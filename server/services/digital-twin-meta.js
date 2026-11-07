@@ -210,6 +210,16 @@ export const updateMeta = (updates) => withMetaLock(async () => {
   return updated;
 });
 
+// Locked read-modify-write on a private clone, for flows that did slow work
+// (provider calls) before writing: they assign only the field they own, so edits
+// saved while they ran survive. Never call it while holding withMetaLock.
+export const mutateMeta = (fn) => withMetaLock(async () => {
+  const meta = structuredClone(await loadMeta());
+  await fn(meta);
+  await saveMeta(meta);
+  return meta;
+});
+
 export const updateSettings = (settings) => withMetaLock(async () => {
   const meta = await loadMeta();
   meta.settings = { ...meta.settings, ...settings };

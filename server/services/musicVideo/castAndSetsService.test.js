@@ -444,6 +444,13 @@ describe('Cast & Sets check-in', () => {
     const done = await current(project.id);
     expect(done.castAndSets.status).toBe('approved');
     expect(done.devArtifacts[0].status).toBe('approved');
+    // The approved sheet is saved again without its check-in questions, still approved.
+    await service.__settleCastAndSetsForTests();
+    const resaved = (await current(project.id)).devArtifacts[0];
+    expect(resaved).toMatchObject({ status: 'approved', version: 2 });
+    const approvedHtml = readFileSync(join(ROOT(), resaved.file), 'utf8');
+    expect(approvedHtml).not.toContain('What I need from you');
+    expect(approvedHtml).toContain('<b>Approved.</b>');
     const refs = done.visualSpec.references;
     expect(refs[0]).toMatchObject({ imageId: 'user-ref.png', condition: true });
     expect(refs.find((r) => r.id === 'mvr-cs-character')).toMatchObject({ role: 'character', condition: true });
@@ -553,7 +560,8 @@ describe('Cast & Sets check-in', () => {
     const after = await current(project.id);
     expect(after.castAndSets.status).toBe('review');
     expect(after.castAndSets.artifactId).toBe(artifactId);
-    expect(after.devArtifacts.find((a) => a.id === artifactId).version).toBe(2);
+    // Approval re-saves the sheet as an approved version, so the rebuild is v3 there.
+    expect(after.devArtifacts.find((a) => a.id === artifactId).version).toBe(end === 'approved' ? 3 : 2);
     // A sheet awaiting review still points the director at Regenerate.
     const again = await request(app).post(`/api/music-video/${project.id}/cast-and-sets`).send({});
     expect(again.status).toBe(409);
@@ -2933,8 +2941,11 @@ describe('rebuilding a catalog stage guide (#15086)', () => {
     const basis = first.body.catalogCheckin.basis;
     const approved = await request(app).post(`/api/music-video/${project.id}/cast-and-sets/approve`).send({ catalogBasis: basis });
     expect(approved.status).toBe(200);
+    expect(approved.body.project.devArtifacts.find((a) => a.id === first.body.artifact.id).status).toBe('approved');
     const unchanged = await rebuild(project.id);
     expect(unchanged.body.artifact.version).toBe(2);
+    // A guide rebuilt after approval keeps the approved check-in's review state.
+    expect(unchanged.body.artifact.status).toBe('approved');
     expect(unchanged.body.stage).toMatchObject({ status: 'approved', catalogApprovedBasis: basis });
     expect(unchanged.body.project.castAndSets.catalogCheckin.approved).toBe(true);
 

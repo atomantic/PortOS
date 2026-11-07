@@ -13,6 +13,9 @@ vi.mock('../../services/apiMusicVideo.js', () => ({
   updateMusicVideoProject: vi.fn(),
   listMusicVideoCharacterStyles: vi.fn(() => Promise.resolve([])),
 }));
+vi.mock('../../services/apiUniverseBuilder.js', () => ({
+  getUniverse: vi.fn(() => Promise.resolve(null)),
+}));
 vi.mock('../moodBoard/MoodBoardReferenceStrip.jsx', () => ({ default: () => null }));
 vi.mock('./VocalStemControl.jsx', () => ({ default: () => null }));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
@@ -151,5 +154,29 @@ describe('Music Video track choices', () => {
     expect(api.updateMusicVideoProject).toHaveBeenCalledWith(project.id, { soundBed: { trackId: tracks[1].id, volume: 0.3 } }, { silent: true });
     expect(api.previewMusicVideoAudioTiming).not.toHaveBeenCalled();
     expect(api.applyMusicVideoAudioTiming).not.toHaveBeenCalled();
+  });
+
+  it('shows universe style refusal and disables submit when selected universe exceeds limit', async () => {
+    const { getUniverse } = await import('../../services/apiUniverseBuilder.js');
+    getUniverse.mockResolvedValueOnce({
+      id: 'uni-over',
+      name: 'Overloaded',
+      styleNotes: 'x'.repeat(3500),
+      influences: { embrace: ['lots '.repeat(100)], avoid: ['avoid '.repeat(50)] },
+      visualProfile: { version: 1, generation: { enabled: true, lighting: 'Natural' }, finishing: { mode: 'preview' } },
+    });
+    function NewProject() {
+      const [form, setForm] = useState({ mode: 'director', mediaMode: 'code-images-video', name: 'Valid Name', trackId: '', universeId: '' });
+      return <CreateProjectDrawer open form={form} onFormChange={(patch) => setForm((current) => ({ ...current, ...patch }))}
+        tracks={tracks} universes={[{ id: 'uni-over', name: 'Overloaded' }]} trackName={trackName} youtube={youtube} onSubmit={vi.fn()} onClose={vi.fn()} />;
+    }
+    render(<NewProject />);
+    const universeSelect = screen.getByLabelText('Universe');
+    fireEvent.change(universeSelect, { target: { value: 'uni-over' } });
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent(/Universe style has \d+ characters; the video concept limit is 4000/);
+    });
+    expect(screen.getByRole('alert')).toHaveTextContent(/Shorten style notes \(3500 characters\) or influences/);
+    expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled();
   });
 });

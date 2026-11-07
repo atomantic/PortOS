@@ -123,7 +123,7 @@ function ConflictEntry({ entry, onResolved }) {
   return (
     <div className="border border-port-border rounded-lg bg-port-card">
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 p-3">
-        <button type="button" onClick={toggleExpanded} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 min-w-0 flex-1 min-h-[44px] sm:min-h-0 text-left">
+        <button type="button" onClick={toggleExpanded} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 min-w-0 basis-full sm:flex-1 min-h-[44px] sm:min-h-0 text-left">
           {expanded ? <ChevronDown size={14} className="text-gray-500 shrink-0" /> : <ChevronRight size={14} className="text-gray-500 shrink-0" />}
           <span className="text-sm text-white truncate">
             {entry.recordKind} <span className="font-mono text-[11px] text-gray-500">{entry.recordId?.slice(0, 14)}</span>

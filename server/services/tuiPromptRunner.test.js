@@ -30,6 +30,7 @@ const { ptyInstances, ptySpawnMock, runnerMocks, shellMocks, runsTmpDirRef, resp
   responseFiles: new Map(),
   runnerMocks: {
     finalizeRunRecord: vi.fn(),
+    patchRunMetadata: vi.fn().mockResolvedValue(undefined),
     failRunRecord: vi.fn(async ({ runId, error, exitCode, onData, onComplete }) => {
       const failure = { id: runId, success: false, exitCode, error };
       onData?.(`\u274c ${error}`);
@@ -353,6 +354,7 @@ describe('executeTuiRun', () => {
     runnerMocks.consumeRunStopRequested.mockReset();
     runnerMocks.consumeRunStopRequested.mockReturnValue(false);
     runnerMocks.getRunsPath.mockClear();
+    runnerMocks.patchRunMetadata.mockClear();
     runnerMocks.failRunRecord.mockClear();
     processEnvMocks.findCommandOnPath.mockReset();
     processEnvMocks.findCommandOnPath.mockImplementation((name) => `/usr/local/bin/${name}`);
@@ -539,6 +541,7 @@ describe('executeTuiRun', () => {
 
     it('finalizes when the PTY exits during startup before the lifecycle is ready', async () => {
       const earlyExitPty = makeFakePty();
+      earlyExitPty.pid = 123456;
       earlyExitPty.onExit.mockImplementation((handler) => {
         earlyExitPty._exitHandler = handler;
         handler({ exitCode: 1, signal: null });
@@ -564,6 +567,12 @@ describe('executeTuiRun', () => {
         extras: expect.objectContaining({ completionReason: 'exit' }),
       }));
       expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({ success: false, exitCode: 1 }));
+      expect(runnerMocks.patchRunMetadata).toHaveBeenCalledWith('run-early-exit', expect.objectContaining({
+        executionOwner: { pid: process.pid, id: expect.any(String), startedAt: expect.any(String) }, executionKind: 'tui',
+      }));
+      expect(runnerMocks.patchRunMetadata).toHaveBeenCalledWith('run-early-exit', {
+        executionChild: { pid: 123456, startedAt: expect.any(String) },
+      });
       expect(runnerMocks.unregisterActiveRun).toHaveBeenCalledWith('run-early-exit');
       expect(shellMocks.unregisterExternalSession).toHaveBeenCalledWith('run-early-exit', { exitCode: 1 });
     });

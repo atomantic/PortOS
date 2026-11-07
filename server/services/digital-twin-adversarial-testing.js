@@ -20,7 +20,7 @@ import { join } from 'path';
 import { getProviderById } from './providers.js';
 import { buildPrompt } from './promptService.js';
 import { DIGITAL_TWIN_DIR, generateId, now, callProviderAI, parseScorerVerdict, resolveTestPersona, parseBulletList } from './digital-twin-helpers.js';
-import { loadMeta, saveMeta, cache, CACHE_TTL_MS } from './digital-twin-meta.js';
+import { loadMeta, mutateMeta, cache, CACHE_TTL_MS } from './digital-twin-meta.js';
 import { getDigitalTwinForPrompt } from './digital-twin-context.js';
 
 export const ADVERSARIAL_SUITE_FILE = 'ADVERSARIAL_BOUNDARY_SUITE.md';
@@ -118,12 +118,9 @@ export async function runAdversarialTests(providerId, model, testIds = null, per
     timestamp: now()
   };
 
-  // Reuse the meta loaded above — single-process, so nothing else mutated it
-  // while the scenario loop ran (cf. the trust model in AGENTS.md).
-  if (!Array.isArray(meta.adversarialTestHistory)) meta.adversarialTestHistory = [];
-  meta.adversarialTestHistory.unshift(historyEntry);
-  meta.adversarialTestHistory = meta.adversarialTestHistory.slice(0, 50); // Keep last 50 runs
-  await saveMeta(meta);
+  await mutateMeta((latest) => {
+    latest.adversarialTestHistory = [historyEntry, ...(Array.isArray(latest.adversarialTestHistory) ? latest.adversarialTestHistory : [])].slice(0, 50); // Keep last 50 runs
+  });
 
   console.log(`🛡️ Adversarial-boundary run complete: ${held}/${toRun.length} held`);
 

@@ -31,7 +31,7 @@ import { resolveGalleryImage, resolveImageInputPath } from '../../lib/pathSafety
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
 import { falSceneTake, falTakeRequestFields, grokCoverage, runwaySceneTake, runwayTakeRequestFields } from '../../lib/musicVideoShotTiming.js';
 import { authoredShotPrompt, musicVideoFrameModelInput } from '../../lib/musicVideoShotPrompt.js';
-import { sceneEndFrameRequestFields } from '../../lib/musicVideoEndFrame.js';
+import { sceneActiveEndImageId, sceneEndFrameRequestFields } from '../../lib/musicVideoEndFrame.js';
 import { preMusicClipSound } from '../../lib/musicVideoColdOpen.js';
 import { conditioningReferences, falRouteVideoSettings, runwayRouteVideoSettings } from './productionPool.js';
 import { loadSceneCastMedia } from './castGuideMedia.js';
@@ -106,10 +106,10 @@ async function dispatchFrame({ project, scene, route, tag, settings }) {
   const selected = files.map((file) => remaining.splice(remaining.findIndex(({ ref }) => ref.imageId === file), 1)[0]);
   const sent = selected.map(({ ref }) => ref);
   const referenceImagePaths = selected.map(({ path }) => path);
-  const { loadLinkedStoryboardPanel } = await import('./linkedPanel.js');
-  const panel = await loadLinkedStoryboardPanel(project, scene);
+  const [{ loadLinkedStoryboardPanel }, { loadMusicVideoSubjectSizes }] = await Promise.all([import('./linkedPanel.js'), import('./subjectScale.js')]);
+  const [panel, sizes] = await Promise.all([loadLinkedStoryboardPanel(project, scene), loadMusicVideoSubjectSizes(project)]);
   const panelReference = scene.panelArt ? sent.findIndex((ref) => ref.imageId === scene.panelArt) + 1 : 0;
-  const { prompt, promptAdditions } = musicVideoFrameModelInput(project, scene, { repairs: unmet, fixes, greybox, panel, panelReference, references: sent });
+  const { prompt, promptAdditions } = musicVideoFrameModelInput(project, scene, { repairs: unmet, fixes, greybox, panel, panelReference, references: sent, sizes });
   if (!prompt) throw unprompted(scene, 'frame');
   const { cleanC2PA, denoise } = resolveImageCleaners(undefined, settings, route.mode);
   const common = {
@@ -171,7 +171,7 @@ async function dispatchClip({ project, scene, route, tag }) {
   };
   // A local model ends on the end frame only when its runtime anchors the last
   // frame (#11258), so the plan needs the model this route actually renders on.
-  const localRuntime = route.mode === 'local' && scene.endImageId
+  const localRuntime = route.mode === 'local' && sceneActiveEndImageId(scene)
     ? (await (await import('../videoGen/modelSelection.js')).resolveVideoModelSelection(route.model || undefined)).model?.runtime ?? null
     : null;
   const { submitVideoGenJob } = await import('../videoGen/submitJob.js');

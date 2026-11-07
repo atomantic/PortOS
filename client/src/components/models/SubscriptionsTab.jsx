@@ -251,8 +251,9 @@ export default function SubscriptionsTab() {
     [family]: { ...prev[family], [key]: value },
   }));
 
-  // One row saves at a time — each row's own controls are disabled while it is
-  // in flight, so a single slot says everything a set would.
+  // Only the in-flight row's controls are disabled, so a second row can start
+  // while the first is saving. The server serializes the saves; this slot only
+  // drives the busy state of the row being saved.
   // try/finally: a throw from the inner callback must not leave the row stuck
   // busy with its controls disabled.
   const withBusy = async (family, fn) => {

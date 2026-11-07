@@ -255,7 +255,7 @@ function PathStrip({ episode, node, byId, onSelectNode }) {
               key={`in-${from.id}-${tr.id}`}
               type="button"
               onClick={() => onSelectNode?.(from.id)}
-              className="text-[10px] px-2 py-0.5 rounded-full border border-port-border hover:border-port-accent max-w-full truncate"
+              className="text-[10px] pointer-coarse:min-h-11 px-2 py-0.5 rounded-full border border-port-border hover:border-port-accent max-w-full truncate"
             >
               {from.title || 'Untitled'}
               {tr.intent ? ` · ${truncate(tr.intent, 22)}` : ''}
@@ -271,7 +271,7 @@ function PathStrip({ episode, node, byId, onSelectNode }) {
               key={tr.id}
               type="button"
               onClick={() => onSelectNode?.(tr.targetNodeId)}
-              className="text-[10px] px-2 py-0.5 rounded-full border border-port-accent/40 text-port-accent hover:border-port-accent max-w-full truncate"
+              className="text-[10px] pointer-coarse:min-h-11 px-2 py-0.5 rounded-full border border-port-accent/40 text-port-accent hover:border-port-accent max-w-full truncate"
             >
               {truncate(tr.intent || 'continue', 22)}
               {' → '}

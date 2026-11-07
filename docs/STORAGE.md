@@ -852,9 +852,17 @@ Apply this checklist to **every new feature that persists data**, and require it
 - [`docs/plans/2026-06-06-create-postgres-storage-inventory.md`](./plans/2026-06-06-create-postgres-storage-inventory.md) — full inventory + migration phases.
 - [`server/lib/README.md`](../server/lib/README.md) — storage helpers (`collectionStore`, `fileUtils`, `db.js`, `assetHash`).
 
+### Native usage store
+
+`native_usage_sources` and `native_usage_snapshots` are `db-primary`: what each machine has collected from provider-native usage files (#15255). `native_usage_sources` holds one row per source file, with its family, a SHA-256 key of its root-relative path, size, mtime, validator and a `jsonb` projection of its hashed record identities and counters. An unchanged file costs one `lstat`; a changed one replaces only its own row; a deleted one keeps its row and still counts, because Claude Code's documented default retention sweeps transcripts while the usage still happened. `native_usage_snapshots` holds whole-document reads with no per-source form: the latest projected Codex account entry and each peer's last verified report, shown labeled stale after a failed read. Rows are read as sets and deduplicated by record identity, and a run writes one row per finished source, which is why this is a table rather than a `data/` file.
+
+The tables hold **no paths, transcript text or raw identifiers**: source and record keys are SHA-256 digests, which are linkable pseudonyms rather than anonymization, so the rows stay private like the reports built from them. The Codex entry is the projected form, without the email the raw account read holds. **Intentionally machine-local**: not in the sync feed. A peer receives only the signed report over the paired usage protocol, under the existing usage-category policy. The Postgres dump backs both tables up; the source files themselves are never changed. They are created by `ensureSchema()` and start empty, so there is no seed or data migration, and the first explicit read or daily run fills them. `MEMORY_BACKEND=file` keeps the same rows as files under `data/native-usage/`, for the dev/test escape hatch only. Code: `server/services/nativeUsageStore.js`, `server/services/nativeUsageCollection.js`. Accounting rules: [the projection record](./plans/2026-11-06-native-usage-projection.md#collected-usage-store-15255).
+
 ### Dedicated inference host
 
 `PORTOS_FLEET_LLM_ENABLED` in the install `.env` is machine-local deployment configuration, alongside `VLLM_QWEN_PROJECT_DIR`. The existing runtime project holds its API key, compose override and model weights; none enters federation sync. Provider records use the existing provider store. The bounded inference queue exists only in memory, with no prompt/response persistence and no restart replay.
+
+`data/usage-cutover-barrier.json` is `file-primary`: one machine-local record of this instance's [usage cutover barrier](./USAGE_CUTOVER_BARRIER.md), holding its epoch, participant set, state, last acknowledgments and any run accounting retained during a fence. It sits beside the file-backed ledger it fences and is read at every write, including by a separate CLI process, so it must work with no database and no boot step. It has no relations or search. A missing file means no barrier; an unreadable or newer one fails closed. Only the acknowledgment and the payload stamp cross to peers. No seed or migration is needed. Rsync backups include it as evidence, but like the other local authority records a restore never installs it, so restoring a ledger can neither lift nor forge a fence.
 
 `data/fleet-host-usage.json` is `file-primary`: the host's INBOUND usage ledger — which machines have called this install's shared inference endpoint, how many requests each made, the token counts their responses reported, 30 days of daily buckets and the last 50 completed requests. It is a bounded counter document, not a relational record set: no foreign keys to app records, no cross-record queries, no search index, and it is rewritten whole by `services/fleetLlmUsage.js` behind a debounce. It is deliberately **machine-local and never federated** — it describes who connected to *this* machine, which is network and identity information about the user's own devices, and each host's answer is only about itself. Clients are keyed by remote address because the gateway authenticates every caller with one shared host key; peer names are resolved at read time from the peer list and the tailnet, never stored. No prompt or response content is ever written. Schema version 1; a payload declaring any other version is refused rather than half-read, so no migration or `data.reference/` seed is needed (an install with no file simply starts counting). Rsync backups include it.
 
@@ -1139,6 +1147,8 @@ before manually retiring history.
 ### Password-free access acknowledgement
 
 Password-risk acceptance is browser-local, stored for this origin under the versioned `portos-password-risk-v1` key. No API can acknowledge the warning for another browser. Missing or unreadable storage requires consent again; acceptance is not federated or included in instance backups. This is a browser preference, not an app-native record.
+
+`usageNativeAccountSelections` is an optional, machine-local operator choice in the existing file-primary `data/settings.json` store. It groups hashed participants under opaque account labels, chooses one Codex authority per account, and records explicit retained-history scope for Claude, Grok and Antigravity. It holds no credentials or native account identifiers, adds no relation or search need, is covered by the rsync backup with the rest of that file, and is never sent to peers. The Usage account editor reads/writes this slice through `/api/usage/native-accounts`, with an opaque revision checked inside the settings write queue to prevent stale replacement. `PUT /api/settings` continues to validate it with the same `nativeUsageAccountSelectionsSchema`; its writes also invalidate old selection revisions. Dashboard and `scripts/native-usage-report.js matrix` reads consume the saved selections without changing history. Invalid/unreadable settings remain unavailable rather than an editable empty selection.
 
 `passwordRiskRevision` is an optional, opaque machine-local setting in the existing file-primary `data/settings.json` store, alongside authentication configuration. Password changes rotate it so old browser acknowledgements become invalid even if that browser was offline. Its absence means the initial revision, enrolling existing installs without a seed or migration. Generic settings updates cannot replace it; the read-only password-risk endpoint exposes only the revision and whether password protection is enabled.
 
@@ -1490,11 +1500,16 @@ preview/apply workflow. No migration rewrites historical counts for this format.
 
 ### Codex accounting source inventory
 
-The shared source reader keeps a disposable, process-local inventory of projected
-accounting records, keyed by source path and device/inode/size/mtime/ctime. It
-retains no transcript prose. Source changes invalidate the entry; incomplete
-reads are never cached. There is no new durable store or automatic historical
-rewrite, and restarting a worker safely rebuilds this inventory.
+Routine accounting keeps verified projections in `data/cache/codex-usage-inventory/`,
+one gzip file per source, named by a hash of the source path and bound to its
+device/inode/size/mtime/ctime. It is an `ephemeral-file` store: counters, hashed
+session identity, model and working directory, with no transcript prose and no
+source path. It is machine-local, never federated, and excluded from backup by
+`/cache/`. It needs no seed or migration: a missing, damaged or other-version file
+is a cold rescan of that source. Source changes invalidate the entry and incomplete
+reads are never stored. The store is capped at 256 MiB, dropping the oldest sources
+first. Process memory holds per-source metadata only, and records load one session
+at a time. Explicit preview reads none of this and writes none of it.
 
 Accounting claims use `codex-session:v1:<SHA-256 session ID>` in the existing
 `codexHighWater` snapshot. Readers accept older path-keyed claims through current

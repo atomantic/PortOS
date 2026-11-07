@@ -1,6 +1,8 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import * as api from '../services/api';
 import useListResource from './useListResource';
+import useUserTimezone from './useUserTimezone.js';
+import { todayKeyInTimezone } from '../utils/timezone.js';
 import { MAX_TAGS, MAX_TAG_LENGTH } from '../components/goals/goalConstants';
 
 // Module-level so useListResource sees a stable fetcher. silent: the pickers
@@ -32,8 +34,13 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
   const activities = activitiesList.items;
   const [selectedActivity, setSelectedActivity] = useState('');
   const [showProgressForm, setShowProgressForm] = useState(false);
-  const todayISO = new Date().toISOString().slice(0, 10);
-  const [progressForm, setProgressForm] = useState({ date: todayISO, note: '', durationMinutes: '' });
+  const userTimezone = useUserTimezone();
+  const freshProgressForm = () => ({ date: todayKeyInTimezone(userTimezone), note: '', durationMinutes: '' });
+  const [progressForm, setProgressForm] = useState(freshProgressForm);
+  // The timezone resolves after mount, so re-key the default date whenever the form opens.
+  useEffect(() => {
+    if (showProgressForm) setProgressForm(f => ({ ...f, date: todayKeyInTimezone(userTimezone) }));
+  }, [showProgressForm, userTimezone]);
   const [progressSubmitting, setProgressSubmitting] = useState(false);
   const progressSubmittingRef = useRef(false);
   const subcalendarsList = useListResource(fetchSubcalendars);
@@ -301,7 +308,7 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
         note: progressForm.note,
         ...(progressForm.durationMinutes ? { durationMinutes: parseInt(progressForm.durationMinutes, 10) } : {})
       });
-      setProgressForm({ date: todayISO, note: '', durationMinutes: '' });
+      setProgressForm(freshProgressForm());
       setShowProgressForm(false);
       onRefresh();
     } catch {
@@ -313,7 +320,7 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
   };
 
   const resetProgressForm = () => {
-    setProgressForm({ date: todayISO, note: '', durationMinutes: '' });
+    setProgressForm(freshProgressForm());
     setShowProgressForm(false);
   };
 

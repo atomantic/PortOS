@@ -1,9 +1,39 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import EventEmitter from 'events';
 
+// In-memory stand-in for brainStorage's locked read-modify-write
+// (`updateWith` / `updateLinkWith`): writes to one record chain on a per-id
+// tail and each callback sees the previous write. A record first touched here
+// is seeded from the test's `getInboxLogById` / `getLinkById` mock; `seedRecord`
+// stores one directly (e.g. from a `createInboxLog` implementation).
+const lockedStore = vi.hoisted(() => ({ records: new Map(), tails: new Map() }));
+const recordKey = (type, id) => `${type}:${id}`;
+const seedRecord = (type, record) => {
+  lockedStore.records.set(recordKey(type, record.id), record);
+  return record;
+};
+const storedRecord = (type, id) => lockedStore.records.get(recordKey(type, id));
+
 // Mock brainStorage
 vi.mock('./brainStorage.js', () => {
-  return {
+  const lockedUpdate = (type, id, fn, read) => {
+    const key = `${type}:${id}`;
+    const run = (lockedStore.tails.get(key) ?? Promise.resolve()).then(async () => {
+      const current = lockedStore.records.get(key) ?? await read(id);
+      if (!current) return null;
+      const updates = await fn({ ...current });
+      if (!updates) return null;
+      const next = { ...current, ...updates };
+      lockedStore.records.set(key, next);
+      return next;
+    });
+    lockedStore.tails.set(key, run.catch(() => {}));
+    return run;
+  };
+  const readFor = (type) => (id) => (type === 'links' ? mock.getLinkById(id) : mock.getInboxLogById(id));
+  const mock = {
+    updateWith: vi.fn((type, id, fn) => lockedUpdate(type, id, fn, readFor(type))),
+    updateLinkWith: vi.fn((id, fn) => lockedUpdate('links', id, fn, readFor('links'))),
     brainEvents: new EventEmitter(),
     loadMeta: vi.fn(),
     updateMeta: vi.fn(),
@@ -65,6 +95,7 @@ vi.mock('./brainStorage.js', () => {
     reorderBuckets: vi.fn(),
     deleteBucket: vi.fn()
   };
+  return mock;
 });
 
 // Mock repoCloner — the bare-URL capture path can kick off a background clone;
@@ -165,12 +196,15 @@ import {
   deleteMemoryEntry,
   recoverStuckClassifications,
   recoverInterruptedRepoClones,
-  createLinkFromUrl
+  createLinkFromUrl,
+  cloneRepoInBackground
 } from './brain.js';
 
 describe('brain service', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    lockedStore.records.clear();
+    lockedStore.tails.clear();
     storage.loadMeta.mockResolvedValue({
       confidenceThreshold: 0.6,
       defaultProvider: 'lmstudio',
@@ -243,8 +277,7 @@ describe('brain service', () => {
 
     it('moves the entry to needs_review and emits when filing throws after a successful classification', async () => {
       const { brainEvents } = storage;
-      storage.createInboxLog.mockResolvedValue({ id: 'inbox-fail', status: 'classifying' });
-      storage.updateInboxLog.mockResolvedValue({ id: 'inbox-fail' });
+      storage.createInboxLog.mockImplementation(async (entry) => seedRecord('inbox', { id: 'inbox-fail', ...entry }));
       storage.createPerson.mockRejectedValue(new Error('db write failed'));
       getProviderById.mockResolvedValue({ id: 'lmstudio', enabled: true, defaultModel: 'test-model' });
       runPromptThroughProvider.mockResolvedValue({
@@ -257,10 +290,13 @@ describe('brain service', () => {
       await captureThought('met Alice');
 
       expect(await emitted).toEqual({ entryId: 'inbox-fail', status: 'needs_review', error: 'db write failed' });
-      expect(storage.updateInboxLog).toHaveBeenCalledWith('inbox-fail', {
+      expect(storedRecord('inbox', 'inbox-fail')).toMatchObject({
         status: 'needs_review',
+        classificationAttempt: null,
         error: { message: 'db write failed' }
       });
+      // The failed filing attempt left no `filed` pointer behind.
+      expect(storedRecord('inbox', 'inbox-fail').filed).toBeUndefined();
       errSpy.mockRestore();
     });
 
@@ -282,7 +318,7 @@ describe('brain service', () => {
   describe('captureThought (bare URL)', () => {
     beforeEach(() => {
       storage.getLinkByUrl.mockResolvedValue(null);
-      storage.createLink.mockImplementation(async (data) => ({ id: 'link-001', ...data }));
+      storage.createLink.mockImplementation(async (data) => seedRecord('links', { id: 'link-001', ...data }));
       storage.createInboxLog.mockImplementation(async (entry) => ({ id: 'inbox-url-1', ...entry }));
     });
 
@@ -360,8 +396,16 @@ describe('brain service', () => {
         isGitHubRepo: true,
         cloneStatus: 'pending'
       }));
-      expect(storage.updateLink).toHaveBeenCalledWith('link-001', {
+      await vi.waitFor(() => expect(storedRecord('links', 'link-001')).toMatchObject({
+        cloneStatus: 'cloned',
+        localPath: '/repos/acme/widgets',
+        cloneAttempt: null
+      }));
+      const [claimedId, claim] = storage.updateLinkWith.mock.calls[0];
+      expect(claimedId).toBe('link-001');
+      expect(claim({ cloneStatus: 'pending' })).toEqual({
         cloneStatus: 'cloning',
+        cloneAttempt: expect.any(String),
         // Cleared, so a recovered link's "interrupted by a server restart"
         // message doesn't sit beside the retry's spinner.
         cloneError: null,
@@ -520,7 +564,7 @@ describe('brain service', () => {
         bucketId: 'bucket-1',
         cloneStatus: 'none'
       }));
-      expect(storage.updateLink).not.toHaveBeenCalled();
+      expect(storage.updateLinkWith).not.toHaveBeenCalled();
     });
   });
 
@@ -540,23 +584,17 @@ describe('brain service', () => {
       };
       storage.getInboxLogById.mockResolvedValue(mockInbox);
       storage.createPerson.mockResolvedValue({ id: 'person-001', name: 'Alice' });
-      storage.updateInboxLog.mockResolvedValue({});
-      // After update, return the updated entry
-      storage.getInboxLogById.mockResolvedValueOnce(mockInbox)
-        .mockResolvedValueOnce({ ...mockInbox, status: 'filed' });
 
       const result = await resolveReview('inbox-001', 'people', { name: 'Alice' });
 
       expect(storage.createPerson).toHaveBeenCalledWith(
         expect.objectContaining({ name: 'Alice' })
       );
-      expect(storage.updateInboxLog).toHaveBeenCalledWith('inbox-001', expect.objectContaining({
+      expect(storage.updateWith).toHaveBeenCalledWith('inbox', 'inbox-001', expect.any(Function));
+      expect(result.inboxLog).toMatchObject({
         status: 'filed',
-        filed: expect.objectContaining({
-          destination: 'people',
-          destinationId: 'person-001'
-        })
-      }));
+        filed: { destination: 'people', destinationId: 'person-001' }
+      });
       expect(result.filedRecord.id).toBe('person-001');
     });
 
@@ -571,7 +609,8 @@ describe('brain service', () => {
       storage.getInboxLogById.mockResolvedValue({ id: 'inbox-001', status: 'filed' });
 
       await expect(resolveReview('inbox-001', 'people', {}))
-        .rejects.toThrow('not in needs_review status');
+        .rejects.toMatchObject({ status: 409, message: expect.stringContaining('not in needs_review status') });
+      expect(storage.createPerson).not.toHaveBeenCalled();
     });
 
     it('should merge editedExtracted with existing classification extracted', async () => {
@@ -584,7 +623,6 @@ describe('brain service', () => {
         }
       });
       storage.createPerson.mockResolvedValue({ id: 'person-002', name: 'Updated' });
-      storage.updateInboxLog.mockResolvedValue({});
 
       await resolveReview('inbox-001', 'people', { name: 'Updated' });
 
@@ -601,16 +639,15 @@ describe('brain service', () => {
         classification: { title: 'Test', extracted: {}, reasons: ['Low confidence'] }
       });
       storage.createIdea.mockResolvedValue({ id: 'idea-001' });
-      storage.updateInboxLog.mockResolvedValue({});
 
       await resolveReview('inbox-001', 'ideas', { title: 'Test', oneLiner: 'one' });
 
-      expect(storage.updateInboxLog).toHaveBeenCalledWith('inbox-001', expect.objectContaining({
+      expect(storedRecord('inbox', 'inbox-001')).toMatchObject({
         classification: expect.objectContaining({
           confidence: 1.0,
           reasons: expect.arrayContaining(['Manually resolved'])
         })
-      }));
+      });
     });
   });
 
@@ -628,7 +665,6 @@ describe('brain service', () => {
       });
       storage.createProject.mockResolvedValue({ id: 'proj-001', name: 'Test Project' });
       storage.updateIdea.mockResolvedValue({});
-      storage.updateInboxLog.mockResolvedValue({});
 
       await fixClassification('inbox-001', 'projects', { name: 'Test Project', nextAction: 'Do something' }, 'Wrong category');
 
@@ -641,7 +677,7 @@ describe('brain service', () => {
       );
 
       // Should update inbox log with correction info
-      expect(storage.updateInboxLog).toHaveBeenCalledWith('inbox-001', expect.objectContaining({
+      expect(storedRecord('inbox', 'inbox-001')).toMatchObject({
         status: 'corrected',
         filed: { destination: 'projects', destinationId: 'proj-001' },
         correction: expect.objectContaining({
@@ -649,7 +685,7 @@ describe('brain service', () => {
           newDestination: 'projects',
           note: 'Wrong category'
         })
-      }));
+      });
     });
 
     it('should throw if inbox log not found', async () => {
@@ -663,7 +699,8 @@ describe('brain service', () => {
       storage.getInboxLogById.mockResolvedValue({ id: 'inbox-001', status: 'needs_review' });
 
       await expect(fixClassification('inbox-001', 'people', {}, 'note'))
-        .rejects.toThrow('Can only fix filed or previously corrected entries');
+        .rejects.toMatchObject({ status: 409, message: 'Can only fix filed or previously corrected entries' });
+      expect(storage.createPerson).not.toHaveBeenCalled();
     });
 
     it('should allow fixing previously corrected entries', async () => {
@@ -675,7 +712,6 @@ describe('brain service', () => {
       });
       storage.createPerson.mockResolvedValue({ id: 'person-001' });
       storage.updateProject.mockResolvedValue({});
-      storage.updateInboxLog.mockResolvedValue({});
 
       await expect(fixClassification('inbox-001', 'people', { name: 'Alice' }, 'oops'))
         .resolves.toBeDefined();
@@ -689,7 +725,6 @@ describe('brain service', () => {
         // no filed field
       });
       storage.createPerson.mockResolvedValue({ id: 'person-001' });
-      storage.updateInboxLog.mockResolvedValue({});
 
       await fixClassification('inbox-001', 'people', { name: 'Alice' }, 'note');
 
@@ -706,7 +741,6 @@ describe('brain service', () => {
 
   describe('fileToDestination (via resolveReview)', () => {
     beforeEach(() => {
-      storage.updateInboxLog.mockResolvedValue({});
     });
 
     const makeNeedsReview = (title = 'Test') => ({
@@ -821,15 +855,11 @@ describe('brain service', () => {
   describe('markInboxDone', () => {
     it('should mark entry as done', async () => {
       storage.getInboxLogById.mockResolvedValue({ id: 'inbox-001', status: 'filed' });
-      storage.updateInboxLog.mockResolvedValue({ id: 'inbox-001', status: 'done' });
 
       const result = await markInboxDone('inbox-001');
 
-      expect(storage.updateInboxLog).toHaveBeenCalledWith('inbox-001', expect.objectContaining({
-        status: 'done',
-        doneAt: expect.any(String)
-      }));
-      expect(result.status).toBe('done');
+      expect(result).toMatchObject({ status: 'done', doneAt: expect.any(String) });
+      expect(storedRecord('inbox', 'inbox-001')).toMatchObject({ status: 'done' });
     });
 
     it('should return null if entry not found', async () => {
@@ -838,7 +868,21 @@ describe('brain service', () => {
       const result = await markInboxDone('missing');
 
       expect(result).toBeNull();
-      expect(storage.updateInboxLog).not.toHaveBeenCalled();
+    });
+
+    it('refuses while a classification is in flight so its result cannot overwrite the decision', async () => {
+      seedRecord('inbox', { id: 'inbox-001', status: 'classifying', classificationAttempt: 'attempt-1' });
+
+      await expect(markInboxDone('inbox-001')).rejects.toMatchObject({ status: 409 });
+      expect(storedRecord('inbox', 'inbox-001').status).toBe('classifying');
+    });
+
+    it('leaves an already-done entry untouched', async () => {
+      seedRecord('inbox', { id: 'inbox-001', status: 'done', doneAt: '2026-01-01T00:00:00.000Z' });
+
+      const result = await markInboxDone('inbox-001');
+
+      expect(result.doneAt).toBe('2026-01-01T00:00:00.000Z');
     });
   });
 
@@ -932,34 +976,45 @@ describe('brain service', () => {
   // ===========================================================================
 
   describe('retryClassification', () => {
-    it('should set status to classifying and return updated entry', async () => {
-      const mockEntry = { id: 'inbox-001', capturedText: 'test', status: 'needs_review' };
-      storage.getInboxLogById.mockResolvedValue(mockEntry);
-      storage.updateInboxLog.mockResolvedValue({});
-      // Second call returns the updated entry
-      storage.getInboxLogById.mockResolvedValueOnce(mockEntry)
-        .mockResolvedValueOnce({ ...mockEntry, status: 'classifying' });
+    const confidentPerson = () => ({
+      text: JSON.stringify({ destination: 'people', confidence: 0.95, title: 'Alice', extracted: { name: 'Alice' } }),
+      model: 'test-model'
+    });
+    const deferred = () => {
+      let resolve;
+      const promise = new Promise((r) => { resolve = r; });
+      return { promise, resolve };
+    };
+
+    beforeEach(() => {
+      getProviderById.mockResolvedValue({ id: 'lmstudio', enabled: true, defaultModel: 'test-model' });
+    });
+
+    it('claims the entry as classifying under a new attempt and returns it', async () => {
+      seedRecord('inbox', { id: 'inbox-001', capturedText: 'test', status: 'needs_review', error: { message: 'old' } });
+      runPromptThroughProvider.mockReturnValue(new Promise(() => {}));
 
       const result = await retryClassification('inbox-001');
 
-      expect(storage.updateInboxLog).toHaveBeenCalledWith('inbox-001', expect.objectContaining({
+      expect(result.inboxLog).toMatchObject({
         status: 'classifying',
+        classificationAttempt: expect.any(String),
         error: null
-      }));
+      });
       expect(result.message).toContain('Retrying');
     });
 
     it('does not count a manual retry toward the daily brain budget', async () => {
-      storage.getInboxLogById.mockResolvedValue({ id: 'inbox-001', capturedText: 'test' });
-      storage.updateInboxLog.mockResolvedValue({});
+      storage.getInboxLogById.mockResolvedValue({ id: 'inbox-001', capturedText: 'test', status: 'needs_review' });
       recordDomainUsage.mockClear();
       runPromptThroughProvider.mockRejectedValue(new Error('boom'));
 
       await retryClassification('inbox-001');
       // The background classification finishes (fails) by writing needs_review.
-      await vi.waitFor(() => expect(storage.updateInboxLog).toHaveBeenCalledWith(
-        'inbox-001', expect.objectContaining({ status: 'needs_review' })
-      ));
+      await vi.waitFor(() => expect(storedRecord('inbox', 'inbox-001')).toMatchObject({
+        status: 'needs_review',
+        classificationAttempt: null
+      }));
 
       expect(recordDomainUsage).not.toHaveBeenCalled();
     });
@@ -968,21 +1023,72 @@ describe('brain service', () => {
       storage.getInboxLogById.mockResolvedValue(null);
 
       await expect(retryClassification('missing'))
-        .rejects.toThrow('Inbox log entry not found');
+        .rejects.toMatchObject({ status: 404, message: 'Inbox log entry not found' });
     });
 
     it('should use provider/model overrides', async () => {
-      storage.getInboxLogById.mockResolvedValue({ id: 'inbox-001', capturedText: 'test' });
-      storage.updateInboxLog.mockResolvedValue({});
+      seedRecord('inbox', { id: 'inbox-001', capturedText: 'test', status: 'needs_review' });
+      runPromptThroughProvider.mockReturnValue(new Promise(() => {}));
 
-      await retryClassification('inbox-001', 'openai', 'gpt-4');
+      const result = await retryClassification('inbox-001', 'openai', 'gpt-4');
 
-      expect(storage.updateInboxLog).toHaveBeenCalledWith('inbox-001', expect.objectContaining({
-        ai: expect.objectContaining({
-          providerId: 'openai',
-          modelId: 'gpt-4'
-        })
-      }));
+      expect(result.inboxLog.ai).toMatchObject({ providerId: 'openai', modelId: 'gpt-4' });
+    });
+
+    it('retries a legacy error row', async () => {
+      seedRecord('inbox', { id: 'inbox-001', capturedText: 'test', status: 'error' });
+      runPromptThroughProvider.mockReturnValue(new Promise(() => {}));
+
+      const result = await retryClassification('inbox-001');
+
+      expect(result.inboxLog.status).toBe('classifying');
+    });
+
+    it('refuses a filed entry without calling the provider', async () => {
+      seedRecord('inbox', { id: 'inbox-001', capturedText: 'met Alice', status: 'filed' });
+
+      await expect(retryClassification('inbox-001')).rejects.toMatchObject({ status: 409 });
+      expect(runPromptThroughProvider).not.toHaveBeenCalled();
+      expect(storedRecord('inbox', 'inbox-001').status).toBe('filed');
+    });
+
+    it('lets only one of two overlapping retries reach the classifier and file', async () => {
+      // Both requests read `needs_review`; the claim in the write queue decides.
+      seedRecord('inbox', { id: 'inbox-001', capturedText: 'met Alice', status: 'needs_review' });
+      const ai = deferred();
+      runPromptThroughProvider.mockReturnValue(ai.promise);
+      storage.createPerson.mockResolvedValue({ id: 'person-001' });
+
+      const results = await Promise.allSettled([retryClassification('inbox-001'), retryClassification('inbox-001')]);
+
+      expect(results.map(r => r.status).sort()).toEqual(['fulfilled', 'rejected']);
+      expect(results.find(r => r.status === 'rejected').reason).toMatchObject({ status: 409 });
+      ai.resolve(confidentPerson());
+      await vi.waitFor(() => expect(storedRecord('inbox', 'inbox-001').status).toBe('filed'));
+      expect(runPromptThroughProvider).toHaveBeenCalledTimes(1);
+      expect(storage.createPerson).toHaveBeenCalledTimes(1);
+      expect(storedRecord('inbox', 'inbox-001')).toMatchObject({
+        classificationAttempt: null,
+        filed: { destination: 'people', destinationId: 'person-001' }
+      });
+    });
+
+    it('drops a classification that finishes after its entry was recovered and marked done', async () => {
+      storage.createInboxLog.mockImplementation(async (entry) => seedRecord('inbox', { id: 'inbox-001', ...entry }));
+      storage.getInboxLog.mockImplementation(async () => [storedRecord('inbox', 'inbox-001')]);
+      const ai = deferred();
+      runPromptThroughProvider.mockReturnValue(ai.promise);
+      storage.createPerson.mockResolvedValue({ id: 'person-001' });
+
+      await captureThought('met Alice');
+      await recoverStuckClassifications();
+      await markInboxDone('inbox-001');
+      ai.resolve(confidentPerson());
+      await vi.waitFor(() => expect(runPromptThroughProvider).toHaveBeenCalled());
+      await new Promise(resolve => setImmediate(resolve));
+
+      expect(storedRecord('inbox', 'inbox-001')).toMatchObject({ status: 'done' });
+      expect(storage.createPerson).not.toHaveBeenCalled();
     });
   });
 
@@ -991,19 +1097,25 @@ describe('brain service', () => {
   // ===========================================================================
 
   describe('recoverStuckClassifications', () => {
-    it('should reset stuck classifying entries to needs_review', async () => {
-      storage.getInboxLog.mockResolvedValue([
-        { id: 'inbox-001' },
-        { id: 'inbox-002' }
+    const asStore = (rows) => {
+      rows.forEach(row => seedRecord('inbox', row));
+      storage.getInboxLog.mockResolvedValue(rows);
+    };
+
+    it('should reset stuck classifying entries to needs_review and drop their attempt', async () => {
+      asStore([
+        { id: 'inbox-001', status: 'classifying', classificationAttempt: 'attempt-1' },
+        { id: 'inbox-002', status: 'classifying' }
       ]);
-      storage.updateInboxLog.mockResolvedValue({});
 
       await recoverStuckClassifications();
 
       expect(storage.getInboxLog).toHaveBeenCalledWith({ status: 'classifying', limit: 100 });
-      expect(storage.updateInboxLog).toHaveBeenCalledTimes(2);
-      expect(storage.updateInboxLog).toHaveBeenCalledWith('inbox-001', { status: 'needs_review' });
-      expect(storage.updateInboxLog).toHaveBeenCalledWith('inbox-002', { status: 'needs_review' });
+      for (const id of ['inbox-001', 'inbox-002']) {
+        expect(storedRecord('inbox', id)).toMatchObject({ status: 'needs_review', classificationAttempt: null });
+      }
+      // Boot recovery never calls a provider.
+      expect(runPromptThroughProvider).not.toHaveBeenCalled();
     });
 
     it('should do nothing when no stuck entries exist', async () => {
@@ -1011,26 +1123,34 @@ describe('brain service', () => {
 
       await recoverStuckClassifications();
 
-      expect(storage.updateInboxLog).not.toHaveBeenCalled();
+      expect(storage.updateWith).not.toHaveBeenCalled();
+    });
+
+    it('leaves an entry that settled between the scan and the write', async () => {
+      storage.getInboxLog.mockResolvedValue([{ id: 'inbox-001', status: 'classifying' }]);
+      seedRecord('inbox', { id: 'inbox-001', status: 'filed' });
+
+      await recoverStuckClassifications();
+
+      expect(storedRecord('inbox', 'inbox-001').status).toBe('filed');
     });
 
     it('skips peer-origin entries so recovery does not clobber a peer mid-classification', async () => {
       // Now that inbox rows sync, flipping a peer's in-flight 'classifying' entry
       // to 'needs_review' here would stamp a fresh updatedAt and win LWW,
       // overwriting the origin's real classification. Recovery is local-only.
-      storage.getInboxLog.mockResolvedValue([
-        { id: 'mine', originInstanceId: 'local-instance' },
-        { id: 'peers', originInstanceId: 'peer-x' },
-        { id: 'legacy' }, // no origin → pre-backfill local record, treated as ours
+      asStore([
+        { id: 'mine', status: 'classifying', originInstanceId: 'local-instance' },
+        { id: 'peers', status: 'classifying', originInstanceId: 'peer-x', classificationAttempt: 'peer-attempt' },
+        { id: 'legacy', status: 'classifying' }, // no origin → pre-backfill local record, treated as ours
       ]);
-      storage.updateInboxLog.mockResolvedValue({});
 
       await recoverStuckClassifications();
 
-      expect(storage.updateInboxLog).toHaveBeenCalledWith('mine', { status: 'needs_review' });
-      expect(storage.updateInboxLog).toHaveBeenCalledWith('legacy', { status: 'needs_review' });
-      expect(storage.updateInboxLog).not.toHaveBeenCalledWith('peers', expect.anything());
-      expect(storage.updateInboxLog).toHaveBeenCalledTimes(2);
+      expect(storedRecord('inbox', 'mine').status).toBe('needs_review');
+      expect(storedRecord('inbox', 'legacy').status).toBe('needs_review');
+      expect(storedRecord('inbox', 'peers')).toMatchObject({ status: 'classifying', classificationAttempt: 'peer-attempt' });
+      expect(storage.updateWith).not.toHaveBeenCalledWith('inbox', 'peers', expect.anything());
     });
   });
 
@@ -1039,11 +1159,16 @@ describe('brain service', () => {
   // ===========================================================================
 
   describe('recoverInterruptedRepoClones', () => {
+    const asStore = (rows) => {
+      rows.forEach(row => seedRecord('links', row));
+      storage.getLinks.mockResolvedValue(rows);
+    };
+
     it('marks only interrupted clones as failed so they can be retried', async () => {
-      storage.getLinks.mockResolvedValue([
+      asStore([
         { id: 'pending', cloneStatus: 'pending' },
-        { id: 'cloning', cloneStatus: 'cloning', cloneInstanceId: 'local-instance' },
-        { id: 'peer-cloning', cloneStatus: 'cloning', cloneInstanceId: 'peer-x' },
+        { id: 'cloning', cloneStatus: 'cloning', cloneInstanceId: 'local-instance', cloneAttempt: 'attempt-1' },
+        { id: 'peer-cloning', cloneStatus: 'cloning', cloneInstanceId: 'peer-x', cloneAttempt: 'peer-attempt' },
         { id: 'old-peer-recent', cloneStatus: 'cloning', originInstanceId: 'peer-x', updatedAt: new Date().toISOString() },
         { id: 'old-peer-stale', cloneStatus: 'cloning', originInstanceId: 'peer-x', updatedAt: '2020-01-01T00:00:00.000Z' },
         { id: 'legacy-local', cloneStatus: 'cloning' },
@@ -1051,44 +1176,38 @@ describe('brain service', () => {
         { id: 'failed', cloneStatus: 'failed' },
         { id: 'none', cloneStatus: 'none' },
       ]);
-      storage.updateLink.mockResolvedValue({});
 
       await recoverInterruptedRepoClones();
 
       expect(storage.getLinks).toHaveBeenCalledWith({ cloneStatus: 'cloning' });
-      expect(storage.updateLink).toHaveBeenCalledTimes(3);
-      expect(storage.updateLink).toHaveBeenCalledWith('cloning', {
+      expect(storage.updateLinkWith).toHaveBeenCalledTimes(3);
+      expect(storedRecord('links', 'cloning')).toEqual({
+        id: 'cloning',
         cloneStatus: 'failed',
         cloneError: 'Clone interrupted by a server restart. Retry to clone the repository again.',
         cloneInstanceId: null,
         cloneInterrupted: true,
+        cloneAttempt: null,
       });
-      expect(storage.updateLink).not.toHaveBeenCalledWith('peer-cloning', expect.anything());
-      expect(storage.updateLink).not.toHaveBeenCalledWith('old-peer-recent', expect.anything());
-      expect(storage.updateLink).toHaveBeenCalledWith('old-peer-stale', expect.objectContaining({
-        cloneStatus: 'failed',
-        cloneInstanceId: null,
-      }));
-      expect(storage.updateLink).toHaveBeenCalledWith('legacy-local', expect.objectContaining({
-        cloneStatus: 'failed',
-        cloneInstanceId: null,
-      }));
+      expect(storedRecord('links', 'peer-cloning')).toMatchObject({ cloneStatus: 'cloning', cloneAttempt: 'peer-attempt' });
+      expect(storedRecord('links', 'old-peer-recent').cloneStatus).toBe('cloning');
+      expect(storedRecord('links', 'old-peer-stale')).toMatchObject({ cloneStatus: 'failed', cloneInstanceId: null });
+      expect(storedRecord('links', 'legacy-local')).toMatchObject({ cloneStatus: 'failed', cloneInstanceId: null });
     });
 
     it('ages a stale peer-owned attempt out so a dead peer cannot strand the link', async () => {
       // The peer that owned this clone crashed and never came back. Skipping it
       // forever on ownership alone is the original #5463 bug, one hop removed.
-      storage.getLinks.mockResolvedValue([
+      asStore([
         { id: 'peer-dead', cloneStatus: 'cloning', cloneInstanceId: 'peer-x', updatedAt: '2020-01-01T00:00:00.000Z' },
       ]);
-      storage.updateLink.mockResolvedValue({});
 
       await recoverInterruptedRepoClones();
 
-      expect(storage.updateLink).toHaveBeenCalledWith('peer-dead', expect.objectContaining({
+      expect(storedRecord('links', 'peer-dead')).toMatchObject({
         cloneStatus: 'failed',
         cloneInterrupted: true,
-      }));
+      });
     });
 
     it('does not block on the staging sweep', async () => {
@@ -1104,6 +1223,87 @@ describe('brain service', () => {
 
       expect(repoCloner.reapStaleCloneStaging).toHaveBeenCalled();
       released(0);
+    });
+  });
+
+  // ===========================================================================
+  // cloneRepoInBackground — the locked clone claim
+  // ===========================================================================
+
+  describe('cloneRepoInBackground', () => {
+    const URL_ = 'https://github.com/acme/widgets';
+    const gitRun = () => {
+      let resolve;
+      let reject;
+      const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+      return { promise, resolve, reject };
+    };
+
+    it('runs git once for two overlapping starts; the loser gets a 409', async () => {
+      seedRecord('links', { id: 'link-001', url: URL_, isRepo: true, cloneStatus: 'failed' });
+      const git = gitRun();
+      repoCloner.cloneRepo.mockReturnValue(git.promise);
+
+      const results = await Promise.allSettled([
+        cloneRepoInBackground('link-001', URL_),
+        cloneRepoInBackground('link-001', URL_),
+      ]);
+
+      expect(results.map(r => r.status).sort()).toEqual(['fulfilled', 'rejected']);
+      expect(results.find(r => r.status === 'rejected').reason).toMatchObject({ status: 409, code: 'CLONE_IN_PROGRESS' });
+      expect(repoCloner.cloneRepo).toHaveBeenCalledTimes(1);
+      git.resolve({ localPath: '/repos/acme/widgets' });
+      await vi.waitFor(() => expect(storedRecord('links', 'link-001').cloneStatus).toBe('cloned'));
+    });
+
+    it('a superseded attempt cannot settle the link its successor owns', async () => {
+      // Attempt A is orphaned (recovery reset the link), then B starts. A's late
+      // failure must not mark B failed, and B's success still lands.
+      seedRecord('links', { id: 'link-001', url: URL_, isRepo: true, cloneStatus: 'pending' });
+      const first = gitRun();
+      const second = gitRun();
+      repoCloner.cloneRepo.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+      storage.getLinks.mockImplementation(async () => [storedRecord('links', 'link-001')]);
+
+      await cloneRepoInBackground('link-001', URL_);
+      await recoverInterruptedRepoClones();
+      await cloneRepoInBackground('link-001', URL_);
+      const ownerAttempt = storedRecord('links', 'link-001').cloneAttempt;
+
+      first.reject(new Error('git exited 128'));
+      await new Promise(resolve => setImmediate(resolve));
+      expect(storedRecord('links', 'link-001')).toMatchObject({ cloneStatus: 'cloning', cloneAttempt: ownerAttempt, cloneError: null });
+
+      second.resolve({ localPath: '/repos/acme/widgets' });
+      await vi.waitFor(() => expect(storedRecord('links', 'link-001')).toMatchObject({
+        cloneStatus: 'cloned',
+        cloneAttempt: null,
+        localPath: '/repos/acme/widgets'
+      }));
+    });
+
+    it('a superseded success does not mark the link cloned under a newer attempt', async () => {
+      seedRecord('links', { id: 'link-001', url: URL_, isRepo: true, cloneStatus: 'pending' });
+      const first = gitRun();
+      repoCloner.cloneRepo.mockReturnValueOnce(first.promise).mockReturnValueOnce(new Promise(() => {}));
+      storage.getLinks.mockImplementation(async () => [storedRecord('links', 'link-001')]);
+
+      await cloneRepoInBackground('link-001', URL_);
+      await recoverInterruptedRepoClones();
+      await cloneRepoInBackground('link-001', URL_);
+
+      first.resolve({ localPath: '/repos/acme/widgets' });
+      await new Promise(resolve => setImmediate(resolve));
+
+      expect(storedRecord('links', 'link-001')).toMatchObject({ cloneStatus: 'cloning', cloneAttempt: expect.any(String) });
+      expect(storedRecord('links', 'link-001').localPath).toBeUndefined();
+    });
+
+    it('resolves to null without running git when the link is gone', async () => {
+      storage.getLinkById.mockResolvedValue(null);
+
+      await expect(cloneRepoInBackground('missing', URL_)).resolves.toBeNull();
+      expect(repoCloner.cloneRepo).not.toHaveBeenCalled();
     });
   });
 
@@ -1553,8 +1753,7 @@ describe('brain service', () => {
         // Mock the create function for the new destination (use people as target)
         storage.createPerson.mockResolvedValue({ id: 'new-001' });
         storage[updateFns[dest]].mockResolvedValue({});
-        storage.updateInboxLog.mockResolvedValue({});
-
+  
         await fixClassification('inbox-001', 'people', { name: 'Test' }, 'fix');
 
         expect(storage[updateFns[dest]]).toHaveBeenCalledWith('old-001', { archived: true });
@@ -1569,7 +1768,6 @@ describe('brain service', () => {
         filed: { destination: 'links', destinationId: 'link-001' }
       });
       storage.createIdea.mockResolvedValue({ id: 'idea-001' });
-      storage.updateInboxLog.mockResolvedValue({});
 
       await fixClassification('inbox-002', 'ideas', undefined, 'not a bookmark');
 

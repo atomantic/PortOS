@@ -131,6 +131,7 @@ export const PLATFORMS = {
 // any future save hooks intact rather than writing the file out from under it.
 export const loadAccounts = store.load;
 export const saveAccounts = store.save;
+export const mutateAccounts = store.mutate;
 export const invalidateCache = store.invalidateCache;
 
 export function notifyChanged(action = 'update', accountId = null) {

@@ -55,8 +55,31 @@ function diffFiles(diff) {
   });
 }
 
-/** One review round, with one shared wall-clock/call budget and immutable input.
- * runBatch MUST return a validated verdict; transport success is insufficient.
+const SIBLING_NOTE_MAX_NAMES = 100;
+const SIBLING_NOTE_MAX_BYTES = 4096;
+
+/** What a batch must tell its reviewer: it holds only part of the change, and where the rest is.
+ * Names are opaque git headers (untrusted data); the list is bounded so the note stays small.
+ */
+function siblingScope(batchFiles, files) {
+  if (batchFiles.length === files.length) return null;
+  const inBatch = new Set(batchFiles.map(file => file.id));
+  const others = files.filter(file => !inBatch.has(file.id)).map(file => file.file.replace(/^diff --git /, ''));
+  const names = [];
+  let bytes = 0;
+  for (const name of others) {
+    bytes += Buffer.byteLength(name) + 1;
+    if (names.length >= SIBLING_NOTE_MAX_NAMES || bytes > SIBLING_NOTE_MAX_BYTES) break;
+    names.push(name);
+  }
+  return { batchFiles: batchFiles.length, totalFiles: files.length, otherFiles: names, omittedFiles: others.length - names.length };
+}
+
+/** One review round, with one shared deadline/call budget and immutable input.
+ * CLI output may renew the deadline; the independent call limit never renews.
+ * runBatch(input, remainingMs, budget, siblings) MUST return a validated verdict; transport
+ * success is insufficient. `siblings` is null when the batch is the whole diff, otherwise the
+ * other files reviewed in separate calls (see siblingScope) so the reviewer can be told.
  * Optional/required policy and iteration limits remain with the caller.
  */
 export async function runCodeReviewBatches({ diff, headSha = null, budgetMs, maxBatchBytes = CODE_REVIEW_BATCH_BYTES, maxBatches = CODE_REVIEW_MAX_BATCHES, startedAt = Date.now(), runBatch }) {
@@ -89,11 +112,11 @@ export async function runCodeReviewBatches({ diff, headSha = null, budgetMs, max
       continue;
     }
     const input = batch.files.map(file => file.diff).join('');
-    const result = await Promise.resolve().then(() => runBatch(input, remainingMs, budget))
+    const result = await Promise.resolve().then(() => runBatch(input, remainingMs, budget, siblingScope(batch.files, files)))
       .catch(() => ({ ok: false, code: 'REVIEW_BATCH_FAILED', error: 'A review batch failed before returning a verdict; review coverage is incomplete.' }));
     identity = { ...identity, ...Object.fromEntries(['backend', 'model', 'effort', 'effortUnsupported'].filter(key => result[key] !== undefined).map(key => [key, result[key]])) };
     const capacity = isReviewContextCapacityFailure(result) || result.code === 'REVIEW_CONTEXT_CAPACITY';
-    batches.push({ files: batch.files.map(file => file.id), diffSha256: digest(input), outcome: result.ok ? result.verdict : capacity ? 'context_capacity' : 'inconclusive', attempted: true });
+    batches.push({ files: batch.files.map(file => file.id), diffSha256: digest(input), outcome: result.ok ? result.verdict : capacity ? 'context_capacity' : 'inconclusive', attempted: true, ...(result.diagnostics ? { diagnostics: result.diagnostics } : {}) });
     if (capacity && batch.files.length > 1) {
       const middle = Math.ceil(batch.files.length / 2);
       queue.unshift(...[batch.files.slice(0, middle), batch.files.slice(middle)].map(parts => ({ files: parts, bytes: parts.reduce((sum, file) => sum + file.bytes, 0) })));

@@ -504,7 +504,7 @@ export default function GraphCanvas({
           type="button"
           onClick={() => setLegendOpen((open) => !open)}
           aria-pressed={legendOpen}
-          className="port-media-overlay port-media-overlay-item self-start px-2 py-0.5 text-[10px] rounded"
+          className="port-media-overlay port-media-overlay-item self-start px-2 py-0.5 text-[10px] pointer-coarse:min-h-11 rounded"
         >
           {legendOpen ? 'Hide legend' : 'Legend'}
         </button>

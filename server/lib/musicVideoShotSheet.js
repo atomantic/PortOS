@@ -4,9 +4,11 @@ import { activeMusicVideoSubjects } from './musicVideoCastSelection.js';
  * rendering anything. A shot's sheet (`scene.shotSheet`) names what the shot is
  * meant to be: which camera we look through and who holds it, the view, where
  * and when it is, who is in it, what they do and what they feel. The project's
- * `cameras` list says which cameras exist in this video. The sheet is the
- * director's plan beside the frame and motion prompts: nothing here reaches a
- * model on its own.
+ * `cameras` list says which cameras exist in this video. A shot whose sheet
+ * has `promptFromSheet` builds its prompts from the sheet: its frame and motion
+ * prompts are then general prompts, and shotSheetPromptLines are the details
+ * the still and clip composers add after them (musicVideoShotPrompt.js).
+ * Otherwise the sheet is the director's plan beside the prompts and reaches no model.
  */
 import { sungLyricTextWithin } from './musicVideoLyricAnchors.js';
 
@@ -41,13 +43,49 @@ export function normalizeShotSheet(sheet) {
  * judged and reads as current. Takes record the composed prompt, which contains
  * the shot's own text whole, so any edit to that text shows.
  */
-function selectedFrameOutdated(scene) {
+function selectedFrameOutdated(project, scene) {
   const framePrompt = typeof scene?.framePrompt === 'string' ? scene.framePrompt.trim() : '';
-  if (!framePrompt || !scene?.referenceImageId) return false;
+  // A sheet-built still records each ingredient's text, so an edited ingredient shows too.
+  const parts = [framePrompt, ...shotSheetPromptLines(project, scene).map((line) => line.text)].filter(Boolean);
+  if (!parts.length || !scene?.referenceImageId) return false;
   const take = (Array.isArray(scene.takes) ? scene.takes : [])
     .find((entry) => entry?.kind === 'image' && entry.assetId === scene.referenceImageId);
   if (typeof take?.prompt !== 'string' || !take.prompt) return false;
-  return !take.prompt.includes(framePrompt);
+  return parts.some((part) => !take.prompt.includes(part));
+}
+
+/** Whether a shot's prompts are built from its sheet (its frame and motion prompts are then general prompts). */
+export const shotSheetDrivesPrompt = (scene) => scene?.shotSheet?.promptFromSheet === true;
+
+const sheetText = (value) => (typeof value === 'string' ? value.trim() : '');
+const listNames = (names) => (names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : names[0] || '');
+
+/**
+ * The still-prompt ingredients a sheet-built shot sends, in reading order, each
+ * `{ id, label, text }` so the composer can list it as its own labeled part:
+ * camera (and who holds it), view, place and time, who, action, emotion, notes.
+ * Empty columns add nothing. [] for a shot not built from its sheet.
+ */
+export function shotSheetPromptLines(project, scene) {
+  if (!shotSheetDrivesPrompt(scene)) return [];
+  const sheet = scene.shotSheet;
+  const camera = sheet.cameraId ? (project?.cameras || []).find((entry) => entry?.id === sheet.cameraId) : null;
+  const holder = sheetText(sheet.holder);
+  const cameraText = camera
+    ? camera.kind === 'observer' ? `${camera.name}, an unseen observer camera that nobody in the scene holds`
+      : holder === SHOT_CAMERA_SET_DOWN ? `${camera.name}, set down with nobody holding it` : holder ? `${camera.name}, held by ${holder}` : camera.name
+    : '';
+  const place = [sheetText(sheet.location), sheetText(sheet.timeOfDay), sheetText(sheet.light) ? `lit by ${sheetText(sheet.light)}` : ''].filter(Boolean).join(', ');
+  const who = (Array.isArray(sheet.characters) ? sheet.characters : []).map(sheetText).filter(Boolean);
+  return [
+    ['camera', 'Camera', cameraText],
+    ['view', 'View', sheetText(sheet.view)],
+    ['place', 'Place and time', place],
+    ['who', 'Who', listNames(who)],
+    ['action', 'Action', sheetText(sheet.action)],
+    ['emotion', 'Emotion', sheetText(sheet.emotion)],
+    ['notes', 'Notes', sheetText(sheet.notes)],
+  ].filter(([, , text]) => text).map(([id, label, text]) => ({ id: `shot-sheet-${id}`, label, text: `${label}: ${text}.`.replace(/([.!?])\.$/, '$1') }));
 }
 
 /** What a shot is set to render: a photo or video, from its planned medium, else its picture layer. */
@@ -72,7 +110,7 @@ export function shotSheetRows(project) {
       scene, sheet,
       lyric: (sung || (typeof scene.lyricText === 'string' ? scene.lyricText : '') || '').trim(),
       camera: sheet.cameraId ? cameras.get(sheet.cameraId) || null : null,
-      frameOutdated: selectedFrameOutdated(scene),
+      frameOutdated: selectedFrameOutdated(project, scene),
       hasDirection: directions.has(scene.sceneId),
       output: shotOutput(scene, directions.get(scene.sceneId)),
       // The picture layer can disagree with the plan, and a composed render reads the layer.
@@ -157,11 +195,11 @@ export function shotSheetStretches(rows, readValue) {
 
 /**
  * An AI backfill of a shot's sheet, filling only the columns that are empty:
- * whatever the director has set stays theirs, and Checked is never touched.
+ * whatever the director has set stays theirs, and Done is never touched.
  * Returns the merged sheet and which columns it filled.
  */
 export function mergeShotSheetBackfill(sheet = {}, proposed = {}) {
-  const filled = Object.keys(proposed).filter((field) => field !== 'checked' && hasSheetValue(proposed[field]) && !hasSheetValue(sheet?.[field]));
+  const filled = Object.keys(proposed).filter((field) => field !== 'checked' && field !== 'promptFromSheet' && hasSheetValue(proposed[field]) && !hasSheetValue(sheet?.[field]));
   return { sheet: { ...sheet, ...Object.fromEntries(filled.map((field) => [field, proposed[field]])) }, filled };
 }
 
@@ -185,7 +223,7 @@ export function shotSheetMediaEdits(rows) {
 /**
  * A column set across a run of shots: the sheet each one saves, leaving out shots
  * it wouldn't change. With `onlyEmpty`, a value the director already set stays.
- * Clearing a column (a blank value) removes it. Checked is left as it was.
+ * Clearing a column (a blank value) removes it. Done is left as it was.
  */
 export function shotSheetBulkEdits(rows, field, value, { onlyEmpty = true } = {}) {
   const next = typeof value === 'string' ? value.trim() : value;
@@ -194,6 +232,26 @@ export function shotSheetBulkEdits(rows, field, value, { onlyEmpty = true } = {}
     if ((sheet[field] ?? '') === (next ?? '')) return [];
     return [{ sceneId: scene.sceneId, shotSheet: normalizeShotSheet({ ...sheet, [field]: next }) }];
   });
+}
+
+/**
+ * How many shots the director has marked Done on the sheet (stored as
+ * `shotSheet.checked`, the box's earlier name). Null while no shot has a sheet
+ * yet, so a video planned without the sheet keeps Shots' other done rules.
+ */
+export function shotSheetDoneProgress(project) {
+  const scenes = (project?.scenes || []).filter(Boolean);
+  if (!scenes.some((scene) => scene.shotSheet)) return null;
+  const done = scenes.filter((scene) => scene.shotSheet?.checked === true).length;
+  return { done, total: scenes.length, all: done === scenes.length };
+}
+
+/**
+ * The sheets that mark every listed shot Done, leaving out shots already done.
+ * Nothing else in a sheet changes.
+ */
+export function shotSheetMarkDoneEdits(rows) {
+  return rows.flatMap(({ scene, sheet }) => (sheet?.checked === true ? [] : [{ sceneId: scene.sceneId, shotSheet: normalizeShotSheet({ ...sheet, checked: true }) }]));
 }
 
 /** The cast the sheet's character picker offers: the project's character subjects, by name. */

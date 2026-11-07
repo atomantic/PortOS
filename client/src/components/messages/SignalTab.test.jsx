@@ -41,3 +41,10 @@ it('requires a saved opt-in before accessing Signal and explains a disabled setu
   expect(toast.error).toHaveBeenCalledWith('Enable Signal sync and save before checking setup or syncing.');
   expect(api.syncSignal).not.toHaveBeenCalled();
 });
+
+it('warns that sync is stopped when the status reports an unreadable store', async () => {
+  api.getSignalStatus.mockResolvedValue({ state: { cursorRowid: null }, stateError: 'UNREADABLE_STORE' });
+  render(<SignalTab />);
+  expect(await screen.findByText(/Sync is stopped: its saved position could not be read/)).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Sync now' })).toBeTruthy();
+});

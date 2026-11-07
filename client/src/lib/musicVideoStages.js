@@ -17,10 +17,12 @@ import { supersededStillsCheckpoint } from '../../../server/lib/musicVideoAutono
 import { FINISHED_OUTSIDE_RERENDER_NOTE, finishedOutside, finishedOutsideCovers } from '../../../server/lib/musicVideoFinishedOutside.js';
 import { coldOpenScenes, normalizePreMusic, songScenes } from '../../../server/lib/musicVideoColdOpen.js';
 import { shotCameraLabel } from '../../../server/lib/cameraMovements.js';
+import { shotSheetDoneProgress } from '../../../server/lib/musicVideoShotSheet.js';
 
 /**
  * The steps of a music video, in the order the director decides them: the
- * story is planned shot by shot before the Look is cast. The
+ * story comes before the song, and is planned shot by shot before the Look
+ * is cast. The
  * ids are the route's `:stage` values and stay stable across the relabel
  * (#10297 follow-up): Song is `setup`, Look is `cast-sets`, Storyboard (once
  * Plan) is `board`, Shots (once Make) is `produce` — each shot's still,
@@ -28,8 +30,8 @@ import { shotCameraLabel } from '../../../server/lib/cameraMovements.js';
  * `review`. `doneWhen` is the one line a step shows under its title.
  */
 export const MUSIC_VIDEO_STAGES = [
-  { id: 'setup', label: 'Song', title: 'Song', doneWhen: 'Done when the track is analyzed and every lyric word is timed to the vocal.' },
   { id: 'story', label: 'Story', title: 'Story', optional: true, doneWhen: 'Done when the story direction is ready; this step is optional.' },
+  { id: 'setup', label: 'Song', title: 'Song', doneWhen: 'Done when the track is analyzed and every lyric word is timed to the vocal.' },
   { id: 'board', label: 'Storyboard', title: 'Storyboard', doneWhen: 'Done when timed shots cover the whole song, each with its action, staging, camera and lyric.' },
   { id: 'cast-sets', label: 'Look', title: 'Look', doneWhen: 'Done when the art direction is written, a visual guide is chosen, and you approve it.' },
   { id: 'produce', label: 'Shots', title: 'Shots', doneWhen: 'Done when the shots and composition are ready.' },
@@ -418,7 +420,8 @@ export function lyricSetupState(project, readiness = project?.productionReadines
  *
  * Plan (`board`) is done once timed shots cover the song. Shots (`produce`)
  * is done once the storyboard is approved, the footage is in and the
- * composition is ready. Its animated proof is an optional check: neither Shots
+ * composition is ready, and, once the shot sheet is in use, every shot is
+ * marked Done on it. Its animated proof is an optional check: neither Shots
  * nor the final render waits on a proof approval.
  */
 export function deriveStages(project, readiness = project?.productionReadiness, publish = {}) {
@@ -442,7 +445,8 @@ export function deriveStages(project, readiness = project?.productionReadiness, 
     'cast-sets': castDone,
     // Reopened for rework, the storyboard waits for Approve storyboard whatever else is done.
     board: (planned || shotsPlanned) && !project?.storyboardReopenedAt,
-    produce: shotsDone,
+    // Once the shot sheet is in use, Shots also waits on every shot being marked Done there.
+    produce: shotsDone && shotSheetDoneProgress(project)?.all !== false,
     // A render made before later scene edits no longer counts as the final video.
     review: !!project?.renderHistoryId && !isFinalRenderStale(project),
     // #9281/#9282: published once every enabled platform has a recorded post.
@@ -599,6 +603,9 @@ const COMPOSE_LABELS = { document: ['Attach a composition', 'Attach'], eidoverse
 function produceNextAction({ project, run }) {
   if (run?.status === 'needs-human') return { id: 'goto-review', kind: 'goto', stage: 'review', label: 'Review the draft', shortLabel: 'Review' };
   if (!footageReady(project)) return { id: 'goto-produce', kind: 'goto', stage: 'produce', anchor: 'mv-generation', label: 'Make the footage', shortLabel: 'Make' };
+  if (shotSheetDoneProgress(project)?.all === false) {
+    return { id: 'goto-shot-sheet', kind: 'goto', stage: 'produce', anchor: SHOT_SHEET_ANCHOR, label: 'Mark shots done', shortLabel: 'Shots' };
+  }
   const [label, shortLabel] = COMPOSE_LABELS[project.composition?.mode] || ['Add typography', 'Type'];
   return { id: 'goto-compose', kind: 'goto', stage: 'produce', anchor: 'mv-composition', label, shortLabel };
 }
@@ -662,6 +669,7 @@ const ART_DIRECTION_FIELDS = [['cast', 'cast'], ['environments', 'sets'], ['visu
 export const ART_DIRECTION_ANCHOR = 'mv-art-direction-editor';
 export const LOOK_GUIDES_ANCHOR = 'mv-look-guides';
 export const CAST_CHECKIN_ANCHOR = 'mv-cast-checkin';
+export const SHOT_SHEET_ANCHOR = 'mv-shot-sheet';
 /**
  * What the art approval is still waiting on before there is anything to
  * approve: the unwritten art-direction fields (`missing`, by label) and the
@@ -1059,7 +1067,7 @@ function castSetsChecklist({ project, readiness }) {
   const waiting = !approve.done && !approve.stale && (missing.length > 0 || !guide);
   return [
     { id: 'direction', label: 'Art direction written', done: missing.length === 0, ...direction },
-    { id: 'guide', label: guide ? `Visual guide chosen: ${guide.title || guide.filename || 'sheet'}` : 'Visual guide chosen', done: !!guide, ...guideRow },
+    { id: 'guide', label: guide ? `Visual guide chosen: ${guide.title || guide.filename || 'sheet'}${guide.version ? ` v${guide.version}` : ''}` : 'Visual guide chosen', done: !!guide, ...guideRow },
     feedbackItem(project, 'art', readiness),
     waiting ? { ...approve, detail: 'Opens once the art direction is written and a guide is chosen.', action: null } : approve,
   ].filter(Boolean);
@@ -1116,6 +1124,12 @@ function produceChecklist({ project, readiness, scenes, mode }) {
     : planOpen ? { ...reviewed, detail: 'Finish the storyboard first.', action: { label: 'Open the storyboard', stage: 'board' } }
       : lookOpen ? { ...reviewed, detail: 'Approve the Look first.', action: { label: 'Open Look', stage: 'cast-sets', anchor: APPROVAL_ANCHORS.art } }
         : reviewed);
+  const sheet = shotSheetDoneProgress(project);
+  if (sheet) {
+    items.push({ id: 'shots-done', label: 'Every shot marked done', done: sheet.all,
+      detail: sheet.all ? null : `${formatCount(sheet.done)} of ${formatCount(sheet.total)} done.`,
+      action: sheet.all ? null : { label: 'Open the shot sheet', anchor: SHOT_SHEET_ANCHOR } });
+  }
   const work = COMPOSITION_ITEMS[mode]?.(project.composition || {}, project);
   if (work) items.push(work);
   const proofFeedback = feedbackItem(project, 'proof', readiness, { optional: true });
@@ -1205,7 +1219,8 @@ export function stepNotes(project, readiness = project?.productionReadiness, pub
   ].filter(Boolean).join(' · ');
   const draft = project.productionReview?.draft || {};
   const guide = (project.devArtifacts || []).find((a) => a.id === draft.guideArtifactId && !a.deleted);
-  const look = guide ? 'Visual guide chosen' : project.castAndSets?.source === 'catalog' ? 'Catalog cast and sets linked' : project.castAndSets ? 'Cast and sets built' : '';
+  // The guide's version names the one the director settled on (e.g. "Visual guide v35").
+  const look = guide ? (guide.version ? `Visual guide v${guide.version}` : 'Visual guide chosen') : project.castAndSets?.source === 'catalog' ? 'Catalog cast and sets linked' : project.castAndSets ? 'Cast and sets built' : '';
   const board = scenes.length ? `${formatCount(scenes.length)} ${scenes.length === 1 ? 'shot' : 'shots'}` : '';
   const mode = project.composition?.mode || 'concat';
   let make = '';
@@ -1217,7 +1232,10 @@ export function stepNotes(project, readiness = project?.productionReadiness, pub
   // Once the picture is in, an unfinished Shots step names what is left instead.
   if (scenes.length && readiness && deriveStages(project, readiness, publish).stages.find((stage) => stage.id === 'produce')?.state !== 'done') {
     const open = stageChecklist('produce', project, readiness, publish).filter((item) => !item.done && !item.optional);
-    if (open.length && !open.some((item) => item.id === 'footage')) make = `To do: ${open[0].label}`;
+    const sheet = shotSheetDoneProgress(project);
+    if (open.length && !open.some((item) => item.id === 'footage')) {
+      make = sheet && !sheet.all ? `${formatCount(sheet.done)}/${formatCount(sheet.total)} shots done` : `To do: ${open[0].label}`;
+    }
   }
   // Before a final render, the drafts and proofs to watch are what Final render holds.
   const drafts = (project.excerpts || []).filter((e) => e.status === 'complete' && e.filename).length;

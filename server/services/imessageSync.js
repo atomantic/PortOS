@@ -24,12 +24,14 @@
 import { DatabaseSync } from 'node:sqlite';
 import { statSync } from 'node:fs';
 
-import { expandHome, dataPath, atomicWrite, tryReadFile, safeJSONParse } from '../lib/fileUtils.js';
+import { expandHome, dataPath, atomicWrite } from '../lib/fileUtils.js';
+import { readSyncCursorState, readSyncCursorStateForStatus } from '../lib/syncCursorState.js';
 import { getUserTimezone } from './userTimezone.js';
 import { identityFromHandle } from '../lib/tribeMatch.js';
 import { shortSummary, localDayKey } from './humanActivity.js';
 import { getSettings } from './settings.js';
 import { fullDiskAccessDetails } from '../lib/fullDiskAccess.js';
+import { readBlocklist, withImessagePrivacyLock } from './imessagePrivacy.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -240,13 +242,7 @@ function stateFilePath() {
 // Machine-local incremental cursor. NOT federated — chat.db and its ROWIDs are
 // per-machine, so this state must never sync to a peer.
 export async function readSyncState() {
-  const raw = await tryReadFile(stateFilePath());
-  const parsed = raw ? safeJSONParse(raw, null, { allowArray: false }) : null;
-  return {
-    cursorRowid: Number.isFinite(parsed?.cursorRowid) ? parsed.cursorRowid : 0,
-    lastRunAt: parsed?.lastRunAt || null,
-    lastResult: parsed?.lastResult || null,
-  };
+  return readSyncCursorState(stateFilePath(), 'cursorRowid');
 }
 
 async function writeSyncState(state) {
@@ -394,12 +390,14 @@ function readMessages(db, cursorRowid, limit) {
  * Re-entrancy guarded: a manual "Sync now" overlapping a scheduler tick would
  * double-read the same cursor (deduped, but doubled work, and the slower writer
  * could stamp a stale cursor over the fresher one) — so concurrent callers share
- * the in-flight pass instead.
+ * the in-flight pass instead. The pass also runs under the privacy lock shared
+ * with blocklist/purge mutations, so an in-flight batch cannot re-insert rows a
+ * completed purge or block just removed.
  */
 let syncInFlight = null;
 export async function runSync() {
   if (syncInFlight) return syncInFlight;
-  syncInFlight = doRunSync().finally(() => { syncInFlight = null; });
+  syncInFlight = withImessagePrivacyLock(doRunSync).finally(() => { syncInFlight = null; });
   return syncInFlight;
 }
 
@@ -435,9 +433,11 @@ async function doRunSync() {
   const touchpointCandidates = imessageTouchpointCandidates(batch.messages, timezone);
 
   // PortOS-side blocklist: skip spam handles before they land in the activity
-  // store or Tribe touchpoint log. Apple's chat.db is never mutated.
-  const blocklist = await manage.readBlocklist().catch(() => ({ handles: [] }));
-  const blockedKeys = new Set(blocklist.handles || []);
+  // store or Tribe touchpoint log. Apple's chat.db is never mutated. An
+  // unreadable blocklist throws UNREADABLE_STORE (fail closed): ingesting with an
+  // empty list would persist blocked handles and advance the cursor past them.
+  const blocklist = await readBlocklist();
+  const blockedKeys = new Set(blocklist.handles);
   const activityFiltered = manage.filterBlockedActivityCandidates(activityCandidates, blockedKeys);
   const touchpointFiltered = manage.filterBlockedTouchpointCandidates(touchpointCandidates, blockedKeys);
 
@@ -479,6 +479,6 @@ async function doRunSync() {
 
 // Status for the settings UI: config + cursor state (no chat.db open).
 export async function getStatus() {
-  const [config, state] = await Promise.all([getImessageConfig(), readSyncState()]);
-  return { config, state };
+  const [config, { state, stateError }] = await Promise.all([getImessageConfig(), readSyncCursorStateForStatus(stateFilePath(), 'cursorRowid')]);
+  return { config, state, ...(stateError ? { stateError } : {}) };
 }

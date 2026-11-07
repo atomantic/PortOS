@@ -11,7 +11,7 @@ vi.mock('./worktreeManager.js', () => ({ listWorktrees: vi.fn() }));
 vi.mock('./branchReconcileOutcome.js', () => ({ recordBranchReconcileOutcome: vi.fn(), getBranchReconcileOutcome: vi.fn() }));
 vi.mock('./heldCheckoutRecovery.js', () => ({ prepareInventoriedCheckoutRetirement: vi.fn(), retireInventoriedCheckout: vi.fn() }));
 vi.mock('./branchReconcileRetirement.js', () => ({ assertAutomaticRetirementAllowed: vi.fn() }));
-vi.mock('./releaseSynchronization.js', () => ({ retainReleaseSynchronizationReview: vi.fn(), validateLockedPublisherRetirement: vi.fn() }));
+vi.mock('./releaseSynchronization.js', () => ({ retainReleaseSynchronizationReview: vi.fn(), validateLockedPublisherRetirement: vi.fn(), validateLockedSynchronizationRetirement: vi.fn() }));
 
 import { settleInlineReleaseCheckouts } from './releaseSynchronizationCleanup.js';
 
@@ -28,7 +28,7 @@ beforeEach(() => {
       candidateHead: head, promotionPrNumber: 12 }, checkouts: [seed],
     obligations: Object.fromEntries(RELEASE_SYNC_OBLIGATIONS.map(name => [name, { status: 'verified' }])) };
   candidate = publisherCandidateTarget(entry);
-  sync = { repoPath: '/repo', path: '/sync', branch: 'codex/release-sync-1', head: syncHead, checkoutIdentity: 'd'.repeat(64), createdAt: '2026-01-01T00:00:02Z' };
+  sync = { repoPath: '/repo', path: '/sync', branch: 'codex/release-sync-1', head: syncHead, checkoutIdentity: 'd'.repeat(64), createdAt: '2026-01-01T00:00:02Z', agentId: 'owner' };
   entry.obligations.synchronizationPr.evidence = { prUrl: 'https://github.com/example/repo/pull/42', headSha: syncHead, branch: sync.branch };
   entry.obligations.retirement = { status: 'pending', evidence: { checkouts: [candidate, sync] } };
   deps = {
@@ -42,7 +42,7 @@ beforeEach(() => {
     record: vi.fn(async () => ({})), allowed: vi.fn(async () => {}),
     prepare: vi.fn(async ({ release }) => ({ ok: true, review: { digest: 'digest', forge: { prHead: release.head },
       comparison: { disposition: 'integrated', difference: '' } } })),
-    retainReview: vi.fn(async () => true), validateLocked: vi.fn(async () => true),
+    retainReview: vi.fn(async () => true), validateLocked: vi.fn(async () => true), validateLockedSync: vi.fn(async () => true),
     retire: vi.fn(async (_input, { beforeMutation }) => { await beforeMutation(); return { ok: true, branchDeleted: true }; }),
   };
 });
@@ -115,7 +115,47 @@ describe('inline release cleanup', () => {
   it('does not unlock a candidate if its settled owner cannot be revalidated', async () => {
     deps.validateLocked.mockResolvedValue(false);
     const result = await settleInlineReleaseCheckouts(entry, deps);
-    expect(result.held).toContainEqual({ branch: candidate.branch, reason: 'release-locked-owner-unverified' });
+    expect(result.held).toContainEqual({ branch: candidate.branch, path: candidate.path, reason: 'release-locked-owner-unverified' });
+    expect(deps.retire.mock.calls.map(([arg]) => arg.release.branch)).toEqual([sync.branch]);
+  });
+
+  const lockSync = async lockReason => {
+    const trees = await deps.listWorktrees();
+    deps.listWorktrees.mockResolvedValue(trees.map(tree => tree.path === sync.path ? { ...tree, locked: true, lockReason } : tree));
+  };
+
+  it('retires a synchronization checkout under its owner\'s own lock after revalidating it', async () => {
+    await lockSync('Active inline release synchronization owned by owner');
+    const result = await settleInlineReleaseCheckouts(entry, deps);
+    expect(result).toEqual({ attempted: true, retired: [candidate.branch, sync.branch], held: [] });
+    expect(deps.validateLockedSync).toHaveBeenCalledWith(expect.objectContaining({ path: sync.path, locked: true, repoPath: '/repo' }));
+    expect(deps.retire).toHaveBeenCalledWith(expect.objectContaining({ release: expect.objectContaining({
+      path: sync.path, locked: true, lockReason: 'Active inline release synchronization owned by owner',
+    }) }), expect.any(Object));
+  });
+
+  it('does not unlock a synchronization checkout if its settled owner cannot be revalidated', async () => {
+    await lockSync('Active inline release synchronization owned by owner');
+    deps.validateLockedSync.mockResolvedValue(false);
+    const result = await settleInlineReleaseCheckouts(entry, deps);
+    expect(result.held).toEqual([{ branch: sync.branch, path: sync.path, reason: 'release-locked-owner-unverified' }]);
+    expect(deps.retire.mock.calls.map(([arg]) => arg.release.branch)).toEqual([candidate.branch]);
+  });
+
+  it.each(['Active inline release synchronization owned by someone-else', 'operator hold', `Active release candidate ${'codex/release-sync-1'}`])
+  ('leaves a synchronization checkout locked as %s to its holder', async lockReason => {
+    await lockSync(lockReason);
+    const result = await settleInlineReleaseCheckouts(entry, deps);
+    expect(result.held).toEqual([{ branch: sync.branch, path: sync.path, reason: 'release-checkout-locked', lockReason }]);
+    expect(deps.prepare.mock.calls.map(([arg]) => arg.release.branch)).toEqual([candidate.branch]);
+  });
+
+  it('treats a checkout another sweep already retired as settled, and still retires its sibling', async () => {
+    const trees = await deps.listWorktrees();
+    deps.listWorktrees.mockResolvedValue(trees.filter(tree => tree.path !== candidate.path));
+    const receipt = { ...candidate, branchDeleted: true, archiveDir: null, retiredAt: '2026-01-01T02:00:00Z' };
+    deps.getOutcome.mockResolvedValue({ retired: [receipt], retirementReceiptEvidence: { same: receipt } });
+    expect(await settleInlineReleaseCheckouts(entry, deps)).toEqual({ attempted: true, retired: [sync.branch], held: [] });
     expect(deps.retire.mock.calls.map(([arg]) => arg.release.branch)).toEqual([sync.branch]);
   });
 

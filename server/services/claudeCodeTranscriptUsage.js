@@ -7,6 +7,7 @@ import { atomicWrite, PATHS, readJSONFile } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { isPlainObject, POLLUTING_KEYS, bucketFor } from '../lib/objects.js';
 import { isNonBlankStr } from '../lib/textUtils.js';
+import { usageLedgerFenced } from './usageCutoverBarrier.js';
 
 /**
  * Per-model token usage for EVERY Claude Code session on this machine —
@@ -17,7 +18,8 @@ import { isNonBlankStr } from '../lib/textUtils.js';
  * `timestamp`, `message.model`, and `message.usage`. Two hazards:
  *  - a streamed response is logged on several lines with growing counts, and
  *    resumed/forked sessions replay earlier history into a new file, so lines
- *    are de-duplicated by `message.id` + `requestId` (the last copy wins);
+ *    are de-duplicated by `message.id` + `requestId` (the largest output wins,
+ *    with a stopped emission preferred when output counts tie);
  *  - the CLI prunes old transcripts. So the scan is folded into a persisted
  *    per-day, per-model store (`data/claude-code-transcript-usage.json`) that
  *    keeps history the CLI has since deleted.
@@ -76,14 +78,21 @@ async function collectFile(path, from, seen) {
     if (!DAY_RE.test(day) || (from && day < from)) continue;
     const key = message.id ? `${message.id}:${row.requestId || ''}` : row.uuid;
     if (!key) continue;
-    seen.set(key, {
+    const previous = seen.get(key);
+    const candidate = {
       day,
       model: message.model,
       input: usage.input_tokens || 0,
       output: usage.output_tokens || 0,
       cacheRead: usage.cache_read_input_tokens || 0,
-      cacheWrite: usage.cache_creation_input_tokens || 0
-    });
+      cacheWrite: usage.cache_creation_input_tokens || 0,
+      stopped: Boolean(message.stop_reason)
+    };
+    if (!previous
+      || candidate.output > previous.output
+      || (candidate.output === previous.output && candidate.stopped && !previous.stopped)) {
+      seen.set(key, candidate);
+    }
   }
 }
 
@@ -189,6 +198,8 @@ export function refreshLocalTranscriptUsage({ root, force = false, staleMs = REF
     const stored = await readLocalTranscriptUsage();
     const age = stored.updatedAt ? Date.now() - Date.parse(stored.updatedAt) : Infinity;
     if (!force && age < staleMs) return { ...stored, filesScanned: 0, refreshed: false };
+    // Native transcripts stay on disk, so the next refresh after a fence catches up.
+    if (await usageLedgerFenced()) return { ...stored, filesScanned: 0, refreshed: false };
     const from = stored.updatedAt
       ? new Date(Date.now() - REFRESH_LOOKBACK_DAYS * 86_400_000).toISOString().slice(0, 10)
       : null;

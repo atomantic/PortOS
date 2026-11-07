@@ -1,0 +1,61 @@
+{
+  "fixtureVersion": 1,
+  "family": "agy",
+  "nativeContract": "Antigravity brain/<conversation>/.system_generated/logs/transcript.jsonl steps: step_index, type, created_at, PLANNER_RESPONSE token fields. Synthetic values.",
+  "scenarios": [
+    {
+      "name": "conversation and step identify a record, and repeating an index in another conversation is a new step",
+      "files": {
+        ".gemini/antigravity-cli/brain/c1/.system_generated/logs/transcript.jsonl": [
+          { "type": "USER_INPUT", "step_index": 0 },
+          { "type": "PLANNER_RESPONSE", "step_index": 1, "created_at": "2026-03-02T12:00:00Z", "input_tokens": 20, "output_tokens": 4, "cache_read_tokens": 10 },
+          { "type": "PLANNER_RESPONSE", "step_index": 1, "created_at": "2026-03-02T12:00:00Z", "input_tokens": 20, "output_tokens": 4, "cache_read_tokens": 10 }
+        ],
+        ".gemini/antigravity-cli/brain/c2/.system_generated/logs/transcript.jsonl": [
+          { "type": "USER_INPUT", "step_index": 0 },
+          { "type": "PLANNER_RESPONSE", "step_index": 1, "created_at": "2026-03-02T13:00:00Z", "input_tokens": 5, "output_tokens": 1, "cache_read_tokens": 50 }
+        ]
+      },
+      "expect": {
+        "status": "available", "scope": { "kind": "machine" },
+        "runtime": { "status": "unknown" },
+        "tokenFields": { "totalTokens": "unverified-overlap", "cacheWriteTokens": "unsupported" },
+        "totals": { "totalTokens": null, "tokensIn": 25, "tokensOut": 5, "cacheReadTokens": 60, "cacheWriteTokens": null },
+        "duplicates": { "duplicateRecords": 1 },
+        "steps": { "conversations": 2, "conversationsWithStepGaps": 0, "missingStepIndexes": 0, "conversationsPartiallyMeasured": 0 },
+        "cacheOverlap": { "cacheExceedsInputRecords": 1, "cacheWithinInputRecords": 1 },
+        "findings": ["input-cache-overlap-unverified"]
+      }
+    },
+    {
+      "name": "missing steps and partly measured conversations are not marked complete",
+      "files": {
+        ".gemini/antigravity-cli/brain/c1/.system_generated/logs/transcript.jsonl": [
+          { "type": "USER_INPUT", "step_index": 0 },
+          { "type": "PLANNER_RESPONSE", "step_index": 1, "created_at": "2026-03-02T12:00:00Z", "input_tokens": 20, "output_tokens": 4, "cache_read_tokens": 10 },
+          { "type": "PLANNER_RESPONSE", "step_index": 4, "created_at": "2026-03-02T12:01:00Z", "status": "DONE" }
+        ]
+      },
+      "expect": {
+        "status": "partial",
+        "totals": { "totalTokens": null, "tokensIn": 20, "tokensOut": 4, "cacheReadTokens": 10 },
+        "coverage": { "records": 2, "measuredRecords": 1, "missingUsageRecords": 1 },
+        "steps": { "conversations": 1, "conversationsWithStepGaps": 1, "missingStepIndexes": 2, "conversationsPartiallyMeasured": 1 },
+        "findings": ["missing-usage", "missing-steps", "partially-measured-conversations", "input-cache-overlap-unverified"]
+      }
+    },
+    {
+      "name": "a step with conflicting usage is excluded and only the transcript location is trusted",
+      "files": {
+        ".gemini/antigravity-cli/brain/c1/.system_generated/logs/transcript.jsonl": [
+          { "type": "PLANNER_RESPONSE", "step_index": 0, "created_at": "2026-03-02T12:00:00Z", "input_tokens": 1, "output_tokens": 1, "cache_read_tokens": 0 },
+          { "type": "PLANNER_RESPONSE", "step_index": 0, "created_at": "2026-03-02T12:00:00Z", "input_tokens": 9, "output_tokens": 1, "cache_read_tokens": 0 }
+        ],
+        ".gemini/antigravity-cli/brain/c1/notes.jsonl": [
+          { "type": "PLANNER_RESPONSE", "step_index": 7, "input_tokens": 1000, "output_tokens": 1000, "cache_read_tokens": 1000 }
+        ]
+      },
+      "expect": { "status": "partial", "totals": null, "duplicates": { "conflictingRecords": 1 }, "coverage": { "files": 1, "measuredRecords": 0 } }
+    }
+  ]
+}

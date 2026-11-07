@@ -2,6 +2,7 @@ import { v4 as uuidv4 } from '../lib/uuid.js';
 import { callProviderAISimple, parseLLMJSON } from './aiProvider.js';
 import { addNotification, NOTIFICATION_TYPES } from './notifications.js';
 import { loadJSON, mutateGoals, GOALS_FILE, DEFAULT_GOALS } from './identity/store.js';
+import { userLocalToday } from './userTimezone.js';
 
 function computeExpectedProgress(goal) {
   const start = new Date(goal.createdAt);
@@ -80,8 +81,9 @@ export async function runGoalCheckIn({ background = false } = {}) {
   );
 
   const results = [];
-  const now = new Date().toISOString();
-  const today = now.slice(0, 10);
+  const nowDate = new Date();
+  const now = nowDate.toISOString();
+  const today = await userLocalToday(nowDate);
 
   // Build the check-in records off the snapshot captured before the LLM calls
   // (title/status text only needs to be roughly current), but apply them to a

@@ -4472,4 +4472,63 @@ function B() { const sensors = useSensors(useSensor(PointerSensor)); return <Dnd
     }
     expect(offenders, `Nested <main> — use <section> (the app shell's <main id="main-content"> is the only landmark):\n${offenders.join('\n')}`).toEqual([]);
   });
+
+  it('floors editable field text at 16px on a coarse pointer, unlayered (#15177)', () => {
+    // iOS Safari zooms on focus of any field under 16px, and fields carry their
+    // own `text-sm`/`text-xs`. The floor must sit at the top level of the
+    // stylesheet: Tailwind's `text-sm` lives in `@layer utilities`, so the same
+    // rule inside any `@layer` would lose to it and silently do nothing.
+    const css = readFileSync(join(CLIENT_ROOT, 'src/index.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+    const topLevel = [];
+    let depth = 0;
+    let start = 0;
+    for (let i = 0; i < css.length; i++) {
+      if (css[i] === '{') {
+        if (depth === 0) start = css.lastIndexOf('}', i) + 1;
+        depth++;
+      } else if (css[i] === '}') {
+        depth--;
+        if (depth === 0) topLevel.push(css.slice(start, i + 1));
+      }
+    }
+    const rule = topLevel.find((block) => /^\s*@media\s*\(pointer:\s*coarse\)/.test(block) && /\btextarea\b/.test(block));
+    expect(rule, 'src/index.css needs a top-level (unlayered) @media (pointer: coarse) rule setting font-size: 16px on input/select/textarea').toBeTruthy();
+    expect(rule).toMatch(/font-size:\s*16px/);
+    expect(rule).toMatch(/\bselect\b/);
+    for (const type of ['checkbox', 'radio', 'range', 'color', 'file', 'hidden']) {
+      expect(rule, `${type} inputs must be excluded`).toContain(`[type="${type}"]`);
+    }
+  });
+
+  it('gives a text-[10px] button a coarse-pointer touch height (#15180)', () => {
+    // A 10px label with tight padding renders a ~21px button; on a phone that
+    // is a mis-tap hazard. Dense desktop chips stay compact via
+    // `pointer-coarse:min-h-11`.
+    const offendersIn = (file, src) => {
+      const out = [];
+      for (const node of forEachOpeningTag(src, 'button')) {
+        const tokens = node.tag.split(/[\s"'`{}=]+/);
+        // Any variant of a 10px label counts (`max-sm:`, `!`), so none escapes the scan.
+        if (!tokens.some((t) => /(?:^|[:!])text-\[10px\]$/.test(t))) continue;
+        const px = (v) => (/^\d+$/.test(v) ? Number(v) * 4 : /^\[(\d+)px\]$/.test(v) ? Number(/\d+/.exec(v)[0]) : /^\[(\d+(?:\.\d+)?)rem\]$/.test(v) ? parseFloat(v.slice(1)) * 16 : 0);
+        // Only an unprefixed floor (always) or a bare/`any-` pointer-coarse floor satisfies it.
+        const tall = tokens.some((t) => {
+          const m = /^(?:(?:any-)?pointer-coarse:)?(?:min-)?h-(.+)$/.exec(t);
+          return m && px(m[1]) >= 44;
+        });
+        if (tall) continue;
+        out.push(`${file}:${lineOf(src, node.index)}`);
+      }
+      return out;
+    };
+    expect(offendersIn('probe.jsx', '<button className="px-1.5 py-0.5 text-[10px]">x</button>')).toEqual(['probe.jsx:1']);
+    expect(offendersIn('probe.jsx', '<button className="px-1.5 pointer-coarse:min-h-11 text-[10px]">x</button>')).toEqual([]);
+    expect(offendersIn('probe.jsx', '<button className="max-sm:text-[10px] !text-[10px]">x</button>')).toEqual(['probe.jsx:1']);
+    expect(offendersIn('probe.jsx', '<button className="text-[10px] max-sm:pointer-coarse:min-h-11">x</button>')).toEqual(['probe.jsx:1']);
+    expect(offendersIn('probe.jsx', '<button className="text-[10px] not-pointer-coarse:min-h-11">x</button>')).toEqual(['probe.jsx:1']);
+    expect(offendersIn('probe.jsx', '<button className="text-[10px] min-h-[56px]">x</button>')).toEqual([]);
+    const offenders = [];
+    for (const file of trackedJsxFiles()) offenders.push(...offendersIn(file, rawSourceOf(file)));
+    expect(offenders, `<button> with text-[10px] needs pointer-coarse:min-h-11:\n${offenders.join('\n')}`).toEqual([]);
+  });
 });

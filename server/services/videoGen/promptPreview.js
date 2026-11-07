@@ -13,6 +13,7 @@ import { carriedPromptAdditions, sentPromptRecord } from '../../lib/modelInput.j
 import { getSettings } from '../settings.js';
 import { VIDEO_GEN_MODE } from './modes.js';
 import { HOSTED_VIDEO_SUBMISSIONS } from './hostedSubmission.js';
+import { RUNWAY_FORM_REFERENCE_LABEL } from '../../lib/runwayVideoModels.js';
 import { hostedReferenceInputsError, referenceImageUploadsError, resolveRequestedVideoBackend } from './prepareParams.js';
 import { VIDEO_GEN_LOCAL_ONLY_FIELD_NAMES, REFERENCE_AUDIO_FIELDS, VIDEO_REFERENCE_IMAGE_FIELDS, videoReferenceImageSlots } from './requestFields.js';
 import { grokVideoSentPrompt } from './grok.js';
@@ -119,6 +120,7 @@ export async function previewVideoPrompt({ previewUploads = [], ...body }) {
       bodyControl: body.runwayBodyControl, expressionIntensity: body.runwayExpressionIntensity, seed: body.runwaySeed,
       seconds: body.runwayDuration, width: body.width, height: body.height, resolution: body.runwayResolution, promptAdditions,
       hasImage: hasSourceImage, hasEndImage: !!uploads.lastImage || !!body.lastImageFile,
+      clipReferenceLabels: (body.referenceImageFiles || []).map(() => ({ label: RUNWAY_FORM_REFERENCE_LABEL })),
     }).record };
   }
   // Gemini's composer takes the prompt exactly as written (videoGen/geminiWeb.js).

@@ -507,7 +507,7 @@ export default function AccountsTab() {
                         <button
                           onClick={() => handleAddToOrgRegistry(account)}
                           disabled={linkingId === account.id}
-                          className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 text-gray-400 hover:text-white border border-port-border rounded hover:bg-port-bg transition-colors disabled:opacity-50"
+                          className="inline-flex items-center gap-1 text-[10px] pointer-coarse:min-h-11 px-1.5 py-0.5 text-gray-400 hover:text-white border border-port-border rounded hover:bg-port-bg transition-colors disabled:opacity-50"
                           title="Track this account in the Privacy Center org registry"
                         >
                           {linkingId === account.id ? <BrailleSpinner /> : <Building2 className="w-3 h-3" />}

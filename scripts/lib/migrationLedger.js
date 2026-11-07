@@ -1,4 +1,4 @@
-import { readdir, readFile, rename, stat } from 'fs/promises';
+import { readFile, rename, stat } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { resolveInstallRoot } from '../../server/lib/dataRoot.js';
@@ -50,19 +50,8 @@ export async function adoptLegacyAppliedList(rootDir) {
   });
 }
 
-/**
- * Scan for numbered migration files (NNN-name.js, sorted by filename). Co-located vitest
- * files (*.test.js) are excluded — they don't export `up()` and would
- * throw the runner if imported as migrations. The vitest config picks
- * them up via its own scripts test glob in server/vitest.config.js.
- * Unnumbered modules include shared helpers and executable tooling; importing
- * them here can run unrelated checks or exit the process before migrations finish.
- */
-export async function scanMigrationFiles(migrationsDir) {
-  return (await readdir(migrationsDir))
-    .filter(f => /^\d+-.*\.js$/.test(f) && !f.endsWith('.test.js'))
-    .sort();
-}
+export { scanMigrationFiles } from './migrationFiles.js';
+import { scanMigrationFiles } from './migrationFiles.js';
 
 /**
  * Read the applied-migrations list. A missing file defaults to [].

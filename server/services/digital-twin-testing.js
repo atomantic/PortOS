@@ -4,7 +4,7 @@ import { join } from 'path';
 import { getProviderById } from './providers.js';
 import { buildPrompt } from './promptService.js';
 import { DIGITAL_TWIN_DIR, generateId, now, callProviderAI, parseScorerVerdict, resolveTestPersona } from './digital-twin-helpers.js';
-import { loadMeta, saveMeta, cache, CACHE_TTL_MS } from './digital-twin-meta.js';
+import { loadMeta, mutateMeta, cache, CACHE_TTL_MS } from './digital-twin-meta.js';
 import { getDigitalTwinForPrompt } from './digital-twin-context.js';
 
 export async function parseTestSuite() {
@@ -83,9 +83,9 @@ export async function runTests(providerId, model, testIds = null, personaId = nu
     timestamp: now()
   };
 
-  meta.testHistory.unshift(historyEntry);
-  meta.testHistory = meta.testHistory.slice(0, 50); // Keep last 50 runs
-  await saveMeta(meta);
+  await mutateMeta((latest) => {
+    latest.testHistory = [historyEntry, ...(latest.testHistory || [])].slice(0, 50); // Keep last 50 runs
+  });
 
   console.log(`🧬 Test run complete: ${passed}/${testsToRun.length} passed`);
 

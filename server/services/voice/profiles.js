@@ -11,7 +11,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
-import { query } from '../../lib/db.js';
+import { query, withTransaction } from '../../lib/db.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS } from '../../lib/paths.js';
 import { writeFileGuarded } from '../../lib/fileUtils.js';
@@ -291,10 +291,10 @@ export async function listStudioProfiles({ limit = 30, cursor } = {}) {
     ? Buffer.from(JSON.stringify({ at: last.updatedAt, id: last.id })).toString('base64url') : null };
 }
 
-async function getBoundProfile(universeId, characterId) {
+async function getBoundPresetProfile(universeId, characterId) {
   const { rows } = await query(
     `SELECT data FROM voice_profiles
-     WHERE universe_id = $1 AND character_id = $2
+     WHERE universe_id = $1 AND character_id = $2 AND data->>'kind' = 'preset'
      ORDER BY (approval_status = 'approved') DESC, updated_at DESC, id DESC LIMIT 1`,
     [universeId, characterId],
   );
@@ -304,8 +304,8 @@ async function getBoundProfile(universeId, characterId) {
 /**
  * Retire existing approved profiles for a character when promoting a new profile.
  */
-async function supersedeApprovedProfiles(universeId, characterId, exceptProfileId) {
-  const { rows } = await query(
+async function supersedeApprovedProfiles(universeId, characterId, exceptProfileId, execute = query) {
+  const { rows } = await execute(
     `SELECT data FROM voice_profiles
      WHERE universe_id = $1 AND character_id = $2 AND approval_status = 'approved' AND id != $3`,
     [universeId, characterId, exceptProfileId],
@@ -318,10 +318,17 @@ async function supersedeApprovedProfiles(universeId, characterId, exceptProfileI
         approval: { ...item.approval, status: 'retired' },
         updatedAt: timestamp(),
       });
-      await persist(updated);
+      await persist(updated, execute);
     }
   }
 }
+
+/** Retire the old approved voice and persist the new one atomically so a failure never leaves the character voiceless. */
+const promoteAtomically = (universeId, characterId, next) => withTransaction(async (client) => {
+  const execute = (...args) => client.query(...args);
+  await supersedeApprovedProfiles(universeId, characterId, next.id, execute);
+  return persist(next, execute);
+});
 
 /**
  * Create a candidate Voice Design profile without changing the approved character voice.
@@ -510,8 +517,7 @@ export async function promoteFineTunedProfile({
   });
 
   await mkdir(profileDirectory(next.id), { recursive: true });
-  await supersedeApprovedProfiles(universeId, characterId, next.id);
-  return persist(next);
+  return promoteAtomically(universeId, characterId, next);
 }
 
 /**
@@ -541,8 +547,7 @@ export async function promoteVoiceProfile(profileId, { routes = null } = {}) {
     updatedAt: now,
   });
 
-  await supersedeApprovedProfiles(current.binding.universeId, current.binding.characterId, next.id);
-  return persist(next);
+  return promoteAtomically(current.binding.universeId, current.binding.characterId, next);
 }
 
 /**
@@ -565,7 +570,7 @@ export async function promotePresetProfile({
       code: 'VOICE_PROFILE_INVALID_PRESET',
     });
   }
-  const current = await getBoundProfile(universe, character);
+  const current = await getBoundPresetProfile(universe, character);
   const samePreset = current?.voiceId === preset.voiceId;
   const now = timestamp();
   const profileId = current?.id || randomUUID();
@@ -595,8 +600,7 @@ export async function promotePresetProfile({
     updatedAt: now,
   });
   await mkdir(profileDirectory(next.id), { recursive: true });
-  await supersedeApprovedProfiles(universe, character, next.id);
-  return persist(next);
+  return promoteAtomically(universe, character, next);
 }
 
 export async function saveProfileBenchmark(profile, benchmark, { interactive } = {}) {

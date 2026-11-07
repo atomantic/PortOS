@@ -19,6 +19,11 @@ import { productionMediumAddition } from './musicVideoProductionMedium.js';
 import { peopleLightLine } from './musicVideoSnapshotLight.js';
 import { falHearsAudioReference, getFalVideoModel } from './falVideoModels.js';
 import { storyboardPanelShotText } from './storyboardRecipe.js';
+import { musicVideoSubjectScaleText } from './musicVideoSubjectScale.js';
+import { musicVideoReferenceSubjectIds } from './musicVideoCastSelection.js';
+import { musicVideoConditioningReferences } from './musicVideoConditioning.js';
+import { routeMapShotText } from './musicVideoRouteMaps.js';
+import { shotSheetDrivesPrompt, shotSheetPromptLines } from './musicVideoShotSheet.js';
 
 /**
  * The project-wide visual direction: palette and camera rules from the visual
@@ -44,7 +49,9 @@ export const storyboardShotDirection = (scene) => (scene?.panelId ? scene?.visua
  * storyboard panel's direction (read live, so it follows panel edits), else
  * its frame prompt.
  */
-export const authoredShotPrompt = (scene) => scene?.prompt?.trim() || storyboardShotDirection(scene) || scene?.framePrompt?.trim() || '';
+export const authoredShotPrompt = (scene) => scene?.prompt?.trim() || storyboardShotDirection(scene)
+  // A detail-built shot's frame prompt is the still's general prompt, so its clip never borrows it.
+  || (shotSheetDrivesPrompt(scene) ? '' : scene?.framePrompt?.trim()) || '';
 
 const addition = (id, label, text) => {
   const trimmed = typeof text === 'string' ? text.trim() : '';
@@ -94,6 +101,8 @@ function composeShotModelInput(project, scene, {
   // A take that hears no audio cannot land a move on the downbeat; the shot card's camera stays as shown.
   const cameraSpec = !hears && !asTyped && scene?.camera?.onBeat ? { ...scene.camera, onBeat: false } : scene?.camera;
   const camera = addition('camera-move', 'Camera move', shotCameraPrompt(cameraSpec));
+  // Where the shot is on a route map, so neighbouring shots keep one direction of travel.
+  const route = addition('route-map', 'Route', routeMapShotText(project, scene));
   const actions = addition('shot-actions', 'Shot actions', project ? shotActionPrompt(project, scene, { offsetSec, heard: hears }) : '');
   const tail = audioReactive
     ? [addition('audio-reactive-guard', 'Audio-reactive guard', AUDIO_REACTIVE_PERFORMANCE_GUARD)]
@@ -103,10 +112,12 @@ function composeShotModelInput(project, scene, {
       addition('repair-notes', 'Repair notes', fixes ? `Fix these problems from the previous take while preserving the shot intent: ${fixes}` : ''),
     ];
 
+  // A detail-built shot's details follow the director's motion text, each its own labeled part.
+  const sheet = shotSheetPromptLines(project, scene);
   const firstLine = [text, ...[...look, ...direction].filter(Boolean).map((item) => item.text)].filter(Boolean).join(', ');
-  const body = [firstLine, camera?.text, actions?.text].filter(Boolean).join('\n');
+  const body = [firstLine, ...sheet.map((item) => item.text), camera?.text, route?.text, actions?.text].filter(Boolean).join('\n');
   const prompt = [body, ...tail.filter(Boolean).map((item) => item.text)].filter(Boolean).join('. ');
-  return { prompt, promptAdditions: [...look, ...direction, camera, actions, ...tail].filter(Boolean) };
+  return { prompt, promptAdditions: [...sheet, ...look, ...direction, camera, route, actions, ...tail].filter(Boolean) };
 }
 
 /** A refine edit's wrapper around the director's instruction ("[instruction]" marks where it goes). */
@@ -116,25 +127,40 @@ const KEEP_REFERENCE = 'Keep the reference image\'s composition, subject and fra
 // Sent when a refine or an end frame from a frame carries the shot's character or set references after that frame.
 export const MUSIC_VIDEO_OTHER_REFERENCES_NOTE = 'The other reference images show the characters and places in this shot: keep their faces, hair and wardrobe as shown there.';
 
-/** The director's text for a shot's start or end frame. */
+/**
+ * The director's text for a shot's start or end frame. A sheet-built start
+ * frame's text is its general prompt alone (its ingredients are composed in),
+ * so it never borrows the motion prompt.
+ */
 export const authoredFramePromptText = (scene, slot = 'start') => (slot === 'end'
   ? scene?.endFramePrompt?.trim() || ''
-  : scene?.framePrompt?.trim() || scene?.prompt?.trim() || '');
+  : scene?.framePrompt?.trim() || (shotSheetDrivesPrompt(scene) ? '' : scene?.prompt?.trim() || ''));
 
 // Which panel id list names a subject of each kind.
 const PANEL_SUBJECT_IDS = { character: 'castIds', place: 'environmentIds', object: 'objectIds' };
 
 /**
- * The subjects a storyboard panel puts in its shot: of each kind the panel
- * names (its cast, places or objects match a subject's catalog id), only
- * those; a kind it names none of keeps every subject. So a shot of one person
- * is not handed the whole cast to fill the frame with.
+ * The subjects a still describes (its production bible and scale lines): those
+ * its references show (musicVideoReferenceSubjectIds), its picked set and cast
+ * variant, and those its storyboard panel names. A place, object or person the
+ * shot neither sends nor names is left out, so its description cannot pull it
+ * into the frame. A subject no shot can attach (a director's text-only subject
+ * with no catalog link or Cast & Sets asset) stays, as nothing else picks it.
+ * `references` defaults to the shot's own conditioning set when the caller
+ * does not know what it sends.
  */
-function panelSubjects(subjects, panel) {
-  if (!panel || !Array.isArray(subjects)) return subjects;
-  const named = (subject) => (panel[PANEL_SUBJECT_IDS[subject?.kind]] || []).includes(subject?.ingredientId);
-  const kindsNamed = new Set(subjects.filter(named).map((subject) => subject.kind));
-  return subjects.filter((subject) => !kindsNamed.has(subject?.kind) || named(subject));
+function shotSubjects(project, scene, { panel = null, references } = {}) {
+  const subjects = project?.concept?.subjects;
+  if (!Array.isArray(subjects)) return subjects;
+  const refs = Array.isArray(references) ? references : musicVideoConditioningReferences(project, scene);
+  const ids = new Set(refs.flatMap((ref) => musicVideoReferenceSubjectIds(project, ref)));
+  if (scene?.setReference?.subjectId) ids.add(scene.setReference.subjectId);
+  const variant = scene?.characterVariant?.ingredientId;
+  const checkedIn = new Set((project?.castAndSets?.catalogCheckin?.items || []).map((item) => item.subjectId));
+  const attachable = (subject) => Boolean(subject?.ingredientId) || String(subject?.id || '').startsWith('cs-') || checkedIn.has(subject?.id);
+  const inShot = (subject) => ids.has(subject.id) || (Boolean(subject.ingredientId)
+    && (subject.ingredientId === variant || (panel?.[PANEL_SUBJECT_IDS[subject.kind]] || []).includes(subject.ingredientId)));
+  return subjects.filter((subject) => !attachable(subject) || inShot(subject));
 }
 
 /**
@@ -181,12 +207,20 @@ const storyboardSketchNote = (position) => `Reference image ${position} is the s
  * `panel` is the shot's live storyboard panel (a start frame from its prompt
  * only): its action stands in for an empty frame prompt, its shot picks and
  * the place of its sketch among the references (`panelReference`, 1-based,
- * 0 when not sent) lead the prompt, and the bible names only the subjects it
+ * 0 when not sent) lead the prompt, and the bible also names the subjects it
  * puts in frame.
+ *
+ * `references` are the sent references in send order (the reference map); the
+ * bible and scale lines describe only the subjects they show (shotSubjects).
+ * `subjectReferences` stands in for them there when send positions are unknown
+ * (a peer-routed render). Neither given: the shot's own conditioning set.
+ *
+ * `sizes` is `{ [subjectId]: text }` (loadMusicVideoSubjectSizes): the real-world
+ * heights and sizes of the shot's subjects, stated as their own addition.
  */
 function composeFrameModelInput(project, scene, {
   slot = 'start', authored = authoredFramePromptText(scene, slot), fromFrame = false, refine = false,
-  repairs = [], fixes = '', otherReferences = 0, panel = null, panelReference = 0, references = [],
+  repairs = [], fixes = '', otherReferences = 0, panel = null, panelReference = 0, references, subjectReferences, sizes = null,
 } = {}) {
   const others = otherReferences > 0 ? addition('other-references', 'Character references', MUSIC_VIDEO_OTHER_REFERENCES_NOTE) : null;
   const text = typeof authored === 'string' ? authored.trim() : '';
@@ -201,17 +235,22 @@ function composeFrameModelInput(project, scene, {
     return { prompt: [`${text}. ${KEEP_REFERENCE}`, others?.text].filter(Boolean).join(' '),
       promptAdditions: [addition('keep-reference', 'Keep the start frame', KEEP_REFERENCE), others].filter(Boolean) };
   }
+  // A sheet-built still's ingredients follow its general prompt, each its own labeled part.
+  const sheet = slot === 'start' ? shotSheetPromptLines(project, scene) : [];
+  const shotText = [text, ...sheet.map((item) => item.text)].filter(Boolean).join('\n');
   const board = slot === 'start' && !fromFrame ? panel : null;
   const storyboard = board ? [
-    text ? null : addition('storyboard-action', 'Storyboard action', board.action),
+    shotText ? null : addition('storyboard-action', 'Storyboard action', board.action),
     addition('storyboard-shot', 'Storyboard shot', storyboardPanelShotText(board)),
     panelReference > 0 ? addition('storyboard-sketch', 'Storyboard sketch', storyboardSketchNote(panelReference)) : null,
   ].filter(Boolean) : [];
-  const concept = board && project?.concept ? { ...project.concept, subjects: panelSubjects(project.concept.subjects, board) } : project?.concept;
+  const concept = project?.concept ? { ...project.concept, subjects: shotSubjects(project, scene, { panel: board, references: subjectReferences ?? references }) } : project?.concept;
   const look = [
     addition('reference-map', 'Reference images', musicVideoReferenceMapText(references)),
     addition('project-style', 'Project style', project?.concept?.style),
     addition('creative-context', 'Production bible', musicVideoCreativeContext(concept, { look: musicVideoDirectorLook(project) })),
+    addition('real-world-scale', 'Real-world scale', musicVideoSubjectScaleText(concept, sizes)),
+    addition('route-map', 'Route', routeMapShotText(project, scene)),
     addition('visual-direction', 'Palette and camera rules', visualDirection(project?.visualSpec)),
     ...(slot === 'end' ? [] : [addition('frame-direction', 'Frame direction', scene?.direction?.frameClause)]),
     productionMediumAddition(project),
@@ -219,8 +258,8 @@ function composeFrameModelInput(project, scene, {
   ].filter(Boolean);
   const lookText = look.map((item) => item.text).join(', ');
   // The storyboard leads on its own lines, ahead of the long look blocks.
-  const firstLine = storyboard.length
-    ? [text, ...storyboard.map((item) => item.text), lookText].filter(Boolean).join('\n')
+  const firstLine = storyboard.length || sheet.length
+    ? [shotText, ...storyboard.map((item) => item.text), lookText].filter(Boolean).join('\n')
     : [text, lookText].filter(Boolean).join(', ');
   if (slot === 'end') return { prompt: firstLine, promptAdditions: look };
   const unmet = [...new Set(repairs)];
@@ -230,7 +269,7 @@ function composeFrameModelInput(project, scene, {
     addition('plate-repairs', 'Plate repairs', unmet.length ? `Repair these visible plate mismatches while preserving the shot intent:\n${unmet.join('\n')}` : ''),
     addition('repair-notes', 'Repair notes', fixes ? `Fix these visible problems from the previous still while preserving the shot intent:\n${fixes}` : ''),
   ].filter(Boolean);
-  return { prompt: [firstLine, ...tail.map((item) => item.text)].filter(Boolean).join('\n'), promptAdditions: [...storyboard, ...look, ...tail] };
+  return { prompt: [firstLine, ...tail.map((item) => item.text)].filter(Boolean).join('\n'), promptAdditions: [...sheet, ...storyboard, ...look, ...tail] };
 }
 
 const withGreybox = (input, greybox) => {

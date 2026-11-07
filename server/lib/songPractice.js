@@ -120,11 +120,11 @@ export function nextSongStage(stage, quality, { allowPromotion = true } = {}) {
  * caller can hand it straight to `brainStorage.updateWith` and let the locked
  * read-modify-write merge it over the freshest record.
  */
-export function applySongPractice(song, quality, now = new Date()) {
+export function applySongPractice(song, quality, now = new Date(), timezone = 'UTC') {
   const previous = songPracticeOrDefault(song);
-  const sameDay = isSameReviewDay(previous.lastReviewed, now);
+  const sameDay = isSameReviewDay(previous.lastReviewed, now, timezone);
   const advanced = advanceSchedule(previous, qualityToRatio(quality), now);
-  const schedule = mergeScheduleAdvance(previous, advanced, now);
+  const schedule = mergeScheduleAdvance(previous, advanced, now, timezone);
   const sessions = Number.isInteger(previous.sessions) ? previous.sessions : 0;
 
   return {

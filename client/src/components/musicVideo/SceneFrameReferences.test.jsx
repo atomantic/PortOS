@@ -10,6 +10,31 @@ const project = { visualSpec: { references: [
 const scene = { sceneId: 's1' };
 
 describe('a shot\'s References row', () => {
+  it('offers Retry when failed catalog guides are the only possible references', () => {
+    const linked = { concept: { subjects: [{ id: 'kit', kind: 'character', name: 'Kit', ingredientId: 'cat-chr-kit' }] } };
+    const shot = { sceneId: 's1', characterVariant: { ingredientId: 'cat-chr-kit' } };
+    const onReload = vi.fn();
+    const { rerender } = render(<SceneFrameReferences project={linked} scene={shot} castMedia={{ 'cat-chr-kit': null }} onReloadCastMedia={onReload} onEditLocal={vi.fn()} onSave={vi.fn()} />);
+    expect(screen.getByText(/Cast guides could not be loaded/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(onReload).toHaveBeenCalledTimes(1);
+    rerender(<SceneFrameReferences project={linked} scene={shot} castMedia={{ 'cat-chr-kit': [] }} onReloadCastMedia={onReload} onEditLocal={vi.fn()} onSave={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+  });
+
+  // Uniquely catches a failed cast-guide read showing nothing, so a frame render looks possible with no way to retry.
+  it('warns with a Retry for a cast member whose guides failed to load, and leaves the row editable', () => {
+    const linked = { ...project, concept: { subjects: [{ id: 'kit', kind: 'character', name: 'Kit', ingredientId: 'cat-chr-kit' }] } };
+    const onReload = vi.fn();
+    const { rerender } = render(<SceneFrameReferences project={linked} scene={{ sceneId: 's1', characterVariant: { ingredientId: 'cat-chr-kit' } }} castMedia={{ 'cat-chr-kit': null }} onReloadCastMedia={onReload} onEditLocal={vi.fn()} onSave={vi.fn()} />);
+    expect(screen.getByText(/Cast guides could not be loaded/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Add' }).disabled).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(onReload).toHaveBeenCalledTimes(1);
+    rerender(<SceneFrameReferences project={linked} scene={{ sceneId: 's1', characterVariant: { ingredientId: 'cat-chr-kit' } }} castMedia={{ 'cat-chr-kit': [] }} onReloadCastMedia={onReload} onEditLocal={vi.fn()} onSave={vi.fn()} />);
+    expect(screen.queryByText(/Cast guides could not be loaded/)).toBeNull();
+  });
+
   // Uniquely catches a linked character whose face and character sheets never reach the picker.
   it('offers every approved catalog asset of a linked character, and saves the pick', () => {
     const onSave = vi.fn();
@@ -29,6 +54,14 @@ describe('a shot\'s References row', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Kit · Face sheet' }));
     expect(onSave).toHaveBeenCalledWith('s1', { frameReferenceIds: ['r1', musicVideoLinkedReferenceId('kit-face.png')] });
     expect(screen.queryByRole('list', { name: 'References to add' })).toBeNull();
+  });
+
+  // Uniquely catches the renderer-limit note returning to the working surface instead of the info icon.
+  it('keeps the reference-order note behind a tap on the References info icon', () => {
+    render(<SceneFrameReferences project={project} scene={scene} onEditLocal={vi.fn()} onSave={vi.fn()} />);
+    expect(screen.queryByText(/each render attaches/)).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'How references are sent' }));
+    expect(screen.getByRole('tooltip').textContent).toContain('each render attaches');
   });
 
   it('holds a saved catalog pick and the row until its cast media loads', () => {

@@ -27,6 +27,7 @@ import { removeWorktree, classifyWorktreeDirt, listWorktrees } from './worktreeM
 import { hasClaimFlowContract } from '../lib/claimFlowTaskTypes.js';
 import { claimContinuationPointer } from '../lib/claimContinuation.js';
 import { isTruthyMeta } from './agentState.js';
+import { isFalsyMeta } from '../lib/metadataFlags.js';
 import { canonicalizePath } from '../lib/pathContainment.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { execGit } from '../lib/execGit.js';
@@ -1576,6 +1577,9 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
       reviewLoopFollowUp: true,
       ...(reviewTarget ? { cleanupReviewTarget: reviewTarget, resumeWorktreePath: reviewTarget.worktreePath } : {}),
       prCompletion,
+      // A per-task auto-merge choice outlives the PR-opening run; unset re-reads the app.
+      ...(isTruthyMeta(originalTask?.metadata?.useAutoMerge) || isFalsyMeta(originalTask?.metadata?.useAutoMerge)
+        ? { useAutoMerge: isTruthyMeta(originalTask.metadata.useAutoMerge) } : {}),
       // Merge-only run: no reviewers, the prompt is a CI-gate-and-merge procedure.
       reviewLoopMergeOnly: mergeOnly,
       // …and, on that same path, whether the agent owes the change its OWN

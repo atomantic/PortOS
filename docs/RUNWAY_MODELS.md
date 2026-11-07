@@ -23,8 +23,10 @@ canvas selection that preserves requested aspect ratio, plus their exact documen
 canvas dimensions. Video sizes and lengths depend on both model and operation:
 WAN keyframe requests use auto ratios, text requests use explicit canvases, and
 models such as MiniMax accept a separate resolution field. Optional advanced API
-controls keep provider defaults. Unknown prices are displayed as unknown, not zero;
-consult [Runway pricing](https://docs.dev.runwayml.com/guides/pricing/) before rendering.
+controls keep provider defaults. A quote uses [Runway's list price](https://docs.dev.runwayml.com/guides/pricing/)
+for the output and any per-image charge. PortOS sends `audio: false`, so a model that
+charges more for audio is quoted at its silent rate. A model with no listed price
+shows as unknown, not zero.
 
 ## Veo inclusion decision (2026-10-22)
 
@@ -81,6 +83,14 @@ inputs, and replay creates fresh uploads. Storage POSTs receive signed upload fi
 not the Runway API key. Local owned inputs are cleaned on success/failure/cancel;
 Runway's remote uploads expire automatically. Reloaded forms require video files to
 be selected again before a new submission.
+
+Reference images come from a Music Video shot's clip references or the Video Gen form's
+picker. Seedance, MiniMax H3 and WAN 3.0 send them as unpositioned `promptImage` entries
+with the start frame first. Runway cannot mix those with `first`/`last` keyframes, so
+with references the start frame guides the clip rather than pinning its opening, and an
+end frame cannot be used. A render with no references still pins its start frame. Kling
+O3 and Kling 4.0 take a separate `references` field, so their frames stay pinned and
+count toward the model's image limit.
 
 Specialized models stay out of text/image-only Music Video and Creative Director
 selectors. Other models' advanced video-reference controls, multiple timed Aleph

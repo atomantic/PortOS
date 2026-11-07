@@ -133,4 +133,32 @@ describe('agentDrafts service', () => {
     await expect(createDraft(agentId, { type: 'post', content: 'x' })).rejects.toMatchObject({ status: 400 });
     expect(fileStore.size).toBe(0);
   });
+
+  it('overlapping saves for one agent keep every draft; updates and deletes keep both outcomes', async () => {
+    const [a, b, c] = await Promise.all(
+      ['a', 'b', 'c'].map(content => createDraft('agent-race', { type: 'post', content }))
+    );
+    expect((await listDrafts('agent-race')).map(d => d.content).sort()).toEqual(['a', 'b', 'c']);
+
+    await Promise.all([
+      updateDraft('agent-race', a.id, { content: 'a2' }),
+      deleteDraft('agent-race', b.id),
+      createDraft('agent-race', { type: 'post', content: 'd' })
+    ]);
+    const contents = (await listDrafts('agent-race')).map(d => d.content).sort();
+    expect(contents).toEqual(['a2', 'c', 'd']);
+    expect(c.id).toBeTruthy();
+  });
+
+  it('writes for different agents do not wait on each other', async () => {
+    const { readJSONFileStrict } = await import('../lib/fileUtils.js');
+    let release;
+    const gate = new Promise(r => { release = r; });
+    readJSONFileStrict.mockImplementationOnce(async (_p, fallback) => { await gate; return { ok: true, value: fallback }; });
+    const blocked = createDraft('agent-slow', { type: 'post', content: 'x' });
+    await createDraft('agent-fast', { type: 'post', content: 'y' });
+    expect(await listDrafts('agent-fast')).toHaveLength(1);
+    release();
+    await blocked;
+  });
 });

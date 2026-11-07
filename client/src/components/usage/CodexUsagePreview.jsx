@@ -30,8 +30,9 @@ export default function CodexUsagePreview({ job, onStatus, refreshStatus, covera
     <section className="bg-port-card border border-port-border rounded-xl p-3 sm:p-4 space-y-3" aria-label="Preview Codex history">
       <h3 className="text-sm font-medium text-white">Preview Codex history before repair</h3>
       {coverage && <div role="note" aria-label="Codex usage on hold" className="rounded-lg border border-port-warning/30 bg-port-warning/5 p-3 text-xs space-y-1">
-        <p className="font-medium text-port-warning">Interactive Codex usage is on hold since {timeAgo(coverage.since, 'an unknown time')}. It is billed when the sources below can be read; nothing is lost while it waits.</p>
+        <p className="font-medium text-port-warning">Interactive Codex usage is on hold since {timeAgo(coverage.since, 'an unknown time')}. It is billed once its sources can be read; nothing is lost while it waits.</p>
         <p className="text-gray-400">Reasons: {formatIssues(coverage.issues)}.</p>
+        {coverage.progress && <p className="text-gray-400">Indexed {formatCount(coverage.progress.indexed)} of {formatCount(coverage.progress.total)} sources. Indexing continues on the next scan.</p>}
         {coverage.sources?.length > 0 && <ul className="text-gray-400 break-words">{coverage.sources.map(({ source, issues }) => <li key={source}>{source}: {issues.join(', ').replaceAll('_', ' ')}</li>)}</ul>}
       </div>}
       <p className="text-xs text-gray-400">Inspect raw, compressed and archived sources without changing recorded usage. Choose up to 366 days, inclusive in UTC. No provider calls.</p>

@@ -69,7 +69,7 @@ function CheckpointRow({ job, checkpoint, active, disabled, promoting, error, on
             onClick={() => onPromote(job, checkpoint)}
             disabled={disabled || blocked || promoting}
             aria-label={`Promote ${label}`}
-            className="inline-flex min-h-8 items-center gap-1 rounded bg-port-accent/20 px-2 py-0.5 text-[10px] text-port-accent hover:bg-port-accent hover:text-white disabled:opacity-40 disabled:hover:bg-port-accent/20 disabled:hover:text-port-accent"
+            className="inline-flex min-h-8 items-center gap-1 rounded bg-port-accent/20 px-2 py-0.5 text-[10px] pointer-coarse:min-h-11 text-port-accent hover:bg-port-accent hover:text-white disabled:opacity-40 disabled:hover:bg-port-accent/20 disabled:hover:text-port-accent"
           >
             {promoting ? <Loader2 size={10} className="animate-spin" /> : <BadgeCheck size={10} />} Promote
           </button>
@@ -102,7 +102,7 @@ function JobCard({ job, activeModelRevision, disabled, cancelling, onCancel, pro
             type="button"
             onClick={() => onCancel(job.id)}
             disabled={disabled || cancelling}
-            className="inline-flex min-h-8 items-center gap-1 rounded border border-port-error/60 px-2 py-0.5 text-[10px] text-port-error hover:bg-port-error hover:text-white disabled:opacity-40"
+            className="inline-flex min-h-8 items-center gap-1 rounded border border-port-error/60 px-2 py-0.5 text-[10px] pointer-coarse:min-h-11 text-port-error hover:bg-port-error hover:text-white disabled:opacity-40"
           >
             {cancelling ? <Loader2 size={10} className="animate-spin" /> : <Square size={10} />} Cancel
           </button>

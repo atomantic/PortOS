@@ -63,7 +63,7 @@ import {
   PEER_SUBSCRIBABLE_KINDS,
 } from '../services/sharing/peerSync.js';
 import { buildLocalManifest, getPeerIntegrity, isLegacyManifestKind, PEER_MANIFEST_VERSION } from '../services/sharing/integrity.js';
-import { authorizePeerPull } from '../services/sharing/peerPullAuthorization.js';
+import { authorizePeerPull, resolveCallerInstanceId } from '../services/sharing/peerPullAuthorization.js';
 
 const router = Router();
 
@@ -115,6 +115,13 @@ router.post('/push', asyncHandler(async (req, res) => {
 router.get('/subscriptions', asyncHandler(async (req, res) => {
   const filter = {};
   if (typeof req.query.peerId === 'string') filter.peerId = req.query.peerId;
+  // A peer credential only sees subscriptions that target itself (the records
+  // we push to it), never this install's subscriptions to other peers.
+  if (req.portosAuthContext?.method === 'peer') {
+    const callerId = await resolveCallerInstanceId(req);
+    if (!callerId) return res.json({ subscriptions: [] });
+    filter.peerId = callerId;
+  }
   if (typeof req.query.recordKind === 'string') filter.recordKind = req.query.recordKind;
   if (typeof req.query.recordId === 'string') filter.recordId = req.query.recordId;
   const subscriptions = await listPeerSubscriptions(filter);
@@ -286,7 +293,12 @@ router.get('/record', asyncHandler(async (req, res) => {
   // — same `peerAllowsOutbound` + `peerHasCategory` predicates the push path
   // uses, resolved from the caller's `X-PortOS-Instance-Id`. Warn-only until
   // `federation.strictPullAuthorization` is turned on.
-  await authorizePeerPull(req, { recordKind: kind, route: `record ${kind}` });
+  // Same enforcement as /manifest: kinds with no legacy pull behavior to
+  // preserve are always scoped to the caller's category sharing config.
+  const newlySupported = !isLegacyManifestKind(kind);
+  await authorizePeerPull(req, {
+    recordKind: kind, route: `record ${kind}`, alwaysEnforce: newlySupported, allowOperator: newlySupported,
+  });
   const payload = await getRecordPayloadForPeer(kind, id);
   if (!payload) {
     throw new ServerError('record not found', { status: 404, code: 'NOT_FOUND' });

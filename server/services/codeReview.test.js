@@ -501,6 +501,21 @@ describe('codeReview helpers', () => {
       expect(markProviderUsageLimit).not.toHaveBeenCalled()
     })
 
+    it('persists measured process timeouts in reviewer health without stream contents', async () => {
+      await reportReviewerFailure('provider:example-cli', { code: 'REVIEWER_PROCESS_TIMEOUT',
+        error: 'Reviewer process emitted output but did not exit — no output activity for 1800000ms', text: 'quota billing', diagnostics: { cli: {
+          phase: 'output-open', elapsedMs: 600000, stdoutBytes: 100, stderrBytes: 0,
+          argv: '/private/prompt', firstOutputMs: 'secret',
+        } } }, 1000)
+      const entry = mockedSettings.current.codeReview.reviewerHealth['provider:example-cli']
+      expect(entry).toMatchObject({ reason: 'provider_error', diagnostics: { cli: {
+        phase: 'output-open', elapsedMs: 600000, stdoutBytes: 100, firstOutputMs: null,
+      } } })
+      expect(codeReviewSettingsSchema.safeParse({ reviewerHealth: { 'provider:example-cli': entry } }).success).toBe(true)
+      expect(JSON.stringify(entry)).not.toContain('/private/prompt')
+      expect(JSON.stringify(entry)).not.toContain('secret')
+    })
+
     it('gives timeouts precedence over quota-like diagnostics without marking provider usage', async () => {
       const failure = {
         error: 'ollama reviewer process did not finish — timed out after 300000ms for a 5 KiB (4290 bytes) diff.',
@@ -927,6 +942,29 @@ describe('codeReview helpers', () => {
       })
     })
 
+    // #15260: a reviewer given part of a diff reported the other batches' files as missing.
+    it('tells each batch reviewer which other files are reviewed separately, leaving the diff untouched', async () => {
+      const sections = [fileDiff('a.js'), fileDiff('b.js'), fileDiff('renamed file.js')]
+      global.fetch = vi.fn().mockResolvedValue(completion('No findings.'))
+      await runLocalCodeReview({ ...batchOptions, diff: sections.join('') })
+      const others = ['a/a.js b/a.js', 'a/b.js b/b.js', 'a/renamed file.js b/renamed file.js']
+      global.fetch.mock.calls.forEach(([, init], i) => {
+        const content = JSON.parse(init.body).messages[1].content
+        expect(content).toContain("This diff holds 1 of the change's 3 files")
+        expect(content).toContain('Do not report a listed file')
+        expect(content).toContain('The list is complete')
+        others.forEach((name, j) => expect(content.split('```diff')[0].includes(name)).toBe(j !== i))
+        expect(content.endsWith(`\`\`\`diff\n${sections[i]}\n\`\`\``)).toBe(true)
+      })
+    })
+
+    it('sends no partial-diff note when one call holds the whole diff', async () => {
+      global.fetch = vi.fn().mockResolvedValue(completion('No findings.'))
+      await runLocalCodeReview({ ...batchOptions, maxBatchBytes: 128 * 1024, diff: fileDiff('a.js') + fileDiff('b.js') })
+      expect(global.fetch).toHaveBeenCalledTimes(1)
+      expect(JSON.parse(global.fetch.mock.calls[0][1].body).messages[1].content).not.toContain('This diff holds')
+    })
+
     it('preserves completed findings when a later batch has no validated verdict', async () => {
       global.fetch = vi.fn().mockResolvedValueOnce(completion(findingReply)).mockResolvedValueOnce(completion(''))
       const result = await runLocalCodeReview({ ...batchOptions, diff: ['a.js', 'b.js', 'c.js'].map(name => fileDiff(name)).join('') })
@@ -956,7 +994,7 @@ describe('codeReview helpers', () => {
       expect(result).toMatchObject({ ok: false, code: 'REVIEW_CONTEXT_CAPACITY', coverage: { reviewedFiles: [1], remainingFiles: [0], calls: 1 } })
       expect(result).not.toHaveProperty('verdict')
       expect(global.fetch).toHaveBeenCalledTimes(1)
-      expect(JSON.parse(global.fetch.mock.calls[0][1].body).messages[1].content).not.toContain('huge.js')
+      expect(JSON.parse(global.fetch.mock.calls[0][1].body).messages[1].content).not.toContain('diff --git a/huge.js')
     })
 
     it('subdivides a vendor context refusal only at file boundaries and removes raw diagnostics', async () => {

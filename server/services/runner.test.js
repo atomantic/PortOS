@@ -375,6 +375,36 @@ describe('patchRunMetadata — serialized merges', () => {
   });
 });
 
+describe('executeCliRun execution ownership', () => {
+  it('persists the server identity before spawn and the child identity before terminal metadata', async () => {
+    let metadata = { id: 'owned-run', endTime: null };
+    tryReadFile.mockImplementation(async () => JSON.stringify(metadata));
+    readFile.mockImplementation(async () => JSON.stringify(metadata));
+    atomicWrite.mockImplementation(async (path, data) => { if (path.endsWith('metadata.json')) metadata = data; });
+    const child = makeChild();
+    child.pid = 123456;
+    spawn.mockImplementationOnce(() => {
+      expect(metadata).toMatchObject({ executionOwner: { pid: process.pid }, executionKind: 'cli', executionChild: { pending: true } });
+      return child;
+    });
+    const onComplete = vi.fn();
+    try {
+      await executeCliRun({ runId: 'owned-run', provider: { id: 'example', command: 'codex', timeout: 5000 },
+        prompt: 'Example', workspacePath: TEST_WORKSPACE, onComplete });
+      child.emit('close', 0);
+      await flushMicrotasks();
+      expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({ success: true,
+        executionOwner: { pid: process.pid, id: expect.any(String), startedAt: expect.any(String) },
+        executionChild: { pid: 123456, startedAt: expect.any(String) },
+      }));
+    } finally {
+      tryReadFile.mockResolvedValue(null);
+      readFile.mockResolvedValue('{}');
+      atomicWrite.mockImplementation(async (path, data) => writeFile(path, typeof data === 'string' ? data : JSON.stringify(data, null, 2)));
+    }
+  });
+});
+
 describe('executeCliRun — Codex response channel', () => {
   it.each([
     ['Selected model is at capacity. Please try a different model.', ERROR_CATEGORIES.RATE_LIMIT, false],

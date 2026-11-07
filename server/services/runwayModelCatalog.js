@@ -23,9 +23,11 @@ function compatibleSchema(row, expected) {
   const d = p.duration?.anyOf?.find((v) => ['integer', 'number'].includes(v.type)) || p.duration || {};
   const ratios = p.ratio?.enum || p.ratio?.anyOf?.find((v) => v.enum)?.enum || [];
   const imageArray = p.promptImage?.anyOf?.find((v) => v.type === 'array');
+  // Some models publish `items: {}` for their image array, which says nothing either way.
+  const endImageKnown = !!imageArray?.items?.properties;
   const endImage = (imageArray?.items?.properties?.position?.enum || []).includes('last');
   const sameValues = (a, b) => JSON.stringify([...a].sort()) === JSON.stringify([...b].sort());
-  return endImage === expected.endImage
+  return (!endImageKnown || endImage === expected.endImage)
     && ('tag' in (p.referenceImages?.items?.properties || {})) === expected.referenceTags
     && required.includes('referenceImages') === (expected.minReferences > 0)
     && p.promptText?.maxLength === expected.promptMax && p.promptText?.minLength === expected.promptMin

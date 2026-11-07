@@ -82,6 +82,17 @@ export function readCallerInstanceId(req) {
 }
 
 /**
+ * Resolve the calling peer's instanceId. Auth context uses the registry id,
+ * while sharing predicates use instanceId. A removed or unidentified
+ * authenticated peer never falls back to the header.
+ */
+export async function resolveCallerInstanceId(req) {
+  return req?.portosAuthContext?.method === 'peer'
+    ? (await getPeers()).find((peer) => peer.id && peer.id === req.portosAuthContext.peerId)?.instanceId ?? null
+    : readCallerInstanceId(req);
+}
+
+/**
  * Decide whether a pull should be served, WITHOUT consulting the strict
  * setting or logging — the pure-ish decision half, so tests can assert it
  * agrees with the push path for a given peer/kind pair.
@@ -180,11 +191,7 @@ export async function authorizePeerPull(req, { recordKind = null, syncCategory =
     const { requestHasHostControl } = await import('../authGate.js');
     if (requestHasHostControl(req)) return { allowed: true, reason: null, peer: null, callerId: null };
   }
-  // Auth context uses the registry id, while sharing predicates use instanceId.
-  // A removed or unidentified authenticated peer never falls back to the header.
-  const callerId = req?.portosAuthContext?.method === 'peer'
-    ? (await getPeers()).find((peer) => peer.id && peer.id === req.portosAuthContext.peerId)?.instanceId ?? null
-    : readCallerInstanceId(req);
+  const callerId = await resolveCallerInstanceId(req);
   const decision = await decidePeerPull({ callerId, recordKind, syncCategory });
   if (decision.allowed) return decision;
   const label = route || 'pull';

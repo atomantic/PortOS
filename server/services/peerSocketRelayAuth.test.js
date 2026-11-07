@@ -44,6 +44,14 @@ vi.mock('../../lib/portosAuthCore.js', async () => {
   };
 });
 
+// Real preview sessions need a headless browser; the gate only needs to know
+// whether a refusal tears down the socket's sessions.
+const previewSessions = vi.hoisted(() => ({ closeForSocket: vi.fn(async () => {}) }));
+vi.mock('./generatedPreview/sessions.js', () => ({
+  registerGeneratedPreviewHandlers: vi.fn(),
+  closeGeneratedPreviewsForSocket: previewSessions.closeForSocket,
+}));
+
 const PEER_ID = 'peer-example-instance';
 const PAIR_SECRET = 'p'.repeat(40);
 const instanceRegistry = vi.hoisted(() => ({ data: { self: null, peers: [] } }));
@@ -159,6 +167,14 @@ const startServer = async (engineOptions = {}) => {
     socket.on('detect:start', () => { reached.push(['detect:start']); socket.emit('detect:complete', { success: true }); });
     // Stand-in for socket.js's error:recover, which queues a recovery agent (#8716).
     socket.on('error:recover', () => reached.push(['error:recover']));
+    // Stand-ins for generated-preview handlers: open/seek/playback/command run
+    // a headless browser and ffmpeg; close only stops work.
+    for (const action of ['open', 'seek', 'playback', 'command', 'close']) {
+      socket.on(`generated-preview:${action}`, () => {
+        reached.push([`generated-preview:${action}`]);
+        socket.emit('test:preview-reached', { action });
+      });
+    }
   });
   await new Promise((resolve) => httpServer.listen(0, resolve));
   port = httpServer.address().port;
@@ -168,6 +184,7 @@ const stopServer = async () => {
   for (const client of clients) client.close();
   clients = [];
   reached = [];
+  previewSessions.closeForSocket.mockClear();
   // Tolerate partial setup (a stage failed before the server existed) so the
   // teardown error does not mask the original failure.
   if (ioServer) await new Promise((resolve) => ioServer.close(resolve));
@@ -408,6 +425,48 @@ describe('host-control socket events need operator authority (#8708)', () => {
     expect(reached).toEqual([]);
   });
 
+  it('auth off: a remote caller is refused every generated-preview action except close', async () => {
+    await startServer();
+    const client = connectClient(REMOTE_VIA_DEV_PROXY);
+    await waitFor(client, 'connect');
+    const requestId = '11111111-1111-4111-8111-111111111111';
+    const sessionId = '22222222-2222-4222-8222-222222222222';
+
+    for (const action of ['open', 'seek', 'playback', 'command']) {
+      const refused = waitFor(client, 'generated-preview:error');
+      client.emit(`generated-preview:${action}`, { requestId, sessionId });
+      expect(await refused).toMatchObject({ code: 'HOST_CONTROL_FORBIDDEN', requestId, sessionId });
+    }
+    expect(reached).toEqual([]);
+    // Each refusal tore down whatever this socket still had open.
+    expect(previewSessions.closeForSocket).toHaveBeenCalledTimes(4);
+    expect(previewSessions.closeForSocket).toHaveBeenCalledWith(expect.any(String));
+
+    // Close is allowed through so the client can always release its own session.
+    previewSessions.closeForSocket.mockClear();
+    const closed = waitFor(client, 'test:preview-reached');
+    client.emit('generated-preview:close', { requestId, sessionId });
+    expect(await closed).toEqual({ action: 'close' });
+    expect(reached).toEqual([['generated-preview:close']]);
+    expect(previewSessions.closeForSocket).not.toHaveBeenCalled();
+    expect(client.connected).toBe(true);
+  });
+
+  it.each([
+    ['local', {}],
+    ['local through the dev proxy', { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '::ffff:127.0.0.1' }],
+  ])('auth off: a %s caller keeps generated-preview', async (_label, headers) => {
+    await startServer();
+    const client = connectClient(headers);
+    await waitFor(client, 'connect');
+    for (const action of ['open', 'seek', 'playback', 'command']) {
+      const reachedEvent = waitFor(client, 'test:preview-reached');
+      client.emit(`generated-preview:${action}`, {});
+      expect(await reachedEvent).toEqual({ action });
+    }
+    expect(previewSessions.closeForSocket).not.toHaveBeenCalled();
+  });
+
   it('auth off: a local caller, direct or through the dev proxy, keeps the shell', async () => {
     await startServer();
     for (const headers of [{}, { [DEV_PROXY_CLIENT_ADDRESS_HEADER]: '::ffff:127.0.0.1' }]) {
@@ -435,7 +494,10 @@ describe('host-control socket events need operator authority (#8708)', () => {
     const started = waitFor(client, 'shell:started');
     client.emit('shell:start', {});
     await started;
-    expect(reached).toEqual([['shell:start', undefined]]);
+    const previewed = waitFor(client, 'test:preview-reached');
+    client.emit('generated-preview:open', {});
+    expect(await previewed).toEqual({ action: 'open' });
+    expect(reached).toEqual([['shell:start', undefined], ['generated-preview:open']]);
   });
 
   it('preserves detection for local callers and authenticated remote operators', async () => {
@@ -463,6 +525,13 @@ describe('host-control socket events need operator authority (#8708)', () => {
     const disconnected = waitFor(client, 'disconnect');
     client.emit('shell:start', { initialCommand: 'echo example' });
     await disconnected;
+    expect(reached).toEqual([]);
+
+    const previewClient = connectClient({ Authorization: `Basic ${Buffer.from(':instance-secret').toString('base64')}` });
+    await waitFor(previewClient, 'connect');
+    const previewDisconnected = waitFor(previewClient, 'disconnect');
+    previewClient.emit('generated-preview:open', {});
+    await previewDisconnected;
     expect(reached).toEqual([]);
   });
 });

@@ -603,6 +603,33 @@ describe('an unreadable store', () => {
   });
 });
 
+describe('a store that cannot be read from disk', () => {
+  // A directory where the file belongs makes the read fail with EISDIR on every
+  // platform — a filesystem error, not an absent or malformed file.
+  const makeUnreadable = () => mkdirSync(STORE, { recursive: true });
+  const record = (modelId) => ({ backend: 'ollama', modelId, assessedAt: '2026-01-01T00:00:00.000Z' });
+
+  it('refuses saves and deletes with 503 and never parks or replaces the file', async () => {
+    makeUnreadable();
+    await expect(store.saveAssessment(record('a'))).rejects.toMatchObject({ status: 503, code: 'UNREADABLE_STORE' });
+    await expect(svc.deleteAssessment('ollama', 'a')).rejects.toMatchObject({ status: 503, code: 'UNREADABLE_STORE' });
+    expect(readdirSync(join(tempRoot, 'local-llm')).filter((f) => f.includes('.corrupt-'))).toEqual([]);
+    expect(existsSync(STORE)).toBe(true);
+  });
+
+  it('serializes overlapping saves and deletes so none drops another record', async () => {
+    await Promise.all(['a', 'b', 'c', 'd'].map((id) => store.saveAssessment(record(id))));
+    await Promise.all([
+      svc.deleteAssessment('ollama', 'a'),
+      store.saveAssessment(record('e')),
+      svc.deleteAssessment('ollama', 'c'),
+      store.saveAssessment(record('f')),
+    ]);
+    const ids = (await svc.loadAssessments()).map((a) => a.modelId).sort();
+    expect(ids).toEqual(['b', 'd', 'e', 'f']);
+  });
+});
+
 describe('deleteAssessment', () => {
   it('removes a record and reports that it did', async () => {
     runLocalLlmTest.mockResolvedValue(okRun());

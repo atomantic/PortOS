@@ -1,3 +1,4 @@
+import { nativeUsageAccountSelectionsSchema } from './nativeUsageSelections.js';
 import { a2vLoraStageStrengthsSchema, isDefaultA2vLoraStages } from './videoLoraStageValidation.js';
 import { executionOptionsSchema } from './aiToolkit/internal/executionOptionsValidation.js';
 import { federatedSourceAudioSchema } from './federatedMediaWire.js';
@@ -353,6 +354,8 @@ export const appSchema = z.object({
   // that never hears about a leaked branch just accumulates them.
   verifyRepoStateOnCompletion: z.boolean().optional(),
   mergeHandoffMinQueuedRuns: z.number().int().min(1).max(10000).nullable().optional(),
+  // Agents enable GitHub native auto-merge once reviews pass. Unset = on for PortOS itself, off elsewhere (resolveUseAutoMerge).
+  useAutoMerge: z.boolean().optional(),
   // Unset/false = off (default); true = land a `.quality.json` quality snapshot through an immediately-merged PR after each audit.
   publishQualitySnapshot: z.boolean().optional(),
   featureOverrides: appFeatureOverridesSchema.optional(),
@@ -1689,6 +1692,16 @@ const isoDay = z.string()
     return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
   }, { message: 'Not a valid calendar date' });
 
+export const nativeUsageAccountsQuerySchema = z.strictObject({});
+export const nativeUsageAccountsUpdateSchema = z.strictObject({
+  expectedRevision: z.string().regex(/^[a-f0-9]{64}$/),
+  selections: nativeUsageAccountSelectionsSchema,
+});
+export const nativeUsageCoverageQuerySchema = z.object({ family: z.enum(['claude', 'codex', 'grok', 'agy']).optional() }).strict();
+export const nativeUsageMatrixQuerySchema = z.object({ scope: z.enum(['local', 'fleet']).default('local') }).strict();
+export const nativeUsageRebuildSchema = z.object({ scope: z.enum(['local', 'fleet']).default('local') }).strict();
+export const nativeUsagePeerReportQuerySchema = z.object({ challenge: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
+
 /**
  * Query params for GET /api/usage — either a preset period or an explicit
  * from/to date range (inclusive, YYYY-MM-DD). Explicit dates win over period.
@@ -1723,6 +1736,17 @@ export const providerUsageQuerySchema = z.object({
 
 /** Body for POST /api/usage/messages — token counts persist forever, so
  * reject non-integer/negative garbage instead of coercing it into counters. */
+const usageCutoverEpoch = z.string().trim().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$/, 'Use 3-64 letters, digits, dots, dashes or underscores');
+export const usageCutoverEpochSchema = z.object({ migrationEpoch: usageCutoverEpoch }).strict();
+export const usageCutoverAcquireSchema = z.object({
+  migrationEpoch: usageCutoverEpoch,
+  participants: z.array(z.string().trim().min(1).max(128)).min(1).max(64),
+}).strict();
+export const usageCutoverRollbackSchema = z.object({
+  migrationEpoch: usageCutoverEpoch,
+  reason: z.string().trim().min(1).max(500),
+}).strict();
+
 export const usageMessagesSchema = z.object({
   providerId: z.string().min(1),
   model: z.string().nullish(),

@@ -8,7 +8,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { resolveGalleryImage } from '../../lib/fileUtils.js';
 import { probeVideoDuration } from '../../lib/ffmpeg.js';
 import { FAL_DEFAULT_IMAGE_VIDEO_MODEL, FAL_DEFAULT_TEXT_VIDEO_MODEL, getFalVideoModel } from '../../lib/falVideoModels.js';
-import { RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, getRunwayVideoModel, runwayModelTakesText } from '../../lib/runwayVideoModels.js';
+import { RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, RUNWAY_FORM_REFERENCE_LABEL, getRunwayVideoModel, runwayModelTakesText } from '../../lib/runwayVideoModels.js';
 import { isDefaultI2vReferenceMode } from '../../lib/videoReferenceModes.js';
 import { VIDEO_GEN_MODE, isVideoModeUsable } from './modes.js';
 import { getRunwaySpecialVideoModel, buildRunwaySpecialVideoRequest } from '../../lib/runwaySpecialVideoModels.js';
@@ -109,10 +109,26 @@ async function stageRunwayInputs(ctx) {
   if (!model) await refuse(`"${body.runwayModelId}" is not a Runway model PortOS offers`);
   if (!sourceImagePath && !runwayModelTakesText(model)) await refuse(`${model.label} renders from a start frame — supply a source image.`);
   if (!sourceImagePath && (uploads.lastImage || body.lastImageFile)) await refuse('An end frame needs a start frame — supply a source image.');
-  if (!uploads.lastImage && !body.lastImageFile) return {};
-  if (!model.endImage) await refuse(`${model.label} takes no end frame`);
+  const hasEndFrame = !!uploads.lastImage || !!body.lastImageFile;
+  if (hasEndFrame && !model.endImage) await refuse(`${model.label} takes no end frame`);
+  // A Music Video clip resolves its shot's references when it is queued (submitJob.js).
+  const pickedReferences = body.musicVideo ? [] : body.referenceImageFiles || [];
+  if (pickedReferences.length) {
+    if (!model.referenceImages) await refuse(`${model.label} takes no reference images.`);
+    if (!sourceImagePath) await refuse('Reference images need a start frame — supply a source image.');
+    if (hasEndFrame && !model.referenceImages.keepsFrames) await refuse(`${model.label} cannot combine an end frame with reference images. Turn one of them off.`);
+    if (pickedReferences.length + (hasEndFrame ? 2 : 1) > model.referenceImages.max) await refuse(`${model.label} takes at most ${model.referenceImages.max} images, its frames included.`);
+  }
+  const referenceImagePaths = [];
+  for (const file of pickedReferences) {
+    const path = resolveGalleryImage(file);
+    if (!path) await refuse(`The reference image ${file} could not be found in the gallery.`);
+    referenceImagePaths.push(path);
+  }
+  const references = referenceImagePaths.length ? { referenceImagePaths } : {};
+  if (!hasEndFrame) return references;
   const endFrame = await stageEndFrame(ctx);
-  return { lastImagePath: endFrame.path, ...(endFrame.owned ? { uploadedTempPaths: [endFrame.path] } : {}) };
+  return { ...references, lastImagePath: endFrame.path, ...(endFrame.owned ? { uploadedTempPaths: [endFrame.path] } : {}) };
 }
 
 // A standalone fal source-audio take: stage the audio clip durably like the frame. The queue removes
@@ -217,6 +233,10 @@ export const HOSTED_VIDEO_SUBMISSIONS = {
       targetAspectRatio: body.runwayTargetAspect, ratio: body.runwayRatio,
       bodyControl: body.runwayBodyControl, expressionIntensity: body.runwayExpressionIntensity, seed: body.runwaySeed,
       ...(prepared.lastImagePath ? { lastImagePath: prepared.lastImagePath } : {}),
+      ...(prepared.referenceImagePaths?.length ? {
+        referenceImagePaths: prepared.referenceImagePaths,
+        clipReferenceLabels: prepared.referenceImagePaths.map(() => ({ label: RUNWAY_FORM_REFERENCE_LABEL })),
+      } : {}),
       ...(prepared.uploadedTempPaths?.length ? { uploadedTempPaths: prepared.uploadedTempPaths } : {}),
       aspectRatio: body.visualConditioning?.render?.parameters?.aspectRatio,
       width: body.width,

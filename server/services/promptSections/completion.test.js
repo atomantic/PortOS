@@ -26,6 +26,10 @@ describe('review-enabled completion merge gate', () => {
     expect(section.indexOf('/api/cos/claim-selection')).toBeLessThan(section.indexOf('/api/cos/claim-ownership'));
     expect(section).toContain('recorded:true');
     expect(section).toContain('Bound child claims always take precedence');
+    // A picker that parked its only candidate itself must still record it, or
+    // the verifier has no selected issue and the task burns its retry budget.
+    expect(section).toContain('an issue this run parked itself with `blocked` or `needs-input`');
+    expect(section).toContain('`Blocked by #N` line');
   });
 
   it('distinguishes an operator-parked claim attempt from resolving the open issue', () => {
@@ -204,5 +208,15 @@ describe('pending-merge handoff instructions (#12247)', () => {
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }
+  });
+});
+
+describe('claim flow Use auto-merge', () => {
+  it('enables GitHub auto-merge after reviews only when the claim merges its own PR', () => {
+    const merging = buildClaimFlowCompletionSection({ agentId: 'example-claim', autoMerge: true });
+    expect(merging).toContain('## Use auto-merge');
+    expect(merging).toContain('Keep watching CI on that head until the PR reports MERGED');
+    expect(buildClaimFlowCompletionSection({ agentId: 'example-claim' })).not.toContain('## Use auto-merge');
+    expect(buildClaimFlowCompletionSection({ agentId: 'example-claim', autoMerge: true, prStaysOpen: true })).not.toContain('## Use auto-merge');
   });
 });

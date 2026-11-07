@@ -727,7 +727,7 @@ function JobRow({ job, onCancel, onRetry, onRunNow, onDelete }) {
         </div>
       </div>
       {job.status === 'failed' && job.error && (
-        <div role="status" className="text-xs text-port-error mt-2 truncate" title={job.error}>{job.error}</div>
+        <div role="status" className="text-xs text-port-error mt-2 break-words" title={job.error}>{job.error}</div>
       )}
       {isTopaz && !canCancel && (job.result?.topazUncertain || topazStatus || job.result?.topazProviderStatus || job.result?.topazRecoveryAvailable) && (
         <div className="mt-2 space-y-1 text-xs text-port-warning">

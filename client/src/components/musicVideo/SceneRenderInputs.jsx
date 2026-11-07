@@ -1,5 +1,6 @@
 import { falHearsAudioReference, falPromptExpansionAddition, falPromptExpansionMode, getFalVideoModel } from '../../lib/falVideoModels.js';
 import { falSceneTake, runwaySceneTake } from '../../lib/musicVideoShotTiming.js';
+import { sceneActiveEndImageId } from '../../../../server/lib/musicVideoEndFrame.js';
 import { getRunwayVideoModel } from '../../lib/runwayVideoModels.js';
 import { shotActionContractProblem } from '../../../../server/lib/musicVideoActionContract.js';
 import { authoredShotPrompt, musicVideoShotModelInput } from '../../../../server/lib/musicVideoShotPrompt.js';
@@ -68,16 +69,24 @@ export function shotCardRenderRequest({
   const clipReferences = falModel?.referenceImages && scene?.referenceImageId
     ? falClipReferenceAddition(falModel, musicVideoClipConditioningReferences(project, scene, castMedia,
       { limit: musicVideoClipReferenceCapacity('fal', falModel) }), { hasImage: true, prompt: composedPrompt }) : null;
-  const prompt = clipReferences ? [composedPrompt, clipReferences.text].filter(Boolean).join('\n') : composedPrompt;
-  const promptAdditions = [...composedAdditions, clipReferences, falPromptExpansionAddition(falPromptExpansionMode(falModel, 'disabled'))].filter(Boolean);
+  const falPrompt = clipReferences ? [composedPrompt, clipReferences.text].filter(Boolean).join('\n') : composedPrompt;
+  const falAdditions = [...composedAdditions, clipReferences, falPromptExpansionAddition(falPromptExpansionMode(falModel, 'disabled'))].filter(Boolean);
 
   let endFrame = null;
-  if (scene?.endImageId) {
+  if (sceneActiveEndImageId(scene)) {
     if (songAudio.state === 'on') endFrame = { state: 'unavailable', note: 'Not with song audio' };
     else if (endFramePlan?.used) endFrame = { state: inputs.endFrame === false ? 'off' : 'on', note: null };
     // The card says why under Render on (its end-frame line), so no note repeats it here.
     else endFrame = { state: 'unavailable', note: null };
   }
+
+  // Most Runway models cannot mix keyframes with references, so an end frame sends none there.
+  const runwayReferenceLimit = musicVideoClipReferenceCapacity('runway', runwayModel, { endFrame: endFrame?.state === 'on' });
+  const runwayReferences = runwayModel?.referenceImages && scene?.referenceImageId && runwayReferenceLimit > 0
+    ? musicVideoClipConditioningReferences(project, scene, castMedia, { limit: runwayReferenceLimit }) : [];
+  const runwayAddition = runwayReferences.length ? falClipReferenceAddition(runwayModel, runwayReferences, { hasImage: true, prompt: composedPrompt }) : null;
+  const prompt = runwayAddition ? [falPrompt, runwayAddition.text].filter(Boolean).join('\n') : falPrompt;
+  const promptAdditions = runwayAddition ? [...falAdditions, runwayAddition] : falAdditions;
 
   // A performance take can hear the whole lyric line the shot sits in, so the
   // clip can play the full line or be cut down to the shot.
@@ -127,11 +136,11 @@ export default function SceneRenderInputs({ id, request, onChange, grokPreview =
         ? <p className="text-port-text-muted">No prompt: this model takes the still and the song only.</p>
         : prompt
           ? (
-            <>
-              <p className="whitespace-pre-wrap break-words">{authored || prompt}</p>
-              {grokPreview && !preview.preview?.shotPreviewUnavailable ? <ModelInputPreview prompt={authored} preview={preview} />
-                : promptAdditions.length > 0 && <SentPromptPanel prompt={authored} sentPrompt={prompt} additions={promptAdditions} />}
-            </>
+            // The motion prompt box above already shows the director's words, so only what is added
+            // (and the full prompt on request) shows here; a prompt sent as written shows once.
+            grokPreview && !preview.preview?.shotPreviewUnavailable ? <ModelInputPreview prompt={authored} preview={preview} />
+              : promptAdditions.length > 0 ? <SentPromptPanel prompt={authored} sentPrompt={prompt} additions={promptAdditions} />
+                : <p className="whitespace-pre-wrap break-words">{prompt}</p>
           )
           : <p className="text-port-text-muted">No prompt</p>}
       {promptUsed && maxChars != null && (

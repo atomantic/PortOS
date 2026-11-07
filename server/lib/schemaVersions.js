@@ -32,6 +32,10 @@ import { join } from 'path';
 import { PATHS, tryReadFile, safeJSONParse } from './fileUtils.js';
 
 export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
+  // Usage cutover barrier protocol (#15098): the stamp on usage payloads during a
+  // barrier and the `/api/sync/usage/cutover` acknowledgment. Compared by that
+  // gate only, so no barrier means an unchanged wire for an older peer.
+  usageCutover: 1,
   // Numeric-only peer wire payload (v1); read-through, never imported into local records.
   // Checked-in `.quality.json` is file schema v3 and must not bump this number.
   appQuality: 1,
@@ -101,7 +105,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // v20 = canon places may carry a `photoreal` look, mirrored like the greybox
   // (v15). A <=v19 peer's `sanitizePlace` would strip it on an unrelated Universe
   // edit and LWW the loss back. The catalog gate stays put, as for v15.
-  universes: 20,
+  // v21 = canon places and objects may carry a real-world `size` (scale cue for
+  // renders). A <=v20 sanitizer strips it and would LWW the loss back.
+  universes: 21,
   // v1 = post-split. Migrations 035/036 introduced the pipeline collection
   // layout for issues and series.
   // v2 = `stages.audio.audioMode` + `stages.audio.cues[]` added (whole-episode
@@ -504,7 +510,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // Older normalizers strip it and would send a left-out collage again.
   // v16 = bible `forms[]` entries may carry a `height` (scale cue for renders).
   // A <=v15 sanitizer strips it and whole-row LWW would send the loss back.
-  catalog: 16,
+  // v17 = place and object payloads may carry a real-world `size`. A <=v16
+  // sanitizer strips it and whole-row LWW would send the loss back.
+  catalog: 17,
   // v1 = cross-machine resumable Story Builder sessions (#730). Sessions are
   // local-only by default and excluded from sync; only `sync: true` sessions
   // ride the `storyBuilder` snapshot category. This is a brand-NEW synced
@@ -861,7 +869,13 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // Optional, no backfill: absent plays the cut as before.
   // v44 = active cast alternates; older peers ignore the choice and render both identities.
   // Optional, no backfill: legacy duplicates deterministically choose the first.
-  musicVideoProjects: 44,
+  // v45 = route maps joining the video's places (`routeMaps`), which a v44 strict
+  // project schema rejects with a 400. Optional, no backfill: absent = no route.
+  // v46 = route stops' side streets, landmarks and forward/back greybox cameras
+  // (`stops[].features`/`views`), which a v45 strict stop schema rejects. Optional, no backfill.
+  // v47 = `scenes[].shotSheet.promptFromSheet` (a still built from its shot sheet), which a v46
+  // strict shot sheet schema rejects. Optional, no backfill.
+  musicVideoProjects: 47,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).
@@ -1247,7 +1261,7 @@ export const RECORD_KIND_SCHEMA_CATEGORIES = Object.freeze({
  * leave its push transfers ungated (silent cross-install corruption). Only
  * genuinely non-push categories belong.
  */
-export const NON_RECORD_SCHEMA_CATEGORIES = Object.freeze(new Set(['memoryHistory', 'mediaLibrary', 'cosHistory', 'cosTasks', 'appQuality', 'eidoverseFoundations', 'meatspace', 'peerAuth', 'peerAssetStamps', 'videoHistory']));
+export const NON_RECORD_SCHEMA_CATEGORIES = Object.freeze(new Set(['memoryHistory', 'mediaLibrary', 'cosHistory', 'cosTasks', 'appQuality', 'eidoverseFoundations', 'meatspace', 'peerAuth', 'peerAssetStamps', 'videoHistory', 'usageCutover']));
 
 /**
  * Lazy-read the current PortOS version from the ROOT package.json so a

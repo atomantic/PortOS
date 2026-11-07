@@ -96,6 +96,7 @@ import { getVoiceConfig } from './voice/config.js';
 import { reconcile as reconcileVoice } from './voice/bootstrap.js';
 import { initVoiceTimers } from './voice/timers.js';
 import { startBackupScheduler } from './backupScheduler.js';
+import { startNativeUsageCollectionSchedule } from './nativeUsageCollectionSchedule.js';
 import { startAutoUpdateScheduler } from './autoUpdateScheduler.js';
 import { startPrivacyRecheckScheduler } from './privacyRecheckScheduler.js';
 import { startQuotaBurnScheduler } from './quotaBurnRunner.js';
@@ -416,6 +417,8 @@ export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverD
       aiToolkit.services.runner.setTuiRunner(executeTuiRunFixed);
     },
 
+    recoverInterruptedRuns: () => import('./interruptedRunRecovery.js').then(({ recoverInterruptedRuns }) => recoverInterruptedRuns()),
+
     // Auto-fixer for error recovery.
     initAutoFixer,
     // Task learning system, tracking agent completions.
@@ -537,6 +540,8 @@ const startBackgroundServices = ({ spawnerReady, io, httpsEnabled, port }) => {
   registerAutobiographyReminderSchedule({ catchUpMissedSlot: true }).catch(err => logBootstrapFailure('❌ Autobiography reminder init failed', err));
   // Initialize backup scheduler for daily data backups
   startBackupScheduler().catch(err => logBootstrapFailure('❌ Backup scheduler init failed', err));
+  // Daily local-file usage collection. Registers a cron only: nothing scans at boot.
+  startNativeUsageCollectionSchedule();
   // Automatic PortOS self-update — OFF by default. When the user turns it on
   // (Update tab), it polls for a window in which the install is completely idle
   // and then runs the SAME update the matching button runs. Registering the

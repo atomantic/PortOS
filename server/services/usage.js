@@ -1,10 +1,11 @@
-import { join } from 'path';
+import { basename, join } from 'path';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { atomicWrite, ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
 import { resolveModelRates, isFreeProvider, isFreeModelId, estimateCostUsd, estimateGrokImagineCost, estimateAgyImageCost, PRICING_AS_OF } from '../lib/modelPricing.js';
 import { familyForProvider, familyForProviderId } from '../lib/providerFamilies.js';
 import { roundCents } from '../lib/subscriptionSavings.js';
 import { POLLUTING_KEYS } from '../lib/objects.js';
+import { admitUsageWrite, readRetainedUsageWrites, registerUsageCutoverParticipant, usageLedgerFenced } from './usageCutoverBarrier.js';
 
 const DATA_DIR = PATHS.data;
 export const USAGE_FILE = join(DATA_DIR, 'usage.json');
@@ -22,20 +23,35 @@ let usageData = null;
 let committedUsage = null;
 const queueUsageWrite = createFileWriteQueue();
 
-// All ledger writers share one transaction boundary. Readers continue seeing
-// committed state while a private draft is being persisted, including when a
-// historical correction yields to the event loop.
-function mutateUsage(fn) {
+// Readers continue seeing committed state while a private draft is being
+// persisted, including when a historical correction yields to the event loop.
+async function transactUsage(fn) {
+  const previous = usageData;
+  usageData = previous && structuredClone(previous);
+  try {
+    return await fn();
+  } catch (error) {
+    usageData = previous;
+    throw error;
+  }
+}
+
+// All ledger writers share this boundary, so the cutover barrier is decided once.
+// It runs inside the queue: a drain then proves nothing admitted is still writing.
+let usageWritesInFlight = 0;
+
+// A write the cutover fence retained belongs to the day it happened, not the day
+// the fence lifted. Only set inside the exclusive replay transaction.
+let retainedWriteTime = null;
+const usageClock = () => new Date(retainedWriteTime ?? Date.now());
+
+function mutateUsage(op, draft, args) {
+  usageWritesInFlight++;
   return queueUsageWrite(async () => {
-    const previous = usageData;
-    usageData = previous && structuredClone(previous);
-    try {
-      return await fn();
-    } catch (error) {
-      usageData = previous;
-      throw error;
-    }
-  });
+    const { admitted } = await admitUsageWrite(op, args, { retainable: Object.hasOwn(RETAINABLE_USAGE_DRAFTS, op) });
+    if (!admitted) return { deferred: true };
+    return transactUsage(() => draft(...args));
+  }).finally(() => { usageWritesInFlight--; });
 }
 const summaryCache = new Map();
 const UNKNOWN_PROVIDER_ID = 'unknown';
@@ -183,7 +199,7 @@ const cacheActivityDay = (day) => {
 /**
  * Load usage data from disk
  */
-async function loadUsageDraft() {
+async function loadUsageDraft({ persist = true } = {}) {
   await ensureDir(DATA_DIR);
   summaryCache.clear();
 
@@ -226,7 +242,7 @@ async function loadUsageDraft() {
   // In memory only until the next real save. Forcing a write here would
   // rewrite every install's usage.json just to add an empty id list.
   if (!Array.isArray(usageData.grokRepairIds)) usageData.grokRepairIds = [];
-  if (missing || rolledUp || normalizedProviders || earliestChanged || normalizedBlocks) {
+  if (persist && (missing || rolledUp || normalizedProviders || earliestChanged || normalizedBlocks)) {
     if (normalizedProviders) console.log('📊 Normalized undefined usage providers to unknown');
     if (rolledUp) console.log(`📊 Rolled up old daily usage into ${Object.keys(usageData.monthlyActivity).length} monthly buckets`);
     await saveUsage();
@@ -387,9 +403,14 @@ export function getReconciledUsageRunIds() {
 /** Exact observed Codex boundaries from nearby durable completions; legacy markers carry none. */
 export async function getRecentCodexUsageClaims(since) {
   if (!committedUsage) await loadUsage();
-  return Object.values(committedUsage.reconciledRuns || {})
+  const durable = Object.values(committedUsage.reconciledRuns || {})
     .filter((marker) => Array.isArray(marker?.codexHighWater) && Date.parse(marker.at) >= since)
     .flatMap((marker) => structuredClone(marker.codexHighWater));
+  // A completion the cutover fence retained has consumed its transcript growth too.
+  const retained = (await readRetainedUsageWrites())
+    .filter(({ op, at, args }) => op === 'recordRunUsage' && Date.parse(at) >= since && Array.isArray(args[1]?.codexHighWater))
+    .flatMap(({ args }) => args[1].codexHighWater);
+  return [...durable, ...retained];
 }
 
 /**
@@ -703,7 +724,7 @@ function mergeSource(existing, incoming) {
 }
 
 function todayBucket() {
-  const today = new Date().toISOString().split('T')[0];
+  const today = usageClock().toISOString().split('T')[0];
   if (!usageData.dailyActivity[today]) {
     usageData.dailyActivity[today] = { sessions: 0, messages: 0, tokens: 0 };
     cacheActivityDay(today);
@@ -743,7 +764,7 @@ async function recordSessionDraft(providerId, providerName, rawModel) {
   if (model) modelDayBucket(providerDay, model).sessions++;
 
   // Track hourly activity
-  const hour = new Date().getHours();
+  const hour = usageClock().getHours();
   usageData.hourlyActivity[hour]++;
   // Keep the day as well as the lifetime histogram so a selected reporting
   // window can be answered without inventing timestamps for older sessions.
@@ -992,7 +1013,7 @@ async function recordLimitBlockDraft({
   category = 'usage-limit',
   message = null,
   resetHint = null,
-  at = Date.now()
+  at = usageClock().getTime()
 } = {}) {
   if (!providerId) return null;
   if (!usageData) await loadUsageDraft();
@@ -1466,6 +1487,7 @@ export function getUsageSummary({ from = null, to = null, providers = [] } = {})
     },
     // Local diagnostics only; the federated digest is built separately.
     codexCoverage: usageData.interactiveScan?.codexCoverage ?? null,
+    heldRunCoverage: summarizeHeldRuns(usageData.interactiveScan?.unresolved),
     lastUpdated: usageData.lastUpdated
   };
   if (summaryCache.size >= SUMMARY_CACHE_LIMIT) {
@@ -1473,6 +1495,31 @@ export function getUsageSummary({ from = null, to = null, providers = [] } = {})
   }
   summaryCache.set(cacheKey, summary);
   return summary;
+}
+
+const HELD_WORKSPACE_LIMIT = 10;
+
+/**
+ * Which workspaces have standalone usage held behind a run with no provable end.
+ * A run known to be running is the ordinary case and stays out of the notice;
+ * entries from before `lifecycle` existed are unknown until the next scan.
+ */
+function summarizeHeldRuns(unresolved) {
+  const held = (Array.isArray(unresolved) ? unresolved : [])
+    .filter((run) => run?.lifecycle !== 'running' && typeof run?.workspacePath === 'string' && Number.isFinite(run.from));
+  if (!held.length) return null;
+  const byWorkspace = new Map();
+  for (const { workspacePath, from } of held) {
+    const entry = byWorkspace.get(workspacePath);
+    byWorkspace.set(workspacePath, { workspace: basename(workspacePath), runs: (entry?.runs ?? 0) + 1, from: Math.min(from, entry?.from ?? from) });
+  }
+  const workspaces = [...byWorkspace.values()].sort((a, b) => a.from - b.from);
+  return {
+    runs: held.length,
+    since: new Date(workspaces[0].from).toISOString(),
+    workspaces: workspaces.slice(0, HELD_WORKSPACE_LIMIT).map(({ workspace, runs, from }) => ({ workspace, runs, since: new Date(from).toISOString() })),
+    moreWorkspaces: Math.max(0, workspaces.length - HELD_WORKSPACE_LIMIT)
+  };
 }
 
 /**
@@ -1541,58 +1588,99 @@ export function buildUsageDigest(source = getUsage(), { retentionDays = DIGEST_D
   };
 }
 
-export async function loadUsage(...args) {
-  return mutateUsage(() => loadUsageDraft(...args));
+// Live run accounting, held rather than refused by a cutover fence. Everything else
+// is recomputable from native sources or an operator command, and is refused.
+const RETAINABLE_USAGE_DRAFTS = {
+  recordSession: recordSessionDraft,
+  recordMessages: recordMessagesDraft,
+  recordRunUsage: recordRunUsageDraft,
+  recordTokens: recordTokensDraft,
+  recordLimitBlock: recordLimitBlockDraft,
+  addDatedUsage: addDatedUsageDraft,
+};
+
+// A fence also suppresses load-time normalization: a restart must not touch the
+// ledger bytes that a rollback has to prove unchanged.
+export async function loadUsage() {
+  return queueUsageWrite(async () => {
+    const persist = !(await usageLedgerFenced());
+    return transactUsage(() => loadUsageDraft({ persist }));
+  });
 }
 
 export async function forgetSiblingReconciledUsageRuns(...args) {
-  return mutateUsage(() => forgetSiblingReconciledUsageRunsDraft(...args));
+  return mutateUsage('forgetSiblingReconciledUsageRuns', forgetSiblingReconciledUsageRunsDraft, args);
 }
 
 export async function markUsageRunReconciled(...args) {
-  return mutateUsage(() => markUsageRunReconciledDraft(...args));
+  return mutateUsage('markUsageRunReconciled', markUsageRunReconciledDraft, args);
 }
 
 export async function setInteractiveScanState(...args) {
-  return mutateUsage(() => setInteractiveScanStateDraft(...args));
+  return mutateUsage('setInteractiveScanState', setInteractiveScanStateDraft, args);
 }
 
 export async function applyHistoricalUsageCorrections(...args) {
-  return mutateUsage(() => applyHistoricalUsageCorrectionsDraft(...args));
+  return mutateUsage('applyHistoricalUsageCorrections', applyHistoricalUsageCorrectionsDraft, args);
 }
 
 export async function recordSession(...args) {
-  return mutateUsage(() => recordSessionDraft(...args));
+  return mutateUsage('recordSession', recordSessionDraft, args);
 }
 
 export async function recordMessages(...args) {
-  return mutateUsage(() => recordMessagesDraft(...args));
+  return mutateUsage('recordMessages', recordMessagesDraft, args);
 }
 
 export async function recordRunUsage(...args) {
-  return mutateUsage(() => recordRunUsageDraft(...args));
+  return mutateUsage('recordRunUsage', recordRunUsageDraft, args);
 }
 
 export async function addDatedUsage(...args) {
-  return mutateUsage(() => addDatedUsageDraft(...args));
+  return mutateUsage('addDatedUsage', addDatedUsageDraft, args);
 }
 
 export async function flushUsageLedger(...args) {
-  return mutateUsage(() => flushUsageLedgerDraft(...args));
+  return mutateUsage('flushUsageLedger', flushUsageLedgerDraft, args);
 }
 
 export async function recordTokens(...args) {
-  return mutateUsage(() => recordTokensDraft(...args));
+  return mutateUsage('recordTokens', recordTokensDraft, args);
 }
 
 export async function recordLimitBlock(...args) {
-  return mutateUsage(() => recordLimitBlockDraft(...args));
+  return mutateUsage('recordLimitBlock', recordLimitBlockDraft, args);
 }
 
 export async function resetUsage(...args) {
-  return mutateUsage(() => resetUsageDraft(...args));
+  return mutateUsage('resetUsage', resetUsageDraft, args);
 }
 
 export async function addDatedUsageBatch(...args) {
-  return mutateUsage(() => addDatedUsageBatchDraft(...args));
+  return mutateUsage('addDatedUsageBatch', addDatedUsageBatchDraft, args);
 }
+
+// The marker commits in the same write as each replayed record, so a crash mid
+// replay can never bill a retained record twice on the next attempt.
+function replayRetainedUsageWrites(transaction) {
+  return queueUsageWrite(() => transaction(async (migrationEpoch, entries) => {
+    await loadUsageDraft({ persist: false });
+    const replayed = usageData.cutoverReplay?.epoch === migrationEpoch ? usageData.cutoverReplay.seq : 0;
+    for (const { seq, op, args, at } of entries) {
+      if (seq <= replayed) continue;
+      retainedWriteTime = Date.parse(at);
+      await transactUsage(async () => {
+        usageData.cutoverReplay = { epoch: migrationEpoch, seq };
+        await RETAINABLE_USAGE_DRAFTS[op](...args);
+      }).finally(() => { retainedWriteTime = null; });
+    }
+  }));
+}
+
+registerUsageCutoverParticipant({
+  name: 'usageLedger',
+  fingerprintPath: USAGE_FILE,
+  inFlight: () => usageWritesInFlight,
+  drain: () => queueUsageWrite(async () => {}),
+  replay: replayRetainedUsageWrites,
+});

@@ -131,7 +131,7 @@ function geminiVideoSubmission({ composed, width, height, mode, sourceImageFile,
 // text-to-video rule, from the prompt alone (Text mode). The negative prompt is sent; the server passes it
 // natively or as an "Avoid:" line, listed as a chip in the sent-prompt view.
 function runwayVideoSubmission({
-  composed, runwayModelId, runwayDuration, runwayResolution, runwayInputs = {},
+  composed, runwayModelId, runwayDuration, runwayResolution, runwayInputs = {}, referenceImageFiles = [],
   width, height, mode, sourceImageFile, sourceImageUpload,
 }) {
   if (mode === 'video-edit' || mode === 'character-performance') return {
@@ -147,6 +147,7 @@ function runwayVideoSubmission({
     ...(mode === 'character-performance' ? { runwayBodyControl: runwayInputs.bodyControl ?? true, runwayExpressionIntensity: runwayInputs.expressionIntensity ?? 3 } : {}),
     ...(runwayInputs.seed != null && runwayInputs.seed !== '' ? { runwaySeed: Number(runwayInputs.seed) } : {}),
   };
+  const referenceFiles = referenceImageFiles.filter(Boolean);
   return {
     backend: 'runway',
     prompt: composed.prompt,
@@ -154,6 +155,7 @@ function runwayVideoSubmission({
     runwayModelId: runwayModelId || undefined,
     ...(runwayDuration ? { runwayDuration: Number(runwayDuration) } : {}),
     ...(runwayResolution ? { runwayResolution } : {}),
+    ...(mode === 'image' && referenceFiles.length ? { referenceImageFiles: referenceFiles } : {}),
     ...clampedSize(width, height),
     ...hostedImageFields(mode, sourceImageFile, sourceImageUpload),
   };

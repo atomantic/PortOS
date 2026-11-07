@@ -243,8 +243,8 @@ export default function JobsTab() {
       {showCreate && (
         <div className="bg-port-card border border-port-accent/50 rounded-lg p-4">
           <div className="space-y-3">
-            <div className="flex gap-3">
-              <FormField label="Job name *" className="flex-1" labelClassName="block text-xs text-gray-400 mb-1">
+            <div className="flex flex-wrap gap-3">
+              <FormField label="Job name *" className="w-full sm:flex-1" labelClassName="block text-xs text-gray-400 mb-1">
                 <input
                   type="text"
                   value={newJob.name}
@@ -261,12 +261,12 @@ export default function JobsTab() {
                   {JOB_TYPE_OPTIONS.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
                 </select>
               </FormField>
-              <FormField label="Category" labelClassName="block text-xs text-gray-400 mb-1">
+              <FormField label="Category" className="min-w-0 flex-1 sm:flex-none" labelClassName="block text-xs text-gray-400 mb-1">
                 <input
                   type="text"
                   value={newJob.category}
                   onChange={e => setNewJob(j => ({ ...j, category: e.target.value }))}
-                  className="w-40 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
+                  className="w-full sm:w-40 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
                 />
               </FormField>
             </div>

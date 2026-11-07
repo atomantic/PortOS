@@ -295,13 +295,13 @@ export default function SongBook() {
                   </div>
                 </Link>
                 {Array.isArray(song.tags) && song.tags.length > 0 && (
-                  <div className="flex flex-wrap gap-1 mt-1.5">
+                  <div className="flex flex-wrap gap-1 pointer-coarse:gap-2 mt-1.5">
                     {song.tags.map((tag) => (
                       <button
                         key={tag}
                         type="button"
                         onClick={() => setParam('tag', tag)}
-                        className="px-1.5 py-0.5 rounded-full text-[10px] bg-port-bg text-gray-400 border border-port-border hover:text-port-accent hover:border-port-accent/40"
+                        className="px-1.5 py-0.5 pointer-coarse:min-h-11 rounded-full text-[10px] bg-port-bg text-gray-400 border border-port-border hover:text-port-accent hover:border-port-accent/40"
                       >
                         #{tag}
                       </button>

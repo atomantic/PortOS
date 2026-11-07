@@ -84,6 +84,9 @@ export const inboxLogRecordSchema = z.object({
   filed: filedSchema.optional(),
   correction: correctionSchema.optional(),
   error: errorSchema.optional(),
+  // The classifier run that owns this row's completion write (#15155). Absent
+  // or null means no live attempt, so any late completion is ignored.
+  classificationAttempt: z.string().nullable().optional(),
   // User-marked creative note (see captureInputSchema.creative). Drives the
   // "Send creative notes to Catalog" batch action in the inbox.
   creative: z.boolean().optional(),
@@ -457,6 +460,9 @@ export const linkRecordSchema = z.object({
   // True only when boot recovery observed an interrupted attempt. Retry uses
   // this to replace a legacy direct-to-destination partial checkout safely.
   cloneInterrupted: z.boolean().optional().default(false),
+  // The in-flight clone that owns this record's next `cloned`/`failed` write
+  // (#15155). Absent or null means no live attempt.
+  cloneAttempt: z.string().nullable().optional(),
   malwareScan: z.object({
     reportId: z.string().uuid(),
     taskId: z.string().optional(),

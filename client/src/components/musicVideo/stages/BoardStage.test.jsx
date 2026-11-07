@@ -68,6 +68,19 @@ describe('BoardStage scene filter', () => {
     expect(b.seekToScene).toHaveBeenLastCalledWith(expect.objectContaining({ sceneId: 's2' }));
     expect(b.onToggleSceneExpand).toHaveBeenLastCalledWith('s2', true);
   });
+
+  it('the shot header carries the only close button, and stepping and closing work while locked', () => {
+    const b = board([scene(1), scene(2)], { activeSceneId: 's1', seekToScene: vi.fn(), locked: true });
+    renderBoard(b);
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getAllByRole('button', { name: 'Close shot' })).toHaveLength(1);
+    expect(within(dialog).getByRole('heading', { name: 'Shot 1 · Part 1' })).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Next shot' }));
+    expect(b.onToggleSceneExpand).toHaveBeenLastCalledWith('s2', true);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close shot' }));
+    expect(b.onToggleSceneExpand).toHaveBeenLastCalledWith('s1', false);
+    expect(dialog.querySelector('fieldset').disabled).toBe(true);
+  });
 });
 
 describe('BoardStage thumbnail media badges', () => {

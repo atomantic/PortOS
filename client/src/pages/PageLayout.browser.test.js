@@ -42,6 +42,39 @@ const responses = {
   '/instances': { peers: [] },
   '/settings/features': { features: [] },
   '/code-animation/jobs': { items: [], total: 0, counts: { running: 0, completed: 0 }, nextCursor: null },
+  '/usage/native-accounts': {
+    revision: '1'.repeat(64),
+    selections: ['codex', 'claude', 'grok', 'agy'].map(family => ({
+      family, accountLabel: 'example-subscription-with-long-unbroken-label-for-geometry-check', members: ['a'.repeat(32), 'b'.repeat(32), 'c'.repeat(32)],
+      ...(family === 'codex' ? { authoritativeParticipant: 'a'.repeat(32) } : { historyScope: 'operator-confirmed-retained-history' }),
+    })),
+    participants: [{ participantKey: 'a'.repeat(32), kind: 'local', status: 'configured' }, { participantKey: 'b'.repeat(32), kind: 'peer', status: 'configured' }, { participantKey: 'c'.repeat(32), kind: 'unavailable', status: 'not-configured' }],
+    inventory: { status: 'truncated', maxPeers: 64 },
+  },
+  '/usage/native-matrix': {
+    selectionRevision: '1'.repeat(64),
+    mode: 'read-only', scope: 'local-instance', contractVersion: 4, ledgerChanged: false, peerReports: 'not-collected',
+    capturedAt: '2026-11-06T12:00:00Z', generatedAt: '2026-11-06T12:00:01Z',
+    providers: [{ family: 'codex', status: 'available',
+      totals: { lifetimeTokens: 104255445839, dailyBuckets: [{ startDate: '2026-11-05', tokens: 1234567 }] },
+      freshness: { earliestObserved: '2026-11-05', latestObserved: '2026-11-05' },
+      runtime: { status: 'observed', versions: ['1.2.3'] },
+    }, ...['claude', 'agy', 'grok'].map(family => ({ family, status: 'partial',
+      totals: { totalTokens: family === 'agy' ? null : 1234567890, tokensIn: 123456789, tokensOut: 23456789,
+        cacheReadTokens: 34567890, cacheWriteTokens: 0,
+        ...(family === 'agy' ? { thinkingOutputTokens: 1234567, responseOutputTokens: 2345678 } : {}) },
+      tokenFields: { totalTokens: family === 'agy' ? 'unverified-overlap' : 'measured' },
+      coverage: { files: 12, records: 123, measuredRecords: 120, missingUsageRecords: 3, unreadableFiles: 0 },
+      scanCaps: { capped: true, stoppedEarly: false, limits: { records: 10000 } },
+      findings: ['scan-capped'], runtime: { status: 'unknown', versions: [] },
+      cost: { nativeCostSignal: family === 'grok' ? { knownCostUsdTicks: 1234567890, measuredRecords: 120, missingRecords: 3, conflictingRecords: 0 } : null },
+    }))],
+    families: ['claude', 'agy', 'grok', 'codex'].map(family => ({ family,
+      merge: { status: 'refused', reasons: ['member-report-missing'], totals: null },
+      accounts: [{ accountLabel: 'example-subscription-with-long-unbroken-label-for-geometry-check', status: 'refused', totals: null, members: ['local', 'peer'], membersWithoutReport: ['peer'], findings: ['retained-history-completeness-unknown'] }],
+    })),
+    refusals: [{ code: 'member-report-missing', family: 'claude' }],
+  },
   '/usage': usage,
   '/usage/backfill': { status: 'idle' },
   '/usage/rolling-cost': { windowDays: 30, instanceCount: 1, series: [], points: [] },
@@ -60,6 +93,24 @@ const responses = {
     limits: [], error: 'Every window in this reading has since reset — refresh for a current one.' }] },
 };
 
+const nativeFleetResponse = {
+  ...responses['/usage/native-matrix'], scope: 'configured-peers', peerReports: 'collected', participantKey: 'a'.repeat(32),
+  peerCollection: { status: 'partial', maxPeers: 8, requested: 3, received: 1,
+    peers: [{ participantKey: 'b'.repeat(32), status: 'available', capturedAt: '2026-11-06T12:00:00Z' },
+      { participantKey: 'c'.repeat(32), status: 'stale', capturedAt: '2026-11-01T12:00:00Z' },
+      { participantKey: 'd'.repeat(32), status: 'invalid', capturedAt: null },
+      { participantKey: null, status: 'identity-unknown', capturedAt: null }], findings: ['peer-report-stale'] },
+  participants: ['a', 'b'].map(prefix => ({ participantKey: prefix.repeat(32), capturedAt: '2026-11-06T12:00:00Z',
+    providers: responses['/usage/native-matrix'].providers,
+  })),
+};
+
+function fixtureResponse(url) {
+  const key = url.pathname.slice(4);
+  if (key === '/usage/native-matrix' && url.searchParams.get('scope') === 'fleet') return nativeFleetResponse;
+  return Object.hasOwn(responses, key) ? responses[key] : {};
+}
+
 // Real route components and Tailwind, synthetic API only. Layout's classification
 // test covers its main; this models the available space beside the global rail.
 describe.skipIf(!chrome)('routed page chrome and content geometry', () => {
@@ -71,8 +122,7 @@ describe.skipIf(!chrome)('routed page chrome and content geometry', () => {
       // a geometry assertion's interaction timeout.
       warmup: async (page, origin) => {
         await page.route('**/api/**', route => {
-          const key = new URL(route.request().url()).pathname.slice(4);
-          return route.fulfill({ json: Object.hasOwn(responses, key) ? responses[key] : {} });
+          return route.fulfill({ json: fixtureResponse(new URL(route.request().url())) });
         });
         await page.goto(`${origin}layout-test?route=/code-animation/gallery`, { waitUntil: 'domcontentloaded' });
         await page.locator('h1').waitFor();
@@ -133,6 +183,8 @@ describe.skipIf(!chrome)('routed page chrome and content geometry', () => {
     const page = await fixture.browser.newPage({ viewport: { width, height: 900 }, reducedMotion: 'reduce' });
     let billed = false;
     const quotaScopes = [];
+    const nativeReads = [];
+    const accountWrites = [];
     page.setDefaultTimeout(10000);
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
@@ -141,6 +193,12 @@ describe.skipIf(!chrome)('routed page chrome and content geometry', () => {
       if (url.origin !== new URL(fixture.origin).origin) return route.abort();
       if (!url.pathname.startsWith('/api/')) return route.continue();
       const key = url.pathname.slice(4);
+      if (key === '/usage/native-matrix' || key === '/usage/native-coverage') nativeReads.push(`${key}${url.search}`);
+      if (key === '/usage/native-accounts' && route.request().method() === 'PUT') {
+        const body = route.request().postDataJSON();
+        accountWrites.push(body);
+        return route.fulfill({ json: { ...responses[key], selections: body.selections, revision: '2'.repeat(64) } });
+      }
       if (key === '/usage/fleet-billing' && route.request().method() === 'PUT') {
         const body = route.request().postDataJSON();
         billed = !body.usesSubscriptions;
@@ -153,7 +211,7 @@ describe.skipIf(!chrome)('routed page chrome and content geometry', () => {
           .filter(card => scope !== 'peers' || card.origin?.self === false);
         return route.fulfill({ json: { providers, federationUnavailable: false, excludedInstanceIds: billed ? ['synthetic-peer'] : [] } });
       }
-      return route.fulfill({ json: Object.hasOwn(responses, key) ? responses[key] : {} });
+      return route.fulfill({ json: fixtureResponse(url) });
     });
     try {
       for (const path of ['/code-animation/gallery', '/cos/agents', '/cos/health', '/system-resources/storage', '/devtools/usage']) {
@@ -163,7 +221,99 @@ describe.skipIf(!chrome)('routed page chrome and content geometry', () => {
         if (path === '/code-animation/gallery') await page.getByText('Animations you generate in Fast HTML appear here.').waitFor();
         if (path === '/cos/health') await page.getByText('No issues detected', { exact: true }).waitFor();
         if (path === '/cos/agents') await page.getByRole('heading', { name: 'Active Agents', exact: true }).waitFor();
-        if (path === '/devtools/usage') await page.getByText('Example claude', { exact: true }).first().waitFor();
+        if (path === '/devtools/usage') {
+          await page.getByRole('button', { name: 'Read native sources', exact: true }).waitFor();
+          expect(nativeReads).toEqual([]);
+          expect(await page.getByText(/Not scanned yet/).count()).toBe(4);
+          await page.getByRole('button', { name: 'Read native sources', exact: true }).click();
+          await page.getByText('104,255,445,839', { exact: true }).waitFor();
+          expect(nativeReads).toEqual(['/usage/native-matrix?scope=local']);
+          await page.getByLabel('Native history scope', { exact: true }).selectOption('fleet');
+          await page.getByRole('button', { name: 'Read native sources', exact: true }).waitFor();
+          expect(nativeReads).toEqual(['/usage/native-matrix?scope=local']);
+          expect(await page.getByText('104,255,445,839', { exact: true }).count()).toBe(0);
+          await page.getByRole('button', { name: 'Read native sources', exact: true }).click();
+          const collection = page.getByRole('region', { name: 'Configured peer collection', exact: true });
+          await collection.waitFor();
+          expect(nativeReads).toEqual(['/usage/native-matrix?scope=local', '/usage/native-matrix?scope=fleet']);
+          expect(await collection.getByText('Report is stale', { exact: true }).count()).toBe(1);
+          expect(await collection.getByText('Report is invalid', { exact: true }).count()).toBe(1);
+          for (const summary of await collection.locator('summary').all()) await summary.click();
+          await page.getByText('Daily native token history', { exact: true }).click();
+          await page.getByRole('table').waitFor();
+          const nativeCards = page.getByRole('region', { name: /native history$/ });
+          expect(await nativeCards.count()).toBe(4);
+          for (const card of await nativeCards.all()) await card.getByText('Source coverage and limits', { exact: true }).click();
+          for (const card of [...await nativeCards.all(), collection]) {
+            const nativeGeometry = await card.evaluate(card => {
+              const bounds = card.getBoundingClientRect();
+              const body = document.querySelector('main').firstElementChild.lastElementChild;
+              const bodyBounds = body.getBoundingClientRect();
+              const bodyStyle = getComputedStyle(body);
+              const children = [...card.querySelectorAll('dt, dd, select, table, summary, li, h2, h3, h4, p')].filter(child => child.getClientRects().length);
+              return {
+                overflow: card.scrollWidth > card.clientWidth + 1,
+                left: bounds.left, right: bounds.right,
+                bodyLeft: bodyBounds.left + parseFloat(bodyStyle.paddingLeft),
+                bodyRight: bodyBounds.left + body.clientWidth - parseFloat(bodyStyle.paddingRight),
+                outsideChildren: children.filter(child => {
+                  const rect = child.getBoundingClientRect();
+                  return rect.left < bounds.left - 1 || rect.right > bounds.right + 1 || child.scrollWidth > child.clientWidth + 1;
+                }).map(child => child.textContent.slice(0, 80)),
+              };
+            });
+            expect(nativeGeometry.overflow).toBe(false);
+            expect(nativeGeometry.left).toBeGreaterThanOrEqual(nativeGeometry.bodyLeft - 1);
+            expect(nativeGeometry.right).toBeLessThanOrEqual(nativeGeometry.bodyRight + 1);
+            expect(nativeGeometry.right).toBeLessThanOrEqual(width);
+            expect(nativeGeometry.outsideChildren).toEqual([]);
+          }
+          if (process.env.PORTOS_NATIVE_USAGE_SCREENSHOTS) await page.screenshot({ path: `${process.env.PORTOS_NATIVE_USAGE_SCREENSHOTS}/native-${width}.png` });
+          await page.getByRole('button', { name: 'Edit account selections' }).click();
+          const accountEditor = page.getByRole('dialog', { name: 'Native account selections' });
+          await accountEditor.getByLabel('Opaque account label').waitFor();
+          for (const provider of ['Codex', 'Claude Code', 'Grok', 'Antigravity']) {
+            await accountEditor.getByRole('tab', { name: provider, exact: true }).click();
+            const providerPanel = accountEditor.getByRole('tabpanel', { name: provider, exact: true });
+            await providerPanel.getByLabel('Opaque account label').waitFor();
+            expect(await providerPanel.getByRole('checkbox', { name: /Missing saved member/ }).isChecked()).toBe(true);
+            const editorGeometry = await accountEditor.evaluate(panel => {
+              const bounds = panel.getBoundingClientRect();
+              const children = [...panel.querySelectorAll('fieldset, label, input, select, p, button, h3')].filter(child => child.getClientRects().length);
+              return {
+                left: bounds.left, right: bounds.right, top: bounds.top, bottom: bounds.bottom,
+                overflow: panel.scrollWidth > panel.clientWidth + 1,
+                outsideChildren: children.filter(child => {
+                  const rect = child.getBoundingClientRect();
+                  return rect.left < bounds.left - 1 || rect.right > bounds.right + 1;
+                }).map(child => child.textContent.slice(0, 80)),
+              };
+            });
+            expect(editorGeometry.left).toBeGreaterThanOrEqual(0);
+            expect(editorGeometry.right).toBeLessThanOrEqual(width);
+            expect(editorGeometry.top).toBe(0);
+            expect(editorGeometry.bottom).toBe(900);
+            expect(editorGeometry.overflow).toBe(false);
+            expect(editorGeometry.outsideChildren).toEqual([]);
+          }
+          await accountEditor.getByRole('tab', { name: 'Codex', exact: true }).click();
+          // Route transitions can leave the outgoing tab's identically labeled
+          // input mounted after click. Wait for the intended panel before editing.
+          const codexPanel = accountEditor.getByRole('tabpanel', { name: 'Codex', exact: true });
+          await codexPanel.getByLabel('Opaque account label').fill('example-updated-subscription');
+          await codexPanel.getByRole('button', { name: 'Save selections', exact: true }).click();
+          await codexPanel.getByText(/Selections saved locally/).waitFor();
+          expect(accountWrites).toHaveLength(1);
+          expect(accountWrites[0].expectedRevision).toBe('1'.repeat(64));
+          expect(accountWrites[0].selections).toEqual(responses['/usage/native-accounts'].selections.map(selection => selection.family === 'codex'
+            ? { ...selection, accountLabel: 'example-updated-subscription' } : selection));
+          expect(nativeReads).toEqual(['/usage/native-matrix?scope=local', '/usage/native-matrix?scope=fleet']);
+          await accountEditor.getByRole('button', { name: 'Cancel', exact: true }).click();
+          expect(await page.getByText('104,255,445,839', { exact: true }).count()).toBe(0);
+          expect(await page.getByText(/Not scanned yet/).count()).toBe(4);
+          await page.getByRole('tab', { name: 'Legacy analytics' }).click();
+          await page.getByText('Example claude', { exact: true }).first().waitFor();
+        }
         expect(await page.getByRole('alert').count(), path).toBe(0);
         const geometry = await page.locator('main').evaluate(main => {
           const shell = main.firstElementChild;

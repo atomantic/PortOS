@@ -63,6 +63,33 @@ describe('AI Toolkit runner service', () => {
     await vi.waitFor(() => expect(settled).toHaveBeenCalledTimes(1));
     expect(reader.releaseLock).toHaveBeenCalledTimes(1);
     expect(failed).not.toHaveBeenCalled();
+    expect(JSON.parse(await readFile(join(dataDir, 'runs', 'settlement', 'metadata.json'), 'utf8'))).toMatchObject({
+      executionOwner: { pid: process.pid, id: expect.any(String), startedAt: expect.any(String) },
+      executionKind: 'api', executionChild: null,
+    });
+  });
+
+  it('preserves malformed metadata during ownership recording before provider dispatch', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+    const metadataPath = join(dataDir, 'runs', 'malformed', 'metadata.json');
+    await mkdir(join(dataDir, 'runs', 'malformed'), { recursive: true });
+    await writeFile(metadataPath, 'unreadable legacy record');
+    let beforeDispatch;
+    const ensureProviderReady = vi.fn(async () => {
+      beforeDispatch = await readFile(metadataPath, 'utf8');
+      return { success: true };
+    });
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true,
+      body: { getReader: () => ({ read: async () => ({ done: true }) }) },
+    })));
+    const runner = createRunnerService({ dataDir, hooks: { ensureProviderReady } });
+    let settle;
+    const settled = new Promise(resolve => { settle = resolve; });
+    await runner.executeApiRun({ runId: 'malformed', provider: runReady(), prompt: 'Example', onSettled: settle });
+    await settled;
+    expect(ensureProviderReady).toHaveBeenCalledOnce();
+    expect(beforeDispatch).toBe('unreadable legacy record');
   });
 
   it('passes request capability requirements to proactive fallback selection', async () => {
@@ -1552,6 +1579,7 @@ describe('AI Toolkit runner service', () => {
     const completed = new Promise(resolve => { complete = vi.fn(resolve); });
     const pending = runner.executeApiRun({ runId: 'unbounded', provider: runReady(), prompt: 'hi',
       workspacePath: process.cwd(), timeout: 0, absoluteTimeoutMs: 0, onComplete: complete });
+    await vi.waitFor(() => expect(finishRead).toBeTypeOf('function'));
     await vi.advanceTimersByTimeAsync(86_400_000);
     expect(complete).not.toHaveBeenCalled();
     expect(await runner.isRunActive('unbounded')).toBe(true);
@@ -1562,8 +1590,10 @@ describe('AI Toolkit runner service', () => {
 
     let canceled;
     const canceledResult = new Promise(resolve => { canceled = vi.fn(resolve); });
+    finishRead = undefined;
     const second = runner.executeApiRun({ runId: 'unbounded-stop', provider: runReady(), prompt: 'hi',
       workspacePath: process.cwd(), timeout: 0, absoluteTimeoutMs: 0, onComplete: canceled });
+    await vi.waitFor(() => expect(finishRead).toBeTypeOf('function'));
     await vi.advanceTimersByTimeAsync(86_400_000);
     await runner.stopRun('unbounded-stop');
     finishRead({ done: true });
@@ -2037,14 +2067,11 @@ describe('AI Toolkit runner — built-in executeCliRun spawn (#1865)', () => {
     let resolveComplete;
     const completed = new Promise((resolve) => { resolveComplete = resolve; });
 
-    setImmediate(() => {
-      child.stdout.emit('data', Buffer.from('output'));
-      child.emit('close', 0);
-    });
-
     await runner.executeCliRun({
       runId: 'builtin-run', provider, prompt: 'test prompt', onComplete: resolveComplete,
     });
+    child.stdout.emit('data', Buffer.from('output'));
+    child.emit('close', 0);
 
     const [command, , options] = spawn.mock.calls.at(-1);
     expect(options.shell).toBeFalsy();

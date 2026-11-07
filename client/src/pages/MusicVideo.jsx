@@ -1,13 +1,14 @@
 import ProductionReviewPanel from '../components/musicVideo/ProductionReviewPanel.jsx';
 import { unfoldToAnchor } from '../lib/unfoldToAnchor.js';
 import useMusicVideoProductionReview from '../hooks/useMusicVideoProductionReview.js';
-import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { lazy, Suspense, useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams, useLocation } from 'react-router';
 import { Plus, Film, Wand2 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import socket from '../services/socket';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import PageHeader from '../components/PageHeader';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import Banner from '../components/ui/Banner.jsx';
 import { usePagedCollection } from '../hooks/usePagedCollection';
 import InfiniteScrollFooter from '../components/ui/InfiniteScrollFooter';
@@ -86,7 +87,6 @@ import StoryStage from '../components/musicVideo/stages/StoryStage.jsx';
 import StageChecklist from '../components/musicVideo/StageChecklist.jsx';
 import CastSetsStage from '../components/musicVideo/stages/CastSetsStage.jsx';
 import PlanStage from '../components/musicVideo/stages/PlanStage.jsx';
-import ProduceStage from '../components/musicVideo/stages/ProduceStage.jsx';
 import ReviewStage from '../components/musicVideo/stages/ReviewStage.jsx';
 import { PUBLISH_TARGETS } from '../components/musicVideo/PublishPostingPanel.jsx';
 import PublishStage from '../components/musicVideo/stages/PublishStage.jsx';
@@ -148,6 +148,7 @@ const approvalStageFor = (tab, project, readiness, proofActive) => (tab === 'pro
 const PLAYER_FIRST_STAGES = new Set(['produce', 'review']);
 // Steps with no player: Assets is a contact sheet, Story and Plan are read and edited rather than watched.
 const NO_DOCK_STAGES = new Set(['assets', 'story', 'board']);
+const ProduceStage = lazy(() => import('../components/musicVideo/stages/ProduceStage.jsx'));
 const STAGE_VIEWS = {
   setup: SetupStage, story: StoryStage, 'cast-sets': CastSetsStage, board: PlanStage, produce: ProduceStage, review: ReviewStage, publish: PublishStage,
   assets: AssetsStage, cleanup: CleanupStage,
@@ -853,6 +854,8 @@ function ProjectWorkspace({
     project: selected,
     videoSettings,
     applyScenePatch: patchScene,
+    // Renders that finished while the socket was down missed their attach events.
+    onReconciled: (projectId) => getMusicVideoProject(projectId, { silent: true }).then(replaceProject).catch(() => {}),
   });
   const takes = useMusicVideoTakes({ project: selected, applyScenePatch: patchScene, patchProject });
   // Selective section revision (#8987): regenerate only a draft's flagged
@@ -1895,7 +1898,11 @@ function ProjectWorkspace({
             )}
           >
             {storyVisited.current && <div hidden={activeStage !== 'story'}><StoryStage board={board} active={activeStage === 'story'} /></div>}
-            {activeStage !== 'story' && <StageView board={board} />}
+            {activeStage !== 'story' && (
+              <Suspense fallback={<PageSkeleton header="none" label="Loading shots" cards={3} sidebar={false} />}>
+                <StageView board={board} />
+              </Suspense>
+            )}
           </MusicVideoLayout>
     </>
   );

@@ -19,7 +19,8 @@ import usePopoverPosition, { VIEWPORT_PADDING } from '../../hooks/usePopoverPosi
 // Trigger and items are >=44px on phones (the repo's touch-target floor) and
 // relax to the denser desktop sizing from `sm` up.
 // The menu is portaled and fixed-positioned so clipped cards and dashboard
-// stacking contexts cannot move or hide the app row when it opens.
+// stacking contexts cannot move or hide the app row when it opens, and it
+// layers above Drawer / Modal (z-50) so a menu opened inside one shows.
 //
 // Tones pre-compose full Tailwind class names — the JIT scans for complete
 // tokens, so `text-port-${tone}` would NOT generate the utility.
@@ -121,7 +122,7 @@ export default function OverflowMenu({
           role="menu"
           aria-label={label}
           onKeyDown={handleMenuKeyDown}
-          className="fixed z-30 max-w-[calc(100vw-1rem)] rounded-lg border border-port-border bg-port-card shadow-lg py-1"
+          className="fixed z-[100] max-w-[calc(100vw-1rem)] rounded-lg border border-port-border bg-port-card shadow-lg py-1"
           style={{
             left: style?.left ?? `${VIEWPORT_PADDING}px`,
             top: style?.top ?? `${VIEWPORT_PADDING}px`,

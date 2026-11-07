@@ -316,7 +316,7 @@ export default function SyncedReview({ work }) {
           <button
             type="button"
             onClick={() => showPane('cast')}
-            className={`flex items-center gap-1 text-[10px] rounded px-1.5 py-0.5 border ${
+            className={`flex items-center gap-1 text-[10px] pointer-coarse:min-h-11 rounded px-1.5 py-0.5 border ${
               castGapCount > 0
                 ? 'text-port-warning border-port-warning/40 hover:bg-port-warning/10'
                 : 'text-gray-400 border-port-border hover:text-gray-200'
@@ -659,7 +659,7 @@ function CastPane({ containerRef, className, cast, findingsByCharacter, castIds,
                     onClick={() => runPropose(row.characterId, row.characterName, repairable.map((f) => f.field))}
                     disabled={proposing}
                     title="Ask the configured model for a sharper version of these fields. Writes nothing — you tick what to keep."
-                    className="inline-flex items-center gap-1 rounded border border-port-accent/40 bg-port-accent/10 px-2 py-1 text-[10px] text-port-accent hover:bg-port-accent/20 disabled:opacity-40"
+                    className="inline-flex items-center gap-1 rounded border border-port-accent/40 bg-port-accent/10 px-2 py-1 text-[10px] pointer-coarse:min-h-11 text-port-accent hover:bg-port-accent/20 disabled:opacity-40"
                   >
                     {proposing ? <Loader2 size={10} className="animate-spin" /> : <Sparkles size={10} />}
                     Sharpen {repairable.length} field{repairable.length === 1 ? '' : 's'}

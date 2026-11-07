@@ -745,7 +745,7 @@ export default function LinksTab({ onRefresh }) {
             className="p-4 bg-port-card border border-port-border rounded-lg"
           >
             {/* Header row */}
-            <div className="flex items-start justify-between gap-3 mb-2">
+            <div className="flex flex-wrap items-start gap-x-2 gap-y-1 sm:flex-nowrap sm:justify-between sm:gap-3 mb-2">
               {!isEditing && (
                 <LinkDragHandle link={link} />
               )}
@@ -842,7 +842,7 @@ export default function LinksTab({ onRefresh }) {
                 </div>
               ) : (
                 <>
-                  <div className="flex-1 min-w-0">
+                  <div className="min-w-0 flex-1 basis-[calc(100%_-_3.5rem)] sm:basis-0">
                     <div className="flex items-center gap-2 mb-1">
                       {link.isRepo ? (
                         link.malwareScan?.verdict === 'DANGEROUS'
@@ -872,7 +872,7 @@ export default function LinksTab({ onRefresh }) {
                     )}
                   </div>
 
-                  <div className="flex items-center gap-2 shrink-0">
+                  <div className="ml-auto flex items-center gap-2 shrink-0">
                     <button
                       onClick={() => handleEdit(link)}
                       className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-400 hover:text-white transition-colors"
@@ -892,7 +892,7 @@ export default function LinksTab({ onRefresh }) {
                       target="_blank"
                       rel="noopener noreferrer"
                       draggable={false}
-                      className="p-1.5 text-gray-400 hover:text-port-accent transition-colors"
+                      className="p-1.5 pointer-coarse:min-h-11 pointer-coarse:min-w-11 inline-flex items-center justify-center text-gray-400 hover:text-port-accent transition-colors"
                       title="Open in new tab"
                       aria-label={`Open ${link.title || link.url} in a new tab`}
                     >
@@ -931,7 +931,7 @@ export default function LinksTab({ onRefresh }) {
                   id={`link-bucket-${link.id}`}
                   value={link.bucketId || ''}
                   onChange={(e) => handleAssignLink(link, e.target.value || null)}
-                  className="px-1.5 py-1 text-xs rounded border border-port-border bg-port-bg text-gray-300 focus:outline-hidden focus:border-port-accent"
+                  className="px-1.5 py-1 pointer-coarse:min-h-11 text-xs rounded border border-port-border bg-port-bg text-gray-300 focus:outline-hidden focus:border-port-accent"
                   title="Assign to a bucket"
                 >
                   <option value="">＋ Bucket…</option>
@@ -942,7 +942,7 @@ export default function LinksTab({ onRefresh }) {
 
                 {/* Tags */}
                 {link.tags?.length > 0 && (
-                  <div className="flex min-w-0 flex-wrap items-center gap-1">
+                  <div className="flex min-w-0 flex-wrap items-center gap-1 pointer-coarse:gap-2">
                     <Tag size={12} className="text-gray-500" />
                     {link.tags.map((tag, i) => (
                       <span key={i} className="max-w-full break-all px-1.5 py-0.5 text-xs bg-port-border/50 text-gray-400 rounded">
@@ -969,7 +969,7 @@ export default function LinksTab({ onRefresh }) {
 
                     {/* Clone error */}
                     {link.cloneError && (
-                      <span role="status" className="text-xs text-port-error truncate max-w-[200px]" title={link.cloneError}>
+                      <span role="status" className="min-w-0 text-xs text-port-error break-words" title={link.cloneError}>
                         {link.cloneError}
                       </span>
                     )}
@@ -1022,7 +1022,7 @@ export default function LinksTab({ onRefresh }) {
                     {link.cloneStatus === 'none' && (
                       <button
                         onClick={() => handleClone(link.id)}
-                        className="flex items-center gap-1 px-2 py-1 text-xs rounded border border-port-border text-gray-400 hover:text-white transition-colors"
+                        className="flex items-center gap-1 px-2 py-1 pointer-coarse:min-h-11 text-xs rounded border border-port-border text-gray-400 hover:text-white transition-colors"
                         title="Clone repository"
                       >
                         <Download size={12} />
@@ -1033,7 +1033,7 @@ export default function LinksTab({ onRefresh }) {
                     {link.cloneStatus === 'failed' && (
                       <button
                         onClick={() => handleClone(link.id)}
-                        className="flex items-center gap-1 px-2 py-1 text-xs rounded border border-port-border text-gray-400 hover:text-white transition-colors"
+                        className="flex items-center gap-1 px-2 py-1 pointer-coarse:min-h-11 text-xs rounded border border-port-border text-gray-400 hover:text-white transition-colors"
                         title="Retry clone"
                       >
                         <RefreshCw size={12} />
@@ -1045,7 +1045,7 @@ export default function LinksTab({ onRefresh }) {
                       <>
                         <button
                           onClick={() => handleOpenFolder(link.id)}
-                          className="flex items-center gap-1 px-2 py-1 text-xs rounded border border-port-border text-gray-400 hover:text-white transition-colors"
+                          className="flex items-center gap-1 px-2 py-1 pointer-coarse:min-h-11 text-xs rounded border border-port-border text-gray-400 hover:text-white transition-colors"
                           title="Open folder in file manager"
                         >
                           <FolderOpen size={12} />
@@ -1053,7 +1053,7 @@ export default function LinksTab({ onRefresh }) {
                         </button>
                         <button
                           onClick={() => handlePull(link.id)}
-                          className="flex items-center gap-1 px-2 py-1 text-xs rounded border border-port-border text-gray-400 hover:text-white transition-colors"
+                          className="flex items-center gap-1 px-2 py-1 pointer-coarse:min-h-11 text-xs rounded border border-port-border text-gray-400 hover:text-white transition-colors"
                           title="Pull latest changes"
                         >
                           <RefreshCw size={12} />
@@ -1061,7 +1061,7 @@ export default function LinksTab({ onRefresh }) {
                         </button>
                         <button
                           onClick={() => setStudyingId(current => (current === link.id ? null : link.id))}
-                          className={`flex items-center gap-1 px-2 py-1 text-xs rounded border transition-colors ${
+                          className={`flex items-center gap-1 px-2 py-1 pointer-coarse:min-h-11 text-xs rounded border transition-colors ${
                             studyingId === link.id
                               ? 'border-port-accent/30 bg-port-accent/20 text-port-accent'
                               : 'border-port-border text-gray-400 hover:text-white'
@@ -1074,7 +1074,7 @@ export default function LinksTab({ onRefresh }) {
                         <button
                           onClick={() => handleScan(link.id)}
                           disabled={scanningId === link.id}
-                          className="flex items-center gap-1 px-2 py-1 text-xs rounded border border-port-border text-gray-400 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                          className="flex items-center gap-1 px-2 py-1 pointer-coarse:min-h-11 text-xs rounded border border-port-border text-gray-400 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                           title="Read-only malware/risk scan via /do:scan (writes report to ~/.claude/scans/)"
                         >
                           {scanningId === link.id ? (

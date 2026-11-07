@@ -489,6 +489,10 @@ export const ALWAYS_RUN_TESTS = [
 ];
 
 const DB_RISK_RULES = [
+  /^scripts\/(?:native-usage-(?:rehearse|sql-rehearsal)|rehearsal-scratch-db|lib\/nativeUsage(?:SqlRehearsal|CodeBinding|Snapshot|Rehearsal\.testFixture))(?:[.\/]|$)/i,
+  /^scripts\/lib\/migrationFiles(?:[.\/]|$)/i,
+  /^server\/lib\/databaseMaintenanceSchema(?:[.\/]|$)/i,
+  /^server\/services\/backupDatabaseDump(?:[.\/]|$)/i,
   /^server\/lib\/db(?:\/|\.|$)/i,
   /^server\/scripts\/.*db/i,
   /^server\/services\/(?:.*\/)?[^/]*DB(?:\/|\.|$)/i,

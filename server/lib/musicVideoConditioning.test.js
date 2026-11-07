@@ -24,6 +24,12 @@ it('uses the selected video model\'s real extra-image capacity', () => {
   expect(musicVideoClipReferenceCapacity('grok')).toBe(7);
   expect(musicVideoClipReferenceCapacity('local', { maxReferenceImages: 9, maxReferenceTotal: 5 })).toBe(4);
   expect(musicVideoClipReferenceCapacity('local', { id: 'ltx25' })).toBe(0);
+  expect(musicVideoClipReferenceCapacity('runway', { referenceImages: { max: 9 } })).toBe(8);
+  expect(musicVideoClipReferenceCapacity('runway', { referenceImages: { max: 30 } })).toBe(16);
+  expect(musicVideoClipReferenceCapacity('runway', { id: 'gen4.5' })).toBe(0);
+  expect(musicVideoClipReferenceCapacity('runway', { referenceImages: { max: 9 } }, { endFrame: true })).toBe(0);
+  expect(musicVideoClipReferenceCapacity('runway', { referenceImages: { max: 7, keepsFrames: true } })).toBe(6);
+  expect(musicVideoClipReferenceCapacity('runway', { referenceImages: { max: 7, keepsFrames: true } }, { endFrame: true })).toBe(5);
   expect(musicVideoClipReferenceCapacity('fal', getFalVideoModel('minimax/h3-max/reference-to-video'))).toBe(9);
   expect(musicVideoClipReferenceCapacity('fal', getFalVideoModel('bytedance/seedance-2.5/reference-to-video'))).toBe(16);
   expect(musicVideoClipReferenceCapacity('fal', getFalVideoModel('fal-ai/minimax/hailuo-02/standard/image-to-video'))).toBe(0);

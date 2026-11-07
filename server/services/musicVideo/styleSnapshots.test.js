@@ -122,7 +122,27 @@ it('adopts an enabled universe film recipe once while preserving explicit projec
   expect((await withStyleSnapshots({ concept: { universeId: 'example-new-universe' } }, existing)).filmLook).toBeUndefined();
 });
 
-it('refuses over-limit photography snapshots without silently truncating direction', async () => {
+it('refuses over-limit photography snapshots without silently truncating direction and names where to shorten it', async () => {
   getUniverse.mockResolvedValue({ ...UNIVERSE, styleNotes: 'x'.repeat(4000), visualProfile: naturalUniverseVisualProfile() });
-  await expect(withStyleSnapshots({ concept: { universeId: 'u1' } })).rejects.toMatchObject({ code: 'MUSIC_VIDEO_STYLE_TOO_LONG' });
+  await expect(withStyleSnapshots({ concept: { universeId: 'u1' } })).rejects.toMatchObject({
+    code: 'MUSIC_VIDEO_STYLE_TOO_LONG',
+    message: expect.stringMatching(/Universe style has \d+ characters; the video concept limit is 4000\. Shorten style notes \(4000 characters\)/),
+    context: expect.objectContaining({
+      limit: 4000,
+      styleNotesLength: 4000,
+    }),
+  });
+});
+
+it('names influences when influences/photography profile are the excessive component', async () => {
+  getUniverse.mockResolvedValue({
+    name: 'Short',
+    styleNotes: 'Brief',
+    influences: { embrace: ['word '.repeat(500)], avoid: ['avoid '.repeat(300)] },
+    visualProfile: naturalUniverseVisualProfile(),
+  });
+  await expect(withStyleSnapshots({ concept: { universeId: 'u1' } })).rejects.toMatchObject({
+    code: 'MUSIC_VIDEO_STYLE_TOO_LONG',
+    message: expect.stringMatching(/Shorten influences \(\d+ characters\) or style notes \(5 characters\)/),
+  });
 });

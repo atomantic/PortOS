@@ -270,6 +270,17 @@ import { LLM_DRILL_TYPES } from './postDrillTypes.js';
 import { escapeRegExp } from './textUtils.js';
 
 export const HOST_CONTROL_ROUTES = Object.freeze([
+  // Explicit account-identity assertions require the local/delegated operator,
+  // including when an optional instance password is disabled.
+  'PUT /api/usage/native-accounts',
+  // The usage cutover barrier (#15098) runs nothing on the host, but it decides
+  // whether this machine's accounting is written and federated, so it needs an
+  // operator: a network caller on a password-free install cannot hold or activate it.
+  'POST /api/usage/cutover/acquire',
+  'POST /api/usage/cutover/verify',
+  'POST /api/usage/cutover/activate',
+  'POST /api/usage/cutover/rollback',
+  'POST /api/usage/cutover/release',
   // Stacker News review authorizes a later saved-key publication or browser
   // handoff; both the decision and execution require operator authority.
   'POST /api/stacker-news/actions/:id/review',
@@ -1091,6 +1102,9 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // Greybox draft hands the place and the user's instruction to a caller-chosen
   // provider (possibly a tool-capable harness). Save and capture are data-only.
   'POST /api/catalog/ingredients/:id/greybox/draft',
+  // Shot render launches a Vite build and the headless composition browser;
+  // capture only saves a caller-supplied PNG and stays data-only.
+  'POST /api/catalog/ingredients/:id/greybox/shots/:shotId/render',
   'POST /api/catalog/ingredients/:id/photoreal/look/draft',
   // Photoreal runs the operator-checked Blender executable on the host.
   'POST /api/catalog/ingredients/:id/photoreal/render',
@@ -1416,6 +1430,8 @@ export const HOST_CONTROL_SETTINGS_SLICES = Object.freeze([
   'seriesAutopilot',
   'telegram',
   'untrustedContent',
+  // Same explicit account-identity assertions as PUT /api/usage/native-accounts.
+  'usageNativeAccountSelections',
   'voice',
 ]);
 

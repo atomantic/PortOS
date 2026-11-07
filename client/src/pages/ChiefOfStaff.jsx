@@ -5,6 +5,7 @@ import { useParams, useNavigate, useSearchParams } from 'react-router';
 import { useSocket } from '../hooks/useSocket';
 import { useSocketSubscription } from '../hooks/useSocketSubscription';
 import { useLocalStorageBool } from '../hooks/useLocalStorageBool';
+import useMediaQuery from '../hooks/useMediaQuery';
 import { useValidTab } from '../hooks/useValidTab';
 import { useInstanceFeatures } from '../hooks/useInstanceFeatures.js';
 import { filterNavByFeatures } from '../lib/navFeatures.js';
@@ -235,15 +236,18 @@ export default function ChiefOfStaff() {
   const [statusMessage, setStatusMessage] = useState("Idle - waiting for tasks...");
   const [liveOutputs, setLiveOutputs] = useState({});
   const [eventLogs, setEventLogs] = useState([]);
-  const [agentPanelCollapsed, setAgentPanelCollapsed] = useState(() => activeTab === 'tasks');
+  // A landscape phone has no height to spare: the stacked agent panel would
+  // push all tab content out of view, so short viewports start collapsed too.
+  const shortViewport = useMediaQuery('(max-height: 500px)');
+  const [agentPanelCollapsed, setAgentPanelCollapsed] = useState(() => activeTab === 'tasks' || shortViewport);
   const mobilePanelPreferenceSet = useRef(false);
   const toggleMobilePanel = () => {
     mobilePanelPreferenceSet.current = true;
     setAgentPanelCollapsed(value => !value);
   };
   useEffect(() => {
-    if (!mobilePanelPreferenceSet.current) setAgentPanelCollapsed(activeTab === 'tasks');
-  }, [activeTab]);
+    if (!mobilePanelPreferenceSet.current) setAgentPanelCollapsed(activeTab === 'tasks' || shortViewport);
+  }, [activeTab, shortViewport]);
   const [desktopPanelCollapsed, setDesktopPanelCollapsed] = useLocalStorageBool(
     'cos-panel-collapsed',
     false,

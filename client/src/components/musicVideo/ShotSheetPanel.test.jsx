@@ -31,12 +31,21 @@ describe('ShotSheetPanel', () => {
   it('shows each shot with its time, lyric, camera and outdated frame warning', () => {
     render(<ShotSheetPanel board={boardFor()} />);
     openPanel();
-    expect(screen.getByText('0 of 2 shots checked · 2 incomplete · 1 frame older than its prompt')).toBeInTheDocument();
+    expect(screen.getByText('0 of 2 shots done · 2 incomplete · 1 frame older than its prompt')).toBeInTheDocument();
     const row = screen.getByRole('button', { name: 'Open Shot 1' }).closest('tr');
     expect(within(row).getByText('Hold still')).toBeInTheDocument();
-    expect(within(row).getByText('Prompt changed since this frame')).toBeInTheDocument();
+    expect(within(row).getByText('Details changed since this frame')).toBeInTheDocument();
     expect(within(row).getByLabelText('Shot 1 camera')).toHaveValue('vhs');
     expect(within(row).getByLabelText('Shot 1 emotion')).toHaveValue('Focused');
+  });
+
+  // Catches the frame preview not opening the shot editor, the phone path to a shot.
+  it('opens the shot editor from the frame preview', () => {
+    const board = boardFor();
+    render(<ShotSheetPanel board={board} />);
+    openPanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Open Shot 1 from preview' }));
+    expect(board.onEditShot).toHaveBeenCalledWith('a');
   });
 
   // Catches a sheet edit dropping sibling fields, or saving when nothing changed.
@@ -53,6 +62,19 @@ describe('ShotSheetPanel', () => {
     expect(board.editSceneLocal).toHaveBeenCalledWith('a', { shotSheet: { cameraId: 'vhs', holder: 'Kevin', emotion: 'Scared' } });
   });
 
+  // Catches View going back to a one-line pick box: it holds a sentence, so it's a growing text box that saves on leave.
+  it('edits the view as free text in a text box', () => {
+    const board = boardFor();
+    render(<ShotSheetPanel board={board} />);
+    openPanel();
+    const view = screen.getByLabelText('Shot 1 view');
+    expect(view.tagName).toBe('TEXTAREA');
+    expect(view).not.toHaveAttribute('list');
+    fireEvent.change(view, { target: { value: 'Crooked snapshot from behind and to the right' } });
+    fireEvent.blur(view);
+    expect(board.saveScene).toHaveBeenCalledWith('a', { shotSheet: { cameraId: 'vhs', holder: 'Kevin', emotion: 'Focused', view: 'Crooked snapshot from behind and to the right' } });
+  });
+
   // Catches an observer keeping a holder: it isn't in their world, so nobody holds it.
   it('clears the holder when a shot changes to the observer and hides the held-by picker', () => {
     const board = boardFor();
@@ -63,20 +85,40 @@ describe('ShotSheetPanel', () => {
   });
 
   // Catches the human review not saving with the plan, or the filters ignoring it.
-  it('saves a Checked tick with the sheet and narrows to unchecked and incomplete shots', () => {
+  it('saves a Done tick with the sheet and narrows to not-done and incomplete shots', () => {
     const board = boardFor();
     board.project.scenes[0].shotSheet = { cameraId: 'vhs', holder: 'Kevin', location: 'Street', timeOfDay: 'Dusk', emotion: 'Focused', action: 'Rides', characters: ['Renee'], checked: true };
     render(<ShotSheetPanel board={board} />);
     openPanel();
-    expect(screen.getByLabelText('Shot 1 checked')).toBeChecked();
-    fireEvent.click(screen.getByLabelText('Shot 2 checked'));
+    expect(screen.getByLabelText('Shot 1 done')).toBeChecked();
+    fireEvent.click(screen.getByLabelText('Shot 2 done'));
     expect(board.saveScene).toHaveBeenCalledWith('b', { shotSheet: { checked: true } });
-    fireEvent.click(screen.getByLabelText('Only not checked'));
+    fireEvent.click(screen.getByLabelText('Only not done'));
     expect(screen.queryByRole('button', { name: 'Open Shot 1' })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByLabelText('Only not checked'));
+    fireEvent.click(screen.getByLabelText('Only not done'));
     fireEvent.click(screen.getByLabelText('Only incomplete'));
     expect(screen.queryByRole('button', { name: 'Open Shot 1' })).not.toBeInTheDocument();
     expect(screen.getByText(/Missing camera, location/)).toBeInTheDocument();
+  });
+
+  // Catches Mark all done dropping a shot's plan, re-saving shots already done, or ticking shots a filter hides.
+  it('marks every listed shot done in one tap, keeping each plan', () => {
+    const board = boardFor();
+    board.project.scenes.push({ sceneId: 'c', label: 'Shot 3', startSec: 4, endSec: 6, shotSheet: { checked: true } });
+    const { rerender } = render(<ShotSheetPanel board={board} />);
+    openPanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Mark all done' }));
+    expect(board.saveScene.mock.calls).toEqual([
+      ['a', { shotSheet: { cameraId: 'vhs', holder: 'Kevin', emotion: 'Focused', checked: true } }],
+      ['b', { shotSheet: { checked: true } }],
+    ]);
+    board.saveScene.mockClear();
+    fireEvent.change(screen.getByLabelText('Filter by camera'), { target: { value: 'vhs' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Mark 1 shown done' }));
+    expect(board.saveScene.mock.calls.map(([sceneId]) => sceneId)).toEqual(['a']);
+    board.project.scenes.forEach((scene) => { scene.shotSheet = { ...scene.shotSheet, checked: true }; });
+    rerender(<ShotSheetPanel board={{ ...board, project: { ...board.project } }} />);
+    expect(screen.queryByRole('button', { name: /Mark .*done/ })).not.toBeInTheDocument();
   });
 
   // Catches a column losing its pick list.

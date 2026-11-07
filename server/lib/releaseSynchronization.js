@@ -77,6 +77,11 @@ export function publisherCandidateTarget(entry) {
     createdAt: seed.seededAt };
 }
 
+/** The one lock a synchronization checkout may carry and still retire. The
+ * recipe does not take a lock, but coordinators have added this exact one; any
+ * other prose belongs to its holder and stays held. */
+export const inlineSynchronizationLockReason = agentId => `Active inline release synchronization owned by ${agentId}`;
+
 export function effectiveReleaseSynchronization(entry) {
   return entry?.synchronization;
 }

@@ -56,7 +56,7 @@ export function StoryboardSetup({
             onClick={onClick}
             disabled={isRunning || !onClick || blockedByDirty}
             title={blockedByDirty ? 'Save first' : undefined}
-            className={`mt-1.5 inline-flex items-center gap-1 px-2 py-1 text-[10px] rounded disabled:opacity-50 ${
+            className={`mt-1.5 inline-flex items-center gap-1 px-2 py-1 text-[10px] pointer-coarse:min-h-11 rounded disabled:opacity-50 ${
               primary
                 ? 'bg-port-accent text-white hover:bg-port-accent/80'
                 : 'border border-port-border text-gray-300 hover:bg-port-border/40'
@@ -157,7 +157,7 @@ export function FailedAdaptBanner({ failure, onRunAdapt, runningAdapt, onOpenCon
       <div className="flex gap-2 justify-end">
         <button
           onClick={onOpenConfig}
-          className="flex items-center gap-1 px-2 py-1 border border-port-border text-gray-300 rounded text-[10px] hover:bg-port-border/40"
+          className="flex items-center gap-1 px-2 py-1 border border-port-border text-gray-300 rounded text-[10px] pointer-coarse:min-h-11 hover:bg-port-border/40"
         >
           <SlidersHorizontal size={10} /> Adjust LLM
         </button>
@@ -165,7 +165,7 @@ export function FailedAdaptBanner({ failure, onRunAdapt, runningAdapt, onOpenCon
           onClick={onRunAdapt}
           disabled={runningAdapt || !onRunAdapt || dirty}
           title={dirty ? 'Save first' : undefined}
-          className="flex items-center gap-1 px-2 py-1 bg-port-error/20 border border-port-error/40 text-port-error rounded text-[10px] hover:bg-port-error/30 disabled:opacity-50"
+          className="flex items-center gap-1 px-2 py-1 bg-port-error/20 border border-port-error/40 text-port-error rounded text-[10px] pointer-coarse:min-h-11 hover:bg-port-error/30 disabled:opacity-50"
         >
           {runningAdapt ? <Loader2 size={10} className="animate-spin" /> : <RefreshCcw size={10} />}
           Re-run Adapt
@@ -202,7 +202,7 @@ export function BiblesMissingNotice({ charactersMissing, placesMissing, onRunCha
               onClick={onRunCharacters}
               disabled={isRunning || !onRunCharacters || dirty}
               title={dirty ? 'Save first' : undefined}
-              className="flex items-center gap-1 px-2 py-1 border border-port-border text-gray-300 rounded text-[10px] hover:bg-port-border/40 disabled:opacity-50"
+              className="flex items-center gap-1 px-2 py-1 border border-port-border text-gray-300 rounded text-[10px] pointer-coarse:min-h-11 hover:bg-port-border/40 disabled:opacity-50"
             >
               {runningKind === 'characters' ? <Loader2 size={10} className="animate-spin" /> : <Users size={10} />}
               Extract characters
@@ -213,7 +213,7 @@ export function BiblesMissingNotice({ charactersMissing, placesMissing, onRunCha
               onClick={onRunPlaces}
               disabled={isRunning || !onRunPlaces || dirty}
               title={dirty ? 'Save first' : undefined}
-              className="flex items-center gap-1 px-2 py-1 border border-port-border text-gray-300 rounded text-[10px] hover:bg-port-border/40 disabled:opacity-50"
+              className="flex items-center gap-1 px-2 py-1 border border-port-border text-gray-300 rounded text-[10px] pointer-coarse:min-h-11 hover:bg-port-border/40 disabled:opacity-50"
             >
               {runningKind === 'places' ? <Loader2 size={10} className="animate-spin" /> : <MapPinIcon size={10} />}
               Extract places
@@ -237,7 +237,7 @@ export function StaleBanner({ onRunAdapt, runningAdapt, dirty = false }) {
         onClick={onRunAdapt}
         disabled={runningAdapt || !onRunAdapt || dirty}
         title={dirty ? 'Save first' : undefined}
-        className="flex items-center gap-1 px-2 py-1 bg-port-warning/20 border border-port-warning/40 text-port-warning rounded text-[10px] hover:bg-port-warning/30 disabled:opacity-50"
+        className="flex items-center gap-1 px-2 py-1 bg-port-warning/20 border border-port-warning/40 text-port-warning rounded text-[10px] pointer-coarse:min-h-11 hover:bg-port-warning/30 disabled:opacity-50"
       >
         {runningAdapt ? <Loader2 size={10} className="animate-spin" /> : <RefreshCcw size={10} />}
         Re-run

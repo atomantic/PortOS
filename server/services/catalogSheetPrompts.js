@@ -40,6 +40,7 @@ export function buildEnvironmentSheetPrompt(universe, place) {
   const timeOfDay = trim(place.timeOfDay);
   const recurring = trim(place.recurringDetails);
   const visualPrompt = trim(place.prompt);
+  const size = trim(place.size);
 
   const headerBits = [
     `Location: ${name}.`,
@@ -55,6 +56,7 @@ export function buildEnvironmentSheetPrompt(universe, place) {
     styleBits || DEFAULT_ENVIRONMENT_SHEET_STYLE,
     `Sheet header (top of sheet): ${headerBits}`,
     description ? `Location description: ${description}` : '',
+    size ? `Real-world sizes, true in every panel: ${size}. Build the place to these sizes against standard 6 ft 8 in (203 cm) doorways, 3 ft (91 cm) railings and parked cars, and state them in a small labeled scale key in the margin of the establishing view; never draw guide or dimension lines over the place itself.` : '',
     visualPrompt ? `Visual notes: ${visualPrompt}` : '',
     `Establishing wide shot (large top zone): a wide establishing view of ${name} showing its full layout, scale, and how the space reads at a glance, labeled "ESTABLISHING".`,
     `Reverse angle (middle left): the same location seen from the opposite direction, so the space reads consistently in three dimensions, labeled "REVERSE".`,
@@ -84,16 +86,20 @@ export function buildProductSheetPrompt(universe, object) {
   const description = trim(object.description);
   const significance = trim(object.significance);
   const visualPrompt = trim(object.prompt);
+  const size = trim(object.size);
 
   const promptParts = [
     'PRODUCT REFERENCE SHEET — single object design page laid out in clear panels with thin borders, clean typography, and labeled views, on a plain seamless light-grey backdrop.',
     styleBits || DEFAULT_PRODUCT_SHEET_STYLE,
     `Sheet header (top of sheet): Object: ${name}.${aliases ? ` Also known as: ${aliases}.` : ''}`,
     description ? `Object description: ${description}` : '',
+    size ? `Real-world size: ${size}.` : '',
     significance ? `Significance: ${significance}` : '',
     visualPrompt ? `Visual notes: ${visualPrompt}` : '',
     `Orthographic views (large top zone): four views of ${name} side by side at identical scale — FRONT, SIDE, BACK, TOP — each on the plain backdrop with a soft contact shadow and a caption strip reading "FRONT", "SIDE", "BACK", "TOP".`,
-    `Scale reference (lower left): ${name} beside a simple measuring ruler and a neutral reference object so its real-world size reads clearly, labeled "SCALE".`,
+    size
+      ? `Scale reference (lower left): ${name} with a measuring ruler marked in feet and centimeters and the plain outline of a standard 6 ft 8 in (203 cm) door frame, drawn at true relative size so it reads as ${size}, labeled "SCALE" with its dimensions. The ruler and outline stand apart with clear space around ${name}: no guide, ruler or dimension line touches or crosses it, and the orthographic views carry no guide lines at all.`
+      : `Scale reference (lower left): ${name} beside a simple measuring ruler and a neutral reference object so its real-world size reads clearly, labeled "SCALE".`,
     `Macro detail (lower right): two close-up macro shots of the most distinctive material, surface finish, marking, or mechanism of ${name}, each labeled.`,
     'Layout: thin black panel borders, light grey labels under each view. The same object, materials, and proportions in every view. No hands, no people, no busy background. Render in one consistent style throughout the page.',
   ].filter(Boolean);

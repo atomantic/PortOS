@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
-import MusicVideoLayout, { stepState } from './MusicVideoLayout.jsx';
+import MusicVideoLayout, { STEP_RAIL_COLLAPSED_KEY, stepState } from './MusicVideoLayout.jsx';
 import { MUSIC_VIDEO_PAGES, MUSIC_VIDEO_STAGES } from '../../lib/musicVideoStages.js';
 
 // Both the step list (md+) and the phone icon bar are "Steps"; only one shows at a time.
@@ -20,10 +20,10 @@ describe('music-video step navigation', () => {
       notes={{ setup: '4:40 · 70 lyric lines', board: '26 shots' }}
       spend={{ spentUsd: 3, capUsd: 10 }} />);
     expect(stepNavs()).toHaveLength(2);
-    const steps = within(rail()).getAllByRole('button');
+    const steps = within(rail()).getAllByRole('button').filter((button) => button.getAttribute('aria-expanded') === null);
     expect(steps.map((step) => step.textContent)).toEqual([
+      '1Story' + 'Not started',
       'Song' + 'Done' + '4:40 · 70 lyric lines',
-      '2Story' + 'Not started',
       '3Storyboard' + 'Needs you' + '26 shots',
       'Look' + 'Done',
       '5Shots' + 'Not started',
@@ -32,7 +32,7 @@ describe('music-video step navigation', () => {
       'Assets', 'Cleanup',
     ]);
     expect(steps[2]).toHaveAttribute('aria-current', 'step');
-    fireEvent.click(steps[1]);
+    fireEvent.click(steps[0]);
     expect(onStageChange).toHaveBeenCalledWith('story');
     fireEvent.click(steps[4]);
     expect(onStageChange).toHaveBeenCalledWith('produce');
@@ -40,7 +40,7 @@ describe('music-video step navigation', () => {
     expect(onStageChange).toHaveBeenCalledWith('assets');
     // The phone bar says each state to screen readers, since it shows only icons.
     expect(within(phoneBar()).getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
-      'Song, Done', 'Story, Not started', 'Storyboard, Needs you', 'Look, Done', 'Shots, Not started', 'Final render, Not started', 'Publish, Not started', 'Assets', 'Cleanup',
+      'Story, Not started', 'Song, Done', 'Storyboard, Needs you', 'Look, Done', 'Shots, Not started', 'Final render, Not started', 'Publish, Not started', 'Assets', 'Cleanup',
     ]);
     // The step names what "done" means under its title, and labels the panel.
     expect(screen.getByRole('tabpanel', { name: 'Storyboard' })).toBeInTheDocument();
@@ -58,6 +58,31 @@ describe('music-video step navigation', () => {
       lead={<section aria-label="What this step needs">Art direction written</section>} />);
     expect(screen.getByRole('heading', { level: 3, name: 'Look' })).toBeInTheDocument();
     expect(screen.queryByText(MUSIC_VIDEO_STAGES.find((stage) => stage.id === 'cast-sets').doneWhen)).toBeNull();
+  });
+
+  it('folds the step list to its marks and remembers the choice', () => {
+    localStorage.removeItem(STEP_RAIL_COLLAPSED_KEY);
+    const onStageChange = vi.fn();
+    const props = {
+      project: { id: 'example-project', name: 'Example Project' }, stage: 'board', onStageChange,
+      progress: progressFor('board', { setup: 'done' }), spend: { spentUsd: 0 }, notes: { board: '26 shots' },
+    };
+    const { unmount } = render(<MusicVideoLayout {...props} />);
+    fireEvent.click(within(rail()).getByRole('button', { name: 'Hide steps' }));
+    // Folded: no names, notes or state words on screen, but each step still names itself and opens.
+    expect(within(rail()).queryByText('26 shots')).toBeNull();
+    const storyboard = within(rail()).getByRole('button', { name: /Storyboard, In progress/ });
+    expect(storyboard).toHaveAttribute('title', 'Storyboard: In progress');
+    fireEvent.click(within(rail()).getByRole('button', { name: /^Assets$/ }));
+    expect(onStageChange).toHaveBeenCalledWith('assets');
+    unmount();
+    // A reload keeps it folded until it is opened again.
+    render(<MusicVideoLayout {...props} />);
+    const show = within(rail()).getByRole('button', { name: 'Show steps' });
+    expect(show).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(show);
+    expect(within(rail()).getByText('26 shots')).toBeInTheDocument();
+    expect(localStorage.getItem(STEP_RAIL_COLLAPSED_KEY)).toBe('0');
   });
 
   it('says where the project stands in one line, and a status error marks no step as needing you', () => {

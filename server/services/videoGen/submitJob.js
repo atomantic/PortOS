@@ -17,6 +17,7 @@ import { isDefaultI2vReferenceMode } from '../../lib/videoReferenceModes.js';
 import { isDefaultSpeedProfile } from '../../lib/videoSpeedProfiles.js';
 import { isStockTextEncoder } from '../../lib/videoTextEncoders.js';
 import { FAL_DEFAULT_IMAGE_VIDEO_MODEL, getFalVideoModel } from '../../lib/falVideoModels.js';
+import { RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, getRunwayVideoModel } from '../../lib/runwayVideoModels.js';
 import { musicVideoClipReferenceCapacity } from '../../lib/musicVideoConditioning.js';
 import { collectRemoteInputAssets } from '../federatedMedia/inputAssets.js';
 import { prepareRemoteMediaJob, negotiateVideoConstraints } from '../federatedMedia/remoteSubmission.js';
@@ -159,10 +160,12 @@ async function prepareVideoSubmissionInputs(body, uploads, inputs) {
       if (isPerformanceScene(scene)) body = { ...body, mode: 'image', _suppliedAudio: false };
       else {
         const { model, modelId } = await resolveVideoModelSelection(body.modelId);
+        // A model that cannot hear the song still renders the shot as an image clip;
+        // the shot card's clip references note says so (SceneClipReferences.jsx).
         if (!supportsSourceAudioWindow(model)) {
-          throw new ServerError('Supplied song windows currently require an LTX MLX model with audio conditioning', { status: 400, code: 'MUSIC_VIDEO_AUDIO_UNSUPPORTED' });
-        }
-        body = sourceAudioVideoRequest(scene, model, { ...body, modelId });
+          console.log(`⏭️ ${model?.name || modelId || 'Local model'} hears no song audio; rendering ${body.musicVideo.sceneId} without its song window`);
+          body = { ...body, mode: 'image', _suppliedAudio: false };
+        } else body = sourceAudioVideoRequest(scene, model, { ...body, modelId });
       }
     }
     prepared = await prepareVideoGenParams({ body, uploads, localOnlyParamKeys: VIDEO_GEN_LOCAL_ONLY_FIELD_NAMES });
@@ -397,10 +400,13 @@ const submitHostedLane = async ({ body, prepared, backend, hosted, performancePa
   }
   const falModel = backend === VIDEO_GEN_MODE.FAL
     ? getFalVideoModel(performanceParams?.modelId || body.falModelId || FAL_DEFAULT_IMAGE_VIDEO_MODEL) : null;
-  const useFalReferences = Boolean(falModel?.referenceImages && body.musicVideo && sourceImagePath && !prepared.guidanceImagePath);
-  const falReferences = useFalReferences
+  const runwayModel = backend === VIDEO_GEN_MODE.RUNWAY
+    ? getRunwayVideoModel(body.runwayModelId || RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL) : null;
+  const clipReferenceModel = falModel || runwayModel;
+  const useClipReferences = Boolean(clipReferenceModel?.referenceImages && body.musicVideo && sourceImagePath && !prepared.guidanceImagePath);
+  const clipReferences = useClipReferences
     ? await (await import('../musicVideo/clipCastReferences.js')).musicVideoClipReferences(body.musicVideo,
-      musicVideoClipReferenceCapacity('fal', falModel), { excludePath: sourceImagePath })
+      musicVideoClipReferenceCapacity(backend, clipReferenceModel, { endFrame: backend === VIDEO_GEN_MODE.RUNWAY && !!prepared.lastImagePath }), { excludePath: sourceImagePath })
     : [];
   const { jobId, position, status } = await enqueue({
     // Hosted jobs use mode for queue dispatch and videoMode for text/image.
@@ -413,9 +419,9 @@ const submitHostedLane = async ({ body, prepared, backend, hosted, performancePa
     ...submissionTagParams(body),
     ...hosted.buildParams(body, prepared),
     ...(castReferences.length ? { castReferences } : {}),
-    ...(useFalReferences ? {
-      referenceImagePaths: falReferences.map((ref) => ref.path),
-      clipReferenceLabels: falReferences.map(({ label, role }) => ({ label, ...(role ? { role } : {}) })),
+    ...(useClipReferences ? {
+      referenceImagePaths: clipReferences.map((ref) => ref.path),
+      clipReferenceLabels: clipReferences.map(({ label, role }) => ({ label, ...(role ? { role } : {}) })),
     } : {}),
     ...(projectAspect ? { aspectRatio: projectAspect, frameAspect: projectAspect } : {}),
     // standalone fal lip sync: the uploaded voice clip (a Music Video performance shot overrides below)

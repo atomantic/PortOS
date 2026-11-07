@@ -20,7 +20,8 @@
  * The pure mappers (candidate mapping, dedupe keys, cursor advance) are exported
  * and unit-tested with fixture payloads — no network or DB required.
  */
-import { dataPath, ensureDir, atomicWrite, tryReadFile, safeJSONParse } from '../lib/fileUtils.js';
+import { dataPath, ensureDir, atomicWrite } from '../lib/fileUtils.js';
+import { readSyncCursorState, readSyncCursorStateForStatus } from '../lib/syncCursorState.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 import { getSettings } from './settings.js';
 import { getAccessToken, getAuthStatus } from './spotifyAuth.js';
@@ -134,13 +135,7 @@ function stateFilePath() {
 // Machine-local incremental cursor. NOT federated — the recently-played window
 // and its timestamps are per-account, so this must never sync to a peer.
 export async function readSyncState() {
-  const raw = await tryReadFile(stateFilePath());
-  const parsed = raw ? safeJSONParse(raw, null, { allowArray: false }) : null;
-  return {
-    cursorAfter: Number.isFinite(parsed?.cursorAfter) ? parsed.cursorAfter : 0,
-    lastRunAt: parsed?.lastRunAt || null,
-    lastResult: parsed?.lastResult || null,
-  };
+  return readSyncCursorState(stateFilePath(), 'cursorAfter');
 }
 
 async function writeSyncState(state) {
@@ -254,10 +249,10 @@ async function doRunSync() {
 
 // Status for the settings UI: config + cursor state + auth status (no API call).
 export async function getStatus(options = {}) {
-  const [config, state, auth] = await Promise.all([
+  const [config, { state, stateError }, auth] = await Promise.all([
     getSpotifyConfig(),
-    readSyncState(),
+    readSyncCursorStateForStatus(stateFilePath(), 'cursorAfter'),
     getAuthStatus(options),
   ]);
-  return { config, state, auth };
+  return { config, state, auth, ...(stateError ? { stateError } : {}) };
 }

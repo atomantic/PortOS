@@ -24,6 +24,7 @@ import { isClaudeCommand, isOpencodeCommand } from '../lib/providerModels.js';
 // parsers of the same OpenCode envelope is how the two end up reporting
 // different tool-call counts for the same run.
 import { summarizeOpenCodeEvents } from '../lib/opencodeStream.js';
+import { claimHeavyLocalJob } from '../lib/heavyJobClaim.js';
 import { getProviderById } from './providers.js';
 import { ensureProviderReadyForExecution } from './providerExecutionReadiness.js';
 import { executeTuiRun } from './tuiPromptRunner.js';
@@ -113,6 +114,10 @@ const validateProvider = (provider, target) => {
 /**
  * Run one explicit local-TUI PTY task benchmark.
  *
+ * Takes the heavy-local-job claim an assessment, sweep or capability test
+ * takes: a 10-minute run on the same runtime would otherwise contend with them
+ * and corrupt both sets of timings. Refuses with 409 instead of waiting.
+ *
  * @param {{backend:'llama'|'mtplx'|'ollama'|'ollama-coder'|'claude-ollama', modelId:string, timeoutMs?:number}} options
  */
 export async function runOpenCodeAgentBenchmark({ backend, modelId, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
@@ -120,6 +125,18 @@ export async function runOpenCodeAgentBenchmark({ backend, modelId, timeoutMs = 
   const provider = await getProviderById(target.providerId);
   validateProvider(provider, target);
 
+  const claim = await claimHeavyLocalJob({ kind: 'local-model agent benchmark', id: `${backend}/${modelId}` });
+  if (!claim.ok) {
+    throw new ServerError(claim.message, { status: 409, code: 'HEAVY_LOCAL_JOB_BUSY', context: { holder: claim.holder } });
+  }
+  try {
+    return await executeBenchmark({ backend, modelId, timeoutMs, target, provider });
+  } finally {
+    await claim.release();
+  }
+}
+
+async function executeBenchmark({ backend, modelId, timeoutMs, target, provider }) {
   const scratchDir = await mkdtemp(join(tmpdir(), 'portos-opencode-agent-benchmark-'));
   const runId = `portos-opencode-agent-benchmark-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   const startedAt = Date.now();

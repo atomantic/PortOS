@@ -51,3 +51,12 @@ describe('IMessageSettingsPanel Full Disk Access', () => {
     expect(api.checkImessageSetup).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('IMessageSettingsPanel unreadable sync state', () => {
+  it('warns that sync is stopped when the status reports an unreadable store', async () => {
+    api.getImessageStatus.mockResolvedValue({ state: { cursorRowid: null }, stateError: 'UNREADABLE_STORE' });
+    render(<MemoryRouter><IMessageSettingsPanel /></MemoryRouter>);
+    expect(await screen.findByText(/Sync is stopped: its saved position could not be read/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: /Sync now/ })).toBeTruthy();
+  });
+});

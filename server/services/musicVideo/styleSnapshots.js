@@ -7,7 +7,11 @@
 
 import { ServerError } from '../../lib/errorHandler.js';
 import { collectBoardStyleContext } from '../../lib/moodBoardStyleContext.js';
-import { universeVisualStyleTokens } from '../../lib/universeVisualStyle.js';
+import {
+  assembleUniverseStyleText,
+  universeStyleRefusal,
+  STYLE_SNAPSHOT_MAX,
+} from '../../lib/universeVisualStyle.js';
 import { visualProfileLook } from '../../lib/universeVisualProfile.js';
 import {
   getMusicVideoCharacterStyle, musicVideoCharacterStyleReferenceId, musicVideoCharacterStyleSnapshot,
@@ -15,19 +19,24 @@ import {
 } from '../../lib/musicVideoCharacterStyles.js';
 import { getCharacterStyleReferenceImage } from './characterStyles.js';
 
-const STYLE_SNAPSHOT_MAX = 4000;
+export { STYLE_SNAPSHOT_MAX, universeStyleSnapshot };
 
 function universeStyleSnapshot(universe) {
   if (!universe) return '';
-  const { embrace, avoid } = universeVisualStyleTokens(universe);
-  const text = [
-    universe.name,
-    universe.styleNotes,
-    embrace.length ? `Embrace: ${embrace.join(', ')}` : '',
-    avoid.length ? `Avoid: ${avoid.join(', ')}` : '',
-  ].filter(Boolean).join('\n');
-  if (universe.visualProfile && text.length > STYLE_SNAPSHOT_MAX) throw new ServerError(`Universe style has ${text.length} characters; the video concept limit is ${STYLE_SNAPSHOT_MAX}. Shorten the universe style before linking it.`, { status: 422, code: 'MUSIC_VIDEO_STYLE_TOO_LONG' });
-  return text.slice(0, STYLE_SNAPSHOT_MAX);
+  const refusal = universeStyleRefusal(universe);
+  if (refusal) {
+    throw new ServerError(refusal.message, {
+      status: 422,
+      code: 'MUSIC_VIDEO_STYLE_TOO_LONG',
+      context: {
+        length: refusal.length,
+        limit: refusal.limit,
+        styleNotesLength: refusal.styleNotesLength,
+        influencesLength: refusal.influencesLength,
+      },
+    });
+  }
+  return assembleUniverseStyleText(universe).slice(0, STYLE_SNAPSHOT_MAX);
 }
 
 // Prefer the board's synthesized style (a look description with its own

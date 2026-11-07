@@ -82,7 +82,7 @@ export default function TrackRenderCard({
             <button
               type="button"
               onClick={() => onOpen(render)}
-              className="flex-1 min-w-0 px-1.5 py-1 bg-port-border hover:bg-port-border/70 text-white text-[10px] rounded flex items-center justify-center gap-1"
+              className="flex-1 min-w-0 px-1.5 py-1 bg-port-border hover:bg-port-border/70 text-white text-[10px] pointer-coarse:min-h-11 rounded flex items-center justify-center gap-1"
               title="View details"
             >
               <Maximize2 className="w-3 h-3 shrink-0" /> <span className="truncate">Details</span>
@@ -92,7 +92,7 @@ export default function TrackRenderCard({
             <button
               type="button"
               onClick={() => onSelect(render)}
-              className="shrink-0 px-1.5 py-1 bg-port-success/20 hover:bg-port-success/40 text-port-success text-[10px] rounded flex items-center justify-center gap-1"
+              className="shrink-0 px-1.5 py-1 bg-port-success/20 hover:bg-port-success/40 text-port-success text-[10px] pointer-coarse:min-h-11 rounded flex items-center justify-center gap-1"
               title="Make this the active take"
             >
               <CheckCircle2 className="w-3 h-3" /> Use
@@ -102,7 +102,7 @@ export default function TrackRenderCard({
             <button
               type="button"
               onClick={() => onRemix(render)}
-              className="shrink-0 px-1.5 py-1 bg-port-accent/20 hover:bg-port-accent/40 text-port-accent text-[10px] rounded flex items-center justify-center gap-1"
+              className="shrink-0 px-1.5 py-1 bg-port-accent/20 hover:bg-port-accent/40 text-port-accent text-[10px] pointer-coarse:min-h-11 rounded flex items-center justify-center gap-1"
               title="Reuse these settings for a new render"
             >
               <Sparkles className="w-3 h-3" /> Remix
@@ -112,7 +112,7 @@ export default function TrackRenderCard({
             <button
               type="button"
               onClick={() => onSendToVideo(render)}
-              className="shrink-0 px-1.5 py-1 bg-port-accent/20 hover:bg-port-accent/40 text-port-accent text-[10px] rounded flex items-center justify-center gap-1"
+              className="shrink-0 px-1.5 py-1 bg-port-accent/20 hover:bg-port-accent/40 text-port-accent text-[10px] pointer-coarse:min-h-11 rounded flex items-center justify-center gap-1"
               title="Send this render to Audio-to-Video"
             >
               <Film className="w-3 h-3" /> <span className="truncate">Audio → Video</span>

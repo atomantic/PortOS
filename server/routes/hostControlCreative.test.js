@@ -239,10 +239,13 @@ describe('Creative Director and Commission operator authority (#10867)', () => {
   it('leaves pause, stop, delete, catalog-only auto-cast suggestions and reads open to remote callers', async () => {
     const app = appFor();
     for (const operation of harmless) {
+      // Pause is only legal while a project is running; the shared fixture is `paused` (resume needs that).
+      project.status = operation[1].endsWith('/pause') ? 'rendering' : 'paused';
       const response = await call(app, operation);
       expect(response.status, operation[1]).toBe(operation[3]);
       if (operation[4]) expect(operation[4]).toHaveBeenCalled();
     }
+    project.status = 'paused';
     expect((await request(app).get(cd)).status).toBe(200);
     expect((await request(app).get(`${cc}/example-commission`)).status).toBe(200);
     expect(startCreativeDirectorProject).not.toHaveBeenCalled();

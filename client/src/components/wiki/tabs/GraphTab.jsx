@@ -7,6 +7,9 @@ import BrailleSpinner from '../../BrailleSpinner';
 import OfflineNotesNotice from '../../OfflineNotesNotice.jsx';
 import useLatestRequest from '../../../hooks/useLatestRequest.js';
 
+// Pointer travel under this is a tap (open note) rather than a pan.
+const TAP_SLOP_PX = 6;
+
 export default function GraphTab({ vaultId }) {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -15,9 +18,9 @@ export default function GraphTab({ vaultId }) {
   const [loading, setLoading] = useState(true);
   const [zoom, setZoom] = useState(1);
   const [offset, setOffset] = useState({ x: 0, y: 0 });
-  const [dragging, setDragging] = useState(false);
   const [hoveredNode, setHoveredNode] = useState(null);
   const nodesRef = useRef([]);
+  const gestureRef = useRef(null);
   const connectionCountsRef = useRef(new Map());
   const beginLoad = useLatestRequest();
 
@@ -151,21 +154,13 @@ export default function GraphTab({ vaultId }) {
     ctx.restore();
   }, [graphData, zoom, offset, hoveredNode]);
 
-  const handleMouseMove = useCallback((e) => {
+  // Graph-space hit test at a viewport point; null when no node is within reach.
+  const hitTest = useCallback((clientX, clientY) => {
     const canvas = canvasRef.current;
-    if (!canvas || nodesRef.current.length === 0) return;
-
-    if (dragging) {
-      setOffset(prev => ({
-        x: prev.x + e.movementX,
-        y: prev.y + e.movementY
-      }));
-      return;
-    }
-
+    if (!canvas || nodesRef.current.length === 0) return null;
     const rect = canvas.getBoundingClientRect();
-    const mx = (e.clientX - rect.left - offset.x - canvas.width / 2 + 400) / zoom;
-    const my = (e.clientY - rect.top - offset.y - canvas.height / 2 + 300) / zoom;
+    const mx = (clientX - rect.left - offset.x - canvas.width / 2 + 400) / zoom;
+    const my = (clientY - rect.top - offset.y - canvas.height / 2 + 300) / zoom;
 
     let closest = null;
     let minDist = 20;
@@ -176,17 +171,57 @@ export default function GraphTab({ vaultId }) {
         closest = node.path;
       }
     }
-    setHoveredNode(closest);
-    canvas.style.cursor = closest ? 'pointer' : dragging ? 'grabbing' : 'grab';
-  }, [dragging, zoom, offset]);
+    return closest;
+  }, [zoom, offset]);
 
-  const handleClick = useCallback(() => {
-    if (hoveredNode) {
-      const next = new URLSearchParams(searchParams);
-      next.set('note', hoveredNode);
-      navigate({ pathname: '/wiki/browse', search: next.toString() });
+  const openNote = useCallback((path) => {
+    const next = new URLSearchParams(searchParams);
+    next.set('note', path);
+    navigate({ pathname: '/wiki/browse', search: next.toString() });
+  }, [navigate, searchParams]);
+
+  const handlePointerDown = useCallback((e) => {
+    // One gesture at a time: a second finger or mouse button must not hijack the active one.
+    if (gestureRef.current || (e.pointerType === 'mouse' && e.button !== 0)) return;
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    gestureRef.current = { id: e.pointerId, startX: e.clientX, startY: e.clientY, lastX: e.clientX, lastY: e.clientY, panned: false };
+  }, []);
+
+  const handlePointerMove = useCallback((e) => {
+    const gesture = gestureRef.current;
+    if (gesture?.id === e.pointerId) {
+      if (!gesture.panned && Math.hypot(e.clientX - gesture.startX, e.clientY - gesture.startY) < TAP_SLOP_PX) return;
+      if (!gesture.panned) setHoveredNode(null);
+      gesture.panned = true;
+      const dx = e.clientX - gesture.lastX;
+      const dy = e.clientY - gesture.lastY;
+      gesture.lastX = e.clientX;
+      gesture.lastY = e.clientY;
+      e.currentTarget.style.cursor = 'grabbing';
+      setOffset(prev => ({ x: prev.x + dx, y: prev.y + dy }));
+      return;
     }
-  }, [hoveredNode, navigate, searchParams]);
+    if (e.pointerType !== 'mouse') return;
+    const closest = hitTest(e.clientX, e.clientY);
+    setHoveredNode(closest);
+    e.currentTarget.style.cursor = closest ? 'pointer' : 'grab';
+  }, [hitTest]);
+
+  const endGesture = useCallback((e, { allowTap }) => {
+    const gesture = gestureRef.current;
+    if (gesture?.id !== e.pointerId) return;
+    if (allowTap && e.pointerType === 'mouse' && e.button !== 0) return;
+    gestureRef.current = null;
+    const hit = hitTest(e.clientX, e.clientY);
+    if (e.pointerType === 'mouse') {
+      setHoveredNode(hit);
+      e.currentTarget.style.cursor = hit ? 'pointer' : 'grab';
+    }
+    if (allowTap && !gesture.panned && hit) openNote(hit);
+  }, [hitTest, openNote]);
+
+  const handlePointerUp = useCallback((e) => endGesture(e, { allowTap: true }), [endGesture]);
+  const handlePointerCancel = useCallback((e) => endGesture(e, { allowTap: false }), [endGesture]);
 
   if (loading) {
     return (
@@ -248,12 +283,12 @@ export default function GraphTab({ vaultId }) {
 
       <canvas
         ref={canvasRef}
-        className="w-full h-full"
-        onMouseMove={handleMouseMove}
-        onClick={handleClick}
-        onMouseDown={() => { if (!hoveredNode) setDragging(true); }}
-        onMouseUp={() => setDragging(false)}
-        onMouseLeave={() => { setDragging(false); setHoveredNode(null); }}
+        className="w-full h-full touch-none"
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerCancel}
+        onPointerLeave={(e) => { if (e.pointerType === 'mouse') setHoveredNode(null); }}
         onWheel={(e) => {
           e.preventDefault();
           setZoom(z => Math.max(0.3, Math.min(3, z - e.deltaY * 0.001)));

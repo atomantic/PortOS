@@ -76,9 +76,11 @@ export const resetToDefaultBranch = (path, options = {}) => request('/git/reset-
   body: JSON.stringify({ path }),
   ...options
 });
-export const cleanupMergedBranches = (path, options = {}) => request('/git/cleanup-merged', {
+// `branches` narrows the cleanup to those merged branches (same safety: active
+// owners, dirty or unmerged worktrees come back in `skipped`).
+export const cleanupMergedBranches = (path, { branches, ...options } = {}) => request('/git/cleanup-merged', {
   method: 'POST',
-  body: JSON.stringify({ path }),
+  body: JSON.stringify({ path, ...(branches && { branches }) }),
   ...options
 });
 export const mergeBranch = (path, branch, options = {}) => request('/git/merge', {

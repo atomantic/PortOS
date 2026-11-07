@@ -132,6 +132,7 @@ export function buildTaskMetadata(taskData, taskType, { now = Date.now() } = {})
     // remain untouched and resolve from reviewLoop at read time.
     metadata.prCompletion = PR_COMPLETIONS.REVIEW_THEN_MERGE;
   }
+  if (typeof taskData.useAutoMerge === 'boolean') metadata.useAutoMerge = taskData.useAutoMerge;
   if (taskData.simplify === true) metadata.simplify = true;
   else if (taskData.simplify === false) metadata.simplify = false;
   // Throwaway-worktree posture. Only the raw path could set this before, so a

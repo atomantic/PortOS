@@ -28,6 +28,7 @@ import { getProject, updateProject, updateScene, updateRun, recordRun } from './
 import { enqueueTreatmentTask } from './agentBridge.js';
 import { advanceAfterPlanStepSettled } from './planAdvance.js';
 import { registerCreativeDirectorProjectStarter } from './projectStartSink.js';
+import { resolveCreativeDirectorProjectCommand } from './projectCommands.js';
 import { dispatchSceneEvaluation } from './sceneEvaluator.js';
 import { runSceneRender } from './sceneRunner.js';
 import { runStitch } from './stitchRunner.js';
@@ -35,7 +36,7 @@ import { sampleEvaluationFrames } from '../videoGen/local.js';
 import { listJobs, mediaJobEvents } from '../mediaJobQueue/index.js';
 import { PATHS, sleep } from '../../lib/fileUtils.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
-import { PROJECT_TERMINAL_STATUSES, RUN_TERMINAL_STATUSES } from '../../lib/creativeDirectorPresets.js';
+import { RUN_TERMINAL_STATUSES } from '../../lib/creativeDirectorPresets.js';
 import {
   DELIVERABLE_KINDS,
   blockedStageReason,
@@ -137,16 +138,18 @@ export async function handleCreativeDirectorCompletion(task, agentId, success) {
     // `paused` (the user pressed Pause, or a commission stopped it) or already
     // terminal. Flipping those to `failed` clobbers the explanatory reason the
     // user is looking at and makes a paused project un-Resumable.
-    if (PROJECT_TERMINAL_STATUSES.has(project.status) || project.status === 'paused') {
-      console.log(`↩️ CD ${meta.kind} agent failure on ${project.id} recorded on the run only — project is already ${project.status}`);
-      return;
-    }
+    //
     // Surface a concrete reason on the project so the UI's failure banner
     // has actionable context. Without this, a project flips to 'failed'
     // with whatever stale failureReason it had before (often null), and
     // the user has no idea what happened.
     const reason = `${meta.kind} agent task failed (taskId=${task.id || '?'}, agent=${agentId || '?'})`;
-    await updateProject(project.id, { status: 'failed', failureReason: reason })
+    const command = resolveCreativeDirectorProjectCommand(project, 'agent-failed', { reason });
+    if (command.outcome !== 'apply') {
+      console.log(`↩️ CD ${meta.kind} agent failure on ${project.id} recorded on the run only — project is ${project.status}`);
+      return;
+    }
+    await updateProject(project.id, command.patch)
       .catch((e) => logFailureWithStack(`❌ CD updateProject(failed) for ${project.id} failed`, e));
     console.error(`❌ CD project ${project.id} marked failed (task ${meta.kind} failed)`);
     return;

@@ -46,6 +46,7 @@ import { enqueueFirstPassMusicBed } from '../services/creativeDirector/firstPass
 import { startCreativeDirectorProject } from '../services/creativeDirector/completionHook.js';
 import { createSmokeTestProject } from '../services/creativeDirector/smokeTest.js';
 import { stopProject } from '../services/creativeDirector/stopProject.js';
+import { resolveCreativeDirectorProjectCommand } from '../services/creativeDirector/projectCommands.js';
 
 const router = Router();
 
@@ -401,53 +402,45 @@ router.patch('/:id/scene/:sceneId', asyncHandler(async (req, res) => {
   res.json(updated);
 }));
 
-// User-callable: kick off (or resume) the agent pipeline. Server inspects
-// project state, decides what kind of task is next, and enqueues it via the
-// CoS task queue. Idempotent — calling start on an already-running project
-// just enqueues whatever the next-task-kind is, which may be nothing.
-//
-// Failed projects are recoverable: any failed scenes are reset to pending so
-// the orchestrator can retry them, and the project status flips back to
-// planning/rendering. This matches the PR's "you can resume from the UI"
-// promise — without it, a single failed scene would leave Start a no-op.
 router.get('/:id/execution', asyncHandler(async (req, res) => {
   const { getVideoExecutionPreview } = await import('../services/creativeDirector/videoExecution.js');
   res.json(await getVideoExecutionPreview(req.params.id));
 }));
 
+// Start / pause / resume of a non-video project: the command table decides
+// whether the current status allows it (#15153). A refused command writes
+// nothing, so it also leaves a peer replica's held run state alone.
+async function runProjectCommand(project, event) {
+  const command = resolveCreativeDirectorProjectCommand(project, event);
+  if (command.outcome === 'reject') throw new ServerError(command.message, { status: command.httpStatus, code: command.code });
+  if (command.outcome !== 'apply') return command;
+  if (command.resetFailedScenes) {
+    // A single failed scene would otherwise leave Start a no-op.
+    for (const s of project.treatment?.scenes || []) {
+      if (s.status === 'failed') await updateScene(project.id, s.sceneId, { status: 'pending', retryCount: 0 });
+    }
+  }
+  if (command.patch) await updateProject(project.id, command.patch);
+  // Fire-and-forget — the orchestrator runs server-side and may spawn an
+  // agent (treatment / evaluate) or kick off a render directly.
+  if (command.advance) startCreativeDirectorProject(project.id).catch((e) => logFailureWithStack(`❌ CD ${event} failed for ${project.id}`, e));
+  return command;
+}
+
+// User-callable: kick off (or resume) the agent pipeline. Server inspects
+// project state, decides what kind of task is next, and enqueues it via the
+// CoS task queue. Idempotent on an already-running project — it advances
+// whatever the next-task-kind is, which may be nothing. Failed projects are
+// recoverable: failed scenes reset to pending and the status flips back to
+// planning/rendering. A complete project with its final video is left alone.
 router.post('/:id/start', asyncHandler(async (req, res) => {
   const project = await getProject(req.params.id);
-  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
-  if (project.workspace === 'video') {
+  if (project?.workspace === 'video') {
     const input = validateRequest(creativeDirectorVideoStartSchema, req.body);
     const { startVideoExecution } = await import('../services/creativeDirector/videoExecution.js');
     return res.json(await startVideoExecution(project.id, input));
   }
-  if (project.status === 'failed') {
-    // Reset every failed scene back to pending so the orchestrator picks
-    // them up. Without this, a single failed scene would leave Start a no-op.
-    const scenes = project.treatment?.scenes || [];
-    for (const s of scenes) {
-      if (s.status === 'failed') {
-        await updateScene(project.id, s.sceneId, { status: 'pending', retryCount: 0 });
-      }
-    }
-    // Clear the prior failure banner — restart implies the user has
-    // accepted the previous failure and wants a fresh attempt.
-    await updateProject(project.id, { status: project.treatment ? 'rendering' : 'planning', failureReason: null });
-  } else if (project.status === 'paused') {
-    await updateProject(project.id, { status: project.treatment ? 'rendering' : 'planning' });
-  } else if (project.status === 'draft') {
-    await updateProject(project.id, { status: 'planning' });
-  } else if (project.peerReplica) {
-    // Starting a peer's in-flight project here takes it over; the status write
-    // releases the sender's running work (applyProjectPatch).
-    await updateProject(project.id, { status: project.status });
-  }
-  // Fire-and-forget — the orchestrator runs server-side and may spawn an
-  // agent (treatment / evaluate) or kick off a render directly. The route
-  // returns immediately; the UI's polling reflects state changes.
-  startCreativeDirectorProject(project.id).catch((e) => logFailureWithStack(`❌ CD start failed for ${project.id}`, e));
+  await runProjectCommand(project, 'start');
   res.json({ ok: true, project: await getProject(project.id) });
 }));
 
@@ -461,8 +454,8 @@ router.post('/:id/pause', asyncHandler(async (req, res) => {
     await pauseVideoExecution(project.id, 'Paused by the user.');
     return res.json(await getProject(project.id));
   }
-  const updated = await updateProject(req.params.id, { status: 'paused' });
-  res.json(updated);
+  await runProjectCommand(project, 'pause');
+  res.json(await getProject(project.id));
 }));
 
 // Dev/test fixture: create a deterministic 3-scene "colored ball" project
@@ -477,23 +470,12 @@ router.post('/smoke-test', asyncHandler(async (_req, res) => {
 
 router.post('/:id/resume', asyncHandler(async (req, res) => {
   const project = await getProject(req.params.id);
-  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
-  if (project.workspace === 'video') {
+  if (project?.workspace === 'video') {
     const input = validateRequest(creativeDirectorVideoStartSchema, req.body);
     const { startVideoExecution } = await import('../services/creativeDirector/videoExecution.js');
     return res.json(await startVideoExecution(project.id, input));
   }
-  if (project.status !== 'paused') {
-    throw new ServerError('Project is not paused', { status: 400, code: 'INVALID_STATE' });
-  }
-  const restored = project.treatment ? 'rendering' : 'planning';
-  // Clear the reason too. A stop parks the project as `paused` WITH a
-  // `failureReason` (that's what explains why it stopped), and the overview/plan
-  // tabs render any non-empty failureReason in a red "FAILURE REASON" box — so
-  // without this the resumed project runs its whole next pass under a banner
-  // reporting the stop the user just undid.
-  await updateProject(project.id, { status: restored, failureReason: null });
-  startCreativeDirectorProject(project.id).catch((e) => logFailureWithStack(`❌ CD resume failed for ${project.id}`, e));
+  await runProjectCommand(project, 'resume');
   res.json({ ok: true, project: await getProject(project.id) });
 }));
 

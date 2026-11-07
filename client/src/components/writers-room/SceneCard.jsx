@@ -11,6 +11,8 @@ import {
 import toast from '../ui/Toast';
 import { generateImage } from '../../services/apiSystem';
 import socket from '../../services/socket';
+import { getWritersRoomAnalysis } from '../../services/apiWritersRoom';
+import useMediaJobReconnectSettle from '../../hooks/useMediaJobReconnectSettle';
 import useClickOutside from '../../hooks/useClickOutside';
 import { WR_IMAGE_DEFAULTS, buildSceneRenderPayload } from '../../lib/wrImageDefaults';
 import {
@@ -39,6 +41,7 @@ const SceneCard = forwardRef(function SceneCard({
   onHoverEnter = null,
   onHoverLeave = null,
   onRenderStart = null,
+  onSceneImageAttached = null,
 }, ref) {
   const light = readingTheme === 'light';
   const matchedCharacters = useMemo(
@@ -76,6 +79,8 @@ const SceneCard = forwardRef(function SceneCard({
   // cancel instead of leaving the card stuck in the error state (#1791/#1796).
   const recentlyFailedRef = useRef(null);
   const debugMenuRef = useRef(null);
+  // Terminal handlers of the live socket effect, reused by the reconnect settle below.
+  const terminalHandlersRef = useRef(null);
 
   // Sync local image state when parent reloads analyses (e.g. post-re-Adapt)
   // so a fresh image appears without forcing the user to re-click Generate.
@@ -152,6 +157,7 @@ const SceneCard = forwardRef(function SceneCard({
         : null);
       setGenStatus(initialImage ? 'done' : 'idle');
     };
+    terminalHandlersRef.current = { onCompleted, onFailed, onCanceled };
     socket.on('image-gen:started', onStarted);
     socket.on('image-gen:progress', onProgress);
     socket.on('image-gen:completed', onCompleted);
@@ -165,6 +171,30 @@ const SceneCard = forwardRef(function SceneCard({
       socket.off('image-gen:canceled', onCanceled);
     };
   }, [workId, analysisId, scene.id, initialImage]);
+
+  // A terminal event emitted while the socket was down is never replayed, so a
+  // reconnect re-reads the pending job and runs the same handler the event would
+  // have (#15167). The durable attach was filed server-side; the missed
+  // `writers-room:scene-image` event is replaced by re-reading the snapshot.
+  useMediaJobReconnectSettle(
+    () => (jobIdRef.current ? [jobIdRef.current] : []),
+    (jobId, job) => {
+      const handlers = terminalHandlersRef.current;
+      if (!handlers) return;
+      const data = { generationId: jobId, path: job.result?.path, error: job.error };
+      if (job.status === 'completed') {
+        handlers.onCompleted(data);
+        if (!onSceneImageAttached || !workId || !analysisId) return;
+        getWritersRoomAnalysis(workId, analysisId, { silent: true })
+          .then((analysis) => { if (analysis) onSceneImageAttached(analysis); })
+          .catch((err) => { console.warn(`⚠️ scene image refresh failed: ${err.message}`); });
+      } else if (job.status === 'failed') {
+        handlers.onFailed(data);
+      } else {
+        handlers.onCanceled(data);
+      }
+    },
+  );
 
   const generate = async () => {
     if (genStatus === 'running') return;
@@ -294,7 +324,7 @@ const SceneCard = forwardRef(function SceneCard({
         <button
           onClick={generate}
           disabled={genStatus === 'running'}
-          className="flex items-center gap-1 px-2 py-1 bg-port-bg border border-port-border rounded text-[10px] text-gray-300 hover:border-port-accent hover:text-white disabled:opacity-50"
+          className="flex items-center gap-1 px-2 py-1 bg-port-bg border border-port-border rounded text-[10px] pointer-coarse:min-h-11 text-gray-300 hover:border-port-accent hover:text-white disabled:opacity-50"
           title="Queue an image render using this scene's visual prompt"
         >
           {genStatus === 'running' ? <Loader2 size={10} className="animate-spin" /> : <ImageIcon size={10} />}

@@ -58,6 +58,49 @@ describe('buildRunwayVideoRequest — per-family wire bodies', () => {
   });
 });
 
+describe('buildRunwayVideoRequest — reference images', () => {
+  const REF = 'data:image/png;base64,REF';
+  it('Seedance 2.5 sends the frame and references as unpositioned images', () => {
+    expect(build('seedance2_5', { seconds: 7, referenceImageUris: [REF], width: 1920, height: 1080 }).body.promptImage).toEqual([{ uri: FRAME }, { uri: REF }]);
+  });
+  it('Seedance 2.5 without references keeps pinning its start frame', () => {
+    expect(build('seedance2_5', { seconds: 7 }).body.promptImage).toBe(FRAME);
+  });
+  it('refuses what Runway would reject, before anything is paid for', () => {
+    const inputError = expect.objectContaining({ code: 'RUNWAY_MODEL_INPUT' });
+    const thrown = (fn) => { try { fn(); } catch (err) { return err; } return null; };
+    expect(thrown(() => build('gen4.5', { referenceImageUris: [REF] }))).toEqual(inputError);
+    expect(thrown(() => build('seedance2_5', { referenceImageUris: [REF], endImageUri: END }))).toEqual(inputError);
+    expect(thrown(() => build('seedance2', { referenceImageUris: Array(9).fill(REF) }))).toEqual(inputError);
+    expect(thrown(() => build('seedance2_5', { imageUri: null, referenceImageUris: [REF] }))).toEqual(inputError);
+  });
+});
+
+describe('buildRunwayVideoRequest — references beside pinned frames', () => {
+  const REF = 'data:image/png;base64,REF';
+  it('Kling O3 and 4.0 keep their keyframes and send references in their own field', () => {
+    for (const modelId of ['klingO3_pro', 'kling_4']) {
+      const { body } = build(modelId, { seconds: 5, endImageUri: END, referenceImageUris: [REF] });
+      expect(body.promptImage).toEqual([{ uri: FRAME, position: 'first' }, { uri: END, position: 'last' }]);
+      expect(body.references).toEqual([{ uri: REF }]);
+    }
+  });
+  it('counts frames toward the limit', () => {
+    expect(build('klingO3_pro', { seconds: 5, referenceImageUris: Array(6).fill(REF) }).body.references).toHaveLength(6);
+    expect(() => build('klingO3_pro', { seconds: 5, endImageUri: END, referenceImageUris: Array(6).fill(REF) })).toThrow(/at most 7 images/);
+  });
+  it('WAN and H3 send references unpositioned and refuse an end frame with them', () => {
+    expect(build('wan3', { seconds: 5, referenceImageUris: [REF] }).body.promptImage).toEqual([{ uri: FRAME }, { uri: REF }]);
+    expect(build('hailuo3', { seconds: 5, referenceImageUris: [REF] }).estimatedCostUsd).toBe(0.54);
+    expect(() => build('wan3', { seconds: 5, endImageUri: END, referenceImageUris: [REF] })).toThrow(/cannot combine an end frame/);
+  });
+  it('Kling 4.0 renders an image at an auto size and text at an explicit one', () => {
+    expect(build('kling_4', { seconds: 5 }).body).toMatchObject({ model: 'kling_4', promptImage: FRAME, ratio: 'auto_720p', duration: 5 });
+    expect(buildRunwayVideoRequest({ modelId: 'kling_4', prompt: 'A coast', seconds: 5, width: 1280, height: 720 }).body).toMatchObject({ ratio: '1280:720' });
+    expect(build('kling_4', { seconds: 5, resolution: '1080p' }).estimatedCostUsd).toBe(1.175);
+  });
+});
+
 describe('buildRunwayVideoRequest — text-to-video', () => {
   it('Gen-4.5 with no start frame: /v1/text_to_video body, ratio matched to the shape, priced, Avoid folded in', () => {
     const portrait = buildRunwayVideoRequest({
@@ -119,6 +162,35 @@ describe('Runway pricing and lengths', () => {
     }
     expect(runwayVideoClipQuote({ modelId: 'wan3', seconds: 4, resolution: '1080p' })).toMatchObject({ billedSec: 4, perSec: 0.2, costUsd: 0.8 });
     expect(runwayVideoClipQuote({ modelId: 'unknown' })).toBeNull();
+  });
+
+  it('prices every model in the catalog at its published rate', () => {
+    for (const model of RUNWAY_VIDEO_MODELS) expect(model.pricing.perSecond, model.id).not.toBeNull();
+    const cost = (modelId, seconds, resolution, extra) => runwayVideoClipQuote({ modelId, seconds, resolution, ...extra }).costUsd;
+    expect(cost('seedance2_5', 7, '1080p')).toBe(4.76);
+    expect(cost('seedance2', 4, '4k')).toBe(6);
+    expect(cost('veo3.1', 8, '1080p')).toBe(1.6);
+    expect(cost('klingO3_pro', 5)).toBe(0.85);
+  });
+
+  it('never quotes Seedance below its per-generation minimum', () => {
+    const minimums = { seedance2_5: 0.8, seedance2: 0.56, seedance2_fast: 0.44, seedance2_mini: 0.28 };
+    for (const [modelId, minimum] of Object.entries(minimums)) {
+      const model = getRunwayVideoModel(modelId);
+      expect(model.duration.min).toBe(4);
+      expect(runwayVideoClipQuote({ modelId, seconds: 4, resolution: '480p' }).costUsd).toBe(minimum);
+    }
+  });
+
+  it('adds the per-image charge for every image a request sends', () => {
+    expect(runwayVideoClipQuote({ modelId: 'hailuo3', seconds: 5, resolution: '768p' })).toMatchObject({ inputImageUsd: 0.02, costUsd: 0.52 });
+    expect(runwayVideoClipQuote({ modelId: 'hailuo3', seconds: 5, resolution: '768p', inputImages: 3 }).costUsd).toBe(0.56);
+    const request = (extra) => buildRunwayVideoRequest({ modelId: 'hailuo3', prompt: 'A coast', seconds: 5, resolution: '768p', ...extra }).estimatedCostUsd;
+    expect(request({})).toBe(0.5);
+    expect(request({ imageUri: FRAME })).toBe(0.52);
+    expect(request({ imageUri: FRAME, endImageUri: END })).toBe(0.54);
+    expect(describeRunwayVideoRate('hailuo3', '768p')).toBe('$0.1/s at 768p + $0.02/image · bills 5s min');
+    expect(runwayVideoClipQuote({ modelId: 'seedance2_5', seconds: 5, resolution: '720p', inputImages: 5 }).inputImageUsd).toBe(0);
   });
 });
 

@@ -3,11 +3,18 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // The real settings store writes data/settings.json; this suite only cares
 // about the merge semantics on top of it, so it stands in an in-memory one.
 let stored = {};
+let writeQueue = Promise.resolve();
 vi.mock('./settings.js', () => ({
   getSettings: vi.fn(async () => structuredClone(stored)),
-  updateSettingsWith: vi.fn(async (mutate) => {
-    stored = await mutate(structuredClone(stored));
-    return structuredClone(stored);
+  // Writes run one at a time, as the real queueWrite does; without that an
+  // overlapping read-modify-write would lose the other caller's update here.
+  updateSettingsWith: vi.fn((mutate) => {
+    const run = writeQueue.then(async () => {
+      stored = await mutate(structuredClone(stored));
+      return structuredClone(stored);
+    });
+    writeQueue = run.catch(() => {});
+    return run;
   }),
 }));
 
@@ -235,5 +242,58 @@ describe('setSubscriptionEnabled', () => {
     expect(result.changed).toEqual(['claude-code']);
     expect(providerRecords[0].enabled).toBe(true);
     expect(providerRecords[1].enabled).toBe(false);
+  });
+
+  it('keeps each family’s restore record when two family toggles overlap', async () => {
+    // Regression: each toggle wrote its own stale copy of the whole toggle map,
+    // so the second write dropped the first family’s entry. Re-enabling that
+    // family then fell back to enabling everything, including user-disabled providers.
+    providerRecords = [
+      claudeCli,
+      { ...claudeAlt, enabled: false },
+      { ...codexCli, enabled: true },
+      { ...codexCli, id: 'codex-2', enabled: false },
+    ];
+    await Promise.all([
+      setSubscriptionEnabled('claude', false),
+      setSubscriptionEnabled('codex', false),
+    ]);
+    expect(providerRecords.filter((p) => p.enabled)).toEqual([]);
+
+    const claudeOn = await setSubscriptionEnabled('claude', true);
+    expect(claudeOn.changed).toEqual(['claude-code']);
+    expect(providerRecords.find((p) => p.id === 'claude-code-alt').enabled).toBe(false);
+    expect(providerRecords.find((p) => p.id === 'codex-cli').enabled).toBe(false);
+
+    const codexOn = await setSubscriptionEnabled('codex', true);
+    expect(codexOn.changed).toEqual(['codex-cli']);
+    expect(providerRecords.find((p) => p.id === 'codex-2').enabled).toBe(false);
+  });
+
+  it('orders an off and an on for the same family, so the on restores the off\'s providers', async () => {
+    // Regression: an on that read the restore list before a concurrent off wrote it
+    // found no record and enabled every provider in the family, including one the
+    // user had disabled by hand.
+    providerRecords = [claudeCli, { ...claudeAlt, enabled: false }];
+    await Promise.all([
+      setSubscriptionEnabled('claude', false),
+      setSubscriptionEnabled('claude', true),
+    ]);
+    expect(providerRecords.find((p) => p.id === 'claude-code').enabled).toBe(true);
+    expect(providerRecords.find((p) => p.id === 'claude-code-alt').enabled).toBe(false);
+  });
+
+  it('keeps the first toggle-off record when the family is turned off again', async () => {
+    // Regression: a repeat off finds nothing left enabled and overwrote the
+    // record with [], so the next on restored nothing yet reported enabled.
+    providerRecords = [claudeCli, claudeAlt];
+    providerRecords[1] = { ...claudeAlt, enabled: true };
+    await setSubscriptionEnabled('claude', false);
+    const repeat = await setSubscriptionEnabled('claude', false);
+    expect(repeat.changed).toEqual([]);
+
+    const result = await setSubscriptionEnabled('claude', true);
+    expect(result.changed).toEqual(['claude-code', 'claude-code-alt']);
+    expect(providerRecords.every((p) => p.enabled)).toBe(true);
   });
 });

@@ -251,6 +251,14 @@ const usageQuery = (params) => {
   return qs ? `?${qs}` : '';
 };
 export const getUsage = (params = {}, options = {}) => request(`/usage${usageQuery(params)}`, options);
+export const getNativeUsageMatrix = (params = {}, options = {}) => request(`/usage/native-matrix${usageQuery(params)}`, options);
+export const rebuildNativeUsageSources = (params = {}, options = {}) => request('/usage/native-sources/rebuild', {
+  ...options, method: 'POST', body: JSON.stringify(params),
+});
+export const getNativeUsageAccounts = (options = {}) => request('/usage/native-accounts', options);
+export const updateNativeUsageAccounts = (selection, options = {}) => request('/usage/native-accounts', {
+  ...options, method: 'PUT', body: JSON.stringify(selection),
+});
 // Per-model token totals for every Claude Code session on this machine, read
 // from the CLI transcripts. Same { period } | { from, to } params as getUsage.
 export const getClaudeCodeModelUsage = (params = {}, options = {}) =>

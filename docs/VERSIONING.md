@@ -457,7 +457,13 @@ and local/remote ref absence; generic delivery/retirement recovery remains the
 only writer of those receipts. After an inline owner's process settles, the
 bounded server sweep asks that same retirement service to review and retire only
 the exact delivered candidate and synchronization checkout generations. A hold
-leaves their evidence in place; it does not queue another agent. No verifier merges a PR, changes a published tag,
+leaves their evidence in place; it does not queue another agent. The latest held
+branch, path, reason and any foreign lock text are kept with the retirement
+evidence (`heldCheckouts`) and shown on the agent and task release milestones with
+a next step. A lock the sweep cannot attribute to the release belongs to its
+holder: once that holder has finished, `git worktree unlock <path>` lets the next
+sweep retire the checkout. A checkpoint with an operator reset no longer retries
+and is labeled as retired, with its original blocker kept as history. No verifier merges a PR, changes a published tag,
 steals a checkout, or resets a task retry budget. Status-view integration is
 tracked in #13773 under #13760.
 
@@ -591,6 +597,12 @@ curl -fsS -H "Authorization: Bearer ${PORTOS_API_TOKEN:-}" -H 'Content-Type: app
   -d '{"action":"sync-capture"}' "http://127.0.0.1:5553/api/cos/agents/$RELEASE_AGENT_ID/release-candidate" | jq -e '.captured == true' >/dev/null
 git -C "$SYNC_WORKTREE" merge --no-ff "$PROMOTION_MERGE_SHA"
 ```
+
+Do not `git worktree lock` the sync checkout: its reservation and captured seed
+already protect it from sweeps while the run is live. Post-exit retirement holds a
+checkout under any lock it cannot attribute, and the release then stays
+"synchronization blocked" until an operator clears it. The only lock it accepts
+here is exactly `Active inline release synchronization owned by <agent-id>`.
 
 Use a new, unused `SYNC_WORKTREE` path. A refused reservation or capture is a
 hold, not authority to adopt another checkout. On recovery, reuse the returned

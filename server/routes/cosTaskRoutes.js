@@ -60,7 +60,7 @@ const enhanceTaskSchema = z.object({
 const TASK_CREATE_PAYLOAD_FIELDS = [
   'prompt', 'description', 'context', 'provider', 'model', 'effort', 'executionOptions', 'app',
   'orchestrationMode', 'orchestrationProfile',
-  'useWorktree', 'openPR', 'prCompletion', 'planOnly', 'reviewLoop', 'reviewers',
+  'useWorktree', 'openPR', 'prCompletion', 'useAutoMerge', 'planOnly', 'reviewLoop', 'reviewers',
   'approvalRequired', 'isInvestigation', 'noChangeSuccess',
   // The one create field with an open shape (`cosTaskDiagnosticsSchema` is a
   // passthrough), so it is both the most informative thing to keep and the reason

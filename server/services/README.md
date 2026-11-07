@@ -6,6 +6,10 @@ image-generation paths below are useful entry points when tracing render jobs.
 
 | Module | Responsibility |
 | --- | --- |
+| `nativeUsageAccounts.js` | Machine-local native account editor: strict saved selections, opaque revision, bounded hashed configured participant inventory and queued compare-and-save; never reads native sources or calls peers. |
+| `nativeUsageMatrix.js` | Explicit local or configured-peer v4 native matrix for the Usage dashboard; selected-account diagnostics, aggregate-only browser output, coalesced in-flight reads and explicit missing peer reports. |
+| `nativeUsageFleet.js` | Read-only bounded collection from up to eight paired usage peers, two at a time; explicit inventory/failure coverage and final report revalidation. No persistence, forwarding or background refresh. |
+| `nativeUsagePeer.js` | Versioned pair-only native report exchange, challenge-bound HMAC, strict v4 hashes and source/audience identity, freshness and byte limits, with current sharing authority rechecked after waits. |
 | `codexUsageSources.js` | Explicit bounded, read-only streamed Codex raw/Zstandard/archive inspection; accounting-only projection, logical-session deduplication, source-integrity coverage and unknown ledger overlap. |
 | `spawnBudgetProof.js` | Server-owned retry-episode and latest-dispatch proof validation, including counter round trips. |
 | `spawnBudgetReconciliation.js` | Ownership-fenced monotone correction of a stopped task from its exact latest dispatch receipt; correction remains held. |

@@ -25,7 +25,7 @@ export default function GoalCheckIns({
           <button
             onClick={handleCheckIn}
             disabled={checkingIn}
-            className="flex items-center gap-1 px-2 py-1 text-[10px] rounded bg-port-accent/20 text-port-accent hover:bg-port-accent/30 disabled:opacity-50"
+            className="flex items-center gap-1 px-2 py-1 text-[10px] pointer-coarse:min-h-11 rounded bg-port-accent/20 text-port-accent hover:bg-port-accent/30 disabled:opacity-50"
           >
             <Wand2 className={`w-3 h-3 ${checkingIn ? 'animate-spin' : ''}`} />
             {checkingIn ? 'Checking in...' : 'Run Check-In'}

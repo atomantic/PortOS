@@ -1,7 +1,7 @@
 import { probeCdpVersion } from './cdpProbe.js';
 import { spawn } from 'child_process';
 import { createServer } from 'http';
-import { readFile, writeFile, mkdir } from 'fs/promises';
+import { readFile, writeFile, mkdir, stat } from 'fs/promises';
 import { resolve, dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { platform, homedir } from 'os';
@@ -76,9 +76,35 @@ async function applyDownloadDirPreference(profileDir, downloadDir) {
   // `prompt_for_download: false` keeps downloads non-interactive, matching the
   // previous behavior of the CDP `allow` behavior.
   prefs.download.prompt_for_download = false;
-  await mkdir(dirname(prefsPath), { recursive: true });
+  await ensureDirectory(dirname(prefsPath));
   await writeFile(prefsPath, JSON.stringify(prefs));
   return true;
+}
+
+async function isDirectory(path) {
+  const info = await stat(path).catch(() => null);
+  return Boolean(info?.isDirectory());
+}
+
+/**
+ * Create `dir` and any missing parents one level at a time. Node's
+ * `mkdir({ recursive: true })` on Windows walks the `\\?\` namespaced form,
+ * so a missing or unreachable drive is reported as `mkdir '\\?'` instead of
+ * the folder the user configured; this walk names the real path and leaves
+ * existing folders untouched.
+ */
+export async function ensureDirectory(dir, mkdirImpl = mkdir) {
+  const target = resolve(dir);
+  if (await isDirectory(target)) return;
+  const parent = dirname(target);
+  if (parent === target) throw new Error(`${target} does not exist (drive not found or not connected)`);
+  await ensureDirectory(parent, mkdirImpl);
+  try {
+    await mkdirImpl(target);
+  } catch (err) {
+    if (err?.code === 'EEXIST' && await isDirectory(target)) return;
+    throw err;
+  }
 }
 
 // Arrays and `null` are typeof 'object' but are not safe spread/assign targets
@@ -131,6 +157,7 @@ export function createBrowserSupervisor(options = {}) {
     checkCdp: options.checkCdp || probeConfiguredCdp,
     spawn: options.spawn || spawn,
     mkdir: options.mkdir || mkdir,
+    ensureDirectory: options.ensureDirectory || ensureDirectory,
     sleep: options.sleep || ((ms) => new Promise((resolve) => { setTimeout(resolve, ms); })),
     loadConfig: options.loadConfig || loadConfig,
     platform: options.platform || platform(),
@@ -212,6 +239,18 @@ export function createBrowserSupervisor(options = {}) {
     }
   }
 
+  // Chrome falls back to its own download folder, so an unavailable configured
+  // one (an unplugged or unmapped drive) must not keep the browser down.
+  async function prepareDownloadDir(downloadDir) {
+    try {
+      await deps.ensureDirectory(downloadDir, deps.mkdir);
+      return true;
+    } catch (err) {
+      console.log(`⚠️ Download folder ${downloadDir} is unavailable, keeping Chrome's download folder: ${err.message}`);
+      return false;
+    }
+  }
+
   async function launchBrowser() {
     if (shuttingDown) return;
     const config = await deps.loadConfig();
@@ -224,7 +263,7 @@ export function createBrowserSupervisor(options = {}) {
     if (await deps.checkCdp()) {
       if (shuttingDown) return;
       console.log(`♻️ Existing Chrome CDP found at ${CDP_HOST}:${CDP_PORT}, reusing`);
-      await deps.mkdir(downloadDir, { recursive: true });
+      await prepareDownloadDir(downloadDir);
       // Chrome owns Preferences while it runs and rewrites the file from memory
       // on exit, so a running instance keeps whatever download dir it launched
       // with; the pref is applied on the next launch.
@@ -237,13 +276,17 @@ export function createBrowserSupervisor(options = {}) {
     const chromePath = browserExecutablePath(config);
     const macAppBundle = getMacAppBundle(config, chromePath);
 
-    await deps.mkdir(profileDir, { recursive: true });
+    try {
+      await deps.ensureDirectory(profileDir, deps.mkdir);
+    } catch (err) {
+      throw new Error(`Chrome profile folder ${profileDir} is unavailable: ${err.message}`);
+    }
     if (shuttingDown) return;
-    await deps.mkdir(downloadDir, { recursive: true });
+    const downloadDirReady = await prepareDownloadDir(downloadDir);
     if (shuttingDown) return;
 
     // Chrome is not running yet, so Preferences is ours to write.
-    if (await deps.applyDownloadDirPreference(profileDir, downloadDir)) {
+    if (downloadDirReady && await deps.applyDownloadDirPreference(profileDir, downloadDir)) {
       console.log(`📥 Download directory pref set → ${downloadDir}`);
     }
     if (shuttingDown) return;

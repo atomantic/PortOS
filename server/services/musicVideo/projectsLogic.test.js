@@ -294,6 +294,19 @@ describe('applyProjectPatch', () => {
     expect(next.audioAnalysis).toBeNull();
   });
 
+  // #15154: the revision a final render settles against.
+  it('bumps the audio revision on a track change, from ready and from rendering', () => {
+    const analyzed = setAudioAnalysis({ ...baseProject(), trackId: 't1', status: 'ready' }, {
+      bpm: 120, beats: [0], downbeats: [0], sections: [{ label: 'S', startSec: 0, endSec: 1 }], durationSec: 1,
+    });
+    const fromReady = applyProjectPatch(analyzed, { trackId: 't2' });
+    expect(fromReady).toMatchObject({ status: 'draft', audioAnalysis: null, audioRevision: 1 });
+    const fromRendering = applyProjectPatch({ ...analyzed, status: 'rendering', audioRevision: 4, renderingOn: 'inst-self' }, { uploadedAudioFilename: 'b.mp3' });
+    expect(fromRendering).toMatchObject({ status: 'draft', audioAnalysis: null, audioRevision: 5 });
+    // Any other edit keeps the revision.
+    expect(applyProjectPatch(fromRendering, { name: 'Renamed' }).audioRevision).toBe(5);
+  });
+
   it('honors an explicit status in the same track-change patch instead of regressing', () => {
     const analyzed = setAudioAnalysis({ ...baseProject(), trackId: 't1', status: 'ready' }, {
       bpm: 120, beats: [0], downbeats: [0], sections: [{ label: 'S', startSec: 0, endSec: 1 }], durationSec: 1,
@@ -480,8 +493,11 @@ describe('setAudioAnalysis', () => {
   });
 
   it('does not regress a later lifecycle status', () => {
-    const ready = { ...baseProject(), status: 'ready' };
-    expect(setAudioAnalysis(ready, analysis).status).toBe('ready');
+    const ready = { ...baseProject(), status: 'ready', audioRevision: 2 };
+    const next = setAudioAnalysis(ready, analysis);
+    expect(next.status).toBe('ready');
+    // Re-analysis of the same master is not a new song (#15154).
+    expect(next.audioRevision).toBe(2);
   });
 });
 
@@ -832,6 +848,13 @@ describe('sanitizeProjectForSync (#1770 federation)', () => {
 describe('mergeProjectRecord (#1770 LWW)', () => {
   it('drops a malformed remote', () => {
     expect(mergeProjectRecord(null, {}).next).toBeNull();
+  });
+
+  // An older peer's record carries the field through untouched (#15154).
+  it('keeps the audio revision and render revision a newer remote carries', () => {
+    const local = { id: 'mv-1', updatedAt: '2026-01-01T00:00:00Z', name: 'L', audioRevision: 1 };
+    const { next } = mergeProjectRecord(local, { id: 'mv-1', updatedAt: '2026-01-05T00:00:00Z', name: 'R', audioRevision: 2, renderAudioRevision: 2 });
+    expect(next).toMatchObject({ name: 'R', audioRevision: 2, renderAudioRevision: 2 });
   });
 
   it('inserts when there is no local copy', () => {

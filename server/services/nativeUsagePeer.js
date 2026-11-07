@@ -1,0 +1,177 @@
+// A local-only report exchanged with one currently paired usage peer. Never a fleet
+// export. Protocol 2 carries aggregates only. Protocol 1 stays for older peers, whose
+// hashed accounting identities may travel, and native records may not.
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { Readable } from 'node:stream';
+import { z } from 'zod';
+import { canonicalStringify } from '../lib/objects.js';
+import { ServerError } from '../lib/errorHandler.js';
+import { RESPONSE_TOO_LARGE } from '../lib/httpClient.js';
+import { peerStreamRequest, readPeerBody, derivePeerAuthToken } from '../lib/peerHttpClient.js';
+import { peerBaseUrl } from '../lib/peerUrl.js';
+import { isPairedPeer } from '../lib/peerPairing.js';
+import { nativeUsageReportSchema, nativeUsageParticipantKey, reportIsIntact } from '../lib/nativeUsageContract.js';
+import { loadData, UNKNOWN_INSTANCE_ID } from './instanceIdentity.js';
+import { peerAllowsCategoryPull } from './sharing/peerSyncShared.js';
+import { captureDashboardNativeUsageReport } from './nativeUsageReport.js';
+import { getNativeUsageSnapshot, saveNativeUsageSnapshot } from './nativeUsageStore.js';
+
+// Paired peers are the owner's machines, so this is a memory-safety bound and not a data
+// limit. Rollups stay far below it; a v4 report from an older peer can be tens of MiB.
+export const NATIVE_USAGE_PEER_MAX_BYTES = 1024 ** 3;
+export const NATIVE_USAGE_PEER_TIMEOUT_MS = 60_000;
+const MAX_AGE_MS = 5 * 60_000;
+const FUTURE_ALLOWANCE_MS = 30_000;
+const REPORT_PROTOCOLS = { 1: { contractVersion: 4, path: '/api/usage/native-report/v1' }, 2: { contractVersion: 5, path: '/api/usage/native-report/v2' } };
+const CONTRACT_VERSIONS = Object.values(REPORT_PROTOCOLS).map(({ contractVersion }) => contractVersion);
+const RETAINED_REPORT_KIND = 'peer-report';
+const bindings = new WeakMap();
+const retainedReports = new WeakSet();
+const hex = z.string().regex(/^[a-f0-9]{64}$/);
+const participant = z.string().regex(/^[a-f0-9]{32}$/);
+const envelopeSchema = z.strictObject({
+  protocolVersion: z.union([z.literal(1), z.literal(2)]), sourceParticipantKey: participant, audienceParticipantKey: participant,
+  challenge: hex, report: nativeUsageReportSchema, signature: hex,
+});
+const fail = (code, status = 403) => {
+  throw new ServerError('Native usage peer report unavailable or unverified. Existing usage records are unchanged.', { code, status, severity: 'warning' });
+};
+const transportFailed = error => fail(error?.code === RESPONSE_TOO_LARGE
+  ? 'NATIVE_USAGE_PEER_REPORT_TOO_LARGE' : 'NATIVE_USAGE_PEER_UNAVAILABLE', error?.code === RESPONSE_TOO_LARGE ? 413 : 503);
+const validInstanceId = id => typeof id === 'string' && id.length > 0 && id.length <= 128 && id !== UNKNOWN_INSTANCE_ID;
+const equal = (left, right) => hex.safeParse(left).success && hex.safeParse(right).success
+  && timingSafeEqual(Buffer.from(left, 'hex'), Buffer.from(right, 'hex'));
+const signatureOf = (secret, payload) => createHmac('sha256', secret)
+  .update(`portos-native-usage-report:v${payload.protocolVersion}:${canonicalStringify(payload)}`).digest('hex');
+
+/** The same category/direction policy applies to collection and disclosure. */
+export const nativeUsagePeerEligible = peer => validInstanceId(peer?.instanceId)
+  && isPairedPeer(peer) && peerAllowsCategoryPull(peer, 'usage');
+
+async function peerIdentity(instanceId) {
+  const data = await loadData().catch(() => null);
+  const matches = (Array.isArray(data?.peers) ? data.peers : []).filter(candidate => candidate?.instanceId === instanceId);
+  const peer = matches.length === 1 ? matches[0] : null;
+  const self = data?.self?.instanceId;
+  if (!validInstanceId(self) || self === instanceId || !nativeUsagePeerEligible(peer)) fail('NATIVE_USAGE_PEER_FORBIDDEN');
+  // Retain a binding, not a mutable reference a registry writer could change.
+  return { self, peer: { ...peer }, url: peerBaseUrl(peer) };
+}
+
+/** Recheck an earlier result after the collector finishes its other peer reads. */
+export async function revalidateNativeUsagePeerReport(report) {
+  const identity = bindings.get(report);
+  if (!identity) fail('NATIVE_USAGE_PEER_UNVERIFIED', 502);
+  assertUnchanged(identity, await peerIdentity(identity.peer.instanceId));
+  if (!retainedReports.has(report)) validatedReport(report, nativeUsageParticipantKey(identity.peer.instanceId));
+}
+
+/** Keep a verified report so a later failed read can still show this peer, labeled stale. */
+export const retainNativeUsagePeerReport = report => saveNativeUsageSnapshot(RETAINED_REPORT_KIND, report.participantKey, report);
+
+/** This peer's last verified report, or null. Current pairing and sharing still apply:
+ * revoking a peer stops its retained report from being shown.
+ */
+export async function loadRetainedNativeUsagePeerReport(instanceId) {
+  const identity = await peerIdentity(instanceId);
+  const expected = nativeUsageParticipantKey(instanceId);
+  const parsed = nativeUsageReportSchema.safeParse(await getNativeUsageSnapshot(RETAINED_REPORT_KIND, expected));
+  if (!parsed.success || !CONTRACT_VERSIONS.includes(parsed.data.contractVersion) || !reportIsIntact(parsed.data)
+    || parsed.data.participantKey !== expected) return null;
+  bindings.set(parsed.data, identity);
+  retainedReports.add(parsed.data);
+  return parsed.data;
+}
+
+async function authenticateRequest(req) {
+  const instanceId = req.headers?.['x-portos-instance-id'];
+  if (!validInstanceId(instanceId)) fail('NATIVE_USAGE_PEER_FORBIDDEN');
+  const identity = await peerIdentity(instanceId);
+  if (!equal(req.headers?.['x-portos-peer-auth'], derivePeerAuthToken(identity.peer.syncSecret, instanceId))) {
+    fail('NATIVE_USAGE_PEER_FORBIDDEN');
+  }
+  return identity;
+}
+
+function assertUnchanged(before, after) {
+  if (before.self !== after.self || before.peer.id !== after.peer.id
+    || before.peer.instanceId !== after.peer.instanceId || before.peer.syncSecret !== after.peer.syncSecret
+    || before.url !== after.url) fail('NATIVE_USAGE_PEER_UNVERIFIED', 502);
+}
+
+function validatedReport(raw, expectedParticipant) {
+  const parsed = nativeUsageReportSchema.safeParse(raw);
+  if (!parsed.success || !CONTRACT_VERSIONS.includes(parsed.data.contractVersion) || !reportIsIntact(parsed.data)
+    || parsed.data.participantKey !== expectedParticipant) fail('NATIVE_USAGE_PEER_UNVERIFIED', 502);
+  const report = parsed.data;
+  const captured = Date.parse(report.capturedAt);
+  const now = Date.now();
+  if (!Number.isFinite(captured) || new Date(captured).toISOString() !== report.capturedAt
+    || captured < now - MAX_AGE_MS || captured > now + FUTURE_ALLOWANCE_MS) fail('NATIVE_USAGE_PEER_STALE', 502);
+  return report;
+}
+
+/** Pair-only HTTP handler service. No Basic, anonymous, or operator shortcut. */
+export async function getNativeUsagePeerReport(req, challenge, protocolVersion) {
+  if (!hex.safeParse(challenge).success) fail('VALIDATION_ERROR', 400);
+  const identity = await authenticateRequest(req);
+  const raw = await captureDashboardNativeUsageReport({ recordLists: protocolVersion === 1 }).catch(() => fail('NATIVE_USAGE_PEER_UNAVAILABLE', 503));
+  const report = validatedReport(raw, nativeUsageParticipantKey(identity.self));
+  assertUnchanged(identity, await authenticateRequest(req));
+  const payload = {
+    protocolVersion, sourceParticipantKey: report.participantKey,
+    audienceParticipantKey: nativeUsageParticipantKey(identity.peer.instanceId), challenge, report,
+  };
+  const envelope = { ...payload, signature: signatureOf(identity.peer.syncSecret, payload) };
+  if (Buffer.byteLength(JSON.stringify(envelope)) > NATIVE_USAGE_PEER_MAX_BYTES) fail('NATIVE_USAGE_PEER_REPORT_TOO_LARGE', 413);
+  return envelope;
+}
+
+/** One bounded, challenge-bound read. A failure never returns a retained report itself:
+ * the caller decides whether to show one, labeled stale. An older
+ * peer has no v2 route: it answers 404, or 403 when its password gate refuses the path.
+ */
+export async function readNativeUsagePeerReport(instanceId, { maxBytes = NATIVE_USAGE_PEER_MAX_BYTES } = {}) {
+  const identity = await peerIdentity(instanceId);
+  const { peer, self, url } = identity;
+  const challenge = randomBytes(32).toString('hex');
+  const signal = AbortSignal.timeout(NATIVE_USAGE_PEER_TIMEOUT_MS);
+  // Stream both HTTP and HTTPS: peerFetch's HTTPS shim buffers the whole body
+  // before returning, which would bypass readPeerBody's per-chunk idle deadline.
+  const request = version => peerStreamRequest(`${url}${REPORT_PROTOCOLS[version].path}?${new URLSearchParams({ challenge })}`, {
+    signal,
+    headers: { 'X-PortOS-Instance-Id': self, 'X-PortOS-Peer-Auth': derivePeerAuthToken(peer.syncSecret, self) },
+  }, { ...peer, auth: undefined, peerAuthAccepted: true }).catch(transportFailed);
+  let protocolVersion = 2;
+  let response = await request(protocolVersion);
+  if (response.status === 404 || response.status === 403) {
+    response.stream.destroy();
+    protocolVersion = 1;
+    response = await request(protocolVersion);
+  }
+  if (response.status < 200 || response.status >= 300) {
+    response.stream.destroy();
+    if (response.status === 413) fail('NATIVE_USAGE_PEER_REPORT_TOO_LARGE', 413);
+    if (response.status === 401 || response.status === 403) fail('NATIVE_USAGE_PEER_FORBIDDEN');
+    fail('NATIVE_USAGE_PEER_UNAVAILABLE', 503);
+  }
+  if (Number(response.headers['content-length']) > maxBytes) {
+    response.stream.destroy();
+    fail('NATIVE_USAGE_PEER_REPORT_TOO_LARGE', 413);
+  }
+  const body = await readPeerBody(new Response(Readable.toWeb(response.stream)), 'json', {
+    maxBytes, idleTimeoutMs: 5000,
+  }).finally(() => response.stream.destroy())
+    .catch(transportFailed);
+  const parsed = envelopeSchema.safeParse(body);
+  if (!parsed.success) fail('NATIVE_USAGE_PEER_UNVERIFIED', 502);
+  const { signature, ...payload } = parsed.data;
+  if (payload.protocolVersion !== protocolVersion || payload.report.contractVersion !== REPORT_PROTOCOLS[protocolVersion].contractVersion
+    || payload.sourceParticipantKey !== nativeUsageParticipantKey(instanceId)
+    || payload.audienceParticipantKey !== nativeUsageParticipantKey(self) || payload.challenge !== challenge
+    || !equal(signature, signatureOf(peer.syncSecret, payload))) fail('NATIVE_USAGE_PEER_UNVERIFIED', 502);
+  const report = validatedReport(payload.report, payload.sourceParticipantKey);
+  assertUnchanged(identity, await peerIdentity(instanceId));
+  bindings.set(report, identity);
+  return report;
+}

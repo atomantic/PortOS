@@ -111,6 +111,22 @@ It carries:
   Each origin sends at most 10,000 receipts and reports truncation as partial.
   They travel only under the user-controlled `usage` sync category and remain
   in the peer usage snapshot until replaced or its origin is retired.
+- An explicit, separate native-report read may exchange v4 accounting
+  projections with an enabled, user-established, paired usage peer. It carries
+  domain-separated hashes of native message/request/session-turn/response
+  identities, measured counters, timestamps, numeric provider/model enums,
+  conflict/finality flags and bounded source coverage. These are linkable
+  pseudonymous accounting records, not anonymous aggregates. They are needed
+  to deduplicate copied native files across the same selected account. Superseded
+  for the Usage view: see the addendum on machine rollups below.
+  The challenge-signed report is source/audience bound, at most 1 GiB, and
+  accepted for five minutes (30 seconds of future clock allowance). It is
+  never saved in the usage digest, forwarded, or exposed to the browser. The
+  requester keeps the last verified report in its machine-local store (#15255)
+  and shows it, labeled stale, only while that peer remains eligible.
+  The browser receives only aggregate coverage and selected-account results.
+  Usage category/direction controls remain in force, even with authentication
+  otherwise disabled; unpaired legacy peers cannot use this new protocol.
 
 It carries no prompts, no transcripts, no record contents, no file paths, and
 nothing about the human. The rejected alternative — federating the raw
@@ -233,6 +249,47 @@ Privacy is unchanged in kind — a quota card carries provider ids, percentages,
 reset times and the publishing instance's name; no prompts, no transcripts, no
 PII. The peer payload is rebuilt to the wire shape on arrival for the same
 recursion-depth reason the usage digest is.
+
+## Addendum: the cutover barrier is independent of the category map
+
+`syncEnabled: false` and `fullSync` both leave `usage` on by the rules above, so
+neither can pause it for a migration. The [usage cutover barrier](../USAGE_CUTOVER_BARRIER.md)
+is a separate machine-local gate at the write and apply boundaries, evaluated after the
+category map. With no barrier the wire is unchanged. During one, `instances` is empty
+and any epoch data rides inside a `cutover` stamp, so an older peer has nothing it could
+merge. The category default and the per-peer toggles keep their meaning.
+
+## Addendum: native usage reports send machine rollups (#15252)
+
+Paired peers are the owner's own trusted machines, so a read should reach all of
+their retained usage and should only need to carry aggregates. Reconciling every
+record across machines is retired for the Usage view.
+
+- **What travels.** `/api/usage/native-report/v2` carries a version-5 report: the
+  same coverage evidence as version 4, with per-day, per-model rollups in place of
+  record lists. Each machine resolves its own partial, final and copied entries
+  before rolling up. Rollup size follows days times models rather than records.
+- **How machines combine.** The Usage view adds each machine's own total. Codex's
+  account read stays once per account, and an operator selection still names its
+  authority. For retained files, a selection only groups machines into a labelled
+  sum. A missing report is named and is never zero.
+- **What summing accepts.** No vendor documentation read for #15230 describes syncing
+  these files between machines, so a transcript reaches a second machine only through
+  a manual step such as a restored backup or a migrated home directory, and only those
+  count twice. Overlap between real machines was not measured. Claude cloud sessions
+  count against the plan but are not in a machine's transcripts unless teleported, so
+  these totals can miss them. The Usage page says both.
+- **What a read covers.** An explicit read uses the capture budgets for bytes, lines,
+  entries and records, under one 45-second deadline shared by all providers. That fits
+  inside the 60-second peer request deadline. A 1 GiB transfer bound remains as memory
+  safety, not as a data limit.
+- **Upgrade skew.** `/api/usage/native-report/v1` keeps answering version-4 record
+  lists, and a collector asks for `v1` when `v2` answers 404 or 403. A version-4
+  report keeps showing its totals, with model attribution
+  `report-without-model-capability`.
+- **Still explicit.** Nothing polls, runs at boot or calls a provider's model. Record
+  lists remain in the standalone capture for the staged recovery (#15031), which
+  keeps its own deduplicating matrix.
 
 ## Addendum: Claude Code transcript token history (per model, per day)
 

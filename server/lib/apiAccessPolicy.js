@@ -33,6 +33,8 @@ export const PEER_API_SURFACE = Object.freeze([
   { path: '/api/apps', methods: READ },
   { path: '/api/apps/quality-federation', methods: READ },
   { path: '/api/instances/sync-status', methods: READ },
+  { path: '/api/usage/native-report/v1', methods: READ },
+  { path: '/api/usage/native-report/v2', methods: READ },
   { path: '/api/cos/agents', methods: READ },
   // Registration handshake.
   { path: '/api/instances/peers/announce', methods: Object.freeze(['POST']) },
@@ -48,7 +50,12 @@ export const PEER_API_SURFACE = Object.freeze([
   { path: '/api/catalog/identity/peer/status', methods: READ },
   { prefix: '/api/sync/', methods: READ },
   // Record push/pull (sharing/*): reads, plus the one inbound push.
-  { prefix: '/api/peer-sync/', methods: READ },
+  // Exact pull endpoints only: `/integrity` is an operator diagnostic that
+  // bypasses per-peer sharing config, so a peer token never reaches it.
+  // `/subscriptions` stays because syncOrchestrator asks a peer which records
+  // it pushes to us; the route narrows a peer caller to its own subscriptions.
+  ...['manifest', 'library-manifest', 'cos-history-manifest', 'cos-tasks', 'eidoverse-foundations', 'cos-agent-archive', 'record', 'subscriptions']
+    .map(endpoint => ({ path: `/api/peer-sync/${endpoint}`, methods: READ })),
   { path: '/api/peer-sync/push', methods: Object.freeze(['POST']) },
   // Remote media delete (services/mediaRemoteDelete.js): the handler also
   // requires the sender's media-delete capability on this install.

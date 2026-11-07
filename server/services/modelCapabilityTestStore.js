@@ -31,8 +31,9 @@
 
 import { join } from 'path';
 import { rename } from 'fs/promises';
-import { PATHS, atomicWrite, ensureDir, tryReadFile, safeJSONParse } from '../lib/fileUtils.js';
-import { captureDurableEnvironment } from './localModelAssessmentStore.js';
+import { PATHS, atomicWrite, ensureDir, tryReadFileStrict, safeJSONParse } from '../lib/fileUtils.js';
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
+import { captureDurableEnvironment, unreadableStoreError } from './localModelAssessmentStore.js';
 
 const storeDir = () => join(PATHS.data, 'local-llm');
 const storeFile = () => join(storeDir(), 'capability-tests.json');
@@ -80,8 +81,17 @@ async function quarantineStore(reason) {
   console.error(`❌ Capability tests: ${reason} — ${moved ? `parked the old file as ${parked.split('/').pop()}` : 'could not park the old file'}`);
 }
 
+// Serializes the load -> replace -> write cycles of saveResult/deleteResult so
+// overlapping saves and deletes cannot drop each other's records.
+const queueWrite = createFileWriteQueue();
+
 export async function loadStore() {
-  const raw = await tryReadFile(storeFile());
+  const { ok, value: raw } = await tryReadFileStrict(storeFile());
+  // A filesystem failure is NOT "never tested": an empty answer here would let
+  // the next save replace a readable store with a one-record file.
+  if (!ok) {
+    return { schemaVersion: STORE_SCHEMA_VERSION, results: [], readError: 'capability test results file could not be read', unreadable: true };
+  }
   // Never written = an empty store, not an error.
   if (raw == null) return { schemaVersion: STORE_SCHEMA_VERSION, results: [], readError: null };
   const parsed = safeJSONParse(raw, null);
@@ -106,8 +116,9 @@ export async function loadResults() {
  * or runtime build is misleading rather than informative. Re-running is cheap
  * enough that keeping a trail would cost more than it explains.
  */
-export async function saveResult(result) {
-  const { results, readError } = await loadStore();
+export const saveResult = (result) => queueWrite(async () => {
+  const { results, readError, unreadable } = await loadStore();
+  if (unreadable) throw unreadableStoreError('Capability test results');
   // Rewriting from an empty in-memory list after a failed read would replace
   // every stored result with this one. Quarantine instead — nothing is lost and
   // the feature keeps working.
@@ -124,14 +135,15 @@ export async function saveResult(result) {
   await ensureDir(storeDir());
   await atomicWrite(storeFile(), { schemaVersion: STORE_SCHEMA_VERSION, results: next });
   return record;
-}
+});
 
 /**
  * Drop one recorded result. Reports whether anything was actually removed so the
  * caller can 404 rather than claiming a phantom success.
  */
-export async function deleteResult(backend, modelId, testId) {
-  const { results, readError } = await loadStore();
+export const deleteResult = (backend, modelId, testId) => queueWrite(async () => {
+  const { results, readError, unreadable } = await loadStore();
+  if (unreadable) throw unreadableStoreError('Capability test results');
   if (readError) return { deleted: false };
   const key = capabilityResultKey(backend, modelId, testId);
   const next = results.filter((r) => keyOfResult(r) !== key);
@@ -140,7 +152,7 @@ export async function deleteResult(backend, modelId, testId) {
   await atomicWrite(storeFile(), { schemaVersion: STORE_SCHEMA_VERSION, results: next });
   console.log(`🧹 Capability tests: dropped ${testId} result for ${backend}/${modelId}`);
   return { deleted: true };
-}
+});
 
 /**
  * Stored results indexed by `backend:modelId:testId`, for the report builder.

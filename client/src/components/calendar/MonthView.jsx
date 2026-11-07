@@ -165,7 +165,7 @@ export default function MonthView({ accounts }) {
                         <button
                           key={`${event.accountId}-${event.id}`}
                           onClick={() => openEvent(event)}
-                          className="w-full text-left px-1 py-0.5 rounded text-[10px] truncate transition-colors hover:brightness-125"
+                          className="w-full text-left px-1 py-0.5 rounded text-[10px] pointer-coarse:min-h-11 truncate transition-colors hover:brightness-125"
                           style={eventChipStyle(evColor, theme?.mode)}
                         >
                           {!event.isAllDay && (
@@ -183,7 +183,7 @@ export default function MonthView({ accounts }) {
                         type="button"
                         aria-label={`View all ${dayEvents.length} events for ${formatDateFull(cell.date)}`}
                         onClick={e => openDay(cell, e.currentTarget)}
-                        className="w-full text-left text-[10px] text-port-accent pl-1 py-1 rounded hover:bg-port-border focus-visible:outline focus-visible:outline-port-accent"
+                        className="w-full text-left text-[10px] pointer-coarse:min-h-11 text-port-accent pl-1 py-1 rounded hover:bg-port-border focus-visible:outline focus-visible:outline-port-accent"
                       >
                         +{dayEvents.length - 3} more
                       </button>

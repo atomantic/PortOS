@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import SettingsLoadError from '../../ui/SettingsLoadError';
+import UnreadableSyncStateNotice from '../../ui/UnreadableSyncStateNotice';
 import { useSearchParams } from 'react-router';
 import { Save, Loader2, Music, Link2, LogOut, RefreshCw, CheckCircle2, AlertCircle, ExternalLink, Search } from 'lucide-react';
 import toast from '../../ui/Toast';
@@ -153,6 +154,7 @@ export function SpotifyTab() {
   return (
     <div className="space-y-6">
       {loadError && <SettingsLoadError onRetry={retry} />}
+      <UnreadableSyncStateNotice status={status} />
       <div className="bg-port-card border border-port-border rounded-lg p-4 sm:p-6">
         <div className="flex items-center gap-2 mb-2">
           <Music size={16} className="text-port-accent" />

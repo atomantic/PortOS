@@ -279,7 +279,7 @@ export default function StoryboardConfigTab({ imageCfg, models, availableBackend
           <button
             type="button"
             onClick={onOpenImageGenSettings}
-            className="flex items-center gap-1 px-2 py-1 text-[10px] rounded border border-port-border text-gray-300 hover:bg-port-border/40 hover:text-white"
+            className="flex items-center gap-1 px-2 py-1 text-[10px] pointer-coarse:min-h-11 rounded border border-port-border text-gray-300 hover:bg-port-border/40 hover:text-white"
             title="Configure image gen backends — enable Codex $imagegen, set local Python, etc."
           >
             <SettingsIcon size={10} /> Backends

@@ -3,22 +3,29 @@ import { Plus, Trash2 } from 'lucide-react';
 import StageSection from './StageSection.jsx';
 import ShotSheetAi from './ShotSheetAi.jsx';
 import ScenePoster from './ScenePoster.jsx';
+import AutoSizeTextarea from '../ui/AutoSizeTextarea.jsx';
 import { musicVideoImageSrc, scenePosterSrc } from '../../lib/musicVideoPreview.js';
 import { formatTimecode } from '../../utils/formatters.js';
 import { uuidv4 } from '../../lib/uuid.js';
 import useShotSheetMapFilter from '../../hooks/useShotSheetMapFilter.js';
+import { SHOT_SHEET_ANCHOR } from '../../lib/musicVideoStages.js';
 import {
-  SHOT_CAMERA_MAX, SHOT_CAMERA_SET_DOWN, SHOT_SHEET_MAP_BARS, normalizeShotSheet, shotSheetBulkEdits, shotSheetCast, shotSheetMapRows, shotSheetMediaEdits, shotSheetOptions, shotSheetProblems, shotSheetRows, shotSheetStretches,
+  SHOT_CAMERA_MAX, SHOT_CAMERA_SET_DOWN, SHOT_SHEET_MAP_BARS, normalizeShotSheet, shotSheetBulkEdits, shotSheetCast, shotSheetMapRows, shotSheetMarkDoneEdits, shotSheetMediaEdits, shotSheetOptions, shotSheetProblems, shotSheetRows, shotSheetStretches,
 } from '../../../../server/lib/musicVideoShotSheet.js';
 
 const inputCls = 'w-full min-w-0 rounded border border-port-border bg-port-bg px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0';
 
-/** A text box that commits on blur, and only when its text changed. */
+/** A text box that grows to fit its text and commits on blur, only when its text changed. */
 function SheetText({ label, value = '', rows = 2, disabled, onCommit, maxLength }) {
+  const [draft, setDraft] = useState(value);
+  const [saved, setSaved] = useState(value);
+  // A save or an AI fill elsewhere replaces what's shown.
+  if (value !== saved) { setSaved(value); setDraft(value); }
   return (
-    <textarea key={value} aria-label={label} rows={rows} defaultValue={value} disabled={disabled} maxLength={maxLength}
-      onBlur={(event) => { if (event.target.value !== value) onCommit(event.target.value); }}
-      className={`${inputCls} resize-y [field-sizing:content]`} />
+    <AutoSizeTextarea aria-label={label} rows={rows} value={draft} disabled={disabled} maxLength={maxLength}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={() => { if (draft !== value) onCommit(draft); }}
+      className={inputCls} />
   );
 }
 
@@ -120,19 +127,18 @@ function CameraList({ project, disabled, onChange }) {
   return (
     <fieldset disabled={disabled} className="min-w-0 space-y-1.5">
       <legend className="text-xs font-medium">Cameras in this video</legend>
-      <p className="text-xs text-port-text-muted">Name each camera the story has, and whether it shoots photos or video. An in-world camera has an owner and can be borrowed or set down; an observer isn’t in their world, so nobody ever looks at it.</p>
       {cameras.map((camera) => (
         <div key={camera.id} className="grid min-w-0 gap-1.5 sm:grid-cols-[10rem_7.5rem_7rem_8rem_minmax(0,1fr)_2.75rem]">
           <input key={`n-${camera.name}`} aria-label="Camera name" defaultValue={camera.name} maxLength={120} className={inputCls}
             onBlur={(event) => { const name = event.target.value.trim(); if (name && name !== camera.name) patch(camera.id, { name }); }} />
           <select aria-label={`${camera.name} kind`} value={camera.kind} className={inputCls} onChange={(event) => patch(camera.id, { kind: event.target.value })}>
-            <option value="in-world">In their world</option>
+            <option value="in-world">In world</option>
             <option value="observer">Observer</option>
           </select>
           <select aria-label={`${camera.name} shoots`} value={camera.output || ''} className={inputCls} onChange={(event) => patch(camera.id, { output: event.target.value || null })}>
-            <option value="">Photo or video</option>
-            <option value="image">Photos only</option>
-            <option value="video">Video only</option>
+            <option value="">Photo/Video</option>
+            <option value="video">Video</option>
+            <option value="image">Photo</option>
           </select>
           <input key={`o-${camera.owner || ''}`} aria-label={`${camera.name} owner`} placeholder="Owner" defaultValue={camera.owner || ''} maxLength={120} className={inputCls}
             onBlur={(event) => { if (event.target.value.trim() !== (camera.owner || '')) patch(camera.id, { owner: event.target.value.trim() }); }} />
@@ -174,12 +180,15 @@ function SheetRow({ project, row, cast, showPrompts, disabled, onEdit, onOpen })
         {Number.isFinite(scene.startSec) ? formatTimecode(scene.startSec) : 'Untimed'}
         {Number.isFinite(scene.startSec) && Number.isFinite(scene.endSec) && <span className="block text-port-text-muted">{(scene.endSec - scene.startSec).toFixed(1)}s</span>}
         <label className="mt-1 flex min-h-[44px] items-center gap-1 sm:min-h-0">
-          <input type="checkbox" aria-label={`${label} checked`} checked={!!sheet.checked} disabled={disabled} onChange={(event) => setField('checked', event.target.checked)} /> Checked
+          {/* Done is stored as `checked`, the box's first name. */}
+          <input type="checkbox" aria-label={`${label} done`} checked={!!sheet.checked} disabled={disabled} onChange={(event) => setField('checked', event.target.checked)} /> Done
         </label>
       </td>
       <td className="w-28 p-1.5">
-        <ScenePoster scene={scene} src={scenePosterSrc(scene) || musicVideoImageSrc(scene.panelArt)} className="aspect-video w-24 rounded" iconSize={14} />
-        {frameOutdated && <span className="mt-0.5 block text-xs text-port-warning">Prompt changed since this frame</span>}
+        <button type="button" onClick={() => onOpen(scene.sceneId)} aria-label={`Open ${label} from preview`} className="block min-h-[44px] min-w-[44px] rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-port-accent">
+          <ScenePoster scene={scene} src={scenePosterSrc(scene) || musicVideoImageSrc(scene.panelArt)} className="aspect-video w-24 rounded" iconSize={14} />
+        </button>
+        {frameOutdated && <span className="mt-0.5 block text-xs text-port-warning">Details changed since this frame</span>}
       </td>
       <td className="w-32 p-1.5 text-xs italic">{lyric || <span className="not-italic text-port-text-muted">Instrumental</span>}</td>
       <td className="w-40 space-y-1 p-1.5">
@@ -196,7 +205,7 @@ function SheetRow({ project, row, cast, showPrompts, disabled, onEdit, onOpen })
           </select>
         )}
       </td>
-      <td className="w-44 p-1.5"><SheetPick label={`${label} view`} field="view" value={sheet.view} maxLength={1000} disabled={disabled} onCommit={(value) => setField('view', value)} /></td>
+      <td className="w-44 p-1.5"><SheetText label={`${label} view`} value={sheet.view} rows={1} maxLength={1000} disabled={disabled} onCommit={(value) => setField('view', value)} /></td>
       <td className="w-36 space-y-1 p-1.5">
         <SheetPick label={`${label} location`} field="location" value={sheet.location} maxLength={200} disabled={disabled} onCommit={(value) => setField('location', value)} />
         <SheetPick label={`${label} time of day`} field="timeOfDay" value={sheet.timeOfDay} maxLength={100} disabled={disabled} onCommit={(value) => setField('timeOfDay', value)} />
@@ -232,8 +241,9 @@ function SheetRow({ project, row, cast, showPrompts, disabled, onEdit, onOpen })
 /**
  * The shot sheet on Shots: the whole video on one screen, to read the story
  * through and plan each shot without rendering a frame. Filled columns save
- * as you leave them. The sheet doesn't change what's sent to a model: the frame
- * and motion prompts stay the shot's inputs, shown here with Show prompts.
+ * as you leave them, to the same record the shot editor's Shot details edit. A
+ * shot set to use its details sends these columns with its frame and motion
+ * prompts; any other shot sends its own prompts alone (shown with Show prompts).
  */
 export default function ShotSheetPanel({ board }) {
   const { project, locked, editSceneLocal, saveScene, editProjectLocal, saveProjectFields, onEditShot, treatment } = board;
@@ -241,7 +251,7 @@ export default function ShotSheetPanel({ board }) {
   const [cameraFilter, setCameraFilter] = useState('');
   const [outdatedOnly, setOutdatedOnly] = useState(false);
   const [mapFilter, setMapFilter] = useShotSheetMapFilter();
-  const [uncheckedOnly, setUncheckedOnly] = useState(false);
+  const [notDoneOnly, setNotDoneOnly] = useState(false);
   const [problemsOnly, setProblemsOnly] = useState(false);
   const [showPrompts, setShowPrompts] = useState(false);
   const [aiOpen, setAiOpen] = useState(false);
@@ -250,12 +260,12 @@ export default function ShotSheetPanel({ board }) {
   const options = useMemo(() => ['view', 'location', 'timeOfDay', 'light', 'emotion'].map((field) => [field, shotSheetOptions(project, field)]), [project]);
   const cast = useMemo(() => shotSheetCast(project), [project]);
   const outdated = rows.filter((row) => row.frameOutdated).length;
-  const checked = rows.filter((row) => row.sheet.checked).length;
+  const done = rows.filter((row) => row.sheet.checked).length;
   const withProblems = rows.filter((row) => row.problems.length).length;
   const needle = query.trim().toLowerCase();
   const listed = shotSheetMapRows(rows, mapFilter).filter((row) => {
     if (outdatedOnly && !row.frameOutdated) return false;
-    if (uncheckedOnly && row.sheet.checked) return false;
+    if (notDoneOnly && row.sheet.checked) return false;
     if (problemsOnly && !row.problems.length) return false;
     if (cameraFilter && row.sheet.cameraId !== cameraFilter) return false;
     if (!needle) return true;
@@ -268,6 +278,9 @@ export default function ShotSheetPanel({ board }) {
     editSceneLocal(sceneId, { shotSheet });
     saveScene(sceneId, { shotSheet });
   };
+  const saveSheets = (edits) => edits.forEach(({ sceneId, shotSheet }) => { editSceneLocal(sceneId, { shotSheet }); saveScene(sceneId, { shotSheet }); });
+  // Filtered, it marks only the shots listed, so a filter never ticks shots out of sight.
+  const markDoneEdits = shotSheetMarkDoneEdits(listed);
   const mediaEdits = shotSheetMediaEdits(rows);
   const matchMedia = async () => {
     const shotDirections = mediaEdits.filter((edit) => edit.medium).map(({ sceneId, medium }) => ({ sceneId, medium, mediumPinned: true }));
@@ -280,9 +293,9 @@ export default function ShotSheetPanel({ board }) {
     editProjectLocal({ cameras });
     saveProjectFields({ cameras });
   };
-  const summary = `${checked} of ${rows.length} shots checked${withProblems ? ` · ${withProblems} incomplete` : ''}${outdated ? ` · ${outdated} frame${outdated === 1 ? '' : 's'} older than ${outdated === 1 ? 'its prompt' : 'their prompts'}` : ''}`;
+  const summary = `${done} of ${rows.length} shots done${withProblems ? ` · ${withProblems} incomplete` : ''}${outdated ? ` · ${outdated} frame${outdated === 1 ? '' : 's'} older than ${outdated === 1 ? 'its prompt' : 'their prompts'}` : ''}`;
   return (
-    <StageSection id="mv-shot-sheet" title="Shot sheet" summary={summary}>
+    <StageSection id={SHOT_SHEET_ANCHOR} title="Shot sheet" summary={summary}>
       <ShotSheetMap rows={rows} active={mapFilter} onPick={setMapFilter} />
       <CameraList project={project} disabled={locked} onChange={editCameras} />
       <div className="flex flex-wrap items-center gap-2 text-xs">
@@ -292,7 +305,7 @@ export default function ShotSheetPanel({ board }) {
           {(project.cameras || []).map((camera) => <option key={camera.id} value={camera.id}>{camera.name}</option>)}
         </select>
         <label className="inline-flex min-h-[44px] items-center gap-1 sm:min-h-0">
-          <input type="checkbox" checked={uncheckedOnly} onChange={(event) => setUncheckedOnly(event.target.checked)} /> Only not checked
+          <input type="checkbox" checked={notDoneOnly} onChange={(event) => setNotDoneOnly(event.target.checked)} /> Only not done
         </label>
         <label className="inline-flex min-h-[44px] items-center gap-1 sm:min-h-0">
           <input type="checkbox" checked={problemsOnly} onChange={(event) => setProblemsOnly(event.target.checked)} /> Only incomplete
@@ -310,14 +323,20 @@ export default function ShotSheetPanel({ board }) {
           Match {mediaEdits.length} shot{mediaEdits.length === 1 ? '' : 's'} to {mediaEdits.length === 1 ? 'its camera' : 'their cameras'}
         </button>
       )}
-      <BulkFill rows={listed} disabled={locked} onApply={(edits) => edits.forEach(({ sceneId, shotSheet }) => { editSceneLocal(sceneId, { shotSheet }); saveScene(sceneId, { shotSheet }); })} />
-      <p className="text-xs text-port-text-muted">Your plan for each shot: pick from the lists or type your own, then tick Checked when it’s right. It sits beside the frame and motion prompts and isn’t sent to a model.</p>
+      <BulkFill rows={listed} disabled={locked} onApply={saveSheets} />
       {options.map(([field, values]) => (
         <datalist key={field} id={`mv-sheet-${field}`}>{values.map((value) => <option key={value} value={value} />)}</datalist>
       ))}
-      <button type="button" aria-expanded={aiOpen} onClick={() => setAiOpen((open) => !open)} className="min-h-[44px] rounded border border-port-border px-2 py-1 text-xs sm:min-h-0">
-        {aiOpen ? 'Hide AI help' : 'AI help'}
-      </button>
+      <div className="flex flex-wrap gap-2">
+        <button type="button" aria-expanded={aiOpen} onClick={() => setAiOpen((open) => !open)} className="min-h-[44px] rounded border border-port-border px-2 py-1 text-xs sm:min-h-0">
+          {aiOpen ? 'Hide AI help' : 'AI help'}
+        </button>
+        {markDoneEdits.length > 0 && (
+          <button type="button" disabled={locked || aiApplying} onClick={() => saveSheets(markDoneEdits)} className="min-h-[44px] rounded border border-port-success px-2 py-1 text-xs text-port-success sm:min-h-0">
+            {listed.length === rows.length ? 'Mark all done' : `Mark ${markDoneEdits.length} shown done`}
+          </button>
+        )}
+      </div>
       {aiOpen && (
         <ShotSheetAi project={project} rows={listed} disabled={locked}
           onApplyingChange={setAiApplying}

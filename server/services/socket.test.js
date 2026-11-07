@@ -163,6 +163,18 @@ describe('socket.js — initSocket', () => {
     authEvents.removeAllListeners('sessions:revoked-all');
   });
 
+  // First settings event after process startup: persisted selections may have
+  // been nonempty before any writer emitted an event. Do not assume an empty base.
+  it('invalidates native account snapshots when the first settings write clears selections', () => {
+    io.emitted.length = 0;
+    settingsEvents.emit('settings:updated', { usageNativeAccountSelections: [] });
+    expect(io.emitted).toEqual([
+      ['usage:native-accounts-updated', { revision: expect.stringMatching(/^[a-f0-9]{64}$/) }],
+      ['backup:changed', {}],
+      ['jev:policy', {}],
+    ]);
+  });
+
   it('coalesces environment changes into payload-free Mind visibility invalidations for subscribers', () => {
     vi.useFakeTimers();
     const subscriber = makeSocket('mind-subscriber');
@@ -234,7 +246,7 @@ describe('socket.js — initSocket', () => {
   it('invalidates Jev policy after an unreadable settings restore without forwarding content', () => {
     io.emitted.length = 0;
     settingsEvents.emit('settings:invalidated', { privateContent: 'Example settings' });
-    expect(io.emitted).toEqual([['jev:policy', {}]]);
+    expect(io.emitted).toEqual([['usage:native-accounts-updated', { revision: null }], ['jev:policy', {}]]);
   });
 
   it('invalidates Eidoverse projection progress without world content', () => {
@@ -267,6 +279,21 @@ describe('socket.js — initSocket', () => {
     io.emitted.length = 0;
     settingsEvents.emit('usage:fleet-billing-updated', { privateContent: 'synthetic account detail' });
     expect(io.emitted).toEqual([['usage:fleet-billing-updated', {}]]);
+  });
+
+  it('invalidates native account snapshots only on selection changes, without sharing settings', () => {
+    const selection = { family: 'grok', accountLabel: 'private-label', members: ['a'.repeat(32)], historyScope: 'operator-confirmed-retained-history' };
+    io.emitted.length = 0;
+    settingsEvents.emit('settings:updated', { usageNativeAccountSelections: [selection], secret: 'private-value' });
+    const updates = () => io.emitted.filter(([event]) => event === 'usage:native-accounts-updated');
+    expect(updates()).toEqual([['usage:native-accounts-updated', { revision: expect.stringMatching(/^[a-f0-9]{64}$/) }]]);
+    settingsEvents.emit('settings:updated', { usageNativeAccountSelections: [selection], secret: 'different-private-value' });
+    expect(updates()).toHaveLength(1);
+    settingsEvents.emit('settings:invalidated');
+    expect(updates().at(-1)).toEqual(['usage:native-accounts-updated', { revision: null }]);
+    settingsEvents.emit('settings:updated', {});
+    expect(updates().at(-1)[1].revision).toMatch(/^[a-f0-9]{64}$/);
+    expect(JSON.stringify(updates())).not.toContain('private');
   });
 
   it('forwards death-clock invalidations without personal data', () => {

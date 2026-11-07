@@ -28,11 +28,16 @@ vi.mock('../services/sharing/integrity.js', () => ({
 vi.mock('../services/sharing/sidecarSync.js', () => ({ backfillMissingSidecars: vi.fn() }));
 
 const { buildLocalManifest } = await import('../services/sharing/integrity.js');
+const { getRecordPayloadForPeer, listPeerSubscriptions } = await import('../services/sharing/peerSync.js');
 const { __resetPullWarnThrottleForTests } = await import('../services/sharing/peerPullAuthorization.js');
 const { default: routes } = await import('./peerSync.js');
 
-function appFor({ localOperator = false } = {}) {
+function appFor({ localOperator = false, peerId = null } = {}) {
   const app = express();
+  if (peerId) app.use((req, _res, next) => {
+    req.portosAuthContext = { enabled: true, authenticated: true, method: 'peer', peerId };
+    next();
+  });
   if (localOperator) app.use((req, _res, next) => {
     req.portosAuthContext = { enabled: false, authenticated: false, method: null };
     next();
@@ -63,5 +68,30 @@ describe('new integrity manifest authorization', () => {
     expect(allowed.status).toBe(200);
     expect(allowed.body).toEqual({ manifestVersion: 1, records: [{ id: 'author-1' }] });
     expect((await request(appFor({ localOperator: true })).get('/api/peer-sync/manifest?kind=author')).status).toBe(200);
+  });
+  it('enforces category sharing on /record for non-legacy kinds even in warn-first mode, but keeps legacy kinds warn-first', async () => {
+    getRecordPayloadForPeer.mockResolvedValue({ id: 'r1' });
+    peers.push({ instanceId: 'denied', enabled: true, syncEnabled: true, directions: ['outbound'], syncCategories: { authors: false, universes: false } });
+    const denied = await request(appFor()).get('/api/peer-sync/record?kind=author&id=r1').set('X-PortOS-Instance-Id', 'denied');
+    expect(denied.status).toBe(403);
+    expect(getRecordPayloadForPeer).not.toHaveBeenCalled();
+    expect((await request(appFor({ localOperator: true })).get('/api/peer-sync/record?kind=author&id=r1')).status).toBe(200);
+    // Legacy kinds keep the warn-first ramp for independently upgraded peers.
+    expect((await request(appFor()).get('/api/peer-sync/record?kind=universe&id=r1').set('X-PortOS-Instance-Id', 'denied')).status).toBe(200);
+  });
+  it('narrows a peer credential on /subscriptions to subscriptions targeting that peer', async () => {
+    listPeerSubscriptions.mockResolvedValue([]);
+    peers.push({ id: 'reg-1', instanceId: 'inst-1', enabled: true });
+    // A forged ?peerId= for another peer is overridden by the authenticated identity.
+    await request(appFor({ peerId: 'reg-1' })).get('/api/peer-sync/subscriptions?peerId=inst-other');
+    expect(listPeerSubscriptions).toHaveBeenLastCalledWith({ peerId: 'inst-1' });
+    // A credential whose peer is no longer registered sees nothing and queries nothing.
+    listPeerSubscriptions.mockClear();
+    const gone = await request(appFor({ peerId: 'reg-gone' })).get('/api/peer-sync/subscriptions');
+    expect(gone.body).toEqual({ subscriptions: [] });
+    expect(listPeerSubscriptions).not.toHaveBeenCalled();
+    // The operator keeps the unfiltered view.
+    await request(appFor({ localOperator: true })).get('/api/peer-sync/subscriptions');
+    expect(listPeerSubscriptions).toHaveBeenLastCalledWith({});
   });
 });

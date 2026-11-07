@@ -94,6 +94,27 @@ describe('creative setup', () => {
     await waitFor(() => expect(onSave.mock.calls[0][0].concept.subjects[0].description).toBe('A concise description'));
   });
 
+  it('shows refusal with length and names where to shorten when universe style exceeds limit, and disables save', async () => {
+    getUniverse.mockResolvedValue({
+      id: 'u1',
+      name: 'Example universe',
+      styleNotes: 'x'.repeat(3500),
+      influences: { embrace: ['noir '.repeat(100)], avoid: ['neon '.repeat(50)] },
+      visualProfile: { version: 1, generation: { enabled: true, lighting: 'Natural' }, finishing: { mode: 'preview' } },
+      characters: [],
+      places: [],
+      objects: [],
+    });
+    open();
+    await screen.findByText('Example universe');
+    fireEvent.change(screen.getByLabelText('Universe'), { target: { value: 'u1' } });
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent(/Universe style has \d+ characters; the video concept limit is 4000/);
+    });
+    expect(screen.getByRole('alert')).toHaveTextContent(/Shorten style notes \(3500 characters\) or influences/);
+    expect(screen.getByText('Save creative setup')).toBeDisabled();
+  });
+
   it('links a catalog subject to its record and lets the director keep a new one in this video only', async () => {
     const onSave = vi.fn(async () => {});
     const cast = { ...project, concept: { subjects: [

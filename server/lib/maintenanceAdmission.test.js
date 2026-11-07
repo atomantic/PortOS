@@ -354,6 +354,18 @@ describe('durable graceful maintenance', () => {
     expect(admission.status()).toMatchObject({ state: 'draining', blockers: [{ unsettled: true }] });
   });
 
+  it('runs settlement callbacks of work that outlived its settled parent instead of refusing them', async () => {
+    const { admission } = gate();
+    const media = admission.admit('media', 'example');
+    let detached;
+    let settled;
+    const afterSettle = new Promise(resolve => { settled = resolve; });
+    media.run(() => { detached = afterSettle.then(() => admission.continueSettlement(async () => 'wrote')); });
+    await media.finish();
+    settled();
+    await expect(detached).resolves.toBe('wrote');
+  });
+
   it('reconnects observed existing work under its original durable identity during a hold', async () => {
     const { root, admission } = gate();
     const original = admission.admit('media', 'training');

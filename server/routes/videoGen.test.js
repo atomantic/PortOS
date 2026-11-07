@@ -1496,6 +1496,17 @@ describe('videoGen routes', () => {
       expect(call[0].params.mode).not.toBe('grok');
     });
 
+    it('restores the LF line breaks a browser form upload turns into CRLF', async () => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockResolvedValueOnce({ imageGen: { local: { pythonPath: '/usr/bin/python3' } }, videoGen: {} });
+      const r = await request(app).post('/api/video-gen/')
+        .send({ prompt: 'Reference sheet: Rider.\r\n\r\nGenerated video: a fox', negativePrompt: 'blur\r\nnoise', backend: 'local' });
+      expect(r.status).toBe(200);
+      expect(mediaJobQueue.enqueueJob.mock.calls.at(-1)[0].params).toMatchObject({
+        prompt: 'Reference sheet: Rider.\n\nGenerated video: a fox', negativePrompt: 'blur\nnoise',
+      });
+    });
+
     it('a named local model anchors a no-backend request local, even under a grok pin', async () => {
       const { getSettings } = await import('../services/settings.js');
       getSettings.mockResolvedValueOnce({

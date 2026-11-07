@@ -27,6 +27,7 @@ import { join } from 'path';
 import { readdir, stat } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import { PATHS, atomicWrite, ensureDir, readJSONFile, safeDate, unlinkGuarded } from '../lib/fileUtils.js';
+import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
 
 export const ASK_DIR = join(PATHS.data, 'ask-conversations');
 export const EXPIRY_DAYS = 30;
@@ -62,6 +63,11 @@ function pathFor(id) {
   return join(ASK_DIR, `${id}.json`);
 }
 
+// Every read-modify-write of one conversation (turn append, pin, delete, and the
+// sweep's re-check) runs on that conversation's queue, so an assistant answer
+// landing during a pin cannot be lost, and a pin cannot be lost to an append.
+const queueConversationWrite = createKeyCachedQueue();
+
 function truncateTitle(text) {
   if (typeof text !== 'string') return '';
   const trimmed = text.trim().replace(/\s+/g, ' ');
@@ -78,6 +84,28 @@ async function readConversation(id, { strict = true } = {}) {
 export async function getConversation(id) {
   if (!isValidId(id)) return null;
   return readConversation(id);
+}
+
+// Fall back to file mtime when the JSON's own timestamps are missing or
+// unparseable — a corrupted record with no usable updatedAt would otherwise
+// live forever because `safeDate(undefined) === 0` made the expiry comparison
+// vacuously false.
+async function isExpiredUnpinned(id, conv, now, expiryMs) {
+  if (conv.promoted) return false;
+  let effectiveTs = safeDate(conv.updatedAt) || safeDate(conv.createdAt);
+  if (!effectiveTs) effectiveTs = await stat(pathFor(id)).then((s) => s.mtimeMs, () => null);
+  return !!effectiveTs && (now - effectiveTs) > expiryMs;
+}
+
+// Runs inside the conversation's queue: a turn or pin that landed after the
+// listing's first read must win over that stale snapshot. Returns the fresh
+// record to list, or null when the row must be left out (pruned, or unreadable).
+async function pruneIfStillExpired(id, expiryMs) {
+  const fresh = await readConversation(id, { strict: false });
+  if (!fresh) return null;
+  if (!(await isExpiredUnpinned(id, fresh, Date.now(), expiryMs))) return fresh;
+  await unlinkGuarded(pathFor(id)).catch(() => {});
+  return null;
 }
 
 export async function listConversations({ limit = 50 } = {}) {
@@ -129,21 +157,10 @@ export async function listConversations({ limit = 50 } = {}) {
       if (!conv) continue;
     }
 
-    // Fall back to file mtime when the JSON's own timestamps are missing or
-    // unparseable — a corrupted record with no usable updatedAt would
-    // otherwise live forever because `safeDate(undefined) === 0` made the
-    // expiry comparison vacuously false.
-    let effectiveTs = safeDate(conv.updatedAt) || safeDate(conv.createdAt);
-    if (!effectiveTs) {
-      if (mtime === null) {
-        mtime = await stat(pathFor(id)).then((s) => s.mtimeMs, () => null);
-      }
-      if (mtime !== null) effectiveTs = mtime;
-    }
-    if (!conv.promoted && effectiveTs && (now - effectiveTs) > expiryMs) {
-      // Single-user app — no concurrency races to worry about pruning here.
-      await unlinkGuarded(pathFor(id)).catch(() => {});
-      continue;
+    if (await isExpiredUnpinned(id, conv, now, expiryMs)) {
+      const current = await queueConversationWrite(id, () => pruneIfStillExpired(id, expiryMs));
+      if (!current) continue;
+      conv = current;
     }
 
     if (headSlot) {
@@ -189,7 +206,11 @@ export async function createConversation({ mode = 'ask', title = '' } = {}) {
   return conv;
 }
 
-export async function appendTurn(conversationId, turn) {
+export function appendTurn(conversationId, turn) {
+  return queueConversationWrite(conversationId, () => appendTurnUnlocked(conversationId, turn));
+}
+
+async function appendTurnUnlocked(conversationId, turn) {
   const conv = await readConversation(conversationId);
   if (!conv) throw new Error(`Conversation not found: ${conversationId}`);
   if (!turn || (turn.role !== 'user' && turn.role !== 'assistant')) {
@@ -224,23 +245,24 @@ export async function appendTurn(conversationId, turn) {
   return { conversation: conv, turn: stamped };
 }
 
-export async function deleteConversation(id) {
-  if (!isValidId(id)) return false;
-  const removed = await unlinkGuarded(pathFor(id)).then(() => true, (err) => {
+export function deleteConversation(id) {
+  if (!isValidId(id)) return Promise.resolve(false);
+  return queueConversationWrite(id, () => unlinkGuarded(pathFor(id)).then(() => true, (err) => {
     if (err.code === 'ENOENT') return false;
     throw err;
-  });
-  return removed;
+  }));
 }
 
-export async function setPromoted(id, promoted) {
-  if (!isValidId(id)) return null;
-  const conv = await readConversation(id);
-  if (!conv) return null;
-  conv.promoted = !!promoted;
-  conv.updatedAt = new Date().toISOString();
-  await atomicWrite(pathFor(id), conv);
-  return conv;
+export function setPromoted(id, promoted) {
+  if (!isValidId(id)) return Promise.resolve(null);
+  return queueConversationWrite(id, async () => {
+    const conv = await readConversation(id);
+    if (!conv) return null;
+    conv.promoted = !!promoted;
+    conv.updatedAt = new Date().toISOString();
+    await atomicWrite(pathFor(id), conv);
+    return conv;
+  });
 }
 
 // Test helper — exposed so tests can introspect/clean state without

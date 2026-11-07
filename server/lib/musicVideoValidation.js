@@ -1,4 +1,7 @@
 import { CAST_SETS_IMAGE_EDIT_MAX } from './musicVideoCastSetsImageEdit.js';
+import {
+  ROUTE_MAP_FEATURE_KINDS, ROUTE_MAP_FEATURE_LABEL_MAX, ROUTE_MAP_FEATURE_SIDES, ROUTE_MAP_FEATURES_MAX, ROUTE_MAP_HEADINGS, ROUTE_MAP_MAX, ROUTE_MAP_NAME_MAX, ROUTE_MAP_NOTE_MAX, ROUTE_MAP_STOPS_MAX, ROUTE_MAP_TRAVEL_MAX,
+} from './musicVideoRouteMapLimits.js';
 import { SHOT_CAMERA_KINDS, SHOT_CAMERA_MAX, SHOT_CAMERA_OUTPUTS, SHOT_SHEET_CHARACTERS_MAX, SHOT_SHEET_TEXT_FIELDS } from './musicVideoShotSheet.js';
 import { festivalPacketSchema } from './musicVideoFestivalPacket.js';
 import { MUSIC_VIDEO_MEDIA_MODES } from './musicVideoMediaPolicy.js';
@@ -276,12 +279,39 @@ export const musicVideoCameraSchema = z.object({
   // How this camera behaves in the story, e.g. who borrows it, or that nobody ever looks at it.
   rule: z.string().trim().max(1000).optional(),
 }).strict();
+// A path through several of the video's places, in travel order (lib/musicVideoRouteMaps.js).
+export const musicVideoRouteMapSchema = z.object({
+  id: z.string().min(1).max(64),
+  name: z.string().trim().min(1).max(ROUTE_MAP_NAME_MAX),
+  heading: z.enum(ROUTE_MAP_HEADINGS).nullable().optional(),
+  // How they travel and what stays the same along the way, e.g. "riding bikes, the low sun ahead and to the left".
+  travel: z.string().trim().max(ROUTE_MAP_TRAVEL_MAX).optional(),
+  stops: z.array(z.object({
+    id: z.string().min(1).max(64),
+    subjectId: z.string().min(1).max(64),
+    note: z.string().trim().max(ROUTE_MAP_NOTE_MAX).optional(),
+    // Side streets and landmarks beside this stretch, on the travellers' left, right or ahead.
+    features: z.array(z.object({
+      id: z.string().min(1).max(64),
+      kind: z.enum(ROUTE_MAP_FEATURE_KINDS),
+      label: z.string().trim().max(ROUTE_MAP_FEATURE_LABEL_MAX).optional(),
+      side: z.enum(ROUTE_MAP_FEATURE_SIDES),
+    }).strict()).max(ROUTE_MAP_FEATURES_MAX).optional(),
+    // The place's greybox cameras that look ahead along the route and back the way they came.
+    views: z.object({
+      forward: z.string().min(1).max(GREYBOX_SHOT_ID_MAX).regex(GREYBOX_SHOT_ID_PATTERN).nullable().optional(),
+      back: z.string().min(1).max(GREYBOX_SHOT_ID_MAX).regex(GREYBOX_SHOT_ID_PATTERN).nullable().optional(),
+    }).strict().optional(),
+  }).strict()).max(ROUTE_MAP_STOPS_MAX),
+}).strict();
 export const musicVideoShotSheetSchema = z.object({
   cameraId: z.string().min(1).max(64).nullable().optional(),
   holder: z.string().trim().max(120).nullable().optional(),
   characters: z.array(z.string().trim().min(1).max(120)).max(SHOT_SHEET_CHARACTERS_MAX).optional(),
-  // The director has read this shot's plan and it's right.
+  // Done: the director has finished this shot. Kept under its first name, `checked`, so stored sheets stay valid.
   checked: z.boolean().optional(),
+  // The still is built from this sheet; the frame prompt is then its general prompt (musicVideoShotSheet.js).
+  promptFromSheet: z.boolean().optional(),
   ...Object.fromEntries(SHOT_SHEET_TEXT_FIELDS.map(([field, max]) => [field, z.string().max(max).optional()])),
 }).strict();
 
@@ -1755,6 +1785,7 @@ export const musicVideoProjectUpdateSchema = z.object({
   phrases: phraseList.optional(),
   pacing: musicVideoPacingSchema.nullable().optional(),
   cameras: z.array(musicVideoCameraSchema).max(SHOT_CAMERA_MAX).optional(),
+  routeMaps: z.array(musicVideoRouteMapSchema).max(ROUTE_MAP_MAX).optional(),
   composition: musicVideoCompositionSchema.nullable().optional(),
   soundBed: musicVideoSoundBedSchema.nullable().optional(),
   // The finishing film look (lib/filmLook.js); null = none.
@@ -1952,6 +1983,8 @@ export const musicVideoSceneUpdateSchema = z.object({
   // and the prompt that renders it from the start frame.
   endImageId: z.string().max(256).nullable().optional(),
   endFramePrompt: z.string().max(8000).nullable().optional(),
+  // The shot's end frame switched off: clips skip it, its selection and takes stay.
+  endFrameOff: z.boolean().nullable().optional(),
   // #10154: the last generation failure the render hooks persisted. The board
   // may send `null` to dismiss it; a full object is accepted so a client that
   // round-trips the scene doesn't 400.

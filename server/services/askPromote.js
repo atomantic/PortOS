@@ -18,6 +18,7 @@ import * as convs from './askConversations.js';
 import * as brainService from './brain.js';
 import { addTask } from './cosTaskStore.js';
 import * as identityService from './identity.js';
+import { userLocalToday } from './userTimezone.js';
 
 // Cap promoted task descriptions so a long assistant answer doesn't bloat
 // TASKS.md — the full text is still in the conversation. CoS tasks are
@@ -77,7 +78,7 @@ export async function promoteTurnContent({ conversationId, turn, target, priorit
     ref = { type: 'task', id: result?.id };
   } else if (target === 'goal') {
     if (!goalId) throw new ServerError('goalId is required for goal target', { status: 400, code: 'VALIDATION_ERROR' });
-    const today = new Date().toISOString().slice(0, 10);
+    const today = await userLocalToday();
     const entry = await identityService.addProgressEntry(goalId, {
       date: today,
       note: content,

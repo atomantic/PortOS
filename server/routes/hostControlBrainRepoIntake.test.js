@@ -63,6 +63,14 @@ vi.mock('../services/brainStorage.js', async (importOriginal) => ({
     store.links.set(id, link);
     return link;
   }),
+  updateLinkWith: vi.fn(async (id, mutate) => {
+    if (!store.links.has(id)) return null;
+    const patch = await mutate({ ...store.links.get(id) });
+    if (!patch) return null;
+    const link = { ...store.links.get(id), ...patch };
+    store.links.set(id, link);
+    return link;
+  }),
   createInboxLog: vi.fn(async (entry) => {
     const log = { id: `inbox-${store.inbox.length + 1}`, ...entry };
     store.inbox.push(log);

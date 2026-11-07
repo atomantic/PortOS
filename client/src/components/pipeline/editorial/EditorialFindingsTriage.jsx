@@ -275,7 +275,7 @@ function FindingRow({ seriesId, comment, onCommentChange, selected, onToggleSele
                   type="button"
                   onClick={() => setShowFix((v) => !v)}
                   aria-expanded={showFix}
-                  className="inline-flex items-center gap-1 rounded border border-port-border px-1.5 py-0.5 text-[10px] text-gray-400 hover:text-white hover:border-port-accent/40"
+                  className="inline-flex items-center gap-1 rounded border border-port-border px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 text-gray-400 hover:text-white hover:border-port-accent/40"
                 >
                   <GitCompareArrows size={11} />
                   {showFix ? 'Hide fix' : 'Preview fix'}
@@ -285,7 +285,7 @@ function FindingRow({ seriesId, comment, onCommentChange, selected, onToggleSele
                   type="button"
                   onClick={accept}
                   disabled={accepting || dismissing || !acceptable}
-                  className="inline-flex items-center gap-1 rounded border border-port-success/40 bg-port-success/20 px-1.5 py-0.5 text-[10px] text-port-success hover:bg-port-success/30 disabled:opacity-40"
+                  className="inline-flex items-center gap-1 rounded border border-port-success/40 bg-port-success/20 px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 text-port-success hover:bg-port-success/30 disabled:opacity-40"
                 >
                   {accepting ? <Loader2 size={11} className="animate-spin" /> : <Check size={11} />}
                   Accept
@@ -296,7 +296,7 @@ function FindingRow({ seriesId, comment, onCommentChange, selected, onToggleSele
               type="button"
               onClick={dismiss}
               disabled={accepting || dismissing || flagging}
-              className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-gray-500 hover:text-white disabled:opacity-40"
+              className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 text-gray-500 hover:text-white disabled:opacity-40"
             >
               {dismissing ? <Loader2 size={11} className="animate-spin" /> : <X size={11} />}
               Dismiss
@@ -306,7 +306,7 @@ function FindingRow({ seriesId, comment, onCommentChange, selected, onToggleSele
                 type="button"
                 onClick={markFalsePositive}
                 disabled={accepting || dismissing || flagging}
-                className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-gray-500 hover:text-port-warning disabled:opacity-40"
+                className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 text-gray-500 hover:text-port-warning disabled:opacity-40"
                 title="Flag as a false positive — the check is wrong here"
               >
                 {flagging ? <Loader2 size={11} className="animate-spin" /> : <Ban size={11} />}
@@ -335,7 +335,7 @@ function FindingRow({ seriesId, comment, onCommentChange, selected, onToggleSele
             type="button"
             onClick={undo}
             disabled={undoing}
-            className="inline-flex items-center gap-1 rounded border border-port-border px-1.5 py-0.5 text-[10px] text-gray-400 hover:text-white hover:border-port-accent/40 disabled:opacity-40"
+            className="inline-flex items-center gap-1 rounded border border-port-border px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 text-gray-400 hover:text-white hover:border-port-accent/40 disabled:opacity-40"
             title="Undo this fix — restore the pre-edit text and re-open the finding"
           >
             {undoing ? <Loader2 size={11} className="animate-spin" /> : <Undo2 size={11} />}
@@ -432,7 +432,7 @@ function CheckGroup({ seriesId, group, onCommentChange, selectedIds, onToggleSel
             onClick={() => onDisableCheck(group.checkId, group.label)}
             title="Disable this check — hides its findings here and skips it on future runs"
             aria-label={`Disable check: ${group.label}`}
-            className="inline-flex shrink-0 items-center gap-1 rounded border border-port-border px-1.5 py-0.5 text-[10px] text-gray-500 hover:border-rose-400/40 hover:text-rose-300"
+            className="inline-flex shrink-0 items-center gap-1 rounded border border-port-border px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 text-gray-500 hover:border-rose-400/40 hover:text-rose-300"
           >
             <Ban size={11} /> Disable
           </button>
@@ -536,7 +536,7 @@ function FilterChip({ active, onClick, label, dotClass }) {
       type="button"
       onClick={onClick}
       aria-pressed={active}
-      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] transition-colors ${
+      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] pointer-coarse:min-h-11 transition-colors ${
         active
           ? 'border-port-accent/60 bg-port-accent/20 text-gray-100'
           : 'border-port-border text-gray-400 hover:text-gray-200 hover:border-port-accent/40'
@@ -584,7 +584,7 @@ function FindingsToolbar({ facets, filters, sort, setParam, toggleInParam, onCle
           <button
             type="button"
             onClick={onClear}
-            className="inline-flex items-center gap-1 rounded border border-port-border px-1.5 py-1 text-[10px] text-gray-400 hover:text-white hover:border-port-accent/40"
+            className="inline-flex items-center gap-1 rounded border border-port-border px-1.5 py-1 text-[10px] pointer-coarse:min-h-11 text-gray-400 hover:text-white hover:border-port-accent/40"
           >
             <X size={11} /> Clear {activeCount}
           </button>

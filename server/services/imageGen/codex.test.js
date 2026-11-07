@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdir, writeFile, rm, readFile } from 'fs/promises';
+import { mkdir, writeFile, rm, readFile, utimes } from 'fs/promises';
 import { existsSync, realpathSync } from 'fs';
 import { join, relative, resolve, basename } from 'path';
 import { tmpdir } from 'os';
@@ -628,6 +628,115 @@ describe('codex provider — image harvest', () => {
     expect(Buffer.compare(written, fakePngBytes)).toBe(0);
   });
 
+  describe('session with several image_gen calls', () => {
+    const JOB_PROMPT = 'A red fox crossing a snowy bridge at dusk';
+    const STRAY_PROMPT = 'completion_summary';
+    const png = (label) => Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from(label)]);
+    const imageItem = (fields) => JSON.stringify({
+      type: 'event_msg',
+      payload: { type: 'item_completed', item: { type: 'Extension', kind: 'image_gen.generation', status: 'completed', failure: null, ...fields } },
+    });
+    const writeSessionLog = async (sessionId, lines) => {
+      const sessionsDir = join(TEST_HOME, '.codex', 'sessions', '2026', '06', '22');
+      await mkdir(sessionsDir, { recursive: true });
+      await writeFile(join(sessionsDir, `rollout-2026-06-22T00-19-45-${sessionId}.jsonl`), `${lines.join('\n')}\n`);
+    };
+    const finishSession = async (sessionId, prompt = JOB_PROMPT) => {
+      const job = await codex.generateImage({ prompt });
+      const { child } = spawnCalls[0];
+      child.stderr.emit('data', Buffer.from(`session id: ${sessionId}\n`));
+      child.exitCode = 0;
+      child.emit('close', 0, null);
+      return job;
+    };
+
+    it('saves the real render when an unrelated call produced a newer file', async () => {
+      const sessionId = '55555555-5555-4555-8555-555555555555';
+      const codexDir = join(TEST_HOME, '.codex', 'generated_images', sessionId);
+      await mkdir(codexDir, { recursive: true });
+      await writeFile(join(codexDir, 'exec-real.png'), png('real render'));
+      await writeFile(join(codexDir, 'exec-stray.png'), png('stray dashboard'));
+      const later = new Date(Date.now() + 20_000);
+      await utimes(join(codexDir, 'exec-stray.png'), later, later);
+      await writeSessionLog(sessionId, [
+        imageItem({ revisedPrompt: `${JOB_PROMPT}, cinematic`, savedPath: join(codexDir, 'exec-real.png') }),
+        imageItem({ revisedPrompt: STRAY_PROMPT, savedPath: join(codexDir, 'exec-stray.png') }),
+      ]);
+      const completed = vi.fn();
+      imageGenEvents.on('completed', completed);
+
+      const job = await finishSession(sessionId);
+
+      await vi.waitFor(() => expect(completed).toHaveBeenCalledTimes(1));
+      expect(await readFile(join(FAKE_IMAGES_DIR, job.filename))).toEqual(png('real render'));
+    });
+
+    it('picks the real render from images kept only in the session log', async () => {
+      const sessionId = '66666666-6666-4666-8666-666666666666';
+      await writeSessionLog(sessionId, [
+        imageItem({ revisedPrompt: JOB_PROMPT, result: png('real render').toString('base64') }),
+        imageItem({ revisedPrompt: STRAY_PROMPT, result: png('stray dashboard').toString('base64') }),
+      ]);
+      const completed = vi.fn();
+      imageGenEvents.on('completed', completed);
+
+      const job = await finishSession(sessionId);
+
+      await vi.waitFor(() => expect(completed).toHaveBeenCalledTimes(1));
+      expect(await readFile(join(FAKE_IMAGES_DIR, job.filename))).toEqual(png('real render'));
+    });
+
+    it('picks the real render kept only in the log over a lone stray file on disk', async () => {
+      const sessionId = '99999999-9999-4999-8999-999999999999';
+      const codexDir = join(TEST_HOME, '.codex', 'generated_images', sessionId);
+      await mkdir(codexDir, { recursive: true });
+      await writeFile(join(codexDir, 'exec-stray.png'), png('stray dashboard'));
+      await writeSessionLog(sessionId, [
+        imageItem({ revisedPrompt: JOB_PROMPT, result: png('real render').toString('base64') }),
+        imageItem({ revisedPrompt: STRAY_PROMPT, savedPath: join(codexDir, 'exec-stray.png') }),
+      ]);
+      const completed = vi.fn();
+      imageGenEvents.on('completed', completed);
+
+      const job = await finishSession(sessionId);
+
+      await vi.waitFor(() => expect(completed).toHaveBeenCalledTimes(1));
+      expect(await readFile(join(FAKE_IMAGES_DIR, job.filename))).toEqual(png('real render'));
+    });
+
+    it('fails with a clear reason and saves nothing when no image matches the prompt', async () => {
+      const sessionId = '77777777-7777-4777-8777-777777777777';
+      const codexDir = join(TEST_HOME, '.codex', 'generated_images', sessionId);
+      await mkdir(codexDir, { recursive: true });
+      await writeFile(join(codexDir, 'exec-a.png'), png('first'));
+      await writeFile(join(codexDir, 'exec-b.png'), png('second'));
+      const failed = vi.fn();
+      imageGenEvents.on('failed', failed);
+
+      const job = await finishSession(sessionId);
+
+      await vi.waitFor(() => expect(failed).toHaveBeenCalledTimes(1));
+      expect(failed.mock.calls[0][0].error).toMatch(/made 2 images.*none could be matched to this job's prompt/);
+      expect(existsSync(join(FAKE_IMAGES_DIR, job.filename))).toBe(false);
+      expect(existsSync(join(FAKE_IMAGES_DIR, `${job.generationId}.metadata.json`))).toBe(false);
+    });
+
+    it('reports an image_gen call made from an exec script as observed when it produced nothing', async () => {
+      const sessionId = '88888888-8888-4888-8888-888888888888';
+      await writeSessionLog(sessionId, [JSON.stringify({
+        type: 'response_item',
+        payload: { type: 'custom_tool_call', name: 'exec', input: 'await tools.image_gen__imagegen({ prompt });' },
+      })]);
+      const failed = vi.fn();
+      imageGenEvents.on('failed', failed);
+
+      await finishSession(sessionId);
+
+      await vi.waitFor(() => expect(failed).toHaveBeenCalledTimes(1));
+      expect(failed.mock.calls[0][0].error).not.toContain('No image_gen call was observed');
+    });
+  });
+
   it('emits a failed event when codex exits 0 but writes no image (likely auth/quota issue)', async () => {
     const sessionId = '00000000-0000-4000-8000-000000000000';
     // Create the session dir so the harvest path exists, but leave it
@@ -1173,6 +1282,7 @@ describe('Codex cached defaults and isolated workspace', () => {
     expect(call.options.cwd.startsWith(PATHS.installRoot)).toBe(false);
     expect(call.options.env.PWD).toBe(call.options.cwd);
     expect(call.args.at(-1)).toContain('Only the image_gen tool may produce this image');
+    expect(call.args.at(-1)).toContain('Call image_gen exactly once');
     await writeFile(join(call.options.cwd, 'drawing.svg'), '<svg/>');
     await writeFile(join(call.options.cwd, 'drawing.png'), 'not a generated image');
     codex.cancel(job.jobId);

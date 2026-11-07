@@ -2178,3 +2178,20 @@ input[type="color"],
     opacity: 0.6;
   }
 }
+
+/* iOS Safari zooms the page when a focused text field computes under 16px, and
+   stays zoomed afterward. Fields carry their own `text-sm` / `text-xs`, so this
+   floor is applied globally on a coarse pointer (phones/tablets) only; desktop
+   keeps its compact sizes (docs/UX_DESIGN_GUIDE.md, "editable fields at least
+   16px on touch layouts"). It MUST stay unlayered: Tailwind emits `text-sm` in
+   `@layer utilities`, and an unlayered rule beats every layered one, whereas an
+   `@layer base` rule would change nothing. The same precedence also pins fields
+   to exactly 16px, so a larger `text-*` on a field is not honored on touch.
+   Excluded types are not text-entry controls and never trigger the zoom. */
+@media (pointer: coarse) {
+  input:where(:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="file"], [type="hidden"])),
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}

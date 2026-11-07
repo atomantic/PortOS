@@ -70,16 +70,19 @@ describe('parseWhatsappChat', () => {
 
 describe('detectDateOrder', () => {
   it('detects year-first from a 4-digit leading group', () => {
-    expect(detectDateOrder(parseWhatsappChat('[2024-01-15, 6:30:00 PM] A: x'))).toBe('ymd');
+    expect(detectDateOrder(parseWhatsappChat('[2024-01-15, 6:30:00 PM] A: x'))).toEqual({ order: 'ymd', ambiguous: false });
   });
   it('detects day-first when a first group exceeds 12', () => {
-    expect(detectDateOrder(parseWhatsappChat('15/01/24, 6:30 PM - A: x'))).toBe('dmy');
+    expect(detectDateOrder(parseWhatsappChat('15/01/24, 6:30 PM - A: x'))).toEqual({ order: 'dmy', ambiguous: false });
   });
   it('detects month-first when a second group exceeds 12', () => {
-    expect(detectDateOrder(parseWhatsappChat('1/15/24, 6:30 PM - A: x'))).toBe('mdy');
+    expect(detectDateOrder(parseWhatsappChat('1/15/24, 6:30 PM - A: x'))).toEqual({ order: 'mdy', ambiguous: false });
   });
-  it('defaults to month-first when fully ambiguous', () => {
-    expect(detectDateOrder(parseWhatsappChat('1/2/24, 6:30 PM - A: x'))).toBe('mdy');
+  it('defaults to month-first but flags it ambiguous when every day and month is 12 or lower', () => {
+    expect(detectDateOrder(parseWhatsappChat('1/2/24, 6:30 PM - A: x'))).toEqual({ order: 'mdy', ambiguous: true });
+  });
+  it('is not ambiguous when first and second groups are always equal', () => {
+    expect(detectDateOrder(parseWhatsappChat('3/3/24, 6:30 PM - A: x'))).toEqual({ order: 'mdy', ambiguous: false });
   });
 });
 

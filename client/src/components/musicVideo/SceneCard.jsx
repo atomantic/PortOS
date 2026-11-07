@@ -9,13 +9,17 @@ import ShotFinalRender from './ShotFinalRender.jsx';
 import ShotFilmLook from './ShotFilmLook.jsx';
 import ShotStoryboardPanel from './ShotStoryboardPanel.jsx';
 import ShotEditorGroup from './ShotEditorGroup.jsx';
+import ShotSheetFields from './ShotSheetFields.jsx';
+import { normalizeShotSheet, shotSheetDrivesPrompt, shotSheetPromptLines } from '../../../../server/lib/musicVideoShotSheet.js';
 import TabPills from '../ui/TabPills.jsx';
+import AutoSizeTextarea from '../ui/AutoSizeTextarea.jsx';
+import InfoTooltip from '../ui/InfoTooltip';
 import SceneStoryboardClip, { storyboardClipOffered } from './SceneStoryboardClip.jsx';
 import { MUSIC_VIDEO_MEDIUM_LABELS } from '../../../../server/lib/musicVideoMediumPlan.js';
 import { storyboardShotDirection } from '../../../../server/lib/musicVideoShotPrompt.js';
-import { useRef, useState } from 'react';
-import { Trash2, Activity, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, Video, AlertTriangle, Clapperboard, Shuffle } from 'lucide-react';
-import OverflowMenu from '../ui/OverflowMenu.jsx';
+import { useState } from 'react';
+import { Trash2, Activity, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, X, Video, AlertTriangle, Clapperboard, Shuffle } from 'lucide-react';
+import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
 import SceneTakePicker from './SceneTakePicker.jsx';
 import { formatTimecode } from '../../utils/formatters.js';
 import useSceneClipPlayback from '../../hooks/useSceneClipPlayback.js';
@@ -29,9 +33,11 @@ import SceneFrames from './SceneFrames.jsx';
 import SceneClipReferences from './SceneClipReferences.jsx';
 import { musicVideoClipConditioningReferences, musicVideoClipReferenceCapacity, musicVideoClipReferenceChoices, musicVideoSceneCastIds } from '../../../../server/lib/musicVideoConditioning.js';
 import { getFalVideoModel } from '../../lib/falVideoModels.js';
-import { falSceneTake } from '../../lib/musicVideoShotTiming.js';
+import { getRunwayVideoModel } from '../../lib/runwayVideoModels.js';
+import { falSceneTake, runwaySceneTake } from '../../lib/musicVideoShotTiming.js';
 import { CLIP_TIMING_FPS, MUSIC_VIDEO_VISUAL_LAYERS, clipReversed, composedDrawsLyrics, sceneHasAuthoredSpan, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
 import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
+import CastGuidesRetry from './CastGuidesRetry.jsx';
 
 // #8985: what a composed render shows for this scene's span.
 const LAYER_LABELS = { footage: 'Footage', still: 'Still image', card: 'Title card', code: 'Code-drawn' };
@@ -107,9 +113,9 @@ const frameSpan = (scene) => `fr ${frameAt(scene.startSec)}–${frameAt(scene.en
  * and any but the first `onMergePrevious(sceneId, backend)` (with `prevStartSec`), which keeps this shot and removes the
  * one before; each is hidden when the joined span would exceed that lane's longest take.
  *
- * The card is a disclosure: collapsed it is one row — frame thumbnail, title,
- * timing, lyric line and status — and it opens on tap to the full editor:
- * a "…" menu (move, delete), the linked storyboard panel, then
+ * It fills the shot drawer: a sticky header (frame thumbnail, title, timing,
+ * lyric line, status, previous / next shot and `onClose`) sits outside the
+ * `locked` fieldset so navigation always works; under it the linked storyboard panel, then
  * one picture at a time behind a Still / Clip switch (the still stands in for a
  * clip not made yet), each with its takes, its make / "Swap from unused" /
  * import buttons and its prompt. Swap from unused
@@ -118,36 +124,67 @@ const frameSpan = (scene) => `fr ${frameAt(scene.startSec)}–${frameAt(scene.en
  * settings sit in ShotEditorGroup groups (Timing, Sound, Transitions & effects,
  * Lyrics, Shot type, Direction), each header naming what is set: beside the
  * picture in a wide drawer and open there, stacked and closed on a phone.
- * Opening or closing it also calls `onSeek(scene)`, so the docked preview
- * jumps to the scene's start.
+ * Move earlier / later and Delete shot sit in the Timing group.
  */
 // #11040: the one owner of whether a video render may start. The server reloads
 // the persisted scene (and its speaker), so an unsaved or failed speaker edit
 // must hold back every video entry point — Generate video and the failure Retry.
 // Returns the refusal reason, or null when the render may go ahead.
 // A clip from the storyboard panel (`needsStill: false`) makes its own first frame.
-function videoGenerationRefusal({ settingsSaving, speakerUnsaved, referenceImageId, generatingVideo, videoBlockedReason, performanceBlocked, needsStill = true }) {
+// Where the shot sits in the cut: move it a slot earlier or later (the song timing and
+// lyric stay with the slot), or delete it after a confirm.
+function SceneOrderActions({ index, isLast, manifestOwnsShots, onMove, onDelete }) {
+  const [confirming, setConfirming] = useState(false);
+  return (
+    <div className="space-y-1">
+      <div className="flex flex-wrap items-center gap-2">
+        {onMove && (
+          <>
+            <button type="button" className={SECONDARY_BUTTON} onClick={() => onMove(index, -1)} disabled={index === 0 || manifestOwnsShots}>
+              <ArrowUp size={12} aria-hidden="true" /> Move earlier
+            </button>
+            <button type="button" className={SECONDARY_BUTTON} onClick={() => onMove(index, 1)} disabled={isLast || manifestOwnsShots}>
+              <ArrowDown size={12} aria-hidden="true" /> Move later
+            </button>
+          </>
+        )}
+        {onDelete && (confirming ? (
+          <ConfirmButtonPair prompt="Delete this shot?" confirmText="Delete shot" confirmIcon={Trash2} className="ml-auto"
+            onConfirm={() => { setConfirming(false); onDelete(); }} onCancel={() => setConfirming(false)} responsiveTouchTargets />
+        ) : (
+          <button type="button" onClick={() => setConfirming(true)}
+            className="ml-auto flex min-h-[44px] items-center gap-1 rounded px-2 py-1.5 text-xs text-port-error hover:bg-port-error/15 sm:min-h-0">
+            <Trash2 size={12} aria-hidden="true" /> Delete shot
+          </button>
+        ))}
+      </div>
+      {manifestOwnsShots && (
+        <p className="text-[11px] text-port-text-muted">Shot order comes from the composition document, so it can&apos;t be reordered here.</p>
+      )}
+    </div>
+  );
+}
+
+// A clip already rendering never blocks another (#15128): a shot can render locally and on grok at once.
+function videoGenerationRefusal({ settingsSaving, speakerUnsaved, referenceImageId, videoBlockedReason, performanceBlocked, needsStill = true }) {
   if (videoBlockedReason) return videoBlockedReason;
   if (performanceBlocked) return performanceBlocked;
   if (speakerUnsaved) return 'Save the speaker / singer edit first';
   if (settingsSaving) return 'Saving settings…';
   if (needsStill && !referenceImageId) return 'Generate a reference frame first';
-  if (generatingVideo) return 'A video is already generating';
   return null;
 }
 
 export default function SceneCard({
-  scene, index, shotName = null, isLast, generatingFrame, generatingVideo, frameProgress = null, videoProgress = null,
+  scene, index, shotName = null, isLast, generatingFrame, generatingVideo, frameProgress = null, videoProgress = null, videoJobs = null,
   settingsSaving, videoBlockedReason, videoBlockedReasonFor = null, canContinueShot,
   onMove, onDelete, onEditLocal, onSave,
-  project = null, castMedia = null, greyboxPlaces = {}, onGenerateFrame, onGenerateVideo, onContinueVideo, onGenerateEndFrame, generatingEndFrame = false, onContinueFromPrevious, previousHasClip = false,
+  project = null, castMedia = null, onReloadCastMedia = null, greyboxPlaces = {}, onGenerateFrame, onGenerateVideo, onContinueVideo, onGenerateEndFrame, generatingEndFrame = false, onContinueFromPrevious, previousHasClip = false,
   onOpenPreview, onSelectTake, onReviewTake, onRejectUnusedTakes = null, onSwapFrames = null, onMarkTake = null, onPoolMarked = null, onImportTake, onImportClipTake, onPlacePoolItem, onTrimClip, projectId = null, aspect = '16:9', videoModels = [], defaultVideoModel = '', shotNumbers = undefined, takeBusy = false, layered = false, documentComposition = false, manifestOwnsShots = false,
-  lipSyncBackend = '', songDurationSec = null, onSplit, onMergeNext, onMergePrevious = null, prevStartSec = null, onMoveStart = null, onMoveEnd = null, nextEndSec = null, falVideoSettings = null, onSeek, performanceReview = null, onRepairPerformance, repairBusy = false,
-  expanded, onToggleExpand, stepShot = null, footageOptional = false, failedScenes = null, songReview = null,
+  lipSyncBackend = '', songDurationSec = null, onSplit, onMergeNext, onMergePrevious = null, prevStartSec = null, onMoveStart = null, onMoveEnd = null, nextEndSec = null, falVideoSettings = null, performanceReview = null, onRepairPerformance, repairBusy = false,
+  onClose = null, locked = false, stepShot = null, footageOptional = false, failedScenes = null, songReview = null,
   storyboardId = null, storyboardShot = null, onStoryboardBoard = null, onApplyCameos = null, onVaryWipes = null,
 }) {
-  const detailsRef = useRef(null);
-
   // Keep playback mounted even when this shot shows a still or performance evidence.
   const clipPlayback = useSceneClipPlayback(scene);
   const { clipSrc, clipSec, clipSize, loops, playedSec } = clipPlayback;
@@ -165,6 +202,8 @@ export default function SceneCard({
   const fieldId = (name) => `mv-scene-${scene.sceneId}-${name}`;
   // #10297: a code shot is drawn by the composition, so it has no frame or clip to make.
   const codeShot = layered && layer === 'code';
+  // The shot sheet's plan for this shot, edited here or on the sheet: one record, so both stay in sync.
+  const fromSheet = shotSheetDrivesPrompt(scene);
   // Where this shot's clip renders: the last pick made on this device, else the project's saved renderer.
   const [initialRender] = useState(() => lastRenderTarget({ performance: isPerformanceScene(scene), saved: falVideoSettings || {} }));
   const [renderPick, setRenderPick] = useState(initialRender.pick);
@@ -193,30 +232,45 @@ export default function SceneCard({
   // #10152: what needs the director's attention, visible without opening the card.
   const attention = sceneAttention(scene, { layered, footageOptional, lipSyncBackend, songDurationSec, clipSec: playedSec, failed: failedScenes || {}, songReview, videoSettings: falVideoSettings });
   const songChange = songReview?.[scene.sceneId];
-  const generatingLane = generatingFrame && generatingVideo ? 'Frame + clip' : generatingFrame ? 'Frame' : generatingVideo ? 'Clip' : null;
+  // Every clip in flight for this shot, each with where it renders. A render whose
+  // request is still on its way has no job yet: Render waits for it, so a double tap
+  // can't send the same (possibly paid) render twice.
+  const clipJobs = Array.isArray(videoJobs) ? videoJobs : generatingVideo ? [{ key: 'clip', label: null, running: !!videoProgress, progress: videoProgress?.progress ?? null }] : [];
+  const sendingClip = clipJobs.some((job) => job.key !== 'clip' && !job.jobId);
+  const clipLane = clipJobs.length > 1 ? `${clipJobs.length} clips` : 'Clip';
+  const generatingLane = generatingFrame && generatingVideo ? `Frame + ${clipLane.toLowerCase()}` : generatingFrame ? 'Frame' : generatingVideo ? clipLane : null;
   // #10154: the server-persisted failure of the last render, shown until a
   // retry is in flight (or lands a take, which clears it server-side).
   const failure = scene.lastFailure && !(scene.lastFailure.lane === 'video' ? generatingVideo : generatingFrame)
     ? scene.lastFailure : null;
   const endFramePlan = sceneEndFramePlanFor(scene, renderSettings || {}, { models: videoModels, defaultModel: defaultVideoModel });
-  // Exactly what Render sends: the prompt as typed and the inputs the card toggles.
-  const cardRequest = shotCardRenderRequest({ project, scene, castMedia, greybox, settings: renderSettings || {}, performance, endFramePlan,
-    models: videoModels, defaultModel: defaultVideoModel, inputs: renderInputs, plan: timing.plan });
   const peerPool = ['both', 'peers'].includes(renderSettings?.renderPool?.mode);
   const referenceBackend = peerPool ? 'remote' : renderSettings?.backend || renderLane;
   const referenceModel = referenceBackend === 'fal'
     ? getFalVideoModel(falSceneTake({ scene, videoSettings: renderSettings || {} }).modelId)
-    : referenceBackend === 'local' ? videoModels.find((model) => model.id === (renderSettings?.modelId || defaultVideoModel)) : null;
+    : referenceBackend === 'runway' ? getRunwayVideoModel(runwaySceneTake({ scene, videoSettings: renderSettings || {} }).modelId)
+      : referenceBackend === 'local' ? videoModels.find((model) => model.id === (renderSettings?.modelId || defaultVideoModel)) : null;
   // Storyboard-to-clip chaining cannot yet pass LTX reference inputs. Offer
   // them after the storyboard's first frame has landed instead.
   const storyboardDefault = storyboardClipOffered({ scene, layer, performance });
   const ltxReferencesAvailable = !performance && referenceBackend === 'local' && referenceModel?.runtime === 'ltx25'
     && renderSettings?.generationMode !== 'audioReactive';
   const canUseLtxReferences = ltxReferencesAvailable && !storyboardDefault;
-  const useLtxReferences = canUseLtxReferences && renderInputs.ltxReferences === true;
   const ltxReferencesGreyboxBlocked = !!scene.setReference?.greyboxShotId;
-  const referenceCapacity = useLtxReferences ? 8 : musicVideoClipReferenceCapacity(referenceBackend, referenceModel);
+  // References the director picked turn the box on. Auto cast does not, since it
+  // costs the shot its song audio. Unticking, or asking for song audio or an end frame, wins.
+  const ltxReferencesPicked = !ltxReferencesGreyboxBlocked && scene.clipReferenceIds?.length > 0;
+  const useLtxReferences = canUseLtxReferences && (renderInputs.ltxReferences ?? ltxReferencesPicked);
+  // Exactly what Render sends: the prompt as typed and the inputs the card toggles.
+  const cardRequest = shotCardRenderRequest({ project, scene, castMedia, greybox, settings: renderSettings || {}, performance, endFramePlan,
+    models: videoModels, defaultModel: defaultVideoModel, inputs: useLtxReferences ? { ...renderInputs, songAudio: false, endFrame: false } : renderInputs, plan: timing.plan });
+  // Most Runway models cannot mix keyframes with references, so an end frame sends none there.
+  const runwayEndFrameOn = referenceBackend === 'runway' && cardRequest.endFrame?.state === 'on';
+  const endFrameBlocksReferences = runwayEndFrameOn && !!referenceModel?.referenceImages && !referenceModel.referenceImages.keepsFrames;
+  const referenceCapacity = useLtxReferences ? 8 : musicVideoClipReferenceCapacity(referenceBackend, referenceModel, { endFrame: runwayEndFrameOn });
   const guidesPending = referenceCapacity > 0 && castMedia && musicVideoSceneCastIds(project, scene).some((id) => castMedia[id] === undefined);
+  // A failed read (null) would otherwise send the clip without the member's guides.
+  const guidesFailed = referenceCapacity > 0 && castMedia && musicVideoSceneCastIds(project, scene).some((id) => castMedia[id] === null);
   const availableReferences = musicVideoClipReferenceChoices(project, scene, castMedia);
   const selectedClipReferences = musicVideoClipConditioningReferences(project, scene, castMedia, { limit: referenceCapacity });
   const referenceLabels = selectedClipReferences.map((ref) => ref.label || ref.role || 'visual reference');
@@ -237,13 +291,14 @@ export default function SceneCard({
   const greyboxRefusal = greyboxSaving ? 'Saving greybox reference…' : greybox?.error;
   const refusalInputs = {
     settingsSaving, speakerUnsaved: performance && (speakerDirty || speakerSaving),
-    referenceImageId: scene.referenceImageId, generatingVideo, performanceBlocked,
+    referenceImageId: scene.referenceImageId, performanceBlocked,
     videoBlockedReason: renderOverrides && videoBlockedReasonFor ? videoBlockedReasonFor(renderSettings) : videoBlockedReason,
   };
   const otherRefusal = videoGenerationRefusal(refusalInputs) || shotCardRequestProblem(cardRequest);
   const referenceRefusal = clipReferenceSaveState === 'saving' ? 'Saving clip references…'
     : clipReferenceSaveState === 'failed' ? 'Save the clip references before rendering'
       : guidesPending ? 'Cast guides are still loading'
+        : guidesFailed ? 'Cast guides could not be loaded'
         : missingReference ? 'A selected clip reference is unavailable'
           : useLtxReferences && ltxReferencesGreyboxBlocked ? 'Clear the greybox reference before using LTX reference images'
             : useLtxReferences && !selectedClipReferences.length ? 'Choose at least one clip reference'
@@ -263,7 +318,7 @@ export default function SceneCard({
     };
     onGenerateVideo?.(scene, { ...(renderOverrides ? { target: renderOverrides } : {}), card });
   };
-  const renderBlocked = !!videoRefusal;
+  const renderBlocked = !!videoRefusal || sendingClip;
   const generateVideo = () => {
     if (renderBlocked) return;
     sendRender();
@@ -315,13 +370,21 @@ export default function SceneCard({
         <span>Needs its own beat — this prompt was copied from the longer shot.</span>
         <button type="button" onClick={() => applyPatch({ beatNeedsReview: false })} className="min-h-[44px] rounded border border-port-border px-2 sm:min-h-0">Mark beat ready</button>
       </div>}
-      <textarea
-        aria-label="Shot prompt"
-        value={followsBoard ? boardDirection : scene.prompt || ''} rows={2}
+      <div className="flex items-center gap-1 text-[11px] text-port-text-muted">
+        <label htmlFor={fieldId('prompt')}>{layer === 'footage' ? 'Motion prompt' : 'Shot prompt'}</label>
+        <InfoTooltip label={layer === 'footage' ? 'About the motion prompt' : 'About the shot prompt'} placement="below" align="start" width={280}>
+          {layer === 'footage'
+            ? `What happens during the clip. The video model gets this text with the start frame (and end frame, if used)${fromSheet ? ', followed by the shot details' : ''}. What the still looks like is its own prompt on the Frames tab.`
+            : 'Describes the shot. The still renders from it only when its own still prompt is empty.'}
+        </InfoTooltip>
+      </div>
+      <AutoSizeTextarea
+        id={fieldId('prompt')}
+        value={followsBoard ? boardDirection : scene.prompt || ''} rows={3}
         onChange={(e) => onEditLocal(scene.sceneId, { prompt: e.target.value })}
         onBlur={(e) => onSave(scene.sceneId, { prompt: boardDirection && e.target.value.trim() === boardDirection ? '' : e.target.value })}
-        placeholder={layer === 'footage' ? 'Motion prompt: what happens in this shot' : "Shot prompt — what this scene's video should show"}
-        className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm"
+        placeholder={layer === 'footage' ? 'What happens in this shot' : 'What this shot shows'}
+        className="block w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm"
       />
       {boardDirection && (followsBoard ? (
         <p className="text-[11px] text-port-text-muted" data-testid="prompt-from-storyboard">From the storyboard panel · stays in sync</p>
@@ -354,8 +417,27 @@ export default function SceneCard({
   );
   // A timed shot's cuts move with the shot beside them; an untimed one sets its own times first.
   const cutMoves = sceneHasAuthoredSpan(scene) ? { startSec: onMoveStart, endSec: onMoveEnd } : {};
+  const detailsSummary = fromSheet
+    ? shotSheetPromptLines(project, scene).map((line) => line.label.toLowerCase()).join(', ') || 'none set'
+    : 'not in the prompts';
+  const detailsGroup = !codeShot && layer !== 'card' && (
+    <ShotEditorGroup title="Shot details" summary={detailsSummary} defaultOpen testId="shot-group-details">
+      <label htmlFor={fieldId('from-sheet')} className="flex items-center gap-1 text-xs min-h-[44px] sm:min-h-0">
+        <input id={fieldId('from-sheet')} type="checkbox" checked={fromSheet}
+          onChange={(e) => applyPatch({ shotSheet: normalizeShotSheet({ ...scene.shotSheet, promptFromSheet: e.target.checked }) })} />
+        Use these details in the prompts
+      </label>
+      <p className="text-[11px] text-port-text-muted">
+        {fromSheet
+          ? 'Each detail is added to the still prompt and the clip prompt as its own labeled part (shown under each prompt). The prompt boxes hold only what the details don\'t cover.'
+          : 'Off: this shot\'s hand-written prompts are sent as they are. To move a long prompt into these details, use Split frame prompts into details on the shot sheet.'}
+      </p>
+      <ShotSheetFields project={project} scene={scene} onChange={applyPatch} />
+    </ShotEditorGroup>
+  );
   const settingsGroups = (
     <>
+      {detailsGroup}
       <ShotEditorGroup title="Timing" summary={timingSummary} testId="shot-group-timing">
         {/* Whether the shot plays before the song (the cold open), with its own length. */}
         <PreMusicTiming fieldId={fieldId} scene={scene} onChange={applyPatch} />
@@ -395,6 +477,8 @@ export default function SceneCard({
           <SceneShotCuts timing={timing} sceneId={scene.sceneId} lipSyncBackend={renderLane} onSplit={onSplit} onMergeNext={onMergeNext} onMergePrevious={onMergePrevious}
             span={sceneHasAuthoredSpan(scene) ? { startSec: scene.startSec, endSec: scene.endSec } : null} />
         )}
+        <SceneOrderActions index={index} isLast={isLast} manifestOwnsShots={manifestOwnsShots}
+          onMove={onMove} onDelete={onDelete ? () => onDelete(scene.sceneId) : null} />
       </ShotEditorGroup>
       {preMusic && (
         <ShotEditorGroup title="Sound" summary={preMusicSoundSummary(scene.preMusic).toLowerCase()} testId="shot-group-sound">
@@ -489,25 +573,15 @@ export default function SceneCard({
   );
   return (
     <div className="min-w-0">
-    <details
-      ref={detailsRef}
-      id={`scene-${scene.sceneId}`}
-      open={expanded != null ? expanded : undefined}
-      onToggle={(e) => {
-        onToggleExpand?.(scene.sceneId, e.currentTarget.open);
-      }}
-      className="group relative rounded-lg border border-port-border bg-port-card"
-    >
-      <summary
-        onClick={() => onSeek?.(scene)}
-        className="flex min-h-[44px] cursor-pointer select-none items-center gap-3 p-2 marker:content-none flex-wrap sm:group-open:pr-72 [&::-webkit-details-marker]:hidden"
-      >
-        <ChevronRight size={14} aria-hidden="true" className="shrink-0 text-port-text-muted transition-transform group-open:rotate-90" />
-        <ScenePoster scene={scene} iconSize={14} className="aspect-video w-16 shrink-0 rounded border border-port-border sm:w-20 max-sm:group-open:hidden" />
+    <section id={`scene-${scene.sceneId}`} aria-labelledby={`scene-${scene.sceneId}-title`}>
+      {/* The drawer's header: it stays put while the editor scrolls, and sits outside the
+          locked fieldset so stepping between shots and closing always work. */}
+      <header className="port-opaque-surface sticky top-0 z-10 -mx-4 -mt-4 mb-3 flex flex-wrap items-center gap-3 border-b border-port-border px-4 py-2">
+        <ScenePoster scene={scene} iconSize={14} className="aspect-video w-20 shrink-0 rounded border border-port-border max-sm:hidden" />
         <div className="min-w-0 flex-1">
-          <div className="truncate text-sm font-medium">
+          <h2 id={`scene-${scene.sceneId}-title`} tabIndex={-1} data-shot-heading className="truncate text-base font-medium text-white focus:outline-hidden">
             {shotName || sceneShotName(scene)}
-          </div>
+          </h2>
           <div className="truncate text-[11px] text-port-text-muted">
             {typeof scene.startSec === 'number' && typeof scene.endSec === 'number'
               ? `${(scene.endSec - scene.startSec).toFixed(2)}s · ${formatTimecode(scene.startSec)}–${formatTimecode(scene.endSec)} · ${frameSpan(scene)}`
@@ -527,9 +601,25 @@ export default function SceneCard({
             </ul>
           )}
         </div>
-        {/* Render status wraps under the title on a phone instead of squeezing it. */}
+        {stepShot && (
+          <>
+            <button type="button" onClick={stepShot.prev || undefined} disabled={!stepShot.prev} aria-label="Previous shot" title="Previous shot" className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-lg border border-port-border text-port-text hover:bg-port-border disabled:opacity-40 sm:min-h-[36px] sm:min-w-[36px]">
+              <ChevronLeft size={16} aria-hidden="true" />
+            </button>
+            <button type="button" onClick={stepShot.next || undefined} disabled={!stepShot.next} aria-label="Next shot" title="Next shot" className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-lg border border-port-border text-port-text hover:bg-port-border disabled:opacity-40 sm:min-h-[36px] sm:min-w-[36px]">
+              <ChevronRight size={16} aria-hidden="true" />
+            </button>
+          </>
+        )}
+        {onClose && (
+          <button type="button" onClick={onClose} aria-label="Close shot" title="Close shot"
+            className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-lg text-gray-400 hover:bg-port-border/50 hover:text-white">
+            <X size={20} aria-hidden="true" />
+          </button>
+        )}
+        {/* Render status wraps under the title instead of squeezing it. */}
         {(generatingLane || generatingFrame || generatingVideo) && (
-          <span className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 max-sm:basis-full max-sm:pl-6">
+          <span className="flex basis-full flex-wrap items-center gap-x-3 gap-y-1">
             {generatingLane && (
               <span className="flex items-center gap-1 text-[11px] text-port-accent">
                 <Activity size={14} className="animate-spin" aria-label="Generating" />
@@ -537,36 +627,14 @@ export default function SceneCard({
               </span>
             )}
             <SceneRenderProgress kind="Frame" generating={generatingFrame} progress={frameProgress} />
-            <SceneRenderProgress kind="Video" generating={generatingVideo} progress={videoProgress} />
+            {clipJobs.map((job) => (
+              <SceneRenderProgress key={job.key} kind={job.label ? `Video (${job.label})` : 'Video'} generating
+                progress={job.running ? { progress: job.progress } : null} />
+            ))}
           </span>
         )}
-      </summary>
-      {/* The open card's shot arrows, lock and "…" menu: their own row under the title on a
-          phone, the top-right corner from sm up. A move swaps this shot with its neighbor;
-          the song timing and lyric stay with the slot. */}
-      <div className="flex items-center justify-end gap-1 px-2 pb-2 sm:absolute sm:right-2 sm:top-2 sm:z-10 sm:p-0">
-        {stepShot && (
-          <span className="mr-auto flex items-center gap-1 sm:mr-0">
-            <button type="button" onClick={stepShot.prev || undefined} disabled={!stepShot.prev} aria-label="Previous shot" title="Previous shot"
-              className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg border border-port-border text-port-text hover:bg-port-border disabled:opacity-40 sm:min-h-[32px] sm:min-w-[32px]">
-              <ChevronLeft size={16} aria-hidden="true" />
-            </button>
-            <button type="button" onClick={stepShot.next || undefined} disabled={!stepShot.next} aria-label="Next shot" title="Next shot"
-              className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg border border-port-border text-port-text hover:bg-port-border disabled:opacity-40 sm:min-h-[32px] sm:min-w-[32px]">
-              <ChevronRight size={16} aria-hidden="true" />
-            </button>
-          </span>
-        )}
-        <OverflowMenu label="Shot actions" items={[
-          { id: 'earlier', label: 'Move earlier', icon: ArrowUp, onSelect: () => onMove(index, -1), disabled: index === 0 || manifestOwnsShots },
-          { id: 'later', label: 'Move later', icon: ArrowDown, onSelect: () => onMove(index, 1), disabled: isLast || manifestOwnsShots },
-          { id: 'delete', label: 'Delete shot', icon: Trash2, tone: 'danger', onSelect: () => onDelete(scene.sceneId) },
-        ]} />
-      </div>
-      <div className="space-y-3 p-3 pt-0">
-        {manifestOwnsShots && (
-          <p className="text-[11px] text-port-text-muted">Shot order comes from the composition document, so it can&apos;t be reordered here.</p>
-        )}
+      </header>
+      <fieldset disabled={locked} className="min-w-0 space-y-3">
         {songChange && !songChange.resolved && songChange.status !== 'kept' && (
           <p className="break-words text-[11px] text-port-warning">{songChange.status === 'new' ? 'New shot for lines the revised song added.' : `Before the song revision: ${songChange.previousLyricText ? `♪ ${songChange.previousLyricText}` : 'instrumental'}`}</p>
         )}
@@ -597,14 +665,14 @@ export default function SceneCard({
         {/* Frames: the still this shot starts from and, optionally, the one it ends on (#11173),
             each with its prompt and Render under it, then the tapped frame's takes. */}
         <div hidden={view !== 'frames'}>
-        <SceneFrames project={project} castMedia={castMedia} greyboxPlaces={greyboxPlaces} greyboxSaving={greyboxSaving} onGreyboxSaving={setGreyboxSaving} scene={scene} index={index} endFrames={endFrames} generatingFrame={!!generatingFrame} generatingEndFrame={!!generatingEndFrame}
+        <SceneFrames project={project} castMedia={castMedia} onReloadCastMedia={onReloadCastMedia} greyboxPlaces={greyboxPlaces} greyboxSaving={greyboxSaving} onGreyboxSaving={setGreyboxSaving} scene={scene} index={index} endFrames={endFrames} endFrameToggle={layer === 'footage'} generatingFrame={!!generatingFrame} generatingEndFrame={!!generatingEndFrame}
           onGenerateFrame={onGenerateFrame} onGenerateEndFrame={onGenerateEndFrame} onEditLocal={onEditLocal} onSave={onSave}
           onOpenPreview={onOpenPreview} takeBusy={takeBusy} onSelectTake={onSelectTake} onReviewTake={onReviewTake}
           onSwap={onPlacePoolItem ? setSwapKind : null} onSwapFrames={onSwapFrames ? () => onSwapFrames(scene) : null} onImportTake={onImportTake}
           onContinueFromPrevious={layer === 'footage' && index > 0 ? onContinueFromPrevious : null} previousHasClip={previousHasClip}
           assetMarks={project?.assetMarks} onMarkTake={onMarkTake} onApplyCameos={onApplyCameos} />
         </div>
-        {/* Clip: the picture and its takes, Render, the motion prompt and where it renders, then other ways to get a clip. */}
+        {/* Clip: the picture and its takes, the motion prompt and where it renders, then Render and other ways to get a clip. */}
         <div hidden={view !== 'clip'}>
         <section aria-label="Render" className="min-w-0 space-y-2">
           {/* A clip, the still, or the still playing a code-drawn image effect (no model call). */}
@@ -646,30 +714,10 @@ export default function SceneCard({
               <span className="absolute right-1.5 top-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white">{scene.referenceImageId ? 'Still · no clip yet' : 'No clip yet'}</span>
             </div>
           )}
-          <SceneTakeStrip scene={scene} kind="video" busy={takeBusy} grid
+          <SceneTakeStrip scene={scene} kind="video" busy={takeBusy} grid pending={clipJobs}
             onSelect={(take) => onSelectTake?.(scene, take)}
             onReview={(take, review) => onReviewTake?.(scene, take, review)}
             onOpenPreview={onOpenPreview} marks={project?.assetMarks} onMark={onMarkTake} />
-          <div className="flex flex-wrap items-center gap-2">
-            {storyboardDefault && (
-              <SceneStoryboardClip refusal={storyboardRefusal} generatingFrame={!!generatingFrame}
-                onClip={generateStoryboardClip} onStill={onGenerateFrame ? () => onGenerateFrame(scene) : null} />
-            )}
-            {!storyboardDefault && <button onClick={generateVideo}
-              disabled={renderBlocked}
-              className={PRIMARY_BUTTON}
-              title={videoRefusal || (performance ? `${capability.style === 'music' ? "Animate this scene's frame to the song" : "Lip-sync this scene's frame to the song"} via ${capability.label} — ${performanceCost}`
-                  : "Render this shot's clip from its still")}>
-              {generatingVideo ? <Activity size={14} className="animate-spin" /> : <Video size={14} />}
-              {generatingVideo ? 'Rendering…' : `Render${scene.videoHistoryId ? ' again' : ''}`}
-            </button>}
-          </div>
-          {/* Why Render is off, on the card itself: a tooltip never shows on a phone. */}
-          {videoRefusal && videoRefusal !== performanceBlocked && !generatingVideo && layer === 'footage' && !storyboardDefault && (
-            <div className="flex flex-wrap items-center gap-2 text-[11px] text-port-warning" data-testid="render-refusal">
-              <span>{videoRefusal}</span>
-            </div>
-          )}
           {layer === 'footage' && promptField}
           {/* The camera move sits with the motion prompt and shows the text it adds to it. */}
           {layer === 'footage' && (
@@ -680,15 +728,15 @@ export default function SceneCard({
           <div className="flex flex-wrap items-center gap-2">
             <SceneRenderTarget id={fieldId('render-on')} value={renderPick} onChange={setRenderPick} performance={performance}
               options={renderOptions} onOptionsChange={setRenderOptions} scene={scene} models={videoModels} defaultModel={defaultVideoModel}
-              saved={falVideoSettings || {}} disabled={!!generatingVideo} minFrames={useLtxReferences ? 121 : null} />
+              saved={falVideoSettings || {}} minFrames={useLtxReferences ? 121 : null} />
             {renderCost && <span className="text-[11px] text-port-text-muted">{renderCost}</span>}
           </div>
           {layer === 'footage' && canUseLtxReferences && (
             <label className="flex items-center gap-2 text-xs text-port-text-muted">
-              <input type="checkbox" checked={useLtxReferences} disabled={!!generatingVideo || ltxReferencesGreyboxBlocked}
+              <input type="checkbox" checked={useLtxReferences} disabled={ltxReferencesGreyboxBlocked}
                 onChange={(event) => setRenderInputs((prev) => ({ ...prev, ltxReferences: event.target.checked,
                   ...(event.target.checked ? { songAudio: false, endFrame: false } : {}) }))} />
-              Use LTX reference images (requires Ingredients adapter; at least 121 frames)
+              Use LTX reference images (requires Ingredients adapter; at least 121 frames; no song audio or end frame)
             </label>
           )}
           {storyboardDefault && ltxReferencesAvailable && (
@@ -698,13 +746,13 @@ export default function SceneCard({
             <p className="text-xs text-port-text-muted">Clear the greybox reference to use LTX reference images.</p>
           )}
           {layer === 'footage' && <SceneClipReferences project={project} scene={scene} castMedia={castMedia}
-            backend={referenceBackend} model={referenceModel} capacityOverride={useLtxReferences ? 8 : undefined} onEditLocal={onEditLocal} onSave={onSave}
+            backend={referenceBackend} model={referenceModel} capacityOverride={useLtxReferences ? 8 : runwayEndFrameOn ? referenceCapacity : undefined} endFrameBlocksReferences={endFrameBlocksReferences} ltxReferencesOff={canUseLtxReferences && !useLtxReferences} onEditLocal={onEditLocal} onSave={onSave}
             saveState={clipReferenceSaveState} onSaveState={setClipReferenceSaveState} />}
           {timingPlan}
           {layer === 'footage' && (
             <SceneRenderInputs id={fieldId('inputs')} request={previewRequest} onChange={(patch) => setRenderInputs((prev) => ({ ...prev, ...patch,
               ...(patch.songAudio === true || patch.endFrame === true ? { ltxReferences: false } : {}) }))}
-              grokPreview={expanded && (!renderSettings?.backend || renderSettings.backend === 'grok') && project?.id && scene.referenceImageId ? {
+              grokPreview={(!renderSettings?.backend || renderSettings.backend === 'grok') && project?.id && scene.referenceImageId ? {
                 ...(renderSettings?.backend ? { backend: renderSettings.backend } : {}), prompt: cardRequest.authored, mode: 'image', sourceImageFile: scene.referenceImageId,
                 grokDuration: renderSettings?.backend === 'grok' ? grokSceneRequestDuration(scene, renderSettings, renderOverrides) : renderSettings?.grokDuration,
                 musicVideo: { projectId: project.id, sceneId: scene.sceneId, catalogBasis: project.castAndSets?.catalogCheckin?.basis, compose: true, promptAsTyped: true, ...songAudioField },
@@ -716,9 +764,20 @@ export default function SceneCard({
               {endFramePlan.used ? 'The clip ends on the end frame.' : `${endFramePlan.reason}.`}
             </p>
           )}
-          {/* Other ways to fill the shot, after Render and its settings so Render stays the one action under the takes. */}
-          {(onPlacePoolItem || onImportClipTake || (scene.videoHistoryId && canContinueShot)) && (
-          <div className="flex flex-wrap items-center gap-2" data-testid="clip-other-sources">
+          {/* Render and the other ways to fill the shot, under all its prompts and settings. */}
+          <div className="flex flex-wrap items-center gap-2" data-testid="clip-actions">
+            {storyboardDefault && (
+              <SceneStoryboardClip refusal={storyboardRefusal} generatingFrame={!!generatingFrame}
+                onClip={generateStoryboardClip} onStill={onGenerateFrame ? () => onGenerateFrame(scene) : null} />
+            )}
+            {!storyboardDefault && <button onClick={generateVideo}
+              disabled={renderBlocked}
+              className={PRIMARY_BUTTON}
+              title={videoRefusal || (performance ? `${capability.style === 'music' ? "Animate this scene's frame to the song" : "Lip-sync this scene's frame to the song"} via ${capability.label} — ${performanceCost}`
+                  : "Render this shot's clip from its still")}>
+              {sendingClip ? <Activity size={14} className="animate-spin" /> : <Video size={14} />}
+              {sendingClip ? 'Sending…' : `Render${scene.videoHistoryId || clipJobs.length ? ' again' : ''}`}
+            </button>}
             {onPlacePoolItem && (
               <button type="button" onClick={() => setSwapKind('video')} disabled={takeBusy} className={SECONDARY_BUTTON}
                 title="Pick a clip made for this video that no shot uses: this shot's other takes, other shots', or the floor">
@@ -742,7 +801,13 @@ export default function SceneCard({
               </button>
             )}
           </div>
+          {/* Why Render is off, on the card itself: a tooltip never shows on a phone. */}
+          {videoRefusal && videoRefusal !== performanceBlocked && layer === 'footage' && !storyboardDefault && (
+            <div className="flex flex-wrap items-center gap-2 text-[11px] text-port-warning" data-testid="render-refusal">
+              <span>{videoRefusal}</span>
+            </div>
           )}
+          {guidesFailed && onReloadCastMedia && layer === 'footage' && !storyboardDefault && <CastGuidesRetry onRetry={onReloadCastMedia} consequence="this clip" />}
           </>
           )}
         </section>
@@ -776,13 +841,13 @@ export default function SceneCard({
         </div>
         </div>
         </div>
-      </div>
+      </fieldset>
       {swapKind && (
         <SceneTakePicker open onClose={() => setSwapKind(null)} projectId={projectId} scene={scene} kind={swapKind}
           shotNumbers={shotNumbers} busy={takeBusy} onPlace={(pick) => onPlacePoolItem?.(scene, pick)}
           onMarked={(result) => onPoolMarked?.(projectId, result)} />
       )}
-    </details>
+    </section>
     {failure && (
       <div className="mt-1 flex items-start gap-2 rounded border border-port-error/40 bg-port-error/10 px-2 py-1 text-xs text-port-error">
         <AlertTriangle size={14} className="mt-0.5 shrink-0" aria-hidden="true" />

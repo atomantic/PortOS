@@ -13,7 +13,7 @@ export { PREFETCHED_ISSUE_CONTEXT_MAX_CHARS } from '../../lib/issueContext.js';
  * (flat); the barrel surfaces it as the `cosValidation` namespace.
  */
 import { z } from 'zod';
-import { MALFORMED_REVIEW_REASONS, REVIEW_FINISH_REASONS, MAX_REVIEW_RESPONSE_LENGTH } from './reviewerHealth.js';
+import { MALFORMED_REVIEW_REASONS, REVIEW_FINISH_REASONS, MAX_REVIEW_RESPONSE_LENGTH, CLI_REVIEW_PHASES, CLI_REVIEW_METRICS } from './reviewerHealth.js';
 import { emptyToUndefined, emptyToNull, providerRefFieldSchema, providerRefSchema } from './zodCompat.js';
 import { isPlainObject } from './objects.js';
 import { MIN_INTERVAL_MS, isValidLoopInterval } from './loopInterval.js';
@@ -270,6 +270,11 @@ export const createCosTaskSchema = z.object({
     z.boolean().optional()
   ),
   prCompletion: z.enum(PR_COMPLETION_VALUES).optional(),
+  // Absent inherits the app's `useAutoMerge` (resolveUseAutoMerge).
+  useAutoMerge: z.preprocess(
+    v => v === 'true' ? true : v === 'false' ? false : v,
+    z.boolean().optional()
+  ),
   simplify: z.preprocess(
     v => v === 'true' ? true : v === 'false' ? false : v,
     z.boolean().optional()
@@ -723,6 +728,10 @@ export const codeReviewSettingsSchema = z.object({
     failureCount: z.number().int().nonnegative().optional(),
     lastFailureAt: z.number().int().positive().optional(),
     diagnostics: z.object({
+      cli: z.object({
+        phase: z.enum(CLI_REVIEW_PHASES),
+        ...Object.fromEntries(CLI_REVIEW_METRICS.map(key => [key, z.number().int().min(0).max(2 ** 31 - 1).nullable()])),
+      }).strict().optional(),
       reason: z.enum(MALFORMED_REVIEW_REASONS),
       finishReason: z.enum(REVIEW_FINISH_REASONS),
       responseLengthChars: z.number().int().min(0).max(MAX_REVIEW_RESPONSE_LENGTH).nullable(),

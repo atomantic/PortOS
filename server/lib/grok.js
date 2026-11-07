@@ -243,6 +243,19 @@ export function extractGrokFinalMessage(streamText) {
   return message.trim();
 }
 
+/** Count observed protocol events without retaining model text in diagnostics. */
+export function grokReviewProgress(streamText) {
+  const counts = { thoughtEvents: 0, textEvents: 0, endEvents: 0 };
+  for (const line of String(streamText ?? '').split('\n')) {
+    let event;
+    try { event = JSON.parse(line); } catch { continue; }
+    if (event?.type === 'thought') counts.thoughtEvents++;
+    else if (event?.type === 'text') counts.textEvents++;
+    else if (event?.type === 'end') counts.endEvents++;
+  }
+  return counts;
+}
+
 // grok's `end.stopReason` is snake_case. The reviewer's diagnostics vocabulary
 // is the closed set in reviewerHealth.js; an unrecognized reason stays unknown.
 const GROK_STOP_REASONS = {

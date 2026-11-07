@@ -15,7 +15,7 @@ vi.mock('./codeReview.js', () => ({ getCodeReviewDefaults: async () => ({}),
   resolveReviewLoopOptions: async () => structuredClone(policy.reviews) }));
 
 import { addTask, getTaskById, updateTask } from './cosTaskStore.js';
-import { ensureReleaseSynchronization, recoverReleaseSynchronizationHandoffs, releaseTaskDispatchDisposition, validateLockedPublisherRetirement } from './releaseSynchronization.js';
+import { ensureReleaseSynchronization, recoverReleaseSynchronizationHandoffs, releaseTaskDispatchDisposition, validateLockedPublisherRetirement, validateLockedSynchronizationRetirement } from './releaseSynchronization.js';
 import { readReleaseSynchronizationOutbox, saveReleaseSynchronization } from './releaseSynchronizationStore.js';
 
 import { inlinePrLifecycleSection, buildInlineReviewLoopSection } from './promptSections/completion.js';
@@ -149,6 +149,36 @@ it('registers and rejoins a real task-store continuation with its frozen review 
   entry.obligations.retirement.evidence.publisherReview = null;
   await saveReleaseSynchronization(entry);
   expect(await validateLockedPublisherRetirement(locked)).toBe(false);
+});
+
+it('revalidates a locked synchronization checkout against its exact delivery and settled owner', async () => {
+  const identity = randomBytes(32).toString('hex');
+  const source = await addTask({ description: `Inline lock ${identity}`, app: 'example-inline-lock', metadata: { analysisType: 'do-release' } });
+  const publisher = { id: 'lock-owner', taskId: source.id, startedAt: '2026-01-01T00:00:00Z', status: 'running', metadata: {
+    workspacePath: '/example/repository', releasePublication: { status: 'verified', synchronizationHandoffVersion: 2, identity, tag: 'v1.2.3', repository: 'example/repo' } } };
+  await ensureReleaseSynchronization(publisher);
+  const entry = (await readReleaseSynchronizationOutbox()).publications[identity];
+  const target = { agentId: 'lock-owner', repoPath: '/example/repository', branch: 'codex/release-sync-lock', path: '/example/sync',
+    head: 'b'.repeat(40), checkoutIdentity: 'c'.repeat(64), createdAt: '2026-01-01T00:00:01Z' };
+  const verified = evidence => ({ status: 'verified', verifiedAt: '2026-01-01T02:00:00Z', evidence });
+  entry.obligations.synchronizationPr = verified({ branch: target.branch, headSha: target.head });
+  entry.obligations.processSettlement = verified({ checkouts: [target] });
+  entry.obligations.retirement = { status: 'blocked', blocker: 'exact-retirement-receipt-unverified', evidence: { checkouts: [target] } };
+  await saveReleaseSynchronization(entry);
+  const locked = { ...target, locked: true, lockReason: 'Active inline release synchronization owned by lock-owner' };
+  expect(await validateLockedSynchronizationRetirement(locked)).toBe(true);
+  settlement.mockResolvedValueOnce(false);
+  expect(await validateLockedSynchronizationRetirement(locked)).toBe(false);
+  expect(await validateLockedSynchronizationRetirement({ ...locked, lockReason: 'operator hold' })).toBe(false);
+  expect(await validateLockedSynchronizationRetirement({ ...locked, checkoutIdentity: 'different-generation' })).toBe(false);
+  expect(await validateLockedSynchronizationRetirement({ ...locked, locked: false })).toBe(false);
+  entry.obligations.synchronizationPr = verified({ branch: target.branch, headSha: 'f'.repeat(40) });
+  await saveReleaseSynchronization(entry);
+  expect(await validateLockedSynchronizationRetirement({ ...locked })).toBe(false);
+  entry.obligations.synchronizationPr = verified({ branch: target.branch, headSha: target.head });
+  entry.obligations.processSettlement = { status: 'pending' };
+  await saveReleaseSynchronization(entry);
+  expect(await validateLockedSynchronizationRetirement(locked)).toBe(false);
 });
 
 

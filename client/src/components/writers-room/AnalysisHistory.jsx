@@ -188,7 +188,7 @@ function FormatResult({ result, onApply }) {
         {onApply && (
           <button
             onClick={() => onApply(text)}
-            className="flex items-center gap-1 px-2 py-1 bg-port-accent text-white rounded text-[10px] hover:bg-port-accent/80"
+            className="flex items-center gap-1 px-2 py-1 bg-port-accent text-white rounded text-[10px] pointer-coarse:min-h-11 hover:bg-port-accent/80"
           >
             <Check size={10} /> Apply to draft
           </button>

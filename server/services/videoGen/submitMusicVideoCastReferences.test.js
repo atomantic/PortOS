@@ -153,6 +153,53 @@ describe('Music Video cast references at video submission', () => {
     });
   });
 
+  it('queues a Runway Seedance clip with its frame and the selected reference images', async () => {
+    m.settings.videoGen.runway = { apiKey: 'test-key' };
+    m.hostedReferences.mockResolvedValue([{ path: '/mock/images/rider.png', label: 'Rider' }]);
+    await submitVideoGenJob(body({ backend: 'runway', runwayModelId: 'seedance2_5', runwayDuration: 5 }), {});
+    expect(m.hostedReferences).toHaveBeenCalledWith(tag, 16, { excludePath: '/mock/images/still.png' });
+    expect(m.enqueue.mock.calls[0][0].params).toMatchObject({
+      sourceImagePath: '/mock/images/still.png',
+      referenceImagePaths: ['/mock/images/rider.png'],
+      clipReferenceLabels: [{ label: 'Rider' }],
+    });
+  });
+
+  it('leaves room for an end frame on a Runway model that keeps its frames', async () => {
+    m.settings.videoGen.runway = { apiKey: 'test-key' };
+    await submitVideoGenJob(body({ backend: 'runway', runwayModelId: 'klingO3_pro', runwayDuration: 5, lastImageFile: 'end.png' }), {});
+    expect(m.hostedReferences).toHaveBeenCalledWith(tag, 5, { excludePath: '/mock/images/still.png' });
+  });
+
+  describe('Runway Video Gen form picks', () => {
+    const form = (extra) => ({ prompt: 'A dancer turns', mode: 'image', sourceImageFile: 'still.png', width: 704, height: 448,
+      backend: 'runway', runwayDuration: 5, referenceImageFiles: ['one.png'], ...extra });
+    beforeEach(() => { m.settings.videoGen.runway = { apiKey: 'test-key' }; });
+
+    it('queues gallery picks with the start frame', async () => {
+      await submitVideoGenJob(form({ runwayModelId: 'seedance2_5' }), {});
+      expect(m.enqueue.mock.calls[0][0].params).toMatchObject({
+        referenceImagePaths: ['/mock/images/one.png'], clipReferenceLabels: [{ label: 'what it shows' }],
+      });
+    });
+
+    it.each([
+      ['a model that takes none', { runwayModelId: 'gen4.5' }, /takes no reference images/],
+      ['an end frame where the model cannot mix them', { runwayModelId: 'seedance2_5', lastImageFile: 'end.png' }, /cannot combine an end frame/],
+      ['more images than the model takes', { runwayModelId: 'klingO3_pro', lastImageFile: 'end.png', referenceImageFiles: Array(6).fill('one.png') }, /at most 7 images/],
+    ])('refuses %s before queueing', async (_name, extra, message) => {
+      await expect(submitVideoGenJob(form(extra), {})).rejects.toThrow(message);
+      expect(m.enqueue).not.toHaveBeenCalled();
+    });
+  });
+
+  it('sends no references on a Runway model that takes none', async () => {
+    m.settings.videoGen.runway = { apiKey: 'test-key' };
+    await submitVideoGenJob(body({ backend: 'runway', runwayModelId: 'gen4.5', runwayDuration: 5 }), {});
+    expect(m.hostedReferences).not.toHaveBeenCalled();
+    expect(m.enqueue.mock.calls[0][0].params).not.toHaveProperty('referenceImagePaths');
+  });
+
   it('does not claim extra references for a fal model that cannot accept them', async () => {
     await submitVideoGenJob(body({ backend: 'fal', falModelId: 'fal-ai/minimax/hailuo-02/standard/image-to-video', falDuration: 6 }), {});
     expect(m.hostedReferences).not.toHaveBeenCalled();

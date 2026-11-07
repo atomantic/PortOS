@@ -3,7 +3,7 @@ import ProviderModelSelector from '../ProviderModelSelector.jsx';
 import SentPromptPanel from '../media/SentPromptPanel.jsx';
 import useProviderModels from '../../hooks/useProviderModels.js';
 import { proposeMusicVideoShotSheet } from '../../services/apiMusicVideo.js';
-import { SHOT_SHEET_PROPOSE_BATCH, mergeShotSheetBackfill, normalizeShotSheet } from '../../../../server/lib/musicVideoShotSheet.js';
+import { SHOT_SHEET_PROPOSE_BATCH, mergeShotSheetBackfill, normalizeShotSheet, shotSheetDrivesPrompt } from '../../../../server/lib/musicVideoShotSheet.js';
 
 const button = 'min-h-[44px] rounded border border-port-border px-2 py-1 text-xs disabled:opacity-50 sm:min-h-0';
 const input = 'w-full min-w-0 rounded border border-port-border bg-port-bg px-1.5 py-1 text-xs';
@@ -12,8 +12,9 @@ const FIELD_LABELS = { cameraId: 'Camera', holder: 'Held by', view: 'View', loca
 const chunks = (items, size) => Array.from({ length: Math.ceil(items.length / size) }, (_, at) => items.slice(at * size, (at + 1) * size));
 
 /** One proposed backfill: only the columns still empty on the shot as it is now. */
-function BackfillReview({ item, scene, cameras }) {
+function BackfillReview({ item, scene, cameras, quiet = false }) {
   const { filled } = mergeShotSheetBackfill(scene?.shotSheet || {}, item.proposedSheet);
+  if (!filled.length && quiet) return null;
   if (!filled.length) return <p className="text-xs text-port-text-muted">You have filled these columns since, so this shot has nothing left to change.</p>;
   const show = (field, value) => (field === 'cameraId' ? cameras.find((camera) => camera.id === value)?.name || value : Array.isArray(value) ? value.join(', ') : value);
   return (
@@ -22,6 +23,21 @@ function BackfillReview({ item, scene, cameras }) {
         <div key={field} className="contents"><dt className="text-port-text-muted">{FIELD_LABELS[field] || field}</dt><dd className="break-words">{show(field, item.proposedSheet[field])}</dd></div>
       ))}
     </dl>
+  );
+}
+
+/** One proposed split: the columns it fills, and the frame prompt beside the general prompt that is left, editable. */
+function SplitReview({ item, scene, cameras, disabled, onEdit }) {
+  return (
+    <div className="min-w-0 space-y-2">
+      <BackfillReview item={item} scene={scene} cameras={cameras} quiet />
+      <div className="grid min-w-0 gap-2 text-xs sm:grid-cols-2">
+        <div className="min-w-0"><p className="font-medium">Frame prompt now</p><p className="max-h-48 overflow-y-auto whitespace-pre-wrap break-words text-port-text-muted">{scene?.framePrompt || 'None'}</p></div>
+        <label className="block min-w-0"><span className="font-medium">General prompt proposed</span>
+          <textarea aria-label={`${item.label} General prompt proposed`} rows={6} maxLength={8000} value={item.generalPrompt} disabled={disabled} onChange={(event) => onEdit(event.target.value)} className={input} />
+        </label>
+      </div>
+    </div>
   );
 }
 
@@ -41,10 +57,10 @@ function PromptReview({ item, scene, disabled, onEdit }) {
 }
 
 /**
- * AI help for the shot sheet, both ways and only on request: fill a shot's empty
- * columns from its existing prompts, or write its prompts from the sheet you
- * edited. Works on the shots currently listed. Every result is a proposal you
- * review, edit and select; nothing is saved until Apply, and Checked is yours alone.
+ * AI help for the shot sheet, only on request: fill a shot's empty columns from
+ * its existing prompts, write its prompts from the sheet you edited, or split a
+ * long frame prompt into columns and a general prompt so the still is built from the sheet. Works on the shots currently listed. Every result is a proposal you
+ * review, edit and select; nothing is saved until Apply, and Done is yours alone.
  */
 export default function ShotSheetAi({ project, rows, disabled, onApply, onApplyingChange }) {
   const llm = useProviderModels({ withEffort: true, silent: true });
@@ -66,7 +82,9 @@ export default function ShotSheetAi({ project, rows, disabled, onApply, onApplyi
 
   const backfillRows = rows.filter((row) => !row.sheet.checked);
   const promptRows = rows.filter((row) => row.sheet.checked);
-  const targets = (direction) => (direction === 'from-prompts' ? backfillRows : promptRows);
+  // Shots still rendering from a hand-written frame prompt, which a split moves onto their sheet.
+  const splitRows = rows.filter((row) => !shotSheetDrivesPrompt(row.scene) && row.scene.framePrompt?.trim());
+  const targets = (direction) => (direction === 'split' ? splitRows : direction === 'from-prompts' ? backfillRows : promptRows);
 
   const request = (direction, sceneIds, preview = false) => proposeMusicVideoShotSheet(project.id, {
     providerId: llm.selectedProviderId, model: llm.selectedModel || undefined, effort: effort || undefined, executionOptions,
@@ -96,7 +114,9 @@ export default function ShotSheetAi({ project, rows, disabled, onApply, onApplyi
       const items = [];
       for (const shot of result.shots) {
         const { label } = byId.get(shot.sceneId).scene;
-        if (direction === 'from-prompts') {
+        if (direction === 'split') {
+          items.push({ sceneId: shot.sceneId, label, selected: true, proposedSheet: shot.sheet, generalPrompt: shot.generalPrompt });
+        } else if (direction === 'from-prompts') {
           if (mergeShotSheetBackfill(sceneNow(shot.sceneId)?.shotSheet || {}, shot.sheet).filled.length) items.push({ sceneId: shot.sceneId, label, selected: true, proposedSheet: shot.sheet });
         } else {
           const { sceneId: _sceneId, ...proposed } = shot;
@@ -114,6 +134,11 @@ export default function ShotSheetAi({ project, rows, disabled, onApply, onApplyi
   const change = (sceneId, update) => setReview((current) => ({ ...current, items: current.items.map((item) => (item.sceneId === sceneId ? update(item) : item)) }));
 
   const patchFor = (item, scene) => {
+    if (review.direction === 'split') {
+      // Applying a split is what switches the shot to building its still from the sheet.
+      const { sheet } = mergeShotSheetBackfill(scene.shotSheet || {}, item.proposedSheet);
+      return { shotSheet: normalizeShotSheet({ ...sheet, promptFromSheet: true }), framePrompt: item.generalPrompt.trim() || null };
+    }
     if (review.direction !== 'from-prompts') return item.proposed;
     const { sheet, filled } = mergeShotSheetBackfill(scene.shotSheet || {}, item.proposedSheet);
     return filled.length ? { shotSheet: normalizeShotSheet(sheet) } : null;
@@ -137,7 +162,7 @@ export default function ShotSheetAi({ project, rows, disabled, onApply, onApplyi
   const noProvider = !llm.selectedProviderId;
   return (
     <section aria-label="AI help" className="min-w-0 space-y-2 rounded border border-port-border p-2">
-      <p className="text-xs text-port-text-muted">Works on the shots listed below. Nothing saves until you review it and press Apply, and AI never ticks Checked.</p>
+      <p className="text-xs text-port-text-muted">Works on the shots listed below. Nothing saves until you review it and press Apply, and AI never ticks Done.</p>
       <ProviderModelSelector providers={llm.providers} selectedProviderId={llm.selectedProviderId} selectedModel={llm.selectedModel}
         availableModels={llm.availableModels} onProviderChange={(id) => { llm.setSelectedProviderId(id); setEffort(''); setExecutionOptions({}); }} onModelChange={llm.setSelectedModel}
         effort={effort} onEffortChange={setEffort} executionOptions={executionOptions} onExecutionOptionsChange={setExecutionOptions}
@@ -145,12 +170,16 @@ export default function ShotSheetAi({ project, rows, disabled, onApply, onApplyi
       <textarea aria-label="Note for the AI" rows={2} maxLength={4000} value={instruction} onChange={(event) => setInstruction(event.target.value)} placeholder="Optional note for the AI" className={input} />
       <div className="flex flex-wrap items-center gap-2">
         <button type="button" className={button} disabled={busy || disabled || noProvider || !backfillRows.length} onClick={() => run('from-prompts')}>
-          Fill empty columns from prompts ({backfillRows.length} unchecked)
+          Fill empty columns from prompts ({backfillRows.length} not done)
         </button>
         <button type="button" className={button} disabled={busy || disabled || noProvider || !promptRows.length} onClick={() => run('to-prompts')}>
           Propose prompts from sheet ({promptRows.length} checked)
         </button>
+        <button type="button" className={button} disabled={busy || disabled || noProvider || !splitRows.length} onClick={() => run('split')}>
+          Split frame prompts into details ({splitRows.length})
+        </button>
         <button type="button" className={button} disabled={busy || !backfillRows.length} onClick={() => preview('from-prompts')}>Preview fill prompt</button>
+        <button type="button" className={button} disabled={busy || !splitRows.length} onClick={() => preview('split')}>Preview split prompt</button>
         <button type="button" className={button} disabled={busy || !promptRows.length} onClick={() => preview('to-prompts')}>Preview shot prompt</button>
         {busy && progress && (
           <>
@@ -173,7 +202,9 @@ export default function ShotSheetAi({ project, rows, disabled, onApply, onApplyi
                 <label className="flex min-h-[44px] items-center gap-1 text-xs font-medium sm:min-h-0">
                   <input type="checkbox" aria-label={`Apply ${item.label}`} checked={item.selected} disabled={applying} onChange={(event) => change(item.sceneId, (current) => ({ ...current, selected: event.target.checked }))} /> {item.label}
                 </label>
-                {review.direction === 'from-prompts'
+                {review.direction === 'split'
+                  ? <SplitReview item={item} scene={sceneNow(item.sceneId)} cameras={project.cameras || []} disabled={applying} onEdit={(value) => change(item.sceneId, (current) => ({ ...current, generalPrompt: value }))} />
+                  : review.direction === 'from-prompts'
                   ? <BackfillReview item={item} scene={sceneNow(item.sceneId)} cameras={project.cameras || []} />
                   : <PromptReview item={item} scene={sceneNow(item.sceneId)} disabled={applying} onEdit={(field, value) => change(item.sceneId, (current) => ({ ...current, proposed: { ...current.proposed, [field]: value } }))} />}
               </li>

@@ -170,6 +170,27 @@ describe('mergeScheduleAdvance', () => {
   });
 });
 
+describe('review day in the user timezone', () => {
+  // 3:50pm and 4:10pm in UTC-8: different UTC days, one local sitting.
+  const FIRST = new Date('2026-11-06T23:50:00.000Z');
+  const SECOND = new Date('2026-11-07T00:10:00.000Z');
+  const TZ = 'America/Los_Angeles';
+  const step = (prev, now, ratio, tz) => mergeScheduleAdvance(prev, advanceSchedule(prev, ratio, now), now, tz);
+
+  it('does not compound the interval across UTC midnight inside one local day', () => {
+    const first = step(undefined, FIRST, 1, TZ);
+    expect(first.intervalDays).toBe(1);
+    expect(step(first, SECOND, 1, TZ).intervalDays).toBe(1);
+    expect(step(first, SECOND, 1).intervalDays).toBe(6); // UTC default keeps old behaviour
+  });
+
+  it('still advances on a different local day and still resets on a miss', () => {
+    const first = step(undefined, FIRST, 1, TZ);
+    expect(step(first, new Date('2026-11-07T20:00:00.000Z'), 1, TZ).intervalDays).toBe(6);
+    expect(step(first, SECOND, 0, TZ).intervalDays).toBe(0);
+  });
+});
+
 describe('isScheduleDue', () => {
   it('compares nextReview against now', () => {
     expect(isScheduleDue({ nextReview: '2026-03-10T11:59:59.000Z' }, NOW)).toBe(true);

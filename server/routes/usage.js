@@ -5,12 +5,13 @@ import { refreshLocalTranscriptUsage } from '../services/claudeCodeTranscriptUsa
 import { getProviderQuotas } from '../services/providerUsage.js';
 import { getAllProviders } from '../services/providers.js';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { validateRequest, usageQuerySchema, usageMessagesSchema, usageTokensSchema, usageSessionSchema, providerUsageQuerySchema, subscriptionsUpdateSchema, subscriptionEnabledSchema, usageFleetBillingSchema, usageRollingCostQuerySchema, usagePreviewSchema, usagePreviewCancelSchema } from '../lib/validation.js';
+import { validateRequest, nativeUsageAccountsQuerySchema, nativeUsageAccountsUpdateSchema, nativeUsageCoverageQuerySchema, nativeUsageMatrixQuerySchema, nativeUsagePeerReportQuerySchema, nativeUsageRebuildSchema, usageCutoverAcquireSchema, usageCutoverEpochSchema, usageCutoverRollbackSchema, usageQuerySchema, usageMessagesSchema, usageTokensSchema, usageSessionSchema, providerUsageQuerySchema, subscriptionsUpdateSchema, subscriptionEnabledSchema, usageFleetBillingSchema, usageRollingCostQuerySchema, usagePreviewSchema, usagePreviewCancelSchema } from '../lib/validation.js';
 import { saveSubscriptionCosts, getSubscriptionSavings } from '../services/subscriptionCosts.js';
 import { getSubscriptionOverview, savePlanTiers, setSubscriptionEnabled } from '../services/subscriptions.js';
 import { getFleetUsage, getFleetClaudeCodeModels, getFleetRollingCost } from '../services/peerUsage.js';
 import { getApiBilledInstanceIds, setInstanceUsesSubscriptions } from '../services/usageFleetBilling.js';
 import { resolveUsageRange } from '../lib/usageRange.js';
+import { acquireUsageCutover, activateUsageCutover, getUsageCutoverStatus, releaseUsageCutover, rollbackUsageCutover, verifyUsageCutover } from '../services/usageCutoverBarrier.js';
 import { WAIT } from '../lib/staleWhileRevalidate.js';
 import {
   getHistoricalUsageBackfillStatus,
@@ -21,10 +22,53 @@ import {
 
 const router = Router();
 
+router.get('/native-report/v2', asyncHandler(async (req, res) => {
+  const { challenge } = validateRequest(nativeUsagePeerReportQuerySchema, req.query);
+  const { getNativeUsagePeerReport } = await import('../services/nativeUsagePeer.js');
+  res.set('Cache-Control', 'no-store').json(await getNativeUsagePeerReport(req, challenge, 2));
+}));
+
+// Keeps answering v4 record lists for peers that have not upgraded yet.
+router.get('/native-report/v1', asyncHandler(async (req, res) => {
+  const { challenge } = validateRequest(nativeUsagePeerReportQuerySchema, req.query);
+  const { getNativeUsagePeerReport } = await import('../services/nativeUsagePeer.js');
+  res.set('Cache-Control', 'no-store').json(await getNativeUsagePeerReport(req, challenge, 1));
+}));
+
+// Machine-local configuration only: no provider reads, captures or peer requests.
+router.get('/native-accounts', asyncHandler(async (req, res) => {
+  validateRequest(nativeUsageAccountsQuerySchema, req.query);
+  const { getNativeUsageAccounts } = await import('../services/nativeUsageAccounts.js');
+  res.set('Cache-Control', 'no-store').json(await getNativeUsageAccounts());
+}));
+
+router.put('/native-accounts', asyncHandler(async (req, res) => {
+  const input = validateRequest(nativeUsageAccountsUpdateSchema, req.body ?? {});
+  const { saveNativeUsageAccounts } = await import('../services/nativeUsageAccounts.js');
+  res.set('Cache-Control', 'no-store').json(await saveNativeUsageAccounts(input, { actor: 'user' }));
+}));
+
+router.get('/native-matrix', asyncHandler(async (req, res) => {
+  const query = validateRequest(nativeUsageMatrixQuerySchema, req.query);
+  const { getNativeUsageMatrix } = await import('../services/nativeUsageMatrix.js');
+  res.set('Cache-Control', 'no-store').json(await getNativeUsageMatrix(query));
+}));
+
+// Re-read every native source still on disk, for an in-place rewrite that kept size and
+// mtime. Nothing collected is removed. Answers with the read so the view updates from it.
+router.post('/native-sources/rebuild', asyncHandler(async (req, res) => {
+  const input = validateRequest(nativeUsageRebuildSchema, req.body ?? {});
+  const { requestNativeUsageRebuild } = await import('../services/nativeUsageCollection.js');
+  await requestNativeUsageRebuild();
+  const { getNativeUsageMatrix } = await import('../services/nativeUsageMatrix.js');
+  res.set('Cache-Control', 'no-store').json(await getNativeUsageMatrix(input));
+}));
+
 // Explicit, uncached diagnostic read. Never consumed by fleet aggregation.
 router.get('/native-coverage', asyncHandler(async (req, res) => {
+  const query = validateRequest(nativeUsageCoverageQuerySchema, req.query);
   const { getNativeUsageCoverage } = await import('../services/nativeUsageCoverage.js');
-  res.set('Cache-Control', 'no-store').json(await getNativeUsageCoverage());
+  res.set('Cache-Control', 'no-store').json(await getNativeUsageCoverage(query));
 }));
 
 // GET /api/usage/hourly - Fixed-size local counters, without building cost reports.
@@ -213,6 +257,31 @@ router.post('/backfill/preview/cancel', asyncHandler(async (req, res) => {
   res.json(await cancelCodexUsagePreview(jobId));
 }));
 
+// Read-only: participants, acknowledgments, outstanding work and why cutover is held.
+router.get('/cutover', asyncHandler(async (req, res) => {
+  res.set('Cache-Control', 'no-store').json(await getUsageCutoverStatus());
+}));
+
+router.post('/cutover/acquire', asyncHandler(async (req, res) => {
+  res.json(await acquireUsageCutover(validateRequest(usageCutoverAcquireSchema, req.body ?? {})));
+}));
+
+router.post('/cutover/verify', asyncHandler(async (req, res) => {
+  res.json(await verifyUsageCutover(validateRequest(usageCutoverEpochSchema, req.body ?? {})));
+}));
+
+router.post('/cutover/activate', asyncHandler(async (req, res) => {
+  res.json(await activateUsageCutover(validateRequest(usageCutoverEpochSchema, req.body ?? {})));
+}));
+
+router.post('/cutover/rollback', asyncHandler(async (req, res) => {
+  res.json(await rollbackUsageCutover(validateRequest(usageCutoverRollbackSchema, req.body ?? {})));
+}));
+
+router.post('/cutover/release', asyncHandler(async (req, res) => {
+  res.json(await releaseUsageCutover(validateRequest(usageCutoverEpochSchema, req.body ?? {})));
+}));
+
 router.post('/backfill', asyncHandler(async (req, res) => {
   res.status(202).json(await startHistoricalUsageBackfill());
 }));
@@ -220,8 +289,8 @@ router.post('/backfill', asyncHandler(async (req, res) => {
 // POST /api/usage/session - Record a session
 router.post('/session', asyncHandler(async (req, res) => {
   const { providerId, providerName, model } = validateRequest(usageSessionSchema, req.body);
-  const sessionNumber = await usage.recordSession(providerId, providerName, model);
-  res.json({ sessionNumber });
+  const recorded = await usage.recordSession(providerId, providerName, model);
+  res.json(recorded?.deferred ? { sessionNumber: null, deferred: true } : { sessionNumber: recorded });
 }));
 
 // POST /api/usage/messages - Record messages

@@ -215,7 +215,8 @@ export async function applyMusicVideoSubmissionGuards({ body, params, prepared, 
   assertShotActionContract(scene);
   const { loadMusicVideoGreybox } = await import('./greyboxReferences.js');
   const greybox = await loadMusicVideoGreybox(project, scene);
-  if (greybox && !params.referenceImagePaths?.some((p) => basename(p) === greybox.reference.imageId)) {
+  // A clip from a start frame carries no plate (greyboxReferences.js).
+  if (greybox && !body.sourceImageFile && !params.referenceImagePaths?.some((p) => basename(p) === greybox.reference.imageId)) {
     refuse(409, 'MUSIC_VIDEO_GREYBOX_CHANGED', 'The greybox capture changed while the shot was prepared. Submit again.');
   }
   const composedAdditions = await composeShotPrompt({ body, params, project, scene, prepared, performance, backend, greybox });

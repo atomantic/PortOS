@@ -71,6 +71,36 @@ describe('extractErrorFromOutput', () => {
 });
 
 describe('completeAgentRun idempotency', () => {
+  it.each([
+    ['2026-08-10T00:01:00.000Z', '2026-08-10T00:01:00.000Z', 60000],
+    ['2026-08-09T23:59:00.000Z', '2026-08-10T00:00:00.000Z', 0],
+  ])('closes a paused run stopped at %s, bills once, and stays terminal after resume', async (stoppedAt, endedAt, duration) => {
+    vi.resetModules();
+    appendRunEvent.mockClear();
+    const metadata = { id: 'run-paused', agentId: 'agent-paused', taskId: 'task-paused',
+      startTime: '2026-08-10T00:00:00.000Z', endTime: null, providerId: 'example-provider', model: 'example-model' };
+    const atomicWrite = vi.fn();
+    const recordCompletedRunUsage = vi.fn();
+    vi.doMock('../lib/fileUtils.js', async (importOriginal) => ({
+      ...(await importOriginal()), readJSONFile: vi.fn().mockResolvedValue(metadata), atomicWrite,
+    }));
+    vi.doMock('./usageReconciler.js', () => ({ recordCompletedRunUsage }));
+    const { completeAgentRun } = await import('./agentRunTracking.js');
+    const { projectRunStates } = await import('../lib/agentRunEvents.js');
+    const close = () => completeAgentRun('run-paused', 'partial output', 143, 0,
+      { category: 'interrupted', message: 'Paused execution retired for continuation' }, false, null, { endedAt: stoppedAt });
+    await close();
+    await close();
+    expect(metadata).toMatchObject({ endTime: endedAt, duration, success: false,
+      errorCategory: 'interrupted', executionInterruption: { category: 'interrupted', at: endedAt } });
+    expect(atomicWrite).toHaveBeenCalledTimes(2);
+    expect(recordCompletedRunUsage).toHaveBeenCalledExactlyOnceWith(metadata, 'partial output');
+    expect(appendRunEvent).toHaveBeenCalledTimes(1);
+    const finalized = appendRunEvent.mock.calls[0][0];
+    const resumed = { ...finalized, kind: 'run.resumed', at: '2026-08-11T00:00:00.000Z', data: {} };
+    expect(projectRunStates([resumed, finalized, resumed])[0]).toMatchObject({ status: 'failed', endedAt, durationMs: duration });
+  });
+
   it('does not rewrite an already-closed run', async () => {
     vi.resetModules();
     const atomicWrite = vi.fn();

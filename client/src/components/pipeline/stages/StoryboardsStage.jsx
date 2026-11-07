@@ -936,7 +936,7 @@ function WardrobePicker({ characters, scene, onChange }) {
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="inline-flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-gray-500 hover:text-gray-300"
+        className="inline-flex items-center gap-1.5 text-[10px] pointer-coarse:min-h-11 uppercase tracking-wider text-gray-500 hover:text-gray-300"
       >
         <Shirt size={12} />
         Wardrobe{pickCount > 0 ? ` (${pickCount})` : ''}

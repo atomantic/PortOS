@@ -52,6 +52,23 @@ it('holds Render while clip references are saving or failed and releases it afte
   expect(onSave).toHaveBeenLastCalledWith('s1', { clipReferenceIds: ['rider', 'bike'] });
 });
 
+// Uniquely catches a failed cast-guide read letting a paid clip render go out without the member's guides.
+it('holds a clip render after a failed cast-guide read and offers Retry', () => {
+  const project = { id: 'mv-1', concept: { subjects: [{ id: 'kit', kind: 'character', name: 'Kit', ingredientId: 'cat-chr-kit' }] }, visualSpec: { references: [] } };
+  const scene = { sceneId: 's1', prompt: 'Kit turns', startSec: 0, endSec: 4, referenceImageId: 'frame.png', takes: [], characterVariant: { ingredientId: 'cat-chr-kit' } };
+  const onReload = vi.fn();
+  const card = (castMedia) => <SceneCard scene={scene} project={project} castMedia={castMedia} onReloadCastMedia={onReload} index={0} expanded lipSyncBackend="grok"
+    falVideoSettings={{ backend: 'grok' }} onEditLocal={vi.fn()} onSave={vi.fn()} />;
+  const { rerender } = render(card({ 'cat-chr-kit': null }));
+  show('Clip');
+  expect(screen.getByRole('button', { name: 'Render' }).disabled).toBe(true);
+  fireEvent.click(screen.getAllByRole('button', { name: 'Retry' }).at(-1));
+  expect(onReload).toHaveBeenCalledTimes(1);
+  rerender(card({ 'cat-chr-kit': [] }));
+  expect(screen.getByRole('button', { name: 'Render' }).disabled).toBe(false);
+  expect(screen.queryByText(/Cast guides could not be loaded/)).toBeNull();
+});
+
 it('also waits for clip-reference edits before starting a storyboard-to-clip render', async () => {
   let settle;
   const onSave = vi.fn(() => new Promise((resolve) => { settle = resolve; }));
@@ -316,19 +333,26 @@ describe('move buttons (#10785)', () => {
     const onMove = vi.fn();
     const props = { scene, index: 1, isLast: false, onMove, onEditLocal: () => {}, onSave: () => {} };
     const { rerender } = render(<SceneCard {...props} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Shot actions' }));
-    expect(screen.getByRole('menuitem', { name: /Move earlier/ }).disabled).toBe(false);
-    fireEvent.click(screen.getByRole('menuitem', { name: /Move later/ }));
+    expect(screen.getByRole('button', { name: /Move earlier/ }).disabled).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: /Move later/ }));
     expect(onMove).toHaveBeenCalledWith(1, 1);
     // A Board-sourced document project still reorders; only a manifest-owned one is locked.
     rerender(<SceneCard {...props} documentComposition />);
-    fireEvent.click(screen.getByRole('button', { name: 'Shot actions' }));
-    expect(screen.getByRole('menuitem', { name: /Move earlier/ }).disabled).toBe(false);
+    expect(screen.getByRole('button', { name: /Move earlier/ }).disabled).toBe(false);
     expect(screen.queryByText(/comes from the composition document/)).toBeNull();
     rerender(<SceneCard {...props} documentComposition manifestOwnsShots />);
-    expect(screen.getByRole('menuitem', { name: /Move earlier/ }).disabled).toBe(true);
-    expect(screen.getByRole('menuitem', { name: /Move later/ }).disabled).toBe(true);
+    expect(screen.getByRole('button', { name: /Move earlier/ }).disabled).toBe(true);
+    expect(screen.getByRole('button', { name: /Move later/ }).disabled).toBe(true);
     expect(screen.getByText(/comes from the composition document/)).toBeTruthy();
+  });
+
+  it('deletes the shot only after the confirm', () => {
+    const onDelete = vi.fn();
+    render(<SceneCard scene={scene} index={0} onDelete={onDelete} onEditLocal={() => {}} onSave={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: /Delete shot/ }));
+    expect(onDelete).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: /Delete shot/ }));
+    expect(onDelete).toHaveBeenCalledWith('s1');
   });
 });
 
@@ -537,7 +561,7 @@ describe('motion prompt from the storyboard panel', () => {
         <SceneCard scene={shot} index={0} expanded project={{ id: 'mv-example', scenes: [shot] }} onEditLocal={() => {}} onSave={onSave} onGenerateVideo={onGenerateVideo} falVideoSettings={{ backend: 'local' }} />
     );
     const { rerender } = render(card(scene));
-    const box = screen.getAllByLabelText('Shot prompt').find((el) => el.value);
+    const box = screen.getAllByLabelText('Motion prompt').find((el) => el.value);
     expect(box.value).toBe('She laces her skates');
     expect(screen.getByTestId('prompt-from-storyboard')).toBeTruthy();
     // Blurring the panel's words keeps the shot linked rather than copying them.
@@ -581,7 +605,7 @@ describe('start and end frames', () => {
       onPlacePoolItem={() => {}} falVideoSettings={{ backend: 'local' }} />);
     show('Frames');
     const pair = screen.getByRole('group', { name: 'Start and end frames' });
-    expect(within(pair).getByLabelText('Reference frame prompt')).toBeTruthy();
+    expect(within(pair).getByLabelText('Start frame prompt')).toBeTruthy();
     expect(within(pair).getByLabelText('End frame prompt').value).toBe('Head thrown back');
     // Each frame swaps from the unused stills on its own, without tapping it first.
     fireEvent.click(within(pair).getByRole('button', { name: 'Swap end frame from unused' }));
@@ -1213,7 +1237,7 @@ it('passes the selected LTX character references and prompt labels from the shot
     onGenerateVideo={onGenerateVideo} videoModels={models}
     falVideoSettings={{ backend: 'local', modelId: 'ltx25_example' }} />);
   show('Clip');
-  fireEvent.click(screen.getByLabelText(/Use LTX reference images/));
+  expect(screen.getByLabelText(/Use LTX reference images/)).toBeChecked();
   fireEvent.click(screen.getByRole('button', { name: 'Show full prompt' }));
   expect(screen.getByTestId('render-inputs').querySelector('pre').textContent)
     .toContain('Reference sheet: Rider.\n\nGenerated video: The rider turns');
@@ -1224,6 +1248,48 @@ it('passes the selected LTX character references and prompt labels from the shot
     expectedClipReferenceLabels: ['Rider'],
     prompt: 'Reference sheet: Rider.\n\nGenerated video: The rider turns',
   }) }));
+});
+
+describe('LTX reference box default', () => {
+  const models = [{ id: 'ltx25_example', name: 'LTX 2.5', runtime: 'ltx25', supportedModes: ['image', 'a2v'] }];
+  const project = (scene) => ({ id: 'mv-reference', scenes: [scene], visualSpec: { references: [
+    { id: 'rider', imageId: 'rider.png', role: 'character', label: 'Rider', condition: true },
+  ] } });
+  const renderCard = (over) => {
+    const scene = { sceneId: 's1', prompt: 'The rider turns', referenceImageId: 'start.png', startSec: 0, endSec: 6, takes: [], ...over };
+    const onGenerateVideo = vi.fn();
+    render(<SceneCard scene={scene} project={project(scene)} index={0} expanded onEditLocal={vi.fn()} onSave={vi.fn()}
+      onGenerateVideo={onGenerateVideo} videoModels={models} falVideoSettings={{ backend: 'local', modelId: 'ltx25_example', generationMode: 'suppliedAudio' }} />);
+    show('Clip');
+    return onGenerateVideo;
+  };
+  const box = () => screen.getByLabelText(/Use LTX reference images/);
+
+  it('stays off for an auto cast and warns its references stay behind', () => {
+    renderCard({ frameReferenceIds: ['rider'] });
+    expect(box()).not.toBeChecked();
+    expect(screen.getByRole('status')).toHaveTextContent('These references are not sent');
+  });
+
+  it('honors unticking a picked selection and warns the references stay behind', () => {
+    const onGenerateVideo = renderCard({ clipReferenceIds: ['rider'] });
+    fireEvent.click(box());
+    expect(box()).not.toBeChecked();
+    expect(screen.getByRole('status')).toHaveTextContent('Turn on Use LTX reference images');
+    fireEvent.click(screen.getByRole('button', { name: 'Render' }));
+    expect(onGenerateVideo.mock.calls[0][1].card).toMatchObject({ expectedClipReferenceFiles: [] });
+    expect(onGenerateVideo.mock.calls[0][1].card).not.toHaveProperty('ltxReferences');
+  });
+
+  it('gives way when the director asks for song audio', () => {
+    renderCard({ clipReferenceIds: ['rider'] });
+    expect(box()).toBeChecked();
+    const song = screen.getByRole('checkbox', { name: /^song audio/i });
+    expect(song).not.toBeChecked();
+    fireEvent.click(song);
+    expect(box()).not.toBeChecked();
+    expect(song).toBeChecked();
+  });
 });
 
 it('does not offer LTX references for a storyboard clip that cannot carry them', () => {
@@ -1253,6 +1319,7 @@ it('shows the effective LTX reference clip length and refuses an empty motion pr
     falVideoSettings={{ backend: 'local', modelId: 'ltx25_example' }} />);
   show('Clip');
   fireEvent.change(screen.getByLabelText('Render on'), { target: { value: 'local' } });
+  fireEvent.click(screen.getByLabelText(/Use LTX reference images/));
   fireEvent.change(screen.getByLabelText('Clip length'), { target: { value: '73' } });
   expect(screen.getByLabelText('Clip length').value).toBe('73');
   fireEvent.click(screen.getByLabelText(/Use LTX reference images/));
@@ -1290,4 +1357,49 @@ it('lets a document shot opt out of the video look and return to inheritance', a
   fireEvent.change(screen.getByLabelText('Film look'), { target: { value: 'video' } });
   await waitFor(() => expect(onSave).toHaveBeenLastCalledWith('s1', { filmLook: null }));
   expect(screen.queryByRole('button', { name: 'Render shot' })).toBeNull();
+});
+
+// Uniquely catches a clip in flight blocking another render on the shot, or its placeholder take
+// going missing (#15128); a request still on its way holds Render so a double tap sends nothing twice.
+describe('clip renders in flight', () => {
+  it('keeps Render open while clips render and shows each as a placeholder take', () => {
+    const scene = { sceneId: 's1', prompt: 'A boat turns', referenceImageId: 'start.png', startSec: 0, endSec: 4, takes: [] };
+    const onGenerateVideo = vi.fn();
+    const props = { scene, index: 0, expanded: true, onEditLocal: vi.fn(), onSave: vi.fn(), onGenerateVideo, falVideoSettings: { backend: 'grok' }, generatingVideo: true };
+    const { rerender } = render(<SceneCard {...props} videoJobs={[
+      { key: 'r1', jobId: 'job-local', label: 'local', running: true, progress: 0.25 },
+      { key: 'r2', jobId: 'job-grok', label: 'grok', running: false, progress: null },
+    ]} />);
+    const placeholders = screen.getAllByTestId('pending-take').map((tile) => tile.textContent);
+    expect(placeholders).toEqual(['Rendering local…25%', 'Rendering grok…Queued']);
+    fireEvent.click(screen.getByRole('button', { name: 'Render again' }));
+    expect(onGenerateVideo).toHaveBeenCalledTimes(1);
+    rerender(<SceneCard {...props} videoJobs={[{ key: 'r3', jobId: null, label: 'grok', running: false, progress: null }]} />);
+    expect(screen.getByRole('button', { name: 'Sending…' })).toBeDisabled();
+  });
+});
+
+describe('shot details', () => {
+  // Catches the sheet's details being unreachable from the shot editor, an edit not saving to the shared record,
+  // the switch not saving, or the details not landing in the clip prompt.
+  it('edits the shot sheet details in place and adds them to the clip prompt when switched on', () => {
+    const onSave = vi.fn();
+    const project = { id: 'mv-1', cameras: [{ id: 'snap', name: 'Snapshot camera', kind: 'in-world' }], concept: { subjects: [{ kind: 'character', name: 'Renee' }] } };
+    function Harness() {
+      const [scene, setScene] = useState({ sceneId: 's1', startSec: 0, endSec: 4, prompt: 'they laugh', takes: [], shotSheet: { emotion: 'Playful' } });
+      return <SceneCard scene={scene} project={{ ...project, scenes: [scene] }} index={0} expanded
+        onEditLocal={(_id, patch) => setScene((current) => ({ ...current, ...patch }))} onSave={onSave} />;
+    }
+    render(<Harness />);
+    const group = screen.getByTestId('shot-group-details');
+    expect(within(group).getByRole('combobox', { name: 'Emotion' })).toHaveValue('Playful');
+    fireEvent.change(within(group).getByLabelText('Capture camera'), { target: { value: 'snap' } });
+    expect(onSave).toHaveBeenLastCalledWith('s1', { shotSheet: { emotion: 'Playful', cameraId: 'snap' } });
+    fireEvent.click(within(group).getByRole('checkbox', { name: 'Use these details in the prompts' }));
+    expect(onSave).toHaveBeenLastCalledWith('s1', { shotSheet: { emotion: 'Playful', cameraId: 'snap', promptFromSheet: true } });
+    show('Clip');
+    const inputs = screen.getByTestId('render-inputs');
+    expect(within(inputs).getByRole('button', { name: '+ Emotion' })).toBeInTheDocument();
+    expect(within(inputs).getByRole('button', { name: '+ Camera' })).toBeInTheDocument();
+  });
 });

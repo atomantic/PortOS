@@ -19,7 +19,7 @@ import { join } from 'path';
 import { getProviderById } from './providers.js';
 import { buildPrompt } from './promptService.js';
 import { DIGITAL_TWIN_DIR, generateId, now, callProviderAI, parseScorerVerdict, resolveTestPersona, parseBulletList } from './digital-twin-helpers.js';
-import { loadMeta, saveMeta, cache, CACHE_TTL_MS } from './digital-twin-meta.js';
+import { loadMeta, mutateMeta, cache, CACHE_TTL_MS } from './digital-twin-meta.js';
 import { getDigitalTwinForPrompt } from './digital-twin-context.js';
 
 export const VALUES_SUITE_FILE = 'VALUES_ALIGNMENT_SUITE.md';
@@ -134,12 +134,9 @@ export async function runValuesAlignmentTests(providerId, model, testIds = null,
     timestamp: now()
   };
 
-  // Reuse the meta loaded above — single-process, so nothing else mutated it
-  // while the dilemma loop ran (cf. the trust model in AGENTS.md).
-  if (!Array.isArray(meta.valuesTestHistory)) meta.valuesTestHistory = [];
-  meta.valuesTestHistory.unshift(historyEntry);
-  meta.valuesTestHistory = meta.valuesTestHistory.slice(0, 50); // Keep last 50 runs
-  await saveMeta(meta);
+  await mutateMeta((latest) => {
+    latest.valuesTestHistory = [historyEntry, ...(Array.isArray(latest.valuesTestHistory) ? latest.valuesTestHistory : [])].slice(0, 50); // Keep last 50 runs
+  });
 
   console.log(`🧭 Values-alignment run complete: ${aligned}/${toRun.length} aligned`);
 

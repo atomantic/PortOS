@@ -21,7 +21,7 @@ import { join } from 'path';
 import { getProviderById } from './providers.js';
 import { buildPrompt } from './promptService.js';
 import { DIGITAL_TWIN_DIR, generateId, now, callProviderAI, parseScorerVerdict, resolveTestPersona, parseBulletList } from './digital-twin-helpers.js';
-import { loadMeta, saveMeta, cache, CACHE_TTL_MS } from './digital-twin-meta.js';
+import { loadMeta, mutateMeta, cache, CACHE_TTL_MS } from './digital-twin-meta.js';
 import { getDigitalTwinForPrompt } from './digital-twin-context.js';
 
 export const MULTI_TURN_SUITE_FILE = 'MULTI_TURN_SUITE.md';
@@ -147,12 +147,9 @@ export async function runMultiTurnTests(providerId, model, testIds = null, perso
     timestamp: now()
   };
 
-  // Reuse the meta loaded above — single-process, so nothing else mutated it
-  // while the scenario loop ran (cf. the trust model in AGENTS.md).
-  if (!Array.isArray(meta.multiTurnTestHistory)) meta.multiTurnTestHistory = [];
-  meta.multiTurnTestHistory.unshift(historyEntry);
-  meta.multiTurnTestHistory = meta.multiTurnTestHistory.slice(0, 50); // Keep last 50 runs
-  await saveMeta(meta);
+  await mutateMeta((latest) => {
+    latest.multiTurnTestHistory = [historyEntry, ...(Array.isArray(latest.multiTurnTestHistory) ? latest.multiTurnTestHistory : [])].slice(0, 50); // Keep last 50 runs
+  });
 
   console.log(`💬 Multi-turn run complete: ${consistent}/${toRun.length} consistent`);
 

@@ -24,6 +24,8 @@
  * consumer — see #4102.
  */
 
+import { todayInTimezone } from './timezone.js';
+
 /** Starting ease for a never-reviewed record — the classic SM-2 default. */
 export const DEFAULT_EASE = 2.5;
 /** SM-2's ease floor: below this the interval ladder stops growing usefully. */
@@ -97,17 +99,18 @@ export function qualityToRatio(quality) {
 }
 
 /**
- * Did the previous review land on the same UTC day as `now`? The signal behind
+ * Did the previous review land on the same calendar day as `now` in `timezone`
+ * (an IANA name; UTC when omitted)? The signal behind
  * once-per-day gating (interval growth in `mergeScheduleAdvance`, and any
  * caller-side progression that should count a day of work once).
  *
  * An absent/unparseable `lastReviewed` is NOT the same day — a record with no
  * review history must never read as "already reviewed today".
  */
-export function isSameReviewDay(lastReviewed, now = new Date()) {
+export function isSameReviewDay(lastReviewed, now = new Date(), timezone = 'UTC') {
   const lastReviewedMs = Date.parse(lastReviewed ?? '');
   if (!Number.isFinite(lastReviewedMs)) return false;
-  return new Date(lastReviewedMs).toISOString().slice(0, 10) === now.toISOString().slice(0, 10);
+  return todayInTimezone(timezone, new Date(lastReviewedMs)) === todayInTimezone(timezone, now);
 }
 
 /**
@@ -153,13 +156,14 @@ export function advanceSchedule(schedule, ratio, now = new Date()) {
  * continuation only refreshes ease and `lastReviewed` — it keeps the
  * interval/nextReview already set earlier today. A miss (interval shrinks to 0)
  * always applies, so a fumbled pass still resurfaces the record immediately
- * regardless of earlier same-day success.
+ * regardless of earlier same-day success. The review day is the user's local
+ * day in `timezone`, so a sitting that crosses UTC midnight stays one day.
  */
-export function mergeScheduleAdvance(prev, advanced, now = new Date()) {
+export function mergeScheduleAdvance(prev, advanced, now = new Date(), timezone = 'UTC') {
   const prevInterval = typeof prev?.intervalDays === 'number' ? prev.intervalDays : 0;
   // Suppress compounding only when this is a same-day continuation AND the
   // interval would grow. Any shrink (a miss reset) always applies.
-  if (isSameReviewDay(prev?.lastReviewed, now) && advanced.intervalDays > prevInterval) {
+  if (isSameReviewDay(prev?.lastReviewed, now, timezone) && advanced.intervalDays > prevInterval) {
     return { ...prev, ease: advanced.ease, lastReviewed: advanced.lastReviewed };
   }
   return advanced;

@@ -21,6 +21,12 @@ describe('selectedFrameOutdated', () => {
   it('reads as current when the composed prompt contains the shot\'s text', () => {
     expect(selectedFrameOutdated(scene({ takes: [take('Style. Renee rides away at dusk, grain.')] }))).toBe(false);
   });
+  // Catches an edited shot detail going unnoticed on a still built from the sheet.
+  it('flags a sheet-built frame whose details changed since', () => {
+    const built = scene({ shotSheet: { promptFromSheet: true, emotion: 'Scared' } });
+    expect(selectedFrameOutdated({ ...built, takes: [take('Renee rides away at dusk\nEmotion: Scared.')] })).toBe(false);
+    expect(selectedFrameOutdated({ ...built, takes: [take('Renee rides away at dusk\nEmotion: Playful.')] })).toBe(true);
+  });
   // Catches an imported frame with no recorded prompt being reported as outdated.
   it('can\'t judge a frame with no recorded prompt', () => {
     expect(selectedFrameOutdated(scene({ takes: [take(null)] }))).toBe(false);

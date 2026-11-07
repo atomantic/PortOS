@@ -9,6 +9,9 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 | Doc | Covers |
 |-----|--------|
 | [CODEX_USAGE_PREVIEW.md](./CODEX_USAGE_PREVIEW.md) | Read-only bounded Codex raw/compressed/archive usage preview, deduplication and coverage limits |
+| [USAGE_CUTOVER_BARRIER.md](./USAGE_CUTOVER_BARRIER.md) | Fencing usage writers and peer sync during the native-history cutover: inventory, acquire, verify, activate, rollback and release steps, refusal conditions |
+| [USAGE_NATIVE_STAGING.md](./USAGE_NATIVE_STAGING.md) | Offline, reproducible provider/account partitions with immutable inputs, coverage and refusal gates; no live activation |
+| [USAGE_NATIVE_REHEARSAL.md](./USAGE_NATIVE_REHEARSAL.md) | Offline barrier-store backup, isolated byte-restore receipts and fail-closed preflight. |
 | [EXECUTION_OPTIONS.md](./EXECUTION_OPTIONS.md) | Capability-driven speed options, persistence, dispatch attribution and selector inventory |
 | [FLUX3_IMAGE.md](./FLUX3_IMAGE.md) | FLUX.3 Klein MLX profiles, isolated runtime, reference edits and license/access behavior |
 | [MOSS_IMAGE.md](./MOSS_IMAGE.md) | Optional pinned MOSS Swift/MLX image runtime, explicit installation, resource needs and Apple Silicon validation |
@@ -56,6 +59,7 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 | [CONTRIBUTING.md](./CONTRIBUTING.md) | Dev setup (PostgreSQL required), code conventions |
 | [LOCAL_REVIEW_LIFECYCLE.md](./LOCAL_REVIEW_LIFECYCLE.md) | Durable one-time pre-PR review, recovery and hosted-feedback continuation |
 | [PR_REVIEW_ATTRIBUTION.md](./PR_REVIEW_ATTRIBUTION.md) | Completed local reviewer model receipts and additive PR labels |
+| [CODE_REVIEW_DIAGNOSTICS.md](./CODE_REVIEW_DIAGNOSTICS.md) | Privacy-safe CLI deadline phases, process timing and a synthetic review probe |
 | [CLI_REVIEW_OUTCOMES.md](./CLI_REVIEW_OUTCOMES.md) | Reviewer tiers, provider pins and bounded, authenticated CLI health reports |
 | [SECURITY_SCANNER_RUNTIME.md](./SECURITY_SCANNER_RUNTIME.md) | Runner-owned Codex security scans, pinned execution, process cleanup and observed evidence |
 | [UX_DESIGN_GUIDE.md](./UX_DESIGN_GUIDE.md) | Admin workspace design specification: icon navigation, responsive layouts, disclosure, visual hierarchy, and redesign acceptance |

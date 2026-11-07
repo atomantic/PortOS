@@ -289,7 +289,7 @@ export function RunFeedback({ runId, current, onRate, tasteAware = false }) {
               disabled={busy}
               aria-pressed={tags.includes(tag)}
               onClick={() => toggleTag(tag)}
-              className={`rounded border px-1.5 py-0.5 text-[10px] disabled:opacity-50 ${tags.includes(tag) ? 'border-port-accent text-blue-300 bg-port-accent/15' : 'border-port-border text-gray-500'}`}
+              className={`rounded border px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 disabled:opacity-50 ${tags.includes(tag) ? 'border-port-accent text-blue-300 bg-port-accent/15' : 'border-port-border text-gray-500'}`}
             >
               {label}
             </button>

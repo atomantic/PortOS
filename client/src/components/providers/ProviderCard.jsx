@@ -301,7 +301,7 @@ export default function ProviderCard({
           <button
             onClick={() => onTest(provider.id)}
             disabled={testResult?.testing || !subscriptionReady}
-            className="px-3 py-1.5 text-sm bg-port-border hover:bg-port-border/80 text-white rounded transition-colors disabled:opacity-50"
+            className="px-3 py-1.5 pointer-coarse:min-h-11 text-sm bg-port-border hover:bg-port-border/80 text-white rounded transition-colors disabled:opacity-50"
           >
             {testResult?.testing ? 'Testing...' : 'Test'}
           </button>
@@ -312,7 +312,7 @@ export default function ProviderCard({
             <button
               onClick={() => onRefreshModels(provider.id)}
               disabled={refreshing}
-              className="px-3 py-1.5 text-sm bg-port-border hover:bg-port-border/80 text-white rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              className="px-3 py-1.5 pointer-coarse:min-h-11 text-sm bg-port-border hover:bg-port-border/80 text-white rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               title="Refresh available models"
             >
               {refreshing ? 'Refreshing...' : 'Refresh Models'}
@@ -352,14 +352,14 @@ export default function ProviderCard({
                   {mode.id === activeProviderId ? `${mode.type.toUpperCase()} default` : `Set ${mode.type.toUpperCase()} default`}
                 </button>
               )}
-              <button onClick={() => onEdit(mode)} className="px-3 py-1.5 text-sm bg-port-border text-white rounded">
+              <button onClick={() => onEdit(mode)} className="px-3 py-1.5 pointer-coarse:min-h-11 text-sm bg-port-border text-white rounded">
                 Edit {mode.type.toUpperCase()}
               </button>
             </span>
           ))}
           {!unified && <button
             onClick={() => onEdit(provider)}
-            className="px-3 py-1.5 text-sm bg-port-border hover:bg-port-border/80 text-white rounded transition-colors"
+            className="px-3 py-1.5 pointer-coarse:min-h-11 text-sm bg-port-border hover:bg-port-border/80 text-white rounded transition-colors"
           >
             Edit
           </button>}

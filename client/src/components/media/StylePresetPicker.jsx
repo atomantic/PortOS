@@ -51,7 +51,7 @@ export default function StylePresetPicker({
             type="button"
             onClick={() => onChange?.(null)}
             disabled={disabled}
-            className="text-[10px] text-gray-500 hover:text-port-error flex items-center gap-0.5 disabled:opacity-50"
+            className="text-[10px] pointer-coarse:min-h-11 text-gray-500 hover:text-port-error flex items-center gap-0.5 disabled:opacity-50"
             title="Clear style preset"
           >
             <X className="w-3 h-3" /> Clear

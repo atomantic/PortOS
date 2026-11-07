@@ -16,7 +16,7 @@ it('edits and saves each frame prompt on blur', () => {
       onEditLocal={(_id, patch) => setDraft(current => ({ ...current, ...patch }))} />;
   }
   render(<Harness />);
-  const start = screen.getByRole('textbox', { name: 'Reference frame prompt' });
+  const start = screen.getByRole('textbox', { name: 'Start frame prompt' });
   fireEvent.change(start, { target: { value: 'The door opens\ninto a garden' } });
   fireEvent.blur(start);
   expect(onSave).toHaveBeenLastCalledWith('s1', { framePrompt: 'The door opens\ninto a garden' });
@@ -103,6 +103,9 @@ describe('older Casting look (#14154)', () => {
     const { rerender } = render(<SceneFrames {...props} scene={older} index={0} endFrames />);
     expect(onGenerateFrame).not.toHaveBeenCalled();
     expect(screen.getAllByText(/Older look:/)).toHaveLength(1);
+    // The info icon is what tells a director that only Re-render swaps the selected frame.
+    fireEvent.click(screen.getByRole('button', { name: 'New take vs Re-render' }));
+    expect(screen.getByRole('tooltip').textContent).toMatch(/stays selected[\s\S]*Re-render:.*swaps it in/);
     fireEvent.click(screen.getByRole('button', { name: 'Re-render start frame' }));
     expect(onGenerateFrame).toHaveBeenCalledTimes(1);
     expect(onGenerateFrame.mock.calls[0][1]).toEqual({ referenceImageId: null, replaceSelection: true });
@@ -164,7 +167,7 @@ it('shows the selected greybox capture, inspectable figure additions and a missi
   expect(screen.getByText('Singer stands at the "rail" mark, waving')).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: 'Show full prompt' }));
   expect(screen.getByText(/Door opens[\s\S]*Singer stands/)).toBeTruthy();
-  expect(screen.getByRole('textbox', { name: 'Reference frame prompt' }).value).toBe('Door opens');
+  expect(screen.getByRole('textbox', { name: 'Still prompt' }).value).toBe('Door opens');
   rerender(<SceneFrames {...props} greyboxPlaces={{ 'cat-rink': { ...greyboxPlaces['cat-rink'], ingredient: { type: 'place', payload: { greybox: { shots: [] } } } } }} />);
   expect(screen.getByRole('alert').textContent).toMatch(/removed/);
   expect(screen.getByRole('button', { name: 'New frame take' }).disabled).toBe(true);
@@ -185,4 +188,24 @@ it('waits for a greybox selection to save and keeps the previous selection on fa
   await waitFor(() => expect(screen.getByRole('alert').textContent).toMatch(/not saved/));
   expect(onEditLocal).not.toHaveBeenCalled();
   expect(screen.getByRole('combobox', { name: 'Set' }).value).toBe('');
+});
+
+it('Use end frame off hides the end frame and keeps its selection for switching back on', () => {
+  const onSave = vi.fn();
+  function Harness() {
+    const [draft, setDraft] = useState(scene);
+    return <SceneFrames scene={draft} index={0} endFrames endFrameToggle onSave={onSave}
+      onEditLocal={(_id, patch) => setDraft(current => ({ ...current, ...patch }))} />;
+  }
+  render(<Harness />);
+  const toggle = screen.getByRole('checkbox', { name: 'Use end frame' });
+  expect(toggle.checked).toBe(true);
+  fireEvent.click(toggle);
+  expect(onSave).toHaveBeenLastCalledWith('s1', { endFrameOff: true });
+  expect(screen.queryByRole('textbox', { name: 'End frame prompt' })).toBeNull();
+  expect(screen.queryByRole('group', { name: 'Start and end frames' })).toBeNull();
+
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Use end frame' }));
+  expect(onSave).toHaveBeenLastCalledWith('s1', { endFrameOff: null });
+  expect(screen.getByRole('textbox', { name: 'End frame prompt' }).value).toBe('Door shut');
 });

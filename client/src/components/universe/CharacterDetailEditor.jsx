@@ -19,6 +19,8 @@ import {
 } from 'lucide-react';
 import { BIBLE_LIMITS as L } from '../../lib/bibleLimits';
 import { formatCount } from '../../utils/formatters';
+import { formatHeight, typicalHeightCm } from '../../../../server/lib/characterHeight.js';
+import { characterHeightStat } from '../../../../server/lib/catalogAppearance.js';
 // Shared narrative-framework definitions (#2175, #6417) — one source of truth
 // with the server store/schema and the Writers Room cast editor. An
 // unrecognized arc type is coerced to null server-side, so `''` = unset.
@@ -109,6 +111,22 @@ const SECTIONS = Object.freeze([
     ],
   },
 ]);
+
+// Height lives in the character's "Height" stat (what sheets and renders read);
+// this field edits that stat directly so it is not buried in the Stats list.
+const HEIGHT_FIELD = Object.freeze({ name: 'height', label: 'Height', max: L.STAT_VALUE_MAX, type: 'input' });
+const heightPlaceholder = (age) => {
+  const cm = typicalHeightCm(age);
+  return cm ? `${formatHeight(cm)}, typical at this age` : '5 ft 7 in (170 cm)';
+};
+function withHeightStat(stats, value) {
+  const list = Array.isArray(stats) ? stats : [];
+  const text = String(value || '').trim();
+  const at = list.findIndex((stat) => /^\s*height\s*$/i.test(String(stat?.label || '')));
+  if (!text) return at < 0 ? list : list.filter((_, i) => i !== at);
+  if (at < 0) return [...list, { label: 'Height', value: text }];
+  return list.map((stat, i) => (i === at ? { ...stat, value: text } : stat));
+}
 
 // Opposing-force axes (#1287) stay local: tagging a link as an opposing force
 // is Universe-editor-only, so the Writers Room row editor has no use for them.
@@ -367,7 +385,7 @@ function ListSectionEditor({ section, entry, onPatchList, disabled }) {
         type="button"
         onClick={addRow}
         disabled={disabled}
-        className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500 disabled:opacity-40"
+        className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500 disabled:opacity-40"
       >
         <Plus size={10} /> {section.addLabel}
       </button>
@@ -481,7 +499,7 @@ function RelationshipRow({ link, idx, others, onUpdate, onRemove, disabled }) {
       />
       <button
         type="button" onClick={toggleOpposition} disabled={disabled}
-        className={`inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded border disabled:opacity-40 ${
+        className={`inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 rounded border disabled:opacity-40 ${
           hasOpposition
             ? 'border-port-warning/50 text-port-warning hover:bg-port-warning/10'
             : 'border-port-border text-gray-400 hover:text-white hover:border-gray-500'
@@ -556,7 +574,7 @@ function RelationshipsSection({ entry, characters, onPatch, disabled }) {
       ) : (
         <button
           type="button" onClick={addLink} disabled={disabled}
-          className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500 disabled:opacity-40"
+          className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500 disabled:opacity-40"
         >
           <Plus size={10} /> Add relationship
         </button>
@@ -780,7 +798,7 @@ function VoiceCanonSection({ entry, onPatch, disabled }) {
         <button
           type="button" disabled={disabled || !newTerm || !newValue || pronunciations.length >= L.VOICE_CANON_PRONUNCIATIONS_MAX}
           onClick={addPronunciation}
-          className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500 disabled:opacity-40"
+          className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500 disabled:opacity-40"
         >
           <Plus size={10} /> Add pronunciation
         </button>
@@ -1000,19 +1018,19 @@ function VoiceProfileSection({ universeId, entry, disabled }) {
           <div className="flex flex-wrap gap-1.5">
             <button
               type="button" onClick={promotePreset} disabled={disabled || promotingPreset || !entry.voiceId}
-              className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500 disabled:opacity-40"
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500 disabled:opacity-40"
             >
               <BadgeCheck size={10} /> {approved ? 'Re-promote selected preset' : 'Promote selected preset'}
             </button>
             <button
               type="button" onClick={renderBenchmark} disabled={disabled || renderingBenchmark || !approved}
-              className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500 disabled:opacity-40"
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500 disabled:opacity-40"
             >
               {renderingBenchmark ? <Loader2 size={10} className="animate-spin" /> : <Play size={10} />} Render fixed benchmark
             </button>
             <button
               type="button" onClick={qualifyInteractive} disabled={disabled || qualifyingInteractive || !approved}
-              className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500 disabled:opacity-40"
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500 disabled:opacity-40"
             >
               {qualifyingInteractive ? <Loader2 size={10} className="animate-spin" /> : <Activity size={10} />} {playbackReady ? 'Play benchmark to qualify' : 'Qualify interactive route'}
             </button>
@@ -1329,7 +1347,7 @@ function PsychologySection({ entry, onPatch, disabled }) {
       <button
         type="button" onClick={() => onPatch?.({ psychology: null })}
         disabled={disabled || !hasProfile}
-        className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded border border-port-border text-gray-400 hover:text-port-error hover:border-port-error disabled:opacity-40"
+        className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 rounded border border-port-border text-gray-400 hover:text-port-error hover:border-port-error disabled:opacity-40"
       >
         <Trash2 size={10} /> Clear psychology profile
       </button>
@@ -1396,7 +1414,7 @@ function IdentityPackSection({ entry, onPatch, disabled }) {
       {entry.imageRefs?.length ? (
         <button
           type="button" onClick={add} disabled={disabled || assets.length >= L.IDENTITY_PACK_ASSETS_MAX}
-          className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500 disabled:opacity-40"
+          className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500 disabled:opacity-40"
         >
           <Plus size={10} /> Add reference
         </button>
@@ -1477,7 +1495,10 @@ function CharacterDetailForm({ entry, universeId = null, onPatch, onExpand, expa
                 {(disabled || saveHint) && <p className="text-xs text-gray-500">{disabled ? 'Read-only character' : saveHint}</p>}
               </div>
               {identityControls}
-              {renderFields([...SECTIONS[0].fields.slice(0, 3), SECTIONS[0].fields.find(field => field.name === 'role')])}
+              {renderFields([...SECTIONS[0].fields.slice(0, 2)])}
+              <DraftField field={{ ...HEIGHT_FIELD, placeholder: heightPlaceholder(entry.age) }} value={characterHeightStat(entry)}
+                onCommit={(value) => patchField('stats', withHeightStat(entry.stats, value))} disabled={disabled} idPrefix={entry.id} />
+              {renderFields([SECTIONS[0].fields[2], SECTIONS[0].fields.find(field => field.name === 'role')])}
             </div>
           </div>
           {listSection('stats')}

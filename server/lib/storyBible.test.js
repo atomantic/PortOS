@@ -258,6 +258,17 @@ describe('storyBible — sanitizeCharacter', () => {
     expect(sanitizePlace({ name: 'Rink' })).not.toHaveProperty('photoreal');
   });
 
+  it('keeps a place or object real-world size, and an older peer cannot strip it', () => {
+    expect(sanitizeObject({ name: 'Bike', size: ' 5 ft 8 in long, handlebars 3 ft 4 in high ' }).size).toBe('5 ft 8 in long, handlebars 3 ft 4 in high');
+    expect(sanitizePlace({ name: 'Fence line', size: 'chain-link fence 4 ft tall' }).size).toBe('chain-link fence 4 ft tall');
+    expect(sanitizeObject({ name: 'Bike' })).not.toHaveProperty('size');
+    const local = [{ id: 'obj-1', name: 'Bike', size: '5 ft 8 in long' }];
+    expect(storyBible.preserveLegacyObjectFields([{ id: 'obj-1', name: 'Bike' }], local, 20)[0].size).toBe('5 ft 8 in long');
+    expect(storyBible.preserveLegacyPlaceFields([{ id: 'obj-1', name: 'Bike' }], local, 20)[0].size).toBe('5 ft 8 in long');
+    // A current sender omitting it cleared it.
+    expect(storyBible.preserveLegacyObjectFields([{ id: 'obj-1', name: 'Bike' }], local, 21)[0]).not.toHaveProperty('size');
+  });
+
   it('extras apply identically to settings + objects', () => {
     const s = sanitizePlace({ name: 'Bubble Room', tags: ['indoor'], prompt: 'pastel lab', locked: true });
     expect(s.tags).toEqual(['indoor']);

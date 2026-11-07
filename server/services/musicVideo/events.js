@@ -52,6 +52,9 @@ import { EventEmitter } from 'events';
 //     — a final music-video render job settled and its project write landed
 //     (server-only; an autonomous run waiting on its final render finishes or
 //     fails from it).
+//   'audio-changed' → { projectId, project } — a project write changed the
+//     song (its `audioRevision`); render.js cancels this instance's render of
+//     the old song (server-only, #15154).
 //
 // The Cast & Sets check-in adds:
 //   'cast-and-sets' → { projectId, stage, project } — the check-in stage

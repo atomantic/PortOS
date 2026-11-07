@@ -4,8 +4,17 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 
-const { makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'portos-interactive-usage-' });
+const { makeProxy, cleanup, tempRoot } = mockPathsDataRoot({ prefix: 'portos-interactive-usage-' });
 vi.mock('../lib/fileUtils.js', async () => makeProxy(await vi.importActual('../lib/fileUtils.js')));
+const codexPass = vi.hoisted(() => ({ limits: undefined, afterInventory: null }));
+vi.mock('./codexUsageSources.js', async (original) => {
+  const actual = await original();
+  return { ...actual, readCodexAccountingSources: async (options) => {
+    const inventory = await actual.readCodexAccountingSources({ ...options, limits: codexPass.limits });
+    await codexPass.afterInventory?.();
+    return inventory;
+  } };
+});
 const applied = [];
 const lifecycle = vi.hoisted(() => ({ projections: [] }));
 vi.mock('./agentRunEventLog.js', () => ({
@@ -14,6 +23,21 @@ vi.mock('./agentRunEventLog.js', () => ({
 }));
 // Stand-in for usage.json's `interactiveScan`: a commit lands only when the mocked save succeeds.
 const ledger = vi.hoisted(() => ({ scan: null, failStateSave: false, failApply: false }));
+const owners = vi.hoisted(() => ({ agents: {}, unreadable: false, activeRuns: new Set() }));
+vi.mock('./cosAgentLifecycle.js', () => {
+  const AGENT_RECORD_UNREADABLE = Symbol('unreadable');
+  return {
+    AGENT_RECORD_UNREADABLE,
+    isLiveAgentRecord: (record) => Boolean(record) && record.status !== 'completed',
+    readAgentRecordOrUnreadable: async (id) => (owners.unreadable ? AGENT_RECORD_UNREADABLE : owners.agents[id] ?? null)
+  };
+});
+// Only live registry observations are synthetic; boot recovery uses the real
+// metadata configuration and finalizer below to release deferred usage.
+vi.mock('./runner.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  isRunActive: async (id) => owners.activeRuns.has(id)
+}));
 vi.mock('./usage.js', () => ({
   applyHistoricalUsageCorrections: vi.fn(async (corrections, { interactiveScan = null } = {}) => {
     if (ledger.failApply) throw new Error('simulated correction write failure');
@@ -66,9 +90,14 @@ describe('refreshInteractiveUsage', () => {
   beforeEach(async () => {
     applied.length = 0;
     lifecycle.projections = [];
+    owners.agents = {};
+    owners.unreadable = false;
+    owners.activeRuns = new Set();
     ledger.scan = null;
     ledger.failStateSave = false;
     ledger.failApply = false;
+    codexPass.limits = undefined;
+    codexPass.afterInventory = null;
     home = await mkdtemp(join(tmpdir(), 'interactive-home-'));
     runsDir = await mkdtemp(join(tmpdir(), 'interactive-runs-'));
     await rm(INTERACTIVE_SCAN_FILE, { force: true });
@@ -118,6 +147,51 @@ describe('refreshInteractiveUsage', () => {
     expect(applied).toEqual([]);
   });
 
+  const writeArchivedRollouts = async (names) => {
+    const archive = join(home, '.codex', 'archived_sessions');
+    await mkdir(archive, { recursive: true });
+    for (const name of names) {
+      await writeFile(join(archive, `${name}.jsonl`), [
+        JSON.stringify({ type: 'session_meta', payload: { id: `session-${name}`, cwd: CWD, model: 'example-codex-model' } }),
+        JSON.stringify({ timestamp: new Date(P1).toISOString(), payload: { type: 'token_count', info: { total_token_usage: { input_tokens: 100, output_tokens: 50 } } } })
+      ].join('\n'));
+    }
+  };
+
+  it('indexes a Codex backlog across scans as progress, holding only its watermark until every source is read', async () => {
+    await writeArchivedRollouts(['backlog-one', 'backlog-two']);
+    codexPass.limits = { coldFiles: 1 };
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const log = vi.spyOn(console, 'log');
+    const held = await refreshInteractiveUsage({ home, runsDir, providers: [CODEX, GROK], now: NOW });
+    expect(held.families.codex).toMatchObject({ held: true, issues: { indexing_pending: 1 } });
+    expect(held.families.grok).toBeDefined();
+    expect(ledger.scan.watermarks.codex).toBeUndefined();
+    expect(ledger.scan.codexCoverage).toMatchObject({ issues: { indexing_pending: 1 }, progress: { indexed: 1, total: 2 }, sources: [] });
+    expect(applied.filter((correction) => correction.providerId === CODEX.id)).toEqual([]);
+    const lines = log.mock.calls.map(([message]) => String(message)).filter((message) => message.includes('holding Codex'));
+    expect(lines).toEqual([expect.stringContaining('indexing_pending=1 (1 of 2 sources indexed)')]);
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+    log.mockRestore();
+
+    expect((await refreshInteractiveUsage({ home, runsDir, providers: [CODEX], now: NOW + 1 })).families.codex.tokens).toBe(300);
+    expect(ledger.scan.codexCoverage).toBeNull();
+    expect(ledger.scan.watermarks.codex).toBeDefined();
+  });
+
+  it('holds the Codex watermark when a projection vanishes before it is parsed, then bills it once', async () => {
+    await writeArchivedRollouts(['vanishing']);
+    codexPass.afterInventory = () => rm(join(tempRoot, 'cache', 'codex-usage-inventory'), { recursive: true, force: true });
+    const held = await refreshInteractiveUsage({ home, runsDir, providers: [CODEX, GROK], now: NOW });
+    expect(held.families.codex).toMatchObject({ held: true, issues: { source_changed: 1 } });
+    expect(held.families.grok).toBeDefined();
+    expect(ledger.scan.watermarks.codex).toBeUndefined();
+    expect(applied.filter((correction) => correction.providerId === CODEX.id)).toEqual([]);
+    codexPass.afterInventory = null;
+    expect((await refreshInteractiveUsage({ home, runsDir, providers: [CODEX], now: NOW + 1 })).families.codex.tokens).toBe(150);
+  });
+
   it('replays deferred archived Codex records after lifecycle resolution without rebilling', async () => {
     const archive = join(home, '.codex', 'archived_sessions');
     await mkdir(archive, { recursive: true });
@@ -139,6 +213,32 @@ describe('refreshInteractiveUsage', () => {
     const recovered = await refreshInteractiveUsage({ ...args, now: NOW + 60_000 });
     expect(recovered.families.codex.tokens).toBe(150);
     expect(ledger.scan.deferred.codex).toEqual([]);
+    applied.length = 0;
+    await refreshInteractiveUsage({ ...args, now: NOW + 120_000 });
+    expect(applied).toEqual([]);
+  });
+
+  it('replays held standalone usage once after boot observes an interrupted in-process run end', async () => {
+    const { setAIToolkit } = await import('./runner.js');
+    const { recoverInterruptedRuns } = await import('./interruptedRunRecovery.js');
+    await rm(runsDir, { recursive: true, force: true });
+    runsDir = join(home, 'runs');
+    const runDir = join(runsDir, 'interrupted');
+    await mkdir(runDir, { recursive: true });
+    await writeFile(join(runDir, 'metadata.json'), JSON.stringify({
+      id: 'interrupted', workspacePath: CWD, startTime: new Date(P1 - 60_000).toISOString(), endTime: null,
+      executionOwner: { id: 'previous-server', pid: 123456, startedAt: new Date(P1 - HOUR).toISOString() },
+      executionKind: 'cli', executionChild: { pid: 123457, startedAt: new Date(P1 - 60_000).toISOString() }
+    }));
+    const args = { home, runsDir, providers: [GROK], now: NOW };
+    await refreshInteractiveUsage(args);
+    expect(applied).toEqual([]);
+    expect(ledger.scan.deferred.grok.length).toBeGreaterThan(0);
+    setAIToolkit({ services: {} }, { dataDir: home });
+    await recoverInterruptedRuns({ isDead: () => true, now: () => P1 + 60_000 });
+    const result = await refreshInteractiveUsage({ ...args, now: NOW + 60_000 });
+    expect(result.families.grok.tokens).toBe(800 + 200 + 900 + 400);
+    expect(ledger.scan.deferred.grok).toEqual([]);
     applied.length = 0;
     await refreshInteractiveUsage({ ...args, now: NOW + 120_000 });
     expect(applied).toEqual([]);
@@ -180,6 +280,68 @@ describe('refreshInteractiveUsage', () => {
     expect(summary.unresolved).toEqual([]);
     expect(summary.families.grok.tokens).toBe(800 + 200 + 900 + 400);
     expect(JSON.parse(await readFile(join(runDir, 'metadata.json'), 'utf8'))).toEqual(metadata);
+  });
+
+  describe('an open run with no ledger verdict', () => {
+    const AFTER_P1 = new Date(P1 + 60_000).toISOString();
+    const LATER = new Date(P2 + 60_000).toISOString();
+    const writeOpenRun = async () => {
+      const runDir = join(runsDir, 'open-run');
+      await mkdir(runDir, { recursive: true });
+      const metadata = { id: 'open-run', agentId: 'agent-a', workspacePath: CWD, startTime: new Date(P1 - 60_000).toISOString(), endTime: null };
+      await writeFile(join(runDir, 'metadata.json'), JSON.stringify(metadata));
+      return { runDir, metadata };
+    };
+    const ownAgent = (fields) => ({ id: 'agent-a', metadata: { runId: 'open-run' }, ...fields });
+    // A resume appends run.resumed, which folds to `running`, then completes the agent without closing the run.
+    const resumedLedger = [{ id: 'open-run', status: 'running' }];
+
+    it.each([
+      ['a resumed agent, at its pause', resumedLedger, ownAgent({ status: 'completed', pausedAt: AFTER_P1, completedAt: LATER })],
+      ['a completed agent', resumedLedger, ownAgent({ status: 'completed', completedAt: AFTER_P1 })],
+      ['a paused agent', [{ id: 'open-run', status: 'paused', lastEventAt: AFTER_P1 }], ownAgent({ status: 'paused', pausedAt: AFTER_P1 })],
+      ['a ledger pause with its agent record gone', [{ id: 'open-run', status: 'paused', lastEventAt: AFTER_P1 }], null],
+      ['an agent that never recorded its run id', resumedLedger, { id: 'agent-a', metadata: {}, status: 'completed', completedAt: AFTER_P1 }]
+    ])('is bounded by %s, leaving its record untouched', async (_name, projections, agent) => {
+      const { runDir, metadata } = await writeOpenRun();
+      lifecycle.projections = projections;
+      if (agent) owners.agents['agent-a'] = agent;
+      const summary = await refreshInteractiveUsage({ home, runsDir, providers: [GROK], now: NOW });
+      expect(summary.unresolved).toEqual([]);
+      // p1 is inside the bounded window; p2 and p3 are the standalone usage it used to hide.
+      expect(summary.families.grok.tokens).toBe(800 + 200 + 900 + 400);
+      expect(JSON.parse(await readFile(join(runDir, 'metadata.json'), 'utf8'))).toEqual(metadata);
+    });
+
+    it.each([
+      ['an agent still running', () => { owners.agents['agent-a'] = ownAgent({ status: 'running' }); }, 'running'],
+      ['a live in-memory run with no agent', () => { owners.activeRuns.add('open-run'); }, 'running'],
+      ['no record anywhere', () => {}, 'unknown'],
+      ['an unreadable agent store', () => { owners.unreadable = true; }, 'unknown'],
+      ['a completed agent that names another run', () => { owners.agents['agent-a'] = { ...ownAgent({ status: 'completed', completedAt: AFTER_P1 }), metadata: { runId: 'other-run' } }; }, 'unknown'],
+      ['an agent end before the run began', () => { owners.agents['agent-a'] = ownAgent({ status: 'completed', completedAt: new Date(P1 - 120_000).toISOString() }); }, 'unknown']
+    ])('stays held and recoverable with %s', async (_name, arrange, expected) => {
+      await writeOpenRun();
+      arrange();
+      const summary = await refreshInteractiveUsage({ home, runsDir, providers: [GROK], now: NOW });
+      expect(applied).toEqual([]);
+      expect(summary.unresolved).toMatchObject([{ runId: 'open-run', lifecycle: expected }]);
+      expect(ledger.scan.unresolved).toMatchObject([{ runId: 'open-run', lifecycle: expected }]);
+      expect(ledger.scan.deferred.grok.length).toBeGreaterThan(0);
+    });
+
+    it('replays what it held once the agent record proves the end, exactly once', async () => {
+      await writeOpenRun();
+      await refreshInteractiveUsage({ home, runsDir, providers: [GROK], now: NOW });
+      expect(applied).toEqual([]);
+      owners.agents['agent-a'] = ownAgent({ status: 'completed', completedAt: AFTER_P1 });
+      const recovered = await refreshInteractiveUsage({ home, runsDir, providers: [GROK], now: NOW + 60_000 });
+      expect(recovered.families.grok.tokens).toBe(800 + 200 + 900 + 400);
+      expect(ledger.scan.deferred.grok).toEqual([]);
+      applied.length = 0;
+      await refreshInteractiveUsage({ home, runsDir, providers: [GROK], now: NOW + 120_000 });
+      expect(applied).toEqual([]);
+    });
   });
 
   it('retains active and unknown coverage, then retries only the unbilled suffix after lifecycle resolution', async () => {

@@ -23,12 +23,17 @@ export { MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT };
 export const MUSIC_VIDEO_GROK_CLIP_REFERENCE_LIMIT = 7;
 
 /** Extra image slots beside the selected source frame for a video render. */
-export function musicVideoClipReferenceCapacity(backend, model = null) {
+export function musicVideoClipReferenceCapacity(backend, model = null, { endFrame = false } = {}) {
   if (backend === 'grok') return MUSIC_VIDEO_GROK_CLIP_REFERENCE_LIMIT;
   if (backend === 'gemini') return GEMINI_WEB_CLIP_REFERENCE_LIMIT;
   if (backend === 'fal') {
     const max = Number(model?.referenceImages?.max) || 0;
     return Math.max(0, Math.min(MUSIC_VIDEO_MAX_REFERENCE_CHOICES, max - (model?.image ? 0 : 1)));
+  }
+  if (backend === 'runway') {
+    // An end frame takes a slot where the model keeps frames, and rules references out where it cannot mix them.
+    if (endFrame && !model?.referenceImages?.keepsFrames) return 0;
+    return Math.max(0, Math.min(MUSIC_VIDEO_MAX_REFERENCE_CHOICES, (Number(model?.referenceImages?.max) || 0) - (endFrame ? 2 : 1)));
   }
   if (backend === 'local') {
     const images = Number(model?.maxReferenceImages) || 0;
@@ -276,6 +281,7 @@ export function musicVideoCastGuideReferences(project, scene, castMedia) {
         role: 'character',
         label: `${name}${detail ? ` · ${detail}` : ''}`.slice(0, 120),
         castGuide: true,
+        ingredientId: variant.ingredientId,
       };
     });
 }
@@ -328,6 +334,7 @@ export function musicVideoLinkedCastReferences(project, castMedia) {
         // Only a cast member's images are recorded as cast guides on the take.
         ...(kind.role === 'character' ? { castGuide: true } : {}),
         linkedCast: true,
+        subjectId: subject.id,
       }));
   }).filter((ref) => !isLegacyCatalogReference(project, ref));
 }

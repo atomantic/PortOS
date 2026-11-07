@@ -161,6 +161,9 @@ describe('HOST_CONTROL_ROUTES (#8716)', () => {
     expect(isHostControlRoute('GET', '/api/html-composition/toolkit')).toBe(false);
     // Render runs the headless composition browser and ffmpeg (#13055).
     expect(isHostControlRoute('POST', '/api/html-composition/render')).toBe(true);
+    // Shot render launches a Vite build and headless Chromium; capture only saves a PNG (#15182).
+    expect(isHostControlRoute('POST', '/api/catalog/ingredients/ing-1/greybox/shots/shot-1/render')).toBe(true);
+    expect(isHostControlRoute('POST', '/api/catalog/ingredients/ing-1/greybox/shots/shot-1/capture')).toBe(false);
     expect(isHostControlRoute('POST', '/api/git/status')).toBe(true);
     for (const suffix of ['//', '////']) {
       expect(hostControlRouteFor('post', '/API/Runs' + suffix)).toBe('POST /api/runs');

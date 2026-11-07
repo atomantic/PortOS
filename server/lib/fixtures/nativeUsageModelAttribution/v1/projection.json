@@ -1,0 +1,135 @@
+{
+  "fixtureVersion": 1,
+  "status": "proposal-not-production",
+  "syntheticOnly": true,
+  "claude": [
+    {
+      "name": "an index names a label in the sorted dictionary",
+      "accept": true,
+      "projection": { "version": 2, "identityScheme": "sha256-native-record/1", "truncated": false, "modelLabels": ["example-model-alpha"], "records": [{ "recordKey": "378033416cbbdcba4ac89367e6cf2b72f9d49cb689b6215181c671e8f03e5169", "requestKey": "3ab97737bcaea19fa367baa440b28e9f28b69faffbd6681ca01c2b17807a6be5", "values": [10, 20, 3, 7], "final": true, "conflict": false, "inconsistent": false, "at": "2026-03-01T00:00:01.000Z", "model": 0 }] }
+    },
+    {
+      "name": "a reason stands in for a label",
+      "accept": true,
+      "projection": { "version": 2, "identityScheme": "sha256-native-record/1", "truncated": false, "modelLabels": [], "records": [{ "recordKey": "378033416cbbdcba4ac89367e6cf2b72f9d49cb689b6215181c671e8f03e5169", "requestKey": "3ab97737bcaea19fa367baa440b28e9f28b69faffbd6681ca01c2b17807a6be5", "values": [10, 20, 3, 7], "final": true, "conflict": false, "inconsistent": false, "at": "2026-03-01T00:00:01.000Z", "model": "model-conflict" }] }
+    },
+    {
+      "name": "a version 1 projection stays valid with no model field",
+      "accept": true,
+      "projection": { "version": 1, "identityScheme": "sha256-native-record/1", "truncated": false, "records": [{ "recordKey": "378033416cbbdcba4ac89367e6cf2b72f9d49cb689b6215181c671e8f03e5169", "requestKey": "3ab97737bcaea19fa367baa440b28e9f28b69faffbd6681ca01c2b17807a6be5", "values": [10, 20, 3, 7], "final": true, "conflict": false, "inconsistent": false, "at": "2026-03-01T00:00:01.000Z" }] }
+    },
+    {
+      "name": "a version 1 projection cannot smuggle a model",
+      "accept": false,
+      "reason": "fields-not-exact",
+      "projection": { "version": 1, "identityScheme": "sha256-native-record/1", "truncated": false, "modelLabels": ["example-model-alpha"], "records": [{ "recordKey": "378033416cbbdcba4ac89367e6cf2b72f9d49cb689b6215181c671e8f03e5169", "requestKey": "3ab97737bcaea19fa367baa440b28e9f28b69faffbd6681ca01c2b17807a6be5", "values": [10, 20, 3, 7], "final": true, "conflict": false, "inconsistent": false, "at": "2026-03-01T00:00:01.000Z", "model": 0 }] }
+    },
+    {
+      "name": "a raw label cannot replace the dictionary index",
+      "accept": false,
+      "reason": "invalid-model-token",
+      "projection": { "version": 2, "identityScheme": "sha256-native-record/1", "truncated": false, "modelLabels": ["example-model-alpha"], "records": [{ "recordKey": "378033416cbbdcba4ac89367e6cf2b72f9d49cb689b6215181c671e8f03e5169", "requestKey": "3ab97737bcaea19fa367baa440b28e9f28b69faffbd6681ca01c2b17807a6be5", "values": [10, 20, 3, 7], "final": true, "conflict": false, "inconsistent": false, "at": "2026-03-01T00:00:01.000Z", "model": "example-model-alpha" }] }
+    },
+    {
+      "name": "an extra free-text field is refused",
+      "accept": false,
+      "reason": "fields-not-exact",
+      "projection": { "version": 2, "identityScheme": "sha256-native-record/1", "truncated": false, "modelLabels": ["example-model-alpha"], "records": [{ "recordKey": "378033416cbbdcba4ac89367e6cf2b72f9d49cb689b6215181c671e8f03e5169", "requestKey": "3ab97737bcaea19fa367baa440b28e9f28b69faffbd6681ca01c2b17807a6be5", "values": [10, 20, 3, 7], "final": true, "conflict": false, "inconsistent": false, "at": "2026-03-01T00:00:01.000Z", "model": 0, "modelText": "example" }] }
+    },
+    {
+      "name": "a duplicate label is refused",
+      "accept": false,
+      "reason": "labels-not-canonical",
+      "projection": { "version": 2, "identityScheme": "sha256-native-record/1", "truncated": false, "modelLabels": ["example-model-alpha", "example-model-alpha"], "records": [{ "recordKey": "378033416cbbdcba4ac89367e6cf2b72f9d49cb689b6215181c671e8f03e5169", "requestKey": "3ab97737bcaea19fa367baa440b28e9f28b69faffbd6681ca01c2b17807a6be5", "values": [10, 20, 3, 7], "final": true, "conflict": false, "inconsistent": false, "at": "2026-03-01T00:00:01.000Z", "model": 0 }] }
+    },
+    {
+      "name": "an unsorted dictionary is refused",
+      "accept": false,
+      "reason": "labels-not-canonical",
+      "projection": {
+        "version": 2,
+        "identityScheme": "sha256-native-record/1",
+        "truncated": false,
+        "modelLabels": ["example-model-beta", "example-model-alpha"],
+        "records": [{ "recordKey": "378033416cbbdcba4ac89367e6cf2b72f9d49cb689b6215181c671e8f03e5169", "requestKey": "3ab97737bcaea19fa367baa440b28e9f28b69faffbd6681ca01c2b17807a6be5", "values": [10, 20, 3, 7], "final": true, "conflict": false, "inconsistent": false, "at": "2026-03-01T00:00:01.000Z", "model": 0 }, { "recordKey": "21d6d547dc5290f61819cce76392ffa00cfb6ac2c468915aacb26966704811b5", "requestKey": "3ab97737bcaea19fa367baa440b28e9f28b69faffbd6681ca01c2b17807a6be5", "values": [10, 20, 3, 7], "final": true, "conflict": false, "inconsistent": false, "at": "2026-03-01T00:00:01.000Z", "model": 1 }]
+      }
+    },
+    {
+      "name": "a label no record uses is refused",
+      "accept": false,
+      "reason": "labels-not-canonical",
+      "projection": { "version": 2, "identityScheme": "sha256-native-record/1", "truncated": false, "modelLabels": ["example-model-alpha", "example-model-beta"], "records": [{ "recordKey": "378033416cbbdcba4ac89367e6cf2b72f9d49cb689b6215181c671e8f03e5169", "requestKey": "3ab97737bcaea19fa367baa440b28e9f28b69faffbd6681ca01c2b17807a6be5", "values": [10, 20, 3, 7], "final": true, "conflict": false, "inconsistent": false, "at": "2026-03-01T00:00:01.000Z", "model": 0 }] }
+    },
+    {
+      "name": "an index outside the dictionary is refused",
+      "accept": false,
+      "reason": "label-index-out-of-range",
+      "projection": { "version": 2, "identityScheme": "sha256-native-record/1", "truncated": false, "modelLabels": ["example-model-alpha"], "records": [{ "recordKey": "378033416cbbdcba4ac89367e6cf2b72f9d49cb689b6215181c671e8f03e5169", "requestKey": "3ab97737bcaea19fa367baa440b28e9f28b69faffbd6681ca01c2b17807a6be5", "values": [10, 20, 3, 7], "final": true, "conflict": false, "inconsistent": false, "at": "2026-03-01T00:00:01.000Z", "model": 1 }] }
+    },
+    {
+      "name": "a label outside the grammar is refused",
+      "accept": false,
+      "reason": "invalid-label",
+      "projection": { "version": 2, "identityScheme": "sha256-native-record/1", "truncated": false, "modelLabels": ["../private/example-model"], "records": [{ "recordKey": "378033416cbbdcba4ac89367e6cf2b72f9d49cb689b6215181c671e8f03e5169", "requestKey": "3ab97737bcaea19fa367baa440b28e9f28b69faffbd6681ca01c2b17807a6be5", "values": [10, 20, 3, 7], "final": true, "conflict": false, "inconsistent": false, "at": "2026-03-01T00:00:01.000Z", "model": 0 }] }
+    },
+    {
+      "name": "an old-report reason cannot appear inside a new projection",
+      "accept": false,
+      "reason": "invalid-model-token",
+      "projection": { "version": 2, "identityScheme": "sha256-native-record/1", "truncated": false, "modelLabels": [], "records": [{ "recordKey": "378033416cbbdcba4ac89367e6cf2b72f9d49cb689b6215181c671e8f03e5169", "requestKey": "3ab97737bcaea19fa367baa440b28e9f28b69faffbd6681ca01c2b17807a6be5", "values": [10, 20, 3, 7], "final": true, "conflict": false, "inconsistent": false, "at": "2026-03-01T00:00:01.000Z", "model": "report-without-model-capability" }] }
+    }
+  ],
+  "grok": [
+    {
+      "name": "rows sorted by dictionary index reconcile with the record",
+      "accept": true,
+      "projection": { "version": 2, "identityScheme": "sha256-grok-session-turn/1", "truncated": false, "modelLabels": ["example-grok-large", "example-grok-small"], "records": [{ "recordKey": "378033416cbbdcba4ac89367e6cf2b72f9d49cb689b6215181c671e8f03e5169", "values": [130, 30, 70, 0, 6, 160, 3], "costUsdTicks": null, "costConflict": false, "conflict": false, "inconsistent": false, "at": "2026-03-01T00:00:01.000Z", "incomplete": false, "model": [[0, 100, 20, 60, 0, 5, 120, 2], [1, 30, 10, 10, 0, 1, 40, 1]] }] }
+    },
+    {
+      "name": "a reason stands in for rows",
+      "accept": true,
+      "projection": { "version": 2, "identityScheme": "sha256-grok-session-turn/1", "truncated": false, "modelLabels": [], "records": [{ "recordKey": "378033416cbbdcba4ac89367e6cf2b72f9d49cb689b6215181c671e8f03e5169", "values": [130, 30, 70, 0, 6, 160, 3], "costUsdTicks": null, "costConflict": false, "conflict": false, "inconsistent": false, "at": "2026-03-01T00:00:01.000Z", "incomplete": false, "model": "model-sum-mismatch" }] }
+    },
+    {
+      "name": "a version 1 projection stays valid with no model field",
+      "accept": true,
+      "projection": { "version": 1, "identityScheme": "sha256-grok-session-turn/1", "truncated": false, "records": [{ "recordKey": "378033416cbbdcba4ac89367e6cf2b72f9d49cb689b6215181c671e8f03e5169", "values": [130, 30, 70, 0, 6, 160, 3], "costUsdTicks": null, "costConflict": false, "conflict": false, "inconsistent": false, "at": "2026-03-01T00:00:01.000Z" }] }
+    },
+    {
+      "name": "rows out of order are refused",
+      "accept": false,
+      "reason": "rows-not-canonical",
+      "projection": { "version": 2, "identityScheme": "sha256-grok-session-turn/1", "truncated": false, "modelLabels": ["example-grok-large", "example-grok-small"], "records": [{ "recordKey": "378033416cbbdcba4ac89367e6cf2b72f9d49cb689b6215181c671e8f03e5169", "values": [130, 30, 70, 0, 6, 160, 3], "costUsdTicks": null, "costConflict": false, "conflict": false, "inconsistent": false, "at": "2026-03-01T00:00:01.000Z", "incomplete": false, "model": [[1, 30, 10, 10, 0, 1, 40, 1], [0, 100, 20, 60, 0, 5, 120, 2]] }] }
+    },
+    {
+      "name": "a duplicate row label is refused",
+      "accept": false,
+      "reason": "rows-not-canonical",
+      "projection": { "version": 2, "identityScheme": "sha256-grok-session-turn/1", "truncated": false, "modelLabels": ["example-grok-large"], "records": [{ "recordKey": "378033416cbbdcba4ac89367e6cf2b72f9d49cb689b6215181c671e8f03e5169", "values": [130, 30, 70, 0, 6, 160, 3], "costUsdTicks": null, "costConflict": false, "conflict": false, "inconsistent": false, "at": "2026-03-01T00:00:01.000Z", "incomplete": false, "model": [[0, 100, 20, 60, 0, 5, 120, 2], [0, 30, 10, 10, 0, 1, 40, 1]] }] }
+    },
+    {
+      "name": "rows that do not sum to the record are refused",
+      "accept": false,
+      "reason": "rows-do-not-reconcile",
+      "projection": { "version": 2, "identityScheme": "sha256-grok-session-turn/1", "truncated": false, "modelLabels": ["example-grok-large", "example-grok-small"], "records": [{ "recordKey": "378033416cbbdcba4ac89367e6cf2b72f9d49cb689b6215181c671e8f03e5169", "values": [130, 30, 70, 0, 6, 160, 3], "costUsdTicks": null, "costConflict": false, "conflict": false, "inconsistent": false, "at": "2026-03-01T00:00:01.000Z", "incomplete": false, "model": [[0, 100, 20, 60, 0, 5, 120, 2], [1, 30, 10, 9, 0, 1, 40, 1]] }] }
+    },
+    {
+      "name": "a row breaking total equals input plus output is refused",
+      "accept": false,
+      "reason": "rows-do-not-reconcile",
+      "projection": { "version": 2, "identityScheme": "sha256-grok-session-turn/1", "truncated": false, "modelLabels": ["example-grok-large", "example-grok-small"], "records": [{ "recordKey": "378033416cbbdcba4ac89367e6cf2b72f9d49cb689b6215181c671e8f03e5169", "values": [130, 30, 70, 0, 6, 160, 3], "costUsdTicks": null, "costConflict": false, "conflict": false, "inconsistent": false, "at": "2026-03-01T00:00:01.000Z", "incomplete": false, "model": [[0, 100, 20, 60, 0, 5, 130, 2], [1, 30, 10, 10, 0, 1, 30, 1]] }] }
+    },
+    {
+      "name": "a cost column in a row is refused",
+      "accept": false,
+      "reason": "invalid-model-token",
+      "projection": { "version": 2, "identityScheme": "sha256-grok-session-turn/1", "truncated": false, "modelLabels": ["example-grok-large", "example-grok-small"], "records": [{ "recordKey": "378033416cbbdcba4ac89367e6cf2b72f9d49cb689b6215181c671e8f03e5169", "values": [130, 30, 70, 0, 6, 160, 3], "costUsdTicks": null, "costConflict": false, "conflict": false, "inconsistent": false, "at": "2026-03-01T00:00:01.000Z", "incomplete": false, "model": [[0, 100, 20, 60, 0, 5, 120, 2, 10], [1, 30, 10, 10, 0, 1, 40, 1, 20]] }] }
+    },
+    {
+      "name": "a missing incomplete flag is refused in version 2",
+      "accept": false,
+      "reason": "fields-not-exact",
+      "projection": { "version": 2, "identityScheme": "sha256-grok-session-turn/1", "truncated": false, "modelLabels": ["example-grok-large", "example-grok-small"], "records": [{ "recordKey": "378033416cbbdcba4ac89367e6cf2b72f9d49cb689b6215181c671e8f03e5169", "values": [130, 30, 70, 0, 6, 160, 3], "costUsdTicks": null, "costConflict": false, "conflict": false, "inconsistent": false, "at": "2026-03-01T00:00:01.000Z", "model": [[0, 100, 20, 60, 0, 5, 120, 2], [1, 30, 10, 10, 0, 1, 40, 1]] }] }
+    }
+  ]
+}

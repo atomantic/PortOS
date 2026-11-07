@@ -337,6 +337,14 @@ export const describeCodexAccountStatus = (status, account = null) => {
   }
 };
 
+/**
+ * The runtime version out of the app-server's `initialize` user agent, or `null`.
+ * The rest of that string names the host OS and architecture and stays behind.
+ */
+export const parseCodexRuntimeVersion = (userAgent) => (
+  typeof userAgent === 'string' ? userAgent.match(/\/(\d+\.\d+\.\d+[0-9A-Za-z.+-]{0,32})/)?.[1] ?? null : null
+);
+
 /** Project the account history response only; never expose thread or credential data.
  * Missing history is unknown, not zero. Reject imprecise JSON integers rather
  * than silently rounding an authoritative provider count.

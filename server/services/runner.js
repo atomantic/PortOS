@@ -1,3 +1,4 @@
+import { runOwnership, runChildIdentity } from '../lib/aiToolkit/internal/runOwnership.js';
 import { publishRuntimeFiles } from '../lib/runtimeFilePublication.js';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 /**
@@ -342,6 +343,7 @@ export async function executeCliRun(options) {
 
 async function executeAdmittedCliRun({ runId, provider, prompt, workspacePath, screenshots = [], onData, onComplete, timeout, toolFree = false, beforeExecute }, permit) {
   const toolkit = requireToolkit();
+  await patchRunMetadata(runId, runOwnership('cli'));
 
   const runsPath = join(runnerConfig.dataDir, 'runs');
   const runDir = join(runsPath, runId);
@@ -558,8 +560,10 @@ async function executeAdmittedCliRun({ runId, provider, prompt, workspacePath, s
   // Funnel both events through one promise so terminal persistence + hooks run
   // exactly once. The finalizer always merges into createRun's metadata instead
   // of replacing attribution fields on the spawn-error path.
+  const childIdentitySaved = patchRunMetadata(runId, { executionChild: runChildIdentity(childProcess.pid) });
   let finalizationPromise = null;
   const finalizeTerminal = async ({ exitCode, signal = null, spawnError = null }) => {
+    await childIdentitySaved;
     const metadataStr = await readFile(metadataPath, 'utf-8').catch(() => '{}');
     let metadata = {};
     try {

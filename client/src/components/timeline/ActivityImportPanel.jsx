@@ -28,8 +28,11 @@ import { formatDateNumeric } from '../../utils/formatters';
 //   importOptions— optional extra options spread into every importFn call (both
 //                  preview and import), so a control's value reaches the server.
 //                  Changing it invalidates a stale preview so counts can't lie.
+//   canImport    — optional (preview) => boolean gating the Import button, for a
+//                  source whose preview needs a user decision first. renderPreview
+//                  also receives the full preview response as its 2nd argument.
 const DEFAULT_ACCEPT = '.zip,.json,application/zip,application/json';
-export default function ActivityImportPanel({ icon: Icon, title, noun, help, importFn, renderPreview, onImported, accept = DEFAULT_ACCEPT, controls, importOptions }) {
+export default function ActivityImportPanel({ icon: Icon, title, noun, help, importFn, renderPreview, onImported, accept = DEFAULT_ACCEPT, controls, importOptions, canImport }) {
   const [open, setOpen] = useState(false);
   const [file, setFile] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -133,7 +136,7 @@ export default function ActivityImportPanel({ icon: Icon, title, noun, help, imp
                 {busy && !preview ? <Loader2 size={14} className="animate-spin" /> : null}
                 Preview
               </button>
-              {preview && preview.mapped > 0 && (
+              {preview && preview.mapped > 0 && (canImport ? canImport(preview) : true) && (
                 <button
                   type="button"
                   onClick={runImport}
@@ -150,7 +153,7 @@ export default function ActivityImportPanel({ icon: Icon, title, noun, help, imp
           {preview && !result && (
             <div className="rounded border border-port-border bg-port-bg p-3 text-xs text-gray-400">
               <div className="mb-1 font-medium text-gray-300">Preview</div>
-              {renderPreview(preview.summary)}
+              {renderPreview(preview.summary, preview)}
             </div>
           )}
 

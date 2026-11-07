@@ -1,8 +1,11 @@
 import PageHeader from '../components/PageHeader';
 import PageLayout from '../components/PageLayout';
+import TabPills from '../components/ui/TabPills';
+import NativeUsageOverview from '../components/usage/NativeUsageOverview';
+import UsageHeldRunsNotice from '../components/usage/UsageHeldRunsNotice';
 import { useCallback, useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router';
-import { RefreshCw, AlertTriangle, DatabaseZap, BarChart3 } from 'lucide-react';
+import { RefreshCw, AlertTriangle, DatabaseZap, BarChart3, History, Fingerprint } from 'lucide-react';
 import * as api from '../services/api';
 import BrailleSpinner from '../components/BrailleSpinner';
 import PageSkeleton from '../components/ui/PageSkeleton';
@@ -125,6 +128,13 @@ function ProviderQuotaCard({ quota, onRefresh, refreshing, disabled, refreshErro
         <div className="space-y-3">
           <p className="text-xs text-gray-500">Image providers do not report a quota meter.</p>
           {quota.imageRefusals.map(([key, refusal]) => <p key={key} className="text-xs text-port-warning break-words">{refusal.label || key}: refusal observed · {refusal.fetchedAt ? `reported ${timeAgo(refusal.fetchedAt, 'time unavailable')}` : 'report time unavailable'}; current availability may have changed.</p>)}
+          {quota.imageObservations?.length > 0 && <p className="text-xs text-gray-500">Render counts are observations from each instance, not account-wide totals.</p>}
+          {quota.imageObservations?.map((observation) => (
+            <section key={observation.origin?.instanceId || 'self'} aria-label={`Image activity reported by ${observation.origin?.name || 'This instance'}`}>
+              <p className="text-xs text-gray-400 mb-1 break-words">{observation.origin?.name || 'This instance'}{observation.fetchedAt ? ` · reported ${timeAgo(observation.fetchedAt, 'time unavailable')}` : ' · report time unavailable'}</p>
+              <ProviderQuotaBody quota={{ ...observation, limits: [], error: undefined }} showActivity={false} showNote={false} showSource={false} />
+            </section>
+          ))}
         </div>
       ) : (
         <>
@@ -1137,6 +1147,8 @@ function InternalUsageMetrics({ onBillingSaved }) {
         </button>
       </div>
 
+      <UsageHeldRunsNotice held={usage.heldRunCoverage} />
+
       <CodexUsagePreview job={backfill} onStatus={setBackfill} refreshStatus={refreshBackfill} coverage={usage.codexCoverage} />
 
       {usage.imageRenders && (
@@ -1412,17 +1424,36 @@ function InternalUsageMetrics({ onBillingSaved }) {
   );
 }
 
-export function UsagePage() {
+export function LegacyUsagePage({ sourceTabs = null }) {
   const [billingRevision, setBillingRevision] = useState(0);
   const onBillingSaved = useCallback(() => setBillingRevision((value) => value + 1), []);
   return (
     <PageLayout header={<PageHeader icon={BarChart3} title="Subscription Usage" />} navigation={<ModelsTabsHeader activeTab="usage" />}>
       <div className="space-y-6">
+        {sourceTabs}
         <ProviderQuotaSection billingRevision={billingRevision} />
         <InternalUsageMetrics onBillingSaved={onBillingSaved} />
       </div>
     </PageLayout>
   );
+}
+
+export function UsagePage() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const view = searchParams.get('view') === 'legacy' ? 'legacy' : 'native';
+  const tabs = <TabPills ariaLabel="Usage source" variant="pills" size="sm" stretch className="sm:max-w-sm" tabs={[
+    { id: 'native', label: 'Native history', icon: Fingerprint },
+    { id: 'legacy', label: 'Legacy analytics', icon: History },
+  ]} activeTab={view} onChange={value => {
+    const next = new URLSearchParams(searchParams);
+    if (value === 'native') next.delete('view');
+    else next.set('view', value);
+    setSearchParams(next);
+  }} />;
+  if (view === 'legacy') return <LegacyUsagePage sourceTabs={tabs} />;
+  return <PageLayout header={<PageHeader icon={BarChart3} title="Subscription Usage" />} navigation={<ModelsTabsHeader activeTab="usage" />}>
+    <div className="space-y-4">{tabs}<NativeUsageOverview /></div>
+  </PageLayout>;
 }
 
 export default UsagePage;

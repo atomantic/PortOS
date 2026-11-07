@@ -323,6 +323,7 @@ async function createAppUnlocked(appData) {
     // create MUST survive, or a new app cannot opt out through POST at all.
     ...(Number.isSafeInteger(appData.mergeHandoffMinQueuedRuns) && appData.mergeHandoffMinQueuedRuns > 0
       ? { mergeHandoffMinQueuedRuns: appData.mergeHandoffMinQueuedRuns } : {}),
+    ...(typeof appData.useAutoMerge === 'boolean' ? { useAutoMerge: appData.useAutoMerge } : {}),
     ...(typeof appData.verifyRepoStateOnCompletion === 'boolean'
       ? { verifyRepoStateOnCompletion: appData.verifyRepoStateOnCompletion }
       : {}),
