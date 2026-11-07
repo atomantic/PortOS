@@ -314,3 +314,12 @@ page can total tokens per model across the fleet and price them at API rates
   local file scan that starts after boot. No provider calls are made.
 - `capturedAt` is the newest of usage / quotas / transcript `updatedAt`, so a
   transcript refresh alone still advances the slot peers pull.
+
+## Addendum: native usage reports retired (#15272)
+
+The `/api/usage/native-report/v1` and `/v2` exchange and the native account
+selections were removed. Each machine's standard Usage report reads its own
+coding-app records (#15271), and peers already receive those overlaid totals in
+the ordinary usage digest, so a second signed report had no remaining reader. An
+older peer that still calls the endpoint gets `403 PEER_SCOPE_FORBIDDEN`. Only its
+own native diagnostics view is affected, which upgrading removes.

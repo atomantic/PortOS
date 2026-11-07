@@ -1,5 +1,7 @@
 # Native usage model attribution
 
+> **Superseded (#15271, #15272).** The Usage report now reads each coding app's own records directly (`server/services/nativeUsageHistory.js`). The staged projection, native reports, account selections and rehearsal tooling described here were removed; this record is kept for history.
+
 ## Context
 
 Decision record for #15230, a parallel research increment of #15031. The v4 native

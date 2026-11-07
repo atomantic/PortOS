@@ -1,5 +1,7 @@
 # Native usage projection and staged migration
 
+> **Superseded (#15271, #15272).** The Usage report now reads each coding app's own records directly (`server/services/nativeUsageHistory.js`). The staged projection, native reports, account selections and rehearsal tooling described here were removed; this record is kept for history.
+
 ## Goal
 
 Use one authoritative native counter per provider/account. Keep PortOS run

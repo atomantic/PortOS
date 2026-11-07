@@ -4,7 +4,6 @@ import { fileURLToPath } from 'url';
 import { describe, it, expect } from 'vitest';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
-import { NATIVE_USAGE_SQL_IMAGE } from './lib/nativeUsageSqlRehearsal.js';
 
 const PINNED = /^pgvector\/pgvector:pg\d+@sha256:[0-9a-f]{64}$/;
 
@@ -27,11 +26,6 @@ describe('database image is pinned to a manifest digest', () => {
 
   it('compose and CI pin the same digest', () => {
     const digests = Object.values(sources).flatMap((t) => [...t.matchAll(/pgvector\/pgvector:pg\d+@(sha256:[0-9a-f]{64})/g)].map((m) => m[1]));
-    expect(new Set([...digests, NATIVE_USAGE_SQL_IMAGE.split('@')[1]]).size).toBe(1);
+    expect(new Set(digests).size).toBe(1);
   });
-});
-
-it('requires the real isolated SQL/schema rehearsal in the hosted DB job without a memo or availability skip', () => {
-  const workflow = readFileSync(join(ROOT, '.github/workflows/ci.yml'), 'utf8');
-  expect(workflow).toMatch(/name: Rehearse isolated SQL and schema restore\n\s+timeout-minutes: 8\n\s+env:\n\s+PORTOS_NATIVE_SQL_LIVE: '1'\n\s+run: cd server && node node_modules\/vitest\/vitest.mjs run --configLoader runner \.\.\/scripts\/native-usage-sql-rehearsal.live.test.js/);
 });

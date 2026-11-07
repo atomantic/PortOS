@@ -29,7 +29,6 @@ const idleJob = () => ({
 
 let job = idleJob();
 registerUsageCutoverParticipant({ name: 'historicalBackfill', inFlight: () => (job.status === 'running' ? 1 : 0) });
-let previewWorker = null;
 
 const publicJob = () => ({ ...job });
 
@@ -60,58 +59,6 @@ export function getHistoricalUsageBackfillStatus() {
 }
 
 
-/** Read-only inspection shares the existing job and socket lifecycle, never the repair callback. */
-export function startCodexUsagePreview({ from, to, home = homedir(), WorkerClass = Worker } = {}) {
-  if (job.status === 'running' || job.status === 'cancelling') return publicJob();
-  const id = randomUUID();
-  job = { ...idleJob(), id, mode: 'preview', range: { from, to }, status: 'running', startedAt: new Date().toISOString() };
-  const finish = (status, extra = {}) => {
-    if (job.id !== id || job.status !== 'running') return;
-    job = { ...job, status, ...extra, completedAt: new Date().toISOString() };
-    previewWorker = null;
-    notifyUsageBackfillUpdated();
-  };
-  // Constructor failures must not leave the shared job stuck running.
-  try {
-    const worker = new WorkerClass(new URL('./usageBackfillWorker.js', import.meta.url), {
-      workerData: { mode: 'preview', from, to, home }
-    });
-    previewWorker = worker;
-    worker.on('message', message => {
-      if (message?.type === 'complete') finish('complete', { preview: message.result });
-      if (message?.type === 'error') finish('error', { error: 'Codex source preview failed. Retry the scan.' });
-    });
-    worker.on('error', () => finish('error', { error: 'Codex source preview worker failed. Retry the scan.' }));
-    worker.on('exit', () => finish('error', { error: 'Codex source preview stopped before returning a result.' }));
-    worker.unref();
-  } catch {
-    finish('error', { error: 'Codex source preview could not start. Retry the scan.' });
-  }
-  notifyUsageBackfillUpdated();
-  return publicJob();
-}
-
-export async function cancelCodexUsagePreview(id) {
-  if (job.id !== id || job.mode !== 'preview' || job.status !== 'running' || !previewWorker) return publicJob();
-  const worker = previewWorker;
-  job = { ...job, status: 'cancelling' };
-  notifyUsageBackfillUpdated();
-  await worker.terminate().catch(() => {
-    if (job.id === id) {
-      job = { ...job, status: 'error', error: 'Could not cancel the preview worker. Retry the preview.', completedAt: new Date().toISOString() };
-      previewWorker = null;
-      notifyUsageBackfillUpdated();
-    }
-    throw new Error('Could not cancel the preview worker. Retry the preview.');
-  });
-  if (job.id === id) {
-    job = { ...job, status: 'cancelled', completedAt: new Date().toISOString() };
-    previewWorker = null;
-    notifyUsageBackfillUpdated();
-  }
-  return publicJob();
-}
-
 /**
  * Start the one-shot historical repair. The explicit POST route is the only
  * caller; no boot hook or schedule invokes this function.
@@ -122,7 +69,7 @@ export async function startHistoricalUsageBackfill({
   WorkerClass = Worker,
   providers = null
 } = {}) {
-  if (job.status === 'running' || job.status === 'cancelling') return publicJob();
+  if (job.status === 'running') return publicJob();
 
   const id = randomUUID();
   job = {
@@ -283,5 +230,4 @@ export async function startHistoricalUsageBackfill({
 
 export function __resetHistoricalUsageBackfillForTests() {
   job = idleJob();
-  previewWorker = null;
 }

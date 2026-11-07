@@ -33,8 +33,6 @@ export const PEER_API_SURFACE = Object.freeze([
   { path: '/api/apps', methods: READ },
   { path: '/api/apps/quality-federation', methods: READ },
   { path: '/api/instances/sync-status', methods: READ },
-  { path: '/api/usage/native-report/v1', methods: READ },
-  { path: '/api/usage/native-report/v2', methods: READ },
   { path: '/api/cos/agents', methods: READ },
   // Registration handshake.
   { path: '/api/instances/peers/announce', methods: Object.freeze(['POST']) },

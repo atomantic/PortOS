@@ -363,7 +363,7 @@ a snapshot as a complete recovery point.
 
 Now that PostgreSQL is a **required** dependency (it owns the creative catalog, memory, and a growing set of app-native records — see [Storage Classification Contract](./STORAGE.md)), **the database dump is part of required system state, not an optional extra.** A snapshot that captured `data/` but failed to capture the DB is incomplete, and PortOS surfaces that explicitly.
 
-The dump includes the machine-local `cos_pending_agent_feedback` reference index, the `cos_tasks` CoS task queues and their completed-task history (the Markdown task files were retired into it and kept as `*.imported`), the `cos_agents` CoS agent working set (moved out of `data/cos/state.json`, whose pre-migration copy is kept as `state.json.imported`), `review_queue_triage` presentation markers, and the `native_usage_sources` and `native_usage_snapshots` collected usage store. The queue's source records remain in their owning stores; restoring the dump therefore preserves snooze/dismissal decisions without exporting them through federation or duplicating source payloads.
+The dump includes the machine-local `cos_pending_agent_feedback` reference index, the `cos_tasks` CoS task queues and their completed-task history (the Markdown task files were retired into it and kept as `*.imported`), the `cos_agents` CoS agent working set (moved out of `data/cos/state.json`, whose pre-migration copy is kept as `state.json.imported`), `review_queue_triage` presentation markers. The queue's source records remain in their owning stores; restoring the dump therefore preserves snooze/dismissal decisions without exporting them through federation or duplicating source payloads.
 
 Implementation: `server/services/backup.js` (snapshot/dump/restore), `server/services/backupScheduler.js` (cron), `server/routes/backup.js` (API), and `server/routes/database.js` (DB export/sync).
 
@@ -447,19 +447,6 @@ A backup run (`runBackup` in `server/services/backup.js`) writes to:
 - Snapshots are namespaced by `<hostname>` so one shared destination (e.g. an iCloud folder) can host backups from several federated machines without `snapshotId` collisions.
 - Snapshot lists include every machine namespace in the destination, plus snapshots written directly under `snapshots/` by PortOS versions from before hostname namespaces. Each row identifies its source, so equal timestamp IDs from different machines remain separate choices. Download, file restore, and database restore keep that source attached through preview and execution. API requests that omit `source` retain the existing behavior and select the current machine; `source: "@legacy"` selects the pre-namespace root.
 - The `manifest.json` hashes the SQL dump too (keyed as `../portos-db.sql`, since the dump lives one level above the `data/` tree), so a truncated or corrupt dump is detectable rather than silently trusted.
-
-For the offline native-usage recovery work, the [snapshot preflight](./USAGE_NATIVE_REHEARSAL.md#inspect-a-detached-standard-snapshot)
-checks an explicitly supplied detached snapshot using this same manifest and
-mandatory dump. It binds raw ledger/peer bytes to the usage barrier backup and
-reports fixed inventory groups without copying or restoring anything. This
-narrower tool refuses symlinks and retains all source-completeness,
-matched-code/schema and database/runtime-restore holds; its successful inspection
-is not a full recovery or cutover approval. The explicit
-[`schema-restore` probe](./USAGE_NATIVE_REHEARSAL.md#bind-code-and-probe-the-restored-maintenance-schema)
-adds committed-source/lockfile binding, a real disposable SQL replay, the shared
-maintenance-startup schema query and exact migration-ID inventory checks. It still
-does not verify installed dependencies, migration effects, all application readers
-or ordinary runtime recovery.
 
 ### What is excluded by default
 

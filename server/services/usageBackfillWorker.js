@@ -219,12 +219,10 @@ export async function scanHistoricalUsage({
 }
 
 if (!isMainThread) {
-  const scan = workerData.mode === 'preview'
-    ? import('./codexUsageSources.js').then(({ previewCodexUsage }) => previewCodexUsage(workerData))
-    : scanHistoricalUsage({
-      ...workerData,
-      onProgress: (progress) => parentPort.postMessage({ type: 'progress', progress })
-    });
+  const scan = scanHistoricalUsage({
+    ...workerData,
+    onProgress: (progress) => parentPort.postMessage({ type: 'progress', progress })
+  });
   scan
     .then((result) => parentPort.postMessage({ type: 'complete', result }))
     .catch((error) => parentPort.postMessage({ type: 'error', error: error.message }));

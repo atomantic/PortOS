@@ -23,7 +23,8 @@ const GIB = 1024 * 1024 * 1024;
 // decodedBytes is a CPU backstop, not a memory bound: skipped lines are never
 // buffered, and retained memory is bounded by `records`. A heavy install decodes
 // tens of GB per week of mostly tool output, so `milliseconds` is the operative
-// ceiling; docs/CODEX_USAGE_PREVIEW.md records why 256 MiB was not kept.
+// ceiling. An earlier 256 MiB limit reported even a one-day window as incomplete
+// on a heavy install.
 const CODEX_PREVIEW_LIMITS = Object.freeze({
   files: 10_000, entries: 100_000, decodedBytes: 256 * GIB,
   records: 100_000, lineBytes: 1024 * 1024, milliseconds: 30_000, depth: 16
