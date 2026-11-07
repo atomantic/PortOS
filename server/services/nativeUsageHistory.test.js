@@ -2,7 +2,9 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
+import { encodeMessage } from '../lib/protobufWire.js';
 
 const { makeProxy, cleanup, tempRoot } = mockPathsDataRoot({ prefix: 'portos-native-usage-' });
 vi.mock('../lib/fileUtils.js', async () => makeProxy(await vi.importActual('../lib/fileUtils.js')));
@@ -18,6 +20,21 @@ const codexRollout = (id) => jsonl([
   { timestamp: '2026-07-19T01:00:00.000Z', type: 'event_msg', payload: { type: 'agent_message', message: 'SYNTHETIC' } },
   { timestamp: '2026-07-19T01:00:01.000Z', type: 'event_msg', payload: { type: 'token_count', info: { total_token_usage: codexTotal(300, 140, 25) } } },
 ]);
+const AGY_METADATA = {
+  created: { no: 1, type: 'message', schema: { seconds: { no: 1, type: 'varint' } } },
+  usage: { no: 9, type: 'message', schema: {
+    input: { no: 2, type: 'varint' }, output: { no: 3, type: 'varint' }, cacheWrite: { no: 4, type: 'varint' }, cacheRead: { no: 5, type: 'varint' },
+  } },
+};
+const agyDatabase = async (path, steps) => {
+  await mkdir(dirname(path), { recursive: true });
+  const db = new DatabaseSync(path);
+  db.exec('CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER NOT NULL, metadata BLOB)');
+  db.exec('CREATE TABLE gen_metadata (idx INTEGER PRIMARY KEY, data BLOB, size INTEGER)');
+  const insert = db.prepare('INSERT INTO steps (idx, step_type, metadata) VALUES (?, ?, ?)');
+  steps.forEach(({ type, at, usage }, idx) => insert.run(idx, type, encodeMessage(AGY_METADATA, { created: { seconds: Date.parse(at) / 1000 }, usage })));
+  db.close();
+};
 const grokTurn = (promptId, ms, usage) => ({ params: { sessionId: 'grok-session', _meta: { agentTimestampMs: ms },
   update: { sessionUpdate: 'turn_completed', prompt_id: promptId, usage: { ...usage, modelUsage: { 'example-grok': {} } } } } });
 
@@ -96,16 +113,68 @@ describe('native usage history', () => {
     expect(result.days['2026-07-10']['example-codex']).toMatchObject({ messages: 1, input: 200 });
   });
 
-  it('reads Antigravity planner steps that carry tokens, once per step', async () => {
+  it('counts a Codex cache write as its own tier, carved out of input apart from the cached read', async () => {
+    const usage = { ...codexTotal(1000, 600, 50), cache_write_input_tokens: 300 };
+    await write(join(home, '.codex', 'sessions', '2026', '07', '19', 'rollout-a.jsonl'), jsonl([
+      { type: 'session_meta', payload: { id: 'session-a', model: 'example-codex' } },
+      { timestamp: '2026-07-19T01:00:00.000Z', type: 'event_msg', payload: { type: 'token_count', info: { total_token_usage: usage, last_token_usage: usage } } },
+    ]));
+    const result = await history.NATIVE_USAGE_STORES.codex.refresh({ home, force: true, now: NOW });
+    expect(result.days['2026-07-19']['example-codex']).toEqual({ messages: 1, input: 100, output: 50, cacheRead: 600, cacheWrite: 300 });
+  });
+
+  it('reads Antigravity usage from the dated conversation DB steps, and the transcript only for a conversation without one', async () => {
+    const brain = (id) => join(home, '.gemini', 'antigravity-cli', 'brain', id, '.system_generated', 'logs', 'transcript.jsonl');
     const step = (index, at, tokens) => ({ type: 'PLANNER_RESPONSE', step_index: index, created_at: at, content: 'SYNTHETIC', ...tokens });
-    await write(join(home, '.gemini', 'antigravity-cli', 'brain', 'conversation-a', '.system_generated', 'logs', 'transcript.jsonl'), jsonl([
+    await agyDatabase(join(home, '.gemini', 'antigravity-cli', 'conversations', 'conversation-a.db'), [
+      { type: 14, at: '2026-07-18T09:00:00Z' },
+      { type: 15, at: '2026-07-18T09:00:01Z', usage: { input: 40, output: 12, cacheRead: 900 } },
+      // A checkpoint step is billed too; its transcript reader never saw it.
+      { type: 23, at: '2026-07-19T09:00:00Z', usage: { input: 7, output: 3 } },
+    ]);
+    // The same conversation's transcript repeats the planner step: not added.
+    await write(brain('conversation-a'), jsonl([step(1, '2026-07-18T09:00:01Z', { input_tokens: 40, cache_read_tokens: 900, output_tokens: 12 })]));
+    await write(brain('conversation-b'), jsonl([
       { type: 'USER_INPUT', step_index: 0, created_at: '2026-07-19T09:00:00Z', content: 'SYNTHETIC' },
-      step(1, '2026-07-19T09:00:01Z', { input_tokens: 40, cache_read_tokens: 900, output_tokens: 12 }),
-      step(1, '2026-07-19T09:00:01Z', { input_tokens: 40, cache_read_tokens: 900, output_tokens: 12 }),
+      step(1, '2026-07-19T09:00:01Z', { input_tokens: 5, cache_read_tokens: 10, output_tokens: 2 }),
+      step(1, '2026-07-19T09:00:01Z', { input_tokens: 5, cache_read_tokens: 10, output_tokens: 2 }),
       step(2, '2026-07-19T09:01:00Z', {}),
     ]));
     const result = await history.NATIVE_USAGE_STORES.agy.refresh({ home, force: true, now: NOW });
-    expect(result.days['2026-07-19']['(unknown model)']).toEqual({ messages: 1, input: 40, output: 12, cacheRead: 900, cacheWrite: 0 });
+    expect(result.days['2026-07-18']['(unknown model)']).toEqual({ messages: 1, input: 40, output: 12, cacheRead: 900, cacheWrite: 0 });
+    expect(result.days['2026-07-19']['(unknown model)']).toEqual({ messages: 2, input: 12, output: 5, cacheRead: 10, cacheWrite: 0 });
+  });
+
+  it('rescans every Antigravity conversation DB once over an older store, so earlier undated-transcript days fill in', async () => {
+    const old = NOW - 20 * 86_400_000;
+    const store = history.NATIVE_USAGE_STORES.agy;
+    await write(store.file, JSON.stringify({ days: {}, updatedAt: new Date(NOW - 60_000).toISOString(), coverageStart: '2026-06-20' }));
+    const path = join(home, '.gemini', 'antigravity-cli', 'conversations', 'conversation-a.db');
+    await agyDatabase(path, [{ type: 15, at: '2026-06-30T09:00:00Z', usage: { input: 40, output: 12 } }]);
+    await utimes(path, old / 1000, old / 1000);
+    const result = await store.refresh({ home, force: true, now: NOW });
+    expect(result.days['2026-06-30']['(unknown model)']).toMatchObject({ messages: 1, input: 40, output: 12 });
+    expect(result.coverageStart).toBe('2026-06-20');
+    // Current now: the next pass looks back only a few days and skips the old DB.
+    const conversationB = join(home, '.gemini', 'antigravity-cli', 'conversations', 'conversation-b.db');
+    await agyDatabase(conversationB, [{ type: 15, at: '2026-06-29T09:00:00Z', usage: { input: 5 } }]);
+    await utimes(conversationB, old / 1000, old / 1000);
+    expect((await store.refresh({ home, force: true, now: NOW + 60_000 })).days['2026-06-29']).toBeUndefined();
+  });
+
+  it('counts a Grok subagent as its own session, never through the parent\'s subagent link', async () => {
+    const sessions = join(home, '.grok', 'sessions', encodeURIComponent('/example/workspace'));
+    await write(join(sessions, 'parent-session', 'updates.jsonl'), jsonl([
+      grokTurn('p1', Date.parse('2026-07-19T10:00:00Z'), { inputTokens: 500, cachedReadTokens: 200, outputTokens: 50 }),
+    ]));
+    // The parent only links the child; the link carries no usage of its own.
+    await write(join(sessions, 'parent-session', 'subagents', 'child-session', 'meta.json'),
+      JSON.stringify({ parent_session_id: 'parent-session', child_session_id: 'child-session' }));
+    await write(join(sessions, 'child-session', 'updates.jsonl'), jsonl([
+      grokTurn('c1', Date.parse('2026-07-19T10:01:00Z'), { inputTokens: 300, cachedReadTokens: 100, outputTokens: 30 }),
+    ]));
+    const result = await history.NATIVE_USAGE_STORES.grok.refresh({ home, force: true, now: NOW });
+    expect(result.days['2026-07-19']['example-grok']).toMatchObject({ messages: 2, input: 500, output: 80, cacheRead: 300 });
   });
 
   it('sums per-prompt Grok turns per day and keeps the long-context subset', async () => {
