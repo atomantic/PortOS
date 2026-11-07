@@ -763,14 +763,6 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
     summary: 'Invalidate the usage report after a provider app usage history refresh changed it; no usage data.',
     payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
-  'usage:native-accounts-updated': {
-    direction: 'server-to-client',
-    summary: 'Invalidate account-derived native usage after local selections change; no settings, memberships or source data.',
-    payloadSchema: {
-      type: 'object', required: ['revision'], additionalProperties: false,
-      properties: { revision: { anyOf: [{ type: 'string', pattern: '^[0-9a-f]{64}$' }, { type: 'null' }] } },
-    },
-  },
   'shell:attach': input(shellAttachSchema, 'Attach this socket to an existing terminal session.'),
   'shell:cd': input(shellCdSchema, 'Change an existing terminal session directory.'),
   'shell:input': input(shellInputSchema, 'Write bytes to an existing terminal session.'),

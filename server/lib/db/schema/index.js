@@ -41,7 +41,6 @@ import { mindToolRecipesDdl } from './mindToolRecipes.js';
 import { decksDdl } from './decks.js';
 import { beeperDdl } from './beeper.js';
 import { githubNotificationsDdl } from './githubNotifications.js';
-import { nativeUsageDdl } from './nativeUsage.js';
 import { auditDdl, auditedTables, buildAuditTriggers } from './audit.js';
 import { syncFeedDdl, syncFeedTables, buildSyncFeedTriggers } from './syncFeed.js';
 
@@ -75,7 +74,6 @@ export {
   xDdl,
   beeperDdl,
   githubNotificationsDdl,
-  nativeUsageDdl,
   mindToolRecipesDdl,
   decksDdl,
   auditDdl,
@@ -131,7 +129,6 @@ export function buildCatalogDdl() {
     ...xDdl,
     ...beeperDdl,
     ...githubNotificationsDdl,
-    ...nativeUsageDdl,
     ...mindToolRecipesDdl,
     ...decksDdl,
     ...auditDdl,
