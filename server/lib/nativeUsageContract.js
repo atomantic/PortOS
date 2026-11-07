@@ -271,7 +271,7 @@ function transcriptFindings(family, coverage, persisted = false) {
 }
 
 /** Project a retained-transcript scan. Scan timing and absolute paths never survive this. */
-function projectTranscriptCoverage(family, scan, scanLimits) {
+export function projectTranscriptCoverage(family, scan, scanLimits) {
   const { coverage } = scan;
   const pick = (source, keys) => Object.fromEntries(keys.map((key) => [key, source[key]]));
   return {

@@ -3,7 +3,8 @@
 These #15031 tools validate an **isolated byte restore of the two stores
 fingerprinted by the usage cutover barrier** and inspect a supplied standard
 snapshot's integrity. An explicit Linux Docker command can also demonstrate a
-disposable SQL replay. None establishes a complete PortOS backup, a matched
+disposable SQL replay. Detached native-source commands preserve supplied raw histories
+and verify retained-provider replay. None establishes a complete PortOS backup, a matched
 runtime restore, a live consistency check, or permission to activate. The [native stage](./USAGE_NATIVE_STAGING.md) stays separate from
 legacy accounting. The [barrier](./USAGE_CUTOVER_BARRIER.md) still refuses activation
 until a compatible runtime exists. This tool never registers one.
@@ -35,7 +36,8 @@ changes; they do not authenticate a capture or prove account membership.
 
 An authorized operator must separately prepare consistent, detached copies. This
 CLI does not acquire a fence, discover a data root, call a local server, contact a
-peer or copy provider-native history. Only the explicit `sql-restore` command
+peer or discover provider-native history. The source commands below copy only
+explicit detached roots. Only the explicit `sql-restore` command
 connects to PostgreSQL, inside its own disposable container. Do not point it at an
 active data directory. The copied barrier and status must both describe a drained
 `fenced` state with the same epoch, participants, timestamps, store fingerprints
@@ -295,6 +297,145 @@ suite on an already provisioned isolated Linux executor, from `server/`:
 ```bash
 PORTOS_NATIVE_SQL_LIVE=1 node node_modules/vitest/vitest.mjs run --configLoader runner ../scripts/native-usage-sql-rehearsal.live.test.js
 ```
+
+## Preserve and replay detached native sources
+
+These commands preserve raw provider history separately from the standard full
+PortOS backup. Supply a verified stage and select **one exact embedded participant
+report** using its participant key and content hash. A report is a projection,
+not a replacement for the original files.
+
+Prepare a detached directory with these fixed role directories, copying only the
+corresponding history root's **contents**, not a home or configuration directory:
+
+- `codexSessions`: Codex `sessions` rollout history.
+- `codexArchivedSessions`: Codex `archived_sessions` rollout history.
+- `claudeProjects`: Claude `projects` history, including any configured location.
+- `grokSessions`: Grok `sessions` history.
+- `agyCliConversations`: Antigravity CLI `conversations` SQLite containers.
+- `agyLegacyBrain`: Antigravity CLI legacy `brain` history.
+- `agyAppConversations`: Antigravity App `conversations` containers.
+- `agyIdeConversations`: Antigravity IDE `conversations` containers.
+
+The CLI never discovers these roots, signs in, calls a provider or reads auth or
+configuration roots. Do not supply live directories. Preparing consistent copies
+and confirming which histories belong to an account remain separate operator
+steps. The fixed layout prevents accidentally walking an entire provider home.
+Unknown files **inside** a provided history root are preserved too; inspect the
+selection privately before copying.
+
+Prepare a separate strict request. All eight roles are mandatory, with one of
+`provided`, `absent-from-detached-input`, or `not-supplied/unknown`:
+
+```json
+{
+  "version": 1,
+  "participantKey": "<32-hex-key-from-the-stage>",
+  "reportHash": "<64-hex-contentHash-of-the-exact-embedded-report>",
+  "roles": {
+    "codexSessions": "provided",
+    "codexArchivedSessions": "absent-from-detached-input",
+    "claudeProjects": "provided",
+    "grokSessions": "provided",
+    "agyCliConversations": "provided",
+    "agyLegacyBrain": "provided",
+    "agyAppConversations": "not-supplied/unknown",
+    "agyIdeConversations": "not-supplied/unknown"
+  }
+}
+```
+
+Only `provided` role directories may exist at the detached root. Extra top-level
+files or directories refuse the operation. An explicitly absent role asserts only
+absence from **this detached input**, never absence from the live machine or deleted
+history. An unknown role is not an observation of absence. A retained provider
+with any required unknown role receives `not-supplied`, never a successful replay
+verdict even if the bound report also lacked that source. Antigravity's provider
+entry includes CLI, legacy, App and IDE coverage, so all four declarations matter.
+
+```bash
+node scripts/native-usage-rehearse.js sources-backup stage.json sources-request.json detached-sources new-source-backup
+node scripts/native-usage-rehearse.js sources-restore stage.json new-source-backup new-source-restore
+```
+
+The destination's parent must already exist. Each destination must be **new**:
+creation is exclusive, directories use `0700`, and files use `0600` where supported.
+No overwrite, repair, cleanup or destructive restore is offered. Concurrent calls
+for the same target have one owner; a repeat refuses without altering that target.
+Use another new destination to retry an interrupted run. Partial directories remain
+private with an `.in-progress` marker and cannot be used as complete bundles.
+
+Every regular source file is copied byte-for-byte, including zero-byte, ignored,
+opaque, future-format and metadata files. Every directory, including empty ones,
+is preserved. Permissions, ownership, timestamps, ACLs and extended attributes are
+not restored; private output permissions are intentional. Links (including hard
+links), special files, traversal, case aliases and nonportable path spellings
+refuse the bundle rather than silently omitting data. A selected input root itself
+cannot be a symlink. Its ancestor aliases, such as macOS `/tmp` and `/var`, are
+resolved once, then operations use the bound canonical path. Bundle entries never
+follow links.
+
+The bundle uses the standard `manifest.json` convention (`generatedAt`,
+`fileCount`, and relative-path-to-SHA-256 `files`) over `data/`. Raw files live at
+`data/<role>/...`. Two private evidence files are also manifested:
+
+- `data/native-sources.json`: strict role declarations, complete directory list,
+  raw-file byte lengths, stage hash, report hash and participant binding.
+- `data/participant-report.json`: the exact bound strict report, including its
+  Codex account-read evidence. It is not reconstructed from local rollouts.
+
+There is no base64 payload or alternative full-backup format. File descriptors
+are pinned, reads are bounded to the initial size plus one byte, and paths, file
+identity, size and modification time are rechecked. Inventory and SHA-256 passes
+are repeated around copying and replay. A complete synced manifest is published
+without overwrite only after data checks, then the in-progress marker is removed.
+A crash may leave a marker or partial copy, never a trusted incomplete verdict.
+These checks detect changes in detached copies; they are not a live capture lock,
+authenticity proof or a guarantee against a concurrently hostile filesystem owner.
+
+Copy/verification limits are 100,000 source files and directories, 64 directory
+levels, 100 MiB per JSON evidence file, 100 GiB of **cumulative reads** (including
+rechecks), and a 15-minute acceptance budget for the whole command. The input dataset must therefore
+be smaller than the read budget. Nothing is silently truncated. Replay accepts
+finite report-declared budgets up to the existing capture ceilings: 512 GiB,
+64 MiB per line, 5,000,000 entries, 50,000,000 records, 30 minutes and depth 64.
+Those declarations stay unchanged in the projection, while the independent
+15-minute command deadline and parser memory/record caps still apply. Detached
+Claude replay additionally refuses before retaining more than 100,000 unique
+identities, matching the report projection bound without changing live defaults.
+Exhausting the execution deadline refuses replay even if counters happen to match.
+Reader deadlines are cooperative: pending filesystem/SQLite operations are not
+forcibly interrupted at the exact deadline, but late completion cannot succeed.
+
+Restore verifies the entire file/directory set and every byte, then runs the
+existing Claude, Grok and Antigravity CLI readers with explicit restored roots.
+Ambient `HOME`, `CODEX_HOME` and `CLAUDE_CONFIG_DIR` cannot supply missing inputs.
+The comparison covers the **entire canonical retained-provider entry**: records,
+conflict tombstones, duplicates, streaming resolution, coverage, unknowns, costs
+and findings, not merely totals. Empty directories matter to Grok missing-session
+coverage and Antigravity legacy-only coverage. App/IDE containers remain opaque;
+their bytes are preserved but no speculative decoder is introduced.
+
+If all three retained entries match and none of their roles is unknown, the stage
+is rebuilt using those entries plus the **preserved original Codex report entry**
+and must match exactly. Codex's authority remains `account/usage/read`; rollout
+bytes cannot change its account totals or prove account-history replay. Historical
+membership, missing intervals, deleted history and actual spend remain unknown.
+
+Backup exits **3** after verified limited preservation. Restore exits **3** only
+when retained replay matches, and **1** on a mismatch or an unknown required role.
+Mismatch leaves useful verified restored bytes and a `replay.json` receipt with
+`retainedReplayVerified: false`; it does not manufacture a success verdict.
+Invalid inputs exit 1, invalid command syntax 2. Output contains only fixed roles,
+statuses, hashes, counts and limitations, never filenames, paths, record payloads
+or secrets. Keep all bundles and reports private: raw histories may contain prompts
+and sensitive data; hashes and filesystem modes are **not encryption**.
+
+Even a successful bundle verifies only supplied detached roots. It permanently
+retains `fullStoreInventoryVerified: false`, `fullRecoveryBackup: false`,
+`activationReady: false` and the global `native-source-preservation-not-verified`
+hold. One supplied bundle does not establish all participants' complete source
+inventory, matched runtime/schema recovery or permission for cutover.
 
 ## Remaining recovery gates
 

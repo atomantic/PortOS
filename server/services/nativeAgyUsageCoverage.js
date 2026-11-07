@@ -35,7 +35,7 @@ const schemaMatches = db => db.prepare('PRAGMA user_version').get().user_version
  * headers, stable file metadata and absent sidecars are required around the copy.
  * Native transcripts and gen_metadata duplicate this source and are never added.
  */
-export async function getNativeAgyUsageCoverage({ home = homedir(), limits: overrides = {} } = {}) {
+export async function getNativeAgyUsageCoverage({ home, cliConversationsRoot, legacyBrainRoot, appConversationsRoot, ideConversationsRoot, limits: overrides = {}, deadline = Infinity } = {}) {
   const limits = { ...LIMITS, ...overrides };
   limits.records = Math.min(limits.records, AGY_USAGE_RECORD_LIMIT + 1);
   const coverage = { files: 0, records: 0, measuredRecords: 0, missingUsageRecords: 0, missingIdentityRecords: 0,
@@ -56,15 +56,17 @@ export async function getNativeAgyUsageCoverage({ home = homedir(), limits: over
   let temporary;
   const stop = () => { coverage.capped = true; coverage.stoppedEarly = true; };
   const exhausted = () => {
-    if (Date.now() - started >= limits.milliseconds || bytes >= limits.bytes || entries >= limits.entries || rows >= limits.records) stop();
+    if (Date.now() >= deadline || Date.now() - started >= limits.milliseconds || bytes >= limits.bytes || entries >= limits.entries || rows >= limits.records) stop();
     return coverage.stoppedEarly;
   };
   const info = async path => lstat(path, { bigint: true }).catch(error => {
     if (error.code !== 'ENOENT') { coverage.unreadableFiles++; refusedSource = true; }
     return null;
   });
-  const directory = async parts => {
-    let path = home;
+  const directory = async (parts, explicitRoot) => {
+    // Explicit offline roots must not depend on the host home or its native layout.
+    let path = explicitRoot === undefined ? home ?? homedir() : '';
+    if (explicitRoot !== undefined) parts = [explicitRoot];
     for (const part of parts) {
       path = join(path, part);
       const stat = await info(path);
@@ -136,7 +138,7 @@ export async function getNativeAgyUsageCoverage({ home = homedir(), limits: over
         const stream = handle.createReadStream({ start: 0, autoClose: false });
         for await (const chunk of stream) {
           bytes += chunk.length;
-          if (bytes > limits.bytes || Date.now() - started >= limits.milliseconds) { stop(); break; }
+          if (bytes > limits.bytes || Date.now() >= deadline || Date.now() - started >= limits.milliseconds) { stop(); break; }
           await output.writeFile(chunk);
         }
       } finally { await output.close(); }
@@ -181,17 +183,17 @@ export async function getNativeAgyUsageCoverage({ home = homedir(), limits: over
     }
   };
   try {
-    for (const [root, field] of [['antigravity', 'unverifiedAppFiles'], ['antigravity-ide', 'unverifiedIdeFiles']]) {
-      const path = await directory(['.gemini', root, 'conversations']);
+    for (const [root, field, explicitRoot] of [['antigravity', 'unverifiedAppFiles', appConversationsRoot], ['antigravity-ide', 'unverifiedIdeFiles', ideConversationsRoot]]) {
+      const path = await directory(['.gemini', root, 'conversations'], explicitRoot);
       if (path) await enumerate(path, entry => { if (entry.isFile()) nativeAgyCoverage[field]++; });
     }
-    const path = await directory(['.gemini', 'antigravity-cli', 'conversations']);
+    const path = await directory(['.gemini', 'antigravity-cli', 'conversations'], cliConversationsRoot);
     coverage.missingSource = !path;
     if (path) await enumerate(path, async entry => {
       if (entry.isFile() && entry.name.endsWith('.db')) await read(join(path, entry.name), entry.name);
       else if (entry.isFile() && !/\.(db-(?:wal|shm|journal))$/.test(entry.name)) { findings.add('unsupported-native-container'); refusedSource = true; }
     });
-    if (!coverage.files && await directory(['.gemini', 'antigravity-cli', 'brain'])) nativeAgyCoverage.legacyOnlySources++;
+    if (!coverage.files && await directory(['.gemini', 'antigravity-cli', 'brain'], legacyBrainRoot)) nativeAgyCoverage.legacyOnlySources++;
   } catch { coverage.unreadableFiles++; refusedSource = true; }
   finally { if (temporary) await rm(temporary, { recursive: true, force: true }); }
   const union = unionNativeAgyRecords(projections);

@@ -82,7 +82,7 @@ function isTranscript(family, parts) {
  * even after an exhaustive scan of today's files. Internal limits are injectable
  * for synthetic boundary tests; no HTTP parameter can change roots or limits.
  */
-export async function getNativeTranscriptCoverage(family, { home = homedir(), limits: overrides = {}, includeRecords = false } = {}) {
+export async function getNativeTranscriptCoverage(family, { home, projectsRoot, limits: overrides = {}, deadline = Infinity, identityLimit = Infinity, includeRecords = false } = {}) {
   if (!Object.hasOwn(roots, family)) throw new Error('Unsupported native transcript family');
   const limits = { ...LIMITS, ...overrides };
   const coverage = { files: 0, records: 0, measuredRecords: 0, missingUsageRecords: 0, missingIdentityRecords: 0,
@@ -94,6 +94,7 @@ export async function getNativeTranscriptCoverage(family, { home = homedir(), li
   let bytes = 0;
   let entries = 0;
   const records = new Map();
+  let identityLimitReached = false;
   const versions = new Set();
   const conversations = new Map();
   const conversation = id => {
@@ -102,7 +103,7 @@ export async function getNativeTranscriptCoverage(family, { home = homedir(), li
   };
   const stop = () => { coverage.capped = true; coverage.stoppedEarly = true; };
   const exhausted = () => {
-    if (Date.now() - started >= limits.milliseconds || bytes >= limits.bytes || entries >= limits.entries || coverage.records >= limits.records) stop();
+    if (Date.now() >= deadline || Date.now() - started >= limits.milliseconds || bytes >= limits.bytes || entries >= limits.entries || coverage.records >= limits.records) stop();
     return coverage.stoppedEarly;
   };
   const consume = (line, parts) => {
@@ -130,6 +131,7 @@ export async function getNativeTranscriptCoverage(family, { home = homedir(), li
     const key = hash(['portos-native-record/1', family, record.key]);
     const signature = hash([record.values, record.usageShape]);
     const prior = records.get(key);
+    if (!prior && records.size >= identityLimit) { identityLimitReached = true; stop(); return; }
     if (prior) {
       coverage.duplicateRecords++;
       prior.copies++;
@@ -212,8 +214,9 @@ export async function getNativeTranscriptCoverage(family, { home = homedir(), li
       }
     })().catch(() => { coverage.unreadableFiles++; });
   };
-  const root = family === 'claude' && process.env.CLAUDE_CONFIG_DIR
-    ? join(process.env.CLAUDE_CONFIG_DIR, 'projects') : join(home, ...roots[family]);
+  const root = family === 'claude'
+    ? projectsRoot ?? (process.env.CLAUDE_CONFIG_DIR ? join(process.env.CLAUDE_CONFIG_DIR, 'projects') : join(home ?? homedir(), ...roots[family]))
+    : join(home ?? homedir(), ...roots[family]);
   await walk(root);
   const totals = [0, 0, 0, 0];
   const overlap = { cacheExceedsInputRecords: 0, cacheWithinInputRecords: 0 };
@@ -254,6 +257,7 @@ export async function getNativeTranscriptCoverage(family, { home = homedir(), li
         : coverage.invalidLines ? 'Retained files contained invalid or incomplete records, with no usable native records found. Coverage remains unknown.'
           : 'No matching native usage records were found in the retained source. This does not establish zero historical usage.';
   return {
+    ...(identityLimitReached ? { executionLimit: 'identity-limit' } : {}),
     status: coverage.records ? (partial ? 'partial' : 'available') : 'unavailable',
     source: `${family}:retained-transcripts`, scope: 'local-retained-transcripts', accountIdentity: null,
     aggregation: 'do-not-sum-across-instances', fetchedAt: new Date().toISOString(), completeness: 'unknown',
