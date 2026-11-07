@@ -168,20 +168,26 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
   useEffect(() => {
     if (!projectId) return undefined;
     let live = true;
-    const load = (reconnected) => getMusicVideoSceneJobs(projectId, { silent: true })
-      .then(async ({ jobs }) => {
-        if (!live || !Array.isArray(jobs)) return;
-        restoreFrameJobs(jobs.filter((j) => j.lane === 'image'));
-        restoreVideoJobs(jobs.filter((j) => j.lane === 'video'));
-        restoreEndFrameJobs(jobs.filter((j) => j.lane === 'endImage'));
-        if (!reconnected) return;
-        // Terminal events fired while the socket was down are never replayed: settle the
-        // tracked jobs the server no longer lists, then reload so their finished takes land.
-        const activeIds = jobs.map((j) => j.jobId);
-        const counts = await Promise.all([reconcileFrameJobs, reconcileVideoJobs, reconcileEndFrameJobs].map((reconcile) => reconcile(activeIds)));
-        if (live && counts.some((n) => n > 0)) onReconciledRef.current?.(projectId);
-      })
-      .catch(() => {}); // best-effort: a failed lookup just means no restored spinners
+    // Only the newest listing counts: an older response landing last would re-light a spinner for a job the newer one shows finished.
+    let latest = 0;
+    const load = (reconnected) => {
+      latest += 1;
+      const requestId = latest;
+      return getMusicVideoSceneJobs(projectId, { silent: true })
+        .then(async ({ jobs }) => {
+          if (!live || !Array.isArray(jobs) || requestId !== latest) return;
+          restoreFrameJobs(jobs.filter((j) => j.lane === 'image'));
+          restoreVideoJobs(jobs.filter((j) => j.lane === 'video'));
+          restoreEndFrameJobs(jobs.filter((j) => j.lane === 'endImage'));
+          if (!reconnected) return;
+          // Terminal events fired while the socket was down are never replayed: settle the
+          // tracked jobs the server no longer lists, then reload so their finished takes land.
+          const activeIds = jobs.map((j) => j.jobId);
+          const counts = await Promise.all([reconcileFrameJobs, reconcileVideoJobs, reconcileEndFrameJobs].map((reconcile) => reconcile(activeIds)));
+          if (live && counts.some((n) => n > 0)) onReconciledRef.current?.(projectId);
+        })
+        .catch(() => {}); // best-effort: a failed lookup just means no restored spinners
+    };
     load(false);
     const onConnect = () => load(true);
     socket.on('connect', onConnect);
