@@ -7,7 +7,6 @@ import { getAiAssignments, updateAiAssignment } from '../services/aiAssignments.
 import { saveSubscriptionCosts } from '../services/subscriptionCosts.js';
 import { savePlanTiers } from '../services/subscriptions.js';
 import { saveApiBilledInstanceIds } from '../services/usageFleetBilling.js';
-import { NATIVE_USAGE_ACCOUNT_SELECTIONS_KEY, nativeUsageAccountSelectionsSchema } from '../lib/nativeUsageContract.js';
 import {
   setCodexParallelLimit,
   CODEX_PARALLEL_MIN,
@@ -669,9 +668,6 @@ const validateSettingsPatch = async (body) => {
   // can't write an unbounded or non-string list through the generic endpoint.
   if (body?.usageApiBilledInstanceIds !== undefined) {
     validateRequest(usageApiBilledInstanceIdsSchema, body.usageApiBilledInstanceIds);
-  }
-  if (body?.[NATIVE_USAGE_ACCOUNT_SELECTIONS_KEY] !== undefined) {
-    validateRequest(nativeUsageAccountSelectionsSchema, body[NATIVE_USAGE_ACCOUNT_SELECTIONS_KEY]);
   }
 };
 

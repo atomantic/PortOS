@@ -228,19 +228,6 @@ describe('Settings routes — apiAccess slice', () => {
     vi.clearAllMocks();
   });
 
-  it('validates the machine-local native usage account selection and refuses an email as a label', async () => {
-    const participant = 'a'.repeat(32);
-    const selection = { family: 'codex', accountLabel: 'acct-a', authoritativeParticipant: participant, members: [participant] };
-    const retained = { family: 'grok', accountLabel: 'acct-a', historyScope: 'operator-confirmed-retained-history', members: [participant] };
-    const saved = await request(buildApp()).put('/api/settings').send({ usageNativeAccountSelections: [selection, retained] });
-    expect(saved.status).toBe(200);
-    expect(saved.body.usageNativeAccountSelections).toEqual([selection, retained]);
-    const { historyScope: _scope, ...unconfirmedHistory } = retained;
-    expect((await request(buildApp()).put('/api/settings').send({ usageNativeAccountSelections: [unconfirmedHistory] })).status).toBe(400);
-    const email = await request(buildApp()).put('/api/settings').send({ usageNativeAccountSelections: [{ ...selection, accountLabel: 'alice@example.com' }] });
-    expect(email.status).toBe(400);
-  });
-
   it('accepts a valid apiAccess patch and persists it', async () => {
     const res = await request(buildApp())
       .put('/api/settings')
@@ -1855,82 +1842,5 @@ describe('Settings routes — saved film looks', () => {
       expect(result.status).toBe(400);
       expect(store.filmLookPresets).toEqual(presets);
     }
-  });
-});
-
-
-// The native account editor and generic settings writer assert the same account
-// identities. Exercise the actual generic router behind both real HTTP gates.
-describe('generic native account selection operator authority', () => {
-  const selected = [{ family: 'grok', accountLabel: 'example-account', members: ['a'.repeat(32)], historyScope: 'operator-confirmed-retained-history' }];
-  const peer = { id: 'example-peer', instanceId: 'example-instance', enabled: true, syncSecret: 'a'.repeat(32) };
-  let enabled;
-  const guarded = address => {
-    const app = express();
-    app.use((req, _res, next) => {
-      Object.defineProperty(req.socket, 'remoteAddress', { value: address, configurable: true });
-      next();
-    });
-    app.use(authGate, hostControlRouteGate, express.json(), hostControlBodyGate);
-    app.use('/api/settings', settingsRoutes);
-    return app;
-  };
-  beforeEach(() => {
-    vi.clearAllMocks();
-    store = { theme: 'dark', usageNativeAccountSelections: structuredClone(selected) };
-    enabled = false;
-    vi.spyOn(auth, 'isAuthEnabled').mockImplementation(async () => enabled);
-    vi.spyOn(auth, 'verifyRequestSession').mockImplementation(async req => req.headers.authorization === 'Bearer example-delegated-session');
-    vi.spyOn(auth, 'verifyPassword').mockResolvedValue(true);
-    vi.spyOn(instanceIdentity, 'loadData').mockResolvedValue({ peers: [peer] });
-  });
-  afterEach(() => vi.restoreAllMocks());
-
-  it('refuses non-loopback replacement and clearing through every generic route spelling before persistence', async () => {
-    const app = guarded('192.0.2.10');
-    for (const path of ['/api/settings', '/API/SETTINGS/']) {
-      for (const usageNativeAccountSelections of [[], selected]) {
-        const res = await request(app).put(path).send({ usageNativeAccountSelections });
-        expect([res.status, res.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-      }
-    }
-    const patch = await request(app).patch('/api/settings/slice').send({ slicePath: 'usageNativeAccountSelections', partial: {} });
-    expect([patch.status, patch.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-    expect(updateSettingsWith).not.toHaveBeenCalled();
-    expect(store.usageNativeAccountSelections).toEqual(selected);
-  });
-
-  it('refuses peer credentials with password on or off, including legacy Basic, before persistence', async () => {
-    const app = guarded('192.0.2.10');
-    for (const passwordEnabled of [false, true]) {
-      enabled = passwordEnabled;
-      const res = await request(app).put('/api/settings')
-        .set(PEER_AUTH_HEADER, derivePeerAuthToken(peer.syncSecret, peer.instanceId)).set(PEER_INSTANCE_HEADER, peer.instanceId)
-        .send({ usageNativeAccountSelections: [] });
-      expect(res.status).toBe(403);
-    }
-    const basic = await request(app).put('/api/settings').set('Authorization', `Basic ${Buffer.from(':example-password').toString('base64')}`)
-      .send({ usageNativeAccountSelections: [] });
-    expect([basic.status, basic.body.code]).toEqual([403, 'HOST_CONTROL_FORBIDDEN']);
-    expect(updateSettingsWith).not.toHaveBeenCalled();
-    expect(store.usageNativeAccountSelections).toEqual(selected);
-  });
-
-  it('preserves local and delegated generic saves without opening unsupported slice PATCH or blocking unrelated settings', async () => {
-    const local = await request(guarded('127.0.0.1')).put('/api/settings').send({ usageNativeAccountSelections: [] });
-    expect(local.status).toBe(200);
-    expect(store.usageNativeAccountSelections).toEqual([]);
-    enabled = true;
-    const delegated = await request(guarded('192.0.2.10')).put('/api/settings').set('Authorization', 'Bearer example-delegated-session')
-      .send({ usageNativeAccountSelections: selected });
-    expect(delegated.status).toBe(200);
-    expect(store.usageNativeAccountSelections).toEqual(selected);
-    enabled = false;
-    const unsupported = await request(guarded('127.0.0.1')).patch('/api/settings/slice')
-      .send({ slicePath: 'usageNativeAccountSelections', partial: {} });
-    expect(unsupported.status).toBe(400);
-    const unrelated = await request(guarded('192.0.2.10')).put('/api/settings').send({ theme: 'light' });
-    expect(unrelated.status).toBe(200);
-    expect(store).toMatchObject({ theme: 'light', usageNativeAccountSelections: selected });
   });
 });

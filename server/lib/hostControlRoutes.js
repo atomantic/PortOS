@@ -270,9 +270,6 @@ import { LLM_DRILL_TYPES } from './postDrillTypes.js';
 import { escapeRegExp } from './textUtils.js';
 
 export const HOST_CONTROL_ROUTES = Object.freeze([
-  // Explicit account-identity assertions require the local/delegated operator,
-  // including when an optional instance password is disabled.
-  'PUT /api/usage/native-accounts',
   // The usage cutover barrier (#15098) runs nothing on the host, but it decides
   // whether this machine's accounting is written and federated, so it needs an
   // operator: a network caller on a password-free install cannot hold or activate it.
@@ -1430,8 +1427,6 @@ export const HOST_CONTROL_SETTINGS_SLICES = Object.freeze([
   'seriesAutopilot',
   'telegram',
   'untrustedContent',
-  // Same explicit account-identity assertions as PUT /api/usage/native-accounts.
-  'usageNativeAccountSelections',
   'voice',
 ]);
 

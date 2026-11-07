@@ -1,4 +1,3 @@
-import { nativeUsageAccountSelectionsSchema } from './nativeUsageSelections.js';
 import { a2vLoraStageStrengthsSchema, isDefaultA2vLoraStages } from './videoLoraStageValidation.js';
 import { executionOptionsSchema } from './aiToolkit/internal/executionOptionsValidation.js';
 import { federatedSourceAudioSchema } from './federatedMediaWire.js';
@@ -1692,16 +1691,6 @@ const isoDay = z.string()
     return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
   }, { message: 'Not a valid calendar date' });
 
-export const nativeUsageAccountsQuerySchema = z.strictObject({});
-export const nativeUsageAccountsUpdateSchema = z.strictObject({
-  expectedRevision: z.string().regex(/^[a-f0-9]{64}$/),
-  selections: nativeUsageAccountSelectionsSchema,
-});
-export const nativeUsageCoverageQuerySchema = z.object({ family: z.enum(['claude', 'codex', 'grok', 'agy']).optional() }).strict();
-export const nativeUsageMatrixQuerySchema = z.object({ scope: z.enum(['local', 'fleet']).default('local') }).strict();
-export const nativeUsageRebuildSchema = z.object({ scope: z.enum(['local', 'fleet']).default('local') }).strict();
-export const nativeUsagePeerReportQuerySchema = z.object({ challenge: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
-
 /**
  * Query params for GET /api/usage — either a preset period or an explicit
  * from/to date range (inclusive, YYYY-MM-DD). Explicit dates win over period.
@@ -1711,11 +1700,6 @@ export const usageQuerySchema = z.object({
   from: isoDay.optional(),
   to: isoDay.optional()
 }).refine((q) => !(q.from && q.to) || q.from <= q.to, { message: 'from must be on or before to' });
-
-export const usagePreviewSchema = z.object({ from: isoDay, to: isoDay }).strict()
-  .refine(({ from, to }) => from <= to && Date.parse(to) - Date.parse(from) < 366 * 86_400_000,
-    { message: 'Choose an inclusive UTC interval of 1 to 366 days' });
-export const usagePreviewCancelSchema = z.object({ jobId: z.string().uuid() }).strict();
 
 /** Query for GET /api/usage/rolling-cost — the chart's span, independent of the report window. */
 export const usageRollingCostQuerySchema = z.object({
