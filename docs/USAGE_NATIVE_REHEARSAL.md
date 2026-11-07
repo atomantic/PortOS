@@ -2,9 +2,9 @@
 
 These #15031 tools validate an **isolated byte restore of the two stores
 fingerprinted by the usage cutover barrier** and inspect a supplied standard
-snapshot's integrity. Neither establishes a complete PortOS backup,
-a demonstrated database/runtime restore, a live consistency check, or permission
-to activate. The [native stage](./USAGE_NATIVE_STAGING.md) stays separate from
+snapshot's integrity. An explicit Linux Docker command can also demonstrate a
+disposable SQL replay. None establishes a complete PortOS backup, a matched
+runtime restore, a live consistency check, or permission to activate. The [native stage](./USAGE_NATIVE_STAGING.md) stays separate from
 legacy accounting. The [barrier](./USAGE_CUTOVER_BARRIER.md) still refuses activation
 until a compatible runtime exists. This tool never registers one.
 
@@ -35,7 +35,8 @@ changes; they do not authenticate a capture or prove account membership.
 
 An authorized operator must separately prepare consistent, detached copies. This
 CLI does not acquire a fence, discover a data root, call a local server, contact a
-peer, copy provider-native history or connect to PostgreSQL. Do not point it at an
+peer or copy provider-native history. Only the explicit `sql-restore` command
+connects to PostgreSQL, inside its own disposable container. Do not point it at an
 active data directory. The copied barrier and status must both describe a drained
 `fenced` state with the same epoch, participants, timestamps, store fingerprints
 and retained-write interval/count. This validates the supplied evidence, not the
@@ -205,9 +206,99 @@ matched code/schema/migrations, database and runtime restore, native-source
 preservation and the existing live cutover gates. It does not clear or change the
 fleet byte-rehearsal preflight. Invalid inputs exit 1; invalid syntax exits 2.
 
+## Rehearse SQL in a disposable Linux container
+
+On a separate Linux executor with `/usr/bin/docker`, a reachable local daemon at
+`unix:///var/run/docker.sock`, and the exact pinned image already present:
+
+```bash
+node scripts/native-usage-rehearse.js sql-restore stage.json barrier-backup.json detached-standard-snapshot
+```
+
+This is an explicit **SQL-only** rehearsal, not a runtime boot or live restore.
+The command first performs the full snapshot inspection above. It then rereads
+and spools the SQL through a pinned descriptor into a new private temporary
+directory, verifying the original hash and byte length again. The original dump
+is never changed. SQL dumps above 256 MiB are refused in this bounded increment.
+
+The image is the same digest-pinned PostgreSQL 17/pgvector image declared by CI.
+The command never pulls images, installs tools, discovers `.env`, uses the primary
+checkout, or accepts a database URL, Docker context, image, executable or daemon
+argument. Host `PG*`, `DOCKER_*`, credentials, home configuration and startup files
+are not inherited. Missing prerequisites fail closed; there is no host-database
+fallback. Provisioning this executor/image is a separate authorized action.
+
+Each run creates its own container with networking disabled, no published ports,
+no host mounts, read-only root, no capabilities, no-new-privileges, one CPU, 64
+processes and 1 GiB memory with no additional swap. The image's declared PGDATA
+volume is replaced by a 768 MiB private tmpfs, and `/tmp` is a separate 64 MiB
+tmpfs. These are intentionally small rehearsal limits, not production sizing.
+The workload has a 15-minute budget; cleanup gets its own bounded budget.
+
+PostgreSQL listens only on its private Unix socket and requires SCRAM passwords
+for local connections. Random admin/replay passwords exist only for this run.
+Server/admin processes use OS uid 999; replay uses uid 65534 and cannot read the
+0700 database directory or signal the server. Replay is a separate PostgreSQL
+role without superuser, create-role, create-database, replication or row-security
+bypass privileges. Only `vector` and `pgcrypto` are preinstalled by the admin.
+
+The existing backup replay scanner omits only extension DROP/COMMENT metadata
+and dump-owned psql restriction/version headers. This preserves preinstalled
+extensions and lets the caller impose its own random psql restriction key. The
+receipt records this transformation and its omitted-range count while retaining
+the **original** dump hash. Replay uses `psql -X`, no password prompt,
+`ON_ERROR_STOP`, restricted mode and a single transaction with explicit `-f -`
+stdin input. Restricted mode permits only `\unrestrict`, which the replay never
+issues. The scanner separately refuses all other out-of-data psql commands
+before execution. Ambiguous backslashes in ordinary/escape
+SQL strings or quoted identifiers are conservatively refused; this increment
+does not interpret changes to SQL lexical modes or encodings. COPY data,
+dollar-quoted payloads and comments retain their exact bytes. A fixed SQL `SELECT`
+after all supplied input must return a fresh random token as an exact output line
+under `-At`; it never uses a prohibited `\echo` command or lifts the restriction.
+This independently proves the input reached its end. Unrecognized or incompatible
+SQL fails rather than broadening privileges or rewriting it.
+
+After commit, fresh sessions verify that all seven required tables are real
+ordinary/partitioned tables and can be queried. Only their fixed names and row
+counts are reported. A zero count is a measured empty restored table; it is not
+proof the original source was empty. No row contents, migration IDs, arbitrary
+SQL output, passwords, paths or raw database errors appear in the report. Failures
+identify the fixed phase and category (for example, `replay:permission-denied`,
+`replay:client-error`, or `replay:division-by-zero`). psql uses SQLSTATE-only error
+verbosity; only allowlisted categories are surfaced, never raw diagnostics.
+
+The container is forcibly removed, including any volumes, on success, failure
+or a handled interruption. A successful daemon list must then affirm its absence
+before any receipt is returned. A cleanup failure is
+`sql-rehearsal-cleanup-unverified`, never a restore-success receipt. An uncatchable
+process/host termination cannot guarantee cleanup; inspect that isolated
+executor before reusing it. Temporary spools are removed when the command exits
+normally or handles a failure/interruption.
+
+A successful report still exits **3**. It sets `database.restoreVerified: true`
+with `restoreScope: disposable-container-sql-replay`, records the restored row
+counts and verified container removal, and clears only the database-replay hold.
+`sourceRowCountsMatched`, `schemaAndMigrationsMatched`, matched runtime,
+`fullStoreInventoryVerified`, `fullRecoveryBackup` and `activationReady` remain
+false. Schema-migration rows were restored and counted, not validated against
+code or claimed to have run correctly. This command neither applies migrations
+nor starts PortOS, provider integrations, peer sync or any runtime service.
+
+The hosted DB job runs synthetic SQL/COPY and privilege-escape tests against real
+PostgreSQL, including actual `pg_dump` output generated with the production flags
+from vector/pgcrypto, schema, function and trigger fixtures. It runs these tests
+explicitly, outside the test memo, with Docker required. Local unit tests simulate
+the Docker transport and do **not** establish actual SQL replay. To run the real
+suite on an already provisioned isolated Linux executor, from `server/`:
+
+```bash
+PORTOS_NATIVE_SQL_LIVE=1 node node_modules/vitest/vitest.mjs run --configLoader runner ../scripts/native-usage-sql-rehearsal.live.test.js
+```
+
 ## Remaining recovery gates
 
-#15031 remains open. The byte rehearsal and snapshot inspection do not prove the complete
+#15031 remains open. These rehearsals and snapshot inspections do not prove the complete
 source inventory: legacy `usage-interactive-scan.json`, Claude's preserved transcript
 history store, quota readings, immutable image receipts, sync cursors, settings,
 provider classifications, identity/peer configuration or attribution artifacts.
