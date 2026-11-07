@@ -4472,4 +4472,31 @@ function B() { const sensors = useSensors(useSensor(PointerSensor)); return <Dnd
     }
     expect(offenders, `Nested <main> — use <section> (the app shell's <main id="main-content"> is the only landmark):\n${offenders.join('\n')}`).toEqual([]);
   });
+
+  it('floors editable field text at 16px on a coarse pointer, unlayered (#15177)', () => {
+    // iOS Safari zooms on focus of any field under 16px, and fields carry their
+    // own `text-sm`/`text-xs`. The floor must sit at the top level of the
+    // stylesheet: Tailwind's `text-sm` lives in `@layer utilities`, so the same
+    // rule inside any `@layer` would lose to it and silently do nothing.
+    const css = readFileSync(join(CLIENT_ROOT, 'src/index.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+    const topLevel = [];
+    let depth = 0;
+    let start = 0;
+    for (let i = 0; i < css.length; i++) {
+      if (css[i] === '{') {
+        if (depth === 0) start = css.lastIndexOf('}', i) + 1;
+        depth++;
+      } else if (css[i] === '}') {
+        depth--;
+        if (depth === 0) topLevel.push(css.slice(start, i + 1));
+      }
+    }
+    const rule = topLevel.find((block) => /^\s*@media\s*\(pointer:\s*coarse\)/.test(block) && /\btextarea\b/.test(block));
+    expect(rule, 'src/index.css needs a top-level (unlayered) @media (pointer: coarse) rule setting font-size: 16px on input/select/textarea').toBeTruthy();
+    expect(rule).toMatch(/font-size:\s*16px/);
+    expect(rule).toMatch(/\bselect\b/);
+    for (const type of ['checkbox', 'radio', 'range', 'color', 'file', 'hidden']) {
+      expect(rule, `${type} inputs must be excluded`).toContain(`[type="${type}"]`);
+    }
+  });
 });
