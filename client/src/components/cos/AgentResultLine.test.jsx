@@ -18,6 +18,16 @@ it('separates clean execution, assessment persistence and delivery validation', 
   expect(screen.queryByText('Assessment could not be saved')).not.toBeInTheDocument();
 });
 
+it('lets a long release identity shrink the result line inside a flex row', () => {
+  const identity = 'a'.repeat(64);
+  const agent = { result: { success: true }, metadata: { releasePublication: { status: 'verified', tag: 'v1.0.0' }, releaseSynchronization: { status: 'verified', identity } } };
+  const { container, rerender } = render(<AgentResultLine agent={agent} />);
+  expect(container.firstChild).toHaveClass('min-w-0', 'max-w-full');
+  expect(screen.getByTitle(identity)).toHaveClass('truncate');
+  rerender(<AgentResultLine agent={agent} className="mt-2" />);
+  expect(container.firstChild).toHaveClass('min-w-0', 'max-w-full', 'mt-2');
+});
+
 it('does not invent assessment or delivery validation for ordinary successful runs', () => {
   render(<AgentResultLine agent={{ result: { success: true, validationPassed: null } }} />);
   expect(screen.getByText('Execution completed')).toBeInTheDocument();
