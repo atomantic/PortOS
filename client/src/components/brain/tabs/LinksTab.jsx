@@ -745,7 +745,7 @@ export default function LinksTab({ onRefresh }) {
             className="p-4 bg-port-card border border-port-border rounded-lg"
           >
             {/* Header row */}
-            <div className="flex items-start justify-between gap-3 mb-2">
+            <div className="flex flex-wrap items-start gap-x-2 gap-y-1 sm:flex-nowrap sm:justify-between sm:gap-3 mb-2">
               {!isEditing && (
                 <LinkDragHandle link={link} />
               )}
@@ -842,7 +842,7 @@ export default function LinksTab({ onRefresh }) {
                 </div>
               ) : (
                 <>
-                  <div className="flex-1 min-w-0">
+                  <div className="min-w-0 flex-1 basis-[calc(100%_-_3.5rem)] sm:basis-0">
                     <div className="flex items-center gap-2 mb-1">
                       {link.isRepo ? (
                         link.malwareScan?.verdict === 'DANGEROUS'
@@ -872,7 +872,7 @@ export default function LinksTab({ onRefresh }) {
                     )}
                   </div>
 
-                  <div className="flex items-center gap-2 shrink-0">
+                  <div className="ml-auto flex items-center gap-2 shrink-0">
                     <button
                       onClick={() => handleEdit(link)}
                       className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1.5 text-gray-400 hover:text-white transition-colors"
