@@ -172,18 +172,21 @@ const hasExactKeys = (value, keys) => canonicalStringify(Object.keys(value).sort
 const onlyKeys = (value, keys) => Object.keys(value).every((key) => keys.includes(key));
 
 /** Allow-list the input shapes, so no transcript text, path or account field can enter the corpus. */
+const GROK_ROW_KEYS = [...GROK_COUNTERS, 'costUsdTicks', 'usageIsIncomplete'];
+const validRows = ({ modelUsage }) => modelUsage === undefined || Object.values(modelUsage).every((row) => onlyKeys(row, GROK_ROW_KEYS));
 const validInput = {
-  claude: ({ entries }) => entries.every((entry) => onlyKeys(entry, ['type', 'version', 'requestId', 'timestamp', 'message'])
+  claude: (report) => hasExactKeys(report, ['capability', 'entries']) && report.entries.every((entry) => onlyKeys(entry, ['type', 'version', 'requestId', 'timestamp', 'message'])
     && entry.type === 'assistant' && /^req-\d+$/.test(entry.requestId ?? 'req-0')
     && onlyKeys(entry.message, ['id', 'model', 'stop_reason', 'usage']) && /^msg-\d+$/.test(entry.message.id)
     && onlyKeys(entry.message.usage, CLAUDE_USAGE)),
-  grok: ({ snapshots }) => snapshots.every(({ sessionId, session, turns, ...rest }) => /^session-[a-z]$/.test(sessionId)
-    && onlyKeys(rest, ['updatedAt']) && onlyKeys(session, [...GROK_COUNTERS, 'costUsdTicks', 'turnCount', 'primaryModelId', 'modelUsage', 'usageIsIncomplete'])
-    && turns.every((turn) => onlyKeys(turn, [...GROK_COUNTERS, 'turnNumber', 'endedAt', 'costUsdTicks', 'costIsPartial', 'turnCount', 'primaryModelId', 'modelUsage', 'usageIsIncomplete']))),
+  grok: (report) => hasExactKeys(report, ['capability', 'snapshots']) && report.snapshots.every(({ sessionId, session, turns, ...rest }) => /^session-[a-z]$/.test(sessionId)
+    && onlyKeys(rest, ['updatedAt']) && onlyKeys(session, [...GROK_COUNTERS, 'costUsdTicks', 'turnCount', 'primaryModelId', 'modelUsage', 'usageIsIncomplete']) && validRows(session)
+    && turns.every((turn) => onlyKeys(turn, [...GROK_COUNTERS, 'turnNumber', 'endedAt', 'costUsdTicks', 'costIsPartial', 'turnCount', 'primaryModelId', 'modelUsage', 'usageIsIncomplete']) && validRows(turn))),
 };
+const carriesModel = (record) => 'modelUsage' in record || 'primaryModelId' in record;
 const hasModelEvidence = {
   claude: ({ entries }) => entries.some(({ message }) => 'model' in message),
-  grok: ({ snapshots }) => snapshots.some(({ turns }) => turns.some((turn) => 'modelUsage' in turn || 'primaryModelId' in turn)),
+  grok: ({ snapshots }) => snapshots.some(({ session, turns }) => carriesModel(session) || turns.some(carriesModel)),
 };
 
 const BUCKET_FIELDS = ['tokensIn', 'tokensOut', 'cacheReadTokens', 'cacheWriteTokens', 'totalTokens'];
@@ -231,6 +234,7 @@ describe('native usage model attribution corpus', () => {
     describe(family, () => {
       it('allow-lists structure and keeps old reports free of model evidence', () => {
         expect(corpus).toMatchObject({ fixtureVersion: 1, family, syntheticOnly: true });
+        expect(hasExactKeys(corpus, ['fixtureVersion', 'family', 'syntheticOnly', 'sourceContract', 'rejectedLabelExamples', 'scenarios'])).toBe(true);
         for (const scenario of corpus.scenarios) {
           expect(onlyKeys(scenario, ['name', 'covers', 'limits', 'reports', 'expect']), scenario.name).toBe(true);
           for (const report of scenario.reports) {
@@ -283,6 +287,15 @@ describe('native usage model attribution corpus', () => {
     const reasons = [...contract.unknownReasons, ...contract.unallocatedReasons];
     const exercised = Object.values(corpora).flatMap(({ scenarios }) => scenarios.flatMap(({ expect: e }) => [...Object.keys(e.unknown), ...Object.keys(e.unallocated), ...Object.keys(e.refused)]));
     for (const reason of [...reasons, ...contract.providerFindings]) expect(exercised).toContain(reason);
+  });
+
+  it('applies its one length limit to a label with or without a suffix', () => {
+    const { maxLabelLength: max } = contract.limits;
+    const suffix = '@20260101';
+    expect(validLabel('a'.repeat(max))).toBe(true);
+    expect(validLabel('a'.repeat(max + 1))).toBe(false);
+    expect(validLabel(`${'a'.repeat(max - suffix.length)}${suffix}`)).toBe(true);
+    expect(validLabel(`${'a'.repeat(max - suffix.length + 1)}${suffix}`)).toBe(false);
   });
 
   // Associativity is what lets a per-source store (#15255) match one full read.

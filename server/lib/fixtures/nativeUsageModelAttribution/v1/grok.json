@@ -265,6 +265,36 @@
       }
     },
     {
+      "name": "a turn failing every check is named by its label first",
+      "covers": ["invalid-label", "malformed-rows", "inconsistent-per-model-sum"],
+      "reports": [{ "capability": "model-attribution-v1", "snapshots": [{ "sessionId": "session-a", "updatedAt": "2026-03-02T00:00:00Z", "session": { "inputTokens": 130, "outputTokens": 30, "cachedReadTokens": 70, "cacheCreationTokens": 0, "reasoningTokens": 6, "totalTokens": 160, "modelCalls": 3, "costUsdTicks": 10, "turnCount": 1 }, "turns": [{ "turnNumber": 1, "endedAt": "2026-03-01T00:01:00Z", "inputTokens": 130, "outputTokens": 30, "cachedReadTokens": 70, "cacheCreationTokens": 0, "reasoningTokens": 6, "totalTokens": 160, "modelCalls": 3, "costUsdTicks": 10, "turnCount": 1, "modelUsage": { "../private/example-model": { "inputTokens": 1 } } }] }] }],
+      "expect": {
+        "records": [{ "identity": "session-a/1", "recordKey": "0d5e92ae705057c6010246bc8ee1947350876036bc1b6d836b7f65d64b00507f", "outcome": "model-label-invalid", "incomplete": false }],
+        "providerTotals": { "tokensIn": 130, "tokensOut": 30, "cacheReadTokens": 70, "cacheWriteTokens": 0, "reasoningTokens": 6, "modelCalls": 3, "totalTokens": 160 },
+        "models": {},
+        "unknown": {},
+        "unallocated": { "model-label-invalid": { "tokensIn": 130, "tokensOut": 30, "cacheReadTokens": 70, "cacheWriteTokens": 0, "reasoningTokens": 6, "modelCalls": 3, "totalTokens": 160 } },
+        "refused": {},
+        "incompleteRecords": 0,
+        "attributionHash": "a6f525d9f5093bedcf03dd3bcfc55bc68fa15c2001da41ab4aed601984665891"
+      }
+    },
+    {
+      "name": "a malformed row that also misses the sum is named as malformed",
+      "covers": ["malformed-rows", "inconsistent-per-model-sum"],
+      "reports": [{ "capability": "model-attribution-v1", "snapshots": [{ "sessionId": "session-a", "updatedAt": "2026-03-02T00:00:00Z", "session": { "inputTokens": 130, "outputTokens": 30, "cachedReadTokens": 70, "cacheCreationTokens": 0, "reasoningTokens": 6, "totalTokens": 160, "modelCalls": 3, "costUsdTicks": 10, "turnCount": 1 }, "turns": [{ "turnNumber": 1, "endedAt": "2026-03-01T00:01:00Z", "inputTokens": 130, "outputTokens": 30, "cachedReadTokens": 70, "cacheCreationTokens": 0, "reasoningTokens": 6, "totalTokens": 160, "modelCalls": 3, "costUsdTicks": 10, "turnCount": 1, "modelUsage": { "example-grok-large": { "inputTokens": 1 } } }] }] }],
+      "expect": {
+        "records": [{ "identity": "session-a/1", "recordKey": "0d5e92ae705057c6010246bc8ee1947350876036bc1b6d836b7f65d64b00507f", "outcome": "model-rows-invalid", "incomplete": false }],
+        "providerTotals": { "tokensIn": 130, "tokensOut": 30, "cacheReadTokens": 70, "cacheWriteTokens": 0, "reasoningTokens": 6, "modelCalls": 3, "totalTokens": 160 },
+        "models": {},
+        "unknown": {},
+        "unallocated": { "model-rows-invalid": { "tokensIn": 130, "tokensOut": 30, "cacheReadTokens": 70, "cacheWriteTokens": 0, "reasoningTokens": 6, "modelCalls": 3, "totalTokens": 160 } },
+        "refused": {},
+        "incompleteRecords": 0,
+        "attributionHash": "e1a9b55b129d6680ccc3740eb906000aefac657629561387538bc4403901d4ec"
+      }
+    },
+    {
       "name": "a turn flagged incomplete reconciles as a marked lower bound",
       "covers": ["incomplete-usage"],
       "reports": [

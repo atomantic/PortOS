@@ -97,7 +97,8 @@ counters keep the total and name no model.
 
 **Grok.** Only `turns[].modelUsage` is evidence, and `primaryModelId` is never read for
 allocation. Absent or empty rows are `model-missing`, even when a primary label is
-present. A split is accepted only when:
+present. A split is accepted only when these checks pass, in this order, with the first
+failure naming the reason:
 
 1. every label passes the grammar, or the turn is `model-label-invalid`;
 2. the row count is within the cap and each row holds all seven counters with
@@ -183,11 +184,11 @@ describes a report with no such field. A refused record's tombstone carries
 
 **Label bounds.** Labels are ASCII, compared byte for byte, and never case-folded,
 aliased or grouped by family. Vendor-routed forms stay separate buckets. The grammar,
-at most 105 characters, refuses paths, whitespace, `arn:` identifiers, email shapes and
-digit-only values:
+at most 128 characters including any suffix, refuses paths, whitespace, `arn:`
+identifiers, email shapes and digit-only values:
 
 ```text
-^(?![Aa][Rr][Nn]:)(?=[^A-Za-z]*[A-Za-z])[A-Za-z0-9][A-Za-z0-9._:+-]{0,95}(?:@(?:[0-9]{8}|default))?$
+^(?![Aa][Rr][Nn]:)(?=[^A-Za-z]*[A-Za-z])(?=.{1,128}$)[A-Za-z0-9][A-Za-z0-9._:+-]*(?:@(?:[0-9]{8}|default))?$
 ```
 
 The caps are guards against a malformed source, set far above real use, and tokens past

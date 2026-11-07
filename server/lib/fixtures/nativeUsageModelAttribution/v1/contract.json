@@ -3,12 +3,12 @@
   "status": "proposal-not-production",
   "syntheticOnly": true,
   "decisionRecord": "docs/plans/2026-11-07-native-usage-model-attribution.md",
-  "labelPattern": "^(?![Aa][Rr][Nn]:)(?=[^A-Za-z]*[A-Za-z])[A-Za-z0-9][A-Za-z0-9._:+-]{0,95}(?:@(?:[0-9]{8}|default))?$",
+  "labelPattern": "^(?![Aa][Rr][Nn]:)(?=[^A-Za-z]*[A-Za-z])(?=.{1,128}$)[A-Za-z0-9][A-Za-z0-9._:+-]*(?:@(?:[0-9]{8}|default))?$",
   "sentinels": [
     "<synthetic>"
   ],
   "limits": {
-    "maxLabelLength": 105,
+    "maxLabelLength": 128,
     "maxLabelsPerProjection": 1024,
     "maxRowsPerRecord": 256
   },
