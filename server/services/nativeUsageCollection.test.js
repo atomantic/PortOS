@@ -158,6 +158,15 @@ describe('collecting only what changed', () => {
     await expectSameAsFullRead(report);
   });
 
+  it('reads a record spanning many stream chunks, with multi-byte text split across them', async () => {
+    const long = claudeLine('a', 5, { padding: '\u{1F98A}'.repeat(100_000) });
+    await save(claudePath('long'), `${long}\n${claudeLine('b')}\n`);
+    const report = await stored();
+    expect(claudeTokens(report)).toBe(40);
+    expect(entry(report, 'claude').coverage.invalidLines).toBe(0);
+    await expectSameAsFullRead(report);
+  });
+
   it('keeps a deleted source counted, and says so', async () => {
     const claude = await save(claudePath('swept'), `${claudeLine('a')}\n`);
     const grok = await save('.grok/sessions/project/session/usage.json', grokSnapshot('session'));

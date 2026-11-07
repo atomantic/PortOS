@@ -168,7 +168,10 @@ export async function getNativeTranscriptCoverage(family, { home, projectsRoot, 
     if (!stat?.isFile()) { sink.coverage.unreadableFiles++; await handle.close(); return; }
     sink.coverage.files++;
     const stream = handle.createReadStream({ highWaterMark: 64 * 1024, autoClose: true });
-    let pending = Buffer.alloc(0);
+    // Chunks wait in a list and only new bytes are searched: re-joining and rescanning
+    // on every chunk costs quadratic time on a long line.
+    let pending = [];
+    let pendingBytes = 0;
     // One oversized record must not end the scan: most are attachments that carry
     // no usage. It stays reported, because this line was not read.
     let skippingLine = false;
@@ -177,25 +180,33 @@ export async function getNativeTranscriptCoverage(family, { home, projectsRoot, 
       for await (const chunk of stream) {
         bytes += chunk.length;
         if (exhausted()) break;
-        pending = Buffer.concat([pending, chunk]);
+        let start = 0;
         let newline;
-        while ((newline = pending.indexOf(10)) !== -1) {
+        while ((newline = chunk.indexOf(10, start)) !== -1) {
+          const lineBytes = pendingBytes + newline - start;
           if (skippingLine) skippingLine = false;
-          else if (newline > limits.lineBytes) oversized();
-          else consume(pending.subarray(0, newline).toString('utf8'), parts);
-          pending = pending.subarray(newline + 1);
+          else if (lineBytes > limits.lineBytes) oversized();
+          else consume(Buffer.concat([...pending, chunk.subarray(start, newline)], lineBytes).toString('utf8'), parts);
+          pending = [];
+          pendingBytes = 0;
+          start = newline + 1;
           if (exhausted()) break;
         }
-        if (pending.length > limits.lineBytes) {
-          if (!skippingLine) oversized();
-          skippingLine = true;
-          pending = Buffer.alloc(0);
+        if (coverage.stoppedEarly) break;
+        if (!skippingLine && start < chunk.length) {
+          pending.push(chunk.subarray(start));
+          pendingBytes += chunk.length - start;
         }
-        if (exhausted()) break;
+        if (pendingBytes > limits.lineBytes) {
+          oversized();
+          skippingLine = true;
+          pending = [];
+          pendingBytes = 0;
+        }
       }
       // A trailing non-newline record may be an in-progress append, not a
       // completed emission. Never silently count it as authoritative.
-      if (!coverage.stoppedEarly && !skippingLine && pending.length) sink.coverage.invalidLines++;
+      if (!coverage.stoppedEarly && !skippingLine && pendingBytes) sink.coverage.invalidLines++;
     })().catch(() => { sink.coverage.unreadableFiles++; });
     stream.destroy();
   };
