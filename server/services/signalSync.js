@@ -43,6 +43,7 @@ import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { expandHome, dataPath, atomicWrite, tryReadFile, safeJSONParse } from '../lib/fileUtils.js';
+import { readSyncCursorState, readSyncCursorStateForStatus } from '../lib/syncCursorState.js';
 import { getUserTimezone } from './userTimezone.js';
 import { identityFromHandle } from '../lib/tribeMatch.js';
 import { decryptSafeStorageValue, isRawHexKey } from '../lib/signalCrypto.js';
@@ -227,13 +228,7 @@ function stateFilePath() {
 // Machine-local incremental cursor. NOT federated — the Signal DB and its rowids
 // are per-machine, so this state must never sync to a peer.
 export async function readSyncState() {
-  const raw = await tryReadFile(stateFilePath());
-  const parsed = raw ? safeJSONParse(raw, null, { allowArray: false }) : null;
-  return {
-    cursorRowid: Number.isFinite(parsed?.cursorRowid) ? parsed.cursorRowid : 0,
-    lastRunAt: parsed?.lastRunAt || null,
-    lastResult: parsed?.lastResult || null,
-  };
+  return readSyncCursorState(stateFilePath(), 'cursorRowid');
 }
 
 async function writeSyncState(state) {
@@ -522,6 +517,6 @@ async function doRunSync() {
 
 // Status for the settings UI: config + cursor state (no DB open / key read).
 export async function getStatus() {
-  const [config, state] = await Promise.all([getSignalConfig(), readSyncState()]);
-  return { config, state };
+  const [config, { state, stateError }] = await Promise.all([getSignalConfig(), readSyncCursorStateForStatus(stateFilePath(), 'cursorRowid')]);
+  return { config, state, ...(stateError ? { stateError } : {}) };
 }

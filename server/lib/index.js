@@ -542,6 +542,7 @@ export * from './pinterestFeed.js';
 export * from './readResponseJson.js';
 export * from './safeUrlFetch.js';
 export * from './sharingOrigin.js';
+export * from './syncCursorState.js';
 export * from './syncIntegrity.js';
 export * from './syncWire.js';
 export * from './tailscale.js';
