@@ -50,6 +50,7 @@ const {
   listAutomationActivity, undoAutomationAction, listLearnedRules, resolveWithAgent, actOnPullRequest, getAutomationsOverview, setNotificationCadence,
 } = await import('./githubNotifications.js');
 const { getDeploymentReview, reviewDeployment } = await import('./githubNotificationDeployment.js');
+const { retriageOpenThreads } = await import('./githubNotificationTriage.js');
 const { startNotificationResolveListener } = await import('./githubNotificationResolveTask.js');
 const { cosEvents } = await import('./cosEvents.js');
 const { runAccountAudit, applyAuditSuggestion, listAuditChanges, undoAuditChange, sendDueAuditReports } = await import('./githubNotificationAudit.js');
@@ -1502,4 +1503,130 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     const { rows } = await query('SELECT 1 FROM github_notifications WHERE account_id = $1 AND thread_id = $2', [account.id, '811']);
     expect(rows).toHaveLength(0);
   });
+  // Runs `beforeCall` the first time `gh` is asked for `endpoint`, to land a
+  // write in the middle of a pass that already read its rows.
+  function interleaveAt(endpoint, beforeCall) {
+    const base = vi.mocked(execGh).getMockImplementation();
+    let fired = false;
+    vi.mocked(execGh).mockImplementation(async (args, ...rest) => {
+      if (!fired && args.includes(endpoint)) {
+        fired = true;
+        await beforeCall();
+      }
+      return base(args, ...rest);
+    });
+  }
+  const handOffRow = (threadId, extra = {}) => query(
+    `UPDATE github_notifications SET decision = 'handed-off', evidence = evidence || $3::jsonb WHERE account_id = $1 AND thread_id = $2`,
+    [account.id, threadId, JSON.stringify({ handoff: { lane: 'notification-resolve', taskId: `task-${threadId}`, previousDecision: 'needs-you' }, ...extra })],
+  );
+
+  it('keeps a hand-off and PR action records through a trust change until new GitHub activity (#15173)', async () => {
+    const login = account.login;
+    const threads = [thread('3001', { owner: login, reason: 'review_requested' }), thread('3002', { owner: login, reason: 'review_requested' })];
+    mockGh((args) => githubListing(args, threads), {
+      [`repos/${login}/hello/pulls/3001`]: { author: 'alice', association: 'NONE', state: 'open', merged: false },
+      [`repos/${login}/hello/pulls/3002`]: { author: 'alice', association: 'NONE', state: 'open', merged: false },
+      [`repos/${login}/hello/collaborators/alice/permission`]: { user: { login: 'alice' }, permission: 'write' },
+    });
+    await syncAccountNotifications(account.id);
+    await handOffRow('3001');
+    const attempt = { action: 'merge', reason: 'GITHUB_PR_ACTION_REFUSED', at: '2026-10-01T11:00:00Z' };
+    await query(`UPDATE github_notifications SET evidence = evidence || $3::jsonb WHERE account_id = $1 AND thread_id = $2`, [account.id, '3002', JSON.stringify({ pullRequestAttempt: attempt, staleMarker: true })]);
+
+    // The trust-change path: only the thread that is not handed off is re-decided.
+    expect(await retriageOpenThreads(account.id)).toBe(1);
+    await syncAccountNotifications(account.id);
+    const handed = await getNotification(account.id, '3001');
+    expect(handed).toMatchObject({ decision: 'handed-off' });
+    expect(handed.evidence.handoff).toMatchObject({ lane: 'notification-resolve', taskId: 'task-3001' });
+    const redecided = await getNotification(account.id, '3002');
+    expect(redecided.evidence.staleMarker).toBeUndefined();
+    expect(redecided.evidence.pullRequestAttempt).toEqual(attempt);
+    expect(redecided.evidence.rulesVersion).toBe(TRIAGE_RULES_VERSION);
+
+    // A hand-off whose stamp an earlier build cleared is re-stamped, not re-decided.
+    await query(`UPDATE github_notifications SET triaged_for = NULL WHERE account_id = $1 AND thread_id = '3001'`, [account.id]);
+    await syncAccountNotifications(account.id);
+    expect(await getNotification(account.id, '3001')).toMatchObject({ decision: 'handed-off' });
+    const { rows } = await query(`SELECT triaged_for FROM github_notifications WHERE account_id = $1 AND thread_id = '3001'`, [account.id]);
+    expect(rows[0].triaged_for).not.toBeNull();
+
+    // New activity ends the hand-off and the previous activity's records.
+    threads[0].updated_at = '2026-10-02T10:00:00Z';
+    threads[1].updated_at = '2026-10-02T10:00:00Z';
+    await syncAccountNotifications(account.id);
+    const after = await getNotification(account.id, '3001');
+    expect(after.decision).not.toBe('handed-off');
+    expect(after.evidence.handoff).toBeUndefined();
+    expect((await getNotification(account.id, '3002')).evidence.pullRequestAttempt).toBeUndefined();
+  });
+
+  it('drops a triage result that a hand-off overtook while its gh lookups ran (#15173)', async () => {
+    const login = account.login;
+    mockGh(() => listing([thread('3101', { owner: login, reason: 'review_requested' })]), {
+      [`repos/${login}/hello/pulls/3101`]: { author: 'alice', association: 'NONE', state: 'open', merged: false },
+      [`repos/${login}/hello/collaborators/alice/permission`]: { user: { login: 'alice' }, permission: 'write' },
+    });
+    interleaveAt(`repos/${login}/hello/pulls/3101`, () => handOffRow('3101'));
+    await syncAccountNotifications(account.id);
+    const handed = await getNotification(account.id, '3101');
+    expect(handed).toMatchObject({ decision: 'handed-off' });
+    expect(handed.evidence.handoff).toMatchObject({ taskId: 'task-3101' });
+    expect(handed.events.some((event) => event.kind === 'triaged')).toBe(false);
+
+    // The next check re-stamps the hand-off instead of re-deciding it.
+    mockGh(() => listing([thread('3101', { owner: login, reason: 'review_requested' })]));
+    await syncAccountNotifications(account.id);
+    expect(await getNotification(account.id, '3101')).toMatchObject({ decision: 'handed-off' });
+  });
+
+  it('drops an Assist verdict a hand-off overtook during the model call and never marks that thread done (#15173)', async () => {
+    const login = account.login;
+    const comment = `https://api.github.com/repos/${login}/hello/issues/comments/1`;
+    const threads = [thread('3201', { owner: login, reason: 'mention', commentUrl: comment, updatedAt: '2026-10-01T11:00:00Z' }), thread('3202', { owner: login, reason: 'mention', commentUrl: comment, updatedAt: '2026-10-01T10:00:00Z' })];
+    const actions = mockGh((args) => githubListing(args, threads), {
+      [`repos/${login}/hello/pulls/3201`]: { author: 'alice', association: 'NONE', state: 'open', merged: false },
+      [`repos/${login}/hello/pulls/3202`]: { author: 'alice', association: 'NONE', state: 'open', merged: false },
+      [`repos/${login}/hello/issues/comments/1`]: { author: 'alice', association: 'MEMBER', mentions: 1, body: 'thanks, nothing to do' },
+      [`repos/${login}/hello/collaborators/alice/permission`]: { user: { login: 'alice' }, permission: 'write' },
+    });
+    await syncAccountNotifications(account.id);
+    expect(await getNotification(account.id, '3201')).toMatchObject({ decision: 'needs-you' });
+
+    await updateAccount(account.id, { mode: 'assist' });
+    // 3202 is handed off while the model reads it; 3201's GitHub write is
+    // still in flight when 3202 would be acted on.
+    vi.mocked(runUntrustedContentAnalysis).mockImplementation(async ({ content }) => {
+      if (JSON.parse(content).title === 'Thread 3202') await handOffRow('3202');
+      return { ok: true, value: { verdict: 'done' } };
+    });
+    const result = await syncAccountNotifications(account.id);
+    expect(result.assist).toMatchObject({ sorted: 1, acted: 1 });
+    expect(actions).toEqual([['DELETE', 'notifications/threads/3201']]);
+    const handed = await getNotification(account.id, '3202');
+    expect(handed).toMatchObject({ decision: 'handed-off', state: 'open' });
+    expect(handed.evidence.handoff).toMatchObject({ taskId: 'task-3202' });
+    expect(handed.evidence.ai).toBeUndefined();
+  });
+
+  it('does not mark a thread done that was handed off after the Assist batch was read (#15173)', async () => {
+    const login = account.login;
+    const comment = `https://api.github.com/repos/${login}/hello/issues/comments/1`;
+    const threads = [thread('3301', { owner: login, reason: 'mention', commentUrl: comment, updatedAt: '2026-10-01T11:00:00Z' }), thread('3302', { owner: login, reason: 'mention', commentUrl: comment, updatedAt: '2026-10-01T10:00:00Z' })];
+    const actions = mockGh((args) => githubListing(args, threads), {
+      [`repos/${login}/hello/pulls/3301`]: { author: 'alice', association: 'NONE', state: 'open', merged: false },
+      [`repos/${login}/hello/pulls/3302`]: { author: 'alice', association: 'NONE', state: 'open', merged: false },
+      [`repos/${login}/hello/issues/comments/1`]: { author: 'alice', association: 'MEMBER', mentions: 1, body: 'thanks, nothing to do' },
+      [`repos/${login}/hello/collaborators/alice/permission`]: { user: { login: 'alice' }, permission: 'write' },
+    });
+    await syncAccountNotifications(account.id);
+    await updateAccount(account.id, { mode: 'assist' });
+    vi.mocked(runUntrustedContentAnalysis).mockResolvedValue({ ok: true, value: { verdict: 'done' } });
+    interleaveAt('notifications/threads/3301', () => handOffRow('3302'));
+    await syncAccountNotifications(account.id);
+    expect(actions).toEqual([['DELETE', 'notifications/threads/3301']]);
+    expect(await getNotification(account.id, '3302')).toMatchObject({ decision: 'handed-off', state: 'open' });
+  });
+
 });
