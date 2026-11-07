@@ -472,7 +472,7 @@ function MediaCollectionDetailContent() {
   return (
     <div ref={pageFocusRef} tabIndex={-1} role="region" aria-label="Media collection" className="space-y-4">
       <div className="flex items-center gap-3">
-        <Link to="/media/collections" className="text-gray-400 hover:text-white" title="Back">
+        <Link to="/media/collections" className="text-gray-400 hover:text-white pointer-coarse:min-h-11 pointer-coarse:min-w-11 inline-flex items-center justify-center" title="Back">
           <ArrowLeft className="w-5 h-5" />
         </Link>
         {renderTitle()}
