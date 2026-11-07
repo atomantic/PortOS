@@ -1,7 +1,14 @@
 import { expect, it } from 'vitest';
-import { universeStarterPatch, REALITY_STARTER_ID } from './universeStarters.js';
+import { universeStarterPatch, REALITY_STARTER_ID, STARTER_UNIVERSE_IDS } from './universeStarters.js';
 import { sanitizeTemplate } from '../services/universeBuilder/sanitize.js';
-import { universeStylePreset, universeVisualStyleTokens } from './universeVisualStyle.js';
+import {
+  assembleUniverseStyleText,
+  STYLE_SNAPSHOT_MAX,
+  universeStylePreset,
+  universeStyleRefusal,
+  universeVisualStyleTokens,
+} from './universeVisualStyle.js';
+import { universeStyleSnapshot } from '../services/musicVideo/styleSnapshots.js';
 
 it('round trips shipped text and positive/negative style through the real universe schema and renderer', () => {
   const starter = universeStarterPatch(REALITY_STARTER_ID);
@@ -16,4 +23,18 @@ it('round trips shipped text and positive/negative style through the real univer
   expect(stored.places).toEqual([]);
   expect(stored.objects).toEqual([]);
   expect(stored.styleImageRefs).toEqual([]);
+});
+
+it('ensures every starter universe snapshot fits within STYLE_SNAPSHOT_MAX', () => {
+  expect(STARTER_UNIVERSE_IDS.length).toBeGreaterThan(0);
+  for (const id of STARTER_UNIVERSE_IDS) {
+    const starter = universeStarterPatch(id);
+    const universe = { id, name: 'Reality', ...starter };
+    const text = assembleUniverseStyleText(universe);
+    expect(text.length).toBeLessThanOrEqual(STYLE_SNAPSHOT_MAX);
+    expect(universeStyleRefusal(universe)).toBeNull();
+    const snapshot = universeStyleSnapshot(universe);
+    expect(snapshot.length).toBeLessThanOrEqual(STYLE_SNAPSHOT_MAX);
+    expect(snapshot).toBe(text.slice(0, STYLE_SNAPSHOT_MAX));
+  }
 });
