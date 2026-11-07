@@ -83,14 +83,53 @@ early (`reproducibility: scan-stopped-early`) or the live Codex read has moved.
 **Account identity.** Codex's `account/read` holds an email and no id that is safe
 to publish, and a hash of an email can be reversed with a dictionary. So `accountKey`
 is always null and identity is `unknown`. Matching totals never group participants.
-The operator groups them in the machine-local `usageNativeAccountSelections` setting
-(`PUT /api/settings`), naming one authoritative participant per account under an
+The operator groups them in the machine-local `usageNativeAccountSelections` setting,
+naming one authoritative participant per account under an
 opaque label. Without a selection for every participant that may hold an account, the
 matrix refuses the merge and reports a null total. A failed authoritative read also
 refuses, with no fallback to another member. A plan or sign-in change, a lifetime
 that went backwards, or restated history across two reports of one participant
 refuses until the operator reselects and drops the older report. Those checks detect
 a change. They do not prove the account stayed the same.
+
+### Selecting accounts in the Usage view
+
+The native Usage view provides an account-selection drawer for Codex, Claude,
+Grok and Antigravity. It reads only local settings and a bounded configured-peer
+inventory through `GET /api/usage/native-accounts`; opening the drawer does not
+read provider sources or contact peers. Participants use hashed keys, with local,
+configured-peer and unavailable-member states. Missing saved members remain
+visible instead of being silently removed.
+
+Use an opaque account label, choose its members, and select exactly one Codex
+authority. For retained providers, explicitly confirm that the selected retained
+history belongs to that account. A shared current subscription or equal totals
+does not establish the provenance of old files. Leave mixed or unverified history
+unselected. Different accounts require separate rows; one participant cannot be
+assigned to two accounts for the same provider.
+
+`PUT /api/usage/native-accounts` saves only this machine's selection slice, using
+the revision returned by the read. The revision is compared inside the settings
+write queue, so a stale tab cannot silently replace a newer selection, including
+a change made through the existing generic settings API. Invalid or unreadable
+settings refuse editing rather than becoming an empty selection. Unknown new
+members are rejected; previously selected unavailable members can remain until
+the operator resolves them. No account credential or raw instance identifier is
+stored by this editor.
+
+Saving account assertions requires the existing local or delegated operator
+authority, including writes through the generic settings API. On password-free
+installs a remote browser cannot make this change; use a browser on the instance
+itself, or configure an instance password in Settings → Security and sign in.
+Scoped peer credentials never grant account-selection write authority.
+
+A successful save applies the returned selection to the editor and invalidates
+the displayed native matrix. Selection-change notifications also invalidate old
+or pending account-derived results without starting another source scan. Use
+**Read native sources** explicitly after saving. Selections stay machine-local
+and never change peer sharing, provider authentication, active usage history or
+cutover state. These assertions enable a diagnostic union; they are not evidence
+that history is complete or permission to activate staged history.
 
 ## Read-only local and configured-peer dashboard matrix
 

@@ -280,6 +280,7 @@ export * from './modelInventory.js';
 export * from './meatspaceRowIdentity.js';
 export * from './meetingUrl.js';
 export * from './nativeUsageContract.js';
+export * as nativeUsageSelections from './nativeUsageSelections.js';
 export * from './minimaxH3Memory.js';
 export * from './videoContinuity.js';
 export * from './videoContinuationProvenance.js';

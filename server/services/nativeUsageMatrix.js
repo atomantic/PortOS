@@ -1,7 +1,24 @@
-import { buildNativeUsageMatrix, nativeUsageAccountSelectionsSchema, nativeUsageParticipantKey } from '../lib/nativeUsageContract.js';
+import { NATIVE_USAGE_ACCOUNT_SELECTIONS_KEY, buildNativeUsageMatrix, nativeUsageAccountSelectionsSchema, nativeUsageParticipantKey, nativeUsageSelectionRevision } from '../lib/nativeUsageContract.js';
 import { captureDashboardNativeUsageReport, getNativeUsageAccountSelections } from './nativeUsageReport.js';
 import { getInstanceId } from './instanceIdentity.js';
+import { settingsEvents } from './settings.js';
 export { NATIVE_USAGE_DASHBOARD_LIMITS } from './nativeUsageReport.js';
+
+// Capture finality spans the peer revalidation wait. A settings event supplies a
+// synchronous revision fence so no additional settings await can reopen the peer
+// authority/freshness window after that final validation.
+let selectionChange = 0;
+let latestSelectionRevision;
+settingsEvents.on('settings:updated', settings => {
+  const selections = settings?.[NATIVE_USAGE_ACCOUNT_SELECTIONS_KEY];
+  const revision = nativeUsageSelectionRevision(selections === undefined ? [] : selections);
+  if (revision !== latestSelectionRevision) selectionChange += 1;
+  latestSelectionRevision = revision;
+});
+settingsEvents.on('settings:invalidated', () => {
+  selectionChange += 1;
+  latestSelectionRevision = null;
+});
 
 const pick = (value, fields) => Object.fromEntries(fields.filter(field => Object.hasOwn(value, field)).map(field => [field, value[field]]));
 const PROVIDER_FIELDS = ['family', 'source', 'validator', 'status', 'completeness', 'retention', 'runtime', 'scope',
@@ -22,10 +39,14 @@ async function readMatrix(scope) {
     fleet ? fleet.collectNativeUsagePeerReports(localKey) : null,
   ]);
   if (scope === 'fleet' && report.participantKey !== localKey) throw new Error('Local participant changed during capture');
-  // Resolve the selection after the network wait; configuration stays local and
-  // never travels with the reports. Equal counters are not account identity.
+  // Selections stay local. Final peer revalidation follows all awaited reads.
+  const selectionAtValidation = selectionChange;
   const selections = await getNativeUsageAccountSelections();
+  const selectionRevision = nativeUsageSelectionRevision(selections);
   if (collection) await fleet.revalidateNativeUsagePeerCollection(collection);
+  if (selectionChange !== selectionAtValidation && latestSelectionRevision !== selectionRevision) {
+    throw new Error('Native account selections changed during capture');
+  }
   const reports = [report, ...(collection?.reports ?? [])];
   const matrix = buildNativeUsageMatrix({ reports, selections });
   if (collection) {
@@ -41,6 +62,7 @@ async function readMatrix(scope) {
   return {
     mode: 'read-only', scope: collection ? 'configured-peers' : 'local-instance', contractVersion: matrix.contractVersion,
     generatedAt: new Date().toISOString(), capturedAt: report.capturedAt,
+    selectionRevision,
     ledgerChanged: false, peerReports: collection ? 'collected' : 'not-collected', participantKey: report.participantKey,
     ...(collection ? {
       peerCollection: collection.peerCollection,

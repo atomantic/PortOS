@@ -1,9 +1,12 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
-import { RefreshCw } from 'lucide-react';
+import { RefreshCw, Users } from 'lucide-react';
 import * as api from '../../services/api';
 import useLatestRequest from '../../hooks/useLatestRequest';
 import useUrlParams from '../../hooks/useUrlParams';
+import useMounted from '../../hooks/useMounted';
+import socket from '../../services/socket';
+import NativeAccountEditor from './NativeAccountEditor';
 import BrailleSpinner from '../BrailleSpinner';
 import { formatCount, formatDateNumeric, formatDateTime, formatMonthYear } from '../../utils/formatters';
 
@@ -189,7 +192,7 @@ function SourceCard({ family, label, provider, matrix, scanned, fleet, collectio
   </section>;
 }
 
-function NativeUsageRead({ scope, onScopeChange }) {
+function NativeUsageRead({ scope, onScopeChange, onSnapshot, acceptsRevision, blocked }) {
   const [snapshot, setSnapshot] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
@@ -197,17 +200,19 @@ function NativeUsageRead({ scope, onScopeChange }) {
   const beginRequest = useLatestRequest();
   const fleet = scope === 'fleet';
   const read = useCallback(async () => {
-    if (request.current) return;
+    if (request.current || blocked) return;
     request.current = true;
     const isCurrent = beginRequest();
     setBusy(true);
     const result = await api.getNativeUsageMatrix({ scope }, { silent: true }).catch(() => null);
     if (!isCurrent()) return;
     request.current = false;
-    if (result) setSnapshot(result);
-    setError(!result);
+    const revisionMismatch = result && !acceptsRevision(result.selectionRevision);
+    if (result && !revisionMismatch) { setSnapshot(result); onSnapshot(result.selectionRevision); }
+    if (revisionMismatch) setSnapshot(null);
+    setError(revisionMismatch ? 'revision' : !result);
     setBusy(false);
-  }, [beginRequest, scope]);
+  }, [beginRequest, scope, onSnapshot, acceptsRevision, blocked]);
   return <div className="space-y-4">
     <div className="flex flex-wrap items-center justify-between gap-3">
       <p className="max-w-3xl text-sm text-gray-400">Read-only native history for all four providers. {fleet ? 'A bounded read includes eligible configured peers.' : 'Only this instance is read; peer reports are not collected.'} Existing PortOS usage records remain unchanged.</p>
@@ -216,12 +221,14 @@ function NativeUsageRead({ scope, onScopeChange }) {
         <select id="native-usage-scope" value={scope} onChange={event => onScopeChange(event.target.value)} className="min-w-0 max-w-full rounded border border-port-border bg-port-bg px-2 py-2 text-sm text-white">
           <option value="local">Local instance</option><option value="fleet">Configured peers</option>
         </select>
-        <button type="button" disabled={busy} onClick={() => { void read(); }} className="inline-flex items-center gap-2 rounded-lg border border-port-border px-3 py-2 text-sm text-white hover:bg-port-border/30 disabled:opacity-50">
+        <button type="button" disabled={busy || blocked} onClick={() => { void read(); }} className="inline-flex items-center gap-2 rounded-lg border border-port-border px-3 py-2 text-sm text-white hover:bg-port-border/30 disabled:opacity-50">
           {busy ? <BrailleSpinner /> : <RefreshCw size={14} aria-hidden="true" />}{busy ? 'Reading…' : snapshot ? 'Refresh native sources' : 'Read native sources'}
         </button>
       </div>
     </div>
-    {error && <p role="alert" className="text-sm text-port-warning">Could not read native sources. {snapshot ? 'Stale: the previous snapshot remains below. Retry to get current values.' : 'No snapshot was captured. Retry the read.'}</p>}
+    {blocked && <p className="text-sm text-gray-400">Save or cancel your account-selection changes before reading native sources.</p>}
+    {error === 'revision' && <p role="alert" className="text-sm text-port-warning">The read used different account selections and was discarded. Reload account selections, then read native sources again.</p>}
+    {error && error !== 'revision' && <p role="alert" className="text-sm text-port-warning">Could not read native sources. {snapshot ? 'Stale: the previous snapshot remains below. Retry to get current values.' : 'No snapshot was captured. Retry the read.'}</p>}
     {snapshot && <p className="text-xs text-gray-400">Snapshot read at {formatDateTime(snapshot.capturedAt ?? snapshot.generatedAt, 'Unknown')} · {fleet ? 'Local instance and configured peers' : 'Local instance only'}</p>}
     <Findings findings={snapshot?.refusals?.map(({ code, family }) => `${family ?? 'All providers'}: ${code}`)} />
     {snapshot && fleet && <PeerCollection snapshot={snapshot} />}
@@ -234,7 +241,76 @@ function NativeUsageRead({ scope, onScopeChange }) {
 
 export default function NativeUsageOverview() {
   const [searchParams, updateParams] = useUrlParams();
+  const [generation, setGeneration] = useState(0);
+  const [invalidation, setInvalidation] = useState(null);
+  const latestInvalidation = useRef(null);
+  const [notice, setNotice] = useState(false);
+  const [draftDirty, setDraftDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const pendingSave = useRef(false);
+  const knownRevision = useRef(null);
+  const observedChanges = useRef(0);
+  const mounted = useMounted();
   const scope = searchParams.get('nativeScope') === 'fleet' ? 'fleet' : 'local';
-  // A scope change disposes both the prior snapshot and its pending request.
-  return <NativeUsageRead key={scope} scope={scope} onScopeChange={nativeScope => updateParams({ nativeScope, nativeMonth: null })} />;
+  const editorOpen = searchParams.get('nativeAccounts') === 'edit';
+  const invalidate = useCallback(() => {
+    setGeneration(value => value + 1);
+    setNotice(true);
+  }, []);
+  const publishInvalidation = useCallback(revision => {
+    const next = { revision };
+    latestInvalidation.current = next;
+    setInvalidation(next);
+  }, []);
+  const getInvalidation = useCallback(() => latestInvalidation.current, []);
+  const observeRevision = useCallback(revision => {
+    if (knownRevision.current && revision !== knownRevision.current) { observedChanges.current += 1; invalidate(); }
+    knownRevision.current = revision;
+  }, [invalidate]);
+  const acceptsRevision = useCallback(revision => !knownRevision.current || revision === knownRevision.current, []);
+  const recordSnapshot = useCallback(revision => { knownRevision.current = revision; setNotice(false); }, []);
+  useEffect(() => {
+    const changed = ({ revision = null } = {}) => {
+      if (revision && revision === knownRevision.current) return;
+      knownRevision.current = revision;
+      observedChanges.current += 1;
+      publishInvalidation(revision);
+      invalidate();
+    };
+    const reconnect = () => changed();
+    socket.on('usage:native-accounts-updated', changed);
+    socket.on('connect', reconnect);
+    return () => { socket.off('usage:native-accounts-updated', changed); socket.off('connect', reconnect); };
+  }, [invalidate, publishInvalidation]);
+  // A successful save invalidates even if its drawer was dismissed while the
+  // request was in flight. It never reopens the drawer or navigates an old URL.
+  const save = useCallback(async selection => {
+    if (pendingSave.current) throw new Error('A selection save is already in progress.');
+    pendingSave.current = true;
+    const changeAtStart = observedChanges.current;
+    setSaving(true);
+    const result = await api.updateNativeUsageAccounts(selection, { silent: true }).finally(() => {
+      pendingSave.current = false;
+      if (mounted.current) setSaving(false);
+    });
+    if (mounted.current) {
+      // A newer socket observation can overtake this HTTP response.
+      if (changeAtStart === observedChanges.current || knownRevision.current === result.revision) {
+        knownRevision.current = result.revision;
+        publishInvalidation(result.revision);
+      }
+      invalidate();
+    }
+    return result;
+  }, [invalidate, mounted, publishInvalidation]);
+  return <div className="space-y-4">
+    <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
+      <p className="text-sm text-gray-400">Accounts are selected explicitly and saved only on this machine.</p>
+      <button type="button" onClick={() => updateParams({ nativeAccounts: 'edit' })} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-port-border px-3 py-2 text-sm text-white hover:bg-port-border/30"><Users size={16} aria-hidden="true" />Edit account selections</button>
+    </div>
+    {notice && <p role="status" className="text-sm text-port-warning">Account selections changed or the connection was restored. The previous snapshot was cleared. Read native sources explicitly for current results.</p>}
+    {/* Scope and selection changes dispose both the old snapshot and pending reads. */}
+    <NativeUsageRead key={`${scope}:${generation}`} scope={scope} onSnapshot={recordSnapshot} acceptsRevision={acceptsRevision} blocked={draftDirty || saving} onScopeChange={nativeScope => updateParams({ nativeScope, nativeMonth: null })} />
+    {editorOpen && <NativeAccountEditor onClose={() => updateParams({ nativeAccounts: null, nativeAccountTab: null })} onLoaded={observeRevision} onSave={save} onDraftChange={setDraftDirty} savePending={saving} getInvalidation={getInvalidation} invalidation={invalidation} />}
+  </div>;
 }
