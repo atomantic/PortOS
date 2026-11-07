@@ -1,6 +1,7 @@
 import SignalManager from './SignalManager';
 import { useState } from 'react';
 import SettingsLoadError from '../ui/SettingsLoadError';
+import UnreadableSyncStateNotice from '../ui/UnreadableSyncStateNotice';
 import { Save, Loader2, Lock, ShieldCheck, ShieldAlert, RefreshCw } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
@@ -61,6 +62,7 @@ export function SignalTab() {
   return (
     <div className="space-y-6">
       {loadError && <SettingsLoadError onRetry={retry} />}
+      <UnreadableSyncStateNotice status={status} />
       <div className="bg-port-card border border-port-border rounded-lg p-4 sm:p-6">
         <div className="flex items-center gap-2 mb-2">
           <Lock size={16} className="text-port-accent" />

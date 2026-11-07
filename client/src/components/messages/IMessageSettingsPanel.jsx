@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import SettingsLoadError from '../ui/SettingsLoadError';
+import UnreadableSyncStateNotice from '../ui/UnreadableSyncStateNotice';
 import { Link } from 'react-router';
 import { Save, Loader2, MessageSquare, ShieldCheck, ShieldAlert, RefreshCw } from 'lucide-react';
 import toast from '../ui/Toast';
@@ -65,6 +66,7 @@ export function IMessageSettingsPanel({ onSynced }) {
   return (
     <div className="space-y-6">
       {loadError && <SettingsLoadError onRetry={retry} />}
+      <UnreadableSyncStateNotice status={status} />
       <div className="bg-port-card border border-port-border rounded-lg p-4 sm:p-6">
         <div className="flex items-center gap-2 mb-2">
           <MessageSquare size={16} className="text-port-accent" />
