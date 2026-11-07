@@ -3,12 +3,16 @@ import { EventEmitter } from 'events';
 import { createServer } from 'http';
 import { fileURLToPath } from 'url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createBrowserSupervisor, shouldStartSupervisor } from './server.js';
+import { mkdtemp, rm, stat, writeFile } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import { createBrowserSupervisor, ensureDirectory, shouldStartSupervisor } from './server.js';
 
 const SERVER_MODULE_URL = new URL('./server.js', import.meta.url).href;
 const SERVER_PATH = fileURLToPath(SERVER_MODULE_URL);
 
 const LAUNCH_POLL_MS = 500;
+const PROFILE_ERROR = 'Chrome profile folder /tmp/portos-browser-profile-fixture is unavailable: folder unavailable';
 const CDP_UP = { webSocketDebuggerUrl: 'ws://127.0.0.1/devtools/browser/fixture' };
 
 function fakeChild() {
@@ -216,7 +220,7 @@ describe('browser Chrome supervise loop', () => {
       ),
       mkdir: async () => {
         mkdirCalls += 1;
-        if (mkdirMode === 'fail') throw new Error('download directory unavailable');
+        if (mkdirMode === 'fail') throw new Error('folder unavailable');
       },
     });
     await session.supervisor.ready;
@@ -227,9 +231,9 @@ describe('browser Chrome supervise loop', () => {
     expect(health.body).toMatchObject({
       status: 'relaunching',
       attempt: 1,
-      lastError: 'download directory unavailable',
+      lastError: PROFILE_ERROR,
     });
-    expect(errorSpy).toHaveBeenCalledWith('❌ Chrome launch failed: download directory unavailable');
+    expect(errorSpy).toHaveBeenCalledWith(`❌ Chrome launch failed: ${PROFILE_ERROR}`);
     expect(session.spawn).not.toHaveBeenCalled();
 
     const waits = [2000];
@@ -266,6 +270,22 @@ describe('browser Chrome supervise loop', () => {
     expect(session.loopError).toBeNull();
   });
 
+  it('launches Chrome when only the configured download folder is unavailable', async () => {
+    const session = start({
+      checkCdp: async () => (session.spawn.mock.calls.length > 0 ? CDP_UP : null),
+      mkdir: async (path) => {
+        if (path.includes('download')) throw new Error('drive not connected');
+      },
+    });
+    await session.supervisor.ready;
+    expect(await advanceToSuperviseSleep(session.sleeper)).toBe(2000);
+    expect(session.spawn).toHaveBeenCalledTimes(1);
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Download folder /tmp/portos-browser-download-fixture is unavailable'));
+    const port = session.supervisor.healthServer.address().port;
+    expect(await readHealth(port)).toMatchObject({ statusCode: 200, body: { status: 'healthy', lastError: null } });
+    expect(session.loopError).toBeNull();
+  });
+
   it('stops a still-running Chrome before the next launch attempt', async () => {
     const session = start({
       checkCdp: async () => null,
@@ -291,14 +311,14 @@ describe('browser Chrome supervise loop', () => {
     const session = start({
       bindSignals: true,
       checkCdp: async () => null,
-      mkdir: async () => { throw new Error('download directory unavailable'); },
+      mkdir: async () => { throw new Error('folder unavailable'); },
     });
     await session.supervisor.ready;
     const port = session.supervisor.healthServer.address().port;
     expect(await advanceToSuperviseSleep(session.sleeper)).toBe(2000);
     expect(await readHealth(port)).toMatchObject({
       statusCode: 503,
-      body: { status: 'relaunching', lastError: 'download directory unavailable' },
+      body: { status: 'relaunching', lastError: PROFILE_ERROR },
     });
     expect(session.spawn).not.toHaveBeenCalled();
 
@@ -308,5 +328,26 @@ describe('browser Chrome supervise loop', () => {
     expect(session.spawn).not.toHaveBeenCalled();
     expect(session.loopError).toBeNull();
     await expect(readHealth(port)).rejects.toThrow();
+  });
+});
+
+describe('ensureDirectory', () => {
+  let root;
+  beforeEach(async () => { root = await mkdtemp(join(tmpdir(), 'portos-browser-dir-')); });
+  afterEach(async () => { await rm(root, { recursive: true, force: true }); });
+
+  it('creates missing parents and leaves an existing folder alone', async () => {
+    const target = join(root, 'profile', 'Default');
+    await ensureDirectory(target);
+    expect((await stat(target)).isDirectory()).toBe(true);
+    const mkdirImpl = vi.fn();
+    await ensureDirectory(target, mkdirImpl);
+    expect(mkdirImpl).not.toHaveBeenCalled();
+  });
+
+  it('rejects a path blocked by a file', async () => {
+    const blocker = join(root, 'blocker');
+    await writeFile(blocker, '');
+    await expect(ensureDirectory(join(blocker, 'child'))).rejects.toThrow();
   });
 });
