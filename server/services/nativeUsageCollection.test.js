@@ -29,6 +29,10 @@ const { PATHS } = await import('../lib/fileUtils.js');
 const { getCodexAccountUsageEvidence } = await import('./codexAppServer.js');
 const { schedule } = await import('./eventScheduler.js');
 const { captureDashboardNativeUsageReport, captureNativeUsageReport, NATIVE_USAGE_DASHBOARD_LIMITS } = await import('./nativeUsageReport.js');
+const { buildNativeUsageRollupReport } = await import('../lib/nativeUsageContract.js');
+const { getNativeTranscriptCoverage } = await import('./nativeTranscriptCoverage.js');
+const { getNativeAgyUsageCoverage } = await import('./nativeAgyUsageCoverage.js');
+const { getNativeGrokUsageCoverage } = await import('./nativeGrokUsageCoverage.js');
 const { collectNativeUsageSources, requestNativeUsageRebuild } = await import('./nativeUsageCollection.js');
 const { startNativeUsageCollectionSchedule } = await import('./nativeUsageCollectionSchedule.js');
 const { getNativeUsageSnapshot, _resetNativeUsageStore } = await import('./nativeUsageStore.js');
@@ -44,13 +48,25 @@ const codexRead = (tokens = 300) => ({ runtimeVersion: '0.166.0', accountBefore:
 const home = () => harness.home;
 const entry = (report, family) => report.providers.find(provider => provider.family === family);
 const stored = () => captureDashboardNativeUsageReport();
-const fullRead = () => captureNativeUsageReport({ home: home(), limits: NATIVE_USAGE_DASHBOARD_LIMITS, now: NOW });
+const storedRecords = () => captureDashboardNativeUsageReport({ recordLists: true });
 const sourcesOpened = () => harness.opened.filter(path => path.startsWith(home()));
-/** A stored read must report exactly what reading the same tree from nothing reports. */
+const fullRollups = async () => buildNativeUsageRollupReport({ instanceId: 'synthetic-instance', capturedAt: NOW().toISOString(),
+  codexEvidence: codexRead(), scanLimits: NATIVE_USAGE_DASHBOARD_LIMITS, transcripts: {
+    claude: await getNativeTranscriptCoverage('claude', { home: home(), limits: NATIVE_USAGE_DASHBOARD_LIMITS, includeRecords: true }),
+    agy: await getNativeAgyUsageCoverage({ home: home(), limits: NATIVE_USAGE_DASHBOARD_LIMITS }),
+    grok: await getNativeGrokUsageCoverage({ home: home(), limits: NATIVE_USAGE_DASHBOARD_LIMITS }),
+  } });
+/** A stored read must report exactly what reading the same tree from nothing reports,
+ * both as the rollups a v5 peer receives and as the v4 record lists an older one does. */
 const expectSameAsFullRead = async report => {
-  const full = await fullRead();
+  const full = await fullRollups();
   expect(report.providers).toEqual(full.providers);
   expect(report.evidenceHash).toBe(full.evidenceHash);
+  harness.opened.length = 0;
+  const records = await storedRecords();
+  expect(sourcesOpened()).toEqual([]);
+  const fullRecords = await captureNativeUsageReport({ home: home(), limits: NATIVE_USAGE_DASHBOARD_LIMITS, now: NOW });
+  expect(records.providers).toEqual(fullRecords.providers);
 };
 
 const save = async (path, text) => {
@@ -227,13 +243,13 @@ describe('collecting only what changed', () => {
     const path = await agyDatabase('conversation', ['a']);
     const before = await stored();
     await writeFile(`${path}-wal`, 'pending writes');
-    const during = await stored();
+    const during = await storedRecords();
     expect(entry(during, 'agy').nativeAgyCoverage.unstableDatabases).toBe(1);
     expect(entry(during, 'agy').recordProjection.truncated).toBe(true);
     expect(entry(during, 'agy').totals).toEqual(entry(before, 'agy').totals);
     await rm(`${path}-wal`);
     harness.opened.length = 0;
-    const after = await stored();
+    const after = await storedRecords();
     expect(sourcesOpened()).toEqual([]);
     expect(entry(after, 'agy').recordProjection.truncated).toBe(false);
   });
@@ -283,9 +299,8 @@ describe('#15230 corpus across separate collection runs', () => {
         await save(path, text);
         await stored();
       }
-      const report = await stored();
-      await expectSameAsFullRead(report);
-      const union = unions[family]([entry(report, family).recordProjection]);
+      await expectSameAsFullRead(await stored());
+      const union = unions[family]([entry(await storedRecords(), family).recordProjection]);
       expect(union.coverage.uniqueRecords).toBe(scenario.expect.records.length);
       if (scenario.expect.providerTotals) expect(union.totals).toEqual(expect.objectContaining(scenario.expect.providerTotals));
       else expect(union.totals).toBeNull();
@@ -312,7 +327,8 @@ describe('what the store keeps', () => {
     const failed = await stored();
     expect(entry(failed, 'codex')).toMatchObject({ status: 'partial', totals: { lifetimeTokens: 300 } });
     expect(entry(failed, 'codex').findings).toContain('retained-snapshot');
-    expect(await getNativeUsageSnapshot('codex-account', 'latest')).toEqual(entry(live, 'codex'));
+    const { modelUsage: _rollupOnly, ...liveEntry } = entry(live, 'codex');
+    expect(await getNativeUsageSnapshot('codex-account', 'latest')).toEqual(liveEntry);
   });
 
   it('reports a signed-out Codex account as signed out, not from the stored entry', async () => {

@@ -79,21 +79,20 @@ async function createSourceTracker(family) {
 // Overlapping runs would re-read the same changed files and race their rows.
 const serialized = createFileWriteQueue();
 
-/** One bounded run across all three file families, which share its deadline. A family
- * reached after the deadline stops at once and reports what it already holds. A caller
+/** One bounded run across all three file families, read side by side under one shared
+ * deadline. A family that reaches it stops and reports what it already holds. A caller
  * with other work in the same budget passes the deadline it started before that work.
  */
 export function collectNativeUsageSources({ limits, deadline = Date.now() + limits.milliseconds }) {
   const home = homedir();
   return serialized(async () => {
-    const claude = await createSourceTracker('claude');
-    const agy = await createSourceTracker('agy');
-    const grok = await createSourceTracker('grok');
-    const transcripts = {
-      claude: await getNativeTranscriptCoverage('claude', { home, limits, deadline, includeRecords: true, sources: claude }),
-      agy: await getNativeAgyUsageCoverage({ home, limits, deadline, sources: agy }),
-      grok: await getNativeGrokUsageCoverage({ home, limits, deadline, sources: grok }),
-    };
+    const [claude, agy, grok] = await Promise.all(['claude', 'agy', 'grok'].map(createSourceTracker));
+    const [claudeScan, agyScan, grokScan] = await Promise.all([
+      getNativeTranscriptCoverage('claude', { home, limits, deadline, includeRecords: true, sources: claude }),
+      getNativeAgyUsageCoverage({ home, limits, deadline, sources: agy }),
+      getNativeGrokUsageCoverage({ home, limits, deadline, sources: grok }),
+    ]);
+    const transcripts = { claude: claudeScan, agy: agyScan, grok: grokScan };
     return { transcripts, stats: { unchanged: claude.stats.unchanged + agy.stats.unchanged + grok.stats.unchanged,
       saved: claude.stats.saved + agy.stats.saved + grok.stats.saved } };
   });

@@ -1089,6 +1089,7 @@ export * from './imageInputProvenance.js';
 
 export * from './nativeUsageRecords.js';
 export * from './nativeUsageSourceFold.js';
+export * from './nativeUsageRollups.js';
 
 export * from './nativeAgyMetadata.js';
 export * from './nativeAgyUsageRecords.js';

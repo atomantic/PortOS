@@ -7,6 +7,7 @@ import { safeParse } from '../lib/streamJsonParser.js';
 import { canonicalStringify } from '../lib/objects.js';
 import { GROK_USAGE_FIELDS, GROK_USAGE_RECORD_LIMIT, unionNativeGrokRecords } from '../lib/nativeGrokUsageRecords.js';
 import { compactNativeCoverage, emptyNativeCoverage, foldNativeCounts } from '../lib/nativeUsageSourceFold.js';
+import { buildNativeUsageRollup, grokModelEvidence, joinModelEvidence } from '../lib/nativeUsageRollups.js';
 
 const LIMITS = { bytes: 128 * 1024 * 1024, lineBytes: 1024 * 1024, entries: 30000, records: 100000, milliseconds: 5000, depth: 8 };
 const counter = value => Number.isSafeInteger(value) && value >= 0;
@@ -24,15 +25,14 @@ const validCounters = record => {
  * auth, updates.jsonl, model inference, billing conversion or legacy ledger reads.
  * Runtime version of historical records and deleted/custom-root history are unknown.
  */
-export async function getNativeGrokUsageCoverage({ home, sessionsRoot, limits: overrides = {}, deadline = Infinity, sources = null } = {}) {
+export async function getNativeGrokUsageCoverage({ home, sessionsRoot, limits: overrides = {}, deadline = Infinity, modelLimits, sources = null } = {}) {
   const limits = { ...LIMITS, ...overrides };
-  // Bound in-memory observations too, including arbitrarily many copied files.
-  limits.records = Math.min(limits.records, GROK_USAGE_RECORD_LIMIT + 1);
   const coverage = emptyNativeCoverage();
   const nativeUsageCoverage = emptyNativeUsageCoverage();
   const projections = [];
+  const modelEvidence = new Map();
   // incompleteTurns: vendor-flagged known under-count (subagent usage not applied); counters stay in the total.
-  const whole = { coverage, nativeUsageCoverage, projections, incompleteTurns: 0 };
+  const whole = { coverage, nativeUsageCoverage, projections, modelEvidence, incompleteTurns: 0 };
   // Readers write here. Per-source collection points it at one source at a time.
   let sink = whole;
   const started = Date.now();
@@ -74,6 +74,9 @@ export async function getNativeGrokUsageCoverage({ home, sessionsRoot, limits: o
       }
       if (turn.usageIsIncomplete === true) sink.incompleteTurns++;
       const recordKey = hash(['portos-grok-session-turn/1', snapshot.sessionId, turn.turnNumber]);
+      const prior = sink.modelEvidence.get(recordKey);
+      sink.modelEvidence.set(recordKey, { evidence: joinModelEvidence(prior?.evidence, grokModelEvidence(turn, modelLimits)),
+        incomplete: prior?.incomplete === true || turn.usageIsIncomplete === true });
       sink.projections.push({ records: [{ recordKey, values, at, costUsdTicks: counter(turn.costUsdTicks) ? turn.costUsdTicks : null,
         costConflict: false, conflict: false, inconsistent: !valid }] });
     }
@@ -103,7 +106,7 @@ export async function getNativeGrokUsageCoverage({ home, sessionsRoot, limits: o
   const readStored = async (path, parts) => {
     const facts = await sources.check(parts, path);
     if (!facts) return;
-    const source = { coverage: emptyNativeCoverage(), nativeUsageCoverage: emptyNativeUsageCoverage(), projections: [], incompleteTurns: 0 };
+    const source = { coverage: emptyNativeCoverage(), nativeUsageCoverage: emptyNativeUsageCoverage(), projections: [], modelEvidence: new Map(), incompleteTurns: 0 };
     sink = source;
     await read(path);
     sink = whole;
@@ -112,7 +115,7 @@ export async function getNativeGrokUsageCoverage({ home, sessionsRoot, limits: o
     coverage.unreadableFiles += source.coverage.unreadableFiles;
     if (coverage.stoppedEarly || source.coverage.unreadableFiles) return;
     await sources.save(facts, { coverage: compactNativeCoverage(source.coverage), nativeUsageCoverage: source.nativeUsageCoverage,
-      incompleteTurns: source.incompleteTurns, records: source.projections.flatMap(({ records }) => records) });
+      incompleteTurns: source.incompleteTurns, modelEvidence: [...source.modelEvidence], records: source.projections.flatMap(({ records }) => records) });
   };
   const walk = async (path, depth = 0, parts = []) => {
     const info = await lstat(path).catch(error => { if (!depth && error.code === 'ENOENT') coverage.missingSource = true; return null; });
@@ -146,6 +149,10 @@ export async function getNativeGrokUsageCoverage({ home, sessionsRoot, limits: o
     for (const { projection } of collected.stored) {
       foldNativeCounts(nativeUsageCoverage, projection.nativeUsageCoverage);
       whole.incompleteTurns += projection.incompleteTurns;
+      for (const [recordKey, { evidence, incomplete }] of projection.modelEvidence) {
+        const prior = modelEvidence.get(recordKey);
+        modelEvidence.set(recordKey, { evidence: joinModelEvidence(prior?.evidence, evidence), incomplete: prior?.incomplete === true || incomplete });
+      }
       projections.push({ records: projection.records });
     }
   }
@@ -169,5 +176,6 @@ export async function getNativeGrokUsageCoverage({ home, sessionsRoot, limits: o
       records: records.slice(0, GROK_USAGE_RECORD_LIMIT) },
     cost: union.cost,
     findings: [...union.findings, ...(whole.incompleteTurns ? ['native-usage-incomplete'] : []), ...collectionFindings],
+    rollup: buildNativeUsageRollup('grok', union.records.map(({ recordKey, values, at }) => ({ at, values, ...modelEvidence.get(recordKey) })), modelLimits),
   };
 }

@@ -72,7 +72,8 @@ the list does not admit.
 | GET | `/api/system/health/details`, `/api/apps`, `/api/instances/sync-status` | Peer probe |
 | GET | `/api/apps/quality-federation` | App quality federation |
 | GET | `/api/cos/agents` | Peer socket relay snapshot |
-| GET | `/api/usage/native-report/v1` | Paired, challenge-bound local native usage report |
+| GET | `/api/usage/native-report/v1` | Paired, challenge-bound local native usage report with record lists, kept for peers that have not upgraded |
+| GET | `/api/usage/native-report/v2` | Paired, challenge-bound local native usage report with per-day model rollups |
 | POST | `/api/instances/peers/announce`, `/api/instances/peers/sync-categories` | Registration handshake |
 | GET | `/api/brain/sync`, `/api/brain/reconcile/{checksum,snapshot,manifest}` | Brain sync and parity |
 | GET | `/api/memory/sync`, `/api/catalog/sync`, `/api/sync/*` | Snapshot sync |
@@ -111,27 +112,29 @@ call site means adding its entry in the same change.
 
 ### Native usage reports
 
-`GET /api/usage/native-report/v1?challenge=<64 lowercase hex characters>`
-requires a current pair credential and an enabled, user-established peer with
+`GET /api/usage/native-report/v2?challenge=<64 lowercase hex characters>` (and
+its older `v1` form) requires a current pair credential and an enabled, user-established peer with
 the effective `usage` category enabled, even when the instance password is off.
 An inbound announcement, Basic password, or claimed instance ID alone does not
 qualify. Usage remains enabled under the content-only master sync switch unless
 its category or the peer is disabled. The endpoint accepts no source paths,
 scan limits, or other query parameters.
 
-The version-1 envelope contains only hashed source/audience participant keys,
-the request challenge, the current version-4 local native report, and a
-pair-secret HMAC over that payload. The report contains measured metadata and
-hashed accounting identities for cross-machine deduplication, never transcript
-text, source paths, credentials, or another peer's reports. Account selections
-remain local. Every response is uncached and checked against the current pair
+The version-2 envelope contains only hashed source/audience participant keys,
+the request challenge, the version-5 local native report, and a pair-secret HMAC
+over that payload. The report contains measured metadata and per-day, per-model
+rollups, with no record identity. The version-1 envelope carries a version-4
+report instead, whose hashed accounting identities exist only for peers that have
+not upgraded. Neither holds transcript text, source paths, credentials, or
+another peer's reports. Account selections remain local. Every response is uncached and checked against the current pair
 again after capture or collection.
 
-Collection uses no Basic fallback and refuses redirects. Each response is
-limited to 128 MiB with a 60-second request deadline and a 5-second body idle
+Collection uses no Basic fallback and refuses redirects. Each response has a
+1 GiB memory-safety bound, a 60-second request deadline and a 5-second body idle
 deadline. Reports older than five minutes or more than 30 seconds in the future,
 invalid hashes/signatures, and changed pair bindings are unavailable, not zero
-usage. Older peers without the endpoint remain explicitly missing. No result is
+usage. A peer that answers `v2` with 404 or 403 is asked for `v1`, and a peer
+without either remains explicitly missing. No result is
 written into the usage ledger. The collector keeps each peer's last verified report
 in its machine-local store and shows it, labeled stale, after a failed read while
 that peer remains eligible; a refusal or changed pairing shows nothing.

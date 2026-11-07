@@ -23,8 +23,12 @@ import { canonicalStringify } from './objects.js';
 import { nativeUsageRecordProjectionSchema, unionNativeClaudeRecords } from './nativeUsageRecords.js';
 import { nativeAgyUsageProjectionSchema, unionNativeAgyRecords } from './nativeAgyUsageRecords.js';
 import { nativeGrokUsageProjectionSchema, unionNativeGrokRecords } from './nativeGrokUsageRecords.js';
+import { nativeModelUsageRefusal, OLD_REPORT_MODEL_REASON } from './nativeUsageRollups.js';
 
+// The staged recovery (#15031) keeps its record lists at v4. The Usage view and paired
+// peers exchange v5, which carries per-day model rollups and no record identity (#15252).
 export const NATIVE_USAGE_CONTRACT_VERSION = 4;
+export const NATIVE_USAGE_ROLLUP_CONTRACT_VERSION = 5;
 
 const FAMILIES = ['agy', 'claude', 'codex', 'grok'];
 const TRANSCRIPT_FAMILIES = ['agy', 'claude', 'grok'];
@@ -174,11 +178,20 @@ const providerEntrySchemaV4 = z.strictObject({
 ) || (family === 'grok' && source === 'grok:persisted-session-usage' && validator === 'grok-persisted-turns/1'
   && recordProjection.identityScheme === 'sha256-grok-session-turn/1') || (family === 'agy' && source === 'agy:cli-sqlite-metadata'
   && validator === 'agy-cli-sqlite-v1/1' && recordProjection.identityScheme === 'sha256-agy-message-response/1')), 'unsupported record projection');
+const providerEntrySchemaV5 = z.strictObject({
+  ...providerEntrySchemaV4.shape,
+  recordProjection: z.null(),
+  modelUsage: z.unknown(),
+  totals: z.union([providerEntrySchemaV4.shape.totals.unwrap(), z.strictObject({ totalTokens: count, tokensIn: count, tokensOut: count,
+    cacheReadTokens: count, cacheWriteTokens: count, reasoningTokens: count, modelCalls: count })]).nullable(),
+}).refine(({ family, nativeAgyCoverage, totals, modelUsage }) => (!nativeAgyCoverage || family === 'agy')
+  && (family === 'codex' ? modelUsage === null : nativeModelUsageRefusal(family, { totals, modelUsage }) === null), 'invalid model usage rollup');
 export const nativeUsageReportSchema = z.discriminatedUnion('contractVersion', [
   reportSchemaV1,
   reportSchemaV1.extend({ contractVersion: z.literal(2), providers: z.array(providerEntrySchemaV2).length(FAMILIES.length) }),
   reportSchemaV1.extend({ contractVersion: z.literal(3), providers: z.array(providerEntrySchemaV3).length(FAMILIES.length) }),
   reportSchemaV1.extend({ contractVersion: z.literal(4), providers: z.array(providerEntrySchemaV4).length(FAMILIES.length) }),
+  reportSchemaV1.extend({ contractVersion: z.literal(5), providers: z.array(providerEntrySchemaV5).length(FAMILIES.length) }),
 ]).refine(({ providers }) => FAMILIES.every((family) => providers.filter((entry) => entry.family === family).length === 1), 'provider family must be unique');
 
 const baseEntry = (family) => {
@@ -307,10 +320,12 @@ const withContentHash = (body) => ({ ...body, contentHash: hashOf(body) });
 
 export const NATIVE_USAGE_CODEX_RETAINED_FINDING = 'retained-snapshot';
 
-/** A failed refresh shows the last stored account entry, marked so it cannot satisfy an
- * authoritative selection. Signed-out and missing-runtime are real states, not failures.
+/** The Codex entry a report carries. A failed refresh shows the last stored entry, marked
+ * so it cannot satisfy an authoritative selection. Signed-out and missing-runtime are
+ * real states, not failures, and are never replaced.
  */
-function withRetainedCodexEntry(entry, retained) {
+export function nativeUsageCodexEntry(evidence, capturedAt, retained = null) {
+  const entry = projectCodexEvidence(evidence, capturedAt);
   if (!retained || entry.findings.length !== 1 || entry.findings[0] !== 'refresh-failed') return entry;
   const parsed = providerEntrySchemaV4.safeParse(retained);
   if (!parsed.success || parsed.data.family !== 'codex' || !parsed.data.totals) return entry;
@@ -321,13 +336,33 @@ function withRetainedCodexEntry(entry, retained) {
 export function buildNativeUsageReport({ instanceId, capturedAt, codexEvidence, transcripts, scanLimits, retainedCodexEntry = null }) {
   const providers = [
     ...TRANSCRIPT_FAMILIES.map((family) => projectTranscriptCoverage(family, transcripts[family], scanLimits)),
-    withRetainedCodexEntry(projectCodexEvidence(codexEvidence, capturedAt), retainedCodexEntry),
+    nativeUsageCodexEntry(codexEvidence, capturedAt, retainedCodexEntry),
   ].sort((a, b) => a.family.localeCompare(b.family));
   const report = withContentHash({
     contractVersion: NATIVE_USAGE_CONTRACT_VERSION, kind: 'native-usage-participant-report',
     participantKey: nativeUsageParticipantKey(instanceId), capturedAt, providers, evidenceHash: hashOf(providers),
   });
   return nativeUsageReportSchema.parse(report);
+}
+
+const EMPTY_ROLLUP = { modelUsage: { version: 1, buckets: [] }, totals: null, findings: [] };
+
+/** A machine's aggregate report: the same coverage evidence as v4 with rollups in place of
+ * record lists, so its size follows days times models rather than records.
+ */
+export function buildNativeUsageRollupReport({ instanceId, capturedAt, codexEvidence, transcripts, scanLimits, retainedCodexEntry = null }) {
+  const providers = [
+    ...TRANSCRIPT_FAMILIES.map((family) => {
+      const { modelUsage, totals, findings } = transcripts[family].rollup ?? EMPTY_ROLLUP;
+      const entry = projectTranscriptCoverage(family, transcripts[family], scanLimits);
+      return { ...entry, totals, modelUsage, recordProjection: null, findings: [...new Set([...entry.findings, ...findings])] };
+    }),
+    { ...nativeUsageCodexEntry(codexEvidence, capturedAt, retainedCodexEntry), modelUsage: null },
+  ].sort((a, b) => a.family.localeCompare(b.family));
+  return nativeUsageReportSchema.parse(withContentHash({
+    contractVersion: NATIVE_USAGE_ROLLUP_CONTRACT_VERSION, kind: 'native-usage-participant-report',
+    participantKey: nativeUsageParticipantKey(instanceId), capturedAt, providers, evidenceHash: hashOf(providers),
+  }));
 }
 
 /** Verify content and evidence hashes after validating the strict report schema. */
@@ -484,6 +519,79 @@ function buildRetainedFamily(family, latest, selections, refusals, refuse) {
   };
 }
 
+const sumFields = (rows) => {
+  const fields = Object.keys(rows[0]).filter((field) => rows.every((row) => field in row));
+  return Object.fromEntries(fields.map((field) => [field, rows.some((row) => row[field] === null) ? null : rows.reduce((sum, row) => sum + row[field], 0)]));
+};
+
+function sumCostSignals(entries) {
+  const signals = entries.map(({ cost }) => cost?.nativeCostSignal)
+    .filter((signal) => signal && 'knownCostUsdTicks' in signal && (signal.measuredRecords || signal.missingRecords));
+  if (!signals.length) return null;
+  const known = signals.some(({ measuredRecords, knownCostUsdTicks }) => measuredRecords && knownCostUsdTicks === null)
+    ? null : signals.reduce((sum, { knownCostUsdTicks }) => sum + (knownCostUsdTicks ?? 0), 0);
+  return { kind: 'grok-cost-usd-ticks', status: 'unverified-scope', knownCostUsdTicks: Number.isSafeInteger(known) ? known : null,
+    ...sumFields(signals.map(({ measuredRecords, missingRecords, conflictingRecords }) => ({ measuredRecords, missingRecords, conflictingRecords }))) };
+}
+
+/** One row per model or reason. A v4 peer's accepted total has no model capability. */
+function sumModelTotals(entries) {
+  const rows = new Map();
+  const add = (kind, key, counters, incompleteRecords) => {
+    const id = `${kind}\u0000${key}`;
+    const row = rows.get(id) ?? { kind, key, counters: {} };
+    // Unknown on one machine stays unknown for the sum, never a smaller known number.
+    for (const [field, value] of Object.entries(counters)) {
+      row.counters[field] = value === null || row.counters[field] === null ? null : (row.counters[field] ?? 0) + value;
+    }
+    // Only Grok measures this. Any other provider has no count to report, not a zero.
+    if (incompleteRecords !== undefined) row.incompleteRecords = (row.incompleteRecords ?? 0) + incompleteRecords;
+    rows.set(id, row);
+  };
+  for (const entry of entries) {
+    if (entry.modelUsage) for (const { kind, key, counters, incompleteRecords } of entry.modelUsage.buckets) add(kind, key, counters, incompleteRecords);
+    else if (entry.totals) add('unknown', OLD_REPORT_MODEL_REASON, entry.totals);
+  }
+  return [...rows.keys()].sort().map((id) => rows.get(id));
+}
+
+/** Add machines' own totals. A field one machine lacks is omitted, and unknown stays unknown. */
+function sumMachineEntries(entries) {
+  const reporting = entries.filter(({ totals }) => totals);
+  const findings = new Set(entries.flatMap((entry) => entry.findings));
+  const summed = reporting.length ? sumFields(reporting.map(({ totals }) => totals)) : null;
+  const modelTotals = sumModelTotals(reporting);
+  const overflow = (summed && !Object.values(summed).every((value) => value === null || Number.isSafeInteger(value)))
+    || modelTotals.some(({ counters }) => !Object.values(counters).every((value) => value === null || Number.isSafeInteger(value)));
+  if (overflow) findings.add('counter-overflow');
+  return { totals: overflow ? null : summed, modelTotals: overflow ? null : modelTotals, findings,
+    cost: { estimatedApiEquivalentUsd: null, actualSpendUsd: null, nativeCostSignal: sumCostSignals(reporting) } };
+}
+
+/** Each machine reports its own retained files, so the view adds them. A transcript copied to
+ * two machines counts twice, by decision (#15252). A selection only groups machines here.
+ */
+function buildMachineRollupFamily(family, latest, selections, refusals) {
+  const entryFor = (key) => latest.get(key)?.providers.find(({ family: entryFamily }) => entryFamily === family);
+  const reasons = [...new Set(refusals.filter(({ family: refusedFamily }) => !refusedFamily || refusedFamily === family).map(({ code }) => code))].sort();
+  const refused = reasons.length > 0;
+  const accounts = selections.map(({ accountLabel, members, historyScope }) => {
+    const missing = members.filter((member) => !latest.has(member)).sort();
+    const { totals, modelTotals, findings, cost } = sumMachineEntries(members.filter((member) => latest.has(member)).map(entryFor));
+    if (missing.length) findings.add('member-report-missing');
+    return { accountLabel, identityBasis: 'operator-selection', historyScope, members: [...members].sort(), membersWithoutReport: missing,
+      status: refused ? 'refused' : 'partial', completeness: 'unknown', retention: 'unknown',
+      totals: refused ? null : totals, modelTotals: refused ? null : modelTotals, findings: [...findings].sort(),
+      cost: refused ? { estimatedApiEquivalentUsd: null, actualSpendUsd: null } : cost, attribution: 'excluded' };
+  }).sort((a, b) => a.accountLabel.localeCompare(b.accountLabel));
+  const { totals, modelTotals } = sumMachineEntries([...latest.keys()].sort().map(entryFor));
+  return {
+    family, scope: 'machine-rollups', accounts, unresolvedParticipants: [],
+    merge: { status: refused ? 'refused' : totals ? 'partial' : 'empty', reasons, accountCount: accounts.length, completeness: 'unknown',
+      totals: refused ? null : totals, modelTotals: refused ? null : modelTotals },
+  };
+}
+
 /**
  * Combine participant reports under an operator selection. Output depends only on
  * its inputs and not on their order, so re-running it over captured reports is
@@ -494,7 +602,7 @@ function buildRetainedFamily(family, latest, selections, refusals, refuse) {
  * and dropping the older report, because this contract cannot tell which account the
  * older snapshot belonged to.
  */
-export function buildNativeUsageMatrix({ reports, selections }) {
+export function buildNativeUsageMatrix({ reports, selections, machineRollups = false }) {
   const refusals = [];
   const refuse = (code, family = null, key = null) => refusals.push({ code, family, participantKey: key });
   const parsedSelections = nativeUsageAccountSelectionsSchema.safeParse(selections);
@@ -503,11 +611,15 @@ export function buildNativeUsageMatrix({ reports, selections }) {
   const byParticipant = loadParticipants(reports, refuse);
   const latest = new Map([...byParticipant].map(([key, list]) => [key, list.at(-1)]));
   const codex = buildCodexFamily(latest, usableSelections.filter(({ family }) => family === 'codex'), refusals, refuse);
-  const retained = ['agy', 'claude', 'grok'].map(family => buildRetainedFamily(family, latest, usableSelections.filter(selection => selection.family === family), refusals, refuse));
+  const retained = ['agy', 'claude', 'grok'].map(family => {
+    const familySelections = usableSelections.filter(selection => selection.family === family);
+    return machineRollups ? buildMachineRollupFamily(family, latest, familySelections, refusals)
+      : buildRetainedFamily(family, latest, familySelections, refusals, refuse);
+  });
   const unique = [...new Map(refusals.map((refusal) => [canonicalStringify(refusal), refusal])).entries()]
     .sort(([a], [b]) => a.localeCompare(b)).map(([, refusal]) => refusal);
   return withContentHash({
-    contractVersion: NATIVE_USAGE_CONTRACT_VERSION, kind: 'native-usage-matrix',
+    contractVersion: machineRollups ? NATIVE_USAGE_ROLLUP_CONTRACT_VERSION : NATIVE_USAGE_CONTRACT_VERSION, kind: 'native-usage-matrix',
     selectionsHash: hashOf(selections ?? null),
     selections: usableSelections,
     participants: [...latest.keys()].sort().map((key) => ({

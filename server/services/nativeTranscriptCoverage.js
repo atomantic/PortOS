@@ -6,6 +6,8 @@ import { createHash } from 'node:crypto';
 import { safeParse } from '../lib/streamJsonParser.js';
 import { canonicalStringify } from '../lib/objects.js';
 import { compactNativeCoverage, emptyNativeCoverage } from '../lib/nativeUsageSourceFold.js';
+import { unionNativeClaudeRecords } from '../lib/nativeUsageRecords.js';
+import { buildNativeUsageRollup, claudeModelEvidence, joinModelEvidence } from '../lib/nativeUsageRollups.js';
 
 // Bounded retained-record reads only. No ledger, estimates, or provider calls.
 const LIMITS = { bytes: 128 * 1024 * 1024, lineBytes: 1024 * 1024, entries: 30000, records: 100000, milliseconds: 5000, depth: 8 };
@@ -29,7 +31,7 @@ function project(family, entry, parts) {
     return { key: identity(entry.message?.id) ? entry.message.id : null, at: date(entry.timestamp),
       values: ['input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens'].map(key => usage?.[key]),
       requestId: identity(entry.requestId) ? entry.requestId : null, final: identity(entry.message?.stop_reason),
-      version: entry.version,
+      version: entry.version, model: entry.message?.model,
       inconsistent: Boolean(breakdown) && (breakdown.ephemeral_5m_input_tokens ?? 0) + (breakdown.ephemeral_1h_input_tokens ?? 0) !== usage.cache_creation_input_tokens };
   }
   if (family === 'agy') {
@@ -78,6 +80,7 @@ function reconcileStreamed(prior, next) {
  * so sources stored separately fold to what reading them together produces.
  */
 function mergeRecord(family, prior, next) {
+  if (next.evidence) prior.evidence = joinModelEvidence(prior.evidence, next.evidence);
   prior.copies += next.copies;
   if (next.at && (!prior.at || next.at < prior.at)) prior.at = next.at;
   prior.inconsistent ||= next.inconsistent;
@@ -101,7 +104,7 @@ function isTranscript(family, parts) {
  * even after an exhaustive scan of today's files. Internal limits are injectable
  * for synthetic boundary tests; no HTTP parameter can change roots or limits.
  */
-export async function getNativeTranscriptCoverage(family, { home, projectsRoot, limits: overrides = {}, deadline = Infinity, identityLimit = Infinity, includeRecords = false, sources = null } = {}) {
+export async function getNativeTranscriptCoverage(family, { home, projectsRoot, limits: overrides = {}, deadline = Infinity, identityLimit = Infinity, includeRecords = false, modelLimits, sources = null } = {}) {
   if (!Object.hasOwn(roots, family)) throw new Error('Unsupported native transcript family');
   if (sources && family !== 'claude') throw new Error('Per-source collection supports Claude transcripts only');
   const limits = { ...LIMITS, ...overrides };
@@ -150,7 +153,8 @@ export async function getNativeTranscriptCoverage(family, { home, projectsRoot, 
     }
     if (!record.key) { sink.coverage.missingIdentityRecords++; return; }
     const key = hash(['portos-native-record/1', family, record.key]);
-    const next = { signature: hash([record.values, record.usageShape]), values: record.values.map(value => counter(value) ? value : null), measured, conflict: false,
+    // Labels stay out of the identity and the copy signature, so one can never create or hide a conflict.
+    const next = { evidence: family === 'claude' ? claudeModelEvidence(record.model) : null, signature: hash([record.values, record.usageShape]), values: record.values.map(value => counter(value) ? value : null), measured, conflict: false,
       requestKey: record.requestId ? hash(['portos-native-request/1', family, record.requestId]) : null, final: record.final === true, partialsDiffer: false,
       costTicks: record.costTicks === true, inconsistent: record.inconsistent === true, at: record.at, copies: 1, maximumCopies: 1 };
     const prior = sink.records.get(key);
@@ -294,6 +298,15 @@ export async function getNativeTranscriptCoverage(family, { home, projectsRoot, 
       conversationsPartiallyMeasured: [...conversations.values()].filter(({ measured, unmeasured }) => measured && unmeasured).length };
   }
   const totalTokens = totals.reduce((sum, value) => sum + value, 0);
+  const projected = includeRecords && family === 'claude'
+    ? [...records].sort(([a], [b]) => a.localeCompare(b)).map(([recordKey, record]) => ({
+      recordKey,
+      requestKey: record.conflict ? null : record.requestKey,
+      // Retain the identity but no arbitrary winning counters for a conflict.
+      values: record.conflict ? [null, null, null, null] : record.values,
+      final: !record.conflict && record.final,
+      conflict: record.conflict, inconsistent: record.inconsistent, at: record.at,
+    })) : null;
   const overflow = !totals.every(counter) || (family === 'claude' && !counter(totalTokens));
   const partial = coverage.capped || coverage.missingUsageRecords || coverage.missingIdentityRecords || coverage.conflictingRecords
     || coverage.invalidLines || coverage.unreadableFiles || coverage.undatedRecords || coverage.skippedLinks || coverage.unfinalizedRecords
@@ -314,17 +327,12 @@ export async function getNativeTranscriptCoverage(family, { home, projectsRoot, 
       totalTokens: family === 'claude' ? totalTokens : null,
       tokensIn: totals[0], tokensOut: totals[1], cacheReadTokens: totals[2], cacheWriteTokens: family === 'agy' ? null : totals[3],
     },
-    ...(includeRecords ? { recordProjection: family === 'claude' ? {
-      version: 1, identityScheme: 'sha256-native-record/1', truncated: records.size > 100000,
-      records: [...records].sort(([a], [b]) => a.localeCompare(b)).slice(0, 100000).map(([recordKey, record]) => ({
-        recordKey,
-        requestKey: record.conflict ? null : record.requestKey,
-        // Retain the identity but no arbitrary winning counters for a conflict.
-        values: record.conflict ? [null, null, null, null] : record.values,
-        final: !record.conflict && record.final,
-        conflict: record.conflict, inconsistent: record.inconsistent, at: record.at,
-      })),
+    ...(includeRecords ? { recordProjection: projected ? {
+      version: 1, identityScheme: 'sha256-native-record/1', truncated: records.size > 100000, records: projected.slice(0, 100000),
     } : null } : {}),
+    // Covers every accepted record: the list limit above applies only to v4 reports.
+    ...(projected ? { rollup: buildNativeUsageRollup('claude', unionNativeClaudeRecords([{ records: projected }]).records
+      .map(({ recordKey, values, at }) => ({ at, values, evidence: records.get(recordKey).evidence })), modelLimits) } : {}),
     coverage, cost: { usd: null, kind: 'unknown' }, ...(sources ? { findings: collectionFindings } : {}),
     reason: !coverage.records ? unavailableReason : family === 'grok'
       ? 'Turn counters are retained, but per-turn versus cumulative semantics are unvalidated. No authoritative total is calculated.'
