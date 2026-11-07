@@ -11,7 +11,7 @@ import { atomicWrite, PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { shuffle } from '../lib/arrayUtils.js';
 import { isMemoryItemEnabled } from '../lib/postTopics.js';
-import { userLocalToday } from './userTimezone.js';
+import { getUserTimezone, userLocalToday } from './userTimezone.js';
 import {
   DEFAULT_EASE,
   advanceSchedule,
@@ -624,6 +624,7 @@ export async function submitPractice(id, practiceData) {
   // is a day-key (every reader does `String(date).split('T')[0]`); `timestamp`
   // keeps the exact instant, matching submitTrainingEntry's shape. Derive the day
   // from the SAME `nowDate` so a midnight boundary can't split date and timestamp.
+  const timezone = await getUserTimezone();
   const todayLocal = await userLocalToday(nowDate);
 
   // Passive study is activity, not retrieval. Keep the event for time/streak
@@ -649,7 +650,7 @@ export async function submitPractice(id, practiceData) {
 
   // Only the item load/edit/save runs under the store queue; the training-log
   // append does not depend on the item pre-image, so it stays outside the lock.
-  const applied = await queueMemoryWrite(() => applyRetrievalPracticeLocked(id, { chunkId, results, nowDate, now }));
+  const applied = await queueMemoryWrite(() => applyRetrievalPracticeLocked(id, { chunkId, results, nowDate, now, timezone }));
   if (!applied) return null;
   const { item, correctCount } = applied;
 
@@ -668,7 +669,7 @@ export async function submitPractice(id, practiceData) {
 }
 
 // Mutation half of submitPractice. Callers must hold queueMemoryWrite.
-async function applyRetrievalPracticeLocked(id, { chunkId, results, nowDate, now }) {
+async function applyRetrievalPracticeLocked(id, { chunkId, results, nowDate, now, timezone }) {
   const items = await loadMemoryItems();
   const item = items.find(i => i.id === id);
   if (!item) return null;
@@ -727,7 +728,7 @@ async function applyRetrievalPracticeLocked(id, { chunkId, results, nowDate, now
     item.mastery.overallPct = computeOverallMastery(item);
   } else if (!['attested', 'mastered'].includes(item.mastery.retention?.status)) {
     const advanced = advanceSchedule(item.schedule, ratio, nowDate);
-    item.schedule = mergeScheduleAdvance(item.schedule, advanced, nowDate);
+    item.schedule = mergeScheduleAdvance(item.schedule, advanced, nowDate, timezone);
   }
 
   item.updatedAt = now;
@@ -748,17 +749,18 @@ async function applyRetrievalPracticeLocked(id, { chunkId, results, nowDate, now
  * doesn't match a known item. The composed-session path uses
  * `applySessionToMemoryItems`, which gates tasks to scored retrieval types.
  */
-export function advanceScheduleFromSession(memoryItemId, ratio, now = new Date()) {
-  if (!memoryItemId) return Promise.resolve(null);
-  return queueMemoryWrite(() => advanceScheduleFromSessionLocked(memoryItemId, ratio, now));
+export async function advanceScheduleFromSession(memoryItemId, ratio, now = new Date()) {
+  if (!memoryItemId) return null;
+  const timezone = await getUserTimezone();
+  return queueMemoryWrite(() => advanceScheduleFromSessionLocked(memoryItemId, ratio, now, timezone));
 }
 
-async function advanceScheduleFromSessionLocked(memoryItemId, ratio, now) {
+async function advanceScheduleFromSessionLocked(memoryItemId, ratio, now, timezone) {
   const items = await loadMemoryItems();
   const item = items.find(i => i.id === memoryItemId);
   if (!item) return null;
 
-  applyScheduleAdvanceToItem(item, ratio, now);
+  applyScheduleAdvanceToItem(item, ratio, now, timezone);
   await saveMemoryItems(items);
 
   console.log(`🧠 POST session reviewed "${item.title}" → next review in ${item.schedule.intervalDays}d`);
@@ -769,7 +771,7 @@ async function advanceScheduleFromSessionLocked(memoryItemId, ratio, now) {
 // and applySessionToMemoryItems (one load+save for the WHOLE session). Keeping a
 // single core guarantees the consolidated one-pass path produces byte-identical
 // schedule results to the legacy per-task path.
-function applyScheduleAdvanceToItem(item, ratio, now) {
+function applyScheduleAdvanceToItem(item, ratio, now, timezone) {
   if (isMemorySpotCheckDue(item, now)) {
     if (ratio >= MASTERY_TARGET_ACCURACY) completeSpotCheck(item, now);
     else resumeTrainingAfterFailedSpotCheck(item, now);
@@ -781,7 +783,7 @@ function applyScheduleAdvanceToItem(item, ratio, now) {
     return item.schedule;
   }
   const advanced = advanceSchedule(item.schedule, ratio, now);
-  item.schedule = mergeScheduleAdvance(item.schedule, advanced, now);
+  item.schedule = mergeScheduleAdvance(item.schedule, advanced, now, timezone);
   item.updatedAt = now.toISOString();
   return item.schedule;
 }
@@ -937,16 +939,17 @@ async function mergeMasteryFromSessionLocked(memoryItemId, questions, now) {
  * @param {Array<{memoryItemId?, questions?}>} tasks - the session's scored tasks
  * @returns {Promise<{updated:number}>} how many memory items were touched
  */
-export function applySessionToMemoryItems(tasks, now = new Date()) {
+export async function applySessionToMemoryItems(tasks, now = new Date()) {
   const memoryTasks = (Array.isArray(tasks) ? tasks : []).filter(t => (
     t?.memoryItemId
     && (!t.type || ['memory-fill-blank', 'memory-sequence', 'memory-element-flash'].includes(t.type))
   ));
-  if (!memoryTasks.length) return Promise.resolve({ updated: 0 });
-  return queueMemoryWrite(() => applySessionToMemoryItemsLocked(memoryTasks, now));
+  if (!memoryTasks.length) return { updated: 0 };
+  const timezone = await getUserTimezone();
+  return queueMemoryWrite(() => applySessionToMemoryItemsLocked(memoryTasks, now, timezone));
 }
 
-async function applySessionToMemoryItemsLocked(memoryTasks, now) {
+async function applySessionToMemoryItemsLocked(memoryTasks, now, timezone) {
   const items = await loadMemoryItems();
   let updated = 0;
   for (const task of memoryTasks) {
@@ -956,7 +959,7 @@ async function applySessionToMemoryItemsLocked(memoryTasks, now) {
     const total = questions.length;
     const correct = questions.filter(q => q?.correct).length;
     const ratio = total ? correct / total : 0;
-    applyScheduleAdvanceToItem(item, ratio, now);
+    applyScheduleAdvanceToItem(item, ratio, now, timezone);
     // mergeMasteryFromSession is a no-op on empty questions; mirror that so the
     // one-pass path stays identical to the legacy schedule+mastery sequence.
     if (questions.length) applyMasteryMergeToItem(item, questions, now);

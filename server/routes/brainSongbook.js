@@ -31,6 +31,7 @@ import {
   songAttachmentUploadSchema,
 } from '../lib/brainValidation.js';
 import { applySongPractice } from '../lib/songPractice.js';
+import { getUserTimezone } from '../services/userTimezone.js';
 import * as brainStorage from '../services/brainStorage.js';
 import { importSongFromUrl } from '../services/brainSongbookImport.js';
 import { MAX_BASE64_UPLOAD_BYTES } from '../lib/uploadLimits.js';
@@ -156,8 +157,9 @@ router.delete('/:id', asyncHandler(async (req, res) => {
 // stays on the server instead of in the browser.
 router.post('/:id/practice', asyncHandler(async (req, res) => {
   const { quality } = validateRequest(songPracticeInputSchema, req.body);
+  const timezone = await getUserTimezone();
   const song = requireSong(await brainStorage.updateWith('songs', req.params.id,
-    (fresh) => applySongPractice(fresh, quality)));
+    (fresh) => applySongPractice(fresh, quality, new Date(), timezone)));
   console.log(`🎸 Practice logged: "${song.title}" quality=${quality} → ${song.stage}, next review in ${song.practice.intervalDays}d`);
   res.json(song);
 }));
