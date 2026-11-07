@@ -50,8 +50,12 @@ const DUMP_SCRIPT = 'umask 077; initdb -D /var/lib/postgresql/data -U fixture_ad
   + '&& psql -X -q -v ON_ERROR_STOP=1 -h /tmp -U fixture_admin -d postgres >/dev/null '
   + '&& pg_dump -h /tmp -U fixture_admin -d postgres "$@"';
 
+// spawnSync blocks the hook's own timer, so the dump, its container removal and
+// the replay (60 + 30 + 60 s) must fit inside the 180 s beforeAll budget.
+const COMMAND_TIMEOUT_MS = 60000;
+
 function run(command, args, options = {}) {
-  const result = spawnSync(command, args, { encoding: 'utf8', timeout: 120000, maxBuffer: 64 * 1024 * 1024, ...options });
+  const result = spawnSync(command, args, { encoding: 'utf8', timeout: COMMAND_TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024, ...options });
   if (result.error) throw new Error(`${command} could not run: ${result.error.message}`);
   if (result.status !== 0) throw new Error(`${command} exited ${result.status}: ${result.stderr.trim().slice(-2000)}`);
   return result.stdout;
