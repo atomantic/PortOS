@@ -491,6 +491,7 @@ export const ALWAYS_RUN_TESTS = [
 const DB_RISK_RULES = [
   /^scripts\/rehearsal-scratch-db(?:[.\/]|$)/i,
   /^scripts\/lib\/migrationFiles(?:[.\/]|$)/i,
+  /^scripts\/lib\/dbImage(?:[.\/]|$)/i,
   /^server\/lib\/databaseMaintenanceSchema(?:[.\/]|$)/i,
   /^server\/services\/backupDatabaseDump(?:[.\/]|$)/i,
   /^server\/lib\/db(?:\/|\.|$)/i,

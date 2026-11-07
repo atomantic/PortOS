@@ -23,7 +23,7 @@ import { createLineReader } from '../lib/streamLines.js';
 import { getEvent } from './eventScheduler.js';
 import { POOL_CONFIG, checkHealth, databaseRestoreRecovery, getServerMajorVersion, query, withDatabaseMaintenance } from '../lib/db.js';
 import { withPgToolEnv, resolvePgDumpBinary } from '../lib/pgTools.js';
-import { inspectDatabaseDump, prepareDatabaseReplay } from './backupDatabaseDump.js';
+import { inspectDatabaseDump, prepareDatabaseReplay, SNAPSHOT_PG_DUMP_FLAGS } from './backupDatabaseDump.js';
 import {
   captureSyncFeedPositions, pendingRecoveryResult, repairCommittedRestore, restoreApplicationName, restoreReceiptSql,
   restoreRecoveryRefusal, settleReplayOutcome, withDatabaseRestoreAdmission,
@@ -945,26 +945,12 @@ export async function dumpPostgres(outputPath) {
   }
 
   return withPgToolEnv(POOL_CONFIG, pgEnv => new Promise((resolvePromise) => {
-    // --clean --if-exists: the dump DROPs each object before recreating it, so it
-    // replays cleanly into the live, already-initialized PortOS database (the
-    // common Restore-DB target) instead of erroring "relation already exists" on
-    // the first CREATE. Without it the dump is only restorable into an empty DB.
     const proc = spawn(pgDumpBin, [
       '-h', pgHost,
       '-p', pgPort,
       '-U', pgUser,
       '-d', pgDb,
-      '--no-owner',
-      '--no-acl',
-      '--no-comments',
-      '--clean',
-      '--if-exists',
-      // Machine-local replay receipts (#9725) describe this install's past
-      // restores, not application data; the table definition is still dumped.
-      '--exclude-table-data=restore_receipts',
-      // The asynchronous media mirror can lag its authoritative files. Rebuild
-      // it after restore rather than snapshotting stale file references.
-      '--exclude-table-data=media_assets',
+      ...SNAPSHOT_PG_DUMP_FLAGS,
       '-f', outputPath
     ], {
       shell: false,

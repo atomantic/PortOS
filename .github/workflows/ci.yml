@@ -823,6 +823,18 @@ jobs:
           restore-keys: |
             test-memo-${{ runner.os }}-${{ runner.arch }}-db-
 
+      # A real pg_dump from the service's pinned image, checked by
+      # inspectDatabaseDump, prepared by prepareDatabaseReplay and replayed into
+      # a scratch database, then the startup maintenance-schema probe. Outside
+      # the memo, so a missing Docker engine, image or psql fails instead of
+      # becoming a cached pass.
+      - name: Restore a real pg_dump into a scratch database
+        timeout-minutes: 5
+        env:
+          PORTOS_DB_RESTORE_LIVE: '1'
+          PGMODE: native
+        run: cd server && npx --no-install vitest run services/backupDatabaseDump.restore.live.test.js
+
       # Full mode: the runner subtracts what the memo verified and records the
       # `⏱ db full suite` duration line itself.
       - name: Run DB-backed tests (portos_test)
