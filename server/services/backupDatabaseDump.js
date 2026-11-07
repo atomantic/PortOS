@@ -42,10 +42,10 @@ const MAX_SCANNED_LINE = 64 * 1024;
  * Offline inspectors may supply a bounded stream from their pinned descriptor
  * and a stricter table inventory. Neither option executes SQL or proves restore.
  * @param {string} path
- * @param {{ spoolTo?: string, omitVersionDirectives?: boolean, targetServerMajor?: number, inputStream?: import('node:stream').Readable, requiredTables?: string[] }} [options]
+ * @param {{ spoolTo?: string, omitVersionDirectives?: boolean, rejectPsqlCommands?: boolean, targetServerMajor?: number, inputStream?: import('node:stream').Readable, requiredTables?: string[] }} [options]
  * @returns {Promise<{ sizeBytes: number, sha256: string, tableCount: number, complete: boolean, missingTables: string[], extensionMetadata?: {start: number, end: number}[] }>}
  */
-export function inspectDatabaseDump(path, { spoolTo, omitVersionDirectives = false, targetServerMajor, inputStream, requiredTables = REQUIRED_DUMP_TABLES } = {}) {
+export function inspectDatabaseDump(path, { spoolTo, omitVersionDirectives = false, rejectPsqlCommands = false, targetServerMajor, inputStream, requiredTables = REQUIRED_DUMP_TABLES } = {}) {
   return new Promise((resolvePromise, reject) => {
     const hash = createHash('sha256');
     // Latin-1 preserves byte offsets and dumps in non-UTF-8 client encodings.
@@ -84,7 +84,7 @@ export function inspectDatabaseDump(path, { spoolTo, omitVersionDirectives = fal
           extensionMetadata.push({ start: lineStart, end: scannedBytes });
           return;
         }
-        if (line.startsWith('\\')) return;
+        if (line.startsWith('\\')) { if (rejectPsqlCommands) unscannable = true; return; }
       }
       for (let i = 0; i < line.length; i += 1) {
         const c = line[i];
@@ -97,6 +97,10 @@ export function inspectDatabaseDump(path, { spoolTo, omitVersionDirectives = fal
           continue;
         }
         if (quote) {
+          // This opt-in admission does not interpret SET lexical modes or
+          // encoding-dependent backslash escapes. Refuse ambiguous SQL tokens;
+          // COPY and dollar-quoted payloads never use those escape rules.
+          if (rejectPsqlCommands && c === '\\') unscannable = true;
           if (c === quote.character) {
             if (next === c) i += 1;
             else quote = null;
@@ -108,6 +112,10 @@ export function inspectDatabaseDump(path, { spoolTo, omitVersionDirectives = fal
           else if (c === '*' && next === '/') { blockDepth -= 1; i += 1; }
           continue;
         }
+        // Restricted psql still permits control flow/early exit. A detached
+        // rehearsal can forbid every non-data command after stripping only
+        // pg_dump's own restriction headers. Quotes/COPY/comments are data.
+        if (c === '\\' && rejectPsqlCommands) unscannable = true;
         if (c === '-' && next === '-') break;
         if (c === '/' && next === '*') { blockDepth = 1; i += 1; continue; }
         if (c === ';') {
@@ -120,11 +128,16 @@ export function inspectDatabaseDump(path, { spoolTo, omitVersionDirectives = fal
           statement = '';
           statementTruncated = false;
           statementStart = null;
-          if (copyData) break;
+          if (copyData) {
+            // psql resumes the command line after consuming COPY's stdin rows.
+            // Do not let a trailing command hide behind the scanner's COPY skip.
+            if (rejectPsqlCommands && !/^\s*(?:--[^\r\n]*)?$/.test(line.slice(i + 1))) unscannable = true;
+            break;
+          }
           continue;
         }
         if (statementStart === null && !/\s/.test(c)) statementStart = lineStart + i;
-        if (c === '$') {
+        if (c === '$' && (!rejectPsqlCommands || !/[A-Za-z0-9_$\x80-\xff]/.test(line[i - 1] ?? ''))) {
           const delimiter = line.slice(i).match(/^\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$/)?.[0];
           if (delimiter) { dollarQuote = delimiter; i += delimiter.length - 1; }
         }
@@ -136,6 +149,7 @@ export function inspectDatabaseDump(path, { spoolTo, omitVersionDirectives = fal
         if (c === '"') {
           const identifier = line.slice(i).match(/^"(?:[^"]|"")*"/);
           if (identifier) {
+            if (rejectPsqlCommands && identifier[0].includes('\\')) unscannable = true;
             if (statement.length + identifier[0].length <= MAX_SCANNED_LINE) statement += identifier[0];
             else statementTruncated = true;
             i += identifier[0].length - 1;

@@ -1,0 +1,169 @@
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
+import { spawn } from 'node:child_process';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { runNativeUsageRehearsalCli } from '../native-usage-rehearse.js';
+import { NATIVE_USAGE_SQL_IMAGE } from './nativeUsageSqlRehearsal.js';
+import { pinPlatform } from '../../server/lib/testHelper.js';
+import { NATIVE_USAGE_SNAPSHOT_TABLES, spoolNativeUsageSnapshotDatabase, verifyNativeUsageSnapshot } from './nativeUsageSnapshot.js';
+import { sqlDump, sqlFixture } from './nativeUsageSqlRehearsal.testFixture.js';
+
+vi.mock('node:child_process', async original => ({ ...await original(), spawn: vi.fn() }));
+let directory;
+let calls;
+let failWhen;
+let leftover;
+let transportFailure;
+let restorePlatform;
+const rows = Object.fromEntries(NATIVE_USAGE_SNAPSHOT_TABLES.map(name => [name, '1']));
+beforeEach(async () => {
+  restorePlatform = pinPlatform('linux');
+  directory = await mkdtemp(join(tmpdir(), 'native-sql-test-'));
+  calls = []; failWhen = () => false; leftover = false; transportFailure = null;
+  vi.mocked(spawn).mockImplementation((binary, argv, options) => {
+    const child = new EventEmitter();
+    child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+    child.kill = vi.fn(() => true);
+    const call = { binary, argv, options, input: '' }; calls.push(call);
+    child.stdin.on('data', chunk => {
+      call.input += chunk.toString();
+      if (transportFailure === 'stdin' && argv.includes('--single-transaction')) {
+        child.stdin.destroy(new Error('private stdin error'));
+        setImmediate(() => child.emit('close', 1));
+      }
+    });
+    child.stdin.on('finish', () => {
+      setImmediate(() => {
+        const failed = failWhen(call);
+        const sql = argv.at(-1);
+        let output = argv.includes('--single-transaction') && transportFailure !== 'early-exit'
+          ? call.input.match(/\n\\echo (native_rehearsal_end_[a-f0-9]+)\n$/)?.[1] ?? '' : '';
+        if (sql.includes('json_build_object')) output = JSON.stringify(rows);
+        else if (sql.includes('pg_class')) output = String(NATIVE_USAGE_SNAPSHOT_TABLES.length);
+        if (argv.includes('ls') && leftover) output = 'synthetic-container-id';
+        if (argv.includes('--single-transaction')) {
+          if (transportFailure === 'interrupt') process.emit('SIGTERM');
+          if (transportFailure === 'spawn') child.emit('error', new Error('private spawn error'));
+          if (transportFailure === 'output') child.stdout.write('x'.repeat(1024 * 1024 + 1));
+        }
+        if (failed) child.stderr.write('private SQL, private database credentials');
+        else child.stdout.write(output);
+        child.stdout.end(); child.stderr.end(); child.emit('close', failed ? 1 : 0);
+      });
+    });
+    return child;
+  });
+});
+afterEach(async () => { restorePlatform(); vi.unstubAllEnvs(); await rm(directory, { recursive: true, force: true }); });
+async function run(args) {
+  let output = '';
+  const code = await runNativeUsageRehearsalCli(args, { stdout: value => { output += value; } });
+  return { code, result: JSON.parse(output), output };
+}
+
+describe('SQL rehearsal CLI isolation and evidence contract (synthetic Docker transport)', () => {
+  it('binds exact dump bytes, restricts replay and cleans up before reporting SQL-only evidence', async () => {
+    const fixture = await sqlFixture(directory);
+    vi.stubEnv('PGHOST', 'private-db.invalid'); vi.stubEnv('DOCKER_HOST', 'tcp://private-daemon.invalid');
+    vi.stubEnv('DOCKER_CONTEXT', 'private-context'); vi.stubEnv('PGPASSWORD', 'private-secret');
+    const before = await readFile(join(directory, 'portos-db.sql'));
+    const { code, result, output } = await run(fixture.args);
+    expect(code).toBe(3);
+    expect(result).toMatchObject({ stageHash: fixture.stage.contentHash, backupHash: fixture.backup.contentHash,
+      database: { restoreVerified: true, schemaAndMigrationsMatched: false, sourceRowCountsMatched: false, restoredRowCounts: rows, omittedRanges: 4 },
+      fullStoreInventoryVerified: false, fullRecoveryBackup: false, activationReady: false,
+      isolation: { image: NATIVE_USAGE_SQL_IMAGE, replaySuperuser: false, separateReplayOsIdentity: true, containerRemoved: true } });
+    expect(result.holdReasons).not.toContain('database-restore-not-verified');
+    expect(result.holdReasons).toContain('matched-runtime-restore-not-verified');
+    expect(await readFile(join(directory, 'portos-db.sql'))).toEqual(before);
+    const create = calls.find(call => call.argv.includes('create'));
+    expect(create.argv).toEqual(expect.arrayContaining(['--pull=never', '--network=none', '--read-only', '--cap-drop=ALL', '--security-opt=no-new-privileges', '--user', '999:999', '--pids-limit=64', '--memory=1g', '--cpus=1']));
+    expect(create.argv.join(' ')).not.toMatch(/--(?:volume|publish|privileged|device|mount)(?:=| )/);
+    for (const call of calls) {
+      expect(call.binary).toBe('/usr/bin/docker');
+      expect(call.argv.slice(0, 3)).toEqual(['--host', 'unix:///var/run/docker.sock', '--config']);
+      expect(call.options.env).toEqual({ PATH: '/usr/bin:/bin', HOME: call.options.cwd });
+      expect(call.options.shell).toBe(false);
+    }
+    const replay = calls.find(call => call.argv.includes('--single-transaction'));
+    expect(replay.argv).toEqual(expect.arrayContaining(['65534:65534', '-X', '--no-password', 'ON_ERROR_STOP=1', 'rehearsal_restore']));
+    expect(replay.input).toMatch(/^[a-f0-9]{64}\n\\restrict [a-f0-9]{64}\n/);
+    expect(replay.input).not.toContain('exampleDumpKey');
+    expect(replay.input).not.toContain('DROP EXTENSION');
+    expect(replay.input).not.toContain('COMMENT ON EXTENSION');
+    expect(calls.some(call => call.input.includes('NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS'))).toBe(true);
+    expect(calls.at(-2).argv).toContain('--force');
+    expect(calls.at(-1).argv).toContain('ls');
+    expect(output).not.toMatch(/private-|example-row|native-sql-test-/);
+  });
+
+  it('refuses non-Linux callers before any snapshot or daemon access', async () => {
+    const fixture = await sqlFixture(directory);
+    const restore = pinPlatform('darwin');
+    try { await expect(run(fixture.args)).rejects.toThrow('sql-rehearsal-requires-isolated-linux-docker'); }
+    finally { restore(); }
+    expect(calls).toHaveLength(0);
+  });
+
+  it('rechecks the SQL hash while spooling instead of trusting a previous inspection', async () => {
+    const fixture = await sqlFixture(directory);
+    const snapshot = await verifyNativeUsageSnapshot(fixture.stage, fixture.backup, directory);
+    const path = join(directory, 'portos-db.sql');
+    const original = await readFile(path, 'utf8');
+    await writeFile(path, original.replaceAll('example-row', 'changed-row'));
+    await expect(spoolNativeUsageSnapshotDatabase(directory, snapshot.database, join(directory, 'spool.sql'))).rejects.toThrow('snapshot-database-replay-mismatch');
+    expect(calls).toHaveLength(0);
+  });
+
+  it.each(['interrupt', 'spawn', 'output', 'stdin'])('cleans up after a transport %s without publishing a receipt', async mode => {
+    const fixture = await sqlFixture(directory);
+    transportFailure = mode;
+    let output = '';
+    await expect(runNativeUsageRehearsalCli(fixture.args, { stdout: value => { output += value; } })).rejects.toThrow('Native SQL rehearsal');
+    expect(output).toBe('');
+    expect(calls.at(-2).argv).toContain('--force');
+    expect(calls.at(-1).argv).toContain('ls');
+    expect(calls.at(-1).options.signal).toBeUndefined();
+  });
+
+  it('requires the unpredictable end marker even when psql exits zero and query checks would pass', async () => {
+    const fixture = await sqlFixture(directory);
+    transportFailure = 'early-exit';
+    await expect(run(fixture.args)).rejects.toThrow('sql-rehearsal-input-end-not-reached');
+    expect(calls.some(call => call.argv.at(-1).includes('pg_class'))).toBe(false);
+    expect(calls.at(-1).argv).toContain('ls');
+  });
+
+  it.each(['\\quit', '\\if false\nSELECT 1;\n\\endif'])('refuses psql control flow %s before Docker rather than claiming a partial replay', async command => {
+    const fixture = await sqlFixture(directory, sqlDump(command));
+    await expect(run(fixture.args)).rejects.toThrow('snapshot-database-replay-mismatch');
+    expect(calls).toHaveLength(0);
+  });
+
+  it('refuses corruption before contacting Docker', async () => {
+    const fixture = await sqlFixture(directory);
+    await writeFile(join(directory, 'portos-db.sql'), 'changed');
+    await expect(run(fixture.args)).rejects.toThrow('snapshot-file-hash-mismatch');
+    expect(calls).toHaveLength(0);
+  });
+
+  it.each(['create', 'start', 'replay', 'check'])('cleans up a failed %s without exposing SQL output or issuing a receipt', async stage => {
+    const fixture = await sqlFixture(directory);
+    failWhen = call => stage === 'replay' ? call.argv.includes('--single-transaction')
+      : stage === 'check' ? call.argv.at(-1).includes('pg_class') : call.argv.includes(stage);
+    await expect(run(fixture.args)).rejects.toThrow('sql-rehearsal-command-failed');
+    expect(calls.at(-2).argv).toContain('--force');
+    expect(calls.at(-1).argv).toContain('ls');
+  });
+
+  it('withholds success on leftover containers and an unreachable cleanup verification', async () => {
+    const fixture = await sqlFixture(directory);
+    leftover = true;
+    await expect(run(fixture.args)).rejects.toThrow('sql-rehearsal-cleanup-unverified');
+    leftover = false; failWhen = call => call.argv.includes('ls');
+    await expect(run(fixture.args)).rejects.toThrow('sql-rehearsal-cleanup-unverified');
+  });
+});

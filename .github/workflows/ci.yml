@@ -825,6 +825,15 @@ jobs:
 
       # Full mode: the runner subtracts what the memo verified and records the
       # `⏱ db full suite` duration line itself.
+      # The service above pulls the exact image used here. The rehearsal itself
+      # never pulls or uses that service: it owns a network-none, tmpfs container.
+      # Run outside the memo so missing Docker/image cannot become a cached pass.
+      - name: Rehearse isolated SQL restore
+        timeout-minutes: 5
+        env:
+          PORTOS_NATIVE_SQL_LIVE: '1'
+        run: cd server && node node_modules/vitest/vitest.mjs run --configLoader runner ../scripts/native-usage-sql-rehearsal.live.test.js
+
       - name: Run DB-backed tests (portos_test)
         id: db-tests
         env:

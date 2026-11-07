@@ -10,12 +10,13 @@ import {
   refuseNativeUsageRehearsal as refuse, verifyNativeUsageBackup,
 } from '../server/lib/nativeUsageRehearsal.js';
 import { verifyNativeUsageStage } from '../server/lib/nativeUsageStaging.js';
+import { rehearseNativeUsageSql } from './lib/nativeUsageSqlRehearsal.js';
 import { verifyNativeUsageSnapshot } from './lib/nativeUsageSnapshot.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 
 const MAX_ARTIFACT_BYTES = 100 * 1024 * 1024;
 const STORES = ['usageLedger', 'peerDigests'];
-const USAGE = 'Usage: native-usage-rehearse.js backup <stage.json> <request.json> <detached-snapshot-directory> <output-directory> | restore <stage.json> <backup.json> <rehearsal-parent> | preflight <stage.json> <backup.json> <restore-directory> [<backup.json> <restore-directory>...] | snapshot-preflight <stage.json> <backup.json> <detached-standard-snapshot>';
+const USAGE = 'Usage: native-usage-rehearse.js backup <stage.json> <request.json> <detached-snapshot-directory> <output-directory> | restore <stage.json> <backup.json> <rehearsal-parent> | preflight <stage.json> <backup.json> <restore-directory> [<backup.json> <restore-directory>...] | snapshot-preflight <stage.json> <backup.json> <detached-standard-snapshot> | sql-restore <stage.json> <backup.json> <detached-standard-snapshot>';
 const same = (a, b) => nativeUsageCanonicalJson(a) === nativeUsageCanonicalJson(b);
 
 // A growing/replaced file is not a frozen snapshot. The read has a hard byte cap;
@@ -121,10 +122,10 @@ export async function runNativeUsageRehearsalCli(argv, { stdout = text => proces
     stdout(nativeUsageCanonicalJson({ status: 'isolated-byte-restore-verified', directoryName: result.directoryName, receipt: result.receipt }));
     return 0;
   }
-  if (command === 'snapshot-preflight' && args.length === 3) {
+  if (['snapshot-preflight', 'sql-restore'].includes(command) && args.length === 3) {
     const stage = verifyNativeUsageStage(await readJson(args[0]));
     const backup = verifyNativeUsageBackup(stage, await readJson(args[1]));
-    stdout(nativeUsageCanonicalJson(await verifyNativeUsageSnapshot(stage, backup, args[2])));
+    stdout(nativeUsageCanonicalJson(await (command === 'sql-restore' ? rehearseNativeUsageSql : verifyNativeUsageSnapshot)(stage, backup, args[2])));
     return 3;
   }
   if (command === 'preflight' && args.length >= 3 && args.length <= 129 && args.length % 2 === 1) {

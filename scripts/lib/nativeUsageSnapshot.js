@@ -13,7 +13,7 @@ const MAX_JSON_BYTES = 100 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 100 * 1024 ** 3;
 const MAX_MILLISECONDS = 15 * 60 * 1000;
 const SQL_KEY = '../portos-db.sql';
-const REQUIRED_TABLES = [...REQUIRED_DUMP_TABLES, 'cos_agents', 'ai_connections', 'ai_harness_bindings', 'ai_route_bindings', 'schema_migrations'];
+export const NATIVE_USAGE_SNAPSHOT_TABLES = [...REQUIRED_DUMP_TABLES, 'cos_agents', 'ai_connections', 'ai_harness_bindings', 'ai_route_bindings', 'schema_migrations'];
 const same = (a, b) => nativeUsageCanonicalJson(a) === nativeUsageCanonicalJson(b);
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const metadata = name => ['.DS_Store', '.localized', 'Thumbs.db', 'desktop.ini'].includes(name) || name.startsWith('._');
@@ -62,7 +62,7 @@ function remainingTime(deadline) {
 
 // Pin the descriptor, bound the read to the original size plus one byte and
 // check it and its path again. Never open links, FIFOs or devices for inspection.
-async function inspectRegular(path, { collect = false, database = false, budget } = {}) {
+async function inspectRegular(path, { collect = false, database = false, spoolTo, budget } = {}) {
   const before = await lstat(path);
   if (!before.isFile() || (collect && before.size > MAX_JSON_BYTES)) refuse('snapshot-input-not-bounded-regular-file');
   if (before.size > budget.bytes) refuse('snapshot-byte-limit-exceeded');
@@ -72,7 +72,7 @@ async function inspectRegular(path, { collect = false, database = false, budget 
     if (!info.isFile() || !unchanged(before, info)) refuse('snapshot-input-changed');
     const stream = handle.createReadStream({ autoClose: false, start: 0, end: info.size, signal: AbortSignal.timeout(remainingTime(budget.deadline)) });
     let result;
-    if (database) result = await inspectDatabaseDump(path, { inputStream: stream, requiredTables: REQUIRED_TABLES });
+    if (database) result = await inspectDatabaseDump(path, { inputStream: stream, spoolTo, omitVersionDirectives: Boolean(spoolTo), rejectPsqlCommands: Boolean(spoolTo), requiredTables: NATIVE_USAGE_SNAPSHOT_TABLES });
     else {
       const hash = createHash('sha256');
       const chunks = [];
@@ -209,4 +209,14 @@ export async function verifyNativeUsageSnapshot(stage, backup, directory) {
       'database-restore-not-verified', 'native-source-preservation-not-verified', 'matched-runtime-restore-not-verified',
       'runtime-not-registered', 'live-barrier-not-verified', 'fenced-interval-not-verified', 'source-freshness-not-verified-at-cutover'],
   };
+}
+
+/** Pin and spool the exact already-inspected SQL bytes for a private replay. */
+export async function spoolNativeUsageSnapshotDatabase(directory, expected, spoolTo) {
+  const result = await inspectRegular(join(directory, 'portos-db.sql'), {
+    database: true, spoolTo, budget: { bytes: expected.bytes, deadline: Date.now() + MAX_MILLISECONDS },
+  });
+  if (result.sha256 !== expected.sha256 || result.sizeBytes !== expected.bytes
+    || !result.complete || result.missingTables.length || !result.replayScanSafe) refuse('snapshot-database-replay-mismatch');
+  return result;
 }

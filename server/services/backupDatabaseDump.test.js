@@ -132,3 +132,39 @@ describe('inspectDatabaseDump', () => {
     await expect(inspectDatabaseDump(join(dir, 'missing.sql'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });
+
+// A successful psql exit does not prove complete replay if a supplied \quit or
+// conditional can skip the tail. This opt-in guard must not reject stored text.
+describe('detached rehearsal psql control-command refusal', () => {
+  const tables = 'CREATE TABLE public.memories (\n id text\n);\nCREATE TABLE public.memory_links (\n id text\n);\n';
+  it.each(['\\quit\n', '  \\quit\nSELECT 1;\n', '\\if false\nSELECT 1;\n\\endif\n', 'SELECT 1 \\gexec\n;\n', 'COPY public.memories (id) FROM stdin; \\quit\nrow\n\\.\n'])('refuses non-data control syntax %s', async command => {
+    const sql = tables + command + TRAILER;
+    const inspected = await inspectDatabaseDump(write('control.sql', sql), { omitVersionDirectives: true, rejectPsqlCommands: true });
+    expect(inspected).toMatchObject({ complete: false, replayScanSafe: false });
+  });
+
+  it('keeps command-looking COPY/quoted/comment data and admits the stripped dump restriction headers', async () => {
+    const sql = '\\restrict fixtureKey\n' + tables
+      + "SELECT 'ordinary ''quoted value'; SELECT $$\\if false$$; -- \\quit\n/* \\quit */\n"
+      + 'COPY public.memories (id) FROM stdin;\n\\quit\n\\.\n'
+      + TRAILER + '\\unrestrict fixtureKey\n';
+    const inspected = await inspectDatabaseDump(write('control-data.sql', sql), { omitVersionDirectives: true, rejectPsqlCommands: true });
+    expect(inspected).toMatchObject({ complete: true, replayScanSafe: true, missingTables: [] });
+  });
+});
+
+it.each([
+  ['escape-mode ambiguity', String.raw`SET standard_conforming_strings = off;
+SELECT '\'';
+\quit
+SELECT ';
+`],
+  ['dollar tag inside an identifier', 'SELECT 1 AS foo$tag$;\n\\quit\nSELECT $tag$;\n'],
+  ['dollar tag inside a Unicode identifier', 'SELECT 1 AS \u00e9$tag$;\n\\quit\nSELECT $tag$;\n'],
+])('rejects psql syntax hidden by %s without changing ordinary inspection', async (_name, control) => {
+  const sql = 'CREATE TABLE public.memories (\n);\nCREATE TABLE public.memory_links (\n);\n' + control + TRAILER;
+  const path = write('ambiguous-control.sql', sql);
+  expect((await inspectDatabaseDump(path)).complete).toBe(true);
+  expect(await inspectDatabaseDump(path, { omitVersionDirectives: true, rejectPsqlCommands: true }))
+    .toMatchObject({ complete: false, replayScanSafe: false });
+});
