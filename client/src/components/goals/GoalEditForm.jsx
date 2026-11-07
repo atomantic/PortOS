@@ -129,7 +129,7 @@ export default function GoalEditForm({
                       const next = active ? days.filter(x => x !== d) : [...days, d];
                       setForm({ ...form, timeBlockConfig: { ...(form.timeBlockConfig || { timeSlot: 'morning', sessionDurationMinutes: 60 }), preferredDays: next } });
                     }}
-                    className={`px-1.5 py-0.5 text-[10px] rounded ${active ? 'bg-port-accent text-white' : 'bg-port-bg border border-port-border text-gray-400'}`}
+                    className={`px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 rounded ${active ? 'bg-port-accent text-white' : 'bg-port-bg border border-port-border text-gray-400'}`}
                   >
                     {d}
                   </button>
@@ -169,7 +169,7 @@ export default function GoalEditForm({
             <button
               type="button"
               onClick={() => setForm({ ...form, timeBlockConfig: null })}
-              className="text-[10px] text-red-400 hover:text-red-300"
+              className="text-[10px] pointer-coarse:min-h-11 text-red-400 hover:text-red-300"
             >
               Clear config
             </button>
@@ -223,7 +223,7 @@ export default function GoalEditForm({
                 type="button"
                 aria-pressed={active}
                 onClick={() => toggleFeatureArea(id)}
-                className={`flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded ${active ? 'bg-port-accent text-white' : 'bg-port-bg border border-port-border text-gray-400'}`}
+                className={`flex items-center gap-1 px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 rounded ${active ? 'bg-port-accent text-white' : 'bg-port-bg border border-port-border text-gray-400'}`}
               >
                 <Icon className="w-3 h-3" />
                 {area.label}

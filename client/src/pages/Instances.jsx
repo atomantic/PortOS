@@ -775,7 +775,7 @@ function SyncCategoriesPanel({ peer, onRefresh }) {
             {peer.instanceId && (
               <button
                 onClick={makeMutual}
-                className="flex items-center gap-1 mr-auto text-[10px] text-gray-500 hover:text-port-accent transition-colors"
+                className="flex items-center gap-1 mr-auto text-[10px] pointer-coarse:min-h-11 text-gray-500 hover:text-port-accent transition-colors"
                 title="Push the current categories to this peer so it syncs them back (use if it was offline during a change)"
               >
                 <ArrowLeftRight size={10} />
@@ -787,13 +787,13 @@ function SyncCategoriesPanel({ peer, onRefresh }) {
               <>
                 <button
                   onClick={() => toggleAll(true)}
-                  className="text-[10px] text-port-accent hover:text-port-accent/80 transition-colors"
+                  className="text-[10px] pointer-coarse:min-h-11 text-port-accent hover:text-port-accent/80 transition-colors"
                 >
                   Enable all
                 </button>
                 <button
                   onClick={() => toggleAll(false)}
-                  className="text-[10px] text-gray-500 hover:text-gray-400 transition-colors"
+                  className="text-[10px] pointer-coarse:min-h-11 text-gray-500 hover:text-gray-400 transition-colors"
                 >
                   Disable all
                 </button>
@@ -848,7 +848,7 @@ function SyncCategoriesPanel({ peer, onRefresh }) {
                       onClick={() => changeMediaSyncMode(option.value)}
                       aria-pressed={mediaSyncMode === option.value}
                       title={option.description}
-                      className={`px-2 py-1 min-h-[28px] rounded text-[10px] border transition-colors ${
+                      className={`px-2 py-1 min-h-[28px] rounded text-[10px] pointer-coarse:min-h-11 border transition-colors ${
                         mediaSyncMode === option.value
                           ? 'border-port-accent bg-port-accent/20 text-port-accent'
                           : 'border-port-border text-gray-400 hover:bg-port-bg/50'
@@ -1511,7 +1511,7 @@ export function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityRepor
             <button
               onClick={handleConnect}
               disabled={connecting}
-              className="inline-flex items-center gap-1 text-[10px] text-port-accent bg-port-accent/10 hover:bg-port-accent/20 rounded px-1.5 py-0.5 transition-colors disabled:opacity-50"
+              className="inline-flex items-center gap-1 text-[10px] pointer-coarse:min-h-11 text-port-accent bg-port-accent/10 hover:bg-port-accent/20 rounded px-1.5 py-0.5 transition-colors disabled:opacity-50"
               title="Connect back to make this mutual"
             >
               <ArrowLeftRight size={10} />

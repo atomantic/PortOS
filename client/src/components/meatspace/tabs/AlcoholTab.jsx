@@ -391,7 +391,7 @@ export default function AlcoholTab() {
                     <button
                       type="button"
                       onClick={() => setButtonVolumeUnit(u => u === 'oz' ? 'ml' : 'oz')}
-                      className="px-1.5 py-1 text-[10px] font-medium rounded bg-port-border/50 text-gray-400 hover:text-port-accent hover:bg-port-accent/10 transition-colors"
+                      className="px-1.5 py-1 text-[10px] pointer-coarse:min-h-11 font-medium rounded bg-port-border/50 text-gray-400 hover:text-port-accent hover:bg-port-accent/10 transition-colors"
                     >
                       {buttonVolumeUnit}
                     </button>
@@ -462,7 +462,7 @@ export default function AlcoholTab() {
                 <button
                   type="button"
                   onClick={() => setButtonVolumeUnit(u => u === 'oz' ? 'ml' : 'oz')}
-                  className="px-1.5 py-1 text-[10px] font-medium rounded bg-port-border/50 text-gray-400 hover:text-port-accent hover:bg-port-accent/10 transition-colors"
+                  className="px-1.5 py-1 text-[10px] pointer-coarse:min-h-11 font-medium rounded bg-port-border/50 text-gray-400 hover:text-port-accent hover:bg-port-accent/10 transition-colors"
                 >
                   {buttonVolumeUnit}
                 </button>
@@ -507,7 +507,7 @@ export default function AlcoholTab() {
               <button
                 type="button"
                 onClick={() => setVolumeUnit(u => u === 'oz' ? 'ml' : 'oz')}
-                className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-port-border/50 text-gray-400 hover:text-port-accent hover:bg-port-accent/10 transition-colors"
+                className="px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 font-medium rounded bg-port-border/50 text-gray-400 hover:text-port-accent hover:bg-port-accent/10 transition-colors"
               >
                 {volumeUnit}
               </button>
@@ -647,7 +647,7 @@ export default function AlcoholTab() {
                                 <button
                                   type="button"
                                   onClick={() => setEditVolumeUnit(u => u === 'oz' ? 'ml' : 'oz')}
-                                  className="px-1 py-0.5 text-[10px] font-medium rounded bg-port-border/50 text-gray-400 hover:text-port-accent hover:bg-port-accent/10 transition-colors"
+                                  className="px-1 py-0.5 text-[10px] pointer-coarse:min-h-11 font-medium rounded bg-port-border/50 text-gray-400 hover:text-port-accent hover:bg-port-accent/10 transition-colors"
                                 >
                                   {editVolumeUnit}
                                 </button>

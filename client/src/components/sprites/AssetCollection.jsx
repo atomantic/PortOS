@@ -102,7 +102,7 @@ function AssetCard({ recordId, asset, actions, corrections, onCorrectionChange, 
               onClick={regenerate.onClick}
               disabled={regenerate.disabled}
               title={regenerate.title}
-              className="flex-1 flex items-center justify-center gap-1 px-1 py-0.5 text-[10px] bg-port-card border border-port-border rounded text-gray-300 hover:border-port-accent disabled:opacity-40"
+              className="flex-1 flex items-center justify-center gap-1 px-1 py-0.5 text-[10px] pointer-coarse:min-h-11 bg-port-card border border-port-border rounded text-gray-300 hover:border-port-accent disabled:opacity-40"
             >
               {regenerate.pending
                 ? <RefreshCw className="w-3 h-3 animate-spin" />
@@ -135,7 +135,7 @@ function AssetCard({ recordId, asset, actions, corrections, onCorrectionChange, 
               onClick={() => onInspect(manifest)}
               title="View the atlas build manifest — geometry, chroma key, and provenance the compiler recorded"
               aria-label={`View build manifest for ${name}`}
-              className="flex-1 flex items-center justify-center gap-1 px-1 py-0.5 text-[10px] bg-port-card border border-port-border rounded text-gray-300 hover:border-port-accent"
+              className="flex-1 flex items-center justify-center gap-1 px-1 py-0.5 text-[10px] pointer-coarse:min-h-11 bg-port-card border border-port-border rounded text-gray-300 hover:border-port-accent"
             >
               <FileJson className="w-3 h-3" /> Manifest
             </button>

@@ -117,7 +117,7 @@ export default function ObjectAttachmentsEditor({ entry, characters = [], onPatc
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider text-gray-500 hover:text-white"
+        className="inline-flex items-center gap-1 text-[10px] pointer-coarse:min-h-11 uppercase tracking-wider text-gray-500 hover:text-white"
       >
         {open ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
         <Heart size={10} />
@@ -147,7 +147,7 @@ export default function ObjectAttachmentsEditor({ entry, characters = [], onPatc
           ) : (
             <button
               type="button" onClick={addAttachment}
-              className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500"
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500"
             >
               <Plus size={10} /> Add attachment
             </button>

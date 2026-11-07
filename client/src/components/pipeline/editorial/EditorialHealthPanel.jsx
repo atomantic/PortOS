@@ -533,7 +533,7 @@ export default function EditorialHealthPanel({
           <button
             type="button"
             onClick={() => setShowIssues((v) => !v)}
-            className="text-[10px] uppercase tracking-wide text-gray-500 hover:text-gray-300"
+            className="text-[10px] pointer-coarse:min-h-11 uppercase tracking-wide text-gray-500 hover:text-gray-300"
             aria-expanded={showIssues}
           >
             By issue ({issueRows.length}) {showIssues ? '▾' : '▸'}

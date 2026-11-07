@@ -385,7 +385,7 @@ function ListSectionEditor({ section, entry, onPatchList, disabled }) {
         type="button"
         onClick={addRow}
         disabled={disabled}
-        className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500 disabled:opacity-40"
+        className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500 disabled:opacity-40"
       >
         <Plus size={10} /> {section.addLabel}
       </button>
@@ -499,7 +499,7 @@ function RelationshipRow({ link, idx, others, onUpdate, onRemove, disabled }) {
       />
       <button
         type="button" onClick={toggleOpposition} disabled={disabled}
-        className={`inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded border disabled:opacity-40 ${
+        className={`inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 rounded border disabled:opacity-40 ${
           hasOpposition
             ? 'border-port-warning/50 text-port-warning hover:bg-port-warning/10'
             : 'border-port-border text-gray-400 hover:text-white hover:border-gray-500'
@@ -574,7 +574,7 @@ function RelationshipsSection({ entry, characters, onPatch, disabled }) {
       ) : (
         <button
           type="button" onClick={addLink} disabled={disabled}
-          className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500 disabled:opacity-40"
+          className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500 disabled:opacity-40"
         >
           <Plus size={10} /> Add relationship
         </button>
@@ -798,7 +798,7 @@ function VoiceCanonSection({ entry, onPatch, disabled }) {
         <button
           type="button" disabled={disabled || !newTerm || !newValue || pronunciations.length >= L.VOICE_CANON_PRONUNCIATIONS_MAX}
           onClick={addPronunciation}
-          className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500 disabled:opacity-40"
+          className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500 disabled:opacity-40"
         >
           <Plus size={10} /> Add pronunciation
         </button>
@@ -1018,19 +1018,19 @@ function VoiceProfileSection({ universeId, entry, disabled }) {
           <div className="flex flex-wrap gap-1.5">
             <button
               type="button" onClick={promotePreset} disabled={disabled || promotingPreset || !entry.voiceId}
-              className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500 disabled:opacity-40"
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500 disabled:opacity-40"
             >
               <BadgeCheck size={10} /> {approved ? 'Re-promote selected preset' : 'Promote selected preset'}
             </button>
             <button
               type="button" onClick={renderBenchmark} disabled={disabled || renderingBenchmark || !approved}
-              className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500 disabled:opacity-40"
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500 disabled:opacity-40"
             >
               {renderingBenchmark ? <Loader2 size={10} className="animate-spin" /> : <Play size={10} />} Render fixed benchmark
             </button>
             <button
               type="button" onClick={qualifyInteractive} disabled={disabled || qualifyingInteractive || !approved}
-              className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500 disabled:opacity-40"
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500 disabled:opacity-40"
             >
               {qualifyingInteractive ? <Loader2 size={10} className="animate-spin" /> : <Activity size={10} />} {playbackReady ? 'Play benchmark to qualify' : 'Qualify interactive route'}
             </button>
@@ -1347,7 +1347,7 @@ function PsychologySection({ entry, onPatch, disabled }) {
       <button
         type="button" onClick={() => onPatch?.({ psychology: null })}
         disabled={disabled || !hasProfile}
-        className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded border border-port-border text-gray-400 hover:text-port-error hover:border-port-error disabled:opacity-40"
+        className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 rounded border border-port-border text-gray-400 hover:text-port-error hover:border-port-error disabled:opacity-40"
       >
         <Trash2 size={10} /> Clear psychology profile
       </button>
@@ -1414,7 +1414,7 @@ function IdentityPackSection({ entry, onPatch, disabled }) {
       {entry.imageRefs?.length ? (
         <button
           type="button" onClick={add} disabled={disabled || assets.length >= L.IDENTITY_PACK_ASSETS_MAX}
-          className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500 disabled:opacity-40"
+          className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500 disabled:opacity-40"
         >
           <Plus size={10} /> Add reference
         </button>

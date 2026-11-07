@@ -4527,69 +4527,8 @@ function B() { const sensors = useSensors(useSensor(PointerSensor)); return <Dnd
     expect(offendersIn('probe.jsx', '<button className="text-[10px] max-sm:pointer-coarse:min-h-11">x</button>')).toEqual(['probe.jsx:1']);
     expect(offendersIn('probe.jsx', '<button className="text-[10px] not-pointer-coarse:min-h-11">x</button>')).toEqual(['probe.jsx:1']);
     expect(offendersIn('probe.jsx', '<button className="text-[10px] min-h-[56px]">x</button>')).toEqual([]);
-    // Ratchet: existing dense buttons are budgeted per file (counts, not line
-    // numbers, so unrelated edits don't churn it). New ones must add the
-    // coarse height; shrink a count when you fix one. Remainder tracked in #15195.
-    const BASELINE = new Map([
-      ['src/components/apps/tabs/IssuesTab.jsx', 1],
-      ['src/components/calendar/MonthView.jsx', 2],
-      ['src/components/calendar/WeekView.jsx', 1],
-      ['src/components/cos/tabs/GsdConcernsPanel.jsx', 1],
-      ['src/components/creative-commission/RenderHistory.jsx', 1],
-      ['src/components/decks/DeckCardGrid.jsx', 1],
-      ['src/components/digital-twin/tabs/AccountsTab.jsx', 1],
-      ['src/components/fableloom/LoomCanvas.jsx', 2],
-      ['src/components/fableloom/LoomPlayPanel.jsx', 1],
-      ['src/components/goals/GoalCheckIns.jsx', 1],
-      ['src/components/goals/GoalEditForm.jsx', 3],
-      ['src/components/imageGen/InitImagePicker.jsx', 1],
-      ['src/components/meatspace/tabs/AlcoholTab.jsx', 4],
-      ['src/components/media/StylePresetPicker.jsx', 1],
-      ['src/components/media/UniverseStylePicker.jsx', 1],
-      ['src/components/media/VideoTimelineLanes.jsx', 4],
-      ['src/components/messages/beeper/BeeperThread.jsx', 3],
-      ['src/components/music/TrackRenderCard.jsx', 4],
-      ['src/components/musicVideo/SceneTakeStrip.jsx', 4],
-      ['src/components/pipeline/arcCanvas/ThemeChips.jsx', 1],
-      ['src/components/pipeline/arcCanvas/VerifyResults.jsx', 1],
-      ['src/components/pipeline/CanonCard.jsx', 2],
-      ['src/components/pipeline/editorial/EditorialFindingsTriage.jsx', 8],
-      ['src/components/pipeline/editorial/EditorialHealthPanel.jsx', 1],
-      ['src/components/pipeline/manuscript/ManuscriptCommentCard.jsx', 1],
-      ['src/components/pipeline/manuscript/ManuscriptCommentIndex.jsx', 2],
-      ['src/components/pipeline/manuscript/ManuscriptLiveSection.jsx', 1],
-      ['src/components/pipeline/stages/StoryboardsStage.jsx', 1],
-      ['src/components/settings/LocalModelAssessments.jsx', 1],
-      ['src/components/settings/ModelCapabilityTests.jsx', 1],
-      ['src/components/songs/MidiVisualization.jsx', 2],
-      ['src/components/sprites/AssetCollection.jsx', 2],
-      ['src/components/sprites/CorrectionNote.jsx', 1],
-      ['src/components/sprites/ReferenceWorkflow.jsx', 1],
-      ['src/components/sprites/WalkWorkflow.jsx', 1],
-      ['src/components/sync/SyncBadge.jsx', 1],
-      ['src/components/ui/ProvenanceChip.jsx', 1],
-      ['src/components/universe/CharacterDetailEditor.jsx', 9],
-      ['src/components/universe/CharacterReferenceSheetPanel.jsx', 1],
-      ['src/components/universe/ObjectAttachmentsEditor.jsx', 2],
-      ['src/components/universeBuilder/graph/GraphCanvas.jsx', 1],
-      ['src/components/usage/ProviderQuotaBody.jsx', 1],
-      ['src/components/voice/VoiceFineTuningPanel.jsx', 2],
-      ['src/components/voice/VoiceWidget.jsx', 3],
-      ['src/components/writers-room/AnalysisHistory.jsx', 1],
-      ['src/components/writers-room/SceneCard.jsx', 1],
-      ['src/components/writers-room/StoryboardBibleTab.jsx', 1],
-      ['src/components/writers-room/StoryboardBoardsBanners.jsx', 6],
-      ['src/components/writers-room/StoryboardConfigTab.jsx', 1],
-      ['src/components/writers-room/SyncedReview.jsx', 2],
-      ['src/pages/Instances.jsx', 5],
-      ['src/pages/PipelineSeriesRoadmap.jsx', 1],
-      ['src/pages/PromptManager.jsx', 1],
-    ]);
-    const over = [];
-    for (const file of trackedJsxFiles()) {
-      const found = offendersIn(file, rawSourceOf(file));
-      if (found.length > (BASELINE.get(file) ?? 0)) over.push(`${file}: ${found.length} > ${BASELINE.get(file) ?? 0} (${found.join(', ')})`);
-    }
-    expect(over, `<button> with text-[10px] needs pointer-coarse:min-h-11:\n${over.join('\n')}`).toEqual([]);
+    const offenders = [];
+    for (const file of trackedJsxFiles()) offenders.push(...offendersIn(file, rawSourceOf(file)));
+    expect(offenders, `<button> with text-[10px] needs pointer-coarse:min-h-11:\n${offenders.join('\n')}`).toEqual([]);
   });
 });

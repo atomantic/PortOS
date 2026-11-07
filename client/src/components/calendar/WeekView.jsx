@@ -154,7 +154,7 @@ export default function WeekView({ accounts }) {
                       <button
                         key={eventKey(event)}
                           onClick={() => openEvent(event)}
-                        className="w-full text-left px-1 py-0.5 rounded text-[10px] truncate transition-colors hover:brightness-125"
+                        className="w-full text-left px-1 py-0.5 rounded text-[10px] pointer-coarse:min-h-11 truncate transition-colors hover:brightness-125"
                         style={eventChipStyle(adColor, theme?.mode)}
                       >
                         {event.title}

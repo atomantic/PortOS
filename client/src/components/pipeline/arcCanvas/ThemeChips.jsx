@@ -150,7 +150,7 @@ export default function ThemeChips({ series, arc, onSeriesUpdate }) {
           onClick={startAdd}
           disabled={saving}
           title={`Add a theme (${themes.length}/${THEMES_PER_ARC_MAX})`}
-          className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-port-bg border border-dashed border-port-border text-gray-500 hover:text-port-accent hover:border-port-accent/40 disabled:opacity-50"
+          className="inline-flex items-center gap-1 text-[10px] pointer-coarse:min-h-11 uppercase tracking-wider px-2 py-0.5 rounded bg-port-bg border border-dashed border-port-border text-gray-500 hover:text-port-accent hover:border-port-accent/40 disabled:opacity-50"
         >
           <Plus size={10} /> Add theme
         </button>

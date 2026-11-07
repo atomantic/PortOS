@@ -109,7 +109,7 @@ export default function ManuscriptLiveSection({
               key={c.id}
               type="button"
               onClick={() => onOpenComment(c.id)}
-              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] ${SEVERITY_TONE[c.severity] || SEVERITY_TONE.low}`}
+              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] pointer-coarse:min-h-11 ${SEVERITY_TONE[c.severity] || SEVERITY_TONE.low}`}
               title={c.problem}
             >
               {CATEGORY_LABEL[c.category] || c.category}

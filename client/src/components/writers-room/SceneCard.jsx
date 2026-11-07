@@ -324,7 +324,7 @@ const SceneCard = forwardRef(function SceneCard({
         <button
           onClick={generate}
           disabled={genStatus === 'running'}
-          className="flex items-center gap-1 px-2 py-1 bg-port-bg border border-port-border rounded text-[10px] text-gray-300 hover:border-port-accent hover:text-white disabled:opacity-50"
+          className="flex items-center gap-1 px-2 py-1 bg-port-bg border border-port-border rounded text-[10px] pointer-coarse:min-h-11 text-gray-300 hover:border-port-accent hover:text-white disabled:opacity-50"
           title="Queue an image render using this scene's visual prompt"
         >
           {genStatus === 'running' ? <Loader2 size={10} className="animate-spin" /> : <ImageIcon size={10} />}

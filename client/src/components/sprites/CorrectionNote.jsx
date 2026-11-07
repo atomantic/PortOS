@@ -62,7 +62,7 @@ export function CorrectionToggleButton({ open, onToggle, hasValue, label, text =
       aria-expanded={open}
       aria-label={`${open ? 'Hide' : 'Show'} correction note for ${label}`}
       title={hasValue ? 'A correction is set — it will be applied on the next regenerate' : `Add a correction for the ${label} re-roll`}
-      className={`flex items-center justify-center gap-1 px-1.5 py-0.5 text-[10px] bg-port-card border rounded hover:border-port-accent ${hasValue ? 'border-port-accent text-port-accent' : 'border-port-border text-gray-300'} ${className}`}
+      className={`flex items-center justify-center gap-1 px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 bg-port-card border rounded hover:border-port-accent ${hasValue ? 'border-port-accent text-port-accent' : 'border-port-border text-gray-300'} ${className}`}
     >
       <NotebookPen className="w-3 h-3" />{text}
     </button>

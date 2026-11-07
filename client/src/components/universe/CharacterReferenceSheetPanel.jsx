@@ -152,7 +152,7 @@ function VariantRow({
                 title={locked
                   ? `Unlock ${entry.name} to render this sheet`
                   : (existing ? `Regenerate the ${variant.label.toLowerCase()}` : `Generate a ${variant.label.toLowerCase()}`)}
-                className="inline-flex items-center gap-1 px-2 py-1 text-[10px] rounded border border-port-border text-gray-300 hover:bg-port-border/40 hover:text-white disabled:opacity-40"
+                className="inline-flex items-center gap-1 px-2 py-1 text-[10px] pointer-coarse:min-h-11 rounded border border-port-border text-gray-300 hover:bg-port-border/40 hover:text-white disabled:opacity-40"
               >
                 {inFlight
                   ? <Loader2 size={10} className="animate-spin" />
