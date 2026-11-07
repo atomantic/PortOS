@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // In-memory store so decompose/accept/migration logic can be exercised without
 // touching disk or a real AI provider.
@@ -18,6 +18,11 @@ vi.mock('./store.js', () => ({
   saveJSON: vi.fn(async (file, data) => { if (file === 'goals.json') h.goalsData = data; })
 }));
 
+vi.mock('../settings.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getSettings: vi.fn(async () => ({ timezone: 'America/Los_Angeles' })),
+}));
+
 vi.mock('../providers.js', () => ({
   getActiveProvider: vi.fn(async () => ({ id: 'p1', apiType: 'openai', defaultModel: 'm1' })),
   getProviderById: vi.fn(async () => ({ id: 'p1', apiType: 'openai', defaultModel: 'm1' }))
@@ -30,7 +35,7 @@ vi.mock('../aiProvider.js', async (importOriginal) => {
 
 const {
   computeGoalVelocity, getGoals, decomposeGoal, generateGoalPhases,
-  acceptGoalPhases, acceptGoalDecomposition, completeMilestoneTask
+  acceptGoalPhases, acceptGoalDecomposition, completeMilestoneTask, updateGoalProgress
 } = await import('./goals.js');
 
 describe('computeGoalVelocity', () => {
@@ -268,5 +273,24 @@ describe('re-plan guard — orphaned scheduledEvents', () => {
     delete h.goalsData.goals[0].scheduledEvents;
     const g2 = await acceptGoalDecomposition('goal-1', [{ title: 'Fresh decomp', order: 0, tasks: [] }]);
     expect(g2.milestones[0].title).toBe('Fresh decomp');
+  });
+});
+
+describe('updateGoalProgress dates the history point by the user-local day', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-07T01:30:00Z'));
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it('keys progressHistory by the configured timezone day', async () => {
+    h.goalsData = {
+      goals: [{ id: 'goal-1', title: 'Write a novel', progress: 10, progressHistory: [] }],
+      birthDate: null
+    };
+    await updateGoalProgress('goal-1', 20);
+    expect(h.goalsData.goals[0].progressHistory).toEqual([
+      expect.objectContaining({ date: '2026-11-06', value: 20 })
+    ]);
   });
 });

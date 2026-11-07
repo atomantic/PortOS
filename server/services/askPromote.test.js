@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Mock the cross-domain services askPromote orchestrates so the test exercises
 // only the latest-turn selection + target dispatch + pin-on-promote logic.
@@ -11,6 +11,10 @@ vi.mock('./askConversations.js', () => convs);
 vi.mock('./brain.js', () => brainService);
 vi.mock('./cosTaskStore.js', () => cosService);
 vi.mock('./identity.js', () => identityService);
+vi.mock('./settings.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getSettings: vi.fn(async () => ({ timezone: 'America/Los_Angeles' })),
+}));
 
 const { latestAssistantTurn, promoteLatestAssistantTurn, promoteTurnById } = await import('./askPromote.js');
 
@@ -140,5 +144,27 @@ describe('askPromote.promoteTurnById', () => {
     convs.getConversation.mockResolvedValue({ id: 'conv-1', turns: [{ id: 't1', role: 'assistant', content: 'a' }] });
     await expect(promoteTurnById({ conversationId: 'conv-1', turnId: 'nope', target: 'brain' }))
       .rejects.toMatchObject({ status: 404 });
+  });
+});
+
+// 01:30 UTC is still the previous evening in the user's zone (UTC-8), so the
+// promoted entry must carry that local day, not the UTC day.
+describe('askPromote goal promotion uses the user-local day', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-07T01:30:00Z'));
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it('dates the progress entry by the configured timezone', async () => {
+    convs.getConversation.mockResolvedValue({ id: 'conv-1', turns: [
+      { id: 't1', role: 'assistant', content: 'the answer' },
+    ] });
+    identityService.addProgressEntry.mockResolvedValue({ id: 'entry-1' });
+
+    await promoteLatestAssistantTurn({ conversationId: 'conv-1', target: 'goal', goalId: 'g1' });
+    expect(identityService.addProgressEntry).toHaveBeenCalledWith('g1',
+      expect.objectContaining({ date: '2026-11-06' }));
   });
 });
