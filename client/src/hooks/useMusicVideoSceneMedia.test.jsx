@@ -90,7 +90,7 @@ describe('useMusicVideoSceneMedia in-flight restore and failure chip (#10154)', 
 
 describe('useMusicVideoSceneMedia socket reconnect reconcile (#15166)', () => {
   beforeEach(() => { handlers.clear(); getMusicVideoSceneJobs.mockReset(); getMediaJob.mockReset(); toastError.mockClear(); });
-  afterEach(cleanup);
+  afterEach(() => { cleanup(); getMediaJob.mockReset(); getMediaJob.mockResolvedValue({ status: 'failed' }); });
 
   const IN_FLIGHT = { jobs: [{ jobId: 'job-a', lane: 'image', sceneId: 's1', status: 'running' }] };
 
@@ -151,6 +151,24 @@ describe('useMusicVideoSceneMedia socket reconnect reconcile (#15166)', () => {
     const { result, onReconciled } = await reconnectWith({ jobs: [] });
     await waitFor(() => expect(result.current.genScenes.s1).toBeUndefined());
     act(() => handlers.get('image-gen:completed')({ generationId: 'job-a' }));
+    expect(onReconciled).toHaveBeenCalledTimes(1);
+  });
+
+  // Uniquely catches an older listing landing last and re-lighting a spinner for a job the newer one shows finished.
+  it('ignores a stale listing that resolves after a newer reconnect listing', async () => {
+    getMusicVideoSceneJobs.mockResolvedValueOnce(IN_FLIGHT);
+    getMediaJob.mockResolvedValue({ status: 'completed' });
+    const onReconciled = vi.fn();
+    const { result } = renderHook(() => useMusicVideoSceneMedia({ project, videoSettings: { settings: {} }, applyScenePatch: vi.fn(), onReconciled }));
+    await waitFor(() => expect(result.current.genScenes.s1).toBe(true));
+    let resolveStale;
+    getMusicVideoSceneJobs.mockReturnValueOnce(new Promise((resolve) => { resolveStale = resolve; }));
+    getMusicVideoSceneJobs.mockResolvedValueOnce({ jobs: [] });
+    await act(async () => { handlers.get('connect')(); });
+    await act(async () => { handlers.get('connect')(); });
+    await waitFor(() => expect(result.current.genScenes.s1).toBeUndefined());
+    await act(async () => { resolveStale(IN_FLIGHT); });
+    expect(result.current.genScenes.s1).toBeUndefined();
     expect(onReconciled).toHaveBeenCalledTimes(1);
   });
 
