@@ -842,7 +842,7 @@ export default function LinksTab({ onRefresh }) {
                 </div>
               ) : (
                 <>
-                  <div className="min-w-0 flex-1 basis-[calc(100%-3.5rem)] sm:basis-0">
+                  <div className="min-w-0 flex-1 basis-[calc(100%_-_3.5rem)] sm:basis-0">
                     <div className="flex items-center gap-2 mb-1">
                       {link.isRepo ? (
                         link.malwareScan?.verdict === 'DANGEROUS'
