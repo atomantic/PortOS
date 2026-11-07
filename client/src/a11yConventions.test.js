@@ -4499,4 +4499,86 @@ function B() { const sensors = useSensors(useSensor(PointerSensor)); return <Dnd
       expect(rule, `${type} inputs must be excluded`).toContain(`[type="${type}"]`);
     }
   });
+
+  it('gives a text-[10px] button a coarse-pointer touch height (#15180)', () => {
+    // A 10px label with tight padding renders a ~21px button; on a phone that
+    // is a mis-tap hazard. Dense desktop chips stay compact via
+    // `pointer-coarse:min-h-11`.
+    const offendersIn = (file, src) => {
+      const out = [];
+      for (const node of forEachOpeningTag(src, 'button')) {
+        if (!/(?:^|[\s"'`{])text-\[10px\]/.test(node.tag)) continue;
+        if (/pointer-coarse:(?:min-)?h-(?:11|12|14|\[(?:4[4-9]|[5-9]\d)px\])/.test(node.tag)) continue;
+        if (/(?:^|[\s"'`])(?:min-)?h-(?:11|12|14)(?:[\s"'`]|$)|min-h-\[4[4-9]px\]/.test(node.tag)) continue;
+        out.push(`${file}:${lineOf(src, node.index)}`);
+      }
+      return out;
+    };
+    expect(offendersIn('probe.jsx', '<button className="px-1.5 py-0.5 text-[10px]">x</button>')).toEqual(['probe.jsx:1']);
+    expect(offendersIn('probe.jsx', '<button className="px-1.5 pointer-coarse:min-h-11 text-[10px]">x</button>')).toEqual([]);
+    // Ratchet: existing dense buttons are budgeted per file (counts, not line
+    // numbers, so unrelated edits don't churn it). New ones must add the
+    // coarse height; shrink a count when you fix one. Remainder tracked in #15195.
+    const BASELINE = new Map([
+      ['src/components/apps/tabs/IssuesTab.jsx', 1],
+      ['src/components/calendar/MonthView.jsx', 2],
+      ['src/components/calendar/WeekView.jsx', 1],
+      ['src/components/cos/tabs/GsdConcernsPanel.jsx', 1],
+      ['src/components/creative-commission/RenderHistory.jsx', 1],
+      ['src/components/decks/DeckCardGrid.jsx', 1],
+      ['src/components/digital-twin/tabs/AccountsTab.jsx', 1],
+      ['src/components/fableloom/LoomCanvas.jsx', 2],
+      ['src/components/fableloom/LoomPlayPanel.jsx', 1],
+      ['src/components/goals/GoalCheckIns.jsx', 1],
+      ['src/components/goals/GoalEditForm.jsx', 3],
+      ['src/components/imageGen/InitImagePicker.jsx', 1],
+      ['src/components/meatspace/tabs/AlcoholTab.jsx', 4],
+      ['src/components/media/StylePresetPicker.jsx', 1],
+      ['src/components/media/UniverseStylePicker.jsx', 1],
+      ['src/components/media/VideoTimelineLanes.jsx', 4],
+      ['src/components/messages/beeper/BeeperThread.jsx', 3],
+      ['src/components/music/TrackRenderCard.jsx', 4],
+      ['src/components/musicVideo/SceneTakeStrip.jsx', 4],
+      ['src/components/pipeline/arcCanvas/ThemeChips.jsx', 1],
+      ['src/components/pipeline/arcCanvas/VerifyResults.jsx', 1],
+      ['src/components/pipeline/CanonCard.jsx', 2],
+      ['src/components/pipeline/editorial/EditorialFindingsTriage.jsx', 8],
+      ['src/components/pipeline/editorial/EditorialHealthPanel.jsx', 1],
+      ['src/components/pipeline/manuscript/ManuscriptCommentCard.jsx', 1],
+      ['src/components/pipeline/manuscript/ManuscriptCommentIndex.jsx', 2],
+      ['src/components/pipeline/manuscript/ManuscriptLiveSection.jsx', 1],
+      ['src/components/pipeline/stages/StoryboardsStage.jsx', 1],
+      ['src/components/settings/LocalModelAssessments.jsx', 1],
+      ['src/components/settings/ModelCapabilityTests.jsx', 1],
+      ['src/components/songs/MidiVisualization.jsx', 2],
+      ['src/components/sprites/AssetCollection.jsx', 2],
+      ['src/components/sprites/CorrectionNote.jsx', 1],
+      ['src/components/sprites/ReferenceWorkflow.jsx', 1],
+      ['src/components/sprites/WalkWorkflow.jsx', 1],
+      ['src/components/sync/SyncBadge.jsx', 1],
+      ['src/components/ui/ProvenanceChip.jsx', 1],
+      ['src/components/universe/CharacterDetailEditor.jsx', 9],
+      ['src/components/universe/CharacterReferenceSheetPanel.jsx', 1],
+      ['src/components/universe/ObjectAttachmentsEditor.jsx', 2],
+      ['src/components/universeBuilder/graph/GraphCanvas.jsx', 1],
+      ['src/components/usage/ProviderQuotaBody.jsx', 1],
+      ['src/components/voice/VoiceFineTuningPanel.jsx', 2],
+      ['src/components/voice/VoiceWidget.jsx', 3],
+      ['src/components/writers-room/AnalysisHistory.jsx', 1],
+      ['src/components/writers-room/SceneCard.jsx', 1],
+      ['src/components/writers-room/StoryboardBibleTab.jsx', 1],
+      ['src/components/writers-room/StoryboardBoardsBanners.jsx', 6],
+      ['src/components/writers-room/StoryboardConfigTab.jsx', 1],
+      ['src/components/writers-room/SyncedReview.jsx', 2],
+      ['src/pages/Instances.jsx', 5],
+      ['src/pages/PipelineSeriesRoadmap.jsx', 1],
+      ['src/pages/PromptManager.jsx', 1],
+    ]);
+    const over = [];
+    for (const file of trackedJsxFiles()) {
+      const found = offendersIn(file, rawSourceOf(file));
+      if (found.length > (BASELINE.get(file) ?? 0)) over.push(`${file}: ${found.length} > ${BASELINE.get(file) ?? 0} (${found.join(', ')})`);
+    }
+    expect(over, `<button> with text-[10px] needs pointer-coarse:min-h-11:\n${over.join('\n')}`).toEqual([]);
+  });
 });

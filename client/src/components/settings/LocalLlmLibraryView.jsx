@@ -378,23 +378,23 @@ export default function LocalLlmLibraryView() {
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <h2 id="llm-library-heading" className="text-sm font-medium text-gray-300">Models</h2>
           <div className="flex items-center gap-2 flex-wrap justify-end">
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1.5 pointer-coarse:gap-2">
               {['recommended', 'huggingface'].map((source) => (
                 <button
                   key={source}
                   onClick={() => { setCatalogSource(source); setActiveCategory('all'); }}
-                  className={`px-2.5 py-1 text-xs rounded transition-colors ${catalogSource === source ? 'bg-port-accent/20 text-port-accent' : 'bg-port-bg text-gray-400 hover:text-white'}`}
+                  className={`px-2.5 py-1 pointer-coarse:min-h-11 text-xs rounded transition-colors ${catalogSource === source ? 'bg-port-accent/20 text-port-accent' : 'bg-port-bg text-gray-400 hover:text-white'}`}
                 >
                   {source === 'recommended' ? 'Recommended' : 'Hugging Face'}
                 </button>
               ))}
             </div>
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1.5 pointer-coarse:gap-2">
               {BACKENDS.map((b) => (
                 <button
                   key={b.id}
                   onClick={() => { setSelected(b.id); setActiveCategory('all'); }}
-                  className={`px-2.5 py-1 text-xs rounded transition-colors ${selected === b.id ? 'bg-port-accent/20 text-port-accent' : 'bg-port-bg text-gray-400 hover:text-white'}`}
+                  className={`px-2.5 py-1 pointer-coarse:min-h-11 text-xs rounded transition-colors ${selected === b.id ? 'bg-port-accent/20 text-port-accent' : 'bg-port-bg text-gray-400 hover:text-white'}`}
                 >
                   {b.label}
                 </button>
@@ -489,10 +489,10 @@ export default function LocalLlmLibraryView() {
         </div>
 
         {catalogCategories.length > 0 && (
-          <div className="flex flex-wrap gap-1.5">
+          <div className="flex flex-wrap gap-1.5 pointer-coarse:gap-2">
             <button
               onClick={() => setActiveCategory('all')}
-              className={`px-2.5 py-1 text-xs rounded transition-colors ${activeCategory === 'all' ? 'bg-port-accent/20 text-port-accent' : 'bg-port-bg text-gray-400 hover:text-white'}`}
+              className={`px-2.5 py-1 pointer-coarse:min-h-11 text-xs rounded transition-colors ${activeCategory === 'all' ? 'bg-port-accent/20 text-port-accent' : 'bg-port-bg text-gray-400 hover:text-white'}`}
             >
               All ({catalog.length})
             </button>
@@ -500,7 +500,7 @@ export default function LocalLlmLibraryView() {
               <button
                 key={category.id}
                 onClick={() => setActiveCategory(category.id)}
-                className={`px-2.5 py-1 text-xs rounded transition-colors ${activeCategory === category.id ? 'bg-port-accent/20 text-port-accent' : 'bg-port-bg text-gray-400 hover:text-white'}`}
+                className={`px-2.5 py-1 pointer-coarse:min-h-11 text-xs rounded transition-colors ${activeCategory === category.id ? 'bg-port-accent/20 text-port-accent' : 'bg-port-bg text-gray-400 hover:text-white'}`}
               >
                 {category.label}{category.count != null ? ` (${category.count})` : ''}
               </button>
@@ -700,7 +700,7 @@ export default function LocalLlmLibraryView() {
                               onClick={() => install(chosenId, { force: true })}
                               disabled={busy}
                               title="Pull this build again. Updated GGUF files keep the same name, so an existing install will not refresh until you redownload."
-                              className="px-2.5 py-1 text-xs bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                              className="px-2.5 py-1 pointer-coarse:min-h-11 text-xs bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
                             >
                               {actionInProgress === `install-${chosenId}` ? <BrailleSpinner /> : <RefreshCw size={12} />}
                               Redownload
@@ -716,7 +716,7 @@ export default function LocalLlmLibraryView() {
                           onClick={() => (isAudio ? installAudio(m) : install(chosenId))}
                           disabled={busy || !!chosenUnsupported}
                           title={chosenUnsupported || undefined}
-                          className="px-2.5 py-1 text-xs bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                          className="px-2.5 py-1 pointer-coarse:min-h-11 text-xs bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
                         >
                           {actionInProgress === `install-${chosenId}` ? <BrailleSpinner /> : <Download size={12} />}
                           Install
@@ -733,7 +733,7 @@ export default function LocalLlmLibraryView() {
                           target="_blank"
                           rel="noopener noreferrer"
                           title={m.gated ? 'Open Hugging Face to accept repository terms' : 'Open the model page on Hugging Face'}
-                          className="px-2.5 py-1 text-xs bg-port-border/60 hover:bg-port-border text-gray-300 rounded flex items-center gap-1"
+                          className="px-2.5 py-1 pointer-coarse:min-h-11 text-xs bg-port-border/60 hover:bg-port-border text-gray-300 rounded flex items-center gap-1"
                         >
                           <ExternalLink size={12} />
                           {m.gated ? 'Accept terms' : 'Visit'}
