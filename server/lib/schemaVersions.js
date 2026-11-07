@@ -32,10 +32,6 @@ import { join } from 'path';
 import { PATHS, tryReadFile, safeJSONParse } from './fileUtils.js';
 
 export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
-  // Usage cutover barrier protocol (#15098): the stamp on usage payloads during a
-  // barrier and the `/api/sync/usage/cutover` acknowledgment. Compared by that
-  // gate only, so no barrier means an unchanged wire for an older peer.
-  usageCutover: 1,
   // Numeric-only peer wire payload (v1); read-through, never imported into local records.
   // Checked-in `.quality.json` is file schema v3 and must not bump this number.
   appQuality: 1,
@@ -1264,7 +1260,7 @@ export const RECORD_KIND_SCHEMA_CATEGORIES = Object.freeze({
  * leave its push transfers ungated (silent cross-install corruption). Only
  * genuinely non-push categories belong.
  */
-export const NON_RECORD_SCHEMA_CATEGORIES = Object.freeze(new Set(['memoryHistory', 'mediaLibrary', 'cosHistory', 'cosTasks', 'appQuality', 'eidoverseFoundations', 'meatspace', 'peerAuth', 'peerAssetStamps', 'videoHistory', 'usageCutover']));
+export const NON_RECORD_SCHEMA_CATEGORIES = Object.freeze(new Set(['memoryHistory', 'mediaLibrary', 'cosHistory', 'cosTasks', 'appQuality', 'eidoverseFoundations', 'meatspace', 'peerAuth', 'peerAssetStamps', 'videoHistory']));
 
 /**
  * Lazy-read the current PortOS version from the ROOT package.json so a

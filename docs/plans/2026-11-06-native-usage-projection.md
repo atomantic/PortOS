@@ -472,8 +472,8 @@ instances. Stop old accounting writers and prevent old peer payloads from mergin
 into rebuilt partitions. Use a validated category-specific sync barrier when
 available; otherwise coordinate a brief pause across all instances before any
 replacement. Do not disable unrelated sync or assume one local pause is enough.
-That barrier is [implemented](../USAGE_CUTOVER_BARRIER.md) (#15098) and is not active
-on any instance until an operator acquires it.
+That barrier was implemented in #15098 and retired unused in #15279, after #15271
+chose to overlay native history at read time instead of migrating the ledger.
 
 Activate each validated partition atomically, then resume only writers/readers and
 peer payloads that understand its schema and epoch. Account-wide counters are

@@ -1720,17 +1720,6 @@ export const providerUsageQuerySchema = z.object({
 
 /** Body for POST /api/usage/messages — token counts persist forever, so
  * reject non-integer/negative garbage instead of coercing it into counters. */
-const usageCutoverEpoch = z.string().trim().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$/, 'Use 3-64 letters, digits, dots, dashes or underscores');
-export const usageCutoverEpochSchema = z.object({ migrationEpoch: usageCutoverEpoch }).strict();
-export const usageCutoverAcquireSchema = z.object({
-  migrationEpoch: usageCutoverEpoch,
-  participants: z.array(z.string().trim().min(1).max(128)).min(1).max(64),
-}).strict();
-export const usageCutoverRollbackSchema = z.object({
-  migrationEpoch: usageCutoverEpoch,
-  reason: z.string().trim().min(1).max(500),
-}).strict();
-
 export const usageMessagesSchema = z.object({
   providerId: z.string().min(1),
   model: z.string().nullish(),
