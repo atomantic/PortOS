@@ -81,7 +81,10 @@ function accountingRecord(entry, ids, lineage) {
     const id = hash(payload.id);
     ids.add(id);
     const model = projectModel(payload.model);
-    return { type: 'session_meta', payload: { id, ...(model ? { model } : {}) } };
+    // The parent's id (hashed like every identity) lets a reader recognize the
+    // parent events an older fork replays under new timestamps.
+    const forkedFrom = typeof payload.forked_from_id === 'string' && payload.forked_from_id ? hash(payload.forked_from_id) : null;
+    return { type: 'session_meta', payload: { id, ...(model ? { model } : {}), ...(forkedFrom ? { forkedFrom } : {}) } };
   }
   if (entry.type === 'turn_context') {
     const model = projectModel(payload?.model);
@@ -95,14 +98,21 @@ function accountingRecord(entry, ids, lineage) {
   if (payload.info == null) return null;
   const total = payload.info.total_token_usage;
   if (!isObject(total) || total.input_tokens == null || total.output_tokens == null) throw problem('malformed');
-  const usage = {};
-  for (const key of COUNTERS) {
-    const value = total[key] ?? 0;
-    if (!Number.isSafeInteger(value) || value < 0) throw problem('malformed');
-    usage[key] = value;
-  }
-  if (usage.cached_input_tokens > usage.input_tokens || usage.reasoning_output_tokens > usage.output_tokens) throw problem('malformed');
-  return { timestamp, payload: { type: 'token_count', info: { total_token_usage: usage } } };
+  const counters = (source) => {
+    const usage = {};
+    for (const key of COUNTERS) {
+      const value = source[key] ?? 0;
+      if (!Number.isSafeInteger(value) || value < 0) throw problem('malformed');
+      usage[key] = value;
+    }
+    if (usage.cached_input_tokens > usage.input_tokens || usage.reasoning_output_tokens > usage.output_tokens) throw problem('malformed');
+    return usage;
+  };
+  const last = payload.info.last_token_usage;
+  // The per-call counters are what a call cost; the cumulative ones can start
+  // from a base a fork inherited. Optional: older rollouts may lack them.
+  const lastUsage = isObject(last) && last.input_tokens != null && last.output_tokens != null ? counters(last) : null;
+  return { timestamp, payload: { type: 'token_count', info: { total_token_usage: counters(total), ...(lastUsage ? { last_token_usage: lastUsage } : {}) } } };
 }
 
 function projectModel(model) {

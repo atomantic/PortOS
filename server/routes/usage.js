@@ -2,6 +2,7 @@ import { Router } from 'express';
 import * as usage from '../services/usage.js';
 import { getClaudeCodeUsage } from '../services/claudeCodeUsage.js';
 import { refreshLocalTranscriptUsage } from '../services/claudeCodeTranscriptUsage.js';
+import { describeNativeUsageSources, refreshNativeUsageHistory } from '../services/nativeUsageHistory.js';
 import { getProviderQuotas } from '../services/providerUsage.js';
 import { getAllProviders } from '../services/providers.js';
 import { asyncHandler } from '../lib/errorHandler.js';
@@ -64,6 +65,9 @@ router.get('/hourly', (req, res) => {
 // or an explicit ?from/?to (YYYY-MM-DD, inclusive) for the report window.
 router.get('/', asyncHandler(async (req, res) => {
   const query = validateRequest(usageQuerySchema, req.query);
+  // Answers from the stored native history at once; a stale store refreshes in
+  // the background and `usage:native-history-updated` tells the page to refetch.
+  refreshNativeUsageHistory().catch((err) => console.error(`❌ Native usage refresh failed: ${err.message}`));
   const { from, to } = resolveUsageRange(query);
   const result = await getAllProviders();
   const providers = Array.isArray(result) ? result : (result?.providers || []);
@@ -102,6 +106,7 @@ router.get('/', asyncHandler(async (req, res) => {
       blocksIncomplete: coverage.blockEventsUnreported?.length > 0 || coverage.missingInstances.length > 0,
     },
     imageRenders,
+    nativeSources: describeNativeUsageSources(),
     monthlyHistory: monthly.history,
     monthlySeries: monthly.series,
     monthlyInstanceCount: monthly.instanceCount,

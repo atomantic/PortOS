@@ -44,6 +44,7 @@ import { isNonBlankStr } from '../lib/textUtils.js';
 import { readLocalTranscriptUsage, sanitizeTranscriptDays, TRANSCRIPT_USAGE_FILE } from './claudeCodeTranscriptUsage.js';
 import { summarizeTranscriptDays, mergeModelRows } from './claudeCodeModelReport.js';
 import { getAllProviders } from './providers.js';
+import { nativeUsageSignature, withNativeUsage } from './nativeUsageHistory.js';
 import { admitInboundUsage, deferUsageRetirement, describeOutboundUsage, registerUsageCutoverParticipant, usageCutoverBarrierFile, usageLedgerFenced, visibleUsageEpoch } from './usageCutoverBarrier.js';
 import { readRenderReceipts, summarizeRenderReceipts } from './imageRenderUsage.js';
 
@@ -263,6 +264,12 @@ async function readImageProjection(directoryStat) {
   return projection;
 }
 
+async function listProviderConfigs() {
+  const data = await getAllProviders().catch(() => null);
+  const providers = Array.isArray(data) ? data : data?.providers;
+  return Array.isArray(providers) ? providers : [];
+}
+
 async function readProviderClasses() {
   const data = await getAllProviders().catch(() => null);
   const providers = Array.isArray(data) ? data : data?.providers;
@@ -344,7 +351,7 @@ function sanitizeEntry(entry, expectedId) {
 // probing peer, all producing the identical byte-for-byte digest.
 let digestMemo = null;
 function selfDigest(usageData) {
-  const key = `${usageData?.lastUpdated ?? ''}|${new Date().toISOString().slice(0, 10)}`;
+  const key = `${usageData?.lastUpdated ?? ''}|${nativeUsageSignature()}|${new Date().toISOString().slice(0, 10)}`;
   if (digestMemo?.key !== key) digestMemo = { key, digest: buildUsageDigest(usageData) };
   return digestMemo.digest;
 }
@@ -362,7 +369,9 @@ async function buildSelfEntry() {
   return withSelfCapture(async () => {
     const { instanceId, name } = await readSelfIdentity();
     if (!instanceId) return null;
-    const usage = selfDigest(getUsage());
+    // Peers receive this machine's report as its own Usage page reads it: the
+    // provider apps' history in place of the ledger's counts for them.
+    const usage = selfDigest(withNativeUsage(getUsage(), await listProviderConfigs()));
     const [{ quotas, capturedAt: quotasAt, reported: quotaReported }, providerResult, imageResult] = await Promise.all([
       readLocalQuotaCards(),
       stableProjection(PROVIDERS_FILE, readProviderClasses).catch(() => ({ value: null, info: null })),
@@ -697,7 +706,7 @@ export async function getFleetUsage({ from = null, to = null, providers = [], ap
 
   const localClasses = Object.fromEntries(providers.map((provider) => [provider.id, { free: isFreeProvider(provider), family: familyForProvider(provider) }]));
   const sources = [
-    { instanceId: localIdentity?.instanceId || 'local', name: localIdentity?.name || 'This machine', capturedAt: self?.capturedAt, activity: getUsage() || {}, transcript: localTranscript?.days, providerClasses: localClasses, isSelf: true },
+    { instanceId: localIdentity?.instanceId || 'local', name: localIdentity?.name || 'This machine', capturedAt: self?.capturedAt, activity: withNativeUsage(getUsage(), providers) || {}, transcript: localTranscript?.days, providerClasses: localClasses, isSelf: true },
     ...peers.map((entry) => ({ ...entry, activity: entry.usage, transcript: entry.claudeCode?.days, providerClasses: entry.providerClasses, isSelf: false })),
   ];
   const reportSource = ({ activity, providerClasses }) => ({
@@ -1034,10 +1043,10 @@ function instanceDailyUsage({ daily = {}, monthly = {}, transcript = {}, provide
 /**
  * The Claude Code CLI's own transcripts count every session on the machine —
  * the terminal, the desktop app's Code tab, AND the runs PortOS spawned. The
- * ledger holds PortOS runs plus the terminal sessions the interactive scan
- * billed (usageInteractiveScan.js, which reaches back only ~35 days from its
- * first run), so each is a partial view of the same spend. Day-level history
- * uses the larger value; a rolled-up month is reconciled over that whole month.
+ * ledger holds PortOS runs (with native history overlaid where the store
+ * covers it, see nativeUsageOverlay.js), so each can be a partial view of the
+ * same spend. Day-level history uses the larger value; a rolled-up month is
+ * reconciled over that whole month.
  */
 function withTranscriptClaude(costs, transcriptCost, labels) {
   if ((transcriptCost || 0) > (costs.claude || 0)) {
@@ -1058,7 +1067,7 @@ function earliestDay(sources) {
 
 async function usageHistorySources(providers = []) {
   const { self, peers } = await entriesWithSelf();
-  const local = getUsage();
+  const local = withNativeUsage(getUsage(), providers);
   // An unreadable transcript store charts PortOS runs only rather than failing.
   const localTranscript = await readLocalTranscriptUsage().catch(() => null);
   // This machine always reads its live maps; with no minted identity yet it
@@ -1068,7 +1077,7 @@ async function usageHistorySources(providers = []) {
       id: self?.instanceId ?? 'local',
       instanceId: self?.instanceId ?? 'local', name: self?.name || 'This machine', isSelf: true,
       capturedAt: local?.lastUpdated || self?.capturedAt || null,
-      stamp: [local?.lastUpdated, localTranscript?.updatedAt],
+      stamp: [local?.lastUpdated, localTranscript?.updatedAt, nativeUsageSignature()],
       daily: local?.dailyActivity,
       monthly: local?.monthlyActivity,
       transcript: localTranscript?.days,

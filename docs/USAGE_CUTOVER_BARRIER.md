@@ -52,7 +52,7 @@ watermark, so they recompute from native sources on the next attempt.
 | Client counters (`POST /api/usage/messages`, `/tokens`) | `recordMessages`, `recordTokens` | Retained |
 | Limit blocks (`promptRunner.js`, `providerStatus.js`) | `recordLimitBlock` | Retained |
 | Live media (`grokMediaUsage.js`, `agyMediaUsage.js`) | `addDatedUsage` | Retained; repair ids keep it idempotent |
-| Interactive scan (`usageInteractiveScan.js`) | `applyHistoricalUsageCorrections`, `setInteractiveScanState`, `forgetSiblingReconciledUsageRuns` | Refused; its watermark holds, so it catches up |
+| Native history refresh (`nativeUsageHistory.js`) | Its own per-app stores, not the ledger | Skipped; the app files stay on disk, so the next refresh catches up |
 | Historical backfill (`usageBackfill.js`) | `applyHistoricalUsageCorrections` | Refused; the job ends in error naming the fence |
 | Grok and Antigravity repair (`grokUsageBackfill.js`, `agyUsageBackfill.js`, `scripts/backfill-*`) | `addDatedUsageBatch` | Refused, including from a separate CLI process |
 | Reset (`DELETE /api/usage`) | `resetUsage` | Refused |

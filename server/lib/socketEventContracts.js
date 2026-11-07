@@ -758,6 +758,11 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
     summary: 'Invalidate subscription quota selection after the fleet billing setting changes; no billing or quota data.',
     payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
+  'usage:native-history-updated': {
+    direction: 'server-to-client',
+    summary: 'Invalidate the usage report after a provider app usage history refresh changed it; no usage data.',
+    payloadSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
   'usage:native-accounts-updated': {
     direction: 'server-to-client',
     summary: 'Invalidate account-derived native usage after local selections change; no settings, memberships or source data.',

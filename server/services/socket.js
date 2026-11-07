@@ -9,6 +9,7 @@ import { modelLifecycleEvents } from './modelLifecycleEvents.js';
 import { meatspaceEvents } from './meatspaceEvents.js';
 import { dashboardEvents } from './dashboardEvents.js';
 import { settingsEvents } from './settings.js';
+import { nativeUsageEvents } from './nativeUsageEvents.js';
 import { recordEvents } from './sharing/recordEvents.js';
 import { fableLoomRunEvents } from './fableLoom/runEvents.js';
 import { cosEvents } from './cosEvents.js';
@@ -536,6 +537,7 @@ function setupCosEventForwarding() {
   for (const event of ['cos:schedule:changed', 'cos:decisions:changed', 'cos:day:changed']) {
     dashboardEvents.on(event, () => broadcastToCos(event, {}));
   }
+  nativeUsageEvents.on('updated', () => ioInstance?.emit('usage:native-history-updated', {}));
   settingsEvents.on('settings:updated', settings => {
     const selections = settings?.[NATIVE_USAGE_ACCOUNT_SELECTIONS_KEY];
     const revision = nativeUsageSelectionRevision(selections === undefined ? [] : selections);
