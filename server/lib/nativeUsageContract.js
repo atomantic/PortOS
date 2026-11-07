@@ -305,11 +305,23 @@ export function projectTranscriptCoverage(family, scan, scanLimits) {
 
 const withContentHash = (body) => ({ ...body, contentHash: hashOf(body) });
 
+export const NATIVE_USAGE_CODEX_RETAINED_FINDING = 'retained-snapshot';
+
+/** A failed refresh shows the last stored account entry, marked so it cannot satisfy an
+ * authoritative selection. Signed-out and missing-runtime are real states, not failures.
+ */
+function withRetainedCodexEntry(entry, retained) {
+  if (!retained || entry.findings.length !== 1 || entry.findings[0] !== 'refresh-failed') return entry;
+  const parsed = providerEntrySchemaV4.safeParse(retained);
+  if (!parsed.success || parsed.data.family !== 'codex' || !parsed.data.totals) return entry;
+  return { ...parsed.data, status: 'partial', findings: [...new Set([...parsed.data.findings, NATIVE_USAGE_CODEX_RETAINED_FINDING])] };
+}
+
 /** One participant's staged input. `capturedAt` must be an ISO instant from `toISOString()`. */
-export function buildNativeUsageReport({ instanceId, capturedAt, codexEvidence, transcripts, scanLimits }) {
+export function buildNativeUsageReport({ instanceId, capturedAt, codexEvidence, transcripts, scanLimits, retainedCodexEntry = null }) {
   const providers = [
     ...TRANSCRIPT_FAMILIES.map((family) => projectTranscriptCoverage(family, transcripts[family], scanLimits)),
-    projectCodexEvidence(codexEvidence, capturedAt),
+    withRetainedCodexEntry(projectCodexEvidence(codexEvidence, capturedAt), retainedCodexEntry),
   ].sort((a, b) => a.family.localeCompare(b.family));
   const report = withContentHash({
     contractVersion: NATIVE_USAGE_CONTRACT_VERSION, kind: 'native-usage-participant-report',

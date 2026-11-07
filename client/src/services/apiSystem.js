@@ -252,6 +252,9 @@ const usageQuery = (params) => {
 };
 export const getUsage = (params = {}, options = {}) => request(`/usage${usageQuery(params)}`, options);
 export const getNativeUsageMatrix = (params = {}, options = {}) => request(`/usage/native-matrix${usageQuery(params)}`, options);
+export const rebuildNativeUsageSources = (params = {}, options = {}) => request('/usage/native-sources/rebuild', {
+  ...options, method: 'POST', body: JSON.stringify(params),
+});
 export const getNativeUsageAccounts = (options = {}) => request('/usage/native-accounts', options);
 export const updateNativeUsageAccounts = (selection, options = {}) => request('/usage/native-accounts', {
   ...options, method: 'PUT', body: JSON.stringify(selection),

@@ -128,11 +128,13 @@ remain local. Every response is uncached and checked against the current pair
 again after capture or collection.
 
 Collection uses no Basic fallback and refuses redirects. Each response is
-limited to 16 MiB with a 60-second request deadline and a 5-second body idle
+limited to 128 MiB with a 60-second request deadline and a 5-second body idle
 deadline. Reports older than five minutes or more than 30 seconds in the future,
 invalid hashes/signatures, and changed pair bindings are unavailable, not zero
 usage. Older peers without the endpoint remain explicitly missing. No result is
-written into the usage ledger or retained as a completed-report cache.
+written into the usage ledger. The collector keeps each peer's last verified report
+in its machine-local store and shows it, labeled stale, after a failed read while
+that peer remains eligible; a refusal or changed pairing shows nothing.
 
 ### Using a peer's image, video, and LLM services
 

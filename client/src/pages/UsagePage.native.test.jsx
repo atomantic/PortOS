@@ -6,7 +6,7 @@ vi.mock('../services/socket', async () => {
   return { default: new EventEmitter() };
 });
 const api = vi.hoisted(() => ({
-  getNativeUsageMatrix: vi.fn(), getUsage: vi.fn(), getProviderUsage: vi.fn(),
+  getNativeUsageMatrix: vi.fn(), rebuildNativeUsageSources: vi.fn(), getUsage: vi.fn(), getProviderUsage: vi.fn(),
   getUsageBackfillStatus: vi.fn(), getUsageRollingCost: vi.fn(), getClaudeCodeModelUsage: vi.fn(),
 }));
 vi.mock('../services/api', () => api);
@@ -39,8 +39,10 @@ const fleetSnapshot = () => {
         { participantKey: 'c'.repeat(32), status: 'stale', capturedAt: '2026-02-01T12:00:00Z' },
         { participantKey: 'd'.repeat(32), status: 'invalid', capturedAt: null },
         { participantKey: 'e'.repeat(32), status: 'not-configured', capturedAt: null },
-        { participantKey: null, status: 'identity-unknown', capturedAt: null }], findings: ['peer-report-stale'] },
+        { participantKey: null, status: 'identity-unknown', capturedAt: null },
+        { participantKey: 'f'.repeat(32), status: 'unavailable', retained: true, capturedAt: '2026-02-01T12:00:00Z' }], findings: ['peer-report-stale'] },
     participants: [{ participantKey, capturedAt, providers: local.providers },
+      { participantKey: 'f'.repeat(32), capturedAt: '2026-02-01T12:00:00Z', retained: true, providers: [retained('claude', 5555)] },
       { participantKey: peerKey, capturedAt, providers: [retained('claude', 9999, {
         freshness: { earliestObserved: '2026-02-01T12:00:00Z', latestObserved: '2026-02-03T12:00:00Z' },
         coverage: { measuredRecords: 4000, missingUsageRecords: 12 },
@@ -167,6 +169,15 @@ describe('native usage default view', () => {
     expect(within(card('Antigravity')).getAllByText('Input tokens')[0].nextElementSibling).toHaveTextContent('40');
   });
 
+  it('rebuilds on request and shows the result of that read', async () => {
+    api.rebuildNativeUsageSources.mockResolvedValue(snapshot(codex(777)));
+    show();
+    fireEvent.click(screen.getByRole('button', { name: 'Rebuild from sources' }));
+    expect(await screen.findByText('777')).toBeInTheDocument();
+    expect(api.rebuildNativeUsageSources).toHaveBeenCalledExactlyOnceWith({ scope: 'local' }, { silent: true });
+    expect(api.getNativeUsageMatrix).not.toHaveBeenCalled();
+  });
+
   it('guards repeated clicks and ignores an old response after leaving and re-entering the view', async () => {
     let finishOld;
     api.getNativeUsageMatrix.mockImplementationOnce(() => new Promise(resolve => { finishOld = resolve; }));
@@ -202,6 +213,8 @@ describe('native usage default view', () => {
     expect(collection).toHaveTextContent('Report is invalid');
     expect(collection).toHaveTextContent('Selected member is not a configured peer');
     expect(collection).toHaveTextContent('Unknown identity 5');
+    expect(collection).toHaveTextContent('Stale: showing the last report collected from this peer');
+    expect(within(collection).getByText(/ffffffff · Peer · Stale · Captured/)).toBeInTheDocument();
     expect(collection).toHaveTextContent('aaaaaaaa · Local instance');
     expect(collection).not.toHaveTextContent('a'.repeat(32));
     fireEvent.click(within(collection).getByText(/bbbbbbbb · Peer · Captured/));

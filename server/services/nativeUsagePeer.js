@@ -13,12 +13,16 @@ import { nativeUsageReportSchema, nativeUsageParticipantKey, reportIsIntact } fr
 import { loadData, UNKNOWN_INSTANCE_ID } from './instanceIdentity.js';
 import { peerAllowsCategoryPull } from './sharing/peerSyncShared.js';
 import { captureDashboardNativeUsageReport } from './nativeUsageReport.js';
+import { getNativeUsageSnapshot, saveNativeUsageSnapshot } from './nativeUsageStore.js';
 
-export const NATIVE_USAGE_PEER_MAX_BYTES = 16 * 1024 * 1024;
+// Sized for the largest report the 100,000-record-per-provider projections allow.
+export const NATIVE_USAGE_PEER_MAX_BYTES = 128 * 1024 * 1024;
 export const NATIVE_USAGE_PEER_TIMEOUT_MS = 60_000;
 const MAX_AGE_MS = 5 * 60_000;
 const FUTURE_ALLOWANCE_MS = 30_000;
+const RETAINED_REPORT_KIND = 'peer-report';
 const bindings = new WeakMap();
+const retainedReports = new WeakSet();
 const hex = z.string().regex(/^[a-f0-9]{64}$/);
 const participant = z.string().regex(/^[a-f0-9]{32}$/);
 const envelopeSchema = z.strictObject({
@@ -55,7 +59,23 @@ export async function revalidateNativeUsagePeerReport(report) {
   const identity = bindings.get(report);
   if (!identity) fail('NATIVE_USAGE_PEER_UNVERIFIED', 502);
   assertUnchanged(identity, await peerIdentity(identity.peer.instanceId));
-  validatedReport(report, nativeUsageParticipantKey(identity.peer.instanceId));
+  if (!retainedReports.has(report)) validatedReport(report, nativeUsageParticipantKey(identity.peer.instanceId));
+}
+
+/** Keep a verified report so a later failed read can still show this peer, labeled stale. */
+export const retainNativeUsagePeerReport = report => saveNativeUsageSnapshot(RETAINED_REPORT_KIND, report.participantKey, report);
+
+/** This peer's last verified report, or null. Current pairing and sharing still apply:
+ * revoking a peer stops its retained report from being shown.
+ */
+export async function loadRetainedNativeUsagePeerReport(instanceId) {
+  const identity = await peerIdentity(instanceId);
+  const expected = nativeUsageParticipantKey(instanceId);
+  const parsed = nativeUsageReportSchema.safeParse(await getNativeUsageSnapshot(RETAINED_REPORT_KIND, expected));
+  if (!parsed.success || !reportIsIntact(parsed.data) || parsed.data.participantKey !== expected) return null;
+  bindings.set(parsed.data, identity);
+  retainedReports.add(parsed.data);
+  return parsed.data;
 }
 
 async function authenticateRequest(req) {
@@ -102,7 +122,9 @@ export async function getNativeUsagePeerReport(req, challenge) {
   return envelope;
 }
 
-/** One bounded, challenge-bound read. A failure never returns a cached report. */
+/** One bounded, challenge-bound read. A failure never returns a retained report itself:
+ * the caller decides whether to show one, labeled stale.
+ */
 export async function readNativeUsagePeerReport(instanceId) {
   const identity = await peerIdentity(instanceId);
   const { peer, self, url } = identity;

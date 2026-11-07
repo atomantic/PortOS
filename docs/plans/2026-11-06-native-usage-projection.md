@@ -134,11 +134,10 @@ that history is complete or permission to activate staged history.
 ## Read-only local and configured-peer dashboard matrix
 
 The Usage page's **Read native sources** action uses `GET /api/usage/native-matrix`
-to capture all four current readers and pass that v4 report through the same
-account-selection matrix. Each retained provider has a 128 MiB / 100,000-record /
-5-second dashboard budget, with bounded line size, inventory and depth. Scan limits
-and unknown coverage stay visible. This is a diagnostic subset, not the standalone
-capture's full-history budget or a staged replacement for the active ledger.
+to collect what changed from all four current readers and pass that v4 report through
+the same account-selection matrix. One read has a 45-second budget across all providers,
+with bounded line size, inventory and depth. Scan limits and unknown coverage stay
+visible. This is a diagnostic view, not a staged replacement for the active ledger.
 
 The default endpoint reads the local instance only. The URL-backed **Configured
 peers** scope uses `GET /api/usage/native-matrix?scope=fleet` on an explicit read.
@@ -159,7 +158,7 @@ policy still applies when the older content-sync master switch is off.
 `GET /api/usage/native-report/v1?challenge=<64 hex>` exchanges only a local v4
 report with a currently authenticated paired usage peer. A domain-separated HMAC
 binds the report to its source, audience and fresh challenge. Strict schemas,
-content/evidence hashes, a 16 MiB byte limit, a 60-second whole-request deadline,
+content/evidence hashes, a 128 MiB byte limit, a 60-second whole-request deadline,
 a five-second body-idle deadline, and five-minute capture freshness with a
 30-second future allowance constrain each response. A response cannot redirect
 credentials, fall back to Basic auth, impersonate another participant or forward
@@ -180,14 +179,66 @@ are an unverified native signal, not dollars or subscription spend. Antigravity'
 input, output, cache and output-decomposition counters stay separate because the
 combined total remains unverified. Native and legacy counters are never added.
 
-Concurrent requests share only the in-flight read. A later refresh captures new
-sources, and a failed read never silently substitutes an older server snapshot.
-The UI labels any prior result retained after a request error as stale. The action
-does not run on boot or poll, write the ledger, change sync, invoke inference, or
-perform deployment. Reports are neither persisted nor forwarded. Durable capture
-for staging, account-map verification and live checks on each participant remain
-tracked by #15097; this read-only UI does
-not close that issue or the staged recovery in #15031.
+Concurrent requests share only the in-flight read. A later refresh collects new
+sources. The UI labels any prior result retained after a request error as stale. The
+action does not run on boot or poll, write the ledger, change sync, invoke inference, or
+perform deployment. Reports are not forwarded from another host. Durable capture for
+staging, account-map verification and live checks on each participant remain tracked by
+#15097; this read-only UI does not close that issue or the staged recovery in #15031.
+
+## Collected usage store (#15255)
+
+Every read used to start over, so month-old files were parsed again, and usage vanished
+when a transcript was swept: Claude Code's documented default retention is 30 days. Each
+machine now keeps what it collected in `native_usage_sources`, one row per source file:
+its family, a SHA-256 of its root-relative path, size, mtime, validator and record
+projection. See [STORAGE.md](../STORAGE.md#native-usage-store).
+
+- **Unchanged** (same size, mtime and validator): one `lstat`, however old the file is.
+  A date cut-off would miss a resumed month-old session.
+- **Changed:** read whole, replacing only its own row. There is no byte-offset resume: a
+  re-read of the few active files is cheap, and offsets would need prefix checks.
+- **Deleted:** the row stays and still counts, because deletion is retention rather than
+  restated usage. `collected-sources-detached` says that some counted sources are gone.
+- **Validator change:** that family's sources that still exist are re-read.
+- **Copied or moved:** a new row with the same record identities, which still deduplicates.
+
+A report is the existing unions over every stored row, built by the same reader code as
+a full read. A row holds what its file contributed before the final resolution, so copies
+split across files fold as they would in one read, and a stored report equals a full read
+of the same tree byte for byte (`evidenceHash`). `nativeUsageCollection.test.js` checks
+this over the #15230 corpus with each copy collected in a separate run. A deleted source
+is the deliberate exception, since its usage is exactly what a full read would lose.
+
+**A run is bounded, not the data.** Its 45-second budget is shared across providers and
+sits inside the 60-second peer deadline. A run that stops reports
+`scan-stopped-early`, and the next run continues, because finished sources are already
+saved. An unfinished read saves nothing. An Antigravity database that is refused or has
+live sidecars is read and reported on every run and never saved, so a transient failure
+cannot stick; its earlier row, if any, keeps counting.
+
+**Collection runs on explicit reads and daily** (`nativeUsageCollectionSchedule.js`), so a
+sweep cannot remove usage nobody happened to read. The daily run reads local files only,
+with no inference, Codex read or peer contact. Nothing scans at boot, and a missed slot
+is not caught up. **Rebuild from sources** (`POST /api/usage/native-sources/rebuild`) marks
+every row for a re-read, for an in-place rewrite that keeps size and mtime. Rows whose
+source is gone are never removed.
+
+**Codex** has no narrower read, and `account/usage/read` is cheap, so every explicit read
+still calls it. The latest projected entry is stored, never the raw account read, which
+holds an email. After a failed refresh the provider shows that entry with
+`retained-snapshot`, which cannot satisfy an authoritative selection. Signed-out and
+missing-runtime results stay as they are. `history-restated` is unchanged.
+
+**Peers** answer the same way: the request collects what changed and reports from the
+store. The requester keeps each peer's last verified report in `native_usage_snapshots`.
+When a later read fails it shows that report, labeled stale, with
+`peer-report-retained` and the original capture time. A refusal, a disabled or unpaired
+peer, or a changed pairing shows nothing, so revoking a peer hides its retained report.
+#15252 replaces these record lists with rollups. Until it lands, a store holding more
+than 100,000 records for a provider keeps exact local totals but marks its projection
+`truncated`, which refuses a selected-account union with `record-projection-truncated`.
+The peer transfer limit is 128 MiB, the largest report those projections allow.
 
 ## Antigravity native CLI capture (report version 4)
 

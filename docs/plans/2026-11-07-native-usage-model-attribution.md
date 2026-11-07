@@ -116,9 +116,8 @@ enter a bucket.
 
 ## Collection and reporting
 
-**Each machine stores what it collected (#15255).** Today every read starts over and
-nothing persists. The proposed store keeps one record projection per source file, with
-that file's size and mtime:
+**Each machine stores what it collected (#15255).** The store keeps one record
+projection per source file, with that file's size and mtime:
 
 - an unchanged source costs one `stat`, however old it is;
 - a changed source is re-read and replaces only its own projection;
@@ -147,13 +146,14 @@ Buckets are unique, sorted by day, kind and key, and sum exactly to the provider
 Size follows days times labels rather than records: a year across ten labels is under
 1 MiB. `aggregate.json` pins accepted and refused examples.
 
-**What limits the data today (#15252).** These are PortOS's own settings, not technical
-limits, and this proposal does not depend on them:
+**What limited the data (#15252).** These were PortOS's own settings, not technical
+limits, and this proposal does not depend on them. #15255 replaced the first and raised
+the second:
 
-- The dashboard and peer read budget stops at 128 MiB of file bytes. On one real install
+- The dashboard and peer read budget stopped at 128 MiB of file bytes. On one real install
   that was 999 of 33,709 Claude records, in 0.2 seconds. Without it, the whole history
   read in about 3 seconds as an 8.76 MiB record list.
-- The 16 MiB peer limit refuses a whole report, at about 61,000 Claude records.
+- The 16 MiB peer limit refused a whole report, at about 61,000 Claude records.
 
 **Which machines to ask.** Codex's account-level read needs only one machine. Claude,
 Antigravity and Grok are per-machine files holding that machine's own usage, so each
@@ -229,7 +229,9 @@ constrain the active #15031 work.
 
 The accepted totals, refusal findings and record keys were also checked once against
 the current production readers and unions by writing each scenario to a temporary home.
-That comparison should become a permanent test once the integration lands.
+`server/services/nativeUsageCollection.test.js` now does this permanently for totals and
+record counts, with each copy collected in a separate run, as #15255 requires. The full
+comparison, with labels, should become a permanent test once the integration lands.
 
 ## Handoff
 

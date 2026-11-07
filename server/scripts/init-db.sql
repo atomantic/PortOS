@@ -342,6 +342,28 @@ CREATE TABLE IF NOT EXISTS cos_pending_agent_feedback (
   archive_date TEXT
 );
 
+-- Machine-local native usage store (#15255): one hashed, counters-only projection
+-- per source file, plus whole-document snapshots. Never enters federation payloads.
+CREATE TABLE IF NOT EXISTS native_usage_sources (
+  family TEXT NOT NULL,
+  source_key TEXT NOT NULL,
+  size_bytes BIGINT NOT NULL,
+  mtime_ns BIGINT NOT NULL,
+  validator TEXT NOT NULL,
+  reread_requested BOOLEAN NOT NULL DEFAULT FALSE,
+  projection JSONB NOT NULL,
+  collected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (family, source_key)
+);
+
+CREATE TABLE IF NOT EXISTS native_usage_snapshots (
+  kind TEXT NOT NULL,
+  snapshot_key TEXT NOT NULL,
+  payload JSONB NOT NULL,
+  collected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (kind, snapshot_key)
+);
+
 -- Publication ownership outlives task working-set retention. Machine-local.
 CREATE TABLE IF NOT EXISTS cos_release_synchronizations (
   identity TEXT PRIMARY KEY,

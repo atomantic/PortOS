@@ -1113,6 +1113,7 @@ migration with explicit recognition of the outgoing shipped defaults.
 | `imageInputProvenance.js` | CLI image-input provenance markers and read-time normalization for legacy sidecars. |
 
 | `nativeUsageRecords.js` | Strict privacy-safe retained-record projections and deterministic Claude message union for selected accounts; preserves conflicts and unknown history. |
+| `nativeUsageSourceFold.js` | Coverage counters of a native usage reader and how one source's share folds into a total, so sources read separately report what one full read would. |
 
 | `nativeAgyMetadata.js` | Strict, bounded Antigravity SQLite v1 metadata protobuf projection; returns only identities, timestamps, enums and six native counters. |
 | `nativeAgyUsageRecords.js` | Private Antigravity record schema and conflict-preserving message/response union with separate native token counters and unknown combined total. |

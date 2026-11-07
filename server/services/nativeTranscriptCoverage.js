@@ -5,6 +5,7 @@ import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { safeParse } from '../lib/streamJsonParser.js';
 import { canonicalStringify } from '../lib/objects.js';
+import { compactNativeCoverage, emptyNativeCoverage } from '../lib/nativeUsageSourceFold.js';
 
 // Bounded retained-record reads only. No ledger, estimates, or provider calls.
 const LIMITS = { bytes: 128 * 1024 * 1024, lineBytes: 1024 * 1024, entries: 30000, records: 100000, milliseconds: 5000, depth: 8 };
@@ -56,20 +57,38 @@ function project(family, entry, parts) {
  * stop_reason. Resolved to that final emission whatever order files are read in, so
  * a copy with a different request or input stays a real conflict.
  */
-function reconcileStreamed(prior, next, signature) {
-  if (!prior.requestId || prior.requestId !== next.requestId || !prior.measured || !next.measured) return false;
+function reconcileStreamed(prior, next) {
+  if (!prior.requestKey || prior.requestKey !== next.requestKey || !prior.measured || !next.measured) return false;
   if (![0, 2, 3].every(index => prior.values[index] === next.values[index])) return false;
   if (prior.final && next.final) return false;
   if (prior.final && next.values[1] > prior.values[1]) return false;
   if (next.final && next.values[1] < prior.values[1]) return false;
   if (next.values[1] > prior.values[1]) {
     prior.values = next.values;
-    prior.signature = signature;
-    prior.maximumCopies = 1;
+    prior.signature = next.signature;
+    prior.maximumCopies = next.maximumCopies;
   }
-  prior.final ||= next.final === true;
+  prior.final ||= next.final;
   prior.partialsDiffer = true;
   return true;
+}
+
+/** Fold one identity's copies into `prior`, whether `next` is a single emission or a
+ * whole source's already-folded record. Conflict depends only on the set of copies,
+ * so sources stored separately fold to what reading them together produces.
+ */
+function mergeRecord(family, prior, next) {
+  prior.copies += next.copies;
+  if (next.at && (!prior.at || next.at < prior.at)) prior.at = next.at;
+  prior.inconsistent ||= next.inconsistent;
+  prior.costTicks ||= next.costTicks;
+  prior.conflict ||= next.conflict;
+  const sameRequest = family !== 'claude' || prior.requestKey === next.requestKey;
+  if (sameRequest && prior.signature === next.signature) {
+    prior.final ||= next.final;
+    prior.partialsDiffer ||= next.partialsDiffer;
+    prior.maximumCopies += next.maximumCopies;
+  } else if (!prior.conflict && !(sameRequest && family === 'claude' && reconcileStreamed(prior, next))) prior.conflict = true;
 }
 
 function isTranscript(family, parts) {
@@ -82,20 +101,21 @@ function isTranscript(family, parts) {
  * even after an exhaustive scan of today's files. Internal limits are injectable
  * for synthetic boundary tests; no HTTP parameter can change roots or limits.
  */
-export async function getNativeTranscriptCoverage(family, { home, projectsRoot, limits: overrides = {}, deadline = Infinity, identityLimit = Infinity, includeRecords = false } = {}) {
+export async function getNativeTranscriptCoverage(family, { home, projectsRoot, limits: overrides = {}, deadline = Infinity, identityLimit = Infinity, includeRecords = false, sources = null } = {}) {
   if (!Object.hasOwn(roots, family)) throw new Error('Unsupported native transcript family');
+  if (sources && family !== 'claude') throw new Error('Per-source collection supports Claude transcripts only');
   const limits = { ...LIMITS, ...overrides };
-  const coverage = { files: 0, records: 0, measuredRecords: 0, missingUsageRecords: 0, missingIdentityRecords: 0,
-    duplicateRecords: 0, conflictingRecords: 0, invalidLines: 0, undatedRecords: 0, unreadableFiles: 0,
-    skippedLinks: 0, missingSource: false, capped: false, stoppedEarly: false, oversizedLines: 0, streamingSupersededRecords: 0,
-    unfinalizedRecords: 0, fieldInconsistentRecords: 0, runtimeVersions: [], steps: null, cacheOverlap: null, costTickRecords: null,
-    firstObservedAt: null, lastObservedAt: null, retention: 'unknown' };
+  const coverage = emptyNativeCoverage();
   const started = Date.now();
   let bytes = 0;
   let entries = 0;
+  let scannedRecords = 0;
   const records = new Map();
   let identityLimitReached = false;
   const versions = new Set();
+  const whole = { coverage, records, versions };
+  // Readers write here. Per-source collection points it at one source at a time.
+  let sink = whole;
   const conversations = new Map();
   const conversation = id => {
     if (!conversations.has(id)) conversations.set(id, { steps: new Set(), measured: 0, unmeasured: 0 });
@@ -103,68 +123,56 @@ export async function getNativeTranscriptCoverage(family, { home, projectsRoot, 
   };
   const stop = () => { coverage.capped = true; coverage.stoppedEarly = true; };
   const exhausted = () => {
-    if (Date.now() >= deadline || Date.now() - started >= limits.milliseconds || bytes >= limits.bytes || entries >= limits.entries || coverage.records >= limits.records) stop();
+    if (Date.now() >= deadline || Date.now() - started >= limits.milliseconds || bytes >= limits.bytes || entries >= limits.entries || scannedRecords >= limits.records) stop();
     return coverage.stoppedEarly;
   };
   const consume = (line, parts) => {
     if (!line.trim()) return;
     const entry = safeParse(line);
-    if (!entry || typeof entry !== 'object') { coverage.invalidLines++; return; }
+    if (!entry || typeof entry !== 'object') { sink.coverage.invalidLines++; return; }
     if (family === 'agy' && counter(entry.step_index)) conversation(parts[0]).steps.add(entry.step_index);
     const record = project(family, entry, parts);
     if (!record) return;
-    coverage.records++;
-    if (!record.at) coverage.undatedRecords++;
+    scannedRecords++;
+    sink.coverage.records++;
+    if (!record.at) sink.coverage.undatedRecords++;
     else {
-      if (!coverage.firstObservedAt || record.at < coverage.firstObservedAt) coverage.firstObservedAt = record.at;
-      if (!coverage.lastObservedAt || record.at > coverage.lastObservedAt) coverage.lastObservedAt = record.at;
+      if (!sink.coverage.firstObservedAt || record.at < sink.coverage.firstObservedAt) sink.coverage.firstObservedAt = record.at;
+      if (!sink.coverage.lastObservedAt || record.at > sink.coverage.lastObservedAt) sink.coverage.lastObservedAt = record.at;
     }
     const measured = family === 'grok' ? record.values.slice(0, 2).every(counter) : record.values.every(counter);
-    if (!measured) coverage.missingUsageRecords++;
-    if (record.inconsistent) coverage.fieldInconsistentRecords++;
+    if (!measured) sink.coverage.missingUsageRecords++;
+    if (record.inconsistent) sink.coverage.fieldInconsistentRecords++;
     if (RUNTIME_VERSION.test(record.version ?? '')) {
-      versions.add(record.version);
+      sink.versions.add(record.version);
       // Keep the same bounded evidence regardless of file enumeration order.
-      if (versions.size > MAX_RUNTIME_VERSIONS) versions.delete([...versions].sort().at(-1));
+      if (sink.versions.size > MAX_RUNTIME_VERSIONS) sink.versions.delete([...sink.versions].sort().at(-1));
     }
-    if (!record.key) { coverage.missingIdentityRecords++; return; }
+    if (!record.key) { sink.coverage.missingIdentityRecords++; return; }
     const key = hash(['portos-native-record/1', family, record.key]);
-    const signature = hash([record.values, record.usageShape]);
-    const prior = records.get(key);
-    if (!prior && records.size >= identityLimit) { identityLimitReached = true; stop(); return; }
-    if (prior) {
-      coverage.duplicateRecords++;
-      prior.copies++;
-      if (record.at && (!prior.at || record.at < prior.at)) prior.at = record.at;
-      prior.inconsistent ||= record.inconsistent === true;
-      prior.costTicks ||= record.costTicks === true;
-      const sameRequest = family !== 'claude' || prior.requestId === record.requestId;
-      if (sameRequest && prior.signature === signature) {
-        prior.final ||= record.final === true;
-        prior.maximumCopies++;
-      } else if (!prior.conflict && !(sameRequest && family === 'claude' && reconcileStreamed(prior, { ...record, measured }, signature))) {
-        prior.conflict = true;
-        coverage.conflictingRecords++;
-      }
-    } else {
-      records.set(key, { signature, values: record.values.map(value => counter(value) ? value : null), measured, conflict: false,
-        requestId: record.requestId ?? null, final: record.final === true, partialsDiffer: false, costTicks: record.costTicks === true,
-        inconsistent: record.inconsistent === true, at: record.at, copies: 1, maximumCopies: 1 });
+    const next = { signature: hash([record.values, record.usageShape]), values: record.values.map(value => counter(value) ? value : null), measured, conflict: false,
+      requestKey: record.requestId ? hash(['portos-native-request/1', family, record.requestId]) : null, final: record.final === true, partialsDiffer: false,
+      costTicks: record.costTicks === true, inconsistent: record.inconsistent === true, at: record.at, copies: 1, maximumCopies: 1 };
+    const prior = sink.records.get(key);
+    if (!prior && sink.records.size >= identityLimit) { identityLimitReached = true; stop(); return; }
+    if (prior) mergeRecord(family, prior, next);
+    else {
+      sink.records.set(key, next);
       if (family === 'agy') { const tally = conversation(parts[0]); if (measured) tally.measured++; else tally.unmeasured++; }
     }
   };
   const read = async (path, parts) => {
     const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0)).catch(() => null);
-    if (!handle) { coverage.unreadableFiles++; return; }
+    if (!handle) { sink.coverage.unreadableFiles++; return; }
     const stat = await handle.stat().catch(() => null);
-    if (!stat?.isFile()) { coverage.unreadableFiles++; await handle.close(); return; }
-    coverage.files++;
+    if (!stat?.isFile()) { sink.coverage.unreadableFiles++; await handle.close(); return; }
+    sink.coverage.files++;
     const stream = handle.createReadStream({ highWaterMark: 64 * 1024, autoClose: true });
     let pending = Buffer.alloc(0);
     // One oversized record must not end the scan: most are attachments that carry
     // no usage. It stays reported, because this line was not read.
     let skippingLine = false;
-    const oversized = () => { coverage.capped = true; coverage.oversizedLines++; };
+    const oversized = () => { sink.coverage.capped = true; sink.coverage.oversizedLines++; };
     await (async () => {
       for await (const chunk of stream) {
         bytes += chunk.length;
@@ -187,9 +195,24 @@ export async function getNativeTranscriptCoverage(family, { home, projectsRoot, 
       }
       // A trailing non-newline record may be an in-progress append, not a
       // completed emission. Never silently count it as authoritative.
-      if (!coverage.stoppedEarly && !skippingLine && pending.length) coverage.invalidLines++;
-    })().catch(() => { coverage.unreadableFiles++; });
+      if (!coverage.stoppedEarly && !skippingLine && pending.length) sink.coverage.invalidLines++;
+    })().catch(() => { sink.coverage.unreadableFiles++; });
     stream.destroy();
+  };
+  const readStored = async (path, parts) => {
+    const facts = await sources.check(parts, path);
+    if (!facts) return;
+    const source = { coverage: emptyNativeCoverage(), records: new Map(), versions: new Set() };
+    sink = source;
+    await read(path, parts);
+    sink = whole;
+    // An unfinished read saves nothing: the source is read again next run, and any
+    // earlier projection of it keeps counting meanwhile.
+    coverage.unreadableFiles += source.coverage.unreadableFiles;
+    if (coverage.stoppedEarly || source.coverage.unreadableFiles) return;
+    source.coverage.runtimeVersions = [...source.versions].sort();
+    await sources.save(facts, { coverage: compactNativeCoverage(source.coverage),
+      records: [...source.records].map(([recordKey, state]) => ({ recordKey, ...state })) });
   };
   const walk = async (path, parts = []) => {
     const info = await lstat(path).catch(error => {
@@ -209,7 +232,7 @@ export async function getNativeTranscriptCoverage(family, { home, projectsRoot, 
         if (entry.isDirectory()) {
           if (next.length >= limits.depth) { stop(); break; }
           await walk(join(path, entry.name), next);
-        } else if (entry.isFile() && isTranscript(family, next)) await read(join(path, entry.name), next);
+        } else if (entry.isFile() && isTranscript(family, next)) await (sources ? readStored : read)(join(path, entry.name), next);
         if (exhausted()) break;
       }
     })().catch(() => { coverage.unreadableFiles++; });
@@ -218,12 +241,26 @@ export async function getNativeTranscriptCoverage(family, { home, projectsRoot, 
     ? projectsRoot ?? (process.env.CLAUDE_CONFIG_DIR ? join(process.env.CLAUDE_CONFIG_DIR, 'projects') : join(home ?? homedir(), ...roots[family]))
     : join(home ?? homedir(), ...roots[family]);
   await walk(root);
+  let collectionFindings = [];
+  if (sources) {
+    const collected = await sources.load(coverage);
+    collectionFindings = collected.findings;
+    for (const { projection } of collected.stored) {
+      for (const { recordKey, ...state } of projection.records) {
+        const prior = records.get(recordKey);
+        if (prior) mergeRecord(family, prior, state);
+        else records.set(recordKey, state);
+      }
+    }
+  }
   const totals = [0, 0, 0, 0];
   const overlap = { cacheExceedsInputRecords: 0, cacheWithinInputRecords: 0 };
   let costTickRecords = 0;
   for (const record of records.values()) {
     // Differing partials with no final emission leave the output count unknowable.
-    if (record.partialsDiffer && !record.final && !record.conflict) { record.conflict = true; coverage.conflictingRecords++; }
+    if (record.partialsDiffer && !record.final) record.conflict = true;
+    coverage.duplicateRecords += record.copies - 1;
+    if (record.conflict) coverage.conflictingRecords++;
     if (record.costTicks) costTickRecords++;
     // Count copies below the resolved maximum, not traversal-dependent merge events.
     if (family === 'claude' && !record.conflict) coverage.streamingSupersededRecords += record.copies - record.maximumCopies;
@@ -233,7 +270,7 @@ export async function getNativeTranscriptCoverage(family, { home, projectsRoot, 
     if (family === 'agy') overlap[record.values[2] > record.values[0] ? 'cacheExceedsInputRecords' : 'cacheWithinInputRecords']++;
     record.values.forEach((value, index) => { totals[index] += counter(value) ? value : 0; });
   }
-  coverage.runtimeVersions = [...versions].sort();
+  coverage.runtimeVersions = [...new Set([...versions, ...coverage.runtimeVersions])].sort().slice(0, MAX_RUNTIME_VERSIONS);
   if (family === 'grok') coverage.costTickRecords = costTickRecords;
   if (family === 'agy') {
     coverage.cacheOverlap = overlap;
@@ -270,14 +307,14 @@ export async function getNativeTranscriptCoverage(family, { home, projectsRoot, 
       version: 1, identityScheme: 'sha256-native-record/1', truncated: records.size > 100000,
       records: [...records].sort(([a], [b]) => a.localeCompare(b)).slice(0, 100000).map(([recordKey, record]) => ({
         recordKey,
-        requestKey: !record.conflict && record.requestId ? hash(['portos-native-request/1', family, record.requestId]) : null,
+        requestKey: record.conflict ? null : record.requestKey,
         // Retain the identity but no arbitrary winning counters for a conflict.
         values: record.conflict ? [null, null, null, null] : record.values,
         final: !record.conflict && record.final,
         conflict: record.conflict, inconsistent: record.inconsistent, at: record.at,
       })),
     } : null } : {}),
-    coverage, cost: { usd: null, kind: 'unknown' },
+    coverage, cost: { usd: null, kind: 'unknown' }, ...(sources ? { findings: collectionFindings } : {}),
     reason: !coverage.records ? unavailableReason : family === 'grok'
       ? 'Turn counters are retained, but per-turn versus cumulative semantics are unvalidated. No authoritative total is calculated.'
       : family === 'agy' ? 'Only planner steps with all three token fields are included. Input/cache overlap, model attribution, deleted history and cost remain unknown; no combined total is calculated.'

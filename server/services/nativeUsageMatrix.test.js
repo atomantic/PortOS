@@ -1,18 +1,22 @@
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 import { nativeUsageParticipantKey } from '../lib/nativeUsageContract.js';
 import { GROK_USAGE_FIELDS } from '../lib/nativeGrokUsageRecords.js';
 
-let home;
+const { makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'native-usage-matrix-' });
+vi.mock('../lib/fileUtils.js', async original => makeProxy(await original()));
+let home = '/nonexistent-native-usage-home';
 vi.mock('node:os', async original => ({ ...await original(), homedir: () => home }));
 vi.mock('./codexAppServer.js', () => ({ getCodexAccountUsageEvidence: vi.fn() }));
 vi.mock('./instanceIdentity.js', () => ({ getInstanceId: vi.fn(async () => 'synthetic-local-instance') }));
 vi.mock('./settings.js', async () => ({ getSettingsWithStatus: vi.fn(), settingsEvents: new (await import('node:events')).EventEmitter() }));
-import { getCodexAccountUsageEvidence } from './codexAppServer.js';
-import { getSettingsWithStatus } from './settings.js';
-import { getNativeUsageMatrix, NATIVE_USAGE_DASHBOARD_LIMITS } from './nativeUsageMatrix.js';
+const { getCodexAccountUsageEvidence } = await import('./codexAppServer.js');
+const { getSettingsWithStatus } = await import('./settings.js');
+const { getNativeUsageMatrix, NATIVE_USAGE_DASHBOARD_LIMITS } = await import('./nativeUsageMatrix.js');
+const { _resetNativeUsageStore } = await import('./nativeUsageStore.js');
 
 const LOCAL = nativeUsageParticipantKey('synthetic-local-instance');
 const PEER = nativeUsageParticipantKey('synthetic-peer-instance');
@@ -47,10 +51,12 @@ beforeEach(async () => {
   vi.clearAllMocks();
   vi.stubEnv('CLAUDE_CONFIG_DIR', '');
   home = await mkdtemp(join(tmpdir(), 'native-matrix-'));
+  await _resetNativeUsageStore();
   getCodexAccountUsageEvidence.mockResolvedValue(codex());
   getSettingsWithStatus.mockResolvedValue({ settings: { usageNativeAccountSelections: ['codex', 'claude', 'grok', 'agy'].map(name => selected(name)) } });
 });
 afterEach(async () => { vi.unstubAllEnvs(); await rm(home, { recursive: true, force: true }); });
+afterAll(cleanup);
 
 describe('local native dashboard capture', () => {
   it('uses the current readers and selected-account union without ledger data, per-record output or source writes', async () => {
@@ -100,9 +106,19 @@ describe('local native dashboard capture', () => {
     const unselected = await getNativeUsageMatrix();
     expect(family(unselected, 'codex')).toMatchObject({ merge: { status: 'refused', totals: null }, unresolvedParticipants: [LOCAL] });
     getCodexAccountUsageEvidence.mockResolvedValueOnce({ failureCode: 'CODEX_APP_SERVER_TIMEOUT' });
+    await _resetNativeUsageStore();
     const unavailable = await getNativeUsageMatrix();
     expect(entry(unavailable, 'codex')).toMatchObject({ status: 'unavailable', totals: null, findings: ['refresh-failed'] });
     expect(family(unavailable, 'codex').accounts[0]).toMatchObject({ status: 'refused', totals: null });
+  });
+
+  it('shows a stored Codex entry after a failed refresh, but never lets it answer for the account', async () => {
+    await getNativeUsageMatrix();
+    getCodexAccountUsageEvidence.mockResolvedValueOnce({ failureCode: 'CODEX_APP_SERVER_TIMEOUT' });
+    const failed = await getNativeUsageMatrix();
+    expect(entry(failed, 'codex')).toMatchObject({ status: 'partial', totals: { lifetimeTokens: 300 }, findings: ['retained-snapshot'] });
+    expect(family(failed, 'codex')).toMatchObject({ merge: { status: 'refused', totals: null, reasons: ['authoritative-source-partial'] },
+      accounts: [{ status: 'refused', totals: null }] });
   });
 
   it('coalesces overlapping reads, releases failures and never caches completed results or leaks capture errors', async () => {

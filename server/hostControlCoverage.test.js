@@ -1324,6 +1324,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/usage/backfill/preview/cancel', IN_PROCESS_COMPUTE],
   ['PUT /api/usage/fleet-billing', RECORDS],
   ['POST /api/usage/messages', CLIENT_TELEMETRY],
+  ['POST /api/usage/native-sources/rebuild', 'Marks collected rows for a re-read, then the same fixed probes and bounded local reads as GET native-matrix; no caller-controlled path, and nothing is removed.'],
   ['POST /api/usage/session', CLIENT_TELEMETRY],
   ['PUT /api/usage/subscriptions', RECORDS],
   ['POST /api/usage/tokens', CLIENT_TELEMETRY],

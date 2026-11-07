@@ -1699,6 +1699,7 @@ export const nativeUsageAccountsUpdateSchema = z.strictObject({
 });
 export const nativeUsageCoverageQuerySchema = z.object({ family: z.enum(['claude', 'codex', 'grok', 'agy']).optional() }).strict();
 export const nativeUsageMatrixQuerySchema = z.object({ scope: z.enum(['local', 'fleet']).default('local') }).strict();
+export const nativeUsageRebuildSchema = z.object({ scope: z.enum(['local', 'fleet']).default('local') }).strict();
 export const nativeUsagePeerReportQuerySchema = z.object({ challenge: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 
 /**
