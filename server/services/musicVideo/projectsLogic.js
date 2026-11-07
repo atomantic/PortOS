@@ -30,6 +30,7 @@ import {
   musicVideoSceneUpdateSchema,
 } from '../../lib/validation.js';
 import { compareNewerWins } from '../../lib/lwwTimestamp.js';
+import { audioRevisionOf } from '../../lib/musicVideoSongAudio.js';
 import { stripMusicVideoLocalRenderPins } from '../../lib/syncWire.js';
 import { persistedRenderPinFields } from '../../lib/renderTargets.js';
 import { sanitizeProjectForSync } from '../../lib/projectStoreKit.js';
@@ -333,6 +334,7 @@ export function cloneProjectRecord(source, {
     renderingOn: null,
     renderPartialFilename: null,
     renderResume: null,
+    renderAudioRevision: null,
     deleted: false,
     deletedAt: null,
   };
@@ -498,6 +500,9 @@ export function applyProjectPatch(project, patch) {
     audioAnalysis: null,
     midiTranscription: null,
     scenes,
+    // A render started against the old song must not settle this project as
+    // complete (#15154): it compares the revision it started with on settle.
+    audioRevision: audioRevisionOf(project) + 1,
   });
 }
 

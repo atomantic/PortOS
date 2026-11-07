@@ -40,6 +40,16 @@ export function assertSongAudioCurrent(project, masterFilename) {
   if (change) throw new ServerError(songAudioChangeMessage(change), { status: 409, code: 'SONG_AUDIO_CHANGED', context: change });
 }
 
+/**
+ * The project's audio revision (#15154): bumped by every change of its audio
+ * source, so a final render started against an older song can tell. A record
+ * written before the field existed is revision 0; so is any malformed value.
+ */
+export const audioRevisionOf = (value) => {
+  const revision = value !== null && typeof value === 'object' ? value.audioRevision : value;
+  return Number.isInteger(revision) && revision > 0 ? revision : 0;
+};
+
 /** The patch that adopts the current master as the basis of the timing the director chose to keep. */
 export function keepSongTimingPatch(project, currentMasterFilename) {
   return {

@@ -33,6 +33,8 @@ import { getSettings } from '../settings.js';
 import { withStyleSnapshots } from './styleSnapshots.js';
 import { queueProjectCatalogLinkSync } from './catalogLinks.js';
 import { labelProjectReferences } from './referenceLabels.js';
+import { musicVideoEvents } from './events.js';
+import { audioRevisionOf } from '../../lib/musicVideoSongAudio.js';
 
 // Shared dispatcher (#2899). ensureSchema() runs inside the selector (mirroring
 // memoryBackend.js) so the backend is self-sufficient regardless of boot ordering.
@@ -246,6 +248,8 @@ export async function updateProject(id, patch) {
   if (!castChanged && !Array.isArray(resolved.scenes)) {
     const next = await backend.updateProject(id, resolved);
     emitRecordUpdated('musicVideoProject', id);
+    // The render listener compares its job's revision with the row's itself.
+    if ('trackId' in resolved || 'uploadedAudioFilename' in resolved) announceAudioChange(id, next);
     return nameReferences(await withCatalogDescriptions(next));
   }
   const { applyProjectPatch } = await import('./projectsLogic.js');
@@ -655,8 +659,12 @@ export function mutateProjectRecord(id, transform, options = {}) {
   return mutateProjectRecordAdmitted(id, transform, options);
 }
 
+// A changed song cancels this instance's render of the old one (render.js).
+const announceAudioChange = (projectId, project) => musicVideoEvents.emit('audio-changed', { projectId, project });
+
 async function mutateProjectRecordAdmitted(id, transform, options = {}, mutate = null) {
   let dropped = null;
+  let audioChanged = false;
   let catalogRecords = [];
   let descriptions = null;
   const write = mutate || (await selectBackend()).mutateProjectRecord;
@@ -683,9 +691,11 @@ async function mutateProjectRecordAdmitted(id, transform, options = {}, mutate =
     const next = descriptions ? descriptions.preserveUnchangedDescriptionSnapshots(stored, current, synced.project, options.commitSubjectIds) : synced.project;
     await assertNewMediaSelections(stored, next);
     dropped = { project: stored, assets: droppedTakeAssets(stored, next) };
+    audioChanged = audioRevisionOf(next) !== audioRevisionOf(stored);
     return { ...outcome, project: retainMusicVideoDependencies(stored, next) };
   });
   emitRecordUpdated('musicVideoProject', id);
+  if (audioChanged) announceAudioChange(id, outcome.project);
   // A cut shot, a merge or a re-plan drops takes from the board: they stay findable in the project's collection.
   if (dropped?.assets.length) await fileMusicVideoMedia(dropped.project, dropped.assets);
   if (descriptions) {
