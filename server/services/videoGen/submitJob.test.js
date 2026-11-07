@@ -32,7 +32,6 @@ const mocks = vi.hoisted(() => ({
   unlink: vi.fn(async () => {}),
   musicVideoClipCastReferences: vi.fn(async () => []),
   musicVideoClipReferences: vi.fn(async () => []),
-  musicVideoClipReferences: vi.fn(async () => []),
 }));
 
 vi.mock('../catalogDB.js', () => ({ getIngredient: mocks.getIngredient, listMediaForIngredient: mocks.listMediaForIngredient }));
