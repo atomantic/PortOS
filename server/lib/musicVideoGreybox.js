@@ -21,6 +21,9 @@ export function castAndSetsPendingGreyboxSetIds(stage, liveCaptures = {}) {
 
 export const castAndSetsGreyboxPending = (stage, liveCaptures) => castAndSetsPendingGreyboxSetIds(stage, liveCaptures).length > 0;
 
+/** The greybox images a render sends, plate (or capture) first, then the optional blocking layout. */
+export const musicVideoGreyboxReferences = (greybox) => [greybox?.reference, greybox?.blocking].filter(Boolean);
+
 /** Resolve only the explicitly selected camera, never a replacement plate. Browser-safe. */
 export function musicVideoGreyboxReference(project, scene, places = {}) {
   const selected = scene?.setReference;
@@ -38,10 +41,20 @@ export function musicVideoGreyboxReference(project, scene, places = {}) {
   const sendable = (m) => !m.deleted && m.kind === 'reference' && /^[^/\\]+\.(png|jpe?g|webp)$/i.test(m.mediaKey);
   // The camera's finished photo plate wins over its flat capture; a plate no longer attached falls back.
   const plate = shot.plate && entry.media?.find((m) => sendable(m) && m.mediaKey === shot.plate);
-  const capture = plate || entry.media?.find((m) => sendable(m) && m.role === `${GREYBOX_SHOT_ROLE_PREFIX}${shot.id}`);
+  const flat = entry.media?.find((m) => sendable(m) && m.role === `${GREYBOX_SHOT_ROLE_PREFIX}${shot.id}`);
+  const capture = plate || flat;
   if (!capture) return fail('the saved shot has no capture');
+  const label = `${subject.name} · ${shot.label}`;
+  // Behind a plate, the flat capture still shows where the camera's figures stand
+  // and which way they face. On unless the shot turns it off (`blocking: false`).
+  const blockingAvailable = Boolean(plate && flat) && Array.isArray(shot.figures) && shot.figures.length > 0;
+  const blocking = blockingAvailable && selected.blocking !== false
+    ? { id: `mvr-greybox-blocking-${shot.id}`, imageId: flat.mediaKey, role: 'blocking', label: `${label} blocking`, greybox: true, blocking: true }
+    : null;
   return {
-    reference: { id: `mvr-greybox-${shot.id}`, imageId: capture.mediaKey, role: 'set', label: `${subject.name} · ${shot.label}`, greybox: true, ...(plate ? { plate: true } : {}) },
+    reference: { id: `mvr-greybox-${shot.id}`, imageId: capture.mediaKey, role: 'set', label, greybox: true, ...(plate ? { plate: true } : {}) },
+    ...(blocking ? { blocking } : {}),
+    blockingAvailable,
     promptAdditions: greyboxFigurePromptLines(greybox, shot).map((text, i) => ({ id: `greybox-figure-${i}`, label: `Greybox figure ${i + 1}`, text })),
   };
 }
