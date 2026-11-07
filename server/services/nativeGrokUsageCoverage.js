@@ -33,6 +33,8 @@ export async function getNativeGrokUsageCoverage({ home, sessionsRoot, limits: o
     firstObservedAt: null, lastObservedAt: null, retention: 'unknown' };
   const nativeUsageCoverage = { validSnapshots: 0, invalidSnapshots: 0, sessionsWithoutUsage: 0 };
   const projections = [];
+  // Vendor-flagged known under-count (subagent usage not applied); counters stay in the total.
+  let incompleteTurns = 0;
   const started = Date.now();
   let bytes = 0;
   let entries = 0;
@@ -68,6 +70,7 @@ export async function getNativeGrokUsageCoverage({ home, sessionsRoot, limits: o
         if (!coverage.firstObservedAt || at < coverage.firstObservedAt) coverage.firstObservedAt = at;
         if (!coverage.lastObservedAt || at > coverage.lastObservedAt) coverage.lastObservedAt = at;
       }
+      if (turn.usageIsIncomplete === true) incompleteTurns++;
       const recordKey = hash(['portos-grok-session-turn/1', snapshot.sessionId, turn.turnNumber]);
       projections.push({ records: [{ recordKey, values, at, costUsdTicks: counter(turn.costUsdTicks) ? turn.costUsdTicks : null,
         costConflict: false, conflict: false, inconsistent: !valid }] });
@@ -138,6 +141,7 @@ export async function getNativeGrokUsageCoverage({ home, sessionsRoot, limits: o
     source: 'grok:persisted-session-usage', validator: 'grok-persisted-turns/1',
     recordProjection: { version: 1, identityScheme: 'sha256-grok-session-turn/1', truncated: coverage.records > GROK_USAGE_RECORD_LIMIT,
       records: records.slice(0, GROK_USAGE_RECORD_LIMIT) },
-    cost: union.cost, findings: union.findings,
+    cost: union.cost,
+    findings: incompleteTurns ? [...union.findings, 'native-usage-incomplete'] : union.findings,
   };
 }
