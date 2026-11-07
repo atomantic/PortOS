@@ -36,7 +36,7 @@ const placeSubjects = (project) => (project?.concept?.subjects || []).filter((su
  * The place a shot is set in: its picked set, else the first place among the
  * references it sends. null when it shows no place of the video.
  */
-function shotPlaceId(project, scene) {
+export function musicVideoShotPlaceId(project, scene) {
   const places = placeSubjects(project);
   if (!places.length || !scene) return null;
   const isPlace = (id) => places.some((place) => place.id === id);
@@ -50,7 +50,7 @@ function shotPlaceId(project, scene) {
 
 /** The route stop a shot is on: `{ map, stop, index }`, or null. The first map naming its place wins. */
 function routeMapStopForShot(project, scene) {
-  const placeId = shotPlaceId(project, scene);
+  const placeId = musicVideoShotPlaceId(project, scene);
   if (!placeId) return null;
   for (const map of projectRouteMaps(project)) {
     const index = (map.stops || []).findIndex((stop) => stop.subjectId === placeId);
@@ -100,7 +100,7 @@ export function draftRouteMapStops(project, { fromShot = 1, toShot = Infinity, n
   const stops = [];
   for (const { scene, number } of orderedShots(project)) {
     if (number < fromShot || number > toShot) continue;
-    const placeId = shotPlaceId(project, scene);
+    const placeId = musicVideoShotPlaceId(project, scene);
     if (!placeId || seen.has(placeId)) continue;
     seen.add(placeId);
     stops.push({ id: newId(), subjectId: placeId, note: '' });

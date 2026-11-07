@@ -878,7 +878,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // v48 = `scenes[].setReference.blocking: false` (a shot that turns off its camera's figure
   // blocking image), which a v47 strict set reference schema rejects. Optional, no backfill:
   // absent sends the blocking layout whenever the camera has figures and a photo plate.
-  musicVideoProjects: 48,
+  // v49 = the greybox previz (`previz`: cuts over the song and per-set blocking tracks), which a v48
+  // strict project update schema rejects. Optional, no backfill: absent means no previz.
+  musicVideoProjects: 49,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

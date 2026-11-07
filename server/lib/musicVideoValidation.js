@@ -27,6 +27,7 @@ import { executionOptionsSchema } from './aiToolkit/internal/executionOptionsVal
  */
 
 import { z } from 'zod';
+import { PREVIZ_CUTS_MAX, PREVIZ_KEYS_MAX, PREVIZ_POSES, PREVIZ_TRACKS_MAX, PREVIZ_VISIBLE_MAX } from './musicVideoPrevizLimits.js';
 import { MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX } from './musicVideoSubjectLimits.js';
 export const musicVideoDcpRequestSchema = z.object({ grade: z.enum(['rec709', 'rec1886']), renderHistoryId: z.string().min(1), sourceSha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 import { GROK_VIDEO_DURATIONS } from './grokVideoClip.js';
@@ -278,6 +279,37 @@ export const musicVideoCameraSchema = z.object({
   owner: z.string().trim().max(120).optional(),
   // How this camera behaves in the story, e.g. who borrows it, or that nobody ever looks at it.
   rule: z.string().trim().max(1000).optional(),
+}).strict();
+// The greybox previz: blocking over the song, played over each place's greybox (lib/musicVideoPreviz.js).
+const previzSec = z.number().finite().min(0).max(36000);
+const previzCoord = z.number().finite().min(-1000).max(1000);
+const previzSubjectId = z.string().min(1).max(64);
+export const musicVideoPrevizSchema = z.object({
+  cuts: z.array(z.object({
+    id: z.string().min(1).max(64),
+    // A linked shot; its live timing wins over the cut's own.
+    sceneId: z.string().min(1).max(128).nullable().optional(),
+    startSec: previzSec,
+    endSec: previzSec,
+    placeSubjectId: previzSubjectId.nullable().optional(),
+    viewShotId: z.string().min(1).max(GREYBOX_SHOT_ID_MAX).regex(GREYBOX_SHOT_ID_PATTERN).nullable().optional(),
+    holderSubjectId: previzSubjectId.nullable().optional(),
+    // null = everyone on the set except the holder.
+    visibleSubjectIds: z.array(previzSubjectId).max(PREVIZ_VISIBLE_MAX).nullable().optional(),
+    aimSubjectId: previzSubjectId.nullable().optional(),
+  }).strict().refine((cut) => cut.endSec > cut.startSec, { message: 'A previz cut must end after it starts' })).max(PREVIZ_CUTS_MAX),
+  tracks: z.array(z.object({
+    subjectId: previzSubjectId,
+    placeSubjectId: previzSubjectId,
+    keys: z.array(z.object({
+      timeSec: previzSec,
+      position: z.tuple([previzCoord, previzCoord, previzCoord]),
+      facingDegrees: z.number().finite().min(-36000).max(36000),
+      pose: z.enum(PREVIZ_POSES).optional(),
+    }).strict()).min(1).max(PREVIZ_KEYS_MAX)
+      .refine((keys) => keys.every((key, i) => i === 0 || key.timeSec > keys[i - 1].timeSec), { message: 'Track key times must strictly increase' }),
+  }).strict()).max(PREVIZ_TRACKS_MAX)
+    .refine((tracks) => new Set(tracks.map((t) => `${t.placeSubjectId}\u0000${t.subjectId}`)).size === tracks.length, { message: 'One track per person per set' }),
 }).strict();
 // A path through several of the video's places, in travel order (lib/musicVideoRouteMaps.js).
 export const musicVideoRouteMapSchema = z.object({
@@ -1788,6 +1820,7 @@ export const musicVideoProjectUpdateSchema = z.object({
   pacing: musicVideoPacingSchema.nullable().optional(),
   cameras: z.array(musicVideoCameraSchema).max(SHOT_CAMERA_MAX).optional(),
   routeMaps: z.array(musicVideoRouteMapSchema).max(ROUTE_MAP_MAX).optional(),
+  previz: musicVideoPrevizSchema.nullable().optional(),
   composition: musicVideoCompositionSchema.nullable().optional(),
   soundBed: musicVideoSoundBedSchema.nullable().optional(),
   // The finishing film look (lib/filmLook.js); null = none.

@@ -18,6 +18,7 @@ import { FINISHED_OUTSIDE_RERENDER_NOTE, finishedOutside, finishedOutsideCovers 
 import { coldOpenScenes, normalizePreMusic, songScenes } from '../../../server/lib/musicVideoColdOpen.js';
 import { shotCameraLabel } from '../../../server/lib/cameraMovements.js';
 import { shotSheetDoneProgress } from '../../../server/lib/musicVideoShotSheet.js';
+import { projectPreviz, previzCoversShots } from '../../../server/lib/musicVideoPreviz.js';
 
 /**
  * The steps of a music video, in the order the director decides them: the
@@ -34,6 +35,7 @@ export const MUSIC_VIDEO_STAGES = [
   { id: 'setup', label: 'Song', title: 'Song', doneWhen: 'Done when the track is analyzed and every lyric word is timed to the vocal.' },
   { id: 'board', label: 'Storyboard', title: 'Storyboard', doneWhen: 'Done when timed shots cover the whole song, each with its action, staging, camera and lyric.' },
   { id: 'cast-sets', label: 'Look', title: 'Look', doneWhen: 'Done when the art direction is written, a visual guide is chosen, and you approve it.' },
+  { id: 'previz', label: 'Previz', title: 'Previz', optional: true, doneWhen: 'Done when every shot has a greybox previz cut; this step is optional.' },
   { id: 'produce', label: 'Shots', title: 'Shots', doneWhen: 'Done when the shots and composition are ready.' },
   { id: 'review', label: 'Final render', title: 'Final render', doneWhen: 'Done when the full video is rendered from the approved plan and is up to date.' },
   { id: 'publish', label: 'Publish', title: 'Publish', doneWhen: 'Done when every platform you turned on has a post.' },
@@ -187,7 +189,8 @@ export function boardJobEstimate(project) {
  * then each finished draft excerpt, newest first. `leadWith` picks the
  * ordering: `"final"` (default) as above; `"drafts"` (Final render stage)
  * puts the drafts before the composition; `"storyboard"` (Plan and Shots
- * stages) puts the live document, then the animatic, first. A final render whose
+ * stages) puts the live document, then the animatic, first; `"previz"` (Previz
+ * stage) puts the greybox previz first. A final render whose
  * inputs changed is labelled out of date. Last comes the storyboard animatic —
  * the song under each shot's frame or card — so a project with a track and
  * shots always has something to watch — and after it the lyric timing
@@ -216,6 +219,12 @@ export function listPreviewSources(project, { finalVideoSrc = null, leadWith = '
     // clip covers only its own range, so most shots could not be played from it.
     if (leadWith === 'storyboard') sources.splice(live ? 1 : 0, 0, animatic);
     else sources.push(animatic);
+  }
+  // The song over the live Three.js greybox, cut to each shot's camera: blocking is watched before anything renders.
+  if (projectHasAudio(project) && projectPreviz(project)) {
+    const previz = { id: 'previz', kind: 'previz', label: 'Greybox previz' };
+    if (leadWith === 'previz') sources.unshift(previz);
+    else sources.push(previz);
   }
   // The aligned words over a plain frame, for checking timing before there is any picture.
   if (projectHasAudio(project) && project.audioAnalysis
@@ -445,6 +454,8 @@ export function deriveStages(project, readiness = project?.productionReadiness, 
     'cast-sets': castDone,
     // Reopened for rework, the storyboard waits for Approve storyboard whatever else is done.
     board: (planned || shotsPlanned) && !project?.storyboardReopenedAt,
+    // Optional: every timed shot has a cut in the greybox previz.
+    previz: previzCoversShots(project),
     // Once the shot sheet is in use, Shots also waits on every shot being marked Done there.
     produce: shotsDone && shotSheetDoneProgress(project)?.all !== false,
     // A render made before later scene edits no longer counts as the final video.
@@ -455,7 +466,7 @@ export function deriveStages(project, readiness = project?.productionReadiness, 
   // Finished outside PortOS: the steps it made elsewhere count as done, with no approval to go stale.
   const external = !!finishedOutside(project);
   if (external) for (const id of Object.keys(done)) if (finishedOutsideCovers(project, id)) done[id] = true;
-  if (external) done.story = true;
+  if (external) { done.story = true; done.previz = true; }
   const blocked = {
     'cast-sets': castStopped,
     produce: !!run && RUN_BLOCKED_STATUSES.has(run.status),
@@ -1243,7 +1254,9 @@ export function stepNotes(project, readiness = project?.productionReadiness, pub
     : drafts ? `${formatCount(drafts)} ${drafts === 1 ? 'draft' : 'drafts'} to watch` : '';
   const posts = publishPlatformProgress(project, publish);
   const publishNote = posts.total ? `${formatCount(posts.posted)} of ${formatCount(posts.total)} posted` : posts.posted ? 'Posted' : '';
-  return { setup: song, story: project.concept?.prompt?.trim() ? 'Concept written' : '', 'cast-sets': look, board, produce: make, review, publish: publishNote };
+  const cuts = projectPreviz(project)?.cuts.length || 0;
+  const previz = cuts ? `${formatCount(cuts)} cut${cuts === 1 ? '' : 's'}` : '';
+  return { setup: song, story: project.concept?.prompt?.trim() ? 'Concept written' : '', 'cast-sets': look, board, previz, produce: make, review, publish: publishNote };
 }
 
 /**

@@ -132,7 +132,7 @@ describe('deriveStages / deriveNextAction', () => {
     expect(deriveStages(allDone).current).toBe('review');
 
     const finished = { ...ready, renderHistoryId: 'rh-1' };
-    expect(stateOf(finished)).toEqual({ setup: 'done', story: 'todo', 'cast-sets': 'done', board: 'done', produce: 'done', review: 'done', publish: 'active' });
+    expect(stateOf(finished)).toEqual({ setup: 'done', story: 'todo', 'cast-sets': 'done', board: 'done', previz: 'todo', produce: 'done', review: 'done', publish: 'active' });
     // #9281: a rendered project moves on to the release.
     expect(deriveNextAction(finished)).toMatchObject({ id: 'goto-publish', kind: 'goto', stage: 'publish', label: 'Build the publishing kit' });
     // With the kit built, the header names one platform at a time: the next one not yet posted.
@@ -384,7 +384,7 @@ describe('stage route param', () => {
     expect(resolveStageParam('shots')).toBe('produce');
     expect(resolveStageParam('plan')).toBe('board');
     expect(resolveStageParam('storyboard')).toBe('board');
-    expect(MUSIC_VIDEO_STAGES.map((stage) => stage.label)).toEqual(['Story', 'Song', 'Storyboard', 'Look', 'Shots', 'Final render', 'Publish']);
+    expect(MUSIC_VIDEO_STAGES.map((stage) => stage.label)).toEqual(['Story', 'Song', 'Storyboard', 'Look', 'Previz', 'Shots', 'Final render', 'Publish']);
     expect(deriveStages({ trackId: 't1', audioAnalysis: ANALYSIS, ...LYRICS }).current).toBe('board');
     for (const stage of MUSIC_VIDEO_STAGES) expect(stage.doneWhen).toMatch(/^Done when /);
   });
@@ -414,6 +414,20 @@ describe('listPreviewSources', () => {
     expect(listPreviewSources({ excerpts: [{ id: 'c', status: 'error' }] })).toEqual([]);
     expect(listPreviewSources({ excerpts })[0]).toMatchObject({ kind: 'video', src: '/data/videos/b.mp4', startSec: 10, endSec: 20 });
   });
+
+  // Catches the greybox previz missing from the player, or not leading on its own step.
+  it('offers the greybox previz once it has cuts, first on the Previz step, and marks the step done when every shot has a cut', () => {
+    const scenes = [{ sceneId: 's1', startSec: 0, endSec: 4 }, { sceneId: 's2', startSec: 4, endSec: 8 }];
+    const cut = (sceneId) => ({ id: `cut-${sceneId}`, sceneId, startSec: 0, endSec: 4 });
+    const project = { trackId: 't1', scenes, previz: { cuts: [cut('s1')], tracks: [] } };
+    const ids = (opts) => listPreviewSources(project, opts).map((source) => source.id);
+    expect(ids()).toEqual(['animatic', 'previz']);
+    expect(ids({ leadWith: 'previz' })).toEqual(['previz', 'animatic']);
+    expect(listPreviewSources({ ...project, previz: { cuts: [], tracks: [] } }).map((source) => source.id)).toEqual(['animatic']);
+    const stateOf = (p) => deriveStages(p, null).stages.find((stage) => stage.id === 'previz').state;
+    expect(stateOf(project)).toBe('todo');
+    expect(stateOf({ ...project, previz: { cuts: [cut('s1'), cut('s2')], tracks: [] } })).toBe('done');
+  });
 });
 
 describe('describeProjectStatus', () => {
@@ -425,21 +439,21 @@ describe('describeProjectStatus', () => {
   it('names the step and flags the one waiting on the director', () => {
     const status = describeProjectStatus({ excerpts: [] },
       { progress: stages('cast-sets', { setup: 'done' }), nextAction: { id: 'review-production', stage: 'cast-sets' } });
-    expect(status).toEqual({ headline: 'Step 4 of 7: Look needs you', tone: 'warn', needsYouStage: 'cast-sets' });
+    expect(status).toEqual({ headline: 'Step 4 of 8: Look needs you', tone: 'warn', needsYouStage: 'cast-sets' });
     // A blocked step needs the director even with no approval to give.
     expect(describeProjectStatus({}, { progress: stages('produce', { produce: 'blocked' }) }))
-      .toMatchObject({ headline: 'Step 5 of 7: Shots needs you', needsYouStage: 'produce' });
+      .toMatchObject({ headline: 'Step 6 of 8: Shots needs you', needsYouStage: 'produce' });
   });
 
   it('names the step an approval sits on, even when an earlier step is still open', () => {
     // Song is not done yet, but the header asks for the art approval on Look.
     const status = describeProjectStatus({}, { progress: stages('setup'), nextAction: { id: 'review-production', stage: 'cast-sets' } });
-    expect(status).toMatchObject({ headline: 'Step 4 of 7: Look needs you', needsYouStage: 'cast-sets' });
+    expect(status).toMatchObject({ headline: 'Step 4 of 8: Look needs you', needsYouStage: 'cast-sets' });
     expect(describeProjectStatus({}, { progress: stages('setup'), nextAction: { id: 'approve-cast-sets', kind: 'run' } }).needsYouStage).toBe('cast-sets');
   });
 
   it('reads plainly when nothing waits on the director', () => {
-    expect(describeProjectStatus({}, { progress: stages('review') })).toEqual({ headline: 'Step 6 of 7: Final render', tone: 'muted', needsYouStage: null });
+    expect(describeProjectStatus({}, { progress: stages('review') })).toEqual({ headline: 'Step 7 of 8: Final render', tone: 'muted', needsYouStage: null });
     const done = describeProjectStatus({ renderHistoryId: 'r1' }, { progress: { current: 'publish', stages: MUSIC_VIDEO_STAGES.map((stage) => ({ ...stage, state: 'done' })) } });
     expect(done).toEqual({ headline: 'Published', tone: 'ok', needsYouStage: null });
   });
@@ -696,7 +710,7 @@ describe('stepNotes', () => {
       devArtifacts: [{ id: 'g', title: 'Guide' }], productionReview: { draft: { guideArtifactId: 'g' } },
     };
     expect(stepNotes(project)).toEqual({
-      setup: '4:40 · 2 lyric lines', story: '', 'cast-sets': 'Visual guide chosen', board: '2 shots',
+      setup: '4:40 · 2 lyric lines', story: '', 'cast-sets': 'Visual guide chosen', board: '2 shots', previz: '',
       produce: '1 of 2 shots have their picture', review: '', publish: '',
     });
     // The step names the guide version the director settled on.
