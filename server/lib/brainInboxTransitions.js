@@ -15,6 +15,8 @@
  * accept no user transition.
  */
 
+import { isNonBlankStr as isAttemptId } from './textUtils.js';
+
 export const INBOX_EVENTS = Object.freeze({
   CLASSIFY_FILED: 'classify-filed',
   CLASSIFY_REVIEW: 'classify-review',
@@ -43,8 +45,6 @@ const USER_TRANSITIONS = Object.freeze({
 const IGNORE = Object.freeze({ action: 'ignore' });
 const CONFLICT = Object.freeze({ action: 'conflict' });
 const NOOP = Object.freeze({ action: 'noop' });
-
-const isAttemptId = (value) => typeof value === 'string' && value.length > 0;
 
 /**
  * @returns {{ action: 'apply', patch: object } | { action: 'ignore' | 'conflict' | 'noop' }}
