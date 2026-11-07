@@ -78,6 +78,24 @@ describe('native usage history', () => {
     });
   });
 
+  it('reads an unchanged fork parent during an incremental Codex pass, so a new fork never re-counts its replay', async () => {
+    const call = (at, total, last) => ({ timestamp: at, type: 'event_msg', payload: { type: 'token_count', info: { total_token_usage: total, last_token_usage: last } } });
+    await write(join(home, '.codex', 'sessions', '2026', '07', '10', 'parent.jsonl'), jsonl([
+      { type: 'session_meta', payload: { id: 'parent', model: 'example-codex' } },
+      call('2026-07-10T01:00:00.000Z', codexTotal(200, 0, 20), codexTotal(200, 0, 20)),
+    ]), NOW - 10 * 86_400_000);
+    await history.NATIVE_USAGE_STORES.codex.refresh({ home, force: true, now: NOW });
+    await write(join(home, '.codex', 'sessions', '2026', '07', '20', 'fork.jsonl'), jsonl([
+      { type: 'session_meta', payload: { id: 'fork', forked_from_id: 'parent', model: 'example-codex' } },
+      { type: 'session_meta', payload: { id: 'parent', model: 'example-codex' } },
+      call('2026-07-20T01:00:00.000Z', codexTotal(200, 0, 20), codexTotal(200, 0, 20)),
+      call('2026-07-20T02:00:00.000Z', codexTotal(250, 0, 25), codexTotal(50, 0, 5)),
+    ]));
+    const result = await history.NATIVE_USAGE_STORES.codex.refresh({ home, force: true, now: NOW + 60_000 });
+    expect(result.days['2026-07-20']).toEqual({ 'example-codex': { messages: 1, input: 50, output: 5, cacheRead: 0, cacheWrite: 0 } });
+    expect(result.days['2026-07-10']['example-codex']).toMatchObject({ messages: 1, input: 200 });
+  });
+
   it('reads Antigravity planner steps that carry tokens, once per step', async () => {
     const step = (index, at, tokens) => ({ type: 'PLANNER_RESPONSE', step_index: index, created_at: at, content: 'SYNTHETIC', ...tokens });
     await write(join(home, '.gemini', 'antigravity-cli', 'brain', 'conversation-a', '.system_generated', 'logs', 'transcript.jsonl'), jsonl([

@@ -53,9 +53,15 @@ describe('overlayNativeUsage', () => {
       'model-b': { ...counts(30, 10), source: 'estimate' },
     } } } } };
     const out = overlayNativeUsage(ledger, { stores: { claude: store({ '2026-07-10': { 'model-a': native(500, 50) } }) }, providers });
-    const models = out['2026-07-10'].byProvider['claude-code'].byModel;
-    expect(models['model-a']).toMatchObject({ tokensIn: 500, tokensOut: 50, source: 'measured' });
-    expect(models['model-b']).toMatchObject({ tokensIn: 30, tokensOut: 10, source: 'estimate' });
+    const provider = out['2026-07-10'].byProvider['claude-code'];
+    expect(provider.byModel['model-a']).toMatchObject({ tokensIn: 500, tokensOut: 50, source: 'measured' });
+    expect(provider.byModel['model-b']).toMatchObject({ tokensIn: 30, tokensOut: 10, source: 'estimate' });
+    // Provider totals match its models, whether the provider was unlabeled or mixed.
+    expect(provider).toMatchObject({ tokensIn: 530, tokensOut: 60 });
+    const mixed = structuredClone(ledger);
+    mixed['2026-07-10'].byProvider['claude-code'].source = 'mixed';
+    expect(overlayNativeUsage(mixed, { stores: { claude: store({ '2026-07-10': { 'model-a': native(500, 50) } }) }, providers })['2026-07-10']
+      .byProvider['claude-code']).toMatchObject({ tokensIn: 530, tokensOut: 60 });
   });
 
   it('before coverage uses the app history only where it shows more than the ledger', () => {

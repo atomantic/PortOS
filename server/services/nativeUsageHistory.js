@@ -117,8 +117,7 @@ function codexCalls(entries) {
   return calls;
 }
 
-async function scanCodex({ from, home = homedir() }) {
-  const modifiedSince = from ? dayStartMs(from) : null;
+async function readCodexInventory(home, modifiedSince) {
   let inventory;
   for (let pass = 0; pass < CODEX_INDEXING_PASSES; pass += 1) {
     inventory = await readCodexAccountingSources({ home, modifiedSince });
@@ -126,13 +125,38 @@ async function scanCodex({ from, home = homedir() }) {
     await yieldToEventLoop();
   }
   const blocking = Object.keys(inventory.coverage.issues).filter((issue) => !TOLERATED_CODEX_ISSUES.has(issue));
-  if (blocking.length) return { incomplete: blocking.sort().join(', '), filesScanned: inventory.coverage.filesInspected };
+  return { inventory, incomplete: blocking.length ? blocking.sort().join(', ') : null };
+}
+
+async function loadCodexSessions(sources, wanted = null) {
   const sessions = [];
-  for (const session of inventory.sessions) {
+  for (const session of sources) {
+    // Inventory ids are the same hashed identity the records carry.
+    if (wanted && !wanted.has(session.id)) continue;
     const entries = await session.loadRecords();
     const meta = entries.find((entry) => entry.type === 'session_meta')?.payload;
     sessions.push({ id: meta?.id ?? session.id, forkedFrom: meta?.forkedFrom ?? null, calls: codexCalls(entries) });
     await yieldToEventLoop();
+  }
+  return sessions;
+}
+
+async function scanCodex({ from, home = homedir() }) {
+  const modifiedSince = from ? dayStartMs(from) : null;
+  const { inventory, incomplete } = await readCodexInventory(home, modifiedSince);
+  if (incomplete) return { incomplete, filesScanned: inventory.coverage.filesInspected };
+  const sessions = await loadCodexSessions(inventory.sessions);
+  // An incremental pass skips an unchanged parent while still reading its new
+  // fork; without the parent a replayed event would be counted (and the
+  // max-merge would keep it), so read the missing parents from the full inventory.
+  const known = new Set(sessions.map((session) => session.id));
+  const missing = new Set(sessions.map((session) => session.forkedFrom).filter((id) => id && !known.has(id)));
+  if (missing.size && modifiedSince != null) {
+    const full = await readCodexInventory(home, null);
+    if (full.incomplete) return { incomplete: full.incomplete, filesScanned: full.inventory.coverage.filesInspected };
+    const parents = await loadCodexSessions(full.inventory.sessions, missing);
+    // Parents only lend signatures: their own calls are outside this pass.
+    for (const parent of parents) sessions.push({ ...parent, signaturesOnly: true });
   }
   // Some older forks replay the parent's events under new timestamps; those
   // calls are the parent's and are already counted there.
@@ -140,6 +164,7 @@ async function scanCodex({ from, home = homedir() }) {
   const floor = from ? dayStartMs(from) : -Infinity;
   const days = {};
   for (const session of sessions) {
+    if (session.signaturesOnly) continue;
     const parent = session.forkedFrom ? signatures.get(session.forkedFrom) : null;
     for (const call of session.calls) {
       if (call.ms < floor || parent?.has(call.signature)) continue;

@@ -55,6 +55,25 @@ function estimatedShare(bucket) {
   return Object.fromEntries(TOKEN_FIELDS.map((field) => [field, all ? num(bucket?.[field]) : 0]));
 }
 
+/**
+ * What a provider bucket keeps: its models' estimated shares, plus the estimated
+ * part of any counts no model row carries. Provider totals then always match
+ * `byModel`, which the report prices and reconciles against.
+ */
+function keptShare(bucket) {
+  const models = Object.values(bucket?.byModel || {});
+  if (!models.length) return estimatedShare(bucket);
+  const modelKeeps = models.map(estimatedShare);
+  const residualEstimated = bucket?.estimated
+    ? (field) => num(bucket.estimated[field]) - models.reduce((sum, model) => sum + estimatedShare(model)[field], 0)
+    : (field) => (bucket?.source === 'estimate' || bucket?.source == null ? Infinity : 0);
+  return Object.fromEntries(TOKEN_FIELDS.map((field) => {
+    const kept = modelKeeps.reduce((sum, keep) => sum + keep[field], 0);
+    const residual = Math.max(0, num(bucket?.[field]) - models.reduce((sum, model) => sum + num(model[field]), 0));
+    return [field, kept + Math.max(0, Math.min(residual, residualEstimated(field)))];
+  }));
+}
+
 /** The CLI/TUI providers whose sessions a family's store already counts, and the one to report them under. */
 function nativeFamilyProviders(providers, family) {
   const members = (providers || []).filter((provider) => SESSION_TYPES.has(provider?.type) && familyForProvider(provider) === family);
@@ -70,7 +89,7 @@ function applyFamilyDay(day, nativeModels, { ids, target }, mode) {
   const buckets = Object.entries(day.byProvider || {}).filter(([id]) => ids.has(id));
   if (mode === 'larger') {
     const ledgerTotal = buckets.reduce((sum, [, bucket]) => sum + billed(bucket), 0);
-    const estimatedTotal = buckets.reduce((sum, [, bucket]) => sum + billed(estimatedShare(bucket)), 0);
+    const estimatedTotal = buckets.reduce((sum, [, bucket]) => sum + billed(keptShare(bucket)), 0);
     const nativeTotal = native.reduce((sum, [, counts]) => sum + billed(counts), 0);
     if (nativeTotal + estimatedTotal <= ledgerTotal) return false;
   }
@@ -78,7 +97,7 @@ function applyFamilyDay(day, nativeModels, { ids, target }, mode) {
   day.byProvider ??= {};
   // Keep only the estimated share of every family bucket, per model and in total.
   for (const [, bucket] of buckets) {
-    const keep = estimatedShare(bucket);
+    const keep = keptShare(bucket);
     for (const model of Object.values(bucket.byModel || {})) {
       const modelKeep = estimatedShare(model);
       for (const field of TOKEN_FIELDS) if (model[field] != null || modelKeep[field]) model[field] = modelKeep[field];
