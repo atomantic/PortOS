@@ -5,7 +5,7 @@ import { getProviderById } from './providers.js';
 import { buildPrompt } from './promptService.js';
 import { extractJson } from '../lib/jsonExtract.js';
 import { DIGITAL_TWIN_DIR, callProviderAI, now } from './digital-twin-helpers.js';
-import { loadMeta, saveMeta, digitalTwinEvents } from './digital-twin-meta.js';
+import { loadMeta, mutateMeta, digitalTwinEvents } from './digital-twin-meta.js';
 import { getDocuments } from './digital-twin-documents.js';
 import { getDigitalTwinForPrompt } from './digital-twin-context.js';
 import { ENRICHMENT_CATEGORIES } from './digital-twin-constants.js';
@@ -329,35 +329,36 @@ export async function getTraits() {
  * Update traits manually (partial update)
  */
 export async function updateTraits(updates) {
-  const meta = await loadMeta();
-  const currentTraits = meta.traits || {};
+  let newTraits;
+  await mutateMeta((meta) => {
+    const currentTraits = meta.traits || {};
 
-  const newTraits = {
-    ...currentTraits,
-    lastAnalyzed: new Date().toISOString(),
-    analysisVersion: 'manual'
-  };
-
-  // Merge Big Five if provided
-  if (updates.bigFive) {
-    newTraits.bigFive = { ...currentTraits.bigFive, ...updates.bigFive };
-  }
-
-  // Replace values hierarchy if provided
-  if (updates.valuesHierarchy) {
-    newTraits.valuesHierarchy = updates.valuesHierarchy;
-  }
-
-  // Merge communication profile if provided
-  if (updates.communicationProfile) {
-    newTraits.communicationProfile = {
-      ...currentTraits.communicationProfile,
-      ...updates.communicationProfile
+    newTraits = {
+      ...currentTraits,
+      lastAnalyzed: new Date().toISOString(),
+      analysisVersion: 'manual'
     };
-  }
 
-  meta.traits = newTraits;
-  await saveMeta(meta);
+    // Merge Big Five if provided
+    if (updates.bigFive) {
+      newTraits.bigFive = { ...currentTraits.bigFive, ...updates.bigFive };
+    }
+
+    // Replace values hierarchy if provided
+    if (updates.valuesHierarchy) {
+      newTraits.valuesHierarchy = updates.valuesHierarchy;
+    }
+
+    // Merge communication profile if provided
+    if (updates.communicationProfile) {
+      newTraits.communicationProfile = {
+        ...currentTraits.communicationProfile,
+        ...updates.communicationProfile
+      };
+    }
+
+    meta.traits = newTraits;
+  });
   digitalTwinEvents.emit('traits:updated', newTraits);
 
   return newTraits;
@@ -415,8 +416,7 @@ export async function analyzeTraits(providerId, model, forceReanalyze = false) {
     analysisVersion: '1.0'
   };
 
-  meta.traits = traits;
-  await saveMeta(meta);
+  await mutateMeta((latest) => { latest.traits = traits; });
   digitalTwinEvents.emit('traits:analyzed', traits);
 
   // Recalculate confidence with updated traits
@@ -464,7 +464,7 @@ export async function calculateConfidence(providerId, model) {
 
   // If no provider specified, do local calculation
   if (!providerId || !model) {
-    return calculateLocalConfidence(twinContent, currentTraits, meta);
+    return calculateLocalConfidence(twinContent, currentTraits);
   }
 
   const prompt = await buildPrompt('twin-confidence-analyzer', {
@@ -474,12 +474,12 @@ export async function calculateConfidence(providerId, model) {
 
   if (!prompt) {
     // Fall back to local calculation
-    return calculateLocalConfidence(twinContent, currentTraits, meta);
+    return calculateLocalConfidence(twinContent, currentTraits);
   }
 
   const provider = await getProviderById(providerId);
   if (!provider || !provider.enabled) {
-    return calculateLocalConfidence(twinContent, currentTraits, meta);
+    return calculateLocalConfidence(twinContent, currentTraits);
   }
 
   const result = await callProviderAI(provider, model, prompt);
@@ -492,8 +492,7 @@ export async function calculateConfidence(providerId, model) {
         lastCalculated: new Date().toISOString()
       };
 
-      meta.confidence = confidence;
-      await saveMeta(meta);
+      await mutateMeta((latest) => { latest.confidence = confidence; });
       digitalTwinEvents.emit('confidence:calculated', confidence);
 
       return { confidence };
@@ -501,7 +500,7 @@ export async function calculateConfidence(providerId, model) {
   }
 
   // Fall back to local calculation
-  return calculateLocalConfidence(twinContent, currentTraits, meta);
+  return calculateLocalConfidence(twinContent, currentTraits);
 }
 
 function parseConfidenceResponse(response, promptToStrip = '') {
@@ -520,7 +519,7 @@ function parseConfidenceResponse(response, promptToStrip = '') {
 /**
  * Calculate confidence locally without LLM (simpler heuristic-based)
  */
-async function calculateLocalConfidence(twinContent, traits, meta) {
+async function calculateLocalConfidence(twinContent, traits) {
   const contentLower = twinContent.toLowerCase();
   const documents = await getDocuments();
   const enabledDocs = documents.filter(d => d.enabled && d.category !== 'behavioral');
@@ -553,8 +552,7 @@ async function calculateLocalConfidence(twinContent, traits, meta) {
     lastCalculated: new Date().toISOString()
   };
 
-  meta.confidence = confidence;
-  await saveMeta(meta);
+  await mutateMeta((latest) => { latest.confidence = confidence; });
   digitalTwinEvents.emit('confidence:calculated', confidence);
 
   return { confidence, method: 'local' };

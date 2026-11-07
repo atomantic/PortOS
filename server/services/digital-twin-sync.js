@@ -987,17 +987,21 @@ async function applyMeta(remoteMeta) {
   return 1;
 }
 
-// Route through socialAccounts.js's own load/save (mirrors applyMeta) so the
-// service's cache stays fresh — a raw write would leave the UI serving pre-sync
-// data until the store's TTL lapses. saveAccounts updates the cache in place;
+// Route through socialAccounts.js's own store so its cache stays fresh — a raw
+// write would leave the UI serving pre-sync data until the store's TTL lapses.
 // notifyChanged emits the change event so the Digital Twin UI updates at once.
 async function applySocialAccounts(remoteSocial) {
   if (!isPlainObject(remoteSocial)) return 0;
-  const { loadAccounts, saveAccounts, notifyChanged } = await import('./socialAccounts.js');
-  const local = await loadAccounts();
-  const { merged, changed } = mergeSocialAccounts(local, remoteSocial);
-  if (!changed) return 0;
-  await saveAccounts(merged);
+  const { mutateAccounts, notifyChanged } = await import('./socialAccounts.js');
+  // Merge against the freshest state under the store's write queue so a local
+  // account edit landing mid-sync is not dropped.
+  let applied = false;
+  await mutateAccounts((local) => {
+    const { merged, changed } = mergeSocialAccounts(local, remoteSocial);
+    applied = changed;
+    return changed ? merged : local;
+  });
+  if (!applied) return 0;
   notifyChanged('sync');
   return 1;
 }
