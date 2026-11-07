@@ -22,11 +22,14 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   addMusicVideoSceneTake: vi.fn(),
   getMusicVideoSceneJobs: (...a) => getMusicVideoSceneJobs(...a),
 }));
-vi.mock('../services/apiMediaJobs', () => ({ getMediaJob: vi.fn(async () => ({ status: 'failed' })) }));
+const getMediaJob = vi.fn(async () => ({ status: 'failed' }));
+vi.mock('../services/apiMediaJobs', () => ({ getMediaJob: (...a) => getMediaJob(...a) }));
 const generateImage = vi.fn(async () => ({ status: 'queued', jobId: 'new-job' }));
 vi.mock('../services/apiSystem.js', () => ({ generateImage: (...a) => generateImage(...a) }));
 vi.mock('../services/apiImageVideo.js', () => ({ generateVideo: vi.fn() }));
 vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn(), info: vi.fn(), success: vi.fn() } }));
+const { default: toast } = await import('../components/ui/Toast');
+const toastError = toast.error;
 const listCatalogIngredientMedia = vi.fn();
 vi.mock('../services/apiCatalog.js', () => ({ listCatalogIngredientMedia: (...a) => listCatalogIngredientMedia(...a) }));
 
@@ -82,6 +85,81 @@ describe('useMusicVideoSceneMedia in-flight restore and failure chip (#10154)', 
     // A landed frame's attach event carries lastFailure: null and clears the chip.
     act(() => handlers.get('music-video:scene-image')({ projectId: 'p1', sceneId: 's1', referenceImageId: 'f.png', takes: [], lastFailure: null }));
     expect(applyScenePatch).toHaveBeenLastCalledWith('p1', 's1', { referenceImageId: 'f.png', takes: [], lastFailure: null });
+  });
+});
+
+describe('useMusicVideoSceneMedia socket reconnect reconcile (#15166)', () => {
+  beforeEach(() => { handlers.clear(); getMusicVideoSceneJobs.mockReset(); getMediaJob.mockReset(); toastError.mockClear(); });
+  afterEach(cleanup);
+
+  const IN_FLIGHT = { jobs: [{ jobId: 'job-a', lane: 'image', sceneId: 's1', status: 'running' }] };
+
+  // Mounts with one restored in-flight frame job, then reconnects with the server's next listing.
+  const reconnectWith = async (nextListing) => {
+    getMusicVideoSceneJobs.mockResolvedValueOnce(IN_FLIGHT);
+    const onReconciled = vi.fn();
+    const view = renderHook(() => useMusicVideoSceneMedia({ project, videoSettings: { settings: {} }, applyScenePatch: vi.fn(), onReconciled }));
+    await waitFor(() => expect(view.result.current.genScenes.s1).toBe(true));
+    getMusicVideoSceneJobs.mockResolvedValueOnce(nextListing);
+    await act(async () => { handlers.get('connect')(); });
+    return { ...view, onReconciled };
+  };
+
+  // Uniquely catches a spinner stranded forever by a terminal event lost in the disconnect gap.
+  it('clears a spinner whose job completed during the gap, then reloads the project', async () => {
+    getMediaJob.mockResolvedValue({ status: 'completed' });
+    const { result, onReconciled } = await reconnectWith({ jobs: [] });
+    await waitFor(() => expect(result.current.genScenes.s1).toBeUndefined());
+    expect(getMediaJob).toHaveBeenCalledWith('job-a');
+    expect(onReconciled).toHaveBeenCalledTimes(1);
+    expect(onReconciled).toHaveBeenCalledWith('p1');
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it('marks the scene failed with one failure toast when the job failed during the gap', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      getMediaJob.mockResolvedValue({ status: 'failed', error: 'CUDA out of memory' });
+      const { result } = await reconnectWith({ jobs: [] });
+      await waitFor(() => expect(result.current.genScenes.s1).toBeUndefined());
+      expect(result.current.failedScenes.frame.s1).toBe(true);
+      await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+      expect(toastError).toHaveBeenCalledTimes(1);
+      expect(toastError.mock.calls[0][0]).toContain('CUDA out of memory');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the spinner of a job the server still lists, and does not reload', async () => {
+    const { result, onReconciled } = await reconnectWith(IN_FLIGHT);
+    expect(getMediaJob).not.toHaveBeenCalled();
+    expect(result.current.genScenes.s1).toBe(true);
+    expect(onReconciled).not.toHaveBeenCalled();
+  });
+
+  it('keeps the spinner when an unlisted job is not terminal yet', async () => {
+    getMediaJob.mockResolvedValue({ status: 'running' });
+    const { result, onReconciled } = await reconnectWith({ jobs: [] });
+    expect(getMediaJob).toHaveBeenCalledWith('job-a');
+    expect(result.current.genScenes.s1).toBe(true);
+    expect(onReconciled).not.toHaveBeenCalled();
+  });
+
+  it('settles a tracked job once even when its live event arrives after the reconcile', async () => {
+    getMediaJob.mockResolvedValue({ status: 'completed' });
+    const { result, onReconciled } = await reconnectWith({ jobs: [] });
+    await waitFor(() => expect(result.current.genScenes.s1).toBeUndefined());
+    act(() => handlers.get('image-gen:completed')({ generationId: 'job-a' }));
+    expect(onReconciled).toHaveBeenCalledTimes(1);
+  });
+
+  it('unsubscribes the connect listener on unmount', async () => {
+    getMusicVideoSceneJobs.mockResolvedValue({ jobs: [] });
+    const { unmount } = setup();
+    expect(listeners.get('connect')?.size).toBe(1);
+    unmount();
+    expect(listeners.get('connect')?.size ?? 0).toBe(0);
   });
 });
 
