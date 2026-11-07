@@ -27,7 +27,7 @@ import { executionOptionsSchema } from './aiToolkit/internal/executionOptionsVal
  */
 
 import { z } from 'zod';
-import { PREVIZ_CUTS_MAX, PREVIZ_KEYS_MAX, PREVIZ_PAWN_COLOR_IDS, PREVIZ_POSES, PREVIZ_TRACKS_MAX, PREVIZ_VISIBLE_MAX } from './musicVideoPrevizLimits.js';
+import { PREVIZ_CAMERA_STYLES, PREVIZ_CUTS_MAX, PREVIZ_KEYS_MAX, PREVIZ_PAWN_COLOR_IDS, PREVIZ_POSES, PREVIZ_TRACKS_MAX, PREVIZ_VISIBLE_MAX } from './musicVideoPrevizLimits.js';
 import { MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX } from './musicVideoSubjectLimits.js';
 export const musicVideoDcpRequestSchema = z.object({ grade: z.enum(['rec709', 'rec1886']), renderHistoryId: z.string().min(1), sourceSha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 import { GROK_VIDEO_DURATIONS } from './grokVideoClip.js';
@@ -279,6 +279,8 @@ export const musicVideoCameraSchema = z.object({
   owner: z.string().trim().max(120).optional(),
   // How this camera behaves in the story, e.g. who borrows it, or that nobody ever looks at it.
   rule: z.string().trim().max(1000).optional(),
+  // How the camera moves in the greybox previz while it is a cut's camera (lib/musicVideoPreviz.js).
+  previzStyle: z.enum(PREVIZ_CAMERA_STYLES).optional(),
 }).strict();
 // The greybox previz: blocking over the song, played over each place's greybox (lib/musicVideoPreviz.js).
 const previzSec = z.number().finite().min(0).max(36000);

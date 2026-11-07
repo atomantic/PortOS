@@ -84,7 +84,7 @@ export default function PrevizPlayer({ project, audioUrl, seekRequest, collapsed
           ? <p className="flex h-full items-center justify-center p-4 text-center text-xs text-port-text-muted">{empty}</p>
           : <PrevizCanvas frame={frame} modelSrc={model ? `/data/models/${encodeURIComponent(model.mediaKey)}` : null} labelPortal={labelPortal} />}
         {frame && <p className="port-media-overlay-strong pointer-events-none absolute left-1 top-1 max-w-[90%] truncate rounded px-1 text-[10px]">
-          {[placeName, frame.actors.find((a) => a.holder)?.name ? `held by ${frame.actors.find((a) => a.holder).name}` : null].filter(Boolean).join(' · ')}
+          {[placeName, frame.storyCamera?.name, frame.actors.find((a) => a.holder)?.name ? `held by ${frame.actors.find((a) => a.holder).name}` : null].filter(Boolean).join(' · ')}
         </p>}
       </div>
       <ShotStepper scenes={scenes} time={time} onSeek={seekTo} onEditShot={onEditShot ? (sceneId) => { audioRef.current?.pause?.(); onEditShot(sceneId); } : null} keys />

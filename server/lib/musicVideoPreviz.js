@@ -273,18 +273,47 @@ export function previzCutVisibleIds(project, cut) {
     .map((track) => track.subjectId);
 }
 
+/** The story camera a cut shoots with (its linked shot's sheet camera), or null. */
+function previzCutStoryCamera(project, cut) {
+  const scene = cut?.sceneId ? (project?.scenes || []).find((entry) => entry.sceneId === cut.sceneId) : null;
+  const cameraId = scene?.shotSheet?.cameraId;
+  return cameraId ? (project?.cameras || []).find((camera) => camera?.id === cameraId) || null : null;
+}
+
+// Smooth, repeatable noise: a sum of sines, so a paused or re-seeked frame looks the same every time.
+const wobble = (t, seed) => Math.sin(t * 1.7 + seed) * 0.5 + Math.sin(t * 4.3 + seed * 2.1) * 0.3 + Math.sin(t * 9.1 + seed * 3.7) * 0.2;
+
+/** The camera after its story camera's previz style: handheld shake, documentary drift, or none. */
+function styledCamera(camera, style, t, riding) {
+  if (style !== 'handheld' && style !== 'documentary') return camera;
+  const handheld = style === 'handheld';
+  const amp = handheld ? (riding ? 0.07 : 0.035) : 0.02;
+  const speed = handheld ? 1 : 0.25;
+  const shake = (seed) => wobble(t * speed, seed) * amp;
+  return {
+    position: camera.position.map((v, i) => v + shake(i + 1)),
+    target: camera.target.map((v, i) => v + shake(i + 7) * (handheld ? 4 : 6)),
+  };
+}
+
 /**
  * Everything the player draws at song time `t`: the cut on screen, its place's
  * greybox, each person on that set (`visible` false for the holder and anyone
  * the cut leaves out), and the camera. A held camera rides on its holder at the
  * saved camera's height (else eye height) and looks at the aim target, else the
  * way the holder faces; an unheld camera stays on its saved greybox camera and
- * turns only to keep the aim target in frame. null between cuts.
+ * turns only to keep the aim target in frame. The cut's story camera (its shot
+ * sheet camera) sets the style: handheld shake, a still that holds the cut's
+ * first frame, or a slow documentary drift. null between cuts.
  */
-export function previzFrameAt(project, loadedPlaces, t) {
-  const entry = previzCutAt(project, t);
+export function previzFrameAt(project, loadedPlaces, songTime) {
+  const entry = previzCutAt(project, songTime);
   if (!entry) return null;
   const { cut, timing } = entry;
+  const storyCamera = previzCutStoryCamera(project, cut);
+  const style = storyCamera?.previzStyle || 'steady';
+  // A still camera shows its cut's first frame for the whole cut.
+  const t = style === 'still' ? timing.startSec : songTime;
   const greybox = cut.placeSubjectId ? previzPlaceGreybox(project, cut.placeSubjectId, loadedPlaces) : null;
   const view = (greybox?.shots || []).find((shot) => shot.id === cut.viewShotId) || null;
   const visible = new Set(previzCutVisibleIds(project, cut));
@@ -320,9 +349,10 @@ export function previzFrameAt(project, loadedPlaces, t) {
       : [0, 0, 0];
     camera = { position: [center[0], 1.6, center[2] + 6], target: aim || [center[0], 1.2, center[2]] };
   }
+  camera = styledCamera(camera, style, songTime, holder?.pose === 'ride');
   if (camera.position.every((v, i) => Math.abs(v - camera.target[i]) < 1e-6)) camera.target = [camera.target[0], camera.target[1], camera.target[2] + 1];
   return {
-    cut, timing, greybox, actors,
+    cut, timing, greybox, actors, style, storyCamera,
     camera: { ...camera, focalLengthMm: view?.focalLengthMm || 35, aspect: view?.aspect || '16:9' },
   };
 }

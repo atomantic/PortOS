@@ -83,3 +83,20 @@ it('gives every character a distinct named pawn color, keeps picks, and colors a
   expect(musicVideoProjectUpdateSchema.safeParse({ previz: { cuts: [], tracks: [], pawnColors: { 'c-bo': { figure: 'red' } } } }).success).toBe(true);
   expect(musicVideoProjectUpdateSchema.safeParse({ previz: { cuts: [], tracks: [], pawnColors: { 'c-bo': { figure: '#ff0000' } } } }).success).toBe(false);
 });
+
+// Catches a camera's previz style being ignored: a snapshot camera must hold one frame, a handheld one must shake.
+it('moves each cut like its story camera: still holds the first frame, handheld shakes, steady does not', () => {
+  const tracks = [{ subjectId: 'c-ana', placeSubjectId: 'p-street', keys: [{ timeSec: 0, position: [0, 0, 0], facingDegrees: 0, pose: 'stand' }, { timeSec: 4, position: [4, 0, 0], facingDegrees: 0, pose: 'stand' }] }];
+  const cut = { id: 'cut-s1', sceneId: 's1', startSec: 0, endSec: 4, placeSubjectId: 'p-street', viewShotId: 'wide', holderSubjectId: null, visibleSubjectIds: null, aimSubjectId: 'c-ana' };
+  const withStyle = (previzStyle) => ({ ...project([scene('s1', 0, 4, { cameraId: 'cam-vhs' })], { previz: { cuts: [cut], tracks } }), cameras: [{ id: 'cam-vhs', name: 'VHS camera', kind: 'in-world', previzStyle }] });
+  const still = withStyle('still');
+  expect(previzFrameAt(still, places, 3).actors[0].position).toEqual([0, 0, 0]);
+  expect(previzFrameAt(still, places, 3).camera).toEqual(previzFrameAt(still, places, 0).camera);
+  const steady = previzFrameAt(withStyle('steady'), places, 2).camera;
+  const shaky = previzFrameAt(withStyle('handheld'), places, 2).camera;
+  expect(steady.position).toEqual([0, 3, 10]);
+  expect(shaky.position).not.toEqual(steady.position);
+  expect(Math.max(...shaky.position.map((v, i) => Math.abs(v - steady.position[i])))).toBeLessThan(0.1);
+  expect(previzFrameAt(withStyle('handheld'), places, 2).camera).toEqual(shaky);
+  expect(musicVideoProjectUpdateSchema.safeParse({ cameras: [{ id: 'cam-vhs', name: 'VHS', kind: 'in-world', previzStyle: 'handheld' }] }).success).toBe(true);
+});

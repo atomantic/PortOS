@@ -24,3 +24,6 @@ export const PREVIZ_PAWN_COLORS = Object.freeze([
   { id: 'chrome', label: 'Chrome', hex: '#d9dde3' },
 ]);
 export const PREVIZ_PAWN_COLOR_IDS = Object.freeze(PREVIZ_PAWN_COLORS.map((color) => color.id));
+// How a story camera moves in the previz while it is a cut's camera: steady (as blocked), handheld
+// (wobble and shake, more when its holder rides), still (a snapshot: the cut's first frame held), documentary (slow drift).
+export const PREVIZ_CAMERA_STYLES = Object.freeze(['steady', 'handheld', 'still', 'documentary']);

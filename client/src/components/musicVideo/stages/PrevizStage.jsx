@@ -11,7 +11,7 @@ import { shotNumbers } from '../ShotStepper.jsx';
 import {
   backfillPrevizFromShots, previzCutProblems, previzPawnColors, previzCutTiming, previzCutVisibleIds, previzPlaceGreybox, projectPreviz,
 } from '../../../../../server/lib/musicVideoPreviz.js';
-import { PREVIZ_PAWN_COLORS } from '../../../../../server/lib/musicVideoPrevizLimits.js';
+import { PREVIZ_CAMERA_STYLES, PREVIZ_PAWN_COLORS } from '../../../../../server/lib/musicVideoPrevizLimits.js';
 
 export const PREVIZ_ANCHOR = 'mv-previz';
 const selectCls = 'min-h-[44px] min-w-0 max-w-full rounded border border-port-border bg-port-bg px-1.5 py-1 text-xs text-port-text sm:min-h-0';
@@ -49,6 +49,25 @@ function PawnColors({ project, characters, onChange }) {
               </select>
             </span>
           ))}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+const CAMERA_STYLE_LABELS = { steady: 'Steady', handheld: 'Handheld shake', still: 'Still (snapshot)', documentary: 'Documentary drift' };
+
+/** How each of the video's cameras moves in the previz while it shoots a cut. */
+function CameraStyles({ cameras, onChange }) {
+  return (
+    <ul className="flex min-w-0 flex-wrap gap-x-4 gap-y-1.5 text-xs" aria-label="Camera styles">
+      {cameras.map((camera) => (
+        <li key={camera.id} className="inline-flex min-w-0 items-center gap-1">
+          <label htmlFor={`mv-previz-style-${camera.id}`} className="font-medium text-port-text">{camera.name}</label>
+          <select id={`mv-previz-style-${camera.id}`} value={camera.previzStyle || 'steady'} className={selectCls}
+            onChange={(event) => onChange(camera.id, event.target.value)}>
+            {PREVIZ_CAMERA_STYLES.map((style) => <option key={style} value={style}>{CAMERA_STYLE_LABELS[style]}</option>)}
+          </select>
         </li>
       ))}
     </ul>
@@ -153,6 +172,16 @@ export default function PrevizStage({ board }) {
           {!timedShots && <span className="text-xs text-port-text-muted">Time the shots on the Storyboard step first.</span>}
           {timedShots > 0 && !placesLoaded && <span className="text-xs text-port-text-muted">Loading the sets…</span>}
         </fieldset>
+        {previz && (project.cameras || []).length > 0 && (
+          <fieldset disabled={locked} className="min-w-0 space-y-1">
+            <legend className="text-xs text-port-text-muted">Camera styles (from each shot's sheet camera)</legend>
+            <CameraStyles cameras={project.cameras} onChange={(cameraId, previzStyle) => {
+              const cameras = project.cameras.map((camera) => (camera.id === cameraId ? { ...camera, previzStyle } : camera));
+              editProjectLocal({ cameras });
+              saveProjectFields({ cameras });
+            }} />
+          </fieldset>
+        )}
         {previz && characters.length > 0 && (
           <fieldset disabled={locked} className="min-w-0 space-y-1">
             <legend className="text-xs text-port-text-muted">Pawn colors</legend>
