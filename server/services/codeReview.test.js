@@ -951,7 +951,8 @@ describe('codeReview helpers', () => {
       global.fetch.mock.calls.forEach(([, init], i) => {
         const content = JSON.parse(init.body).messages[1].content
         expect(content).toContain("This diff holds 1 of the change's 3 files")
-        expect(content).toContain('do not report them')
+        expect(content).toContain('Do not report a listed file')
+        expect(content).toContain('The list is complete')
         others.forEach((name, j) => expect(content.split('```diff')[0].includes(name)).toBe(j !== i))
         expect(content.endsWith(`\`\`\`diff\n${sections[i]}\n\`\`\``)).toBe(true)
       })
