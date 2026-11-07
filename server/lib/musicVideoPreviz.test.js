@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { backfillPrevizFromShots, previzCutProblems, previzFrameAt, previzPawnColors } from './musicVideoPreviz.js';
+import { backfillPrevizFromShots, previzCutProblems, previzFrameAt, previzPawnColors, updatePrevizCut } from './musicVideoPreviz.js';
 import { musicVideoProjectUpdateSchema } from './musicVideoValidation.js';
 
 const subjects = [
@@ -99,4 +99,24 @@ it('moves each cut like its story camera: still holds the first frame, handheld 
   expect(Math.max(...shaky.position.map((v, i) => Math.abs(v - steady.position[i])))).toBeLessThan(0.1);
   expect(previzFrameAt(withStyle('handheld'), places, 2).camera).toEqual(shaky);
   expect(musicVideoProjectUpdateSchema.safeParse({ cameras: [{ id: 'cam-vhs', name: 'VHS', kind: 'in-world', previzStyle: 'handheld' }] }).success).toBe(true);
+});
+
+// Catches a picker edit that names someone with no mark on the set, so the player draws nobody (review on #15285).
+it('seeds marks for anyone a picker edit adds, follows a set change with its cast, and never aims at the holder', () => {
+  const places2 = { ...places, 'cat-park': { ingredient: { type: 'place', payload: { greybox } }, media: [] } };
+  const p0 = project([scene('s1', 0, 4, { characters: ['Ana'] })]);
+  const p = { ...p0, concept: { subjects: [...subjects, { id: 'p-park', kind: 'place', name: 'Example Park', ingredientId: 'cat-park' }] } };
+  const built = { ...p, previz: backfillPrevizFromShots(p, places2).previz };
+  const cut = built.previz.cuts[0];
+  const shown = updatePrevizCut(built, { ...cut, visibleSubjectIds: ['c-ana', 'c-bo'] }, places2);
+  expect(shown.tracks.map((t) => t.subjectId).sort()).toEqual(['c-ana', 'c-bo']);
+  const held = updatePrevizCut(built, { ...cut, holderSubjectId: 'c-bo', aimSubjectId: 'c-bo' }, places2);
+  expect(held.cuts[0].aimSubjectId).toBeNull();
+  expect(previzFrameAt({ ...built, previz: held }, places2, 1).actors.find((a) => a.subjectId === 'c-bo')).toMatchObject({ holder: true });
+  const moved = updatePrevizCut(built, { ...cut, placeSubjectId: 'p-park', visibleSubjectIds: null, viewShotId: null }, places2);
+  expect(moved.tracks.some((t) => t.placeSubjectId === 'p-park' && t.subjectId === 'c-ana')).toBe(true);
+  expect(previzFrameAt({ ...built, previz: moved }, places2, 1).actors.filter((a) => a.visible).map((a) => a.subjectId)).toEqual(['c-ana']);
+  // Sync seeds an existing cut whose picks changed outside the pickers too.
+  const edited = { ...built, previz: { ...built.previz, cuts: [{ ...cut, visibleSubjectIds: ['c-ana', 'c-bo'] }] } };
+  expect(backfillPrevizFromShots(edited, places2).previz.tracks.some((t) => t.subjectId === 'c-bo')).toBe(true);
 });

@@ -9,7 +9,7 @@ import { sceneShotName } from '../../../lib/musicVideoStages.js';
 import { formatCount, formatTimecode } from '../../../utils/formatters.js';
 import { shotNumbers } from '../ShotStepper.jsx';
 import {
-  backfillPrevizFromShots, previzCutProblems, previzPawnColors, previzCutTiming, previzCutVisibleIds, previzPlaceGreybox, projectPreviz,
+  backfillPrevizFromShots, previzCutProblems, previzPawnColors, updatePrevizCut, previzCutTiming, previzCutVisibleIds, previzPlaceGreybox, projectPreviz,
 } from '../../../../../server/lib/musicVideoPreviz.js';
 import { PREVIZ_CAMERA_STYLES, PREVIZ_PAWN_COLORS } from '../../../../../server/lib/musicVideoPrevizLimits.js';
 
@@ -153,7 +153,8 @@ export default function PrevizStage({ board }) {
       ? `Previz: ${[added ? `${formatCount(added)} cut${added === 1 ? '' : 's'} added` : '', removed ? `${formatCount(removed)} removed` : ''].filter(Boolean).join(', ')}`
       : 'Previz already matches the shots');
   };
-  const editCut = (cutId, patch) => save({ ...previz, cuts: previz.cuts.map((cut) => (cut.id === cutId ? { ...cut, ...patch } : cut)) });
+  // Seeds marks for anyone the edited cut now needs on its set, so the change plays at once.
+  const editCut = (cutId, patch) => save(updatePrevizCut(project, { ...previz.cuts.find((cut) => cut.id === cutId), ...patch }, places));
   const sorted = useMemo(() => (previz?.cuts || [])
     .map((cut) => ({ cut, timing: previzCutTiming(project, cut) }))
     .sort((a, b) => (a.timing?.startSec ?? Infinity) - (b.timing?.startSec ?? Infinity)), [previz, project]);

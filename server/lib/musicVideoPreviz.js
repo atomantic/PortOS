@@ -153,7 +153,7 @@ function shotRides(project, scene, placeSubjectId) {
   return projectRouteMaps(project).some((map) => (map.stops || []).some((stop) => stop.subjectId === placeSubjectId) && RIDE_WORDS.test(textOf(map.travel)));
 }
 
-/** Everyone a cut stands on its set: the people it shows, then the camera's holder. */
+/** Everyone a cut stands on its set: the people it picks to show, then the camera's holder. */
 function cutPeople(cut) {
   return [...new Set([...(cut.visibleSubjectIds || []), ...(cut.holderSubjectId ? [cut.holderSubjectId] : [])])];
 }
@@ -194,11 +194,64 @@ function seedMarks(cut, greybox, people) {
   return marks;
 }
 
+const trackKey = (subjectId, placeSubjectId) => `${placeSubjectId}\u0000${subjectId}`;
+
+/**
+ * Seed a mark for everyone the given cuts need on their sets (shown cast,
+ * holder, aim target) who has no track there yet; existing tracks are never
+ * changed. A person first seeded in this pass gets a mark in each later cut
+ * of the pass too.
+ */
+function seedCutTracks(project, existingTracks, cuts, loadedPlaces) {
+  const tracks = new Map(existingTracks.map((track) => [trackKey(track.subjectId, track.placeSubjectId), track]));
+  const seeded = new Map();
+  for (const cut of cuts) {
+    const timing = previzCutTiming(project, cut);
+    if (!cut.placeSubjectId || !timing) continue;
+    const people = [...new Set([...cutPeople(cut), ...(cut.aimSubjectId ? [cut.aimSubjectId] : [])])]
+      .filter((id) => characters(project).some((subject) => subject.id === id) && !tracks.has(trackKey(id, cut.placeSubjectId)));
+    if (!people.length) continue;
+    const scene = (project?.scenes || []).find((entry) => entry.sceneId === cut.sceneId) || {};
+    const pose = shotRides(project, scene, cut.placeSubjectId) ? 'ride' : 'stand';
+    const marks = seedMarks(cut, previzPlaceGreybox(project, cut.placeSubjectId, loadedPlaces), people);
+    for (const id of people) {
+      const key = trackKey(id, cut.placeSubjectId);
+      const track = seeded.get(key) || { subjectId: id, placeSubjectId: cut.placeSubjectId, keys: [] };
+      const mark = marks.get(id);
+      track.keys.push({ timeSec: timing.startSec, position: mark.position, facingDegrees: mark.facingDegrees, pose });
+      if (timing.endSec - HOLD_EPSILON > timing.startSec) track.keys.push({ timeSec: round(timing.endSec - HOLD_EPSILON), position: mark.position, facingDegrees: mark.facingDegrees, pose });
+      seeded.set(key, track);
+    }
+  }
+  const fresh = [...seeded.values()].map((track) => ({
+    ...track,
+    keys: [...track.keys].sort((a, b) => a.timeSec - b.timeSec).filter((key, i, all) => i === 0 || key.timeSec > all[i - 1].timeSec).slice(0, PREVIZ_KEYS_MAX),
+  }));
+  return [...tracks.values(), ...fresh].slice(0, PREVIZ_TRACKS_MAX);
+}
+
+/**
+ * The previz with one cut replaced by `next` and marks seeded for anyone that
+ * cut now needs on its set, so a new set, holder, shown person or aim target
+ * plays at once. A holder can't also be the camera's aim target.
+ */
+export function updatePrevizCut(project, next, loadedPlaces = {}) {
+  const previz = projectPreviz(project);
+  if (!previz) return null;
+  const cut = next.aimSubjectId && next.aimSubjectId === next.holderSubjectId ? { ...next, aimSubjectId: null } : next;
+  const before = previz.cuts.find((entry) => entry.id === cut.id);
+  const cuts = previz.cuts.map((entry) => (entry.id === cut.id ? cut : entry));
+  // Moved to another set with the default cast: the people it showed there come along.
+  const seedAs = before && before.placeSubjectId !== cut.placeSubjectId && !Array.isArray(cut.visibleSubjectIds)
+    ? { ...cut, visibleSubjectIds: previzCutVisibleIds(project, before) } : cut;
+  return { ...previz, cuts, tracks: seedCutTracks({ ...project, previz: { ...previz, cuts } }, previz.tracks || [], [seedAs], loadedPlaces) };
+}
+
 /**
  * Build or refresh the previz from the shot list. Every timed shot gets one
  * linked cut; a shot that already has one keeps it with its picks (place,
  * camera, holder, cast, aim), cuts whose shot is gone are dropped, and unlinked
- * cuts are kept. Tracks are seeded only for people with no track yet on that
+ * cuts are kept. Marks are seeded only for people with no track yet on that
  * set, so hand-made blocking survives a refresh. `loadedPlaces` is the linked
  * catalog places by ingredient id. Returns `{ previz, added, removed }`.
  */
@@ -219,33 +272,9 @@ export function backfillPrevizFromShots(project, loadedPlaces = {}) {
   const removed = current.cuts.filter((cut) => cut.sceneId && !shotIds.has(cut.sceneId)).length;
   const allCuts = [...cuts, ...kept].slice(0, PREVIZ_CUTS_MAX);
 
-  const trackKey = (subjectId, placeSubjectId) => `${placeSubjectId}\u0000${subjectId}`;
-  const tracks = new Map((current.tracks || []).map((track) => [trackKey(track.subjectId, track.placeSubjectId), track]));
-  const seeded = new Map();
-  for (const cut of added) {
-    if (!cut.placeSubjectId) continue;
-    const scene = shots.find((entry) => entry.sceneId === cut.sceneId);
-    const greybox = previzPlaceGreybox(project, cut.placeSubjectId, loadedPlaces);
-    const people = cutPeople(cut).filter((id) => !tracks.has(trackKey(id, cut.placeSubjectId)));
-    if (!people.length) continue;
-    const pose = shotRides(project, scene, cut.placeSubjectId) ? 'ride' : 'stand';
-    const marks = seedMarks(cut, greybox, people);
-    for (const id of people) {
-      const key = trackKey(id, cut.placeSubjectId);
-      const track = seeded.get(key) || { subjectId: id, placeSubjectId: cut.placeSubjectId, keys: [] };
-      const mark = marks.get(id);
-      track.keys.push({ timeSec: cut.startSec, position: mark.position, facingDegrees: mark.facingDegrees, pose });
-      if (cut.endSec - HOLD_EPSILON > cut.startSec) track.keys.push({ timeSec: round(cut.endSec - HOLD_EPSILON), position: mark.position, facingDegrees: mark.facingDegrees, pose });
-      seeded.set(key, track);
-    }
-  }
-  const newTracks = [...seeded.values()].map((track) => {
-    const keys = [...track.keys].sort((a, b) => a.timeSec - b.timeSec)
-      .filter((key, i, all) => i === 0 || key.timeSec > all[i - 1].timeSec).slice(0, PREVIZ_KEYS_MAX);
-    return { ...track, keys };
-  });
-  const allTracks = [...tracks.values(), ...newTracks].slice(0, PREVIZ_TRACKS_MAX);
-  return { previz: { ...current, cuts: allCuts, tracks: allTracks }, added: added.length, removed };
+  // Every cut is seeded, not just new ones, so a cut whose picks changed since gets its people too.
+  const tracks = seedCutTracks(project, current.tracks || [], allCuts, loadedPlaces);
+  return { previz: { ...current, cuts: allCuts, tracks }, added: added.length, removed };
 }
 
 /** A track's pose at `t`: interpolated position and facing, the earlier key's pose. */
