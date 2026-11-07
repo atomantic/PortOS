@@ -92,9 +92,8 @@ export async function musicVideoClipReferences({ projectId, sceneId } = {}, limi
 }
 
 /**
- * A Grok or Gemini clip's references: the shot's selected greybox camera plate
- * leads as its set reference, then the clip references fill the remaining slots.
- * Both lanes upload these beside the start frame (grok.js, geminiWeb.js). The
+ * A hosted clip's references: the shot's selected greybox camera plate leads as
+ * its set reference, then the clip references fill the remaining slots. The
  * default limit is Grok's: its CLI does not expose its video-model id.
  */
 export async function musicVideoHostedClipReferences(tag = {}, limit = MUSIC_VIDEO_GROK_CLIP_REFERENCE_LIMIT, { excludePath = null } = {}) {

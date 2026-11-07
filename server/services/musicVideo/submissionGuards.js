@@ -194,12 +194,15 @@ export async function applyMusicVideoSubmissionGuards({ body, params, prepared, 
     }
     if (!Array.isArray(expectedLabels)) referencePromptPrefix = prefix;
   }
+  const { loadMusicVideoGreybox } = await import('./greyboxReferences.js');
+  const greybox = await loadMusicVideoGreybox(project, scene);
   if (Array.isArray(musicVideo.expectedClipReferenceFiles)) {
-    // The greybox plate leads a Grok or Gemini clip's references; the picker lists only the rest.
-    const actual = backend === VIDEO_GEN_MODE.GROK || backend === VIDEO_GEN_MODE.GEMINI ? (params.castReferences || []).filter((ref) => !ref.greybox).map((ref) => basename(ref.path))
+    const actual = backend === VIDEO_GEN_MODE.GROK || backend === VIDEO_GEN_MODE.GEMINI ? (params.castReferences || []).map((ref) => basename(ref.path))
       : (body.mode === 'ic-ingredients-25' ? (params.icReferencePaths || []) : (params.referenceImagePaths || []))
         .map((path) => basename(path));
-    if (JSON.stringify(actual) !== JSON.stringify(musicVideo.expectedClipReferenceFiles)) {
+    // The greybox plate leads a hosted clip's references; the picker lists only the rest.
+    const withoutPlate = (files) => files.filter((file) => file !== greybox?.reference.imageId);
+    if (JSON.stringify(withoutPlate(actual)) !== JSON.stringify(withoutPlate(musicVideo.expectedClipReferenceFiles))) {
       refuse(409, 'MUSIC_VIDEO_CLIP_REFERENCES_CHANGED', 'The clip references changed or could not be loaded. Review them and render again.');
     }
   }
@@ -214,8 +217,6 @@ export async function applyMusicVideoSubmissionGuards({ body, params, prepared, 
     refuse(409, 'MUSIC_VIDEO_STORYBOARD_STALE', 'The storyboard still or shot layer changed — submit the clip again');
   }
   assertShotActionContract(scene);
-  const { loadMusicVideoGreybox } = await import('./greyboxReferences.js');
-  const greybox = await loadMusicVideoGreybox(project, scene);
   const sentImages = [...(params.referenceImagePaths || []), ...(params.castReferences || []).map((ref) => ref.path)];
   if (greybox && !sentImages.some((p) => basename(p) === greybox.reference.imageId)) {
     refuse(409, 'MUSIC_VIDEO_GREYBOX_CHANGED', 'The greybox capture changed while the shot was prepared. Submit again.');

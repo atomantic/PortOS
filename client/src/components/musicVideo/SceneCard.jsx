@@ -263,10 +263,10 @@ export default function SceneCard({
   // Most Runway models cannot mix keyframes with references, so an end frame sends none there.
   const runwayEndFrameOn = referenceBackend === 'runway' && cardRequest.endFrame?.state === 'on';
   const endFrameBlocksReferences = runwayEndFrameOn && !!referenceModel?.referenceImages && !referenceModel.referenceImages.keepsFrames;
-  // A Grok or Gemini clip sends the greybox plate first (clipCastReferences.js), so it takes one slot.
-  const greyboxSlot = greybox?.reference && ['grok', 'gemini'].includes(referenceBackend) ? 1 : 0;
-  const referenceCapacity = useLtxReferences ? 8
-    : Math.max(0, musicVideoClipReferenceCapacity(referenceBackend, referenceModel, { endFrame: runwayEndFrameOn }) - greyboxSlot);
+  // A hosted clip sends the greybox plate first (clipCastReferences.js), so it takes one slot.
+  const greyboxSlot = greybox?.reference && ['grok', 'gemini', 'fal', 'runway'].includes(referenceBackend) ? 1 : 0;
+  const laneReferenceCapacity = musicVideoClipReferenceCapacity(referenceBackend, referenceModel, { endFrame: runwayEndFrameOn });
+  const referenceCapacity = useLtxReferences ? 8 : Math.max(0, laneReferenceCapacity - greyboxSlot);
   const guidesPending = referenceCapacity > 0 && castMedia && musicVideoSceneCastIds(project, scene).some((id) => castMedia[id] === undefined);
   // A failed read (null) would otherwise send the clip without the member's guides.
   const guidesFailed = referenceCapacity > 0 && castMedia && musicVideoSceneCastIds(project, scene).some((id) => castMedia[id] === null);
@@ -300,8 +300,11 @@ export default function SceneCard({
         : guidesFailed ? 'Cast guides could not be loaded'
         : missingReference ? 'A selected clip reference is unavailable'
           : useLtxReferences && ltxReferencesGreyboxBlocked ? 'Clear the greybox reference before using LTX reference images'
-            : useLtxReferences && !selectedClipReferences.length ? 'Choose at least one clip reference'
-              : useLtxReferences && !cardRequest.authored?.trim() ? 'Add a shot prompt first' : null;
+            : greyboxSlot && laneReferenceCapacity < 1 ? (endFrameBlocksReferences
+              ? 'Turn off the end frame, clear the greybox reference, or pick another model'
+              : 'Clear the greybox reference or pick a model that takes references')
+              : useLtxReferences && !selectedClipReferences.length ? 'Choose at least one clip reference'
+                : useLtxReferences && !cardRequest.authored?.trim() ? 'Add a shot prompt first' : null;
   const videoRefusal = greyboxRefusal || referenceRefusal || otherRefusal;
   const sendRender = () => {
     const { endFrame, wholeLine } = cardRequest;

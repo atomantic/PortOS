@@ -1341,6 +1341,30 @@ it('explains why a greybox shot cannot use LTX reference images', () => {
   expect(screen.getByText(/Clear the greybox reference to use LTX reference images/)).toBeTruthy();
 });
 
+describe('greybox shot on a hosted model', () => {
+  const scene = { sceneId: 's1', prompt: 'The rider turns', referenceImageId: 'start.png',
+    setReference: { subjectId: 'rink', greyboxShotId: 'wide' }, startSec: 0, endSec: 4, takes: [] };
+  const project = { id: 'p', scenes: [scene], concept: { subjects: [{ id: 'rink', kind: 'place', name: 'Example Rink', ingredientId: 'cat-rink' }] } };
+  const greyboxPlaces = { 'cat-rink': { ingredient: { type: 'place', payload: { greybox: { shots: [{ id: 'wide', label: 'Wide' }] } } },
+    media: [{ mediaKey: 'layout.png', kind: 'reference', role: 'greybox-shot:wide' }] } };
+  const card = (settings) => render(<SceneCard scene={scene} project={project} greyboxPlaces={greyboxPlaces} index={0} expanded
+    onEditLocal={vi.fn()} onSave={vi.fn()} lipSyncBackend={settings.backend} falVideoSettings={settings} />);
+
+  it.each([
+    ['fal', { backend: 'fal', falModelId: 'fal-ai/minimax/hailuo-02/standard/image-to-video' }],
+    ['Runway', { backend: 'runway', runwayModelId: 'gen4.5' }],
+  ])('refuses a %s model that takes no references before Render', (_lane, settings) => {
+    card(settings);
+    show('Clip');
+    expect(screen.getByTestId('render-refusal')).toHaveTextContent('Clear the greybox reference or pick a model that takes references');
+  });
+
+  it('renders on a model that takes references', () => {
+    card({ backend: 'fal', falModelId: 'minimax/h3-max/reference-to-video' });
+    show('Clip');
+    expect(screen.queryByTestId('render-refusal')?.textContent || '').not.toMatch(/greybox/i);
+  });
+});
 
 it('lets a document shot opt out of the video look and return to inheritance', async () => {
   const onSave = vi.fn();

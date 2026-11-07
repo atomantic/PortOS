@@ -643,7 +643,7 @@ describe('submitVideoGenJob', () => {
 
     it('refuses new H3 image-reference costs at the production queue boundary when a dollar cap applies', async () => {
       mocks.prepareVideoGenParams.mockResolvedValue(falPrepared());
-      mocks.musicVideoClipReferences.mockResolvedValueOnce([{ path: '/example/rider.png', label: 'Rider' }]);
+      mocks.musicVideoHostedClipReferences.mockResolvedValueOnce([{ path: '/example/rider.png', label: 'Rider' }]);
       mocks.getMusicVideoProject.mockResolvedValue({ id: 'mv-1', scenes: [{ sceneId: 'mvs-1', startSec: 0, endSec: 5 }],
         productionRuns: [{ id: 'mvpr-1', limits: { spendCapUsd: 1 } }] });
       await expect(submitVideoGenJob({ prompt: 'selected shot', backend: 'fal', falModelId: 'minimax/h3-max/reference-to-video',
@@ -654,7 +654,7 @@ describe('submitVideoGenJob', () => {
 
     it('refuses a paid clip if its resolved references differ from the shot card', async () => {
       mocks.prepareVideoGenParams.mockResolvedValue(falPrepared());
-      mocks.musicVideoClipReferences.mockResolvedValueOnce([{ path: '/example/new-rider.png', label: 'Rider' }]);
+      mocks.musicVideoHostedClipReferences.mockResolvedValueOnce([{ path: '/example/new-rider.png', label: 'Rider' }]);
       mocks.getMusicVideoProject.mockResolvedValue({ id: 'mv-1', scenes: [{ sceneId: 'mvs-1', startSec: 0, endSec: 5 }] });
       await expect(submitVideoGenJob({ prompt: 'selected shot', backend: 'fal', falModelId: 'minimax/h3-max/reference-to-video',
         musicVideo: { ...musicVideo, expectedClipReferenceFiles: ['previous-rider.png'] } }, {}))

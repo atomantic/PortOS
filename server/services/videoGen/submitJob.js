@@ -401,10 +401,18 @@ const submitHostedLane = async ({ body, prepared, backend, hosted, performancePa
   const runwayModel = backend === VIDEO_GEN_MODE.RUNWAY
     ? getRunwayVideoModel(body.runwayModelId || RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL) : null;
   const clipReferenceModel = falModel || runwayModel;
+  const clipReferenceLimit = clipReferenceModel
+    ? musicVideoClipReferenceCapacity(backend, clipReferenceModel, { endFrame: backend === VIDEO_GEN_MODE.RUNWAY && !!prepared.lastImagePath }) : 0;
+  // On these lanes a shot's only image pick is the greybox plate applyProjectRenderPool added.
+  if (clipReferenceModel && clipReferenceLimit < 1 && body.musicVideo && body.referenceImageFiles?.length && !prepared.guidanceImagePath) {
+    throw new ServerError(prepared.lastImagePath && clipReferenceModel.referenceImages
+      ? `${clipReferenceModel.label} cannot combine an end frame with this shot's greybox reference. Turn off the end frame, clear the greybox reference, or pick another model.`
+      : `${clipReferenceModel.label} takes no reference images, so it cannot use this shot's greybox reference. Clear the greybox reference or pick a model that takes references.`,
+    { status: 400, code: 'MUSIC_VIDEO_GREYBOX_REFERENCES_UNSUPPORTED' });
+  }
   const useClipReferences = Boolean(clipReferenceModel?.referenceImages && body.musicVideo && sourceImagePath && !prepared.guidanceImagePath);
   const clipReferences = useClipReferences
-    ? await (await import('../musicVideo/clipCastReferences.js')).musicVideoClipReferences(body.musicVideo,
-      musicVideoClipReferenceCapacity(backend, clipReferenceModel, { endFrame: backend === VIDEO_GEN_MODE.RUNWAY && !!prepared.lastImagePath }), { excludePath: sourceImagePath })
+    ? await (await import('../musicVideo/clipCastReferences.js')).musicVideoHostedClipReferences(body.musicVideo, clipReferenceLimit, { excludePath: sourceImagePath })
     : [];
   const { jobId, position, status } = await enqueue({
     // Hosted jobs use mode for queue dispatch and videoMode for text/image.

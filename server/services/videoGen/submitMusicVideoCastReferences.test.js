@@ -5,6 +5,7 @@ const m = vi.hoisted(() => ({
   enqueue: vi.fn(),
   localReferences: vi.fn(),
   hostedReferences: vi.fn(async () => []),
+  plainClipReferences: vi.fn(),
   renderPool: vi.fn((body) => body),
   copy: vi.fn(async () => {}),
   unlink: vi.fn(async () => {}),
@@ -38,7 +39,7 @@ vi.mock('../musicVideo/renderPool.js', () => ({ applyProjectRenderPool: async (b
 vi.mock('../musicVideo/clipCastReferences.js', () => ({
   musicVideoLocalReferencePaths: m.localReferences,
   musicVideoHostedClipReferences: m.hostedReferences,
-  musicVideoClipReferences: m.hostedReferences,
+  musicVideoClipReferences: m.plainClipReferences,
 }));
 vi.mock('../musicVideo/performanceShot.js', () => ({ preparePerformanceShot: async () => null }));
 vi.mock('../musicVideo/submissionGuards.js', () => ({ applyMusicVideoSubmissionGuards: async () => [] }));
@@ -57,6 +58,7 @@ beforeEach(() => {
   m.localReferences.mockImplementation(async (_tag, limit, { excludePath } = {}) => ['/mock/images/still.png', '/mock/images/lead.png', '/mock/images/guest.png']
     .filter((path) => path !== excludePath).slice(0, limit));
   m.hostedReferences.mockResolvedValue([]);
+  m.plainClipReferences.mockImplementation((...args) => m.hostedReferences(...args));
   m.renderPool.mockImplementation((body) => body);
   m.enqueue.mockResolvedValue({ jobId: 'job', status: 'queued', position: 1 });
 });
@@ -174,6 +176,44 @@ describe('Music Video cast references at video submission', () => {
       sourceImagePath: '/mock/images/still.png',
       referenceImagePaths: ['/mock/images/rider.png'],
       clipReferenceLabels: [{ label: 'Rider' }],
+    });
+  });
+
+  describe('a shot with a greybox camera on fal and Runway', () => {
+    const plate = { path: '/mock/images/layout.png', label: 'Rink · Wide', role: 'set', greybox: true };
+    beforeEach(() => {
+      m.settings.videoGen.runway = { apiKey: 'test-key' };
+      m.renderPool.mockImplementation((request) => ({ ...request, referenceImageFiles: ['layout.png'] }));
+      const rider = { path: '/mock/images/rider.png', label: 'Rider' };
+      m.hostedReferences.mockResolvedValue([plate, rider]);
+      m.plainClipReferences.mockResolvedValue([rider]);
+    });
+
+    // Uniquely catches a lane dropping the plate (Runway) or refusing it (fal's hosted-reference guard).
+    it.each([
+      ['Runway Seedance', { backend: 'runway', runwayModelId: 'seedance2_5', runwayDuration: 5 }, 16],
+      ['a fal reference model', { backend: 'fal', falModelId: 'minimax/h3-max/reference-to-video', falDuration: 5 }, 9],
+    ])('queues %s with the plate leading its references', async (_name, lane, limit) => {
+      await submitVideoGenJob(body(lane), {});
+      expect(m.hostedReferences).toHaveBeenCalledWith(tag, limit, { excludePath: '/mock/images/still.png' });
+      expect(m.enqueue.mock.calls[0][0].params).toMatchObject({
+        referenceImagePaths: ['/mock/images/layout.png', '/mock/images/rider.png'],
+        clipReferenceLabels: [{ label: 'Rink · Wide', role: 'set' }, { label: 'Rider' }],
+      });
+    });
+
+    it.each([
+      ['a Runway model', { backend: 'runway', runwayModelId: 'gen4.5', runwayDuration: 5 }, /takes no reference images.*Clear the greybox reference or pick a model that takes references/],
+      ['a fal model', { backend: 'fal', falModelId: 'fal-ai/minimax/hailuo-02/standard/image-to-video', falDuration: 6 }, /takes no reference images.*Clear the greybox reference or pick a model that takes references/],
+      ['a Runway model that cannot mix an end frame with references', { backend: 'runway', runwayModelId: 'seedance2_5', runwayDuration: 5, lastImageFile: 'end.png' }, /cannot combine an end frame with this shot's greybox reference/],
+    ])('refuses %s with room for no references, naming the greybox', async (_name, lane, message) => {
+      await expect(submitVideoGenJob(body(lane), {})).rejects.toThrow(message);
+      expect(m.enqueue).not.toHaveBeenCalled();
+    });
+
+    it('still refuses reference picks on a fal render that is not a shot', async () => {
+      const { musicVideo: _untagged, ...standalone } = body({ backend: 'fal', falModelId: 'minimax/h3-max/reference-to-video', falDuration: 5, referenceImageFiles: ['one.png'] });
+      await expect(submitVideoGenJob(standalone, {})).rejects.toMatchObject({ code: 'VIDEO_REFERENCE_INPUTS_LOCAL_ONLY' });
     });
   });
 

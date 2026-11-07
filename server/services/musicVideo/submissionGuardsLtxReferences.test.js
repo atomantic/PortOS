@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const m = vi.hoisted(() => ({ project: null, references: vi.fn(), hydrate: vi.fn() }));
+const m = vi.hoisted(() => ({ project: null, references: vi.fn(), hydrate: vi.fn(), greybox: null }));
 vi.mock('./projects.js', () => ({ getProject: async () => m.project }));
 vi.mock('./clipCastReferences.js', async (original) => ({ ...(await original()), musicVideoClipReferences: (...args) => m.references(...args) }));
 vi.mock('./catalogCheckin.js', async (original) => ({ ...(await original()), withCatalogCheckin: (...args) => m.hydrate(...args) }));
-vi.mock('./greyboxReferences.js', () => ({ loadMusicVideoGreybox: async () => null }));
+vi.mock('./greyboxReferences.js', () => ({ loadMusicVideoGreybox: async () => m.greybox }));
 
 import { applyMusicVideoSubmissionGuards } from './submissionGuards.js';
 
@@ -16,6 +16,7 @@ const request = () => ({
 });
 
 beforeEach(() => {
+  m.greybox = null;
   m.project = { id: 'project', scenes: [{ sceneId: 'shot', referenceImageId: 'start.png',
     clipReferenceIds: ['ref-a'], prompt: 'A rider turns' }],
   visualSpec: { references: [{ id: 'ref-a', imageId: 'a.png', role: 'character' }, { id: 'ref-b', imageId: 'b.png', role: 'character' }] } };
@@ -83,4 +84,23 @@ it('rechecks catalog readiness at final video dispatch and rejects old files wit
   input.body.musicVideo.catalogBasis = 'current-catalog';
   await expect(applyMusicVideoSubmissionGuards(input)).resolves.toBeDefined();
   expect(input.params.musicVideoCatalogBasis).toBe('current-catalog');
+});
+
+describe('greybox plate on a Runway clip', () => {
+  const runway = (referenceImagePaths) => ({
+    body: { mode: 'image', musicVideo: { projectId: 'project', sceneId: 'shot', expectedClipReferenceFiles: ['a.png'] } },
+    backend: 'runway', performance: null, prepared: { sourceImagePath: '/gallery/start.png' },
+    params: { prompt: 'A rider turns', referenceImagePaths },
+  });
+  beforeEach(() => { m.greybox = { path: '/inputs/layout.png', reference: { imageId: 'layout.png', label: 'Rink · Wide' }, promptAdditions: [] }; });
+
+  // Uniquely catches the plate reading as a changed pick: the card's list leaves it out.
+  it('accepts the plate leading the references the card listed', async () => {
+    await expect(applyMusicVideoSubmissionGuards(runway(['/inputs/layout.png', '/gallery/a.png']))).resolves.toBeDefined();
+  });
+
+  it('still refuses a changed pick, and a clip that lost the plate', async () => {
+    await expect(applyMusicVideoSubmissionGuards(runway(['/inputs/layout.png', '/gallery/b.png']))).rejects.toMatchObject({ code: 'MUSIC_VIDEO_CLIP_REFERENCES_CHANGED' });
+    await expect(applyMusicVideoSubmissionGuards(runway(['/gallery/a.png']))).rejects.toMatchObject({ code: 'MUSIC_VIDEO_GREYBOX_CHANGED' });
+  });
 });

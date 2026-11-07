@@ -54,6 +54,17 @@ describe('shotCardRenderRequest', () => {
     expect(loose.prompt).toContain('Use @Image1 as the opening view. @Image2 is the reference for Rider. @Image3 is the reference for Bike.');
   });
 
+  // Uniquely catches the card naming reference images differently from the list the server sends.
+  it('names the greybox plate first among a hosted clip\'s references, within the model limit', () => {
+    const project = { visualSpec: { references: [{ id: 'rider', imageId: 'rider.png', role: 'character', label: 'Rider' }] } };
+    const greybox = { reference: { imageId: 'layout.png', role: 'set', label: 'Rink · Wide', greybox: true }, promptAdditions: [] };
+    const selected = scene({ clipReferenceIds: ['rider'] });
+    const fal = shotCardRenderRequest({ project, greybox, scene: selected, settings: { backend: 'fal', falModelId: 'minimax/h3-max/reference-to-video' } });
+    expect(fal.prompt).toContain('Image 1 is the reference for Rink · Wide. Image 2 is the reference for Rider.');
+    const runway = shotCardRenderRequest({ project, greybox, scene: selected, settings: { backend: 'runway', runwayModelId: 'seedance2_5' } });
+    expect(runway.prompt).toMatch(/is the reference for Rink · Wide\. \S+( \d+)? is the reference for Rider\./);
+  });
+
   it('offers song audio for a cutaway on an LTX-2 model, off unless toggled, and drops the end frame with it', () => {
     const base = { scene: scene({ endImageId: 'end.png' }), settings: { backend: 'local', modelId: 'ltx25_example' }, models, endFramePlan: { used: true } };
     expect(shotCardRenderRequest(base)).toMatchObject({ songAudio: { state: 'off', note: 'Song 1:04.2–1:09.8' }, endFrame: { state: 'on' } });

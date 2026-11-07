@@ -66,9 +66,14 @@ export function shotCardRenderRequest({
     audioReferenceModelId: performance && falHearsAudioReference(falModel) ? falModel.id : null,
   });
   // The server sends music-video fal takes with provider expansion disabled (fal.js).
+  // The greybox plate leads a hosted clip's references and takes one slot (clipCastReferences.js).
+  const hostedClipReferences = (limit) => {
+    const plate = limit > 0 && greybox?.reference ? [greybox.reference] : [];
+    return [...plate, ...musicVideoClipConditioningReferences(project, scene, castMedia, { limit: limit - plate.length })
+      .filter((ref) => ref.imageId !== plate[0]?.imageId)];
+  };
   const clipReferences = falModel?.referenceImages && scene?.referenceImageId
-    ? falClipReferenceAddition(falModel, musicVideoClipConditioningReferences(project, scene, castMedia,
-      { limit: musicVideoClipReferenceCapacity('fal', falModel) }), { hasImage: true, prompt: composedPrompt }) : null;
+    ? falClipReferenceAddition(falModel, hostedClipReferences(musicVideoClipReferenceCapacity('fal', falModel)), { hasImage: true, prompt: composedPrompt }) : null;
   const falPrompt = clipReferences ? [composedPrompt, clipReferences.text].filter(Boolean).join('\n') : composedPrompt;
   const falAdditions = [...composedAdditions, clipReferences, falPromptExpansionAddition(falPromptExpansionMode(falModel, 'disabled'))].filter(Boolean);
 
@@ -83,7 +88,7 @@ export function shotCardRenderRequest({
   // Most Runway models cannot mix keyframes with references, so an end frame sends none there.
   const runwayReferenceLimit = musicVideoClipReferenceCapacity('runway', runwayModel, { endFrame: endFrame?.state === 'on' });
   const runwayReferences = runwayModel?.referenceImages && scene?.referenceImageId && runwayReferenceLimit > 0
-    ? musicVideoClipConditioningReferences(project, scene, castMedia, { limit: runwayReferenceLimit }) : [];
+    ? hostedClipReferences(runwayReferenceLimit) : [];
   const runwayAddition = runwayReferences.length ? falClipReferenceAddition(runwayModel, runwayReferences, { hasImage: true, prompt: composedPrompt }) : null;
   const prompt = runwayAddition ? [falPrompt, runwayAddition.text].filter(Boolean).join('\n') : falPrompt;
   const promptAdditions = runwayAddition ? [...falAdditions, runwayAddition] : falAdditions;
