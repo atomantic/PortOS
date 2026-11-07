@@ -379,12 +379,6 @@ Context tools remain read-only. Semantic reads and writes are independent, defau
 |--------|----------|-------------|
 | GET | `/usage` | Get usage statistics |
 | GET | `/usage/hourly` | Get hourly activity |
-| GET | `/usage/cutover` | Read-only usage cutover barrier status ([guide](./USAGE_CUTOVER_BARRIER.md)) |
-| POST | `/usage/cutover/acquire` | Usage cutover barrier: acquire (host control required) |
-| POST | `/usage/cutover/verify` | Usage cutover barrier: verify (host control required) |
-| POST | `/usage/cutover/activate` | Usage cutover barrier: activate (host control required) |
-| POST | `/usage/cutover/rollback` | Usage cutover barrier: rollback (host control required) |
-| POST | `/usage/cutover/release` | Usage cutover barrier: release (host control required) |
 
 ### Eidoverse Worlds
 

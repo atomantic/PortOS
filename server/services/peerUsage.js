@@ -45,7 +45,6 @@ import { readLocalTranscriptUsage, sanitizeTranscriptDays, TRANSCRIPT_USAGE_FILE
 import { summarizeTranscriptDays, mergeModelRows } from './claudeCodeModelReport.js';
 import { getAllProviders } from './providers.js';
 import { nativeUsageSignature, withNativeUsage } from './nativeUsageHistory.js';
-import { admitInboundUsage, deferUsageRetirement, describeOutboundUsage, registerUsageCutoverParticipant, usageCutoverBarrierFile, usageLedgerFenced, visibleUsageEpoch } from './usageCutoverBarrier.js';
 import { readRenderReceipts, summarizeRenderReceipts } from './imageRenderUsage.js';
 
 const PEER_USAGE_FILE = join(PATHS.data, 'peer-usage.json');
@@ -166,7 +165,6 @@ function sanitizeDigest(raw) {
 }
 
 const withLock = createMutex();
-let peerUsageWritesInFlight = 0;
 
 /**
  * This machine's federation identity, read from the identity leaf
@@ -305,9 +303,6 @@ async function versionSelfProjection(projection, componentTimes) {
     if (previous?.instanceId === projection.instanceId && previous.fingerprint === fingerprint && parseTsMs(previous.capturedAt) !== null) return previous.capturedAt;
     const latest = Math.max(Date.now(), parseTsMs(previous?.capturedAt) ?? 0, ...componentTimes.map((time) => parseTsMs(time) ?? 0));
     const capturedAt = new Date(latest + 1).toISOString();
-    // Reads reach here too. A fence withholds this stamp from peers, and its
-    // rollback proof needs the store's bytes unchanged.
-    if (await usageLedgerFenced()) return capturedAt;
     store.selfVersion = { instanceId: projection.instanceId, fingerprint, capturedAt };
     await atomicWrite(PEER_USAGE_FILE, store);
     return capturedAt;
@@ -398,10 +393,8 @@ async function buildSelfEntry() {
  * `lastUpdated` and is dropped from the wire rather than shipped unorderable.
  */
 async function entriesWithSelf() {
-  const [store, self, epoch] = await Promise.all([readStore(), buildSelfEntry(), visibleUsageEpoch()]);
-  // One read path for reports and the wire: an activated epoch never shows or
-  // forwards old digests, and old accounting never shows an epoch's.
-  const peers = Object.values(store.instances).filter((e) => isPlainObject(e) && isPlainObject(e.usage) && (e.migrationEpoch ?? null) === epoch);
+  const [store, self] = await Promise.all([readStore(), buildSelfEntry()]);
+  const peers = Object.values(store.instances).filter((e) => isPlainObject(e) && isPlainObject(e.usage));
   const publishable = self && isNonBlankStr(self.capturedAt) ? self : null;
   return {
     self: publishable,
@@ -436,13 +429,6 @@ function manifestOf(self, peers, tombstones) {
  */
 const usageChecksum = (manifest) => canonicalSnapshotChecksum(manifest);
 
-// With no barrier the wire is unchanged. Otherwise `instances` stays empty, so a
-// runtime that cannot read the stamp has nothing it could mix into old accounting.
-const withheldUsageData = (stamp) => ({ instances: {}, tombstones: [], cutover: stamp });
-const stampedManifest = (barrier, manifest) => (barrier
-  ? { instances: {}, tombstones: manifest.tombstones, cutover: { ...barrier.stamp, instances: manifest.instances } }
-  : manifest);
-
 /**
  * dataSync `getManifest` for the `usage` category. Served at
  * `/api/sync/usage/manifest` so a puller can fetch only the slots that moved,
@@ -450,13 +436,8 @@ const stampedManifest = (barrier, manifest) => (barrier
  * for that diff.
  */
 export async function getUsageManifest() {
-  const barrier = await describeOutboundUsage();
-  if (barrier?.withhold) {
-    const data = withheldUsageData(barrier.stamp);
-    return { data, checksum: usageChecksum(data) };
-  }
   const { self, peers, tombstones } = await entriesWithSelf();
-  const data = stampedManifest(barrier, manifestOf(self, peers, tombstones));
+  const data = manifestOf(self, peers, tombstones);
   return { data, checksum: usageChecksum(data) };
 }
 
@@ -473,11 +454,6 @@ export async function getUsageManifest() {
  * serve, so the two endpoints can never disagree.
  */
 export async function getUsageSnapshot({ slots = null } = {}) {
-  const barrier = await describeOutboundUsage();
-  if (barrier?.withhold) {
-    const data = withheldUsageData(barrier.stamp);
-    return { data, checksum: usageChecksum(data) };
-  }
   const { self, peers, tombstones } = await entriesWithSelf();
   const wanted = slots instanceof Set ? slots : (Array.isArray(slots) && slots.length > 0 ? new Set(slots) : null);
   const keep = (id) => !wanted || wanted.has(id);
@@ -486,10 +462,7 @@ export async function getUsageSnapshot({ slots = null } = {}) {
   // Tombstones ride EVERY response (slot-scoped included) so a retirement
   // propagates: an add-only merge alone would let any peer that still holds the
   // digest hand it straight back, and a retirement moves no slot's capturedAt.
-  const data = barrier
-    ? { instances: {}, tombstones, cutover: { ...barrier.stamp, instances } }
-    : { instances, tombstones };
-  return { data, checksum: usageChecksum(stampedManifest(barrier, manifestOf(self, peers, tombstones))) };
+  return { data: { instances, tombstones }, checksum: usageChecksum(manifestOf(self, peers, tombstones)) };
 }
 
 /**
@@ -497,20 +470,17 @@ export async function getUsageSnapshot({ slots = null } = {}) {
  * `capturedAt`; our own slot is skipped outright (we are the authority on our
  * own counters), and nothing is ever summed into `data/usage.json`.
  */
-export async function applyUsageRemote(remoteData, source = {}) {
-  const stamp = isPlainObject(remoteData?.cutover) ? remoteData.cutover : null;
-  const incoming = isPlainObject(stamp?.instances) ? stamp.instances
-    : (isPlainObject(remoteData?.instances) ? remoteData.instances : null);
+export async function applyUsageRemote(remoteData) {
+  // A peer still running the retired cutover barrier (#15098) stamps `cutover` on
+  // a payload only while it holds a fence or an epoch. Its digests then belong to
+  // a cutover this version never joins, so the whole payload is skipped.
+  if (isPlainObject(remoteData?.cutover)) return { applied: false, count: 0 };
+  const incoming = isPlainObject(remoteData?.instances) ? remoteData.instances : null;
   if (!incoming) return { applied: false, count: 0 };
 
   const { instanceId: selfId } = await readSelfIdentity();
 
-  peerUsageWritesInFlight++;
   return withLock(async () => {
-    // Inside the lock: a payload that waited out a fence is judged against now.
-    const admission = await admitInboundUsage(stamp, { peerId: source.peerId });
-    if (!admission.admitted) return { applied: false, count: 0, refusedByBarrier: admission.reason };
-    const epoch = admission.migrationEpoch;
     const store = await readStore();
     // Union the deletion list in BOTH directions, so retiring an instance on one
     // machine retires it everywhere instead of being undone by the next peer that
@@ -522,19 +492,14 @@ export async function applyUsageRemote(remoteData, source = {}) {
     for (const [key, rawEntry] of Object.entries(incoming)) {
       // A peer-chosen key of `__proto__` would replace this map's prototype on assignment.
       if (!isNonBlankStr(key) || key === selfId || POLLUTING_KEYS.has(key)) continue;
-      // Forwarding cannot widen the participant set a barrier was bound to.
-      if (admission.participants && !admission.participants.has(key)) continue;
       const entry = sanitizeEntry(rawEntry, key);
       if (!entry) continue;
       // A digest CAPTURED after the deletion is a machine that came back, and
       // supersedes the tombstone. An older one is the retired machine echoing
       // back via a peer that hasn't seen the removal yet.
       if (isTombstoned(store.tombstones, key, entry.capturedAt, 'instanceId')) continue;
-      // LWW orders digests within one accounting epoch, never across two: a rebuilt
-      // digest can legitimately carry an older stamp than the slot it replaces.
-      const sameEpoch = (store.instances[key]?.migrationEpoch ?? null) === epoch;
-      if (sameEpoch && !compareNewerWins(entry.capturedAt, store.instances[key]?.capturedAt)) continue;
-      store.instances[key] = epoch ? { ...entry, migrationEpoch: epoch } : entry;
+      if (!compareNewerWins(entry.capturedAt, store.instances[key]?.capturedAt)) continue;
+      store.instances[key] = entry;
       changed++;
     }
 
@@ -561,7 +526,7 @@ export async function applyUsageRemote(remoteData, source = {}) {
     await atomicWrite(PEER_USAGE_FILE, store);
     console.log(`🔄 Usage sync: updated ${changed} instance digest${changed === 1 ? '' : 's'}`);
     return { applied: true, count: changed };
-  }).finally(() => { peerUsageWritesInFlight--; });
+  });
 }
 
 /**
@@ -1285,7 +1250,6 @@ export async function getFleetQuotaEntries({ excludeInstanceIds = [], includeEmp
 export async function forgetInstanceUsage(instanceId) {
   if (!isNonBlankStr(instanceId)) return { removed: false };
   return withLock(async () => {
-    if (await deferUsageRetirement(instanceId)) return { removed: false, deferred: true };
     const store = await readStore();
     store.tombstones = recordTombstone(store.tombstones, instanceId, { keyField: 'instanceId' });
     const removed = Object.hasOwn(store.instances, instanceId);
@@ -1299,15 +1263,6 @@ export async function forgetInstanceUsage(instanceId) {
 // Files whose fingerprint invalidates the category's checksum cache. The
 // instances file is in the set because the manifest is keyed by this instance's
 // ID — a re-identified machine must re-checksum even when no counter moved.
-export const USAGE_CHECKSUM_PATHS = [USAGE_FILE, PEER_USAGE_FILE, PROVIDER_QUOTAS_FILE, TRANSCRIPT_USAGE_FILE, PROVIDERS_FILE, IMAGE_RECEIPTS_DIR, dataPath('instances.json'), usageCutoverBarrierFile()];
-
-registerUsageCutoverParticipant({
-  name: 'peerDigests',
-  fingerprintPath: PEER_USAGE_FILE,
-  inFlight: () => peerUsageWritesInFlight,
-  drain: () => withLock(async () => {}),
-  heldOrigins: async () => Object.keys((await readStore()).instances),
-  retire: forgetInstanceUsage,
-});
+export const USAGE_CHECKSUM_PATHS = [USAGE_FILE, PEER_USAGE_FILE, PROVIDER_QUOTAS_FILE, TRANSCRIPT_USAGE_FILE, PROVIDERS_FILE, IMAGE_RECEIPTS_DIR, dataPath('instances.json')];
 
 export { PEER_USAGE_FILE };

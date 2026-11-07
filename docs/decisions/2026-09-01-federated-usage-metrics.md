@@ -250,14 +250,13 @@ reset times and the publishing instance's name; no prompts, no transcripts, no
 PII. The peer payload is rebuilt to the wire shape on arrival for the same
 recursion-depth reason the usage digest is.
 
-## Addendum: the cutover barrier is independent of the category map
+## Addendum: the cutover barrier is retired (#15279)
 
-`syncEnabled: false` and `fullSync` both leave `usage` on by the rules above, so
-neither can pause it for a migration. The [usage cutover barrier](../USAGE_CUTOVER_BARRIER.md)
-is a separate machine-local gate at the write and apply boundaries, evaluated after the
-category map. With no barrier the wire is unchanged. During one, `instances` is empty
-and any epoch data rides inside a `cutover` stamp, so an older peer has nothing it could
-merge. The category default and the per-peer toggles keep their meaning.
+The usage cutover barrier (#15098) was a machine-local gate at the write and apply
+boundaries for a planned ledger migration. #15271 overlays native history at read time
+instead, so the ledger is never migrated and the barrier was removed unused. The usage
+wire is the plain `{ instances, tombstones }` map. A payload that still carries a
+`cutover` stamp comes from an older peer holding a fence or epoch, and is skipped whole.
 
 ## Addendum: native usage reports send machine rollups (#15252)
 

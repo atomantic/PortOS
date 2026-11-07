@@ -217,28 +217,6 @@ describe('/api/sync/:category — enum parity with getSupportedCategories()', ()
 
 // #5759 — the manifest leg that lets a puller fetch only the per-instance slots
 // that moved, instead of the whole digest map every 60s cycle.
-describe('GET /api/sync/usage/cutover', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    settings = { federation: { strictPullAuthorization: true } };
-    __resetPullWarnThrottleForTests();
-  });
-
-  it('serves a participant barrier state only, with no usage data', async () => {
-    setPeers(allowedPeer());
-    const res = await request(buildApp()).get('/api/sync/usage/cutover').set(PEER_INSTANCE_ID_HEADER, PEER_ID);
-    expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ state: 'idle', barrierSchema: 1, participants: [] });
-    expect(Object.keys(res.body).sort()).toEqual(['barrierSchema', 'drained', 'instanceId', 'migrationEpoch', 'observedAcks', 'participants', 'retiredEpochs', 'runtimeReady', 'state']);
-  });
-
-  it('refuses a caller the usage pull gate refuses', async () => {
-    setPeers();
-    const res = await request(buildApp()).get('/api/sync/usage/cutover').set(PEER_INSTANCE_ID_HEADER, PEER_ID);
-    expect(res.status).toBe(403);
-  });
-});
-
 describe('GET /api/sync/:category/manifest', () => {
   beforeEach(() => {
     vi.clearAllMocks();

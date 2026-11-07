@@ -3232,7 +3232,7 @@ describe('restoreSnapshot manifest verification', () => {
       });
     });
 
-    for (const path of ['tailcat-serve.json', 'tailcat-serve.addr', 'Tailcat-Serve.json', 'tailcat-serve.json.example.tmp', 'peer-execution-grants.json', 'peer-execution-catalog.json', 'peer-execution/fixture-operation/evidence.json', 'peer-execution-authority.json', 'peer-execution-recovery.jsonl', 'workflow-maintenance/state.json', 'workflow-maintenance/recovered-fixture/receipt.json', 'Workflow-Maintenance/state.json', 'backup-admission/cut/owner.json', 'Backup-Admission/publications/owner.json', 'usage-cutover-barrier.json', 'Usage-Cutover-Barrier.json']) {
+    for (const path of ['tailcat-serve.json', 'tailcat-serve.addr', 'Tailcat-Serve.json', 'tailcat-serve.json.example.tmp', 'peer-execution-grants.json', 'peer-execution-catalog.json', 'peer-execution/fixture-operation/evidence.json', 'peer-execution-authority.json', 'peer-execution-recovery.jsonl', 'workflow-maintenance/state.json', 'workflow-maintenance/recovered-fixture/receipt.json', 'Workflow-Maintenance/state.json', 'backup-admission/cut/owner.json', 'Backup-Admission/publications/owner.json']) {
       it(`preserves non-rewound execution authority and ownership at ${path} (#10127)`, async context => {
         await withRealRsync(context, async () => {
           const localPath = joinPath(PATHS.data, path);
@@ -3952,7 +3952,6 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
         '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[rR][eE][cC][oO][vV][eE][rR][yY].[jJ][sS][oO][nN][lL]',
         '--exclude=/[wW][oO][rR][kK][fF][lL][oO][wW]-[mM][aA][iI][nN][tT][eE][nN][aA][nN][cC][eE]',
         '--exclude=/[bB][aA][cC][kK][uU][pP]-[aA][dD][mM][iI][sS][sS][iI][oO][nN]',
-        '--exclude=/[uU][sS][aA][gG][eE]-[cC][uU][tT][oO][vV][eE][rR]-[bB][aA][rR][rR][iI][eE][rR].[jJ][sS][oO][nN]',
         '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[sS][eE][rR][vV][eE].[jJ][sS][oO][nN].*.[tT][mM][pP]',
         // No snapshot instances.json was approved for install (#12596).
         '--exclude=/[iI][nN][sS][tT][aA][nN][cC][eE][sS].[jJ][sS][oO][nN]',
@@ -3992,7 +3991,6 @@ describe('restoreSnapshot snapshotId, filter flags, and settings re-sync', () =>
         '--exclude=/[pP][eE][eE][rR]-[eE][xX][eE][cC][uU][tT][iI][oO][nN]-[rR][eE][cC][oO][vV][eE][rR][yY].[jJ][sS][oO][nN][lL]',
         '--exclude=/[wW][oO][rR][kK][fF][lL][oO][wW]-[mM][aA][iI][nN][tT][eE][nN][aA][nN][cC][eE]',
         '--exclude=/[bB][aA][cC][kK][uU][pP]-[aA][dD][mM][iI][sS][sS][iI][oO][nN]',
-        '--exclude=/[uU][sS][aA][gG][eE]-[cC][uU][tT][oO][vV][eE][rR]-[bB][aA][rR][rR][iI][eE][rR].[jJ][sS][oO][nN]',
         '--exclude=/[tT][aA][iI][lL][cC][aA][tT]-[sS][eE][rR][vV][eE].[jJ][sS][oO][nN].*.[tT][mM][pP]',
         // No snapshot instances.json was approved for install (#12596).
         '--exclude=/[iI][nN][sS][tT][aA][nN][cC][eE][sS].[jJ][sS][oO][nN]',

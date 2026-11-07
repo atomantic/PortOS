@@ -3,7 +3,6 @@ import { atomicWrite, readJSONFile } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 import { isPlainObject, POLLUTING_KEYS, bucketFor } from '../lib/objects.js';
 import { isNonBlankStr } from '../lib/textUtils.js';
-import { usageLedgerFenced } from './usageCutoverBarrier.js';
 
 /**
  * A persisted `day -> model -> counts` history of one provider app's own usage
@@ -112,8 +111,6 @@ export function createNativeUsageStore({ family, file, fields, scan, retentionDa
       const stored = await read();
       const age = stored.updatedAt ? now - Date.parse(stored.updatedAt) : Infinity;
       if (!force && age < staleMs) return { ...stored, filesScanned: 0, refreshed: false };
-      // The app's files stay on disk, so the next refresh after a fence catches up.
-      if (await usageLedgerFenced()) return { ...stored, filesScanned: 0, refreshed: false };
       const from = stored.coverageStart && stored.updatedAt ? dayOf(now - lookbackDays * DAY_MS) : null;
       const result = await scan({ ...scanOptions, from });
       if (result?.incomplete) return { ...stored, filesScanned: result.filesScanned ?? 0, refreshed: false, incomplete: result.incomplete };

@@ -188,6 +188,21 @@ describe('usage sync category', () => {
     expect(data.instances['inst-self'].usage.totalTokens.output).toBe(1000);
   });
 
+  // A peer one version behind still runs the retired cutover barrier (#15279):
+  // idle, its wire is the plain map; holding a fence or epoch, it stamps `cutover`.
+  it('stays wire-compatible with a peer that still runs the cutover barrier', async () => {
+    const stamp = { migrationEpoch: 'epoch-a', state: 'activated', barrierSchema: 1 };
+    expect(await applyUsageRemote({ instances: {}, tombstones: [], cutover: { ...stamp, instances: { 'inst-peer': peerEntry() } } }))
+      .toEqual({ applied: false, count: 0 });
+    expect((await readStoreFile())?.instances?.['inst-peer']).toBeUndefined();
+
+    expect(await applyUsageRemote({ instances: { 'inst-peer': peerEntry() }, tombstones: [] })).toEqual({ applied: true, count: 1 });
+    const [snapshot, manifest] = await Promise.all([getUsageSnapshot(), getUsageManifest()]);
+    expect(Object.keys(snapshot.data).sort()).toEqual(['instances', 'tombstones']);
+    expect(Object.keys(manifest.data).sort()).toEqual(['instances', 'tombstones']);
+    expect(Object.keys(manifest.data.instances).sort()).toEqual(['inst-peer', 'inst-self']);
+  });
+
   it('re-applying the same snapshot is a no-op', async () => {
     const snapshot = { instances: { 'inst-peer': peerEntry() } };
     await applyUsageRemote(snapshot);
