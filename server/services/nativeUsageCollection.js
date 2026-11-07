@@ -80,12 +80,12 @@ async function createSourceTracker(family) {
 const serialized = createFileWriteQueue();
 
 /** One bounded run across all three file families, which share its deadline. A family
- * reached after the deadline stops at once and reports what it already holds.
+ * reached after the deadline stops at once and reports what it already holds. A caller
+ * with other work in the same budget passes the deadline it started before that work.
  */
-export function collectNativeUsageSources({ limits }) {
+export function collectNativeUsageSources({ limits, deadline = Date.now() + limits.milliseconds }) {
   const home = homedir();
   return serialized(async () => {
-    const deadline = Date.now() + limits.milliseconds;
     const claude = await createSourceTracker('claude');
     const agy = await createSourceTracker('agy');
     const grok = await createSourceTracker('grok');

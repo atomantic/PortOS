@@ -24,11 +24,13 @@ let pendingDashboardCapture = null;
 async function captureStoredNativeUsageReport() {
   const limits = NATIVE_USAGE_DASHBOARD_LIMITS;
   const capturedAt = new Date().toISOString();
+  // Starts before the Codex read, so that read also spends the peer's deadline.
+  const deadline = Date.now() + limits.milliseconds;
   const { getCodexAccountUsageEvidence } = await import('./codexAppServer.js');
   const { collectNativeUsageSources } = await import('./nativeUsageCollection.js');
   const { getNativeUsageSnapshot, saveNativeUsageSnapshot } = await import('./nativeUsageStore.js');
   const codexEvidence = await getCodexAccountUsageEvidence();
-  const { transcripts } = await collectNativeUsageSources({ limits });
+  const { transcripts } = await collectNativeUsageSources({ limits, deadline });
   const retainedCodexEntry = await getNativeUsageSnapshot(...CODEX_SNAPSHOT);
   const report = buildNativeUsageReport({
     instanceId: await getInstanceId(), capturedAt, codexEvidence, transcripts, scanLimits: limits, retainedCodexEntry,

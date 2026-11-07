@@ -316,6 +316,21 @@ describe('daily collection', () => {
     expect(sourcesOpened()).toEqual([]);
   });
 
+  it('spends a slow Codex read from the same budget, so the sources stop rather than the peer timing out', async () => {
+    await save(claudePath('a'), `${claudeLine('a')}\n`);
+    const realNow = Date.now.bind(Date);
+    let skew = 0;
+    vi.spyOn(Date, 'now').mockImplementation(() => realNow() + skew);
+    getCodexAccountUsageEvidence.mockImplementationOnce(async () => {
+      skew = NATIVE_USAGE_DASHBOARD_LIMITS.milliseconds + 1;
+      return codexRead();
+    });
+    const report = await stored();
+    vi.restoreAllMocks();
+    expect(sourcesOpened()).toEqual([]);
+    expect(entry(report, 'claude').scanCaps.stoppedEarly).toBe(true);
+  });
+
   it('never interleaves two runs over the same changed file', async () => {
     const path = await save(claudePath('a'), `${claudeLine('a')}\n`);
     await Promise.all([collectNativeUsageSources({ limits: NATIVE_USAGE_DASHBOARD_LIMITS }), collectNativeUsageSources({ limits: NATIVE_USAGE_DASHBOARD_LIMITS })]);

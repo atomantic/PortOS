@@ -27,9 +27,9 @@ const readRows = async family => {
 function makeFileBackend() {
   return {
     name: 'file',
-    listSourceFacts: readRows,
+    listSourceFacts: async family => (await readRows(family)).map(({ sourceKey, sizeBytes, mtimeNs, validator, rereadRequested }) => ({ sourceKey, sizeBytes, mtimeNs, validator, rereadRequested })),
     saveSource: ({ family, sourceKey, ...row }) => atomicWrite(join(sourceDir(family), `${sourceKey}.json`), { sourceKey, ...row, rereadRequested: false }),
-    loadSourceProjections: readRows,
+    loadSourceProjections: async family => (await readRows(family)).map(({ sourceKey, validator, projection }) => ({ sourceKey, validator, projection })),
     async requestSourceReread() {
       for (const family of await listDirectories(join(rootDir(), 'sources'))) {
         for (const row of await readRows(family)) await atomicWrite(join(sourceDir(family), `${row.sourceKey}.json`), { ...row, rereadRequested: true });
