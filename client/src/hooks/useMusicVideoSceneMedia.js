@@ -300,6 +300,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
         // Clip from storyboard: the server animates this still on this lane once it is the shot's selection.
         ...(thenClip ? { thenClip } : {}),
         ...(greybox?.reference ? { greyboxImageId: greybox.reference.imageId } : {}),
+        ...(greybox?.blocking ? { greyboxBlockingImageId: greybox.blocking.imageId } : {}),
         ...(refining ? { refine: true } : referenceImageId ? { fromFrame: true } : {}),
       },
     }, { silent: true })
@@ -372,6 +373,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
         projectId, sceneId: scene.sceneId, slot: 'end', compose: true, castInputs,
         ...(replaceSelection ? { replaceSelection: true, expectedSelection: scene.endImageId || null } : {}),
         ...(greybox?.reference ? { greyboxImageId: greybox.reference.imageId } : {}),
+        ...(greybox?.blocking ? { greyboxBlockingImageId: greybox.blocking.imageId } : {}),
         ...(refining ? { refine: true } : referenceImageId ? { fromFrame: true } : {}),
       },
     }, { silent: true })

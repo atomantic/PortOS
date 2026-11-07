@@ -741,6 +741,8 @@ export const musicVideoSceneCharacterVariantSchema = z.object({
 export const musicVideoSceneSetReferenceSchema = z.object({
   subjectId: z.string().min(1).max(128),
   greyboxShotId: z.string().min(1).max(GREYBOX_SHOT_ID_MAX).regex(GREYBOX_SHOT_ID_PATTERN).optional(),
+  // false keeps the camera's flat figure capture out of renders that send its photo plate.
+  blocking: z.literal(false).optional(),
 }).strict();
 
 const musicVideoPreMusicLayerSchema = z.object({

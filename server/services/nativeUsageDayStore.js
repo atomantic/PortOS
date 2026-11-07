@@ -78,8 +78,11 @@ const earliestDay = (days) => Object.keys(days).sort()[0] ?? null;
  *   reads the app's files written on or after `from` (null = everything). A result
  *   with `incomplete` set is not folded in, so a partial read never advances coverage.
  * @param {number} [spec.retentionDays] how long the app keeps its files (unknown → 30)
+ * @param {number} [spec.scanVersion] bump when `scan` starts finding counts it
+ *   missed in days already stored: the next refresh rescans everything once. Only
+ *   for a scan that finds MORE; the max-merge cannot undo a count that moved tiers.
  */
-export function createNativeUsageStore({ family, file, fields, scan, retentionDays = 30, lookbackDays = 3, staleMs = 5 * 60_000 }) {
+export function createNativeUsageStore({ family, file, fields, scan, retentionDays = 30, lookbackDays = 3, staleMs = 5 * 60_000, scanVersion = 1 }) {
   const withLock = createMutex();
   let memo = null;
 
@@ -96,6 +99,7 @@ export function createNativeUsageStore({ family, file, fields, scan, retentionDa
       days: sanitizeNativeUsageDays(raw?.days, fields),
       updatedAt: isNonBlankStr(raw?.updatedAt) ? raw.updatedAt : null,
       coverageStart: typeof raw?.coverageStart === 'string' && DAY_RE.test(raw.coverageStart) ? raw.coverageStart : null,
+      scanVersion: Number.isSafeInteger(raw?.scanVersion) ? raw.scanVersion : 1,
     };
     memo = key ? { key, value } : null;
     return value;
@@ -111,14 +115,15 @@ export function createNativeUsageStore({ family, file, fields, scan, retentionDa
       const stored = await read();
       const age = stored.updatedAt ? now - Date.parse(stored.updatedAt) : Infinity;
       if (!force && age < staleMs) return { ...stored, filesScanned: 0, refreshed: false };
-      const from = stored.coverageStart && stored.updatedAt ? dayOf(now - lookbackDays * DAY_MS) : null;
+      const current = stored.coverageStart && stored.updatedAt && stored.scanVersion === scanVersion;
+      const from = current ? dayOf(now - lookbackDays * DAY_MS) : null;
       const result = await scan({ ...scanOptions, from });
       if (result?.incomplete) return { ...stored, filesScanned: result.filesScanned ?? 0, refreshed: false, incomplete: result.incomplete };
       const days = mergeDays(stored.days, result?.days, fields);
       const retentionFloor = dayOf(now - retentionDays * DAY_MS);
       const first = earliestDay(days);
       const coverageStart = stored.coverageStart ?? (first && first > retentionFloor ? first : retentionFloor);
-      const next = { days, updatedAt: new Date(now).toISOString(), coverageStart };
+      const next = { days, updatedAt: new Date(now).toISOString(), coverageStart, scanVersion };
       await atomicWrite(file, next);
       return { family, ...next, filesScanned: result?.filesScanned ?? 0, refreshed: true };
     });
