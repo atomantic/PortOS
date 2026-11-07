@@ -13,8 +13,11 @@ vi.mock('../../lib/db.js', () => ({
   withTransaction: async (fn) => {
     const staged = [];
     const result = await fn({ query: async (sql, args) => {
-      if (/^\s*INSERT/.test(sql) && txFailure) throw txFailure;
-      if (/^\s*INSERT/.test(sql)) { staged.push([sql, args]); return { rows: [] }; }
+      if (/^\s*INSERT/.test(sql)) {
+        staged.push([sql, args]);
+        if (txFailure && JSON.parse(args[4]).approval.status === 'approved') throw txFailure;
+        return { rows: [] };
+      }
       return queryMock(sql, args);
     } });
     for (const [sql, args] of staged) await queryMock(sql, args);
@@ -147,7 +150,7 @@ describe('voice profile contract', () => {
     // Mirrors the kind filter so a regression to an unfiltered lookup is caught.
     const useRows = (rows) => queryMock.mockImplementation(async (sql) => {
       if (/data->>'kind' = 'preset'/.test(sql)) return { rows: rows.filter((r) => r.kind === 'preset').map((data) => ({ data })) };
-      if (/approval_status = 'approved'/.test(sql)) return { rows: rows.filter((r) => r.approval.status === 'approved').map((data) => ({ data })) };
+      if (/approval_status = 'approved' AND id != /.test(sql)) return { rows: rows.filter((r) => r.approval.status === 'approved').map((data) => ({ data })) };
       return { rows: rows.map((data) => ({ data })) };
     });
 
