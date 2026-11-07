@@ -311,6 +311,7 @@ export * from './providerPrerequisites.js';
 // cliProviderArgs.js), which would trip the barrel's duplicate-identifier
 // collision check as flat exports.
 export * as providerVendors from './providerVendors.js';
+export * from './nativeUsageOverlay.js';
 export * from './providerTranscriptUsage.js';
 export * from './publicReviewSpawnGate.js';
 // Namespaced: reviewerConfig.js is re-exported flat by cosValidation.js (and so

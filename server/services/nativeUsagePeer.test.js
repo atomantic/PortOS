@@ -31,6 +31,7 @@ vi.mock('./settings.js', () => ({ getSettings: async () => ({}), settingsEvents:
 vi.mock('./usage.js', () => ({}));
 vi.mock('./claudeCodeUsage.js', () => ({ getClaudeCodeUsage: vi.fn() }));
 vi.mock('./claudeCodeTranscriptUsage.js', () => ({ refreshLocalTranscriptUsage: vi.fn() }));
+vi.mock('./nativeUsageHistory.js', () => ({ describeNativeUsageSources: vi.fn(() => []), refreshNativeUsageHistory: vi.fn(async () => ({})) }));
 vi.mock('./providerUsage.js', () => ({ getProviderQuotas: vi.fn() }));
 vi.mock('./providers.js', () => ({ getAllProviders: vi.fn() }));
 vi.mock('./subscriptionCosts.js', () => ({ saveSubscriptionCosts: vi.fn(), getSubscriptionSavings: vi.fn() }));

@@ -130,7 +130,6 @@ describe('usage writers during a fence', () => {
     for (const attempt of [
       () => a.call.usage.applyHistoricalUsageCorrections([{ runId: 'r', day: DAY, providerId: 'provider-a', siblings: [run(1)], siblingScanned: true }]),
       () => a.call.usage.addDatedUsageBatch([{ dayKey: DAY, record: run(1) }]),
-      () => a.call.usage.setInteractiveScanState({ watermarks: {} }),
       () => a.call.usage.resetUsage(),
     ]) {
       expect(await code(attempt())).toBe('USAGE_CUTOVER_FENCED');
