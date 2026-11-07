@@ -70,10 +70,6 @@ export const JSON_WRITEBACK_EXCEPTIONS = [
     "reason": "Authoritative rebuild: theme extraction replaces the cache from source evidence without retaining prior fields."
   },
   {
-    "key": "localModelAssessmentStore.js :: assessmentsFile ( )",
-    "reason": "Non-lossy: saveAssessment quarantines an unreadable store to a .corrupt-<ts> sibling before writing, and deleteAssessment refuses."
-  },
-  {
     "key": "meatspaceDailyLog.js :: DAILY_LOG_FILE",
     "reason": "No non-strict write-back: UI reads stay tolerant, but mutateDailyLog is the only writer and always reads with strict: true before atomicWrite.",
     "issue": "#8032"
@@ -89,10 +85,6 @@ export const JSON_WRITEBACK_EXCEPTIONS = [
   {
     "key": "messageSync.js :: filePath",
     "reason": "Rebuildable cache: the per-account message cache and sync cursor are re-fetched from the provider; an unreadable cache reads as empty."
-  },
-  {
-    "key": "modelCapabilityTestStore.js :: storeFile ( )",
-    "reason": "Non-lossy: saveResult quarantines an unreadable store to a .corrupt-<ts> sibling before writing, and deleteResult refuses."
   },
   {
     "key": "ollamaSafetensorsImport.js :: markerPath ( tempRoot )",
