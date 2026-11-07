@@ -17,6 +17,9 @@ import { applyProjectPatch } from './projectsLogic.js';
 // the field and is recovered as before.
 export const isLocalRenderMark = (renderingOn, instanceId) => !renderingOn || renderingOn === instanceId;
 
+// The reason a run records when its final render finished after the song changed.
+export const SONG_CHANGED_DURING_RENDER = 'The song changed during the final render';
+
 const CLEARED_RENDER_MARK = Object.freeze({ renderingOn: null, renderPartialFilename: null, renderResume: null, renderAudioRevision: null });
 
 // Every terminal project write clears the in-flight mark's stamp and the

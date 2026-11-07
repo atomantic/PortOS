@@ -1241,6 +1241,14 @@ it('ignores an earlier failed render attempt completion after explicit retry', a
   expect(theRun().finalRender.status).toBe('queued');
 });
 
+it('blocks the run when its final render completed after the song changed (#15158)', async () => {
+  seedCodeFirst(); documentDoubles();
+  await start({ pool: [], authoring: AUTHORING }); passOwnedReview(); await settle();
+  musicVideoEvents.emit('document-render', { projectId: 'mv-example', runId: theRun().id, jobId: 'final-render', attemptId: theRun().finalRender.attemptId, status: 'completed', abandoned: true });
+  await settle(); expect(theRun().status).toBe('blocked');
+  expect(theRun().finalRender).toMatchObject({ status: 'failed', error: 'The song changed during the final render' });
+});
+
 it('requires reauthoring and a new review after an accepted policy/selected-asset change', async () => {
   seedCodeFirst(); const { author } = documentDoubles();
   await start({ pool: [], authoring: AUTHORING });

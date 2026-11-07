@@ -81,6 +81,7 @@ import {
   sceneRequirement,
 } from './productionPool.js';
 import { loadSceneCastMedia } from './castGuideMedia.js';
+import { SONG_CHANGED_DURING_RENDER } from './renderSettlement.js';
 
 // One id per server process: a run records the process that may dispatch for it.
 const PROCESS_ID = `proc-${randomUUID()}`;
@@ -955,8 +956,10 @@ function armJobListeners() {
 
 // Internal final-render event: settle only this run, and never advance a run
 // pinned to an older process after a restart.
-musicVideoEvents.on('document-render', guarded('its final document rendered', async ({ projectId, runId, jobId, status, error, attemptId }) => {
+musicVideoEvents.on('document-render', guarded('its final document rendered', async ({ projectId, runId, jobId, status, error, attemptId, abandoned }) => {
   if (!projectId || !runId) return;
-  const out = await mutateProjectRecord(projectId, (current) => setProductionRender(current, runId, { jobId, status, error, attemptId }));
+  // A render the project never names (the song changed under it) is not a delivered film (#15158).
+  const settled = abandoned ? { jobId, status: 'failed', error: SONG_CHANGED_DURING_RENDER, attemptId } : { jobId, status, error, attemptId };
+  const out = await mutateProjectRecord(projectId, (current) => setProductionRender(current, runId, settled));
   if (runningHere(out.run)) await advanceProduction(projectId, runId);
 }));

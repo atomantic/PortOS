@@ -2,6 +2,7 @@ import { musicVideoMediaMode, musicVideoAllowsMedia } from '../../lib/musicVideo
 import { prepareProductionReview } from './productionReviewService.js';
 import { ALIGNMENT_UNVERIFIED_PROBLEM, assertProductionApproval, carryProductionApprovals, nameShots, productionAlignmentBasis, productionReadiness, productionReviewBasis } from './productionReview.js';
 import { CAST_SETS_WORKING } from './castAndSets.js';
+import { SONG_CHANGED_DURING_RENDER } from './renderSettlement.js';
 import { applyTreatmentPatch, applyTreatmentToProject } from './treatment.js';
 import { codeFirstProductionAssets, normalizeMusicVideoProductionPolicy } from '../../lib/musicVideoMediumPlan.js';
 import { MUSIC_VIDEO_AUTOMATION_TOOL_IDS } from '../../lib/musicVideoAutomation.js';
@@ -2392,11 +2393,13 @@ async function onAutoReviewEvent({ projectId, runId, run: review }) {
   await startFinalRender(projectId, run);
 }
 
-async function onRenderEvent({ projectId, jobId, status, error }) {
+async function onRenderEvent({ projectId, jobId, status, error, abandoned }) {
   if (!projectId || !jobId) return;
   const project = await getProject(projectId).catch(() => null);
   const run = runInFinalDelivery(project);
   if (!run || run.output.renderJobId !== jobId) return;
+  // The file exists but the project does not name it: the song changed while it rendered (#15158).
+  if (status === 'completed' && abandoned) return failFinalRender(projectId, SONG_CHANGED_DURING_RENDER);
   if (status === 'completed') return completeFinalRender(projectId, run);
   return failFinalRender(projectId, error || (status === 'canceled' ? 'The final render was cancelled' : 'The final render failed'));
 }

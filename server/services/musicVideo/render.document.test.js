@@ -194,7 +194,9 @@ it('persists a document failure for returning operators and clears it after a su
   expect(await projects.getProject(id)).toMatchObject({
     status: 'failed', renderError: `Composition document render failed: ${message}`,
   });
-  expect(await renderAndWait(id)).toMatchObject({ projectId: id, status: 'completed', error: null });
+  const settled = await renderAndWait(id);
+  expect(settled).toMatchObject({ projectId: id, status: 'completed', error: null });
+  expect(settled).not.toHaveProperty('abandoned');
   expect(await projects.getProject(id)).toMatchObject({ status: 'complete', renderError: null });
 });
 
@@ -267,7 +269,7 @@ describe('a song change during a document render', () => {
     await importDocumentTemplate(id);
     // A peer sync handed the mark to another machine.
     const settled = await renderAroundSongChange(id, () => projects.mutateProjectRecord(id, (current) => ({ project: { ...current, renderingOn: 'instance-peer' } })));
-    expect(settled.status).toBe('completed');
+    expect(settled).toMatchObject({ status: 'completed', abandoned: true });
     const stored = await projects.getProject(id);
     expect(stored).toMatchObject({ status: 'draft', audioAnalysis: null, audioRevision: 1, renderingOn: 'instance-peer' });
     expect(stored.renderHistoryId).not.toBe(settled.jobId);

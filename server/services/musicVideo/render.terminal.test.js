@@ -802,6 +802,9 @@ describe('a song change during a footage render (#15154)', () => {
     const { mutateVideoHistory } = await import('../videoGen/local.js');
     const pid = 'song-peer';
     prime(pid);
+    const events = [];
+    const onRender = (event) => events.push(event);
+    musicVideoEvents.on('render', onRender);
     const { jobId } = await renderMusicVideo(pid);
     const proc = lastProc();
     proc.emit('spawn');
@@ -811,6 +814,9 @@ describe('a song change during a footage render (#15154)', () => {
     proc.emit('close', 0, null);
     await tick();
     await tick();
+    musicVideoEvents.off('render', onRender);
+    // The job still completes; the event says the project does not name its film (#15158).
+    expect(events).toEqual([{ projectId: pid, jobId, status: 'completed', error: null, abandoned: true }]);
     expect(rows.get(pid)).toMatchObject({ status: 'draft', audioRevision: 1, renderingOn: 'inst-peer' });
     expect(rows.get(pid).renderHistoryId).toBeUndefined();
     // The written file stays in the history, marked as abandoned.
