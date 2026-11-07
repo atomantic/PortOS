@@ -9,6 +9,8 @@ import ShotFinalRender from './ShotFinalRender.jsx';
 import ShotFilmLook from './ShotFilmLook.jsx';
 import ShotStoryboardPanel from './ShotStoryboardPanel.jsx';
 import ShotEditorGroup from './ShotEditorGroup.jsx';
+import ShotSheetFields from './ShotSheetFields.jsx';
+import { normalizeShotSheet, shotSheetDrivesPrompt, shotSheetPromptLines } from '../../../../server/lib/musicVideoShotSheet.js';
 import TabPills from '../ui/TabPills.jsx';
 import AutoSizeTextarea from '../ui/AutoSizeTextarea.jsx';
 import InfoTooltip from '../ui/InfoTooltip';
@@ -200,6 +202,8 @@ export default function SceneCard({
   const fieldId = (name) => `mv-scene-${scene.sceneId}-${name}`;
   // #10297: a code shot is drawn by the composition, so it has no frame or clip to make.
   const codeShot = layered && layer === 'code';
+  // The shot sheet's plan for this shot, edited here or on the sheet: one record, so both stay in sync.
+  const fromSheet = shotSheetDrivesPrompt(scene);
   // Where this shot's clip renders: the last pick made on this device, else the project's saved renderer.
   const [initialRender] = useState(() => lastRenderTarget({ performance: isPerformanceScene(scene), saved: falVideoSettings || {} }));
   const [renderPick, setRenderPick] = useState(initialRender.pick);
@@ -373,7 +377,7 @@ export default function SceneCard({
         <label htmlFor={fieldId('prompt')}>{layer === 'footage' ? 'Motion prompt' : 'Shot prompt'}</label>
         <InfoTooltip label={layer === 'footage' ? 'About the motion prompt' : 'About the shot prompt'} placement="below" align="start" width={280}>
           {layer === 'footage'
-            ? 'What happens during the clip. The video model gets this text with the start frame (and end frame, if used). What the still looks like is its own prompt on the Frames tab.'
+            ? `What happens during the clip. The video model gets this text with the start frame (and end frame, if used)${fromSheet ? ', followed by the shot details' : ''}. What the still looks like is its own prompt on the Frames tab.`
             : 'Describes the shot. The still renders from it only when its own still prompt is empty.'}
         </InfoTooltip>
       </div>
@@ -416,8 +420,27 @@ export default function SceneCard({
   );
   // A timed shot's cuts move with the shot beside them; an untimed one sets its own times first.
   const cutMoves = sceneHasAuthoredSpan(scene) ? { startSec: onMoveStart, endSec: onMoveEnd } : {};
+  const detailsSummary = fromSheet
+    ? shotSheetPromptLines(project, scene).map((line) => line.label.toLowerCase()).join(', ') || 'none set'
+    : 'not in the prompts';
+  const detailsGroup = !codeShot && layer !== 'card' && (
+    <ShotEditorGroup title="Shot details" summary={detailsSummary} defaultOpen testId="shot-group-details">
+      <label htmlFor={fieldId('from-sheet')} className="flex items-center gap-1 text-xs min-h-[44px] sm:min-h-0">
+        <input id={fieldId('from-sheet')} type="checkbox" checked={fromSheet}
+          onChange={(e) => applyPatch({ shotSheet: normalizeShotSheet({ ...scene.shotSheet, promptFromSheet: e.target.checked }) })} />
+        Use these details in the prompts
+      </label>
+      <p className="text-[11px] text-port-text-muted">
+        {fromSheet
+          ? 'Each detail is added to the still prompt and the clip prompt as its own labeled part (shown under each prompt). The prompt boxes hold only what the details don\'t cover.'
+          : 'Off: this shot\'s hand-written prompts are sent as they are. To move a long prompt into these details, use Split frame prompts into details on the shot sheet.'}
+      </p>
+      <ShotSheetFields project={project} scene={scene} onChange={applyPatch} />
+    </ShotEditorGroup>
+  );
   const settingsGroups = (
     <>
+      {detailsGroup}
       <ShotEditorGroup title="Timing" summary={timingSummary} testId="shot-group-timing">
         {/* Whether the shot plays before the song (the cold open), with its own length. */}
         <PreMusicTiming fieldId={fieldId} scene={scene} onChange={applyPatch} />
