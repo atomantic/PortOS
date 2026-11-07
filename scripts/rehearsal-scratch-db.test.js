@@ -54,7 +54,7 @@ describe('scratch database creation', () => {
   });
 
   it('turns a missing-extension privilege error into the CONTRIBUTING repair pointer', () => {
-    const err = explainScratchDbError(pgError('42501', 'permission denied to create extension "vector"'));
+    const err = explainScratchDbError(pgError('42501', 'permission denied to create extension "vector"'), { phase: 'schema' });
     expect(err.message).toMatch(/cannot create the vector\/pgcrypto extensions/);
     expect(err.message).toMatch(/Repairing a test database whose extensions were dropped/);
     expect(err.message).not.toMatch(/\n/);
@@ -65,10 +65,15 @@ describe('scratch database creation', () => {
   });
 
   it('explains a busy template, and notes it when the fallback also failed', () => {
-    expect(explainScratchDbError(pgError('55006', 'source database is being accessed by other users')).message)
+    expect(explainScratchDbError(pgError('55006', 'source database is being accessed by other users'), { template: 'portos_test' }).message)
       .toMatch(/another session is connected/);
-    expect(explainScratchDbError(pgError('42501', 'permission denied to create extension "vector"'), { templateBusy: true }).message)
-      .toMatch(/was in use by another session/);
+    expect(explainScratchDbError(pgError('42501', 'permission denied to create extension "vector"'), { phase: 'schema', templateBusy: true }).message)
+      .toMatch(/was busy/);
+  });
+
+  it('keeps the server error for a busy database that was not a clone source', () => {
+    const err = pgError('55006', 'source database "template1" is being accessed by other users');
+    expect(explainScratchDbError(err)).toBe(err);
   });
 
   it('passes unrelated errors through untouched', () => {

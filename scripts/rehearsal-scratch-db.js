@@ -105,24 +105,30 @@ export const createScratchDbSql = (database, template = null) =>
 async function findExtensionTemplate(connection) {
   const { Client } = loadPg();
   const client = new Client({ ...connection, database: TEMPLATE_DATABASE, connectionTimeoutMillis: 5000 });
-  const connected = await client.connect().then(() => true, () => false);
-  if (!connected) return null;
   try {
+    await client.connect();
     const { rows } = await client.query('SELECT extname FROM pg_extension WHERE extname = ANY($1)', [REQUIRED_EXTENSIONS]);
     return rows.length === REQUIRED_EXTENSIONS.length ? TEMPLATE_DATABASE : null;
+  } catch (err) {
+    // Absent (3D000) or not connectable by this role (42501) just means no template; anything else is a real fault.
+    if (err.code === '3D000' || err.code === '42501') return null;
+    throw err;
   } finally {
     await client.end().catch(() => {});
   }
 }
 
-/** One actionable line for the Postgres failures this helper can hit; any other error passes through. */
-export function explainScratchDbError(err, { templateBusy = false } = {}) {
-  const busy = templateBusy ? ` (${TEMPLATE_DATABASE} was in use by another session so it could not be cloned: stop other DB test runs and retry)` : '';
-  if (err.code === '55006') return new Error(`cannot clone ${TEMPLATE_DATABASE} while another session is connected to it: stop other DB test runs and retry`, { cause: err });
-  if (err.code === '42501' && /create extension/i.test(err.message)) {
-    return new Error(`the database role cannot create the vector/pgcrypto extensions and has no ${TEMPLATE_DATABASE} copy to clone: ${REPAIR_HINT}${busy}`, { cause: err });
+/**
+ * One actionable line for the Postgres failures this helper can hit; any other error passes through.
+ * `phase` is 'create' for CREATE DATABASE and 'schema' for init-db.sql; `template` is the clone source, if any.
+ */
+export function explainScratchDbError(err, { phase = 'create', template = null, templateBusy = false } = {}) {
+  const busyNote = templateBusy ? ` (${TEMPLATE_DATABASE} was busy, so it could not be cloned: disconnect its sessions and retry)` : '';
+  if (err.code === '55006' && template) return new Error(`cannot clone ${template} while another session is connected to it: disconnect its sessions (stop other DB test runs) and retry`, { cause: err });
+  if (err.code === '42501' && phase === 'schema') {
+    return new Error(`the database role cannot create the vector/pgcrypto extensions${templateBusy ? '' : ` and has no ${TEMPLATE_DATABASE} copy to clone`}: ${REPAIR_HINT}${busyNote}`, { cause: err });
   }
-  if (err.code === '42501') return new Error(`the database role lacks CREATEDB, which creating a scratch database needs${busy}`, { cause: err });
+  if (err.code === '42501') return new Error(`the database role lacks CREATEDB, which creating a scratch database needs${busyNote}`, { cause: err });
   return err;
 }
 
@@ -140,14 +146,14 @@ export async function createScratchDb(connection = resolveAdminConnection(), { e
       return create(null);
     });
   } catch (err) {
-    throw explainScratchDbError(err, { templateBusy });
+    throw explainScratchDbError(err, { phase: 'create', template, templateBusy });
   }
   try {
     if (!empty) await applyBaseSchema(connection, database);
   } catch (err) {
     // A half-built scratch database is never handed back; drop it before reporting the failure.
     await dropScratchDb(database, connection).catch(() => {});
-    throw explainScratchDbError(err, { templateBusy });
+    throw explainScratchDbError(err, { phase: 'schema', templateBusy });
   }
   const { host, port, user } = connection;
   return { database, host, port, user, baseSchema: !empty };
