@@ -68,6 +68,8 @@ const CELLS = [
     [label, project, 'stop', skip('terminal')],
     [label, project, 'agent-failed', skip('terminal')],
   ]),
+  ['complete without final peer replica', p('complete', { peerReplica: true }), 'start', apply({ status: 'complete' }, true)],
+  ['complete with final peer replica', p('complete', { finalVideoId: 'video-1', peerReplica: true }), 'start', skip('complete')],
 ];
 
 describe('resolveCreativeDirectorProjectCommand', () => {

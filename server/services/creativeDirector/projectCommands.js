@@ -55,12 +55,11 @@ function start(project) {
   if (status === 'draft') return apply({ status: 'planning' }, { advance: true });
   if (status === 'paused') return restart(project);
   if (status === 'failed') return restart(project, { resetFailedScenes: true });
-  // The stitch path already returns once a final exists; with no final the
-  // advance is what produces it.
-  if (status === 'complete') return project.finalVideoId ? skip('complete') : apply(null, { advance: true });
-  // Starting a peer's in-flight project here takes it over: the same-status echo
-  // is what releases the sender's running work (applyProjectPatch).
-  if (IN_FLIGHT_STATUSES.has(status)) return apply(project.peerReplica ? { status } : null, { advance: true });
+  if (status === 'complete' && project.finalVideoId) return skip('complete');
+  // In flight, or complete with no final (the advance is what stitches it).
+  // Starting a peer's replica here takes it over: the same-status echo is what
+  // releases the sender's running work (applyProjectPatch).
+  if (IN_FLIGHT_STATUSES.has(status) || status === 'complete') return apply(project.peerReplica ? { status } : null, { advance: true });
   return reject(`Cannot start a ${status} project`);
 }
 
@@ -70,7 +69,9 @@ function stop(project, reason) {
   if (IN_FLIGHT_STATUSES.has(status)) return apply({ status: 'paused', failureReason: reason });
   // Draft and paused are already parked: no status write, but the caller's
   // teardown still runs — a paused project's render keeps going until stopped,
-  // and a draft may own queued first-pass seed frames.
+  // and a draft may own queued first-pass seed frames. A draft needs no park
+  // write to fence the advance loop: nothing arms a dispatch on it (every
+  // planner/treatment dispatch flips the project to `planning` first).
   return apply(null);
 }
 
