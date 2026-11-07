@@ -26,6 +26,10 @@ describe('review-enabled completion merge gate', () => {
     expect(section.indexOf('/api/cos/claim-selection')).toBeLessThan(section.indexOf('/api/cos/claim-ownership'));
     expect(section).toContain('recorded:true');
     expect(section).toContain('Bound child claims always take precedence');
+    // A picker that parked its only candidate itself must still record it, or
+    // the verifier has no selected issue and the task burns its retry budget.
+    expect(section).toContain('an issue this run parked itself with `blocked` or `needs-input`');
+    expect(section).toContain('`Blocked by #N` line');
   });
 
   it('distinguishes an operator-parked claim attempt from resolving the open issue', () => {
