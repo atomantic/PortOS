@@ -9,11 +9,24 @@ const { TEMP_ROOT } = vi.hoisted(() => {
   return { TEMP_ROOT: mkdtempSync(join(tmpdir(), 'ask-conversations-')) };
 });
 
+// Test-only hook: runs once, after the sweep's first read of `path`, so a
+// concurrent write can land between the sweep's read and its delete.
+const hooks = vi.hoisted(() => ({ afterRead: null }));
+
 vi.mock('../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../lib/fileUtils.js');
   return {
     ...actual,
     PATHS: { ...actual.PATHS, data: TEMP_ROOT },
+    readJSONFile: async (path, ...rest) => {
+      const data = await actual.readJSONFile(path, ...rest);
+      if (hooks.afterRead && hooks.afterRead.path === path) {
+        const { run } = hooks.afterRead;
+        hooks.afterRead = null;
+        await run();
+      }
+      return data;
+    },
   };
 });
 
@@ -113,6 +126,40 @@ describe('askConversations', () => {
     it('rejects unknown conversation ids', async () => {
       await expect(convs.appendTurn('ask_zzzzzzzzz_deadbeef', { role: 'user', content: 'x' })).rejects.toThrow(/not found/);
     });
+
+    it('keeps both turns when two appends overlap on one conversation', async () => {
+      const conv = await convs.createConversation({ mode: 'ask' });
+      await Promise.all([
+        convs.appendTurn(conv.id, { role: 'user', content: 'first' }),
+        convs.appendTurn(conv.id, { role: 'assistant', content: 'second' }),
+      ]);
+      const stored = await convs.getConversation(conv.id);
+      expect(stored.turns.map((t) => t.content).sort()).toEqual(['first', 'second']);
+    });
+  });
+
+  describe('overlapping writers', () => {
+    it('keeps the answer and the pin when an append and a promote overlap (append first)', async () => {
+      const conv = await convs.createConversation({ mode: 'ask' });
+      await Promise.all([
+        convs.appendTurn(conv.id, { role: 'assistant', content: 'the answer' }),
+        convs.setPromoted(conv.id, true),
+      ]);
+      const stored = await convs.getConversation(conv.id);
+      expect(stored.promoted).toBe(true);
+      expect(stored.turns.map((t) => t.content)).toEqual(['the answer']);
+    });
+
+    it('keeps the answer and the pin when a promote and an append overlap (promote first)', async () => {
+      const conv = await convs.createConversation({ mode: 'ask' });
+      await Promise.all([
+        convs.setPromoted(conv.id, true),
+        convs.appendTurn(conv.id, { role: 'assistant', content: 'the answer' }),
+      ]);
+      const stored = await convs.getConversation(conv.id);
+      expect(stored.promoted).toBe(true);
+      expect(stored.turns.map((t) => t.content)).toEqual(['the answer']);
+    });
   });
 
   describe('listConversations', () => {
@@ -171,6 +218,35 @@ describe('askConversations', () => {
 
       const summaries = await convs.listConversations();
       expect(summaries.find((s) => s.id === stale.id)).toBeUndefined();
+    });
+
+    it('does not prune a conversation that received a turn after the sweep first read it', async () => {
+      const stale = await convs.createConversation({ title: 'raced' });
+      const { writeFileSync, readFileSync } = await import('fs');
+      const path = convs.__test.pathFor(stale.id);
+      const data = JSON.parse(readFileSync(path, 'utf-8'));
+      data.updatedAt = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000).toISOString();
+      writeFileSync(path, JSON.stringify(data));
+
+      // Land a fresh turn on disk right after the sweep's first (stale) read.
+      hooks.afterRead = {
+        path,
+        run: async () => {
+          const { atomicWrite, readJSONFile } = await vi.importActual('../lib/fileUtils.js');
+          const current = await readJSONFile(path, null, { logError: false });
+          await atomicWrite(path, {
+            ...current,
+            updatedAt: new Date().toISOString(),
+            turns: [{ id: 't1', role: 'assistant', content: 'late answer', createdAt: new Date().toISOString() }],
+          });
+        },
+      };
+
+      await convs.listConversations();
+      expect(hooks.afterRead).toBeNull();
+      const stored = await convs.getConversation(stale.id);
+      expect(stored).not.toBeNull();
+      expect(stored.turns.map((t) => t.content)).toEqual(['late answer']);
     });
 
     it('keeps promoted conversations regardless of age', async () => {
