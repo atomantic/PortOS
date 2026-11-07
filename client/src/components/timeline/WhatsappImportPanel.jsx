@@ -10,10 +10,19 @@ import ActivityImportPanel, { dateRangeLabel } from './ActivityImportPanel';
 // a neutral event (the sender is always kept per event). An optional "chat label"
 // scopes the dedupe key to a stable chat name so two different chats that share a
 // same-named sender + identical message never collapse into one event; left blank,
-// the legacy un-scoped key is used unchanged.
+// the legacy un-scoped key is used unchanged. When the preview reports the
+// day/month order as ambiguous (every day and month ≤12), the user must pick
+// day-first or month-first before importing; the choice is tied to that preview
+// and sent only on commit.
+const ORDER_LABELS = { dmy: 'Day first (31/12/2024)', mdy: 'Month first (12/31/2024)' };
+
 export default function WhatsappImportPanel({ onImported }) {
   const [yourName, setYourName] = useState('');
   const [chatLabel, setChatLabel] = useState('');
+  // { preview, order } — bound to the preview object it was made on, so a new
+  // file/preview never inherits an earlier choice.
+  const [orderChoice, setOrderChoice] = useState(null);
+  const chosenOrder = (preview) => (orderChoice?.preview === preview ? orderChoice.order : null);
   const trimmedName = yourName.trim();
   const trimmedLabel = chatLabel.trim();
   const importOptions = (trimmedName || trimmedLabel)
@@ -25,7 +34,11 @@ export default function WhatsappImportPanel({ onImported }) {
       icon={MessagesSquare}
       title="Import WhatsApp chat"
       noun="message"
-      importFn={api.importWhatsappHistory}
+      importFn={(file, opts) => api.importWhatsappHistory(
+        file,
+        opts.preview ? opts : { ...opts, dateOrder: orderChoice?.order },
+      )}
+      canImport={(preview) => !preview.dateOrderAmbiguous || chosenOrder(preview) !== null}
       onImported={onImported}
       accept=".txt,.zip,text/plain,application/zip"
       importOptions={importOptions}
@@ -69,7 +82,7 @@ export default function WhatsappImportPanel({ onImported }) {
           </div>
         </div>
       )}
-      renderPreview={(summary) => (
+      renderPreview={(summary, preview) => (
         <>
           <div>{summary.messages} message(s) from {summary.uniqueSenders} sender(s)</div>
           {summary.directionKnown && (
@@ -78,6 +91,28 @@ export default function WhatsappImportPanel({ onImported }) {
           {summary.chatTitle && <div>Chat: {summary.chatTitle}</div>}
           {dateRangeLabel(summary.from, summary.to) && (
             <div>Range: {dateRangeLabel(summary.from, summary.to)}</div>
+          )}
+          {preview?.dateOrderAmbiguous && (
+            <fieldset className="mt-2 flex flex-col gap-1 text-gray-300">
+              <legend className="text-yellow-400">
+                Every date in this chat is 12 or lower, so the day/month order can&apos;t be told apart. Pick the one that matches your phone:
+              </legend>
+              {['dmy', 'mdy'].map((order) => {
+                const sample = preview.dateOrderSamples?.[order];
+                return (
+                  <label key={order} htmlFor={`whatsapp-date-order-${order}`} className="flex items-center gap-2">
+                    <input
+                      id={`whatsapp-date-order-${order}`}
+                      type="radio"
+                      name="whatsapp-date-order"
+                      checked={chosenOrder(preview) === order}
+                      onChange={() => setOrderChoice({ preview, order })}
+                    />
+                    <span>{ORDER_LABELS[order]}{dateRangeLabel(sample?.from, sample?.to) ? ` — ${dateRangeLabel(sample.from, sample.to)}` : ''}</span>
+                  </label>
+                );
+              })}
+            </fieldset>
           )}
           {summary.topSenders?.length > 0 && (
             <div className="mt-1 truncate">

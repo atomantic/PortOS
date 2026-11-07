@@ -88,6 +88,8 @@ const whatsappImportBodySchema = z.object({
   preview: previewField,
   yourName: blankToUndefinedName,
   chatLabel: blankToUndefinedName,
+  // Settles an ambiguous day/month order; blank multipart field → not provided.
+  dateOrder: z.preprocess((v) => (v === '' ? undefined : v), z.enum(['mdy', 'dmy']).optional()),
 });
 
 const dayQuerySchema = z.object({
@@ -180,10 +182,12 @@ router.post('/import/discord', uploadDiscord, importHandler(importDiscordHistory
 // content hash, since WhatsApp lines carry no message id). An optional `yourName`
 // classifies direction (sent vs received); absent → neutral `message` events. An
 // optional `chatLabel` scopes the dedupe key to a stable chat name so distinct
-// chats don't collide; absent → the legacy un-scoped key.
+// chats don't collide; absent → the legacy un-scoped key. A file whose day/month
+// order can't be inferred needs `dateOrder` (mdy|dmy) to commit (400
+// WHATSAPP_DATE_ORDER_REQUIRED otherwise); previews always succeed.
 router.post('/import/whatsapp', uploadWhatsapp, importHandler(importWhatsappHistory, {
   schema: whatsappImportBodySchema,
-  toOptions: (body) => ({ dryRun: body.preview, yourName: body.yourName ?? null, chatLabel: body.chatLabel ?? null }),
+  toOptions: (body) => ({ dryRun: body.preview, yourName: body.yourName ?? null, chatLabel: body.chatLabel ?? null, dateOrder: body.dateOrder ?? null }),
 }));
 
 // POST /api/timeline/import/browser — bulk-backfill a Google Takeout Chrome
