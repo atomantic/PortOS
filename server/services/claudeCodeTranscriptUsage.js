@@ -5,7 +5,7 @@ import { join } from 'path';
 import { createInterface } from 'readline';
 import { PATHS } from '../lib/fileUtils.js';
 import { POLLUTING_KEYS, bucketFor } from '../lib/objects.js';
-import { createNativeUsageStore } from './nativeUsageStore.js';
+import { createNativeUsageStore } from './nativeUsageDayStore.js';
 
 /**
  * Per-model token usage for EVERY Claude Code session on this machine —

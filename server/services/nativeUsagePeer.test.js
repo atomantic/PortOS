@@ -7,7 +7,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import { request } from '../lib/testHelper.js';
 import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 import { canonicalStringify } from '../lib/objects.js';
-import { buildNativeUsageReport, nativeUsageParticipantKey } from '../lib/nativeUsageContract.js';
+import { buildNativeUsageReport, buildNativeUsageRollupReport, nativeUsageParticipantKey } from '../lib/nativeUsageContract.js';
 import { resolveEffectiveCategories } from '../lib/instanceSyncCategories.js';
 
 const fixture = vi.hoisted(() => ({ registry: null, enabled: false, capture: vi.fn(), streamRequest: vi.fn() }));
@@ -48,7 +48,7 @@ const { peerStreamRequest: actualPeerStreamRequest } = await vi.importActual('..
 const { authGate } = await import('./authGate.js');
 const { errorMiddleware } = await import('../lib/errorHandler.js');
 const { default: routes } = await import('../routes/usage.js');
-const { readNativeUsagePeerReport, revalidateNativeUsagePeerReport, NATIVE_USAGE_PEER_MAX_BYTES } = await import('./nativeUsagePeer.js');
+const { loadRetainedNativeUsagePeerReport, readNativeUsagePeerReport, retainNativeUsagePeerReport, revalidateNativeUsagePeerReport, NATIVE_USAGE_PEER_MAX_BYTES, NATIVE_USAGE_PEER_TIMEOUT_MS } = await import('./nativeUsagePeer.js');
 const LOCAL = 'fixture-local-instance';
 const PEER = 'fixture-peer-instance';
 const SECRET = 'fixture-pair-secret-not-a-real-credential';
@@ -67,37 +67,44 @@ const missingSource = { status: 'unavailable', summary: null, coverage: {
   oversizedLines: 0, streamingSupersededRecords: 0, unfinalizedRecords: 0, fieldInconsistentRecords: 0, runtimeVersions: [], steps: null,
   cacheOverlap: null, costTickRecords: null, firstObservedAt: null, lastObservedAt: null,
 } };
-const report = (instanceId, capturedAt = new Date(NOW).toISOString()) => buildNativeUsageReport({
+const reportInput = (instanceId, capturedAt) => ({
   instanceId, capturedAt, transcripts: { agy: missingSource, claude: missingSource, grok: missingSource },
   scanLimits: { bytes: 1, lineBytes: 1, entries: 1, records: 1, milliseconds: 1, depth: 1 },
   codexEvidence: { usage: { summary: { lifetimeTokens: 20 }, dailyUsageBuckets: [{ startDate: '2026-11-06', tokens: 20 }] },
     accountBefore: { status: 'read', account: { authMethod: 'chatgpt', planType: 'pro' } },
     accountAfter: { status: 'read', account: { authMethod: 'chatgpt', planType: 'pro' } } },
 });
+const report = (instanceId, capturedAt = new Date(NOW).toISOString()) => buildNativeUsageRollupReport(reportInput(instanceId, capturedAt));
+const recordListReport = (instanceId, capturedAt = new Date(NOW).toISOString()) => buildNativeUsageReport(reportInput(instanceId, capturedAt));
 const sign = payload => ({ ...payload, signature: createHmac('sha256', SECRET)
-  .update(`portos-native-usage-report:v1:${canonicalStringify(payload)}`).digest('hex') });
-const payloadFor = url => ({ protocolVersion: 1, sourceParticipantKey: nativeUsageParticipantKey(PEER),
-  audienceParticipantKey: nativeUsageParticipantKey(LOCAL), challenge: new URL(url).searchParams.get('challenge'), report: report(PEER) });
+  .update(`portos-native-usage-report:v${payload.protocolVersion}:${canonicalStringify(payload)}`).digest('hex') });
+const payloadFor = url => {
+  const older = new URL(url).pathname.endsWith('/v1');
+  return { protocolVersion: older ? 1 : 2, sourceParticipantKey: nativeUsageParticipantKey(PEER),
+    audienceParticipantKey: nativeUsageParticipantKey(LOCAL), challenge: new URL(url).searchParams.get('challenge'),
+    report: older ? recordListReport(PEER) : report(PEER) };
+};
 const streamed = (body, status = 200, headers = {}) => ({ status, headers, stream: Readable.from([Buffer.from(body)]) });
 const json = body => streamed(JSON.stringify(body));
 const headers = (instanceId = PEER, secret = SECRET) => ({ 'X-PortOS-Instance-Id': instanceId,
   'X-PortOS-Peer-Auth': derivePeerAuthToken(secret, instanceId) });
-const callRoute = (extraHeaders = headers(), query = `challenge=${CHALLENGE}`) => {
+const callRoute = (extraHeaders = headers(), query = `challenge=${CHALLENGE}`, version = 'v2') => {
   const app = express();
   app.use(authGate); app.use('/api/usage', routes); app.use(errorMiddleware);
-  const call = request(app).get(`/api/usage/native-report/v1?${query}`);
+  const call = request(app).get(`/api/usage/native-report/${version}?${query}`);
   for (const [name, value] of Object.entries(extraHeaders)) call.set(name, value);
   return call;
 };
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks();
   vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(NOW);
+  await (await import('./nativeUsageStore.js'))._resetNativeUsageStore();
   fixture.enabled = false;
   fixture.registry = { self: { instanceId: LOCAL }, peers: [{ id: 'fixture-peer-record', instanceId: PEER,
     enabled: true, directions: ['outbound'], syncSecret: SECRET, syncEnabled: false,
     address: '192.0.2.5', port: 5555, auth: { password: 'fixture-broad-password' } }] };
-  fixture.capture.mockImplementation(async () => report(LOCAL));
+  fixture.capture.mockImplementation(async ({ recordLists = false } = {}) => (recordLists ? recordListReport(LOCAL) : report(LOCAL)));
   fixture.streamRequest.mockImplementation(async url => json(sign(payloadFor(url))));
 });
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
@@ -112,15 +119,24 @@ describe('native usage paired HTTP boundary', () => {
       expect(result.headers['cache-control']).toBe('no-store');
       const { signature, ...payload } = result.body;
       expect(signature).toBe(sign(payload).signature);
-      expect(payload).toMatchObject({ protocolVersion: 1, challenge: CHALLENGE,
+      expect(payload).toMatchObject({ protocolVersion: 2, challenge: CHALLENGE,
         sourceParticipantKey: nativeUsageParticipantKey(LOCAL), audienceParticipantKey: nativeUsageParticipantKey(PEER),
-        report: { participantKey: nativeUsageParticipantKey(LOCAL), contractVersion: 4 } });
+        report: { participantKey: nativeUsageParticipantKey(LOCAL), contractVersion: 5 } });
       for (const privateValue of [LOCAL, PEER, SECRET, 'fixture-broad-password', '192.0.2.5']) {
         expect(JSON.stringify(result.body)).not.toContain(privateValue);
       }
     }
     expect(fixture.streamRequest).not.toHaveBeenCalled();
     expect(fixture.capture).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps answering a peer that has not upgraded with its signed v4 report', async () => {
+    const result = await callRoute(headers(), `challenge=${CHALLENGE}`, 'v1');
+    expect(result.status).toBe(200);
+    const { signature, ...payload } = result.body;
+    expect(signature).toBe(sign(payload).signature);
+    expect(payload).toMatchObject({ protocolVersion: 1, report: { contractVersion: 4 } });
+    expect(fixture.capture).toHaveBeenCalledExactlyOnceWith({ recordLists: true });
   });
 
   it('refuses anonymous, spoofed and password/session-only callers before capture on a password-free install', async () => {
@@ -160,10 +176,9 @@ describe('native usage paired HTTP boundary', () => {
   });
 
   it('refuses an oversized local envelope rather than silently dropping evidence', async () => {
-    const oversized = report(LOCAL);
-    oversized.providers.find(provider => provider.family === 'codex').totals.dailyBuckets =
-      Array.from({ length: 450000 }, () => ({ startDate: '2026-11-06', tokens: 20 }));
-    fixture.capture.mockResolvedValueOnce(rehash(oversized));
+    const byteLength = Buffer.byteLength;
+    vi.spyOn(Buffer, 'byteLength').mockImplementation((value, ...rest) => (
+      typeof value === 'string' && value.includes('"signature"') ? NATIVE_USAGE_PEER_MAX_BYTES + 1 : byteLength(value, ...rest)));
     const result = await callRoute();
     expect(result.status).toBe(413);
     expect(result.body.code).toBe('NATIVE_USAGE_PEER_REPORT_TOO_LARGE');
@@ -189,7 +204,7 @@ describe('native usage peer consumer', () => {
   it('accepts a fresh authenticated report without Basic or raw-secret fallback', async () => {
     expect(await readNativeUsagePeerReport(PEER)).toEqual(report(PEER));
     const [url, options, peer] = fixture.streamRequest.mock.calls[0];
-    expect(new URL(url).pathname).toBe('/api/usage/native-report/v1');
+    expect(new URL(url).pathname).toBe('/api/usage/native-report/v2');
     expect(options).toMatchObject({ headers: headers(LOCAL) });
     expect(options.signal).toBeInstanceOf(AbortSignal);
     expect(peer).toMatchObject({ auth: undefined, peerAuthAccepted: true });
@@ -200,7 +215,7 @@ describe('native usage peer consumer', () => {
   it('refuses forged/replayed/source-mismatched envelopes and invalid report hashes even with a valid MAC', async () => {
     const alterations = [
       value => { value.challenge = CHALLENGE; }, value => { value.sourceParticipantKey = 'b'.repeat(32); },
-      value => { value.audienceParticipantKey = 'b'.repeat(32); }, value => { value.protocolVersion = 2; },
+      value => { value.audienceParticipantKey = 'b'.repeat(32); }, value => { value.protocolVersion = 1; }, value => { value.report = recordListReport(PEER); },
       value => { value.report.participantKey = 'b'.repeat(32); rehash(value.report); },
       value => { value.report.evidenceHash = 'b'.repeat(64); }, value => { value.report.contentHash = 'b'.repeat(64); },
       value => { value.report.contractVersion = 3; rehash(value.report); },
@@ -239,20 +254,46 @@ describe('native usage peer consumer', () => {
 
   it('bounds chunked bodies and refuses errors/older peers without returning a cached success', async () => {
     await readNativeUsagePeerReport(PEER);
-    const oversized = streamed(' '.repeat(NATIVE_USAGE_PEER_MAX_BYTES + 1));
+    const oversized = streamed(' '.repeat(65));
     fixture.streamRequest.mockResolvedValueOnce(oversized);
-    await expect(readNativeUsagePeerReport(PEER)).rejects.toMatchObject({ code: 'NATIVE_USAGE_PEER_REPORT_TOO_LARGE' });
+    await expect(readNativeUsagePeerReport(PEER, { maxBytes: 64 })).rejects.toMatchObject({ code: 'NATIVE_USAGE_PEER_REPORT_TOO_LARGE' });
     expect(oversized.stream.destroyed).toBe(true);
-    for (const [status, code] of [[404, 'NATIVE_USAGE_PEER_UNAVAILABLE'], [413, 'NATIVE_USAGE_PEER_REPORT_TOO_LARGE'],
-      [401, 'NATIVE_USAGE_PEER_FORBIDDEN'], [403, 'NATIVE_USAGE_PEER_FORBIDDEN'], [302, 'NATIVE_USAGE_PEER_UNAVAILABLE']]) {
+    for (const [status, code] of [[413, 'NATIVE_USAGE_PEER_REPORT_TOO_LARGE'], [401, 'NATIVE_USAGE_PEER_FORBIDDEN'], [302, 'NATIVE_USAGE_PEER_UNAVAILABLE']]) {
       const response = streamed('private response body', status);
       fixture.streamRequest.mockResolvedValueOnce(response);
       await expect(readNativeUsagePeerReport(PEER)).rejects.toMatchObject({ code,
         message: 'Native usage peer report unavailable or unverified. Existing usage records are unchanged.' });
       expect(response.stream.destroyed).toBe(true);
     }
+    for (const [status, code] of [[404, 'NATIVE_USAGE_PEER_UNAVAILABLE'], [403, 'NATIVE_USAGE_PEER_FORBIDDEN']]) {
+      fixture.streamRequest.mockResolvedValueOnce(streamed('private response body', status));
+      fixture.streamRequest.mockResolvedValueOnce(streamed('private response body', status));
+      await expect(readNativeUsagePeerReport(PEER)).rejects.toMatchObject({ code });
+    }
     fixture.streamRequest.mockRejectedValueOnce(new Error('private network error'));
     await expect(readNativeUsagePeerReport(PEER)).rejects.toMatchObject({ code: 'NATIVE_USAGE_PEER_UNAVAILABLE' });
+  });
+
+  it('asks an older peer for its v4 report when the v2 route is missing or refused', async () => {
+    for (const status of [404, 403]) {
+      fixture.streamRequest.mockClear();
+      const refused = streamed('private response body', status);
+      fixture.streamRequest.mockResolvedValueOnce(refused);
+      expect(await readNativeUsagePeerReport(PEER)).toMatchObject({ contractVersion: 4 });
+      expect(refused.stream.destroyed).toBe(true);
+      expect(fixture.streamRequest.mock.calls.map(([url]) => new URL(url).pathname))
+        .toEqual(['/api/usage/native-report/v2', '/api/usage/native-report/v1']);
+    }
+  });
+
+  it('lets a whole explicit read finish inside the peer request deadline', async () => {
+    const { NATIVE_USAGE_DASHBOARD_LIMITS } = await vi.importActual('./nativeUsageReport.js');
+    expect(NATIVE_USAGE_DASHBOARD_LIMITS.milliseconds).toBeLessThan(NATIVE_USAGE_PEER_TIMEOUT_MS);
+  });
+
+  it('accepts a report past the former 16 MiB limit', async () => {
+    fixture.streamRequest.mockImplementationOnce(async url => streamed(JSON.stringify(sign(payloadFor(url))) + ' '.repeat(17 * 1024 * 1024)));
+    expect(await readNativeUsagePeerReport(PEER)).toMatchObject({ contractVersion: 5 });
   });
 
   it('revalidates earlier reports at collector completion and refuses detached or stale evidence', async () => {
@@ -264,6 +305,31 @@ describe('native usage peer consumer', () => {
     fixture.registry.peers[0].syncCategories = { usage: true };
     vi.setSystemTime(NOW + 300001);
     await expect(revalidateNativeUsagePeerReport(accepted)).rejects.toMatchObject({ code: 'NATIVE_USAGE_PEER_STALE' });
+  });
+
+  it('keeps a verified report for a later failed read, however old, while the pairing stands', async () => {
+    const report = await readNativeUsagePeerReport(PEER);
+    await retainNativeUsagePeerReport(report);
+    vi.setSystemTime(NOW + 30 * 24 * 60 * 60_000);
+    const retained = await loadRetainedNativeUsagePeerReport(PEER);
+    expect(retained).toEqual(report);
+    await expect(revalidateNativeUsagePeerReport(retained)).resolves.toBeUndefined();
+    const original = structuredClone(fixture.registry);
+    fixture.registry.peers[0].syncSecret += '-rotated';
+    await expect(revalidateNativeUsagePeerReport(retained)).rejects.toMatchObject({ code: 'NATIVE_USAGE_PEER_UNVERIFIED' });
+    fixture.registry = original;
+    fixture.registry.peers = [];
+    await expect(loadRetainedNativeUsagePeerReport(PEER)).rejects.toMatchObject({ code: 'NATIVE_USAGE_PEER_FORBIDDEN' });
+  });
+
+  it('refuses a retained report whose hashes no longer verify or that names another peer', async () => {
+    expect(await loadRetainedNativeUsagePeerReport(PEER)).toBeNull();
+    const report = await readNativeUsagePeerReport(PEER);
+    const { saveNativeUsageSnapshot } = await import('./nativeUsageStore.js');
+    await saveNativeUsageSnapshot('peer-report', report.participantKey, { ...report, evidenceHash: 'f'.repeat(64) });
+    expect(await loadRetainedNativeUsagePeerReport(PEER)).toBeNull();
+    await saveNativeUsageSnapshot('peer-report', report.participantKey, { ...rehash(structuredClone(report)), participantKey: nativeUsageParticipantKey('another-peer') });
+    expect(await loadRetainedNativeUsagePeerReport(PEER)).toBeNull();
   });
 
   it('aborts a continuously streaming body at the whole-request deadline', async () => {
@@ -304,9 +370,9 @@ describe('native usage peer consumer', () => {
       incoming = new PassThrough();
       incoming.statusCode = 200;
       incoming.headers = mode === 'declared-bytes' ? { 'content-length': String(NATIVE_USAGE_PEER_MAX_BYTES + 1) } : {};
-      incoming.write(Buffer.from(mode === 'bytes' ? ' '.repeat(NATIVE_USAGE_PEER_MAX_BYTES + 1) : '{}'));
+      incoming.write(Buffer.from(mode === 'bytes' ? ' '.repeat(1025) : '{}'));
       fixture.streamRequest.mockImplementationOnce(actualPeerStreamRequest);
-      const pending = expect(readNativeUsagePeerReport(PEER)).rejects.toMatchObject({ code });
+      const pending = expect(readNativeUsagePeerReport(PEER, mode === 'bytes' ? { maxBytes: 1024 } : undefined)).rejects.toMatchObject({ code });
       await vi.advanceTimersByTimeAsync(0);
       if (mode === 'idle') {
         await vi.advanceTimersByTimeAsync(4999);

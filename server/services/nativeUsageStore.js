@@ -1,131 +1,109 @@
-import { stat } from 'fs/promises';
-import { atomicWrite, readJSONFile } from '../lib/fileUtils.js';
-import { createMutex } from '../lib/asyncMutex.js';
-import { isPlainObject, POLLUTING_KEYS, bucketFor } from '../lib/objects.js';
-import { isNonBlankStr } from '../lib/textUtils.js';
-import { usageLedgerFenced } from './usageCutoverBarrier.js';
-
 /**
- * A persisted `day -> model -> counts` history of one provider app's own usage
- * records (Claude Code transcripts, Codex rollouts, Grok sessions, …).
- *
- * The provider apps prune their session files, so each scan is folded into this
- * store and the store keeps what the app has since deleted. A day is only ever
- * re-scanned whole (every file written since the scan floor is read), and the
- * fold keeps the larger count per field, so a rescan after pruning never
- * shrinks a stored day.
- *
- * `coverageStart` is the first day the store is known to hold COMPLETELY: the
- * first full scan reads everything on disk, but the app may already have pruned
- * files older than its retention window, so days before
- * `firstScan - retentionDays` can be partial. The Usage report trusts the store
- * as the source of truth from `coverageStart` on (see `nativeUsageOverlay.js`).
- *
- * Days are UTC calendar days, matching `usageRange.js`. Scans read local files
- * only; no provider calls.
+ * Persistence for collected native usage (#15255): one projection per source file,
+ * plus whole-document snapshots. PostgreSQL is authoritative in a normal install;
+ * the per-file JSON backend exists only for the documented dev/test escape hatch.
+ * Machine-local, and holds hashed identities and counters only.
  */
+import { readdir, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { atomicWrite, PATHS, readJSONFile } from '../lib/fileUtils.js';
+import { toPgJson } from '../lib/pgJson.js';
+import { createPgFileFacade, resolvePgBackend, POSTGRES_SETUP_HINT } from '../lib/pgFileFacade.js';
 
-const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
-const DAY_MS = 86_400_000;
-const MAX_DAYS = 800;
-const MAX_MODELS_PER_DAY = 100;
-const num = (v) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0);
-const dayOf = (ms) => new Date(ms).toISOString().slice(0, 10);
+const rootDir = () => join(PATHS.data, 'native-usage');
+const sourceDir = family => join(rootDir(), 'sources', family);
+const snapshotPath = (kind, key) => join(rootDir(), 'snapshots', kind, `${key}.json`);
+const listDirectories = dir => readdir(dir).catch(error => {
+  if (error.code === 'ENOENT') return [];
+  throw error;
+});
+const listJson = async dir => (await listDirectories(dir)).filter(name => name.endsWith('.json')).sort();
+const readRow = path => readJSONFile(path, null, { logError: false, strict: true });
+const readRows = async family => {
+  const rows = await Promise.all((await listJson(sourceDir(family))).map(name => readRow(join(sourceDir(family), name))));
+  return rows.filter(Boolean);
+};
 
-/** Rebuild a day -> model -> counts map to `fields`, dropping anything else. */
-function sanitizeNativeUsageDays(raw, fields) {
-  const out = {};
-  if (!isPlainObject(raw)) return out;
-  const dayKeys = Object.keys(raw).filter((d) => DAY_RE.test(d)).sort().slice(-MAX_DAYS);
-  for (const day of dayKeys) {
-    if (!isPlainObject(raw[day])) continue;
-    for (const [model, counts] of Object.entries(raw[day]).slice(0, MAX_MODELS_PER_DAY)) {
-      if (!isNonBlankStr(model) || POLLUTING_KEYS.has(model)) continue;
-      const trimmedModel = model.slice(0, 200);
-      if (POLLUTING_KEYS.has(trimmedModel)) continue;
-      const dayBucket = bucketFor(out, day, () => ({}));
-      if (!dayBucket) continue;
-      dayBucket[trimmedModel] = Object.fromEntries(fields.map((f) => [f, num(counts?.[f])]));
-    }
-  }
-  return out;
+function makeFileBackend() {
+  return {
+    name: 'file',
+    listSourceFacts: async family => (await readRows(family)).map(({ sourceKey, sizeBytes, mtimeNs, validator, rereadRequested }) => ({ sourceKey, sizeBytes, mtimeNs, validator, rereadRequested })),
+    saveSource: ({ family, sourceKey, ...row }) => atomicWrite(join(sourceDir(family), `${sourceKey}.json`), { sourceKey, ...row, rereadRequested: false }),
+    loadSourceProjections: async family => (await readRows(family)).map(({ sourceKey, validator, projection }) => ({ sourceKey, validator, projection })),
+    async requestSourceReread() {
+      for (const family of await listDirectories(join(rootDir(), 'sources'))) {
+        for (const row of await readRows(family)) await atomicWrite(join(sourceDir(family), `${row.sourceKey}.json`), { ...row, rereadRequested: true });
+      }
+    },
+    getSnapshot: (kind, key) => readRow(snapshotPath(kind, key)),
+    saveSnapshot: (kind, key, payload) => atomicWrite(snapshotPath(kind, key), payload),
+  };
 }
 
-// Per (day, model, field) the larger count wins: a rescan of a day whose oldest
-// files were pruned must never shrink what an earlier scan saw.
-function mergeDays(stored, scanned, fields) {
-  const merged = { ...stored };
-  for (const [day, models] of Object.entries(scanned || {})) {
-    if (POLLUTING_KEYS.has(day) || !isPlainObject(models)) continue;
-    const target = { ...(isPlainObject(merged[day]) ? merged[day] : {}) };
-    for (const [model, row] of Object.entries(models)) {
-      if (!isNonBlankStr(model) || POLLUTING_KEYS.has(model) || !isPlainObject(row)) continue;
-      const prev = Object.hasOwn(target, model) && isPlainObject(target[model]) ? target[model] : {};
-      target[model] = Object.fromEntries(fields.map((f) => [f, Math.max(num(prev[f]), num(row[f]))]));
-    }
-    merged[day] = target;
-  }
-  return sanitizeNativeUsageDays(merged, fields);
+function makePgBackend(db) {
+  return {
+    name: 'postgres',
+    async listSourceFacts(family) {
+      const { rows } = await db.query(
+        'SELECT source_key, size_bytes, mtime_ns, validator, reread_requested FROM native_usage_sources WHERE family = $1',
+        [family],
+      );
+      return rows.map(row => ({ sourceKey: row.source_key, sizeBytes: String(row.size_bytes), mtimeNs: String(row.mtime_ns),
+        validator: row.validator, rereadRequested: row.reread_requested }));
+    },
+    async saveSource({ family, sourceKey, sizeBytes, mtimeNs, validator, projection }) {
+      await db.query(
+        `INSERT INTO native_usage_sources (family, source_key, size_bytes, mtime_ns, validator, reread_requested, projection, collected_at)
+         VALUES ($1, $2, $3, $4, $5, FALSE, $6::jsonb, NOW())
+         ON CONFLICT (family, source_key) DO UPDATE SET size_bytes = EXCLUDED.size_bytes, mtime_ns = EXCLUDED.mtime_ns,
+           validator = EXCLUDED.validator, reread_requested = FALSE, projection = EXCLUDED.projection, collected_at = NOW()`,
+        [family, sourceKey, sizeBytes, mtimeNs, validator, toPgJson(projection)],
+      );
+    },
+    async loadSourceProjections(family) {
+      const { rows } = await db.query(
+        'SELECT source_key, validator, projection FROM native_usage_sources WHERE family = $1 ORDER BY source_key',
+        [family],
+      );
+      return rows.map(row => ({ sourceKey: row.source_key, validator: row.validator, projection: row.projection }));
+    },
+    async requestSourceReread() {
+      await db.query('UPDATE native_usage_sources SET reread_requested = TRUE');
+    },
+    async getSnapshot(kind, key) {
+      const { rows } = await db.query('SELECT payload FROM native_usage_snapshots WHERE kind = $1 AND snapshot_key = $2', [kind, key]);
+      return rows[0]?.payload ?? null;
+    },
+    async saveSnapshot(kind, key, payload) {
+      await db.query(
+        `INSERT INTO native_usage_snapshots (kind, snapshot_key, payload, collected_at) VALUES ($1, $2, $3::jsonb, NOW())
+         ON CONFLICT (kind, snapshot_key) DO UPDATE SET payload = EXCLUDED.payload, collected_at = NOW()`,
+        [kind, key, toPgJson(payload)],
+      );
+    },
+  };
 }
 
-const earliestDay = (days) => Object.keys(days).sort()[0] ?? null;
+const facade = createPgFileFacade({
+  makeFile: makeFileBackend,
+  makePg: () => resolvePgBackend({
+    requirement: `The native usage store requires PostgreSQL — ${POSTGRES_SETUP_HINT}`,
+    loadDb: () => import('../lib/db.js'),
+    makePg: makePgBackend,
+  }),
+});
 
-/**
- * @param {object} spec
- * @param {string} spec.family provider family id (`claude`, `codex`, `grok`, `agy`)
- * @param {string} spec.file persisted store path
- * @param {string[]} spec.fields per-model counters kept for this family
- * @param {(opts: { from: string|null }) => Promise<{ days: object, filesScanned?: number, incomplete?: string }>} spec.scan
- *   reads the app's files written on or after `from` (null = everything). A result
- *   with `incomplete` set is not folded in, so a partial read never advances coverage.
- * @param {number} [spec.retentionDays] how long the app keeps its files (unknown → 30)
- */
-export function createNativeUsageStore({ family, file, fields, scan, retentionDays = 30, lookbackDays = 3, staleMs = 5 * 60_000 }) {
-  const withLock = createMutex();
-  let memo = null;
+/** Size, mtime and validator of each stored source, without loading its projection. */
+export const listNativeUsageSourceFacts = async family => (await facade.getBackend()).listSourceFacts(family);
+export const saveNativeUsageSource = async row => (await facade.getBackend()).saveSource(row);
+export const loadNativeUsageSourceProjections = async family => (await facade.getBackend()).loadSourceProjections(family);
+/** Marks every stored source for a re-read; one whose file is gone keeps counting. */
+export const requestNativeUsageSourceReread = async () => (await facade.getBackend()).requestSourceReread();
+export const getNativeUsageSnapshot = async (kind, key) => (await facade.getBackend()).getSnapshot(kind, key);
+export const saveNativeUsageSnapshot = async (kind, key, payload) => (await facade.getBackend()).saveSnapshot(kind, key, payload);
 
-  /** `{ days, updatedAt, coverageStart }`. Throws when the file exists but is unreadable. */
-  async function read() {
-    const info = await stat(file).catch(() => null);
-    const key = info ? `${info.mtimeMs}|${info.size}` : null;
-    if (key && memo?.key === key) return memo.value;
-    // Strict: a damaged store must stop the refresh, not read as empty and be
-    // overwritten by a rescan of only the files the app has not yet pruned.
-    const raw = await readJSONFile(file, null, { strict: true });
-    const value = {
-      family,
-      days: sanitizeNativeUsageDays(raw?.days, fields),
-      updatedAt: isNonBlankStr(raw?.updatedAt) ? raw.updatedAt : null,
-      coverageStart: typeof raw?.coverageStart === 'string' && DAY_RE.test(raw.coverageStart) ? raw.coverageStart : null,
-    };
-    memo = key ? { key, value } : null;
-    return value;
-  }
-
-  /**
-   * Fold a fresh scan into the store. Until coverage is established every file is
-   * read; after that only the last few days are. Skipped when the store is younger
-   * than `staleMs` unless `force`.
-   */
-  function refresh({ force = false, now = Date.now(), ...scanOptions } = {}) {
-    return withLock(async () => {
-      const stored = await read();
-      const age = stored.updatedAt ? now - Date.parse(stored.updatedAt) : Infinity;
-      if (!force && age < staleMs) return { ...stored, filesScanned: 0, refreshed: false };
-      // The app's files stay on disk, so the next refresh after a fence catches up.
-      if (await usageLedgerFenced()) return { ...stored, filesScanned: 0, refreshed: false };
-      const from = stored.coverageStart && stored.updatedAt ? dayOf(now - lookbackDays * DAY_MS) : null;
-      const result = await scan({ ...scanOptions, from });
-      if (result?.incomplete) return { ...stored, filesScanned: result.filesScanned ?? 0, refreshed: false, incomplete: result.incomplete };
-      const days = mergeDays(stored.days, result?.days, fields);
-      const retentionFloor = dayOf(now - retentionDays * DAY_MS);
-      const first = earliestDay(days);
-      const coverageStart = stored.coverageStart ?? (first && first > retentionFloor ? first : retentionFloor);
-      const next = { days, updatedAt: new Date(now).toISOString(), coverageStart };
-      await atomicWrite(file, next);
-      return { family, ...next, filesScanned: result?.filesScanned ?? 0, refreshed: true };
-    });
-  }
-
-  return { family, file, fields, read, refresh, sanitize: (raw) => sanitizeNativeUsageDays(raw, fields) };
+/** Test seam: forget the backend and clear the file store under the current data root. */
+export async function _resetNativeUsageStore() {
+  facade.reset();
+  await rm(rootDir(), { recursive: true, force: true });
 }

@@ -36,6 +36,7 @@ describe('readSyncCursorState', () => {
   it.each([
     ['truncated JSON', '{"cursorRowid": 12'],
     ['array root', '[1,2]'],
+    ['null root', 'null'],
     ['string cursor', '{"cursorRowid":"12"}'],
     ['negative cursor', '{"cursorRowid":-1}'],
     ['fractional cursor', '{"cursorRowid":1.5}'],
@@ -52,8 +53,8 @@ describe('readSyncCursorState', () => {
 });
 
 describe('readSyncCursorStateForStatus', () => {
-  it('surfaces stateError with a null cursor instead of throwing', async () => {
-    writeFileSync(file, '{oops');
+  it.each(['{oops', 'null'])('surfaces stateError for invalid state %s instead of throwing', async (body) => {
+    writeFileSync(file, body);
     const result = await readSyncCursorStateForStatus(file, 'cursorRowid');
     expect(result.stateError).toBe('UNREADABLE_STORE');
     expect(result.state.cursorRowid).toBeNull();

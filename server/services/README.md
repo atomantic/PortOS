@@ -6,7 +6,7 @@ image-generation paths below are useful entry points when tracing render jobs.
 
 | Module | Responsibility |
 | --- | --- |
-| `nativeUsageStore.js` | Persisted per-app `day -> model -> counts` store: max-merge folds that survive app pruning, `coverageStart`, incremental lookback, fence-aware refresh. |
+| `nativeUsageDayStore.js` | Persisted per-app `day -> model -> counts` store: max-merge folds that survive app pruning, `coverageStart`, incremental lookback, fence-aware refresh. |
 | `nativeUsageHistory.js` | Readers for Claude, Codex, Grok and Antigravity session records into native stores, background refresh, and `withNativeUsage` overlay of the ledger for the Usage report and peer digest. |
 | `nativeUsageEvents.js` | Emitter for `usage:native-history-updated` after a refresh changes a store. |
 | `nativeUsageAccounts.js` | Machine-local native account editor: strict saved selections, opaque revision, bounded hashed configured participant inventory and queued compare-and-save; never reads native sources or calls peers. |

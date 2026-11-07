@@ -48,6 +48,7 @@ init-db.sql, each with a one-line reason.
 | `stackerNews.js` | `stackerNewsDdl` | Stacker News accounts, territories, untrusted-content analyses, and review-gated actions |
 | `x.js` | `xDdl` | X account diagnostics, public post metrics, and review-gated drafts |
 | `beeper.js` | `beeperDdl` | Beeper conversation mirror — accounts, the vault-encrypted access credential, conversations, messages, participants, attachment metadata, sync cursors, and the outbound send outbox (machine-local, never federated) |
+| `nativeUsage.js` | `nativeUsageDdl` | Native usage store — one hashed, counters-only projection per source file, plus Codex and retained peer snapshots (machine-local, never federated) |
 | `githubNotifications.js` | `githubNotificationsDdl` | GitHub notifications inbox — per-account notification threads (metadata only) and the fetch cursor (machine-local, never federated) |
 | `audit.js` | `auditDdl`, `auditedTables`, `buildAuditTriggers()` | `record_audit` table/function + per-table audit triggers |
 | `syncFeed.js` | `syncFeedDdl`, `syncFeedTables`, `buildSyncFeedTriggers()` | Commit-ordered federation change feed (`sync_feed`) + deferred capture triggers on memories and the catalog tables (#8315) |

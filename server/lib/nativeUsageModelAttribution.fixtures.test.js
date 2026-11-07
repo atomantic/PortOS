@@ -6,10 +6,10 @@ import { describe, expect, it } from 'vitest';
 import { canonicalStringify } from './objects.js';
 
 // Guards the handoff corpus for docs/plans/2026-11-07-native-usage-model-attribution.md.
-// The resolver below is a reference for the proposed contract, not production code:
-// expected values in the fixtures are hand-authored, so it catches an arithmetic
-// slip or order-dependent outcome in them. Stay free of production native-usage
-// imports: #15031 owns those modules and this corpus must not constrain them.
+// The resolver below is a reference, not production code: expected values in the fixtures
+// are hand-authored, so it catches an arithmetic slip or order-dependent outcome in them.
+// Stay free of production native-usage imports, so the corpus stays an independent check.
+// services/nativeUsageAttribution.test.js runs the same scenarios through the real readers.
 
 const here = dirname(fileURLToPath(import.meta.url));
 const FIXTURES = join(here, 'fixtures/nativeUsageModelAttribution/v1');
@@ -216,7 +216,7 @@ const keyFits = ({ kind, key }) => {
 };
 const bucketOrder = ({ day, kind, key }) => `${day}\u0000${kind}\u0000${key}`;
 
-/** Reference refusal rules for the proposed per-day peer rollup. */
+/** Reference refusal rules for the per-day peer rollup. */
 function aggregateRefusal(family, { totals, modelUsage }) {
   if (!hasExactKeys(modelUsage, ['version', 'buckets']) || modelUsage.version !== 1) return 'fields-not-exact';
   const { buckets } = modelUsage;
@@ -318,7 +318,7 @@ describe('native usage model attribution corpus', () => {
   });
 });
 
-describe('proposed peer rollup examples', () => {
+describe('peer rollup examples', () => {
   for (const family of ['claude', 'grok']) {
     it.each(aggregates[family].map((example) => [example.name, example]))(`${family}: %s`, (_name, { accept, reason, totals, modelUsage }) => {
       expect(aggregateRefusal(family, { totals, modelUsage })).toBe(accept ? null : reason);

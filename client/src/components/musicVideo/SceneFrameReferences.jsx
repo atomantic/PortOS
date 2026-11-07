@@ -34,7 +34,8 @@ export default function SceneFrameReferences({ project, scene, castMedia = null,
   const longPressed = useRef(false);
   useEffect(() => () => clearTimeout(pressTimer.current), []);
   const choices = [...(greybox?.reference ? [greybox.reference] : []), ...musicVideoResearchReferences(scene), ...musicVideoCameoReferences(project, scene), ...musicVideoCastGuideReferences(project, scene, castMedia), ...musicVideoPanelArtReferences(scene), ...musicVideoReferenceChoices(project), ...musicVideoLinkedCastReferences(project, castMedia)];
-  if (!choices.length) return null;
+  const failedCastIds = castMedia ? musicVideoSceneCastIds(project, scene).filter((id) => castMedia[id] === null) : [];
+  if (!choices.length && !failedCastIds.length) return null;
   // The selected greybox is added separately and is not one of the saved picks.
   const chosen = musicVideoConditioningReferences(project, scene, castMedia, greybox, { limit: MUSIC_VIDEO_MAX_REFERENCE_CHOICES + 1 });
   const chosenIds = chosen.map((ref) => ref.id);
@@ -69,7 +70,6 @@ export default function SceneFrameReferences({ project, scene, castMedia = null,
   };
   // Until the cast member's guides load, an edit would save the row without them.
   const locked = disabled || Boolean(castMedia && musicVideoSceneCastIds(project, scene).some((id) => castMedia[id] === undefined));
-  const failedCastIds = castMedia ? musicVideoSceneCastIds(project, scene).filter((id) => castMedia[id] === null) : [];
   const set = (picked) => {
     const next = picked && [...picked, ...unresolvedGuides].slice(0, MUSIC_VIDEO_MAX_REFERENCE_CHOICES);
     onEditLocal(scene.sceneId, { frameReferenceIds: next });

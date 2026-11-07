@@ -14,6 +14,7 @@ export const DB_TEST_INCLUDE = [
   'services/catalogDB.identityIntegration.db.test.js',
   'services/trackAlbumMembership.db.test.js',
   'services/stackerNews.db.test.js',
+  'services/nativeUsageStore.db.test.js',
   'services/peerExecutionLedger.db.test.js',
   'services/voice/profiles.db.test.js',
   'services/voice/studio.db.test.js',

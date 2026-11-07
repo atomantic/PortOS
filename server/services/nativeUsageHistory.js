@@ -5,7 +5,7 @@ import { PATHS, tryReadFile } from '../lib/fileUtils.js';
 import { UNKNOWN_MODEL, parseGrokTurns, parseJsonLines, decodeGrokSessionDir, grokEventMs, totalTranscriptTokens } from '../lib/providerTranscriptUsage.js';
 import { claudeNativeUsageStore } from './claudeCodeTranscriptUsage.js';
 import { readCodexAccountingSources } from './codexUsageSources.js';
-import { createNativeUsageStore } from './nativeUsageStore.js';
+import { createNativeUsageStore } from './nativeUsageDayStore.js';
 import { nativeUsageEvents } from './nativeUsageEvents.js';
 import { overlayNativeUsage } from '../lib/nativeUsageOverlay.js';
 import { familyForProvider, familyLabel } from '../lib/providerFamilies.js';

@@ -1,18 +1,23 @@
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
 import { nativeUsageParticipantKey } from '../lib/nativeUsageContract.js';
 import { GROK_USAGE_FIELDS } from '../lib/nativeGrokUsageRecords.js';
 
-let home;
+const { makeProxy, cleanup } = mockPathsDataRoot({ prefix: 'native-usage-matrix-' });
+vi.mock('../lib/fileUtils.js', async original => makeProxy(await original()));
+let home = '/nonexistent-native-usage-home';
 vi.mock('node:os', async original => ({ ...await original(), homedir: () => home }));
 vi.mock('./codexAppServer.js', () => ({ getCodexAccountUsageEvidence: vi.fn() }));
 vi.mock('./instanceIdentity.js', () => ({ getInstanceId: vi.fn(async () => 'synthetic-local-instance') }));
 vi.mock('./settings.js', async () => ({ getSettingsWithStatus: vi.fn(), settingsEvents: new (await import('node:events')).EventEmitter() }));
-import { getCodexAccountUsageEvidence } from './codexAppServer.js';
-import { getSettingsWithStatus } from './settings.js';
-import { getNativeUsageMatrix, NATIVE_USAGE_DASHBOARD_LIMITS } from './nativeUsageMatrix.js';
+const { getCodexAccountUsageEvidence } = await import('./codexAppServer.js');
+const { getSettingsWithStatus } = await import('./settings.js');
+const { getNativeUsageMatrix, NATIVE_USAGE_DASHBOARD_LIMITS } = await import('./nativeUsageMatrix.js');
+const { _resetNativeUsageStore } = await import('./nativeUsageStore.js');
+const { captureDashboardNativeUsageReport } = await import('./nativeUsageReport.js');
 
 const LOCAL = nativeUsageParticipantKey('synthetic-local-instance');
 const PEER = nativeUsageParticipantKey('synthetic-peer-instance');
@@ -47,13 +52,15 @@ beforeEach(async () => {
   vi.clearAllMocks();
   vi.stubEnv('CLAUDE_CONFIG_DIR', '');
   home = await mkdtemp(join(tmpdir(), 'native-matrix-'));
+  await _resetNativeUsageStore();
   getCodexAccountUsageEvidence.mockResolvedValue(codex());
   getSettingsWithStatus.mockResolvedValue({ settings: { usageNativeAccountSelections: ['codex', 'claude', 'grok', 'agy'].map(name => selected(name)) } });
 });
 afterEach(async () => { vi.unstubAllEnvs(); await rm(home, { recursive: true, force: true }); });
+afterAll(cleanup);
 
 describe('local native dashboard capture', () => {
-  it('uses the current readers and selected-account union without ledger data, per-record output or source writes', async () => {
+  it('resolves copies on this machine and reports totals without ledger data, per-record output or source writes', async () => {
     const source = await save('.claude/projects/private-project/session.jsonl', `${claude}\n`);
     await save('.claude/projects/copy/session.jsonl', `${claude}\n`);
     await save('.grok/sessions/private-project/private-session/usage.json', grok());
@@ -61,12 +68,12 @@ describe('local native dashboard capture', () => {
     const before = await readFile(source, 'utf8');
     const modified = (await stat(source)).mtimeMs;
     const result = await getNativeUsageMatrix();
-    expect(result).toMatchObject({ mode: 'read-only', scope: 'local-instance', contractVersion: 4, ledgerChanged: false,
+    expect(result).toMatchObject({ mode: 'read-only', scope: 'local-instance', contractVersion: 5, ledgerChanged: false,
       peerReports: 'not-collected', participantKey: LOCAL });
     expect(entry(result, 'claude')).toMatchObject({ totals: { totalTokens: 20 }, duplicates: { duplicateRecords: 1 },
       scanCaps: { limits: NATIVE_USAGE_DASHBOARD_LIMITS } });
-    expect(family(result, 'claude')).toMatchObject({ merge: { status: 'partial', totals: { totalTokens: 20 } },
-      accounts: [{ totals: { totalTokens: 20 }, coverage: { uniqueRecords: 1 } }] });
+    expect(family(result, 'claude')).toMatchObject({ merge: { status: 'partial', totals: { totalTokens: 20 },
+      modelTotals: [{ kind: 'unknown', key: 'model-missing' }] }, accounts: [{ totals: { totalTokens: 20 } }] });
     expect(entry(result, 'grok')).toMatchObject({ source: 'grok:persisted-session-usage', totals: { totalTokens: 120 },
       cost: { actualSpendUsd: null, nativeCostSignal: { knownCostUsdTicks: 123000 } } });
     expect(entry(result, 'agy')).toMatchObject({ source: 'agy:cli-sqlite-metadata', totals: null, coverage: { missingSource: true } });
@@ -78,12 +85,12 @@ describe('local native dashboard capture', () => {
     expect((await stat(source)).mtimeMs).toBe(modified);
   });
 
-  it('identifies missing selected peers and refuses retained totals instead of treating local data as fleet coverage', async () => {
+  it('names a missing selected peer rather than counting it as zero', async () => {
     await save('.claude/projects/p/s.jsonl', `${claude}\n`);
     getSettingsWithStatus.mockResolvedValue({ settings: { usageNativeAccountSelections: [selected('codex', [LOCAL, PEER]), selected('claude', [LOCAL, PEER])] } });
     const result = await getNativeUsageMatrix();
-    expect(family(result, 'claude')).toMatchObject({ merge: { status: 'refused', totals: null, reasons: ['member-report-missing'] },
-      accounts: [{ status: 'refused', totals: null, membersWithoutReport: [PEER] }] });
+    expect(family(result, 'claude')).toMatchObject({ merge: { status: 'partial', totals: { totalTokens: 20 } },
+      accounts: [{ status: 'partial', totals: { totalTokens: 20 }, membersWithoutReport: [PEER], findings: expect.arrayContaining(['member-report-missing']) }] });
     // An authoritative account-wide snapshot is read once even if another member is missing.
     expect(family(result, 'codex')).toMatchObject({ merge: { totals: { lifetimeTokens: 300 } }, accounts: [{ membersWithoutReport: [PEER] }] });
     expect(entry(result, 'claude').totals.totalTokens).toBe(20);
@@ -100,9 +107,19 @@ describe('local native dashboard capture', () => {
     const unselected = await getNativeUsageMatrix();
     expect(family(unselected, 'codex')).toMatchObject({ merge: { status: 'refused', totals: null }, unresolvedParticipants: [LOCAL] });
     getCodexAccountUsageEvidence.mockResolvedValueOnce({ failureCode: 'CODEX_APP_SERVER_TIMEOUT' });
+    await _resetNativeUsageStore();
     const unavailable = await getNativeUsageMatrix();
     expect(entry(unavailable, 'codex')).toMatchObject({ status: 'unavailable', totals: null, findings: ['refresh-failed'] });
     expect(family(unavailable, 'codex').accounts[0]).toMatchObject({ status: 'refused', totals: null });
+  });
+
+  it('shows a stored Codex entry after a failed refresh, but never lets it answer for the account', async () => {
+    await getNativeUsageMatrix();
+    getCodexAccountUsageEvidence.mockResolvedValueOnce({ failureCode: 'CODEX_APP_SERVER_TIMEOUT' });
+    const failed = await getNativeUsageMatrix();
+    expect(entry(failed, 'codex')).toMatchObject({ status: 'partial', totals: { lifetimeTokens: 300 }, findings: ['retained-snapshot'] });
+    expect(family(failed, 'codex')).toMatchObject({ merge: { status: 'refused', totals: null, reasons: ['authoritative-source-partial'] },
+      accounts: [{ status: 'refused', totals: null }] });
   });
 
   it('coalesces overlapping reads, releases failures and never caches completed results or leaks capture errors', async () => {
@@ -121,10 +138,28 @@ describe('local native dashboard capture', () => {
     expect(getCodexAccountUsageEvidence).toHaveBeenCalledTimes(3);
   });
 
-  it('reports bounded reads and does not publish capped retained-account results', async () => {
-    await save('.claude/projects/p/oversized.jsonl', `${'x'.repeat(NATIVE_USAGE_DASHBOARD_LIMITS.lineBytes + 1)}\n`);
+  it('reports a line past the memory bound and keeps the rest of the read', async () => {
+    await save('.claude/projects/p/oversized.jsonl', `${'x'.repeat(NATIVE_USAGE_DASHBOARD_LIMITS.lineBytes + 1)}\n${claude}\n`);
     const result = await getNativeUsageMatrix();
-    expect(entry(result, 'claude')).toMatchObject({ scanCaps: { capped: true, oversizedLines: 1 } });
-    expect(family(result, 'claude').merge).toMatchObject({ status: 'refused', totals: null });
+    expect(entry(result, 'claude')).toMatchObject({ scanCaps: { capped: true, oversizedLines: 1 }, findings: expect.arrayContaining(['scan-capped']) });
+    expect(family(result, 'claude').merge).toMatchObject({ status: 'partial', totals: { totalTokens: 20 } });
   });
+
+  // The former budget stopped at 128 MiB of file bytes, a report's record list passed the
+  // former 16 MiB peer limit at about 61,000 Claude records, and it holds at most 100,000.
+  it('reads a whole history past the former limits into a report that holds only rollups', async () => {
+    const filler = JSON.stringify({ type: 'attachment', text: 'x'.repeat(2 * 1024 ** 2) });
+    await save('.claude/projects/p/attachments.jsonl', `${Array.from({ length: 70 }, () => filler).join('\n')}\n`);
+    const line = index => JSON.stringify({ type: 'assistant', requestId: `request-${index}`, timestamp: `2026-01-${String(index % 28 + 1).padStart(2, '0')}T00:00:00Z`,
+      message: { id: `message-${index}`, model: `example-model-${index % 3 === 0 ? 'a' : 'b'}`, stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } });
+    await save('.claude/projects/p/records.jsonl', `${Array.from({ length: 100500 }, (_, index) => line(index)).join('\n')}\n`);
+    const report = await captureDashboardNativeUsageReport();
+    const claudeEntry = report.providers.find(provider => provider.family === 'claude');
+    expect(claudeEntry).toMatchObject({ reproducibility: 'deterministic', recordProjection: null, coverage: { measuredRecords: 100500 },
+      scanCaps: { capped: false, stoppedEarly: false }, totals: { totalTokens: 201000 } });
+    expect(claudeEntry.modelUsage.buckets.reduce((sum, { counters }) => sum + counters.totalTokens, 0)).toBe(201000);
+    const text = JSON.stringify(report);
+    expect(Buffer.byteLength(text)).toBeLessThan(1024 ** 2);
+    for (const identity of ['recordKey', 'requestKey', 'message-0', 'request-0']) expect(text).not.toContain(identity);
+  }, 120_000);
 });

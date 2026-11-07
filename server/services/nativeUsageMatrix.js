@@ -25,11 +25,10 @@ const PROVIDER_FIELDS = ['family', 'source', 'validator', 'status', 'completenes
   'accountContext', 'dateBoundary', 'freshness', 'missingIntervals', 'scanCaps', 'reproducibility', 'duplicates',
   'coverage', 'steps', 'cacheOverlap', 'tokenFields', 'totals', 'cost', 'attribution', 'findings', 'nativeUsageCoverage', 'nativeAgyCoverage'];
 const ACCOUNT_FIELDS = ['accountLabel', 'identityBasis', 'authoritativeParticipant', 'historyScope', 'members',
-  'membersWithoutReport', 'status', 'completeness', 'retention', 'freshness', 'coverage', 'totals', 'findings', 'cost', 'attribution'];
+  'membersWithoutReport', 'status', 'completeness', 'retention', 'freshness', 'totals', 'modelTotals', 'findings', 'cost', 'attribution'];
 
-/** Local observations stay separate from selected-account unions. Only the
- * paired report protocol carries hashed record identities for deduplication;
- * the browser projection never includes per-record arrays or source paths.
+/** Machine totals add, per #15252. Account selections group machines and pick one
+ * Codex authority. The browser projection never includes per-record arrays or source paths.
  */
 async function readMatrix(scope) {
   const localKey = scope === 'fleet' ? nativeUsageParticipantKey(await getInstanceId()) : null;
@@ -48,7 +47,7 @@ async function readMatrix(scope) {
     throw new Error('Native account selections changed during capture');
   }
   const reports = [report, ...(collection?.reports ?? [])];
-  const matrix = buildNativeUsageMatrix({ reports, selections });
+  const matrix = buildNativeUsageMatrix({ reports, selections, machineRollups: true });
   if (collection) {
     const parsed = nativeUsageAccountSelectionsSchema.safeParse(selections);
     const known = new Set([report.participantKey, ...collection.peerCollection.peers.map(peer => peer.participantKey)]);
@@ -67,6 +66,7 @@ async function readMatrix(scope) {
     ...(collection ? {
       peerCollection: collection.peerCollection,
       participants: reports.map(source => ({ participantKey: source.participantKey, capturedAt: source.capturedAt,
+        ...(collection.peerCollection.peers.some(peer => peer.retained && peer.participantKey === source.participantKey) ? { retained: true } : {}),
         providers: source.providers.map(provider => pick(provider, PROVIDER_FIELDS)),
       })),
     } : {}),

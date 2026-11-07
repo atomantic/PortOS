@@ -1,6 +1,7 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import { assembleUniverseStyleText } from '../../server/lib/universeVisualStyle.js';
-import { naturalUniverseVisualProfile } from '../../server/lib/universeVisualProfile.js';
+import { REALITY_STARTER_V1 } from '../../server/lib/realityStarterV1.js';
+import { REALITY_STARTER_V2 } from '../../server/lib/realityStarterV2.js';
 
 const { query } = vi.hoisted(() => ({ query: vi.fn() }));
 vi.mock('../../server/lib/db.js', () => ({ withTransaction: fn => fn({ query }) }));
@@ -8,14 +9,14 @@ import migration from './456-reality-style-snapshot-limit.js';
 
 beforeEach(() => query.mockReset());
 
-it('trims Reality style notes when assembled style exceeds limit and updates under a row lock', async () => {
+it('preserves oversized customized Reality style notes during upgrade', async () => {
   const data = {
     id: 'universe-reality',
     name: 'Reality',
     factual: true,
     styleNotes: 'Do not impose a permanent gloomy palette, flattering beauty key or polished cinematic rim light. Analog images should resemble actual film capture, without decorative borders, fake scratches or light-leak overlays. ' + 'x'.repeat(3200),
     influences: { embrace: ['embrace '.repeat(60)], avoid: ['avoid '.repeat(30)] },
-    visualProfile: naturalUniverseVisualProfile(),
+    visualProfile: structuredClone(REALITY_STARTER_V2.visualProfile),
   };
   const originalLength = assembleUniverseStyleText(data).length;
   expect(originalLength).toBeGreaterThan(4000);
@@ -23,19 +24,10 @@ it('trims Reality style notes when assembled style exceeds limit and updates und
   query.mockResolvedValueOnce({ rows: [{ data, deleted: false }] }).mockResolvedValueOnce({});
   await migration.up();
 
-  expect(query.mock.calls[0][0]).toContain('FOR UPDATE');
-  expect(query.mock.calls[1][0]).toContain('UPDATE universes SET');
-  const updated = JSON.parse(query.mock.calls[1][1][1]);
-  expect(assembleUniverseStyleText(updated).length).toBeLessThanOrEqual(4000);
+  expect(query.mock.calls.some(([sql]) => /UPDATE|DELETE|INSERT/.test(sql))).toBe(false);
+  expect(assembleUniverseStyleText(data).length).toBe(originalLength);
 });
 
-it.each([
-  { deleted: true },
-  { name: 'Other' },
-  { styleNotes: 'Short notes' },
-])('preserves universes that do not need shortening or are deleted: %j', async (patch) => {
-  const data = { id: 'universe-reality', name: 'Reality', factual: true, styleNotes: 'Brief', ...patch };
-  query.mockResolvedValue({ rows: [{ data, deleted: !!patch.deleted }] });
-  await migration.up();
-  expect(query).toHaveBeenCalledTimes(1);
+it.each([REALITY_STARTER_V1, REALITY_STARTER_V2])('shipped Reality defaults already fit without shortening', starter => {
+  expect(assembleUniverseStyleText({ name: 'Reality', ...starter }).length).toBeLessThanOrEqual(4000);
 });
