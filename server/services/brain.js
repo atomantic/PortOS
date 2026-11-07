@@ -26,6 +26,8 @@ import * as repoCloner from './repoCloner.js';
 import { deriveRepoLinkFields } from '../lib/repoLinkFields.js';
 import { parseBareUrl } from '../lib/bareUrl.js';
 import { normalizeRepoIntake } from '../lib/repoIntakeActions.js';
+import { transitionInbox, INBOX_EVENTS } from '../lib/brainInboxTransitions.js';
+import { v4 as uuidv4 } from '../lib/uuid.js';
 import {
   classifierOutputSchema,
   digestOutputSchema,
@@ -184,13 +186,17 @@ export async function captureThought(text, providerOverride, modelOverride, { cr
   // Create initial inbox log entry. When auto-classify is off the entry goes
   // straight to needs_review rather than the transient classifying state — and
   // carries no `ai` metadata, since no provider/model was ever invoked.
+  const attemptId = classify ? uuidv4() : null;
   const inboxEntry = await storage.createInboxLog({
     capturedText: text,
     source: 'brain_ui',
     ...(creative ? { creative: true } : {}),
     ...(!classify
       ? {}
-      : { ai: { providerId: provider, modelId: model, promptTemplateId: 'brain-classifier' } }),
+      : {
+        ai: { providerId: provider, modelId: model, promptTemplateId: 'brain-classifier' },
+        classificationAttempt: attemptId
+      }),
     status: !classify ? 'needs_review' : 'classifying'
   });
 
@@ -215,9 +221,10 @@ export async function captureThought(text, providerOverride, modelOverride, { cr
     provider,
     model,
     autoFile: autonomyMode !== 'dry-run',
-    countsTowardBudget: true
+    countsTowardBudget: true,
+    attemptId
   })
-    .catch(err => failClassification(inboxEntry.id, err));
+    .catch(err => failClassification(inboxEntry.id, attemptId, err));
 
   return {
     inboxLog: inboxEntry,
@@ -282,27 +289,68 @@ function repoCaptureMessage(repoIntake) {
 }
 
 /**
+ * Apply one inbox status transition (lib/brainInboxTransitions.js) inside the
+ * record's write queue, against the freshly re-read row. `buildUpdates(fresh)`
+ * runs only once the transition is allowed — side effects such as filing a
+ * destination record belong there, so a refused or stale event performs none.
+ *
+ * Returns `{ outcome, entry }`: outcome is the transition's action (`apply`,
+ * `ignore`, `noop`) or `missing` (absent/tombstoned, entry null). A refused
+ * user action throws a 409.
+ */
+async function transitionInboxEntry(id, event, { attemptId, conflictMessage, buildUpdates } = {}) {
+  let outcome = 'missing';
+  let current = null;
+  const updated = await storage.updateWith('inbox', id, async (fresh) => {
+    current = fresh;
+    const result = transitionInbox(fresh, event, attemptId);
+    outcome = result.action;
+    if (result.action !== 'apply') return null;
+    return { ...(buildUpdates ? await buildUpdates(fresh) : {}), ...result.patch };
+  });
+  if (outcome === 'conflict') {
+    throw new ServerError(conflictMessage || `Inbox entry is ${current.status}; cannot ${event}`, {
+      status: 409,
+      code: 'INBOX_STATUS_CONFLICT'
+    });
+  }
+  return { outcome, entry: updated ?? current };
+}
+
+const inboxNotFound = () => new ServerError('Inbox log entry not found', { status: 404, code: 'NOT_FOUND' });
+
+/**
+ * Write a classifier completion if `attemptId` still owns the row. Returns
+ * whether it was written; a stale completion is logged and dropped.
+ */
+async function settleClassification(entryId, attemptId, event, buildUpdates) {
+  const { outcome } = await transitionInboxEntry(entryId, event, { attemptId, buildUpdates });
+  if (outcome === 'apply') return true;
+  console.log(`⏭️ Ignored stale classification result for ${entryId} (attempt no longer owns the entry)`);
+  return false;
+}
+
+/**
  * Last-resort handler for a throw escaping classifyInBackground (e.g. the filing
  * write failed after a successful AI call). Without it the entry stays
  * `classifying` until the next boot's recoverStuckClassifications.
  */
-async function failClassification(entryId, err) {
+async function failClassification(entryId, attemptId, err) {
   console.error(`❌ Background classification failed for ${entryId}: ${err.message}`);
-  const updated = await storage.updateInboxLog(entryId, {
-    status: 'needs_review',
+  const written = await settleClassification(entryId, attemptId, INBOX_EVENTS.FAIL, () => ({
     error: { message: err.message }
-  }).catch(updateErr => {
+  })).catch(updateErr => {
     console.error(`❌ Failed to mark ${entryId} needs_review: ${updateErr.message}`);
-    return null;
+    return false;
   });
-  if (updated) brainEvents.emit('classified', { entryId, status: 'needs_review', error: err.message });
+  if (written) brainEvents.emit('classified', { entryId, status: 'needs_review', error: err.message });
 }
 
 /**
  * Background AI classification for a captured thought.
  * Updates the inbox entry and emits a brain:classified event when done.
  */
-async function classifyInBackground({ entryId, text, meta, provider, model, autoFile = true, countsTowardBudget = false }) {
+async function classifyInBackground({ entryId, text, meta, provider, model, autoFile = true, countsTowardBudget = false, attemptId }) {
   let classification = null;
   let aiError = null;
 
@@ -346,7 +394,7 @@ async function classifyInBackground({ entryId, text, meta, provider, model, auto
   // If AI failed, mark as needs_review
   if (!classification) {
     const errorMessage = aiError?.message || 'AI classification failed';
-    await storage.updateInboxLog(entryId, {
+    const written = await settleClassification(entryId, attemptId, INBOX_EVENTS.CLASSIFY_REVIEW, () => ({
       ...(aiMeta ? { ai: aiMeta } : {}),
       classification: {
         destination: 'unknown',
@@ -355,9 +403,9 @@ async function classifyInBackground({ entryId, text, meta, provider, model, auto
         extracted: {},
         reasons: [errorMessage]
       },
-      status: 'needs_review',
       error: { message: errorMessage }
-    });
+    }));
+    if (!written) return;
 
     console.log(`🧠 Classification failed for ${entryId}: ${errorMessage}`);
     brainEvents.emit('classified', { entryId, status: 'needs_review', error: errorMessage });
@@ -366,11 +414,11 @@ async function classifyInBackground({ entryId, text, meta, provider, model, auto
 
   // Check confidence threshold
   if (classification.confidence < meta.confidenceThreshold || classification.destination === 'unknown') {
-    await storage.updateInboxLog(entryId, {
+    const written = await settleClassification(entryId, attemptId, INBOX_EVENTS.CLASSIFY_REVIEW, () => ({
       ai: aiMeta,
-      classification,
-      status: 'needs_review'
-    });
+      classification
+    }));
+    if (!written) return;
 
     console.log(`🧠 Low confidence (${classification.confidence}) for ${entryId}`);
     brainEvents.emit('classified', { entryId, status: 'needs_review', confidence: classification.confidence });
@@ -381,11 +429,11 @@ async function classifyInBackground({ entryId, text, meta, provider, model, auto
   // effect is withheld. Surface the suggestion as needs_review so the user can
   // confirm filing it from the inbox.
   if (!autoFile) {
-    await storage.updateInboxLog(entryId, {
+    const written = await settleClassification(entryId, attemptId, INBOX_EVENTS.CLASSIFY_REVIEW, () => ({
       ai: aiMeta,
-      classification,
-      status: 'needs_review'
-    });
+      classification
+    }));
+    if (!written) return;
     console.log(`🧠 [dry-run] Classified ${entryId} → ${classification.destination} (not filed; awaiting confirmation)`);
     brainEvents.emit('classified', {
       entryId,
@@ -397,18 +445,21 @@ async function classifyInBackground({ entryId, text, meta, provider, model, auto
     return;
   }
 
-  // File to appropriate destination
-  const filedRecord = await fileToDestination(classification.destination, classification.extracted, classification.title);
-
-  await storage.updateInboxLog(entryId, {
-    ai: aiMeta,
-    classification,
-    status: 'filed',
-    filed: {
-      destination: classification.destination,
-      destinationId: filedRecord.id
-    }
+  // Filed inside the inbox row's write queue, after the attempt matched, so a
+  // stale or superseded attempt never creates a destination record.
+  let filedRecord = null;
+  const written = await settleClassification(entryId, attemptId, INBOX_EVENTS.CLASSIFY_FILED, async () => {
+    filedRecord = await fileToDestination(classification.destination, classification.extracted, classification.title);
+    return {
+      ai: aiMeta,
+      classification,
+      filed: {
+        destination: classification.destination,
+        destinationId: filedRecord.id
+      }
+    };
   });
+  if (!written) return;
 
   console.log(`🧠 Classified and filed to ${classification.destination}: ${filedRecord.id}`);
   brainEvents.emit('classified', {
@@ -497,91 +548,71 @@ function entryTitle(inboxLog) {
  * Resolve a needs_review inbox item
  */
 export async function resolveReview(inboxLogId, destination, editedExtracted) {
-  const inboxLog = await storage.getInboxLogById(inboxLogId);
-  if (!inboxLog) {
-    throw new Error('Inbox log entry not found');
-  }
-
-  if (inboxLog.status !== 'needs_review') {
-    throw new Error('Inbox entry is not in needs_review status');
-  }
-
-  // Merge extracted data with edits
-  const extracted = { ...inboxLog.classification?.extracted, ...editedExtracted };
-  const title = entryTitle(inboxLog);
-
-  // File to destination
-  const filedRecord = await fileToDestination(destination, extracted, title);
-
-  // Update inbox log
-  await storage.updateInboxLog(inboxLogId, {
-    classification: {
-      ...inboxLog.classification,
-      destination,
-      extracted,
-      confidence: 1.0,
-      reasons: [...(inboxLog.classification?.reasons || []), 'Manually resolved']
-    },
-    status: 'filed',
-    filed: {
-      destination,
-      destinationId: filedRecord.id
+  let filedRecord = null;
+  const { outcome, entry } = await transitionInboxEntry(inboxLogId, INBOX_EVENTS.RESOLVE, {
+    conflictMessage: 'Inbox entry is not in needs_review status',
+    buildUpdates: async (inboxLog) => {
+      const extracted = { ...inboxLog.classification?.extracted, ...editedExtracted };
+      filedRecord = await fileToDestination(destination, extracted, entryTitle(inboxLog));
+      return {
+        classification: {
+          ...inboxLog.classification,
+          destination,
+          extracted,
+          confidence: 1.0,
+          reasons: [...(inboxLog.classification?.reasons || []), 'Manually resolved']
+        },
+        filed: {
+          destination,
+          destinationId: filedRecord.id
+        }
+      };
     }
   });
+  if (outcome === 'missing') throw inboxNotFound();
 
   console.log(`🧠 Resolved review to ${destination}: ${filedRecord.id}`);
-  return {
-    inboxLog: await storage.getInboxLogById(inboxLogId),
-    filedRecord
-  };
+  return { inboxLog: entry, filedRecord };
 }
 
 /**
  * Fix/correct a filed inbox item
  */
 export async function fixClassification(inboxLogId, newDestination, updatedFields, note) {
-  const inboxLog = await storage.getInboxLogById(inboxLogId);
-  if (!inboxLog) {
-    throw new Error('Inbox log entry not found');
-  }
+  let newRecord = null;
+  let previousDestination = null;
+  const { outcome, entry } = await transitionInboxEntry(inboxLogId, INBOX_EVENTS.CORRECT, {
+    conflictMessage: 'Can only fix filed or previously corrected entries',
+    buildUpdates: async (inboxLog) => {
+      previousDestination = inboxLog.filed?.destination || inboxLog.classification?.destination;
+      const previousId = inboxLog.filed?.destinationId;
 
-  if (inboxLog.status !== 'filed' && inboxLog.status !== 'corrected') {
-    throw new Error('Can only fix filed or previously corrected entries');
-  }
+      const extracted = { ...inboxLog.classification?.extracted, ...updatedFields };
+      newRecord = await fileToDestination(newDestination, extracted, entryTitle(inboxLog));
 
-  const previousDestination = inboxLog.filed?.destination || inboxLog.classification?.destination;
-  const previousId = inboxLog.filed?.destinationId;
+      // Mark old record as archived (soft delete by adding archived flag)
+      if (previousId && previousDestination) {
+        await archiveRecord(previousDestination, previousId);
+      }
 
-  // Create new record in new destination
-  const extracted = { ...inboxLog.classification?.extracted, ...updatedFields };
-  const title = entryTitle(inboxLog);
-  const newRecord = await fileToDestination(newDestination, extracted, title);
-
-  // Mark old record as archived (soft delete by adding archived flag)
-  if (previousId && previousDestination) {
-    await archiveRecord(previousDestination, previousId);
-  }
-
-  // Update inbox log with correction info
-  await storage.updateInboxLog(inboxLogId, {
-    status: 'corrected',
-    filed: {
-      destination: newDestination,
-      destinationId: newRecord.id
-    },
-    correction: {
-      correctedAt: new Date().toISOString(),
-      previousDestination: previousDestination || 'unknown',
-      newDestination,
-      note
+      return {
+        filed: {
+          destination: newDestination,
+          destinationId: newRecord.id
+        },
+        correction: {
+          correctedAt: new Date().toISOString(),
+          previousDestination: previousDestination || 'unknown',
+          newDestination,
+          note
+        }
+      };
     }
   });
+  if (outcome === 'missing') throw inboxNotFound();
 
   console.log(`🧠 Fixed classification from ${previousDestination} to ${newDestination}`);
-  return {
-    inboxLog: await storage.getInboxLogById(inboxLogId),
-    newRecord
-  };
+  return { inboxLog: entry, newRecord };
 }
 
 /**
@@ -746,25 +777,26 @@ export async function runWeeklyReview(providerOverride, modelOverride) {
  * AI classification runs in the background and emits a socket event on completion.
  */
 export async function retryClassification(inboxLogId, providerOverride, modelOverride) {
-  const inboxLog = await storage.getInboxLogById(inboxLogId);
-  if (!inboxLog) {
-    throw new Error('Inbox log entry not found');
-  }
-
   const meta = await storage.loadMeta();
   const provider = providerOverride || meta.defaultProvider;
   const model = modelOverride || meta.defaultModel;
 
-  // Set status to classifying so UI shows spinner
-  await storage.updateInboxLog(inboxLogId, {
-    ai: {
-      providerId: provider,
-      modelId: model,
-      promptTemplateId: 'brain-classifier'
-    },
-    status: 'classifying',
-    error: null
+  // The `classifying` claim and its new attempt id are one locked write, so of
+  // two overlapping retries exactly one reaches the classifier; the other 409s.
+  const attemptId = uuidv4();
+  const { outcome, entry } = await transitionInboxEntry(inboxLogId, INBOX_EVENTS.RETRY, {
+    attemptId,
+    conflictMessage: 'Only an entry awaiting review can be retried',
+    buildUpdates: () => ({
+      ai: {
+        providerId: provider,
+        modelId: model,
+        promptTemplateId: 'brain-classifier'
+      },
+      error: null
+    })
   });
+  if (outcome === 'missing') throw inboxNotFound();
 
   console.log(`🧠 Retrying classification in background: ${inboxLogId}`);
 
@@ -772,37 +804,36 @@ export async function retryClassification(inboxLogId, providerOverride, modelOve
   // A manual retry is a user decision to file: it skips the autonomy gate and isn't budget-counted.
   classifyInBackground({
     entryId: inboxLogId,
-    text: inboxLog.capturedText,
+    text: entry.capturedText,
     meta,
     provider,
     model,
     autoFile: true,
-    countsTowardBudget: false
+    countsTowardBudget: false,
+    attemptId
   })
-    .catch(err => failClassification(inboxLogId, err));
+    .catch(err => failClassification(inboxLogId, attemptId, err));
 
   return {
-    inboxLog: await storage.getInboxLogById(inboxLogId),
+    inboxLog: entry,
     message: 'Retrying classification...'
   };
 }
 
 /**
- * Mark inbox entry as done
+ * Mark inbox entry as done. Refused (409) while a classification is in flight,
+ * so its late result cannot overwrite the user's decision. Returns null when the
+ * entry does not exist.
  */
 export async function markInboxDone(inboxLogId) {
-  const inboxLog = await storage.getInboxLogById(inboxLogId);
-  if (!inboxLog) {
-    return null;
-  }
-
-  const updated = await storage.updateInboxLog(inboxLogId, {
-    status: 'done',
-    doneAt: new Date().toISOString()
+  const { outcome, entry } = await transitionInboxEntry(inboxLogId, INBOX_EVENTS.DONE, {
+    conflictMessage: 'Inbox entry is still being classified',
+    buildUpdates: () => ({ doneAt: new Date().toISOString() })
   });
+  if (outcome === 'missing') return null;
 
-  console.log(`🧠 Marked inbox entry done: ${inboxLogId}`);
-  return updated;
+  if (outcome === 'apply') console.log(`🧠 Marked inbox entry done: ${inboxLogId}`);
+  return entry;
 }
 
 /**
@@ -863,11 +894,20 @@ export async function deleteInboxEntry(inboxLogId) {
  */
 export async function recoverStuckClassifications() {
   const instanceId = await getInstanceId();
+  const isOurs = (entry) => !entry.originInstanceId || entry.originInstanceId === instanceId;
   const entries = await storage.getInboxLog({ status: 'classifying', limit: 100 });
   let recovered = 0;
   for (const entry of entries) {
-    if (entry.originInstanceId && entry.originInstanceId !== instanceId) continue;
-    await storage.updateInboxLog(entry.id, { status: 'needs_review' });
+    if (!isOurs(entry)) continue;
+    // Clearing the attempt is what stops a dead classifier from filing later
+    // (any completion without a matching attempt is ignored). Re-checked inside
+    // the write queue so a row that settled since the scan is left alone.
+    const updated = await storage.updateWith('inbox', entry.id, (fresh) => (
+      fresh.status === 'classifying' && isOurs(fresh)
+        ? { status: 'needs_review', classificationAttempt: null }
+        : null
+    ));
+    if (!updated) continue;
     recovered++;
     console.log(`🧠 Recovered stuck classification: ${entry.id}`);
   }
@@ -914,13 +954,19 @@ export async function recoverInterruptedRepoClones() {
     // storage implementation cannot broaden this boot-time mutation by accident.
     if (link.cloneStatus !== 'cloning') continue;
     if (!shouldRecoverInterruptedClone(link, instanceId)) continue;
-    await storage.updateLink(link.id, {
-      cloneStatus: 'failed',
-      cloneError: 'Clone interrupted by a server restart. Retry to clone the repository again.',
-      cloneInstanceId: null,
-      cloneInterrupted: true
-    });
-    recovered++;
+    const updated = await storage.updateLinkWith(link.id, (fresh) => (
+      fresh.cloneStatus === 'cloning' && shouldRecoverInterruptedClone(fresh, instanceId)
+        ? {
+          cloneStatus: 'failed',
+          cloneError: 'Clone interrupted by a server restart. Retry to clone the repository again.',
+          cloneInstanceId: null,
+          cloneInterrupted: true,
+          // A dead attempt must not settle the link if its git child outlived us.
+          cloneAttempt: null
+        }
+        : null
+    ));
+    if (updated) recovered++;
   }
   if (recovered > 0) {
     console.log(`🧠 Recovered ${recovered} interrupted repository clone(s)`);
@@ -1059,40 +1105,69 @@ function hostnameFromUrl(url) {
  * after a first clone failed. They dispatch only after the clone SUCCEEDS:
  * there is nothing on disk to read before that, and a failed clone must not
  * queue an agent against a path that doesn't exist.
+ *
+ * Awaiting it awaits only the claim: the `cloning` stamp and a new
+ * `cloneAttempt` are one locked write, refused with a 409 when the fresh record
+ * is already `cloning`, so two starts run git once. The completion writes only
+ * while its attempt still owns the record. Resolves to the claimed link, or
+ * null when the link no longer exists.
  */
 export async function cloneRepoInBackground(linkId, url) {
-  const previous = await storage.getLinkById(linkId);
   // `ensureInstanceId`, and null rather than the sentinel: `cloneInstanceId`
   // lands on a durable, federated record, and a stamped 'unknown' would read as
   // "some other install owns this" at boot on every machine — re-stranding the
   // exact record this recovery exists to free.
   const resolvedInstanceId = await ensureInstanceId();
   const cloneInstanceId = resolvedInstanceId === UNKNOWN_INSTANCE_ID ? null : resolvedInstanceId;
-  await storage.updateLink(linkId, {
-    cloneStatus: 'cloning',
-    // The Links tab renders `cloneError` whenever it is set, independent of
-    // status — leaving the previous attempt's message would show the failure
-    // text beside the new attempt's spinner.
-    cloneError: null,
-    cloneInstanceId,
-    cloneInterrupted: false
+  const cloneAttempt = uuidv4();
+  let inProgress = false;
+  let replaceIncomplete = false;
+  const claimed = await storage.updateLinkWith(linkId, (fresh) => {
+    if (fresh.cloneStatus === 'cloning') {
+      inProgress = true;
+      return null;
+    }
+    replaceIncomplete = fresh.cloneInterrupted === true;
+    return {
+      cloneStatus: 'cloning',
+      cloneAttempt,
+      // The Links tab renders `cloneError` whenever it is set, independent of
+      // status — leaving the previous attempt's message would show the failure
+      // text beside the new attempt's spinner.
+      cloneError: null,
+      cloneInstanceId,
+      cloneInterrupted: false
+    };
   });
+  if (inProgress) {
+    throw new ServerError('Clone already in progress', { status: 409, code: 'CLONE_IN_PROGRESS' });
+  }
+  if (!claimed) return null;
 
-  repoCloner.cloneRepo(url, { replaceIncomplete: previous?.cloneInterrupted === true })
+  // A newer attempt (or boot recovery) owns the record once the ids differ; the
+  // superseded completion leaves it alone.
+  const settle = (updates) => storage.updateLinkWith(linkId, (fresh) => (
+    fresh.cloneAttempt === cloneAttempt ? { ...updates, cloneAttempt: null } : null
+  ));
+
+  repoCloner.cloneRepo(url, { replaceIncomplete })
     .then(async (result) => {
-      const link = await storage.updateLink(linkId, {
+      const link = await settle({
         localPath: result.localPath,
         cloneStatus: 'cloned',
         cloneError: null,
         cloneInstanceId: null,
         cloneInterrupted: false
       });
+      if (!link) {
+        console.log(`⏭️ Background clone finished for ${linkId}, but a newer attempt owns the link (or it was deleted)`);
+        return;
+      }
       console.log(`✅ Background clone complete: ${linkId}`);
-      // `link` is null when the user deleted the bookmark mid-clone — nothing
-      // left to scan or study. The whole intake is chained off its OWN catch, so
-      // a queueing failure can't rewrite a clone that genuinely succeeded as
-      // `failed` via the outer handler below.
-      if (!link?.repoIntake) return;
+      // The whole intake is chained off its OWN catch, so a queueing failure
+      // can't rewrite a clone that genuinely succeeded as `failed` via the
+      // outer handler below.
+      if (!link.repoIntake) return;
       // Dynamic on purpose, and NOT for boot cost — routes/brainLinks.js already
       // imports repoIntake.js statically, so the CoS task graph is loaded either
       // way. It keeps that graph out of *brain.js's own module graph*, which the
@@ -1105,14 +1180,23 @@ export async function cloneRepoInBackground(linkId, url) {
         .catch(err => console.error(`❌ Post-clone intake failed for ${linkId}: ${err.message}`));
     })
     .catch(async (err) => {
-      await storage.updateLink(linkId, {
+      const link = await settle({
         cloneStatus: 'failed',
         cloneError: err.message,
         cloneInstanceId: null,
         cloneInterrupted: false
+      }).catch(updateErr => {
+        console.error(`❌ Failed to record clone failure for ${linkId}: ${updateErr.message}`);
+        return null;
       });
+      if (!link) {
+        console.log(`⏭️ Superseded clone attempt for ${linkId} ended: ${err.message}`);
+        return;
+      }
       console.error(`❌ Background clone failed: ${linkId} - ${err.message}`);
     });
+
+  return claimed;
 }
 
 /**

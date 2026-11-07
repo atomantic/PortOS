@@ -1131,6 +1131,7 @@ export const getLinks = (filters) => readLinks(filters ? query('links', filters)
 export const getLinkById = (id) => readLink(getById('links', id));
 export const createLink = (data) => readLink(create('links', data));
 export const updateLink = (id, data) => readLink(update('links', id, data));
+export const updateLinkWith = (id, fn) => readLink(updateWith('links', id, fn));
 // Batch reorder: per-id write queues so a multi-chip drag merges each link
 // against its freshest persisted record.
 export const reorderLinks = (updates) => readLinks(updateMany('links', updates));

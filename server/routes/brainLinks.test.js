@@ -13,7 +13,7 @@ import express from 'express';
 import { join } from 'path';
 import { PATHS } from '../lib/fileUtils.js';
 import { request } from '../lib/testHelper.js';
-import { errorMiddleware } from '../lib/errorHandler.js';
+import { errorMiddleware, ServerError } from '../lib/errorHandler.js';
 
 vi.mock('../services/brain.js', () => ({
   getLinks: vi.fn(),
@@ -187,7 +187,7 @@ describe('POST /api/brain/links/:id/clone', () => {
 
   it('starts a new clone for a link boot recovery reset to failed', async () => {
     brainService.getLinkById.mockResolvedValue(repoLink('failed'));
-    brainService.cloneRepoInBackground.mockResolvedValue();
+    brainService.cloneRepoInBackground.mockResolvedValue(repoLink('cloning'));
 
     const res = await request(app).post('/api/brain/links/repo-link/clone');
 
@@ -198,19 +198,27 @@ describe('POST /api/brain/links/:id/clone', () => {
     );
   });
 
-  it('logs rather than crashing when the un-awaited clone kickoff rejects', async () => {
-    // The kickoff runs outside the request lifecycle, so its pre-clone steps
-    // (identity resolve, the `cloning` stamp) have no `next(err)` to bubble to.
-    brainService.getLinkById.mockResolvedValue(repoLink('none'));
-    brainService.cloneRepoInBackground.mockRejectedValue(new Error('identity unavailable'));
-    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+  it('surfaces the 409 from the locked claim when a concurrent start won', async () => {
+    // Both requests read `failed` before either claimed; the claim inside the
+    // link's write queue is the authority (#15155).
+    brainService.getLinkById.mockResolvedValue(repoLink('failed'));
+    brainService.cloneRepoInBackground.mockRejectedValue(
+      new ServerError('Clone already in progress', { status: 409, code: 'CLONE_IN_PROGRESS' })
+    );
 
     const res = await request(app).post('/api/brain/links/repo-link/clone');
-    await new Promise(resolve => setImmediate(resolve));
 
-    expect(res.status).toBe(200);
-    expect(logged).toHaveBeenCalledWith(expect.stringContaining('identity unavailable'));
-    logged.mockRestore();
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('CLONE_IN_PROGRESS');
+  });
+
+  it('answers 404 when the link was deleted before the claim', async () => {
+    brainService.getLinkById.mockResolvedValue(repoLink('none'));
+    brainService.cloneRepoInBackground.mockResolvedValue(null);
+
+    const res = await request(app).post('/api/brain/links/repo-link/clone');
+
+    expect(res.status).toBe(404);
   });
 });
 

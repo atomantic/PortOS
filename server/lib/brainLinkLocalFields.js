@@ -11,6 +11,7 @@ export const BRAIN_LINK_MACHINE_LOCAL_FIELDS = Object.freeze([
   'cloneError',
   'cloneInstanceId',
   'cloneInterrupted',
+  'cloneAttempt',
   'malwareScan',
   'repoIntake',
   'repoStudy',
