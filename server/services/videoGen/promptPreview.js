@@ -73,7 +73,7 @@ export async function previewVideoPrompt({ previewUploads = [], ...body }) {
     let castReferences = [];
     if (body.musicVideo) {
       if (!sourceImagePath) throw new ServerError('Music Video scene render needs a resolvable reference frame.', { status: 400, code: 'MUSIC_VIDEO_SOURCE_REQUIRED' });
-      const [{ getProject }, { loadMusicVideoGreybox }, { composeShotPrompt }, { musicVideoHostedClipReferences }] = await Promise.all([
+      const [{ getProject }, { loadMusicVideoGreybox }, { composeShotPrompt }, { musicVideoClipCastReferences }] = await Promise.all([
         import('../musicVideo/projects.js'), import('../musicVideo/greyboxReferences.js'),
         import('../musicVideo/submissionGuards.js'), import('../musicVideo/clipCastReferences.js'),
       ]);
@@ -87,7 +87,7 @@ export async function previewVideoPrompt({ previewUploads = [], ...body }) {
       const additions = await composeShotPrompt({ body, params, project, scene, prepared: {}, performance: null, backend, greybox });
       prompt = params.prompt;
       promptAdditions = [...promptAdditions, ...additions];
-      if (!guidance.guidanceImagePath) castReferences = await musicVideoHostedClipReferences(body.musicVideo, MUSIC_VIDEO_GROK_CLIP_REFERENCE_LIMIT, { excludePath: sourceImagePath });
+      if (!guidance.guidanceImagePath) castReferences = await musicVideoClipCastReferences(body.musicVideo);
     }
     // Uploaded reference images follow, named in place of their staged paths.
     castReferences = [...castReferences, ...videoReferenceImageSlots(uploads, body)

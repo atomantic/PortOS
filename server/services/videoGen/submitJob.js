@@ -387,7 +387,9 @@ const submitHostedLane = async ({ body, prepared, backend, hosted, performancePa
   const carriesCast = backend === VIDEO_GEN_MODE.GROK || backend === VIDEO_GEN_MODE.GEMINI;
   const castReferenceLimit = musicVideoClipReferenceCapacity(backend);
   const musicVideoReferences = carriesCast && body.musicVideo && sourceImagePath && !prepared.guidanceImagePath
-    ? await (await import('../musicVideo/clipCastReferences.js')).musicVideoHostedClipReferences(body.musicVideo, castReferenceLimit, { excludePath: sourceImagePath })
+    ? await import('../musicVideo/clipCastReferences.js').then((mod) => (backend === VIDEO_GEN_MODE.GROK
+      ? mod.musicVideoClipCastReferences(body.musicVideo)
+      : mod.musicVideoClipReferences(body.musicVideo, castReferenceLimit)))
     : [];
   // Caller-uploaded reference images (staged by the lane) follow any Music Video
   // sheets, in upload order. Only a render with a source frame uses them.

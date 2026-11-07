@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { loadMusicVideoGreybox } from './greyboxReferences.js';
+import { loadMusicVideoGreybox, withMusicVideoGreyboxInput } from './greyboxReferences.js';
 import { musicVideoFrameModelInput, musicVideoShotModelInput } from '../../lib/musicVideoShotPrompt.js';
 import { musicVideoSceneCreateSchema } from '../../lib/musicVideoValidation.js';
 import { buildProjectRecord, addScene, replaceScenes, splitScene } from './projectsLogic.js';
@@ -18,6 +18,12 @@ const media = [{ mediaKey: 'layout.png', kind: 'reference', role: 'greybox-shot:
 const deps = () => ({ catalog: { getIngredient: vi.fn(async () => structuredClone(ingredient)), listMediaForIngredient: vi.fn(async () => structuredClone(media)) }, resolveImage: vi.fn(() => '/example/layout.png') });
 
 describe('music video greybox selection', () => {
+  // Uniquely catches a clip from a start frame sending the set plate as an extra, unpicked reference.
+  it('adds no plate to a clip that animates its start frame', async () => {
+    const request = { prompt: 'The singer waves', sourceImageFile: 'start.png', musicVideo: { projectId: 'p', sceneId: 's1' } };
+    await expect(withMusicVideoGreyboxInput(request, project)).resolves.toBe(request);
+  });
+
   it('resolves the selected camera and records figure additions in both sent prompts without editing authored fields', async () => {
     const greybox = await loadMusicVideoGreybox(project, scene, deps());
     expect(greybox.reference).toMatchObject({ imageId: 'layout.png', role: 'set' });
