@@ -66,7 +66,7 @@ export async function assertCatalogRenderParams(params, snapshot = null) {
 }
 
 /** Ordered references for a tagged shot, resolved once before the job is queued. */
-export async function musicVideoClipReferences({ projectId, sceneId } = {}, limit = MUSIC_VIDEO_MAX_REFERENCE_CHOICES, { excludePath = null, project: snapshot = null, includePromptLabels = false } = {}) {
+export async function musicVideoClipReferences({ projectId, sceneId } = {}, limit = MUSIC_VIDEO_MAX_REFERENCE_CHOICES, { excludePath = null, excludeImageId = null, project: snapshot = null, includePromptLabels = false } = {}) {
   if (!projectId || !sceneId || limit < 1) return [];
   const { getProject } = await import('./projects.js');
   const project = await requireCatalogRenderReady(snapshot || await getProject(projectId));
@@ -81,6 +81,7 @@ export async function musicVideoClipReferences({ projectId, sceneId } = {}, limi
   const resolved = [];
   for (const ref of references) {
     if (resolved.length >= limit) break;
+    if (ref.imageId === excludeImageId) continue;
     const path = (ref.castGuide || ref.linkedCast || ref.catalogSubjectId) ? resolveImageInputPath(ref.imageId) : resolveGalleryImage(ref.imageId);
     if (!path) throw new ServerError(`The clip reference ${ref.label || ref.imageId} is missing. Restore it or select another.`,
       { status: 409, code: 'MUSIC_VIDEO_CLIP_REFERENCE_MISSING' });
@@ -104,8 +105,15 @@ export async function musicVideoHostedClipReferences(tag = {}, limit = MUSIC_VID
   const greybox = scene && await loadMusicVideoGreybox(project, scene);
   const lead = greybox && greybox.path !== excludePath
     ? [{ path: greybox.path, label: greybox.reference.label, role: 'set', greybox: true }] : [];
-  const rest = await musicVideoClipReferences(tag, limit - lead.length, { excludePath, project });
-  return [...lead, ...rest.filter((ref) => !lead.some((item) => item.path === ref.path))];
+  const rest = await musicVideoClipReferences(tag, limit - lead.length, { excludePath, excludeImageId: greybox?.reference.imageId, project });
+  return [...lead, ...rest];
+}
+
+/** The tagged shot's selected greybox camera, or null. */
+export async function musicVideoShotGreybox({ projectId, sceneId } = {}) {
+  const [{ getProject }, { loadMusicVideoGreybox }] = await Promise.all([import('./projects.js'), import('./greyboxReferences.js')]);
+  const project = await getProject(projectId);
+  return loadMusicVideoGreybox(project, project?.scenes?.find((entry) => entry.sceneId === sceneId));
 }
 
 /**

@@ -403,12 +403,20 @@ const submitHostedLane = async ({ body, prepared, backend, hosted, performancePa
   const clipReferenceModel = falModel || runwayModel;
   const clipReferenceLimit = clipReferenceModel
     ? musicVideoClipReferenceCapacity(backend, clipReferenceModel, { endFrame: backend === VIDEO_GEN_MODE.RUNWAY && !!prepared.lastImagePath }) : 0;
-  // On these lanes a shot's only image pick is the greybox plate applyProjectRenderPool added.
-  if (clipReferenceModel && clipReferenceLimit < 1 && body.musicVideo && body.referenceImageFiles?.length && !prepared.guidanceImagePath) {
-    throw new ServerError(prepared.lastImagePath && clipReferenceModel.referenceImages
-      ? `${clipReferenceModel.label} cannot combine an end frame with this shot's greybox reference. Turn off the end frame, clear the greybox reference, or pick another model.`
-      : `${clipReferenceModel.label} takes no reference images, so it cannot use this shot's greybox reference. Clear the greybox reference or pick a model that takes references.`,
-    { status: 400, code: 'MUSIC_VIDEO_GREYBOX_REFERENCES_UNSUPPORTED' });
+  // applyProjectRenderPool adds a shot's greybox plate to its image picks. These lanes
+  // resolve clip references themselves, so the plate is the only pick they can send.
+  if (clipReferenceModel && body.musicVideo && body.referenceImageFiles?.length && !prepared.guidanceImagePath) {
+    const greybox = await (await import('../musicVideo/clipCastReferences.js')).musicVideoShotGreybox(body.musicVideo);
+    const plate = greybox?.reference.imageId;
+    if (backend === VIDEO_GEN_MODE.FAL && body.referenceImageFiles.some((file) => file !== plate)) {
+      throw new ServerError('A fal shot clip takes its references from the shot, not from reference image picks.', { status: 400, code: 'VIDEO_REFERENCE_INPUTS_LOCAL_ONLY' });
+    }
+    if (clipReferenceLimit < 1 && body.referenceImageFiles.includes(plate)) {
+      throw new ServerError(prepared.lastImagePath && clipReferenceModel.referenceImages
+        ? `${clipReferenceModel.label} cannot combine an end frame with this shot's greybox reference. Turn off the end frame, clear the greybox reference, or pick another model.`
+        : `${clipReferenceModel.label} takes no reference images, so it cannot use this shot's greybox reference. Clear the greybox reference or pick a model that takes references.`,
+      { status: 400, code: 'MUSIC_VIDEO_GREYBOX_REFERENCES_UNSUPPORTED' });
+    }
   }
   const useClipReferences = Boolean(clipReferenceModel?.referenceImages && body.musicVideo && sourceImagePath && !prepared.guidanceImagePath);
   const clipReferences = useClipReferences

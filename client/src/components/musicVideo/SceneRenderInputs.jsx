@@ -69,8 +69,7 @@ export function shotCardRenderRequest({
   // The greybox plate leads a hosted clip's references and takes one slot (clipCastReferences.js).
   const hostedClipReferences = (limit) => {
     const plate = limit > 0 && greybox?.reference ? [greybox.reference] : [];
-    return [...plate, ...musicVideoClipConditioningReferences(project, scene, castMedia, { limit: limit - plate.length })
-      .filter((ref) => ref.imageId !== plate[0]?.imageId)];
+    return [...plate, ...musicVideoClipConditioningReferences(project, scene, castMedia, { limit: limit - plate.length, excludeImageId: plate[0]?.imageId })];
   };
   const clipReferences = falModel?.referenceImages && scene?.referenceImageId
     ? falClipReferenceAddition(falModel, hostedClipReferences(musicVideoClipReferenceCapacity('fal', falModel)), { hasImage: true, prompt: composedPrompt }) : null;

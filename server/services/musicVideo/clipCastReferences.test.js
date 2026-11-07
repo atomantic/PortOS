@@ -88,6 +88,18 @@ describe('musicVideoHostedClipReferences', () => {
     ]);
   });
 
+  // Uniquely catches a plate also picked as a clip reference costing the shot a later reference.
+  it('does not spend a slot on a pick that is the greybox plate', async () => {
+    const setReference = { subjectId: 'set-rink', greyboxShotId: 'wide' };
+    const refs = [...REFS, { id: 'mvr-layout', imageId: 'layout.png', role: 'set', label: 'Layout' }];
+    const scene = { sceneId: 's1', clipReferenceIds: ['mvr-layout', 'mvr-cs-character'], setReference };
+    getProject.mockResolvedValue({ ...project(scene, refs), concept: { subjects: [{ id: 'set-rink', kind: 'place', name: 'Example Rink', ingredientId: 'cat-rink' }] } });
+    catalog.getIngredient.mockResolvedValue({ id: 'cat-rink', type: 'place', payload: { greybox: { shots: [{ id: 'wide', label: 'Wide camera' }] } } });
+    catalog.listMediaForIngredient.mockResolvedValue([{ mediaKey: 'layout.png', kind: 'reference', role: 'greybox-shot:wide' }]);
+    expect((await musicVideoHostedClipReferences({ projectId: 'mv-1', sceneId: 's1' }, 2)).map((ref) => ref.label))
+      .toEqual(['Example Rink · Wide camera', 'Lead — character sheet']);
+  });
+
   it('returns none for an untagged clip or a scene that is gone', async () => {
     expect(await musicVideoHostedClipReferences({})).toEqual([]);
     getProject.mockResolvedValue(project({ sceneId: 'other' }, REFS));

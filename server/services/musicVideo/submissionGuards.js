@@ -201,8 +201,7 @@ export async function applyMusicVideoSubmissionGuards({ body, params, prepared, 
       : (body.mode === 'ic-ingredients-25' ? (params.icReferencePaths || []) : (params.referenceImagePaths || []))
         .map((path) => basename(path));
     // The greybox plate leads a hosted clip's references; the picker lists only the rest.
-    const withoutPlate = (files) => files.filter((file) => file !== greybox?.reference.imageId);
-    if (JSON.stringify(withoutPlate(actual)) !== JSON.stringify(withoutPlate(musicVideo.expectedClipReferenceFiles))) {
+    if (JSON.stringify(actual.filter((file) => file !== greybox?.reference.imageId)) !== JSON.stringify(musicVideo.expectedClipReferenceFiles)) {
       refuse(409, 'MUSIC_VIDEO_CLIP_REFERENCES_CHANGED', 'The clip references changed or could not be loaded. Review them and render again.');
     }
   }

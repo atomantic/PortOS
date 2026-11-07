@@ -576,11 +576,11 @@ export function musicVideoConditioningReferences(project, scene, castMedia = nul
  * references previously derived from the frame selection; an explicit empty
  * list means no extra images. The selected source frame is not repeated.
  */
-export function musicVideoClipConditioningReferences(project, scene, castMedia = null, { limit = MUSIC_VIDEO_MAX_REFERENCE_CHOICES } = {}) {
+export function musicVideoClipConditioningReferences(project, scene, castMedia = null, { limit = MUSIC_VIDEO_MAX_REFERENCE_CHOICES, excludeImageId = null } = {}) {
   const explicit = Array.isArray(scene?.clipReferenceIds);
   const source = explicit ? { ...scene, frameReferenceIds: scene.clipReferenceIds } : scene;
   return musicVideoConditioningReferences(project, source, castMedia)
-    .filter((ref) => !ref.panelArt && !ref.greybox && ref.imageId !== scene?.referenceImageId
+    .filter((ref) => !ref.panelArt && !ref.greybox && ref.imageId !== scene?.referenceImageId && ref.imageId !== excludeImageId
       && (explicit || ref.role === 'character' || ref.role === 'subject'))
     .filter((ref, index, refs) => refs.findIndex((other) => other.imageId === ref.imageId) === index)
     .slice(0, Math.max(0, limit));

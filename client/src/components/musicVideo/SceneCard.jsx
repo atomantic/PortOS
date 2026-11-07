@@ -271,7 +271,7 @@ export default function SceneCard({
   // A failed read (null) would otherwise send the clip without the member's guides.
   const guidesFailed = referenceCapacity > 0 && castMedia && musicVideoSceneCastIds(project, scene).some((id) => castMedia[id] === null);
   const availableReferences = musicVideoClipReferenceChoices(project, scene, castMedia);
-  const selectedClipReferences = musicVideoClipConditioningReferences(project, scene, castMedia, { limit: referenceCapacity });
+  const selectedClipReferences = musicVideoClipConditioningReferences(project, scene, castMedia, { limit: referenceCapacity, excludeImageId: greyboxSlot ? greybox.reference.imageId : null });
   const referenceLabels = selectedClipReferences.map((ref) => ref.label || ref.role || 'visual reference');
   const referenceSheetPrefix = `Reference sheet: ${referenceLabels.join(', ')}.\n\nGenerated video: `;
   const previewRequest = useLtxReferences ? { ...cardRequest,

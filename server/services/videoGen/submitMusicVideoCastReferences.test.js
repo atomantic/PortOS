@@ -6,6 +6,7 @@ const m = vi.hoisted(() => ({
   localReferences: vi.fn(),
   hostedReferences: vi.fn(async () => []),
   plainClipReferences: vi.fn(),
+  shotGreybox: vi.fn(async () => null),
   renderPool: vi.fn((body) => body),
   copy: vi.fn(async () => {}),
   unlink: vi.fn(async () => {}),
@@ -40,6 +41,7 @@ vi.mock('../musicVideo/clipCastReferences.js', () => ({
   musicVideoLocalReferencePaths: m.localReferences,
   musicVideoHostedClipReferences: m.hostedReferences,
   musicVideoClipReferences: m.plainClipReferences,
+  musicVideoShotGreybox: m.shotGreybox,
 }));
 vi.mock('../musicVideo/performanceShot.js', () => ({ preparePerformanceShot: async () => null }));
 vi.mock('../musicVideo/submissionGuards.js', () => ({ applyMusicVideoSubmissionGuards: async () => [] }));
@@ -59,6 +61,7 @@ beforeEach(() => {
     .filter((path) => path !== excludePath).slice(0, limit));
   m.hostedReferences.mockResolvedValue([]);
   m.plainClipReferences.mockImplementation((...args) => m.hostedReferences(...args));
+  m.shotGreybox.mockResolvedValue(null);
   m.renderPool.mockImplementation((body) => body);
   m.enqueue.mockResolvedValue({ jobId: 'job', status: 'queued', position: 1 });
 });
@@ -187,6 +190,7 @@ describe('Music Video cast references at video submission', () => {
       const rider = { path: '/mock/images/rider.png', label: 'Rider' };
       m.hostedReferences.mockResolvedValue([plate, rider]);
       m.plainClipReferences.mockResolvedValue([rider]);
+      m.shotGreybox.mockResolvedValue({ reference: { imageId: 'layout.png' } });
     });
 
     // Uniquely catches a lane dropping the plate (Runway) or refusing it (fal's hosted-reference guard).
@@ -209,6 +213,15 @@ describe('Music Video cast references at video submission', () => {
     ])('refuses %s with room for no references, naming the greybox', async (_name, lane, message) => {
       await expect(submitVideoGenJob(body(lane), {})).rejects.toThrow(message);
       expect(m.enqueue).not.toHaveBeenCalled();
+    });
+
+    // Uniquely catches blaming the greybox for files that are not its plate, or fal silently dropping them.
+    it('treats reference files that are not the plate as ordinary picks', async () => {
+      m.shotGreybox.mockResolvedValue(null);
+      m.renderPool.mockImplementation((request) => ({ ...request, referenceImageFiles: ['chosen.png'] }));
+      await expect(submitVideoGenJob(body({ backend: 'runway', runwayModelId: 'gen4.5', runwayDuration: 5 }), {})).resolves.toMatchObject({ mode: 'runway' });
+      await expect(submitVideoGenJob(body({ backend: 'fal', falModelId: 'minimax/h3-max/reference-to-video', falDuration: 5 }), {}))
+        .rejects.toMatchObject({ code: 'VIDEO_REFERENCE_INPUTS_LOCAL_ONLY' });
     });
 
     it('still refuses reference picks on a fal render that is not a shot', async () => {
