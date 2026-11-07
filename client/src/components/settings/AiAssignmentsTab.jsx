@@ -540,21 +540,21 @@ export default function AiAssignmentsTab() {
               return (
                 <tr key={entry.id} className="align-top">
                   <td className="px-3 py-3 text-sm text-gray-300 whitespace-nowrap">
-                      <div>{entry.area}</div>
-                      <div className="mt-1 text-xs text-gray-600">{entry.assignmentType}</div>
+                    <div>{entry.area}</div>
+                    <div className="mt-1 text-xs text-gray-600">{entry.assignmentType}</div>
                   </td>
                   <td className="px-3 py-3">
-                      <div className="text-sm text-white">{entry.label}</div>
-                      {entry.notes && <div className="mt-1 text-xs text-gray-500">{entry.notes}</div>}
+                    <div className="text-sm text-white">{entry.label}</div>
+                    {entry.notes && <div className="mt-1 text-xs text-gray-500">{entry.notes}</div>}
                   </td>
                   <td className="px-3 py-3">{provider}</td>
                   <td className="px-3 py-3">{model}</td>
                   <td className="px-3 py-3">{effort}</td>
                   <td className="px-3 py-3 text-xs text-gray-500">
-                      <div className="break-all">{entry.source}</div>
-                      {entry.link && (
-                        <Link to={entry.link} className="inline-block mt-1 text-port-accent hover:underline">Open</Link>
-                      )}
+                    <div className="break-all">{entry.source}</div>
+                    {entry.link && (
+                      <Link to={entry.link} className="inline-block mt-1 text-port-accent hover:underline">Open</Link>
+                    )}
                   </td>
                   <td className="px-3 py-3 text-right">{action}</td>
                 </tr>
