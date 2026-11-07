@@ -9,8 +9,8 @@
   ],
   "limits": {
     "maxLabelLength": 105,
-    "maxLabelsPerProjection": 64,
-    "maxRowsPerRecord": 16
+    "maxLabelsPerProjection": 1024,
+    "maxRowsPerRecord": 256
   },
   "unknownReasons": [
     "model-missing",

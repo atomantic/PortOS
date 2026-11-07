@@ -13,6 +13,13 @@ removes or re-totals them, and it establishes neither API-equivalent cost nor ac
 spend. A label is what the responding endpoint reported, not a verified vendor model
 and not a pricing key.
 
+**Owner direction (2026-11-07).** Paired peers are the owner's own trusted machines, so
+PortOS should not cap what they report. Peers should only need to send aggregate
+metrics, and reconciling every record should not be a goal where a subscription source
+supplies the data. Usage already collected should be stored, so static history is never
+read twice. This record follows that direction; #15252 and #15255 track the production
+work.
+
 ## Source evidence
 
 Checked 2026-11-07 against Claude Code 2.1.319 and Grok 1.0.77 (`50ca579fa996`).
@@ -106,10 +113,61 @@ misstate the rest. Cache and reasoning are read as columns and never added to a 
 without changing its bucket. Cost ticks and `costIsPartial` are not reconciled and never
 enter a bucket.
 
-## Proposed extension
+## Collection and reporting
 
-Smallest change: bump record projections to `version: 2` inside a new report contract
-version 5. `identityScheme` and every existing field are unchanged.
+**Each machine stores what it collected (#15255).** Today every read starts over and
+nothing persists. The proposed store keeps one record projection per source file, with
+that file's size and mtime:
+
+- an unchanged source costs one `stat`, however old it is;
+- a changed source is re-read and replaces only its own projection;
+- a deleted source keeps its projection, because Claude's default 30-day retention
+  removes transcripts while the usage still happened.
+
+Staleness comes from those file facts rather than a date cut-off, so a resumed
+month-old session is still picked up. Totals are the existing unions over every stored
+projection. Evidence folds the same in any order or grouping, so that matches reading
+everything at once, and a file copied to a new path still deduplicates by identity.
+Codex has no narrower read: `account/usage/read` returns its history in one cheap call.
+
+**Peers report aggregates.** Per-record resolution stays on the machine that read the
+files. A new report contract version 5 adds this block to the Claude and Grok entries:
+
+```text
+modelUsage = { version: 1, buckets: [{ day, kind, key, counters, incompleteRecords? }] }
+  day       UTC date of the accepted record's `at`
+  kind      model | unknown | unallocated
+  key       validated label for model, otherwise a reason from the vocabulary above
+  counters  the provider total's field names, with no cost and no record identity
+  incompleteRecords   Grok only: how many records in this bucket are lower bounds
+```
+
+Buckets are unique, sorted by day, kind and key, and sum exactly to the provider total.
+Size follows days times labels rather than records: a year across ten labels is under
+1 MiB. `aggregate.json` pins accepted and refused examples.
+
+**What limits the data today (#15252).** These are PortOS's own settings, not technical
+limits, and this proposal does not depend on them:
+
+- The dashboard and peer read budget stops at 128 MiB of file bytes. On one real install
+  that was 999 of 33,709 Claude records, in 0.2 seconds. Without it, the whole history
+  read in about 3 seconds as an 8.76 MiB record list.
+- The 16 MiB peer limit refuses a whole report, at about 61,000 Claude records.
+
+**Which machines to ask.** Codex's account-level read needs only one machine. Claude,
+Antigravity and Grok are per-machine files holding that machine's own usage, so each
+machine still has to report.
+
+**Only if cross-machine deduplication stays.** Record lists exist to deduplicate native
+files copied between machines (`docs/decisions/2026-09-01-federated-usage-metrics.md`),
+but no vendor documentation read for this record describes syncing these files between
+machines. Claude's local sessions stay local; its one copy path is an explicit
+`--teleport` of a cloud session, which gives that terminal its own copy. Grok's shipped
+docs describe none, and for Antigravity only unofficial forum posts were found, which
+describe local-only history. A copy normally takes a manual step, such as a restored
+backup or a migrated home directory, so #15252 accepts counting those twice. If #15031
+keeps the record union for any provider, labels must travel with the records as
+projection version 2, which `projection.json` pins:
 
 ```text
 projection v2 = v1 fields + modelLabels: string[]          // sorted, unique, all used
@@ -119,11 +177,8 @@ grok record   = v1 fields + incomplete: boolean
                                      reasoning, total, modelCalls], ...] | <reason>
 ```
 
-A dictionary rather than a per-record label: a Claude record is already about 245 bytes,
-so the 16 MiB peer report limit binds near 68,000 records, before the 100,000-record cap.
-An inline label costs about 30 more bytes per record, and an index about 10.
-`<reason>` is any of the reasons above except `report-without-model-capability`, which
-only describes a report that has no such field. A refused record's tombstone carries
+`<reason>` is any reason above except `report-without-model-capability`, which only
+describes a report with no such field. A refused record's tombstone carries
 `model-missing`; its label is not retained.
 
 **Label bounds.** Labels are ASCII, compared byte for byte, and never case-folded,
@@ -135,14 +190,14 @@ digit-only values:
 ^(?![Aa][Rr][Nn]:)(?=[^A-Za-z]*[A-Za-z])[A-Za-z0-9][A-Za-z0-9._:+-]{0,95}(?:@(?:[0-9]{8}|default))?$
 ```
 
-A projection holds at most 64 distinct labels, keeping the smallest and sending the
-rest to `model-label-limit`. A turn holds at most 16 rows. Refused values never leave
-the reader. Validated labels may reach the same peer-authenticated report protocol and
-the owner's Usage page as aggregates, and never logs, issues or browser record lists.
+The caps are guards against a malformed source, set far above real use, and tokens past
+them stay in the provider total. A report holds at most 1024 distinct labels, keeping
+the smallest and sending the rest to `model-label-limit`. A turn holds at most 256 rows.
+Refused values never leave the reader. Validated labels may reach the peer-authenticated
+report protocol and the owner's Usage page, and never logs or issues.
 
-**Determinism.** Sort labels and rows by plain code-unit comparison, never
-`localeCompare`, then hash with the existing `canonicalStringify` and SHA-256. Compare
-labels, never indexes, when folding across reports, since dictionaries differ. Model
+**Determinism.** Sort labels, rows and buckets by plain code-unit comparison, never
+`localeCompare`, then hash with the existing `canonicalStringify` and SHA-256. Model
 fields enter `evidenceHash` through `hashOf(providers)` only for v5 reports, so an
 unchanged source still re-hashes equal and v1 to v4 hashes do not move. The corpus pins
 `portos-native-model-attribution/1` over each scenario's sorted outcomes as a
@@ -150,8 +205,8 @@ cross-machine check; it is a test digest, not a new report field.
 
 ## Compatibility
 
-- v1 to v4 reports stay parseable by their unchanged schema arms. Their records resolve
-  to `report-without-model-capability`, with totals unchanged.
+- v1 to v4 reports stay parseable by their unchanged schema arms. Their tokens are
+  `report-without-model-capability`, with totals unchanged.
 - A copy from an old report adds no evidence and no tokens beside a new copy of the
   same identity.
 - `nativeUsagePeer.js` and `scripts/lib/nativeUsageSources.js` require exactly
@@ -160,17 +215,16 @@ cross-machine check; it is a test digest, not a new report field.
   absent, add `/v2` for v5, and fall back to `/v1` on 404.
 - Staged partitions keep their recorded report versions and are not rewritten to gain
   labels. `attribution: 'excluded'` keeps meaning PortOS run linkage and is unrelated.
-- Per-day or per-month model views partition by the accepted record's existing `at`, so
-  each period still reconciles with the same period's provider total.
 
 ## Corpus
 
 `server/lib/fixtures/nativeUsageModelAttribution/v1/` holds `contract.json` (grammar,
 limits, vocabulary), `claude.json` and `grok.json` (raw-shape synthetic inputs with
-hand-authored outcomes), and `projection.json` (accepted and refused examples of the
-shape above). `server/lib/nativeUsageModelAttribution.fixtures.test.js` resolves every
-scenario in every copy order and proves the buckets partition the provider total. It
-imports no native usage module, so it cannot constrain the active #15031 work.
+hand-authored outcomes), `aggregate.json` (the peer rollup) and `projection.json` (the
+record form). `server/lib/nativeUsageModelAttribution.fixtures.test.js` resolves every
+scenario in every copy order, proves the buckets partition the provider total, and rolls
+each outcome up into a valid peer block. It imports no native usage module, so it cannot
+constrain the active #15031 work.
 
 The accepted totals, refusal findings and record keys were also checked once against
 the current production readers and unions by writing each scenario to a temporary home.
@@ -194,6 +248,14 @@ Files that will need the extension, all owned by #15031 and untouched here:
 
 Unresolved source limitations:
 
+- No subscription-level token history for Claude, Antigravity or Grok was found in the
+  code or in the vendor docs read for this record, though that search was not exhaustive.
+  `grok usage` without a session reports a plan limit rather than token history.
+- Claude cloud sessions run on Anthropic's infrastructure and count against the plan,
+  but the docs do not put them in a machine's transcripts unless teleported. Retained-file
+  totals can therefore undercount an account. This was not tested.
+- Overlap between real machines was not measured. On one install, 32 of 33,709 Claude
+  identities repeated across files, all among subagent files in one project.
 - Neither retained format is a vendor contract. A format change must fail closed to
   `unknown` or `unallocated` while the provider total survives.
 - No multi-model Grok turn was observed in `usage.json`. The split rule rests on the

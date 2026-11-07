@@ -17,6 +17,7 @@ const load = (name) => JSON.parse(readFileSync(join(FIXTURES, name), 'utf8'));
 const contract = load('contract.json');
 const corpora = { claude: load('claude.json'), grok: load('grok.json') };
 const projections = load('projection.json');
+const aggregates = load('aggregate.json');
 // A literal path, so the test memo re-runs this file when the record changes.
 const DECISION_RECORD_PATH = join(here, '../../docs/plans/2026-11-07-native-usage-model-attribution.md');
 const decisionRecord = readFileSync(DECISION_RECORD_PATH, 'utf8');
@@ -185,12 +186,45 @@ const hasModelEvidence = {
   grok: ({ snapshots }) => snapshots.some(({ turns }) => turns.some((turn) => 'modelUsage' in turn || 'primaryModelId' in turn)),
 };
 
-const BUCKET_FIELDS = { claude: 5, grok: 7 };
+const BUCKET_FIELDS = ['tokensIn', 'tokensOut', 'cacheReadTokens', 'cacheWriteTokens', 'totalTokens'];
+// Claude's fields are disjoint; Grok's cache and reasoning sit inside input and output.
+const validBucket = {
+  claude: (bucket) => hasExactKeys(bucket, BUCKET_FIELDS) && Object.values(bucket).every(counter)
+    && bucket.totalTokens === bucket.tokensIn + bucket.tokensOut + bucket.cacheReadTokens + bucket.cacheWriteTokens,
+  grok: (bucket) => hasExactKeys(bucket, [...BUCKET_FIELDS, 'reasoningTokens', 'modelCalls']) && Object.values(bucket).every(counter)
+    && bucket.totalTokens === bucket.tokensIn + bucket.tokensOut
+    && bucket.cacheReadTokens <= bucket.tokensIn && bucket.reasoningTokens <= bucket.tokensOut,
+};
 const sumBuckets = (buckets) => {
   const total = {};
   for (const bucket of buckets) add(total, 'all', bucket);
   return total.all ?? null;
 };
+
+const OLD_REPORT_REASON = 'report-without-model-capability';
+const parsesAsDay = (day) => {
+  const ms = /^\d{4}-\d{2}-\d{2}$/.test(day) ? Date.parse(`${day}T00:00:00.000Z`) : Number.NaN;
+  return Number.isFinite(ms) && new Date(ms).toISOString().slice(0, 10) === day;
+};
+const keyFits = ({ kind, key }) => {
+  if (kind === 'model') return validLabel(key);
+  if (kind === 'unknown') return key !== OLD_REPORT_REASON && contract.unknownReasons.includes(key);
+  return kind === 'unallocated' && contract.unallocatedReasons.includes(key);
+};
+const bucketOrder = ({ day, kind, key }) => `${day}\u0000${kind}\u0000${key}`;
+
+/** Reference refusal rules for the proposed per-day peer rollup. */
+function aggregateRefusal(family, { totals, modelUsage }) {
+  if (!hasExactKeys(modelUsage, ['version', 'buckets']) || modelUsage.version !== 1) return 'fields-not-exact';
+  const { buckets } = modelUsage;
+  const fields = family === 'grok' ? ['day', 'kind', 'key', 'counters', 'incompleteRecords'] : ['day', 'kind', 'key', 'counters'];
+  if (!buckets.every((bucket) => hasExactKeys(bucket, fields))) return 'fields-not-exact';
+  if (!buckets.every(({ day }) => parsesAsDay(day))) return 'invalid-day';
+  if (!buckets.every(keyFits)) return 'invalid-key';
+  if (!buckets.every(({ counters, incompleteRecords }) => validBucket[family](counters) && (family !== 'grok' || counter(incompleteRecords)))) return 'counters-invalid';
+  if (buckets.some((bucket, index) => index > 0 && bucketOrder(buckets[index - 1]) >= bucketOrder(bucket))) return 'buckets-not-canonical';
+  return canonicalStringify(sumBuckets(buckets.map(({ counters }) => counters))) === canonicalStringify(totals) ? null : 'buckets-do-not-reconcile';
+}
 
 describe('native usage model attribution corpus', () => {
   for (const [family, corpus] of Object.entries(corpora)) {
@@ -219,15 +253,16 @@ describe('native usage model attribution corpus', () => {
         const buckets = [expected.models, expected.unknown, expected.unallocated].flatMap(Object.values);
         expect(sumBuckets(buckets)).toEqual(expected.providerTotals);
         for (const bucket of [...buckets, ...(expected.providerTotals ? [expected.providerTotals] : [])]) {
-          expect(Object.keys(bucket)).toHaveLength(BUCKET_FIELDS[family]);
-          // Claude's fields are disjoint; Grok's cache and reasoning are inside input and output.
-          const { tokensIn, tokensOut, cacheReadTokens, cacheWriteTokens, totalTokens, reasoningTokens } = bucket;
-          if (family === 'claude') expect(totalTokens).toBe(tokensIn + tokensOut + cacheReadTokens + cacheWriteTokens);
-          else {
-            expect(totalTokens).toBe(tokensIn + tokensOut);
-            expect(cacheReadTokens).toBeLessThanOrEqual(tokensIn);
-            expect(reasoningTokens).toBeLessThanOrEqual(tokensOut);
-          }
+          expect(validBucket[family](bucket), JSON.stringify(bucket)).toBe(true);
+        }
+
+        // Each outcome must fit the rollup a peer would send. An old report has no block to fill.
+        if (!expected.unknown[OLD_REPORT_REASON]) {
+          const rollup = [['model', expected.models], ['unallocated', expected.unallocated], ['unknown', expected.unknown]]
+            .flatMap(([kind, group]) => Object.keys(group).sort().map((key) => ({
+              day: '2026-03-01', kind, key, counters: group[key], ...(family === 'grok' ? { incompleteRecords: 0 } : {}),
+            })));
+          expect(aggregateRefusal(family, { totals: expected.providerTotals, modelUsage: { version: 1, buckets: rollup } })).toBeNull();
         }
 
         expect(Object.keys(expected.unknown).every((reason) => contract.unknownReasons.includes(reason))).toBe(true);
@@ -250,7 +285,8 @@ describe('native usage model attribution corpus', () => {
     for (const reason of [...reasons, ...contract.providerFindings]) expect(exercised).toContain(reason);
   });
 
-  it('folds evidence order-independently across any grouping', () => {
+  // Associativity is what lets a per-source store (#15255) match one full read.
+  it('folds evidence the same in any order, grouping or collection run', () => {
     const domain = [
       { kind: 'report-without-model-capability' }, { kind: 'model-missing' }, { kind: 'model-sentinel' },
       { kind: 'model-label-invalid' }, { kind: 'model-sum-mismatch' }, { kind: 'model-rows-invalid' },
@@ -269,7 +305,15 @@ describe('native usage model attribution corpus', () => {
   });
 });
 
-const REASON_TOKENS = contract.unknownReasons.filter((reason) => reason !== 'report-without-model-capability').concat(contract.unallocatedReasons);
+describe('proposed peer rollup examples', () => {
+  for (const family of ['claude', 'grok']) {
+    it.each(aggregates[family].map((example) => [example.name, example]))(`${family}: %s`, (_name, { accept, reason, totals, modelUsage }) => {
+      expect(aggregateRefusal(family, { totals, modelUsage })).toBe(accept ? null : reason);
+    });
+  }
+});
+
+const REASON_TOKENS = contract.unknownReasons.filter((reason) => reason !== OLD_REPORT_REASON).concat(contract.unallocatedReasons);
 const CLAUDE_RECORD_V1 = ['recordKey', 'requestKey', 'values', 'final', 'conflict', 'inconsistent', 'at'];
 const GROK_RECORD_V1 = ['recordKey', 'values', 'costUsdTicks', 'costConflict', 'conflict', 'inconsistent', 'at'];
 const COUNTER_COLUMNS = 7;
@@ -324,7 +368,7 @@ describe('proposed projection examples', () => {
   }
 
   it('refuses more labels than the projection limit', () => {
-    const labels = Array.from({ length: contract.limits.maxLabelsPerProjection + 1 }, (_, index) => `example-${String(index).padStart(3, '0')}`);
+    const labels = Array.from({ length: contract.limits.maxLabelsPerProjection + 1 }, (_, index) => `example-${String(index).padStart(6, '0')}`);
     const records = labels.map((_, index) => ({ recordKey: sha(index), requestKey: null, values: [1, 1, 0, 0], final: true, conflict: false, inconsistent: false, at: null, model: index }));
     expect(projectionRefusal('claude', { version: 2, identityScheme: 'sha256-native-record/1', truncated: false, modelLabels: labels, records })).toBe('labels-not-canonical');
     expect(projectionRefusal('claude', { version: 2, identityScheme: 'sha256-native-record/1', truncated: false, modelLabels: labels.slice(1), records: records.slice(1).map((record, index) => ({ ...record, model: index })) })).toBeNull();
@@ -337,7 +381,7 @@ describe('committed artifacts stay synthetic and in step', () => {
   it('carries no private value shape outside its declared refused examples', () => {
     const rejected = [...new Set(Object.values(corpora).flatMap(({ rejectedLabelExamples }) => rejectedLabelExamples))];
     const scrub = (text) => rejected.reduce((rest, example) => rest.split(example).join(''), text);
-    const artifacts = [contract, projections, ...Object.values(corpora)].map((value) => scrub(JSON.stringify(value)));
+    const artifacts = [contract, projections, aggregates, ...Object.values(corpora)].map((value) => scrub(JSON.stringify(value)));
     for (const text of [...artifacts, decisionRecord]) {
       for (const shape of PRIVATE_SHAPES) expect(shape.test(text), String(shape)).toBe(false);
     }
