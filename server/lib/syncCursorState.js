@@ -9,9 +9,10 @@ import { readJSONFileStrict, unreadableStoreError } from './jsonIo.js';
  * write. `lastRunAt`/`lastResult` stay lenient — they never gate ingestion.
  */
 export async function readSyncCursorState(filePath, cursorKey) {
-  const { ok, value } = await readJSONFileStrict(filePath, null, { allowArray: false });
+  const absent = Symbol('absent sync state');
+  const { ok, value } = await readJSONFileStrict(filePath, absent, { allowArray: false });
   if (!ok) throw unreadableStoreError(filePath);
-  if (value !== null && (typeof value !== 'object' || Array.isArray(value))) {
+  if (value !== absent && (value === null || typeof value !== 'object' || Array.isArray(value))) {
     throw unreadableStoreError(filePath);
   }
   const cursor = value?.[cursorKey];
