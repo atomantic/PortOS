@@ -314,7 +314,7 @@ export function SecurityTab() {
                   type="button"
                   onClick={handleRevokeAll}
                   disabled={revokingAll}
-                  className="min-h-9 text-sm bg-port-error text-white px-3 py-1.5 rounded hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="min-h-9 pointer-coarse:min-h-11 text-sm bg-port-error text-white px-3 py-1.5 rounded hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {revokingAll ? 'Revoking…' : 'Confirm revoke all'}
                 </button>
@@ -322,7 +322,7 @@ export function SecurityTab() {
                   type="button"
                   onClick={() => setConfirmRevokeAll(false)}
                   disabled={revokingAll}
-                  className="min-h-9 text-sm bg-port-bg border border-port-border text-gray-300 px-3 py-1.5 rounded hover:border-gray-400 disabled:opacity-50"
+                  className="min-h-9 pointer-coarse:min-h-11 text-sm bg-port-bg border border-port-border text-gray-300 px-3 py-1.5 rounded hover:border-gray-400 disabled:opacity-50"
                 >
                   Cancel
                 </button>
@@ -331,7 +331,7 @@ export function SecurityTab() {
               <button
                 type="button"
                 onClick={() => setConfirmRevokeAll(true)}
-                className="min-h-9 text-sm bg-port-bg border border-port-border text-port-error px-3 py-1.5 rounded hover:border-port-error"
+                className="min-h-9 pointer-coarse:min-h-11 text-sm bg-port-bg border border-port-border text-port-error px-3 py-1.5 rounded hover:border-port-error"
               >
                 Revoke all agent sessions
               </button>
@@ -354,7 +354,7 @@ export function SecurityTab() {
                   type="button"
                   onClick={() => handleRevokeSession(session.id)}
                   disabled={revokingId === session.id}
-                  className="min-h-9 text-sm bg-port-bg border border-port-border text-port-error px-3 py-1.5 rounded hover:border-port-error disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="min-h-9 pointer-coarse:min-h-11 text-sm bg-port-bg border border-port-border text-port-error px-3 py-1.5 rounded hover:border-port-error disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {revokingId === session.id ? 'Revoking…' : 'Revoke'}
                 </button>

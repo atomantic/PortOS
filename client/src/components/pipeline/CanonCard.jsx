@@ -48,7 +48,7 @@ function ChipPicker({ label, value, options, onChange }) {
             key={opt}
             type="button"
             onClick={() => onChange(active ? null : opt)}
-            className={`px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wider border ${
+            className={`px-1.5 py-0.5 rounded text-[10px] pointer-coarse:min-h-11 uppercase tracking-wider border ${
               active
                 ? 'bg-port-accent/20 border-port-accent text-port-accent'
                 : 'border-port-border text-gray-400 hover:text-white hover:border-gray-500'
@@ -330,7 +330,7 @@ function WardrobeSection({ wardrobes, editable, onChange }) {
         <button
           type="button"
           onClick={addOne}
-          className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500"
+          className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500"
         >
           <Plus size={10} /> Add outfit
         </button>

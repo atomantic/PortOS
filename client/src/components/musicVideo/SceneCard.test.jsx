@@ -52,6 +52,23 @@ it('holds Render while clip references are saving or failed and releases it afte
   expect(onSave).toHaveBeenLastCalledWith('s1', { clipReferenceIds: ['rider', 'bike'] });
 });
 
+// Uniquely catches a failed cast-guide read letting a paid clip render go out without the member's guides.
+it('holds a clip render after a failed cast-guide read and offers Retry', () => {
+  const project = { id: 'mv-1', concept: { subjects: [{ id: 'kit', kind: 'character', name: 'Kit', ingredientId: 'cat-chr-kit' }] }, visualSpec: { references: [] } };
+  const scene = { sceneId: 's1', prompt: 'Kit turns', startSec: 0, endSec: 4, referenceImageId: 'frame.png', takes: [], characterVariant: { ingredientId: 'cat-chr-kit' } };
+  const onReload = vi.fn();
+  const card = (castMedia) => <SceneCard scene={scene} project={project} castMedia={castMedia} onReloadCastMedia={onReload} index={0} expanded lipSyncBackend="grok"
+    falVideoSettings={{ backend: 'grok' }} onEditLocal={vi.fn()} onSave={vi.fn()} />;
+  const { rerender } = render(card({ 'cat-chr-kit': null }));
+  show('Clip');
+  expect(screen.getByRole('button', { name: 'Render' }).disabled).toBe(true);
+  fireEvent.click(screen.getAllByRole('button', { name: 'Retry' }).at(-1));
+  expect(onReload).toHaveBeenCalledTimes(1);
+  rerender(card({ 'cat-chr-kit': [] }));
+  expect(screen.getByRole('button', { name: 'Render' }).disabled).toBe(false);
+  expect(screen.queryByText(/Cast guides could not be loaded/)).toBeNull();
+});
+
 it('also waits for clip-reference edits before starting a storyboard-to-clip render', async () => {
   let settle;
   const onSave = vi.fn(() => new Promise((resolve) => { settle = resolve; }));

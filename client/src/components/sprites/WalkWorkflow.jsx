@@ -394,7 +394,7 @@ function DirectionCard({
               it if the server dies mid-package). Disabling on `busy` would make
               the "Re-run postprocess" branch permanently unclickable and leave
               that direction with no enabled action at all. */}
-          <button onClick={() => onRetry(run)} disabled={pending || targetSaving || retrying} className="px-2 py-0.5 text-[10px] bg-port-card border border-port-border rounded text-gray-300 hover:border-port-accent disabled:opacity-50">
+          <button onClick={() => onRetry(run)} disabled={pending || targetSaving || retrying} className="px-2 py-0.5 text-[10px] pointer-coarse:min-h-11 bg-port-card border border-port-border rounded text-gray-300 hover:border-port-accent disabled:opacity-50">
             {retrying ? 'Repacking…' : run.status === 'postprocessing' ? 'Re-run postprocess' : 'Retry postprocess'}
           </button>
         </div>

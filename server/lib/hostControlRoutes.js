@@ -1102,6 +1102,9 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // Greybox draft hands the place and the user's instruction to a caller-chosen
   // provider (possibly a tool-capable harness). Save and capture are data-only.
   'POST /api/catalog/ingredients/:id/greybox/draft',
+  // Shot render launches a Vite build and the headless composition browser;
+  // capture only saves a caller-supplied PNG and stays data-only.
+  'POST /api/catalog/ingredients/:id/greybox/shots/:shotId/render',
   'POST /api/catalog/ingredients/:id/photoreal/look/draft',
   // Photoreal runs the operator-checked Blender executable on the host.
   'POST /api/catalog/ingredients/:id/photoreal/render',

@@ -95,7 +95,7 @@ export const isOutsideReference = isOutsideMusicVideoReference;
  * fills an unselected slot — so a late render never replaces the frame or clip
  * the director chose.
  */
-export default function useMusicVideoSceneMedia({ project, videoSettings, applyScenePatch } = {}) {
+export default function useMusicVideoSceneMedia({ project, videoSettings, applyScenePatch, onReconciled } = {}) {
   const frameBatch = useSceneBatch();
   const videoBatch = useSceneBatch();
   // Latest scenes for the failure toasts' scene names, read lazily (a lane
@@ -160,22 +160,42 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
   // keeps rendering — restore them from the server so the batch actions skip
   // those scenes and no duplicate (possibly paid) render is submitted (#10154).
   const projectId = project?.id;
-  const { restoreJobs: restoreFrameJobs } = frameLane;
-  const { restoreJobs: restoreVideoJobs } = videoLane;
-  const { restoreJobs: restoreEndFrameJobs } = endFrameLane;
+  const { restoreJobs: restoreFrameJobs, reconcileJobs: reconcileFrameJobs } = frameLane;
+  const { restoreJobs: restoreVideoJobs, reconcileJobs: reconcileVideoJobs } = videoLane;
+  const { restoreJobs: restoreEndFrameJobs, reconcileJobs: reconcileEndFrameJobs } = endFrameLane;
+  const onReconciledRef = useRef(onReconciled);
+  onReconciledRef.current = onReconciled;
   useEffect(() => {
     if (!projectId) return undefined;
     let live = true;
-    getMusicVideoSceneJobs(projectId, { silent: true })
-      .then(({ jobs }) => {
-        if (!live || !Array.isArray(jobs)) return;
-        restoreFrameJobs(jobs.filter((j) => j.lane === 'image'));
-        restoreVideoJobs(jobs.filter((j) => j.lane === 'video'));
-        restoreEndFrameJobs(jobs.filter((j) => j.lane === 'endImage'));
-      })
-      .catch(() => {}); // best-effort: a failed lookup just means no restored spinners
-    return () => { live = false; };
-  }, [projectId, restoreFrameJobs, restoreVideoJobs, restoreEndFrameJobs]);
+    // Only the newest listing counts: an older response landing last would re-light a spinner for a job the newer one shows finished.
+    let latest = 0;
+    const load = (reconnected) => {
+      latest += 1;
+      const requestId = latest;
+      return getMusicVideoSceneJobs(projectId, { silent: true })
+        .then(async ({ jobs }) => {
+          if (!live || !Array.isArray(jobs) || requestId !== latest) return;
+          restoreFrameJobs(jobs.filter((j) => j.lane === 'image'));
+          restoreVideoJobs(jobs.filter((j) => j.lane === 'video'));
+          restoreEndFrameJobs(jobs.filter((j) => j.lane === 'endImage'));
+          if (!reconnected) return;
+          // Terminal events fired while the socket was down are never replayed: settle the
+          // tracked jobs the server no longer lists, then reload so their finished takes land.
+          const activeIds = jobs.map((j) => j.jobId);
+          const counts = await Promise.all([reconcileFrameJobs, reconcileVideoJobs, reconcileEndFrameJobs].map((reconcile) => reconcile(activeIds)));
+          if (live && counts.some((n) => n > 0)) onReconciledRef.current?.(projectId);
+        })
+        .catch(() => {}); // best-effort: a failed lookup just means no restored spinners
+    };
+    load(false);
+    const onConnect = () => load(true);
+    socket.on('connect', onConnect);
+    return () => {
+      live = false;
+      socket.off('connect', onConnect);
+    };
+  }, [projectId, restoreFrameJobs, restoreVideoJobs, restoreEndFrameJobs, reconcileFrameJobs, reconcileVideoJobs, reconcileEndFrameJobs]);
   // The Casting media of every character linked from the catalog and every cast member
   // a shot names in its `characterVariant` (#12763), keyed by ingredient id: an array once loaded, null when the first load
   // failed, absent while pending. A shot's frames lead with that member's guides;
@@ -195,9 +215,21 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       .then((entries) => { if (active) setCastMedia((prev) => Object.fromEntries(entries.map(([id, media]) => [id, media ?? prev[id] ?? null]))); });
     return () => { active = false; };
   }, [castIds, castRefresh]);
-  // A render before the shot's cast guides load would silently go out without them.
+  // Failed members return to "loading" while the retry is in flight, so a render waits instead of being told the read failed.
+  const reloadCastMedia = () => {
+    setCastMedia((prev) => Object.fromEntries(Object.entries(prev).map(([id, media]) => [id, media === null ? undefined : media])));
+    setCastRefresh((n) => n + 1);
+  };
+  // A render before the shot's cast guides load, or after a failed read (null), would silently go out without them.
   const castGuidesPending = (scene) => {
-    if (musicVideoSceneCastIds(project, scene).every((id) => castMedia[id] !== undefined)) return false;
+    const ids = musicVideoSceneCastIds(project, scene);
+    const failed = ids.find((id) => castMedia[id] === null);
+    if (failed) {
+      const name = (project?.concept?.subjects || []).find((s) => s?.ingredientId === failed)?.name || failed;
+      toast.error(`Cast guides could not be loaded for ${name}. Retry before rendering.`);
+      return true;
+    }
+    if (ids.every((id) => castMedia[id] !== undefined)) return false;
     toast.error('Cast guides are still loading. Try again in a moment.');
     return true;
   };
@@ -597,6 +629,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     videoBatch,
     conditioning,
     castMedia,
+    reloadCastMedia,
     greyboxPlaces,
     generateFrame,
     generateEndFrame,

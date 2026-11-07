@@ -270,7 +270,6 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/catalog/ingredients/:id/photoreal/look/prompt', READ_OVER_POST],
   ['PUT /api/catalog/ingredients/:id/photoreal/look', RECORDS],
   ['POST /api/catalog/ingredients/:id/greybox/shots/:shotId/capture', RECORDS],
-  ['POST /api/catalog/ingredients/:id/greybox/shots/:shotId/render', RECORDS],
   ['POST /api/catalog/ingredients/:id/media/voice', TOOL_FREE_INFERENCE],
   ['DELETE /api/catalog/ingredients/:id/relations', REMOVES_RECORD],
   ['POST /api/catalog/ingredients/:id/relations', RECORDS],

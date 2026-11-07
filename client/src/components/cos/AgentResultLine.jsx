@@ -44,7 +44,7 @@ export default function AgentResultLine({ agent, className = '' }) {
     : deliveryComplete ? 'text-port-success' : executionSuccess ? 'text-port-text-muted' : 'text-port-error';
 
   return (
-    <div className={`text-sm ${tone} ${className}`.trim()}>
+    <div className={`text-sm ${tone} min-w-0 max-w-full ${className}`.trim()}>
       <ReleasePublicationLine publication={publication} synchronization={synchronization} />
       <span className="flex items-center gap-2">
       {handoff ? (

@@ -23,6 +23,7 @@ const effects = vi.hoisted(() => ({
   ingestVoice: vi.fn(),
   ingestBrain: vi.fn(),
   refineMedia: vi.fn(),
+  renderGreyboxShot: vi.fn(),
 }));
 vi.mock('../lib/fileUtils.js', async (importOriginal) =>
   makePathsProxy(await importOriginal(), { dataRoot: () => lazyTempDataRoot('portos-catalog-authority-') }));
@@ -48,6 +49,9 @@ vi.mock('../services/catalogDB.js', () => ({
 }));
 vi.mock('../services/catalogExtraction.js', () => ({ extractIngredientsForScrap: effects.extract }));
 vi.mock('../services/catalogPrune.js', () => ({ pruneCatalogBabble: effects.prune }));
+vi.mock('../services/catalogGreybox.js', () => ({
+  captureGreyboxShot: vi.fn(), draftGreybox: vi.fn(), previewGreyboxPrompt: vi.fn(), saveGreybox: vi.fn(), renderGreyboxShot: effects.renderGreyboxShot,
+}));
 vi.mock('../services/catalogMediaRefinement.js', () => ({ refineCatalogMedia: effects.refineMedia }));
 vi.mock('../services/catalogIngestSources.js', () => ({
   ingestFromUrl: effects.ingestUrl, ingestFromFile: effects.ingestFile,
@@ -78,6 +82,8 @@ const operations = [
   generation('/api/catalog/ingest/voice', { audioBase64: 'ZXhhbXBsZQ==', providerOverride: 'example-api' }, effects.ingestVoice),
   generation('/api/catalog/ingest/brain', { brainType: 'ideas', brainId: 'example-record' }, effects.ingestBrain),
   generation('/api/catalog/ingest/brain', { brainType: 'ideas', brainId: 'example-record', providerOverride: 'example-cli' }, effects.ingestBrain),
+  // Shot render launches a Vite build and headless Chromium (#15182).
+  generation('/api/catalog/ingredients/example-place/greybox/shots/wide/render', {}, effects.renderGreyboxShot),
 ];
 const appFor = (address = '192.0.2.10') => {
   const app = express();
@@ -106,6 +112,7 @@ beforeEach(() => {
   effects.createChunkedScrap.mockResolvedValue({ id: 'example-scrap' });
   effects.updateScrap.mockResolvedValue({ id: 'example-scrap' });
   effects.refineMedia.mockResolvedValue({ jobId: 'example-job' });
+  effects.renderGreyboxShot.mockResolvedValue({ mediaKey: 'example.png', role: 'greybox-shot:wide' });
   for (const effect of [effects.extract, effects.prune, effects.ingestUrl, effects.ingestFile,
     effects.ingestVoice, effects.ingestBrain]) effect.mockResolvedValue({ scrap: { id: 'example-scrap' }, draft: {} });
 });

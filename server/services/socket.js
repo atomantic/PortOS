@@ -71,7 +71,7 @@ import { runEventLogEvents } from './agentRunEventLog.js';
 import { bindSystemActivityIo } from './systemActivityNotify.js';
 import { armSystemActivityWatchers } from './systemActivityWatchers.js';
 import { armReadinessWatchers, registerReadinessSocket } from './readinessNotify.js';
-import { registerGeneratedPreviewHandlers } from './generatedPreview/sessions.js';
+import { closeGeneratedPreviewsForSocket, registerGeneratedPreviewHandlers } from './generatedPreview/sessions.js';
 import { peerSyncBus, deliverPeerSyncEvent, registerPeerSyncSubscriber, PEER_SYNC_ROOM } from './peerSyncEventBus.js';
 
 // Store CoS subscribers
@@ -158,13 +158,18 @@ const PEER_RELAY_ALLOWED_EVENTS = new Set(['cos:subscribe', 'cos:unsubscribe', '
 // directory. They need the same operator authority as the HTTP
 // requireHostControl routes (#8226): on a password-free install a remote
 // LAN/tailnet socket is refused (#8708). Every `shell:*` and `iterm:*` event
-// is included by prefix; read-only subscriptions stay open to remote sockets.
+// is included by prefix, as is every `generated-preview:*` event except `close`
+// (open launches a headless browser/ffmpeg, command can record into the
+// gallery); read-only subscriptions stay open to remote sockets.
 // `error:recover` queues a recovery agent that runs shell commands (#8716).
 // Detection can bootstrap a PM2 daemon while inspecting an app-specific home.
 // The HTTP twin of this set is HOST_CONTROL_ROUTES in lib/hostControlRoutes.js.
 const HOST_CONTROL_SOCKET_EVENTS = new Set(['app:update', 'app:standardize', 'app:deploy', 'standardize:start', 'detect:start', 'error:recover']);
-const HOST_CONTROL_SOCKET_PREFIXES = ['shell:', 'iterm:'];
+const HOST_CONTROL_SOCKET_PREFIXES = ['shell:', 'iterm:', 'generated-preview:'];
+// Closing only stops work, so a refused socket can always tear down its own preview.
+const HOST_CONTROL_SOCKET_EXEMPT_EVENTS = new Set(['generated-preview:close']);
 const isHostControlSocketEvent = (event) => typeof event === 'string'
+  && !HOST_CONTROL_SOCKET_EXEMPT_EVENTS.has(event)
   && (HOST_CONTROL_SOCKET_EVENTS.has(event) || HOST_CONTROL_SOCKET_PREFIXES.some((prefix) => event.startsWith(prefix)));
 
 // A refusal goes out on the error event the event's own client already
@@ -173,6 +178,9 @@ const hostControlRefusal = (event, payload) => {
   const refusal = { code: 'HOST_CONTROL_FORBIDDEN', error: HOST_CONTROL_FORBIDDEN_MESSAGE, message: HOST_CONTROL_FORBIDDEN_MESSAGE };
   if (event.startsWith('shell:')) return ['shell:error', { ...refusal, sessionId: payload?.sessionId }];
   if (event.startsWith('iterm:')) return ['iterm:error', { ...refusal, id: payload?.id }];
+  if (event.startsWith('generated-preview:')) {
+    return ['generated-preview:error', { ...refusal, requestId: payload?.requestId, sessionId: payload?.sessionId }];
+  }
   if (event === 'standardize:start') return ['standardize:complete', { success: false, ...refusal }];
   if (event === 'detect:start') return ['detect:complete', { success: false, ...refusal }];
   return [`${event}:error`, { ...refusal, appId: payload?.appId }];
@@ -189,6 +197,8 @@ function registerAuthHandlers(socket, _io) {
           if (!isHostControlSocketEvent(event) || socketHasHostControl(socket)) return next();
           console.warn(`⛔ Refused host-control socket event ${event} from a non-local connection`);
           socket.emit(...hostControlRefusal(event, payload));
+          // After the refusal so the client settles on the error before the close.
+          if (event.startsWith('generated-preview:')) await closeGeneratedPreviewsForSocket(socket.id);
           return;
         }
         if (await verifyRequestSession({ headers: socket.handshake?.headers || {} })) return next();

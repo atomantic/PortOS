@@ -47,6 +47,7 @@ export default function StoryboardBoardsTab({
   hotRef = null,
   onSceneHover,
   onSceneRenderStart,
+  onSceneImageAttached,
   dirty = false,
 }) {
   return (
@@ -147,6 +148,7 @@ export default function StoryboardBoardsTab({
             onHoverEnter={onSceneHover ? () => onSceneHover(sceneId) : null}
             onHoverLeave={onSceneHover ? () => onSceneHover(null) : null}
             onRenderStart={onSceneRenderStart}
+            onSceneImageAttached={onSceneImageAttached}
           />
         );
       })}

@@ -810,7 +810,7 @@ router.get('/:id/render', (req, res) => {
   res.json({ jobId: getActiveRenderJobId(req.params.id) });
 });
 
-// The shot, look and cleanup reads plan the render, whose performance-take
+// The shot, look and cleanup reads and their mutations plan the render, whose performance-take
 // review decodes the song master with ffmpeg; only a caller with host control
 // starts that decode (#13156). Others get the plan with the take unchecked.
 let authGateModule;
@@ -826,7 +826,7 @@ router.get('/:id/render-cleanup', asyncHandler(async (req, res) => {
 router.post('/:id/render-cleanup', asyncHandler(async (req, res) => {
   const input = validateRequest(musicVideoRenderCleanupSchema, req.body ?? {});
   const { cleanupRenders } = await import('../services/musicVideo/renderCleanup.js');
-  res.json(await cleanupRenders(req.params.id, input));
+  res.json(await cleanupRenders(req.params.id, input, await planOptions(req)));
 }));
 
 // Per-shot render segments (shotSegments.js): every shot's cache state, one
@@ -856,7 +856,7 @@ router.get('/:id/film-looks', asyncHandler(async (req, res) => {
 }));
 router.delete('/:id/film-looks/:lookId', asyncHandler(async (req, res) => {
   const { deleteFilmLook } = await import('../services/musicVideo/shotSegments.js');
-  res.json(await deleteFilmLook(req.params.id, req.params.lookId));
+  res.json(await deleteFilmLook(req.params.id, req.params.lookId, await planOptions(req)));
 }));
 // The cold open's sound (shots before the song), mixed for the animatic to play
 // before the song: the same mix the final render lays in front of it.

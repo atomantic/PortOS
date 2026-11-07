@@ -135,7 +135,7 @@ export default function ProvenanceChip({
         aria-expanded={open}
         aria-controls={open ? popId : undefined}
         title={`${meta.label} — tap for how this is derived`}
-        className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide transition-colors ${chipTone}`}
+        className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] pointer-coarse:min-h-11 font-medium uppercase tracking-wide transition-colors ${chipTone}`}
       >
         <Icon size={10} aria-hidden="true" className="shrink-0" />
         <span>{label ?? meta.label}</span>

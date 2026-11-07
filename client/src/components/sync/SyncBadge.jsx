@@ -94,7 +94,7 @@ export default function SyncBadge({ status, onClick }) {
       type="button"
       onClick={onClick}
       title={title}
-      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium transition-colors ${className}`}
+      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] pointer-coarse:min-h-11 font-medium transition-colors ${className}`}
     >
       <Icon className="w-3 h-3 flex-shrink-0" aria-hidden="true" />
       <span>{label}</span>

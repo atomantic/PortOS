@@ -791,7 +791,7 @@ export default function PromptManager() {
                 <button
                   onClick={() => setSystemOnly(v => !v)}
                   aria-pressed={systemOnly}
-                  className={`text-[10px] px-2.5 py-1.5 rounded uppercase font-semibold transition-colors ${
+                  className={`text-[10px] pointer-coarse:min-h-11 px-2.5 py-1.5 rounded uppercase font-semibold transition-colors ${
                     systemOnly
                       ? 'bg-port-accent text-white'
                       : 'bg-port-border text-gray-400 hover:text-white'

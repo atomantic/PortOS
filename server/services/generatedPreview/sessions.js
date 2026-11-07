@@ -158,7 +158,7 @@ export async function closeSession(sessionId, reason = 'closed') {
   session.socket.emit('generated-preview:closed', { sessionId, reason });
 }
 
-async function closeGeneratedPreviewsForSocket(socketId) {
+export async function closeGeneratedPreviewsForSocket(socketId) {
   const ids = [...(bySocket.get(socketId) || [])];
   bySocket.delete(socketId);
   for (const [requestId, controller] of opening) {

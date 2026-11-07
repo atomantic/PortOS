@@ -1517,6 +1517,12 @@ describe('browser-relay guard in both auth modes', () => {
     const foreign = await proxied({ host: 'portos.tailnet.ts.net:5554', origin: 'https://attacker.example', 'sec-fetch-site': 'cross-site' });
     expect(foreign.called).toBe(false);
     expect(foreign.res.body.code).toBe('CROSS_ORIGIN_BLOCKED');
+    // DNS rebinding: the attacker's name resolves to the Vite server, so Origin
+    // and Host match — the proxy must not vouch for a Host it would not serve.
+    const rebound = await proxied({ host: 'rebind.attacker.example:5554', origin: 'http://rebind.attacker.example:5554', 'sec-fetch-site': 'same-origin' });
+    expect(rebound.called).toBe(false);
+    expect(rebound.res.body.code).toBe('CROSS_ORIGIN_BLOCKED');
+    expect(devProxyForwardedOrigin({ headers: { host: 'localhost:5554', origin: 'http://localhost:5554' } }, target)).toBe(target);
   });
 
   it('refuses a foreign Socket.IO handshake at the transport and the namespace gate', async () => {

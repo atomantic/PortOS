@@ -151,7 +151,7 @@ export default function DeckCardGrid({
                           <button
                             type="button"
                             onClick={() => onSetActiveVersion?.(card.id, viewedFilename)}
-                            className="inline-flex items-center gap-0.5 rounded border border-port-border bg-port-bg/60 px-1.5 py-0.5 text-[10px] text-gray-300 hover:border-port-accent hover:text-port-accent transition-colors"
+                            className="inline-flex items-center gap-0.5 rounded border border-port-border bg-port-bg/60 px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 text-gray-300 hover:border-port-accent hover:text-port-accent transition-colors"
                             title={`Set v${currentVersionNum} as active version for ${card.name}`}
                             aria-label={`Set v${currentVersionNum} as active version for ${card.name}`}
                           >

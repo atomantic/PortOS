@@ -34,7 +34,7 @@ export function CopyId({ id }) {
       type="button"
       onClick={() => copyToClipboard(id, 'Comment id copied')}
       title={`Copy comment id: ${id}`}
-      className="inline-flex items-center gap-1 text-[10px] font-mono text-gray-500 hover:text-gray-300"
+      className="inline-flex items-center gap-1 text-[10px] pointer-coarse:min-h-11 font-mono text-gray-500 hover:text-gray-300"
     >
       <Copy size={10} /> {short}
     </button>

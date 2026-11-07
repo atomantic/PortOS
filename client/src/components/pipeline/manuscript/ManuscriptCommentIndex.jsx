@@ -89,7 +89,7 @@ export default function ManuscriptCommentIndex({ comments, locatedCommentIds, op
             <button
               type="button"
               onClick={() => setSeverityFilter(null)}
-              className={`px-2 py-0.5 rounded text-[10px] border ${severityFilter === null ? 'bg-port-accent text-white border-port-accent' : 'text-gray-400 border-port-border hover:text-white'}`}
+              className={`px-2 py-0.5 rounded text-[10px] pointer-coarse:min-h-11 border ${severityFilter === null ? 'bg-port-accent text-white border-port-accent' : 'text-gray-400 border-port-border hover:text-white'}`}
             >
               All
             </button>
@@ -101,7 +101,7 @@ export default function ManuscriptCommentIndex({ comments, locatedCommentIds, op
                   key={s}
                   type="button"
                   onClick={() => setSeverityFilter(severityFilter === s ? null : s)}
-                  className={`px-2 py-0.5 rounded text-[10px] border capitalize ${severityFilter === s ? 'bg-port-accent text-white border-port-accent' : 'text-gray-400 border-port-border hover:text-white'}`}
+                  className={`px-2 py-0.5 rounded text-[10px] pointer-coarse:min-h-11 border capitalize ${severityFilter === s ? 'bg-port-accent text-white border-port-accent' : 'text-gray-400 border-port-border hover:text-white'}`}
                 >
                   {s} {n}
                 </button>

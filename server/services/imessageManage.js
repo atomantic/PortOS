@@ -6,13 +6,13 @@
  * remove rows from the machine-local `human_activity_events` table only.
  * Blocklisted handles are skipped on future syncs (see imessageSync.runSync).
  */
-import { dataPath, atomicWrite, readJSONFileStrict, unreadableStoreError } from '../lib/fileUtils.js';
-import { identityFromHandle, normalizeIdentifier, normalizePhone } from '../lib/tribeMatch.js';
+import { ensureSchema, withTransaction } from '../lib/db.js';
+import { normalizeIdentifier, normalizePhone } from '../lib/tribeMatch.js';
 import * as humanActivity from './humanActivity.js';
 import { getStatus } from './imessageSync.js';
+import { blocklistKey, readBlocklist, writeBlocklist, withImessagePrivacyLock } from './imessagePrivacy.js';
 
 const SOURCE = 'imessage';
-const BLOCKLIST_FILE = 'imessage-blocklist.json';
 
 // ---------------------------------------------------------------------------
 // chatKey encode/decode — URL-safe base64 of the raw chatGuid (Apple GUIDs
@@ -42,112 +42,103 @@ export function decodeChatKey(chatKey) {
 // ---------------------------------------------------------------------------
 // Blocklist — machine-local, not federated (same locality as the sync cursor).
 // Handles are stored as normalized match keys so +1 555 / 555-… / +1555… collide.
+// Reads/writes live in imessagePrivacy.js; every mutation here and every sync
+// pass runs under its shared lock.
 // ---------------------------------------------------------------------------
 
-function blocklistPath() {
-  return dataPath(BLOCKLIST_FILE);
+export { blocklistKey, readBlocklist };
+
+/** Replace the whole list. Refuses (UNREADABLE_STORE) to overwrite a store it cannot read. */
+export function setBlocklist(handles) {
+  return withImessagePrivacyLock(async () => {
+    await readBlocklist();
+    return writeBlocklist(handles);
+  });
 }
 
 /**
- * Stable match key for a raw handle (phone → E.164-ish, email → lowercased).
- * Empty string when the handle can't be classified.
+ * Erase PortOS-side data for blocked handles, mirroring what the sync filter
+ * would have skipped: received events whose stored counterpart handle normalizes
+ * to a blocked key, plus from-me events in those chats whose participants are
+ * all blocked. A chat left with no events also loses its `imsg:<chat>:<day>`
+ * Tribe touchpoints (a chat that still holds other people's events keeps them).
+ * One transaction so a failure leaves nothing half-erased.
  */
-export function blocklistKey(handle) {
-  const id = identityFromHandle(handle);
-  if (id.phone) return id.phone;
-  if (id.email) return id.email;
-  // Fallback: trim + lower so free-form keys still dedupe case-insensitively.
-  const raw = handle == null ? '' : String(handle).trim().toLowerCase();
-  return raw;
-}
+async function purgeHandles(keys, blockedKeys) {
+  const { deleteAutoTouchpoints } = await import('./tribe.js');
+  await ensureSchema();
+  return withTransaction(async (client) => {
+    // Stored handles are raw chat.db values and SQL can't run blocklistKey, so
+    // resolve the matching raw values in JS from the distinct (handle, chat) pairs.
+    const pairs = await client.query(
+      `SELECT DISTINCT metadata->>'handle' AS handle, metadata->>'chatGuid' AS chat_guid
+       FROM human_activity_events WHERE source = $1 AND metadata->>'handle' IS NOT NULL`,
+      [SOURCE],
+    );
+    const wanted = new Set(keys);
+    const matching = pairs.rows.filter((row) => wanted.has(blocklistKey(row.handle)));
+    const chatGuids = new Set(matching.map((row) => row.chat_guid).filter(Boolean));
+    let events = 0;
+    for (const handle of new Set(matching.map((row) => row.handle))) {
+      events += (await humanActivity.deleteEvents({ source: SOURCE, handle, client })).deleted;
+    }
+    if (chatGuids.size === 0) return { events, touchpoints: 0 };
 
-function projectBlocklist(parsed) {
-  const handles = Array.isArray(parsed?.handles)
-    ? [...new Set(parsed.handles.map((h) => blocklistKey(h)).filter(Boolean))].sort()
-    : [];
-  return {
-    handles,
-    updatedAt: parsed?.updatedAt || null,
-  };
-}
+    const sent = await client.query(
+      `SELECT id, participants, metadata FROM human_activity_events
+       WHERE source = $1 AND metadata->>'chatGuid' = ANY($2::text[])
+         AND COALESCE(metadata->>'handle', '') = ''`,
+      [SOURCE, [...chatGuids]],
+    );
+    const { kept } = filterBlockedActivityCandidates(sent.rows, blockedKeys);
+    const keptIds = new Set(kept.map((row) => row.id));
+    const sentIds = sent.rows.filter((row) => !keptIds.has(row.id)).map((row) => row.id);
+    if (sentIds.length > 0) events += (await humanActivity.deleteEvents({ source: SOURCE, ids: sentIds, client })).deleted;
 
-// Display readers (status, conversation list) serve an empty list for an
-// unreadable file; mutation paths use readBlocklistForWrite and refuse.
-export async function readBlocklist() {
-  const { value } = await readJSONFileStrict(blocklistPath(), null, { allowArray: false });
-  return projectBlocklist(value);
-}
-
-async function readBlocklistForWrite() {
-  const { ok, value } = await readJSONFileStrict(blocklistPath(), null, { allowArray: false });
-  if (!ok) throw unreadableStoreError(blocklistPath());
-  return projectBlocklist(value);
-}
-
-async function writeBlocklist(handles) {
-  const cleaned = [...new Set((handles || []).map((h) => blocklistKey(h)).filter(Boolean))].sort();
-  const payload = { handles: cleaned, updatedAt: new Date().toISOString() };
-  await atomicWrite(blocklistPath(), JSON.stringify(payload, null, 2));
-  return payload;
-}
-
-export async function setBlocklist(handles) {
-  return writeBlocklist(handles);
+    const remaining = await client.query(
+      `SELECT DISTINCT metadata->>'chatGuid' AS chat_guid FROM human_activity_events
+       WHERE source = $1 AND metadata->>'chatGuid' = ANY($2::text[])`,
+      [SOURCE, [...chatGuids]],
+    );
+    const stillActive = new Set(remaining.rows.map((row) => row.chat_guid));
+    let touchpoints = 0;
+    for (const chatGuid of chatGuids) {
+      if (stillActive.has(chatGuid)) continue;
+      touchpoints += (await deleteAutoTouchpoints({ dedupePrefix: `imsg:${chatGuid}:`, client })).touchpoints;
+    }
+    return { events, touchpoints };
+  });
 }
 
 /**
  * Add one or more handles to the blocklist. When `purgeExisting` is true, also
- * deletes PortOS activity events whose metadata.handle matches (normalized).
- * Returns `{ handles, added, purged }`.
+ * erases already-ingested events/touchpoints for every submitted handle — even
+ * one that was already listed, which is how leaked rows get cleaned up.
+ * Returns `{ handles, updatedAt, added, purged, touchpoints }`.
  */
-export async function addToBlocklist(handles, { purgeExisting = false } = {}) {
+export function addToBlocklist(handles, { purgeExisting = false } = {}) {
   const incoming = (Array.isArray(handles) ? handles : [handles])
     .map((h) => blocklistKey(h))
     .filter(Boolean);
-  const current = await readBlocklistForWrite();
-  const before = new Set(current.handles);
-  const next = new Set(current.handles);
-  const added = [];
-  for (const key of incoming) {
-    if (!next.has(key)) {
-      next.add(key);
-      added.push(key);
-    }
-  }
-  const saved = await writeBlocklist([...next]);
-  let purged = 0;
-  if (purgeExisting && added.length > 0) {
-    // Events store the raw counterpart handle in metadata.handle; match via
-    // the same normalization so a stored "+1 555…" still purges.
-    for (const key of added.length ? added : incoming) {
-      // Direct metadata match for the normalized form, plus common raw variants
-      // are unlikely — also scan by listing is too heavy. Instead delete where
-      // the stored handle normalizes to the key (SQL can't run JS, so we delete
-      // by exact stored handle when it already equals the key, which is what
-      // imessageSync writes for phone handles after chat.db).
-      const r = await humanActivity.deleteEvents({ source: SOURCE, handle: key });
-      purged += r.deleted;
-    }
-    // Also try un-normalized variants callers may have passed (raw phone).
-    for (const raw of Array.isArray(handles) ? handles : [handles]) {
-      const rawStr = raw == null ? '' : String(raw).trim();
-      if (!rawStr) continue;
-      if (blocklistKey(rawStr) && rawStr !== blocklistKey(rawStr)) {
-        const r = await humanActivity.deleteEvents({ source: SOURCE, handle: rawStr });
-        purged += r.deleted;
-      }
-    }
-  }
-  void before; // reserved for diagnostics
-  return { ...saved, added, purged };
+  return withImessagePrivacyLock(async () => {
+    const current = await readBlocklist();
+    const existing = new Set(current.handles);
+    const added = [...new Set(incoming)].filter((key) => !existing.has(key));
+    const saved = await writeBlocklist([...current.handles, ...added]);
+    const purge = purgeExisting && incoming.length > 0
+      ? await purgeHandles(incoming, new Set(saved.handles))
+      : { events: 0, touchpoints: 0 };
+    return { ...saved, added, purged: purge.events, touchpoints: purge.touchpoints };
+  });
 }
 
-export async function removeFromBlocklist(handle) {
+export function removeFromBlocklist(handle) {
   const key = blocklistKey(handle);
-  if (!key) return readBlocklist();
-  const current = await readBlocklistForWrite();
-  if (!current.handles.includes(key)) return current;
-  return writeBlocklist(current.handles.filter((h) => h !== key));
+  return withImessagePrivacyLock(async () => {
+    const current = await readBlocklist();
+    if (!key || !current.handles.includes(key)) return current;
+    return writeBlocklist(current.handles.filter((h) => h !== key));
+  });
 }
 
 /**
@@ -322,20 +313,25 @@ export async function listConversationEvents(chatKey, { limit, before } = {}) {
   };
 }
 
-export async function purgeConversation(chatKey) {
+export function purgeConversation(chatKey) {
   const chatGuid = decodeChatKey(chatKey);
-  if (chatGuid == null) return { deleted: 0, chatGuid: null };
-  const result = await humanActivity.deleteEvents({ source: SOURCE, chatGuid });
-  // Touchpoint summaries carry the chat name; dedupe keys are imsg:<chatGuid>:<day>.
-  const { deleteAutoTouchpoints } = await import('./tribe.js');
-  await deleteAutoTouchpoints({ dedupePrefix: `imsg:${chatGuid}:` });
-  return { ...result, chatGuid, chatKey: encodeChatKey(chatGuid) };
+  if (chatGuid == null) return Promise.resolve({ deleted: 0, chatGuid: null });
+  return withImessagePrivacyLock(async () => {
+    const { deleteAutoTouchpoints } = await import('./tribe.js');
+    await ensureSchema();
+    // Touchpoint dedupe keys are imsg:<chatGuid>:<day>; erase both stores together.
+    return withTransaction(async (client) => {
+      const result = await humanActivity.deleteEvents({ source: SOURCE, chatGuid, client });
+      await deleteAutoTouchpoints({ dedupePrefix: `imsg:${chatGuid}:`, client });
+      return { ...result, chatGuid, chatKey: encodeChatKey(chatGuid) };
+    });
+  });
 }
 
-export async function deleteEvent(id) {
-  if (!id) return { deleted: 0 };
+export function deleteEvent(id) {
+  if (!id) return Promise.resolve({ deleted: 0 });
   // Scope to imessage so a typo'd id from another source can't be wiped via this route.
-  return humanActivity.deleteEvents({ ids: [String(id)], source: SOURCE });
+  return withImessagePrivacyLock(() => humanActivity.deleteEvents({ ids: [String(id)], source: SOURCE }));
 }
 
 export async function getStats() {

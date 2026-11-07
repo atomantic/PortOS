@@ -46,7 +46,12 @@ const REDECIDE_SQL = `(state = 'open' AND decision IS DISTINCT FROM 'handed-off'
     OR (latest_comment_api_url IS NOT NULL AND NOT (evidence ? 'commenterTrust'))))`;
 // A deployment waiting on you is re-checked every sync: approving or rejecting
 // it on GitHub does not touch the notification thread.
-const WAITING_DEPLOYMENT_SQL = "(state = 'open' AND evidence->>'rule' = 'deployment-approval')";
+const WAITING_DEPLOYMENT_SQL = "(state = 'open' AND decision IS DISTINCT FROM 'handed-off' AND evidence->>'rule' = 'deployment-approval')";
+// Operator and automation action records written outside triage. A re-triage of
+// the same GitHub activity (a trust change, a rules bump) rebuilds the rest of
+// the evidence but must keep these: a hand-off is how the finished resolve task
+// finds its thread, and an attempt is what stops a repeated PR action.
+const TURN_EVIDENCE_KEYS = ['handoff', 'pullRequestAction', 'pullRequestAttempt'];
 const WAITING_RUNS_JQ = '[.workflow_runs[] | {id, name, displayTitle: .display_title, headBranch: .head_branch, event, actor: .actor.login, actorType: .actor.type, createdAt: .created_at, updatedAt: .updated_at}]';
 const LOGIN_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}(?:\[bot\])?$/;
 const REPO_RE = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;
@@ -303,8 +308,25 @@ async function foldCiDuplicates(client, accountId) {
  * new activity.
  */
 export async function retriageOpenThreads(accountId) {
-  const { rowCount } = await query("UPDATE github_notifications SET triaged_for = NULL, updated_at = NOW() WHERE account_id = $1 AND state = 'open'", [accountId]);
+  // A hand-off holds until new GitHub activity, like REDECIDE_SQL.
+  const { rowCount } = await query(
+    "UPDATE github_notifications SET triaged_for = NULL, updated_at = NOW() WHERE account_id = $1 AND state = 'open' AND decision IS DISTINCT FROM 'handed-off'",
+    [accountId],
+  );
   return rowCount;
+}
+
+// No new GitHub activity since the last decision (never decided counts: nothing
+// newer than a decision exists to supersede an action recorded on the row).
+const isSameActivity = (row) => row.triaged_for == null || new Date(row.triaged_for).getTime() >= new Date(row.gh_updated_at).getTime();
+
+function carryTurnEvidence(row, evidence) {
+  if (!isSameActivity(row)) return evidence;
+  // A refused hand-off pins nothing: a changed rule or trust may now allow it.
+  const kept = Object.fromEntries(TURN_EVIDENCE_KEYS
+    .filter((key) => row.evidence?.[key] !== undefined && !(key === 'handoff' && row.evidence.handoff?.skipped))
+    .map((key) => [key, row.evidence[key]]));
+  return { ...evidence, ...kept };
 }
 
 /**
@@ -323,18 +345,34 @@ export async function triageAccountNotifications(account, env, { now = Date.now(
   const ctx = {
     account, reader, ownLogins: await ownLoginsFor(account, reader), managedKeys: await managedRepoKeys(), learnedRules: await loadLearnedRules(account.id), now,
   };
+  // A hand-off holds until new activity; a row selected only because its stamp was cleared is re-stamped, not re-decided.
+  const held = rows.filter((row) => row.decision === 'handed-off' && isSameActivity(row));
   const results = [];
-  for (const row of rows) results.push({ row, result: await triageThread(row, ctx) });
+  for (const row of rows) if (!held.includes(row)) results.push({ row, result: await triageThread(row, ctx) });
 
   const decisions = {};
+  let triaged = 0;
   await withTransaction(async (client) => {
-    for (const { row, result } of results) {
-      decisions[result.decision] = (decisions[result.decision] || 0) + 1;
+    for (const row of held) {
       await client.query(
-        `UPDATE github_notifications SET decision = $3, trust = $4, suspect = $5, evidence = $6::jsonb, triaged_for = $7, updated_at = NOW()
-         WHERE account_id = $1 AND thread_id = $2`,
-        [account.id, row.thread_id, result.decision, result.trust, result.suspect, toPgJson(result.evidence), row.gh_updated_at],
+        `UPDATE github_notifications SET triaged_for = $3 WHERE account_id = $1 AND thread_id = $2 AND decision = 'handed-off'`,
+        [account.id, row.thread_id, row.gh_updated_at],
       );
+    }
+    for (const { row, result } of results) {
+      // Triage spent seconds in `gh` after reading this row. Write only if the row
+      // is still as read: a hand-off, learned decision, PR action or Assist verdict
+      // landing meanwhile wins, and the next check re-triages this thread.
+      const evidence = carryTurnEvidence(row, result.evidence);
+      const { rowCount } = await client.query(
+        `UPDATE github_notifications SET decision = $3, trust = $4, suspect = $5, evidence = $6::jsonb, triaged_for = $7, updated_at = NOW()
+         WHERE account_id = $1 AND thread_id = $2
+           AND state = $8 AND decision IS NOT DISTINCT FROM $9 AND evidence = $10::jsonb`,
+        [account.id, row.thread_id, result.decision, result.trust, result.suspect, toPgJson(evidence), row.gh_updated_at, row.state, row.decision, toPgJson(row.evidence)],
+      );
+      if (!rowCount) continue;
+      triaged += 1;
+      decisions[result.decision] = (decisions[result.decision] || 0) + 1;
       if (row.decision !== result.decision) {
         await client.query(
           `INSERT INTO github_notification_events (account_id, thread_id, actor, kind, detail) VALUES ($1, $2, 'automation', 'triaged', $3::jsonb)`,
@@ -344,5 +382,5 @@ export async function triageAccountNotifications(account, env, { now = Date.now(
     }
     await foldCiDuplicates(client, account.id);
   });
-  return { triaged: results.length, decisions };
+  return { triaged, decisions };
 }

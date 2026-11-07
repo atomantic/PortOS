@@ -120,27 +120,27 @@ export default function SceneTakeStrip({
                 <div className="flex flex-wrap gap-1">
                   {!isSelected && (
                     <button type="button" disabled={busy} onClick={() => onSelect?.(take)}
-                      className="inline-flex items-center gap-0.5 rounded bg-port-accent/20 text-port-accent px-1.5 py-0.5 text-[10px] min-h-[32px] sm:min-h-0 disabled:opacity-50"
+                      className="inline-flex items-center gap-0.5 rounded bg-port-accent/20 text-port-accent px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 min-h-[32px] sm:min-h-0 disabled:opacity-50"
                       title="Use this take for the scene">
                       <Check size={11} /> Use
                     </button>
                   )}
                   {rejected ? (
                     <button type="button" disabled={busy} onClick={() => onReview?.(take, { status: 'candidate' })}
-                      className="inline-flex items-center gap-0.5 rounded bg-port-border px-1.5 py-0.5 text-[10px] min-h-[32px] sm:min-h-0 disabled:opacity-50"
+                      className="inline-flex items-center gap-0.5 rounded bg-port-border px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 min-h-[32px] sm:min-h-0 disabled:opacity-50"
                       title="Restore this take as a candidate">
                       <RotateCcw size={11} /> Restore
                     </button>
                   ) : (
                     <button type="button" disabled={busy} onClick={() => { onReview?.(take, { status: 'rejected' }); openNote(take); }}
-                      className="inline-flex items-center gap-0.5 rounded bg-port-border px-1.5 py-0.5 text-[10px] min-h-[32px] sm:min-h-0 disabled:opacity-50"
+                      className="inline-flex items-center gap-0.5 rounded bg-port-border px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 min-h-[32px] sm:min-h-0 disabled:opacity-50"
                       title={isSelected ? 'Not for this shot: clears the selection so the next render fills it. Other shots can still use it.' : 'Not for this shot. Other shots can still use it.'}>
                       <X size={11} /> Reject
                     </button>
                   )}
                   {onMark && (
                     <button type="button" disabled={busy} onClick={() => onMark(take, bad ? null : 'bad')} aria-pressed={bad}
-                      className={`inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] min-h-[32px] sm:min-h-0 disabled:opacity-50 ${bad ? 'bg-port-error/20 text-port-error' : 'bg-port-border'}`}
+                      className={`inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 min-h-[32px] sm:min-h-0 disabled:opacity-50 ${bad ? 'bg-port-error/20 text-port-error' : 'bg-port-border'}`}
                       title={bad ? 'Clear the bad mark' : 'Mark this file bad, to clean up when the project is done. It is also rejected on every shot not using it, and stays counted in the stats.'}>
                       <Ban size={11} /> Bad
                     </button>

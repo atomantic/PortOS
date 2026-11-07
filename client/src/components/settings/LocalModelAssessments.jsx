@@ -764,7 +764,7 @@ function OpenCodeAgentBenchmarkPanel({ results, running, onRun }) {
                 type="button"
                 onClick={() => onRun(target)}
                 disabled={running}
-                className="w-full flex items-center justify-center gap-1 px-2 py-1 text-[10px] rounded border border-port-border text-gray-300 hover:border-port-accent hover:text-white transition-colors disabled:opacity-50"
+                className="w-full flex items-center justify-center gap-1 px-2 py-1 text-[10px] pointer-coarse:min-h-11 rounded border border-port-border text-gray-300 hover:border-port-accent hover:text-white transition-colors disabled:opacity-50"
               >
                 <Play size={10} /> {running ? 'Running…' : 'Run task check'}
               </button>

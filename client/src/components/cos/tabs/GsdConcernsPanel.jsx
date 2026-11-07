@@ -89,7 +89,7 @@ export default function GsdConcernsPanel({ appId, concerns, onTaskCreated }) {
                       <button
                         onClick={() => handleCreateTask(item.id)}
                         disabled={creating === item.id}
-                        className="shrink-0 px-1.5 py-0.5 text-[10px] bg-port-accent/10 hover:bg-port-accent/20 text-port-accent rounded transition-colors disabled:opacity-50"
+                        className="shrink-0 px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 bg-port-accent/10 hover:bg-port-accent/20 text-port-accent rounded transition-colors disabled:opacity-50"
                       >
                         {creating === item.id ? '...' : '+ Task'}
                       </button>

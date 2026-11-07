@@ -31,7 +31,9 @@
 import { join } from 'path';
 import { rename } from 'fs/promises';
 import os from 'os';
-import { PATHS, atomicWrite, ensureDir, tryReadFile, safeJSONParse } from '../lib/fileUtils.js';
+import { PATHS, atomicWrite, ensureDir, tryReadFileStrict, safeJSONParse } from '../lib/fileUtils.js';
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
+import { ServerError } from '../lib/errorHandler.js';
 import { getAvailableMemoryGb } from './localMemory.js';
 import { compareEnvironments, describeStaleness, measuredFitVerdict } from '../lib/localModelAssessment.js';
 import { ASSESSABLE_RUNTIMES } from '../lib/localProviderRuntime.js';
@@ -168,8 +170,27 @@ async function quarantineStore(reason) {
   console.error(`❌ Local LLM: ${reason} — ${moved ? `parked the old file as ${parked.split('/').pop()}` : 'could not park the old file'}`);
 }
 
+// One tail for the whole file: save and delete are read-modify-write cycles over
+// the same JSON document, so a delete overlapping a run's save would otherwise
+// persist whichever pre-image it read.
+const queueWrite = createFileWriteQueue();
+
+/**
+ * 503 for a store whose bytes could not be read (EACCES / EIO / ...). Unlike a
+ * malformed file this is not provably corrupt — it may be perfectly good — so a
+ * writer must refuse rather than park or replace it. Shared with the capability
+ * store.
+ */
+export const unreadableStoreError = (label) =>
+  new ServerError(`${label} could not be read from disk; refusing to overwrite it`, { status: 503, code: 'UNREADABLE_STORE' });
+
 export async function loadStore() {
-  const raw = await tryReadFile(assessmentsFile());
+  const { ok, value: raw } = await tryReadFileStrict(assessmentsFile());
+  // A filesystem failure is NOT "never assessed": reporting an empty store here
+  // let the next save write a one-record file over a perfectly good one.
+  if (!ok) {
+    return { schemaVersion: STORE_SCHEMA_VERSION, assessments: [], readError: 'assessments file could not be read', unreadable: true };
+  }
   // Never read = an empty store, not an error: the file simply doesn't exist
   // until the first assessment runs.
   if (raw == null) return { schemaVersion: STORE_SCHEMA_VERSION, assessments: [], readError: null };
@@ -194,8 +215,9 @@ export async function loadAssessments() {
   return (await loadStore()).assessments;
 }
 
-export async function saveAssessment(assessment) {
-  const { assessments, readError } = await loadStore();
+export const saveAssessment = (assessment) => queueWrite(async () => {
+  const { assessments, readError, unreadable } = await loadStore();
+  if (unreadable) throw unreadableStoreError('Local model assessments');
   // An unreadable store reports zero assessments, and writing on top of that
   // would replace every prior measurement with this one record — a read failure
   // silently destroying data the user spent minutes of compute on. Quarantine
@@ -213,14 +235,15 @@ export async function saveAssessment(assessment) {
   await ensureDir(assessmentsDir());
   await atomicWrite(assessmentsFile(), { schemaVersion: STORE_SCHEMA_VERSION, assessments: next });
   return assessment;
-}
+});
 
 /**
  * Drop one recorded assessment. Returns whether a record was actually removed,
  * so the caller can 404 rather than reporting a phantom success.
  */
-export async function deleteAssessment(backend, modelId, tuningKey = '') {
-  const { assessments, readError } = await loadStore();
+export const deleteAssessment = (backend, modelId, tuningKey = '') => queueWrite(async () => {
+  const { assessments, readError, unreadable } = await loadStore();
+  if (unreadable) throw unreadableStoreError('Local model assessments');
   // Same hazard as saveAssessment: rewriting from an empty in-memory list would
   // wipe the file. A delete against an unreadable store has nothing to remove.
   if (readError) return { deleted: false };
@@ -231,7 +254,7 @@ export async function deleteAssessment(backend, modelId, tuningKey = '') {
   await atomicWrite(assessmentsFile(), { schemaVersion: STORE_SCHEMA_VERSION, assessments: next });
   console.log(`🧹 Local LLM: dropped assessment for ${backend}/${modelId}${tuningKey ? ` (${tuningKey})` : ''}`);
   return { deleted: true };
-}
+});
 
 // ---- measured evidence for the ESTIMATE-driven surfaces ---------------------
 

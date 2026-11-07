@@ -4,11 +4,13 @@ vi.mock('./providers.js', () => ({ getProviderById: vi.fn() }));
 vi.mock('./providerExecutionReadiness.js', () => ({ ensureProviderReadyForExecution: vi.fn().mockResolvedValue({ success: true }) }));
 vi.mock('./tuiPromptRunner.js', () => ({ executeTuiRun: vi.fn() }));
 vi.mock('./runner.js', () => ({ getRunsPath: vi.fn(() => '/tmp/portos-benchmark-runs') }));
+vi.mock('../lib/heavyJobClaim.js', () => ({ claimHeavyLocalJob: vi.fn() }));
 vi.mock('../lib/providerModels.js', () => ({
   isOpencodeCommand: vi.fn(() => true),
   isClaudeCommand: vi.fn((command) => command === 'claude'),
 }));
 
+import { claimHeavyLocalJob } from '../lib/heavyJobClaim.js';
 import { getProviderById } from './providers.js';
 import { ensureProviderReadyForExecution } from './providerExecutionReadiness.js';
 import { executeTuiRun } from './tuiPromptRunner.js';
@@ -36,8 +38,11 @@ describe('summarizeOpenCodeEvents', () => {
 });
 
 describe('runOpenCodeAgentBenchmark', () => {
+  let release;
   beforeEach(() => {
     vi.clearAllMocks();
+    release = vi.fn(async () => {});
+    claimHeavyLocalJob.mockResolvedValue({ ok: true, holder: null, release });
     getProviderById.mockResolvedValue({
       id: 'opencode-llama-tui',
       type: 'tui',
@@ -150,6 +155,26 @@ describe('runOpenCodeAgentBenchmark', () => {
       mtplxBacked: true,
     }));
     expect(executeTuiRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses with 409 when another heavy local job holds the machine, before waking the runtime', async () => {
+    claimHeavyLocalJob.mockResolvedValue({
+      ok: false, holder: { kind: 'local-model assessment sweep' }, message: 'A sweep is running', release: async () => {},
+    });
+
+    await expect(runOpenCodeAgentBenchmark({ backend: 'llama', modelId: 'dflash' }))
+      .rejects.toMatchObject({ status: 409, code: 'HEAVY_LOCAL_JOB_BUSY' });
+    expect(ensureProviderReadyForExecution).not.toHaveBeenCalled();
+    expect(executeTuiRun).not.toHaveBeenCalled();
+  });
+
+  it('holds the claim for the whole run and releases it on success and on failure', async () => {
+    await runOpenCodeAgentBenchmark({ backend: 'llama', modelId: 'dflash' });
+    expect(release).toHaveBeenCalledTimes(1);
+
+    ensureProviderReadyForExecution.mockRejectedValueOnce(new Error('daemon exploded'));
+    await expect(runOpenCodeAgentBenchmark({ backend: 'llama', modelId: 'dflash' })).rejects.toThrow('daemon exploded');
+    expect(release).toHaveBeenCalledTimes(2);
   });
 
   it('rejects a model outside the three explicit benchmark targets', async () => {
