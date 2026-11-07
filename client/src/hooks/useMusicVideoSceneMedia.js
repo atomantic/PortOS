@@ -195,7 +195,11 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       .then((entries) => { if (active) setCastMedia((prev) => Object.fromEntries(entries.map(([id, media]) => [id, media ?? prev[id] ?? null]))); });
     return () => { active = false; };
   }, [castIds, castRefresh]);
-  const reloadCastMedia = () => setCastRefresh((n) => n + 1);
+  // Failed members return to "loading" while the retry is in flight, so a render waits instead of being told the read failed.
+  const reloadCastMedia = () => {
+    setCastMedia((prev) => Object.fromEntries(Object.entries(prev).map(([id, media]) => [id, media === null ? undefined : media])));
+    setCastRefresh((n) => n + 1);
+  };
   // A render before the shot's cast guides load, or after a failed read (null), would silently go out without them.
   const castGuidesPending = (scene) => {
     const ids = musicVideoSceneCastIds(project, scene);

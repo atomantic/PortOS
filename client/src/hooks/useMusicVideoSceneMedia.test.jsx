@@ -150,8 +150,15 @@ describe('useMusicVideoSceneMedia Casting guides (#12763)', () => {
     expect(toast.error).toHaveBeenCalledWith('Cast guides could not be loaded for Example Lead. Retry before rendering.');
     expect(generateImage).not.toHaveBeenCalled();
 
-    listCatalogIngredientMedia.mockResolvedValueOnce([{ mediaKey: 'child.png', kind: 'reference', library: { variant: { age: 7 }, guide: true } }]);
+    let release;
+    listCatalogIngredientMedia.mockReset();
+    listCatalogIngredientMedia.mockReturnValueOnce(new Promise((r) => { release = r; }));
     await act(async () => { result.current.reloadCastMedia(); });
+    expect(result.current.castMedia['cat-chr-x']).toBeUndefined();
+    toast.error.mockClear();
+    await act(async () => { await result.current.generateFrame(cast.scenes[0]); });
+    expect(toast.error).toHaveBeenCalledWith('Cast guides are still loading. Try again in a moment.');
+    await act(async () => { release([{ mediaKey: 'child.png', kind: 'reference', library: { variant: { age: 7 }, guide: true } }]); });
     await waitFor(() => expect(result.current.castMedia['cat-chr-x']).toHaveLength(1));
     await act(async () => { await result.current.generateFrame(cast.scenes[0]); });
     expect(generateImage.mock.calls.at(-1)[0].referenceImageFiles).toEqual(['child.png']);
