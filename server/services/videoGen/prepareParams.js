@@ -84,12 +84,19 @@ import { audioDurationToFrames } from './audioDuration.js';
 import { RUNWAY_SPECIAL_VIDEO_MODES } from '../../lib/runwaySpecialVideoModels.js';
 import { isMiniMaxH3SpeedProfileRequest } from '../../lib/minimaxH3SpeedProfiles.js';
 
-/** Hosted lanes cannot consume the generic reference inputs used by local models, except Runway's own image picks (hostedSubmission.js). */
+/**
+ * Hosted lanes cannot consume the generic reference inputs used by local models.
+ * Image references are taken by Runway's own picks (hostedSubmission.js) and, on a
+ * Music Video shot, by Grok and Gemini, which send the shot's greybox plate with
+ * its clip references beside the start frame (submitJob.js).
+ */
 export function hostedReferenceInputsError({ backend, body, uploads = {} }) {
+  const takesImages = backend === VIDEO_GEN_MODE.RUNWAY
+    || (body.musicVideo && (backend === VIDEO_GEN_MODE.GROK || backend === VIDEO_GEN_MODE.GEMINI));
   if (backend === VIDEO_GEN_MODE.LOCAL
-    || !((body.referenceImageFiles?.length && !body.guidanceImageFile && backend !== VIDEO_GEN_MODE.RUNWAY) || body.referenceVideoIds?.length
+    || !((body.referenceImageFiles?.length && !body.guidanceImageFile && !takesImages) || body.referenceVideoIds?.length
       || REFERENCE_AUDIO_FIELDS.some((field) => uploads[field]))) return null;
-  return new ServerError('Reference images, clips and voice clips are only used by local reference-to-video models and, for images, Runway models that take them.',
+  return new ServerError('Reference images, clips and voice clips are only used by local reference-to-video models; images also go to Runway models that take them and to Grok and Gemini shot clips.',
     { status: 400, code: 'VIDEO_REFERENCE_INPUTS_LOCAL_ONLY' });
 }
 

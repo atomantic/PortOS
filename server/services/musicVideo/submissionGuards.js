@@ -195,7 +195,8 @@ export async function applyMusicVideoSubmissionGuards({ body, params, prepared, 
     if (!Array.isArray(expectedLabels)) referencePromptPrefix = prefix;
   }
   if (Array.isArray(musicVideo.expectedClipReferenceFiles)) {
-    const actual = backend === VIDEO_GEN_MODE.GROK || backend === VIDEO_GEN_MODE.GEMINI ? (params.castReferences || []).map((ref) => basename(ref.path))
+    // The greybox plate leads a Grok or Gemini clip's references; the picker lists only the rest.
+    const actual = backend === VIDEO_GEN_MODE.GROK || backend === VIDEO_GEN_MODE.GEMINI ? (params.castReferences || []).filter((ref) => !ref.greybox).map((ref) => basename(ref.path))
       : (body.mode === 'ic-ingredients-25' ? (params.icReferencePaths || []) : (params.referenceImagePaths || []))
         .map((path) => basename(path));
     if (JSON.stringify(actual) !== JSON.stringify(musicVideo.expectedClipReferenceFiles)) {
@@ -215,7 +216,8 @@ export async function applyMusicVideoSubmissionGuards({ body, params, prepared, 
   assertShotActionContract(scene);
   const { loadMusicVideoGreybox } = await import('./greyboxReferences.js');
   const greybox = await loadMusicVideoGreybox(project, scene);
-  if (greybox && !params.referenceImagePaths?.some((p) => basename(p) === greybox.reference.imageId)) {
+  const sentImages = [...(params.referenceImagePaths || []), ...(params.castReferences || []).map((ref) => ref.path)];
+  if (greybox && !sentImages.some((p) => basename(p) === greybox.reference.imageId)) {
     refuse(409, 'MUSIC_VIDEO_GREYBOX_CHANGED', 'The greybox capture changed while the shot was prepared. Submit again.');
   }
   const composedAdditions = await composeShotPrompt({ body, params, project, scene, prepared, performance, backend, greybox });

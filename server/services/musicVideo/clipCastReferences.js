@@ -91,8 +91,23 @@ export async function musicVideoClipReferences({ projectId, sceneId } = {}, limi
   return resolved;
 }
 
-/** The Grok CLI does not expose its video-model id; use the older model's cap. */
-export const musicVideoClipCastReferences = (tag) => musicVideoClipReferences(tag, MUSIC_VIDEO_GROK_CLIP_REFERENCE_LIMIT);
+/**
+ * A Grok or Gemini clip's references: the shot's selected greybox camera plate
+ * leads as its set reference, then the clip references fill the remaining slots.
+ * Both lanes upload these beside the start frame (grok.js, geminiWeb.js). The
+ * default limit is Grok's: its CLI does not expose its video-model id.
+ */
+export async function musicVideoHostedClipReferences(tag = {}, limit = MUSIC_VIDEO_GROK_CLIP_REFERENCE_LIMIT, { excludePath = null } = {}) {
+  if (!tag.projectId || !tag.sceneId || limit < 1) return [];
+  const [{ getProject }, { loadMusicVideoGreybox }] = await Promise.all([import('./projects.js'), import('./greyboxReferences.js')]);
+  const project = await requireCatalogRenderReady(await getProject(tag.projectId));
+  const scene = project?.scenes?.find((entry) => entry.sceneId === tag.sceneId);
+  const greybox = scene && await loadMusicVideoGreybox(project, scene);
+  const lead = greybox && greybox.path !== excludePath
+    ? [{ path: greybox.path, label: greybox.reference.label, role: 'set', greybox: true }] : [];
+  const rest = await musicVideoClipReferences(tag, limit - lead.length, { excludePath, project });
+  return [...lead, ...rest.filter((ref) => !lead.some((item) => item.path === ref.path))];
+}
 
 /**
  * Resolved paths of the shot's cast sheets for a local reference-to-video model
