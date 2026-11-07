@@ -9,10 +9,10 @@ import { settingsEvents } from './settings.js';
 
 vi.mock('./instanceIdentity.js', () => ({ getInstanceId: vi.fn(async () => 'local'), loadData: vi.fn() }));
 vi.mock('./nativeUsageReport.js', () => ({ captureDashboardNativeUsageReport: vi.fn(), getNativeUsageAccountSelections: vi.fn(), NATIVE_USAGE_DASHBOARD_LIMITS: {} }));
-vi.mock('./nativeUsagePeer.js', () => ({ readNativeUsagePeerReport: vi.fn(), revalidateNativeUsagePeerReport: vi.fn() }));
+vi.mock('./nativeUsagePeer.js', () => ({ readNativeUsagePeerReport: vi.fn(), revalidateNativeUsagePeerReport: vi.fn(), retainNativeUsagePeerReport: vi.fn(), loadRetainedNativeUsagePeerReport: vi.fn() }));
 import { loadData } from './instanceIdentity.js';
 import { captureDashboardNativeUsageReport, getNativeUsageAccountSelections } from './nativeUsageReport.js';
-import { readNativeUsagePeerReport, revalidateNativeUsagePeerReport } from './nativeUsagePeer.js';
+import { loadRetainedNativeUsagePeerReport, readNativeUsagePeerReport, retainNativeUsagePeerReport, revalidateNativeUsagePeerReport } from './nativeUsagePeer.js';
 import { getNativeUsageMatrix } from './nativeUsageMatrix.js';
 
 const key = nativeUsageParticipantKey;
@@ -76,9 +76,39 @@ beforeEach(() => {
   getNativeUsageAccountSelections.mockResolvedValue(selected());
   readNativeUsagePeerReport.mockImplementation(async id => report(id));
   revalidateNativeUsagePeerReport.mockResolvedValue(undefined);
+  retainNativeUsagePeerReport.mockResolvedValue(undefined);
+  loadRetainedNativeUsagePeerReport.mockResolvedValue(null);
 });
 
 describe('explicit fleet native matrix', () => {
+  const peerFailure = code => Object.assign(new Error('peer failed'), { code });
+
+  it('keeps each received report and shows it, labeled stale, when a later read fails', async () => {
+    const last = report('peer');
+    await getNativeUsageMatrix({ scope: 'fleet' });
+    expect(retainNativeUsagePeerReport).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ participantKey: key('peer') }));
+    readNativeUsagePeerReport.mockRejectedValueOnce(peerFailure('NATIVE_USAGE_PEER_UNAVAILABLE'));
+    loadRetainedNativeUsagePeerReport.mockResolvedValueOnce(last);
+    const matrix = await getNativeUsageMatrix({ scope: 'fleet' });
+    expect(matrix.peerCollection).toMatchObject({ status: 'partial', received: 0, findings: ['peer-report-retained'],
+      peers: [{ participantKey: key('peer'), status: 'unavailable', retained: true, capturedAt: last.capturedAt }] });
+    expect(matrix.participants.find(({ participantKey }) => participantKey === key('peer'))).toMatchObject({ retained: true });
+    expect(family(matrix, 'claude').merge.status).toBe('partial');
+  });
+
+  it('shows no retained report after a refusal, or once final validation revokes the peer', async () => {
+    readNativeUsagePeerReport.mockRejectedValueOnce(peerFailure('NATIVE_USAGE_PEER_FORBIDDEN'));
+    const refused = await getNativeUsageMatrix({ scope: 'fleet' });
+    expect(loadRetainedNativeUsagePeerReport).not.toHaveBeenCalled();
+    expect(refused.peerCollection.peers[0]).toMatchObject({ status: 'forbidden', capturedAt: null });
+    readNativeUsagePeerReport.mockRejectedValueOnce(peerFailure('NATIVE_USAGE_PEER_UNAVAILABLE'));
+    loadRetainedNativeUsagePeerReport.mockResolvedValueOnce(report('peer'));
+    revalidateNativeUsagePeerReport.mockRejectedValueOnce(peerFailure('NATIVE_USAGE_PEER_FORBIDDEN'));
+    const revoked = await getNativeUsageMatrix({ scope: 'fleet' });
+    expect(revoked.peerCollection.peers[0]).toMatchObject({ status: 'unavailable', retained: false, capturedAt: null });
+    expect(revoked.participants.map(({ participantKey }) => participantKey)).toEqual([key('local')]);
+  });
+
   it('refuses a changed selection during final peer validation, then reopens with its current revision', async () => {
     let release;
     revalidateNativeUsagePeerReport.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));

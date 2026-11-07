@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import { safeParse } from '../lib/streamJsonParser.js';
 import { canonicalStringify } from '../lib/objects.js';
 import { GROK_USAGE_FIELDS, GROK_USAGE_RECORD_LIMIT, unionNativeGrokRecords } from '../lib/nativeGrokUsageRecords.js';
+import { compactNativeCoverage, emptyNativeCoverage, foldNativeCounts } from '../lib/nativeUsageSourceFold.js';
 import { buildNativeUsageRollup, grokModelEvidence, joinModelEvidence } from '../lib/nativeUsageRollups.js';
 
 const LIMITS = { bytes: 128 * 1024 * 1024, lineBytes: 1024 * 1024, entries: 30000, records: 100000, milliseconds: 5000, depth: 8 };
@@ -14,6 +15,7 @@ const identity = value => typeof value === 'string' && value.trim().length > 0 &
 const hash = value => createHash('sha256').update(canonicalStringify(value)).digest('hex');
 const date = value => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : null;
 const valuesOf = record => GROK_USAGE_FIELDS.map(field => counter(record?.[field]) ? record[field] : null);
+const emptyNativeUsageCoverage = () => ({ validSnapshots: 0, invalidSnapshots: 0, sessionsWithoutUsage: 0 });
 const validCounters = record => {
   const [input, output, cached, , reasoning, total] = valuesOf(record);
   return valuesOf(record).every(value => value !== null) && total === input + output && cached <= input && reasoning <= output;
@@ -23,30 +25,29 @@ const validCounters = record => {
  * auth, updates.jsonl, model inference, billing conversion or legacy ledger reads.
  * Runtime version of historical records and deleted/custom-root history are unknown.
  */
-export async function getNativeGrokUsageCoverage({ home, sessionsRoot, limits: overrides = {}, deadline = Infinity, modelLimits } = {}) {
+export async function getNativeGrokUsageCoverage({ home, sessionsRoot, limits: overrides = {}, deadline = Infinity, modelLimits, sources = null } = {}) {
   const limits = { ...LIMITS, ...overrides };
-  const coverage = { files: 0, records: 0, measuredRecords: 0, missingUsageRecords: 0, missingIdentityRecords: 0,
-    duplicateRecords: 0, conflictingRecords: 0, invalidLines: 0, undatedRecords: 0, unreadableFiles: 0,
-    skippedLinks: 0, missingSource: false, capped: false, stoppedEarly: false, oversizedLines: 0, streamingSupersededRecords: 0,
-    unfinalizedRecords: 0, fieldInconsistentRecords: 0, runtimeVersions: [], steps: null, cacheOverlap: null, costTickRecords: null,
-    firstObservedAt: null, lastObservedAt: null, retention: 'unknown' };
-  const nativeUsageCoverage = { validSnapshots: 0, invalidSnapshots: 0, sessionsWithoutUsage: 0 };
+  const coverage = emptyNativeCoverage();
+  const nativeUsageCoverage = emptyNativeUsageCoverage();
   const projections = [];
   const modelEvidence = new Map();
-  // Vendor-flagged known under-count (subagent usage not applied); counters stay in the total.
-  let incompleteTurns = 0;
+  // incompleteTurns: vendor-flagged known under-count (subagent usage not applied); counters stay in the total.
+  const whole = { coverage, nativeUsageCoverage, projections, modelEvidence, incompleteTurns: 0 };
+  // Readers write here. Per-source collection points it at one source at a time.
+  let sink = whole;
   const started = Date.now();
   let bytes = 0;
   let entries = 0;
+  let scannedRecords = 0;
   const stop = () => { coverage.capped = true; coverage.stoppedEarly = true; };
   const exhausted = () => {
-    if (Date.now() >= deadline || Date.now() - started >= limits.milliseconds || bytes >= limits.bytes || entries >= limits.entries || coverage.records >= limits.records) stop();
+    if (Date.now() >= deadline || Date.now() - started >= limits.milliseconds || bytes >= limits.bytes || entries >= limits.entries || scannedRecords >= limits.records) stop();
     return coverage.stoppedEarly;
   };
   const consume = text => {
     const snapshot = safeParse(text);
-    if (!snapshot || !Array.isArray(snapshot.turns) || !snapshot.session) { coverage.invalidLines++; nativeUsageCoverage.invalidSnapshots++; return; }
-    if (!identity(snapshot.sessionId)) { coverage.missingIdentityRecords++; nativeUsageCoverage.invalidSnapshots++; return; }
+    if (!snapshot || !Array.isArray(snapshot.turns) || !snapshot.session) { sink.coverage.invalidLines++; sink.nativeUsageCoverage.invalidSnapshots++; return; }
+    if (!identity(snapshot.sessionId)) { sink.coverage.missingIdentityRecords++; sink.nativeUsageCoverage.invalidSnapshots++; return; }
     const turns = snapshot.turns;
     const turnNumbers = turns.map(turn => turn?.turnNumber);
     const valid = validCounters(snapshot.session) && snapshot.session.turnCount === turns.length
@@ -56,36 +57,37 @@ export async function getNativeGrokUsageCoverage({ home, sessionsRoot, limits: o
         const sum = turns.reduce((total, turn) => total + turn[field], 0);
         return counter(sum) && sum === snapshot.session[field];
       });
-    nativeUsageCoverage[valid ? 'validSnapshots' : 'invalidSnapshots']++;
+    sink.nativeUsageCoverage[valid ? 'validSnapshots' : 'invalidSnapshots']++;
     for (const turn of turns) {
       if (exhausted()) break;
-      coverage.records++;
+      scannedRecords++;
+      sink.coverage.records++;
       const values = valuesOf(turn);
-      if (values.some(value => value === null)) coverage.missingUsageRecords++;
-      if (!valid) coverage.fieldInconsistentRecords++;
-      if (!counter(turn?.turnNumber) || !turn.turnNumber) { coverage.missingIdentityRecords++; continue; }
+      if (values.some(value => value === null)) sink.coverage.missingUsageRecords++;
+      if (!valid) sink.coverage.fieldInconsistentRecords++;
+      if (!counter(turn?.turnNumber) || !turn.turnNumber) { sink.coverage.missingIdentityRecords++; continue; }
       const at = date(turn.endedAt);
-      if (!at) coverage.undatedRecords++;
+      if (!at) sink.coverage.undatedRecords++;
       else {
-        if (!coverage.firstObservedAt || at < coverage.firstObservedAt) coverage.firstObservedAt = at;
-        if (!coverage.lastObservedAt || at > coverage.lastObservedAt) coverage.lastObservedAt = at;
+        if (!sink.coverage.firstObservedAt || at < sink.coverage.firstObservedAt) sink.coverage.firstObservedAt = at;
+        if (!sink.coverage.lastObservedAt || at > sink.coverage.lastObservedAt) sink.coverage.lastObservedAt = at;
       }
-      if (turn.usageIsIncomplete === true) incompleteTurns++;
+      if (turn.usageIsIncomplete === true) sink.incompleteTurns++;
       const recordKey = hash(['portos-grok-session-turn/1', snapshot.sessionId, turn.turnNumber]);
-      const prior = modelEvidence.get(recordKey);
-      modelEvidence.set(recordKey, { evidence: joinModelEvidence(prior?.evidence, grokModelEvidence(turn, modelLimits)),
+      const prior = sink.modelEvidence.get(recordKey);
+      sink.modelEvidence.set(recordKey, { evidence: joinModelEvidence(prior?.evidence, grokModelEvidence(turn, modelLimits)),
         incomplete: prior?.incomplete === true || turn.usageIsIncomplete === true });
-      projections.push({ records: [{ recordKey, values, at, costUsdTicks: counter(turn.costUsdTicks) ? turn.costUsdTicks : null,
+      sink.projections.push({ records: [{ recordKey, values, at, costUsdTicks: counter(turn.costUsdTicks) ? turn.costUsdTicks : null,
         costConflict: false, conflict: false, inconsistent: !valid }] });
     }
   };
   const read = async path => {
     const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0)).catch(() => null);
-    if (!handle) { coverage.unreadableFiles++; return; }
+    if (!handle) { sink.coverage.unreadableFiles++; return; }
     const stat = await handle.stat().catch(() => null);
-    if (!stat?.isFile()) { coverage.unreadableFiles++; await handle.close(); return; }
-    coverage.files++;
-    if (stat.size > limits.lineBytes) { coverage.capped = true; coverage.oversizedLines++; await handle.close(); return; }
+    if (!stat?.isFile()) { sink.coverage.unreadableFiles++; await handle.close(); return; }
+    sink.coverage.files++;
+    if (stat.size > limits.lineBytes) { sink.coverage.capped = true; sink.coverage.oversizedLines++; await handle.close(); return; }
     const chunks = [];
     let size = 0;
     const stream = handle.createReadStream({ highWaterMark: 64 * 1024, autoClose: true });
@@ -94,14 +96,28 @@ export async function getNativeGrokUsageCoverage({ home, sessionsRoot, limits: o
         size += chunk.length;
         bytes += chunk.length;
         if (exhausted()) break;
-        if (size > limits.lineBytes) { coverage.capped = true; coverage.oversizedLines++; break; }
+        if (size > limits.lineBytes) { sink.coverage.capped = true; sink.coverage.oversizedLines++; break; }
         chunks.push(chunk);
       }
       if (!coverage.stoppedEarly && size <= limits.lineBytes) consume(Buffer.concat(chunks).toString('utf8'));
-    })().catch(() => { coverage.unreadableFiles++; });
+    })().catch(() => { sink.coverage.unreadableFiles++; });
     stream.destroy();
   };
-  const walk = async (path, depth = 0) => {
+  const readStored = async (path, parts) => {
+    const facts = await sources.check(parts, path);
+    if (!facts) return;
+    const source = { coverage: emptyNativeCoverage(), nativeUsageCoverage: emptyNativeUsageCoverage(), projections: [], modelEvidence: new Map(), incompleteTurns: 0 };
+    sink = source;
+    await read(path);
+    sink = whole;
+    // An unfinished read saves nothing: the source is read again next run, and any
+    // earlier projection of it keeps counting meanwhile.
+    coverage.unreadableFiles += source.coverage.unreadableFiles;
+    if (coverage.stoppedEarly || source.coverage.unreadableFiles) return;
+    await sources.save(facts, { coverage: compactNativeCoverage(source.coverage), nativeUsageCoverage: source.nativeUsageCoverage,
+      incompleteTurns: source.incompleteTurns, modelEvidence: [...source.modelEvidence], records: source.projections.flatMap(({ records }) => records) });
+  };
+  const walk = async (path, depth = 0, parts = []) => {
     const info = await lstat(path).catch(error => { if (!depth && error.code === 'ENOENT') coverage.missingSource = true; return null; });
     if (!info) { if (!coverage.missingSource) coverage.unreadableFiles++; return; }
     if (info.isSymbolicLink()) { coverage.skippedLinks++; return; }
@@ -115,17 +131,31 @@ export async function getNativeGrokUsageCoverage({ home, sessionsRoot, limits: o
         if (entry.isSymbolicLink()) { coverage.skippedLinks++; continue; }
         if (depth === 2 && entry.name === 'usage.json') {
           usageFound = true;
-          if (entry.isFile()) await read(join(path, entry.name));
+          if (entry.isFile()) await (sources ? readStored(join(path, entry.name), [...parts, entry.name]) : read(join(path, entry.name)));
           else coverage.unreadableFiles++;
         } else if (depth < 2 && entry.isDirectory()) {
           if (depth + 1 >= limits.depth) { stop(); break; }
-          await walk(join(path, entry.name), depth + 1);
+          await walk(join(path, entry.name), depth + 1, [...parts, entry.name]);
         }
       }
     })().catch(() => { coverage.unreadableFiles++; });
     if (depth === 2 && !usageFound && !coverage.stoppedEarly) nativeUsageCoverage.sessionsWithoutUsage++;
   };
   await walk(sessionsRoot ?? join(home ?? homedir(), '.grok', 'sessions'));
+  let collectionFindings = [];
+  if (sources) {
+    const collected = await sources.load(coverage);
+    collectionFindings = collected.findings;
+    for (const { projection } of collected.stored) {
+      foldNativeCounts(nativeUsageCoverage, projection.nativeUsageCoverage);
+      whole.incompleteTurns += projection.incompleteTurns;
+      for (const [recordKey, { evidence, incomplete }] of projection.modelEvidence) {
+        const prior = modelEvidence.get(recordKey);
+        modelEvidence.set(recordKey, { evidence: joinModelEvidence(prior?.evidence, evidence), incomplete: prior?.incomplete === true || incomplete });
+      }
+      projections.push({ records: projection.records });
+    }
+  }
   const union = unionNativeGrokRecords(projections);
   // Preserve excluded identities as tombstones so a clean peer copy cannot hide
   // a locally contradictory session. Deterministic, with no arbitrary winner.
@@ -145,7 +175,7 @@ export async function getNativeGrokUsageCoverage({ home, sessionsRoot, limits: o
     recordProjection: { version: 1, identityScheme: 'sha256-grok-session-turn/1', truncated: coverage.records > GROK_USAGE_RECORD_LIMIT,
       records: records.slice(0, GROK_USAGE_RECORD_LIMIT) },
     cost: union.cost,
-    findings: incompleteTurns ? [...union.findings, 'native-usage-incomplete'] : union.findings,
+    findings: [...union.findings, ...(whole.incompleteTurns ? ['native-usage-incomplete'] : []), ...collectionFindings],
     rollup: buildNativeUsageRollup('grok', union.records.map(({ recordKey, values, at }) => ({ at, values, ...modelEvidence.get(recordKey) })), modelLimits),
   };
 }

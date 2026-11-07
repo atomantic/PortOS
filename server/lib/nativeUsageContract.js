@@ -318,11 +318,25 @@ export function projectTranscriptCoverage(family, scan, scanLimits) {
 
 const withContentHash = (body) => ({ ...body, contentHash: hashOf(body) });
 
+export const NATIVE_USAGE_CODEX_RETAINED_FINDING = 'retained-snapshot';
+
+/** The Codex entry a report carries. A failed refresh shows the last stored entry, marked
+ * so it cannot satisfy an authoritative selection. Signed-out and missing-runtime are
+ * real states, not failures, and are never replaced.
+ */
+export function nativeUsageCodexEntry(evidence, capturedAt, retained = null) {
+  const entry = projectCodexEvidence(evidence, capturedAt);
+  if (!retained || entry.findings.length !== 1 || entry.findings[0] !== 'refresh-failed') return entry;
+  const parsed = providerEntrySchemaV4.safeParse(retained);
+  if (!parsed.success || parsed.data.family !== 'codex' || !parsed.data.totals) return entry;
+  return { ...parsed.data, status: 'partial', findings: [...new Set([...parsed.data.findings, NATIVE_USAGE_CODEX_RETAINED_FINDING])] };
+}
+
 /** One participant's staged input. `capturedAt` must be an ISO instant from `toISOString()`. */
-export function buildNativeUsageReport({ instanceId, capturedAt, codexEvidence, transcripts, scanLimits }) {
+export function buildNativeUsageReport({ instanceId, capturedAt, codexEvidence, transcripts, scanLimits, retainedCodexEntry = null }) {
   const providers = [
     ...TRANSCRIPT_FAMILIES.map((family) => projectTranscriptCoverage(family, transcripts[family], scanLimits)),
-    projectCodexEvidence(codexEvidence, capturedAt),
+    nativeUsageCodexEntry(codexEvidence, capturedAt, retainedCodexEntry),
   ].sort((a, b) => a.family.localeCompare(b.family));
   const report = withContentHash({
     contractVersion: NATIVE_USAGE_CONTRACT_VERSION, kind: 'native-usage-participant-report',
@@ -336,14 +350,14 @@ const EMPTY_ROLLUP = { modelUsage: { version: 1, buckets: [] }, totals: null, fi
 /** A machine's aggregate report: the same coverage evidence as v4 with rollups in place of
  * record lists, so its size follows days times models rather than records.
  */
-export function buildNativeUsageRollupReport({ instanceId, capturedAt, codexEvidence, transcripts, scanLimits }) {
+export function buildNativeUsageRollupReport({ instanceId, capturedAt, codexEvidence, transcripts, scanLimits, retainedCodexEntry = null }) {
   const providers = [
     ...TRANSCRIPT_FAMILIES.map((family) => {
       const { modelUsage, totals, findings } = transcripts[family].rollup ?? EMPTY_ROLLUP;
       const entry = projectTranscriptCoverage(family, transcripts[family], scanLimits);
       return { ...entry, totals, modelUsage, recordProjection: null, findings: [...new Set([...entry.findings, ...findings])] };
     }),
-    { ...projectCodexEvidence(codexEvidence, capturedAt), modelUsage: null },
+    { ...nativeUsageCodexEntry(codexEvidence, capturedAt, retainedCodexEntry), modelUsage: null },
   ].sort((a, b) => a.family.localeCompare(b.family));
   return nativeUsageReportSchema.parse(withContentHash({
     contractVersion: NATIVE_USAGE_ROLLUP_CONTRACT_VERSION, kind: 'native-usage-participant-report',

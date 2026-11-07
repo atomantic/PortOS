@@ -115,12 +115,13 @@ function PeerCollection({ snapshot }) {
         <span className="font-mono text-gray-300">{peer.participantKey ? shortParticipant(peer.participantKey) : `Unknown identity ${formatCount(index + 1)}`}</span>
         <span className={peer.status === 'available' ? 'text-gray-300' : 'text-port-warning'}>{PEER_REASONS[peer.status] ?? peer.status}</span>
         <span className="text-gray-500">Report captured: {formatDateTime(peer.capturedAt, 'Unknown')}</span>
+        {peer.retained && <span className="text-port-warning">Stale: showing the last report collected from this peer</span>}
       </li>)}
     </ul> : <p className="text-xs text-gray-400">No configured peer reports are listed.</p>}
     <div className="space-y-2">
       <h3 className="text-sm font-semibold text-white">Participant source coverage</h3>
       {snapshot.participants?.map(participant => <details key={participant.participantKey ?? 'local'} className="min-w-0 rounded border border-port-border p-2">
-        <summary className="cursor-pointer break-words text-sm text-gray-300">{shortParticipant(participant.participantKey)}{participant.participantKey === snapshot.participantKey ? ' · Local instance' : ' · Peer'} · Captured {formatDateTime(participant.capturedAt, 'Unknown')}</summary>
+        <summary className="cursor-pointer break-words text-sm text-gray-300">{shortParticipant(participant.participantKey)}{participant.participantKey === snapshot.participantKey ? ' · Local instance' : ' · Peer'}{participant.retained ? ' · Stale' : ''} · Captured {formatDateTime(participant.capturedAt, 'Unknown')}</summary>
         <div className="mt-3 grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
           {FAMILIES.map(({ family, label }) => {
             const provider = participant.providers?.find(entry => entry.family === family);
@@ -228,12 +229,12 @@ function NativeUsageRead({ scope, onScopeChange, onSnapshot, acceptsRevision, bl
   const request = useRef(false);
   const beginRequest = useLatestRequest();
   const fleet = scope === 'fleet';
-  const read = useCallback(async () => {
+  const read = useCallback(async (load = api.getNativeUsageMatrix) => {
     if (request.current || blocked) return;
     request.current = true;
     const isCurrent = beginRequest();
     setBusy(true);
-    const result = await api.getNativeUsageMatrix({ scope }, { silent: true }).catch(() => null);
+    const result = await load({ scope }, { silent: true }).catch(() => null);
     if (!isCurrent()) return;
     request.current = false;
     const revisionMismatch = result && !acceptsRevision(result.selectionRevision);
@@ -245,7 +246,7 @@ function NativeUsageRead({ scope, onScopeChange, onSnapshot, acceptsRevision, bl
   return <div className="space-y-4">
     <div className="flex flex-wrap items-center justify-between gap-3">
       <div className="max-w-3xl space-y-1 text-sm text-gray-400">
-        <p>Read-only native history for all four providers. {fleet ? 'A read includes eligible configured peers.' : 'Only this instance is read; peer reports are not collected.'} Existing PortOS usage records remain unchanged.</p>
+        <p>Read-only native history for all four providers. {fleet ? 'A read includes eligible configured peers.' : 'Only this instance is read; peer reports are not collected.'} Existing PortOS usage records remain unchanged. Collected usage is stored on each machine, so a read touches only sources that changed and usage still counts after its transcript is deleted.</p>
         <p>Totals add each machine's own retained files. A transcript copied to two machines counts twice, and Claude cloud sessions that were never teleported to a machine may be missing.</p>
       </div>
       <div className="flex min-w-0 flex-wrap items-center gap-3">
@@ -255,6 +256,9 @@ function NativeUsageRead({ scope, onScopeChange, onSnapshot, acceptsRevision, bl
         </select>
         <button type="button" disabled={busy || blocked} onClick={() => { void read(); }} className="inline-flex items-center gap-2 rounded-lg border border-port-border px-3 py-2 text-sm text-white hover:bg-port-border/30 disabled:opacity-50">
           {busy ? <BrailleSpinner /> : <RefreshCw size={14} aria-hidden="true" />}{busy ? 'Reading…' : snapshot ? 'Refresh native sources' : 'Read native sources'}
+        </button>
+        <button type="button" disabled={busy || blocked} onClick={() => { void read(api.rebuildNativeUsageSources); }} title="Read every source still on disk again, for a file rewritten in place. Nothing collected is removed." className="inline-flex items-center gap-2 rounded-lg border border-port-border px-3 py-2 text-sm text-gray-300 hover:bg-port-border/30 disabled:opacity-50">
+          Rebuild from sources
         </button>
       </div>
     </div>

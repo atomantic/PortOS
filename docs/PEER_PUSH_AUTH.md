@@ -135,7 +135,9 @@ deadline. Reports older than five minutes or more than 30 seconds in the future,
 invalid hashes/signatures, and changed pair bindings are unavailable, not zero
 usage. A peer that answers `v2` with 404 or 403 is asked for `v1`, and a peer
 without either remains explicitly missing. No result is
-written into the usage ledger or retained as a completed-report cache.
+written into the usage ledger. The collector keeps each peer's last verified report
+in its machine-local store and shows it, labeled stale, after a failed read while
+that peer remains eligible; a refusal or changed pairing shows nothing.
 
 ### Using a peer's image, video, and LLM services
 

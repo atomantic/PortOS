@@ -121,7 +121,9 @@ It carries:
   for the Usage view: see the addendum on machine rollups below.
   The challenge-signed report is source/audience bound, at most 1 GiB, and
   accepted for five minutes (30 seconds of future clock allowance). It is
-  never saved in the usage digest, forwarded, or exposed to the browser.
+  never saved in the usage digest, forwarded, or exposed to the browser. The
+  requester keeps the last verified report in its machine-local store (#15255)
+  and shows it, labeled stale, only while that peer remains eligible.
   The browser receives only aggregate coverage and selected-account results.
   Usage category/direction controls remain in force, even with authentication
   otherwise disabled; unpaired legacy peers cannot use this new protocol.

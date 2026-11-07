@@ -1,5 +1,5 @@
 import { homedir } from 'node:os';
-import { buildNativeUsageReport, buildNativeUsageRollupReport, NATIVE_USAGE_ACCOUNT_SELECTIONS_KEY } from '../lib/nativeUsageContract.js';
+import { buildNativeUsageReport, buildNativeUsageRollupReport, NATIVE_USAGE_ACCOUNT_SELECTIONS_KEY, NATIVE_USAGE_CODEX_RETAINED_FINDING, nativeUsageCodexEntry } from '../lib/nativeUsageContract.js';
 import { getInstanceId } from './instanceIdentity.js';
 import { getNativeTranscriptCoverage } from './nativeTranscriptCoverage.js';
 import { getNativeAgyUsageCoverage } from './nativeAgyUsageCoverage.js';
@@ -12,8 +12,9 @@ export const NATIVE_USAGE_CAPTURE_LIMITS = Object.freeze({
 });
 
 // An explicit read also covers the whole retained history (#15252). Only time bounds it:
-// 45 seconds stays inside the 60-second peer request deadline. Callers cannot choose paths
-// or raise caps.
+// 45 seconds stays inside the 60-second peer request deadline. Finished sources are saved,
+// so a read that stops there is continued by the next one (#15255). Callers cannot choose
+// paths or raise caps.
 export const NATIVE_USAGE_DASHBOARD_LIMITS = Object.freeze({ ...NATIVE_USAGE_CAPTURE_LIMITS, milliseconds: 45_000 });
 
 // One deadline across providers: separate budgets would add up past the peer deadline.
@@ -30,14 +31,33 @@ async function readNativeSources({ home, limits, now }) {
   return { instanceId: await getInstanceId(), capturedAt, codexEvidence, transcripts: { claude, agy, grok }, scanLimits: limits };
 }
 
+const CODEX_SNAPSHOT = ['codex-account', 'latest'];
+
+/** Like the staged read above, but collects only what changed and reports all it has kept. */
+async function readStoredNativeSources() {
+  const limits = NATIVE_USAGE_DASHBOARD_LIMITS;
+  const capturedAt = new Date().toISOString();
+  const deadline = Date.now() + limits.milliseconds;
+  const { getCodexAccountUsageEvidence } = await import('./codexAppServer.js');
+  const { collectNativeUsageSources } = await import('./nativeUsageCollection.js');
+  const { getNativeUsageSnapshot, saveNativeUsageSnapshot } = await import('./nativeUsageStore.js');
+  const [codexEvidence, { transcripts }] = await Promise.all([getCodexAccountUsageEvidence(), collectNativeUsageSources({ limits, deadline })]);
+  const retainedCodexEntry = await getNativeUsageSnapshot(...CODEX_SNAPSHOT);
+  // Only the projected entry is kept: the raw account read holds an email.
+  const codex = nativeUsageCodexEntry(codexEvidence, capturedAt, retainedCodexEntry);
+  if (codex.totals && !codex.findings.includes(NATIVE_USAGE_CODEX_RETAINED_FINDING)) await saveNativeUsageSnapshot(...CODEX_SNAPSHOT, codex);
+  return { instanceId: await getInstanceId(), capturedAt, codexEvidence, transcripts, scanLimits: limits, retainedCodexEntry };
+}
+
 let pendingDashboardRead = null;
 
-/** The local UI and authenticated peers share only an in-flight read. Nothing is cached
- * after completion, persisted or forwarded from another host. Everything gets rollups,
- * except a peer on an older version, which asks for v4 record lists.
+/** The local UI and authenticated peers share only an in-flight read. Each read collects
+ * what changed since the last one and reports from the store, so nothing is forwarded from
+ * another host and no finished read is replayed. Everything gets rollups, except a peer
+ * on an older version, which asks for v4 record lists.
  */
 export async function captureDashboardNativeUsageReport({ recordLists = false } = {}) {
-  pendingDashboardRead ??= readNativeSources({ home: homedir(), limits: NATIVE_USAGE_DASHBOARD_LIMITS, now: () => new Date() })
+  pendingDashboardRead ??= readStoredNativeSources()
     .finally(() => { pendingDashboardRead = null; });
   const read = await pendingDashboardRead;
   return recordLists ? buildNativeUsageReport(read) : buildNativeUsageRollupReport(read);

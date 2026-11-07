@@ -66,6 +66,7 @@ async function readMatrix(scope) {
     ...(collection ? {
       peerCollection: collection.peerCollection,
       participants: reports.map(source => ({ participantKey: source.participantKey, capturedAt: source.capturedAt,
+        ...(collection.peerCollection.peers.some(peer => peer.retained && peer.participantKey === source.participantKey) ? { retained: true } : {}),
         providers: source.providers.map(provider => pick(provider, PROVIDER_FIELDS)),
       })),
     } : {}),

@@ -5,7 +5,7 @@ import { refreshLocalTranscriptUsage } from '../services/claudeCodeTranscriptUsa
 import { getProviderQuotas } from '../services/providerUsage.js';
 import { getAllProviders } from '../services/providers.js';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { validateRequest, nativeUsageAccountsQuerySchema, nativeUsageAccountsUpdateSchema, nativeUsageCoverageQuerySchema, nativeUsageMatrixQuerySchema, nativeUsagePeerReportQuerySchema, usageCutoverAcquireSchema, usageCutoverEpochSchema, usageCutoverRollbackSchema, usageQuerySchema, usageMessagesSchema, usageTokensSchema, usageSessionSchema, providerUsageQuerySchema, subscriptionsUpdateSchema, subscriptionEnabledSchema, usageFleetBillingSchema, usageRollingCostQuerySchema, usagePreviewSchema, usagePreviewCancelSchema } from '../lib/validation.js';
+import { validateRequest, nativeUsageAccountsQuerySchema, nativeUsageAccountsUpdateSchema, nativeUsageCoverageQuerySchema, nativeUsageMatrixQuerySchema, nativeUsagePeerReportQuerySchema, nativeUsageRebuildSchema, usageCutoverAcquireSchema, usageCutoverEpochSchema, usageCutoverRollbackSchema, usageQuerySchema, usageMessagesSchema, usageTokensSchema, usageSessionSchema, providerUsageQuerySchema, subscriptionsUpdateSchema, subscriptionEnabledSchema, usageFleetBillingSchema, usageRollingCostQuerySchema, usagePreviewSchema, usagePreviewCancelSchema } from '../lib/validation.js';
 import { saveSubscriptionCosts, getSubscriptionSavings } from '../services/subscriptionCosts.js';
 import { getSubscriptionOverview, savePlanTiers, setSubscriptionEnabled } from '../services/subscriptions.js';
 import { getFleetUsage, getFleetClaudeCodeModels, getFleetRollingCost } from '../services/peerUsage.js';
@@ -52,6 +52,16 @@ router.get('/native-matrix', asyncHandler(async (req, res) => {
   const query = validateRequest(nativeUsageMatrixQuerySchema, req.query);
   const { getNativeUsageMatrix } = await import('../services/nativeUsageMatrix.js');
   res.set('Cache-Control', 'no-store').json(await getNativeUsageMatrix(query));
+}));
+
+// Re-read every native source still on disk, for an in-place rewrite that kept size and
+// mtime. Nothing collected is removed. Answers with the read so the view updates from it.
+router.post('/native-sources/rebuild', asyncHandler(async (req, res) => {
+  const input = validateRequest(nativeUsageRebuildSchema, req.body ?? {});
+  const { requestNativeUsageRebuild } = await import('../services/nativeUsageCollection.js');
+  await requestNativeUsageRebuild();
+  const { getNativeUsageMatrix } = await import('../services/nativeUsageMatrix.js');
+  res.set('Cache-Control', 'no-store').json(await getNativeUsageMatrix(input));
 }));
 
 // Explicit, uncached diagnostic read. Never consumed by fleet aggregation.

@@ -47,7 +47,7 @@ const { peerStreamRequest: actualPeerStreamRequest } = await vi.importActual('..
 const { authGate } = await import('./authGate.js');
 const { errorMiddleware } = await import('../lib/errorHandler.js');
 const { default: routes } = await import('../routes/usage.js');
-const { readNativeUsagePeerReport, revalidateNativeUsagePeerReport, NATIVE_USAGE_PEER_MAX_BYTES, NATIVE_USAGE_PEER_TIMEOUT_MS } = await import('./nativeUsagePeer.js');
+const { loadRetainedNativeUsagePeerReport, readNativeUsagePeerReport, retainNativeUsagePeerReport, revalidateNativeUsagePeerReport, NATIVE_USAGE_PEER_MAX_BYTES, NATIVE_USAGE_PEER_TIMEOUT_MS } = await import('./nativeUsagePeer.js');
 const LOCAL = 'fixture-local-instance';
 const PEER = 'fixture-peer-instance';
 const SECRET = 'fixture-pair-secret-not-a-real-credential';
@@ -95,9 +95,10 @@ const callRoute = (extraHeaders = headers(), query = `challenge=${CHALLENGE}`, v
   return call;
 };
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks();
   vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(NOW);
+  await (await import('./nativeUsageStore.js'))._resetNativeUsageStore();
   fixture.enabled = false;
   fixture.registry = { self: { instanceId: LOCAL }, peers: [{ id: 'fixture-peer-record', instanceId: PEER,
     enabled: true, directions: ['outbound'], syncSecret: SECRET, syncEnabled: false,
@@ -303,6 +304,31 @@ describe('native usage peer consumer', () => {
     fixture.registry.peers[0].syncCategories = { usage: true };
     vi.setSystemTime(NOW + 300001);
     await expect(revalidateNativeUsagePeerReport(accepted)).rejects.toMatchObject({ code: 'NATIVE_USAGE_PEER_STALE' });
+  });
+
+  it('keeps a verified report for a later failed read, however old, while the pairing stands', async () => {
+    const report = await readNativeUsagePeerReport(PEER);
+    await retainNativeUsagePeerReport(report);
+    vi.setSystemTime(NOW + 30 * 24 * 60 * 60_000);
+    const retained = await loadRetainedNativeUsagePeerReport(PEER);
+    expect(retained).toEqual(report);
+    await expect(revalidateNativeUsagePeerReport(retained)).resolves.toBeUndefined();
+    const original = structuredClone(fixture.registry);
+    fixture.registry.peers[0].syncSecret += '-rotated';
+    await expect(revalidateNativeUsagePeerReport(retained)).rejects.toMatchObject({ code: 'NATIVE_USAGE_PEER_UNVERIFIED' });
+    fixture.registry = original;
+    fixture.registry.peers = [];
+    await expect(loadRetainedNativeUsagePeerReport(PEER)).rejects.toMatchObject({ code: 'NATIVE_USAGE_PEER_FORBIDDEN' });
+  });
+
+  it('refuses a retained report whose hashes no longer verify or that names another peer', async () => {
+    expect(await loadRetainedNativeUsagePeerReport(PEER)).toBeNull();
+    const report = await readNativeUsagePeerReport(PEER);
+    const { saveNativeUsageSnapshot } = await import('./nativeUsageStore.js');
+    await saveNativeUsageSnapshot('peer-report', report.participantKey, { ...report, evidenceHash: 'f'.repeat(64) });
+    expect(await loadRetainedNativeUsagePeerReport(PEER)).toBeNull();
+    await saveNativeUsageSnapshot('peer-report', report.participantKey, { ...rehash(structuredClone(report)), participantKey: nativeUsageParticipantKey('another-peer') });
+    expect(await loadRetainedNativeUsagePeerReport(PEER)).toBeNull();
   });
 
   it('aborts a continuously streaming body at the whole-request deadline', async () => {

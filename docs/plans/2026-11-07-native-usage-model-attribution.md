@@ -117,9 +117,8 @@ enter a bucket.
 
 ## Collection and reporting
 
-**Each machine stores what it collected (#15255).** Today every read starts over and
-nothing persists. The proposed store keeps one record projection per source file, with
-that file's size and mtime:
+**Each machine stores what it collected (#15255).** The store keeps one record
+projection per source file, with that file's size and mtime:
 
 - an unchanged source costs one `stat`, however old it is;
 - a changed source is re-read and replaces only its own projection;
@@ -236,6 +235,8 @@ home and compares the production readers' rollups with the hand-authored outcome
 `server/lib/nativeUsageRollups.test.js` runs `aggregate.json` through the production
 refusal check. Scenarios mixing report capabilities describe a union across machines,
 which the Usage view no longer performs, so only the reference resolver covers them.
+`server/services/nativeUsageCollection.test.js` collects each scenario's copies in
+separate runs, as #15255 requires, and checks that the stored report equals one full read.
 
 ## Handoff
 
