@@ -9,8 +9,9 @@ import { sceneShotName } from '../../../lib/musicVideoStages.js';
 import { formatCount, formatTimecode } from '../../../utils/formatters.js';
 import { shotNumbers } from '../ShotStepper.jsx';
 import {
-  backfillPrevizFromShots, previzCutProblems, previzCutTiming, previzCutVisibleIds, previzPlaceGreybox, projectPreviz,
+  backfillPrevizFromShots, previzCutProblems, previzPawnColors, previzCutTiming, previzCutVisibleIds, previzPlaceGreybox, projectPreviz,
 } from '../../../../../server/lib/musicVideoPreviz.js';
+import { PREVIZ_PAWN_COLORS } from '../../../../../server/lib/musicVideoPrevizLimits.js';
 
 export const PREVIZ_ANCHOR = 'mv-previz';
 const selectCls = 'min-h-[44px] min-w-0 max-w-full rounded border border-port-border bg-port-bg px-1.5 py-1 text-xs text-port-text sm:min-h-0';
@@ -26,6 +27,31 @@ function Picker({ id, label, value, options, empty, onChange }) {
         {options.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}
       </select>
     </span>
+  );
+}
+
+/** Each character's pawn color, and their bike's, so who is who reads at a glance in the previz. */
+function PawnColors({ project, characters, onChange }) {
+  const colors = previzPawnColors(project);
+  const picked = project.previz?.pawnColors || {};
+  const pick = (subjectId, part, id) => onChange({ ...picked, [subjectId]: { ...picked[subjectId], [part]: id } });
+  return (
+    <ul className="flex min-w-0 flex-wrap gap-x-4 gap-y-1.5 text-xs" aria-label="Pawn colors">
+      {characters.map((subject) => (
+        <li key={subject.id} className="inline-flex min-w-0 flex-wrap items-center gap-1">
+          <span aria-hidden="true" className="inline-block h-3 w-3 shrink-0 rounded-full border border-port-border" style={{ background: colors[subject.id].figure.hex }} />
+          <span className="font-medium text-port-text">{subject.name}</span>
+          {['figure', 'bike'].map((part) => (
+            <span key={part} className="inline-flex items-center gap-1">
+              <label htmlFor={`mv-previz-color-${subject.id}-${part}`} className="text-port-text-muted">{part === 'figure' ? 'Figure' : 'Bike'}</label>
+              <select id={`mv-previz-color-${subject.id}-${part}`} value={colors[subject.id][part].id} onChange={(event) => pick(subject.id, part, event.target.value)} className={selectCls}>
+                {PREVIZ_PAWN_COLORS.map((color) => <option key={color.id} value={color.id}>{color.label}</option>)}
+              </select>
+            </span>
+          ))}
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -127,6 +153,12 @@ export default function PrevizStage({ board }) {
           {!timedShots && <span className="text-xs text-port-text-muted">Time the shots on the Storyboard step first.</span>}
           {timedShots > 0 && !placesLoaded && <span className="text-xs text-port-text-muted">Loading the sets…</span>}
         </fieldset>
+        {previz && characters.length > 0 && (
+          <fieldset disabled={locked} className="min-w-0 space-y-1">
+            <legend className="text-xs text-port-text-muted">Pawn colors</legend>
+            <PawnColors project={project} characters={characters} onChange={(pawnColors) => save({ ...previz, pawnColors })} />
+          </fieldset>
+        )}
         {previz && (
           <fieldset disabled={locked} className="min-w-0">
             <legend className="sr-only">Previz cuts</legend>

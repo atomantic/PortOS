@@ -27,7 +27,7 @@ import { executionOptionsSchema } from './aiToolkit/internal/executionOptionsVal
  */
 
 import { z } from 'zod';
-import { PREVIZ_CUTS_MAX, PREVIZ_KEYS_MAX, PREVIZ_POSES, PREVIZ_TRACKS_MAX, PREVIZ_VISIBLE_MAX } from './musicVideoPrevizLimits.js';
+import { PREVIZ_CUTS_MAX, PREVIZ_KEYS_MAX, PREVIZ_PAWN_COLOR_IDS, PREVIZ_POSES, PREVIZ_TRACKS_MAX, PREVIZ_VISIBLE_MAX } from './musicVideoPrevizLimits.js';
 import { MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX } from './musicVideoSubjectLimits.js';
 export const musicVideoDcpRequestSchema = z.object({ grade: z.enum(['rec709', 'rec1886']), renderHistoryId: z.string().min(1), sourceSha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 import { GROK_VIDEO_DURATIONS } from './grokVideoClip.js';
@@ -310,6 +310,11 @@ export const musicVideoPrevizSchema = z.object({
       .refine((keys) => keys.every((key, i) => i === 0 || key.timeSec > keys[i - 1].timeSec), { message: 'Track key times must strictly increase' }),
   }).strict()).max(PREVIZ_TRACKS_MAX)
     .refine((tracks) => new Set(tracks.map((t) => `${t.placeSubjectId}\u0000${t.subjectId}`)).size === tracks.length, { message: 'One track per person per set' }),
+  // Picked pawn colors by character; anyone missing takes the next unused color in cast order.
+  pawnColors: z.record(previzSubjectId, z.object({
+    figure: z.enum(PREVIZ_PAWN_COLOR_IDS).optional(),
+    bike: z.enum(PREVIZ_PAWN_COLOR_IDS).optional(),
+  }).strict()).optional(),
 }).strict();
 // A path through several of the video's places, in travel order (lib/musicVideoRouteMaps.js).
 export const musicVideoRouteMapSchema = z.object({

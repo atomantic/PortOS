@@ -24,7 +24,7 @@
 import { isPreMusicShot } from './musicVideoColdOpen.js';
 import { musicVideoShotPlaceId, projectRouteMaps } from './musicVideoRouteMaps.js';
 import { SHOT_CAMERA_SET_DOWN } from './musicVideoShotSheet.js';
-import { PREVIZ_CUTS_MAX, PREVIZ_KEYS_MAX, PREVIZ_TRACKS_MAX } from './musicVideoPrevizLimits.js';
+import { PREVIZ_CUTS_MAX, PREVIZ_KEYS_MAX, PREVIZ_PAWN_COLORS, PREVIZ_TRACKS_MAX } from './musicVideoPrevizLimits.js';
 
 const EYE_HEIGHT = { stand: 1.6, ride: 1.75 };
 const CHEST_HEIGHT = { stand: 1.25, ride: 1.4 };
@@ -56,6 +56,24 @@ function characterByName(project, name) {
   return characters(project).find((subject) => textOf(subject.name).toLowerCase() === wanted) || null;
 }
 
+/**
+ * Each character's pawn colors, `{ [subjectId]: { figure, bike } }` (palette
+ * entries): the director's picks, else the next color no one has, in cast order.
+ * A bike defaults to its rider's color.
+ */
+export function previzPawnColors(project) {
+  const picked = project?.previz?.pawnColors || {};
+  const byId = new Map(PREVIZ_PAWN_COLORS.map((color) => [color.id, color]));
+  const taken = new Set(Object.values(picked).map((entry) => entry?.figure).filter(Boolean));
+  const free = PREVIZ_PAWN_COLORS.filter((color) => !taken.has(color.id));
+  let next = 0;
+  return Object.fromEntries(characters(project).map((subject, at) => {
+    const own = picked[subject.id] || {};
+    const figure = byId.get(own.figure) || free[next++] || PREVIZ_PAWN_COLORS[at % PREVIZ_PAWN_COLORS.length];
+    return [subject.id, { figure, bike: byId.get(own.bike) || figure }];
+  }));
+}
+
 /** The place's greybox and its saved cameras, from the loaded catalog places (`{ [ingredientId]: { ingredient, media } }`). */
 export function previzPlaceGreybox(project, placeSubjectId, loadedPlaces = {}) {
   const subject = places(project).find((place) => place.id === placeSubjectId);
@@ -73,7 +91,7 @@ export function previzCutTiming(project, cut) {
 }
 
 /** Cuts in song order with their live timing; untimed cuts are left out. */
-export function previzTimedCuts(project) {
+function previzTimedCuts(project) {
   const previz = projectPreviz(project);
   if (!previz) return [];
   return previz.cuts
@@ -92,7 +110,7 @@ export function previzCoversShots(project) {
 }
 
 /** The cut on screen at song time `t`: the last one that has started and not ended. */
-export function previzCutAt(project, t) {
+function previzCutAt(project, t) {
   let found = null;
   for (const entry of previzTimedCuts(project)) {
     if (entry.timing.startSec <= t + 1e-6 && t < entry.timing.endSec) found = entry;
@@ -227,11 +245,11 @@ export function backfillPrevizFromShots(project, loadedPlaces = {}) {
     return { ...track, keys };
   });
   const allTracks = [...tracks.values(), ...newTracks].slice(0, PREVIZ_TRACKS_MAX);
-  return { previz: { cuts: allCuts, tracks: allTracks }, added: added.length, removed };
+  return { previz: { ...current, cuts: allCuts, tracks: allTracks }, added: added.length, removed };
 }
 
 /** A track's pose at `t`: interpolated position and facing, the earlier key's pose. */
-export function samplePrevizTrack(track, t) {
+function samplePrevizTrack(track, t) {
   const keys = track?.keys || [];
   if (!keys.length) return null;
   const right = keys.findIndex((key) => key.timeSec > t);
@@ -271,13 +289,14 @@ export function previzFrameAt(project, loadedPlaces, t) {
   const view = (greybox?.shots || []).find((shot) => shot.id === cut.viewShotId) || null;
   const visible = new Set(previzCutVisibleIds(project, cut));
   const names = new Map(characters(project).map((subject) => [subject.id, subject.name]));
+  const colors = previzPawnColors(project);
   const actors = (projectPreviz(project)?.tracks || [])
     .filter((track) => track.placeSubjectId === cut.placeSubjectId && names.has(track.subjectId))
     .map((track) => {
       const pose = samplePrevizTrack(track, t);
       return pose && {
         subjectId: track.subjectId, name: names.get(track.subjectId), position: pose.position, facingDegrees: pose.facingDegrees,
-        pose: pose.pose || 'stand', visible: visible.has(track.subjectId) && track.subjectId !== cut.holderSubjectId, holder: track.subjectId === cut.holderSubjectId,
+        pose: pose.pose || 'stand', color: colors[track.subjectId].figure.hex, bikeColor: colors[track.subjectId].bike.hex, visible: visible.has(track.subjectId) && track.subjectId !== cut.holderSubjectId, holder: track.subjectId === cut.holderSubjectId,
       };
     })
     .filter(Boolean);

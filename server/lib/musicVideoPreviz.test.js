@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { backfillPrevizFromShots, previzCutProblems, previzFrameAt } from './musicVideoPreviz.js';
+import { backfillPrevizFromShots, previzCutProblems, previzFrameAt, previzPawnColors } from './musicVideoPreviz.js';
 import { musicVideoProjectUpdateSchema } from './musicVideoValidation.js';
 
 const subjects = [
@@ -72,4 +72,14 @@ describe('greybox previz playback', () => {
     expect(previzCutProblems(p, { id: 'c', sceneId: 's1', startSec: 0, endSec: 4, placeSubjectId: 'p-street' }, { 'cat-street': { ingredient: { type: 'place', payload: {} }, media: [] } }))
       .toEqual(['Example Street has no greybox yet']);
   });
+});
+
+// Catches two people sharing a pawn color, so the director (and later a model) can't tell them apart.
+it('gives every character a distinct named pawn color, keeps picks, and colors a bike like its rider unless picked', () => {
+  const colors = previzPawnColors(project([], { previz: { cuts: [], tracks: [], pawnColors: { 'c-bo': { figure: 'red', bike: 'chrome' } } } }));
+  expect(colors['c-bo']).toMatchObject({ figure: { id: 'red' }, bike: { id: 'chrome' } });
+  expect(colors['c-ana'].figure.id).not.toBe('red');
+  expect(colors['c-ana'].bike).toBe(colors['c-ana'].figure);
+  expect(musicVideoProjectUpdateSchema.safeParse({ previz: { cuts: [], tracks: [], pawnColors: { 'c-bo': { figure: 'red' } } } }).success).toBe(true);
+  expect(musicVideoProjectUpdateSchema.safeParse({ previz: { cuts: [], tracks: [], pawnColors: { 'c-bo': { figure: '#ff0000' } } } }).success).toBe(false);
 });

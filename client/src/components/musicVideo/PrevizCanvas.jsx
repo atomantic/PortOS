@@ -6,13 +6,11 @@ import ErrorBoundary from '../ErrorBoundary';
 import { aspectRatio, fovFromFocalLength, partColor } from '../../lib/greybox';
 
 const BACKGROUND = '#1b1e24';
-const FIGURE_COLOR = '#e0884a';
-const BIKE_COLOR = '#5d8fd6';
 const FIGURE_HEIGHT = 1.7;
 const rad = (deg) => (deg * Math.PI) / 180;
 const noop = () => {};
 
-// A person at their mark; the nose shows which way they face. Riding, a long low bike proxy sits under a seated figure.
+// A person at their mark in their pawn color; the nose shows which way they face. Riding, a long low bike proxy sits under a seated figure.
 function ActorProxy({ actor, labelPortal }) {
   const riding = actor.pose === 'ride';
   const body = riding ? 1.1 : FIGURE_HEIGHT;
@@ -20,14 +18,14 @@ function ActorProxy({ actor, labelPortal }) {
   return (
     <group position={actor.position} rotation={[0, rad(actor.facingDegrees), 0]}>
       {riding && <>
-        <mesh position={[0, 0.5, 0]}><boxGeometry args={[0.08, 0.08, 1.2]} /><meshStandardMaterial color={BIKE_COLOR} roughness={0.9} /></mesh>
+        <mesh position={[0, 0.5, 0]}><boxGeometry args={[0.08, 0.08, 1.2]} /><meshStandardMaterial color={actor.bikeColor} roughness={0.9} /></mesh>
         {[-0.55, 0.55].map((z) => (
-          <mesh key={z} position={[0, 0.34, z]} rotation={[0, 0, Math.PI / 2]}><cylinderGeometry args={[0.34, 0.34, 0.05, 20]} /><meshStandardMaterial color={BIKE_COLOR} roughness={0.9} /></mesh>
+          <mesh key={z} position={[0, 0.34, z]} rotation={[0, 0, Math.PI / 2]}><cylinderGeometry args={[0.34, 0.34, 0.05, 20]} /><meshStandardMaterial color={actor.bikeColor} roughness={0.9} /></mesh>
         ))}
       </>}
       <mesh position={[0, lift + body / 2, riding ? -0.1 : 0]}>
         <capsuleGeometry args={[0.22, Math.max(body - 0.44, 0.01), 6, 16]} />
-        <meshStandardMaterial color={FIGURE_COLOR} roughness={0.9} />
+        <meshStandardMaterial color={actor.color} roughness={0.9} />
       </mesh>
       <mesh position={[0, lift + body * 0.85, riding ? 0.18 : 0.28]} rotation={[Math.PI / 2, 0, 0]}>
         <coneGeometry args={[0.07, 0.2, 12]} />
