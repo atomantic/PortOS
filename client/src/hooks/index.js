@@ -62,6 +62,7 @@ export { default as useKeyCapture } from './useKeyCapture.js';
 export { default as useKeyboardShortcuts } from './useKeyboardShortcuts.js';
 export * from './useKeyboardShortcuts.js';
 export { default as useMediaJobProgress } from './useMediaJobProgress.js';
+export { default as useMediaJobReconnectSettle } from './useMediaJobReconnectSettle.js';
 export * from './useMediaJobSse.js';
 export { default as useSceneBatch } from './useSceneBatch.js';
 export { default as useSceneClipPlayback } from './useSceneClipPlayback.js';
