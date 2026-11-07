@@ -338,6 +338,36 @@ describe('native account selection editor', () => {
     expect(api.getNativeUsageMatrix).toHaveBeenCalledTimes(2);
   });
 
+  it('saves existing four-provider selections through the HTTP wrappers after visiting every tab', async () => {
+    const accountLabel = 'example-subscription-with-long-unbroken-label-for-geometry-check';
+    const savedModel = model(['codex', 'claude', 'grok', 'agy'].map(family => ({
+      family, accountLabel, members: [local, peer, missing],
+      ...(family === 'codex' ? { authoritativeParticipant: local } : { historyScope: 'operator-confirmed-retained-history' }),
+    })), { participants: [...model().participants, { participantKey: missing, kind: 'unavailable', status: 'not-configured' }], inventory: { status: 'truncated', maxPeers: 64 } });
+    const fetchRequest = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, options) => ({
+      ok: true, json: async () => options.method === 'PUT'
+        ? { ...savedModel, selections: JSON.parse(options.body).selections, revision: nextRevision }
+        : savedModel,
+    }));
+    api.getNativeUsageAccounts.mockImplementationOnce(getNativeUsageAccounts);
+    api.updateNativeUsageAccounts.mockImplementationOnce(updateNativeUsageAccounts);
+    show(); read(); await screen.findByText('123,456'); await open();
+    for (const provider of ['Codex', 'Claude Code', 'Grok', 'Antigravity']) {
+      tab(provider);
+      expect(editor().getByRole('checkbox', { name: /Missing saved member/ })).toBeChecked();
+    }
+    tab('Codex');
+    const codexPanel = within(editor().getByRole('tabpanel', { name: 'Codex', exact: true }));
+    fireEvent.change(codexPanel.getByLabelText('Opaque account label'), { target: { value: 'example-updated-subscription' } });
+    fireEvent.click(codexPanel.getByRole('button', { name: 'Save selections' }));
+    expect(await codexPanel.findByText(/Selections saved locally/)).toBeInTheDocument();
+    expect(fetchRequest).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(fetchRequest.mock.calls[1][1].body)).toEqual({ expectedRevision: revision, selections: savedModel.selections.map(selection => selection.family === 'codex'
+      ? { ...selection, accountLabel: 'example-updated-subscription' } : selection) });
+    expect(editor().queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByText('123,456')).not.toBeInTheDocument();
+  });
+
   it('keeps options out of GET/PUT payloads and renders wrapper errors in one owned boundary', async () => {
     const fetchRequest = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({ ok: true, json: async () => model([retained('claude')]) })
       .mockResolvedValueOnce({ ok: false, status: 409, json: async () => ({ error: 'Revision conflict' }) });

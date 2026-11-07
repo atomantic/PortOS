@@ -274,8 +274,9 @@ describe.skipIf(!chrome)('routed page chrome and content geometry', () => {
           await accountEditor.getByLabel('Opaque account label').waitFor();
           for (const provider of ['Codex', 'Claude Code', 'Grok', 'Antigravity']) {
             await accountEditor.getByRole('tab', { name: provider, exact: true }).click();
-            await accountEditor.getByLabel('Opaque account label').waitFor();
-            expect(await accountEditor.getByRole('checkbox', { name: /Missing saved member/ }).isChecked()).toBe(true);
+            const providerPanel = accountEditor.getByRole('tabpanel', { name: provider, exact: true });
+            await providerPanel.getByLabel('Opaque account label').waitFor();
+            expect(await providerPanel.getByRole('checkbox', { name: /Missing saved member/ }).isChecked()).toBe(true);
             const editorGeometry = await accountEditor.evaluate(panel => {
               const bounds = panel.getBoundingClientRect();
               const children = [...panel.querySelectorAll('fieldset, label, input, select, p, button, h3')].filter(child => child.getClientRects().length);
@@ -296,12 +297,16 @@ describe.skipIf(!chrome)('routed page chrome and content geometry', () => {
             expect(editorGeometry.outsideChildren).toEqual([]);
           }
           await accountEditor.getByRole('tab', { name: 'Codex', exact: true }).click();
-          await accountEditor.getByLabel('Opaque account label').fill('example-updated-subscription');
-          await accountEditor.getByRole('button', { name: 'Save selections', exact: true }).click();
-          await accountEditor.getByText(/Selections saved locally/).waitFor();
+          // Route transitions can leave the outgoing tab's identically labeled
+          // input mounted after click. Wait for the intended panel before editing.
+          const codexPanel = accountEditor.getByRole('tabpanel', { name: 'Codex', exact: true });
+          await codexPanel.getByLabel('Opaque account label').fill('example-updated-subscription');
+          await codexPanel.getByRole('button', { name: 'Save selections', exact: true }).click();
+          await codexPanel.getByText(/Selections saved locally/).waitFor();
           expect(accountWrites).toHaveLength(1);
           expect(accountWrites[0].expectedRevision).toBe('1'.repeat(64));
-          expect(accountWrites[0].selections).toHaveLength(4);
+          expect(accountWrites[0].selections).toEqual(responses['/usage/native-accounts'].selections.map(selection => selection.family === 'codex'
+            ? { ...selection, accountLabel: 'example-updated-subscription' } : selection));
           expect(nativeReads).toEqual(['/usage/native-matrix?scope=local', '/usage/native-matrix?scope=fleet']);
           await accountEditor.getByRole('button', { name: 'Cancel', exact: true }).click();
           expect(await page.getByText('104,255,445,839', { exact: true }).count()).toBe(0);
