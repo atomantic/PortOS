@@ -525,9 +525,13 @@ function sumModelTotals(entries) {
   const rows = new Map();
   const add = (kind, key, counters, incompleteRecords) => {
     const id = `${kind}\u0000${key}`;
-    const row = rows.get(id) ?? { kind, key, counters: {}, incompleteRecords: 0 };
-    for (const [field, value] of Object.entries(counters)) if (value !== null) row.counters[field] = (row.counters[field] ?? 0) + value;
-    row.incompleteRecords += incompleteRecords ?? 0;
+    const row = rows.get(id) ?? { kind, key, counters: {} };
+    // Unknown on one machine stays unknown for the sum, never a smaller known number.
+    for (const [field, value] of Object.entries(counters)) {
+      row.counters[field] = value === null || row.counters[field] === null ? null : (row.counters[field] ?? 0) + value;
+    }
+    // Only Grok measures this. Any other provider has no count to report, not a zero.
+    if (incompleteRecords !== undefined) row.incompleteRecords = (row.incompleteRecords ?? 0) + incompleteRecords;
     rows.set(id, row);
   };
   for (const entry of entries) {
@@ -544,7 +548,7 @@ function sumMachineEntries(entries) {
   const summed = reporting.length ? sumFields(reporting.map(({ totals }) => totals)) : null;
   const modelTotals = sumModelTotals(reporting);
   const overflow = (summed && !Object.values(summed).every((value) => value === null || Number.isSafeInteger(value)))
-    || modelTotals.some(({ counters }) => !Object.values(counters).every(Number.isSafeInteger));
+    || modelTotals.some(({ counters }) => !Object.values(counters).every((value) => value === null || Number.isSafeInteger(value)));
   if (overflow) findings.add('counter-overflow');
   return { totals: overflow ? null : summed, modelTotals: overflow ? null : modelTotals, findings,
     cost: { estimatedApiEquivalentUsd: null, actualSpendUsd: null, nativeCostSignal: sumCostSignals(reporting) } };

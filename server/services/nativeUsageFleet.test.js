@@ -109,7 +109,7 @@ describe('explicit fleet native matrix', () => {
         accounts: [{ totals: { totalTokens: total }, membersWithoutReport: [] }] });
     }
     expect(family(matrix, 'agy').merge.totals).toMatchObject({ tokensIn: 30, tokensOut: 15, cacheReadTokens: 90, thinkingOutputTokens: 9, responseOutputTokens: 6 });
-    expect(family(matrix, 'claude').merge.modelTotals).toEqual([{ kind: 'model', key: 'example-model', incompleteRecords: 0,
+    expect(family(matrix, 'claude').merge.modelTotals).toEqual([{ kind: 'model', key: 'example-model',
       counters: { tokensIn: 30, tokensOut: 15, cacheReadTokens: 9, cacheWriteTokens: 6, totalTokens: 60 } }]);
     expect(family(matrix, 'agy').merge.modelTotals).toMatchObject([{ kind: 'unknown', key: 'model-unverified' }]);
     const text = JSON.stringify(matrix);
@@ -125,6 +125,8 @@ describe('explicit fleet native matrix', () => {
     expect(family(matrix, 'claude').merge).toMatchObject({ status: 'partial', totals: { totalTokens: 40, tokensIn: 20 } });
     expect(family(matrix, 'claude').merge.modelTotals.map(({ kind, key, counters }) => [kind, key, counters.totalTokens])).toEqual([
       ['model', 'example-model', 20], ['unknown', 'report-without-model-capability', 20]]);
+    expect(family(matrix, 'agy').merge.modelTotals.find(({ key }) => key === 'report-without-model-capability').counters.totalTokens).toBeNull();
+    expect(family(matrix, 'grok').merge.modelTotals.find(({ kind }) => kind === 'model').incompleteRecords).toBe(0);
     // A field the older report lacks is unknown for the sum, never counted as its zero.
     expect(family(matrix, 'grok').merge.totals).toEqual({ totalTokens: 30, tokensIn: 20, tokensOut: 10, cacheReadTokens: 6, cacheWriteTokens: 0 });
     expect(JSON.stringify(matrix)).not.toContain('recordKey');

@@ -129,19 +129,19 @@ describe('local native dashboard capture', () => {
     expect(family(result, 'claude').merge).toMatchObject({ status: 'partial', totals: { totalTokens: 20 } });
   });
 
-  // The former budget stopped at 128 MiB of file bytes, and a report's record list passed
-  // the former 16 MiB peer limit at about 61,000 Claude records.
+  // The former budget stopped at 128 MiB of file bytes, a report's record list passed the
+  // former 16 MiB peer limit at about 61,000 Claude records, and it holds at most 100,000.
   it('reads a whole history past the former limits into a report that holds only rollups', async () => {
     const filler = JSON.stringify({ type: 'attachment', text: 'x'.repeat(2 * 1024 ** 2) });
     await save('.claude/projects/p/attachments.jsonl', `${Array.from({ length: 70 }, () => filler).join('\n')}\n`);
     const line = index => JSON.stringify({ type: 'assistant', requestId: `request-${index}`, timestamp: `2026-01-${String(index % 28 + 1).padStart(2, '0')}T00:00:00Z`,
       message: { id: `message-${index}`, model: `example-model-${index % 3 === 0 ? 'a' : 'b'}`, stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } });
-    await save('.claude/projects/p/records.jsonl', `${Array.from({ length: 70000 }, (_, index) => line(index)).join('\n')}\n`);
+    await save('.claude/projects/p/records.jsonl', `${Array.from({ length: 100500 }, (_, index) => line(index)).join('\n')}\n`);
     const report = await captureDashboardNativeUsageReport();
     const claudeEntry = report.providers.find(provider => provider.family === 'claude');
-    expect(claudeEntry).toMatchObject({ reproducibility: 'deterministic', recordProjection: null, coverage: { measuredRecords: 70000 },
-      scanCaps: { capped: false, stoppedEarly: false }, totals: { totalTokens: 140000 } });
-    expect(claudeEntry.modelUsage.buckets.reduce((sum, { counters }) => sum + counters.totalTokens, 0)).toBe(140000);
+    expect(claudeEntry).toMatchObject({ reproducibility: 'deterministic', recordProjection: null, coverage: { measuredRecords: 100500 },
+      scanCaps: { capped: false, stoppedEarly: false }, totals: { totalTokens: 201000 } });
+    expect(claudeEntry.modelUsage.buckets.reduce((sum, { counters }) => sum + counters.totalTokens, 0)).toBe(201000);
     const text = JSON.stringify(report);
     expect(Buffer.byteLength(text)).toBeLessThan(1024 ** 2);
     for (const identity of ['recordKey', 'requestKey', 'message-0', 'request-0']) expect(text).not.toContain(identity);
