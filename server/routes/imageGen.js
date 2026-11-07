@@ -274,6 +274,7 @@ const generateSchema = z.object({
     fromFrame: z.boolean().optional(),
     refine: z.boolean().optional(),
     greyboxImageId: galleryImageFilenameSchema('greybox capture').optional(),
+    greyboxBlockingImageId: galleryImageFilenameSchema('greybox blocking capture').optional(),
     // The guides and sheets this submit actually sent (#14154). The completion
     // hook copies them onto the take; it does not look them up again.
     castInputs: musicVideoCastInputsSchema.optional(),

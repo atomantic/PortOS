@@ -55,10 +55,34 @@ describe('music video greybox selection', () => {
     expect(greybox.reference).toMatchObject({ imageId: 'wall-photo.png', role: 'set', plate: true });
     const withPlate = { ...project, scenes: [{ ...scene, frameReferenceIds: ['mvr-cs-set-rink', 'mvr-cast'] }],
       visualSpec: { references: [{ id: 'mvr-cs-set-rink', imageId: 'generic.png', role: 'set' }, { id: 'mvr-cast', imageId: 'cast.png', role: 'character' }] } };
-    expect(musicVideoConditioningReferences(withPlate, withPlate.scenes[0], null, greybox).map((r) => r.imageId)).toEqual(['wall-photo.png', 'cast.png']);
+    expect(musicVideoConditioningReferences(withPlate, withPlate.scenes[0], null, greybox).map((r) => r.imageId)).toEqual(['wall-photo.png', 'layout.png', 'cast.png']);
     // A plate no longer attached to the place falls back to the capture.
     d.catalog.listMediaForIngredient.mockResolvedValue(media);
     expect((await loadMusicVideoGreybox(project, scene, d)).reference).toMatchObject({ imageId: 'layout.png' });
+  });
+
+  // Uniquely catches a plate hiding where the camera's figures stand, or a shot unable to turn the layout off.
+  it('sends the flat figure capture after the photo plate as a layout-only reference unless the shot turns it off', async () => {
+    const d = deps();
+    d.catalog.getIngredient.mockResolvedValue({ ...ingredient, payload: { greybox: { ...ingredient.payload.greybox, shots: [{ ...ingredient.payload.greybox.shots[0], plate: 'wall-photo.png' }] } } });
+    d.catalog.listMediaForIngredient.mockResolvedValue([...media, { mediaKey: 'wall-photo.png', kind: 'reference', role: null }]);
+    d.resolveImage.mockImplementation((file) => `/example/${file}`);
+    const greybox = await loadMusicVideoGreybox(project, scene, d);
+    expect(greybox).toMatchObject({ blockingAvailable: true, blockingPath: '/example/layout.png', blocking: { imageId: 'layout.png', role: 'blocking', blocking: true } });
+    const refs = musicVideoConditioningReferences({ ...project, visualSpec: { references: [{ id: 'mvr-cast', imageId: 'cast.png', role: 'character' }] }, scenes: [{ ...scene, frameReferenceIds: ['mvr-cast'] }] },
+      { ...scene, frameReferenceIds: ['mvr-cast'] }, null, greybox);
+    expect(refs.map((r) => r.imageId)).toEqual(['wall-photo.png', 'layout.png', 'cast.png']);
+    const input = musicVideoFrameModelInput(project, scene, { greybox, references: refs });
+    expect(input.prompt).toContain('Reference image 2 is the layout only');
+    expect(input.promptAdditions.find((a) => a.id === 'reference-map').text).toContain('which way they face');
+    // A two-slot renderer keeps both greybox images ahead of the cast.
+    expect(musicVideoConditioningReferences(project, scene, null, greybox, { limit: 2 }).map((r) => r.imageId)).toEqual(['wall-photo.png', 'layout.png']);
+    const off = await loadMusicVideoGreybox(project, { ...scene, setReference: { ...setReference, blocking: false } }, d);
+    expect(off).toMatchObject({ blockingAvailable: true });
+    expect(off.blocking).toBeUndefined();
+    expect(musicVideoSceneCreateSchema.safeParse({ setReference: { ...setReference, blocking: false } }).success).toBe(true);
+    d.resolveImage.mockImplementation((file) => (file === 'layout.png' ? null : `/example/${file}`));
+    await expect(loadMusicVideoGreybox(project, scene, d)).rejects.toThrow(/figure blocking capture is missing/);
   });
 
   it('persists the optional selection through create, replan and split and rejects invalid camera ids', () => {
