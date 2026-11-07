@@ -13,6 +13,26 @@ import { StringDecoder } from 'string_decoder';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 
+// The snapshot backup's pg_dump flags, shared with the live restore test so it
+// replays a dump made exactly as production makes one.
+export const SNAPSHOT_PG_DUMP_FLAGS = Object.freeze([
+  '--no-owner',
+  '--no-acl',
+  '--no-comments',
+  // --clean --if-exists: the dump DROPs each object before recreating it, so it
+  // replays cleanly into the live, already-initialized PortOS database (the
+  // common Restore-DB target) instead of erroring "relation already exists" on
+  // the first CREATE. Without it the dump is only restorable into an empty DB.
+  '--clean',
+  '--if-exists',
+  // Machine-local replay receipts (#9725) describe this install's past
+  // restores, not application data; the table definition is still dumped.
+  '--exclude-table-data=restore_receipts',
+  // The asynchronous media mirror can lag its authoritative files. Rebuild
+  // it after restore rather than snapshotting stale file references.
+  '--exclude-table-data=media_assets',
+]);
+
 // Present in every PortOS database since the first pg_dump backup. Tables added
 // later are deliberately NOT required: an old dump legitimately predates them,
 // and schema reconciliation recreates them after replay.
