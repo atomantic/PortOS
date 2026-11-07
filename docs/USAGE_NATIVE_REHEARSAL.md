@@ -3,7 +3,7 @@
 These #15031 tools validate an **isolated byte restore of the two stores
 fingerprinted by the usage cutover barrier** and inspect a supplied standard
 snapshot's integrity. An explicit Linux Docker command can also demonstrate a
-disposable SQL replay. Detached native-source commands preserve supplied raw histories
+disposable SQL replay and a code-bound maintenance-schema probe. Detached native-source commands preserve supplied raw histories
 and verify retained-provider replay. None establishes a complete PortOS backup, a matched
 runtime restore, a live consistency check, or permission to activate. The [native stage](./USAGE_NATIVE_STAGING.md) stays separate from
 legacy accounting. The [barrier](./USAGE_CUTOVER_BARRIER.md) still refuses activation
@@ -459,3 +459,76 @@ account scope, billing exclusions and continued refresh. Cover the retained-writ
 interval from native evidence or explicitly record its gap. Do not replay those old
 writes into native partitions or add overlapping legacy/native totals. This CLI
 cannot activate, restore live data, lift a barrier, change sync, restart or deploy.
+
+## Bind code and probe the restored maintenance schema
+
+On the same isolated Linux Docker executor, an explicit stronger command uses the
+SQL replay above and then the **existing fenced startup diagnostic's schema
+query**. It does not start PortOS:
+
+```bash
+node scripts/native-usage-rehearse.js schema-restore stage.json barrier-backup.json detached-standard-snapshot
+```
+
+The command derives its code root from its executing module, never from the
+snapshot, environment, current directory or a supplied checkout argument. The
+backup's original `codeCommit` must equal that checkout's actual `HEAD`. A missing
+commit, a different checkout, tracked changes or untracked files refuse before
+Docker starts. Do not relabel an old backup to make it pass. Use a matching audited
+checkout that supplies this command, or take a newly justified detached capture
+with the correct original code evidence.
+
+Before and after replay it reads the tracked checkout's actual bytes and verifies
+each Git blob, rather than trusting Git's stat cache or `assume-unchanged` flags.
+The one supported checkout conversion is UTF-8 LF to CRLF when the committed
+attributes explicitly declare `text eol=crlf`, as for `exec.cmd`. The conversion
+count and a digest of the actual working bytes are recorded. Local
+`.git/info/attributes`, global attributes, clean filters, encoding conversions and
+identifier expansion cannot justify a byte mismatch. `/usr/bin/git` must support
+`check-attr --source` (Git 2.43 or newer) when this conversion is needed.
+It records the commit/tree, hashes of all four committed package lockfiles, and
+content hashes of the shipped schema and migration sources. Parent-directory
+links, mismatched file modes, changed symlinks and uncommitted migration files
+refuse. Tracked symlink **text** is checked without following it. Gitlink object
+IDs are bound by the tree, but submodule contents are **not** validated. Ignored
+files and installed `node_modules` are not code/dependency installation evidence.
+The reported Node version is the diagnostic process's version, not proof of the
+backup's original runtime. Source checks allow 100,000 tracked entries, 100 MiB
+per regular file, 1 GiB total and five minutes per pass.
+
+The file and database migration inventories use the same filename selectors as
+the actual migration runners. The already-hashed current file ledger wins over
+the legacy location. Its recorded IDs must exactly equal the shipped file
+migration set, and the restored `public.schema_migrations` IDs must exactly equal
+the shipped database migration set. Missing ledgers, pending, unknown, duplicate,
+malformed or noncanonical IDs refuse. No migration module is imported or run.
+Matching IDs are bookkeeping evidence only: neither migration effects nor a
+successful earlier execution are established by a ledger.
+
+After SQL commits, the command runs `maintenance-target-v1`, shared with
+`verifyDatabaseMaintenanceTarget` in `server/lib/db.js`, in a read-only transaction
+with a fixed `pg_catalog` search path. It checks the private scratch database/user,
+`public.memories`, `public.memory_links`, the `memories.sync_sequence` column,
+`public.catalog_ingredients` and `public.catalog_scraps`. The receipt identifies
+this contract, its exact query hash and its narrow scope. The migration inventory
+query also runs read-only with row security disabled, refusing rather than
+accepting a policy-filtered inventory. No rows, database identities or supplied SQL diagnostics
+are printed. The original snapshot and both migration ledgers are never edited.
+
+A successful command exits **3** and adds `schemaProbe.verified: true`,
+`databaseMigrationInventoryMatched: true`, and `fileMigrations.inventoryMatched:
+true`. The schema probe is **presence/readability of this maintenance contract**,
+not a full schema comparison: column types, constraints, triggers, indexes, all
+other tables, application store readers, usage normalization, writes and a later
+ordinary boot are still unverified. The synthetic integration fixture deliberately
+satisfies only this minimal contract; passing it must not be described as an app
+restore.
+
+`schemaAndMigrationsMatched`, `appliedStateVerified`, `matchedRuntimeVerified`,
+`installedDependenciesVerified`, `fullRecoveryBackup` and `activationReady` remain
+**false**. The matched-code/schema/migrations and matched-runtime holds stay in
+place. Nothing registers a runtime, installs identity, changes barriers, contacts
+a live host, runs migrations, invokes providers, enables jobs or resumes sync.
+The required hosted DB workflow exercises this command against real restored
+synthetic SQL, including missing-schema and unknown-migration refusal with cleanup.
+Transport-only tests are not evidence of an actual PostgreSQL execution.

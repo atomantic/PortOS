@@ -7,7 +7,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { runNativeUsageRehearsalCli } from './native-usage-rehearse.js';
 import { NATIVE_USAGE_SQL_IMAGE } from './lib/nativeUsageSqlRehearsal.js';
 import { NATIVE_USAGE_SNAPSHOT_TABLES } from './lib/nativeUsageSnapshot.js';
-import { sqlDump, sqlFixture } from './lib/nativeUsageSqlRehearsal.testFixture.js';
+import { scanDatabaseMigrationFiles, scanMigrationFiles } from './lib/migrationFiles.js';
+import { fileURLToPath } from 'node:url';
+import { sqlDump, sqlFixture, schemaSqlDump } from './lib/nativeUsageSqlRehearsal.testFixture.js';
 
 // Generate real pg_dump output using fixed synthetic SQL only. Nothing from a
 // snapshot is executed by this privileged fixture builder or mounted into it.
@@ -87,6 +89,44 @@ describe.skipIf(process.env.PORTOS_NATIVE_SQL_LIVE !== '1')('real network-disabl
       restoredRowCounts: Object.fromEntries(NATIVE_USAGE_SNAPSHOT_TABLES.map(name => [name, '1'])),
       schemaAndMigrationsMatched: false }, isolation: { containerRemoved: true }, activationReady: false });
     expect(stdout).not.toContain('example-row');
+  }, 180000);
+
+
+  it('binds the executing committed code and both migration inventories to a restored startup-schema probe', async () => {
+    const root = fileURLToPath(new URL('../', import.meta.url));
+    const codeCommit = execFileSync('/usr/bin/git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
+    const fileMigrationIds = await scanMigrationFiles(join(root, 'scripts/migrations'));
+    const databaseIds = await scanDatabaseMigrationFiles(join(root, 'server/scripts/db-migrations'));
+    const fixture = await sqlFixture(directory, schemaSqlDump(databaseIds), { codeCommit, fileMigrationIds });
+    fixture.args[0] = 'schema-restore';
+    let stdout = '';
+    expect(await runNativeUsageRehearsalCli(fixture.args, { stdout: value => { stdout += value; } })).toBe(3);
+    expect(JSON.parse(stdout)).toMatchObject({ code: { commit: codeCommit, installedDependenciesVerified: false, matchedRuntimeVerified: false },
+      schemaProbe: { contract: 'maintenance-target-v1', verified: true, databaseMigrationInventoryMatched: true,
+        fullSchemaVerified: false, applicationReadersVerified: false, migrationEffectsVerified: false },
+      fileMigrations: { inventoryMatched: true, appliedStateVerified: false },
+      database: { schemaAndMigrationsMatched: false }, fullRecoveryBackup: false, activationReady: false });
+    expect(stdout).not.toContain('example-row');
+  }, 180000);
+
+  it.each([
+    ['missing startup column', 'ALTER TABLE public.memories DROP COLUMN sync_sequence;', 'maintenance-schema-probe-mismatch'],
+    ['hidden migration ID', `INSERT INTO public.schema_migrations(id) VALUES ('999999-hidden.sql');
+      ALTER TABLE public.schema_migrations ENABLE ROW LEVEL SECURITY;
+      ALTER TABLE public.schema_migrations FORCE ROW LEVEL SECURITY;
+      CREATE POLICY hide_unknown ON public.schema_migrations FOR SELECT USING (id <> '999999-hidden.sql');`,
+      'sql-rehearsal-command-failed:migration-inventory:permission-denied'],
+    ['unknown migration ID', "INSERT INTO public.schema_migrations (id) VALUES ('999999-unknown.sql');", 'database-migration-inventory-mismatch'],
+  ])('refuses %s in the real restored database and still removes its container', async (_label, extra, reason) => {
+    const root = fileURLToPath(new URL('../', import.meta.url));
+    const codeCommit = execFileSync('/usr/bin/git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
+    const fileMigrationIds = await scanMigrationFiles(join(root, 'scripts/migrations'));
+    const databaseIds = await scanDatabaseMigrationFiles(join(root, 'server/scripts/db-migrations'));
+    const fixture = await sqlFixture(directory, schemaSqlDump(databaseIds, extra), { codeCommit, fileMigrationIds });
+    fixture.args[0] = 'schema-restore';
+    let stdout = '';
+    await expect(runNativeUsageRehearsalCli(fixture.args, { stdout: value => { stdout += value; } })).rejects.toThrow(reason);
+    expect(stdout).toBe('');
   }, 180000);
 
   it.each([

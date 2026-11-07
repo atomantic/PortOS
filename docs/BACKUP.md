@@ -454,7 +454,12 @@ mandatory dump. It binds raw ledger/peer bytes to the usage barrier backup and
 reports fixed inventory groups without copying or restoring anything. This
 narrower tool refuses symlinks and retains all source-completeness,
 matched-code/schema and database/runtime-restore holds; its successful inspection
-is not a full recovery or cutover approval.
+is not a full recovery or cutover approval. The explicit
+[`schema-restore` probe](./USAGE_NATIVE_REHEARSAL.md#bind-code-and-probe-the-restored-maintenance-schema)
+adds committed-source/lockfile binding, a real disposable SQL replay, the shared
+maintenance-startup schema query and exact migration-ID inventory checks. It still
+does not verify installed dependencies, migration effects, all application readers
+or ordinary runtime recovery.
 
 ### What is excluded by default
 

@@ -29,9 +29,10 @@
  * file-migration runner's convention.
  */
 
-import { readdir, readFile } from 'fs/promises';
+import { readFile } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
+import { scanDatabaseMigrationFiles } from '../../scripts/lib/migrationFiles.js';
 import { isDirectlyInvoked } from '../../scripts/lib/directInvocation.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -57,18 +58,7 @@ export async function runDbMigrations({
   const { rows } = await query('SELECT id FROM schema_migrations');
   const applied = new Set(rows.map((r) => r.id));
 
-  // Scan for migration files (*.sql / *.js, sorted by filename). Co-located
-  // vitest files (*.test.js) are excluded — they don't export `up()` and would
-  // throw the runner if imported as migrations. `_`-prefixed files are shared
-  // helpers / fixtures consumed by migrations and their tests, never migrations
-  // themselves. A missing directory is treated as "no migrations".
-  const entries = await readdir(migrationsDir).catch((err) => {
-    if (err.code !== 'ENOENT') throw err;
-    return [];
-  });
-  const files = entries
-    .filter((f) => (f.endsWith('.sql') || f.endsWith('.js')) && !f.endsWith('.test.js') && !f.startsWith('_'))
-    .sort();
+  const files = await scanDatabaseMigrationFiles(migrationsDir);
 
   let ran = 0;
   for (const file of files) {
