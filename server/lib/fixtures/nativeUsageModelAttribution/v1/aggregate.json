@@ -1,0 +1,146 @@
+{
+  "fixtureVersion": 1,
+  "status": "proposal-not-production",
+  "syntheticOnly": true,
+  "claude": [
+    {
+      "name": "two days, two models, and visible unknown and unallocated tokens",
+      "accept": true,
+      "totals": { "tokensIn": 16, "tokensOut": 26, "cacheReadTokens": 7, "cacheWriteTokens": 7, "totalTokens": 56 },
+      "modelUsage": { "version": 1, "buckets": [
+        { "day": "2026-03-01", "kind": "model", "key": "example-model-alpha", "counters": { "tokensIn": 10, "tokensOut": 20, "cacheReadTokens": 3, "cacheWriteTokens": 7, "totalTokens": 40 } },
+        { "day": "2026-03-01", "kind": "unknown", "key": "model-missing", "counters": { "tokensIn": 1, "tokensOut": 1, "cacheReadTokens": 0, "cacheWriteTokens": 0, "totalTokens": 2 } },
+        { "day": "2026-03-02", "kind": "model", "key": "example-model-alpha", "counters": { "tokensIn": 2, "tokensOut": 2, "cacheReadTokens": 0, "cacheWriteTokens": 0, "totalTokens": 4 } },
+        { "day": "2026-03-02", "kind": "model", "key": "example-model-beta", "counters": { "tokensIn": 1, "tokensOut": 2, "cacheReadTokens": 4, "cacheWriteTokens": 0, "totalTokens": 7 } },
+        { "day": "2026-03-02", "kind": "unallocated", "key": "model-conflict", "counters": { "tokensIn": 2, "tokensOut": 1, "cacheReadTokens": 0, "cacheWriteTokens": 0, "totalTokens": 3 } }
+      ] }
+    },
+    {
+      "name": "no accepted records means no buckets",
+      "accept": true,
+      "totals": null,
+      "modelUsage": { "version": 1, "buckets": [] }
+    },
+    {
+      "name": "a record key cannot travel in a bucket",
+      "accept": false,
+      "reason": "fields-not-exact",
+      "totals": { "tokensIn": 10, "tokensOut": 20, "cacheReadTokens": 3, "cacheWriteTokens": 7, "totalTokens": 40 },
+      "modelUsage": { "version": 1, "buckets": [
+        { "day": "2026-03-01", "kind": "model", "key": "example-model-alpha", "recordKey": "0000000000000000000000000000000000000000000000000000000000000000", "counters": { "tokensIn": 10, "tokensOut": 20, "cacheReadTokens": 3, "cacheWriteTokens": 7, "totalTokens": 40 } }
+      ] }
+    },
+    {
+      "name": "a label outside the grammar is refused",
+      "accept": false,
+      "reason": "invalid-key",
+      "totals": { "tokensIn": 10, "tokensOut": 20, "cacheReadTokens": 3, "cacheWriteTokens": 7, "totalTokens": 40 },
+      "modelUsage": { "version": 1, "buckets": [
+        { "day": "2026-03-01", "kind": "model", "key": "../private/example-model", "counters": { "tokensIn": 10, "tokensOut": 20, "cacheReadTokens": 3, "cacheWriteTokens": 7, "totalTokens": 40 } }
+      ] }
+    },
+    {
+      "name": "an old-report reason cannot appear in a block only new reports carry",
+      "accept": false,
+      "reason": "invalid-key",
+      "totals": { "tokensIn": 10, "tokensOut": 20, "cacheReadTokens": 3, "cacheWriteTokens": 7, "totalTokens": 40 },
+      "modelUsage": { "version": 1, "buckets": [
+        { "day": "2026-03-01", "kind": "unknown", "key": "report-without-model-capability", "counters": { "tokensIn": 10, "tokensOut": 20, "cacheReadTokens": 3, "cacheWriteTokens": 7, "totalTokens": 40 } }
+      ] }
+    },
+    {
+      "name": "a reason filed under the wrong kind is refused",
+      "accept": false,
+      "reason": "invalid-key",
+      "totals": { "tokensIn": 10, "tokensOut": 20, "cacheReadTokens": 3, "cacheWriteTokens": 7, "totalTokens": 40 },
+      "modelUsage": { "version": 1, "buckets": [
+        { "day": "2026-03-01", "kind": "unallocated", "key": "model-missing", "counters": { "tokensIn": 10, "tokensOut": 20, "cacheReadTokens": 3, "cacheWriteTokens": 7, "totalTokens": 40 } }
+      ] }
+    },
+    {
+      "name": "a day that does not exist is refused",
+      "accept": false,
+      "reason": "invalid-day",
+      "totals": { "tokensIn": 10, "tokensOut": 20, "cacheReadTokens": 3, "cacheWriteTokens": 7, "totalTokens": 40 },
+      "modelUsage": { "version": 1, "buckets": [
+        { "day": "2026-02-30", "kind": "model", "key": "example-model-alpha", "counters": { "tokensIn": 10, "tokensOut": 20, "cacheReadTokens": 3, "cacheWriteTokens": 7, "totalTokens": 40 } }
+      ] }
+    },
+    {
+      "name": "a bucket whose total is not its parts is refused",
+      "accept": false,
+      "reason": "counters-invalid",
+      "totals": { "tokensIn": 10, "tokensOut": 20, "cacheReadTokens": 3, "cacheWriteTokens": 7, "totalTokens": 41 },
+      "modelUsage": { "version": 1, "buckets": [
+        { "day": "2026-03-01", "kind": "model", "key": "example-model-alpha", "counters": { "tokensIn": 10, "tokensOut": 20, "cacheReadTokens": 3, "cacheWriteTokens": 7, "totalTokens": 41 } }
+      ] }
+    },
+    {
+      "name": "a cost field cannot travel in a bucket",
+      "accept": false,
+      "reason": "counters-invalid",
+      "totals": { "tokensIn": 10, "tokensOut": 20, "cacheReadTokens": 3, "cacheWriteTokens": 7, "totalTokens": 40 },
+      "modelUsage": { "version": 1, "buckets": [
+        { "day": "2026-03-01", "kind": "model", "key": "example-model-alpha", "counters": { "tokensIn": 10, "tokensOut": 20, "cacheReadTokens": 3, "cacheWriteTokens": 7, "totalTokens": 40, "costUsd": 1 } }
+      ] }
+    },
+    {
+      "name": "a repeated bucket is refused",
+      "accept": false,
+      "reason": "buckets-not-canonical",
+      "totals": { "tokensIn": 10, "tokensOut": 20, "cacheReadTokens": 4, "cacheWriteTokens": 6, "totalTokens": 40 },
+      "modelUsage": { "version": 1, "buckets": [
+        { "day": "2026-03-01", "kind": "model", "key": "example-model-alpha", "counters": { "tokensIn": 5, "tokensOut": 10, "cacheReadTokens": 2, "cacheWriteTokens": 3, "totalTokens": 20 } },
+        { "day": "2026-03-01", "kind": "model", "key": "example-model-alpha", "counters": { "tokensIn": 5, "tokensOut": 10, "cacheReadTokens": 2, "cacheWriteTokens": 3, "totalTokens": 20 } }
+      ] }
+    },
+    {
+      "name": "buckets out of order are refused",
+      "accept": false,
+      "reason": "buckets-not-canonical",
+      "totals": { "tokensIn": 10, "tokensOut": 20, "cacheReadTokens": 4, "cacheWriteTokens": 6, "totalTokens": 40 },
+      "modelUsage": { "version": 1, "buckets": [
+        { "day": "2026-03-02", "kind": "model", "key": "example-model-alpha", "counters": { "tokensIn": 5, "tokensOut": 10, "cacheReadTokens": 2, "cacheWriteTokens": 3, "totalTokens": 20 } },
+        { "day": "2026-03-01", "kind": "model", "key": "example-model-alpha", "counters": { "tokensIn": 5, "tokensOut": 10, "cacheReadTokens": 2, "cacheWriteTokens": 3, "totalTokens": 20 } }
+      ] }
+    },
+    {
+      "name": "buckets that do not sum to the provider total are refused",
+      "accept": false,
+      "reason": "buckets-do-not-reconcile",
+      "totals": { "tokensIn": 10, "tokensOut": 20, "cacheReadTokens": 3, "cacheWriteTokens": 7, "totalTokens": 40 },
+      "modelUsage": { "version": 1, "buckets": [
+        { "day": "2026-03-01", "kind": "model", "key": "example-model-alpha", "counters": { "tokensIn": 9, "tokensOut": 20, "cacheReadTokens": 3, "cacheWriteTokens": 7, "totalTokens": 39 } }
+      ] }
+    }
+  ],
+  "grok": [
+    {
+      "name": "a multi-model day keeps cache and reasoning inside input and output",
+      "accept": true,
+      "totals": { "tokensIn": 130, "tokensOut": 30, "cacheReadTokens": 70, "cacheWriteTokens": 0, "reasoningTokens": 6, "modelCalls": 3, "totalTokens": 160 },
+      "modelUsage": { "version": 1, "buckets": [
+        { "day": "2026-03-01", "kind": "model", "key": "example-grok-large", "incompleteRecords": 1, "counters": { "tokensIn": 100, "tokensOut": 20, "cacheReadTokens": 60, "cacheWriteTokens": 0, "reasoningTokens": 5, "modelCalls": 2, "totalTokens": 120 } },
+        { "day": "2026-03-01", "kind": "model", "key": "example-grok-small", "incompleteRecords": 0, "counters": { "tokensIn": 30, "tokensOut": 10, "cacheReadTokens": 10, "cacheWriteTokens": 0, "reasoningTokens": 1, "modelCalls": 1, "totalTokens": 40 } }
+      ] }
+    },
+    {
+      "name": "a total that adds cache and reasoning again is refused",
+      "accept": false,
+      "reason": "counters-invalid",
+      "totals": { "tokensIn": 100, "tokensOut": 20, "cacheReadTokens": 60, "cacheWriteTokens": 0, "reasoningTokens": 5, "modelCalls": 2, "totalTokens": 185 },
+      "modelUsage": { "version": 1, "buckets": [
+        { "day": "2026-03-01", "kind": "model", "key": "example-grok-large", "incompleteRecords": 0, "counters": { "tokensIn": 100, "tokensOut": 20, "cacheReadTokens": 60, "cacheWriteTokens": 0, "reasoningTokens": 5, "modelCalls": 2, "totalTokens": 185 } }
+      ] }
+    },
+    {
+      "name": "a bucket without its lower-bound count is refused",
+      "accept": false,
+      "reason": "fields-not-exact",
+      "totals": { "tokensIn": 100, "tokensOut": 20, "cacheReadTokens": 60, "cacheWriteTokens": 0, "reasoningTokens": 5, "modelCalls": 2, "totalTokens": 120 },
+      "modelUsage": { "version": 1, "buckets": [
+        { "day": "2026-03-01", "kind": "model", "key": "example-grok-large", "counters": { "tokensIn": 100, "tokensOut": 20, "cacheReadTokens": 60, "cacheWriteTokens": 0, "reasoningTokens": 5, "modelCalls": 2, "totalTokens": 120 } }
+      ] }
+    }
+  ]
+}
