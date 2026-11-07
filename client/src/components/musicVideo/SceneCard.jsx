@@ -10,6 +10,7 @@ import ShotFilmLook from './ShotFilmLook.jsx';
 import ShotStoryboardPanel from './ShotStoryboardPanel.jsx';
 import ShotEditorGroup from './ShotEditorGroup.jsx';
 import TabPills from '../ui/TabPills.jsx';
+import AutoSizeTextarea from '../ui/AutoSizeTextarea.jsx';
 import InfoTooltip from '../ui/InfoTooltip';
 import SceneStoryboardClip, { storyboardClipOffered } from './SceneStoryboardClip.jsx';
 import { MUSIC_VIDEO_MEDIUM_LABELS } from '../../../../server/lib/musicVideoMediumPlan.js';
@@ -369,13 +370,13 @@ export default function SceneCard({
             : 'Describes the shot. The still renders from it only when its own still prompt is empty.'}
         </InfoTooltip>
       </div>
-      <textarea
+      <AutoSizeTextarea
         id={fieldId('prompt')}
-        value={followsBoard ? boardDirection : scene.prompt || ''} rows={2}
+        value={followsBoard ? boardDirection : scene.prompt || ''} rows={3}
         onChange={(e) => onEditLocal(scene.sceneId, { prompt: e.target.value })}
         onBlur={(e) => onSave(scene.sceneId, { prompt: boardDirection && e.target.value.trim() === boardDirection ? '' : e.target.value })}
         placeholder={layer === 'footage' ? 'What happens in this shot' : 'What this shot shows'}
-        className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm"
+        className="block w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm"
       />
       {boardDirection && (followsBoard ? (
         <p className="text-[11px] text-port-text-muted" data-testid="prompt-from-storyboard">From the storyboard panel · stays in sync</p>
