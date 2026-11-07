@@ -65,8 +65,12 @@ function Counters({ totals, family, tokenFields }) {
   </dl>;
 }
 
+const FINDING_COPY = {
+  'native-usage-incomplete': 'native-usage-incomplete: the provider flagged some turns as incomplete (subagent usage may be missing), so this total is a lower bound.',
+};
+
 function Findings({ findings }) {
-  return findings?.length ? <ul className="list-inside list-disc text-xs text-port-warning">{[...new Set(findings)].map(code => <li key={code}>{code}</li>)}</ul> : null;
+  return findings?.length ? <ul className="list-inside list-disc text-xs text-port-warning">{[...new Set(findings)].map(code => <li key={code}>{FINDING_COPY[code] ?? code}</li>)}</ul> : null;
 }
 
 function Evidence({ label, value }) {

@@ -112,7 +112,7 @@ function BindingRow({
           <Icon className={`h-3.5 w-3.5 shrink-0 ${className}`} aria-hidden="true" />
           <div className="truncate text-sm font-medium text-white">{label}</div>
         </div>
-        <div className="truncate text-xs text-gray-500" title={message}>{message}</div>
+        <div className="break-words text-xs text-gray-500" title={message}>{message}</div>
         {needsAttention && explanation ? (
           <p className="mt-1 text-xs leading-5 text-gray-400">{explanation}</p>
         ) : null}
@@ -187,7 +187,7 @@ function MusicBindingRow({
               </Pill>
             ) : null}
           </div>
-          <div className="truncate text-xs text-gray-500" title={message}>{message}</div>
+          <div className="break-words text-xs text-gray-500" title={message}>{message}</div>
           {needsAttention && explanation ? (
             <p className="mt-1 text-xs leading-5 text-gray-400">{explanation}</p>
           ) : null}

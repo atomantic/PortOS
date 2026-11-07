@@ -344,7 +344,7 @@ const DecisionLogWidget = memo(function DecisionLogWidget() {
                           {formatDecisionType(decision.type)}
                         </span>
                       </div>
-                      <p className="text-sm text-gray-300 truncate" title={decision.reason}>
+                      <p className="text-sm text-gray-300 break-words" title={decision.reason}>
                         {decision.reason}
                       </p>
                       {renderContextDetails(decision)}

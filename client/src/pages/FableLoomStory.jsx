@@ -534,7 +534,7 @@ export default function FableLoomStory({ view = 'graph' }) {
       />
       <header className="border-b border-port-border px-3 py-2 sm:px-4 sm:py-2.5 space-y-1.5 sm:space-y-2">
         <div className="flex items-center gap-2 sm:gap-3">
-          <Link to="/fableloom" className="shrink-0 text-port-text-muted hover:text-port-text" aria-label="Back to FableLoom">
+          <Link to="/fableloom" className="shrink-0 pointer-coarse:min-h-11 pointer-coarse:min-w-11 inline-flex items-center justify-center text-port-text-muted hover:text-port-text" aria-label="Back to FableLoom">
             <ArrowLeft size={18} />
           </Link>
           <h1 className="font-semibold flex items-center gap-2 min-w-0 flex-1">

@@ -1127,7 +1127,7 @@ function TimelineProjectEditor({ projectId }) {
             />
           ))}
 
-          <div className="flex items-center gap-2 text-xs text-gray-400">
+          <div className="flex flex-wrap items-center gap-2 text-xs text-gray-400">
             <button
               type="button"
               onClick={() => setPlaying((p) => !p)}
@@ -1153,13 +1153,13 @@ function TimelineProjectEditor({ projectId }) {
               step={0.01}
               value={playheadSec}
               onChange={(e) => { setPlaying(false); setT(Number(e.target.value)); }}
-              className="flex-1"
+              className="min-w-0 flex-1 basis-40"
               disabled={segments.length === 0}
             />
-            <span className="font-mono text-[11px] tabular-nums">
+            <span className="font-mono text-[11px] tabular-nums whitespace-nowrap">
               {formatTimecode(t)} / {formatTimecode(total)}
             </span>
-            <label htmlFor="timeline-zoom" className="flex items-center gap-1 ml-2">
+            <label htmlFor="timeline-zoom" className="flex items-center gap-1 ml-auto sm:ml-2">
               <span>zoom</span>
               <input
                 id="timeline-zoom"

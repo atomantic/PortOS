@@ -66,6 +66,20 @@ describe('persisted Grok capture and retained-account union', () => {
     expect(result.accounts[0].findings).toContain('native-cost-incomplete');
   });
 
+  it('keeps vendor-flagged incomplete turns in the total and reports a lower-bound finding on any peer copy, in any order', async () => {
+    await put('one/s/usage.json', snapshot('same'));
+    const clean = await capture('a');
+    expect(matrix([clean]).accounts[0].findings).not.toContain('native-usage-incomplete');
+    await put('one/s/usage.json', snapshot('same', [turn(1, { usageIsIncomplete: true })]));
+    const flagged = await capture('b');
+    const accounts = [matrix([clean, flagged]), matrix([flagged, clean])].map(result => result.accounts[0]);
+    for (const account of accounts) {
+      expect(account).toMatchObject({ totals: { totalTokens: 120 }, coverage: { uniqueRecords: 1, measuredRecords: 1, excludedRecords: 0 } });
+      expect(account.findings).toContain('native-usage-incomplete');
+    }
+    expect(flagged.evidenceHash).not.toBe(clean.evidenceHash);
+  });
+
   it('keeps sessions distinct, collapses copied roots and excludes contradictions without choosing a machine winner', async () => {
     await put('one/s/usage.json', snapshot('same'));
     await put('two/copy/usage.json', snapshot('same'));
