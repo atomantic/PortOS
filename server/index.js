@@ -619,11 +619,9 @@ if (!isSmokeBoot()) {
     console.error(`❌ Dedicated model host listener could not start (${describeFleetHostError(err)}); open AI Providers → Model host setup.`);
   }))
     .catch((err) => console.error(`❌ Dedicated model host listener could not load: ${err.message}`));
-  // Local file scan only (no provider calls); keeps the federated Claude Code
-  // token history current even when the usage page is never opened.
-  import('./services/claudeCodeTranscriptUsage.js').then(({ startTranscriptUsageRefresh }) => startTranscriptUsageRefresh())
-    .catch((err) => console.error(`❌ Claude Code transcript usage refresh could not start: ${err.message}`));
-  // Same for interactive Claude Code / Codex / Grok / Antigravity sessions (local files, zero provider calls).
-  import('./services/usageInteractiveScan.js').then(({ startInteractiveUsageRefresh }) => startInteractiveUsageRefresh())
-    .catch((err) => console.error(`❌ Interactive usage scan could not start: ${err.message}`));
+  // Local file scan only (no provider calls): keeps each provider app's own usage
+  // history (Claude Code, Codex, Grok) current for the Usage report and peers
+  // even when the usage page is never opened.
+  import('./services/nativeUsageHistory.js').then(({ startNativeUsageRefresh }) => startNativeUsageRefresh())
+    .catch((err) => console.error(`❌ Native usage history refresh could not start: ${err.message}`));
 }

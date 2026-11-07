@@ -14,7 +14,7 @@ import { atomicWrite, PATHS, rmGuarded } from '../lib/fileUtils.js';
  * through atomic renames, and lets a pass load one session at a time.
  */
 // Bump when the projection in codexUsageSources changes; another version reads as cold.
-const FORMAT_VERSION = 1;
+const FORMAT_VERSION = 2;
 // Counts small files at their on-disk block size, so the cap also bounds file count.
 const MIN_ENTRY_BYTES = 4096;
 const SWEEP_FRACTION = 16;

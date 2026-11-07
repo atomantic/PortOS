@@ -3,11 +3,9 @@ import { readdir, stat } from 'fs/promises';
 import { homedir } from 'os';
 import { join } from 'path';
 import { createInterface } from 'readline';
-import { atomicWrite, PATHS, readJSONFile } from '../lib/fileUtils.js';
-import { createMutex } from '../lib/asyncMutex.js';
-import { isPlainObject, POLLUTING_KEYS, bucketFor } from '../lib/objects.js';
-import { isNonBlankStr } from '../lib/textUtils.js';
-import { usageLedgerFenced } from './usageCutoverBarrier.js';
+import { PATHS } from '../lib/fileUtils.js';
+import { POLLUTING_KEYS, bucketFor } from '../lib/objects.js';
+import { createNativeUsageStore } from './nativeUsageStore.js';
 
 /**
  * Per-model token usage for EVERY Claude Code session on this machine —
@@ -37,16 +35,11 @@ export const TRANSCRIPT_USAGE_FILE = join(PATHS.data, 'claude-code-transcript-us
 
 const SYNTHETIC_MODEL = '<synthetic>';
 const FIELDS = ['messages', 'input', 'output', 'cacheRead', 'cacheWrite'];
-// Bounds on stored/peer-supplied maps (see the digest caps in peerUsage.js).
-const MAX_DAYS = 800;
-const MAX_MODELS_PER_DAY = 100;
 // An incremental refresh re-reads recent days only; a first run reads all.
 const REFRESH_LOOKBACK_DAYS = 3;
 const REFRESH_STALE_MS = 5 * 60_000;
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
-const num = (v) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0);
-const withLock = createMutex();
 
 const projectsRoot = () => join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude'), 'projects');
 const zeroCounts = () => Object.fromEntries(FIELDS.map((f) => [f, 0]));
@@ -123,98 +116,34 @@ async function scanTranscriptDays({ from = null, root = projectsRoot() } = {}) {
   return { days, filesScanned: files.length };
 }
 
+const store = createNativeUsageStore({
+  family: 'claude',
+  file: TRANSCRIPT_USAGE_FILE,
+  fields: FIELDS,
+  // Claude Code deletes transcripts older than `cleanupPeriodDays` (default 30).
+  retentionDays: 30,
+  lookbackDays: REFRESH_LOOKBACK_DAYS,
+  staleMs: REFRESH_STALE_MS,
+  scan: scanTranscriptDays,
+});
+export const claudeNativeUsageStore = store;
+
 /**
  * Rebuild a day → model → counts map to the known shape, dropping anything
  * else. Used for both the stored file and peer-supplied digests, so depth and
  * size are fixed by construction.
  */
-export function sanitizeTranscriptDays(raw) {
-  const out = {};
-  if (!isPlainObject(raw)) return out;
-  const dayKeys = Object.keys(raw).filter((d) => DAY_RE.test(d)).sort().slice(-MAX_DAYS);
-  for (const day of dayKeys) {
-    if (POLLUTING_KEYS.has(day) || !isPlainObject(raw[day])) continue;
-    for (const [model, counts] of Object.entries(raw[day]).slice(0, MAX_MODELS_PER_DAY)) {
-      if (!isNonBlankStr(model) || POLLUTING_KEYS.has(model)) continue;
-      const trimmedModel = model.slice(0, 200);
-      if (POLLUTING_KEYS.has(trimmedModel)) continue;
-      const dayBucket = bucketFor(out, day, () => ({}));
-      if (!dayBucket) continue;
-      dayBucket[trimmedModel] = Object.fromEntries(FIELDS.map((f) => [f, num(counts?.[f])]));
-    }
-  }
-  return out;
-}
-
-// Per (day, model) field, the larger count wins: a re-scan of a day whose
-// oldest transcripts were pruned must never shrink what an earlier scan saw.
-function mergeDays(stored, scanned) {
-  const merged = { ...stored };
-  for (const [day, models] of Object.entries(scanned)) {
-    if (POLLUTING_KEYS.has(day) || !isPlainObject(models)) continue;
-    const target = { ...(isPlainObject(merged[day]) ? merged[day] : {}) };
-    for (const [model, row] of Object.entries(models)) {
-      if (!isNonBlankStr(model) || POLLUTING_KEYS.has(model) || !isPlainObject(row)) continue;
-      const prev = Object.hasOwn(target, model) && isPlainObject(target[model]) ? target[model] : zeroCounts();
-      target[model] = Object.fromEntries(FIELDS.map((f) => [f, Math.max(prev[f] || 0, row[f] || 0)]));
-    }
-    merged[day] = target;
-  }
-  return sanitizeTranscriptDays(merged);
-}
-
-// The store is read on every sync snapshot/manifest/checksum, so the sanitized
-// copy is memoized against the file's identity (mtime + size) — the same idea
-// as peerUsage's digest memo — instead of re-parsing and rebuilding up to
-// MAX_DAYS x MAX_MODELS_PER_DAY rows per call.
-let storeMemo = null;
+export const sanitizeTranscriptDays = (raw) => store.sanitize(raw);
 
 /**
- * The persisted local store: `{ days, updatedAt }` (`updatedAt` null before the
- * first scan). Throws when the file exists but is unreadable.
+ * The persisted local store: `{ days, updatedAt, coverageStart }` (`updatedAt`
+ * null before the first scan). Throws when the file exists but is unreadable.
  */
-export async function readLocalTranscriptUsage() {
-  const info = await stat(TRANSCRIPT_USAGE_FILE).catch(() => null);
-  const key = info ? `${TRANSCRIPT_USAGE_FILE}|${info.mtimeMs}|${info.size}` : null;
-  if (key && storeMemo?.key === key) return storeMemo.value;
-  // Strict: a damaged store must stop the refresh, not read as empty and be
-  // overwritten by a rescan of only the transcripts the CLI has not yet pruned.
-  const raw = await readJSONFile(TRANSCRIPT_USAGE_FILE, null, { strict: true });
-  const value = {
-    days: sanitizeTranscriptDays(raw?.days),
-    updatedAt: isNonBlankStr(raw?.updatedAt) ? raw.updatedAt : null
-  };
-  storeMemo = key ? { key, value } : null;
-  return value;
-}
+export const readLocalTranscriptUsage = () => store.read();
 
 /**
  * Fold a fresh scan into the persisted store. The first run reads every
  * transcript on disk; later runs re-read only the last few days. Skipped when
  * the store is younger than `staleMs` unless `force`.
  */
-export function refreshLocalTranscriptUsage({ root, force = false, staleMs = REFRESH_STALE_MS } = {}) {
-  return withLock(async () => {
-    const stored = await readLocalTranscriptUsage();
-    const age = stored.updatedAt ? Date.now() - Date.parse(stored.updatedAt) : Infinity;
-    if (!force && age < staleMs) return { ...stored, filesScanned: 0, refreshed: false };
-    // Native transcripts stay on disk, so the next refresh after a fence catches up.
-    if (await usageLedgerFenced()) return { ...stored, filesScanned: 0, refreshed: false };
-    const from = stored.updatedAt
-      ? new Date(Date.now() - REFRESH_LOOKBACK_DAYS * 86_400_000).toISOString().slice(0, 10)
-      : null;
-    const { days: scanned, filesScanned } = await scanTranscriptDays({ from, root });
-    const next = { days: mergeDays(stored.days, scanned), updatedAt: new Date().toISOString() };
-    await atomicWrite(TRANSCRIPT_USAGE_FILE, next);
-    return { ...next, filesScanned, refreshed: true };
-  });
-}
-
-/** Background keep-fresh so peers get current numbers even if the page is never opened. */
-export function startTranscriptUsageRefresh({ intervalMs = 30 * 60_000, firstDelayMs = 60_000 } = {}) {
-  const run = () => refreshLocalTranscriptUsage({ force: true }).catch((err) => {
-    console.error(`❌ Claude Code transcript usage refresh failed: ${err.message}`);
-  });
-  setTimeout(run, firstDelayMs).unref();
-  setInterval(run, intervalMs).unref();
-}
+export const refreshLocalTranscriptUsage = (options) => store.refresh(options);

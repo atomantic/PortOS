@@ -101,6 +101,7 @@ vi.mock('../services/maintenanceRun.js', () => ({}));
 vi.mock('../services/usage.js', () => ({}));
 vi.mock('../services/claudeCodeUsage.js', () => ({}));
 vi.mock('../services/claudeCodeTranscriptUsage.js', () => ({}));
+vi.mock('../services/nativeUsageHistory.js', () => ({}));
 vi.mock('../services/providerUsage.js', () => ({}));
 vi.mock('../services/peerUsage.js', () => ({}));
 vi.mock('../services/usageFleetBilling.js', () => ({}));

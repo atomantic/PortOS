@@ -1,4 +1,4 @@
-import { basename, join } from 'path';
+import { join } from 'path';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { atomicWrite, ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
 import { resolveModelRates, isFreeProvider, isFreeModelId, estimateCostUsd, estimateGrokImagineCost, estimateAgyImageCost, PRICING_AS_OF } from '../lib/modelPricing.js';
@@ -6,6 +6,7 @@ import { familyForProvider, familyForProviderId } from '../lib/providerFamilies.
 import { roundCents } from '../lib/subscriptionSavings.js';
 import { POLLUTING_KEYS } from '../lib/objects.js';
 import { admitUsageWrite, readRetainedUsageWrites, registerUsageCutoverParticipant, usageLedgerFenced } from './usageCutoverBarrier.js';
+import { nativeUsageSignature, withNativeUsage } from './nativeUsageHistory.js';
 
 const DATA_DIR = PATHS.data;
 export const USAGE_FILE = join(DATA_DIR, 'usage.json');
@@ -368,6 +369,19 @@ const adjustCounts = (bucket, counts, direction) => {
   }
 };
 
+/**
+ * The estimated share of a bucket's counts, kept beside them as `estimated`.
+ * The native usage overlay (lib/nativeUsageOverlay.js) replaces a provider
+ * app's measured counts with the app's own history, but an estimate is usage
+ * the app recorded nowhere (a `--no-session-persistence` / `--ephemeral`
+ * one-shot, a session PortOS could not find), so the report keeps it.
+ */
+const adjustEstimated = (bucket, counts, direction) => {
+  if (!bucket) return;
+  bucket.estimated ??= {};
+  adjustCounts(bucket.estimated, counts, direction);
+};
+
 function rememberRepairIds(ids) {
   if (!Array.isArray(ids) || !usageData) return;
   usageData.grokRepairIds ??= [];
@@ -465,25 +479,6 @@ function setReconciledMarkers(runId, siblings) {
 }
 
 /**
- * Interactive-scan state `{ watermarks, sidechainRepairedAt, codexCoverage }`, or null when
- * this ledger has never committed one (the caller then adopts the legacy
- * `usage-interactive-scan.json`). Lives in usage.json so a watermark and the
- * counts it covers commit in one atomic write. Local bookkeeping: never in the digest.
- */
-export async function getInteractiveScanState() {
-  if (!committedUsage) await loadUsage();
-  const state = committedUsage.interactiveScan;
-  return state && typeof state === 'object' ? structuredClone(state) : null;
-}
-
-/** Commit scan state alone, for a family whose watermark moved with no corrections. */
-async function setInteractiveScanStateDraft(interactiveScan) {
-  if (!usageData) await loadUsageDraft();
-  usageData.interactiveScan = structuredClone(interactiveScan);
-  await saveUsage();
-}
-
-/**
  * Add one usage record to its own provider's day bucket and the all-time
  * rollups. `long*` and Imagine units ride the same count fields as tokens.
  * Long-context tokens are NOT added to totalTokens: they are a subset of
@@ -494,6 +489,7 @@ function addUsageRecord(day, record) {
   const bucket = providerDayBucket(day, record.providerId, record.providerName);
   const hadProviderCounts = hasUsageCounts(bucket);
   adjustCounts(bucket, record, 1);
+  if (record.source === 'estimate') adjustEstimated(bucket, record, 1);
   bucket.source = hadProviderCounts
     ? mergeSource(bucket.source, record.source || 'measured')
     : (record.source || 'measured');
@@ -501,6 +497,7 @@ function addUsageRecord(day, record) {
     const target = modelDayBucket(bucket, record.model);
     const hadCounts = hasUsageCounts(target);
     adjustCounts(target, record, 1);
+    if (record.source === 'estimate') adjustEstimated(target, record, 1);
     target.source = hadCounts
       ? mergeSource(target.source, record.source || 'measured')
       : (record.source || 'measured');
@@ -584,6 +581,9 @@ function replaceEstimateWithMeasured(providerDay, { model, estimate, measured })
   const measuredRecords = [measured].flat();
   adjustCounts(providerDay, estimate, -1);
   adjustCounts(model ? providerDay.byModel?.[model] : null, estimate, -1);
+  if (providerDay?.estimated) adjustCounts(providerDay.estimated, estimate, -1);
+  const estimatedModel = model ? providerDay?.byModel?.[model] : null;
+  if (estimatedModel?.estimated) adjustCounts(estimatedModel.estimated, estimate, -1);
   for (const record of measuredRecords) {
     adjustCounts(providerDay, record, 1);
     if (!record?.model) continue;
@@ -839,6 +839,12 @@ function applyMessageUsage(providerId, rawModel, messageCount, outputTokens = 0,
     if (longTokensOut || bucket.longTokensOut != null) bucket.longTokensOut = (bucket.longTokensOut ?? 0) + longTokensOut;
     if (longCacheReadTokens || bucket.longCacheReadTokens != null) bucket.longCacheReadTokens = (bucket.longCacheReadTokens ?? 0) + longCacheReadTokens;
     if (longCacheWriteTokens || bucket.longCacheWriteTokens != null) bucket.longCacheWriteTokens = (bucket.longCacheWriteTokens ?? 0) + longCacheWriteTokens;
+    if (source === 'estimate') {
+      adjustEstimated(bucket, {
+        messages: messageCount, tokensIn: inputTokens, tokensOut: outputTokens, cacheReadTokens, cacheWriteTokens,
+        longTokensIn, longTokensOut, longCacheReadTokens, longCacheWriteTokens,
+      }, 1);
+    }
     bucket.source = mergeSource(bucket.source, source);
   };
   const day = todayBucket();
@@ -1381,7 +1387,7 @@ export function buildUsageReport(dailyActivity, { from = null, to = null, provid
  * live `providers` config list for free-classification.
  */
 export function getUsageSummary({ from = null, to = null, providers = [] } = {}) {
-  const usageData = committedUsage;
+  const usageData = withNativeUsage(committedUsage, providers);
   if (!usageData) {
     const empty = getEmptyUsage();
     // Generate empty last7Days
@@ -1412,6 +1418,7 @@ export function getUsageSummary({ from = null, to = null, providers = [] } = {})
     day: new Date().toISOString().split('T')[0],
     from,
     to,
+    native: nativeUsageSignature(),
     providers: providers.map((provider) => ({
       id: provider.id,
       name: provider.name,
@@ -1485,9 +1492,6 @@ export function getUsageSummary({ from = null, to = null, providers = [] } = {})
       })),
       basis: 'ledger'
     },
-    // Local diagnostics only; the federated digest is built separately.
-    codexCoverage: usageData.interactiveScan?.codexCoverage ?? null,
-    heldRunCoverage: summarizeHeldRuns(usageData.interactiveScan?.unresolved),
     lastUpdated: usageData.lastUpdated
   };
   if (summaryCache.size >= SUMMARY_CACHE_LIMIT) {
@@ -1495,31 +1499,6 @@ export function getUsageSummary({ from = null, to = null, providers = [] } = {})
   }
   summaryCache.set(cacheKey, summary);
   return summary;
-}
-
-const HELD_WORKSPACE_LIMIT = 10;
-
-/**
- * Which workspaces have standalone usage held behind a run with no provable end.
- * A run known to be running is the ordinary case and stays out of the notice;
- * entries from before `lifecycle` existed are unknown until the next scan.
- */
-function summarizeHeldRuns(unresolved) {
-  const held = (Array.isArray(unresolved) ? unresolved : [])
-    .filter((run) => run?.lifecycle !== 'running' && typeof run?.workspacePath === 'string' && Number.isFinite(run.from));
-  if (!held.length) return null;
-  const byWorkspace = new Map();
-  for (const { workspacePath, from } of held) {
-    const entry = byWorkspace.get(workspacePath);
-    byWorkspace.set(workspacePath, { workspace: basename(workspacePath), runs: (entry?.runs ?? 0) + 1, from: Math.min(from, entry?.from ?? from) });
-  }
-  const workspaces = [...byWorkspace.values()].sort((a, b) => a.from - b.from);
-  return {
-    runs: held.length,
-    since: new Date(workspaces[0].from).toISOString(),
-    workspaces: workspaces.slice(0, HELD_WORKSPACE_LIMIT).map(({ workspace, runs, from }) => ({ workspace, runs, since: new Date(from).toISOString() })),
-    moreWorkspaces: Math.max(0, workspaces.length - HELD_WORKSPACE_LIMIT)
-  };
 }
 
 /**
@@ -1614,10 +1593,6 @@ export async function forgetSiblingReconciledUsageRuns(...args) {
 
 export async function markUsageRunReconciled(...args) {
   return mutateUsage('markUsageRunReconciled', markUsageRunReconciledDraft, args);
-}
-
-export async function setInteractiveScanState(...args) {
-  return mutateUsage('setInteractiveScanState', setInteractiveScanStateDraft, args);
 }
 
 export async function applyHistoricalUsageCorrections(...args) {

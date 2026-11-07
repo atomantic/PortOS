@@ -978,32 +978,6 @@ describe('usage.js — cache tiers and measured/estimate provenance (#3124 Phase
     expect(buildUsageDigest(getUsage())).not.toHaveProperty('interactiveScan');
   });
 
-  it('reports held standalone workspaces locally, never a known-running run, and never to peers', async () => {
-    readJSONFile.mockResolvedValueOnce(makeUsage({}));
-    await loadUsage();
-    expect(getUsageSummary().heldRunCoverage).toBeNull();
-    const at = (day) => Date.parse(`2026-07-${String(day).padStart(2, '0')}T00:00:00.000Z`);
-    const held = (runId, workspacePath, day, lifecycle) => ({ runId, workspacePath, from: at(day), to: at(20), lifecycle });
-    await applyHistoricalUsageCorrections([], { interactiveScan: { watermarks: {}, unresolved: [
-      held('active', '/example/active-app', 1, 'running'),
-      held('a', '/example/first-app', 3, 'unknown'),
-      held('b', '/example/first-app', 2, 'unknown'),
-      // Written before `lifecycle` existed: unknown until the next scan rewrites it.
-      held('legacy', '/example/older-app', 1),
-      ...Array.from({ length: 10 }, (_, i) => held(`c${i}`, `/example/app-${i}`, 4 + i, 'unknown'))
-    ] } });
-    const summary = getUsageSummary();
-    expect(summary.heldRunCoverage).toMatchObject({ runs: 13, since: '2026-07-01T00:00:00.000Z', moreWorkspaces: 2 });
-    expect(summary.heldRunCoverage.workspaces).toHaveLength(10);
-    expect(summary.heldRunCoverage.workspaces.slice(0, 2)).toEqual([
-      { workspace: 'older-app', runs: 1, since: '2026-07-01T00:00:00.000Z' },
-      { workspace: 'first-app', runs: 2, since: '2026-07-02T00:00:00.000Z' }
-    ]);
-    expect(JSON.stringify(summary.heldRunCoverage)).not.toContain('/example/');
-    expect(JSON.stringify(summary.heldRunCoverage)).not.toContain('active-app');
-    expect(JSON.stringify(buildUsageDigest(getUsage()))).not.toContain('first-app');
-  });
-
   it('defaults recordMessages to an estimate source with no cache tokens', async () => {
     readJSONFile.mockResolvedValueOnce(makeUsage({}));
     await loadUsage();

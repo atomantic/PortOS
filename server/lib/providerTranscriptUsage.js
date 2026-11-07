@@ -466,7 +466,7 @@ export function decodeGrokSessionDir(dirName) {
  * already ms; the envelope's own `timestamp` is epoch SECONDS (a 10-digit
  * value), which would land in 1970 if read as ms.
  */
-function grokEventMs(line) {
+export function grokEventMs(line) {
   const meta = line?.params?._meta;
   if (typeof meta?.agentTimestampMs === 'number' && Number.isFinite(meta.agentTimestampMs)) {
     return meta.agentTimestampMs;

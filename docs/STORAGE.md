@@ -1474,23 +1474,21 @@ owner and process-group absence; Windows additionally requires operation-bound
 terminal evidence. Unknown liveness remains held, never aged out. See
 [Self-Update](SELF_UPDATE.md) for the offline recovery command.
 
-### Interactive usage coverage
+### Native usage history
 
-`data/usage.json` retains the interactive scanner's existing watermarks and counts
-in one atomic accounting write. `interactiveScan.coverageVersion: 1` additionally
-stores `deferred[family]` intervals (`runId`, `workspacePath`, inclusive `from` and
-`to` milliseconds) that the scanner excluded because an unfinished run had no
-authoritative lifecycle end. These are coverage metadata, not another receipt
-ledger. They are compacted by run/workspace and replayed only for the matching
-workspace while unrelated sessions continue from their normal watermark.
-`unresolved` exposes the current ownership gaps. Unknown coverage versions fail
-closed; older states without deferred coverage remain readable.
+Each coding app's own session records are rolled up into one machine-local
+`day -> model -> counts` file per app: `data/claude-code-transcript-usage.json`,
+`data/codex-native-usage.json`, `data/grok-native-usage.json` and
+`data/agy-native-usage.json` (`services/nativeUsageStore.js`). The apps prune
+their files, so the store keeps every day it has seen; a rescan keeps the larger
+count per field and never shrinks a day. `coverageStart` is the first day the
+store holds completely. These are regenerable caches of on-disk app records, not
+synced records: peers receive them only as part of the usage digest, after the
+overlay in `server/lib/nativeUsageOverlay.js` has been applied. No migration or
+seed; a missing file is a first full scan.
 
-A retained terminal lifecycle projection can bound an exclusion without editing
-the run record. Missing lifecycle evidence, removed run metadata and mere age do
-not prove an end. Existing advanced watermarks are not rewound automatically:
-legacy historical gaps require the explicit evidence-bound reconciliation
-preview/apply workflow. No migration rewrites historical counts for this format.
+`data/usage.json` may still carry a legacy `interactiveScan` object from the
+retired interactive scanner. It is left in place and no longer written.
 
 ### Codex accounting source inventory
 
