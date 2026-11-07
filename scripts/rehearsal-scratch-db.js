@@ -9,7 +9,8 @@
 // isTestDatabase() accepts /_test$/, so the test-runner gate stays armed for a
 // rehearsal that points PGDATABASE here and can never be aimed at `portos`.
 // `create` applies server/scripts/init-db.sql (the base schema ensureSchema() builds on, as
-// `npm run setup:db:test` does) unless --empty asks for a bare database.
+// `npm run setup:db:test` does) unless --empty asks for a bare database. It clones portos_test
+// when that already has the extensions, so a role without superuser needs only CREATEDB.
 // `drop` is the only destructive verb and refuses every name that this helper
 // would not have created — including `portos` and `portos_test`.
 
@@ -89,17 +90,64 @@ async function applyBaseSchema(connection, database) {
   }
 }
 
-// Identifiers are interpolated (DDL cannot be parameterized) only after
-// assertScratchDbName has matched the fixed pattern.
+// `vector` and `pgcrypto` need a role that can create extensions, which the ordinary application
+// role is not. A database cloned from the test database carries them, so that role needs only CREATEDB.
+export const TEMPLATE_DATABASE = 'portos_test';
+const REQUIRED_EXTENSIONS = ['vector', 'pgcrypto'];
+const REPAIR_HINT = 'run `npm run setup:db:test`, or see docs/CONTRIBUTING.md "Repairing a test database whose extensions were dropped"';
+
+// Identifiers are interpolated (DDL cannot be parameterized) only after assertScratchDbName has
+// matched the fixed pattern; the template is the TEMPLATE_DATABASE constant.
+export const createScratchDbSql = (database, template = null) =>
+  `CREATE DATABASE "${assertScratchDbName(database)}"${template ? ` TEMPLATE "${template}"` : ''}`;
+
+/** The template database when it exists and already has every required extension, else null. */
+async function findExtensionTemplate(connection) {
+  const { Client } = loadPg();
+  const client = new Client({ ...connection, database: TEMPLATE_DATABASE, connectionTimeoutMillis: 5000 });
+  const connected = await client.connect().then(() => true, () => false);
+  if (!connected) return null;
+  try {
+    const { rows } = await client.query('SELECT extname FROM pg_extension WHERE extname = ANY($1)', [REQUIRED_EXTENSIONS]);
+    return rows.length === REQUIRED_EXTENSIONS.length ? TEMPLATE_DATABASE : null;
+  } finally {
+    await client.end().catch(() => {});
+  }
+}
+
+/** One actionable line for the Postgres failures this helper can hit; any other error passes through. */
+export function explainScratchDbError(err, { templateBusy = false } = {}) {
+  const busy = templateBusy ? ` (${TEMPLATE_DATABASE} was in use by another session so it could not be cloned: stop other DB test runs and retry)` : '';
+  if (err.code === '55006') return new Error(`cannot clone ${TEMPLATE_DATABASE} while another session is connected to it: stop other DB test runs and retry`, { cause: err });
+  if (err.code === '42501' && /create extension/i.test(err.message)) {
+    return new Error(`the database role cannot create the vector/pgcrypto extensions and has no ${TEMPLATE_DATABASE} copy to clone: ${REPAIR_HINT}${busy}`, { cause: err });
+  }
+  if (err.code === '42501') return new Error(`the database role lacks CREATEDB, which creating a scratch database needs${busy}`, { cause: err });
+  return err;
+}
+
 export async function createScratchDb(connection = resolveAdminConnection(), { empty = false } = {}) {
   const database = assertScratchDbName(newScratchDbName());
-  await withAdmin(connection, client => client.query(`CREATE DATABASE "${database}"`));
+  let template = empty ? null : await findExtensionTemplate(connection);
+  let templateBusy = false;
+  const create = tpl => withAdmin(connection, client => client.query(createScratchDbSql(database, tpl)));
+  try {
+    await create(template).catch(err => {
+      // A busy template only blocks the clone; a superuser can still build from init-db.sql.
+      if (!template || err.code !== '55006') throw err;
+      templateBusy = true;
+      template = null;
+      return create(null);
+    });
+  } catch (err) {
+    throw explainScratchDbError(err, { templateBusy });
+  }
   try {
     if (!empty) await applyBaseSchema(connection, database);
   } catch (err) {
     // A half-built scratch database is never handed back; drop it before reporting the failure.
     await dropScratchDb(database, connection).catch(() => {});
-    throw err;
+    throw explainScratchDbError(err, { templateBusy });
   }
   const { host, port, user } = connection;
   return { database, host, port, user, baseSchema: !empty };
