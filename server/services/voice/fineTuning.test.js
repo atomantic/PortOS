@@ -29,7 +29,10 @@ vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
     return result;
   } };
 });
-vi.mock('../../lib/db.js', () => ({ query: (...args) => queryMock(...args) }));
+vi.mock('../../lib/db.js', () => ({
+  query: (...args) => queryMock(...args),
+  withTransaction: async fn => fn({ query: (...args) => queryMock(...args) }),
+}));
 vi.mock('../../lib/paths.js', async () => {
   const actual = await vi.importActual('../../lib/paths.js');
   return { ...actual, PATHS: { ...actual.PATHS, get voiceProfiles() { return voiceProfilesRoot; } } };
