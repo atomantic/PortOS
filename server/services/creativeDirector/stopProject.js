@@ -12,7 +12,8 @@
  *
  * `stopProject` is the full stop. In order (the order matters):
  *
- *   1. Park the project as `paused` FIRST, so any completion / media-job event
+ *   1. Park the project as `paused` FIRST (unless it is already parked — see
+ *      projectCommands.js), so any completion / media-job event
  *      that lands mid-stop finds a paused project and returns early instead of
  *      dispatching the next step behind us.
  *   2. Mark the in-flight run rows `failed`, so the re-dispatch guards in
@@ -36,7 +37,8 @@
  */
 
 import { getProject, updateProject, updateRun, updateScene, updatePlanStep } from './local.js';
-import { PROJECT_TERMINAL_STATUSES, RUN_TERMINAL_STATUSES } from '../../lib/creativeDirectorPresets.js';
+import { RUN_TERMINAL_STATUSES } from '../../lib/creativeDirectorPresets.js';
+import { resolveCreativeDirectorProjectCommand } from './projectCommands.js';
 
 const nowISO = () => new Date().toISOString();
 
@@ -166,13 +168,13 @@ export async function stopProject(projectId, { reason = 'Stopped', project: prer
   // a fan-out over one commission's projects would otherwise cost a single-row
   // query per project just to rediscover what it already holds.
   const project = preread || await getProject(projectId).catch(() => null);
-  if (!project) return { projectId, stopped: false, skipped: 'missing', runs: 0, tasks: 0, agents: 0, jobs: 0 };
-  if (PROJECT_TERMINAL_STATUSES.has(project.status) && (project.workspace !== 'video' || project.status === 'complete')) {
-    return { projectId, stopped: false, skipped: 'terminal', runs: 0, tasks: 0, agents: 0, jobs: 0 };
-  }
+  const command = resolveCreativeDirectorProjectCommand(project, 'stop', { reason });
+  if (command.outcome === 'skip') return { projectId, stopped: false, skipped: command.skipped, runs: 0, tasks: 0, agents: 0, jobs: 0 };
 
-  // 1. Park first — a settle event racing us must find `paused` and bail.
-  if (project.workspace === 'video') {
+  // 1. Park first — a settle event racing us must find `paused` and bail. A
+  // draft or already-paused project needs no write (the command's null patch)
+  // but still gets the teardown below.
+  if (command.outcome === 'delegate') {
     const { pauseVideoExecution } = await import('./videoExecution.js');
     // If the durable stop fails, do not pretend subsequent teardown is safe.
     await pauseVideoExecution(projectId, reason, { invalidate: true });
@@ -180,7 +182,7 @@ export async function stopProject(projectId, { reason = 'Stopped', project: prer
       const { cancelRender } = await import('../videoTimeline/local.js');
       cancelRender(project.videoExecution.assembly.jobId);
     }
-  } else await updateProject(projectId, { status: 'paused', failureReason: reason })
+  } else if (command.patch) await updateProject(projectId, command.patch)
     .catch((e) => console.error(`❌ CD stop ${projectId}: park failed: ${e.message}`));
 
   const retired = await retireRuns(projectId, { runs: inflightRuns(project), reason });

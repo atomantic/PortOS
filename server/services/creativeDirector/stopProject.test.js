@@ -141,6 +141,17 @@ describe('stopProject', () => {
     expect(updateProjectMock).not.toHaveBeenCalled();
   });
 
+  it('tears down an already-paused project without rewriting its status or reason', async () => {
+    // Pause is soft — the render and agent keep going — so Stop on a paused
+    // project still has work to retire; only the park write is already done.
+    getProjectMock.mockResolvedValue(project({ status: 'paused', runs: [{ runId: 'r1', taskId: 't1', status: 'running' }] }));
+    getActiveAgentsMock.mockReturnValue([{ id: 'agent-live', taskId: 't1' }]);
+    const result = await stopProject('cd-1', { reason: 'Stopped by user' });
+    expect(result).toMatchObject({ stopped: true, runs: 1, agents: 1 });
+    expect(updateProjectMock).not.toHaveBeenCalled();
+    expect(killAgentMock).toHaveBeenCalledWith('agent-live');
+  });
+
   it('parks the project, then settles the run, then kills — so neither the settle nor the kill echo can un-park it', async () => {
     const order = [];
     updateProjectMock.mockImplementation(async () => { order.push('park'); });
