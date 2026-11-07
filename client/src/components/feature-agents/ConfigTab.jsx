@@ -116,7 +116,7 @@ export default function ConfigTab({ agent, isCreate, apps, onSave }) {
   };
 
   const inputCls = 'w-full bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-hidden focus:border-port-accent';
-  const selectCls = 'bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white focus:outline-hidden focus:border-port-accent';
+  const selectCls = 'w-full min-w-0 bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white focus:outline-hidden focus:border-port-accent';
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6 max-w-3xl">
@@ -132,7 +132,7 @@ export default function ConfigTab({ agent, isCreate, apps, onSave }) {
         <FormField label="Persona (system prompt)">
           <textarea value={form.persona} onChange={e => set('persona', e.target.value)} className={`${inputCls} resize-y`} rows={4} placeholder="You are a meticulous developer who..." />
         </FormField>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <FormField label="App">
             <select value={form.appId} onChange={e => set('appId', e.target.value)} className={selectCls} required>
               <option value="">Select app...</option>
@@ -163,7 +163,7 @@ export default function ConfigTab({ agent, isCreate, apps, onSave }) {
       {/* Schedule */}
       <div className="bg-port-card border border-port-border rounded-xl p-5 space-y-4">
         <h3 className="text-sm font-medium text-gray-400 uppercase tracking-wider">Schedule</h3>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <FormField label="Mode">
             <select value={form.schedule.mode} onChange={e => set('schedule', { ...form.schedule, mode: e.target.value })} className={selectCls}>
               <option value="continuous">Continuous</option>
