@@ -223,7 +223,7 @@ function LabelFilterChip({ facet, hidden, onToggle }) {
       title={facet.description
         ? `${facet.description} — click to ${hidden ? 'show' : 'hide'} these issues`
         : `Click to ${hidden ? 'show' : 'hide'} issues labeled ${facet.name}`}
-      className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] transition-opacity ${
+      className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 transition-opacity ${
         style ? 'hover:opacity-80' : neutral
       }`}
       style={style}

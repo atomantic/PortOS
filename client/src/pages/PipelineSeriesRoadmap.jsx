@@ -141,7 +141,7 @@ function IssueRow({ entry, quality, onAnalyze, analyzing }) {
             type="button"
             onClick={() => onAnalyze(entry.issueId)}
             disabled={analyzing}
-            className="text-[10px] px-1.5 py-1 rounded border border-port-border text-gray-400 hover:text-port-accent hover:border-port-accent/40 disabled:opacity-40 shrink-0"
+            className="text-[10px] pointer-coarse:min-h-11 px-1.5 py-1 rounded border border-port-border text-gray-400 hover:text-port-accent hover:border-port-accent/40 disabled:opacity-40 shrink-0"
             title={entry.analyzed ? 'Re-analyze this issue' : 'Analyze this issue'}
           >
             {analyzing ? <Loader2 size={11} className="animate-spin" /> : (entry.analyzed ? 'Re-run' : 'Analyze')}

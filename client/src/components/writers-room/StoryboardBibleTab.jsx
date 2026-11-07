@@ -41,7 +41,7 @@ function RefreshHeader({ noun, label, sub, running, anyRunning, onRefresh, empty
         type="button"
         onClick={onRefresh}
         disabled={anyRunning || !onRefresh || dirty}
-        className="shrink-0 flex items-center gap-1 px-2 py-1 text-[10px] rounded bg-port-bg border border-port-border text-gray-300 hover:bg-port-card hover:text-white disabled:opacity-50 disabled:cursor-not-allowed"
+        className="shrink-0 flex items-center gap-1 px-2 py-1 text-[10px] pointer-coarse:min-h-11 rounded bg-port-bg border border-port-border text-gray-300 hover:bg-port-card hover:text-white disabled:opacity-50 disabled:cursor-not-allowed"
         title={dirty ? 'Save your draft first — extraction reads the saved prose.' : (empty ? `Extract ${noun} from prose` : `Re-extract ${noun} from prose (merges into existing)`)}
       >
         {running

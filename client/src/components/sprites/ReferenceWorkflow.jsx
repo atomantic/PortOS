@@ -518,7 +518,7 @@ export default function ReferenceWorkflow({
             type="button"
             onClick={() => setChromaKey(null)}
             disabled={keySaving || keyFrozen}
-            className={`h-6 rounded-sm border px-2 text-[10px] ${!record.chromaKey ? 'border-white ring-1 ring-port-accent text-white' : 'border-port-border text-gray-400 opacity-60 hover:opacity-100'} disabled:opacity-40`}
+            className={`h-6 rounded-sm border px-2 text-[10px] pointer-coarse:min-h-11 ${!record.chromaKey ? 'border-white ring-1 ring-port-accent text-white' : 'border-port-border text-gray-400 opacity-60 hover:opacity-100'} disabled:opacity-40`}
           >
             auto
           </button>

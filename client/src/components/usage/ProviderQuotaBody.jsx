@@ -143,7 +143,7 @@ export default function ProviderQuotaBody({ quota, showActivity = true, showNote
                     type="button"
                     onClick={() => setSelectedPeriod(p.key)}
                     aria-pressed={active}
-                    className={`px-1.5 sm:px-2 py-0.5 rounded text-[10px] sm:text-xs font-medium transition-colors ${
+                    className={`px-1.5 sm:px-2 py-0.5 rounded text-[10px] pointer-coarse:min-h-11 sm:text-xs font-medium transition-colors ${
                       active
                         ? 'bg-port-accent text-white shadow-xs'
                         : 'text-gray-400 hover:text-white bg-port-bg border border-port-border'

@@ -439,7 +439,7 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode, onClose }
             <button
               type="button"
               onClick={() => setShowInspector((prev) => !prev)}
-              className="shrink-0 text-[10px] text-port-accent hover:underline"
+              className="shrink-0 text-[10px] pointer-coarse:min-h-11 text-port-accent hover:underline"
             >
               {showInspector ? 'Hide rehearsal' : 'Rehearsal details'}
             </button>

@@ -66,7 +66,7 @@ export default function InitImagePicker({
                   type="button"
                   onClick={onBrowse}
                   disabled={disabled}
-                  className="shrink-0 inline-flex items-center gap-1 text-[10px] text-port-accent hover:text-white disabled:opacity-50"
+                  className="shrink-0 inline-flex items-center gap-1 text-[10px] pointer-coarse:min-h-11 text-port-accent hover:text-white disabled:opacity-50"
                   title="Pick a different image from your gallery"
                 >
                   <Images className="w-3 h-3" /> Gallery

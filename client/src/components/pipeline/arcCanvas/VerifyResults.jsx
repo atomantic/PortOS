@@ -49,7 +49,7 @@ export default function VerifyResults({ issues, onDismiss, onResolveAll, onResol
                     type="button"
                     onClick={() => onResolveOne(i, iss)}
                     disabled={busy}
-                    className="ml-auto inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] uppercase tracking-wider border border-port-border bg-port-bg text-gray-300 hover:text-white hover:border-port-accent/40 disabled:opacity-40"
+                    className="ml-auto inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] pointer-coarse:min-h-11 uppercase tracking-wider border border-port-border bg-port-bg text-gray-300 hover:text-white hover:border-port-accent/40 disabled:opacity-40"
                     title="Run an LLM pass that rewrites the arc to resolve only this finding"
                   >
                     {resolvingThis ? <Loader2 size={10} className="animate-spin" /> : <Wand2 size={10} />}

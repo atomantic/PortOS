@@ -864,7 +864,7 @@ export default function VoiceWidget() {
               title={handsFree
                 ? 'Hands-free ON — mic stays open, auto-submits on pause, talk over the bot to interrupt. Click to switch to push-to-talk.'
                 : 'Push-to-talk ON — click mic to start, click again to send. Click to switch to hands-free.'}
-              className={`flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-medium ${handsFree
+              className={`flex items-center gap-1 px-2 py-1 rounded-full text-[10px] pointer-coarse:min-h-11 font-medium ${handsFree
                 ? 'text-port-accent bg-port-accent/10 hover:bg-port-accent/20'
                 : 'text-gray-400 hover:text-white hover:bg-port-border/70'}`}
             >
@@ -885,7 +885,7 @@ export default function VoiceWidget() {
             title={visionEnabled
               ? 'Screen vision ON — the assistant can describe what\'s on your screen ("what\'s on this chart?"). Click to stop sharing.'
               : 'Screen vision OFF — click to let the assistant see your screen for "what\'s on this chart?" (you pick the tab/window).'}
-            className={`flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-medium ${visionEnabled
+            className={`flex items-center gap-1 px-2 py-1 rounded-full text-[10px] pointer-coarse:min-h-11 font-medium ${visionEnabled
               ? 'text-port-accent bg-port-accent/10 hover:bg-port-accent/20'
               : 'text-gray-400 hover:text-white hover:bg-port-border/70'}`}
           >
@@ -899,7 +899,7 @@ export default function VoiceWidget() {
             title={isVoiceOutputTab
               ? 'This tab plays the assistant\'s proactive speech (reminders, briefings). Only one tab speaks at a time.'
               : 'Proactive speech plays on another tab. Click to make this tab the speaker.'}
-            className={`flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-medium ${isVoiceOutputTab
+            className={`flex items-center gap-1 px-2 py-1 rounded-full text-[10px] pointer-coarse:min-h-11 font-medium ${isVoiceOutputTab
               ? 'text-port-success bg-port-success/10'
               : 'text-gray-400 hover:text-white hover:bg-port-border/70'}`}
           >

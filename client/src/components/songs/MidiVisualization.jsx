@@ -90,7 +90,7 @@ export default function MidiVisualization({ url, filename, model }) {
               <ZoomIn size={13} />
             </button>
             <button type="button" onClick={() => setZoom(MIN_ZOOM)} aria-label="Fit to width"
-              className="px-1.5 py-0.5 text-[10px] rounded border border-port-border text-gray-400 hover:text-white" title="Fit the whole file (0)">
+              className="px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 rounded border border-port-border text-gray-400 hover:text-white" title="Fit the whole file (0)">
               Fit
             </button>
             {chords.length > 0 && (
@@ -98,7 +98,7 @@ export default function MidiVisualization({ url, filename, model }) {
                 type="button"
                 onClick={() => setShowChords((v) => !v)}
                 aria-pressed={showChords}
-                className={`px-1.5 py-0.5 text-[10px] rounded border ${showChords ? 'border-port-accent text-port-accent' : 'border-port-border text-gray-400 hover:text-white'}`}
+                className={`px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 rounded border ${showChords ? 'border-port-accent text-port-accent' : 'border-port-border text-gray-400 hover:text-white'}`}
                 title="Toggle the chord lane"
               >
                 Chords

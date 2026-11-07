@@ -312,7 +312,7 @@ function TitleTribeChip({ conversation, onOpenParticipants, onOpenPerson }) {
       <button
         type="button"
         onClick={onOpenParticipants}
-        className="inline-flex shrink-0 items-center gap-1 rounded-full border border-port-border px-2 py-0.5 text-[10px] text-gray-300 transition-colors hover:border-port-accent hover:text-white"
+        className="inline-flex shrink-0 items-center gap-1 rounded-full border border-port-border px-2 py-0.5 text-[10px] pointer-coarse:min-h-11 text-gray-300 transition-colors hover:border-port-accent hover:text-white"
       >
         <Users size={10} aria-hidden="true" />
         {label}
@@ -326,7 +326,7 @@ function TitleTribeChip({ conversation, onOpenParticipants, onOpenPerson }) {
       <button
         type="button"
         onClick={() => onOpenPerson(counterpart.tribePersonId)}
-        className="inline-flex shrink-0 items-center gap-1 rounded-full border border-port-success/40 px-2 py-0.5 text-[10px] text-port-success transition-colors hover:border-port-success"
+        className="inline-flex shrink-0 items-center gap-1 rounded-full border border-port-success/40 px-2 py-0.5 text-[10px] pointer-coarse:min-h-11 text-port-success transition-colors hover:border-port-success"
       >
         {`${counterpart.tribePersonName || 'Linked'} · Tribe`}
       </button>
@@ -337,7 +337,7 @@ function TitleTribeChip({ conversation, onOpenParticipants, onOpenPerson }) {
     <button
       type="button"
       onClick={onOpenParticipants}
-      className="inline-flex shrink-0 items-center gap-1 rounded-full border border-dashed border-port-border px-2 py-0.5 text-[10px] text-gray-400 transition-colors hover:border-port-accent hover:text-gray-200"
+      className="inline-flex shrink-0 items-center gap-1 rounded-full border border-dashed border-port-border px-2 py-0.5 text-[10px] pointer-coarse:min-h-11 text-gray-400 transition-colors hover:border-port-accent hover:text-gray-200"
     >
       <UserPlus size={10} aria-hidden="true" />
       Link to Tribe

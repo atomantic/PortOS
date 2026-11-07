@@ -236,7 +236,7 @@ export const LibraryTile = memo(function LibraryTile({ clip, onAdd }) {
         <button
           type="button"
           onClick={() => onAdd(clip)}
-          className="w-full flex items-center justify-center gap-1 px-1.5 py-1 bg-port-accent/20 hover:bg-port-accent/40 text-port-accent text-[10px] rounded"
+          className="w-full flex items-center justify-center gap-1 px-1.5 py-1 bg-port-accent/20 hover:bg-port-accent/40 text-port-accent text-[10px] pointer-coarse:min-h-11 rounded"
         >
           <Plus className="w-3 h-3" /> Add to timeline
         </button>
@@ -261,14 +261,14 @@ export const StillTile = memo(function StillTile({ image, onAddStill, onAddOverl
           <button
             type="button"
             onClick={() => onAddStill(image)}
-            className="flex-1 px-1 py-1 bg-port-accent/20 hover:bg-port-accent/40 text-port-accent text-[10px] rounded"
+            className="flex-1 px-1 py-1 bg-port-accent/20 hover:bg-port-accent/40 text-port-accent text-[10px] pointer-coarse:min-h-11 rounded"
           >
             Still
           </button>
           <button
             type="button"
             onClick={() => onAddOverlay(image)}
-            className="flex-1 px-1 py-1 bg-port-card border border-port-border hover:border-port-accent text-gray-300 text-[10px] rounded"
+            className="flex-1 px-1 py-1 bg-port-card border border-port-border hover:border-port-accent text-gray-300 text-[10px] pointer-coarse:min-h-11 rounded"
           >
             Overlay
           </button>
@@ -286,7 +286,7 @@ export const AudioRow = memo(function AudioRow({ track, onAdd }) {
       <button
         type="button"
         onClick={() => onAdd(track)}
-        className="px-1.5 py-1 bg-port-accent/20 hover:bg-port-accent/40 text-port-accent text-[10px] rounded shrink-0"
+        className="px-1.5 py-1 bg-port-accent/20 hover:bg-port-accent/40 text-port-accent text-[10px] pointer-coarse:min-h-11 rounded shrink-0"
       >
         Add
       </button>

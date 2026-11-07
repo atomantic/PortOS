@@ -633,7 +633,7 @@ function CapabilityRecommendations({ report, onOpen }) {
                   <button
                     type="button"
                     onClick={() => onOpen(winner.model.backend, winner.model.modelId, winner.test.id)}
-                    className="text-[10px] text-port-accent hover:underline"
+                    className="text-[10px] pointer-coarse:min-h-11 text-port-accent hover:underline"
                   >
                     Read the result
                   </button>
