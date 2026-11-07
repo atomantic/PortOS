@@ -16,7 +16,7 @@ const rad = (deg) => (deg * Math.PI) / 180;
 
 // Preserve Blender's meter scale and origin: fitting/centering would move saved
 // cameras and anchors. Only the cloned scene's material references are replaced.
-function GreyboxModel({ src, onReady }) {
+export function GreyboxModel({ src, onReady }) {
   const { scene } = useClonedGltf(src);
   const material = useMemo(() => new THREE.MeshStandardMaterial({ color: '#8a8f98', roughness: 1, metalness: 0, side: THREE.DoubleSide }), []);
   useEffect(() => {
@@ -38,7 +38,7 @@ function extrudeGeometry(part) {
 }
 
 // Select on press so the click after an anchor drag cannot select the floor.
-const PartMesh = memo(function PartMesh({ part, color, selected, onSelect }) {
+export const PartMesh = memo(function PartMesh({ part, color, selected, onSelect }) {
   const geometry = useMemo(() => (part.type === 'extrude' ? extrudeGeometry(part) : null), [part]);
   const [px, py, pz] = part.position;
   const [rx, ry, rz] = part.rotationDegrees;

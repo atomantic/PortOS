@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { ChevronDown, ChevronUp, Maximize2, Minimize2, MonitorPlay } from 'lucide-react';
 import CompositionPreviewPlayer from './CompositionPreviewPlayer.jsx';
@@ -6,6 +6,9 @@ import StoryboardAnimatic from './StoryboardAnimatic.jsx';
 import ShotStepper, { shotSteps } from './ShotStepper.jsx';
 import FrameStepper, { captureMediaFrame } from './FrameStepper.jsx';
 import { sceneShotName } from '../../lib/musicVideoStages.js';
+
+// Three.js loads only when the greybox previz is the source being watched.
+const PrevizPlayer = lazy(() => import('./PrevizPlayer.jsx'));
 
 // A rendered file (the final render or a draft excerpt). Its clock starts at
 // the clip's own start, so a seek to song time `t` lands at `t - startSec` and
@@ -155,6 +158,9 @@ export default function PreviewDock({ project, sources, audioUrl, seekRequest, c
       {source?.kind === 'document' && <div className={collapsed ? 'max-xl:hidden' : ''}><CompositionPreviewPlayer project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} shotNav onEditShot={onEditShot} onProject={onProject} /></div>}
       {source?.kind === 'lyrics' && <div className={collapsed ? 'max-xl:hidden' : ''}><CompositionPreviewPlayer project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} lyrics shotNav onEditShot={onEditShot} /></div>}
       {source?.kind === 'animatic' && <StoryboardAnimatic project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} onEditShot={onEditShot} />}
+      {source?.kind === 'previz' && <Suspense fallback={<p className="text-xs text-port-text-muted">Loading the greybox previz…</p>}>
+        <PrevizPlayer project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} onEditShot={onEditShot} />
+      </Suspense>}
       {source?.kind === 'video' && <VideoPreview key={source.id} source={source} scenes={project.scenes} projectName={project.name} seekRequest={seekRequest} collapsed={collapsed} onEditShot={onEditShot} />}
     </aside>
   );
