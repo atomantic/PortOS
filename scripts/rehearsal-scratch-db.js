@@ -125,10 +125,10 @@ async function findExtensionTemplate(connection) {
 export function explainScratchDbError(err, { phase = 'create', template = null, templateBusy = false } = {}) {
   const busyNote = templateBusy ? ` (${TEMPLATE_DATABASE} was busy, so it could not be cloned: disconnect its sessions and retry)` : '';
   if (err.code === '55006' && template) return new Error(`cannot clone ${template} while another session is connected to it: disconnect its sessions (stop other DB test runs) and retry`, { cause: err });
-  if (err.code === '42501' && phase === 'schema') {
+  if (err.code === '42501' && phase === 'schema' && /extension/i.test(err.message)) {
     return new Error(`the database role cannot create the vector/pgcrypto extensions${templateBusy ? '' : ` and has no ${TEMPLATE_DATABASE} copy to clone`}: ${REPAIR_HINT}${busyNote}`, { cause: err });
   }
-  if (err.code === '42501') return new Error(`the database role lacks CREATEDB, which creating a scratch database needs${busyNote}`, { cause: err });
+  if (err.code === '42501' && phase === 'create') return new Error(`the database role lacks CREATEDB, which creating a scratch database needs${busyNote}`, { cause: err });
   return err;
 }
 
@@ -139,9 +139,10 @@ export async function createScratchDb(connection = resolveAdminConnection(), { e
   const create = tpl => withAdmin(connection, client => client.query(createScratchDbSql(database, tpl)));
   try {
     await create(template).catch(err => {
-      // A busy template only blocks the clone; a superuser can still build from init-db.sql.
-      if (!template || err.code !== '55006') throw err;
-      templateBusy = true;
+      // A busy template (55006) or one this role may not copy (42501, it must own it) only blocks the
+      // clone; a superuser can still build from init-db.sql.
+      if (!template || (err.code !== '55006' && err.code !== '42501')) throw err;
+      templateBusy = err.code === '55006';
       template = null;
       return create(null);
     });

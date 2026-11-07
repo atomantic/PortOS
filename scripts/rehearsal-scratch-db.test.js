@@ -76,6 +76,11 @@ describe('scratch database creation', () => {
     expect(explainScratchDbError(err)).toBe(err);
   });
 
+  it('leaves a schema-phase privilege error that is not about extensions as the server error', () => {
+    const err = pgError('42501', 'permission denied for schema public');
+    expect(explainScratchDbError(err, { phase: 'schema' })).toBe(err);
+  });
+
   it('passes unrelated errors through untouched', () => {
     const err = pgError('08006', 'connection terminated');
     expect(explainScratchDbError(err)).toBe(err);
