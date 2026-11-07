@@ -539,7 +539,6 @@ const startBackgroundServices = ({ spawnerReady, io, httpsEnabled, port }) => {
   registerAutobiographyReminderSchedule({ catchUpMissedSlot: true }).catch(err => logBootstrapFailure('❌ Autobiography reminder init failed', err));
   // Initialize backup scheduler for daily data backups
   startBackupScheduler().catch(err => logBootstrapFailure('❌ Backup scheduler init failed', err));
-  // Daily local-file usage collection. Registers a cron only: nothing scans at boot.
   // Automatic PortOS self-update — OFF by default. When the user turns it on
   // (Update tab), it polls for a window in which the install is completely idle
   // and then runs the SAME update the matching button runs. Registering the

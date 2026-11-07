@@ -228,6 +228,13 @@ describe('Settings routes — apiAccess slice', () => {
     vi.clearAllMocks();
   });
 
+  it('drops the retired native usage account selection slice instead of persisting it', async () => {
+    const saved = await request(buildApp()).put('/api/settings').send({ theme: 'dark', usageNativeAccountSelections: [{ family: 'codex' }] });
+    expect(saved.status).toBe(200);
+    expect(saved.body.usageNativeAccountSelections).toBeUndefined();
+    expect(store.usageNativeAccountSelections).toBeUndefined();
+  });
+
   it('accepts a valid apiAccess patch and persists it', async () => {
     const res = await request(buildApp())
       .put('/api/settings')

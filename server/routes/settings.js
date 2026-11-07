@@ -694,6 +694,9 @@ const saveSettingsPatch = async (body, slicePatch) => {
     secrets: _ignoredSecrets,
     passwordRiskRevision: _ignoredPasswordRiskRevision,
     catalogUserTypes: _ignoredTypes,
+    // Retired with the native usage account editor (#15272): a restore dump or
+    // legacy client must not write the dead slice back.
+    usageNativeAccountSelections: _ignoredNativeAccountSelections,
     subscriptionCosts: subscriptionCostsPatch,
     subscriptionPlanTiers: subscriptionPlanTiersPatch,
     usageApiBilledInstanceIds: apiBilledPatch,
