@@ -43,9 +43,10 @@ export const importDiscordHistory = (file, options = {}) =>
 // message becomes a timeline event (dedupe on a content hash). An optional
 // `yourName` classifies direction: a sender matching it → sent, others →
 // received; absent → neutral `message` events. An optional `chatLabel` is a stable
-// chat name that scopes the dedupe key so distinct chats don't collide.
-export const importWhatsappHistory = (file, { yourName, chatLabel, ...options } = {}) =>
-  importFile('/timeline/import/whatsapp', file, { ...options, fields: { yourName, chatLabel } });
+// chat name that scopes the dedupe key so distinct chats don't collide. `dateOrder`
+// ('mdy' | 'dmy') settles a chat whose day/month order the preview flagged ambiguous.
+export const importWhatsappHistory = (file, { yourName, chatLabel, dateOrder, ...options } = {}) =>
+  importFile('/timeline/import/whatsapp', file, { ...options, fields: { yourName, chatLabel, dateOrder } });
 
 // Google Takeout Chrome browser history (`History.json`, standalone or zipped) —
 // each visit becomes a `web.visit` event (dedupe on a content hash of

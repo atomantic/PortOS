@@ -50,6 +50,7 @@
  * chat are distinct identities); the label also becomes the display chat title.
  */
 import { readFile } from 'fs/promises';
+import { ServerError } from '../lib/errorHandler.js';
 import { createHash } from 'crypto';
 import { collectZipEntries, isZipUpload } from '../lib/zipStream.js';
 import { shortSummary, recordEvents, resolveEventInstant } from './humanActivity.js';
@@ -125,14 +126,15 @@ export function parseWhatsappChat(text) {
 // Infer the file's date component order from the parsed messages. WhatsApp writes
 // the phone's locale format, so the whole file shares one order. A 4-digit first
 // group is unambiguously year-first; otherwise a first group >12 forces D/M and a
-// second group >12 forces M/D. Ambiguous files (all components ≤12) default to
-// M/D/Y — the US/iOS default — which is the safest single guess.
+// second group >12 forces M/D. When every day/month is ≤12 the order is a GUESS
+// (month-first, reported as `ambiguous: true`) — unless every message has equal
+// first and second groups (01/01), where both orders resolve identically.
 export function detectDateOrder(messages = []) {
   const list = Array.isArray(messages) ? messages : [];
-  for (const m of list) if (m.d1 >= 1000) return 'ymd';
-  for (const m of list) if (m.d1 > 12) return 'dmy';
-  for (const m of list) if (m.d2 > 12) return 'mdy';
-  return 'mdy';
+  for (const m of list) if (m.d1 >= 1000) return { order: 'ymd', ambiguous: false };
+  for (const m of list) if (m.d1 > 12) return { order: 'dmy', ambiguous: false };
+  for (const m of list) if (m.d2 > 12) return { order: 'mdy', ambiguous: false };
+  return { order: 'mdy', ambiguous: list.some((m) => m.d1 !== m.d2) };
 }
 
 // Resolve a message's numeric date groups to a { year, month, day } under the
@@ -249,12 +251,20 @@ export function whatsappMessageToCandidate(msg, { order = 'mdy', chatTitle = nul
   };
 }
 
+// The order to map under: the detected one, except that a caller-stated
+// `mdy`/`dmy` settles an ambiguous file. It never overrides an unambiguous
+// detection (a day >12 or a year-first file proves the order).
+function resolveDateOrder(messages, dateOrder) {
+  const detected = detectDateOrder(messages);
+  return detected.ambiguous && (dateOrder === 'mdy' || dateOrder === 'dmy') ? dateOrder : detected.order;
+}
+
 // Map a full parsed chat to candidates: detect the date order once, then map +
 // filter every message under it. `yourName` (optional) classifies direction;
 // `chatScope` (optional) scopes the dedupe key to a stable user-supplied chat name.
-export function whatsappActivityCandidates(messages = [], { chatTitle = null, timezone = null, yourName = null, chatScope = null } = {}) {
+export function whatsappActivityCandidates(messages = [], { chatTitle = null, timezone = null, yourName = null, chatScope = null, dateOrder = null } = {}) {
   if (!Array.isArray(messages)) return [];
-  const order = detectDateOrder(messages);
+  const order = resolveDateOrder(messages, dateOrder);
   return messages
     .map((msg) => whatsappMessageToCandidate(msg, { order, chatTitle, timezone, yourName, chatScope }))
     .filter(Boolean);
@@ -350,7 +360,7 @@ export async function readWhatsappText(file) {
 // Returns counts + a preview summary. `dryRun` parses and summarizes WITHOUT
 // writing so the UI can show what will be imported before committing. Because
 // `recordEvents` is idempotent, committing (or re-committing) is always safe.
-export async function importWhatsappHistory(file, { dryRun = false, yourName = null, chatLabel = null } = {}) {
+export async function importWhatsappHistory(file, { dryRun = false, yourName = null, chatLabel = null, dateOrder = null } = {}) {
   const text = await readWhatsappText(file);
   const messages = parseWhatsappChat(text);
   const timezone = await getUserTimezone();
@@ -359,11 +369,34 @@ export async function importWhatsappHistory(file, { dryRun = false, yourName = n
   // to the filename-derived title with no dedupe scope (legacy behavior).
   const label = typeof chatLabel === 'string' ? chatLabel.trim() : '';
   const chatTitle = label || deriveChatTitle(file?.originalname);
-  const candidates = whatsappActivityCandidates(messages, { chatTitle, timezone, yourName, chatScope: label });
+  const detected = detectDateOrder(messages);
+  const chosen = detected.ambiguous && (dateOrder === 'mdy' || dateOrder === 'dmy') ? dateOrder : null;
+  const candidateOpts = { chatTitle, timezone, yourName, chatScope: label };
+  const candidates = whatsappActivityCandidates(messages, { ...candidateOpts, dateOrder: chosen });
   const summary = summarizeWhatsappCandidates(candidates);
   if (dryRun) {
     console.log(`💬 WhatsApp import preview: ${candidates.length} message(s) from ${messages.length} line-record(s)`);
-    return { dryRun: true, parsed: messages.length, mapped: candidates.length, recorded: 0, skipped: 0, summary };
+    const preview = {
+      dryRun: true, parsed: messages.length, mapped: candidates.length, recorded: 0, skipped: 0, summary,
+      dateOrder: chosen ?? detected.order, dateOrderAmbiguous: detected.ambiguous,
+    };
+    if (detected.ambiguous) {
+      // Date range under each candidate order, so the user can pick the one that matches their chat.
+      const range = (order) => {
+        const { from, to } = summarizeWhatsappCandidates(whatsappActivityCandidates(messages, { ...candidateOpts, dateOrder: order }));
+        return { from, to };
+      };
+      preview.dateOrderSamples = { mdy: range('mdy'), dmy: range('dmy') };
+    }
+    return preview;
+  }
+  // Committing a guessed order would store wrong dates and later split from a
+  // correctly-ordered re-import, so an ambiguous file needs the order stated.
+  if (detected.ambiguous && !chosen) {
+    throw new ServerError('This chat export\'s date order (day-first or month-first) is ambiguous; choose one to import', {
+      status: 400,
+      code: 'WHATSAPP_DATE_ORDER_REQUIRED',
+    });
   }
   const { recorded, skipped } = await recordEvents(candidates);
   console.log(`💬 WhatsApp import: ${recorded} new message(s) recorded, ${skipped} duplicate/invalid (from ${messages.length} line-record(s))`);

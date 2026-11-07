@@ -290,7 +290,7 @@ describe('timeline import routes', () => {
     expect(r.body.recorded).toBe(2);
     expect(importWhatsappHistory).toHaveBeenCalledWith(
       expect.objectContaining({ originalname: 'WhatsApp Chat with Alice.txt' }),
-      { dryRun: false, yourName: null, chatLabel: null },
+      { dryRun: false, yourName: null, chatLabel: null, dateOrder: null },
     );
   });
 
@@ -304,7 +304,7 @@ describe('timeline import routes', () => {
       .send(body);
     expect(r.status).toBe(200);
     expect(r.body.dryRun).toBe(true);
-    expect(importWhatsappHistory).toHaveBeenCalledWith(expect.anything(), { dryRun: true, yourName: null, chatLabel: null });
+    expect(importWhatsappHistory).toHaveBeenCalledWith(expect.anything(), { dryRun: true, yourName: null, chatLabel: null, dateOrder: null });
   });
 
   it('whatsapp threads yourName through for direction inference', async () => {
@@ -316,7 +316,7 @@ describe('timeline import routes', () => {
       .set('content-type', `multipart/form-data; boundary=${boundary}`)
       .send(body);
     expect(r.status).toBe(200);
-    expect(importWhatsappHistory).toHaveBeenCalledWith(expect.anything(), { dryRun: false, yourName: 'Alice', chatLabel: null });
+    expect(importWhatsappHistory).toHaveBeenCalledWith(expect.anything(), { dryRun: false, yourName: 'Alice', chatLabel: null, dateOrder: null });
   });
 
   it('whatsapp treats a blank yourName field as not provided (neutral)', async () => {
@@ -328,7 +328,7 @@ describe('timeline import routes', () => {
       .set('content-type', `multipart/form-data; boundary=${boundary}`)
       .send(body);
     expect(r.status).toBe(200);
-    expect(importWhatsappHistory).toHaveBeenCalledWith(expect.anything(), { dryRun: false, yourName: null, chatLabel: null });
+    expect(importWhatsappHistory).toHaveBeenCalledWith(expect.anything(), { dryRun: false, yourName: null, chatLabel: null, dateOrder: null });
   });
 
   it('whatsapp threads chatLabel through as the dedupe scope, blank → null', async () => {
@@ -340,7 +340,7 @@ describe('timeline import routes', () => {
       .set('content-type', `multipart/form-data; boundary=${withLabel.boundary}`)
       .send(withLabel.body);
     expect(r.status).toBe(200);
-    expect(importWhatsappHistory).toHaveBeenCalledWith(expect.anything(), { dryRun: false, yourName: null, chatLabel: 'Family group' });
+    expect(importWhatsappHistory).toHaveBeenCalledWith(expect.anything(), { dryRun: false, yourName: null, chatLabel: 'Family group', dateOrder: null });
 
     const blankLabel = multipart(
       { preview: 'false', chatLabel: '   ' },
@@ -350,7 +350,20 @@ describe('timeline import routes', () => {
       .set('content-type', `multipart/form-data; boundary=${blankLabel.boundary}`)
       .send(blankLabel.body);
     expect(r.status).toBe(200);
-    expect(importWhatsappHistory).toHaveBeenLastCalledWith(expect.anything(), { dryRun: false, yourName: null, chatLabel: null });
+    expect(importWhatsappHistory).toHaveBeenLastCalledWith(expect.anything(), { dryRun: false, yourName: null, chatLabel: null, dateOrder: null });
+  });
+
+  it('whatsapp threads dateOrder through and rejects an unknown value', async () => {
+    const file = { filename: 'WhatsApp Chat with Bob.txt', contentType: 'text/plain', content: '03/04/24, 18:30 - Alice: hi\n' };
+    let { boundary, body } = multipart({ preview: 'false', dateOrder: 'dmy' }, file);
+    let r = await request(app).post('/api/timeline/import/whatsapp')
+      .set('content-type', `multipart/form-data; boundary=${boundary}`).send(body);
+    expect(r.status).toBe(200);
+    expect(importWhatsappHistory).toHaveBeenLastCalledWith(expect.anything(), { dryRun: false, yourName: null, chatLabel: null, dateOrder: 'dmy' });
+    ({ boundary, body } = multipart({ preview: 'false', dateOrder: 'ydm' }, file));
+    r = await request(app).post('/api/timeline/import/whatsapp')
+      .set('content-type', `multipart/form-data; boundary=${boundary}`).send(body);
+    expect(r.status).toBe(400);
   });
 
   it('whatsapp rejects a disallowed file type with 400', async () => {
