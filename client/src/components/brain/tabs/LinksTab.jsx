@@ -969,7 +969,7 @@ export default function LinksTab({ onRefresh }) {
 
                     {/* Clone error */}
                     {link.cloneError && (
-                      <span role="status" className="text-xs text-port-error truncate max-w-[200px]" title={link.cloneError}>
+                      <span role="status" className="min-w-0 text-xs text-port-error break-words" title={link.cloneError}>
                         {link.cloneError}
                       </span>
                     )}
