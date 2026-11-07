@@ -195,8 +195,12 @@ export function storyboardShotSyncPlan(board, project, { song = null, removeWith
     const changed = link === 'panel' && (rev !== scene.panelRev || art !== (scene.panelArt ?? null));
     const held = false;
     const content = changed;
+    // Same camera: keep the shot's own options on it (e.g. figure blocking turned off).
+    const keptReference = setReference && scene.setReference?.subjectId === setReference.subjectId
+      && scene.setReference?.greyboxShotId === setReference.greyboxShotId ? { setReference: scene.setReference } : {};
     const patch = {
       ...placing,
+      ...keptReference,
       ...(link !== 'panel' ? { panelId: panel.id, panelRev: rev, panelArt: art } : {}),
       ...(content ? { visualIntent: clip(panel.action, TEXT_MAX) || null, panelRev: rev, panelArt: art } : {}),
     };

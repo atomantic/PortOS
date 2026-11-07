@@ -91,7 +91,7 @@ async function dispatchFrame({ project, scene, route, tag, settings }) {
   }
   const available = [];
   for (const ref of allReferences) {
-    const path = ref.greybox ? greybox.path : ref.castGuide || ref.linkedCast ? resolveImageInputPath(ref.imageId) : resolveGalleryImage(ref.imageId, { mustExist: false });
+    const path = ref.blocking ? greybox.blockingPath : ref.greybox ? greybox.path : ref.castGuide || ref.linkedCast ? resolveImageInputPath(ref.imageId) : resolveGalleryImage(ref.imageId, { mustExist: false });
     if (!path && (ref.linkedCast || scene.frameReferenceIds?.includes(ref.id))) {
       throw new ServerError(`The picked reference ${ref.label} is missing. Restore it or reset the shot's references.`, { status: 409, code: 'PRODUCTION_FRAME_REFERENCE_MISSING' });
     }
@@ -100,7 +100,7 @@ async function dispatchFrame({ project, scene, route, tag, settings }) {
   }
   const files = musicVideoLimitReferenceFiles(available.map(({ ref }) => ref.imageId), capacity, {
     panelImageId: !Array.isArray(scene.frameReferenceIds) ? scene.panelArt : null,
-    protectedCount: available[0]?.ref.greybox ? 1 : 0,
+    protectedCount: available.filter(({ ref }) => ref.greybox).length,
   });
   const remaining = [...available];
   const selected = files.map((file) => remaining.splice(remaining.findIndex(({ ref }) => ref.imageId === file), 1)[0]);

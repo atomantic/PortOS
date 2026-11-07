@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Plus, X } from 'lucide-react';
 import { isCatalogMediaReferenceId, musicVideoCastGuideReferences, musicVideoCatalogPickPlans, musicVideoConditioningReferences, musicVideoLinkedCastReferences, musicVideoMissingFrameLinkedPicks, musicVideoOfferedReferences, musicVideoPanelArtReferences, musicVideoReferenceChoices, musicVideoResearchReferences, musicVideoSceneCastIds, MUSIC_VIDEO_MAX_REFERENCE_CHOICES } from '../../../../server/lib/musicVideoConditioning.js';
+import { musicVideoGreyboxReferences } from '../../../../server/lib/musicVideoGreybox.js';
 import { MUSIC_VIDEO_OTHER_REFERENCES_NOTE } from '../../../../server/lib/musicVideoShotPrompt.js';
 import { musicVideoCameoReferences } from '../../../../server/lib/musicVideoCameos.js';
 import MediaImage from '../MediaImage';
@@ -33,11 +34,11 @@ export default function SceneFrameReferences({ project, scene, castMedia = null,
   const pressTimer = useRef(null);
   const longPressed = useRef(false);
   useEffect(() => () => clearTimeout(pressTimer.current), []);
-  const choices = [...(greybox?.reference ? [greybox.reference] : []), ...musicVideoResearchReferences(scene), ...musicVideoCameoReferences(project, scene), ...musicVideoCastGuideReferences(project, scene, castMedia), ...musicVideoPanelArtReferences(scene), ...musicVideoReferenceChoices(project), ...musicVideoLinkedCastReferences(project, castMedia)];
+  const choices = [...musicVideoGreyboxReferences(greybox), ...musicVideoResearchReferences(scene), ...musicVideoCameoReferences(project, scene), ...musicVideoCastGuideReferences(project, scene, castMedia), ...musicVideoPanelArtReferences(scene), ...musicVideoReferenceChoices(project), ...musicVideoLinkedCastReferences(project, castMedia)];
   const failedCastIds = castMedia ? musicVideoSceneCastIds(project, scene).filter((id) => castMedia[id] === null) : [];
   if (!choices.length && !failedCastIds.length) return null;
   // The selected greybox is added separately and is not one of the saved picks.
-  const chosen = musicVideoConditioningReferences(project, scene, castMedia, greybox, { limit: MUSIC_VIDEO_MAX_REFERENCE_CHOICES + 1 });
+  const chosen = musicVideoConditioningReferences(project, scene, castMedia, greybox, { limit: MUSIC_VIDEO_MAX_REFERENCE_CHOICES + musicVideoGreyboxReferences(greybox).length });
   const chosenIds = chosen.map((ref) => ref.id);
   const ids = chosen.filter((ref) => !ref.greybox).map((ref) => ref.id);
   const others = musicVideoOfferedReferences(choices).filter((ref) => !chosenIds.includes(ref.id));

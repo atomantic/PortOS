@@ -48,10 +48,19 @@ export default function SceneGreyboxReference({ project, scene, places = {}, onC
       {subject && !entry && <p className="text-xs text-port-warning">{places[subject.ingredientId] === undefined ? 'Loading set cameras…' : 'Unable to load this set.'}</p>}
       {saveError && <p role="alert" className="text-xs text-port-error">{saveError}</p>}
       {context?.error && <p role="alert" className="text-xs text-port-error">{context.error}</p>}
-      {context?.reference?.imageId === missingCapture && <p role="alert" className="text-xs text-port-error">The greybox capture file could not be loaded. Capture this camera again before rendering.</p>}
+      {missingCapture && [context?.reference?.imageId, context?.blocking?.imageId].includes(missingCapture) && <p role="alert" className="text-xs text-port-error">The greybox capture file could not be loaded. Capture this camera again before rendering.</p>}
       {context?.reference && <figure className="flex items-center gap-2 text-xs">
         <MediaImage thumbnail src={`/data/images/${encodeURIComponent(context.reference.imageId)}`} alt={context.reference.label} onError={() => setMissingCapture(context.reference.imageId)} onLoad={() => setMissingCapture((missing) => missing === context.reference.imageId ? null : missing)} className="h-20 w-32 rounded object-contain" />
         <figcaption>{context.reference.label} · sent as a set reference</figcaption>
+      </figure>}
+      {context?.blockingAvailable && <label htmlFor={`${id}-blocking`} className="flex min-h-[44px] items-center gap-2 text-xs">
+        <input id={`${id}-blocking`} type="checkbox" checked={selected.blocking !== false}
+          onChange={(e) => save({ subjectId: selected.subjectId, greyboxShotId: selected.greyboxShotId, ...(e.target.checked ? {} : { blocking: false }) })} />
+        Send figure blocking (layout only)
+      </label>}
+      {context?.blocking && <figure className="flex items-center gap-2 text-xs">
+        <MediaImage thumbnail src={`/data/images/${encodeURIComponent(context.blocking.imageId)}`} alt={context.blocking.label} onError={() => setMissingCapture(context.blocking.imageId)} onLoad={() => setMissingCapture((missing) => missing === context.blocking.imageId ? null : missing)} className="h-20 w-32 rounded object-contain" />
+        <figcaption>{context.blocking.label} · sent after the plate, for where figures stand and face only</figcaption>
       </figure>}
     </fieldset>
   );

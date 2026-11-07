@@ -514,6 +514,25 @@ it('sends the live greybox capture before set plates, retains the edited frame f
   await expect(run({ prompt: 'A wide shot', musicVideo: tag })).rejects.toMatchObject({ code: 'MUSIC_VIDEO_GREYBOX_UNAVAILABLE' });
 });
 
+// Catches a photo plate replacing the flat capture so the figures' positions never reach the still.
+it('sends a camera photo plate first and its flat figure capture second, labeled layout only', async () => {
+  const { PATHS } = await import('../../lib/paths.js');
+  mkdirSync(PATHS.images, { recursive: true });
+  for (const file of ['layout.png', 'old-layout.png', 'photo.png', 'edit.png']) writeFileSync(join(PATHS.images, file), 'fixture');
+  getSettings.mockResolvedValue({ imageGen: { mode: 'codex', ...CODEX_ON } });
+  getProject.mockResolvedValue({ concept: { subjects: [{ id: 'rink', kind: 'place', ingredientId: 'cat-rink', name: 'Example Rink' }] }, scenes: [{ sceneId: 's1', setReference: { subjectId: 'rink', greyboxShotId: 'wide' } }] });
+  greyboxCatalog.getIngredient.mockResolvedValue({ type: 'place', payload: { greybox: { anchors: [{ id: 'rail', label: 'Singer' }], shots: [{ id: 'wide', plate: 'photo.png', figures: [{ anchorId: 'rail' }] }] } } });
+  greyboxCatalog.listMediaForIngredient.mockResolvedValue([{ kind: 'reference', role: 'greybox-shot:wide', mediaKey: 'layout.png' }, { kind: 'reference', role: null, mediaKey: 'photo.png' }]);
+  const tag = { projectId: 'mv-1', sceneId: 's1', compose: true };
+  const names = (res) => res.data.referenceImagePaths.map((p) => p.split(/[\\/]/).at(-1));
+  const rendered = await run({ prompt: 'A wide shot', referenceImageFiles: ['photo.png', 'old-layout.png'], musicVideo: { ...tag, greyboxImageId: 'photo.png', greyboxBlockingImageId: 'old-layout.png' } });
+  expect(names(rendered)).toEqual(['photo.png', 'layout.png']);
+  expect(rendered.data.prompt).toContain('Reference image 1 is the set reference');
+  expect(rendered.data.prompt).toContain('Reference image 2 is the layout only');
+  const refined = await run({ prompt: 'Raise the hand', referenceImageFiles: ['edit.png'], musicVideo: { ...tag, refine: true } });
+  expect(names(refined)).toEqual(['edit.png', 'photo.png', 'layout.png']);
+});
+
 // Public preparation path used by prompt preview and actual submission.
 it('snapshots universe photography for rendering and respects an explicit disabled override', async () => {
   const { naturalUniverseVisualProfile } = await import('../../lib/universeVisualProfile.js');

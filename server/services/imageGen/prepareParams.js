@@ -32,6 +32,7 @@ import { applyImageVisualProfile } from './visualProfile.js';
 import { musicVideoCastGuideReferences, musicVideoLimitReferenceFiles, musicVideoLinkedCastReferences, musicVideoPanelArtReferences, musicVideoResearchReferences, musicVideoReferenceChoices, musicVideoStyleImages, musicVideoReferenceCapacity, musicVideoStylePrompt, musicVideoStyleReferenceCapacity } from '../../lib/musicVideoConditioning.js';
 import { musicVideoCameoReferences } from '../../lib/musicVideoCameos.js';
 import { musicVideoFrameModelInput } from '../../lib/musicVideoShotPrompt.js';
+import { musicVideoGreyboxReferences } from '../../lib/musicVideoGreybox.js';
 import { musicVideoFrameGenSize } from '../../lib/musicVideoAspect.js';
 import { join } from 'node:path';
 import { assertFlux2InputsCompatible } from '../../lib/flux2Inputs.js';
@@ -156,19 +157,19 @@ function withQuickEditInstruction(data) {
   };
 }
 
-// The live greybox capture leads the named references. A render that edits a
-// picked frame keeps that frame first and puts the capture right after it; an
-// older capture of the shot (`cachedCapture`) is dropped unless it is that frame.
-function placeGreyboxReference(namedReferenceFiles, imageId, { cachedCapture, fromFrame }) {
-  if (cachedCapture && cachedCapture !== imageId) {
-    for (let i = namedReferenceFiles.length - 1; i >= 0; i--) {
-      if (namedReferenceFiles[i] === cachedCapture && !(fromFrame && i === 0)) namedReferenceFiles.splice(i, 1);
-    }
-  }
-  const existing = namedReferenceFiles.indexOf(imageId);
-  if (fromFrame && existing === 0) return;
-  if (existing >= 0) namedReferenceFiles.splice(existing, 1);
-  namedReferenceFiles.splice(fromFrame ? Math.min(1, namedReferenceFiles.length) : 0, 0, imageId);
+// The live greybox images (the camera's plate or capture, then its optional
+// figure blocking layout) lead the named references. A render that edits a
+// picked frame keeps that frame first and puts them right after it; an older
+// copy the client sent (`cached`) is dropped unless it is that frame.
+function placeGreyboxReferences(namedReferenceFiles, imageIds, { cached = [], fromFrame }) {
+  const live = new Set(imageIds);
+  const drop = new Set([...cached.filter((id) => id && !live.has(id)), ...imageIds]);
+  const keepFrame = fromFrame && namedReferenceFiles.length > 0;
+  const frame = keepFrame ? namedReferenceFiles[0] : null;
+  const rest = namedReferenceFiles.filter((file, i) => !(keepFrame && i === 0) && !drop.has(file));
+  // The edited frame may itself be one of the greybox images; it stays first, once.
+  const greybox = imageIds.filter((id) => id !== frame);
+  namedReferenceFiles.splice(0, namedReferenceFiles.length, ...(keepFrame ? [frame] : []), ...greybox, ...rest);
 }
 
 // A music-video scene render adds its greybox capture, its composed shot prompt
@@ -186,8 +187,9 @@ async function applyMusicVideoSceneInputs(data, { project, mode, localModel, clo
     castGuideMedia?.loadSceneCastMedia(scene, { project }),
     subjectScale?.loadMusicVideoSubjectSizes(project),
   ]);
+  const greyboxFiles = musicVideoGreyboxReferences(greybox).map((ref) => ref.imageId);
   if (greybox) {
-    placeGreyboxReference(namedReferenceFiles, greybox.reference.imageId, { cachedCapture: tag.greyboxImageId, fromFrame: tag.fromFrame || tag.refine });
+    placeGreyboxReferences(namedReferenceFiles, greyboxFiles, { cached: [tag.greyboxImageId, tag.greyboxBlockingImageId], fromFrame: tag.fromFrame || tag.refine });
   }
   // The board sends its priority-ordered references; this renderer takes as many as it can (a peer decides its own).
   const rendererCapacity = musicVideoReferenceCapacity(mode, { modelId: cloudModel, localModel });
@@ -195,7 +197,7 @@ async function applyMusicVideoSceneInputs(data, { project, mode, localModel, clo
     const room = Math.max(0, rendererCapacity - initInputCount - referenceUploads.length);
     const panelImageId = !Array.isArray(scene?.frameReferenceIds) ? scene?.panelArt : null;
     const frameCount = (tag.fromFrame || tag.refine) && namedReferenceFiles.length ? 1 : 0;
-    const greyboxIndex = greybox ? namedReferenceFiles.indexOf(greybox.reference.imageId) : -1;
+    const greyboxIndex = Math.max(-1, ...greyboxFiles.map((file) => namedReferenceFiles.indexOf(file)));
     const protectedCount = Math.max(frameCount, greyboxIndex + 1);
     const limited = musicVideoLimitReferenceFiles(namedReferenceFiles, room, { panelImageId, protectedCount });
     namedReferenceFiles.splice(0, namedReferenceFiles.length, ...limited);
@@ -223,7 +225,7 @@ async function applyMusicVideoSceneInputs(data, { project, mode, localModel, clo
     const positionsUnknown = Boolean(data.mediaProviderPeerId && initInputCount);
     const sentFiles = positionsUnknown ? [] : namedReferenceFiles;
     const sentInitCount = initInputCount;
-    const known = [greybox?.reference, ...musicVideoResearchReferences(scene), ...musicVideoPanelArtReferences(scene), ...musicVideoCameoReferences(project, scene), ...musicVideoCastGuideReferences(project, scene, castMedia), ...(project?.visualSpec?.references || []), ...musicVideoReferenceChoices(project), ...musicVideoLinkedCastReferences(project, castMedia)];
+    const known = [...musicVideoGreyboxReferences(greybox), ...musicVideoResearchReferences(scene), ...musicVideoPanelArtReferences(scene), ...musicVideoCameoReferences(project, scene), ...musicVideoCastGuideReferences(project, scene, castMedia), ...(project?.visualSpec?.references || []), ...musicVideoReferenceChoices(project), ...musicVideoLinkedCastReferences(project, castMedia)];
     const panelIndex = scene?.panelArt ? sentFiles.indexOf(scene.panelArt) : -1;
     // The director's text plus each labeled block PortOS adds (#11317), from the
     // composer the server's production run uses for the same still.

@@ -13,13 +13,17 @@ export async function loadMusicVideoGreybox(project, scene, deps = {}) {
     places[subject.ingredientId] = { ingredient, media };
   }
   const result = musicVideoGreyboxReference(project, scene, places);
-  const path = result?.reference && (deps.resolveImage || resolveImageInputPath)(result.reference.imageId);
-  if (result?.error || !path) {
-    throw new ServerError(result?.error || 'Greybox reference: the capture file is missing. Capture the saved camera again or clear the selection.', {
+  const resolve = deps.resolveImage || resolveImageInputPath;
+  const path = result?.reference && resolve(result.reference.imageId);
+  const blockingPath = result?.blocking && resolve(result.blocking.imageId);
+  const missing = !path ? 'Greybox reference: the capture file is missing. Capture the saved camera again or clear the selection.'
+    : result.blocking && !blockingPath ? 'Greybox reference: the figure blocking capture is missing. Capture the saved camera again or turn off figure blocking.' : null;
+  if (result?.error || missing) {
+    throw new ServerError(result?.error || missing, {
       status: 422, code: 'MUSIC_VIDEO_GREYBOX_UNAVAILABLE', context: { sceneId: scene.sceneId },
     });
   }
-  return { ...result, path };
+  return { ...result, path, ...(blockingPath ? { blockingPath } : {}) };
 }
 
 /**
