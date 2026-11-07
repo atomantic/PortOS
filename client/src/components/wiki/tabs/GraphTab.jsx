@@ -181,7 +181,8 @@ export default function GraphTab({ vaultId }) {
   }, [navigate, searchParams]);
 
   const handlePointerDown = useCallback((e) => {
-    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    // One gesture at a time: a second finger or mouse button must not hijack the active one.
+    if (gestureRef.current || (e.pointerType === 'mouse' && e.button !== 0)) return;
     e.currentTarget.setPointerCapture?.(e.pointerId);
     gestureRef.current = { id: e.pointerId, startX: e.clientX, startY: e.clientY, lastX: e.clientX, lastY: e.clientY, panned: false };
   }, []);
@@ -190,6 +191,7 @@ export default function GraphTab({ vaultId }) {
     const gesture = gestureRef.current;
     if (gesture?.id === e.pointerId) {
       if (!gesture.panned && Math.hypot(e.clientX - gesture.startX, e.clientY - gesture.startY) < TAP_SLOP_PX) return;
+      if (!gesture.panned) setHoveredNode(null);
       gesture.panned = true;
       const dx = e.clientX - gesture.lastX;
       const dy = e.clientY - gesture.lastY;
@@ -205,18 +207,21 @@ export default function GraphTab({ vaultId }) {
     e.currentTarget.style.cursor = closest ? 'pointer' : 'grab';
   }, [hitTest]);
 
-  const handlePointerUp = useCallback((e) => {
+  const endGesture = useCallback((e, { allowTap }) => {
     const gesture = gestureRef.current;
     if (gesture?.id !== e.pointerId) return;
+    if (allowTap && e.pointerType === 'mouse' && e.button !== 0) return;
     gestureRef.current = null;
-    if (gesture.panned) return;
-    const tapped = hitTest(e.clientX, e.clientY);
-    if (tapped) openNote(tapped);
+    const hit = hitTest(e.clientX, e.clientY);
+    if (e.pointerType === 'mouse') {
+      setHoveredNode(hit);
+      e.currentTarget.style.cursor = hit ? 'pointer' : 'grab';
+    }
+    if (allowTap && !gesture.panned && hit) openNote(hit);
   }, [hitTest, openNote]);
 
-  const handlePointerCancel = useCallback((e) => {
-    if (gestureRef.current?.id === e.pointerId) gestureRef.current = null;
-  }, []);
+  const handlePointerUp = useCallback((e) => endGesture(e, { allowTap: true }), [endGesture]);
+  const handlePointerCancel = useCallback((e) => endGesture(e, { allowTap: false }), [endGesture]);
 
   if (loading) {
     return (
