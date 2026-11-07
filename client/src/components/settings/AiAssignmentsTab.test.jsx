@@ -435,3 +435,18 @@ describe('AiAssignmentsTab responsive layout', () => {
     expect(screen.getAllByLabelText('Model for Production planning model')).toHaveLength(1);
   });
 });
+
+describe('AiAssignmentsTab card field names', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('names read-only provider and model values by their caption below lg', async () => {
+    // Regression: aria-hidden captions left a read-only value announced bare.
+    vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })));
+    getAiAssignments.mockResolvedValue(payload([
+      entry({ id: 'settings.fixed', label: 'Fixed route', providerEditable: false, modelEditable: false, providerId: 'ollama', model: 'gemma2:9b' }),
+    ]));
+    renderTab();
+    expect(await screen.findByRole('group', { name: 'Provider' })).toHaveTextContent('Ollama');
+    expect(screen.getByRole('group', { name: 'Model' })).toHaveTextContent('gemma2:9b');
+  });
+});

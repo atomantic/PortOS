@@ -573,6 +573,13 @@ export default function AiAssignmentsTab() {
         {filtered.map((entry) => {
           const { provider, model, effort, action } = rowParts(entry);
           const caption = 'mb-1 text-xs uppercase tracking-wide text-gray-500';
+          // A group named by its caption gives read-only text and the em dash a field name; table cells get theirs from column headers.
+          const field = (name, body) => (
+            <div role="group" aria-labelledby={`cap-${name}-${entry.id}`}>
+              <div id={`cap-${name}-${entry.id}`} className={caption}>{name}</div>
+              {body}
+            </div>
+          );
           return (
             <div key={entry.id} className="bg-port-card border border-port-border rounded-lg p-3 space-y-3">
               <div className="min-w-0">
@@ -580,11 +587,9 @@ export default function AiAssignmentsTab() {
                 <div className="mt-0.5 text-xs text-gray-500">{entry.area} · {entry.assignmentType}</div>
                 {entry.notes && <div className="mt-1 text-xs text-gray-500">{entry.notes}</div>}
               </div>
-              <div><div aria-hidden="true" className={caption}>Provider</div>{provider}</div>
-              <div><div aria-hidden="true" className={caption}>Model</div>{model}</div>
-              {entry.effortEditable && (
-                <div><div aria-hidden="true" className={caption}>Effort</div>{effort}</div>
-              )}
+              {field('Provider', provider)}
+              {field('Model', model)}
+              {entry.effortEditable && field('Effort', effort)}
               <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0 text-xs text-gray-500 break-all">{entry.source}</div>
                 {entry.link && (
