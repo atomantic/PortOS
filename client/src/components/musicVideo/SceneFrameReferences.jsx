@@ -6,6 +6,7 @@ import { musicVideoCameoReferences } from '../../../../server/lib/musicVideoCame
 import MediaImage from '../MediaImage';
 import SceneReferencePicker from './SceneReferencePicker.jsx';
 import InfoTooltip from '../ui/InfoTooltip';
+import CastGuidesRetry from './CastGuidesRetry.jsx';
 
 // No iOS image callout or text selection, so a long-press opens the preview instead.
 const CHIP = 'inline-flex min-h-[44px] max-w-full select-none items-center gap-1 rounded border border-port-border bg-port-bg p-0.5 text-xs [-webkit-touch-callout:none] sm:min-h-[32px]';
@@ -125,10 +126,7 @@ export default function SceneFrameReferences({ project, scene, castMedia = null,
         )}
       </ul>
       {failedCastIds.length > 0 && onReloadCastMedia && (
-        <p className="text-[11px] text-port-warning">
-          Cast guides could not be loaded, so frames will not render.{' '}
-          <button type="button" onClick={onReloadCastMedia} className="underline min-h-[44px] sm:min-h-0">Retry</button>
-        </p>
+        <CastGuidesRetry onRetry={onReloadCastMedia} consequence="frames" />
       )}
       {!locked && musicVideoMissingFrameLinkedPicks(project, scene, castMedia).length > 0 && <p className="text-[11px] text-port-warning">A picked cast reference is unavailable, so frames will not render. Reload to try again, or use Back to auto.</p>}
       {notOffered.length > 0 && <p className="text-[11px] text-port-warning">Left out of new renders because the catalog check-in does not offer {notOffered.map(nameOf).join(', ')}. Offer {notOffered.length === 1 ? 'it' : 'them'} on the catalog record, add a replacement here, or use Back to auto.</p>}

@@ -35,6 +35,7 @@ import { getRunwayVideoModel } from '../../lib/runwayVideoModels.js';
 import { falSceneTake, runwaySceneTake } from '../../lib/musicVideoShotTiming.js';
 import { CLIP_TIMING_FPS, MUSIC_VIDEO_VISUAL_LAYERS, clipReversed, composedDrawsLyrics, sceneHasAuthoredSpan, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
 import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
+import CastGuidesRetry from './CastGuidesRetry.jsx';
 
 // #8985: what a composed render shows for this scene's span.
 const LAYER_LABELS = { footage: 'Footage', still: 'Still image', card: 'Title card', code: 'Code-drawn' };
@@ -264,6 +265,8 @@ export default function SceneCard({
   const endFrameBlocksReferences = runwayEndFrameOn && !!referenceModel?.referenceImages && !referenceModel.referenceImages.keepsFrames;
   const referenceCapacity = useLtxReferences ? 8 : musicVideoClipReferenceCapacity(referenceBackend, referenceModel, { endFrame: runwayEndFrameOn });
   const guidesPending = referenceCapacity > 0 && castMedia && musicVideoSceneCastIds(project, scene).some((id) => castMedia[id] === undefined);
+  // A failed read (null) would otherwise send the clip without the member's guides.
+  const guidesFailed = referenceCapacity > 0 && castMedia && musicVideoSceneCastIds(project, scene).some((id) => castMedia[id] === null);
   const availableReferences = musicVideoClipReferenceChoices(project, scene, castMedia);
   const selectedClipReferences = musicVideoClipConditioningReferences(project, scene, castMedia, { limit: referenceCapacity });
   const referenceLabels = selectedClipReferences.map((ref) => ref.label || ref.role || 'visual reference');
@@ -291,6 +294,7 @@ export default function SceneCard({
   const referenceRefusal = clipReferenceSaveState === 'saving' ? 'Saving clip references…'
     : clipReferenceSaveState === 'failed' ? 'Save the clip references before rendering'
       : guidesPending ? 'Cast guides are still loading'
+        : guidesFailed ? 'Cast guides could not be loaded'
         : missingReference ? 'A selected clip reference is unavailable'
           : useLtxReferences && ltxReferencesGreyboxBlocked ? 'Clear the greybox reference before using LTX reference images'
             : useLtxReferences && !selectedClipReferences.length ? 'Choose at least one clip reference'
@@ -780,6 +784,7 @@ export default function SceneCard({
               <span>{videoRefusal}</span>
             </div>
           )}
+          {guidesFailed && onReloadCastMedia && layer === 'footage' && !storyboardDefault && <CastGuidesRetry onRetry={onReloadCastMedia} consequence="this clip" />}
           </>
           )}
         </section>
