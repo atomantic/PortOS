@@ -4507,15 +4507,26 @@ function B() { const sensors = useSensors(useSensor(PointerSensor)); return <Dnd
     const offendersIn = (file, src) => {
       const out = [];
       for (const node of forEachOpeningTag(src, 'button')) {
-        if (!/(?:^|[\s"'`{])text-\[10px\]/.test(node.tag)) continue;
-        if (/pointer-coarse:(?:min-)?h-(?:11|12|14|\[(?:4[4-9]|[5-9]\d)px\])/.test(node.tag)) continue;
-        if (/(?:^|[\s"'`])(?:min-)?h-(?:11|12|14)(?:[\s"'`]|$)|min-h-\[4[4-9]px\]/.test(node.tag)) continue;
+        const tokens = node.tag.split(/[\s"'`{}=]+/);
+        // Any variant of a 10px label counts (`max-sm:`, `!`), so none escapes the scan.
+        if (!tokens.some((t) => /(?:^|[:!])text-\[10px\]$/.test(t))) continue;
+        const px = (v) => (/^\d+$/.test(v) ? Number(v) * 4 : /^\[(\d+)px\]$/.test(v) ? Number(/\d+/.exec(v)[0]) : /^\[(\d+(?:\.\d+)?)rem\]$/.test(v) ? parseFloat(v.slice(1)) * 16 : 0);
+        // Only an unprefixed floor (always) or a bare/`any-` pointer-coarse floor satisfies it.
+        const tall = tokens.some((t) => {
+          const m = /^(?:(?:any-)?pointer-coarse:)?(?:min-)?h-(.+)$/.exec(t);
+          return m && px(m[1]) >= 44;
+        });
+        if (tall) continue;
         out.push(`${file}:${lineOf(src, node.index)}`);
       }
       return out;
     };
     expect(offendersIn('probe.jsx', '<button className="px-1.5 py-0.5 text-[10px]">x</button>')).toEqual(['probe.jsx:1']);
     expect(offendersIn('probe.jsx', '<button className="px-1.5 pointer-coarse:min-h-11 text-[10px]">x</button>')).toEqual([]);
+    expect(offendersIn('probe.jsx', '<button className="max-sm:text-[10px] !text-[10px]">x</button>')).toEqual(['probe.jsx:1']);
+    expect(offendersIn('probe.jsx', '<button className="text-[10px] max-sm:pointer-coarse:min-h-11">x</button>')).toEqual(['probe.jsx:1']);
+    expect(offendersIn('probe.jsx', '<button className="text-[10px] not-pointer-coarse:min-h-11">x</button>')).toEqual(['probe.jsx:1']);
+    expect(offendersIn('probe.jsx', '<button className="text-[10px] min-h-[56px]">x</button>')).toEqual([]);
     // Ratchet: existing dense buttons are budgeted per file (counts, not line
     // numbers, so unrelated edits don't churn it). New ones must add the
     // coarse height; shrink a count when you fix one. Remainder tracked in #15195.
