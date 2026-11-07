@@ -76,7 +76,7 @@ the list does not admit.
 | POST | `/api/instances/peers/announce`, `/api/instances/peers/sync-categories` | Registration handshake |
 | GET | `/api/brain/sync`, `/api/brain/reconcile/{checksum,snapshot,manifest}` | Brain sync and parity |
 | GET | `/api/memory/sync`, `/api/catalog/sync`, `/api/sync/*` | Snapshot sync |
-| GET | `/api/peer-sync/*` | Record, manifest, and archive pulls |
+| GET | `/api/peer-sync/{manifest,library-manifest,cos-history-manifest,cos-tasks,eidoverse-foundations,cos-agent-archive,record,subscriptions}` | Record, manifest, and archive pulls. `/subscriptions` returns only the subscriptions targeting the calling peer; `/integrity` is operator-only |
 | POST | `/api/peer-sync/push` | Record push |
 | POST | `/api/peer-media/delete` | Remote media delete (also needs this install's media-delete capability for the peer) |
 | any | `/api/federation/media/v1/*` | Federated media provider |

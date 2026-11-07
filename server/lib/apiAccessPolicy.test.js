@@ -72,6 +72,9 @@ describe('peer API surface (#8387)', () => {
     expect(isPeerApiRequestAllowed('GET', '/api/apps/')).toBe(true);
     // Operator mutations beside allowed reads stay closed.
     expect(isPeerApiRequestAllowed('POST', '/api/peer-sync/sync-now')).toBe(false);
+    // The integrity diagnostic bypasses per-peer sharing config, so peers never reach it.
+    expect(isPeerApiRequestAllowed('GET', '/api/peer-sync/integrity')).toBe(false);
+    expect(isPeerApiRequestAllowed('GET', '/api/peer-sync/record')).toBe(true);
     expect(isPeerApiRequestAllowed('POST', '/api/instances/peers/pair-secret')).toBe(false);
     expect(isPeerBasicBootstrapRequest('POST', '/api/instances/peers/pair-secret')).toBe(true);
     expect(isPeerBasicBootstrapRequest('GET', '/api/instances/peers/pair-secret')).toBe(false);
