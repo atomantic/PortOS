@@ -11,7 +11,7 @@
  * fails the parse identically on every platform and needs no privileges.
  */
 
-import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterAll, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -36,6 +36,11 @@ vi.mock('./providers.js', () => ({ getActiveProvider: vi.fn(async () => provider
 vi.mock('./aiProvider.js', () => ({
   callProviderAISimple: vi.fn(async () => ({ text: '{"assessment":"ok","recommendations":["keep going"]}' })),
   parseLLMJSON: (text) => JSON.parse(text),
+}));
+
+vi.mock('./settings.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  getSettings: vi.fn(async () => ({ timezone: 'America/Los_Angeles' })),
 }));
 
 vi.mock('./notifications.js', () => ({
@@ -172,5 +177,30 @@ describe('runGoalCheckIn concurrency and MortalLoom mirroring (#8755)', () => {
       expect.objectContaining({ id: 'g1', checkIns: expect.arrayContaining([expect.objectContaining({ assessment: 'ok' })]) })
     ]));
     await changed;
+  });
+});
+
+// 01:30 UTC is still the previous evening in the user's zone (UTC-8); the
+// check-in's day key is the user's local day, matching the Daily Review.
+describe('runGoalCheckIn dates by the user-local day', () => {
+  const goalsFile = () => join(getTempRoot(), 'digital-twin', 'goals.json');
+
+  beforeEach(() => {
+    rmSync(getTempRoot(), { recursive: true, force: true });
+    mkdirSync(join(getTempRoot(), 'digital-twin'), { recursive: true });
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-07T01:30:00Z'));
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it('stamps the check-in with the configured timezone day', async () => {
+    writeFileSync(goalsFile(), JSON.stringify({ goals: [{
+      id: 'g1', title: 'Example Goal', status: 'active', targetDate: '2027-01-01',
+      createdAt: '2026-01-01T00:00:00.000Z', progress: 40,
+    }] }));
+    await runGoalCheckIn();
+    const written = JSON.parse(readFileSync(goalsFile(), 'utf8'));
+    expect(written.goals[0].checkIns[0].date).toBe('2026-11-06');
   });
 });

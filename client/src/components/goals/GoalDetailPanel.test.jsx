@@ -7,6 +7,7 @@ import { act, render, screen, fireEvent } from '@testing-library/react';
 vi.mock('../../services/api', () => ({
   getActivities: vi.fn(() => Promise.resolve([])),
   getCalendarAccounts: vi.fn(() => Promise.resolve([])),
+  getSettings: vi.fn(() => Promise.resolve({ timezone: 'UTC' })),
   getInstanceFeatures: vi.fn(() => Promise.resolve({ features: [{ id: 'post', enabled: true }] })),
   updateGoal: vi.fn(() => Promise.resolve({})),
 }));

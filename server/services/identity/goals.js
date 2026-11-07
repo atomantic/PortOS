@@ -2,6 +2,7 @@ import { v4 as uuidv4 } from '../../lib/uuid.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { getActivities } from '../meatspaceCalendar.js';
 import { callProviderAISimple, parseLLMJSON } from '../aiProvider.js';
+import { userLocalToday } from '../userTimezone.js';
 import {
   goalTypeEnum,
   goalPhasesProposalSchema,
@@ -701,7 +702,7 @@ export async function generateGoalPhases(goalId, { providerId, model } = {}) {
   if (!provider) throw new ServerError('No AI provider available', { status: 503, code: 'NO_PROVIDER' });
   const selectedModel = model ?? provider.defaultModel;
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = await userLocalToday();
   const prompt = `You are a goal planning assistant. Given a goal with a target completion date, generate 3-7 ordered phases that break this goal into achievable milestones.
 
 Goal title: ${goal.title}
@@ -782,7 +783,7 @@ export async function decomposeGoal(goalId, { providerId, model } = {}) {
   if (!provider) throw new ServerError('No AI provider available', { status: 503, code: 'NO_PROVIDER' });
   const selectedModel = model ?? provider.defaultModel;
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = await userLocalToday();
   // targetDate is optional for decomposition (relative ordering only) — unlike
   // generateGoalPhases which hard-requires it for date distribution.
   const dateGuidance = goal.targetDate
@@ -1016,7 +1017,7 @@ export async function checkInGoal(goalId, { providerId, model } = {}) {
   if (!provider) throw new ServerError('No AI provider available', { status: 503, code: 'NO_PROVIDER' });
   const selectedModel = model ?? provider.defaultModel;
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = await userLocalToday();
   const velocity = computeGoalVelocity(goal);
 
   // Calculate expected progress based on creation date and target date
@@ -1109,6 +1110,7 @@ Respond with JSON only (no markdown fences). The response must be an object with
 // =============================================================================
 
 export async function updateGoalProgress(goalId, value) {
+  const today = await userLocalToday();
   return editGoals(goals => {
     const goal = goals.goals.find(g => g.id === goalId);
     if (!goal) return null;
@@ -1119,7 +1121,6 @@ export async function updateGoalProgress(goalId, value) {
 
     // Only log if value changed; deduplicate same-day entries to prevent bloat
     if (prev !== value) {
-      const today = new Date().toISOString().slice(0, 10);
       const lastEntry = goal.progressHistory[goal.progressHistory.length - 1];
       if (lastEntry?.date === today) {
         lastEntry.value = value;

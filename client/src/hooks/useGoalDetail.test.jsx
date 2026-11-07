@@ -1,7 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 
 const getActivities = vi.fn(() => Promise.resolve([]));
+const getSettings = vi.fn(() => Promise.resolve({ timezone: 'America/Los_Angeles' }));
 const getCalendarAccounts = vi.fn(() => Promise.resolve([]));
 const scheduleGoalTimeBlocks = vi.fn(() => Promise.resolve({}));
 const removeGoalSchedule = vi.fn(() => Promise.resolve({}));
@@ -19,6 +20,7 @@ const completeMilestoneTask = vi.fn(() => Promise.resolve({}));
 
 vi.mock('../services/api', () => ({
   getActivities: (...args) => getActivities(...args),
+  getSettings: (...args) => getSettings(...args),
   getCalendarAccounts: (...args) => getCalendarAccounts(...args),
   scheduleGoalTimeBlocks: (...args) => scheduleGoalTimeBlocks(...args),
   removeGoalSchedule: (...args) => removeGoalSchedule(...args),
@@ -547,5 +549,36 @@ describe('useGoalDetail milestone actions', () => {
     });
     expect(result.current.milestoneActions.size).toBe(0);
     expect(onRefresh).not.toHaveBeenCalled();
+  });
+});
+
+// 01:30 UTC is the previous evening in the configured zone (UTC-8), so the
+// progress entry must default to that local day, not the UTC day.
+describe('useGoalDetail progress entry date', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getSettings.mockResolvedValue({ timezone: 'America/Los_Angeles' });
+    getActivities.mockResolvedValue([]);
+    getCalendarAccounts.mockResolvedValue([]);
+    addGoalProgress.mockResolvedValue({});
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-07T01:30:00Z'));
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it('defaults to the user-local day when the form opens', async () => {
+    const { result } = renderGoalDetail();
+    await act(async () => {});
+    act(() => { result.current.setShowProgressForm(true); });
+    expect(result.current.progressForm.date).toBe('2026-11-06');
+  });
+
+  it('submits a hand-picked date unchanged', async () => {
+    const { result } = renderGoalDetail();
+    await act(async () => {});
+    act(() => { result.current.setShowProgressForm(true); });
+    act(() => { result.current.setProgressForm({ ...result.current.progressForm, date: '2026-10-01', note: 'Backfill' }); });
+    await act(async () => { await result.current.handleAddProgress(); });
+    expect(addGoalProgress).toHaveBeenCalledWith('goal-1', expect.objectContaining({ date: '2026-10-01' }));
   });
 });
