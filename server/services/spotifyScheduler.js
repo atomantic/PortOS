@@ -31,5 +31,5 @@ export const startSpotifyScheduler = createSyncScheduler({
   source: 'spotifyScheduler',
   getConfig: getSpotifyConfig,
   runSync,
-  getLastRunAt: async () => (await readSyncState().catch(() => null))?.lastRunAt ?? null,
+  getLastRunAt: async () => (await readSyncState()).lastRunAt,
 });
