@@ -6,7 +6,21 @@ import { join } from 'node:path';
 let voiceProfilesRoot = '';
 const queryMock = vi.fn();
 
-vi.mock('../../lib/db.js', () => ({ query: (...args) => queryMock(...args) }));
+let txFailure = null;
+vi.mock('../../lib/db.js', () => ({
+  query: (...args) => queryMock(...args),
+  // Buffer writes and drop them on failure so rollback is observable.
+  withTransaction: async (fn) => {
+    const staged = [];
+    const result = await fn({ query: async (sql, args) => {
+      if (/^\s*INSERT/.test(sql) && txFailure) throw txFailure;
+      if (/^\s*INSERT/.test(sql)) { staged.push([sql, args]); return { rows: [] }; }
+      return queryMock(sql, args);
+    } });
+    for (const [sql, args] of staged) await queryMock(sql, args);
+    return result;
+  },
+}));
 vi.mock('../../lib/paths.js', async () => {
   const actual = await vi.importActual('../../lib/paths.js');
   return { ...actual, PATHS: { ...actual.PATHS, get voiceProfiles() { return voiceProfilesRoot; } } };
@@ -47,6 +61,7 @@ const PROFILE = {
 beforeEach(async () => {
   voiceProfilesRoot = await mkdtemp(join(tmpdir(), 'portos-voice-profiles-'));
   queryMock.mockReset();
+  txFailure = null;
 });
 
 afterEach(async () => {
@@ -115,11 +130,57 @@ describe('voice profile contract', () => {
       .rejects.toMatchObject({ code: 'VOICE_PROFILE_INVALID_PRESET' });
     expect(queryMock).not.toHaveBeenCalled();
     queryMock.mockResolvedValue({ rows: [] }).mockResolvedValueOnce({ rows: [{ data: {
-      ...PROFILE, engine: 'auk', voiceId: 'auk:voice-profile-1', kind: 'designed', originProfileId: 'library-1',
+      ...PROFILE, engine: 'auk', voiceId: 'auk:voice-profile-1', kind: 'preset', originProfileId: 'library-1',
       sourceAssets: [{ filename: 'reference.wav', transcript: 'Hello.' }], inference: { instructions: 'Old voice' },
     } }] });
     const replacement = await promotePresetProfile({ universeId: 'universe-1', characterId: 'character-1', voiceId: 'piper:example' });
     expect(replacement).toMatchObject({ engine: 'piper', sourceAssets: [], originProfileId: null, inference: { instructions: null } });
+  });
+
+  describe('preset promotion never overwrites other voice kinds', () => {
+    const clone = {
+      ...PROFILE, id: 'clone-1', kind: 'cloned', engine: 'qwen3-tts', voiceId: 'qwen3-tts:clone-1',
+      sourceAssets: [{ filename: 'ref.wav', sha256: 'a'.repeat(64), transcript: 'Hello.', performerConsentConfirmed: true }],
+    };
+    const args = { universeId: 'universe-1', characterId: 'character-1', voiceId: 'piper:example' };
+    const writes = () => queryMock.mock.calls.filter(([sql]) => /INSERT INTO voice_profiles/.test(sql)).map(([, a]) => JSON.parse(a[4]));
+    // Mirrors the kind filter so a regression to an unfiltered lookup is caught.
+    const useRows = (rows) => queryMock.mockImplementation(async (sql) => {
+      if (/data->>'kind' = 'preset'/.test(sql)) return { rows: rows.filter((r) => r.kind === 'preset').map((data) => ({ data })) };
+      if (/approval_status = 'approved'/.test(sql)) return { rows: rows.filter((r) => r.approval.status === 'approved').map((data) => ({ data })) };
+      return { rows: rows.map((data) => ({ data })) };
+    });
+
+    it('leaves a draft clone untouched and adds a separate preset row', async () => {
+      const draft = { ...clone, approval: { status: 'draft', approvedAt: null, benchmarkRevision: 1 } };
+      useRows([draft]);
+      const preset = await promotePresetProfile(args);
+      expect(preset.id).not.toBe('clone-1');
+      expect(writes().map((w) => w.id)).toEqual([preset.id]);
+    });
+
+    it('retires an approved clone with its fields intact', async () => {
+      useRows([clone]);
+      const preset = await promotePresetProfile(args);
+      const retired = writes().find((w) => w.id === 'clone-1');
+      expect(preset.id).not.toBe('clone-1');
+      expect(retired).toMatchObject({ kind: 'cloned', approval: { status: 'retired' } });
+      expect(retired.sourceAssets).toHaveLength(1);
+    });
+
+    it('re-promoting the same preset updates the preset row in place', async () => {
+      const existing = { ...PROFILE, id: 'preset-1', kind: 'preset', engine: 'piper', voiceId: 'piper:example', version: 4 };
+      useRows([existing]);
+      const again = await promotePresetProfile(args);
+      expect(again).toMatchObject({ id: 'preset-1', version: 4 });
+    });
+
+    it('keeps the approved voice when persisting the new profile fails', async () => {
+      useRows([clone]);
+      txFailure = new Error('db down');
+      await expect(promotePresetProfile(args)).rejects.toThrow('db down');
+      expect(writes()).toEqual([]);
+    });
   });
 
   it('creates voice design candidate profile as draft without altering approved profile', async () => {
