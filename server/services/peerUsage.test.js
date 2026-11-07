@@ -445,10 +445,18 @@ describe('fleet report', () => {
 
     expect(fleet.instances.map((i) => i.instanceId)).toEqual(['inst-self', 'inst-peer']);
     expect(fleet.instances[0].self).toBe(true);
-    expect(fleet.instances[1].capturedAt).toBe('2026-08-30T12:00:00.000Z');
+    expect(fleet.instances[1].capturedAt).toBe('2026-08-30T09:00:00.000Z');
     expect(fleet.totals.tokensOut).toBe(5000);
     expect(fleet.totals.sessions).toBe(4);
     expect(fleet.instances.every((i) => i.usesSubscriptions)).toBe(true);
+  });
+
+  it('ages a peer row by its snapshot, not its last ledger write', async () => {
+    // A native-history refresh moves capturedAt without touching the ledger.
+    await applyUsageRemote({ instances: { 'inst-peer': peerEntry({ capturedAt: '2026-08-30T18:00:00.000Z' }) } });
+    const fleet = await getFleetUsage({ providers: [] });
+
+    expect(fleet.instances[1].capturedAt).toBe('2026-08-30T18:00:00.000Z');
   });
 
   // A machine that pays API rates is still listed — the spend is real — but

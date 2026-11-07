@@ -704,7 +704,10 @@ export async function getFleetUsage({ from = null, to = null, providers = [], ap
       instanceId,
       name: name || instanceId,
       self: isSelf,
-      capturedAt: activity.lastUpdated || capturedAt,
+      // The digest's stamp, not the ledger's lastUpdated: since the native
+      // history became the source of truth for coding-app tokens, a peer can
+      // ship fresh counts hours after its last ledger write.
+      capturedAt: capturedAt || activity.lastUpdated,
       totals: report.totals,
       usesSubscriptions: !apiBilled.has(instanceId),
     };
