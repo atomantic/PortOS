@@ -471,7 +471,7 @@ function MediaCollectionDetailContent() {
 
   return (
     <div ref={pageFocusRef} tabIndex={-1} role="region" aria-label="Media collection" className="space-y-4">
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-3">
         <Link to="/media/collections" className="text-gray-400 hover:text-white" title="Back">
           <ArrowLeft className="w-5 h-5" />
         </Link>
@@ -483,13 +483,13 @@ function MediaCollectionDetailContent() {
           </span>
         )}
         {!selectMode && (
-          <div className="ml-auto flex items-center gap-2">
+          <div className="ml-auto w-full sm:w-auto flex flex-wrap items-center gap-2">
             {isUnsorted && (
               <button
                 type="button"
                 onClick={runPullPrompts}
                 disabled={pullingPrompts || unsortedImageFilenames.length === 0}
-                className="px-2.5 py-1 text-xs bg-port-accent/20 hover:bg-port-accent/40 text-port-accent rounded flex items-center gap-1.5 disabled:opacity-40"
+                className="px-2.5 py-1 text-xs whitespace-nowrap bg-port-accent/20 hover:bg-port-accent/40 text-port-accent rounded flex items-center gap-1.5 disabled:opacity-40"
                 title={unsortedImageFilenames.length === 0
                   ? 'No unsorted images to check'
                   : 'Fetch gen-params sidecars for images that synced without prompts'}
