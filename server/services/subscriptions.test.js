@@ -3,11 +3,18 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // The real settings store writes data/settings.json; this suite only cares
 // about the merge semantics on top of it, so it stands in an in-memory one.
 let stored = {};
+let writeQueue = Promise.resolve();
 vi.mock('./settings.js', () => ({
   getSettings: vi.fn(async () => structuredClone(stored)),
-  updateSettingsWith: vi.fn(async (mutate) => {
-    stored = await mutate(structuredClone(stored));
-    return structuredClone(stored);
+  // Writes run one at a time, as the real queueWrite does; without that an
+  // overlapping read-modify-write would lose the other caller's update here.
+  updateSettingsWith: vi.fn((mutate) => {
+    const run = writeQueue.then(async () => {
+      stored = await mutate(structuredClone(stored));
+      return structuredClone(stored);
+    });
+    writeQueue = run.catch(() => {});
+    return run;
   }),
 }));
 
@@ -239,9 +246,14 @@ describe('setSubscriptionEnabled', () => {
 
   it('keeps each family’s restore record when two family toggles overlap', async () => {
     // Regression: each toggle wrote its own stale copy of the whole toggle map,
-    // so the second write dropped the first family's entry. Re-enabling that
-    // family then fell back to enabling everything, including a user-disabled provider.
-    providerRecords = [claudeCli, { ...codexCli, enabled: true }, { ...codexCli, id: 'codex-2', enabled: true }];
+    // so the second write dropped the first family’s entry. Re-enabling that
+    // family then fell back to enabling everything, including user-disabled providers.
+    providerRecords = [
+      claudeCli,
+      { ...claudeAlt, enabled: false },
+      { ...codexCli, enabled: true },
+      { ...codexCli, id: 'codex-2', enabled: false },
+    ];
     await Promise.all([
       setSubscriptionEnabled('claude', false),
       setSubscriptionEnabled('codex', false),
@@ -250,7 +262,11 @@ describe('setSubscriptionEnabled', () => {
 
     const claudeOn = await setSubscriptionEnabled('claude', true);
     expect(claudeOn.changed).toEqual(['claude-code']);
+    expect(providerRecords.find((p) => p.id === 'claude-code-alt').enabled).toBe(false);
     expect(providerRecords.find((p) => p.id === 'codex-cli').enabled).toBe(false);
+
+    const codexOn = await setSubscriptionEnabled('codex', true);
+    expect(codexOn.changed).toEqual(['codex-cli']);
     expect(providerRecords.find((p) => p.id === 'codex-2').enabled).toBe(false);
   });
 

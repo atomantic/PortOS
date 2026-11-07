@@ -166,23 +166,23 @@ export async function setSubscriptionEnabled(family, enabled) {
       return { ...current, [FAMILY_TOGGLE_STATE]: { ...toggleState, [family]: record } };
     });
   } else {
-    // Read and clear the record in one serialized step, so a concurrent off cannot
-    // land between the read and the clear.
-    let disabledByToggle;
-    await updateSettingsWith((current) => {
-      const toggleState = { ...(current[FAMILY_TOGGLE_STATE] || {}) };
-      disabledByToggle = toggleState[family];
-      delete toggleState[family];
-      return { ...current, [FAMILY_TOGGLE_STATE]: toggleState };
-    });
+    // Snapshot the record, restore from it, then clear it only if it is still the
+    // same list. A failed restore leaves the record in place for a retry, and an
+    // off that landed meanwhile is not wiped out by this on.
+    const disabledByToggle = (await getSettings())?.[FAMILY_TOGGLE_STATE]?.[family];
     if (disabledByToggle) {
-      // Restore only providers that the toggle disabled.
       for (const provider of members) {
         if (disabledByToggle.includes(provider.id) && provider.enabled !== true) {
           await updateProvider(provider.id, { enabled: true });
           changed.push(provider.id);
         }
       }
+      await updateSettingsWith((current) => {
+        const toggleState = { ...(current[FAMILY_TOGGLE_STATE] || {}) };
+        if (JSON.stringify(toggleState[family]) !== JSON.stringify(disabledByToggle)) return current;
+        delete toggleState[family];
+        return { ...current, [FAMILY_TOGGLE_STATE]: toggleState };
+      });
     } else {
       // No toggle state: enable all currently-disabled providers (original behavior).
       for (const provider of members) {
