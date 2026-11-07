@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
@@ -385,5 +385,53 @@ describe('AiAssignmentsTab assignment management', () => {
       { providerId: 'lmstudio', model: 'qwen2.5-vl' },
       { silent: true },
     ));
+  });
+});
+
+describe('AiAssignmentsTab responsive layout', () => {
+  const stubViewport = (wide) => vi.stubGlobal('matchMedia', vi.fn(() => ({
+    matches: wide,
+    addEventListener: vi.fn(),
+    removeEventListener: vi.fn(),
+  })));
+  afterEach(() => vi.unstubAllGlobals());
+
+  const row = entry({
+    id: 'settings.creativeDirector.plan',
+    providerId: 'ollama',
+    model: 'gemma2:9b',
+    link: '/creative-director',
+  });
+
+  it('below lg renders stacked cards with no table, and a card save persists like the table', async () => {
+    // Regression: the 1213px table forced ~3.5 screens of sideways scroll with
+    // the assignment name off-screen from its selects.
+    stubViewport(false);
+    getAiAssignments.mockResolvedValue(payload([row]));
+    updateAiAssignment.mockResolvedValue(payload([{ ...row, providerId: 'openai', model: 'gpt-4o' }]));
+    renderTab();
+
+    const provider = await screen.findByLabelText('Provider for Production planning model');
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
+    expect(screen.getAllByLabelText('Model for Production planning model')).toHaveLength(1);
+    expect(screen.getByRole('link', { name: 'Open' }).className).toMatch(/min-h-\[44px\]/);
+
+    await userEvent.selectOptions(provider, 'openai');
+    await userEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+    await waitFor(() => expect(updateAiAssignment).toHaveBeenCalledWith(
+      'settings.creativeDirector.plan',
+      { providerId: 'openai', model: 'gpt-4o', effort: null },
+      { silent: true },
+    ));
+  });
+
+  it('at lg and up keeps the table with one set of labelled controls', async () => {
+    stubViewport(true);
+    getAiAssignments.mockResolvedValue(payload([row]));
+    renderTab();
+
+    await screen.findByLabelText('Provider for Production planning model');
+    expect(screen.getByRole('table')).toBeInTheDocument();
+    expect(screen.getAllByLabelText('Model for Production planning model')).toHaveLength(1);
   });
 });

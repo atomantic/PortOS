@@ -8,6 +8,7 @@ import EffortSelect from '../cos/EffortSelect.jsx';
 import ToolUseWarning from '../ui/ToolUseWarning.jsx';
 import TabPills from '../ui/TabPills.jsx';
 import { getAiAssignments, updateAiAssignment } from '../../services/api';
+import useMediaQuery from '../../hooks/useMediaQuery.js';
 import useVisionModelIds from '../../hooks/useVisionModelIds.js';
 import useToolUseModelIds from '../../hooks/useToolUseModelIds.js';
 import {
@@ -59,6 +60,7 @@ export default function AiAssignmentsTab() {
   const [saving, setSaving] = useState({});
   const [data, setData] = useState({ providers: [], assignments: [] });
   const [drafts, setDrafts] = useState({});
+  const isLg = useMediaQuery('(min-width: 1024px)');
   const [query, setQuery] = useState('');
   const [area, setArea] = useState('all');
   const [assignmentType, setAssignmentType] = useState('all');
@@ -248,6 +250,137 @@ export default function AiAssignmentsTab() {
     return <div className="text-sm text-gray-400">Loading AI assignments...</div>;
   }
 
+  // Both layouts render from these parts so draft state, handlers and ids
+  // never diverge; `isLg` picks exactly one tree, keeping label ids unique.
+  const rowParts = (entry) => {
+    const draft = drafts[entry.id] || getDraft(entry);
+    const selectedProvider = data.providers.find((p) => p.id === (draft.providerId || data.activeProvider));
+    const providerOptions = assignmentProviderOptions(entry, data.providers);
+    const modelOptions = assignmentModelOptions(entry, data.providers, draft.providerId, visionIdsByProvider);
+    const dirty = !sameDraft(entry, draft);
+    // Agent rows: mark each model option and warn when the EFFECTIVE
+    // model isn't a recognized tool-caller. Same server flag, same
+    // helper, same copy as the Creative Director drawer — which links
+    // here, so the pin it warns about must not be silently editable.
+    const { annotate: annotateToolUse, effectiveModel, incapable: toolIncapable } =
+      assignmentToolUseState(entry, selectedProvider, draft.model, toolUseIdsByProvider, toolUseLoaded);
+    // Choosing a provider seeds its default model; for a vision row
+    // that seed is only correct once the capability scan has settled.
+    // Picking during it leaves a blank model pin, which the evaluator
+    // resolves to the provider's own (possibly text-only) default.
+    const visionUnknown = entry.modelFilter === 'vision' && !visionLoaded;
+    const provider = (
+      <>
+        {entry.providerEditable === false ? (
+          <div className="text-sm text-gray-300 py-2">{providerName(data.providers, draft.providerId)}</div>
+        ) : (
+          // Provider-only: this row's model cell is a select OR a
+          // free-text pin depending on what the entry's filter left
+          // to offer, and its effort lives in a third cell.
+          <ProviderModelSelector
+            compact
+            label={`Provider for ${entry.label}`}
+            providers={providerOptions}
+            selectedProviderId={draft.providerId}
+            disabled={visionUnknown}
+            onProviderChange={(nextProviderId) => {
+              // Vision-filtered rows (e.g. Scene evaluation) seed the
+              // first eligible VLM when the provider default is text-only.
+              const nextDefault = assignmentDefaultModel(entry, data.providers, nextProviderId, visionIdsByProvider);
+              setDraft(entry.id, { providerId: nextProviderId, model: entry.modelEditable === false ? draft.model : nextDefault, effort: '' });
+            }}
+            emptyProviderOption="Default / unset"
+            // A composed route is not in `providerOptions`, so the
+            // seeding above resolves to a blank model and the row runs
+            // the service's own default. On a vision row that default
+            // may be text-only, so composing is offered only where a
+            // blank model pin is safe.
+            compose={entry.modelFilter !== 'vision' && entry.modelEditable !== false}
+            composeMethods={entry.providerTypes}
+          />
+        )}
+      </>
+    );
+    const model = (
+      <>
+        {entry.modelEditable === false ? (
+          <div className="text-sm text-gray-300 py-2">{draft.model || 'Default'}</div>
+        ) : modelOptions.length > 0 ? (
+          <FormField label={`Model for ${entry.label}`} labelClassName="sr-only">
+            <select
+              value={draft.model}
+              onChange={(e) => setDraft(entry.id, {
+                model: e.target.value,
+                effort: effortSurvivingModel(selectedProvider, e.target.value, draft.effort),
+              })}
+              aria-label={`Model for ${entry.label}`}
+              className="w-full bg-port-card border border-port-border rounded px-2 py-2 text-sm text-white"
+            >
+              <option value="">Default / auto</option>
+              {modelOptions.map((m) => (
+                <option key={m} value={m}>
+                  {annotateToolUse
+                    ? withToolUseOptionLabel(m, m, selectedProvider, toolUseIdsByProvider)
+                    : m}
+                </option>
+              ))}
+            </select>
+          </FormField>
+        ) : (
+          <FormField label={`Model for ${entry.label}`} labelClassName="sr-only">
+            <input
+              value={draft.model}
+              onChange={(e) => setDraft(entry.id, { model: e.target.value })}
+              placeholder="Default / auto"
+              aria-label={`Model for ${entry.label}`}
+              className="w-full bg-port-card border border-port-border rounded px-2 py-2 text-sm text-white placeholder-gray-600"
+            />
+          </FormField>
+        )}
+        {toolIncapable && (
+          <ToolUseWarning model={effectiveModel} isProviderDefault={!draft.model} className="mt-1.5">
+            <Link to="/models/llms" className="underline hover:text-port-warning/80">Browse models</Link>.
+          </ToolUseWarning>
+        )}
+      </>
+    );
+    const effort = (
+      <>
+        {entry.effortEditable && effortOptionsFor(selectedProvider, draft.model || selectedProvider?.defaultModel).length > 0 ? (
+          <EffortSelect
+            provider={selectedProvider}
+            model={draft.model || selectedProvider?.defaultModel}
+            value={draft.effort}
+            onChange={(effort) => setDraft(entry.id, { effort })}
+            label={`Effort for ${entry.label}`}
+            labelClassName="sr-only"
+            className="w-full bg-port-card border border-port-border rounded px-2 py-2 text-sm text-white"
+          />
+        ) : (
+          <span className="text-sm text-gray-600">—</span>
+        )}
+      </>
+    );
+    const action = (
+      <>
+        {entry.editable === false ? (
+          <span className="text-xs text-gray-600">Read only</span>
+        ) : (
+          <button
+            type="button"
+            onClick={() => saveEntry(entry)}
+            disabled={!dirty || saving[entry.id]}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 text-white rounded text-xs"
+          >
+            <Save size={12} />
+            {saving[entry.id] ? 'Saving' : 'Save'}
+          </button>
+        )}
+      </>
+    );
+    return { provider, model, effort, action };
+  };
+
   return (
     <div className="min-w-0 space-y-5">
       <div className="flex min-w-0 flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
@@ -387,6 +520,7 @@ export default function AiAssignmentsTab() {
         </button>
       </div>
 
+      {isLg ? (
       <div className="overflow-x-auto border border-port-border rounded-lg">
         <table className="min-w-full divide-y divide-port-border">
           <thead className="bg-port-card">
@@ -402,139 +536,27 @@ export default function AiAssignmentsTab() {
           </thead>
           <tbody className="divide-y divide-port-border bg-port-bg">
             {filtered.map((entry) => {
-              const draft = drafts[entry.id] || getDraft(entry);
-              const selectedProvider = data.providers.find((p) => p.id === (draft.providerId || data.activeProvider));
-              const providerOptions = assignmentProviderOptions(entry, data.providers);
-              const modelOptions = assignmentModelOptions(entry, data.providers, draft.providerId, visionIdsByProvider);
-              const dirty = !sameDraft(entry, draft);
-              // Agent rows: mark each model option and warn when the EFFECTIVE
-              // model isn't a recognized tool-caller. Same server flag, same
-              // helper, same copy as the Creative Director drawer — which links
-              // here, so the pin it warns about must not be silently editable.
-              const { annotate: annotateToolUse, effectiveModel, incapable: toolIncapable } =
-                assignmentToolUseState(entry, selectedProvider, draft.model, toolUseIdsByProvider, toolUseLoaded);
-              // Choosing a provider seeds its default model; for a vision row
-              // that seed is only correct once the capability scan has settled.
-              // Picking during it leaves a blank model pin, which the evaluator
-              // resolves to the provider's own (possibly text-only) default.
-              const visionUnknown = entry.modelFilter === 'vision' && !visionLoaded;
+              const { provider, model, effort, action } = rowParts(entry);
               return (
                 <tr key={entry.id} className="align-top">
                   <td className="px-3 py-3 text-sm text-gray-300 whitespace-nowrap">
-                    <div>{entry.area}</div>
-                    <div className="mt-1 text-xs text-gray-600">{entry.assignmentType}</div>
+                      <div>{entry.area}</div>
+                      <div className="mt-1 text-xs text-gray-600">{entry.assignmentType}</div>
                   </td>
                   <td className="px-3 py-3">
-                    <div className="text-sm text-white">{entry.label}</div>
-                    {entry.notes && <div className="mt-1 text-xs text-gray-500">{entry.notes}</div>}
+                      <div className="text-sm text-white">{entry.label}</div>
+                      {entry.notes && <div className="mt-1 text-xs text-gray-500">{entry.notes}</div>}
                   </td>
-                  <td className="px-3 py-3">
-                    {entry.providerEditable === false ? (
-                      <div className="text-sm text-gray-300 py-2">{providerName(data.providers, draft.providerId)}</div>
-                    ) : (
-                      // Provider-only: this row's model cell is a select OR a
-                      // free-text pin depending on what the entry's filter left
-                      // to offer, and its effort lives in a third cell.
-                      <ProviderModelSelector
-                        compact
-                        label={`Provider for ${entry.label}`}
-                        providers={providerOptions}
-                        selectedProviderId={draft.providerId}
-                        disabled={visionUnknown}
-                        onProviderChange={(nextProviderId) => {
-                          // Vision-filtered rows (e.g. Scene evaluation) seed the
-                          // first eligible VLM when the provider default is text-only.
-                          const nextDefault = assignmentDefaultModel(entry, data.providers, nextProviderId, visionIdsByProvider);
-                          setDraft(entry.id, { providerId: nextProviderId, model: entry.modelEditable === false ? draft.model : nextDefault, effort: '' });
-                        }}
-                        emptyProviderOption="Default / unset"
-                        // A composed route is not in `providerOptions`, so the
-                        // seeding above resolves to a blank model and the row runs
-                        // the service's own default. On a vision row that default
-                        // may be text-only, so composing is offered only where a
-                        // blank model pin is safe.
-                        compose={entry.modelFilter !== 'vision' && entry.modelEditable !== false}
-                        composeMethods={entry.providerTypes}
-                      />
-                    )}
-                  </td>
-                  <td className="px-3 py-3">
-                    {entry.modelEditable === false ? (
-                      <div className="text-sm text-gray-300 py-2">{draft.model || 'Default'}</div>
-                    ) : modelOptions.length > 0 ? (
-                      <FormField label={`Model for ${entry.label}`} labelClassName="sr-only">
-                        <select
-                          value={draft.model}
-                          onChange={(e) => setDraft(entry.id, {
-                            model: e.target.value,
-                            effort: effortSurvivingModel(selectedProvider, e.target.value, draft.effort),
-                          })}
-                          aria-label={`Model for ${entry.label}`}
-                          className="w-full bg-port-card border border-port-border rounded px-2 py-2 text-sm text-white"
-                        >
-                          <option value="">Default / auto</option>
-                          {modelOptions.map((m) => (
-                            <option key={m} value={m}>
-                              {annotateToolUse
-                                ? withToolUseOptionLabel(m, m, selectedProvider, toolUseIdsByProvider)
-                                : m}
-                            </option>
-                          ))}
-                        </select>
-                      </FormField>
-                    ) : (
-                      <FormField label={`Model for ${entry.label}`} labelClassName="sr-only">
-                        <input
-                          value={draft.model}
-                          onChange={(e) => setDraft(entry.id, { model: e.target.value })}
-                          placeholder="Default / auto"
-                          aria-label={`Model for ${entry.label}`}
-                          className="w-full bg-port-card border border-port-border rounded px-2 py-2 text-sm text-white placeholder-gray-600"
-                        />
-                      </FormField>
-                    )}
-                    {toolIncapable && (
-                      <ToolUseWarning model={effectiveModel} isProviderDefault={!draft.model} className="mt-1.5">
-                        <Link to="/models/llms" className="underline hover:text-port-warning/80">Browse models</Link>.
-                      </ToolUseWarning>
-                    )}
-                  </td>
-                  <td className="px-3 py-3">
-                    {entry.effortEditable && effortOptionsFor(selectedProvider, draft.model || selectedProvider?.defaultModel).length > 0 ? (
-                      <EffortSelect
-                        provider={selectedProvider}
-                        model={draft.model || selectedProvider?.defaultModel}
-                        value={draft.effort}
-                        onChange={(effort) => setDraft(entry.id, { effort })}
-                        label={`Effort for ${entry.label}`}
-                        labelClassName="sr-only"
-                        className="w-full bg-port-card border border-port-border rounded px-2 py-2 text-sm text-white"
-                      />
-                    ) : (
-                      <span className="text-sm text-gray-600">—</span>
-                    )}
-                  </td>
+                  <td className="px-3 py-3">{provider}</td>
+                  <td className="px-3 py-3">{model}</td>
+                  <td className="px-3 py-3">{effort}</td>
                   <td className="px-3 py-3 text-xs text-gray-500">
-                    <div className="break-all">{entry.source}</div>
-                    {entry.link && (
-                      <Link to={entry.link} className="inline-block mt-1 text-port-accent hover:underline">Open</Link>
-                    )}
+                      <div className="break-all">{entry.source}</div>
+                      {entry.link && (
+                        <Link to={entry.link} className="inline-block mt-1 text-port-accent hover:underline">Open</Link>
+                      )}
                   </td>
-                  <td className="px-3 py-3 text-right">
-                    {entry.editable === false ? (
-                      <span className="text-xs text-gray-600">Read only</span>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => saveEntry(entry)}
-                        disabled={!dirty || saving[entry.id]}
-                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 text-white rounded text-xs"
-                      >
-                        <Save size={12} />
-                        {saving[entry.id] ? 'Saving' : 'Save'}
-                      </button>
-                    )}
-                  </td>
+                  <td className="px-3 py-3 text-right">{action}</td>
                 </tr>
               );
             })}
@@ -546,6 +568,38 @@ export default function AiAssignmentsTab() {
           </tbody>
         </table>
       </div>
+      ) : (
+      <div className="space-y-3">
+        {filtered.map((entry) => {
+          const { provider, model, effort, action } = rowParts(entry);
+          const caption = 'mb-1 text-xs uppercase tracking-wide text-gray-500';
+          return (
+            <div key={entry.id} className="bg-port-card border border-port-border rounded-lg p-3 space-y-3">
+              <div className="min-w-0">
+                <div className="text-sm text-white">{entry.label}</div>
+                <div className="mt-0.5 text-xs text-gray-500">{entry.area} · {entry.assignmentType}</div>
+                {entry.notes && <div className="mt-1 text-xs text-gray-500">{entry.notes}</div>}
+              </div>
+              <div><div aria-hidden="true" className={caption}>Provider</div>{provider}</div>
+              <div><div aria-hidden="true" className={caption}>Model</div>{model}</div>
+              {entry.effortEditable && (
+                <div><div aria-hidden="true" className={caption}>Effort</div>{effort}</div>
+              )}
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0 text-xs text-gray-500 break-all">{entry.source}</div>
+                {entry.link && (
+                  <Link to={entry.link} className="inline-flex min-h-[44px] shrink-0 items-center px-2 text-sm text-port-accent hover:underline">Open</Link>
+                )}
+              </div>
+              <div className="flex justify-end">{action}</div>
+            </div>
+          );
+        })}
+        {filtered.length === 0 && (
+          <div className="border border-port-border rounded-lg px-3 py-8 text-center text-sm text-gray-500">No assignments match the current filters.</div>
+        )}
+      </div>
+      )}
     </div>
   );
 }
