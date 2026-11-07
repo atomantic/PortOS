@@ -62,11 +62,12 @@ function remainingTime(deadline) {
 
 // Pin the descriptor, bound the read to the original size plus one byte and
 // check it and its path again. Never open links, FIFOs or devices for inspection.
-async function inspectRegular(path, { collect = false, database = false, spoolTo, budget } = {}) {
+export async function inspectNativeUsageRegular(path, { collect = false, database = false, spoolTo, copyTo, budget } = {}) {
   const before = await lstat(path);
   if (!before.isFile() || (collect && before.size > MAX_JSON_BYTES)) refuse('snapshot-input-not-bounded-regular-file');
   if (before.size > budget.bytes) refuse('snapshot-byte-limit-exceeded');
   const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  let output;
   try {
     const info = await handle.stat();
     if (!info.isFile() || !unchanged(before, info)) refuse('snapshot-input-changed');
@@ -74,6 +75,7 @@ async function inspectRegular(path, { collect = false, database = false, spoolTo
     let result;
     if (database) result = await inspectDatabaseDump(path, { inputStream: stream, spoolTo, omitVersionDirectives: Boolean(spoolTo), rejectPsqlCommands: Boolean(spoolTo), requiredTables: NATIVE_USAGE_SNAPSHOT_TABLES });
     else {
+      if (copyTo) output = await open(copyTo, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
       const hash = createHash('sha256');
       const chunks = [];
       let sizeBytes = 0;
@@ -81,19 +83,23 @@ async function inspectRegular(path, { collect = false, database = false, spoolTo
         hash.update(chunk);
         sizeBytes += chunk.length;
         if (collect) chunks.push(chunk);
+        if (output) await output.writeFile(chunk);
       }
       result = { sha256: hash.digest('hex'), sizeBytes, ...(collect ? { bytes: Buffer.concat(chunks) } : {}) };
     }
     const current = await lstat(path);
     if (!current.isFile() || !unchanged(info, current) || !unchanged(info, await handle.stat()) || result.sizeBytes !== info.size) refuse('snapshot-input-changed');
     budget.bytes -= result.sizeBytes;
+    if (output) await output.sync();
     if (database) result.stat = info;
     return result;
   } catch (error) {
     if (error.code === 'ABORT_ERR') refuse('snapshot-time-limit-exceeded');
     throw error;
-  } finally { await handle.close(); }
+  } finally { try { await output?.close(); } finally { await handle.close(); } }
 }
+
+const inspectRegular = inspectNativeUsageRegular;
 
 async function noFailureMarkers(root) {
   for (const path of [join(root, '.in-progress'), join(root, '.failed'), join(dirname(root), `.${basename(root)}.in-progress`)]) {

@@ -18,6 +18,15 @@ const save = async (path, records) => {
 };
 
 describe('read-only native retained history', () => {
+  it('bounds detached replay identities before Map growth without changing the default scan', async () => {
+    await save('.claude/projects/project/session.jsonl', [claude('a'), claude('b'), claude('c')]);
+    const limited = await getNativeTranscriptCoverage('claude', { home, identityLimit: 1, includeRecords: true });
+    expect(limited).toMatchObject({ executionLimit: 'identity-limit', coverage: { capped: true, stoppedEarly: true, measuredRecords: 1 } });
+    expect(limited.recordProjection.records).toHaveLength(1);
+    expect(await getNativeTranscriptCoverage('claude', { home, includeRecords: true })).toMatchObject({
+      coverage: { capped: false, stoppedEarly: false, measuredRecords: 3 } });
+  });
+
   it('deduplicates Claude parent/copied/subagent emissions, excludes conflicts and never changes native files', async () => {
     const file = await save('.claude/projects/project/session.jsonl', [claude('a'), claude('conflict'), claude('missing'), '{invalid']);
     const missing = claude('missing'); delete missing.message.usage.output_tokens;
@@ -40,6 +49,16 @@ describe('read-only native retained history', () => {
     const result = await getNativeTranscriptCoverage('claude', { home });
     expect(result).toMatchObject({ summary: { tokensOut: 8 }, coverage: { measuredRecords: 1 } });
     expect(JSON.stringify(result)).not.toContain(home);
+  });
+
+  it('replays an explicit projects copy even when the environment points at another Claude source', async () => {
+    await save('configured/projects/project/session.jsonl', [claude('ambient', 99)]);
+    await save('copied-projects/project/session.jsonl', [claude('copied', 8)]);
+    vi.stubEnv('CLAUDE_CONFIG_DIR', join(home, 'configured'));
+    const result = await getNativeTranscriptCoverage('claude', { projectsRoot: join(home, 'copied-projects'), includeRecords: true });
+    expect(result).toMatchObject({ summary: { tokensOut: 8 }, coverage: { measuredRecords: 1 } });
+    const absent = await getNativeTranscriptCoverage('claude', { projectsRoot: join(home, 'missing-projects') });
+    expect(absent).toMatchObject({ summary: null, coverage: { missingSource: true, files: 0 } });
   });
 
   it('distinguishes absent, unreadable, capped and empty retained sources without exposing paths', async () => {

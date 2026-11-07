@@ -112,6 +112,11 @@ for every participant. Its read-only `snapshot-preflight` command also checks an
 explicit detached standard snapshot against the bound stores and mandatory SQL
 dump, while reporting present/absent inventory coverage. Neither establishes full
 source preservation, matched-runtime/database restore or green cutover preflight.
+The same rehearsal CLI can preserve explicitly supplied detached native roots and
+replay their retained-provider entries against one exact embedded report. This
+verifies only those supplied bytes and directory topology, not live inventory,
+deleted history or Codex account-history replay. Unknown required roles cannot
+produce a successful replay verdict. Global recovery and activation holds remain.
 
 Every artifact permanently reports `activation.ready: false`. There is no activate
 command, runtime registration, background task or boot migration in this increment.

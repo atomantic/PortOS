@@ -12,11 +12,12 @@ import {
 import { verifyNativeUsageStage } from '../server/lib/nativeUsageStaging.js';
 import { rehearseNativeUsageSql } from './lib/nativeUsageSqlRehearsal.js';
 import { verifyNativeUsageSnapshot } from './lib/nativeUsageSnapshot.js';
+import { backupNativeUsageSources, restoreNativeUsageSources } from './lib/nativeUsageSources.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 
 const MAX_ARTIFACT_BYTES = 100 * 1024 * 1024;
 const STORES = ['usageLedger', 'peerDigests'];
-const USAGE = 'Usage: native-usage-rehearse.js backup <stage.json> <request.json> <detached-snapshot-directory> <output-directory> | restore <stage.json> <backup.json> <rehearsal-parent> | preflight <stage.json> <backup.json> <restore-directory> [<backup.json> <restore-directory>...] | snapshot-preflight <stage.json> <backup.json> <detached-standard-snapshot> | sql-restore <stage.json> <backup.json> <detached-standard-snapshot>';
+const USAGE = 'Usage: native-usage-rehearse.js backup <stage.json> <request.json> <detached-snapshot-directory> <output-directory> | restore <stage.json> <backup.json> <rehearsal-parent> | preflight <stage.json> <backup.json> <restore-directory> [<backup.json> <restore-directory>...] | snapshot-preflight <stage.json> <backup.json> <detached-standard-snapshot> | sql-restore <stage.json> <backup.json> <detached-standard-snapshot> | sources-backup <stage.json> <request.json> <detached-source-directory> <new-backup-directory> | sources-restore <stage.json> <source-backup-directory> <new-restore-directory>';
 const same = (a, b) => nativeUsageCanonicalJson(a) === nativeUsageCanonicalJson(b);
 
 // A growing/replaced file is not a frozen snapshot. The read has a hard byte cap;
@@ -101,6 +102,18 @@ async function restore(stage, backup, parent) {
 
 export async function runNativeUsageRehearsalCli(argv, { stdout = text => process.stdout.write(text), stderr = text => process.stderr.write(text) } = {}) {
   const [command, ...args] = argv;
+  if (command === 'sources-backup' && args.length === 4) {
+    const stage = verifyNativeUsageStage(await readJson(args[0]));
+    const result = await backupNativeUsageSources(stage, await readJson(args[1], 1024 * 1024), args[2], args[3]);
+    stdout(nativeUsageCanonicalJson(result));
+    return 3;
+  }
+  if (command === 'sources-restore' && args.length === 3) {
+    const stage = verifyNativeUsageStage(await readJson(args[0]));
+    const result = await restoreNativeUsageSources(stage, args[1], args[2]);
+    stdout(nativeUsageCanonicalJson(result));
+    return result.retainedReplayVerified ? 3 : 1;
+  }
   if (command === 'backup' && args.length === 4) {
     const [stagePath, requestPath, source, output] = args;
     const stage = verifyNativeUsageStage(await readJson(stagePath));

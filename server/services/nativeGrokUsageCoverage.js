@@ -22,7 +22,7 @@ const validCounters = record => {
  * auth, updates.jsonl, model inference, billing conversion or legacy ledger reads.
  * Runtime version of historical records and deleted/custom-root history are unknown.
  */
-export async function getNativeGrokUsageCoverage({ home = homedir(), limits: overrides = {} } = {}) {
+export async function getNativeGrokUsageCoverage({ home, sessionsRoot, limits: overrides = {}, deadline = Infinity } = {}) {
   const limits = { ...LIMITS, ...overrides };
   // Bound in-memory observations too, including arbitrarily many copied files.
   limits.records = Math.min(limits.records, GROK_USAGE_RECORD_LIMIT + 1);
@@ -38,7 +38,7 @@ export async function getNativeGrokUsageCoverage({ home = homedir(), limits: ove
   let entries = 0;
   const stop = () => { coverage.capped = true; coverage.stoppedEarly = true; };
   const exhausted = () => {
-    if (Date.now() - started >= limits.milliseconds || bytes >= limits.bytes || entries >= limits.entries || coverage.records >= limits.records) stop();
+    if (Date.now() >= deadline || Date.now() - started >= limits.milliseconds || bytes >= limits.bytes || entries >= limits.entries || coverage.records >= limits.records) stop();
     return coverage.stoppedEarly;
   };
   const consume = text => {
@@ -119,7 +119,7 @@ export async function getNativeGrokUsageCoverage({ home = homedir(), limits: ove
     })().catch(() => { coverage.unreadableFiles++; });
     if (depth === 2 && !usageFound && !coverage.stoppedEarly) nativeUsageCoverage.sessionsWithoutUsage++;
   };
-  await walk(join(home, '.grok', 'sessions'));
+  await walk(sessionsRoot ?? join(home ?? homedir(), '.grok', 'sessions'));
   const union = unionNativeGrokRecords(projections);
   // Preserve excluded identities as tombstones so a clean peer copy cannot hide
   // a locally contradictory session. Deterministic, with no arbitrary winner.
