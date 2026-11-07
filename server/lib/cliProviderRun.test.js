@@ -164,7 +164,7 @@ describe('runCliProviderPrompt', () => {
     expect(argv).toContain('pinned-model');
   });
 
-  // #15260: a batched review is ~118 KiB of prompt through `--prompt-file /dev/stdin`. A real
+  // #15260: a batched review is ~118 KiB of prompt through `--prompt-file /dev/stdin`. The stand-in drains fd 0 instead of opening /dev/stdin, which Linux refuses (ENXIO) for a socket stdin. A real
   // grok-4.7 call on a 118 KiB and a 131 KiB filler prompt ending in a sentinel echoed the
   // sentinel back, so the transport does not truncate; this pins PortOS's side of that
   // delivery, so a `complete: true` coverage claim means the CLI received every byte.
@@ -174,7 +174,7 @@ describe('runCliProviderPrompt', () => {
     const { join } = await import('node:path');
     const dir = await mkdtemp(join(tmpdir(), 'grok-long-prompt-'));
     const command = join(dir, 'grok');
-    await writeFile(command, '#!/usr/bin/env node\nconst fs = require("node:fs");\nconst text = fs.readFileSync(process.argv[process.argv.indexOf("--prompt-file") + 1], "utf8");\nprocess.stdout.write(JSON.stringify({ bytes: Buffer.byteLength(text), tail: text.slice(-12) }));', { mode: 0o755 });
+    await writeFile(command, '#!/usr/bin/env node\nconst chunks = [];\nprocess.stdin.on("data", (chunk) => chunks.push(chunk));\nprocess.stdin.on("end", () => { const text = Buffer.concat(chunks).toString("utf8"); process.stdout.write(JSON.stringify({ bytes: Buffer.byteLength(text), tail: text.slice(-12) })); });', { mode: 0o755 });
     const prompt = `${'line of filler text for transport measurement\n'.repeat(3000)}END-SENTINEL`;
     const result = await runCliProviderPrompt({ provider: { ...cli('grok-cli'), command }, model: 'grok-4.7', prompt, cwd: dir })
       .finally(() => rm(dir, { recursive: true, force: true }));
