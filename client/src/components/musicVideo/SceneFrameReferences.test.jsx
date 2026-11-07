@@ -10,6 +10,18 @@ const project = { visualSpec: { references: [
 const scene = { sceneId: 's1' };
 
 describe('a shot\'s References row', () => {
+  it('offers Retry when failed catalog guides are the only possible references', () => {
+    const linked = { concept: { subjects: [{ id: 'kit', kind: 'character', name: 'Kit', ingredientId: 'cat-chr-kit' }] } };
+    const shot = { sceneId: 's1', characterVariant: { ingredientId: 'cat-chr-kit' } };
+    const onReload = vi.fn();
+    const { rerender } = render(<SceneFrameReferences project={linked} scene={shot} castMedia={{ 'cat-chr-kit': null }} onReloadCastMedia={onReload} onEditLocal={vi.fn()} onSave={vi.fn()} />);
+    expect(screen.getByText(/Cast guides could not be loaded/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(onReload).toHaveBeenCalledTimes(1);
+    rerender(<SceneFrameReferences project={linked} scene={shot} castMedia={{ 'cat-chr-kit': [] }} onReloadCastMedia={onReload} onEditLocal={vi.fn()} onSave={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+  });
+
   // Uniquely catches a failed cast-guide read showing nothing, so a frame render looks possible with no way to retry.
   it('warns with a Retry for a cast member whose guides failed to load, and leaves the row editable', () => {
     const linked = { ...project, concept: { subjects: [{ id: 'kit', kind: 'character', name: 'Kit', ingredientId: 'cat-chr-kit' }] } };
