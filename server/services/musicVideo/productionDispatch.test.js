@@ -83,7 +83,7 @@ describe('production scene dispatch (#9066)', () => {
     expect(params).toMatchObject({ mode: 'codex', musicVideo: tag, referenceImageStrengths: [1] });
     // Frames are requested at the project's aspect (16:9 by default), never left to the backend.
     expect(params).toMatchObject({ width: 1536, height: 864 });
-    expect(params.prompt).toMatch(/^a lighthouse, noir/);
+    expect(params.prompt).toMatch(/^a lighthouse. waves roll, noir/);
     expect(params.referenceImagePaths).toHaveLength(1);
     expect(params.referenceImagePaths[0]).toMatch(/ref-example\.png$/);
   });
@@ -259,7 +259,7 @@ describe('production scene dispatch (#9066)', () => {
     const clipTag = { ...tag, productionStepKey: 'clip:mvs-a:base:1' };
     await dispatchProductionStep({ stepKind: 'clip', project, scene, route: { kind: 'video', mode: 'grok', model: null }, tag: clipTag, settings });
     expect(submitVideoGenJob).toHaveBeenCalledWith(expect.objectContaining({
-      backend: 'grok', mode: 'image', sourceImageFile: 'frame-example.png', grokDuration: 6, musicVideo: { ...clipTag, compose: true }, prompt: 'waves roll',
+      backend: 'grok', mode: 'image', sourceImageFile: 'frame-example.png', grokDuration: 6, musicVideo: { ...clipTag, compose: true }, prompt: 'a lighthouse. waves roll',
     }), {});
   });
 

@@ -6,7 +6,7 @@ vi.mock('../../hooks/useFilmLookPresets.js', () => ({ default: () => ({ presets:
 vi.mock('../../hooks/useVideoFileSrc.js', () => ({ useVideoFileSrc: vi.fn(() => ({})) }));
 vi.mock('../../services/apiMusicVideo.js', async (importOriginal) => ({ ...(await importOriginal()), getMusicVideoMediaPool: vi.fn(async () => ({ items: [] })) }));
 vi.mock('../../services/apiImageVideo.js', async (importOriginal) => ({
-  ...(await importOriginal()), previewVideoPrompt: vi.fn(async () => ({ backend: 'grok', sentPrompt: 'Cast reference preview', promptAdditions: [] })),
+  ...(await importOriginal()), previewImagePrompt: vi.fn(async (body) => ({ sentPrompt: body.prompt, promptAdditions: [] })), previewVideoPrompt: vi.fn(async () => ({ backend: 'grok', sentPrompt: 'Cast reference preview', promptAdditions: [] })),
 }));
 vi.mock('../../services/api', async (importOriginal) => ({ ...(await importOriginal()), listTracks: vi.fn(async () => []) }));
 import SceneCard from './SceneCard.jsx';
@@ -272,9 +272,9 @@ describe('planned camera move (#10589)', () => {
     expect(screen.getByLabelText('Move').value).toBe('hold');
   });
 
-  it('puts a footage shot\'s camera beside its motion prompt and shows the text it adds', () => {
+  it('puts a footage shot\'s camera on its Clip tab and shows the text it adds', () => {
     render(<Harness initial={{ sceneId: 's1', visualLayer: 'footage', prompt: 'a hand turns the dial', startSec: 0, endSec: 5, takes: [] }} onSave={vi.fn()} />);
-    // With no still yet the editor opens on the Still; the camera sits with the clip's motion prompt.
+    // With no still yet the editor opens on the Still; the camera sits on the Clip tab.
     expect(screen.getByRole('button', { name: 'Still' }).getAttribute('aria-pressed')).toBe('true');
     show('Clip');
     const camera = screen.getByLabelText('Camera');
@@ -561,7 +561,7 @@ describe('motion prompt from the storyboard panel', () => {
         <SceneCard scene={shot} index={0} expanded project={{ id: 'mv-example', scenes: [shot] }} onEditLocal={() => {}} onSave={onSave} onGenerateVideo={onGenerateVideo} falVideoSettings={{ backend: 'local' }} />
     );
     const { rerender } = render(card(scene));
-    const box = screen.getAllByLabelText('Motion prompt').find((el) => el.value);
+    const box = screen.getAllByLabelText('Shot prompt').find((el) => el.value);
     expect(box.value).toBe('She laces her skates');
     expect(screen.getByTestId('prompt-from-storyboard')).toBeTruthy();
     // Blurring the panel's words keeps the shot linked rather than copying them.
@@ -572,6 +572,20 @@ describe('motion prompt from the storyboard panel', () => {
     rerender(card({ ...scene, prompt: 'She stands up' }));
     fireEvent.click(screen.getByRole('button', { name: 'Use storyboard direction' }));
     expect(onSave).toHaveBeenLastCalledWith('s1', { prompt: '' });
+  });
+});
+
+// Catches an older shot's separate still prompt being hidden from, or left diverging beside, the one shot prompt.
+describe('one shot prompt', () => {
+  it('shows an older shot\'s still prompt joined into the shot prompt and folds it in on save', () => {
+    const scene = { sceneId: 's1', visualLayer: 'still', prompt: 'She waves.', framePrompt: 'Porch at dusk', startSec: 0, endSec: 4, takes: [] };
+    const onSave = vi.fn();
+    render(<SceneCard scene={scene} index={0} expanded onEditLocal={() => {}} onSave={onSave} falVideoSettings={{ backend: 'local' }} />);
+    const box = screen.getByLabelText('Shot prompt');
+    expect(box.value).toBe('Porch at dusk. She waves.');
+    expect(screen.queryByLabelText(/Still prompt|Start frame prompt|Motion prompt/)).toBeNull();
+    fireEvent.blur(box);
+    expect(onSave).toHaveBeenLastCalledWith('s1', { prompt: 'Porch at dusk. She waves.', framePrompt: null });
   });
 });
 
@@ -605,7 +619,7 @@ describe('start and end frames', () => {
       onPlacePoolItem={() => {}} falVideoSettings={{ backend: 'local' }} />);
     show('Frames');
     const pair = screen.getByRole('group', { name: 'Start and end frames' });
-    expect(within(pair).getByLabelText('Start frame prompt')).toBeTruthy();
+    expect(within(pair).queryByLabelText('Start frame prompt')).toBeNull();
     expect(within(pair).getByLabelText('End frame prompt').value).toBe('Head thrown back');
     // Each frame swaps from the unused stills on its own, without tapping it first.
     fireEvent.click(within(pair).getByRole('button', { name: 'Swap end frame from unused' }));
