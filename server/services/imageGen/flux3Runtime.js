@@ -17,7 +17,7 @@ export const flux3Python = () => join(flux3Venv(), 'bin', 'python3');
 // whole locked set, not just the direct pins.
 export const FLUX3_LOCK_PATH = join(PATHS.root, 'scripts', 'requirements-flux3-mlx.lock.txt');
 let lockedPins = null;
-export function flux3LockedPins() {
+function flux3LockedPins() {
   lockedPins ??= readFileSync(FLUX3_LOCK_PATH, 'utf8').split('\n')
     .map(line => line.match(/^([A-Za-z0-9][A-Za-z0-9._-]*)==([^\s;\\]+)/)).filter(Boolean)
     .map(([, name, version]) => [name, version]);
