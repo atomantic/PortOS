@@ -139,7 +139,13 @@ async function land(projectId, keys = null) {
   }
 }
 
-/** Land every image as it is queued until the stage reaches `status`. */
+/**
+ * Land every image as it is queued until the stage reaches `status`.
+ * Event-driven like `until`, with the same small re-check fallback so a
+ * transition persisted between a read and the wait can never strand the helper,
+ * and a deadline that names what the stage was doing instead of leaving a bare
+ * test timeout (#15429).
+ */
 async function runTo(projectId, status) {
   let changes = 0;
   let wake;
@@ -151,17 +157,25 @@ async function runTo(projectId, status) {
   const cleanup = () => musicVideoEvents.off('cast-and-sets', changed);
   musicVideoEvents.on('cast-and-sets', changed);
   onTestFinished(cleanup);
+  const deadline = Date.now() + 25_000;
   try {
     // Subscribe before reading so a persisted transition between the read and
-    // the wait is retained. The test's existing timeout bounds a stuck stage.
+    // the wait is retained.
     for (;;) {
       const observed = changes;
       await land(projectId);
       const stage = (await current(projectId)).castAndSets;
       if (stage?.status === status) return;
       if (stage?.status === 'failed') throw new Error(stage.stopReason || stage.error || 'The stage failed');
+      if (Date.now() >= deadline) {
+        const queued = Object.entries(stage?.images || {}).filter(([, image]) => image.status !== 'done').map(([key, image]) => `${key}:${image.status}`);
+        throw new Error(`timed out waiting for the stage to reach ${status}: status=${stage?.status} revision=${stage?.revision} jobs=${jobs.length} unfinished=[${queued.join(', ')}]`);
+      }
       if (changes !== observed) continue;
-      await new Promise((resolve) => { wake = resolve; });
+      await Promise.race([
+        new Promise((resolve) => { wake = resolve; }),
+        new Promise((resolve) => setTimeout(resolve, 250)),
+      ]);
       wake = null;
     }
   } finally {
@@ -1284,7 +1298,9 @@ describe('Cast & Sets procedural check-in', () => {
     const invalid = await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`).send({ sets: [{ id: 'river', imageRole: 'wallpaper' }] });
     expect(invalid.status).toBe(400);
     expect(sheet()).toContain('Reusable code definitions');
-    // An approved sheet re-opens for the edit and comes back for review.
+    // An approved sheet re-opens for the edit and comes back for review. The
+    // first edit's background pass must be done before approving, or its tail can interleave with the approval.
+    await service.__settleCastAndSetsForTests();
     await service.approveCastAndSets(project.id);
     const approved = await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`).send({ world: { camera: 'x' } });
     expect(approved.status).toBe(202);
