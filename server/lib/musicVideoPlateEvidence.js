@@ -1,3 +1,4 @@
+import { activeMusicVideoSubjects } from './musicVideoCastSelection.js';
 import { RENDER_DEFECTS } from './imageRenderQuality.js';
 /** Asset-bound still-image admission for authored shots. Shared with the comparison UI. */
 import { extractJson } from './jsonExtract.js';
@@ -7,8 +8,41 @@ export function plateRequirementBasis(scene) {
   return canonicalStringify({ direction: scene.direction || null, framePrompt: scene.framePrompt || scene.prompt || '', startSec: scene.startSec, endSec: scene.endSec });
 }
 
+const sheetNames = (list) => (Array.isArray(list) ? list : [list]).map((name) => String(name || '').trim().toLowerCase()).filter(Boolean);
+
+/**
+ * Details a character must always show (a watch, a bracelet, a camera on a strap),
+ * taken from the video's subjects: required for each character the shot sheet names,
+ * and conditional for the point-of-view holder, whose hands may be all that shows.
+ */
+export function plateDetailRequirements(scene, subjects = []) {
+  const sheet = scene?.shotSheet || {};
+  const inShot = new Set(sheetNames(sheet.characters));
+  const holder = new Set(sheetNames(sheet.holder));
+  const lines = [];
+  for (const subject of activeMusicVideoSubjects({ subjects: Array.isArray(subjects) ? subjects : [] })) {
+    if (subject?.kind !== 'character' || !Array.isArray(subject.requiredDetails)) continue;
+    const name = String(subject.name || '').trim();
+    const key = name.toLowerCase();
+    const prefix = inShot.has(key) ? `${name} shows` : holder.has(key) ? `If ${name}'s hands or arms are visible, they show` : null;
+    if (!prefix) continue;
+    for (const detail of subject.requiredDetails) {
+      const text = String(detail || '').trim();
+      if (text) lines.push(`${prefix}: ${text}`);
+    }
+  }
+  return [...new Set(lines)].map((requirement, index) => ({ id: `detail-${index + 1}`, requirement }));
+}
+
+const isDetailCheck = (check) => typeof check?.id === 'string' && /^detail-\d+$/.test(check.id);
+
 /** Still evidence proves starting-state support, never completion of timed actions. */
-export function plateRequirements(scene) {
+export function plateRequirements(scene, subjects = []) {
+  const own = sceneRequirements(scene);
+  return [...own.slice(0, -1), ...plateDetailRequirements(scene, subjects), own[own.length - 1]];
+}
+
+function sceneRequirements(scene) {
   const direction = scene.direction || {};
   const contract = direction.actionContract;
   if (!contract) return [
@@ -32,13 +66,17 @@ export function plateRequirements(scene) {
 }
 
 /** A selection or shot edit cannot borrow evidence from a different image or intent. */
+// Character detail checks come from the video's subjects at review time, so the
+// shot alone cannot re-derive them; they count as long as each one is well formed.
 export function currentPlateEvidence(scene, take) {
   const evidence = take?.plateEvidence;
   if (!evidence || !take || evidence.assetId !== take.assetId || evidence.basis !== plateRequirementBasis(scene) || !Array.isArray(evidence.checks)) return null;
-  const requirements = plateRequirements(scene);
-  if (evidence.checks.length !== requirements.length || new Set(evidence.checks.map((check) => check?.id)).size !== requirements.length
-    || requirements.some(({ id, requirement }) => !evidence.checks.some((check) => check?.id === id && check.requirement === requirement
-      && ['pass', 'fail', 'unverified'].includes(check.status) && typeof check.note === 'string' && check.note.trim()))) return null;
+  const requirements = sceneRequirements(scene);
+  const wellFormed = (check) => ['pass', 'fail', 'unverified'].includes(check?.status) && typeof check.note === 'string' && check.note.trim();
+  const details = evidence.checks.filter(isDetailCheck);
+  if (evidence.checks.length !== requirements.length + details.length || new Set(evidence.checks.map((check) => check?.id)).size !== evidence.checks.length
+    || details.some((check) => !wellFormed(check) || typeof check.requirement !== 'string')
+    || requirements.some(({ id, requirement }) => !evidence.checks.some((check) => check?.id === id && check.requirement === requirement && wellFormed(check)))) return null;
   const verdict = evidence.checks.some((check) => check.status === 'unverified') ? 'unverified'
     : evidence.checks.some((check) => check.status === 'fail') ? 'fail' : 'pass';
   return evidence.verdict === verdict ? evidence : null;
@@ -79,9 +117,8 @@ export function plateStripFindings(strip, text) {
 export function selectedPlatePasses(scene, runId) {
   const take = scene.takes?.find((entry) => entry.kind === 'image' && entry.assetId === scene.referenceImageId && entry.status !== 'rejected');
   const evidence = currentPlateEvidence(scene, take);
-  const requirements = plateRequirements(scene);
-  return evidence?.runId === runId && !plateAdjacencyFailed(evidence, runId) && requirements.every(({ id }) => evidence.checks?.some((check) => check.id === id
-    && (check.status === 'pass' || (id === 'render-quality' && renderQualityAcknowledged(scene, take)))));
+  return evidence?.runId === runId && !plateAdjacencyFailed(evidence, runId) && evidence.checks.every((check) => check.status === 'pass'
+    || (check.id === 'render-quality' && renderQualityAcknowledged(scene, take)));
 }
 
 /** Explicit acknowledgement is bound to one image, exact shot intent and visible defect. */
@@ -93,8 +130,8 @@ export function renderQualityAcknowledged(scene, take) {
 }
 
 /** Invalid, absent or incomplete responses fail closed with concrete unverified checks. */
-export function plateReviewEvidence(scene, assetId, runId, text, used = {}) {
-  const requirements = plateRequirements(scene);
+export function plateReviewEvidence(scene, assetId, runId, text, used = {}, subjects = []) {
+  const requirements = plateRequirements(scene, subjects);
   const { value } = extractJson(String(text || ''), { shapePredicate: (candidate) => candidate && Array.isArray(candidate.checks) });
   const checks = requirements.map(({ id, requirement }) => {
     const matches = Array.isArray(value?.checks) ? value.checks.filter((check) => check?.id === id) : [];

@@ -163,6 +163,9 @@ export const musicVideoConceptSchema = z.object({
     // Kept in this video only: saved to the catalog only when explicitly asked.
     localOnly: z.boolean().optional(),
     active: z.boolean().optional(),
+    // What every frame of this character must show (a watch, a bracelet, a camera
+    // on a strap); the frame check adds one requirement per line.
+    requiredDetails: z.array(z.string().trim().min(1).max(200)).max(8).optional(),
   }).strict()).max(24).optional(),
 }).strict();
 
