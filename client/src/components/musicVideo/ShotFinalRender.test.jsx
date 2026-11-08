@@ -203,7 +203,7 @@ describe('ShotFinalRender', () => {
     expect(screen.queryByRole('button', { name: /Stop/ })).toBeNull();
   });
 
-  it('a late { ok: false } for a stopped render leaves a newer render of the same shot in place', async () => {
+  it('a late { ok: false } for a stopped render leaves a newer render of the same shot in place, even when an earlier read lands after it', async () => {
     getMusicVideoShotRenders.mockResolvedValue({ available: true, shots: [{ ...shot('a', 'stale'), rendering: true }], ready: 0, total: 1 });
     render(<ShotFinalRender project={project} scene={project.scenes[0]} onChange={() => {}} fieldId={fieldId} />);
     await screen.findByRole('button', { name: /Stop/ });
@@ -216,14 +216,21 @@ describe('ShotFinalRender', () => {
     fireEvent.click(screen.getByRole('button', { name: /Stop/ }));
 
     // The first render finishes, and a second render of the same shot starts before the cancel answers.
-    getMusicVideoShotRenders.mockResolvedValueOnce({ available: true, shots: [shot('a', 'rendered', ['a.mp4'])], ready: 1, total: 1 });
-    await act(async () => onEvent({ projectId: 'mv-1', sceneId: 'a', state: 'rendered', progress: 1 }));
+    // The first render's settle re-read is still in flight when the replacement starts. It answers "not rendering",
+    // as a read taken before the replacement began would.
+    let resolveSettleRead;
+    getMusicVideoShotRenders.mockReturnValueOnce(new Promise((resolve) => { resolveSettleRead = resolve; }));
+    act(() => onEvent({ projectId: 'mv-1', sceneId: 'a', state: 'rendered', progress: 1 }));
     act(() => onEvent({ projectId: 'mv-1', sceneId: 'a', state: 'rendering', progress: 0.1 }));
     expect(screen.getByTestId('shot-render-state').textContent).toBe('Rendering 10%');
 
+    // The Stop answer names the first render, so the replacement row does not match it: nothing is cleared or re-read.
     const readsBeforeCancel = getMusicVideoShotRenders.mock.calls.length;
     await act(async () => resolveCancel({ ok: false }));
-    await waitFor(() => expect(getMusicVideoShotRenders.mock.calls.length).toBeGreaterThan(readsBeforeCancel));
+    expect(getMusicVideoShotRenders.mock.calls.length).toBe(readsBeforeCancel);
+    expect(screen.getByTestId('shot-render-state').textContent).toBe('Rendering 10%');
+
+    await act(async () => resolveSettleRead({ available: true, shots: [shot('a', 'stale')], ready: 0, total: 1 }));
     expect(screen.getByTestId('shot-render-state').textContent).toBe('Rendering 10%');
     expect(screen.getByRole('button', { name: /Stop/ })).toBeTruthy();
   });

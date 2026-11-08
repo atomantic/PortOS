@@ -279,4 +279,61 @@ describe('useMusicVideoShotRenders', () => {
       vi.useRealTimers();
     }
   });
+
+  it.each([
+    ['a lower-progress replacement', 0.1],
+    ['a higher-progress replacement', 0.7],
+  ])('a replacement attempt with %s that starts while the reconnect read is pending keeps its progress', async (_, progress) => {
+    vi.useFakeTimers();
+    try {
+      getMusicVideoShotRenders.mockResolvedValue({ available: true, ready: 0, total: 1, shots: [{ sceneId: 's1', state: 'stale', rendering: false }] });
+      const { result } = renderHook(() => useMusicVideoShotRenders(project));
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+
+      // The first attempt (startedAt 1000) is still "rendering" on the client; its socket dropped and the server restarted.
+      act(() => {
+        handlers.get('music-video:shot-render')({ projectId: 'mv-test', sceneId: 's1', state: 'rendering', progress: 0.5, startedAt: 1000 });
+      });
+
+      let resolveRead;
+      getMusicVideoShotRenders.mockReturnValueOnce(new Promise((resolve) => { resolveRead = resolve; }));
+      act(() => { handlers.get('connect')(); });
+
+      // A new attempt (startedAt 2000) starts while the read is pending; the read predates it.
+      act(() => {
+        handlers.get('music-video:shot-render')({ projectId: 'mv-test', sceneId: 's1', state: 'rendering', progress, startedAt: 2000 });
+      });
+      await act(async () => { resolveRead({ available: true, ready: 0, total: 1, shots: [{ sceneId: 's1', state: 'stale', rendering: false }] }); });
+      expect(result.current.live.s1).toMatchObject({ state: 'rendering', progress, startedAt: 2000 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps an optimistic Render click that the reconnect read predates, until a socket event confirms its scene', async () => {
+    vi.useFakeTimers();
+    try {
+      getMusicVideoShotRenders.mockResolvedValue({ available: true, ready: 0, total: 1, shots: [{ sceneId: 's1', state: 'stale', rendering: false }] });
+      const { result } = renderHook(() => useMusicVideoShotRenders(project));
+      await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+
+      act(() => { result.current.markLive('s1', { state: 'rendering', progress: 0 }); });
+      let resolveRead;
+      getMusicVideoShotRenders.mockReturnValueOnce(new Promise((resolve) => { resolveRead = resolve; }));
+      act(() => { handlers.get('connect')(); });
+      await act(async () => { resolveRead({ available: true, ready: 0, total: 1, shots: [{ sceneId: 's1', state: 'stale', rendering: false }] }); });
+      // The server may not have registered the job yet, so the unconfirmed row survives the read.
+      expect(result.current.live.s1).toMatchObject({ state: 'rendering', optimistic: true });
+
+      act(() => {
+        handlers.get('music-video:shot-render')({ projectId: 'mv-test', sceneId: 's1', state: 'rendering', progress: 0, startedAt: 3000 });
+      });
+      expect(result.current.live.s1.optimistic).toBeUndefined();
+      getMusicVideoShotRenders.mockResolvedValueOnce({ available: true, ready: 0, total: 1, shots: [{ sceneId: 's1', state: 'stale', rendering: false }] });
+      await act(async () => { handlers.get('connect')(); });
+      expect(result.current.live.s1).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

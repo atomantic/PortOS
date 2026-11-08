@@ -5,10 +5,17 @@ import { getMusicVideoShotRenders } from '../services/apiMusicVideo.js';
 // The project fields that can change which cached shot segments are current.
 const renderInputs = (project) => JSON.stringify([project?.scenes, project?.filmLook, project?.composition, project?.statsOutro, project?.creditsOutro, project?.trackId, project?.lyricCues, project?.renderHistoryId]);
 
-// Entering 'rendering' stamps the entry with its clock tick; progress events of the same render keep that tick.
+// Entering 'rendering' stamps the entry with its clock tick. Progress of the same attempt keeps that tick: an event
+// carries the server's startedAt, which names the attempt; without one (older servers, optimistic starts) the tick
+// is kept only while progress moves forward, so a replacement render that starts over is stamped anew.
 const withRenderStart = (prev, sceneId, entry, stamp) => {
   if (entry?.state !== 'rendering') return entry;
-  return { ...entry, since: prev[sceneId]?.state === 'rendering' ? prev[sceneId].since : stamp };
+  const before = prev[sceneId];
+  if (before?.state !== 'rendering') return { ...entry, since: stamp };
+  const sameAttempt = entry.startedAt !== undefined
+    ? before.startedAt === entry.startedAt
+    : (entry.progress ?? 0) >= (before.progress ?? 0);
+  return { ...entry, since: sameAttempt ? before.since : stamp };
 };
 
 /**
@@ -16,7 +23,7 @@ const withRenderStart = (prev, sceneId, entry, stamp) => {
  * read when the project's render inputs change (debounced, as edits land) and
  * when a shot render settles, plus each shot's live render from the
  * `music-video:shot-render` events. Returns `{ status, live, markLive, clearLive, refresh, retry }`,
- * `live` keyed by sceneId (`{ state, progress, error, since }`). Off (null) for other render styles.
+ * `live` keyed by sceneId (`{ state, progress, error, since, startedAt?, optimistic? }`). Off (null) for other render styles.
  */
 export default function useMusicVideoShotRenders(project) {
   const projectId = project?.id;
@@ -27,15 +34,18 @@ export default function useMusicVideoShotRenders(project) {
   const generation = useRef(0);
   // Logical clock for live entries and read issue times: ticks are unique, so "entered before this read" is strict.
   const clock = useRef(0);
+  const liveRef = useRef(live);
+  liveRef.current = live;
 
   // Drops 'rendering' entries the server does not list, when they entered before the read was issued.
-  // Entries stamped later are a newer render the read cannot have seen.
+  // Entries stamped later are a newer render the read cannot have seen. An optimistic entry (from a Render click)
+  // is not dropped until a socket 'rendering' event confirms its scene, since the server may not have it yet.
   const dropStaleRendering = (fresh, issuedAt) => {
     const serverRendering = new Set((fresh.shots || []).filter((shot) => shot.rendering).map((shot) => shot.sceneId));
     setLive((prev) => {
       let next = null;
       for (const [sceneId, entry] of Object.entries(prev)) {
-        if (entry.state !== 'rendering' || entry.since > issuedAt || serverRendering.has(sceneId)) continue;
+        if (entry.state !== 'rendering' || entry.optimistic || entry.since > issuedAt || serverRendering.has(sceneId)) continue;
         next ??= { ...prev };
         delete next[sceneId];
       }
@@ -114,19 +124,24 @@ export default function useMusicVideoShotRenders(project) {
     const stamp = ++clock.current;
     setLive((prev) => {
       const next = { ...prev };
-      if (entry) next[sceneId] = withRenderStart(prev, sceneId, entry, stamp);
+      if (entry) next[sceneId] = withRenderStart(prev, sceneId, { ...entry, optimistic: true }, stamp);
       else delete next[sceneId];
       return next;
     });
   };
 
   // Clears only the entry still carrying this render-start marker, so a late response can't wipe a newer render.
-  const clearLive = (sceneId, since) => setLive((prev) => {
-    if (since === undefined || prev[sceneId]?.since !== since) return prev;
-    const next = { ...prev };
-    delete next[sceneId];
-    return next;
-  });
+  // Returns whether it cleared that entry.
+  const clearLive = (sceneId, since) => {
+    if (since === undefined || liveRef.current[sceneId]?.since !== since) return false;
+    setLive((prev) => {
+      if (prev[sceneId]?.since !== since) return prev;
+      const next = { ...prev };
+      delete next[sceneId];
+      return next;
+    });
+    return true;
+  };
 
   return {
     status,

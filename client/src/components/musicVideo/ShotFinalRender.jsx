@@ -53,11 +53,17 @@ export default function ShotFinalRender({ project, scene, onChange, fieldId }) {
               type="button"
               className={BUTTON}
               // { ok: false } means the server has no running job for this shot: settle the card from its status.
-              // The clear is scoped to the render this click targeted, so a late response can't wipe a newer render.
+              // The clear is scoped to the render this click targeted, so a late response can't wipe a newer render;
+              // when the row was replaced meanwhile, the newer render is left as it is and no re-read is needed.
               onClick={() => {
                 const since = live?.since;
                 cancelMusicVideoShotRender(projectId, sceneId)
-                  .then((result) => { if (result?.ok === false) { clearLive(sceneId, since); retry?.(); } })
+                  .then((result) => {
+                    if (result?.ok !== false) return;
+                    // No row at click time: the card was showing the server's own rendering flag, so re-read it.
+                    const settled = since === undefined || clearLive(sceneId, since);
+                    if (settled) retry?.();
+                  })
                   .catch(() => {});
               }}
             >

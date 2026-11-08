@@ -647,8 +647,8 @@ export async function getShotRenderStatus(projectId, options) {
   });
   if (plan.error) return { available: true, error: plan.error, shots: [], outro: null, ready: 0, total: 0 };
   const status = segmentStatus(plan);
-  const running = new Set([...shotJobs.keys()].filter((key) => key.startsWith(`${projectId}:`)).map((key) => key.slice(projectId.length + 1)));
-  return { available: true, ...status, shots: status.shots.map((shot) => (running.has(shot.sceneId) ? { ...shot, rendering: true } : shot)) };
+  const running = new Map([...shotJobs.entries()].filter(([key]) => key.startsWith(`${projectId}:`)).map(([key, job]) => [key.slice(projectId.length + 1), job.startedAt]));
+  return { available: true, ...status, shots: status.shots.map((shot) => (running.has(shot.sceneId) ? { ...shot, rendering: true, startedAt: running.get(shot.sceneId) } : shot)) };
 }
 
 /**
@@ -676,7 +676,9 @@ export async function startShotRender(projectId, sceneId) {
       if (shotJobs.has(key)) return { sceneId, state: 'rendering' };
       assertRenderCleanupIdle(projectId);
       const controller = new AbortController();
-      shotJobs.set(key, { controller });
+      // startedAt identifies this attempt: a client can tell a replacement render from a progress tick of the same one.
+      const startedAt = Date.now();
+      shotJobs.set(key, { controller, startedAt });
       handedOff = true;
       const total = segments.reduce((sum, s) => sum + s.frames, 0) || 1;
       let reported = -1;
@@ -684,10 +686,10 @@ export async function startShotRender(projectId, sceneId) {
         const pct = Math.floor(fraction * 20) * 5;
         if (pct === reported) return;
         reported = pct;
-        emitShotRender({ projectId, sceneId, state: 'rendering', progress: pct / 100 });
+        emitShotRender({ projectId, sceneId, state: 'rendering', progress: pct / 100, startedAt });
       };
       report(0);
-      const started = Date.now();
+      const started = startedAt;
       let rendered = false;
       Promise.resolve().then(async () => {
         let before = 0;

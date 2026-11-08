@@ -490,4 +490,31 @@ describe('renderSegment after a cancel', () => {
     await expect(retry).resolves.toBe(segment.path);
     expect(segmentRendering(segment)).toBe(false);
   });
+
+  it('stamps every rendering event of one attempt with the same startedAt', async () => {
+    const id = 'mv-attempt-started-at';
+    fixture.project = project({ id });
+    const rendering = [];
+    let settle;
+    const settled = new Promise((resolve) => { settle = resolve; });
+    const onShot = (event) => {
+      if (event.projectId !== id) return;
+      if (event.state === 'rendering') rendering.push(event);
+      else settle(event.state);
+    };
+    musicVideoEvents.on('shot-render', onShot);
+    try {
+      const before = Date.now();
+      await startShotRender(id, 'a');
+      expect(await settled).toBe('rendered');
+      expect(rendering.length).toBeGreaterThan(0);
+      const attempt = rendering[0].startedAt;
+      expect(attempt).toBeGreaterThanOrEqual(before);
+      expect(attempt).toBeLessThanOrEqual(Date.now());
+      expect(rendering.map((event) => event.startedAt)).toEqual(rendering.map(() => attempt));
+    } finally {
+      musicVideoEvents.off('shot-render', onShot);
+      await vi.waitFor(() => { assertSegmentCleanupIdle(id); assertRenderCleanupIdle(id); });
+    }
+  }, 60000);
 });
