@@ -14,6 +14,7 @@ vi.mock('../services/socket', () => ({
 import { useAppDeploy } from './useAppDeploy';
 
 const LOST = "Lost connection while this deploy ran; it has finished on the server. Check the app's logs or run Deploy again to confirm.";
+const NOT_CONFIRMED = 'Lost connection before the server confirmed this deploy started. Run Deploy again.';
 const fire = (event, payload) => act(() => { socketHandlers.get(event)(payload); });
 const listRequests = () => emitted.filter(e => e.event === 'app:operations:list').length;
 const active = (...operations) => fire('app:operations:active', { operations });
@@ -131,13 +132,28 @@ describe('useAppDeploy', () => {
     expect(result.current.isDeploying).toBe(true);
   });
 
-  it('settles a dispatch the server never acknowledged once the link dropped and the registry is empty', () => {
+  it('does not claim a dispatch the server never acknowledged ran once the link dropped and the registry is empty', () => {
     const { result } = renderHook(() => useAppDeploy('app-a'));
     act(() => result.current.startDeploy());
     fire('disconnect');
     fire('connect');
     active();
     expect(result.current.isDeploying).toBe(false);
+    expect(result.current.error).toBe(NOT_CONFIRMED);
+  });
+
+  it('keeps an unacknowledged dispatch spinning while connected, and attaches if the registry lists it after a reconnect', () => {
+    const { result } = renderHook(() => useAppDeploy('app-a'));
+    act(() => result.current.startDeploy());
+    fire('disconnect');
+    fire('connect');
+    active(liveDeploy());
+    expect(result.current.isDeploying).toBe(true);
+    expect(result.current.error).toBeNull();
+
+    // Once acknowledged, a later empty snapshot is the finished-while-away case.
+    fire('connect');
+    active();
     expect(result.current.error).toBe(LOST);
   });
 
@@ -154,6 +170,31 @@ describe('useAppDeploy', () => {
     active(liveDeploy());
     expect(result.current.isDeploying).toBe(true);
     expect(result.current.error).toBeNull();
+  });
+
+  it('drops the duplicate refusal once the deploy already running streams a frame', () => {
+    const { result } = renderHook(() => useAppDeploy('app-a'));
+    act(() => result.current.startDeploy());
+    fire('app:deploy:error', { appId: 'app-a', duplicate: true, message: 'A deploy is already running for Example App' });
+    expect(result.current.error).toBe('A deploy is already running for Example App');
+
+    fire('app:deploy:output', { appId: 'app-a', text: 'building\n', stream: 'stdout', timestamp: 1 });
+    expect(result.current.isDeploying).toBe(true);
+    expect(result.current.error).toBeNull();
+  });
+
+  it('drops the duplicate refusal when the deploy it hit completes successfully, but keeps a failed completion', () => {
+    const { result } = renderHook(() => useAppDeploy('app-a'));
+    act(() => result.current.startDeploy());
+    fire('app:deploy:error', { appId: 'app-a', duplicate: true, message: 'A deploy is already running for Example App' });
+    fire('app:deploy:complete', { appId: 'app-a', success: true, code: 0 });
+    expect(result.current.error).toBeNull();
+    expect(result.current.result).toEqual({ appId: 'app-a', success: true, code: 0 });
+
+    act(() => result.current.startDeploy());
+    fire('app:deploy:error', { appId: 'app-a', duplicate: true, message: 'A deploy is already running for Example App' });
+    fire('app:deploy:complete', { appId: 'app-a', success: false, code: 1 });
+    expect(result.current.error).toBe('A deploy is already running for Example App');
   });
 
   it('stops listening on unmount', () => {

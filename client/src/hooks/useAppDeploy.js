@@ -5,6 +5,8 @@ const MAX_OUTPUT_LINES = 5000;
 
 const DEPLOY_CONNECTION_LOST_MESSAGE =
   "Lost connection while this deploy ran; it has finished on the server. Check the app's logs or run Deploy again to confirm.";
+const DEPLOY_NOT_CONFIRMED_MESSAGE =
+  'Lost connection before the server confirmed this deploy started. Run Deploy again.';
 
 const statusEntry = (message, ts) => ({ text: `--- ${message} ---\n`, stream: 'status', ts });
 
@@ -28,13 +30,16 @@ const statusEntry = (message, ts) => ({ text: `--- ${message} ---\n`, stream: 's
  *  - `confirmed`: the server acknowledged this run (any frame, or a snapshot
  *    listing it). Until then an empty snapshot may simply predate our request's
  *    claim, so it must not be read as "the deploy is gone".
+ *  - `linkLost`: the socket dropped while the run was unconfirmed. The request
+ *    may never have reached the server, so the next empty snapshot settles the
+ *    run, but with a message that does not claim it ran.
  */
 export function useAppDeploy(appId) {
   const [output, setOutput] = useState([]);
   const [isDeploying, setIsDeploying] = useState(false);
   const [error, setError] = useState(null);
   const [result, setResult] = useState(null);
-  const runRef = useRef({ live: false, confirmed: false, finished: false });
+  const runRef = useRef({ live: false, confirmed: false, finished: false, linkLost: false });
 
   useEffect(() => {
     if (!appId) return undefined;
@@ -42,6 +47,7 @@ export function useAppDeploy(appId) {
     run.live = false;
     run.confirmed = false;
     run.finished = false;
+    run.linkLost = false;
     setOutput([]);
     setError(null);
     setResult(null);
@@ -52,6 +58,9 @@ export function useAppDeploy(appId) {
       return next.length > MAX_OUTPUT_LINES ? next.slice(-MAX_OUTPUT_LINES) : next;
     });
     const markLive = () => {
+      // Frames from a deploy that outlived a refused duplicate dispatch
+      // supersede that refusal's message.
+      if (!run.live) setError(null);
       run.live = true;
       run.confirmed = true;
       run.finished = false;
@@ -91,6 +100,7 @@ export function useAppDeploy(appId) {
       markFinished();
     });
     const onComplete = forApp((data) => {
+      if (data.success !== false) setError(null);
       setResult(data);
       markFinished();
     });
@@ -112,17 +122,17 @@ export function useAppDeploy(appId) {
       // The end broadcast follows every terminal frame, so a snapshot without
       // the run means any stale one has been replaced.
       run.finished = false;
-      if (run.live && run.confirmed) {
+      if (run.live && (run.confirmed || run.linkLost)) {
         run.live = false;
         setIsDeploying(false);
-        setError(DEPLOY_CONNECTION_LOST_MESSAGE);
+        setError(run.confirmed ? DEPLOY_CONNECTION_LOST_MESSAGE : DEPLOY_NOT_CONFIRMED_MESSAGE);
       }
     };
 
     const requestActive = () => socket.emit('app:operations:list');
     // A dispatch that never reached the server before the link dropped has no
     // claim to wait for: from here the registry is authoritative.
-    const onDisconnect = () => { if (run.live) run.confirmed = true; };
+    const onDisconnect = () => { if (run.live && !run.confirmed) run.linkLost = true; };
 
     socket.on('app:deploy:output', onOutput);
     socket.on('app:deploy:status', onStatus);
@@ -151,6 +161,7 @@ export function useAppDeploy(appId) {
     run.live = true;
     run.confirmed = false;
     run.finished = false;
+    run.linkLost = false;
     setOutput([]);
     setError(null);
     setResult(null);
