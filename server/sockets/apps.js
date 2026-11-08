@@ -130,7 +130,7 @@ export const registerAppHandlers = (socket, io) => {
         socket.emit('app:standardize:error', {
           appId: app.id,
           duplicate: true,
-          message: `An ${claim.inFlight.type} is already running for ${claim.inFlight.appName}`
+          message: claim.message
         });
         return;
       }
@@ -201,7 +201,7 @@ export const registerAppHandlers = (socket, io) => {
         socket.emit('app:deploy:error', {
           appId: app.id,
           duplicate: true,
-          message: `An ${claim.inFlight.type} is already running for ${claim.inFlight.appName}`
+          message: claim.message
         });
         return;
       }

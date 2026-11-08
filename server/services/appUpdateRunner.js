@@ -75,7 +75,7 @@ export async function runAppUpdate({
       reason: 'duplicate',
       appId: app.id,
       code: null,
-      message: `An ${claim.inFlight.type} is already running for ${claim.inFlight.appName}`,
+      message: claim.message,
     };
   }
   const operation = claim.operation;

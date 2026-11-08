@@ -330,7 +330,7 @@ describe('app socket handlers', () => {
       expect(second.last('app:deploy:error').payload).toEqual({
         appId: 'app-a',
         duplicate: true,
-        message: 'An deploy is already running for Example App A',
+        message: 'A deploy is already running for Example App A',
       });
 
       const sibling = connect(bus);
