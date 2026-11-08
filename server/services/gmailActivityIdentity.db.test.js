@@ -19,7 +19,7 @@ vi.mock('./userTimezone.js', () => ({ getUserTimezone: async () => 'UTC' }));
 
 import { recordMessageActivity } from './messageSync.js';
 import { importGmailMbox, parseMboxText } from './gmailMboxImport.js';
-import { deleteEvents, recordEvents } from './humanActivity.js';
+import { deleteEvents, retireLegacyGmailDuplicates } from './humanActivity.js';
 import { gmailConversationThreadKey } from '../lib/gmailThreadKey.js';
 
 let dbReady = false;
@@ -261,17 +261,19 @@ describe.skipIf(!runDb)('Takeout import retires pre-#15308 live Gmail rows (#153
     expect(await gmailRowsForAccountOrIds(acct, ['sibling-a', 'sibling-b'])).toHaveLength(3);
   });
 
-  it('keeps the legacy row when the import chunk fails, because retiring shares its transaction', async () => {
-    const acct = account('retire-atomic');
+  it('never retires a legacy row whose imported replacement is not stored', async () => {
+    const acct = account('retire-unstored');
     const { thrid, threadKey } = nextThread();
-    await recordLegacy(acct, 'retire-atomic', threadKey);
-    const [candidate] = parseMboxText(mboxMessage('retire-atomic', { thrid }));
-    // A valid JS date before PostgreSQL's timestamptz range fails the chunk.
-    const unstorable = { ...candidate, dedupeKey: `gmail:${messageId('retire-atomic-bad')}`, happenedAt: '-010000-01-01T00:00:00.000Z' };
-
-    await expect(recordEvents([candidate, unstorable])).rejects.toThrow();
-    expect(await gmailRowsForAccountOrIds(acct, ['retire-atomic'])).toEqual([
-      { dedupe_key: `msg:${acct.id}:api-gmail-${nonce}-retire-atomic`, account_id: acct.id },
+    await recordLegacy(acct, 'retire-unstored', threadKey);
+    // As if the import stopped before this message's batch was written.
+    const [candidate] = parseMboxText(mboxMessage('retire-unstored', { thrid }));
+    const { retired } = await retireLegacyGmailDuplicates([{
+      dedupeKey: candidate.dedupeKey, kind: candidate.kind, title: candidate.title, happenedAt: candidate.happenedAt,
+      threadKey, rawThreadId: thrid, fromEmail: candidate.legacyGmailMatch.fromEmail,
+    }]);
+    expect(retired).toBe(0);
+    expect(await gmailRowsForAccountOrIds(acct, ['retire-unstored'])).toEqual([
+      { dedupe_key: `msg:${acct.id}:api-gmail-${nonce}-retire-unstored`, account_id: acct.id },
     ]);
   });
 });

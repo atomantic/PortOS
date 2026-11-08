@@ -24,7 +24,8 @@
  * rows on the same `gmail:<Message-ID>` (#15308), so an import overlapping
  * already-synced mail is a no-op too. Rows live sync wrote before that, under
  * a per-account key with no Message-ID, are matched by thread, subject, sender
- * and time and retired with the insert (#15320, `recordEvents`). Messages missing a
+ * and time and retired once the whole import is stored (#15320,
+ * `retireLegacyGmailDuplicates`). Messages missing a
  * Message-ID (rare — some drafts) fall back to a content hash of
  * (instant + from + subject). No AI-provider calls; parsing is deterministic and
  * LLM-free.
@@ -39,7 +40,7 @@ import path from 'path';
 import { ServerError } from '../lib/errorHandler.js';
 import { cleanMessageId } from '../lib/emailMessageId.js';
 import { gmailApiThreadIdFromThrid, gmailConversationThreadKey } from '../lib/gmailThreadKey.js';
-import { shortSummary, recordEvents } from './humanActivity.js';
+import { shortSummary, recordEvents, listLegacyGmailThreadKeys, retireLegacyGmailDuplicates } from './humanActivity.js';
 
 // ---------------------------------------------------------------------------
 // Pure helpers (exported for unit tests — no DB, no filesystem, no side effects).
@@ -373,7 +374,15 @@ async function streamMboxFile(filePath, { dryRun, selfEmails, agg }) {
     if (!cand) return;
     agg.mapped += 1;
     accumulateSummary(agg.summary, cand);
-    if (!dryRun) batch.push(cand);
+    if (dryRun) return;
+    batch.push(cand);
+    const match = cand.legacyGmailMatch;
+    if (match && agg.legacyThreads.has(match.threadKey)) {
+      agg.legacyMatches.push({
+        dedupeKey: cand.dedupeKey, kind: cand.kind, title: cand.title, happenedAt: cand.happenedAt,
+        threadKey: match.threadKey, rawThreadId: cand.metadata.threadId, fromEmail: match.fromEmail,
+      });
+    }
   });
 
   const rl = createInterface({ input: createReadStream(filePath, { encoding: 'utf-8' }), crlfDelay: Infinity });
@@ -397,11 +406,18 @@ async function streamMboxFile(filePath, { dryRun, selfEmails, agg }) {
 export async function importGmailMbox({ path: inputPath, dryRun = false, selfEmails = [] } = {}) {
   const files = await resolveMboxFiles(inputPath);
   const self = (selfEmails || []).map((e) => String(e).trim().toLowerCase()).filter(Boolean);
-  const agg = { parsed: 0, mapped: 0, recorded: 0, summary: newSummaryAcc() };
+  const agg = {
+    parsed: 0, mapped: 0, recorded: 0, summary: newSummaryAcc(),
+    legacyThreads: dryRun ? new Set() : await listLegacyGmailThreadKeys(),
+    legacyMatches: [],
+  };
 
   for (const file of files) {
     await streamMboxFile(file, { dryRun, selfEmails: self, agg });
   }
+  // Only after every file is stored: a sibling in a later batch or file must
+  // already count as a lookalike, and each retired row's replacement must exist.
+  if (!dryRun) await retireLegacyGmailDuplicates(agg.legacyMatches);
 
   const summary = finalizeSummary(agg.summary);
   if (dryRun) {
