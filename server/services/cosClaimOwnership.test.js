@@ -137,6 +137,43 @@ describe('updateClaimOwnership', () => {
     expect(cosEvents.emit).toHaveBeenCalledWith('claim:ownership-changed', { agentId: 'agent-epicrun', repository: SOURCE });
   });
 
+  it('frees a live holder\'s binding only once its recorded checkout, local and origin branch are all retired (#15459)', async () => {
+    const { mkdtemp, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { materializeGitRepo, attachBareOrigin } = await import('../lib/gitTestRepo.js');
+    const { execGit } = await import('../lib/execGit.js');
+    const scratch = await mkdtemp(join(tmpdir(), 'portos-claim-retired-'));
+    try {
+      const repo = join(scratch, 'repo');
+      const checkout = join(scratch, 'claim');
+      await materializeGitRepo(repo);
+      await attachBareOrigin(scratch, repo);
+      const branch = 'claim/issue-101';
+      const run = id => ({ id, status: 'running', startedAt: new Date().toISOString(),
+        metadata: { sourceWorkspace: repo, workspacePath: repo, claimPicksOwnBranch: true, claimBranches: [] } });
+      store.state.agents = { 'agent-swarm': run('agent-swarm'), 'agent-next': run('agent-next'), 'agent-unseeded': run('agent-unseeded') };
+      const bind = agentId => updateClaimOwnership({ agentId, action: 'bind', branch });
+      const refused = { bound: false, reason: 'owner-active' };
+      expect(await bind('agent-swarm')).toEqual({ bound: true, branch });
+      await execGit(['worktree', 'add', '-b', branch, checkout, 'main'], repo);
+      expect(await bind('agent-swarm')).toEqual({ bound: true, branch });
+      await execGit(['push', 'origin', branch], checkout);
+      expect(await bind('agent-next')).toEqual(refused);
+      // The checkout and local ref are gone, but origin still carries the PR head.
+      await execGit(['worktree', 'remove', '--force', checkout], repo);
+      await execGit(['branch', '-D', branch], repo);
+      expect(await bind('agent-next')).toEqual(refused);
+      await execGit(['push', 'origin', '--delete', branch], repo);
+      expect(await bind('agent-next')).toEqual({ bound: true, branch });
+      expect(store.state.agents['agent-swarm'].metadata).toMatchObject({ claimBranches: [], claimReleasedBranches: [branch] });
+      expect(store.state.agents['agent-next'].metadata.claimBranches).toEqual([branch]);
+      // A binding that never recorded a checkout may be about to cut one: it keeps the name.
+      expect(await bind('agent-unseeded')).toEqual(refused);
+      expect(store.state.agents['agent-next'].metadata.claimBranches).toEqual([branch]);
+    } finally { await rm(scratch, { recursive: true, force: true, maxRetries: 3 }); }
+  });
+
   it('refuses an unknown or finished run without writing', async () => {
     const before = structuredClone(store.state);
     expect(await updateClaimOwnership({ agentId: 'agent-gone', action: 'bind', branch: 'claim/issue-101' }))
