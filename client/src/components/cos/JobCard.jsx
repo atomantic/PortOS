@@ -178,20 +178,11 @@ function formatNextDue(job) {
   // No recurrence — rendering lastRun + a null intervalMs would print 'Invalid Date'.
   if (isOnDemandSchedule(job)) return 'On demand';
 
-  const { lastRun, intervalMs, scheduledTime } = job;
+  const { lastRun, scheduledTime } = job;
   if (!lastRun) return scheduledTime ? `at ${scheduledTime}` : 'Immediately';
-  let nextDue = new Date(lastRun).getTime() + intervalMs;
-  if (scheduledTime) {
-    // Mirrors server nextIntervalJobFireTime: snap to the HH:MM occurrence nearest
-    // lastRun + interval, so a run that finished a minute late stays on its weekday.
-    const [hours, minutes] = scheduledTime.split(':').map(Number);
-    const searchFrom = nextDue - Math.min(12 * 3600_000, intervalMs / 2);
-    const snapped = new Date(searchFrom);
-    snapped.setHours(hours, minutes, 0, 0);
-    if (snapped.getTime() < searchFrom) snapped.setDate(snapped.getDate() + 1);
-    nextDue = snapped.getTime();
-  }
-  return timeUntil(nextDue, 'Now');
+  // Interval jobs: the server projects the exact fire time (user timezone, DST,
+  // weekdaysOnly), so the card never re-derives it in the browser's zone.
+  return job.nextRunAt ? timeUntil(job.nextRunAt, 'Now') : 'Unknown';
 }
 
 function getJobTypeLabel(job) {
@@ -412,9 +403,8 @@ export default function JobCard({
     onUpdate();
   };
 
-  const isDue = job.enabled && !isOnDemandSchedule(job) && (job.cronSchedule
-    ? (!job.lastRun || Boolean(job.nextRunAt && Date.now() >= new Date(job.nextRunAt).getTime()))
-    : (!job.lastRun || (Date.now() - new Date(job.lastRun).getTime() >= job.intervalMs)));
+  const isDue = job.enabled && !isOnDemandSchedule(job)
+    && (!job.lastRun || Boolean(job.nextRunAt && Date.now() >= new Date(job.nextRunAt).getTime()));
 
   return (
     <div className={`flex flex-col bg-port-card border rounded-lg transition-colors ${

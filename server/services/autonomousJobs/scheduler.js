@@ -6,7 +6,7 @@
  * creating/updating jobs and rendering the UI's interval picker.
  */
 
-import { getLocalParts, nextLocalTime } from '../../lib/timezone.js'
+import { addLocalDays, getLocalParts, nextLocalTime } from '../../lib/timezone.js'
 import { getUserTimezone } from '../userTimezone.js'
 import { parseCronToNextRun, parseRecurrenceToNextRun } from '../eventScheduler.js'
 import { DAY, HOUR, isOnDemandJob } from './constants.js'
@@ -133,8 +133,9 @@ export function nextIntervalJobFireTime(job, timezone) {
 
   if (job.weekdaysOnly && Number.isFinite(nextDue)) {
     const { dayOfWeek } = getLocalParts(new Date(nextDue), timezone)
-    if (dayOfWeek === 0) nextDue += DAY // Sunday → Monday
-    if (dayOfWeek === 6) nextDue += 2 * DAY // Saturday → Monday
+    // Whole local days, so the local HH:MM survives a DST change over the weekend.
+    if (dayOfWeek === 0) nextDue = addLocalDays(nextDue, 1, timezone) // Sunday → Monday
+    if (dayOfWeek === 6) nextDue = addLocalDays(nextDue, 2, timezone) // Saturday → Monday
   }
 
   return Number.isFinite(nextDue) ? nextDue : null

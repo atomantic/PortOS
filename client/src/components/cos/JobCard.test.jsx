@@ -163,26 +163,45 @@ describe('JobCard on-demand cadence', () => {
   });
 });
 
-// #15352 — the card's "Next:" must use the server's nearest-occurrence rule, so
-// a weekly run that finished late shows the same weekday, not a day later.
-describe('JobCard next-due for a late weekly run', () => {
+// #15352 — the card renders the server's projected fire time (user timezone,
+// nearest-HH:MM snap, weekdaysOnly skip) rather than re-deriving it in the
+// browser's zone, so the two cannot disagree.
+describe('JobCard next-due from the server projection', () => {
+  const NOW = Date.parse('2026-11-02T11:30:00Z'); // Monday, 03:30 Pacific
   const WEEKLY_JOB = {
     ...SCRIPT_JOB,
     id: 'job-weekly',
     interval: 'weekly',
     intervalMs: 7 * 24 * 3600000,
-    scheduledTime: '03:00'
+    scheduledTime: '03:00',
+    lastRun: new Date(NOW).toISOString()
   };
 
   afterEach(() => vi.useRealTimers());
 
-  it('shows 6d, not 7d, when a Monday 03:00 job finished at 03:30', () => {
-    const lastRun = new Date(2026, 10, 2, 3, 30); // Monday, browser-local
+  const renderAt = (job) => {
     vi.useFakeTimers({ toFake: ['Date'] });
-    vi.setSystemTime(lastRun);
-    renderCard({ ...WEEKLY_JOB, lastRun: lastRun.toISOString() });
+    vi.setSystemTime(NOW);
+    renderCard(job);
+  };
 
-    // Next fire is the following Monday 03:00 (6d 23h 30m away), not 03:30.
+  it('shows the server nextRunAt for a late weekly run, not a client recomputation', () => {
+    // Following Monday 03:00 Pacific (PST) is 6d 23h 30m away. A browser-side
+    // recomputation from lastRun + intervalMs would not land on this instant.
+    renderAt({ ...WEEKLY_JOB, nextRunAt: '2026-11-09T11:00:00.000Z' });
     expect(screen.getByText('Next: in 6d')).toBeTruthy();
+    expect(screen.queryByText('Due')).toBeNull();
+  });
+
+  it('badges an interval job Due once the server nextRunAt has passed', () => {
+    renderAt({ ...WEEKLY_JOB, nextRunAt: new Date(NOW - 60_000).toISOString() });
+    expect(screen.getByText('Due')).toBeTruthy();
+    expect(screen.getByText('Next: Now')).toBeTruthy();
+  });
+
+  it('does not badge Due before the scheduled slot even if a full interval has elapsed', () => {
+    renderAt({ ...WEEKLY_JOB, lastRun: new Date(NOW - 7 * 24 * 3600000).toISOString(), nextRunAt: new Date(NOW + 3600000).toISOString() });
+    expect(screen.queryByText('Due')).toBeNull();
+    expect(screen.getByText('Next: in 1h')).toBeTruthy();
   });
 });

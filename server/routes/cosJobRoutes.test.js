@@ -100,6 +100,24 @@ describe('CoS Job Routes', () => {
     });
   });
 
+  describe('GET /api/cos/jobs nextRunAt for interval jobs', () => {
+    it('projects the server fire time for interval jobs in the user timezone, null when none', async () => {
+      const weekly = { id: 'j1', name: 'Weekly', interval: 'weekly', intervalMs: 7 * 86_400_000, scheduledTime: '03:00', lastRun: '2026-11-02T11:01:00.000Z' };
+      const onDemand = { id: 'j2', name: 'Manual', interval: 'on-demand' };
+      autonomousJobs.getAllJobs.mockResolvedValue([weekly, onDemand]);
+      autonomousJobs.getJobStats.mockResolvedValue({ total: 2 });
+      getUserTimezone.mockResolvedValue('America/Los_Angeles');
+      computeNextJobRun.mockImplementation(job => (job.id === 'j1' ? Date.parse('2026-11-09T11:00:00.000Z') : null));
+      hasGate.mockReturnValue(false);
+      getRegisteredGates.mockReturnValue([]);
+
+      const response = await request(app).get('/api/cos/jobs');
+
+      expect(computeNextJobRun).toHaveBeenCalledWith(expect.objectContaining({ id: 'j1' }), 'America/Los_Angeles');
+      expect(response.body.jobs.map(j => j.nextRunAt)).toEqual(['2026-11-09T11:00:00.000Z', null]);
+    });
+  });
+
   describe('GET /api/cos/jobs/due', () => {
     it('should return due jobs', async () => {
       autonomousJobs.getDueJobs.mockResolvedValue([{ id: 'j1' }]);

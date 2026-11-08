@@ -95,6 +95,31 @@ describe('interval job + scheduledTime next fire (#15352)', () => {
     expect(await nextFire(job(PDT('2026-10-26T01:30:00')))).toBe(PDT('2026-10-26T03:00:00'));
   });
 
+  // No scheduledTime, so the timer takes the interval path (a scheduledTime would make it a cron).
+  const dailyWeekdays = (lastRun) => ({ id: 'j', interval: '1d', intervalMs: DAY, weekdaysOnly: true, lastRun: new Date(lastRun).toISOString() });
+
+  it('a weekdaysOnly job skips a weekend spanning the November fall-back and keeps its local hour', async () => {
+    // Fri 03:00 PDT + 1d = Sat 2026-10-31 03:00 PDT; the weekend crosses the Nov 1 fall-back.
+    // Adding a fixed 48h would land on Monday 02:00 PST.
+    const next = await nextFire(dailyWeekdays(PDT('2026-10-30T03:00:00')));
+    expect(next).toBe(PST('2026-11-02T03:00:00'));
+    expect(getLocalParts(new Date(next), LA)).toMatchObject({ dayOfWeek: 1, hour: 3, minute: 0 });
+  });
+
+  it('a weekdaysOnly job skips a weekend spanning the March spring-forward and keeps its local hour', async () => {
+    // Fri 03:00 PST + 1d = Sat 2027-03-13 03:00 PST; Sun 03-14 springs forward at 02:00.
+    // A fixed 48h would land on Monday 04:00 PDT.
+    const next = await nextFire(dailyWeekdays(PST('2027-03-12T03:00:00')));
+    expect(next).toBe(PDT('2027-03-15T03:00:00'));
+    expect(getLocalParts(new Date(next), LA)).toMatchObject({ dayOfWeek: 1, hour: 3, minute: 0 });
+  });
+
+  it('a weekdaysOnly job landing on a Sunday across the fall-back moves one local day to Monday', async () => {
+    // Sat 2026-10-31 04:00 PDT + 24h elapsed = Sun 2026-11-01 03:00 PST (the day has 25 hours).
+    const next = await nextFire(dailyWeekdays(PDT('2026-10-31T04:00:00')));
+    expect(next).toBe(PST('2026-11-02T03:00:00'));
+  });
+
   it('a weekdaysOnly interval job landing on a weekend moves to Monday in both entry points', async () => {
     // No scheduledTime, so the timer takes the interval path (a scheduledTime would make it a cron).
     const job = { id: 'j', interval: '1d', intervalMs: DAY, weekdaysOnly: true, lastRun: new Date(PDT('2026-10-23T12:00:00')).toISOString() };
