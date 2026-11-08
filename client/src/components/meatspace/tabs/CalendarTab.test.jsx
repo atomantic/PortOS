@@ -100,9 +100,11 @@ describe('CalendarTab activity removal', () => {
 
   it('does not resurrect a row when a refetch started before a later delete resolves with the older list', async () => {
     let resolveStaleRead;
+    let resolveFreshRead;
     api.getLifeCalendar
       .mockResolvedValueOnce(structuredClone(CALENDAR))
-      .mockReturnValueOnce(new Promise(resolve => { resolveStaleRead = resolve; }));
+      .mockReturnValueOnce(new Promise(resolve => { resolveStaleRead = resolve; }))
+      .mockReturnValueOnce(new Promise(resolve => { resolveFreshRead = resolve; }));
     api.removeActivity
       .mockRejectedValueOnce(Object.assign(new Error('moved'), { code: 'ACTIVITY_MOVED' }))
       .mockResolvedValueOnce([{ name: 'Coffees' }, { name: 'Books' }]);
@@ -117,5 +119,11 @@ describe('CalendarTab activity removal', () => {
     await act(async () => { resolveStaleRead(structuredClone(CALENDAR)); });
     expect(screen.queryByText('Showers')).toBeNull();
     expect(screen.getByText('Books')).toBeInTheDocument();
+
+    // The delete landed while that read was pending, so a fresh read follows and is what the list ends on.
+    expect(api.getLifeCalendar).toHaveBeenCalledTimes(3);
+    await act(async () => { resolveFreshRead({ ...structuredClone(CALENDAR), budgets: [CALENDAR.budgets[0], CALENDAR.budgets[2]] }); });
+    expect(screen.queryByText('Showers')).toBeNull();
+    expect(screen.getByText('Coffees')).toBeInTheDocument();
   });
 });

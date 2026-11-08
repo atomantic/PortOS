@@ -20,6 +20,7 @@ export default function CalendarTab() {
   // newer read or removal started after it, so a snapshot taken before a delete
   // cannot resurrect the removed row.
   const generationRef = useRef(0);
+  const readsInFlightRef = useRef(0);
   // Activity names (or a row key when unnamed) with a delete in flight. Keyed by
   // identity, not index, because an earlier removal shifts later rows. The ref is
   // the synchronous guard a second click reads before React has re-rendered.
@@ -28,10 +29,12 @@ export default function CalendarTab() {
 
   const fetchData = useCallback(async () => {
     const generation = ++generationRef.current;
+    readsInFlightRef.current++;
     const result = await api.getLifeCalendar().catch(err => {
       if (generation === generationRef.current) setError(err.message);
       return null;
     });
+    readsInFlightRef.current--;
     if (generation === generationRef.current && result) {
       setData(result);
       setError(null);
@@ -72,19 +75,27 @@ export default function CalendarTab() {
     setRemovingKeys([...removingRef.current]);
     if (result) {
       toast.success(`Removed ${label}`);
-      // Any read started before this delete may still show the row; drop it.
+      // A read started before this delete may still show the row, so it is dropped;
+      // if one was pending, refetch so the list is not left without a fresh read.
+      const readPending = readsInFlightRef.current > 0;
       generationRef.current++;
-      // Budgets are independent per activity, so dropping this entry matches the
-      // server without a refetch. Match the slot by name: an earlier removal may
-      // have shifted it, and a newer read may already have dropped it.
-      setData(prev => {
-        if (!prev?.budgets) return prev;
-        const at = prev.budgets[index]?.name === storedName
-          ? index
-          : prev.budgets.findIndex(b => b.name === storedName);
-        if (at === -1) return prev;
-        return { ...prev, budgets: prev.budgets.filter((_, i) => i !== at) };
-      });
+      if (expectedName === undefined) {
+        // An unnamed row has no identity to match a slot by, so take the server's list.
+        fetchData();
+      } else {
+        // Budgets are independent per activity, so dropping this entry matches the
+        // server without a refetch. Match the slot by name: an earlier removal may
+        // have shifted it, and a newer read may already have dropped it.
+        setData(prev => {
+          if (!prev?.budgets) return prev;
+          const at = prev.budgets[index]?.name === expectedName
+            ? index
+            : prev.budgets.findIndex(b => b.name === expectedName);
+          if (at === -1) return prev;
+          return { ...prev, budgets: prev.budgets.filter((_, i) => i !== at) };
+        });
+        if (readPending) fetchData();
+      }
     }
   };
 
