@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync } from 'fs'
 import { tmpdir } from 'os';
 import { join } from 'path';
 
-import migration from './457-autonomous-job-schedule-anchor.js';
+import migration from './458-autonomous-job-schedule-anchor.js';
 import { nextIntervalJobFireTime } from '../../server/services/autonomousJobs/scheduler.js';
 
 const WEEK = 7 * 24 * 3_600_000;
@@ -12,7 +12,7 @@ describe('migration 457 — autonomous job schedule anchors', () => {
   let rootDir, jobsPath;
 
   beforeEach(() => {
-    rootDir = mkdtempSync(join(tmpdir(), 'migration-457-'));
+    rootDir = mkdtempSync(join(tmpdir(), 'migration-458-'));
     mkdirSync(join(rootDir, 'data', 'cos'), { recursive: true });
     jobsPath = join(rootDir, 'data', 'cos', 'autonomous-jobs.json');
     writeFileSync(join(rootDir, 'data', 'settings.json'), JSON.stringify({ timezone: 'America/Los_Angeles' }));
