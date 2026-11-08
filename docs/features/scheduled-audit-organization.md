@@ -8,7 +8,7 @@ continue to work. No task is newly enabled or automatically run.
 
 The newly prefixed display names are: better-security, better-code-quality,
 better-test-coverage, better-performance, better-accessibility,
-better-documentation, better-ui-bugs, better-mobile-responsive,
+better-documentation, better-ui-bugs, better-app-bugs, better-mobile-responsive,
 better-error-handling, better-typing, better-console-errors, better-ux,
 better-data-safety, better-simplify, better-module-hygiene, better-api-contract,
 better-ui-lifecycle, better-observability, and better-copy, plus the service

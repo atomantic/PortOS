@@ -96,6 +96,10 @@ export const SELF_IMPROVEMENT_TASK_TYPES = [
   // `error-handling` (failure paths + resilience) and `ui-lifecycle`
   // (UI lifecycle and state). Files under `bug` plus the `runtime-safety` metric label.
   'better-runtime-safety',
+  // Server-side counterpart of `ui-bugs`: behavior bugs in routes, jobs and
+  // core logic (wrong results, edge inputs, user-triggerable races). Distinct
+  // from `better-runtime-safety`, which owns code-shape defects.
+  'app-bugs',
   // Third-party dependency NECESSITY (the `do:depfree` lens) — replace
   // micro-packages and native-API wrappers with in-repo code. Distinct from
   // `dependency-updates`, which bumps what stays. Worktree-isolated do-work.

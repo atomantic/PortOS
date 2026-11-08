@@ -2867,7 +2867,7 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
   const planConstraintBlock = buildPlanConstraintBlock(metadata.planId);
 
   const modeInstructions = isAuditTaskType(taskType)
-    ? `${modeContractFor(fileIssues)}\n\n${auditQualityInstructions(taskType)}`
+    ? `${modeContractFor(fileIssues)}\n\n${auditQualityInstructions(taskType, app)}`
     : '';
   // Resolve completion before rendering reviewers, including claim flows that
   // own their PR while intentionally disabling CoS worktree provisioning.

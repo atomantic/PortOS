@@ -15,6 +15,7 @@ export const AUDIT_DISCOVERY = Object.freeze({
   performance: 'Inventory hot routes, loops, queries and large payloads; use existing profiling or bounded measurements to rank latency, memory and repeated work.',
   accessibility: 'Inventory shared controls and screens; scan semantic roles, labels, focus and contrast, then verify the most reused controls and critical keyboard journeys.',
   documentation: 'Compare setup, upgrade and public API documentation against scripts and implementations; rank instructions that break installation or cause data loss first.',
+  'app-bugs': 'Inventory server routes, background and scheduled jobs, imports and syncs; trace each against what its callers, docs and tests promise, ranking wrong results and silent no-ops on primary workflows and races a user or job of this app can trigger first.',
   'ui-bugs': 'Inventory routes and shared components; trace primary actions, loading/error/empty states and navigation, then reproduce the highest-reach broken workflows.',
   'mobile-responsive': 'Scan all layouts for fixed widths, grids, overflow and touch targets; test the most reused layouts and primary journeys at narrow widths.',
   'error-handling': 'Inventory external I/O and failure boundaries; search swallowed rejections and missing recovery, ranking data loss and stranded user operations first.',
@@ -39,7 +40,7 @@ export const AUDIT_DISCOVERY = Object.freeze({
   'better-dev-environment': 'Diff host state around one bounded run of the dev commands (see the mission), then inventory the fixture, spawn, watcher and cache sites behind each change; rank by what accumulates per run times how often the loop runs.',
   infrastructure: 'Inventory infrastructure-as-code, container, orchestration, deployment and CI files; scan exposure, identity grants, secrets, pinning, resource limits and probes, rank deployment risk alongside measured CI waste. Trace CI planners/runners; measure run frequency, job duration and critical path, then inspect trigger/path selection, duplicate work, dependencies, cache/artifact reuse, cancellation/concurrency and risk-based PR/MR versus merge/nightly/release placement. Coordinate test-value evidence with Test Quality; preserve essential correctness/security coverage.',
   'data-integrity': 'Inventory every durable user-record write path, ingestion entry point, consumer, batch/backfill job and stored data format (excluding ephemeral runtime state, git worktrees and caches); trace retry and redelivery behavior and multi-step writes, ranking silent duplication, loss and wrong results first.',
-  reliability: 'Inventory process entry points, signal handling, health endpoints, queues, workers and scheduled jobs; trace startup, restart and overload behavior under the documented single-install deployment model (excluding multi-instance leases and shutdown job checkpointing for idempotent/regenerable work), ranking primary data corruption and outage amplification first.',
+  reliability: 'Inventory process entry points, signal handling, health endpoints, queues, workers and scheduled jobs; trace startup, restart and overload behavior under the deployment model in the reachability check (for a single install, excluding multi-instance leases and shutdown job checkpointing for idempotent/regenerable work), ranking primary data corruption and outage amplification first.',
   privacy: 'Inventory personal and sensitive fields in schemas and payloads, then trace them to logs, errors, analytics, caches, exports, third-party calls and deletion paths; rank exposure already happening over missing governance.',
   'feature-completeness': 'Scan for not-implemented/501/placeholder returns, permanently disabled or "coming soon" controls, settings written but never read, endpoints and jobs with no caller, server events with no listener, and to-do references to missing or closed tracker items; trace each to the control or document that offers it, ranking what users are offered today over internal gaps.',
   'workflow-recovery': 'Inventory persisted server-side in-progress states for long-running, multi-minute or paid user generation workflows (excluding short request-bound operations, git worktree cleanup and in-memory re-entrancy guards) and the client chains that drive them; trace each state to the page that must show it and its resume/cancel/reattach exit, ranking user records left blocked with no visible exit first.',
@@ -47,7 +48,32 @@ export const AUDIT_DISCOVERY = Object.freeze({
   'cost-efficiency': 'Inventory metered dependencies (paid APIs, model providers, cloud storage/query/compute, egress) and their call sites, schedules and retry paths; rank spend by frequency times unit cost and growth with usage.',
 });
 
-export function auditQualityInstructions(taskType) {
+const MAX_DEPLOYMENT_MODEL_CHARS = 2000;
+
+/**
+ * The deployment model every audit weighs reachability against: the owner's
+ * own words from the app record when set, else the repository's documentation.
+ */
+function deploymentModelSource(app) {
+  const stated = typeof app?.deploymentModel === 'string' ? app.deploymentModel.trim().slice(0, MAX_DEPLOYMENT_MODEL_CHARS) : '';
+  return stated
+    ? `The app's owner states its deployment model, and it is binding:\n\n> ${stated.replace(/\r?\n/g, '\n> ')}\n\nWhere the repository's own docs are more specific, they refine it.`
+    : "Take the deployment model from the repository's own AGENTS.md, README and deployment config (who uses it, how many people share one install, which processes, schedulers and syncs run beside the user). If they do not say, infer it from the code and name the assumption in your report.";
+}
+
+/**
+ * Shared calibration for every audit: hunt the concurrency and edge cases a
+ * real deployment can produce, and drop the ones it cannot.
+ */
+function reachabilityCheck(app) {
+  return `## Reachability check: likely bugs, not imaginable ones
+
+${deploymentModelSource(app)}
+
+Weigh every candidate by how likely it is to happen under that model, and rank by likelihood times impact. Drop a finding that needs a condition the model rules out — for a single-user install, that means two different people editing the same record, tenant isolation, or horizontal-scaling races — and do not add machinery against it. One person still produces concurrency, so these stay in scope whatever the model: the same action fired twice (double click, retry after a timeout), two tabs or devices on one record, background or scheduled jobs running while the user works, parallel jobs sharing a file, record or external resource, sync with the user's other machines, and a restart in the middle of an operation. A race finding names both actors and how they come to overlap in real use; if you cannot name a realistic pair, it is not a finding.`;
+}
+
+export function auditQualityInstructions(taskType, app) {
   const category = normalizeAuditTaskType(taskType);
   if (!Object.hasOwn(AUDIT_DEFINITIONS, category)) return '';
   return `## Repository-wide discovery, worst offender first, and quality assessment
@@ -57,12 +83,15 @@ This contract overrides narrower slice-selection or ranking advice in the missio
 2. Category search: ${AUDIT_DISCOVERY[category]}
 3. Rank at least the top five candidates (or all if fewer), with paths, measured signals, impact, reach, confidence and why higher candidates win. Validate the top candidates through callers, tests and relevant history before filing or fixing. Severity and user impact outrank ease, small scope and recency. Churn and fan-in break ties; inactivity alone never dismisses a severe offender. If the raw worst is exempt, already filed or not actionable, report why and continue down the ranking. Existing unresolved issues still count against quality. Never pick a nit while a verified major problem remains actionable.
    Proportionality check, before filing or fixing any candidate: the proposed fix must be the smallest change that removes the demonstrated harm, and must not add a new validation layer, archive, ledger, retry or recovery workflow, extra CI stage, or slower process. Speed of execution (CI time, agent turnaround, local build/test gate time) counts as a cost: a fix that slows CI or process needs a measured harm that outweighs it. Defer to the project's existing sources of truth (for example its code host or CI system, whether GitHub, GitLab or a self-hosted/enterprise instance, for branch, merge and review state; the platform toolchain for build and signing state) instead of building a parallel verification of them. If a finding is only defensible by adding such machinery, or you cannot show a reachable failure that justifies it, do not file a robust-process fix; file at most one documentation or decision-gap item stating the question and the simple options, and score the slice without penalizing the gap. When the audited code is itself machinery of that kind, prefer a finding that removes or simplifies it.
+   Reachability check, before ranking: apply the section below to every candidate.
 4. Keep investigation bounded after this scan. Report scanned roots, tools/commands, candidate ranking, exclusions, reviewed paths, unreviewed inventory and stopping reason. If tools or budget prevent broad discovery, report partial coverage, never claim a global worst or a clean repository.
 5. Assess the PRE-FIX state of the SLICE you deep-reviewed on 0–100 (higher is healthier): 90–100 no material defect found in the slice after real inspection; 70–89 localized moderate debt; 40–69 significant recurring or widespread problems; 10–39 severe/core-workflow defects; 0–9 pervasive critical failure. Name the slice (the top-level paths or area actually read, not the whole inventory) and rate only what you read; the dashboard derives the category trend server-side from recent slice scores, so never extrapolate a repository-wide number from a signal scan. Rate the slice, not the agent's performance or issue count. Explain the sliceScore using severity, prevalence and concrete evidence from the slice. Do not award points merely for filing or fixing this run. Use sliceScore:null for unavailable or inapplicable assessment; zero is a real score.
 6. Score the worst finding's severity separately on 1–10: 1–3 minor localized impact, 4–6 material recurring cost, 7–8 major workflow/reliability impact, 9–10 critical data/security/availability failure. Use 0 only when no material finding was verified. List this severity for every finding in the narrative.
 7. Include exactly one single-line QUALITY_AUDIT_JSON: {...} in your completion sentinel summary AND final response, with no secrets or personal data. Replace the example values with observed evidence. The category is fixed to this task; do not rate other categories. Beside it, include exactly one line AUDIT_SLICE: <comma-separated top-level paths or areas deep-reviewed> naming the same slice; PortOS records it so later runs of this lane rotate to other areas. Keep ordinary completion/PR instructions and summaries too.
 QUALITY_AUDIT_JSON: {"version":2,"category":"${category}","slice":"top-level paths or area deep-reviewed","sliceScore":null,"worstSeverity":0,"coverage":"unavailable","confidence":"low","summary":"Explain the slice assessment and strongest evidence","scannedFiles":0,"totalFiles":0}
-Allowed coverage: broad, partial, unavailable, not-applicable. Allowed confidence: low, medium, high. coverage describes the signal scan in step 1, not the deep review: scannedFiles counts files actually included in the category signal scan; totalFiles is the eligible inventory. Broad requires the whole inventory to be scanned (deep review remains bounded). Partial assessments are excluded from the overall score. For partial coverage, use sliceScore:null when the inspected evidence cannot support a slice score; explain why rather than inventing one. A numeric partial score is provisional. If unavailable or not-applicable, sliceScore must be null and explain why. Even a zero-finding audit returns this assessment.`;
+Allowed coverage: broad, partial, unavailable, not-applicable. Allowed confidence: low, medium, high. coverage describes the signal scan in step 1, not the deep review: scannedFiles counts files actually included in the category signal scan; totalFiles is the eligible inventory. Broad requires the whole inventory to be scanned (deep review remains bounded). Partial assessments are excluded from the overall score. For partial coverage, use sliceScore:null when the inspected evidence cannot support a slice score; explain why rather than inventing one. A numeric partial score is provisional. If unavailable or not-applicable, sliceScore must be null and explain why. Even a zero-finding audit returns this assessment.
+
+${reachabilityCheck(app)}`;
 }
 
 export const appQualityQuerySchema = z.object({ includeQuality: z.enum(['true', 'false']).optional() });

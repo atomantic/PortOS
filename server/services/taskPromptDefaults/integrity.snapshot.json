@@ -2,6 +2,7 @@
   "DEFAULT_TASK_PROMPTS": {
     "accessibility": "46f628a44a919bb788de8761e86ca0e1",
     "api-contract": "d52e00ec53eb5618df1a769efccc08f3",
+    "app-bugs": "5d0f5c86b38e9d34f892e00147b5c081",
     "app-launch-video": "271c1e8bc301ba02b4a2207e0abf8573",
     "better-cognitive-load": "882bbda803edcdef5a4308521050f8fd",
     "better-complexity": "c99f67b43ff54a1c8cf0176c721d9c06",
@@ -21,7 +22,7 @@
     "console-errors": "5a7f6fd0b119db9d0e01c7f44a7a061c",
     "copy": "6a0959e898d37fb4d4d7445dfc8008c9",
     "cost-efficiency": "239bad18c51b50c80599d30b2fb0ad15",
-    "data-integrity": "0b361db688338b9cd0fa70cfedd28e56",
+    "data-integrity": "064bd15eb2924430aadb669296c1dcc7",
     "data-safety": "9e930585587a475901a4673427c9d87f",
     "dependency-updates": "8ce4e7e33c5c7554b89af7d35a471c31",
     "design": "118ab916feb90ff079f6e6449f60e7fe",
@@ -70,6 +71,7 @@
   "PROMPT_VERSIONS": {
     "accessibility": 5,
     "api-contract": 2,
+    "app-bugs": 1,
     "app-launch-video": 8,
     "better-cognitive-load": 2,
     "better-complexity": 2,
@@ -89,7 +91,7 @@
     "console-errors": 4,
     "copy": 1,
     "cost-efficiency": 1,
-    "data-integrity": 2,
+    "data-integrity": 3,
     "data-safety": 4,
     "dependency-updates": 9,
     "design": 1,
@@ -353,7 +355,8 @@
       "eec33a9293f9393019917a6632dd964e"
     ],
     "data-integrity": [
-      "5fcc4f5044101e89da5bbf4890c11a1c"
+      "5fcc4f5044101e89da5bbf4890c11a1c",
+      "0b361db688338b9cd0fa70cfedd28e56"
     ],
     "data-safety": [
       "86b07f51abdbcbe7016f840b5bb0cd9b",

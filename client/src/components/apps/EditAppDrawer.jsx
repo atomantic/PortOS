@@ -85,6 +85,7 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
     // Opt-in: publishing writes to the app's own repo, so an app that has never
     // been saved must render unchecked.
     publishQualitySnapshot: app.publishQualitySnapshot === true,
+    deploymentModel: typeof app.deploymentModel === 'string' ? app.deploymentModel : '',
     featureOverrides: Object.fromEntries(
       APP_FEATURE_IDS.map(featureId => [featureId, getAppFeatureOverride(app, featureId)])
     ),
@@ -285,6 +286,8 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
       useAutoMerge: formData.useAutoMerge,
       verifyRepoStateOnCompletion: formData.verifyRepoStateOnCompletion,
       publishQualitySnapshot: formData.publishQualitySnapshot,
+      // Empty string clears it, so audits fall back to the repository's docs.
+      deploymentModel: formData.deploymentModel.trim(),
     };
 
     // Do not stamp an all-null map during an unrelated edit. Leaving the map
@@ -765,6 +768,21 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
               <p className="ml-6 text-xs text-gray-500">
                 After each audit, PortOS writes the app’s numeric quality scores to .quality.json, opens a pull request, and merges it immediately so the live checkout never diverges from origin. Off by default.
               </p>
+              <div className="pt-2">
+                <label htmlFor="edit-app-deployment-model" className="block text-sm text-gray-400 mb-1">Deployment model for quality audits</label>
+                <textarea
+                  id="edit-app-deployment-model"
+                  value={formData.deploymentModel}
+                  onChange={e => setFormData(prev => ({ ...prev, deploymentModel: e.target.value }))}
+                  maxLength={2000}
+                  rows={3}
+                  placeholder="e.g. One user per install on a private network; background jobs run beside the UI; syncs with the user's other machines."
+                  className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:border-port-accent focus:outline-hidden"
+                />
+                <p className="mt-1 text-xs text-gray-500">
+                  Audits use this to skip conditions that can't happen here (like two people editing at once in a single-user app) while still hunting races one person can cause. Leave empty to use the repo's own docs.
+                </p>
+              </div>
             </div>
           )}
 
