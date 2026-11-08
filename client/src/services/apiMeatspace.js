@@ -301,7 +301,10 @@ export const getActivities = (options = {}) => request('/meatspace/activities', 
 export const addActivity = (data) => request('/meatspace/activities', {
   method: 'POST', body: JSON.stringify(data)
 });
-export const removeActivity = (index) => request(`/meatspace/activities/${index}`, { method: 'DELETE' });
+export const removeActivity = (index, name, options = {}) => request(
+  `/meatspace/activities/${index}${name ? `?name=${encodeURIComponent(name)}` : ''}`,
+  { method: 'DELETE', ...options },
+);
 export const addLifeEvent = (data) => request('/meatspace/life-events', {
   method: 'POST', body: JSON.stringify(data)
 });

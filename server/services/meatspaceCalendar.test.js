@@ -13,7 +13,7 @@ vi.mock('./meatspace.js', () => ({ getDeathClock: async () => ({ error: 'no birt
 import { PATHS } from '../lib/fileUtils.js';
 import meatspaceCalendarRoutes from '../routes/meatspaceCalendarRoutes.js';
 import {
-  addActivity, getActivities, getLifeEvents, removeActivity, removeLifeEvent, addLifeEvent,
+  addActivity, getActivities, getLifeEvents, removeActivity, removeLifeEvent, addLifeEvent, updateLifeEvent,
 } from './meatspaceCalendar.js';
 
 function makeApp() {
@@ -58,5 +58,52 @@ describe('activity index routes', () => {
     const res = await (method === 'put' ? req.send({ name: 'X' }) : req);
     expect(res.status).toBe(400);
     expect(await getActivities()).toEqual(before);
+  });
+});
+
+describe('activity delete by index is guarded by the row the client saw', () => {
+  it('a double-clicked delete removes one activity and answers the second 409', async () => {
+    const before = await getActivities();
+    const name = before[3].name;
+    const [first, second] = await Promise.all(['a', 'b'].map(() =>
+      request(makeApp()).delete(`/api/meatspace/activities/3?name=${encodeURIComponent(name)}`)));
+    const responses = [first, second];
+    const refused = responses.find(r => r.status === 409);
+    expect(responses.filter(r => r.status === 200)).toHaveLength(1);
+    expect(refused.body.code).toBe('ACTIVITY_MOVED');
+    const after = await getActivities();
+    expect(after).toHaveLength(before.length - 1);
+    expect(after.some(a => a.name === name)).toBe(false);
+    expect(after[3].name).toBe(before[4].name);
+  });
+
+  it('a delete without ?name= keeps the old index-only behavior for older clients', async () => {
+    const before = await getActivities();
+    const res = await request(makeApp()).delete('/api/meatspace/activities/0');
+    expect(res.status).toBe(200);
+    expect(await getActivities()).toHaveLength(before.length - 1);
+  });
+
+  it('a stale PUT with a mismatched ?name= leaves the activity at that index untouched', async () => {
+    const before = await getActivities();
+    const res = await request(makeApp())
+      .put('/api/meatspace/activities/2?name=Not%20Here')
+      .send({ frequency: 99 });
+    expect(res.status).toBe(409);
+    expect(await getActivities()).toEqual(before);
+  });
+});
+
+describe('life calendar read-modify-writes are serialized', () => {
+  it('a concurrent add and update both persist', async () => {
+    const [seed] = await getLifeEvents();
+    const [, events] = await Promise.all([
+      addLifeEvent({ name: 'Added', type: 'custom', recurrence: 'yearly', month: 2, day: 3, enabled: true }),
+      updateLifeEvent(seed.id, { enabled: false }),
+    ]);
+    expect(events.map(e => e.name)).toContain('Added');
+    const persisted = await getLifeEvents();
+    expect(persisted.find(e => e.id === seed.id).enabled).toBe(false);
+    expect(persisted.map(e => e.name)).toContain('Added');
   });
 });
