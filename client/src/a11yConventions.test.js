@@ -2256,20 +2256,34 @@ describe('a11y conventions', () => {
     // ::before grows it by. `-inset-N` grows both sides; `-top-N` / `-bottom-N`
     // one each. Coarse-pointer-prefixed tokens count, since that is the scope
     // the expansion is meant for.
+    // On a coarse pointer a pointer-coarse utility overrides the base one for
+    // that property; min-height is never overridden by height, so the used
+    // height is the larger of the two after that override.
     const hitHeightPx = (cls) => {
-      const tokens = cls.split(/\s+/).map((t) => t.replace(/^pointer-coarse:/, ''));
-      let height = 0;
-      let sideGrow = 0;
-      let topBottomGrow = 0;
-      for (const t of tokens) {
-        if (/^(?:min-)?h-/.test(t)) height = Math.max(height, tokenPx(t) ?? 0);
-        const inset = t.match(/^before:-(inset|inset-y)-(\d+(?:\.5)?)$/);
-        if (inset) sideGrow = Math.max(sideGrow, parseFloat(inset[2]) * 4);
-        const edge = t.match(/^before:-(top|bottom)-(\d+(?:\.5)?)$/);
-        if (edge) topBottomGrow += parseFloat(edge[2]) * 4;
-      }
-      const positioned = tokens.includes('before:absolute');
-      return positioned ? height + 2 * sideGrow + topBottomGrow : height;
+      const all = cls.split(/\s+/).filter(Boolean);
+      const base = all.filter((t) => !t.startsWith('pointer-coarse:'));
+      const coarse = all.filter((t) => t.startsWith('pointer-coarse:')).map((t) => t.slice('pointer-coarse:'.length));
+      const lastPx = (tokens, re) => {
+        let v = null;
+        for (const t of tokens) if (re.test(t)) v = tokenPx(t) ?? 0;
+        return v;
+      };
+      const hOf = lastPx(coarse, /^h-/) ?? lastPx(base, /^h-/) ?? 0;
+      const minOf = lastPx(coarse, /^min-h-/) ?? lastPx(base, /^min-h-/) ?? 0;
+      const height = Math.max(hOf, minOf);
+
+      // Pseudo-element growth only counts when this same class list positions
+      // the control and the ::before is absolutely positioned against it.
+      const stripped = [...base, ...coarse];
+      const positioned = stripped.some((t) => ['relative', 'absolute', 'fixed', 'sticky'].includes(t));
+      if (!positioned || !stripped.includes('before:absolute')) return height;
+      const insetTok = stripped.map((t) => t.match(/^before:-(?:inset|inset-y)-(\d+(?:\.5)?)$/)).find(Boolean);
+      if (insetTok) return height + 2 * parseFloat(insetTok[1]) * 4;
+      const topTok = stripped.map((t) => t.match(/^before:-top-(\d+(?:\.5)?)$/)).find(Boolean);
+      const bottomTok = stripped.map((t) => t.match(/^before:-bottom-(\d+(?:\.5)?)$/)).find(Boolean);
+      // An empty absolute ::before stretches only when both edges are set.
+      if (topTok && bottomTok) return height + (parseFloat(topTok[1]) + parseFloat(bottomTok[1])) * 4;
+      return height;
     };
     const hasTouchHitArea = (cls) => hitHeightPx(cls) >= 44;
     const offendersIn = (file, src) => {
@@ -2293,10 +2307,16 @@ describe('a11y conventions', () => {
     // h-5 (20px) plus -inset-2 is only 36px tall, so it stays an offender;
     // -inset-3 reaches 44px.
     expect(probe('pointer-coarse:before:absolute pointer-coarse:before:-inset-2 shrink-0 w-10 h-5 rounded-full')).toEqual(['probe.jsx:1']);
-    expect(probe('pointer-coarse:before:absolute pointer-coarse:before:-inset-3 shrink-0 w-10 h-5 rounded-full')).toEqual([]);
-    expect(probe('pointer-coarse:before:absolute pointer-coarse:before:-top-3 pointer-coarse:before:-bottom-3 h-5 rounded-full')).toEqual([]);
-    expect(probe('pointer-coarse:before:-inset-3 h-5 rounded-full')).toEqual(['probe.jsx:1']);
-    expect(probe('pointer-coarse:before:absolute pointer-coarse:before:-inset-x-3 h-5 rounded-full')).toEqual(['probe.jsx:1']);
+    // The ::before only grows a control that is itself positioned.
+    expect(probe('relative pointer-coarse:before:absolute pointer-coarse:before:-inset-3 shrink-0 w-10 h-5 rounded-full')).toEqual([]);
+    expect(probe('pointer-coarse:before:absolute pointer-coarse:before:-inset-3 shrink-0 w-10 h-5 rounded-full')).toEqual(['probe.jsx:1']);
+    expect(probe('relative pointer-coarse:before:absolute pointer-coarse:before:-top-3 pointer-coarse:before:-bottom-3 h-5 rounded-full')).toEqual([]);
+    // A lone edge offset does not stretch an empty absolute ::before.
+    expect(probe('relative before:absolute before:-top-6 h-5 rounded-full')).toEqual(['probe.jsx:1']);
+    expect(probe('relative pointer-coarse:before:-inset-x-3 h-5 rounded-full')).toEqual(['probe.jsx:1']);
+    // A pointer-coarse height overrides the base one on a coarse pointer.
+    expect(probe('h-11 pointer-coarse:h-5 rounded-full')).toEqual(['probe.jsx:1']);
+    expect(probe('h-5 pointer-coarse:min-h-11 rounded-full')).toEqual([]);
     expect(probe('pointer-coarse:min-h-11 w-10 h-5 rounded-full')).toEqual([]);
     expect(probe('pointer-coarse:min-h-[44px] w-10 h-5 rounded-full')).toEqual([]);
     // Dynamic className: the template's static tokens are what count.
@@ -2320,7 +2340,7 @@ describe('a11y conventions', () => {
     for (const file of trackedJsxFiles()) {
       if (file !== SHARED) offenders.push(...offendersIn(file, rawSourceOf(file)));
     }
-    expect(offenders, `role="switch" button under the 44px touch-target minimum — use components/ToggleSwitch.jsx, or give it min-h-[44px] / pointer-coarse:before:-inset-2:\n${offenders.join('\n')}`).toEqual([]);
+    expect(offenders, `role="switch" button under the 44px touch-target minimum — use components/ToggleSwitch.jsx, or give it min-h-[44px], or on a relative control pointer-coarse:before:absolute pointer-coarse:before:-inset-3 with an h-5 track:\n${offenders.join('\n')}`).toEqual([]);
   });
 
   it('keeps every file input focusable and label-activated', () => {
