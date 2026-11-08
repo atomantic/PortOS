@@ -203,7 +203,28 @@ export async function ensureDiagnosticsLabels({ cwd = PATHS.root, exec = runCli 
   }
 }
 
-const MALFORMED_LABEL = /^(?:model:[^ ]+|effort:[^ ]+|planner:[^ ]+|plan|tests|bug|data-safety|upgrade-rehearsal|security|needs-decision) (?:(--color )?#?([0-9A-Fa-f]{6}))(?: .*)?$/
+// Shape of a whole "name color description" string passed as one CLI argument:
+// a label-safe name, a space (optionally " --color "), a six-digit hex color,
+// then an optional free-text tail. Prefixes are not allowlisted, so new
+// categories match.
+const MALFORMED_LABEL = /^([A-Za-z0-9][A-Za-z0-9:._/-]*) (--color )?#?([0-9A-Fa-f]{6})(?: .*)?$/
+
+/**
+ * True when `name` has the malformed shape and is safe to consider for pruning.
+ * A "--color" marker is only produced by the broken loops, so it is decisive.
+ * Otherwise an all-digit tail is an id ("ticket 123456"). An all-letter tail is
+ * a color only in the uppercase form the broken loops emit ("tests BFDADC"), and
+ * only when the prefix is itself a label; a lowercase word ("tests decade") stays.
+ */
+function isPrunableMalformedLabel(name, existingNames) {
+  const malformed = name.match(MALFORMED_LABEL)
+  if (!malformed) return false
+  const [, prefix, colorFlag, hex] = malformed
+  if (colorFlag) return true
+  if (!/[A-Fa-f]/.test(hex)) return false
+  if (/[0-9]/.test(hex)) return true
+  return hex === hex.toUpperCase() && existingNames.has(prefix)
+}
 
 /**
  * Remove labels accidentally created by passing a whole "name color description"
@@ -223,14 +244,11 @@ async function pruneMalformedLabels({ cwd = PATHS.root, exec = runCli } = {}) {
     return { pruned: 0, skipped: 0 }
   }
 
+  const existingNames = new Set(labels.map(label => label.name))
   let pruned = 0
   let skipped = 0
   for (const { name } of labels) {
-    const malformed = name.match(MALFORMED_LABEL)
-    // Keep unrelated labels with number-like values (e.g. "ticket 123456").
-    // Only the label prefixes known to have been produced by the broken shell
-    // loops are candidates; a bare six-letter word such as "decade" is hex too.
-    if (!malformed || (!malformed[1] && !/[0-9]/.test(malformed[2]))) continue
+    if (!isPrunableMalformedLabel(name, existingNames)) continue
     // gh's --label filters split commas into multiple labels, so those names
     // cannot be checked safely through the issue/pr list commands.
     if (name.includes(',')) {

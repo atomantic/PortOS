@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { mkdir, writeFile, stat, readdir, unlink, readFile, utimes } from 'node:fs/promises';
 import { join } from 'node:path';
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../../lib/mockPathsDataRoot.js';
@@ -203,6 +203,77 @@ describe('Topaz job boundary', () => {
     expect(state.result.topazUncertain).toBe(true);
     expect(state.rows).toHaveLength(1);
     await expect(stat(topazPreparedPath(params.preparedId))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  describe('status poll resilience', () => {
+    const statusOutcomes = outcomes => {
+      const queue = [...outcomes];
+      const base = fetch;
+      vi.stubGlobal('fetch', vi.fn(async (url, opts = {}) => {
+        if (!String(url).endsWith('/status')) return base(url, opts);
+        state.statusCalls = (state.statusCalls || 0) + 1;
+        const next = queue.length ? queue.shift() : 'complete';
+        if (next === 'network') throw new Error('socket hang up');
+        if (typeof next === 'number') return response({ message: 'private provider data' }, next);
+        if (next === 'invalid') return new Response('not json', { status: 200 });
+        return response({ status: 'complete', download: { url: 'https://bucket.s3.amazonaws.com/output' } });
+      }));
+    };
+    beforeEach(() => {
+      state.statusCalls = 0;
+      const realSetTimeout = globalThis.setTimeout;
+      vi.spyOn(globalThis, 'setTimeout').mockImplementation((fn, ms, ...args) => realSetTimeout(fn, ms === 5000 ? 0 : ms, ...args));
+    });
+    afterEach(() => vi.restoreAllMocks());
+
+    it('publishes the result after a network error and an HTTP 503 on the status poll', async () => {
+      const { params } = await queued();
+      statusOutcomes(['network', 503]);
+      const failed = vi.fn(); videoGenEvents.once('failed', failed);
+      await runVideoUpscale(params);
+      expect(failed).not.toHaveBeenCalled();
+      expect(state.updates.some(update => update.patch.topazUncertain === false)).toBe(false);
+      expect(state.rows[0]).toMatchObject({ upscaleMethod: 'topaz' });
+      expect(state.statusCalls).toBe(3);
+    });
+
+    it('resets the failure count after a successful status read', async () => {
+      const { params } = await queued();
+      const processing = response({ status: 'processing', progress: 10 });
+      const base = fetch;
+      const queue = ['network', 429, 'processing', 502, 'network'];
+      vi.stubGlobal('fetch', vi.fn(async (url, opts = {}) => {
+        if (!String(url).endsWith('/status')) return base(url, opts);
+        const next = queue.shift();
+        if (next === 'network') throw new Error('offline');
+        if (typeof next === 'number') return response({}, next);
+        if (next === 'processing') return processing.clone();
+        return response({ status: 'complete', download: { url: 'https://bucket.s3.amazonaws.com/output' } });
+      }));
+      await runVideoUpscale(params);
+      expect(state.rows[0]).toMatchObject({ upscaleMethod: 'topaz' });
+    });
+
+    it('still fails as uncertain after more than the allowed consecutive transient failures', async () => {
+      const { params } = await queued();
+      statusOutcomes([503, 503, 503]);
+      const failed = vi.fn(); videoGenEvents.once('failed', failed);
+      await runVideoUpscale(params);
+      expect(failed).toHaveBeenCalledTimes(1);
+      expect(state.result.topazUncertain).toBe(true);
+      expect(state.statusCalls).toBe(3);
+      expect(state.rows).toHaveLength(1);
+    });
+
+    it.each([[401], [403], [404], ['invalid']])('does not retry a non-transient status failure (%s)', async outcome => {
+      const { params } = await queued();
+      statusOutcomes([outcome]);
+      const failed = vi.fn(); videoGenEvents.once('failed', failed);
+      await runVideoUpscale(params);
+      expect(failed).toHaveBeenCalledTimes(1);
+      expect(state.result.topazUncertain).toBe(true);
+      expect(state.statusCalls).toBe(1);
+    });
   });
 
   it('rejects unexpected provider geometry without publishing a result', async () => {

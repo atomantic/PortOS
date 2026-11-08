@@ -317,6 +317,7 @@ async function createAppUnlocked(appData) {
     // The gh account this app's repo is driven under. Absent (the default) means
     // "infer from the repo owner" — see services/forgeAuth.js.
     ...(appData.forgeAccount?.trim() ? { forgeAccount: appData.forgeAccount.trim() } : {}),
+    ...(appData.deploymentModel?.trim() ? { deploymentModel: appData.deploymentModel.trim() } : {}),
     // Only persisted when explicitly sent. Absent means ON (see
     // repoStateVerificationEnabled), so writing a default here would freeze the
     // app against a future change of that default — but an explicit `false` on

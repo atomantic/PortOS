@@ -428,6 +428,10 @@ Nothing picks a tier automatically — not the description, priority, context si
 | persistentMindThinkingPresets.presets | [] | Saved named alternates (exact provider/model/effort) one message may borrow for a single turn. Empty by default; storing one changes nothing about the route the mind wakes on |
 | avatarStyle | svg | Default CoS UI avatar style (`svg`, `ascii`, `core`, the 3D styles, or a `rigged-<modelId>` record) |
 
+### Malformed tracker label prune
+
+The `job-self-diagnostics` scheduled job (`server/services/autonomousJobs/selfDiagnostics.js`) also deletes tracker labels created by accident, such as `macos 0366D6` or `effort:low --color BFE5E5`, when a whole "name color description" string was passed as one CLI argument. A label is deleted only when its name matches that shape, it has no comma, and both issue and PR searches show no use. Any failed usage lookup leaves the label in place. The job ships disabled, so the operator must enable `job-self-diagnostics` in the autonomous jobs settings for this prune to keep running; otherwise malformed labels accumulate again.
+
 ### Temporary thinking sessions in the Mind UI
 
 Saved alternates are managed in **Mind → Models** (`/cos/mind?panel=models`). Adding, editing, previewing, or removing a preset writes only `persistentMindThinkingPresets` through `PUT /api/cos/config` — it never starts a turn, never resumes a paused mind, never infers, and never downloads a model. Sending the list replaces the whole array (PUT merges top-level keys only), because a merge cannot express "remove this one entry" and would resurrect a deleted preset.

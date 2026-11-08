@@ -252,12 +252,24 @@ describe('pruneMalformedLabels', () => {
         { name: 'good first issue' },
         { name: 'help wanted' },
         { name: 'needs decade' },
+        { name: 'needs decade' },
+        { name: 'ticket decade' },
         { name: 'sprint 202401' },
         { name: 'ticket 123456' },
-        { name: 'release 20251a' },
+        { name: 'bug #123456' },
         { name: 'model:light D4C5F9' },
         { name: 'effort:medium --color 76C7C7' },
-        { name: 'security 0366D6 Proposed from a security audit' }
+        { name: 'security 0366D6 Proposed from a security audit' },
+        { name: 'data-integrity 0366D6' },
+        { name: 'macos 0366D6' },
+        { name: 'plan 428BCA Tracked by /do:replan' },
+        { name: 'effort:low --color BFE5E5' },
+        { name: 'effort:low --color BFDADC' },
+        { name: 'tests' },
+        { name: 'tests BFDADC' },
+        { name: 'bug' },
+        { name: 'bug facade' },
+        { name: 'tests decade' }
       ]) } },
       { match: argsHaveIssueLabel, result: { code: 0, stdout: '[]' } },
       { match: argsHavePrLabel, result: { code: 0, stdout: '[]' } },
@@ -267,8 +279,18 @@ describe('pruneMalformedLabels', () => {
 
     await invokeHandler(exec)
     const deleted = exec.mock.calls.filter(([, args]) => args.includes('delete')).map(([, args]) => args[2])
-    expect(deleted).toEqual(['model:light D4C5F9', 'effort:medium --color 76C7C7', 'security 0366D6 Proposed from a security audit'])
-    expect(log).toHaveBeenCalledWith('🧹 Pruned 3 malformed labels')
+    expect(deleted).toEqual([
+      'model:light D4C5F9',
+      'effort:medium --color 76C7C7',
+      'security 0366D6 Proposed from a security audit',
+      'data-integrity 0366D6',
+      'macos 0366D6',
+      'plan 428BCA Tracked by /do:replan',
+      'effort:low --color BFE5E5',
+      'effort:low --color BFDADC',
+      'tests BFDADC'
+    ])
+    expect(log).toHaveBeenCalledWith('🧹 Pruned 9 malformed labels')
     log.mockRestore()
   })
 

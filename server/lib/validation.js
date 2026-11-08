@@ -357,6 +357,9 @@ export const appSchema = z.object({
   useAutoMerge: z.boolean().optional(),
   // Unset/false = off (default); true = land a `.quality.json` quality snapshot through an immediately-merged PR after each audit.
   publishQualitySnapshot: z.boolean().optional(),
+  // Free-text deployment assumptions (who uses it, what runs beside the user)
+  // every quality audit weighs reachability against. Empty clears it.
+  deploymentModel: z.string().trim().max(2000).optional(),
   featureOverrides: appFeatureOverridesSchema.optional(),
   jira: jiraConfigSchema.optional().nullable(),
   datadog: datadogConfigSchema.optional().nullable(),

@@ -27,6 +27,18 @@ describe('scheduled audit measurement workflow', () => {
     expect(auditQualityInstructions('react-lifecycle')).toContain('"category":"ui-lifecycle"');
   });
 
+  // Unique regression: the owner's stated deployment model reaches every audit,
+  // and an app without one falls back to the repository's docs, never to a
+  // hardcoded single-user assumption.
+  it('calibrates reachability against the app deployment model', () => {
+    const stated = auditQualityInstructions('app-bugs', { deploymentModel: 'Public SaaS, many tenants.\nTwo regions.' });
+    expect(stated).toContain('> Public SaaS, many tenants.\n> Two regions.');
+    expect(stated).toContain('the same action fired twice');
+    const fallback = auditQualityInstructions('data-integrity', { deploymentModel: '   ' });
+    expect(fallback).toContain("Take the deployment model from the app's own requirements: its PRD, spec");
+    expect(auditQualityInstructions('security')).toContain('Reachability check');
+  });
+
   it('persists Design screenshot coverage through the existing assessment and slice history contract', async () => {
     const designReport = sliceReport({ category: 'design', slice: 'client/src/components/media',
       sliceScore: null, coverage: 'unavailable', confidence: 'low', worstSeverity: 0,

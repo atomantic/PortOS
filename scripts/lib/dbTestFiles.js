@@ -42,6 +42,7 @@ export const DB_TEST_INCLUDE = [
   'services/catalogSync.pendingParents.db.test.js',
   'services/humanActivity.db.test.js',
   'services/gmailActivityIdentity.db.test.js',
+  'services/goalScorecard.db.test.js',
   'services/postRunDb.db.test.js',
   'services/userActions.db.test.js',
   'services/memoryDB.db.test.js',
@@ -86,6 +87,7 @@ export const DB_TEST_INCLUDE = [
   'scripts/db-migrations/023-owned-records-join-universe-canon.db.test.js',
   'scripts/db-migrations/024-scrap-canon-entries.db.test.js',
   'scripts/db-migrations/025-drop-replicated-brain-bridge-memories.db.test.js',
+  'scripts/db-migrations/029-spotify-live-keys-whole-second.db.test.js',
 ];
 
 const patterns = DB_TEST_INCLUDE.map((pattern) => posix.normalize(posix.join('server', pattern)));

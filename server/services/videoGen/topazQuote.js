@@ -30,7 +30,7 @@ export async function topazRequest(path, { method = 'GET', body, key, signal } =
   }).catch(() => { throw new ServerError('Topaz could not be reached.', { status: 502, code: 'TOPAZ_UNAVAILABLE' }); });
   if (!response.ok) {
     if (response.status === 401 || response.status === 403) throw new ServerError('Topaz rejected the API key or access.', { status: 400, code: 'TOPAZ_AUTH' });
-    throw new ServerError(`Topaz request failed (HTTP ${response.status}).`, { status: 502, code: 'TOPAZ_REQUEST_FAILED' });
+    throw Object.assign(new ServerError(`Topaz request failed (HTTP ${response.status}).`, { status: 502, code: 'TOPAZ_REQUEST_FAILED' }), { upstreamStatus: response.status });
   }
   if (response.status === 204) return {};
   return response.json().catch(() => { throw new ServerError('Topaz returned an invalid response.', { status: 502, code: 'TOPAZ_INVALID_RESPONSE' }); });

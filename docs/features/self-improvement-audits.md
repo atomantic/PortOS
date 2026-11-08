@@ -117,6 +117,7 @@ chosen cadence remains the trigger; adding this lane starts no provider work.
 | `better-cognitive-load` | Reader cost no metric captures | `code-quality`, `cognitive-load` | file | yes |
 | `better-structural-drift` | The same fact kept in two places | `code-quality`, `structural-drift` | file | yes |
 | `better-runtime-safety` | Latent defects not yet triggered | `bug`, `runtime-safety` | file | |
+| `app-bugs` | Server and core-logic behavior bugs a user or job can hit: wrong results, edge inputs, success that did nothing, user-triggerable races | `bug`, `app-bug` | file | |
 | `better-dependency-freedom` | Whether a dependency should exist at all | `dependencies`, `depfree` | file | yes |
 | `better-test-quality` | Existing tests that prove nothing | `tests`, `test-quality` | file | |
 | `better-dev-environment` | What the dev loop leaves on the host | `tests`, `dev-environment` | file | |
@@ -201,8 +202,9 @@ problem:
   including `portos` and `portos_test`); with no creatable scratch database the
   run reports the Postgres steps as uncovered. It files only what the executed path
   broke, one issue per root cause (#12091).
-- **Defects are split four ways.** `better-runtime-safety` reads source for
-  latent defects; `console-errors` collects what actually errors at runtime;
+- **Defects are split five ways.** `better-runtime-safety` reads source for
+  latent code-shape defects; `app-bugs` traces server routes and jobs against
+  what they promise for behavior bugs; `console-errors` collects what actually errors at runtime;
   `error-handling` owns the failure path once something goes wrong; and
   `ui-lifecycle` owns UI lifecycle and state correctness across UI runtimes.
   Its checks follow the target app’s own semantics.
@@ -275,3 +277,17 @@ is running on a budget provider, rather than quietly lowering the bar. Pin the
 model and effort on the same Schedule card. The server-side vocabulary is
 `DEPFREE_MODES` in `server/lib/auditCatalog.js`, beside the block text in
 `applyDepfreeMode`; `server/lib/cosValidation.js` re-exports the vocabulary.
+
+## Reachability check and the app's deployment model
+
+Every audit carries one shared calibration rule: weigh a candidate by how
+likely it is under the app's real deployment model and drop what that model
+rules out. A single-user install drops multi-user edit races; a multi-user app
+keeps them. One person's own concurrency stays in scope for every app: repeated
+submits, two tabs or devices, background and scheduled jobs beside the UI,
+parallel jobs on shared state, sync with the user's other machines, and a
+restart mid-operation. A race finding names both actors and how they overlap.
+
+The model comes from **Edit App > Workflow > Deployment model for quality
+audits** (`deploymentModel` on the app record) when set, otherwise from the
+app's requirements, PRD, spec, `AGENTS.md`, README and deployment config.
