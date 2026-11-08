@@ -60,6 +60,7 @@ function PortosShellView() {
     sendCtrlB,
     sendCtrlC,
     sendEsc,
+    sendAltM,
     sendNavKey,
     scrollPage,
     restartSession,
@@ -125,11 +126,11 @@ function PortosShellView() {
     if (showPasteInput) pasteInputRef.current?.focus();
   }, [showPasteInput]);
 
-  // The two toolbars render the same hot-key strip with the same eleven props and
+  // The two toolbars render the same hot-key strip with the same props and
   // differ only in which way its popover opens; spread one object so a new prop
   // reaches both.
   const hotKeyProps = {
-    sendCtrlB, sendCtrlC, sendEsc, handlePaste, sendNavKey, scrollPage,
+    sendCtrlB, sendCtrlC, sendEsc, sendAltM, handlePaste, sendNavKey, scrollPage,
     showPasteInput, setShowPasteInput, pasteInputRef, handlePasteInputEvent, sendImage,
   };
 
