@@ -128,9 +128,6 @@ export default function SceneTakeStrip({
               {take.dependencies?.references?.some((ref) => ref.role === 'clipReferences' && ref.untrackedCastGuides) && (
                 <p className="text-[10px] text-port-warning break-words">Cast guide changes are not tracked. Review this take before use.</p>
               )}
-              <AssetReferenceActions assetId={take.assetId}
-                url={kind === 'video' ? null : takeThumbUrl(take)}
-                resolveUrl={kind === 'video' ? () => videoTakeUrl(take) : null} />
               {take.takeId && (
                 <div className="flex flex-wrap gap-1">
                   {!isSelected && (
@@ -175,6 +172,10 @@ export default function SceneTakeStrip({
                   </button>
                 </div>
               )}
+              {/* Secondary: copy the file's ID or URL, after the review actions. */}
+              <AssetReferenceActions assetId={take.assetId} compact
+                url={kind === 'video' ? null : takeThumbUrl(take)}
+                resolveUrl={kind === 'video' ? () => videoTakeUrl(take) : null} />
               {kind === 'image' && currentPlateEvidence(scene, take)?.checks.filter((check) => check.id === 'render-quality' && check.status === 'fail').map((check) => (
                 <div key={check.id} className="space-y-1 text-xs text-port-warning">
                   <p className="break-words">Rendering defect: {check.note}</p>

@@ -66,3 +66,10 @@ it('shows a verdict only after a check, opens it to the misses, and checks a fra
   fireEvent.click(screen.getByRole('button', { name: 'Issues (1)' }));
   expect(screen.getByText('There is no chair.')).toBeInTheDocument();
 });
+
+// Uniquely catches the take card's copy actions reverting to the full-width buttons.
+it('shows compact copy chips on a take card', () => {
+  render(<SceneTakeStrip scene={scene} kind="image" />);
+  const copyId = screen.getAllByRole('button', { name: 'Copy ID' })[0];
+  expect(copyId.textContent.trim()).toBe('ID');
+});
