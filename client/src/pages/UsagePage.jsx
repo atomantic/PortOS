@@ -1313,7 +1313,7 @@ function InternalUsageMetrics({ onBillingSaved }) {
             <span>6pm</span>
             <span>12am</span>
           </div>
-          <p className="text-xs text-gray-500 mt-1">Sessions in this period across available instances, by each instance&rsquo;s local clock.</p>
+          <p className="text-xs text-gray-500 mt-1">Sessions in this period across available instances, by hour in your configured timezone (sessions recorded before this change use UTC).</p>
           {usage.coverage?.hourlyIncomplete && <p className="text-xs text-port-warning mt-1">Partial: older sessions or unavailable instances do not provide hourly detail.</p>}
           </> : <p className="text-sm text-gray-500">Hourly data is unavailable for this period.</p>}
         </div>

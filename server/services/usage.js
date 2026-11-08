@@ -6,6 +6,8 @@ import { familyForProvider, familyForProviderId } from '../lib/providerFamilies.
 import { roundCents } from '../lib/subscriptionSavings.js';
 import { POLLUTING_KEYS } from '../lib/objects.js';
 import { nativeUsageSignature, withNativeUsage } from './nativeUsageHistory.js';
+import { getLocalParts } from '../lib/timezone.js';
+import { getUserTimezone } from './userTimezone.js';
 
 const DATA_DIR = PATHS.data;
 export const USAGE_FILE = join(DATA_DIR, 'usage.json');
@@ -744,8 +746,9 @@ async function recordSessionDraft(providerId, providerName, rawModel) {
   providerDay.sessions++;
   if (model) modelDayBucket(providerDay, model).sessions++;
 
-  // Track hourly activity
-  const hour = new Date().getHours();
+  // Track hourly activity in the user's configured timezone. The server runs with TZ=UTC,
+  // so the host clock would bucket every session by UTC hour.
+  const hour = getLocalParts(new Date(), await getUserTimezone()).hour;
   usageData.hourlyActivity[hour]++;
   // Keep the day as well as the lifetime histogram so a selected reporting
   // window can be answered without inventing timestamps for older sessions.
