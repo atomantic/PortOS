@@ -274,6 +274,26 @@ export async function updateReleaseSynchronizationOwnership(agentId, action) {
 }
 
 /**
+ * Completion hold as the reconcile classifier sees it. The classifier hands an
+ * unshipped review-then-merge branch (no PR ever recorded) to a coordinator to
+ * open its PR, so the recheck must not refuse that same branch on the hold the
+ * classifier released. The Recheck carries no PR URL, so only an exact forge
+ * read showing no open PR releases it: once the coordinator opens one, the
+ * before-merge recheck sees it and the review hold gates the merge again.
+ * @returns {Promise<string|null>}
+ */
+async function readReconcileCompletionHold(input, deps = {}) {
+  const policy = await import('./branchCompletionPolicy.js');
+  const reason = await (deps.readStrictCompletionHold ?? policy.readBranchCompletionHold)(input);
+  if (reason !== 'pr-completion-review-required' || input.prUrl) return reason;
+  const detail = await (deps.readCompletionHoldDetail ?? policy.readBranchCompletionHoldDetail)(input);
+  if (detail?.reason !== reason || detail.unshipped !== true) return reason;
+  const readOpenPr = deps.readOpenPrForBranch ?? (await import('./branchReconcile.js')).readOpenPrForBranch;
+  const hasOpenPr = await readOpenPr(input.repoPath, input.branch, { forgeAccount: input.forgeAccount ?? null }).catch(() => null);
+  return hasOpenPr === false ? null : reason;
+}
+
+/**
  * Whether a branch-reconcile worker may mutate `branch` right now. Admits only
  * when the checkout it was dispatched at still holds the branch and no live
  * owner (agent, lock, or registered/possible claim run) holds it.
@@ -294,7 +314,7 @@ export async function checkReconcileOwnership(input, deps = {}) {
   const getAppById = deps.getAppById ?? (await import('./apps.js')).getAppById;
   const listWorktrees = deps.listWorktrees ?? (await import('./worktreeManager.js')).listWorktrees;
   const getAgents = deps.getAgents ?? readClaimOwnershipAgents;
-  const readCompletionHold = deps.readCompletionHold ?? (await import('./branchCompletionPolicy.js')).readBranchCompletionHold;
+  const readCompletionHold = deps.readCompletionHold ?? (holdInput => readReconcileCompletionHold(holdInput, deps));
   const getActiveAgentIds = deps.getActiveAgentIds ?? (await import('./agentState.js')).getActiveAgentIds;
   const { buildActiveOwnerIds, resolveLiveOwnerReason } = await import('./branchReconcile.js');
 
@@ -309,7 +329,8 @@ export async function checkReconcileOwnership(input, deps = {}) {
   const admit = async () => {
     const agents = await getAgents().catch(() => null);
     if (!Array.isArray(worktrees) || !Array.isArray(agents)) return { admitted: false, reason: 'ownership-unreadable' };
-    const completionHold = await readCompletionHold({ repoPath, branch, prUrl }).catch(() => 'pr-completion-policy-unavailable');
+    const completionHold = await readCompletionHold({ repoPath, branch, prUrl, forgeAccount: app.forgeAccount ?? null })
+      .catch(() => 'pr-completion-policy-unavailable');
     if (completionHold) return { admitted: false, reason: completionHold };
     if (worktreePath && !samePath(holder?.path, worktreePath)) return { admitted: false, reason: 'holder-changed' };
     const fenced = checkoutRetirementFenceReason({ repoPath, branch, path: holder?.path || null });
@@ -381,5 +402,8 @@ export async function checkSnapshotPublicationOwnership({ appId, branch, prUrl }
     && agent.metadata.reviewLoopMergeTarget.branch === branch)) {
     return { admitted: false, reason: 'review-owner-active' };
   }
-  return checkReconcileOwnership({ appId, branch, prUrl }, { ...deps, getAgents: async () => agents });
+  // Publication keeps the strict hold: the reconcile-only unshipped release
+  // exists for a coordinator that opens the PR through the review workflow.
+  const readCompletionHold = deps.readCompletionHold ?? (await import('./branchCompletionPolicy.js')).readBranchCompletionHold;
+  return checkReconcileOwnership({ appId, branch, prUrl }, { ...deps, readCompletionHold, getAgents: async () => agents });
 }

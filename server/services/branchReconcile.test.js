@@ -137,7 +137,7 @@ import {
   SHIPPED_CLAIM_IDLE_MS, STALE_CLAIM_IDLE_MS, SUPERSEDED_UNMANAGED_IDLE_MS,
   isMalformedClaimBranch,
   listRemoteHeads, upstreamBranchName, parseRemoteHeads, partitionRemoteOrphans, reapOrphanedRemotes,
-  reapSupersededBranches, buildActiveOwnerIds
+  reapSupersededBranches, buildActiveOwnerIds, readOpenPrForBranch
 } from './branchReconcile.js';
 import * as git from './git.js';
 import * as wt from './worktreeManager.js';
@@ -734,6 +734,24 @@ describe('buildActiveOwnerIds', () => {
     expect(buildActiveOwnerIds(new Set(), null)).toBeNull();
     expect([...buildActiveOwnerIds(new Set(['agent-rt']), live)].sort()).toEqual(['agent-live', 'agent-rt', 'claim-x']);
     expect(buildActiveOwnerIds(new Set(), [])).toEqual(new Set());
+  });
+});
+
+// A recheck releases an unshipped review hold only on a definite "no open PR".
+describe('readOpenPrForBranch', () => {
+  it('asks the forge for the exact head and never reports "no PR" when it cannot answer', async () => {
+    execGh.mockResolvedValueOnce('[]');
+    expect(await readOpenPrForBranch('/repo', 'cos/task-x/agent-1')).toBe(false);
+    expect(execGh.mock.lastCall[0]).toEqual(['pr', 'list', '--repo', 'github.com/atomantic/PortOS', '--state', 'open', '--head', 'cos/task-x/agent-1', '--json', 'number']);
+    expect(execGh.mock.lastCall[2]).toMatchObject({ env: PINNED_ENV });
+    execGh.mockResolvedValueOnce('[{"number":7}]');
+    expect(await readOpenPrForBranch('/repo', 'cos/task-x/agent-1')).toBe(true);
+    execGh.mockRejectedValueOnce(new Error('gh failed'));
+    expect(await readOpenPrForBranch('/repo', 'cos/task-x/agent-1')).toBeNull();
+    execGh.mockResolvedValueOnce('not json');
+    expect(await readOpenPrForBranch('/repo', 'cos/task-x/agent-1')).toBeNull();
+    getOriginInfo.mockResolvedValueOnce({ hasOrigin: true, isGithub: false, host: 'gitlab.example.com', fullName: 'o/r' });
+    expect(await readOpenPrForBranch('/repo', 'cos/task-x/agent-1')).toBeNull();
   });
 });
 

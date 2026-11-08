@@ -341,6 +341,23 @@ async function getOpenPrsByHead(repoPath, providedOrigin, { forgeExec = null, fo
 }
 
 /**
+ * Whether `branch` has an open PR: true/false, or null when the forge cannot
+ * answer (non-GitHub origin, gh failure, unparseable output). An exact `--head`
+ * query rather than `getOpenPrsByHead`'s capped list, whose empty Map for a
+ * non-GitHub origin must never read as "no PR" to a caller releasing a hold.
+ * @returns {Promise<boolean|null>}
+ */
+export async function readOpenPrForBranch(repoPath, branch, { forgeAccount = null } = {}) {
+  const repoSpec = githubRepoSpec(await getOriginInfo(repoPath).catch(() => null));
+  if (!repoSpec || !branch) return null;
+  const { cwd, env } = await resolveForgeExecOptions(repoPath, { forgeAccount });
+  const raw = await execGh(['pr', 'list', '--repo', repoSpec, '--state', 'open', '--head', branch, '--json', 'number'],
+    undefined, { cwd, env }).catch(() => null);
+  const parsed = raw === null ? null : safeJSONParse(raw, null);
+  return Array.isArray(parsed) ? parsed.length > 0 : null;
+}
+
+/**
  * Reason a worktree must NOT be torn down, or null if it's safe to remove.
  * Pure — the dangerous-to-remove cases the deterministic cleanup must respect
  * (mirrors the guards the existing worktree reaper honors), in gate order — a
