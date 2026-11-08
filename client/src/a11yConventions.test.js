@@ -3824,17 +3824,22 @@ describe('a11y conventions', () => {
       if (arb) return parseFloat(arb[1]) * (arb[2] === 'rem' ? 16 : 1);
       return /^\d+$/.test(v) ? Number(v) * 4 : null;
     };
-    const SHRINK_OVERRIDE = /^((?:[^:\s]+:)*)(min-[hw])-(.+)$/;
+    // Height and width both count: `h-11 sm:h-8` shrinks a 44px box as surely as
+    // `min-h-[44px] sm:min-h-0`. A max-h/max-w cap below 44px is also a shrink.
+    const SHRINK = /^((?:[^:\s]+:)*)(?:min-|max-)?([hw])-(.+)$/;
     const offendersIn = (file, src) => {
       const out = [];
       for (const seg of src.matchAll(/"([^"\n]*)"|'([^'\n]*)'|`([^`]*)`/g)) {
         const tokens = (seg[1] ?? seg[2] ?? seg[3] ?? '').split(/\s+/).filter(Boolean);
-        for (const axis of ['min-h', 'min-w']) {
-          const prefix = `${axis}-`;
-          const hasFloor = tokens.some((t) => !t.includes(':') && t.startsWith(prefix) && (pxOf(t.slice(prefix.length)) ?? 0) >= MIN_FLOOR_PX);
-          if (!hasFloor) continue;
+        const floorOf = (t) => {
+          const m = /^(?:pointer-coarse:)?(?:min-)?([hw])-(.+)$/.exec(t);
+          return m && (pxOf(m[2]) ?? 0) >= MIN_FLOOR_PX ? m[1] : null;
+        };
+        const floors = new Set(tokens.filter((t) => !t.includes(':') || t.startsWith('pointer-coarse:')).map(floorOf).filter(Boolean));
+        for (const axis of floors) {
+          const coarseFloor = tokens.some((t) => t.startsWith('pointer-coarse:') && floorOf(t) === axis);
           const shrinks = tokens.some((t) => {
-            const m = SHRINK_OVERRIDE.exec(t);
+            const m = SHRINK.exec(t);
             if (!m || m[2] !== axis) return false;
             const variants = m[1].split(':').filter(Boolean);
             if (variants.includes('pointer-fine')) return false;
@@ -3842,7 +3847,6 @@ describe('a11y conventions', () => {
             const px = pxOf(m[3]);
             return px !== null && px < MIN_FLOOR_PX;
           });
-          const coarseFloor = tokens.some((t) => t.startsWith(`pointer-coarse:${prefix}`) && (pxOf(t.slice(`pointer-coarse:${prefix}`.length)) ?? 0) >= MIN_FLOOR_PX);
           if (shrinks && !coarseFloor) out.push(`${file}:${lineOf(src, seg.index)}`);
         }
       }
@@ -3858,6 +3862,10 @@ describe('a11y conventions', () => {
     expect(offendersIn('probe.jsx', '<button className="min-h-[44px] pointer-coarse:min-h-11 sm:min-h-0">x</button>')).toEqual([]);
     // Axes are independent: a 44px height does not excuse a shrunken width.
     expect(offendersIn('probe.jsx', '<button className="min-h-[44px] sm:min-w-0">x</button>')).toEqual([]);
+    // Bare height/width floors and their breakpoint shrinks.
+    expect(offendersIn('probe.jsx', '<button className="h-11 w-14 sm:h-8">x</button>')).toEqual(['probe.jsx:1']);
+    expect(offendersIn('probe.jsx', '<button className="h-11 w-14 pointer-fine:sm:h-8">x</button>')).toEqual([]);
+    expect(offendersIn('probe.jsx', '<button className="min-h-[44px] sm:max-h-[20px]">x</button>')).toEqual(['probe.jsx:1']);
 
     const offenders = trackedJsxFiles()
       .filter((file) => !/\.test\.jsx?$/.test(file))

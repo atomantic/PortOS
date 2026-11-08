@@ -214,18 +214,18 @@ export default function TitleCardPanel({ project, onEditLocal, onSave, onPreview
             <div>
               <label htmlFor="mv-title-card-color" className={labelCls}>Text</label>
               <input id="mv-title-card-color" type="color" value={card.color}
-                onChange={(e) => edit({ color: e.target.value })} onBlur={() => commit()} className="h-11 w-14 rounded border border-port-border bg-port-bg sm:h-8" />
+                onChange={(e) => edit({ color: e.target.value })} onBlur={() => commit()} className="h-11 w-14 rounded border border-port-border bg-port-bg pointer-fine:sm:h-8" />
             </div>
             <div>
               <label htmlFor="mv-title-card-title-color" className={labelCls}>Title</label>
               <input id="mv-title-card-title-color" type="color" value={card.titleColor || (card.style === 'mtv' ? TITLE_CARD_MTV_COLORS.title : card.color)}
-                onChange={(e) => edit({ titleColor: e.target.value })} onBlur={() => commit()} className="h-11 w-14 rounded border border-port-border bg-port-bg sm:h-8" />
+                onChange={(e) => edit({ titleColor: e.target.value })} onBlur={() => commit()} className="h-11 w-14 rounded border border-port-border bg-port-bg pointer-fine:sm:h-8" />
             </div>
             {card.style === 'mtv' && (
               <div>
                 <label htmlFor="mv-title-card-accent" className={labelCls}>Bar</label>
                 <input id="mv-title-card-accent" type="color" value={card.accentColor || TITLE_CARD_MTV_COLORS.accent}
-                  onChange={(e) => edit({ accentColor: e.target.value })} onBlur={() => commit()} className="h-11 w-14 rounded border border-port-border bg-port-bg sm:h-8" />
+                  onChange={(e) => edit({ accentColor: e.target.value })} onBlur={() => commit()} className="h-11 w-14 rounded border border-port-border bg-port-bg pointer-fine:sm:h-8" />
               </div>
             )}
             <label htmlFor="mv-title-card-quote" className="inline-flex min-h-[44px] items-center gap-2 text-xs text-port-text-muted pointer-fine:sm:min-h-0">
