@@ -61,6 +61,9 @@ def exercise(runner, scenario):
     class Gemma4LanguageModel(Text):
         pass
 
+    class Array:
+        pass
+
     class Connector:
         def __init__(self):
             gc.collect()
@@ -75,8 +78,13 @@ def exercise(runner, scenario):
             assert weights == [('projection', 2)]
             fail('connector-load')
 
+        def parameters(self):
+            return {'projection': Array()}
+
         def __call__(self, hidden, attention_mask):
             fail('connector-apply')
+            if split_expected:
+                assert events[-1] == 'cpu-eval', 'connector weights not resolved on CPU first'
             assert attention_mask.value == [0, 1, 1]
             owners = [self, hidden, attention_mask]
             return (Lazy(sum(x.value for x in hidden), owners, 'output-eval'),
@@ -128,7 +136,18 @@ def exercise(runner, scenario):
     blocks._materialize = materialize
     blocks.load_split_safetensors = lambda path, prefix: {'projection': 2}
     utils.blocks = blocks
-    for module in (pkg, utils, blocks):
+    mlx, mlx_core, mlx_utils = (types.ModuleType(n) for n in ('mlx', 'mlx.core', 'mlx.utils'))
+    mlx_core.array, mlx_core.cpu = Array, 'cpu'
+
+    @contextlib.contextmanager
+    def stream(device):
+        assert device == 'cpu'
+        yield
+
+    mlx_core.stream = stream
+    mlx_core.eval = lambda arrays: events.append('cpu-eval') if len(arrays) == 1 else None
+    mlx_utils.tree_flatten = lambda tree: list(tree.items())
+    for module in (pkg, utils, blocks, mlx, mlx_core, mlx_utils):
         sys.modules[module.__name__] = module
     runner._split_prompt_runtime_supported = lambda module: True
     os.environ['LTX2_GEMMA_MAX_LENGTH'] = '4'
