@@ -5,12 +5,18 @@ import { getMusicVideoShotRenders } from '../services/apiMusicVideo.js';
 // The project fields that can change which cached shot segments are current.
 const renderInputs = (project) => JSON.stringify([project?.scenes, project?.filmLook, project?.composition, project?.statsOutro, project?.creditsOutro, project?.trackId, project?.lyricCues, project?.renderHistoryId]);
 
+// Entering 'rendering' stamps the entry with its clock tick; progress events of the same render keep that tick.
+const withRenderStart = (prev, sceneId, entry, stamp) => {
+  if (entry?.state !== 'rendering') return entry;
+  return { ...entry, since: prev[sceneId]?.state === 'rendering' ? prev[sceneId].since : stamp };
+};
+
 /**
  * The composed final render's per-shot cache state (`GET /:id/shot-renders`):
  * read when the project's render inputs change (debounced, as edits land) and
  * when a shot render settles, plus each shot's live render from the
- * `music-video:shot-render` events. Returns `{ status, live, markLive, refresh, retry }`,
- * `live` keyed by sceneId (`{ state, progress, error }`). Off (null) for other render styles.
+ * `music-video:shot-render` events. Returns `{ status, live, markLive, clearLive, refresh, retry }`,
+ * `live` keyed by sceneId (`{ state, progress, error, since }`). Off (null) for other render styles.
  */
 export default function useMusicVideoShotRenders(project) {
   const projectId = project?.id;
@@ -19,15 +25,34 @@ export default function useMusicVideoShotRenders(project) {
   const [status, setStatus] = useState(null);
   const [live, setLive] = useState({});
   const generation = useRef(0);
+  // Logical clock for live entries and read issue times: ticks are unique, so "entered before this read" is strict.
+  const clock = useRef(0);
+
+  // Drops 'rendering' entries the server does not list, when they entered before the read was issued.
+  // Entries stamped later are a newer render the read cannot have seen.
+  const dropStaleRendering = (fresh, issuedAt) => {
+    const serverRendering = new Set((fresh.shots || []).filter((shot) => shot.rendering).map((shot) => shot.sceneId));
+    setLive((prev) => {
+      let next = null;
+      for (const [sceneId, entry] of Object.entries(prev)) {
+        if (entry.state !== 'rendering' || entry.since > issuedAt || serverRendering.has(sceneId)) continue;
+        next ??= { ...prev };
+        delete next[sceneId];
+      }
+      return next ?? prev;
+    });
+  };
 
   // Resolves to the fresh status, or null when this read was superseded or failed.
   const refresh = useRef(null);
   refresh.current = () => {
     const ticket = ++generation.current;
+    const issuedAt = ++clock.current;
     return getMusicVideoShotRenders(projectId, { silent: true })
       .then((next) => {
         if (ticket !== generation.current) return null;
         setStatus(next);
+        if (next && !next.error) dropStaleRendering(next, issuedAt);
         return next;
       })
       .catch((err) => {
@@ -45,9 +70,6 @@ export default function useMusicVideoShotRenders(project) {
       });
   };
 
-  const liveRef = useRef(live);
-  liveRef.current = live;
-
   useEffect(() => {
     generation.current += 1;
     setStatus(null);
@@ -64,9 +86,10 @@ export default function useMusicVideoShotRenders(project) {
     if (!projectId || !composed) return undefined;
     const onEvent = (event) => {
       if (event?.projectId !== projectId || !event.sceneId) return;
+      const stamp = ++clock.current;
       setLive((prev) => {
         const next = { ...prev };
-        if (event.state === 'rendering' || event.state === 'failed') next[event.sceneId] = event;
+        if (event.state === 'rendering' || event.state === 'failed') next[event.sceneId] = withRenderStart(prev, event.sceneId, event, stamp);
         else delete next[event.sceneId];
         return next;
       });
@@ -74,24 +97,10 @@ export default function useMusicVideoShotRenders(project) {
     };
     socket.on('music-video:shot-render', onEvent);
     // A terminal event sent while the socket was down is never replayed, and a server restart
-    // kills the render outright: re-read on reconnect and drop the rendering entries the server no longer lists.
+    // kills the render outright: re-read on reconnect (the read reconciles stale live entries).
     let active = true;
     const onConnect = () => {
-      const atConnect = liveRef.current;
-      refresh.current().then((fresh) => {
-        if (!active || !fresh || fresh.error) return;
-        const serverRendering = new Set((fresh.shots || []).filter((shot) => shot.rendering).map((shot) => shot.sceneId));
-        setLive((prev) => {
-          let next = null;
-          for (const [sceneId, entry] of Object.entries(prev)) {
-            // Identity check: an entry a newer event replaced while this read was in flight is not stale.
-            if (entry.state !== 'rendering' || entry !== atConnect[sceneId] || serverRendering.has(sceneId)) continue;
-            next ??= { ...prev };
-            delete next[sceneId];
-          }
-          return next ?? prev;
-        });
-      });
+      if (active) refresh.current();
     };
     socket.on('connect', onConnect);
     return () => {
@@ -101,16 +110,29 @@ export default function useMusicVideoShotRenders(project) {
     };
   }, [projectId, composed]);
 
-  const markLive = (sceneId, entry) => setLive((prev) => {
+  const markLive = (sceneId, entry) => {
+    const stamp = ++clock.current;
+    setLive((prev) => {
+      const next = { ...prev };
+      if (entry) next[sceneId] = withRenderStart(prev, sceneId, entry, stamp);
+      else delete next[sceneId];
+      return next;
+    });
+  };
+
+  // Clears only the entry still carrying this render-start marker, so a late response can't wipe a newer render.
+  const clearLive = (sceneId, since) => setLive((prev) => {
+    if (since === undefined || prev[sceneId]?.since !== since) return prev;
     const next = { ...prev };
-    if (entry) next[sceneId] = entry;
-    else delete next[sceneId];
+    delete next[sceneId];
     return next;
   });
+
   return {
     status,
     live,
     markLive,
+    clearLive,
     refresh: () => refresh.current(),
     retry: () => refresh.current(),
   };

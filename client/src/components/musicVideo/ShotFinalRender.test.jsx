@@ -202,4 +202,29 @@ describe('ShotFinalRender', () => {
     expect(document.querySelector('.animate-spin')).toBeNull();
     expect(screen.queryByRole('button', { name: /Stop/ })).toBeNull();
   });
+
+  it('a late { ok: false } for a stopped render leaves a newer render of the same shot in place', async () => {
+    getMusicVideoShotRenders.mockResolvedValue({ available: true, shots: [{ ...shot('a', 'stale'), rendering: true }], ready: 0, total: 1 });
+    render(<ShotFinalRender project={project} scene={project.scenes[0]} onChange={() => {}} fieldId={fieldId} />);
+    await screen.findByRole('button', { name: /Stop/ });
+    const onEvent = handlers.get('music-video:shot-render');
+    act(() => onEvent({ projectId: 'mv-1', sceneId: 'a', state: 'rendering', progress: 0.3 }));
+
+    // Stop captures the first render; its cancel response is held back.
+    let resolveCancel;
+    cancelMusicVideoShotRender.mockReturnValueOnce(new Promise((resolve) => { resolveCancel = resolve; }));
+    fireEvent.click(screen.getByRole('button', { name: /Stop/ }));
+
+    // The first render finishes, and a second render of the same shot starts before the cancel answers.
+    getMusicVideoShotRenders.mockResolvedValueOnce({ available: true, shots: [shot('a', 'rendered', ['a.mp4'])], ready: 1, total: 1 });
+    await act(async () => onEvent({ projectId: 'mv-1', sceneId: 'a', state: 'rendered', progress: 1 }));
+    act(() => onEvent({ projectId: 'mv-1', sceneId: 'a', state: 'rendering', progress: 0.1 }));
+    expect(screen.getByTestId('shot-render-state').textContent).toBe('Rendering 10%');
+
+    const readsBeforeCancel = getMusicVideoShotRenders.mock.calls.length;
+    await act(async () => resolveCancel({ ok: false }));
+    await waitFor(() => expect(getMusicVideoShotRenders.mock.calls.length).toBeGreaterThan(readsBeforeCancel));
+    expect(screen.getByTestId('shot-render-state').textContent).toBe('Rendering 10%');
+    expect(screen.getByRole('button', { name: /Stop/ })).toBeTruthy();
+  });
 });
