@@ -719,6 +719,8 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/music-video/:id/production-runs/:runId/resume',
   'POST /api/music-video/:id/auto-reviews',
   'POST /api/music-video/:id/auto-reviews/:runId/resume',
+  // A frame take's plate check runs the vision reviewer, Codex CLI by default.
+  'POST /api/music-video/:id/scenes/:sceneId/takes/:takeId/check',
   // Song revision drives the signed-in PortOS Browser to submit the song to
   // Suno, spending the operator's account credits (#13055).
   'POST /api/music-video/:id/song-revision/generate',

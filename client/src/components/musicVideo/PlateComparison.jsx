@@ -1,13 +1,20 @@
 import { currentPlateEvidence } from '../../../../server/lib/musicVideoPlateEvidence.js';
 import { sceneTakeList, takeThumbUrl } from '../../lib/musicVideoTakes.js';
 
-/** Short plate verdict for a frame take, or null when the shot has no action contract. */
+/**
+ * Short verdict of a frame take's current plate check, or null when no check has
+ * run for this image and shot as they are now: an unchecked take wears no badge.
+ * `issues` are the other checks that did not pass, to show when the badge is opened.
+ */
 export function plateVerdict(scene, take) {
   if (!scene) return null;
   const evidence = currentPlateEvidence(scene, take);
-  if (evidence?.verdict === 'pass') return { label: 'Ready', tone: 'pass' };
-  if (evidence?.verdict === 'fail') return { label: 'Requirements unmet', tone: 'fail' };
-  return { label: 'Unverified', tone: 'unverified' };
+  if (!evidence) return null;
+  // A failed render-quality check has its own line and acknowledgement on the take card.
+  const issues = evidence.checks.filter((check) => check.status !== 'pass' && !(check.id === 'render-quality' && check.status === 'fail'));
+  if (evidence.verdict === 'pass') return { label: 'Checked', tone: 'pass', issues };
+  if (evidence.verdict === 'fail') return { label: 'Issues', tone: 'fail', issues };
+  return { label: 'Unclear', tone: 'unverified', issues };
 }
 
 /**

@@ -43,3 +43,25 @@ it('shows a rendering defect with an acknowledgement bound to that image and not
   fireEvent.click(screen.getByRole('button', { name: 'Acknowledge rendering defect' }));
   expect(onReview).toHaveBeenCalledWith(selected.takes[0], { acknowledgeRenderQuality: { basis: selected.takes[0].plateEvidence.basis, note: 'The chair is fused into the desk.' } });
 });
+
+// Uniquely catches an unchecked frame wearing a verdict badge, the Check action not reaching its handler,
+// or a check's misses staying hidden behind the badge.
+it('shows a verdict only after a check, opens it to the misses, and checks a frame in place', () => {
+  const onCheck = vi.fn();
+  const fresh = { ...scene, framePrompt: 'A desk with a chair', takes: [take('t1', 'a.png')] };
+  const { rerender } = render(<SceneTakeStrip scene={fresh} kind="image" onCheck={onCheck} checking={new Set()} />);
+  expect(screen.queryByText(/Unverified|Unclear|Issues|Checked/)).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Check' }));
+  expect(onCheck).toHaveBeenCalledWith(fresh.takes[0]);
+
+  rerender(<SceneTakeStrip scene={fresh} kind="image" onCheck={onCheck} checking={new Set(['t1'])} />);
+  expect(screen.getByRole('button', { name: 'Checking' })).toBeDisabled();
+
+  fresh.takes[0].plateEvidence = plateReviewEvidence(fresh, 'a.png', 'manual-example', JSON.stringify({ checks: plateRequirements(fresh).map(({ id }) => ({
+    id, status: id === 'plate-prompt' ? 'fail' : 'pass', note: id === 'plate-prompt' ? 'There is no chair.' : 'Clean',
+  })) }));
+  rerender(<SceneTakeStrip scene={{ ...fresh }} kind="image" onCheck={onCheck} checking={new Set()} />);
+  expect(screen.queryByText('There is no chair.')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Issues (1)' }));
+  expect(screen.getByText('There is no chair.')).toBeInTheDocument();
+});

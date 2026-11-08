@@ -180,7 +180,7 @@ export default function SceneCard({
   settingsSaving, videoBlockedReason, videoBlockedReasonFor = null, canContinueShot,
   onMove, onDelete, onEditLocal, onSave,
   project = null, castMedia = null, onReloadCastMedia = null, greyboxPlaces = {}, onGenerateFrame, onGenerateVideo, onContinueVideo, onGenerateEndFrame, generatingEndFrame = false, onContinueFromPrevious, previousHasClip = false,
-  onOpenPreview, onSelectTake, onReviewTake, onRejectUnusedTakes = null, onSwapFrames = null, onMarkTake = null, onPoolMarked = null, onImportTake, onImportClipTake, onPlacePoolItem, onTrimClip, projectId = null, aspect = '16:9', videoModels = [], defaultVideoModel = '', shotNumbers = undefined, takeBusy = false, layered = false, documentComposition = false, manifestOwnsShots = false,
+  onOpenPreview, onSelectTake, onReviewTake, onRejectUnusedTakes = null, onSwapFrames = null, onMarkTake = null, onCheckTake = null, checkingTakes = null, onPoolMarked = null, onImportTake, onImportClipTake, onPlacePoolItem, onTrimClip, projectId = null, aspect = '16:9', videoModels = [], defaultVideoModel = '', shotNumbers = undefined, takeBusy = false, layered = false, documentComposition = false, manifestOwnsShots = false,
   lipSyncBackend = '', songDurationSec = null, onSplit, onMergeNext, onMergePrevious = null, prevStartSec = null, onMoveStart = null, onMoveEnd = null, nextEndSec = null, falVideoSettings = null, performanceReview = null, onRepairPerformance, repairBusy = false,
   onClose = null, locked = false, stepShot = null, footageOptional = false, failedScenes = null, songReview = null,
   storyboardId = null, storyboardShot = null, onStoryboardBoard = null, onApplyCameos = null, onVaryWipes = null,
@@ -672,7 +672,7 @@ export default function SceneCard({
           onOpenPreview={onOpenPreview} takeBusy={takeBusy} onSelectTake={onSelectTake} onReviewTake={onReviewTake}
           onSwap={onPlacePoolItem ? setSwapKind : null} onSwapFrames={onSwapFrames ? () => onSwapFrames(scene) : null} onImportTake={onImportTake}
           onContinueFromPrevious={layer === 'footage' && index > 0 ? onContinueFromPrevious : null} previousHasClip={previousHasClip}
-          assetMarks={project?.assetMarks} onMarkTake={onMarkTake} onApplyCameos={onApplyCameos} />
+          assetMarks={project?.assetMarks} onMarkTake={onMarkTake} onCheckTake={onCheckTake} checkingTakes={checkingTakes} onApplyCameos={onApplyCameos} />
         </div>
         {/* Clip: the picture and its takes, the camera move and where it renders, then Render and other ways to get a clip. */}
         <div hidden={view !== 'clip'}>
