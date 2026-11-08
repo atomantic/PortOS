@@ -520,6 +520,48 @@ export async function listEvents({ from, to, source, accountId, kind, personId, 
 }
 
 /**
+ * Walk every event in [from, to) newest-first in keyset-paginated pages and hand
+ * each page (rowToEvent shape, scorecard columns only) to `onPage`. Unlike
+ * listEvents there is no total cap, and memory stays bounded to one page. The
+ * cursor is (happened_at, id) so events sharing a timestamp across a page
+ * boundary are each visited exactly once. happened_at is carried as text to keep
+ * Postgres' microsecond precision (a JS Date would truncate to milliseconds and
+ * could skip or repeat rows at the boundary).
+ */
+export async function forEachEventPage({ from, to, pageSize = 2000 } = {}, onPage) {
+  await ensureReady();
+  const size = Math.min(Math.max(Math.floor(Number(pageSize)) || 2000, 1), 2000);
+  const clauses = [];
+  const params = [];
+  if (from) { params.push(new Date(from).toISOString()); clauses.push(`happened_at >= $${params.length}`); }
+  if (to) { params.push(new Date(to).toISOString()); clauses.push(`happened_at < $${params.length}`); }
+  let cursor = null;
+  for (;;) {
+    const pageParams = [...params];
+    const pageClauses = [...clauses];
+    if (cursor) {
+      pageParams.push(cursor.at, cursor.id);
+      pageClauses.push(`(happened_at, id) < ($${pageParams.length - 1}::timestamptz, $${pageParams.length})`);
+    }
+    pageParams.push(size);
+    const where = pageClauses.length ? `WHERE ${pageClauses.join(' AND ')}` : '';
+    const { rows } = await query(
+      `SELECT id, kind, happened_at, happened_at::text AS cursor_at, duration_s, title, summary, participants, metadata
+       FROM human_activity_events
+       ${where}
+       ORDER BY happened_at DESC, id DESC
+       LIMIT $${pageParams.length}`,
+      pageParams,
+    );
+    if (rows.length === 0) return;
+    await onPage(rows.map(rowToEvent));
+    if (rows.length < size) return;
+    const last = rows[rows.length - 1];
+    cursor = { at: last.cursor_at, id: last.id };
+  }
+}
+
+/**
  * Delete activity events by explicit id list and/or filters. Returns `{ deleted }`.
  *
  * Safety: refuses unbounded wipes. Accepts either:
