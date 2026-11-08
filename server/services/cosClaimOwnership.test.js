@@ -388,6 +388,7 @@ describe('checkReconcileOwnership', () => {
     const lookups = [];
     const unshipped = (hasOpenPr, detail = { reason: 'pr-completion-review-required', unshipped: true }) => ({
       readCompletionHold: undefined,
+      readStrictCompletionHold: async () => detail.reason,
       readCompletionHoldDetail: async () => detail,
       readOpenPrForBranch: async (...args) => { lookups.push(args); if (hasOpenPr instanceof Error) throw hasOpenPr; return hasOpenPr; },
     });

@@ -283,12 +283,14 @@ export async function updateReleaseSynchronizationOwnership(agentId, action) {
  * @returns {Promise<string|null>}
  */
 async function readReconcileCompletionHold(input, deps = {}) {
-  const readDetail = deps.readCompletionHoldDetail ?? (await import('./branchCompletionPolicy.js')).readBranchCompletionHoldDetail;
-  const hold = await readDetail(input);
-  if (!hold?.reason || hold.unshipped !== true || input.prUrl) return hold?.reason ?? null;
+  const policy = await import('./branchCompletionPolicy.js');
+  const reason = await (deps.readStrictCompletionHold ?? policy.readBranchCompletionHold)(input);
+  if (reason !== 'pr-completion-review-required' || input.prUrl) return reason;
+  const detail = await (deps.readCompletionHoldDetail ?? policy.readBranchCompletionHoldDetail)(input);
+  if (detail?.reason !== reason || detail.unshipped !== true) return reason;
   const readOpenPr = deps.readOpenPrForBranch ?? (await import('./branchReconcile.js')).readOpenPrForBranch;
   const hasOpenPr = await readOpenPr(input.repoPath, input.branch, { forgeAccount: input.forgeAccount ?? null }).catch(() => null);
-  return hasOpenPr === false ? null : hold.reason;
+  return hasOpenPr === false ? null : reason;
 }
 
 /**
