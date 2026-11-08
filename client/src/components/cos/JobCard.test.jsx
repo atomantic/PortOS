@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 
 vi.mock('../ui/Toast', () => ({
   default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), loading: vi.fn(), dismiss: vi.fn() })
@@ -160,5 +160,63 @@ describe('JobCard on-demand cadence', () => {
     expect(select.value).toBe('on-demand');
     expect(screen.queryByLabelText('Run at a specific time (leave empty for any time)')).toBeNull();
     expect(screen.getByText('Runs only when you press Run now.')).toBeTruthy();
+  });
+});
+
+// #15352 — the card renders the server's projected fire time (user timezone,
+// nearest-HH:MM snap, weekdaysOnly skip) rather than re-deriving it in the
+// browser's zone, so the two cannot disagree.
+describe('JobCard next-due from the server projection', () => {
+  const NOW = Date.parse('2026-11-02T11:30:00Z'); // Monday, 03:30 Pacific
+  const WEEKLY_JOB = {
+    ...SCRIPT_JOB,
+    id: 'job-weekly',
+    interval: 'weekly',
+    intervalMs: 7 * 24 * 3600000,
+    scheduledTime: '03:00',
+    lastRun: new Date(NOW).toISOString()
+  };
+
+  afterEach(() => vi.useRealTimers());
+
+  const renderAt = (job) => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(NOW);
+    renderCard(job);
+  };
+
+  it('shows the server nextRunAt for a late weekly run, not a client recomputation', () => {
+    // Following Monday 03:00 Pacific (PST) is 6d 23h 30m away. A browser-side
+    // recomputation from lastRun + intervalMs would not land on this instant.
+    renderAt({ ...WEEKLY_JOB, nextRunAt: '2026-11-09T11:00:00.000Z' });
+    expect(screen.getByText('Next: in 6d')).toBeTruthy();
+    expect(screen.queryByText('Due')).toBeNull();
+  });
+
+  it('badges an interval job Due once the server nextRunAt has passed', () => {
+    renderAt({ ...WEEKLY_JOB, nextRunAt: new Date(NOW - 60_000).toISOString() });
+    expect(screen.getByText('Due')).toBeTruthy();
+    expect(screen.getByText('Next: Now')).toBeTruthy();
+  });
+
+  it('does not badge Due before the scheduled slot even if a full interval has elapsed', () => {
+    renderAt({ ...WEEKLY_JOB, lastRun: new Date(NOW - 7 * 24 * 3600000).toISOString(), nextRunAt: new Date(NOW + 3600000).toISOString() });
+    expect(screen.queryByText('Due')).toBeNull();
+    expect(screen.getByText('Next: in 1h')).toBeTruthy();
+  });
+
+  it('a never-run clock job shows its future server slot and no Due badge', () => {
+    renderAt({ ...WEEKLY_JOB, lastRun: null, nextRunAt: new Date(NOW + 5 * 3600000).toISOString() });
+    expect(screen.getByText('Next: in 5h')).toBeTruthy();
+    expect(screen.queryByText('Due')).toBeNull();
+  });
+
+  it('a never-run job with no projection falls back to Immediately / at HH:MM and badges Due', () => {
+    renderAt({ ...WEEKLY_JOB, lastRun: null, scheduledTime: null, nextRunAt: null });
+    expect(screen.getByText('Next: Immediately')).toBeTruthy();
+    expect(screen.getByText('Due')).toBeTruthy();
+    cleanup();
+    renderAt({ ...WEEKLY_JOB, lastRun: null });
+    expect(screen.getByText('Next: at 03:00')).toBeTruthy();
   });
 });

@@ -26,7 +26,6 @@ import { maintenance, isMaintenanceHold } from '../lib/maintenanceAdmission.js';
  */
 
 import { schedule as scheduleEvent, cancel as cancelEvent, getEvent as getScheduledEvent, parseCronToNextRun, parseRecurrenceToNextRun } from './eventScheduler.js';
-import { getLocalParts, nextLocalTime } from '../lib/timezone.js';
 import { getUserTimezone } from './userTimezone.js';
 import { formatDuration } from '../lib/fileUtils.js';
 import { loadState, isDaemonRunning, canQueueImprovementTasks } from './cosState.js';
@@ -39,6 +38,7 @@ import { getCosTasks } from './cosTaskStore.js';
 import { queueEligibleImprovementTasks } from './cosTaskGenerator.js';
 import { generateTaskFromJob, recordJobGateSkip, isScriptJob, executeScriptJob, isShellJob, executeShellJob } from './autonomousJobs.js';
 import { checkJobGate, hasGate } from './jobGates.js';
+import { clockCronExpression, nextIntervalJobFireTime } from './autonomousJobs/scheduler.js';
 import {
   acquireCosActionReservation,
   pendingCosActionReservations,
@@ -57,13 +57,6 @@ import {
  * @returns {number|null} Timestamp (ms) of next fire time, or null when the job never fires on a clock
  */
 function computeNextJobFireTime(job, timezone) {
-  // Convert scheduledTime (HH:MM) + interval to a cron expression so parseCronToNextRun
-  // handles all "next occurrence after lastRun" logic without drift issues.
-  // Only synthesize a daily/weekday cron for strictly daily or weekdaysOnly jobs.
-  // Weekly/biweekly/sub-daily interval jobs fall through to the interval path below,
-  // which correctly computes lastRun + intervalMs without scheduling them every day.
-  // e.g. { interval: 'daily', scheduledTime: '04:30' } → '30 4 * * *'
-  let cronExpr = job.cronExpression;
   if (job.cronSchedule) {
     const from = job.lastRun ? new Date(job.lastRun) : new Date();
     const next = parseRecurrenceToNextRun(job.cronSchedule, from, timezone);
@@ -76,16 +69,11 @@ function computeNextJobFireTime(job, timezone) {
   // fields (a job switched to cron mode keeps whatever cadence it last had) but
   // before the synthesized daily/weekday cron below, which a weekdaysOnly
   // on-demand job would otherwise fall into.
-  if (!cronExpr && isOnDemandJob(job)) return null;
+  if (!job.cronExpression && isOnDemandJob(job)) return null;
 
-  const isDailyCronCandidate = job.interval === 'daily' || job.weekdaysOnly;
-  if (!cronExpr && job.scheduledTime && isDailyCronCandidate) {
-    const match = String(job.scheduledTime).match(/^([01]\d|2[0-3]):([0-5]\d)$/);
-    if (match) {
-      const dayField = job.weekdaysOnly ? '1-5' : '*';
-      cronExpr = `${Number(match[2])} ${Number(match[1])} * * ${dayField}`;
-    }
-  }
+  // Daily/weekdaysOnly jobs with a scheduledTime fire on a synthesized cron;
+  // other interval jobs snap lastRun + intervalMs (see clockCronExpression).
+  const cronExpr = clockCronExpression(job);
 
   if (cronExpr) {
     const from = job.lastRun ? new Date(job.lastRun) : new Date();
@@ -100,28 +88,7 @@ function computeNextJobFireTime(job, timezone) {
     return next.getTime();
   }
 
-  // Interval fallback: lastRun + intervalMs, then align to scheduledTime if set
-  const lastRun = job.lastRun ? new Date(job.lastRun).getTime() : 0;
-  let nextDue = lastRun + job.intervalMs;
-
-  // Restore scheduledTime alignment for interval-mode jobs (e.g. weekly at 00:00).
-  // nextLocalTime advances nextDue to the next occurrence of HH:MM in the user's timezone,
-  // preventing drift when a run occurs slightly late.
-  if (job.scheduledTime) {
-    const match = String(job.scheduledTime).match(/^([01]\d|2[0-3]):([0-5]\d)$/);
-    if (match) {
-      const candidate = nextLocalTime(nextDue, Number(match[1]), Number(match[2]), timezone);
-      if (candidate > nextDue) nextDue = candidate;
-    }
-  }
-
-  if (job.weekdaysOnly) {
-    const { dayOfWeek } = getLocalParts(new Date(nextDue), timezone);
-    if (dayOfWeek === 0) nextDue += 24 * 60 * 60 * 1000; // Sunday → Monday
-    if (dayOfWeek === 6) nextDue += 2 * 24 * 60 * 60 * 1000; // Saturday → Monday
-  }
-
-  return nextDue;
+  return nextIntervalJobFireTime(job, timezone);
 }
 
 /**

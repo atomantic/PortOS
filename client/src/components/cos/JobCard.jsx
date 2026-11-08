@@ -171,6 +171,9 @@ export function ScheduleFields({ data, onChange, timezone }) {
   );
 }
 
+// null reads as the epoch to Date, so it must be excluded before the finite check.
+const hasNextRunAt = (job) => job.nextRunAt != null && Number.isFinite(new Date(job.nextRunAt).getTime());
+
 function formatNextDue(job) {
   // Cron jobs: show human-readable schedule (server computes exact next fire time)
   if (job.cronSchedule) return describeRecurrence(job.cronSchedule);
@@ -178,16 +181,13 @@ function formatNextDue(job) {
   // No recurrence — rendering lastRun + a null intervalMs would print 'Invalid Date'.
   if (isOnDemandSchedule(job)) return 'On demand';
 
-  const { lastRun, intervalMs, scheduledTime } = job;
+  // Interval jobs: the server projects the exact fire time (user timezone, DST,
+  // weekdaysOnly), so the card never re-derives it in the browser's zone. That
+  // holds for a never-run job too: a new daily clock job waits for its next slot.
+  if (hasNextRunAt(job)) return timeUntil(job.nextRunAt, 'Now');
+  const { lastRun, scheduledTime } = job;
   if (!lastRun) return scheduledTime ? `at ${scheduledTime}` : 'Immediately';
-  let nextDue = new Date(lastRun).getTime() + intervalMs;
-  if (scheduledTime) {
-    const [hours, minutes] = scheduledTime.split(':').map(Number);
-    const nextDate = new Date(nextDue);
-    nextDate.setHours(hours, minutes, 0, 0);
-    if (nextDate.getTime() > nextDue) nextDue = nextDate.getTime();
-  }
-  return timeUntil(nextDue, 'Now');
+  return 'Unknown';
 }
 
 function getJobTypeLabel(job) {
@@ -408,9 +408,8 @@ export default function JobCard({
     onUpdate();
   };
 
-  const isDue = job.enabled && !isOnDemandSchedule(job) && (job.cronSchedule
-    ? (!job.lastRun || Boolean(job.nextRunAt && Date.now() >= new Date(job.nextRunAt).getTime()))
-    : (!job.lastRun || (Date.now() - new Date(job.lastRun).getTime() >= job.intervalMs)));
+  const isDue = job.enabled && !isOnDemandSchedule(job)
+    && (hasNextRunAt(job) ? Date.now() >= new Date(job.nextRunAt).getTime() : !job.lastRun);
 
   return (
     <div className={`flex flex-col bg-port-card border rounded-lg transition-colors ${
