@@ -4,6 +4,7 @@ import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { afterEach, describe, expect, it } from 'vitest';
+import { resolveBashBinary } from '../server/lib/bashResolver.js';
 import { BYOV_RUNTIME_INFO } from '../server/services/videoGen/runtimes.js';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -754,6 +755,106 @@ describe('Wan 2.2 CUDA hash-pinned installation', () => {
     expect(section).toContain('uv venv --managed-python --python 3.11');
     expect(section).toContain('uv venv --clear --managed-python --python 3.11');
     expect(section).toContain("(Path(sys.base_prefix) / 'conda-meta').is_dir()");
+  });
+});
+
+describe('MiniMax Music 3 CUDA Install/Repair', () => {
+  const shell = resolveBashBinary();
+  const direct = readFileSync(join(REPO_ROOT, 'scripts/requirements-minimax-music3-cuda.txt'), 'utf8')
+    .split(/\r?\n/).filter((line) => /^[\w.-]+==/.test(line));
+
+  function installer(target) {
+    const home = mkdtempSync(join(tmpdir(), 'portos-music3-install-'));
+    tempVenvs.push(home);
+    const log = join(home, 'commands.log');
+    const stub = join(home, 'python-stub');
+    writeFileSync(stub, `#!/usr/bin/env bash
+printf 'python %s\\n' "$*" >> "$LOG"
+if [[ "$*" == *sys.version_info* ]]; then exit "\${COMPAT_EXIT:-0}"; fi
+if [[ "$*" == *ModularPipeline* ]]; then exit "\${PROBE_EXIT:-0}"; fi
+exit 0
+`);
+    const run = (env = {}) => execFileSync(shell, ['-c', `
+set -euo pipefail
+export HOME="$TEST_HOME"
+uname() { if [[ "\${1:-}" == -m ]]; then echo x86_64; else echo "$TARGET"; fi; }
+uv() {
+  printf 'uv %s\\n' "$*" >> "$LOG"
+  if [[ "$1" == venv ]]; then
+    local root="\${@: -1}" layout=bin/python3
+    if [[ "$TARGET" == MINGW64_NT* ]]; then layout=Scripts/python.exe; fi
+    mkdir -p "$(dirname "$root/$layout")"
+    cp "$STUB" "$root/$layout"
+    chmod +x "$root/$layout"
+  elif [[ "$1 $2" == 'pip sync' ]]; then
+    return "\${SYNC_EXIT:-0}"
+  else
+    echo 'Unexpected unlocked install' >&2; return 91
+  fi
+}
+source "$1"
+`, 'bash', SETUP_SCRIPT.replaceAll('\\', '/')], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        ...Object.fromEntries(installFlags.map((flag) => [flag, '0'])),
+        TEST_HOME: home.replaceAll('\\', '/'),
+        PORTOS_DATA: join(home, 'data').replaceAll('\\', '/'),
+        LOG: log.replaceAll('\\', '/'), STUB: stub.replaceAll('\\', '/'),
+        TARGET: target === 'windows' ? 'MINGW64_NT-10.0' : 'Linux',
+        PYTHON_BIN: 'true', INSTALL_MINIMAX_MUSIC3: '1',
+        PORTOS_TORCH_CUDA_INDEX: 'https://download.pytorch.org/whl/cu126',
+        ...env,
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    return { run, commands: () => readFileSync(log, 'utf8') };
+  }
+
+  it.each(['windows', 'linux'])('locks every %s distribution and uses that lock for fresh Install and Repair', (target) => {
+    const lock = readFileSync(join(REPO_ROOT, 'scripts', `requirements-minimax-music3-cuda-${target}.lock.txt`), 'utf8');
+    const requirements = lock.split(/\r?\n/).filter((line) => /^\w/.test(line));
+    const blocks = lock.match(/^[\w.-]+==[^\n]+\n(?:[ \t]+[^\n]*\n?)*/gm) ?? [];
+    expect(blocks.length).toBe(requirements.length);
+    for (const block of blocks) expect(block).toMatch(/--hash=sha256:[0-9a-f]{64}/);
+    const pins = requirements.map((line) => line.replace(/\s*\\$/, ''));
+    for (const pin of direct) expect(pins).toContain(pin);
+    expect(lock).not.toMatch(/git\+|^[\w.-]+\s*@/m);
+    expect(lock.includes('nvidia-cuda-runtime-cu12==')).toBe(target === 'linux');
+
+    const install = installer(target);
+    expect(install.run()).toContain('MiniMax Music 3 venv ready');
+    expect(install.run()).toContain('MiniMax Music 3 venv ready');
+    const commands = install.commands().split('\n');
+    const syncs = commands.filter((line) => line.startsWith('uv pip'));
+    expect(syncs).toHaveLength(2);
+    for (const sync of syncs) {
+      expect(sync).toContain('pip sync --require-hashes --only-binary :all:');
+      expect(sync).toContain('--python ');
+      expect(sync).toContain(`requirements-minimax-music3-cuda-${target}.lock.txt`);
+    }
+    expect(commands.filter((line) => line.startsWith('uv venv'))).toHaveLength(1);
+    expect(install.commands()).toContain('venv --managed-python --python 3.11');
+    expect(install.commands()).toContain('from diffusers.modular_pipelines.minimax_music3 import MiniMaxMusic3Blocks');
+    expect(install.commands()).toContain('assert torch.cuda.is_available()');
+    expect(install.commands()).not.toMatch(/pip install|--upgrade|git\+/);
+  });
+
+  it('rebuilds an incompatible existing interpreter before syncing during Repair', () => {
+    const install = installer('windows');
+    install.run();
+    expect(install.run({ COMPAT_EXIT: '1' })).toContain('Rebuilding MiniMax Music 3 CUDA');
+    expect(install.commands()).toContain('venv --clear --managed-python --python 3.11');
+  });
+
+  it.each([{ SYNC_EXIT: '42' }, { PROBE_EXIT: '43' }])('fails Install without reporting ready when sync or the CUDA probe fails (%j)', (failure) => {
+    const install = installer('linux');
+    let result;
+    try { install.run(failure); } catch (error) { result = error; }
+    expect(result).toBeDefined();
+    expect(result.stdout).not.toContain('MiniMax Music 3 venv ready');
+    if (failure.PROBE_EXIT) expect(result.stderr).toContain('MiniMax Music 3 CUDA installed but its runtime probe failed');
+    else expect(install.commands()).not.toContain('ModularPipeline');
   });
 });
 
