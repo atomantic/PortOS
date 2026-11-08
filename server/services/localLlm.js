@@ -1115,10 +1115,18 @@ const lastCatalogSync = { ollama: null, lmstudio: null }
 
 const sortedKey = (ids) => [...ids].sort().join('\n')
 
-function storedCatalogMatches(targets, installed) {
+// Judged per provider, never on the union: one record holding the full set
+// must not hide a stale sibling. An Ollama CLI/TUI wrapper stores only the
+// tool-capable subset, which can't be told apart without probing, so it
+// matches when it lists nothing that was removed and is not left empty.
+function storedCatalogMatches(backend, targets, installed) {
   const installedSet = new Set(installed)
-  const stored = new Set(targets.flatMap((p) => p.models || []))
-  return stored.size === installedSet.size && [...stored].every((id) => installedSet.has(id))
+  return targets.every((p) => {
+    const stored = new Set(p.models || [])
+    if (![...stored].every((id) => installedSet.has(id))) return false
+    const toolFiltered = backend === 'ollama' && (p.type === 'cli' || p.type === 'tui')
+    return toolFiltered ? stored.size > 0 || installedSet.size === 0 : stored.size === installedSet.size
+  })
 }
 
 async function syncBackendProviderModels(backend, { force, providers }) {
@@ -1141,7 +1149,7 @@ async function syncBackendProviderModels(backend, { force, providers }) {
     const previous = lastCatalogSync[backend]
     const unchanged = previous?.targetsKey === record.targetsKey
       ? previous.signature === record.signature
-      : storedCatalogMatches(targets, installed)
+      : storedCatalogMatches(backend, targets, installed)
     if (unchanged) {
       lastCatalogSync[backend] = record
       return false
@@ -1160,9 +1168,10 @@ async function syncBackendProviderModels(backend, { force, providers }) {
       console.error(`⚠️ Skipped refreshing ${group.ids.length} ${label}-backed provider(s): lead provider ${group.leadId} no longer exists`)
     }
   }
-  if (!groups.some((group) => group.status === 'updated')) return false
-  if (record) lastCatalogSync[backend] = record
-  return true
+  // A failed or skipped group leaves the signature unrecorded so the next read
+  // retries it; any update still reports true so the route re-reads.
+  if (record && groups.every((group) => group.status === 'updated')) lastCatalogSync[backend] = record
+  return groups.some((group) => group.status === 'updated')
 }
 
 /**

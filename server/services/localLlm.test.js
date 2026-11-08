@@ -1653,6 +1653,31 @@ describe('syncLocalProviderModels', () => {
     expect(mocks.providers.refreshProviderModelsBatch).toHaveBeenCalledTimes(2);
   });
 
+  it('refreshes when one provider is stale even though a sibling already lists every model', async () => {
+    installedIds.lmstudio([stored.lmstudio, added.lmstudio]);
+    const providers = [
+      { ...providerFixtures.lmstudio[0], models: [stored.lmstudio, added.lmstudio] },
+      { ...providerFixtures.lmstudio[1], models: [] },
+    ];
+    await expect(svc.syncLocalProviderModels({ backend: 'lmstudio', providers })).resolves.toBe(true);
+    expect(mocks.providers.refreshProviderModelsBatch).toHaveBeenCalledWith(['lmstudio', 'opencode-lmstudio']);
+  });
+
+  it('retries on the next read when part of the refresh failed', async () => {
+    const providers = providerFixtures.lmstudio;
+    installedIds.lmstudio([stored.lmstudio, added.lmstudio]);
+    mocks.providers.refreshProviderModelsBatch.mockResolvedValueOnce([
+      { ids: ['lmstudio'], leadId: 'lmstudio', status: 'updated' },
+      { ids: ['opencode-lmstudio'], leadId: 'opencode-lmstudio', status: 'failed', error: new Error('unreachable') },
+    ]);
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(svc.syncLocalProviderModels({ backend: 'lmstudio', providers })).resolves.toBe(true);
+    await svc.syncLocalProviderModels({ backend: 'lmstudio', providers });
+    expect(mocks.providers.refreshProviderModelsBatch).toHaveBeenCalledTimes(2);
+    errSpy.mockRestore();
+  });
+
   it('probes nothing for a backend with no enabled provider on its local daemon', async () => {
     const providers = [
       { id: 'anthropic', type: 'api', endpoint: 'https://api.anthropic.com' },
