@@ -22,17 +22,20 @@ export async function getDatabaseResetPlan() {
   const sequences = names(/CREATE SEQUENCE IF NOT EXISTS ([a-z_][a-z_0-9]*)/g);
   const literals = values => values.map(value => `'${value}'`).join(', ');
   const preflight = `DO $portos_restore$
+  DECLARE obj text;
   BEGIN
-    IF EXISTS (
-      SELECT 1 FROM pg_namespace n WHERE n.nspname = 'public'
+    -- Each refusal names the first offending catalog object (identifiers only).
+    obj := (
+      SELECT format('%I', pg_get_userbyid(n.nspowner)) FROM pg_namespace n WHERE n.nspname = 'public'
       AND NOT (n.nspowner = (SELECT oid FROM pg_roles WHERE rolname = current_user)
         OR (pg_get_userbyid(n.nspowner) = 'pg_database_owner' AND
           (SELECT datdba FROM pg_database WHERE datname = current_database()) =
           (SELECT oid FROM pg_roles WHERE rolname = current_user)))
-    ) THEN RAISE EXCEPTION 'Restore preflight: application schema is not owned by the database user'; END IF;
+    );
+    IF obj IS NOT NULL THEN RAISE EXCEPTION 'Restore preflight: application schema is not owned by the database user (owner %)', obj; END IF;
 
-    IF EXISTS (
-      SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    obj := (
+      SELECT format('%I (owner %I)', c.relname, pg_get_userbyid(c.relowner)) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
       WHERE n.nspname = 'public' AND c.relkind NOT IN ('i', 'I', 't')
       AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_class'::regclass
         AND d.objid = c.oid AND d.deptype = 'e')
@@ -45,47 +48,58 @@ export async function getDatabaseResetPlan() {
             AND d.refclassid = 'pg_class'::regclass AND d.deptype IN ('a', 'i')
             AND t.relnamespace = n.oid AND t.relname IN (${literals(tables)})
           )))))
-    ) THEN RAISE EXCEPTION 'Restore preflight: unexpected application-schema relation or owner'; END IF;
+      LIMIT 1
+    );
+    IF obj IS NOT NULL THEN RAISE EXCEPTION 'Restore preflight: unexpected application-schema relation or owner: %', obj; END IF;
 
-    IF EXISTS (
-      SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    obj := (
+      SELECT format('%I (owner %I)', p.proname, pg_get_userbyid(p.proowner)) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
       WHERE n.nspname = 'public'
       AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_proc'::regclass
         AND d.objid = p.oid AND d.deptype = 'e')
       AND (NOT EXISTS (SELECT 1 FROM unnest(ARRAY[${literals(functions)}]) AS allowed(signature)
           WHERE p.oid = to_regprocedure(allowed.signature))
         OR p.proowner <> (SELECT oid FROM pg_roles WHERE rolname = current_user))
-    ) THEN RAISE EXCEPTION 'Restore preflight: unexpected application-schema function or owner'; END IF;
+      LIMIT 1
+    );
+    IF obj IS NOT NULL THEN RAISE EXCEPTION 'Restore preflight: unexpected application-schema function or owner: %', obj; END IF;
 
-    IF EXISTS (
-      SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
+    obj := COALESCE((
+      SELECT format('type %I', t.typname) FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
       WHERE n.nspname = 'public' AND t.typrelid = 0 AND t.typelem = 0
       AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_type'::regclass
         AND d.objid = t.oid AND d.deptype = 'e')
-    ) OR EXISTS (
-      SELECT 1 FROM pg_extension e JOIN pg_namespace n ON n.oid = e.extnamespace
+      LIMIT 1
+    ), (
+      SELECT format('extension %I', e.extname) FROM pg_extension e JOIN pg_namespace n ON n.oid = e.extnamespace
       WHERE n.nspname = 'public' AND e.extname NOT IN ('vector', 'pgcrypto')
-    ) OR EXISTS (
-      SELECT 1 FROM pg_depend d JOIN pg_namespace n ON n.oid = d.refobjid
+      LIMIT 1
+    ), (
+      SELECT format('%s %s', d.classid::regclass::text, d.objid) FROM pg_depend d JOIN pg_namespace n ON n.oid = d.refobjid
       WHERE d.refclassid = 'pg_namespace'::regclass AND n.nspname = 'public'
       AND d.classid NOT IN ('pg_class'::regclass, 'pg_proc'::regclass, 'pg_type'::regclass, 'pg_extension'::regclass)
       AND NOT EXISTS (SELECT 1 FROM pg_depend e WHERE e.classid = d.classid
         AND e.objid = d.objid AND e.deptype = 'e')
-    ) THEN RAISE EXCEPTION 'Restore preflight: unexpected application-schema object'; END IF;
+      LIMIT 1
+    ));
+    IF obj IS NOT NULL THEN RAISE EXCEPTION 'Restore preflight: unexpected application-schema object: %', obj; END IF;
 
-    IF EXISTS (
-      SELECT 1 FROM pg_constraint c JOIN pg_class parent ON parent.oid = c.confrelid
+    obj := COALESCE((
+      SELECT format('constraint %I', c.conname) FROM pg_constraint c JOIN pg_class parent ON parent.oid = c.confrelid
       JOIN pg_namespace pn ON pn.oid = parent.relnamespace
       JOIN pg_class child ON child.oid = c.conrelid
       JOIN pg_namespace cn ON cn.oid = child.relnamespace
       WHERE c.contype = 'f' AND pn.nspname = 'public' AND cn.nspname <> 'public'
-    ) OR EXISTS (
-      SELECT 1 FROM pg_depend d JOIN pg_rewrite r ON r.oid = d.objid
+      LIMIT 1
+    ), (
+      SELECT format('view %I', v.relname) FROM pg_depend d JOIN pg_rewrite r ON r.oid = d.objid
       JOIN pg_class v ON v.oid = r.ev_class JOIN pg_namespace vn ON vn.oid = v.relnamespace
       JOIN pg_class t ON t.oid = d.refobjid JOIN pg_namespace tn ON tn.oid = t.relnamespace
       WHERE d.classid = 'pg_rewrite'::regclass AND d.refclassid = 'pg_class'::regclass
       AND tn.nspname = 'public' AND vn.nspname <> 'public'
-    ) THEN RAISE EXCEPTION 'Restore preflight: non-PortOS dependency on application schema'; END IF;
+      LIMIT 1
+    ));
+    IF obj IS NOT NULL THEN RAISE EXCEPTION 'Restore preflight: non-PortOS dependency on application schema: %', obj; END IF;
   END $portos_restore$;`;
 
   // A single DROP list permits dependencies BETWEEN approved tables. RESTRICT

@@ -2447,7 +2447,9 @@ async function restoreAdmittedDump({ sqlPath, spoolPath, expectedHash, snapshotI
   const { preflight, reset } = await getDatabaseResetPlan();
   const preflightError = await query(preflight).then(() => null, error => error);
   if (preflightError) {
-    return { status: 'failed', reason: 'restore_preflight', error: 'Database contains unexpected objects, ownership, or dependencies. Restore was refused without changing data.' };
+    console.error(`❌ restore: preflight refused snapshot ${snapshotId}: ${preflightError.message}`);
+    const detail = String(preflightError.message || '').replace(/^Restore preflight:\s*/, '');
+    return { status: 'failed', reason: 'restore_preflight', error: `Database contains unexpected objects, ownership, or dependencies${detail ? ` (${detail})` : ''}. Restore was refused without changing data.` };
   }
   if (dryRun) return { status: 'ok', dryRun: true, sizeBytes, tableCount };
 

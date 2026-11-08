@@ -461,7 +461,12 @@ describe.skipIf(!ready)('restore older database schema', { timeout: RESTORE_CASE
     } finally { await query('DROP VIEW public.unexpected_restore_view RESTRICT'); }
     await query('CREATE TABLE public.unexpected_restore_record (id integer PRIMARY KEY)');
     await query('INSERT INTO public.unexpected_restore_record VALUES (42)');
-    expect(await restore()).toMatchObject({ status: 'failed', reason: 'restore_preflight' });
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const refused = await restore();
+    expect(refused).toMatchObject({ status: 'failed', reason: 'restore_preflight' });
+    expect(refused.error).toContain('unexpected_restore_record');
+    expect(errSpy.mock.calls.some(([line]) => /❌ restore: preflight refused .*unexpected_restore_record/.test(line))).toBe(true);
+    errSpy.mockRestore();
     expect((await query('SELECT * FROM public.unexpected_restore_record')).rows).toEqual([{ id: 42 }]);
     await query('DROP TABLE public.unexpected_restore_record');
     await query('CREATE SCHEMA restore_external');
