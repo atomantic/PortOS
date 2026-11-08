@@ -9,7 +9,7 @@ vi.mock('../../lib/platform.js', () => ({ isAppleSilicon: () => true }));
 vi.mock('node:os', async original => ({ ...await original(), release: () => '25.0.0' }));
 
 import { readFileSync } from 'node:fs';
-import { diagnoseFlux3Runtime, flux3Python, FLUX3_LOCK_PATH, installFlux3Runtime } from './flux3Runtime.js';
+import { diagnoseFlux3Runtime, flux3Python, flux3LockPath, installFlux3Runtime } from './flux3Runtime.js';
 let restore;
 beforeEach(() => {
   restore = pinPlatform('darwin');
@@ -39,7 +39,7 @@ describe('isolated FLUX.3 runtime lifecycle', () => {
     await install.promise;
     const argv = command.mock.calls.map(([bin, args]) => [bin, ...args].join(' ')).join('\n');
     expect(argv).toContain('venv --python 3.12 --python-preference only-managed --allow-existing');
-    expect(argv).toContain(`pip sync --require-hashes --reinstall --python ${flux3Python()} ${FLUX3_LOCK_PATH}`);
+    expect(argv).toContain(`pip sync --require-hashes --reinstall --python ${flux3Python()} ${flux3LockPath()}`);
     expect(argv).not.toMatch(/snapshot_download|hf download|mflux-generate|--user/);
     expect(command.mock.calls[0][3].env).toMatchObject({ PYTHONNOUSERSITE: '1', PYTHONPATH: undefined, PYTHONHOME: undefined });
     expect(events.at(-1)).toMatchObject({ type: 'complete' });
@@ -68,12 +68,12 @@ describe('FLUX.3 runtime lock', () => {
   it('probes every hash-pinned package and matches the direct pins it was compiled from', async () => {
     await diagnoseFlux3Runtime();
     const probed = JSON.parse(probe.mock.calls[0][1][2].match(/^for name, version in (\[.*\]):$/m)[1]);
-    const lock = readFileSync(FLUX3_LOCK_PATH, 'utf8');
+    const lock = readFileSync(flux3LockPath(), 'utf8');
     const entries = lock.split(/\n(?=[a-z0-9])/i).filter(entry => /^[a-z0-9][\w.-]*==/i.test(entry));
     expect(entries.map(entry => entry.split(/\s/)[0].split('=='))).toEqual(probed);
     for (const entry of entries) expect(entry, entry.split(' ')[0]).toMatch(/--hash=sha256:[0-9a-f]{64}/);
     const locked = Object.fromEntries(probed);
-    const direct = readFileSync(FLUX3_LOCK_PATH.replace('.lock.txt', '.txt'), 'utf8')
+    const direct = readFileSync(flux3LockPath().replace('.lock.txt', '.txt'), 'utf8')
       .split('\n').filter(line => /^[a-z0-9]/i.test(line)).map(line => line.trim().split('=='));
     expect(direct.length).toBeGreaterThan(0);
     for (const [name, version] of direct) expect(locked[name], name).toBe(version);

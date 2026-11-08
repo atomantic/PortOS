@@ -15,10 +15,10 @@ export const flux3Python = () => join(flux3Venv(), 'bin', 'python3');
 // Every transitive package is version- and hash-pinned in the lock so a repair
 // cannot resolve a newly published (or tampered) release. The probe asserts the
 // whole locked set, not just the direct pins.
-export const FLUX3_LOCK_PATH = join(PATHS.root, 'scripts', 'requirements-flux3-mlx.lock.txt');
+export const flux3LockPath = () => join(PATHS.root, 'scripts', 'requirements-flux3-mlx.lock.txt');
 let lockedPins = null;
 function flux3LockedPins() {
-  lockedPins ??= readFileSync(FLUX3_LOCK_PATH, 'utf8').split('\n')
+  lockedPins ??= readFileSync(flux3LockPath(), 'utf8').split('\n')
     .map(line => line.match(/^([A-Za-z0-9][A-Za-z0-9._-]*)==([^\s;\\]+)/)).filter(Boolean)
     .map(([, name, version]) => [name, version]);
   return lockedPins;
@@ -83,7 +83,7 @@ export function installFlux3Runtime(emit) {
       await command(['venv', '--python', '3.12', '--python-preference', 'only-managed', '--allow-existing', flux3Venv()]);
       const mflux = flux3LockedPins().find(([name]) => name === 'mflux')?.[1];
       emit({ type: 'stage', stage: 'install', message: `Installing hash-locked mflux ${mflux} and MLX dependencies.` });
-      await command(['pip', 'sync', '--require-hashes', '--reinstall', '--python', flux3Python(), FLUX3_LOCK_PATH]);
+      await command(['pip', 'sync', '--require-hashes', '--reinstall', '--python', flux3Python(), flux3LockPath()]);
       emit({ type: 'stage', stage: 'verify', message: 'Checking both FLUX.3 CLI modules without loading weights.' });
       await probe();
       if (cancelled) throw new Error('FLUX.3 installation cancelled.');
