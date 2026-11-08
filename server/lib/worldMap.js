@@ -170,18 +170,25 @@ const hashString = (text) => [...text].reduce((h, c) => (Math.imul(h, 31) + c.ch
 
 const BUILDING_STEP = 24;
 const LAMP_STEP = 36;
+const POLE_HEIGHT = 10.5;
+const LAMP_HEIGHT = 8;
 const FENCE_POST_STEP = 3;
 // Filler stays clear of a placed set's center by this much, so the set itself shows.
 const SET_CLEARANCE = 30;
 
 /**
- * The generated filler along every path, as flat lists the viewer instances:
- * `buildings` and `fences` are boxes `{ position: [x, y, z], size: [w, h, d], rotationDegrees }`,
- * `open` are ground strips (boxes of tiny height), `lamps` are `{ position, rotationDegrees }`
- * poles, `paving` is each path segment as a ground strip. Capped at FILL_MAX each.
+ * The generated filler along every path, as flat lists the viewer instances.
+ * Boxes are `{ position: [x, y, z], size: [w, h, d], rotationDegrees }` (yaw):
+ * `buildings`, `fences`, `doors`, `poles` (utility poles, house masts and
+ * corridor light posts), `arms` (crossarms and lamp arms), `lamps` (lamp heads),
+ * and the ground strips `paving`, `driveways` and `open`. `wires` are segments
+ * `[x1, y1, z1, x2, y2, z2]`. A road follows real infrastructure (#15328): one
+ * pole line on its right, wires pole to pole, lamps on arms over the road, a
+ * service drop from the nearest pole to each house's roof mast, and every house
+ * faces the road with a front door and a driveway. Capped at FILL_MAX each.
  */
 export function worldFill(world) {
-  const out = { paving: [], buildings: [], fences: [], open: [], lamps: [] };
+  const out = { paving: [], driveways: [], buildings: [], doors: [], fences: [], open: [], poles: [], arms: [], lamps: [], wires: [] };
   if (!world) return out;
   const sets = (world.sets || []).map((set) => set.position);
   const clear = (x, z) => sets.every(([sx, sz]) => Math.hypot(x - sx, z - sz) > SET_CLEARANCE);
@@ -189,6 +196,10 @@ export function worldFill(world) {
   for (const path of world.paths || []) {
     const rand = mulberry32((world.seed || 1) ^ hashString(path.id));
     const half = path.width / 2;
+    const road = path.kind === 'road';
+    // This road's utility poles in order, and the roof masts their drops feed.
+    const poleTops = [];
+    const masts = [];
     for (let i = 1; i < path.points.length; i += 1) {
       const [ax, az] = path.points[i - 1];
       const [bx, bz] = path.points[i];
@@ -201,11 +212,23 @@ export function worldFill(world) {
       const nz = ux;
       const yaw = round((Math.atan2(ux, uz) * 180) / Math.PI);
       push(out.paving, { position: [round((ax + bx) / 2), 0.01, round((az + bz) / 2)], size: [path.width, 0.02, round(length)], rotationDegrees: yaw, kind: path.kind });
-      if (path.kind === 'road' || path.kind === 'corridor') {
+      if (path.kind === 'corridor') {
         for (let d = LAMP_STEP / 2; d < length; d += LAMP_STEP) {
           const x = ax + ux * d + nx * (half + 1);
           const z = az + uz * d + nz * (half + 1);
-          push(out.lamps, { position: [round(x), 0, round(z)], rotationDegrees: yaw });
+          push(out.poles, { position: [round(x), 2.5, round(z)], size: [0.15, 5, 0.15], rotationDegrees: yaw });
+          push(out.lamps, { position: [round(x), 5, round(z)], size: [0.5, 0.25, 0.5], rotationDegrees: yaw });
+        }
+      } else if (road) {
+        // One pole line on the right, the crossarm across the road and the lamp arm reaching over it.
+        for (let d = LAMP_STEP / 2; d < length; d += LAMP_STEP) {
+          const x = ax + ux * d + nx * (half + 1.5);
+          const z = az + uz * d + nz * (half + 1.5);
+          push(out.poles, { position: [round(x), POLE_HEIGHT / 2, round(z)], size: [0.3, POLE_HEIGHT, 0.3], rotationDegrees: yaw });
+          push(out.arms, { position: [round(x), POLE_HEIGHT - 0.4, round(z)], size: [2.4, 0.12, 0.12], rotationDegrees: yaw });
+          push(out.arms, { position: [round(x - nx * 1.4), LAMP_HEIGHT, round(z - nz * 1.4)], size: [2.8, 0.1, 0.1], rotationDegrees: yaw });
+          push(out.lamps, { position: [round(x - nx * 2.8), LAMP_HEIGHT - 0.1, round(z - nz * 2.8)], size: [0.7, 0.2, 0.35], rotationDegrees: yaw });
+          poleTops.push({ x, z, nx, nz });
         }
       }
       for (const sign of [1, -1]) {
@@ -219,7 +242,19 @@ export function worldFill(world) {
             const back = half + depth / 2 + (path.kind === 'corridor' ? 0.2 : 7 + rand() * 3);
             const x = ax + ux * d + nx * sign * back;
             const z = az + uz * d + nz * sign * back;
-            if (clear(x, z)) push(out.buildings, { position: [round(x), round(h / 2), round(z)], size: [round(w), round(h), round(depth)], rotationDegrees: yaw });
+            if (!clear(x, z)) continue;
+            push(out.buildings, { position: [round(x), round(h / 2), round(z)], size: [round(w), round(h), round(depth)], rotationDegrees: yaw });
+            if (!road) continue;
+            // The front (size x is across the road) faces it: a door mid-wall, a driveway beside it to the road edge.
+            const fx = x - nx * sign * (w / 2);
+            const fz = z - nz * sign * (w / 2);
+            push(out.doors, { position: [round(fx - nx * sign * 0.1), 1.05, round(fz - nz * sign * 0.1)], size: [0.2, 2.1, 1], rotationDegrees: yaw });
+            const yard = back - w / 2 - half;
+            const dx = fx + ux * (depth / 2 - 2) - nx * sign * (yard / 2);
+            const dz = fz + uz * (depth / 2 - 2) - nz * sign * (yard / 2);
+            push(out.driveways, { position: [round(dx), 0.015, round(dz)], size: [round(yard), 0.02, 3.5], rotationDegrees: yaw });
+            masts.push([fx, h, fz]);
+            push(out.poles, { position: [round(fx), round(h + 0.6), round(fz)], size: [0.08, 1.2, 0.08], rotationDegrees: yaw });
           }
         } else if (path.sides === 'fence') {
           for (let d = 0; d < length; d += FENCE_POST_STEP * 20) {
@@ -235,6 +270,18 @@ export function worldFill(world) {
           push(out.open, { position: [round(x), 0.02, round(z)], size: [118, 0.02, round(length)], rotationDegrees: yaw });
         }
       }
+    }
+    // Primary wires run crossarm to crossarm along the line; each house's drop comes from its nearest pole.
+    for (let i = 1; i < poleTops.length; i += 1) {
+      const a = poleTops[i - 1];
+      const b = poleTops[i];
+      for (const offset of [-1, 1]) {
+        push(out.wires, [a.x + a.nx * offset, POLE_HEIGHT - 0.3, a.z + a.nz * offset, b.x + b.nx * offset, POLE_HEIGHT - 0.3, b.z + b.nz * offset].map(round));
+      }
+    }
+    for (const [mx, my, mz] of masts) {
+      const pole = poleTops.reduce((best, p) => (!best || Math.hypot(p.x - mx, p.z - mz) < Math.hypot(best.x - mx, best.z - mz) ? p : best), null);
+      if (pole) push(out.wires, [pole.x, POLE_HEIGHT - 0.5, pole.z, mx, my + 1.2, mz].map(round));
     }
   }
   return out;

@@ -7,8 +7,8 @@ import useClonedGltf, { GltfPrimitive } from '../../hooks/useClonedGltf';
 import ErrorBoundary from '../ErrorBoundary';
 import useGreyboxAnchorDrag from './useGreyboxAnchorDrag';
 import { greyboxCaptureSettings } from '../../../../server/lib/greyboxCapture.js';
+import { GREYBOX_SKY_COLOR } from '../../../../server/lib/greyboxVocabulary.js';
 
-const BACKGROUND = '#1b1e24';
 const FIGURE_COLOR = '#e0884a';
 const PROP_COLOR = '#4aa8a0';
 const DEFAULT_VIEW = Object.freeze({ position: [0, 8, 18], target: [0, 0, 0] });
@@ -190,7 +190,7 @@ const GreyboxViewer = forwardRef(function GreyboxViewer({ scene, aspect = '16:9'
         dpr={[1, 2]}
         frameloop="demand"
       >
-        <color attach="background" args={[BACKGROUND]} />
+        <color attach="background" args={[GREYBOX_SKY_COLOR]} />
         <ambientLight intensity={0.9} />
         <hemisphereLight args={['#ffffff', '#555a66', 0.6]} />
         <directionalLight position={[10, 18, 8]} intensity={1.4} />
