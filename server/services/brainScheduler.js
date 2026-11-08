@@ -5,11 +5,16 @@
  * - Daily digest generation (default midnight)
  * - Weekly review generation (default Sunday midnight)
  *
+ * Configured times are wall-clock times in the user's timezone (Settings > General),
+ * not the server's TZ=UTC host time.
+ *
  * Handles catch-up logic for missed runs (max 1 per type)
  */
 
 import * as storage from './brainStorage.js';
 import { runDailyDigest, runWeeklyReview, TOOL_FREE_REQUIRED } from './brain.js';
+import { getUserTimezone } from './userTimezone.js';
+import { getLocalParts, isLocalDay, todayInTimezone } from '../lib/timezone.js';
 
 let schedulerInterval = null;
 let lastCheckTime = null;
@@ -49,22 +54,23 @@ function parseTime(timeStr) {
 }
 
 /**
- * Check if it's time for daily digest
+ * Check if it's time for daily digest. `parts` is the local wall clock in the
+ * user's timezone (see getLocalParts), not the host's, which runs TZ=UTC.
  */
-function isDailyDigestTime(settings, now) {
+function isDailyDigestTime(settings, parts) {
   const { hours, minutes } = parseTime(settings.dailyDigestTime);
-  return now.getHours() === hours && now.getMinutes() === minutes;
+  return parts.hour === hours && parts.minute === minutes;
 }
 
 /**
  * Check if it's time for weekly review
  */
-function isWeeklyReviewTime(settings, now) {
+function isWeeklyReviewTime(settings, parts) {
   const { hours, minutes } = parseTime(settings.weeklyReviewTime);
   const targetDay = DAY_MAP[settings.weeklyReviewDay];
-  return now.getDay() === targetDay &&
-         now.getHours() === hours &&
-         now.getMinutes() === minutes;
+  return parts.dayOfWeek === targetDay &&
+         parts.hour === hours &&
+         parts.minute === minutes;
 }
 
 /**
@@ -78,7 +84,7 @@ function isInCooldown(lastFailure, now) {
 /**
  * Check if daily digest was missed (should have run today but didn't)
  */
-function isDailyDigestMissed(settings, now) {
+function isDailyDigestMissed(settings, now, parts, timezone) {
   // Don't re-trigger while already running
   if (dailyRunning || dailyCatchUpAttempted) return false;
   // Respect cooldown after failure
@@ -86,19 +92,14 @@ function isDailyDigestMissed(settings, now) {
 
   const { hours, minutes } = parseTime(settings.dailyDigestTime);
 
-  // Create target time for today
-  const todayTarget = new Date(now);
-  todayTarget.setHours(hours, minutes, 0, 0);
-
-  // Only consider catch-up if we're past today's target time
-  if (now <= todayTarget) return false;
+  // Only consider catch-up once local wall-clock time is past today's target
+  if (parts.hour * 60 + parts.minute <= hours * 60 + minutes) return false;
 
   // Never run before — catch up now
   if (!settings.lastDailyDigest) return true;
 
-  // Last run was before today — catch up
-  const lastRun = new Date(settings.lastDailyDigest);
-  return lastRun.toDateString() !== now.toDateString();
+  // Last run was on an earlier local day — catch up
+  return !isLocalDay(settings.lastDailyDigest, timezone, todayInTimezone(timezone, now));
 }
 
 /**
@@ -134,9 +135,11 @@ function logRunFailure(err, label, isCatchUp) {
 async function checkSchedule() {
   const now = new Date();
   const settings = await storage.loadMeta();
+  const timezone = await getUserTimezone();
+  const parts = getLocalParts(now, timezone);
 
   // Avoid running multiple times in the same minute
-  const currentMinute = `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}-${now.getHours()}-${now.getMinutes()}`;
+  const currentMinute = `${parts.year}-${parts.month}-${parts.day}-${parts.hour}-${parts.minute}`;
   if (lastCheckTime === currentMinute) return;
   lastCheckTime = currentMinute;
 
@@ -144,8 +147,8 @@ async function checkSchedule() {
   if (settings.scheduledReviewsEnabled !== true) return;
 
   // Check for daily digest
-  if (!dailyRunning && (isDailyDigestTime(settings, now) || isDailyDigestMissed(settings, now))) {
-    const isCatchUp = !isDailyDigestTime(settings, now);
+  if (!dailyRunning && (isDailyDigestTime(settings, parts) || isDailyDigestMissed(settings, now, parts, timezone))) {
+    const isCatchUp = !isDailyDigestTime(settings, parts);
     console.log(`🧠 Scheduler: Running ${isCatchUp ? 'missed ' : ''}daily digest${isCatchUp ? ' (catch-up)' : ''}...`);
     dailyRunning = true;
     if (isCatchUp) dailyCatchUpAttempted = true;
@@ -158,8 +161,8 @@ async function checkSchedule() {
   }
 
   // Check for weekly review
-  if (!weeklyRunning && (isWeeklyReviewTime(settings, now) || isWeeklyReviewMissed(settings, now))) {
-    const isCatchUp = !isWeeklyReviewTime(settings, now);
+  if (!weeklyRunning && (isWeeklyReviewTime(settings, parts) || isWeeklyReviewMissed(settings, now))) {
+    const isCatchUp = !isWeeklyReviewTime(settings, parts);
     console.log(`🧠 Scheduler: Running ${isCatchUp ? 'missed ' : ''}weekly review${isCatchUp ? ' (catch-up)' : ''}...`);
     weeklyRunning = true;
     if (isCatchUp) weeklyCatchUpAttempted = true;
