@@ -5,6 +5,7 @@ vi.mock('../../lib/fetchWithTimeout.js', () => ({ fetchWithTimeout: fetchMock })
 vi.mock('./rateLimits.js', () => ({ checkRateLimit: vi.fn(), recordAction: vi.fn(), syncFromExternal: vi.fn() }));
 
 import * as moltworld from './api.js';
+import { checkRateLimit } from './rateLimits.js';
 
 const SECRET = 'mw-secret-agent-9f8e7d';
 const jsonResponse = (body, status = 200) => ({
@@ -53,5 +54,26 @@ describe('moltworld api logging', () => {
 
     expect(result.agentId).toBe(SECRET);
     expect(loggedText([logSpy, errorSpy])).not.toContain(SECRET);
+  });
+});
+
+describe('moltworld request headers', () => {
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('sends Content-Type: application/json on a POST write', async () => {
+    checkRateLimit.mockReturnValue({ allowed: true });
+    fetchMock.mockResolvedValue(jsonResponse({ ok: true }));
+    await moltworld.think(SECRET, 'hello');
+
+    const [, config] = fetchMock.mock.calls[0];
+    expect(config.method).toBe('POST');
+    expect(config.headers['Content-Type']).toBe('application/json');
   });
 });

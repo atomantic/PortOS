@@ -74,11 +74,11 @@ async function handleVerification(data, apiKey, aiConfig) {
 async function request(endpoint, options = {}, aiConfig) {
   const url = `${API_BASE}${endpoint}`;
   const config = {
+    ...options,
     headers: {
       'Content-Type': 'application/json',
       ...options.headers
-    },
-    ...options
+    }
   };
 
   console.log(`📚 Moltbook API: ${options.method || 'GET'} ${endpoint}`);
