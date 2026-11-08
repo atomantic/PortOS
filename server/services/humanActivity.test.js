@@ -6,6 +6,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { localDayRangeUtc as canonicalLocalDayRangeUtc } from '../lib/timezone.js';
+import { mboxMessageToCandidate } from './gmailMboxImport.js';
 import {
   shortSummary,
   localDayKey,
@@ -153,6 +154,19 @@ describe('messageActivityCandidates', () => {
     expect(c.metadata.externalId).toBe('e1');
     // Privacy: summary is a collapsed preview, not the raw multi-line body.
     expect(c.summary).toBe('the full body with newlines');
+  });
+  it('keys Gmail mail with a Message-ID exactly like the Takeout importer and names the legacy key it replaces (#15308)', () => {
+    const [live, noId] = messageActivityCandidates(account, [
+      { externalId: 'e1', rfcMessageId: '<id-1@example.com>', date: '2026-07-04T10:00:00Z', from: 'friend@x.io', subject: 'Hey' },
+      { externalId: 'e2', rfcMessageId: '', date: '2026-07-04T11:00:00Z', from: 'friend@x.io', subject: 'Draft' },
+    ]);
+    const mbox = mboxMessageToCandidate(['Message-ID: <id-1@example.com>', 'Date: Sat, 04 Jul 2026 10:00:00 +0000', 'From: friend@x.io']);
+    expect(live.dedupeKey).toBe(mbox.dedupeKey);
+    expect(live.supersedesDedupeKey).toBe('msg:acct-1:e1');
+    expect(live.metadata.rfcMessageId).toBe('id-1@example.com');
+    // No Message-ID header: the legacy per-account key, with nothing to supersede.
+    expect(noId.dedupeKey).toBe('msg:acct-1:e2');
+    expect(noId.supersedesDedupeKey).toBeUndefined();
   });
   it('skips messages without a date or external id', () => {
     expect(messageActivityCandidates(account, [{ subject: 'no date' }])).toEqual([]);

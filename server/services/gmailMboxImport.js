@@ -20,7 +20,9 @@
  *
  * Idempotent: the dedupe key is the RFC-822 `Message-ID` (globally unique and
  * stable), so re-importing the same export — or a newer overlapping one — is a
- * no-op via `recordEvents`'s `ON CONFLICT DO NOTHING`. Messages missing a
+ * no-op via `recordEvents`'s `ON CONFLICT DO NOTHING`. Live Gmail sync keys its
+ * rows on the same `gmail:<Message-ID>` (#15308), so an import overlapping
+ * already-synced mail is a no-op too. Messages missing a
  * Message-ID (rare — some drafts) fall back to a content hash of
  * (instant + from + subject). No AI-provider calls; parsing is deterministic and
  * LLM-free.
@@ -33,6 +35,7 @@ import { homedir } from 'os';
 import path from 'path';
 
 import { ServerError } from '../lib/errorHandler.js';
+import { cleanMessageId } from '../lib/emailMessageId.js';
 import { shortSummary, recordEvents } from './humanActivity.js';
 
 // ---------------------------------------------------------------------------
@@ -172,11 +175,6 @@ export function resolveMboxInstant(value) {
   if (!value) return null;
   const d = new Date(String(value).trim());
   return Number.isNaN(d.getTime()) ? null : d.toISOString();
-}
-
-// Strip the surrounding angle brackets from a `Message-ID` header.
-export function cleanMessageId(value) {
-  return String(value || '').replace(/[<>]/g, '').trim();
 }
 
 // Classify a message as 'sent' or 'received'. Gmail Takeout stamps outbound mail

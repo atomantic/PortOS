@@ -41,6 +41,7 @@ export const DB_TEST_INCLUDE = [
   'services/catalogSync.changeClock.db.test.js',
   'services/catalogSync.pendingParents.db.test.js',
   'services/humanActivity.db.test.js',
+  'services/gmailActivityIdentity.db.test.js',
   'services/goalScorecard.db.test.js',
   'services/postRunDb.db.test.js',
   'services/userActions.db.test.js',
