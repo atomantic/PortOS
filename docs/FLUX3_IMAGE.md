@@ -6,9 +6,13 @@ in Image Gen, then use **Install / repair FLUX.3 runtime** if needed. Installati
 requires `uv`, macOS 14+ and Apple Silicon; the shipped profiles require 32 GB
 unified memory. Runtime packages and model weights are separate downloads.
 
-The runtime lives at `<data>/python/venv-flux3`, with mflux 0.23.0 and pinned
-MLX/Transformers dependencies. It does not upgrade the older shared FLUX.1 or
-video environment. The installer verifies imports without loading weights.
+The runtime lives at `<data>/python/venv-flux3`. Direct pins (mflux 0.24.0,
+MLX, Transformers, Pillow) are in `scripts/requirements-flux3-mlx.txt`; the
+installer syncs the fully resolved, hash-pinned
+`scripts/requirements-flux3-mlx.lock.txt` (regeneration steps are in its
+header). It does not upgrade the older shared FLUX.1 or video environment. The
+installer verifies every locked version and both CLI imports without loading
+weights; a venv from an older lock reports as needing repair.
 Selecting **Download** or generating the first image fetches the selected
 community checkpoint into the normal Hugging Face cache. Explicit downloads and
 later reconciliation update the model inventory.
@@ -47,7 +51,7 @@ errors rather than bypassing the gate.
 
 The issue's provenance is real: [Phosphene v4.19.14](https://github.com/mrbizarro/Phosphene/commit/43c2b9abd7edde4fca1dbfb265e88dfe642317e6)
 introduced FLUX.3 Klein. CLI modules and flags were verified against the
-[published mflux 0.23.0 source](https://pypi.org/project/mflux/0.23.0/) and the
+[published mflux 0.24.0 source](https://pypi.org/project/mflux/0.24.0/) and the
 [upstream runner documentation](https://github.com/mflux-community/mflux/tree/main/src/mflux/models/flux3).
 
 Automated tests cover registration/upgrades, hardware requirements, runtime
