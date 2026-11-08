@@ -406,14 +406,14 @@ function AppDetail() {
           <div className="flex flex-wrap items-center gap-1 lg:max-w-[60%]">
             {/* Start/Stop/Restart - only for PM2 apps */}
             {!NON_PM2_TYPES.has(app.type) && (
-            <div className="inline-flex rounded-lg overflow-hidden border border-port-border">
+            <div className="inline-flex gap-1 pointer-coarse:gap-2 rounded-lg overflow-hidden border border-port-border">
               {app.overallStatus === 'online' ? (
                 <>
                   <button
                     onClick={handleStop}
                     disabled={actionLoading}
                     aria-busy={actionLoading === 'stop'}
-                    className="px-2 py-1 bg-port-error/20 text-port-error enabled:hover:bg-port-error/30 transition-colors disabled:opacity-50 flex items-center gap-1"
+                    className="px-2 py-1 pointer-coarse:min-h-11 bg-port-error/20 text-port-error enabled:hover:bg-port-error/30 transition-colors disabled:opacity-50 flex items-center gap-1"
                   >
                     <Square size={14} />
                     <span className="text-xs">Stop</span>
@@ -422,7 +422,7 @@ function AppDetail() {
                     onClick={handleRestart}
                     disabled={actionLoading}
                     aria-busy={actionLoading === 'restart'}
-                    className="px-2 py-1 bg-port-warning/20 text-port-warning enabled:hover:bg-port-warning/30 transition-colors disabled:opacity-50 border-l border-port-border flex items-center gap-1"
+                    className="px-2 py-1 pointer-coarse:min-h-11 bg-port-warning/20 text-port-warning enabled:hover:bg-port-warning/30 transition-colors disabled:opacity-50 border-l border-port-border flex items-center gap-1"
                   >
                     <RotateCcw size={14} className={actionLoading === 'restart' ? 'animate-spin' : ''} />
                     <span className="text-xs">{actionLoading === 'restart' ? 'Restarting...' : 'Restart'}</span>
@@ -434,7 +434,7 @@ function AppDetail() {
                 <button
                   onClick={fetchApp}
                   disabled={actionLoading}
-                  className="px-2 py-1 bg-port-warning/20 text-port-warning enabled:hover:bg-port-warning/30 transition-colors disabled:opacity-50 flex items-center gap-1"
+                  className="px-2 py-1 pointer-coarse:min-h-11 bg-port-warning/20 text-port-warning enabled:hover:bg-port-warning/30 transition-colors disabled:opacity-50 flex items-center gap-1"
                   title="PM2 status could not be read — refresh to retry"
                 >
                   <RefreshCw size={14} />
@@ -445,7 +445,7 @@ function AppDetail() {
                   onClick={handleStart}
                   disabled={actionLoading}
                   aria-busy={actionLoading === 'start'}
-                  className="px-2 py-1 bg-port-success/20 text-port-success enabled:hover:bg-port-success/30 transition-colors disabled:opacity-50 flex items-center gap-1"
+                  className="px-2 py-1 pointer-coarse:min-h-11 bg-port-success/20 text-port-success enabled:hover:bg-port-success/30 transition-colors disabled:opacity-50 flex items-center gap-1"
                 >
                   <Play size={14} />
                   <span className="text-xs">{actionLoading === 'start' ? 'Starting...' : 'Start'}</span>

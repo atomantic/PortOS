@@ -153,20 +153,20 @@ export default function ProcessesTab({ appId, pm2ProcessNames, filterFn }) {
                     <td className="px-4 py-3 text-gray-400">{proc.uptime ? formatDurationMs(proc.uptime) : '-'}</td>
                     <td className="px-4 py-3 text-gray-400">{proc.restarts}</td>
                     <td className="px-4 py-3 text-right">
-                      <div className="flex justify-end gap-1">
+                      <div className="flex justify-end gap-1 pointer-coarse:gap-2">
                         {proc.status === 'online' ? (
                           <>
                             <button
                               onClick={() => pm2Action('restart', proc.name)}
                               disabled={restarting[proc.name]}
-                              className="px-2 py-1 text-xs bg-port-warning/20 text-port-warning hover:bg-port-warning/30 rounded disabled:opacity-50"
+                              className="px-2 py-1 text-xs pointer-coarse:min-h-11 bg-port-warning/20 text-port-warning hover:bg-port-warning/30 rounded disabled:opacity-50"
                             >
                               {restarting[proc.name] ? '...' : 'Restart'}
                             </button>
                             <button
                               onClick={() => pm2Action('stop', proc.name)}
                               disabled={restarting[proc.name]}
-                              className="px-2 py-1 text-xs bg-port-error/20 text-port-error hover:bg-port-error/30 rounded disabled:opacity-50"
+                              className="px-2 py-1 text-xs pointer-coarse:min-h-11 bg-port-error/20 text-port-error hover:bg-port-error/30 rounded disabled:opacity-50"
                             >
                               Stop
                             </button>
@@ -175,7 +175,7 @@ export default function ProcessesTab({ appId, pm2ProcessNames, filterFn }) {
                           <button
                             onClick={() => pm2Action('start', proc.name)}
                             disabled={restarting[proc.name]}
-                            className="px-2 py-1 text-xs bg-port-success/20 text-port-success hover:bg-port-success/30 rounded disabled:opacity-50"
+                            className="px-2 py-1 text-xs pointer-coarse:min-h-11 bg-port-success/20 text-port-success hover:bg-port-success/30 rounded disabled:opacity-50"
                           >
                             {restarting[proc.name] ? '...' : 'Start'}
                           </button>
