@@ -21,7 +21,8 @@ vi.mock('../lib/fileUtils.js', () => ({
 }));
 
 vi.mock('./runner.js', () => ({
-  createRun: vi.fn()
+  createRun: vi.fn(),
+  stopRun: vi.fn().mockResolvedValue(undefined)
 }));
 
 vi.mock('./promptRunner.js', () => ({
@@ -41,13 +42,14 @@ vi.mock('./providers.js', () => ({
 }));
 
 import { tryReadFile, atomicWrite } from '../lib/fileUtils.js';
-import { createRun } from './runner.js';
+import { createRun, stopRun } from './runner.js';
 import { runPromptThroughProvider, resolveProviderAndModel } from './promptRunner.js';
 import { getActiveProvider, listSelectableProviders } from './providers.js';
 import {
   createLoop,
   restoreLoops,
   stopLoop,
+  deleteLoop,
   triggerLoop,
   updateLoop,
   getLoops,
@@ -337,6 +339,35 @@ describe('loops.js', () => {
   // ===========================================================================
   // executeIteration error logging via triggerLoop
   // ===========================================================================
+  describe('cancelling an in-flight iteration', () => {
+    async function startPendingIteration() {
+      const loop = await createLoop({ prompt: 'cancel test', interval: '30s', runImmediately: false });
+      tryReadFile.mockResolvedValue(JSON.stringify(atomicWrite.mock.calls[0][1]));
+      mockRunPrompt.mockReturnValue(new Promise(() => {}));
+      await triggerLoop(loop.id);
+      await flushAsync();
+      return loop;
+    }
+
+    it('stopLoop stops the in-flight run', async () => {
+      const loop = await startPendingIteration();
+      await stopLoop(loop.id);
+      expect(stopRun).toHaveBeenCalledWith('run-123');
+    });
+
+    it('deleteLoop stops the in-flight run', async () => {
+      const loop = await startPendingIteration();
+      await deleteLoop(loop.id);
+      expect(stopRun).toHaveBeenCalledWith('run-123');
+    });
+
+    it('stopLoop on an idle loop does not call stopRun', async () => {
+      const loop = await createLoop({ prompt: 'idle', interval: '30s', runImmediately: false });
+      await stopLoop(loop.id);
+      expect(stopRun).not.toHaveBeenCalled();
+    });
+  });
+
   describe('error handling in executeIteration', () => {
     it('logs console.error when the central prompt runner rejects', async () => {
       const loop = await createLoop({
