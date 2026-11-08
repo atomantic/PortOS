@@ -235,7 +235,9 @@ describe('Tribe person deep link (#98 part C)', () => {
   it('omits lastContact from the update unless the user edited it (#15356)', async () => {
     api.updateTribePerson.mockResolvedValue({ ...PEOPLE[1] });
     renderAt('/tribe?person=p2');
-    const notes = await screen.findByLabelText('Notes');
+    // Wait for the deep link to select the person; editing earlier hits the blank create form.
+    await waitFor(() => expect(screen.getByLabelText('Name')).toHaveValue('Sample Neighbor'));
+    const notes = screen.getByLabelText('Notes');
     fireEvent.change(notes, { target: { value: 'edited' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(api.updateTribePerson).toHaveBeenCalledTimes(1));
