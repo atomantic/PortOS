@@ -161,14 +161,16 @@ async function resolveGitlabNamespace(repoPath) {
  * minutes. Null when the agent records are unreadable: an under-counted set
  * would dispatch a picker the ownership bind then refuses.
  */
-async function liveClaimIssueNumbers(repoPath) {
+async function liveClaimIssueNumbers(repoPath, ignoreTaskId) {
   const [{ readAgentsStateForSafetyCheck }, { liveClaimBranches }] = await Promise.all([
     import('./cosState.js'), import('../lib/claimContinuation.js'),
   ]);
   const snapshot = await readAgentsStateForSafetyCheck().catch(() => null);
   const agents = snapshot?.trusted === true ? snapshot.agents : null;
   if (!agents || typeof agents !== 'object' || Array.isArray(agents)) return null;
-  return liveClaimBranches(Object.values(agents), repoPath).map(issueNumberFromRef).filter((n) => n != null);
+  // The refill that a completion triggers must not count that task's own run.
+  const live = Object.values(agents).filter((agent) => !ignoreTaskId || agent?.taskId !== ignoreTaskId);
+  return liveClaimBranches(live, repoPath).map(issueNumberFromRef).filter((n) => n != null);
 }
 
 /**
@@ -182,7 +184,7 @@ async function liveClaimIssueNumbers(repoPath) {
  * how open changes are listed: GitHub PR head refs (`gh pr list`) vs GitLab
  * MR source branches (`glab mr list`).
  */
-async function inFlightIssueNumbers(repoPath, forge = 'github', env) {
+async function inFlightIssueNumbers(repoPath, forge = 'github', env, ignoreTaskId = null) {
   const nums = new Set();
   // The branch list and the PR/MR list are independent CLI calls — run concurrently.
   const prListCall = forge === 'gitlab'
@@ -191,7 +193,7 @@ async function inFlightIssueNumbers(repoPath, forge = 'github', env) {
   const [branchRes, prRes, liveClaims] = await Promise.all([
     runCli('git', ['branch', '-a', '--no-color', '--format=%(refname:short)'], repoPath, env),
     prListCall,
-    liveClaimIssueNumbers(repoPath)
+    liveClaimIssueNumbers(repoPath, ignoreTaskId)
   ]);
   if (prRes.code !== 0) {
     return { error: `${forge === 'gitlab' ? 'glab' : 'gh'}-unavailable`, detail: redactCliDetail(prRes.stderr) };
@@ -725,7 +727,7 @@ async function fetchTrustedForgeIssues(cfg, repoPath, { issueAuthorFilter = 'sel
  * runs only when the list is non-empty, so an empty queue parks without a
  * wasted branch/PR scan.
  */
-async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', issueExcludeLabels = [], issueMinAgeMinutes, requireComplete = false } = {}, env) {
+async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', issueExcludeLabels = [], issueMinAgeMinutes, requireComplete = false, ignoreTaskId = null } = {}, env) {
   const cfg = FORGE_ISSUE_CONFIG[forgeKey];
   const repoPath = app?.repoPath;
   if (!repoPath) return { actionable: false, count: 0, reason: 'no-repo-path' };
@@ -774,7 +776,7 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', is
     return parked('no-open-issues');
   }
 
-  const inFlightResult = await inFlightIssueNumbers(repoPath, cfg.inFlightForge, resolvedEnv);
+  const inFlightResult = await inFlightIssueNumbers(repoPath, cfg.inFlightForge, resolvedEnv, ignoreTaskId);
   if (inFlightResult.error) {
     console.log(`⏭️ In-flight claim evidence unavailable (${inFlightResult.error}); skipping this dispatch`);
     return forgeTransient(cfg, inFlightResult.error, null, inFlightResult.detail);

@@ -629,6 +629,10 @@ describe('perpetualWork', () => {
         });
         expect(await detectGithubIssues(app, { issueAuthorFilter: 'any' }))
           .toMatchObject({ actionable: false, reason: 'no-actionable-issues', inFlightCount: 1 });
+        // The refill a task's completion triggers ignores that task's own run.
+        cosAgents.pinned.taskId = 'task-done';
+        expect(await detectGithubIssues(app, { issueAuthorFilter: 'any', ignoreTaskId: 'task-done' }))
+          .toMatchObject({ actionable: true, count: 1, inFlightCount: 0 });
       } finally {
         cosAgents = {};
       }
