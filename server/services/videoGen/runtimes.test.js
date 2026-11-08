@@ -88,7 +88,15 @@ describe('Wan 2.2 CUDA locked currency', () => {
     const root = mkdtempSync(join(tmpdir(), 'portos-cuda-currency-'));
     try {
       const lock = join(root, 'runtime.lock.txt');
-      writeFileSync(lock, 'portos-currency-direct==1.0\nportos-currency-transitive==2.0\n');
+      writeFileSync(lock, [
+        '--index-url https://pypi.org/simple',
+        'portos-currency-direct==1.0 \\',
+        `    --hash=sha256:${'0'.repeat(64)}`,
+        '    # via runtime',
+        'portos-currency-transitive==2.0 \\',
+        `    --hash=sha256:${'1'.repeat(64)}`,
+        '',
+      ].join('\n'));
       const direct = join(root, 'portos_currency_direct-1.0.dist-info');
       const transitive = join(root, 'portos_currency_transitive-2.0.dist-info');
       mkdirSync(direct);
