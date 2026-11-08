@@ -37,6 +37,8 @@ const STANDARDIZE_STEPS = [
   { id: 'apply', label: 'Writing ecosystem.config.cjs' }
 ];
 
+const STANDARDIZE_CONNECTION_LOST_MESSAGE = 'Connection lost during standardization; it may still finish on the server. Click Standardize again to see the result.';
+
 const stepIconFor = (step) => {
   if (!step) return <Circle size={16} className="text-gray-600" />;
   if (step.status === 'running') return <Loader size={16} className="text-port-accent animate-spin" />;
@@ -103,6 +105,9 @@ export default function CreateApp() {
   const [standardizeResult, setStandardizeResult] = useState(null);
   const [standardizeError, setStandardizeError] = useState(null);
   const [activeProvider, setActiveProvider] = useState(null);
+  // The socket handlers are registered once, so they read the live flag from here.
+  const standardizingRef = useRef(false);
+  useEffect(() => { standardizingRef.current = standardizing; }, [standardizing]);
 
   // Fetch active provider and default directory on mount
   useEffect(() => {
@@ -178,6 +183,15 @@ export default function CreateApp() {
         setStandardizeError(err || 'Standardization failed');
         if (err) toast.error(`Standardization failed: ${err}`);
       }
+    });
+
+    // A standardization reports only to this socket. If the link drops, its
+    // terminal frame is lost with the old socket id, so settle rather than spin;
+    // re-running is safe because the server serializes per repo.
+    socketRef.current.on('disconnect', () => {
+      if (!standardizingRef.current) return;
+      setStandardizing(false);
+      setStandardizeError(STANDARDIZE_CONNECTION_LOST_MESSAGE);
     });
 
     return () => {

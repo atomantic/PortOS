@@ -15,7 +15,7 @@ const FLAG_OPTIONS = [
 const PLATFORM_FLAGS = new Set(['--ios', '--macos', '--watch', '--all']);
 
 export default function DeployPanel({ appId, appName }) {
-  const { output, isDeploying, error, result, startDeploy, clearDeploy } = useAppDeploy();
+  const { output, isDeploying, error, result, startDeploy, clearDeploy } = useAppDeploy(appId);
   const [showOptions, setShowOptions] = useState(false);
   const [selectedFlags, setSelectedFlags] = useState([]);
   const [dismissed, setDismissed] = useState(false);
@@ -62,7 +62,7 @@ export default function DeployPanel({ appId, appName }) {
     // If a deploy is already running and the modal was dismissed, just reopen it
     // instead of triggering another deploy (the backend would reject as duplicate).
     if (isDeploying) return;
-    startDeploy(appId, selectedFlags);
+    startDeploy(selectedFlags);
   };
 
   const handleClose = () => {

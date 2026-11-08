@@ -4,11 +4,12 @@ import ActivityLog from './ActivityLog';
 
 const LABELS = {
   update: { running: 'Updating', done: 'Updated', failed: 'Update failed for' },
+  deploy: { running: 'Deploying', done: 'Deployed', failed: 'Deploy failed for' },
   standardize: { running: 'Standardizing', done: 'Standardized', failed: 'Standardize failed for' }
 };
 
 /**
- * Page-level banner for an in-flight app update/standardize. It lives above the
+ * Page-level banner for an in-flight app update/standardize/deploy. It lives above the
  * app list rather than inside the expanded row so collapsing the row — or
  * returning to /apps mid-operation — still shows what is running (#3435).
  */
