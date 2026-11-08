@@ -39,6 +39,10 @@ describe('pinned MOSS weight workflow', () => {
     expect(fetcher.mock.calls[0][0]).toBe('https://huggingface.co/example/moss/resolve/immutable-revision/transformer/model.safetensors');
     expect(await readFile(join(fixture.root, 'transformer/model.safetensors'))).toEqual(tensor);
     expect(events.at(-1).type).toBe('complete');
+    // The picker badge renders `step/total` and byte sizes from this frame (it showed "undefined/undefined").
+    expect(events.find(event => event.type === 'progress')).toMatchObject({
+      file: 'transformer/model.safetensors', step: 1, total: 1, totalBytes: tensor.length, downloaded: expect.any(Number),
+    });
     expect((await mossModelCacheStatus('moss')).cached).toBe(true);
     await downloadMossWeights(() => {}).promise;
     expect(fetcher).toHaveBeenCalledTimes(1);

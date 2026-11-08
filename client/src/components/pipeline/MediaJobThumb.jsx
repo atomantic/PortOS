@@ -51,7 +51,7 @@ export default function MediaJobThumb({
   // can show WHY live, instead of only after a reload re-reads the persisted
   // record; callers that only care about the status ignore it.
   useEffect(() => { if (onStatus) onStatus(effectiveStatus, error); }, [effectiveStatus, error, onStatus]);
-  useEffect(() => { if (onFilename && effectiveFilename) onFilename(effectiveFilename); }, [effectiveFilename, onFilename]);
+  useEffect(() => { if (onFilename && effectiveStatus === 'completed' && effectiveFilename) onFilename(effectiveFilename); }, [effectiveFilename, effectiveStatus, onFilename]);
 
   if (!jobId) return null;
 

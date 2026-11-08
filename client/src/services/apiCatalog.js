@@ -267,6 +267,10 @@ export const previewCatalogSheet = (id, body = {}, options) =>
 
 export const renderCatalogSheet = (id, body = {}, options) =>
   request(`/catalog/ingredients/${enc(id)}/sheets`, { method: 'POST', body: JSON.stringify(body), ...options });
+// Bounded failed sheet jobs with verified, retained originals for explicit recovery.
+export const listCatalogSheetJobs = (id, options = {}) =>
+  request(`/catalog/ingredients/${enc(id)}/sheets/jobs`, options);
+
 // Remove a universe-canon sheet, bound to the file shown; returns
 // `{ filename, pointers, updatedAt }`.
 export const removeCatalogPointerSheet = (id, variant, filename, options) =>
