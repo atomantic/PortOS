@@ -8,7 +8,7 @@ import { performance } from 'node:perf_hooks';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { writeStepSummary } from './lib/githubOutput.js';
 
-export const IMPACT_STAGES = ['admission', 'base', 'hidden-content', 'commit-messages', 'import-case', 'plan', 'node-minimum', 'summary', 'autofixer-install', 'syntax'];
+export const IMPACT_STAGES = ['admission', 'base', 'hidden-content', 'import-case', 'plan', 'node-minimum', 'summary', 'autofixer-install', 'syntax'];
 const OWNER_KEY = 'PORTOS_CI_IMPACT_OWNER';
 const diagnosticRoot = () => process.env.PORTOS_CI_IMPACT_DIAGNOSTICS
   || (process.env.RUNNER_TEMP ? join(process.env.RUNNER_TEMP, 'portos-ci-impact') : undefined);
