@@ -449,7 +449,7 @@ export default function ConfigTab({ onRefresh }) {
               className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:outline-hidden focus:ring-2 focus:ring-port-accent"
             />
             <p className="mt-1 text-xs text-gray-500">
-              Time when daily digest will be generated automatically
+              Time when the daily digest is generated automatically, in your timezone (Settings &gt; General)
             </p>
           </div>
 
@@ -471,7 +471,7 @@ export default function ConfigTab({ onRefresh }) {
               ))}
             </select>
             <p className="mt-1 text-xs text-gray-500">
-              Day of the week for weekly review generation
+              Day of the week for weekly review generation, in your timezone (Settings &gt; General)
             </p>
           </div>
 
@@ -488,7 +488,7 @@ export default function ConfigTab({ onRefresh }) {
               className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:outline-hidden focus:ring-2 focus:ring-port-accent"
             />
             <p className="mt-1 text-xs text-gray-500">
-              Time when weekly review will be generated automatically
+              Time when the weekly review is generated automatically, in your timezone (Settings &gt; General)
             </p>
           </div>
         </div>
