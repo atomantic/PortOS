@@ -235,7 +235,7 @@ describe('loops.js', () => {
     it('throws when interval is shorter than 10 seconds', async () => {
       await expect(
         createLoop({ prompt: 'fast loop', interval: '5s', runImmediately: false })
-      ).rejects.toThrow('Interval must be at least 10 seconds');
+      ).rejects.toThrow('Interval must be between 10 seconds and 24 days');
     });
 
     it('throws when prompt is empty', async () => {
