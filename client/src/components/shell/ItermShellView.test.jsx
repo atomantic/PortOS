@@ -37,6 +37,7 @@ const hookState = (over = {}) => ({
   sendCtrlB: vi.fn(),
   sendCtrlC: vi.fn(),
   sendEsc: vi.fn(),
+  sendAltM: vi.fn(),
   sendNavKey: vi.fn(),
   ...over,
 });
