@@ -14,7 +14,7 @@ import { PATHS, ensureDir, atomicWrite, tryReadFile } from '../lib/fileUtils.js'
 import { randomUUID } from 'crypto';
 import { ServerError } from '../lib/errorHandler.js';
 import { MIN_INTERVAL_MS, parseInterval } from '../lib/loopInterval.js';
-import { createRun } from './runner.js';
+import { createRun, stopRun } from './runner.js';
 import { resolveProviderAndModel, runPromptThroughProvider } from './promptRunner.js';
 import { listSelectableProviders, getActiveProvider } from './providers.js';
 
@@ -354,11 +354,21 @@ function startLoopTimer(loop, runImmediately = false, firstDelayMs = null) {
   }
 }
 
+// Stop the provider run behind an in-flight iteration so Stop/Delete actually halt the AI work.
+function cancelActiveIteration(active) {
+  if (!active?.running || !active.runId) return;
+  const { runId } = active;
+  Promise.resolve()
+    .then(() => stopRun(runId))
+    .catch(err => console.log(`⏹️ Loop run ${runId} not cancelled: ${err.message}`));
+}
+
 export async function stopLoop(id) {
   const active = activeLoops.get(id);
   if (!active) throw new ServerError(`Loop ${id} is not running`, { status: 409, code: 'INVALID_STATE' });
 
   clearLoopTimer(active);
+  cancelActiveIteration(active);
   activeLoops.delete(id);
 
   await withLoopsTail(async () => {
@@ -401,6 +411,7 @@ export async function deleteLoop(id) {
   if (activeLoops.has(id)) {
     const active = activeLoops.get(id);
     clearLoopTimer(active);
+    cancelActiveIteration(active);
     activeLoops.delete(id);
   }
 
