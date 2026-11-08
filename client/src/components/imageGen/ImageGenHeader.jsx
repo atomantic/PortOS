@@ -4,7 +4,8 @@ import {
   Settings as SettingsIcon,
 } from 'lucide-react';
 import BackendChipStrip from '../media/BackendChipStrip';
-import { IMAGE_GEN_MODE, IMAGE_RUNTIME_REMEDY } from '../../lib/imageGenBackends';
+import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
+import { isSelfServeRuntimeRemedy } from './RuntimeRemedyModals';
 
 const CONNECTED_MODE_LABELS = {
   __proto__: null,
@@ -39,8 +40,8 @@ export default function ImageGenHeader({ status, backends, remix, actions }) {
                 <>
                   <AlertTriangle className="w-3 h-3 shrink-0" />
                   {status.unknown ? 'Could not verify' : 'Unavailable'}: {status.value.reason || 'Not connected'} —
-                  {status.value.remedy?.kind === IMAGE_RUNTIME_REMEDY.INSTALL_TORCH_VENV ? (
-                    <button type="button" onClick={actions.onInstallRuntime} className="underline">
+                  {isSelfServeRuntimeRemedy(status.value.remedy?.kind) ? (
+                    <button type="button" onClick={() => actions.onInstallRuntime(status.value.remedy.kind)} className="underline">
                       {status.value.remedy.label}
                     </button>
                   ) : (
