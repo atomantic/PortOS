@@ -25,8 +25,8 @@ const MATCHES = {
   unsorted: (item) => !item.mark && !inUse(item),
   bad: (item) => item.mark === 'bad',
 };
-const CHIP = 'min-h-[44px] rounded border px-2 text-xs sm:min-h-[28px]';
-const ACTION = 'inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border px-3 text-xs disabled:opacity-50 sm:min-h-[32px]';
+const CHIP = 'min-h-[44px] rounded border px-2 text-xs pointer-fine:sm:min-h-[28px]';
+const ACTION = 'inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border px-3 text-xs disabled:opacity-50 pointer-fine:sm:min-h-[32px]';
 
 /**
  * Assets: every still and clip made for this video on one page, in shot order
@@ -140,7 +140,7 @@ export default function AssetsStage({ board }) {
         <Search size={14} aria-hidden="true" className="shrink-0 text-port-text-muted" />
         <span className="sr-only">Search prompts or shot number</span>
         <input id="mv-assets-search" type="search" value={query} onChange={(e) => { setQuery(e.target.value); setShown(PAGE); }}
-          placeholder="Search prompts or shot #" className="min-h-[44px] min-w-0 flex-1 bg-transparent text-sm outline-none sm:min-h-[32px]" />
+          placeholder="Search prompts or shot #" className="min-h-[44px] min-w-0 flex-1 bg-transparent text-sm outline-none pointer-fine:sm:min-h-[32px]" />
       </label>
       <div className="flex flex-wrap gap-1" role="group" aria-label="Show">
         {FILTERS.map((entry) => (
@@ -189,7 +189,7 @@ export default function AssetsStage({ board }) {
         ? <DeleteConfirm count={badHere.length} noun={noun} working={working} onConfirm={() => remove(badHere)} onCancel={() => setConfirmDelete(null)} />
         : (
           <button type="button" disabled={working} onClick={() => setConfirmDelete('bad')}
-            className="inline-flex min-h-[44px] w-full items-center justify-center gap-1 rounded border border-port-error text-xs text-port-error disabled:opacity-50 sm:min-h-[32px]">
+            className="inline-flex min-h-[44px] w-full items-center justify-center gap-1 rounded border border-port-error text-xs text-port-error disabled:opacity-50 pointer-fine:sm:min-h-[32px]">
             <Trash2 size={14} aria-hidden="true" />Delete {formatCount(badHere.length)} bad
           </button>
         ))}
@@ -198,12 +198,12 @@ export default function AssetsStage({ board }) {
           <label htmlFor="mv-assets-import" className="shrink-0">Add media from</label>
           <select id="mv-assets-import" value={importing.fromId} disabled={!importing.projects || working}
             onChange={(e) => setImporting((prev) => ({ ...prev, fromId: e.target.value }))}
-            className="min-h-[44px] min-w-0 flex-1 basis-48 rounded border border-port-border bg-port-bg px-2 text-sm sm:min-h-[32px]">
+            className="min-h-[44px] min-w-0 flex-1 basis-48 rounded border border-port-border bg-port-bg px-2 text-sm pointer-fine:sm:min-h-[32px]">
             <option value="">{importing.projects ? 'Pick a video' : 'Loading videos…'}</option>
             {(importing.projects || []).map((p) => <option key={p.id} value={p.id}>{p.name || 'Untitled'}{p.version > 1 ? ` (v${p.version})` : ''}</option>)}
           </select>
           <button type="button" disabled={!importing.fromId || working} onClick={runImport}
-            className="inline-flex min-h-[44px] items-center gap-1 rounded bg-port-accent px-3 font-medium text-white disabled:opacity-50 sm:min-h-[32px]">
+            className="inline-flex min-h-[44px] items-center gap-1 rounded bg-port-accent px-3 font-medium text-white disabled:opacity-50 pointer-fine:sm:min-h-[32px]">
             {working && <Activity size={14} className="animate-spin" />}Add
           </button>
           <button type="button" disabled={working} onClick={() => setImporting(null)} className={ACTION}>Cancel</button>
@@ -300,7 +300,7 @@ function LibraryAdd({ projectId, onAdded, onCancel }) {
         <Library size={14} aria-hidden="true" className="shrink-0 text-port-text-muted" />
         <span className="sr-only">Search the media library by prompt</span>
         <input id="mv-assets-library" type="search" value={query} onChange={(e) => setQuery(e.target.value)} autoFocus
-          placeholder="Search the media library by prompt" className="min-h-[44px] min-w-0 flex-1 bg-transparent text-sm outline-none sm:min-h-[32px]" />
+          placeholder="Search the media library by prompt" className="min-h-[44px] min-w-0 flex-1 bg-transparent text-sm outline-none pointer-fine:sm:min-h-[32px]" />
       </label>
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <span className="min-w-0 flex-1 text-port-text-muted">
@@ -313,7 +313,7 @@ function LibraryAdd({ projectId, onAdded, onCancel }) {
           </button>
         )}
         <button type="button" disabled={!picked.size || busy} onClick={add}
-          className="inline-flex min-h-[44px] items-center gap-1 rounded bg-port-accent px-3 font-medium text-white disabled:opacity-50 sm:min-h-[32px]">
+          className="inline-flex min-h-[44px] items-center gap-1 rounded bg-port-accent px-3 font-medium text-white disabled:opacity-50 pointer-fine:sm:min-h-[32px]">
           {busy && <Activity size={14} className="animate-spin" />}Add {formatCount(picked.size, { fallback: '0' })}
         </button>
         <button type="button" disabled={busy} onClick={onCancel} className={ACTION}>Cancel</button>

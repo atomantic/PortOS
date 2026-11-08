@@ -43,7 +43,7 @@ export default function PreviewFilmLook({ enabled, onToggle }) {
       onClick={onToggle}
       aria-pressed={enabled}
       title={enabled ? 'Film look enabled for this preview' : 'Film look hidden in this preview; the render still applies it'}
-      className={`flex min-h-[44px] shrink-0 items-center gap-1 rounded border px-2 text-xs sm:min-h-0 sm:py-1 ${enabled ? 'border-port-accent text-port-accent' : 'border-port-border text-port-text-muted'}`}
+      className={`flex min-h-[44px] shrink-0 items-center gap-1 rounded border px-2 text-xs pointer-fine:sm:min-h-0 sm:py-1 ${enabled ? 'border-port-accent text-port-accent' : 'border-port-border text-port-text-muted'}`}
     >
       <Film size={14} aria-hidden="true" /> Film look
     </button>

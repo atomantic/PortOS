@@ -52,7 +52,7 @@ export default function TreatmentApplyReview({ project, api }) {
     <div className="space-y-2 border-t border-port-border pt-2">
       <div className="flex flex-wrap items-center gap-2">
         <button type="button" onClick={open} disabled={previewing || applying}
-          className="flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1 text-xs min-h-[44px] sm:min-h-0">
+          className="flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0">
           <ClipboardCheck size={13} /> {previewing ? 'Reviewing…' : 'Review changes before applying'}
         </button>
         {preview && <span className="text-xs text-port-text-muted">{changing} of {preview.scenes.length} scenes would change</span>}
@@ -75,7 +75,7 @@ export default function TreatmentApplyReview({ project, api }) {
               <span>Apply is blocked until the treatment matches the current project.</span>
               {!audioStale && (
                 <button type="button" onClick={() => api.save({ rebase: true }).then(() => api.loadPreview())}
-                  className="bg-port-border hover:bg-port-border/70 rounded px-2 py-1 min-h-[44px] sm:min-h-0">
+                  className="bg-port-border hover:bg-port-border/70 rounded px-2 py-1 min-h-[44px] pointer-fine:sm:min-h-0">
                   Keep this treatment for the current inputs
                 </button>
               )}
@@ -103,7 +103,7 @@ export default function TreatmentApplyReview({ project, api }) {
                         <p className="text-port-text-muted">{name} — treatment: {snippet(s.suggested[field])}</p>
                       </div>
                     ))}
-                    <label className="flex items-center gap-1.5 min-h-[44px] sm:min-h-0">
+                    <label className="flex items-center gap-1.5 min-h-[44px] pointer-fine:sm:min-h-0">
                       <input type="checkbox" checked={!!overwrite[s.sceneId]}
                         onChange={(e) => setOverwrite((prev) => ({ ...prev, [s.sceneId]: e.target.checked }))} />
                       Use the treatment&apos;s prompts for this scene
@@ -114,14 +114,14 @@ export default function TreatmentApplyReview({ project, api }) {
             ))}
           </ul>
           {preview.textCueCandidates > 0 && (
-            <label htmlFor={idFor('cues')} className="flex items-center gap-1.5 min-h-[44px] sm:min-h-0">
+            <label htmlFor={idFor('cues')} className="flex items-center gap-1.5 min-h-[44px] pointer-fine:sm:min-h-0">
               <input id={idFor('cues')} type="checkbox" checked={addTextCues} onChange={(e) => setAddTextCues(e.target.checked)} />
               Add {preview.textCueCandidates} text cue{preview.textCueCandidates === 1 ? '' : 's'} from the timed lyrics, placed in each shot&apos;s reserved region
             </label>
           )}
           <div className="flex flex-wrap items-center gap-2">
             <button type="button" onClick={submit} disabled={preview.blocked || applying}
-              className="bg-port-accent text-white disabled:opacity-50 rounded px-3 py-1.5 min-h-[44px] sm:min-h-0">
+              className="bg-port-accent text-white disabled:opacity-50 rounded px-3 py-1.5 min-h-[44px] pointer-fine:sm:min-h-0">
               {applying ? 'Applying…' : 'Apply treatment'}
             </button>
             <button type="button" onClick={api.clearPreview} className="text-port-text-muted underline">Cancel</button>

@@ -11,7 +11,7 @@ const lastDevelopSec = () => {
   const sec = Number(safeReadStorage(LAST_SEC_KEY));
   return IMAGE_EFFECT_DEVELOP_SECS.includes(sec) ? sec : DEFAULT_IMAGE_EFFECT_SEC;
 };
-const SELECT = 'min-w-0 bg-port-bg border border-port-border rounded px-1 py-1 text-xs min-h-[44px] sm:min-h-0 disabled:opacity-50';
+const SELECT = 'min-w-0 bg-port-bg border border-port-border rounded px-1 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50';
 
 /**
  * Where a shot's picture comes from in a composed render: a rendered clip, its

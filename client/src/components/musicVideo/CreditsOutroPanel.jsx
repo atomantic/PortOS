@@ -12,7 +12,7 @@ const LENGTHS = [6, 8, 10, 12, 15, 20, 25, 30];
 // The layouts offered, in CREDITS_OUTRO_LAYOUTS order.
 const LAYOUT_LABELS = { roll: 'Roll', grid: 'Grid (one screen)' };
 
-const FIELD = 'min-h-[44px] rounded border border-port-border bg-port-bg px-2 py-1 text-sm sm:min-h-0';
+const FIELD = 'min-h-[44px] rounded border border-port-border bg-port-bg px-2 py-1 text-sm pointer-fine:sm:min-h-0';
 
 /** One text field: edited in place, saved when it loses focus. */
 function TextField({ id, label, value, placeholder = '', list, onCommit, hideLabel = false }) {
@@ -73,7 +73,7 @@ export default function CreditsOutroPanel({ project, onEditLocal, onSave }) {
           <Clapperboard size={14} className="text-port-accent" aria-hidden="true" /> Credits ending
           <span className="text-xs font-normal text-port-text-muted">Optional</span>
         </h3>
-        <label htmlFor={id('on')} className="inline-flex min-h-[44px] items-center gap-2 text-xs text-port-text-muted sm:min-h-0">
+        <label htmlFor={id('on')} className="inline-flex min-h-[44px] items-center gap-2 text-xs text-port-text-muted pointer-fine:sm:min-h-0">
           {filling ? 'Filling…' : on ? `On · ${credits.durationSec}s` : 'Off'}
           <input id={id('on')} type="checkbox" checked={on} disabled={filling} onChange={(e) => toggle(e.target.checked)} className="h-4 w-4" />
         </label>
@@ -109,7 +109,7 @@ export default function CreditsOutroPanel({ project, onEditLocal, onSave }) {
                 <TextField id={id(`name-${i}`)} label={`Credit ${i + 1} name`} hideLabel value={line.name} placeholder="Name"
                   onCommit={(name) => setLine(i, { name })} />
                 <button type="button" onClick={() => removeLine(i)} aria-label={`Remove ${line.role || 'credit'} ${line.name}`.trim()}
-                  className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded text-port-text-muted sm:min-h-0 sm:min-w-0 sm:p-1">
+                  className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded text-port-text-muted pointer-fine:sm:min-h-0 pointer-fine:sm:min-w-0 sm:p-1">
                   <X size={14} aria-hidden="true" />
                 </button>
               </div>
@@ -117,12 +117,12 @@ export default function CreditsOutroPanel({ project, onEditLocal, onSave }) {
             <div className="flex flex-wrap gap-2">
               {lines.length < CREDITS_OUTRO_LIMITS.linesMax && (
                 <button type="button" onClick={addLine}
-                  className="flex min-h-[44px] items-center gap-1 rounded border border-port-border px-2 text-xs sm:min-h-0 sm:py-1">
+                  className="flex min-h-[44px] items-center gap-1 rounded border border-port-border px-2 text-xs pointer-fine:sm:min-h-0 sm:py-1">
                   <Plus size={14} aria-hidden="true" /> Add credit
                 </button>
               )}
               <button type="button" onClick={() => fill({ durationSec: credits.durationSec, layout: credits.layout })} disabled={filling}
-                className="flex min-h-[44px] items-center gap-1 rounded border border-port-border px-2 text-xs text-port-text-muted sm:min-h-0 sm:py-1">
+                className="flex min-h-[44px] items-center gap-1 rounded border border-port-border px-2 text-xs text-port-text-muted pointer-fine:sm:min-h-0 sm:py-1">
                 <RotateCcw size={14} aria-hidden="true" /> Refill from song &amp; artist
               </button>
             </div>

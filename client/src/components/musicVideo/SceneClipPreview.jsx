@@ -34,7 +34,7 @@ export default function SceneClipPreview({ scene, index, performance, playback, 
             }}
             aria-label={`View scene ${index + 1} clip full size`}
             title={`View scene ${index + 1} clip full size`}
-            className="always-dark absolute top-1 right-1 min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 p-1 flex items-center justify-center rounded bg-black/50 text-white hover:bg-black/80 focus:outline-none focus:ring-2 focus:ring-port-accent"
+            className="always-dark absolute top-1 right-1 min-h-[44px] min-w-[44px] pointer-fine:sm:min-h-0 pointer-fine:sm:min-w-0 p-1 flex items-center justify-center rounded bg-black/50 text-white hover:bg-black/80 focus:outline-none focus:ring-2 focus:ring-port-accent"
           >
             <Maximize2 className="w-3 h-3" />
           </button>

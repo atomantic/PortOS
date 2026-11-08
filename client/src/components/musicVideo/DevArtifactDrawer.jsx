@@ -8,7 +8,7 @@ import { timeAgo } from '../../utils/formatters.js';
 import { isStandalonePwa } from '../../lib/standaloneDownload.js';
 import { DEV_ARTIFACT_KIND_LABELS, devArtifactStatus } from './DevArtifactsPanel.jsx';
 
-const buttonClass = 'flex items-center gap-1 rounded px-3 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50';
+const buttonClass = 'flex items-center gap-1 rounded px-3 py-1.5 text-sm min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50';
 
 /** What a Cast & Sets note can point at: the sheet's images, or the direction as a whole. */
 function castAndSetsTargets(stage) {
@@ -69,7 +69,7 @@ export default function DevArtifactDrawer({
             <Pill size="xs" tone={status.tone}>{status.label}</Pill>
             <label htmlFor={`${idPrefix}-version`} className="text-port-text-muted">Version</label>
             <select id={`${idPrefix}-version`} value={shown} onChange={(e) => onVersionChange(Number(e.target.value))}
-              className="bg-port-bg border border-port-border rounded px-2 py-1 min-h-[44px] sm:min-h-0">
+              className="bg-port-bg border border-port-border rounded px-2 py-1 min-h-[44px] pointer-fine:sm:min-h-0">
               {[...(artifact.versions || [])].reverse().map((v) => (
                 <option key={v.version} value={v.version}>v{v.version}{v.version === artifact.version ? ' (current)' : ''} · {timeAgo(v.createdAt)}</option>
               ))}
@@ -77,7 +77,7 @@ export default function DevArtifactDrawer({
             {/* A Home Screen app opens same-origin links in place with no back control. */}
             {!isStandalonePwa() && (
               <a href={musicVideoDevArtifactFileUrl(project.id, artifact.id, shown === artifact.version ? null : shown)} target="_blank" rel="noreferrer noopener"
-                className="flex items-center gap-1 text-port-accent min-h-[44px] sm:min-h-0">
+                className="flex items-center gap-1 text-port-accent min-h-[44px] pointer-fine:sm:min-h-0">
                 <ExternalLink size={12} aria-hidden="true" /> Open in a tab
               </a>
             )}
@@ -129,7 +129,7 @@ export default function DevArtifactDrawer({
               <>
                 <label htmlFor={`${idPrefix}-target`} className="sr-only">Note is about</label>
                 <select id={`${idPrefix}-target`} value={noteTarget} onChange={(e) => setNoteTarget(e.target.value)}
-                  className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-xs min-h-[44px] sm:min-h-0">
+                  className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0">
                   {targets.map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
                 </select>
               </>
@@ -153,7 +153,7 @@ export default function DevArtifactDrawer({
                     <span className="text-port-text-muted">v{note.version} · {timeAgo(note.createdAt)}</span>
                     <input id={`${idPrefix}-resolved-${note.id}`} type="checkbox" className="ml-auto" checked={!!note.resolvedAt} disabled={busy}
                       onChange={(e) => ops.resolveNote(artifact.id, note.id, e.target.checked)} />
-                    <label htmlFor={`${idPrefix}-resolved-${note.id}`} className="min-h-[44px] sm:min-h-0 flex items-center">Resolved</label>
+                    <label htmlFor={`${idPrefix}-resolved-${note.id}`} className="min-h-[44px] pointer-fine:sm:min-h-0 flex items-center">Resolved</label>
                   </div>
                   <p className="mt-1 break-words">{note.text}</p>
                 </li>
@@ -167,7 +167,7 @@ export default function DevArtifactDrawer({
               {[...(artifact.versions || [])].reverse().map((v) => (
                 <li key={v.version}>
                   <button type="button" onClick={() => onVersionChange(v.version)}
-                    className={`min-h-[44px] sm:min-h-0 ${v.version === shown ? 'text-port-accent' : 'text-port-text'}`}>
+                    className={`min-h-[44px] pointer-fine:sm:min-h-0 ${v.version === shown ? 'text-port-accent' : 'text-port-text'}`}>
                     v{v.version} · {v.source === 'cast-and-sets' ? 'generated' : v.source} · {timeAgo(v.createdAt)}
                   </button>
                 </li>
@@ -179,11 +179,11 @@ export default function DevArtifactDrawer({
             {confirmDelete ? (
               <div className="flex flex-wrap items-center gap-2 text-xs">
                 <span>Remove this file from the project?</span>
-                <button type="button" disabled={busy} onClick={() => ops.remove(artifact.id).then((res) => { if (res) onClose(); })} className="text-port-error min-h-[44px] sm:min-h-0 px-1">Remove</button>
-                <button type="button" onClick={() => setConfirmDelete(false)} className="min-h-[44px] sm:min-h-0 px-1">Cancel</button>
+                <button type="button" disabled={busy} onClick={() => ops.remove(artifact.id).then((res) => { if (res) onClose(); })} className="text-port-error min-h-[44px] pointer-fine:sm:min-h-0 px-1">Remove</button>
+                <button type="button" onClick={() => setConfirmDelete(false)} className="min-h-[44px] pointer-fine:sm:min-h-0 px-1">Cancel</button>
               </div>
             ) : (
-              <button type="button" onClick={() => setConfirmDelete(true)} disabled={busy} className="flex items-center gap-1 text-xs text-port-error min-h-[44px] sm:min-h-0">
+              <button type="button" onClick={() => setConfirmDelete(true)} disabled={busy} className="flex items-center gap-1 text-xs text-port-error min-h-[44px] pointer-fine:sm:min-h-0">
                 <Trash2 size={12} aria-hidden="true" /> Remove
               </button>
             )}

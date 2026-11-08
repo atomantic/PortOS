@@ -14,7 +14,7 @@ const SIDES = Object.freeze([
 const VARY_COUNTS = Object.freeze([4, 8, 16, 32]);
 // Hundredths of a second and the frames they cover at 24 fps.
 const lengthLabel = (sec) => `${sec.toFixed(2)} s · ${Math.max(1, Math.round(sec * 24))} f`;
-const FIELD = 'min-w-0 bg-port-bg border border-port-border rounded px-1 py-1 text-xs min-h-[44px] sm:min-h-0 disabled:opacity-50';
+const FIELD = 'min-w-0 bg-port-bg border border-port-border rounded px-1 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50';
 
 /**
  * The effect over the cut into and out of a shot, Off by default: a glitch (a VHS,
@@ -78,7 +78,7 @@ export default function SceneTransitions({ fieldId, scene, onChange, onVaryWipes
                         className={`h-8 w-8 rounded border border-port-border bg-port-bg ${wipe.color ? '' : 'opacity-40'}`} />
                       {wipe.color && (
                         <button type="button" disabled={disabled} onClick={() => onChange({ [wipeKey]: { ...wipe, color: null } })}
-                          className="min-h-[44px] rounded border border-port-border px-1 text-port-text-muted sm:min-h-0">No edge</button>
+                          className="min-h-[44px] rounded border border-port-border px-1 text-port-text-muted pointer-fine:sm:min-h-0">No edge</button>
                       )}
                     </span>
                   )}
@@ -92,7 +92,7 @@ export default function SceneTransitions({ fieldId, scene, onChange, onVaryWipes
         <div className="flex flex-wrap items-center gap-1">
           <button type="button" onClick={vary} disabled={disabled || varying}
             title="Give this shot and the ones after it a wipe out each, never the same wipe twice in a row. Replaces their glitches out."
-            className="min-h-[44px] rounded border border-port-border px-2 text-xs hover:bg-port-border/40 disabled:opacity-50 sm:min-h-0 sm:py-1">
+            className="min-h-[44px] rounded border border-port-border px-2 text-xs hover:bg-port-border/40 disabled:opacity-50 pointer-fine:sm:min-h-0 sm:py-1">
             {varying ? 'Varying…' : 'Vary wipes'}
           </button>
           <label htmlFor={fieldId('vary-wipes-count')} className="text-port-text-muted">over</label>

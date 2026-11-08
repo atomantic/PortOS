@@ -3,8 +3,8 @@ import { Merge, Minus, Plus, Scissors } from 'lucide-react';
 import { formatDurationSec } from '../../utils/formatters.js';
 import { CLIP_TIMING_FPS } from '../../lib/musicVideoLayers.js';
 
-const BUTTON = 'inline-flex items-center gap-1 rounded bg-port-bg border border-port-border hover:bg-port-border/40 disabled:opacity-50 px-2 py-1 text-xs min-h-[44px] sm:min-h-0';
-const STEP = 'flex items-center justify-center rounded bg-port-bg border border-port-border hover:bg-port-border/40 disabled:opacity-50 min-h-[44px] min-w-[44px] sm:min-h-[28px] sm:min-w-[28px]';
+const BUTTON = 'inline-flex items-center gap-1 rounded bg-port-bg border border-port-border hover:bg-port-border/40 disabled:opacity-50 px-2 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0';
+const STEP = 'flex items-center justify-center rounded bg-port-bg border border-port-border hover:bg-port-border/40 disabled:opacity-50 min-h-[44px] min-w-[44px] pointer-fine:sm:min-h-[28px] pointer-fine:sm:min-w-[28px]';
 // The shortest piece the server leaves on either side of a split or a moved cut (projectsLogic MIN_SPLIT_PIECE_SEC).
 const MIN_PIECE_SEC = 0.1;
 const tenth = (sec) => Math.round(sec * 10) / 10;
@@ -75,7 +75,7 @@ export function SceneDuration({ id, scene, nextEndSec = null, songDurationSec = 
             moveTo(hundredth(scene.startSec + Number(typed)));
           }}
           onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
-          className="w-20 bg-port-bg border border-port-border rounded px-1 py-1 text-base sm:text-xs tabular-nums min-h-[44px] sm:min-h-0 disabled:opacity-50" />
+          className="w-20 bg-port-bg border border-port-border rounded px-1 py-1 text-base sm:text-xs tabular-nums min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50" />
         <button type="button" onClick={() => stepFrames(1)} disabled={locked || atMax} className={STEP} aria-label="One frame longer"><Plus size={13} /></button>
       </span>
       <span className="tabular-nums text-port-text-muted" data-testid="shot-duration-note">
@@ -96,7 +96,7 @@ export function SceneCutField({ label, value, onCommit }) {
   };
   return (
     <label className="flex items-center gap-1">{label}
-      <input type="number" min="0" step="0.01" value={draft ?? value} className="w-20 bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0"
+      <input type="number" min="0" step="0.01" value={draft ?? value} className="w-20 bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] pointer-fine:sm:min-h-0"
         onChange={(e) => setDraft(e.target.value)}
         onBlur={(e) => commit(e.target.value)}
         onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }} />

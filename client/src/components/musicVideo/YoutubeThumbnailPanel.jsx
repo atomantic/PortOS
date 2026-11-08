@@ -12,7 +12,7 @@ import ListLoadError from '../ui/ListLoadError';
 const MAX_SOURCES = 24;
 // YouTube's Test & Compare runs up to three thumbnails on a published video.
 const MAX_TESTS = 3;
-const button = 'flex items-center gap-1 bg-port-accent/20 text-port-accent disabled:opacity-50 rounded px-2 py-1.5 min-h-[44px] sm:min-h-0';
+const button = 'flex items-center gap-1 bg-port-accent/20 text-port-accent disabled:opacity-50 rounded px-2 py-1.5 min-h-[44px] pointer-fine:sm:min-h-0';
 const srcFor = (kind, filename) => (kind === 'thumbnail' ? `/data/video-thumbnails/${encodeURIComponent(filename)}` : `/data/images/${encodeURIComponent(filename)}`);
 
 /**
@@ -147,15 +147,15 @@ export default function YoutubeThumbnailPanel({ project, publishKit }) {
           {needsCoverFonts && letterAssets.fontState === 'loading' && <p role="status" className="text-port-text-muted">Loading cover fonts for the preview…</p>}
           {thumb.filename ? (
             <div className="flex flex-wrap items-center gap-3">
-              <a href={`/data/video-thumbnails/${encodeURIComponent(thumb.filename)}`} download className="text-port-accent flex items-center gap-1 min-h-[44px] sm:min-h-0"><Download size={12} /> Download</a>
-              <button type="button" onClick={publishKit.clearThumbnail} disabled={busy} className="text-port-text-muted flex items-center gap-1 disabled:opacity-50 min-h-[44px] sm:min-h-0">
+              <a href={`/data/video-thumbnails/${encodeURIComponent(thumb.filename)}`} download className="text-port-accent flex items-center gap-1 min-h-[44px] pointer-fine:sm:min-h-0"><Download size={12} /> Download</a>
+              <button type="button" onClick={publishKit.clearThumbnail} disabled={busy} className="text-port-text-muted flex items-center gap-1 disabled:opacity-50 min-h-[44px] pointer-fine:sm:min-h-0">
                 <RotateCcw size={12} /> Use the best video frame instead
               </button>
             </div>
           ) : kit.thumbnail && !source && <p className="text-port-text-muted">YouTube gets this frame, bare, until you make a thumbnail.</p>}
         </div>
         <div className="flex-1 space-y-2 min-w-0">
-          <label htmlFor={idFor('lettering')} className="flex items-center gap-1.5 min-h-[44px] sm:min-h-0">
+          <label htmlFor={idFor('lettering')} className="flex items-center gap-1.5 min-h-[44px] pointer-fine:sm:min-h-0">
             <input id={idFor('lettering')} type="checkbox" checked={lettering} onChange={(e) => setLettering(e.target.checked)} />
             Set the title on the image
           </label>
@@ -163,14 +163,14 @@ export default function YoutubeThumbnailPanel({ project, publishKit }) {
             <div>
               <label htmlFor={idFor('title')} className="block text-[11px] text-port-text-muted">Title on the thumbnail (short reads best)</label>
               <input id={idFor('title')} value={title} maxLength={60} onChange={(e) => setTitle(e.target.value)}
-                className="w-full bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0" />
+                className="w-full bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0" />
             </div>
           )}
           {source && (
             <div>
               <label htmlFor={idFor('crop')} className="block text-[11px] text-port-text-muted">{wide ? 'Crop position (left to right)' : 'Crop position (top to bottom)'}</label>
               <input id={idFor('crop')} type="range" min={0} max={1} step={0.05} value={crop} onChange={(e) => setCrop(Number(e.target.value))}
-                className="w-full min-h-[44px] sm:min-h-0" />
+                className="w-full min-h-[44px] pointer-fine:sm:min-h-0" />
             </div>
           )}
           {source && (
@@ -186,7 +186,7 @@ export default function YoutubeThumbnailPanel({ project, publishKit }) {
         <div className="flex flex-wrap items-center justify-between gap-2">
           <span className="text-port-text-muted">Pick an image</span>
           <button type="button" onClick={() => setPickerOpen(true)} disabled={busy || needsTitle}
-            className="flex items-center gap-1 text-port-accent disabled:opacity-50 min-h-[44px] sm:min-h-0">
+            className="flex items-center gap-1 text-port-accent disabled:opacity-50 min-h-[44px] pointer-fine:sm:min-h-0">
             <Images size={13} /> Choose from image history or upload
           </button>
         </div>
@@ -203,7 +203,7 @@ export default function YoutubeThumbnailPanel({ project, publishKit }) {
         )}
       </div>
       <details open={paintOpen} onToggle={(e) => setPaintOpen(e.currentTarget.open)} className="space-y-1 rounded border border-port-border p-2">
-        <summary className="cursor-pointer flex items-center gap-1 min-h-[44px] sm:min-h-0"><Brush size={13} /> Paint the title with the image model</summary>
+        <summary className="cursor-pointer flex items-center gap-1 min-h-[44px] pointer-fine:sm:min-h-0"><Brush size={13} /> Paint the title with the image model</summary>
         <p className="text-port-text-muted">Redraws the picked image with the title painted in as bold lettering. The result becomes the thumbnail when it lands.</p>
         <label htmlFor={idFor('paint-notes')} className="block text-[11px] text-port-text-muted">Lettering direction (optional)</label>
         <textarea id={idFor('paint-notes')} value={paintNotes} maxLength={1500} rows={2} onChange={(e) => setPaintNotes(e.target.value)}
@@ -232,9 +232,9 @@ export default function YoutubeThumbnailPanel({ project, publishKit }) {
               <div key={t.filename} className="space-y-1">
                 <img src={srcFor('thumbnail', t.filename)} alt={`Test thumbnail ${i + 1}`} className="w-full aspect-video object-cover rounded border border-port-border" />
                 <div className="flex items-center justify-between gap-2">
-                  <a href={srcFor('thumbnail', t.filename)} download className="text-port-accent flex items-center gap-1 min-h-[44px] sm:min-h-0"><Download size={12} /> {String.fromCharCode(65 + i)}</a>
+                  <a href={srcFor('thumbnail', t.filename)} download className="text-port-accent flex items-center gap-1 min-h-[44px] pointer-fine:sm:min-h-0"><Download size={12} /> {String.fromCharCode(65 + i)}</a>
                   <button type="button" onClick={() => publishKit.removeThumbnailTest(t.filename)} aria-label={`Remove test thumbnail ${i + 1}`}
-                    className="text-port-text-muted flex items-center gap-1 min-h-[44px] sm:min-h-0"><X size={12} /> Remove</button>
+                    className="text-port-text-muted flex items-center gap-1 min-h-[44px] pointer-fine:sm:min-h-0"><X size={12} /> Remove</button>
                 </div>
               </div>
             ))}

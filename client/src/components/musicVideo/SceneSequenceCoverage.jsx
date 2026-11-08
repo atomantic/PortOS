@@ -5,7 +5,7 @@ import useAsyncAction from '../../hooks/useAsyncAction.js';
 import toast from '../ui/Toast';
 import SentPromptPanel from '../media/SentPromptPanel';
 
-const BUTTON = 'flex items-center gap-1 bg-port-bg border border-port-border hover:bg-port-border/40 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap';
+const BUTTON = 'flex items-center gap-1 bg-port-bg border border-port-border hover:bg-port-border/40 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] pointer-fine:sm:min-h-0 whitespace-nowrap';
 
 /**
  * A `coverage: 'sequence'` shot's card (#14241): which run of shots it is

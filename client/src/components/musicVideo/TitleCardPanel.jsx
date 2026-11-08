@@ -33,7 +33,7 @@ function addSwatchFaces() {
 const LOOKS = [['outline', 'Outlined, like the lyrics'], ['mtv', 'Classic MTV lower third']];
 // Render styles that draw the card: the composition document and a composed cut's typography layer.
 const DRAWN_BY = ['document', 'composed'];
-const inputCls = 'w-full rounded border border-port-border bg-port-bg px-2 py-1 text-sm min-h-[44px] sm:min-h-0';
+const inputCls = 'w-full rounded border border-port-border bg-port-bg px-2 py-1 text-sm min-h-[44px] pointer-fine:sm:min-h-0';
 const labelCls = 'mb-0.5 block text-xs text-port-text-muted';
 const clock = (sec) => {
   const rest = sec % 60;
@@ -102,7 +102,7 @@ export default function TitleCardPanel({ project, onEditLocal, onSave, onPreview
     <section aria-label="Opening title card" className="space-y-2 rounded-lg border border-port-border bg-port-card p-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="inline-flex items-center gap-1.5 text-sm font-medium"><Clapperboard size={14} className="text-port-accent" aria-hidden="true" /> Opening title card</h3>
-        <label htmlFor="mv-title-card-on" className="inline-flex min-h-[44px] items-center gap-2 text-xs text-port-text-muted sm:min-h-0">
+        <label htmlFor="mv-title-card-on" className="inline-flex min-h-[44px] items-center gap-2 text-xs text-port-text-muted pointer-fine:sm:min-h-0">
           {on ? `Live in the preview · ${clock(card.startSec)}–${clock(card.endSec)}` : 'Off'}
           <input id="mv-title-card-on" type="checkbox" checked={on} disabled={starting}
             onChange={(e) => (e.target.checked ? turnOn() : commit({ enabled: false }))} className="h-4 w-4" />
@@ -153,7 +153,7 @@ export default function TitleCardPanel({ project, onEditLocal, onSave, onPreview
             </div>
           </div>
           <div className="space-y-2">
-            <label htmlFor="mv-title-card-outro" className="inline-flex min-h-[44px] items-center gap-2 text-xs text-port-text-muted sm:min-h-0">
+            <label htmlFor="mv-title-card-outro" className="inline-flex min-h-[44px] items-center gap-2 text-xs text-port-text-muted pointer-fine:sm:min-h-0">
               <input id="mv-title-card-outro" type="checkbox" checked={card.outro} disabled={!canOutro}
                 onChange={(e) => setOutro(e.target.checked)} className="h-4 w-4" />
               Also at the end · Optional
@@ -173,7 +173,7 @@ export default function TitleCardPanel({ project, onEditLocal, onSave, onPreview
                 </div>
                 {onPreview && typeof card.outroStartSec === 'number' && (
                   <button type="button" onClick={() => onPreview(Math.max(0, card.outroStartSec - 0.5))}
-                    className="inline-flex min-h-[44px] items-center gap-1 text-xs text-port-accent sm:min-h-0">
+                    className="inline-flex min-h-[44px] items-center gap-1 text-xs text-port-accent pointer-fine:sm:min-h-0">
                     <Play size={13} aria-hidden="true" /> Play from {clock(Math.max(0, card.outroStartSec - 0.5))}
                   </button>
                 )}
@@ -198,7 +198,7 @@ export default function TitleCardPanel({ project, onEditLocal, onSave, onPreview
               {FONTS.map(([value, label, stack, , weight]) => (
                 <button key={value} type="button" role="radio" aria-checked={card.font === value} onClick={() => commit({ font: value })}
                   style={{ fontFamily: stack, fontWeight: weight }}
-                  className={`min-h-[44px] truncate rounded border px-2 py-1 text-sm sm:min-h-0 ${card.font === value ? 'border-port-accent bg-port-accent/15 text-white' : 'border-port-border bg-port-bg text-port-text-muted'}`}>
+                  className={`min-h-[44px] truncate rounded border px-2 py-1 text-sm pointer-fine:sm:min-h-0 ${card.font === value ? 'border-port-accent bg-port-accent/15 text-white' : 'border-port-border bg-port-bg text-port-text-muted'}`}>
                   {label}
                 </button>
               ))}
@@ -228,13 +228,13 @@ export default function TitleCardPanel({ project, onEditLocal, onSave, onPreview
                   onChange={(e) => edit({ accentColor: e.target.value })} onBlur={() => commit()} className="h-11 w-14 rounded border border-port-border bg-port-bg sm:h-8" />
               </div>
             )}
-            <label htmlFor="mv-title-card-quote" className="inline-flex min-h-[44px] items-center gap-2 text-xs text-port-text-muted sm:min-h-0">
+            <label htmlFor="mv-title-card-quote" className="inline-flex min-h-[44px] items-center gap-2 text-xs text-port-text-muted pointer-fine:sm:min-h-0">
               <input id="mv-title-card-quote" type="checkbox" checked={card.quoteTitle} onChange={(e) => commit({ quoteTitle: e.target.checked })} className="h-4 w-4" />
               Quote the title
             </label>
             {onPreview && (
               <button type="button" onClick={() => onPreview(Math.max(0, card.startSec - 0.5))}
-                className="inline-flex min-h-[44px] items-center gap-1 text-xs text-port-accent sm:min-h-0">
+                className="inline-flex min-h-[44px] items-center gap-1 text-xs text-port-accent pointer-fine:sm:min-h-0">
                 <Play size={13} aria-hidden="true" /> Play from {clock(Math.max(0, card.startSec - 0.5))}
               </button>
             )}
@@ -244,7 +244,7 @@ export default function TitleCardPanel({ project, onEditLocal, onSave, onPreview
               A sung line starts at {clock(overlap.startSec)} while the card is up. Check the corner in the preview
               {endBefore > card.startSec + TITLE_CARD_LIMITS.windowMin && (
                 <>, or{' '}
-                  <button type="button" onClick={() => commit({ endSec: endBefore })} className="min-h-[44px] px-1 text-port-accent sm:min-h-0">
+                  <button type="button" onClick={() => commit({ endSec: endBefore })} className="min-h-[44px] px-1 text-port-accent pointer-fine:sm:min-h-0">
                     end it at {clock(endBefore)}
                   </button>
                 </>

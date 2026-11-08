@@ -87,7 +87,7 @@ export default function FlyerPanel({ project, publishKit }) {
       summary={flyer.qrSource === 'none' ? 'QR waiting for the YouTube link' : 'QR ready'} defaultOpen={false}
       actions={(
         <button type="button" onClick={print}
-          className="flex items-center gap-1 rounded bg-port-accent/20 text-port-accent px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0">
+          className="flex items-center gap-1 rounded bg-port-accent/20 text-port-accent px-2 py-1.5 text-xs min-h-[44px] pointer-fine:sm:min-h-0">
           <Printer size={13} /> Print
         </button>
       )}>
@@ -118,7 +118,7 @@ export default function FlyerPanel({ project, publishKit }) {
                 {options.map((c) => (
                   <button key={c.id} type="button" aria-pressed={draft[key] === c.id}
                     onClick={() => { if (draft[key] !== c.id) { edit(key, c.id); save({ [key]: c.id }); } }}
-                    className={`rounded border px-3 py-2 text-sm min-h-[44px] sm:min-h-0 ${draft[key] === c.id ? 'border-port-accent bg-port-accent/20 text-port-accent' : 'border-port-border'}`}>
+                    className={`rounded border px-3 py-2 text-sm min-h-[44px] pointer-fine:sm:min-h-0 ${draft[key] === c.id ? 'border-port-accent bg-port-accent/20 text-port-accent' : 'border-port-border'}`}>
                     {c.label}
                   </button>
                 ))}
@@ -132,7 +132,7 @@ export default function FlyerPanel({ project, publishKit }) {
                 {imageChoices.map((c) => <option key={c.id} value={c.id}>{c.id === 'gallery' && draft.image === 'gallery' ? 'Gallery image' : c.label}</option>)}
               </select>
               {draft.image === 'gallery' && (
-                <button type="button" onClick={() => setPickerOpen(true)} className="shrink-0 rounded border border-port-border px-3 py-2 text-sm min-h-[44px] sm:min-h-0">Change</button>
+                <button type="button" onClick={() => setPickerOpen(true)} className="shrink-0 rounded border border-port-border px-3 py-2 text-sm min-h-[44px] pointer-fine:sm:min-h-0">Change</button>
               )}
             </div>
             {pickerOpen && <GalleryImagePicker open allowUpload onClose={() => setPickerOpen(false)} onSelect={pickGalleryImage} />}

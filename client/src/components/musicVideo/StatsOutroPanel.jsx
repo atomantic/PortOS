@@ -5,7 +5,7 @@ import { STATS_OUTRO_DEFAULTS, STATS_OUTRO_LIMITS, STATS_OUTRO_LINES, normalizeS
 // Lengths offered for the scene, in seconds (inside STATS_OUTRO_LIMITS).
 const LENGTHS = [4, 6, 8, 10, 12, 15, 20];
 
-const FIELD = 'min-h-[44px] rounded border border-port-border bg-port-bg px-2 py-1 text-sm sm:min-h-0';
+const FIELD = 'min-h-[44px] rounded border border-port-border bg-port-bg px-2 py-1 text-sm pointer-fine:sm:min-h-0';
 
 /** One heading line: edited in place, saved when it loses focus. Empty leaves the line out. */
 function HeadingField({ id, label, value, onCommit }) {
@@ -52,7 +52,7 @@ export default function StatsOutroPanel({ project, onEditLocal, onSave }) {
           <Scissors size={14} className="text-port-accent" aria-hidden="true" /> Cutting room floor ending
           <span className="text-xs font-normal text-port-text-muted">Optional</span>
         </h3>
-        <label htmlFor="mv-stats-outro-on" className="inline-flex min-h-[44px] items-center gap-2 text-xs text-port-text-muted sm:min-h-0">
+        <label htmlFor="mv-stats-outro-on" className="inline-flex min-h-[44px] items-center gap-2 text-xs text-port-text-muted pointer-fine:sm:min-h-0">
           {on ? `On · ${outro.durationSec}s after the song` : 'Off'}
           <input id="mv-stats-outro-on" type="checkbox" checked={on} onChange={(e) => commit({ enabled: e.target.checked })} className="h-4 w-4" />
         </label>
@@ -73,7 +73,7 @@ export default function StatsOutroPanel({ project, onEditLocal, onSave }) {
             <legend className="mb-0.5 text-xs text-port-text-muted">Show</legend>
             <div className="flex flex-wrap gap-x-3 gap-y-1">
               {STATS_OUTRO_LINES.map(({ key, label }) => (
-                <label key={key} htmlFor={`mv-stats-outro-line-${key}`} className="inline-flex min-h-[44px] items-center gap-1.5 text-xs sm:min-h-0">
+                <label key={key} htmlFor={`mv-stats-outro-line-${key}`} className="inline-flex min-h-[44px] items-center gap-1.5 text-xs pointer-fine:sm:min-h-0">
                   <input id={`mv-stats-outro-line-${key}`} type="checkbox" checked={!outro.hidden.includes(key)}
                     onChange={(e) => toggleLine(key, e.target.checked)} className="h-4 w-4" />
                   {label}

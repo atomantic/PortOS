@@ -327,8 +327,8 @@ export function CognitiveDrillHowItWorksButton({ type, onClick, compact = false 
       aria-label={`How ${label} works`}
       title="How it works"
       className={compact
-        ? 'shrink-0 inline-flex items-center justify-center min-w-[44px] min-h-[44px] sm:min-w-0 sm:min-h-0 sm:p-1 -m-1 sm:m-0 rounded-lg text-gray-500 hover:text-rose-300 transition-colors focus:outline-hidden focus:ring-2 focus:ring-port-accent'
-        : 'mt-1 inline-flex items-center justify-center gap-1 min-h-[44px] sm:min-h-0 sm:py-0.5 text-xs text-gray-500 hover:text-port-accent transition-colors rounded focus:outline-hidden focus:ring-2 focus:ring-port-accent'}
+        ? 'shrink-0 inline-flex items-center justify-center min-w-[44px] min-h-[44px] pointer-fine:sm:min-w-0 pointer-fine:sm:min-h-0 sm:p-1 -m-1 sm:m-0 rounded-lg text-gray-500 hover:text-rose-300 transition-colors focus:outline-hidden focus:ring-2 focus:ring-port-accent'
+        : 'mt-1 inline-flex items-center justify-center gap-1 min-h-[44px] pointer-fine:sm:min-h-0 sm:py-0.5 text-xs text-gray-500 hover:text-port-accent transition-colors rounded focus:outline-hidden focus:ring-2 focus:ring-port-accent'}
     >
       <BookOpen size={compact ? 14 : 12} />
       {!compact && 'How it works'}
@@ -461,7 +461,7 @@ function NBackDemo({ example: { sequence, n } }) {
             type="button"
             onClick={togglePlay}
             aria-label={playing ? 'Pause example' : finished ? 'Replay example' : 'Play example'}
-            className="ml-auto inline-flex items-center gap-1 min-h-[44px] sm:min-h-0 sm:py-0.5 px-2 -my-2 sm:my-0 rounded text-[0.65rem] uppercase tracking-wide text-gray-500 hover:text-rose-300 transition-colors focus:outline-hidden focus:ring-2 focus:ring-port-accent"
+            className="ml-auto inline-flex items-center gap-1 min-h-[44px] pointer-fine:sm:min-h-0 sm:py-0.5 px-2 -my-2 sm:my-0 rounded text-[0.65rem] uppercase tracking-wide text-gray-500 hover:text-rose-300 transition-colors focus:outline-hidden focus:ring-2 focus:ring-port-accent"
           >
             {playing ? <Pause size={12} /> : <Play size={12} />}
             {playing ? 'Pause' : finished ? 'Replay' : 'Play'}

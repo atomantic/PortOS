@@ -16,7 +16,7 @@ function AccountInput({ id, label, initial, placeholder, onSave, disabled }) {
     <input id={id} value={value} disabled={disabled} aria-label={`${label} account`} placeholder={placeholder || '@handle (optional)'}
       onChange={(e) => setValue(e.target.value)}
       onBlur={() => { if (value.trim() !== (initial || '')) onSave(value.trim() || null); }}
-      className="w-full sm:w-40 bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0 disabled:opacity-50" />
+      className="w-full sm:w-40 bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50" />
   );
 }
 
@@ -52,7 +52,7 @@ export default function PublishPlatformsPanel({ projectId, publishing }) {
           const latest = h?.notes?.[0];
           return (
             <li key={target} className="py-1.5 flex flex-wrap items-center gap-2">
-              <label className="flex items-center gap-1.5 min-w-[9rem] min-h-[44px] sm:min-h-0">
+              <label className="flex items-center gap-1.5 min-w-[9rem] min-h-[44px] pointer-fine:sm:min-h-0">
                 <input type="checkbox" checked={!!p.enabled} onChange={(e) => setPlatform(target, { enabled: e.target.checked })} />
                 <span className="font-medium">{label}</span>
               </label>

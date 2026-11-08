@@ -88,7 +88,7 @@ export default function PerformanceEvidence({ clipSrc, instruction, temporal = n
       {source && <audio ref={audio} src={source} muted={sourceMuted} preload="metadata" onLoadedMetadata={sync}
         onError={() => { video.current?.pause(); setError('Recorded source unavailable — check the audio file'); }} />}
       {canSync && <button type="button" aria-pressed={sourceMuted} onClick={() => setSourceMuted((value) => !value)}
-        className="rounded border border-port-border px-2 py-1 min-h-[44px] sm:min-h-0">{sourceMuted ? 'Unmute source' : 'Mute source'}</button>}
+        className="rounded border border-port-border px-2 py-1 min-h-[44px] pointer-fine:sm:min-h-0">{sourceMuted ? 'Unmute source' : 'Mute source'}</button>}
       <p>Speaker: {instruction?.speaker || 'Unspecified'} · Audio: {CONDITIONING_LABELS[conditioning?.source] || conditioning?.source || 'Unknown'}</p>
       {lineFrom != null && outSec != null && <p className="text-port-text-muted">This take holds the whole sung line ({formatTimecode(wholeLine.startSec)}–{formatTimecode(wholeLine.endSec)} of the song). The final render uses {formatTimecode(inSec)}–{formatTimecode(outSec)} of it.</p>}
       {padded && <p className="text-port-text-muted">The model needs at least {formatSeconds(instruction?.capability?.minAudioSec)} of song, so this take runs longer than the shot. The final render uses {formatTimecode(inSec)}–{formatTimecode(outSec)} of it, and play stops there.</p>}
@@ -98,7 +98,7 @@ export default function PerformanceEvidence({ clipSrc, instruction, temporal = n
         <span className="text-port-text-muted">Jump to</span>
         {words.map((word, i) => (
           <button type="button" key={i} onClick={() => seek(word.startSec + offset)}
-            className="rounded border border-port-border px-2 py-1 min-h-[44px] sm:min-h-0"
+            className="rounded border border-port-border px-2 py-1 min-h-[44px] pointer-fine:sm:min-h-0"
             title={`${formatTimecode(word.startSec + offset)}–${formatTimecode(word.endSec + offset)} in the clip`}>
             {word.label}
           </button>
@@ -110,14 +110,14 @@ export default function PerformanceEvidence({ clipSrc, instruction, temporal = n
           <p>Keep accepted prefix through {formatTimecode(repair.boundarySec)}. Continue only {formatTimecode(repair.boundarySec)}–{formatTimecode(repair.endSec)} (song time).</p>
           <p>Next spend: {formatUsd(repair.costUsd)} · one generation · accepted boundary frame</p>
           <button type="button" disabled={repairBusy} onClick={onRepair}
-            className="rounded border border-port-border px-2 py-1 min-h-[44px] sm:min-h-0 disabled:opacity-50">{repairBusy ? 'Repairing…' : 'Repair from here'}</button>
+            className="rounded border border-port-border px-2 py-1 min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50">{repairBusy ? 'Repairing…' : 'Repair from here'}</button>
         </> : <p className="text-port-warning">{repair.ok ? 'Review needed: update the authored composition edit points before continuing' : repair.message}</p>}
       </div>}
       {measured && <ul className="space-y-1" aria-label="Temporal evidence spans">
         {spans.map((span, i) => (
           <li key={i}>
             <button type="button" onClick={() => seek(span.startSec + excerptStartSec - (windowStart || 0))}
-              className="text-port-accent min-h-[44px] sm:min-h-0">
+              className="text-port-accent min-h-[44px] pointer-fine:sm:min-h-0">
               {formatTimecode(span.startSec + excerptStartSec)}–{formatTimecode(span.endSec + excerptStartSec)}
             </button>
             {' · '}{span.status}

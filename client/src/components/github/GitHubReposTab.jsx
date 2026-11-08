@@ -235,7 +235,7 @@ export default function GitHubReposTab() {
             {!authStatusUnavailable && !environmentCredential && authStatus?.status !== 'not-installed' && (
               <Link
                 to={`/shell?cmd=${encodeURIComponent(GITHUB_LOGIN_COMMAND)}`}
-                className="inline-flex min-h-[44px] shrink-0 items-center justify-center rounded bg-port-accent px-4 py-2 text-sm font-medium text-white hover:bg-port-accent/80 sm:min-h-0"
+                className="inline-flex min-h-[44px] shrink-0 items-center justify-center rounded bg-port-accent px-4 py-2 text-sm font-medium text-white hover:bg-port-accent/80 pointer-fine:sm:min-h-0"
               >
                 Sign in with GitHub
               </Link>
@@ -244,7 +244,7 @@ export default function GitHubReposTab() {
               <button
                 type="button"
                 onClick={loadData}
-                className="inline-flex min-h-[44px] shrink-0 items-center justify-center rounded bg-port-accent px-4 py-2 text-sm font-medium text-white hover:bg-port-accent/80 sm:min-h-0"
+                className="inline-flex min-h-[44px] shrink-0 items-center justify-center rounded bg-port-accent px-4 py-2 text-sm font-medium text-white hover:bg-port-accent/80 pointer-fine:sm:min-h-0"
               >
                 Retry
               </button>

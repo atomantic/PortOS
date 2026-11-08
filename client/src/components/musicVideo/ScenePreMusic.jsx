@@ -15,7 +15,7 @@ const fetchTracks = async () => {
   const data = await listTracks({ silent: true });
   return Array.isArray(data) ? data : data?.tracks || [];
 };
-const control = 'bg-port-bg border border-port-border rounded px-1 py-1 text-xs min-h-[44px] sm:min-h-0 disabled:opacity-50';
+const control = 'bg-port-bg border border-port-border rounded px-1 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50';
 const percent = (v) => `${Math.round(v * 100)}%`;
 
 /** A level slider that keeps its own value while dragging and saves once it is let go. */
@@ -28,7 +28,7 @@ function LevelSlider({ id, label, value, onCommit, disabled }) {
       <label htmlFor={id} className="shrink-0 tabular-nums text-port-text-muted">{label} {percent(level)}</label>
       <input id={id} type="range" min="0" max="2" step="0.05" value={level} disabled={disabled}
         onChange={(e) => setLevel(Number(e.target.value))} onPointerUp={commit} onKeyUp={commit} onBlur={commit}
-        className="min-w-0 flex-1 accent-port-accent min-h-[44px] sm:min-h-0" />
+        className="min-w-0 flex-1 accent-port-accent min-h-[44px] pointer-fine:sm:min-h-0" />
     </span>
   );
 }
@@ -61,11 +61,11 @@ function LayerRow({ fieldId, index, layer, spanSec, tracks, onCommit, onRemove, 
         <label htmlFor={id('at')} className="shrink-0 tabular-nums text-port-text-muted">at {atSec.toFixed(2)}s</label>
         <input id={id('at')} type="range" min="0" max={spanSec} step={STEP_SEC} value={Math.min(atSec, spanSec)} disabled={disabled}
           onChange={(e) => setAtSec(Number(e.target.value))} onPointerUp={commitTime} onKeyUp={commitTime} onBlur={commitTime}
-          className="min-w-0 flex-1 accent-port-accent min-h-[44px] sm:min-h-0" />
+          className="min-w-0 flex-1 accent-port-accent min-h-[44px] pointer-fine:sm:min-h-0" />
       </span>
       <LevelSlider id={id('volume')} label="level" value={layer.volume} disabled={disabled} onCommit={(volume) => onCommit({ volume })} />
       <button type="button" onClick={onRemove} disabled={disabled} aria-label={`Remove sound ${index + 1}`}
-        className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded text-port-text-muted hover:text-port-error sm:min-h-[28px] sm:min-w-[28px] disabled:opacity-50">
+        className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded text-port-text-muted hover:text-port-error pointer-fine:sm:min-h-[28px] pointer-fine:sm:min-w-[28px] disabled:opacity-50">
         <X size={14} aria-hidden="true" />
       </button>
     </li>
@@ -101,7 +101,7 @@ export function PreMusicTiming({ fieldId, scene, onChange, disabled = false }) {
     <div className="flex flex-wrap items-center gap-2 text-xs">
       <button type="button" role="switch" aria-checked={on} disabled={disabled}
         onClick={() => (on ? onChange({ preMusic: null }) : turnOn())}
-        className={`inline-flex min-h-[44px] items-center gap-1 rounded border px-2 sm:min-h-[28px] disabled:opacity-50 ${on ? 'border-port-accent text-port-accent' : 'border-port-border text-port-text-muted'}`}>
+        className={`inline-flex min-h-[44px] items-center gap-1 rounded border px-2 pointer-fine:sm:min-h-[28px] disabled:opacity-50 ${on ? 'border-port-accent text-port-accent' : 'border-port-border text-port-text-muted'}`}>
         Before the song
       </button>
       {on && (
@@ -135,7 +135,7 @@ export function PreMusicSound({ fieldId, scene, onChange, disabled = false }) {
         <button type="button" role="switch" aria-checked={settings.clipVolume != null && settings.clipVolume > 0} disabled={disabled}
           onClick={() => save({ clipVolume: settings.clipVolume > 0 ? null : 1 })}
           title="Play this clip's own sound. While it is on, a new fal.ai or local render of this shot asks the model for sound (on Kling at its audio-on rate)."
-          className={`inline-flex min-h-[44px] items-center rounded border px-2 sm:min-h-[28px] disabled:opacity-50 ${settings.clipVolume > 0 ? 'border-port-accent text-port-accent' : 'border-port-border text-port-text-muted'}`}>
+          className={`inline-flex min-h-[44px] items-center rounded border px-2 pointer-fine:sm:min-h-[28px] disabled:opacity-50 ${settings.clipVolume > 0 ? 'border-port-accent text-port-accent' : 'border-port-border text-port-text-muted'}`}>
           Clip sound
         </button>
         {settings.clipVolume > 0 && (
@@ -144,7 +144,7 @@ export function PreMusicSound({ fieldId, scene, onChange, disabled = false }) {
         )}
         {layers.length < PRE_MUSIC_LAYER_LIMIT && (
           <button type="button" onClick={addLayer} disabled={disabled}
-            className="inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border px-2 text-port-text-muted hover:text-port-text sm:min-h-[28px] disabled:opacity-50">
+            className="inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border px-2 text-port-text-muted hover:text-port-text pointer-fine:sm:min-h-[28px] disabled:opacity-50">
             <Plus size={12} aria-hidden="true" /> Add sound
           </button>
         )}

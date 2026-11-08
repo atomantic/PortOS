@@ -74,7 +74,7 @@ export default function TrackPanel({
           onChange={(e) => e.target.value && requestChange({ kind: 'track', trackId: e.target.value })}
           disabled={youtube.editJob.active || renderBound || midiBound}
           title={blockedMessage || undefined}
-          className="bg-port-bg border border-port-border rounded px-1.5 py-1 disabled:opacity-50 min-h-[44px] sm:min-h-0 min-w-0 max-w-full">
+          className="bg-port-bg border border-port-border rounded px-1.5 py-1 disabled:opacity-50 min-h-[44px] pointer-fine:sm:min-h-0 min-w-0 max-w-full">
           <option value="">Change track…</option>
           {tracks.map((t) => <option key={t.id} value={t.id}>{optionLabels.get(t.id)}</option>)}
         </select>
@@ -104,17 +104,17 @@ export default function TrackPanel({
           </p>
           <div className="flex flex-wrap gap-2">
             <button type="button" onClick={() => runChange(pending, {})}
-              className="min-h-[44px] sm:min-h-0 px-2 py-1 rounded bg-port-error text-white">
+              className="min-h-[44px] pointer-fine:sm:min-h-0 px-2 py-1 rounded bg-port-error text-white">
               {pending.kind === 'youtube' ? 'Import audio' : 'Change track'}
             </button>
             {pending.kind === 'track' && (
               <button type="button" onClick={() => runChange(pending, { fork: true })}
-                className="min-h-[44px] sm:min-h-0 px-2 py-1 rounded border border-port-border text-port-accent">
+                className="min-h-[44px] pointer-fine:sm:min-h-0 px-2 py-1 rounded border border-port-border text-port-accent">
                 Fork &amp; change track
               </button>
             )}
             <button type="button" onClick={() => setPending(null)}
-              className="min-h-[44px] sm:min-h-0 px-2 py-1 rounded border border-port-border">Cancel</button>
+              className="min-h-[44px] pointer-fine:sm:min-h-0 px-2 py-1 rounded border border-port-border">Cancel</button>
           </div>
         </div>
       )}
@@ -126,7 +126,7 @@ export default function TrackPanel({
             <audio src={audioUrl} controls preload="metadata" className="h-8 max-w-full" aria-label="Preview track audio" />
             <a href={audioUrl} download={audioFilename}
               title="Download the audio track"
-              className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1 text-xs min-h-[44px] sm:min-h-0 hover:bg-port-border/40">
+              className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0 hover:bg-port-border/40">
               <Download size={13} /> Download audio
             </a>
           </div>

@@ -9,7 +9,7 @@ import { formatCount } from '../../utils/formatters.js';
 import { localModelTakesSongAudio } from '../../../../server/lib/musicVideoLocalModels.js';
 import { isPerformanceScene } from '../../../../server/lib/musicVideoShotTiming.js';
 
-const BUTTON = 'inline-flex min-h-[44px] max-w-full items-center gap-1 rounded border border-port-border bg-port-bg px-2 text-xs hover:bg-port-border/40 disabled:opacity-50 sm:min-h-[32px]';
+const BUTTON = 'inline-flex min-h-[44px] max-w-full items-center gap-1 rounded border border-port-border bg-port-bg px-2 text-xs hover:bg-port-border/40 disabled:opacity-50 pointer-fine:sm:min-h-[32px]';
 const nameOf = (ref) => ref.label || ref.role || 'Reference';
 
 /** The extra images this model will receive alongside the shot's frame. */
@@ -54,7 +54,7 @@ export default function SceneClipReferences({ project, scene, castMedia, backend
     <div role="group" aria-label="Clip references" className="space-y-1">
       <div className="flex flex-wrap items-center gap-x-2 text-[11px] text-port-text-muted">
         <span className="font-medium text-port-text">Clip references</span>
-        {auto ? <span>Auto: cast from Frames</span> : <button type="button" className="min-h-[44px] underline sm:min-h-0" disabled={locked} onClick={() => save(null)}>Back to auto</button>}
+        {auto ? <span>Auto: cast from Frames</span> : <button type="button" className="min-h-[44px] underline pointer-fine:sm:min-h-0" disabled={locked} onClick={() => save(null)}>Back to auto</button>}
       </div>
       <p className="text-[11px] text-port-text-muted">
         {scene.referenceImageId

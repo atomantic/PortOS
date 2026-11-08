@@ -133,7 +133,7 @@ export default function MusicVideoAutopilotSettings({ taskType, config, onUpdate
         disabled={updating}
       />
 
-      <button type="submit" disabled={updating} className="w-full bg-port-accent text-white rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50">
+      <button type="submit" disabled={updating} className="w-full bg-port-accent text-white rounded px-2 py-1.5 text-sm min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50">
         {updating ? 'Saving…' : 'Save settings'}
       </button>
     </form>

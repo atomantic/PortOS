@@ -313,7 +313,7 @@ export default function TabPills({
                 disabled={t.disabled}
                 onClick={() => onChange(t.id)}
                 onKeyDown={(event) => handleTabKeyDown(event, index)}
-                className={`flex items-center ${stretch ? 'flex-1 min-w-0 justify-center' : 'shrink-0 justify-center'} ${iconRow ? 'max-sm:min-w-[44px] max-sm:min-h-[44px]' : ''} ${sz.gap} ${sz.padding} ${sz.text} font-medium transition-colors whitespace-nowrap min-h-[44px] sm:min-h-[40px] border-b-2 -mb-px ${
+                className={`flex items-center ${stretch ? 'flex-1 min-w-0 justify-center' : 'shrink-0 justify-center'} ${iconRow ? 'max-sm:min-w-[44px] max-sm:min-h-[44px]' : ''} ${sz.gap} ${sz.padding} ${sz.text} font-medium transition-colors whitespace-nowrap min-h-[44px] pointer-fine:sm:min-h-[40px] border-b-2 -mb-px ${
                   active
                     ? 'text-port-accent border-port-accent bg-port-accent/5'
                     : 'text-gray-400 border-transparent hover:text-white hover:bg-port-card'

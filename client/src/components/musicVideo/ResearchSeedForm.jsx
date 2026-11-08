@@ -6,7 +6,7 @@ import InfoTooltip from '../ui/InfoTooltip';
 import useProviderModels from '../../hooks/useProviderModels.js';
 import socket from '../../services/socket';
 
-const BUTTON = 'inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border px-3 py-1.5 text-sm disabled:opacity-50 sm:min-h-0';
+const BUTTON = 'inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border px-3 py-1.5 text-sm disabled:opacity-50 pointer-fine:sm:min-h-0';
 const COUNTS = [1, 2, 3, 4];
 const OPEN_HINT = 'Opens a short form first (subject, photo count, agent); nothing runs until you press Find photos there.';
 
@@ -66,7 +66,7 @@ export default function ResearchSeedForm({ projectId, match, start, onSaved, roo
       {!open && (
         <span className="inline-flex items-center">
           <button type="button" onClick={() => { setSubject((s) => s || defaultSubject); setOpen(true); }} disabled={disabled} title={OPEN_HINT}
-            className="inline-flex min-h-[44px] items-center gap-1 text-[11px] underline sm:min-h-0">
+            className="inline-flex min-h-[44px] items-center gap-1 text-[11px] underline pointer-fine:sm:min-h-0">
             <Search size={12} aria-hidden="true" /> Research and seed
           </button>
           <InfoTooltip label="About researching photos" placement="below" align="start" width={280}>
@@ -85,7 +85,7 @@ export default function ResearchSeedForm({ projectId, match, start, onSaved, roo
           </label>
           <label htmlFor={`${fieldId}-count`} className="block text-xs text-port-text-muted">Photos
             <select id={`${fieldId}-count`} value={count} onChange={(e) => setCount(Number(e.target.value))} disabled={running}
-              className="ml-2 min-h-[44px] rounded border border-port-border bg-port-bg px-2 text-sm sm:min-h-0">
+              className="ml-2 min-h-[44px] rounded border border-port-border bg-port-bg px-2 text-sm pointer-fine:sm:min-h-0">
               {COUNTS.map((n) => <option key={n} value={n}>{n}</option>)}
             </select>
           </label>

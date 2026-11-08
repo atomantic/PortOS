@@ -12,7 +12,7 @@ import toast from '../ui/Toast';
 import { upgradeMusicVideoCompositionEngine } from '../../services/apiMusicVideo.js';
 import { sceneShotName } from '../../lib/musicVideoStages.js';
 
-const buttonCls = 'flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50';
+const buttonCls = 'flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50';
 
 // What the lyric playthrough page is built from: the song length, the word times,
 // the sheet's sections, the shots' timing and text zones, and the title card's spot. A change rebuilds it.

@@ -14,7 +14,7 @@ import { formatUsd } from '../../utils/formatters.js';
 import { SOURCE_AUDIO_LIPSYNC, SOURCE_AUDIO_MUSIC, performanceCapability } from '../../lib/musicVideoShotTiming.js';
 import { localModelRendersCutaway } from '../../../../server/lib/musicVideoLocalModels.js';
 
-const falSelectCls = 'w-full max-w-full bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50 sm:w-auto min-h-[44px] sm:min-h-0';
+const falSelectCls = 'w-full max-w-full bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50 sm:w-auto min-h-[44px] pointer-fine:sm:min-h-0';
 const falOptionLabel = (model) => {
   const rate = describeFalVideoRate(model.id);
   return rate ? `${model.label} · ${rate}` : model.label;
@@ -76,7 +76,7 @@ export default function VideoRenderSettings({ videoSettings, generating, project
         onChange={(e) => change({ backend: e.target.value || null })}
         disabled={locked}
         title="Saved renderer for this project's scene videos"
-        className="w-full max-w-full bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50 min-h-[44px] sm:min-h-0 sm:w-auto"
+        className="w-full max-w-full bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50 min-h-[44px] pointer-fine:sm:min-h-0 sm:w-auto"
       >
         <option value="">Install default</option>
         <option value="local">Local video</option>
@@ -111,7 +111,7 @@ export default function VideoRenderSettings({ videoSettings, generating, project
             }}
             disabled={locked}
             title="Prompt motion uses the reference frame; audio reactive also conditions motion on this scene's song segment"
-            className="w-full max-w-full bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50 min-h-[44px] sm:min-h-0 sm:w-auto"
+            className="w-full max-w-full bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50 min-h-[44px] pointer-fine:sm:min-h-0 sm:w-auto"
           >
             <option value="image">Prompt motion</option>
             <option value="suppliedAudio">Supplied song audio (cutaway only)</option>
@@ -124,7 +124,7 @@ export default function VideoRenderSettings({ videoSettings, generating, project
             onChange={(e) => change({ modelId: e.target.value })}
             disabled={locked || models.length === 0}
             title="Saved local image-to-video model for this project"
-            className="w-full max-w-full bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50 min-h-[44px] sm:min-h-0 sm:w-auto sm:max-w-[240px]"
+            className="w-full max-w-full bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50 min-h-[44px] pointer-fine:sm:min-h-0 sm:w-auto sm:max-w-[240px]"
           >
             <option value="">
               {defaultModel
@@ -145,7 +145,7 @@ export default function VideoRenderSettings({ videoSettings, generating, project
                 onChange={(e) => change({ audioReactiveLora: e.target.value })}
                 disabled={locked || audioReactiveLoras.length === 0}
                 title="Saved audio-reactive LoRA version for this project"
-                className="w-full max-w-full bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50 min-h-[44px] sm:min-h-0 sm:w-auto sm:max-w-[220px]"
+                className="w-full max-w-full bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50 min-h-[44px] pointer-fine:sm:min-h-0 sm:w-auto sm:max-w-[220px]"
               >
                 {audioReactiveLoras.length === 0 && (
                   <option value="">{catalogStatus === 'ready' ? 'No audio-reactive LoRA installed' : 'Audio-reactive LoRAs not loaded'}</option>
@@ -163,7 +163,7 @@ export default function VideoRenderSettings({ videoSettings, generating, project
                 onChange={(e) => change({ audioReactiveScale: Number(e.target.value) })}
                 disabled={locked}
                 title="How strongly the song drives visible motion"
-                className="w-full max-w-full bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50 min-h-[44px] sm:min-h-0 sm:w-auto"
+                className="w-full max-w-full bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50 min-h-[44px] pointer-fine:sm:min-h-0 sm:w-auto"
               >
                 <option value={1}>Reactive 1.0×</option>
                 <option value={1.2}>Reactive 1.2×</option>
@@ -199,7 +199,7 @@ export default function VideoRenderSettings({ videoSettings, generating, project
             onChange={(e) => change({ grokDuration: Number(e.target.value) })}
             disabled={locked}
             title="Native duration for each Grok scene clip"
-            className="w-full max-w-full bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50 min-h-[44px] sm:min-h-0 sm:w-auto"
+            className="w-full max-w-full bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50 min-h-[44px] pointer-fine:sm:min-h-0 sm:w-auto"
           >
             {GROK_VIDEO_DURATIONS.map((duration) => (
               <option key={duration} value={duration}>{duration}s clips</option>
@@ -271,7 +271,7 @@ export default function VideoRenderSettings({ videoSettings, generating, project
             disabled={locked}
             placeholder="shot length"
             title="Clip length in seconds for this project's fal.ai cutaway renders. Blank renders the shortest length the model offers that covers each shot (the model default for an untimed scene)."
-            className="w-full max-w-full bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50 min-h-[44px] sm:min-h-0 sm:w-24"
+            className="w-full max-w-full bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50 min-h-[44px] pointer-fine:sm:min-h-0 sm:w-24"
           />
           <label htmlFor="mv-fal-lipsync-resolution" className="sr-only">fal.ai lip-sync resolution</label>
           <select
@@ -287,7 +287,7 @@ export default function VideoRenderSettings({ videoSettings, generating, project
               <option key={res} value={res}>{`Lip-sync ${res} · ${describeFalVideoRate(lipSync.modelId, res)}`}</option>
             ))}
           </select>
-          <label className="flex items-center gap-1.5 text-xs text-port-text-muted min-h-[44px] sm:min-h-0"
+          <label className="flex items-center gap-1.5 text-xs text-port-text-muted min-h-[44px] pointer-fine:sm:min-h-0"
             title="Let the provider transcribe the sung audio to guide mouth shapes. Turn off if it mishears lyrics and shapes the wrong words (e.g. 'swarm' mouthed as 'sworn'); the take then follows the audio alone.">
             <input
               type="checkbox"

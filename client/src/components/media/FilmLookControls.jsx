@@ -32,7 +32,7 @@ function Slider({ control, value, onChange, onCommit, id }) {
   );
 }
 
-const chipCls = (on) => `min-h-[44px] rounded-full border px-3 py-1 sm:min-h-0 ${on ? 'border-port-accent bg-port-accent/20 text-port-accent' : 'border-port-border bg-port-bg text-port-text-muted hover:text-port-text'}`;
+const chipCls = (on) => `min-h-[44px] rounded-full border px-3 py-1 pointer-fine:sm:min-h-0 ${on ? 'border-port-accent bg-port-accent/20 text-port-accent' : 'border-port-border bg-port-bg text-port-text-muted hover:text-port-text'}`;
 
 // The install's saved looks: tap one to apply it, save the current look under a
 // name, or delete the saved look the controls currently match.
@@ -63,24 +63,24 @@ function SavedLooks({ look, saved, matched, onApply }) {
         <form onSubmit={submit} className="flex flex-wrap items-center gap-2">
           <label htmlFor={nameId} className="text-port-text-muted">Name</label>
           <input id={nameId} value={name} onChange={(event) => setName(event.target.value)} maxLength={60} autoFocus
-            className="min-h-[44px] min-w-0 flex-1 rounded border border-port-border bg-port-bg px-2 sm:min-h-0 sm:py-1" />
-          <button type="submit" disabled={!name.trim()} className="min-h-[44px] rounded bg-port-accent px-3 text-port-bg disabled:opacity-50 sm:min-h-0 sm:py-1">Save</button>
-          <button type="button" onClick={() => setNaming(false)} className="min-h-[44px] px-2 sm:min-h-0">Cancel</button>
+            className="min-h-[44px] min-w-0 flex-1 rounded border border-port-border bg-port-bg px-2 pointer-fine:sm:min-h-0 sm:py-1" />
+          <button type="submit" disabled={!name.trim()} className="min-h-[44px] rounded bg-port-accent px-3 text-port-bg disabled:opacity-50 pointer-fine:sm:min-h-0 sm:py-1">Save</button>
+          <button type="button" onClick={() => setNaming(false)} className="min-h-[44px] px-2 pointer-fine:sm:min-h-0">Cancel</button>
         </form>
       ) : matched ? (
         confirming ? (
           <div className="flex flex-wrap items-center gap-2">
             <span>Delete &ldquo;{matched.label}&rdquo;?</span>
-            <button type="button" onClick={() => { saved.remove(matched.id); setConfirming(false); }} className="min-h-[44px] px-2 text-port-error sm:min-h-0">Delete</button>
-            <button type="button" onClick={() => setConfirming(false)} className="min-h-[44px] px-2 sm:min-h-0">Keep</button>
+            <button type="button" onClick={() => { saved.remove(matched.id); setConfirming(false); }} className="min-h-[44px] px-2 text-port-error pointer-fine:sm:min-h-0">Delete</button>
+            <button type="button" onClick={() => setConfirming(false)} className="min-h-[44px] px-2 pointer-fine:sm:min-h-0">Keep</button>
           </div>
         ) : (
-          <button type="button" onClick={() => setConfirming(true)} className="inline-flex min-h-[44px] items-center gap-1 px-1 text-port-text-muted hover:text-port-text sm:min-h-0">
+          <button type="button" onClick={() => setConfirming(true)} className="inline-flex min-h-[44px] items-center gap-1 px-1 text-port-text-muted hover:text-port-text pointer-fine:sm:min-h-0">
             <Trash2 size={12} aria-hidden="true" /> Delete saved look
           </button>
         )
       ) : !isFilmLookNeutral(look) && (
-        <button type="button" onClick={() => { setName(''); setNaming(true); }} className="inline-flex min-h-[44px] items-center gap-1 px-1 text-port-accent sm:min-h-0">
+        <button type="button" onClick={() => { setName(''); setNaming(true); }} className="inline-flex min-h-[44px] items-center gap-1 px-1 text-port-accent pointer-fine:sm:min-h-0">
           <Save size={12} aria-hidden="true" /> Save as preset
         </button>
       )}
@@ -137,7 +137,7 @@ export default function FilmLookControls({ look: given, onChange, onCommit, comp
       <div>
         <div className="mb-1 flex items-center justify-between gap-2">
           <span className="text-port-text-muted">Presets</span>
-          <button type="button" onClick={() => applyPreset('none')} className="inline-flex min-h-[44px] items-center gap-1 px-1 text-port-accent sm:min-h-0" aria-label="Reset to a clean look">
+          <button type="button" onClick={() => applyPreset('none')} className="inline-flex min-h-[44px] items-center gap-1 px-1 text-port-accent pointer-fine:sm:min-h-0" aria-label="Reset to a clean look">
             <RotateCcw size={12} aria-hidden="true" /> Reset
           </button>
         </div>
@@ -195,7 +195,7 @@ export default function FilmLookControls({ look: given, onChange, onCommit, comp
                   }
                   if (control.type === 'toggle') {
                     return (
-                      <label key={control.id} htmlFor={id} title={control.hint} className="flex min-h-[44px] items-center gap-2 sm:min-h-0">
+                      <label key={control.id} htmlFor={id} title={control.hint} className="flex min-h-[44px] items-center gap-2 pointer-fine:sm:min-h-0">
                         <input id={id} type="checkbox" checked={!!look[control.id]} onChange={(event) => set({ [control.id]: event.target.checked })} className="accent-port-accent" />
                         <span className="text-port-text">{control.label}</span>{' '}
                         <span className="text-port-text-muted">{control.term}</span>
@@ -214,7 +214,7 @@ export default function FilmLookControls({ look: given, onChange, onCommit, comp
         <div className="mb-1 flex items-center justify-between gap-2">
           <span className="text-port-text-muted">In a prompt</span>
           {words && (
-            <button type="button" onClick={() => copyToClipboard(words, 'Look words copied')} className="inline-flex min-h-[44px] items-center gap-1 px-1 text-port-accent sm:min-h-0" aria-label="Copy the look as prompt words">
+            <button type="button" onClick={() => copyToClipboard(words, 'Look words copied')} className="inline-flex min-h-[44px] items-center gap-1 px-1 text-port-accent pointer-fine:sm:min-h-0" aria-label="Copy the look as prompt words">
               <Copy size={12} aria-hidden="true" /> Copy
             </button>
           )}

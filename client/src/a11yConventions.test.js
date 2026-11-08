@@ -3812,6 +3812,59 @@ describe('a11y conventions', () => {
     expect(offenders, `Icon-only <button> with a glyph-sized tap target — add pointer-coarse:min-h-11 pointer-coarse:min-w-11 (or min-h-[44px] min-w-[44px]):\n${offenders.join('\n')}`).toEqual([]);
   });
 
+  it('keeps a 44px touch floor when a breakpoint shrinks a control (#15377)', () => {
+    // Width is not pointer precision: an iPad at 768px is past `sm` and still
+    // coarse. A class string that sets a ≥44px min on an axis and then shrinks
+    // that axis at a width breakpoint must gate the shrink on `pointer-fine:`,
+    // so coarse pointers keep the floor at every width. A `pointer-coarse:`
+    // min of 44px+ on the same axis is an accepted alternative floor.
+    const MIN_FLOOR_PX = 44;
+    const pxOf = (v) => {
+      const arb = /^\[(\d+(?:\.\d+)?)(px|rem)\]$/.exec(v);
+      if (arb) return parseFloat(arb[1]) * (arb[2] === 'rem' ? 16 : 1);
+      return /^\d+$/.test(v) ? Number(v) * 4 : null;
+    };
+    const SHRINK_OVERRIDE = /^((?:[^:\s]+:)*)(min-[hw])-(.+)$/;
+    const offendersIn = (file, src) => {
+      const out = [];
+      for (const seg of src.matchAll(/"([^"\n]*)"|'([^'\n]*)'|`([^`]*)`/g)) {
+        const tokens = (seg[1] ?? seg[2] ?? seg[3] ?? '').split(/\s+/).filter(Boolean);
+        for (const axis of ['min-h', 'min-w']) {
+          const prefix = `${axis}-`;
+          const hasFloor = tokens.some((t) => !t.includes(':') && t.startsWith(prefix) && (pxOf(t.slice(prefix.length)) ?? 0) >= MIN_FLOOR_PX);
+          if (!hasFloor) continue;
+          const shrinks = tokens.some((t) => {
+            const m = SHRINK_OVERRIDE.exec(t);
+            if (!m || m[2] !== axis) return false;
+            const variants = m[1].split(':').filter(Boolean);
+            if (variants.includes('pointer-fine')) return false;
+            if (!variants.some((v) => /^(?:sm|md|lg|xl|2xl|@.+)$/.test(v))) return false;
+            const px = pxOf(m[3]);
+            return px !== null && px < MIN_FLOOR_PX;
+          });
+          const coarseFloor = tokens.some((t) => t.startsWith(`pointer-coarse:${prefix}`) && (pxOf(t.slice(`pointer-coarse:${prefix}`.length)) ?? 0) >= MIN_FLOOR_PX);
+          if (shrinks && !coarseFloor) out.push(`${file}:${lineOf(src, seg.index)}`);
+        }
+      }
+      return out;
+    };
+
+    // Probe first: the shrink must be recognized, and the gated form must pass.
+    expect(offendersIn('probe.jsx', '<button className="min-h-[44px] sm:min-h-0">x</button>')).toEqual(['probe.jsx:1']);
+    expect(offendersIn('probe.jsx', '<button className="min-h-[44px] pointer-fine:sm:min-h-0">x</button>')).toEqual([]);
+    expect(offendersIn('probe.jsx', '<button className="min-w-11 md:min-w-8">x</button>')).toEqual(['probe.jsx:1']);
+    expect(offendersIn('probe.jsx', '<button className="min-h-[44px] sm:min-h-[44px]">x</button>')).toEqual([]);
+    expect(offendersIn('probe.jsx', '<button className="sm:min-h-0 px-2">x</button>')).toEqual([]);
+    expect(offendersIn('probe.jsx', '<button className="min-h-[44px] pointer-coarse:min-h-11 sm:min-h-0">x</button>')).toEqual([]);
+    // Axes are independent: a 44px height does not excuse a shrunken width.
+    expect(offendersIn('probe.jsx', '<button className="min-h-[44px] sm:min-w-0">x</button>')).toEqual([]);
+
+    const offenders = trackedJsxFiles()
+      .filter((file) => !/\.test\.jsx?$/.test(file))
+      .flatMap((file) => offendersIn(file, rawSourceOf(file)));
+    expect(offenders, `Breakpoint shrinks a 44px touch floor on every width, so tablets get a desktop-size target — gate the override with pointer-fine: (e.g. pointer-fine:sm:min-h-0):\n${offenders.join('\n')}`).toEqual([]);
+  });
+
   it('never autofocuses a button on a surface that submits with a key', () => {
     // The Enter that submits an answer is still down when the control it
     // reveals mounts and takes focus, so the browser activates that control off

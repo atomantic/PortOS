@@ -24,7 +24,7 @@ export function toastWorkflowError(err, fallback, { reload } = {}) {
       <button
         type="button"
         onClick={() => { revealAttention(); toast.dismiss(t.id); }}
-        className="inline-flex min-h-[44px] shrink-0 items-center rounded border border-port-border px-2 py-0.5 text-[11px] text-port-accent hover:border-port-accent/40 hover:text-white sm:min-h-0"
+        className="inline-flex min-h-[44px] shrink-0 items-center rounded border border-port-border px-2 py-0.5 text-[11px] text-port-accent hover:border-port-accent/40 hover:text-white pointer-fine:sm:min-h-0"
       >
         Show revision
       </button>

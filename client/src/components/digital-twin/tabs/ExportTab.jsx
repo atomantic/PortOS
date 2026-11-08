@@ -256,7 +256,7 @@ export default function ExportTab({ onRefresh: _onRefresh }) {
       </div>
 
       {/* Preview / Result */}
-      <div className="bg-port-card rounded-lg border border-port-border overflow-hidden flex flex-col min-h-[300px] lg:min-h-0">
+      <div className="bg-port-card rounded-lg border border-port-border overflow-hidden flex flex-col min-h-[300px] pointer-fine:lg:min-h-0">
         <div className="p-4 border-b border-port-border flex flex-wrap items-center justify-between gap-2">
           <h3 className="font-semibold text-white flex items-center gap-2">
             <Eye size={18} />

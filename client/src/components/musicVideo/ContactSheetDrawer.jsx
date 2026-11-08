@@ -46,7 +46,7 @@ export default function ContactSheetDrawer({
   return (
     <Drawer open={open} onClose={onClose} title="Contact sheet" subtitle={project?.name} size="xl" closeLabel="Close contact sheet">
       <div className="mb-3 flex items-center justify-between gap-2">
-        <label className="flex items-center gap-2 text-xs min-h-[44px] sm:min-h-0">
+        <label className="flex items-center gap-2 text-xs min-h-[44px] pointer-fine:sm:min-h-0">
           <input type="checkbox" checked={pendingOnly} onChange={(e) => onPendingOnlyChange?.(e.target.checked)} />
           Pending decisions
         </label>
@@ -65,7 +65,7 @@ export default function ContactSheetDrawer({
                 </div>
                 {onRegenerateFrame && (
                   <button type="button" disabled={busy || !!generatingScenes[scene.sceneId]} onClick={() => onRegenerateFrame(scene)}
-                    className="inline-flex shrink-0 items-center gap-1 rounded bg-port-border px-2 py-1 text-[11px] min-h-[44px] sm:min-h-0 disabled:opacity-50"
+                    className="inline-flex shrink-0 items-center gap-1 rounded bg-port-border px-2 py-1 text-[11px] min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50"
                     title="Generate another frame take for this scene">
                     <RefreshCw size={12} className={generatingScenes[scene.sceneId] ? 'animate-spin' : ''} /> Regenerate frame
                   </button>

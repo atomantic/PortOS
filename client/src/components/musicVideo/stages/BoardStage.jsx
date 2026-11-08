@@ -191,7 +191,7 @@ export default function BoardStage({ board }) {
         <div className="flex flex-wrap items-center gap-2">
           <PacingRecutPanel key={project.id} project={project} disabled={locked || videoSettings.saving} onApplied={board.replaceProject} />
           <ContactSheetButton onOpen={board.openContactSheet} />
-          <button onClick={board.onAddScene} className="flex min-h-[44px] items-center gap-1 rounded bg-port-accent px-2 py-1.5 text-sm text-white sm:min-h-0">
+          <button onClick={board.onAddScene} className="flex min-h-[44px] items-center gap-1 rounded bg-port-accent px-2 py-1.5 text-sm text-white pointer-fine:sm:min-h-0">
             <Plus size={15} /> Add scene
           </button>
         </div>
@@ -202,19 +202,19 @@ export default function BoardStage({ board }) {
         <div role="group" aria-label="Filter scenes" className="flex flex-wrap items-center gap-1.5 text-xs">
           {FILTER_LABELS.map(([id, label]) => (
             <button key={id} type="button" aria-pressed={filter === id} onClick={() => setFilter(id)}
-              className={`min-h-[44px] rounded border px-2 py-1 sm:min-h-0 ${filter === id ? 'border-port-accent bg-port-accent/10 text-port-accent' : 'border-port-border text-port-text-muted'}`}>
+              className={`min-h-[44px] rounded border px-2 py-1 pointer-fine:sm:min-h-0 ${filter === id ? 'border-port-accent bg-port-accent/10 text-port-accent' : 'border-port-border text-port-text-muted'}`}>
               {label} ({counts[id]})
             </button>
           ))}
           {effectFilter && (
             <button type="button" onClick={() => setEffectFilter(null)} aria-label={`Stop showing only shots with ${shotEffectLabel(effectFilter)}`}
-              className="flex min-h-[44px] items-center gap-1 rounded border border-port-accent bg-port-accent/10 px-2 py-1 text-port-accent sm:min-h-0">
+              className="flex min-h-[44px] items-center gap-1 rounded border border-port-accent bg-port-accent/10 px-2 py-1 text-port-accent pointer-fine:sm:min-h-0">
               {shotEffectLabel(effectFilter)} <X size={12} aria-hidden="true" />
             </button>
           )}
           {mapFilter && (
             <button type="button" onClick={() => setMapFilter(null)} aria-label="Clear the map filter"
-              className="inline-flex min-h-[44px] items-center gap-1 rounded border border-port-accent bg-port-accent/10 px-2 py-1 text-port-accent sm:min-h-0">
+              className="inline-flex min-h-[44px] items-center gap-1 rounded border border-port-accent bg-port-accent/10 px-2 py-1 text-port-accent pointer-fine:sm:min-h-0">
               {SHOT_SHEET_MAP_BARS.find(([id]) => id === mapFilter.bar)[1]}: {mapFilter.value || 'Not set'} <X size={12} aria-hidden="true" />
             </button>
           )}

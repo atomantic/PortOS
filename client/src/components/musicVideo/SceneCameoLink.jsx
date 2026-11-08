@@ -3,8 +3,8 @@ import { shotInheritsCameoStill, cameoStillFor } from '../../../../server/lib/mu
 import { linkMusicVideoCameoShots, setMusicVideoCameoStillFromShot, unlinkMusicVideoCameoShots } from '../../services/apiMusicVideo.js';
 import toast from '../ui/Toast';
 
-const FIELD = 'min-h-[44px] rounded border border-port-border bg-port-bg px-2 text-xs sm:min-h-[32px] disabled:opacity-50';
-const BUTTON = 'min-h-[44px] rounded border border-port-border bg-port-bg px-2 text-xs hover:bg-port-border/40 disabled:opacity-50 sm:min-h-[32px]';
+const FIELD = 'min-h-[44px] rounded border border-port-border bg-port-bg px-2 text-xs pointer-fine:sm:min-h-[32px] disabled:opacity-50';
+const BUTTON = 'min-h-[44px] rounded border border-port-border bg-port-bg px-2 text-xs hover:bg-port-border/40 disabled:opacity-50 pointer-fine:sm:min-h-[32px]';
 
 /**
  * Which roster cameo this shot shows (#14821). While the shot has no still of

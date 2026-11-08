@@ -131,7 +131,7 @@ export default function ProcessesTab({ appId, pm2ProcessNames, filterFn }) {
                         onClick={() => toggleExpand(proc.name)}
                         aria-expanded={expandedProcess === proc.name}
                         aria-label={`${expandedProcess === proc.name ? 'Collapse' : 'Expand'} details for ${proc.name}`}
-                        className="inline-flex items-center justify-center min-w-[44px] min-h-[44px] lg:min-w-0 lg:min-h-0 text-gray-400 hover:text-white transition-transform"
+                        className="inline-flex items-center justify-center min-w-[44px] min-h-[44px] pointer-fine:lg:min-w-0 pointer-fine:lg:min-h-0 text-gray-400 hover:text-white transition-transform"
                       >
                         <span className={`inline-block transition-transform ${expandedProcess === proc.name ? 'rotate-90' : ''}`} aria-hidden="true">▶</span>
                       </button>

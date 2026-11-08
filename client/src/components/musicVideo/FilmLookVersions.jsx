@@ -4,7 +4,7 @@ import { deleteMusicVideoFilmLook, getMusicVideoFilmLooks } from '../../services
 import { FILM_LOOK_PRESETS, describeFilmLook } from '../../lib/filmLook.js';
 import { formatBytes } from '../../utils/formatters.js';
 
-const BUTTON = 'inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border bg-port-bg px-2 py-1.5 text-xs hover:bg-port-border/40 disabled:opacity-50 sm:min-h-0';
+const BUTTON = 'inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border bg-port-bg px-2 py-1.5 text-xs hover:bg-port-border/40 disabled:opacity-50 pointer-fine:sm:min-h-0';
 const presetLabel = (look) => FILM_LOOK_PRESETS.find((p) => p.id === look?.preset)?.label || 'Custom';
 
 /**

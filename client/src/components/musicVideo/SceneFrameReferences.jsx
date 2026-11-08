@@ -10,7 +10,7 @@ import InfoTooltip from '../ui/InfoTooltip';
 import CastGuidesRetry from './CastGuidesRetry.jsx';
 
 // No iOS image callout or text selection, so a long-press opens the preview instead.
-const CHIP = 'inline-flex min-h-[44px] max-w-full select-none items-center gap-1 rounded border border-port-border bg-port-bg p-0.5 text-xs [-webkit-touch-callout:none] sm:min-h-[32px]';
+const CHIP = 'inline-flex min-h-[44px] max-w-full select-none items-center gap-1 rounded border border-port-border bg-port-bg p-0.5 text-xs [-webkit-touch-callout:none] pointer-fine:sm:min-h-[32px]';
 const LONG_PRESS_MS = 450;
 const thumb = (ref) => <MediaImage thumbnail src={`/data/images/${encodeURIComponent(ref.imageId)}`} fallbackSrc={`/data/image-refs/${encodeURIComponent(ref.imageId)}`} alt="" className="h-8 w-8 shrink-0 rounded bg-black object-cover" />;
 const nameOf = (ref) => ref.label || ref.role || 'Reference';
@@ -85,7 +85,7 @@ export default function SceneFrameReferences({ project, scene, castMedia = null,
             {preview.note && <span className="block text-port-text-muted">{preview.note}</span>}
           </figcaption>
           <button type="button" onClick={() => setPreview(null)} aria-label="Close preview"
-            className="absolute bottom-1 right-1 inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded hover:bg-port-border sm:min-h-[32px] sm:min-w-[32px]">
+            className="absolute bottom-1 right-1 inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded hover:bg-port-border pointer-fine:sm:min-h-[32px] pointer-fine:sm:min-w-[32px]">
             <X size={14} aria-hidden="true" />
           </button>
         </figure>
@@ -100,7 +100,7 @@ export default function SceneFrameReferences({ project, scene, castMedia = null,
         </InfoTooltip>
         {auto ? <span>Auto: from the prompt</span> : (
           <span className="inline-flex items-center">
-            <button type="button" onClick={() => set(null)} disabled={locked} title={BACK_TO_AUTO_HINT} className="min-h-[44px] underline sm:min-h-0">Back to auto</button>
+            <button type="button" onClick={() => set(null)} disabled={locked} title={BACK_TO_AUTO_HINT} className="min-h-[44px] underline pointer-fine:sm:min-h-0">Back to auto</button>
             <InfoTooltip label="What Back to auto does" placement="below" align="start" width={260}>{BACK_TO_AUTO_HINT}</InfoTooltip>
           </span>
         )}

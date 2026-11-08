@@ -53,7 +53,7 @@ function shotOnScreen(scenes, t) {
   return current;
 }
 
-const buttonCls = 'flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded border border-port-border bg-port-bg text-port-text disabled:opacity-40 sm:min-h-[28px] sm:min-w-[28px]';
+const buttonCls = 'flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded border border-port-border bg-port-bg text-port-text disabled:opacity-40 pointer-fine:sm:min-h-[28px] pointer-fine:sm:min-w-[28px]';
 
 /**
  * A Start button (the song's start, or the excerpt's), then Back and Next

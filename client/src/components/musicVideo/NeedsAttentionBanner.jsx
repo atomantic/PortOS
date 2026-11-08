@@ -4,7 +4,7 @@ import { Link } from 'react-router';
 import { ATTENTION_ANCHOR_ID } from '../../lib/musicVideoAttention.js';
 import StaleApprovalActions from './StaleApprovalActions.jsx';
 
-const BUTTON = 'inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border px-2.5 text-xs disabled:opacity-50 sm:min-h-0 sm:py-1';
+const BUTTON = 'inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border px-2.5 text-xs disabled:opacity-50 pointer-fine:sm:min-h-0 sm:py-1';
 const PRIMARY = `${BUTTON} text-port-accent`;
 const DANGER = `${BUTTON} text-port-error`;
 

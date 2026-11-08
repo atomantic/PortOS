@@ -67,8 +67,8 @@ export const usedLabel = (item, shotNumbers) => {
   const numbers = (item.inUseBy || []).map((id) => shotNumbers.get(id)).filter(Boolean);
   return item.inUseBy?.length ? `Used on ${numbers.length ? numbers.map((n) => `#${n}`).join(', ') : 'a shot'}` : null;
 };
-const CHIP = 'min-h-[44px] rounded border px-2 text-xs sm:min-h-[28px]';
-const ACTION = 'inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border px-3 text-xs disabled:opacity-50 sm:min-h-[32px]';
+const CHIP = 'min-h-[44px] rounded border px-2 text-xs pointer-fine:sm:min-h-[28px]';
+const ACTION = 'inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border px-3 text-xs disabled:opacity-50 pointer-fine:sm:min-h-[32px]';
 
 /**
  * Items of one kind matching a search over their prompt, or a shot number ("12" or "#12").
@@ -191,7 +191,7 @@ export default function SceneTakePicker({ open, onClose, projectId, scene, kind,
       panelClassName="w-full max-w-4xl lg:max-w-[min(100%,1600px)] min-h-dvh-cap bg-port-card border border-port-border rounded-lg p-3 space-y-2">
       <div className="flex items-center gap-2">
         <h3 className="min-w-0 flex-1 truncate text-sm font-medium">Swap {noun} · {shotName}</h3>
-        <button type="button" onClick={onClose} aria-label="Close" className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded sm:min-h-0 sm:min-w-0 sm:p-1">
+        <button type="button" onClick={onClose} aria-label="Close" className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded pointer-fine:sm:min-h-0 pointer-fine:sm:min-w-0 sm:p-1">
           <X size={16} />
         </button>
       </div>
@@ -201,7 +201,7 @@ export default function SceneTakePicker({ open, onClose, projectId, scene, kind,
         <Search size={14} aria-hidden="true" className="shrink-0 text-port-text-muted" />
         <span className="sr-only">Search prompts or shot number</span>
         <input id={`mv-pool-search-${scene.sceneId}`} type="search" value={query} onChange={(e) => { setQuery(e.target.value); setShown(PAGE); }}
-          placeholder="Search prompts or shot #" className="min-h-[44px] min-w-0 flex-1 bg-transparent text-sm outline-none sm:min-h-[32px]" />
+          placeholder="Search prompts or shot #" className="min-h-[44px] min-w-0 flex-1 bg-transparent text-sm outline-none pointer-fine:sm:min-h-[32px]" />
       </label>
       <div className="flex flex-wrap gap-1" role="group" aria-label="Show by mark">
         {MARK_FILTERS.map((filter) => (
@@ -221,7 +221,7 @@ export default function SceneTakePicker({ open, onClose, projectId, scene, kind,
           {picked.prompt && <p className="line-clamp-2 text-[11px] text-port-text-muted">{picked.prompt}</p>}
           <div className="flex flex-wrap gap-2">
             <button type="button" disabled={busy} onClick={() => place(null)}
-              className="inline-flex min-h-[44px] items-center gap-1 rounded bg-port-accent px-3 text-xs font-medium text-white disabled:opacity-50 sm:min-h-[32px]">
+              className="inline-flex min-h-[44px] items-center gap-1 rounded bg-port-accent px-3 text-xs font-medium text-white disabled:opacity-50 pointer-fine:sm:min-h-[32px]">
               {busy && <Activity size={14} className="animate-spin" />}Use {noun}
             </button>
             {partner && (
@@ -254,7 +254,7 @@ export default function SceneTakePicker({ open, onClose, projectId, scene, kind,
         ? <DeleteConfirm count={badHere.length} noun={itemNoun} working={working} onConfirm={() => remove(badHere)} onCancel={() => setConfirmDelete(null)} />
         : (
           <button type="button" disabled={working} onClick={() => setConfirmDelete('bad')}
-            className="inline-flex min-h-[44px] w-full items-center justify-center gap-1 rounded border border-port-error text-xs text-port-error disabled:opacity-50 sm:min-h-[32px]">
+            className="inline-flex min-h-[44px] w-full items-center justify-center gap-1 rounded border border-port-error text-xs text-port-error disabled:opacity-50 pointer-fine:sm:min-h-[32px]">
             <Trash2 size={14} aria-hidden="true" />Delete {formatCount(badHere.length)} bad
           </button>
         ))}
@@ -307,7 +307,7 @@ export function DeleteConfirm({ count, noun, working, onConfirm, onCancel }) {
     <div className="flex flex-wrap items-center gap-2 rounded border border-port-error/50 p-2 text-xs">
       <span className="min-w-0 flex-1">Delete {count === 1 ? `this ${noun}` : `${formatCount(count)} ${noun}s`} from the media library? This can't be undone.</span>
       <button type="button" disabled={working} onClick={onConfirm}
-        className="inline-flex min-h-[44px] items-center gap-1 rounded bg-port-error px-3 font-medium text-white disabled:opacity-50 sm:min-h-[32px]">
+        className="inline-flex min-h-[44px] items-center gap-1 rounded bg-port-error px-3 font-medium text-white disabled:opacity-50 pointer-fine:sm:min-h-[32px]">
         {working && <Activity size={14} className="animate-spin" />}Yes, delete
       </button>
       <button type="button" disabled={working} onClick={onCancel} className={ACTION}>Keep</button>

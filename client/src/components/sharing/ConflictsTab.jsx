@@ -123,7 +123,7 @@ function ConflictEntry({ entry, onResolved }) {
   return (
     <div className="border border-port-border rounded-lg bg-port-card">
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 p-3">
-        <button type="button" onClick={toggleExpanded} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 min-w-0 basis-full sm:flex-1 min-h-[44px] sm:min-h-0 text-left">
+        <button type="button" onClick={toggleExpanded} className="flex flex-wrap items-center gap-x-2 gap-y-0.5 min-w-0 basis-full sm:flex-1 min-h-[44px] pointer-fine:sm:min-h-0 text-left">
           {expanded ? <ChevronDown size={14} className="text-gray-500 shrink-0" /> : <ChevronRight size={14} className="text-gray-500 shrink-0" />}
           <span className="text-sm text-white truncate">
             {entry.recordKind} <span className="font-mono text-[11px] text-gray-500">{entry.recordId?.slice(0, 14)}</span>
@@ -134,11 +134,11 @@ function ConflictEntry({ entry, onResolved }) {
         </button>
         <div className="flex items-center gap-1.5 shrink-0">
           <button type="button" onClick={() => resolve('restore-all')} disabled={busy}
-            className="inline-flex items-center gap-1 min-h-[44px] sm:min-h-0 px-2 py-1 rounded bg-port-accent hover:bg-port-accent/90 text-white text-[11px]" title="Restore your overwritten version">
+            className="inline-flex items-center gap-1 min-h-[44px] pointer-fine:sm:min-h-0 px-2 py-1 rounded bg-port-accent hover:bg-port-accent/90 text-white text-[11px]" title="Restore your overwritten version">
             <RotateCcw size={12} /> Restore mine
           </button>
           <button type="button" onClick={() => resolve('discard')} disabled={busy}
-            className="min-h-[44px] sm:min-h-0 px-2 py-1 rounded border border-port-border text-gray-400 hover:text-white text-[11px]">
+            className="min-h-[44px] pointer-fine:sm:min-h-0 px-2 py-1 rounded border border-port-border text-gray-400 hover:text-white text-[11px]">
             Discard
           </button>
           <button type="button" onClick={remove} disabled={busy} className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center p-1 text-gray-500 hover:text-port-error" title="Remove entry" aria-label="Remove entry">

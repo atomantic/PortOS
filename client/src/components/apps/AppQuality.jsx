@@ -236,7 +236,7 @@ function CategoryRow({ category, below, runLink }) {
       <td className="col-span-1 sm:table-cell sm:py-1.5 sm:px-2">
         <div className="flex items-center justify-end gap-1">
           <Link to={runLink} aria-label={`Run ${category.label} check`} title="Run this check"
-            className="inline-flex min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 items-center justify-center rounded border border-port-accent/60 bg-port-accent/10 p-1.5 text-port-accent hover:bg-port-accent/25">
+            className="inline-flex min-h-[44px] min-w-[44px] pointer-fine:sm:min-h-0 pointer-fine:sm:min-w-0 items-center justify-center rounded border border-port-accent/60 bg-port-accent/10 p-1.5 text-port-accent hover:bg-port-accent/25">
             <Play size={12} aria-hidden="true" />
           </Link>
           <OverflowMenu label={`${category.label} actions`} items={menuItems} />

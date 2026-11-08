@@ -251,7 +251,7 @@ export default function MediaHistory() {
               key={f.id}
               type="button"
               onClick={() => setFilter(f.id)}
-              className={`min-h-[44px] sm:min-h-0 px-2.5 py-1 rounded-full border ${
+              className={`min-h-[44px] pointer-fine:sm:min-h-0 px-2.5 py-1 rounded-full border ${
                 filter === f.id
                   ? 'bg-port-accent/20 border-port-accent text-port-accent'
                   : 'border-port-border text-gray-400 hover:text-white hover:bg-port-border/50'

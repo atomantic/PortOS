@@ -24,7 +24,7 @@ export default function AutomationBriefFields({ idPrefix, draft, onChange }) {
           <button
             type="button"
             onClick={() => onChange({ tools: allPicked ? [] : [...MUSIC_VIDEO_AUTOMATION_TOOL_IDS] })}
-            className="text-xs text-port-accent min-h-[44px] sm:min-h-0"
+            className="text-xs text-port-accent min-h-[44px] pointer-fine:sm:min-h-0"
           >
             {allPicked ? 'Clear all' : 'Select all'}
           </button>

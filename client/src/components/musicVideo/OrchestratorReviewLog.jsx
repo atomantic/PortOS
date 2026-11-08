@@ -37,7 +37,7 @@ export default function OrchestratorReviewLog({ run }) {
       <ul className="space-y-2">{renderRow(latest)}</ul>
       {earlier.length > 0 && (
         <details>
-          <summary className="cursor-pointer text-xs text-port-accent min-h-[44px] sm:min-h-0 flex items-center">Earlier decisions ({earlier.length})</summary>
+          <summary className="cursor-pointer text-xs text-port-accent min-h-[44px] pointer-fine:sm:min-h-0 flex items-center">Earlier decisions ({earlier.length})</summary>
           <ul className="mt-2 space-y-2">{earlier.map(renderRow)}</ul>
         </details>
       )}

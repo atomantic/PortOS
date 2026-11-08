@@ -102,7 +102,7 @@ export default function ProjectOptionsPanel({
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <select id="mv-setup-strategy" value={policy.strategy}
             onChange={(e) => savePolicy(normalizeMusicVideoProductionPolicy({ strategy: e.target.value }, policy))}
-            className="min-h-[44px] rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm sm:min-h-0">
+            className="min-h-[44px] rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm pointer-fine:sm:min-h-0">
             <option value="legacy">Legacy / manual workflow</option>
             <option value="code-first">Code-first medium planning</option>
           </select>
@@ -113,7 +113,7 @@ export default function ProjectOptionsPanel({
                 value={allowanceText ?? policy.maxGeneratedVideoPercent}
                 onChange={(e) => setAllowanceText(e.target.value)}
                 onBlur={(e) => commitAllowance(e.target.value)}
-                className="min-h-[44px] w-24 rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm sm:min-h-0" />
+                className="min-h-[44px] w-24 rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm pointer-fine:sm:min-h-0" />
               <p className="w-full text-xs text-port-text-muted">Start with code and images. This plans final-edit seconds; it does not change the renderer or enforce generation budgets in manual controls.</p>
             </>
           )}
@@ -154,7 +154,7 @@ export default function ProjectOptionsPanel({
               maxLength={500}
               value={outsideNote}
               onChange={(e) => setOutsideNote(e.target.value)}
-              className="min-h-[44px] min-w-0 flex-1 rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm sm:min-h-0"
+              className="min-h-[44px] min-w-0 flex-1 rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm pointer-fine:sm:min-h-0"
             />
           )}
           <p className="w-full text-xs text-port-text-muted">
@@ -196,7 +196,7 @@ export default function ProjectOptionsPanel({
                 value={draft.castAndSetsCheckin}
                 disabled={briefSaving}
                 onChange={(e) => saveBrief({ castAndSetsCheckin: e.target.value })}
-                className="min-h-[44px] rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm sm:min-h-0"
+                className="min-h-[44px] rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm pointer-fine:sm:min-h-0"
               >
                 <option value="review">Stop for my review</option>
                 <option value="auto">Auto-approve</option>

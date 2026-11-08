@@ -75,7 +75,7 @@ export default function BeatSection({
         )}
         {(beforeSong || canPlayBeforeSong) && (
           <button type="button" role="switch" aria-checked={beforeSong} onClick={() => onUpdate({ beforeSong: !beforeSong })}
-            className={`min-h-[44px] inline-flex items-center rounded border px-2 text-xs sm:min-h-[28px] ${beforeSong ? 'border-port-accent text-port-accent' : 'border-port-border text-gray-400 hover:text-white'}`}>
+            className={`min-h-[44px] inline-flex items-center rounded border px-2 text-xs pointer-fine:sm:min-h-[28px] ${beforeSong ? 'border-port-accent text-port-accent' : 'border-port-border text-gray-400 hover:text-white'}`}>
             Before the song
           </button>
         )}

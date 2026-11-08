@@ -44,8 +44,8 @@ const LAYER_LABELS = { footage: 'Footage', still: 'Still image', card: 'Title ca
 const STILL_MOVE_LABELS = [['hold', 'Hold'], ['push', 'Push in'], ['pan', 'Pan']];
 // #10583: the shared lyric type's zone and style for this shot (composition documents).
 const SHOT_MODE_LABELS = { cutaway: 'Cutaway', performance: 'Performance (lip-sync)', music: 'Performance (music-driven)' };
-const PRIMARY_BUTTON = 'flex items-center gap-1 bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap';
-const SECONDARY_BUTTON = 'flex items-center gap-1 bg-port-bg border border-port-border hover:bg-port-border/40 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap';
+const PRIMARY_BUTTON = 'flex items-center gap-1 bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] pointer-fine:sm:min-h-0 whitespace-nowrap';
+const SECONDARY_BUTTON = 'flex items-center gap-1 bg-port-bg border border-port-border hover:bg-port-border/40 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] pointer-fine:sm:min-h-0 whitespace-nowrap';
 import { buildSceneTimingPresentation } from '../../lib/musicVideoSceneTiming.js';
 import SceneTimingPlan from './SceneTimingPlan.jsx';
 import SceneShotCuts, { SceneCutField, SceneDuration } from './SceneShotCuts.jsx';
@@ -153,7 +153,7 @@ function SceneOrderActions({ index, isLast, manifestOwnsShots, onMove, onDelete 
             onConfirm={() => { setConfirming(false); onDelete(); }} onCancel={() => setConfirming(false)} responsiveTouchTargets />
         ) : (
           <button type="button" onClick={() => setConfirming(true)}
-            className="ml-auto flex min-h-[44px] items-center gap-1 rounded px-2 py-1.5 text-xs text-port-error hover:bg-port-error/15 sm:min-h-0">
+            className="ml-auto flex min-h-[44px] items-center gap-1 rounded px-2 py-1.5 text-xs text-port-error hover:bg-port-error/15 pointer-fine:sm:min-h-0">
             <Trash2 size={12} aria-hidden="true" /> Delete shot
           </button>
         ))}
@@ -368,7 +368,7 @@ export default function SceneCard({
     <div className="space-y-1">
       {scene.beatNeedsReview && <div className="flex flex-wrap items-center gap-2 text-xs text-port-warning">
         <span>Needs its own beat — this prompt was copied from the longer shot.</span>
-        <button type="button" onClick={() => applyPatch({ beatNeedsReview: false })} className="min-h-[44px] rounded border border-port-border px-2 sm:min-h-0">Mark beat ready</button>
+        <button type="button" onClick={() => applyPatch({ beatNeedsReview: false })} className="min-h-[44px] rounded border border-port-border px-2 pointer-fine:sm:min-h-0">Mark beat ready</button>
       </div>}
       <div className="flex items-center gap-1 text-[11px] text-port-text-muted">
         <label htmlFor={fieldId('prompt')}>{layer === 'footage' ? 'Motion prompt' : 'Shot prompt'}</label>
@@ -391,7 +391,7 @@ export default function SceneCard({
       ) : (
         <div className="flex flex-wrap items-center gap-2 text-[11px] text-port-text-muted" data-testid="prompt-own">
           <span>This shot's own prompt, not the panel's</span>
-          <button type="button" onClick={() => { onEditLocal(scene.sceneId, { prompt: '' }); onSave(scene.sceneId, { prompt: '' }); }} className="underline min-h-[44px] sm:min-h-0">Use storyboard direction</button>
+          <button type="button" onClick={() => { onEditLocal(scene.sceneId, { prompt: '' }); onSave(scene.sceneId, { prompt: '' }); }} className="underline min-h-[44px] pointer-fine:sm:min-h-0">Use storyboard direction</button>
         </div>
       ))}
     </div>
@@ -422,7 +422,7 @@ export default function SceneCard({
     : 'not in the prompts';
   const detailsGroup = !codeShot && layer !== 'card' && (
     <ShotEditorGroup title="Shot details" summary={detailsSummary} defaultOpen testId="shot-group-details">
-      <label htmlFor={fieldId('from-sheet')} className="flex items-center gap-1 text-xs min-h-[44px] sm:min-h-0">
+      <label htmlFor={fieldId('from-sheet')} className="flex items-center gap-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0">
         <input id={fieldId('from-sheet')} type="checkbox" checked={fromSheet}
           onChange={(e) => applyPatch({ shotSheet: normalizeShotSheet({ ...scene.shotSheet, promptFromSheet: e.target.checked }) })} />
         Use these details in the prompts
@@ -455,19 +455,19 @@ export default function SceneCard({
             if (cutMoves[key]) return <SceneCutField key={key} label={labelText} value={scene[key]} onCommit={(sec) => cutMoves[key](scene.sceneId, sec)} />;
             return (
               <label key={key} className="flex items-center gap-1">{labelText}
-                <input type="number" min="0" step="0.1" value={scene[key] ?? ''} className="w-20 bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0"
+                <input type="number" min="0" step="0.1" value={scene[key] ?? ''} className="w-20 bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] pointer-fine:sm:min-h-0"
                   onChange={(e) => onEditLocal(scene.sceneId, { [key]: toValue(e.target.value) })}
                   onBlur={(e) => onSave(scene.sceneId, { [key]: toValue(e.target.value) })} />
                 {typeof scene[key] === 'number' && <span className="tabular-nums text-port-text-muted">fr {frameAt(scene[key])}</span>}
               </label>
             );
           })}
-          <label className="flex items-center gap-1 min-h-[44px] sm:min-h-0">
+          <label className="flex items-center gap-1 min-h-[44px] pointer-fine:sm:min-h-0">
             <input type="checkbox" checked={!!scene.beatAligned}
               onChange={(e) => { onEditLocal(scene.sceneId, { beatAligned: e.target.checked }); onSave(scene.sceneId, { beatAligned: e.target.checked }); }} />
             Beat-aligned
           </label>
-          <label className="flex items-center gap-1 min-h-[44px] sm:min-h-0" title="Repeat the generated clip to fill a span longer than the clip. Off: the shot must be covered by its clip (trim, continue, or replace it).">
+          <label className="flex items-center gap-1 min-h-[44px] pointer-fine:sm:min-h-0" title="Repeat the generated clip to fill a span longer than the clip. Off: the shot must be covered by its clip (trim, continue, or replace it).">
             <input type="checkbox" checked={loops} disabled={performance || clipReversed(scene)} onChange={(e) => applyPatch({ loop: e.target.checked })} />
             Loop clip
           </label>
@@ -505,7 +505,7 @@ export default function SceneCard({
         <div className="flex flex-wrap gap-2 items-center text-xs">
           <label htmlFor={fieldId('layer')}>Layer</label>
           <select id={fieldId('layer')} value={layer} onChange={(e) => applyPatch({ visualLayer: e.target.value })}
-            className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0">
+            className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] pointer-fine:sm:min-h-0">
             {MUSIC_VIDEO_VISUAL_LAYERS.map((value) => <option key={value} value={value}>{LAYER_LABELS[value]}</option>)}
           </select>
           {/* A performance is sung footage — only the footage layer offers it. */}
@@ -517,7 +517,7 @@ export default function SceneCard({
                   : e.target.value === 'music' ? { shotMode: 'performance', performanceStyle: 'music' }
                     // Clear the style only when one is stored, so a plain lip-sync switch stays one field.
                     : { shotMode: 'performance', ...(scene.performanceStyle ? { performanceStyle: null } : {}) })}
-                className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0"
+                className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] pointer-fine:sm:min-h-0"
                 title="Cutaway: any video lane animates the frame under the song. Lip-sync: a singer's mouth follows the song. Music-driven: the song slice drives the whole frame's motion (a drummer on the beat). Both need a source-audio provider.">
                 {Object.entries(SHOT_MODE_LABELS).map(([value, text]) => <option key={value} value={value}>{text}</option>)}
               </select>
@@ -527,7 +527,7 @@ export default function SceneCard({
                   <label htmlFor={fieldId('coverage')}>Coverage</label>
                   <select id={fieldId('coverage')} value={scene.coverage === 'sequence' ? 'sequence' : 'per-shot'}
                     onChange={(e) => applyPatch({ coverage: e.target.value })}
-                    className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0"
+                    className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] pointer-fine:sm:min-h-0"
                     title="Per shot: one clip per shot. Sequence: neighbouring cutaways that share a set and protagonist render in one timed request, cut back onto each shot.">
                     <option value="per-shot">Per shot</option>
                     <option value="sequence">Sequence</option>
@@ -541,7 +541,7 @@ export default function SceneCard({
               <label htmlFor={fieldId('move')}>Move</label>
               <select id={fieldId('move')} value={scene.stillMove || 'hold'} onChange={(e) => applyPatch({ stillMove: e.target.value })}
                 disabled={documentComposition && !!scene.camera?.move} title={documentComposition && scene.camera?.move ? 'The planned camera move drives this still.' : undefined}
-                className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0 disabled:opacity-50">
+                className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50">
                 {STILL_MOVE_LABELS.map(([value, text]) => <option key={value} value={value}>{text}</option>)}
               </select>
             </>
@@ -553,12 +553,12 @@ export default function SceneCard({
                 placeholder="Title shown on the card"
                 onChange={(e) => onEditLocal(scene.sceneId, { cardText: e.target.value })}
                 onBlur={(e) => onSave(scene.sceneId, { cardText: e.target.value.trim() || null })}
-                className="min-w-0 flex-1 basis-40 bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0" />
+                className="min-w-0 flex-1 basis-40 bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] pointer-fine:sm:min-h-0" />
               <label htmlFor={fieldId('card-color')}>Background</label>
               <input id={fieldId('card-color')} type="color" value={scene.cardColor || '#000000'}
                 onChange={(e) => onEditLocal(scene.sceneId, { cardColor: e.target.value })}
                 onBlur={(e) => onSave(scene.sceneId, { cardColor: e.target.value })}
-                className="h-8 w-10 min-h-[44px] sm:min-h-0 bg-port-bg border border-port-border rounded" />
+                className="h-8 w-10 min-h-[44px] pointer-fine:sm:min-h-0 bg-port-bg border border-port-border rounded" />
             </>
           )}
         </div>
@@ -603,10 +603,10 @@ export default function SceneCard({
         </div>
         {stepShot && (
           <>
-            <button type="button" onClick={stepShot.prev || undefined} disabled={!stepShot.prev} aria-label="Previous shot" title="Previous shot" className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-lg border border-port-border text-port-text hover:bg-port-border disabled:opacity-40 sm:min-h-[36px] sm:min-w-[36px]">
+            <button type="button" onClick={stepShot.prev || undefined} disabled={!stepShot.prev} aria-label="Previous shot" title="Previous shot" className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-lg border border-port-border text-port-text hover:bg-port-border disabled:opacity-40 pointer-fine:sm:min-h-[36px] pointer-fine:sm:min-w-[36px]">
               <ChevronLeft size={16} aria-hidden="true" />
             </button>
-            <button type="button" onClick={stepShot.next || undefined} disabled={!stepShot.next} aria-label="Next shot" title="Next shot" className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-lg border border-port-border text-port-text hover:bg-port-border disabled:opacity-40 sm:min-h-[36px] sm:min-w-[36px]">
+            <button type="button" onClick={stepShot.next || undefined} disabled={!stepShot.next} aria-label="Next shot" title="Next shot" className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-lg border border-port-border text-port-text hover:bg-port-border disabled:opacity-40 pointer-fine:sm:min-h-[36px] pointer-fine:sm:min-w-[36px]">
               <ChevronRight size={16} aria-hidden="true" />
             </button>
           </>
@@ -858,7 +858,7 @@ export default function SceneCard({
           onClick={() => (failure.lane === 'video' ? generateVideo() : onGenerateFrame?.(scene))}
           disabled={failure.lane === 'video' && renderBlocked}
           title={failure.lane === 'video' ? videoRefusal || undefined : undefined}
-          className="inline-flex min-h-[44px] shrink-0 items-center px-1 font-medium underline disabled:opacity-50 sm:min-h-0">
+          className="inline-flex min-h-[44px] shrink-0 items-center px-1 font-medium underline disabled:opacity-50 pointer-fine:sm:min-h-0">
           Retry
         </button>
       </div>

@@ -55,7 +55,7 @@ export default function StageChecklist({ items, onAction, onRevert, headerAnchor
                     <li key={shot.sceneId} className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs">
                       {onAction ? (
                         <button type="button" onClick={() => onAction({ label: shot.label, editShot: shot.sceneId })}
-                          className="min-h-[44px] shrink-0 rounded border border-port-border px-2 py-1 text-port-accent sm:min-h-0">
+                          className="min-h-[44px] shrink-0 rounded border border-port-border px-2 py-1 text-port-accent pointer-fine:sm:min-h-0">
                           {shot.label}
                         </button>
                       ) : <strong className="shrink-0">{shot.label}</strong>}
@@ -73,7 +73,7 @@ export default function StageChecklist({ items, onAction, onRevert, headerAnchor
                       {onAction && (
                         <button type="button" disabled={busy} aria-label={`Mark resolved: ${note.target}`}
                           onClick={() => onAction({ label: 'Mark resolved', run: 'resolve-feedback', feedbackId: note.id })}
-                          className="min-h-[44px] shrink-0 rounded border border-port-border px-2 py-1 text-xs text-port-accent disabled:opacity-50 sm:min-h-0">
+                          className="min-h-[44px] shrink-0 rounded border border-port-border px-2 py-1 text-xs text-port-accent disabled:opacity-50 pointer-fine:sm:min-h-0">
                           Mark resolved
                         </button>
                       )}
@@ -99,7 +99,7 @@ export default function StageChecklist({ items, onAction, onRevert, headerAnchor
                     onClick={() => onAction(action)}
                     disabled={action.disabled || (!!action.run && busy)}
                     title={action.reason}
-                    className={`flex min-h-[44px] shrink-0 items-center gap-1 rounded px-2 py-1 text-xs disabled:opacity-50 sm:min-h-0 ${action === item.action
+                    className={`flex min-h-[44px] shrink-0 items-center gap-1 rounded px-2 py-1 text-xs disabled:opacity-50 pointer-fine:sm:min-h-0 ${action === item.action
                       ? (action.run ? 'bg-port-accent font-medium text-white' : 'border border-port-border text-port-accent')
                       : 'text-port-text-muted hover:text-port-accent'}`}
                   >

@@ -6,7 +6,7 @@ import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
 import useMounted from '../../hooks/useMounted.js';
 import { getMusicVideoCastAndSets } from '../../services/apiMusicVideo.js';
 
-const buttonClass = 'flex min-h-[44px] items-center gap-1 rounded border border-port-border px-2 py-1 text-xs sm:min-h-0 disabled:opacity-50';
+const buttonClass = 'flex min-h-[44px] items-center gap-1 rounded border border-port-border px-2 py-1 text-xs pointer-fine:sm:min-h-0 disabled:opacity-50';
 const fieldClass = 'w-full min-w-0 rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm';
 
 const PROTAGONIST_FIELDS = [['name', 'Name'], ['description', 'Who they are'], ['height', 'Height'], ['face', 'Face'], ['hair', 'Hair'], ['signature', 'Signature detail'], ['gesture', 'Gesture']];
