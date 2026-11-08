@@ -728,6 +728,35 @@ describe('MiniMax H3 MLX hash-pinned lock', () => {
   });
 });
 
+describe('Wan 2.2 CUDA hash-pinned installation', () => {
+  const section = source.slice(source.indexOf('INSTALL_WAN22_CUDA="${'), source.indexOf('INSTALL_MUSICGEN="${'));
+  const direct = readFileSync(join(REPO_ROOT, 'scripts', 'requirements-wan22-cuda.txt'), 'utf8')
+    .split(/\r?\n/).filter((line) => /^[\w.-]+==/.test(line));
+
+  it.each(['windows', 'linux'])('pins and hashes the entire %s runtime, including the CUDA torch stack', (target) => {
+    const lock = readFileSync(join(REPO_ROOT, 'scripts', `requirements-wan22-cuda-${target}.lock.txt`), 'utf8');
+    const requirements = lock.split(/\r?\n/).filter((line) => /^\w/.test(line));
+    const blocks = lock.match(/^[\w.-]+==[^\n]+\n(?:[ \t]+[^\n]*\n?)*/gm) ?? [];
+    expect(blocks.length).toBe(requirements.length);
+    for (const block of blocks) expect(block).toMatch(/--hash=sha256:[0-9a-f]{64}/);
+    const pins = requirements.map((line) => line.replace(/\s*\\$/, ''));
+    for (const pin of direct) expect(pins).toContain(pin);
+    expect(pins.find((pin) => pin.startsWith('torch=='))).toMatch(/\+cu126$/);
+    expect(pins.find((pin) => pin.startsWith('torchvision=='))).toMatch(/\+cu126$/);
+    expect(lock.includes('nvidia-cuda-runtime-cu12==')).toBe(target === 'linux');
+  });
+
+  it('uses only a host-selected hash lock for Install and Repair', () => {
+    expect(section).toContain('requirements-wan22-cuda-windows.lock.txt');
+    expect(section).toContain('requirements-wan22-cuda-linux.lock.txt');
+    expect(section).toContain('pip sync --require-hashes --only-binary :all: --index-strategy unsafe-best-match --python "$WAN22_CUDA_PY" "$WAN22_CUDA_LOCK"');
+    expect(section).not.toMatch(/pip install|--upgrade|requirements-wan22-cuda\.txt/);
+    expect(section).toContain('uv venv --managed-python --python 3.11');
+    expect(section).toContain('uv venv --clear --managed-python --python 3.11');
+    expect(section).toContain("(Path(sys.base_prefix) / 'conda-meta').is_dir()");
+  });
+});
+
 describe.each([
   { runtime: 'MusicGen (MLX)', lock: 'requirements-musicgen-mlx.lock.txt', from: 'INSTALL_MUSICGEN" == "1"', to: 'INSTALL_AUDIOLDM2="${' },
   { runtime: 'MiniMax Music 3 (MLX)', lock: 'requirements-minimax-music3-mlx.lock.txt', from: 'INSTALL_MINIMAX_MUSIC3_MLX" == "1"', to: 'INSTALL_MUSCRIPTOR="${' },

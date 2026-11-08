@@ -1,9 +1,11 @@
 import { EventEmitter } from 'node:events';
-import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { pinPlatform } from '../../lib/testHelper.js';
+import { pinPlatform, resolveTestPython } from '../../lib/testHelper.js';
 
 const runtimeMocks = vi.hoisted(() => ({
   existsSync: vi.fn(() => true),
@@ -76,6 +78,68 @@ describe('retired runtime filtering', () => {
   it('does not advertise legacy Hunyuan support to the video UI', () => {
     expect(BYOV_RUNTIME_INFO).not.toHaveProperty('hunyuan');
     expect(BYOV_VIDEO_RUNTIMES.has('hunyuan')).toBe(false);
+  });
+});
+
+describe('Wan 2.2 CUDA locked currency', () => {
+  const python = resolveTestPython();
+
+  it.skipIf(!python)('checks transitive metadata, missing packages, Python minor and Conda before declaring a runtime current', () => {
+    const root = mkdtempSync(join(tmpdir(), 'portos-cuda-currency-'));
+    try {
+      const lock = join(root, 'runtime.lock.txt');
+      writeFileSync(lock, [
+        '--index-url https://pypi.org/simple',
+        'portos-currency-direct==1.0 \\',
+        `    --hash=sha256:${'0'.repeat(64)}`,
+        '    # via runtime',
+        'portos-currency-transitive==2.0 \\',
+        `    --hash=sha256:${'1'.repeat(64)}`,
+        '',
+      ].join('\n'));
+      const direct = join(root, 'portos_currency_direct-1.0.dist-info');
+      const transitive = join(root, 'portos_currency_transitive-2.0.dist-info');
+      mkdirSync(direct);
+      mkdirSync(transitive);
+      writeFileSync(join(direct, 'METADATA'), 'Name: portos-currency-direct\nVersion: 1.0\n');
+      const metadata = join(transitive, 'METADATA');
+      writeFileSync(metadata, 'Name: portos-currency-transitive\nVersion: 2.0\n');
+      const probe = (version = '3.11', base = root) => spawnSync(python, ['-c', `
+import importlib.metadata, re, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[2])
+sys.version_info = tuple(map(int, sys.argv[3].split('.')))
+sys.base_prefix = sys.argv[4]
+${BYOV_RUNTIME_INFO.wan22_cuda.currencyProbeArgs[1]}`, lock, root, version, base], { encoding: 'utf8', timeout: 10000 });
+
+      expect(probe().status).toBe(0);
+      writeFileSync(metadata, 'Name: portos-currency-transitive\nVersion: 1.0\n');
+      expect(probe().status).toBe(78);
+      rmSync(transitive, { recursive: true });
+      expect(probe().status).toBe(78);
+      mkdirSync(transitive);
+      writeFileSync(metadata, 'Name: portos-currency-transitive\nVersion: 2.0\n');
+      expect(probe('3.10').status).toBe(78);
+      const conda = join(root, 'conda-base');
+      mkdirSync(join(conda, 'conda-meta'), { recursive: true });
+      expect(probe('3.11', conda).status).toBe(78);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it('offers upgrade for a stale lock even after a successful readiness result was cached', async () => {
+    runtimeMocks.spawn.mockImplementation(() => exitChild(0));
+    await expect(isByovRuntimeReady('wan22_cuda')).resolves.toBe(true);
+    const logs = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      runtimeMocks.spawn.mockImplementation(() => exitChild(78));
+      const current = await captureProbeLogs(() => isByovRuntimeCurrent('wan22_cuda'));
+      expect(current).toEqual({ result: false, lines: [] });
+      await expect(isByovRuntimeReady('wan22_cuda')).resolves.toBe(false);
+      expect(logs).toHaveBeenCalledWith(expect.stringContaining('needs a dependency upgrade'));
+      expect(runtimeMocks.spawn.mock.calls.at(-1)[1].at(-1)).toMatch(
+        /requirements-wan22-cuda-(windows|linux)\.lock\.txt$/,
+      );
+    } finally { logs.mockRestore(); }
   });
 });
 
