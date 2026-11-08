@@ -27,9 +27,9 @@ describe('greyboxPrompt', () => {
 });
 
 describe('greyboxContractInstructions', () => {
-  // Uniquely catches the street infrastructure rules dropping out of what a drafting model reads (#15328).
-  it('tells a drafting model the real street infrastructure rules and their zones', () => {
+  // Uniquely catches the real-world logic check and the zones the plate prompt reads dropping out of what a drafting model reads (#15328).
+  it('asks a drafting model to build the place as it really works, check its work, and name its infrastructure zones', () => {
     const text = greyboxContractInstructions();
-    for (const rule of [/ONE line along one side of the street/, /never zig-zag/, /never to the middle of a pole/, /never facing the houses/, /Nothing floats/, /Decide sidewalks on purpose/, /driveway/, /front door/, /zone "derelict"/]) expect(text).toMatch(rule);
+    for (const rule of [/as it would really be built/, /check your scene/, /"pole", "wire", "drop", "lamp", "road", "sidewalk"/, /"No sidewalks"/, /"derelict"/]) expect(text).toMatch(rule);
   });
 });

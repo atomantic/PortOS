@@ -48,9 +48,9 @@ describe('music video greybox selection', () => {
     const greybox = await loadMusicVideoGreybox(project, scene, d);
     const lines = greybox.promptAdditions.filter((item) => item.id.startsWith('greybox-street-')).map((item) => item.text);
     expect(lines).toHaveLength(3);
-    expect(lines[0]).toMatch(/^Street power: 2 wooden utility poles in one line on the right of the frame, .*service drop .*hang from those poles/);
+    expect(lines[0]).toBe('Street power: 2 utility poles in one line on the right of the frame, exactly where the greybox shows them, with their wires, service drops to the houses and pole-mounted streetlights; no extra poles, lamps or wires.');
     expect(lines[1]).toMatch(/no sidewalks/);
-    expect(lines[2]).toBe('Derelict: Derelict house 4. Only this looks abandoned (boarded or broken windows, overgrown yard); every other building is lived-in and kept up.');
+    expect(lines[2]).toBe('Derelict: Derelict house 4. Only this looks abandoned; every other building is lived-in.');
     expect(musicVideoFrameModelInput(project, scene, { greybox }).prompt).toContain(lines[0]);
   });
 

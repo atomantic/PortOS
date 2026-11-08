@@ -35,9 +35,9 @@ const zoneKey = (id) => String(id || '').toLowerCase().replace(/s$/, '');
 
 /**
  * Plain-language street facts read from a greybox's infrastructure zones
- * (`pole`, `wire`, `drop`, `lamp`, `road`, `sidewalk`, `driveway`, `door`, `derelict`), so a painter
- * keeps one pole line, its wires and lamps, the stated sidewalks and only the
- * marked derelict houses (#15327, #15328). With `shot`, says which side of the
+ * (`pole`, `wire`, `drop`, `lamp`, `road`, `sidewalk`, `derelict`), so a painter
+ * keeps the modeled pole line, the stated sidewalks and only the marked
+ * derelict houses (#15327, #15328). With `shot`, says which side of the
  * frame the pole line is on.
  */
 export function greyboxInfrastructurePromptLines(scene, shot = null) {
@@ -56,15 +56,13 @@ export function greyboxInfrastructurePromptLines(scene, shot = null) {
     }
     const drops = parts('drop').length > 0;
     const lamps = parts('lamp').length > 0;
-    lines.push(`Street power: ${poles.length === 1 ? 'one wooden utility pole' : `${poles.length} wooden utility poles in one line`}${side}, wires strung pole to pole along the street${drops ? ', and a thin service drop from a pole top or crossarm to a mast on the roof edge of each house' : ''}${lamps ? '; the streetlights hang from those poles on arms reaching out over the road' : ''}. Keep exactly these poles, wires and lamps where the greybox shows them: no extra poles or lamp posts, no lamp facing the houses, no wire ending in mid-air or at the middle of a pole, and the only wires crossing the road are service drops.`);
+    lines.push(`Street power: ${poles.length === 1 ? 'one utility pole' : `${poles.length} utility poles in one line`}${side}, exactly where the greybox shows them, with their wires${drops ? ', service drops to the houses' : ''}${lamps ? ' and pole-mounted streetlights' : ''}; no extra poles, lamps or wires.`);
   } else if (parts('lamp').length) {
-    lines.push('Streetlights stand only where the greybox shows them, each lamp head reaching out over the road, never facing the houses.');
+    lines.push('Streetlights only where the greybox shows them.');
   }
-  if (parts('sidewalk').length) lines.push('Sidewalks only where the greybox shows them, each with its curb and grass strip.');
+  if (parts('sidewalk').length) lines.push('Sidewalks only where the greybox shows them.');
   else if (parts('road').length) lines.push('This street has no sidewalks: the lawns or shoulders run to the road edge.');
-  if (parts('door').length) lines.push('Houses face the street: each front door, porch or stoop and front walk is on the side the greybox shows it.');
-  if (parts('driveway').length) lines.push('Each house keeps its driveway to the road where the greybox shows it, with a curb cut where there is a curb.');
   const derelict = [...new Set(parts('derelict').map((part) => part.label || part.id))];
-  if (derelict.length) lines.push(`Derelict: ${derelict.join(', ')}. Only ${derelict.length === 1 ? 'this looks' : 'these look'} abandoned (boarded or broken windows, overgrown yard); every other building is lived-in and kept up.`);
+  if (derelict.length) lines.push(`Derelict: ${derelict.join(', ')}. Only ${derelict.length === 1 ? 'this looks' : 'these look'} abandoned; every other building is lived-in.`);
   return lines;
 }
