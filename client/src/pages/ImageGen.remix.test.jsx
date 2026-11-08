@@ -151,4 +151,38 @@ describe('ImageGen cross-page Remix handoff', () => {
     expect(screen.getByLabelText('Negative Prompt')).toHaveValue('');
     expect(state.loraPickerProps.selected).toEqual([]);
   });
+
+  it('restores the init and reference images the render used', async () => {
+    const flux2 = imageGenModel('flux2-example', { name: 'Example FLUX.2', runner: 'flux2' });
+    state.models = [flux2];
+    state.getGalleryImages.mockResolvedValue([{
+      ...RECORD,
+      modelId: flux2.id,
+      initImageFilename: 'init-0a1b.png',
+      initImageStrength: 0.65,
+      referenceImageFilenames: ['example-ref.png', 'ref-2c3d.png'],
+      referenceImageStrengths: [0.5, 0.8],
+    }]);
+    // The gallery holds the named reference; staged uploads live in image-refs.
+    const served = new Set(['/data/images/example-ref.png', '/data/image-refs/init-0a1b.png', '/data/image-refs/ref-2c3d.png']);
+    const fetchMock = vi.fn(async (url) => (served.has(url)
+      ? { ok: true, blob: async () => new Blob(['x'], { type: 'image/png' }) }
+      : { ok: false, status: 404 }));
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      await renderImageGenPage('/media/image?remix=' + encodeURIComponent(RECORD.filename));
+
+      await waitFor(() => expect(state.initImagePickerProps?.initImage).toMatchObject({
+        source: 'upload', name: 'init-0a1b.png', previewUrl: '/data/image-refs/init-0a1b.png',
+      }));
+      expect(state.initImagePickerProps.initImage.file).toBeInstanceOf(File);
+      await waitFor(() => expect(state.referenceImagePickerProps?.referenceImages.slice(0, 2)).toMatchObject([
+        { previewUrl: '/data/images/example-ref.png', strength: 0.5 },
+        { previewUrl: '/data/image-refs/ref-2c3d.png', strength: 0.8 },
+      ]));
+      expect(state.referenceImagePickerProps.referenceImages[0].file).toBeInstanceOf(File);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

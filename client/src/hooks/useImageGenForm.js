@@ -34,6 +34,25 @@ import {
 const REFERENCE_SLOT_COUNT = 16;
 const EMPTY_REF_SLOT = { file: null, previewUrl: null, strength: 1.0 };
 const IMAGE_GEN_RESTORE_PARAM_KEYS = ['prompt', 'negativePrompt', 'modelId', 'width', 'height', 'seed', 'steps', 'guidance', 'quantize'];
+async function fetchImageFile(url, filename) {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const blob = await response.blob();
+  return new File([blob], filename, { type: blob.type || 'image/png' });
+}
+
+// A render's sidecar names its inputs by basename: a gallery pick stays in the
+// gallery, an upload was staged into image-refs. Resolves null when neither
+// still holds the file.
+async function fetchRenderInput(filename) {
+  for (const dir of ['images', 'image-refs']) {
+    const url = `/data/${dir}/${encodeURIComponent(filename)}`;
+    const file = await fetchImageFile(url, filename).catch(() => null);
+    if (file) return { file, url, inGallery: dir === 'images' };
+  }
+  return null;
+}
+
 const IMAGE_GEN_HANDOFF_PARAM_KEYS = ['remix', ...IMAGE_GEN_RESTORE_PARAM_KEYS, 'initImageFile'];
 
 const revokeIfBlob = (url) => {
@@ -329,7 +348,45 @@ export function useImageGenForm({ searchParams, setSearchParams, backend, handof
     return dimensions;
   };
 
-  const handleRemix = useCallback((item, { applyModel = true } = {}) => {
+  // Remix restores the render's init and reference images too, so the same
+  // inputs can be re-run on another model. A render without inputs clears them.
+  const restoreRemixInputs = useCallback(async (image) => {
+    const initName = typeof image.initImageFilename === 'string' ? image.initImageFilename : null;
+    const refNames = (Array.isArray(image.referenceImageFilenames) ? image.referenceImageFilenames : [])
+      .filter((name) => typeof name === 'string' && name).slice(0, REFERENCE_SLOT_COUNT);
+    const initPick = ++pickSeqRef.current.init;
+    const refPicks = Array.from({ length: REFERENCE_SLOT_COUNT }, (_, index) => {
+      pickSeqRef.current.refs[index] = (pickSeqRef.current.refs[index] ?? 0) + 1;
+      return pickSeqRef.current.refs[index];
+    });
+    revokeIfBlob(initImagePreviewRef.current);
+    setInitImage({ source: null, file: null, name: null, previewUrl: null });
+    setReferenceImages((previous) => {
+      previous.forEach((slot) => revokeIfBlob(slot.previewUrl));
+      return previous.map(() => ({ ...EMPTY_REF_SLOT }));
+    });
+    if (!initName && !refNames.length) return;
+    const [initInput, ...refInputs] = await Promise.all([initName ? fetchRenderInput(initName) : null, ...refNames.map(fetchRenderInput)]);
+    if (!mountedRef.current) return;
+    const missing = [initName && !initInput ? initName : null, ...refNames.filter((_, index) => !refInputs[index])].filter(Boolean);
+    if (missing.length) toast.error(`Could not restore ${missing.length === 1 ? 'input image' : 'input images'}: ${missing.join(', ')}`);
+    if (initInput && initPick === pickSeqRef.current.init) {
+      setInitImage(initInput.inGallery
+        ? { source: 'gallery', file: null, name: initName, previewUrl: initInput.url }
+        : { source: 'upload', file: initInput.file, name: initName, previewUrl: initInput.url });
+      if (typeof image.initImageStrength === 'number') setInitImageStrength(image.initImageStrength);
+      wantI2iModeRef.current = true;
+    }
+    const strengths = Array.isArray(image.referenceImageStrengths) ? image.referenceImageStrengths : [];
+    const restoredRefs = refInputs.map((input, index) => (input
+      ? { file: input.file, previewUrl: input.url, strength: typeof strengths[index] === 'number' ? strengths[index] : 1.0 }
+      : null)).filter(Boolean);
+    setReferenceImages((previous) => previous.map((slot, index) => (
+      index < restoredRefs.length && refPicks[index] === pickSeqRef.current.refs[index] ? restoredRefs[index] : slot
+    )));
+  }, [mountedRef]);
+
+  const handleRemix = useCallback((item, { applyModel = true, restoreInputs = true } = {}) => {
     const image = item?.raw || item;
     setStylePreset(null);
     setSelectedUniverse(null);
@@ -350,8 +407,9 @@ export function useImageGenForm({ searchParams, setSearchParams, backend, handof
       return match ? { filename: match.filename, name: match.name, scale: image.loraScales?.[index] ?? 1.0 } : null;
     }).filter(Boolean);
     setSelectedLoras(restored);
+    if (restoreInputs) restoreRemixInputs(image);
     window.scrollTo({ top: 0, behavior: 'smooth' });
-  }, [availableLoras, models]);
+  }, [availableLoras, models, restoreRemixInputs]);
 
   const handlePickInitImage = async (event) => {
     const raw = event.target.files?.[0];
@@ -381,7 +439,7 @@ export function useImageGenForm({ searchParams, setSearchParams, backend, handof
     if (!item?.filename) return;
     pickSeqRef.current.init += 1;
     if (item.raw) {
-      handleRemix(item.raw, { applyModel: false });
+      handleRemix(item.raw, { applyModel: false, restoreInputs: false });
       setPrompt(item.raw.prompt || '');
     }
     revokeIfBlob(initImage.previewUrl);
@@ -423,19 +481,12 @@ export function useImageGenForm({ searchParams, setSearchParams, backend, handof
     });
   };
 
-  const galleryImageToFile = async (filename) => {
-    const response = await fetch(`/data/images/${encodeURIComponent(filename)}`);
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const blob = await response.blob();
-    return new File([blob], filename, { type: blob.type || 'image/png' });
-  };
-
   const handlePickGalleryReferenceImage = async (slotIndex, item) => {
     if (!item?.filename) return;
     const sequences = pickSeqRef.current.refs;
     const myPick = sequences[slotIndex] = (sequences[slotIndex] ?? 0) + 1;
     const isCurrent = () => mountedRef.current && myPick === pickSeqRef.current.refs[slotIndex];
-    const file = await galleryImageToFile(item.filename).catch((error) => {
+    const file = await fetchImageFile(`/data/images/${encodeURIComponent(item.filename)}`, item.filename).catch((error) => {
       if (isCurrent()) toast.error(`Failed to load reference image: ${error.message}`);
       return null;
     });

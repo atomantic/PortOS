@@ -535,7 +535,7 @@ export function useImageGenPageRuntime() {
   const handleSendToImage = useCallback((item) => {
     const image = item?.raw || item;
     if (!image?.filename) return;
-    actions.handleRemix(image, { applyModel: false });
+    actions.handleRemix(image, { applyModel: false, restoreInputs: false });
     fields.setPrompt(image.prompt || '');
     actions.ensureI2iCapableMode();
     actions.setGalleryInitImage(image.filename);
