@@ -192,7 +192,9 @@ export async function updateClaimOwnership({ agentId, action, branch }) {
       if (patch.refused) return { [done]: false, reason: patch.refused };
       const updated = { ...agent, metadata: { ...agent.metadata, ...patch } };
       if (action === 'bind') {
-        const { captureCheckoutSeeds } = await import('./completedCheckoutEvidence.js');
+        const { captureCheckoutSeeds, supersedeReleasedCheckoutSeed } = await import('./completedCheckoutEvidence.js');
+        // Judged on the pre-bind record: the bind patch drops the release mark.
+        Object.assign(updated.metadata, await supersedeReleasedCheckoutSeed(agent, branch));
         try { updated.metadata.checkoutSeeds = await captureCheckoutSeeds(updated); }
         catch { return { [done]: false, reason: 'checkout-seed-unavailable' }; }
       }

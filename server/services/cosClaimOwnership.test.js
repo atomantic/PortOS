@@ -123,6 +123,59 @@ describe('updateClaimOwnership', () => {
     } finally { await rm(scratch, { recursive: true, force: true, maxRetries: 3 }); }
   });
 
+  it('re-cuts a released branch only after its seeded checkout is retired, keeping the first generation (#15463)', async () => {
+    const { mkdtemp, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { materializeGitRepo } = await import('../lib/gitTestRepo.js');
+    const { execGit } = await import('../lib/execGit.js');
+    const scratch = await mkdtemp(join(tmpdir(), 'portos-claim-recut-'));
+    try {
+      const repo = join(scratch, 'repo');
+      const checkout = join(scratch, 'claim');
+      const branch = 'claim/issue-7';
+      await materializeGitRepo(repo);
+      store.state.agents['agent-epicrun'] = { id: 'agent-epicrun', status: 'running',
+        startedAt: new Date().toISOString(), metadata: { sourceWorkspace: repo, workspacePath: repo,
+          claimPicksOwnBranch: true, claimBranches: [] } };
+      const meta = () => store.state.agents['agent-epicrun'].metadata;
+      const bind = () => updateClaimOwnership({ agentId: 'agent-epicrun', action: 'bind', branch });
+      const release = () => updateClaimOwnership({ agentId: 'agent-epicrun', action: 'release', branch });
+      const cut = () => execGit(['worktree', 'add', '-b', branch, checkout, 'main'], repo);
+      const retire = async () => {
+        await execGit(['worktree', 'remove', '--force', checkout], repo);
+        await execGit(['branch', '-D', branch], repo);
+      };
+      expect(await bind()).toEqual({ bound: true, branch });
+      await cut();
+      expect(await bind()).toEqual({ bound: true, branch });
+      const [first] = meta().checkoutSeeds;
+
+      // Released while its checkout still exists: a re-cut is a replacement.
+      expect(await release()).toEqual({ released: true, branch });
+      expect(await bind()).toEqual({ bound: true, branch });
+      expect(meta().checkoutSeeds).toEqual([first]);
+      await retire();
+      await cut();
+      expect(await bind()).toEqual({ bound: false, reason: 'checkout-seed-unavailable' });
+      expect(meta().checkoutSeeds).toEqual([first]);
+      expect(meta().supersededCheckoutSeeds).toBeUndefined();
+
+      // Delivered, retired, then released: the next bind supersedes it.
+      await retire();
+      expect(await release()).toEqual({ released: true, branch });
+      expect(await bind()).toEqual({ bound: true, branch });
+      expect(meta().checkoutSeeds).toEqual([]);
+      expect(meta().supersededCheckoutSeeds).toEqual([{ ...first, supersededAt: expect.any(String) }]);
+      await cut();
+      expect(await bind()).toEqual({ bound: true, branch });
+      const [second] = meta().checkoutSeeds;
+      expect(second).toMatchObject({ branch, path: first.path });
+      expect(second.incarnation).not.toEqual(first.incarnation);
+      expect(meta().supersededCheckoutSeeds).toEqual([{ ...first, supersededAt: expect.any(String) }]);
+    } finally { await rm(scratch, { recursive: true, force: true, maxRetries: 3 }); }
+  });
+
   it('persists the bound child branch on the run record and settles its selection', async () => {
     expect(await updateClaimOwnership({ agentId: 'agent-epicrun', action: 'bind', branch: 'claim/issue-101' }))
       .toEqual({ bound: true, branch: 'claim/issue-101' });
