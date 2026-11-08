@@ -21,7 +21,6 @@
 #   INSTALL_MUSICGEN '1' to bootstrap a venv at ~/.portos/venv-musicgen + clone ml-explore/mlx-examples to ~/.portos/mlx-examples for local MusicGen (MLX) background-music generation (pipeline audio stage). Default: 0; opt in with INSTALL_MUSICGEN=1 (macOS / Apple Silicon only).
 #   MLX_EXAMPLES_PIN  commit SHA of ml-explore/mlx-examples to check out for MusicGen (default: main).
 #   INSTALL_MINIMAX_MUSIC3_MLX '1' to bootstrap a separate venv at ~/.portos/venv-minimax-music3-mlx for native MiniMax Music 3 MLX generation (Music studio). Default: 0; opt in with INSTALL_MINIMAX_MUSIC3_MLX=1 (macOS / Apple Silicon only).
-#   MLX_AUDIO_PIN    commit SHA of Blaizzy/mlx-audio containing MiniMax Music 3 support (default: 784b29e2691a93ca7483147d86f61859dfaa6296).
 #   INSTALL_AUDIOLDM2 '1' to bootstrap a venv at ~/.portos/venv-audioldm2 (torch + diffusers) for local AudioLDM2 long-form background-music generation (pipeline audio stage, second backend alongside MusicGen). Default: 0; opt in with INSTALL_AUDIOLDM2=1 (runs on MPS / CUDA / CPU).
 #   INSTALL_ACESTEP '1' to bootstrap a venv at ~/.portos/venv-acestep (torch + the acestep package) for local ACE-Step full-song generation with vocals (Music studio, third backend). Default: 0; opt in with INSTALL_ACESTEP=1 (runs on MPS / CUDA / CPU; checkpoints auto-download to ~/.cache/ace-step on first run).
 #   INSTALL_ACESTEP15 '1' to bootstrap a venv at ~/.portos/venv-acestep15 (the ACE-Step 1.5 package + torch) for local ACE-Step 1.5 full-song generation (Music studio). Default: 0; opt in with INSTALL_ACESTEP15=1 (runs on MPS / CUDA / CPU; model weights are installed separately from Music).
@@ -1281,21 +1280,18 @@ if [[ "$INSTALL_MINIMAX_MUSIC3_MLX" == "1" ]]; then
       "$PYTHON_BIN" -m venv "$MINIMAX_MUSIC3_MLX_VENV"
     fi
     MINIMAX_MUSIC3_MLX_PY="$(venv_python "$MINIMAX_MUSIC3_MLX_VENV")"
-    MLX_AUDIO_PIN="${MLX_AUDIO_PIN:-784b29e2691a93ca7483147d86f61859dfaa6296}"
     echo "📦 Installing MiniMax Music 3 MLX packages into ${MINIMAX_MUSIC3_MLX_VENV}..."
-    "$MINIMAX_MUSIC3_MLX_PY" -m pip install --upgrade pip wheel setuptools >/dev/null
-    # MiniMax Music 3 support merged into mlx-audio after its latest release;
-    # pin the merge commit until a release containing it is published. The model
-    # cards themselves document this same upstream commit as the required API.
-    "$MINIMAX_MUSIC3_MLX_PY" -m pip install --upgrade \
-      "mlx-audio @ git+https://github.com/Blaizzy/mlx-audio.git@${MLX_AUDIO_PIN}" \
-      "huggingface_hub[hf_xet]"
+    # Install only from the hash-pinned lock (scripts/requirements-minimax-music3-mlx.lock.txt):
+    # no install-time resolution, so a new or compromised transitive release can't
+    # land on the next Repair. Direct pins: scripts/requirements-minimax-music3-mlx.txt
+    # (mlx-audio 0.5.0, the first release with the MiniMax Music 3 merge).
+    "$MINIMAX_MUSIC3_MLX_PY" -m pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-minimax-music3-mlx.lock.txt"
     pin_venv_arm64 "$MINIMAX_MUSIC3_MLX_VENV"
     probe_or_fail \
       "MiniMax Music 3 MLX venv built but 'import mlx; from mlx_audio.music import load' failed." \
       "Check that mlx-audio installed cleanly in ${MINIMAX_MUSIC3_MLX_VENV}." \
       "$MINIMAX_MUSIC3_MLX_PY" -c "import mlx; from mlx_audio.music import load"
-    echo "✅ MiniMax Music 3 MLX venv ready: $MINIMAX_MUSIC3_MLX_PY (mlx-audio @ ${MLX_AUDIO_PIN:0:12})"
+    echo "✅ MiniMax Music 3 MLX venv ready: $MINIMAX_MUSIC3_MLX_PY"
   fi
 fi
 

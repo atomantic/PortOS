@@ -728,18 +728,22 @@ describe('MiniMax H3 MLX hash-pinned lock', () => {
   });
 });
 
-describe('MusicGen (MLX) install is hash-pinned', () => {
-  const lock = readFileSync(join(REPO_ROOT, 'scripts', 'requirements-musicgen-mlx.lock.txt'), 'utf8');
+describe.each([
+  { runtime: 'MusicGen (MLX)', lock: 'requirements-musicgen-mlx.lock.txt', from: 'INSTALL_MUSICGEN" == "1"', to: 'INSTALL_AUDIOLDM2="${' },
+  { runtime: 'MiniMax Music 3 (MLX)', lock: 'requirements-minimax-music3-mlx.lock.txt', from: 'INSTALL_MINIMAX_MUSIC3_MLX" == "1"', to: 'INSTALL_MUSCRIPTOR="${' },
+])('$runtime install is hash-pinned', ({ lock: lockName, from, to }) => {
+  const lock = readFileSync(join(REPO_ROOT, 'scripts', lockName), 'utf8');
 
-  it('every locked package carries a sha256 hash', () => {
-    const pins = lock.split('\n').filter((l) => /^[A-Za-z0-9_.\-]+(\[.*\])?==/.test(l));
-    expect(pins.length).toBeGreaterThan(0);
-    expect(lock.match(/--hash=sha256:[0-9a-f]{64}/g).length).toBeGreaterThanOrEqual(pins.length);
+  it('every locked package carries a sha256 hash and none comes from a VCS or URL source', () => {
+    const blocks = lock.split(/\n(?=[a-z][^\n]*==)/i).filter((b) => /^[a-z][^\n]*==/i.test(b));
+    expect(blocks.length).toBeGreaterThan(0);
+    for (const block of blocks) expect(block).toMatch(/--hash=sha256:[0-9a-f]{64}/);
+    expect(lock).not.toMatch(/^[a-z][^\n]* @ /im);
   });
 
   it('installs from the lock with --require-hashes and resolves nothing at install time', () => {
-    const section = source.slice(source.indexOf('INSTALL_MUSICGEN" == "1"'), source.indexOf('INSTALL_AUDIOLDM2="${'));
-    expect(section).toMatch(/pip install --require-hashes --no-deps -r "\$SCRIPT_DIR\/requirements-musicgen-mlx\.lock\.txt"/);
+    const section = source.slice(source.indexOf(from), source.indexOf(to));
+    expect(section).toContain(`pip install --require-hashes --no-deps -r "$SCRIPT_DIR/${lockName}"`);
     expect(section).not.toMatch(/pip install --upgrade/);
   });
 });
