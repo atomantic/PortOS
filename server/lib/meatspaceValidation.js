@@ -19,6 +19,9 @@ export const activitySchema = z.object({
 
 export const activityUpdateSchema = partialWithoutDefaults(activitySchema);
 
+// Optional name of the row the client saw at :index; a mismatch answers 409.
+export const activityTargetQuerySchema = z.object({ name: activitySchema.shape.name.optional() });
+
 // =============================================================================
 // LIFE CALENDAR EVENTS
 // =============================================================================

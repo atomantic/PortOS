@@ -9,6 +9,7 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { parseIndexParam, validateRequest } from '../lib/validation.js';
 import {
   activitySchema,
+  activityTargetQuerySchema,
   activityUpdateSchema,
   lifeEventSchema,
   lifeEventUpdateSchema,
@@ -50,13 +51,15 @@ router.post('/activities', asyncHandler(async (req, res) => {
 }));
 
 /**
- * PUT /api/meatspace/activities/:index
- * Update an activity by index.
+ * PUT /api/meatspace/activities/:index?name=<expected name>
+ * Update an activity by index. `name` (optional, for older clients) guards
+ * against a list that shifted since the caller read it.
  */
 router.put('/activities/:index', asyncHandler(async (req, res) => {
   const index = parseIndexParam(req.params.index);
   const data = validateRequest(activityUpdateSchema, req.body);
-  const activities = await calendarService.updateActivity(index, data);
+  const { name } = validateRequest(activityTargetQuerySchema, req.query);
+  const activities = await calendarService.updateActivity(index, data, name);
   if (!activities) {
     throw new ServerError('Activity not found', { status: 404, code: 'NOT_FOUND' });
   }
@@ -64,12 +67,13 @@ router.put('/activities/:index', asyncHandler(async (req, res) => {
 }));
 
 /**
- * DELETE /api/meatspace/activities/:index
- * Remove an activity by index.
+ * DELETE /api/meatspace/activities/:index?name=<expected name>
+ * Remove an activity by index, refusing (409) when `name` no longer matches.
  */
 router.delete('/activities/:index', asyncHandler(async (req, res) => {
   const index = parseIndexParam(req.params.index);
-  const activities = await calendarService.removeActivity(index);
+  const { name } = validateRequest(activityTargetQuerySchema, req.query);
+  const activities = await calendarService.removeActivity(index, name);
   if (!activities) {
     throw new ServerError('Activity not found', { status: 404, code: 'NOT_FOUND' });
   }

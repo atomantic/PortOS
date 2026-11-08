@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Calendar, Trash2 } from 'lucide-react';
 import { Link } from 'react-router';
 import toast from '../../ui/Toast';
@@ -16,6 +16,10 @@ export default function CalendarTab() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  // Indexes with a delete in flight. The ref is the synchronous guard a second
+  // click reads before React has re-rendered; the state drives the disabled button.
+  const [removingIndexes, setRemovingIndexes] = useState([]);
+  const removingRef = useRef(new Set());
 
   const fetchData = useCallback(async () => {
     const result = await api.getLifeCalendar().catch(err => {
@@ -40,11 +44,26 @@ export default function CalendarTab() {
   };
 
   const handleRemoveActivity = async (index) => {
+    if (removingRef.current.has(index)) return;
     const name = data?.budgets?.[index]?.name || 'Activity';
-    const result = await api.removeActivity(index).catch(() => null);
+    removingRef.current.add(index);
+    setRemovingIndexes([...removingRef.current]);
+    const result = await api.removeActivity(index, name, { silent: true }).catch(err => {
+      if (err?.code === 'ACTIVITY_MOVED') {
+        toast.error(`${name} moved; the list was refreshed`);
+        fetchData();
+      } else {
+        toast.error(`Failed to remove ${name}`);
+      }
+      return null;
+    });
+    removingRef.current.delete(index);
+    setRemovingIndexes([...removingRef.current]);
     if (result) {
       toast.success(`Removed ${name}`);
-      fetchData();
+      // Budgets are one-per-activity and independent of each other, so dropping
+      // this row's entry matches the server without a refetch.
+      setData(prev => prev && { ...prev, budgets: prev.budgets.filter((_, i) => i !== index) });
     }
   };
 
@@ -198,7 +217,8 @@ export default function CalendarTab() {
               </div>
               <button
                 onClick={() => handleRemoveActivity(i)}
-                className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center opacity-40 [@media(hover:hover)]:sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 transition-opacity text-gray-600 hover:text-port-error p-0.5"
+                disabled={removingIndexes.includes(i)}
+                className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center opacity-40 [@media(hover:hover)]:sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 transition-opacity text-gray-600 hover:text-port-error p-0.5 disabled:opacity-30 disabled:cursor-progress"
                 title="Remove activity" aria-label="Remove activity"
               >
                 <Trash2 size={12} />
