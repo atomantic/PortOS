@@ -19,8 +19,13 @@ export const activitySchema = z.object({
 
 export const activityUpdateSchema = partialWithoutDefaults(activitySchema);
 
-// Optional name of the row the client saw at :index; a mismatch answers 409.
-export const activityTargetQuerySchema = z.object({ name: activitySchema.shape.name.optional() });
+// The row the client saw at :index. `id` (preferred) names it exactly; `name` is
+// the guard clients from before activity ids send. Either mismatch answers 409.
+// Stored ids are UUIDs or the shipped `default-<slug>` ids.
+export const activityTargetQuerySchema = z.object({
+  id: z.string().min(1).max(100).optional(),
+  name: activitySchema.shape.name.optional(),
+});
 
 // =============================================================================
 // LIFE CALENDAR EVENTS
