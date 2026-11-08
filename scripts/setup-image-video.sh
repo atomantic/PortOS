@@ -14,7 +14,7 @@
 #   INSTALL_FASTVIDEO '1' to clone hao-ai-lab/FastVideo at ~/.portos/fastvideo and build an MLX venv for native Apple Silicon video generation (FastMetal models). Default: 0; opt in with INSTALL_FASTVIDEO=1.
 #   INSTALL_MINIMAX_H3 '1' to install the pinned MiniMax H3 MLX runtime at ~/.portos/minimax-h3-mlx (Apple Silicon). Weights remain a separate explicit Video Gen download. Default: 0.
 #   INSTALL_MERERUN '1' to install the signed mere.run v0.47.0 runtime at ~/.portos/mere-run for MiniMax H3 Ref2VA image+audio generation (Apple Silicon). Weights remain a separate explicit Video Gen download. Default: 0.
-#   INSTALL_MINIMAX_H3_CUDA '1' to install the MiniMax H3 CUDA runtime at ~/.portos/minimax-h3-cuda (Windows + NVIDIA), via diffusers' MiniMaxH3ModularPipeline. Weights remain a separate explicit Video Gen download (~144 GB). Default: 0.
+#   INSTALL_MINIMAX_H3_CUDA '1' to install the MiniMax H3 CUDA runtime at ~/.portos/minimax-h3-cuda (Windows/Linux + NVIDIA), via diffusers' MiniMaxH3ModularPipeline. Weights remain a separate explicit Video Gen download (~144 GB). Default: 0.
 #   INSTALL_LTX25_CUDA '1' to install the official LTX-2.5 CUDA runtime at ~/.portos/ltx-2.5-cuda (Windows/Linux + NVIDIA). Weights remain a separate explicit Video Gen download. Default: 0.
 #   INSTALL_WAN22_CUDA '1' to install the official Wan 2.2 Diffusers runtime at ~/.portos/wan2.2-cuda (Windows/Linux + NVIDIA). Weights remain a separate explicit Video Gen download. Default: 0.
 #   INSTALL_FLUX2  '1' to also bootstrap a separate venv at ~/.portos/venv-flux2 for FLUX.2-klein (default: 1 on macOS, 0 elsewhere)
@@ -898,46 +898,48 @@ fi
 
 INSTALL_MINIMAX_H3_CUDA="${INSTALL_MINIMAX_H3_CUDA:-0}"
 if [[ "$INSTALL_MINIMAX_H3_CUDA" == "1" ]]; then
-  # MiniMax H3 on NVIDIA, through diffusers' MiniMaxH3ModularPipeline. Unlike
-  # the MLX sibling above there is no source checkout to pin — everything this
-  # runtime executes is an installed distribution, so the pin is the exact
-  # `==` set in requirements-minimax-h3-cuda.txt. Reached only from the
-  # explicit runtime Install / Repair action, never from PortOS boot.
+  # Reached only from explicit Install / Repair, never from PortOS boot.
   if is_macos; then
     echo "❌ MiniMax H3 CUDA needs an NVIDIA GPU. On Apple Silicon use INSTALL_MINIMAX_H3=1 (the MLX port) instead." >&2
     exit 1
   fi
-  # Windows and Linux both reach this model: since #4142 the catalog picks
-  # video.cuda[] vs video.mlx[] on `process.platform === 'darwin'`, so a Linux
-  # install is served the same CUDA list a Windows one is.
+  if ! have uv; then
+    echo "❌ MiniMax H3 CUDA needs uv to provision its locked Python 3.11 runtime. Install uv and retry Repair." >&2
+    exit 1
+  fi
+  case "$(uname -m)" in
+    x86_64|amd64|AMD64) ;;
+    *) echo "❌ MiniMax H3 CUDA hash locks support x86_64 Windows/Linux only." >&2; exit 1 ;;
+  esac
+  if [[ "$TORCH_CUDA_INDEX" != "https://download.pytorch.org/whl/cu126" ]]; then
+    echo "❌ MiniMax H3 CUDA is locked to cu126. Unset PORTOS_TORCH_CUDA_INDEX for this runtime; see docs/MINIMAX_H3_CUDA.md." >&2
+    exit 1
+  fi
   MINIMAX_H3_CUDA_DIR="${HOME}/.portos/minimax-h3-cuda"
   MINIMAX_H3_CUDA_VENV="${MINIMAX_H3_CUDA_DIR}/.venv"
-  MINIMAX_H3_CUDA_REQS="${SCRIPT_DIR}/requirements-minimax-h3-cuda.txt"
+  if is_windows; then
+    MINIMAX_H3_CUDA_LOCK="${SCRIPT_DIR}/requirements-minimax-h3-cuda-windows.lock.txt"
+  else
+    MINIMAX_H3_CUDA_LOCK="${SCRIPT_DIR}/requirements-minimax-h3-cuda-linux.lock.txt"
+  fi
   mkdir -p "${MINIMAX_H3_CUDA_DIR}"
-  # A Windows venv puts the interpreter under Scripts/, a POSIX one under bin/.
-  # Probe for either rather than branching on `uname`, so an MSYS/Cygwin bash on
-  # Windows (which is what the in-app installer runs) resolves correctly.
   reset_universal_venv "$MINIMAX_H3_CUDA_VENV" "$PYTHON_BIN"
+  # Locks target 3.11. Rebuild other minors and Conda bases whose DLL search
+  # path can prevent the Windows CUDA torch wheel from loading.
+  if venv_exists "$MINIMAX_H3_CUDA_VENV"; then
+    MINIMAX_H3_CUDA_PY="$(venv_python "$MINIMAX_H3_CUDA_VENV")"
+    if ! "$MINIMAX_H3_CUDA_PY" -c "import sys; from pathlib import Path; sys.exit(sys.version_info[:2] != (3, 11) or (Path(sys.base_prefix) / 'conda-meta').is_dir())"; then
+      echo "♻️ Rebuilding MiniMax H3 CUDA with its locked Python 3.11..."
+      uv venv --clear --managed-python --python 3.11 "$MINIMAX_H3_CUDA_VENV"
+    fi
+  fi
   if ! venv_exists "$MINIMAX_H3_CUDA_VENV"; then
-    echo "📦 Creating MiniMax H3 CUDA venv..."
-    "$PYTHON_BIN" -m venv "$MINIMAX_H3_CUDA_VENV"
+    echo "📦 Creating MiniMax H3 CUDA venv (Python 3.11)..."
+    uv venv --managed-python --python 3.11 "$MINIMAX_H3_CUDA_VENV"
   fi
   MINIMAX_H3_CUDA_PY="$(venv_python "$MINIMAX_H3_CUDA_VENV")"
-
-  "$MINIMAX_H3_CUDA_PY" -m pip install --disable-pip-version-check --upgrade pip wheel setuptools
-  # torch comes from PyTorch's own CUDA index on Windows — the default PyPI
-  # Windows wheel is CPU-only, which on a 33B model is not "slower" but
-  # unusable. Linux's PyPI torch already bundles CUDA, so it needs no swap.
-  # Mirrors WIN_TORCH_CUDA_INDEX in server/lib/pythonSetup.js.
-  if is_windows; then
-    echo "📦 Installing CUDA torch from ${TORCH_CUDA_INDEX}..."
-    "$MINIMAX_H3_CUDA_PY" -m pip install --upgrade --index-url "$TORCH_CUDA_INDEX" torch
-  else
-    echo "📦 Installing torch..."
-    "$MINIMAX_H3_CUDA_PY" -m pip install --upgrade torch
-  fi
-  echo "📦 Installing pinned MiniMax H3 CUDA packages..."
-  "$MINIMAX_H3_CUDA_PY" -m pip install --upgrade --progress-bar on -r "$MINIMAX_H3_CUDA_REQS"
+  echo "📦 Syncing the hash-pinned MiniMax H3 CUDA runtime..."
+  uv pip sync --require-hashes --only-binary :all: --index-strategy unsafe-best-match --python "$MINIMAX_H3_CUDA_PY" "$MINIMAX_H3_CUDA_LOCK"
   pin_venv_arm64 "$MINIMAX_H3_CUDA_VENV"
 
   # Three separate ways this install can look complete and not be: a CPU-only
