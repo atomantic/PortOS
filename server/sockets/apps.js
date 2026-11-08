@@ -138,63 +138,28 @@ export const registerAppHandlers = (socket, io) => {
       operatingAppId = app.id;
 
       await runAppOperation(operation, async () => {
-      console.log(`🔧 Socket standardize started for ${app.name}`);
-      const emit = (step, status, message) => {
-        const frame = { appId: app.id, step, status, message, timestamp: Date.now() };
-        recordOperationStep(operation, frame);
-        io.emit('app:standardize:step', frame);
-      };
+        console.log(`🔧 Socket standardize started for ${app.name}`);
+        const flow = await pm2Standardizer.runStandardizeFlow(app.repoPath, null, {
+          overwriteEcosystem: data.overwriteEcosystem ?? false,
+          onStep: ({ step, status, data: detail }) => {
+            const frame = { appId: app.id, step, status, message: detail?.message, timestamp: Date.now() };
+            recordOperationStep(operation, frame);
+            io.emit('app:standardize:step', frame);
+          }
+        });
 
-      emit('analyze', 'running', 'Analyzing project configuration...');
-      const analysis = await pm2Standardizer.analyzeApp(app.repoPath)
-        .catch(err => ({ success: false, error: err.message }));
-
-      if (!analysis.success) {
-        emit('analyze', 'error', analysis.error);
-        io.emit('app:standardize:error', { appId: app.id, message: analysis.error });
-        return;
-      }
-      emit('analyze', 'done', `Found ${analysis.proposedChanges.processes?.length || 0} processes`);
-
-      emit('backup', 'running', 'Creating git backup...');
-      const backup = await pm2Standardizer.createGitBackup(app.repoPath)
-        .catch(err => ({ success: false, reason: err.message }));
-
-      if (backup.success) emit('backup', 'done', `Backup branch: ${backup.branch}`);
-      else emit('backup', 'skipped', backup.reason || 'No git repository');
-
-      emit('apply', 'running', 'Writing ecosystem.config.cjs...');
-      const result = await pm2Standardizer.applyStandardization(app.repoPath, analysis, {
-        overwriteEcosystem: data.overwriteEcosystem ?? false
-      }).catch(err => ({ success: false, errors: [err.message] }));
-
-      if (result.errors?.length > 0) {
-        emit('apply', 'error', result.errors.join(', '));
-        io.emit('app:standardize:error', { appId: app.id, message: result.errors.join(', ') });
-        return;
-      }
-      const preserved = result.filesPreserved || [];
-      emit('apply', 'done', preserved.length
-        ? `Modified ${result.filesModified.length} files, preserved ${preserved.length}`
-        : `Modified ${result.filesModified.length} files`);
-
-      if (analysis.proposedChanges?.processes) {
-        const pm2ProcessNames = analysis.proposedChanges.processes.map(p => p.name);
-        await appsService.updateApp(data.appId, { pm2ProcessNames });
-      }
-
-      io.emit('app:standardize:complete', {
-        appId: app.id,
-        success: true,
-        result: {
-          backupBranch: result.backupBranch,
-          filesModified: result.filesModified,
-          filesPreserved: preserved,
-          processes: analysis.proposedChanges.processes
+        if (!flow.success) {
+          io.emit('app:standardize:error', { appId: app.id, message: flow.error });
+          return;
         }
-      });
-      outcome = 'completion';
-      console.log(`✅ Socket standardize complete for ${app.name}`);
+        const { processes } = flow.result;
+        if (processes) {
+          await appsService.updateApp(data.appId, { pm2ProcessNames: processes.map(p => p.name) });
+        }
+
+        io.emit('app:standardize:complete', { appId: app.id, success: true, result: flow.result });
+        outcome = 'completion';
+        console.log(`✅ Socket standardize complete for ${app.name}`);
       });
     } catch (err) {
       const message = err?.message ?? String(err);
