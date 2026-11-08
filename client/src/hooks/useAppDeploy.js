@@ -58,36 +58,47 @@ export function useAppDeploy(appId) {
       const next = [...prev, ...entries];
       return next.length > MAX_OUTPUT_LINES ? next.slice(-MAX_OUTPUT_LINES) : next;
     });
-    const markLive = () => {
-      if (!run.live) {
-        // Frames from a run this hook was not following: identity is learned
-        // from the next snapshot. They also supersede a refused duplicate's error.
+    // A frame from a run that already ended (its startedAt is tombstoned).
+    const isEnded = (data) => data.startedAt != null && data.startedAt === run.tombstone;
+    const markLive = (data) => {
+      const otherRun = run.live && data.startedAt != null && run.startedAt != null && data.startedAt !== run.startedAt;
+      if (!run.live || otherRun) {
+        // Frames from a run this hook was not following. They also supersede a
+        // refused duplicate's error.
         setError(null);
-        run.startedAt = null;
         run.linkLost = false;
+        if (otherRun) {
+          setOutput([]);
+          setResult(null);
+        }
       }
+      if (data.startedAt != null) run.startedAt = data.startedAt;
+      else if (!run.live) run.startedAt = null;
       run.live = true;
       run.confirmed = true;
       setIsDeploying(true);
     };
     const endRun = () => {
       run.live = false;
-      run.tombstone = run.startedAt;
+      // An unknown identity keeps the previous tombstone rather than erasing it.
+      if (run.startedAt != null) run.tombstone = run.startedAt;
       setIsDeploying(false);
     };
     const forApp = (handler) => (data) => { if (data?.appId === appId) handler(data); };
 
     const onOutput = forApp((data) => {
-      markLive();
+      if (isEnded(data)) return;
+      markLive(data);
       appendOutput({ text: data.text, stream: data.stream, ts: data.timestamp });
     });
     const onStatus = forApp((data) => {
+      if (isEnded(data)) return;
       // A deploy started elsewhere (another tab) begins a fresh log.
       if (data.phase === 'start' && !run.live) {
         setOutput([]);
         setResult(null);
       }
-      markLive();
+      markLive(data);
       appendOutput(statusEntry(data.message, data.timestamp));
     });
     const onError = forApp((data) => {
@@ -101,9 +112,11 @@ export function useAppDeploy(appId) {
         socket.emit('app:operations:list');
         return;
       }
+      if (data.startedAt != null) run.startedAt = data.startedAt;
       endRun();
     });
     const onComplete = forApp((data) => {
+      if (data.startedAt != null) run.startedAt = data.startedAt;
       // A failed run replaces any stale duplicate-refusal error.
       setError(data.success === false ? (data.error || DEPLOY_FAILED_MESSAGE) : null);
       setResult(data);

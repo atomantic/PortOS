@@ -200,6 +200,10 @@ export const registerAppHandlers = (socket, io) => {
   // maintenance.run admission stays inside appDeployer.runDeployFlow.
   socket.on('app:deploy', async (rawData) => {
     let operatingAppId = null;
+    // Every frame carries the operation's startedAt, the run identity the
+    // client tombstones, so a trailing snapshot cannot resurrect a run whose
+    // frames ended before any snapshot named it.
+    let runId = {};
     let requestedAppId = null;
     let outcome = 'failure';
     try {
@@ -224,10 +228,11 @@ export const registerAppHandlers = (socket, io) => {
       }
       const operation = claim.operation;
       operatingAppId = app.id;
+      runId = { startedAt: operation.startedAt };
 
       await runAppOperation(operation, async () => {
         const onOutput = (type, payload) => {
-          const frame = { ...payload, appId: app.id, timestamp: Date.now() };
+          const frame = { ...payload, appId: app.id, ...runId, timestamp: Date.now() };
           if (type === 'status') {
             recordOperationStep(operation, { appId: app.id, step: payload.phase ?? 'deploy', status: payload.phase === 'complete' ? 'done' : 'running', message: payload.message, timestamp: frame.timestamp });
           }
@@ -236,16 +241,16 @@ export const registerAppHandlers = (socket, io) => {
 
         const result = await appDeployer.runDeployFlow(app.id, data.flags, { onOutput });
         if (!result.ok) {
-          io.emit('app:deploy:error', { appId: app.id, message: result.error });
+          io.emit('app:deploy:error', { appId: app.id, ...runId, message: result.error });
           return;
         }
-        io.emit('app:deploy:complete', { appId: app.id, success: result.success, code: result.code });
+        io.emit('app:deploy:complete', { appId: app.id, ...runId, success: result.success, code: result.code });
         if (result.success) outcome = 'completion';
       });
     } catch (err) {
       const message = err?.message ?? String(err);
       console.error(`❌ Socket handler error [app:deploy]: ${message}`);
-      io.emit('app:deploy:error', { appId: operatingAppId ?? requestedAppId, message });
+      io.emit('app:deploy:error', { appId: operatingAppId ?? requestedAppId, ...runId, message });
     } finally {
       if (operatingAppId) endAppOperation(io, operatingAppId, outcome);
     }

@@ -271,6 +271,32 @@ describe('useAppDeploy', () => {
     expect(result.current.error).toBe('deploy.sh exited 1');
   });
 
+  it('a run that ends before any snapshot named it is tombstoned from its frames', () => {
+    const { result } = renderHook(() => useAppDeploy('app-a'));
+    act(() => result.current.startDeploy());
+    fire('app:deploy:output', { appId: 'app-a', startedAt: 1000, text: 'building\n', stream: 'stdout', timestamp: 1 });
+    fire('app:deploy:complete', { appId: 'app-a', startedAt: 1000, success: true, code: 0 });
+    expect(result.current.isDeploying).toBe(false);
+
+    // A trailing snapshot and a late frame from that run cannot resurrect it.
+    active(liveDeploy('app-a', 1000));
+    fire('app:deploy:output', { appId: 'app-a', startedAt: 1000, text: 'late\n', stream: 'stdout', timestamp: 2 });
+    expect(result.current.isDeploying).toBe(false);
+    expect(result.current.result).toMatchObject({ success: true });
+    expect(result.current.output.map(o => o.text)).toEqual(['building\n']);
+
+    // A genuinely new run still attaches.
+    active(liveDeploy('app-a', 2000));
+    expect(result.current.isDeploying).toBe(true);
+  });
+
+  it('a frame from a different run replaces the log of the run being followed', () => {
+    const { result } = renderHook(() => useAppDeploy('app-a'));
+    active(liveDeploy('app-a', 1000, [step('old')]));
+    fire('app:deploy:output', { appId: 'app-a', startedAt: 2000, text: 'new\n', stream: 'stdout', timestamp: 3 });
+    expect(result.current.output.map(o => o.text)).toEqual(['new\n']);
+  });
+
   it('stops listening on unmount', () => {
     const { unmount } = renderHook(() => useAppDeploy('app-a'));
     unmount();

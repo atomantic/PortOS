@@ -337,9 +337,12 @@ describe('app socket handlers', () => {
       expect(client.last('app:deploy:output').payload).toMatchObject({ appId: 'app-a', text: 'building\n', stream: 'stdout' });
       // io.emit: the terminal frame also reaches a socket that connected after the request.
       for (const watcher of [client, remount]) {
-        expect(watcher.last('app:deploy:complete').payload).toEqual({ appId: 'app-a', success: true, code: 0 });
+        expect(watcher.last('app:deploy:complete').payload).toEqual({ appId: 'app-a', startedAt: expect.any(Number), success: true, code: 0 });
         expect(watcher.last('app:operations:active').payload.operations).toEqual([]);
       }
+      // Every frame names the run, so a client can tombstone a run no snapshot named.
+      const runIds = new Set(['app:deploy:status', 'app:deploy:output', 'app:deploy:complete'].map(e => client.last(e).payload.startedAt));
+      expect(runIds.size).toBe(1);
     });
 
     it('refuses a second deploy for the same app and for a sibling record on the same checkout', async () => {
@@ -366,7 +369,7 @@ describe('app socket handlers', () => {
       runDeployFlow.mockResolvedValue({ ok: true, success: false, code: 2 });
       const client = connect(bus);
       await client.fire('app:deploy', { appId: 'app-a' });
-      expect(client.last('app:deploy:complete').payload).toEqual({ appId: 'app-a', success: false, code: 2 });
+      expect(client.last('app:deploy:complete').payload).toEqual({ appId: 'app-a', startedAt: expect.any(Number), success: false, code: 2 });
       expect(client.last('app:operations:active').payload.operations).toEqual([]);
     });
 
@@ -374,7 +377,7 @@ describe('app socket handlers', () => {
       runDeployFlow.mockResolvedValue({ ok: false, error: 'No deploy.sh found for this app' });
       const client = connect(bus);
       await client.fire('app:deploy', { appId: 'app-a' });
-      expect(client.last('app:deploy:error').payload).toEqual({ appId: 'app-a', message: 'No deploy.sh found for this app' });
+      expect(client.last('app:deploy:error').payload).toEqual({ appId: 'app-a', startedAt: expect.any(Number), message: 'No deploy.sh found for this app' });
       expect(client.events('app:deploy:complete')).toHaveLength(0);
       expect(client.last('app:operations:active').payload.operations).toEqual([]);
     });
@@ -383,7 +386,7 @@ describe('app socket handlers', () => {
       runDeployFlow.mockRejectedValueOnce(new Error('spawn failed'));
       const client = connect(bus);
       await client.fire('app:deploy', { appId: 'app-a' });
-      expect(client.last('app:deploy:error').payload).toEqual({ appId: 'app-a', message: 'spawn failed' });
+      expect(client.last('app:deploy:error').payload).toEqual({ appId: 'app-a', startedAt: expect.any(Number), message: 'spawn failed' });
       expect(client.events('app:deploy:complete')).toHaveLength(0);
       expect(client.last('app:operations:active').payload.operations).toEqual([]);
 
