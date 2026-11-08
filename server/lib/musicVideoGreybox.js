@@ -1,4 +1,4 @@
-import { GREYBOX_SHOT_ROLE_PREFIX, greyboxFigurePromptLines } from './greyboxVocabulary.js';
+import { GREYBOX_SHOT_ROLE_PREFIX, greyboxFigurePromptLines, greyboxStreetPromptLines } from './greyboxVocabulary.js';
 
 /** Older records only have the flag; compare live captures when available and otherwise keep the gate. */
 export function castAndSetsPendingGreyboxSetIds(stage, liveCaptures = {}) {
@@ -51,10 +51,14 @@ export function musicVideoGreyboxReference(project, scene, places = {}) {
   const blocking = blockingAvailable && selected.blocking !== false
     ? { id: `mvr-greybox-blocking-${shot.id}`, imageId: flat.mediaKey, role: 'blocking', label: `${label} blocking`, greybox: true, blocking: true }
     : null;
+  const toAdditions = (lines, id, label) => lines.map((text, i) => ({ id: `${id}-${i}`, label: `${label} ${i + 1}`, text }));
+  // Street facts also feed a people-free set plate, so they travel apart from the figure lines.
+  const streetAdditions = toAdditions(greyboxStreetPromptLines(greybox, shot), 'greybox-street', 'Greybox street');
   return {
     reference: { id: `mvr-greybox-${shot.id}`, imageId: capture.mediaKey, role: 'set', label, greybox: true, ...(plate ? { plate: true } : {}) },
     ...(blocking ? { blocking } : {}),
     blockingAvailable,
-    promptAdditions: greyboxFigurePromptLines(greybox, shot).map((text, i) => ({ id: `greybox-figure-${i}`, label: `Greybox figure ${i + 1}`, text })),
+    promptAdditions: [...toAdditions(greyboxFigurePromptLines(greybox, shot), 'greybox-figure', 'Greybox figure'), ...streetAdditions],
+    streetAdditions,
   };
 }

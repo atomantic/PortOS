@@ -447,6 +447,8 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
     // A memory set is shot on its own era's stock, not the present story's.
     const setLook = withoutPeople(set.look, p.name) || plateStyle;
     const placeImages = greyboxes[set.id]?.reference.imageId ? [greyboxes[set.id].reference.imageId] : fixedImages(fixedFor('place', set.name));
+    // The camera's street furniture facts stay in the saved plan prompt, where the check-in lists the exact sent text.
+    const streetFacts = (greyboxes[set.id]?.streetAdditions || []).map((item) => item.text);
     plan[key] = {
       key,
       kind: 'plate',
@@ -464,6 +466,7 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
         plateLight && `Lighting: ${plateLight}`,
         setLook && `Look: ${setLook}`,
         PLAUSIBLE_SET,
+        ...streetFacts,
         'Photorealistic music video location still',
         note(key),
       ),

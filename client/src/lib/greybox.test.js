@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import editingParts from '../../../server/lib/fixtures/greyboxEditing.json';
-import { aspectRatio, blankGreybox, captureForShot, fovFromFocalLength, shotFromCamera, withShot, withoutShot, greyboxEditErrors, newGreyboxItem } from './greybox';
+import { aspectRatio, blankGreybox, captureForShot, fovFromFocalLength, shotFromCamera, withShot, withoutShot, greyboxEditErrors, newGreyboxItem, streetFor, withMount } from './greybox';
 
 describe('greybox helpers', () => {
   it('maps lens to vertical fov and back, and aspect labels to ratios', () => {
@@ -50,10 +50,22 @@ describe('greybox helpers', () => {
     ['unknown zone', (scene) => { scene.parts[0].zone = 'missing'; }],
     ['unknown anchor', (scene) => { scene.shots[0].figures = [{ anchorId: 'missing' }]; }],
     ['invalid extent', (scene) => { scene.parts[0].size[0] = 0; }],
+    ['lamp arm bearing out of range', (scene) => { scene.parts[0].street = { kind: 'lamp', armDegrees: 400 }; }],
   ])('rejects %s before sending', (_name, invalidate) => {
     const scene = blankGreybox();
     invalidate(scene);
     expect(greyboxEditErrors(scene).length).toBeGreaterThan(0);
   });
 
+  // Uniquely catches the editor dropping a lamp's arm bearing or leaving a stale mount when the role changes.
+  it('moves a part between street roles keeping a lamp bearing and mount only while it is a lamp', () => {
+    const lamp = streetFor('lamp', undefined);
+    expect(lamp).toEqual({ kind: 'lamp', armDegrees: 0 });
+    const mounted = withMount({ ...lamp, armDegrees: 90 }, 'post');
+    expect(mounted).toEqual({ kind: 'lamp', armDegrees: 90, mount: 'post' });
+    expect(streetFor('lamp', mounted)).toEqual(mounted);
+    expect(withMount(mounted, '')).toEqual({ kind: 'lamp', armDegrees: 90 });
+    expect(streetFor('pole', mounted)).toEqual({ kind: 'pole' });
+    expect(streetFor('', mounted)).toBeUndefined();
+  });
 });

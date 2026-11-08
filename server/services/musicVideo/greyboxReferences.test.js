@@ -85,6 +85,64 @@ describe('music video greybox selection', () => {
     await expect(loadMusicVideoGreybox(project, scene, d)).rejects.toThrow(/figure blocking capture is missing/);
   });
 
+  describe('street furniture facts', () => {
+    // Camera at +Z looking toward -Z: the viewer's right is +X, so a +X arm reaches the viewer's right.
+    const street = (extra = {}) => ({ ...ingredient, payload: { greybox: { ...ingredient.payload.greybox,
+      shots: [{ ...ingredient.payload.greybox.shots[0], position: [0, 2, 20], target: [0, 2, 0] }],
+      parts: [
+        { id: 'pole-b', label: 'Pole B', position: [8, 4, -20], street: { kind: 'pole' } },
+        { id: 'pole-a', label: 'Pole A', position: [8, 4, -5], street: { kind: 'pole' } },
+        { id: 'pole-behind', label: 'Pole Behind', position: [8, 4, 40], street: { kind: 'pole' } },
+        { id: 'lamp-a', label: 'Lamp A', position: [-8, 4, -10], street: { kind: 'lamp', armDegrees: 90, mount: 'pole' } },
+        { id: 'curb', label: 'Curb', position: [0, 0, 0] },
+      ], ...extra } } });
+
+    // Uniquely catches a painter being left to guess wires and lamp-arm direction from a grey cylinder.
+    it('states the pole line, wires and camera-relative lamp arm in the shot prompt as visible chips', async () => {
+      const d = deps();
+      d.catalog.getIngredient.mockResolvedValue(street());
+      const greybox = await loadMusicVideoGreybox(project, scene, d);
+      const input = musicVideoFrameModelInput(project, scene, { greybox });
+      const chips = input.promptAdditions.filter((a) => a.id.startsWith('greybox-street-'));
+      expect(chips.map((c) => c.label)).toEqual(['Greybox street 1', 'Greybox street 2']);
+      expect(chips[0].text).toBe('Utility poles "Pole B", "Pole A" stand in one line along the road, joined pole to pole by continuous overhead wires that also run on past the end poles; a pole never stands without wires.');
+      expect(chips[1].text).toBe('Streetlight "Lamp A" is bracketed on a utility pole: its arm reaches toward the viewer\'s right, out over the road with the lamp head above the pavement, never aimed at a house or yard.');
+    });
+
+    it('reads the lamp arm from the camera and lists poles the same way whatever the part order', async () => {
+      const d = deps();
+      const base = street();
+      const parts = base.payload.greybox.parts;
+      const lamp = (armDegrees) => ({ ...parts[3], street: { kind: 'lamp', armDegrees } });
+      const texts = async (list) => {
+        d.catalog.getIngredient.mockResolvedValue({ ...base, payload: { greybox: { ...base.payload.greybox, parts: list } } });
+        return (await loadMusicVideoGreybox(project, scene, d)).streetAdditions.map((a) => a.text);
+      };
+      expect((await texts([lamp(-90)]))[0]).toContain('reaches toward the viewer\'s left, out over the road');
+      expect((await texts([lamp(180)]))[0]).toContain('reaches away from the camera, out over the road');
+      expect(await texts([...parts].reverse())).toEqual(await texts(parts));
+    });
+
+    it('omits street facts for a greybox without street furniture and for furniture behind the camera', async () => {
+      const d = deps();
+      const plain = await loadMusicVideoGreybox(project, scene, d);
+      expect(plain.promptAdditions.some((a) => a.id.startsWith('greybox-street-'))).toBe(false);
+      d.catalog.getIngredient.mockResolvedValue(street({ parts: [{ id: 'pole-behind', position: [8, 4, 40], street: { kind: 'pole' } }] }));
+      expect((await loadMusicVideoGreybox(project, scene, d)).streetAdditions).toEqual([]);
+    });
+
+    it('puts the street facts, never the figure lines, into a people-free set plate prompt', async () => {
+      const d = deps();
+      d.catalog.getIngredient.mockResolvedValue(street());
+      const greybox = await loadMusicVideoGreybox(project, scene, d);
+      const direction = { protagonist: {}, looks: [], sets: [{ id: 'rink', name: 'Example Rink', description: 'An empty rink', setReference }], tests: [] };
+      const prompt = buildCastAndSetsImagePlan(project, direction, { greyboxes: { rink: greybox } })['set:rink'].prompt;
+      expect(prompt).toContain('a pole never stands without wires');
+      expect(prompt).toContain('arm reaches toward the viewer\'s right');
+      expect(prompt).not.toContain('stands at the "rail" mark');
+    });
+  });
+
   it('persists the optional selection through create, replan and split and rejects invalid camera ids', () => {
     const base = buildProjectRecord({ name: 'Example Video' }, { id: 'mv-example', now: '2026-01-01' });
     const added = addScene(base, { prompt: scene.prompt, startSec: 0, endSec: 8, setReference });

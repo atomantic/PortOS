@@ -50,6 +50,15 @@ describe('greyboxSceneSchema', () => {
     expect(greyboxSceneSchema.safeParse(tooLong).success).toBe(false);
   });
 
+  it('keeps street furniture facts and requires a lamp arm bearing', () => {
+    const part = (street) => ({ id: 'post', type: 'cylinder', radius: 0.1, height: 8, street });
+    const lamp = { kind: 'lamp', armDegrees: 90, mount: 'pole' };
+    expect(greyboxSceneSchema.parse({ parts: [part({ kind: 'pole' }), { ...part(lamp), id: 'lamp' }] }).parts[1].street).toEqual(lamp);
+    for (const street of [{ kind: 'lamp' }, { kind: 'lamp', armDegrees: 0, mount: 'wall' }, { kind: 'wire' }]) {
+      expect(greyboxSceneSchema.safeParse({ parts: [part(street)] }).success).toBe(false);
+    }
+  });
+
   it('requires parts for a spec source but not for a glb source', () => {
     expect(greyboxSceneSchema.safeParse({ source: 'spec' }).success).toBe(false);
     expect(greyboxSceneSchema.safeParse({ source: 'glb', shots: [] }).success).toBe(true);

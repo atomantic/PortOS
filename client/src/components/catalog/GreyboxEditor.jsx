@@ -1,5 +1,5 @@
 import { useId, useState } from 'react';
-import { newGreyboxItem, withoutGreyboxItem } from '../../lib/greybox';
+import { newGreyboxItem, streetFor, withMount, withoutGreyboxItem } from '../../lib/greybox';
 
 const inputClass = 'w-full min-w-0 min-h-[44px] rounded-lg bg-port-bg border border-port-border px-2 text-sm text-white';
 const buttonClass = 'min-h-[44px] rounded-lg border border-port-border px-3 text-sm text-gray-200 hover:border-port-accent disabled:opacity-40';
@@ -41,6 +41,15 @@ function ItemFields({ collection, item, scene, update }) {
         <Picker label="Zone" value={item.zone || ''} onChange={(zone) => update({ zone: zone || undefined })}>
           <option value="">No zone</option>{scene.zones.map((zone) => <option key={zone.id} value={zone.id}>{zone.label}</option>)}
         </Picker>
+        <Picker label="Street furniture" value={item.street?.kind || ''} onChange={(kind) => update({ street: streetFor(kind, item.street) })}>
+          <option value="">None</option><option value="pole">Utility pole (carries wires)</option><option value="lamp">Streetlight</option>
+        </Picker>
+        {item.street?.kind === 'lamp' && <>
+          <Field label="Lamp arm bearing (degrees, over the road)" value={item.street.armDegrees} numeric min={-360} max={360} onChange={(armDegrees) => update({ street: { ...item.street, armDegrees } })} />
+          <Picker label="Lamp mount" value={item.street.mount || ''} onChange={(mount) => update({ street: withMount(item.street, mount) })}>
+            <option value="">Not stated</option><option value="pole">On a utility pole</option><option value="post">On its own post</option>
+          </Picker>
+        </>}
         <VectorFields label="Rotation (degrees)" value={item.rotationDegrees} onChange={(rotationDegrees) => update({ rotationDegrees })} />
         {item.size && <VectorFields label="Size (m)" value={item.size} axes={item.type === 'plane' ? ['X', 'Z'] : undefined} positive onChange={(size) => update({ size })} />}
         {item.radius !== undefined && <Field label="Radius (m)" value={item.radius} numeric min={0.1} max={1000} onChange={(radius) => update({ radius })} />}

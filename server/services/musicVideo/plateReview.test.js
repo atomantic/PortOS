@@ -19,6 +19,10 @@ const scene = { startSec: 0, endSec: 4, direction: { actionContract: { version: 
 const response = (statuses = {}) => JSON.stringify({ checks: plateRequirements(scene).map(({ id }) => ({ id, status: statuses[id] || 'pass', note: 'Visible in the plate' })) });
 
 describe('plate evidence admission', () => {
+  it('holds shot plates and frames to the same street infrastructure check as set plates', () => {
+    expect(plateRequirements(scene).find(({ id }) => id === 'render-quality').requirement).toContain('infrastructure logic: a utility pole with no wires');
+  });
+
   it('fails a two-person shot on a one-person plate and rejects missing or duplicate checks', () => {
     const evidence = plateReviewEvidence(scene, 'one.png', 'run-a', response({ 'plate-2': 'fail' }));
     expect(evidence.verdict).toBe('fail');

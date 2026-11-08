@@ -89,6 +89,19 @@ export function newGreyboxItem(scene, collection, type = 'box') {
   return { id, label: 'New part', type, ...shape, position: [0, 0.5, 0], rotationDegrees: [0, 0, 0] };
 }
 
+/** A part's street furniture after the role picker changes; a lamp keeps its arm bearing when re-picked, else starts toward +Z. */
+export function streetFor(kind, current) {
+  if (kind === 'pole') return { kind: 'pole' };
+  if (kind === 'lamp') return { kind: 'lamp', armDegrees: Number.isFinite(current?.armDegrees) ? current.armDegrees : 0, ...(current?.mount ? { mount: current.mount } : {}) };
+  return undefined;
+}
+
+/** A lamp with its mount set, or with the key dropped when the mount is not stated. */
+export function withMount(street, mount) {
+  const { mount: _old, ...rest } = street;
+  return mount ? { ...rest, mount } : rest;
+}
+
 /** Removing a referenced row clears only its dependent references. */
 export function withoutGreyboxItem(scene, collection, id) {
   const next = { ...scene, [collection]: scene[collection].filter((item) => item.id !== id) };
@@ -126,6 +139,7 @@ export function greyboxEditErrors(scene) {
   for (const part of scene.parts) {
     if (part.zone && !zones.has(part.zone)) errors.push(`Part ${part.id} names an unknown zone.`);
     vector(part.rotationDegrees, 'Part rotation');
+    if (part.street?.kind === 'lamp') number(part.street.armDegrees, -360, 360, 'Lamp arm bearing');
     if (part.size) vector(part.size, 'Part size', true);
     if (part.radius !== undefined) number(part.radius, 0, 1000, 'Part radius', true);
     if (part.height !== undefined) number(part.height, 0, 1000, 'Part height', true);

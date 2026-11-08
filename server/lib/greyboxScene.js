@@ -57,6 +57,19 @@ const extrudePart = z.object({
   height: extent,
 });
 
+// Street furniture facts a painter cannot read off a grey primitive: poles
+// share one wire line, and a lamp's arm reaches over the road. `armDegrees`
+// uses the anchor facing convention (0 toward +Z, 90 toward +X); `mount` says
+// whether the lamp is bracketed on a wire pole or stands on its own post.
+const streetSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('pole') }),
+  z.object({
+    kind: z.literal('lamp'),
+    armDegrees: z.number().finite().min(-360).max(360),
+    mount: z.enum(['pole', 'post']).optional(),
+  }),
+]);
+
 const partShape = z.discriminatedUnion('type', [boxPart, cylinderPart, planePart, extrudePart]);
 
 const partSchema = z.intersection(
@@ -65,6 +78,7 @@ const partSchema = z.intersection(
     id: idSchema,
     label: labelSchema.optional(),
     zone: idSchema.optional(),
+    street: streetSchema.optional(),
     position: vec3.default([0, 0, 0]),
     rotationDegrees: vec3.default([0, 0, 0]),
   }),

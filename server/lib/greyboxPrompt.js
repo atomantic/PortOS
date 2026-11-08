@@ -29,6 +29,7 @@ export function greyboxContractInstructions() {
     '  {"type":"cylinder","radius":n,"height":n} (centered on position)',
     '  {"type":"plane","size":[width,depth]} (flat, at position)',
     `  {"type":"extrude","outline":[[x,z],...],"height":n} (a closed floor outline of 3..${GREYBOX_LIMITS.OUTLINE_POINTS} points swept up from position.y; use it for floors, ovals and irregular footprints)`,
+    '  Any part may add "street" to mark street furniture: {"kind":"pole"} for a utility pole (all poles of a street share one wire line), or {"kind":"lamp","armDegrees":n,"mount":"pole"|"post"} for a streetlight, where armDegrees is the bearing its arm reaches (0 toward +Z, 90 toward +X) and must point out over the road, never at a house, and mount says whether it is bracketed on a utility pole or stands on its own post. Use one mount for all lamps on a street.',
     '- zones: {"id","label","color":"#RRGGBB"}: named tints for areas (skate floor, seating, stage). A part joins a zone by naming its id.',
     '- landmarks: {"id","label","position":[x,y,z],"note"?}: named things worth pointing at in a shot description (DJ booth, north rail, exit door).',
     '- anchors: {"id","label","kind":"figure"|"prop","position":[x,y,z],"facingDegrees":n,"heightMeters":n}: floor marks for people and props, so each stays in the same spot from shot to shot. position.y is 0 for a figure on the floor.',

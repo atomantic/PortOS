@@ -79,6 +79,17 @@ describe('Cast & Sets vision transport contract', () => {
     expect(prompt).toContain('Respect details explicitly requested or supported by the story');
   });
 
+  // Uniquely catches a plate with a wireless pole or a lamp aimed at the houses passing the render-quality look (#15327).
+  it('asks the reviewer to fail impossible street infrastructure with that reason', async () => {
+    const scene = { ...inputs, planPrompt: 'A quiet cul-de-sac with a utility pole and a streetlight.' };
+    runner.runPromptThroughProvider.mockResolvedValueOnce(response());
+    await reviewCastSetsImage({ inputs: scene, reviewer });
+    const prompt = runner.runPromptThroughProvider.mock.calls.at(-1)[0].prompt;
+    expect(prompt).toContain('infrastructure logic: a utility pole with no wires or only a hint of them');
+    expect(prompt).toContain('a streetlight whose arm points at the houses instead of over the road');
+    expect(prompt).toContain('standalone lamp posts mixed with pole-mounted lamps on the same street');
+  });
+
   // Uniquely catches the #14811 failure modes: a local model fencing its JSON, and thinking models running past the 120 s cap.
   it('reads a fenced local reply and asks the reviewer not to think on either look', async () => {
     const local = { provider: { id: 'ollama', type: 'api', timeout: 1000, thinking: true }, model: 'vision-model' };
