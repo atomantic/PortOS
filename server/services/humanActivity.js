@@ -328,54 +328,81 @@ function rowToEvent(row) {
 // any candidate that failed normalization.
 //
 // A candidate may carry `supersedesDedupeKey`: the key an earlier version of the
-// same ingester wrote for this event (#15308). That row is deleted in the SAME
-// transaction as the insert, so a crash between them cannot lose the event; when
-// another row already holds the new key, ON CONFLICT keeps it and only the
-// superseded duplicate goes.
+// same ingester wrote for this event (#15308). See `recordRekeyedChunk`.
 export async function recordEvents(candidates = []) {
-  const rows = [];
-  const superseded = { sources: [], keys: [] };
+  const entries = [];
   for (const candidate of candidates || []) {
     const row = normalizeCandidate(candidate);
     if (!row) continue;
-    rows.push(row);
     const legacyKey = String(candidate.supersedesDedupeKey ?? '').trim();
-    if (legacyKey && legacyKey !== row.dedupeKey) {
-      superseded.sources.push(row.source);
-      superseded.keys.push(legacyKey);
-    }
+    entries.push({ row, legacyKey: legacyKey && legacyKey !== row.dedupeKey ? legacyKey : null });
   }
-  if (rows.length === 0) return { recorded: 0, skipped: (candidates || []).length };
+  if (entries.length === 0) return { recorded: 0, skipped: (candidates || []).length };
   await ensureReady();
 
   // Chunk the multi-row insert so a large batch (the message hook passes the full
   // capped cache each sync) can't exceed Postgres's 65535-param-per-statement
-  // limit — 12 params/row, so a 500-row chunk stays well under it.
+  // limit — 12 params/row, so a 500-row chunk stays well under it. Each chunk
+  // commits on its own, so one failing chunk never discards the others.
   const CHUNK = 500;
-  const insertAll = async (execute) => {
-    let inserted = 0;
-    for (let start = 0; start < rows.length; start += CHUNK) {
-      inserted += await insertActivityChunk(rows.slice(start, start + CHUNK), execute);
-    }
-    return inserted;
-  };
-  const recorded = superseded.keys.length === 0
-    ? await insertAll(query)
-    : await withTransaction(async (client) => {
-      const retired = await client.query(
-        `DELETE FROM human_activity_events e
-          USING unnest($1::text[], $2::text[]) AS k(source, dedupe_key)
-          WHERE e.source = k.source AND e.dedupe_key = k.dedupe_key`,
-        [superseded.sources, superseded.keys],
-      );
-      if (retired.rowCount > 0) console.log(`🗓️  Re-keyed ${retired.rowCount} activity event(s) off a superseded dedupe key`);
-      return insertAll(client.query.bind(client));
-    });
+  let recorded = 0;
+  for (let start = 0; start < entries.length; start += CHUNK) {
+    const chunk = entries.slice(start, start + CHUNK);
+    recorded += chunk.some((e) => e.legacyKey)
+      ? await withTransaction((client) => recordRekeyedChunk(client, chunk))
+      : await insertActivityChunk(chunk.map((e) => e.row));
+  }
   const skipped = (candidates || []).length - recorded;
   if (recorded > 0) {
     console.log(`🗓️  Recorded ${recorded} activity event(s) (${skipped} skipped as duplicate/invalid)`);
   }
   return { recorded, skipped };
+}
+
+// Move a chunk's events off their superseded keys inside one transaction, so a
+// crash between the delete and the insert cannot lose an event. The new key is
+// adopted only when no row holds it or the holder is account-less (a Takeout
+// import) or this same account; when ANOTHER account already holds it (one
+// email delivered to two connected mailboxes), this account keeps its own
+// per-account row. Otherwise its event would ride on the other account's row
+// and vanish when that account is erased. The legacy row is deleted only after
+// the insert, against the holder actually present then.
+async function recordRekeyedChunk(client, entries) {
+  const rekeyed = entries.filter((e) => e.legacyKey);
+  const { rows: holders } = await client.query(
+    `SELECT e.source, e.dedupe_key, e.account_id FROM human_activity_events e
+       JOIN unnest($1::text[], $2::text[]) AS k(source, dedupe_key)
+         ON e.source = k.source AND e.dedupe_key = k.dedupe_key`,
+    [rekeyed.map((e) => e.row.source), rekeyed.map((e) => e.row.dedupeKey)],
+  );
+  const holderAccount = new Map(holders.map((h) => [`${h.source}\u0000${h.dedupe_key}`, h.account_id]));
+  for (const e of rekeyed) {
+    const holder = holderAccount.get(`${e.row.source}\u0000${e.row.dedupeKey}`);
+    if (holder != null && holder !== e.row.accountId) {
+      e.row = { ...e.row, dedupeKey: e.legacyKey };
+      e.legacyKey = null;
+    }
+  }
+  const execute = client.query.bind(client);
+  const inserted = await insertActivityChunk(entries.map((e) => e.row), execute);
+  const retiring = entries.filter((e) => e.legacyKey);
+  if (retiring.length === 0) return inserted;
+  const retired = await client.query(
+    `DELETE FROM human_activity_events e
+      USING unnest($1::text[], $2::text[], $3::text[], $4::text[]) AS k(source, dedupe_key, legacy_key, account_id),
+            human_activity_events n
+      WHERE n.source = k.source AND n.dedupe_key = k.dedupe_key
+        AND (n.account_id IS NULL OR n.account_id IS NOT DISTINCT FROM k.account_id)
+        AND e.source = k.source AND e.dedupe_key = k.legacy_key`,
+    [
+      retiring.map((e) => e.row.source),
+      retiring.map((e) => e.row.dedupeKey),
+      retiring.map((e) => e.legacyKey),
+      retiring.map((e) => e.row.accountId),
+    ],
+  );
+  if (retired.rowCount > 0) console.log(`🗓️  Re-keyed ${retired.rowCount} activity event(s) off a superseded dedupe key`);
+  return inserted;
 }
 
 // Insert one chunk of normalized rows; returns the count actually inserted.

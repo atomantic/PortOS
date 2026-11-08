@@ -143,6 +143,42 @@ describe.skipIf(!runDb)('Gmail activity identity (#15308)', () => {
     expect(await rowsFor('atomic', acct)).toEqual([{ dedupe_key: `msg:${acct.id}:api-gmail-${nonce}-atomic`, account_id: acct.id }]);
   });
 
+  it('keeps a second mailbox\'s copy of one email on its own row, so erasing the first account keeps it', async () => {
+    const first = account('shared-a');
+    const second = account('shared-b');
+    const secondLegacyKey = `msg:${second.id}:api-gmail-${nonce}-shared`;
+    // The second account recorded the email before the upgrade.
+    await recordMessageActivity(second, [liveMessage('shared', { rfcMessageId: undefined })]);
+    await recordMessageActivity(first, [liveMessage('shared')]);
+
+    await recordMessageActivity(second, [liveMessage('shared')]);
+    const { rows } = await query(
+      `SELECT dedupe_key, account_id FROM human_activity_events WHERE source = 'gmail' AND account_id = ANY($1::text[]) ORDER BY account_id`,
+      [[first.id, second.id]],
+    );
+    expect(rows).toEqual([
+      { dedupe_key: `gmail:${messageId('shared')}`, account_id: first.id },
+      { dedupe_key: secondLegacyKey, account_id: second.id },
+    ]);
+
+    await deleteEvents({ accountId: first.id });
+    const { rows: left } = await query(
+      `SELECT dedupe_key FROM human_activity_events WHERE source = 'gmail' AND account_id = ANY($1::text[])`,
+      [[first.id, second.id]],
+    );
+    expect(left).toEqual([{ dedupe_key: secondLegacyKey }]);
+  });
+
+  it('commits each 500-event chunk on its own, so a failing chunk does not discard the others', async () => {
+    const acct = account('chunks');
+    const good = Array.from({ length: 500 }, (_, i) => liveMessage(`chunk-${i}`));
+    const unstorable = liveMessage('chunk-bad', { date: '-010000-01-01T00:00:00.000Z' });
+
+    await expect(recordMessageActivity(acct, [...good, unstorable])).rejects.toThrow();
+    const { rows } = await query(`SELECT count(*)::int AS n FROM human_activity_events WHERE source = 'gmail' AND account_id = $1`, [acct.id]);
+    expect(rows[0].n).toBe(500);
+  });
+
   it('still erases a deleted account\'s re-keyed live rows', async () => {
     const acct = account('erase');
     await recordMessageActivity(acct, [liveMessage('erase')]);
