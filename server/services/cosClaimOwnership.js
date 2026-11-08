@@ -400,5 +400,8 @@ export async function checkSnapshotPublicationOwnership({ appId, branch, prUrl }
     && agent.metadata.reviewLoopMergeTarget.branch === branch)) {
     return { admitted: false, reason: 'review-owner-active' };
   }
-  return checkReconcileOwnership({ appId, branch, prUrl }, { ...deps, getAgents: async () => agents });
+  // Publication keeps the strict hold: the reconcile-only unshipped release
+  // exists for a coordinator that opens the PR through the review workflow.
+  const readCompletionHold = deps.readCompletionHold ?? (await import('./branchCompletionPolicy.js')).readBranchCompletionHold;
+  return checkReconcileOwnership({ appId, branch, prUrl }, { ...deps, readCompletionHold, getAgents: async () => agents });
 }
