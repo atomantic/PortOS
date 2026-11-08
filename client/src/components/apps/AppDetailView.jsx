@@ -434,7 +434,7 @@ function AppDetail() {
                 <button
                   onClick={fetchApp}
                   disabled={actionLoading}
-                  className="px-2 py-1 pointer-coarse:min-h-11 bg-port-warning/20 text-port-warning enabled:hover:bg-port-warning/30 transition-colors disabled:opacity-50 flex items-center gap-1"
+                  className="px-2 py-1 pointer-coarse:min-h-11 pointer-coarse:rounded-lg pointer-coarse:border pointer-coarse:border-port-border bg-port-warning/20 text-port-warning enabled:hover:bg-port-warning/30 transition-colors disabled:opacity-50 flex items-center gap-1"
                   title="PM2 status could not be read — refresh to retry"
                 >
                   <RefreshCw size={14} />
@@ -445,7 +445,7 @@ function AppDetail() {
                   onClick={handleStart}
                   disabled={actionLoading}
                   aria-busy={actionLoading === 'start'}
-                  className="px-2 py-1 pointer-coarse:min-h-11 bg-port-success/20 text-port-success enabled:hover:bg-port-success/30 transition-colors disabled:opacity-50 flex items-center gap-1"
+                  className="px-2 py-1 pointer-coarse:min-h-11 pointer-coarse:rounded-lg pointer-coarse:border pointer-coarse:border-port-border bg-port-success/20 text-port-success enabled:hover:bg-port-success/30 transition-colors disabled:opacity-50 flex items-center gap-1"
                 >
                   <Play size={14} />
                   <span className="text-xs">{actionLoading === 'start' ? 'Starting...' : 'Start'}</span>
