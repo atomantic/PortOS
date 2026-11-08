@@ -26,7 +26,7 @@ export const CREATIVE_LIBRARIES = Object.freeze([
   }),
   Object.freeze({
     id: 'environments', type: 'place', path: '/environments', label: 'Environments', singular: 'environment', empty: 'No environments yet.',
-    detailTabs: Object.freeze([PROFILE, SHEETS, tab('plates', 'Plates'), tab('greybox', 'Greybox'), tab('photoreal', 'Photoreal'), tab('references', 'References')]),
+    detailTabs: Object.freeze([PROFILE, SHEETS, tab('plates', 'Plates'), tab('greybox', 'Greybox'), tab('photoreal', 'Photoreal'), tab('town', 'Town'), tab('references', 'References')]),
   }),
   Object.freeze({
     id: 'objects', type: 'object', path: '/objects', label: 'Objects', singular: 'object', empty: 'No objects yet.',

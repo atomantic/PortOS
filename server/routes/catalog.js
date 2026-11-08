@@ -1,4 +1,4 @@
-import { catalogGreyboxDraftSchema, catalogGreyboxSaveSchema, catalogGreyboxCaptureSchema, catalogGreyboxRenderSchema, catalogPhotorealRenderSchema, catalogPhotorealOpenSchema, catalogPhotorealLookDraftSchema, catalogPhotorealLookSaveSchema, catalogPhotorealTextureIdSchema, catalogPhotorealTextureSearchSchema } from '../lib/catalogGreyboxValidation.js';
+import { catalogGreyboxDraftSchema, catalogGreyboxSaveSchema, catalogTownSaveSchema, catalogGreyboxCaptureSchema, catalogGreyboxRenderSchema, catalogPhotorealRenderSchema, catalogPhotorealOpenSchema, catalogPhotorealLookDraftSchema, catalogPhotorealLookSaveSchema, catalogPhotorealTextureIdSchema, catalogPhotorealTextureSearchSchema } from '../lib/catalogGreyboxValidation.js';
 import { getCatalogIdentityAccess } from '../services/catalogDB/identityAccess.js';
 // Creative Ingredients Catalog HTTP routes, mounted at /api/catalog. Backs
 // the Catalog page, Ingest workflow, picker integrations, and peer sync.
@@ -69,7 +69,7 @@ import { parseBulkPayload, bundleToMarkdown, toYamlString } from '../lib/catalog
 import { resolveImageInputPath } from '../lib/fileUtils.js';
 import { embedIngredient, embedBatch, ingredientEmbedSeed } from '../services/embeddings.js';
 import { extractIngredientsForScrap } from '../services/catalogExtraction.js';
-import { captureGreyboxShot, draftGreybox, previewGreyboxPrompt, renderGreyboxShot, saveGreybox } from '../services/catalogGreybox.js';
+import { captureGreyboxShot, draftGreybox, previewGreyboxPrompt, renderGreyboxShot, saveGreybox, saveTown } from '../services/catalogGreybox.js';
 import { getPhotorealStatus, openPhotorealBlend, photorealBlendPath, startPhotorealRender } from '../services/catalogPhotoreal.js';
 import { installTexture, listInstalledTextures, searchTextures } from '../services/photorealTextures.js';
 import { draftPhotorealLook, previewPhotorealLookPrompt, savePhotorealLook } from '../services/catalogPhotorealLook.js';
@@ -819,6 +819,17 @@ router.put('/ingredients/:id/greybox', asyncHandler(async (req, res) => {
   catalogEvents.emit('primitive-changed', { ingredientId: updated.id });
   // Same fan-out as PATCH: a linked universe's embedded place must not keep the
   // old layout, or its next Universe Builder edit would write it back.
+  projectToCanon(updated.id, updated).catch((err) => {
+    console.error(`🔁 catalog→canon projection failed for ${updated.id}: ${err.message}`);
+  });
+}));
+
+// Town map: places other environments and joins them with streets (lib/townMap.js).
+router.put('/ingredients/:id/town', asyncHandler(async (req, res) => {
+  const { town, source } = validateRequest(catalogTownSaveSchema, req.body);
+  const updated = await saveTown(req.params.id, town, { source });
+  res.json(updated);
+  catalogEvents.emit('primitive-changed', { ingredientId: updated.id });
   projectToCanon(updated.id, updated).catch((err) => {
     console.error(`🔁 catalog→canon projection failed for ${updated.id}: ${err.message}`);
   });

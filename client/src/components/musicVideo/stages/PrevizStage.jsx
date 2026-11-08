@@ -1,10 +1,12 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
-import { Box, Play, RefreshCw } from 'lucide-react';
+import { Box, Map as MapIcon, Play, RefreshCw, X } from 'lucide-react';
 import StageSection from '../StageSection.jsx';
 import toast from '../../ui/Toast';
 import useMusicVideoGreyboxPlaces from '../../../hooks/useMusicVideoGreyboxPlaces.js';
 import { ingredientPath } from '../../../lib/creativeLibraries.js';
+import { createCatalogIngredient, listCatalogIngredientsByIds, saveCatalogTown } from '../../../services/apiCatalog.js';
+import { draftTownFromRouteMaps } from '../../../../../server/lib/townMap.js';
 import { sceneShotName } from '../../../lib/musicVideoStages.js';
 import { formatCount, formatTimecode } from '../../../utils/formatters.js';
 import { shotNumbers } from '../ShotStepper.jsx';
@@ -56,6 +58,62 @@ function PawnColors({ project, characters, onChange }) {
 }
 
 const CAMERA_STYLE_LABELS = { steady: 'Steady', handheld: 'Handheld shake', still: 'Still (snapshot)', documentary: 'Documentary drift' };
+
+const townIdMaker = () => {
+  const stamp = Date.now().toString(36);
+  let n = 0;
+  return () => `t${stamp}${(n += 1).toString(36)}`;
+};
+
+/**
+ * The town the previz plays in: a catalog environment with a town map. "Draft
+ * town from route maps" makes a new environment from the video's route maps
+ * (sets on their routes, streets between them) and picks it; it is edited on
+ * that environment's Town tab.
+ */
+function PrevizTown({ project, townId, onPick }) {
+  const [town, setTown] = useState(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let active = true;
+    setTown(null);
+    if (!townId) return () => { active = false; };
+    listCatalogIngredientsByIds([townId], { silent: true })
+      .then((rows) => { if (active) setTown(rows.find((row) => row.id === townId) || false); })
+      .catch(() => { if (active) setTown(false); });
+    return () => { active = false; };
+  }, [townId]);
+  const routes = (project.routeMaps || []).filter((map) => (map.stops || []).length);
+  const draft = async () => {
+    setBusy(true);
+    const { town: map, skipped } = draftTownFromRouteMaps(project, { newId: townIdMaker(), seed: Math.floor(Math.random() * 1e6) });
+    const created = await createCatalogIngredient({ type: 'place', name: `${project.title || 'Music video'} town`.slice(0, 120), payload: { description: 'Town map for the previz: the video\'s sets placed on one map, joined by streets.' } }).catch(() => null);
+    const saved = created ? await saveCatalogTown(created.id, map).catch(() => null) : null;
+    setBusy(false);
+    if (!saved) return;
+    onPick(saved.id);
+    toast.success(`Town drafted with ${formatCount(map.sets.length)} set${map.sets.length === 1 ? '' : 's'}${skipped.length ? `; not in the catalog yet: ${skipped.join(', ')}` : ''}`);
+  };
+  if (townId) {
+    const path = town ? `${ingredientPath({ id: townId, type: 'place' })}/town` : null;
+    return (
+      <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs">
+        <MapIcon size={14} aria-hidden="true" className="text-port-text-muted" />
+        <span className="text-port-text">{town === null ? 'Loading the town…' : town ? town.name : 'The town environment was removed'}</span>
+        {path && <Link className={buttonCls} to={path}>Open town map</Link>}
+        <button type="button" className={buttonCls} onClick={() => onPick(null)}><X size={12} aria-hidden="true" /> Unlink town</button>
+      </div>
+    );
+  }
+  return (
+    <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs">
+      <button type="button" className={buttonCls} disabled={busy || !routes.length} onClick={draft}><MapIcon size={12} aria-hidden="true" /> Draft town from route maps</button>
+      <span className="text-port-text-muted">{routes.length
+        ? 'Places the sets on one map, joined by streets, as a new environment you can edit.'
+        : 'Add a route map on the Shots step first.'}</span>
+    </div>
+  );
+}
 
 /** How each of the video's cameras moves in the previz while it shoots a cut. */
 function CameraStyles({ cameras, onChange }) {
@@ -172,6 +230,13 @@ export default function PrevizStage({ board }) {
           </button>
           {!timedShots && <span className="text-xs text-port-text-muted">Time the shots on the Storyboard step first.</span>}
           {timedShots > 0 && !placesLoaded && <span className="text-xs text-port-text-muted">Loading the sets…</span>}
+        </fieldset>
+        <fieldset disabled={locked} className="min-w-0 space-y-1">
+          <legend className="text-xs text-port-text-muted">Town</legend>
+          <PrevizTown project={project} townId={project.previz?.townId || null} onPick={(townId) => {
+            const current = project.previz && Array.isArray(project.previz.cuts) ? project.previz : { cuts: [], tracks: [] };
+            save({ ...current, townId });
+          }} />
         </fieldset>
         {previz && (project.cameras || []).length > 0 && (
           <fieldset disabled={locked} className="min-w-0 space-y-1">

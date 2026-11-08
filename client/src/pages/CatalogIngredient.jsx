@@ -10,7 +10,7 @@
 import CatalogReferenceLibrary from '../components/catalog/CatalogReferenceLibrary.jsx';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams, useLocation, Link } from 'react-router';
-import { Save, Trash2, ArrowLeft, Loader2, Plus, X, History, RotateCcw, Image as ImageIcon, ChevronDown, Upload, Mic, Square, UserRound, LayoutGrid, Images, Clapperboard, Shirt, Box, Wand2, Aperture } from 'lucide-react';
+import { Save, Trash2, ArrowLeft, Loader2, Plus, X, History, RotateCcw, Image as ImageIcon, ChevronDown, Upload, Mic, Square, UserRound, LayoutGrid, Images, Clapperboard, Shirt, Box, Wand2, Aperture, Map as MapIcon } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import FilePickerButton from '../components/ui/FilePickerButton';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair.jsx';
@@ -55,6 +55,7 @@ import CatalogSheetsPanel, { ReferenceSheetPanel } from '../components/catalog/C
 import CatalogUnlockNotice from '../components/catalog/CatalogUnlockNotice';
 import CatalogPlatesPanel from '../components/catalog/CatalogPlatesPanel';
 import GreyboxPanel from '../components/catalog/GreyboxPanel';
+import TownPanel from '../components/catalog/TownPanel';
 import PhotorealPanel from '../components/catalog/PhotorealPanel';
 import CatalogLooksPanel from '../components/catalog/CatalogLooksPanel';
 import CatalogDesignPanel from '../components/catalog/CatalogDesignPanel';
@@ -104,6 +105,7 @@ const DETAIL_TAB_ICONS = {
   plates: Clapperboard,
   greybox: Box,
   photoreal: Aperture,
+  town: MapIcon,
   references: Images,
   images: ImageIcon,
 };
@@ -608,18 +610,19 @@ function IngredientEditor() {
     return true;
   }, [record, refreshRevisions, identityReadOnly]);
 
-  // The Greybox and Photoreal tabs save straight onto the SAVED payload; copy just
+  // The Greybox, Photoreal and Town tabs save straight onto the SAVED payload; copy just
   // those keys into the draft so the next profile Save does not write the old
   // layout or look back.
   const handleGreyboxSaved = useCallback((updated) => {
     const persisted = ingredientPayload(updated.payload);
     setRecord((prev) => (prev?.id === updated.id ? { ...prev, ...updated, payload: persisted } : prev));
     setPayload((cur) => {
-      const { greybox: _greybox, photoreal: _photoreal, ...rest } = cur;
+      const { greybox: _greybox, photoreal: _photoreal, town: _town, ...rest } = cur;
       return {
         ...rest,
         ...(persisted.greybox ? { greybox: persisted.greybox } : {}),
         ...(persisted.photoreal ? { photoreal: persisted.photoreal } : {}),
+        ...(persisted.town ? { town: persisted.town } : {}),
       };
     });
     refreshRevisions();
@@ -1182,6 +1185,17 @@ function IngredientEditor() {
             onBusyChange={setGreyboxBusy}
             onSaved={handleGreyboxSaved}
             onCaptured={refreshMedia}
+          />
+        )}
+
+        {activeTab === 'town' && mediaReady && (
+          <TownPanel
+            key={record.id}
+            record={record}
+            readOnly={identityReadOnly}
+            disabled={saving}
+            onBusyChange={setGreyboxBusy}
+            onSaved={handleGreyboxSaved}
           />
         )}
 

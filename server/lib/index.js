@@ -956,6 +956,8 @@ export * from './musicVideoStatsOutro.js';
 export * from './musicVideoCameos.js';
 export * from './musicVideoPreviz.js';
 export * from './musicVideoPrevizLimits.js';
+export * from './townMap.js';
+export * from './townMapValidation.js';
 export * from './musicVideoRouteMapLimits.js';
 export * from './musicVideoRouteMaps.js';
 export * from './musicVideoShotSheet.js';

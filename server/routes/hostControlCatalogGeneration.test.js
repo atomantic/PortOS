@@ -50,7 +50,7 @@ vi.mock('../services/catalogDB.js', () => ({
 vi.mock('../services/catalogExtraction.js', () => ({ extractIngredientsForScrap: effects.extract }));
 vi.mock('../services/catalogPrune.js', () => ({ pruneCatalogBabble: effects.prune }));
 vi.mock('../services/catalogGreybox.js', () => ({
-  captureGreyboxShot: vi.fn(), draftGreybox: vi.fn(), previewGreyboxPrompt: vi.fn(), saveGreybox: vi.fn(), renderGreyboxShot: effects.renderGreyboxShot,
+  captureGreyboxShot: vi.fn(), draftGreybox: vi.fn(), previewGreyboxPrompt: vi.fn(), saveGreybox: vi.fn(), saveTown: vi.fn(), renderGreyboxShot: effects.renderGreyboxShot,
 }));
 vi.mock('../services/catalogMediaRefinement.js', () => ({ refineCatalogMedia: effects.refineMedia }));
 vi.mock('../services/catalogIngestSources.js', () => ({

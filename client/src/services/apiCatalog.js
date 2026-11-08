@@ -328,6 +328,9 @@ export const previewCatalogGreyboxPrompt = (id, body, options) =>
 export const saveCatalogGreybox = (id, greybox, { source, ...options } = {}) =>
   request(`/catalog/ingredients/${enc(id)}/greybox`, { method: 'PUT', body: JSON.stringify({ greybox, ...(source ? { source } : {}) }), ...options });
 
+export const saveCatalogTown = (id, town, { source, ...options } = {}) =>
+  request(`/catalog/ingredients/${enc(id)}/town`, { method: 'PUT', body: JSON.stringify({ town, ...(source ? { source } : {}) }), ...options });
+
 export const captureCatalogGreyboxShot = (id, shotId, dataBase64, options) =>
   request(`/catalog/ingredients/${enc(id)}/greybox/shots/${enc(shotId)}/capture`, { method: 'POST', body: JSON.stringify({ dataBase64 }), ...options });
 
