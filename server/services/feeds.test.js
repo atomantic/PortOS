@@ -334,6 +334,25 @@ describe('refreshFeed', () => {
     expect(links).not.toContain('https://example.com/p/999');
   });
 
+  it('keeps new posts when every stored pubDate is unparseable by Date.parse', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-19T10:00:00Z'));
+    const item = (n) => `<item><title>T${n}</title><link>https://example.com/u/${n}</link><pubDate>Tue, 10 Jun 2003 04:00:00 CEST</pubDate></item>`;
+    const rss = (ns) => `<rss version="2.0"><channel><title>U</title>${ns.map(item).join('')}</channel></rss>`;
+    const initial = Array.from({ length: 100 }, (_, i) => i);
+    fetchMock.mockResolvedValueOnce(makeResponse({ body: rss(initial) }));
+    const { feed } = await feeds.addFeed('https://example.com/u');
+
+    vi.setSystemTime(new Date('2026-05-19T10:01:00Z'));
+    fetchMock.mockResolvedValueOnce(makeResponse({ body: rss([...initial, 100, 101, 102]) }));
+    const result = await feeds.refreshFeed(feed.id);
+    expect(result.newCount).toBe(3);
+
+    const links = (await feeds.getItems({ feedId: feed.id, limit: 200 })).map(i => i.link);
+    expect(links).toHaveLength(100);
+    for (const n of [100, 101, 102]) expect(links).toContain(`https://example.com/u/${n}`);
+  });
+
   it('returns an error when the feed id is unknown', async () => {
     expect(await feeds.refreshFeed('missing')).toEqual({ error: 'Feed not found' });
   });

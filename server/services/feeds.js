@@ -23,7 +23,7 @@ const store = createCachedStore(FEEDS_FILE, DEFAULT_DATA, { context: 'feeds' });
 
 // Compare items newest-first by pubDate (or fetchedAt fallback). Both writes
 // and the legacy normalization pass use this so getItems can skip the sort.
-const itemSortKey = (item) => Date.parse(item.pubDate || item.fetchedAt) || 0;
+const itemSortKey = (item) => Date.parse(item.pubDate) || Date.parse(item.fetchedAt) || 0;
 const compareItemsNewestFirst = (a, b) => itemSortKey(b) - itemSortKey(a);
 
 // Drop items with no link, a link already in `seen`, or a link repeated within
