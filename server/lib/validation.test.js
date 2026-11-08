@@ -980,6 +980,15 @@ describe('validation.js', () => {
       expect(sanitizeTaskMetadata({ stallNudge: 'off' })).toBeNull();
     });
 
+    it('normalizes pr-watcher self-managed authors and bounds the stale window', () => {
+      expect(sanitizeTaskMetadata({ selfManagedPrAuthors: [' @Alice ', 'alice', 'bad login', 'x;rm', 7], selfManagedPrStaleMinutes: 90 }))
+        .toEqual({ selfManagedPrAuthors: ['alice'], selfManagedPrStaleMinutes: 90 });
+      // An explicit empty list survives so a per-app override can clear the global one.
+      expect(sanitizeTaskMetadata({ selfManagedPrAuthors: [] })).toEqual({ selfManagedPrAuthors: [] });
+      expect(sanitizeTaskMetadata({ selfManagedPrStaleMinutes: 0 })).toBeNull();
+      expect(sanitizeTaskMetadata({ selfManagedPrStaleMinutes: 1.5 })).toBeNull();
+    });
+
     it('should return null for null/undefined/non-object input', () => {
       expect(sanitizeTaskMetadata(null)).toBeNull();
       expect(sanitizeTaskMetadata(undefined)).toBeNull();

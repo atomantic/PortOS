@@ -3,7 +3,7 @@ import { useState, useEffect, useMemo } from 'react';
 import useFieldDraft from '../../../../hooks/useFieldDraft';
 import { RotateCcw, AlertCircle } from 'lucide-react';
 import CronInput from '../../../CronInput';
-import { AGENT_OPTIONS, BRANCHES_PER_AGENT_DEFAULT, BRANCHES_PER_AGENT_OPTIONS, BRANCHES_PER_AGENT_TASK_TYPES, DEFAULT_REVIEW_STOP_MODE, DEPFREE_MODE_DEFAULT, DEPFREE_MODE_OPTIONS, DEPFREE_MODE_TASK_TYPES, depfreeModeOption, LOG_TRIAGE_CAPS, LOG_TRIAGE_TASK_TYPES, REVIEWER_OVERRIDE_KEYS as REVIEW_CONFIG_KEYS, IMPLICIT_PR_COMPLETION, PR_AUTHOR_FILTER_OPTIONS, PR_COMPLETION_OPTIONS, pinnedPrCompletion, prCompletionOption, RELEASE_OPTIONS, RELEASE_OPTIONS_TASK_TYPES, STALL_NUDGE_OPTION, ISSUE_AUTHOR_FILTER_OPTIONS, ISSUE_AUTHOR_FILTER_TASK_TYPES, SWARM_COUNT_OPTIONS, SWARM_TASK_TYPES } from '../../constants';
+import { AGENT_OPTIONS, BRANCHES_PER_AGENT_DEFAULT, BRANCHES_PER_AGENT_OPTIONS, BRANCHES_PER_AGENT_TASK_TYPES, DEFAULT_REVIEW_STOP_MODE, DEPFREE_MODE_DEFAULT, DEPFREE_MODE_OPTIONS, DEPFREE_MODE_TASK_TYPES, depfreeModeOption, LOG_TRIAGE_CAPS, LOG_TRIAGE_TASK_TYPES, REVIEWER_OVERRIDE_KEYS as REVIEW_CONFIG_KEYS, IMPLICIT_PR_COMPLETION, PR_AUTHOR_FILTER_OPTIONS, PR_COMPLETION_OPTIONS, pinnedPrCompletion, prCompletionOption, RELEASE_OPTIONS, RELEASE_OPTIONS_TASK_TYPES, SELF_MANAGED_PR_STALE_MINUTES_DEFAULT, SELF_MANAGED_PR_STALE_MINUTES_MAX, STALL_NUDGE_OPTION, ISSUE_AUTHOR_FILTER_OPTIONS, ISSUE_AUTHOR_FILTER_TASK_TYPES, SWARM_COUNT_OPTIONS, SWARM_TASK_TYPES } from '../../constants';
 import ReviewerPicker from '../../ReviewerPicker';
 import Banner from '../../../ui/Banner';
 import InfoTooltip from '../../../ui/InfoTooltip';
@@ -85,6 +85,35 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
       try {
         await onUpdate(taskType, {
           taskMetadata: { ...(config.taskMetadata || {}), issueExcludeLabels: next.split(',').map((s) => s.trim()).filter(Boolean) }
+        });
+      } finally {
+        setUpdating(false);
+      }
+    }
+  );
+  // pr-watcher's self-managed authors: comma-separated logins, committed on blur.
+  const selfManagedAuthorsDraft = useFieldDraft(
+    (config.taskMetadata?.selfManagedPrAuthors || []).join(', '),
+    async (next) => {
+      setUpdating(true);
+      try {
+        await onUpdate(taskType, {
+          taskMetadata: { ...(config.taskMetadata || {}), selfManagedPrAuthors: next.split(',').map((s) => s.trim()).filter(Boolean) }
+        });
+      } finally {
+        setUpdating(false);
+      }
+    }
+  );
+  const selfManagedStaleDraft = useFieldDraft(
+    String(config.taskMetadata?.selfManagedPrStaleMinutes || SELF_MANAGED_PR_STALE_MINUTES_DEFAULT),
+    async (next) => {
+      const minutes = Number.parseInt(next, 10);
+      if (!Number.isInteger(minutes) || minutes < 1) return;
+      setUpdating(true);
+      try {
+        await onUpdate(taskType, {
+          taskMetadata: { ...(config.taskMetadata || {}), selfManagedPrStaleMinutes: Math.min(minutes, SELF_MANAGED_PR_STALE_MINUTES_MAX) }
         });
       } finally {
         setUpdating(false);
@@ -600,6 +629,38 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
           <p className="text-xs text-gray-500 mt-1">
             {PR_AUTHOR_FILTER_OPTIONS.find(o => o.value === 'trusted')?.description}
             {' '}Edit the prompt below to control what the agent does for each opened PR (it can use <code>{'{prData}'}</code>, <code>{'{repoFullName}'}</code>, <code>{'{defaultBranch}'}</code>).
+          </p>
+          <div className="grid gap-3 mt-3 grid-cols-1 sm:grid-cols-[minmax(0,1fr)_10rem]">
+            <div>
+              <label htmlFor={`pr-self-managed-authors-${taskType}`} className="text-sm text-gray-400 block mb-2">Self-managed PR authors</label>
+              <input
+                id={`pr-self-managed-authors-${taskType}`}
+                type="text"
+                value={selfManagedAuthorsDraft.value}
+                onChange={selfManagedAuthorsDraft.onChange}
+                onBlur={selfManagedAuthorsDraft.onBlur}
+                disabled={updating}
+                placeholder="octocat, hubot"
+                className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm"
+              />
+            </div>
+            <div>
+              <label htmlFor={`pr-self-managed-stale-${taskType}`} className="text-sm text-gray-400 block mb-2">Stale after (minutes)</label>
+              <input
+                id={`pr-self-managed-stale-${taskType}`}
+                type="number"
+                min={1}
+                max={SELF_MANAGED_PR_STALE_MINUTES_MAX}
+                value={selfManagedStaleDraft.value}
+                onChange={selfManagedStaleDraft.onChange}
+                onBlur={selfManagedStaleDraft.onBlur}
+                disabled={updating}
+                className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm"
+              />
+            </div>
+          </div>
+          <p className="text-xs text-gray-500 mt-1">
+            These authors run their own merge process. PR Watcher leaves their PRs alone until a PR has had no activity for the stale window, then treats it like any other trusted PR.
           </p>
         </div>
       )}

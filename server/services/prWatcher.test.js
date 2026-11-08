@@ -927,6 +927,31 @@ describe('checkPullRequests trusted maintenance boundary', () => {
     expect((await checkPullRequests({ ...tracked, prWatcherState: { lastSeenPrNumber: 3, activityByPr: failureSeen.activityByPr } })).newPrs.map(pr => pr.number)).toEqual([3]);
   });
 
+  it('leaves a self-managed author\'s active PR alone and dispatches it once it goes stale', async () => {
+    const nowMs = Date.parse('2026-08-01T12:00:00Z');
+    const prs = [
+      rawPr(3, 'collaborator', { updatedAt: '2026-08-01T11:30:00Z' }),
+      rawPr(4, 'operator', { updatedAt: '2026-08-01T11:30:00Z' }),
+    ];
+    forge(prs);
+    const options = { selfManagedPrAuthors: ['@Collaborator'], nowMs };
+    const tracked = { ...app, prWatcherState: { lastSeenPrNumber: 4, activityByPr: {} } };
+
+    const active = await checkPullRequests(tracked, options);
+    expect(active.newPrs.map(pr => pr.number)).toEqual([4]);
+    expect(active.selfManagedHeld).toEqual([3]);
+    // The held PR's activity is not recorded, so it still reads as new when stale.
+    expect(active.activityByPr).not.toHaveProperty('3');
+
+    const later = { ...tracked, prWatcherState: { lastSeenPrNumber: 4, activityByPr: active.activityByPr } };
+    const stale = await checkPullRequests(later, { ...options, nowMs: nowMs + 31 * 60_000 });
+    expect(stale.newPrs.map(pr => pr.number)).toEqual([3]);
+    expect(stale.selfManagedHeld).toEqual([]);
+
+    // A configured window replaces the one-hour default.
+    expect((await checkPullRequests(later, { ...options, selfManagedPrStaleMinutes: 15 })).newPrs.map(pr => pr.number)).toEqual([3]);
+  });
+
   it('runs every gh read with the per-repo credential, honouring the app\'s forgeAccount pin', async () => {
     // #7540: `gh repo view`, `gh pr list` and the collaborator `gh api` probes all
     // used gh's ambient active login, so an app whose repo belongs to another

@@ -389,6 +389,10 @@ export const PR_AUTHOR_FILTER_OPTIONS = [
   { value: 'trusted', label: 'Owner and write collaborators', description: 'Verified repository collaborators and the signed-in operator; external PRs use PR Reviewer' }
 ];
 
+// pr-watcher self-managed author stale window. Mirrors server/lib/selfManagedPrAuthors.js.
+export const SELF_MANAGED_PR_STALE_MINUTES_DEFAULT = 60;
+export const SELF_MANAGED_PR_STALE_MINUTES_MAX = 7 * 24 * 60;
+
 // claim-issue author gate (taskMetadata.issueAuthorFilter). Mirrors
 // ISSUE_AUTHOR_FILTERS in server/lib/validation.js. 'self' = only claim issues
 // YOU filed (the slashdo /do:next --self security boundary; the default);

@@ -24,6 +24,9 @@ import { createHash } from 'node:crypto';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
 import { PR_COMPLETIONS, prHeldForOperator, resolvePrCompletion } from '../lib/prDisposition.js';
+import {
+  SELF_MANAGED_PR_STALE_MINUTES_DEFAULT, isSelfManagedPrActive, isValidSelfManagedPrStaleMinutes, normalizeSelfManagedPrAuthors,
+} from '../lib/selfManagedPrAuthors.js';
 
 // Bound the gh query. The high-water mark (computePrCheck) advances to the max
 // open PR number it saw, so it can only correctly drain a backlog it received
@@ -1035,9 +1038,16 @@ export async function persistPrWatcherState(appId, patch) {
  *   { ok: true, firstRun: true, repoFullName, defaultBranch, newLastSeen }
  *   { ok: true, newPrs, newLastSeen, repoFullName, defaultBranch, candidateCount }
  */
-export async function checkPullRequests(app, { authorFilter = 'trusted' } = {}) {
+export async function checkPullRequests(app, {
+  authorFilter = 'trusted', selfManagedPrAuthors = [], selfManagedPrStaleMinutes, nowMs = Date.now(),
+} = {}) {
   // Legacy 'any'/'others' pins cannot widen a maintenance task into intake.
   const filter = authorFilter === 'self' ? 'self' : 'trusted';
+  const selfManaged = {
+    authors: normalizeSelfManagedPrAuthors(selfManagedPrAuthors),
+    staleMinutes: isValidSelfManagedPrStaleMinutes(selfManagedPrStaleMinutes)
+      ? selfManagedPrStaleMinutes : SELF_MANAGED_PR_STALE_MINUTES_DEFAULT,
+  };
 
   const origin = await getOriginInfo(app.repoPath).catch(() => null);
   // Accept any GitHub-family host — github.com AND self-hosted GitHub Enterprise
@@ -1106,10 +1116,19 @@ export async function checkPullRequests(app, { authorFilter = 'trusted' } = {}) 
   const firstRun = prevLastSeen === null;
   const activityByPr = {};
   const newPrs = [];
+  const selfManagedHeld = [];
   for (const pr of prs) {
     if (!Number.isInteger(pr.number) || pr.number < 1) continue;
     if (!await trust.isTrusted(pr.authorLogin)) continue;
     if (filter === 'self' && pr.authorLogin?.toLowerCase() !== selfLogin) continue;
+    if (isSelfManagedPrActive(pr, selfManaged, nowMs)) {
+      // Keep the previous fingerprint rather than recording this one, so the
+      // activity seen while held still reads as new once the PR goes stale.
+      const prior = state.activityByPr?.[pr.number];
+      if (prior) activityByPr[pr.number] = prior;
+      selfManagedHeld.push(pr.number);
+      continue;
+    }
     // Includes current head and CI transitions, so an existing PR becomes
     // actionable again when its checks complete or a collaborator pushes a fix.
     const fingerprint = createHash('sha256').update(JSON.stringify([
@@ -1119,7 +1138,7 @@ export async function checkPullRequests(app, { authorFilter = 'trusted' } = {}) 
     if (!firstRun && state.activityByPr?.[pr.number] !== fingerprint) newPrs.push(pr);
   }
   const newLastSeen = Math.max(prevLastSeen || 0, ...prs.map(pr => Number.isInteger(pr.number) ? pr.number : 0));
-  return { ok: true, firstRun, newPrs, newLastSeen, activityByPr,
+  return { ok: true, firstRun, newPrs, newLastSeen, activityByPr, selfManagedHeld,
     candidateCount: prs.length, repoFullName, defaultBranch };
 
 }
