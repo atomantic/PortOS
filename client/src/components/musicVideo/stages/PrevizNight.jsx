@@ -75,6 +75,8 @@ function BeatEditor({ project, world, night, beat, characters, setName, onChange
     const clock = fromTimeValue(value);
     if (clock === null) return;
     const startMin = nightMinuteOfClock(night, clock);
+    // A time outside the night wraps past its end.
+    if (startMin >= night.lengthMin) return;
     onChange({ startMin, endMin: startMin + span });
   };
   return (

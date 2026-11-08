@@ -86,4 +86,8 @@ it('places shots on the night and saves a cut\'s story time', async () => {
   fireEvent.change(screen.getByLabelText('On the night at'), { target: { value: '20:30' } });
   expect(board.saveProjectFields.mock.calls.at(-1)[0].previz.cuts[0]).toMatchObject({ storyMin: 30 });
   expect(board.saveProjectFields.mock.calls.at(-1)[0].previz.night).toEqual(night);
+  // 19:00 is before a night that starts at 20:00, so it is not a moment of it.
+  const saves = board.saveProjectFields.mock.calls.length;
+  fireEvent.change(screen.getByLabelText('On the night at'), { target: { value: '19:00' } });
+  expect(board.saveProjectFields.mock.calls).toHaveLength(saves);
 });

@@ -147,7 +147,10 @@ function CutOnNight({ project, cut, world, worldPlaces, onChange }) {
           <input id={id} type="time" className={selectCls} value={on ? worldClockText(nightClockAt(night, cut.storyMin)) : ''}
             onChange={(event) => {
               const [h, m] = event.target.value.split(':').map(Number);
-              if (Number.isFinite(h) && Number.isFinite(m)) onChange({ storyMin: nightMinuteOfClock(night, h * 60 + m) });
+              if (!Number.isFinite(h) || !Number.isFinite(m)) return;
+              // A time outside the night wraps past its end, where everyone has stopped.
+              const storyMin = nightMinuteOfClock(night, h * 60 + m);
+              if (storyMin <= night.lengthMin) onChange({ storyMin });
             }} />
         </label>
         {on
