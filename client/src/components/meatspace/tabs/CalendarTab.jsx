@@ -16,17 +16,22 @@ export default function CalendarTab() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  // Bumped by each read and each optimistic removal; a read applies only if no
+  // newer read or removal started after it, so a snapshot taken before a delete
+  // cannot resurrect the removed row.
+  const generationRef = useRef(0);
   // Indexes with a delete in flight. The ref is the synchronous guard a second
   // click reads before React has re-rendered; the state drives the disabled button.
   const [removingIndexes, setRemovingIndexes] = useState([]);
   const removingRef = useRef(new Set());
 
   const fetchData = useCallback(async () => {
+    const generation = ++generationRef.current;
     const result = await api.getLifeCalendar().catch(err => {
-      setError(err.message);
+      if (generation === generationRef.current) setError(err.message);
       return null;
     });
-    if (result) {
+    if (generation === generationRef.current && result) {
       setData(result);
       setError(null);
     }
@@ -45,24 +50,29 @@ export default function CalendarTab() {
 
   const handleRemoveActivity = async (index) => {
     if (removingRef.current.has(index)) return;
-    const name = data?.budgets?.[index]?.name || 'Activity';
+    const storedName = data?.budgets?.[index]?.name;
+    const label = storedName || 'Activity';
+    // A row without a stored name has no identity to send; the server's guard
+    // only applies when a name is given, so omit it rather than send a placeholder.
+    const expectedName = typeof storedName === 'string' && storedName ? storedName : undefined;
     removingRef.current.add(index);
     setRemovingIndexes([...removingRef.current]);
-    const result = await api.removeActivity(index, name, { silent: true }).catch(err => {
+    const result = await api.removeActivity(index, expectedName, { silent: true }).catch(err => {
       if (err?.code === 'ACTIVITY_MOVED') {
-        toast.error(`${name} moved; the list was refreshed`);
+        toast.error(`${label} moved; the list was refreshed`);
         fetchData();
       } else {
-        toast.error(`Failed to remove ${name}`);
+        toast.error(`Failed to remove ${label}`);
       }
       return null;
     });
     removingRef.current.delete(index);
     setRemovingIndexes([...removingRef.current]);
     if (result) {
-      toast.success(`Removed ${name}`);
+      toast.success(`Removed ${label}`);
       // Budgets are one-per-activity and independent of each other, so dropping
       // this row's entry matches the server without a refetch.
+      generationRef.current++;
       setData(prev => prev && { ...prev, budgets: prev.budgets.filter((_, i) => i !== index) });
     }
   };

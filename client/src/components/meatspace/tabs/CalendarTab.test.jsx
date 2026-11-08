@@ -81,4 +81,25 @@ describe('CalendarTab activity removal', () => {
     expect(api.getLifeCalendar).toHaveBeenCalledTimes(2);
     expect(screen.getByText('Coffees')).toBeInTheDocument();
   });
+
+  it('does not resurrect a row when a refetch started before a later delete resolves with the older list', async () => {
+    let resolveStaleRead;
+    api.getLifeCalendar
+      .mockResolvedValueOnce(structuredClone(CALENDAR))
+      .mockReturnValueOnce(new Promise(resolve => { resolveStaleRead = resolve; }));
+    api.removeActivity
+      .mockRejectedValueOnce(Object.assign(new Error('moved'), { code: 'ACTIVITY_MOVED' }))
+      .mockResolvedValueOnce([{ name: 'Coffees' }, { name: 'Books' }]);
+    await act(async () => { renderTab(); });
+    await screen.findByText('Books');
+
+    await act(async () => { fireEvent.click(removeButtons()[2]); });
+    await act(async () => { fireEvent.click(removeButtons()[1]); });
+    expect(screen.queryByText('Showers')).toBeNull();
+
+    // The read that the 409 started finally lands with the pre-delete snapshot.
+    await act(async () => { resolveStaleRead(structuredClone(CALENDAR)); });
+    expect(screen.queryByText('Showers')).toBeNull();
+    expect(screen.getByText('Books')).toBeInTheDocument();
+  });
 });
