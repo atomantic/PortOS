@@ -1333,10 +1333,15 @@ export function sanitizeTaskMetadata(raw) {
     hasKeys = true;
   }
   // An explicitly empty list is KEPT so a per-app override can clear the
-  // global exclusions back to "touch every trusted PR".
+  // global exclusions back to "touch every trusted PR" — but only when the
+  // caller sent []: a list whose every entry is invalid must not become that
+  // clear and silently release the held authors.
   if (Array.isArray(raw.selfManagedPrAuthors)) {
-    clean.selfManagedPrAuthors = normalizeSelfManagedPrAuthors(raw.selfManagedPrAuthors);
-    hasKeys = true;
+    const authors = normalizeSelfManagedPrAuthors(raw.selfManagedPrAuthors);
+    if (authors.length || raw.selfManagedPrAuthors.length === 0) {
+      clean.selfManagedPrAuthors = authors;
+      hasKeys = true;
+    }
   }
   if (isValidSelfManagedPrStaleMinutes(raw.selfManagedPrStaleMinutes)) {
     clean.selfManagedPrStaleMinutes = raw.selfManagedPrStaleMinutes;

@@ -611,6 +611,14 @@ describe('GlobalConfigControls — pr-watcher self-managed authors', () => {
       taskMetadata: { prAuthorFilter: 'trusted', selfManagedPrAuthors: ['octocat', 'hubot'] }
     });
 
+    fireEvent.change(authors, { target: { value: 'octocat, not a login' } });
+    fireEvent.blur(authors);
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+
+    fireEvent.change(stale, { target: { value: '1.5' } });
+    fireEvent.blur(stale);
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+
     fireEvent.change(stale, { target: { value: '90' } });
     fireEvent.blur(stale);
     expect(onUpdate).toHaveBeenLastCalledWith('pr-watcher', {

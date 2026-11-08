@@ -389,7 +389,7 @@ export const PR_AUTHOR_FILTER_OPTIONS = [
   { value: 'trusted', label: 'Owner and write collaborators', description: 'Verified repository collaborators and the signed-in operator; external PRs use PR Reviewer' }
 ];
 
-export { SELF_MANAGED_PR_STALE_MINUTES_DEFAULT, SELF_MANAGED_PR_STALE_MINUTES_MAX } from '../../../../server/lib/selfManagedPrAuthors.js';
+export { SELF_MANAGED_PR_STALE_MINUTES_DEFAULT, SELF_MANAGED_PR_STALE_MINUTES_MAX, normalizeSelfManagedPrAuthors } from '../../../../server/lib/selfManagedPrAuthors.js';
 
 // claim-issue author gate (taskMetadata.issueAuthorFilter). Mirrors
 // ISSUE_AUTHOR_FILTERS in server/lib/validation.js. 'self' = only claim issues

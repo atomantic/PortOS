@@ -109,8 +109,8 @@ export * from './validation.js';
 // Cross-domain Zod fragments both `validation.js` and the per-domain files
 // import (leaf module, no cycle). Flat because `validation.js` re-exports the
 // same objects — same identity, so the collision detector is satisfied.
-export * from './sharedSchemas.js';
 export * from './selfManagedPrAuthors.js';
+export * from './sharedSchemas.js';
 export * from './threadRefKinds.js';
 export * from './threejsModel.js';
 export * from './threejsModelAnimation.js';

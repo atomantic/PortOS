@@ -3,7 +3,7 @@ import { useState, useEffect, useMemo } from 'react';
 import useFieldDraft from '../../../../hooks/useFieldDraft';
 import { RotateCcw, AlertCircle } from 'lucide-react';
 import CronInput from '../../../CronInput';
-import { AGENT_OPTIONS, BRANCHES_PER_AGENT_DEFAULT, BRANCHES_PER_AGENT_OPTIONS, BRANCHES_PER_AGENT_TASK_TYPES, DEFAULT_REVIEW_STOP_MODE, DEPFREE_MODE_DEFAULT, DEPFREE_MODE_OPTIONS, DEPFREE_MODE_TASK_TYPES, depfreeModeOption, LOG_TRIAGE_CAPS, LOG_TRIAGE_TASK_TYPES, REVIEWER_OVERRIDE_KEYS as REVIEW_CONFIG_KEYS, IMPLICIT_PR_COMPLETION, PR_AUTHOR_FILTER_OPTIONS, PR_COMPLETION_OPTIONS, pinnedPrCompletion, prCompletionOption, RELEASE_OPTIONS, RELEASE_OPTIONS_TASK_TYPES, SELF_MANAGED_PR_STALE_MINUTES_DEFAULT, SELF_MANAGED_PR_STALE_MINUTES_MAX, STALL_NUDGE_OPTION, ISSUE_AUTHOR_FILTER_OPTIONS, ISSUE_AUTHOR_FILTER_TASK_TYPES, SWARM_COUNT_OPTIONS, SWARM_TASK_TYPES } from '../../constants';
+import { AGENT_OPTIONS, BRANCHES_PER_AGENT_DEFAULT, BRANCHES_PER_AGENT_OPTIONS, BRANCHES_PER_AGENT_TASK_TYPES, DEFAULT_REVIEW_STOP_MODE, DEPFREE_MODE_DEFAULT, DEPFREE_MODE_OPTIONS, DEPFREE_MODE_TASK_TYPES, depfreeModeOption, LOG_TRIAGE_CAPS, LOG_TRIAGE_TASK_TYPES, REVIEWER_OVERRIDE_KEYS as REVIEW_CONFIG_KEYS, IMPLICIT_PR_COMPLETION, PR_AUTHOR_FILTER_OPTIONS, PR_COMPLETION_OPTIONS, pinnedPrCompletion, prCompletionOption, RELEASE_OPTIONS, RELEASE_OPTIONS_TASK_TYPES, SELF_MANAGED_PR_STALE_MINUTES_DEFAULT, SELF_MANAGED_PR_STALE_MINUTES_MAX, normalizeSelfManagedPrAuthors, STALL_NUDGE_OPTION, ISSUE_AUTHOR_FILTER_OPTIONS, ISSUE_AUTHOR_FILTER_TASK_TYPES, SWARM_COUNT_OPTIONS, SWARM_TASK_TYPES } from '../../constants';
 import ReviewerPicker from '../../ReviewerPicker';
 import Banner from '../../../ui/Banner';
 import InfoTooltip from '../../../ui/InfoTooltip';
@@ -95,12 +95,20 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
   );
   const selfManagedAuthorsDraft = useFieldDraft(
     (config.taskMetadata?.selfManagedPrAuthors || []).join(', '),
-    (next) => writeMetadataField('selfManagedPrAuthors', splitList(next))
+    (next) => {
+      const entered = splitList(next);
+      const authors = normalizeSelfManagedPrAuthors(entered);
+      // An entry that is not a GitHub login reverts the edit rather than saving a shorter list.
+      const distinct = new Set(entered.map((login) => login.replace(/^@+/, '').toLowerCase()));
+      if (authors.length !== distinct.size) return undefined;
+      return writeMetadataField('selfManagedPrAuthors', authors);
+    }
   );
   const selfManagedStaleDraft = useFieldDraft(
     String(config.taskMetadata?.selfManagedPrStaleMinutes || SELF_MANAGED_PR_STALE_MINUTES_DEFAULT),
     (next) => {
-      const minutes = Number.parseInt(next, 10);
+      // Whole numbers only; anything else reverts to the saved window.
+      const minutes = /^\d+$/.test(next.trim()) ? Number(next.trim()) : Number.NaN;
       if (!Number.isInteger(minutes) || minutes < 1) return undefined;
       return writeMetadataField('selfManagedPrStaleMinutes', Math.min(minutes, SELF_MANAGED_PR_STALE_MINUTES_MAX));
     }
