@@ -7,6 +7,7 @@ import toast from '../../ui/Toast';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import useMusicVideoGreyboxPlaces from '../../../hooks/useMusicVideoGreyboxPlaces.js';
 import usePrevizWorld from '../../../hooks/usePrevizWorld.js';
+import PrevizAi from './PrevizAi.jsx';
 import PrevizNight from './PrevizNight.jsx';
 import WorldMap, { fitWorldView } from '../../catalog/WorldMapView';
 import { nightActorsAt, nightClockAt, nightMinuteOfClock, previzNight } from '../../../../../server/lib/musicVideoPrevizNight.js';
@@ -352,6 +353,11 @@ export default function PrevizStage({ board }) {
             <PrevizNight project={project} world={world} places={worldPlaces} locked={locked} onSave={savePrevizField} />
           </section>
         )}
+        <section className="min-w-0 space-y-1" aria-label="Edit with AI">
+          <h3 className="text-xs text-port-text-muted">Edit with AI</h3>
+          <PrevizAi project={project} world={world} worldId={worldId} places={worldPlaces} previz={previz || project.previz} disabled={locked}
+            onSavePreviz={savePrevizField} onSaveCameras={(cameras) => { editProjectLocal({ cameras }); saveProjectFields({ cameras }); }} />
+        </section>
         {previz && (project.cameras || []).length > 0 && (
           <fieldset disabled={locked} className="min-w-0 space-y-1">
             <legend className="text-xs text-port-text-muted">Camera styles (from each shot's sheet camera)</legend>

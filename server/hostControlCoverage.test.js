@@ -952,6 +952,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/music-video/:id/song-revision/cancel', REDUCES_EXECUTION],
   ['POST /api/music-video/:id/song/keep-timing', RECORDS],
   ['POST /api/music-video/:id/shot-sheet/propose', HANDLER_GATED],
+  ['POST /api/music-video/:id/previz/propose', HANDLER_GATED],
   ['POST /api/music-video/:id/story/apply', RECORDS],
   ['POST /api/music-video/:id/story/art-guides', HANDLER_GATED],
   ['POST /api/music-video/:id/story/beats', RECORDS],

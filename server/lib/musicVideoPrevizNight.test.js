@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { draftNightFromShots, nightActorsAt, nightBeatProblems, nightClockAt, nightMinuteOfClock, previzNight } from './musicVideoPrevizNight.js';
 import { musicVideoPrevizSchema } from './musicVideoValidation.js';
 import { placePrevizCutsOnNight, previzFrameAt } from './musicVideoPreviz.js';
+import { musicVideoPrevizForActiveCast } from './musicVideoCastSelection.js';
 
 const idMaker = () => { let n = 0; return () => `b${++n}`; };
 
@@ -183,6 +184,12 @@ describe('alternates of one character', () => {
     const frame = previzFrameAt(project, {}, 1, { world, places: {} });
     expect(frame.actors.find((actor) => actor.holder)).toMatchObject({ subjectId: 'c-b2', color: '#2fa59a' });
     expect(nightBeatProblems(project, world, previzNight(project).beats[0])).toEqual([]);
+  });
+  // Catches an unused nameless character being read as an unrelated nameless one.
+  it('never joins two nameless characters', () => {
+    const cast = [...subjects, { id: 'x1', kind: 'character', name: '' }, { id: 'x2', kind: 'character', name: '', active: false }];
+    const project = { concept: { subjects: cast }, previz: { cuts: [{ id: 'k1', startSec: 0, endSec: 4, placeSubjectId: 'p-home', holderSubjectId: 'x2' }], tracks: [] } };
+    expect(musicVideoPrevizForActiveCast(project).cuts[0].holderSubjectId).toBe('x2');
   });
 });
 

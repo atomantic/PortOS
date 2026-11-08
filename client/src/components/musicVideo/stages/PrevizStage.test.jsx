@@ -11,6 +11,7 @@ vi.mock('../../../hooks/useMusicVideoGreyboxPlaces.js', () => ({
   }),
 }));
 vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('./PrevizAi.jsx', () => ({ default: () => null }));
 vi.mock('../../../services/apiCatalog.js', () => ({
   createCatalogIngredient: vi.fn(async (body) => ({ id: 'cat-world', ...body })),
   saveCatalogWorld: vi.fn(async (id, world) => ({ id, type: 'place', payload: { world } })),
