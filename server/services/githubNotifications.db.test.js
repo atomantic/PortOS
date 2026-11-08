@@ -50,7 +50,7 @@ const {
   listAutomationActivity, undoAutomationAction, listLearnedRules, resolveWithAgent, actOnPullRequest, getAutomationsOverview, setNotificationCadence,
 } = await import('./githubNotifications.js');
 const { getDeploymentReview, reviewDeployment } = await import('./githubNotificationDeployment.js');
-const { retriageOpenThreads } = await import('./githubNotificationTriage.js');
+const { refreshOpenPullRequestStatus, retriageOpenThreads } = await import('./githubNotificationTriage.js');
 const { startNotificationResolveListener } = await import('./githubNotificationResolveTask.js');
 const { cosEvents } = await import('./cosEvents.js');
 const { runAccountAudit, applyAuditSuggestion, listAuditChanges, undoAuditChange, sendDueAuditReports } = await import('./githubNotificationAudit.js');
@@ -1008,6 +1008,49 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     expect(failed).toMatchObject({ state: 'open', decision: 'needs-you', agentFailed: { taskId: 'task-2' }, agent: { lane: 'notification-resolve', refused: null } });
     expect(failed.events.filter((event) => event.kind === 'agent-failed')).toHaveLength(1);
     expect(actions).not.toContainEqual(['DELETE', 'notifications/threads/1505']);
+  });
+
+  it('shows your PR into someone else\'s repo as waiting on its owner, refreshes its merge state, and lets an agent work through the owner\'s review', async () => {
+    const login = account.login;
+    vi.mocked(addTask).mockReset().mockImplementation(async (task) => ({ id: 'task-upstream', description: task.description }));
+    const pr = { author: login, authorType: 'User', association: 'CONTRIBUTOR', state: 'open', merged: false, draft: false, mergeableState: 'clean' };
+    const forge = {
+      // The account cannot push to the upstream repo, so it cannot merge there.
+      'repos/example-org/project': 'false',
+      'repos/example-org/project/pulls/1701': pr,
+      'repos/example-org/project/issues/comments/91': { author: 'maint', authorType: 'User', association: 'MEMBER', mentions: 0 },
+      // A public member of the org that owns the repo.
+      'orgs/example-org/members/maint': '',
+      'repos/example-org/project/issues/1701/comments': `maint\tUser\n${login}\tUser\n`,
+      'repos/example-org/project/pulls/1701/comments': 'maint\tUser\n',
+      'repos/example-org/project/pulls/1701/reviews': '',
+    };
+    mockGh(() => listing([thread('1701', { owner: 'example-org', repo: 'project', reason: 'comment',
+      commentUrl: 'https://api.github.com/repos/example-org/project/issues/comments/91' })]), forge);
+    await syncAccountNotifications(account.id);
+    let row = await getNotification(account.id, '1701');
+    expect(row).toMatchObject({ trust: 'yours', suspect: false,
+      subjectStatus: { state: 'open', mergeState: 'clean', canMerge: false, awaitingReply: true },
+      agent: { lane: 'notification-resolve', refused: null } });
+    expect(row.evidence).toMatchObject({ commenter: 'maint', commenterTrust: 'outside', commenterMaintainer: true, viewerCanPush: false });
+    expect(row.pullRequest.mergeEligible).toBe(false);
+
+    // Conflicts arrive with no new notification; a later pass re-reads the PR.
+    forge['repos/example-org/project/pulls/1701'] = { ...pr, mergeableState: 'dirty' };
+    expect(await refreshOpenPullRequestStatus(account, {})).toBe(0);
+    expect(await refreshOpenPullRequestStatus(account, {}, { now: Date.now() + 11 * 60_000 })).toBe(1);
+    expect((await getNotification(account.id, '1701')).subjectStatus.mergeState).toBe('dirty');
+
+    // Anyone else in the discussion keeps the agent out, checked at the tap.
+    forge['repos/example-org/project/pulls/1701/comments'] = 'maint\tUser\ndrive-by\tUser\n';
+    await expect(resolveWithAgent(account.id, '1701')).rejects.toMatchObject({ code: 'GITHUB_NOTIFICATION_HANDOFF_REFUSED' });
+    expect(addTask).not.toHaveBeenCalled();
+    forge['repos/example-org/project/pulls/1701/comments'] = 'maint\tUser\n';
+    row = await resolveWithAgent(account.id, '1701');
+    expect(row.decision).toBe('handed-off');
+    const [task] = vi.mocked(addTask).mock.calls[0];
+    expect(task.description).toContain('rebase onto the current base');
+    expect(task.description).toContain('gh repo clone example-org/project');
   });
 
   it('vouches for GitHub\'s own bots in a thread at the tap, but not a look-alike user', async () => {

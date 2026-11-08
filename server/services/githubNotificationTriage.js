@@ -92,6 +92,9 @@ function createReader(account, env) {
     comment: (path) => (path ? once(`c:${path}`, () => json(path, COMMENT_JQ)) : null),
     userCreatedAt: (login) => once(`u:${login}`, () => run([`users/${login}`, '--jq', '.created_at']).then((out) => out.trim() || null).catch(() => null)),
     defaultBranch: (repo) => once(`b:${repo}`, () => run([`repos/${repo}`, '--jq', '.default_branch']).then((out) => out.trim() || null).catch(() => null)),
+    // Whether this account can push to (and so merge in) the repo; null when unread.
+    canPush: (repo) => once(`p:${repo}`, () => run([`repos/${repo}`, '--jq', '.permissions.push'])
+      .then((out) => ({ true: true, false: false })[out.trim()] ?? null).catch(() => null)),
     // 204 for a member; any failure (404, no visibility) is "not a member".
     orgMember: (org, login) => once(`o:${org}/${login}`, () => run([`orgs/${org}/members/${login}`]).then(() => true).catch(() => false)),
     repoTrust: (repo) => once(`t:${repo}`, () => createGithubActorTrust({
@@ -133,6 +136,16 @@ async function rateActor({ account, reader, ownLogins, repo, repoOwned, repoOwne
   });
 }
 
+/**
+ * Whether a login owns the repo, by name or as a public member of its owning
+ * org. Forge identity only; GitHub's `author_association` never counts.
+ */
+async function isRepoOwner(reader, repoOwner, login) {
+  if (!repoOwner || !login) return false;
+  if (login.toLowerCase() === repoOwner.toLowerCase()) return true;
+  return reader.orgMember(repoOwner, login);
+}
+
 const DISCUSSION_SUBJECT_RE = /^repos\/[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}\/(issues|pulls)\/(\d{1,9})$/;
 const VOUCHED_TRUST = new Set(['yours', 'trusted']);
 
@@ -167,8 +180,12 @@ export async function threadDiscussionVouched(account, env, row) {
   if (!actors.size) return true;
   const reader = createReader(account, env);
   const ctx = { account, reader, ownLogins: await ownLoginsFor(account, reader), repo, repoOwned: row.evidence?.repoOwned === true, repoOwner: row.repo_owner };
+  // On your own PR the repo's owner reviewing it is the work, as in agentHandoff.
+  const ownPullRequest = kind === 'pulls' && row.trust === 'yours';
   for (const [login, type] of actors) {
-    if (!VOUCHED_TRUST.has(await rateActor(ctx, login, type))) return false;
+    if (VOUCHED_TRUST.has(await rateActor(ctx, login, type))) continue;
+    if (ownPullRequest && type === 'User' && await isRepoOwner(reader, row.repo_owner, login)) continue;
+    return false;
   }
   return true;
 }
@@ -233,6 +250,11 @@ async function triageThread(row, ctx) {
     for (const signal of await signalsFor(commenter, commenterTrust, comment.association, comment.mentions ?? 0)) signalSet.add(signal);
   }
   const signals = [...signalSet];
+  // A reply on your own PR in a repo you do not own, from that repo's owner.
+  const commenterMaintainer = Boolean(commenter && trust === 'yours' && !repoOwned && row.subject_type === 'PullRequest'
+    && commenterTrust === 'outside' && comment?.authorType === 'User') && await isRepoOwner(reader, row.repo_owner, commenter);
+  const isOpenPullRequest = row.subject_type === 'PullRequest' && subject?.state === 'open' && subject?.merged !== true;
+  const viewerCanPush = isOpenPullRequest && repo ? await reader.canPush(repo) : null;
 
   const isCi = row.reason === 'ci_activity' || row.subject_type === 'CheckSuite';
   const ciBranch = isCi ? parseCiBranch(row.subject_title) : null;
@@ -265,11 +287,14 @@ async function triageThread(row, ctx) {
       // Always recorded (null: no other commenter) so the generic agent lane
       // can tell a vouched thread from one triaged before it was kept (#13191).
       commenterTrust,
+      commenterMaintainer,
       repoOwned,
       repoManaged,
       subjectState: subject ? (subject.merged === true ? 'merged' : subject.state || null) : null,
       subjectDraft: subject?.draft === true,
       mergeState: typeof subject?.mergeableState === 'string' ? subject.mergeableState : null,
+      viewerCanPush,
+      statusCheckedAt: new Date(now).toISOString(),
       ciBranch,
       metadataMissing: Boolean(subjectPath && !subject) || (isDeployment && waitingRun === undefined),
       ...(waitingRun ? { workflowRun: workflowRunEvidence(waitingRun) } : {}),
@@ -314,6 +339,54 @@ export async function retriageOpenThreads(accountId) {
     [accountId],
   );
   return rowCount;
+}
+
+// A PR's merge readiness changes without any notification (the base moves, a
+// check finishes), so open PR threads are re-read on a slow cadence. GitHub
+// computes mergeability lazily: a read can answer `unknown` and start the
+// computation, which the next pass picks up.
+const STATUS_REFRESH_MS = 10 * 60 * 1000;
+const MAX_STATUS_REFRESH_PER_RUN = 20;
+
+/**
+ * Re-read the state, draft and merge readiness of open pull-request threads
+ * whose status is older than STATUS_REFRESH_MS. A PR found merged or closed
+ * is queued for re-triage so its finished rule applies. Returns the count of
+ * rows whose status changed.
+ */
+export async function refreshOpenPullRequestStatus(account, env, { now = Date.now() } = {}) {
+  const cutoff = new Date(now - STATUS_REFRESH_MS).toISOString();
+  const { rows } = await query(
+    `SELECT * FROM github_notifications WHERE account_id = $1 AND state = 'open' AND NOT suspect
+       AND subject_type = 'PullRequest' AND evidence->>'subjectState' = 'open'
+       AND COALESCE(evidence->>'statusCheckedAt', '') < $2
+     ORDER BY evidence->>'statusCheckedAt' ASC NULLS FIRST, gh_updated_at DESC LIMIT ${MAX_STATUS_REFRESH_PER_RUN}`,
+    [account.id, cutoff],
+  );
+  if (!rows.length) return 0;
+  const reader = createReader(account, env);
+  let changed = 0;
+  for (const row of rows) {
+    const subject = await reader.subject(repoApiPath(row.subject_api_url, account.host));
+    if (!subject) continue;
+    const status = {
+      subjectState: subject.merged === true ? 'merged' : subject.state || null,
+      subjectDraft: subject.draft === true,
+      mergeState: typeof subject.mergeableState === 'string' ? subject.mergeableState : null,
+      statusCheckedAt: new Date(now).toISOString(),
+    };
+    const finished = status.subjectState !== 'open';
+    const moved = ['subjectState', 'subjectDraft', 'mergeState'].some((key) => (row.evidence?.[key] ?? null) !== status[key]);
+    // Only the status keys change, and only on the row as read.
+    const { rowCount } = await query(
+      `UPDATE github_notifications SET evidence = evidence || $3::jsonb,
+         triaged_for = CASE WHEN $4::boolean THEN NULL ELSE triaged_for END, updated_at = NOW()
+       WHERE account_id = $1 AND thread_id = $2 AND evidence = $5::jsonb`,
+      [account.id, row.thread_id, toPgJson(status), finished, toPgJson(row.evidence)],
+    );
+    if (rowCount && moved) changed += 1;
+  }
+  return changed;
 }
 
 // No new GitHub activity since the last decision (never decided counts: nothing

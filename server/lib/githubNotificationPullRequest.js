@@ -18,7 +18,8 @@ export function notificationPullRequestView(account, row) {
   const agentsAllowed = account.trust !== 'private' || account.allowAgents === true;
   return {
     number: target.number,
-    mergeEligible: trusted,
+    // Your PR into a repo you cannot push to is the maintainers' to merge.
+    mergeEligible: trusted && row.evidence?.viewerCanPush !== false,
     doReviewEligible: agentsAllowed && trusted,
     // Native bots are trusted inbox actors, but the app's PR reviewer still
     // screens their dependency patches through its external-contributor lane.

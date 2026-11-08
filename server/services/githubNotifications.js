@@ -22,7 +22,7 @@ import {
 import { execGh } from './github.js';
 import { getAccount, listAccounts, resolveGitHubAccountEnv } from './githubAccounts.js';
 import { githubNotificationEvents } from './githubNotificationEvents.js';
-import { triageAccountNotifications } from './githubNotificationTriage.js';
+import { refreshOpenPullRequestStatus, triageAccountNotifications } from './githubNotificationTriage.js';
 import { assistAccountNotifications } from './githubNotificationAssist.js';
 import {
   agentHandoff, agentRunPin, DEFAULT_AGENT_RULES, FINISHED_DECISIONS, KIND_SQL, learnedDecisionForAction, normalizeAgentRules, PINNED_TRIAGE_RULES, threadAgentKind,
@@ -234,10 +234,11 @@ async function syncAccountNow(account, automate) {
       await client.query('UPDATE github_notification_sync SET last_sync_at = NOW(), last_error = \'\', updated_at = NOW() WHERE account_id = $1', [account.id]);
       return count;
     });
+    const refreshed = await refreshOpenPullRequestStatus(account, env);
     // Threads past the last run's triage cap still need a decision.
     const triage = await triageAccountNotifications(account, env);
     const assist = await runAutomation(account, env, automate);
-    if (readOnGithub || triage.triaged || assist.sorted || assist.acted || assist.handedOff) githubNotificationEvents.emit('changed', { accountId: account.id });
+    if (readOnGithub || refreshed || triage.triaged || assist.sorted || assist.acted || assist.handedOff) githubNotificationEvents.emit('changed', { accountId: account.id });
     return { accountId: account.id, changed: false, fetched: 0, triage, assist };
   }
   // The `all=true` listing can run past MAX_PAGES and is a delta after the
@@ -270,6 +271,7 @@ async function syncAccountNow(account, automate) {
       [account.id, inbox.headers['last-modified'] ? `${LISTING_CURSOR_PREFIX}${inbox.headers['last-modified']}` : null, pollIntervalSeconds(inbox.headers['x-poll-interval'])],
     );
   });
+  await refreshOpenPullRequestStatus(account, env);
   const triage = await triageAccountNotifications(account, env);
   const assist = await runAutomation(account, env, automate);
   githubNotificationEvents.emit('changed', { accountId: account.id });
@@ -350,10 +352,19 @@ const deploymentView = (account, row) => {
 // The thread's own state, so a row says what it is now: open, draft, merged,
 // closed, and for an open PR GitHub's merge readiness (clean, blocked, ...).
 // Null mergeState: GitHub had not computed it yet, or the thread is no PR.
+// `canMerge` is false only when the forge said this account cannot push to the
+// repo (your PR into someone else's project); `awaitingReply` when the latest
+// comment on your own thread is someone else's.
 const subjectStatusView = (row) => {
   const evidence = row.evidence || {};
   if (!evidence.subjectState) return null;
-  return { state: evidence.subjectState, draft: evidence.subjectDraft === true, mergeState: evidence.mergeState || null };
+  return {
+    state: evidence.subjectState,
+    draft: evidence.subjectDraft === true,
+    mergeState: evidence.mergeState || null,
+    canMerge: evidence.viewerCanPush !== false,
+    awaitingReply: row.trust === 'yours' && Boolean(evidence.commenter) && ['outside', 'trusted'].includes(evidence.commenterTrust),
+  };
 };
 
 const toApi = (row, accountsById) => {

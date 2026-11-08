@@ -42,6 +42,10 @@ describe('queueNotificationResolveTask', () => {
     expect(task.description).toContain('https://github.com/acme/app/pull/7');
     expect(task.description).toContain('gh repo clone acme/app');
     expect(task.description).toContain('never merge a pull request');
+    // Your own PR is brought up to date and answered on its own head branch.
+    expect(task.description).toContain('rebase onto the current base');
+    expect(task.description).toContain('Push only to this pull request\'s head branch or branches you create in this run');
+    expect(task.description).toContain('`--force-with-lease`, never plain `--force`');
     expect(task.description).not.toContain(INJECTED_TITLE);
     expect(task.description).not.toContain('Ignore your rules');
   });
@@ -74,6 +78,7 @@ describe('queueNotificationResolveTask', () => {
     expect(description).toContain('The notification was last updated at 2026-10-30T12:00:00.000Z.');
     expect(description).toContain('no later than 2026-10-30T12:00:00.000Z and no earlier than three hours before it');
     expect(description).toContain('report that no run matches this notification, and stop');
+    expect(description).toContain('Push only to branches you create in this run.');
     expect(description).not.toContain(INJECTED_TITLE);
     await queueNotificationResolveTask({ account: { ...account, login: 'bad login' }, row: ciRow });
     expect(vi.mocked(addTask).mock.calls[1][0].description)
