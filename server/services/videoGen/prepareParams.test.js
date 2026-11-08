@@ -1003,12 +1003,12 @@ describe('LTX 2.5 reference sheet admission', () => {
     defaultVideoModelId.mockReturnValue('ltx25_mlx_q8');
   });
   const request = { backend: 'local', modelId: 'ltx25_mlx_q8', mode: 'ic-ingredients-25',
-    numFrames: 121, sourceImageFile: 'start.png', icReferenceImageFiles: ['renee.png'] };
+    numFrames: 121, sourceImageFile: 'start.png', icReferenceImageFiles: ['ada.png'] };
 
   it('preserves both the opening frame and an independent gallery reference', async () => {
     const result = await prepare(request);
     expect(result).toMatchObject({ mode: 'ic-ingredients-25', sourceImagePath: '/mock/images/start.png',
-      icReferencePaths: ['/mock/images/renee.png'] });
+      icReferencePaths: ['/mock/images/ada.png'] });
   });
 
   it('rejects a declared opening frame that no longer exists', async () => {
@@ -1020,7 +1020,7 @@ describe('LTX 2.5 reference sheet admission', () => {
   it('allows an intentionally omitted opening frame', async () => {
     const result = await prepare({ ...request, sourceImageFile: '' });
     expect(result.sourceImagePath).toBeNull();
-    expect(result.icReferencePaths).toEqual(['/mock/images/renee.png']);
+    expect(result.icReferencePaths).toEqual(['/mock/images/ada.png']);
   });
 
   it('rejects a short render or a skipped refinement before staging', async () => {

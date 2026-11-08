@@ -105,7 +105,7 @@ export default function PrevizAi({ project, world, worldId, places, previz, disa
         effort={effort} onEffortChange={setEffort} executionOptions={executionOptions} onExecutionOptionsChange={setExecutionOptions}
         loading={llm.loading} disabled={busy || disabled} />
       <textarea aria-label="What to change in the previz" rows={3} maxLength={4000} value={instruction} onChange={(event) => setInstruction(event.target.value)}
-        placeholder="e.g. Put the abandoned mall at the far east end of the main road, and in shot 1 have Renee ride on K's right while K turns the camera to her" className={inputCls} />
+        placeholder="e.g. Put the station at the far east end of the main road, and in shot 1 have the friend walk on the lead's right while the lead turns the camera to them" className={inputCls} />
       <div className="flex flex-wrap items-center gap-2">
         <button type="button" className={buttonCls} disabled={busy || disabled || !llm.selectedProviderId || !instruction.trim()} onClick={() => ask(false)}>
           <Sparkles size={12} aria-hidden="true" /> {busy ? 'Asking…' : 'Propose changes'}

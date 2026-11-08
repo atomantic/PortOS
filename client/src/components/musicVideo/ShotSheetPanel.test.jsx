@@ -9,14 +9,14 @@ const boardFor = (over = {}) => ({
   project: {
     id: 'p',
     cameras: [
-      { id: 'vhs', name: 'VHS', kind: 'in-world', owner: 'Kevin' },
+      { id: 'vhs', name: 'VHS', kind: 'in-world', owner: 'Ben' },
       { id: 'obs', name: 'Observer', kind: 'observer' },
     ],
-    concept: { subjects: [{ kind: 'character', name: 'Renee' }, { kind: 'character', name: 'Kevin' }] },
-    lyricCues: [{ id: 'c', text: 'Hold still', startSec: 0, endSec: 2 }],
+    concept: { subjects: [{ kind: 'character', name: 'Ada' }, { kind: 'character', name: 'Ben' }] },
+    lyricCues: [{ id: 'c', text: 'Stay a while', startSec: 0, endSec: 2 }],
     scenes: [
       { sceneId: 'a', label: 'Shot 1', startSec: 0, endSec: 2, framePrompt: 'New wording', prompt: 'She rides', referenceImageId: 'a.png',
-        takes: [{ kind: 'image', assetId: 'a.png', prompt: 'Old wording' }], shotSheet: { cameraId: 'vhs', holder: 'Kevin', emotion: 'Focused' } },
+        takes: [{ kind: 'image', assetId: 'a.png', prompt: 'Old wording' }], shotSheet: { cameraId: 'vhs', holder: 'Ben', emotion: 'Focused' } },
       { sceneId: 'b', label: 'Shot 2', startSec: 2, endSec: 4, framePrompt: 'Empty lot', prompt: '' },
     ],
     ...over,
@@ -33,7 +33,7 @@ describe('ShotSheetPanel', () => {
     openPanel();
     expect(screen.getByText('0 of 2 shots done · 2 incomplete · 1 frame older than its prompt')).toBeInTheDocument();
     const row = screen.getByRole('button', { name: 'Open Shot 1' }).closest('tr');
-    expect(within(row).getByText('Hold still')).toBeInTheDocument();
+    expect(within(row).getByText('Stay a while')).toBeInTheDocument();
     expect(within(row).getByText('Details changed since this frame')).toBeInTheDocument();
     expect(within(row).getByLabelText('Shot 1 camera')).toHaveValue('vhs');
     expect(within(row).getByLabelText('Shot 1 emotion')).toHaveValue('Focused');
@@ -58,8 +58,8 @@ describe('ShotSheetPanel', () => {
     expect(board.saveScene).not.toHaveBeenCalled();
     fireEvent.change(emotion, { target: { value: 'Scared' } });
     fireEvent.blur(emotion);
-    expect(board.saveScene).toHaveBeenCalledWith('a', { shotSheet: { cameraId: 'vhs', holder: 'Kevin', emotion: 'Scared' } });
-    expect(board.editSceneLocal).toHaveBeenCalledWith('a', { shotSheet: { cameraId: 'vhs', holder: 'Kevin', emotion: 'Scared' } });
+    expect(board.saveScene).toHaveBeenCalledWith('a', { shotSheet: { cameraId: 'vhs', holder: 'Ben', emotion: 'Scared' } });
+    expect(board.editSceneLocal).toHaveBeenCalledWith('a', { shotSheet: { cameraId: 'vhs', holder: 'Ben', emotion: 'Scared' } });
   });
 
   // Catches View going back to a one-line pick box: it holds a sentence, so it's a growing text box that saves on leave.
@@ -72,7 +72,7 @@ describe('ShotSheetPanel', () => {
     expect(view).not.toHaveAttribute('list');
     fireEvent.change(view, { target: { value: 'Crooked snapshot from behind and to the right' } });
     fireEvent.blur(view);
-    expect(board.saveScene).toHaveBeenCalledWith('a', { shotSheet: { cameraId: 'vhs', holder: 'Kevin', emotion: 'Focused', view: 'Crooked snapshot from behind and to the right' } });
+    expect(board.saveScene).toHaveBeenCalledWith('a', { shotSheet: { cameraId: 'vhs', holder: 'Ben', emotion: 'Focused', view: 'Crooked snapshot from behind and to the right' } });
   });
 
   // Catches an observer keeping a holder: it isn't in their world, so nobody holds it.
@@ -87,7 +87,7 @@ describe('ShotSheetPanel', () => {
   // Catches the human review not saving with the plan, or the filters ignoring it.
   it('saves a Done tick with the sheet and narrows to not-done and incomplete shots', () => {
     const board = boardFor();
-    board.project.scenes[0].shotSheet = { cameraId: 'vhs', holder: 'Kevin', location: 'Street', timeOfDay: 'Dusk', emotion: 'Focused', action: 'Rides', characters: ['Renee'], checked: true };
+    board.project.scenes[0].shotSheet = { cameraId: 'vhs', holder: 'Ben', location: 'Street', timeOfDay: 'Dusk', emotion: 'Focused', action: 'Rides', characters: ['Ada'], checked: true };
     render(<ShotSheetPanel board={board} />);
     openPanel();
     expect(screen.getByLabelText('Shot 1 done')).toBeChecked();
@@ -109,7 +109,7 @@ describe('ShotSheetPanel', () => {
     openPanel();
     fireEvent.click(screen.getByRole('button', { name: 'Mark all done' }));
     expect(board.saveScene.mock.calls).toEqual([
-      ['a', { shotSheet: { cameraId: 'vhs', holder: 'Kevin', emotion: 'Focused', checked: true } }],
+      ['a', { shotSheet: { cameraId: 'vhs', holder: 'Ben', emotion: 'Focused', checked: true } }],
       ['b', { shotSheet: { checked: true } }],
     ]);
     board.saveScene.mockClear();
@@ -124,12 +124,12 @@ describe('ShotSheetPanel', () => {
   // Catches a column losing its pick list.
   it('offers the project\u2019s places and earlier wording as pick lists', () => {
     const board = boardFor();
-    board.project.concept.subjects.push({ kind: 'place', name: 'Dead mall' });
+    board.project.concept.subjects.push({ kind: 'place', name: 'Old station' });
     board.project.scenes[0].shotSheet.light = 'Sodium streetlight';
     const { container } = render(<ShotSheetPanel board={board} />);
     openPanel();
     expect(screen.getByLabelText('Shot 2 location')).toHaveAttribute('list', 'mv-sheet-location');
-    expect(container.querySelector('#mv-sheet-location option[value="Dead mall"]')).not.toBeNull();
+    expect(container.querySelector('#mv-sheet-location option[value="Old station"]')).not.toBeNull();
     expect(container.querySelector('#mv-sheet-light option[value="Sodium streetlight"]')).not.toBeNull();
     expect(container.querySelector('#mv-sheet-emotion option[value="Contemplative"]')).not.toBeNull();
   });
@@ -138,12 +138,12 @@ describe('ShotSheetPanel', () => {
   it('maps location, camera and time of day and filters to a tapped stretch', () => {
     const board = boardFor();
     Object.assign(board.project.scenes[0].shotSheet, { location: 'Street', timeOfDay: 'Dusk' });
-    board.project.scenes[1].shotSheet = { location: 'Dead mall', timeOfDay: 'Dusk', cameraId: 'obs' };
+    board.project.scenes[1].shotSheet = { location: 'Old station', timeOfDay: 'Dusk', cameraId: 'obs' };
     render(<ShotSheetPanel board={board} />);
     openPanel();
-    const mall = within(screen.getByRole('group', { name: 'Location' })).getByRole('button', { name: /^Location Dead mall, 0:02/ });
-    expect(mall.style.flex).toContain('2');
-    within(screen.getByRole('group', { name: 'Camera' })).getByRole('button', { name: /^Camera VHS · Kevin, 0:00/ });
+    const station = within(screen.getByRole('group', { name: 'Location' })).getByRole('button', { name: /^Location Old station, 0:02/ });
+    expect(station.style.flex).toContain('2');
+    within(screen.getByRole('group', { name: 'Camera' })).getByRole('button', { name: /^Camera VHS · Ben, 0:00/ });
     const observer = within(screen.getByRole('group', { name: 'Camera' })).getByRole('button', { name: /^Camera Observer, 0:02/ });
     // One stretch across both shots: the light didn't change.
     within(screen.getByRole('group', { name: 'Time of day' })).getByRole('button', { name: /^Time of day Dusk, 0:00.*2 shots/ });
@@ -168,12 +168,12 @@ describe('ShotSheetPanel', () => {
   // Catches a borrowed camera changing color, which would read as a different camera.
   it('keeps one color per camera whoever holds it', () => {
     const board = boardFor();
-    board.project.scenes[1].shotSheet = { cameraId: 'vhs', holder: 'Renee' };
+    board.project.scenes[1].shotSheet = { cameraId: 'vhs', holder: 'Ada' };
     render(<ShotSheetPanel board={board} />);
     openPanel();
     const bar = within(screen.getByRole('group', { name: 'Camera' }));
     const color = (button) => button.className.match(/bg-port-\S+/)[0];
-    expect(color(bar.getByRole('button', { name: /VHS · Renee/ }))).toBe(color(bar.getByRole('button', { name: /VHS · Kevin/ })));
+    expect(color(bar.getByRole('button', { name: /VHS · Ada/ }))).toBe(color(bar.getByRole('button', { name: /VHS · Ben/ })));
   });
 
   // Catches the storyboard sketch standing in for the selected render, which the warning beside it describes.

@@ -1384,7 +1384,7 @@ describe('shot details', () => {
   // the switch not saving, or the details not landing in the clip prompt.
   it('edits the shot sheet details in place and adds them to the clip prompt when switched on', () => {
     const onSave = vi.fn();
-    const project = { id: 'mv-1', cameras: [{ id: 'snap', name: 'Snapshot camera', kind: 'in-world' }], concept: { subjects: [{ kind: 'character', name: 'Renee' }] } };
+    const project = { id: 'mv-1', cameras: [{ id: 'snap', name: 'Snapshot camera', kind: 'in-world' }], concept: { subjects: [{ kind: 'character', name: 'Ada' }] } };
     function Harness() {
       const [scene, setScene] = useState({ sceneId: 's1', startSec: 0, endSec: 4, prompt: 'they laugh', takes: [], shotSheet: { emotion: 'Playful' } });
       return <SceneCard scene={scene} project={{ ...project, scenes: [scene] }} index={0} expanded

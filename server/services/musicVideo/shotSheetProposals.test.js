@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const project = {
-  id: 'p', concept: { prompt: 'Two teens', subjects: [{ kind: 'character', name: 'Renee' }] },
-  cameras: [{ id: 'vhs', name: 'VHS', kind: 'in-world', rule: 'Kevin owns it' }],
+  id: 'p', concept: { prompt: 'Two teens', subjects: [{ kind: 'character', name: 'Ada' }] },
+  cameras: [{ id: 'vhs', name: 'VHS', kind: 'in-world', rule: 'Ben owns it' }],
   scenes: [{ sceneId: 'a', label: 'Shot 1', startSec: 0, endSec: 2, framePrompt: 'Frame A', prompt: 'Motion A', shotSheet: { emotion: 'Scared' } }, { sceneId: 'b', label: 'Shot 2', startSec: 2, endSec: 4 }],
 };
 vi.mock('./requireProject.js', () => ({ requireProject: vi.fn(async () => project) }));
@@ -21,7 +21,7 @@ describe('proposeShotSheet', () => {
     const result = await proposeShotSheet('p', { ...base, direction: 'to-prompts', preview: true, instruction: 'Darker' });
     expect(run).not.toHaveBeenCalled();
     expect(result.promptAdditions.map((entry) => entry.id)).toContain('shot-sheet-direction');
-    for (const text of ['Frame A', 'Scared', 'Kevin owns it', 'Darker']) expect(result.sentPrompt).toContain(text);
+    for (const text of ['Frame A', 'Scared', 'Ben owns it', 'Darker']) expect(result.sentPrompt).toContain(text);
   });
   // Catches AI ticking Checked, inventing a camera, or proposing for a shot nobody asked about.
   it('drops Checked, an unknown camera and unasked shots from a backfill', async () => {
@@ -64,8 +64,8 @@ describe('shot sheet AI limits', () => {
   });
   // Catches a backfill overwriting anything the director set, including Checked.
   it('fills only empty columns', () => {
-    const { sheet, filled } = mergeShotSheetBackfill({ emotion: 'Mine', characters: [] }, { emotion: 'AI', characters: ['Renee'], checked: true, location: 'Mall' });
-    expect(sheet).toEqual({ emotion: 'Mine', characters: ['Renee'], location: 'Mall' });
+    const { sheet, filled } = mergeShotSheetBackfill({ emotion: 'Mine', characters: [] }, { emotion: 'AI', characters: ['Ada'], checked: true, location: 'Mall' });
+    expect(sheet).toEqual({ emotion: 'Mine', characters: ['Ada'], location: 'Mall' });
     expect(filled).toEqual(['characters', 'location']);
   });
 });

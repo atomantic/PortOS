@@ -4,28 +4,28 @@ import { musicVideoSceneUpdateSchema, musicVideoProjectUpdateSchema } from './mu
 import { applySceneUpdate, applyProjectPatch, replaceScenes } from '../services/musicVideo/projectsLogic.js';
 
 const selectedFrameOutdated = (shot) => shotSheetRows({ scenes: [shot] })[0].frameOutdated;
-const scene = (over = {}) => ({ sceneId: 's1', framePrompt: 'Renee rides away at dusk', referenceImageId: 'a.png', takes: [], ...over });
+const scene = (over = {}) => ({ sceneId: 's1', framePrompt: 'Ada rides away at dusk', referenceImageId: 'a.png', takes: [], ...over });
 const take = (prompt) => ({ kind: 'image', assetId: 'a.png', prompt });
 
 describe('selectedFrameOutdated', () => {
   // Catches the check missing a frame rendered before the prompt was rewritten.
   it('flags a frame whose recorded prompt no longer holds the shot\'s frame prompt', () => {
-    expect(selectedFrameOutdated(scene({ takes: [take('Renee and Kevin stop at the curb')] }))).toBe(true);
+    expect(selectedFrameOutdated(scene({ takes: [take('Ada and Ben stop at the curb')] }))).toBe(true);
   });
   // Catches an edit late in a long prompt going unnoticed.
   it('flags a change after the prompt\u2019s opening', () => {
-    const opening = 'Renee and Kevin ride down a long curved suburban street at dusk past lawns, sprinklers and porch lights just clicking on one by one. ';
-    expect(selectedFrameOutdated(scene({ framePrompt: `${opening}Kevin holds the camera.`, takes: [take(`${opening}Renee holds the camera.`)] }))).toBe(true);
+    const opening = 'Ada and Ben ride down a long curved suburban street at dusk past lawns, sprinklers and porch lights just clicking on one by one. ';
+    expect(selectedFrameOutdated(scene({ framePrompt: `${opening}Ben holds the camera.`, takes: [take(`${opening}Ada holds the camera.`)] }))).toBe(true);
   });
   // Catches a false alarm when the render composed extra text around the shot's own prompt.
   it('reads as current when the composed prompt contains the shot\'s text', () => {
-    expect(selectedFrameOutdated(scene({ takes: [take('Style. Renee rides away at dusk, grain.')] }))).toBe(false);
+    expect(selectedFrameOutdated(scene({ takes: [take('Style. Ada rides away at dusk, grain.')] }))).toBe(false);
   });
   // Catches an edited shot detail going unnoticed on a still built from the sheet.
   it('flags a sheet-built frame whose details changed since', () => {
     const built = scene({ shotSheet: { promptFromSheet: true, emotion: 'Scared' } });
-    expect(selectedFrameOutdated({ ...built, takes: [take('Renee rides away at dusk\nEmotion: Scared.')] })).toBe(false);
-    expect(selectedFrameOutdated({ ...built, takes: [take('Renee rides away at dusk\nEmotion: Playful.')] })).toBe(true);
+    expect(selectedFrameOutdated({ ...built, takes: [take('Ada rides away at dusk\nEmotion: Scared.')] })).toBe(false);
+    expect(selectedFrameOutdated({ ...built, takes: [take('Ada rides away at dusk\nEmotion: Playful.')] })).toBe(true);
   });
   // Catches an imported frame with no recorded prompt being reported as outdated.
   it('can\'t judge a frame with no recorded prompt', () => {
@@ -38,7 +38,7 @@ describe('shotSheetRows', () => {
   it('lists shots in song order with the lyric sung over each and its camera', () => {
     const project = {
       cameras: [{ id: 'vhs', name: 'VHS', kind: 'in-world' }],
-      lyricCues: [{ id: 'c', text: 'Hold still', startSec: 5, endSec: 7 }],
+      lyricCues: [{ id: 'c', text: 'Stay a while', startSec: 5, endSec: 7 }],
       scenes: [
         { sceneId: 'late', startSec: 5, endSec: 8, shotSheet: { cameraId: 'vhs' } },
         { sceneId: 'early', startSec: 0, endSec: 5, lyricText: 'stale text' },
@@ -47,7 +47,7 @@ describe('shotSheetRows', () => {
     };
     const rows = shotSheetRows(project);
     expect(rows.map((row) => row.scene.sceneId)).toEqual(['early', 'late', 'untimed']);
-    expect(rows[1].lyric).toBe('Hold still');
+    expect(rows[1].lyric).toBe('Stay a while');
     expect(rows[1].camera.name).toBe('VHS');
     expect(rows[0].camera).toBeNull();
   });
@@ -57,13 +57,13 @@ describe('shot sheet storage', () => {
   // Catches an emptied sheet being kept as a planned shot.
   it('stores a sheet with nothing filled in as null', () => {
     expect(normalizeShotSheet({ view: '  ', characters: [], cameraId: null, checked: false })).toBeNull();
-    expect(normalizeShotSheet({ view: 'Low', characters: ['Renee'] })).toEqual({ view: 'Low', characters: ['Renee'] });
+    expect(normalizeShotSheet({ view: 'Low', characters: ['Ada'] })).toEqual({ view: 'Low', characters: ['Ada'] });
   });
   // Catches the sheet being dropped by the update schema, or a sheet edit losing the storyboard approval.
   it('saves a shot\'s sheet through a scene update without touching its prompts', () => {
     const project = { id: 'p', scenes: [{ sceneId: 's1', startSec: 0, endSec: 2, prompt: 'keep me', framePrompt: 'keep me too' }] };
-    const { updated } = applySceneUpdate(project, 's1', { shotSheet: { emotion: 'Scared', cameraId: 'vhs', holder: 'Renee' } });
-    expect(updated.shotSheet).toEqual({ emotion: 'Scared', cameraId: 'vhs', holder: 'Renee' });
+    const { updated } = applySceneUpdate(project, 's1', { shotSheet: { emotion: 'Scared', cameraId: 'vhs', holder: 'Ada' } });
+    expect(updated.shotSheet).toEqual({ emotion: 'Scared', cameraId: 'vhs', holder: 'Ada' });
     expect(updated.prompt).toBe('keep me');
     expect(updated.framePrompt).toBe('keep me too');
     expect(musicVideoSceneUpdateSchema.safeParse({ shotSheet: { unknown: 'x' } }).success).toBe(false);
@@ -87,7 +87,7 @@ describe('shot sheet storage', () => {
 });
 
 describe('shotSheetProblems', () => {
-  const full = { cameraId: 'vhs', holder: 'Kevin', location: 'Street', timeOfDay: 'Dusk', emotion: 'Joy', action: 'Rides', characters: ['Renee'] };
+  const full = { cameraId: 'vhs', holder: 'Ben', location: 'Street', timeOfDay: 'Dusk', emotion: 'Joy', action: 'Rides', characters: ['Ada'] };
   const vhs = { id: 'vhs', name: 'VHS', kind: 'in-world' };
   // Catches a complete plan being nagged about.
   it('has nothing to say about a complete plan', () => {
@@ -113,7 +113,7 @@ describe('shotSheetProblems', () => {
 describe('shotSheetOptions', () => {
   // Catches sets missing from the location list, or a typed value not coming back as a choice.
   it('offers places, the starting list and earlier wording without repeats', () => {
-    const project = { concept: { subjects: [{ kind: 'place', name: 'Mall' }, { kind: 'character', name: 'Renee' }] }, scenes: [{ shotSheet: { location: 'Mall' } }, { shotSheet: { location: 'Field' } }, { shotSheet: { emotion: 'Scared' } }] };
+    const project = { concept: { subjects: [{ kind: 'place', name: 'Mall' }, { kind: 'character', name: 'Ada' }] }, scenes: [{ shotSheet: { location: 'Mall' } }, { shotSheet: { location: 'Field' } }, { shotSheet: { emotion: 'Scared' } }] };
     expect(shotSheetOptions(project, 'location')).toEqual(['Mall', 'Field']);
     expect(shotSheetOptions(project, 'emotion').filter((value) => value === 'Scared')).toHaveLength(1);
   });
@@ -136,8 +136,8 @@ describe('shotSheetStretches', () => {
   it('shows who has each camera and reads time of day from its own column', () => {
     const vhs = { name: 'VHS' };
     const observer = { name: 'Observer' };
-    const rows = [row(0, 1, { holder: 'Kevin', timeOfDay: 'Dusk', light: 'Flash' }, vhs), row(1, 2, { holder: 'Renee', timeOfDay: 'Dusk', light: 'Lamp' }, vhs), row(2, 3, { timeOfDay: 'Night' }, observer)];
-    expect(shotSheetStretches(rows, bar('camera')).map((stretch) => stretch.value)).toEqual(['VHS · Kevin', 'VHS · Renee', 'Observer']);
+    const rows = [row(0, 1, { holder: 'Ben', timeOfDay: 'Dusk', light: 'Flash' }, vhs), row(1, 2, { holder: 'Ada', timeOfDay: 'Dusk', light: 'Lamp' }, vhs), row(2, 3, { timeOfDay: 'Night' }, observer)];
+    expect(shotSheetStretches(rows, bar('camera')).map((stretch) => stretch.value)).toEqual(['VHS · Ben', 'VHS · Ada', 'Observer']);
     expect(shotSheetStretches(rows, bar('timeOfDay')).map((stretch) => stretch.value)).toEqual(['Dusk', 'Night']);
   });
 });
@@ -197,6 +197,6 @@ describe('shotSheetBulkEdits', () => {
 describe('shotSheetCast', () => {
   // Catches sets and props being offered as people in a shot.
   it('offers only character subjects', () => {
-    expect(shotSheetCast({ concept: { subjects: [{ kind: 'character', name: 'Renee' }, { kind: 'place', name: 'Mall' }] } })).toEqual(['Renee']);
+    expect(shotSheetCast({ concept: { subjects: [{ kind: 'character', name: 'Ada' }, { kind: 'place', name: 'Mall' }] } })).toEqual(['Ada']);
   });
 });

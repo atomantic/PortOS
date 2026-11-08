@@ -335,8 +335,8 @@ describe('fixed supporting cast in the merge (#14069)', () => {
 
 describe('Cast & Sets props', () => {
   const PROPS = [
-    { name: "Renee's camera", owner: 'Renee', description: 'matte black plastic 35mm snapshot camera on a wrist strap' },
-    { id: 'Bike!', name: "Kevin's ten-speed", owner: 'Kevin', description: 'faded maroon ten-speed with drop bars' },
+    { name: "Ada's camera", owner: 'Ada', description: 'matte black plastic 35mm snapshot camera on a wrist strap' },
+    { id: 'Bike!', name: "Ben's ten-speed", owner: 'Ben', description: 'faded maroon ten-speed with drop bars' },
     { name: 'placeholder only' },
   ];
 
@@ -344,8 +344,8 @@ describe('Cast & Sets props', () => {
     expect(buildCastAndSetsPrompt(project)).toMatch(/props: EVERY object a character carries, holds, uses or rides/);
     const { direction } = mergeCastAndSetsDirection(null, parseCastAndSetsResponse(JSON.stringify({ ...ANSWER, props: PROPS })), { sections });
     expect(direction.props).toEqual([
-      { id: 'renee-s-camera', name: "Renee's camera", owner: 'Renee', description: 'matte black plastic 35mm snapshot camera on a wrist strap' },
-      { id: 'bike', name: "Kevin's ten-speed", owner: 'Kevin', description: 'faded maroon ten-speed with drop bars' },
+      { id: 'ada-s-camera', name: "Ada's camera", owner: 'Ada', description: 'matte black plastic 35mm snapshot camera on a wrist strap' },
+      { id: 'bike', name: "Ben's ten-speed", owner: 'Ben', description: 'faded maroon ten-speed with drop bars' },
     ]);
   });
 
@@ -354,7 +354,7 @@ describe('Cast & Sets props', () => {
     expect(buildCastAndSetsPrompt(linked)).toContain('FIXED PROPS (catalog objects the director chose');
     const { direction } = mergeCastAndSetsDirection(null, parseCastAndSetsResponse(JSON.stringify({ ...ANSWER, props: PROPS.slice(0, 1) })),
       { sections, fixedProps: [{ id: 'obj-1', name: 'VHS-C camcorder', description: 'charcoal camcorder, red REC light' }] });
-    expect(direction.props.map((item) => item.name)).toEqual(['VHS-C camcorder', "Renee's camera"]);
+    expect(direction.props.map((item) => item.name)).toEqual(['VHS-C camcorder', "Ada's camera"]);
   });
 
   it('keeps a direction saved before props existed in its old shape, and lets the director replace the list', () => {
