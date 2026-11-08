@@ -1225,59 +1225,51 @@ fi
 
 INSTALL_MINIMAX_MUSIC3="${INSTALL_MINIMAX_MUSIC3:-0}"
 if [[ "$INSTALL_MINIMAX_MUSIC3" == "1" ]]; then
-  # MiniMax Music 3 (Music studio, CUDA-only) — full songs with vocals up to five
-  # minutes. diffusers is pinned to a git commit until a release carries the
-  # MiniMax-Music3 modular pipeline, so pip needs git to build that wheel. Say so
-  # up front rather than failing several minutes into a torch download.
-  if ! have git; then
-    echo "❌ INSTALL_MINIMAX_MUSIC3=1 requires git (the diffusers pin is a git commit)." >&2
+  if is_macos; then
+    echo "❌ MiniMax Music 3 CUDA needs an NVIDIA GPU. Use the Music 3 MLX runtime on Apple Silicon." >&2
+    exit 1
+  fi
+  if ! have uv; then
+    echo "❌ MiniMax Music 3 CUDA needs uv to provision its locked Python 3.11 runtime. Install uv and retry Repair." >&2
+    exit 1
+  fi
+  case "$(uname -m)" in
+    x86_64|amd64|AMD64) ;;
+    *) echo "❌ MiniMax Music 3 CUDA hash locks support x86_64 Windows/Linux only." >&2; exit 1 ;;
+  esac
+  if [[ "$TORCH_CUDA_INDEX" != "https://download.pytorch.org/whl/cu126" ]]; then
+    echo "❌ MiniMax Music 3 CUDA is locked to cu126. Unset PORTOS_TORCH_CUDA_INDEX; see docs/MINIMAX_MUSIC3_CUDA.md." >&2
     exit 1
   fi
   MINIMAX_MUSIC3_VENV="${HOME}/.portos/venv-minimax-music3"
-  mkdir -p "${HOME}/.portos"
-  # A venv built from a conda/anaconda base is the sticky Windows failure: pip
-  # installs torch happily, then `import torch` dies with
-  # "WinError 1114 ... c10.dll initialization routine failed" because conda's
-  # MKL/OpenMP DLLs poison the search path. Re-running never helped, because the
-  # venv already existed and got reused. Rebuild it when its recorded base is
-  # conda and the interpreter we'd build from is not.
-  if [[ -f "$MINIMAX_MUSIC3_VENV/pyvenv.cfg" ]] \
-     && grep -qiE '^home *=.*(miniconda|anaconda)' "$MINIMAX_MUSIC3_VENV/pyvenv.cfg" \
-     && [[ ! "$PYTHON_BIN" =~ [Mm]ini?conda|[Aa]naconda ]]; then
-    echo "♻️  Existing MiniMax Music 3 venv was built from a conda base (torch can't load there) — rebuilding from ${PYTHON_BIN}."
-    rm -rf "$MINIMAX_MUSIC3_VENV"
+  if is_windows; then
+    MINIMAX_MUSIC3_LOCK="${SCRIPT_DIR}/requirements-minimax-music3-cuda-windows.lock.txt"
+  else
+    MINIMAX_MUSIC3_LOCK="${SCRIPT_DIR}/requirements-minimax-music3-cuda-linux.lock.txt"
   fi
+  mkdir -p "${HOME}/.portos"
   reset_universal_venv "$MINIMAX_MUSIC3_VENV" "$PYTHON_BIN"
+  # Repair keeps standalone 3.11, but replaces incompatible minors and Conda
+  # bases whose DLL search path can prevent CUDA torch from loading on Windows.
+  if venv_exists "$MINIMAX_MUSIC3_VENV"; then
+    MINIMAX_MUSIC3_PY="$(venv_python "$MINIMAX_MUSIC3_VENV")"
+    if ! "$MINIMAX_MUSIC3_PY" -c "import sys; from pathlib import Path; sys.exit(sys.version_info[:2] != (3, 11) or (Path(sys.base_prefix) / 'conda-meta').is_dir())"; then
+      echo "♻️ Rebuilding MiniMax Music 3 CUDA with its locked Python 3.11..."
+      uv venv --clear --managed-python --python 3.11 "$MINIMAX_MUSIC3_VENV"
+    fi
+  fi
   if ! venv_exists "$MINIMAX_MUSIC3_VENV"; then
-    "$PYTHON_BIN" -m venv "$MINIMAX_MUSIC3_VENV"
+    echo "📦 Creating MiniMax Music 3 CUDA venv (Python 3.11)..."
+    uv venv --managed-python --python 3.11 "$MINIMAX_MUSIC3_VENV"
   fi
   MINIMAX_MUSIC3_PY="$(venv_python "$MINIMAX_MUSIC3_VENV")"
-  "$MINIMAX_MUSIC3_PY" -m pip install --upgrade pip wheel setuptools
-  # torch comes from PyTorch's own CUDA index on Windows — the default PyPI
-  # Windows wheel is CPU-only, which fails the cuda assert below. Linux's PyPI
-  # torch already bundles CUDA. Mirrors the MiniMax H3 CUDA block above.
-  MINIMAX_MUSIC3_TORCH_INDEX="${PORTOS_TORCH_CUDA_INDEX:-https://download.pytorch.org/whl/cu126}"
-  if is_windows; then
-    echo "📦 Installing CUDA torch from ${MINIMAX_MUSIC3_TORCH_INDEX}..."
-    "$MINIMAX_MUSIC3_PY" -m pip install --upgrade --index-url "$MINIMAX_MUSIC3_TORCH_INDEX" torch
-  else
-    "$MINIMAX_MUSIC3_PY" -m pip install --upgrade torch
-  fi
-  # Fail here, with the cause named, rather than 400 MB of diffusers later. The
-  # conda-base check above is a heuristic (a venv can inherit a poisoned DLL path
-  # other ways); this is the ground truth.
-  probe_or_fail \
-    "torch installed into ${MINIMAX_MUSIC3_VENV} but cannot be imported." \
-    "On Windows, use a standalone Python instead of a conda/anaconda base, then retry the install." \
-    "$MINIMAX_MUSIC3_PY" -c "import torch"
-  # Pinned to the main commit that merged MiniMax Music 3 (diffusers PR #14456,
-  # 2026-08-13) — the integration is in no tagged release yet. The pin must be a
-  # commit reachable from main: pip clones the default branch, so a PR-branch
-  # head SHA fails with "pathspec ... did not match any file(s) known to git".
-  "$MINIMAX_MUSIC3_PY" -m pip install --upgrade transformers accelerate huggingface_hub numpy \
-    'diffusers @ git+https://github.com/huggingface/diffusers.git@2da7040be1a2e5f2fcbc8b985083342a308f5a86'
+  echo "📦 Syncing the hash-pinned MiniMax Music 3 CUDA runtime..."
+  uv pip sync --require-hashes --only-binary :all: --index-strategy unsafe-best-match --python "$MINIMAX_MUSIC3_PY" "$MINIMAX_MUSIC3_LOCK"
   pin_venv_arm64 "$MINIMAX_MUSIC3_VENV"
-  "$MINIMAX_MUSIC3_PY" -c "import torch; from diffusers import ModularPipeline; assert torch.cuda.is_available()"
+  probe_or_fail \
+    "MiniMax Music 3 CUDA installed but its runtime probe failed." \
+    "Check the CUDA torch/import errors above, then use Repair in Music. Use standalone Python if Conda DLLs interfere." \
+    "$MINIMAX_MUSIC3_PY" -c "import torch; from diffusers import ModularPipeline; from diffusers.modular_pipelines.minimax_music3 import MiniMaxMusic3Blocks; assert torch.cuda.is_available(), 'no CUDA device'"
   echo "✅ MiniMax Music 3 venv ready: $MINIMAX_MUSIC3_PY"
   echo "   Model weights (~29 GB) install separately from Music → Generate."
 fi
