@@ -20,6 +20,12 @@ import {
 // the reset through this module.
 export { __resetAppOperations } from '../services/appOperations.js';
 
+// maintenance.admit records each run but does not refuse a second one, so a
+// Create App re-click (e.g. after a dropped socket) would otherwise run two
+// analyze→backup→apply flows against the same repo at once.
+const standardizingRepos = new Set();
+const STANDARDIZE_BUSY_MESSAGE = 'A standardization is already running for this repository. Wait for it to finish, then try again.';
+
 export const registerAppHandlers = (socket, io) => {
   socket.on('detect:start', async (rawData) => {
     try {
@@ -38,13 +44,22 @@ export const registerAppHandlers = (socket, io) => {
   // The multi-step analyze→backup→apply flow lives in the service; the socket
   // handler only wires progress callbacks to socket events.
   socket.on('standardize:start', async (rawData) => {
+    let resource = null;
     try {
       const data = validateSocketData(standardizeStartSchema, rawData, socket, 'standardize:start');
       if (!data) return;
       const { repoPath, providerId, overwriteEcosystem = false } = data;
+      const repoResource = appOperationResource(repoPath);
+      if (standardizingRepos.has(repoResource)) {
+        console.log(`🚫 Standardization already running for ${repoPath}`);
+        socket.emit('standardize:complete', { success: false, duplicate: true, error: STANDARDIZE_BUSY_MESSAGE });
+        return;
+      }
+      standardizingRepos.add(repoResource);
+      resource = repoResource;
       console.log(`🔧 Starting PM2 standardization: ${repoPath}`);
 
-      const outcome = await maintenance.run('app-operation', appOperationResource(repoPath), () => pm2Standardizer.runStandardizeFlow(repoPath, providerId, {
+      const outcome = await maintenance.run('app-operation', resource, () => pm2Standardizer.runStandardizeFlow(repoPath, providerId, {
         overwriteEcosystem,
         onStep: ({ step, status, data }) => {
           socket.emit('standardize:step', { step, status, data, timestamp: Date.now() });
@@ -58,6 +73,8 @@ export const registerAppHandlers = (socket, io) => {
       console.error(`❌ Socket handler error [standardize:start]: ${message}`);
       socket.emit('error:server', { message });
       socket.emit('standardize:complete', { success: false, error: message });
+    } finally {
+      if (resource) standardizingRepos.delete(resource);
     }
   });
 

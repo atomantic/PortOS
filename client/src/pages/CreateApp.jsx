@@ -187,7 +187,8 @@ export default function CreateApp() {
 
     // A standardization reports only to this socket. If the link drops, its
     // terminal frame is lost with the old socket id, so settle rather than spin;
-    // re-running is safe because the server serializes per repo.
+    // re-running is safe because the server refuses a second concurrent run
+    // for the same repo (server/sockets/apps.js standardizingRepos).
     socketRef.current.on('disconnect', () => {
       if (!standardizingRef.current) return;
       setStandardizing(false);

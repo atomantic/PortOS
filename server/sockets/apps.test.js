@@ -148,6 +148,26 @@ describe('app socket handlers', () => {
     expect(pm2Standardizer.runStandardizeFlow).toHaveBeenCalledTimes(1);
   });
 
+  it('refuses a second Create App standardization for the same repo while one runs', async () => {
+    const entered = deferred();
+    const work = deferred();
+    pm2Standardizer.runStandardizeFlow.mockImplementation(async () => { entered.resolve(); return work.promise; });
+    const first = connect(bus);
+    const run = first.fire('standardize:start', { repoPath: '/repos/new-app' });
+    onTestFinished(async () => { work.resolve({ success: true }); await run; });
+    await entered.promise;
+
+    const second = connect(bus);
+    await second.fire('standardize:start', { repoPath: '/repos/new-app' });
+    expect(second.last('standardize:complete').payload).toMatchObject({ success: false, duplicate: true });
+    expect(pm2Standardizer.runStandardizeFlow).toHaveBeenCalledTimes(1);
+
+    work.resolve({ success: true });
+    await run;
+    await second.fire('standardize:start', { repoPath: '/repos/new-app' });
+    expect(pm2Standardizer.runStandardizeFlow).toHaveBeenCalledTimes(2);
+  });
+
   it('routes a standardization admission refusal to the requested app', async () => {
     const update = maintenance.deferredUpdate.request();
     expect(maintenance.deferredUpdate.acquire(update.id)).toBe(true);
