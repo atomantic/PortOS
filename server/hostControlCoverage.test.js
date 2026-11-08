@@ -267,6 +267,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/catalog/ingredients/:id/media/upload', RECORDS],
   ['POST /api/catalog/ingredients/:id/greybox/prompt', READ_OVER_POST],
   ['PUT /api/catalog/ingredients/:id/greybox', RECORDS],
+  ['PUT /api/catalog/ingredients/:id/world', RECORDS],
   ['POST /api/catalog/ingredients/:id/photoreal/look/prompt', READ_OVER_POST],
   ['PUT /api/catalog/ingredients/:id/photoreal/look', RECORDS],
   ['POST /api/catalog/ingredients/:id/greybox/shots/:shotId/capture', RECORDS],

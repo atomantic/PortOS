@@ -1132,11 +1132,12 @@ export function sanitizePlace(raw, { idPrefix = DEFAULT_ID_PREFIX.place, preserv
     firstAppearance: ensureFirstAppearance(raw.firstAppearance),
     evidence: cleanStringArray(raw.evidence, BIBLE_LIMITS.EVIDENCE_ITEM_MAX, BIBLE_LIMITS.EVIDENCE_PER_ENTRY_MAX),
     missingFromProse: cleanStringArray(raw.missingFromProse, BIBLE_LIMITS.EVIDENCE_ITEM_MAX, BIBLE_LIMITS.EVIDENCE_PER_ENTRY_MAX),
-    // Greybox layout (docs/plans/2026-10-25-place-greybox.md) and Photoreal look:
+    // Greybox layout (docs/plans/2026-10-25-place-greybox.md), Photoreal look and world map:
     // validated by their schemas where they are written, passed through here so a
     // later profile save or canon edit does not drop them.
     ...(raw.greybox && typeof raw.greybox === 'object' && !Array.isArray(raw.greybox) ? { greybox: raw.greybox } : {}),
     ...(raw.photoreal && typeof raw.photoreal === 'object' && !Array.isArray(raw.photoreal) ? { photoreal: raw.photoreal } : {}),
+    ...(raw.world && typeof raw.world === 'object' && !Array.isArray(raw.world) ? { world: raw.world } : {}),
     ...applyCanonExtras(raw),
     createdAt: created,
     updatedAt: preserveTimestamps && isStr(raw.updatedAt) ? raw.updatedAt : nowIso(),

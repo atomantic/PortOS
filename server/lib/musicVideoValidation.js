@@ -287,6 +287,8 @@ const previzSec = z.number().finite().min(0).max(36000);
 const previzCoord = z.number().finite().min(-1000).max(1000);
 const previzSubjectId = z.string().min(1).max(64);
 export const musicVideoPrevizSchema = z.object({
+  // The catalog environment whose world map (lib/worldMap.js) the previz plays in; null/absent = none.
+  worldId: z.string().min(1).max(128).nullable().optional(),
   cuts: z.array(z.object({
     id: z.string().min(1).max(64),
     // A linked shot; its live timing wins over the cut's own.

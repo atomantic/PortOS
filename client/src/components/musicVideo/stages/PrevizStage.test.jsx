@@ -1,4 +1,5 @@
 import { expect, it, vi } from 'vitest';
+import { waitFor } from '@testing-library/react';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import PrevizStage from './PrevizStage.jsx';
@@ -7,6 +8,11 @@ vi.mock('../../../hooks/useMusicVideoGreyboxPlaces.js', () => ({
   default: () => ({ 'cat-street': { ingredient: { type: 'place', payload: { greybox: { anchors: [], shots: [{ id: 'wide', label: 'Wide', position: [0, 2, 8], target: [0, 1, 0], figures: [] }] } } }, media: [] } }),
 }));
 vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('../../../services/apiCatalog.js', () => ({
+  createCatalogIngredient: vi.fn(async (body) => ({ id: 'cat-world', ...body })),
+  saveCatalogWorld: vi.fn(async (id, world) => ({ id, type: 'place', payload: { world } })),
+  listCatalogIngredientsByIds: vi.fn(async () => [{ id: 'cat-world', type: 'place', name: 'Example world' }]),
+}));
 
 const project = {
   id: 'mv-1',
@@ -31,4 +37,16 @@ it('builds a cut per shot from the shot list, then saves who is in shot from the
   expect(board.saveProjectFields.mock.calls.at(-1)[0].previz.cuts[0].visibleSubjectIds).toEqual([]);
   fireEvent.click(screen.getByRole('button', { name: /Watch/ }));
   expect(board.seekToScene).toHaveBeenCalledWith({ startSec: 0 }, { play: true });
+});
+
+// Catches the drafted world never reaching the catalog or never being picked for the previz.
+it('drafts a world environment from the route maps and links it to the previz', async () => {
+  const { saveCatalogWorld } = await import('../../../services/apiCatalog.js');
+  const routed = { ...project, title: 'Example', routeMaps: [{ id: 'r1', name: 'Ride', heading: 'east', stops: [{ id: 's1', subjectId: 'p-street' }] }] };
+  const board = { project: routed, locked: false, editProjectLocal: vi.fn(), saveProjectFields: vi.fn(), seekToScene: vi.fn() };
+  render(<MemoryRouter><PrevizStage board={board} /></MemoryRouter>);
+  fireEvent.click(screen.getByRole('button', { name: /Draft world from route maps/ }));
+  await waitFor(() => expect(board.saveProjectFields).toHaveBeenCalled());
+  expect(saveCatalogWorld.mock.calls[0][1].sets).toEqual([expect.objectContaining({ ingredientId: 'cat-street' })]);
+  expect(board.saveProjectFields.mock.calls[0][0].previz).toMatchObject({ worldId: 'cat-world', cuts: [] });
 });

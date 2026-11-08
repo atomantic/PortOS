@@ -4,7 +4,7 @@ import { request } from '../lib/testHelper.js';
 import { errorMiddleware, ServerError } from '../lib/errorHandler.js';
 
 vi.mock('../services/catalogGreybox.js', () => ({
-  captureGreyboxShot: vi.fn(), draftGreybox: vi.fn(), previewGreyboxPrompt: vi.fn(), saveGreybox: vi.fn(), renderGreyboxShot: vi.fn(),
+  captureGreyboxShot: vi.fn(), draftGreybox: vi.fn(), previewGreyboxPrompt: vi.fn(), saveGreybox: vi.fn(), saveWorld: vi.fn(), renderGreyboxShot: vi.fn(),
 }));
 const { renderGreyboxShot } = await import('../services/catalogGreybox.js');
 const router = (await import('./catalog.js')).default;
@@ -31,5 +31,21 @@ describe('POST greybox shot render', () => {
     const response = await request(app).post(url).send({});
     expect(response.status).toBe(503);
     expect(response.body.code).toBe('PREVIEW_ISOLATION_UNAVAILABLE');
+  });
+});
+
+describe('PUT world map', () => {
+  const world = { version: 1, seed: 7, sets: [{ id: 'set-a', ingredientId: 'example-street', position: [0, 0], rotationDegrees: 90 }], paths: [{ id: 'road-a', kind: 'road', sides: 'buildings', width: 9, points: [[0, 0], [120, 0]] }] };
+
+  it('saves a valid world and refuses a malformed one before the service', async () => {
+    const { saveWorld } = await import('../services/catalogGreybox.js');
+    saveWorld.mockResolvedValue({ id: 'example-world', payload: { world } });
+    const saved = await request(app).put('/api/catalog/ingredients/example-world/world').send({ world });
+    expect(saved.status).toBe(200);
+    expect(saveWorld).toHaveBeenCalledWith('example-world', world, { source: undefined });
+    const dup = { ...world, paths: [{ ...world.paths[0], id: 'set-a' }] };
+    const refused = await request(app).put('/api/catalog/ingredients/example-world/world').send({ world: dup });
+    expect(refused.status).toBe(400);
+    expect(saveWorld).toHaveBeenCalledTimes(1);
   });
 });
