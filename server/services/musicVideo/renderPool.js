@@ -19,12 +19,19 @@ export async function applyProjectRenderPool(body) {
   }
   const pool = project?.videoSettings?.renderPool;
   // The shot card's Song audio toggle decides for its own render; else the project's generation mode.
-  const supplied = typeof body.musicVideo.songAudio === 'boolean'
+  let supplied = typeof body.musicVideo.songAudio === 'boolean'
     ? body.musicVideo.songAudio : project?.videoSettings?.generationMode === 'suppliedAudio';
-  if (supplied
-    && ((body.mode && !['image', 'a2v'].includes(body.mode)) || body.extendFromVideoId
-      || body.lastImageFile || body.keyframes?.length || body.chunks > 1)) {
-    refuse('Supplied song audio does not support continuation, end frames, keyframes or chained clips');
+  // A render song audio cannot ride with (a hosted renderer, continuation, end
+  // frames) still renders, silent, and says so, rather than refusing the shot.
+  const songAudioBlocker = !supplied ? null
+    : body.backend && body.backend !== 'local' ? `${body.backend} cannot take song audio`
+      : ((body.mode && !['image', 'a2v'].includes(body.mode)) || body.extendFromVideoId
+        || body.lastImageFile || body.keyframes?.length || body.chunks > 1)
+        ? 'song audio cannot combine with continuation, end frames, keyframes or chained clips' : null;
+  if (songAudioBlocker) {
+    console.log(`⏭️ ${songAudioBlocker}; rendering ${body.musicVideo.sceneId} without its song window`);
+    supplied = false;
+    body = { ...body, musicVideo: { ...body.musicVideo, songAudio: false }, _notice: `Rendered without song audio: ${songAudioBlocker}.` };
   }
   // A production run's own routes decide: a supplied-audio route sends `_suppliedAudio` itself.
   if (body.musicVideo.productionRunId && supplied && !body._suppliedAudio) {
@@ -33,9 +40,6 @@ export async function applyProjectRenderPool(body) {
   // Existing projects retain their renderer pins until a pool is saved.
   if (!pool || pool.mode === 'local') {
     if (body.mediaProviderPeerId) refuse('Select a peer in the saved project render pool first');
-    if (supplied && body.backend && body.backend !== 'local') {
-      refuse('Supplied song audio requires Local video; choose that renderer explicitly');
-    }
     return supplied ? { ...body, backend: 'local', mode: 'a2v', _suppliedAudio: true } : body;
   }
   const scene = project.scenes?.find((entry) => entry.sceneId === body.musicVideo.sceneId);

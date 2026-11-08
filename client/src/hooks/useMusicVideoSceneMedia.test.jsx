@@ -359,15 +359,15 @@ it('sends LTX reference sheets separately from the opening frame on a shot', asy
   generateVideo.mockResolvedValueOnce({ jobId: 'job-reference', status: 'queued' });
   await act(async () => { await result.current.generateSceneVideo(shot, {
     target: { numFrames: 123 },
-    card: { prompt: 'Reference sheet: Renee.\n\nGenerated video: A rider turns', ltxReferences: true,
-      songAudio: false, endFrame: false, expectedClipReferenceFiles: ['renee.png'], expectedClipReferenceLabels: ['Renee'] },
+    card: { prompt: 'Reference sheet: Ada.\n\nGenerated video: A rider turns', ltxReferences: true,
+      songAudio: false, endFrame: false, expectedClipReferenceFiles: ['ada.png'], expectedClipReferenceLabels: ['Ada'] },
   }); });
   const payload = generateVideo.mock.calls.at(-1)[0];
   expect(payload).toMatchObject({
     modelId: 'ltx25_mlx_q8', mode: 'ic-ingredients-25', numFrames: 129,
-    sourceImageFile: 'start.png', icReferenceImageFiles: ['renee.png'],
+    sourceImageFile: 'start.png', icReferenceImageFiles: ['ada.png'],
   });
-  expect(JSON.parse(payload.musicVideo)).toMatchObject({ expectedClipReferenceFiles: ['renee.png'], expectedClipReferenceLabels: ['Renee'] });
+  expect(JSON.parse(payload.musicVideo)).toMatchObject({ expectedClipReferenceFiles: ['ada.png'], expectedClipReferenceLabels: ['Ada'] });
   expect(payload).not.toHaveProperty('lastImageFile');
   cleanup();
 });
@@ -381,8 +381,8 @@ it.each([[9, 193], [9.01, 201]])('covers a shot ending at %s when LTX references
   const { result } = renderHook(() => useMusicVideoSceneMedia({ project, videoSettings, applyScenePatch: vi.fn() }));
   generateVideo.mockResolvedValueOnce({ jobId: 'job-reference', status: 'queued' });
   await act(async () => { await result.current.generateSceneVideo(shot, { card: {
-    prompt: 'Reference sheet: Renee.\n\nGenerated video: A rider turns', ltxReferences: true,
-    expectedClipReferenceFiles: ['renee.png'], expectedClipReferenceLabels: ['Renee'],
+    prompt: 'Reference sheet: Ada.\n\nGenerated video: A rider turns', ltxReferences: true,
+    expectedClipReferenceFiles: ['ada.png'], expectedClipReferenceLabels: ['Ada'],
   } }); });
   expect(generateVideo.mock.calls.at(-1)[0]).toMatchObject({ mode: 'ic-ingredients-25', numFrames: frames });
   cleanup();
@@ -400,7 +400,7 @@ it('asks for a shorter clip when a cold open exceeds the LTX frame limit', async
   const { result } = renderHook(() => useMusicVideoSceneMedia({ project, videoSettings, applyScenePatch: vi.fn() }));
   let outcome;
   await act(async () => { outcome = await result.current.generateSceneVideo(shot, { card: {
-    prompt: 'A rider turns', ltxReferences: true, expectedClipReferenceFiles: ['renee.png'],
+    prompt: 'A rider turns', ltxReferences: true, expectedClipReferenceFiles: ['ada.png'],
   } }); });
   expect(outcome).toEqual({ ok: false });
   expect(generateVideo).not.toHaveBeenCalled();

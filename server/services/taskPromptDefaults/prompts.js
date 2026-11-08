@@ -690,6 +690,13 @@ repo (a globally-configured \`gh\` will silently target an unrelated GitHub repo
 1. Run the appropriate audit for EVERY ecosystem and manifest in the repo, including
    Python requirements/locks (for example pip-audit) as well as npm workspaces.
    Record any scanner or dependency-resolution failures as coverage gaps.
+   Python needs its own inventory, because its pins rarely sit in one manifest:
+   requirements/lock files, \`pyproject.toml\`, and versions pinned inline in
+   installer scripts or source (\`pip install "pkg==x.y"\`, a pin list in code).
+   For each resolved set, query OSV (\`https://api.osv.dev/v1/querybatch\`, PyPI
+   ecosystem) or pip-audit; OSV also carries \`MAL-\` malicious-package records.
+   An install that resolves unpinned packages at install time has no auditable
+   set: list it as a coverage gap rather than a pass.
 2. Check for outdated packages — skip any package that still has an open bot PR; that PR
    owns the bump. Phase 1's list is the first filter, and when Phase 1 had forge access,
    confirm per package before you bump one it didn't mention
@@ -715,6 +722,15 @@ repo (a globally-configured \`gh\` will silently target an unrelated GitHub repo
    - Patch versions first (safest)
    - Then minor versions
    - Major versions need careful review
+   - Python: bump the direct pin in its source requirements file, then
+     regenerate the compiled lock with the command its header documents — never
+     hand-edit a lock, and keep its hashes. Resolve with a release cooldown
+     (uv \`--exclude-newer\` at least 7 days back) so a just-published, possibly
+     compromised release is not adopted, and treat a new maintainer, a renamed
+     package, or a sdist-only release of a formerly wheel-only package as a
+     red flag to stop and record. A runtime for hardware this machine lacks
+     (CUDA, Apple Silicon) may be resolved but not run here: say its runtime
+     validation is pending rather than reporting it as verified.
 
 6. After updating:
    - Run tests

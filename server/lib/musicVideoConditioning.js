@@ -88,7 +88,7 @@ function isCloseFraming(scene) {
 
 /**
  * Whether a scene's frame or shot prompt shows one of the direction's props: by
- * its name without the owner ("Renee's camera" is shown by "camera"), so a shot
+ * its name without the owner ("Ada's camera" is shown by "camera"), so a shot
  * that only names its owner does not pull the prop sheet in.
  */
 function showsProp(direction, scene) {

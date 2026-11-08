@@ -709,3 +709,21 @@ describe('pinned runtime revisions', () => {
       expect(shellDefault).toBe(info.expectedRevision);
     });
 });
+
+describe('MiniMax H3 MLX hash-pinned lock', () => {
+  const pinnedNames = (text) => text.split('\n').filter((l) => /^[a-z]/i.test(l)).map((l) => l.split(/ |\\/)[0]);
+  const input = readFileSync(join(REPO_ROOT, 'scripts', 'requirements-minimax-h3-mlx.txt'), 'utf8');
+  const lock = readFileSync(join(REPO_ROOT, 'scripts', 'requirements-minimax-h3-mlx.lock.txt'), 'utf8');
+
+  it('locks exactly the validated input set, every package carrying sha256 hashes', () => {
+    const locked = pinnedNames(lock);
+    expect(locked).toEqual(pinnedNames(input));
+    const blocks = lock.split(/\n(?=[a-z][^\n]*==)/i).filter((b) => /^[a-z][^\n]*==/i.test(b));
+    expect(blocks).toHaveLength(locked.length);
+    for (const block of blocks) expect(block).toMatch(/--hash=sha256:[0-9a-f]{64}/);
+  });
+
+  it('installs the lock with --require-hashes so nothing resolves at install time', () => {
+    expect(source).toMatch(/pip sync --require-hashes --python "\$MINIMAX_H3_PY" "\$MINIMAX_H3_LOCK"/);
+  });
+});

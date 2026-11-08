@@ -1308,6 +1308,7 @@ describe('CI test impact planner', () => {
     it('scopes a requirements-pin change to the installer contract', () => {
       const requirements = [
         'scripts/requirements-ltx25-cuda.txt',
+        'scripts/requirements-flux3-mlx.lock.txt',
         'scripts/requirements-minimax-h3-cuda.txt',
         'scripts/requirements-minimax-h3-mlx.lock.txt',
         'scripts/requirements-wan22-cuda.txt',
@@ -1316,6 +1317,7 @@ describe('CI test impact planner', () => {
         'scripts/setup-image-video.test.js',
         'server/lib/pythonSetup.install.test.js',
         'server/lib/pythonSetup.test.js',
+        'server/services/imageGen/flux3Runtime.test.js',
       ];
       const plan = buildCiTestPlan(requirements, { trackedFiles: [...TRACKED, ...requirements, ...owners] });
 

@@ -11,7 +11,7 @@ import { worldClockText } from '../../../../../server/lib/worldMap.js';
 
 const buttonCls = 'inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border px-2 py-1 text-xs disabled:opacity-50 pointer-fine:sm:min-h-0';
 const inputCls = 'w-full min-w-0 rounded border border-port-border bg-port-bg px-1.5 py-1 text-xs';
-const PART_ORDER = ['world', 'night', 'cuts', 'pawnColors', 'cameraStyles'];
+const PART_ORDER = ['world', 'timeline', 'vehicles', 'cuts', 'pawnColors', 'cameraStyles'];
 const plural = (n, word) => `${formatCount(n)} ${word}${n === 1 ? '' : 's'}`;
 
 const cutLine = (patch, nameOf, numberOf) => {
@@ -21,14 +21,14 @@ const cutLine = (patch, nameOf, numberOf) => {
   if ('aimSubjectId' in patch) bits.push(patch.aimSubjectId ? `keeps ${nameOf(patch.aimSubjectId)} in frame` : 'camera\'s own aim');
   if ('turnToAim' in patch) bits.push(patch.turnToAim ? 'turns to them' : 'no turn');
   if ('visibleSubjectIds' in patch) bits.push(patch.visibleSubjectIds ? `shows ${patch.visibleSubjectIds.map(nameOf).join(', ') || 'nobody'}` : 'shows everyone');
-  if ('storyMin' in patch) bits.push(patch.storyMin == null ? 'off the night' : `story minute ${formatCount(Math.round(patch.storyMin))}`);
+  if ('storyMin' in patch) bits.push(patch.storyMin == null ? 'off the timeline' : `story minute ${formatCount(Math.round(patch.storyMin))}`);
   if ('cameraSpot' in patch) bits.push(patch.cameraSpot ? `camera at ${patch.cameraSpot.map((v) => Math.round(v)).join(', ')} m` : 'auto camera spot');
   return `${numberOf(patch.id)}: ${bits.join(' · ')}`;
 };
 
 /**
  * Edit the previz by asking a model: the director writes what to change and
- * picks provider › model › effort, and the model's world map, night, cut edits,
+ * picks provider › model › effort, and the model's world map, timeline, cut edits,
  * pawn colors and camera styles come back as a proposal to review. Each part is
  * applied (or not) on its own; nothing is saved until Apply.
  */
@@ -72,7 +72,8 @@ export default function PrevizAi({ project, world, worldId, places, previz, disa
       if (!saved) { setBusy(false); return; }
     }
     const patch = {};
-    if (keep.night && proposal.night) patch.night = proposal.night;
+    if (keep.timeline && proposal.timeline) patch.timeline = proposal.timeline;
+    if (keep.vehicles && proposal.vehicles) patch.vehicles = proposal.vehicles;
     if (keep.pawnColors && proposal.pawnColors) patch.pawnColors = { ...(previz?.pawnColors || {}), ...proposal.pawnColors };
     if (keep.cuts && proposal.cuts && previz?.cuts) {
       const edits = new Map(proposal.cuts.map(({ id, ...edit }) => [id, edit]));
@@ -92,12 +93,13 @@ export default function PrevizAi({ project, world, worldId, places, previz, disa
   const { proposal } = review || {};
   const describe = {
     world: () => `${plural(proposal.world.sets.length, 'set')}, ${plural(proposal.world.paths.length, 'path')} (now ${plural(world?.sets.length || 0, 'set')}, ${plural(world?.paths.length || 0, 'path')})`,
-    night: () => `${plural(proposal.night.beats.length, 'beat')}, from ${worldClockText(proposal.night.startClock)} for ${formatCount(Math.round(proposal.night.lengthMin / 6) / 10)} h`,
+    timeline: () => `${plural(proposal.timeline.beats.length, 'beat')}, from ${worldClockText(proposal.timeline.startClock)} for ${formatCount(Math.round(proposal.timeline.lengthMin / 6) / 10)} h`,
+    vehicles: () => proposal.vehicles.map((vehicle) => `${nameOf(vehicle.subjectId)}: ${formatCount(vehicle.speedMetersPerMin)} m/min`).join(' · ') || 'none',
     cuts: () => plural(proposal.cuts.length, 'cut edit'),
-    pawnColors: () => Object.entries(proposal.pawnColors).map(([id, colors]) => `${nameOf(id)}: ${[colors.figure, colors.bike && `bike ${colors.bike}`].filter(Boolean).join(', ')}`).join(' · '),
+    pawnColors: () => Object.entries(proposal.pawnColors).map(([id, colors]) => `${nameOf(id)}: ${colors.figure}`).join(' · '),
     cameraStyles: () => Object.entries(proposal.cameraStyles).map(([id, style]) => `${(project.cameras || []).find((camera) => camera.id === id)?.name || id}: ${style}`).join(' · '),
   };
-  const LABELS = { world: 'World map', night: 'Night', cuts: 'Cuts', pawnColors: 'Pawn colors', cameraStyles: 'Camera styles' };
+  const LABELS = { world: 'World map', timeline: 'Timeline', vehicles: 'Vehicles', cuts: 'Cuts', pawnColors: 'Pawn colors', cameraStyles: 'Camera styles' };
   return (
     <section aria-label="Edit the previz with AI" className="min-w-0 space-y-2 rounded border border-port-border p-2 text-xs">
       <ProviderModelSelector providers={llm.providers} selectedProviderId={llm.selectedProviderId} selectedModel={llm.selectedModel}
@@ -105,7 +107,7 @@ export default function PrevizAi({ project, world, worldId, places, previz, disa
         effort={effort} onEffortChange={setEffort} executionOptions={executionOptions} onExecutionOptionsChange={setExecutionOptions}
         loading={llm.loading} disabled={busy || disabled} />
       <textarea aria-label="What to change in the previz" rows={3} maxLength={4000} value={instruction} onChange={(event) => setInstruction(event.target.value)}
-        placeholder="e.g. Put the abandoned mall at the far east end of the main road, and in shot 1 have Renee ride on K's right while K turns the camera to her" className={inputCls} />
+        placeholder="e.g. Put the station at the far east end of the main road, and in shot 1 have the friend walk on the lead's right while the lead turns the camera to them" className={inputCls} />
       <div className="flex flex-wrap items-center gap-2">
         <button type="button" className={buttonCls} disabled={busy || disabled || !llm.selectedProviderId || !instruction.trim()} onClick={() => ask(false)}>
           <Sparkles size={12} aria-hidden="true" /> {busy ? 'Asking…' : 'Propose changes'}

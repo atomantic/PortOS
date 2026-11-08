@@ -5,7 +5,10 @@
 // keeping downloads explicit and recoverable instead of hiding them in render.
 //
 // Four render states:
-//   1. cached     → green CheckCircle, "Available · <size>"
+//   1. cached     → green CheckCircle, "Available · <size>" — or, when the
+//                   host says the runtime that loads these weights is
+//                   unavailable, an amber "Weights downloaded · runtime
+//                   unavailable" with the host's one-tap repair.
 //   2. unknown    → grey, no CTA (model has no `repo` in the registry)
 //   3. needsDl    → "↓ Download (~est)" button; while downloading, a stage
 //                   label + percentage replace the button.
@@ -15,7 +18,7 @@
 //                   offering Download here would hijack the lane the queued
 //                   pull is politely waiting for.
 
-import { CheckCircle, Clock, Download, Loader2 } from 'lucide-react';
+import { AlertTriangle, CheckCircle, Clock, Download, Loader2, Wrench } from 'lucide-react';
 import { formatBytes } from '../../utils/formatters.js';
 
 const STAGE_LABELS = {
@@ -34,6 +37,12 @@ export default function ModelDownloadBadge({
   disabled = false,
   disabledReason,
   disabledReasonId,
+  // Cached weights are not a working model when the runtime that loads them
+  // fails its check. `runtimeIssue` is that check's reason; `onRepairRuntime`
+  // and `repairLabel` are the host's one-tap fix, if it has one.
+  runtimeIssue = null,
+  onRepairRuntime,
+  repairLabel = 'Repair runtime',
 }) {
   if (!status) {
     return <p className="text-[10px] text-gray-500 mt-1">Checking model cache…</p>;
@@ -99,6 +108,23 @@ export default function ModelDownloadBadge({
 
   if (status.cached) {
     const sizeLabel = status.sizeBytes ? ` · ${formatBytes(status.sizeBytes)}` : '';
+    if (runtimeIssue) {
+      return (
+        <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-port-warning">
+          <AlertTriangle className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+          <span title={runtimeIssue}>Weights downloaded{sizeLabel} · runtime unavailable</span>
+          {onRepairRuntime && (
+            <button
+              type="button"
+              onClick={onRepairRuntime}
+              className="inline-flex items-center gap-1 rounded border border-port-border px-2 py-1 text-port-accent hover:border-port-accent hover:text-white"
+            >
+              <Wrench className="w-3.5 h-3.5" aria-hidden="true" /> {repairLabel}
+            </button>
+          )}
+        </div>
+      );
+    }
     return (
       <p className="mt-1 flex items-center gap-1.5 text-[11px] text-port-success">
         <CheckCircle className="w-3.5 h-3.5" />

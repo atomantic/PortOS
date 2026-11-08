@@ -53,7 +53,7 @@ export const proposeMusicVideoStory = (id, body, options = {}) => request(`/musi
 export const proposeMusicVideoShotSheet = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/shot-sheet/propose`, {
   method: 'POST', body: JSON.stringify(body), ...options,
 });
-// A previz edit proposal (world, night, cuts, colors, camera styles); nothing is saved.
+// A previz edit proposal (world, timeline, vehicles, cuts, colors, camera styles); nothing is saved.
 export const proposeMusicVideoPrevizEdit = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/previz/propose`, {
   method: 'POST', body: JSON.stringify(body), ...options,
 });

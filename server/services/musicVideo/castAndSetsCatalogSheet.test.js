@@ -35,15 +35,15 @@ describe('catalog guide song map', () => {
 describe('catalog guide sheet', () => {
   const subjects = [
     { id: 's-lead', kind: 'character', role: 'protagonist', name: 'Lead' },
-    { id: 's-k1', kind: 'character', role: 'protagonist', name: 'K' },
-    { id: 's-k2', kind: 'character', role: 'protagonist', name: 'K', active: true },
+    { id: 's-k1', kind: 'character', role: 'protagonist', name: 'Cal' },
+    { id: 's-k2', kind: 'character', role: 'protagonist', name: 'Cal', active: true },
     { id: 's-friend', kind: 'character', role: 'supporting', name: 'Friend' },
     { id: 's-band', kind: 'character', role: 'band', name: 'Drummer' },
     { id: 's-lamp', kind: 'object', name: 'Lamp' },
   ];
   const items = [
     item('s-lead', 'character', 'Lead', { images: ['a.png', 'b.png', 'c.png', 'd.png', 'e.png'], formLabel: 'Age 40' }),
-    item('s-k1', 'character', 'K One'), item('s-k2', 'character', 'K Two'),
+    item('s-k1', 'character', 'Cal One'), item('s-k2', 'character', 'Cal Two'),
     item('s-friend', 'character', 'Friend'), item('s-band', 'character', 'Drummer'),
     item('s-lamp', 'object', 'Lamp'), ...places,
   ];
@@ -56,8 +56,8 @@ describe('catalog guide sheet', () => {
     const leads = section('Protagonists');
     expect(leads).toContain('2 protagonists · 1 alternate not selected');
     expect(leads).toContain('Lead · Age 40');
-    expect(leads).toMatch(/K One.*Alternate for K · Not selected/s);
-    expect(leads).toMatch(/K Two.*Alternate for K · Selected/s);
+    expect(leads).toMatch(/Cal One.*Alternate for Cal · Not selected/s);
+    expect(leads).toMatch(/Cal Two.*Alternate for Cal · Selected/s);
     expect(leads).not.toContain('Friend');
     expect(section('Supporting cast')).toContain('Friend');
     expect(section('Band')).toContain('Drummer');

@@ -182,9 +182,9 @@ describe('buildVideoGenSubmission — local frame sources', () => {
 
   it('sends the LTX 2.5 reference images alongside an optional opening frame', () => {
     expect(local({ currentModel: { runtime: 'ltx25' }, mode: 'ic-ingredients-25',
-      icModeActive: true, icImageKind: true, icReferenceImageFiles: ['renee.png'] }))
+      icModeActive: true, icImageKind: true, icReferenceImageFiles: ['ada.png'] }))
       .toMatchObject({ sourceImageFile: 'a.png', sourceImage: 'up',
-        icReferenceImageFiles: ['renee.png'], lastImageFile: '', audioFile: '' });
+        icReferenceImageFiles: ['ada.png'], lastImageFile: '', audioFile: '' });
   });
 
   it('attaches both frames for legacy first-last-frame, not when keyframes are active', () => {

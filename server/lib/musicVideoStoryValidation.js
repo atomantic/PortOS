@@ -77,7 +77,8 @@ export const previzCutPatchSchema = z.object({
 // Each part is checked on its own, so one bad part never costs the rest.
 export const previzProposalPartSchemas = {
   world: worldMapSchema,
-  night: musicVideoPrevizSchema.shape.night.unwrap().unwrap(),
+  timeline: musicVideoPrevizSchema.shape.timeline.unwrap().unwrap(),
+  vehicles: musicVideoPrevizSchema.shape.vehicles.unwrap(),
   cuts: z.array(z.unknown()).max(600),
   pawnColors: musicVideoPrevizSchema.shape.pawnColors.unwrap(),
   cameraStyles: z.record(z.string().min(1).max(128), z.enum(PREVIZ_CAMERA_STYLES)),

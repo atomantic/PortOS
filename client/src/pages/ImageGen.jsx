@@ -13,7 +13,7 @@ export default function ImageGen() {
     gallery,
     header,
     settings,
-    flux2,
+    runtimeInstall,
   } = useImageGenPageRuntime();
 
   return (
@@ -36,7 +36,7 @@ export default function ImageGen() {
         preview={gallery.overlay}
         galleryPicker={gallery.picker}
         settings={settings}
-        flux2={flux2}
+        runtimeInstall={runtimeInstall}
       />
     </div>
   );

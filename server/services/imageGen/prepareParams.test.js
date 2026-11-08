@@ -334,7 +334,7 @@ it('keeps separate strengths for repeated named references', async () => {
   expect(data.referenceImageStrengths).toEqual([0.3, 0.9]);
 });
 
-// Catches the board preview/render losing the shot's real-world sizes read from Casting (Hold Still shot 89).
+// Catches the board preview/render losing the shot's real-world sizes read from Casting.
 it('composes a board still with its subjects\' Casting sizes as the Real-world scale chip', async () => {
   getSettings.mockResolvedValue({ imageGen: { mode: 'external' } });
   greyboxCatalog.getIngredient.mockImplementation(async (id) => (id === 'cat-fence' ? { type: 'place', payload: { size: 'chain-link fence 4 ft tall' } } : null));

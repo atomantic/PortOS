@@ -72,7 +72,7 @@ describe('Gemini web video lane', () => {
     const done = finished('job-1');
     await gemini.generateVideo({
       jobId: 'job-1', prompt: 'she rides past', frameAspect: '9:16', sourceImagePath: staged, uploadedTempPath: staged,
-      castReferences: [{ path: '/example/sheet.png', label: 'Renee' }, { path: '/example/bikes.png', label: 'Bikes' }],
+      castReferences: [{ path: '/example/sheet.png', label: 'Ada' }, { path: '/example/bikes.png', label: 'Bikes' }],
     });
     expect((await done).type).toBe('completed');
 
