@@ -106,8 +106,10 @@ Every shared-selector consumer below uses the legacy reference bridge unless it 
 | `client/src/components/musicVideo/PromotionPlanPanel.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/musicVideo/PublishKitPanel.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/musicVideo/ResearchSeedForm.jsx` | Session-local structured options forwarded unchanged to shot and cameo research preview and execution requests; changing providers clears the options |
+| `client/src/components/musicVideo/ShotSheetAi.jsx` | Session-local options forwarded to shot-sheet preview and proposal requests; changing providers clears the options |
 | `client/src/components/musicVideo/StoryWorkbench.jsx` | Shared structured options for this story-development session |
 | `client/src/components/musicVideo/TreatmentPanel.jsx` | Shared structured options or saved provider reference |
+| `client/src/components/musicVideo/stages/PrevizAi.jsx` | Session-local options forwarded to previz preview and proposal requests; changing providers clears the options |
 | `client/src/components/pipeline/AutopilotPanel.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/pipeline/SeriesAutopilotSchedule.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/pipeline/SeriesLlmPicker.jsx` | Shared structured options or saved provider reference |
