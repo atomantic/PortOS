@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { listCatalogIngredientsByIds, listCatalogIngredientMedia } from '../services/apiCatalog.js';
 import { useVisibilityEvent } from './useVisibilityEvent.js';
 
+const BATCH = 50;
+
 /**
  * Load catalog places (and their media, for a Blender greybox's model file) by
  * id: `{ [ingredientId]: { ingredient, media } }`, an id missing until it loads
@@ -18,8 +20,11 @@ export default function useCatalogPlaces(ingredientIds = []) {
     if (!ids) return () => { active = false; };
     const selected = ids.split(',');
     Promise.all([
-      listCatalogIngredientsByIds(selected, { silent: true }),
-      Promise.all(selected.map((id) => listCatalogIngredientMedia(id, { silent: true }).then((media) => [id, media]))),
+      // The batch read caps each call at BATCH ids; a town can place more sets than that.
+      Promise.all(Array.from({ length: Math.ceil(selected.length / BATCH) }, (_, i) => listCatalogIngredientsByIds(selected.slice(i * BATCH, (i + 1) * BATCH), { silent: true })))
+        .then((pages) => pages.flat()),
+      // A removed place 404s its media read; only that id should read as missing.
+      Promise.all(selected.map((id) => listCatalogIngredientMedia(id, { silent: true }).then((media) => [id, media]).catch(() => [id, []]))),
     ]).then(([ingredients, media]) => {
       if (!active) return;
       const found = Object.fromEntries(ingredients.map((ingredient) => [ingredient.id, { ingredient, media: media.find(([id]) => id === ingredient.id)?.[1] || [] }]));

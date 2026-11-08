@@ -14,6 +14,7 @@ import { ingredientIdPrefix } from '../../lib/catalogTypes.js';
 import { sanitizeCharacter, sanitizePlace, sanitizeObject } from '../../lib/storyBible.js';
 import { greyboxSceneSchema } from '../../lib/greyboxScene.js';
 import { photorealLookSchema } from '../../lib/photorealLook.js';
+import { townMapSchema } from '../../lib/townMapValidation.js';
 
 // Story-bible sanitizers keyed by catalog type, for the registry
 // `extractionShape: 'bible'` types ONLY (character/place/object). The catalog
@@ -35,7 +36,7 @@ export const BIBLE_SANITIZERS = Object.freeze({
 // catalog↔canon projection round-trip.
 const SANITIZED_NON_PAYLOAD_KEYS = ['id', 'name', 'createdAt', 'updatedAt'];
 
-const VALIDATED_PAYLOAD_KEYS = Object.freeze({ greybox: greyboxSceneSchema, photoreal: photorealLookSchema });
+const VALIDATED_PAYLOAD_KEYS = Object.freeze({ greybox: greyboxSceneSchema, photoreal: photorealLookSchema, town: townMapSchema });
 
 /**
  * Run a bible-type ingredient payload through its storyBible sanitizer so the
