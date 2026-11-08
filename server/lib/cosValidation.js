@@ -16,6 +16,7 @@ import { z } from 'zod';
 import { MALFORMED_REVIEW_REASONS, REVIEW_FINISH_REASONS, MAX_REVIEW_RESPONSE_LENGTH, CLI_REVIEW_PHASES, CLI_REVIEW_METRICS } from './reviewerHealth.js';
 import { emptyToUndefined, emptyToNull, providerRefFieldSchema, providerRefSchema } from './zodCompat.js';
 import { isPlainObject } from './objects.js';
+import { isValidSelfManagedPrStaleMinutes, normalizeSelfManagedPrAuthors } from './selfManagedPrAuthors.js';
 import { MIN_INTERVAL_MS, isValidLoopInterval } from './loopInterval.js';
 import { EFFORT_LEVELS } from './providerModels.js';
 import { isValidSlashdoCommand } from './slashdoInvocation.js';
@@ -1329,6 +1330,21 @@ export function sanitizeTaskMetadata(raw) {
   // string the watcher would silently treat as "any".
   if (Object.prototype.hasOwnProperty.call(raw, 'prAuthorFilter') && PR_AUTHOR_FILTERS.includes(raw.prAuthorFilter)) {
     clean.prAuthorFilter = raw.prAuthorFilter;
+    hasKeys = true;
+  }
+  // An explicitly empty list is KEPT so a per-app override can clear the
+  // global exclusions back to "touch every trusted PR" — but only when the
+  // caller sent []: a list whose every entry is invalid must not become that
+  // clear and silently release the held authors.
+  if (Array.isArray(raw.selfManagedPrAuthors)) {
+    const authors = normalizeSelfManagedPrAuthors(raw.selfManagedPrAuthors);
+    if (authors.length || raw.selfManagedPrAuthors.length === 0) {
+      clean.selfManagedPrAuthors = authors;
+      hasKeys = true;
+    }
+  }
+  if (isValidSelfManagedPrStaleMinutes(raw.selfManagedPrStaleMinutes)) {
+    clean.selfManagedPrStaleMinutes = raw.selfManagedPrStaleMinutes;
     hasKeys = true;
   }
   // `verifyMode` decides when repo-sync dispatches its coordinator agent after a

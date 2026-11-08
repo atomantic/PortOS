@@ -1026,7 +1026,11 @@ export async function resolvePrWatcherBlock(app, taskType, metadata, taskSchedul
   // `sweepPendingMergePrs`). This function owns only PR *discovery*.
   // prAuthorFilter was already merged + value-constrained into `metadata`.
   const authorFilter = metadata.prAuthorFilter === 'self' ? 'self' : 'trusted';
-  const check = await prWatcher.checkPullRequests(app, { authorFilter });
+  const check = await prWatcher.checkPullRequests(app, {
+    authorFilter,
+    selfManagedPrAuthors: metadata.selfManagedPrAuthors,
+    selfManagedPrStaleMinutes: metadata.selfManagedPrStaleMinutes,
+  });
   const checkedAt = new Date().toISOString();
   // The gh poll IS the cadence-bearing work — a poll that dispatches nothing
   // still has to advance the interval, else a CUSTOM task re-polls every tick.
@@ -1085,9 +1089,12 @@ export async function resolvePrWatcherBlock(app, taskType, metadata, taskSchedul
     emitLog('info', `pr-watcher baselined ${app.name} at PR #${check.newLastSeen} — no dispatch on first run`, { appId: app.id });
     return { skip: true };
   }
+  const held = check.selfManagedHeld?.length
+    ? `; leaving ${check.selfManagedHeld.length} self-managed PR(s) to their author until stale (#${check.selfManagedHeld.join(', #')})`
+    : '';
   if (check.newPrs.length === 0) {
     await recordPoll();
-    emitLog('info', `Skipping pr-watcher for ${app.name}: no new PRs (author filter: ${authorFilter})`, { appId: app.id });
+    emitLog('info', `Skipping pr-watcher for ${app.name}: no new PRs (author filter: ${authorFilter})${held}`, { appId: app.id });
     return { skip: true };
   }
 
@@ -1095,7 +1102,7 @@ export async function resolvePrWatcherBlock(app, taskType, metadata, taskSchedul
   const block = prWatcher.formatPullRequestsForPrompt(check.newPrs, {
     repoFullName: check.repoFullName, defaultBranch: check.defaultBranch
   });
-  emitLog('info', `pr-watcher dispatching for ${app.name}: ${check.newPrs.length} new PR(s)`, { appId: app.id, analysisType: taskType });
+  emitLog('info', `pr-watcher dispatching for ${app.name}: ${check.newPrs.length} new PR(s)${held}`, { appId: app.id, analysisType: taskType });
   return { skip: false, block, repoFullName: check.repoFullName, defaultBranch: check.defaultBranch };
 }
 
