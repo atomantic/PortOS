@@ -15,10 +15,11 @@ it('flags a clip whose external cast guides cannot be tracked', () => {
 
 describe('rejecting a take versus marking it bad', () => {
   // Uniquely catches a take rejected from this shot reading as bad, or the Bad toggle not reaching the project-wide mark.
-  it('shows a rejected take as not for this shot, and marks or clears bad on its own', () => {
+  it('offers Restore on a rejected take without a label, and marks or clears bad on its own', () => {
     const onMark = vi.fn();
     const { rerender } = render(<SceneTakeStrip scene={scene} kind="image" marks={{}} onMark={onMark} />);
-    expect(screen.getByText('Not for this shot')).toBeTruthy();
+    expect(screen.queryByText('Not for this shot')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Restore' })).toBeTruthy();
     expect(screen.queryByText(/generated/)).toBeNull();
     expect(screen.queryByText('Bad', { selector: 'span' })).toBeNull();
     fireEvent.click(screen.getAllByRole('button', { name: 'Bad' })[1]);
@@ -64,4 +65,11 @@ it('shows a verdict only after a check, opens it to the misses, and checks a fra
   expect(screen.queryByText('There is no chair.')).toBeNull();
   fireEvent.click(screen.getByRole('button', { name: 'Issues (1)' }));
   expect(screen.getByText('There is no chair.')).toBeInTheDocument();
+});
+
+// Uniquely catches the take card's copy actions reverting to the full-width buttons.
+it('shows compact copy chips on a take card', () => {
+  render(<SceneTakeStrip scene={scene} kind="image" />);
+  const copyId = screen.getAllByRole('button', { name: 'Copy ID' })[0];
+  expect(copyId.textContent.trim()).toBe('ID');
 });

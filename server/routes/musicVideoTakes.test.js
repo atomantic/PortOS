@@ -49,11 +49,11 @@ vi.mock('../lib/fileUtils.js', async (original) => {
 });
 
 // The vision reviewer itself is covered in plateReview.test.js; here it answers with real evidence for the scene it was handed.
-const plateCheck = vi.hoisted(() => ({ duringReview: null }));
+const plateCheck = vi.hoisted(() => ({ duringReview: null, reviewerAsked: null }));
 vi.mock('../services/musicVideo/plateReview.js', async () => {
   const { plateReviewEvidence, plateRequirements } = await import('../lib/musicVideoPlateEvidence.js');
   return {
-    resolvePlateReviewer: async () => ({ provider: { id: 'example-vision' }, model: 'example-model', costUsd: 0 }),
+    resolvePlateReviewer: async (pinned) => { plateCheck.reviewerAsked = pinned; return { provider: { id: 'example-vision' }, model: 'example-model', costUsd: 0 }; },
     reviewPlate: async ({ scene, assetId, runId }) => {
       await plateCheck.duringReview?.();
       return plateReviewEvidence(scene, assetId, runId, JSON.stringify({ checks: plateRequirements(scene).map(({ id }) => ({
@@ -173,6 +173,15 @@ describe('scene takes routes', () => {
     expect(checked.status).toBe(200);
     expect(checked.body.takes[0].plateEvidence).toMatchObject({ assetId: 'check.png', verdict: 'fail' });
     expect(checked.body.takes[0].plateEvidence.runId).toMatch(/^manual-/);
+    expect(plateCheck.reviewerAsked).toEqual({});
+
+    // The project's chosen reviewer is the one asked for; null goes back to the default.
+    expect((await request(app).patch(base()).send({ plateReviewer: { providerId: 'example-api', model: 'example-vision-model' } })).status).toBe(200);
+    await request(app).post(url);
+    expect(plateCheck.reviewerAsked).toEqual({ providerId: 'example-api', model: 'example-vision-model' });
+    expect((await request(app).patch(base()).send({ plateReviewer: null })).status).toBe(200);
+    await request(app).post(url);
+    expect(plateCheck.reviewerAsked).toEqual({});
 
     plateCheck.duringReview = () => projects.updateScene(project.id, sceneA.sceneId, { framePrompt: 'Another composition' });
     expect((await request(app).post(url)).status).toBe(409);

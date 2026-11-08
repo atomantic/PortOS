@@ -106,16 +106,15 @@ export default function SceneTakeStrip({
                 )}
               </button>
               {/* Only what the director acts on: how a take was made stays in the hover title. */}
-              {/* "In use" is already on the thumbnail. */}
-              {(verdict || rejected) && (
+              {/* "In use" is already on the thumbnail; a rejected take reads from its dimmed thumbnail and Restore. */}
+              {verdict && (
                 <div className="flex flex-wrap items-center gap-1 text-[10px] text-port-text-muted" title={take.originalName || take.prompt || takeProvenance(take)}>
-                  {verdict && (verdict.issues.length ? (
+                  {verdict.issues.length ? (
                     <button type="button" onClick={() => setOpenVerdict(verdictOpen ? null : take.takeId)} aria-expanded={verdictOpen}
                       className={`rounded px-1 pointer-coarse:min-h-8 ${VERDICT_TONE[verdict.tone]}`} title="Show what the check found">
                       {verdict.label} ({verdict.issues.length})
                     </button>
-                  ) : <span className={`rounded px-1 ${VERDICT_TONE[verdict.tone]}`} title="A vision check found it matches the shot">{verdict.label}</span>)}
-                  {rejected && <span>Not for this shot</span>}
+                  ) : <span className={`rounded px-1 ${VERDICT_TONE[verdict.tone]}`} title="A vision check found it matches the shot">{verdict.label}</span>}
                 </div>
               )}
               {verdictOpen && (
@@ -129,9 +128,6 @@ export default function SceneTakeStrip({
               {take.dependencies?.references?.some((ref) => ref.role === 'clipReferences' && ref.untrackedCastGuides) && (
                 <p className="text-[10px] text-port-warning break-words">Cast guide changes are not tracked. Review this take before use.</p>
               )}
-              <AssetReferenceActions assetId={take.assetId}
-                url={kind === 'video' ? null : takeThumbUrl(take)}
-                resolveUrl={kind === 'video' ? () => videoTakeUrl(take) : null} />
               {take.takeId && (
                 <div className="flex flex-wrap gap-1">
                   {!isSelected && (
@@ -176,6 +172,10 @@ export default function SceneTakeStrip({
                   </button>
                 </div>
               )}
+              {/* Secondary: copy the file's ID or URL, after the review actions. */}
+              <AssetReferenceActions assetId={take.assetId} compact
+                url={kind === 'video' ? null : takeThumbUrl(take)}
+                resolveUrl={kind === 'video' ? () => videoTakeUrl(take) : null} />
               {kind === 'image' && currentPlateEvidence(scene, take)?.checks.filter((check) => check.id === 'render-quality' && check.status === 'fail').map((check) => (
                 <div key={check.id} className="space-y-1 text-xs text-port-warning">
                   <p className="break-words">Rendering defect: {check.note}</p>
