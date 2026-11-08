@@ -43,7 +43,8 @@ export const sameSet = (a = [], b = []) => {
 };
 
 // Every recorded collision path still collides. Extra live paths are allowed.
-const coversCollisions = (live, recorded) => Array.isArray(live) && Array.isArray(recorded)
+// Absent lists default to empty, as `sameSet` treats them.
+const coversCollisions = (live = [], recorded = []) => Array.isArray(live) && Array.isArray(recorded)
   && recorded.every((path) => live.includes(path));
 
 /**

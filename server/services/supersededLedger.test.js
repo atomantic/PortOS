@@ -154,6 +154,10 @@ describe('isVerdictFresh', () => {
     expect(fresh(entry(), branch({ collisionPaths: undefined }))).toBe(false);
   });
 
+  it('keeps a legacy verdict that recorded no collision list', () => {
+    expect(fresh(entry({ collisionPaths: undefined }), branch())).toBe(true);
+  });
+
   it('is stale when the replacing commits are no longer reachable (a revert)', () => {
     expect(fresh(entry(), branch(), { replacedByPresent: false })).toBe(false);
   });
