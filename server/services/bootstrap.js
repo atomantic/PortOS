@@ -62,7 +62,7 @@ import {
   gateStepsForSmokeBoot
 } from './bootstrapSequence.js';
 
-import { ensureBackendProvider, getBackend as getLocalLlmBackend } from './localLlm.js';
+import { bindLocalLlmIo, ensureBackendProvider, getBackend as getLocalLlmBackend } from './localLlm.js';
 import { ensureRunning as ensureOllamaRunning } from './ollamaManager.js';
 import { ensureProviderReadyForExecution } from './providerExecutionReadiness.js';
 import { loadUsage, recordSession } from './usage.js';
@@ -210,6 +210,7 @@ import { logFailureWithStack as logBootstrapFailure } from '../lib/failureLoggin
  */
 export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverDir }) => {
   bindMaintenanceIo(io);
+  bindLocalLlmIo(io);
   // Lifecycle hooks shared between AI Toolkit and PortOS runner shim
   const aiToolkitHooks = attachLlmActivityHooks({
     ensureProviderReady: (provider) => ensureProviderReadyForExecution(provider),

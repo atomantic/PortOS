@@ -33,11 +33,11 @@ const REMOTE_API = {
   enabled: true,
 };
 
-function appWith(providerService) {
+function appWith(providerService, options) {
   const toolkit = { services: { providers: providerService }, routes: { providers: Router() } };
   const app = express();
   app.use(express.json());
-  app.use('/api/providers', createPortOSProviderRoutes(toolkit));
+  app.use('/api/providers', createPortOSProviderRoutes(toolkit, options));
   app.use(errorMiddleware);
   return app;
 }
@@ -83,6 +83,30 @@ describe('GET /api/providers/management/preview', () => {
       .toEqual(['claude-ollama', 'claude-ollama-tui', 'remote-ollama']);
     expect(res.body.providers[0].hasApiKey).toBe(false);
     expect(res.body.providers[0].executionModes).toBeDefined();
+  });
+});
+
+describe('GET /api/providers local catalog sync', () => {
+  it('answers with the list as it stands after the sync rewrote a catalog', async () => {
+    const stale = providersFixture();
+    const fresh = providersFixture();
+    fresh.providers[0] = { ...CLAUDE_OLLAMA, models: ['example-model:8b', 'example-new:3b'] };
+    const getAllProviders = vi.fn().mockResolvedValueOnce(stale).mockResolvedValueOnce(fresh);
+    const syncProviderCatalogs = vi.fn().mockResolvedValue(true);
+    const res = await request(appWith({ getAllProviders }, { syncProviderCatalogs })).get('/api/providers');
+
+    expect(res.status).toBe(200);
+    expect(syncProviderCatalogs).toHaveBeenCalledWith(stale.providers);
+    expect(res.body.providers[0].models).toEqual(['example-model:8b', 'example-new:3b']);
+  });
+
+  it('reads the list once when nothing changed', async () => {
+    const getAllProviders = vi.fn().mockResolvedValue(providersFixture());
+    const res = await request(appWith({ getAllProviders }, { syncProviderCatalogs: vi.fn().mockResolvedValue(false) }))
+      .get('/api/providers');
+
+    expect(res.status).toBe(200);
+    expect(getAllProviders).toHaveBeenCalledTimes(1);
   });
 });
 

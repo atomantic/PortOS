@@ -56,7 +56,10 @@ import * as ollamaManager from './ollamaManager.js'
 import * as lmStudioManager from './lmStudioManager.js'
 import { localModelInventoryRow } from '../lib/modelInventory.js'
 import { recordModelInstall, recordModelUninstall } from './modelManifest.js'
-import { getProviderById, getAllProviders, updateProvider, refreshProviderModelsBatch, isOllamaBackedProvider } from './providers.js'
+import { getProviderById, getAllProviders, updateProvider, refreshProviderModelsBatch } from './providers.js'
+import { resolveModelFetcher } from '../lib/aiToolkit/internal/modelFetchers.js'
+import { ollamaBaseFromProvider } from '../lib/aiToolkit/internal/ollamaBacked.js'
+import { createSingleFlight } from '../lib/singleFlight.js'
 import { getSettings } from './settings.js'
 
 const execFileAsync = promisify(execFile)
@@ -1068,47 +1071,142 @@ async function listVisionCliModels() {
   return entries
 }
 
-// ---- install / delete --------------------------------------------------------
+// ---- provider catalog sync ---------------------------------------------------
+
+// Bound at boot (bootstrap.js) rather than imported, so this module adds no
+// socket.js edge to the suites that reach it.
+let providersIo = null
+export function bindLocalLlmIo(io) {
+  providersIo = io
+}
+
+const BACKEND_LABEL = { ollama: 'Ollama', lmstudio: 'LM Studio' }
+
+// `host:port` of a daemon URL, with every spelling of this machine folded into
+// `localhost`, so `127.0.0.1:1234/v1` and `localhost:1234` name one daemon.
+function daemonKey(url) {
+  try {
+    const { hostname, port } = new URL(url)
+    return `${isLocalInstanceHost(hostname) ? 'localhost' : hostname}:${port}`
+  } catch {
+    return null
+  }
+}
+
+// Which managed backend serves this provider's model refresh. API records are
+// matched by id/name/local port; CLI/TUI wrappers by the MODEL_FETCHERS row the
+// toolkit would refresh them through.
+function catalogBackendForProvider(provider) {
+  if (provider?.type !== 'cli' && provider?.type !== 'tui') return localBackendForProvider(provider)
+  const key = resolveModelFetcher(provider)?.key
+  return key === 'ollama' || key === 'lmstudio' ? key : null
+}
+
+function providerDaemonUrl(backend, provider) {
+  return backend === 'ollama'
+    ? ollamaBaseFromProvider(provider)
+    : provider.endpoint || 'http://localhost:1234'
+}
+
+const catalogSyncFlight = createSingleFlight()
+// backend -> { targetsKey, signature } of the last installed set every target
+// was refreshed against (or found already matching). `null` until a first look.
+const lastCatalogSync = { ollama: null, lmstudio: null }
+
+const sortedKey = (ids) => [...ids].sort().join('\n')
+
+function storedCatalogMatches(targets, installed) {
+  const installedSet = new Set(installed)
+  const stored = new Set(targets.flatMap((p) => p.models || []))
+  return stored.size === installedSet.size && [...stored].every((id) => installedSet.has(id))
+}
+
+async function syncBackendProviderModels(backend, { force, providers }) {
+  const localDaemon = daemonKey(manager(backend).getBaseUrl())
+  // A managed daemon on another host could stall a list read for its whole
+  // probe timeout; only install/delete (which already talked to it) go there.
+  if (!force && !localDaemon?.startsWith('localhost:')) return false
+  const all = providers ?? (await getAllProviders()).providers
+  const targets = (all || []).filter((p) => (force || p.enabled !== false)
+    && catalogBackendForProvider(p) === backend
+    && daemonKey(providerDaemonUrl(backend, p)) === localDaemon)
+  if (targets.length === 0) return false
+
+  const listing = await listManagedBackendModels(backend, true)
+  // An unreachable daemon or unreadable list is not evidence the set changed.
+  if (listing.error && !force) return false
+  const installed = listing.error ? null : listing.models.map((m) => m.id)
+  const record = installed && { targetsKey: sortedKey(targets.map((p) => p.id)), signature: sortedKey(installed) }
+  if (!force) {
+    const previous = lastCatalogSync[backend]
+    const unchanged = previous?.targetsKey === record.targetsKey
+      ? previous.signature === record.signature
+      : storedCatalogMatches(targets, installed)
+    if (unchanged) {
+      lastCatalogSync[backend] = record
+      return false
+    }
+  }
+
+  const label = BACKEND_LABEL[backend]
+  const groups = await refreshProviderModelsBatch(targets.map((p) => p.id))
+  for (const group of groups) {
+    if (group.status === 'failed') {
+      console.error(`⚠️ Failed to refresh models for ${group.ids.length} ${label}-backed provider(s) via ${group.leadId}: ${group.error?.message}`)
+    } else if (group.status === 'missing') {
+      // The lead was deleted between listing the providers and probing it.
+      // Say so — silently dropping the group would leave its siblings stale
+      // with no trace of why.
+      console.error(`⚠️ Skipped refreshing ${group.ids.length} ${label}-backed provider(s): lead provider ${group.leadId} no longer exists`)
+    }
+  }
+  if (!groups.some((group) => group.status === 'updated')) return false
+  if (record) lastCatalogSync[backend] = record
+  return true
+}
 
 /**
- * Push a live model-list refresh to every provider backed by the Ollama daemon,
- * so an install/delete on the Local LLMs tab is immediately reflected in every
- * provider/model picker (task scheduler, pipeline stages, etc.) without the user
- * having to find and click "Refresh Models" on the AI Providers page. Fire-and-
- * forget from the caller's perspective — the install/delete response shouldn't
- * wait on an extra round-trip to Ollama per matching provider. Best-effort per
- * provider — one failing refresh (e.g. Ollama briefly unreachable mid-pull)
- * must not block the others.
+ * Bring every provider backed by a managed local backend (Ollama, LM Studio) up
+ * to date with the models that daemon has installed, so a model added or
+ * removed — through the Local LLMs tab, `ollama pull`, `lms get` or LM Studio's
+ * own UI — reaches every provider/model picker without "Refresh Models".
  *
- * The grouping, probing and persistence all live in the toolkit's
- * `refreshProviderModelsBatch`: it dedupes providers that share a daemon AND a
- * probe shape so `/api/tags` + the per-model `/api/show` capability sweep runs
- * once rather than once per provider, and it collapses the whole fan-out into a
- * SINGLE `providers.json` write instead of one full-file save per provider.
- * All this function adds is the host-side log line — one per group, because
- * every member of a group failed identically against the same daemon and N
- * copies of one error is noise, not information.
+ * Targets are the providers whose refresh resolves to that backend on the
+ * daemon PortOS manages; a remote endpoint's catalog says nothing about this
+ * daemon's installs and keeps its own "Refresh Models".
+ *
+ * Two callers:
+ * - every provider list read (`GET /api/providers`, `/catalog`) awaits it
+ *   before answering. It costs one loopback model list per backend with an
+ *   enabled target, and runs `refreshProviderModelsBatch` (one probe per daemon
+ *   and probe shape, one `providers.json` write) only when the installed set
+ *   changed — on a first look, when it differs from the stored catalogs.
+ * - install/delete pass `force` to refresh every target unconditionally.
+ *
+ * Probes list models only: no generation, no spawn. Single-flight per backend
+ * and mode. Never rejects. Resolves true when a catalog was rewritten, after
+ * broadcasting `providers:changed` (this write bypasses the provider routes
+ * that announce one).
+ *
+ * @param {{ backend?: 'ollama'|'lmstudio', force?: boolean, providers?: object[] }} [opts]
+ *   `backend` omitted syncs both. `providers`: the list the caller already
+ *   read, to skip a second read.
+ * @returns {Promise<boolean>}
  */
-function refreshOllamaBackedProviders() {
-  getAllProviders().then(({ providers }) => {
-    const targets = (providers || []).filter(isOllamaBackedProvider)
-    if (targets.length === 0) return null
-    return refreshProviderModelsBatch(targets.map((p) => p.id)).then((groups) => {
-      for (const group of groups) {
-        if (group.status === 'failed') {
-          console.error(`⚠️ Failed to refresh models for ${group.ids.length} Ollama-backed provider(s) via ${group.leadId}: ${group.error?.message}`)
-        } else if (group.status === 'missing') {
-          // The lead was deleted between listing the providers and probing it.
-          // Say so — silently dropping the group would leave its siblings stale
-          // with no trace of why.
-          console.error(`⚠️ Skipped refreshing ${group.ids.length} Ollama-backed provider(s): lead provider ${group.leadId} no longer exists`)
-        }
-      }
-    })
-  }).catch((err) => {
-    console.error(`⚠️ Failed to list providers for post-install Ollama refresh: ${err.message}`)
-  })
+export async function syncLocalProviderModels({ backend, force = false, providers } = {}) {
+  const backends = backend ? [backend] : ['ollama', 'lmstudio']
+  const results = await Promise.all(backends.map((b) =>
+    catalogSyncFlight.run(`${b}:${force ? 'force' : 'read'}`, () =>
+      syncBackendProviderModels(b, { force, providers }).catch((err) => {
+        console.error(`⚠️ Failed to sync ${BACKEND_LABEL[b]} provider models: ${err.message}`)
+        return false
+      }))))
+  const changed = results.some(Boolean)
+  if (changed) providersIo?.emit('providers:changed')
+  return changed
 }
+
+// ---- install / delete --------------------------------------------------------
 
 /**
  * One-line label for an install progress frame, or null for a frame with nothing
@@ -1189,7 +1287,7 @@ async function performInstallModel(backend, modelId, onProgress, { force = false
     const result = importSpec
       ? await ollamaManager.importModelFromHfSafetensors(importSpec, onProgress)
       : await ollamaManager.pullModel(modelId, onProgress)
-    if (result.success) refreshOllamaBackedProviders()
+    if (result.success) void syncLocalProviderModels({ backend: 'ollama', force: true })
     return result
   }
   // `lms get` skips files already on disk. A force redownload has to evict the
@@ -1208,6 +1306,7 @@ async function performInstallModel(backend, modelId, onProgress, { force = false
       .then(() => ({ ok: true })).catch((err) => ({ _err: err.stderr || err.message }))
     if (r._err) return { success: false, error: r._err, modelId }
     lmStudioManager.resetCache()
+    void syncLocalProviderModels({ backend: 'lmstudio', force: true })
     return { success: true, modelId }
   }
   // REST fallback only *queues* the download — LM Studio pulls it in the
@@ -1231,7 +1330,7 @@ async function performDeleteModel(backend, modelId) {
       return { success: false, error: 'Model is loaded; unload it before deleting.', modelId }
     }
     const result = await ollamaManager.deleteModel(modelId)
-    if (result.success) refreshOllamaBackedProviders()
+    if (result.success) void syncLocalProviderModels({ backend: 'ollama', force: true })
     return result
   }
   const loaded = await lmStudioManager.getLoadedModels(true)
@@ -1243,7 +1342,9 @@ async function performDeleteModel(backend, modelId) {
   }
   // LM Studio has no delete in its REST API and the `lms` CLI has no `rm`
   // command — deleteModel removes the model's on-disk folder directly.
-  return lmStudioManager.deleteModel(modelId)
+  const result = await lmStudioManager.deleteModel(modelId)
+  if (result.success) void syncLocalProviderModels({ backend: 'lmstudio', force: true })
+  return result
 }
 
 // Both backends' installs and deletes have several success and failure exits
