@@ -11,7 +11,11 @@ vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() }
 vi.mock('../../../services/apiCatalog.js', () => ({
   createCatalogIngredient: vi.fn(async (body) => ({ id: 'cat-world', ...body })),
   saveCatalogWorld: vi.fn(async (id, world) => ({ id, type: 'place', payload: { world } })),
-  listCatalogIngredientsByIds: vi.fn(async () => [{ id: 'cat-world', type: 'place', name: 'Example world' }]),
+  listCatalogIngredientsByIds: vi.fn(async (ids) => [
+    { id: 'cat-world', type: 'place', name: 'Example world', payload: { world: { version: 1, seed: 1, sets: [{ id: 'w-street', ingredientId: 'cat-street', position: [0, 0], rotationDegrees: 0 }], paths: [] } } },
+    { id: 'cat-street', type: 'place', name: 'Example Street', payload: {} },
+  ].filter((row) => ids.includes(row.id))),
+  listCatalogIngredientMedia: vi.fn(async () => []),
 }));
 
 const project = {
@@ -49,4 +53,20 @@ it('drafts a world environment from the route maps and links it to the previz', 
   await waitFor(() => expect(board.saveProjectFields).toHaveBeenCalled());
   expect(saveCatalogWorld.mock.calls[0][1].sets).toEqual([expect.objectContaining({ ingredientId: 'cat-street' })]);
   expect(board.saveProjectFields.mock.calls[0][0].previz).toMatchObject({ worldId: 'cat-world', cuts: [] });
+});
+
+// Catches the night draft or a beat edit never reaching the saved previz.
+it('drafts the night over the linked world from the shots, then saves a beat edit', async () => {
+  const linked = { ...project, previz: { cuts: [], tracks: [], worldId: 'cat-world' } };
+  const board = { project: linked, locked: false, editProjectLocal: vi.fn(), saveProjectFields: vi.fn(), seekToScene: vi.fn() };
+  const { rerender } = render(<MemoryRouter><PrevizStage board={board} /></MemoryRouter>);
+  fireEvent.click(await screen.findByRole('button', { name: /Draft night from 1 shot/ }));
+  const { previz } = board.saveProjectFields.mock.calls.at(-1)[0];
+  expect(previz).toMatchObject({ worldId: 'cat-world', night: { startClock: 1200, lengthMin: 480 } });
+  expect(previz.night.beats).toEqual([expect.objectContaining({ kind: 'stay', setId: 'w-street', subjectIds: ['c-ana', 'c-bo'], startMin: 0, endMin: 480 })]);
+
+  rerender(<MemoryRouter><PrevizStage board={{ ...board, project: { ...linked, previz } }} /></MemoryRouter>);
+  fireEvent.click((await screen.findAllByRole('button', { name: /Example Street, 20:00/ }))[0]);
+  fireEvent.change(screen.getByLabelText('Minutes'), { target: { value: '90' } });
+  expect(board.saveProjectFields.mock.calls.at(-1)[0].previz.night.beats[0]).toMatchObject({ startMin: 0, endMin: 90 });
 });

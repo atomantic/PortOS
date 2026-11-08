@@ -27,3 +27,10 @@ export const PREVIZ_PAWN_COLOR_IDS = Object.freeze(PREVIZ_PAWN_COLORS.map((color
 // How a story camera moves in the previz while it is a cut's camera: steady (as blocked), handheld
 // (wobble and shake, more when its holder rides), still (a snapshot: the cut's first frame held), documentary (slow drift).
 export const PREVIZ_CAMERA_STYLES = Object.freeze(['steady', 'handheld', 'still', 'documentary']);
+// The previz night (lib/musicVideoPrevizNight.js): story beats over a whole night in a world map.
+export const NIGHT_BEATS_MAX = 200;
+export const NIGHT_LENGTH_MAX_MIN = 2880;
+export const NIGHT_BEAT_KINDS = Object.freeze(['stay', 'travel']);
+export const NIGHT_PACES = Object.freeze(['walk', 'run', 'ride']);
+// Meters per story minute: an easy walk, a jog, an unhurried bike ride.
+export const NIGHT_PACE_METERS_PER_MIN = Object.freeze({ walk: 80, run: 180, ride: 270 });

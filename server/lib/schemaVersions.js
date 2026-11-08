@@ -881,7 +881,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // camera's `previzStyle`, which a v48 strict project update / camera schema rejects. Optional, no backfill: absent means no previz.
   // v50 = `previz.worldId` (the catalog environment whose world map the previz plays
   // in, lib/worldMap.js), which a v49 strict previz schema rejects. Optional, no backfill.
-  musicVideoProjects: 50,
+  // v51 = `previz.night` (story clock and beats simulated over the world map,
+  // lib/musicVideoPrevizNight.js), which a v50 strict previz schema rejects. Optional, no backfill.
+  musicVideoProjects: 51,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

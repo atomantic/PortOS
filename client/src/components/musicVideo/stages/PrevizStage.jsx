@@ -1,12 +1,14 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { Box, Map as MapIcon, Play, RefreshCw, X } from 'lucide-react';
 import StageSection from '../StageSection.jsx';
 import toast from '../../ui/Toast';
 import useMusicVideoGreyboxPlaces from '../../../hooks/useMusicVideoGreyboxPlaces.js';
+import useCatalogPlaces from '../../../hooks/useCatalogPlaces.js';
+import PrevizNight from './PrevizNight.jsx';
 import { ingredientPath } from '../../../lib/creativeLibraries.js';
-import { createCatalogIngredient, listCatalogIngredientsByIds, saveCatalogWorld } from '../../../services/apiCatalog.js';
-import { draftWorldFromRouteMaps } from '../../../../../server/lib/worldMap.js';
+import { createCatalogIngredient, saveCatalogWorld } from '../../../services/apiCatalog.js';
+import { draftWorldFromRouteMaps, placeWorld } from '../../../../../server/lib/worldMap.js';
 import { sceneShotName } from '../../../lib/musicVideoStages.js';
 import { formatCount, formatTimecode } from '../../../utils/formatters.js';
 import { shotNumbers } from '../ShotStepper.jsx';
@@ -71,18 +73,9 @@ const worldIdMaker = () => {
  * (sets on their routes, paths between them) and picks it; it is edited on
  * that environment's World tab.
  */
-function PrevizWorld({ project, worldId, onPick }) {
-  const [world, setWorld] = useState(null);
+/** The linked world environment (`entry`: undefined while loading, null when removed), or a button to draft one. */
+function PrevizWorld({ project, worldId, entry, onPick }) {
   const [busy, setBusy] = useState(false);
-  useEffect(() => {
-    let active = true;
-    setWorld(null);
-    if (!worldId) return () => { active = false; };
-    listCatalogIngredientsByIds([worldId], { silent: true })
-      .then((rows) => { if (active) setWorld(rows.find((row) => row.id === worldId) || false); })
-      .catch(() => { if (active) setWorld(false); });
-    return () => { active = false; };
-  }, [worldId]);
   const routes = (project.routeMaps || []).filter((map) => (map.stops || []).length);
   const draft = async () => {
     setBusy(true);
@@ -95,11 +88,12 @@ function PrevizWorld({ project, worldId, onPick }) {
     toast.success(`World drafted with ${formatCount(map.sets.length)} set${map.sets.length === 1 ? '' : 's'}${skipped.length ? `; not in the catalog yet: ${skipped.join(', ')}` : ''}`);
   };
   if (worldId) {
+    const world = entry?.ingredient;
     const path = world ? `${ingredientPath({ id: worldId, type: 'place' })}/world` : null;
     return (
       <div className="flex min-w-0 flex-wrap items-center gap-2 text-xs">
         <MapIcon size={14} aria-hidden="true" className="text-port-text-muted" />
-        <span className="text-port-text">{world === null ? 'Loading the world…' : world ? world.name : 'The world environment was removed'}</span>
+        <span className="text-port-text">{entry === undefined ? 'Loading the world…' : world ? world.name : 'The world environment was removed'}</span>
         {path && <Link className={buttonCls} to={path}>Open world map</Link>}
         <button type="button" className={buttonCls} onClick={() => onPick(null)}><X size={12} aria-hidden="true" /> Unlink world</button>
       </div>
@@ -195,6 +189,9 @@ export default function PrevizStage({ board }) {
   const { project, locked, editProjectLocal, saveProjectFields, seekToScene } = board;
   const places = useMusicVideoGreyboxPlaces(project);
   const previz = projectPreviz(project);
+  const worldId = project.previz?.worldId || null;
+  const worldEntry = useCatalogPlaces(worldId ? [worldId] : [])[worldId];
+  const world = placeWorld(worldEntry?.ingredient);
   const subjects = project.concept?.subjects || [];
   const characters = subjects.filter((subject) => subject.kind === 'character');
   const placeSubjects = subjects.filter((subject) => subject.kind === 'place');
@@ -204,6 +201,8 @@ export default function PrevizStage({ board }) {
   const timedShots = scenes.filter((scene) => Number.isFinite(scene.startSec) && Number.isFinite(scene.endSec) && scene.endSec > scene.startSec).length;
   // Applied locally at once; the page serializes the saves.
   const save = (next) => { editProjectLocal({ previz: next }); saveProjectFields({ previz: next }); };
+  // World and night can come before any cuts exist.
+  const savePrevizField = (patch) => save({ ...(project.previz && Array.isArray(project.previz.cuts) ? project.previz : { cuts: [], tracks: [] }), ...patch });
   const build = () => {
     const { previz: next, added, removed } = backfillPrevizFromShots(project, places);
     save(next);
@@ -233,11 +232,14 @@ export default function PrevizStage({ board }) {
         </fieldset>
         <fieldset disabled={locked} className="min-w-0 space-y-1">
           <legend className="text-xs text-port-text-muted">World</legend>
-          <PrevizWorld project={project} worldId={project.previz?.worldId || null} onPick={(worldId) => {
-            const current = project.previz && Array.isArray(project.previz.cuts) ? project.previz : { cuts: [], tracks: [] };
-            save({ ...current, worldId });
-          }} />
+          <PrevizWorld project={project} worldId={worldId} entry={worldEntry} onPick={(next) => savePrevizField({ worldId: next })} />
         </fieldset>
+        {world && (
+          <section className="min-w-0 space-y-1" aria-label="Night">
+            <h3 className="text-xs text-port-text-muted">Night</h3>
+            <PrevizNight project={project} world={world} locked={locked} onSave={(night) => savePrevizField({ night })} />
+          </section>
+        )}
         {previz && (project.cameras || []).length > 0 && (
           <fieldset disabled={locked} className="min-w-0 space-y-1">
             <legend className="text-xs text-port-text-muted">Camera styles (from each shot's sheet camera)</legend>

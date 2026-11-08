@@ -1,9 +1,10 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { Check, Loader2, Minus, Plus, RotateCcw, RotateCw, Route, Trash2, X } from 'lucide-react';
 import toast from '../ui/Toast';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import useCatalogPlaces from '../../hooks/useCatalogPlaces';
+import WorldMap, { fitWorldView } from './WorldMapView';
 import useListResource from '../../hooks/useListResource';
 import ListLoadError from '../ui/ListLoadError';
 import { listCatalogIngredients, saveCatalogWorld } from '../../services/apiCatalog';
@@ -16,138 +17,15 @@ import {
 // three.js stays out of the main chunk: the 3D view loads when it is opened.
 const WorldViewer = lazy(() => import('./WorldViewer'));
 
+
 const buttonCls = 'min-h-[44px] inline-flex items-center justify-center gap-1.5 rounded-lg border border-port-border px-3 text-sm text-gray-200 hover:border-port-accent/60 hover:text-white disabled:opacity-40';
 const iconCls = 'min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-lg border border-port-border text-gray-200 hover:border-port-accent/60 disabled:opacity-40';
 const selectCls = 'min-h-[44px] rounded border border-port-border bg-port-bg px-2 text-sm text-port-text';
-const PATH_COLORS = { road: '#5b606b', footpath: '#a39a8c', track: '#8a7155', corridor: '#7a8494' };
 const KIND_LABELS = { road: 'Road', footpath: 'Footpath', track: 'Dirt track', corridor: 'Corridor' };
 const SIDE_LABELS = { buildings: 'Buildings', fence: 'Fence or rail', open: 'Open ground', none: 'Nothing' };
 const SETTING_LABELS = { outdoor: 'Outdoors (sky by time of day)', indoor: 'Indoors', space: 'Space' };
-const SET_SIZE = 30;
 const round = (n) => Math.round(n * 10) / 10 + 0;
 const newId = (prefix) => `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
-
-// A set's footprint on the map from its greybox's parts (meters), else a plain square.
-function footprint(greybox) {
-  const parts = (greybox?.parts || []).filter((part) => part.type === 'box' || part.type === 'plane');
-  if (!parts.length) return { x: -SET_SIZE / 2, z: -SET_SIZE / 2, w: SET_SIZE, d: SET_SIZE };
-  let minX = Infinity; let maxX = -Infinity; let minZ = Infinity; let maxZ = -Infinity;
-  for (const part of parts) {
-    const [w, , d] = part.type === 'plane' ? [part.size[0], 0, part.size[1]] : part.size;
-    minX = Math.min(minX, part.position[0] - w / 2); maxX = Math.max(maxX, part.position[0] + w / 2);
-    minZ = Math.min(minZ, part.position[2] - d / 2); maxZ = Math.max(maxZ, part.position[2] + d / 2);
-  }
-  return { x: minX, z: minZ, w: Math.max(2, maxX - minX), d: Math.max(2, maxZ - minZ) };
-}
-
-function fitView(world) {
-  const points = [...world.sets.map((set) => set.position), ...world.paths.flatMap((path) => path.points)];
-  if (!points.length) return { cx: 0, cz: 0, size: 400 };
-  const xs = points.map((p) => p[0]);
-  const zs = points.map((p) => p[1]);
-  return { cx: (Math.min(...xs) + Math.max(...xs)) / 2, cz: (Math.min(...zs) + Math.max(...zs)) / 2, size: Math.max(200, (Math.max(...xs) - Math.min(...xs)) * 1.3, (Math.max(...zs) - Math.min(...zs)) * 1.3) };
-}
-
-/**
- * Top-down world map: drag a set or a path point to move it, drag the empty
- * ground to pan, tap the ground while drawing to add path points. North is up.
- */
-function WorldMap({ world, places, selected, drawing, view, onView, onSelect, onMoveSet, onMovePoint, onAddPoint }) {
-  const svgRef = useRef(null);
-  const drag = useRef(null);
-  const toWorld = (event) => {
-    const svg = svgRef.current;
-    const point = svg.createSVGPoint();
-    point.x = event.clientX;
-    point.y = event.clientY;
-    const local = point.matrixTransform(svg.getScreenCTM().inverse());
-    return [round(local.x), round(local.y)];
-  };
-  const start = (event, target) => {
-    event.stopPropagation();
-    event.currentTarget.setPointerCapture?.(event.pointerId);
-    drag.current = { target, client: [event.clientX, event.clientY], view, moved: false };
-    if (target.kind !== 'ground') onSelect(target.select);
-  };
-  const move = (event) => {
-    const active = drag.current;
-    if (!active) return;
-    const dxPx = event.clientX - active.client[0];
-    const dyPx = event.clientY - active.client[1];
-    if (Math.hypot(dxPx, dyPx) > 4) active.moved = true;
-    if (!active.moved) return;
-    if (active.target.kind === 'set') onMoveSet(active.target.id, toWorld(event));
-    else if (active.target.kind === 'point') onMovePoint(active.target.id, active.target.index, toWorld(event));
-    else if (!drawing) {
-      // Pan by screen pixels: the view moves under the pointer, so world points would drift.
-      const perPx = active.view.size / (svgRef.current.getBoundingClientRect().width || 1);
-      onView({ ...active.view, cx: active.view.cx - dxPx * perPx, cz: active.view.cz - dyPx * perPx });
-    }
-  };
-  const end = (event) => {
-    const active = drag.current;
-    drag.current = null;
-    if (active?.target.kind === 'ground' && !active.moved) {
-      if (drawing) onAddPoint(toWorld(event));
-      else onSelect('');
-    }
-  };
-  const half = view.size / 2;
-  const stroke = view.size / 400;
-  return (
-    <svg
-      ref={svgRef}
-      viewBox={`${view.cx - half} ${view.cz - half} ${view.size} ${view.size}`}
-      className="aspect-square w-full touch-none select-none rounded-lg border border-port-border bg-[#20241f]"
-      role="application"
-      aria-label="World map, north is up"
-      onPointerDown={(event) => start(event, { kind: 'ground' })}
-      onPointerMove={move}
-      onPointerUp={end}
-      onPointerCancel={() => { drag.current = null; }}
-    >
-      {world.paths.map((path) => (
-        <g key={path.id}>
-          <polyline points={path.points.map((p) => p.join(',')).join(' ')} fill="none" stroke={PATH_COLORS[path.kind]}
-            strokeWidth={Math.max(path.width, stroke * 3)} strokeLinecap="round" strokeLinejoin="round"
-            onPointerDown={(event) => start(event, { kind: 'path', select: `path:${path.id}` })} />
-          {selected === `path:${path.id}` && (
-            <>
-              <polyline points={path.points.map((p) => p.join(',')).join(' ')} fill="none" stroke="#ffdd55" strokeWidth={stroke} pointerEvents="none" />
-              {path.points.map((p, index) => (
-                <circle key={index} cx={p[0]} cy={p[1]} r={stroke * 6} fill="#ffdd55" aria-label={`Path point ${index + 1}`}
-                  onPointerDown={(event) => start(event, { kind: 'point', id: path.id, index, select: `path:${path.id}` })} />
-              ))}
-            </>
-          )}
-        </g>
-      ))}
-      {world.sets.map((set) => {
-        const entry = places[set.ingredientId];
-        const box = footprint(entry?.ingredient?.payload?.greybox);
-        const on = selected === `set:${set.id}`;
-        return (
-          <g key={set.id} transform={`translate(${set.position[0]} ${set.position[1]}) rotate(${-set.rotationDegrees})`}
-            onPointerDown={(event) => start(event, { kind: 'set', id: set.id, select: `set:${set.id}` })}>
-            <rect x={box.x} y={box.z} width={box.w} height={box.d} fill={entry === null ? '#7a3b3b' : '#6f7f96'} fillOpacity="0.75"
-              stroke={on ? '#ffdd55' : '#1b1e24'} strokeWidth={stroke * (on ? 2 : 1)} />
-            {/* The greybox's front (its +Z, the way a facing of 0 looks). */}
-            <line x1="0" y1="0" x2="0" y2={box.z + box.d} stroke="#ffffff" strokeWidth={stroke} pointerEvents="none" />
-          </g>
-        );
-      })}
-      {world.sets.map((set) => (
-        <text key={set.id} x={set.position[0]} y={set.position[1]} fontSize={stroke * 11} fill="#ffffff" textAnchor="middle" pointerEvents="none"
-          paintOrder="stroke" stroke="#000000" strokeWidth={stroke * 2}>
-          {places[set.ingredientId]?.ingredient?.name || (places[set.ingredientId] === null ? 'Missing' : '…')}
-        </text>
-      ))}
-      {drawing && drawing.length > 0 && (
-        <polyline points={drawing.map((p) => p.join(',')).join(' ')} fill="none" stroke="#ffdd55" strokeWidth={stroke * 2} strokeDasharray={`${stroke * 6} ${stroke * 4}`} pointerEvents="none" />
-      )}
-    </svg>
-  );
-}
 
 /** Search the catalog's environments to add one to the world as a set. */
 function AddSet({ exclude, onAdd }) {
@@ -194,7 +72,7 @@ export default function WorldPanel({ record, readOnly = false, disabled = false,
   const [clock, setClock] = useState(21 * 60);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const world = draft || saved;
-  const [view, setView] = useState(() => fitView(world || blankWorld()));
+  const [view, setView] = useState(() => fitWorldView(world || blankWorld()));
   const places = useCatalogPlaces((world?.sets || []).map((set) => set.ingredientId));
   const selected = params.get('worldItem') || '';
   const select = (item) => setParams((current) => {
@@ -264,7 +142,7 @@ export default function WorldPanel({ record, readOnly = false, disabled = false,
           <span className="ml-auto inline-flex gap-1">
             <button type="button" className={iconCls} aria-label="Zoom in" onClick={() => zoom(0.7)}><Plus size={16} aria-hidden="true" /></button>
             <button type="button" className={iconCls} aria-label="Zoom out" onClick={() => zoom(1 / 0.7)}><Minus size={16} aria-hidden="true" /></button>
-            <button type="button" className={buttonCls} onClick={() => setView(fitView(world))}>Fit</button>
+            <button type="button" className={buttonCls} onClick={() => setView(fitWorldView(world))}>Fit</button>
           </span>
         </div>
       </fieldset>
