@@ -325,6 +325,26 @@ describe('scene mutation transactions', () => {
   });
 });
 
+describe('automatic shot clean-up (#15317)', () => {
+  // Uniquely catches a delete or split leaving default labels on their old numbers ("Shot 40 · Shot 41").
+  it('renumbers default "Shot N" labels after a delete and a split, leaving custom labels alone', async () => {
+    const p = await projects.createProject({ name: 'Renumber shots' });
+    const { scenes: [a, b, c, d] } = await projects.addProjectScenes(p.id, [
+      { startSec: 0, endSec: 2, label: 'Shot 1' },
+      { startSec: 2, endSec: 4, label: 'Shot 2' },
+      { startSec: 4, endSec: 6, label: 'Shot 3' },
+      { startSec: 6, endSec: 8, label: 'Fence run' },
+    ]);
+    const deleted = await projects.deleteScene(p.id, b.sceneId);
+    expect(deleted.scenes.map(scene => scene.label)).toEqual(['Shot 1', 'Shot 2', 'Fence run']);
+    const { scenes: pieces } = await projects.splitProjectScene(p.id, a.sceneId, { atSec: 1 });
+    expect(pieces.map(scene => scene.label)).toEqual(['Shot 1', 'Shot 2']);
+    const stored = await projects.getProject(p.id);
+    expect(stored.scenes.map(scene => [scene.sceneId === c.sceneId || scene.sceneId === d.sceneId ? scene.sceneId : 'piece', scene.label]))
+      .toEqual([['piece', 'Shot 1'], ['piece', 'Shot 2'], [c.sceneId, 'Shot 3'], [d.sceneId, 'Fence run']]);
+  });
+});
+
 describe('moving the cut before a shot', () => {
   // Uniquely catches a start move that leaves a gap or overlap with the shot before.
   it('starts the shot at the new time and ends the shot before it there, even with legacy video locks', async () => {

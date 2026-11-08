@@ -89,6 +89,34 @@ export const timedSongScenes = (project) => songScenes(project)
   .filter((scene) => finite(scene.startSec) && finite(scene.endSec))
   .sort((a, b) => a.startSec - b.startSec);
 
+/**
+ * The number each song shot goes by on the Shots list: shots with a start, in
+ * song order (client musicVideoStages.js numbers them the same way). Cold-open
+ * and untimed shots carry no number.
+ */
+export const shotNumbers = (project) => new Map(songScenes(project).filter((scene) => finite(scene?.startSec))
+  .sort((a, b) => a.startSec - b.startSec).map((scene, i) => [scene.sceneId, i + 1]));
+
+// A label that only names the shot's place ("Shot 14", "Shot 14 · 2/3", a split's "Scene 3 · 1/2").
+const DEFAULT_SHOT_LABEL = /^(?:shot|scene)\s+\d+(?:\s+·\s+\d+\/\d+)?$/i;
+
+/**
+ * Keep default "Shot N" labels equal to each shot's number after a delete,
+ * split, merge, reorder or retime, so one shot never goes by two numbers.
+ * Custom labels are left alone. Returns the same project when nothing changes.
+ */
+export function renumberShotLabels(project) {
+  const numbers = shotNumbers(project);
+  let changed = false;
+  const scenes = (project?.scenes || []).map((scene) => {
+    const number = numbers.get(scene?.sceneId);
+    if (!number || !DEFAULT_SHOT_LABEL.test(scene.label || '') || scene.label === `Shot ${number}`) return scene;
+    changed = true;
+    return { ...scene, label: `Shot ${number}` };
+  });
+  return changed ? { ...project, scenes } : project;
+}
+
 /** The project as the song's own pipeline sees it: the cold open left out. */
 export const withSongScenesOnly = (project) => (coldOpenScenes(project).length ? { ...project, scenes: songScenes(project) } : project);
 

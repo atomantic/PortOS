@@ -6,7 +6,8 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { characterSheetReferenceCandidates } from '../../lib/characterSheetReferences.js';
 import { pickGuideMedia } from '../../lib/catalogMediaLibrary.js';
 import { resolveGalleryImage, resolveImageRef } from '../../lib/pathSafety.js';
-import { musicVideoCatalogPickPlans } from '../../lib/musicVideoConditioning.js';
+import { musicVideoCatalogPickPlans, musicVideoCatalogReferenceId } from '../../lib/musicVideoConditioning.js';
+import { shotNumbers } from '../../lib/musicVideoColdOpen.js';
 
 export const isCatalogCheckin = project => project?.castAndSets?.source === 'catalog';
 const TYPES = new Set(['character', 'place', 'object']);
@@ -19,15 +20,16 @@ function shotReferenceReport(project, items, problems) {
   if (!isCatalogCheckin(project)) return { shotReferenceProblems: [], movableShotReferences: 0 };
   const plans = musicVideoCatalogPickPlans({ ...project, castAndSets: { ...project.castAndSets, catalogCheckin: { items, problems } } });
   const scenes = project.scenes || [];
+  const numbers = shotNumbers(project);
   return {
     movableShotReferences: plans.reduce((total, plan) => total + plan.moved, 0),
     shotReferenceProblems: plans.filter(plan => plan.unmapped.length).map(({ sceneId, unmapped }) => {
-      const index = scenes.findIndex(scene => scene.sceneId === sceneId);
-      const label = scenes[index].label;
+      const shot = numbers.get(sceneId) ?? scenes.findIndex(scene => scene.sceneId === sceneId) + 1;
+      const label = scenes.find(scene => scene.sceneId === sceneId)?.label;
       const references = [...new Set(unmapped.map(ref => ref.label || ref.role || 'a saved reference'))];
       const them = references.length === 1 ? 'it' : 'them';
-      return { sceneId, shot: index + 1, references,
-        message: `Shot ${index + 1}${label ? ` · ${label}` : ''}: the catalog check-in does not offer ${references.join(', ')}, so new renders cannot send ${them}. Offer ${them} on the catalog record, or pick a replacement on the shot.` };
+      return { sceneId, shot, references,
+        message: `Shot ${shot}${label && label !== `Shot ${shot}` ? ` · ${label}` : ''}: the catalog check-in does not offer ${references.join(', ')}, so new renders cannot send ${them}. Offer ${them} on the catalog record, or pick a replacement on the shot.` };
     }),
   };
 }
@@ -44,6 +46,38 @@ export function remapCatalogShotReferences(project) {
   return { project: { ...project, scenes }, moved: [...plans.values()].reduce((total, plan) => total + plan.moved, 0) };
 }
 
+/**
+ * Clear shot picks of catalog images that can never render again, in the same
+ * write: every pick of a subject `next` removes, and, when the check-in resolved
+ * cleanly, any catalog pick its records no longer hold at all (a deleted image,
+ * or a subject removed before). Images still on a record but not offered stay
+ * picked, so their warning names them. `current` carries the resolved check-in.
+ */
+export function dropStaleCatalogPicks(current, next) {
+  const checkin = current?.castAndSets?.catalogCheckin;
+  if (!isCatalogCheckin(next) || !checkin?.items || !Array.isArray(next?.scenes) || !musicVideoAllowsMedia(current, 'image')) return next;
+  const kept = new Set((next.concept?.subjects || []).map(subject => subject?.id));
+  const ids = items => new Set(items.flatMap(item => [...(item.images || []), ...(item.retiredImages || [])]
+    .map(filename => musicVideoCatalogReferenceId(item.subjectId, filename))));
+  const held = ids(checkin.items.filter(item => kept.has(item.subjectId)));
+  const removed = ids(checkin.items.filter(item => !kept.has(item.subjectId)));
+  const clean = !checkin.problems?.length;
+  const stale = id => typeof id === 'string' && id.startsWith('mvr-catalog-') && !held.has(id) && (clean || removed.has(id));
+  let changed = false;
+  const prune = ids => {
+    if (!Array.isArray(ids) || !ids.some(stale)) return ids;
+    changed = true;
+    return ids.filter(id => !stale(id));
+  };
+  const scenes = next.scenes.map(scene => {
+    const frameReferenceIds = prune(scene?.frameReferenceIds);
+    const clipReferenceIds = prune(scene?.clipReferenceIds);
+    if (frameReferenceIds === scene?.frameReferenceIds && clipReferenceIds === scene?.clipReferenceIds) return scene;
+    return { ...scene, ...(Array.isArray(frameReferenceIds) ? { frameReferenceIds } : {}), ...(Array.isArray(clipReferenceIds) ? { clipReferenceIds } : {}) };
+  });
+  return changed ? { ...next, scenes } : next;
+}
+
 export async function resolveCatalogCheckin(project, { catalog, exists = existsOnDisk, client } = {}) {
   const allowsImages = musicVideoAllowsMedia(project, 'image');
   const subjects = (project?.concept?.subjects || []).filter(subject => TYPES.has(subject?.kind));
@@ -53,7 +87,7 @@ export async function resolveCatalogCheckin(project, { catalog, exists = existsO
   const db = catalog || (subjects.some(subject => subject.ingredientId) ? await import('../catalogDB.js') : null);
   for (const subject of subjects) {
     const item = { subjectId: subject.id, ingredientId: subject.ingredientId || null, formId: subject.castForm?.id || null, formLabel: null,
-      kind: subject.kind, name: subject.name || '', description: '', images: [] };
+      kind: subject.kind, name: subject.name || '', description: '', images: [], retiredImages: [] };
     items.push(item);
     const problem = (code, message) => problems.push({ subjectId: subject.id, code, message });
     if (!subject.ingredientId) { problem('CATALOG_LINK_REQUIRED', `Link ${item.name || 'this subject'} to a catalog record.`); continue; }
@@ -80,10 +114,13 @@ export async function resolveCatalogCheckin(project, { catalog, exists = existsO
       ? characterSheetReferenceCandidates(payload, scopedRows, item.formId ? { formId: item.formId } : {}).filter(candidate => !candidate.leftOut && (!item.formId || candidate.scope === 'form')).map(candidate => candidate.filename)
       : pickGuideMedia(rows).map(row => row.mediaKey);
     item.images = allowsImages ? [...new Set(candidates.filter(exists))] : [];
+    // Still on the record (even a file missing on disk) but not offered: a stale pick names it and is not cleared.
+    item.retiredImages = allowsImages ? [...new Set((media || []).filter(row => !row.deleted).map(row => row.mediaKey).filter(key => typeof key === 'string' && !item.images.includes(key)))] : [];
     if (allowsImages && !item.images.length) problem('CATALOG_IMAGES_REQUIRED', `Add a usable image to ${item.name}${item.formId ? "'s selected catalog look" : ' in the catalog'}.`);
   }
   if (!items.length) problems.push({ subjectId: null, code: 'CATALOG_SUBJECTS_REQUIRED', message: 'Add cast, environments or objects from the catalog before approving.' });
-  const basis = createHash('sha256').update(JSON.stringify({ items, problems, concept: project?.concept?.prompt || '',
+  // `retiredImages` stays out of the basis so naming stale picks never stales an approval.
+  const basis = createHash('sha256').update(JSON.stringify({ items: items.map(({ retiredImages: _retired, ...item }) => item), problems, concept: project?.concept?.prompt || '',
     song: [project?.trackId || null, project?.uploadedAudioFilename || null] })).digest('hex');
   return { items, problems, basis, approved: isCatalogCheckin(project) && project.castAndSets.status === 'approved'
     && !problems.length && project.castAndSets.catalogApprovedBasis === basis, ...shotReferenceReport(project, items, problems) };

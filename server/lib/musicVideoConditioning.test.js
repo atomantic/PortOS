@@ -249,7 +249,10 @@ describe('catalog-linked check-in conditioning', () => {
     const scene = { sceneId: 's1', frameReferenceIds: [id] };
     expect(musicVideoCatalogPickPlans(p, [scene])).toEqual([]);
     p.castAndSets.catalogCheckin.items[0].images = ['newer-lead.png'];
-    expect(musicVideoCatalogPickPlans(p, [scene])[0].unmappedFrame).toEqual([{ id, label: 'a removed catalog image' }]);
+    expect(musicVideoCatalogPickPlans(p, [scene])[0].unmappedFrame).toEqual([{ id, label: 'an image removed from the catalog or from this video' }]);
+    // Still on the record but no longer offered: the warning names the subject and image.
+    p.castAndSets.catalogCheckin.items[0].retiredImages = ['current-lead.png'];
+    expect(musicVideoCatalogPickPlans(p, [scene])[0].unmappedFrame).toEqual([{ id, label: "Lead's image current-lead.png" }]);
     p.castAndSets.catalogCheckin.problems = [{ subjectId: 'lead', code: 'CATALOG_UNAVAILABLE', message: 'Try again' }];
     expect(musicVideoCatalogPickPlans(p, [scene])).toEqual([]);
   });
