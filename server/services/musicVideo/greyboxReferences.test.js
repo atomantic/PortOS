@@ -36,6 +36,24 @@ describe('music video greybox selection', () => {
     expect(scene.prompt).toBe('The singer waves');
   });
 
+  // Uniquely catches a street plate prompt that leaves the painter to guess the pole side, drops, sidewalks or which houses are derelict (#15327, #15328).
+  it('states the street layout the greybox models, with the pole line side for the camera', async () => {
+    const d = deps();
+    const street = { zones: [{ id: 'pole', label: 'Poles', color: '#5a4a3a' }, { id: 'drop', label: 'Drops', color: '#222222' }, { id: 'lamp', label: 'Lamps', color: '#dddd88' }, { id: 'road', label: 'Road', color: '#333333' }, { id: 'derelict', label: 'Derelict', color: '#664444' }],
+      parts: [{ id: 'p1', zone: 'pole', position: [6, 5, 0] }, { id: 'p2', zone: 'pole', position: [6, 5, -40] }, { id: 'd1', zone: 'drop', position: [12, 6, 0] },
+        { id: 'l1', zone: 'lamp', position: [4, 8, 0] }, { id: 'r', zone: 'road', position: [0, 0, 0] },
+        { id: 'h4a', label: 'Derelict house 4', zone: 'derelict', position: [-14, 3, -20] }, { id: 'h4b', label: 'Derelict house 4', zone: 'derelict', position: [-14, 6, -20] }],
+      anchors: [], shots: [{ id: 'wide', label: 'Wide camera', position: [0, 1.6, 10], target: [0, 1, 0], figures: [] }] };
+    d.catalog.getIngredient.mockResolvedValue({ ...ingredient, payload: { greybox: street } });
+    const greybox = await loadMusicVideoGreybox(project, scene, d);
+    const lines = greybox.promptAdditions.filter((item) => item.id.startsWith('greybox-street-')).map((item) => item.text);
+    expect(lines).toHaveLength(3);
+    expect(lines[0]).toMatch(/^Street power: 2 wooden utility poles in one line on the right of the frame, .*service drop .*hang from those poles/);
+    expect(lines[1]).toMatch(/no sidewalks/);
+    expect(lines[2]).toBe('Derelict: Derelict house 4. Only this looks abandoned (boarded or broken windows, overgrown yard); every other building is lived-in and kept up.');
+    expect(musicVideoFrameModelInput(project, scene, { greybox }).prompt).toContain(lines[0]);
+  });
+
   it('refuses removed cameras, detached captures and missing bytes instead of using a different plate', async () => {
     const d = deps();
     await expect(loadMusicVideoGreybox(project, { ...scene, setReference: { ...setReference, greyboxShotId: 'removed' } }, d)).rejects.toMatchObject({ code: 'MUSIC_VIDEO_GREYBOX_UNAVAILABLE' });

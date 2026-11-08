@@ -1,4 +1,4 @@
-import { Suspense, useLayoutEffect, useMemo, useRef } from 'react';
+import { Suspense, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { Canvas } from '@react-three/fiber';
 import { Html, MapControls } from '@react-three/drei';
@@ -38,6 +38,18 @@ function BoxInstances({ items, color, emissive = null }) {
       <meshStandardMaterial color={color} roughness={1} emissive={emissive || '#000000'} emissiveIntensity={emissive ? 1 : 0} />
     </instancedMesh>
   );
+}
+
+// Every wire as one line draw call: primaries pole to pole and service drops to roof masts.
+function Wires({ segments }) {
+  const geometry = useMemo(() => {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(segments.flat(), 3));
+    return g;
+  }, [segments]);
+  useEffect(() => () => geometry.dispose(), [geometry]);
+  if (!segments.length) return null;
+  return <lineSegments geometry={geometry}><lineBasicMaterial color="#1c1c1c" /></lineSegments>;
 }
 
 // A set's greybox where the world places it: its parts, or its Blender model.
@@ -86,8 +98,6 @@ export function WorldScene({ world, places, clockMinutes, labelPortal }) {
     -Math.cos(rad(sky.sunAzimuth)) * Math.cos(rad(sky.sunElevation)),
   ];
   const pavingBy = (kind) => fill.paving.filter((strip) => strip.kind === kind);
-  const lampHeads = fill.lamps.map((lamp) => ({ position: [lamp.position[0], 5, lamp.position[2]], size: [0.5, 0.25, 0.5], rotationDegrees: 0 }));
-  const lampPoles = fill.lamps.map((lamp) => ({ position: [lamp.position[0], 2.5, lamp.position[2]], size: [0.15, 5, 0.15], rotationDegrees: 0 }));
   const [cx, cz] = extent.center;
   return (
     <>
@@ -107,8 +117,12 @@ export function WorldScene({ world, places, clockMinutes, labelPortal }) {
       <BoxInstances items={fill.open} color="#5d6b3a" />
       <BoxInstances items={fill.buildings} color="#9a958c" />
       <BoxInstances items={fill.fences} color="#6e6a62" />
-      <BoxInstances items={lampPoles} color="#4a4d52" />
-      <BoxInstances items={lampHeads} color="#30302a" emissive={sky.lampsOn ? '#ffd58a' : null} />
+      <BoxInstances items={fill.driveways} color="#4d4f52" />
+      <BoxInstances items={fill.doors} color="#3a2e26" />
+      <BoxInstances items={fill.poles} color="#4a4038" />
+      <BoxInstances items={fill.arms} color="#4a4038" />
+      <BoxInstances items={fill.lamps} color="#30302a" emissive={sky.lampsOn ? '#ffd58a' : null} />
+      <Wires segments={fill.wires} />
       {world.sets.map((set) => <PlacedSet key={set.id} set={set} entry={places[set.ingredientId]} labelPortal={labelPortal} />)}
     </>
   );

@@ -25,3 +25,11 @@ describe('greyboxPrompt', () => {
     expect(edit.endsWith('Requested change:\nAdd a DJ booth')).toBe(true);
   });
 });
+
+describe('greyboxContractInstructions', () => {
+  // Uniquely catches the street infrastructure rules dropping out of what a drafting model reads (#15328).
+  it('tells a drafting model the real street infrastructure rules and their zones', () => {
+    const text = greyboxContractInstructions();
+    for (const rule of [/ONE line along one side of the street/, /never zig-zag/, /never to the middle of a pole/, /never facing the houses/, /Nothing floats/, /Decide sidewalks on purpose/, /driveway/, /front door/, /zone "derelict"/]) expect(text).toMatch(rule);
+  });
+});

@@ -63,6 +63,27 @@ describe('worldFill', () => {
     expect(fill.lamps.every(({ position: [x] }) => x < 200)).toBe(true);
   });
 
+  // Uniquely catches a road drawn with wireless poles, lamps away from the road or houses with no drop, door or driveway (#15328).
+  it('gives a road one pole line with wires, lamps over the road, and a drop, door and driveway for every house', () => {
+    const fill = worldFill({ version: 1, seed: 3, sets: [], paths: [{ id: 'main', kind: 'road', sides: 'buildings', width: 9, points: [[0, 0], [200, 0]] }] });
+    const utility = fill.poles.filter(({ size }) => size[1] > 5);
+    // Travelling +X, the right-hand side is +Z: every utility pole sits there, beside the road.
+    expect(utility.length).toBeGreaterThan(3);
+    expect(utility.every(({ position: [, , z] }) => z > 4.5 && z < 7)).toBe(true);
+    // Lamp heads hang over the road, inside its edge.
+    expect(fill.lamps).toHaveLength(utility.length);
+    expect(fill.lamps.every(({ position: [, y, z] }) => Math.abs(z) < 4.5 && y > 7)).toBe(true);
+    const houses = fill.buildings.length;
+    expect(fill.doors).toHaveLength(houses);
+    expect(fill.driveways).toHaveLength(houses);
+    // Two primaries per span plus one drop per house, every drop ending on a roof mast.
+    expect(fill.wires).toHaveLength((utility.length - 1) * 2 + houses);
+    const masts = fill.poles.filter(({ size }) => size[1] < 2);
+    expect(masts).toHaveLength(houses);
+    const drops = fill.wires.slice((utility.length - 1) * 2);
+    expect(drops.every((w) => masts.some(({ position: [x, , z] }) => Math.hypot(w[3] - x, w[5] - z) < 0.02))).toBe(true);
+  });
+
   it('changes with the seed', () => {
     expect(worldFill({ ...world, seed: 4 }).buildings).not.toEqual(worldFill(world).buildings);
   });

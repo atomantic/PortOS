@@ -1,4 +1,4 @@
-import { GREYBOX_SHOT_ROLE_PREFIX, greyboxFigurePromptLines } from './greyboxVocabulary.js';
+import { GREYBOX_SHOT_ROLE_PREFIX, greyboxFigurePromptLines, greyboxInfrastructurePromptLines } from './greyboxVocabulary.js';
 
 /** Older records only have the flag; compare live captures when available and otherwise keep the gate. */
 export function castAndSetsPendingGreyboxSetIds(stage, liveCaptures = {}) {
@@ -55,6 +55,9 @@ export function musicVideoGreyboxReference(project, scene, places = {}) {
     reference: { id: `mvr-greybox-${shot.id}`, imageId: capture.mediaKey, role: 'set', label, greybox: true, ...(plate ? { plate: true } : {}) },
     ...(blocking ? { blocking } : {}),
     blockingAvailable,
-    promptAdditions: greyboxFigurePromptLines(greybox, shot).map((text, i) => ({ id: `greybox-figure-${i}`, label: `Greybox figure ${i + 1}`, text })),
+    promptAdditions: [
+      ...greyboxFigurePromptLines(greybox, shot).map((text, i) => ({ id: `greybox-figure-${i}`, label: `Greybox figure ${i + 1}`, text })),
+      ...greyboxInfrastructurePromptLines(greybox, shot).map((text, i) => ({ id: `greybox-street-${i}`, label: `Greybox street ${i + 1}`, text })),
+    ],
   };
 }
