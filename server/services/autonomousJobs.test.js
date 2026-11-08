@@ -995,6 +995,89 @@ describe('autonomousJobs', () => {
     })
   })
 
+  describe('scheduleAnchor (#15395)', () => {
+    const weeklyJob = (overrides = {}) => ({
+      ...mockJobsData.jobs[0],
+      id: 'job-weekly-anchor',
+      interval: 'weekly',
+      intervalMs: 7 * 24 * 60 * 60 * 1000,
+      scheduledTime: '03:00',
+      ...overrides
+    })
+
+    it('createJob keeps the weekday the user picked and defaults one from now otherwise', async () => {
+      const picked = await createJob({ name: 'Picked', interval: 'weekly', scheduledTime: '03:00', scheduleAnchor: 3, promptTemplate: 'x' })
+      expect(picked.scheduleAnchor).toBe(3)
+
+      vi.useFakeTimers({ toFake: ['Date'] })
+      try {
+        vi.setSystemTime(Date.parse('2026-10-28T12:30:00.000Z')) // Wednesday; the mocked user timezone is UTC
+        const defaulted = await createJob({ name: 'Defaulted', interval: 'weekly', scheduledTime: '12:00', promptTemplate: 'x' })
+        expect(defaulted.scheduleAnchor).toBe(3)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('createJob leaves jobs without a multi-day clock cadence unanchored', async () => {
+      const daily = await createJob({ name: 'Daily', interval: 'daily', scheduledTime: '03:00', scheduleAnchor: 2, promptTemplate: 'x' })
+      const noTime = await createJob({ name: 'No time', interval: 'weekly', promptTemplate: 'x' })
+      expect(daily.scheduleAnchor).toBeNull()
+      expect(noTime.scheduleAnchor).toBeNull()
+    })
+
+    it('createJob and updateJob reject an anchor that does not fit the cadence', async () => {
+      await expect(createJob({ name: 'Bad', interval: 'weekly', scheduledTime: '03:00', scheduleAnchor: 9, promptTemplate: 'x' }))
+        .rejects.toMatchObject({ status: 400 })
+      readJSONFile.mockResolvedValue({ ...mockJobsData, jobs: [weeklyJob({ scheduleAnchor: 1 })] })
+      await expect(updateJob('job-weekly-anchor', { scheduleAnchor: 8 })).rejects.toMatchObject({ status: 400 })
+    })
+
+    it('updateJob re-derives the anchor from lastRun when the cadence changes, and clears it for on-demand', async () => {
+      // Monday 2026-10-26 03:01 UTC run: nearest slot is Monday, so a monthly job anchors on the 26th.
+      readJSONFile.mockResolvedValue({ ...mockJobsData, jobs: [weeklyJob({ scheduleAnchor: 1, lastRun: '2026-10-26T03:01:00.000Z' })] })
+      const monthly = await updateJob('job-weekly-anchor', { interval: 'monthly' })
+      expect(monthly.scheduleAnchor).toBe(26)
+
+      // Weekly -> biweekly is still a weekday, so the user's pick survives the change.
+      readJSONFile.mockResolvedValue({ ...mockJobsData, jobs: [weeklyJob({ scheduleAnchor: 4, lastRun: '2026-10-26T03:01:00.000Z' })] })
+      expect((await updateJob('job-weekly-anchor', { interval: 'biweekly' })).scheduleAnchor).toBe(4)
+
+      readJSONFile.mockResolvedValue({ ...mockJobsData, jobs: [weeklyJob({ scheduleAnchor: 1 })] })
+      const onDemand = await updateJob('job-weekly-anchor', { interval: ON_DEMAND_INTERVAL })
+      expect(onDemand.scheduleAnchor).toBeNull()
+    })
+
+    it('updateJob treats a null pick as "default it" and an unrelated edit as "keep it"', async () => {
+      readJSONFile.mockResolvedValue({ ...mockJobsData, jobs: [weeklyJob({ scheduleAnchor: 4, lastRun: '2026-10-26T20:00:00.000Z' })] })
+      const kept = await updateJob('job-weekly-anchor', { name: 'Renamed' })
+      expect(kept.scheduleAnchor).toBe(4)
+
+      // Monday 20:00 UTC: nearest 03:00 slot is Tuesday.
+      const defaulted = await updateJob('job-weekly-anchor', { scheduleAnchor: null })
+      expect(defaulted.scheduleAnchor).toBe(2)
+    })
+
+    it('getDueJobs releases an anchored job on its anchor day even though lastRun + interval has not elapsed', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      try {
+        readJSONFile.mockResolvedValue({ ...mockJobsData, jobs: [weeklyJob({ scheduleAnchor: 1, lastRun: '2026-10-26T20:00:00.000Z' })] })
+        vi.setSystemTime(Date.parse('2026-11-02T03:00:30.000Z')) // Monday slot, 6d 7h after the run
+        expect((await getDueJobs()).map(j => j.id)).toContain('job-weekly-anchor')
+        vi.setSystemTime(Date.parse('2026-11-01T12:00:00.000Z')) // Sunday: not yet
+        expect((await getDueJobs()).map(j => j.id)).not.toContain('job-weekly-anchor')
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('initJobs anchors shipped and older-build weekly jobs from their lastRun', async () => {
+      readJSONFile.mockResolvedValue({ ...mockJobsData, jobs: [weeklyJob({ lastRun: '2026-10-26T03:01:00.000Z' })] })
+      const data = await initJobs()
+      expect(data.jobs.find(j => j.id === 'job-weekly-anchor').scheduleAnchor).toBe(1)
+    })
+  })
+
   describe('deleteJob', () => {
     it('deletes existing job', async () => {
       const result = await deleteJob('job-test-1')
