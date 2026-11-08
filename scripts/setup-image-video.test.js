@@ -1,4 +1,4 @@
-import { execFileSync } from 'child_process';
+import { execFileSync, spawnSync } from 'child_process';
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
@@ -726,6 +726,106 @@ describe('MiniMax H3 MLX hash-pinned lock', () => {
 
   it('installs the lock with --require-hashes so nothing resolves at install time', () => {
     expect(source).toMatch(/pip sync --require-hashes --python "\$MINIMAX_H3_PY" "\$MINIMAX_H3_LOCK"/);
+  });
+});
+
+describe('MiniMax H3 CUDA hash-pinned installation', () => {
+  const section = source.slice(source.indexOf('INSTALL_MINIMAX_H3_CUDA="${'), source.indexOf('INSTALL_LTX25_CUDA="${'));
+  const direct = readFileSync(join(REPO_ROOT, 'scripts', 'requirements-minimax-h3-cuda.txt'), 'utf8')
+    .split(/\r?\n/).filter((line) => /^[\w.-]+==/.test(line));
+
+  it.each(['windows', 'linux'])('hashes the complete %s set, including CUDA torch and torchao', (target) => {
+    const lock = readFileSync(join(REPO_ROOT, 'scripts', `requirements-minimax-h3-cuda-${target}.lock.txt`), 'utf8');
+    const requirements = lock.split(/\r?\n/).filter((line) => /^\w/.test(line));
+    const blocks = lock.match(/^[\w.-]+==[^\n]+\n(?:[ \t]+[^\n]*\n?)*/gm) ?? [];
+    expect(blocks.length).toBe(requirements.length);
+    for (const block of blocks) expect(block).toMatch(/--hash=sha256:[0-9a-f]{64}/);
+    const pins = requirements.map((line) => line.replace(/\s*\\$/, ''));
+    // PEP 440 allows the Linux torchao CUDA build to satisfy its public pin.
+    for (const pin of direct) expect(pins.some((locked) => locked === pin || (!pin.includes('+') && locked.split('+')[0] === pin))).toBe(true);
+    expect(pins.find((pin) => pin.startsWith('torch=='))).toMatch(/\+cu126$/);
+    expect(pins.find((pin) => pin.startsWith('torchao=='))).toMatch(/^torchao==0\.18\.0(?:\+cu126)?$/);
+    expect(lock.includes('nvidia-cuda-runtime-cu12==')).toBe(target === 'linux');
+    expect(section).not.toMatch(/pip install|--upgrade|git\+|requirements-minimax-h3-cuda\.txt/);
+  });
+
+  // Executes the public Install/Repair entry point with package tools doubled.
+  // A Windows runner validates the real NVIDIA install separately; these shell
+  // doubles exercise both OS selections on POSIX CI without a GPU or downloads.
+  it.skipIf(process.platform === 'win32').each(['windows', 'linux'])('installs and repairs only the %s lock, and refuses failed sync/probes', (target) => {
+    const dir = mkdtempSync(join(tmpdir(), 'portos-h3-install-'));
+    tempVenvs.push(dir);
+    const log = join(dir, 'calls');
+    const bin = join(dir, 'bin');
+    mkdirSync(bin);
+    const executable = (name, script) => {
+      writeFileSync(join(bin, name), `#!/bin/bash\nset -eu\n${script}\n`);
+      chmodSync(join(bin, name), 0o755);
+    };
+    executable('uname', `if [[ "$1" == -m ]]; then echo x86_64; else echo "\${TEST_OS}"; fi`);
+    executable('python3', 'exit 0');
+    executable('ffmpeg', 'exit 0');
+    executable('ffprobe', 'exit 0');
+    executable('uv', `printf '%s\\n' "$*" >> "$CALL_LOG"
+if [[ "$1" == venv ]]; then
+  root="\${@: -1}"
+  mkdir -p "$root/$PY_LAYOUT"
+  cp "$FAKE_PY" "$root/$PY_LAYOUT/$PY_NAME"
+elif [[ "$1 $2" == 'pip sync' ]]; then
+  [[ "$*" == *'--require-hashes --only-binary :all:'* ]]
+  [[ "$*" == *"requirements-minimax-h3-cuda-$TARGET.lock.txt" ]]
+  [[ "\${FAIL_SYNC:-0}" == 0 ]] || exit 41
+else
+  exit 42
+fi`);
+    const fakePy = join(dir, 'fake-python');
+    writeFileSync(fakePy, `#!/bin/bash
+set -eu
+if [[ "$*" == *version_info* ]]; then exit "\${STALE_PYTHON:-0}"; fi
+[[ "$*" == *'import torch;'* && "$*" == *'import torchao;'* && "$*" == *MiniMaxH3Transformer3DModel* && "$*" == *MiniMaxH3ImageReference* && "$*" == *'torch.cuda.is_available()'* ]] || exit 43
+echo probe >> "$CALL_LOG"
+exit "\${FAIL_PROBE:-0}"
+`);
+    chmodSync(fakePy, 0o755);
+    const env = {
+      ...process.env,
+      ...Object.fromEntries(installFlags.map((flag) => [flag, '0'])),
+      INSTALL_MINIMAX_H3_CUDA: '1', HOME: dir, PORTOS_DATA: join(dir, 'data'),
+      PYTHON_BIN: 'python3', PATH: `${bin}:${process.env.PATH}`,
+      PORTOS_TORCH_CUDA_INDEX: 'https://download.pytorch.org/whl/cu126',
+      TARGET: target, TEST_OS: target === 'windows' ? 'MINGW64_NT' : 'Linux',
+      PY_LAYOUT: target === 'windows' ? 'Scripts' : 'bin',
+      PY_NAME: target === 'windows' ? 'python.exe' : 'python3', FAKE_PY: fakePy, CALL_LOG: log,
+    };
+    const run = (extra = {}) => {
+      writeFileSync(log, '');
+      const result = spawnSync('bash', [SETUP_SCRIPT], { env: { ...env, ...extra }, encoding: 'utf8', timeout: 10000 });
+      return { ...result, calls: readFileSync(log, 'utf8') };
+    };
+    const fresh = run();
+    expect(fresh.status, fresh.stderr).toBe(0);
+    expect(fresh.calls).toContain('venv --managed-python --python 3.11');
+    expect(fresh.calls).toContain(`requirements-minimax-h3-cuda-${target}.lock.txt`);
+    expect(fresh.stdout).toContain('MiniMax H3 CUDA runtime ready');
+    const repair = run();
+    expect(repair.status, repair.stderr).toBe(0);
+    expect(repair.calls).not.toContain('venv ');
+    expect(repair.calls).toContain('pip sync --require-hashes');
+    const stale = run({ STALE_PYTHON: '1' });
+    expect(stale.status, stale.stderr).toBe(0);
+    expect(stale.calls).toContain('venv --clear --managed-python --python 3.11');
+    const failedSync = run({ FAIL_SYNC: '1' });
+    expect(failedSync.status).toBe(41);
+    expect(failedSync.calls).not.toContain('probe');
+    expect(failedSync.stdout).not.toContain('runtime ready');
+    const failedProbe = run({ FAIL_PROBE: '1' });
+    expect(failedProbe.status).toBe(1);
+    expect(failedProbe.stderr).toContain('readiness check failed');
+    expect(failedProbe.stdout).not.toContain('runtime ready');
+    const wrongIndex = run({ PORTOS_TORCH_CUDA_INDEX: 'https://example.com/cu130' });
+    expect(wrongIndex.status).toBe(1);
+    expect(wrongIndex.calls).toBe('');
+    expect(wrongIndex.stderr).toContain('locked to cu126');
   });
 });
 

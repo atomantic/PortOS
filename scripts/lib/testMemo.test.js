@@ -143,6 +143,8 @@ describe('fixture owners', () => {
     'scripts/requirements-wan22-cuda.txt': 'diffusers==1\n',
     'scripts/requirements-minimax-music3-cuda-windows.lock.txt': 'diffusers==1 --hash=sha256:aaa\n',
     'scripts/requirements-minimax-music3-cuda-linux.lock.txt': 'diffusers==1 --hash=sha256:bbb\n',
+    'scripts/requirements-minimax-h3-cuda-windows.lock.txt': 'torch==1\n',
+    'scripts/requirements-minimax-h3-cuda-linux.lock.txt': 'torch==1\n',
     'scripts/notes.txt': 'unmapped\n',
     'scripts/nested/requirements-extra.txt': 'nested\n',
   };
@@ -165,6 +167,12 @@ describe('fixture owners', () => {
       }
       const recorded = keyOf(files, owner, { records: new Map([[owner, [owner]]]) });
       expect(recorded.recorded.memoizable, owner).toBe(true);
+      for (const target of ['windows', 'linux']) {
+        const changed = { ...files, [`scripts/requirements-minimax-h3-cuda-${target}.lock.txt`]: 'torch==2\n' };
+        const after = keyOf(changed, owner, { records: new Map([[owner, [owner]]]) });
+        expect(after.floor.key, owner).not.toBe(before.floor.key);
+        expect(after.recorded.key, owner).not.toBe(recorded.recorded.key);
+      }
       expect(keyOf(
         { ...files, 'scripts/requirements-wan22-cuda.txt': 'diffusers==2\n' },
         owner,

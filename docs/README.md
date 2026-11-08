@@ -11,6 +11,7 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 | [CODEX_USAGE_PREVIEW.md](./CODEX_USAGE_PREVIEW.md) | Read-only bounded Codex raw/compressed/archive usage preview, deduplication and coverage limits |
 | [EXECUTION_OPTIONS.md](./EXECUTION_OPTIONS.md) | Capability-driven speed options, persistence, dispatch attribution and selector inventory |
 | [FLUX3_IMAGE.md](./FLUX3_IMAGE.md) | FLUX.3 Klein MLX profiles, isolated runtime, reference edits and license/access behavior |
+| [MINIMAX_H3_CUDA.md](./MINIMAX_H3_CUDA.md) | MiniMax H3 CUDA hash locks, Python/CUDA targets, advisory checks and NVIDIA readiness validation |
 | [WAN22_CUDA.md](./WAN22_CUDA.md) | Wan 2.2 CUDA hash locks, Python/CUDA targets, regeneration, advisory scans and NVIDIA readiness validation |
 | [MINIMAX_MUSIC3_CUDA.md](./MINIMAX_MUSIC3_CUDA.md) | MiniMax Music 3 CUDA hash locks, Install/Repair, regeneration, advisory scans and NVIDIA readiness evidence |
 | [MOSS_IMAGE.md](./MOSS_IMAGE.md) | Optional pinned MOSS Swift/MLX image runtime, explicit installation, resource needs and Apple Silicon validation |

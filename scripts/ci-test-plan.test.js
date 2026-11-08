@@ -1309,6 +1309,8 @@ describe('CI test impact planner', () => {
         'scripts/requirements-ltx25-cuda.txt',
         'scripts/requirements-flux3-mlx.lock.txt',
         'scripts/requirements-minimax-h3-cuda.txt',
+        'scripts/requirements-minimax-h3-cuda-windows.lock.txt',
+        'scripts/requirements-minimax-h3-cuda-linux.lock.txt',
         'scripts/requirements-minimax-h3-mlx.lock.txt',
         'scripts/requirements-minimax-music3-mlx.lock.txt',
         'scripts/requirements-minimax-music3-cuda.txt',

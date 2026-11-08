@@ -9,7 +9,8 @@ download the base model, then select LightX2V under Speed and use its separate
 Download button for the 1.38 GB adapter. Selecting a profile, restoring history,
 starting PortOS, and rendering never download this adapter. A missing or corrupt
 adapter is refused before queue admission. The runtime installation downloads
-code dependencies, not model weights.
+code dependencies, not model weights. See [H3 CUDA runtime locks](./MINIMAX_H3_CUDA.md)
+for supported Python/CUDA targets, regeneration and readiness evidence.
 
 The supported profile is a single text or first-image clip at **1344×768**.
 FFLF, continuation, chains, audio/reference conditioning, other canvases, MLX,
