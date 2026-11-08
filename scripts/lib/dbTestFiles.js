@@ -86,6 +86,7 @@ export const DB_TEST_INCLUDE = [
   'scripts/db-migrations/023-owned-records-join-universe-canon.db.test.js',
   'scripts/db-migrations/024-scrap-canon-entries.db.test.js',
   'scripts/db-migrations/025-drop-replicated-brain-bridge-memories.db.test.js',
+  'scripts/db-migrations/029-spotify-live-keys-whole-second.db.test.js',
 ];
 
 const patterns = DB_TEST_INCLUDE.map((pattern) => posix.normalize(posix.join('server', pattern)));

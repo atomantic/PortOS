@@ -78,7 +78,10 @@ export function spotifyListenCandidate(item) {
     title: track.name || '(unknown track)',
     summary: artistNames,
     url: track.external_urls?.spotify || null,
-    dedupeKey: `spotify:${at.toISOString()}:${track.id}`,
+    // Whole-second key: the history export's `ts` has no milliseconds, so a ms key
+    // would never meet the imported copy of this play (#15309). The `after` cursor
+    // stays full-precision (maxPlayedAtMs).
+    dedupeKey: `spotify:${new Date(Math.floor(at.getTime() / 1000) * 1000).toISOString()}:${track.id}`,
     metadata: {
       trackId: track.id,
       trackName: track.name || null,
