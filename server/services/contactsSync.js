@@ -84,12 +84,16 @@ const hasOwnName = (c) => Boolean(c.firstName || c.lastName || c.nickname || c.o
 /**
  * True when two records sharing a phone/email look like one person: either has
  * no name of its own, or one first/last-name set contains the other
- * ("Jane" vs "Jane Doe").
+ * ("Jane" vs "Jane Doe"). Cards with no first/last name on either side match
+ * on an equal nickname or organization.
  */
 function sameContactPerson(a, b) {
   if (!hasOwnName(a) || !hasOwnName(b)) return true;
   const sa = nameSet(a);
   const sb = nameSet(b);
+  if (!sa.size && !sb.size) {
+    return ['nickname', 'organization'].some((f) => nameKey(a[f]) && nameKey(a[f]) === nameKey(b[f]));
+  }
   if (!sa.size || !sb.size) return false;
   const [small, big] = sa.size <= sb.size ? [sa, sb] : [sb, sa];
   return [...small].every((n) => big.has(n));

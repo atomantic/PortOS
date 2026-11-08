@@ -81,6 +81,14 @@ describe('contactsSync pure helpers', () => {
       expect(out[0].phones).toHaveLength(2);
     });
 
+    it('merges org-only cards from different sources that share a phone and organization', () => {
+      const out = mergeContacts([
+        [{ uniqueId: 'O1', organization: 'Acme', phones: ['+15550100005'] }],
+        [{ uniqueId: 'O2', organization: 'acme', phones: ['+15550100005'], emails: ['info@example.com'] }],
+      ]);
+      expect(out).toHaveLength(1);
+    });
+
     it('does not chain distinct people through shared phone then shared email', () => {
       const out = mergeContacts([[
         { uniqueId: 'A', firstName: 'Alice', phones: ['+15550100001'] },
