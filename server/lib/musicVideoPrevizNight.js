@@ -16,6 +16,7 @@
  * Positions are world meters `[x, y, z]` (y = 0 ground); facing 0 looks along
  * +Z, as in the greyboxes. Browser-safe and pure.
  */
+import { activeMusicVideoSubjects, musicVideoPrevizForActiveCast } from './musicVideoCastSelection.js';
 import { NIGHT_BEATS_MAX, NIGHT_PACE_METERS_PER_MIN } from './musicVideoPrevizLimits.js';
 
 const round = (n) => Math.round(n * 1000) / 1000 + 0;
@@ -28,9 +29,9 @@ const STAY_RADIUS = 2;
 const WANDER = 1.2;
 const MIN_TRAVEL_MIN = 2;
 
-/** The project's night, or null when it has none. */
+/** The project's night as the active cast sees it (lib/musicVideoCastSelection.js), or null when it has none. */
 export function previzNight(project) {
-  const night = project?.previz?.night;
+  const night = musicVideoPrevizForActiveCast(project)?.night;
   return night && Array.isArray(night.beats) && Number.isFinite(night.lengthMin) ? night : null;
 }
 
@@ -44,7 +45,8 @@ export function nightMinuteOfClock(night, clockMinutes) {
   return ((clockMinutes - (night?.startClock || 0)) % 1440 + 1440) % 1440;
 }
 
-const characters = (project) => (project?.concept?.subjects || []).filter((subject) => subject?.kind === 'character');
+// The active cast: one entry per character, the director's chosen alternate (lib/musicVideoCastSelection.js).
+const characters = (project) => activeMusicVideoSubjects(project?.concept).filter((subject) => subject?.kind === 'character');
 const setById = (world, id) => (world?.sets || []).find((set) => set.id === id) || null;
 
 /** A point in a set's own greybox coordinates (`[x, z]`) placed in the world. */

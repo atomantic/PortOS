@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { Clapperboard, Moon, Pause, Play, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import { activeMusicVideoSubjects } from '../../../../../server/lib/musicVideoCastSelection.js';
 import toast from '../../ui/Toast';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import WorldMap, { fitWorldView } from '../../catalog/WorldMapView';
@@ -159,7 +160,8 @@ export default function PrevizNight({ project, world, places, locked, onSave: sa
   const [params, setParams] = useSearchParams();
   const night = previzNight(project);
   const onSave = (next) => savePatch({ night: next });
-  const characters = (project.concept?.subjects || []).filter((subject) => subject.kind === 'character');
+  // One entry per character: the alternate picked on the Story step.
+  const characters = activeMusicVideoSubjects(project.concept).filter((subject) => subject.kind === 'character');
   const colors = useMemo(() => previzPawnColors(project), [project]);
   const [startClock, setStartClock] = useState(1200);
   const [hours, setHours] = useState(8);

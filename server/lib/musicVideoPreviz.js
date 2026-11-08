@@ -29,6 +29,7 @@
 import { isPreMusicShot } from './musicVideoColdOpen.js';
 import { musicVideoShotPlaceId, projectRouteMaps } from './musicVideoRouteMaps.js';
 import { SHOT_CAMERA_SET_DOWN } from './musicVideoShotSheet.js';
+import { activeMusicVideoSubjects, musicVideoPrevizForActiveCast } from './musicVideoCastSelection.js';
 import { nightActorsAt, nightClockAt, previzNight } from './musicVideoPrevizNight.js';
 import { PREVIZ_CUTS_MAX, PREVIZ_KEYS_MAX, PREVIZ_PAWN_COLORS, PREVIZ_TRACKS_MAX } from './musicVideoPrevizLimits.js';
 
@@ -46,13 +47,14 @@ const rad = (deg) => (deg * Math.PI) / 180;
 const facingDir = (deg) => [Math.sin(rad(deg)), 0, Math.cos(rad(deg))];
 const facingToward = (from, to) => round((Math.atan2(to[0] - from[0], to[2] - from[2]) * 180) / Math.PI);
 
-/** The project's previz, or null when it has none. */
+/** The project's previz as the active cast sees it (alternates read as the chosen entry), or null when it has none. */
 export function projectPreviz(project) {
-  const previz = project?.previz;
+  const previz = musicVideoPrevizForActiveCast(project);
   return previz && Array.isArray(previz.cuts) && previz.cuts.length ? previz : null;
 }
 
-const characters = (project) => (project?.concept?.subjects || []).filter((subject) => subject?.kind === 'character');
+// The active cast: one entry per character, the director's chosen alternate (lib/musicVideoCastSelection.js).
+const characters = (project) => activeMusicVideoSubjects(project?.concept).filter((subject) => subject?.kind === 'character');
 const places = (project) => (project?.concept?.subjects || []).filter((subject) => subject?.kind === 'place');
 
 /** A character subject by the name a shot sheet writes (case and spacing ignored). */
@@ -68,7 +70,7 @@ function characterByName(project, name) {
  * A bike defaults to its rider's color.
  */
 export function previzPawnColors(project) {
-  const picked = project?.previz?.pawnColors || {};
+  const picked = musicVideoPrevizForActiveCast(project)?.pawnColors || {};
   const byId = new Map(PREVIZ_PAWN_COLORS.map((color) => [color.id, color]));
   const taken = new Set(Object.values(picked).map((entry) => entry?.figure).filter(Boolean));
   const free = PREVIZ_PAWN_COLORS.filter((color) => !taken.has(color.id));
@@ -281,7 +283,8 @@ export function updatePrevizCut(project, next, loadedPlaces = {}) {
  * catalog places by ingredient id. Returns `{ previz, added, removed }`.
  */
 export function backfillPrevizFromShots(project, loadedPlaces = {}) {
-  const current = project?.previz && Array.isArray(project.previz.cuts) ? project.previz : { cuts: [], tracks: [] };
+  const forCast = musicVideoPrevizForActiveCast(project);
+  const current = forCast && Array.isArray(forCast.cuts) ? forCast : { cuts: [], tracks: [] };
   const shots = timedShots(project);
   const shotIds = new Set(shots.map((scene) => scene.sceneId));
   const linked = new Map(current.cuts.filter((cut) => cut.sceneId).map((cut) => [cut.sceneId, cut]));

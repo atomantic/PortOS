@@ -78,3 +78,17 @@ describe('worldSkyAt', () => {
     expect(worldSkyAt(23 * 60, 'space')).toMatchObject({ sky: '#000000', lampsOn: false });
   });
 });
+
+// Catches large sets (a long street greybox) drafted on top of each other.
+it('spaces route stops by their greyboxes so big sets never overlap', () => {
+  const wide = { x: -100, z: -20, w: 200, d: 40 };
+  const { world } = draftWorldFromRouteMaps(project, { newId: idMaker(), footprints: { 'cat-home': wide, 'cat-mall': wide } });
+  const at = Object.fromEntries(world.sets.map((set) => [set.ingredientId, set]));
+  // Eastbound sets turn 90°, so their 200 m width runs north-south and the 40 m depth runs east: 120 m still clears.
+  expect(at['cat-mall'].position[0] - at['cat-home'].position[0]).toBe(120);
+  const deep = { x: -20, z: -150, w: 40, d: 300 };
+  const spaced = draftWorldFromRouteMaps(project, { newId: idMaker(), footprints: { 'cat-home': deep, 'cat-mall': deep } }).world;
+  const by = Object.fromEntries(spaced.sets.map((set) => [set.ingredientId, set.position]));
+  // Now 300 m runs along the road: the next set starts 20 m past the last one's far edge.
+  expect(by['cat-mall'][0] - by['cat-home'][0]).toBe(320);
+});

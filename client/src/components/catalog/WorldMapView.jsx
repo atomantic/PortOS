@@ -1,22 +1,11 @@
 import { useRef } from 'react';
+import { worldSetFootprint as footprint } from '../../../../server/lib/worldMap.js';
 
 const PATH_COLORS = { road: '#5b606b', footpath: '#a39a8c', track: '#8a7155', corridor: '#7a8494' };
-const SET_SIZE = 30;
 const round = (n) => Math.round(n * 10) / 10 + 0;
 const noop = () => {};
-
-// A set's footprint on the map from its greybox's parts (meters), else a plain square.
-function footprint(greybox) {
-  const parts = (greybox?.parts || []).filter((part) => part.type === 'box' || part.type === 'plane');
-  if (!parts.length) return { x: -SET_SIZE / 2, z: -SET_SIZE / 2, w: SET_SIZE, d: SET_SIZE };
-  let minX = Infinity; let maxX = -Infinity; let minZ = Infinity; let maxZ = -Infinity;
-  for (const part of parts) {
-    const [w, , d] = part.type === 'plane' ? [part.size[0], 0, part.size[1]] : part.size;
-    minX = Math.min(minX, part.position[0] - w / 2); maxX = Math.max(maxX, part.position[0] + w / 2);
-    minZ = Math.min(minZ, part.position[2] - d / 2); maxZ = Math.max(maxZ, part.position[2] + d / 2);
-  }
-  return { x: minX, z: minZ, w: Math.max(2, maxX - minX), d: Math.max(2, maxZ - minZ) };
-}
+const LABEL_MAX = 24;
+const label = (text) => (text.length > LABEL_MAX ? `${text.slice(0, LABEL_MAX - 1)}…` : text);
 
 /** A view that shows every set and path. */
 export function fitWorldView(world) {
@@ -110,7 +99,7 @@ export default function WorldMap({ world, places, selected = '', drawing = null,
         return (
           <g key={set.id} transform={`translate(${set.position[0]} ${set.position[1]}) rotate(${-set.rotationDegrees})`}
             onPointerDown={(event) => start(event, { kind: 'set', id: set.id, select: `set:${set.id}` })}>
-            <rect x={box.x} y={box.z} width={box.w} height={box.d} fill={entry === null ? '#7a3b3b' : '#6f7f96'} fillOpacity="0.75"
+            <rect x={box.x} y={box.z} width={box.w} height={box.d} fill={entry === null ? '#7a3b3b' : '#6f7f96'} fillOpacity={on ? 0.7 : 0.4}
               stroke={on ? '#ffdd55' : '#1b1e24'} strokeWidth={stroke * (on ? 2 : 1)} />
             {/* The greybox's front (its +Z, the way a facing of 0 looks). */}
             <line x1="0" y1="0" x2="0" y2={box.z + box.d} stroke="#ffffff" strokeWidth={stroke} pointerEvents="none" />
@@ -118,9 +107,9 @@ export default function WorldMap({ world, places, selected = '', drawing = null,
         );
       })}
       {world.sets.map((set) => (
-        <text key={set.id} x={set.position[0]} y={set.position[1]} fontSize={stroke * 11} fill="#ffffff" textAnchor="middle" pointerEvents="none"
+        <text key={set.id} x={set.position[0]} y={set.position[1]} fontSize={stroke * (selected === `set:${set.id}` ? 9 : 7)} fill="#ffffff" textAnchor="middle" pointerEvents="none"
           paintOrder="stroke" stroke="#000000" strokeWidth={stroke * 2}>
-          {places[set.ingredientId]?.ingredient?.name || (places[set.ingredientId] === null ? 'Missing' : '…')}
+          {label(places[set.ingredientId]?.ingredient?.name || (places[set.ingredientId] === null ? 'Missing' : '…'))}
         </text>
       ))}
       {actors.map((actor) => (

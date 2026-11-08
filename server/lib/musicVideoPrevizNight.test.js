@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { draftNightFromShots, nightActorsAt, nightBeatProblems, nightClockAt, nightMinuteOfClock } from './musicVideoPrevizNight.js';
+import { draftNightFromShots, nightActorsAt, nightBeatProblems, nightClockAt, nightMinuteOfClock, previzNight } from './musicVideoPrevizNight.js';
 import { musicVideoPrevizSchema } from './musicVideoValidation.js';
 import { placePrevizCutsOnNight, previzFrameAt } from './musicVideoPreviz.js';
 
@@ -169,3 +169,20 @@ describe('shots on the night', () => {
     expect(musicVideoPrevizSchema.safeParse(turning.previz).success).toBe(true);
   });
 });
+
+// Catches the previz drawing both alternates of one character, or losing blocking when the pick changes.
+describe('alternates of one character', () => {
+  it('shows only the chosen alternate, reading the other one\'s beats, camera and colors as its own', () => {
+    const cast = [...subjects, { id: 'c-b2', kind: 'character', name: 'Bo', active: true }];
+    const night = { startClock: 1200, lengthMin: 60, beats: [{ id: 'a', kind: 'stay', subjectIds: ['c-a', 'c-b'], startMin: 0, endMin: 60, setId: 'home', toSetId: null, pace: null }] };
+    const project = {
+      concept: { subjects: cast },
+      previz: { cuts: [{ id: 'k1', startSec: 0, endSec: 4, placeSubjectId: 'p-home', storyMin: 10, holderSubjectId: 'c-b' }], tracks: [], night, pawnColors: { 'c-b': { figure: 'teal' } } },
+    };
+    expect(nightActorsAt(project, world, {}, 10).map((actor) => actor.subjectId)).toEqual(['c-a', 'c-b2']);
+    const frame = previzFrameAt(project, {}, 1, { world, places: {} });
+    expect(frame.actors.find((actor) => actor.holder)).toMatchObject({ subjectId: 'c-b2', color: '#2fa59a' });
+    expect(nightBeatProblems(project, world, previzNight(project).beats[0])).toEqual([]);
+  });
+});
+
