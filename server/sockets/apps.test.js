@@ -34,6 +34,11 @@ vi.mock('../services/pm2Standardizer.js', () => ({
 import * as appsService from '../services/apps.js';
 import * as appUpdater from '../services/appUpdater.js';
 import * as pm2Standardizer from '../services/pm2Standardizer.js';
+
+// The real orchestration, so app:standardize is exercised through the same
+// flow the standardize:start path uses. Its analyze/backup/apply seams are wired
+// to the mocked steps above.
+const { runStandardizeFlow: runRealStandardizeFlow } = await vi.importActual('../services/pm2Standardizer.js');
 import { logAction } from '../services/history.js';
 import { checkPortosUpdatePreflight } from '../services/updatePreflight.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
@@ -114,6 +119,13 @@ describe('app socket handlers', () => {
     __resetAppOperations();
     bus = makeBus();
     appsService.getAppById.mockImplementation(async (id) => APPS[id] ?? null);
+    pm2Standardizer.createGitBackup.mockResolvedValue({ success: false, reason: 'No git repository' });
+    pm2Standardizer.runStandardizeFlow.mockImplementation((repoPath, providerId, opts) => runRealStandardizeFlow(repoPath, providerId, {
+      ...opts,
+      analyze: pm2Standardizer.analyzeApp,
+      backup: pm2Standardizer.createGitBackup,
+      apply: pm2Standardizer.applyStandardization,
+    }));
   });
 
   it('waits for Create App standardization and refuses another once update maintenance starts', async () => {
@@ -395,6 +407,59 @@ describe('app socket handlers', () => {
         { syncFork: false,
         acknowledgeFork: true, acknowledgePersistentMindImageBackup: true },
       );
+    });
+  });
+
+  describe('app:standardize through the shared flow', () => {
+    it('creates exactly one git backup on a clean repo and tells apply to skip its own', async () => {
+      pm2Standardizer.analyzeApp.mockResolvedValue({ success: true, proposedChanges: { processes: [{ name: 'example-web' }] } });
+      pm2Standardizer.createGitBackup.mockResolvedValue({ success: true, branch: 'portos-backup-1' });
+      pm2Standardizer.applyStandardization.mockResolvedValue({ success: true, filesModified: ['ecosystem.config.cjs'], filesPreserved: [] });
+      const client = connect(bus);
+
+      await client.fire('app:standardize', { appId: 'app-a' });
+
+      expect(pm2Standardizer.createGitBackup).toHaveBeenCalledTimes(1);
+      expect(pm2Standardizer.applyStandardization).toHaveBeenCalledWith(
+        '/repos/shared', expect.anything(), expect.objectContaining({ skipBackup: true }),
+      );
+      expect(client.last('app:standardize:complete').payload).toEqual({
+        appId: 'app-a',
+        success: true,
+        result: {
+          backupBranch: 'portos-backup-1',
+          filesModified: ['ecosystem.config.cjs'],
+          filesPreserved: [],
+          processes: [{ name: 'example-web' }],
+        },
+      });
+      expect(appsService.updateApp).toHaveBeenCalledWith('app-a', { pm2ProcessNames: ['example-web'] });
+    });
+
+    it('reports a dirty worktree as a failed backup step and never applies', async () => {
+      pm2Standardizer.analyzeApp.mockResolvedValue({ success: true, proposedChanges: { processes: [] } });
+      pm2Standardizer.createGitBackup.mockResolvedValue({
+        success: false,
+        code: 'DIRTY_WORKTREE',
+        reason: 'Working tree has uncommitted changes',
+      });
+      const client = connect(bus);
+
+      await client.fire('app:standardize', { appId: 'app-a' });
+
+      expect(client.events('app:standardize:step').map((e) => [e.payload.step, e.payload.status])).toEqual([
+        ['analyze', 'running'],
+        ['analyze', 'done'],
+        ['backup', 'running'],
+        ['backup', 'error'],
+      ]);
+      expect(client.last('app:standardize:error').payload).toEqual({
+        appId: 'app-a',
+        message: 'Working tree has uncommitted changes',
+      });
+      expect(pm2Standardizer.applyStandardization).not.toHaveBeenCalled();
+      expect(client.events('app:standardize:complete')).toHaveLength(0);
+      expect(client.last('app:operations:active').payload.operations).toEqual([]);
     });
   });
 
