@@ -27,7 +27,7 @@ import { executionOptionsSchema } from './aiToolkit/internal/executionOptionsVal
  */
 
 import { z } from 'zod';
-import { PREVIZ_CAMERA_STYLES, PREVIZ_CUTS_MAX, PREVIZ_KEYS_MAX, PREVIZ_PAWN_COLOR_IDS, PREVIZ_POSES, PREVIZ_TRACKS_MAX, PREVIZ_VISIBLE_MAX } from './musicVideoPrevizLimits.js';
+import { NIGHT_BEAT_KINDS, NIGHT_BEATS_MAX, NIGHT_LENGTH_MAX_MIN, NIGHT_PACES, PREVIZ_CAMERA_STYLES, PREVIZ_CUTS_MAX, PREVIZ_KEYS_MAX, PREVIZ_PAWN_COLOR_IDS, PREVIZ_POSES, PREVIZ_TRACKS_MAX, PREVIZ_VISIBLE_MAX } from './musicVideoPrevizLimits.js';
 import { MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX } from './musicVideoSubjectLimits.js';
 export const musicVideoDcpRequestSchema = z.object({ grade: z.enum(['rec709', 'rec1886']), renderHistoryId: z.string().min(1), sourceSha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 import { GROK_VIDEO_DURATIONS } from './grokVideoClip.js';
@@ -319,6 +319,23 @@ export const musicVideoPrevizSchema = z.object({
     figure: z.enum(PREVIZ_PAWN_COLOR_IDS).optional(),
     bike: z.enum(PREVIZ_PAWN_COLOR_IDS).optional(),
   }).strict()).optional(),
+  // The story night over the world map (lib/musicVideoPrevizNight.js); story minutes from `startClock`.
+  night: z.object({
+    startClock: z.number().int().min(0).max(1439),
+    lengthMin: z.number().finite().min(1).max(NIGHT_LENGTH_MAX_MIN),
+    beats: z.array(z.object({
+      id: z.string().min(1).max(64),
+      kind: z.enum(NIGHT_BEAT_KINDS),
+      subjectIds: z.array(previzSubjectId).max(PREVIZ_VISIBLE_MAX),
+      startMin: z.number().finite().min(0).max(NIGHT_LENGTH_MAX_MIN),
+      endMin: z.number().finite().min(0).max(NIGHT_LENGTH_MAX_MIN),
+      setId: z.string().min(1).max(64),
+      toSetId: z.string().min(1).max(64).nullable().optional(),
+      pace: z.enum(NIGHT_PACES).nullable().optional(),
+    }).strict().refine((beat) => beat.endMin > beat.startMin, { message: 'A night beat must end after it starts' }))
+      .max(NIGHT_BEATS_MAX)
+      .refine((beats) => new Set(beats.map((b) => b.id)).size === beats.length, { message: 'Night beat ids must be unique' }),
+  }).strict().nullable().optional(),
 }).strict();
 // A path through several of the video's places, in travel order (lib/musicVideoRouteMaps.js).
 export const musicVideoRouteMapSchema = z.object({
