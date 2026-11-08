@@ -148,7 +148,24 @@ describe('shots on the night', () => {
     const frame = previzFrameAt(observed, {}, 1, nightWorld);
     expect(frame.camera).toMatchObject({ position: [260, 1.6, 0], focalLengthMm: 85 });
     expect(frame.actors.every((actor) => actor.visible)).toBe(true);
+    // Riding east side by side, Ana (first in the cast) is on the right, south of Bo.
+    expect(first.actors.find((actor) => actor.subjectId === 'c-a').position[2]).toBeGreaterThan(bo.position[2]);
     // Without the world loaded the cut falls back to its set's own blocking.
     expect(previzFrameAt(observed, {}, 1).world).toBeUndefined();
+  });
+
+  // Catches a held camera that never swings to the person it should turn to (Hold Still shot 1).
+  it('swings a held camera from straight ahead to its keep-in-frame person when it turns to them', () => {
+    const turning = { ...base, previz: { ...base.previz, cuts: [cut('k1', 0, 'p-home', { storyMin: 35, holderSubjectId: 'c-b', aimSubjectId: 'c-a', turnToAim: true })] } };
+    const look = (sec) => {
+      const { camera } = previzFrameAt(turning, {}, sec, nightWorld);
+      return Math.atan2(camera.target[0] - camera.position[0], camera.target[2] - camera.position[2]) * 180 / Math.PI;
+    };
+    // Riding east (facing 90°), then turned toward Ana on the right (south, +Z, facing 0°).
+    expect(look(0)).toBeCloseTo(90, 0);
+    expect(Math.abs(look(3.9))).toBeLessThan(5);
+    expect(look(2)).toBeLessThan(look(0));
+    expect(look(2)).toBeGreaterThan(look(3.9));
+    expect(musicVideoPrevizSchema.safeParse(turning.previz).success).toBe(true);
   });
 });

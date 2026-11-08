@@ -885,7 +885,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // lib/musicVideoPrevizNight.js), which a v50 strict previz schema rejects. Optional, no backfill.
   // v52 = `previz.cuts[].storyMin` and `cameraSpot` (a cut's moment on the night and its
   // observer spot), which a v51 strict cut schema rejects. Optional, no backfill.
-  musicVideoProjects: 52,
+  // v53 = `previz.cuts[].turnToAim` (the camera swings to its keep-in-frame person during
+  // the cut), which a v52 strict cut schema rejects. Optional, no backfill.
+  musicVideoProjects: 53,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

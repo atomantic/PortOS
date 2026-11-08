@@ -12,7 +12,8 @@
  *   camera of the place (its framing and lens). `holderSubjectId` is the character
  *   holding the camera: the camera rides on that character's track, so it moves
  *   when they do. `visibleSubjectIds` null means everyone on the set except the
- *   holder. `aimSubjectId` is who the camera keeps in frame. On a previz with a
+ *   holder. `aimSubjectId` is who the camera keeps in frame; with `turnToAim`
+ *   the camera starts on its own aim and swings to them during the cut. On a previz with a
  *   world and a night (lib/musicVideoPrevizNight.js), `storyMin` is the story
  *   minute the cut starts on that night: the cut then plays the simulated night
  *   from there at real speed (one song second = one story second), and an unheld
@@ -330,6 +331,20 @@ function styledCamera(camera, style, t, riding) {
   };
 }
 
+/**
+ * Where the camera looks: at the keep-in-frame target, or, for a cut that turns
+ * to it (`turnToAim`), from its own aim at the start over to the target by the
+ * last quarter of the cut (eased), as a camera swung toward someone.
+ */
+function aimedTarget(cut, timing, t, own, aim) {
+  if (!aim) return own;
+  if (!cut.turnToAim) return aim;
+  const span = timing.endSec - timing.startSec;
+  const f = Math.min(1, Math.max(0, span > 0 ? ((t - timing.startSec) / span) * 2 - 0.5 : 1));
+  const eased = f * f * (3 - 2 * f);
+  return own.map((v, i) => v + (aim[i] - v) * eased);
+}
+
 const NIGHT_HELD_LENS = 35;
 const NIGHT_OBSERVER_LENS = 85;
 // An observer with no spot picked stands this far off the people, to their right.
@@ -356,16 +371,17 @@ function nightFrame(project, cut, timing, songTime, t, style, storyCamera, night
   if (holder) {
     const position = [holder.position[0], EYE_HEIGHT[holder.pose], holder.position[2]];
     const dir = facingDir(holder.facingDegrees);
-    camera = { position, target: aim || [position[0] + dir[0] * 5, position[1], position[2] + dir[2] * 5] };
+    camera = { position, target: aimedTarget(cut, timing, t, [position[0] + dir[0] * 5, position[1], position[2] + dir[2] * 5], aim) };
   } else {
-    const look = aim || (center ? [center[0], 1.2, center[2]] : [0, 1.2, 0]);
+    const middle = center ? [center[0], 1.2, center[2]] : [0, 1.2, 0];
+    const look = aim || middle;
     let spot = Array.isArray(cut.cameraSpot) ? cut.cameraSpot : null;
     if (!spot) {
       const lead = shown[0] || actors[0];
       const right = lead ? [Math.cos(rad(lead.facingDegrees)), -Math.sin(rad(lead.facingDegrees))] : [1, 0];
       spot = [look[0] + right[0] * OBSERVER_DISTANCE, look[2] + right[1] * OBSERVER_DISTANCE];
     }
-    camera = { position: [spot[0], 1.6, spot[1]], target: look };
+    camera = { position: [spot[0], 1.6, spot[1]], target: aimedTarget(cut, timing, t, middle, aim) };
   }
   camera = styledCamera(camera, style, songTime, holder?.pose === 'ride');
   if (camera.position.every((v, i) => Math.abs(v - camera.target[i]) < 1e-6)) camera.target = [camera.target[0], camera.target[1], camera.target[2] + 1];
@@ -428,15 +444,15 @@ export function previzFrameAt(project, loadedPlaces, songTime, nightWorld = null
     const reach = view ? Math.hypot(view.target[0] - view.position[0], view.target[2] - view.position[2]) || 5 : 5;
     const dir = facingDir(holder.facingDegrees);
     const ahead = [position[0] + dir[0] * reach, view ? view.target[1] : position[1], position[2] + dir[2] * reach];
-    camera = { position, target: aim || ahead };
+    camera = { position, target: aimedTarget(cut, timing, t, ahead, aim) };
   } else if (view) {
-    camera = { position: view.position, target: aim || view.target };
+    camera = { position: view.position, target: aimedTarget(cut, timing, t, view.target, aim) };
   } else {
     const shown = actors.filter((actor) => actor.visible);
     const center = shown.length
       ? [0, 1, 2].map((i) => shown.reduce((sum, actor) => sum + actor.position[i], 0) / shown.length)
       : [0, 0, 0];
-    camera = { position: [center[0], 1.6, center[2] + 6], target: aim || [center[0], 1.2, center[2]] };
+    camera = { position: [center[0], 1.6, center[2] + 6], target: aimedTarget(cut, timing, t, [center[0], 1.2, center[2]], aim) };
   }
   camera = styledCamera(camera, style, songTime, holder?.pose === 'ride');
   if (camera.position.every((v, i) => Math.abs(v - camera.target[i]) < 1e-6)) camera.target = [camera.target[0], camera.target[1], camera.target[2] + 1];
