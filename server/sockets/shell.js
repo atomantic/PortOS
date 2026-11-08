@@ -44,12 +44,15 @@ export const registerShellHandlers = (socket, _io) => {
         initialCommand = launch.commandLine;
         env = launch.env;
       }
-      const sessionId = shellService.createShellSession(socket, { cwd, env, ...(executionOptions ? { executionOptions } : {}) });
+      // The service injects the command only after a shell round-trip proves it
+      // can run commands; a fixed timer here races slow interactive shells.
+      const sessionId = shellService.createShellSession(socket, {
+        cwd, env,
+        ...(initialCommand ? { initialCommand, waitForPromptReady: true } : {}),
+        ...(executionOptions ? { executionOptions } : {}),
+      });
       if (sessionId) {
         socket.emit('shell:started', { sessionId });
-        if (initialCommand) {
-          setTimeout(() => shellService.submitToSession(sessionId, initialCommand), 200);
-        }
       } else {
         socket.emit('shell:error', { error: 'Failed to create shell session' });
       }

@@ -1478,7 +1478,6 @@ describe('socket.js — initSocket', () => {
 
     beforeEach(() => {
       vi.mocked(shellService.createShellSession).mockClear().mockReturnValue('sess-1');
-      vi.mocked(shellService.submitToSession).mockClear();
       vi.mocked(getProviderById).mockReset();
     });
 
@@ -1490,6 +1489,8 @@ describe('socket.js — initSocket', () => {
       expect(socket.emitted).toContainEqual(['shell:started', { sessionId: 'sess-1' }]);
       const [, opts] = vi.mocked(shellService.createShellSession).mock.calls.at(-1);
       expect(opts.env.ANTHROPIC_BASE_URL).toBe('http://127.0.0.1:11434');
+      expect(opts.initialCommand).toMatch(/^claude\b/);
+      expect(opts.waitForPromptReady).toBe(true);
     });
 
     it('ignores a client-supplied command for a provider launch — the server owns it', async () => {
@@ -1497,11 +1498,11 @@ describe('socket.js — initSocket', () => {
 
       await start({ providerId: 'claude-ollama-tui', initialCommand: 'rm -rf /' });
 
-      // The submit is deferred behind a timer; drain it before asserting.
-      await vi.waitFor(() => expect(shellService.submitToSession).toHaveBeenCalled());
-      const [, typed] = vi.mocked(shellService.submitToSession).mock.calls.at(-1);
-      expect(typed).not.toContain('rm -rf');
-      expect(typed).toContain('claude');
+      const [, opts] = vi.mocked(shellService.createShellSession).mock.calls.at(-1);
+      expect(opts.initialCommand).not.toContain('rm -rf');
+      expect(opts.initialCommand).toMatch(/^claude\b/);
+      expect(opts.waitForPromptReady).toBe(true);
+      expect(opts).not.toHaveProperty('exitWithCommand');
     });
 
     it('refuses a provider that is not a launchable TUI rather than opening a bare shell', async () => {
@@ -1529,6 +1530,8 @@ describe('socket.js — initSocket', () => {
       const [, opts] = vi.mocked(shellService.createShellSession).mock.calls.at(-1);
       expect(opts.cwd).toBe('/tmp/app');
       expect(opts.env).toBeUndefined();
+      expect(opts.initialCommand).toBe('claude');
+      expect(opts.waitForPromptReady).toBe(true);
     });
   });
 });
