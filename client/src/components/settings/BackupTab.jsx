@@ -511,16 +511,7 @@ export function BackupTab() {
           <div className="space-y-4 min-w-0">
             <div className="flex items-center gap-3">
               <span className="text-sm text-gray-400">Enabled</span>
-              <button
-                type="button"
-                role="switch"
-                onClick={() => setEnabled(!enabled)}
-                aria-label="Scheduled backups"
-                aria-checked={enabled}
-                className={`relative w-10 h-5 rounded-full transition-colors ${enabled ? 'bg-port-accent' : 'bg-port-border'}`}
-              >
-                <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${enabled ? 'translate-x-5' : ''}`} />
-              </button>
+              <ToggleSwitch size="sm" enabled={enabled} onChange={() => setEnabled(!enabled)} ariaLabel="Scheduled backups" />
             </div>
             <div className="space-y-1">
               <span className="block text-sm text-gray-400">Schedule</span>

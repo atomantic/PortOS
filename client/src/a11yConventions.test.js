@@ -2239,6 +2239,56 @@ describe('a11y conventions', () => {
     expect(offenders, `Toggle-switch button without role="switch" + aria-checked — prefer components/ToggleSwitch.jsx:\n${offenders.join('\n')}`).toEqual([]);
   });
 
+  it('gives every hand-rolled role="switch" button a touch-size hit area (#15381)', () => {
+    // ToggleSwitch.jsx grows its hit area on a coarse pointer. A switch built
+    // elsewhere must carry its own: a >=44px height (base or pointer-coarse),
+    // or a pointer-coarse before:-inset pseudo-element around the track.
+    const SHARED = 'src/components/ToggleSwitch.jsx';
+    // A `${constName}` in a template className resolves to that file's
+    // `const constName = '...'` literal, so a shared class constant counts.
+    const classOf = (tag, src) => {
+      const m = tag.match(/className\s*=\s*(?:"([^"]*)"|\{\s*`([^`]*)`\s*\}|\{\s*"([^"]*)"\s*\})/);
+      const raw = m ? (m[1] ?? m[2] ?? m[3]) : '';
+      const consts = new Map([...src.matchAll(/const\s+(\w+)\s*=\s*'([^']*)'/g)].map((c) => [c[1], c[2]]));
+      return raw.replace(/\$\{(\w+)\}/g, (_, name) => consts.get(name) ?? '');
+    };
+    const hasTouchHitArea = (cls) => /(?:^|\s)(?:pointer-coarse:)?before:-inset-/.test(cls)
+      || cls.split(/\s+/).some((token) => /^(?:pointer-coarse:)?(?:min-)?h-/.test(token)
+        && tokenPx(token.replace(/^pointer-coarse:/, '')) >= 44);
+    const offendersIn = (file, src) => {
+      if (file === SHARED) return [];
+      const out = [];
+      for (const node of forEachOpeningTag(src, 'button')) {
+        if (!/role="switch"/.test(node.tag)) continue;
+        if (hasTouchHitArea(classOf(node.tag, src))) continue;
+        out.push(`${file}:${lineOf(src, node.index)}`);
+      }
+      return out;
+    };
+
+    // Probe first: the old hand-rolled 20px track must fail, and each accepted
+    // hit-area form must pass, so a green run means "no offenders" for real.
+    const probe = (cls) => offendersIn('probe.jsx', `<button type="button" role="switch" aria-checked={on} className="${cls}"><span /></button>`);
+    expect(probe('shrink-0 w-10 h-5 rounded-full transition-colors relative')).toEqual(['probe.jsx:1']);
+    expect(probe('relative inline-flex h-5 w-9 items-center rounded-full')).toEqual(['probe.jsx:1']);
+    expect(probe('pointer-coarse:h-5 rounded-full')).toEqual(['probe.jsx:1']);
+    expect(probe('min-h-[44px] sm:min-h-[28px] rounded-full')).toEqual([]);
+    expect(probe('sm:min-h-[44px] rounded-full')).toEqual(['probe.jsx:1']);
+    expect(probe('pointer-coarse:before:absolute pointer-coarse:before:-inset-2 shrink-0 w-10 h-5 rounded-full')).toEqual([]);
+    expect(probe('pointer-coarse:min-h-11 w-10 h-5 rounded-full')).toEqual([]);
+    expect(probe('pointer-coarse:min-h-[44px] w-10 h-5 rounded-full')).toEqual([]);
+    // Dynamic className: the template's static tokens are what count.
+    expect(offendersIn('probe.jsx', '<button type="button" role="switch" aria-checked={on} className={`relative h-5 w-9 ${on ? "a" : "b"}`}><span /></button>')).toEqual(['probe.jsx:1']);
+    // Not a switch: a rounded track button without role="switch" is out of this rule's remit.
+    expect(offendersIn('probe.jsx', '<button type="button" className="h-5 w-10 rounded-full"><span /></button>')).toEqual([]);
+    // The shared primitive owns its own hit-area expansion and is exempt.
+    expect(offendersIn(SHARED, '<button type="button" role="switch" aria-checked={on} className="h-7 w-12"><span /></button>')).toEqual([]);
+
+    const offenders = [];
+    for (const file of trackedJsxFiles()) offenders.push(...offendersIn(file, rawSourceOf(file)));
+    expect(offenders, `role="switch" button under the 44px touch-target minimum — use components/ToggleSwitch.jsx, or give it min-h-[44px] / pointer-coarse:before:-inset-2:\n${offenders.join('\n')}`).toEqual([]);
+  });
+
   it('keeps every file input focusable and label-activated', () => {
     // Two failures ride on the same markup, and neither reproduces for the
     // author: `display:none` (Tailwind `hidden`) drops the input from the tab

@@ -4,6 +4,7 @@ import { updatePostConfig, getProviders, getPostAdaptivePreview, getPostMultipli
 import toast from '../../ui/Toast';
 import { FormField } from '../../ui/FormField';
 import ProviderModelSelector from '../../ProviderModelSelector';
+import ToggleSwitch from '../../ToggleSwitch';
 import { filterSelectableModels, enabledApiProviderFilter } from '../../../utils/providers';
 import { GOAL_DEFS, POST_TOPICS, MODULE_LABELS, DRILL_LABELS, DRILL_DESCRIPTIONS, composedSessionDrillTypes } from './constants';
 import { COGNITIVE_PAIR_CONSTRAINTS, validateCognitivePair, dependentMin } from '../../../../../server/lib/postCognitiveConfig.js';
@@ -492,20 +493,7 @@ function DrillCard({ type, meta, drillConfig, enabled, accent, onToggle, onUpdat
               how you decide whether to switch a drill ON (issue #4732). */}
           {onPreviewHowItWorks && <CognitiveDrillHowItWorksButton type={type} onClick={onPreviewHowItWorks} />}
         </div>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={enabled}
-          aria-label={label}
-          onClick={onToggle}
-          className={`shrink-0 w-10 h-5 rounded-full transition-colors relative ${
-            enabled ? toggleBg : 'bg-port-border'
-          }`}
-        >
-          <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
-            enabled ? 'translate-x-5' : 'translate-x-0.5'
-          }`} />
-        </button>
+        <ToggleSwitch size="sm" enabled={enabled} onChange={onToggle} ariaLabel={label} activeColor={toggleBg} />
       </div>
 
       {enabled && supportsProgressive && (
@@ -514,20 +502,7 @@ function DrillCard({ type, meta, drillConfig, enabled, accent, onToggle, onUpdat
             <span className="text-sm text-white">Progressive difficulty</span>
             <p className="text-xs text-gray-500">Difficulty rises only after exact-rung mastery.</p>
           </div>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={progressive}
-            aria-label={`Progressive difficulty — ${label}`}
-            onClick={onToggleProgressive}
-            className={`shrink-0 w-10 h-5 rounded-full transition-colors relative ${
-              progressive ? toggleBg : 'bg-port-border'
-            }`}
-          >
-            <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
-              progressive ? 'translate-x-5' : 'translate-x-0.5'
-            }`} />
-          </button>
+          <ToggleSwitch size="sm" enabled={progressive} onChange={onToggleProgressive} ariaLabel={`Progressive difficulty — ${label}`} activeColor={toggleBg} />
         </div>
       )}
 
@@ -902,20 +877,7 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
             <Bell size={16} className="text-port-accent" />
             <h3 className="text-sm font-medium text-gray-500 uppercase tracking-wider">Daily Reminder</h3>
           </div>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={reminderEnabled}
-            aria-label="Daily reminder"
-            onClick={() => setReminderEnabled(v => !v)}
-            className={`shrink-0 w-10 h-5 rounded-full transition-colors relative ${
-              reminderEnabled ? 'bg-port-accent' : 'bg-port-border'
-            }`}
-          >
-            <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
-              reminderEnabled ? 'translate-x-5' : 'translate-x-0.5'
-            }`} />
-          </button>
+          <ToggleSwitch size="sm" enabled={reminderEnabled} onChange={() => setReminderEnabled(v => !v)} ariaLabel="Daily reminder" activeColor={'bg-port-accent'} />
         </div>
         <p className="text-xs text-gray-500">
           Off by default. When enabled, you'll get an in-app nudge at the chosen time if today's POST is still incomplete — nothing fires once you've done a session, and no AI calls are involved.
@@ -1025,20 +987,7 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
           </div>
           <div className="flex items-center gap-2">
             <span className="text-xs text-gray-400">Adaptive difficulty</span>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={adaptiveEnabled}
-              aria-label="Adaptive difficulty"
-              onClick={() => setAdaptiveEnabled(v => !v)}
-              className={`shrink-0 w-10 h-5 rounded-full transition-colors relative ${
-                adaptiveEnabled ? 'bg-port-accent' : 'bg-port-border'
-              }`}
-            >
-              <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
-                adaptiveEnabled ? 'translate-x-5' : 'translate-x-0.5'
-              }`} />
-            </button>
+            <ToggleSwitch size="sm" enabled={adaptiveEnabled} onChange={() => setAdaptiveEnabled(v => !v)} ariaLabel="Adaptive difficulty" activeColor={'bg-port-accent'} />
           </div>
         </div>
         {adaptiveEnabled && (
@@ -1088,20 +1037,7 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
             onDisableAll={() => setAllCognitiveEnabled(false)}
           />
         </div>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={cognitiveEnabled}
-          aria-label="Cognitive drills"
-          onClick={() => setCognitiveEnabled(!cognitiveEnabled)}
-          className={`shrink-0 w-10 h-5 rounded-full transition-colors relative ${
-            cognitiveEnabled ? 'bg-rose-400' : 'bg-port-border'
-          }`}
-        >
-          <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
-            cognitiveEnabled ? 'translate-x-5' : 'translate-x-0.5'
-          }`} />
-        </button>
+        <ToggleSwitch size="sm" enabled={cognitiveEnabled} onChange={() => setCognitiveEnabled(!cognitiveEnabled)} ariaLabel="Cognitive drills" activeColor={'bg-rose-400'} />
       </div>
 
       {cognitiveEnabled && (
@@ -1163,20 +1099,7 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
             onDisableAll={() => setAllLlmEnabled(false)}
           />
         </div>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={llmEnabled}
-          aria-label="Wit & Memory (LLM) drills"
-          onClick={() => setLlmEnabled(!llmEnabled)}
-          className={`shrink-0 w-10 h-5 rounded-full transition-colors relative ${
-            llmEnabled ? 'bg-port-accent-2' : 'bg-port-border'
-          }`}
-        >
-          <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
-            llmEnabled ? 'translate-x-5' : 'translate-x-0.5'
-          }`} />
-        </button>
+        <ToggleSwitch size="sm" enabled={llmEnabled} onChange={() => setLlmEnabled(!llmEnabled)} ariaLabel="Wit & Memory (LLM) drills" activeColor={'bg-port-accent-2'} />
       </div>
 
       {llmEnabled && (

@@ -23,6 +23,7 @@ import { formatDateTime } from '../utils/formatters';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import useDrawerTab from '../hooks/useDrawerTab';
 import FolderPicker from '../components/FolderPicker';
+import ToggleSwitch from '../components/ToggleSwitch';
 import DuplicatesTab from '../components/sharing/DuplicatesTab';
 import ConflictsTab from '../components/sharing/ConflictsTab';
 import socket from '../services/socket';
@@ -700,16 +701,7 @@ function SettingsPanel({ bucket, onToggleMode, onRequestDelete, onConfirmDelete,
         <h3 className="text-sm font-medium text-white mb-2">Import mode</h3>
         <div className="flex items-center gap-3">
           <span className={`text-sm ${bucket.mode === 'inbox' ? 'text-white' : 'text-gray-500'}`}>Inbox (review)</span>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={bucket.mode === 'auto-merge'}
-            onClick={onToggleMode}
-            className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${bucket.mode === 'auto-merge' ? 'bg-port-accent' : 'bg-port-border'}`}
-            aria-label="Auto-merge incoming records (off queues them in the inbox for review)"
-          >
-            <span className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${bucket.mode === 'auto-merge' ? 'translate-x-5' : 'translate-x-1'}`} />
-          </button>
+          <ToggleSwitch size="sm" enabled={bucket.mode === 'auto-merge'} onChange={onToggleMode} ariaLabel="Auto-merge incoming records (off queues them in the inbox for review)" />
           <span className={`text-sm ${bucket.mode === 'auto-merge' ? 'text-white' : 'text-gray-500'}`}>Auto-merge</span>
         </div>
         <p className="text-[11px] text-gray-500 mt-2">
