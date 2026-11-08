@@ -30,7 +30,7 @@ import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js
 import { createSettingsStore } from '../lib/settingsStore.js';
 import { todayInTimezone, localDayRangeUtc } from '../lib/timezone.js';
 import { getUserTimezone } from './userTimezone.js';
-import { localDayKey, listEvents } from './humanActivity.js';
+import { localDayKey, forEachEventPage } from './humanActivity.js';
 import * as journal from './brainJournal.js';
 import { buildMarkers } from '../lib/markedSection.js';
 import { getProviderById, getActiveProvider } from './providers.js';
@@ -442,8 +442,8 @@ export async function getScorecard() {
 
 /**
  * Compute (and persist) the weekly goal-effectiveness scorecard. Deterministic
- * and LLM-free — safe to call on any user action. Queries the last TREND_WEEKS
- * of timeline events once, buckets them, computes the detailed target week plus
+ * and LLM-free — safe to call on any user action. Pages through the last
+ * TREND_WEEKS of timeline events (uncapped), buckets them, computes the detailed target week plus
  * the trend series, persists the artifact, and (opt-in) splices a one-line slice
  * into the week-anchor day's Brain daily-log.
  *
@@ -469,27 +469,34 @@ export async function computeWeeklyScorecard({ weekStart } = {}) {
     start: weekRangeUtc(oldestWeek, timezone)?.start,
     end: weekRangeUtc(targetWeek, timezone)?.end,
   };
-  const EVENT_CAP = 2000;
-  const events = span.start && span.end
-    ? await listEvents({ from: span.start.toISOString(), to: span.end.toISOString(), limit: EVENT_CAP })
-    : [];
-  // listEvents returns newest-first capped at EVENT_CAP — the target (current)
-  // week is always fully covered, but a very active user could truncate the
-  // OLDEST trend weeks. Surface it rather than silently under-counting a trend bar.
-  if (events.length >= EVENT_CAP) {
-    console.warn(`🎯 Goal scorecard hit the ${EVENT_CAP}-event query cap for ${targetWeek}; oldest trend weeks may under-count`);
+  // Keyset-page the whole span (no cap): trend weeks accumulate incrementally and
+  // only the target week's events are retained, since computeScorecard needs
+  // per-event detail for that week alone.
+  const weekAcc = new Map();
+  const targetEvents = [];
+  let eventTotal = 0;
+  if (span.start && span.end) {
+    await forEachEventPage({ from: span.start.toISOString(), to: span.end.toISOString() }, (page) => {
+      eventTotal += page.length;
+      for (const [wk, evs] of bucketEventsByWeek(page, timezone, weekStartsOn)) {
+        const t = weekTotals(evs, rules);
+        const acc = weekAcc.get(wk) || { alignedSeconds: 0, unalignedSeconds: 0, totalSeconds: 0, eventCount: 0 };
+        for (const k of Object.keys(acc)) acc[k] += t[k];
+        weekAcc.set(wk, acc);
+        if (wk === targetWeek) for (const e of evs) targetEvents.push(e);
+      }
+    });
   }
 
-  const buckets = bucketEventsByWeek(events, timezone, weekStartsOn);
   const trend = [];
   for (let i = TREND_WEEKS - 1; i >= 0; i -= 1) {
     const wk = shiftIsoDate(targetWeek, -i * 7);
-    trend.push({ weekStart: wk, ...weekTotals(buckets.get(wk) || [], rules) });
+    trend.push({ weekStart: wk, ...(weekAcc.get(wk) || weekTotals([], rules)) });
   }
 
   const scorecard = computeScorecard({
     weekStart: targetWeek,
-    events: buckets.get(targetWeek) || [],
+    events: targetEvents,
     rules,
     timezone,
     trend,
@@ -506,7 +513,7 @@ export async function computeWeeklyScorecard({ weekStart } = {}) {
       .catch((err) => console.error(`🎯 Goal scorecard digest slice failed for ${targetWeek}: ${err.message}`));
   }
 
-  console.log(`🎯 Goal scorecard computed for week ${targetWeek}: ${scorecard.totals.alignedHours}h aligned / ${scorecard.totals.unalignedHours}h unaligned (${goals.length} goals, ${events.length} events) in ${Date.now() - started}ms`);
+  console.log(`🎯 Goal scorecard computed for week ${targetWeek}: ${scorecard.totals.alignedHours}h aligned / ${scorecard.totals.unalignedHours}h unaligned (${goals.length} goals, ${eventTotal} events) in ${Date.now() - started}ms`);
   return { ...scorecard, available: true };
 }
 
