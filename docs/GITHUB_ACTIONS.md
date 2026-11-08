@@ -124,21 +124,10 @@ same rules to external pull-request content before the model-abuse classifier
 sees it — and which honors no marker, because that author is not trusted to
 grant one.
 
-Next, `node scripts/scan-commit-session-links.js` refuses a pull request whose
-commit messages link to an AI conversation session (`claude.ai/code/session`,
-`claude.ai/chat/`, `claude.ai/share/`, `chatgpt.com/c/` or `/share/`, and the
-`chat.openai.com` spellings), naming each offending commit. History on `main` is
-permanent, so this runs before merge. The depth-2 checkout does not hold the
-pull request's commits, so the script reads them from the compare API against
-the default branch: commits already on `main` never fail it, and a release PR
-does not answer for the `main` commits it promotes. A squash merge copies the
-pull request's description into `main`'s commit message, so the separate
-`pr-description.yml` workflow runs the same script with `--description` on every
-open, push and description edit; fixing a flagged description turns it green
-without re-running CI. Pregate runs the same check
-over `<merge base>..HEAD` right after the hidden-content scan, excluding commits
-already on `origin/main` when that ref is available. This keeps release candidates
-from answering for historical main commits while still checking candidate-only work.
+AI conversation-session links in commit messages and PR descriptions are
+banned by the AGENTS.md Git Workflow rule, but no CI check enforces it: outside
+contributors do not always follow it, and refusing their pull requests only
+created churn.
 
 The import-growth guard measures one development change. Release promotions and
 pushes retain the existing exception for a whole release cycle's aggregate growth.
@@ -195,7 +184,7 @@ CI run that never needed it — they keep the documented skip.
 
 `scripts/pregate.js` runs the same planner over the committed and uncommitted
 diff and hands its plan to the same runners. Default `npm run pregate` runs the
-hidden-content and commit-message scans, early server and client structural
+hidden-content scan, early server and client structural
 guards, lint, and focused unit tests: edited test files and sibling tests for changed sources,
 including untracked tests, without expanding through transitive imports.
 
@@ -1338,7 +1327,7 @@ in the root AGENTS.md; combined-tree guards remain available for investigation.
 ### Impact job command and finalization evidence
 
 The `impact` job records the fixed stages `admission`, `base`, `hidden-content`,
-`commit-messages`, `import-case`, `plan`, `node-minimum`, `summary`, `autofixer-install`, and `syntax`
+`import-case`, `plan`, `node-minimum`, `summary`, `autofixer-install`, and `syntax`
 through `scripts/ci-impact-diagnostics.js`. Each stage logs its start and direct
 child `exit`/`close` status and elapsed milliseconds. Its original stdout, GitHub
 command files, environment inputs and nonzero status pass through; a signal or
