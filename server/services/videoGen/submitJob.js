@@ -507,6 +507,13 @@ const submitValidatedVideoGenJob = async (body, uploads, inputs) => {
     const { applyProjectRenderPool } = await import('../musicVideo/renderPool.js');
     body = await applyProjectRenderPool(body);
   }
+  // The render pool's note (a shot rendering without song audio) rides on the response.
+  const notice = body._notice;
+  const result = await submitPreparedVideoGenJob(body, uploads, inputs, fableLoomRenderSettings);
+  return notice ? { ...result, notice } : result;
+};
+
+const submitPreparedVideoGenJob = async (body, uploads, inputs, fableLoomRenderSettings) => {
   let prepared;
   ({ body, prepared } = await prepareVideoSubmissionInputs(body, uploads, inputs));
   const { backend } = prepared;

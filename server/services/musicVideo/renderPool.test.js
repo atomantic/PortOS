@@ -76,15 +76,22 @@ describe('project render-pool submission policy', () => {
     m.project.videoSettings.renderPool.mode = 'local';
     await expect(applyProjectRenderPool({ ...body(), mediaProviderPeerId: 'peer-a' })).rejects.toThrow(/saved project/);
     m.project.videoSettings.generationMode = 'suppliedAudio';
-    await expect(applyProjectRenderPool({ ...body(), backend: 'fal' })).rejects.toThrow(/explicitly/);
+    // A hosted renderer cannot hear the song: the shot renders silent and says so.
+    expect(await applyProjectRenderPool({ ...body(), backend: 'fal' })).toMatchObject({ backend: 'fal', mode: 'image',
+      musicVideo: { songAudio: false }, _notice: 'Rendered without song audio: fal cannot take song audio.' });
+    const picked = await applyProjectRenderPool({ ...body(), backend: 'grok', musicVideo: { ...body().musicVideo, songAudio: true } });
+    expect(picked).toMatchObject({ backend: 'grok', musicVideo: { songAudio: false } });
+    expect(picked._suppliedAudio).toBeUndefined();
   });
   it('rejects an empty or duplicated remote pool at the project write schema', () => {
     expect(musicVideoVideoSettingsSchema.safeParse({ renderPool: { mode: 'peers', peers: [] } }).success).toBe(false);
   });
-  it('refuses an explicit continuation before the local supplied-audio mode override', async () => {
+  it('renders an explicit continuation silent instead of overriding it to a supplied-audio clip', async () => {
     m.project.videoSettings.generationMode = 'suppliedAudio';
     m.project.videoSettings.renderPool.mode = 'local';
-    await expect(applyProjectRenderPool({ ...body(), mode: 'extend', extendFromVideoId: 'prior-clip' })).rejects.toThrow(/continuation/);
+    const extended = await applyProjectRenderPool({ ...body(), mode: 'extend', extendFromVideoId: 'prior-clip' });
+    expect(extended).toMatchObject({ mode: 'extend', musicVideo: { songAudio: false } });
+    expect(extended._notice).toMatch(/without song audio: song audio cannot combine with continuation/);
     expect(m.resolve).not.toHaveBeenCalled();
     expect(await applyProjectRenderPool(body())).toMatchObject({ mode: 'a2v', backend: 'local' });
   });
