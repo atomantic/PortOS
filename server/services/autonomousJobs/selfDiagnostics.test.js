@@ -9,7 +9,8 @@ import {
   runSelfDiagnostics,
   MONITORING_LABEL,
   NEEDS_ATTENTION_LABEL,
-  DIAGNOSTICS_SLUG
+  DIAGNOSTICS_SLUG,
+  isPrunableMalformedLabel
 } from './selfDiagnostics.js'
 
 // Deterministic clock shared by the windowed fixtures and the tests (#2617).
@@ -237,6 +238,29 @@ describe('findMonitoringIssue', () => {
   })
 })
 
+describe('isPrunableMalformedLabel', () => {
+  const names = new Set(['good first issue', 'help wanted', 'area: ui', 'tests', 'ticket decade'])
+
+  it.each([
+    'data-integrity 0366D6',
+    'macos 0366D6',
+    'plan 428BCA Tracked by /do:replan',
+    'effort:low --color BFE5E5',
+    'tests BFDADC'
+  ])('flags malformed shape %s', name => {
+    expect(isPrunableMalformedLabel(name, names)).toBe(true)
+  })
+
+  it.each([
+    'good first issue',
+    'help wanted',
+    'area: ui',
+    'ticket decade'
+  ])('keeps ordinary label %s', name => {
+    expect(isPrunableMalformedLabel(name, names)).toBe(false)
+  })
+})
+
 describe('pruneMalformedLabels', () => {
   const invokeHandler = exec => runSelfDiagnostics({
     forgeGate: okForge,
@@ -252,12 +276,14 @@ describe('pruneMalformedLabels', () => {
         { name: 'good first issue' },
         { name: 'help wanted' },
         { name: 'needs decade' },
-        { name: 'sprint 202401' },
-        { name: 'ticket 123456' },
-        { name: 'release 20251a' },
+        { name: 'needs decade' },
         { name: 'model:light D4C5F9' },
         { name: 'effort:medium --color 76C7C7' },
-        { name: 'security 0366D6 Proposed from a security audit' }
+        { name: 'security 0366D6 Proposed from a security audit' },
+        { name: 'data-integrity 0366D6' },
+        { name: 'macos 0366D6' },
+        { name: 'plan 428BCA Tracked by /do:replan' },
+        { name: 'effort:low --color BFE5E5' }
       ]) } },
       { match: argsHaveIssueLabel, result: { code: 0, stdout: '[]' } },
       { match: argsHavePrLabel, result: { code: 0, stdout: '[]' } },
@@ -267,8 +293,16 @@ describe('pruneMalformedLabels', () => {
 
     await invokeHandler(exec)
     const deleted = exec.mock.calls.filter(([, args]) => args.includes('delete')).map(([, args]) => args[2])
-    expect(deleted).toEqual(['model:light D4C5F9', 'effort:medium --color 76C7C7', 'security 0366D6 Proposed from a security audit'])
-    expect(log).toHaveBeenCalledWith('🧹 Pruned 3 malformed labels')
+    expect(deleted).toEqual([
+      'model:light D4C5F9',
+      'effort:medium --color 76C7C7',
+      'security 0366D6 Proposed from a security audit',
+      'data-integrity 0366D6',
+      'macos 0366D6',
+      'plan 428BCA Tracked by /do:replan',
+      'effort:low --color BFE5E5'
+    ])
+    expect(log).toHaveBeenCalledWith('🧹 Pruned 7 malformed labels')
     log.mockRestore()
   })
 
