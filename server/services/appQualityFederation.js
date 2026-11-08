@@ -138,11 +138,23 @@ export async function collectPortosQuality(days, deps = {}) {
   return collectAppQuality({ id: PORTOS_APP_ID }, days, deps);
 }
 
+// Why a peer contributed nothing, so the UI can name it and say what to fix.
+// Reasons are a fixed vocabulary: peer error text never reaches the client.
+const peerFailure = reason => Object.assign(new Error(reason), { peerFailureReason: reason });
+function unavailableReason(err) {
+  if (err?.peerFailureReason) return err.peerFailureReason;
+  // Wire-schema or JSON mismatch: the peer runs a PortOS version this one cannot read.
+  if (err instanceof z.ZodError || err instanceof SyntaxError) return 'incompatible';
+  return 'unreachable';
+}
+const HTTP_FAILURE_REASONS = { 400: 'incompatible', 403: 'refused', 404: 'incompatible' };
+const emptyFederation = () => ({ peers: 0, available: 0, unavailable: 0, unavailablePeers: [] });
+
 export async function collectAppQuality(app, days, deps = {}) {
   const peers = await eligiblePeers(deps);
-  if (!peers.length) return { records: [], federation: { peers: 0, available: 0, unavailable: 0 } };
+  if (!peers.length) return { records: [], federation: emptyFederation() };
   const repository = await repositoryKey(deps, app);
-  if (!repository) return { records: [], federation: { peers: 0, available: 0, unavailable: 0 } };
+  if (!repository) return { records: [], federation: emptyFederation() };
   const now = deps.now ?? Date.now();
   const results = await Promise.allSettled(peers.map(async peer => {
     const response = await (deps.peerFetch || peerFetch)(
@@ -150,15 +162,15 @@ export async function collectAppQuality(app, days, deps = {}) {
       { signal: AbortSignal.timeout(3000), redirect: 'error', maxBytes: MAX_PAYLOAD_BYTES }, peer);
     if (!response.ok) {
       await response.body?.cancel?.();
-      throw new Error('Peer quality unavailable');
+      throw peerFailure(HTTP_FAILURE_REASONS[response.status] || 'error');
     }
     const body = await readBodyCapped(response, MAX_PAYLOAD_BYTES);
     if (!body) {
       await response.body?.cancel?.();
-      throw new Error('Peer quality payload too large');
+      throw peerFailure('too-large');
     }
     const payload = payloadSchema.parse(JSON.parse(body.toString('utf8')));
-    if (payload.repository !== repository) throw new Error('Different repository');
+    if (payload.repository !== repository) throw peerFailure('different-repository');
     const measurements = payload.measurements.flatMap(row => {
       const parsed = measurementSchema.safeParse(row);
       return parsed.success ? [parsed.data] : [];
@@ -168,9 +180,11 @@ export async function collectAppQuality(app, days, deps = {}) {
       report: { ...row.report, summary: sharedSummary },
     }));
   }));
+  const unavailablePeers = results.flatMap((result, i) => result.status === 'rejected'
+    ? [{ id: peers[i].id, name: peers[i].name || peers[i].id, reason: unavailableReason(result.reason) }] : []);
   return { records: results.flatMap(result => result.status === 'fulfilled' ? result.value : []),
-    federation: { peers: peers.length, available: results.filter(r => r.status === 'fulfilled').length,
-      unavailable: results.filter(r => r.status === 'rejected').length } };
+    federation: { peers: peers.length, available: peers.length - unavailablePeers.length,
+      unavailable: unavailablePeers.length, unavailablePeers } };
 }
 
 /**

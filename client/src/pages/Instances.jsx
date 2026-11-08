@@ -1234,7 +1234,8 @@ function ProbeDiagnostics({ peer, probing, onProbe }) {
   );
 }
 
-export function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityReport }) {
+export function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityReport, focused = false }) {
+  const cardRef = useRef(null);
   const [editingName, setEditingName] = useState(false);
   const [name, setName] = useState('');
   const [probing, setProbing] = useState(false);
@@ -1419,8 +1420,18 @@ export function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo, parityRepor
     setEditingName(false);
   };
 
+  // `?peer=<id>` deep links (e.g. from App Quality's unavailable-peer list) land on this card.
+  useEffect(() => {
+    if (focused) cardRef.current?.scrollIntoView?.({ block: 'center' });
+  }, [focused]);
+
   return (
-    <div className={`bg-port-card border border-port-border rounded-xl p-5 transition-opacity ${!peer.enabled ? 'opacity-50' : ''}`}>
+    <div
+      ref={cardRef}
+      data-peer-id={peer.id}
+      aria-current={focused ? 'true' : undefined}
+      className={`bg-port-card border rounded-xl p-5 transition-opacity ${focused ? 'border-port-accent ring-2 ring-port-accent/40' : 'border-port-border'} ${!peer.enabled ? 'opacity-50' : ''}`}
+    >
       <div className="flex flex-wrap items-start justify-between gap-2 mb-3">
         <div className="flex items-center gap-2">
           <StatusIcon size={16} className={STATUS_COLORS[peer.status]} />
@@ -1586,6 +1597,7 @@ function InstancesContent() {
   const peerAddressRef = useRef(null);
   const [searchParams, setSearchParams] = useSearchParams();
   const drawer = searchParams.get('connection');
+  const focusedPeerId = searchParams.get('peer');
   const [settingsTab, setSettingsTab] = useDrawerTab('connectionTab', 'instance', ['instance', 'network', 'relay', 'routing']);
   const [editingSelf, setEditingSelf] = useState(false);
   const [selfName, setSelfName] = useState('');
@@ -1732,6 +1744,10 @@ function InstancesContent() {
               </button>
             )}
 
+            {snapshotLoaded && !snapshotError && focusedPeerId && !peers.some(peer => peer.id === focusedPeerId) && (
+              <p role="status" className="text-sm text-gray-400">The linked peer is no longer registered on this install.</p>
+            )}
+
             {peers.length > 0 && (
               <div>
                 <h2 className="text-sm font-medium text-gray-400 uppercase tracking-wider mb-3">
@@ -1750,6 +1766,7 @@ function InstancesContent() {
                       syncStatus={syncStatus}
                       tailnetInfo={tailnetInfo}
                       parityReport={parityReports[peer.instanceId] ?? parityReports[peer.id] ?? null}
+                      focused={focusedPeerId === peer.id}
                     />
                   ))}
                 </div>
