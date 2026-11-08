@@ -11,19 +11,19 @@ const FIGURE_HEIGHT = 1.7;
 const rad = (deg) => (deg * Math.PI) / 180;
 const noop = () => {};
 
-// A person at their mark in their pawn color; the nose shows which way they face. Riding, a long low bike proxy sits under a seated figure.
+// A person at their mark in their pawn color; the nose shows which way they face. Riding a vehicle, a low block in the vehicle's pawn color sits under a seated figure.
 function ActorProxy({ actor, labelPortal }) {
   const riding = actor.pose === 'ride';
   const body = riding ? 1.1 : FIGURE_HEIGHT;
   const lift = riding ? 0.55 : 0;
   return (
     <group position={actor.position} rotation={[0, rad(actor.facingDegrees), 0]}>
-      {riding && <>
-        <mesh position={[0, 0.5, 0]}><boxGeometry args={[0.08, 0.08, 1.2]} /><meshStandardMaterial color={actor.bikeColor} roughness={0.9} /></mesh>
-        {[-0.55, 0.55].map((z) => (
-          <mesh key={z} position={[0, 0.34, z]} rotation={[0, 0, Math.PI / 2]}><cylinderGeometry args={[0.34, 0.34, 0.05, 20]} /><meshStandardMaterial color={actor.bikeColor} roughness={0.9} /></mesh>
-        ))}
-      </>}
+      {riding && (
+        <mesh position={[0, 0.3, 0]}>
+          <boxGeometry args={[0.7, 0.5, 1.8]} />
+          <meshStandardMaterial color={actor.vehicleColor || actor.color} roughness={0.9} />
+        </mesh>
+      )}
       <mesh position={[0, lift + body / 2, riding ? -0.1 : 0]}>
         <capsuleGeometry args={[0.22, Math.max(body - 0.44, 0.01), 6, 16]} />
         <meshStandardMaterial color={actor.color} roughness={0.9} />
@@ -56,13 +56,13 @@ function CameraRig({ camera: shot }) {
 
 /**
  * One previz frame (lib/musicVideoPreviz.js `previzFrameAt`) drawn over its
- * set's greybox, or over the whole world when the cut plays on the night: the layout, every visible person as a proxy, seen through the
+ * set's greybox, or over the whole world when the cut plays on the timeline: the layout, every visible person as a proxy, seen through the
  * cut's camera at its lens and aspect. `labelPortal` is the DOM overlay for names.
  */
 export default function PrevizCanvas({ frame, modelSrc = null, labelPortal }) {
   const { greybox, camera } = frame;
   if (frame.world) {
-    // A shot on the night: the whole world, lit by the story clock, from the cut's camera.
+    // A shot on the timeline: the whole world, lit by the story clock, from the cut's camera.
     return (
       <ErrorBoundary fallback={<p role="alert" className="p-4 text-sm text-port-text">The world could not be drawn.</p>}>
         <Canvas camera={{ position: camera.position, fov: fovFromFocalLength(camera.focalLengthMm), near: 0.1, far: 20000 }}

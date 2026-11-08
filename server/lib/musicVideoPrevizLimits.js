@@ -3,7 +3,7 @@ export const PREVIZ_CUTS_MAX = 600;
 export const PREVIZ_TRACKS_MAX = 240;
 export const PREVIZ_KEYS_MAX = 2000;
 export const PREVIZ_VISIBLE_MAX = 24;
-// How a figure is posed on a key: standing, or riding a bike (drawn as a long, low bike proxy under a seated figure).
+// How a figure is posed on a key: standing, or riding a vehicle (a catalog object listed in `previz.vehicles`, drawn as a low proxy under a seated figure).
 export const PREVIZ_POSES = Object.freeze(['stand', 'ride']);
 // Pawn colors with plain names, so a person (and later a model told "the lavender figure is Ana") can tell who is who.
 // New cast members take them in order; the director can repick any.
@@ -27,10 +27,15 @@ export const PREVIZ_PAWN_COLOR_IDS = Object.freeze(PREVIZ_PAWN_COLORS.map((color
 // How a story camera moves in the previz while it is a cut's camera: steady (as blocked), handheld
 // (wobble and shake, more when its holder rides), still (a snapshot: the cut's first frame held), documentary (slow drift).
 export const PREVIZ_CAMERA_STYLES = Object.freeze(['steady', 'handheld', 'still', 'documentary']);
-// The previz night (lib/musicVideoPrevizNight.js): story beats over a whole night in a world map.
-export const NIGHT_BEATS_MAX = 200;
-export const NIGHT_LENGTH_MAX_MIN = 2880;
-export const NIGHT_BEAT_KINDS = Object.freeze(['stay', 'travel']);
-export const NIGHT_PACES = Object.freeze(['walk', 'run', 'ride']);
-// Meters per story minute: an easy walk, a jog, an unhurried bike ride.
-export const NIGHT_PACE_METERS_PER_MIN = Object.freeze({ walk: 80, run: 180, ride: 270 });
+// The previz timeline (lib/musicVideoPrevizTimeline.js): story beats over a stretch of story time in a world map.
+export const TIMELINE_BEATS_MAX = 200;
+export const TIMELINE_LENGTH_MAX_MIN = 2880;
+export const TIMELINE_BEAT_KINDS = Object.freeze(['stay', 'travel']);
+// On foot; a beat that names a vehicle travels at that vehicle's speed instead.
+export const TIMELINE_PACES = Object.freeze(['walk', 'run']);
+// Meters per story minute: an easy walk, a jog.
+export const TIMELINE_PACE_METERS_PER_MIN = Object.freeze({ walk: 80, run: 180 });
+// Catalog objects the previz treats as vehicles (`previz.vehicles`), each with its own travel speed.
+export const PREVIZ_VEHICLES_MAX = 24;
+export const VEHICLE_DEFAULT_METERS_PER_MIN = 270;
+export const VEHICLE_SPEED_MAX_METERS_PER_MIN = 3000;

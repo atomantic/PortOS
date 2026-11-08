@@ -14,14 +14,15 @@
  *   when they do. `visibleSubjectIds` null means everyone on the set except the
  *   holder. `aimSubjectId` is who the camera keeps in frame; with `turnToAim`
  *   the camera starts on its own aim and swings to them during the cut. On a previz with a
- *   world and a night (lib/musicVideoPrevizNight.js), `storyMin` is the story
- *   minute the cut starts on that night: the cut then plays the simulated night
+ *   world and a timeline (lib/musicVideoPrevizTimeline.js), `storyMin` is the story
+ *   minute the cut starts on that timeline: the cut then plays the simulated timeline
  *   from there at real speed (one song second = one story second), and an unheld
  *   camera stands at `cameraSpot` (`[x, z]` world meters) with a long lens.
  * - a track is where one character is in one place over time:
- *   `{ subjectId, placeSubjectId, keys: [{ timeSec, position, facingDegrees, pose }] }`,
+ *   `{ subjectId, placeSubjectId, keys: [{ timeSec, position, facingDegrees, pose, vehicleSubjectId }] }`,
  *   absolute song seconds, linearly interpolated, held before the first and after
- *   the last key. `pose: 'ride'` draws the figure on a bike proxy.
+ *   the last key. `pose: 'ride'` draws the figure on a proxy of the vehicle `vehicleSubjectId`
+ *   names (a catalog object listed in `previz.vehicles`).
  *
  * Units are the greybox's: meters, Y up, floor y=0; facing 0 looks along +Z.
  * Browser-safe and pure.
@@ -30,7 +31,7 @@ import { isPreMusicShot } from './musicVideoColdOpen.js';
 import { musicVideoShotPlaceId, projectRouteMaps } from './musicVideoRouteMaps.js';
 import { SHOT_CAMERA_SET_DOWN } from './musicVideoShotSheet.js';
 import { activeMusicVideoSubjects, musicVideoPrevizForActiveCast } from './musicVideoCastSelection.js';
-import { nightActorsAt, nightClockAt, previzNight } from './musicVideoPrevizNight.js';
+import { timelineActorsAt, timelineClockAt, previzTimeline, previzVehicleInText, previzVehicles } from './musicVideoPrevizTimeline.js';
 import { PREVIZ_CUTS_MAX, PREVIZ_KEYS_MAX, PREVIZ_PAWN_COLORS, PREVIZ_TRACKS_MAX } from './musicVideoPrevizLimits.js';
 
 const EYE_HEIGHT = { stand: 1.6, ride: 1.75 };
@@ -39,7 +40,6 @@ const FIGURE_SPACING = 0.9;
 // The end key of a cut sits this far before the cut's end, so a figure holds its mark for
 // the whole cut instead of sliding toward where it stands in the next one.
 const HOLD_EPSILON = 0.001;
-const RIDE_WORDS = /\b(bikes?|bicycles?|cycl(?:e|es|ing)|rid(?:e|es|ing)|pedal\w*)\b/i;
 
 const textOf = (value) => (typeof value === 'string' ? value.trim() : '');
 const round = (n) => Math.round(n * 1000) / 1000;
@@ -65,9 +65,9 @@ function characterByName(project, name) {
 }
 
 /**
- * Each character's pawn colors, `{ [subjectId]: { figure, bike } }` (palette
- * entries): the director's picks, else the next color no one has, in cast order.
- * A bike defaults to its rider's color.
+ * Each character's and each vehicle's pawn color, `{ [subjectId]: { figure } }` (palette
+ * entries): the director's picks, else the next color no one has, characters first in cast
+ * order, then vehicles in the order listed.
  */
 export function previzPawnColors(project) {
   const picked = musicVideoPrevizForActiveCast(project)?.pawnColors || {};
@@ -75,11 +75,16 @@ export function previzPawnColors(project) {
   const taken = new Set(Object.values(picked).map((entry) => entry?.figure).filter(Boolean));
   const free = PREVIZ_PAWN_COLORS.filter((color) => !taken.has(color.id));
   let next = 0;
-  return Object.fromEntries(characters(project).map((subject, at) => {
-    const own = picked[subject.id] || {};
-    const figure = byId.get(own.figure) || free[next++] || PREVIZ_PAWN_COLORS[at % PREVIZ_PAWN_COLORS.length];
-    return [subject.id, { figure, bike: byId.get(own.bike) || figure }];
-  }));
+  const pawns = [...characters(project).map((subject) => subject.id), ...previzVehicles(project).map((vehicle) => vehicle.subjectId)];
+  return Object.fromEntries(pawns.map((id, at) => [id, {
+    figure: byId.get(picked[id]?.figure) || free[next++] || PREVIZ_PAWN_COLORS[at % PREVIZ_PAWN_COLORS.length],
+  }]));
+}
+
+/** The pawn fields an actor carries for the vehicle it rides: its object id, name and color (null when on foot). */
+function vehicleOf(project, colors, vehicleSubjectId) {
+  const vehicle = vehicleSubjectId ? previzVehicles(project).find((entry) => entry.subjectId === vehicleSubjectId) : null;
+  return vehicle ? { vehicleSubjectId: vehicle.subjectId, vehicleName: vehicle.name, vehicleColor: colors[vehicle.subjectId]?.figure.hex || null } : { vehicleSubjectId: null, vehicleName: null, vehicleColor: null };
 }
 
 /** The place's greybox and its saved cameras, from the loaded catalog places (`{ [ingredientId]: { ingredient, media } }`). */
@@ -174,10 +179,10 @@ function cutFromShot(project, scene) {
   };
 }
 
-/** Whether the shot shows its people on bikes: its sheet's action, else the route its place is on. */
-function shotRides(project, scene, placeSubjectId) {
-  if (RIDE_WORDS.test(textOf(scene.shotSheet?.action))) return true;
-  return projectRouteMaps(project).some((map) => (map.stops || []).some((stop) => stop.subjectId === placeSubjectId) && RIDE_WORDS.test(textOf(map.travel)));
+/** The vehicle the shot shows its people riding: one its sheet's action names, else one named by the travel of the route its place is on. Null on foot. */
+function shotVehicle(project, scene, placeSubjectId) {
+  return previzVehicleInText(project, scene.shotSheet?.action)
+    || previzVehicleInText(project, ...projectRouteMaps(project).filter((map) => (map.stops || []).some((stop) => stop.subjectId === placeSubjectId)).map((map) => map.travel));
 }
 
 /** Everyone a cut stands on its set: the people it picks to show, then the camera's holder. */
@@ -239,14 +244,15 @@ function seedCutTracks(project, existingTracks, cuts, loadedPlaces) {
       .filter((id) => characters(project).some((subject) => subject.id === id) && !tracks.has(trackKey(id, cut.placeSubjectId)));
     if (!people.length) continue;
     const scene = (project?.scenes || []).find((entry) => entry.sceneId === cut.sceneId) || {};
-    const pose = shotRides(project, scene, cut.placeSubjectId) ? 'ride' : 'stand';
+    const vehicleSubjectId = shotVehicle(project, scene, cut.placeSubjectId);
+    const pose = vehicleSubjectId ? 'ride' : 'stand';
     const marks = seedMarks(cut, previzPlaceGreybox(project, cut.placeSubjectId, loadedPlaces), people);
     for (const id of people) {
       const key = trackKey(id, cut.placeSubjectId);
       const track = seeded.get(key) || { subjectId: id, placeSubjectId: cut.placeSubjectId, keys: [] };
       const mark = marks.get(id);
-      track.keys.push({ timeSec: timing.startSec, position: mark.position, facingDegrees: mark.facingDegrees, pose });
-      if (timing.endSec - HOLD_EPSILON > timing.startSec) track.keys.push({ timeSec: round(timing.endSec - HOLD_EPSILON), position: mark.position, facingDegrees: mark.facingDegrees, pose });
+      track.keys.push({ timeSec: timing.startSec, position: mark.position, facingDegrees: mark.facingDegrees, pose, ...(vehicleSubjectId ? { vehicleSubjectId } : {}) });
+      if (timing.endSec - HOLD_EPSILON > timing.startSec) track.keys.push({ timeSec: round(timing.endSec - HOLD_EPSILON), position: mark.position, facingDegrees: mark.facingDegrees, pose, ...(vehicleSubjectId ? { vehicleSubjectId } : {}) });
       seeded.set(key, track);
     }
   }
@@ -318,7 +324,7 @@ function samplePrevizTrack(track, t) {
   const mix = (x, y) => x + (y - x) * f;
   let turn = ((b.facingDegrees - a.facingDegrees) % 360 + 540) % 360 - 180;
   if (!Number.isFinite(turn)) turn = 0;
-  return { timeSec: t, position: a.position.map((v, i) => mix(v, b.position[i])), facingDegrees: a.facingDegrees + turn * f, pose: a.pose };
+  return { timeSec: t, position: a.position.map((v, i) => mix(v, b.position[i])), facingDegrees: a.facingDegrees + turn * f, pose: a.pose, vehicleSubjectId: a.vehicleSubjectId };
 }
 
 /** Whom a cut shows: its picks, else everyone on its set but the holder. */
@@ -367,20 +373,20 @@ function aimedTarget(cut, timing, t, own, aim) {
   return own.map((v, i) => v + (aim[i] - v) * eased);
 }
 
-const NIGHT_HELD_LENS = 35;
-const NIGHT_OBSERVER_LENS = 85;
+const TIMELINE_HELD_LENS = 35;
+const TIMELINE_OBSERVER_LENS = 85;
 // An observer with no spot picked stands this far off the people, to their right.
 const OBSERVER_DISTANCE = 30;
 
-/** The cut's frame on the night: everyone where the simulation has them, seen from the holder or the camera spot. */
-function nightFrame(project, cut, timing, songTime, t, style, storyCamera, nightWorld) {
-  const night = previzNight(project);
+/** The cut's frame on the timeline: everyone where the simulation has them, seen from the holder or the camera spot. */
+function timelineFrame(project, cut, timing, songTime, t, style, storyCamera, timelineWorld) {
+  const timeline = previzTimeline(project);
   const storyMin = cut.storyMin + (t - timing.startSec) / 60;
   const visibleIds = Array.isArray(cut.visibleSubjectIds) ? new Set(cut.visibleSubjectIds) : null;
   const colors = previzPawnColors(project);
-  const actors = nightActorsAt(project, nightWorld.world, nightWorld.places, storyMin).map((actor) => ({
+  const actors = timelineActorsAt(project, timelineWorld.world, timelineWorld.places, storyMin).map((actor) => ({
     subjectId: actor.subjectId, name: actor.name, position: actor.position, facingDegrees: actor.facingDegrees, pose: actor.pose,
-    color: colors[actor.subjectId].figure.hex, bikeColor: colors[actor.subjectId].bike.hex,
+    color: colors[actor.subjectId].figure.hex, ...vehicleOf(project, colors, actor.vehicleSubjectId),
     holder: actor.subjectId === cut.holderSubjectId,
     visible: actor.subjectId !== cut.holderSubjectId && (!visibleIds || visibleIds.has(actor.subjectId)),
   }));
@@ -408,15 +414,15 @@ function nightFrame(project, cut, timing, songTime, t, style, storyCamera, night
   camera = styledCamera(camera, style, songTime, holder?.pose === 'ride');
   if (camera.position.every((v, i) => Math.abs(v - camera.target[i]) < 1e-6)) camera.target = [camera.target[0], camera.target[1], camera.target[2] + 1];
   return {
-    cut, timing, greybox: null, world: nightWorld.world, worldPlaces: nightWorld.places, storyMin, clockMinutes: nightClockAt(night, storyMin),
+    cut, timing, greybox: null, world: timelineWorld.world, worldPlaces: timelineWorld.places, storyMin, clockMinutes: timelineClockAt(timeline, storyMin),
     actors, style, storyCamera,
-    camera: { ...camera, focalLengthMm: holder ? NIGHT_HELD_LENS : NIGHT_OBSERVER_LENS, aspect: '16:9' },
+    camera: { ...camera, focalLengthMm: holder ? TIMELINE_HELD_LENS : TIMELINE_OBSERVER_LENS, aspect: '16:9' },
   };
 }
 
-/** Whether a cut plays on the night rather than on its set's own blocking. */
-function previzCutOnNight(project, cut, world) {
-  return !!(world && previzNight(project) && Number.isFinite(cut?.storyMin));
+/** Whether a cut plays on the timeline rather than on its set's own blocking. */
+function previzCutOnTimeline(project, cut, world) {
+  return !!(world && previzTimeline(project) && Number.isFinite(cut?.storyMin));
 }
 
 /**
@@ -428,11 +434,11 @@ function previzCutOnNight(project, cut, world) {
  * turns only to keep the aim target in frame. The cut's story camera (its shot
  * sheet camera) sets the style: handheld shake, a still that holds the cut's
  * first frame, or a slow documentary drift. null between cuts. With
- * `nightWorld` (`{ world, places }`, the previz world and its loaded sets) a cut
- * with a story time plays the simulated night instead (frame `world` set,
+ * `timelineWorld` (`{ world, places }`, the previz world and its loaded sets) a cut
+ * with a story time plays the simulated timeline instead (frame `world` set,
  * `greybox` null).
  */
-export function previzFrameAt(project, loadedPlaces, songTime, nightWorld = null) {
+export function previzFrameAt(project, loadedPlaces, songTime, timelineWorld = null) {
   const entry = previzCutAt(project, songTime);
   if (!entry) return null;
   const { cut, timing } = entry;
@@ -440,7 +446,7 @@ export function previzFrameAt(project, loadedPlaces, songTime, nightWorld = null
   const style = storyCamera?.previzStyle || 'steady';
   // A still camera shows its cut's first frame for the whole cut.
   const t = style === 'still' ? timing.startSec : songTime;
-  if (previzCutOnNight(project, cut, nightWorld?.world)) return nightFrame(project, cut, timing, songTime, t, style, storyCamera, nightWorld);
+  if (previzCutOnTimeline(project, cut, timelineWorld?.world)) return timelineFrame(project, cut, timing, songTime, t, style, storyCamera, timelineWorld);
   const greybox = cut.placeSubjectId ? previzPlaceGreybox(project, cut.placeSubjectId, loadedPlaces) : null;
   const view = (greybox?.shots || []).find((shot) => shot.id === cut.viewShotId) || null;
   const visible = new Set(previzCutVisibleIds(project, cut));
@@ -452,7 +458,7 @@ export function previzFrameAt(project, loadedPlaces, songTime, nightWorld = null
       const pose = samplePrevizTrack(track, t);
       return pose && {
         subjectId: track.subjectId, name: names.get(track.subjectId), position: pose.position, facingDegrees: pose.facingDegrees,
-        pose: pose.pose || 'stand', color: colors[track.subjectId].figure.hex, bikeColor: colors[track.subjectId].bike.hex, visible: visible.has(track.subjectId) && track.subjectId !== cut.holderSubjectId, holder: track.subjectId === cut.holderSubjectId,
+        pose: pose.pose || 'stand', color: colors[track.subjectId].figure.hex, ...vehicleOf(project, colors, pose.vehicleSubjectId), visible: visible.has(track.subjectId) && track.subjectId !== cut.holderSubjectId, holder: track.subjectId === cut.holderSubjectId,
       };
     })
     .filter(Boolean);
@@ -502,16 +508,16 @@ export function previzCutProblems(project, cut, loadedPlaces = {}) {
 }
 
 /**
- * Gives cuts a story time on the night: shots in song order walk through the
- * night's stays in order, and each run of shots at one set shares the next stay
+ * Gives cuts a story time on the timeline: shots in song order walk through the
+ * timeline's stays in order, and each run of shots at one set shares the next stay
  * there, spread evenly across it. `onlyUnplaced` keeps cuts that already have a
  * time. Returns `{ previz, placed }`.
  */
-export function placePrevizCutsOnNight(project, world, { onlyUnplaced = false } = {}) {
+export function placePrevizCutsOnTimeline(project, world, { onlyUnplaced = false } = {}) {
   const previz = projectPreviz(project);
-  const night = previzNight(project);
-  if (!previz || !night || !world) return { previz: previz || project?.previz || null, placed: 0 };
-  const stays = night.beats.filter((beat) => beat.kind === 'stay').sort((a, b) => a.startMin - b.startMin);
+  const timeline = previzTimeline(project);
+  if (!previz || !timeline || !world) return { previz: previz || project?.previz || null, placed: 0 };
+  const stays = timeline.beats.filter((beat) => beat.kind === 'stay').sort((a, b) => a.startMin - b.startMin);
   const setOfCut = (cut) => {
     const subject = places(project).find((entry) => entry.id === cut.placeSubjectId);
     return subject?.ingredientId ? (world.sets || []).find((set) => set.ingredientId === subject.ingredientId)?.id || null : null;

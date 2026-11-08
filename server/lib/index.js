@@ -962,7 +962,7 @@ export * from './musicVideoStatsOutro.js';
 export * from './musicVideoCameos.js';
 export * from './musicVideoPreviz.js';
 export * from './musicVideoPrevizLimits.js';
-export * from './musicVideoPrevizNight.js';
+export * from './musicVideoPrevizTimeline.js';
 export * from './worldMap.js';
 export * from './worldMapValidation.js';
 export * from './musicVideoRouteMapLimits.js';

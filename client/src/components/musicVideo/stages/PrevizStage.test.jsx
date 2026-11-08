@@ -60,40 +60,40 @@ it('drafts a world environment from the route maps and links it to the previz', 
   expect(board.saveProjectFields.mock.calls[0][0].previz).toMatchObject({ worldId: 'cat-world', cuts: [] });
 });
 
-// Catches the night draft or a beat edit never reaching the saved previz.
-it('drafts the night over the linked world from the shots, then saves a beat edit', async () => {
+// Catches the timeline draft or a beat edit never reaching the saved previz.
+it('drafts the timeline over the linked world from the shots, then saves a beat edit', async () => {
   const linked = { ...project, previz: { cuts: [], tracks: [], worldId: 'cat-world' } };
   const board = { project: linked, locked: false, editProjectLocal: vi.fn(), saveProjectFields: vi.fn(), seekToScene: vi.fn() };
   const { rerender } = render(<MemoryRouter><PrevizStage board={board} /></MemoryRouter>);
-  fireEvent.click(await screen.findByRole('button', { name: /Draft night from 1 shot/ }));
+  fireEvent.click(await screen.findByRole('button', { name: /Draft timeline from 1 shot/ }));
   const { previz } = board.saveProjectFields.mock.calls.at(-1)[0];
-  expect(previz).toMatchObject({ worldId: 'cat-world', night: { startClock: 1200, lengthMin: 480 } });
-  expect(previz.night.beats).toEqual([expect.objectContaining({ kind: 'stay', setId: 'w-street', subjectIds: ['c-ana', 'c-bo'], startMin: 0, endMin: 480 })]);
+  expect(previz).toMatchObject({ worldId: 'cat-world', timeline: { startClock: 1200, lengthMin: 480 } });
+  expect(previz.timeline.beats).toEqual([expect.objectContaining({ kind: 'stay', setId: 'w-street', subjectIds: ['c-ana', 'c-bo'], startMin: 0, endMin: 480 })]);
 
   rerender(<MemoryRouter><PrevizStage board={{ ...board, project: { ...linked, previz } }} /></MemoryRouter>);
   fireEvent.click((await screen.findAllByRole('button', { name: /Example Street, 20:00/ }))[0]);
   fireEvent.change(screen.getByLabelText('Minutes'), { target: { value: '90' } });
-  expect(board.saveProjectFields.mock.calls.at(-1)[0].previz.night.beats[0]).toMatchObject({ startMin: 0, endMin: 90 });
+  expect(board.saveProjectFields.mock.calls.at(-1)[0].previz.timeline.beats[0]).toMatchObject({ startMin: 0, endMin: 90 });
 });
 
-// Catches shots never getting a moment on the night, or the cut's story time edit not saving.
-it('places shots on the night and saves a cut\'s story time', async () => {
-  const night = { startClock: 1200, lengthMin: 480, beats: [{ id: 'b1', kind: 'stay', subjectIds: ['c-ana', 'c-bo'], startMin: 0, endMin: 480, setId: 'w-street', toSetId: null, pace: null }] };
+// Catches shots never getting a moment on the timeline, or the cut's story time edit not saving.
+it('places shots on the timeline and saves a cut\'s story time', async () => {
+  const timeline = { startClock: 1200, lengthMin: 480, beats: [{ id: 'b1', kind: 'stay', subjectIds: ['c-ana', 'c-bo'], startMin: 0, endMin: 480, setId: 'w-street', toSetId: null, pace: null }] };
   const cut = { id: 'k1', sceneId: 's1', startSec: 0, endSec: 4, placeSubjectId: 'p-street', viewShotId: 'wide', holderSubjectId: null, visibleSubjectIds: null, aimSubjectId: null };
-  const linked = { ...project, previz: { cuts: [cut], tracks: [], worldId: 'cat-world', night } };
+  const linked = { ...project, previz: { cuts: [cut], tracks: [], worldId: 'cat-world', timeline } };
   const board = { project: linked, locked: false, editProjectLocal: vi.fn(), saveProjectFields: vi.fn(), seekToScene: vi.fn() };
   const { rerender } = render(<MemoryRouter><PrevizStage board={board} /></MemoryRouter>);
-  fireEvent.click(await screen.findByRole('button', { name: /Place 1 shot on the night/ }));
+  fireEvent.click(await screen.findByRole('button', { name: /Place 1 shot on the timeline/ }));
   const { previz } = board.saveProjectFields.mock.calls.at(-1)[0];
   expect(previz.cuts[0].storyMin).toBe(0);
 
   rerender(<MemoryRouter><PrevizStage board={{ ...board, project: { ...linked, previz } }} /></MemoryRouter>);
-  fireEvent.change(screen.getByLabelText('On the night at'), { target: { value: '20:30' } });
+  fireEvent.change(screen.getByLabelText('On the timeline at'), { target: { value: '20:30' } });
   expect(board.saveProjectFields.mock.calls.at(-1)[0].previz.cuts[0]).toMatchObject({ storyMin: 30 });
-  expect(board.saveProjectFields.mock.calls.at(-1)[0].previz.night).toEqual(night);
-  // 19:00 is before a night that starts at 20:00, so it is not a moment of it.
+  expect(board.saveProjectFields.mock.calls.at(-1)[0].previz.timeline).toEqual(timeline);
+  // 19:00 is before a timeline that starts at 20:00, so it is not a moment of it.
   const saves = board.saveProjectFields.mock.calls.length;
-  fireEvent.change(screen.getByLabelText('On the night at'), { target: { value: '19:00' } });
+  fireEvent.change(screen.getByLabelText('On the timeline at'), { target: { value: '19:00' } });
   expect(board.saveProjectFields.mock.calls).toHaveLength(saves);
 });
 
@@ -133,4 +133,21 @@ it('lists the sets cuts use that have no greybox, with their cut counts and a li
   expect(within(list).getByText('2 cuts')).toBeTruthy();
   // The street has a greybox, so it is not listed.
   expect(within(list).queryByText('Example Street')).toBeNull();
+});
+
+// Catches vehicles being unreachable from the UI: marking a cast object as a vehicle, giving it a color and a speed.
+it('marks a cast object as a vehicle, then saves its color and speed', () => {
+  const withCart = { ...project, concept: { subjects: [...project.concept.subjects, { id: 'o-cart', kind: 'object', name: 'Hand cart' }] },
+    previz: { cuts: [{ id: 'k1', sceneId: 's1', startSec: 0, endSec: 4, placeSubjectId: 'p-street' }], tracks: [] } };
+  const board = { project: withCart, locked: false, editProjectLocal: vi.fn(), saveProjectFields: vi.fn(), seekToScene: vi.fn() };
+  const { rerender } = render(<MemoryRouter><PrevizStage board={board} /></MemoryRouter>);
+  fireEvent.click(screen.getByLabelText('Hand cart is a vehicle'));
+  const { previz } = board.saveProjectFields.mock.calls.at(-1)[0];
+  expect(previz.vehicles).toEqual([{ subjectId: 'o-cart', speedMetersPerMin: 270 }]);
+
+  rerender(<MemoryRouter><PrevizStage board={{ ...board, project: { ...withCart, previz } }} /></MemoryRouter>);
+  fireEvent.change(screen.getByLabelText('Speed (m/min)'), { target: { value: '120' } });
+  expect(board.saveProjectFields.mock.calls.at(-1)[0].previz.vehicles).toEqual([{ subjectId: 'o-cart', speedMetersPerMin: 120 }]);
+  fireEvent.change(screen.getByLabelText('Color'), { target: { value: 'teal' } });
+  expect(board.saveProjectFields.mock.calls.at(-1)[0].previz.pawnColors['o-cart']).toEqual({ figure: 'teal' });
 });

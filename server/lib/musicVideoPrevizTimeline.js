@@ -1,15 +1,19 @@
 /**
- * The previz night: one story clock for a music video set in a world map
+ * The previz timeline: one story clock for a music video set in a world map
  * (lib/worldMap.js), so the people's whole journey is simulated over story
- * time and shots later sample moments of it.
+ * time and shots later sample moments of it. It can span any stretch of time:
+ * an evening, a day, several days.
  *
- * `project.previz.night` is `{ startClock, lengthMin, beats: [...] }`:
+ * `project.previz.timeline` is `{ startClock, lengthMin, beats: [...] }`:
  * `startClock` is minutes after midnight when story minute 0 happens (19:40 =
- * 1180), `lengthMin` how long the night runs. A beat is one thing some of the
- * cast do: `{ id, kind, subjectIds, startMin, endMin, setId, toSetId, pace }`
+ * 1180), `lengthMin` how long the timeline runs (it wraps past midnight, so a
+ * long timeline shows the clock time, not the day). A beat is one thing some of the
+ * cast do: `{ id, kind, subjectIds, startMin, endMin, setId, toSetId, pace, vehicleSubjectId }`
  * in story minutes. `stay` keeps them at world set `setId`, drifting between
  * that set's figure marks; `travel` moves them along the world's paths from
- * `setId` to `toSetId` at constant speed (`pace`: walk, run or ride). Between
+ * `setId` to `toSetId` at constant speed: on foot at `pace` (walk or run), or,
+ * when `vehicleSubjectId` names a catalog object listed in `previz.vehicles`,
+ * riding it at that vehicle's `speedMetersPerMin`. Between
  * beats a person holds where the last one left them. Nothing here is stored
  * per moment: every pose is computed from the beats.
  *
@@ -17,32 +21,52 @@
  * +Z, as in the greyboxes. Browser-safe and pure.
  */
 import { activeMusicVideoSubjects, musicVideoPrevizForActiveCast } from './musicVideoCastSelection.js';
-import { NIGHT_BEATS_MAX, NIGHT_PACE_METERS_PER_MIN } from './musicVideoPrevizLimits.js';
+import { TIMELINE_BEATS_MAX, TIMELINE_PACE_METERS_PER_MIN, VEHICLE_DEFAULT_METERS_PER_MIN } from './musicVideoPrevizLimits.js';
+import { escapeRegExp } from './textUtils.js';
 
 const round = (n) => Math.round(n * 1000) / 1000 + 0;
 const rad = (deg) => (deg * Math.PI) / 180;
 const deg = (r) => (r * 180) / Math.PI;
 const textOf = (value) => (typeof value === 'string' ? value.trim() : '');
-const RIDE_WORDS = /\b(bikes?|bicycles?|cycl(?:e|es|ing)|rid(?:e|es|ing)|pedal\w*)\b/i;
 const SIDE_BY_SIDE = 1.2;
 const STAY_RADIUS = 2;
 const WANDER = 1.2;
 const MIN_TRAVEL_MIN = 2;
 
-/** The project's night as the active cast sees it (lib/musicVideoCastSelection.js), or null when it has none. */
-export function previzNight(project) {
-  const night = musicVideoPrevizForActiveCast(project)?.night;
-  return night && Array.isArray(night.beats) && Number.isFinite(night.lengthMin) ? night : null;
+/** The project's timeline as the active cast sees it (lib/musicVideoCastSelection.js), or null when it has none. */
+export function previzTimeline(project) {
+  const timeline = musicVideoPrevizForActiveCast(project)?.timeline;
+  return timeline && Array.isArray(timeline.beats) && Number.isFinite(timeline.lengthMin) ? timeline : null;
+}
+
+/**
+ * The vehicles of the project's previz, `[{ subjectId, speedMetersPerMin, name }]`: catalog
+ * objects of the cast the director marked as something the people ride
+ * (`previz.vehicles`), in the order listed. An entry whose object left the cast is dropped.
+ */
+export function previzVehicles(project) {
+  const listed = musicVideoPrevizForActiveCast(project)?.vehicles || [];
+  const objects = new Map((project?.concept?.subjects || []).filter((subject) => subject?.kind === 'object').map((subject) => [subject.id, subject]));
+  return listed.filter((entry) => objects.has(entry.subjectId)).map((entry) => ({
+    subjectId: entry.subjectId, name: textOf(objects.get(entry.subjectId).name), speedMetersPerMin: entry.speedMetersPerMin || VEHICLE_DEFAULT_METERS_PER_MIN,
+  }));
+}
+
+/** The first vehicle whose name a text mentions (a shot's action, a route map's travel), or null. */
+export function previzVehicleInText(project, ...texts) {
+  const text = texts.map(textOf).filter(Boolean).join('\n');
+  if (!text) return null;
+  return previzVehicles(project).find((vehicle) => vehicle.name && new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(vehicle.name)}(?![\\p{L}\\p{N}])`, 'iu').test(text))?.subjectId || null;
 }
 
 /** The story clock (minutes after midnight, 0–1439) at story minute `storyMin`. */
-export function nightClockAt(night, storyMin) {
-  return (((night?.startClock || 0) + storyMin) % 1440 + 1440) % 1440;
+export function timelineClockAt(timeline, storyMin) {
+  return (((timeline?.startClock || 0) + storyMin) % 1440 + 1440) % 1440;
 }
 
 /** The story minute a clock time (minutes after midnight) falls on, counting past midnight. */
-export function nightMinuteOfClock(night, clockMinutes) {
-  return ((clockMinutes - (night?.startClock || 0)) % 1440 + 1440) % 1440;
+export function timelineMinuteOfClock(timeline, clockMinutes) {
+  return ((clockMinutes - (timeline?.startClock || 0)) % 1440 + 1440) % 1440;
 }
 
 // The active cast: one entry per character, the director's chosen alternate (lib/musicVideoCastSelection.js).
@@ -161,7 +185,7 @@ function stayPose(beat, set, greybox, subjectId, storyMin) {
   const at = [mark.at[0] + drift(storyMin / 3, seed) * WANDER, mark.at[1] + drift(storyMin / 3, seed + 13) * WANDER];
   const center = marks.reduce((sum, m) => [sum[0] + m.at[0] / marks.length, sum[1] + m.at[1] / marks.length], [0, 0]);
   const facing = mark.facing ?? (people.length > 1 ? deg(Math.atan2(center[0] - at[0], center[1] - at[1])) : (set.rotationDegrees || 0));
-  return { position: [round(at[0]), 0, round(at[1])], facingDegrees: round(facing), pose: 'stand', setId: set.id };
+  return { position: [round(at[0]), 0, round(at[1])], facingDegrees: round(facing), pose: 'stand', vehicleSubjectId: null, setId: set.id };
 }
 
 function travelPose(world, beat, subjectId, storyMin, routes) {
@@ -176,21 +200,21 @@ function travelPose(world, beat, subjectId, storyMin, routes) {
   const across = [Math.cos(rad(heading)), -Math.sin(rad(heading))];
   return {
     position: [round(at[0] + across[0] * slot * SIDE_BY_SIDE), 0, round(at[1] + across[1] * slot * SIDE_BY_SIDE)],
-    facingDegrees: round(heading), pose: beat.pace === 'ride' ? 'ride' : 'stand', setId: null,
+    facingDegrees: round(heading), pose: beat.vehicleSubjectId ? 'ride' : 'stand', vehicleSubjectId: beat.vehicleSubjectId || null, setId: null,
   };
 }
 
 /**
  * Where one person is at story minute `storyMin`: `{ position, facingDegrees,
- * pose, setId, beatId }`, or null when no beat names them. Before their first
+ * pose, vehicleSubjectId, setId, beatId }`, or null when no beat names them. Before their first
  * beat they wait at its start; after a beat ends they hold where it left them
  * (at a travel's destination, standing). `places` is the loaded catalog places
  * by id, for each set's figure marks.
  */
-function nightPoseAt(project, world, places, subjectId, storyMin, routes) {
-  const night = previzNight(project);
-  if (!night || !world) return null;
-  const beats = night.beats.filter((beat) => (beat.subjectIds || []).includes(subjectId)).sort((a, b) => a.startMin - b.startMin);
+function timelinePoseAt(project, world, places, subjectId, storyMin, routes) {
+  const timeline = previzTimeline(project);
+  if (!timeline || !world) return null;
+  const beats = timeline.beats.filter((beat) => (beat.subjectIds || []).includes(subjectId)).sort((a, b) => a.startMin - b.startMin);
   if (!beats.length) return null;
   let beat = beats.find((entry) => entry.startMin <= storyMin && storyMin < entry.endMin);
   let t = storyMin;
@@ -218,13 +242,13 @@ const routesFor = (world) => {
   return ROUTES.get(world);
 };
 
-/** Everyone the night names, where they are at `storyMin`, with their names. */
-export function nightActorsAt(project, world, places, storyMin) {
+/** Everyone the timeline names, where they are at `storyMin`, with their names. */
+export function timelineActorsAt(project, world, places, storyMin) {
   if (!world) return [];
   const routes = routesFor(world);
   return characters(project)
     .map((subject) => {
-      const pose = nightPoseAt(project, world, places, subject.id, storyMin, routes);
+      const pose = timelinePoseAt(project, world, places, subject.id, storyMin, routes);
       return pose && { subjectId: subject.id, name: subject.name, ...pose };
     })
     .filter(Boolean);
@@ -237,15 +261,16 @@ function worldSetForPlace(project, world, placeSubjectId) {
 }
 
 /**
- * A first night drawn from the shot list: the world sets the shots visit, in
+ * A first timeline drawn from the shot list: the world sets the shots visit, in
  * song order (a place shot again right after counts once), become stays joined
  * by travels along the paths. A travel takes as long as its route needs at the
- * pace (riding when the shots or route maps talk of bikes), at least two
- * minutes; the rest of the night is shared between the stays by how many shots
+ * pace (on foot, or at the speed of a vehicle the shots or route maps name, see
+ * `previzVehicleInText`), at least two
+ * minutes; the rest of the timeline is shared between the stays by how many shots
  * each has. Everyone in the cast is in every beat. `placeOfShot(scene)` is the
- * place subject id a shot is set in. Returns `{ night, visits }`.
+ * place subject id a shot is set in. Returns `{ timeline, visits }`.
  */
-export function draftNightFromShots(project, world, { placeOfShot, newId, startClock = 1200, lengthMin = 480 } = {}) {
+export function draftTimelineFromShots(project, world, { placeOfShot, newId, startClock = 1200, lengthMin = 480 } = {}) {
   const shots = (project?.scenes || [])
     .filter((scene) => Number.isFinite(scene.startSec) && Number.isFinite(scene.endSec) && scene.endSec > scene.startSec)
     .sort((a, b) => a.startSec - b.startSec);
@@ -256,13 +281,12 @@ export function draftNightFromShots(project, world, { placeOfShot, newId, startC
     if (visits.at(-1)?.setId === set.id) visits.at(-1).shots += 1;
     else visits.push({ setId: set.id, shots: 1 });
   }
-  const rides = shots.some((scene) => RIDE_WORDS.test(textOf(scene.shotSheet?.action)))
-    || (project?.routeMaps || []).some((map) => RIDE_WORDS.test(textOf(map.travel)));
-  const pace = rides ? 'ride' : 'walk';
+  const vehicleSubjectId = previzVehicleInText(project, ...shots.map((scene) => scene.shotSheet?.action), ...(project?.routeMaps || []).map((map) => map.travel));
+  const metersPerMin = previzVehicles(project).find((vehicle) => vehicle.subjectId === vehicleSubjectId)?.speedMetersPerMin || TIMELINE_PACE_METERS_PER_MIN.walk;
   const subjectIds = characters(project).map((subject) => subject.id);
   const travels = visits.slice(1).map((visit, i) => {
     const meters = routeLength(worldRoute(world, visits[i].setId, visit.setId));
-    return Math.max(MIN_TRAVEL_MIN, Math.ceil(meters / NIGHT_PACE_METERS_PER_MIN[pace]));
+    return Math.max(MIN_TRAVEL_MIN, Math.ceil(meters / metersPerMin));
   });
   const travelTotal = travels.reduce((sum, n) => sum + n, 0);
   const stayTotal = Math.max(visits.length, lengthMin - travelTotal);
@@ -270,20 +294,20 @@ export function draftNightFromShots(project, world, { placeOfShot, newId, startC
   const beats = [];
   let clock = 0;
   visits.forEach((visit, i) => {
-    if (beats.length >= NIGHT_BEATS_MAX) return;
+    if (beats.length >= TIMELINE_BEATS_MAX) return;
     const stay = Math.max(1, Math.round((stayTotal * visit.shots) / shotTotal));
     beats.push({ id: newId(), kind: 'stay', subjectIds, startMin: clock, endMin: clock + stay, setId: visit.setId, toSetId: null, pace: null });
     clock += stay;
-    if (i < travels.length && beats.length < NIGHT_BEATS_MAX) {
-      beats.push({ id: newId(), kind: 'travel', subjectIds, startMin: clock, endMin: clock + travels[i], setId: visit.setId, toSetId: visits[i + 1].setId, pace });
+    if (i < travels.length && beats.length < TIMELINE_BEATS_MAX) {
+      beats.push({ id: newId(), kind: 'travel', subjectIds, startMin: clock, endMin: clock + travels[i], setId: visit.setId, toSetId: visits[i + 1].setId, pace: 'walk', vehicleSubjectId });
       clock += travels[i];
     }
   });
-  return { night: { startClock, lengthMin: Math.max(lengthMin, clock), beats }, visits: visits.length };
+  return { timeline: { startClock, lengthMin: Math.max(lengthMin, clock), beats }, visits: visits.length };
 }
 
 /** What is wrong with a beat, as short lines: a set gone from the world, a travel going nowhere, a person in two beats at once. */
-export function nightBeatProblems(project, world, beat) {
+export function timelineBeatProblems(project, world, beat) {
   const problems = [];
   if (!setById(world, beat.setId)) problems.push('Its set is not on the world map');
   if (beat.kind === 'travel') {
@@ -293,7 +317,7 @@ export function nightBeatProblems(project, world, beat) {
   if (!(beat.subjectIds || []).length) problems.push('Nobody is in it');
   const ids = new Set(characters(project).map((subject) => subject.id));
   if ((beat.subjectIds || []).some((id) => !ids.has(id))) problems.push('Names someone no longer in the video');
-  const clash = (previzNight(project)?.beats || []).find((other) => other.id !== beat.id
+  const clash = (previzTimeline(project)?.beats || []).find((other) => other.id !== beat.id
     && other.startMin < beat.endMin && beat.startMin < other.endMin
     && (other.subjectIds || []).some((id) => (beat.subjectIds || []).includes(id)));
   if (clash) problems.push('Overlaps another beat for the same person');
