@@ -1,7 +1,9 @@
 import { z } from 'zod';
 import { MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX } from './musicVideoSubjectLimits.js';
 import { executionOptionsSchema } from './aiToolkit/internal/executionOptionsValidation.js';
-import { musicVideoShotSheetSchema, musicVideoTreatmentBriefSchema } from './musicVideoValidation.js';
+import { musicVideoPrevizSchema, musicVideoShotSheetSchema, musicVideoTreatmentBriefSchema } from './musicVideoValidation.js';
+import { worldMapSchema } from './worldMapValidation.js';
+import { PREVIZ_CAMERA_STYLES } from './musicVideoPrevizLimits.js';
 import { SHOT_SHEET_PROPOSE_BATCH } from './musicVideoShotSheet.js';
 import { STORYBOARD_MUSICAL_ROLES, STORYBOARD_PANEL_FRAMINGS, STORYBOARD_LIMITS } from './storyboardVocabulary.js';
 
@@ -54,3 +56,30 @@ export const shotSheetBackfillSchema = z.object({ sceneId: text(64).min(1), shee
 export const shotSheetSplitSchema = z.object({ sceneId: text(64).min(1), sheet: musicVideoShotSheetSchema.omit({ checked: true, promptFromSheet: true }).strip(), generalPrompt: z.string().max(8000) }).strip();
 export const shotSheetPromptProposalSchema = z.object({ sceneId: text(64).min(1), framePrompt: text(8000).optional(), prompt: text(8000).optional() }).strip()
   .refine((shot) => shot.framePrompt !== undefined || shot.prompt !== undefined, 'Propose at least one prompt');
+
+// AI edits to the previz (services/musicVideo/previzProposals.js): the director's request, and what may come back.
+export const previzProposeSchema = z.object({
+  providerId: text(256).min(1), model: text(256).optional(), effort: text(32).optional(), executionOptions: executionOptionsSchema.optional(),
+  instruction: text(4000).refine((value) => !!value.trim(), 'Say what to change'), preview: z.boolean().optional(),
+}).strict();
+const previzSubjectRef = z.string().min(1).max(64);
+// A cut edit names the cut and only the fields it changes; null clears.
+export const previzCutPatchSchema = z.object({
+  id: z.string().min(1).max(64),
+  placeSubjectId: previzSubjectRef.nullable().optional(),
+  holderSubjectId: previzSubjectRef.nullable().optional(),
+  aimSubjectId: previzSubjectRef.nullable().optional(),
+  turnToAim: z.boolean().optional(),
+  visibleSubjectIds: z.array(previzSubjectRef).max(24).nullable().optional(),
+  storyMin: z.number().finite().min(0).max(2880).nullable().optional(),
+  cameraSpot: z.tuple([z.number().finite().min(-5000).max(5000), z.number().finite().min(-5000).max(5000)]).nullable().optional(),
+}).strip();
+// Each part is checked on its own, so one bad part never costs the rest.
+export const previzProposalPartSchemas = {
+  world: worldMapSchema,
+  night: musicVideoPrevizSchema.shape.night.unwrap().unwrap(),
+  cuts: z.array(z.unknown()).max(600),
+  pawnColors: musicVideoPrevizSchema.shape.pawnColors.unwrap(),
+  cameraStyles: z.record(z.string().min(1).max(128), z.enum(PREVIZ_CAMERA_STYLES)),
+  summary: z.string().max(2000),
+};

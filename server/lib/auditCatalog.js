@@ -232,6 +232,21 @@ export const AUDIT_DEFINITIONS = Object.freeze({
       noun: 'UI bug(s)',
     }),
   },
+  // Server-side counterpart of ui-bugs: behavior bugs in routes, jobs and core
+  // logic, judged by whether a user or a job of the app can actually reach them.
+  'app-bugs': {
+    quotaBurnId: null,
+    label: 'App bugs',
+    description: 'Find server and core-logic bugs (wrong results, edge inputs, user-triggerable races) — configurable: file issues (default) or implement fixes',
+    defaultFileIssues: true,
+    filing: filing({
+      slugPrefix: 'app-bug-',
+      label: 'app-bug-audit',
+      issueLabel: 'bug',
+      labelDescription: 'Proposed from an app/server bug audit',
+      noun: 'app bug(s)',
+    }),
+  },
   'mobile-responsive': {
     quotaBurnId: 'mobile-audit',
     label: 'Mobile & responsive',
@@ -959,7 +974,7 @@ export const DO_BETTER_SCOPE_COVERAGE = Object.freeze({
   'code-quality': ['code-quality', 'observability'],
   dry: ['simplify'],
   architecture: ['module-hygiene', 'api-contract'],
-  'bugs-perf': ['better-runtime-safety', 'performance', 'error-handling', 'observability', 'reliability', 'cost-efficiency', 'workflow-recovery'],
+  'bugs-perf': ['app-bugs', 'better-runtime-safety', 'performance', 'error-handling', 'observability', 'reliability', 'cost-efficiency', 'workflow-recovery'],
   'stack-specific': ['ui-lifecycle', 'accessibility', 'data-safety', 'upgrade-rehearsal', 'security', 'infrastructure', 'data-integrity'],
   deps: ['better-dependency-freedom', 'security'],
   tests: ['test-coverage', 'better-test-quality', 'better-dev-environment'],
@@ -1050,6 +1065,7 @@ export const AUDIT_RUN_GUIDANCE = Object.freeze({
   security: 'Head of the order — an exploitable defect is fixed before any cleanup, whatever else is queued.',
   'data-safety': 'Head of the order — data-loss and upgrade hazards are fixed before code moves around them.',
   'better-runtime-safety': 'Head of the order — reachable runtime defects are fixed first; rerun once structure settles.',
+  'app-bugs': 'Head of the order — a bug a user can hit is fixed before cleanup moves the code around it.',
   'error-handling': 'Head of the order — safe failure behavior is established before the same code is restructured.',
   'better-structural-drift': 'Start of the restructuring ladder: consolidating sources of truth first means every later refactor targets the surviving implementation.',
   simplify: 'Dead and duplicate code is removed before modules are reorganized, so the reorganization only moves live code.',

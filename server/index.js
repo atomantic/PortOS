@@ -202,6 +202,7 @@ import { remoteDesktopBroker } from './services/remoteDesktop.js';
 import { authEvents } from './services/auth.js';
 import { mountEidoverseOnServer } from './services/eidoverseHost.js';
 import { bootstrapServices, runBootSequence, registerShutdownHandlers } from './services/bootstrap.js';
+import { syncLocalProviderModels } from './services/localLlm.js';
 import { errorMiddleware } from './lib/errorHandler.js';
 import { setHttpsEnabledAtBoot } from './lib/httpsState.js';
 import { JSON_BODY_LIMIT } from './lib/uploadLimits.js';
@@ -358,7 +359,7 @@ app.use('/api/scaffold', scaffoldRoutes);
 app.use('/api/provider-fallbacks', providerFallbackRoutes);
 app.use('/api/providers/comparison', createModelComparisonRoutes());
 app.use('/api/models/performance/task-benchmark', createModelPerformanceBenchmarkRoutes(aiToolkit.services.providers));
-app.use('/api/providers', createPortOSProviderRoutes(aiToolkit));
+app.use('/api/providers', createPortOSProviderRoutes(aiToolkit, { syncProviderCatalogs: (providers) => syncLocalProviderModels({ providers }) }));
 app.use('/api/runs', createPortOSRunsRoutes(aiToolkit));
 app.use('/api/prompts', createPortOSPromptsRoutes(aiToolkit));
 
@@ -619,11 +620,9 @@ if (!isSmokeBoot()) {
     console.error(`❌ Dedicated model host listener could not start (${describeFleetHostError(err)}); open AI Providers → Model host setup.`);
   }))
     .catch((err) => console.error(`❌ Dedicated model host listener could not load: ${err.message}`));
-  // Local file scan only (no provider calls); keeps the federated Claude Code
-  // token history current even when the usage page is never opened.
-  import('./services/claudeCodeTranscriptUsage.js').then(({ startTranscriptUsageRefresh }) => startTranscriptUsageRefresh())
-    .catch((err) => console.error(`❌ Claude Code transcript usage refresh could not start: ${err.message}`));
-  // Same for interactive Claude Code / Codex / Grok / Antigravity sessions (local files, zero provider calls).
-  import('./services/usageInteractiveScan.js').then(({ startInteractiveUsageRefresh }) => startInteractiveUsageRefresh())
-    .catch((err) => console.error(`❌ Interactive usage scan could not start: ${err.message}`));
+  // Local file scan only (no provider calls): keeps each provider app's own usage
+  // history (Claude Code, Codex, Grok) current for the Usage report and peers
+  // even when the usage page is never opened.
+  import('./services/nativeUsageHistory.js').then(({ startNativeUsageRefresh }) => startNativeUsageRefresh())
+    .catch((err) => console.error(`❌ Native usage history refresh could not start: ${err.message}`));
 }

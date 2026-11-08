@@ -61,3 +61,53 @@ export function musicVideoReferenceSubjectIds(project, reference) {
   if (reference.ingredientId) return known(subjects.filter((subject) => subject.ingredientId === reference.ingredientId).map((subject) => subject.id));
   return [];
 }
+
+/**
+ * The project's previz (`project.previz`) as the active cast sees it: every id of
+ * a character's unused alternate (a cast entry with the same name) reads as the
+ * active one, and characters with no active entry drop out of the night's beats.
+ * Lets the director switch alternates without re-blocking. Tracks, pawn colors
+ * and beat casts keep the active entry's own data when both exist. Cached per
+ * previz and cast, so playback can call it every frame.
+ */
+const PREVIZ_FOR_CAST = new WeakMap();
+export function musicVideoPrevizForActiveCast(project) {
+  const previz = project?.previz;
+  if (!previz || typeof previz !== 'object') return null;
+  const subjects = project?.concept?.subjects || [];
+  const cached = PREVIZ_FOR_CAST.get(previz);
+  if (cached && cached.subjects === subjects) return cached.value;
+  const active = activeMusicVideoSubjects(project?.concept).filter((subject) => subject.kind === 'character');
+  const byName = new Map(active.filter((subject) => subject.name?.trim()).map((subject) => [subject.name.trim(), subject.id]));
+  const remap = new Map(subjects
+    .filter((subject) => subject?.kind === 'character' && !active.includes(subject) && byName.has(subject.name?.trim()))
+    .map((subject) => [subject.id, byName.get(subject.name.trim())]));
+  let value = previz;
+  if (remap.size) {
+    const id = (subjectId) => remap.get(subjectId) || subjectId;
+    const ids = (list) => (Array.isArray(list) ? [...new Set(list.map(id))] : list);
+    const ownFirst = (entries, keyOf) => {
+      const seen = new Set();
+      return [...entries.filter((entry) => !remap.has(entry.subjectId)), ...entries.filter((entry) => remap.has(entry.subjectId))]
+        .map((entry) => ({ ...entry, subjectId: id(entry.subjectId) }))
+        .filter((entry) => !seen.has(keyOf(entry)) && seen.add(keyOf(entry)));
+    };
+    const pawnColors = previz.pawnColors && Object.fromEntries(Object.entries(previz.pawnColors)
+      .sort(([a], [b]) => Number(remap.has(b)) - Number(remap.has(a)))
+      .map(([subjectId, colors]) => [id(subjectId), colors]));
+    value = {
+      ...previz,
+      cuts: (previz.cuts || []).map((cut) => ({
+        ...cut,
+        ...(cut.holderSubjectId ? { holderSubjectId: id(cut.holderSubjectId) } : {}),
+        ...(cut.aimSubjectId ? { aimSubjectId: id(cut.aimSubjectId) } : {}),
+        ...(Array.isArray(cut.visibleSubjectIds) ? { visibleSubjectIds: ids(cut.visibleSubjectIds) } : {}),
+      })),
+      tracks: ownFirst(previz.tracks || [], (track) => `${track.placeSubjectId}\u0000${track.subjectId}`),
+      ...(pawnColors ? { pawnColors } : {}),
+      ...(previz.night ? { night: { ...previz.night, beats: (previz.night.beats || []).map((beat) => ({ ...beat, subjectIds: ids(beat.subjectIds) })) } } : {}),
+    };
+  }
+  PREVIZ_FOR_CAST.set(previz, { subjects, value });
+  return value;
+}

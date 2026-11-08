@@ -10,6 +10,8 @@ import { getAuthenticatedClient } from './googleAuth.js';
 import { createGmailApi } from './gmailApi.js';
 import { htmlToText as sharedHtmlToText } from '../lib/htmlToText.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { cleanMessageId } from '../lib/emailMessageId.js';
+import { gmailConversationThreadKey } from '../lib/gmailThreadKey.js';
 
 function makeExternalId(gmailId) {
   return 'api-gmail-' + crypto.createHash('md5').update(gmailId).digest('hex').slice(0, 12);
@@ -125,6 +127,45 @@ export async function collectMessageIds(passes, listFn, { onProgress } = {}) {
     } while (pageToken);
   }
   return { items, truncated };
+}
+
+// Per-sync ceiling on cached messages whose Message-ID is backfilled (#15308).
+// The first sync after upgrade would otherwise issue one metadata request per
+// cached message (up to the 500-message cache cap) while holding the account's
+// write queue; the remainder is picked up by the following syncs.
+export const RFC_MESSAGE_ID_BACKFILL_MAX = 200;
+
+// Parallel message fetches per round, for full details and the backfill alike.
+const FETCH_BATCH_SIZE = 10;
+
+/**
+ * Backfill `rfcMessageId` onto cached API messages synced before it was
+ * recorded (#15308), so the activity ingest can re-key their legacy rows onto
+ * the Takeout importer's `gmail:<Message-ID>` key. Mutates `messages` in place.
+ *
+ * `rfcMessageId` sentinel: absent = not yet known (retried next sync after a
+ * transient failure); `''` = Gmail answered and the message has no Message-ID,
+ * or is gone (404), so it keeps its legacy key and is never fetched again.
+ */
+async function backfillRfcMessageIds(gmailClient, messages, skipApiIds) {
+  const pending = (messages || [])
+    .filter((m) => m?.apiId && m.rfcMessageId === undefined && !skipApiIds.has(m.apiId))
+    .slice(0, RFC_MESSAGE_ID_BACKFILL_MAX);
+  let failed = 0;
+  for (let i = 0; i < pending.length; i += FETCH_BATCH_SIZE) {
+    const batch = pending.slice(i, i + FETCH_BATCH_SIZE);
+    const results = await Promise.all(batch.map((m) =>
+      gmailClient.getMessage(m.apiId, { format: 'metadata', metadataHeaders: ['Message-ID'] })
+        .then((data) => ({ data }), (err) => ({ status: err?.response?.status }))));
+    results.forEach(({ data, status }, j) => {
+      if (status === 404) { batch[j].rfcMessageId = ''; return; }
+      if (!data || data.id !== batch[j].apiId || !data.payload) { failed++; return; }
+      batch[j].rfcMessageId = cleanMessageId(getHeader(data.payload.headers, 'Message-ID'));
+    });
+  }
+  if (pending.length > 0) {
+    console.log(`📧 Gmail: backfilled Message-ID for ${pending.length - failed}/${pending.length} cached message(s)${failed ? ` (${failed} retry next sync)` : ''}`);
+  }
 }
 
 function getHeader(headers, name) {
@@ -286,13 +327,12 @@ export async function syncGmail(account, cache, io, options = {}) {
 
   // Step 2: Fetch full message details in parallel batches
   const messages = [];
-  const BATCH_SIZE = 10;
   let detailFetchFailures = 0;
 
-  for (let i = 0; i < messageIds.length; i += BATCH_SIZE) {
+  for (let i = 0; i < messageIds.length; i += FETCH_BATCH_SIZE) {
     io?.emit('messages:sync:progress', { accountId: account.id, current: i, total: messageIds.length });
 
-    const batch = messageIds.slice(i, i + BATCH_SIZE);
+    const batch = messageIds.slice(i, i + FETCH_BATCH_SIZE);
     const results = await Promise.all(batch.map(({ id: gmailId }) =>
       gmailClient.getMessage(gmailId, { format: 'full' })
         .catch(err => { console.warn(`📧 Gmail: failed to fetch message detail: ${messageLogError(err)}`); return null; })
@@ -316,11 +356,12 @@ export async function syncGmail(account, cache, io, options = {}) {
         externalId: makeExternalId(gmailId),
         apiId: gmailId,
         conversationId: gmailThreadId || null,
-        threadId: gmailThreadId ? `conv-${crypto.createHash('md5').update(gmailThreadId).digest('hex').slice(0, 12)}` : null,
+        threadId: gmailConversationThreadKey(gmailThreadId),
         from,
         to: parseRecipients(getHeader(headers, 'To')),
         cc: parseRecipients(getHeader(headers, 'Cc')),
         subject: getHeader(headers, 'Subject'),
+        rfcMessageId: cleanMessageId(getHeader(headers, 'Message-ID')),
         bodyText: body.text,
         bodyHtml: body.html || undefined,
         bodyFull: !!(body.text || body.html),
@@ -340,6 +381,9 @@ export async function syncGmail(account, cache, io, options = {}) {
       });
     }
   }
+
+  // Messages fetched in full above already carry their Message-ID.
+  await backfillRfcMessageIds(gmailClient, cache?.messages, new Set(messages.map((m) => m.apiId)));
 
   // Split inbox vs sent: sent mail is ingested ONLY for the human-activity timeline
   // (reply detection, #2796) — it must NOT enter the inbox cache, or it would show

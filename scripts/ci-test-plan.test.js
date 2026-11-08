@@ -2450,11 +2450,9 @@ describe('path-gated single-purpose jobs', () => {
   });
 });
 
-// Import reach alone does not select the dedicated Docker replay step.
-it.each(['scripts/native-usage-rehearse.js', 'scripts/lib/nativeUsageSqlRehearsal.js',
-  'scripts/lib/nativeUsageSnapshot.js', 'scripts/lib/nativeUsageRehearsal.testFixture.js',
-  'scripts/lib/nativeUsageCodeBinding.js', 'scripts/lib/migrationFiles.js', 'server/lib/databaseMaintenanceSchema.js',
-  'scripts/native-usage-sql-rehearsal.live.test.js', 'server/services/backupDatabaseDump.js'])
-('selects the required isolated SQL restore job for %s', source => {
+// Database maintenance sources select the DB job by path.
+it.each(['scripts/rehearsal-scratch-db.js', 'scripts/lib/migrationFiles.js', 'server/lib/databaseMaintenanceSchema.js',
+  'server/services/backupDatabaseDump.js', 'server/services/backupDatabaseDump.restore.live.test.js', 'scripts/lib/dbImage.js'])
+('selects the DB job for %s', source => {
   expect(buildCiTestPlan([source], { trackedFiles: [source], clientDependencies: [] }).db).toBe(true);
 });

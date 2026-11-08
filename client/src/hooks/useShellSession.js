@@ -218,6 +218,11 @@ export function useShellSession({ isFullscreen } = {}) {
   const sendCtrlB = useCallback(() => emitShellInput('\x02'), [emitShellInput]);
   const sendCtrlC = useCallback(() => emitShellInput('\x03'), [emitShellInput]);
   const sendEsc = useCallback(() => emitShellInput('\x1b'), [emitShellInput]);
+  // Meta/Alt+M as ESC-prefixed `m` (xterm's meta encoding). On macOS the Option key
+  // types `µ` in the browser, so this button is how Antigravity's Alt+M is reached.
+  // xterm's macOptionIsMeta is deliberately left off: it would break Option-typed
+  // characters (€, accents, and `#`/`@` on non-US layouts) for every Mac user.
+  const sendAltM = useCallback(() => emitShellInput('\x1bm'), [emitShellInput]);
   // Arrow keys send CSI or SS3 based on the terminal's DECCKM state (see NAV_KEYS);
   // Enter and any other literal-`seq` keys pass through unchanged. focus:false keeps the
   // soft keyboard down on touch — these buttons exist to replace it, not trigger it.
@@ -912,6 +917,7 @@ export function useShellSession({ isFullscreen } = {}) {
     sendCtrlB,
     sendCtrlC,
     sendEsc,
+    sendAltM,
     sendNavKey,
     scrollPage,
     restartSession,

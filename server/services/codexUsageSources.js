@@ -48,7 +48,9 @@ const NON_ACCOUNTING_LINE = /^\{(?:"[a-z_]{1,32}":(?:"[^"]{0,64}"|\d{1,20}),){0,
 const LINE_PREFIX_BYTES = 256;
 const isNonAccountingLine = bytes => NON_ACCOUNTING_LINE.test(bytes.latin1Slice(0, Math.min(bytes.length, LINE_PREFIX_BYTES)));
 const PROBLEM_SOURCE_SAMPLE = 5;
-const COUNTERS = ['input_tokens', 'cached_input_tokens', 'output_tokens', 'reasoning_output_tokens', 'total_tokens'];
+// `cache_write_input_tokens` (a few 0.145-era CLIs only) is a separate part of
+// `input_tokens`, disjoint from the cached read; `total_tokens` stays input + output.
+const COUNTERS = ['input_tokens', 'cached_input_tokens', 'cache_write_input_tokens', 'output_tokens', 'reasoning_output_tokens', 'total_tokens'];
 const emptyTotals = () => ({ messages: 0, tokensIn: 0, tokensOut: 0, cacheReadTokens: 0, cacheWriteTokens: 0 });
 const problem = code => Object.assign(new Error(code), { code });
 const hash = value => createHash('sha256').update(value).digest('hex');
@@ -81,7 +83,10 @@ function accountingRecord(entry, ids, lineage) {
     const id = hash(payload.id);
     ids.add(id);
     const model = projectModel(payload.model);
-    return { type: 'session_meta', payload: { id, ...(model ? { model } : {}) } };
+    // The parent's id (hashed like every identity) lets a reader recognize the
+    // parent events an older fork replays under new timestamps.
+    const forkedFrom = typeof payload.forked_from_id === 'string' && payload.forked_from_id ? hash(payload.forked_from_id) : null;
+    return { type: 'session_meta', payload: { id, ...(model ? { model } : {}), ...(forkedFrom ? { forkedFrom } : {}) } };
   }
   if (entry.type === 'turn_context') {
     const model = projectModel(payload?.model);
@@ -95,14 +100,21 @@ function accountingRecord(entry, ids, lineage) {
   if (payload.info == null) return null;
   const total = payload.info.total_token_usage;
   if (!isObject(total) || total.input_tokens == null || total.output_tokens == null) throw problem('malformed');
-  const usage = {};
-  for (const key of COUNTERS) {
-    const value = total[key] ?? 0;
-    if (!Number.isSafeInteger(value) || value < 0) throw problem('malformed');
-    usage[key] = value;
-  }
-  if (usage.cached_input_tokens > usage.input_tokens || usage.reasoning_output_tokens > usage.output_tokens) throw problem('malformed');
-  return { timestamp, payload: { type: 'token_count', info: { total_token_usage: usage } } };
+  const counters = (source) => {
+    const usage = {};
+    for (const key of COUNTERS) {
+      const value = source[key] ?? 0;
+      if (!Number.isSafeInteger(value) || value < 0) throw problem('malformed');
+      usage[key] = value;
+    }
+    if (usage.cached_input_tokens + usage.cache_write_input_tokens > usage.input_tokens || usage.reasoning_output_tokens > usage.output_tokens) throw problem('malformed');
+    return usage;
+  };
+  const last = payload.info.last_token_usage;
+  // The per-call counters are what a call cost; the cumulative ones can start
+  // from a base a fork inherited. Optional: older rollouts may lack them.
+  const lastUsage = isObject(last) && last.input_tokens != null && last.output_tokens != null ? counters(last) : null;
+  return { timestamp, payload: { type: 'token_count', info: { total_token_usage: counters(total), ...(lastUsage ? { last_token_usage: lastUsage } : {}) } } };
 }
 
 function projectModel(model) {

@@ -163,18 +163,6 @@ describe('socket.js — initSocket', () => {
     authEvents.removeAllListeners('sessions:revoked-all');
   });
 
-  // First settings event after process startup: persisted selections may have
-  // been nonempty before any writer emitted an event. Do not assume an empty base.
-  it('invalidates native account snapshots when the first settings write clears selections', () => {
-    io.emitted.length = 0;
-    settingsEvents.emit('settings:updated', { usageNativeAccountSelections: [] });
-    expect(io.emitted).toEqual([
-      ['usage:native-accounts-updated', { revision: expect.stringMatching(/^[a-f0-9]{64}$/) }],
-      ['backup:changed', {}],
-      ['jev:policy', {}],
-    ]);
-  });
-
   it('coalesces environment changes into payload-free Mind visibility invalidations for subscribers', () => {
     vi.useFakeTimers();
     const subscriber = makeSocket('mind-subscriber');
@@ -246,7 +234,7 @@ describe('socket.js — initSocket', () => {
   it('invalidates Jev policy after an unreadable settings restore without forwarding content', () => {
     io.emitted.length = 0;
     settingsEvents.emit('settings:invalidated', { privateContent: 'Example settings' });
-    expect(io.emitted).toEqual([['usage:native-accounts-updated', { revision: null }], ['jev:policy', {}]]);
+    expect(io.emitted).toEqual([['jev:policy', {}]]);
   });
 
   it('invalidates Eidoverse projection progress without world content', () => {
@@ -279,21 +267,6 @@ describe('socket.js — initSocket', () => {
     io.emitted.length = 0;
     settingsEvents.emit('usage:fleet-billing-updated', { privateContent: 'synthetic account detail' });
     expect(io.emitted).toEqual([['usage:fleet-billing-updated', {}]]);
-  });
-
-  it('invalidates native account snapshots only on selection changes, without sharing settings', () => {
-    const selection = { family: 'grok', accountLabel: 'private-label', members: ['a'.repeat(32)], historyScope: 'operator-confirmed-retained-history' };
-    io.emitted.length = 0;
-    settingsEvents.emit('settings:updated', { usageNativeAccountSelections: [selection], secret: 'private-value' });
-    const updates = () => io.emitted.filter(([event]) => event === 'usage:native-accounts-updated');
-    expect(updates()).toEqual([['usage:native-accounts-updated', { revision: expect.stringMatching(/^[a-f0-9]{64}$/) }]]);
-    settingsEvents.emit('settings:updated', { usageNativeAccountSelections: [selection], secret: 'different-private-value' });
-    expect(updates()).toHaveLength(1);
-    settingsEvents.emit('settings:invalidated');
-    expect(updates().at(-1)).toEqual(['usage:native-accounts-updated', { revision: null }]);
-    settingsEvents.emit('settings:updated', {});
-    expect(updates().at(-1)[1].revision).toMatch(/^[a-f0-9]{64}$/);
-    expect(JSON.stringify(updates())).not.toContain('private');
   });
 
   it('forwards death-clock invalidations without personal data', () => {
@@ -1505,7 +1478,6 @@ describe('socket.js — initSocket', () => {
 
     beforeEach(() => {
       vi.mocked(shellService.createShellSession).mockClear().mockReturnValue('sess-1');
-      vi.mocked(shellService.submitToSession).mockClear();
       vi.mocked(getProviderById).mockReset();
     });
 
@@ -1517,6 +1489,8 @@ describe('socket.js — initSocket', () => {
       expect(socket.emitted).toContainEqual(['shell:started', { sessionId: 'sess-1' }]);
       const [, opts] = vi.mocked(shellService.createShellSession).mock.calls.at(-1);
       expect(opts.env.ANTHROPIC_BASE_URL).toBe('http://127.0.0.1:11434');
+      expect(opts.initialCommand).toMatch(/^claude\b/);
+      expect(opts.waitForPromptReady).toBe(true);
     });
 
     it('ignores a client-supplied command for a provider launch — the server owns it', async () => {
@@ -1524,11 +1498,11 @@ describe('socket.js — initSocket', () => {
 
       await start({ providerId: 'claude-ollama-tui', initialCommand: 'rm -rf /' });
 
-      // The submit is deferred behind a timer; drain it before asserting.
-      await vi.waitFor(() => expect(shellService.submitToSession).toHaveBeenCalled());
-      const [, typed] = vi.mocked(shellService.submitToSession).mock.calls.at(-1);
-      expect(typed).not.toContain('rm -rf');
-      expect(typed).toContain('claude');
+      const [, opts] = vi.mocked(shellService.createShellSession).mock.calls.at(-1);
+      expect(opts.initialCommand).not.toContain('rm -rf');
+      expect(opts.initialCommand).toMatch(/^claude\b/);
+      expect(opts.waitForPromptReady).toBe(true);
+      expect(opts).not.toHaveProperty('exitWithCommand');
     });
 
     it('refuses a provider that is not a launchable TUI rather than opening a bare shell', async () => {
@@ -1556,6 +1530,8 @@ describe('socket.js — initSocket', () => {
       const [, opts] = vi.mocked(shellService.createShellSession).mock.calls.at(-1);
       expect(opts.cwd).toBe('/tmp/app');
       expect(opts.env).toBeUndefined();
+      expect(opts.initialCommand).toBe('claude');
+      expect(opts.waitForPromptReady).toBe(true);
     });
   });
 });

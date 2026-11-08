@@ -57,6 +57,16 @@ describe.skipIf(!ready)('setIngredientPayloadKey', () => {
     expect(dropped.payload).not.toHaveProperty('photoreal');
   });
 
+  it('keeps a world map through a profile save, and drops a malformed one', async () => {
+    const created = await createIngredient({ id: `${P}-world`, type: 'place', name: 'World', payload: { description: 'd' } });
+    const world = { version: 1, seed: 3, sets: [], paths: [{ id: 'main', kind: 'road', sides: 'buildings', width: 9, points: [[0, 0], [100, 0]] }] };
+    const set = await setIngredientPayloadKey(created.id, 'world', world);
+    const saved = await updateIngredient(created.id, { payload: { ...set.payload, notes: 'edited' } });
+    expect(saved.payload.world).toEqual(world);
+    const dropped = await updateIngredient(created.id, { payload: { description: 'd', world: { ...world, paths: 'bad' } } });
+    expect(dropped.payload).not.toHaveProperty('world');
+  });
+
   it('keeps the lock behavior: type guard and idempotent write', async () => {
     const place = await createIngredient({ id: `${P}-lock`, type: 'place', name: 'Lockable' });
     await setIngredientLock(place.id, true);

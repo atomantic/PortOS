@@ -149,8 +149,10 @@ const PLAYER_FIRST_STAGES = new Set(['produce', 'review']);
 // Steps with no player: Assets is a contact sheet, Story and Plan are read and edited rather than watched.
 const NO_DOCK_STAGES = new Set(['assets', 'story', 'board']);
 const ProduceStage = lazy(() => import('../components/musicVideo/stages/ProduceStage.jsx'));
+// Loaded when the optional Previz step first opens.
+const PrevizStage = lazy(() => import('../components/musicVideo/stages/PrevizStage.jsx'));
 const STAGE_VIEWS = {
-  setup: SetupStage, story: StoryStage, 'cast-sets': CastSetsStage, board: PlanStage, produce: ProduceStage, review: ReviewStage, publish: PublishStage,
+  setup: SetupStage, story: StoryStage, 'cast-sets': CastSetsStage, board: PlanStage, previz: PrevizStage, produce: ProduceStage, review: ReviewStage, publish: PublishStage,
   assets: AssetsStage, cleanup: CleanupStage,
 };
 
@@ -1758,7 +1760,7 @@ function ProjectWorkspace({
   // proof approval (including an already-approved or stale registered proof).
   const proofRequested = activeStage === 'produce' && ['#mv-review-proof', '#mv-review-render'].includes(location.hash);
   const reviewStage = selected ? (proofRequested ? 'proof' : approvalStageFor(activeStage, selected, productionReview.readiness, productionReview.proof.active)) : null;
-  const previewSources = selected ? listPreviewSources(selected, { finalVideoSrc: finalVideo.src, leadWith: activeStage === 'review' ? 'drafts' : activeStage === 'produce' ? 'storyboard' : activeStage === 'setup' ? 'lyrics' : 'final' }) : [];
+  const previewSources = selected ? listPreviewSources(selected, { finalVideoSrc: finalVideo.src, leadWith: activeStage === 'review' ? 'drafts' : activeStage === 'produce' ? 'storyboard' : activeStage === 'setup' ? 'lyrics' : activeStage === 'previz' ? 'previz' : 'final' }) : [];
 
   return (
     <>

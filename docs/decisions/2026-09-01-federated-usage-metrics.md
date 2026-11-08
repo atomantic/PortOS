@@ -250,14 +250,13 @@ reset times and the publishing instance's name; no prompts, no transcripts, no
 PII. The peer payload is rebuilt to the wire shape on arrival for the same
 recursion-depth reason the usage digest is.
 
-## Addendum: the cutover barrier is independent of the category map
+## Addendum: the cutover barrier is retired (#15279)
 
-`syncEnabled: false` and `fullSync` both leave `usage` on by the rules above, so
-neither can pause it for a migration. The [usage cutover barrier](../USAGE_CUTOVER_BARRIER.md)
-is a separate machine-local gate at the write and apply boundaries, evaluated after the
-category map. With no barrier the wire is unchanged. During one, `instances` is empty
-and any epoch data rides inside a `cutover` stamp, so an older peer has nothing it could
-merge. The category default and the per-peer toggles keep their meaning.
+The usage cutover barrier (#15098) was a machine-local gate at the write and apply
+boundaries for a planned ledger migration. #15271 overlays native history at read time
+instead, so the ledger is never migrated and the barrier was removed unused. The usage
+wire is the plain `{ instances, tombstones }` map. A payload that still carries a
+`cutover` stamp comes from an older peer holding a fence or epoch, and is skipped whole.
 
 ## Addendum: native usage reports send machine rollups (#15252)
 
@@ -314,3 +313,12 @@ page can total tokens per model across the fleet and price them at API rates
   local file scan that starts after boot. No provider calls are made.
 - `capturedAt` is the newest of usage / quotas / transcript `updatedAt`, so a
   transcript refresh alone still advances the slot peers pull.
+
+## Addendum: native usage reports retired (#15272)
+
+The native report exchange above is retired. Each machine's Usage report now
+reads its own app histories into per-app daily stores (#15271), and paired peers
+receive those counts inside the existing usage digest. `/api/usage/native-report/v1`
+and `/v2`, the collection store and the native matrix are removed; an older peer
+that still asks for them gets `403 PEER_SCOPE_FORBIDDEN` and shows that report as
+missing.

@@ -3,8 +3,6 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
-vi.mock('../services/nativeUsageMatrix.js', () => ({ getNativeUsageMatrix: vi.fn(async () => ({ mode: 'read-only', scope: 'local-instance', peerReports: 'not-collected', providers: [] })) }));
-vi.mock('../services/nativeUsageCoverage.js', () => ({ getNativeUsageCoverage: vi.fn(async () => ({ mode: 'read-only', providers: [] })) }));
 vi.mock('../services/usage.js', () => ({
   getUsageSummary: vi.fn(),
   getUsage: vi.fn(),
@@ -52,22 +50,9 @@ vi.mock('../services/claudeCodeUsage.js', () => ({
 
 vi.mock('../services/usageBackfill.js', () => ({
   getHistoricalUsageBackfillStatus: vi.fn(),
-  startHistoricalUsageBackfill: vi.fn(),
-  startCodexUsagePreview: vi.fn(() => ({ status: 'running', mode: 'preview' })),
-  cancelCodexUsagePreview: vi.fn(async () => ({ status: 'cancelled' }))
+  startHistoricalUsageBackfill: vi.fn()
 }));
 
-vi.mock('../services/usageCutoverBarrier.js', () => ({
-  getUsageCutoverStatus: vi.fn(async () => ({ state: 'idle', holdReasons: [] })),
-  acquireUsageCutover: vi.fn(async () => ({ state: 'fenced' })),
-  verifyUsageCutover: vi.fn(async () => ({ state: 'fenced', holdReasons: [] })),
-  activateUsageCutover: vi.fn(async () => ({ state: 'activated' })),
-  rollbackUsageCutover: vi.fn(async () => ({ state: 'rolling-back' })),
-  releaseUsageCutover: vi.fn(async () => ({ state: 'idle' })),
-}));
-
-import { acquireUsageCutover, rollbackUsageCutover } from '../services/usageCutoverBarrier.js';
-import { getNativeUsageCoverage } from '../services/nativeUsageCoverage.js';
 import * as usage from '../services/usage.js';
 import { getAllProviders } from '../services/providers.js';
 import { getProviderQuotas } from '../services/providerUsage.js';
@@ -525,47 +510,6 @@ describe('usage routes', () => {
     expect(usage.recordSession).toHaveBeenCalledWith('anthropic', 'Anthropic', 'opus');
   });
 
-  it('POST /api/usage/session reports a write the cutover fence retained', async () => {
-    usage.recordSession.mockResolvedValueOnce({ deferred: true });
-    const res = await request(buildApp())
-      .post('/api/usage/session')
-      .send({ providerId: 'provider-a', providerName: 'Provider A', model: 'model-a' });
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ sessionNumber: null, deferred: true });
-  });
-
-  it('GET /api/usage/cutover serves read-only status', async () => {
-    const res = await request(buildApp()).get('/api/usage/cutover');
-    expect(res.status).toBe(200);
-    expect(res.body.state).toBe('idle');
-    expect(res.headers['cache-control']).toBe('no-store');
-  });
-
-  it('POST /api/usage/cutover/acquire binds an explicit epoch and participant set', async () => {
-    const res = await request(buildApp()).post('/api/usage/cutover/acquire').send({ migrationEpoch: 'native-2026', participants: ['inst-a'] });
-    expect(res.status).toBe(200);
-    expect(acquireUsageCutover).toHaveBeenCalledWith({ migrationEpoch: 'native-2026', participants: ['inst-a'] });
-  });
-
-  it.each([
-    [{ participants: ['inst-a'] }],
-    [{ migrationEpoch: 'native-2026', participants: [] }],
-    [{ migrationEpoch: '../escape', participants: ['inst-a'] }],
-    [{ migrationEpoch: 'native-2026', participants: ['inst-a'], force: true }],
-  ])('POST /api/usage/cutover/acquire rejects %j', async (body) => {
-    acquireUsageCutover.mockClear();
-    const res = await request(buildApp()).post('/api/usage/cutover/acquire').send(body);
-    expect(res.status).toBe(400);
-    expect(acquireUsageCutover).not.toHaveBeenCalled();
-  });
-
-  it('POST /api/usage/cutover/rollback requires a reason', async () => {
-    rollbackUsageCutover.mockClear();
-    const res = await request(buildApp()).post('/api/usage/cutover/rollback').send({ migrationEpoch: 'native-2026' });
-    expect(res.status).toBe(400);
-    expect(rollbackUsageCutover).not.toHaveBeenCalled();
-  });
-
   it('POST /api/usage/messages records messages and returns success', async () => {
     usage.recordMessages.mockResolvedValue();
     const res = await request(buildApp())
@@ -625,51 +569,15 @@ describe('usage routes', () => {
 });
 
 
-describe('bounded Codex preview route', () => {
-  it('requires a real bounded date range and never starts legacy repair', async () => {
-    const app = buildApp();
-    const { startCodexUsagePreview } = await import('../services/usageBackfill.js');
-    vi.clearAllMocks();
-    for (const body of [{}, { from: '2026-02-30', to: '2026-03-01' }, { from: '2026-03-02', to: '2026-03-01' }, { from: '2024-01-01', to: '2026-01-01' }, { from: '2026-01-01', to: '2026-01-02', home: '/example/home' }]) {
-      const response = await request(app).post('/api/usage/backfill/preview').send(body);
-      expect(response.status).toBe(400);
-    }
-    expect(startCodexUsagePreview).not.toHaveBeenCalled();
-    const response = await request(app).post('/api/usage/backfill/preview').send({ from: '2026-01-01', to: '2026-01-02' });
-    expect(response.status).toBe(202);
-    expect(startCodexUsagePreview).toHaveBeenCalledWith({ from: '2026-01-01', to: '2026-01-02' });
-    expect(startHistoricalUsageBackfill).not.toHaveBeenCalled();
-    expect((await request(app).post('/api/usage/backfill/preview/cancel').send({})).status).toBe(400);
-    expect((await request(app).post('/api/usage/backfill/preview/cancel').send({ jobId: '12345678-1234-4234-8234-123456789abc' })).status).toBe(200);
-  });
-});
-
-it('validates native coverage source selection before scanning and never caches diagnostics', async () => {
-  getNativeUsageCoverage.mockClear();
-  for (const query of ['family=unknown', 'family=claude&family=grok', 'home=/private']) {
-    expect((await request(buildApp()).get(`/api/usage/native-coverage?${query}`)).status).toBe(400);
+// The Usage report reads native history directly; the retired diagnostics and
+// preview endpoints must not come back as unreachable side doors.
+it('serves no native diagnostics, peer report or Codex preview endpoints', async () => {
+  const app = buildApp();
+  for (const path of ['/api/usage/native-matrix', '/api/usage/native-coverage', '/api/usage/native-accounts', '/api/usage/native-report/v2']) {
+    expect((await request(app).get(path)).status).toBe(404);
   }
-  expect(getNativeUsageCoverage).not.toHaveBeenCalled();
-  const response = await request(buildApp()).get('/api/usage/native-coverage?family=claude');
-  expect(response.status).toBe(200);
-  expect(response.headers['cache-control']).toBe('no-store');
-  expect(getNativeUsageCoverage).toHaveBeenCalledExactlyOnceWith({ family: 'claude' });
-});
-
-
-it('serves the bounded local matrix without allowing source roots, caps or peer reports from HTTP input', async () => {
-  const { getNativeUsageMatrix } = await import('../services/nativeUsageMatrix.js');
-  getNativeUsageMatrix.mockClear();
-  for (const query of ['home=/private', 'milliseconds=1800000', 'reports=[]', 'family=claude', 'scope=all', 'scope=local&scope=fleet']) {
-    expect((await request(buildApp()).get(`/api/usage/native-matrix?${query}`)).status).toBe(400);
+  for (const path of ['/api/usage/native-sources/rebuild', '/api/usage/backfill/preview']) {
+    expect((await request(app).post(path).send({})).status).toBe(404);
   }
-  expect(getNativeUsageMatrix).not.toHaveBeenCalled();
-  const response = await request(buildApp()).get('/api/usage/native-matrix');
-  expect(response.status).toBe(200);
-  expect(response.headers['cache-control']).toBe('no-store');
-  expect(response.body).toMatchObject({ mode: 'read-only', scope: 'local-instance', peerReports: 'not-collected' });
-  expect(getNativeUsageMatrix).toHaveBeenCalledExactlyOnceWith({ scope: 'local' });
-  const fleet = await request(buildApp()).get('/api/usage/native-matrix?scope=fleet');
-  expect(fleet.status).toBe(200);
-  expect(getNativeUsageMatrix).toHaveBeenLastCalledWith({ scope: 'fleet' });
+  expect(startHistoricalUsageBackfill).not.toHaveBeenCalled();
 });

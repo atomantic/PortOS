@@ -319,45 +319,52 @@ export async function createPerson(data) {
 
 export async function updatePerson(id, updates) {
   await ensureReady();
-  const current = await getPerson(id);
-  if (!current) return null;
-  const next = { ...current, ...updates };
-  const result = await query(
-    `UPDATE tribe_people
-     SET name = $2,
-         relationship = $3,
-         ring = $4,
-         cadence_days = $5,
-         last_contact_on = $6,
-         channel = $7,
-         energy = $8,
-         tags = $9,
-         emails = $10,
-         phones = $11,
-         next_move = $12,
-         notes = $13,
-         updated_at = NOW()
-     WHERE id = $1 AND deleted = FALSE
-     RETURNING *,
-       (SELECT COUNT(*) FROM tribe_touchpoints t WHERE t.person_id = tribe_people.id) AS touchpoint_count,
-       (SELECT COUNT(*) FROM tribe_memory_links ml WHERE ml.person_id = tribe_people.id) AS linked_memory_count`,
-    [
-      id,
-      next.name,
-      next.relationship || '',
-      next.ring || 'tribe',
-      next.cadenceDays ?? DEFAULT_RING_CADENCE[next.ring] ?? 45,
-      next.lastContact || null,
-      next.channel || '',
-      next.energy || 'steady',
-      normalizeTags(next.tags),
-      normalizeEmails(next.emails),
-      normalizePhones(next.phones),
-      next.nextMove || '',
-      next.notes || '',
-    ],
-  );
-  return result.rows[0] ? rowToPerson(result.rows[0]) : null;
+  // Row lock serializes the read-merge-write with autoCreateTouchpoint/createTouchpoint,
+  // so a concurrent last_contact_on advance is never overwritten with a stale value.
+  return withTransaction(async (client) => {
+    const locked = await client.query(
+      'SELECT * FROM tribe_people WHERE id = $1 AND deleted = FALSE FOR UPDATE',
+      [id],
+    );
+    if (!locked.rows[0]) return null;
+    const next = { ...rowToPerson(locked.rows[0]), ...updates };
+    const result = await client.query(
+      `UPDATE tribe_people
+       SET name = $2,
+           relationship = $3,
+           ring = $4,
+           cadence_days = $5,
+           last_contact_on = $6,
+           channel = $7,
+           energy = $8,
+           tags = $9,
+           emails = $10,
+           phones = $11,
+           next_move = $12,
+           notes = $13,
+           updated_at = NOW()
+       WHERE id = $1 AND deleted = FALSE
+       RETURNING *,
+         (SELECT COUNT(*) FROM tribe_touchpoints t WHERE t.person_id = tribe_people.id) AS touchpoint_count,
+         (SELECT COUNT(*) FROM tribe_memory_links ml WHERE ml.person_id = tribe_people.id) AS linked_memory_count`,
+      [
+        id,
+        next.name,
+        next.relationship || '',
+        next.ring || 'tribe',
+        next.cadenceDays ?? DEFAULT_RING_CADENCE[next.ring] ?? 45,
+        next.lastContact || null,
+        next.channel || '',
+        next.energy || 'steady',
+        normalizeTags(next.tags),
+        normalizeEmails(next.emails),
+        normalizePhones(next.phones),
+        next.nextMove || '',
+        next.notes || '',
+      ],
+    );
+    return result.rows[0] ? rowToPerson(result.rows[0]) : null;
+  });
 }
 
 // Days a deleted person stays recoverable before `purgeDeletedPeople` erases

@@ -70,7 +70,10 @@ const setOperationKey = (key, operation) => {
  */
 export const claimAppOperation = (io, app, type) => {
   const inFlight = findConflictingOperation(app);
-  if (inFlight) return { ok: false, inFlight };
+  if (inFlight) {
+    const article = /^[aeiou]/i.test(inFlight.type) ? "An" : "A";
+    return { ok: false, inFlight, message: `${article} ${inFlight.type} is already running for ${inFlight.appName}` };
+  }
   const operation = { appId: app.id, appName: app.name, type, steps: [], startedAt: Date.now(), repoPath: app.repoPath };
   const permit = maintenance.admit('app-operation', String(app.id).slice(0, 256));
   admissionByOperation.set(operation, { permit, supervisorPid: null });

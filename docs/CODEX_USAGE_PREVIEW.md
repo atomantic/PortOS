@@ -69,12 +69,12 @@ work under #15030 and #15031.
 
 ## Routine accounting
 
-Run reconciliation and the interactive scan read the same sources under separate
+Run reconciliation and the native history reader read the same sources under separate
 limits, so these do not change what a preview reports. Each pass decodes at most
 5,000 unindexed files, 64 GiB or 20 seconds of work and stores each verified
 projection (see [Storage](./STORAGE.md#codex-accounting-source-inventory)). Sources
 already stored spend none of that budget. A pass that leaves work reports
-`indexing_pending` with counts, holds the Codex watermark and claims, and the next
+`indexing_pending` with counts, holds the Codex native-history fold and run claims, and the next
 pass continues, so a history larger than one pass converges. A single source is
 limited to 100,000 accounting records; a larger one holds accounting until it is
 resolved, and only that source is reported.
@@ -88,8 +88,9 @@ sources that could not be read, by path relative to the Codex home, because thos
 are what you need to repair. It is served only to an operator session: the
 federated usage digest and the peer API surface do not include it.
 
-## Usage page preview
+## Usage page
 
-The Usage page includes **Preview Codex history before repair** beside the existing historical reconciliation controls. Enter an inclusive UTC date interval (at most 366 days), then choose **Preview sources**. The scan runs in the existing background worker and can be cancelled without changing recorded usage. Source coverage, conflicting copies, observed counters and unknown ledger overlap are shown separately. This preview does not invoke the existing **Reconcile now** repair action.
-
-The preview is inspection only. No apply action is offered: recovered counters, legacy run timestamps and standalone scan watermarks do not establish exact previous attribution. Even newer cumulative high-water markers do not reconstruct historical per-model/day contributions. Issue #15031 remains open for evidence-bound repair, source/ledger revision validation and an explicit apply flow once a positive adjustment can be proved. Do not infer missing usage by subtracting arbitrary aggregate totals or by treating absent markers as proof.
+The Usage page does not run this preview. Its Codex token counts come from the
+native daily history in `server/services/nativeUsageHistory.js`, which reads the
+same raw, compressed and archived sources through `readCodexAccountingSources`
+(#15271).

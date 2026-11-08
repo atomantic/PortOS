@@ -1,5 +1,24 @@
 import { extractSlugFromRef } from './planIds.js';
 
+// `issueMinAgeMinutes` (claim-issue / claim-work task metadata): autonomous
+// claiming skips an issue younger than this. The agent that files an issue
+// usually claims it moments later; a scheduled run that raced it would snipe the
+// work out from under that agent. 0 disables the grace; lib/cosValidation.js
+// caps it.
+export const DEFAULT_ISSUE_MIN_AGE_MINUTES = 5;
+
+/**
+ * Newest creation time (epoch ms) an issue may have and still be auto-claimed,
+ * or null when the grace is off. Absent minutes means the shipped default, so
+ * an install whose stored schedule predates the setting still gets the grace.
+ */
+export function issueCreatedBeforeMs(issueMinAgeMinutes, nowMs = Date.now()) {
+  const minutes = issueMinAgeMinutes === undefined || issueMinAgeMinutes === null
+    ? DEFAULT_ISSUE_MIN_AGE_MINUTES
+    : Number(issueMinAgeMinutes);
+  return Number.isFinite(minutes) && minutes > 0 ? nowMs - minutes * 60_000 : null;
+}
+
 /** Only documented claim refs establish ownership; incidental digits do not. */
 export function claimIssueNumber(ref) {
   const match = /^issue-(\d+)$/.exec(extractSlugFromRef(ref) || '');

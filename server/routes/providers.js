@@ -266,8 +266,14 @@ const withResolvedModelAccess = (provider, resolved) => (
 /**
  * Create PortOS-specific provider routes
  * Extends AI Toolkit routes with vision testing endpoints
+ *
+ * `syncProviderCatalogs(providers)` runs before `GET /` and `GET /catalog`
+ * answer, so catalogs that track a local daemon are current when a picker
+ * opens. It must not reject; it resolves true when it rewrote a catalog, and
+ * the route then re-reads the list. Injected (`syncLocalProviderModels` from
+ * server/index.js) so this module stays out of localLlm.js's import closure.
  */
-export function createPortOSProviderRoutes(aiToolkit) {
+export function createPortOSProviderRoutes(aiToolkit, { syncProviderCatalogs } = {}) {
   const router = Router();
   router.use((req, res, next) => {
     if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
@@ -329,6 +335,10 @@ export function createPortOSProviderRoutes(aiToolkit) {
   }));
 
   const providerService = aiToolkit.services.providers;
+  const readProviders = async () => {
+    const data = await providerService.getAllProviders();
+    return (await syncProviderCatalogs?.(data.providers)) ? providerService.getAllProviders() : data;
+  };
   const providerStatusService = aiToolkit.services.providerStatus;
   router.use(observeModelMutations('provider-readiness', 'provider-status', 'codex-account'));
   const readinessObservation = observeModelResource('provider-readiness', async () => {
@@ -357,7 +367,7 @@ export function createPortOSProviderRoutes(aiToolkit) {
    * visible until the runtime can make a confirmed decision.
    */
   router.get('/', asyncHandler(async (req, res) => {
-    const data = await providerService.getAllProviders();
+    const data = await readProviders();
     const prerequisites = getProviderPrerequisiteMap(data.providers);
     const modeGroups = new Map(providerModeGroups(data.providers).flatMap(group =>
       group.map(provider => [provider.id, group.map(({ id, type }) => ({ id, type }))])));
@@ -709,14 +719,17 @@ export function createPortOSProviderRoutes(aiToolkit) {
    * bootstrap apps, which harness reaches which service, the effort ladder per
    * harness (and per model where a model narrows it), and the stored presets.
    * Derived from cache and settings only: harness detection is the runtime
-   * probe's cache, nothing is spawned, no provider is contacted.
+   * probe's cache, nothing is spawned, and no provider is asked to generate
+   * (`syncProviderCatalogs` may list a local daemon's installed models first).
    *
    * `GET /api/providers` stays presets-only — every existing `useProviderModels`
    * consumer keeps its shape; this is the additive surface for composing.
    */
   router.get('/catalog', asyncHandler(async (_req, res) => {
     const { buildProviderCatalog } = await import('../services/compositeProviders.js');
-    const [catalog, data, capabilities] = await Promise.all([buildProviderCatalog(), providerService.getAllProviders(), detectSystemCapabilities()]);
+    // Sync first: the composed catalog derives from the providers it may rewrite.
+    const data = await readProviders();
+    const [catalog, capabilities] = await Promise.all([buildProviderCatalog(), detectSystemCapabilities()]);
     res.json({ ...catalog, harnesses: (catalog.harnesses || []).map(harness => ({ ...harness, executionOptionKeys: executionOptionKeysForHarness(harness.id) })), presets: data.providers.map((provider) => presentProvider(provider, capabilities)) });
   }));
 

@@ -389,6 +389,8 @@ export const PR_AUTHOR_FILTER_OPTIONS = [
   { value: 'trusted', label: 'Owner and write collaborators', description: 'Verified repository collaborators and the signed-in operator; external PRs use PR Reviewer' }
 ];
 
+export { SELF_MANAGED_PR_STALE_MINUTES_DEFAULT, SELF_MANAGED_PR_STALE_MINUTES_MAX, MAX_SELF_MANAGED_PR_AUTHORS, normalizeSelfManagedPrAuthors } from '../../../../server/lib/selfManagedPrAuthors.js';
+
 // claim-issue author gate (taskMetadata.issueAuthorFilter). Mirrors
 // ISSUE_AUTHOR_FILTERS in server/lib/validation.js. 'self' = only claim issues
 // YOU filed (the slashdo /do:next --self security boundary; the default);
@@ -407,6 +409,11 @@ export const ISSUE_AUTHOR_FILTER_OPTIONS = [
 // (github/gitlab) at dispatch but configures the filter here too. Add any new
 // issue-claiming task type here rather than OR-ing literals across components.
 export const ISSUE_AUTHOR_FILTER_TASK_TYPES = new Set(['claim-issue', 'claim-work']);
+
+// New-issue grace for autonomous claiming (taskMetadata.issueMinAgeMinutes),
+// mirroring DEFAULT_ISSUE_MIN_AGE_MINUTES in server/lib/cosValidation.js.
+export const ISSUE_MIN_AGE_DEFAULT = 5;
+export const ISSUE_MIN_AGE_OPTIONS = [0, 2, 5, 10, 15, 30, 60];
 
 // Scheduled claim swarm fan-out (taskMetadata.swarmCount). 0 = off;
 // 2..12 = parallel workers, matching SWARM_COUNT_MIN/MAX in cosValidation.js.

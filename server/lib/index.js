@@ -109,6 +109,7 @@ export * from './validation.js';
 // Cross-domain Zod fragments both `validation.js` and the per-domain files
 // import (leaf module, no cycle). Flat because `validation.js` re-exports the
 // same objects — same identity, so the collision detector is satisfied.
+export * from './selfManagedPrAuthors.js';
 export * from './sharedSchemas.js';
 export * from './threadRefKinds.js';
 export * from './threejsModel.js';
@@ -279,8 +280,6 @@ export * from './modelInput.js';
 export * from './modelInventory.js';
 export * from './meatspaceRowIdentity.js';
 export * from './meetingUrl.js';
-export * from './nativeUsageContract.js';
-export * as nativeUsageSelections from './nativeUsageSelections.js';
 export * from './minimaxH3Memory.js';
 export * from './videoContinuity.js';
 export * from './videoContinuationProvenance.js';
@@ -311,6 +310,7 @@ export * from './providerPrerequisites.js';
 // cliProviderArgs.js), which would trip the barrel's duplicate-identifier
 // collision check as flat exports.
 export * as providerVendors from './providerVendors.js';
+export * from './nativeUsageOverlay.js';
 export * from './providerTranscriptUsage.js';
 export * from './publicReviewSpawnGate.js';
 // Namespaced: reviewerConfig.js is re-exported flat by cosValidation.js (and so
@@ -900,6 +900,8 @@ export * from './chatgptText.js';
 
 export * from './modelComparisonComposite.js';
 export * from './messageLogError.js';
+export * from './emailMessageId.js';
+export * from './gmailThreadKey.js';
 
 export * from './launchVideoValidation.js';
 export * from './styleSourcePrompt.js';
@@ -955,6 +957,11 @@ export * from './filmLookValidation.js';
 export * from './filmLookGpu.js';
 export * from './musicVideoStatsOutro.js';
 export * from './musicVideoCameos.js';
+export * from './musicVideoPreviz.js';
+export * from './musicVideoPrevizLimits.js';
+export * from './musicVideoPrevizNight.js';
+export * from './worldMap.js';
+export * from './worldMapValidation.js';
 export * from './musicVideoRouteMapLimits.js';
 export * from './musicVideoRouteMaps.js';
 export * from './musicVideoShotSheet.js';
@@ -1086,17 +1093,5 @@ export * from './blenderVersion.js';
 export * from './greyboxBlender.js';
 export * from './photorealLook.js';
 export * from './imageInputProvenance.js';
-
-export * from './nativeUsageRecords.js';
-export * from './nativeUsageSourceFold.js';
-export * from './nativeUsageRollups.js';
-
-export * from './nativeAgyMetadata.js';
-export * from './nativeAgyUsageRecords.js';
-export * from './nativeGrokUsageRecords.js';
-export * from './nativeUsageSources.js';
-export * from './nativeUsageStaging.js';
-
-export * from './nativeUsageRehearsal.js';
 
 export * from './databaseMaintenanceSchema.js';

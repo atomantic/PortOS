@@ -23,7 +23,7 @@ import { createLineReader } from '../lib/streamLines.js';
 import { getEvent } from './eventScheduler.js';
 import { POOL_CONFIG, checkHealth, databaseRestoreRecovery, getServerMajorVersion, query, withDatabaseMaintenance } from '../lib/db.js';
 import { withPgToolEnv, resolvePgDumpBinary } from '../lib/pgTools.js';
-import { inspectDatabaseDump, prepareDatabaseReplay } from './backupDatabaseDump.js';
+import { inspectDatabaseDump, prepareDatabaseReplay, SNAPSHOT_PG_DUMP_FLAGS } from './backupDatabaseDump.js';
 import {
   captureSyncFeedPositions, pendingRecoveryResult, repairCommittedRestore, restoreApplicationName, restoreReceiptSql,
   restoreRecoveryRefusal, settleReplayOutcome, withDatabaseRestoreAdmission,
@@ -945,26 +945,12 @@ export async function dumpPostgres(outputPath) {
   }
 
   return withPgToolEnv(POOL_CONFIG, pgEnv => new Promise((resolvePromise) => {
-    // --clean --if-exists: the dump DROPs each object before recreating it, so it
-    // replays cleanly into the live, already-initialized PortOS database (the
-    // common Restore-DB target) instead of erroring "relation already exists" on
-    // the first CREATE. Without it the dump is only restorable into an empty DB.
     const proc = spawn(pgDumpBin, [
       '-h', pgHost,
       '-p', pgPort,
       '-U', pgUser,
       '-d', pgDb,
-      '--no-owner',
-      '--no-acl',
-      '--no-comments',
-      '--clean',
-      '--if-exists',
-      // Machine-local replay receipts (#9725) describe this install's past
-      // restores, not application data; the table definition is still dumped.
-      '--exclude-table-data=restore_receipts',
-      // The asynchronous media mirror can lag its authoritative files. Rebuild
-      // it after restore rather than snapshotting stale file references.
-      '--exclude-table-data=media_assets',
+      ...SNAPSHOT_PG_DUMP_FLAGS,
       '-f', outputPath
     ], {
       shell: false,
@@ -1665,7 +1651,7 @@ const OS_METADATA_RSYNC_EXCLUDES = [...OS_METADATA_FILES, '._*'].map(name => `--
  */
 const RESTORE_PRESERVED_FILES = Object.freeze([
   'tailcat-serve.json', 'tailcat-serve.addr',
-  'database-authority.json', 'peer-execution', 'peer-execution-catalog.json', 'peer-execution-grants.json', 'peer-execution-authority.json', 'peer-execution-recovery.jsonl', 'workflow-maintenance', 'backup-admission', 'usage-cutover-barrier.json',
+  'database-authority.json', 'peer-execution', 'peer-execution-catalog.json', 'peer-execution-grants.json', 'peer-execution-authority.json', 'peer-execution-recovery.jsonl', 'workflow-maintenance', 'backup-admission',
 ]);
 // Matched case-insensitively (rsync has no such flag, so each letter becomes a
 // `[xX]` class): on a case-insensitive volume a `Database-Authority.json` entry
@@ -1954,7 +1940,7 @@ async function restoreSnapshotAdmitted(destPath, snapshotId, { dryRun, requested
   // never promises a restore that execution would silently skip.
   if (restoreScopeIsPreservedFile(subdirFilter)) {
     throw new ServerError(
-      'These machine-local authority and recovery records (database-authority.json, peer-execution-authority.json, peer-execution-recovery.jsonl, workflow-maintenance, backup-admission and usage-cutover-barrier.json) are never restored from a snapshot. Restore application records with a data or database restore; existing local authority and unresolved owners must be reconciled on this machine (see docs/STORAGE.md).',
+      'These machine-local authority and recovery records (database-authority.json, peer-execution-authority.json, peer-execution-recovery.jsonl, workflow-maintenance and backup-admission) are never restored from a snapshot. Restore application records with a data or database restore; existing local authority and unresolved owners must be reconciled on this machine (see docs/STORAGE.md).',
       { status: 400, code: 'BACKUP_RESTORE_MACHINE_LOCAL' },
     );
   }
@@ -2461,7 +2447,9 @@ async function restoreAdmittedDump({ sqlPath, spoolPath, expectedHash, snapshotI
   const { preflight, reset } = await getDatabaseResetPlan();
   const preflightError = await query(preflight).then(() => null, error => error);
   if (preflightError) {
-    return { status: 'failed', reason: 'restore_preflight', error: 'Database contains unexpected objects, ownership, or dependencies. Restore was refused without changing data.' };
+    console.error(`❌ restore: preflight refused snapshot ${snapshotId}: ${preflightError.message}`);
+    const detail = String(preflightError.message || '').replace(/^Restore preflight:\s*/, '');
+    return { status: 'failed', reason: 'restore_preflight', error: `Database contains unexpected objects, ownership, or dependencies${detail ? ` (${detail})` : ''}. Restore was refused without changing data.` };
   }
   if (dryRun) return { status: 'ok', dryRun: true, sizeBytes, tableCount };
 

@@ -461,7 +461,12 @@ describe.skipIf(!ready)('restore older database schema', { timeout: RESTORE_CASE
     } finally { await query('DROP VIEW public.unexpected_restore_view RESTRICT'); }
     await query('CREATE TABLE public.unexpected_restore_record (id integer PRIMARY KEY)');
     await query('INSERT INTO public.unexpected_restore_record VALUES (42)');
-    expect(await restore()).toMatchObject({ status: 'failed', reason: 'restore_preflight' });
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const refused = await restore();
+    expect(refused).toMatchObject({ status: 'failed', reason: 'restore_preflight' });
+    expect(refused.error).toContain('unexpected_restore_record');
+    expect(errSpy.mock.calls.some(([line]) => /❌ restore: preflight refused .*unexpected_restore_record/.test(line))).toBe(true);
+    errSpy.mockRestore();
     expect((await query('SELECT * FROM public.unexpected_restore_record')).rows).toEqual([{ id: 42 }]);
     await query('DROP TABLE public.unexpected_restore_record');
     await query('CREATE SCHEMA restore_external');
@@ -474,5 +479,17 @@ describe.skipIf(!ready)('restore older database schema', { timeout: RESTORE_CASE
     const before = (await query('SELECT tableoid, xmin, name FROM tribe_people WHERE id = $1', [personId])).rows;
     expectRestoreOk(await restore(true), true);
     expect((await query('SELECT tableoid, xmin, name FROM tribe_people WHERE id = $1', [personId])).rows).toEqual(before);
+  });
+
+  it('accepts restore once the retired native-usage tables are dropped by migration 030 (#15363)', async () => {
+    const id = '030-drop-retired-native-usage-tables.sql';
+    await query('CREATE TABLE native_usage_sources (id integer PRIMARY KEY)');
+    await query('CREATE TABLE native_usage_snapshots (id integer PRIMARY KEY)');
+    expect(await restore(true)).toMatchObject({ status: 'failed', reason: 'restore_preflight' });
+    await query('DELETE FROM schema_migrations WHERE id = $1', [id]);
+    await runDbMigrations();
+    expect((await query("SELECT 1 FROM pg_class WHERE relname LIKE 'native_usage_%'")).rowCount).toBe(0);
+    expectRestoreOk(await restore(true), true);
+    expectRestoreOk(await restore(true), true);
   });
 });

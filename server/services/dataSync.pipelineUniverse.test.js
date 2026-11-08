@@ -163,19 +163,19 @@ describe('dataSync — universe category', () => {
     const snap = await dataSync.getSnapshot('universe');
     expect(snap.portosMeta).toBeDefined();
     expect(typeof snap.portosMeta.portosVersion).toBe('string');
-    expect(snap.portosMeta.schemaVersions.universes).toBe(21);
+    expect(snap.portosMeta.schemaVersions.universes).toBe(22);
   });
 
   it('applyRemote rejects when sender schemaVersions are AHEAD of local code', async () => {
     writeUniverseState({ universes: [], runs: [] });
     const result = await dataSync.applyRemote('universe', {
       universes: [{ id: 'u-new', name: 'Foundry', updatedAt: '2026-05-17T10:00:00Z' }],
-    }, { portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 22 } } });
+    }, { portosMeta: { portosVersion: '99.0.0', schemaVersions: { universes: 23 } } });
     expect(result.applied).toBe(false);
     expect(result.count).toBe(0);
     expect(result.blockedBySchema).toBeDefined();
     expect(result.blockedBySchema.ahead).toEqual([
-      { category: 'universes', senderV: 22, receiverV: 21 },
+      { category: 'universes', senderV: 23, receiverV: 22 },
     ]);
     expect(result.blockedBySchema.senderPortosVersion).toBe('99.0.0');
     // Nothing was written.
@@ -1234,9 +1234,6 @@ describe('dataSync — per-category schema gate (cross-key isolation)', () => {
     // assertion stays honest about what the snapshot map IS and ISN'T
     // responsible for.
     const OUT_OF_BAND_SYNC_KEYS = new Set([
-      // Usage cutover barrier protocol (#15098): its own stamp gate, deliberately
-      // not the snapshot schema gate, so an older peer keeps syncing with no barrier.
-      'usageCutover',
       // Memory current-row pull negotiates version metadata at /api/memory/sync;
       // memorySync rejects future versions, and history never enters snapshots.
       'memoryHistory',

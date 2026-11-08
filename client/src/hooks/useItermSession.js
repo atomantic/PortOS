@@ -247,6 +247,7 @@ export function useItermSession({ itermSessionId, enabled = true } = {}) {
     sendCtrlB: () => emitInput('\x02'),
     sendCtrlC: () => emitInput('\x03'),
     sendEsc: () => emitInput('\x1b'),
+    sendAltM: () => emitInput('\x1bm'),
     sendNavKey,
   };
 }

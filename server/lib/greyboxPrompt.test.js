@@ -25,3 +25,11 @@ describe('greyboxPrompt', () => {
     expect(edit.endsWith('Requested change:\nAdd a DJ booth')).toBe(true);
   });
 });
+
+describe('greyboxContractInstructions', () => {
+  // Uniquely catches the real-world logic check and the zones the plate prompt reads dropping out of what a drafting model reads (#15328).
+  it('asks a drafting model to build the place as it really works, check its work, and name its infrastructure zones', () => {
+    const text = greyboxContractInstructions();
+    for (const rule of [/as it would really be built/, /check your scene/, /"pole", "wire", "drop", "lamp", "road", "sidewalk"/, /"No sidewalks"/, /"derelict"/]) expect(text).toMatch(rule);
+  });
+});

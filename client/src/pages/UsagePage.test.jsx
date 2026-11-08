@@ -22,8 +22,7 @@ const api = vi.hoisted(() => ({
 vi.mock('../services/api', () => api);
 
 const UsagePageModule = await import('./UsagePage');
-// Preserve the full legacy analytics contract independently of the native default view.
-const UsagePage = UsagePageModule.LegacyUsagePage;
+const UsagePage = UsagePageModule.UsagePage;
 const { arrangeQuotaCells } = UsagePageModule;
 
 const usage = {
@@ -51,25 +50,21 @@ beforeEach(() => {
   api.updateUsageFleetBilling.mockResolvedValue({});
 });
 
-describe('UsagePage held standalone usage', () => {
-  it('names the workspaces held behind runs with no provable end, and stays quiet otherwise', async () => {
-    api.getUsage.mockResolvedValue({ ...usage, heldRunCoverage: {
-      runs: 3, since: '2026-07-01T00:00:00.000Z', moreWorkspaces: 2,
-      workspaces: [{ workspace: 'example-app', runs: 2, since: '2026-07-01T00:00:00.000Z' }, { workspace: 'other-app', runs: 1, since: '2026-07-02T00:00:00.000Z' }],
-    } });
-    const view = render(<MemoryRouter><UsagePage /></MemoryRouter>);
-    const notice = await screen.findByRole('note', { name: 'Standalone usage on hold' });
-    expect(notice).toHaveTextContent('3 PortOS runs');
-    expect(within(notice).getByText(/example-app/)).toHaveTextContent('2 runs');
-    expect(within(notice).getByText(/other-app/)).toHaveTextContent('1 run');
-    expect(notice).toHaveTextContent('and 2 more workspaces');
-    expect(within(notice).getByRole('link', { name: 'Review runs' })).toHaveAttribute('href', '/cos/runs');
-    view.unmount();
-
-    api.getUsage.mockResolvedValue({ ...usage, heldRunCoverage: null });
+describe('UsagePage native usage history', () => {
+  it('is the single standard report: no native/legacy tabs, names native coverage, and refetches on a native update', async () => {
+    api.getUsage.mockResolvedValue({ ...usage, coverage: { instanceCount: 1 }, nativeSources: [
+      { family: 'codex', label: 'Codex', coverageStart: '2026-07-01', updatedAt: '2026-07-20T12:00:00.000Z', hasHistory: true },
+      { family: 'grok', label: 'Grok', coverageStart: null, updatedAt: null, hasHistory: false },
+    ] });
     render(<MemoryRouter><UsagePage /></MemoryRouter>);
-    await screen.findByText('Reconcile historical usage');
-    expect(screen.queryByRole('note', { name: 'Standalone usage on hold' })).toBeNull();
+    const note = await screen.findByText(/come from each app/);
+    expect(note).toHaveTextContent('Codex (from 2026-07-01)');
+    expect(note).not.toHaveTextContent('Grok');
+    expect(screen.queryByRole('tab', { name: /legacy/i })).toBeNull();
+    expect(screen.queryByRole('tab', { name: /native history/i })).toBeNull();
+    const calls = api.getUsage.mock.calls.length;
+    await act(async () => { socket.emit('usage:native-history-updated', {}); });
+    await waitFor(() => expect(api.getUsage.mock.calls.length).toBeGreaterThan(calls));
   });
 });
 

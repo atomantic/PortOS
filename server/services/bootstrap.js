@@ -62,7 +62,7 @@ import {
   gateStepsForSmokeBoot
 } from './bootstrapSequence.js';
 
-import { ensureBackendProvider, getBackend as getLocalLlmBackend } from './localLlm.js';
+import { bindLocalLlmIo, ensureBackendProvider, getBackend as getLocalLlmBackend } from './localLlm.js';
 import { ensureRunning as ensureOllamaRunning } from './ollamaManager.js';
 import { ensureProviderReadyForExecution } from './providerExecutionReadiness.js';
 import { loadUsage, recordSession } from './usage.js';
@@ -96,7 +96,6 @@ import { getVoiceConfig } from './voice/config.js';
 import { reconcile as reconcileVoice } from './voice/bootstrap.js';
 import { initVoiceTimers } from './voice/timers.js';
 import { startBackupScheduler } from './backupScheduler.js';
-import { startNativeUsageCollectionSchedule } from './nativeUsageCollectionSchedule.js';
 import { startAutoUpdateScheduler } from './autoUpdateScheduler.js';
 import { startPrivacyRecheckScheduler } from './privacyRecheckScheduler.js';
 import { startQuotaBurnScheduler } from './quotaBurnRunner.js';
@@ -211,6 +210,7 @@ import { logFailureWithStack as logBootstrapFailure } from '../lib/failureLoggin
  */
 export const bootstrapServices = async ({ io, dataDir, dataReferenceDir, serverDir }) => {
   bindMaintenanceIo(io);
+  bindLocalLlmIo(io);
   // Lifecycle hooks shared between AI Toolkit and PortOS runner shim
   const aiToolkitHooks = attachLlmActivityHooks({
     ensureProviderReady: (provider) => ensureProviderReadyForExecution(provider),
@@ -540,8 +540,6 @@ const startBackgroundServices = ({ spawnerReady, io, httpsEnabled, port }) => {
   registerAutobiographyReminderSchedule({ catchUpMissedSlot: true }).catch(err => logBootstrapFailure('❌ Autobiography reminder init failed', err));
   // Initialize backup scheduler for daily data backups
   startBackupScheduler().catch(err => logBootstrapFailure('❌ Backup scheduler init failed', err));
-  // Daily local-file usage collection. Registers a cron only: nothing scans at boot.
-  startNativeUsageCollectionSchedule();
   // Automatic PortOS self-update — OFF by default. When the user turns it on
   // (Update tab), it polls for a window in which the install is completely idle
   // and then runs the SAME update the matching button runs. Registering the

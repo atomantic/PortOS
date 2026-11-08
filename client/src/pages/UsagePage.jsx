@@ -1,11 +1,8 @@
 import PageHeader from '../components/PageHeader';
 import PageLayout from '../components/PageLayout';
-import TabPills from '../components/ui/TabPills';
-import NativeUsageOverview from '../components/usage/NativeUsageOverview';
-import UsageHeldRunsNotice from '../components/usage/UsageHeldRunsNotice';
 import { useCallback, useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router';
-import { RefreshCw, AlertTriangle, DatabaseZap, BarChart3, History, Fingerprint } from 'lucide-react';
+import { RefreshCw, AlertTriangle, DatabaseZap, BarChart3 } from 'lucide-react';
 import * as api from '../services/api';
 import BrailleSpinner from '../components/BrailleSpinner';
 import PageSkeleton from '../components/ui/PageSkeleton';
@@ -20,7 +17,6 @@ import ClaudeCodeModelTokensCard from '../components/usage/ClaudeCodeModelTokens
 import FleetUsageCard from '../components/usage/FleetUsageCard';
 import MonthlyUsageCard from '../components/usage/MonthlyUsageCard';
 import RollingCostCard from '../components/usage/RollingCostCard';
-import CodexUsagePreview from '../components/usage/CodexUsagePreview';
 import FreeTierUsageCard from '../components/usage/FreeTierUsageCard';
 import ProviderQuotaBody from '../components/usage/ProviderQuotaBody';
 import ModelsTabsHeader from '../components/models/ModelsTabsHeader';
@@ -32,6 +28,8 @@ const BACKFILL_EVENTS = ['usage-backfill:updated'];
 const IMAGE_USAGE_EVENTS = ['image-gen:completed'];
 const FLEET_SYNC_EVENTS = ['sync:progress'];
 const FLEET_BILLING_EVENTS = ['usage:fleet-billing-updated'];
+// A provider app's own usage history changed (Claude Code, Codex, Grok, Antigravity).
+const NATIVE_HISTORY_EVENTS = ['usage:native-history-updated'];
 const isUsageSync = (payload) => payload?.phase === 'applied' && payload.category === 'usage';
 const resolvesQuotaRefresh = (card) => card?.supported === false || Boolean(!card?.pending && (card?.limits?.length || card?.metrics?.length || card?.activity?.length));
 const refreshDiagnostic = (card, requestOrder) => ({ ...card, requestOrder,
@@ -623,6 +621,22 @@ function SourcePill({ source, className = '' }) {
   );
 }
 
+/**
+ * Where this machine's token counts come from. Each provider app's own session
+ * records are the source of truth from the day its history is complete; before
+ * that, the larger of the app's history and PortOS's run records is shown.
+ */
+function NativeSourcesNote({ sources }) {
+  const read = (sources || []).filter((source) => source.hasHistory && source.coverageStart);
+  if (!read.length) return null;
+  return (
+    <p>
+      Tokens for {read.map((source) => `${source.label} (from ${source.coverageStart})`).join(', ')} come from each app&rsquo;s own session records on this machine,
+      plus PortOS runs the app does not save. Earlier days use whichever of the two counted more.
+    </p>
+  );
+}
+
 function CostReportTable({ report }) {
   if (!report?.providers?.length) {
     return <div className="text-gray-500 text-sm py-4">No per-provider usage recorded in this period.</div>;
@@ -1017,6 +1031,7 @@ function InternalUsageMetrics({ onBillingSaved }) {
 
   useSocketResource(fetchUsage, { events: IMAGE_USAGE_EVENTS, immediate: false });
   useSocketResource(fetchUsage, { events: FLEET_BILLING_EVENTS, immediate: false });
+  useSocketResource(() => { setFleetRevision((value) => value + 1); return fetchUsage(); }, { events: NATIVE_HISTORY_EVENTS, immediate: false });
   useSocketResource(() => { setFleetRevision((value) => value + 1); return fetchUsage(); },
     { namespace: 'instances', events: FLEET_SYNC_EVENTS, matchesEvent: isUsageSync, immediate: false });
 
@@ -1029,7 +1044,7 @@ function InternalUsageMetrics({ onBillingSaved }) {
   }, { errorMessage: 'Failed to start historical usage reconciliation' });
 
   useEffect(() => {
-    if (backfill?.mode !== 'preview' && (backfill?.status === 'complete' || backfill?.status === 'error')) {
+    if ((backfill?.status === 'complete' || backfill?.status === 'error')) {
       setFleetRevision((value) => value + 1);
       fetchUsage();
     }
@@ -1097,6 +1112,7 @@ function InternalUsageMetrics({ onBillingSaved }) {
         <div className="text-xs text-gray-400 space-y-1" role="status">
           <p>Usage from {formatCount(usage.coverage.instanceCount)} reported instance{usage.coverage.instanceCount === 1 ? '' : 's'}; peer data reflects the last sync.</p>
           {usage.coverage.instanceCount > 1 && <p>Each instance snapshot is counted once. Runs recorded independently on multiple machines cannot be deduplicated from the available aggregates.</p>}
+          <NativeSourcesNote sources={usage.nativeSources} />
           <p>Cost classifications use each instance&rsquo;s current provider configuration; historical configuration changes are not available.</p>
           {usage.coverage.pricingIncomplete && <p className="text-port-warning">Some provider classifications are unavailable. Fleet API cost includes only classified usage and is incomplete.</p>}
           {usage.coverage.classificationUnreported?.length > 0 && <p className="text-port-warning">Provider classifications have not been reported by {usage.coverage.classificationUnreported.join(', ')}.</p>}
@@ -1116,12 +1132,12 @@ function InternalUsageMetrics({ onBillingSaved }) {
           <p className="text-xs text-gray-500 mt-1">
             Re-read saved transcripts, Grok sessions, and Antigravity media to replace older estimates and record media and long-context charges. This changes this machine’s recorded history but makes no provider calls. It cannot repair peer classifications or restore deleted transcripts; use the chart’s coverage details for those gaps.
           </p>
-          {backfill?.mode !== 'preview' && backfill?.status === 'running' && (
+          {backfill?.status === 'running' && (
             <p className="text-xs text-port-accent mt-1" role="status">
               Processing {backfill.processed || 0} of {backfill.total || 0} runs…
             </p>
           )}
-          {backfill?.mode !== 'preview' && backfill?.status === 'complete' && (
+          {backfill?.status === 'complete' && (
             <p className="text-xs text-port-success mt-1" role="status">
               Corrected {backfill.corrected || 0} run{backfill.corrected === 1 ? '' : 's'}.
             </p>
@@ -1132,24 +1148,20 @@ function InternalUsageMetrics({ onBillingSaved }) {
           {backfill?.agy && (backfill.status === 'complete' || backfill.status === 'error') && (
             <p className="text-xs text-port-success mt-1" role="status">{agyRepairLine(backfill.agy)}</p>
           )}
-          {backfill?.mode !== 'preview' && backfill?.status === 'error' && (
+          {backfill?.status === 'error' && (
             <p className="text-xs text-port-error mt-1" role="alert">{backfill.error}</p>
           )}
         </div>
         <button
           type="button"
           onClick={startBackfill}
-          disabled={startingBackfill || backfill?.status === 'running' || backfill?.status === 'cancelling'}
+          disabled={startingBackfill || backfill?.status === 'running'}
           className="shrink-0 inline-flex items-center justify-center gap-2 rounded-lg border border-port-border px-3 py-2 text-sm text-white hover:border-port-accent disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {(startingBackfill || backfill?.status === 'running') ? <BrailleSpinner /> : <DatabaseZap size={15} />}
-          {backfill?.mode === 'preview' && ['running', 'cancelling'].includes(backfill?.status) ? 'Preview in progress' : backfill?.status === 'running' ? 'Reconciling…' : 'Reconcile now'}
+          {backfill?.status === 'running' ? 'Reconciling…' : 'Reconcile now'}
         </button>
       </div>
-
-      <UsageHeldRunsNotice held={usage.heldRunCoverage} />
-
-      <CodexUsagePreview job={backfill} onStatus={setBackfill} refreshStatus={refreshBackfill} coverage={usage.codexCoverage} />
 
       {usage.imageRenders && (
         <section className="bg-port-card border border-port-border rounded-xl p-3 sm:p-4 space-y-2" aria-label="Codex image usage">
@@ -1218,13 +1230,12 @@ function InternalUsageMetrics({ onBillingSaved }) {
         <CostReportTable report={report} />
         <p className="text-[10px] sm:text-xs text-gray-500">
           Informational estimate of what this usage would have cost under API billing (PortOS runs on subscriptions).
-          {' '}<span className="text-gray-400">Measured</span> rows are the provider CLI&rsquo;s own per-message counts, read from its local
-          transcript — full per-turn input, output, and prompt-cache reads/writes, each priced at its own rate.
-          {' '}Grok rows are measured the same way once a turn completes; a run killed mid-turn falls back to its chat history.
-          {' '}<span className="text-gray-400">Estimated</span> rows are runs with no token counts to read: Antigravity writes a
-          session transcript but no token fields, so its rows are sized from that transcript&rsquo;s text, and a run with no session
-          file at all (local models) is approximated from the initial prompt only with no cache traffic counted — those rows
-          understate real usage substantially.
+          {' '}<span className="text-gray-400">Measured</span> rows come from the provider app&rsquo;s own session records — Claude Code,
+          Codex, Grok and Antigravity write per-call input, output and prompt-cache counts for every session on the machine,
+          terminal and desktop use included, each priced at its own rate.
+          {' '}<span className="text-gray-400">Estimated</span> rows are usage no app recorded: PortOS one-shot runs the app does not
+          save, older Antigravity turns without token fields, and local models, approximated from prompt and output text with no
+          cache traffic counted — those rows understate real usage.
           {' '}OpenCode-backed runs (including zen) contribute the output tokens from the run&rsquo;s own event stream and stay
           estimated on input. Rates are as of {report?.pricingAsOf || 'the last update'} and exclude batch and long-context tiers.
           {' '}Rows marked ~ use an approximated rate.
@@ -1302,7 +1313,7 @@ function InternalUsageMetrics({ onBillingSaved }) {
             <span>6pm</span>
             <span>12am</span>
           </div>
-          <p className="text-xs text-gray-500 mt-1">Sessions in this period across available instances, by each instance&rsquo;s local clock.</p>
+          <p className="text-xs text-gray-500 mt-1">Sessions in this period across available instances, by hour in your configured timezone (days recorded before this change are keyed and binned in UTC).</p>
           {usage.coverage?.hourlyIncomplete && <p className="text-xs text-port-warning mt-1">Partial: older sessions or unavailable instances do not provide hourly detail.</p>}
           </> : <p className="text-sm text-gray-500">Hourly data is unavailable for this period.</p>}
         </div>
@@ -1424,36 +1435,17 @@ function InternalUsageMetrics({ onBillingSaved }) {
   );
 }
 
-export function LegacyUsagePage({ sourceTabs = null }) {
+export function UsagePage() {
   const [billingRevision, setBillingRevision] = useState(0);
   const onBillingSaved = useCallback(() => setBillingRevision((value) => value + 1), []);
   return (
     <PageLayout header={<PageHeader icon={BarChart3} title="Subscription Usage" />} navigation={<ModelsTabsHeader activeTab="usage" />}>
       <div className="space-y-6">
-        {sourceTabs}
         <ProviderQuotaSection billingRevision={billingRevision} />
         <InternalUsageMetrics onBillingSaved={onBillingSaved} />
       </div>
     </PageLayout>
   );
-}
-
-export function UsagePage() {
-  const [searchParams, setSearchParams] = useSearchParams();
-  const view = searchParams.get('view') === 'legacy' ? 'legacy' : 'native';
-  const tabs = <TabPills ariaLabel="Usage source" variant="pills" size="sm" stretch className="sm:max-w-sm" tabs={[
-    { id: 'native', label: 'Native history', icon: Fingerprint },
-    { id: 'legacy', label: 'Legacy analytics', icon: History },
-  ]} activeTab={view} onChange={value => {
-    const next = new URLSearchParams(searchParams);
-    if (value === 'native') next.delete('view');
-    else next.set('view', value);
-    setSearchParams(next);
-  }} />;
-  if (view === 'legacy') return <LegacyUsagePage sourceTabs={tabs} />;
-  return <PageLayout header={<PageHeader icon={BarChart3} title="Subscription Usage" />} navigation={<ModelsTabsHeader activeTab="usage" />}>
-    <div className="space-y-4">{tabs}<NativeUsageOverview /></div>
-  </PageLayout>;
 }
 
 export default UsagePage;

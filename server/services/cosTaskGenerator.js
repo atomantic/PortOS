@@ -2391,6 +2391,7 @@ async function applyPerpetualWorkGate(app, taskType, promptTaskType, metadata, i
   const detection = await detectActionableWork(promptTaskType, app, {
     issueAuthorFilter: metadata.issueAuthorFilter || 'self',
     issueExcludeLabels: metadata.issueExcludeLabels || [],
+    issueMinAgeMinutes: metadata.issueMinAgeMinutes,
     // A detector that counts in-flight work must skip the task whose completion
     // triggered this refill — it is already recorded, just not yet marked done.
     ignoreTaskId
@@ -2866,7 +2867,7 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
   const planConstraintBlock = buildPlanConstraintBlock(metadata.planId);
 
   const modeInstructions = isAuditTaskType(taskType)
-    ? `${modeContractFor(fileIssues)}\n\n${auditQualityInstructions(taskType)}`
+    ? `${modeContractFor(fileIssues)}\n\n${auditQualityInstructions(taskType, app)}`
     : '';
   // Resolve completion before rendering reviewers, including claim flows that
   // own their PR while intentionally disabling CoS worktree provisioning.

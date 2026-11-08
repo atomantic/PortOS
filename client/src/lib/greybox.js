@@ -104,7 +104,7 @@ export function withoutGreyboxItem(scene, collection, id) {
 /** Fast editor checks; the PUT's server schema remains authoritative. */
 export function greyboxEditErrors(scene) {
   const errors = [];
-  const limits = { parts: 400, zones: 24, landmarks: 80, anchors: 80, shots: 60 };
+  const limits = { parts: 1500, zones: 24, landmarks: 80, anchors: 80, shots: 60 };
   const number = (value, min, max, name, positive = false) => {
     if (!Number.isFinite(value) || value < min || value > max || (positive && value === 0)) errors.push(`${name} must be ${positive ? 'greater than 0' : `at least ${min}`} and at most ${max}.`);
   };

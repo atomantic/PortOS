@@ -6,6 +6,7 @@
  * These helpers convert between UTC and the user's local timezone.
  */
 
+const DAY_MS = 24 * 60 * 60 * 1000
 const WEEKDAY_MAP = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 }
 
 // Cache Intl.DateTimeFormat instances per timezone — these are expensive to construct
@@ -100,6 +101,21 @@ export function nextLocalTime(afterMs, hours, minutes, timezone) {
 }
 
 /**
+ * Move an instant by whole LOCAL calendar days, keeping its local HH:MM. Adding
+ * `days * 24h` instead lands an hour off whenever a DST change falls in between
+ * (Sat 03:00 + 48h is Mon 02:00 across a fall-back). Searches the HH:MM occurrence
+ * from 12h before the naive target, so a +/-1h DST shift still resolves to it.
+ * @param {number} ms - UTC timestamp
+ * @param {number} days - Whole local days to add (may be negative)
+ * @param {string} timezone - IANA timezone string
+ * @returns {number} UTC timestamp
+ */
+export function addLocalDays(ms, days, timezone) {
+  const { hour, minute } = getLocalParts(new Date(ms), timezone)
+  return nextLocalTime(ms + days * DAY_MS - DAY_MS / 2, hour, minute, timezone)
+}
+
+/**
  * Get the date string (YYYY-MM-DD) for an instant in the user's timezone —
  * "today" by default, or a caller-supplied instant. Pass the SAME instant a
  * writer stamped into its `timestamp`/`startedAt` so the day key and the instant
@@ -134,7 +150,6 @@ export function isLocalDay(timestamp, timezone, dayStr) {
   return todayInTimezone(timezone, at) === dayStr
 }
 
-const DAY_MS = 24 * 60 * 60 * 1000
 const LOCAL_DAY_SEARCH_RADIUS_MS = 36 * 60 * 60 * 1000
 
 function parseIsoDay(dayStr) {

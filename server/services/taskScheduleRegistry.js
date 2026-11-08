@@ -8,6 +8,7 @@ import { PRIVATE_SECURITY_TASK_TYPE, PRIVATE_SECURITY_DELIVERY } from '../lib/pr
 
 import { BRANCHES_PER_AGENT_MAX, BRANCHES_PER_AGENT_MIN, DEFAULT_REPO_SYNC_VERIFY_MODE, ERROR_LOG_TRIAGE_LIMITS, RELEASE_OPTION_KEYS } from '../lib/cosValidation.js';
 import { isAuditTaskType, defaultFileIssuesFor } from '../lib/auditCatalog.js';
+import { DEFAULT_ISSUE_MIN_AGE_MINUTES } from '../lib/issueClaimEvidence.js';
 import { MODEL_ABUSE_GUARD_ID } from '../lib/modelAbuseGuard.js';
 import {
   PUBLIC_REVIEW_GATE_EXECUTION_PROFILE,
@@ -298,7 +299,10 @@ const TASK_INTERVAL_DEFAULTS = {
   // (perpetualWork.js) — e.g. `good first issue`, to leave those open for human
   // contributors. Per-app override supported via taskTypeOverrides, like
   // `issueAuthorFilter`.
-  'claim-issue':         { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: false, openPR: false, claimFlow: true, simplify: true, issueAuthorFilter: 'self', issueExcludeLabels: [] } },
+  // `issueMinAgeMinutes` (default 5, 0 = off) skips issues younger than that
+  // while auto-claiming, so a run never snipes an issue the agent that just
+  // filed it is about to claim. A pinned target ignores it.
+  'claim-issue':         { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: false, openPR: false, claimFlow: true, simplify: true, issueAuthorFilter: 'self', issueExcludeLabels: [], issueMinAgeMinutes: DEFAULT_ISSUE_MIN_AGE_MINUTES } },
   // claim-work is the SINGLE-SOURCE router: one toggle per app that ships the
   // next work item from whatever tracker the app is configured for
   // (app.workTracker, default 'auto' → resolved from the git origin host). At
@@ -312,7 +316,7 @@ const TASK_INTERVAL_DEFAULTS = {
   // hide the claim slug and trigger cleanupAgentWorktree's auto-merge).
   // `issueAuthorFilter` / `issueExcludeLabels` apply only when the resolved
   // tracker is a forge (github/gitlab); both are inert for plan/jira.
-  'claim-work':          { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: false, openPR: false, claimFlow: true, simplify: true, issueAuthorFilter: 'self', issueExcludeLabels: [] } },
+  'claim-work':          { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: false, openPR: false, claimFlow: true, simplify: true, issueAuthorFilter: 'self', issueExcludeLabels: [], issueMinAgeMinutes: DEFAULT_ISSUE_MIN_AGE_MINUTES } },
   'error-handling':      { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
   'typing':              { type: INTERVAL_TYPES.ON_DEMAND, enabled: true, providerId: null, model: null, prompt: null, taskMetadata: { fileIssues: false } },
   // do-release ships the release: it finishes in-flight PRs, merges dependency
@@ -388,6 +392,7 @@ const TASK_INTERVAL_DEFAULTS = {
   'better-complexity':          fileIssuesAuditInterval(),
   'better-cognitive-load':      fileIssuesAuditInterval(),
   'better-structural-drift':    fileIssuesAuditInterval(),
+  'app-bugs':                   fileIssuesAuditInterval(),
   'better-runtime-safety':      fileIssuesAuditInterval(),
   'better-dependency-freedom':  fileIssuesAuditInterval(),
   'better-test-quality':        fileIssuesAuditInterval(),
@@ -660,6 +665,7 @@ export const TASK_TYPE_DESCRIPTIONS = {
   'better-complexity': 'Cyclomatic complexity — measure branching per function, reduce the hottest offenders; file issues (default) or implement one refactor',
   'better-cognitive-load': 'Cognitive load — excessive code comments, mixed abstraction levels, flag arguments, misleading names, action at a distance; file issues (default) or implement one refactor',
   'better-structural-drift': 'Structural drift — generated artifacts as a second source of truth, hand-synced registries, layout coupling; file issues (default) or implement one consolidation',
+  'app-bugs': 'App bugs — server and core-logic bugs: wrong results, edge inputs, success that did nothing, races a user or job can trigger; file issues (default) or implement fixes',
   'better-runtime-safety': 'Runtime safety — missing awaits, unhandled rejections, unguarded nulls, leaks, races; file issues (default) or implement fixes',
   'better-dependency-freedom': 'Dependency freedom — replace micro-packages and native-API wrappers with in-repo code; file issues (default) or implement one removal',
   'better-test-quality': 'Test quality — vacuous, weak, or redundant tests; file issues (default) or implement one cleanup',

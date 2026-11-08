@@ -34,6 +34,12 @@ vi.mock('../services/pm2Standardizer.js', () => ({
 import * as appsService from '../services/apps.js';
 import * as appUpdater from '../services/appUpdater.js';
 import * as pm2Standardizer from '../services/pm2Standardizer.js';
+import { runDeployFlow } from '../services/appDeployer.js';
+
+// The real orchestration, so app:standardize is exercised through the same
+// flow the standardize:start path uses. Its analyze/backup/apply seams are wired
+// to the mocked steps above.
+const { runStandardizeFlow: runRealStandardizeFlow } = await vi.importActual('../services/pm2Standardizer.js');
 import { logAction } from '../services/history.js';
 import { checkPortosUpdatePreflight } from '../services/updatePreflight.js';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
@@ -114,6 +120,13 @@ describe('app socket handlers', () => {
     __resetAppOperations();
     bus = makeBus();
     appsService.getAppById.mockImplementation(async (id) => APPS[id] ?? null);
+    pm2Standardizer.createGitBackup.mockResolvedValue({ success: false, reason: 'No git repository' });
+    pm2Standardizer.runStandardizeFlow.mockImplementation((repoPath, providerId, opts) => runRealStandardizeFlow(repoPath, providerId, {
+      ...opts,
+      analyze: pm2Standardizer.analyzeApp,
+      backup: pm2Standardizer.createGitBackup,
+      apply: pm2Standardizer.applyStandardization,
+    }));
   });
 
   it('waits for Create App standardization and refuses another once update maintenance starts', async () => {
@@ -133,6 +146,26 @@ describe('app socket handlers', () => {
     await client.fire('standardize:start', { repoPath: '/repos/another-app' });
     expect(client.last('standardize:complete').payload).toMatchObject({ success: false });
     expect(pm2Standardizer.runStandardizeFlow).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a second Create App standardization for the same repo while one runs', async () => {
+    const entered = deferred();
+    const work = deferred();
+    pm2Standardizer.runStandardizeFlow.mockImplementation(async () => { entered.resolve(); return work.promise; });
+    const first = connect(bus);
+    const run = first.fire('standardize:start', { repoPath: '/repos/new-app' });
+    onTestFinished(async () => { work.resolve({ success: true }); await run; });
+    await entered.promise;
+
+    const second = connect(bus);
+    await second.fire('standardize:start', { repoPath: '/repos/new-app' });
+    expect(second.last('standardize:complete').payload).toMatchObject({ success: false, duplicate: true });
+    expect(pm2Standardizer.runStandardizeFlow).toHaveBeenCalledTimes(1);
+
+    work.resolve({ success: true });
+    await run;
+    await second.fire('standardize:start', { repoPath: '/repos/new-app' });
+    expect(pm2Standardizer.runStandardizeFlow).toHaveBeenCalledTimes(2);
   });
 
   it('routes a standardization admission refusal to the requested app', async () => {
@@ -259,6 +292,126 @@ describe('app socket handlers', () => {
       });
       expect(pm2Standardizer.analyzeApp).not.toHaveBeenCalled();
 
+      release();
+      await settled;
+    });
+  });
+
+  describe('app:deploy through the operation registry', () => {
+    // Parks inside runDeployFlow so the claim is provably held when the next event fires.
+    const startParkedDeploy = async (appId, { emitFrames } = {}) => {
+      const entered = deferred();
+      const gate = deferred();
+      runDeployFlow.mockImplementation(async (_id, _flags, { onOutput }) => {
+        emitFrames?.(onOutput);
+        entered.resolve();
+        return gate.promise;
+      });
+      const client = connect(bus);
+      const settled = client.fire('app:deploy', { appId, flags: ['--ios'] });
+      const release = (result) => gate.resolve(result ?? { ok: true, success: true, code: 0 });
+      onTestFinished(async () => { release(); await settled; });
+      await entered.promise;
+      return { client, settled, release };
+    };
+
+    it('claims a deploy operation, broadcasts every frame with its appId, and releases on success', async () => {
+      const { client, settled, release } = await startParkedDeploy('app-a', {
+        emitFrames: (onOutput) => {
+          onOutput('status', { message: 'Starting deploy...', phase: 'start' });
+          onOutput('output', { text: 'building\n', stream: 'stdout' });
+        },
+      });
+      // A client that connects mid-run sees the operation, with its phase.
+      const remount = connect(bus);
+      remount.fire('app:operations:list');
+      expect(remount.last('app:operations:active').payload.operations).toMatchObject([
+        { appId: 'app-a', type: 'deploy', steps: [{ step: 'start', status: 'running', message: 'Starting deploy...' }] },
+      ]);
+
+      release({ ok: true, success: true, code: 0 });
+      await settled;
+
+      expect(runDeployFlow).toHaveBeenCalledWith('app-a', ['--ios'], { onOutput: expect.any(Function) });
+      expect(client.last('app:deploy:status').payload).toMatchObject({ appId: 'app-a', phase: 'start' });
+      expect(client.last('app:deploy:output').payload).toMatchObject({ appId: 'app-a', text: 'building\n', stream: 'stdout' });
+      // io.emit: the terminal frame also reaches a socket that connected after the request.
+      for (const watcher of [client, remount]) {
+        expect(watcher.last('app:deploy:complete').payload).toEqual({ appId: 'app-a', startedAt: expect.any(Number), success: true, code: 0 });
+        expect(watcher.last('app:operations:active').payload.operations).toEqual([]);
+      }
+      // Every frame names the run, so a client can tombstone a run no snapshot named.
+      const runIds = new Set(['app:deploy:status', 'app:deploy:output', 'app:deploy:complete'].map(e => client.last(e).payload.startedAt));
+      expect(runIds.size).toBe(1);
+    });
+
+    it('refuses a second deploy for the same app and for a sibling record on the same checkout', async () => {
+      const { settled, release } = await startParkedDeploy('app-a');
+
+      const second = connect(bus);
+      await second.fire('app:deploy', { appId: 'app-a' });
+      expect(second.last('app:deploy:error').payload).toEqual({
+        appId: 'app-a',
+        duplicate: true,
+        message: 'A deploy is already running for Example App A',
+      });
+
+      const sibling = connect(bus);
+      await sibling.fire('app:deploy', { appId: 'app-b' });
+      expect(sibling.last('app:deploy:error').payload).toMatchObject({ appId: 'app-b', duplicate: true });
+      expect(runDeployFlow).toHaveBeenCalledTimes(1);
+
+      release();
+      await settled;
+    });
+
+    it('releases the operation and reports a failed deploy as complete with success:false', async () => {
+      runDeployFlow.mockResolvedValue({ ok: true, success: false, code: 2 });
+      const client = connect(bus);
+      await client.fire('app:deploy', { appId: 'app-a' });
+      expect(client.last('app:deploy:complete').payload).toEqual({ appId: 'app-a', startedAt: expect.any(Number), success: false, code: 2 });
+      expect(client.last('app:operations:active').payload.operations).toEqual([]);
+    });
+
+    it('releases the operation when the flow refuses the request', async () => {
+      runDeployFlow.mockResolvedValue({ ok: false, error: 'No deploy.sh found for this app' });
+      const client = connect(bus);
+      await client.fire('app:deploy', { appId: 'app-a' });
+      expect(client.last('app:deploy:error').payload).toEqual({ appId: 'app-a', startedAt: expect.any(Number), message: 'No deploy.sh found for this app' });
+      expect(client.events('app:deploy:complete')).toHaveLength(0);
+      expect(client.last('app:operations:active').payload.operations).toEqual([]);
+    });
+
+    it('releases the operation when the flow throws, and allows the next deploy', async () => {
+      runDeployFlow.mockRejectedValueOnce(new Error('spawn failed'));
+      const client = connect(bus);
+      await client.fire('app:deploy', { appId: 'app-a' });
+      expect(client.last('app:deploy:error').payload).toEqual({ appId: 'app-a', startedAt: expect.any(Number), message: 'spawn failed' });
+      expect(client.events('app:deploy:complete')).toHaveLength(0);
+      expect(client.last('app:operations:active').payload.operations).toEqual([]);
+
+      runDeployFlow.mockResolvedValueOnce({ ok: true, success: true, code: 0 });
+      await client.fire('app:deploy', { appId: 'app-a' });
+      expect(client.events('app:deploy:error')).toHaveLength(1);
+      expect(client.last('app:deploy:complete').payload).toMatchObject({ appId: 'app-a', success: true });
+    });
+
+    it('reports an unknown app to the requester without claiming anything', async () => {
+      const client = connect(bus);
+      await client.fire('app:deploy', { appId: 'missing' });
+      expect(client.last('app:deploy:error').payload).toEqual({ appId: 'missing', message: 'App not found' });
+      expect(runDeployFlow).not.toHaveBeenCalled();
+      expect(client.events('app:operations:active').filter((e) => e.payload.operations.length)).toHaveLength(0);
+    });
+
+    it('refuses a deploy while an update runs on the same checkout', async () => {
+      const { settled, release } = await startParkedUpdate(bus, 'app-a');
+      const other = connect(bus);
+      await other.fire('app:deploy', { appId: 'app-b' });
+      expect(other.last('app:deploy:error').payload).toMatchObject({
+        appId: 'app-b', duplicate: true, message: 'An update is already running for Example App A',
+      });
+      expect(runDeployFlow).not.toHaveBeenCalled();
       release();
       await settled;
     });
@@ -395,6 +548,59 @@ describe('app socket handlers', () => {
         { syncFork: false,
         acknowledgeFork: true, acknowledgePersistentMindImageBackup: true },
       );
+    });
+  });
+
+  describe('app:standardize through the shared flow', () => {
+    it('creates exactly one git backup on a clean repo and tells apply to skip its own', async () => {
+      pm2Standardizer.analyzeApp.mockResolvedValue({ success: true, proposedChanges: { processes: [{ name: 'example-web' }] } });
+      pm2Standardizer.createGitBackup.mockResolvedValue({ success: true, branch: 'portos-backup-1' });
+      pm2Standardizer.applyStandardization.mockResolvedValue({ success: true, filesModified: ['ecosystem.config.cjs'], filesPreserved: [] });
+      const client = connect(bus);
+
+      await client.fire('app:standardize', { appId: 'app-a' });
+
+      expect(pm2Standardizer.createGitBackup).toHaveBeenCalledTimes(1);
+      expect(pm2Standardizer.applyStandardization).toHaveBeenCalledWith(
+        '/repos/shared', expect.anything(), expect.objectContaining({ skipBackup: true }),
+      );
+      expect(client.last('app:standardize:complete').payload).toEqual({
+        appId: 'app-a',
+        success: true,
+        result: {
+          backupBranch: 'portos-backup-1',
+          filesModified: ['ecosystem.config.cjs'],
+          filesPreserved: [],
+          processes: [{ name: 'example-web' }],
+        },
+      });
+      expect(appsService.updateApp).toHaveBeenCalledWith('app-a', { pm2ProcessNames: ['example-web'] });
+    });
+
+    it('reports a dirty worktree as a failed backup step and never applies', async () => {
+      pm2Standardizer.analyzeApp.mockResolvedValue({ success: true, proposedChanges: { processes: [] } });
+      pm2Standardizer.createGitBackup.mockResolvedValue({
+        success: false,
+        code: 'DIRTY_WORKTREE',
+        reason: 'Working tree has uncommitted changes',
+      });
+      const client = connect(bus);
+
+      await client.fire('app:standardize', { appId: 'app-a' });
+
+      expect(client.events('app:standardize:step').map((e) => [e.payload.step, e.payload.status])).toEqual([
+        ['analyze', 'running'],
+        ['analyze', 'done'],
+        ['backup', 'running'],
+        ['backup', 'error'],
+      ]);
+      expect(client.last('app:standardize:error').payload).toEqual({
+        appId: 'app-a',
+        message: 'Working tree has uncommitted changes',
+      });
+      expect(pm2Standardizer.applyStandardization).not.toHaveBeenCalled();
+      expect(client.events('app:standardize:complete')).toHaveLength(0);
+      expect(client.last('app:operations:active').payload.operations).toEqual([]);
     });
   });
 

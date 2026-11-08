@@ -75,6 +75,19 @@ describe('ModelDownloadBadge', () => {
     expect(screen.getByText('24 GB / 48 GB')).toBeInTheDocument();
   });
 
+  it('omits the file counter when the emitter does not count files', () => {
+    render(<ModelDownloadBadge
+      status={{
+        repo: 'example/encoder',
+        cached: false,
+        downloading: true,
+        progress: { type: 'progress', stage: 'download', progress: 0.25, file: 'text_encoder/model.safetensors' },
+      }}
+    />);
+    expect(screen.getByText('text_encoder/model.safetensors')).toBeInTheDocument();
+    expect(screen.queryByText(/undefined/)).not.toBeInTheDocument();
+  });
+
   it('labels the post-transfer commit as verifying', () => {
     render(<ModelDownloadBadge
       status={{

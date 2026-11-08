@@ -5,6 +5,7 @@ import { GREYBOX_INSTRUCTION_MAX, GREYBOX_SHOT_ID_MAX } from './greyboxVocabular
 import { PHOTOREAL_ENGINES, PHOTOREAL_FLYTHROUGH_SECONDS, PHOTOREAL_MAX_SAMPLES } from './greyboxBlender.js';
 import { PHOTOREAL_TEXTURE_ID, PHOTOREAL_TEXTURED_PRESETS, photorealLookSchema } from './photorealLook.js';
 import { EFFORT_LEVELS } from './providerModels.js';
+import { worldMapSchema } from './worldMapValidation.js';
 import { emptyToNull } from './zodCompat.js';
 import { REVISION_SOURCES } from './catalogValidation.js';
 
@@ -25,6 +26,12 @@ export const catalogGreyboxDraftSchema = z.object({
 // `greybox: null` removes the place's greybox.
 export const catalogGreyboxSaveSchema = z.object({
   greybox: greyboxSceneSchema.nullable(),
+  source: z.enum(REVISION_SOURCES).optional(),
+}).strict();
+
+// World map (lib/worldMap.js): the sets it places and the paths between them; `world: null` removes it.
+export const catalogWorldSaveSchema = z.object({
+  world: worldMapSchema.nullable(),
   source: z.enum(REVISION_SOURCES).optional(),
 }).strict();
 

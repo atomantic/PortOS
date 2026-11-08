@@ -27,6 +27,7 @@ import { executionOptionsSchema } from './aiToolkit/internal/executionOptionsVal
  */
 
 import { z } from 'zod';
+import { NIGHT_BEAT_KINDS, NIGHT_BEATS_MAX, NIGHT_LENGTH_MAX_MIN, NIGHT_PACES, PREVIZ_CAMERA_STYLES, PREVIZ_CUTS_MAX, PREVIZ_KEYS_MAX, PREVIZ_PAWN_COLOR_IDS, PREVIZ_POSES, PREVIZ_TRACKS_MAX, PREVIZ_VISIBLE_MAX } from './musicVideoPrevizLimits.js';
 import { MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX } from './musicVideoSubjectLimits.js';
 export const musicVideoDcpRequestSchema = z.object({ grade: z.enum(['rec709', 'rec1886']), renderHistoryId: z.string().min(1), sourceSha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 import { GROK_VIDEO_DURATIONS } from './grokVideoClip.js';
@@ -278,6 +279,70 @@ export const musicVideoCameraSchema = z.object({
   owner: z.string().trim().max(120).optional(),
   // How this camera behaves in the story, e.g. who borrows it, or that nobody ever looks at it.
   rule: z.string().trim().max(1000).optional(),
+  // How the camera moves in the greybox previz while it is a cut's camera (lib/musicVideoPreviz.js).
+  previzStyle: z.enum(PREVIZ_CAMERA_STYLES).optional(),
+}).strict();
+// The greybox previz: blocking over the song, played over each place's greybox (lib/musicVideoPreviz.js).
+const previzSec = z.number().finite().min(0).max(36000);
+const previzCoord = z.number().finite().min(-1000).max(1000);
+const previzSubjectId = z.string().min(1).max(64);
+export const musicVideoPrevizSchema = z.object({
+  // The catalog environment whose world map (lib/worldMap.js) the previz plays in; null/absent = none.
+  worldId: z.string().min(1).max(128).nullable().optional(),
+  // When the cuts were last built or synced from the shots (the Previz step's "updated" time).
+  builtAt: z.string().datetime().nullable().optional(),
+  cuts: z.array(z.object({
+    id: z.string().min(1).max(64),
+    // A linked shot; its live timing wins over the cut's own.
+    sceneId: z.string().min(1).max(128).nullable().optional(),
+    startSec: previzSec,
+    endSec: previzSec,
+    placeSubjectId: previzSubjectId.nullable().optional(),
+    viewShotId: z.string().min(1).max(GREYBOX_SHOT_ID_MAX).regex(GREYBOX_SHOT_ID_PATTERN).nullable().optional(),
+    holderSubjectId: previzSubjectId.nullable().optional(),
+    // null = everyone on the set except the holder.
+    visibleSubjectIds: z.array(previzSubjectId).max(PREVIZ_VISIBLE_MAX).nullable().optional(),
+    aimSubjectId: previzSubjectId.nullable().optional(),
+    // The camera starts on its own aim and swings to the keep-in-frame person during the cut.
+    turnToAim: z.boolean().optional(),
+    // Where the cut starts on the night (story minutes) and an unheld camera's spot on the world map.
+    storyMin: z.number().finite().min(0).max(NIGHT_LENGTH_MAX_MIN).nullable().optional(),
+    cameraSpot: z.tuple([z.number().finite().min(-5000).max(5000), z.number().finite().min(-5000).max(5000)]).nullable().optional(),
+  }).strict().refine((cut) => cut.endSec > cut.startSec, { message: 'A previz cut must end after it starts' })).max(PREVIZ_CUTS_MAX),
+  tracks: z.array(z.object({
+    subjectId: previzSubjectId,
+    placeSubjectId: previzSubjectId,
+    keys: z.array(z.object({
+      timeSec: previzSec,
+      position: z.tuple([previzCoord, previzCoord, previzCoord]),
+      facingDegrees: z.number().finite().min(-36000).max(36000),
+      pose: z.enum(PREVIZ_POSES).optional(),
+    }).strict()).min(1).max(PREVIZ_KEYS_MAX)
+      .refine((keys) => keys.every((key, i) => i === 0 || key.timeSec > keys[i - 1].timeSec), { message: 'Track key times must strictly increase' }),
+  }).strict()).max(PREVIZ_TRACKS_MAX)
+    .refine((tracks) => new Set(tracks.map((t) => `${t.placeSubjectId}\u0000${t.subjectId}`)).size === tracks.length, { message: 'One track per person per set' }),
+  // Picked pawn colors by character; anyone missing takes the next unused color in cast order.
+  pawnColors: z.record(previzSubjectId, z.object({
+    figure: z.enum(PREVIZ_PAWN_COLOR_IDS).optional(),
+    bike: z.enum(PREVIZ_PAWN_COLOR_IDS).optional(),
+  }).strict()).optional(),
+  // The story night over the world map (lib/musicVideoPrevizNight.js); story minutes from `startClock`.
+  night: z.object({
+    startClock: z.number().int().min(0).max(1439),
+    lengthMin: z.number().finite().min(1).max(NIGHT_LENGTH_MAX_MIN),
+    beats: z.array(z.object({
+      id: z.string().min(1).max(64),
+      kind: z.enum(NIGHT_BEAT_KINDS),
+      subjectIds: z.array(previzSubjectId).max(PREVIZ_VISIBLE_MAX),
+      startMin: z.number().finite().min(0).max(NIGHT_LENGTH_MAX_MIN),
+      endMin: z.number().finite().min(0).max(NIGHT_LENGTH_MAX_MIN),
+      setId: z.string().min(1).max(64),
+      toSetId: z.string().min(1).max(64).nullable().optional(),
+      pace: z.enum(NIGHT_PACES).nullable().optional(),
+    }).strict().refine((beat) => beat.endMin > beat.startMin, { message: 'A night beat must end after it starts' }))
+      .max(NIGHT_BEATS_MAX)
+      .refine((beats) => new Set(beats.map((b) => b.id)).size === beats.length, { message: 'Night beat ids must be unique' }),
+  }).strict().nullable().optional(),
 }).strict();
 // A path through several of the video's places, in travel order (lib/musicVideoRouteMaps.js).
 export const musicVideoRouteMapSchema = z.object({
@@ -741,6 +806,8 @@ export const musicVideoSceneCharacterVariantSchema = z.object({
 export const musicVideoSceneSetReferenceSchema = z.object({
   subjectId: z.string().min(1).max(128),
   greyboxShotId: z.string().min(1).max(GREYBOX_SHOT_ID_MAX).regex(GREYBOX_SHOT_ID_PATTERN).optional(),
+  // false keeps the camera's flat figure capture out of renders that send its photo plate.
+  blocking: z.literal(false).optional(),
 }).strict();
 
 const musicVideoPreMusicLayerSchema = z.object({
@@ -1786,6 +1853,7 @@ export const musicVideoProjectUpdateSchema = z.object({
   pacing: musicVideoPacingSchema.nullable().optional(),
   cameras: z.array(musicVideoCameraSchema).max(SHOT_CAMERA_MAX).optional(),
   routeMaps: z.array(musicVideoRouteMapSchema).max(ROUTE_MAP_MAX).optional(),
+  previz: musicVideoPrevizSchema.nullable().optional(),
   composition: musicVideoCompositionSchema.nullable().optional(),
   soundBed: musicVideoSoundBedSchema.nullable().optional(),
   // The finishing film look (lib/filmLook.js); null = none.

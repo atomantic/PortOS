@@ -188,6 +188,21 @@ describe('usage sync category', () => {
     expect(data.instances['inst-self'].usage.totalTokens.output).toBe(1000);
   });
 
+  // A peer one version behind still runs the retired cutover barrier (#15279):
+  // idle, its wire is the plain map; holding a fence or epoch, it stamps `cutover`.
+  it('stays wire-compatible with a peer that still runs the cutover barrier', async () => {
+    const stamp = { migrationEpoch: 'epoch-a', state: 'activated', barrierSchema: 1 };
+    expect(await applyUsageRemote({ instances: {}, tombstones: [], cutover: { ...stamp, instances: { 'inst-peer': peerEntry() } } }))
+      .toEqual({ applied: false, count: 0 });
+    expect((await readStoreFile())?.instances?.['inst-peer']).toBeUndefined();
+
+    expect(await applyUsageRemote({ instances: { 'inst-peer': peerEntry() }, tombstones: [] })).toEqual({ applied: true, count: 1 });
+    const [snapshot, manifest] = await Promise.all([getUsageSnapshot(), getUsageManifest()]);
+    expect(Object.keys(snapshot.data).sort()).toEqual(['instances', 'tombstones']);
+    expect(Object.keys(manifest.data).sort()).toEqual(['instances', 'tombstones']);
+    expect(Object.keys(manifest.data.instances).sort()).toEqual(['inst-peer', 'inst-self']);
+  });
+
   it('re-applying the same snapshot is a no-op', async () => {
     const snapshot = { instances: { 'inst-peer': peerEntry() } };
     await applyUsageRemote(snapshot);
@@ -430,10 +445,18 @@ describe('fleet report', () => {
 
     expect(fleet.instances.map((i) => i.instanceId)).toEqual(['inst-self', 'inst-peer']);
     expect(fleet.instances[0].self).toBe(true);
-    expect(fleet.instances[1].capturedAt).toBe('2026-08-30T12:00:00.000Z');
+    expect(fleet.instances[1].capturedAt).toBe('2026-08-30T09:00:00.000Z');
     expect(fleet.totals.tokensOut).toBe(5000);
     expect(fleet.totals.sessions).toBe(4);
     expect(fleet.instances.every((i) => i.usesSubscriptions)).toBe(true);
+  });
+
+  it('ages a peer row by its snapshot, not its last ledger write', async () => {
+    // A native-history refresh moves capturedAt without touching the ledger.
+    await applyUsageRemote({ instances: { 'inst-peer': peerEntry({ capturedAt: '2026-08-30T18:00:00.000Z' }) } });
+    const fleet = await getFleetUsage({ providers: [] });
+
+    expect(fleet.instances[1].capturedAt).toBe('2026-08-30T18:00:00.000Z');
   });
 
   // A machine that pays API rates is still listed — the spend is real — but

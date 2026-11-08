@@ -6,10 +6,10 @@
  * creating/updating jobs and rendering the UI's interval picker.
  */
 
-import { getLocalParts, nextLocalTime } from '../../lib/timezone.js'
+import { addLocalDays, getLocalParts, nextLocalTime } from '../../lib/timezone.js'
 import { getUserTimezone } from '../userTimezone.js'
 import { parseCronToNextRun, parseRecurrenceToNextRun } from '../eventScheduler.js'
-import { DAY, isOnDemandJob } from './constants.js'
+import { DAY, HOUR, isOnDemandJob } from './constants.js'
 import { loadJobs } from './store.js'
 
 // Reads enabled jobs straight from the store. Scheduler intentionally does NOT
@@ -103,36 +103,92 @@ async function getDueJobs() {
 }
 
 /**
+ * The cron a job fires on: its own `cronExpression`, or a synthesized daily
+ * (`M H * * *`) / weekday (`M H * * 1-5`) cron for a daily or weekdaysOnly
+ * job with a `scheduledTime`. Shared by the armed timer (cosJobScheduler) and
+ * computeNextJobRun so both pick the same path. Weekly/biweekly/sub-daily
+ * interval jobs return null and use nextIntervalJobFireTime.
+ * @param {Object} job
+ * @returns {string|null}
+ */
+export function clockCronExpression(job) {
+  if (job.cronExpression) return job.cronExpression
+  if (!job.scheduledTime || !(job.interval === 'daily' || job.weekdaysOnly)) return null
+  const match = String(job.scheduledTime).match(/^([01]\d|2[0-3]):([0-5]\d)$/)
+  return match ? `${Number(match[2])} ${Number(match[1])} * * ${job.weekdaysOnly ? '1-5' : '*'}` : null
+}
+
+/**
+ * Next fire time of an interval-mode job: `lastRun + intervalMs`, snapped to the
+ * `scheduledTime` (HH:MM, user timezone) occurrence NEAREST that moment, then
+ * pushed off weekends for `weekdaysOnly`. The one implementation behind both the
+ * armed timer (cosJobScheduler) and the stats preview (computeNextJobRun), so
+ * they cannot drift.
+ *
+ * Nearest, not next: a run stamped a minute after HH:MM (script jobs stamp
+ * `lastRun` after the handler finishes) would otherwise round up a whole day,
+ * sliding a weekly job one weekday later every cycle. The search starts at
+ * `nextDue - window` (half an interval, capped at 13h), so every candidate is
+ * later than `lastRun` and hourly jobs still resolve to the next HH:MM. The cap
+ * is 13h, not 12h, and two consecutive HH:MM occurrences are compared: on a DST
+ * day they are 23h or 25h apart, so a one-sided 12h window could miss the nearer one.
+ *
+ * @param {Object} job - interval-mode job (finite `intervalMs`)
+ * @param {string} timezone - IANA timezone for scheduledTime
+ * @returns {number|null} UTC timestamp in milliseconds
+ */
+export function nextIntervalJobFireTime(job, timezone) {
+  // Never run: due now. The timer fires an overdue job at once; projecting
+  // lastRun = epoch 0 would publish a 1970 instant as the next run.
+  if (!job.lastRun) return Date.now()
+
+  const lastRun = new Date(job.lastRun).getTime()
+  let nextDue = lastRun + job.intervalMs
+
+  const match = job.scheduledTime && String(job.scheduledTime).match(/^([01]\d|2[0-3]):([0-5]\d)$/)
+  if (match) {
+    const hours = Number(match[1])
+    const minutes = Number(match[2])
+    // 13h covers the 25h fall-back gap between local HH:MM instants. Only an
+    // interval shorter than that narrows it, so the search still starts after lastRun.
+    const window = job.intervalMs > 13 * HOUR ? 13 * HOUR : job.intervalMs / 2
+    const first = nextLocalTime(nextDue - window, hours, minutes, timezone)
+    const second = nextLocalTime(first + 60_000, hours, minutes, timezone)
+    // DST nudging in nextLocalTime can move a candidate by up to an hour.
+    const nearest = [first, second]
+      .filter(candidate => candidate > lastRun)
+      .sort((a, b) => Math.abs(a - nextDue) - Math.abs(b - nextDue))[0]
+    if (nearest !== undefined) nextDue = nearest
+  }
+
+  if (job.weekdaysOnly && Number.isFinite(nextDue)) {
+    const { dayOfWeek } = getLocalParts(new Date(nextDue), timezone)
+    // Whole local days, so the local HH:MM survives a DST change over the weekend.
+    if (dayOfWeek === 0) nextDue = addLocalDays(nextDue, 1, timezone) // Sunday → Monday
+    if (dayOfWeek === 6) nextDue = addLocalDays(nextDue, 2, timezone) // Saturday → Monday
+  }
+
+  return Number.isFinite(nextDue) ? nextDue : null
+}
+
+/**
  * Compute one job's next scheduled timestamp.
  * @param {Object} job
  * @param {string} timezone
  * @returns {number|null} UTC timestamp in milliseconds
  */
 export function computeNextJobRun(job, timezone) {
-  if (job.cronSchedule || job.cronExpression) {
-    const from = job.lastRun ? new Date(job.lastRun) : new Date()
-    const next = job.cronSchedule
-      ? parseRecurrenceToNextRun(job.cronSchedule, from, timezone)
-      : parseCronToNextRun(job.cronExpression, from, timezone)
-    return next?.getTime() ?? null
-  }
+  const from = job.lastRun ? new Date(job.lastRun) : new Date()
+  if (job.cronSchedule) return parseRecurrenceToNextRun(job.cronSchedule, from, timezone)?.getTime() ?? null
 
   // No recurrence to project forward from — the caller renders 'On demand'
   // rather than an arithmetic-on-null date.
-  if (isOnDemandJob(job)) return null
+  if (!job.cronExpression && isOnDemandJob(job)) return null
 
-  const lastRun = job.lastRun ? new Date(job.lastRun).getTime() : 0
-  let nextDue = lastRun + job.intervalMs
+  const cronExpr = clockCronExpression(job)
+  if (cronExpr) return parseCronToNextRun(cronExpr, from, timezone)?.getTime() ?? null
 
-  if (job.scheduledTime) {
-    const match = String(job.scheduledTime).match(/^([01]\d|2[0-3]):([0-5]\d)$/)
-    if (match) {
-      const candidate = nextLocalTime(nextDue, Number(match[1]), Number(match[2]), timezone)
-      if (candidate > nextDue) nextDue = candidate
-    }
-  }
-
-  return Number.isFinite(nextDue) ? nextDue : null
+  return nextIntervalJobFireTime(job, timezone)
 }
 
 /**

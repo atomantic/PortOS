@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
 import { browserSuiteCanRun, resolveClientBundler, resolveTestChrome } from '../lib/browserSuiteGate.js';
 import { BROWSER_FIXTURE_STARTUP_MS, startBrowserFixture } from '../../scripts/lib/browserFixture.js';
+import { GREYBOX_SKY_COLOR } from '../lib/greyboxVocabulary.js';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const client = join(root, 'client');
@@ -394,7 +395,9 @@ describe.skipIf(!canRun)('Environment greybox in Chromium', () => {
         expect(pixels).toMatchObject({ width, height });
         expect(pixels.variance).toBeGreaterThan(100);
         for (const [r, g, b] of pixels.floor) { expect(g).toBeGreaterThan(r * 1.3); expect(g).toBeGreaterThan(b * 1.2); }
-        for (const [r, g, b] of pixels.outside) expect(Math.max(r, g, b)).toBeLessThan(60);
+        // Off the floor the capture shows the light sky, so dark poles and wires stay visible (#15327).
+        const sky = [1, 3, 5].map((i) => Number.parseInt(GREYBOX_SKY_COLOR.slice(i, i + 2), 16));
+        for (const pixel of pixels.outside) pixel.forEach((value, i) => expect(Math.abs(value - sky[i])).toBeLessThan(25));
         await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
         expect(await canvasState(page)).toEqual(before);
         expect(ingredient.payload.greybox.shots[0].aspect).toBe(aspect);

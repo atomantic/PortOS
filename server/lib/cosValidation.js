@@ -16,6 +16,7 @@ import { z } from 'zod';
 import { MALFORMED_REVIEW_REASONS, REVIEW_FINISH_REASONS, MAX_REVIEW_RESPONSE_LENGTH, CLI_REVIEW_PHASES, CLI_REVIEW_METRICS } from './reviewerHealth.js';
 import { emptyToUndefined, emptyToNull, providerRefFieldSchema, providerRefSchema } from './zodCompat.js';
 import { isPlainObject } from './objects.js';
+import { isValidSelfManagedPrStaleMinutes, normalizeSelfManagedPrAuthors } from './selfManagedPrAuthors.js';
 import { MIN_INTERVAL_MS, isValidLoopInterval } from './loopInterval.js';
 import { EFFORT_LEVELS } from './providerModels.js';
 import { isValidSlashdoCommand } from './slashdoInvocation.js';
@@ -1081,6 +1082,10 @@ export const ISSUE_AUTHOR_FILTERS = ['self', 'collaborators', 'owner', 'any'];
 export const REPO_SYNC_VERIFY_MODES = ['always', 'when-changed', 'never'];
 export const DEFAULT_REPO_SYNC_VERIFY_MODE = 'when-changed';
 
+// `issueMinAgeMinutes` cap: one day. A longer hold is a label's job. The
+// shipped default and its use live in lib/issueClaimEvidence.js.
+export const MAX_ISSUE_MIN_AGE_MINUTES = 1440;
+
 // `issueExcludeLabels` — extra labels a user wants left for human contributors
 // (e.g. `good first issue`) rather than auto-claimed by claim-issue/claim-work.
 // Unioned with the fixed NON_ACTIONABLE_ISSUE_LABELS set at read time
@@ -1088,6 +1093,7 @@ export const DEFAULT_REPO_SYNC_VERIFY_MODE = 'when-changed';
 // GitHub/GitLab's own per-issue label limits; this is a short curated list, not
 // an arbitrary label dump.
 export const MAX_ISSUE_EXCLUDE_LABELS = 20;
+
 
 // Per-entry length cap. GitHub caps a label name at 50 chars; GitLab allows up
 // to 255. Cap at GitLab's (larger) limit rather than GitHub's — a GitHub
@@ -1331,6 +1337,21 @@ export function sanitizeTaskMetadata(raw) {
     clean.prAuthorFilter = raw.prAuthorFilter;
     hasKeys = true;
   }
+  // An explicitly empty list is KEPT so a per-app override can clear the
+  // global exclusions back to "touch every trusted PR" — but only when the
+  // caller sent []: a list whose every entry is invalid must not become that
+  // clear and silently release the held authors.
+  if (Array.isArray(raw.selfManagedPrAuthors)) {
+    const authors = normalizeSelfManagedPrAuthors(raw.selfManagedPrAuthors);
+    if (authors.length || raw.selfManagedPrAuthors.length === 0) {
+      clean.selfManagedPrAuthors = authors;
+      hasKeys = true;
+    }
+  }
+  if (isValidSelfManagedPrStaleMinutes(raw.selfManagedPrStaleMinutes)) {
+    clean.selfManagedPrStaleMinutes = raw.selfManagedPrStaleMinutes;
+    hasKeys = true;
+  }
   // `verifyMode` decides when repo-sync dispatches its coordinator agent after a
   // clean deterministic pass — constrained, so an arbitrary string can't reach the
   // dispatch gate (which would fall back to the default anyway, silently).
@@ -1358,6 +1379,14 @@ export function sanitizeTaskMetadata(raw) {
   // default's non-empty list, not silently inherit it.
   if (Array.isArray(raw.issueExcludeLabels)) {
     clean.issueExcludeLabels = normalizeIssueExcludeLabels(raw.issueExcludeLabels);
+    hasKeys = true;
+  }
+  // `issueMinAgeMinutes` — 0 is kept as an explicit "no grace" override.
+  if (Object.prototype.hasOwnProperty.call(raw, 'issueMinAgeMinutes')
+      && Number.isInteger(raw.issueMinAgeMinutes)
+      && raw.issueMinAgeMinutes >= 0
+      && raw.issueMinAgeMinutes <= MAX_ISSUE_MIN_AGE_MINUTES) {
+    clean.issueMinAgeMinutes = raw.issueMinAgeMinutes;
     hasKeys = true;
   }
   // `swarmCount` turns claim-issue `--swarm` fan-out on (2..12 parallel agents)

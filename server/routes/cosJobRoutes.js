@@ -46,16 +46,17 @@ function validateRecurrenceRule(rule) {
 router.get('/jobs', asyncHandler(async (req, res) => {
   const jobs = await autonomousJobs.getAllJobs();
   const stats = await autonomousJobs.getJobStats();
-  const recurrenceJobs = jobs.filter(job => job.cronSchedule);
-  const timezone = recurrenceJobs.length ? await getUserTimezone() : null;
+  const timezone = await getUserTimezone();
+  // nextRunAt is the server's own next-fire projection (user timezone, DST,
+  // weekdaysOnly), so the UI renders it instead of re-deriving it in the browser.
   const jobsWithGates = jobs.map(j => {
-    const nextRun = j.cronSchedule && isValidRecurrence(j.cronSchedule)
-      ? computeNextJobRun(j, timezone)
-      : null;
+    const nextRun = j.cronSchedule && !isValidRecurrence(j.cronSchedule)
+      ? null
+      : computeNextJobRun(j, timezone);
     return {
       ...j,
       hasGate: hasGate(j.id),
-      ...(j.cronSchedule ? { nextRunAt: Number.isFinite(nextRun) ? new Date(nextRun).toISOString() : null } : {})
+      nextRunAt: Number.isFinite(nextRun) ? new Date(nextRun).toISOString() : null
     };
   });
   res.json({ jobs: jobsWithGates, stats, registeredGates: getRegisteredGates(), dataInputCatalog: getTaskDataInputCatalog() });

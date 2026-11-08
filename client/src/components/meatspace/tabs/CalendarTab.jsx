@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Calendar, Trash2 } from 'lucide-react';
 import { Link } from 'react-router';
 import toast from '../../ui/Toast';
@@ -16,13 +16,26 @@ export default function CalendarTab() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  // Bumped by each read and each optimistic removal; a read applies only if no
+  // newer read or removal started after it, so a snapshot taken before a delete
+  // cannot resurrect the removed row.
+  const generationRef = useRef(0);
+  const readsInFlightRef = useRef(0);
+  // Activity names (or a row key when unnamed) with a delete in flight. Keyed by
+  // identity, not index, because an earlier removal shifts later rows. The ref is
+  // the synchronous guard a second click reads before React has re-rendered.
+  const [removingKeys, setRemovingKeys] = useState([]);
+  const removingRef = useRef(new Set());
 
   const fetchData = useCallback(async () => {
+    const generation = ++generationRef.current;
+    readsInFlightRef.current++;
     const result = await api.getLifeCalendar().catch(err => {
-      setError(err.message);
+      if (generation === generationRef.current) setError(err.message);
       return null;
     });
-    if (result) {
+    readsInFlightRef.current--;
+    if (generation === generationRef.current && result) {
       setData(result);
       setError(null);
     }
@@ -40,11 +53,49 @@ export default function CalendarTab() {
   };
 
   const handleRemoveActivity = async (index) => {
-    const name = data?.budgets?.[index]?.name || 'Activity';
-    const result = await api.removeActivity(index).catch(() => null);
+    const storedName = data?.budgets?.[index]?.name;
+    const label = storedName || 'Activity';
+    // A row without a stored name has no identity to send; the server's guard
+    // only applies when a name is given, so omit it rather than send a placeholder.
+    const expectedName = typeof storedName === 'string' && storedName ? storedName : undefined;
+    const key = expectedName ?? `#${index}`;
+    if (removingRef.current.has(key)) return;
+    removingRef.current.add(key);
+    setRemovingKeys([...removingRef.current]);
+    const result = await api.removeActivity(index, expectedName, { silent: true }).catch(err => {
+      if (err?.code === 'ACTIVITY_MOVED') {
+        toast.error(`${label} moved; the list was refreshed`);
+        fetchData();
+      } else {
+        toast.error(`Failed to remove ${label}`);
+      }
+      return null;
+    });
+    removingRef.current.delete(key);
+    setRemovingKeys([...removingRef.current]);
     if (result) {
-      toast.success(`Removed ${name}`);
-      fetchData();
+      toast.success(`Removed ${label}`);
+      // A read started before this delete may still show the row, so it is dropped;
+      // if one was pending, refetch so the list is not left without a fresh read.
+      const readPending = readsInFlightRef.current > 0;
+      generationRef.current++;
+      if (expectedName === undefined) {
+        // An unnamed row has no identity to match a slot by, so take the server's list.
+        fetchData();
+      } else {
+        // Budgets are independent per activity, so dropping this entry matches the
+        // server without a refetch. Match the slot by name: an earlier removal may
+        // have shifted it, and a newer read may already have dropped it.
+        setData(prev => {
+          if (!prev?.budgets) return prev;
+          const at = prev.budgets[index]?.name === expectedName
+            ? index
+            : prev.budgets.findIndex(b => b.name === expectedName);
+          if (at === -1) return prev;
+          return { ...prev, budgets: prev.budgets.filter((_, i) => i !== at) };
+        });
+        if (readPending) fetchData();
+      }
     }
   };
 
@@ -198,7 +249,8 @@ export default function CalendarTab() {
               </div>
               <button
                 onClick={() => handleRemoveActivity(i)}
-                className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center opacity-40 [@media(hover:hover)]:sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 transition-opacity text-gray-600 hover:text-port-error p-0.5"
+                disabled={removingKeys.includes(b.name || `#${i}`)}
+                className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center opacity-40 [@media(hover:hover)]:sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 transition-opacity text-gray-600 hover:text-port-error p-0.5 disabled:opacity-30 disabled:cursor-progress"
                 title="Remove activity" aria-label="Remove activity"
               >
                 <Trash2 size={12} />

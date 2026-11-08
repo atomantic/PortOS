@@ -2,6 +2,7 @@
   "DEFAULT_TASK_PROMPTS": {
     "accessibility": "46f628a44a919bb788de8761e86ca0e1",
     "api-contract": "d52e00ec53eb5618df1a769efccc08f3",
+    "app-bugs": "34741422196f77c3f7c96ed36668aa87",
     "app-launch-video": "271c1e8bc301ba02b4a2207e0abf8573",
     "better-cognitive-load": "882bbda803edcdef5a4308521050f8fd",
     "better-complexity": "c99f67b43ff54a1c8cf0176c721d9c06",
@@ -12,8 +13,8 @@
     "better-test-quality": "8e305f986e9c9066da5db2aee76fc024",
     "branch-cleanup": "3ae50eec50fe2dea33575c5ab6d56716",
     "branch-reconcile": "84e3e34112ed761c85df1f58c8c6faed",
-    "claim-issue": "9b03ffa00588f7cc1e7e7f47aee72155",
-    "claim-issue-gitlab": "f3458aa910dd16b5998336131664ff0a",
+    "claim-issue": "b4f2bd36cfaef67a002aed16157b524b",
+    "claim-issue-gitlab": "d4e07862598ab51a62940aacabeedf56",
     "claim-issue-jira": "42dba9e163d5f6912e2d1df2722bf9c4",
     "code-quality": "175fab48fc713b71b4f0574b7cc5fe0b",
     "code-reviewer-implement": "f8cb11be6796874018d0a4d776c8931d",
@@ -21,7 +22,7 @@
     "console-errors": "5a7f6fd0b119db9d0e01c7f44a7a061c",
     "copy": "6a0959e898d37fb4d4d7445dfc8008c9",
     "cost-efficiency": "239bad18c51b50c80599d30b2fb0ad15",
-    "data-integrity": "0b361db688338b9cd0fa70cfedd28e56",
+    "data-integrity": "064bd15eb2924430aadb669296c1dcc7",
     "data-safety": "9e930585587a475901a4673427c9d87f",
     "dependency-updates": "8ce4e7e33c5c7554b89af7d35a471c31",
     "design": "118ab916feb90ff079f6e6449f60e7fe",
@@ -70,6 +71,7 @@
   "PROMPT_VERSIONS": {
     "accessibility": 5,
     "api-contract": 2,
+    "app-bugs": 1,
     "app-launch-video": 8,
     "better-cognitive-load": 2,
     "better-complexity": 2,
@@ -80,8 +82,8 @@
     "better-test-quality": 2,
     "branch-cleanup": 4,
     "branch-reconcile": 13,
-    "claim-issue": 59,
-    "claim-issue-gitlab": 51,
+    "claim-issue": 60,
+    "claim-issue-gitlab": 52,
     "claim-issue-jira": 28,
     "code-quality": 6,
     "code-reviewer-a": 1,
@@ -89,7 +91,7 @@
     "console-errors": 4,
     "copy": 1,
     "cost-efficiency": 1,
-    "data-integrity": 2,
+    "data-integrity": 3,
     "data-safety": 4,
     "dependency-updates": 9,
     "design": 1,
@@ -254,7 +256,8 @@
       "a6c2548f393470ca6427ae2f31eae4fd",
       "526e5bef525d70c37dbb5dabe1ea6eab",
       "b5e22f254f3c6e8250336610ae16edbb",
-      "8ce75abd48c80ac22a750285faa7eba3"
+      "8ce75abd48c80ac22a750285faa7eba3",
+      "9b03ffa00588f7cc1e7e7f47aee72155"
     ],
     "claim-issue-gitlab": [
       "fae92c45c89c65455930b4b06a1b88c4",
@@ -306,7 +309,8 @@
       "ba41d708ff3a6478f30be5922c0c5d92",
       "234b8ac6bd883d32f27d46fb6614587e",
       "f4ed2d8486d011af8c5e5c6d70c84419",
-      "1551a0567c1049d7c08926c2558523e2"
+      "1551a0567c1049d7c08926c2558523e2",
+      "f3458aa910dd16b5998336131664ff0a"
     ],
     "claim-issue-jira": [
       "496638ec099de9d57686a61a015a3c03",
@@ -351,7 +355,8 @@
       "eec33a9293f9393019917a6632dd964e"
     ],
     "data-integrity": [
-      "5fcc4f5044101e89da5bbf4890c11a1c"
+      "5fcc4f5044101e89da5bbf4890c11a1c",
+      "0b361db688338b9cd0fa70cfedd28e56"
     ],
     "data-safety": [
       "86b07f51abdbcbe7016f840b5bb0cd9b",

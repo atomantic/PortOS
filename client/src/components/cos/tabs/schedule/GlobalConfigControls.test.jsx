@@ -593,3 +593,36 @@ it('offers and saves twelve parallel claim workers without dropping other metada
   await act(async () => fireEvent.change(select, { target: { value: '12' } }));
   expect(onUpdate).toHaveBeenCalledWith('claim-issue', { taskMetadata: { simplify: true, swarmCount: 12 } });
 });
+
+describe('GlobalConfigControls — pr-watcher self-managed authors', () => {
+  it('commits the author list and stale window alongside the existing metadata', () => {
+    const onUpdate = renderControls({
+      taskType: 'pr-watcher',
+      taskMetadata: { prAuthorFilter: 'trusted' },
+      onUpdate: vi.fn().mockResolvedValue(undefined),
+    });
+    const stale = screen.getByLabelText('Stale after (minutes)');
+    expect(stale).toHaveValue(60);
+
+    const authors = screen.getByLabelText('Self-managed PR authors');
+    fireEvent.change(authors, { target: { value: 'octocat, hubot' } });
+    fireEvent.blur(authors);
+    expect(onUpdate).toHaveBeenCalledWith('pr-watcher', {
+      taskMetadata: { prAuthorFilter: 'trusted', selfManagedPrAuthors: ['octocat', 'hubot'] }
+    });
+
+    fireEvent.change(authors, { target: { value: 'octocat, not a login' } });
+    fireEvent.blur(authors);
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+
+    fireEvent.change(stale, { target: { value: '1.5' } });
+    fireEvent.blur(stale);
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+
+    fireEvent.change(stale, { target: { value: '90' } });
+    fireEvent.blur(stale);
+    expect(onUpdate).toHaveBeenLastCalledWith('pr-watcher', {
+      taskMetadata: { prAuthorFilter: 'trusted', selfManagedPrStaleMinutes: 90 }
+    });
+  });
+});

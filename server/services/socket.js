@@ -1,4 +1,3 @@
-import { NATIVE_USAGE_ACCOUNT_SELECTIONS_KEY, nativeUsageSelectionRevision } from '../lib/nativeUsageSelections.js';
 import { catalogIdentityEvents } from './catalogIdentity/events.js';
 import { githubNotificationEvents } from './githubNotificationEvents.js';
 import { registerModelObservationSocket } from './modelObservation.js';
@@ -9,6 +8,7 @@ import { modelLifecycleEvents } from './modelLifecycleEvents.js';
 import { meatspaceEvents } from './meatspaceEvents.js';
 import { dashboardEvents } from './dashboardEvents.js';
 import { settingsEvents } from './settings.js';
+import { nativeUsageEvents } from './nativeUsageEvents.js';
 import { recordEvents } from './sharing/recordEvents.js';
 import { fableLoomRunEvents } from './fableLoom/runEvents.js';
 import { cosEvents } from './cosEvents.js';
@@ -524,9 +524,6 @@ function invalidateMindVisibility() {
   mindVisibilityTimer.unref?.();
 }
 
-// Unknown until a real settings event: persisted selections may be nonempty.
-let nativeAccountsRevision;
-
 // Process-wide listeners forward through the current IO and subscriber sets.
 function setupCosEventForwarding() {
   // Dashboard invalidations deliberately omit decisions, prompts and settings.
@@ -536,21 +533,14 @@ function setupCosEventForwarding() {
   for (const event of ['cos:schedule:changed', 'cos:decisions:changed', 'cos:day:changed']) {
     dashboardEvents.on(event, () => broadcastToCos(event, {}));
   }
-  settingsEvents.on('settings:updated', settings => {
-    const selections = settings?.[NATIVE_USAGE_ACCOUNT_SELECTIONS_KEY];
-    const revision = nativeUsageSelectionRevision(selections === undefined ? [] : selections);
-    if (revision !== nativeAccountsRevision) {
-      nativeAccountsRevision = revision;
-      ioInstance?.emit('usage:native-accounts-updated', { revision });
-    }
+  nativeUsageEvents.on('updated', () => ioInstance?.emit('usage:native-history-updated', {}));
+  settingsEvents.on('settings:updated', () => {
     ioInstance?.emit('backup:changed', {});
     ioInstance?.emit('jev:policy', {});
   });
   // A failed restore also invalidates policy: clients must show the strict
   // read failure instead of continuing to offer stale safety settings.
   settingsEvents.on('settings:invalidated', () => {
-    nativeAccountsRevision = null;
-    ioInstance?.emit('usage:native-accounts-updated', { revision: null });
     ioInstance?.emit('jev:policy', {});
   });
   for (const [source, target] of [

@@ -11,11 +11,19 @@ import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { atomicWrite, PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
+import { ServerError } from '../lib/errorHandler.js';
 import { getDeathClock } from './meatspace.js';
 
 const MEATSPACE_DIR = PATHS.meatspace;
 const ACTIVITIES_FILE = join(MEATSPACE_DIR, 'activities.json');
 const EVENTS_FILE = join(MEATSPACE_DIR, 'life-events.json');
+
+// One tail per file: every load -> mutate -> save below runs through these, so a
+// second click or a concurrent add cannot read the pre-image the first write
+// is about to replace.
+const queueActivitiesWrite = createFileWriteQueue();
+const queueEventsWrite = createFileWriteQueue();
 
 const MS_PER_DAY = 86400000;
 const MS_PER_WEEK = MS_PER_DAY * 7;
@@ -234,42 +242,48 @@ export async function getLifeEvents() {
   return Array.isArray(data.events) ? data.events : DEFAULT_EVENTS;
 }
 
-export async function addLifeEvent(event) {
-  const data = await loadEvents();
-  if (!Array.isArray(data.events)) {
-    data.events = [...DEFAULT_EVENTS];
-  }
-  const newEvent = { id: randomUUID(), ...event };
-  data.events.push(newEvent);
-  await saveEvents(data);
-  console.log(`📅 Life event added: "${newEvent.name}"`);
-  return data.events;
+export function addLifeEvent(event) {
+  return queueEventsWrite(async () => {
+    const data = await loadEvents();
+    if (!Array.isArray(data.events)) {
+      data.events = [...DEFAULT_EVENTS];
+    }
+    const newEvent = { id: randomUUID(), ...event };
+    data.events.push(newEvent);
+    await saveEvents(data);
+    console.log(`📅 Life event added: "${newEvent.name}"`);
+    return data.events;
+  });
 }
 
-export async function updateLifeEvent(id, updates) {
-  const data = await loadEvents();
-  if (!Array.isArray(data.events)) {
-    data.events = [...DEFAULT_EVENTS];
-  }
-  const idx = data.events.findIndex(e => e.id === id);
-  if (idx === -1) return null;
-  data.events[idx] = { ...data.events[idx], ...updates };
-  await saveEvents(data);
-  console.log(`📅 Life event updated: "${data.events[idx].name}"`);
-  return data.events;
+export function updateLifeEvent(id, updates) {
+  return queueEventsWrite(async () => {
+    const data = await loadEvents();
+    if (!Array.isArray(data.events)) {
+      data.events = [...DEFAULT_EVENTS];
+    }
+    const idx = data.events.findIndex(e => e.id === id);
+    if (idx === -1) return null;
+    data.events[idx] = { ...data.events[idx], ...updates };
+    await saveEvents(data);
+    console.log(`📅 Life event updated: "${data.events[idx].name}"`);
+    return data.events;
+  });
 }
 
-export async function removeLifeEvent(id) {
-  const data = await loadEvents();
-  if (!Array.isArray(data.events)) {
-    data.events = [...DEFAULT_EVENTS];
-  }
-  const idx = data.events.findIndex(e => e.id === id);
-  if (idx === -1) return null;
-  const removed = data.events.splice(idx, 1)[0];
-  await saveEvents(data);
-  console.log(`📅 Life event removed: "${removed.name}"`);
-  return data.events;
+export function removeLifeEvent(id) {
+  return queueEventsWrite(async () => {
+    const data = await loadEvents();
+    if (!Array.isArray(data.events)) {
+      data.events = [...DEFAULT_EVENTS];
+    }
+    const idx = data.events.findIndex(e => e.id === id);
+    if (idx === -1) return null;
+    const removed = data.events.splice(idx, 1)[0];
+    await saveEvents(data);
+    console.log(`📅 Life event removed: "${removed.name}"`);
+    return data.events;
+  });
 }
 
 // === Exported Service Functions ===
@@ -311,39 +325,55 @@ export async function getActivities() {
   return Array.isArray(data.activities) ? data.activities : DEFAULT_ACTIVITIES;
 }
 
-export async function addActivity(activity) {
-  const data = await loadActivities();
-  // If using defaults, seed with defaults first
-  if (!Array.isArray(data.activities)) {
-    data.activities = [...DEFAULT_ACTIVITIES];
-  }
-  data.activities.push(activity);
-  await saveActivities(data);
-  return data.activities;
+export function addActivity(activity) {
+  return queueActivitiesWrite(async () => {
+    const data = await loadActivities();
+    // If using defaults, seed with defaults first
+    if (!Array.isArray(data.activities)) {
+      data.activities = [...DEFAULT_ACTIVITIES];
+    }
+    data.activities.push(activity);
+    await saveActivities(data);
+    return data.activities;
+  });
 }
 
-export async function updateActivity(index, updates) {
-  const data = await loadActivities();
-  if (!Array.isArray(data.activities)) {
-    data.activities = [...DEFAULT_ACTIVITIES];
-  }
-  if (index < 0 || index >= data.activities.length) {
-    return null;
-  }
-  data.activities[index] = { ...data.activities[index], ...updates };
-  await saveActivities(data);
-  return data.activities;
+// Index addressing is only safe when the caller names the row it saw. A stale
+// index (double-click, or a list that shifted after an earlier delete) must not
+// mutate whichever activity now sits at that position.
+function assertActivityNameMatches(activities, index, expectedName) {
+  if (expectedName === undefined || activities[index]?.name === expectedName) return;
+  throw new ServerError('Activity list changed; refresh and try again', { status: 409, code: 'ACTIVITY_MOVED' });
 }
 
-export async function removeActivity(index) {
-  const data = await loadActivities();
-  if (!Array.isArray(data.activities)) {
-    data.activities = [...DEFAULT_ACTIVITIES];
-  }
-  if (index < 0 || index >= data.activities.length) {
-    return null;
-  }
-  data.activities.splice(index, 1);
-  await saveActivities(data);
-  return data.activities;
+export function updateActivity(index, updates, expectedName) {
+  return queueActivitiesWrite(async () => {
+    const data = await loadActivities();
+    if (!Array.isArray(data.activities)) {
+      data.activities = [...DEFAULT_ACTIVITIES];
+    }
+    assertActivityNameMatches(data.activities, index, expectedName);
+    if (index < 0 || index >= data.activities.length) {
+      return null;
+    }
+    data.activities[index] = { ...data.activities[index], ...updates };
+    await saveActivities(data);
+    return data.activities;
+  });
+}
+
+export function removeActivity(index, expectedName) {
+  return queueActivitiesWrite(async () => {
+    const data = await loadActivities();
+    if (!Array.isArray(data.activities)) {
+      data.activities = [...DEFAULT_ACTIVITIES];
+    }
+    assertActivityNameMatches(data.activities, index, expectedName);
+    if (index < 0 || index >= data.activities.length) {
+      return null;
+    }
+    data.activities.splice(index, 1);
+    await saveActivities(data);
+    return data.activities;
+  });
 }

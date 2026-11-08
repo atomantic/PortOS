@@ -19,7 +19,8 @@ import { GREYBOX_ASPECTS, GREYBOX_SHOT_ID_MAX } from './greyboxVocabulary.js';
 export const GREYBOX_SCHEMA_VERSION = 1;
 
 export const GREYBOX_LIMITS = Object.freeze({
-  PARTS: 400,
+  // A detailed street (poles, wires, drops, masts, doors, walks, driveways) needs well over 400.
+  PARTS: 1500,
   ZONES: 24,
   LANDMARKS: 80,
   ANCHORS: 80,

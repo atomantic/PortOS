@@ -21,6 +21,7 @@ const {
   createSnapshot,
   getSnapshot,
   deleteSnapshot,
+  compareSnapshots,
 } = await import('./timeCapsule.js');
 
 const twinDir = () => PATHS.digitalTwin;
@@ -157,6 +158,45 @@ describe('createSnapshot', () => {
     const listed = await listSnapshots();
     expect(listed).toHaveLength(2);
     expect(listed.map(s => s.id).sort()).toEqual([a.id, b.id].sort());
+  });
+});
+
+describe('genome capture', () => {
+  const meatspaceGenomePath = () => join(PATHS.meatspace, 'genome.json');
+  beforeEach(() => {
+    rmSync(meatspaceGenomePath(), { force: true });
+  });
+  const writeMeatspaceGenome = (value) => {
+    mkdirSync(PATHS.meatspace, { recursive: true });
+    writeFileSync(meatspaceGenomePath(), JSON.stringify(value));
+  };
+
+  it('captures genome markers from the meatspace genome file', async () => {
+    writeMeatspaceGenome({ savedMarkers: { rs1: { id: 'rs1' }, rs2: { id: 'rs2' } } });
+
+    const snapshot = await createSnapshot('with genome');
+
+    expect(snapshot.summary.genomeMarkers).toBe(2);
+    const stored = await getSnapshot(snapshot.id);
+    expect(stored.data['genome.json']).toEqual({ savedMarkers: { rs1: { id: 'rs1' }, rs2: { id: 'rs2' } } });
+  });
+
+  it('records zero genome markers when no genome file exists', async () => {
+    const snapshot = await createSnapshot('no genome');
+
+    expect(snapshot.summary.genomeMarkers).toBe(0);
+    const stored = await getSnapshot(snapshot.id);
+    expect(stored.data['genome.json']).toBeUndefined();
+  });
+
+  it('reports a genome marker change between snapshots taken before and after upload', async () => {
+    const before = await createSnapshot('before upload');
+    writeMeatspaceGenome({ savedMarkers: { rs1: { id: 'rs1' } } });
+    const after = await createSnapshot('after upload');
+
+    const diff = await compareSnapshots(before.id, after.id);
+
+    expect(diff.changes).toContainEqual({ field: 'Genome markers', before: 0, after: 1 });
   });
 });
 

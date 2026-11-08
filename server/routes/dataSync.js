@@ -40,7 +40,6 @@ import { z } from 'zod';
 import * as dataSync from '../services/dataSync.js';
 import { sweepTombstones, getSweepStatus, TOMBSTONE_GRACE_MS } from '../services/sharing/tombstoneGc.js';
 import { authorizePeerPull } from '../services/sharing/peerPullAuthorization.js';
-import { getUsageCutoverAck } from '../services/usageCutoverBarrier.js';
 import { MAX_MANIFEST_SLOTS } from '../lib/syncManifest.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
@@ -147,13 +146,6 @@ router.get('/mediaCollections/image-inventory', asyncHandler(async (req, res) =>
 router.get('/mediaCollections/image-library-inventory', asyncHandler(async (req, res) => {
   await authorizeSyncPull(req, 'mediaCollections');
   res.json(await dataSync.getImageLibraryInventory());
-}));
-
-// A participant's usage cutover acknowledgment: barrier state only, no usage data.
-// An older peer 404s here, which is exactly the hold its absence must produce.
-router.get('/usage/cutover', asyncHandler(async (req, res) => {
-  await authorizeSyncPull(req, 'usage');
-  res.set('Cache-Control', 'no-store').json(await getUsageCutoverAck());
 }));
 
 // GET /api/sync/:category/manifest — the category's per-slot version map.

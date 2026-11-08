@@ -15,7 +15,7 @@
  * placeholder names and handles only.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { checkHealth, close, ensureSchema, query } from '../lib/db.js';
+import { checkHealth, close, ensureSchema, query, withTransaction } from '../lib/db.js';
 import { requireDbOrSkip } from '../lib/dbTestGate.js';
 import * as tribe from './tribe.js';
 
@@ -82,5 +82,29 @@ describe.skipIf(!runDb)('tribe last_contact_on — UTC-offset round-trip (#8451)
     const { rows } = await query('SELECT last_contact_on FROM tribe_people WHERE id = $1', [person.id]);
     expect(typeof rows[0].last_contact_on).toBe('string');
     expect(rows[0].last_contact_on).toBe('2026-03-01');
+  });
+
+  it('does not roll back a last_contact_on advance committed while updatePerson is in flight (#15356)', async () => {
+    const person = await tribe.createPerson({ name: `Example Person ${nonce}-race`, lastContact: '2026-01-01' });
+    createdPersonIds.push(person.id);
+
+    let pending;
+    await withTransaction(async (client) => {
+      await client.query('SELECT 1 FROM tribe_people WHERE id = $1 FOR UPDATE', [person.id]);
+      pending = tribe.updatePerson(person.id, { notes: 'edited notes' });
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      await client.query("UPDATE tribe_people SET last_contact_on = '2026-06-15' WHERE id = $1", [person.id]);
+    });
+    const updated = await pending;
+
+    expect(updated.notes).toBe('edited notes');
+    expect(updated.lastContact).toBe('2026-06-15');
+  });
+
+  it('still applies an explicit earlier lastContact correction (#15356)', async () => {
+    const person = await tribe.createPerson({ name: `Example Person ${nonce}-fix`, lastContact: '2026-06-15' });
+    createdPersonIds.push(person.id);
+    const updated = await tribe.updatePerson(person.id, { lastContact: '2026-05-01' });
+    expect(updated.lastContact).toBe('2026-05-01');
   });
 });

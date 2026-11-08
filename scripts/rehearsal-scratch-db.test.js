@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url';
 import {
   SCRATCH_DB_PATTERN,
   assertScratchDbName,
+  createScratchDbSql,
+  explainScratchDbError,
   newScratchDbName,
   resolveAdminConnection,
 } from './rehearsal-scratch-db.js';
@@ -38,6 +40,50 @@ describe('rehearsal scratch database naming', () => {
     const connection = resolveAdminConnection({ env: { PGMODE: 'native', PGPORT: '5432' }, root: '/nonexistent' });
     expect(connection.database).toBe('postgres');
     expect(connection.port).toBe(5432);
+  });
+});
+
+describe('scratch database creation', () => {
+  const name = 'portos_rehearsal_0123456789ab_test';
+  const pgError = (code, message) => Object.assign(new Error(message), { code });
+
+  it('clones the extension-bearing test database when asked, else builds a bare one', () => {
+    expect(createScratchDbSql(name, 'portos_test')).toBe(`CREATE DATABASE "${name}" TEMPLATE "portos_test"`);
+    expect(createScratchDbSql(name)).toBe(`CREATE DATABASE "${name}"`);
+    expect(() => createScratchDbSql('portos')).toThrow(/refusing/);
+  });
+
+  it('turns a missing-extension privilege error into the CONTRIBUTING repair pointer', () => {
+    const err = explainScratchDbError(pgError('42501', 'permission denied to create extension "vector"'), { phase: 'schema' });
+    expect(err.message).toMatch(/cannot create the vector\/pgcrypto extensions/);
+    expect(err.message).toMatch(/Repairing a test database whose extensions were dropped/);
+    expect(err.message).not.toMatch(/\n/);
+  });
+
+  it('names CREATEDB for a role that cannot create the database', () => {
+    expect(explainScratchDbError(pgError('42501', 'permission denied to create database')).message).toMatch(/lacks CREATEDB/);
+  });
+
+  it('explains a busy template, and notes it when the fallback also failed', () => {
+    expect(explainScratchDbError(pgError('55006', 'source database is being accessed by other users'), { template: 'portos_test' }).message)
+      .toMatch(/another session is connected/);
+    expect(explainScratchDbError(pgError('42501', 'permission denied to create extension "vector"'), { phase: 'schema', templateBusy: true }).message)
+      .toMatch(/was busy/);
+  });
+
+  it('keeps the server error for a busy database that was not a clone source', () => {
+    const err = pgError('55006', 'source database "template1" is being accessed by other users');
+    expect(explainScratchDbError(err)).toBe(err);
+  });
+
+  it('leaves a schema-phase privilege error that is not about extensions as the server error', () => {
+    const err = pgError('42501', 'permission denied for schema public');
+    expect(explainScratchDbError(err, { phase: 'schema' })).toBe(err);
+  });
+
+  it('passes unrelated errors through untouched', () => {
+    const err = pgError('08006', 'connection terminated');
+    expect(explainScratchDbError(err)).toBe(err);
   });
 });
 

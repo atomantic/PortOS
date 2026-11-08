@@ -7,7 +7,6 @@ import { getAiAssignments, updateAiAssignment } from '../services/aiAssignments.
 import { saveSubscriptionCosts } from '../services/subscriptionCosts.js';
 import { savePlanTiers } from '../services/subscriptions.js';
 import { saveApiBilledInstanceIds } from '../services/usageFleetBilling.js';
-import { NATIVE_USAGE_ACCOUNT_SELECTIONS_KEY, nativeUsageAccountSelectionsSchema } from '../lib/nativeUsageContract.js';
 import {
   setCodexParallelLimit,
   CODEX_PARALLEL_MIN,
@@ -670,9 +669,6 @@ const validateSettingsPatch = async (body) => {
   if (body?.usageApiBilledInstanceIds !== undefined) {
     validateRequest(usageApiBilledInstanceIdsSchema, body.usageApiBilledInstanceIds);
   }
-  if (body?.[NATIVE_USAGE_ACCOUNT_SELECTIONS_KEY] !== undefined) {
-    validateRequest(nativeUsageAccountSelectionsSchema, body[NATIVE_USAGE_ACCOUNT_SELECTIONS_KEY]);
-  }
 };
 
 const saveSettingsPatch = async (body, slicePatch) => {
@@ -698,6 +694,9 @@ const saveSettingsPatch = async (body, slicePatch) => {
     secrets: _ignoredSecrets,
     passwordRiskRevision: _ignoredPasswordRiskRevision,
     catalogUserTypes: _ignoredTypes,
+    // Retired with the native usage account editor (#15272): a restore dump or
+    // legacy client must not write the dead slice back.
+    usageNativeAccountSelections: _ignoredNativeAccountSelections,
     subscriptionCosts: subscriptionCostsPatch,
     subscriptionPlanTiers: subscriptionPlanTiersPatch,
     usageApiBilledInstanceIds: apiBilledPatch,

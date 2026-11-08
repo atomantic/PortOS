@@ -278,8 +278,10 @@ export function parseClaudeTranscript(jsonlText, { from = null, to = null, exclu
  *
  * `input_tokens` is the *total* input including the cached portion, so the
  * uncached input we bill at the standard rate is `input - cached`, with
- * `cached` priced at the provider's cached-input rate. Codex reports no
- * cache-write tier, so `cacheWriteTokens` is always 0. `reasoning_output_tokens`
+ * `cached` priced at the provider's cached-input rate. A few 0.145-era CLIs
+ * also wrote `cache_write_input_tokens`, another part of `input_tokens` that
+ * does not overlap the cached read, so it moves to the cache-write tier
+ * (absent elsewhere, so 0). `reasoning_output_tokens`
  * is a subset of `output_tokens` (already billed as output), not an addition.
  *
  * When a window is supplied and no in-range event exists but earlier events do,
@@ -363,6 +365,7 @@ export function parseCodexRollout(jsonlText, { from = null, to = null } = {}) {
   // Cumulative delta against the pre-window baseline (0 when unwindowed).
   const delta = (key) => Math.max(0, num(latest[key]) - num(baseline?.[key]));
   const cachedIn = delta('cached_input_tokens');
+  const cacheWrite = delta('cache_write_input_tokens');
   const totalIn = delta('input_tokens');
 
   const bounded = from != null || to != null;
@@ -375,10 +378,10 @@ export function parseCodexRollout(jsonlText, { from = null, to = null } = {}) {
     messages: bounded ? messages : (messages || 1),
     // `input_tokens` INCLUDES the cached portion — split it so each tier is
     // priced at its own rate instead of billing cache reads as fresh input.
-    tokensIn: Math.max(0, totalIn - cachedIn),
+    tokensIn: Math.max(0, totalIn - cachedIn - cacheWrite),
     tokensOut: delta('output_tokens'),
     cacheReadTokens: cachedIn,
-    cacheWriteTokens: 0
+    cacheWriteTokens: cacheWrite
   };
 
   return {
@@ -466,7 +469,7 @@ export function decodeGrokSessionDir(dirName) {
  * already ms; the envelope's own `timestamp` is epoch SECONDS (a 10-digit
  * value), which would land in 1970 if read as ms.
  */
-function grokEventMs(line) {
+export function grokEventMs(line) {
   const meta = line?.params?._meta;
   if (typeof meta?.agentTimestampMs === 'number' && Number.isFinite(meta.agentTimestampMs)) {
     return meta.agentTimestampMs;

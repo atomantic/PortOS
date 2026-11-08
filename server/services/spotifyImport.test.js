@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { spotifyListenCandidate } from './spotifySync.js';
 import {
   resolveSpotifyInstant,
   spotifyUriToUrl,
@@ -94,6 +95,16 @@ describe('spotifyRecordToCandidate', () => {
     const c2 = spotifyRecordToCandidate({ ...extendedRecord });
     expect(c1.dedupeKey).toBe(c2.dedupeKey);
     expect(c1.dedupeKey).toBe('spotify:2023-05-01T18:30:00.000Z:2gjHtqrEnMBmD3lBWJUp2P');
+  });
+
+  it('keys an import record and the live play of the same track identically, despite live milliseconds (#15309)', () => {
+    const live = spotifyListenCandidate({
+      played_at: '2023-05-01T18:30:00.123Z',
+      track: { id: '2gjHtqrEnMBmD3lBWJUp2P', name: 'Idioteque' },
+    });
+    const imported = spotifyRecordToCandidate(extendedRecord);
+    expect(live.dedupeKey).toBe(imported.dedupeKey);
+    expect(live.happenedAt).toBe('2023-05-01T18:30:00.123Z');
   });
 
   it('keys URI records as spotify:<playedAt>:<bareId>, matching live sync', () => {

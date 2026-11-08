@@ -625,15 +625,15 @@ export default function LearningTab() {
                     </div>
                     <div className="divide-y divide-port-border">
                       {performance.topPerformers.map((item, idx) => (
-                        <div key={idx} className="p-3 flex items-center justify-between">
+                        <div key={idx} className="p-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                           <div className="flex-1 min-w-0">
-                            <div className="text-sm text-white truncate">{item.taskType}</div>
+                            <div className="text-sm text-white break-all sm:truncate">{item.taskType}</div>
                             <div className="text-xs text-gray-500">
                               {runsLabel(item, 'tasks')} • {item.avgDurationMin}m avg
                             </div>
                           </div>
-                          <div className="flex items-center gap-3">
-                            <div className="w-24 bg-port-border rounded-full h-2">
+                          <div className="flex items-center gap-3 self-stretch sm:self-auto">
+                            <div className="flex-1 sm:flex-none sm:w-24 bg-port-border rounded-full h-2">
                               <div
                                 className="h-2 rounded-full bg-port-success"
                                 style={{ width: `${item.successRate}%` }}
@@ -660,15 +660,15 @@ export default function LearningTab() {
                     </div>
                     <div className="divide-y divide-port-border">
                       {performance.needsAttention.map((item, idx) => (
-                        <div key={idx} className="p-3 flex items-center justify-between">
+                        <div key={idx} className="p-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                           <div className="flex-1 min-w-0">
-                            <div className="text-sm text-white truncate">{item.taskType}</div>
+                            <div className="text-sm text-white break-all sm:truncate">{item.taskType}</div>
                             <div className="text-xs text-gray-500">
                               {runsLabel(item, 'tasks')} • {item.avgDurationMin}m avg
                             </div>
                           </div>
-                          <div className="flex items-center gap-3">
-                            <div className="w-24 bg-port-border rounded-full h-2">
+                          <div className="flex items-center gap-3 self-stretch sm:self-auto">
+                            <div className="flex-1 sm:flex-none sm:w-24 bg-port-border rounded-full h-2">
                               <div
                                 className="h-2 rounded-full bg-port-error"
                                 style={{ width: `${item.successRate}%` }}

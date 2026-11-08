@@ -32,10 +32,6 @@ import { join } from 'path';
 import { PATHS, tryReadFile, safeJSONParse } from './fileUtils.js';
 
 export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
-  // Usage cutover barrier protocol (#15098): the stamp on usage payloads during a
-  // barrier and the `/api/sync/usage/cutover` acknowledgment. Compared by that
-  // gate only, so no barrier means an unchanged wire for an older peer.
-  usageCutover: 1,
   // Numeric-only peer wire payload (v1); read-through, never imported into local records.
   // Checked-in `.quality.json` is file schema v3 and must not bump this number.
   appQuality: 1,
@@ -107,7 +103,10 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // edit and LWW the loss back. The catalog gate stays put, as for v15.
   // v21 = canon places and objects may carry a real-world `size` (scale cue for
   // renders). A <=v20 sanitizer strips it and would LWW the loss back.
-  universes: 21,
+  // v22 = canon places may carry a `world` map (lib/worldMap.js), mirrored like the
+  // greybox (v15). A <=v21 `sanitizePlace` would strip it on an unrelated Universe
+  // edit and LWW the loss back. The catalog gate stays put, as for v15.
+  universes: 22,
   // v1 = post-split. Migrations 035/036 introduced the pipeline collection
   // layout for issues and series.
   // v2 = `stages.audio.audioMode` + `stages.audio.cues[]` added (whole-episode
@@ -875,7 +874,20 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // (`stops[].features`/`views`), which a v45 strict stop schema rejects. Optional, no backfill.
   // v47 = `scenes[].shotSheet.promptFromSheet` (a still built from its shot sheet), which a v46
   // strict shot sheet schema rejects. Optional, no backfill.
-  musicVideoProjects: 47,
+  // v48 = `scenes[].setReference.blocking: false` (a shot that turns off its camera's figure
+  // blocking image), which a v47 strict set reference schema rejects. Optional, no backfill:
+  // absent sends the blocking layout whenever the camera has figures and a photo plate.
+  // v49 = the greybox previz (`previz`: cuts over the song and per-set blocking tracks) and each
+  // camera's `previzStyle`, which a v48 strict project update / camera schema rejects. Optional, no backfill: absent means no previz.
+  // v50 = `previz.worldId` (the catalog environment whose world map the previz plays
+  // in, lib/worldMap.js), which a v49 strict previz schema rejects. Optional, no backfill.
+  // v51 = `previz.night` (story clock and beats simulated over the world map,
+  // lib/musicVideoPrevizNight.js), which a v50 strict previz schema rejects. Optional, no backfill.
+  // v52 = `previz.cuts[].storyMin` and `cameraSpot` (a cut's moment on the night and its
+  // observer spot), which a v51 strict cut schema rejects. Optional, no backfill.
+  // v53 = `previz.cuts[].turnToAim` (the camera swings to its keep-in-frame person during
+  // the cut), which a v52 strict cut schema rejects. Optional, no backfill.
+  musicVideoProjects: 53,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).
@@ -1261,7 +1273,7 @@ export const RECORD_KIND_SCHEMA_CATEGORIES = Object.freeze({
  * leave its push transfers ungated (silent cross-install corruption). Only
  * genuinely non-push categories belong.
  */
-export const NON_RECORD_SCHEMA_CATEGORIES = Object.freeze(new Set(['memoryHistory', 'mediaLibrary', 'cosHistory', 'cosTasks', 'appQuality', 'eidoverseFoundations', 'meatspace', 'peerAuth', 'peerAssetStamps', 'videoHistory', 'usageCutover']));
+export const NON_RECORD_SCHEMA_CATEGORIES = Object.freeze(new Set(['memoryHistory', 'mediaLibrary', 'cosHistory', 'cosTasks', 'appQuality', 'eidoverseFoundations', 'meatspace', 'peerAuth', 'peerAssetStamps', 'videoHistory']));
 
 /**
  * Lazy-read the current PortOS version from the ROOT package.json so a

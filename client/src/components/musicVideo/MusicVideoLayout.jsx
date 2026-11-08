@@ -1,7 +1,5 @@
 import { useEffect, useRef } from 'react';
-import {
-  ArrowRight, BookOpen, Bot, Check, Clapperboard, Film, History, Images, LayoutGrid, Music, PanelLeftClose, PanelLeftOpen, Pencil, Play, Send, Settings, Users, Trash2,
-} from 'lucide-react';
+import { ArrowRight, BookOpen, Bot, Box, Check, Clapperboard, Film, History, Images, LayoutGrid, Music, PanelLeftClose, PanelLeftOpen, Pencil, Play, Send, Settings, Trash2, Users } from 'lucide-react';
 import { useLocalStorageBool } from '../../hooks/useLocalStorageBool.js';
 import CancelRenderButton from './CancelRenderButton.jsx';
 import TabPills from '../ui/TabPills.jsx';
@@ -12,7 +10,7 @@ import { MUSIC_VIDEO_PAGES } from '../../lib/musicVideoStages.js';
 // One icon per step: the phone's bottom bar collapses to icons, and a repeated
 // glyph would be a repeated destination.
 const STAGE_ICONS = {
-  setup: Music, story: BookOpen, 'cast-sets': Users, board: LayoutGrid, produce: Clapperboard, review: Film, publish: Send, assets: Images, cleanup: Trash2,
+  setup: Music, story: BookOpen, 'cast-sets': Users, board: LayoutGrid, previz: Box, produce: Clapperboard, review: Film, publish: Send, assets: Images, cleanup: Trash2,
 };
 
 // The page's scroll body (the route is full-width, so the page owns its

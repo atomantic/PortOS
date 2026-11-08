@@ -12,7 +12,7 @@ const progressFor = (current, states = {}) => ({
 });
 
 describe('music-video step navigation', () => {
-  it('lists the seven steps with a state word and one fact each, then Assets, and opens a step on click', () => {
+  it('lists the eight steps with a state word and one fact each, then Assets, and opens a step on click', () => {
     const onStageChange = vi.fn();
     render(<MusicVideoLayout project={{ id: 'example-project', name: 'Example Project', version: 2 }} stage="board" trackLabel="Example Track"
       onStageChange={onStageChange} progress={progressFor('board', { setup: 'done', 'cast-sets': 'done' })}
@@ -26,21 +26,22 @@ describe('music-video step navigation', () => {
       'Song' + 'Done' + '4:40 · 70 lyric lines',
       '3Storyboard' + 'Needs you' + '26 shots',
       'Look' + 'Done',
-      '5Shots' + 'Not started',
-      '6Final render' + 'Not started',
-      '7Publish' + 'Not started',
+      '5Previz' + 'Not started',
+      '6Shots' + 'Not started',
+      '7Final render' + 'Not started',
+      '8Publish' + 'Not started',
       'Assets', 'Cleanup',
     ]);
     expect(steps[2]).toHaveAttribute('aria-current', 'step');
     fireEvent.click(steps[0]);
     expect(onStageChange).toHaveBeenCalledWith('story');
-    fireEvent.click(steps[4]);
+    fireEvent.click(steps[5]);
     expect(onStageChange).toHaveBeenCalledWith('produce');
-    fireEvent.click(steps[7]);
+    fireEvent.click(steps[8]);
     expect(onStageChange).toHaveBeenCalledWith('assets');
     // The phone bar says each state to screen readers, since it shows only icons.
     expect(within(phoneBar()).getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
-      'Story, Not started', 'Song, Done', 'Storyboard, Needs you', 'Look, Done', 'Shots, Not started', 'Final render, Not started', 'Publish, Not started', 'Assets', 'Cleanup',
+      'Story, Not started', 'Song, Done', 'Storyboard, Needs you', 'Look, Done', 'Previz, Not started', 'Shots, Not started', 'Final render, Not started', 'Publish, Not started', 'Assets', 'Cleanup',
     ]);
     // The step names what "done" means under its title, and labels the panel.
     expect(screen.getByRole('tabpanel', { name: 'Storyboard' })).toBeInTheDocument();

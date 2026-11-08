@@ -19,7 +19,12 @@ tryReadFile: vi.fn().mockResolvedValue(null),
   readJSONFile: vi.fn()
 }));
 
+vi.mock('./userTimezone.js', () => ({
+  getUserTimezone: vi.fn().mockResolvedValue('UTC')
+}));
+
 import { atomicWrite, readJSONFile } from '../lib/fileUtils.js';
+import { getUserTimezone } from './userTimezone.js';
 import {
   applyHistoricalUsageCorrections,
   buildUsageDigest,
@@ -251,6 +256,43 @@ describe('usage.js — summary', () => {
   });
 
   describe('time-dimensioned capture', () => {
+    it('buckets the hourly histograms by the configured timezone, not UTC', async () => {
+      // 16:30 UTC is 09:30 in America/Los_Angeles (PDT, UTC-7).
+      vi.useFakeTimers();
+      vi.setSystemTime(Date.parse('2026-07-15T16:30:00Z'));
+      getUserTimezone.mockResolvedValueOnce('America/Los_Angeles');
+      try {
+        readJSONFile.mockResolvedValueOnce(makeUsage({}));
+        await loadUsage();
+        await recordSession('claude-code', 'Claude Code', 'opus');
+
+        expect(getUsage().hourlyActivity[9]).toBe(1);
+        expect(getUsage().hourlyActivity[16]).toBe(0);
+        const day = getUsage().dailyActivity['2026-07-15'];
+        expect(day.hourlyActivity[9]).toBe(1);
+        expect(day.hourlyActivity[16]).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+    it('keys the day bucket and its hourly bin by the same configured timezone', async () => {
+      // 02:00Z on 07-16 is 19:00 on 07-15 in America/Los_Angeles (PDT).
+      vi.useFakeTimers();
+      vi.setSystemTime(Date.parse('2026-07-16T02:00:00Z'));
+      getUserTimezone.mockResolvedValueOnce('America/Los_Angeles');
+      try {
+        readJSONFile.mockResolvedValueOnce(makeUsage({}));
+        await loadUsage();
+        await recordSession('claude-code', 'Claude Code', 'opus');
+
+        const days = getUsage().dailyActivity;
+        expect(days['2026-07-16']).toBeUndefined();
+        expect(days['2026-07-15'].sessions).toBe(1);
+        expect(days['2026-07-15'].hourlyActivity[19]).toBe(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
     it('advances the usage revision for two writes at the same clock time', async () => {
       readJSONFile.mockResolvedValueOnce(makeUsage({}));
       await loadUsage();
@@ -976,32 +1018,6 @@ describe('usage.js — cache tiers and measured/estimate provenance (#3124 Phase
     expect(atomicWrite).toHaveBeenCalledTimes(1);
     expect(atomicWrite.mock.calls[0][1].interactiveScan).toEqual(scan);
     expect(buildUsageDigest(getUsage())).not.toHaveProperty('interactiveScan');
-  });
-
-  it('reports held standalone workspaces locally, never a known-running run, and never to peers', async () => {
-    readJSONFile.mockResolvedValueOnce(makeUsage({}));
-    await loadUsage();
-    expect(getUsageSummary().heldRunCoverage).toBeNull();
-    const at = (day) => Date.parse(`2026-07-${String(day).padStart(2, '0')}T00:00:00.000Z`);
-    const held = (runId, workspacePath, day, lifecycle) => ({ runId, workspacePath, from: at(day), to: at(20), lifecycle });
-    await applyHistoricalUsageCorrections([], { interactiveScan: { watermarks: {}, unresolved: [
-      held('active', '/example/active-app', 1, 'running'),
-      held('a', '/example/first-app', 3, 'unknown'),
-      held('b', '/example/first-app', 2, 'unknown'),
-      // Written before `lifecycle` existed: unknown until the next scan rewrites it.
-      held('legacy', '/example/older-app', 1),
-      ...Array.from({ length: 10 }, (_, i) => held(`c${i}`, `/example/app-${i}`, 4 + i, 'unknown'))
-    ] } });
-    const summary = getUsageSummary();
-    expect(summary.heldRunCoverage).toMatchObject({ runs: 13, since: '2026-07-01T00:00:00.000Z', moreWorkspaces: 2 });
-    expect(summary.heldRunCoverage.workspaces).toHaveLength(10);
-    expect(summary.heldRunCoverage.workspaces.slice(0, 2)).toEqual([
-      { workspace: 'older-app', runs: 1, since: '2026-07-01T00:00:00.000Z' },
-      { workspace: 'first-app', runs: 2, since: '2026-07-02T00:00:00.000Z' }
-    ]);
-    expect(JSON.stringify(summary.heldRunCoverage)).not.toContain('/example/');
-    expect(JSON.stringify(summary.heldRunCoverage)).not.toContain('active-app');
-    expect(JSON.stringify(buildUsageDigest(getUsage()))).not.toContain('first-app');
   });
 
   it('defaults recordMessages to an estimate source with no cache tokens', async () => {

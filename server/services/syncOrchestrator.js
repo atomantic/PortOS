@@ -26,7 +26,7 @@ import * as catalogSync from './catalogSync.js';
 import * as dataSync from './dataSync.js';
 import { getBackendName } from './memoryBackend.js';
 import { withAbortTimeout } from '../lib/abortTimeout.js';
-import { isManifestEnvelope, diffManifestSlots, manifestSlotMap, MAX_MANIFEST_SLOTS } from '../lib/syncManifest.js';
+import { isManifestEnvelope, diffManifestSlots, MAX_MANIFEST_SLOTS } from '../lib/syncManifest.js';
 import { PORTOS_SCHEMA_VERSIONS } from '../lib/schemaVersions.js';
 import { isNonBlankStr } from '../lib/textUtils.js';
 import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
@@ -672,10 +672,6 @@ async function syncDataCategoryFromPeer(peer, peerId, category, cachedChecksums,
     return { totalApplied: 0, checksum: null, blockedBySchema: result.blockedBySchema };
   }
 
-  // A payload the usage barrier refused was not converged on. Caching its checksum
-  // would skip this peer's digest after the fence lifts, until the digest next moved.
-  if (result.refusedByBarrier) return { totalApplied: 0, checksum: null };
-
   // After character sync, fetch avatar image if we don't have it locally
   if (category === 'character' && snapshot.data?.avatarPath) {
     await syncImageFromPeer(peer, snapshot.data.avatarPath);
@@ -709,8 +705,7 @@ async function resolveStaleSlots(peer, category, forPeerQs) {
   if (!local) return null;
   const remote = await fetchPeer(peer, `/api/sync/${category}/manifest${forPeerQs}`);
   if (!isManifestEnvelope(remote)) return null;
-  const stale = diffManifestSlots(manifestSlotMap(remote.data), manifestSlotMap(local.data));
-  const { instances: _slotVersions, ...cutover } = remote.data.cutover ?? {};
+  const stale = diffManifestSlots(remote.data.instances, local.data?.instances);
   return {
     // A truncated request converges only if we DON'T cache the checksum: the
     // dropped slots would otherwise sit behind a checksum that now matches. The
@@ -721,8 +716,9 @@ async function resolveStaleSlots(peer, category, forPeerQs) {
     // Tombstones ride the manifest, so a retirement propagates even on a cycle
     // where no slot advanced.
     tombstones: Array.isArray(remote.data.tombstones) ? remote.data.tombstones : [],
-    // The shortcut payload must still answer to the receiver's epoch gate.
-    cutover: remote.data.cutover ? cutover : null,
+    // An older peer still running the retired cutover barrier stamps `cutover` while
+    // fenced; forwarded so applyUsageRemote skips that payload, tombstones included.
+    cutover: isPlainObjectShallow(remote.data.cutover) ? remote.data.cutover : null,
     // Carried so the empty-payload shortcut above still runs the same
     // schema-version gate a fetched snapshot would.
     portosMeta: remote.portosMeta,

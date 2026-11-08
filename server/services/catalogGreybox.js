@@ -114,6 +114,26 @@ export async function saveGreybox(ingredientId, scene, { source = 'user' } = {})
 }
 
 /**
+ * Store the place's world map (lib/worldMap.js) under the row lock; `null` removes
+ * it. The route's schema has validated it. A world names other places, never
+ * itself, and must fit the payload cap like a greybox.
+ */
+export async function saveWorld(ingredientId, world, { source = 'user' } = {}) {
+  const updated = await catalogDB.setIngredientPayloadKey(ingredientId, 'world', world, {
+    source,
+    guard: (current) => {
+      if (current.type !== 'place') throw refuse('A world map belongs to an environment', 'GREYBOX_NOT_A_PLACE');
+      if (world?.sets.some((set) => set.ingredientId === ingredientId)) throw refuse('A world cannot place itself as one of its sets', 'WORLD_SELF_SET');
+      if (world && JSON.stringify({ ...current.payload, world }).length > CATALOG_PAYLOAD_MAX_CHARS) {
+        throw refuse('This world is too large to store with the environment; remove some paths.', 'WORLD_TOO_LARGE', 413);
+      }
+    },
+  });
+  if (!updated) throw refuse('Place not found', 'NOT_FOUND', 404);
+  return updated;
+}
+
+/**
  * Attach a rendered PNG of a saved shot as the place's reference for it,
  * replacing the shot's previous capture. The shot must exist on the stored
  * greybox, so a capture can never outlive the camera that made it unnoticed.

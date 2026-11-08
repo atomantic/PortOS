@@ -175,7 +175,7 @@ const codexMeta = (cwd = '/work/example-repo') => JSON.stringify({
   payload: { id: 'rollout-abc', cwd, cli_version: '0.0.0', originator: 'codex_cli_rs', model: 'gpt-5.3-codex' }
 });
 
-const codexTokenCount = ({ timestamp, input, cached, output, reasoning = 0 }) => JSON.stringify({
+const codexTokenCount = ({ timestamp, input, cached, output, reasoning = 0, cacheWrite }) => JSON.stringify({
   timestamp,
   type: 'event_msg',
   payload: {
@@ -186,7 +186,8 @@ const codexTokenCount = ({ timestamp, input, cached, output, reasoning = 0 }) =>
         cached_input_tokens: cached,
         output_tokens: output,
         reasoning_output_tokens: reasoning,
-        total_tokens: input + output
+        total_tokens: input + output,
+        ...(cacheWrite != null ? { cache_write_input_tokens: cacheWrite } : {})
       },
       last_token_usage: { input_tokens: input, cached_input_tokens: cached, output_tokens: output }
     }
@@ -215,6 +216,18 @@ describe('parseCodexRollout', () => {
       tokensOut: 250,
       cacheWriteTokens: 0
     });
+  });
+
+  it('moves a recorded cache write out of input into its own tier', () => {
+    const text = [
+      codexMeta(),
+      codexTokenCount({ timestamp: '2026-07-01T09:00:00.000Z', input: 1000, cached: 600, output: 100, cacheWrite: 300 }),
+      codexTokenCount({ timestamp: '2026-07-01T12:00:00.000Z', input: 3000, cached: 2000, output: 250, cacheWrite: 700 })
+    ].join('\n');
+    expect(parseCodexRollout(text)).toMatchObject({ tokensIn: 300, cacheReadTokens: 2000, cacheWriteTokens: 700, tokensOut: 250 });
+    // Windowed, the write is a delta like every other tier.
+    expect(parseCodexRollout(text, { from: Date.parse('2026-07-01T11:00:00.000Z') }))
+      .toMatchObject({ tokensIn: 200, cacheReadTokens: 1400, cacheWriteTokens: 400, tokensOut: 150 });
   });
 
   it('windows by taking the delta from the last pre-window total', () => {

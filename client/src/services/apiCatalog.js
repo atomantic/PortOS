@@ -267,6 +267,10 @@ export const previewCatalogSheet = (id, body = {}, options) =>
 
 export const renderCatalogSheet = (id, body = {}, options) =>
   request(`/catalog/ingredients/${enc(id)}/sheets`, { method: 'POST', body: JSON.stringify(body), ...options });
+// Bounded failed sheet jobs with verified, retained originals for explicit recovery.
+export const listCatalogSheetJobs = (id, options = {}) =>
+  request(`/catalog/ingredients/${enc(id)}/sheets/jobs`, options);
+
 // Remove a universe-canon sheet, bound to the file shown; returns
 // `{ filename, pointers, updatedAt }`.
 export const removeCatalogPointerSheet = (id, variant, filename, options) =>
@@ -327,6 +331,9 @@ export const previewCatalogGreyboxPrompt = (id, body, options) =>
 // `greybox: null` removes the place's greybox.
 export const saveCatalogGreybox = (id, greybox, { source, ...options } = {}) =>
   request(`/catalog/ingredients/${enc(id)}/greybox`, { method: 'PUT', body: JSON.stringify({ greybox, ...(source ? { source } : {}) }), ...options });
+
+export const saveCatalogWorld = (id, world, { source, ...options } = {}) =>
+  request(`/catalog/ingredients/${enc(id)}/world`, { method: 'PUT', body: JSON.stringify({ world, ...(source ? { source } : {}) }), ...options });
 
 export const captureCatalogGreyboxShot = (id, shotId, dataBase64, options) =>
   request(`/catalog/ingredients/${enc(id)}/greybox/shots/${enc(shotId)}/capture`, { method: 'POST', body: JSON.stringify({ dataBase64 }), ...options });

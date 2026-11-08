@@ -251,14 +251,6 @@ const usageQuery = (params) => {
   return qs ? `?${qs}` : '';
 };
 export const getUsage = (params = {}, options = {}) => request(`/usage${usageQuery(params)}`, options);
-export const getNativeUsageMatrix = (params = {}, options = {}) => request(`/usage/native-matrix${usageQuery(params)}`, options);
-export const rebuildNativeUsageSources = (params = {}, options = {}) => request('/usage/native-sources/rebuild', {
-  ...options, method: 'POST', body: JSON.stringify(params),
-});
-export const getNativeUsageAccounts = (options = {}) => request('/usage/native-accounts', options);
-export const updateNativeUsageAccounts = (selection, options = {}) => request('/usage/native-accounts', {
-  ...options, method: 'PUT', body: JSON.stringify(selection),
-});
 // Per-model token totals for every Claude Code session on this machine, read
 // from the CLI transcripts. Same { period } | { from, to } params as getUsage.
 export const getClaudeCodeModelUsage = (params = {}, options = {}) =>
@@ -669,5 +661,3 @@ export const approveTailcatDevice = (data, options) => request('/instances/peers
 export const revokeTailcatDevice = (id, options) => request(`/instances/peers/tailcat/devices/${id}`, { ...options, method: 'DELETE' });
 export const setTailcatDeviceEnforcement = (enabled, options) => request('/instances/peers/tailcat/devices/enforcement', { ...options, method: 'PATCH', body: JSON.stringify({ enabled }) });
 
-export const previewCodexUsage = (range, options = {}) => request('/usage/backfill/preview', { method: 'POST', body: JSON.stringify(range), ...options });
-export const cancelCodexUsagePreview = (jobId, options = {}) => request('/usage/backfill/preview/cancel', { method: 'POST', body: JSON.stringify({ jobId }), ...options });

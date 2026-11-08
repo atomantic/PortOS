@@ -638,6 +638,19 @@ describe('syncAccount', () => {
     expect(savedData.messages).toHaveLength(2);
   });
 
+  it('adopts a re-fetched Gmail message\'s Message-ID onto its cached entry (#15308)', async () => {
+    getAccount.mockResolvedValue({ id: VALID_UUID, name: 'Gmail', type: 'gmail', enabled: true });
+    readFile.mockResolvedValue(JSON.stringify({ messages: [{ id: 'msg-1', externalId: 'ext-1', date: '2026-01-01' }] }));
+    syncGmail.mockResolvedValue([{ id: 'msg-1-dup', externalId: 'ext-1', date: '2026-01-01', rfcMessageId: 'one@example.com' }]);
+    updateSyncStatus.mockResolvedValue();
+
+    await syncAccount(VALID_UUID, mockIo);
+
+    expect(atomicWrite.mock.calls[0][1].messages).toEqual([
+      expect.objectContaining({ id: 'msg-1', rfcMessageId: 'one@example.com' }),
+    ]);
+  });
+
   it('keeps provider row identities separate when summary hashes collide', async () => {
     getAccount.mockResolvedValue({ id: VALID_UUID, type: 'outlook', enabled: true });
     readFile.mockResolvedValue(JSON.stringify({ messages: [{ id: 'local-first', externalId: 'same-summary', providerRowId: 'first' }] }));

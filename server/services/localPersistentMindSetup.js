@@ -51,11 +51,42 @@ async function probeOllamaRunning() {
   return status?.available === true;
 }
 
-function resolveInstalledModelId(models) {
-  const ids = (Array.isArray(models) ? models : [])
+function listedModelIds(models) {
+  return (Array.isArray(models) ? models : [])
     .map((m) => (typeof m === 'string' ? m : m?.id || m?.name))
-    .filter((id) => typeof id === 'string' && id.trim());
+    .filter((id) => typeof id === 'string' && id.trim())
+    .map((id) => id.trim());
+}
+
+function resolveInstalledModelId(ids) {
   return ids.find((id) => matchesLocalPersistentMindModel(id)) || null;
+}
+
+/**
+ * The id Apply may write. An explicit `modelId` is honored only when that
+ * exact id is on the daemon's list, or when it names the recommended model
+ * and an installed alias is already there — the installed id is what gets
+ * pinned, never the unpulled spelling.
+ */
+function installedPinTarget(status, requestedId) {
+  if (status.modelCatalog !== 'listed') return null;
+  const installed = new Set(status.installedModelIds || []);
+  if (!requestedId) return status.matchedModel || null;
+  if (installed.has(requestedId)) return requestedId;
+  if (matchesLocalPersistentMindModel(requestedId) && status.matchedModel && installed.has(status.matchedModel)) {
+    return status.matchedModel;
+  }
+  return null;
+}
+
+function pinRefusal(status) {
+  if (status.modelCatalog === 'listed') {
+    return `Pull \`${LOCAL_PERSISTENT_MIND_MODEL}\` before pinning the Persistent Mind profile.`;
+  }
+  if (status.modelCatalog === 'list-failed') {
+    return 'The Ollama model list could not be read. Confirm the recommended model is installed before pinning the Persistent Mind profile.';
+  }
+  return 'Start Ollama and confirm the recommended model is installed before pinning the Persistent Mind profile.';
 }
 
 /**
@@ -115,9 +146,22 @@ export async function describeLocalPersistentMindSetup(deps = {}) {
   }
 
   let matchedModel = null;
+  let installedModelIds = [];
+  // A failed or skipped list is not an empty catalog. Only `listed` may say
+  // the recommended model is absent.
+  let modelCatalog = 'daemon-down';
   if (running) {
-    const models = await listModels('ollama').catch(() => []);
-    matchedModel = resolveInstalledModelId(models);
+    try {
+      const models = await listModels('ollama');
+      installedModelIds = listedModelIds(models);
+      matchedModel = resolveInstalledModelId(installedModelIds);
+      modelCatalog = 'listed';
+    } catch {
+      modelCatalog = 'list-failed';
+    }
+  }
+
+  if (modelCatalog === 'listed') {
     steps.push(step(
       'model-present',
       matchedModel ? 'ready' : 'todo',
@@ -132,6 +176,12 @@ export async function describeLocalPersistentMindSetup(deps = {}) {
           modelId: LOCAL_PERSISTENT_MIND_MODEL,
           label: `Pull ${recommendation.modelLabel}`,
         },
+    ));
+  } else if (modelCatalog === 'list-failed') {
+    steps.push(step(
+      'model-present',
+      'blocked',
+      'Ollama is answering, but the installed-model list could not be read.',
     ));
   } else {
     steps.push(step(
@@ -174,15 +224,27 @@ export async function describeLocalPersistentMindSetup(deps = {}) {
 
   const config = await getConfig().catch(() => null);
   const profile = normalizePersistentMindProfile(config?.persistentMindProfile);
-  const mindReady = profile.enabled === true
+  const mindPinned = profile.enabled === true
     && profile.providerId === LOCAL_PERSISTENT_MIND_PROVIDER_ID
     && matchesLocalPersistentMindModel(profile.model);
+  // A pin to weights that are not pulled fails every mind wake with
+  // model-not-found, so it is not ready until the model list confirms it.
+  // Daemon-down and a failed list are a different fact from "not pulled".
+  const mindReady = mindPinned && Boolean(matchedModel);
+  let mindDetail = 'Optionally pin Persistent Mind to the Ollama provider and recommended model.';
+  if (mindReady) {
+    mindDetail = `Persistent Mind profile pins \`${profile.providerId}\` / \`${profile.model}\`.`;
+  } else if (mindPinned && modelCatalog === 'listed') {
+    mindDetail = `Persistent Mind profile pins \`${profile.providerId}\` / \`${profile.model}\`, but that model is not pulled — mind wakes fail until it is.`;
+  } else if (mindPinned && modelCatalog === 'list-failed') {
+    mindDetail = `Persistent Mind profile pins \`${profile.providerId}\` / \`${profile.model}\`, but the model list could not be read. Mind wakes stay unconfirmed until the list succeeds and the model is installed.`;
+  } else if (mindPinned) {
+    mindDetail = `Persistent Mind profile pins \`${profile.providerId}\` / \`${profile.model}\`, but Ollama is unavailable. Mind wakes fail until the daemon is up and the model is installed.`;
+  }
   steps.push(step(
     'mind-profile',
     mindReady ? 'ready' : 'todo',
-    mindReady
-      ? `Persistent Mind profile pins \`${profile.providerId}\` / \`${profile.model}\`.`
-      : 'Optionally pin Persistent Mind to the Ollama provider and recommended model.',
+    mindDetail,
     { kind: 'set-mind-profile', label: 'Set Persistent Mind profile', optional: true },
   ));
 
@@ -197,14 +259,20 @@ export async function describeLocalPersistentMindSetup(deps = {}) {
     stepIds: STEP_IDS,
     ready: requiredReady,
     matchedModel,
+    installedModelIds,
+    modelCatalog,
     providerEnabled,
     mindProfileReady: mindReady,
   };
 }
 
 /**
- * Enable the Ollama provider (and pin its default model when known). Optionally
- * write the Persistent Mind profile. Does not install Ollama or pull weights.
+ * Enable the Ollama provider (and pin its default model when an installed
+ * match is known). Optionally write the Persistent Mind profile. Does not
+ * install Ollama or pull weights, so it never writes a model the daemon has
+ * not listed — including an explicit `modelId` that only spells the
+ * recommended tag. The setup card does not send `modelId`; the apply route
+ * still accepts one, and that id has to be on the listed set.
  *
  * @param {{ setMindProfile?: boolean, modelId?: string }} [options]
  */
@@ -219,23 +287,32 @@ export async function applyLocalPersistentMindSetup(options = {}) {
     };
   }
 
-  const modelId = (typeof options.modelId === 'string' && options.modelId.trim())
-    || status.matchedModel
-    || LOCAL_PERSISTENT_MIND_MODEL;
+  const requestedId = (typeof options.modelId === 'string' && options.modelId.trim())
+    ? options.modelId.trim()
+    : null;
+  const modelId = installedPinTarget(status, requestedId);
+
+  if (setMindProfile && !modelId) {
+    return {
+      success: false,
+      error: pinRefusal(status),
+      status,
+    };
+  }
 
   const provider = await getProviderById(LOCAL_PERSISTENT_MIND_PROVIDER_ID).catch(() => null);
   if (!provider) {
     return { success: false, error: 'Built-in ollama provider is missing.', status };
   }
 
-  const models = Array.isArray(provider.models) ? [...provider.models] : [];
-  if (!models.includes(modelId)) models.unshift(modelId);
-
-  await updateProvider(LOCAL_PERSISTENT_MIND_PROVIDER_ID, {
-    enabled: true,
-    defaultModel: modelId,
-    models,
-  });
+  const providerUpdate = { enabled: true };
+  if (modelId) {
+    const models = Array.isArray(provider.models) ? [...provider.models] : [];
+    if (!models.includes(modelId)) models.unshift(modelId);
+    providerUpdate.defaultModel = modelId;
+    providerUpdate.models = models;
+  }
+  await updateProvider(LOCAL_PERSISTENT_MIND_PROVIDER_ID, providerUpdate);
 
   let profile = null;
   if (setMindProfile) {

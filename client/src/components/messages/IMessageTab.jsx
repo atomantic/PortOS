@@ -690,8 +690,8 @@ export default function IMessageTab() {
         </div>
       )}
 
-      <div className="grid min-h-0 flex-1 gap-3 md:grid-cols-[minmax(16rem,22rem)_1fr]">
-        <div className={`min-h-0 ${showDetailMobile ? 'hidden md:block' : 'block'} h-[min(50vh,28rem)] md:h-auto`}>
+      <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 md:grid-cols-[minmax(16rem,22rem)_minmax(0,1fr)]">
+        <div className={`min-h-0 min-w-0 ${showDetailMobile ? 'hidden md:block' : 'block'} h-[min(50vh,28rem)] md:h-auto`}>
           <ConversationList
             conversations={conversations}
             selectedKey={selectedKey}
@@ -703,7 +703,7 @@ export default function IMessageTab() {
             onRetry={loadList}
           />
         </div>
-        <div className={`min-h-0 ${showDetailMobile ? 'block' : 'hidden md:block'} h-[min(50vh,28rem)] md:h-auto`}>
+        <div className={`min-h-0 min-w-0 ${showDetailMobile ? 'block' : 'hidden md:block'} h-[min(50vh,28rem)] md:h-auto`}>
           <ConversationDetail
             chatKey={selectedKey}
             conversation={selectedConversation}
