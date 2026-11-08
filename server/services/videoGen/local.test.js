@@ -454,6 +454,14 @@ vi.mock('../loraEffectProbe.js', () => ({
 
 vi.mock('fs/promises', () => fsPromisesMock);
 
+// The shard preflight stats real files; the substituted-encoder test uses
+// fabricated paths under the fs mock, and the preflight has its own coverage
+// in textEncoderPreflight.test.js.
+vi.mock('./ensureWeights.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  assertTextEncoderFilesComplete: vi.fn(async () => {}),
+}));
+
 // Fake EventEmitter-like process that completes immediately with exit code 0.
 // Shared shape for both the child_process spawn mock (ffmpeg/probe) and the
 // detachedSpawn mock (the render child). Hoisted so the vi.mock factories

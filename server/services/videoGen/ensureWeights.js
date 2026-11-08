@@ -1,5 +1,6 @@
 import { readFile, stat } from 'node:fs/promises';
-import { findCachedRepoFile, isSafeHfRepoRelativePath } from '../../lib/hfCache.js';
+import { basename } from 'node:path';
+import { findCachedRepoFile, isSafeHfRepoRelativePath, verifySafetensorsStructure } from '../../lib/hfCache.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { downloadHfRepo } from '../hfDownload.js';
 import { sha256File } from '../../lib/fileUtils.js';
@@ -132,5 +133,27 @@ export async function ensureMiniMaxH3Weights(model, { cacheOnly = false } = {}) 
       throw new ServerError('MiniMax H3 automatic download did not complete the required model files. Retry when the download service is available.',
         { status: 400, code: 'MINIMAX_H3_WEIGHTS_NOT_CACHED' });
     }
+  }
+}
+
+// findCachedRepoFiles already rejects missing and 0-byte files; this adds the
+// header check so a download cut off mid-shard names its file here instead of
+// surfacing as the renderer's generic "no *.safetensors found" after spawn.
+export async function assertTextEncoderFilesComplete(encoder) {
+  const bad = [];
+  for (const path of encoder?.paths || []) {
+    const info = await stat(path).catch(() => null);
+    let reason = null;
+    if (!info?.isFile()) reason = 'missing';
+    else if (info.size === 0) reason = 'empty';
+    else if (path.endsWith('.safetensors')) {
+      const structural = await verifySafetensorsStructure(path, info.size);
+      if (!structural.ok) reason = structural.reason;
+    }
+    if (reason) bad.push(`${basename(path)} (${reason})`);
+  }
+  if (bad.length) {
+    throw new ServerError(`Text encoder "${encoder.id}" has incomplete weight files: ${bad.join(', ')}. Re-download or repair it in Video Gen before rendering.`,
+      { status: 400, code: 'VIDEO_WEIGHTS_INCOMPLETE' });
   }
 }
