@@ -539,7 +539,7 @@ it('links directly from character design to the shared voice studio with its cas
     .toHaveAttribute('href', '/voices?universeId=example-universe&characterId=chr-aria');
 });
 
-// Catches the height renders read hiding in the Stats list (Hold Still: figures sized by guesswork).
+// Catches the height renders read hiding in the Stats list (figures were sized by guesswork).
 it('edits the Height stat from its own field, with the typical height for a child age as the hint', async () => {
   const { useState } = await import('react');
   let draft;

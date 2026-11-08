@@ -155,7 +155,7 @@ describe('shots on the night', () => {
     expect(previzFrameAt(observed, {}, 1).world).toBeUndefined();
   });
 
-  // Catches a held camera that never swings to the person it should turn to (Hold Still shot 1).
+  // Catches a held camera that never swings to the person it should turn to.
   it('swings a held camera from straight ahead to its keep-in-frame person when it turns to them', () => {
     const turning = { ...base, previz: { ...base.previz, cuts: [cut('k1', 0, 'p-home', { storyMin: 35, holderSubjectId: 'c-b', aimSubjectId: 'c-a', turnToAim: true })] } };
     const look = (sec) => {

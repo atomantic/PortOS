@@ -136,64 +136,64 @@ describe('musicVideoConditioningReferences with an approved Cast & Sets check-in
     { id: 'mvr-cs-set-mall', imageId: 'mall.png', condition: true },
     { id: 'mvr-cs-set-lot', imageId: 'lot.png', condition: true },
     { id: 'mvr-cs-set-hill', imageId: 'hill.png', condition: false },
-    { id: 'mvr-cs-cast-kevin', imageId: 'kevin-sheet.png', condition: false },
+    { id: 'mvr-cs-cast-ben', imageId: 'ben-sheet.png', condition: false },
   ];
   const checkedIn = {
     visualSpec: { references },
-    castAndSets: { status: 'approved', direction: { cast: [{ id: 'kevin', name: 'Kevin', role: 'boyfriend' }], songMap: [{ section: 0, setId: 'hill' }] } },
+    castAndSets: { status: 'approved', direction: { cast: [{ id: 'ben', name: 'Ben', role: 'boyfriend' }], songMap: [{ section: 0, setId: 'hill' }] } },
   };
-  const scene = (extra) => ({ framePrompt: 'Kevin rides beside her, both laughing', ...extra });
+  const scene = (extra) => ({ framePrompt: 'Ben rides beside her, both laughing', ...extra });
 
   it('sends the shot\'s own set and the cast it names', () => {
-    expect(ids(musicVideoConditioningReferences(checkedIn, scene({ sectionIndex: 0 })))).toEqual(['lead-sheet.png', 'hill.png', 'kevin-sheet.png']);
+    expect(ids(musicVideoConditioningReferences(checkedIn, scene({ sectionIndex: 0 })))).toEqual(['lead-sheet.png', 'hill.png', 'ben-sheet.png']);
   });
 
   it('adds the prop sheet to a shot that shows a prop, never to one that only names its owner', () => {
     const withProps = {
       visualSpec: { references: [...references, { id: 'mvr-cs-props', imageId: 'props.png', role: 'prop', condition: false }] },
-      castAndSets: { ...checkedIn.castAndSets, direction: { ...checkedIn.castAndSets.direction, props: [{ id: 'camera', name: "Kevin's camera", description: 'black 35mm compact' }] } },
+      castAndSets: { ...checkedIn.castAndSets, direction: { ...checkedIn.castAndSets.direction, props: [{ id: 'camera', name: "Ben's camera", description: 'black 35mm compact' }] } },
     };
-    expect(ids(musicVideoConditioningReferences(withProps, scene({ sectionIndex: 0, framePrompt: 'Kevin rides beside her, raising his camera' }))))
-      .toEqual(['lead-sheet.png', 'hill.png', 'kevin-sheet.png', 'props.png']);
-    expect(ids(musicVideoConditioningReferences(withProps, scene({ sectionIndex: 0 })))).toEqual(['lead-sheet.png', 'hill.png', 'kevin-sheet.png']);
+    expect(ids(musicVideoConditioningReferences(withProps, scene({ sectionIndex: 0, framePrompt: 'Ben rides beside her, raising his camera' }))))
+      .toEqual(['lead-sheet.png', 'hill.png', 'ben-sheet.png', 'props.png']);
+    expect(ids(musicVideoConditioningReferences(withProps, scene({ sectionIndex: 0 })))).toEqual(['lead-sheet.png', 'hill.png', 'ben-sheet.png']);
   });
 
   it('prioritizes each person and face sheet on a close-up, retaining the set when it fits', () => {
     const withFaces = { ...checkedIn, visualSpec: { references: [...references,
       { id: 'mvr-cs-expressions', imageId: 'lead-face.png', role: 'character' },
-      { id: 'mvr-cs-face-kevin', imageId: 'kevin-face.png', role: 'character' }] } };
-    expect(ids(musicVideoConditioningReferences(withFaces, scene({ sectionIndex: 0, framePrompt: 'Arm\'s-length selfie: Kevin and her cheek to cheek' }))))
-      .toEqual(['lead-sheet.png', 'lead-face.png', 'kevin-sheet.png', 'kevin-face.png', 'hill.png']);
-    expect(ids(musicVideoConditioningReferences(withFaces, scene({ sectionIndex: 0, framePrompt: 'Close-up of Kevin' }), null, null, { limit: 4 })))
-      .toEqual(['lead-sheet.png', 'lead-face.png', 'kevin-sheet.png', 'kevin-face.png']);
+      { id: 'mvr-cs-face-ben', imageId: 'ben-face.png', role: 'character' }] } };
+    expect(ids(musicVideoConditioningReferences(withFaces, scene({ sectionIndex: 0, framePrompt: 'Arm\'s-length selfie: Ben and her cheek to cheek' }))))
+      .toEqual(['lead-sheet.png', 'lead-face.png', 'ben-sheet.png', 'ben-face.png', 'hill.png']);
+    expect(ids(musicVideoConditioningReferences(withFaces, scene({ sectionIndex: 0, framePrompt: 'Close-up of Ben' }), null, null, { limit: 4 })))
+      .toEqual(['lead-sheet.png', 'lead-face.png', 'ben-sheet.png', 'ben-face.png']);
     expect(ids(musicVideoConditioningReferences(withFaces, scene({ sectionIndex: 0, framePrompt: 'Close-up of her laughing' }))))
       .toEqual(['lead-sheet.png', 'lead-face.png', 'hill.png']);
     expect(ids(musicVideoConditioningReferences(withFaces, scene({ sectionIndex: 0, framePrompt: 'Close up of her laughing' }))))
       .toEqual(['lead-sheet.png', 'lead-face.png', 'hill.png']);
-    expect(ids(musicVideoConditioningReferences(withFaces, scene({ sectionIndex: 0, framePrompt: 'At arm’s length, Kevin and her' }))))
-      .toEqual(['lead-sheet.png', 'lead-face.png', 'kevin-sheet.png', 'kevin-face.png', 'hill.png']);
-    expect(ids(musicVideoConditioningReferences(withFaces, scene({ sectionIndex: 0 })))).toEqual(['lead-sheet.png', 'hill.png', 'kevin-sheet.png']);
+    expect(ids(musicVideoConditioningReferences(withFaces, scene({ sectionIndex: 0, framePrompt: 'At arm’s length, Ben and her' }))))
+      .toEqual(['lead-sheet.png', 'lead-face.png', 'ben-sheet.png', 'ben-face.png', 'hill.png']);
+    expect(ids(musicVideoConditioningReferences(withFaces, scene({ sectionIndex: 0 })))).toEqual(['lead-sheet.png', 'hill.png', 'ben-sheet.png']);
   });
 
   // Only sheets omitted at approval may be restored as virtual references.
   it('honors removal of a published face sheet and hides overflow outside an approved stage', () => {
-    const face = { id: 'mvr-cs-face-kevin', imageId: 'kevin-face.png', role: 'character' };
-    const shot = scene({ framePrompt: 'Close-up of Kevin' });
-    const approved = { ...checkedIn, castAndSets: { ...checkedIn.castAndSets, images: { 'face:kevin': { imageId: face.imageId } }, overflowFaceReferences: [] } };
+    const face = { id: 'mvr-cs-face-ben', imageId: 'ben-face.png', role: 'character' };
+    const shot = scene({ framePrompt: 'Close-up of Ben' });
+    const approved = { ...checkedIn, castAndSets: { ...checkedIn.castAndSets, images: { 'face:ben': { imageId: face.imageId } }, overflowFaceReferences: [] } };
     expect(ids(musicVideoConditioningReferences(approved, shot))).not.toContain(face.imageId);
     const overflow = { ...approved, castAndSets: { ...approved.castAndSets, overflowFaceReferences: [face] } };
     expect(ids(musicVideoConditioningReferences(overflow, shot))).toContain(face.imageId);
     expect(ids(musicVideoConditioningReferences({ ...overflow, castAndSets: { ...overflow.castAndSets, status: 'review' } }, shot))).not.toContain(face.imageId);
     // A full list may have omitted the supporting cast sheet as well as its face sheet.
-    const noCastSheet = { ...overflow, visualSpec: { references: references.filter((ref) => ref.id !== 'mvr-cs-cast-kevin') } };
-    expect(ids(musicVideoConditioningReferences(noCastSheet, shot)).slice(0, 2)).toEqual(['lead-sheet.png', 'kevin-face.png']);
+    const noCastSheet = { ...overflow, visualSpec: { references: references.filter((ref) => ref.id !== 'mvr-cs-cast-ben') } };
+    expect(ids(musicVideoConditioningReferences(noCastSheet, shot)).slice(0, 2)).toEqual(['lead-sheet.png', 'ben-face.png']);
   });
 
   // Uniquely catches a shot whose song section was cleared (a replaced song) dropping the
   // cast sheets it names for the capped authored set, so a co-lead is drawn from text alone.
   it('keeps the named cast when the shot has no song section, filling spare slots with the authored set', () => {
     expect(ids(musicVideoConditioningReferences(checkedIn, scene({ sectionIndex: null }), null, null, { limit: 4 })))
-      .toEqual(['lead-sheet.png', 'kevin-sheet.png', 'street.png', 'mall.png']);
+      .toEqual(['lead-sheet.png', 'ben-sheet.png', 'street.png', 'mall.png']);
     expect(ids(musicVideoConditioningReferences(checkedIn, { framePrompt: 'An empty street at dawn' }, null, null, { limit: 4 })))
       .toEqual(['lead-sheet.png', 'street.png', 'mall.png', 'lot.png']);
   });

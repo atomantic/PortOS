@@ -4,7 +4,7 @@ import { AMATEUR_SNAPSHOT_LIGHT, SCENE_LIGHT_ON_PEOPLE, isAmateurLook, peopleLig
 describe('Music Video lighting on people', () => {
   it('recognizes amateur snapshot and home-video looks', () => {
     expect(isAmateurLook('Faded consumer color; harsh direct pop-up flash; VHS-C chroma bleed')).toBe(true);
-    expect(isAmateurLook('', 'Found 1986 teen snapshots and home video')).toBe(true);
+    expect(isAmateurLook('', 'Found 1979 teen snapshots and home video')).toBe(true);
     expect(isAmateurLook('Glossy anamorphic cinema, teal and orange')).toBe(false);
     expect(isAmateurLook('Clean cinematic lighting; avoid VHS and amateur aesthetics')).toBe(false);
     expect(isAmateurLook('Faded Kodak Gold; harsh pop-up flash; no HDR, no gloss')).toBe(true);
