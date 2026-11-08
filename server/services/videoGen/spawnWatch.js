@@ -85,6 +85,9 @@ export async function spawnAndWatchVideo({
   // `{ sourcePath, extendLatents }` for a plain native Extend render, whose
   // delivered file should keep the original source (see ./extendSplice.js).
   extendSplice = null,
+  // True for a single a2v render: measure and correct its mouth-first lead
+  // after the model wrote it (see lib/lipsyncAlign.js).
+  lipsyncAlign = false,
 }) {
   delete job.metalBufferPolicy;
   let ownershipSettled = true;
@@ -669,6 +672,12 @@ export async function spawnAndWatchVideo({
             // Best-effort: a failed splice leaves the model's own output in place.
             if (extendSplice && (await spliceExtendSource({ ...extendSplice, outputPath })).applied) {
               meta.extendSourceOriginal = true;
+            }
+            if (lipsyncAlign) {
+              const { alignLipsyncLead } = await import('../../lib/lipsyncAlign.js');
+              meta.lipsyncAlign = await alignLipsyncLead({ videoPath: outputPath, label: jobId.slice(0, 8) });
+              await recordVideoExecutionDiagnostics(jobId, { lipsyncAlign: meta.lipsyncAlign }, ...(executionParent ? [executionParent] : []))
+                .catch(error => console.error(`❌ Lip-sync evidence persistence failed [${jobId.slice(0, 8)}]: ${error.message}`));
             }
             thumbnail = await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta, actualSeed, terminal: false, mutateHistory: mutateVideoHistory, publication: publications.get(outputPath) });
           }
