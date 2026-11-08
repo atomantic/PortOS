@@ -7,6 +7,7 @@ vi.mock('../services/api', () => ({
   // OutreachQueue (care tab) fetches unanswered threads on mount (#2158).
   getTribeOutreach: vi.fn(() => Promise.resolve({ threads: [] })),
   createTribeTouchpoint: vi.fn(),
+  updateTribePerson: vi.fn(),
   // Non-blocking duplicate-identifier report (#5908); defaults to clean so
   // tests unrelated to it never see the banner.
   getTribeDuplicateIdentifiers: vi.fn(() => Promise.resolve({ emails: [], phones: [] })),
@@ -229,6 +230,23 @@ describe('Tribe person deep link (#98 part C)', () => {
     // Circle-only content — proves the tab actually switched, not just the draft.
     expect(screen.getByPlaceholderText('Search relationships')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Relationship' })).toBeInTheDocument();
+  });
+
+  it('omits lastContact from the update unless the user edited it (#15356)', async () => {
+    api.updateTribePerson.mockResolvedValue({ ...PEOPLE[1] });
+    renderAt('/tribe?person=p2');
+    // Wait for the deep link to select the person; editing earlier hits the blank create form.
+    await waitFor(() => expect(screen.getByLabelText('Name')).toHaveValue('Sample Neighbor'));
+    const notes = screen.getByLabelText('Notes');
+    fireEvent.change(notes, { target: { value: 'edited' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.updateTribePerson).toHaveBeenCalledTimes(1));
+    expect(api.updateTribePerson.mock.calls[0][1]).not.toHaveProperty('lastContact');
+
+    fireEvent.change(screen.getByLabelText('Last Contact'), { target: { value: '2020-01-02' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.updateTribePerson).toHaveBeenCalledTimes(2));
+    expect(api.updateTribePerson.mock.calls[1][1]).toMatchObject({ lastContact: '2020-01-02' });
   });
 
   it('scrolls the matching card into view', async () => {

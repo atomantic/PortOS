@@ -1139,6 +1139,9 @@ export default function Tribe() {
   const selectContact = (contact) => setDraft({
     ...emptyDraft(),
     ...contact,
+    // Snapshot of the date as loaded: saveDraft only sends lastContact when the
+    // user changed it, so background touchpoint syncs aren't rolled back (#15356).
+    loadedLastContact: contact.lastContact || '',
     tags: tagsToInput(contact.tags),
     emails: tagsToInput(contact.emails),
     phones: tagsToInput(contact.phones),
@@ -1193,7 +1196,6 @@ export default function Tribe() {
       relationship: draft.relationship.trim(),
       ring: draft.ring,
       cadenceDays: Math.max(1, Number(draft.cadenceDays) || ringFor(draft.ring).cadenceDays),
-      lastContact: draft.lastContact || null,
       channel: draft.channel.trim(),
       energy: draft.energy,
       tags: tagsToArray(draft.tags),
@@ -1204,6 +1206,9 @@ export default function Tribe() {
     };
 
     const isCreate = !draft.id;
+    if (isCreate || (draft.lastContact || '') !== (draft.loadedLastContact || '')) {
+      payload.lastContact = draft.lastContact || null;
+    }
     setSaving(true);
     const saved = draft.id
       ? await api.updateTribePerson(draft.id, payload, { silent: true }).catch((err) => {
@@ -1260,7 +1265,7 @@ export default function Tribe() {
     setContacts((current) => current.map((contact) => (
       contact.id === id ? { ...contact, lastContact: date } : contact
     )));
-    if (draft.id === id) setDraft((current) => ({ ...current, lastContact: date }));
+    if (draft.id === id) setDraft((current) => ({ ...current, lastContact: date, loadedLastContact: date }));
   };
 
   const clearFilters = () => {
