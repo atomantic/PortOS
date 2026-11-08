@@ -275,6 +275,24 @@ export function ownsClaimBranch(agent, branchName) {
   return registeredClaimBranch(agent) === branchName || ownershipList(agent, 'claimBranches').includes(branchName);
 }
 
+/**
+ * Claim branches live runs in `sourceWorkspace` own: registered pinned targets
+ * plus bound branches, minus released ones. A pinned run holds its target
+ * before it cuts the branch or stamps tracker markers, so an issue scan that
+ * reads only refs and PRs would otherwise dispatch a picker onto it.
+ * Pure.
+ */
+export function liveClaimBranches(agents, sourceWorkspace) {
+  const branches = new Set();
+  for (const agent of agents) {
+    if (!agent || !isLiveAgent(agent) || !inRepository(agent, sourceWorkspace)) continue;
+    for (const branch of [registeredClaimBranch(agent), ...ownershipList(agent, 'claimBranches')]) {
+      if (typeof branch === 'string' && ownsClaimBranch(agent, branch)) branches.add(branch);
+    }
+  }
+  return [...branches];
+}
+
 // A run that may hold a claim checkout nobody can name yet: a picker until it
 // binds its first branch, a pinned run until it binds the branch it actually
 // works on. The claim prompt binds every branch BEFORE its worktree exists, so
