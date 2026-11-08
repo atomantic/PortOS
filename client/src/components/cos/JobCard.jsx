@@ -12,6 +12,7 @@ import InlineConfirmRow from '../ui/InlineConfirmRow';
 import FormField from '../ui/FormField';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
 import TaskDataInputs from './TaskDataInputs';
+import ScheduleAnchorSelect from './ScheduleAnchorSelect';
 import { JobFormFieldsEditor, JobFormValueInputs, missingRequiredJobFormFields } from './JobFormFields';
 
 // Footer actions beside Run now — same shape, quieter than the accent trigger.
@@ -89,6 +90,7 @@ export function normalizeJobPayload(formData) {
     payload.cronExpression = derivedCron || payload.cronExpression?.trim() || null;
     payload.cronSchedule = payload.cronSchedule || null;
     payload.scheduledTime = null;
+    payload.scheduleAnchor = null;
   } else {
     payload.cronExpression = null;
     payload.cronSchedule = null;
@@ -146,6 +148,8 @@ export function ScheduleFields({ data, onChange, timezone }) {
               // align to; the server clears it too, so drop it here rather than
               // saving a value the job will never honor.
               if (e.target.value === ON_DEMAND_INTERVAL) onChange('scheduledTime', null);
+              // A weekday and a day of month are not interchangeable: let the server re-default it.
+              onChange('scheduleAnchor', null);
             }}
             className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
           >
@@ -164,6 +168,9 @@ export function ScheduleFields({ data, onChange, timezone }) {
               title="Run at specific time (leave empty for any time)"
               aria-label="Run at a specific time (leave empty for any time)"
             />
+          )}
+          {data.scheduledTime && data.interval !== ON_DEMAND_INTERVAL && (
+            <ScheduleAnchorSelect interval={data.interval} value={data.scheduleAnchor} onChange={value => onChange('scheduleAnchor', value)} />
           )}
         </div>
       )}
@@ -348,6 +355,7 @@ export default function JobCard({
       scheduleMode: job.cronExpression || job.cronSchedule ? 'cron' : 'interval',
       interval: job.interval,
       scheduledTime: job.scheduledTime || '',
+      scheduleAnchor: job.scheduleAnchor ?? null,
       cronExpression: job.cronExpression || '',
       cronSchedule: job.cronSchedule || (job.cronExpression ? parseCronToRecurrence(job.cronExpression) : null),
       priority: job.priority,

@@ -554,6 +554,22 @@ describe('projectWorkflowTimeline', () => {
     ]);
   });
 
+  it('projects an anchored weekly job on its anchor day even after a run stamped 17 hours late', () => {
+    const timeline = projectWorkflowTimeline([{
+      id: 'job:anchored', kind: 'job', enabled: true,
+      lastRun: '2026-07-06T20:00:00.000Z', // Monday evening
+      schedule: { type: 'weekly', intervalMs: 7 * 86_400_000, scheduledTime: '03:00', scheduleAnchor: 1 }
+    }], {
+      start: new Date('2026-07-07T00:00:00.000Z'),
+      end: new Date('2026-07-28T00:00:00.000Z'),
+      timezone: 'UTC'
+    });
+
+    expect(timeline.occurrences.map(item => item.at)).toEqual([
+      '2026-07-13T03:00:00.000Z', '2026-07-20T03:00:00.000Z', '2026-07-27T03:00:00.000Z'
+    ]);
+  });
+
   it('flags launches from different nodes within fifteen minutes', () => {
     const timeline = projectWorkflowTimeline([
       { id: 'task:a', kind: 'task', enabled: true, schedule: { type: 'cron', cronExpression: '0 9 * * *' } },

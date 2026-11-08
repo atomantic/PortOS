@@ -170,3 +170,74 @@ describe('interval job + scheduledTime next fire (#15352)', () => {
     expect(computeNextJobRun({ id: 'j', interval: '1d', intervalMs: DAY, weekdaysOnly: true }, LA)).toBe(PDT('2026-10-24T12:00:00'));
   });
 });
+
+// #15395: nearest-slot snapping moves a weekly job to the next weekday once a run is
+// stamped >12h after its slot; scheduleAnchor pins the calendar day instead.
+describe('anchored multi-day jobs (#15395)', () => {
+  afterEach(() => vi.useRealTimers());
+
+  const MONDAY = 1;
+  const anchored = (lastRun, overrides = {}) => ({ ...weekly(lastRun), scheduleAnchor: MONDAY, ...overrides });
+
+  it('a weekly 03:00 job anchored on Monday run Monday 20:00 fires next Monday 03:00, across the fall-back', async () => {
+    const lastRun = PDT('2026-10-26T20:00:00'); // Monday evening, e.g. a manual run
+    expect(await nextFire(anchored(lastRun))).toBe(PST('2026-11-02T03:00:00'));
+  });
+
+  it('the same late run without an anchor still takes the nearest slot (Tuesday)', async () => {
+    const lastRun = PDT('2026-10-26T20:00:00');
+    expect(await nextFire(weekly(lastRun))).toBe(PST('2026-11-03T03:00:00'));
+  });
+
+  it('an on-time run lands exactly where nearest-slot snapping put it', async () => {
+    const lastRun = PDT('2026-10-26T03:01:00');
+    expect(await nextFire(anchored(lastRun))).toBe(await nextFire(weekly(lastRun)));
+  });
+
+  it('does not drift to another weekday across repeated runs stamped 17 hours late', async () => {
+    let lastRun = PDT('2026-10-26T20:00:00');
+    for (let week = 0; week < 5; week++) {
+      const next = await nextFire(anchored(lastRun));
+      expect(getLocalParts(new Date(next), LA)).toMatchObject({ dayOfWeek: MONDAY, hour: 3, minute: 0 });
+      lastRun = next + 17 * HOUR;
+    }
+  });
+
+  it('a run stamped the evening before the anchor day still waits for the following anchor day', async () => {
+    const lastRun = PDT('2026-10-25T22:00:00'); // Sunday evening, 19h before the Monday slot
+    expect(await nextFire(anchored(lastRun))).toBe(PST('2026-11-02T03:00:00'));
+  });
+
+  it('a run held days past its slot skips an anchor day that is less than a day short of a week away', async () => {
+    const lastRun = PDT('2026-10-27T10:00:00'); // Tuesday; next Monday is 6d 17h later
+    expect(await nextFire(anchored(lastRun))).toBe(PST('2026-11-09T03:00:00'));
+  });
+
+  it('a biweekly job keeps its weekday and fortnight', async () => {
+    const job = anchored(PDT('2026-10-19T20:00:00'), { interval: 'biweekly', intervalMs: 14 * DAY });
+    expect(await nextFire(job)).toBe(PST('2026-11-02T03:00:00'));
+  });
+
+  it('a monthly job keeps its day of month when a short month shifts lastRun + 30 days', async () => {
+    const monthly = (lastRun, scheduleAnchor) => ({
+      id: 'job-monthly', interval: 'monthly', intervalMs: 30 * DAY, scheduledTime: '03:00', scheduleAnchor, lastRun: new Date(lastRun).toISOString(),
+    });
+    // Feb 15 + 30d is Mar 17; the 15th must still come next, not April.
+    expect(await nextFire(monthly(PST('2027-02-15T03:01:00'), 15))).toBe(PDT('2027-03-15T03:00:00'));
+    // A late run on the 15th stays on the 15th of next month.
+    expect(await nextFire(monthly(PST('2026-12-15T20:00:00'), 15))).toBe(PST('2027-01-15T03:00:00'));
+  });
+
+  it('a monthly day beyond a short month fires on its last day, then returns to the anchor day', async () => {
+    const monthly = (lastRun) => ({
+      id: 'job-monthly', interval: 'monthly', intervalMs: 30 * DAY, scheduledTime: '03:00', scheduleAnchor: 31, lastRun: new Date(lastRun).toISOString(),
+    });
+    expect(await nextFire(monthly(PST('2027-01-31T03:01:00')))).toBe(PST('2027-02-28T03:00:00'));
+    expect(await nextFire(monthly(PST('2027-02-28T03:01:00')))).toBe(PDT('2027-03-31T03:00:00'));
+  });
+
+  it('an anchor that does not fit the cadence is ignored, keeping the nearest-slot behavior', async () => {
+    const lastRun = PDT('2026-10-26T20:00:00');
+    expect(await nextFire(anchored(lastRun, { scheduleAnchor: 9 }))).toBe(PST('2026-11-03T03:00:00'));
+  });
+});

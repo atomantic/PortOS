@@ -14,6 +14,8 @@ import { existsSync } from 'fs'
 import { ensureDir, PATHS, readJSONFile, atomicWrite, tryReadFile } from '../../lib/fileUtils.js'
 import { validateCommand } from '../../lib/commandSecurity.js'
 import { DATA_DIR, JOBS_FILE, JOBS_SKILLS_DIR, JOB_INTERVAL_VALUES, resolveIntervalMs } from './constants.js'
+import { getUserTimezone } from '../userTimezone.js'
+import { deriveScheduleAnchor, needsScheduleAnchor } from '../../lib/scheduleAnchor.js'
 import { createDefaultJobsData, mergeWithDefaults } from './defaults.js'
 
 let initPromise = null
@@ -30,16 +32,30 @@ async function initJobs() {
   if (!loaded) {
     const initial = createDefaultJobsData()
     await migrateScriptsState(initial)
+    await anchorUnanchoredJobs(initial)
     await saveJobs(initial)
     return initial
   }
 
   const { data: merged, dirty } = mergeWithDefaults(loaded)
   const migrated = await migrateScriptsState(merged)
-  if (migrated || dirty) {
+  const anchored = await anchorUnanchoredJobs(merged)
+  if (migrated || dirty || anchored) {
     await saveJobs(merged)
   }
   return merged
+}
+
+// Weekly-or-longer clock jobs merged in after the migration (shipped defaults,
+// jobs written by an older build) get their calendar anchor from their lastRun.
+async function anchorUnanchoredJobs(data) {
+  const pending = data.jobs.filter(needsScheduleAnchor)
+  if (pending.length === 0) return false
+  const timezone = await getUserTimezone()
+  for (const job of pending) {
+    job.scheduleAnchor = deriveScheduleAnchor(job, timezone)
+  }
+  return true
 }
 
 async function syncSkillTemplatesFromSample() {

@@ -30,6 +30,8 @@ import * as autonomousJobs from './autonomousJobs.js';
 import { checkJobGate, hasGate, getRegisteredGates } from './jobGates.js';
 import { parseCronToNextRun, parseRecurrenceToNextRun } from './eventScheduler.js';
 import { getLocalParts, nextLocalTime } from '../lib/timezone.js';
+import { effectiveScheduleAnchor } from '../lib/scheduleAnchor.js';
+import { nextIntervalJobFireTime } from './autonomousJobs/scheduler.js';
 import { getUserTimezone } from './userTimezone.js';
 
 const HOUR = 3_600_000;
@@ -242,6 +244,7 @@ export async function getWorkflowGraph({ horizonHours = 24, from = new Date() } 
         cronExpression: job.cronExpression ?? null,
         cronSchedule: job.cronSchedule ?? null,
         scheduledTime: job.scheduledTime ?? null,
+        scheduleAnchor: job.scheduleAnchor ?? null,
         weekdaysOnly: !!job.weekdaysOnly
       },
       lastRun: job.lastRun || null,
@@ -568,9 +571,33 @@ function makePerpetualWindow(node, atMs, endMs, state) {
   };
 }
 
+// An anchored job fires on its calendar day, not every cadence after lastRun, so
+// replay the scheduler's own next-fire function with each projected run as lastRun.
+function projectAnchoredIntervalJob(node, job, startMs, endMs, timezone, occurrences) {
+  let lastRunMs = new Date(node.lastRun).getTime();
+  for (let i = 0; i < MAX_OCCURRENCES_PER_NODE; i++) {
+    const fireMs = nextIntervalJobFireTime({ ...job, lastRun: new Date(lastRunMs).toISOString() }, timezone);
+    if (fireMs == null || fireMs >= endMs) return;
+    if (fireMs <= startMs) {
+      // Already due: the scheduler fires it now, and the following run counts from then.
+      occurrences.push(makeOccurrence(node, startMs, 'launch', nodeDueNow(node)));
+      lastRunMs = startMs;
+    } else {
+      occurrences.push(makeOccurrence(node, fireMs, 'launch'));
+      lastRunMs = fireMs;
+    }
+  }
+}
+
 function projectIntervalJob(node, startMs, endMs, timezone, occurrences) {
   const cadence = node.schedule?.intervalMs;
   if (!cadence) return;
+  const { type, scheduledTime, scheduleAnchor, weekdaysOnly } = node.schedule;
+  const anchorable = { interval: type, intervalMs: cadence, scheduledTime, scheduleAnchor, weekdaysOnly };
+  if (node.lastRun && effectiveScheduleAnchor(anchorable)) {
+    projectAnchoredIntervalJob(node, anchorable, startMs, endMs, timezone, occurrences);
+    return;
+  }
   const lastRunMs = node.lastRun ? new Date(node.lastRun).getTime() : NaN;
   let nextMs = Number.isFinite(lastRunMs) ? lastRunMs + cadence : startMs;
   const timeMatch = String(node.schedule?.scheduledTime || '').match(/^([01]\d|2[0-3]):([0-5]\d)$/);

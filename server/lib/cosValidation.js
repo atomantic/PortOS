@@ -507,6 +507,10 @@ export const createCosJobSchema = z.object({
   // always emitted null for the inactive mode; accepting it here lets updateJob
   // distinguish "clear this field" from an omitted field it should preserve.
   scheduledTime: z.string().nullable().optional(),
+  // Local weekday (0-6, weekly/biweekly) or day of month (1-31, monthly) a clock
+  // job stays on. Which range applies depends on the cadence, so updateJob checks
+  // the fit; null asks the server to default it from the job's lastRun.
+  scheduleAnchor: z.number().int().min(0).max(31).nullable().optional(),
   cronExpression: z.string().nullable().optional(),
   // Optional calendar rule for schedules that need an anchored interval (for
   // example every two weeks). cronExpression remains the compatibility preview

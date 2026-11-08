@@ -14,6 +14,29 @@ import { cosEvents } from '../cosEvents.js'
 import { withLock, resolveIntervalMs } from './constants.js'
 import { loadJobs, saveJobs } from './store.js'
 import { getNextDueJob } from './scheduler.js'
+import { getUserTimezone } from '../userTimezone.js'
+import { deriveScheduleAnchor, isValidScheduleAnchor, needsScheduleAnchor, scheduleAnchorKind } from '../../lib/scheduleAnchor.js'
+
+/**
+ * Settle `job.scheduleAnchor`: null when the job cannot carry one, the user's
+ * pick when it fits the cadence, otherwise derived from the current lastRun
+ * (or now) so an existing schedule's next fire time does not move.
+ * An explicit pick that cannot fit the cadence is a 400, not silently replaced.
+ */
+async function settleScheduleAnchor(job, { picked } = {}) {
+  const kind = scheduleAnchorKind(job)
+  if (!kind) {
+    job.scheduleAnchor = null
+    return
+  }
+  if (typeof picked === 'number' && !isValidScheduleAnchor(kind, picked)) {
+    const err = new Error(`scheduleAnchor ${picked} is not a valid ${kind === 'weekday' ? 'weekday (0-6)' : 'day of month (1-31)'} for a ${job.interval} job`)
+    err.status = 400
+    throw err
+  }
+  if (!needsScheduleAnchor(job)) return
+  job.scheduleAnchor = deriveScheduleAnchor(job, await getUserTimezone())
+}
 
 /**
  * Get all jobs
@@ -102,6 +125,8 @@ async function createJob(jobData) {
       intervalMs,
       scheduledTime: intervalMs == null ? null : (jobData.scheduledTime || null),
       weekdaysOnly: jobData.weekdaysOnly || false,
+      // Local weekday / day of month a weekly-or-longer clock job stays on; settled below.
+      scheduleAnchor: Number.isInteger(jobData.scheduleAnchor) ? jobData.scheduleAnchor : null,
       enabled: jobData.enabled !== undefined ? jobData.enabled : false,
       priority: jobData.priority || 'MEDIUM',
       autonomyLevel: jobData.autonomyLevel || 'manager',
@@ -131,6 +156,8 @@ async function createJob(jobData) {
       createdAt: now,
       updatedAt: now
     }
+
+    await settleScheduleAnchor(job, { picked: job.scheduleAnchor ?? undefined })
 
     data.jobs.push(job)
     await saveJobs(data)
@@ -167,13 +194,14 @@ async function updateJob(jobId, updates) {
 
     const updatableFields = [
       'name', 'description', 'category', 'type', 'interval', 'intervalMs',
-      'scheduledTime', 'cronExpression', 'cronSchedule', 'weekdaysOnly', 'enabled', 'priority', 'autonomyLevel', 'promptTemplate', 'dataInputs',
+      'scheduledTime', 'scheduleAnchor', 'cronExpression', 'cronSchedule', 'weekdaysOnly', 'enabled', 'priority', 'autonomyLevel', 'promptTemplate', 'dataInputs',
       'command', 'triggerAction', 'config', 'appId', 'taskMetadata', 'providerId', 'model', 'effort', 'executionOptions',
       // Separately updatable on purpose: re-aiming a job sends `formValues`
       // alone, which must not have to restate the whole field design to do it.
       'formFields', 'formValues'
     ]
 
+    const previousAnchorKind = scheduleAnchorKind(job)
     for (const field of updatableFields) {
       if (updates[field] !== undefined) {
         job[field] = updates[field]
@@ -194,6 +222,14 @@ async function updateJob(jobId, updates) {
       // a pinned time-of-day to align to.
       if (job.intervalMs == null) job.scheduledTime = null
     }
+
+    // A weekday and a day of month are not interchangeable, so moving between them
+    // drops the old anchor unless the same request supplies a new one.
+    if (updates.scheduleAnchor === undefined && previousAnchorKind && scheduleAnchorKind(job) !== previousAnchorKind) {
+      job.scheduleAnchor = null
+    }
+    // A null pick on an anchorable job means "default it", not "no anchor".
+    await settleScheduleAnchor(job, { picked: updates.scheduleAnchor ?? undefined })
 
     // Validate shell jobs have a valid command after all fields are applied
     if (job.type === 'shell') {

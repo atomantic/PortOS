@@ -7,6 +7,7 @@
  */
 
 import { addLocalDays, getLocalParts, nextLocalTime } from '../../lib/timezone.js'
+import { effectiveScheduleAnchor, nearestLocalTime, nextAnchoredFireTime } from '../../lib/scheduleAnchor.js'
 import { getUserTimezone } from '../userTimezone.js'
 import { parseCronToNextRun, parseRecurrenceToNextRun } from '../eventScheduler.js'
 import { DAY, HOUR, isOnDemandJob } from './constants.js'
@@ -64,6 +65,20 @@ async function getDueJobs() {
     // Interval-mode jobs
     const lastRun = job.lastRun ? new Date(job.lastRun).getTime() : 0
     const timeSinceLastRun = now - lastRun
+
+    // An anchored job is due on its anchor day, which can precede
+    // lastRun + intervalMs (a late run must not move the weekday).
+    if (effectiveScheduleAnchor(job)) {
+      const fireAt = nextIntervalJobFireTime(job, timezone)
+      if (fireAt == null || fireAt > now) continue
+      if (job.weekdaysOnly && !isWeekday(timezone)) continue
+      due.push({
+        ...job,
+        reason: job.lastRun ? `${job.interval}-due` : 'never-run',
+        overdueBy: now - fireAt
+      })
+      continue
+    }
 
     if (timeSinceLastRun >= job.intervalMs) {
       if (job.scheduledTime) {
@@ -133,6 +148,11 @@ export function clockCronExpression(job) {
  * is 13h, not 12h, and two consecutive HH:MM occurrences are compared: on a DST
  * day they are 23h or 25h apart, so a one-sided 12h window could miss the nearer one.
  *
+ * Nearest still lets one run stamped more than ~12h after its slot move the job
+ * to the next weekday for good, so weekly/biweekly/monthly jobs carry a
+ * `scheduleAnchor` (see lib/scheduleAnchor.js) that fixes the calendar day;
+ * a job without a valid anchor keeps the nearest-slot behavior above.
+ *
  * @param {Object} job - interval-mode job (finite `intervalMs`)
  * @param {string} timezone - IANA timezone for scheduledTime
  * @returns {number|null} UTC timestamp in milliseconds
@@ -145,19 +165,18 @@ export function nextIntervalJobFireTime(job, timezone) {
   const lastRun = new Date(job.lastRun).getTime()
   let nextDue = lastRun + job.intervalMs
 
-  const match = job.scheduledTime && String(job.scheduledTime).match(/^([01]\d|2[0-3]):([0-5]\d)$/)
+  // An explicit calendar anchor wins over snapping to the nearest slot.
+  const anchored = nextAnchoredFireTime(job, timezone)
+  if (anchored != null) nextDue = anchored
+
+  const match = !anchored && job.scheduledTime && String(job.scheduledTime).match(/^([01]\d|2[0-3]):([0-5]\d)$/)
   if (match) {
     const hours = Number(match[1])
     const minutes = Number(match[2])
     // 13h covers the 25h fall-back gap between local HH:MM instants. Only an
     // interval shorter than that narrows it, so the search still starts after lastRun.
-    const window = job.intervalMs > 13 * HOUR ? 13 * HOUR : job.intervalMs / 2
-    const first = nextLocalTime(nextDue - window, hours, minutes, timezone)
-    const second = nextLocalTime(first + 60_000, hours, minutes, timezone)
-    // DST nudging in nextLocalTime can move a candidate by up to an hour.
-    const nearest = [first, second]
-      .filter(candidate => candidate > lastRun)
-      .sort((a, b) => Math.abs(a - nextDue) - Math.abs(b - nextDue))[0]
+    const windowMs = job.intervalMs > 13 * HOUR ? 13 * HOUR : job.intervalMs / 2
+    const nearest = nearestLocalTime(nextDue, hours, minutes, timezone, { windowMs, afterMs: lastRun })
     if (nearest !== undefined) nextDue = nearest
   }
 

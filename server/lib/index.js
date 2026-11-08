@@ -580,6 +580,7 @@ export * from './scheduledTaskTypes.js';
 export * from './taskTypeBucket.js';
 export * from './taskTypeRenames.js';
 export * from './scheduleRunOrder.js';
+export * from './scheduleAnchor.js';
 export * from './taskReadinessReasons.js';
 export * from './taskTargetScope.js';
 export * from './taxonomyTally.js';

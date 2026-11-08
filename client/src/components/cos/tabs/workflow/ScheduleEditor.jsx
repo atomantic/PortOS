@@ -4,6 +4,7 @@ import toast from '../../../ui/Toast';
 import * as api from '../../../../services/api';
 import { DEFAULT_CRON, buildCronFromRecurrence, parseCronToRecurrence } from '../../../../utils/cronHelpers';
 import CronSchedulePicker from '../../../CronSchedulePicker';
+import ScheduleAnchorSelect from '../../ScheduleAnchorSelect';
 import { PERPETUAL_DESCRIPTION, ON_DEMAND_PERPETUAL_LABEL, ON_DEMAND_PERPETUAL_DESCRIPTION } from '../schedule/scheduleConstants';
 
 const TASK_MODES = [
@@ -46,10 +47,11 @@ export default function ScheduleEditor({ node, allNodes, timezone, onClose, onSa
       autoStart: schedule.autoStart ?? !!schedule.perpetual,
       interval: node.kind === 'job' ? (schedule.type || 'daily') : 'daily',
       scheduledTime: schedule.scheduledTime || '',
+      scheduleAnchor: schedule.scheduleAnchor ?? null,
       weekdaysOnly: !!schedule.weekdaysOnly,
       runAfter: [...(node.runAfter || [])]
     });
-  }, [node, schedule.autoStart, schedule.cronExpression, schedule.cronSchedule, schedule.perpetual, schedule.recheckCron, schedule.scheduledTime, schedule.type, schedule.weekdaysOnly]);
+  }, [node, schedule.autoStart, schedule.cronExpression, schedule.cronSchedule, schedule.perpetual, schedule.recheckCron, schedule.scheduledTime, schedule.scheduleAnchor, schedule.type, schedule.weekdaysOnly]);
 
   const dependencyOptions = useMemo(() => {
     if (!node) return [];
@@ -112,7 +114,8 @@ export default function ScheduleEditor({ node, allNodes, timezone, onClose, onSa
         weekdaysOnly: form.weekdaysOnly,
         cronExpression: form.mode === 'cron' ? (buildCronFromRecurrence(form.cronSchedule) || String(form.cronExpression || '').trim() || null) : null,
         cronSchedule: form.mode === 'cron' ? form.cronSchedule : null,
-        scheduledTime: form.mode === 'interval' ? (form.scheduledTime || null) : null
+        scheduledTime: form.mode === 'interval' ? (form.scheduledTime || null) : null,
+        scheduleAnchor: form.mode === 'interval' && form.scheduledTime ? form.scheduleAnchor : null
       };
       if (form.mode === 'interval') payload.interval = form.interval;
       result = await api.updateCosJob(node.id.slice(4), payload, { silent: true }).catch(error => {
@@ -244,7 +247,7 @@ export default function ScheduleEditor({ node, allNodes, timezone, onClose, onSa
           <div className="grid grid-cols-2 gap-2">
             <label className="block text-xs text-gray-400">
               Frequency
-              <select value={form.interval} onChange={event => set('interval', event.target.value)} className="mt-1.5 w-full rounded border border-port-border bg-port-bg px-2 py-2 text-sm text-white">
+              <select value={form.interval} onChange={event => setForm(current => ({ ...current, interval: event.target.value, scheduleAnchor: null }))} className="mt-1.5 w-full rounded border border-port-border bg-port-bg px-2 py-2 text-sm text-white">
                 {JOB_INTERVALS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
               </select>
             </label>
@@ -252,6 +255,15 @@ export default function ScheduleEditor({ node, allNodes, timezone, onClose, onSa
               Start time
               <input type="time" value={form.scheduledTime} onChange={event => set('scheduledTime', event.target.value)} className="mt-1.5 w-full rounded border border-port-border bg-port-bg px-2 py-2 text-sm text-white" />
             </label>
+          </div>
+        )}
+
+        {node.kind === 'job' && form.mode === 'interval' && form.scheduledTime && (
+          <div className="text-xs text-gray-400">
+            <span className="block">Run on</span>
+            <div className="mt-1.5 [&>select]:w-full">
+              <ScheduleAnchorSelect interval={form.interval} value={form.scheduleAnchor} onChange={value => set('scheduleAnchor', value)} />
+            </div>
           </div>
         )}
 

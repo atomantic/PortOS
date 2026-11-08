@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 
 vi.mock('../ui/Toast', () => ({
   default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), loading: vi.fn(), dismiss: vi.fn() })
 }));
 vi.mock('../../services/api', () => ({ updateCosJob: vi.fn() }));
+const { updateCosJob } = await import('../../services/api');
 
 const JobCard = (await import('./JobCard')).default;
 
@@ -218,5 +219,34 @@ describe('JobCard next-due from the server projection', () => {
     cleanup();
     renderAt({ ...WEEKLY_JOB, lastRun: null });
     expect(screen.getByText('Next: at 03:00')).toBeTruthy();
+  });
+});
+
+describe('JobCard schedule anchor (#15395)', () => {
+  const weekly = { ...SCRIPT_JOB, id: 'job-weekly', interval: 'weekly', intervalMs: 7 * 24 * 3600000, scheduledTime: '03:00', scheduleAnchor: 1 };
+
+  afterEach(() => {
+    cleanup();
+    vi.mocked(updateCosJob).mockReset();
+  });
+
+  it('edits the weekday a weekly job stays on and saves it', async () => {
+    vi.mocked(updateCosJob).mockResolvedValue({ success: true });
+    renderCard(weekly);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+
+    const weekday = screen.getByRole('combobox', { name: 'Run on weekday' });
+    expect(weekday.value).toBe('1');
+    fireEvent.change(weekday, { target: { value: '4' } });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Save/ })); });
+    expect(updateCosJob.mock.calls[0][1]).toMatchObject({ interval: 'weekly', scheduleAnchor: 4 });
+  });
+
+  it('offers a day of month for monthly jobs and nothing for daily ones', () => {
+    renderCard({ ...weekly, interval: 'monthly', intervalMs: 30 * 24 * 3600000, scheduleAnchor: 15 });
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    expect(screen.getByRole('combobox', { name: 'Run on day of month' }).value).toBe('15');
+    fireEvent.change(screen.getByRole('combobox', { name: 'Interval' }), { target: { value: 'daily' } });
+    expect(screen.queryByRole('combobox', { name: /Run on/ })).toBeNull();
   });
 });
