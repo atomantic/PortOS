@@ -29,6 +29,7 @@ import { FORGE_MAINTENANCE_VERSION } from '../lib/forgeMaintenanceTasks.js';
 
 import { resolveClaimReviewerConfig, reviewerConfigMetadata, SWARM_COUNT_MIN, ISSUE_AUTHOR_FILTERS, RELEASE_OPTION_KEYS } from '../lib/validation.js';
 import { emitLog } from './cosEvents.js';
+import { DEFAULT_ISSUE_MIN_AGE_MINUTES } from '../lib/issueClaimEvidence.js';
 import { getActiveApps } from './apps.js';
 import { getCodeReviewDefaults } from './codeReview.js';
 import { preflightClaimReviewers } from './claimReviewerPreflight.js';
@@ -177,6 +178,20 @@ export function resolveIssueExcludeLabelsBlock(extraLabels = []) {
   const extras = Array.isArray(extraLabels) ? extraLabels.filter((l) => typeof l === 'string' && l.trim()) : [];
   const all = [...NON_ACTIONABLE_ISSUE_LABELS, ...extras];
   return all.map((l) => `\`${l}\``).join(', ');
+}
+
+/**
+ * Resolve the {issueMinAgeRule} line of the claim prompts' Phase 1 rules. The
+ * perpetual detector applies the same grace (perpetualWork.js#issueCreatedBeforeMs),
+ * so a scheduled tick and the agent's own pick agree on which issues are too new.
+ */
+export function resolveIssueMinAgeRuleBlock(issueMinAgeMinutes, { gitlab = false } = {}) {
+  const minutes = issueMinAgeMinutes === undefined || issueMinAgeMinutes === null
+    ? DEFAULT_ISSUE_MIN_AGE_MINUTES
+    : issueMinAgeMinutes;
+  if (!Number.isInteger(minutes) || minutes <= 0) return 'There is no minimum issue age for this run.';
+  const field = gitlab ? '`created_at`' : '`createdAt`';
+  return `It was created at least ${minutes} minute${minutes === 1 ? '' : 's'} ago: compare its ${field} with the current UTC time (\`date -u +%Y-%m-%dT%H:%M:%SZ\`). A newer issue was probably just filed by an agent that is about to claim it; leave it for a later run.`;
 }
 
 // One line per RELEASE_OPTION_KEYS entry: what ON asks of the agent, and what
@@ -1183,6 +1198,7 @@ export async function buildImprovementTaskDescription({ promptTemplate, app, pro
     .replace(/\{issueAuthorFilter\}/g, () => issueAuthorFilterBlock)
     .replace(/\{issueCandidateList\}/g, () => resolveIssueCandidateListBlock(promptTaskType, metadata.issueAuthorFilter))
     .replace(/\{issueExcludeLabels\}/g, () => issueExcludeLabelsBlock)
+    .replace(/\{issueMinAgeRule\}/g, () => resolveIssueMinAgeRuleBlock(metadata.issueMinAgeMinutes, { gitlab: promptTaskType === 'claim-issue-gitlab' }))
     // Use a replacer function — String.replace with a replacement STRING
     // interprets `$&`, `$1`, etc. as backreferences. Commit subjects/authors
     // legitimately contain `$` (env-var docs, prices, awk snippets) and

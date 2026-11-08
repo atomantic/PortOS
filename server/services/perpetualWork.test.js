@@ -400,6 +400,29 @@ describe('perpetualWork', () => {
       expect(out.skipCauses).toEqual({ 'needs-input': 5, blocked: 1, 'decomposed-epic': 1 });
     });
 
+    it('holds an issue younger than the new-issue grace so its filing agent can claim it first', async () => {
+      const now = new Date().toISOString();
+      const hourAgo = new Date(Date.now() - 60 * 60_000).toISOString();
+      const route = (issues) => routeSpawn({
+        'gh issue': { stdout: JSON.stringify(issues) },
+        'git branch': { stdout: 'main\n' },
+        'gh pr': { stdout: '' }
+      });
+      route([
+        { number: 1, title: 'filed an hour ago', assignees: [], labels: [], createdAt: hourAgo },
+        { number: 2, title: 'filed just now', assignees: [], labels: [], createdAt: now }
+      ]);
+      // Absent setting = shipped 5-minute default.
+      expect(await detectGithubIssues(app, { issueAuthorFilter: 'any' })).toMatchObject({ actionable: true, count: 1, sample: [1] });
+
+      route([{ number: 2, title: 'filed just now', assignees: [], labels: [], createdAt: now }]);
+      expect(await detectGithubIssues(app, { issueAuthorFilter: 'any', issueMinAgeMinutes: 5 }))
+        .toMatchObject({ actionable: false, reason: 'no-actionable-issues', skipCauses: { 'too-new': 1 } });
+
+      route([{ number: 2, title: 'filed just now', assignees: [], labels: [], createdAt: now }]);
+      expect(await detectGithubIssues(app, { issueAuthorFilter: 'any', issueMinAgeMinutes: 0 })).toMatchObject({ actionable: true, count: 1 });
+    });
+
     it('carries an empty skipCauses map when issues remain actionable (attribution is park-only)', async () => {
       routeSpawn({
         'gh issue': { stdout: JSON.stringify([

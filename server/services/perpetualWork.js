@@ -22,7 +22,7 @@
  * full recheck cadence on a blip.
  */
 
-import { claimIssueNumber, collectGithubPrIssueNumbers, collectGitlabMrIssueNumbers, githubClaimPrArgs, githubPrRowsFromPages } from '../lib/issueClaimEvidence.js';
+import { claimIssueNumber, collectGithubPrIssueNumbers, issueCreatedBeforeMs, collectGitlabMrIssueNumbers, githubClaimPrArgs, githubPrRowsFromPages } from '../lib/issueClaimEvidence.js';
 import { runCliBounded } from '../lib/runCliBounded.js';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
@@ -63,7 +63,7 @@ export const NON_ACTIONABLE_ISSUE_LABELS = new Set([
 // indistinguishable from the structural skip, so the cause is prefixed on
 // collision. Label-shaped structural names need no entry: the structural label
 // check runs first and shadows a same-named configured label by design.
-const STRUCTURAL_NON_LABEL_CAUSES = new Set(['assigned', 'in-flight', 'decomposed-epic', 'malformed']);
+const STRUCTURAL_NON_LABEL_CAUSES = new Set(['assigned', 'in-flight', 'decomposed-epic', 'malformed', 'too-new']);
 
 // Exported so the timeout path is directly testable with fake timers rather
 // than a real 15s wait.
@@ -245,8 +245,8 @@ const isEpicIssue = (title, labels) => labels.includes(EPIC_LABEL) || titleMarks
  * `NON_ACTIONABLE_ISSUE_LABELS`, never replacing it: the base set is
  * structural (in-progress/blocked/etc.), not user-configurable.
  */
-export function isActionableIssue(issue, inFlight = new Set(), excludeLabels = null) {
-  return issueSkipCause(issue, inFlight, excludeLabels) === null;
+export function isActionableIssue(issue, inFlight = new Set(), excludeLabels = null, createdBeforeMs = null) {
+  return issueSkipCause(issue, inFlight, excludeLabels, createdBeforeMs) === null;
 }
 
 /**
@@ -263,11 +263,14 @@ export function isActionableIssue(issue, inFlight = new Set(), excludeLabels = n
  * detector tests exercise it behaviorally through `skipCauses`, and the
  * dead-exports guard keeps it honest about that.
  */
-function issueSkipCause(issue, inFlight = new Set(), excludeLabels = null) {
+function issueSkipCause(issue, inFlight = new Set(), excludeLabels = null, createdBeforeMs = null) {
   if (!issue || typeof issue.number !== 'number') return 'malformed';
   if (inFlight.has(issue.number)) return 'in-flight';
   const assignees = Array.isArray(issue.assignees) ? issue.assignees : [];
   if (assignees.length > 0) return 'assigned';
+  // An unparseable timestamp is not a reason to hold an issue forever; the
+  // claim agent re-applies the same grace from the live listing.
+  if (createdBeforeMs !== null && Date.parse(issue.createdAt) > createdBeforeMs) return 'too-new';
   const labels = (Array.isArray(issue.labels) ? issue.labels : [])
     .map((l) => (typeof l === 'string' ? l : l?.name) || '')
     .map((s) => s.toLowerCase());
@@ -361,7 +364,8 @@ const normalizeIssues = (raw, numberKey, authorKey) => raw.map((r) => ({
   title: r.title,
   labels: r.labels,
   assignees: r.assignees,
-  authorLogin: (r.author?.[authorKey] || '').toLowerCase()
+  authorLogin: (r.author?.[authorKey] || '').toLowerCase(),
+  createdAt: r.createdAt || r.created_at || null
 }));
 
 // A forge can return the same candidate set in a different order, especially
@@ -432,7 +436,7 @@ const FORGE_ISSUE_CONFIG = {
     // happens to be full of excluded/in-flight/decomposed-epic issues even
     // though real work exists further down the queue. Matches the same
     // tradeoff the /do:next auto-pick walk already makes for the same reason.
-    listArgs: ['issue', 'list', '--state', 'open', '--search', 'sort:created-asc', '--json', 'number,assignees,labels,title,author', '--limit', '500'],
+    listArgs: ['issue', 'list', '--state', 'open', '--search', 'sort:created-asc', '--json', 'number,assignees,labels,title,author,createdAt', '--limit', '500'],
     listFail: 'gh-list-failed',
     parseFail: 'gh-parse-failed',
     // Park reason when the owner filter resolves to a non-authoring owner. On
@@ -700,7 +704,7 @@ async function fetchTrustedForgeIssues(cfg, repoPath, { issueAuthorFilter = 'sel
  * runs only when the list is non-empty, so an empty queue parks without a
  * wasted branch/PR scan.
  */
-async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', issueExcludeLabels = [], requireComplete = false } = {}, env) {
+async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', issueExcludeLabels = [], issueMinAgeMinutes, requireComplete = false } = {}, env) {
   const cfg = FORGE_ISSUE_CONFIG[forgeKey];
   const repoPath = app?.repoPath;
   if (!repoPath) return { actionable: false, count: 0, reason: 'no-repo-path' };
@@ -765,7 +769,8 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', is
   const excludeSet = Array.isArray(issueExcludeLabels) && issueExcludeLabels.length > 0
     ? new Set(issueExcludeLabels.map((l) => String(l).toLowerCase()))
     : null;
-  const actionable = issues.filter((issue) => isActionableIssue(issue, inFlight, excludeSet));
+  const createdBeforeMs = issueCreatedBeforeMs(issueMinAgeMinutes);
+  const actionable = issues.filter((issue) => isActionableIssue(issue, inFlight, excludeSet, createdBeforeMs));
   const filteredCount = Math.max(0, total - actionable.length - inFlightCount);
   // Per-cause attribution of every skip, so a park on a non-empty queue can say
   // WHY each issue was filtered ("49 needs-input, 17 blocked, …") instead of a
@@ -778,7 +783,7 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', is
   const skipCauses = Object.create(null);
   if (actionable.length === 0 && total > 0) {
     for (const issue of issues) {
-      const cause = issueSkipCause(issue, inFlight, excludeSet);
+      const cause = issueSkipCause(issue, inFlight, excludeSet, createdBeforeMs);
       if (cause != null) skipCauses[cause] = (skipCauses[cause] || 0) + 1;
     }
   }

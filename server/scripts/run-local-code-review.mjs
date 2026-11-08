@@ -12,6 +12,7 @@ import { Console } from 'node:console';
 import { isReviewerConfigFault, reviewerModelsFromDefaults, reviewerEffortsFromDefaults } from '../lib/reviewerConfig.js';
 import { localReviewBridgeRequest } from '../lib/localReviewBridge.js';
 import { stopCodexAppServer } from '../services/codexAppServer.js';
+import { screenLinkedContribution } from '../services/untrustedContent.js';
 
 // Provider/runtime diagnostics belong on stderr; stdout is exactly one JSON
 // response for the claim procedure's jq gate.
@@ -72,6 +73,14 @@ try {
     const activeGroup = pickAvailableReviewerGroups(defaults);
     process.stdout.write(`${JSON.stringify({ ok: true, activeGroup })}\n`);
     process.exit(0);
+  }
+
+  // A claim agent screens linked contributor content (a fork PR's diff) here
+  // before reading it. Only the verdict returns; the content never echoes back.
+  if (request.action === 'screen-untrusted') {
+    const result = await screenLinkedContribution(request);
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    process.exit(result.ok && result.safe ? 0 : 1);
   }
 
   if (request.action === 'report-failure' || request.reportFailure) {

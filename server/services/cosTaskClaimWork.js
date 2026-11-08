@@ -39,6 +39,7 @@ import {
   resolveIssueAuthorFilterBlock,
   resolveIssueCandidateListBlock,
   resolveIssueExcludeLabelsBlock,
+  resolveIssueMinAgeRuleBlock,
   resolveSwarmBlock,
 } from './cosTaskPreStepBlocks.js';
 
@@ -245,6 +246,7 @@ export async function buildClaimWorkTask(app, {
     .replace(/\{issueAuthorFilter\}/g, () => issueAuthorFilterBlock)
     .replace(/\{issueCandidateList\}/g, () => resolveIssueCandidateListBlock(promptTaskType, resolvedAuthorFilter))
     .replace(/\{issueExcludeLabels\}/g, () => issueExcludeLabelsBlock)
+    .replace(/\{issueMinAgeRule\}/g, () => resolveIssueMinAgeRuleBlock(metadata.issueMinAgeMinutes, { gitlab: promptTaskType === 'claim-issue-gitlab' }))
     + reviewerIdentityNotice
     + (composed ? '' : appendTargetWorkItemBlock(promptTaskType, targetRef, issueExcludeLabelsBlock))
     + appendPrefetchedIssueContext(promptTaskType, targetRef, issueContext)

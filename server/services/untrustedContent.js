@@ -119,6 +119,21 @@ export async function screenUntrustedContent({ content, source, policy: override
     ...(compatible ? {} : { code: verdict.code, message: verdict.findings[0].reason }) };
 }
 
+/**
+ * Verdict-only screen for contributor content a tool-enabled claim agent wants
+ * to read, e.g. the diff of a fork PR linked to the issue it claimed. Runs the
+ * same abuse scan and security-model assessment as external PR intake. The
+ * caller gets ok/safe/code, never the content or model prose, so a screened
+ * diff cannot steer the agent through this channel.
+ */
+export async function screenLinkedContribution({ source, content } = {}) {
+  if (source !== 'github-pr' && source !== 'github-issue') {
+    return failure('untrusted-content-source-unsupported', 'Linked contributions are screened as github-pr or github-issue content.');
+  }
+  const result = await screenUntrustedContent({ content, source });
+  return { ok: result.ok === true, safe: result.ok === true && result.safe === true, code: result.code || null };
+}
+
 // A premise may be given as a thunk. The default install never opts in, so the
 // callers would otherwise re-serialize every message body in the batch on every
 // run just to build a request the gate discards on its first check.

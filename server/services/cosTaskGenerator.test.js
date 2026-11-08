@@ -1956,6 +1956,9 @@ describe('claim prompt author-filter scripts', () => {
         expect(phase1).not.toContain('Owner-only mode (default)');
         expect(prompt).not.toContain('{issueCandidateList}');
         expect(prompt).not.toContain('{issueAuthorFilter}');
+        // Manual and scheduled claims both render the new-issue grace.
+        expect(prompt).not.toContain('{issueMinAgeRule}');
+        expect(prompt).toContain('It was created at least 5 minutes ago');
         if (cli === 'gh') {
           if (mode === 'owner') expect(phase1).toContain('owner-is-org');
           expect(query).toContain('--search "sort:created-asc"');
