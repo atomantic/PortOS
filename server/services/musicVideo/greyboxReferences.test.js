@@ -122,9 +122,25 @@ describe('music video greybox selection', () => {
       expect((await texts([lamp(-90)]))[0]).toContain('reaches toward the viewer\'s left, out over the road');
       expect((await texts([lamp(180)]))[0]).toContain('reaches away from the camera, out over the road');
       expect(await texts([...parts].reverse())).toEqual(await texts(parts));
-      // Poles on both sides of the camera say so rather than claiming one side.
-      const both = await texts(parts.map((part) => (part.id === 'pole-a' ? { ...part, position: [-8, 4, -5] } : part)));
-      expect(both[0]).toContain('1 on the viewer\'s left side of the street and 1 on the right with each side\'s wires running along its own side');
+      // Poles on both sides of a street running away from the camera say so rather than claiming one side.
+      const moved = (id, position) => (part) => (part.id === id ? { ...part, position } : part);
+      const both = await texts(parts.map(moved('pole-a', [-8, 4, -5])).map(moved('pole-b', [8, 4, -60])));
+      expect(both[0]).toBe('Utility poles stand on both sides of the street: "Pole A" on the viewer\'s left and "Pole B" on the right. Each side is its own line, its poles joined pole to pole by continuous overhead wires that run on past the end poles along that side; a pole never stands without wires and no wire crosses the road.');
+      // A line running across the frame has no single side, and a pole on the aim axis is on neither.
+      expect((await texts(parts.map(moved('pole-a', [-8, 4, -20]))))[0]).not.toMatch(/viewer's (left|right) side|both sides/);
+      expect((await texts(parts.map(moved('pole-a', [0, 4, -5])).map(moved('pole-b', [0, 4, -20]))))[0]).not.toMatch(/viewer's (left|right) side|both sides/);
+    });
+
+    it('requires wires for pole-mounted lamps with no pole in frame and keeps every lamp bearing past eight lamps', async () => {
+      const d = deps();
+      const base = street();
+      const lamps = Array.from({ length: 10 }, (_, i) => ({ id: `lamp-${i}`, label: `Lamp ${i}`, position: [8, 4, -5 - i], street: { kind: 'lamp', armDegrees: i < 9 ? -90 : 90, mount: 'pole' } }));
+      d.catalog.getIngredient.mockResolvedValue({ ...base, payload: { greybox: { ...base.payload.greybox, parts: lamps } } });
+      const texts = (await loadMusicVideoGreybox(project, scene, d)).streetAdditions.map((a) => a.text);
+      expect(texts[0]).toContain('continuous overhead wires that run past both ends');
+      expect(texts.find((t) => t.includes('Lamp 9'))).toContain('toward the viewer\'s right');
+      expect(texts.find((t) => t.includes('"Lamp 0"'))).toContain('and 1 more');
+      expect(texts.at(-1)).toBe('Every streetlight here is arm-mounted on a utility pole; draw no separate lamp posts.');
     });
 
     it('omits street facts for a greybox without street furniture and for furniture behind the camera', async () => {

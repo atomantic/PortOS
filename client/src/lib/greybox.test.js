@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import editingParts from '../../../server/lib/fixtures/greyboxEditing.json';
-import { aspectRatio, blankGreybox, captureForShot, fovFromFocalLength, shotFromCamera, withShot, withoutShot, greyboxEditErrors, newGreyboxItem, streetFor, withMount } from './greybox';
+import { aspectRatio, blankGreybox, captureForShot, fovFromFocalLength, shotFromCamera, withShot, withoutShot, greyboxEditErrors, newGreyboxItem, streetFor, withLampMounts, withMount } from './greybox';
 
 describe('greybox helpers', () => {
   it('maps lens to vertical fov and back, and aspect labels to ratios', () => {
@@ -50,6 +50,7 @@ describe('greybox helpers', () => {
     ['unknown zone', (scene) => { scene.parts[0].zone = 'missing'; }],
     ['unknown anchor', (scene) => { scene.shots[0].figures = [{ anchorId: 'missing' }]; }],
     ['invalid extent', (scene) => { scene.parts[0].size[0] = 0; }],
+    ['mixed lamp mounts', (scene) => { scene.parts.push({ ...scene.parts[0], id: 'l1', street: { kind: 'lamp', armDegrees: 0, mount: 'pole' } }, { ...scene.parts[0], id: 'l2', street: { kind: 'lamp', armDegrees: 0, mount: 'post' } }); }],
     ['lamp arm bearing out of range', (scene) => { scene.parts[0].street = { kind: 'lamp', armDegrees: 400 }; }],
   ])('rejects %s before sending', (_name, invalidate) => {
     const scene = blankGreybox();
@@ -67,5 +68,8 @@ describe('greybox helpers', () => {
     expect(withMount(mounted, '')).toEqual({ kind: 'lamp', armDegrees: 90 });
     expect(streetFor('pole', mounted)).toEqual({ kind: 'pole' });
     expect(streetFor('', mounted)).toBeUndefined();
+    // One street, one lamp mount: setting it once reaches every lamp and spares everything else.
+    const scene = { ...blankGreybox(), parts: [{ id: 'a', street: { kind: 'lamp', armDegrees: 0, mount: 'pole' } }, { id: 'b', street: { kind: 'lamp', armDegrees: 90 } }, { id: 'c', street: { kind: 'pole' } }] };
+    expect(withLampMounts(scene, 'post').parts.map((part) => part.street)).toEqual([{ kind: 'lamp', armDegrees: 0, mount: 'post' }, { kind: 'lamp', armDegrees: 90, mount: 'post' }, { kind: 'pole' }]);
   });
 });

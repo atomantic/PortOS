@@ -1,5 +1,5 @@
 import { useId, useState } from 'react';
-import { newGreyboxItem, streetFor, withMount, withoutGreyboxItem } from '../../lib/greybox';
+import { newGreyboxItem, streetFor, withLampMounts, withoutGreyboxItem } from '../../lib/greybox';
 
 const inputClass = 'w-full min-w-0 min-h-[44px] rounded-lg bg-port-bg border border-port-border px-2 text-sm text-white';
 const buttonClass = 'min-h-[44px] rounded-lg border border-port-border px-3 text-sm text-gray-200 hover:border-port-accent disabled:opacity-40';
@@ -32,7 +32,7 @@ function VectorFields({ label, value, onChange, axes = ['X', 'Y', 'Z'], positive
   );
 }
 
-function ItemFields({ collection, item, scene, update }) {
+function ItemFields({ collection, item, scene, update, onLampMount }) {
   return (
     <div className="space-y-2">
       <Field label="Label" value={item.label ?? ''} onChange={(label) => update({ label })} maxLength={120} />
@@ -46,7 +46,7 @@ function ItemFields({ collection, item, scene, update }) {
         </Picker>
         {item.street?.kind === 'lamp' && <>
           <Field label="Lamp arm bearing (degrees, over the road)" value={item.street.armDegrees} numeric min={-360} max={360} onChange={(armDegrees) => update({ street: { ...item.street, armDegrees } })} />
-          <Picker label="Lamp mount" value={item.street.mount || ''} onChange={(mount) => update({ street: withMount(item.street, mount) })}>
+          <Picker label="Lamp mount (all streetlights)" value={item.street.mount || ''} onChange={onLampMount}>
             <option value="">Not stated</option><option value="pole">On a utility pole</option><option value="post">On its own post</option>
           </Picker>
         </>}
@@ -92,7 +92,7 @@ export default function GreyboxEditor({ scene, shotId, selected, onSelect, onCha
               <button type="button" className={buttonClass} aria-label={`Remove ${key.slice(0, -1)} ${item.label || item.id}`} disabled={key === 'parts' && scene.source === 'spec' && scene.parts.length === 1}
                 onClick={() => { onChange(withoutGreyboxItem(scene, key, item.id)); if (selected === `${key}:${item.id}`) onSelect(''); }}>Remove</button>
             </div>
-            {selected === `${key}:${item.id}` && <ItemFields collection={key} item={item} scene={scene}
+            {selected === `${key}:${item.id}` && <ItemFields collection={key} item={item} scene={scene} onLampMount={(mount) => onChange(withLampMounts(scene, mount))}
               update={(patch) => onChange({ ...scene, [key]: scene[key].map((old) => old.id === item.id ? { ...old, ...patch } : old) })} />}
           </div>)}
         </div>

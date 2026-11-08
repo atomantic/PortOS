@@ -153,6 +153,11 @@ export const greyboxSceneSchema = z.object({
   if (scene.source === 'spec' && scene.parts.length === 0) {
     ctx.addIssue({ code: 'custom', message: 'a spec greybox needs at least one part', path: ['parts'] });
   }
+  // One street, one kind of lamp: a mix is the defect the render check fails.
+  const lampMounts = new Set(scene.parts.map((part) => part.street?.kind === 'lamp' && part.street.mount).filter(Boolean));
+  if (lampMounts.size > 1) {
+    ctx.addIssue({ code: 'custom', message: 'streetlights must all share one mount (pole or post)', path: ['parts'] });
+  }
   const zoneIds = new Set(scene.zones.map((z2) => z2.id));
   scene.parts.forEach((part, index) => {
     if (part.zone && !zoneIds.has(part.zone)) {

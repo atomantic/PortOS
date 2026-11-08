@@ -54,6 +54,8 @@ describe('greyboxSceneSchema', () => {
     const part = (street) => ({ id: 'post', type: 'cylinder', radius: 0.1, height: 8, street });
     const lamp = { kind: 'lamp', armDegrees: 90, mount: 'pole' };
     expect(greyboxSceneSchema.parse({ parts: [part({ kind: 'pole' }), { ...part(lamp), id: 'lamp' }] }).parts[1].street).toEqual(lamp);
+    const mixed = [{ ...part({ kind: 'lamp', armDegrees: 0, mount: 'pole' }), id: 'a' }, { ...part({ kind: 'lamp', armDegrees: 0, mount: 'post' }), id: 'b' }];
+    expect(greyboxSceneSchema.safeParse({ parts: mixed }).error.issues[0].message).toMatch(/share one mount/);
     for (const street of [{ kind: 'lamp' }, { kind: 'lamp', armDegrees: 0, mount: 'wall' }, { kind: 'wire' }]) {
       expect(greyboxSceneSchema.safeParse({ parts: [part(street)] }).success).toBe(false);
     }

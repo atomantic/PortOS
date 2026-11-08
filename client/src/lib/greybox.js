@@ -102,6 +102,11 @@ export function withMount(street, mount) {
   return mount ? { ...rest, mount } : rest;
 }
 
+/** Every streetlight takes the one mount, since a street never mixes pole-mounted and post lamps. */
+export function withLampMounts(scene, mount) {
+  return { ...scene, parts: scene.parts.map((part) => (part.street?.kind === 'lamp' ? { ...part, street: withMount(part.street, mount) } : part)) };
+}
+
 /** Removing a referenced row clears only its dependent references. */
 export function withoutGreyboxItem(scene, collection, id) {
   const next = { ...scene, [collection]: scene[collection].filter((item) => item.id !== id) };
@@ -148,6 +153,7 @@ export function greyboxEditErrors(scene) {
       part.outline.forEach((point) => vector(point, 'Outline position'));
     }
   }
+  if (new Set(scene.parts.map((part) => part.street?.kind === 'lamp' && part.street.mount).filter(Boolean)).size > 1) errors.push('Streetlights must all share one mount.');
   for (const anchor of scene.anchors) {
     number(anchor.facingDegrees, -360, 360, 'Anchor facing');
     number(anchor.heightMeters, 0, 50, 'Anchor height', true);
