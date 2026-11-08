@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   projectToCanon: vi.fn(),
   getSettings: vi.fn(),
   enqueueJob: vi.fn(),
+  listJobs: vi.fn(() => []),
   getImageModels: vi.fn(),
   getBoard: vi.fn(),
   listMediaForIngredient: vi.fn(),
@@ -47,6 +48,7 @@ vi.mock('../services/settings.js', () => ({ getSettings: (...args) => mocks.getS
 vi.mock('../services/mediaJobQueue/index.js', () => ({
   enqueueJob: (...args) => mocks.enqueueJob(...args),
   getJob: vi.fn(),
+  listJobs: (...args) => mocks.listJobs(...args),
   mediaJobEvents: { on: vi.fn(), off: vi.fn(), emit: vi.fn() },
 }));
 vi.mock('../services/universeRunTag.js', () => ({ buildUniverseRunTag: vi.fn(async () => null) }));
@@ -937,5 +939,39 @@ describe('catalog sheet routes', () => {
       expect((await remove('?variant=profile')).status).toBe(404);
       expect(mocks.updateIngredientPayloadKeys).not.toHaveBeenCalled();
     });
+  });
+});
+
+
+describe('sheet recovery discovery', () => {
+  it('shows only unresolved jobs for this ingredient and verifies saved bytes without exposing params', async () => {
+    const base = { kind: 'image', status: 'failed', completedAt: '2026-01-01T00:00:00Z',
+      error: 'Saving failed; original retained', params: { catalogAttach: { ingredientId: character.id, role: 'sheet:face' }, privatePath: '/private/example' } };
+    mocks.getIngredient.mockResolvedValue(character);
+    mocks.listMediaForIngredient.mockResolvedValue([{ mediaKey: 'recovered.png', role: 'sheet:photographic', createdAt: '2025-01-01T00:00:00Z' }]);
+    mocks.imageFiles.add('saved.png');
+    mocks.listJobs.mockReturnValue([
+      { ...base, id: 'saved', result: { filename: 'saved.png' } },
+      { ...base, id: 'missing', result: { filename: 'missing.png' } },
+      { ...base, id: 'recovered', result: { filename: 'recovered.png' } },
+      { ...base, id: 'other', params: { catalogAttach: { ingredientId: 'other-record', role: 'sheet:face' } } },
+    ]);
+    const result = await request(app).get(`/api/catalog/ingredients/${character.id}/sheets/jobs`);
+    expect(result.status).toBe(200);
+    expect(result.body).toEqual({ hasMore: false, jobs: [
+      { jobId: 'saved', status: 'failed', error: base.error, role: 'sheet:face', savedFilename: 'saved.png' },
+      { jobId: 'missing', status: 'failed', error: base.error, role: 'sheet:face', savedFilename: null },
+    ] });
+  });
+
+  it('bounds recovery history and excludes failures superseded by a later sheet', async () => {
+    mocks.getIngredient.mockResolvedValue(character);
+    mocks.listMediaForIngredient.mockResolvedValue([{ mediaKey: 'new.png', role: 'sheet:face', createdAt: '2026-02-01T00:00:00Z' }]);
+    mocks.listJobs.mockReturnValue(Array.from({ length: 23 }, (_, i) => ({ id: `job-${i}`, status: 'failed',
+      completedAt: '2026-01-01T00:00:00Z', params: { catalogAttach: { ingredientId: character.id, role: i === 0 ? 'sheet:face' : 'sheet:standard' } } })));
+    const result = await request(app).get(`/api/catalog/ingredients/${character.id}/sheets/jobs`);
+    expect(result.body.jobs).toHaveLength(20);
+    expect(result.body.hasMore).toBe(true);
+    expect(result.body.jobs.some(j => j.jobId === 'job-0')).toBe(false);
   });
 });

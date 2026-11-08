@@ -405,6 +405,122 @@ async function recordRekeyedChunk(client, entries) {
   return inserted;
 }
 
+// Gmail live thread keys that still hold a row live sync wrote before #15308:
+// a per-account `msg:` key and no Message-ID (#15320). A Takeout import only
+// tracks candidates in these threads for `retireLegacyGmailDuplicates`, which
+// keeps its memory bounded by the legacy rows, not the size of the mailbox.
+export async function listLegacyGmailThreadKeys() {
+  await ensureReady();
+  const { rows } = await query(
+    `SELECT DISTINCT metadata->>'threadId' AS thread_key FROM human_activity_events
+      WHERE source = 'gmail' AND dedupe_key LIKE 'msg:%' AND account_id IS NOT NULL
+        AND metadata->>'rfcMessageId' IS NULL AND metadata->>'threadId' IS NOT NULL`,
+  );
+  return new Set(rows.map((r) => r.thread_key));
+}
+
+// Retire the rows live Gmail sync wrote before #15308 for emails a Takeout
+// import has now recorded (#15320). Such a row has a per-account `msg:` key and
+// no Message-ID, so it can only be recognized by resemblance: same live thread
+// key (derived from X-GM-THRID), kind, title, sender (`metadata.handle`,
+// received mail only) and a `happened_at` within 10 minutes of the mbox Date
+// (live sync stores Gmail's receive time, not the header date).
+//
+// The import calls this only after every message is stored, so each sibling in
+// the export is visible here, and a row is deleted only while its imported
+// replacement exists: an interrupted import leaves a duplicate, never a loss.
+// A wrong delete would erase a distinct email, so it is refused unless the
+// match is unambiguous on every side:
+// - exactly one legacy row fits the imported email;
+// - no OTHER row looks like the same email: the lookalike count spans every
+//   Gmail row in the thread (by live key or the raw X-GM-THRID imported rows
+//   store) with the same kind, title and window whose sender matches or who
+//   lists the sender as a participant, so a second legacy row, a re-keyed live
+//   row or an imported sibling makes it ambiguous;
+// - the imported email's own key is held by an account-less (imported) row, so
+//   a live row for another mailbox never absorbs this mailbox's event;
+// - seen from the legacy row, the imported email is the only other stored row
+//   that fits it (thread, kind, title, sender, 10 minutes of ITS time), so a
+//   second claimant more than 10 minutes from the first, or a sibling stored
+//   under a content-hash key, keeps it.
+// A derivation that does not hold (thread ids, subject decoding) simply finds
+// no match and leaves the duplicate, never a wrong delete.
+//
+// `matches`: [{ dedupeKey, kind, title, happenedAt, threadKey, rawThreadId, fromEmail }].
+export async function retireLegacyGmailDuplicates(matches = []) {
+  // One email can appear in several mbox files of an export; a repeat of the
+  // same key is one claimant, not two.
+  const byKey = new Map();
+  for (const m of matches || []) {
+    if (m?.dedupeKey && m.kind && m.happenedAt && m.threadKey && !byKey.has(m.dedupeKey)) byKey.set(m.dedupeKey, m);
+  }
+  const rows = [...byKey.values()];
+  if (rows.length === 0) return { retired: 0 };
+  await ensureReady();
+  // One statement over every match; each array is a single bind parameter.
+  const { rowCount } = await query(
+    `WITH k AS (
+       SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::timestamptz[], $5::text[], $6::text[], $7::text[])
+         AS k(dedupe_key, kind, title, happened_at, thread_key, raw_thread, from_email)
+     ),
+     near AS (
+       SELECT k.*, e.id, e.dedupe_key AS row_key, e.account_id, e.participants, e.metadata
+         FROM k JOIN human_activity_events e
+           ON e.source = 'gmail' AND e.kind = k.kind AND e.title = k.title
+          AND e.happened_at BETWEEN k.happened_at - INTERVAL '10 minutes' AND k.happened_at + INTERVAL '10 minutes'
+          AND e.metadata->>'threadId' IN (k.thread_key, k.raw_thread)
+          AND e.dedupe_key <> k.dedupe_key
+     ),
+     legacy AS (
+       SELECT dedupe_key, id FROM near
+        WHERE row_key LIKE 'msg:%' AND account_id IS NOT NULL
+          AND metadata->>'rfcMessageId' IS NULL AND metadata->>'threadId' = thread_key
+          AND (kind = 'message.sent' OR metadata->>'handle' = from_email)
+     ),
+     targets AS (SELECT dedupe_key, min(id) AS target_id, count(*) AS n FROM legacy GROUP BY dedupe_key),
+     lookalikes AS (
+       SELECT dedupe_key, count(*) AS n FROM near
+        WHERE kind = 'message.sent' OR metadata->>'handle' = from_email
+           OR participants @> jsonb_build_array(jsonb_build_object('email', from_email))
+        GROUP BY dedupe_key
+     ),
+     rivals AS (
+       SELECT t.dedupe_key, count(DISTINCT r.id) AS n, bool_or(r.dedupe_key = t.dedupe_key) AS has_own
+         FROM targets t
+         JOIN k ON k.dedupe_key = t.dedupe_key
+         JOIN human_activity_events lr ON lr.id = t.target_id
+         JOIN human_activity_events r
+           ON r.source = 'gmail' AND r.id <> lr.id AND r.kind = lr.kind AND r.title = lr.title
+          AND r.happened_at BETWEEN lr.happened_at - INTERVAL '10 minutes' AND lr.happened_at + INTERVAL '10 minutes'
+          AND r.metadata->>'threadId' IN (k.thread_key, k.raw_thread)
+          AND (k.kind = 'message.sent' OR r.metadata->>'handle' = k.from_email
+               OR r.participants @> jsonb_build_array(jsonb_build_object('email', k.from_email)))
+        GROUP BY t.dedupe_key
+     ),
+     picked AS (
+       SELECT t.target_id FROM targets t
+         JOIN lookalikes l ON l.dedupe_key = t.dedupe_key
+         JOIN rivals v ON v.dedupe_key = t.dedupe_key
+         JOIN human_activity_events h ON h.source = 'gmail' AND h.dedupe_key = t.dedupe_key AND h.account_id IS NULL
+        WHERE t.n = 1 AND l.n = 1 AND v.n = 1 AND v.has_own
+     )
+     DELETE FROM human_activity_events e USING picked p WHERE e.id = p.target_id`,
+    [
+      rows.map((m) => String(m.dedupeKey)),
+      rows.map((m) => String(m.kind)),
+      // Stored titles went through normalizeCandidate; compare the same form.
+      rows.map((m) => (m.title ? shortSummary(m.title, 300) : null)),
+      rows.map((m) => new Date(m.happenedAt).toISOString()),
+      rows.map((m) => String(m.threadKey)),
+      rows.map((m) => String(m.rawThreadId ?? '')),
+      rows.map((m) => normalizeIdentifier(m.fromEmail)),
+    ],
+  );
+  const retired = rowCount || 0;
+  if (retired > 0) console.log(`🗓️  Retired ${retired} pre-#15308 live Gmail activity event(s) a Takeout import now records`);
+  return { retired };
+}
+
 // Insert one chunk of normalized rows; returns the count actually inserted.
 // 12 bound params per row (created_at is a NOW() literal, not a param);
 // participants and metadata are toPgJson-serialized + ::jsonb-cast (node-pg would
