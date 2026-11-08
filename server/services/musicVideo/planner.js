@@ -31,7 +31,7 @@ import { musicVideoCreativeContext, musicVideoDirectionContext, musicVideoSongSt
  * replaces director control, and the seeded scenes are indistinguishable
  * from hand-added ones. Optionally (best-effort, mirroring Creative
  * Director's first-pass asset gen in firstPassGen.js) also asks the
- * active/given AI provider for a first-pass `framePrompt`/`prompt` per scene
+ * active/given AI provider for a first-pass shot `prompt` per scene
  * from the project's concept + section context. A missing/disabled provider
  * or an unparsable response degrades to plain scenes with empty prompts
  * rather than failing the plan request — the director can always fill in
@@ -119,8 +119,8 @@ function shotSubject(shot, generated) {
   if (shot.shotMode === 'performance') return LEAD;
   const asked = generated.subject;
   if (asked) return /^(lead|protagonist)$/i.test(asked) ? LEAD : /^(none|nobody|no one|no people|empty)$/i.test(asked) ? NOBODY : asked;
-  const current = shot.current?.framePrompt;
-  if (typeof current !== 'string') return shot.visualLayer === 'card' ? null : LEAD;
+  const current = shot.current?.prompt;
+  if (typeof current !== 'string' || !current) return shot.visualLayer === 'card' ? null : LEAD;
   if (shot.protagonist.name && current.includes(`Subject: ${quote(shot.protagonist.name, 450)}`)) return LEAD;
   if (current.includes(NO_PEOPLE)) return NOBODY;
   return current.match(/^(?:.*? )?Subject: (.+?) (?:Location|Wardrobe): /)?.[1] || null;
@@ -130,7 +130,7 @@ function shotSubject(shot, generated) {
 function shotSet(shot, generated, sets) {
   const byName = (name) => sets.find((set) => set.name?.trim().toLowerCase() === name.trim().toLowerCase());
   if (generated.set && byName(generated.set)) return byName(generated.set);
-  const current = shot.current?.framePrompt;
+  const current = shot.current?.prompt;
   return (typeof current === 'string' && !current.includes(`Location: ${shot.set?.name}.`)
     && sets.find((set) => current.includes(locationLine(set)))) || shot.set;
 }
@@ -141,17 +141,17 @@ function shotSet(shot, generated, sets) {
 function directedPrompts(shot, generated = {}, sets = []) {
   const subject = shotSubject(shot, generated);
   const set = shotSet(shot, generated, sets);
-  const frame = [
+  const direction = [
     shot.shotMode === 'performance' && PERFORMANCE_FRAME,
     subject === LEAD ? leadLine(shot.protagonist) : subject === NOBODY ? NO_PEOPLE : subject && subjectLine(subject),
     set && locationLine(set),
     subject === LEAD && shot.look && `Wardrobe: ${quote(`${shot.look.name}. ${shot.look.description}`, 350)}`,
-    generated.framePrompt || (shot.visualLayer === 'card' ? 'Graphic title card.' : 'Cinematic shot in the directed setting.'),
   ].filter(Boolean).join(' ');
-  const motion = generated.prompt || (shot.visualLayer === 'card' ? 'Choreograph the graphic scene around the supplied musical anchors; give subject, props and camera a readable action and payoff. Use a hold only when it serves the chosen energy target.'
+  const shotText = generated.prompt || (shot.visualLayer === 'card' ? 'Graphic title card. Choreograph the graphic scene around the supplied musical anchors; give subject, props and camera a readable action and payoff. Use a hold only when it serves the chosen energy target.'
     : shot.shotMode === 'performance' ? `Perform to the source audio: ${shot.lyricText}`
       : `Stage a readable subject action and camera response for ${shot.visualIntent || shot.sectionLabel || 'this instrumental passage'}, at the chosen energy target.`);
-  return { framePrompt: frame.slice(0, SCENE_TEXT_MAX), prompt: motion.slice(0, SCENE_TEXT_MAX) };
+  // One shot prompt: the still and the clip both render from it (#15446).
+  return { framePrompt: null, prompt: [direction, shotText].filter(Boolean).join(' ').slice(0, SCENE_TEXT_MAX) };
 }
 
 const quote = (text, max) => {
@@ -160,7 +160,7 @@ const quote = (text, max) => {
 };
 
 /**
- * Build the LLM prompt asking for a first-pass framePrompt/prompt per SHOT.
+ * Build the LLM prompt asking for a first-pass shot prompt per SHOT.
  * Each line carries the shot's musical section (label, energy, position inside
  * the section), its duration, the lyric lines it spans (or that it is
  * instrumental — no lyrics are invented), and any phrase-level visual intent.
@@ -212,8 +212,7 @@ export function buildScenePlanPrompt(project, shots) {
       if (times) parts.push(`${kind} (seconds): ${times}`);
     }
     if (s.shotMode === 'performance') parts.push(PERFORMANCE_FRAME);
-    if (s.current?.framePrompt) parts.push(`current frame: ${quote(s.current.framePrompt, PROMPT_GUIDANCE_MAX)}`);
-    if (s.current?.prompt) parts.push(`current motion: ${quote(s.current.prompt, PROMPT_GUIDANCE_MAX)}`);
+    if (s.current?.prompt) parts.push(`current shot prompt: ${quote(s.current.prompt, PROMPT_GUIDANCE_MAX)}`);
     const currentMove = getCameraMovement(s.current?.camera?.move);
     if (currentMove) parts.push(`current camera: ${currentMove.value}${s.current.camera.speed ? ` (${s.current.camera.speed})` : ''}`);
     return parts.join('; ');
@@ -235,20 +234,19 @@ The song has been cut into these shots (index; musical section and the shot's po
 ${shotLines}
 
 For EACH shot above, propose a timed composition for its assigned medium (code-authored worlds, selected stills or footage):
-- "framePrompt": the opening reference still — subject, setting, lighting, composition. Keep it concrete and visual.
-- "prompt": the motion for that shot as plain physical action — who moves, how, where the camera goes and the end state — building on the frame. Higher-energy sections read more kinetic; calmer sections more lingering. The video model sees only the frame and usually hears nothing, and it acts out every word: no song times or timestamps ("on the 9.6s downbeat", "at 10.573"), clip lengths, trim notes ("use the first 2 s"), beats, lyric cues ("on 'Sleep'") or song references, no "no lip-sync" line, and no look words (film stock, grain, lens, grade, palette), which the frame already carries.
+- "prompt": the one prompt for that shot, which both its opening still and its clip render from. Open with the picture — subject, setting, lighting, composition, concrete and visual — then the motion as plain physical action: who moves, how, where the camera goes and the end state. Higher-energy sections read more kinetic; calmer sections more lingering. The video model sees only the frame and usually hears nothing, and it acts out every word: no song times or timestamps ("on the 9.6s downbeat", "at 10.573"), clip lengths, trim notes ("use the first 2 s"), beats, lyric cues ("on 'Sleep'") or song references, no "no lip-sync" line, and no look words (film stock, grain, lens, grade, palette), which the shot's look already carries.
 - "camera": the shot's camera move from the vocabulary below, with its speed, end framing, whether it lands on the downbeat, and (for a static camera) the reason.
 - Shots in the same section are one edited sequence: keep subject and setting continuous, but vary framing (wide / medium / close), angle, or action from shot to shot so consecutive shots cut rather than repeat.
 - The OPENING HOOK shot must grab attention immediately.
 - Use each shot's absolute times and musical anchors to decide what happens and when the camera lands (its "onBeat"), but keep them out of the motion prompt text. Follow the saved energy target; this proposal still needs human review. Repeated choruses must develop the action, scale or staging instead of replaying the same pose. Include anticipation, payoff and recovery; motivated holds and long takes are valid. Do not replace choreography with continuous camera drift, geometry presence, subtitles alone or an arbitrary fast-cut quota.
 ${direction ? `- "subject": who the frame shows. "lead" for the protagonist, "none" when no person is in frame (an empty set, a title card, an object insert), or a short description of whoever else is in frame (for example "a desk clerk"). Each frame opens with this subject, and only the lead wears the assigned look, so set it on every shot; a performance is always "lead".
-${direction.sets?.length ? '- "set": only when a shot belongs in a different listed set than its assigned one, that set\'s exact name; otherwise leave it out.\n' : ''}` : ''}${revising ? '- These shots already exist. Revise each one\'s current frame and motion to address the unresolved review feedback, keeping what the feedback does not ask to change.\n' : ''}- If an energy target or required audio timing is absent, identify it as a director decision to review rather than inventing analysis or claiming the plan is approved.
+${direction.sets?.length ? '- "set": only when a shot belongs in a different listed set than its assigned one, that set\'s exact name; otherwise leave it out.\n' : ''}` : ''}${revising ? '- These shots already exist. Revise each one\'s current shot prompt to address the unresolved review feedback, keeping what the feedback does not ask to change.\n' : ''}- If an energy target or required audio timing is absent, identify it as a director decision to review rather than inventing analysis or claiming the plan is approved.
 ${hasLyrics ? '- Let the lyric lines inform the imagery and emotion of their shot (interpret, do not illustrate word-for-word). Never render the lyrics as on-screen text in footage; assigned card layers use their explicit card text.\n' : ''}${hasDelivery ? '- Follow the delivery directions: spoken or whispered lines play as intimate close-ups; shouts land as hard-hitting cuts or impacts; a silence or stop is a held, frozen or cut-to-black beat.\n' : ''}- Keep the assigned layer and shot mode: performance uses source-audio lip-sync and a frontal medium close-up with the mouth visible; cutaways show narrative action without lip-sync; cards are graphic beats.\n- Honor any director intent given for a shot. Instrumental shots carry no singing or lip-sync.
 
 ${shotCameraPromptSection()}
 
 Respond with ONLY a JSON array, one object per shot, in shot-index order (replace every <…> with real content; do NOT output the literal angle-bracket text), no other text:
-[{ "index": 0, "framePrompt": "<the opening reference still, ready to render>", "prompt": "<the shot's motion, ready to render>", ${direction ? '"subject": "<lead|none|who else is in frame>", ' : ''}"camera": { "move": "<camera move id>", "speed": "<slow|moderate|fast|snap>", "endFraming": "<extreme-wide|wide|medium|close|extreme-close>", "onBeat": false, "reason": "<why the camera holds, only for a static move>" } }]`;
+[{ "index": 0, "prompt": "<the shot, opening picture then motion, ready to render>", ${direction ? '"subject": "<lead|none|who else is in frame>", ' : ''}"camera": { "move": "<camera move id>", "speed": "<slow|moderate|fast|snap>", "endFraming": "<extreme-wide|wide|medium|close|extreme-close>", "onBeat": false, "reason": "<why the camera holds, only for a static move>" } }]`;
 }
 
 // A CLI-style provider can echo its input (including this prompt's own JSON
@@ -260,20 +258,19 @@ Respond with ONLY a JSON array, one object per shot, in shot-index order (replac
 const isPlaceholderText = (s) => typeof s === 'string' && /^\s*<.+>\s*$/.test(s);
 
 // shapePredicate for extractJson: an array counts as a real answer only if at
-// least one entry has a non-placeholder framePrompt/prompt — so a wholly
+// least one entry has a non-placeholder prompt — so a wholly
 // placeholder block (the echoed schema example) is skipped in favor of a
 // later candidate block (the model's actual answer), rather than being
 // returned outright as extractJson's default "first parseable block" would.
 function isUsableScenePlanArray(parsed) {
   return Array.isArray(parsed) && parsed.some((entry) => {
-    const fp = typeof entry?.framePrompt === 'string' ? entry.framePrompt : '';
     const p = typeof entry?.prompt === 'string' ? entry.prompt : '';
-    return (fp && !isPlaceholderText(fp)) || (p && !isPlaceholderText(p));
+    return p && !isPlaceholderText(p);
   });
 }
 
 /**
- * Parse the LLM's scene-prompt response into a `Map<index, {framePrompt, prompt, camera}>`.
+ * Parse the LLM's scene-prompt response into a `Map<index, {prompt, camera}>`.
  * `camera` is validated against the catalog (shotCamera.js parseShotCamera) and
  * is null when absent or unusable; the planner's family rules apply later.
  */
@@ -284,14 +281,12 @@ function parseScenePlanResponse(text, count) {
   for (const entry of parsed) {
     const idx = Number(entry?.index);
     if (!Number.isInteger(idx) || idx < 0 || idx >= count) continue;
-    let framePrompt = typeof entry?.framePrompt === 'string' ? entry.framePrompt.trim().slice(0, SCENE_TEXT_MAX) : '';
     let prompt = typeof entry?.prompt === 'string' ? entry.prompt.trim().slice(0, SCENE_TEXT_MAX) : '';
-    if (isPlaceholderText(framePrompt)) framePrompt = '';
     if (isPlaceholderText(prompt)) prompt = '';
     const camera = parseShotCamera(entry?.camera);
     const [subject, set] = [entry?.subject, entry?.set].map((v) => (typeof v === 'string' && !isPlaceholderText(v) ? v.trim().slice(0, 300) : ''));
-    if (!framePrompt && !prompt && !camera) continue;
-    byIndex.set(idx, { framePrompt, prompt, camera, ...(subject ? { subject } : {}), ...(set ? { set } : {}) });
+    if (!prompt && !camera) continue;
+    byIndex.set(idx, { prompt, camera, ...(subject ? { subject } : {}), ...(set ? { set } : {}) });
   }
   return byIndex.size > 0 ? byIndex : null;
 }
@@ -343,7 +338,7 @@ async function tryProposeScenePrompts(project, shots, { providerId, model, effor
  * @param {string} id — project id
  * @param {object} [options]
  * @param {boolean} [options.seedPrompts=true] — also attempt first-pass
- *   framePrompt/prompt text via the active/given AI provider (best-effort).
+ *   shot prompt text via the active/given AI provider (best-effort).
  * @param {string} [options.providerId] — pin a specific provider instead of
  *   the active one.
  * @param {string} [options.model] — model override for the prompt-seeding call.
@@ -407,8 +402,7 @@ export async function planProject(id, { seedPrompts = true, providerId, model, e
         if (shots[idx].visualLayer === 'code') continue;
         if (shots[idx].visualLayer) Object.assign(sceneInputs[idx], directedPrompts(shots[idx], fields, sets));
         else {
-          if (fields.framePrompt) sceneInputs[idx].framePrompt = fields.framePrompt;
-          if (fields.prompt) sceneInputs[idx].prompt = fields.prompt;
+          if (fields.prompt) Object.assign(sceneInputs[idx], { framePrompt: null, prompt: fields.prompt });
         }
       }
     } else {
@@ -486,7 +480,7 @@ function feedbackSceneIds(scenes, feedback) {
  * A shot whose span still matches the deterministic plan keeps its assigned
  * set, look and layer direction. Throws when no usable proposal comes back.
  * A valid revised camera move (catalog id; a still move with its reason) is kept.
- * @returns {Promise<Map<string, { framePrompt?: string, prompt?: string, camera?: object }>>} revised fields by sceneId
+ * @returns {Promise<Map<string, { prompt?: string, camera?: object }>>} revised fields by sceneId
  */
 export async function proposeShotRevisions(project, feedback, { providerId, model, effort } = {}) {
   const scenes = (project.scenes || []).filter((scene) => Number.isFinite(scene.startSec) && scene.endSec > scene.startSec);
@@ -500,7 +494,8 @@ export async function proposeShotRevisions(project, feedback, { providerId, mode
     const base = match || { sectionLabel: scene.sectionLabel || scene.label, sectionIndex: scene.sectionIndex ?? index,
       shotIndex: 0, shotCount: 1, startSec: scene.startSec, endSec: scene.endSec };
     return { ...base, lyricText: scene.lyricText ?? base.lyricText, visualIntent: scene.visualIntent ?? base.visualIntent,
-      sceneId: scene.sceneId, current: { framePrompt: scene.framePrompt, prompt: scene.prompt, camera: scene.camera } };
+      sceneId: scene.sceneId, // A legacy shot's separate frame prompt reads as the front of its one prompt.
+      current: { prompt: [scene.framePrompt, scene.prompt].map((t) => t?.trim()).filter(Boolean).join(' '), camera: scene.camera } };
   });
   const { seeded, reason } = await tryProposeScenePrompts(project, shots, { providerId, model, effort });
   if (!seeded) throw new ServerError(`No revised shots came back (${reason}). Edit the shots by hand or retry.`, { status: 422, code: 'SHOT_REVISION_FAILED' });
@@ -508,9 +503,8 @@ export async function proposeShotRevisions(project, feedback, { providerId, mode
   for (const [index, fields] of seeded) {
     const shot = shots[index];
     const camera = fields.camera && shot.visualLayer !== 'card' ? { camera: fields.camera } : {};
-    const prose = fields.framePrompt || fields.prompt;
-    updates.set(shot.sceneId, shot.visualLayer && prose ? { ...directedPrompts(shot, fields, castSets(project)), ...camera } : {
-      ...(fields.framePrompt ? { framePrompt: fields.framePrompt } : {}), ...(fields.prompt ? { prompt: fields.prompt } : {}), ...camera,
+    updates.set(shot.sceneId, shot.visualLayer && fields.prompt ? { ...directedPrompts(shot, fields, castSets(project)), ...camera } : {
+      ...(fields.prompt ? { framePrompt: null, prompt: fields.prompt } : {}), ...camera,
     });
   }
   return updates;

@@ -45,19 +45,19 @@ describe('ShotSheetAi', () => {
 
   // Catches the director's edit to a proposal being lost, or a deselected shot being saved.
   it('applies the director’s edit of a proposed prompt and skips deselected shots', async () => {
-    proposeMusicVideoShotSheet.mockResolvedValue({ shots: [{ sceneId: 'a', prompt: 'AI motion' }, { sceneId: 'b', framePrompt: 'AI frame' }] });
+    proposeMusicVideoShotSheet.mockResolvedValue({ shots: [{ sceneId: 'a', prompt: 'AI motion' }, { sceneId: 'b', prompt: 'AI two' }] });
     const onApply = vi.fn(async () => true);
     const rows = [row('a', 'Shot 1', { checked: true }), row('b', 'Shot 2', { checked: true })];
     render(<ShotSheetAi project={projectOf(rows)} disabled={false} onApply={onApply} rows={rows} />);
     fireEvent.click(screen.getByRole('button', { name: /Propose prompts from sheet \(2 checked\)/ }));
-    const motion = await screen.findByLabelText('Shot 1 Motion prompt proposed');
+    const motion = await screen.findByLabelText('Shot 1 Shot prompt proposed');
     expect(proposeMusicVideoShotSheet.mock.calls[0][1].direction).toBe('to-prompts');
-    expect(screen.getByText('Old motion')).toBeInTheDocument();
+    expect(screen.getAllByText('Old frame Old motion')).toHaveLength(2);
     fireEvent.change(motion, { target: { value: 'My motion' } });
     fireEvent.click(screen.getByLabelText('Apply Shot 2'));
     fireEvent.click(screen.getByRole('button', { name: 'Apply 1 selected' }));
     await waitFor(() => expect(onApply).toHaveBeenCalledTimes(1));
-    expect(onApply).toHaveBeenCalledWith('a', { prompt: 'My motion' });
+    expect(onApply).toHaveBeenCalledWith('a', { prompt: 'My motion', framePrompt: null });
   });
 
   // Catches a long video being sent in one request, or an earlier batch's work being lost when a later one fails.
@@ -100,9 +100,9 @@ describe('ShotSheetAi', () => {
       .mockReturnValueOnce(new Promise((resolve) => { finishSecond = resolve; }));
     render(<ShotSheetAi project={projectOf(rows)} disabled={false} onApply={vi.fn()} rows={rows} />);
     fireEvent.click(screen.getByRole('button', { name: /Propose prompts/ }));
-    fireEvent.change(await screen.findByLabelText('Shot 1 Motion prompt proposed'), { target: { value: 'My one' } });
+    fireEvent.change(await screen.findByLabelText('Shot 1 Shot prompt proposed'), { target: { value: 'My one' } });
     finishSecond({ shots: [{ sceneId: 's15', prompt: 'AI two' }] });
-    await screen.findByLabelText('Shot 16 Motion prompt proposed');
-    expect(screen.getByLabelText('Shot 1 Motion prompt proposed')).toHaveValue('My one');
+    await screen.findByLabelText('Shot 16 Shot prompt proposed');
+    expect(screen.getByLabelText('Shot 1 Shot prompt proposed')).toHaveValue('My one');
   });
 });

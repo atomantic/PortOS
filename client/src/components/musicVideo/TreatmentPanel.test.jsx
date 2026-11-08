@@ -101,7 +101,7 @@ describe('TreatmentPanel apply review', () => {
     expect(screen.getByText(/becomes a lip-synced performance shot/)).toBeTruthy();
     // Both hand-edited fields the tick would replace are shown, not just one.
     expect(screen.getByText('Frame prompt — yours: my own frame')).toBeTruthy();
-    expect(screen.getByText('Motion prompt — treatment: push in')).toBeTruthy();
+    expect(screen.getByText('Shot prompt — treatment: push in')).toBeTruthy();
 
     fireEvent.click(screen.getByLabelText(/Use the treatment's prompts for this scene/));
     fireEvent.click(screen.getByText('Apply treatment'));
