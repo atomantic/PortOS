@@ -565,6 +565,8 @@ describe('generic own-PR delivery retains assigned scope under provider merge au
     expect(promptTrace.mergesOwnPr).toBe(false);
     expect(prompt.split(ADMISSION)).toHaveLength(2);
     expect(prompt).toContain('## Claim ownership binding');
+    // A swarm parent frees each delivered branch, not only at run end (#15459).
+    expect(prompt).toContain('Release a branch the moment its own PR/MR is confirmed MERGED');
   });
 
   it.each([true, false])('gives a repository-cleanup recovery with a parent PR target admission on the %s light/full path (#12251)', async (light) => {
