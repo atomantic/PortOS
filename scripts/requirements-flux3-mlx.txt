@@ -1,0 +1,11 @@
+# FLUX.3 Klein MLX runtime: direct pins for <data>/python/venv-flux3.
+# Installed only from requirements-flux3-mlx.lock.txt, which pins and hashes
+# every transitive package. After editing this file, regenerate the lock with
+# the command in the lock header.
+mflux==0.24.0
+mlx==0.32.4
+mlx-metal==0.32.4
+transformers==5.22.1
+tokenizers==0.23.3
+huggingface-hub==1.33.0
+pillow==13.0.0

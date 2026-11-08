@@ -545,9 +545,9 @@ export const FIXTURE_OWNERS = [
     dir: 'server/services/promptSections/__snapshots__/reviewLoopMatrix',
     tests: ['server/services/promptSections/reviewLifecycleMatrix.test.js'],
   },
-  // Pip pins consumed only by an explicit Install/Repair (`setup-image-video.sh`).
-  // No Vitest suite reads the files; the installer-contract tests are the suites
-  // that exercise that script and server/lib/pythonSetup.js.
+  // Pip pins consumed only by an explicit Install/Repair (`setup-image-video.sh`,
+  // and the FLUX.3 runtime lock read by services/imageGen/flux3Runtime.js). The
+  // installer-contract tests are the suites that exercise those installers.
   {
     re: /^scripts\/requirements-[^/]+\.txt$/,
     dir: 'scripts',
@@ -556,6 +556,7 @@ export const FIXTURE_OWNERS = [
       'scripts/setup-image-video.test.js',
       'server/lib/pythonSetup.install.test.js',
       'server/lib/pythonSetup.test.js',
+      'server/services/imageGen/flux3Runtime.test.js',
     ],
   },
 ];
