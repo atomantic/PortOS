@@ -4,6 +4,7 @@ import { Box, Map as MapIcon, Play, RefreshCw, X } from 'lucide-react';
 import StageSection from '../StageSection.jsx';
 import { activeMusicVideoSubjects } from '../../../../../server/lib/musicVideoCastSelection.js';
 import toast from '../../ui/Toast';
+import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import useMusicVideoGreyboxPlaces from '../../../hooks/useMusicVideoGreyboxPlaces.js';
 import usePrevizWorld from '../../../hooks/usePrevizWorld.js';
 import PrevizNight from './PrevizNight.jsx';
@@ -11,7 +12,7 @@ import WorldMap, { fitWorldView } from '../../catalog/WorldMapView';
 import { nightActorsAt, nightClockAt, nightMinuteOfClock, previzNight } from '../../../../../server/lib/musicVideoPrevizNight.js';
 import { ingredientPath } from '../../../lib/creativeLibraries.js';
 import { createCatalogIngredient, saveCatalogWorld } from '../../../services/apiCatalog.js';
-import { draftWorldFromRouteMaps, worldClockText } from '../../../../../server/lib/worldMap.js';
+import { draftWorldFromRouteMaps, worldClockText, worldSetFootprint } from '../../../../../server/lib/worldMap.js';
 import { sceneShotName } from '../../../lib/musicVideoStages.js';
 import { formatCount, formatTimecode } from '../../../utils/formatters.js';
 import { shotNumbers } from '../ShotStepper.jsx';
@@ -77,18 +78,35 @@ const worldIdMaker = () => {
  * that environment's World tab.
  */
 /** The linked world environment (`entry`: undefined while loading, null when removed), or a button to draft one. */
-function PrevizWorld({ project, worldId, entry, onPick }) {
+function PrevizWorld({ project, worldId, entry, places, onPick }) {
   const [busy, setBusy] = useState(false);
+  const [confirmRedraft, setConfirmRedraft] = useState(false);
   const routes = (project.routeMaps || []).filter((map) => (map.stops || []).length);
+  // Sets are spaced by their greyboxes' real size, so big sets never overlap.
+  const draftMap = () => draftWorldFromRouteMaps(project, {
+    newId: worldIdMaker(),
+    seed: Math.floor(Math.random() * 1e6),
+    footprints: Object.fromEntries(Object.entries(places).filter(([, entry]) => entry?.ingredient?.payload?.greybox)
+      .map(([id, entry]) => [id, worldSetFootprint(entry.ingredient.payload.greybox)])),
+  });
+  const draftedText = (map, skipped) => `${formatCount(map.sets.length)} set${map.sets.length === 1 ? '' : 's'}${skipped.length ? `; not in the catalog yet: ${skipped.join(', ')}` : ''}`;
   const draft = async () => {
     setBusy(true);
-    const { world: map, skipped } = draftWorldFromRouteMaps(project, { newId: worldIdMaker(), seed: Math.floor(Math.random() * 1e6) });
+    const { world: map, skipped } = draftMap();
     const created = await createCatalogIngredient({ type: 'place', name: `${project.title || 'Music video'} world`.slice(0, 120), payload: { description: 'World map for the previz: the video\'s sets placed on one map, joined by paths.' } }).catch(() => null);
     const saved = created ? await saveCatalogWorld(created.id, map).catch(() => null) : null;
     setBusy(false);
     if (!saved) return;
     onPick(saved.id);
-    toast.success(`World drafted with ${formatCount(map.sets.length)} set${map.sets.length === 1 ? '' : 's'}${skipped.length ? `; not in the catalog yet: ${skipped.join(', ')}` : ''}`);
+    toast.success(`World drafted with ${draftedText(map, skipped)}`);
+  };
+  const redraft = async () => {
+    setConfirmRedraft(false);
+    setBusy(true);
+    const { world: map, skipped } = draftMap();
+    const saved = await saveCatalogWorld(worldId, map).catch(() => null);
+    setBusy(false);
+    if (saved) toast.success(`World redrafted with ${draftedText(map, skipped)}`);
   };
   if (worldId) {
     const world = entry?.ingredient;
@@ -98,6 +116,10 @@ function PrevizWorld({ project, worldId, entry, onPick }) {
         <MapIcon size={14} aria-hidden="true" className="text-port-text-muted" />
         <span className="text-port-text">{entry === undefined ? 'Loading the world…' : world ? world.name : 'The world environment was removed'}</span>
         {path && <Link className={buttonCls} to={path}>Open world map</Link>}
+        {world && routes.length > 0 && (confirmRedraft
+          ? <ConfirmButtonPair prompt="Redraft the world map from the route maps? Its sets and paths are replaced." confirmText="Redraft" largeTouchTargets busy={busy}
+              onConfirm={redraft} onCancel={() => setConfirmRedraft(false)} />
+          : <button type="button" className={buttonCls} disabled={busy} onClick={() => setConfirmRedraft(true)}><RefreshCw size={12} aria-hidden="true" /> Redraft world</button>)}
         <button type="button" className={buttonCls} onClick={() => onPick(null)}><X size={12} aria-hidden="true" /> Unlink world</button>
       </div>
     );
@@ -287,7 +309,7 @@ export default function PrevizStage({ board }) {
         </fieldset>
         <fieldset disabled={locked} className="min-w-0 space-y-1">
           <legend className="text-xs text-port-text-muted">World</legend>
-          <PrevizWorld project={project} worldId={worldId} entry={worldEntry} onPick={(next) => savePrevizField({ worldId: next })} />
+          <PrevizWorld project={project} worldId={worldId} entry={worldEntry} places={places} onPick={(next) => savePrevizField({ worldId: next })} />
         </fieldset>
         {world && (
           <section className="min-w-0 space-y-1" aria-label="Night">

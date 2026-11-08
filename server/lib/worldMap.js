@@ -52,21 +52,53 @@ const STOP_SPACING = 120;
 const SIDE_PATH_LENGTH = 80;
 const ROUTE_GAP = 220;
 
+const SET_SIZE = 30;
+const SET_GAP = 20;
+
+/**
+ * A set's footprint in its own greybox coordinates, `{ x, z, w, d }` meters
+ * (corner and size), from its greybox's boxes and planes; a 30 m square when it
+ * has none.
+ */
+export function worldSetFootprint(greybox) {
+  const parts = (greybox?.parts || []).filter((part) => part.type === 'box' || part.type === 'plane');
+  if (!parts.length) return { x: -SET_SIZE / 2, z: -SET_SIZE / 2, w: SET_SIZE, d: SET_SIZE };
+  let minX = Infinity; let maxX = -Infinity; let minZ = Infinity; let maxZ = -Infinity;
+  for (const part of parts) {
+    const [w, , d] = part.type === 'plane' ? [part.size[0], 0, part.size[1]] : part.size;
+    minX = Math.min(minX, part.position[0] - w / 2); maxX = Math.max(maxX, part.position[0] + w / 2);
+    minZ = Math.min(minZ, part.position[2] - d / 2); maxZ = Math.max(maxZ, part.position[2] + d / 2);
+  }
+  return { x: minX, z: minZ, w: Math.max(2, maxX - minX), d: Math.max(2, maxZ - minZ) };
+}
+
+// How far a set placed at the origin with `rotationDegrees` reaches along world direction `dir`: [min, max].
+function reachAlong(box, rotationDegrees, dir) {
+  const t = (rotationDegrees * Math.PI) / 180;
+  const along = [[box.x, box.z], [box.x + box.w, box.z], [box.x, box.z + box.d], [box.x + box.w, box.z + box.d]]
+    .map(([x, z]) => [x * Math.cos(t) + z * Math.sin(t), -x * Math.sin(t) + z * Math.cos(t)])
+    .map(([x, z]) => x * dir[0] + z * dir[1]);
+  return [Math.min(...along), Math.max(...along)];
+}
+
 /**
  * A first world drawn from a music video's route maps: each route's stops laid
- * out along one road in its heading, STOP_SPACING apart, turned to face the way
+ * out along one road in its heading, at least STOP_SPACING apart and never
+ * overlapping (`footprints`: `{ [ingredientId]: worldSetFootprint }` of the
+ * loaded greyboxes), turned to face the way
  * of travel; side paths branch off where a stop names one; a later route that
  * starts at a placed set continues from it. The video's other places line up
  * beside the routes so they can be dragged into place. Sets need a catalog
  * link (`ingredientId`); `skipped` names the places that have none. `newId`
  * mints ids.
  */
-export function draftWorldFromRouteMaps(project, { newId, seed = 1 } = {}) {
+export function draftWorldFromRouteMaps(project, { newId, seed = 1, footprints = {} } = {}) {
   const places = (project?.concept?.subjects || []).filter((subject) => subject?.kind === 'place');
   const bySubject = new Map(places.map((subject) => [subject.id, subject]));
   const world = blankWorld(seed);
   const placedAt = new Map();
   const skipped = new Set();
+  const boxOf = (subject) => footprints[subject?.ingredientId] || worldSetFootprint(null);
   const place = (subject, position, compass) => {
     if (!subject.ingredientId) { skipped.add(subject.name || subject.id); return null; }
     if (placedAt.has(subject.ingredientId)) return placedAt.get(subject.ingredientId);
@@ -87,8 +119,12 @@ export function draftWorldFromRouteMaps(project, { newId, seed = 1 } = {}) {
     if (!placedAt.has(stops[0].subject.ingredientId)) lane += 1;
     let cursor = start;
     const road = [];
+    const turn = facingRotation(compass);
     stops.forEach(({ stop, subject }, i) => {
-      const at = i === 0 ? cursor : [cursor[0] + dir[0] * STOP_SPACING, cursor[1] + dir[1] * STOP_SPACING];
+      // Far enough on that this set's near edge clears the last one's far edge.
+      const step = i === 0 ? 0 : Math.max(STOP_SPACING,
+        reachAlong(boxOf(stops[i - 1].subject), turn, dir)[1] - reachAlong(boxOf(subject), turn, dir)[0] + SET_GAP);
+      const at = i === 0 ? cursor : [cursor[0] + dir[0] * step, cursor[1] + dir[1] * step];
       const placed = place(subject, at, compass) || at.map(round);
       cursor = placed;
       road.push(placed);
@@ -106,7 +142,15 @@ export function draftWorldFromRouteMaps(project, { newId, seed = 1 } = {}) {
   // Places no route visits: a row south of everything, to drag into place.
   const loose = places.filter((subject) => subject.ingredientId && !placedAt.has(subject.ingredientId));
   const southmost = Math.max(0, ...[...placedAt.values()].map((p) => p[1]));
-  loose.forEach((subject, i) => place(subject, [(i - (loose.length - 1) / 2) * 60, southmost + 150], 0));
+  // Each one's width side by side along the row, clear of the routes by the deepest of them.
+  const widths = loose.map((subject) => Math.max(60, boxOf(subject).w + SET_GAP));
+  const deepest = Math.max(0, ...loose.map((subject) => boxOf(subject).d));
+  const total = widths.reduce((sum, w) => sum + w, 0);
+  let x = -total / 2;
+  loose.forEach((subject, i) => {
+    place(subject, [x + widths[i] / 2, southmost + 150 + deepest / 2], 0);
+    x += widths[i];
+  });
   for (const subject of places) if (!subject.ingredientId) skipped.add(subject.name || subject.id);
   return { world, skipped: [...skipped] };
 }

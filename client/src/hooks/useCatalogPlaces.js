@@ -1,19 +1,35 @@
 import { useEffect, useState } from 'react';
 import { listCatalogIngredientsByIds, listCatalogIngredientMedia } from '../services/apiCatalog.js';
 import { useVisibilityEvent } from './useVisibilityEvent.js';
+import socket from '../services/socket.js';
 
 const BATCH = 50;
 
 /**
  * Load catalog places (and their media, for a Blender greybox's model file) by
  * id: `{ [ingredientId]: { ingredient, media } }`, an id missing until it loads
- * and `null` when the load failed. Refreshes on return from editing a place.
+ * and `null` when the load failed. Refreshes on return to the tab and when a
+ * loaded place is saved (`catalog:primitive-changed`).
  */
 export default function useCatalogPlaces(ingredientIds = []) {
   const ids = [...new Set(ingredientIds.filter(Boolean))].sort().join(',');
   const [places, setPlaces] = useState({});
   const [refresh, setRefresh] = useState(0);
   useVisibilityEvent((state) => { if (state === 'visible') setRefresh((n) => n + 1); });
+  // A loaded place saved elsewhere (its world map redrafted, its greybox edited) reloads.
+  useEffect(() => {
+    if (!ids) return undefined;
+    const watched = new Set(ids.split(','));
+    let timer = null;
+    const changed = (event) => {
+      if (!watched.has(event?.ingredientId)) return;
+      clearTimeout(timer);
+      // Catalog notifications precede their transaction commit.
+      timer = setTimeout(() => setRefresh((n) => n + 1), 1000);
+    };
+    socket.on('catalog:primitive-changed', changed);
+    return () => { clearTimeout(timer); socket.off('catalog:primitive-changed', changed); };
+  }, [ids]);
   useEffect(() => {
     let active = true;
     setPlaces({});
