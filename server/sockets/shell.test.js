@@ -44,6 +44,22 @@ describe('shell:start payload validation', () => {
     expect(socket.emit).toHaveBeenCalledWith('shell:error', expect.objectContaining({ error: expect.stringContaining('ChatGPT') }));
   });
 
+  it('hands a plain initialCommand to the service to inject after the shell is ready', async () => {
+    const { handlers, socket } = setup();
+    await handlers['shell:start']({ cwd: '/tmp/app', initialCommand: 'claude' });
+    expect(createShellSession).toHaveBeenCalledWith(socket, expect.objectContaining({ initialCommand: 'claude', waitForPromptReady: true }));
+    expect(createShellSession.mock.calls.at(-1)[1]).not.toHaveProperty('exitWithCommand');
+  });
+
+  it('passes neither command option when the start carries no command', async () => {
+    const { handlers, socket } = setup();
+    await handlers['shell:start']({ cwd: '/tmp/app' });
+    const [, opts] = createShellSession.mock.calls.at(-1);
+    expect(opts).not.toHaveProperty('initialCommand');
+    expect(opts).not.toHaveProperty('waitForPromptReady');
+    expect(socket.emit).toHaveBeenCalledWith('shell:started', { sessionId: 'sess-1' });
+  });
+
   it('rejects a non-string cwd on shell:error without creating a session', async () => {
     const { handlers, socket } = setup();
     await handlers['shell:start']({ cwd: { not: 'a string' } });
