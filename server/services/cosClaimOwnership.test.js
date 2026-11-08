@@ -381,6 +381,27 @@ describe('checkReconcileOwnership', () => {
     expect(await check([], { listWorktrees: async () => [] })).toEqual({ admitted: false, reason: 'holder-changed' });
     expect(await check([], { listWorktrees: async () => [{ ...holder, locked: true }] })).toEqual({ admitted: false, reason: 'worktree-locked' });
   });
+
+  // The classifier dispatches an unshipped review branch for its PR to be opened;
+  // a recheck that kept refusing it stranded the branch on every cycle.
+  it('admits an unshipped review branch only while the forge shows no open PR', async () => {
+    const lookups = [];
+    const unshipped = (hasOpenPr, detail = { reason: 'pr-completion-review-required', unshipped: true }) => ({
+      readCompletionHold: undefined,
+      readCompletionHoldDetail: async () => detail,
+      readOpenPrForBranch: async (...args) => { lookups.push(args); if (hasOpenPr instanceof Error) throw hasOpenPr; return hasOpenPr; },
+    });
+    const held = { admitted: false, reason: 'pr-completion-review-required' };
+    expect(await check([], unshipped(false))).toEqual({ admitted: true });
+    expect(lookups[0]).toEqual([SOURCE, 'claim/issue-101', { forgeAccount: null }]);
+    expect(await check([], unshipped(true))).toEqual(held);
+    expect(await check([], unshipped(null))).toEqual(held);
+    expect(await check([], unshipped(new Error('gh failed')))).toEqual(held);
+    expect(await check([], unshipped(false), { prUrl: 'https://github.com/o/r/pull/1' })).toEqual(held);
+    expect(await check([], unshipped(false, { reason: 'pr-completion-review-required', unshipped: false }))).toEqual(held);
+    expect(await check([], unshipped(false, { reason: 'pr-completion-human-handoff', unshipped: false })))
+      .toEqual({ admitted: false, reason: 'pr-completion-human-handoff' });
+  });
 });
 
 // A successful check by a named coordinator is an acquire (#10096): the claim run
