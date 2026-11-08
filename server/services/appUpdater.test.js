@@ -25,7 +25,7 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
   return { ...actual, PATHS: mock.paths };
 });
 vi.mock('./git.js', () => ({ updateDefaultBranch: mock.updateDefaultBranch }));
-vi.mock('./pm2.js', () => ({ restartApp: mock.restart, filterRunningProcessNames: mock.runningNames }));
+vi.mock('./pm2.js', () => ({ restartApp: mock.restart, getProcessesToRestartOnUpdate: mock.runningNames }));
 vi.mock('../lib/bufferedSpawn.js', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, bufferedSpawnOrThrow: mock.spawn };
@@ -354,16 +354,17 @@ describe('managed app updates', () => {
     expect(result.steps).toContainEqual(expect.objectContaining({ step: 'restart', skipped: true }));
   });
 
-  it('restarts only the processes that are running, and all of them when PM2 is unreadable', async () => {
-    const app = { id: 'example-managed-app', name: 'Example App', type: 'express', repoPath: repo, pm2ProcessNames: ['example-api', 'example-ui'] };
+  it('restarts only the processes that were running before the update began', async () => {
+    await writeFile(join(repo, 'package.json'), JSON.stringify({ scripts: { 'portos:update': 'example-update' } }));
     mock.runningNames.mockResolvedValueOnce(['example-ui']);
-    await updateApp(app, vi.fn());
-    expect(mock.restart.mock.calls).toEqual([['example-ui', undefined]]);
 
-    mock.restart.mockClear();
-    mock.runningNames.mockResolvedValueOnce(null);
-    await updateApp(app, vi.fn());
-    expect(mock.restart.mock.calls).toEqual([['example-api', undefined], ['example-ui', undefined]]);
+    await updateApp({ id: 'example-managed-app', name: 'Example App', type: 'express', repoPath: repo, pm2ProcessNames: ['example-api', 'example-ui'] }, vi.fn());
+
+    expect(mock.restart.mock.calls).toEqual([['example-ui', undefined]]);
+    // Read before the routine runs, so a routine that stops its own processes
+    // cannot turn a running app into a skipped restart.
+    expect(mock.runningNames.mock.invocationCallOrder[0]).toBeLessThan(mock.updateDefaultBranch.mock.invocationCallOrder[0]);
+    expect(mock.runningNames.mock.invocationCallOrder[0]).toBeLessThan(mock.spawn.mock.invocationCallOrder[0]);
   });
 
   it('honors a custom update command configured on the PortOS record', async () => {

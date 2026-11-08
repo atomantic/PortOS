@@ -577,22 +577,28 @@ export async function listProcessesStrict(pm2Home = null) {
   return list.map(mapProcess);
 }
 
-// PM2 states that mean the process is (or is about to be) up. `stopped`,
-// `errored` and an unregistered name are all "not running".
+// PM2 states that mean the process is (or is about to be) up. Broader than
+// the 'online'-only app status label on purpose: a process mid-launch or
+// awaiting an autorestart is one an update must still restart.
 const RUNNING_PM2_STATUSES = new Set(['online', 'launching', 'waiting restart']);
 
 /**
- * Which of `names` are currently running under PM2. Returns `null` when the
- * PM2 read FAILED, so a caller can tell "nothing running" from "unknown".
+ * Which of an app's declared PM2 processes a managed update should restart:
+ * the ones currently running, so a stopped app is never started by an update.
+ * An unreadable PM2 state returns every declared name, so a running app is not
+ * left on code older than its checkout.
  *
- * @param {string[]} names PM2 process names
+ * @param {string[]} [names] Declared PM2 process names
  * @param {string} [pm2Home] Optional custom PM2_HOME path
- * @returns {Promise<string[]|null>}
+ * @returns {Promise<string[]>}
  */
-export async function filterRunningProcessNames(names, pm2Home = null) {
+export async function getProcessesToRestartOnUpdate(names, pm2Home = null) {
   if (!names?.length) return [];
   const processes = await listProcessesStrict(pm2Home);
-  if (!processes) return null;
+  if (!processes) {
+    console.log(`⚠️ Could not read PM2 state — restarting all declared processes (${names.join(', ')})`);
+    return names;
+  }
   const running = new Set(processes.filter(p => RUNNING_PM2_STATUSES.has(p.status)).map(p => p.name));
   return names.filter(name => running.has(name));
 }

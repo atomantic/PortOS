@@ -29,7 +29,7 @@ vi.mock('./git.js', () => ({
   resolveForgeForRepo: mock.resolveForgeForRepo,
 }));
 vi.mock('./github.js', () => ({ execGh: mock.execGh }));
-vi.mock('./pm2.js', () => ({ filterRunningProcessNames: mock.runningNames }));
+vi.mock('./pm2.js', () => ({ getProcessesToRestartOnUpdate: mock.runningNames }));
 vi.mock('./gitPinnedSubmodules.js', () => ({ inspectPinnedSubmoduleDrift: mock.inspectPinnedSubmoduleDrift }));
 
 import {
@@ -116,8 +116,6 @@ describe('managed app repository topology', () => {
     expect((await getManagedAppRepositorySources(app)).updateRestartsApp).toBe(true);
     mock.runningNames.mockResolvedValueOnce([]);
     expect((await getManagedAppRepositorySources(app)).updateRestartsApp).toBe(false);
-    mock.runningNames.mockResolvedValueOnce(null);
-    expect((await getManagedAppRepositorySources(app)).updateRestartsApp).toBe(true);
   });
 
   it('reports sanitized source state and defaults issue filing to upstream', async () => {

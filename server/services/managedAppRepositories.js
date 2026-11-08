@@ -276,15 +276,12 @@ function publicTarget(repository, role) {
   };
 }
 
-// Mirrors appUpdater: only running processes restart, and an unreadable PM2
-// state falls back to restarting every declared process. Lazy so this
-// module's many importers do not pull in the PM2 service.
+// Same rule the update itself applies. Lazy so this module's many importers
+// do not pull in the PM2 service.
 async function updateWouldRestart(app) {
-  const names = Array.isArray(app?.pm2ProcessNames) ? app.pm2ProcessNames : [];
-  if (names.length === 0) return false;
-  const { filterRunningProcessNames } = await import('./pm2.js');
-  const running = await filterRunningProcessNames(names, app.pm2Home);
-  return running === null || running.length > 0;
+  if (!app?.pm2ProcessNames?.length) return false;
+  const { getProcessesToRestartOnUpdate } = await import('./pm2.js');
+  return (await getProcessesToRestartOnUpdate(app.pm2ProcessNames, app.pm2Home)).length > 0;
 }
 
 export async function getManagedAppRepositorySources(app) {
