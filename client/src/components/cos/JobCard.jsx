@@ -3,7 +3,7 @@ import { Play, Trash2, ChevronDown, ChevronUp, Clock, ToggleLeft, ToggleRight, E
 import toast from '../ui/Toast';
 import * as api from '../../services/api';
 import { timeAgo, timeUntil, formatDateNumeric } from '../../utils/formatters';
-import { DEFAULT_CRON, describeCron, describeRecurrence, parseCronToRecurrence, buildCronFromRecurrence, JOB_INTERVAL_OPTIONS as INTERVAL_OPTIONS, ON_DEMAND_INTERVAL } from '../../utils/cronHelpers';
+import { DEFAULT_CRON, describeCron, describeRecurrence, parseCronToRecurrence, buildCronFromRecurrence, JOB_INTERVAL_OPTIONS as INTERVAL_OPTIONS, ON_DEMAND_INTERVAL, scheduleAnchorKindForInterval } from '../../utils/cronHelpers';
 import CronSchedulePicker from '../CronSchedulePicker';
 import AgentJobProviderFields, { hasRunnableAgentProvider } from './AgentJobProviderFields';
 import { AGENT_OPTIONS, agentOptionButtonClass } from './constants';
@@ -148,8 +148,9 @@ export function ScheduleFields({ data, onChange, timezone }) {
               // align to; the server clears it too, so drop it here rather than
               // saving a value the job will never honor.
               if (e.target.value === ON_DEMAND_INTERVAL) onChange('scheduledTime', null);
-              // A weekday and a day of month are not interchangeable: let the server re-default it.
-              onChange('scheduleAnchor', null);
+              // A weekday and a day of month are not interchangeable: let the server
+              // re-default it. Weekly <-> biweekly keeps the day the user picked.
+              if (scheduleAnchorKindForInterval(e.target.value) !== scheduleAnchorKindForInterval(data.interval)) onChange('scheduleAnchor', null);
             }}
             className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
           >

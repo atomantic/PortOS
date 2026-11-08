@@ -570,6 +570,22 @@ describe('projectWorkflowTimeline', () => {
     ]);
   });
 
+  it('projects a never-run anchored job as due now, then on its anchor day', () => {
+    const timeline = projectWorkflowTimeline([{
+      id: 'job:fresh', kind: 'job', enabled: true, lastRun: null,
+      schedule: { type: 'weekly', intervalMs: 7 * 86_400_000, scheduledTime: '03:00', scheduleAnchor: 1 }
+    }], {
+      start: new Date('2026-07-08T00:00:00.000Z'), // Wednesday
+      end: new Date('2026-07-28T00:00:00.000Z'),
+      timezone: 'UTC'
+    });
+
+    // The Monday five days after the first run is under a week away, so the anchor skips it.
+    expect(timeline.occurrences.map(item => item.at)).toEqual([
+      '2026-07-08T00:00:00.000Z', '2026-07-20T03:00:00.000Z', '2026-07-27T03:00:00.000Z'
+    ]);
+  });
+
   it('flags launches from different nodes within fifteen minutes', () => {
     const timeline = projectWorkflowTimeline([
       { id: 'task:a', kind: 'task', enabled: true, schedule: { type: 'cron', cronExpression: '0 9 * * *' } },

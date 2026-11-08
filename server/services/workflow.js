@@ -574,7 +574,13 @@ function makePerpetualWindow(node, atMs, endMs, state) {
 // An anchored job fires on its calendar day, not every cadence after lastRun, so
 // replay the scheduler's own next-fire function with each projected run as lastRun.
 function projectAnchoredIntervalJob(node, job, startMs, endMs, timezone, occurrences) {
-  let lastRunMs = new Date(node.lastRun).getTime();
+  // A never-run job fires as soon as it is armed, and its anchor rules the runs after that.
+  let lastRunMs = startMs;
+  if (node.lastRun) {
+    lastRunMs = new Date(node.lastRun).getTime();
+  } else {
+    occurrences.push(makeOccurrence(node, startMs, 'launch', nodeDueNow(node)));
+  }
   for (let i = 0; i < MAX_OCCURRENCES_PER_NODE; i++) {
     const fireMs = nextIntervalJobFireTime({ ...job, lastRun: new Date(lastRunMs).toISOString() }, timezone);
     if (fireMs == null || fireMs >= endMs) return;
@@ -594,7 +600,7 @@ function projectIntervalJob(node, startMs, endMs, timezone, occurrences) {
   if (!cadence) return;
   const { type, scheduledTime, scheduleAnchor, weekdaysOnly } = node.schedule;
   const anchorable = { interval: type, intervalMs: cadence, scheduledTime, scheduleAnchor, weekdaysOnly };
-  if (node.lastRun && effectiveScheduleAnchor(anchorable)) {
+  if (effectiveScheduleAnchor(anchorable)) {
     projectAnchoredIntervalJob(node, anchorable, startMs, endMs, timezone, occurrences);
     return;
   }

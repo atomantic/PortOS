@@ -112,9 +112,10 @@ const matchesAnchorDay = ({ kind, value }, local) =>
  */
 export function nextAnchoredFireTime(job, timezone) {
   const anchor = effectiveScheduleAnchor(job)
-  if (!anchor) return null
+  const lastRun = job.lastRun ? new Date(job.lastRun).getTime() : NaN
+  if (!anchor || !Number.isFinite(lastRun)) return null
   const [, hours, minutes] = job.scheduledTime.match(HHMM)
-  const after = new Date(job.lastRun).getTime() + job.intervalMs - ANCHOR_SLACK_MS[anchor.kind]
+  const after = lastRun + job.intervalMs - ANCHOR_SLACK_MS[anchor.kind]
   let candidate = nextLocalTime(after, Number(hours), Number(minutes), timezone)
   // Stepping 12h past the previous candidate always reaches the next day's slot
   // (slots are 23-25h apart), and DST nudging can never move it back before it.

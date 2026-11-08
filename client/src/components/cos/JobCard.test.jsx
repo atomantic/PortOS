@@ -242,6 +242,18 @@ describe('JobCard schedule anchor (#15395)', () => {
     expect(updateCosJob.mock.calls[0][1]).toMatchObject({ interval: 'weekly', scheduleAnchor: 4 });
   });
 
+  it('keeps the picked weekday when weekly becomes biweekly, and re-defaults it when it becomes monthly', async () => {
+    vi.mocked(updateCosJob).mockResolvedValue({ success: true });
+    renderCard(weekly);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    fireEvent.change(screen.getByRole('combobox', { name: 'Interval' }), { target: { value: 'biweekly' } });
+    expect(screen.getByRole('combobox', { name: 'Run on weekday' }).value).toBe('1');
+    fireEvent.change(screen.getByRole('combobox', { name: 'Interval' }), { target: { value: 'monthly' } });
+    expect(screen.getByRole('combobox', { name: 'Run on day of month' }).value).toBe('');
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Save/ })); });
+    expect(updateCosJob.mock.calls[0][1]).toMatchObject({ interval: 'monthly', scheduleAnchor: null });
+  });
+
   it('offers a day of month for monthly jobs and nothing for daily ones', () => {
     renderCard({ ...weekly, interval: 'monthly', intervalMs: 30 * 24 * 3600000, scheduleAnchor: 15 });
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));

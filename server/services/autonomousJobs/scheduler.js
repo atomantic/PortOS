@@ -67,14 +67,15 @@ async function getDueJobs() {
     const timeSinceLastRun = now - lastRun
 
     // An anchored job is due on its anchor day, which can precede
-    // lastRun + intervalMs (a late run must not move the weekday).
-    if (effectiveScheduleAnchor(job)) {
+    // lastRun + intervalMs (a late run must not move the weekday). A never-run
+    // job has no run to anchor against and keeps the slot check below.
+    if (job.lastRun && effectiveScheduleAnchor(job)) {
       const fireAt = nextIntervalJobFireTime(job, timezone)
       if (fireAt == null || fireAt > now) continue
       if (job.weekdaysOnly && !isWeekday(timezone)) continue
       due.push({
         ...job,
-        reason: job.lastRun ? `${job.interval}-due` : 'never-run',
+        reason: `${job.interval}-due`,
         overdueBy: now - fireAt
       })
       continue
