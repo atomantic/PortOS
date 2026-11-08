@@ -5,9 +5,9 @@ import { activeMusicVideoSubjects } from './musicVideoCastSelection.js';
  * meant to be: which camera we look through and who holds it, the view, where
  * and when it is, who is in it, what they do and what they feel. The project's
  * `cameras` list says which cameras exist in this video. A shot whose sheet
- * has `promptFromSheet` builds its prompts from the sheet: its shot prompt is
- * then a general prompt, and shotSheetPromptLines are the details the still
- * and clip composers add after it (musicVideoShotPrompt.js).
+ * has `promptFromSheet` builds its prompts from the sheet: its frame and motion
+ * prompts are then general prompts, and shotSheetPromptLines are the details
+ * the still and clip composers add after them (musicVideoShotPrompt.js).
  * Otherwise the sheet is the director's plan beside the prompts and reaches no model.
  */
 import { sungLyricTextWithin } from './musicVideoLyricAnchors.js';
@@ -44,10 +44,9 @@ export function normalizeShotSheet(sheet) {
  * the shot's own text whole, so any edit to that text shows.
  */
 function selectedFrameOutdated(project, scene) {
-  // An older shot's still rendered from its frame prompt; otherwise from the shot prompt.
-  const own = [scene?.framePrompt, scene?.prompt].find((text) => typeof text === 'string' && text.trim())?.trim() || '';
+  const framePrompt = typeof scene?.framePrompt === 'string' ? scene.framePrompt.trim() : '';
   // A sheet-built still records each ingredient's text, so an edited ingredient shows too.
-  const parts = [own, ...shotSheetPromptLines(project, scene).map((line) => line.text)].filter(Boolean);
+  const parts = [framePrompt, ...shotSheetPromptLines(project, scene).map((line) => line.text)].filter(Boolean);
   if (!parts.length || !scene?.referenceImageId) return false;
   const take = (Array.isArray(scene.takes) ? scene.takes : [])
     .find((entry) => entry?.kind === 'image' && entry.assetId === scene.referenceImageId);
@@ -55,7 +54,7 @@ function selectedFrameOutdated(project, scene) {
   return parts.some((part) => !take.prompt.includes(part));
 }
 
-/** Whether a shot's prompts are built from its sheet (its shot prompt is then a general prompt). */
+/** Whether a shot's prompts are built from its sheet (its frame and motion prompts are then general prompts). */
 export const shotSheetDrivesPrompt = (scene) => scene?.shotSheet?.promptFromSheet === true;
 
 const sheetText = (value) => (typeof value === 'string' ? value.trim() : '');

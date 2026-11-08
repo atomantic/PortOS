@@ -8,18 +8,18 @@ vi.mock('../../services/apiImageVideo.js', () => ({ previewImagePrompt: vi.fn(as
 const scene = { sceneId: 's1', referenceImageId: 'start.png', endImageId: 'end.png', framePrompt: 'Door opens', endFramePrompt: 'Door shut', takes: [] };
 const frames = (props) => render(<SceneFrames scene={scene} index={0} endFrames onEditLocal={vi.fn()} onSave={vi.fn()} {...props} />);
 
-// Catches a separate start frame prompt box coming back beside the shot prompt.
-it('renders the start frame from the shot prompt and edits only the end frame prompt', async () => {
+it('edits and saves each frame prompt on blur', () => {
   const onSave = vi.fn();
   function Harness() {
     const [draft, setDraft] = useState(scene);
-    return <SceneFrames project={{ id: 'mv-example' }} scene={draft} index={0} endFrames onSave={onSave}
+    return <SceneFrames scene={draft} index={0} endFrames onSave={onSave}
       onEditLocal={(_id, patch) => setDraft(current => ({ ...current, ...patch }))} />;
   }
   render(<Harness />);
-  expect(screen.queryByRole('textbox', { name: /Start frame prompt|Still prompt/ })).toBeNull();
-  fireEvent.click((await screen.findAllByRole('button', { name: 'Show full prompt' }))[0]);
-  expect(screen.getByText(/^Door opens/)).toBeTruthy();
+  const start = screen.getByRole('textbox', { name: 'Start frame prompt' });
+  fireEvent.change(start, { target: { value: 'The door opens\ninto a garden' } });
+  fireEvent.blur(start);
+  expect(onSave).toHaveBeenLastCalledWith('s1', { framePrompt: 'The door opens\ninto a garden' });
 
   const end = screen.getByRole('textbox', { name: 'End frame prompt' });
   fireEvent.change(end, { target: { value: '' } });
@@ -167,6 +167,7 @@ it('shows the selected greybox capture, inspectable figure additions and a missi
   expect(screen.getByText('Singer stands at the "rail" mark, waving')).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: 'Show full prompt' }));
   expect(screen.getByText(/Door opens[\s\S]*Singer stands/)).toBeTruthy();
+  expect(screen.getByRole('textbox', { name: 'Frame prompt' }).value).toBe('Door opens');
   expect(screen.getByRole('checkbox', { name: 'Greybox layout' }).checked).toBe(true);
   rerender(<SceneFrames {...props} greyboxPlaces={{ 'cat-rink': { ...greyboxPlaces['cat-rink'], ingredient: { type: 'place', payload: { greybox: { shots: [] } } } } }} />);
   expect(screen.getByRole('alert').textContent).toMatch(/removed/);

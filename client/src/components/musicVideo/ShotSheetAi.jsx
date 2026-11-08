@@ -43,24 +43,24 @@ function SplitReview({ item, scene, cameras, disabled, onEdit }) {
 
 /** One proposed rewrite: current text beside an editable proposal, so the director has the last word. */
 function PromptReview({ item, scene, disabled, onEdit }) {
-  const name = 'Shot prompt';
-  // A legacy shot's separate frame prompt leads its one prompt; a sheet-built still keeps its own.
-  const now = shotSheetDrivesPrompt(scene) ? scene?.prompt : [scene?.framePrompt, scene?.prompt].filter(Boolean).join(' ');
-  return (
-    <div className="grid min-w-0 gap-2 text-xs sm:grid-cols-2">
-      <div className="min-w-0"><p className="font-medium">{name} now</p><p className="max-h-48 overflow-y-auto whitespace-pre-wrap break-words text-port-text-muted">{now || 'None'}</p></div>
-      <label className="block min-w-0"><span className="font-medium">{name} proposed</span>
-        <textarea aria-label={`${item.label} ${name} proposed`} rows={6} maxLength={8000} value={item.proposed.prompt} disabled={disabled} onChange={(event) => onEdit('prompt', event.target.value)} className={input} />
-      </label>
-    </div>
-  );
+  return ['framePrompt', 'prompt'].filter((field) => item.proposed[field] !== undefined).map((field) => {
+    const name = field === 'prompt' ? 'Clip prompt' : 'Frame prompt';
+    return (
+      <div key={field} className="grid min-w-0 gap-2 text-xs sm:grid-cols-2">
+        <div className="min-w-0"><p className="font-medium">{name} now</p><p className="max-h-48 overflow-y-auto whitespace-pre-wrap break-words text-port-text-muted">{scene?.[field] || 'None'}</p></div>
+        <label className="block min-w-0"><span className="font-medium">{name} proposed</span>
+          <textarea aria-label={`${item.label} ${name} proposed`} rows={6} maxLength={8000} value={item.proposed[field]} disabled={disabled} onChange={(event) => onEdit(field, event.target.value)} className={input} />
+        </label>
+      </div>
+    );
+  });
 }
 
 /**
  * AI help for the shot sheet, only on request: fill a shot's empty columns from
  * its existing prompts, write its prompts from the sheet you edited, or split a
  * long frame prompt into columns and a general prompt so the still is built from the sheet, or
- * tighten long prompts that say things twice into one short prompt. Works on the shots currently listed. Every result is a proposal you
+ * tighten long frame and clip prompts that say things twice. Works on the shots currently listed. Every result is a proposal you
  * review, edit and select; nothing is saved until Apply, and Done is yours alone.
  */
 export default function ShotSheetAi({ project, rows, disabled, onApply, onApplyingChange }) {
@@ -142,8 +142,7 @@ export default function ShotSheetAi({ project, rows, disabled, onApply, onApplyi
       const { sheet } = mergeShotSheetBackfill(scene.shotSheet || {}, item.proposedSheet);
       return { shotSheet: normalizeShotSheet({ ...sheet, promptFromSheet: true }), framePrompt: item.generalPrompt.trim() || null };
     }
-    // One shot prompt: it replaces a legacy separate frame prompt, except where the sheet builds the still.
-    if (review.direction !== 'from-prompts') return shotSheetDrivesPrompt(scene) ? item.proposed : { ...item.proposed, framePrompt: null };
+    if (review.direction !== 'from-prompts') return item.proposed;
     const { sheet, filled } = mergeShotSheetBackfill(scene.shotSheet || {}, item.proposedSheet);
     return filled.length ? { shotSheet: normalizeShotSheet(sheet) } : null;
   };

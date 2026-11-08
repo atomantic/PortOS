@@ -105,8 +105,8 @@ describe('buildHandoffManifest typography (#8992)', () => {
     const manifest = buildHandoffManifest(project);
 
     expect(manifest.visualSpec.typography).toBe('condensed sans, all caps, lower-third titles');
-    expect(manifest.scenes[0].framePrompt).toBe('harbor at dawn. waves, grainy 16mm, color palette #112233; camera: locked-off wides');
-    expect(manifest.scenes[0].shotPrompt).toBe("harbor at dawn. waves, grainy 16mm, color palette #112233; camera: locked-off wides, hold the reference frame's lighting, time of day and palette for the whole shot");
+    expect(manifest.scenes[0].framePrompt).toBe('harbor at dawn, grainy 16mm, color palette #112233; camera: locked-off wides');
+    expect(manifest.scenes[0].shotPrompt).toBe("waves, grainy 16mm, color palette #112233; camera: locked-off wides, hold the reference frame's lighting, time of day and palette for the whole shot");
     expect(manifest.scenes[0].framePrompt).not.toMatch(/typography/i);
     expect(manifest.scenes[0].shotPrompt).not.toMatch(/typography/i);
   });

@@ -305,7 +305,7 @@ export async function resolveSongRevisionScenes(projectId, { revisionId, action,
       ? draft.storyboard.filter((shot) => !done.has(shot.sceneId))
       : draft.storyboard.map((shot) => {
         const fields = updates.get(shot.sceneId);
-        return fields ? { ...shot, ...(fields.prompt ? { action: fields.prompt, staging: '' } : {}) } : shot;
+        return fields ? { ...shot, ...(fields.prompt ? { action: fields.prompt } : {}), ...(fields.framePrompt ? { staging: fields.framePrompt } : {}) } : shot;
       }));
     const sceneReview = Object.fromEntries(Object.entries(live.sceneReview || {}).map(([id, entry]) => [id,
       done.has(id) ? { ...entry, resolved: action === 'dismiss' ? 'kept' : action === 'remove' ? 'removed' : 'replanned', resolvedAt: now } : entry]));

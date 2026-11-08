@@ -805,9 +805,6 @@ export function applyTreatmentToProject(project, { revision, overwrite = [], add
       if (fieldPlan === 'fill' || fieldPlan === 'replace' || (fieldPlan === 'manual' && approvedOverwrite)) {
         next[field] = direction[key];
         wrote = true;
-        // A one-prompt suggestion supersedes a legacy frame prompt the treatment wrote, or one the director approved replacing.
-        if (field === 'prompt' && !direction.suggestedFramePrompt && isNonBlankStr(scene.framePrompt)
-          && (approvedOverwrite || appliedPrompts.framePrompt === fieldFingerprint(scene.framePrompt))) next.framePrompt = null;
       }
       if (fieldPlan !== 'none' && (fieldPlan !== 'manual' || approvedOverwrite)) appliedPrompts[field] = fieldFingerprint(next[field]);
     }

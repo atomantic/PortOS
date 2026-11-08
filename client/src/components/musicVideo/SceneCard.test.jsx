@@ -272,9 +272,9 @@ describe('planned camera move (#10589)', () => {
     expect(screen.getByLabelText('Move').value).toBe('hold');
   });
 
-  it('puts a footage shot\'s camera on its Clip tab and shows the text it adds', () => {
+  it('puts a footage shot\'s camera beside its clip prompt and shows the text it adds', () => {
     render(<Harness initial={{ sceneId: 's1', visualLayer: 'footage', prompt: 'a hand turns the dial', startSec: 0, endSec: 5, takes: [] }} onSave={vi.fn()} />);
-    // With no still yet the editor opens on the Still; the camera sits on the Clip tab.
+    // With no still yet the editor opens on the Still; the camera sits with the clip prompt.
     expect(screen.getByRole('button', { name: 'Still' }).getAttribute('aria-pressed')).toBe('true');
     show('Clip');
     const camera = screen.getByLabelText('Camera');
@@ -285,6 +285,22 @@ describe('planned camera move (#10589)', () => {
     // The same text is what Sent to the model lists as its Camera move addition.
     fireEvent.click(within(screen.getByTestId('render-inputs')).getByRole('button', { name: '+ Camera move' }));
     expect(screen.getByTestId('render-inputs').textContent).toContain(adds);
+  });
+
+  // Catches the frame and clip prompts merging into one box again, or the clip prompt leaving the Clip tab.
+  it('keeps a footage shot\'s frame prompt under its frame and its clip prompt on the Clip tab', () => {
+    const onSave = vi.fn();
+    render(<Harness initial={{ sceneId: 's1', visualLayer: 'footage', framePrompt: 'Porch at dusk', prompt: 'She waves', startSec: 0, endSec: 5, takes: [] }} onSave={onSave} />);
+    const frame = screen.getByRole('textbox', { name: 'Frame prompt' });
+    expect(frame.value).toBe('Porch at dusk');
+    expect(frame.closest('[hidden]')).toBeNull();
+    expect(screen.getByRole('textbox', { name: 'Clip prompt', hidden: true }).closest('[hidden]')).not.toBeNull();
+    show('Clip');
+    const clip = screen.getByRole('textbox', { name: 'Clip prompt' });
+    expect(clip.value).toBe('She waves');
+    fireEvent.change(clip, { target: { value: 'She waves back' } });
+    fireEvent.blur(clip);
+    expect(onSave).toHaveBeenLastCalledWith('s1', { prompt: 'She waves back' });
   });
 
   it('asks why a static camera holds, and offers no camera on a title card', () => {
@@ -561,7 +577,7 @@ describe('motion prompt from the storyboard panel', () => {
         <SceneCard scene={shot} index={0} expanded project={{ id: 'mv-example', scenes: [shot] }} onEditLocal={() => {}} onSave={onSave} onGenerateVideo={onGenerateVideo} falVideoSettings={{ backend: 'local' }} />
     );
     const { rerender } = render(card(scene));
-    const box = screen.getAllByLabelText('Shot prompt').find((el) => el.value);
+    const box = screen.getAllByLabelText('Clip prompt').find((el) => el.value);
     expect(box.value).toBe('She laces her skates');
     expect(screen.getByTestId('prompt-from-storyboard')).toBeTruthy();
     // Blurring the panel's words keeps the shot linked rather than copying them.
@@ -572,20 +588,6 @@ describe('motion prompt from the storyboard panel', () => {
     rerender(card({ ...scene, prompt: 'She stands up' }));
     fireEvent.click(screen.getByRole('button', { name: 'Use storyboard direction' }));
     expect(onSave).toHaveBeenLastCalledWith('s1', { prompt: '' });
-  });
-});
-
-// Catches an older shot's separate still prompt being hidden from, or left diverging beside, the one shot prompt.
-describe('one shot prompt', () => {
-  it('shows an older shot\'s still prompt joined into the shot prompt and folds it in on save', () => {
-    const scene = { sceneId: 's1', visualLayer: 'still', prompt: 'She waves.', framePrompt: 'Porch at dusk', startSec: 0, endSec: 4, takes: [] };
-    const onSave = vi.fn();
-    render(<SceneCard scene={scene} index={0} expanded onEditLocal={() => {}} onSave={onSave} falVideoSettings={{ backend: 'local' }} />);
-    const box = screen.getByLabelText('Shot prompt');
-    expect(box.value).toBe('Porch at dusk. She waves.');
-    expect(screen.queryByLabelText(/Still prompt|Start frame prompt|Motion prompt/)).toBeNull();
-    fireEvent.blur(box);
-    expect(onSave).toHaveBeenLastCalledWith('s1', { prompt: 'Porch at dusk. She waves.', framePrompt: null });
   });
 });
 
@@ -619,7 +621,7 @@ describe('start and end frames', () => {
       onPlacePoolItem={() => {}} falVideoSettings={{ backend: 'local' }} />);
     show('Frames');
     const pair = screen.getByRole('group', { name: 'Start and end frames' });
-    expect(within(pair).queryByLabelText('Start frame prompt')).toBeNull();
+    expect(within(pair).getByLabelText('Start frame prompt')).toBeTruthy();
     expect(within(pair).getByLabelText('End frame prompt').value).toBe('Head thrown back');
     // Each frame swaps from the unused stills on its own, without tapping it first.
     fireEvent.click(within(pair).getByRole('button', { name: 'Swap end frame from unused' }));

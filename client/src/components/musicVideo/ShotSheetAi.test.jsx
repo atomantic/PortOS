@@ -45,32 +45,33 @@ describe('ShotSheetAi', () => {
 
   // Catches the director's edit to a proposal being lost, or a deselected shot being saved.
   it('applies the director’s edit of a proposed prompt and skips deselected shots', async () => {
-    proposeMusicVideoShotSheet.mockResolvedValue({ shots: [{ sceneId: 'a', prompt: 'AI motion' }, { sceneId: 'b', prompt: 'AI two' }] });
+    proposeMusicVideoShotSheet.mockResolvedValue({ shots: [{ sceneId: 'a', prompt: 'AI motion' }, { sceneId: 'b', framePrompt: 'AI frame' }] });
     const onApply = vi.fn(async () => true);
     const rows = [row('a', 'Shot 1', { checked: true }), row('b', 'Shot 2', { checked: true })];
     render(<ShotSheetAi project={projectOf(rows)} disabled={false} onApply={onApply} rows={rows} />);
     fireEvent.click(screen.getByRole('button', { name: /Propose prompts from sheet \(2 checked\)/ }));
-    const motion = await screen.findByLabelText('Shot 1 Shot prompt proposed');
+    const motion = await screen.findByLabelText('Shot 1 Clip prompt proposed');
     expect(proposeMusicVideoShotSheet.mock.calls[0][1].direction).toBe('to-prompts');
-    expect(screen.getAllByText('Old frame Old motion')).toHaveLength(2);
+    expect(screen.getByText('Old motion')).toBeInTheDocument();
     fireEvent.change(motion, { target: { value: 'My motion' } });
     fireEvent.click(screen.getByLabelText('Apply Shot 2'));
     fireEvent.click(screen.getByRole('button', { name: 'Apply 1 selected' }));
     await waitFor(() => expect(onApply).toHaveBeenCalledTimes(1));
-    expect(onApply).toHaveBeenCalledWith('a', { prompt: 'My motion', framePrompt: null });
+    expect(onApply).toHaveBeenCalledWith('a', { prompt: 'My motion' });
   });
 
-  // Catches tighten skipping shots whose sheet is not done, or leaving the old frame prompt to be joined back in.
-  it('tightens any listed shot and replaces its joined frame prompt on Apply', async () => {
-    proposeMusicVideoShotSheet.mockResolvedValue({ shots: [{ sceneId: 'a', prompt: 'Short' }] });
+  // Catches tighten skipping shots whose sheet is not done, or folding the frame prompt into the clip prompt.
+  it('tightens any listed shot and applies its frame and clip prompts apart', async () => {
+    proposeMusicVideoShotSheet.mockResolvedValue({ shots: [{ sceneId: 'a', framePrompt: 'Short frame', prompt: 'Short clip' }] });
     const onApply = vi.fn(async () => true);
     const rows = [row('a', 'Shot 1', {}), row('b', 'Shot 2', { checked: true })];
     render(<ShotSheetAi project={projectOf(rows)} disabled={false} onApply={onApply} rows={rows} />);
     fireEvent.click(screen.getByRole('button', { name: /Tighten prompts \(2\)/ }));
-    await screen.findByLabelText('Shot 1 Shot prompt proposed');
+    await screen.findByLabelText('Shot 1 Frame prompt proposed');
+    expect(screen.getByLabelText('Shot 1 Clip prompt proposed')).toHaveValue('Short clip');
     expect(proposeMusicVideoShotSheet.mock.calls[0][1]).toMatchObject({ direction: 'tighten', sceneIds: ['a', 'b'] });
     fireEvent.click(screen.getByRole('button', { name: 'Apply 1 selected' }));
-    await waitFor(() => expect(onApply).toHaveBeenCalledWith('a', { prompt: 'Short', framePrompt: null }));
+    await waitFor(() => expect(onApply).toHaveBeenCalledWith('a', { framePrompt: 'Short frame', prompt: 'Short clip' }));
   });
 
   // Catches a long video being sent in one request, or an earlier batch's work being lost when a later one fails.
@@ -113,9 +114,9 @@ describe('ShotSheetAi', () => {
       .mockReturnValueOnce(new Promise((resolve) => { finishSecond = resolve; }));
     render(<ShotSheetAi project={projectOf(rows)} disabled={false} onApply={vi.fn()} rows={rows} />);
     fireEvent.click(screen.getByRole('button', { name: /Propose prompts/ }));
-    fireEvent.change(await screen.findByLabelText('Shot 1 Shot prompt proposed'), { target: { value: 'My one' } });
+    fireEvent.change(await screen.findByLabelText('Shot 1 Clip prompt proposed'), { target: { value: 'My one' } });
     finishSecond({ shots: [{ sceneId: 's15', prompt: 'AI two' }] });
-    await screen.findByLabelText('Shot 16 Shot prompt proposed');
-    expect(screen.getByLabelText('Shot 1 Shot prompt proposed')).toHaveValue('My one');
+    await screen.findByLabelText('Shot 16 Clip prompt proposed');
+    expect(screen.getByLabelText('Shot 1 Clip prompt proposed')).toHaveValue('My one');
   });
 });
