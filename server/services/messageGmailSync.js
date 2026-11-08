@@ -11,6 +11,7 @@ import { createGmailApi } from './gmailApi.js';
 import { htmlToText as sharedHtmlToText } from '../lib/htmlToText.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { cleanMessageId } from '../lib/emailMessageId.js';
+import { gmailConversationThreadKey } from '../lib/gmailThreadKey.js';
 
 function makeExternalId(gmailId) {
   return 'api-gmail-' + crypto.createHash('md5').update(gmailId).digest('hex').slice(0, 12);
@@ -355,7 +356,7 @@ export async function syncGmail(account, cache, io, options = {}) {
         externalId: makeExternalId(gmailId),
         apiId: gmailId,
         conversationId: gmailThreadId || null,
-        threadId: gmailThreadId ? `conv-${crypto.createHash('md5').update(gmailThreadId).digest('hex').slice(0, 12)}` : null,
+        threadId: gmailConversationThreadKey(gmailThreadId),
         from,
         to: parseRecipients(getHeader(headers, 'To')),
         cc: parseRecipients(getHeader(headers, 'Cc')),

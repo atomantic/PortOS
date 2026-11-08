@@ -2,7 +2,8 @@
  * Gmail activity identity across live sync and Takeout import (#15308): both
  * paths key a message on its RFC-822 Message-ID, so one email is one row in
  * either order, and rows the live sync wrote under the legacy per-account key
- * are re-keyed atomically on the next sync.
+ * are re-keyed atomically on the next sync. A Takeout import also retires a
+ * legacy row live sync can no longer see, when exactly one matches (#15320).
  *
  * `*.db.test.js` → runs ONLY via `npm run test:db` against `portos_test`. Every
  * row carries a per-run nonce and is removed in afterAll.
@@ -17,8 +18,9 @@ import { requireDbOrSkip } from '../lib/dbTestGate.js';
 vi.mock('./userTimezone.js', () => ({ getUserTimezone: async () => 'UTC' }));
 
 import { recordMessageActivity } from './messageSync.js';
-import { importGmailMbox } from './gmailMboxImport.js';
-import { deleteEvents } from './humanActivity.js';
+import { importGmailMbox, parseMboxText } from './gmailMboxImport.js';
+import { deleteEvents, retireLegacyGmailDuplicates } from './humanActivity.js';
+import { gmailConversationThreadKey } from '../lib/gmailThreadKey.js';
 
 let dbReady = false;
 let skipReason = '';
@@ -61,24 +63,31 @@ const liveMessage = (name, over = {}) => ({
   ...over,
 });
 
-async function importMbox(name) {
+// One Takeout message. `thrid` is the decimal X-GM-THRID; omitted, the message
+// carries none (as in the #15308 cases, which predate thread matching).
+const mboxMessage = (name, { thrid, date = 'Sat, 04 Jul 2026 10:00:00 +0000', subject = `Hello ${name}` } = {}) => [
+  'From 1234@xxx Sat Jul 04 10:00:00 +0000 2026',
+  `Message-ID: <${messageId(name)}>`,
+  `Date: ${date}`,
+  'From: Friend <friend@example.com>',
+  'To: me@example.com',
+  `Subject: ${subject}`,
+  'X-Gmail-Labels: Inbox',
+  ...(thrid ? [`X-GM-THRID: ${thrid}`] : []),
+  '',
+  'body',
+  '',
+].join('\n');
+
+async function importMboxText(text) {
   const dir = await mkdtemp(path.join(tmpdir(), 'portos-gmail-identity-'));
   tempDirs.push(dir);
   const file = path.join(dir, 'All mail.mbox');
-  await writeFile(file, [
-    'From 1234@xxx Sat Jul 04 10:00:00 +0000 2026',
-    `Message-ID: <${messageId(name)}>`,
-    'Date: Sat, 04 Jul 2026 10:00:00 +0000',
-    'From: Friend <friend@example.com>',
-    'To: me@example.com',
-    `Subject: Hello ${name}`,
-    'X-Gmail-Labels: Inbox',
-    '',
-    'body',
-    '',
-  ].join('\n'));
+  await writeFile(file, text);
   return importGmailMbox({ path: file });
 }
+
+const importMbox = (name, opts) => importMboxText(mboxMessage(name, opts));
 
 // Every row either path could have written for this message.
 async function rowsFor(name, acct) {
@@ -184,5 +193,126 @@ describe.skipIf(!runDb)('Gmail activity identity (#15308)', () => {
     await recordMessageActivity(acct, [liveMessage('erase')]);
     expect(await deleteEvents({ accountId: acct.id })).toEqual({ deleted: 1 });
     expect(await rowsFor('erase', acct)).toEqual([]);
+  });
+});
+
+// A unique 64-bit X-GM-THRID per run (past 2^53), and the hex Gmail API thread
+// id live sync would have seen for it.
+let threadSeq = 0n;
+const nextThread = () => {
+  threadSeq += 1n;
+  const thrid = BigInt(Date.now()) * 1_000_000n + threadSeq;
+  return { thrid: thrid.toString(), threadKey: gmailConversationThreadKey(thrid.toString(16)) };
+};
+
+// The row live sync wrote before #15308: a per-account key, no Message-ID, the
+// Gmail receive time (a little after the header Date).
+const recordLegacy = (acct, name, threadKey, over = {}) => recordMessageActivity(acct, [liveMessage(name, {
+  rfcMessageId: undefined, threadId: threadKey, date: '2026-07-04T10:00:40.000Z', ...over,
+})]);
+
+async function gmailRowsForAccountOrIds(acct, names) {
+  const { rows } = await query(
+    `SELECT dedupe_key, account_id FROM human_activity_events
+      WHERE source = 'gmail' AND (account_id = $1 OR dedupe_key = ANY($2::text[])) ORDER BY dedupe_key`,
+    [acct.id, names.map((n) => `gmail:${messageId(n)}`)],
+  );
+  return rows;
+}
+
+describe.skipIf(!runDb)('Takeout import retires pre-#15308 live Gmail rows (#15320)', () => {
+  it('leaves one row for an email live sync recorded before #15308, and re-importing stays a no-op', async () => {
+    const acct = account('retire');
+    const { thrid, threadKey } = nextThread();
+    await recordLegacy(acct, 'retire', threadKey);
+
+    expect((await importMbox('retire', { thrid })).recorded).toBe(1);
+    expect(await gmailRowsForAccountOrIds(acct, ['retire'])).toEqual([{ dedupe_key: `gmail:${messageId('retire')}`, account_id: null }]);
+
+    expect((await importMbox('retire', { thrid })).recorded).toBe(0);
+    expect(await gmailRowsForAccountOrIds(acct, ['retire'])).toEqual([{ dedupe_key: `gmail:${messageId('retire')}`, account_id: null }]);
+  });
+
+  it('deletes nothing when two legacy rows fit the imported email', async () => {
+    const acct = account('ambiguous');
+    const { thrid, threadKey } = nextThread();
+    // Two distinct emails, same thread, sender and subject, minutes apart.
+    await recordLegacy(acct, 'ambiguous-a', threadKey, { subject: 'Hello ambiguous' });
+    await recordLegacy(acct, 'ambiguous-b', threadKey, { subject: 'Hello ambiguous', date: '2026-07-04T10:03:00.000Z' });
+
+    await importMbox('ambiguous-a', { thrid, subject: 'Hello ambiguous' });
+    expect(await gmailRowsForAccountOrIds(acct, ['ambiguous-a'])).toEqual([
+      { dedupe_key: `gmail:${messageId('ambiguous-a')}`, account_id: null },
+      { dedupe_key: `msg:${acct.id}:api-gmail-${nonce}-ambiguous-a`, account_id: acct.id },
+      { dedupe_key: `msg:${acct.id}:api-gmail-${nonce}-ambiguous-b`, account_id: acct.id },
+    ]);
+  });
+
+  it('keeps a legacy row whose only lookalike is a sibling email in the same import', async () => {
+    const acct = account('sibling');
+    const { thrid, threadKey } = nextThread();
+    await recordLegacy(acct, 'sibling-a', threadKey, { subject: 'Hello sibling' });
+
+    await importMboxText([
+      mboxMessage('sibling-a', { thrid, subject: 'Hello sibling' }),
+      mboxMessage('sibling-b', { thrid, subject: 'Hello sibling', date: 'Sat, 04 Jul 2026 10:02:00 +0000' }),
+    ].join('\n'));
+    // Either imported email could be the legacy one, so it stays.
+    expect(await gmailRowsForAccountOrIds(acct, ['sibling-a', 'sibling-b'])).toHaveLength(3);
+  });
+
+  it('keeps a legacy row that two imported emails, too far apart to be each other\'s lookalike, both fit', async () => {
+    const acct = account('two-claims');
+    const { thrid, threadKey } = nextThread();
+    await recordLegacy(acct, 'two-claims-a', threadKey, { subject: 'Hello two-claims', date: '2026-07-04T10:07:30.000Z' });
+
+    await importMboxText([
+      mboxMessage('two-claims-a', { thrid, subject: 'Hello two-claims' }),
+      mboxMessage('two-claims-b', { thrid, subject: 'Hello two-claims', date: 'Sat, 04 Jul 2026 10:15:00 +0000' }),
+    ].join('\n'));
+    expect(await gmailRowsForAccountOrIds(acct, ['two-claims-a', 'two-claims-b'])).toHaveLength(3);
+  });
+
+  it('keeps a legacy row that a stored sibling without a Message-ID also fits', async () => {
+    const acct = account('hash-sibling');
+    const { thrid, threadKey } = nextThread();
+    await recordLegacy(acct, 'hash-sibling-a', threadKey, { subject: 'Hello hash-sibling', date: '2026-07-04T10:07:30.000Z' });
+    const noId = mboxMessage('hash-sibling-b', { thrid, subject: 'Hello hash-sibling', date: 'Sat, 04 Jul 2026 10:15:00 +0000' })
+      .split('\n').filter((l) => !l.startsWith('Message-ID')).join('\n');
+
+    await importMboxText([mboxMessage('hash-sibling-a', { thrid, subject: 'Hello hash-sibling' }), noId].join('\n'));
+    expect(await gmailRowsForAccountOrIds(acct, ['hash-sibling-a'])).toEqual([
+      { dedupe_key: `gmail:${messageId('hash-sibling-a')}`, account_id: null },
+      { dedupe_key: `msg:${acct.id}:api-gmail-${nonce}-hash-sibling-a`, account_id: acct.id },
+    ]);
+  });
+
+  it('retires the legacy row when one email appears in two mbox files of the export', async () => {
+    const acct = account('two-files');
+    const { thrid, threadKey } = nextThread();
+    await recordLegacy(acct, 'two-files', threadKey);
+    const dir = await mkdtemp(path.join(tmpdir(), 'portos-gmail-identity-'));
+    tempDirs.push(dir);
+    await writeFile(path.join(dir, 'Inbox.mbox'), mboxMessage('two-files', { thrid }));
+    await writeFile(path.join(dir, 'Important.mbox'), mboxMessage('two-files', { thrid }));
+
+    await importGmailMbox({ path: dir });
+    expect(await gmailRowsForAccountOrIds(acct, ['two-files'])).toEqual([{ dedupe_key: `gmail:${messageId('two-files')}`, account_id: null }]);
+  });
+
+  it('never retires a legacy row whose imported replacement is not stored', async () => {
+    const acct = account('retire-unstored');
+    const { thrid, threadKey } = nextThread();
+    await recordLegacy(acct, 'retire-unstored', threadKey);
+    // As if the import stopped before this message's batch was written.
+    const [candidate] = parseMboxText(mboxMessage('retire-unstored', { thrid }));
+    const { retired } = await retireLegacyGmailDuplicates([{
+      dedupeKey: candidate.dedupeKey, kind: candidate.kind, title: candidate.title, happenedAt: candidate.happenedAt,
+      threadKey, rawThreadId: thrid, fromEmail: candidate.legacyGmailMatch.fromEmail,
+    }]);
+    expect(retired).toBe(0);
+    expect(await gmailRowsForAccountOrIds(acct, ['retire-unstored'])).toEqual([
+      { dedupe_key: `msg:${acct.id}:api-gmail-${nonce}-retire-unstored`, account_id: acct.id },
+    ]);
   });
 });

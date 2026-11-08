@@ -12,6 +12,7 @@ import {
   parseMboxText,
 } from './gmailMboxImport.js';
 import { cleanMessageId } from '../lib/emailMessageId.js';
+import { gmailConversationThreadKey } from '../lib/gmailThreadKey.js';
 
 describe('gmailMboxImport — pure helpers', () => {
   describe('decodeMimeWords', () => {
@@ -140,6 +141,21 @@ describe('gmailMboxImport — mboxMessageToCandidate', () => {
     });
     expect(c.metadata).toMatchObject({ messageId: 'abc@mail.gmail.com', threadId: '99887766', direction: 'received' });
     expect(c.metadata.labels).toEqual(['Inbox', 'Important']);
+  });
+
+  it('derives the live-sync thread key from a 64-bit X-GM-THRID without losing precision', () => {
+    // 1784257377736189945 is past 2^53, so a Number conversion would hash the wrong hex id.
+    const lines = [...headerLines.filter((l) => !l.startsWith('X-GM-THRID')), 'X-GM-THRID: 1784257377736189945'];
+    const c = mboxMessageToCandidate(lines, { selfEmails: ['me@gmail.com'] });
+    expect(c.legacyGmailMatch).toEqual({ threadKey: gmailConversationThreadKey('18c2f4a1b3d5e7f9'), fromEmail: 'alice@example.com' });
+    expect(c.metadata.threadId).toBe('1784257377736189945');
+  });
+
+  it('offers no legacy match for a malformed X-GM-THRID or a message without a Message-ID', () => {
+    const malformed = [...headerLines.filter((l) => !l.startsWith('X-GM-THRID')), 'X-GM-THRID: 18c2f4a1b3d5e7f9'];
+    expect(mboxMessageToCandidate(malformed).legacyGmailMatch).toBeUndefined();
+    const noId = headerLines.filter((l) => !l.startsWith('Message-ID'));
+    expect(mboxMessageToCandidate(noId).legacyGmailMatch).toBeUndefined();
   });
 
   it('excludes the self email from participants', () => {
