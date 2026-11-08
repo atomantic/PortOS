@@ -84,6 +84,12 @@ import { audioDurationToFrames } from './audioDuration.js';
 import { RUNWAY_SPECIAL_VIDEO_MODES } from '../../lib/runwaySpecialVideoModels.js';
 import { isMiniMaxH3SpeedProfileRequest } from '../../lib/minimaxH3SpeedProfiles.js';
 
+// A hosted renderer is picked with `backend`, not `modelId`; say so to an API caller who sends its name.
+const HOSTED_VIDEO_BACKENDS = ['grok', 'fal', 'reactor', 'runway', 'gemini'];
+export const unknownVideoModelMessage = (modelId) => (HOSTED_VIDEO_BACKENDS.includes(modelId)
+  ? `Unknown modelId: ${modelId}. ${modelId} is a renderer: send backend: "${modelId}" instead of modelId`
+  : `Unknown modelId: ${modelId}`);
+
 /** Hosted lanes cannot consume the generic reference inputs used by local models, except Runway's own image picks (hostedSubmission.js). */
 export function hostedReferenceInputsError({ backend, body, uploads = {} }) {
   if (backend === VIDEO_GEN_MODE.LOCAL
@@ -155,7 +161,7 @@ export async function validateVideoRetryParams(params = {}) {
   await validateA2vLoraStages({ strengths: params.a2vLoraStageStrengths, model,
     mode: params.mode, hasLoras: params.loras?.length > 0 });
   if (!model) {
-    throw new ServerError(`Unknown modelId: ${modelId}`, { status: 400, code: 'VIDEO_GEN_UNKNOWN_MODEL' });
+    throw new ServerError(unknownVideoModelMessage(modelId), { status: 400, code: 'VIDEO_GEN_UNKNOWN_MODEL' });
   }
   if (!isHardwareCompatible(model.hardwareCompatibility)) {
     throw new ServerError(
@@ -444,7 +450,7 @@ export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys 
   if (body.modelId !== undefined && !effectiveModel) {
     await cleanupMultipartTemp(uploads);
     throw new ServerError(
-      `Unknown modelId: ${body.modelId}`,
+      unknownVideoModelMessage(body.modelId),
       { status: 400, code: 'VIDEO_GEN_UNKNOWN_MODEL' },
     );
   }

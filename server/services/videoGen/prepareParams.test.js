@@ -78,6 +78,7 @@ import {
   validateVideoRetryParams,
   withStagedRollback,
   cleanupMultipartTemp,
+  unknownVideoModelMessage,
 } from './prepareParams.js';
 
 // Field names the route owns Zod schemas for; the service only needs the keys
@@ -1031,5 +1032,12 @@ describe('LTX 2.5 reference sheet admission', () => {
   it('rejects a 2.3 model for the 2.5 adapter', async () => {
     listVideoModels.mockReturnValue([{ id: 'ltx2_unified', name: 'LTX 2.3', runtime: 'ltx2' }]);
     await expect(prepare({ ...request, modelId: 'ltx2_unified' })).rejects.toMatchObject({ code: 'IC_LORA_REQUIRES_LTX2' });
+  });
+});
+
+describe('unknownVideoModelMessage', () => {
+  it('points an API caller who names a hosted renderer at backend', () => {
+    expect(unknownVideoModelMessage('grok')).toBe('Unknown modelId: grok. grok is a renderer: send backend: "grok" instead of modelId');
+    expect(unknownVideoModelMessage('ltx-typo')).toBe('Unknown modelId: ltx-typo');
   });
 });

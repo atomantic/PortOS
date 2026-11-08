@@ -36,7 +36,7 @@ export async function previewVideoPrompt({ previewUploads = [], ...body }) {
   // FableLoom scenes and non-Grok shots rebuild their prompt on their own surfaces.
   if (body.fableLoom || (body.musicVideo && ((body.backend && body.backend !== VIDEO_GEN_MODE.GROK)
     || !body.musicVideo.compose || !body.musicVideo.promptAsTyped))) {
-    throw new ServerError('Preview a music video shot or FableLoom scene from its own card', { status: 400, code: 'VALIDATION_ERROR' });
+    throw new ServerError('Prompt preview covers only a Grok music video shot sent as its card sends it (musicVideo.compose and musicVideo.promptAsTyped); preview other shots and FableLoom scenes from their own card', { status: 400, code: 'VALIDATION_ERROR' });
   }
   if (body.musicVideo) {
     const { applyProjectRenderPool } = await import('../musicVideo/renderPool.js');
