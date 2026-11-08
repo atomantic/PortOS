@@ -62,7 +62,7 @@ export function greyboxInfrastructurePromptLines(scene, shot = null) {
   }
   if (parts('sidewalk').length) lines.push('Sidewalks only where the greybox shows them, each with its curb and grass strip.');
   else if (parts('road').length) lines.push('This street has no sidewalks: the lawns or shoulders run to the road edge.');
-  if (parts('door').length) lines.push('Houses face the street: each front door, porch or stoop and front walk is on the side the greybox shows it.');
+  if (parts('door').length) lines.push('Houses face the street: each front door, porch or stoop and front walk is on the side the greybox shows it, and no bush, tree or planting sits on a walk or blocks a door.');
   if (parts('driveway').length) lines.push('Each house keeps its driveway to the road where the greybox shows it, with a curb cut where there is a curb.');
   const derelict = [...new Set(parts('derelict').map((part) => part.label || part.id))];
   if (derelict.length) lines.push(`Derelict: ${derelict.join(', ')}. Only ${derelict.length === 1 ? 'this looks' : 'these look'} abandoned (boarded or broken windows, overgrown yard); every other building is lived-in and kept up.`);
