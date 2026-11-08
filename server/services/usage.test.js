@@ -19,7 +19,12 @@ tryReadFile: vi.fn().mockResolvedValue(null),
   readJSONFile: vi.fn()
 }));
 
+vi.mock('./userTimezone.js', () => ({
+  getUserTimezone: vi.fn().mockResolvedValue('UTC')
+}));
+
 import { atomicWrite, readJSONFile } from '../lib/fileUtils.js';
+import { getUserTimezone } from './userTimezone.js';
 import {
   applyHistoricalUsageCorrections,
   buildUsageDigest,
@@ -251,6 +256,25 @@ describe('usage.js — summary', () => {
   });
 
   describe('time-dimensioned capture', () => {
+    it('buckets the hourly histograms by the configured timezone, not UTC', async () => {
+      // 16:30 UTC is 09:30 in America/Los_Angeles (PDT, UTC-7).
+      vi.useFakeTimers();
+      vi.setSystemTime(Date.parse('2026-07-15T16:30:00Z'));
+      getUserTimezone.mockResolvedValueOnce('America/Los_Angeles');
+      try {
+        readJSONFile.mockResolvedValueOnce(makeUsage({}));
+        await loadUsage();
+        await recordSession('claude-code', 'Claude Code', 'opus');
+
+        expect(getUsage().hourlyActivity[9]).toBe(1);
+        expect(getUsage().hourlyActivity[16]).toBe(0);
+        const day = getUsage().dailyActivity['2026-07-15'];
+        expect(day.hourlyActivity[9]).toBe(1);
+        expect(day.hourlyActivity[16]).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
     it('advances the usage revision for two writes at the same clock time', async () => {
       readJSONFile.mockResolvedValueOnce(makeUsage({}));
       await loadUsage();
