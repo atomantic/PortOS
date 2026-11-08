@@ -263,7 +263,7 @@ export default function ScheduleEditor({ node, allNodes, timezone, onClose, onSa
           </div>
         )}
 
-        {node.kind === 'job' && form.mode === 'interval' && form.scheduledTime && scheduleAnchorKindForInterval(form.interval) && (
+        {node.kind === 'job' && form.mode === 'interval' && form.scheduledTime && !form.weekdaysOnly && scheduleAnchorKindForInterval(form.interval) && (
           <div className="text-xs text-gray-400">
             <span className="block">Run on</span>
             <div className="mt-1.5 [&>select]:w-full">

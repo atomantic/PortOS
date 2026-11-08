@@ -236,6 +236,11 @@ describe('anchored multi-day jobs (#15395)', () => {
     expect(await nextFire(monthly(PST('2027-02-28T03:01:00')))).toBe(PDT('2027-03-31T03:00:00'));
   });
 
+  it('a weekdaysOnly job ignores the anchor, as the weekday cron it arms does', async () => {
+    const job = anchored(PDT('2026-10-23T03:01:00'), { weekdaysOnly: true, scheduleAnchor: 6 }); // Saturday anchor
+    expect(await nextFire(job)).toBe(PDT('2026-10-26T03:00:00')); // next weekday 03:00
+  });
+
   it('an anchor that does not fit the cadence is ignored, keeping the nearest-slot behavior', async () => {
     const lastRun = PDT('2026-10-26T20:00:00');
     expect(await nextFire(anchored(lastRun, { scheduleAnchor: 9 }))).toBe(PST('2026-11-03T03:00:00'));

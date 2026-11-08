@@ -44,13 +44,15 @@ export function nearestLocalTime(targetMs, hours, minutes, timezone, { windowMs 
 
 /**
  * Which kind of anchor a job can carry: `weekday`, `monthDay`, or null when the
- * job has no multi-day clock cadence (cron mode, sub-weekly/custom/on-demand
- * interval, or no valid `scheduledTime`).
+ * job has no multi-day clock cadence (cron mode, weekdaysOnly, sub-weekly/custom/
+ * on-demand interval, or no valid `scheduledTime`).
  * @param {Object} job
  * @returns {'weekday'|'monthDay'|null}
  */
 export function scheduleAnchorKind(job) {
   if (job?.cronExpression || job?.cronSchedule) return null
+  // A weekdaysOnly job fires on a synthesized every-weekday cron (clockCronExpression), so it has no single day to keep.
+  if (job?.weekdaysOnly) return null
   if (!Number.isFinite(job?.intervalMs)) return null
   if (!HHMM.test(String(job?.scheduledTime ?? ''))) return null
   return scheduleAnchorKindForInterval(job?.interval)
