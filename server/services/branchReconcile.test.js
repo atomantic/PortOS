@@ -137,7 +137,7 @@ import {
   SHIPPED_CLAIM_IDLE_MS, STALE_CLAIM_IDLE_MS, SUPERSEDED_UNMANAGED_IDLE_MS,
   isMalformedClaimBranch,
   listRemoteHeads, upstreamBranchName, parseRemoteHeads, partitionRemoteOrphans, reapOrphanedRemotes,
-  reapSupersededBranches, buildActiveOwnerIds, readOpenPrForBranch
+  reapSupersededBranches, buildActiveOwnerIds, readBranchUnshipped
 } from './branchReconcile.js';
 import * as git from './git.js';
 import * as wt from './worktreeManager.js';
@@ -737,21 +737,26 @@ describe('buildActiveOwnerIds', () => {
   });
 });
 
-// A recheck releases an unshipped review hold only on a definite "no open PR".
-describe('readOpenPrForBranch', () => {
-  it('asks the forge for the exact head and never reports "no PR" when it cannot answer', async () => {
+// A review hold is released only on a definite "no open or closed-unmerged PR".
+describe('readBranchUnshipped', () => {
+  const read = () => readBranchUnshipped('/repo', 'cos/task-x/agent-1');
+  it('asks the forge for every PR at the exact head and never reports "unshipped" when it cannot answer', async () => {
     execGh.mockResolvedValueOnce('[]');
-    expect(await readOpenPrForBranch('/repo', 'cos/task-x/agent-1')).toBe(false);
-    expect(execGh.mock.lastCall[0]).toEqual(['pr', 'list', '--repo', 'github.com/atomantic/PortOS', '--state', 'open', '--head', 'cos/task-x/agent-1', '--json', 'number']);
+    expect(await read()).toBe(true);
+    expect(execGh.mock.lastCall[0]).toEqual(['pr', 'list', '--repo', 'github.com/atomantic/PortOS', '--state', 'all', '--head', 'cos/task-x/agent-1', '--json', 'state']);
     expect(execGh.mock.lastCall[2]).toMatchObject({ env: PINNED_ENV });
-    execGh.mockResolvedValueOnce('[{"number":7}]');
-    expect(await readOpenPrForBranch('/repo', 'cos/task-x/agent-1')).toBe(true);
+    execGh.mockResolvedValueOnce('[{"state":"MERGED"}]');
+    expect(await read()).toBe(true);
+    execGh.mockResolvedValueOnce('[{"state":"OPEN"}]');
+    expect(await read()).toBe(false);
+    execGh.mockResolvedValueOnce('[{"state":"MERGED"},{"state":"CLOSED"}]');
+    expect(await read()).toBe(false);
     execGh.mockRejectedValueOnce(new Error('gh failed'));
-    expect(await readOpenPrForBranch('/repo', 'cos/task-x/agent-1')).toBeNull();
+    expect(await read()).toBeNull();
     execGh.mockResolvedValueOnce('not json');
-    expect(await readOpenPrForBranch('/repo', 'cos/task-x/agent-1')).toBeNull();
+    expect(await read()).toBeNull();
     getOriginInfo.mockResolvedValueOnce({ hasOrigin: true, isGithub: false, host: 'gitlab.example.com', fullName: 'o/r' });
-    expect(await readOpenPrForBranch('/repo', 'cos/task-x/agent-1')).toBeNull();
+    expect(await read()).toBeNull();
   });
 });
 
