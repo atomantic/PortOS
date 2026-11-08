@@ -149,7 +149,9 @@ export function nextIntervalJobFireTime(job, timezone) {
   if (match) {
     const hours = Number(match[1])
     const minutes = Number(match[2])
-    const window = Math.min(13 * HOUR, job.intervalMs / 2)
+    // 13h covers the 25h fall-back gap between local HH:MM instants. Only an
+    // interval shorter than that narrows it, so the search still starts after lastRun.
+    const window = job.intervalMs > 13 * HOUR ? 13 * HOUR : job.intervalMs / 2
     const first = nextLocalTime(nextDue - window, hours, minutes, timezone)
     const second = nextLocalTime(first + 60_000, hours, minutes, timezone)
     // DST nudging in nextLocalTime can move a candidate by up to an hour.

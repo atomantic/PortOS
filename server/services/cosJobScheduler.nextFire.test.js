@@ -148,6 +148,13 @@ describe('interval job + scheduledTime next fire (#15352)', () => {
     expect(next).toBe(PDT('2026-10-31T03:00:00'));
   });
 
+  it('a one-day interval job (not the daily cron path) also gets the full DST window', async () => {
+    // 03:00 on Sat Oct 31 (PDT) and Sun Nov 1 (PST) are 25h apart; due Sat 15:15 PDT is
+    // 12h15m after the first, so a half-interval (12h) window would pick Sunday.
+    const job = { id: 'j', interval: 'custom', intervalMs: DAY, scheduledTime: '03:00', lastRun: new Date(PDT('2026-10-30T15:15:00')).toISOString() };
+    expect(await nextFire(job)).toBe(PDT('2026-10-31T03:00:00'));
+  });
+
   it('a job that has never run projects now, not a 1970 instant, and still arms an immediate timer', async () => {
     const now = PDT('2026-10-26T00:00:00');
     vi.useFakeTimers({ toFake: ['Date'] });
