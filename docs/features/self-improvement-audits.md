@@ -282,12 +282,12 @@ model and effort on the same Schedule card. The server-side vocabulary is
 
 Every audit carries one shared calibration rule: weigh a candidate by how
 likely it is under the app's real deployment model and drop what that model
-rules out. For a single-user install that removes multi-user edit races and
-tenant isolation, while one person's own concurrency stays in scope: repeated
+rules out. A single-user install drops multi-user edit races; a multi-user app
+keeps them. One person's own concurrency stays in scope for every app: repeated
 submits, two tabs or devices, background and scheduled jobs beside the UI,
 parallel jobs on shared state, sync with the user's other machines, and a
 restart mid-operation. A race finding names both actors and how they overlap.
 
 The model comes from **Edit App > Workflow > Deployment model for quality
 audits** (`deploymentModel` on the app record) when set, otherwise from the
-repository's own `AGENTS.md`, README and deployment config.
+app's requirements, PRD, spec, `AGENTS.md`, README and deployment config.

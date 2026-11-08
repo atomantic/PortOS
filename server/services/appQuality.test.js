@@ -35,7 +35,7 @@ describe('scheduled audit measurement workflow', () => {
     expect(stated).toContain('> Public SaaS, many tenants.\n> Two regions.');
     expect(stated).toContain('the same action fired twice');
     const fallback = auditQualityInstructions('data-integrity', { deploymentModel: '   ' });
-    expect(fallback).toContain("Take the deployment model from the repository's own AGENTS.md");
+    expect(fallback).toContain("Take the deployment model from the app's own requirements: its PRD, spec");
     expect(auditQualityInstructions('security')).toContain('Reachability check');
   });
 

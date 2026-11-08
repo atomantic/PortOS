@@ -780,7 +780,7 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm focus:border-port-accent focus:outline-hidden"
                 />
                 <p className="mt-1 text-xs text-gray-500">
-                  Audits use this to skip conditions that can't happen here (like two people editing at once in a single-user app) while still hunting races one person can cause. Leave empty to use the repo's own docs.
+                  Audits judge which bugs are realistic from this: a single-user app skips multi-user edit races, a multi-user app keeps them. Leave empty to use the repo's requirements, PRD or spec.
                 </p>
               </div>
             </div>

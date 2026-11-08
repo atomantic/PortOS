@@ -57,8 +57,8 @@ const MAX_DEPLOYMENT_MODEL_CHARS = 2000;
 function deploymentModelSource(app) {
   const stated = typeof app?.deploymentModel === 'string' ? app.deploymentModel.trim().slice(0, MAX_DEPLOYMENT_MODEL_CHARS) : '';
   return stated
-    ? `The app's owner states its deployment model, and it is binding:\n\n> ${stated.replace(/\r?\n/g, '\n> ')}\n\nWhere the repository's own docs are more specific, they refine it.`
-    : "Take the deployment model from the repository's own AGENTS.md, README and deployment config (who uses it, how many people share one install, which processes, schedulers and syncs run beside the user). If they do not say, infer it from the code and name the assumption in your report.";
+    ? `The app's owner states its deployment model, and it is binding:\n\n> ${stated.replace(/\r?\n/g, '\n> ')}\n\nWhere the repository's requirements, PRD, spec or AGENTS.md are more specific, they refine it.`
+    : "Take the deployment model from the app's own requirements: its PRD, spec, PLAN or design docs, AGENTS.md, README and deployment config (who uses it, whether several people share one install or record, which processes, schedulers and syncs run beside the user). If none says, infer it from the code and name the assumption in your report.";
 }
 
 /**
@@ -70,7 +70,7 @@ function reachabilityCheck(app) {
 
 ${deploymentModelSource(app)}
 
-Weigh every candidate by how likely it is to happen under that model, and rank by likelihood times impact. Drop a finding that needs a condition the model rules out — for a single-user install, that means two different people editing the same record, tenant isolation, or horizontal-scaling races — and do not add machinery against it. One person still produces concurrency, so these stay in scope whatever the model: the same action fired twice (double click, retry after a timeout), two tabs or devices on one record, background or scheduled jobs running while the user works, parallel jobs sharing a file, record or external resource, sync with the user's other machines, and a restart in the middle of an operation. A race finding names both actors and how they come to overlap in real use; if you cannot name a realistic pair, it is not a finding.`;
+Weigh every candidate by how likely it is to happen under that model, and rank by likelihood times impact. Drop a finding that needs a condition the model rules out, and do not add machinery against it; keep every condition the model allows. For example, a single-user install rules out two different people editing the same record, while a multi-user app keeps those races, permission boundaries and tenant isolation in scope. Even one person produces concurrency, so these stay in scope for every model: the same action fired twice (double click, retry after a timeout), two tabs or devices on one record, background or scheduled jobs running while the user works, parallel jobs sharing a file, record or external resource, sync with the user's other machines, and a restart in the middle of an operation. A race finding names both actors and how they come to overlap in real use; if you cannot name a realistic pair, it is not a finding.`;
 }
 
 export function auditQualityInstructions(taskType, app) {

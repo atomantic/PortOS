@@ -867,9 +867,9 @@ Repository: {repoPath}
 
 Inventory the user-facing workflows the server owns: its routes and their
 handlers, background and scheduled jobs, imports and syncs, and any CLI the
-project documents. For each, read what it promises (route name, docs, tests,
-the UI control that calls it), then trace the code that keeps the promise and
-look for where it does not.
+project documents. For each, read what it promises (the requirements, PRD,
+spec or design docs, route name, tests, the UI control that calls it), then
+trace the code that keeps the promise and look for where it does not.
 
 Run the project's own tests for the slice you review. When the app is running
 and a read-only request settles a question, make it; never write to the live
