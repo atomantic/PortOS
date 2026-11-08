@@ -8,18 +8,18 @@ vi.mock('../../services/apiImageVideo.js', () => ({ previewImagePrompt: vi.fn(as
 const scene = { sceneId: 's1', referenceImageId: 'start.png', endImageId: 'end.png', framePrompt: 'Door opens', endFramePrompt: 'Door shut', takes: [] };
 const frames = (props) => render(<SceneFrames scene={scene} index={0} endFrames onEditLocal={vi.fn()} onSave={vi.fn()} {...props} />);
 
-it('edits and saves each frame prompt on blur', () => {
+// Catches a separate start frame prompt box coming back beside the shot prompt.
+it('renders the start frame from the shot prompt and edits only the end frame prompt', async () => {
   const onSave = vi.fn();
   function Harness() {
     const [draft, setDraft] = useState(scene);
-    return <SceneFrames scene={draft} index={0} endFrames onSave={onSave}
+    return <SceneFrames project={{ id: 'mv-example' }} scene={draft} index={0} endFrames onSave={onSave}
       onEditLocal={(_id, patch) => setDraft(current => ({ ...current, ...patch }))} />;
   }
   render(<Harness />);
-  const start = screen.getByRole('textbox', { name: 'Start frame prompt' });
-  fireEvent.change(start, { target: { value: 'The door opens\ninto a garden' } });
-  fireEvent.blur(start);
-  expect(onSave).toHaveBeenLastCalledWith('s1', { framePrompt: 'The door opens\ninto a garden' });
+  expect(screen.queryByRole('textbox', { name: /Start frame prompt|Still prompt/ })).toBeNull();
+  fireEvent.click((await screen.findAllByRole('button', { name: 'Show full prompt' }))[0]);
+  expect(screen.getByText(/^Door opens/)).toBeTruthy();
 
   const end = screen.getByRole('textbox', { name: 'End frame prompt' });
   fireEvent.change(end, { target: { value: '' } });
@@ -167,7 +167,7 @@ it('shows the selected greybox capture, inspectable figure additions and a missi
   expect(screen.getByText('Singer stands at the "rail" mark, waving')).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: 'Show full prompt' }));
   expect(screen.getByText(/Door opens[\s\S]*Singer stands/)).toBeTruthy();
-  expect(screen.getByRole('textbox', { name: 'Still prompt' }).value).toBe('Door opens');
+  expect(screen.getByRole('checkbox', { name: 'Greybox layout' }).checked).toBe(true);
   rerender(<SceneFrames {...props} greyboxPlaces={{ 'cat-rink': { ...greyboxPlaces['cat-rink'], ingredient: { type: 'place', payload: { greybox: { shots: [] } } } } }} />);
   expect(screen.getByRole('alert').textContent).toMatch(/removed/);
   expect(screen.getByRole('button', { name: 'New frame take' }).disabled).toBe(true);
@@ -180,6 +180,9 @@ it('waits for a greybox selection to save and keeps the previous selection on fa
   const onEditLocal = vi.fn();
   const project = { id: 'mv-example', concept: { subjects: [{ id: 'rink', kind: 'place', ingredientId: 'cat-rink', name: 'Example Rink' }] } };
   render(<SceneFrames project={project} scene={scene} index={0} onEditLocal={onEditLocal} onSave={onSave} />);
+  // The greybox card stays folded away until its checkbox under References opens it.
+  expect(screen.queryByRole('combobox', { name: 'Set' })).toBeNull();
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Greybox layout' }));
   fireEvent.change(screen.getByRole('combobox', { name: 'Set' }), { target: { value: 'rink' } });
   expect(onSave).toHaveBeenCalledWith('s1', { setReference: { subjectId: 'rink' } });
   expect(onEditLocal).not.toHaveBeenCalled();
@@ -188,6 +191,17 @@ it('waits for a greybox selection to save and keeps the previous selection on fa
   await waitFor(() => expect(screen.getByRole('alert').textContent).toMatch(/not saved/));
   expect(onEditLocal).not.toHaveBeenCalled();
   expect(screen.getByRole('combobox', { name: 'Set' }).value).toBe('');
+});
+
+// Catches the Greybox layout checkbox hiding a greybox that still reaches the renders.
+it('turns a shot\'s greybox reference off from its checkbox', async () => {
+  const onSave = vi.fn(async () => true);
+  const project = { id: 'mv-example', concept: { subjects: [{ id: 'rink', kind: 'place', ingredientId: 'cat-rink', name: 'Example Rink' }] } };
+  render(<SceneFrames project={project} scene={{ ...scene, setReference: { subjectId: 'rink' } }} index={0} onEditLocal={vi.fn()} onSave={onSave} />);
+  expect(screen.getByRole('combobox', { name: 'Set' }).value).toBe('rink');
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Greybox layout' }));
+  expect(onSave).toHaveBeenCalledWith('s1', { setReference: null });
+  await waitFor(() => expect(screen.getByRole('checkbox', { name: 'Greybox layout' }).disabled).toBe(false));
 });
 
 it('Use end frame off hides the end frame and keeps its selection for switching back on', () => {

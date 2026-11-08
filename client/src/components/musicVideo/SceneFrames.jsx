@@ -11,7 +11,6 @@ import SceneTakeStrip from './SceneTakeStrip.jsx';
 import SceneCameoLink from './SceneCameoLink.jsx';
 import SceneFrameReferences from './SceneFrameReferences.jsx';
 import SceneResearchSeed from './SceneResearchSeed.jsx';
-import { shotSheetDrivesPrompt } from '../../../../server/lib/musicVideoShotSheet.js';
 
 const PRIMARY_BUTTON = 'flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] pointer-fine:sm:min-h-0 whitespace-nowrap';
 const SECONDARY_BUTTON = 'flex items-center gap-1 bg-port-bg border border-port-border hover:bg-port-border/40 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] pointer-fine:sm:min-h-0 whitespace-nowrap';
@@ -37,22 +36,7 @@ function FrameTile({ label, imageId, empty, onOpen, openLabel }) {
   );
 }
 
-// The frame prompt and the Clip tab's motion prompt read alike, so each box names the model it feeds.
-const FRAME_PROMPT_HELP = 'What this still image shows. The image model renders the frame from this text plus the additions listed under it. How the shot moves is the motion prompt on the Clip tab.';
-const GENERAL_PROMPT_HELP = 'Anything the shot details don\'t cover. The still\'s prompt is this text plus each shot detail, listed under it as its own part; how the shot moves is the motion prompt on the Clip tab.';
-
-function FramePrompt({ id, label, value, help = FRAME_PROMPT_HELP, ...props }) {
-  return (
-    <>
-      <div className="flex items-center gap-1 text-[11px] text-port-text-muted">
-        <label htmlFor={id}>{label}</label>
-        <InfoTooltip label={`About the ${label.toLowerCase()}`} placement="below" align="start" width={280}>{help}</InfoTooltip>
-      </div>
-      <AutoSizeTextarea id={id} value={value} rows={3} {...props}
-        className="block w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm" />
-    </>
-  );
-}
+const END_PROMPT_HELP = 'Where the shot ends. The image model renders the end frame from this text plus the additions listed under it; the start frame renders from the shot prompt.';
 
 const REFERENCE_LABELS = { '': 'Prompt only', start: 'Start frame', end: 'End frame' };
 // Both render from the current prompt and Casting look; only Re-render replaces the selected frame (takes.js `replaceSelection`).
@@ -61,15 +45,17 @@ const RERENDER_HINT = 'Renders this frame again from the current Casting look an
 
 /**
  * A shot's frames: the still its clip starts from and, for footage, the
- * optional one it ends on (#11173). Each frame shows its prompt and its own
- * Render right under the picture, and can render from the start or end frame
+ * optional one it ends on (#11173). The start frame renders from the shot
+ * prompt (edited above the tabs) and the end frame from its own prompt; each
+ * shows what it sends and its own Render right under the picture, and can render from the start or end frame
  * as an image reference (`onGenerateFrame` / `onGenerateEndFrame` take
  * `{ referenceImageId }`, null for prompt only). Refine edits a frame by a
  * short instruction (`{ referenceImageId, refine }`), and Swap puts one of the
  * video's unused stills on it. Each frame's own takes sit under it as a grid,
  * so both frames' actions and takes show at once; tapping a frame opens it full size.
  * With both frames set, `onSwapFrames` trades them (prompts included) in one tap.
- * The References row above them picks the character and set references every frame render sends;
+ * The References row above them picks the character and set references every frame render sends,
+ * and its Greybox layout checkbox opens (or turns off) the shot's greybox set/camera reference;
  * Research and seed above it imports real photos of the shot's subject that lead those references.
  * With `endFrameToggle` (footage), Use end frame switches the end frame off (`scene.endFrameOff`):
  * its column hides and clips skip it, keeping its selection, prompt and takes for switching back on.
@@ -81,11 +67,19 @@ export default function SceneFrames({
 }) {
   const endFrameOff = endFrameToggle && scene.endFrameOff === true;
   const endFrames = endFramesAllowed && !endFrameOff;
-  // A detail-built shot: its frame prompt is the still's general prompt and the shot details are composed in.
-  const fromSheet = shotSheetDrivesPrompt(scene);
   const setEndFrameOn = (on) => { const patch = { endFrameOff: on ? null : true }; onEditLocal(scene.sceneId, patch); onSave(scene.sceneId, patch); };
   const greybox = musicVideoGreyboxReference(project, scene, greyboxPlaces);
   const [referenceSaving, setReferenceSaving] = useState(false);
+  // The greybox card stays folded away behind its checkbox unless the shot uses a greybox.
+  const hasGreyboxSets = Boolean(scene.setReference) || (project?.concept?.subjects || []).some((s) => s.kind === 'place' && s.ingredientId);
+  const [greyboxOpen, setGreyboxOpen] = useState(false);
+  const greyboxOn = greyboxOpen || Boolean(scene.setReference);
+  const markGreyboxSaving = (saving) => { setReferenceSaving(saving); onGreyboxSaving?.(saving); };
+  const saveGreybox = async (setReference) => {
+    const saved = await onSave(scene.sceneId, { setReference });
+    if (saved !== false) onEditLocal(scene.sceneId, { setReference });
+    return saved;
+  };
   const greyboxBlocked = greyboxSaving || referenceSaving || Boolean(greybox?.error);
   const [keepStillAsEnd, setKeepStillAsEnd] = useState(false);
   // Which frame each render starts from: the start frame renders from its prompt, the end frame from the start frame.
@@ -100,7 +94,6 @@ export default function SceneFrames({
   const column = (which) => {
     const start = which === 'start';
     const label = start ? (endFrames ? 'Start' : 'Still') : 'End';
-    const field = start ? 'framePrompt' : 'endFramePrompt';
     const generating = start ? generatingFrame : generatingEndFrame;
     const imageId = frames[which];
     const ref = refOf(which);
@@ -126,13 +119,19 @@ export default function SceneFrames({
       <div key={which} className="min-w-0 space-y-1.5">
         <FrameTile label={label} imageId={imageId} empty={start ? 'No still yet' : 'Optional'} onOpen={() => onOpenPreview?.(`image:${imageId}`)}
           openLabel={`View scene ${index + 1} ${start ? 'reference' : 'end'} frame full size`} />
-        <FramePrompt id={id(`${which}-prompt`)} label={start ? (fromSheet ? 'General still prompt' : endFrames ? 'Start frame prompt' : 'Still prompt') : 'End frame prompt'} value={scene[field] || ''}
-          help={start && fromSheet ? GENERAL_PROMPT_HELP : FRAME_PROMPT_HELP}
-          onChange={(e) => onEditLocal(scene.sceneId, { [field]: e.target.value })}
-          onBlur={(e) => onSave(scene.sceneId, { [field]: e.target.value || null })}
-          placeholder={start ? (fromSheet ? 'Anything the shot details don\'t cover' : 'What the still shows (empty: uses the motion prompt)') : 'Where the shot ends, e.g. her head thrown back, eyes white'} />
-        {/* A greybox, a storyboard panel or the shot details add to the still's prompt, so its full input shows here. */}
-        {project && (greybox?.reference || scene.panelId || (start && fromSheet)) && <SceneFramePromptPreview project={project} scene={scene} castMedia={castMedia} greybox={greybox} slot={which} referenceImageId={ref ? frames[ref] : null} />}
+        {!start && <>
+          <div className="flex items-center gap-1 text-[11px] text-port-text-muted">
+            <label htmlFor={id('end-prompt')}>End frame prompt</label>
+            <InfoTooltip label="About the end frame prompt" placement="below" align="start" width={280}>{END_PROMPT_HELP}</InfoTooltip>
+          </div>
+          <AutoSizeTextarea id={id('end-prompt')} value={scene.endFramePrompt || ''} rows={3}
+            onChange={(e) => onEditLocal(scene.sceneId, { endFramePrompt: e.target.value })}
+            onBlur={(e) => onSave(scene.sceneId, { endFramePrompt: e.target.value || null })}
+            placeholder="Where the shot ends, e.g. her head thrown back, eyes white"
+            className="block w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm" />
+        </>}
+        {/* What the frame sends: the shot prompt (or end prompt) plus every addition, as chips. */}
+        {project && <SceneFramePromptPreview project={project} scene={scene} castMedia={castMedia} greybox={greybox} slot={which} referenceImageId={ref ? frames[ref] : null} />}
         {project && <SceneFrameReferenceLimitNotice project={project} scene={scene} castMedia={castMedia} greybox={greybox} sourceImageId={ref ? frames[ref] : null} />}
         <div className="flex flex-wrap items-center gap-2">
           <button type="button" onClick={render} disabled={greyboxBlocked || !!generating || needsPrompt} className={PRIMARY_BUTTON}
@@ -243,11 +242,20 @@ export default function SceneFrames({
           </label>
         )}
       </div>
-      <SceneGreyboxReference project={project} scene={scene} places={greyboxPlaces} onSaving={(saving) => { setReferenceSaving(saving); onGreyboxSaving?.(saving); }}
-        onChange={async (setReference) => { const saved = await onSave(scene.sceneId, { setReference }); if (saved !== false) onEditLocal(scene.sceneId, { setReference }); return saved; }} />
       <SceneCameoLink project={project} scene={scene} onApplyCameos={onApplyCameos} onEditLocal={onEditLocal} onSave={onSave} />
       {project && <SceneResearchSeed project={project} scene={scene} onEditLocal={onEditLocal} onSave={onSave} />}
       <SceneFrameReferences project={project} scene={scene} castMedia={castMedia} onReloadCastMedia={onReloadCastMedia} greybox={greybox} onEditLocal={onEditLocal} onSave={onSave} />
+      {hasGreyboxSets && (
+        <label htmlFor={id('greybox')} className="flex items-center gap-1 text-xs text-port-text-muted min-h-[44px] pointer-fine:sm:min-h-0"
+          title={scene.setReference ? 'Off removes this shot\'s greybox set and camera reference' : 'Pick a greybox set and camera to send as a layout reference'}>
+          <input id={id('greybox')} type="checkbox" checked={greyboxOn} disabled={greyboxSaving || referenceSaving}
+            onChange={(e) => { setGreyboxOpen(e.target.checked); if (!e.target.checked && scene.setReference) { markGreyboxSaving(true); Promise.resolve(saveGreybox(null)).finally(() => markGreyboxSaving(false)); } }} />
+          Greybox layout
+        </label>
+      )}
+      {greyboxOn && (
+        <SceneGreyboxReference project={project} scene={scene} places={greyboxPlaces} onSaving={markGreyboxSaving} onChange={saveGreybox} />
+      )}
       {endFrames ? (
         <div role="group" aria-label="Start and end frames" className="grid gap-3 @sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
           {column('start')}

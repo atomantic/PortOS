@@ -218,7 +218,7 @@ describe('external-asset handoff', () => {
     expect(JSON.stringify(manifest)).not.toMatch(/imageModelId|example-model|videoSettings|\/Users\//);
     expect(manifest.visualSpec.references[0]).toMatchObject({ filename: 'ref-mood.png', condition: true });
     const [tagA, tagB] = manifest.scenes.map((s) => s.fileTag);
-    expect(manifest.scenes[0].framePrompt).toBe('lighthouse still, grainy 16mm, color palette #112233 #aabbcc; camera: locked-off wide shots');
+    expect(manifest.scenes[0].framePrompt).toBe('lighthouse still. a lighthouse at dusk, grainy 16mm, color palette #112233 #aabbcc; camera: locked-off wide shots');
     expect(manifest.scenes[0].referenceFiles).toEqual(['ref-mood.png']);
 
     // Reorder between export and import: the tag's order prefix is cosmetic.

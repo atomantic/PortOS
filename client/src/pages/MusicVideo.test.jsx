@@ -249,6 +249,7 @@ vi.mock('../services/apiImageVideo.js', () => ({
   getVideoGenModelContext: vi.fn(async () => null),
   generateVideo: vi.fn(),
   previewVideoPrompt: vi.fn(async () => ({ backend: 'local', shotPreviewUnavailable: true })),
+  previewImagePrompt: vi.fn(async (body) => ({ sentPrompt: body.prompt, promptAdditions: [] })),
   uploadGalleryVideo: vi.fn(),
   trimVideoStart: vi.fn(),
   listLorasFull: vi.fn(async () => [{
@@ -2673,7 +2674,7 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Generate frame$/ }));
     await waitFor(() => expect(generateImage).toHaveBeenCalledWith({
       // The director's text; the server composes the look onto it (lib/musicVideoShotPrompt.js).
-      prompt: 'harbor at dawn',
+      prompt: 'harbor at dawn. waves',
       // Frames are requested at the project's aspect (16:9 by default).
       width: 1536,
       height: 864,
@@ -2715,7 +2716,7 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     await showFrames();
     fireEvent.click(screen.getByRole('button', { name: /^New frame take$/ }));
     await waitFor(() => expect(generateImage).toHaveBeenCalledWith(expect.objectContaining({
-      prompt: 'harbor at dawn',
+      prompt: 'harbor at dawn. waves',
       referenceImageFiles: ['start.png', 'mood.png'],
       musicVideo: expect.objectContaining({ projectId: 'mv-spec', sceneId: 's1', compose: true, fromFrame: true }),
     }), { silent: true }));
@@ -3261,7 +3262,7 @@ describe('MusicVideo stage tabs (#9243)', () => {
       board: { 'Start the storyboard': (root) => root.queryByText('Start the storyboard') },
       // Shots: the scene board, its timing tools, the footage, then the composition over it.
       produce: { 'Add scene': (root) => root.queryByRole('button', { name: /Add scene/ }), 'AI Plan': (root) => root.queryByRole('button', { name: /AI Plan/ }),
-        'Motion prompt': (root) => root.queryByLabelText('Motion prompt'),
+        'Shot prompt': (root) => root.queryByLabelText('Shot prompt'),
         Footage: () => document.getElementById('mv-generation'), Typography: (root) => root.queryByText(/^Typography —/) },
       review: { 'Render final': (root) => root.queryByRole('button', { name: /^Render final$/ }), 'Render excerpt': (root) => root.queryByRole('button', { name: /Render excerpt/ }) },
     };

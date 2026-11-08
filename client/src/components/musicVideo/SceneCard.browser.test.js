@@ -64,7 +64,7 @@ describe.skipIf(!chrome)('shot editor render selector layout', () => {
   afterAll(() => fixture?.close());
 
   // Catches measuring a hidden frame as zero, clipping long prompts, and stale heights after edits or wrapping changes.
-  it('fits both frame prompts when opened, edited, and rewrapped', async () => {
+  it('fits the shot prompt and the end frame prompt when opened, edited, and rewrapped', async () => {
     const page = await fixture.browser.newPage({ viewport: { width: 1000, height: 900 } });
     const pageErrors = [];
     page.on('pageerror', error => pageErrors.push(error.message));
@@ -80,7 +80,7 @@ describe.skipIf(!chrome)('shot editor render selector layout', () => {
     try {
       await page.goto(`${fixture.origin}shot-editor-test?width=1000&frames=1`);
       await page.getByRole('group', { name: 'Show' }).getByRole('button', { name: 'Frames' }).click();
-      const start = page.getByRole('textbox', { name: 'Start frame prompt' });
+      const start = page.getByRole('textbox', { name: 'Shot prompt' });
       const end = page.getByRole('textbox', { name: 'End frame prompt' });
       const fit = async (locator) => {
         await locator.waitFor({ state: 'visible' });
@@ -119,7 +119,7 @@ describe.skipIf(!chrome)('shot editor render selector layout', () => {
 
       await page.goto(`${fixture.origin}shot-editor-test?width=1000`);
       await page.getByRole('group', { name: 'Show' }).getByRole('button', { name: 'Still' }).click();
-      expect(await fit(page.getByRole('textbox', { name: 'Still prompt' }))).toBeGreaterThan(320);
+      expect(await fit(page.getByRole('textbox', { name: 'Shot prompt' }))).toBeGreaterThan(320);
       expect(pageErrors).toEqual([]);
     } finally {
       await page.close();
