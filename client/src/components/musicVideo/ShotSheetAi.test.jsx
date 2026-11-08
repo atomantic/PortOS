@@ -60,6 +60,19 @@ describe('ShotSheetAi', () => {
     expect(onApply).toHaveBeenCalledWith('a', { prompt: 'My motion', framePrompt: null });
   });
 
+  // Catches tighten skipping shots whose sheet is not done, or leaving the old frame prompt to be joined back in.
+  it('tightens any listed shot and replaces its joined frame prompt on Apply', async () => {
+    proposeMusicVideoShotSheet.mockResolvedValue({ shots: [{ sceneId: 'a', prompt: 'Short' }] });
+    const onApply = vi.fn(async () => true);
+    const rows = [row('a', 'Shot 1', {}), row('b', 'Shot 2', { checked: true })];
+    render(<ShotSheetAi project={projectOf(rows)} disabled={false} onApply={onApply} rows={rows} />);
+    fireEvent.click(screen.getByRole('button', { name: /Tighten prompts \(2\)/ }));
+    await screen.findByLabelText('Shot 1 Shot prompt proposed');
+    expect(proposeMusicVideoShotSheet.mock.calls[0][1]).toMatchObject({ direction: 'tighten', sceneIds: ['a', 'b'] });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply 1 selected' }));
+    await waitFor(() => expect(onApply).toHaveBeenCalledWith('a', { prompt: 'Short', framePrompt: null }));
+  });
+
   // Catches a long video being sent in one request, or an earlier batch's work being lost when a later one fails.
   it('sends batches and keeps earlier results when a batch fails', async () => {
     const rows = Array.from({ length: 16 }, (_, at) => row(`s${at}`, `Shot ${at + 1}`, {}));

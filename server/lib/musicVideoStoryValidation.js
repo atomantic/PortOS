@@ -46,7 +46,7 @@ export const artGuideProposeSchema = z.object({
 // AI on the shot sheet (services/musicVideo/shotSheetProposals.js): a proposal for a batch of shots, never a save.
 export const shotSheetProposeSchema = z.object({
   providerId: text(256).min(1), model: text(256).optional(), effort: text(32).optional(), executionOptions: executionOptionsSchema.optional(),
-  direction: z.enum(['from-prompts', 'to-prompts', 'split']),
+  direction: z.enum(['from-prompts', 'to-prompts', 'split', 'tighten']),
   sceneIds: z.array(text(64).min(1)).min(1).max(SHOT_SHEET_PROPOSE_BATCH),
   instruction: text(4000).optional(), preview: z.boolean().optional(),
 }).strict();

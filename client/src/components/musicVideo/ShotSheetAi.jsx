@@ -59,7 +59,8 @@ function PromptReview({ item, scene, disabled, onEdit }) {
 /**
  * AI help for the shot sheet, only on request: fill a shot's empty columns from
  * its existing prompts, write its prompts from the sheet you edited, or split a
- * long frame prompt into columns and a general prompt so the still is built from the sheet. Works on the shots currently listed. Every result is a proposal you
+ * long frame prompt into columns and a general prompt so the still is built from the sheet, or
+ * tighten long prompts that say things twice into one short prompt. Works on the shots currently listed. Every result is a proposal you
  * review, edit and select; nothing is saved until Apply, and Done is yours alone.
  */
 export default function ShotSheetAi({ project, rows, disabled, onApply, onApplyingChange }) {
@@ -84,7 +85,9 @@ export default function ShotSheetAi({ project, rows, disabled, onApply, onApplyi
   const promptRows = rows.filter((row) => row.sheet.checked);
   // Shots still rendering from a hand-written frame prompt, which a split moves onto their sheet.
   const splitRows = rows.filter((row) => !shotSheetDrivesPrompt(row.scene) && row.scene.framePrompt?.trim());
-  const targets = (direction) => (direction === 'split' ? splitRows : direction === 'from-prompts' ? backfillRows : promptRows);
+  // Any listed shot can be tightened: its prompt may be long whether or not its sheet is done.
+  const tightenRows = rows.filter((row) => row.scene.prompt?.trim() || row.scene.framePrompt?.trim());
+  const targets = (direction) => ({ split: splitRows, 'from-prompts': backfillRows, tighten: tightenRows }[direction] || promptRows);
 
   const request = (direction, sceneIds, preview = false) => proposeMusicVideoShotSheet(project.id, {
     providerId: llm.selectedProviderId, model: llm.selectedModel || undefined, effort: effort || undefined, executionOptions,
@@ -179,9 +182,13 @@ export default function ShotSheetAi({ project, rows, disabled, onApply, onApplyi
         <button type="button" className={button} disabled={busy || disabled || noProvider || !splitRows.length} onClick={() => run('split')}>
           Split frame prompts into details ({splitRows.length})
         </button>
+        <button type="button" className={button} disabled={busy || disabled || noProvider || !tightenRows.length} onClick={() => run('tighten')}>
+          Tighten prompts ({tightenRows.length})
+        </button>
         <button type="button" className={button} disabled={busy || !backfillRows.length} onClick={() => preview('from-prompts')}>Preview fill prompt</button>
         <button type="button" className={button} disabled={busy || !splitRows.length} onClick={() => preview('split')}>Preview split prompt</button>
         <button type="button" className={button} disabled={busy || !promptRows.length} onClick={() => preview('to-prompts')}>Preview shot prompt</button>
+        <button type="button" className={button} disabled={busy || !tightenRows.length} onClick={() => preview('tighten')}>Preview tighten prompt</button>
         {busy && progress && (
           <>
             <span role="status" className="text-xs text-port-text-muted">{progress}</span>

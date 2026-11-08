@@ -20,6 +20,7 @@ import {
   proposeShotRevisions,
 } from './planner.js';
 import { planShots } from './shotPlan.js';
+import { SHOT_PROMPT_WRITING } from '../../lib/musicVideoShotPrompt.js';
 
 const SECTIONS = [
   { label: 'Intro', startSec: 0, endSec: 10, energy: 0.2 },
@@ -227,6 +228,8 @@ describe('buildScenePlanPrompt', () => {
     const prompt = buildScenePlanPrompt(makeProject({ treatment: { brief } }), []);
     for (const value of [brief.premise, brief.graphicLanguage, mustHave, brief.avoid, brief.destination, brief.referenceNotes[0].note]) expect(prompt).toContain(value);
     expect(prompt).toContain('never fetch reference URLs');
+    // Catches the planner asking for full picture descriptions again instead of a short, one-action shot prompt.
+    expect(prompt).toContain(SHOT_PROMPT_WRITING);
   });
 
   it('carries the reviewed energy plan and actual musical anchors into autopilot shot choreography', () => {

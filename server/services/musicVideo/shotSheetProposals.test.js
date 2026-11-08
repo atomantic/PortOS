@@ -9,6 +9,7 @@ vi.mock('./requireProject.js', () => ({ requireProject: vi.fn(async () => projec
 const { proposeShotSheet, __setShotSheetDepsForTests } = await import('./shotSheetProposals.js');
 const { shotSheetProposeSchema } = await import('../../lib/musicVideoStoryValidation.js');
 const { mergeShotSheetBackfill } = await import('../../lib/musicVideoShotSheet.js');
+const { SHOT_PROMPT_WRITING } = await import('../../lib/musicVideoShotPrompt.js');
 
 const provider = { id: 'prov', enabled: true, type: 'api' };
 const run = vi.fn();
@@ -22,6 +23,12 @@ describe('proposeShotSheet', () => {
     expect(run).not.toHaveBeenCalled();
     expect(result.promptAdditions.map((entry) => entry.id)).toContain('shot-sheet-direction');
     for (const text of ['Frame A', 'Scared', 'Ben owns it', 'Darker']) expect(result.sentPrompt).toContain(text);
+  });
+  // Catches a sheet rewrite growing the prompt by keeping every earlier detail instead of restating the shot short.
+  it('asks a sheet rewrite for a short, one-action prompt', async () => {
+    const { sentPrompt } = await proposeShotSheet('p', { ...base, direction: 'to-prompts', preview: true });
+    expect(sentPrompt).toContain(SHOT_PROMPT_WRITING);
+    expect(sentPrompt).not.toContain('Keep every detail');
   });
   // Catches AI ticking Checked, inventing a camera, or proposing for a shot nobody asked about.
   it('drops Checked, an unknown camera and unasked shots from a backfill', async () => {
@@ -47,6 +54,14 @@ describe('proposeShotSheet', () => {
     run.mockResolvedValue({ text: JSON.stringify({ shots: [{ sceneId: 'a', prompt: 'New motion' }, { sceneId: 'a' }] }) });
     const { shots } = await proposeShotSheet('p', { ...base, direction: 'to-prompts' });
     expect(shots).toEqual([{ sceneId: 'a', prompt: 'New motion' }]);
+  });
+  // Catches tighten reading only the motion half of a joined prompt, or being sent the sheet-writing instructions.
+  it('tightens a shot from its joined prompt with the short-prompt rule', async () => {
+    const { sentPrompt } = await proposeShotSheet('p', { ...base, direction: 'tighten', preview: true });
+    expect(sentPrompt).toContain('"prompt":"Frame A Motion A"');
+    expect(sentPrompt).toContain('say each thing once');
+    expect(sentPrompt).toContain(SHOT_PROMPT_WRITING);
+    expect(sentPrompt).not.toContain('carries out the director');
   });
   // Catches a stale client asking about a deleted shot, or unusable output reaching the review.
   it('refuses a missing shot and an unreadable reply', async () => {
