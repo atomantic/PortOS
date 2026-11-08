@@ -128,6 +128,7 @@ export async function listProjectIds(options = {}) {
 import { getTrack, updateTrack } from '../tracks/index.js';
 import { parseLyricCues } from './timedText.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { randomUUID } from 'crypto';
 
 // resolveVideoMode usability-gates the pin (a disabled grok pin seeds local);
 // an input that names a backend explicitly wins untouched.
@@ -648,6 +649,24 @@ export async function reviewSceneTake(id, sceneId, takeId, review) {
   const { reviewSceneTake: reviewTake } = await import('./takes.js');
   const { scene } = await mutateProjectRecord(id, (current) => reviewTake(current, sceneId, takeId, review));
   return scene;
+}
+
+/**
+ * User-started plate check of one frame take, outside a production run: the
+ * same vision review a run does (Codex when ready, else an API provider).
+ * Its evidence carries a manual run id, so a production run still reviews for itself.
+ */
+export async function checkSceneTakePlate(id, sceneId, takeId) {
+  const { plateCheckTake, recordTakePlateEvidence } = await import('./takes.js');
+  const project = await getProject(id);
+  if (!project) throw new ServerError('Music video project not found', { status: 404, code: 'NOT_FOUND' });
+  const { scene, take } = plateCheckTake(project, sceneId, takeId);
+  const { resolvePlateReviewer, reviewPlate } = await import('./plateReview.js');
+  const reviewer = await resolvePlateReviewer().catch((error) => { throw new ServerError(error.message, { status: error.status || 422, code: error.code || 'PLATE_REVIEWER_UNAVAILABLE' }); });
+  const evidence = await reviewPlate({ scene, assetId: take.assetId, runId: `manual-${randomUUID()}`, reviewer,
+    prompt: take.prompt ?? scene.framePrompt ?? scene.prompt ?? '' });
+  const { scene: saved } = await mutateProjectRecord(id, (current) => recordTakePlateEvidence(current, sceneId, takeId, evidence));
+  return saved;
 }
 
 /**

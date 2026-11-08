@@ -149,6 +149,7 @@ import {
   placeMediaPoolItem,
   markMediaPoolAssets,
   reviewSceneTake,
+  checkSceneTakePlate,
   rejectUnusedSceneTakes,
   swapProjectSceneFrames,
   refreshSongStyleFromSuno,
@@ -1995,6 +1996,11 @@ router.post('/:id/scenes/:sceneId/takes/reject-unused', asyncHandler(async (req,
 // No body: the shot's start frame becomes its end frame and the end frame its start, prompts included.
 router.post('/:id/scenes/:sceneId/swap-frames', asyncHandler(async (req, res) => {
   res.json(await swapProjectSceneFrames(req.params.id, req.params.sceneId));
+}));
+
+// No body: a vision model checks this frame take against its shot (user-started) → the scene.
+router.post('/:id/scenes/:sceneId/takes/:takeId/check', asyncHandler(async (req, res) => {
+  res.json(await checkSceneTakePlate(req.params.id, req.params.sceneId, req.params.takeId));
 }));
 
 router.patch('/:id/scenes/:sceneId/takes/:takeId', asyncHandler(async (req, res) => {

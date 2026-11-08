@@ -293,6 +293,10 @@ export const reviewMusicVideoSceneTake = (id, sceneId, takeId, review, options =
     method: 'PATCH', body: JSON.stringify(review), ...options,
   });
 
+// A vision model checks one frame take against its shot → the scene.
+export const checkMusicVideoSceneTake = (id, sceneId, takeId, options = {}) =>
+  request(`${takesPath(id, sceneId)}/${encodeURIComponent(takeId)}/check`, { method: 'POST', ...options });
+
 // ---- External-asset handoff (#8965) ----
 // Export the per-scene prompt/reference manifest for a tool PortOS doesn't
 // drive (e.g. Midjourney), and import what was generated there. Import body:
