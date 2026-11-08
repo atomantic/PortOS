@@ -140,7 +140,7 @@ describe('shots on the night', () => {
     const bo = first.actors.find((actor) => actor.subjectId === 'c-b');
     expect(bo).toMatchObject({ holder: true, visible: false, pose: 'ride' });
     expect(first.camera.position[0]).toBeCloseTo(bo.position[0]);
-    // Three song seconds are three story seconds: a 270 m/min ride covers about 13.5 m (here 300 m in 10 min).
+    // Three song seconds are three story seconds: this 300 m, 10 min ride covers about 1.5 m in them.
     const moved = Math.hypot(later.camera.position[0] - first.camera.position[0], later.camera.position[2] - first.camera.position[2]);
     expect(moved).toBeGreaterThan(1);
     expect(moved).toBeLessThan(3);
