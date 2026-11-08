@@ -15,7 +15,7 @@ const BUTTON = 'inline-flex min-h-[44px] items-center gap-1 rounded border borde
 export default function ShotFinalRender({ project, scene, onChange, fieldId }) {
   const projectId = project?.id;
   const sceneId = scene.sceneId;
-  const { status, live: liveByShot, markLive, retry } = useMusicVideoShotRenders(project);
+  const { status, live: liveByShot, markLive, clearLive, retry } = useMusicVideoShotRenders(project);
   const live = liveByShot[sceneId] || null;
   const [playing, setPlaying] = useState(false);
   const [starting, setStarting] = useState(false);
@@ -49,7 +49,24 @@ export default function ShotFinalRender({ project, scene, onChange, fieldId }) {
         )}
         <span className="ml-auto flex flex-wrap items-center gap-2">
           {rendering ? (
-            <button type="button" className={BUTTON} onClick={() => cancelMusicVideoShotRender(projectId, sceneId).catch(() => {})}>
+            <button
+              type="button"
+              className={BUTTON}
+              // { ok: false } means the server has no running job for this shot: settle the card from its status.
+              // The clear is scoped to the render this click targeted, so a late response can't wipe a newer render;
+              // when the row was replaced meanwhile, the newer render is left as it is and no re-read is needed.
+              onClick={() => {
+                const since = live?.since;
+                cancelMusicVideoShotRender(projectId, sceneId)
+                  .then((result) => {
+                    if (result?.ok !== false) return;
+                    // No row at click time: the card was showing the server's own rendering flag, so re-read it.
+                    const settled = since === undefined || clearLive(sceneId, since);
+                    if (settled) retry?.();
+                  })
+                  .catch(() => {});
+              }}
+            >
               <Square size={12} aria-hidden="true" /> Stop
             </button>
           ) : shot && !rendered ? (
