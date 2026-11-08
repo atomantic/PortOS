@@ -8,6 +8,7 @@ import { escapeRegExp } from './textUtils.js';
 import { musicVideoCameoReferences } from './musicVideoCameos.js';
 import { GEMINI_WEB_CLIP_REFERENCE_LIMIT } from './geminiWebVideo.js';
 import { musicVideoGreyboxReferences } from './musicVideoGreybox.js';
+import { SHOT_CAMERA_SET_DOWN } from './musicVideoShotSheet.js';
 
 /**
  * Browser-safe reference selection shared by the board and production lanes.
@@ -584,6 +585,23 @@ export function musicVideoConditioningReferences(project, scene, castMedia = nul
   return ids.map((id) => remaining.splice(remaining.findIndex((ref) => ref.imageId === id), 1)[0]);
 }
 
+// An alternate's trailing "(…)" names the same person: "Lead (older)" is "Lead".
+const personName = (name) => String(name || '').replace(/\s*\([^)]*\)\s*$/, '').trim().toLowerCase();
+const isPersonReference = (ref) => !ref?.role || ref.role === 'character' || ref.role === 'subject';
+
+/**
+ * The cast member holding an in-world camera who is not in the picture (a POV
+ * shot), or null. Their sheet can only invite a video model to draw them into
+ * the shot, so a clip never sends it. A selfie lists the holder among its characters.
+ */
+export function offscreenCameraHolder(scene) {
+  const sheet = scene?.shotSheet;
+  const holder = typeof sheet?.holder === 'string' ? personName(sheet.holder) : '';
+  if (!holder || holder === personName(SHOT_CAMERA_SET_DOWN)) return null;
+  const visible = (Array.isArray(sheet.characters) ? sheet.characters : []).some((entry) => personName(entry) === holder);
+  return visible ? null : holder;
+}
+
 /**
  * A clip can choose its own ordered references. Legacy/Auto retains the cast
  * references previously derived from the frame selection; an explicit empty
@@ -592,9 +610,11 @@ export function musicVideoConditioningReferences(project, scene, castMedia = nul
 export function musicVideoClipConditioningReferences(project, scene, castMedia = null, { limit = MUSIC_VIDEO_MAX_REFERENCE_CHOICES } = {}) {
   const explicit = Array.isArray(scene?.clipReferenceIds);
   const source = explicit ? { ...scene, frameReferenceIds: scene.clipReferenceIds } : scene;
+  const holder = offscreenCameraHolder(scene);
   return musicVideoConditioningReferences(project, source, castMedia)
     .filter((ref) => !ref.panelArt && !ref.greybox && ref.imageId !== scene?.referenceImageId
-      && (explicit || ref.role === 'character' || ref.role === 'subject'))
+      && (explicit || ref.role === 'character' || ref.role === 'subject')
+      && !(holder && isPersonReference(ref) && personName(String(ref.label || '').split(/\s[—·-]\s/)[0]) === holder))
     .filter((ref, index, refs) => refs.findIndex((other) => other.imageId === ref.imageId) === index)
     .slice(0, Math.max(0, limit));
 }

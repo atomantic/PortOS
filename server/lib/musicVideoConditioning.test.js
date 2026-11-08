@@ -432,3 +432,22 @@ it('drops inactive generated cast sheets and catalog-image aliases from new rend
   p.concept.subjects = p.concept.subjects.map(subject => ({ ...subject, active: !subject.active }));
   expect(ids(musicVideoConditioningReferences(p, { prompt: 'Q walks' }))).toEqual(['old.png']);
 });
+
+describe('a POV clip leaves the off-screen camera holder out', () => {
+  const pov = project([
+    { id: 'friend', imageId: 'friend.png', role: 'character', label: 'Friend', condition: true },
+    { id: 'holder', imageId: 'holder.png', role: 'character', label: 'Lead (older) — wardrobe', condition: true },
+    { id: 'prop', imageId: 'prop.png', role: 'prop', label: 'Lead and Friend', condition: true },
+  ]);
+  const shot = (sheet) => ({ sceneId: 's1', clipReferenceIds: ['friend', 'holder', 'prop'], shotSheet: { cameraId: 'cam-handheld', ...sheet } });
+
+  it('drops the holder\'s sheet when the holder is not in the picture, even when picked by hand', () => {
+    expect(ids(musicVideoClipConditioningReferences(pov, shot({ holder: 'Lead', characters: ['Friend'] })))).toEqual(['friend.png', 'prop.png']);
+  });
+
+  it('keeps the holder in a selfie, and keeps everyone when the camera is set down', () => {
+    expect(ids(musicVideoClipConditioningReferences(pov, shot({ holder: 'Lead', characters: ['Friend', 'Lead'] })))).toEqual(['friend.png', 'holder.png', 'prop.png']);
+    expect(ids(musicVideoClipConditioningReferences(pov, shot({ holder: 'Set down', characters: ['Friend'] })))).toEqual(['friend.png', 'holder.png', 'prop.png']);
+    expect(ids(musicVideoClipConditioningReferences(pov, shot({})))).toEqual(['friend.png', 'holder.png', 'prop.png']);
+  });
+});
