@@ -2392,6 +2392,38 @@ describe('claim-swarm completion', () => {
     expect(addTask).not.toHaveBeenCalled();
   });
 
+  it.each(['retired', 'restored'])('verifies every generation of a re-cut claim branch (#15463): %s', async scenario => {
+    const root = await mkdtemp(join(tmpdir(), 'portos-claim-generations-'));
+    try {
+      const branch = 'claim/issue-7';
+      const path = join(root, 'claim');
+      const identity = { dev: '1', ino: '2', birthtimeNs: '3' };
+      const seed = checkout => ({ version: 1, agentId: 'agent-1', startedAt: CREATED_AT, seededAt: CREATED_AT,
+        repoPath: '/repo', branch, path, repository: identity, checkout,
+        incarnation: { pointer: identity, gitdir: { path: '/repo/.git/worktrees/claim', ...identity } } });
+      let first = seed(identity);
+      if (scenario === 'restored') {
+        await mkdir(path);
+        const { lstat } = await vi.importActual('node:fs/promises');
+        const stat = await lstat(path, { bigint: true });
+        first = seed({ dev: String(stat.dev), ino: String(stat.ino), birthtimeNs: String(stat.birthtimeNs) });
+      }
+      const state = { ...agentState({ isWorktree: false, worktreeBranch: null, workspacePath: '/repo',
+        claimBranches: [branch], claimReleasedBranches: [], checkoutCapture: { status: 'captured' }, completedCheckouts: [],
+        checkoutSeeds: [seed({ dev: '1', ino: '9', birthtimeNs: '3' })],
+        supersededCheckoutSeeds: [{ ...first, supersededAt: CREATED_AT }] }),
+        id: 'agent-1', taskId: 'task-1', status: 'completed', completedAt: CREATED_AT };
+      findPullRequestForBranch.mockResolvedValue({ status: 'found', url: 'https://github.com/example/repo/pull/7', detail: 'MERGED' });
+      const result = await run({ agentState: state });
+      expect(result.verified).toBe(scenario === 'retired');
+      const held = recordCleanupOutcome.mock.calls.some(([, row]) => row.branch === branch
+        && row.status === 'blocked' && row.reason === 'superseded-checkout-generation-present');
+      expect(held).toBe(scenario === 'restored');
+      // The retired generation still requires the branch's full delivery proof.
+      expect(findPullRequestForBranch).toHaveBeenCalledTimes(scenario === 'retired' ? 1 : 0);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
   it('retains each missing claim checkout without spawning bookkeeping agents', async () => {
     const branches = ['claim/issue-11', 'claim/issue-12'];
     findPullRequestForBranch.mockImplementation(async branch => ({ status: 'found', detail: 'OPEN', number: branches.indexOf(branch) + 11,

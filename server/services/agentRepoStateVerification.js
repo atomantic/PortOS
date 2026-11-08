@@ -13,7 +13,8 @@ import { getDeliveryActivity, withDeliveryActivity, COMPLETION_RECOVERY_BATCH_SI
 import { MANAGED_WORKTREE_CLEANUP_CONTRACT } from '../lib/mergeGateContract.js';
 import { processAuditFingerprint } from '../lib/persistentMindProcessAudit.js';
 import { completionSentinelPresent } from './agentCompletionSentinel.js';
-import { hasClaimCheckoutBindings, completedCheckoutReceiptValid, sameTaskRetirementBinding, checkoutSeedSchema } from './completedCheckoutEvidence.js';
+import { hasClaimCheckoutBindings, completedCheckoutReceiptValid, sameTaskRetirementBinding, checkoutSeedSchema,
+  readSupersededGenerationRetired } from './completedCheckoutEvidence.js';
 import { readRetirementCheckoutIdentity } from '../lib/retirementCheckoutObservation.js';
 import { sameRetirementObservation } from '../lib/reconcileRetirementEvidence.js';
 import { resolveRetirementApp } from './retirementAppScope.js';
@@ -1402,6 +1403,14 @@ async function verifyRunBranches(input) {
       const reason = await input.recheckCleanup().then(() => null, error => error.message);
       if (reason) { results.push(await holdBranch(branch, reason)); continue; }
     }
+    // A branch re-cut after release has earlier generations (#15463). Each
+    // must stay physically retired; the branch's delivery proof below still
+    // runs because any seeded generation keeps it off the released-selection path.
+    const superseded = (meta.supersededCheckoutSeeds || []).filter(row => row?.branch === branch);
+    const retired = await Promise.all(superseded.map(readSupersededGenerationRetired));
+    if (retired.includes(null)) { results.push(await holdBranch(branch, 'superseded-checkout-generation-unreadable')); continue; }
+    const unretired = superseded.find((_, index) => !retired[index]);
+    if (unretired) { results.push(await holdBranch(branch, 'superseded-checkout-generation-present', null, unretired.path)); continue; }
     const captures = (meta.completedCheckouts || []).filter(row => row?.branch === branch && completedCheckoutReceiptValid(input.agentState, row)
       && typeof row.path === 'string' && row.path && typeof row.repoPath === 'string' && resolve(row.repoPath) === repository
       && retirementCheckoutIdentityFromPointer(row.incarnation?.pointer));
@@ -1438,7 +1447,7 @@ async function verifyRunBranches(input) {
     // release alone must not erase evidence of actual work.
     const releasedSelection = absent && (meta.claimReleasedBranches?.includes(branch) || (meta.claimBranches?.length > 1 && !original?.path))
       && (!meta.claimBranches?.includes(branch) || !meta.claimReleasedBranches?.includes(branch)) && meta.checkoutCapture?.status === 'captured'
-      && !meta.checkoutSeeds?.some(row => row.branch === branch)
+      && ![...(meta.checkoutSeeds || []), ...superseded].some(row => row.branch === branch)
       && meta.completedCheckouts?.some(row => row.branch !== branch
         && completedCheckoutReceiptValid(input.agentState, row)
         && typeof row.repoPath === 'string' && resolve(row.repoPath) === repository
