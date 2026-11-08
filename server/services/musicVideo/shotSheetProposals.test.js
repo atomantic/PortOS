@@ -55,6 +55,14 @@ describe('proposeShotSheet', () => {
     const { shots } = await proposeShotSheet('p', { ...base, direction: 'to-prompts' });
     expect(shots).toEqual([{ sceneId: 'a', prompt: 'New motion' }]);
   });
+  // Catches tighten reading only the motion half of a joined prompt, or being sent the sheet-writing instructions.
+  it('tightens a shot from its joined prompt with the short-prompt rule', async () => {
+    const { sentPrompt } = await proposeShotSheet('p', { ...base, direction: 'tighten', preview: true });
+    expect(sentPrompt).toContain('"prompt":"Frame A Motion A"');
+    expect(sentPrompt).toContain('say each thing once');
+    expect(sentPrompt).toContain(SHOT_PROMPT_WRITING);
+    expect(sentPrompt).not.toContain('carries out the director');
+  });
   // Catches a stale client asking about a deleted shot, or unusable output reaching the review.
   it('refuses a missing shot and an unreadable reply', async () => {
     await expect(proposeShotSheet('p', { ...base, sceneIds: ['gone'], direction: 'to-prompts' })).rejects.toMatchObject({ status: 409 });
