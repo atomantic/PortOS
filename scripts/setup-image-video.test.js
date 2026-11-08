@@ -751,6 +751,9 @@ describe('Wan 2.2 CUDA hash-pinned installation', () => {
     expect(section).toContain('requirements-wan22-cuda-linux.lock.txt');
     expect(section).toContain('pip sync --require-hashes --only-binary :all: --index-strategy unsafe-best-match --python "$WAN22_CUDA_PY" "$WAN22_CUDA_LOCK"');
     expect(section).not.toMatch(/pip install|--upgrade|requirements-wan22-cuda\.txt/);
+    expect(section).toContain('uv venv --managed-python --python 3.11');
+    expect(section).toContain('uv venv --clear --managed-python --python 3.11');
+    expect(section).toContain("(Path(sys.base_prefix) / 'conda-meta').is_dir()");
   });
 });
 

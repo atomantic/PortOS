@@ -4,8 +4,9 @@ Video Gen's explicit Install/Repair action installs Wan 2.2 in
 `~/.portos/wan2.2-cuda/.venv`. It requires x86_64 Windows or Linux, an NVIDIA
 GPU/driver compatible with CUDA 12.6, and [uv](https://docs.astral.sh/uv/).
 The standard PortOS Python prerequisite still applies; uv provisions the
-dedicated CPython 3.11 automatically. A previous runtime built with another
-Python minor version is rebuilt in the same location; no Python path setting is
+dedicated uv-managed CPython 3.11 automatically, without selecting Conda from
+PATH. A previous runtime built with another Python minor version or a Conda base
+is rebuilt in the same location; no Python path setting is
 needed. Model weights remain a separate explicit download.
 
 The installer selects `scripts/requirements-wan22-cuda-windows.lock.txt` or
@@ -14,6 +15,9 @@ The installer selects `scripts/requirements-wan22-cuda-windows.lock.txt` or
 setuptools, and every transitive dependency. Sync removes packages outside the
 lock during Repair. There is no separate unpinned pip/bootstrap/torch install.
 The direct requirements file is an input to lock generation only.
+Video Gen compares every installed dependency version with the host's lock,
+including transitive packages, before treating an existing runtime as current.
+An older or incomplete environment therefore offers Upgrade/Repair.
 
 The stack is torch 2.14.1 / torchvision 0.29.1 with the `+cu126` build tag,
 diffusers 0.42.0 and transformers 5.22.1. Newer transformers pins replace the old

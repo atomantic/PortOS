@@ -282,6 +282,17 @@ export const BYOV_RUNTIME_INFO = Object.freeze({
     killProcessGroup: true,
     repoUrl: 'https://huggingface.co/docs/diffusers/main/api/pipelines/wan',
     installSourceLabel: 'pinned Diffusers and CUDA PyTorch packages',
+    currencyProbeArgs: ['-c', String.raw`import importlib.metadata as m, re, sys
+from pathlib import Path
+pins = re.findall(r'^([A-Za-z0-9][A-Za-z0-9._-]*)==([^\s;\\]+)', Path(sys.argv[1]).read_text(encoding='utf-8'), re.M)
+assert pins, 'empty runtime lock'
+current = sys.version_info[:2] == (3, 11) and not (Path(sys.base_prefix) / 'conda-meta').is_dir()
+try:
+ current = current and all(m.version(name) == version for name, version in pins)
+except m.PackageNotFoundError:
+ current = False
+sys.exit(0 if current else 78)
+`, join(PATHS.root, 'scripts', `requirements-wan22-cuda-${process.platform === 'win32' ? 'windows' : 'linux'}.lock.txt`)],
     importProbe: 'import torch, hf_xet; from diffusers import AutoencoderKLWan, WanPipeline; assert torch.cuda.is_available(), "no CUDA device"',
     fingerprintPackages: ['torch', 'diffusers', 'transformers', 'accelerate', 'huggingface-hub', 'hf-xet'],
   },
@@ -426,7 +437,7 @@ export async function isByovRuntimeReady(runtimeId) {
   // executable package have passed the clean-status check. Keep this ahead of
   // the positive readiness cache too: a checkout can be edited after an
   // earlier successful probe.
-  if ((info.expectedRevision || info.expectedVersion) && !await isByovRuntimeCurrent(runtimeId)) return false;
+  if ((info.expectedRevision || info.expectedVersion || info.currencyProbeArgs) && !await isByovRuntimeCurrent(runtimeId)) return false;
   if (readyCache.get(runtimeId) === true) return true;
   const probeOk = await runVenvProbe(
     info.venvPython, info.probeArgs || ['-c', info.importProbe], `${runtimeId} readiness`,
@@ -465,7 +476,7 @@ const summarizeProbeStderr = (stderr) => stderr.replace(/\s+/g, ' ').trim() || '
 // `label` names the runtime and which probe ran, so a status request that fans
 // out over several runtimes produces attributable lines. It must never carry a
 // filesystem path — venv paths embed the OS username.
-function runVenvProbe(venvPython, args, label, { unsupportedExitCode } = {}) {
+function runVenvProbe(venvPython, args, label, { unsupportedExitCode, staleExitCode } = {}) {
   return new Promise((resolve) => {
     let stderr = '';
     let settled = false;
@@ -501,7 +512,9 @@ function runVenvProbe(venvPython, args, label, { unsupportedExitCode } = {}) {
       finish(false, '❌', 'timed out after 30s');
     }, 30000);
     child.on('close', (code, signal) => {
-      if (unsupportedExitCode !== undefined && code === unsupportedExitCode && !signal) {
+      if (staleExitCode !== undefined && code === staleExitCode && !signal) {
+        finish(false, '🔄', 'needs a dependency upgrade', true);
+      } else if (unsupportedExitCode !== undefined && code === unsupportedExitCode && !signal) {
         finish(false, '🚫', 'does not support this capability', true);
       } else {
         finish(code === 0, '⚠️', signal ? `was killed by ${signal}` : `exited ${code}`);
@@ -630,8 +643,8 @@ export function videoLoraUnsupportedError(model, modelId) {
 }
 
 // Resolve a checkout's exact revision without trusting a mutable tag/branch.
-// Runtimes without an expectedRevision remain current by definition. A stale
-// pinned checkout makes the UI offer Repair / Upgrade; nothing runs at boot.
+// A stale source revision, executable version or dependency lock makes the UI
+// offer Repair / Upgrade; nothing runs at boot.
 export function isPinnedSourceStatusClean(stdout, expectedRevision) {
   const lines = String(stdout).split(/\r?\n/).filter(Boolean);
   const oid = lines.find((line) => line.startsWith('# branch.oid '))?.slice('# branch.oid '.length);
@@ -650,6 +663,10 @@ export function byovRuntimeExpectedRevision(runtimeId) {
 
 export async function isByovRuntimeCurrent(runtimeId) {
   const info = BYOV_RUNTIME_INFO[runtimeId];
+  if (info?.currencyProbeArgs) {
+    if (!existsSync(info.venvPython)) return false;
+    return runVenvProbe(info.venvPython, info.currencyProbeArgs, `${runtimeId} locked dependencies`, { staleExitCode: 78 });
+  }
   if (info?.expectedVersion) {
     if (!existsSync(info.venvPython)) return false;
     return new Promise((resolve) => {

@@ -1018,18 +1018,18 @@ if [[ "$INSTALL_WAN22_CUDA" == "1" ]]; then
   fi
   mkdir -p "$WAN22_CUDA_DIR"
   reset_universal_venv "$WAN22_CUDA_VENV" "$PYTHON_BIN"
-  # Old installs used whichever system Python was discovered. Rebuild only
-  # when its minor version differs from the interpreter the locks target.
+  # Keep an existing standalone 3.11, but rebuild older minors and Conda bases
+  # whose DLL search path can prevent CUDA torch from loading on Windows.
   if venv_exists "$WAN22_CUDA_VENV"; then
     WAN22_CUDA_PY="$(venv_python "$WAN22_CUDA_VENV")"
-    if ! "$WAN22_CUDA_PY" -c "import sys; sys.exit(sys.version_info[:2] != (3, 11))"; then
+    if ! "$WAN22_CUDA_PY" -c "import sys; from pathlib import Path; sys.exit(sys.version_info[:2] != (3, 11) or (Path(sys.base_prefix) / 'conda-meta').is_dir())"; then
       echo "♻️ Rebuilding Wan 2.2 CUDA with its locked Python 3.11..."
-      uv venv --clear --python 3.11 "$WAN22_CUDA_VENV"
+      uv venv --clear --managed-python --python 3.11 "$WAN22_CUDA_VENV"
     fi
   fi
   if ! venv_exists "$WAN22_CUDA_VENV"; then
     echo "📦 Creating Wan 2.2 CUDA venv (Python 3.11)..."
-    uv venv --python 3.11 "$WAN22_CUDA_VENV"
+    uv venv --managed-python --python 3.11 "$WAN22_CUDA_VENV"
   fi
   WAN22_CUDA_PY="$(venv_python "$WAN22_CUDA_VENV")"
   echo "📦 Syncing the hash-pinned Wan 2.2 CUDA runtime..."
