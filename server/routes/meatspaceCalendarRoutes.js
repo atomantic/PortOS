@@ -51,15 +51,16 @@ router.post('/activities', asyncHandler(async (req, res) => {
 }));
 
 /**
- * PUT /api/meatspace/activities/:index?name=<expected name>
- * Update an activity by index. `name` (optional, for older clients) guards
- * against a list that shifted since the caller read it.
+ * PUT /api/meatspace/activities/:index?id=<activity id>
+ * Update an activity. `id` (preferred) names the row wherever it now sits;
+ * clients from before ids send `name` to guard the index, or neither for
+ * index-only addressing. A stale reference answers 409 ACTIVITY_MOVED.
  */
 router.put('/activities/:index', asyncHandler(async (req, res) => {
   const index = parseIndexParam(req.params.index);
   const data = validateRequest(activityUpdateSchema, req.body);
-  const { name } = validateRequest(activityTargetQuerySchema, req.query);
-  const activities = await calendarService.updateActivity(index, data, name);
+  const target = validateRequest(activityTargetQuerySchema, req.query);
+  const activities = await calendarService.updateActivity(index, data, target);
   if (!activities) {
     throw new ServerError('Activity not found', { status: 404, code: 'NOT_FOUND' });
   }
@@ -67,13 +68,13 @@ router.put('/activities/:index', asyncHandler(async (req, res) => {
 }));
 
 /**
- * DELETE /api/meatspace/activities/:index?name=<expected name>
- * Remove an activity by index, refusing (409) when `name` no longer matches.
+ * DELETE /api/meatspace/activities/:index?id=<activity id>
+ * Remove an activity; `id` / `name` / neither as for PUT.
  */
 router.delete('/activities/:index', asyncHandler(async (req, res) => {
   const index = parseIndexParam(req.params.index);
-  const { name } = validateRequest(activityTargetQuerySchema, req.query);
-  const activities = await calendarService.removeActivity(index, name);
+  const target = validateRequest(activityTargetQuerySchema, req.query);
+  const activities = await calendarService.removeActivity(index, target);
   if (!activities) {
     throw new ServerError('Activity not found', { status: 404, code: 'NOT_FOUND' });
   }

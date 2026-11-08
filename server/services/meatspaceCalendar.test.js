@@ -1,5 +1,6 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { rm } from 'fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'fs/promises';
+import { join } from 'path';
 import express from 'express';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 import { request } from '../lib/testHelper.js';
@@ -91,6 +92,87 @@ describe('activity delete by index is guarded by the row the client saw', () => 
       .send({ frequency: 99 });
     expect(res.status).toBe(409);
     expect(await getActivities()).toEqual(before);
+  });
+});
+
+const activitiesFile = () => join(PATHS.meatspace, 'activities.json');
+async function storeActivities(activities) {
+  await mkdir(PATHS.meatspace, { recursive: true });
+  await writeFile(activitiesFile(), JSON.stringify({ activities }));
+}
+const stored = async () => JSON.parse(await readFile(activitiesFile(), 'utf8')).activities;
+
+describe('activities are addressed by a stable id', () => {
+  it('a default row keeps the id the client read across the first write that seeds the list', async () => {
+    const before = await getActivities();
+    const target = before[1];
+    const res = await request(makeApp()).delete(`/api/meatspace/activities/1?id=${encodeURIComponent(target.id)}`);
+    expect(res.status).toBe(200);
+    expect((await stored()).map(a => a.id)).toEqual(before.filter(a => a.id !== target.id).map(a => a.id));
+  });
+
+  it('an added activity gets an id the client cannot choose', async () => {
+    const res = await request(makeApp()).post('/api/meatspace/activities')
+      .send({ id: 'chosen', name: 'Walks', cadence: 'day', frequency: 1 });
+    const added = res.body.at(-1);
+    expect(added.name).toBe('Walks');
+    expect(added.id).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it.each([
+    ['first', 'w1', 1, ['a', 'w2']],
+    ['second', 'w2', 2, ['a', 'w1']],
+  ])('a stale index with an id removes only the %s of two same-named activities', async (_which, id, staleIndex, remaining) => {
+    await storeActivities([
+      { id: 'gone', name: 'Earlier', cadence: 'day', frequency: 1 },
+      { id: 'a', name: 'Books', cadence: 'month', frequency: 1 },
+      { id: 'w1', name: 'Walks', cadence: 'day', frequency: 1 },
+      { id: 'w2', name: 'Walks', cadence: 'week', frequency: 3 },
+    ]);
+    // Another tab removes the first row, so this caller's indexes are one too high.
+    await removeActivity(0, { id: 'gone' });
+    const res = await request(makeApp()).delete(`/api/meatspace/activities/${staleIndex + 1}?id=${id}`);
+    expect(res.status).toBe(200);
+    expect((await stored()).map(a => a.id)).toEqual(remaining);
+  });
+
+  it('guards a nameless row by its id, and refuses an id that is no longer stored', async () => {
+    await storeActivities([
+      { id: 'x', cadence: 'day', frequency: 1 },
+      { id: 'y', cadence: 'year', frequency: 1 },
+    ]);
+    const refused = await request(makeApp()).delete('/api/meatspace/activities/0?id=already-removed');
+    expect(refused.status).toBe(409);
+    expect(refused.body.code).toBe('ACTIVITY_MOVED');
+    expect((await stored()).map(a => a.id)).toEqual(['x', 'y']);
+
+    const res = await request(makeApp()).delete('/api/meatspace/activities/0?id=y');
+    expect(res.status).toBe(200);
+    expect((await stored()).map(a => a.id)).toEqual(['x']);
+  });
+
+  it('a PUT by id edits that row and keeps its id', async () => {
+    await storeActivities([
+      { id: 'x', name: 'Walks', cadence: 'day', frequency: 1 },
+      { id: 'y', name: 'Walks', cadence: 'day', frequency: 1 },
+    ]);
+    const res = await request(makeApp()).put('/api/meatspace/activities/0?id=y').send({ frequency: 5 });
+    expect(res.status).toBe(200);
+    expect(await stored()).toEqual([
+      { id: 'x', name: 'Walks', cadence: 'day', frequency: 1 },
+      { id: 'y', name: 'Walks', cadence: 'day', frequency: 5 },
+    ]);
+  });
+
+  it('a write gives a row stored without an id one, and an index-only delete still works', async () => {
+    await storeActivities([
+      { name: 'Walks', cadence: 'day', frequency: 1 },
+      { cadence: 'year', frequency: 1 },
+    ]);
+    const res = await request(makeApp()).delete('/api/meatspace/activities/0');
+    expect(res.status).toBe(200);
+    const [row] = await stored();
+    expect(row).toMatchObject({ cadence: 'year', frequency: 1, id: expect.any(String) });
   });
 });
 

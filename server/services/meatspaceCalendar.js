@@ -167,7 +167,7 @@ export function computeActivityBudgets(deathDate, activities) {
   const daysRemaining = (death.getTime() - now.getTime()) / MS_PER_DAY;
 
   return activities.map(activity => {
-    const { name, cadence, frequency, icon } = activity;
+    const { id, name, cadence, frequency, icon } = activity;
 
     let remaining;
     switch (cadence) {
@@ -187,7 +187,7 @@ export function computeActivityBudgets(deathDate, activities) {
         remaining = 0;
     }
 
-    return { name, cadence, frequency, icon, remaining };
+    return { id, name, cadence, frequency, icon, remaining };
   });
 }
 
@@ -205,15 +205,17 @@ async function saveActivities(data) {
 
 // === Default Activities ===
 
+// Fixed ids: the defaults are served unpersisted until the first write seeds them,
+// so the id a client read must survive that seeding. Added rows get a UUID.
 const DEFAULT_ACTIVITIES = [
-  { name: 'Coffees', cadence: 'day', frequency: 2, icon: 'coffee' },
-  { name: 'Showers', cadence: 'day', frequency: 1, icon: 'droplets' },
-  { name: 'Meals', cadence: 'day', frequency: 3, icon: 'utensils' },
-  { name: 'Workouts', cadence: 'week', frequency: 4, icon: 'dumbbell' },
-  { name: 'Books', cadence: 'month', frequency: 1, icon: 'book-open' },
-  { name: 'Haircuts', cadence: 'month', frequency: 1, icon: 'scissors' },
-  { name: 'Birthdays', cadence: 'year', frequency: 1, icon: 'cake' },
-  { name: 'Vacations', cadence: 'year', frequency: 2, icon: 'plane' },
+  { id: 'default-coffees', name: 'Coffees', cadence: 'day', frequency: 2, icon: 'coffee' },
+  { id: 'default-showers', name: 'Showers', cadence: 'day', frequency: 1, icon: 'droplets' },
+  { id: 'default-meals', name: 'Meals', cadence: 'day', frequency: 3, icon: 'utensils' },
+  { id: 'default-workouts', name: 'Workouts', cadence: 'week', frequency: 4, icon: 'dumbbell' },
+  { id: 'default-books', name: 'Books', cadence: 'month', frequency: 1, icon: 'book-open' },
+  { id: 'default-haircuts', name: 'Haircuts', cadence: 'month', frequency: 1, icon: 'scissors' },
+  { id: 'default-birthdays', name: 'Birthdays', cadence: 'year', frequency: 1, icon: 'cake' },
+  { id: 'default-vacations', name: 'Vacations', cadence: 'year', frequency: 2, icon: 'plane' },
 ];
 
 // === Life Events ===
@@ -325,54 +327,60 @@ export async function getActivities() {
   return Array.isArray(data.activities) ? data.activities : DEFAULT_ACTIVITIES;
 }
 
+const hasActivityId = (activity) => typeof activity?.id === 'string' && activity.id !== '';
+
+// The list a write mutates: defaults seeded on first write, and any row still
+// without an id (restored from a pre-migration backup, or hand-edited) given one
+// so it is addressable from the next read on.
+async function loadActivitiesForWrite() {
+  const data = await loadActivities();
+  const activities = Array.isArray(data.activities) ? data.activities : DEFAULT_ACTIVITIES;
+  data.activities = activities.map(a => (hasActivityId(a) ? a : { ...a, id: randomUUID() }));
+  return data;
+}
+
 export function addActivity(activity) {
   return queueActivitiesWrite(async () => {
-    const data = await loadActivities();
-    // If using defaults, seed with defaults first
-    if (!Array.isArray(data.activities)) {
-      data.activities = [...DEFAULT_ACTIVITIES];
-    }
-    data.activities.push(activity);
+    const data = await loadActivitiesForWrite();
+    data.activities.push({ ...activity, id: randomUUID() });
     await saveActivities(data);
     return data.activities;
   });
 }
 
-// Index addressing is only safe when the caller names the row it saw. A stale
-// index (double-click, or a list that shifted after an earlier delete) must not
-// mutate whichever activity now sits at that position.
-function assertActivityNameMatches(activities, index, expectedName) {
-  if (expectedName === undefined || activities[index]?.name === expectedName) return;
-  throw new ServerError('Activity list changed; refresh and try again', { status: 409, code: 'ACTIVITY_MOVED' });
+const activityMoved = () => new ServerError('Activity list changed; refresh and try again', { status: 409, code: 'ACTIVITY_MOVED' });
+
+// Resolves the row a caller means. `id` names it exactly, wherever it now sits;
+// an unknown id is a row already gone. Without an id, `name` (clients from before
+// ids) only checks that the index still holds the row the caller saw. Neither
+// keeps index-only addressing for older clients. Returns -1 for an index out of range.
+function resolveActivityIndex(activities, index, { id, name } = {}) {
+  if (id !== undefined) {
+    const at = activities.findIndex(a => a.id === id);
+    if (at === -1) throw activityMoved();
+    return at;
+  }
+  if (name !== undefined && activities[index]?.name !== name) throw activityMoved();
+  return index >= 0 && index < activities.length ? index : -1;
 }
 
-export function updateActivity(index, updates, expectedName) {
+export function updateActivity(index, updates, expected) {
   return queueActivitiesWrite(async () => {
-    const data = await loadActivities();
-    if (!Array.isArray(data.activities)) {
-      data.activities = [...DEFAULT_ACTIVITIES];
-    }
-    assertActivityNameMatches(data.activities, index, expectedName);
-    if (index < 0 || index >= data.activities.length) {
-      return null;
-    }
-    data.activities[index] = { ...data.activities[index], ...updates };
+    const data = await loadActivitiesForWrite();
+    const at = resolveActivityIndex(data.activities, index, expected);
+    if (at === -1) return null;
+    data.activities[at] = { ...data.activities[at], ...updates, id: data.activities[at].id };
     await saveActivities(data);
     return data.activities;
   });
 }
 
-export function removeActivity(index, expectedName) {
+export function removeActivity(index, expected) {
   return queueActivitiesWrite(async () => {
-    const data = await loadActivities();
-    if (!Array.isArray(data.activities)) {
-      data.activities = [...DEFAULT_ACTIVITIES];
-    }
-    assertActivityNameMatches(data.activities, index, expectedName);
-    if (index < 0 || index >= data.activities.length) {
-      return null;
-    }
-    data.activities.splice(index, 1);
+    const data = await loadActivitiesForWrite();
+    const at = resolveActivityIndex(data.activities, index, expected);
+    if (at === -1) return null;
+    data.activities.splice(at, 1);
     await saveActivities(data);
     return data.activities;
   });
