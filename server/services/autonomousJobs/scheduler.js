@@ -103,6 +103,22 @@ async function getDueJobs() {
 }
 
 /**
+ * The cron a job fires on: its own `cronExpression`, or a synthesized daily
+ * (`M H * * *`) / weekday (`M H * * 1-5`) cron for a daily or weekdaysOnly
+ * job with a `scheduledTime`. Shared by the armed timer (cosJobScheduler) and
+ * computeNextJobRun so both pick the same path. Weekly/biweekly/sub-daily
+ * interval jobs return null and use nextIntervalJobFireTime.
+ * @param {Object} job
+ * @returns {string|null}
+ */
+export function clockCronExpression(job) {
+  if (job.cronExpression) return job.cronExpression
+  if (!job.scheduledTime || !(job.interval === 'daily' || job.weekdaysOnly)) return null
+  const match = String(job.scheduledTime).match(/^([01]\d|2[0-3]):([0-5]\d)$/)
+  return match ? `${Number(match[2])} ${Number(match[1])} * * ${job.weekdaysOnly ? '1-5' : '*'}` : null
+}
+
+/**
  * Next fire time of an interval-mode job: `lastRun + intervalMs`, snapped to the
  * `scheduledTime` (HH:MM, user timezone) occurrence NEAREST that moment, then
  * pushed off weekends for `weekdaysOnly`. The one implementation behind both the
@@ -148,17 +164,15 @@ export function nextIntervalJobFireTime(job, timezone) {
  * @returns {number|null} UTC timestamp in milliseconds
  */
 export function computeNextJobRun(job, timezone) {
-  if (job.cronSchedule || job.cronExpression) {
-    const from = job.lastRun ? new Date(job.lastRun) : new Date()
-    const next = job.cronSchedule
-      ? parseRecurrenceToNextRun(job.cronSchedule, from, timezone)
-      : parseCronToNextRun(job.cronExpression, from, timezone)
-    return next?.getTime() ?? null
-  }
+  const from = job.lastRun ? new Date(job.lastRun) : new Date()
+  if (job.cronSchedule) return parseRecurrenceToNextRun(job.cronSchedule, from, timezone)?.getTime() ?? null
 
   // No recurrence to project forward from — the caller renders 'On demand'
   // rather than an arithmetic-on-null date.
-  if (isOnDemandJob(job)) return null
+  if (!job.cronExpression && isOnDemandJob(job)) return null
+
+  const cronExpr = clockCronExpression(job)
+  if (cronExpr) return parseCronToNextRun(cronExpr, from, timezone)?.getTime() ?? null
 
   return nextIntervalJobFireTime(job, timezone)
 }

@@ -9,13 +9,17 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 
 const jobs = new Map();
 vi.mock('./autonomousJobs.js', () => ({ getJob: vi.fn(async (id) => jobs.get(id)) }));
-vi.mock('./eventScheduler.js', () => ({
-  schedule: vi.fn(),
-  cancel: vi.fn(),
-  getEvent: vi.fn(() => null),
-  parseCronToNextRun: vi.fn(),
-  parseRecurrenceToNextRun: vi.fn(),
-}));
+// Real cron/recurrence math; only the timer registry is stubbed.
+vi.mock('./eventScheduler.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    schedule: vi.fn(),
+    cancel: vi.fn(),
+    getEvent: vi.fn(() => null),
+    parseCronToNextRun: actual.parseCronToNextRun,
+    parseRecurrenceToNextRun: actual.parseRecurrenceToNextRun,
+  };
+});
 vi.mock('./userTimezone.js', () => ({ getUserTimezone: vi.fn().mockResolvedValue('America/Los_Angeles') }));
 vi.mock('./cosState.js', () => ({}));
 vi.mock('./cosTaskStore.js', () => ({}));
@@ -124,5 +128,15 @@ describe('interval job + scheduledTime next fire (#15352)', () => {
     // No scheduledTime, so the timer takes the interval path (a scheduledTime would make it a cron).
     const job = { id: 'j', interval: '1d', intervalMs: DAY, weekdaysOnly: true, lastRun: new Date(PDT('2026-10-23T12:00:00')).toISOString() };
     expect(await nextFire(job)).toBe(PDT('2026-10-26T12:00:00'));
+  });
+
+  it('a daily job with a time of day run manually in the evening fires at HH:MM the next morning in both entry points', async () => {
+    const job = { id: 'j', interval: 'daily', intervalMs: DAY, scheduledTime: '03:00', lastRun: new Date(PDT('2026-10-27T20:00:00')).toISOString() };
+    expect(await nextFire(job)).toBe(PDT('2026-10-28T03:00:00'));
+  });
+
+  it('a weekly weekdaysOnly job with a time of day reports the weekday cron the timer arms', async () => {
+    const job = { ...weekly(PDT('2026-10-23T03:01:00')), weekdaysOnly: true }; // Friday
+    expect(await nextFire(job)).toBe(PDT('2026-10-26T03:00:00')); // next weekday 03:00
   });
 });
