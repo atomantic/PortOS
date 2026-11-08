@@ -155,9 +155,27 @@ async function resolveGitlabNamespace(repoPath) {
 }
 
 /**
+ * Issue numbers whose claim branch a live CoS run in this repository owns. A
+ * pinned claim run binds its branch at dispatch but cuts it and stamps tracker
+ * markers only after its pre-claim checks, so refs and PRs alone miss it for
+ * minutes. Null when the agent records are unreadable: an under-counted set
+ * would dispatch a picker the ownership bind then refuses.
+ */
+async function liveClaimIssueNumbers(repoPath) {
+  const [{ readAgentsStateForSafetyCheck }, { liveClaimBranches }] = await Promise.all([
+    import('./cosState.js'), import('../lib/claimContinuation.js'),
+  ]);
+  const snapshot = await readAgentsStateForSafetyCheck().catch(() => null);
+  const agents = snapshot?.trusted === true ? snapshot.agents : null;
+  if (!agents || typeof agents !== 'object' || Array.isArray(agents)) return null;
+  return liveClaimBranches(Object.values(agents), repoPath).map(issueNumberFromRef).filter((n) => n != null);
+}
+
+/**
  * Collect the set of issue numbers currently in flight, evidenced by an open
  * `claim/issue-<num>` / `cos/.../issue-<num>/...` / `next/issue-<num>` (slashdo
  * `/do:next`, #8161) branch (local or remote) or an open PR/MR source ref.
+ * A live CoS run's registered or bound claim branch counts too, before it exists.
  * Local branches are supplementary; a failed PR/MR listing (timeout, auth,
  * rate limit) returns `{ error, detail }` rather than an under-counted set,
  * since a short set makes issues with an open PR look claimable. `forge` selects
@@ -170,13 +188,16 @@ async function inFlightIssueNumbers(repoPath, forge = 'github', env) {
   const prListCall = forge === 'gitlab'
     ? runCli('glab', withGlabJson(['mr', 'list', '--per-page', '100']), repoPath, env)
     : runCli('gh', await withGithubHost(githubClaimPrArgs(), repoPath), repoPath, env);
-  const [branchRes, prRes] = await Promise.all([
+  const [branchRes, prRes, liveClaims] = await Promise.all([
     runCli('git', ['branch', '-a', '--no-color', '--format=%(refname:short)'], repoPath, env),
-    prListCall
+    prListCall,
+    liveClaimIssueNumbers(repoPath)
   ]);
   if (prRes.code !== 0) {
     return { error: `${forge === 'gitlab' ? 'glab' : 'gh'}-unavailable`, detail: redactCliDetail(prRes.stderr) };
   }
+  if (!liveClaims) return { error: 'claim-ownership-unreadable', detail: 'CoS agent records could not be read' };
+  for (const number of liveClaims) nums.add(number);
   const refs = (branchRes.stdout || '').split('\n').map((s) => s.trim()).filter(Boolean);
   let changes;
   try { changes = JSON.parse(prRes.stdout); } catch { changes = null; }
