@@ -368,15 +368,17 @@ export async function refreshOpenPullRequestStatus(account, env, { now = Date.no
   let changed = 0;
   for (const row of rows) {
     const subject = await reader.subject(repoApiPath(row.subject_api_url, account.host));
-    if (!subject) continue;
-    const status = {
+    const statusCheckedAt = new Date(now).toISOString();
+    // An unreadable PR (deleted, access lost) is still stamped, so it rotates
+    // out of the window instead of starving every other PR.
+    const status = subject ? {
       subjectState: subject.merged === true ? 'merged' : subject.state || null,
       subjectDraft: subject.draft === true,
       mergeState: typeof subject.mergeableState === 'string' ? subject.mergeableState : null,
-      statusCheckedAt: new Date(now).toISOString(),
-    };
-    const finished = status.subjectState !== 'open';
-    const moved = ['subjectState', 'subjectDraft', 'mergeState'].some((key) => (row.evidence?.[key] ?? null) !== status[key]);
+      statusCheckedAt,
+    } : { statusCheckedAt };
+    const finished = Boolean(subject) && status.subjectState !== 'open';
+    const moved = Boolean(subject) && ['subjectState', 'subjectDraft', 'mergeState'].some((key) => (row.evidence?.[key] ?? null) !== status[key]);
     // Only the status keys change, and only on the row as read.
     const { rowCount } = await query(
       `UPDATE github_notifications SET evidence = evidence || $3::jsonb,

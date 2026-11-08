@@ -1040,6 +1040,13 @@ describe.skipIf(!runDb)('GitHub notifications inbox against Postgres', () => {
     expect(await refreshOpenPullRequestStatus(account, {})).toBe(0);
     expect(await refreshOpenPullRequestStatus(account, {}, { now: Date.now() + 11 * 60_000 })).toBe(1);
     expect((await getNotification(account.id, '1701')).subjectStatus.mergeState).toBe('dirty');
+    // An unreadable PR is stamped too, so it leaves the refresh window.
+    delete forge['repos/example-org/project/pulls/1701'];
+    expect(await refreshOpenPullRequestStatus(account, {}, { now: Date.now() + 22 * 60_000 })).toBe(0);
+    const stamped = (await getNotification(account.id, '1701')).evidence;
+    expect(stamped).toMatchObject({ mergeState: 'dirty', statusCheckedAt: new Date(stamped.statusCheckedAt).toISOString() });
+    expect(Date.parse(stamped.statusCheckedAt)).toBeGreaterThan(Date.now() + 21 * 60_000);
+    forge['repos/example-org/project/pulls/1701'] = { ...pr, mergeableState: 'dirty' };
 
     // Anyone else in the discussion keeps the agent out, checked at the tap.
     forge['repos/example-org/project/pulls/1701/comments'] = 'maint\tUser\ndrive-by\tUser\n';
