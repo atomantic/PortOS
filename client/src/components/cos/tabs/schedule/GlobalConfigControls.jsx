@@ -73,51 +73,36 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
       }
     },
   );
-  // Comma-separated free text, committed to taskMetadata.issueExcludeLabels
-  // (an array) on blur. Routes through setUpdating like every other handler
-  // in this file so RunTaskButton (client/src/AGENTS.md's "gate on in-flight
-  // saves, not just the form" rule) can't fire against the pre-edit list
-  // while this PATCH is still in flight.
+  // Writes one taskMetadata key. Routes through setUpdating like every other
+  // handler in this file so RunTaskButton (client/src/AGENTS.md's "gate on
+  // in-flight saves, not just the form" rule) can't fire against the pre-edit
+  // value while this PATCH is still in flight.
+  const writeMetadataField = async (field, value) => {
+    setUpdating(true);
+    try {
+      await onUpdate(taskType, {
+        taskMetadata: { ...(config.taskMetadata || {}), [field]: value }
+      });
+    } finally {
+      setUpdating(false);
+    }
+  };
+  const splitList = (text) => text.split(',').map((s) => s.trim()).filter(Boolean);
+  // Comma-separated free text, committed as an array on blur.
   const excludeLabelsDraft = useFieldDraft(
     (config.taskMetadata?.issueExcludeLabels || []).join(', '),
-    async (next) => {
-      setUpdating(true);
-      try {
-        await onUpdate(taskType, {
-          taskMetadata: { ...(config.taskMetadata || {}), issueExcludeLabels: next.split(',').map((s) => s.trim()).filter(Boolean) }
-        });
-      } finally {
-        setUpdating(false);
-      }
-    }
+    (next) => writeMetadataField('issueExcludeLabels', splitList(next))
   );
-  // pr-watcher's self-managed authors: comma-separated logins, committed on blur.
   const selfManagedAuthorsDraft = useFieldDraft(
     (config.taskMetadata?.selfManagedPrAuthors || []).join(', '),
-    async (next) => {
-      setUpdating(true);
-      try {
-        await onUpdate(taskType, {
-          taskMetadata: { ...(config.taskMetadata || {}), selfManagedPrAuthors: next.split(',').map((s) => s.trim()).filter(Boolean) }
-        });
-      } finally {
-        setUpdating(false);
-      }
-    }
+    (next) => writeMetadataField('selfManagedPrAuthors', splitList(next))
   );
   const selfManagedStaleDraft = useFieldDraft(
     String(config.taskMetadata?.selfManagedPrStaleMinutes || SELF_MANAGED_PR_STALE_MINUTES_DEFAULT),
-    async (next) => {
+    (next) => {
       const minutes = Number.parseInt(next, 10);
-      if (!Number.isInteger(minutes) || minutes < 1) return;
-      setUpdating(true);
-      try {
-        await onUpdate(taskType, {
-          taskMetadata: { ...(config.taskMetadata || {}), selfManagedPrStaleMinutes: Math.min(minutes, SELF_MANAGED_PR_STALE_MINUTES_MAX) }
-        });
-      } finally {
-        setUpdating(false);
-      }
+      if (!Number.isInteger(minutes) || minutes < 1) return undefined;
+      return writeMetadataField('selfManagedPrStaleMinutes', Math.min(minutes, SELF_MANAGED_PR_STALE_MINUTES_MAX));
     }
   );
   // Provider/model/effort pins are shared with the schedule card's quick
@@ -274,16 +259,6 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
     }
   };
 
-  const handleTriageCapChange = async (field, value) => {
-    setUpdating(true);
-    try {
-      await onUpdate(taskType, {
-        taskMetadata: { ...(config.taskMetadata || {}), [field]: value }
-      });
-    } finally {
-      setUpdating(false);
-    }
-  };
 
   // The removal bar is stored explicitly even for 'default', so the persisted
   // task states the bar it ran under rather than leaving readers to infer it.
@@ -760,7 +735,7 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
                 <select
                   id={`${cap.field}-${taskType}`}
                   value={value}
-                  onChange={(e) => handleTriageCapChange(cap.field, Number(e.target.value))}
+                  onChange={(e) => writeMetadataField(cap.field, Number(e.target.value))}
                   disabled={updating}
                   className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm"
                 >

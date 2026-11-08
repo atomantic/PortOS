@@ -24,9 +24,7 @@ import { createHash } from 'node:crypto';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { isPlainObject } from '../lib/objects.js';
 import { PR_COMPLETIONS, prHeldForOperator, resolvePrCompletion } from '../lib/prDisposition.js';
-import {
-  SELF_MANAGED_PR_STALE_MINUTES_DEFAULT, isSelfManagedPrActive, isValidSelfManagedPrStaleMinutes, normalizeSelfManagedPrAuthors,
-} from '../lib/selfManagedPrAuthors.js';
+import { isSelfManagedPrActive } from '../lib/selfManagedPrAuthors.js';
 
 // Bound the gh query. The high-water mark (computePrCheck) advances to the max
 // open PR number it saw, so it can only correctly drain a backlog it received
@@ -1043,11 +1041,8 @@ export async function checkPullRequests(app, {
 } = {}) {
   // Legacy 'any'/'others' pins cannot widen a maintenance task into intake.
   const filter = authorFilter === 'self' ? 'self' : 'trusted';
-  const selfManaged = {
-    authors: normalizeSelfManagedPrAuthors(selfManagedPrAuthors),
-    staleMinutes: isValidSelfManagedPrStaleMinutes(selfManagedPrStaleMinutes)
-      ? selfManagedPrStaleMinutes : SELF_MANAGED_PR_STALE_MINUTES_DEFAULT,
-  };
+  // Already normalized and bounded by sanitizeTaskMetadata.
+  const selfManaged = { authors: selfManagedPrAuthors, staleMinutes: selfManagedPrStaleMinutes };
 
   const origin = await getOriginInfo(app.repoPath).catch(() => null);
   // Accept any GitHub-family host — github.com AND self-hosted GitHub Enterprise
@@ -1119,8 +1114,8 @@ export async function checkPullRequests(app, {
   const selfManagedHeld = [];
   for (const pr of prs) {
     if (!Number.isInteger(pr.number) || pr.number < 1) continue;
-    if (!await trust.isTrusted(pr.authorLogin)) continue;
-    if (filter === 'self' && pr.authorLogin?.toLowerCase() !== selfLogin) continue;
+    // Checked before the trust lookup: a held PR is skipped either way, so the
+    // collaborator-permission round-trip would be wasted on every poll.
     if (isSelfManagedPrActive(pr, selfManaged, nowMs)) {
       // Keep the previous fingerprint rather than recording this one, so the
       // activity seen while held still reads as new once the PR goes stale.
@@ -1129,6 +1124,8 @@ export async function checkPullRequests(app, {
       selfManagedHeld.push(pr.number);
       continue;
     }
+    if (!await trust.isTrusted(pr.authorLogin)) continue;
+    if (filter === 'self' && pr.authorLogin?.toLowerCase() !== selfLogin) continue;
     // Includes current head and CI transitions, so an existing PR becomes
     // actionable again when its checks complete or a collaborator pushes a fix.
     const fingerprint = createHash('sha256').update(JSON.stringify([

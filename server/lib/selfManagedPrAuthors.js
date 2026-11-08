@@ -10,7 +10,7 @@ export const SELF_MANAGED_PR_STALE_MINUTES_MAX = 7 * 24 * 60;
 export const MAX_SELF_MANAGED_PR_AUTHORS = 50;
 const GITHUB_LOGIN_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
 
-/** Trim, strip `@`, drop non-logins, lowercase-dedupe and cap. Non-array → []. */
+/** Lowercased, deduped, capped GitHub logins (non-array → []). Unlike normalizeReviewUsernames, no team slugs. */
 export function normalizeSelfManagedPrAuthors(list) {
   if (!Array.isArray(list)) return [];
   const out = new Set();
@@ -31,10 +31,10 @@ export function isValidSelfManagedPrStaleMinutes(value) {
  * stale window. An unparseable `updatedAt` cannot prove recent activity, so the
  * PR is not held.
  */
-export function isSelfManagedPrActive(pr, { authors = [], staleMinutes = SELF_MANAGED_PR_STALE_MINUTES_DEFAULT } = {}, nowMs = Date.now()) {
+export function isSelfManagedPrActive(pr, { authors, staleMinutes } = {}, nowMs = Date.now()) {
   const login = typeof pr?.authorLogin === 'string' ? pr.authorLogin.toLowerCase() : '';
-  if (!login || !authors.includes(login)) return false;
+  if (!login || !authors?.includes(login)) return false;
   const updatedMs = Date.parse(pr.updatedAt || '');
   if (!Number.isFinite(updatedMs)) return false;
-  return nowMs - updatedMs < staleMinutes * 60_000;
+  return nowMs - updatedMs < (staleMinutes ?? SELF_MANAGED_PR_STALE_MINUTES_DEFAULT) * 60_000;
 }

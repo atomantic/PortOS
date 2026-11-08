@@ -934,7 +934,7 @@ describe('checkPullRequests trusted maintenance boundary', () => {
       rawPr(4, 'operator', { updatedAt: '2026-08-01T11:30:00Z' }),
     ];
     forge(prs);
-    const options = { selfManagedPrAuthors: ['@Collaborator'], nowMs };
+    const options = { selfManagedPrAuthors: ['collaborator'], nowMs };
     const tracked = { ...app, prWatcherState: { lastSeenPrNumber: 4, activityByPr: {} } };
 
     const active = await checkPullRequests(tracked, options);
