@@ -60,24 +60,26 @@ function PlacedSet({ set, entry, labelPortal }) {
   );
 }
 
+/** The world's extent on the ground: its middle and a size that covers every set and path. */
+export function worldExtent(world) {
+  const points = [...world.sets.map((set) => set.position), ...world.paths.flatMap((path) => path.points)];
+  if (!points.length) return { center: [0, 0], size: 200 };
+  const xs = points.map((p) => p[0]);
+  const zs = points.map((p) => p[1]);
+  const center = [(Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...zs) + Math.max(...zs)) / 2];
+  return { center, size: Math.max(200, Math.max(...xs) - Math.min(...xs), Math.max(...zs) - Math.min(...zs)) };
+}
+
 /**
- * The whole world in 3D: ground, paths, generated filler, and every placed
- * set's own greybox, lit for its setting and, outdoors, `clockMinutes` (sky, sun, lamps). Pan, zoom and
- * tilt with the map controls. `places` is the loaded catalog places by id.
+ * Everything of the world inside a Canvas: sky and light for its setting and
+ * `clockMinutes`, ground, paths, generated filler, lamps and every placed set.
+ * Shared by the World tab's viewer and the previz player's night shots.
  */
-export default function WorldViewer({ world, places, clockMinutes = 21 * 60 }) {
-  const labelPortal = useRef(null);
+export function WorldScene({ world, places, clockMinutes, labelPortal }) {
   const fill = useMemo(() => worldFill(world), [world]);
+  const extent = useMemo(() => worldExtent(world), [world]);
   const setting = world.setting || 'outdoor';
   const sky = worldSkyAt(clockMinutes, setting);
-  const extent = useMemo(() => {
-    const points = [...world.sets.map((set) => set.position), ...world.paths.flatMap((path) => path.points)];
-    if (!points.length) return { center: [0, 0], size: 200 };
-    const xs = points.map((p) => p[0]);
-    const zs = points.map((p) => p[1]);
-    const center = [(Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...zs) + Math.max(...zs)) / 2];
-    return { center, size: Math.max(200, Math.max(...xs) - Math.min(...xs), Math.max(...zs) - Math.min(...zs)) };
-  }, [world]);
   const sunDir = [
     Math.sin(rad(sky.sunAzimuth)) * Math.cos(rad(sky.sunElevation)),
     Math.max(0.05, Math.sin(rad(sky.sunElevation))),
@@ -88,27 +90,43 @@ export default function WorldViewer({ world, places, clockMinutes = 21 * 60 }) {
   const lampPoles = fill.lamps.map((lamp) => ({ position: [lamp.position[0], 2.5, lamp.position[2]], size: [0.15, 5, 0.15], rotationDegrees: 0 }));
   const [cx, cz] = extent.center;
   return (
+    <>
+      <color attach="background" args={[sky.sky]} />
+      {setting !== 'space' && <fog attach="fog" args={[sky.sky, extent.size * 1.2, extent.size * 4]} />}
+      <ambientLight intensity={sky.ambient} />
+      <hemisphereLight args={[sky.sky, '#222018', sky.ambient * 0.6]} />
+      {sky.sunIntensity > 0 && <directionalLight position={sunDir.map((v) => v * 500)} intensity={sky.sunIntensity} />}
+      {/* Space has no ground: the sets float where they are placed. */}
+      {setting !== 'space' && (
+        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[cx, 0, cz]}>
+          <planeGeometry args={[extent.size * 6, extent.size * 6]} />
+          <meshStandardMaterial color={setting === 'indoor' ? '#2c2e33' : GROUND} roughness={1} />
+        </mesh>
+      )}
+      {Object.keys(PAVING).map((kind) => <BoxInstances key={kind} items={pavingBy(kind)} color={PAVING[kind]} />)}
+      <BoxInstances items={fill.open} color="#5d6b3a" />
+      <BoxInstances items={fill.buildings} color="#9a958c" />
+      <BoxInstances items={fill.fences} color="#6e6a62" />
+      <BoxInstances items={lampPoles} color="#4a4d52" />
+      <BoxInstances items={lampHeads} color="#30302a" emissive={sky.lampsOn ? '#ffd58a' : null} />
+      {world.sets.map((set) => <PlacedSet key={set.id} set={set} entry={places[set.ingredientId]} labelPortal={labelPortal} />)}
+    </>
+  );
+}
+
+/**
+ * The whole world in 3D (WorldScene), lit for its setting and, outdoors,
+ * `clockMinutes`. Pan, zoom and tilt with the map controls. `places` is the
+ * loaded catalog places by id.
+ */
+export default function WorldViewer({ world, places, clockMinutes = 21 * 60 }) {
+  const labelPortal = useRef(null);
+  const extent = useMemo(() => worldExtent(world), [world]);
+  const [cx, cz] = extent.center;
+  return (
     <div ref={labelPortal} className="relative w-full overflow-hidden rounded-lg border border-port-border bg-black" style={{ aspectRatio: '16 / 10' }} data-port-graphics-surface="webgl" data-testid="world-viewer">
       <Canvas camera={{ position: [cx, extent.size * 0.6, cz + extent.size * 0.6], fov: 45, near: 0.5, far: 20000 }} dpr={[1, 2]} frameloop="demand">
-        <color attach="background" args={[sky.sky]} />
-        {setting !== 'space' && <fog attach="fog" args={[sky.sky, extent.size * 1.2, extent.size * 4]} />}
-        <ambientLight intensity={sky.ambient} />
-        <hemisphereLight args={[sky.sky, '#222018', sky.ambient * 0.6]} />
-        {sky.sunIntensity > 0 && <directionalLight position={sunDir.map((v) => v * 500)} intensity={sky.sunIntensity} />}
-        {/* Space has no ground: the sets float where they are placed. */}
-        {setting !== 'space' && (
-          <mesh rotation={[-Math.PI / 2, 0, 0]} position={[cx, 0, cz]}>
-            <planeGeometry args={[extent.size * 6, extent.size * 6]} />
-            <meshStandardMaterial color={setting === 'indoor' ? '#2c2e33' : GROUND} roughness={1} />
-          </mesh>
-        )}
-        {Object.keys(PAVING).map((kind) => <BoxInstances key={kind} items={pavingBy(kind)} color={PAVING[kind]} />)}
-        <BoxInstances items={fill.open} color="#5d6b3a" />
-        <BoxInstances items={fill.buildings} color="#9a958c" />
-        <BoxInstances items={fill.fences} color="#6e6a62" />
-        <BoxInstances items={lampPoles} color="#4a4d52" />
-        <BoxInstances items={lampHeads} color="#30302a" emissive={sky.lampsOn ? '#ffd58a' : null} />
-        {world.sets.map((set) => <PlacedSet key={set.id} set={set} entry={places[set.ingredientId]} labelPortal={labelPortal} />)}
+        <WorldScene world={world} places={places} clockMinutes={clockMinutes} labelPortal={labelPortal} />
         <MapControls makeDefault target={[cx, 0, cz]} maxPolarAngle={Math.PI * 0.49} />
       </Canvas>
     </div>

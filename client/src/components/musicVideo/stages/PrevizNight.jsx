@@ -1,14 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
-import { Moon, Pause, Play, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import { Clapperboard, Moon, Pause, Play, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import toast from '../../ui/Toast';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import WorldMap, { fitWorldView } from '../../catalog/WorldMapView';
-import useCatalogPlaces from '../../../hooks/useCatalogPlaces.js';
 import { formatCount } from '../../../utils/formatters.js';
 import { worldClockText } from '../../../../../server/lib/worldMap.js';
 import { musicVideoShotPlaceId } from '../../../../../server/lib/musicVideoRouteMaps.js';
-import { previzPawnColors } from '../../../../../server/lib/musicVideoPreviz.js';
+import { placePrevizCutsOnNight, previzPawnColors, projectPreviz } from '../../../../../server/lib/musicVideoPreviz.js';
 import { NIGHT_BEATS_MAX, NIGHT_PACES } from '../../../../../server/lib/musicVideoPrevizLimits.js';
 import {
   draftNightFromShots, nightActorsAt, nightBeatProblems, nightClockAt, nightMinuteOfClock, previzNight,
@@ -76,6 +75,8 @@ function BeatEditor({ project, world, night, beat, characters, setName, onChange
     const clock = fromTimeValue(value);
     if (clock === null) return;
     const startMin = nightMinuteOfClock(night, clock);
+    // A time outside the night wraps past its end.
+    if (startMin >= night.lengthMin) return;
     onChange({ startMin, endMin: startMin + span });
   };
   return (
@@ -150,12 +151,14 @@ function BeatEditor({ project, world, night, beat, characters, setName, onChange
  * The story night over the previz world: when it starts and how long it runs,
  * the beats (stay at a set, travel between sets) everyone's journey is
  * simulated from, a strip of those beats per person, and a top-down map to
- * watch the whole night play at 60x. The selected beat is `?beat=`.
+ * watch the whole night play at 60x. The selected beat is `?beat=`. Drafting
+ * also places the previz cuts on the night; "Place shots" fills cuts with no
+ * story time yet. `onSave(patch)` saves fields of the previz.
  */
-export default function PrevizNight({ project, world, locked, onSave }) {
+export default function PrevizNight({ project, world, places, locked, onSave: savePatch }) {
   const [params, setParams] = useSearchParams();
   const night = previzNight(project);
-  const places = useCatalogPlaces((world?.sets || []).map((set) => set.ingredientId));
+  const onSave = (next) => savePatch({ night: next });
   const characters = (project.concept?.subjects || []).filter((subject) => subject.kind === 'character');
   const colors = useMemo(() => previzPawnColors(project), [project]);
   const [startClock, setStartClock] = useState(1200);
@@ -208,8 +211,18 @@ export default function PrevizNight({ project, world, locked, onSave }) {
     }
     select('');
     setWatchMin(0);
-    onSave(next);
-    toast.success(`Night drafted: ${formatCount(next.beats.length)} beat${next.beats.length === 1 ? '' : 's'} across ${formatCount(visits)} visit${visits === 1 ? '' : 's'}`);
+    const withNight = { ...project, previz: { ...(project.previz || { cuts: [], tracks: [] }), night: next } };
+    const { previz, placed } = placePrevizCutsOnNight(withNight, world);
+    savePatch(projectPreviz(withNight) ? { night: next, cuts: previz.cuts } : { night: next });
+    toast.success(`Night drafted: ${formatCount(next.beats.length)} beat${next.beats.length === 1 ? '' : 's'}${placed ? `, ${formatCount(placed)} shot${placed === 1 ? '' : 's'} placed on it` : ''}`);
+  };
+  const cuts = projectPreviz(project)?.cuts || [];
+  const unplaced = cuts.filter((cut) => !Number.isFinite(cut.storyMin)).length;
+  const placeShots = () => {
+    const { previz, placed } = placePrevizCutsOnNight(project, world, { onlyUnplaced: true });
+    if (!placed) { toast.error('None of the unplaced shots is at a set the night stays at.'); return; }
+    savePatch({ cuts: previz.cuts });
+    toast.success(`${formatCount(placed)} shot${placed === 1 ? '' : 's'} placed on the night`);
   };
   const editBeat = (patch) => onSave({ ...night, beats: night.beats.map((entry) => (entry.id === beat.id ? { ...entry, ...patch } : entry)) });
   const addBeat = () => {
@@ -259,6 +272,7 @@ export default function PrevizNight({ project, world, locked, onSave }) {
           </select>
         </label>
         <span className="text-port-text-muted">until {worldClockText(endClock)} · {formatCount(night.beats.length)} beat{night.beats.length === 1 ? '' : 's'}</span>
+        {unplaced > 0 && <button type="button" className={buttonCls} onClick={placeShots}><Clapperboard size={12} aria-hidden="true" /> Place {formatCount(unplaced)} shot{unplaced === 1 ? '' : 's'} on the night</button>}
         <button type="button" className={buttonCls} disabled={night.beats.length >= NIGHT_BEATS_MAX} onClick={addBeat}><Plus size={12} aria-hidden="true" /> Add beat</button>
         {confirmRedraft
           ? <ConfirmButtonPair prompt="Redraft the night from the shots? Beat edits are replaced." confirmText="Redraft" largeTouchTargets

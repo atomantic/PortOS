@@ -70,3 +70,24 @@ it('drafts the night over the linked world from the shots, then saves a beat edi
   fireEvent.change(screen.getByLabelText('Minutes'), { target: { value: '90' } });
   expect(board.saveProjectFields.mock.calls.at(-1)[0].previz.night.beats[0]).toMatchObject({ startMin: 0, endMin: 90 });
 });
+
+// Catches shots never getting a moment on the night, or the cut's story time edit not saving.
+it('places shots on the night and saves a cut\'s story time', async () => {
+  const night = { startClock: 1200, lengthMin: 480, beats: [{ id: 'b1', kind: 'stay', subjectIds: ['c-ana', 'c-bo'], startMin: 0, endMin: 480, setId: 'w-street', toSetId: null, pace: null }] };
+  const cut = { id: 'k1', sceneId: 's1', startSec: 0, endSec: 4, placeSubjectId: 'p-street', viewShotId: 'wide', holderSubjectId: null, visibleSubjectIds: null, aimSubjectId: null };
+  const linked = { ...project, previz: { cuts: [cut], tracks: [], worldId: 'cat-world', night } };
+  const board = { project: linked, locked: false, editProjectLocal: vi.fn(), saveProjectFields: vi.fn(), seekToScene: vi.fn() };
+  const { rerender } = render(<MemoryRouter><PrevizStage board={board} /></MemoryRouter>);
+  fireEvent.click(await screen.findByRole('button', { name: /Place 1 shot on the night/ }));
+  const { previz } = board.saveProjectFields.mock.calls.at(-1)[0];
+  expect(previz.cuts[0].storyMin).toBe(0);
+
+  rerender(<MemoryRouter><PrevizStage board={{ ...board, project: { ...linked, previz } }} /></MemoryRouter>);
+  fireEvent.change(screen.getByLabelText('On the night at'), { target: { value: '20:30' } });
+  expect(board.saveProjectFields.mock.calls.at(-1)[0].previz.cuts[0]).toMatchObject({ storyMin: 30 });
+  expect(board.saveProjectFields.mock.calls.at(-1)[0].previz.night).toEqual(night);
+  // 19:00 is before a night that starts at 20:00, so it is not a moment of it.
+  const saves = board.saveProjectFields.mock.calls.length;
+  fireEvent.change(screen.getByLabelText('On the night at'), { target: { value: '19:00' } });
+  expect(board.saveProjectFields.mock.calls).toHaveLength(saves);
+});

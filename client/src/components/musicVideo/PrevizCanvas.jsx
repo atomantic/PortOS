@@ -2,6 +2,7 @@ import { Suspense, useEffect } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
 import { Html } from '@react-three/drei';
 import { GreyboxModel, PartMesh } from '../catalog/GreyboxViewer.jsx';
+import { WorldScene } from '../catalog/WorldViewer.jsx';
 import ErrorBoundary from '../ErrorBoundary';
 import { aspectRatio, fovFromFocalLength, partColor } from '../../lib/greybox';
 
@@ -55,11 +56,24 @@ function CameraRig({ camera: shot }) {
 
 /**
  * One previz frame (lib/musicVideoPreviz.js `previzFrameAt`) drawn over its
- * set's greybox: the layout, every visible person as a proxy, seen through the
+ * set's greybox, or over the whole world when the cut plays on the night: the layout, every visible person as a proxy, seen through the
  * cut's camera at its lens and aspect. `labelPortal` is the DOM overlay for names.
  */
 export default function PrevizCanvas({ frame, modelSrc = null, labelPortal }) {
   const { greybox, camera } = frame;
+  if (frame.world) {
+    // A shot on the night: the whole world, lit by the story clock, from the cut's camera.
+    return (
+      <ErrorBoundary fallback={<p role="alert" className="p-4 text-sm text-port-text">The world could not be drawn.</p>}>
+        <Canvas camera={{ position: camera.position, fov: fovFromFocalLength(camera.focalLengthMm), near: 0.1, far: 20000 }}
+          gl={{ antialias: true, preserveDrawingBuffer: true }} dpr={[1, 2]} frameloop="demand" style={{ aspectRatio: aspectRatio(camera.aspect) }}>
+          <WorldScene world={frame.world} places={frame.worldPlaces || {}} clockMinutes={frame.clockMinutes} labelPortal={labelPortal} />
+          {frame.actors.filter((actor) => actor.visible).map((actor) => <ActorProxy key={actor.subjectId} actor={actor} labelPortal={labelPortal} />)}
+          <CameraRig camera={camera} />
+        </Canvas>
+      </ErrorBoundary>
+    );
+  }
   const layout = { zones: greybox.zones || [] };
   return (
     <ErrorBoundary key={modelSrc || 'spec'} fallback={<p role="alert" className="p-4 text-sm text-port-text">The set's 3D model could not be drawn.</p>}>

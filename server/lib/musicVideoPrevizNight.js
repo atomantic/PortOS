@@ -185,7 +185,7 @@ function travelPose(world, beat, subjectId, storyMin, routes) {
  * (at a travel's destination, standing). `places` is the loaded catalog places
  * by id, for each set's figure marks.
  */
-function nightPoseAt(project, world, places, subjectId, storyMin, routes = new Map()) {
+function nightPoseAt(project, world, places, subjectId, storyMin, routes) {
   const night = previzNight(project);
   if (!night || !world) return null;
   const beats = night.beats.filter((beat) => (beat.subjectIds || []).includes(subjectId)).sort((a, b) => a.startMin - b.startMin);
@@ -209,9 +209,17 @@ function nightPoseAt(project, world, places, subjectId, storyMin, routes = new M
   return { ...stayPose(beat.kind === 'travel' ? { ...beat, subjectIds: beat.subjectIds } : beat, set, greyboxOf(set), subjectId, storyMin), beatId: beat.id };
 }
 
+// Routes per world object, so playback at 24+ fps never re-solves the path network.
+const ROUTES = new WeakMap();
+const routesFor = (world) => {
+  if (!ROUTES.has(world)) ROUTES.set(world, new Map());
+  return ROUTES.get(world);
+};
+
 /** Everyone the night names, where they are at `storyMin`, with their names. */
 export function nightActorsAt(project, world, places, storyMin) {
-  const routes = new Map();
+  if (!world) return [];
+  const routes = routesFor(world);
   return characters(project)
     .map((subject) => {
       const pose = nightPoseAt(project, world, places, subject.id, storyMin, routes);
