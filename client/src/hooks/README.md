@@ -199,7 +199,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 
 | Hook | Purpose | Use when |
 |---|---|---|
-| `useAppDeploy` | Stream `deploy.sh` output via Socket.IO. | App deployment surfaces only. |
+| `useAppDeploy` | Stream one app's `deploy.sh` output via Socket.IO; reattaches to a running deploy after a reload or reconnect. | App deployment surfaces only. |
 | `useAppOperation` | Socket-based app ops (update, standardize) with step tracking. | App operations UI. |
 | `useAppOverrideActions` | Per-app scheduled-task override mutations (`{ handleUpdateOverride, handleBulkToggleOverride }`) with shared toast copy + silent flag; pass the tab's `refetch`. | Any surface hosting `PerAppOverrideList` (Schedule tab, Timeline tab) — don't re-copy the write-plus-toast-plus-refetch handlers. |
 | `useTaskAddForm` | Reducer-backed CoS task form orchestration: draft reconciliation, provider/app/feature loading, template and reviewer defaults, uploads, submit gating, and immutable task payload construction. | `TaskAddForm` and any future surface that needs the same task-entry state machine. |

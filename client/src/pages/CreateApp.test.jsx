@@ -118,3 +118,46 @@ describe('CreateApp — PM2 standardization is opt-in', () => {
     expect(screen.getByText(/Needs an LLM provider/)).toBeInTheDocument();
   });
 });
+
+describe('CreateApp — standardization when the socket drops', () => {
+  beforeEach(() => {
+    emit.mockClear();
+    for (const key of Object.keys(handlers)) delete handlers[key];
+  });
+
+  it('settles a running standardization with a retry message when the socket disconnects', async () => {
+    const user = userEvent.setup();
+    await detectApp();
+    await user.click(screen.getByRole('button', { name: 'Standardize PM2 config' }));
+    // Spinner state: the action is replaced by the progress rows.
+    expect(screen.queryByRole('button', { name: 'Standardize PM2 config' })).toBeNull();
+
+    // The terminal frame is lost with the old socket id; only the disconnect arrives.
+    await act(async () => { handlers.disconnect('transport close'); });
+
+    expect(screen.getByText("Connection lost during standardization; it may still finish on the server. Wait for it to finish, then check the app's ecosystem.config.cjs or run Standardize again.")).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Standardize PM2 config' })).toBeEnabled();
+
+    // Re-running starts a fresh attempt and clears the message.
+    await user.click(screen.getByRole('button', { name: 'Standardize PM2 config' }));
+    expect(standardizeEmits()).toHaveLength(2);
+    expect(screen.queryByText(/Connection lost during standardization/)).toBeNull();
+  });
+
+  it('does not raise the message for a disconnect when no standardization is running', async () => {
+    await detectApp();
+    await act(async () => { handlers.disconnect('transport close'); });
+    expect(screen.queryByText(/Connection lost during standardization/)).toBeNull();
+  });
+
+  it('does not overwrite a finished standardization on a later disconnect', async () => {
+    const user = userEvent.setup();
+    await detectApp();
+    await user.click(screen.getByRole('button', { name: 'Standardize PM2 config' }));
+    await act(async () => {
+      handlers['standardize:complete']({ success: true, result: { filesModified: ['ecosystem.config.cjs'] } });
+    });
+    await act(async () => { handlers.disconnect('transport close'); });
+    expect(screen.queryByText(/Connection lost during standardization/)).toBeNull();
+  });
+});

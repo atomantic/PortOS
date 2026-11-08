@@ -20,6 +20,12 @@ import {
 // the reset through this module.
 export { __resetAppOperations } from '../services/appOperations.js';
 
+// maintenance.admit records each run but does not refuse a second one, so a
+// Create App re-click (e.g. after a dropped socket) would otherwise run two
+// analyze→backup→apply flows against the same repo at once.
+const standardizingRepos = new Set();
+const STANDARDIZE_BUSY_MESSAGE = 'A standardization is already running for this repository. Wait for it to finish, then try again.';
+
 export const registerAppHandlers = (socket, io) => {
   socket.on('detect:start', async (rawData) => {
     try {
@@ -38,13 +44,22 @@ export const registerAppHandlers = (socket, io) => {
   // The multi-step analyze→backup→apply flow lives in the service; the socket
   // handler only wires progress callbacks to socket events.
   socket.on('standardize:start', async (rawData) => {
+    let resource = null;
     try {
       const data = validateSocketData(standardizeStartSchema, rawData, socket, 'standardize:start');
       if (!data) return;
       const { repoPath, providerId, overwriteEcosystem = false } = data;
+      const repoResource = appOperationResource(repoPath);
+      if (standardizingRepos.has(repoResource)) {
+        console.log(`🚫 Standardization already running for ${repoPath}`);
+        socket.emit('standardize:complete', { success: false, duplicate: true, error: STANDARDIZE_BUSY_MESSAGE });
+        return;
+      }
+      standardizingRepos.add(repoResource);
+      resource = repoResource;
       console.log(`🔧 Starting PM2 standardization: ${repoPath}`);
 
-      const outcome = await maintenance.run('app-operation', appOperationResource(repoPath), () => pm2Standardizer.runStandardizeFlow(repoPath, providerId, {
+      const outcome = await maintenance.run('app-operation', resource, () => pm2Standardizer.runStandardizeFlow(repoPath, providerId, {
         overwriteEcosystem,
         onStep: ({ step, status, data }) => {
           socket.emit('standardize:step', { step, status, data, timestamp: Date.now() });
@@ -58,6 +73,8 @@ export const registerAppHandlers = (socket, io) => {
       console.error(`❌ Socket handler error [standardize:start]: ${message}`);
       socket.emit('error:server', { message });
       socket.emit('standardize:complete', { success: false, error: message });
+    } finally {
+      if (resource) standardizingRepos.delete(resource);
     }
   });
 
@@ -130,7 +147,7 @@ export const registerAppHandlers = (socket, io) => {
         socket.emit('app:standardize:error', {
           appId: app.id,
           duplicate: true,
-          message: `An ${claim.inFlight.type} is already running for ${claim.inFlight.appName}`
+          message: claim.message
         });
         return;
       }
@@ -176,25 +193,66 @@ export const registerAppHandlers = (socket, io) => {
   });
   socket.emit('app:operations:active', activeOperationsPayload());
 
+  // A deploy runs for minutes, so like update/standardize it lives in the
+  // operation registry and broadcasts on the io bus keyed by appId: a client
+  // that reconnects (new socket id) or reloads mid-deploy still receives the
+  // terminal frame, or rehydrates from `app:operations:active`. The
+  // maintenance.run admission stays inside appDeployer.runDeployFlow.
   socket.on('app:deploy', async (rawData) => {
+    let operatingAppId = null;
+    // Every frame carries the operation's startedAt, the run identity the
+    // client tombstones, so a trailing snapshot cannot resurrect a run whose
+    // frames ended before any snapshot named it.
+    let runId = {};
+    let requestedAppId = null;
+    let outcome = 'failure';
     try {
       const data = validateSocketData(appDeploySchema, rawData, socket, 'app:deploy');
       if (!data) return;
+      requestedAppId = data.appId;
 
-      const onOutput = (type, payload) => {
-        socket.emit(`app:deploy:${type}`, { ...payload, timestamp: Date.now() });
-      };
-
-      const outcome = await appDeployer.runDeployFlow(data.appId, data.flags, { onOutput });
-      if (!outcome.ok) {
-        socket.emit('app:deploy:error', { message: outcome.error });
+      const app = await appsService.getAppById(data.appId);
+      if (!app) {
+        socket.emit('app:deploy:error', { appId: data.appId, message: 'App not found' });
         return;
       }
-      socket.emit('app:deploy:complete', { success: outcome.success, code: outcome.code });
+
+      const claim = claimAppOperation(io, app, 'deploy');
+      if (!claim.ok) {
+        socket.emit('app:deploy:error', {
+          appId: app.id,
+          duplicate: true,
+          message: claim.message
+        });
+        return;
+      }
+      const operation = claim.operation;
+      operatingAppId = app.id;
+      runId = { startedAt: operation.startedAt };
+
+      await runAppOperation(operation, async () => {
+        const onOutput = (type, payload) => {
+          const frame = { ...payload, appId: app.id, ...runId, timestamp: Date.now() };
+          if (type === 'status') {
+            recordOperationStep(operation, { appId: app.id, step: payload.phase ?? 'deploy', status: payload.phase === 'complete' ? 'done' : 'running', message: payload.message, timestamp: frame.timestamp });
+          }
+          io.emit(`app:deploy:${type}`, frame);
+        };
+
+        const result = await appDeployer.runDeployFlow(app.id, data.flags, { onOutput });
+        if (!result.ok) {
+          io.emit('app:deploy:error', { appId: app.id, ...runId, message: result.error });
+          return;
+        }
+        io.emit('app:deploy:complete', { appId: app.id, ...runId, success: result.success, code: result.code });
+        if (result.success) outcome = 'completion';
+      });
     } catch (err) {
       const message = err?.message ?? String(err);
       console.error(`❌ Socket handler error [app:deploy]: ${message}`);
-      socket.emit('app:deploy:error', { message });
+      io.emit('app:deploy:error', { appId: operatingAppId ?? requestedAppId, ...runId, message });
+    } finally {
+      if (operatingAppId) endAppOperation(io, operatingAppId, outcome);
     }
   });
 };
