@@ -306,7 +306,11 @@ describe('ChiefOfStaff agent panel on a short viewport (#15237)', () => {
     vi.stubGlobal('matchMedia', vi.fn((query) => (query === '(max-height: 500px)'
       ? media
       : { matches: false, addEventListener: () => {}, removeEventListener: () => {} })));
-    return () => act(() => { listeners.forEach((fn) => fn()); });
+    return () => {
+      // A change fired before the page subscribes would be silently lost.
+      expect(listeners.size).toBeGreaterThan(0);
+      act(() => { listeners.forEach((fn) => fn()); });
+    };
   };
   const panelToggle = () => document.querySelector('button[aria-controls="cos-agent-panel"]');
 
@@ -327,6 +331,9 @@ describe('ChiefOfStaff agent panel on a short viewport (#15237)', () => {
     const short = { value: false };
     const notify = stubViewport(short);
     await renderSettledAt('agents');
+    // The agents tab resolves its own async work after the shell settles; flush
+    // it inside act so a late update can't land mid-assertion under load.
+    await act(async () => {});
     expect(panelToggle()).toHaveAttribute('aria-expanded', 'true');
 
     short.value = true;
