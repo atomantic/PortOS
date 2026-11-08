@@ -410,6 +410,11 @@ export const ISSUE_AUTHOR_FILTER_OPTIONS = [
 // issue-claiming task type here rather than OR-ing literals across components.
 export const ISSUE_AUTHOR_FILTER_TASK_TYPES = new Set(['claim-issue', 'claim-work']);
 
+// New-issue grace for autonomous claiming (taskMetadata.issueMinAgeMinutes),
+// mirroring DEFAULT_ISSUE_MIN_AGE_MINUTES in server/lib/cosValidation.js.
+export const ISSUE_MIN_AGE_DEFAULT = 5;
+export const ISSUE_MIN_AGE_OPTIONS = [0, 2, 5, 10, 15, 30, 60];
+
 // Scheduled claim swarm fan-out (taskMetadata.swarmCount). 0 = off;
 // 2..12 = parallel workers, matching SWARM_COUNT_MIN/MAX in cosValidation.js.
 // Exposed on the same forge-issue task types as the author filter.

@@ -1082,6 +1082,10 @@ export const ISSUE_AUTHOR_FILTERS = ['self', 'collaborators', 'owner', 'any'];
 export const REPO_SYNC_VERIFY_MODES = ['always', 'when-changed', 'never'];
 export const DEFAULT_REPO_SYNC_VERIFY_MODE = 'when-changed';
 
+// `issueMinAgeMinutes` cap: one day. A longer hold is a label's job. The
+// shipped default and its use live in lib/issueClaimEvidence.js.
+export const MAX_ISSUE_MIN_AGE_MINUTES = 1440;
+
 // `issueExcludeLabels` — extra labels a user wants left for human contributors
 // (e.g. `good first issue`) rather than auto-claimed by claim-issue/claim-work.
 // Unioned with the fixed NON_ACTIONABLE_ISSUE_LABELS set at read time
@@ -1089,6 +1093,7 @@ export const DEFAULT_REPO_SYNC_VERIFY_MODE = 'when-changed';
 // GitHub/GitLab's own per-issue label limits; this is a short curated list, not
 // an arbitrary label dump.
 export const MAX_ISSUE_EXCLUDE_LABELS = 20;
+
 
 // Per-entry length cap. GitHub caps a label name at 50 chars; GitLab allows up
 // to 255. Cap at GitLab's (larger) limit rather than GitHub's — a GitHub
@@ -1374,6 +1379,14 @@ export function sanitizeTaskMetadata(raw) {
   // default's non-empty list, not silently inherit it.
   if (Array.isArray(raw.issueExcludeLabels)) {
     clean.issueExcludeLabels = normalizeIssueExcludeLabels(raw.issueExcludeLabels);
+    hasKeys = true;
+  }
+  // `issueMinAgeMinutes` — 0 is kept as an explicit "no grace" override.
+  if (Object.prototype.hasOwnProperty.call(raw, 'issueMinAgeMinutes')
+      && Number.isInteger(raw.issueMinAgeMinutes)
+      && raw.issueMinAgeMinutes >= 0
+      && raw.issueMinAgeMinutes <= MAX_ISSUE_MIN_AGE_MINUTES) {
+    clean.issueMinAgeMinutes = raw.issueMinAgeMinutes;
     hasKeys = true;
   }
   // `swarmCount` turns claim-issue `--swarm` fan-out on (2..12 parallel agents)

@@ -150,3 +150,6 @@ PROMPT_VERSIONS['plan-task-claim'] = 7; // v7: same late-registration rule for t
 
 PROMPT_VERSIONS['claim-issue'] = 59; // v59: investigate and attempt bounded recovery of failed required CI (#15032).
 PROMPT_VERSIONS['claim-issue-gitlab'] = 51; // v51: same failed-CI recovery contract (#15032).
+
+PROMPT_VERSIONS['claim-issue'] = 60; // v60: Phase 1 skips issues younger than the configured new-issue grace ({issueMinAgeRule}, default 5 minutes) so a scheduled run never snipes an issue its filing agent is about to claim; Phase 3b checks linked issues and PRs and screens a non-collaborator's linked diff through the abuse guard + security-model check before building on it.
+PROMPT_VERSIONS['claim-issue-gitlab'] = 52; // v52: same new-issue grace and linked issue/MR check.

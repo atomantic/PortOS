@@ -52,6 +52,7 @@ export async function probeSequenceDrain(job, { catalog, ignoreTaskId = null }) 
   const detection = await detectActionableWork(MAINTENANCE_DRAIN_TASK, app, {
     issueAuthorFilter: metadata.issueAuthorFilter || 'self',
     issueExcludeLabels: metadata.issueExcludeLabels || [],
+    issueMinAgeMinutes: metadata.issueMinAgeMinutes,
     ignoreTaskId,
   });
   if (detection.transient || !detection.hasDetector) return { reason: detection.reason || 'claim probe unavailable' };

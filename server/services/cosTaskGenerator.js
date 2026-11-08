@@ -2391,6 +2391,7 @@ async function applyPerpetualWorkGate(app, taskType, promptTaskType, metadata, i
   const detection = await detectActionableWork(promptTaskType, app, {
     issueAuthorFilter: metadata.issueAuthorFilter || 'self',
     issueExcludeLabels: metadata.issueExcludeLabels || [],
+    issueMinAgeMinutes: metadata.issueMinAgeMinutes,
     // A detector that counts in-flight work must skip the task whose completion
     // triggered this refill — it is already recorded, just not yet marked done.
     ignoreTaskId

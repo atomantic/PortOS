@@ -19,6 +19,7 @@ import {
   applyReleaseOptions,
   resolveIssueAuthorFilterBlock,
   resolveIssueExcludeLabelsBlock,
+  resolveIssueMinAgeRuleBlock,
   resolveReconcileDrainGate,
   resolveSwarmBlock,
 } from './cosTaskPreStepBlocks.js';
@@ -109,6 +110,14 @@ describe('resolveIssueAuthorFilterBlock', () => {
 // NON_ACTIONABLE_ISSUE_LABELS set (perpetualWork.js) plus any app-configured extras
 // (e.g. `good first issue`), so the LIVE claim agent honors the same per-app
 // exclusions the perpetual-drain detector applies.
+describe('resolveIssueMinAgeRuleBlock', () => {
+  it('renders the shipped grace when unset, the configured one, and nothing when off', () => {
+    expect(resolveIssueMinAgeRuleBlock(undefined)).toContain('at least 5 minutes ago');
+    expect(resolveIssueMinAgeRuleBlock(15, { gitlab: true })).toMatch(/at least 15 minutes ago: compare its `created_at`/);
+    expect(resolveIssueMinAgeRuleBlock(0)).toBe('There is no minimum issue age for this run.');
+  });
+});
+
 describe('resolveIssueExcludeLabelsBlock', () => {
   it('renders the fixed base list with no configured extras (default, matches the prior static prompt text)', () => {
     const block = resolveIssueExcludeLabelsBlock();

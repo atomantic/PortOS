@@ -134,7 +134,7 @@ async function inspectApp(app, tasks, localReviewTasks = [], activeAgentTaskIds 
   const { metadata: preview } = await resolveClaimWorkMetadata(pinned, 'claim-issue');
   const [prs, backlog, branches, issues] = await Promise.all([
     listAppPullRequests(pinned),
-    detectActionableWork('claim-issue', pinned, { issueAuthorFilter: preview.issueAuthorFilter, issueExcludeLabels: preview.issueExcludeLabels, requireComplete: true }),
+    detectActionableWork('claim-issue', pinned, { issueAuthorFilter: preview.issueAuthorFilter, issueExcludeLabels: preview.issueExcludeLabels, issueMinAgeMinutes: preview.issueMinAgeMinutes, requireComplete: true }),
     execGit(['ls-remote', '--heads', 'origin'], app.repoPath),
     listConfiguredForgeIssues('gh', pinned, { issueAuthorFilter: preview.issueAuthorFilter, issueExcludeLabels: preview.issueExcludeLabels }, exec.env),
   ]);
