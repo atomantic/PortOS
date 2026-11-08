@@ -140,3 +140,21 @@ describe('IMessageTab — failed stats refresh', () => {
     expect(screen.queryByText(/2 events/)).toBeNull();
   });
 });
+
+// Phone widths need an explicit single shrinkable track; without it the implicit
+// auto column grows to max-content and pushes rows and actions off the viewport.
+describe('IMessageTab — two-pane layout on phones', () => {
+  it('gives the list and detail panes shrinkable tracks', async () => {
+    api.getImessageConversations.mockResolvedValueOnce({
+      conversations: [{ chatKey: 'chat-1', title: 'Example Chat', eventCount: 1 }],
+    });
+    renderTab();
+
+    const grid = (await screen.findByText('Example Chat')).closest('.grid');
+    expect(grid.className).toContain('grid-cols-1');
+    expect(grid.className).toContain('md:grid-cols-[minmax(16rem,22rem)_minmax(0,1fr)]');
+    for (const pane of Array.from(grid.children)) {
+      expect(pane.className).toContain('min-w-0');
+    }
+  });
+});
