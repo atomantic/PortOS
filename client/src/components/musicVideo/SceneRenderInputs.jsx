@@ -136,7 +136,7 @@ export default function SceneRenderInputs({ id, request, onChange, grokPreview =
         ? <p className="text-port-text-muted">No prompt: this model takes the still and the song only.</p>
         : prompt
           ? (
-            // The shot prompt box above already shows the director's words, so only what is added
+            // The motion prompt box above already shows the director's words, so only what is added
             // (and the full prompt on request) shows here; a prompt sent as written shows once.
             grokPreview && !preview.preview?.shotPreviewUnavailable ? <ModelInputPreview prompt={authored} preview={preview} />
               : promptAdditions.length > 0 ? <SentPromptPanel prompt={authored} sentPrompt={prompt} additions={promptAdditions} />

@@ -405,7 +405,7 @@ describe('human-reviewed Music Video workflow', () => {
     expect(bound.body.readiness.readyForProduction).toBe(false);
   });
 
-  it('binds a location-only staging with the shot action and named cast in the one shot prompt', async () => {
+  it('binds a location-only staging with the shot action and named cast in framePrompt', async () => {
     const source = JSON.stringify({ cast: [{ id: 'Mia', age: 9, description: 'red scarf' }], storyboard: [
       { id: 'rink', startSec: 0, endSec: 5, action: 'Mia skates a slow circle', staging: 'Rink floor.', camera: 'Wide', transition: 'Cut' },
       { id: 'full', startSec: 5, endSec: 9, action: 'Mia waves', staging: 'Mia waves from the rink floor at dusk', camera: 'Wide', transition: 'Cut' }] });
@@ -414,10 +414,10 @@ describe('human-reviewed Music Video workflow', () => {
     expect(bound.status).toBe(200);
     const scene = id => bound.body.project.scenes.find(s => s.sceneId === id);
     const [rink] = bound.body.project.productionReview.draft.storyboard;
-    expect(scene(rink.sceneId)).toMatchObject({ framePrompt: null, prompt: 'Mia skates a slow circle Rink floor. In frame: Mia (age 9, red scarf)\nWide\nCut' });
+    expect(scene(rink.sceneId).framePrompt).toBe('Mia skates a slow circle Rink floor. In frame: Mia (age 9, red scarf)');
     const full = await request(app).post(`${base}/production-review/shots/full/bind`).send({});
     const fs = full.body.project.productionReview.draft.storyboard[1];
-    expect(full.body.project.scenes.find(s => s.sceneId === fs.sceneId).prompt).toBe('Mia waves from the rink floor at dusk In frame: Mia (age 9, red scarf)\nWide\nCut');
+    expect(full.body.project.scenes.find(s => s.sceneId === fs.sceneId).framePrompt).toBe('Mia waves from the rink floor at dusk In frame: Mia (age 9, red scarf)');
   });
 
   it('retains targeted feedback across revisions and imports without granting production approval', async () => {
@@ -548,7 +548,7 @@ describe('revising from review feedback', () => {
     const [scene] = before.body.project.scenes;
     shotReviser.mockImplementationOnce(async (_project, requests) => {
       expect(requests.map(r => r.text)).toEqual(['Open the doorway on the downbeat, not before']);
-      return new Map([[scene.sceneId, { framePrompt: null, prompt: 'Figure waits at the closed doorway. Doorway swings open on the first downbeat' }]]);
+      return new Map([[scene.sceneId, { framePrompt: 'Figure waits at the closed doorway', prompt: 'Doorway swings open on the first downbeat' }]]);
     });
 
     const revised = await revise('storyboard');
@@ -556,9 +556,9 @@ describe('revising from review feedback', () => {
     expect(revised.status).toBe(200);
     expect(revised.body.revision).toMatchObject({ stage: 'storyboard', sceneIds: [scene.sceneId] });
     const after = revised.body.project;
-    expect(after.scenes[0]).toMatchObject({ sceneId: scene.sceneId, prompt: 'Figure waits at the closed doorway. Doorway swings open on the first downbeat', framePrompt: null });
-    expect(after.productionReview.draft.storyboard[0]).toMatchObject({ action: 'Figure waits at the closed doorway. Doorway swings open on the first downbeat',
-      staging: '', camera: 'Dolly through doorway', transition: 'Match doorway to next frame' });
+    expect(after.scenes[0]).toMatchObject({ sceneId: scene.sceneId, prompt: 'Doorway swings open on the first downbeat', framePrompt: 'Figure waits at the closed doorway' });
+    expect(after.productionReview.draft.storyboard[0]).toMatchObject({ action: 'Doorway swings open on the first downbeat',
+      staging: 'Figure waits at the closed doorway', camera: 'Dolly through doorway', transition: 'Match doorway to next frame' });
     expect(revised.body.readiness.basis.storyboard).not.toBe(before.body.readiness.basis.storyboard);
     expect(after.productionReview.feedback[0].resolvedAt).toBeUndefined();
     expect(revised.body.readiness.storyboard.problems).toContain('Resolve storyboard feedback for shot: Chorus: Open the doorway on the downbeat, not before');

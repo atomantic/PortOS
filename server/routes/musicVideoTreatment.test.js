@@ -187,7 +187,7 @@ describe('treatment compile', () => {
         motifs: [{ name: 'Red umbrella', description: 'Closed, then open', evolution: 'Opens in the chorus', rationale: 'Hope' }],
         balance: { performance: 30, cutaway: 50, graphic: 20, rationale: 'Mostly the city' },
         shots: [
-          { index: 0, mode: 'cutaway', focalSubject: 'a train window', negativeSpace: 'lower', prompt: 'train window at night, reflections, slow push in' },
+          { index: 0, mode: 'cutaway', focalSubject: 'a train window', negativeSpace: 'lower', framePrompt: 'train window at night, reflections', prompt: 'slow push in' },
           { index: instrumentalIndex, typographyRole: 'hero', mode: 'bogus-mode', focalSubject: 'rain on asphalt' },
         ],
       }),
@@ -207,7 +207,7 @@ describe('treatment compile', () => {
     expect(t.arc.lyricInterpretation).toBe('Running as a refusal to let the night end.');
     expect(t.arc.beats[3].objective).toBe('Umbrella opens into a sea of neon');
     expect(t.arc.balance).toMatchObject({ performance: 30, cutaway: 50, graphic: 20 });
-    expect(t.shotDirections[0]).toMatchObject({ sceneId: first.sceneId, focalSubject: 'a train window', suggestedPrompt: 'train window at night, reflections, slow push in', suggestedFramePrompt: '' });
+    expect(t.shotDirections[0]).toMatchObject({ sceneId: first.sceneId, focalSubject: 'a train window', suggestedFramePrompt: 'train window at night, reflections' });
     // Instrumental shot: no invented text, and an invalid mode keeps the draft's.
     expect(t.shotDirections[instrumentalIndex]).toMatchObject({ typographyRole: 'none', focalSubject: 'rain on asphalt' });
     expect(['cutaway', 'graphic']).toContain(t.shotDirections[instrumentalIndex].mode);
@@ -215,7 +215,7 @@ describe('treatment compile', () => {
 
   it('falls back to the deterministic draft on malformed model output', async () => {
     const project = await plannedProject();
-    runPromptThroughProvider.mockResolvedValueOnce({ text: 'Sure! [{"index": 0, "prompt": "<still>"}] and some prose' });
+    runPromptThroughProvider.mockResolvedValueOnce({ text: 'Sure! [{"index": 0, "framePrompt": "<still>"}] and some prose' });
     const res = await compile(project.id, { baseRevision: 0 });
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ aiUsed: false, aiSkippedReason: 'unparsable-response' });
@@ -280,7 +280,7 @@ describe('treatment apply', () => {
     runPromptThroughProvider.mockResolvedValueOnce({
       text: JSON.stringify({
         beats: [{ sectionIndex: 0, objective: 'Open on the train' }],
-        shots: scenes.map((_, index) => ({ index, focalSubject: `subject ${index}`, prompt: `motion ${index}` })),
+        shots: scenes.map((_, index) => ({ index, focalSubject: `subject ${index}`, framePrompt: `frame ${index}`, prompt: `motion ${index}` })),
       }),
     });
     const res = await compile(project.id, { baseRevision: 0 });
@@ -296,20 +296,19 @@ describe('treatment apply', () => {
     const byScene = new Map(preview.body.scenes.map((s) => [s.sceneId, s]));
     expect(byScene.get(scenes[0].sceneId)).toMatchObject({ prompt: 'manual', keepsSelection: true, directionChanged: true });
     expect(byScene.get(scenes[1].sceneId).prompt).toBe('fill');
-    expect(byScene.get(scenes[2].sceneId).fields).toEqual({ framePrompt: 'none', prompt: 'fill' });
+    expect(byScene.get(scenes[2].sceneId).fields).toEqual({ framePrompt: 'manual', prompt: 'fill' });
 
     const res = await request(app).post(`${base(project.id)}/treatment/apply`).send({ revision: preview.body.revision });
     expect(res.status).toBe(200);
-    expect(res.body.result.promptsKept).toEqual([scenes[0].sceneId]);
+    expect(res.body.result.promptsKept).toEqual([scenes[0].sceneId, scenes[2].sceneId]);
     expect(res.body.result.directed).toBe(scenes.length);
 
     const after = await reload(project.id);
     const [kept, filled] = after.scenes;
     expect(kept).toMatchObject({ framePrompt: 'my own frame', prompt: 'my own motion', referenceImageId: 'picked.png' });
     expect(kept.takes).toHaveLength(1);
-    expect(filled).toMatchObject({ prompt: 'motion 1' });
-    expect(filled.framePrompt ?? null).toBeNull();
-    // A legacy hand-written frame prompt stays beside a newly filled shot prompt.
+    expect(filled).toMatchObject({ framePrompt: 'frame 1', prompt: 'motion 1' });
+    // A hand edit to one prompt never blocks filling the other.
     expect(after.scenes[2]).toMatchObject({ framePrompt: 'hand frame', prompt: 'motion 2' });
     expect(filled.direction.frameClause).toContain('focal subject: subject 1');
     expect(filled.direction.frameClause).toContain('no text, letters, captions');
@@ -339,8 +338,7 @@ describe('treatment apply', () => {
       .send({ revision: preview.revision, overwrite: [{ sceneId: scenes[0].sceneId, promptFingerprint: reviewed.promptFingerprint }] });
     expect(right.status).toBe(200);
     const scene = (await reload(project.id)).scenes[0];
-    // The approved overwrite replaces the whole legacy pair with the one shot prompt.
-    expect(scene).toMatchObject({ framePrompt: null, prompt: 'motion 0', referenceImageId: 'picked.png' });
+    expect(scene).toMatchObject({ framePrompt: 'frame 0', prompt: 'motion 0', referenceImageId: 'picked.png' });
   });
 
   it('blocks a stale treatment until it is recompiled or rebased, and never rebases across a song change', async () => {

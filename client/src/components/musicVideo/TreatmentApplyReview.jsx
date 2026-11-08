@@ -10,8 +10,7 @@ const PROMPT_LABELS = {
   none: 'prompts untouched',
 };
 
-// A legacy treatment may still carry a separate frame prompt; new ones suggest one shot prompt.
-const PROMPT_FIELDS = [['framePrompt', 'Frame prompt'], ['prompt', 'Shot prompt']];
+const PROMPT_FIELDS = [['framePrompt', 'Frame prompt'], ['prompt', 'Clip prompt']];
 // The scene render fields Apply sets (#8977 shot mode, #8985 visual layer).
 function renderFieldLabel(fields) {
   if (!fields) return null;

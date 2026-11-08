@@ -3,7 +3,7 @@ import { shotCameraPrompt } from '../../lib/cameraMovements.js';
 import { musicVideoCreativeContext, musicVideoDirectorLook } from '../../lib/musicVideoCreativeContext.js';
 import { MOTION_CONTINUITY_CLAUSE } from '../../lib/musicVideoMotion.js';
 import { isOutsideMusicVideoReference } from '../../lib/musicVideoConditioning.js';
-import { authoredShotPrompt, musicVideoFrameModelInput, visualDirection } from '../../lib/musicVideoShotPrompt.js';
+import { musicVideoFrameModelInput, visualDirection } from '../../lib/musicVideoShotPrompt.js';
 /**
  * Music Video external-asset handoff (#8965) — provider-neutral export/import
  * for tools PortOS does not drive, such as Midjourney.
@@ -74,9 +74,9 @@ export { visualDirection };
 // A motion prompt (`motion: true`) omits the mood-board look (the i2v model
 // starts from the reference frame, which already carries it) and pins the
 // frame's lighting for the length of the take.
-function composePrompt(primary, project, clause, { motion = false } = {}) {
+function composePrompt(primary, fallback, project, clause, { motion = false } = {}) {
   return [
-    primary?.trim() || '',
+    primary?.trim() || fallback?.trim() || '',
     project.concept?.style?.trim() || '',
     musicVideoCreativeContext(project.concept, { moodBoard: !motion, look: musicVideoDirectorLook(project) }),
     visualDirection(project.visualSpec),
@@ -114,7 +114,7 @@ export const sceneFramePrompt = (project, scene) => musicVideoFrameModelInput(pr
  * camera as the four-part Movement / Speed / Framing / End block, kept apart
  * from the scene description so the i2v model reads it as its own instruction.
  */
-export const sceneShotPrompt = (project, scene, options = {}) => [composePrompt(authoredShotPrompt(scene), project, scene.direction?.motionClause, { motion: true }), shotCameraPrompt(scene.camera), shotActionPrompt(project, scene, options)].filter(Boolean).join('\n');
+export const sceneShotPrompt = (project, scene, options = {}) => [composePrompt(scene.prompt, scene.framePrompt, project, scene.direction?.motionClause, { motion: true }), shotCameraPrompt(scene.camera), shotActionPrompt(project, scene, options)].filter(Boolean).join('\n');
 
 /** Build the export manifest for a project. */
 export function buildHandoffManifest(project, { now = new Date().toISOString() } = {}) {

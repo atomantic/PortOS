@@ -16,7 +16,7 @@ import AutoSizeTextarea from '../ui/AutoSizeTextarea.jsx';
 import InfoTooltip from '../ui/InfoTooltip';
 import SceneStoryboardClip, { storyboardClipOffered } from './SceneStoryboardClip.jsx';
 import { MUSIC_VIDEO_MEDIUM_LABELS } from '../../../../server/lib/musicVideoMediumPlan.js';
-import { authoredShotPrompt, storyboardShotDirection } from '../../../../server/lib/musicVideoShotPrompt.js';
+import { storyboardShotDirection } from '../../../../server/lib/musicVideoShotPrompt.js';
 import { useState } from 'react';
 import { Trash2, Activity, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, X, Video, AlertTriangle, Clapperboard, Shuffle } from 'lucide-react';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
@@ -360,13 +360,10 @@ export default function SceneCard({
   const effectLabels = [...new Set(Object.values(shotEffects(scene, { layered, planned })).flat().map(shotEffectLabel))];
   const effectsSummary = effectLabels.join(', ') || 'none';
   const lyricType = !preMusic && (documentComposition || (layer !== 'card' && composedDrawsLyrics(project)));
-  // A shot has one prompt: its still and its clip both render from it, with the shot details
-  // and other additions listed as chips. A storyboard-linked shot's prompt is its panel's
-  // direction, read live, until the director types one of their own; typing the panel's words
-  // back re-links it. An older shot's separate still prompt shows joined in, and saving folds it in.
+  // A storyboard-linked shot's prompt is its panel's direction, read live so it stays in
+  // sync, until the director types one of their own; typing the panel's words back re-links it.
   const boardDirection = storyboardShotDirection(scene);
-  const followsBoard = !!boardDirection && !scene.prompt?.trim() && !scene.framePrompt?.trim();
-  const promptPatch = (value) => ({ prompt: value, ...(scene.framePrompt != null ? { framePrompt: null } : {}) });
+  const followsBoard = !!boardDirection && !scene.prompt?.trim();
   const promptField = (
     <div className="space-y-1">
       {scene.beatNeedsReview && <div className="flex flex-wrap items-center gap-2 text-xs text-port-warning">
@@ -374,17 +371,19 @@ export default function SceneCard({
         <button type="button" onClick={() => applyPatch({ beatNeedsReview: false })} className="min-h-[44px] rounded border border-port-border px-2 pointer-fine:sm:min-h-0">Mark beat ready</button>
       </div>}
       <div className="flex items-center gap-1 text-[11px] text-port-text-muted">
-        <label htmlFor={fieldId('prompt')}>Shot prompt</label>
-        <InfoTooltip label="About the shot prompt" placement="below" align="start" width={280}>
-          {`The one prompt for this shot. The still${layer === 'footage' ? ' and the clip both render' : ' renders'} from it${fromSheet ? ', followed by the shot details' : ''}; everything PortOS adds is listed as a chip under each render.${endFrames ? ' The end frame has its own prompt.' : ''}`}
+        <label htmlFor={fieldId('prompt')}>{layer === 'footage' ? 'Clip prompt' : 'Shot prompt'}</label>
+        <InfoTooltip label={layer === 'footage' ? 'About the clip prompt' : 'About the shot prompt'} placement="below" align="start" width={280}>
+          {layer === 'footage'
+            ? `What happens during the clip. The video model gets this text with the start frame (and end frame, if used)${fromSheet ? ', followed by the shot details' : ''}. What the frame looks like is its own prompt on the Frames tab.`
+            : 'Describes the shot. The frame renders from it only when its own frame prompt is empty.'}
         </InfoTooltip>
       </div>
       <AutoSizeTextarea
         id={fieldId('prompt')}
-        value={authoredShotPrompt(scene)} rows={3}
-        onChange={(e) => onEditLocal(scene.sceneId, promptPatch(e.target.value))}
-        onBlur={(e) => onSave(scene.sceneId, promptPatch(boardDirection && e.target.value.trim() === boardDirection ? '' : e.target.value))}
-        placeholder={layer === 'footage' ? 'What this shot shows and what happens in it' : 'What this shot shows'}
+        value={followsBoard ? boardDirection : scene.prompt || ''} rows={3}
+        onChange={(e) => onEditLocal(scene.sceneId, { prompt: e.target.value })}
+        onBlur={(e) => onSave(scene.sceneId, { prompt: boardDirection && e.target.value.trim() === boardDirection ? '' : e.target.value })}
+        placeholder={layer === 'footage' ? 'What happens in this shot' : 'What this shot shows'}
         className="block w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm"
       />
       {boardDirection && (followsBoard ? (
@@ -392,7 +391,7 @@ export default function SceneCard({
       ) : (
         <div className="flex flex-wrap items-center gap-2 text-[11px] text-port-text-muted" data-testid="prompt-own">
           <span>This shot's own prompt, not the panel's</span>
-          <button type="button" onClick={() => { onEditLocal(scene.sceneId, promptPatch('')); onSave(scene.sceneId, promptPatch('')); }} className="underline min-h-[44px] pointer-fine:sm:min-h-0">Use storyboard direction</button>
+          <button type="button" onClick={() => { onEditLocal(scene.sceneId, { prompt: '' }); onSave(scene.sceneId, { prompt: '' }); }} className="underline min-h-[44px] pointer-fine:sm:min-h-0">Use storyboard direction</button>
         </div>
       ))}
     </div>
@@ -430,7 +429,7 @@ export default function SceneCard({
       </label>
       <p className="text-[11px] text-port-text-muted">
         {fromSheet
-          ? 'Each detail is added after the shot prompt, for the still and the clip, as its own labeled part (listed under each render). The shot prompt holds only what the details don\'t cover.'
+          ? 'Each detail is added to the still prompt and the clip prompt as its own labeled part (shown under each prompt). The prompt boxes hold only what the details don\'t cover.'
           : 'Off: this shot\'s hand-written prompts are sent as they are. To move a long prompt into these details, use Split frame prompts into details on the shot sheet.'}
       </p>
       <ShotSheetFields project={project} scene={scene} onChange={applyPatch} />
@@ -652,8 +651,7 @@ export default function SceneCard({
         <div className="@container">
         <div className="grid gap-3 @3xl:grid-cols-[minmax(0,5fr)_minmax(0,4fr)] @3xl:items-start">
         <div className="min-w-0 space-y-3">
-        {/* One prompt for the whole shot, above the still and clip tabs that both render from it. */}
-        {promptField}
+        {(layer !== 'footage' || codeShot) && promptField}
         {codeShot ? (
           <p className="text-xs text-port-text-muted" data-testid="code-shot-note">
             The composition draws this shot, so it needs no frame or clip.
@@ -665,7 +663,7 @@ export default function SceneCard({
         {/* Finalize the shot: only the frames and clip in use stay candidates. */}
         <SceneRejectUnused scene={scene} busy={takeBusy} onReject={onRejectUnusedTakes} />
         {/* Frames: the still this shot starts from and, optionally, the one it ends on (#11173),
-            each with Render under it (the end frame with its own prompt), then the tapped frame's takes. */}
+            each with its prompt and Render under it, then the tapped frame's takes. */}
         <div hidden={view !== 'frames'}>
         <SceneFrames project={project} castMedia={castMedia} onReloadCastMedia={onReloadCastMedia} greyboxPlaces={greyboxPlaces} greyboxSaving={greyboxSaving} onGreyboxSaving={setGreyboxSaving} scene={scene} index={index} endFrames={endFrames} endFrameToggle={layer === 'footage'} generatingFrame={!!generatingFrame} generatingEndFrame={!!generatingEndFrame}
           onGenerateFrame={onGenerateFrame} onGenerateEndFrame={onGenerateEndFrame} onEditLocal={onEditLocal} onSave={onSave}
@@ -674,7 +672,7 @@ export default function SceneCard({
           onContinueFromPrevious={layer === 'footage' && index > 0 ? onContinueFromPrevious : null} previousHasClip={previousHasClip}
           assetMarks={project?.assetMarks} onMarkTake={onMarkTake} onCheckTake={onCheckTake} checkingTakes={checkingTakes} onApplyCameos={onApplyCameos} />
         </div>
-        {/* Clip: the picture and its takes, the camera move and where it renders, then Render and other ways to get a clip. */}
+        {/* Clip: the picture and its takes, where it renders and its references, the clip prompt, then Render and other ways to get a clip. */}
         <div hidden={view !== 'clip'}>
         <section aria-label="Render" className="min-w-0 space-y-2">
           {/* A clip, the still, or the still playing a code-drawn image effect (no model call). */}
@@ -720,11 +718,6 @@ export default function SceneCard({
             onSelect={(take) => onSelectTake?.(scene, take)}
             onReview={(take, review) => onReviewTake?.(scene, take, review)}
             onOpenPreview={onOpenPreview} marks={project?.assetMarks} onMark={onMarkTake} />
-          {/* The camera move shows the text it adds to the clip's prompt. */}
-          {layer === 'footage' && (
-            <SceneCameraControls scene={scene} fieldId={fieldId} onEditLocal={onEditLocal} onSave={onSave}
-              adds={cardRequest.promptAdditions.find((item) => item.id === 'camera-move')?.text || null} />
-          )}
           {speakerField}
           <div className="flex flex-wrap items-center gap-2">
             <SceneRenderTarget id={fieldId('render-on')} value={renderPick} onChange={setRenderPick} performance={performance}
@@ -749,6 +742,13 @@ export default function SceneCard({
           {layer === 'footage' && <SceneClipReferences project={project} scene={scene} castMedia={castMedia}
             backend={referenceBackend} model={referenceModel} capacityOverride={useLtxReferences ? 8 : runwayEndFrameOn ? referenceCapacity : undefined} endFrameBlocksReferences={endFrameBlocksReferences} ltxReferencesOff={canUseLtxReferences && !useLtxReferences} onEditLocal={onEditLocal} onSave={onSave}
             saveState={clipReferenceSaveState} onSaveState={setClipReferenceSaveState} />}
+          {/* The clip prompt sits under the clip's references, like each frame's prompt under its frame. */}
+          {layer === 'footage' && promptField}
+          {/* The camera move sits with the clip prompt and shows the text it adds to it. */}
+          {layer === 'footage' && (
+            <SceneCameraControls scene={scene} fieldId={fieldId} onEditLocal={onEditLocal} onSave={onSave}
+              adds={cardRequest.promptAdditions.find((item) => item.id === 'camera-move')?.text || null} />
+          )}
           {timingPlan}
           {layer === 'footage' && (
             <SceneRenderInputs id={fieldId('inputs')} request={previewRequest} onChange={(patch) => setRenderInputs((prev) => ({ ...prev, ...patch,

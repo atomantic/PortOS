@@ -19,22 +19,23 @@ describe('sheet-built stills', () => {
   // Catches the sheet's columns not reaching the still, arriving unlabeled, or out of reading order.
   it('composes the general prompt and each detail as its own labeled part', () => {
     const input = musicVideoFrameModelInput(sheetProject, built);
-    expect(input.prompt.startsWith('red raincoat. they laugh\nCamera: Snapshot camera, held by Ada.\nView: Arm\u2019s-length selfie.\nPlace and time: Corner curb, Dusk, lit by Flash.\nWho: Ada and K.\nAction: They bump heads.\nEmotion: Playful.')).toBe(true);
+    expect(input.prompt.startsWith('red raincoat\nCamera: Snapshot camera, held by Ada.\nView: Arm\u2019s-length selfie.\nPlace and time: Corner curb, Dusk, lit by Flash.\nWho: Ada and K.\nAction: They bump heads.\nEmotion: Playful.')).toBe(true);
     expect(ids(input).slice(0, 6)).toEqual(['shot-sheet-camera', 'shot-sheet-view', 'shot-sheet-place', 'shot-sheet-who', 'shot-sheet-action', 'shot-sheet-emotion']);
   });
-  // Catches an unsplit shot gaining details, or a sheet-built still not sending the shot prompt.
-  it('leaves other shots alone and sends the shot prompt before the details', () => {
+  // Catches an unsplit shot changing what it sends, or a sheet-built one borrowing the motion prompt.
+  it('leaves other shots alone and never falls back to the motion prompt', () => {
     const plain = { ...built, shotSheet: { ...built.shotSheet, promptFromSheet: undefined } };
     expect(musicVideoFrameModelInput(sheetProject, plain).prompt).not.toContain('Camera:');
     const noGeneral = musicVideoFrameModelInput(sheetProject, { ...built, framePrompt: '' });
-    expect(noGeneral.prompt.startsWith('they laugh\nCamera:')).toBe(true);
-    expect(musicVideoFrameModelInput(sheetProject, { ...built, framePrompt: '', prompt: '' }).prompt.startsWith('Camera:')).toBe(true);
+    expect(noGeneral.prompt.startsWith('Camera:')).toBe(true);
+    expect(noGeneral.prompt).not.toContain('they laugh');
   });
-  // Catches the details not reaching the clip, or the clip's text drifting from the still's.
-  it('adds the same details to the clip after the same shot prompt', () => {
+  // Catches the details not reaching the clip, or a detail-built clip borrowing the still's general prompt.
+  it('adds the same details to the clip after its motion text', () => {
     const clip = musicVideoShotModelInput(sheetProject, built, { asTyped: true });
-    expect(clip.prompt.startsWith('red raincoat. they laugh\nCamera: Snapshot camera, held by Ada.')).toBe(true);
+    expect(clip.prompt.startsWith('they laugh\nCamera: Snapshot camera, held by Ada.')).toBe(true);
     expect(ids(clip)).toContain('shot-sheet-emotion');
+    expect(authoredShotPrompt({ ...built, prompt: '' })).toBe('');
     expect(musicVideoShotModelInput(sheetProject, { ...built, shotSheet: { ...built.shotSheet, promptFromSheet: undefined } }, { asTyped: true }).prompt).not.toContain('Camera:');
   });
   // Catches an observer camera reading as held, and the details leaking into an end frame.
@@ -203,20 +204,11 @@ describe('production medium chip', () => {
 // Uniquely catches the server's clip dispatch refusing a panel-linked shot with no typed prompt, or a planner's
 // intent on an unlinked shot standing in for the director's text.
 describe('authoredShotPrompt', () => {
-  it('takes the shot\'s own prompt, else its storyboard panel\'s direction', () => {
-    const linked = { panelId: 'p1', visualIntent: 'She laces her skates' };
+  it('takes the shot\'s own prompt, then its storyboard panel\'s direction, then its frame prompt', () => {
+    const linked = { panelId: 'p1', visualIntent: 'She laces her skates', framePrompt: 'rental booth' };
     expect(authoredShotPrompt({ ...linked, prompt: 'She stands up' })).toBe('She stands up');
     expect(authoredShotPrompt(linked)).toBe('She laces her skates');
-    expect(authoredShotPrompt({ visualIntent: 'planner intent' })).toBe('');
-  });
-  // Catches an older shot's separate still prompt being dropped, doubled, or reaching only one of still and clip.
-  it('joins an older shot\'s still prompt in front, once, for both the still and the clip', () => {
-    const legacy = { sceneId: 's9', framePrompt: 'Rental booth at night', prompt: 'She laces her skates.' };
-    expect(authoredShotPrompt(legacy)).toBe('Rental booth at night. She laces her skates.');
-    expect(authoredShotPrompt({ ...legacy, prompt: 'Rental booth at night, she laces up' })).toBe('Rental booth at night, she laces up');
-    expect(authoredShotPrompt({ framePrompt: 'Rental booth at night', visualIntent: 'planner intent' })).toBe('Rental booth at night');
-    expect(musicVideoFrameModelInput(project, legacy, { asTyped: true }).prompt.startsWith(authoredShotPrompt(legacy))).toBe(true);
-    expect(musicVideoShotModelInput(project, legacy, { asTyped: true }).prompt.startsWith(authoredShotPrompt(legacy))).toBe(true);
+    expect(authoredShotPrompt({ visualIntent: 'planner intent', framePrompt: 'rental booth' })).toBe('rental booth');
   });
 });
 

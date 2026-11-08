@@ -23,7 +23,7 @@ import { musicVideoSubjectScaleText } from './musicVideoSubjectScale.js';
 import { musicVideoReferenceSubjectIds } from './musicVideoCastSelection.js';
 import { musicVideoConditioningReferences } from './musicVideoConditioning.js';
 import { routeMapShotText } from './musicVideoRouteMaps.js';
-import { shotSheetPromptLines } from './musicVideoShotSheet.js';
+import { shotSheetDrivesPrompt, shotSheetPromptLines } from './musicVideoShotSheet.js';
 
 /**
  * The project-wide visual direction: palette and camera rules from the visual
@@ -45,30 +45,26 @@ export function visualDirection(spec) {
 export const storyboardShotDirection = (scene) => (scene?.panelId ? scene?.visualIntent?.trim() || '' : '');
 
 /**
- * A shot's one prompt, which both its still and its clip render from: its own
- * text, else its storyboard panel's direction (read live, so it follows panel
- * edits). Older shots and AI drafts may also carry a separate opening-still
- * `framePrompt`; it is joined in front of the shot's text (unless one already
- * holds the other) so no wording is dropped and the two can never diverge.
- * The shot editor shows this joined text and saves it back to `prompt`.
+ * The director's text for a shot's clip: its own shot prompt, else its
+ * storyboard panel's direction (read live, so it follows panel edits), else
+ * its frame prompt.
  */
-export function authoredShotPrompt(scene) {
-  const own = scene?.prompt?.trim() || storyboardShotDirection(scene);
-  const still = scene?.framePrompt?.trim() || '';
-  if (!still || own.includes(still)) return own;
-  if (!own || still.includes(own)) return still;
-  return `${still}${/[.!?]$/.test(still) ? '' : '.'} ${own}`;
-}
+export const authoredShotPrompt = (scene) => scene?.prompt?.trim() || storyboardShotDirection(scene)
+  // A detail-built shot's frame prompt is the still's general prompt, so its clip never borrows it.
+  || (shotSheetDrivesPrompt(scene) ? '' : scene?.framePrompt?.trim()) || '';
 
 /**
- * How every AI writer of a shot prompt words it (planner, treatment, shot
- * sheet rewrite). Render time already adds the look, production bible, shot
- * sheet, camera, route and references, so the prompt carries only the shot's
- * idea; a long prompt that restates those, or stacks several actions, gives
- * the model competing instructions. A revision rewrites to the same length
- * instead of appending fixes, so prompts don't grow with each review round.
+ * How every AI writer of a shot's prompts words them (planner, treatment, shot
+ * sheet rewrite and tighten). A shot has a frame prompt (the start still) and a
+ * clip prompt (what happens from that still); the video model already sees the
+ * frame, so the clip prompt never redescribes it. Render time adds the look,
+ * production bible, shot sheet, camera, route and references, so neither prompt
+ * restates those. A revision rewrites to the same length instead of appending
+ * fixes, so prompts don't grow with each review round.
  */
-export const SHOT_PROMPT_WRITING = 'Write it the way a director states the shot: two to four plain sentences, about 70 words at most. One main action per shot: who is in frame and where, what they do, where the camera goes and how the shot ends. Name people, places and cameras by name, and leave out what the shot\'s references, look, sheet, camera move and route already carry (faces, wardrobe, props, set dressing, period, lighting rules). An in-world camera\'s holder may show at the edge of frame. When revising, rewrite the whole prompt to this length; never append rules to it.';
+const PROMPT_WRITING_SHARED = 'Name people, places and cameras by name, and leave out what the shot\'s references, look, sheet, camera move and route already carry (faces, wardrobe, props, set dressing, period, lighting rules). When revising, rewrite the whole prompt to this length; never append rules to it.';
+export const FRAME_PROMPT_WRITING = `Write the frame prompt as one still picture in one to three plain sentences, about 50 words at most: who is in frame and where, their pose and the framing. No motion. An in-world camera's holder may show at the edge of frame. ${PROMPT_WRITING_SHARED}`;
+export const CLIP_PROMPT_WRITING = `Write the clip prompt in one to three plain sentences, about 50 words at most: one main action, what moves and which way, what the camera does and how the shot ends. It starts from the frame, so never repeat what the frame prompt already shows. ${PROMPT_WRITING_SHARED}`;
 
 const addition = (id, label, text) => {
   const trimmed = typeof text === 'string' ? text.trim() : '';
@@ -129,7 +125,7 @@ function composeShotModelInput(project, scene, {
       addition('repair-notes', 'Repair notes', fixes ? `Fix these problems from the previous take while preserving the shot intent: ${fixes}` : ''),
     ];
 
-  // A detail-built shot's details follow the director's text, each its own labeled part.
+  // A detail-built shot's details follow the director's motion text, each its own labeled part.
   const sheet = shotSheetPromptLines(project, scene);
   const firstLine = [text, ...[...look, ...direction].filter(Boolean).map((item) => item.text)].filter(Boolean).join(', ');
   const body = [firstLine, ...sheet.map((item) => item.text), camera?.text, route?.text, actions?.text].filter(Boolean).join('\n');
@@ -144,10 +140,14 @@ const KEEP_REFERENCE = 'Keep the reference image\'s composition, subject and fra
 // Sent when a refine or an end frame from a frame carries the shot's character or set references after that frame.
 export const MUSIC_VIDEO_OTHER_REFERENCES_NOTE = 'The other reference images show the characters and places in this shot: keep their faces, hair and wardrobe as shown there.';
 
-/** The director's text for a shot's start frame (the shot prompt) or end frame (its own prompt). */
+/**
+ * The director's text for a shot's start or end frame. A sheet-built start
+ * frame's text is its general prompt alone (its ingredients are composed in),
+ * so it never borrows the motion prompt.
+ */
 export const authoredFramePromptText = (scene, slot = 'start') => (slot === 'end'
   ? scene?.endFramePrompt?.trim() || ''
-  : authoredShotPrompt(scene));
+  : scene?.framePrompt?.trim() || (shotSheetDrivesPrompt(scene) ? '' : scene?.prompt?.trim() || ''));
 
 // Which panel id list names a subject of each kind.
 const PANEL_SUBJECT_IDS = { character: 'castIds', place: 'environmentIds', object: 'objectIds' };
