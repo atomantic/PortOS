@@ -100,6 +100,7 @@ export const state = {
   listMediaJobs: vi.fn(async () => []),
   locationSearch: '',
   initImagePickerProps: null,
+  referenceImagePickerProps: null,
   loraPickerProps: null,
   loraPickerFactory: null,
   resolutionFieldProps: null,
@@ -153,6 +154,7 @@ export function resetImageGenMockState() {
   state.listMediaJobs.mockReset().mockResolvedValue([]);
   state.locationSearch = '';
   state.initImagePickerProps = null;
+  state.referenceImagePickerProps = null;
   state.loraPickerProps = null;
   state.loraPickerFactory = null;
   state.resolutionFieldProps = null;
@@ -268,6 +270,7 @@ vi.mock('../components/imageGen/InitImagePicker', () => ({
 }));
 vi.mock('../components/imageGen/ReferenceImagePicker', () => ({
   default: (props) => {
+    state.referenceImagePickerProps = props;
     const Factory = state.referenceImagePickerFactory;
     return Factory ? <Factory {...props} /> : null;
   },
