@@ -275,6 +275,24 @@ describe('usage.js — summary', () => {
         vi.useRealTimers();
       }
     });
+    it('keys the day bucket and its hourly bin by the same configured timezone', async () => {
+      // 02:00Z on 07-16 is 19:00 on 07-15 in America/Los_Angeles (PDT).
+      vi.useFakeTimers();
+      vi.setSystemTime(Date.parse('2026-07-16T02:00:00Z'));
+      getUserTimezone.mockResolvedValueOnce('America/Los_Angeles');
+      try {
+        readJSONFile.mockResolvedValueOnce(makeUsage({}));
+        await loadUsage();
+        await recordSession('claude-code', 'Claude Code', 'opus');
+
+        const days = getUsage().dailyActivity;
+        expect(days['2026-07-16']).toBeUndefined();
+        expect(days['2026-07-15'].sessions).toBe(1);
+        expect(days['2026-07-15'].hourlyActivity[19]).toBe(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
     it('advances the usage revision for two writes at the same clock time', async () => {
       readJSONFile.mockResolvedValueOnce(makeUsage({}));
       await loadUsage();
