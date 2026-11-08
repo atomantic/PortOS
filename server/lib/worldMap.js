@@ -29,6 +29,10 @@ export const WORLD_LIMITS = Object.freeze({
 export const WORLD_PATH_KINDS = Object.freeze(['road', 'footpath', 'track', 'corridor']);
 // What lines a path: buildings (rooms, on a corridor), a fence (a rail), open ground (fields, lawns, bare floor), or nothing.
 export const WORLD_PATH_SIDES = Object.freeze(['buildings', 'fence', 'open', 'none']);
+// A road's street infrastructure: overhead pole line with wires, lamps and house drops (the default, also for roads saved before this field), buried lines with streetlight posts only, a sparse rural pole line with wires and no lamps or drops, or none.
+export const WORLD_ROAD_INFRASTRUCTURE = Object.freeze(['overhead', 'buried', 'rural', 'none']);
+export const WORLD_POLE_SIDES = Object.freeze(['right', 'left']);
+export const WORLD_POLE_SPACING = Object.freeze({ min: 10, max: 200 });
 export const WORLD_PATH_DEFAULT_WIDTH = Object.freeze({ road: 9, footpath: 2.5, track: 4, corridor: 3 });
 // Where the world is, which decides its light.
 export const WORLD_SETTINGS = Object.freeze(['outdoor', 'indoor', 'space']);
@@ -173,6 +177,8 @@ const LAMP_STEP = 36;
 const POLE_HEIGHT = 10.5;
 const LAMP_HEIGHT = 8;
 const FENCE_POST_STEP = 3;
+const RURAL_POLE_STEP = 90;
+const LAMP_POST_HEIGHT = 6;
 // Filler stays clear of a placed set's center by this much, so the set itself shows.
 const SET_CLEARANCE = 30;
 
@@ -182,8 +188,9 @@ const SET_CLEARANCE = 30;
  * `buildings`, `fences`, `doors`, `poles` (utility poles, house masts and
  * corridor light posts), `arms` (crossarms and lamp arms), `lamps` (lamp heads),
  * and the ground strips `paving`, `driveways` and `open`. `wires` are segments
- * `[x1, y1, z1, x2, y2, z2]`. A road follows real infrastructure (#15328): one
- * pole line on its right, wires pole to pole, lamps on arms over the road, a
+ * `[x1, y1, z1, x2, y2, z2]`. A road follows real infrastructure (#15328) per its
+ * `infrastructure` (overhead by default, else buried, rural or none): one
+ * pole line on its `poleSide` (right by default), wires pole to pole, lamps on arms over the road, a
  * service drop from the nearest pole to each house's roof mast, and every house
  * faces the road with a front door and a driveway. Capped at FILL_MAX each.
  */
@@ -197,6 +204,10 @@ export function worldFill(world) {
     const rand = mulberry32((world.seed || 1) ^ hashString(path.id));
     const half = path.width / 2;
     const road = path.kind === 'road';
+    const infrastructure = road ? path.infrastructure || 'overhead' : null;
+    const wired = infrastructure === 'overhead' || infrastructure === 'rural';
+    const poleSign = path.poleSide === 'left' ? -1 : 1;
+    const poleStep = Math.max(WORLD_POLE_SPACING.min, path.poleSpacing || (infrastructure === 'rural' ? RURAL_POLE_STEP : LAMP_STEP));
     // This road's utility poles in order, and the roof masts their drops feed.
     const poleTops = [];
     const masts = [];
@@ -219,15 +230,26 @@ export function worldFill(world) {
           push(out.poles, { position: [round(x), 2.5, round(z)], size: [0.15, 5, 0.15], rotationDegrees: yaw });
           push(out.lamps, { position: [round(x), 5, round(z)], size: [0.5, 0.25, 0.5], rotationDegrees: yaw });
         }
-      } else if (road) {
-        // One pole line on the right, the crossarm across the road and the lamp arm reaching over it.
-        for (let d = LAMP_STEP / 2; d < length; d += LAMP_STEP) {
-          const x = ax + ux * d + nx * (half + 1.5);
-          const z = az + uz * d + nz * (half + 1.5);
+      } else if (infrastructure === 'buried') {
+        // Lines are underground: only free-standing streetlight posts with a short arm over the road.
+        for (let d = poleStep / 2; d < length; d += poleStep) {
+          const x = ax + ux * d + nx * poleSign * (half + 1.5);
+          const z = az + uz * d + nz * poleSign * (half + 1.5);
+          push(out.poles, { position: [round(x), LAMP_POST_HEIGHT / 2, round(z)], size: [0.2, LAMP_POST_HEIGHT, 0.2], rotationDegrees: yaw });
+          push(out.arms, { position: [round(x - nx * poleSign * 0.9), LAMP_POST_HEIGHT - 0.1, round(z - nz * poleSign * 0.9)], size: [1.8, 0.1, 0.1], rotationDegrees: yaw });
+          push(out.lamps, { position: [round(x - nx * poleSign * 1.8), LAMP_POST_HEIGHT - 0.2, round(z - nz * poleSign * 1.8)], size: [0.6, 0.2, 0.3], rotationDegrees: yaw });
+        }
+      } else if (wired) {
+        // One pole line on the chosen side; overhead adds the lamp arm reaching over the road, rural is poles and wires only.
+        for (let d = poleStep / 2; d < length; d += poleStep) {
+          const x = ax + ux * d + nx * poleSign * (half + 1.5);
+          const z = az + uz * d + nz * poleSign * (half + 1.5);
           push(out.poles, { position: [round(x), POLE_HEIGHT / 2, round(z)], size: [0.3, POLE_HEIGHT, 0.3], rotationDegrees: yaw });
           push(out.arms, { position: [round(x), POLE_HEIGHT - 0.4, round(z)], size: [2.4, 0.12, 0.12], rotationDegrees: yaw });
-          push(out.arms, { position: [round(x - nx * 1.4), LAMP_HEIGHT, round(z - nz * 1.4)], size: [2.8, 0.1, 0.1], rotationDegrees: yaw });
-          push(out.lamps, { position: [round(x - nx * 2.8), LAMP_HEIGHT - 0.1, round(z - nz * 2.8)], size: [0.7, 0.2, 0.35], rotationDegrees: yaw });
+          if (infrastructure === 'overhead') {
+            push(out.arms, { position: [round(x - nx * poleSign * 1.4), LAMP_HEIGHT, round(z - nz * poleSign * 1.4)], size: [2.8, 0.1, 0.1], rotationDegrees: yaw });
+            push(out.lamps, { position: [round(x - nx * poleSign * 2.8), LAMP_HEIGHT - 0.1, round(z - nz * poleSign * 2.8)], size: [0.7, 0.2, 0.35], rotationDegrees: yaw });
+          }
           poleTops.push({ x, z, nx, nz });
         }
       }
@@ -253,6 +275,7 @@ export function worldFill(world) {
             const dx = fx + ux * (depth / 2 - 2) - nx * sign * (yard / 2);
             const dz = fz + uz * (depth / 2 - 2) - nz * sign * (yard / 2);
             push(out.driveways, { position: [round(dx), 0.015, round(dz)], size: [round(yard), 0.02, 3.5], rotationDegrees: yaw });
+            if (infrastructure !== 'overhead') continue;
             masts.push([fx, h, fz]);
             push(out.poles, { position: [round(fx), round(h + 0.6), round(fz)], size: [0.08, 1.2, 0.08], rotationDegrees: yaw });
           }

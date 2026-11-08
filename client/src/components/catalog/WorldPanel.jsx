@@ -11,7 +11,7 @@ import { listCatalogIngredients, saveCatalogWorld } from '../../services/apiCata
 import { ingredientPath } from '../../lib/creativeLibraries';
 import { formatCount } from '../../utils/formatters';
 import {
-  WORLD_LIMITS, WORLD_PATH_DEFAULT_WIDTH, WORLD_PATH_KINDS, WORLD_PATH_SIDES, WORLD_SETTINGS, blankWorld, placeWorld, worldClockText, worldProblems,
+  WORLD_LIMITS, WORLD_PATH_DEFAULT_WIDTH, WORLD_PATH_KINDS, WORLD_PATH_SIDES, WORLD_POLE_SIDES, WORLD_POLE_SPACING, WORLD_ROAD_INFRASTRUCTURE, WORLD_SETTINGS, blankWorld, placeWorld, worldClockText, worldProblems,
 } from '../../../../server/lib/worldMap.js';
 
 // three.js stays out of the main chunk: the 3D view loads when it is opened.
@@ -22,6 +22,7 @@ const buttonCls = 'min-h-[44px] inline-flex items-center justify-center gap-1.5 
 const iconCls = 'min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-lg border border-port-border text-gray-200 hover:border-port-accent/60 disabled:opacity-40';
 const selectCls = 'min-h-[44px] rounded border border-port-border bg-port-bg px-2 text-sm text-port-text';
 const KIND_LABELS = { road: 'Road', footpath: 'Footpath', track: 'Dirt track', corridor: 'Corridor' };
+const INFRA_LABELS = { overhead: 'Overhead poles and wires', buried: 'Buried lines (streetlights only)', rural: 'Rural poles (no lamps)', none: 'None' };
 const SIDE_LABELS = { buildings: 'Buildings', fence: 'Fence or rail', open: 'Open ground', none: 'Nothing' };
 const SETTING_LABELS = { outdoor: 'Outdoors (sky by time of day)', indoor: 'Indoors', space: 'Space' };
 const round = (n) => Math.round(n * 10) / 10 + 0;
@@ -177,6 +178,25 @@ export default function WorldPanel({ record, readOnly = false, disabled = false,
             <select id="world-street-sides" className={selectCls} value={path.sides} onChange={(event) => patchPath(path.id, { sides: event.target.value })}>
               {WORLD_PATH_SIDES.map((sides) => <option key={sides} value={sides}>{SIDE_LABELS[sides]}</option>)}
             </select>
+            {path.kind === 'road' && (
+              <>
+                <label htmlFor="world-street-infra" className="text-port-text-muted">Infrastructure</label>
+                <select id="world-street-infra" className={selectCls} value={path.infrastructure || 'overhead'} onChange={(event) => patchPath(path.id, { infrastructure: event.target.value })}>
+                  {WORLD_ROAD_INFRASTRUCTURE.map((value) => <option key={value} value={value}>{INFRA_LABELS[value]}</option>)}
+                </select>
+                {['overhead', 'buried', 'rural'].includes(path.infrastructure || 'overhead') && (
+                  <>
+                    <label htmlFor="world-street-pole-side" className="text-port-text-muted">Pole side</label>
+                    <select id="world-street-pole-side" className={selectCls} value={path.poleSide || 'right'} onChange={(event) => patchPath(path.id, { poleSide: event.target.value })}>
+                      {WORLD_POLE_SIDES.map((value) => <option key={value} value={value}>{value === 'right' ? 'Right' : 'Left'}</option>)}
+                    </select>
+                    <label htmlFor="world-street-pole-spacing" className="text-port-text-muted">Spacing (m)</label>
+                    <input id="world-street-pole-spacing" type="number" min={WORLD_POLE_SPACING.min} max={WORLD_POLE_SPACING.max} step={1} placeholder="auto" value={path.poleSpacing ?? ''} className="min-h-[44px] w-20 rounded border border-port-border bg-port-bg px-2"
+                      onChange={(event) => patchPath(path.id, { poleSpacing: event.target.value === '' ? undefined : Math.min(WORLD_POLE_SPACING.max, Math.max(WORLD_POLE_SPACING.min, Number(event.target.value) || WORLD_POLE_SPACING.min)) })} />
+                  </>
+                )}
+              </>
+            )}
             <label htmlFor="world-street-width" className="text-port-text-muted">Width (m)</label>
             <input id="world-street-width" type="number" min={1} max={WORLD_LIMITS.WIDTH_MAX} step={0.5} value={path.width} className="min-h-[44px] w-20 rounded border border-port-border bg-port-bg px-2"
               onChange={(event) => patchPath(path.id, { width: Math.min(WORLD_LIMITS.WIDTH_MAX, Math.max(1, Number(event.target.value) || 1)) })} />
