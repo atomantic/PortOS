@@ -6,7 +6,7 @@ import { familyForProvider, familyForProviderId } from '../lib/providerFamilies.
 import { roundCents } from '../lib/subscriptionSavings.js';
 import { POLLUTING_KEYS } from '../lib/objects.js';
 import { nativeUsageSignature, withNativeUsage } from './nativeUsageHistory.js';
-import { getLocalParts } from '../lib/timezone.js';
+import { getLocalParts, todayInTimezone } from '../lib/timezone.js';
 import { getUserTimezone } from './userTimezone.js';
 
 const DATA_DIR = PATHS.data;
@@ -706,8 +706,17 @@ function mergeSource(existing, incoming) {
   return current === incoming ? current : 'mixed';
 }
 
+// The writers below resolve the configured timezone (async) before they touch a
+// day bucket, so the synchronous bucket lookup keys the day and the hourly bins
+// by one timezone. Days written before this change keep their UTC keys.
+let dayKeyTimezone = 'UTC';
+
+async function refreshDayKeyTimezone() {
+  dayKeyTimezone = await getUserTimezone();
+}
+
 function todayBucket() {
-  const today = new Date().toISOString().split('T')[0];
+  const today = todayInTimezone(dayKeyTimezone);
   if (!usageData.dailyActivity[today]) {
     usageData.dailyActivity[today] = { sessions: 0, messages: 0, tokens: 0 };
     cacheActivityDay(today);
@@ -720,6 +729,7 @@ function todayBucket() {
  */
 async function recordSessionDraft(providerId, providerName, rawModel) {
   if (!usageData) await loadUsageDraft();
+  await refreshDayKeyTimezone();
   const provider = normalizeProvider(providerId, providerName);
   const model = usageModelKey(rawModel);
 
@@ -748,7 +758,7 @@ async function recordSessionDraft(providerId, providerName, rawModel) {
 
   // Track hourly activity in the user's configured timezone. The server runs with TZ=UTC,
   // so the host clock would bucket every session by UTC hour.
-  const hour = getLocalParts(new Date(), await getUserTimezone()).hour;
+  const hour = getLocalParts(new Date(), dayKeyTimezone).hour;
   usageData.hourlyActivity[hour]++;
   // Keep the day as well as the lifetime histogram so a selected reporting
   // window can be answered without inventing timestamps for older sessions.
@@ -842,6 +852,7 @@ function applyMessageUsage(providerId, rawModel, messageCount, outputTokens = 0,
 
 async function recordMessagesDraft(providerId, model, messageCount, outputTokens = 0, inputTokens = 0, extra = {}) {
   if (!usageData) await loadUsageDraft();
+  await refreshDayKeyTimezone();
   applyMessageUsage(providerId, model, messageCount, outputTokens, inputTokens, extra);
   await saveUsage();
 }
@@ -874,6 +885,7 @@ async function recordRunUsageDraft(record, { reconciledRunId = null, siblings = 
   const records = Array.isArray(record) ? record.flat(Infinity) : [record];
   if (records.length === 0 && !reconciledRunId) return;
   if (!usageData) await loadUsageDraft();
+  await refreshDayKeyTimezone();
 
   for (const entry of records) {
     const {
@@ -964,6 +976,7 @@ async function flushUsageLedgerDraft() {
  */
 async function recordTokensDraft(inputTokens, outputTokens) {
   if (!usageData) await loadUsageDraft();
+  await refreshDayKeyTimezone();
   usageData.totalTokens.input += inputTokens;
   usageData.totalTokens.output += outputTokens;
   const day = todayBucket();
