@@ -997,23 +997,43 @@ if [[ "$INSTALL_WAN22_CUDA" == "1" ]]; then
     echo "❌ Wan 2.2 CUDA needs an NVIDIA GPU. Use the Wan 2.2 MLX runtime on Apple Silicon." >&2
     exit 1
   fi
+  if ! have uv; then
+    echo "❌ Wan 2.2 CUDA needs uv to provision its locked Python 3.11 runtime. Install uv and retry Repair." >&2
+    exit 1
+  fi
+  case "$(uname -m)" in
+    x86_64|amd64|AMD64) ;;
+    *) echo "❌ Wan 2.2 CUDA hash locks support x86_64 Windows/Linux only." >&2; exit 1 ;;
+  esac
+  if [[ "$TORCH_CUDA_INDEX" != "https://download.pytorch.org/whl/cu126" ]]; then
+    echo "❌ Wan 2.2 CUDA is locked to the cu126 stack. Unset PORTOS_TORCH_CUDA_INDEX for this runtime; see docs/WAN22_CUDA.md." >&2
+    exit 1
+  fi
   WAN22_CUDA_DIR="${HOME}/.portos/wan2.2-cuda"
   WAN22_CUDA_VENV="${WAN22_CUDA_DIR}/.venv"
-  WAN22_CUDA_REQS="${SCRIPT_DIR}/requirements-wan22-cuda.txt"
+  if is_windows; then
+    WAN22_CUDA_LOCK="${SCRIPT_DIR}/requirements-wan22-cuda-windows.lock.txt"
+  else
+    WAN22_CUDA_LOCK="${SCRIPT_DIR}/requirements-wan22-cuda-linux.lock.txt"
+  fi
   mkdir -p "$WAN22_CUDA_DIR"
   reset_universal_venv "$WAN22_CUDA_VENV" "$PYTHON_BIN"
+  # Old installs used whichever system Python was discovered. Rebuild only
+  # when its minor version differs from the interpreter the locks target.
+  if venv_exists "$WAN22_CUDA_VENV"; then
+    WAN22_CUDA_PY="$(venv_python "$WAN22_CUDA_VENV")"
+    if ! "$WAN22_CUDA_PY" -c "import sys; sys.exit(sys.version_info[:2] != (3, 11))"; then
+      echo "♻️ Rebuilding Wan 2.2 CUDA with its locked Python 3.11..."
+      uv venv --clear --python 3.11 "$WAN22_CUDA_VENV"
+    fi
+  fi
   if ! venv_exists "$WAN22_CUDA_VENV"; then
-    echo "📦 Creating Wan 2.2 CUDA venv..."
-    "$PYTHON_BIN" -m venv "$WAN22_CUDA_VENV"
+    echo "📦 Creating Wan 2.2 CUDA venv (Python 3.11)..."
+    uv venv --python 3.11 "$WAN22_CUDA_VENV"
   fi
   WAN22_CUDA_PY="$(venv_python "$WAN22_CUDA_VENV")"
-  "$WAN22_CUDA_PY" -m pip install --disable-pip-version-check --upgrade pip wheel setuptools
-  if is_windows; then
-    "$WAN22_CUDA_PY" -m pip install --upgrade --index-url "$TORCH_CUDA_INDEX" torch torchvision
-  else
-    "$WAN22_CUDA_PY" -m pip install --upgrade torch torchvision
-  fi
-  "$WAN22_CUDA_PY" -m pip install --upgrade --progress-bar on -r "$WAN22_CUDA_REQS"
+  echo "📦 Syncing the hash-pinned Wan 2.2 CUDA runtime..."
+  uv pip sync --require-hashes --only-binary :all: --index-strategy unsafe-best-match --python "$WAN22_CUDA_PY" "$WAN22_CUDA_LOCK"
   pin_venv_arm64 "$WAN22_CUDA_VENV"
   probe_or_fail \
     "Wan 2.2 CUDA installed but its runtime probe failed." \
