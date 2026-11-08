@@ -278,8 +278,9 @@ export async function updateReleaseSynchronizationOwnership(agentId, action) {
  * unshipped review-then-merge branch (no PR ever recorded) to a coordinator to
  * open its PR, so the recheck must not refuse that same branch on the hold the
  * classifier released. The Recheck carries no PR URL, so only an exact forge
- * read showing no open PR releases it: once the coordinator opens one, the
- * before-merge recheck sees it and the review hold gates the merge again.
+ * read showing no open (or closed-unmerged) PR releases it: once the coordinator
+ * opens one, the before-merge recheck sees it and the review hold gates the
+ * merge again.
  * @returns {Promise<string|null>}
  */
 async function readReconcileCompletionHold(input, deps = {}) {
@@ -288,9 +289,9 @@ async function readReconcileCompletionHold(input, deps = {}) {
   if (reason !== 'pr-completion-review-required' || input.prUrl) return reason;
   const detail = await (deps.readCompletionHoldDetail ?? policy.readBranchCompletionHoldDetail)(input);
   if (detail?.reason !== reason || detail.unshipped !== true) return reason;
-  const readOpenPr = deps.readOpenPrForBranch ?? (await import('./branchReconcile.js')).readOpenPrForBranch;
-  const hasOpenPr = await readOpenPr(input.repoPath, input.branch, { forgeAccount: input.forgeAccount ?? null }).catch(() => null);
-  return hasOpenPr === false ? null : reason;
+  const readUnshipped = deps.readBranchUnshipped ?? (await import('./branchReconcile.js')).readBranchUnshipped;
+  const unshipped = await readUnshipped(input.repoPath, input.branch, { forgeAccount: input.forgeAccount ?? null }).catch(() => null);
+  return unshipped === true ? null : reason;
 }
 
 /**
