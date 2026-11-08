@@ -985,6 +985,8 @@ describe('validation.js', () => {
         .toEqual({ selfManagedPrAuthors: ['alice'], selfManagedPrStaleMinutes: 90 });
       // An explicit empty list survives so a per-app override can clear the global one.
       expect(sanitizeTaskMetadata({ selfManagedPrAuthors: [] })).toEqual({ selfManagedPrAuthors: [] });
+      expect(sanitizeTaskMetadata({ selfManagedPrAuthors: ['renovate[bot]', 'app/dependabot'] }))
+        .toEqual({ selfManagedPrAuthors: ['renovate[bot]', 'app/dependabot'] });
       // An all-invalid list is not that clear: it is dropped, so the stored list survives.
       expect(sanitizeTaskMetadata({ selfManagedPrAuthors: ['bad login'] })).toBeNull();
       expect(sanitizeTaskMetadata({ selfManagedPrStaleMinutes: 0 })).toBeNull();

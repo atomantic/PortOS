@@ -8,7 +8,8 @@
 export const SELF_MANAGED_PR_STALE_MINUTES_DEFAULT = 60;
 export const SELF_MANAGED_PR_STALE_MINUTES_MAX = 7 * 24 * 60;
 export const MAX_SELF_MANAGED_PR_AUTHORS = 50;
-const GITHUB_LOGIN_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
+// A user login, or a GitHub App's `name[bot]` / gh's `app/name` author form.
+const GITHUB_LOGIN_RE = /^(?:app\/)?[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\[bot\])?$/;
 
 /** Lowercased, deduped, capped GitHub logins (non-array → []). Unlike normalizeReviewUsernames, no team slugs. */
 export function normalizeSelfManagedPrAuthors(list) {
