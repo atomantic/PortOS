@@ -6,12 +6,12 @@ import {
   headerValue,
   parseGmailLabels,
   resolveMboxInstant,
-  cleanMessageId,
   gmailDirection,
   mboxMessageToCandidate,
   createMboxLineReader,
   parseMboxText,
 } from './gmailMboxImport.js';
+import { cleanMessageId } from '../lib/emailMessageId.js';
 
 describe('gmailMboxImport — pure helpers', () => {
   describe('decodeMimeWords', () => {

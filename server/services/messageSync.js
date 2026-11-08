@@ -331,7 +331,7 @@ export async function syncAccount(accountId, io, options = {}) {
           // A row that becomes one unambiguous child keeps its already-recorded event.
           existing.activityIdentity ||= messageIngestionIdentity(existing);
           // Adopt canonical identity without replacing local ID or evaluation.
-          for (const key of ['externalId', 'browserMessageKind', 'providerMessageId', 'browserMemberDisambiguator', 'browserSummaryExternalId', 'from', 'date', 'subject']) {
+          for (const key of ['externalId', 'browserMessageKind', 'providerMessageId', 'browserMemberDisambiguator', 'browserSummaryExternalId', 'from', 'date', 'subject', 'rfcMessageId']) {
             if (msg[key] !== undefined && (key !== 'providerMessageId' || msg[key])) existing[key] = msg[key];
           }
           // Update flags and provider identity on existing message
