@@ -439,7 +439,8 @@ export async function listLegacyGmailThreadKeys() {
 //   row or an imported sibling makes it ambiguous;
 // - the imported email's own key is held by an account-less (imported) row, so
 //   a live row for another mailbox never absorbs this mailbox's event;
-// - no two imported emails pick the same legacy row.
+// - no other imported email also fits that legacy row (two emails more than
+//   10 minutes apart can each fit it without being each other's lookalike).
 // A derivation that does not hold (thread ids, subject decoding) simply finds
 // no match and leaves the duplicate, never a wrong delete.
 //
@@ -448,57 +449,57 @@ export async function retireLegacyGmailDuplicates(matches = []) {
   const rows = (matches || []).filter((m) => m?.dedupeKey && m.kind && m.happenedAt && m.threadKey);
   if (rows.length === 0) return { retired: 0 };
   await ensureReady();
-  const CHUNK = 500;
-  let retired = 0;
-  for (let start = 0; start < rows.length; start += CHUNK) {
-    const chunk = rows.slice(start, start + CHUNK);
-    const { rowCount } = await query(
-      `WITH k AS (
-         SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::timestamptz[], $5::text[], $6::text[], $7::text[])
-           AS k(dedupe_key, kind, title, happened_at, thread_key, raw_thread, from_email)
-       ),
-       near AS (
-         SELECT k.*, e.id, e.dedupe_key AS row_key, e.account_id, e.participants, e.metadata
-           FROM k JOIN human_activity_events e
-             ON e.source = 'gmail' AND e.kind = k.kind AND e.title = k.title
-            AND e.happened_at BETWEEN k.happened_at - INTERVAL '10 minutes' AND k.happened_at + INTERVAL '10 minutes'
-            AND e.metadata->>'threadId' IN (k.thread_key, k.raw_thread)
-            AND e.dedupe_key <> k.dedupe_key
-       ),
-       targets AS (
-         SELECT dedupe_key, min(id) AS target_id, count(*) AS n FROM near
-          WHERE row_key LIKE 'msg:%' AND account_id IS NOT NULL
-            AND metadata->>'rfcMessageId' IS NULL AND metadata->>'threadId' = thread_key
-            AND (kind = 'message.sent' OR metadata->>'handle' = from_email)
-          GROUP BY dedupe_key
-       ),
-       lookalikes AS (
-         SELECT dedupe_key, count(*) AS n FROM near
-          WHERE kind = 'message.sent' OR metadata->>'handle' = from_email
-             OR participants @> jsonb_build_array(jsonb_build_object('email', from_email))
-          GROUP BY dedupe_key
-       ),
-       picked AS (
-         SELECT t.target_id FROM targets t
-           JOIN lookalikes l ON l.dedupe_key = t.dedupe_key
-           JOIN human_activity_events h ON h.source = 'gmail' AND h.dedupe_key = t.dedupe_key AND h.account_id IS NULL
-          WHERE t.n = 1 AND l.n = 1
-          GROUP BY t.target_id HAVING count(*) = 1
-       )
-       DELETE FROM human_activity_events e USING picked p WHERE e.id = p.target_id`,
-      [
-        chunk.map((m) => String(m.dedupeKey)),
-        chunk.map((m) => String(m.kind)),
-        // Stored titles went through normalizeCandidate; compare the same form.
-        chunk.map((m) => (m.title ? shortSummary(m.title, 300) : null)),
-        chunk.map((m) => new Date(m.happenedAt).toISOString()),
-        chunk.map((m) => String(m.threadKey)),
-        chunk.map((m) => String(m.rawThreadId ?? '')),
-        chunk.map((m) => normalizeIdentifier(m.fromEmail)),
-      ],
-    );
-    retired += rowCount || 0;
-  }
+  // One statement over every match (each array is a single bind parameter): the
+  // one-claim-per-legacy-row rule must see every imported email that could
+  // claim a row, including two more than 10 minutes apart that fall outside
+  // each other's lookalike window.
+  const { rowCount } = await query(
+    `WITH k AS (
+       SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::timestamptz[], $5::text[], $6::text[], $7::text[])
+         AS k(dedupe_key, kind, title, happened_at, thread_key, raw_thread, from_email)
+     ),
+     near AS (
+       SELECT k.*, e.id, e.dedupe_key AS row_key, e.account_id, e.participants, e.metadata
+         FROM k JOIN human_activity_events e
+           ON e.source = 'gmail' AND e.kind = k.kind AND e.title = k.title
+          AND e.happened_at BETWEEN k.happened_at - INTERVAL '10 minutes' AND k.happened_at + INTERVAL '10 minutes'
+          AND e.metadata->>'threadId' IN (k.thread_key, k.raw_thread)
+          AND e.dedupe_key <> k.dedupe_key
+     ),
+     legacy AS (
+       SELECT dedupe_key, id FROM near
+        WHERE row_key LIKE 'msg:%' AND account_id IS NOT NULL
+          AND metadata->>'rfcMessageId' IS NULL AND metadata->>'threadId' = thread_key
+          AND (kind = 'message.sent' OR metadata->>'handle' = from_email)
+     ),
+     targets AS (SELECT dedupe_key, min(id) AS target_id, count(*) AS n FROM legacy GROUP BY dedupe_key),
+     claims AS (SELECT id, count(*) AS n FROM legacy GROUP BY id),
+     lookalikes AS (
+       SELECT dedupe_key, count(*) AS n FROM near
+        WHERE kind = 'message.sent' OR metadata->>'handle' = from_email
+           OR participants @> jsonb_build_array(jsonb_build_object('email', from_email))
+        GROUP BY dedupe_key
+     ),
+     picked AS (
+       SELECT t.target_id FROM targets t
+         JOIN lookalikes l ON l.dedupe_key = t.dedupe_key
+         JOIN claims c ON c.id = t.target_id
+         JOIN human_activity_events h ON h.source = 'gmail' AND h.dedupe_key = t.dedupe_key AND h.account_id IS NULL
+        WHERE t.n = 1 AND l.n = 1 AND c.n = 1
+     )
+     DELETE FROM human_activity_events e USING picked p WHERE e.id = p.target_id`,
+    [
+      rows.map((m) => String(m.dedupeKey)),
+      rows.map((m) => String(m.kind)),
+      // Stored titles went through normalizeCandidate; compare the same form.
+      rows.map((m) => (m.title ? shortSummary(m.title, 300) : null)),
+      rows.map((m) => new Date(m.happenedAt).toISOString()),
+      rows.map((m) => String(m.threadKey)),
+      rows.map((m) => String(m.rawThreadId ?? '')),
+      rows.map((m) => normalizeIdentifier(m.fromEmail)),
+    ],
+  );
+  const retired = rowCount || 0;
   if (retired > 0) console.log(`🗓️  Retired ${retired} pre-#15308 live Gmail activity event(s) a Takeout import now records`);
   return { retired };
 }

@@ -261,6 +261,18 @@ describe.skipIf(!runDb)('Takeout import retires pre-#15308 live Gmail rows (#153
     expect(await gmailRowsForAccountOrIds(acct, ['sibling-a', 'sibling-b'])).toHaveLength(3);
   });
 
+  it('keeps a legacy row that two imported emails, too far apart to be each other\'s lookalike, both fit', async () => {
+    const acct = account('two-claims');
+    const { thrid, threadKey } = nextThread();
+    await recordLegacy(acct, 'two-claims-a', threadKey, { subject: 'Hello two-claims', date: '2026-07-04T10:07:30.000Z' });
+
+    await importMboxText([
+      mboxMessage('two-claims-a', { thrid, subject: 'Hello two-claims' }),
+      mboxMessage('two-claims-b', { thrid, subject: 'Hello two-claims', date: 'Sat, 04 Jul 2026 10:15:00 +0000' }),
+    ].join('\n'));
+    expect(await gmailRowsForAccountOrIds(acct, ['two-claims-a', 'two-claims-b'])).toHaveLength(3);
+  });
+
   it('never retires a legacy row whose imported replacement is not stored', async () => {
     const acct = account('retire-unstored');
     const { thrid, threadKey } = nextThread();
