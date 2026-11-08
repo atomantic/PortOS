@@ -577,6 +577,26 @@ export async function listProcessesStrict(pm2Home = null) {
   return list.map(mapProcess);
 }
 
+// PM2 states that mean the process is (or is about to be) up. `stopped`,
+// `errored` and an unregistered name are all "not running".
+const RUNNING_PM2_STATUSES = new Set(['online', 'launching', 'waiting restart']);
+
+/**
+ * Which of `names` are currently running under PM2. Returns `null` when the
+ * PM2 read FAILED, so a caller can tell "nothing running" from "unknown".
+ *
+ * @param {string[]} names PM2 process names
+ * @param {string} [pm2Home] Optional custom PM2_HOME path
+ * @returns {Promise<string[]|null>}
+ */
+export async function filterRunningProcessNames(names, pm2Home = null) {
+  if (!names?.length) return [];
+  const processes = await listProcessesStrict(pm2Home);
+  if (!processes) return null;
+  const running = new Set(processes.filter(p => RUNNING_PM2_STATUSES.has(p.status)).map(p => p.name));
+  return names.filter(name => running.has(name));
+}
+
 async function callExistingDaemon(method) {
   const rpcPath = process.env.PM2_DAEMON_RPC_PORT || join(process.env.PM2_HOME || join(homedir(), '.pm2'), 'rpc.sock');
   if (!IS_WIN && !existsSync(rpcPath)) return null;

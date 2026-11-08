@@ -276,9 +276,23 @@ function publicTarget(repository, role) {
   };
 }
 
+// Mirrors appUpdater: only running processes restart, and an unreadable PM2
+// state falls back to restarting every declared process. Lazy so this
+// module's many importers do not pull in the PM2 service.
+async function updateWouldRestart(app) {
+  const names = Array.isArray(app?.pm2ProcessNames) ? app.pm2ProcessNames : [];
+  if (names.length === 0) return false;
+  const { filterRunningProcessNames } = await import('./pm2.js');
+  const running = await filterRunningProcessNames(names, app.pm2Home);
+  return running === null || running.length > 0;
+}
+
 export async function getManagedAppRepositorySources(app) {
   const descriptors = sourceDescriptors(app);
-  const inspected = await Promise.all(descriptors.map(inspectCheckout));
+  const [inspected, updateRestartsApp] = await Promise.all([
+    Promise.all(descriptors.map(inspectCheckout)),
+    updateWouldRestart(app),
+  ]);
   const sources = inspected.map((source) => ({ ...source, forkSyncable: isForkSyncable(source) }));
   const primary = sources[0] || null;
   const originTarget = publicTarget(primary?.origin, 'origin');
@@ -294,7 +308,7 @@ export async function getManagedAppRepositorySources(app) {
     updateAvailable: sources.some((source) => source.submodulesOnly || source.localVsOrigin?.behind > 0
       || (source.forkSyncable && (source.forkVsUpstream?.behind || 0) > 0)),
     updatePullsAll: true,
-    updateRestartsApp: Array.isArray(app?.pm2ProcessNames) && app.pm2ProcessNames.length > 0,
+    updateRestartsApp,
     issueTargets: {
       default: canChoose || primary?.origin?.isUpstream == null ? 'upstream' : 'origin',
       canChoose,

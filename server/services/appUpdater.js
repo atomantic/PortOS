@@ -334,7 +334,19 @@ async function _doUpdate(app, emit, {
   // handoff), so restarting PortOS on top of the detached script would be
   // redundant and would race it — the script may not have finished
   // re-registering the processes we would be restarting.
-  const processNames = detachSelfUpdate ? [] : (app.pm2ProcessNames || []);
+  // Only restart what is running: `pm2 restart` on a stopped process would
+  // START it, which an update the user ran against a stopped app never asked
+  // for. An unreadable PM2 state keeps the prior restart-all behavior rather
+  // than leaving a running app on code older than its checkout.
+  const declaredNames = detachSelfUpdate ? [] : (app.pm2ProcessNames || []);
+  const running = await pm2Service.filterRunningProcessNames(declaredNames, app.pm2Home);
+  if (running === null) console.log(`⚠️ Could not read PM2 state for ${app.name || dir} — restarting all declared processes`);
+  const processNames = running ?? declaredNames;
+  if (declaredNames.length > 0 && processNames.length === 0) {
+    const msg = 'App is not running — checkout updated without restarting';
+    emit('restart', 'skipped', msg);
+    steps.push({ step: 'restart', success: true, skipped: true, message: msg });
+  }
   if (processNames.length > 0) {
     emit('restart', 'running', 'Restarting app...');
     await startDashboardHandoff(app);
