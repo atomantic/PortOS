@@ -145,8 +145,17 @@ describe('isVerdictFresh', () => {
     expect(fresh(entry(), branch({ dirtyPaths: ['a.js'] }))).toBe(false);
   });
 
-  it('is stale when the collision set grew', () => {
-    expect(fresh(entry(), branch({ collisionPaths: ['a.js', 'new.js'] }))).toBe(false);
+  it('stays fresh when the default branch touched one more file the branch also changes', () => {
+    expect(fresh(entry(), branch({ collisionPaths: ['a.js', 'new.js'] }))).toBe(true);
+  });
+
+  it('is stale when a recorded collision path no longer collides (the default branch restored it)', () => {
+    expect(fresh(entry({ collisionPaths: ['a.js', 'restored.js'] }), branch({ collisionPaths: ['a.js'] }))).toBe(false);
+    expect(fresh(entry(), branch({ collisionPaths: undefined }))).toBe(false);
+  });
+
+  it('keeps a legacy verdict that recorded no collision list', () => {
+    expect(fresh(entry({ collisionPaths: undefined }), branch())).toBe(true);
   });
 
   it('is stale when the replacing commits are no longer reachable (a revert)', () => {

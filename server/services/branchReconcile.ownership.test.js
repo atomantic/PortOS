@@ -541,6 +541,42 @@ describe.skipIf(SKIP_HEAVY_INTEGRATION)('branch-reconcile worktree ownership (re
     expect(await branches()).toContain(branch);
   });
 
+  // A review-then-merge claim run whose PR closed unmerged as superseded left
+  // its obligation with no recorded PR; it held the superseded reap forever.
+  it.each([
+    ['reaps past a completed review obligation that never recorded a PR', {}, null],
+    ['keeps a superseded branch whose review obligation recorded a PR', { prUrl: 'https://github.com/example/repo/pull/7' }, 'pr-completion-review-required'],
+    ['keeps a superseded branch under a human handoff', { completion: 'leave-open' }, 'pr-completion-human-handoff'],
+  ])('%s', async (_name, receipt, heldBy) => {
+    const branch = 'claim/issue-77';
+    const path = await addTree(join(repo, '.claude', 'worktrees', 'claim-issue-77'), branch);
+    await writeFile(join(path, 'feature.txt'), 'work the default branch replaced\n');
+    await execGit(['add', 'feature.txt'], path);
+    await execGit(['commit', '-m', 'feat: superseded attempt'], path);
+    const tip = (await execGit(['rev-parse', branch], repo)).stdout.trim();
+    const worktreePath = await gitCheckoutPath(path);
+    injected.policies = [{ id: 'claim-run', status: 'completed', startedAt: new Date(Date.now() - DAY).toISOString(), result: { success: true }, metadata: {
+      sourceWorkspace: repo, claimBranches: [branch], prCompletionPolicy: 'review-then-merge',
+      ...(Object.keys(receipt).length && { branchCompletionPolicy: { branch, completion: 'review-then-merge', ...receipt } }),
+    } }];
+
+    const result = await reapSupersededBranches(repo, 'main', [{
+      branch, tip, worktreePath, worktreeLocked: false, dirtyPaths: [],
+      verdict: { branch, tip, verdict: 'SUPERSEDED', dirtyPaths: [] },
+    }], { cosDir: join(scratch, 'cos'), appId: 'app-1' });
+
+    if (heldBy) {
+      expect(result.reaped).toEqual([]);
+      expect(result.skipped).toContainEqual(expect.objectContaining({ branch, reason: heldBy }));
+      expect(existsSync(path)).toBe(true);
+      expect(await branches()).toContain(branch);
+    } else {
+      expect(result).toMatchObject({ reaped: [branch], skipped: [] });
+      expect(existsSync(path)).toBe(false);
+      expect(await branches()).not.toContain(branch);
+    }
+  });
+
   it('checks current owners when direct cleanup receives only a previously merged ref', async () => {
     const branch = 'fix/newly-reserved';
     await execGit(['branch', branch, 'main'], repo);

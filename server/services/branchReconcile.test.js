@@ -2052,9 +2052,9 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
     expect(res.superseded).toEqual([]);
   });
 
-  it('re-analyzes when the collision set changed', async () => {
+  it('re-analyzes when a recorded collision path stopped colliding', async () => {
     setupAbandoned();
-    tryReadFileMock.mockResolvedValue(ledger({ collisionPaths: [] }));
+    tryReadFileMock.mockResolvedValue(ledger({ collisionPaths: ['server/services/thing.js', 'server/services/restored.js'] }));
 
     const res = await reconcile('/repo', { reapSuperseded: true, activeAgentIds: new Set() });
     expect(res.inFlight.map((i) => i.branch)).toEqual([BRANCH]);

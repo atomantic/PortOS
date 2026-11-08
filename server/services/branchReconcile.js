@@ -1277,6 +1277,7 @@ export async function reapSupersededBranches(repoPath, defaultBranch, superseded
       activeAgentIds,
       appId,
       allowLiveClaim: true,
+      superseded: true,
       label: `🔀 branch-reconcile: remove superseded worktree for ${b.branch}`,
       // A worktree outside the managed roots is reachable here and nowhere else —
       // the fresh verdict and a clean tree supply the preservation proof, and the
@@ -1426,7 +1427,7 @@ async function retireBranch(repoPath, b, opts) {
 }
 
 /** Every gate before the archive. Returns `{ result }` to stop, else the context removal needs. */
-async function admitBranchRetirement(repoPath, b, { activeAgentIds, staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false, label, requireCleanWorktree = true, unmanagedIdleMs, prepare, claimOwners, mergedRetirement = false, mergeTarget, forgeAccount = null, appId = null, disposableHead = null, deliveredHead = null, deliveredMergedAt = null }) {
+async function admitBranchRetirement(repoPath, b, { activeAgentIds, staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false, label, requireCleanWorktree = true, unmanagedIdleMs, prepare, claimOwners, mergedRetirement = false, mergeTarget, forgeAccount = null, appId = null, disposableHead = null, deliveredHead = null, deliveredMergedAt = null, superseded = false }) {
   const stop = result => ({ result });
   if (PROTECTED_BRANCHES.includes(b.branch)) return stop({ ok: false, reason: 'protected-branch' });
   const defaultBranch = await getDefaultBranch(repoPath, { strict: true }).catch(() => null);
@@ -1434,8 +1435,17 @@ async function admitBranchRetirement(repoPath, b, { activeAgentIds, staleClaimId
   if (b.branch === defaultBranch) return stop({ ok: false, reason: 'protected-branch' });
   const expectedHead = (await execGit(['rev-parse', '--verify', `refs/heads/${b.branch}`], repoPath).catch(() => null))?.stdout?.trim();
   if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(expectedHead || '')) return stop({ ok: false, reason: mergedRetirement ? 'not-merged-on-recheck' : 'branch-head-unavailable' });
-  const { readBranchCompletionHold } = await import('./branchCompletionPolicy.js');
-  const readPolicyHold = (tip = expectedHead) => readBranchCompletionHold({ repoPath, branch: b.branch, tip, retirement: mergedRetirement });
+  const completionPolicy = await import('./branchCompletionPolicy.js');
+  const readPolicyHold = async (tip = expectedHead) => {
+    const hold = await completionPolicy.readBranchCompletionHold({ repoPath, branch: b.branch, tip, retirement: mergedRetirement });
+    if (!superseded || b.openPr || hold !== 'pr-completion-review-required') return hold;
+    // A verified-superseded branch is never merged, so a review-then-merge
+    // obligation that never recorded a PR has no merge left to gate. A recorded
+    // PR, a human handoff and unreadable policy records still hold.
+    const agents = await completionPolicy.readBranchCompletionPolicies().catch(() => null);
+    const detail = agents && await completionPolicy.readBranchCompletionHoldDetail({ repoPath, branch: b.branch, tip, agents }).catch(() => null);
+    return detail?.reason === hold && detail.unshipped === true ? null : hold;
+  };
   if (prepare && expectedHead !== b.tip) return stop({ ok: false, reason: 'branch-head-changed' });
   const policyHold = await readPolicyHold();
   if (policyHold) return stop({ ok: false, reason: policyHold });
