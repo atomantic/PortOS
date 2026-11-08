@@ -35,6 +35,7 @@ import { queueProjectCatalogLinkSync } from './catalogLinks.js';
 import { labelProjectReferences } from './referenceLabels.js';
 import { musicVideoEvents } from './events.js';
 import { audioRevisionOf } from '../../lib/musicVideoSongAudio.js';
+import { renumberShotLabels } from '../../lib/musicVideoColdOpen.js';
 
 // Shared dispatcher (#2899). ensureSchema() runs inside the selector (mirroring
 // memoryBackend.js) so the backend is self-sufficient regardless of boot ordering.
@@ -662,6 +663,16 @@ export function mutateProjectRecord(id, transform, options = {}) {
 // A changed song cancels this instance's render of the old one (render.js).
 const announceAudioChange = (projectId, project) => musicVideoEvents.emit('audio-changed', { projectId, project });
 
+// The scenes a transform answers with, as the clean-up saved them.
+function withCleanedScenes(outcome, project) {
+  const byId = new Map((project.scenes || []).map((scene) => [scene.sceneId, scene]));
+  const fresh = (scene) => (scene?.sceneId && byId.get(scene.sceneId)) || scene;
+  const result = { project };
+  for (const key of ['scene', 'updated', 'previous', 'next']) if (outcome[key]?.sceneId) result[key] = fresh(outcome[key]);
+  if (Array.isArray(outcome.scenes)) result.scenes = outcome.scenes.map(fresh);
+  return result;
+}
+
 async function mutateProjectRecordAdmitted(id, transform, options = {}, mutate = null) {
   let dropped = null;
   let audioChanged = false;
@@ -677,6 +688,14 @@ async function mutateProjectRecordAdmitted(id, transform, options = {}, mutate =
     }
     // A transform may be async: the thumbnail heal re-checks job liveness under the lock.
     const outcome = await transform(current, { ...context, storedProject: stored });
+    // Automatic clean-up in the same write (#15317): default "Shot N" labels follow the
+    // shot's number, and picks of catalog images that can never render again go.
+    if (outcome.project && !outcome.skipPersist) {
+      const picked = current?.castAndSets?.catalogCheckin
+        ? (await import('./catalogCheckin.js')).dropStaleCatalogPicks(current, outcome.project) : outcome.project;
+      const cleaned = renumberShotLabels(picked);
+      if (cleaned !== outcome.project) Object.assign(outcome, withCleanedScenes(outcome, cleaned));
+    }
     if (outcome.project?.castAndSets?.catalogCheckin) {
       const { catalogCheckin: _projection, ...stage } = outcome.project.castAndSets;
       outcome.project = { ...outcome.project, castAndSets: stage };

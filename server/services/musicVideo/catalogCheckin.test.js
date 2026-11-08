@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { resolveCatalogCheckin, withCatalogCheckin, assertCatalogCheckinReady, assertLegacyCheckin } from './catalogCheckin.js';
+import { resolveCatalogCheckin, withCatalogCheckin, assertCatalogCheckinReady, assertLegacyCheckin, dropStaleCatalogPicks } from './catalogCheckin.js';
+import { musicVideoCatalogReferenceId as refId } from '../../lib/musicVideoConditioning.js';
 
 const subject = { id: 'subject-example', ingredientId: 'character-example', kind: 'character', name: 'Example actor' };
 const fixture = (extra = {}) => ({ concept: { subjects: [subject] }, castAndSets: { source: 'catalog', status: 'review',
@@ -90,5 +91,42 @@ describe('catalog check-in projection', () => {
     const project = fixture();
     expect((await withCatalogCheckin(project, { catalog: catalog(), exists: () => true })).castAndSets.catalogCheckin.items[0].images).toEqual(['catalog.png']);
     expect(project.castAndSets.catalogCheckin).toBeUndefined();
+  });
+});
+
+describe('automatic clean-up of stale catalog shot picks (#15317)', () => {
+  const lamp = { id: 'subject-lamp', ingredientId: 'object-lamp', kind: 'object', name: 'Pocket lamp' };
+  const items = [
+    { subjectId: subject.id, name: 'Example actor', images: ['actor.png'], retiredImages: ['actor-old.png'] },
+    { subjectId: lamp.id, name: 'Pocket lamp', images: ['lamp.png'], retiredImages: [] },
+  ];
+  const current = (problems = []) => ({ concept: { subjects: [subject, lamp] }, castAndSets: { source: 'catalog', catalogCheckin: { items, problems } } });
+  const shot = { sceneId: 'shot-a', frameReferenceIds: [refId(subject.id, 'actor.png'), refId(lamp.id, 'lamp.png'), 'palette'], clipReferenceIds: [refId(lamp.id, 'lamp.png')] };
+  const next = (subjects, scenes = [shot]) => ({ ...current(), concept: { subjects }, scenes });
+
+  // Uniquely catches a removed subject's image staying picked on a shot after the subject goes.
+  it('drops a removed subject\'s picks from every shot in the same write', () => {
+    const cleaned = dropStaleCatalogPicks(current(), next([subject]));
+    expect(cleaned.scenes[0]).toEqual({ sceneId: 'shot-a', frameReferenceIds: [refId(subject.id, 'actor.png'), 'palette'], clipReferenceIds: [] });
+    // Even when another subject has an open check-in problem.
+    expect(dropStaleCatalogPicks(current([{ subjectId: subject.id, code: 'CATALOG_UNAVAILABLE' }]), next([subject])).scenes[0].frameReferenceIds)
+      .toEqual([refId(subject.id, 'actor.png'), 'palette']);
+  });
+
+  it('clears picks no record holds, keeps a still-listed image, and changes nothing with an unresolved check-in', () => {
+    const gone = refId('subject-removed-earlier', 'old.png');
+    const retired = refId(subject.id, 'actor-old.png');
+    const scenes = [{ sceneId: 'shot-b', frameReferenceIds: [gone, retired] }];
+    expect(dropStaleCatalogPicks(current(), next([subject, lamp], scenes)).scenes[0].frameReferenceIds).toEqual([retired]);
+    const unresolved = next([subject, lamp], scenes);
+    expect(dropStaleCatalogPicks(current([{ subjectId: lamp.id, code: 'CATALOG_UNAVAILABLE' }]), unresolved)).toBe(unresolved);
+  });
+
+  it('lists still-on-record images it does not offer without changing the approval basis', async () => {
+    const offered = await resolve(fixture());
+    const db = catalog({}, [{ kind: 'portrait', mediaKey: 'catalog.png' }, { kind: 'audio', mediaKey: 'theme.mp3' }]);
+    const withRetired = await resolve(fixture(), db);
+    expect(withRetired.items[0]).toMatchObject({ images: ['catalog.png'], retiredImages: ['theme.mp3'] });
+    expect(withRetired.basis).toBe(offered.basis);
   });
 });

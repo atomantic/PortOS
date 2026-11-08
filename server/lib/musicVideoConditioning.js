@@ -147,7 +147,9 @@ function fnv1a64(text) {
   return hash.toString(16).padStart(16, '0');
 }
 
-const catalogReferenceId = (subjectId, filename) => `mvr-catalog-${fnv1a64(JSON.stringify([subjectId, filename]))}`;
+/** A catalog check-in image's reference id: one per subject and file. */
+export const musicVideoCatalogReferenceId = (subjectId, filename) => `mvr-catalog-${fnv1a64(JSON.stringify([subjectId, filename]))}`;
+const catalogReferenceId = musicVideoCatalogReferenceId;
 
 /** A linked catalog asset's id, from its whole filename: long names can share any prefix. */
 export const musicVideoLinkedReferenceId = (mediaKey) => `mvr-linked-${fnv1a64(mediaKey)}`;
@@ -181,6 +183,10 @@ function catalogItemReferences(project) {
     }))).filter((ref) => !isLegacyCatalogReference(project, ref));
 }
 
+// The check-in's still-listed catalog images it no longer offers (catalogCheckin.js `retiredImages`), by reference id.
+const retiredCatalogImages = (project) => new Map((project.castAndSets.catalogCheckin?.items || []).flatMap((item) => (item.retiredImages || [])
+  .map((filename) => [catalogReferenceId(item.subjectId, filename), { name: item.name, filename }])));
+
 /**
  * Resolves one saved shot pick against the check-in. A generated sheet's id never
  * renders again, so it either moves to the catalog id for the same image or comes
@@ -194,13 +200,17 @@ function catalogPickResolver(project) {
   const { catalogCheckin: _resolved, ...generatedStage } = stage;
   const generated = { ...project, castAndSets: generatedStage };
   let offered = null;
+  let retired = null;
   return (id) => {
     // A pick that already moved can still fall out when the catalog stops offering its
     // image. An unresolved check-in has its own blocking problem, so it reports nothing here.
     if (String(id).startsWith('mvr-catalog-')) {
       if (stage.catalogCheckin?.problems?.length) return { id };
       offered ??= catalogItemReferences(project);
-      return offered.some((choice) => choice.id === id) ? { id } : { id, unmapped: { id, label: 'a removed catalog image' } };
+      if (offered.some((choice) => choice.id === id)) return { id };
+      retired ??= retiredCatalogImages(project);
+      const owner = retired.get(id);
+      return { id, unmapped: { id, label: owner ? `${owner.name || 'a catalog item'}'s image ${owner.filename}` : 'an image removed from the catalog or from this video' } };
     }
     const ref = saved.get(id);
     if (!ref || isOutsideMusicVideoReference(ref) || !isLegacyCatalogReference(project, ref)) return { id };
