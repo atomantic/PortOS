@@ -273,6 +273,33 @@ describe.skipIf(!runDb)('Takeout import retires pre-#15308 live Gmail rows (#153
     expect(await gmailRowsForAccountOrIds(acct, ['two-claims-a', 'two-claims-b'])).toHaveLength(3);
   });
 
+  it('keeps a legacy row that a stored sibling without a Message-ID also fits', async () => {
+    const acct = account('hash-sibling');
+    const { thrid, threadKey } = nextThread();
+    await recordLegacy(acct, 'hash-sibling-a', threadKey, { subject: 'Hello hash-sibling', date: '2026-07-04T10:07:30.000Z' });
+    const noId = mboxMessage('hash-sibling-b', { thrid, subject: 'Hello hash-sibling', date: 'Sat, 04 Jul 2026 10:15:00 +0000' })
+      .split('\n').filter((l) => !l.startsWith('Message-ID')).join('\n');
+
+    await importMboxText([mboxMessage('hash-sibling-a', { thrid, subject: 'Hello hash-sibling' }), noId].join('\n'));
+    expect(await gmailRowsForAccountOrIds(acct, ['hash-sibling-a'])).toEqual([
+      { dedupe_key: `gmail:${messageId('hash-sibling-a')}`, account_id: null },
+      { dedupe_key: `msg:${acct.id}:api-gmail-${nonce}-hash-sibling-a`, account_id: acct.id },
+    ]);
+  });
+
+  it('retires the legacy row when one email appears in two mbox files of the export', async () => {
+    const acct = account('two-files');
+    const { thrid, threadKey } = nextThread();
+    await recordLegacy(acct, 'two-files', threadKey);
+    const dir = await mkdtemp(path.join(tmpdir(), 'portos-gmail-identity-'));
+    tempDirs.push(dir);
+    await writeFile(path.join(dir, 'Inbox.mbox'), mboxMessage('two-files', { thrid }));
+    await writeFile(path.join(dir, 'Important.mbox'), mboxMessage('two-files', { thrid }));
+
+    await importGmailMbox({ path: dir });
+    expect(await gmailRowsForAccountOrIds(acct, ['two-files'])).toEqual([{ dedupe_key: `gmail:${messageId('two-files')}`, account_id: null }]);
+  });
+
   it('never retires a legacy row whose imported replacement is not stored', async () => {
     const acct = account('retire-unstored');
     const { thrid, threadKey } = nextThread();
