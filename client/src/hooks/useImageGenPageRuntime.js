@@ -144,7 +144,8 @@ export function useImageGenPageRuntime() {
   const form = useImageGenForm({ searchParams, setSearchParams, backend, handoffStylePreset: location.state?.imageStylePreset });
   const gallery = useImageGenGallery({ previewParam: searchParams.get('preview') });
   const [flux2Status, setFlux2Status] = useState(null);
-  const [flux2InstallOpen, setFlux2InstallOpen] = useState(false);
+  // The remedy kind whose installer is open (see RuntimeRemedyModals), or null.
+  const [runtimeInstallKind, setRuntimeInstallKind] = useState(null);
   const [generating, setGenerating] = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
   const [errorMeta, setErrorMeta] = useState(null);
@@ -181,12 +182,15 @@ export function useImageGenPageRuntime() {
     .then((status) => { if (status) setFlux2Status(status); })
     .catch(() => {}), [fields.modelId]);
 
-  const handleFlux2ModalClose = useCallback(() => setFlux2InstallOpen(false), []);
-  const handleFlux2InstallComplete = useCallback(() => {
+  const handleRuntimeInstallClose = useCallback(() => setRuntimeInstallKind(null), []);
+  const handleRuntimeInstallComplete = useCallback(() => {
     refreshFlux2Status();
     backend.refreshStatus(effectiveMode, fields.modelId);
-    toast.success('FLUX.2 runtime installed');
+    toast.success('Image runtime ready');
   }, [refreshFlux2Status, backend.refreshStatus, effectiveMode, fields.modelId]);
+  // Opens the in-page installer for the selected model's runtime remedy, so the
+  // header and the model picker repair what the page probed, not the Settings default.
+  const openRuntimeInstall = useCallback((kind) => setRuntimeInstallKind(kind || null), []);
 
   useEffect(() => {
     if (!derived.sharesFlux2Venv) {
@@ -545,7 +549,7 @@ export function useImageGenPageRuntime() {
 
   return {
     form,
-    backend: { ...backend, effectiveAgyModel, effectiveFalModel, effectiveRunwayModel },
+    backend: { ...backend, effectiveAgyModel, effectiveFalModel, effectiveRunwayModel, openRuntimeInstall },
     generation: {
       handleGenerate,
       handleCancel,
@@ -623,17 +627,17 @@ export function useImageGenPageRuntime() {
       actions: {
         onRefresh: () => backend.refreshStatus(effectiveMode, fields.modelId),
         onOpenSettings: openSettings,
-        onInstallRuntime: () => setFlux2InstallOpen(true),
+        onInstallRuntime: openRuntimeInstall,
       },
     },
     settings: {
       open: settingsOpen,
       onClose: closeSettings,
     },
-    flux2: {
-      open: flux2InstallOpen,
-      onClose: handleFlux2ModalClose,
-      onComplete: handleFlux2InstallComplete,
+    runtimeInstall: {
+      kind: runtimeInstallKind,
+      onClose: handleRuntimeInstallClose,
+      onComplete: handleRuntimeInstallComplete,
       modelId: fields.modelId,
     },
   };

@@ -1,8 +1,7 @@
 import { useCallback, useState } from 'react';
 import { AlertTriangle, CheckCircle2, Download, HelpCircle, RefreshCw, Settings as SettingsIcon, Wand2 } from 'lucide-react';
 import Banner from '../ui/Banner';
-import Flux2InstallModal from './Flux2InstallModal';
-import RuntimeInstallModal from '../install/RuntimeInstallModal';
+import RuntimeRemedyModals, { isSelfServeRuntimeRemedy } from './RuntimeRemedyModals';
 import { IMAGE_RUNTIME_READINESS, IMAGE_RUNTIME_REMEDY } from '../../lib/imageGenBackends';
 
 /**
@@ -70,8 +69,7 @@ export default function LocalRuntimeStatus({
   const remedy = runtime.remedy;
   // A remedy this component can perform itself, vs. one whose form lives in
   // Settings. Anything else renders as a reason with no button.
-  const selfServe = [IMAGE_RUNTIME_REMEDY.INSTALL_TORCH_VENV, IMAGE_RUNTIME_REMEDY.INSTALL_FLUX3, IMAGE_RUNTIME_REMEDY.INSTALL_MOSS_SWIFT, IMAGE_RUNTIME_REMEDY.DOWNLOAD_MOSS_WEIGHTS].includes(remedy?.kind);
-  const mossWeights = installKind === IMAGE_RUNTIME_REMEDY.DOWNLOAD_MOSS_WEIGHTS;
+  const selfServe = isSelfServeRuntimeRemedy(remedy?.kind);
   const RemedyIcon = REMEDY_ICON[remedy?.kind] || SettingsIcon;
 
   return (
@@ -127,24 +125,7 @@ export default function LocalRuntimeStatus({
           </span>
         )}
       </Banner>
-      <RuntimeInstallModal
-        open={installKind === IMAGE_RUNTIME_REMEDY.INSTALL_FLUX3}
-        runtime="flux3" label="FLUX.3 Klein runtime"
-        installUrlBase="/api/image-gen/setup/flux3-install"
-        description="Installing isolated mflux 0.23.0 and its MLX dependencies. Requires uv and Apple Silicon macOS 14+. Model weights download separately (Q4 5.3 GB, Q6 7.6 GB, Q8 9.9 GB)."
-        onClose={closeInstall} onComplete={handleInstallComplete}
-      />
-      <Flux2InstallModal open={installKind === IMAGE_RUNTIME_REMEDY.INSTALL_TORCH_VENV} onClose={closeInstall} onComplete={handleInstallComplete} modelId={runtime.modelId} />
-      <RuntimeInstallModal
-        open={installKind === IMAGE_RUNTIME_REMEDY.INSTALL_MOSS_SWIFT || mossWeights}
-        runtime="moss-swift"
-        label={mossWeights ? 'MOSS SFT weights (27.2 GB)' : 'MOSS Swift runtime'}
-        installUrlBase={mossWeights ? '/api/image-gen/setup/moss-weights' : '/api/image-gen/setup/moss-install'}
-        description={mossWeights ? 'Downloading and verifying 27.2 GB of Apache-2.0 SFT weights.' : 'Building the pinned MIT Swift port and dependencies. Requires Swift 6.3+, Metal compiler and 10 GB free build space; weights download separately.'}
-        doneText={mossWeights ? 'MOSS SFT weights are verified.' : 'MOSS Swift is installed. Download the SFT weights separately.'}
-        onClose={closeInstall}
-        onComplete={handleInstallComplete}
-      />
+      <RuntimeRemedyModals kind={installKind} modelId={runtime.modelId} onClose={closeInstall} onComplete={handleInstallComplete} />
     </>
   );
 }

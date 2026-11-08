@@ -107,3 +107,24 @@ describe('ModelDownloadBadge', () => {
     expect(screen.getByText('Verifying… 100%')).toBeInTheDocument();
   });
 });
+
+describe('ModelDownloadBadge runtime issue', () => {
+  it('does not call cached weights available when their runtime fails its check', () => {
+    const onRepairRuntime = vi.fn();
+    render(<ModelDownloadBadge
+      status={{ repo: 'example/model', cached: true, sizeBytes: 1024 }}
+      runtimeIssue="Runtime needs repair"
+      onRepairRuntime={onRepairRuntime}
+      repairLabel="Repair example runtime"
+    />);
+    expect(screen.queryByText(/^Available/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Weights downloaded.*runtime unavailable/)).toHaveAttribute('title', 'Runtime needs repair');
+    fireEvent.click(screen.getByRole('button', { name: /Repair example runtime/ }));
+    expect(onRepairRuntime).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the plain Available state when the runtime is fine', () => {
+    render(<ModelDownloadBadge status={{ repo: 'example/model', cached: true }} />);
+    expect(screen.getByText('Available')).toBeInTheDocument();
+  });
+});
