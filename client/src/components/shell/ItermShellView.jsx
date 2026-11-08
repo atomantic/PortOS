@@ -31,7 +31,7 @@ export default function ItermShellView() {
 
   const {
     terminalRef, sessions, listed, status, activeSession, connected,
-    selectSession, emitInput, sendCtrlB, sendCtrlC, sendEsc, sendNavKey,
+    selectSession, emitInput, sendCtrlB, sendCtrlC, sendEsc, sendAltM, sendNavKey,
   } = useItermSession({ itermSessionId, enabled });
 
   // The static checks (not installed, API disabled, not running) come from the
@@ -66,7 +66,7 @@ export default function ItermShellView() {
   }, [showPasteInput]);
 
   const hotKeyProps = {
-    sendCtrlB, sendCtrlC, sendEsc, handlePaste, sendNavKey,
+    sendCtrlB, sendCtrlC, sendEsc, sendAltM, handlePaste, sendNavKey,
     showPasteInput, setShowPasteInput, pasteInputRef, handlePasteInputEvent,
   };
 
