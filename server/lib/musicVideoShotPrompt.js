@@ -60,6 +60,16 @@ export function authoredShotPrompt(scene) {
   return `${still}${/[.!?]$/.test(still) ? '' : '.'} ${own}`;
 }
 
+/**
+ * How every AI writer of a shot prompt words it (planner, treatment, shot
+ * sheet rewrite). Render time already adds the look, production bible, shot
+ * sheet, camera, route and references, so the prompt carries only the shot's
+ * idea; a long prompt that restates those, or stacks several actions, gives
+ * the model competing instructions. A revision rewrites to the same length
+ * instead of appending fixes, so prompts don't grow with each review round.
+ */
+export const SHOT_PROMPT_WRITING = 'Write it the way a director states the shot: two to four plain sentences, about 70 words at most. One main action per shot: who is in frame and where, what they do, where the camera goes and how the shot ends. Name people, places and cameras by name, and leave out what the shot\'s references, look, sheet, camera move and route already carry (faces, wardrobe, props, set dressing, period, lighting rules). An in-world camera\'s holder may show at the edge of frame. When revising, rewrite the whole prompt to this length; never append rules to it.';
+
 const addition = (id, label, text) => {
   const trimmed = typeof text === 'string' ? text.trim() : '';
   return trimmed ? { id, label, text: trimmed } : null;
