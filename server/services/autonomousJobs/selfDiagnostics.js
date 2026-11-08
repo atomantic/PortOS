@@ -204,19 +204,24 @@ export async function ensureDiagnosticsLabels({ cwd = PATHS.root, exec = runCli 
 }
 
 // Shape of a whole "name color description" string passed as one CLI argument:
-// a label-safe name, a space (or " --color "), a six-digit hex color, then an
-// optional free-text tail. Prefixes are not allowlisted, so new categories match.
-const MALFORMED_LABEL = /^([A-Za-z0-9][A-Za-z0-9:._/-]*) (?:--color |)#?([0-9A-Fa-f]{6})(?: .*)?$/
+// a label-safe name, a space (optionally " --color "), a six-digit hex color,
+// then an optional free-text tail. Prefixes are not allowlisted, so new
+// categories match.
+const MALFORMED_LABEL = /^([A-Za-z0-9][A-Za-z0-9:._/-]*) (--color )?#?([0-9A-Fa-f]{6})(?: .*)?$/
 
 /**
  * True when `name` has the malformed shape and is safe to consider for pruning.
- * An all-letter hex tail ("tests BFDADC") is only trusted when the prefix is
- * itself an existing label; otherwise a word like "ticket decade" is kept.
+ * A "--color" marker is only produced by the broken loops, so it is decisive.
+ * Otherwise an all-digit tail is an id ("ticket 123456"), and an all-letter
+ * tail ("tests BFDADC") is trusted only when the prefix is itself a label.
  */
 export function isPrunableMalformedLabel(name, existingNames) {
   const malformed = name.match(MALFORMED_LABEL)
   if (!malformed) return false
-  return /[0-9]/.test(malformed[2]) || existingNames.has(malformed[1])
+  const [, prefix, colorFlag, hex] = malformed
+  if (colorFlag) return true
+  if (!/[A-Fa-f]/.test(hex)) return false
+  return /[0-9]/.test(hex) || existingNames.has(prefix)
 }
 
 /**

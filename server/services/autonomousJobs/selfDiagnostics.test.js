@@ -246,7 +246,9 @@ describe('isPrunableMalformedLabel', () => {
     'macos 0366D6',
     'plan 428BCA Tracked by /do:replan',
     'effort:low --color BFE5E5',
-    'tests BFDADC'
+    'tests BFDADC',
+    'effort:low --color BFDADC',
+    'release 20251a'
   ])('flags malformed shape %s', name => {
     expect(isPrunableMalformedLabel(name, names)).toBe(true)
   })
@@ -255,8 +257,11 @@ describe('isPrunableMalformedLabel', () => {
     'good first issue',
     'help wanted',
     'area: ui',
-    'ticket decade'
-  ])('keeps ordinary label %s', name => {
+    'ticket decade',
+    'ticket 123456',
+    'sprint 202401',
+    'bug #123456'
+  ])('keeps ordinary or numeric label %s', name => {
     expect(isPrunableMalformedLabel(name, names)).toBe(false)
   })
 })
@@ -277,6 +282,8 @@ describe('pruneMalformedLabels', () => {
         { name: 'help wanted' },
         { name: 'needs decade' },
         { name: 'needs decade' },
+        { name: 'sprint 202401' },
+        { name: 'ticket 123456' },
         { name: 'model:light D4C5F9' },
         { name: 'effort:medium --color 76C7C7' },
         { name: 'security 0366D6 Proposed from a security audit' },
