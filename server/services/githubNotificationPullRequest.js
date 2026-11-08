@@ -48,7 +48,10 @@ export async function actOnNotificationPullRequest(account, threadId, options, {
     const rule = automatic ? pullRequestAutomationRule(account, row) : null;
     if (automatic && rule?.action !== action) throw refuse('This automation rule no longer matches the notification');
     const eligible = { merge: view.mergeEligible, 'do-review': view.doReviewEligible, 'untrusted-review': view.reviewEligible };
-    if (!eligible[action]) throw refuse(action === 'merge' ? 'Merge requires a trusted pull-request author' : 'This account or pull request does not allow this review action');
+    if (!eligible[action]) {
+      const mergeRefusal = row.evidence?.viewerCanPush === false ? 'This account cannot merge in this repository' : 'Merge requires a trusted pull-request author';
+      throw refuse(action === 'merge' ? mergeRefusal : 'This account or pull request does not allow this review action');
+    }
 
     const env = suppliedEnv || await requireAccountEnv(account);
     const pr = await readGithubPullRequest({ repoSpec: target.repoSpec, number: target.number, env });

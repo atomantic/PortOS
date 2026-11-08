@@ -31,6 +31,11 @@ const REASON_LABELS = {
   team_mention: 'Team mention',
 };
 
+// The generic agent lane (GENERIC_AGENT_LANE on the server): on your own PR it
+// brings the branch up to date and works through the maintainers' comments,
+// which the PR's review and merge buttons do not cover.
+const GENERIC_LANE = 'notification-resolve';
+
 const STATE_LABELS = { done: 'Done', muted: 'Muted', unsubscribed: 'Unsubscribed' };
 
 // Undoing Done is local; undoing Mute/Unsubscribe re-subscribes on GitHub.
@@ -173,6 +178,7 @@ export default function GitHubNotificationCard({ notification: sourceNotificatio
           <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-gray-400">
             <Pill tone={why?.tone || 'muted'} size="xs">{REASON_LABELS[notification.reason] || notification.reason}</Pill>
             {statusChip && <Pill tone={statusChip.tone} size="xs">{statusChip.label}</Pill>}
+            {notification.subjectStatus?.awaitingReply && statusChip && statusChip.key !== 'reply' && <Pill tone="warning" size="xs">Reply needed</Pill>}
             {notification.repoFullName && <span className="min-w-0 truncate font-mono">{notification.repoFullName}</span>}
             <span className="shrink-0">· {timeAgo(notification.updatedAt)}</span>
             {accountLabel && <span className="shrink-0">· {accountLabel}</span>}
@@ -244,7 +250,7 @@ export default function GitHubNotificationCard({ notification: sourceNotificatio
           )}
           {notification.pullRequest && <GitHubPullRequestActions notification={notification} onUpdated={applyUpdate}
             busy={busy} runMutation={runMutation} />}
-          {agent && !picking && !notification.pullRequest && (
+          {agent && !picking && (!notification.pullRequest || (agent.lane === GENERIC_LANE && canResolve)) && (
             <button
               type="button"
               disabled={busy || !canResolve}

@@ -75,7 +75,8 @@ for (const [path, render] of Object.entries(compose)) {
       const prompt = await render(task);
       assertExternalContract(prompt);
       expect(prompt).toContain('never merge a pull request');
-      expect(prompt).toContain('Push only to branches you create in this run');
+      // An own PR also allows its head branch (githubNotificationResolveTask.test.js).
+      expect(prompt).toMatch(/Push only to (this pull request's head branch or )?branches you create in this run/);
     });
 
     it.each([

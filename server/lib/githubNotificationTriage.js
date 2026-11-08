@@ -44,8 +44,10 @@ export const notificationAgentAccountBinding = (account, origin = 'user') => ({
 });
 
 // Bump when a rule change should re-decide threads that have no new activity;
-// open threads triaged under an older version are triaged again.
-export const TRIAGE_RULES_VERSION = 9;
+// open threads triaged under an older version are triaged again. Version 10
+// records whether a reply on your own upstream PR came from the repo's owner
+// and whether you can push to (and so merge in) the PR's repo.
+export const TRIAGE_RULES_VERSION = 10;
 
 // Open threads with nothing left for you: closed or merged, folded into a
 // newer CI notice, or owned by a PR workflow. Every sync that may act marks
@@ -427,7 +429,8 @@ const rulePin = (rule) => {
  * advisory, a one-off `security-fix` run in a scratch clone. Any other open
  * thread goes to the generic `notification-resolve` run, refused unless its
  * author and latest commenter are you or trusted (or it is CI in a repo of
- * yours), so outside text reaches only the screened lanes; the tap re-checks
+ * yours, or your own PR answered by its repo's owner), so other outside text
+ * reaches only the screened lanes; the tap re-checks
  * every commenter (threadDiscussionVouched). The account's
  * matching agent rule (`matchAgentRule`) adds its provider/model/effort pin.
  * Used by Autopilot and the inbox's Resolve with agent button.
@@ -501,6 +504,11 @@ function genericRefusal(row, evidence) {
   const hasComment = Boolean(row.latest_comment_api_url) && row.latest_comment_api_url !== row.subject_api_url;
   if (!Object.hasOwn(evidence, 'commenterTrust')) return hasComment || evidence.commenter ? 'comment-unchecked' : null;
   // An unreadable latest comment is recorded as outside with no commenter.
+  // Your own PR into someone else's repo: its owner (or a public member of the
+  // owning org) asking for changes is the work itself. The agent already reads
+  // that owner's code in the clone, so their review adds no new author.
+  const ownerReply = row.trust === 'yours' && row.subject_type === 'PullRequest' && evidence.commenterMaintainer === true;
+  if (ownerReply) return null;
   if (evidence.commenterTrust !== null && !VOUCHED_TRUST.has(evidence.commenterTrust)) return 'outside-content';
   if (evidence.commenter && !VOUCHED_TRUST.has(evidence.commenterTrust)) return 'outside-content';
   return null;
