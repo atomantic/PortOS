@@ -11,16 +11,10 @@ import { ServerError } from '../../lib/errorHandler.js';
 const exec = promisify(execFile);
 export const flux3Venv = () => join(PATHS.data, 'python', 'venv-flux3');
 export const flux3Python = () => join(flux3Venv(), 'bin', 'python3');
-// Transitive deps that mflux leaves open are pinned here too when a newer
-// release breaks its import: mflux 0.23.0 asks only for pillow>=12.3.0, and
-// Pillow 13.0.0 fails to import on Python 3.12 (numbers._IntegralLike), which
-// made the probe report a fully installed runtime as broken. The probe checks
-// every pin, so a venv that drifted reads as "needs repair" and the repair
-// reinstalls the pinned set.
-export const FLUX3_REQUIREMENTS = Object.freeze(['mflux==0.23.0', 'mlx==0.32.4', 'mlx-metal==0.32.4', 'transformers==5.19.0', 'tokenizers==0.23.3', 'huggingface-hub==1.33.0', 'pillow==12.3.0']);
+const REQUIREMENTS = ['mflux==0.23.0', 'mlx==0.32.4', 'mlx-metal==0.32.4', 'transformers==5.19.0', 'tokenizers==0.23.3', 'huggingface-hub==1.33.0'];
 const PROBE = `import importlib.metadata as m, platform, sys
 assert platform.machine() == 'arm64' and sys.version_info >= (3, 11)
-for spec in ${JSON.stringify(FLUX3_REQUIREMENTS)}:
+for spec in ${JSON.stringify(REQUIREMENTS)}:
  name, version = spec.split('=='); assert m.version(name) == version, spec
 from mflux.models.flux3.cli.flux3_generate import main
 from mflux.models.flux3.cli.flux3_edit_generate import main
@@ -77,7 +71,7 @@ export function installFlux3Runtime(emit) {
       emit({ type: 'stage', stage: 'venv', message: 'Creating isolated Python 3.12 environment. No model weights are downloaded.' });
       await command(['venv', '--python', '3.12', '--python-preference', 'only-managed', '--allow-existing', flux3Venv()]);
       emit({ type: 'stage', stage: 'install', message: 'Installing pinned mflux 0.23.0 and MLX dependencies.' });
-      await command(['pip', 'install', '--reinstall', '--python', flux3Python(), ...FLUX3_REQUIREMENTS]);
+      await command(['pip', 'install', '--reinstall', '--python', flux3Python(), ...REQUIREMENTS]);
       emit({ type: 'stage', stage: 'verify', message: 'Checking both FLUX.3 CLI modules without loading weights.' });
       await probe();
       if (cancelled) throw new Error('FLUX.3 installation cancelled.');
