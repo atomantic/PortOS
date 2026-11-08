@@ -582,12 +582,13 @@ function IngredientEditor() {
   // role right away (the server-side attach hook files the same row and is
   // idempotent against this), then reconcile the media list.
   const handleSheetFile = useCallback(async (filename, role, readyMessage = 'Reference sheet ready') => {
-    if (!record || identityReadOnly || !filename) return;
+    if (!record || identityReadOnly || !filename) return false;
     const ok = await attachCatalogIngredientMedia(record.id, { mediaKey: filename, kind: 'reference', role }, { silent: true })
       .then(() => true)
       .catch((err) => { toast.error(err?.message || 'Failed to attach the rendered image'); return false; });
     refreshMedia();
     if (ok) toast.success(readyMessage);
+    return ok;
   }, [record, refreshMedia, identityReadOnly]);
   const handleLookFile = useCallback((filename, role) => handleSheetFile(filename, role, 'Look ready'), [handleSheetFile]);
 

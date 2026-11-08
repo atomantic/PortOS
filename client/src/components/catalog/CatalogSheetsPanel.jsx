@@ -8,6 +8,7 @@ import { imageRefsSequenceKey, useCatalogPreviewSequence } from './CatalogImageP
 import MediaJobThumb from '../pipeline/MediaJobThumb';
 import ModelInputPreview from '../media/ModelInputPreview';
 import CatalogMediaTile from './CatalogMediaTile';
+import CatalogSheetRecovery from './CatalogSheetRecovery';
 import socket from '../../services/socket';
 import useMounted from '../../hooks/useMounted';
 import { useModelInputPreview } from '../../hooks/useModelInputPreview';
@@ -134,12 +135,14 @@ const SHEET_EVENT = 'reference-sheet:changed';
 // age/look or sheet kind) can run side by side.
 function SheetJob({ job, onFilename, onStatus }) {
   const handleFilename = useCallback((filename) => onFilename(job, filename), [job, onFilename]);
-  const handleStatus = useCallback((status) => onStatus(job, status), [job, onStatus]);
+  const handleStatus = useCallback((status, error) => onStatus(job, status, error), [job, onStatus]);
   return (
     <li className="flex items-center gap-2 min-w-0">
       <MediaJobThumb jobId={job.jobId} label="Reference sheet" size="xs"
         onFilename={handleFilename} onStatus={handleStatus} />
-      <span className="text-xs text-gray-300 truncate">{job.label}</span>
+      <div className="min-w-0 text-xs"><span className="text-gray-300">{job.label}</span>
+        {job.publicationError && <p role="status" className="text-port-warning">{job.publicationError} <Link to="/media/image" className="underline">Open image queue</Link></p>}
+      </div>
     </li>
   );
 }
@@ -231,9 +234,13 @@ export default function CatalogSheetsPanel({
     const onChanged = (data) => {
       const job = delegatedJobs.find((j) => j.jobId === data?.jobId);
       if (!job) return;
+      if (data.status === 'failed') {
+        setJobs((cur) => cur.map((item) => item.jobId === data.jobId
+          ? { ...item, publicationError: 'The render finished, but its sheet link could not be saved. Inspect the saved result in the image queue.' } : item));
+        return;
+      }
       dropJob(data.jobId);
       if (data.status === 'ready') onPointerSheetReady?.();
-      else if (data.status === 'failed') toast.error(`${job.label} render finished but the sheet could not be saved`);
     };
     socket.on(SHEET_EVENT, onChanged);
     return () => { socket.off(SHEET_EVENT, onChanged); };
@@ -254,12 +261,12 @@ export default function CatalogSheetsPanel({
   const variant = (variants || []).find((v) => v.id === variantId) || null;
   const renderBlocked = blockedReason || preview.error;
   const selectedRole = variant ? `${SHEET_ROLE_PREFIX}${variant.id}${activeFormId ? `@${activeFormId}` : ''}` : null;
-  const selectedRendering = !!selectedRole && jobs.some((j) => j.role === selectedRole);
+  const selectedRendering = !!selectedRole && jobs.some((j) => j.role === selectedRole && !j.publicationError);
 
   const handleGenerate = async (renderVariant = variant, renderFormId = activeFormId) => {
     const renderRole = renderVariant && `${SHEET_ROLE_PREFIX}${renderVariant.id}${renderFormId ? `@${renderFormId}` : ''}`;
     const sameTarget = renderVariant?.id === variantId && renderFormId === activeFormId;
-    if (!renderVariant || blockedReason || (sameTarget && preview.error) || starting || jobs.some((job) => job.role === renderRole)) return;
+    if (!renderVariant || blockedReason || (sameTarget && preview.error) || starting || jobs.some((job) => job.role === renderRole && !job.publicationError)) return;
     setStarting(true);
     const form = forms.find((f) => f.id === renderFormId) || null;
     const queued = await renderCatalogSheet(ingredientId, { variant: renderVariant.id, ...(renderFormId ? { formId: renderFormId } : {}) }, { silent: true })
@@ -375,7 +382,7 @@ export default function CatalogSheetsPanel({
           </div>
           {jobs.length > 0 && (
             <div aria-label="Sheets rendering">
-              <p className="text-xs uppercase tracking-wider text-gray-500 mb-1">Rendering {jobs.length}</p>
+              <p className="text-xs uppercase tracking-wider text-gray-500 mb-1">{jobs.some((job) => job.publicationError) ? 'Sheet render status' : `Rendering ${jobs.length}`}</p>
               <ul className="flex flex-wrap gap-3">
                 {jobs.map((job) => <SheetJob key={job.jobId} job={job} onFilename={handleFilename} onStatus={handleStatus} />)}
               </ul>
@@ -386,6 +393,8 @@ export default function CatalogSheetsPanel({
           <ModelInputPreview preview={preview} prompt="" onToggleLikeness={onMediaChanged ? toggleLikeness : undefined} />
         </div>
       )}
+
+      <CatalogSheetRecovery key={ingredientId} ingredientId={ingredientId} sheetMedia={sheetMedia} onSheetFile={onSheetFile} blockedReason={blockedReason} />
 
       {groups.map((group) => (
         <div key={group.id || 'canonical'} className="space-y-2">
