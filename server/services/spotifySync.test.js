@@ -76,9 +76,9 @@ describe('spotifySync pure helpers', () => {
       expect(c.happenedAt).toBe(new Date('2024-03-10T15:30:00.123Z').toISOString());
     });
 
-    it('uses spotify:<played_at ISO>:<trackId> as the dedupe key', () => {
+    it('uses spotify:<played_at floored to the second>:<trackId> as the dedupe key', () => {
       const c = spotifyListenCandidate(makeItem());
-      expect(c.dedupeKey).toBe('spotify:2024-03-10T15:30:00.123Z:track123');
+      expect(c.dedupeKey).toBe('spotify:2024-03-10T15:30:00.000Z:track123');
     });
 
     it('carries track/artist/album metadata verbatim for later enrichment', () => {
