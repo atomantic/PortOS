@@ -56,7 +56,11 @@ export async function adaptStagedDocumentPreview(directory, { scenes = [] } = {}
   try {
     [original, index, template] = await Promise.all([read(directory, 'engine.js'), read(directory, 'index.html'), read(join(ROOT, 'layered'), 'index.html')]);
   } catch { return declined('unrecognized-entrypoint'); }
-  if (digest(original) !== ENGINE_SHA256) return declined('unrecognized-engine');
+  if (digest(original) !== ENGINE_SHA256) {
+    // An older shipped engine plays only by exact per-frame seeks; the player offers its one-tap update.
+    const { isUpgradableLayeredEngine } = await import('./compositionDocument.js');
+    return { ...declined('unrecognized-engine'), ...(isUpgradableLayeredEngine(original) ? { upgradable: true } : {}) };
+  }
   // Photo selection changes within a scene; retain exact seek until the
   // cooperative image owner supports changing sources at those boundaries.
   if (scenes.some(scene => scene.photoSequence)) return declined('photo-sequence-exact-seek');

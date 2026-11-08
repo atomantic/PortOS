@@ -488,6 +488,9 @@ const COMPATIBLE_IMAGE_EFFECT_MODULES = new Set([
 ]);
 const engineDigest = bytes => createHash('sha256').update(bytes.toString('utf8').replace(/\r\n?/g, '\n')).digest('hex');
 
+/** Whether `engine` (engine.js bytes) is an older shipped layered engine that "Update layered engine" can replace. */
+export const isUpgradableLayeredEngine = engine => UPGRADABLE_LAYERED_ENGINES.has(engineDigest(engine));
+
 function generatedLayeredEngineMatches(engine, reference) {
   if (!reference || !UPGRADABLE_LAYERED_ENGINES.has(engineDigest(reference))) return false;
   try {

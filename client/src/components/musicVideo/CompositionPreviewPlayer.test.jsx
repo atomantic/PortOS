@@ -367,6 +367,37 @@ describe('CompositionPreviewPlayer', () => {
     expect(api.upgradeMusicVideoCompositionEngine).toHaveBeenCalledWith('mv-1', DOCUMENT.directory, { silent: true });
   });
 
+  // Uniquely catches an older shipped engine silently falling back to choppy per-frame playback with no way out.
+  it('names frame-by-frame playback and offers the engine update when only the engine is older', async () => {
+    socket.emit.mockImplementation((event, payload) => {
+      if (event !== 'generated-preview:open') return;
+      socket.reply(event, payload);
+      for (const fn of socket.__handlers.get('generated-preview:opened') || []) fn({ requestId: payload.requestId,
+        sessionId: '00000000-0000-4000-8000-0000000000ab', durationSec: 10, fps: 24, width: 1920, height: 1080, audio: 'none',
+        playbackFallback: { reason: 'unrecognized-engine', upgradable: true } });
+    });
+    const upgraded = { ...project, composition: { ...project.composition, document: { ...DOCUMENT, directory: 'music-video/mv-1/composition/doc-c' } } };
+    api.upgradeMusicVideoCompositionEngine.mockResolvedValue({ project: upgraded, changed: true });
+    const onProject = vi.fn();
+    render(<CompositionPreviewPlayer project={project} audioUrl="/data/music/song.mp3" onProject={onProject} />);
+    expect(await screen.findByText(/Playing frame by frame.*older layered engine/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Update layered engine' }));
+    await waitFor(() => expect(onProject).toHaveBeenCalledWith(upgraded));
+  });
+
+  it('names a customized document without offering an update', async () => {
+    socket.emit.mockImplementation((event, payload) => {
+      if (event !== 'generated-preview:open') return;
+      socket.reply(event, payload);
+      for (const fn of socket.__handlers.get('generated-preview:opened') || []) fn({ requestId: payload.requestId,
+        sessionId: '00000000-0000-4000-8000-0000000000ac', durationSec: 10, fps: 24, width: 1920, height: 1080, audio: 'none',
+        playbackFallback: { reason: 'wipe-exact-seek', upgradable: false } });
+    });
+    render(<CompositionPreviewPlayer project={project} audioUrl="/data/music/song.mp3" onProject={vi.fn()} />);
+    expect(await screen.findByText(/Playing frame by frame.*a shot uses a wipe/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Update layered engine' })).not.toBeInTheDocument();
+  });
+
   it('applies film look and title-card edits made while the isolated worker is opening', async () => {
     globalThis.localStorage.setItem(PREVIEW_FILM_LOOK_KEY, 'on');
     socket.emit.mockImplementation(() => {});

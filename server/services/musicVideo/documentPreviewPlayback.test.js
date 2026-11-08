@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runInNewContext } from 'node:vm';
+vi.mock('./compositionDocument.js', () => ({ isUpgradableLayeredEngine: bytes => bytes.toString().startsWith('// older shipped engine') }));
 import { adaptStagedDocumentPreview } from './documentPreviewPlayback.js';
 import { installLayeredPreviewPlayback } from './previewPlaybackRuntime.js';
 import { imageEffectState, IMAGE_EFFECT_FOG_COLOR } from '../../lib/musicVideoImageEffects.js';
@@ -49,6 +50,16 @@ describe('recognized staged composition playback capability', () => {
     await writeFile(join(generated, 'index.html'), index.replace('<script src="engine.js"></script>', '<script src="generated.js"></script>\n<script src="engine.js"></script>'));
     await writeFile(join(generated, 'generated.js'), 'window.PORTOS_MV_GENERATED = { sections: {} };');
     expect(await adaptStagedDocumentPreview(generated)).toMatchObject({ adapted: false, reason: 'generated-contract-not-admitted' });
+  });
+
+  // Uniquely catches the player losing its one-tap way back to smooth playback for an older shipped engine.
+  it('marks an older shipped engine as upgradable and a customized one as not', async () => {
+    const older = await staged();
+    await writeFile(join(older, 'engine.js'), '// older shipped engine\n');
+    expect(await adaptStagedDocumentPreview(older)).toEqual({ adapted: false, reason: 'unrecognized-engine', upgradable: true });
+    const custom = await staged();
+    await writeFile(join(custom, 'engine.js'), '// my own engine\n');
+    expect(await adaptStagedDocumentPreview(custom)).toEqual({ adapted: false, reason: 'unrecognized-engine' });
   });
 
   it('declines unknown or too-slow staged video cadence without rewriting its engine', async () => {
