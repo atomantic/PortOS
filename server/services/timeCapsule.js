@@ -18,7 +18,7 @@ const SNAPSHOTS_DIR = join(DIGITAL_TWIN_DIR, 'snapshots');
 const INDEX_FILE = join(SNAPSHOTS_DIR, 'index.json');
 const JSON_TWIN_FILES = [
   'meta.json', 'identity.json', 'goals.json', 'taste-profile.json',
-  'feedback.json', 'genome.json', 'longevity.json', 'chronotype.json',
+  'feedback.json', 'longevity.json', 'chronotype.json',
 ];
 
 // One tail for every index.json read-modify-write so two snapshot creates or
@@ -85,6 +85,8 @@ async function collectTwinData() {
   // JSON is omitted so one bad twin file cannot abort the whole snapshot.
   const jsonTargets = [
     ...JSON_TWIN_FILES.map(filename => ({ key: filename, path: join(DIGITAL_TWIN_DIR, filename) })),
+    // The genome store moved to the meatspace directory; the key stays 'genome.json' so older snapshots line up.
+    { key: 'genome.json', path: join(PATHS.meatspace, 'genome.json') },
     { key: 'autobiography/stories.json', path: join(DIGITAL_TWIN_DIR, 'autobiography', 'stories.json') }
   ];
   await Promise.all(jsonTargets.map(async ({ key, path }) => {
@@ -134,7 +136,10 @@ function buildSummary(data) {
     markdownFiles: Object.keys(mdDocs).length,
     goalsCount: Array.isArray(goals?.goals) ? goals.goals.length : 0,
     storiesCount: Array.isArray(stories) ? stories.length : 0,
-    genomeMarkers: Array.isArray(genome?.markers) ? genome.markers.length : 0,
+    // Live genome metadata keeps markers in savedMarkers (an object); the array form is from older snapshot shapes.
+    genomeMarkers: genome?.savedMarkers
+      ? Object.keys(genome.savedMarkers).length
+      : (Array.isArray(genome?.markers) ? genome.markers.length : 0),
     hasIdentity: !!identity,
     testHistoryCount: Array.isArray(meta.testHistory) ? meta.testHistory.length : 0,
     traits: meta.traits || null,
