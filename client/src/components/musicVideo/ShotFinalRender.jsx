@@ -49,7 +49,14 @@ export default function ShotFinalRender({ project, scene, onChange, fieldId }) {
         )}
         <span className="ml-auto flex flex-wrap items-center gap-2">
           {rendering ? (
-            <button type="button" className={BUTTON} onClick={() => cancelMusicVideoShotRender(projectId, sceneId).catch(() => {})}>
+            <button
+              type="button"
+              className={BUTTON}
+              // { ok: false } means the server has no running job for this shot: settle the card from its status.
+              onClick={() => cancelMusicVideoShotRender(projectId, sceneId)
+                .then((result) => { if (result?.ok === false) { markLive(sceneId, null); retry?.(); } })
+                .catch(() => {})}
+            >
               <Square size={12} aria-hidden="true" /> Stop
             </button>
           ) : shot && !rendered ? (

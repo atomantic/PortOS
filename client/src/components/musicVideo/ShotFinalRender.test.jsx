@@ -186,4 +186,20 @@ describe('ShotFinalRender', () => {
       vi.useRealTimers();
     }
   });
+
+  it('settles a Stop the server answers with { ok: false } by clearing the spinner and offering Render shot', async () => {
+    getMusicVideoShotRenders.mockResolvedValue({ available: true, shots: [{ ...shot('a', 'stale'), rendering: true }], ready: 0, total: 1 });
+    render(<ShotFinalRender project={project} scene={project.scenes[0]} onChange={() => {}} fieldId={fieldId} />);
+    fireEvent.click(await screen.findByRole('button', { name: /Stop/ }));
+    cancelMusicVideoShotRender.mockResolvedValueOnce({ ok: false });
+    getMusicVideoShotRenders.mockResolvedValueOnce({ available: true, shots: [shot('a', 'stale')], ready: 0, total: 1 });
+    act(() => handlers.get('music-video:shot-render')({ projectId: 'mv-1', sceneId: 'a', state: 'rendering', progress: 0.3 }));
+    expect(screen.getByTestId('shot-render-state').textContent).toBe('Rendering 30%');
+
+    fireEvent.click(screen.getByRole('button', { name: /Stop/ }));
+    expect(await screen.findByRole('button', { name: /Render shot/ })).toBeTruthy();
+    expect(screen.getByTestId('shot-render-state').textContent).toBe('Not rendered');
+    expect(document.querySelector('.animate-spin')).toBeNull();
+    expect(screen.queryByRole('button', { name: /Stop/ })).toBeNull();
+  });
 });
