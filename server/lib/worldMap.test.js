@@ -84,6 +84,31 @@ describe('worldFill', () => {
     expect(drops.every((w) => masts.some(({ position: [x, , z] }) => Math.hypot(w[3] - x, w[5] - z) < 0.02))).toBe(true);
   });
 
+  // Uniquely catches every road getting overhead poles, wires and drops regardless of its infrastructure choice (#15437).
+  it('lets each road choose its infrastructure, side and spacing; unset stays overhead', () => {
+    const fillOf = (extra) => worldFill({ version: 1, seed: 3, sets: [], paths: [{ id: 'main', kind: 'road', sides: 'buildings', width: 9, points: [[0, 0], [400, 0]], ...extra }] });
+    const overhead = fillOf({});
+    expect(fillOf({ infrastructure: 'overhead' })).toEqual(overhead);
+    const none = fillOf({ infrastructure: 'none' });
+    expect([none.poles, none.arms, none.lamps, none.wires].map((list) => list.length)).toEqual([0, 0, 0, 0]);
+    expect(none.buildings.length).toBeGreaterThan(0);
+    const buried = fillOf({ infrastructure: 'buried' });
+    expect(buried.wires).toHaveLength(0);
+    expect(buried.lamps.length).toBeGreaterThan(0);
+    expect(buried.poles.every(({ size }) => size[1] < 7 && size[1] > 2)).toBe(true);
+    const rural = fillOf({ infrastructure: 'rural' });
+    expect(rural.lamps).toHaveLength(0);
+    expect(rural.wires.length).toBeGreaterThan(0);
+    expect(rural.poles.length).toBeLessThan(overhead.poles.length);
+    // Rural carries no house drops: wires are only pole-to-pole spans, two per span.
+    expect(rural.wires).toHaveLength((rural.poles.length - 1) * 2);
+    const left = fillOf({ poleSide: 'left', poleSpacing: 20 });
+    const utility = left.poles.filter(({ size }) => size[1] > 5);
+    expect(utility.length).toBeGreaterThan(fillOf({}).poles.filter(({ size }) => size[1] > 5).length);
+    expect(utility.every(({ position: [, , z] }) => z < -4.5)).toBe(true);
+    expect(left.lamps.every(({ position: [, , z] }) => Math.abs(z) < 4.5)).toBe(true);
+  });
+
   it('changes with the seed', () => {
     expect(worldFill({ ...world, seed: 4 }).buildings).not.toEqual(worldFill(world).buildings);
   });
