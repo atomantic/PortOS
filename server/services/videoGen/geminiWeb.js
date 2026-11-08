@@ -128,7 +128,7 @@ function reportRetryWait(job, jobId, { retry, retries, remainingMs }) {
 }
 
 /** The job's error once Gemini stayed busy through every retry: what it said and that Retry is the next step. */
-export function busyExhaustedMessage(err) {
+function busyExhaustedMessage(err) {
   const retries = err?.transientRetriesExhausted;
   if (!retries || !isBusyRefusal(err)) return err?.message || String(err);
   const minutes = Math.round(TRANSIENT_RETRY_DELAYS_MS.slice(0, retries).reduce((sum, ms) => sum + ms, 0) / 60_000);
