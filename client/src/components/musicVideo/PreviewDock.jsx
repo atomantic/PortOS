@@ -117,7 +117,7 @@ export default function PreviewDock({ project, sources, audioUrl, seekRequest, c
               id={pickerId}
               value={source.id}
               onChange={(e) => pick(e.target.value)}
-              className="order-last min-h-[44px] min-w-0 basis-full truncate rounded border border-port-border bg-port-bg px-1.5 py-1 text-xs text-port-text sm:min-h-[28px] @min-[32rem]/mv-preview:order-none @min-[32rem]/mv-preview:basis-auto @min-[32rem]/mv-preview:flex-1"
+              className="order-last min-h-[44px] min-w-0 basis-full truncate rounded border border-port-border bg-port-bg px-1.5 py-1 text-xs text-port-text pointer-fine:sm:min-h-[28px] @min-[32rem]/mv-preview:order-none @min-[32rem]/mv-preview:basis-auto @min-[32rem]/mv-preview:flex-1"
             >
               {sources.map((entry) => <option key={entry.id} value={entry.id}>{entry.label}</option>)}
             </select>

@@ -241,7 +241,7 @@ function HeldCheckoutRow({ hold }) {
         <button
           type="button"
           onClick={() => copyToClipboard(unlock, 'Unlock command copied')}
-          className="inline-flex items-center gap-1 min-h-[44px] sm:min-h-0 px-2 py-1 mt-1 rounded border border-port-border hover:bg-port-border/40 transition-colors"
+          className="inline-flex items-center gap-1 min-h-[44px] pointer-fine:sm:min-h-0 px-2 py-1 mt-1 rounded border border-port-border hover:bg-port-border/40 transition-colors"
         >
           <Copy size={12} aria-hidden="true" />
           Copy unlock command

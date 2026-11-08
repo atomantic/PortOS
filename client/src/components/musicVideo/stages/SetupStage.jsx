@@ -40,14 +40,14 @@ function AlignWords({ disabled, aligning, status, aligned, onAlign }) {
           : 'The words are placed on the isolated vocal on their own once the song has lyrics.'}
       </p>
       <button type="button" onClick={run} disabled={aligning || disabled}
-        className="min-h-[44px] rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm text-port-accent disabled:opacity-50 sm:min-h-0">
+        className="min-h-[44px] rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm text-port-accent disabled:opacity-50 pointer-fine:sm:min-h-0">
         {aligning ? 'Aligning…' : aligned ? 'Re-align all words' : 'Align all words'}
       </button>
       {status && (
         <div role="status" className="flex flex-wrap items-center gap-2 text-xs text-port-text-muted">
           <span>{status.label}{status.percent > 0 ? ` ${status.percent}%` : ''}</span>
           <button type="button" onClick={status.onCancel}
-            className="min-h-[44px] rounded border border-port-border px-2 text-port-error sm:min-h-0">Cancel</button>
+            className="min-h-[44px] rounded border border-port-border px-2 text-port-error pointer-fine:sm:min-h-0">Cancel</button>
         </div>
       )}
       {error && <p role="alert" className="text-xs text-port-error">{error}</p>}

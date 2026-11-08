@@ -384,7 +384,7 @@ function LinkedImagePicker({ panel, names, onPatch }) {
               {failed && (
                 <p role="alert" className="mt-1 flex flex-wrap items-center gap-2 text-xs text-port-error">
                   Could not load the images for {name}.
-                  <button type="button" onClick={() => retry(id)} className="min-h-[44px] underline sm:min-h-0">Retry</button>
+                  <button type="button" onClick={() => retry(id)} className="min-h-[44px] underline pointer-fine:sm:min-h-0">Retry</button>
                 </p>
               )}
             </div>

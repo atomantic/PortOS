@@ -7,7 +7,7 @@ import { BEAT_TOGGLE_RATES, BEAT_TOGGLE_RATE_LABELS } from '../../lib/musicVideo
 import { formatCount } from '../../utils/formatters.js';
 import MediaImage from '../MediaImage';
 
-const CONTROL = 'min-h-[44px] rounded border border-port-border bg-port-bg px-2 py-1 text-xs disabled:opacity-50 sm:min-h-0';
+const CONTROL = 'min-h-[44px] rounded border border-port-border bg-port-bg px-2 py-1 text-xs disabled:opacity-50 pointer-fine:sm:min-h-0';
 
 // #14277: the per-photo layout fields, in the units the editor shows them.
 const LAYOUT_FIELDS = [

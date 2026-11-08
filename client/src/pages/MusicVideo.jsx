@@ -304,8 +304,8 @@ export default function MusicVideo() {
         onKeyDown={(e) => { if (e.key === 'Escape') setRenamingId(null); }}
         className="min-w-0 flex-1 basis-48 sm:max-w-md bg-port-bg border border-port-border rounded px-2 py-1.5 text-base sm:text-sm"
       />
-      <button type="submit" disabled={!renameDraft.trim()} className="rounded bg-port-accent px-3 py-1.5 text-sm text-white disabled:opacity-50 min-h-[44px] sm:min-h-0">Save</button>
-      <button type="button" onClick={() => setRenamingId(null)} className="rounded border border-port-border px-3 py-1.5 text-sm min-h-[44px] sm:min-h-0">Cancel</button>
+      <button type="submit" disabled={!renameDraft.trim()} className="rounded bg-port-accent px-3 py-1.5 text-sm text-white disabled:opacity-50 min-h-[44px] pointer-fine:sm:min-h-0">Save</button>
+      <button type="button" onClick={() => setRenamingId(null)} className="rounded border border-port-border px-3 py-1.5 text-sm min-h-[44px] pointer-fine:sm:min-h-0">Cancel</button>
     </form>
   ) : null;
   // A full record replaces its summary in the index list; the project card
@@ -602,14 +602,14 @@ export default function MusicVideo() {
               type="button"
               onClick={() => setAutonomousOpen(true)}
               title="One prompt in — lyrics, a Suno song, a mood board and the video out"
-              className="flex items-center gap-1 rounded border border-port-accent text-port-accent px-3 py-1.5 text-sm min-h-[44px] sm:min-h-0"
+              className="flex items-center gap-1 rounded border border-port-accent text-port-accent px-3 py-1.5 text-sm min-h-[44px] pointer-fine:sm:min-h-0"
             >
               <Wand2 size={15} /> Autonomous
             </button>
             <button
               type="button"
               onClick={() => setCreateOpen(true)}
-              className="flex items-center gap-1 bg-port-accent text-white rounded px-3 py-1.5 text-sm min-h-[44px] sm:min-h-0"
+              className="flex items-center gap-1 bg-port-accent text-white rounded px-3 py-1.5 text-sm min-h-[44px] pointer-fine:sm:min-h-0"
             >
               <Plus size={15} /> New project
             </button>

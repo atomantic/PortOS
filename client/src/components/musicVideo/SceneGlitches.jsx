@@ -14,7 +14,7 @@ const REPEAT_EVERY_SEC = [0.25, 0.5, 1, 1.5, 2, 3, 4, 6, 8];
 const EDGE_LABELS = { left: 'Left edge', right: 'Right edge', top: 'Top edge', bottom: 'Bottom edge' };
 const DEFAULT_LEAK_COLOR = '#ff4f8a';
 const round3 = (n) => Math.round(n * 1000) / 1000;
-const selectCls = 'bg-port-bg border border-port-border rounded px-1 py-1 text-xs min-h-[44px] sm:min-h-0 disabled:opacity-50';
+const selectCls = 'bg-port-bg border border-port-border rounded px-1 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50';
 
 /** One glitch: its style, when it hits (a slider over the shot), how long and strong it is, and how often it repeats. */
 function GlitchRow({ fieldId, index, glitch, spanSec, onCommit, onRemove, disabled }) {
@@ -48,7 +48,7 @@ function GlitchRow({ fieldId, index, glitch, spanSec, onCommit, onRemove, disabl
           <input id={id('at')} type="range" min="0" max={spanSec} step={STEP_SEC} value={Math.min(atSec, spanSec)} disabled={disabled}
             onChange={(e) => setAtSec(Number(e.target.value))}
             onPointerUp={commitTime} onKeyUp={commitTime} onBlur={commitTime}
-            className="min-w-0 flex-1 accent-port-accent min-h-[44px] sm:min-h-0" />
+            className="min-w-0 flex-1 accent-port-accent min-h-[44px] pointer-fine:sm:min-h-0" />
         </span>
         <label htmlFor={id('length')} className="sr-only">Effect {index + 1} length</label>
         <select id={id('length')} value={glitch.lengthSec ?? ''} disabled={disabled} title="How long the effect lasts"
@@ -58,7 +58,7 @@ function GlitchRow({ fieldId, index, glitch, spanSec, onCommit, onRemove, disabl
           {MUSIC_VIDEO_GLITCH_LENGTHS.map((sec) => <option key={sec} value={sec}>{LENGTH_LABELS[sec] || `${sec} s`}</option>)}
         </select>
         <button type="button" onClick={onRemove} disabled={disabled} aria-label={`Remove effect ${index + 1}`}
-          className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded text-port-text-muted hover:text-port-error sm:min-h-[28px] sm:min-w-[28px] disabled:opacity-50">
+          className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded text-port-text-muted hover:text-port-error pointer-fine:sm:min-h-[28px] pointer-fine:sm:min-w-[28px] disabled:opacity-50">
           <X size={14} aria-hidden="true" />
         </button>
       </div>
@@ -71,7 +71,7 @@ function GlitchRow({ fieldId, index, glitch, spanSec, onCommit, onRemove, disabl
             title="0 switches the effect off and keeps its settings"
             onChange={(e) => setStrength(Number(e.target.value))}
             onPointerUp={commitStrength} onKeyUp={commitStrength} onBlur={commitStrength}
-            className="min-w-0 flex-1 accent-port-accent min-h-[44px] sm:min-h-0" />
+            className="min-w-0 flex-1 accent-port-accent min-h-[44px] pointer-fine:sm:min-h-0" />
         </span>
         <label htmlFor={id('count')} className="sr-only">Effect {index + 1} repeats</label>
         <select id={id('count')} value={repeats ? glitch.count : ''} disabled={disabled} title="Play it again on a steady interval, never past the shot"
@@ -145,7 +145,7 @@ export default function SceneGlitches({ fieldId, scene, onChange, disabled = fal
   // A new glitch lands halfway through the shot, where it is easy to find and move.
   const add = () => save([...glitches, { atSec: round3(Math.round(spanSec / 2 / STEP_SEC) * STEP_SEC), style: 'color-block' }]);
   const recipe = homeMovieGlitches(spanSec);
-  const btnCls = 'inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border px-2 text-port-text-muted hover:text-port-text sm:min-h-[28px] disabled:opacity-50';
+  const btnCls = 'inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border px-2 text-port-text-muted hover:text-port-text pointer-fine:sm:min-h-[28px] disabled:opacity-50';
   return (
     <div className="space-y-1 text-xs" data-testid="scene-glitches">
       <div className="flex flex-wrap items-center gap-2">

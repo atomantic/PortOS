@@ -33,8 +33,8 @@ export function captureMediaFrame(el) {
   return new Promise((resolve) => canvas.toBlob((blob) => resolve(blob), 'image/png'));
 }
 
-const buttonCls = 'flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center gap-1 rounded border border-port-border bg-port-bg px-1 text-port-text disabled:opacity-40 sm:min-h-[28px] sm:min-w-[28px]';
-const inputCls = 'min-h-[44px] rounded border border-port-border bg-port-bg px-1 text-right tabular-nums text-port-text sm:min-h-[28px]';
+const buttonCls = 'flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center gap-1 rounded border border-port-border bg-port-bg px-1 text-port-text disabled:opacity-40 pointer-fine:sm:min-h-[28px] pointer-fine:sm:min-w-[28px]';
+const inputCls = 'min-h-[44px] rounded border border-port-border bg-port-bg px-1 text-right tabular-nums text-port-text pointer-fine:sm:min-h-[28px]';
 
 /**
  * Frame-by-frame controls for a preview player: step back or forward by a

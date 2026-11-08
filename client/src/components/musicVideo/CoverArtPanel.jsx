@@ -77,7 +77,7 @@ export default function CoverArtPanel({ project, publishKit }) {
           {art.filename ? (
             <>
               <img src={`/data/video-thumbnails/${encodeURIComponent(art.filename)}`} alt={`Cover art for ${project?.name || 'the song'}`} className="w-full aspect-square object-cover rounded border border-port-border" />
-              <a href={`/data/video-thumbnails/${encodeURIComponent(art.filename)}`} download className="text-port-accent flex items-center gap-1 min-h-[44px] sm:min-h-0"><Download size={12} /> Download</a>
+              <a href={`/data/video-thumbnails/${encodeURIComponent(art.filename)}`} download className="text-port-accent flex items-center gap-1 min-h-[44px] pointer-fine:sm:min-h-0"><Download size={12} /> Download</a>
               {art.source?.filename && <p className="text-port-text-muted break-all">From {art.source.filename}</p>}
             </>
           ) : (
@@ -85,7 +85,7 @@ export default function CoverArtPanel({ project, publishKit }) {
           )}
         </div>
         <div className="flex-1 space-y-2 min-w-0">
-          <label htmlFor={idFor('lettering')} className="flex items-center gap-1.5 min-h-[44px] sm:min-h-0">
+          <label htmlFor={idFor('lettering')} className="flex items-center gap-1.5 min-h-[44px] pointer-fine:sm:min-h-0">
             <input id={idFor('lettering')} type="checkbox" checked={lettering} onChange={(e) => setLettering(e.target.checked)} />
             Set the title and artist on the image (off for a cover that already has its lettering)
           </label>
@@ -93,21 +93,21 @@ export default function CoverArtPanel({ project, publishKit }) {
             <div>
               <label htmlFor={idFor('title')} className="block text-[11px] text-port-text-muted">Title on the cover</label>
               <input id={idFor('title')} value={title} maxLength={60} onChange={(e) => setTitle(e.target.value)}
-                className="w-full bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0" />
+                className="w-full bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0" />
             </div>
             <div>
               <label htmlFor={idFor('tag')} className="block text-[11px] text-port-text-muted">Artist tag</label>
               <input id={idFor('tag')} value={tag ?? art.tag ?? ''} maxLength={24} placeholder="Artist name" onChange={(e) => setTag(e.target.value)}
-                className="w-full bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0" />
+                className="w-full bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0" />
             </div>
           </div>}
           <div>
             <label htmlFor={idFor('focus')} className="block text-[11px] text-port-text-muted">Crop position (left to right)</label>
             <input id={idFor('focus')} type="range" min={0} max={1} step={0.05} value={focusX} onChange={(e) => setFocusX(Number(e.target.value))}
-              className="w-full min-h-[44px] sm:min-h-0" />
+              className="w-full min-h-[44px] pointer-fine:sm:min-h-0" />
           </div>
           <button type="button" onClick={() => compose(null)} disabled={busy || !art.source || needsTitle}
-            className="flex items-center gap-1 bg-port-accent/20 text-port-accent disabled:opacity-50 rounded px-2 py-1.5 min-h-[44px] sm:min-h-0">
+            className="flex items-center gap-1 bg-port-accent/20 text-port-accent disabled:opacity-50 rounded px-2 py-1.5 min-h-[44px] pointer-fine:sm:min-h-0">
             {busy ? 'Setting the cover…' : 'Apply to the cover'}
           </button>
         </div>
@@ -120,7 +120,7 @@ export default function CoverArtPanel({ project, publishKit }) {
         <div className="flex flex-wrap items-center justify-between gap-2">
           <span className="text-port-text-muted">Cover image: pick one</span>
           <button type="button" onClick={() => setPickerOpen(true)} disabled={busy || needsTitle}
-            className="flex items-center gap-1 text-port-accent disabled:opacity-50 min-h-[44px] sm:min-h-0">
+            className="flex items-center gap-1 text-port-accent disabled:opacity-50 min-h-[44px] pointer-fine:sm:min-h-0">
             <Images size={13} /> Choose from image history or upload
           </button>
         </div>
@@ -157,16 +157,16 @@ export default function CoverArtPanel({ project, publishKit }) {
           className="w-full bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs" />
         <div className="flex flex-wrap items-center gap-2">
           <button type="button" onClick={restyle} disabled={busy}
-            className="flex items-center gap-1 bg-port-accent/20 text-port-accent disabled:opacity-50 rounded px-2 py-1.5 min-h-[44px] sm:min-h-0">
+            className="flex items-center gap-1 bg-port-accent/20 text-port-accent disabled:opacity-50 rounded px-2 py-1.5 min-h-[44px] pointer-fine:sm:min-h-0">
             <Sparkles size={13} /> {publishKit.designing ? 'Designing…' : (art.design ? 'Restyle the lettering' : 'Design the cover')}
           </button>
           {/* Disabled only while this click is in flight, never by `pending`: the server tells a live render from one a restart lost. */}
           <button type="button" onClick={generate} disabled={busy}
-            className="flex items-center gap-1 bg-port-accent/20 text-port-accent disabled:opacity-50 rounded px-2 py-1.5 min-h-[44px] sm:min-h-0">
+            className="flex items-center gap-1 bg-port-accent/20 text-port-accent disabled:opacity-50 rounded px-2 py-1.5 min-h-[44px] pointer-fine:sm:min-h-0">
             <ImageIcon size={13} /> {publishKit.requestingImage ? (art.design ? 'Queuing the image…' : 'Designing, then queuing…') : 'Make a new image'}
           </button>
           {art.source?.kind === 'image' && (
-            <label htmlFor={idFor('adjust-image')} className="flex items-center gap-1.5 min-h-[44px] sm:min-h-0">
+            <label htmlFor={idFor('adjust-image')} className="flex items-center gap-1.5 min-h-[44px] pointer-fine:sm:min-h-0">
               <input id={idFor('adjust-image')} type="checkbox" checked={adjustImage} onChange={(e) => setAdjustImage(e.target.checked)} />
               Start from the current image
             </label>

@@ -33,7 +33,7 @@ export default function MusicVideoFilingSelect({ id = 'media-gen-music-video', d
       <label htmlFor={id} className="shrink-0 text-xs text-gray-400">Music video <span className="text-gray-500">(Optional)</span></label>
       <select id={id} value={value} onChange={(e) => pick(e.target.value)} disabled={disabled}
         title="Also keep this render in the music video's collection"
-        className="min-w-0 flex-1 bg-port-bg border border-port-border rounded px-2 py-1 text-sm min-h-[44px] sm:min-h-0">
+        className="min-w-0 flex-1 bg-port-bg border border-port-border rounded px-2 py-1 text-sm min-h-[44px] pointer-fine:sm:min-h-0">
         <option value="">None</option>
         {value && !listed && <option value={value}>This music video</option>}
         {projects.map((project) => <option key={project.id} value={project.id}>{project.name || 'Untitled'}</option>)}

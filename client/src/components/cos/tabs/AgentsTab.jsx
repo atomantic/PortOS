@@ -355,7 +355,7 @@ export default function AgentsTab({ agentsLoaded = true, agentsError = null, onR
               onClick={() => setConfirmingClear(true)}
               disabled={pendingDeliveryAgents.length > 0}
               title={pendingDeliveryAgents.length > 0 ? 'Wait for delivery verification and cleanup to finish' : undefined}
-              className="flex min-h-[44px] min-w-[44px] items-center justify-center gap-1 text-sm text-gray-500 hover:text-port-error transition-colors disabled:opacity-50 sm:min-h-0 sm:min-w-0"
+              className="flex min-h-[44px] min-w-[44px] items-center justify-center gap-1 text-sm text-gray-500 hover:text-port-error transition-colors disabled:opacity-50 pointer-fine:sm:min-h-0 pointer-fine:sm:min-w-0"
               aria-label="Clear all completed agents"
             >
               <Trash2 size={14} aria-hidden="true" />

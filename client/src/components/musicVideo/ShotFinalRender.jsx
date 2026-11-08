@@ -4,7 +4,7 @@ import ShotFilmLook from './ShotFilmLook.jsx';
 import { cancelMusicVideoShotRender, musicVideoShotRenderUrl, renderMusicVideoShot } from '../../services/apiMusicVideo.js';
 import useMusicVideoShotRenders from '../../hooks/useMusicVideoShotRenders.js';
 
-const BUTTON = 'inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border bg-port-bg px-2 py-1.5 text-xs hover:bg-port-border/40 disabled:opacity-50 sm:min-h-0';
+const BUTTON = 'inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border bg-port-bg px-2 py-1.5 text-xs hover:bg-port-border/40 disabled:opacity-50 pointer-fine:sm:min-h-0';
 
 /**
  * The shot's piece of the composed final render: whether its segment is

@@ -4,7 +4,7 @@ import { ImageUp, LayoutPanelLeft, Loader2, RefreshCw, Unlink } from 'lucide-rea
 import { sendShotStillToStoryboardPanel, updateShotFromStoryboardPanel } from '../../services/api';
 import { selectedTake } from '../storyboards/storyboardArt';
 
-const actionButton = 'min-h-[44px] sm:min-h-[32px] inline-flex shrink-0 items-center gap-1 rounded border border-port-border px-2 text-xs text-gray-200 hover:border-port-accent/60 hover:text-white disabled:opacity-40';
+const actionButton = 'min-h-[44px] pointer-fine:sm:min-h-[32px] inline-flex shrink-0 items-center gap-1 rounded border border-port-border px-2 text-xs text-gray-200 hover:border-port-accent/60 hover:text-white disabled:opacity-40';
 const imageName = (ref) => (typeof ref === 'string' ? ref.split(/[?#]/)[0].split('/').pop() : null);
 
 /**

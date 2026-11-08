@@ -975,7 +975,7 @@ function KindSection() {
           title={`Add a ${kind.singular} manually`}
           aria-label={`Add ${kind.singular}`}
           aria-expanded={adding}
-          className="inline-flex shrink-0 min-h-11 sm:min-h-0 items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-gray-400 hover:text-port-accent disabled:opacity-30 disabled:cursor-not-allowed border border-port-border hover:border-port-accent/50"
+          className="inline-flex shrink-0 min-h-11 pointer-fine:sm:min-h-0 items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-gray-400 hover:text-port-accent disabled:opacity-30 disabled:cursor-not-allowed border border-port-border hover:border-port-accent/50"
         >
           {creating ? <Loader2 size={11} className="animate-spin" /> : <Plus size={11} />}
           Add
@@ -988,7 +988,7 @@ function KindSection() {
           disabled={catalogLinking}
           title={`Add an existing ${kind.singular} from the shared Catalog`}
           aria-label={`Pick ${kind.singular} from Catalog`}
-          className="inline-flex shrink-0 min-h-11 sm:min-h-0 items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-gray-400 hover:text-port-accent disabled:opacity-30 disabled:cursor-not-allowed border border-port-border hover:border-port-accent/50"
+          className="inline-flex shrink-0 min-h-11 pointer-fine:sm:min-h-0 items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-gray-400 hover:text-port-accent disabled:opacity-30 disabled:cursor-not-allowed border border-port-border hover:border-port-accent/50"
         >
           {catalogLinking ? <Loader2 size={11} className="animate-spin" /> : <Sparkles size={11} />}
           Pick from Catalog
@@ -1003,7 +1003,7 @@ function KindSection() {
             ? `Every ${kind.singular} already has a reference image`
             : `Queue reference renders for ${renderableCount} ${renderableCount === 1 ? kind.singular : kind.label.toLowerCase()} without an image yet`}
           aria-label={`Render all ${kind.label}`}
-          className="inline-flex shrink-0 min-h-11 sm:min-h-0 items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-gray-400 hover:text-port-accent disabled:opacity-30 disabled:cursor-not-allowed border border-port-border hover:border-port-accent/50"
+          className="inline-flex shrink-0 min-h-11 pointer-fine:sm:min-h-0 items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-gray-400 hover:text-port-accent disabled:opacity-30 disabled:cursor-not-allowed border border-port-border hover:border-port-accent/50"
         >
           {renderingAll ? <Loader2 size={11} className="animate-spin" /> : <ImagePlus size={11} />}
           Render all{renderableCount > 0 ? ` (${renderableCount})` : ''}

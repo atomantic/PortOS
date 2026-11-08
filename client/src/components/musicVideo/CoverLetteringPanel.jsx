@@ -26,8 +26,8 @@ const humanize = (value) => {
   const text = String(value).replace(/-/g, ' ');
   return text.charAt(0).toUpperCase() + text.slice(1);
 };
-const control = 'w-full bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0';
-const button = 'flex items-center gap-1 bg-port-accent/20 text-port-accent disabled:opacity-50 rounded px-2 py-1.5 min-h-[44px] sm:min-h-0';
+const control = 'w-full bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0';
+const button = 'flex items-center gap-1 bg-port-accent/20 text-port-accent disabled:opacity-50 rounded px-2 py-1.5 min-h-[44px] pointer-fine:sm:min-h-0';
 
 // A face is registered with the page once per upload (a re-upload changes `addedAt`), so the preview sets the title in the file the server will.
 const faceLoads = new Map();
@@ -94,7 +94,7 @@ export default function CoverLetteringPanel({ project, art, source, title, tag, 
 
   return (
     <details open={open} onToggle={(e) => onToggle(e.currentTarget.open)} className="rounded border border-port-border p-2 text-xs">
-      <summary className="cursor-pointer text-sm font-medium flex items-center gap-1.5 min-h-[44px] sm:min-h-0"><Type size={14} /> Lettering</summary>
+      <summary className="cursor-pointer text-sm font-medium flex items-center gap-1.5 min-h-[44px] pointer-fine:sm:min-h-0"><Type size={14} /> Lettering</summary>
       {lettering.fontState === 'error' ? (
         <ListLoadError what="cover fonts" error={lettering.fontError} onRetry={lettering.retryFonts} className="mt-2" />
       ) : lettering.fontState !== 'ready' ? (
@@ -129,9 +129,9 @@ export default function CoverLetteringPanel({ project, art, source, title, tag, 
             </div>
             <div>
               <label htmlFor={idFor('tracking')} className="block text-[11px] text-port-text-muted">Letter spacing</label>
-              <input id={idFor('tracking')} type="range" min={-0.05} max={0.3} step={0.01} value={design.tracking} onChange={(e) => set('tracking', Number(e.target.value))} className="w-full min-h-[44px] sm:min-h-0" />
+              <input id={idFor('tracking')} type="range" min={-0.05} max={0.3} step={0.01} value={design.tracking} onChange={(e) => set('tracking', Number(e.target.value))} className="w-full min-h-[44px] pointer-fine:sm:min-h-0" />
             </div>
-            <label htmlFor={idFor('rule')} className="flex items-center gap-1.5 min-h-[44px] sm:min-h-0 self-end">
+            <label htmlFor={idFor('rule')} className="flex items-center gap-1.5 min-h-[44px] pointer-fine:sm:min-h-0 self-end">
               <input id={idFor('rule')} type="checkbox" checked={design.rule} onChange={(e) => set('rule', e.target.checked)} />
               A thin line by the title
             </label>
@@ -192,7 +192,7 @@ export default function CoverLetteringPanel({ project, art, source, title, tag, 
               {fonts.map((f) => (
                 <span key={f.id} className="flex items-center gap-1 rounded bg-port-bg border border-port-border px-1.5 py-1">
                   {f.family}
-                  <button type="button" onClick={() => lettering.removeFont(f.id)} aria-label={`Remove the font ${f.family}`} className="text-port-text-muted hover:text-port-error min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 flex items-center justify-center">
+                  <button type="button" onClick={() => lettering.removeFont(f.id)} aria-label={`Remove the font ${f.family}`} className="text-port-text-muted hover:text-port-error min-h-[44px] min-w-[44px] pointer-fine:sm:min-h-0 pointer-fine:sm:min-w-0 flex items-center justify-center">
                     <Trash2 size={12} />
                   </button>
                 </span>

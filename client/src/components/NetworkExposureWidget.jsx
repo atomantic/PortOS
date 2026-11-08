@@ -210,7 +210,7 @@ const NetworkExposureWidget = memo(function NetworkExposureWidget() {
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
           <Link
             to="/capabilities"
-            className="inline-flex min-h-[44px] items-center text-sm text-port-accent hover:text-port-accent/80 @sm:min-h-0"
+            className="inline-flex min-h-[44px] items-center text-sm text-port-accent hover:text-port-accent/80 pointer-fine:@sm:min-h-0"
           >
             Open setup
           </Link>
@@ -218,7 +218,7 @@ const NetworkExposureWidget = memo(function NetworkExposureWidget() {
             href={docsUrl}
             target="_blank"
             rel="noreferrer"
-            className="inline-flex min-h-[44px] items-center gap-1 text-sm text-port-accent hover:text-port-accent/80 @sm:min-h-0"
+            className="inline-flex min-h-[44px] items-center gap-1 text-sm text-port-accent hover:text-port-accent/80 pointer-fine:@sm:min-h-0"
           >
             <span>Port + scheme guide</span>
             <ExternalLink size={12} />

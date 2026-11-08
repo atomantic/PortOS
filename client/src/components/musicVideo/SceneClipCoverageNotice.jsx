@@ -11,10 +11,10 @@ export default function SceneClipCoverageNotice({ scene, playback, onChange }) {
         Trim the shot, continue or regenerate a longer clip{canLoop ? ', or loop it on purpose.' : '.'}
       </span>
       <button type="button" onClick={() => onChange({ endSec: Math.round((scene.startSec + playedSec) * 1000) / 1000 })}
-        className="rounded bg-port-bg border border-port-border px-2 py-1 min-h-[44px] sm:min-h-0 text-port-text">Trim to clip</button>
+        className="rounded bg-port-bg border border-port-border px-2 py-1 min-h-[44px] pointer-fine:sm:min-h-0 text-port-text">Trim to clip</button>
       {canLoop && (
         <button type="button" onClick={() => onChange({ loop: true })}
-          className="rounded bg-port-bg border border-port-border px-2 py-1 min-h-[44px] sm:min-h-0 text-port-text">Loop clip</button>
+          className="rounded bg-port-bg border border-port-border px-2 py-1 min-h-[44px] pointer-fine:sm:min-h-0 text-port-text">Loop clip</button>
       )}
     </div>
   );

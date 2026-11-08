@@ -794,7 +794,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
             }}
             aria-pressed={cold.active}
             title={`The ${formatDurationSec(cold.seconds)} before the song, then the song. Playing the song from its start plays this first too.`}
-            className={`flex min-h-[44px] shrink-0 items-center gap-1 rounded border px-2 text-xs sm:min-h-0 sm:py-1 ${cold.active ? 'border-port-accent text-port-accent' : 'border-port-border text-port-text-muted'}`}
+            className={`flex min-h-[44px] shrink-0 items-center gap-1 rounded border px-2 text-xs pointer-fine:sm:min-h-0 sm:py-1 ${cold.active ? 'border-port-accent text-port-accent' : 'border-port-border text-port-text-muted'}`}
           >
             <Clapperboard size={14} aria-hidden="true" /> Cold open
           </button>
@@ -809,7 +809,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
             }}
             aria-pressed={outro.active}
             title={`The ending that plays for ${outro.seconds}s after the song`}
-            className={`flex min-h-[44px] shrink-0 items-center gap-1 rounded border px-2 text-xs sm:min-h-0 sm:py-1 ${outro.active ? 'border-port-accent text-port-accent' : 'border-port-border text-port-text-muted'}`}
+            className={`flex min-h-[44px] shrink-0 items-center gap-1 rounded border px-2 text-xs pointer-fine:sm:min-h-0 sm:py-1 ${outro.active ? 'border-port-accent text-port-accent' : 'border-port-border text-port-text-muted'}`}
           >
             <Scissors size={14} aria-hidden="true" /> Ending
           </button>
@@ -820,7 +820,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
             type="button"
             onClick={() => setLyricsOn((on) => !on)}
             aria-pressed={lyricsOn}
-            className={`flex min-h-[44px] shrink-0 items-center gap-1 rounded border px-2 text-xs sm:min-h-0 sm:py-1 ${lyricsOn ? 'border-port-accent text-port-accent' : 'border-port-border text-port-text-muted'}`}
+            className={`flex min-h-[44px] shrink-0 items-center gap-1 rounded border px-2 text-xs pointer-fine:sm:min-h-0 sm:py-1 ${lyricsOn ? 'border-port-accent text-port-accent' : 'border-port-border text-port-text-muted'}`}
           >
             <Captions size={14} aria-hidden="true" /> Lyrics
           </button>

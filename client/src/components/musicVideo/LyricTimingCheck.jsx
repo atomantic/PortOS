@@ -5,7 +5,7 @@ import CompositionPreviewPlayer from './CompositionPreviewPlayer.jsx';
 
 const EMPTY_DRAFT = { cast: '', environments: '', visualLanguage: '', motionLanguage: '', guideArtifactId: null,
   lyricsMode: 'vocal', timingStatus: 'provisional', timingNotes: '', storyboard: [] };
-const buttonClass = 'min-h-[44px] rounded border border-port-border bg-port-bg px-3 py-1.5 text-sm disabled:opacity-50 sm:min-h-0';
+const buttonClass = 'min-h-[44px] rounded border border-port-border bg-port-bg px-3 py-1.5 text-sm disabled:opacity-50 pointer-fine:sm:min-h-0';
 
 /**
  * The Song step's last check: is this a vocal song whose word timings you have
@@ -58,11 +58,11 @@ export default function LyricTimingCheck({ project, review, planning = null, dis
     <div className="space-y-2">
       <fieldset className="flex flex-wrap gap-3 text-sm">
         <legend className="sr-only">Song content</legend>
-        <label className="flex min-h-[44px] items-center gap-2 sm:min-h-0">
+        <label className="flex min-h-[44px] items-center gap-2 pointer-fine:sm:min-h-0">
           <input type="radio" name={`mv-song-content-${project.id}`} value="vocal" checked={mode === 'vocal'} onChange={() => setMode('vocal')} />
           Vocal song
         </label>
-        <label className="flex min-h-[44px] items-center gap-2 sm:min-h-0">
+        <label className="flex min-h-[44px] items-center gap-2 pointer-fine:sm:min-h-0">
           <input type="radio" name={`mv-song-content-${project.id}`} value="instrumental" checked={mode === 'instrumental'} onChange={() => setMode('instrumental')} />
           Instrumental
         </label>

@@ -241,7 +241,7 @@ export default function MusicVideoLayout({
                     onClick={onRename}
                     aria-label={`Rename v${project.version || 1}`}
                     title="Rename this version"
-                    className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded text-port-text-muted hover:text-port-text sm:min-h-[32px] sm:min-w-[32px]"
+                    className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded text-port-text-muted hover:text-port-text pointer-fine:sm:min-h-[32px] pointer-fine:sm:min-w-[32px]"
                   >
                     <Pencil size={14} aria-hidden="true" />
                   </button>
@@ -253,7 +253,7 @@ export default function MusicVideoLayout({
                     onClick={() => onOpenSettings('project')}
                     aria-label="Project settings"
                     title="Project settings"
-                    className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded text-port-text-muted hover:text-port-text sm:min-h-[32px] sm:min-w-[32px]"
+                    className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded text-port-text-muted hover:text-port-text pointer-fine:sm:min-h-[32px] pointer-fine:sm:min-w-[32px]"
                   >
                     <Settings size={15} aria-hidden="true" />
                   </button>

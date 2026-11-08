@@ -513,7 +513,7 @@ export default function LoomPlayPanel({ loom, episode: initialEpisode, onClose }
 
       <div className="flex min-h-0 flex-1 flex-col lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(20rem,32rem)]">
         <section
-          className="relative flex min-h-[16rem] h-[42vh] items-center justify-center overflow-hidden bg-black lg:h-auto lg:min-h-0"
+          className="relative flex min-h-[16rem] h-[42vh] items-center justify-center overflow-hidden bg-black lg:h-auto pointer-fine:lg:min-h-0"
           aria-label="Scene media"
         >
           <SceneMedia

@@ -26,7 +26,7 @@ export default function SceneCutEffect({ fieldId, scene, planned = null, isLast 
     if (next) save({ style: next, enabled: true });
     else if (effect) save({ enabled: false });
   };
-  const selectClass = 'bg-port-bg border border-port-border rounded px-1 py-1 text-xs min-h-[44px] sm:min-h-0 disabled:opacity-50';
+  const selectClass = 'bg-port-bg border border-port-border rounded px-1 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50';
   const overlap = OVERLAPS.includes(effect?.overlapSec) ? effect.overlapSec : null;
   const label = isLast ? 'At the end' : 'Into next shot';
   return (

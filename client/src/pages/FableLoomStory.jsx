@@ -68,7 +68,7 @@ import {
 // the denser desktop row from `sm` up. Base and variants never both set the
 // same utility — with no tailwind-merge, two border colors resolve by
 // stylesheet order, not by class-string order.
-const headerActionBase = 'flex min-h-[44px] items-center gap-1 rounded border px-2.5 py-2 text-xs sm:min-h-[36px] sm:py-1.5';
+const headerActionBase = 'flex min-h-[44px] items-center gap-1 rounded border px-2.5 py-2 text-xs pointer-fine:sm:min-h-[36px] sm:py-1.5';
 const headerActionClass = `${headerActionBase} border-port-border hover:border-port-accent`;
 const headerPlayClass = `${headerActionBase} border-port-accent bg-port-accent text-white`;
 

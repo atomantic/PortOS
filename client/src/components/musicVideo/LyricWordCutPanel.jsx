@@ -5,8 +5,8 @@ import { lyricWordCuts } from '../../../../server/lib/musicVideoLyricAnchors.js'
 import { formatCount, formatTimecode } from '../../utils/formatters.js';
 
 const MODES = [['phrase', 'One shot per phrase'], ['word', 'One shot per word']];
-const fieldCls = 'bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0 max-w-full';
-const buttonCls = 'flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50';
+const fieldCls = 'bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0 max-w-full';
+const buttonCls = 'flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50';
 
 const lineLabel = (cue, i) => {
   const at = cue.words?.[0]?.startSec ?? cue.startSec;

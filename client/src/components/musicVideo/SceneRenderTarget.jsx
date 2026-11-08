@@ -38,7 +38,7 @@ import { safeReadJsonStorage, safeWriteJsonStorage } from '../../lib/safeStorage
 const BACKEND_LABELS = { local: 'Local LTX', grok: 'Grok', fal: 'fal.ai', runway: 'Runway', gemini: GEMINI_OMNI_WEB_MODEL.label };
 // The local render's frame rate when the request names none (generateVideo's default).
 const LOCAL_FPS = 24;
-const SELECT = 'min-w-0 max-w-full bg-port-bg border border-port-border rounded px-1 py-1 text-xs min-h-[44px] sm:min-h-0 disabled:opacity-50';
+const SELECT = 'min-w-0 max-w-full bg-port-bg border border-port-border rounded px-1 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50';
 
 // The fal model a performance shot renders on: the lip-sync route, or the
 // project's music-driven model for a music-driven shot. Never the cutaway model.

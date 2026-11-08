@@ -9,7 +9,7 @@ import useListResource from '../../hooks/useListResource.js';
 import ListLoadError from '../ui/ListLoadError.jsx';
 import PublishCard from './PublishCard.jsx';
 
-const inputCls = 'w-full bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0';
+const inputCls = 'w-full bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0';
 const DAY_CHOICES = [3, 7, 14];
 
 /**
@@ -81,7 +81,7 @@ export default function PromotionPlanPanel({ project }) {
             emptyProviderOption="Active provider (default)" emptyModelOption="Default model" disabled={planning} />
         )}
         <button type="button" onClick={plan} disabled={planning || !projectId || state !== 'ready'}
-          className="flex items-center gap-1 bg-port-accent/20 text-port-accent disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0">
+          className="flex items-center gap-1 bg-port-accent/20 text-port-accent disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] pointer-fine:sm:min-h-0">
           <Sparkles size={13} /> {planning ? 'Planning…' : (steps.length ? 'Plan again' : 'Plan promotion')}
         </button>
       </div>

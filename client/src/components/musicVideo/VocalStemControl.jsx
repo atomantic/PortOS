@@ -53,26 +53,26 @@ export default function VocalStemControl({ project, masterFilename = null, hasAu
     <div className="mt-2 flex flex-wrap items-center gap-2 text-xs" title={hasAudio ? HELP : 'Link a track first'}>
       <input id={inputId} type="file" accept="audio/*" className="sr-only" onChange={upload} disabled={disabled} />
       <label htmlFor={inputId}
-        className={`flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1 min-h-[44px] sm:min-h-0 ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:bg-port-border/40'}`}>
+        className={`flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1 min-h-[44px] pointer-fine:sm:min-h-0 ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:bg-port-border/40'}`}>
         <Mic size={13} /> {busy ? 'Working…' : stem ? 'Replace vocal stem' : 'Add vocal stem'}
       </label>
       {separation && (
         <button type="button" onClick={() => separation.start(project.id)} disabled={busy || !hasAudio || separation.active}
           title={hasAudio ? SEPARATE_HELP : 'Link a track first'} aria-live="polite"
-          className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1 min-h-[44px] sm:min-h-0 disabled:opacity-50">
+          className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1 min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50">
           <Wand2 size={13} /> {separationLabel}
         </button>
       )}
       {separating && separation.jobId && (
         <button type="button" onClick={separation.cancel}
-          className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1 min-h-[44px] sm:min-h-0">
+          className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1 min-h-[44px] pointer-fine:sm:min-h-0">
           Cancel
         </button>
       )}
       <label htmlFor={sourceId}>Conditioning source</label>
       <select id={sourceId} value={source} disabled={disabled}
         onChange={(e) => run(() => updateMusicVideoProject(project.id, { performanceConditioningSource: e.target.value }, { silent: true }), 'Conditioning source saved', 'Failed to save conditioning source')}
-        className="max-w-full bg-port-bg border border-port-border rounded px-2 py-1 min-h-[44px] sm:min-h-0">
+        className="max-w-full bg-port-bg border border-port-border rounded px-2 py-1 min-h-[44px] pointer-fine:sm:min-h-0">
         <option value="master">Master mix</option>
         <option value="vocal-stem" disabled={!stem}>Attached vocal stem</option>
         <option value="clean-singer-stem" disabled={!stem}>Attached clean singer stem (user selected)</option>
@@ -86,7 +86,7 @@ export default function VocalStemControl({ project, masterFilename = null, hasAu
             <span className="text-port-text-muted break-all">{source === 'master' ? 'Lip-sync uses the full mix' : `Lip-sync uses ${stem}`}</span>
           )}
           <button type="button" onClick={remove} disabled={busy || separating} aria-label="Remove vocal stem"
-            className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1 min-h-[44px] sm:min-h-0 disabled:opacity-50">
+            className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1 min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50">
             <X size={13} /> Remove
           </button>
         </>

@@ -55,7 +55,7 @@ export default function PlanShotList({ project, readiness, onOpenShot }) {
         <div role="group" aria-label="Filter shots" className="flex flex-wrap gap-1.5 text-xs">
           {FILTERS.map(([id, label]) => (
             <button key={id} type="button" aria-pressed={filter === id} onClick={() => setFilter(id)}
-              className={`min-h-[44px] rounded border px-2 py-1 sm:min-h-0 ${filter === id ? 'border-port-accent bg-port-accent/10 text-port-accent' : 'border-port-border text-port-text-muted'}`}>
+              className={`min-h-[44px] rounded border px-2 py-1 pointer-fine:sm:min-h-0 ${filter === id ? 'border-port-accent bg-port-accent/10 text-port-accent' : 'border-port-border text-port-text-muted'}`}>
               {label} ({counts[id]})
             </button>
           ))}

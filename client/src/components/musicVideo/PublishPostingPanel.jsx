@@ -51,7 +51,7 @@ const LEGACY_REMEMBERED = { songwriterFirst: 'first', songwriterLast: 'last', so
 const ACCOUNT_OPTION = { distrokid: 'artistName', substack: 'publication' };
 const REMEMBERED_OPTIONS = { distrokid: DISTROKID_REMEMBERED_OPTIONS };
 
-const inputCls = 'w-full bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0';
+const inputCls = 'w-full bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0';
 
 const summaryRows = (summary) => Object.entries(summary || {})
   .filter(([, v]) => v != null && v !== '' && (typeof v !== 'object' || (Array.isArray(v) && v.every((x) => typeof x === 'string'))))
@@ -109,7 +109,7 @@ function FittedCutNotice({ project, cut, excerpts }) {
         ) : (
           <button type="button" disabled={excerpts.occupied}
             onClick={() => excerpts.startExcerpt(cut.startSec, cut.endSec, { aspect: '9:16', fade: true })}
-            className="border border-port-border disabled:opacity-50 rounded px-2 py-1.5 min-h-[44px] sm:min-h-0">
+            className="border border-port-border disabled:opacity-50 rounded px-2 py-1.5 min-h-[44px] pointer-fine:sm:min-h-0">
             Render a native 9:16 cut of {fmtSec(cut.startSec)}-{fmtSec(cut.endSec)}
           </button>
         )
@@ -194,7 +194,7 @@ function TargetOptions({ target, kit, project, options, setOption, commitOption,
       <div className="grid sm:grid-cols-2 gap-2 items-end">
         {text('songUrl', 'Song URL (the take the Hook plays)', kit.links?.song || 'https://suno.com/song/…')}
         {cutPicker()}
-        <label className="flex items-center gap-1.5 text-xs min-h-[44px] sm:min-h-0">
+        <label className="flex items-center gap-1.5 text-xs min-h-[44px] pointer-fine:sm:min-h-0">
           <input type="checkbox" checked={options.showLyrics === true} onChange={(e) => setOption('showLyrics', e.target.checked)} /> Show Suno's lyrics (off when the cut has its own)
         </label>
         {fitted}
@@ -222,7 +222,7 @@ function TargetOptions({ target, kit, project, options, setOption, commitOption,
   }
   if (target === 'linkedin' || target === 'facebook') {
     const check = (key, text) => (
-      <label key={key} className="flex items-center gap-1.5 text-xs min-h-[44px] sm:min-h-0">
+      <label key={key} className="flex items-center gap-1.5 text-xs min-h-[44px] pointer-fine:sm:min-h-0">
         <input type="checkbox" checked={options[key] !== false} onChange={(e) => setOption(key, e.target.checked)} /> {text}
       </label>
     );
@@ -245,7 +245,7 @@ function TargetOptions({ target, kit, project, options, setOption, commitOption,
     return (
       <div className="grid sm:grid-cols-2 gap-2 items-end">
         {text('songUrl', 'Song URL (the take to publish)', defaultSongUrl)}
-        <label className="flex items-center gap-1.5 text-xs min-h-[44px] sm:min-h-0">
+        <label className="flex items-center gap-1.5 text-xs min-h-[44px] pointer-fine:sm:min-h-0">
           <input type="checkbox" checked={options.pin !== false} onChange={(e) => setOption('pin', e.target.checked)} /> Pin to profile
         </label>
       </div>
@@ -253,7 +253,7 @@ function TargetOptions({ target, kit, project, options, setOption, commitOption,
   }
   if (target === 'distrokid') {
     const check = (key, label, fallback) => (
-      <label key={key} className="flex items-center gap-1.5 text-xs min-h-[44px] sm:min-h-0">
+      <label key={key} className="flex items-center gap-1.5 text-xs min-h-[44px] pointer-fine:sm:min-h-0">
         <input type="checkbox" checked={options[key] ?? fallback} onChange={(e) => setOption(key, e.target.checked)} /> {label}
       </label>
     );
@@ -330,7 +330,7 @@ function PostFeedback({ idFor, label, post, onSave }) {
         {RECEPTIONS.map(([value, text]) => (
           <button key={value} type="button" aria-pressed={post.reception === value}
             onClick={() => onSave({ reception: post.reception === value ? null : value })}
-            className={`rounded border px-2 py-1 text-[11px] min-h-[44px] sm:min-h-0 ${post.reception === value ? 'border-port-accent text-port-accent bg-port-accent/10' : 'border-port-border'}`}>
+            className={`rounded border px-2 py-1 text-[11px] min-h-[44px] pointer-fine:sm:min-h-0 ${post.reception === value ? 'border-port-accent text-port-accent bg-port-accent/10' : 'border-port-border'}`}>
             {text}
           </button>
         ))}
@@ -357,12 +357,12 @@ function ManualLink({ idFor, label, placeholder, onSave, hideMarkDone = false })
       <input id={idFor('manual-url')} aria-label={`Link to the ${label} post`} value={url} placeholder={placeholder || 'Posted it? Paste the link to the post'}
         onChange={(e) => setUrl(e.target.value)} className={`${inputCls} basis-full sm:basis-auto sm:flex-1 min-w-0`} />
       <button type="button" disabled={!valid} onClick={() => onSave({ url: url.trim() }).then((post) => { if (post) setUrl(''); })}
-        className="flex items-center gap-1 border border-port-border disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0">
+        className="flex items-center gap-1 border border-port-border disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] pointer-fine:sm:min-h-0">
         <LinkIcon size={12} /> Record
       </button>
       {!hideMarkDone && (
         <button type="button" aria-label={`Mark ${label} done`} onClick={() => onSave({ posted: true })}
-          className="flex items-center gap-1 border border-port-border rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0">
+          className="flex items-center gap-1 border border-port-border rounded px-2 py-1.5 text-xs min-h-[44px] pointer-fine:sm:min-h-0">
           <Check size={12} /> Mark done
         </button>
       )}
@@ -385,7 +385,7 @@ function UndoDone({ label, onUndo }) {
     />
   ) : (
     <button type="button" onClick={() => setConfirm(true)}
-      className="flex items-center gap-1 border border-port-border rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0">
+      className="flex items-center gap-1 border border-port-border rounded px-2 py-1.5 text-xs min-h-[44px] pointer-fine:sm:min-h-0">
       <Undo2 size={12} /> Not done…
     </button>
   );
@@ -433,7 +433,7 @@ function PostPreview({ label, preview }) {
   }
   return (
     <details className="rounded border border-port-border bg-port-bg/50 p-2 text-[11px]" open>
-      <summary className="cursor-pointer font-medium min-h-[44px] sm:min-h-0 flex items-center">What gets posted to {label}</summary>
+      <summary className="cursor-pointer font-medium min-h-[44px] pointer-fine:sm:min-h-0 flex items-center">What gets posted to {label}</summary>
       <dl className="mt-1 space-y-1">
         {(preview.parts || []).map(({ label: rowLabel, text }, i) => (
           <div key={`${rowLabel}-${i}`}>
@@ -558,7 +558,7 @@ function TargetRow({ project, kit, entry, publishing, excerpts }) {
         <div className="min-w-0 flex-1">
           <h4 className="text-xs font-medium">
             <button type="button" data-fold-toggle aria-expanded={open} aria-controls={open ? idFor('body') : undefined} onClick={() => setOpen(!open)}
-              className="flex items-center gap-1 min-h-[44px] sm:min-h-0">
+              className="flex items-center gap-1 min-h-[44px] pointer-fine:sm:min-h-0">
               <Chevron size={13} className="shrink-0" />
               <span>{label}{account && <span className="font-normal text-port-text-muted"> as {entry.accountPlaceholder ? '' : '@'}{account}</span>}</span>
               <span className={`ml-1 shrink-0 inline-flex items-center gap-0.5 rounded border px-1 text-[10px] ${status === 'posted' ? '' : 'font-normal'} ${STATUS[status][1]}`}>{status === 'posted' && <Check size={10} aria-hidden="true" />}{STATUS[status][0]}</span>
@@ -589,13 +589,13 @@ function TargetRow({ project, kit, entry, publishing, excerpts }) {
             />
           ) : (
             <button type="button" onClick={() => setConfirmAgain(true)} disabled={!!busy}
-              className="flex items-center gap-1 border border-port-border disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0">
+              className="flex items-center gap-1 border border-port-border disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] pointer-fine:sm:min-h-0">
               {busy === 'prepare' ? 'Filling…' : 'Post again…'}
             </button>
           )
         ) : (
           <button type="button" onClick={() => fill(posted ? { again: true } : {})} disabled={!!busy}
-            className="flex items-center gap-1 bg-port-accent/20 text-port-accent disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0">
+            className="flex items-center gap-1 bg-port-accent/20 text-port-accent disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] pointer-fine:sm:min-h-0">
             {busy === 'prepare' ? 'Filling…' : (draft ? 'Fill again' : 'Fill draft')}
           </button>
         )}
@@ -642,7 +642,7 @@ function TargetRow({ project, kit, entry, publishing, excerpts }) {
             />
           ) : (
             <button type="button" onClick={() => setConfirmDiscard(true)} disabled={!!busy}
-              className="flex items-center gap-1 border border-port-border disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0">
+              className="flex items-center gap-1 border border-port-border disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] pointer-fine:sm:min-h-0">
               <XIcon size={13} /> Discard
             </button>
           )}

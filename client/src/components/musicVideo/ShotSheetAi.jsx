@@ -5,7 +5,7 @@ import useProviderModels from '../../hooks/useProviderModels.js';
 import { proposeMusicVideoShotSheet } from '../../services/apiMusicVideo.js';
 import { SHOT_SHEET_PROPOSE_BATCH, mergeShotSheetBackfill, normalizeShotSheet, shotSheetDrivesPrompt } from '../../../../server/lib/musicVideoShotSheet.js';
 
-const button = 'min-h-[44px] rounded border border-port-border px-2 py-1 text-xs disabled:opacity-50 sm:min-h-0';
+const button = 'min-h-[44px] rounded border border-port-border px-2 py-1 text-xs disabled:opacity-50 pointer-fine:sm:min-h-0';
 const input = 'w-full min-w-0 rounded border border-port-border bg-port-bg px-1.5 py-1 text-xs';
 const FIELD_LABELS = { cameraId: 'Camera', holder: 'Held by', view: 'View', location: 'Location', timeOfDay: 'Time of day', light: 'Light', characters: 'Who', action: 'Action', emotion: 'Emotion', notes: 'Notes' };
 
@@ -199,7 +199,7 @@ export default function ShotSheetAi({ project, rows, disabled, onApply, onApplyi
           <ul className="min-w-0 space-y-2">
             {review.items.map((item) => (
               <li key={item.sceneId} className="min-w-0 space-y-1 rounded border border-port-border p-2">
-                <label className="flex min-h-[44px] items-center gap-1 text-xs font-medium sm:min-h-0">
+                <label className="flex min-h-[44px] items-center gap-1 text-xs font-medium pointer-fine:sm:min-h-0">
                   <input type="checkbox" aria-label={`Apply ${item.label}`} checked={item.selected} disabled={applying} onChange={(event) => change(item.sceneId, (current) => ({ ...current, selected: event.target.checked }))} /> {item.label}
                 </label>
                 {review.direction === 'split'

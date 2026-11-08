@@ -24,7 +24,7 @@ export default function VisualSpecPanel({ project, onSave }) {
 
   return (
     <details className="mt-2 rounded border border-port-border bg-port-bg/40 p-2 group">
-      <summary className="cursor-pointer text-xs text-port-text-muted select-none min-h-[44px] sm:min-h-[32px] flex items-center gap-2">
+      <summary className="cursor-pointer text-xs text-port-text-muted select-none min-h-[44px] pointer-fine:sm:min-h-[32px] flex items-center gap-2">
         <Palette size={13} />
         <span>Visual spec</span>
         {palette.length > 0 && (
@@ -44,10 +44,10 @@ export default function VisualSpecPanel({ project, onSave }) {
             ))}
             <label htmlFor={idFor('color')} className="sr-only">Palette color</label>
             <input id={idFor('color')} type="color" value={color} onChange={(e) => setColor(e.target.value)}
-              className="w-9 h-9 bg-transparent border border-port-border rounded min-h-[44px] sm:min-h-0 min-w-[44px] sm:min-w-0" />
+              className="w-9 h-9 bg-transparent border border-port-border rounded min-h-[44px] pointer-fine:sm:min-h-0 min-w-[44px] pointer-fine:sm:min-w-0" />
             <button type="button" disabled={palette.length >= MAX_PALETTE || palette.includes(color.toLowerCase())}
               onClick={() => onSave({ palette: [...palette, color.toLowerCase()] })}
-              className="flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1 text-xs min-h-[44px] sm:min-h-0">
+              className="flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0">
               <Plus size={13} /> Add color
             </button>
           </div>

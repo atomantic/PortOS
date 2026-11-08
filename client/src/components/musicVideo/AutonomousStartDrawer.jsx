@@ -280,7 +280,7 @@ export default function AutonomousStartDrawer({ open, onClose, onStarted }) {
         <button
           type="submit"
           disabled={!valid || submitting}
-          className="w-full flex items-center justify-center gap-1 bg-port-accent text-white rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50"
+          className="w-full flex items-center justify-center gap-1 bg-port-accent text-white rounded px-2 py-1.5 text-sm min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50"
         >
           <Wand2 size={16} /> {submitting ? 'Starting…' : 'Start autonomous video'}
         </button>

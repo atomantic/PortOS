@@ -44,7 +44,7 @@ export default function ThreadPasteBlocks({ notes, tags }) {
           <div className="flex items-center justify-between gap-2">
             <span className="text-xs text-gray-400 min-w-0 break-words">{block.label}</span>
             <button type="button" onClick={() => copyToClipboard(block.text, `Copied: ${block.label}`)}
-              className="inline-flex items-center gap-1 rounded border border-port-border px-2 py-1 text-xs text-port-accent min-h-[44px] sm:min-h-0">
+              className="inline-flex items-center gap-1 rounded border border-port-border px-2 py-1 text-xs text-port-accent min-h-[44px] pointer-fine:sm:min-h-0">
               <Copy size={12} /> Copy
             </button>
           </div>

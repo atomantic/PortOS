@@ -4,7 +4,7 @@ import SentPromptPanel from '../media/SentPromptPanel.jsx';
 import useProviderModels from '../../hooks/useProviderModels.js';
 import { proposeMusicVideoArtGuides } from '../../services/apiMusicVideo.js';
 
-const button = 'min-h-[44px] rounded border border-port-border px-3 py-1.5 text-sm disabled:opacity-50 sm:min-h-0';
+const button = 'min-h-[44px] rounded border border-port-border px-3 py-1.5 text-sm disabled:opacity-50 pointer-fine:sm:min-h-0';
 const LABELS = { cast: 'Cast guide', environments: 'Environment guide', visualLanguage: 'Visual language and mood board' };
 
 /**

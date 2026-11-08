@@ -40,7 +40,7 @@ export default function MindConversationPanel({
   selectedPreset,
 }) {
   return (
-    <section data-testid="mind-chat" aria-label="Persistent mind chat" className="flex h-[68dvh] min-h-[30rem] flex-col overflow-hidden rounded-[1.5rem] border border-port-border bg-port-card shadow-lg shadow-black/10 sm:min-h-[34rem] xl:h-full xl:min-h-0">
+    <section data-testid="mind-chat" aria-label="Persistent mind chat" className="flex h-[68dvh] min-h-[30rem] flex-col overflow-hidden rounded-[1.5rem] border border-port-border bg-port-card shadow-lg shadow-black/10 sm:min-h-[34rem] xl:h-full pointer-fine:xl:min-h-0">
       <header className="flex shrink-0 items-center justify-between gap-3 border-b border-port-border bg-port-card/95 px-3 py-2.5 sm:px-4">
         <h3 className="flex min-w-0 items-center gap-2 text-sm font-medium text-port-text"><span className="shrink-0">Conversation</span> <MindTurnIndicator progress={turnProgress} /></h3>
         <label htmlFor="mind-show-activity" className="flex shrink-0 items-center gap-2 rounded-full border border-port-border px-2.5 py-1.5 text-[11px] text-port-text-muted">

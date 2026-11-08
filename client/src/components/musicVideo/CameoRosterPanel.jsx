@@ -15,9 +15,9 @@ import {
   updateMusicVideoCameo, updateMusicVideoCameoVariant,
 } from '../../services/apiMusicVideo.js';
 
-const FIELD = 'w-full min-h-[44px] rounded border border-port-border bg-port-bg px-2 py-1 text-sm sm:min-h-[32px]';
-const ICON_BUTTON = 'inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded border border-port-border bg-port-bg text-xs hover:bg-port-border/40 disabled:opacity-50 sm:min-h-[32px] sm:min-w-[32px]';
-const BUTTON = 'inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border bg-port-bg px-2 text-xs hover:bg-port-border/40 disabled:opacity-50 sm:min-h-[32px]';
+const FIELD = 'w-full min-h-[44px] rounded border border-port-border bg-port-bg px-2 py-1 text-sm pointer-fine:sm:min-h-[32px]';
+const ICON_BUTTON = 'inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded border border-port-border bg-port-bg text-xs hover:bg-port-border/40 disabled:opacity-50 pointer-fine:sm:min-h-[32px] pointer-fine:sm:min-w-[32px]';
+const BUTTON = 'inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border bg-port-bg px-2 text-xs hover:bg-port-border/40 disabled:opacity-50 pointer-fine:sm:min-h-[32px]';
 const NEED_LABELS = { research: 'research', references: 'photos', still: 'still', variant: 'variant still' };
 const REFERENCE_ORIGIN_LABELS = { upload: 'Upload', gallery: 'Gallery', research: 'Research', shot: 'Shot' };
 const FILTERS = [

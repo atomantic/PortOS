@@ -40,7 +40,7 @@ export default function RecordStatusLine({
           onClick={onNextAction}
           disabled={nextAction.disabled}
           title={nextAction.reason}
-          className="flex min-h-[44px] shrink-0 items-center gap-1 rounded bg-port-accent px-3 py-1.5 text-sm text-white disabled:opacity-50 sm:min-h-0"
+          className="flex min-h-[44px] shrink-0 items-center gap-1 rounded bg-port-accent px-3 py-1.5 text-sm text-white disabled:opacity-50 pointer-fine:sm:min-h-0"
         >
           <ActionIcon size={14} aria-hidden="true" /> {nextAction.label}
         </button>

@@ -9,7 +9,7 @@ import { saveCatalogWorld } from '../../../services/apiCatalog.js';
 import { formatCount } from '../../../utils/formatters.js';
 import { worldClockText } from '../../../../../server/lib/worldMap.js';
 
-const buttonCls = 'inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border px-2 py-1 text-xs disabled:opacity-50 sm:min-h-0';
+const buttonCls = 'inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border px-2 py-1 text-xs disabled:opacity-50 pointer-fine:sm:min-h-0';
 const inputCls = 'w-full min-w-0 rounded border border-port-border bg-port-bg px-1.5 py-1 text-xs';
 const PART_ORDER = ['world', 'night', 'cuts', 'pawnColors', 'cameraStyles'];
 const plural = (n, word) => `${formatCount(n)} ${word}${n === 1 ? '' : 's'}`;
@@ -123,7 +123,7 @@ export default function PrevizAi({ project, world, worldId, places, previz, disa
           <ul className="min-w-0 space-y-1.5">
             {parts.map((key) => (
               <li key={key} className="min-w-0 space-y-1">
-                <label className="flex min-h-[44px] items-center gap-1 font-medium sm:min-h-0">
+                <label className="flex min-h-[44px] items-center gap-1 font-medium pointer-fine:sm:min-h-0">
                   <input type="checkbox" checked={!!review.keep[key]} disabled={busy} onChange={() => toggle(key)} aria-label={`Apply ${LABELS[key]}`} />
                   {LABELS[key]}: <span className="font-normal text-port-text-muted">{describe[key]()}</span>
                 </label>

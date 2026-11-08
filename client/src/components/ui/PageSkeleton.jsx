@@ -29,7 +29,7 @@ import { SkeletonBlock, SkeletonCard, skeletonRepeat } from './Skeleton';
 //   tabs    n > 0    — reserves a `TabPills` (underline variant) strip under
 //                      the header. A default-size TabPills button is `text-sm`
 //                      (20px line box) + `py-3`, i.e. 44px — its
-//                      `min-h-[44px] sm:min-h-[40px]` is a floor the content
+//                      `min-h-[44px] pointer-fine:sm:min-h-[40px]` is a floor the content
 //                      already exceeds, so reserve a flat 44px at every width.
 //                      `tabsInBar` moves the strip INSIDE the header block for
 //                      pages that nest their tabs there (Feature Agent detail).

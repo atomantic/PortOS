@@ -18,7 +18,7 @@ const ROLE_STYLES = {
   payoff: 'bg-port-success/30 text-port-success',
   release: 'bg-port-border text-port-text-muted',
 };
-const inputCls = 'w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0';
+const inputCls = 'w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] pointer-fine:sm:min-h-0';
 
 // One brief text field: buffered locally, committed on blur as a per-field patch.
 function BriefField({ id, label, value, onCommit, multiline = false, maxLength, placeholder }) {
@@ -177,7 +177,7 @@ export default function TreatmentPanel({ project, treatment: api, storyboardAppr
                 placeholder="https://… (optional)" className={`${inputCls} ${urlValid ? '' : 'border-port-error'}`} />
             </div>
             <button type="button" onClick={addNote} disabled={notesSaving || (!noteText.trim() && !noteUrl.trim()) || !urlValid || notes.length >= 20}
-              className="flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1 text-xs min-h-[44px] sm:min-h-0">
+              className="flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0">
               <Plus size={13} /> Add note
             </button>
           </div>
@@ -213,11 +213,11 @@ export default function TreatmentPanel({ project, treatment: api, storyboardAppr
           )}
           <button type="button" disabled={!analyzed || api.compiling}
             onClick={() => api.compile({ useAi: true, providerId: selectedProviderId, model: selectedModel })}
-            className="flex items-center gap-1 bg-port-accent text-white disabled:opacity-50 rounded px-2 py-1 text-xs min-h-[44px] sm:min-h-0">
+            className="flex items-center gap-1 bg-port-accent text-white disabled:opacity-50 rounded px-2 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0">
             <Sparkles size={13} /> {api.compiling ? 'Compiling…' : (arc ? 'Recompile with AI' : 'Compile with AI')}
           </button>
           <button type="button" disabled={!analyzed || api.compiling} onClick={() => api.compile({ useAi: false })}
-            className="flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1 text-xs min-h-[44px] sm:min-h-0">
+            className="flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0">
             <Wand2 size={13} /> Draft without AI
           </button>
           {!analyzed && <span className="text-xs text-port-text-muted">Analyze the song first — the arc is built on its sections.</span>}

@@ -13,7 +13,7 @@ import {
   SHOT_CAMERA_MAX, SHOT_CAMERA_SET_DOWN, SHOT_SHEET_MAP_BARS, normalizeShotSheet, shotSheetBulkEdits, shotSheetCast, shotSheetMapRows, shotSheetMarkDoneEdits, shotSheetMediaEdits, shotSheetOptions, shotSheetProblems, shotSheetRows, shotSheetStretches,
 } from '../../../../server/lib/musicVideoShotSheet.js';
 
-const inputCls = 'w-full min-w-0 rounded border border-port-border bg-port-bg px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0';
+const inputCls = 'w-full min-w-0 rounded border border-port-border bg-port-bg px-1.5 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0';
 
 /** A text box that grows to fit its text and commits on blur, only when its text changed. */
 function SheetText({ label, value = '', rows = 2, disabled, onCommit, maxLength }) {
@@ -109,10 +109,10 @@ function BulkFill({ rows, disabled, onApply }) {
         {BULK_FIELDS.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
       </select>
       <input aria-label="Value to set" list={`mv-sheet-${field}`} value={value} onChange={(event) => setValue(event.target.value)} className={`${inputCls} max-w-xs`} placeholder="Value" />
-      <label className="inline-flex min-h-[44px] items-center gap-1 sm:min-h-0">
+      <label className="inline-flex min-h-[44px] items-center gap-1 pointer-fine:sm:min-h-0">
         <input type="checkbox" checked={onlyEmpty} onChange={(event) => setOnlyEmpty(event.target.checked)} /> Only empty
       </label>
-      <button type="button" disabled={!value.trim() || !edits.length} onClick={apply} className="min-h-[44px] rounded border border-port-border px-2 py-1 disabled:opacity-50 sm:min-h-0">
+      <button type="button" disabled={!value.trim() || !edits.length} onClick={apply} className="min-h-[44px] rounded border border-port-border px-2 py-1 disabled:opacity-50 pointer-fine:sm:min-h-0">
         Set on {edits.length} listed shot{edits.length === 1 ? '' : 's'}
       </button>
     </fieldset>
@@ -151,7 +151,7 @@ function CameraList({ project, disabled, onChange }) {
         </div>
       ))}
       {cameras.length < SHOT_CAMERA_MAX && (
-        <button type="button" onClick={add} className="inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border px-2 py-1 text-xs sm:min-h-0">
+        <button type="button" onClick={add} className="inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border px-2 py-1 text-xs pointer-fine:sm:min-h-0">
           <Plus size={12} aria-hidden="true" /> Add camera
         </button>
       )}
@@ -176,10 +176,10 @@ function SheetRow({ project, row, cast, showPrompts, disabled, onEdit, onOpen })
   return (
     <tr className="align-top">
       <td className="whitespace-nowrap p-1.5 text-xs tabular-nums">
-        <button type="button" onClick={() => onOpen(scene.sceneId)} aria-label={`Open ${label}`} className="block min-h-[44px] font-medium text-port-accent sm:min-h-0">{label}</button>
+        <button type="button" onClick={() => onOpen(scene.sceneId)} aria-label={`Open ${label}`} className="block min-h-[44px] font-medium text-port-accent pointer-fine:sm:min-h-0">{label}</button>
         {Number.isFinite(scene.startSec) ? formatTimecode(scene.startSec) : 'Untimed'}
         {Number.isFinite(scene.startSec) && Number.isFinite(scene.endSec) && <span className="block text-port-text-muted">{(scene.endSec - scene.startSec).toFixed(1)}s</span>}
-        <label className="mt-1 flex min-h-[44px] items-center gap-1 sm:min-h-0">
+        <label className="mt-1 flex min-h-[44px] items-center gap-1 pointer-fine:sm:min-h-0">
           {/* Done is stored as `checked`, the box's first name. */}
           <input type="checkbox" aria-label={`${label} done`} checked={!!sheet.checked} disabled={disabled} onChange={(event) => setField('checked', event.target.checked)} /> Done
         </label>
@@ -217,7 +217,7 @@ function SheetRow({ project, row, cast, showPrompts, disabled, onEdit, onOpen })
             const on = (sheet.characters || []).includes(name);
             return (
               <button key={name} type="button" aria-pressed={on} disabled={disabled} onClick={() => toggleCharacter(name)}
-                className={`min-h-[44px] rounded-full border px-2 py-0.5 text-xs sm:min-h-0 ${on ? 'border-port-accent bg-port-accent/10 text-port-accent' : 'border-port-border text-port-text-muted'}`}>{name}</button>
+                className={`min-h-[44px] rounded-full border px-2 py-0.5 text-xs pointer-fine:sm:min-h-0 ${on ? 'border-port-accent bg-port-accent/10 text-port-accent' : 'border-port-border text-port-text-muted'}`}>{name}</button>
             );
           })}
         </div>
@@ -304,22 +304,22 @@ export default function ShotSheetPanel({ board }) {
           <option value="">All cameras</option>
           {(project.cameras || []).map((camera) => <option key={camera.id} value={camera.id}>{camera.name}</option>)}
         </select>
-        <label className="inline-flex min-h-[44px] items-center gap-1 sm:min-h-0">
+        <label className="inline-flex min-h-[44px] items-center gap-1 pointer-fine:sm:min-h-0">
           <input type="checkbox" checked={notDoneOnly} onChange={(event) => setNotDoneOnly(event.target.checked)} /> Only not done
         </label>
-        <label className="inline-flex min-h-[44px] items-center gap-1 sm:min-h-0">
+        <label className="inline-flex min-h-[44px] items-center gap-1 pointer-fine:sm:min-h-0">
           <input type="checkbox" checked={problemsOnly} onChange={(event) => setProblemsOnly(event.target.checked)} /> Only incomplete
         </label>
-        <label className="inline-flex min-h-[44px] items-center gap-1 sm:min-h-0">
+        <label className="inline-flex min-h-[44px] items-center gap-1 pointer-fine:sm:min-h-0">
           <input type="checkbox" checked={outdatedOnly} onChange={(event) => setOutdatedOnly(event.target.checked)} /> Only frames older than their prompt
         </label>
-        <label className="inline-flex min-h-[44px] items-center gap-1 sm:min-h-0">
+        <label className="inline-flex min-h-[44px] items-center gap-1 pointer-fine:sm:min-h-0">
           <input type="checkbox" checked={showPrompts} onChange={(event) => setShowPrompts(event.target.checked)} /> Show prompts
         </label>
         <span className="text-port-text-muted">{listed.length} shown</span>
       </div>
       {mediaEdits.length > 0 && (
-        <button type="button" disabled={locked} onClick={matchMedia} className="min-h-[44px] rounded border border-port-warning px-2 py-1 text-xs text-port-warning sm:min-h-0">
+        <button type="button" disabled={locked} onClick={matchMedia} className="min-h-[44px] rounded border border-port-warning px-2 py-1 text-xs text-port-warning pointer-fine:sm:min-h-0">
           Match {mediaEdits.length} shot{mediaEdits.length === 1 ? '' : 's'} to {mediaEdits.length === 1 ? 'its camera' : 'their cameras'}
         </button>
       )}
@@ -328,11 +328,11 @@ export default function ShotSheetPanel({ board }) {
         <datalist key={field} id={`mv-sheet-${field}`}>{values.map((value) => <option key={value} value={value} />)}</datalist>
       ))}
       <div className="flex flex-wrap gap-2">
-        <button type="button" aria-expanded={aiOpen} onClick={() => setAiOpen((open) => !open)} className="min-h-[44px] rounded border border-port-border px-2 py-1 text-xs sm:min-h-0">
+        <button type="button" aria-expanded={aiOpen} onClick={() => setAiOpen((open) => !open)} className="min-h-[44px] rounded border border-port-border px-2 py-1 text-xs pointer-fine:sm:min-h-0">
           {aiOpen ? 'Hide AI help' : 'AI help'}
         </button>
         {markDoneEdits.length > 0 && (
-          <button type="button" disabled={locked || aiApplying} onClick={() => saveSheets(markDoneEdits)} className="min-h-[44px] rounded border border-port-success px-2 py-1 text-xs text-port-success sm:min-h-0">
+          <button type="button" disabled={locked || aiApplying} onClick={() => saveSheets(markDoneEdits)} className="min-h-[44px] rounded border border-port-success px-2 py-1 text-xs text-port-success pointer-fine:sm:min-h-0">
             {listed.length === rows.length ? 'Mark all done' : `Mark ${markDoneEdits.length} shown done`}
           </button>
         )}

@@ -5,7 +5,7 @@ import FilmLookPreview from '../media/FilmLookPreview.jsx';
 import useFilmLookPresets from '../../hooks/useFilmLookPresets.js';
 import { FILM_LOOK_PRESETS, filmLookPreset, isFilmLookNeutral, normalizeFilmLook, sameFilmLook } from '../../lib/filmLook.js';
 
-const BUTTON = 'inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border bg-port-bg px-2 py-1.5 text-xs hover:bg-port-border/40 sm:min-h-0';
+const BUTTON = 'inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border bg-port-bg px-2 py-1.5 text-xs hover:bg-port-border/40 pointer-fine:sm:min-h-0';
 const presetLabel = (look) => (isFilmLookNeutral(look) ? 'Clean' : FILM_LOOK_PRESETS.find((p) => p.id === look?.preset)?.label || 'Custom');
 
 /** Shot look controls shared by composed footage and composition documents. */
@@ -34,7 +34,7 @@ export default function ShotFilmLook({ project, scene, onChange, fieldId }) {
       <div className="flex flex-wrap items-center gap-2">
         <label htmlFor={fieldId('film-look')} className="text-[11px] text-port-text-muted">Film look</label>
         <select id={fieldId('film-look')} value={lookValue} onChange={(e) => pickLook(e.target.value)}
-          className="min-h-[44px] rounded border border-port-border bg-port-bg px-2 py-1 text-xs sm:min-h-0">
+          className="min-h-[44px] rounded border border-port-border bg-port-bg px-2 py-1 text-xs pointer-fine:sm:min-h-0">
           <option value="video">Video&apos;s look ({presetLabel(videoLook)})</option>
           {!ownLook && <option value="keep">Keep the video&apos;s look on this shot</option>}
           {lookValue === 'own' && <option value="own">This shot&apos;s look ({presetLabel(ownLook)})</option>}

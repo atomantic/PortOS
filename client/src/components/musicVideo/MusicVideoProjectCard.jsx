@@ -102,7 +102,7 @@ export default function MusicVideoProjectCard({
                 onClick={onRename}
                 aria-label={`Rename v${project.version || 1} of ${project.name}`}
                 title="Rename this version"
-                className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded text-port-text-muted hover:text-port-text sm:min-h-[28px] sm:min-w-[28px]"
+                className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded text-port-text-muted hover:text-port-text pointer-fine:sm:min-h-[28px] pointer-fine:sm:min-w-[28px]"
               >
                 <Pencil size={13} aria-hidden="true" />
               </button>

@@ -1,8 +1,8 @@
 import { CheckCircle2, ChevronRight, RotateCcw } from 'lucide-react';
 import { formatCount } from '../../utils/formatters.js';
 
-const buttonClass = 'flex items-center gap-1 rounded border border-port-border px-3 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50';
-const keepClass = 'flex items-center gap-1 rounded bg-port-accent px-3 py-1.5 text-sm font-medium text-white min-h-[44px] sm:min-h-0 disabled:opacity-50';
+const buttonClass = 'flex items-center gap-1 rounded border border-port-border px-3 py-1.5 text-sm min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50';
+const keepClass = 'flex items-center gap-1 rounded bg-port-accent px-3 py-1.5 text-sm font-medium text-white min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50';
 const chipClass = 'flex items-center gap-1 rounded border border-port-border px-2 py-1 text-xs min-h-[36px] sm:min-h-0 disabled:opacity-50';
 // More reverts than this fold behind one "See N changes" toggle, so the main choice stays obvious.
 const INLINE_REVERTS = 2;
@@ -37,7 +37,7 @@ export default function StaleApprovalActions({ revertible, busy = false, onKeep,
   );
   const foldedReverts = folded && (
     <details className="group min-w-0 basis-full">
-      <summary className="flex min-h-[44px] cursor-pointer list-none items-center gap-1 text-sm text-port-text-muted hover:text-port-accent sm:min-h-0 sm:py-1">
+      <summary className="flex min-h-[44px] cursor-pointer list-none items-center gap-1 text-sm text-port-text-muted hover:text-port-accent pointer-fine:sm:min-h-0 sm:py-1">
         <ChevronRight size={14} aria-hidden="true" className="transition-transform group-open:rotate-90" />
         {`See ${formatCount(reverts.length)} changes${label ? ` to ${label}` : ''} you can undo`}
       </summary>

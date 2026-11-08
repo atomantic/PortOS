@@ -8,7 +8,7 @@ import { lyricSetupState } from '../../lib/musicVideoStages.js';
 // tailnet origin PortOS is usually opened from).
 const mintId = (prefix) => `${prefix}-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 const toSec = (value) => (value === '' ? null : Number(value));
-const inputCls = 'bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0';
+const inputCls = 'bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0';
 const round3 = (n) => Math.round(n * 1000) / 1000;
 const MIN_WORD_SEC = 0.02;
 
@@ -45,7 +45,7 @@ function WordTimingEditor({ cue, lineNumber, onCommit, disabled }) {
   };
   return (
     <details className="basis-full min-w-0">
-      <summary className="cursor-pointer min-h-[44px] sm:min-h-0">Exact word times · line {lineNumber}</summary>
+      <summary className="cursor-pointer min-h-[44px] pointer-fine:sm:min-h-0">Exact word times · line {lineNumber}</summary>
       <form onSubmit={submit}>
         <fieldset disabled={disabled} className="min-w-0 space-y-1">
           <p className="text-port-text-muted">Seconds on the song clock. Save this line’s word times together; line bounds stay unchanged.</p>
@@ -89,7 +89,7 @@ function WordTimingRow({ cue, lineNumber, disabled, onPreview, onCommit }) {
           >{word.w}</span>
           <button type="button" aria-label={`Nudge the end of ${word.w} earlier`}
             onClick={() => onCommit(nudgeWordBoundary(words, index, -0.05))}
-            className="min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 px-1 text-port-text-muted">−</button>
+            className="min-h-[44px] min-w-[44px] pointer-fine:sm:min-h-0 pointer-fine:sm:min-w-0 px-1 text-port-text-muted">−</button>
           <span
             role="separator"
             aria-orientation="vertical"
@@ -115,7 +115,7 @@ function WordTimingRow({ cue, lineNumber, disabled, onPreview, onCommit }) {
           />
           <button type="button" aria-label={`Nudge the end of ${word.w} later`}
             onClick={() => onCommit(nudgeWordBoundary(words, index, 0.05))}
-            className="min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 px-1 text-port-text-muted">+</button>
+            className="min-h-[44px] min-w-[44px] pointer-fine:sm:min-h-0 pointer-fine:sm:min-w-0 px-1 text-port-text-muted">+</button>
         </span>
       ))}
       <WordTimingEditor cue={cue} lineNumber={lineNumber} disabled={disabled} onCommit={onCommit} />
@@ -228,7 +228,7 @@ export default function LyricsPanel({ project, onEditLocal, onSave, onImport, im
       </Modal>
     )}
     <Shell className="mt-2 bg-port-bg border border-port-border rounded-lg p-2 text-xs">
-      <Heading className={`${inline ? '' : 'cursor-pointer select-none '}text-port-text-muted min-h-[44px] sm:min-h-0 flex flex-wrap items-center gap-x-1`}>
+      <Heading className={`${inline ? '' : 'cursor-pointer select-none '}text-port-text-muted min-h-[44px] pointer-fine:sm:min-h-0 flex flex-wrap items-center gap-x-1`}>
         Lyrics &amp; phrases — {cues.length} line{cues.length === 1 ? '' : 's'} ({timedCount} timed)
         · {phrases.length} phrase{phrases.length === 1 ? '' : 's'}
         <span className="block sm:inline sm:ml-1">— AI Plan cuts on timed lines and phrase edges; no lyrics = an instrumental plan.</span>
@@ -246,7 +246,7 @@ export default function LyricsPanel({ project, onEditLocal, onSave, onImport, im
             {onImportTrack && project.trackId && (
               <button type="button" onClick={onImportTrack} disabled={importing}
                 title={cues.length ? 'Replace these lines with the linked track\'s lyric sheet' : 'Use the linked track\'s lyric sheet'}
-                className="flex items-center gap-1 text-port-accent min-h-[44px] sm:min-h-0 disabled:opacity-50">
+                className="flex items-center gap-1 text-port-accent min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50">
                 <ListMusic size={13} /> Use track lyrics
               </button>
             )}
@@ -273,7 +273,7 @@ export default function LyricsPanel({ project, onEditLocal, onSave, onImport, im
               </select>
             </div>
             <button type="button" onClick={submitImport} disabled={importing || !importText.trim()}
-              className="flex items-center gap-1 bg-port-accent text-white rounded px-2 py-1.5 min-h-[44px] sm:min-h-0 disabled:opacity-50">
+              className="flex items-center gap-1 bg-port-accent text-white rounded px-2 py-1.5 min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50">
               <Upload size={13} /> {importing ? 'Importing…' : 'Import lyrics'}
             </button>
           </div>
@@ -292,12 +292,12 @@ export default function LyricsPanel({ project, onEditLocal, onSave, onImport, im
               {onAlign && (
                 <button type="button" onClick={() => runAlign()} disabled={aligning || cues.length === 0 || !hasAudio}
                   title={hasAudio ? 'Align the known lyrics to the vocal with local MMS_FA (model weights download on first use)' : 'Attach a song before aligning words'}
-                  className="min-h-[44px] sm:min-h-0 text-port-accent disabled:opacity-50">
+                  className="min-h-[44px] pointer-fine:sm:min-h-0 text-port-accent disabled:opacity-50">
                   {aligning ? 'Aligning…' : 'Align words'}
                 </button>
               )}
               <button type="button" onClick={() => replaceCues([...cues, { id: mintId('lc'), text: 'New line', startSec: null, endSec: null }])}
-                className="flex items-center gap-1 text-port-accent min-h-[44px] sm:min-h-0"><Plus size={13} /> Line</button>
+                className="flex items-center gap-1 text-port-accent min-h-[44px] pointer-fine:sm:min-h-0"><Plus size={13} /> Line</button>
             </span>
           </div>
           {alignError && <p role="alert" className="text-port-error">{alignError}</p>}
@@ -325,10 +325,10 @@ export default function LyricsPanel({ project, onEditLocal, onSave, onImport, im
                     <button type="button" onClick={() => runAlign(cue.id)} disabled={aligning || !hasAudio}
                       title={hasAudio ? undefined : 'Attach a song before aligning words'}
                       aria-label={`Re-align line ${i + 1}`}
-                      className="min-h-[44px] sm:min-h-0 text-port-accent disabled:opacity-50">Re-align</button>
+                      className="min-h-[44px] pointer-fine:sm:min-h-0 text-port-accent disabled:opacity-50">Re-align</button>
                   )}
                   <button type="button" onClick={() => replaceCues(cues.filter((c) => c.id !== cue.id))}
-                    aria-label={`Delete line ${i + 1}`} className="min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 p-1 text-port-error"><Trash2 size={12} /></button>
+                    aria-label={`Delete line ${i + 1}`} className="min-h-[44px] min-w-[44px] pointer-fine:sm:min-h-0 pointer-fine:sm:min-w-0 p-1 text-port-error"><Trash2 size={12} /></button>
                 </div>
                 {typeof cue.matched === 'number' && cue.matched < 0.5 && (
                   <span className="inline-block rounded bg-port-warning/10 px-1.5 py-0.5 text-port-warning">
@@ -346,7 +346,7 @@ export default function LyricsPanel({ project, onEditLocal, onSave, onImport, im
           <div className="flex items-center justify-between pt-1">
             <h4 className="font-medium text-port-text">Phrases</h4>
             <button type="button" onClick={() => replacePhrases([...phrases, { id: mintId('mp'), label: '', intent: '', startSec: null, endSec: null }])}
-              className="flex items-center gap-1 text-port-accent min-h-[44px] sm:min-h-0"><Plus size={13} /> Phrase</button>
+              className="flex items-center gap-1 text-port-accent min-h-[44px] pointer-fine:sm:min-h-0"><Plus size={13} /> Phrase</button>
           </div>
           <div className="max-h-48 overflow-y-auto space-y-1 pr-1">
             {phrases.map((phrase, i) => (
@@ -364,7 +364,7 @@ export default function LyricsPanel({ project, onEditLocal, onSave, onImport, im
                   value={phrase.intent || ''} onChange={(e) => editPhrase(phrase.id, { intent: e.target.value })}
                   onBlur={() => savePhrases()} className={`${inputCls} min-w-0 flex-1 basis-40`} />
                 <button type="button" onClick={() => replacePhrases(phrases.filter((p) => p.id !== phrase.id))}
-                  aria-label={`Delete phrase ${i + 1}`} className="min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 p-1 text-port-error"><Trash2 size={12} /></button>
+                  aria-label={`Delete phrase ${i + 1}`} className="min-h-[44px] min-w-[44px] pointer-fine:sm:min-h-0 pointer-fine:sm:min-w-0 p-1 text-port-error"><Trash2 size={12} /></button>
               </div>
             ))}
           </div>

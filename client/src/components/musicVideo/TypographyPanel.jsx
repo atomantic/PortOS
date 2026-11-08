@@ -5,7 +5,7 @@ import { composedDrawsLyrics } from '../../lib/musicVideoLayers.js';
 // Client-minted ids keep a freshly added row addressable across saves (see LyricsPanel).
 const mintId = () => `mtc-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 const toSec = (value) => (value === '' ? null : Number(value));
-const inputCls = 'bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0';
+const inputCls = 'bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0';
 
 // Mirrors the server's composition enums (server/lib/musicVideoValidation.js).
 const TEMPLATES = [['fade', 'Fade'], ['rise', 'Rise'], ['typewriter', 'Typewriter'], ['pop', 'Pop'], ['build', 'Word build']];
@@ -44,7 +44,7 @@ export default function TypographyPanel({ project, onEditLocal, onSave }) {
 
   return (
     <details className="mt-2 bg-port-bg border border-port-border rounded-lg p-2 text-xs">
-      <summary className="cursor-pointer select-none text-port-text-muted min-h-[44px] sm:min-h-0 flex flex-wrap items-center gap-x-1">
+      <summary className="cursor-pointer select-none text-port-text-muted min-h-[44px] pointer-fine:sm:min-h-0 flex flex-wrap items-center gap-x-1">
         Typography — {renderStyleLabel(composition.mode)} · {cues.length} text cue{cues.length === 1 ? '' : 's'}
         <span className="block sm:inline sm:ml-1">— timed text laid over the footage, kept inside the title-safe area.</span>
       </summary>
@@ -76,12 +76,12 @@ export default function TypographyPanel({ project, onEditLocal, onSave }) {
         </div>
         <button type="button" onClick={copyLyrics} disabled={timedLyrics.length === 0}
           title={timedLyrics.length === 0 ? 'Time some lyric lines first' : 'Replace the text cues with the timed lyric lines as plain subtitles (they replace the lyric type in the final render)'}
-          className="flex items-center gap-1 text-port-accent min-h-[44px] sm:min-h-0 disabled:opacity-50">
+          className="flex items-center gap-1 text-port-accent min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50">
           <Copy size={13} /> Copy timed lyrics ({timedLyrics.length})
         </button>
         <button type="button"
           onClick={() => replace({ textCues: [...cues, { id: mintId(), text: 'New text', startSec: lastEnd, endSec: lastEnd + 2, template: 'fade', placement: 'lower', emphasis: 'subtitle' }] })}
-          className="flex items-center gap-1 text-port-accent min-h-[44px] sm:min-h-0"><Plus size={13} /> Text cue</button>
+          className="flex items-center gap-1 text-port-accent min-h-[44px] pointer-fine:sm:min-h-0"><Plus size={13} /> Text cue</button>
       </div>
 
       {composed && composedDrawsLyrics({ ...project, composition }) && <p className="mt-2 text-port-text-muted">The final render draws your timed lyrics, as in the player. Text cues are optional; a Subtitle cue replaces the lyrics.</p>}
@@ -108,7 +108,7 @@ export default function TypographyPanel({ project, onEditLocal, onSave }) {
               </select>
             ))}
             <button type="button" onClick={() => replace({ textCues: cues.filter((c) => c.id !== cue.id) })}
-              aria-label={`Delete text cue ${i + 1}`} className="min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 p-1 text-port-error"><Trash2 size={12} /></button>
+              aria-label={`Delete text cue ${i + 1}`} className="min-h-[44px] min-w-[44px] pointer-fine:sm:min-h-0 pointer-fine:sm:min-w-0 p-1 text-port-error"><Trash2 size={12} /></button>
           </div>
         ))}
       </div>

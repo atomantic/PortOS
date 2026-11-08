@@ -71,11 +71,11 @@ export default function DevArtifactsPanel({
           <div className="ml-auto flex flex-wrap items-center gap-2">
             <label htmlFor={`${idPrefix}-kind`} className="sr-only">Kind of file to import</label>
             <select id={`${idPrefix}-kind`} value={kind} onChange={(e) => setKind(e.target.value)} disabled={busy}
-              className="bg-port-bg border border-port-border rounded px-2 py-1 text-xs min-h-[44px] sm:min-h-0">
+              className="bg-port-bg border border-port-border rounded px-2 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0">
               {Object.entries(DEV_ARTIFACT_KIND_LABELS).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
             </select>
             <FilePickerButton accept={ACCEPT} onChange={upload} disabled={busy} ariaLabel="Import development file"
-              className="flex items-center gap-1 text-sm text-port-accent min-h-[44px] sm:min-h-0 px-1 cursor-pointer">
+              className="flex items-center gap-1 text-sm text-port-accent min-h-[44px] pointer-fine:sm:min-h-0 px-1 cursor-pointer">
               <Upload size={14} aria-hidden="true" /> Import
             </FilePickerButton>
           </div>
@@ -107,7 +107,7 @@ export default function DevArtifactsPanel({
                   ? <Pill size="xs" tone="success"><Check size={11} className="inline" aria-hidden="true" /> Visual guide</Pill>
                   : (
                     <button type="button" disabled={busy} onClick={() => onUseAsGuide(artifact.id)} aria-label={`Use ${artifact.title} as visual guide`}
-                      className="text-xs text-port-accent border border-port-border rounded px-2 min-h-[44px] sm:min-h-0 sm:py-1 disabled:opacity-50">
+                      className="text-xs text-port-accent border border-port-border rounded px-2 min-h-[44px] pointer-fine:sm:min-h-0 sm:py-1 disabled:opacity-50">
                       Use as visual guide
                     </button>
                   ))}

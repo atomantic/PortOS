@@ -44,7 +44,7 @@ export default function MusicVideoLlmStagesPicker({
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
         aria-controls={bodyId}
-        className="flex items-center gap-1 text-xs text-port-text-muted min-h-[44px] sm:min-h-0"
+        className="flex items-center gap-1 text-xs text-port-text-muted min-h-[44px] pointer-fine:sm:min-h-0"
       >
         <Chevron size={14} aria-hidden="true" />
         Models per stage

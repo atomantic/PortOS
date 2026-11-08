@@ -140,14 +140,14 @@ function ReferenceCard({ item, stage, onOpenPreview, actions, subjects, olderLoo
             <div className="flex flex-wrap gap-2">
               {canRetryVision && (
                 <button type="button" disabled={busy} title="Ask the vision reviewer to check this image again"
-                  className="flex min-h-[44px] items-center gap-1 rounded border border-port-border px-2 text-port-accent disabled:opacity-50 sm:min-h-0 sm:py-1"
+                  className="flex min-h-[44px] items-center gap-1 rounded border border-port-border px-2 text-port-accent disabled:opacity-50 pointer-fine:sm:min-h-0 sm:py-1"
                   onClick={() => onReinspectImage(item.key)}>
                   <RotateCcw size={12} aria-hidden="true" /> Retry vision
                 </button>
               )}
               {canAccept && (
                 <button type="button" disabled={busy} title="Approve with this image as it is"
-                  className="min-h-[44px] rounded border border-port-border px-2 text-port-accent disabled:opacity-50 sm:min-h-0 sm:py-1"
+                  className="min-h-[44px] rounded border border-port-border px-2 text-port-accent disabled:opacity-50 pointer-fine:sm:min-h-0 sm:py-1"
                   onClick={() => onAcknowledgeImage({ inputs: castSetsInspectionInputs(stage, item.key), inspectionId: inspection?.id || null })}>
                   {inspection?.verdict === 'mismatch' ? 'Accept anyway' : 'Accept unchecked'}
                 </button>
@@ -161,7 +161,7 @@ function ReferenceCard({ item, stage, onOpenPreview, actions, subjects, olderLoo
       {live.status === 'running' && <progress aria-label={`${item.label || item.key} rendering progress`} className="w-full" max={1} value={Math.max(0, Math.min(1, live.progress || 0))} />}
       {live.status === 'running' && live.statusMsg && <p className="text-[11px] text-port-text-muted break-words">{live.statusMsg}</p>}
       <details className="min-w-0 text-xs">
-        <summary className="cursor-pointer min-h-[44px] sm:min-h-0 py-1 text-port-accent">{submitted ? 'Submitted prompt' : 'Planned prompt'}</summary>
+        <summary className="cursor-pointer min-h-[44px] pointer-fine:sm:min-h-0 py-1 text-port-accent">{submitted ? 'Submitted prompt' : 'Planned prompt'}</summary>
         {!submitted && <p className="text-[11px] text-port-text-muted">The submitted prompt has not been recorded. Style instructions may be added when queued.</p>}
         <p className="mt-1 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{submitted ? image.submittedPrompt : item.prompt || 'No planned prompt recorded.'}</p>
         {image.submittedPromptTruncated && <p className="mt-1 text-port-warning">The recorded prompt is truncated.</p>}

@@ -67,14 +67,14 @@ export default function SetupBanner() {
             <button
               type="button"
               onClick={() => navigate('/capabilities')}
-              className="min-h-[44px] rounded bg-port-warning px-3 py-2 text-xs font-medium text-black hover:bg-port-warning/80 lg:min-h-0 lg:py-1"
+              className="min-h-[44px] rounded bg-port-warning px-3 py-2 text-xs font-medium text-black hover:bg-port-warning/80 pointer-fine:lg:min-h-0 lg:py-1"
             >
               Review setup
             </button>
             <button
               type="button"
               onClick={dismiss}
-              className="min-h-[44px] rounded bg-gray-600 px-3 py-2 text-xs text-white hover:bg-gray-500 lg:min-h-0 lg:py-1"
+              className="min-h-[44px] rounded bg-gray-600 px-3 py-2 text-xs text-white hover:bg-gray-500 pointer-fine:lg:min-h-0 lg:py-1"
             >
               Later
             </button>

@@ -68,7 +68,7 @@ function CopyField({ id, field, initial, onSave }) {
       </div>
       <Input id={id} value={value} rows={field.multiline ? 4 : undefined}
         onChange={(e) => setValue(e.target.value)} onBlur={commit}
-        className="w-full bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0" />
+        className="w-full bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0" />
     </div>
   );
 }
@@ -161,7 +161,7 @@ export default function PublishKitPanel({ project, publishKit, enabledTargets })
         summary={kit.builtAt ? `Built ${new Date(kit.builtAt).toLocaleDateString()}` : 'Not built yet'} defaultOpen={!kit.builtAt}
         actions={(
           <button type="button" disabled={!canBuild || publishKit.building} onClick={publishKit.build}
-            className="flex items-center gap-1 bg-port-accent/20 text-port-accent disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0">
+            className="flex items-center gap-1 bg-port-accent/20 text-port-accent disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] pointer-fine:sm:min-h-0">
             <Package size={13} /> {kit.builtAt ? 'Rebuild kit' : 'Build publishing kit'}
           </button>
         )}>
@@ -169,7 +169,7 @@ export default function PublishKitPanel({ project, publishKit, enabledTargets })
         {canBuild && (
           <div className="space-y-2">
             <button type="button" onClick={() => { setUpscaledVideo(null); setUpscaleSource({ id: project.renderHistoryId, key: currentRender.current }); }}
-              className="rounded border border-port-border px-2 py-1.5 text-xs hover:text-port-accent min-h-[44px] sm:min-h-0">
+              className="rounded border border-port-border px-2 py-1.5 text-xs hover:text-port-accent min-h-[44px] pointer-fine:sm:min-h-0">
               Upscale final render
             </button>
             <p className="text-xs text-port-text-muted">Creates a separate video in the gallery; the final master stays unchanged.</p>
@@ -196,19 +196,19 @@ export default function PublishKitPanel({ project, publishKit, enabledTargets })
               {kit.master?.filename && (
                 <li className="flex flex-wrap items-center justify-between gap-2">
                   <span>YouTube master (the final render)</span>
-                  <a href={`/data/videos/${kit.master.filename}`} download className="text-port-accent flex items-center gap-1 min-h-[44px] sm:min-h-0"><Download size={12} /> Download</a>
+                  <a href={`/data/videos/${kit.master.filename}`} download className="text-port-accent flex items-center gap-1 min-h-[44px] pointer-fine:sm:min-h-0"><Download size={12} /> Download</a>
                 </li>
               )}
               {(kit.exports || []).map((e) => (
                 <li key={e.filename} className="flex flex-wrap items-center justify-between gap-2">
                   <span>{publishExportLabel(e)}{e.kind === 'teaser' && e.startSec != null && <span className="text-port-text-muted"> · {fmtTime(e.startSec)}–{fmtTime(e.endSec)}</span>}</span>
-                  <a href={`/data/videos/${e.filename}`} download className="text-port-accent flex items-center gap-1 min-h-[44px] sm:min-h-0"><Download size={12} /> Download</a>
+                  <a href={`/data/videos/${e.filename}`} download className="text-port-accent flex items-center gap-1 min-h-[44px] pointer-fine:sm:min-h-0"><Download size={12} /> Download</a>
                 </li>
               ))}
               {kit.captionsFilename && (
                 <li className="flex flex-wrap items-center justify-between gap-2">
                   <span className="flex items-center gap-1"><Captions size={12} /> Lyric captions (SRT)</span>
-                  <a href={`/data/videos/${kit.captionsFilename}`} download className="text-port-accent flex items-center gap-1 min-h-[44px] sm:min-h-0"><Download size={12} /> Download</a>
+                  <a href={`/data/videos/${kit.captionsFilename}`} download className="text-port-accent flex items-center gap-1 min-h-[44px] pointer-fine:sm:min-h-0"><Download size={12} /> Download</a>
                 </li>
               )}
             </ul>
@@ -253,20 +253,20 @@ export default function PublishKitPanel({ project, publishKit, enabledTargets })
           <div>
             <label htmlFor={idFor('youtube-url')} className="block text-[11px] text-port-text-muted">Full video URL (optional)</label>
             <input id={idFor('youtube-url')} value={youtubeUrl} onChange={(e) => setYoutubeUrl(e.target.value)} onBlur={() => saveLink('youtube', youtubeUrl)} placeholder="https://…"
-              className="w-full bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0" />
+              className="w-full bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0" />
             {badLink(youtubeUrl) && <p className="text-[11px] text-port-warning">Not saved: a link starts with https://</p>}
           </div>
           <div>
             <label htmlFor={idFor('song-url')} className="block text-[11px] text-port-text-muted">Song URL (optional)</label>
             <input id={idFor('song-url')} value={songUrl} onChange={(e) => setSongUrl(e.target.value)} onBlur={() => saveLink('song', songUrl)} placeholder="https://…"
-              className="w-full bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0" />
+              className="w-full bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0" />
             {badLink(songUrl) && <p className="text-[11px] text-port-warning">Not saved: a link starts with https://</p>}
           </div>
         </div>
         <fieldset className="space-y-1 rounded border border-port-border p-2">
           <legend className="px-1 text-[11px] font-medium">Draft from (plus your notes and links)</legend>
           {includeRows.map(({ key, label, detail, available }) => (
-            <label key={key} htmlFor={idFor(`include-${key}`)} className={`flex items-center gap-2 min-h-[44px] sm:min-h-0 ${available ? '' : 'opacity-50'}`}>
+            <label key={key} htmlFor={idFor(`include-${key}`)} className={`flex items-center gap-2 min-h-[44px] pointer-fine:sm:min-h-0 ${available ? '' : 'opacity-50'}`}>
               <input id={idFor(`include-${key}`)} type="checkbox" checked={available && include[key]} disabled={!available || publishKit.drafting}
                 onChange={(e) => {
                   const checked = e.target.checked;
@@ -280,7 +280,7 @@ export default function PublishKitPanel({ project, publishKit, enabledTargets })
         <fieldset className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <legend className="text-[11px] text-port-text-muted mb-0.5">Length</legend>
           {[['short', 'A sentence or two'], ['full', 'Full making-of']].map(([value, label]) => (
-            <label key={value} htmlFor={idFor(`length-${value}`)} className="flex items-center gap-1.5 min-h-[44px] sm:min-h-0">
+            <label key={value} htmlFor={idFor(`length-${value}`)} className="flex items-center gap-1.5 min-h-[44px] pointer-fine:sm:min-h-0">
               <input id={idFor(`length-${value}`)} type="radio" name={idFor('length')} value={value} checked={length === value}
                 disabled={publishKit.drafting} onChange={() => { setLength(value); save({ draftOptions: { length: value } }); }} />
               {label}
@@ -295,7 +295,7 @@ export default function PublishKitPanel({ project, publishKit, enabledTargets })
               emptyProviderOption="Active provider (default)" emptyModelOption="Default model" disabled={publishKit.drafting} />
           )}
           <button type="button" onClick={onDraft} disabled={publishKit.drafting || publishKit.saving || platformsUnknown || noPlatforms || confirmReplace}
-            className="flex items-center gap-1 bg-port-accent/20 text-port-accent disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0">
+            className="flex items-center gap-1 bg-port-accent/20 text-port-accent disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] pointer-fine:sm:min-h-0">
             <Sparkles size={13} /> {publishKit.drafting ? 'Drafting…' : (kit.copy ? 'Redraft copy' : 'Draft copy')}
           </button>
         </div>
@@ -303,9 +303,9 @@ export default function PublishKitPanel({ project, publishKit, enabledTargets })
           <div role="alert" className="flex flex-wrap items-center gap-2 rounded border border-port-warning/50 bg-port-warning/10 p-2">
             <span className="flex-1 min-w-[12rem]">Drafting replaces the posts you wrote or edited below.</span>
             <button type="button" onClick={() => { setConfirmReplace(false); draft(true); }}
-              className="bg-port-warning/20 text-port-warning rounded px-2 py-1.5 min-h-[44px] sm:min-h-0">Replace them</button>
+              className="bg-port-warning/20 text-port-warning rounded px-2 py-1.5 min-h-[44px] pointer-fine:sm:min-h-0">Replace them</button>
             <button type="button" onClick={() => setConfirmReplace(false)}
-              className="text-port-text-muted px-2 py-1.5 min-h-[44px] sm:min-h-0">Keep mine</button>
+              className="text-port-text-muted px-2 py-1.5 min-h-[44px] pointer-fine:sm:min-h-0">Keep mine</button>
           </div>
         )}
         {noPlatforms && <p className="text-port-text-muted">Turn on a platform under Where you post to draft its copy.</p>}

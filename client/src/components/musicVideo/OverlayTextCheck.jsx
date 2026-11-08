@@ -40,7 +40,7 @@ export default function OverlayTextCheck({ report, onCheck, busy = false, onSeek
           <span className={`font-medium ${finding.severity === 'error' ? 'text-port-error' : 'text-port-warning'}`}>{KIND_LABELS[finding.kind] || finding.kind}</span>
           {onSeek
             ? <button type="button" onClick={() => onSeek(finding.atSec)} aria-label={`Play ${time} in the preview`}
-              className="min-h-[44px] text-port-accent underline sm:min-h-0">{time}</button>
+              className="min-h-[44px] text-port-accent underline pointer-fine:sm:min-h-0">{time}</button>
             : <span>{time}</span>}
           {momentary && <span className="text-xs text-port-warning">{plural(finding.span.frames, 'frame')} only</span>}
           {finding.sceneLabel && <span className="min-w-0 break-words text-xs text-port-text-muted">{finding.sceneLabel}</span>}
@@ -66,7 +66,7 @@ export default function OverlayTextCheck({ report, onCheck, busy = false, onSeek
       {shown.length > 0 && <ul aria-label="Overlay text findings" className={`mt-2 space-y-2 ${stale ? 'opacity-70' : ''}`}>{shown.map(renderFinding)}</ul>}
       {folded.length > 0 && (
         <details className="mt-1">
-          <summary className="flex min-h-[44px] cursor-pointer items-center text-xs text-port-accent sm:min-h-0">{formatCount(folded.length)} more</summary>
+          <summary className="flex min-h-[44px] cursor-pointer items-center text-xs text-port-accent pointer-fine:sm:min-h-0">{formatCount(folded.length)} more</summary>
           <ul className={`mt-2 space-y-2 ${stale ? 'opacity-70' : ''}`}>{folded.map(renderFinding)}</ul>
         </details>
       )}
