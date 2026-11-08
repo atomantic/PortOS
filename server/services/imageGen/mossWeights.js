@@ -58,7 +58,13 @@ export function downloadMossWeights(emit) {
       for (const [index, file] of missing.entries()) {
         slot.throwIfAborted();
         emit({ type: 'stage', stage: 'download', message: `${index + 1}/${missing.length}: ${file.path}` });
-        const onBytes = slot.throttle((received, total) => emit({ type: 'progress', stage: 'download', file: file.path, progress: (index + received / (total || file.size)) / missing.length }));
+        const onBytes = slot.throttle((received, total) => {
+          const totalBytes = total || file.size;
+          emit({
+            type: 'progress', stage: 'download', file: file.path, step: index + 1, total: missing.length,
+            downloaded: received, totalBytes, progress: (index + received / totalBytes) / missing.length,
+          });
+        });
         await streamResumableDownload({
           url: `https://huggingface.co/${MOSS_MANIFEST.repo}/resolve/${MOSS_MANIFEST.revision}/${file.path}`,
           destPath: join(destination, file.path), expectedSha256: file.sha256, onBytes, ...slot.downloadOptions(),

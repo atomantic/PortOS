@@ -957,6 +957,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 
 | `messageLogError.js` | `messageLogError(error)` projects mailbox failures to allowlisted codes and HTTP error status, excluding provider text and credentials. |
 | `emailMessageId.js` | `cleanMessageId(value)` normalizes an RFC-822 `Message-ID` (angle brackets stripped, trimmed) — the one rule the Gmail Takeout importer and live Gmail sync share for the `gmail:<id>` activity key (#15308). |
+| `gmailThreadKey.js` | `gmailConversationThreadKey(apiThreadId)` is the `conv-…` thread key live Gmail sync stores; `gmailApiThreadIdFromThrid(xGmThrid)` converts Takeout's decimal `X-GM-THRID` to the hex Gmail API thread id (null when malformed), so the importer can find pre-#15308 live rows (#15320). |
 
 | `launchVideoValidation.js` | `validateLaunchVideoAssets` checks frozen launch composition text, storyboard reading time, duration, and poster position before rendering. |
 

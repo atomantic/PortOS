@@ -54,7 +54,9 @@ export default function ModelDownloadBadge({
     // that is not a transfer percentage.
     const showPct = pct != null && (hasBytes || pct > 0 || frame.stage === 'verify');
     const stage = STAGE_LABELS[frame.stage] || (frame.type === 'log' ? 'Downloading…' : (STAGE_LABELS[frame.type] || 'Downloading…'));
-    const fileLine = frame.file ? `${frame.step}/${frame.total} · ${frame.file}` : '';
+    // Emitters that don't count files omit step/total; show the file alone.
+    const counter = Number.isFinite(frame.step) && Number.isFinite(frame.total) ? `${frame.step}/${frame.total} · ` : '';
+    const fileLine = frame.file ? `${counter}${frame.file}` : '';
     const byteLine = hasBytes
       ? (Number.isFinite(frame.totalBytes) && frame.totalBytes > 0
         ? `${formatBytes(frame.downloaded)} / ${formatBytes(frame.totalBytes)}`
