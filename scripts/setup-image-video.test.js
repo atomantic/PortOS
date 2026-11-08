@@ -727,3 +727,19 @@ describe('MiniMax H3 MLX hash-pinned lock', () => {
     expect(source).toMatch(/pip sync --require-hashes --python "\$MINIMAX_H3_PY" "\$MINIMAX_H3_LOCK"/);
   });
 });
+
+describe('MusicGen (MLX) install is hash-pinned', () => {
+  const lock = readFileSync(join(REPO_ROOT, 'scripts', 'requirements-musicgen-mlx.lock.txt'), 'utf8');
+
+  it('every locked package carries a sha256 hash', () => {
+    const pins = lock.split('\n').filter((l) => /^[A-Za-z0-9_.\-]+(\[.*\])?==/.test(l));
+    expect(pins.length).toBeGreaterThan(0);
+    expect(lock.match(/--hash=sha256:[0-9a-f]{64}/g).length).toBeGreaterThanOrEqual(pins.length);
+  });
+
+  it('installs from the lock with --require-hashes and resolves nothing at install time', () => {
+    const section = source.slice(source.indexOf('INSTALL_MUSICGEN" == "1"'), source.indexOf('INSTALL_AUDIOLDM2="${'));
+    expect(section).toMatch(/pip install --require-hashes --no-deps -r "\$SCRIPT_DIR\/requirements-musicgen-mlx\.lock\.txt"/);
+    expect(section).not.toMatch(/pip install --upgrade/);
+  });
+});
