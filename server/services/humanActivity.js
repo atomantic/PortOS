@@ -328,14 +328,23 @@ function rowToEvent(row) {
 // any candidate that failed normalization.
 //
 // A candidate may carry `supersedesDedupeKey`: the key an earlier version of the
-// same ingester wrote for this event (#15308). See `recordRekeyedChunk`.
+// same ingester wrote for this event (#15308). See `recordRekeyedChunk`. A Gmail
+// Takeout candidate may instead carry `legacyGmailMatch` (#15320); see
+// `retireLegacyGmailLookalikes`.
 export async function recordEvents(candidates = []) {
   const entries = [];
   for (const candidate of candidates || []) {
     const row = normalizeCandidate(candidate);
     if (!row) continue;
     const legacyKey = String(candidate.supersedesDedupeKey ?? '').trim();
-    entries.push({ row, legacyKey: legacyKey && legacyKey !== row.dedupeKey ? legacyKey : null });
+    const threadKey = String(candidate.legacyGmailMatch?.threadKey ?? '').trim();
+    entries.push({
+      row,
+      legacyKey: legacyKey && legacyKey !== row.dedupeKey ? legacyKey : null,
+      legacyMatch: row.source === 'gmail' && threadKey
+        ? { threadKey, fromEmail: normalizeIdentifier(candidate.legacyGmailMatch.fromEmail) }
+        : null,
+    });
   }
   if (entries.length === 0) return { recorded: 0, skipped: (candidates || []).length };
   await ensureReady();
@@ -348,7 +357,7 @@ export async function recordEvents(candidates = []) {
   let recorded = 0;
   for (let start = 0; start < entries.length; start += CHUNK) {
     const chunk = entries.slice(start, start + CHUNK);
-    recorded += chunk.some((e) => e.legacyKey)
+    recorded += chunk.some((e) => e.legacyKey || e.legacyMatch)
       ? await withTransaction((client) => recordRekeyedChunk(client, chunk))
       : await insertActivityChunk(chunk.map((e) => e.row));
   }
@@ -369,22 +378,25 @@ export async function recordEvents(candidates = []) {
 // the insert, against the holder actually present then.
 async function recordRekeyedChunk(client, entries) {
   const rekeyed = entries.filter((e) => e.legacyKey);
-  const { rows: holders } = await client.query(
-    `SELECT e.source, e.dedupe_key, e.account_id FROM human_activity_events e
-       JOIN unnest($1::text[], $2::text[]) AS k(source, dedupe_key)
-         ON e.source = k.source AND e.dedupe_key = k.dedupe_key`,
-    [rekeyed.map((e) => e.row.source), rekeyed.map((e) => e.row.dedupeKey)],
-  );
-  const holderAccount = new Map(holders.map((h) => [`${h.source}\u0000${h.dedupe_key}`, h.account_id]));
-  for (const e of rekeyed) {
-    const holder = holderAccount.get(`${e.row.source}\u0000${e.row.dedupeKey}`);
-    if (holder != null && holder !== e.row.accountId) {
-      e.row = { ...e.row, dedupeKey: e.legacyKey };
-      e.legacyKey = null;
+  if (rekeyed.length > 0) {
+    const { rows: holders } = await client.query(
+      `SELECT e.source, e.dedupe_key, e.account_id FROM human_activity_events e
+         JOIN unnest($1::text[], $2::text[]) AS k(source, dedupe_key)
+           ON e.source = k.source AND e.dedupe_key = k.dedupe_key`,
+      [rekeyed.map((e) => e.row.source), rekeyed.map((e) => e.row.dedupeKey)],
+    );
+    const holderAccount = new Map(holders.map((h) => [`${h.source}\u0000${h.dedupe_key}`, h.account_id]));
+    for (const e of rekeyed) {
+      const holder = holderAccount.get(`${e.row.source}\u0000${e.row.dedupeKey}`);
+      if (holder != null && holder !== e.row.accountId) {
+        e.row = { ...e.row, dedupeKey: e.legacyKey };
+        e.legacyKey = null;
+      }
     }
   }
   const execute = client.query.bind(client);
   const inserted = await insertActivityChunk(entries.map((e) => e.row), execute);
+  await retireLegacyGmailLookalikes(client, entries.filter((e) => e.legacyMatch));
   const retiring = entries.filter((e) => e.legacyKey);
   if (retiring.length === 0) return inserted;
   const retired = await client.query(
@@ -403,6 +415,76 @@ async function recordRekeyedChunk(client, entries) {
   );
   if (retired.rowCount > 0) console.log(`🗓️  Re-keyed ${retired.rowCount} activity event(s) off a superseded dedupe key`);
   return inserted;
+}
+
+// Retire the row live Gmail sync wrote for a Takeout-imported email before
+// #15308 (#15320). That row has a per-account `msg:` key and no Message-ID, so
+// it can only be recognized by resemblance: same live thread key (derived from
+// X-GM-THRID), kind, title, sender (`metadata.handle`, received mail only) and
+// a `happened_at` within 10 minutes of the mbox Date (live sync stores Gmail's
+// receive time, not the header date). Runs after the insert in the caller's
+// transaction, so a crash cannot leave the event with neither row.
+//
+// A wrong delete would erase a distinct email, so it is refused unless the
+// match is unambiguous on every side:
+// - exactly one legacy row fits the candidate;
+// - no OTHER row looks like the same email: the lookalike count spans every
+//   Gmail row in the thread (by live key or the raw X-GM-THRID imported rows
+//   store) with the same kind, title and window whose participants include the
+//   sender, so a second legacy row, a re-keyed live row or an imported sibling
+//   (including one inserted in this chunk) makes it ambiguous;
+// - the candidate's own key is held by an account-less (imported) row, so a
+//   live row for another mailbox never absorbs this mailbox's event;
+// - no two candidates pick the same legacy row.
+// A derivation that does not hold (thread ids, subject decoding) simply finds
+// no match and leaves the duplicate, never a wrong delete.
+async function retireLegacyGmailLookalikes(client, entries) {
+  if (entries.length === 0) return;
+  const { rowCount } = await client.query(
+    `WITH k AS (
+       SELECT * FROM unnest($1::text[], $2::text[], $3::text[], $4::timestamptz[], $5::text[], $6::text[], $7::text[])
+         AS k(dedupe_key, kind, title, happened_at, thread_key, raw_thread, from_email)
+     ),
+     near AS (
+       SELECT k.*, e.id, e.dedupe_key AS row_key, e.account_id, e.participants, e.metadata
+         FROM k JOIN human_activity_events e
+           ON e.source = 'gmail' AND e.kind = k.kind AND e.title = k.title
+          AND e.happened_at BETWEEN k.happened_at - INTERVAL '10 minutes' AND k.happened_at + INTERVAL '10 minutes'
+          AND e.metadata->>'threadId' IN (k.thread_key, k.raw_thread)
+          AND e.dedupe_key <> k.dedupe_key
+     ),
+     targets AS (
+       SELECT dedupe_key, min(id) AS target_id, count(*) AS n FROM near
+        WHERE row_key LIKE 'msg:%' AND account_id IS NOT NULL
+          AND metadata->>'rfcMessageId' IS NULL AND metadata->>'threadId' = thread_key
+          AND (kind = 'message.sent' OR metadata->>'handle' = from_email)
+        GROUP BY dedupe_key
+     ),
+     lookalikes AS (
+       SELECT dedupe_key, count(*) AS n FROM near
+        WHERE kind = 'message.sent' OR metadata->>'handle' = from_email
+           OR participants @> jsonb_build_array(jsonb_build_object('email', from_email))
+        GROUP BY dedupe_key
+     ),
+     picked AS (
+       SELECT t.target_id FROM targets t
+         JOIN lookalikes l ON l.dedupe_key = t.dedupe_key
+         JOIN human_activity_events h ON h.source = 'gmail' AND h.dedupe_key = t.dedupe_key AND h.account_id IS NULL
+        WHERE t.n = 1 AND l.n = 1
+        GROUP BY t.target_id HAVING count(*) = 1
+     )
+     DELETE FROM human_activity_events e USING picked p WHERE e.id = p.target_id`,
+    [
+      entries.map((e) => e.row.dedupeKey),
+      entries.map((e) => e.row.kind),
+      entries.map((e) => e.row.title),
+      entries.map((e) => e.row.happenedAt),
+      entries.map((e) => e.legacyMatch.threadKey),
+      entries.map((e) => String(e.row.metadata?.threadId ?? '')),
+      entries.map((e) => e.legacyMatch.fromEmail),
+    ],
+  );
+  if (rowCount > 0) console.log(`🗓️  Retired ${rowCount} pre-import live Gmail activity event(s) the Takeout import now records`);
 }
 
 // Insert one chunk of normalized rows; returns the count actually inserted.

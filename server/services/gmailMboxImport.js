@@ -22,7 +22,9 @@
  * stable), so re-importing the same export — or a newer overlapping one — is a
  * no-op via `recordEvents`'s `ON CONFLICT DO NOTHING`. Live Gmail sync keys its
  * rows on the same `gmail:<Message-ID>` (#15308), so an import overlapping
- * already-synced mail is a no-op too. Messages missing a
+ * already-synced mail is a no-op too. Rows live sync wrote before that, under
+ * a per-account key with no Message-ID, are matched by thread, subject, sender
+ * and time and retired with the insert (#15320, `recordEvents`). Messages missing a
  * Message-ID (rare — some drafts) fall back to a content hash of
  * (instant + from + subject). No AI-provider calls; parsing is deterministic and
  * LLM-free.
@@ -36,6 +38,7 @@ import path from 'path';
 
 import { ServerError } from '../lib/errorHandler.js';
 import { cleanMessageId } from '../lib/emailMessageId.js';
+import { gmailApiThreadIdFromThrid, gmailConversationThreadKey } from '../lib/gmailThreadKey.js';
 import { shortSummary, recordEvents } from './humanActivity.js';
 
 // ---------------------------------------------------------------------------
@@ -217,6 +220,10 @@ export function mboxMessageToCandidate(headerLines, { selfEmails = [] } = {}) {
     ? `gmail:${messageId}`
     : `gmail:h:${createHash('sha1').update(`${happenedAt}|${fromEmail}|${subject}`).digest('hex').slice(0, 24)}`;
 
+  // Live sync rows written before #15308 carry no Message-ID, so the only link
+  // back to them is the thread key derived from X-GM-THRID (#15320).
+  const liveThreadKey = gmailConversationThreadKey(gmailApiThreadIdFromThrid(threadId));
+
   const summary = direction === 'sent'
     ? (toList.length ? `To: ${toList.map((p) => p.name || p.email).slice(0, 3).join(', ')}` : '')
     : (fromList.length ? `From: ${fromList[0].name || fromList[0].email}` : '');
@@ -229,6 +236,7 @@ export function mboxMessageToCandidate(headerLines, { selfEmails = [] } = {}) {
     summary: shortSummary(summary),
     participants,
     dedupeKey,
+    ...(messageId && liveThreadKey ? { legacyGmailMatch: { threadKey: liveThreadKey, fromEmail } } : {}),
     metadata: {
       messageId: messageId || null,
       threadId,
