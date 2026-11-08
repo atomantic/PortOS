@@ -960,31 +960,54 @@ fi
 
 INSTALL_LTX25_CUDA="${INSTALL_LTX25_CUDA:-0}"
 if [[ "$INSTALL_LTX25_CUDA" == "1" ]]; then
+  # Reached only from explicit Install / Repair, never from PortOS boot.
   if is_macos; then
-    echo "❌ LTX-2.5 CUDA needs an NVIDIA GPU. On Apple Silicon use the LTX-2.5 MLX runtime instead." >&2
+    echo "❌ LTX-2.5 CUDA needs an NVIDIA GPU. On Apple Silicon use INSTALL_LTX25=1 (the MLX port) instead." >&2
+    exit 1
+  fi
+  if ! have uv; then
+    echo "❌ LTX-2.5 CUDA needs uv to provision its locked Python 3.11 runtime. Install uv and retry Repair." >&2
+    exit 1
+  fi
+  case "$(uname -m)" in
+    x86_64|amd64|AMD64) ;;
+    *) echo "❌ LTX-2.5 CUDA hash locks support x86_64 Windows/Linux only." >&2; exit 1 ;;
+  esac
+  LTX25_CUDA_TORCH_INDEX="${PORTOS_LTX25_CUDA_TORCH_INDEX:-https://download.pytorch.org/whl/cu126}"
+  if [[ "$LTX25_CUDA_TORCH_INDEX" != "https://download.pytorch.org/whl/cu126" ]]; then
+    echo "❌ LTX-2.5 CUDA is locked to cu126. Unset PORTOS_LTX25_CUDA_TORCH_INDEX for this runtime; see docs/LTX25_CUDA.md." >&2
     exit 1
   fi
   LTX25_CUDA_DIR="${HOME}/.portos/ltx-2.5-cuda"
   LTX25_CUDA_VENV="${LTX25_CUDA_DIR}/.venv"
-  LTX25_CUDA_REQS="${SCRIPT_DIR}/requirements-ltx25-cuda.txt"
-  LTX25_CUDA_TORCH_INDEX="${PORTOS_LTX25_CUDA_TORCH_INDEX:-https://download.pytorch.org/whl/cu128}"
-  mkdir -p "$LTX25_CUDA_DIR"
+  if is_windows; then
+    LTX25_CUDA_LOCK="${SCRIPT_DIR}/requirements-ltx25-cuda-windows.lock.txt"
+  else
+    LTX25_CUDA_LOCK="${SCRIPT_DIR}/requirements-ltx25-cuda-linux.lock.txt"
+  fi
+  mkdir -p "${LTX25_CUDA_DIR}"
   reset_universal_venv "$LTX25_CUDA_VENV" "$PYTHON_BIN"
+  # Locks target 3.11. Rebuild other minors and Conda bases whose DLL search
+  # path can prevent the Windows CUDA torch wheel from loading.
+  if venv_exists "$LTX25_CUDA_VENV"; then
+    LTX25_CUDA_PY="$(venv_python "$LTX25_CUDA_VENV")"
+    if ! "$LTX25_CUDA_PY" -c "import sys; from pathlib import Path; sys.exit(sys.version_info[:2] != (3, 11) or (Path(sys.base_prefix) / 'conda-meta').is_dir())"; then
+      echo "♻️ Rebuilding LTX-2.5 CUDA with its locked Python 3.11..."
+      uv venv --clear --managed-python --python 3.11 "$LTX25_CUDA_VENV"
+    fi
+  fi
   if ! venv_exists "$LTX25_CUDA_VENV"; then
-    echo "📦 Creating LTX-2.5 CUDA venv..."
-    "$PYTHON_BIN" -m venv "$LTX25_CUDA_VENV"
+    echo "📦 Creating LTX-2.5 CUDA venv (Python 3.11)..."
+    uv venv --managed-python --python 3.11 "$LTX25_CUDA_VENV"
   fi
   LTX25_CUDA_PY="$(venv_python "$LTX25_CUDA_VENV")"
-  "$LTX25_CUDA_PY" -m pip install --disable-pip-version-check --upgrade pip wheel setuptools
-  if is_windows; then
-    echo "📦 Installing LTX-validated CUDA torch 2.10 stack from ${LTX25_CUDA_TORCH_INDEX}..."
-    "$LTX25_CUDA_PY" -m pip install --upgrade --index-url "$LTX25_CUDA_TORCH_INDEX" "torch==2.10.0" "torchaudio==2.10.0" "torchvision==0.25.0"
-  else
-    "$LTX25_CUDA_PY" -m pip install --upgrade torch torchaudio torchvision
-  fi
-  echo "📦 Installing official LTX-2.5 CUDA packages..."
-  "$LTX25_CUDA_PY" -m pip install --upgrade --progress-bar on -r "$LTX25_CUDA_REQS"
+  echo "📦 Syncing the hash-pinned LTX-2.5 CUDA runtime..."
+  # Only the two hash-verified LTX archives may build. Bootstrap their sole
+  # backend from its own hash lock, then disable isolated build resolution.
+  uv pip install --require-hashes --only-binary :all: --no-deps --python "$LTX25_CUDA_PY" -r "${SCRIPT_DIR}/requirements-ltx25-cuda-build.lock.txt"
+  uv pip sync --require-hashes --only-binary :all: --no-binary ltx-core,ltx-pipelines --no-build-isolation --index-strategy unsafe-best-match --python "$LTX25_CUDA_PY" "$LTX25_CUDA_LOCK"
   pin_venv_arm64 "$LTX25_CUDA_VENV"
+
   probe_or_fail \
     "LTX-2.5 CUDA installed but its runtime probe failed." \
     "Check the CUDA torch and LTX package errors above, then use Repair in Video Gen." \

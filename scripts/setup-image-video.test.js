@@ -158,11 +158,6 @@ describe('setup-image-video venv layout handling (issue #4200)', () => {
     expect(source).toContain(`${python}="$(venv_python "$${venv}")"`);
   });
 
-  it('pins LTX-2.5 CUDA to Lightricks Desktop\'s validated Windows torch stack', () => {
-    expect(source).toContain('https://download.pytorch.org/whl/cu128');
-    expect(source).toContain('"torch==2.10.0" "torchaudio==2.10.0" "torchvision==0.25.0"');
-  });
-
   it('has no call site that hardcodes a venv interpreter path outside the shared helpers', () => {
     // A literal "$SOMETHING_VENV/bin/python3" assignment outside the helper
     // definitions means a call site bypassed venv_python() and reintroduced
@@ -726,6 +721,114 @@ describe('MiniMax H3 MLX hash-pinned lock', () => {
 
   it('installs the lock with --require-hashes so nothing resolves at install time', () => {
     expect(source).toMatch(/pip sync --require-hashes --python "\$MINIMAX_H3_PY" "\$MINIMAX_H3_LOCK"/);
+  });
+});
+
+describe('LTX-2.5 CUDA Install/Repair', () => {
+  const shell = resolveBashBinary();
+  const direct = readFileSync(join(REPO_ROOT, 'scripts/requirements-ltx25-cuda.txt'), 'utf8')
+    .split(/\r?\n/).filter((line) => /^[\w.-]+==/.test(line));
+
+  function installer(target) {
+    const home = mkdtempSync(join(tmpdir(), 'portos-ltx25-install-'));
+    tempVenvs.push(home);
+    const log = join(home, 'commands.log');
+    const stub = join(home, 'python-stub');
+    writeFileSync(stub, `#!/usr/bin/env bash
+printf 'python %s\\n' "$*" >> "$LOG"
+if [[ "$*" == *sys.version_info* ]]; then exit "\${COMPAT_EXIT:-0}"; fi
+if [[ "$*" == *DistilledPipeline* ]]; then exit "\${PROBE_EXIT:-0}"; fi
+exit 0
+`);
+    const run = (env = {}) => execFileSync(shell, ['-c', `
+set -euo pipefail
+export HOME="$TEST_HOME"
+uname() { if [[ "\${1:-}" == -m ]]; then echo x86_64; else echo "$TARGET"; fi; }
+uv() {
+  printf 'uv %s\\n' "$*" >> "$LOG"
+  if [[ "$1" == venv ]]; then
+    local root="\${@: -1}" layout=bin/python3
+    if [[ "$TARGET" == MINGW64_NT* ]]; then layout=Scripts/python.exe; fi
+    mkdir -p "$(dirname "$root/$layout")"
+    cp "$STUB" "$root/$layout"
+    chmod +x "$root/$layout"
+  elif [[ "$1 $2" == 'pip install' ]]; then
+    [[ "$*" == *'--require-hashes --only-binary :all: --no-deps'* && "$*" == *requirements-ltx25-cuda-build.lock.txt ]] || return 92
+    return "\${BUILD_EXIT:-0}"
+  elif [[ "$1 $2" == 'pip sync' ]]; then
+    return "\${SYNC_EXIT:-0}"
+  else
+    echo 'Unexpected unlocked install' >&2; return 91
+  fi
+}
+source "$1"
+`, 'bash', SETUP_SCRIPT.replaceAll('\\', '/')], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        ...Object.fromEntries(installFlags.map((flag) => [flag, '0'])),
+        TEST_HOME: home.replaceAll('\\', '/'),
+        PORTOS_DATA: join(home, 'data').replaceAll('\\', '/'),
+        LOG: log.replaceAll('\\', '/'), STUB: stub.replaceAll('\\', '/'),
+        TARGET: target === 'windows' ? 'MINGW64_NT-10.0' : 'Linux',
+        PYTHON_BIN: 'true', INSTALL_LTX25_CUDA: '1',
+        PORTOS_LTX25_CUDA_TORCH_INDEX: 'https://download.pytorch.org/whl/cu126',
+        ...env,
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    return { run, commands: () => readFileSync(log, 'utf8') };
+  }
+
+  it.each(['windows', 'linux'])('locks every %s distribution and uses that lock for fresh Install and Repair', (target) => {
+    const lock = readFileSync(join(REPO_ROOT, 'scripts', `requirements-ltx25-cuda-${target}.lock.txt`), 'utf8');
+    const requirements = lock.split(/\r?\n/).filter((line) => /^\w/.test(line));
+    const blocks = lock.match(/^[\w.-]+(?:==| @ )[^\n]+\n(?:[ \t]+[^\n]*\n?)*/gm) ?? [];
+    expect(blocks.length).toBe(requirements.length);
+    for (const block of blocks) expect(block).toMatch(/--hash=sha256:[0-9a-f]{64}/);
+    const pins = requirements.map((line) => line.replace(/\s*\\$/, ''));
+    for (const pin of direct) expect(pins).toContain(pin);
+    expect(lock).not.toMatch(/git\+/);
+    expect(lock.match(/#subdirectory=packages\/ltx-/g)).toHaveLength(2);
+    expect(lock).toContain('d151147788a9284cca791edc6ce898007e727fe6.tar.gz');
+    const backend = readFileSync(join(REPO_ROOT, 'scripts/requirements-ltx25-cuda-build.lock.txt'), 'utf8');
+    expect(backend.match(/^uv-build==[^\n]+\n(?:[ \t]+[^\n]*\n?)*/m)?.[0]).toBe(lock.match(/^uv-build==[^\n]+\n(?:[ \t]+[^\n]*\n?)*/m)?.[0]);
+    expect(lock.includes('nvidia-cuda-runtime-cu12==')).toBe(target === 'linux');
+
+    const install = installer(target);
+    expect(install.run()).toContain('LTX-2.5 CUDA runtime ready');
+    expect(install.run()).toContain('LTX-2.5 CUDA runtime ready');
+    const commands = install.commands().split('\n');
+    const syncs = commands.filter((line) => line.startsWith('uv pip'));
+    expect(syncs).toHaveLength(4);
+    for (const sync of syncs.filter((line) => line.startsWith('uv pip sync'))) {
+      expect(sync).toContain('pip sync --require-hashes --only-binary :all:');
+      expect(sync).toContain('--no-binary ltx-core,ltx-pipelines --no-build-isolation');
+      expect(sync).toContain('--python ');
+      expect(sync).toContain(`requirements-ltx25-cuda-${target}.lock.txt`);
+    }
+    expect(commands.filter((line) => line.startsWith('uv venv'))).toHaveLength(1);
+    expect(install.commands()).toContain('venv --managed-python --python 3.11');
+    expect(install.commands()).toContain('from ltx_pipelines.distilled import DistilledPipeline');
+    expect(install.commands()).toContain('assert torch.cuda.is_available()');
+    expect(install.commands()).not.toMatch(/--upgrade|git\+/);
+  });
+
+  it('rebuilds an incompatible existing interpreter before syncing during Repair', () => {
+    const install = installer('windows');
+    install.run();
+    expect(install.run({ COMPAT_EXIT: '1' })).toContain('Rebuilding LTX-2.5 CUDA');
+    expect(install.commands()).toContain('venv --clear --managed-python --python 3.11');
+  });
+
+  it.each([{ BUILD_EXIT: '41' }, { SYNC_EXIT: '42' }, { PROBE_EXIT: '43' }])('fails Install without reporting ready when sync or the CUDA probe fails (%j)', (failure) => {
+    const install = installer('linux');
+    let result;
+    try { install.run(failure); } catch (error) { result = error; }
+    expect(result).toBeDefined();
+    expect(result.stdout).not.toContain('LTX-2.5 CUDA runtime ready');
+    if (failure.PROBE_EXIT) expect(result.stderr).toContain('LTX-2.5 CUDA installed but its runtime probe failed');
+    else expect(install.commands()).not.toContain('DistilledPipeline');
   });
 });
 

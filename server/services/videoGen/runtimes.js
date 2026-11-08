@@ -269,7 +269,8 @@ export const BYOV_RUNTIME_INFO = Object.freeze({
     killProcessGroup: true,
     repoUrl: 'https://github.com/Lightricks/LTX-2',
     installSourceLabel: 'official Lightricks ltx-core / ltx-pipelines packages',
-    importProbe: 'import sys, torch; import ltx_core, ltx_pipelines; from ltx_pipelines.distilled import DistilledPipeline; assert torch.cuda.is_available(), "no CUDA device"; assert sys.platform != "win32" or torch.__version__ == "2.10.0+cu128", f"expected torch 2.10.0+cu128 on Windows, got {torch.__version__}"',
+    currencyProbeArgs: [join(PATHS.root, 'scripts', 'ltx25_cuda_currency.py'), join(PATHS.root, 'scripts', `requirements-ltx25-cuda-${process.platform === 'win32' ? 'windows' : 'linux'}.lock.txt`)],
+    importProbe: 'import torch; import ltx_core, ltx_pipelines; from ltx_pipelines.distilled import DistilledPipeline; assert torch.cuda.is_available(), "no CUDA device"',
     fingerprintPackages: ['torch', 'ltx-core', 'ltx-pipelines', 'transformers', 'accelerate', 'huggingface-hub'],
   },
   wan22_cuda: {
