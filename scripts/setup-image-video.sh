@@ -1061,21 +1061,16 @@ if [[ "$INSTALL_MUSICGEN" == "1" ]]; then
       "$PYTHON_BIN" -m venv "$MUSICGEN_VENV"
     fi
     echo "📦 Installing MusicGen (MLX) packages into ${MUSICGEN_VENV}..."
-    "$MUSICGEN_PY" -m pip install --upgrade pip wheel setuptools >/dev/null
+    # Install only from the hash-pinned lock (scripts/requirements-musicgen-mlx.lock.txt):
+    # no install-time resolution, so a new or compromised transitive release can't
+    # land on the next Repair. Direct pins: scripts/requirements-musicgen-mlx.txt.
     # mlx + numpy run the model; transformers (<5 for MLX compat) + sentencepiece
     # provide the T5 text conditioner's tokenizer; scipy is imported by the
     # mlx-examples musicgen utils. torch is required because MusicGen.from_pretrained
     # loads the upstream PyTorch checkpoints (torch.load) before converting to MLX —
     # without it generation fails at model-load even though the class imports fine.
     # We write WAV via the stdlib `wave` module in the sidecar, so no soundfile dep.
-    "$MUSICGEN_PY" -m pip install --upgrade \
-      mlx \
-      numpy \
-      torch \
-      "transformers<5" \
-      sentencepiece \
-      "huggingface_hub[hf_xet]" \
-      scipy
+    "$MUSICGEN_PY" -m pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-musicgen-mlx.lock.txt"
     pin_venv_arm64 "$MUSICGEN_VENV"
     # Verify BOTH that the class imports AND that torch loaded — the import alone
     # passed even when torch was missing, so install used to report ready and

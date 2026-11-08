@@ -1311,6 +1311,7 @@ describe('CI test impact planner', () => {
         'scripts/requirements-flux3-mlx.lock.txt',
         'scripts/requirements-minimax-h3-cuda.txt',
         'scripts/requirements-minimax-h3-mlx.lock.txt',
+        'scripts/requirements-musicgen-mlx.lock.txt',
         'scripts/requirements-wan22-cuda.txt',
       ];
       const owners = [
