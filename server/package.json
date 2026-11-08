@@ -43,9 +43,9 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.4",
-    "@vitest/coverage-v8": "5.0.5",
+    "@vitest/coverage-v8": "5.1.0",
     "eslint": "10.14.0",
-    "vitest": "5.0.5"
+    "vitest": "5.1.0"
   },
   "overrides": {
     "path-to-regexp": "8.4.2",
