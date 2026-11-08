@@ -25,7 +25,9 @@ export default function RunTaskButton({ taskType, apps, onTrigger, installWide =
   const ref = useRef(null);
   const triggerSeqRef = useRef(0);
   const triggerInFlightRef = useRef(false);
-  const activeApps = apps?.filter(app => !app.archived) || [];
+  const activeApps = (apps?.filter(app => !app.archived) || [])
+    .slice()
+    .sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' }));
   const disabled = !!disabledReason || triggering;
 
   // The app list is portaled to <body> and placed in viewport coordinates. This
