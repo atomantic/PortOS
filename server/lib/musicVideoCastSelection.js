@@ -78,7 +78,7 @@ export function musicVideoPrevizForActiveCast(project) {
   const cached = PREVIZ_FOR_CAST.get(previz);
   if (cached && cached.subjects === subjects) return cached.value;
   const active = activeMusicVideoSubjects(project?.concept).filter((subject) => subject.kind === 'character');
-  const byName = new Map(active.map((subject) => [subject.name?.trim(), subject.id]));
+  const byName = new Map(active.filter((subject) => subject.name?.trim()).map((subject) => [subject.name.trim(), subject.id]));
   const remap = new Map(subjects
     .filter((subject) => subject?.kind === 'character' && !active.includes(subject) && byName.has(subject.name?.trim()))
     .map((subject) => [subject.id, byName.get(subject.name.trim())]));
