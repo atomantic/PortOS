@@ -3,6 +3,8 @@ import PrevizCanvas from './PrevizCanvas.jsx';
 import ShotStepper, { shotNumbers } from './ShotStepper.jsx';
 import FrameStepper from './FrameStepper.jsx';
 import useMusicVideoGreyboxPlaces from '../../hooks/useMusicVideoGreyboxPlaces.js';
+import usePrevizWorld from '../../hooks/usePrevizWorld.js';
+import { worldClockText } from '../../../../server/lib/worldMap.js';
 import { previzFrameAt, previzPlaceGreybox } from '../../../../server/lib/musicVideoPreviz.js';
 import { aspectRatio } from '../../lib/greybox';
 import { sceneShotName } from '../../lib/musicVideoStages.js';
@@ -17,7 +19,8 @@ const PREVIZ_FPS = 24;
  * its set's greybox is drawn through the cut's camera with its people at their
  * marks, every animation frame while it plays. Nothing is rendered to a file,
  * so blocking edits show on the next play. `seekRequest` (`{ t, n }`) is the
- * shot-card seek the other preview sources honour.
+ * shot-card seek the other preview sources honour. A cut with a story time
+ * on the previz night plays the simulated night in the whole world instead.
  */
 export default function PrevizPlayer({ project, audioUrl, seekRequest, collapsed, onEditShot = null }) {
   const audioRef = useRef(null);
@@ -25,6 +28,8 @@ export default function PrevizPlayer({ project, audioUrl, seekRequest, collapsed
   const applied = useRef(null);
   const [time, setTime] = useState(0);
   const places = useMusicVideoGreyboxPlaces(project);
+  const { world, places: worldPlaces } = usePrevizWorld(project);
+  const nightWorld = useMemo(() => (world ? { world, places: worldPlaces } : null), [world, worldPlaces]);
   const scenes = project.scenes || [];
 
   useEffect(() => {
@@ -58,15 +63,16 @@ export default function PrevizPlayer({ project, audioUrl, seekRequest, collapsed
   }, []);
   const stepFrame = useCallback((t) => { audioRef.current?.pause?.(); seekTo(t); }, [seekTo]);
 
-  const frame = useMemo(() => previzFrameAt(project, places, time), [project, places, time]);
+  const frame = useMemo(() => previzFrameAt(project, places, time, nightWorld), [project, places, time, nightWorld]);
   const shot = frame?.cut.sceneId ? scenes.find((scene) => scene.sceneId === frame.cut.sceneId) : null;
   const number = shot ? shotNumbers(scenes).get(shot.sceneId) : null;
   const placeName = frame?.cut.placeSubjectId ? (project.concept?.subjects || []).find((s) => s.id === frame.cut.placeSubjectId)?.name : null;
   const ingredientId = frame?.cut.placeSubjectId ? (project.concept?.subjects || []).find((s) => s.id === frame.cut.placeSubjectId)?.ingredientId : null;
-  const model = ingredientId ? latestModel(places[ingredientId]?.media) : null;
+  const model = ingredientId && !frame?.world ? latestModel(places[ingredientId]?.media) : null;
   const loading = ingredientId && places[ingredientId] === undefined;
   const ratio = aspectRatio(frame?.camera.aspect || '16:9');
   const empty = !frame ? 'No previz cut here'
+    : frame.world ? null
     : !frame.cut.placeSubjectId ? 'This cut has no set; pick one on the Previz step'
       : loading ? 'Loading the set…'
         : !previzPlaceGreybox(project, frame.cut.placeSubjectId, places) ? `${placeName || 'This set'} has no greybox yet` : null;
@@ -84,7 +90,7 @@ export default function PrevizPlayer({ project, audioUrl, seekRequest, collapsed
           ? <p className="flex h-full items-center justify-center p-4 text-center text-xs text-port-text-muted">{empty}</p>
           : <PrevizCanvas frame={frame} modelSrc={model ? `/data/models/${encodeURIComponent(model.mediaKey)}` : null} labelPortal={labelPortal} />}
         {frame && <p className="port-media-overlay-strong pointer-events-none absolute left-1 top-1 max-w-[90%] truncate rounded px-1 text-[10px]">
-          {[placeName, frame.storyCamera?.name, frame.actors.find((a) => a.holder)?.name ? `held by ${frame.actors.find((a) => a.holder).name}` : null].filter(Boolean).join(' · ')}
+          {[frame.world ? worldClockText(frame.clockMinutes) : null, placeName, frame.storyCamera?.name, frame.actors.find((a) => a.holder)?.name ? `held by ${frame.actors.find((a) => a.holder).name}` : null].filter(Boolean).join(' · ')}
         </p>}
       </div>
       <ShotStepper scenes={scenes} time={time} onSeek={seekTo} onEditShot={onEditShot ? (sceneId) => { audioRef.current?.pause?.(); onEditShot(sceneId); } : null} keys />

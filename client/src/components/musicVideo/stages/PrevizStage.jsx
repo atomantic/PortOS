@@ -4,11 +4,13 @@ import { Box, Map as MapIcon, Play, RefreshCw, X } from 'lucide-react';
 import StageSection from '../StageSection.jsx';
 import toast from '../../ui/Toast';
 import useMusicVideoGreyboxPlaces from '../../../hooks/useMusicVideoGreyboxPlaces.js';
-import useCatalogPlaces from '../../../hooks/useCatalogPlaces.js';
+import usePrevizWorld from '../../../hooks/usePrevizWorld.js';
 import PrevizNight from './PrevizNight.jsx';
+import WorldMap, { fitWorldView } from '../../catalog/WorldMapView';
+import { nightActorsAt, nightClockAt, nightMinuteOfClock, previzNight } from '../../../../../server/lib/musicVideoPrevizNight.js';
 import { ingredientPath } from '../../../lib/creativeLibraries.js';
 import { createCatalogIngredient, saveCatalogWorld } from '../../../services/apiCatalog.js';
-import { draftWorldFromRouteMaps, placeWorld } from '../../../../../server/lib/worldMap.js';
+import { draftWorldFromRouteMaps, worldClockText } from '../../../../../server/lib/worldMap.js';
 import { sceneShotName } from '../../../lib/musicVideoStages.js';
 import { formatCount, formatTimecode } from '../../../utils/formatters.js';
 import { shotNumbers } from '../ShotStepper.jsx';
@@ -126,8 +128,51 @@ function CameraStyles({ cameras, onChange }) {
   );
 }
 
+/** A cut's moment on the previz night, and where an unheld camera stands for it (tap the map). */
+function CutOnNight({ project, cut, world, worldPlaces, onChange }) {
+  const night = previzNight(project);
+  const [picking, setPicking] = useState(false);
+  const [view, setView] = useState(() => fitWorldView(world));
+  const id = `mv-previz-${cut.id}-story`;
+  const on = Number.isFinite(cut.storyMin);
+  const spotActors = () => {
+    const actors = nightActorsAt(project, world, worldPlaces, cut.storyMin).map((actor) => ({ ...actor, color: '#d9dde3' }));
+    return cut.cameraSpot ? [...actors, { subjectId: 'camera-spot', name: 'Camera', position: [cut.cameraSpot[0], 0, cut.cameraSpot[1]], color: '#ffdd55' }] : actors;
+  };
+  return (
+    <div className="min-w-0 space-y-1.5">
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
+        <label className="flex items-center gap-1" htmlFor={id}>
+          <span className="text-port-text-muted">On the night at</span>
+          <input id={id} type="time" className={selectCls} value={on ? worldClockText(nightClockAt(night, cut.storyMin)) : ''}
+            onChange={(event) => {
+              const [h, m] = event.target.value.split(':').map(Number);
+              if (Number.isFinite(h) && Number.isFinite(m)) onChange({ storyMin: nightMinuteOfClock(night, h * 60 + m) });
+            }} />
+        </label>
+        {on
+          ? <button type="button" className={buttonCls} onClick={() => onChange({ storyMin: null })}>Off the night</button>
+          : <span className="text-port-text-muted">Not on the night: plays its set's own blocking</span>}
+        {on && !cut.holderSubjectId && (
+          <>
+            <button type="button" className={buttonCls} aria-pressed={picking} onClick={() => setPicking(!picking)}><MapIcon size={12} aria-hidden="true" /> {cut.cameraSpot ? 'Move camera spot' : 'Pick camera spot'}</button>
+            {cut.cameraSpot && <button type="button" className={buttonCls} onClick={() => onChange({ cameraSpot: null })}>Auto spot</button>}
+          </>
+        )}
+      </div>
+      {picking && on && !cut.holderSubjectId && (
+        <div className="max-w-sm space-y-1">
+          <p className="text-port-text-muted">Tap where the observer stands.</p>
+          <WorldMap world={world} places={worldPlaces} view={view} onView={setView} drawing={[]} actors={spotActors()}
+            onAddPoint={(point) => onChange({ cameraSpot: point })} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** One cut's row: the shot it plays, and its set, camera, holder, cast and aim pickers. */
-function CutRow({ project, cut, number, scene, places, characters, placeSubjects, onChange, onWatch }) {
+function CutRow({ project, cut, number, scene, places, characters, placeSubjects, world, worldPlaces, onChange, onWatch }) {
   const timing = previzCutTiming(project, cut);
   const problems = previzCutProblems(project, cut, places);
   const greybox = cut.placeSubjectId ? previzPlaceGreybox(project, cut.placeSubjectId, places) : null;
@@ -158,6 +203,7 @@ function CutRow({ project, cut, number, scene, places, characters, placeSubjects
         <Picker id={`${id}-aim`} label="Keep in frame" value={cut.aimSubjectId} options={others} empty="Camera's own aim"
           onChange={(aimSubjectId) => onChange({ aimSubjectId })} />
       </div>
+      {world && previzNight(project) && <CutOnNight project={project} cut={cut} world={world} worldPlaces={worldPlaces} onChange={onChange} />}
       {others.length > 0 && (
         <fieldset className="flex min-w-0 flex-wrap items-center gap-1.5">
           <legend className="sr-only">In shot</legend>
@@ -189,9 +235,7 @@ export default function PrevizStage({ board }) {
   const { project, locked, editProjectLocal, saveProjectFields, seekToScene } = board;
   const places = useMusicVideoGreyboxPlaces(project);
   const previz = projectPreviz(project);
-  const worldId = project.previz?.worldId || null;
-  const worldEntry = useCatalogPlaces(worldId ? [worldId] : [])[worldId];
-  const world = placeWorld(worldEntry?.ingredient);
+  const { worldId, entry: worldEntry, world, places: worldPlaces } = usePrevizWorld(project);
   const subjects = project.concept?.subjects || [];
   const characters = subjects.filter((subject) => subject.kind === 'character');
   const placeSubjects = subjects.filter((subject) => subject.kind === 'place');
@@ -237,7 +281,7 @@ export default function PrevizStage({ board }) {
         {world && (
           <section className="min-w-0 space-y-1" aria-label="Night">
             <h3 className="text-xs text-port-text-muted">Night</h3>
-            <PrevizNight project={project} world={world} locked={locked} onSave={(night) => savePrevizField({ night })} />
+            <PrevizNight project={project} world={world} places={worldPlaces} locked={locked} onSave={savePrevizField} />
           </section>
         )}
         {previz && (project.cameras || []).length > 0 && (
@@ -264,7 +308,7 @@ export default function PrevizStage({ board }) {
                 const scene = cut.sceneId ? scenes.find((entry) => entry.sceneId === cut.sceneId) : null;
                 return (
                   <CutRow key={cut.id} project={project} cut={cut} number={scene ? numbers.get(scene.sceneId) : null} scene={scene} places={places}
-                    characters={characters} placeSubjects={placeSubjects} onChange={(patch) => editCut(cut.id, patch)}
+                    characters={characters} placeSubjects={placeSubjects} world={world} worldPlaces={worldPlaces} onChange={(patch) => editCut(cut.id, patch)}
                     onWatch={(startSec) => seekToScene?.({ startSec }, { play: true })} />
                 );
               })}

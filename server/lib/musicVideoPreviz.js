@@ -12,7 +12,11 @@
  *   camera of the place (its framing and lens). `holderSubjectId` is the character
  *   holding the camera: the camera rides on that character's track, so it moves
  *   when they do. `visibleSubjectIds` null means everyone on the set except the
- *   holder. `aimSubjectId` is who the camera keeps in frame.
+ *   holder. `aimSubjectId` is who the camera keeps in frame. On a previz with a
+ *   world and a night (lib/musicVideoPrevizNight.js), `storyMin` is the story
+ *   minute the cut starts on that night: the cut then plays the simulated night
+ *   from there at real speed (one song second = one story second), and an unheld
+ *   camera stands at `cameraSpot` (`[x, z]` world meters) with a long lens.
  * - a track is where one character is in one place over time:
  *   `{ subjectId, placeSubjectId, keys: [{ timeSec, position, facingDegrees, pose }] }`,
  *   absolute song seconds, linearly interpolated, held before the first and after
@@ -24,6 +28,7 @@
 import { isPreMusicShot } from './musicVideoColdOpen.js';
 import { musicVideoShotPlaceId, projectRouteMaps } from './musicVideoRouteMaps.js';
 import { SHOT_CAMERA_SET_DOWN } from './musicVideoShotSheet.js';
+import { nightActorsAt, nightClockAt, previzNight } from './musicVideoPrevizNight.js';
 import { PREVIZ_CUTS_MAX, PREVIZ_KEYS_MAX, PREVIZ_PAWN_COLORS, PREVIZ_TRACKS_MAX } from './musicVideoPrevizLimits.js';
 
 const EYE_HEIGHT = { stand: 1.6, ride: 1.75 };
@@ -325,6 +330,57 @@ function styledCamera(camera, style, t, riding) {
   };
 }
 
+const NIGHT_HELD_LENS = 35;
+const NIGHT_OBSERVER_LENS = 85;
+// An observer with no spot picked stands this far off the people, to their right.
+const OBSERVER_DISTANCE = 30;
+
+/** The cut's frame on the night: everyone where the simulation has them, seen from the holder or the camera spot. */
+function nightFrame(project, cut, timing, songTime, t, style, storyCamera, nightWorld) {
+  const night = previzNight(project);
+  const storyMin = cut.storyMin + (t - timing.startSec) / 60;
+  const visibleIds = Array.isArray(cut.visibleSubjectIds) ? new Set(cut.visibleSubjectIds) : null;
+  const colors = previzPawnColors(project);
+  const actors = nightActorsAt(project, nightWorld.world, nightWorld.places, storyMin).map((actor) => ({
+    subjectId: actor.subjectId, name: actor.name, position: actor.position, facingDegrees: actor.facingDegrees, pose: actor.pose,
+    color: colors[actor.subjectId].figure.hex, bikeColor: colors[actor.subjectId].bike.hex,
+    holder: actor.subjectId === cut.holderSubjectId,
+    visible: actor.subjectId !== cut.holderSubjectId && (!visibleIds || visibleIds.has(actor.subjectId)),
+  }));
+  const aimActor = cut.aimSubjectId ? actors.find((actor) => actor.subjectId === cut.aimSubjectId) : null;
+  const aim = aimActor ? [aimActor.position[0], CHEST_HEIGHT[aimActor.pose], aimActor.position[2]] : null;
+  const holder = actors.find((actor) => actor.holder) || null;
+  const shown = actors.filter((actor) => actor.visible);
+  const center = shown.length ? [0, 1, 2].map((i) => shown.reduce((sum, actor) => sum + actor.position[i], 0) / shown.length) : null;
+  let camera;
+  if (holder) {
+    const position = [holder.position[0], EYE_HEIGHT[holder.pose], holder.position[2]];
+    const dir = facingDir(holder.facingDegrees);
+    camera = { position, target: aim || [position[0] + dir[0] * 5, position[1], position[2] + dir[2] * 5] };
+  } else {
+    const look = aim || (center ? [center[0], 1.2, center[2]] : [0, 1.2, 0]);
+    let spot = Array.isArray(cut.cameraSpot) ? cut.cameraSpot : null;
+    if (!spot) {
+      const lead = shown[0] || actors[0];
+      const right = lead ? [Math.cos(rad(lead.facingDegrees)), -Math.sin(rad(lead.facingDegrees))] : [1, 0];
+      spot = [look[0] + right[0] * OBSERVER_DISTANCE, look[2] + right[1] * OBSERVER_DISTANCE];
+    }
+    camera = { position: [spot[0], 1.6, spot[1]], target: look };
+  }
+  camera = styledCamera(camera, style, songTime, holder?.pose === 'ride');
+  if (camera.position.every((v, i) => Math.abs(v - camera.target[i]) < 1e-6)) camera.target = [camera.target[0], camera.target[1], camera.target[2] + 1];
+  return {
+    cut, timing, greybox: null, world: nightWorld.world, worldPlaces: nightWorld.places, storyMin, clockMinutes: nightClockAt(night, storyMin),
+    actors, style, storyCamera,
+    camera: { ...camera, focalLengthMm: holder ? NIGHT_HELD_LENS : NIGHT_OBSERVER_LENS, aspect: '16:9' },
+  };
+}
+
+/** Whether a cut plays on the night rather than on its set's own blocking. */
+function previzCutOnNight(project, cut, world) {
+  return !!(world && previzNight(project) && Number.isFinite(cut?.storyMin));
+}
+
 /**
  * Everything the player draws at song time `t`: the cut on screen, its place's
  * greybox, each person on that set (`visible` false for the holder and anyone
@@ -333,9 +389,12 @@ function styledCamera(camera, style, t, riding) {
  * way the holder faces; an unheld camera stays on its saved greybox camera and
  * turns only to keep the aim target in frame. The cut's story camera (its shot
  * sheet camera) sets the style: handheld shake, a still that holds the cut's
- * first frame, or a slow documentary drift. null between cuts.
+ * first frame, or a slow documentary drift. null between cuts. With
+ * `nightWorld` (`{ world, places }`, the previz world and its loaded sets) a cut
+ * with a story time plays the simulated night instead (frame `world` set,
+ * `greybox` null).
  */
-export function previzFrameAt(project, loadedPlaces, songTime) {
+export function previzFrameAt(project, loadedPlaces, songTime, nightWorld = null) {
   const entry = previzCutAt(project, songTime);
   if (!entry) return null;
   const { cut, timing } = entry;
@@ -343,6 +402,7 @@ export function previzFrameAt(project, loadedPlaces, songTime) {
   const style = storyCamera?.previzStyle || 'steady';
   // A still camera shows its cut's first frame for the whole cut.
   const t = style === 'still' ? timing.startSec : songTime;
+  if (previzCutOnNight(project, cut, nightWorld?.world)) return nightFrame(project, cut, timing, songTime, t, style, storyCamera, nightWorld);
   const greybox = cut.placeSubjectId ? previzPlaceGreybox(project, cut.placeSubjectId, loadedPlaces) : null;
   const view = (greybox?.shots || []).find((shot) => shot.id === cut.viewShotId) || null;
   const visible = new Set(previzCutVisibleIds(project, cut));
@@ -401,4 +461,46 @@ export function previzCutProblems(project, cut, loadedPlaces = {}) {
   const ids = new Set(characters(project).map((subject) => subject.id));
   if ([...(cut.visibleSubjectIds || []), cut.holderSubjectId, cut.aimSubjectId].some((id) => id && !ids.has(id))) problems.push('Names someone no longer in the video');
   return problems;
+}
+
+/**
+ * Gives cuts a story time on the night: shots in song order walk through the
+ * night's stays in order, and each run of shots at one set shares the next stay
+ * there, spread evenly across it. `onlyUnplaced` keeps cuts that already have a
+ * time. Returns `{ previz, placed }`.
+ */
+export function placePrevizCutsOnNight(project, world, { onlyUnplaced = false } = {}) {
+  const previz = projectPreviz(project);
+  const night = previzNight(project);
+  if (!previz || !night || !world) return { previz: previz || project?.previz || null, placed: 0 };
+  const stays = night.beats.filter((beat) => beat.kind === 'stay').sort((a, b) => a.startMin - b.startMin);
+  const setOfCut = (cut) => {
+    const subject = places(project).find((entry) => entry.id === cut.placeSubjectId);
+    return subject?.ingredientId ? (world.sets || []).find((set) => set.ingredientId === subject.ingredientId)?.id || null : null;
+  };
+  const ordered = previzTimedCuts(project);
+  const runs = [];
+  for (const { cut } of ordered) {
+    const setId = setOfCut(cut);
+    if (runs.at(-1)?.setId === setId) runs.at(-1).cuts.push(cut);
+    else runs.push({ setId, cuts: [cut] });
+  }
+  const times = new Map();
+  let at = 0;
+  for (const run of runs) {
+    if (!run.setId) continue;
+    const index = stays.findIndex((stay, i) => i >= at && stay.setId === run.setId);
+    if (index === -1) continue;
+    at = index + 1;
+    const stay = stays[index];
+    const span = stay.endMin - stay.startMin;
+    run.cuts.forEach((cut, i) => times.set(cut.id, round(stay.startMin + (span * i) / run.cuts.length)));
+  }
+  let placed = 0;
+  const cuts = previz.cuts.map((cut) => {
+    if (!times.has(cut.id) || (onlyUnplaced && Number.isFinite(cut.storyMin))) return cut;
+    placed += 1;
+    return { ...cut, storyMin: times.get(cut.id) };
+  });
+  return { previz: { ...previz, cuts }, placed };
 }

@@ -301,6 +301,9 @@ export const musicVideoPrevizSchema = z.object({
     // null = everyone on the set except the holder.
     visibleSubjectIds: z.array(previzSubjectId).max(PREVIZ_VISIBLE_MAX).nullable().optional(),
     aimSubjectId: previzSubjectId.nullable().optional(),
+    // Where the cut starts on the night (story minutes) and an unheld camera's spot on the world map.
+    storyMin: z.number().finite().min(0).max(NIGHT_LENGTH_MAX_MIN).nullable().optional(),
+    cameraSpot: z.tuple([z.number().finite().min(-5000).max(5000), z.number().finite().min(-5000).max(5000)]).nullable().optional(),
   }).strict().refine((cut) => cut.endSec > cut.startSec, { message: 'A previz cut must end after it starts' })).max(PREVIZ_CUTS_MAX),
   tracks: z.array(z.object({
     subjectId: previzSubjectId,

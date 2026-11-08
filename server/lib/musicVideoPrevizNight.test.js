@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { draftNightFromShots, nightActorsAt, nightBeatProblems, nightClockAt, nightMinuteOfClock } from './musicVideoPrevizNight.js';
 import { musicVideoPrevizSchema } from './musicVideoValidation.js';
+import { placePrevizCutsOnNight, previzFrameAt } from './musicVideoPreviz.js';
 
 const idMaker = () => { let n = 0; return () => `b${++n}`; };
 
@@ -101,5 +102,53 @@ describe('night clock', () => {
     const night = { startClock: 1200 };
     expect(nightClockAt(night, 300)).toBe(60);
     expect(nightMinuteOfClock(night, 60)).toBe(300);
+  });
+});
+
+describe('shots on the night', () => {
+  const night = {
+    startClock: 1200, lengthMin: 120,
+    beats: [
+      { id: 'a', kind: 'stay', subjectIds: ['c-a', 'c-b'], startMin: 0, endMin: 30, setId: 'home', toSetId: null, pace: null },
+      { id: 'b', kind: 'travel', subjectIds: ['c-a', 'c-b'], startMin: 30, endMin: 40, setId: 'home', toSetId: 'mall', pace: 'ride' },
+      { id: 'c', kind: 'stay', subjectIds: ['c-a', 'c-b'], startMin: 40, endMin: 120, setId: 'mall', toSetId: null, pace: null },
+    ],
+  };
+  const cut = (id, startSec, placeSubjectId, extra = {}) => ({ id, startSec, endSec: startSec + 4, placeSubjectId, ...extra });
+  const base = {
+    concept: { subjects },
+    previz: { cuts: [cut('k1', 0, 'p-home'), cut('k2', 4, 'p-home'), cut('k3', 8, 'p-mall'), cut('k4', 12, 'p-home')], tracks: [], night },
+  };
+  const nightWorld = { world, places: {} };
+
+  // Catches shots landing on the wrong stay, or a later return home reusing the first visit.
+  it('spreads each run of shots across its next stay in order, and skips shots with no stay left', () => {
+    const { previz, placed } = placePrevizCutsOnNight(base, world);
+    expect(placed).toBe(3);
+    expect(previz.cuts.map((entry) => entry.storyMin)).toEqual([0, 15, 40, undefined]);
+    expect(musicVideoPrevizSchema.safeParse(previz).success).toBe(true);
+    const kept = { ...base, previz: { ...base.previz, cuts: base.previz.cuts.map((entry) => (entry.id === 'k1' ? { ...entry, storyMin: 5 } : entry)) } };
+    expect(placePrevizCutsOnNight(kept, world, { onlyUnplaced: true }).previz.cuts[0].storyMin).toBe(5);
+  });
+
+  // Catches the night playing sped up, or a held camera not riding its holder.
+  it('plays a cut on the night at real speed from its holder, or from an observer spot on a long lens', () => {
+    const riding = { ...base, previz: { ...base.previz, cuts: [cut('k1', 0, 'p-home', { storyMin: 35, holderSubjectId: 'c-b' })] } };
+    const first = previzFrameAt(riding, {}, 0, nightWorld);
+    const later = previzFrameAt(riding, {}, 3, nightWorld);
+    expect(first).toMatchObject({ greybox: null, world, clockMinutes: 1235 });
+    const bo = first.actors.find((actor) => actor.subjectId === 'c-b');
+    expect(bo).toMatchObject({ holder: true, visible: false, pose: 'ride' });
+    expect(first.camera.position[0]).toBeCloseTo(bo.position[0]);
+    // Three song seconds are three story seconds: a 270 m/min ride covers about 13.5 m (here 300 m in 10 min).
+    const moved = Math.hypot(later.camera.position[0] - first.camera.position[0], later.camera.position[2] - first.camera.position[2]);
+    expect(moved).toBeGreaterThan(1);
+    expect(moved).toBeLessThan(3);
+    const observed = { ...base, previz: { ...base.previz, cuts: [cut('k1', 0, 'p-home', { storyMin: 50, cameraSpot: [260, 0] })] } };
+    const frame = previzFrameAt(observed, {}, 1, nightWorld);
+    expect(frame.camera).toMatchObject({ position: [260, 1.6, 0], focalLengthMm: 85 });
+    expect(frame.actors.every((actor) => actor.visible)).toBe(true);
+    // Without the world loaded the cut falls back to its set's own blocking.
+    expect(previzFrameAt(observed, {}, 1).world).toBeUndefined();
   });
 });
