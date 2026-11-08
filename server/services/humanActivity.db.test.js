@@ -320,15 +320,52 @@ describe.skipIf(!runDb)('stripParticipantsForAccount — send-as alias backfill 
 // index. Assert the PLAN, not a timing: plan shape is deterministic in CI,
 // elapsed time is not.
 describe.skipIf(!runDb)('source-scoped read plan (#5715)', () => {
-  // On a near-empty shared test table a sequential scan is genuinely the
-  // cheapest plan, so an unmodified EXPLAIN would prove nothing about the index.
-  // Disabling seqscan for the transaction makes the choice Postgres faces on a
-  // real, large table — this composite vs. the plain `happened_at` index —
-  // observable here.
-  const explainWithoutSeqScan = (sql, params) => withTransaction(async (client) => {
+  // The shared portos_test table's statistics move under concurrent suites
+  // (bulk inserts, afterAll deletes, autoanalyze), so the planner's choice
+  // between the competing indexes flaked (#15322). Plan against a temp table
+  // that copies the SHIPPED index definitions (LIKE ... INCLUDING INDEXES) but
+  // carries a fixed, freshly ANALYZEd row set, with seqscan and bitmap scans
+  // disabled so the choice is among index scans only.
+  const FIXTURE = 'ha_plan_fixture';
+  const BUSY = 'busy-source';
+  const QUIET = 'quiet-source';
+
+  // Temp-table copies get auto-generated index names, so match each by its
+  // definition (everything from USING on) against the shipped index's.
+  const indexTail = (def) => def.slice(def.indexOf(' USING '));
+  const explainOnFixture = (sql, params) => withTransaction(async (client) => {
+    await client.query(`CREATE TEMP TABLE ${FIXTURE} (LIKE human_activity_events INCLUDING INDEXES) ON COMMIT DROP`);
+    // A busy source with newer timestamps and several kinds, plus a quiet one
+    // whose events are all older: the case the composites exist for.
+    await client.query(
+      `INSERT INTO ${FIXTURE} (id, source, kind, happened_at, dedupe_key)
+       SELECT 'b' || g, $1, 'kind-' || (g % 4), TIMESTAMPTZ '2026-07-01' + g * INTERVAL '1 minute', 'b' || g
+       FROM generate_series(1, 4000) g`,
+      [BUSY],
+    );
+    await client.query(
+      `INSERT INTO ${FIXTURE} (id, source, kind, happened_at, dedupe_key)
+       SELECT 'q' || g, $1, 'kind-' || (g % 2), TIMESTAMPTZ '2026-01-01' + g * INTERVAL '1 minute', 'q' || g
+       FROM generate_series(1, 200) g`,
+      [QUIET],
+    );
+    await client.query(`ANALYZE ${FIXTURE}`);
     await client.query('SET LOCAL enable_seqscan = off');
+    await client.query('SET LOCAL enable_bitmapscan = off');
     const res = await client.query(`EXPLAIN (FORMAT JSON) ${sql}`, params);
-    return res.rows[0]['QUERY PLAN'][0].Plan;
+    const { rows: shipped } = await client.query(
+      `SELECT indexname, indexdef FROM pg_indexes
+       WHERE tablename = 'human_activity_events' AND schemaname = current_schema()`,
+    );
+    const { rows: copies } = await client.query(
+      `SELECT indexname, indexdef FROM pg_indexes WHERE tablename = $1`,
+      [FIXTURE],
+    );
+    const aliases = Object.fromEntries(shipped.flatMap((s) => {
+      const copy = copies.find((c) => indexTail(c.indexdef) === indexTail(s.indexdef));
+      return copy ? [[copy.indexname, s.indexname]] : [];
+    }));
+    return { plan: res.rows[0]['QUERY PLAN'][0].Plan, aliases };
   });
 
   const planNodes = (node) => [node, ...(node.Plans || []).flatMap(planNodes)];
@@ -337,35 +374,39 @@ describe.skipIf(!runDb)('source-scoped read plan (#5715)', () => {
   // LIMIT stops early. A bitmap scan feeding a Sort would still name the index
   // while re-reading and sorting every matching row — the exact regression this
   // pins — so assert an ordered Index Scan AND the absence of a Sort node.
-  const expectOrderedIndexScan = (plan, indexName) => {
+  const expectOrderedIndexScan = ({ plan, aliases }, indexName) => {
     const nodes = planNodes(plan);
-    expect(nodes.map((n) => n['Node Type'])).not.toContain('Sort');
-    expect(nodes.some((n) => /^Index (Only )?Scan$/.test(n['Node Type']) && n['Index Name'] === indexName))
-      .toBe(true);
+    const summary = nodes
+      .map((n) => (n['Index Name'] ? `${n['Node Type']}(${aliases[n['Index Name']] || n['Index Name']})` : n['Node Type']))
+      .join(' > ');
+    const types = nodes.map((n) => n['Node Type']);
+    expect(types, `plan: ${summary}`).not.toContain('Sort');
+    expect(
+      nodes.some((n) => /^Index (Only )?Scan$/.test(n['Node Type']) && aliases[n['Index Name']] === indexName),
+      `expected an ordered scan of ${indexName}; plan: ${summary}`,
+    ).toBe(true);
   };
 
   it('uses idx_human_activity_source_happened for a source-scoped newest-first read', async () => {
-    await recordEvents([mk({ dedupeKey: 'plan-1' }), mk({ dedupeKey: 'plan-2' })]);
-    const plan = await explainWithoutSeqScan(
-      `SELECT * FROM human_activity_events
+    const result = await explainOnFixture(
+      `SELECT * FROM ${FIXTURE}
        WHERE source = $1
        ORDER BY happened_at DESC
        LIMIT 50`,
-      [SOURCE],
+      [QUIET],
     );
-    expectOrderedIndexScan(plan, 'idx_human_activity_source_happened');
+    expectOrderedIndexScan(result, 'idx_human_activity_source_happened');
   });
 
   it('uses idx_human_activity_source_kind_happened when the read is also kind-scoped', async () => {
-    await recordEvents([mk({ dedupeKey: 'plan-kind-1' })]);
-    const plan = await explainWithoutSeqScan(
-      `SELECT * FROM human_activity_events
+    const result = await explainOnFixture(
+      `SELECT * FROM ${FIXTURE}
        WHERE source = $1 AND kind = $2
        ORDER BY happened_at DESC
        LIMIT 50`,
-      [SOURCE, 'message.received'],
+      [QUIET, 'kind-1'],
     );
-    expectOrderedIndexScan(plan, 'idx_human_activity_source_kind_happened');
+    expectOrderedIndexScan(result, 'idx_human_activity_source_kind_happened');
   });
 });
 
