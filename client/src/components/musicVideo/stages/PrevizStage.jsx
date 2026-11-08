@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { Box, Map as MapIcon, Play, RefreshCw, X } from 'lucide-react';
 import StageSection from '../StageSection.jsx';
+import { activeMusicVideoSubjects } from '../../../../../server/lib/musicVideoCastSelection.js';
 import toast from '../../ui/Toast';
 import useMusicVideoGreyboxPlaces from '../../../hooks/useMusicVideoGreyboxPlaces.js';
 import usePrevizWorld from '../../../hooks/usePrevizWorld.js';
@@ -246,7 +247,8 @@ export default function PrevizStage({ board }) {
   const previz = projectPreviz(project);
   const { worldId, entry: worldEntry, world, places: worldPlaces } = usePrevizWorld(project);
   const subjects = project.concept?.subjects || [];
-  const characters = subjects.filter((subject) => subject.kind === 'character');
+  // One entry per character: the alternate picked on the Story step.
+  const characters = activeMusicVideoSubjects(project.concept).filter((subject) => subject.kind === 'character');
   const placeSubjects = subjects.filter((subject) => subject.kind === 'place');
   const placesLoaded = placeSubjects.every((subject) => !subject.ingredientId || places[subject.ingredientId] !== undefined);
   const scenes = useMemo(() => project.scenes || [], [project.scenes]);
