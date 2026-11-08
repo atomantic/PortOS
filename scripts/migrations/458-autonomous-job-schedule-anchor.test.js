@@ -8,7 +8,7 @@ import { nextIntervalJobFireTime } from '../../server/services/autonomousJobs/sc
 
 const WEEK = 7 * 24 * 3_600_000;
 
-describe('migration 457 — autonomous job schedule anchors', () => {
+describe('migration 458 — autonomous job schedule anchors', () => {
   let rootDir, jobsPath;
 
   beforeEach(() => {
