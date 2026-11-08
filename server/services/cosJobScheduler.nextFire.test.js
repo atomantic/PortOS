@@ -139,4 +139,27 @@ describe('interval job + scheduledTime next fire (#15352)', () => {
     const job = { ...weekly(PDT('2026-10-23T03:01:00')), weekdaysOnly: true }; // Friday
     expect(await nextFire(job)).toBe(PDT('2026-10-26T03:00:00')); // next weekday 03:00
   });
+
+  it('snaps to the nearer HH:MM when a DST change makes the far side of the window nearer than 12h', async () => {
+    // Unsnapped due is Sat 2026-10-31 15:15 PDT. Sat 03:00 PDT is 12h15m earlier and
+    // Sun 03:00 PST (the day has 25 hours) is 12h45m later, so Saturday is nearest.
+    // A one-sided 12h window starts at Sat 03:15 and would skip Saturday.
+    const next = await nextFire(weekly(PDT('2026-10-24T15:15:00')));
+    expect(next).toBe(PDT('2026-10-31T03:00:00'));
+  });
+
+  it('a job that has never run projects now, not a 1970 instant, and still arms an immediate timer', async () => {
+    const now = PDT('2026-10-26T00:00:00');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(now);
+    const job = { id: 'job-never', interval: 'weekly', intervalMs: 7 * DAY, scheduledTime: '03:00', weekdaysOnly: false };
+    jobs.set(job.id, { ...job, enabled: true, name: job.id });
+    vi.mocked(scheduleEvent).mockClear();
+    await registerSingleJobSchedule(job.id);
+    expect(vi.mocked(scheduleEvent).mock.calls[0][0].delayMs).toBe(1000);
+    expect(computeNextJobRun(job, LA)).toBe(now);
+    // Even on a Saturday a weekdaysOnly job that never ran is due now, as before.
+    vi.setSystemTime(PDT('2026-10-24T12:00:00'));
+    expect(computeNextJobRun({ id: 'j', interval: '1d', intervalMs: DAY, weekdaysOnly: true }, LA)).toBe(PDT('2026-10-24T12:00:00'));
+  });
 });

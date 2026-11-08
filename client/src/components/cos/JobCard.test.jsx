@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 
 vi.mock('../ui/Toast', () => ({
   default: Object.assign(vi.fn(), { success: vi.fn(), error: vi.fn(), loading: vi.fn(), dismiss: vi.fn() })
@@ -203,5 +203,20 @@ describe('JobCard next-due from the server projection', () => {
     renderAt({ ...WEEKLY_JOB, lastRun: new Date(NOW - 7 * 24 * 3600000).toISOString(), nextRunAt: new Date(NOW + 3600000).toISOString() });
     expect(screen.queryByText('Due')).toBeNull();
     expect(screen.getByText('Next: in 1h')).toBeTruthy();
+  });
+
+  it('a never-run clock job shows its future server slot and no Due badge', () => {
+    renderAt({ ...WEEKLY_JOB, lastRun: null, nextRunAt: new Date(NOW + 5 * 3600000).toISOString() });
+    expect(screen.getByText('Next: in 5h')).toBeTruthy();
+    expect(screen.queryByText('Due')).toBeNull();
+  });
+
+  it('a never-run job with no projection falls back to Immediately / at HH:MM and badges Due', () => {
+    renderAt({ ...WEEKLY_JOB, lastRun: null, scheduledTime: null, nextRunAt: null });
+    expect(screen.getByText('Next: Immediately')).toBeTruthy();
+    expect(screen.getByText('Due')).toBeTruthy();
+    cleanup();
+    renderAt({ ...WEEKLY_JOB, lastRun: null });
+    expect(screen.getByText('Next: at 03:00')).toBeTruthy();
   });
 });

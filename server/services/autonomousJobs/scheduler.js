@@ -127,24 +127,36 @@ export function clockCronExpression(job) {
  *
  * Nearest, not next: a run stamped a minute after HH:MM (script jobs stamp
  * `lastRun` after the handler finishes) would otherwise round up a whole day,
- * sliding a weekly job one weekday later every cycle. Searching from
- * `nextDue - window` (half an interval, capped at 12h) also guarantees the result
- * is later than `lastRun` and leaves hourly jobs resolving to the next HH:MM.
+ * sliding a weekly job one weekday later every cycle. The search starts at
+ * `nextDue - window` (half an interval, capped at 13h), so every candidate is
+ * later than `lastRun` and hourly jobs still resolve to the next HH:MM. The cap
+ * is 13h, not 12h, and two consecutive HH:MM occurrences are compared: on a DST
+ * day they are 23h or 25h apart, so a one-sided 12h window could miss the nearer one.
  *
  * @param {Object} job - interval-mode job (finite `intervalMs`)
  * @param {string} timezone - IANA timezone for scheduledTime
  * @returns {number|null} UTC timestamp in milliseconds
  */
 export function nextIntervalJobFireTime(job, timezone) {
-  const lastRun = job.lastRun ? new Date(job.lastRun).getTime() : 0
+  // Never run: due now. The timer fires an overdue job at once; projecting
+  // lastRun = epoch 0 would publish a 1970 instant as the next run.
+  if (!job.lastRun) return Date.now()
+
+  const lastRun = new Date(job.lastRun).getTime()
   let nextDue = lastRun + job.intervalMs
 
   const match = job.scheduledTime && String(job.scheduledTime).match(/^([01]\d|2[0-3]):([0-5]\d)$/)
   if (match) {
-    const window = Math.min(12 * HOUR, job.intervalMs / 2)
-    const snapped = nextLocalTime(nextDue - window, Number(match[1]), Number(match[2]), timezone)
-    // DST nudging in nextLocalTime can move the result by up to an hour.
-    if (snapped > lastRun) nextDue = snapped
+    const hours = Number(match[1])
+    const minutes = Number(match[2])
+    const window = Math.min(13 * HOUR, job.intervalMs / 2)
+    const first = nextLocalTime(nextDue - window, hours, minutes, timezone)
+    const second = nextLocalTime(first + 60_000, hours, minutes, timezone)
+    // DST nudging in nextLocalTime can move a candidate by up to an hour.
+    const nearest = [first, second]
+      .filter(candidate => candidate > lastRun)
+      .sort((a, b) => Math.abs(a - nextDue) - Math.abs(b - nextDue))[0]
+    if (nearest !== undefined) nextDue = nearest
   }
 
   if (job.weekdaysOnly && Number.isFinite(nextDue)) {

@@ -171,6 +171,9 @@ export function ScheduleFields({ data, onChange, timezone }) {
   );
 }
 
+// null reads as the epoch to Date, so it must be excluded before the finite check.
+const hasNextRunAt = (job) => job.nextRunAt != null && Number.isFinite(new Date(job.nextRunAt).getTime());
+
 function formatNextDue(job) {
   // Cron jobs: show human-readable schedule (server computes exact next fire time)
   if (job.cronSchedule) return describeRecurrence(job.cronSchedule);
@@ -178,11 +181,13 @@ function formatNextDue(job) {
   // No recurrence — rendering lastRun + a null intervalMs would print 'Invalid Date'.
   if (isOnDemandSchedule(job)) return 'On demand';
 
+  // Interval jobs: the server projects the exact fire time (user timezone, DST,
+  // weekdaysOnly), so the card never re-derives it in the browser's zone. That
+  // holds for a never-run job too: a new daily clock job waits for its next slot.
+  if (hasNextRunAt(job)) return timeUntil(job.nextRunAt, 'Now');
   const { lastRun, scheduledTime } = job;
   if (!lastRun) return scheduledTime ? `at ${scheduledTime}` : 'Immediately';
-  // Interval jobs: the server projects the exact fire time (user timezone, DST,
-  // weekdaysOnly), so the card never re-derives it in the browser's zone.
-  return job.nextRunAt ? timeUntil(job.nextRunAt, 'Now') : 'Unknown';
+  return 'Unknown';
 }
 
 function getJobTypeLabel(job) {
@@ -404,7 +409,7 @@ export default function JobCard({
   };
 
   const isDue = job.enabled && !isOnDemandSchedule(job)
-    && (!job.lastRun || Boolean(job.nextRunAt && Date.now() >= new Date(job.nextRunAt).getTime()));
+    && (hasNextRunAt(job) ? Date.now() >= new Date(job.nextRunAt).getTime() : !job.lastRun);
 
   return (
     <div className={`flex flex-col bg-port-card border rounded-lg transition-colors ${
