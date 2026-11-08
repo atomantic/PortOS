@@ -17,6 +17,7 @@ import { attachSseClient as attachSse, closeJobAfterDelay, createJobFailureFinal
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { GEMINI_OMNI_WEB_MODEL, geminiWebAspectChoice } from '../../lib/geminiWebVideo.js';
 import { carriedPromptAdditions, sentPromptRecord } from '../../lib/modelInput.js';
+import { formatRetryWait, isTransientProviderError, runWithTransientRetry, TRANSIENT_RETRY_DELAYS_MS } from '../../lib/providerTransientRetry.js';
 import { videoGenEvents } from './events.js';
 import { CLOUD_RENDER_PHASE, discardUnpublishedVideo, emitCloudRenderStatus, finalizeGeneratedVideo } from './generateVideoHelpers.js';
 import { mutateVideoHistory } from './history.js';
@@ -113,6 +114,27 @@ const PHASE_STATUS = {
   fetch: { phase: CLOUD_RENDER_PHASE.FETCH, progress: 0.95, message: 'Downloading video…' },
 };
 
+// Only an answer in the chat with no clip is safe to resend: a timeout may still render and charge.
+const isBusyRefusal = (err) => err?.code === 'GEMINI_WEB_REFUSED' && isTransientProviderError(err);
+
+/** The wait between busy answers, on the card (structured `retry`) and in the queue (the line). */
+function reportRetryWait(job, jobId, { retry, retries, remainingMs }) {
+  const message = `Gemini is busy. Trying again in ${formatRetryWait(remainingMs)} (retry ${retry} of ${retries})…`;
+  videoGenEvents.emit('progress', {
+    generationId: jobId, progress: PHASE_STATUS.open.progress, step: 0, totalSteps: 1, message,
+    retry: { attempt: retry, of: retries, inMs: remainingMs, reason: 'busy' },
+  });
+  emitCloudRenderStatus(job, jobId, CLOUD_RENDER_PHASE.SUBMIT, message);
+}
+
+/** The job's error once Gemini stayed busy through every retry: what it said and that Retry is the next step. */
+export function busyExhaustedMessage(err) {
+  const retries = err?.transientRetriesExhausted;
+  if (!retries || !isBusyRefusal(err)) return err?.message || String(err);
+  const minutes = Math.round(TRANSIENT_RETRY_DELAYS_MS.slice(0, retries).reduce((sum, ms) => sum + ms, 0) / 60_000);
+  return `${err.message} (still busy after ${retries} retries over ${minutes} min; tap Retry to try again)`;
+}
+
 function reportPhase(job, jobId, name, sentAtMs) {
   const status = PHASE_STATUS[name] || {
     phase: CLOUD_RENDER_PHASE.RENDER,
@@ -149,13 +171,24 @@ async function runGeminiWebVideo(job, jobId, { prompt, aspectChoice, files, file
   try {
     if (entry.aborted) return finishFailure('Canceled');
     let sentAtMs = Date.now();
-    const { chatUrl } = await renderOnGeminiWeb({
+    const signal = entry.controller.signal;
+    // Gemini answers "at capacity" in the chat without rendering; each resend opens a fresh chat.
+    const { chatUrl } = await runWithTransientRetry(() => renderOnGeminiWeb({
       prompt, files, aspectChoice, outputPath,
       deadline: Date.now() + GEMINI_WEB_TIMEOUT_MS,
-      signal: entry.controller.signal,
+      signal,
       onPhase: (name) => {
         if (name === 'send') sentAtMs = Date.now();
         reportPhase(job, jobId, name, sentAtMs);
+      },
+    }), {
+      signal,
+      isTransient: isBusyRefusal,
+      onRetryWait: (wait) => {
+        if (wait.remainingMs === TRANSIENT_RETRY_DELAYS_MS[wait.retry - 1]) {
+          console.log(`🔁 Gemini busy [${jobId.slice(0, 8)}]: retry ${wait.retry} of ${wait.retries} in ${formatRetryWait(wait.remainingMs)}`);
+        }
+        reportRetryWait(job, jobId, wait);
       },
     });
     if (entry.aborted) {
@@ -178,7 +211,7 @@ async function runGeminiWebVideo(job, jobId, { prompt, aspectChoice, files, file
       maintenance.markResourceUnsettled('media', jobId);
       console.error(`❌ Gemini video publication cleanup failed [${jobId.slice(0, 8)}]: ${error.message}`);
     });
-    return finishFailure(err?.message || String(err));
+    return finishFailure(busyExhaustedMessage(err));
   }
 }
 

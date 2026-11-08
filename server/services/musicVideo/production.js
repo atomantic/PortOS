@@ -50,6 +50,7 @@ import { projectRevisions } from './revision.js';
 import { castAndSetsSettled } from './castAndSets.js';
 import { assertProductionApproval } from './productionReview.js';
 import { currentPilotPass, pilotClass, pilotInputBasis, pilotRepair, selectProductionPilots, stalePilotSlot } from './productionPilot.js';
+import { isTransientProviderError } from '../../lib/providerTransientRetry.js';
 
 const PRODUCTION_LIMIT_BOUNDS = Object.freeze({
   maxGenerations: Object.freeze({ min: 1, max: 500 }),
@@ -422,7 +423,8 @@ export const PRODUCTION_TRANSIENT_RETRIES = 2;
  * otherwise, so an input-caused or repeated failure still halts.
  */
 export function transientProductionRetry(run) {
-  const transient = (step) => step.status === 'failed' && TRANSIENT_FAILURE.test(step.error || '');
+  // A provider still busy after its lane's own retries is transient too.
+  const transient = (step) => step.status === 'failed' && (TRANSIENT_FAILURE.test(step.error || '') || isTransientProviderError(step.error || ''));
   const failed = (run?.steps || []).filter((s) => s.status === 'failed' && !(run.retryAcknowledged || []).includes(s.key));
   if (!failed.length || !failed.every((s) => ['frame', 'clip'].includes(s.kind) && transient(s))) return null;
   const spent = failed.some((s) => slotSteps(run, s.sceneId, s.kind, s.revisionId || null).filter(transient).length > PRODUCTION_TRANSIENT_RETRIES);
