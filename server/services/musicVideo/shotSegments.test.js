@@ -491,7 +491,7 @@ describe('renderSegment after a cancel', () => {
     expect(segmentRendering(segment)).toBe(false);
   });
 
-  it('stamps every rendering event of one attempt with the same startedAt', async () => {
+  it.skipIf(!hasFfmpeg)('stamps every rendering event of one attempt with the same startedAt', async () => {
     const id = 'mv-attempt-started-at';
     fixture.project = project({ id });
     const rendering = [];
