@@ -4,9 +4,8 @@ import { Html } from '@react-three/drei';
 import { GreyboxModel, PartMesh } from '../catalog/GreyboxViewer.jsx';
 import { WorldScene } from '../catalog/WorldViewer.jsx';
 import ErrorBoundary from '../ErrorBoundary';
-import { aspectRatio, fovFromFocalLength, partColor } from '../../lib/greybox';
+import { GREYBOX_SKY_COLOR, aspectRatio, fovFromFocalLength, partColor } from '../../lib/greybox';
 
-const BACKGROUND = '#1b1e24';
 const FIGURE_HEIGHT = 1.7;
 const rad = (deg) => (deg * Math.PI) / 180;
 const noop = () => {};
@@ -84,7 +83,7 @@ export default function PrevizCanvas({ frame, modelSrc = null, labelPortal }) {
         frameloop="demand"
         style={{ aspectRatio: aspectRatio(camera.aspect) }}
       >
-        <color attach="background" args={[BACKGROUND]} />
+        <color attach="background" args={[GREYBOX_SKY_COLOR]} />
         <ambientLight intensity={0.9} />
         <hemisphereLight args={['#ffffff', '#555a66', 0.6]} />
         <directionalLight position={[10, 18, 8]} intensity={1.4} />

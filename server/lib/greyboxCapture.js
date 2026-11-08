@@ -2,6 +2,10 @@
 export const DEFAULT_FOCAL_LENGTH_MM = 35;
 const CAPTURE_LONG_EDGE = 1280;
 
+// Daytime sky behind every capture. A dark backdrop hides dark poles and wires, so a painter
+// invents extra poles, lamps and wires on the wrong side of the street.
+export const GREYBOX_SKY_COLOR = '#b4d0ec';
+
 export function aspectRatio(aspect) {
   const [w, h] = String(aspect).split(':').map(Number);
   return w > 0 && h > 0 ? w / h : 16 / 9;

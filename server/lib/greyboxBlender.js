@@ -10,6 +10,7 @@
  */
 
 import { BLENDER_COMPAT_PY } from './blenderVersion.js';
+import { GREYBOX_SKY_COLOR } from './greyboxCapture.js';
 
 export const PHOTOREAL_ROLE_PREFIX = 'photoreal:';
 export const PHOTOREAL_ENGINES = Object.freeze(['eevee', 'cycles']);
@@ -33,6 +34,7 @@ export const photorealFlythroughFrameFile = (frame) => `frame-${String(frame).pa
 export function greyboxBlenderJob(scene, { shotIds, engine = 'eevee', samples, look = null, flythroughSeconds = null, useGpu, sceneOnly = false } = {}) {
   return {
     look,
+    skyColor: GREYBOX_SKY_COLOR,
     ...(sceneOnly ? { sceneOnly: true } : {}),
     flythrough: flythroughSeconds ? { fps: PHOTOREAL_FLYTHROUGH_FPS, frames: Math.round(flythroughSeconds * PHOTOREAL_FLYTHROUGH_FPS) } : null,
     engine: engine === 'cycles' ? 'CYCLES' : 'BLENDER_EEVEE_NEXT',
@@ -454,7 +456,7 @@ atmos = (look or {}).get('atmosphere', {})
 world = bpy.data.worlds.new('Blockout world')
 world.use_nodes = True
 background = world.node_tree.nodes['Background']
-background.inputs['Color'].default_value = srgb(atmos['worldColor']) if look else (0.05, 0.05, 0.06, 1)
+background.inputs['Color'].default_value = srgb(atmos['worldColor']) if look else srgb(job['skyColor'])
 background.inputs['Strength'].default_value = atmos.get('worldStrength', 1.0) if look else 1.0
 scene.world = world
 lights = collection('Blockout lights')

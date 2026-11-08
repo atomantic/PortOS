@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { spawnSync } from './childProcess.js';
-import { GREYBOX_BLENDER_PY } from './greyboxBlender.js';
+import { GREYBOX_BLENDER_PY, greyboxBlenderJob } from './greyboxBlender.js';
+import { GREYBOX_SKY_COLOR } from './greyboxCapture.js';
 
 const python = process.platform === 'win32' ? 'python' : 'python3';
 const hasPython = spawnSync(python, ['--version'], { encoding: 'utf8' }).status === 0;
@@ -39,5 +40,15 @@ describe('greybox Blender scene-only build', () => {
   it.skipIf(!hasPython)('saves without rendering and leaves ordinary camera renders intact', () => {
     const result = spawnSync(python, ['-c', SCENE_ONLY_HARNESS], { input: GREYBOX_BLENDER_PY, encoding: 'utf8', timeout: 10000 });
     expect(result.status, result.stderr).toBe(0);
+  });
+});
+
+describe('greybox sky', () => {
+  // Uniquely catches Blender renders and browser captures drifting onto different backdrops (#15327).
+  it('paints the unlit Blender world with the same pale sky the browser captures use, never a dark void', () => {
+    const channels = [1, 3, 5].map((i) => Number.parseInt(GREYBOX_SKY_COLOR.slice(i, i + 2), 16));
+    expect(Math.min(...channels)).toBeGreaterThan(150);
+    expect(greyboxBlenderJob({ parts: [], zones: [], landmarks: [], anchors: [], shots: [] }, { shotIds: [] }).skyColor).toBe(GREYBOX_SKY_COLOR);
+    expect(GREYBOX_BLENDER_PY).toContain("srgb(job['skyColor'])");
   });
 });

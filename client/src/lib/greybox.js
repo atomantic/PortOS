@@ -8,7 +8,7 @@
 import { GREYBOX_ASPECTS, GREYBOX_SHOT_ROLE_PREFIX } from '../../../server/lib/greyboxVocabulary.js';
 
 export { GREYBOX_ASPECTS };
-export { aspectRatio, fovFromFocalLength, DEFAULT_FOCAL_LENGTH_MM } from '../../../server/lib/greyboxCapture.js';
+export { aspectRatio, fovFromFocalLength, DEFAULT_FOCAL_LENGTH_MM, GREYBOX_SKY_COLOR } from '../../../server/lib/greyboxCapture.js';
 const DEFAULT_ZONE_COLOR = '#8a8f98';
 
 /** The role a shot's captured reference image carries on the place's media. */

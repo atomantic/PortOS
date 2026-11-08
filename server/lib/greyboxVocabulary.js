@@ -79,9 +79,16 @@ export function greyboxStreetPromptLines(scene, shot) {
     // Orient the axis canonically so the listing does not depend on part order.
     const axis = along[0] < 0 || (along[0] === 0 && along[1] < 0) ? along.map((v) => -v) : along;
     const ordered = [...poles].sort((a, b) => (a.position[0] * axis[0] + a.position[2] * axis[1]) - (b.position[0] * axis[0] + b.position[2] * axis[1]));
+    // Which side of the road the poles stand on, as the camera sees it, so a plate keeps them on one side.
+    const lateral = (part) => camera ? (part.position[0] - camera.origin[0]) * camera.right[0] + (part.position[2] - camera.origin[1]) * camera.right[1] : 0;
+    const onRight = ordered.filter((part) => lateral(part) > 0);
+    const onLeft = ordered.filter((part) => lateral(part) <= 0);
+    const oneSide = camera && (!onLeft.length || !onRight.length) ? ` on the viewer's ${onRight.length ? 'right' : 'left'} side of the street` : '';
+    const bothSides = camera && onLeft.length && onRight.length ? `, ${onLeft.length} on the viewer's left side of the street and ${onRight.length} on the right with each side's wires running along its own side` : '';
+    const rule = 'a pole never stands without wires and no wire crosses the road.';
     lines.push(poles.length === 1
-      ? `Utility pole ${nameList(ordered)} carries continuous overhead wires that run off past the pole on both sides; a pole never stands without wires.`
-      : `Utility poles ${nameList(ordered)} stand in one line along the road, joined pole to pole by continuous overhead wires that also run on past the end poles; a pole never stands without wires.`);
+      ? `Utility pole ${nameList(ordered)} stands${oneSide} and carries continuous overhead wires that run off past the pole both ways; ${rule}`
+      : `Utility poles ${nameList(ordered)} stand in one line along the road${oneSide ? `,${oneSide.replace(' on', ' all on')}` : bothSides}, joined pole to pole by continuous overhead wires that also run on past the end poles; ${rule}`);
   }
   const lamps = furniture('lamp');
   const mounts = new Set(lamps.map((part) => part.street.mount));
