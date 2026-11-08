@@ -67,6 +67,9 @@ describe('proposeShotSheet', () => {
     run.mockResolvedValue({ text: JSON.stringify({ shots: [{ sceneId: 'a', framePrompt: 'Short frame', prompt: 'Short clip' }] }) });
     const { shots } = await proposeShotSheet('p', { ...base, direction: 'tighten' });
     expect(shots).toEqual([{ sceneId: 'a', framePrompt: 'Short frame', prompt: 'Short clip' }]);
+    // A blank field is the template echoed back, not a request to wipe that prompt.
+    run.mockResolvedValue({ text: JSON.stringify({ shots: [{ sceneId: 'a', framePrompt: '', prompt: 'New clip' }] }) });
+    expect((await proposeShotSheet('p', { ...base, direction: 'tighten' })).shots).toEqual([{ sceneId: 'a', prompt: 'New clip' }]);
   });
   // Catches a rewrite replacing a sheet-built still's general prompt, which the director split out by hand.
   it('keeps a sheet-built still\'s frame prompt out of a rewrite', async () => {
