@@ -2,6 +2,7 @@ import { useState } from 'react';
 import MediaModePicker from './MediaModePicker.jsx';
 import VideoRenderSettings from './VideoRenderSettings.jsx';
 import RecordRenderPinRow from '../imageGen/RecordRenderPinRow.jsx';
+import PlateReviewerSetting from './PlateReviewerSetting.jsx';
 import ToggleChip from '../ui/ToggleChip.jsx';
 import Pill from '../ui/Pill.jsx';
 import { RenderStyleSelect } from './ProjectActionGroups.jsx';
@@ -134,6 +135,13 @@ export default function ProjectOptionsPanel({
         <span className={headCls}>Video service</span>
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <VideoRenderSettings videoSettings={videoSettings} generating={generatingVideos} project={project} />
+        </div>
+      </div>
+      <div className={rowCls}>
+        <span className={headCls}>Frame check</span>
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <PlateReviewerSetting project={project} onProjectUpdated={onProjectUpdated} />
+          <span className="text-xs text-port-text-muted">The vision model a frame take's Check button uses.</span>
         </div>
       </div>
       <div className={rowCls}>

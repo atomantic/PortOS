@@ -4,6 +4,7 @@ import ProjectOptionsPanel from './ProjectOptionsPanel.jsx';
 
 vi.mock('./VideoRenderSettings.jsx', () => ({ default: () => null }));
 vi.mock('../imageGen/RecordRenderPinRow.jsx', () => ({ default: () => null }));
+vi.mock('./PlateReviewerSetting.jsx', () => ({ default: () => null }));
 vi.mock('../../services/apiMusicVideo.js', () => ({ setMusicVideoFinishedOutside: vi.fn() }));
 import { setMusicVideoFinishedOutside } from '../../services/apiMusicVideo.js';
 

@@ -1836,7 +1836,14 @@ export const musicVideoProjectCreateSchema = z.object({
   creditsOutro: musicVideoCreditsOutroSchema.nullable().optional(),
 }).strict();
 
+// The vision model a frame take's Check uses; null = the default (Codex when ready, else an API provider).
+const musicVideoPlateReviewerSchema = z.object({
+  providerId: z.string().trim().min(1).max(200),
+  model: z.string().trim().max(200).nullable().optional(),
+}).strict();
+
 export const musicVideoProjectUpdateSchema = z.object({
+  plateReviewer: musicVideoPlateReviewerSchema.nullable().optional(),
   // The descriptions the editor started from, used only for conflict checks.
   catalogDescriptionBases: z.array(z.object({ subjectId: z.string().min(1).max(64), description: z.string().max(16000) }).strict()).max(24).optional(),
   festivalPacket: festivalPacketSchema.nullable().optional(),
