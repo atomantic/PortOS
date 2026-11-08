@@ -8,7 +8,7 @@ vi.mock('../../lib/streamingSpawn.js', () => ({ runStreamingCommand: (...args) =
 vi.mock('../../lib/platform.js', () => ({ isAppleSilicon: () => true }));
 vi.mock('node:os', async original => ({ ...await original(), release: () => '25.0.0' }));
 
-import { diagnoseFlux3Runtime, flux3Python, installFlux3Runtime } from './flux3Runtime.js';
+import { diagnoseFlux3Runtime, flux3Python, installFlux3Runtime, FLUX3_REQUIREMENTS } from './flux3Runtime.js';
 let restore;
 beforeEach(() => {
   restore = pinPlatform('darwin');
@@ -39,6 +39,10 @@ describe('isolated FLUX.3 runtime lifecycle', () => {
     const argv = command.mock.calls.map(([bin, args]) => [bin, ...args].join(' ')).join('\n');
     expect(argv).toContain('venv --python 3.12 --python-preference only-managed --allow-existing');
     expect(argv).toContain(`pip install --reinstall --python ${flux3Python()} mflux==0.23.0`);
+    // mflux leaves pillow open-ended and Pillow 13.0.0 cannot be imported on
+    // the managed Python 3.12, so the install and the probe both pin it.
+    expect(argv).toContain('pillow==12.3.0');
+    expect(FLUX3_REQUIREMENTS).toContain('pillow==12.3.0');
     expect(argv).not.toMatch(/snapshot_download|hf download|mflux-generate|--user/);
     expect(command.mock.calls[0][3].env).toMatchObject({ PYTHONNOUSERSITE: '1', PYTHONPATH: undefined, PYTHONHOME: undefined });
     expect(events.at(-1)).toMatchObject({ type: 'complete' });

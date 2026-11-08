@@ -247,6 +247,8 @@ export default function ImageGenFormEditor({ form, backend, generation }) {
             modelStatus={isLocalMode ? modelDownload.getStatus(fields.modelId) : null}
             onModelDownload={isLocalMode ? modelDownload.start : undefined}
             onModelDownloadCancel={modelDownload.cancel}
+            runtimeStatus={isLocalMode ? backend.status : null}
+            onRuntimeRemedy={backend.openRuntimeInstall}
             cloudModels={isAgyMode ? backend.agy.models : isFalMode ? FAL_IMAGE_MODEL_OPTIONS : isRunwayMode ? [...runwayCatalog.imageModels, ...(effectiveRunwayModel && !runwayCatalog.imageModels.some((m) => m.id === effectiveRunwayModel) ? [{ id: effectiveRunwayModel, label: `${effectiveRunwayModel} (unavailable)` }] : [])] : []}
             cloudModel={isRunwayMode ? effectiveRunwayModel : isFalMode ? effectiveFalModel : effectiveAgyModel}
             onCloudModelChange={isRunwayMode ? fields.setRunwayModel : isFalMode ? fields.setFalModel : fields.setAgyModel}

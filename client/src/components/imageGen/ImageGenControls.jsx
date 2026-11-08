@@ -12,7 +12,8 @@ import { Dice5 } from 'lucide-react';
 import { filterResolutions, MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS } from '../../lib/imageGenResolutions';
 import { randomSeed } from '../../lib/genUtils';
 import { RUNNER_FAMILIES } from '../../lib/runnerFamilies';
-import { IMAGE_GEN_MODE, isCloudCliMode } from '../../lib/imageGenBackends';
+import { IMAGE_GEN_MODE, IMAGE_RUNTIME_READINESS, imageGenReadiness, isCloudCliMode } from '../../lib/imageGenBackends';
+import { isSelfServeRuntimeRemedy } from './RuntimeRemedyModals';
 import { formatCount } from '../../utils/formatters';
 import ModelDownloadBadge, { deriveSizeEstimate } from '../media/ModelDownloadBadge';
 import ResolutionField from '../media/ResolutionField';
@@ -60,6 +61,11 @@ export default function ImageGenControls({
   modelStatus = null,
   onModelDownload,
   onModelDownloadCancel,
+  // The local runtime verdict for the picked model (GET /image-gen/status),
+  // so the badge never says "Available" over a runtime that cannot load the
+  // weights. `onRuntimeRemedy(kind)` performs a self-serve remedy in place.
+  runtimeStatus = null,
+  onRuntimeRemedy,
   // Per-render cloud-CLI model override. `cloudModels` is the live catalog —
   // an id outside it makes the CLI exit before generating, so the select only
   // renders once the probe has returned something AND the host wired
@@ -85,6 +91,13 @@ export default function ImageGenControls({
   const currentModel = remoteTargetActive ? null : models.find((m) => m.id === modelId);
   const isFlux2 = currentModel?.runner === RUNNER_FAMILIES.FLUX2;
   const isFlux3 = isLocal && currentModel?.runner === 'flux3';
+  // Only a verdict for THIS model counts: the page re-probes on every model
+  // change, and a stale answer for the previous pick must not relabel this one.
+  const runtimeIssue = runtimeStatus?.modelId === modelId
+    && imageGenReadiness(runtimeStatus) === IMAGE_RUNTIME_READINESS.UNAVAILABLE
+    ? runtimeStatus.reason || 'The local runtime failed its check.' : null;
+  const runtimeRepair = runtimeIssue && onRuntimeRemedy && isSelfServeRuntimeRemedy(runtimeStatus.remedy?.kind)
+    ? runtimeStatus.remedy : null;
   const isMoss = isLocal && currentModel?.runner === 'moss-swift';
 
   // Filter by backend; a stale w/h (e.g. Flux 2 → Flux 1 with 1536 still set)
@@ -126,6 +139,9 @@ export default function ImageGenControls({
               onDownload={() => onModelDownload(modelId)}
               onCancel={onModelDownloadCancel}
               estimateLabel={deriveSizeEstimate(currentModel?.name)}
+              runtimeIssue={runtimeIssue}
+              onRepairRuntime={runtimeRepair ? () => onRuntimeRemedy(runtimeRepair.kind) : undefined}
+              repairLabel={runtimeRepair?.label}
             />
           )}
         </FormField>
