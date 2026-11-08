@@ -87,6 +87,25 @@ export function previzPlaceGreybox(project, placeSubjectId, loadedPlaces = {}) {
   return greybox && typeof greybox === 'object' ? greybox : null;
 }
 
+/**
+ * The sets cuts play on that have no greybox, `[{ subject, cuts }]` in cast
+ * order with how many cuts use each. A set whose catalog place is still loading
+ * is left out, so a loading set never reads as missing.
+ */
+export function previzSetsWithoutGreybox(project, loadedPlaces = {}) {
+  const previz = projectPreviz(project);
+  if (!previz) return [];
+  const counts = new Map();
+  for (const cut of previz.cuts) {
+    if (cut.placeSubjectId) counts.set(cut.placeSubjectId, (counts.get(cut.placeSubjectId) || 0) + 1);
+  }
+  return places(project)
+    .filter((subject) => counts.has(subject.id))
+    .filter((subject) => !subject.ingredientId || loadedPlaces[subject.ingredientId] !== undefined)
+    .filter((subject) => !previzPlaceGreybox(project, subject.id, loadedPlaces))
+    .map((subject) => ({ subject, cuts: counts.get(subject.id) }));
+}
+
 /** A cut's span on the song clock: its linked shot's live timing, else its own. null when untimed. */
 export function previzCutTiming(project, cut) {
   const scene = cut?.sceneId ? (project?.scenes || []).find((entry) => entry.sceneId === cut.sceneId) : null;

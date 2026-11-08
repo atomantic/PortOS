@@ -289,6 +289,8 @@ const previzSubjectId = z.string().min(1).max(64);
 export const musicVideoPrevizSchema = z.object({
   // The catalog environment whose world map (lib/worldMap.js) the previz plays in; null/absent = none.
   worldId: z.string().min(1).max(128).nullable().optional(),
+  // When the cuts were last built or synced from the shots (the Previz step's "updated" time).
+  builtAt: z.string().datetime().nullable().optional(),
   cuts: z.array(z.object({
     id: z.string().min(1).max(64),
     // A linked shot; its live timing wins over the cut's own.

@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router';
-import { Box, Map as MapIcon, Play, RefreshCw, X } from 'lucide-react';
+import { AlertTriangle, Box, Loader2, Map as MapIcon, Play, RefreshCw, X } from 'lucide-react';
 import StageSection from '../StageSection.jsx';
 import toast from '../../ui/Toast';
 import useMusicVideoGreyboxPlaces from '../../../hooks/useMusicVideoGreyboxPlaces.js';
@@ -12,10 +12,10 @@ import { ingredientPath } from '../../../lib/creativeLibraries.js';
 import { createCatalogIngredient, saveCatalogWorld } from '../../../services/apiCatalog.js';
 import { draftWorldFromRouteMaps, worldClockText } from '../../../../../server/lib/worldMap.js';
 import { sceneShotName } from '../../../lib/musicVideoStages.js';
-import { formatCount, formatTimecode } from '../../../utils/formatters.js';
+import { formatCount, formatDateTime, formatTimecode } from '../../../utils/formatters.js';
 import { shotNumbers } from '../ShotStepper.jsx';
 import {
-  backfillPrevizFromShots, previzCutProblems, previzPawnColors, updatePrevizCut, previzCutTiming, previzCutVisibleIds, previzPlaceGreybox, projectPreviz,
+  backfillPrevizFromShots, previzCutProblems, previzPawnColors, updatePrevizCut, previzCutTiming, previzCutVisibleIds, previzPlaceGreybox, previzSetsWithoutGreybox, projectPreviz,
 } from '../../../../../server/lib/musicVideoPreviz.js';
 import { PREVIZ_CAMERA_STYLES, PREVIZ_PAWN_COLORS } from '../../../../../server/lib/musicVideoPrevizLimits.js';
 
@@ -62,6 +62,29 @@ function PawnColors({ project, characters, onChange }) {
 }
 
 const CAMERA_STYLE_LABELS = { steady: 'Steady', handheld: 'Handheld shake', still: 'Still (snapshot)', documentary: 'Documentary drift' };
+
+const plural = (count, word) => `${formatCount(count)} ${word}${count === 1 ? '' : 's'}`;
+
+/** The sets cuts play on that have no greybox, so those cuts play an empty set; each links to its Greybox panel. */
+function SetsWithoutGreybox({ sets }) {
+  if (!sets.length) return null;
+  return (
+    <section role="status" aria-label="Sets without a greybox" className="min-w-0 space-y-1 rounded border border-port-warning/50 p-2 text-xs">
+      <h3 className="flex items-center gap-1 font-medium text-port-warning"><AlertTriangle size={12} aria-hidden="true" /> Sets without a greybox</h3>
+      <p className="text-port-text-muted">These cuts play an empty set until the set has a greybox. Its Greybox panel can draft one.</p>
+      <ul className="flex min-w-0 flex-wrap gap-2">
+        {sets.map(({ subject, cuts }) => (
+          <li key={subject.id} className="inline-flex min-w-0 flex-wrap items-center gap-1">
+            {subject.ingredientId
+              ? <Link className={buttonCls} to={`${ingredientPath({ id: subject.ingredientId, type: 'place' })}/greybox`}>{subject.name}</Link>
+              : <span className="font-medium text-port-text">{subject.name} (not in the catalog)</span>}
+            <span className="text-port-text-muted">{plural(cuts, 'cut')}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
 
 const worldIdMaker = () => {
   const stamp = Date.now().toString(36);
@@ -247,16 +270,22 @@ export default function PrevizStage({ board }) {
   const numbers = useMemo(() => shotNumbers(scenes), [scenes]);
   const timedShots = scenes.filter((scene) => Number.isFinite(scene.startSec) && Number.isFinite(scene.endSec) && scene.endSec > scene.startSec).length;
   // Applied locally at once; the page serializes the saves.
-  const save = (next) => { editProjectLocal({ previz: next }); saveProjectFields({ previz: next }); };
+  const save = (next) => { editProjectLocal({ previz: next }); return saveProjectFields({ previz: next }); };
+  // The label of the save in flight ('Building…' / 'Syncing…'), null when idle.
+  const [building, setBuilding] = useState(null);
   // World and night can come before any cuts exist.
   const savePrevizField = (patch) => save({ ...(project.previz && Array.isArray(project.previz.cuts) ? project.previz : { cuts: [], tracks: [] }), ...patch });
   const build = () => {
-    const { previz: next, added, removed } = backfillPrevizFromShots(project, places);
-    save(next);
+    const { previz: built, added, removed } = backfillPrevizFromShots(project, places);
+    setBuilding(previz ? 'Syncing…' : 'Building…');
+    // saveProjectFields toasts its own failure and always settles.
+    Promise.resolve(save({ ...built, builtAt: new Date().toISOString() })).finally(() => setBuilding(null));
     toast.success(added || removed
-      ? `Previz: ${[added ? `${formatCount(added)} cut${added === 1 ? '' : 's'} added` : '', removed ? `${formatCount(removed)} removed` : ''].filter(Boolean).join(', ')}`
+      ? `Previz: ${[added ? `${plural(added, 'cut')} added` : '', removed ? `${formatCount(removed)} removed` : ''].filter(Boolean).join(', ')}`
       : 'Previz already matches the shots');
   };
+  const builtFrom = previz ? previz.cuts.filter((cut) => cut.sceneId).length : 0;
+  const missingGreybox = placesLoaded ? previzSetsWithoutGreybox(project, places) : [];
   // Seeds marks for anyone the edited cut now needs on its set, so the change plays at once.
   const editCut = (cutId, patch) => save(updatePrevizCut(project, { ...previz.cuts.find((cut) => cut.id === cutId), ...patch }, places));
   const sorted = useMemo(() => (previz?.cuts || [])
@@ -270,13 +299,19 @@ export default function PrevizStage({ board }) {
           A Three.js greybox of each set, cut to each shot's camera and played with the song in the preview. Nothing is rendered, so it's free to change.
         </p>
         <fieldset disabled={locked} className="flex min-w-0 flex-wrap items-center gap-2">
-          <button type="button" className={buttonCls} disabled={!timedShots || !placesLoaded} onClick={build}>
-            {previz ? <RefreshCw size={12} aria-hidden="true" /> : <Box size={12} aria-hidden="true" />}
-            {previz ? 'Sync with shots' : `Build previz from ${formatCount(timedShots)} shot${timedShots === 1 ? '' : 's'}`}
+          <button type="button" className={buttonCls} disabled={!timedShots || !placesLoaded || Boolean(building)} aria-busy={Boolean(building)} onClick={build}>
+            {building ? <Loader2 size={12} aria-hidden="true" className="animate-spin" /> : previz ? <RefreshCw size={12} aria-hidden="true" /> : <Box size={12} aria-hidden="true" />}
+            {building || (previz ? 'Sync with shots' : `Build previz from ${plural(timedShots, 'shot')}`)}
           </button>
           {!timedShots && <span className="text-xs text-port-text-muted">Time the shots on the Storyboard step first.</span>}
-          {timedShots > 0 && !placesLoaded && <span className="text-xs text-port-text-muted">Loading the sets…</span>}
+          {timedShots > 0 && !placesLoaded && <span className="inline-flex items-center gap-1 text-xs text-port-text-muted"><Loader2 size={12} aria-hidden="true" className="animate-spin" /> Loading the sets…</span>}
+          {previz && !building && (
+            <span role="status" className="text-xs text-port-text-muted">
+              {[`Built from ${plural(builtFrom, 'shot')}`, plural(previz.cuts.length, 'cut'), previz.builtAt ? `updated ${formatDateTime(previz.builtAt)}` : null].filter(Boolean).join(' · ')}
+            </span>
+          )}
         </fieldset>
+        <SetsWithoutGreybox sets={missingGreybox} />
         <fieldset disabled={locked} className="min-w-0 space-y-1">
           <legend className="text-xs text-port-text-muted">World</legend>
           <PrevizWorld project={project} worldId={worldId} entry={worldEntry} onPick={(next) => savePrevizField({ worldId: next })} />
