@@ -606,6 +606,22 @@ _SPLIT_PROMPT_REVISION = "57952288076766abe27dda3a774b2c24f7346977"
 _PROMPT_ENCODE_POLICY = {"mode": "resident", "calls": 0}
 
 
+def _eval_connector_on_cpu(extractor) -> None:
+    """Resolve lazily loaded connector weights on the CPU stream.
+
+    ``load_weights`` only registers lazy disk reads; left alone, the first GPU
+    projection is queued in a committed Metal command buffer that then blocks on
+    the disk read, and slow storage can outlast the macOS GPU watchdog
+    (``kIOGPUCommandBufferCallbackErrorTimeout``, SIGABRT).
+    """
+    import mlx.core as mx
+    from mlx.utils import tree_flatten
+
+    arrays = [v for _, v in tree_flatten(extractor.parameters()) if isinstance(v, mx.array)]
+    with mx.stream(mx.cpu):
+        mx.eval(arrays)
+
+
 def _split_prompt_runtime_supported(blocks) -> bool:
     """Accept the inspected 2.5 lifecycle; keep the shipped 2.3 path unchanged."""
     source = getattr(blocks, "__file__", None)
@@ -683,6 +699,7 @@ def configure_prompt_encode_policy(active: bool) -> None:
                 )
                 self._feature_extractor.connector.load_weights(list(weights.items()))
                 del weights
+                _eval_connector_on_cpu(self._feature_extractor)
                 video, audio = self._feature_extractor(hidden, attention_mask=mask)
                 blocks._materialize(video, audio)
                 _PROMPT_ENCODE_POLICY["calls"] += 1
