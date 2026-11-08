@@ -9,9 +9,9 @@ vi.mock('../../../hooks/useMusicVideoGreyboxPlaces.js', () => ({
 }));
 vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 vi.mock('../../../services/apiCatalog.js', () => ({
-  createCatalogIngredient: vi.fn(async (body) => ({ id: 'cat-town', ...body })),
-  saveCatalogTown: vi.fn(async (id, town) => ({ id, type: 'place', payload: { town } })),
-  listCatalogIngredientsByIds: vi.fn(async () => [{ id: 'cat-town', type: 'place', name: 'Example town' }]),
+  createCatalogIngredient: vi.fn(async (body) => ({ id: 'cat-world', ...body })),
+  saveCatalogWorld: vi.fn(async (id, world) => ({ id, type: 'place', payload: { world } })),
+  listCatalogIngredientsByIds: vi.fn(async () => [{ id: 'cat-world', type: 'place', name: 'Example world' }]),
 }));
 
 const project = {
@@ -39,14 +39,14 @@ it('builds a cut per shot from the shot list, then saves who is in shot from the
   expect(board.seekToScene).toHaveBeenCalledWith({ startSec: 0 }, { play: true });
 });
 
-// Catches the drafted town never reaching the catalog or never being picked for the previz.
-it('drafts a town environment from the route maps and links it to the previz', async () => {
-  const { saveCatalogTown } = await import('../../../services/apiCatalog.js');
+// Catches the drafted world never reaching the catalog or never being picked for the previz.
+it('drafts a world environment from the route maps and links it to the previz', async () => {
+  const { saveCatalogWorld } = await import('../../../services/apiCatalog.js');
   const routed = { ...project, title: 'Example', routeMaps: [{ id: 'r1', name: 'Ride', heading: 'east', stops: [{ id: 's1', subjectId: 'p-street' }] }] };
   const board = { project: routed, locked: false, editProjectLocal: vi.fn(), saveProjectFields: vi.fn(), seekToScene: vi.fn() };
   render(<MemoryRouter><PrevizStage board={board} /></MemoryRouter>);
-  fireEvent.click(screen.getByRole('button', { name: /Draft town from route maps/ }));
+  fireEvent.click(screen.getByRole('button', { name: /Draft world from route maps/ }));
   await waitFor(() => expect(board.saveProjectFields).toHaveBeenCalled());
-  expect(saveCatalogTown.mock.calls[0][1].sets).toEqual([expect.objectContaining({ ingredientId: 'cat-street' })]);
-  expect(board.saveProjectFields.mock.calls[0][0].previz).toMatchObject({ townId: 'cat-town', cuts: [] });
+  expect(saveCatalogWorld.mock.calls[0][1].sets).toEqual([expect.objectContaining({ ingredientId: 'cat-street' })]);
+  expect(board.saveProjectFields.mock.calls[0][0].previz).toMatchObject({ worldId: 'cat-world', cuts: [] });
 });

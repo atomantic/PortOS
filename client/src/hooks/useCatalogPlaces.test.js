@@ -9,7 +9,7 @@ vi.mock('../services/apiCatalog.js', () => ({
   listCatalogIngredientMedia: vi.fn(async (id) => { if (id === 'gone') throw new Error('Not found'); return []; }),
 }));
 
-// Catches one deleted place (or a town past the 50-id batch cap) turning every set into "missing".
+// Catches one deleted place (or a world past the 50-id batch cap) turning every set into "missing".
 it('marks only the removed place missing, across more ids than one batch read answers', async () => {
   const ids = [...Array.from({ length: 55 }, (_, i) => `p${String(i).padStart(2, '0')}`), 'gone'];
   const { result } = renderHook(() => useCatalogPlaces(ids));

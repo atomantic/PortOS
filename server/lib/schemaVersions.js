@@ -103,7 +103,7 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // edit and LWW the loss back. The catalog gate stays put, as for v15.
   // v21 = canon places and objects may carry a real-world `size` (scale cue for
   // renders). A <=v20 sanitizer strips it and would LWW the loss back.
-  // v22 = canon places may carry a `town` map (lib/townMap.js), mirrored like the
+  // v22 = canon places may carry a `world` map (lib/worldMap.js), mirrored like the
   // greybox (v15). A <=v21 `sanitizePlace` would strip it on an unrelated Universe
   // edit and LWW the loss back. The catalog gate stays put, as for v15.
   universes: 22,
@@ -879,8 +879,8 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // absent sends the blocking layout whenever the camera has figures and a photo plate.
   // v49 = the greybox previz (`previz`: cuts over the song and per-set blocking tracks) and each
   // camera's `previzStyle`, which a v48 strict project update / camera schema rejects. Optional, no backfill: absent means no previz.
-  // v50 = `previz.townId` (the catalog environment whose town map the previz plays
-  // in, lib/townMap.js), which a v49 strict previz schema rejects. Optional, no backfill.
+  // v50 = `previz.worldId` (the catalog environment whose world map the previz plays
+  // in, lib/worldMap.js), which a v49 strict previz schema rejects. Optional, no backfill.
   musicVideoProjects: 50,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,

@@ -55,7 +55,7 @@ import CatalogSheetsPanel, { ReferenceSheetPanel } from '../components/catalog/C
 import CatalogUnlockNotice from '../components/catalog/CatalogUnlockNotice';
 import CatalogPlatesPanel from '../components/catalog/CatalogPlatesPanel';
 import GreyboxPanel from '../components/catalog/GreyboxPanel';
-import TownPanel from '../components/catalog/TownPanel';
+import WorldPanel from '../components/catalog/WorldPanel';
 import PhotorealPanel from '../components/catalog/PhotorealPanel';
 import CatalogLooksPanel from '../components/catalog/CatalogLooksPanel';
 import CatalogDesignPanel from '../components/catalog/CatalogDesignPanel';
@@ -105,7 +105,7 @@ const DETAIL_TAB_ICONS = {
   plates: Clapperboard,
   greybox: Box,
   photoreal: Aperture,
-  town: MapIcon,
+  world: MapIcon,
   references: Images,
   images: ImageIcon,
 };
@@ -610,19 +610,19 @@ function IngredientEditor() {
     return true;
   }, [record, refreshRevisions, identityReadOnly]);
 
-  // The Greybox, Photoreal and Town tabs save straight onto the SAVED payload; copy just
+  // The Greybox, Photoreal and World tabs save straight onto the SAVED payload; copy just
   // those keys into the draft so the next profile Save does not write the old
   // layout or look back.
   const handleGreyboxSaved = useCallback((updated) => {
     const persisted = ingredientPayload(updated.payload);
     setRecord((prev) => (prev?.id === updated.id ? { ...prev, ...updated, payload: persisted } : prev));
     setPayload((cur) => {
-      const { greybox: _greybox, photoreal: _photoreal, town: _town, ...rest } = cur;
+      const { greybox: _greybox, photoreal: _photoreal, world: _world, ...rest } = cur;
       return {
         ...rest,
         ...(persisted.greybox ? { greybox: persisted.greybox } : {}),
         ...(persisted.photoreal ? { photoreal: persisted.photoreal } : {}),
-        ...(persisted.town ? { town: persisted.town } : {}),
+        ...(persisted.world ? { world: persisted.world } : {}),
       };
     });
     refreshRevisions();
@@ -1188,8 +1188,8 @@ function IngredientEditor() {
           />
         )}
 
-        {activeTab === 'town' && mediaReady && (
-          <TownPanel
+        {activeTab === 'world' && mediaReady && (
+          <WorldPanel
             key={record.id}
             record={record}
             readOnly={identityReadOnly}

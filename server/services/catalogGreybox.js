@@ -114,18 +114,18 @@ export async function saveGreybox(ingredientId, scene, { source = 'user' } = {})
 }
 
 /**
- * Store the place's town map (lib/townMap.js) under the row lock; `null` removes
- * it. The route's schema has validated it. A town names other places, never
+ * Store the place's world map (lib/worldMap.js) under the row lock; `null` removes
+ * it. The route's schema has validated it. A world names other places, never
  * itself, and must fit the payload cap like a greybox.
  */
-export async function saveTown(ingredientId, town, { source = 'user' } = {}) {
-  const updated = await catalogDB.setIngredientPayloadKey(ingredientId, 'town', town, {
+export async function saveWorld(ingredientId, world, { source = 'user' } = {}) {
+  const updated = await catalogDB.setIngredientPayloadKey(ingredientId, 'world', world, {
     source,
     guard: (current) => {
-      if (current.type !== 'place') throw refuse('A town map belongs to an environment', 'GREYBOX_NOT_A_PLACE');
-      if (town?.sets.some((set) => set.ingredientId === ingredientId)) throw refuse('A town cannot place itself as one of its sets', 'TOWN_SELF_SET');
-      if (town && JSON.stringify({ ...current.payload, town }).length > CATALOG_PAYLOAD_MAX_CHARS) {
-        throw refuse('This town is too large to store with the environment; remove some streets.', 'TOWN_TOO_LARGE', 413);
+      if (current.type !== 'place') throw refuse('A world map belongs to an environment', 'GREYBOX_NOT_A_PLACE');
+      if (world?.sets.some((set) => set.ingredientId === ingredientId)) throw refuse('A world cannot place itself as one of its sets', 'WORLD_SELF_SET');
+      if (world && JSON.stringify({ ...current.payload, world }).length > CATALOG_PAYLOAD_MAX_CHARS) {
+        throw refuse('This world is too large to store with the environment; remove some paths.', 'WORLD_TOO_LARGE', 413);
       }
     },
   });

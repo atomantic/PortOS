@@ -20,7 +20,7 @@ export default function useCatalogPlaces(ingredientIds = []) {
     if (!ids) return () => { active = false; };
     const selected = ids.split(',');
     Promise.all([
-      // The batch read caps each call at BATCH ids; a town can place more sets than that.
+      // The batch read caps each call at BATCH ids; a world can place more sets than that.
       Promise.all(Array.from({ length: Math.ceil(selected.length / BATCH) }, (_, i) => listCatalogIngredientsByIds(selected.slice(i * BATCH, (i + 1) * BATCH), { silent: true })))
         .then((pages) => pages.flat()),
       // A removed place 404s its media read; only that id should read as missing.
