@@ -1,11 +1,14 @@
 import { expect, it, vi } from 'vitest';
 import { waitFor } from '@testing-library/react';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import PrevizStage from './PrevizStage.jsx';
 
 vi.mock('../../../hooks/useMusicVideoGreyboxPlaces.js', () => ({
-  default: () => ({ 'cat-street': { ingredient: { type: 'place', payload: { greybox: { anchors: [], shots: [{ id: 'wide', label: 'Wide', position: [0, 2, 8], target: [0, 1, 0], figures: [] }] } } }, media: [] } }),
+  default: () => ({
+    'cat-street': { ingredient: { type: 'place', payload: { greybox: { anchors: [], shots: [{ id: 'wide', label: 'Wide', position: [0, 2, 8], target: [0, 1, 0], figures: [] }] } } }, media: [] },
+    'cat-alley': { ingredient: { type: 'place', payload: {} }, media: [] },
+  }),
 }));
 vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 vi.mock('../../../services/apiCatalog.js', () => ({
@@ -26,10 +29,11 @@ const project = {
 };
 
 // Catches the backfill or the per-shot cast picker never reaching the saved project.
-it('builds a cut per shot from the shot list, then saves who is in shot from the chips', () => {
+it('builds a cut per shot from the shot list, then saves who is in shot from the chips', async () => {
   const board = { project, locked: false, editProjectLocal: vi.fn(), saveProjectFields: vi.fn(), seekToScene: vi.fn() };
   const { rerender } = render(<MemoryRouter><PrevizStage board={board} /></MemoryRouter>);
   fireEvent.click(screen.getByRole('button', { name: /Build previz from 1 shot/ }));
+  await act(async () => {});
   const { previz } = board.saveProjectFields.mock.calls[0][0];
   expect(previz.cuts[0]).toMatchObject({ sceneId: 's1', viewShotId: 'wide', holderSubjectId: 'c-bo', visibleSubjectIds: ['c-ana'] });
 
@@ -90,4 +94,42 @@ it('places shots on the night and saves a cut\'s story time', async () => {
   const saves = board.saveProjectFields.mock.calls.length;
   fireEvent.change(screen.getByLabelText('On the night at'), { target: { value: '19:00' } });
   expect(board.saveProjectFields.mock.calls).toHaveLength(saves);
+});
+
+// Catches a build that gives no feedback: no busy state while it saves, no summary of what it built after.
+it('shows the build as busy until the save settles, then summarizes it with the time', async () => {
+  let settle;
+  const board = { project, locked: false, editProjectLocal: vi.fn(), saveProjectFields: vi.fn(() => new Promise((resolve) => { settle = resolve; })), seekToScene: vi.fn() };
+  const { rerender } = render(<MemoryRouter><PrevizStage board={board} /></MemoryRouter>);
+  fireEvent.click(screen.getByRole('button', { name: /Build previz from 1 shot/ }));
+  const busy = screen.getByRole('button', { name: /Building…/ });
+  expect(busy).toBeDisabled();
+  expect(busy).toHaveAttribute('aria-busy', 'true');
+  const { previz } = board.saveProjectFields.mock.calls[0][0];
+  expect(Number.isNaN(Date.parse(previz.builtAt))).toBe(false);
+
+  settle();
+  await waitFor(() => expect(screen.getByRole('button', { name: /Build previz from 1 shot/ })).not.toBeDisabled());
+  rerender(<MemoryRouter><PrevizStage board={{ ...board, project: { ...project, previz } }} /></MemoryRouter>);
+  expect(screen.getByText(/^Built from 1 shot · 1 cut · updated /)).toBeTruthy();
+  expect(screen.getByRole('button', { name: /Sync with shots/ })).not.toBeDisabled();
+});
+
+// Catches cuts on a set with no greybox playing an empty set with nothing on the Previz step saying so.
+it('lists the sets cuts use that have no greybox, with their cut counts and a link to each Greybox panel', () => {
+  const alley = { id: 'p-alley', kind: 'place', name: 'Example Alley', ingredientId: 'cat-alley' };
+  const cut = (id, placeSubjectId, startSec) => ({ id, sceneId: null, startSec, endSec: startSec + 2, placeSubjectId, viewShotId: null, holderSubjectId: null, visibleSubjectIds: null, aimSubjectId: null });
+  const withAlley = {
+    ...project,
+    concept: { subjects: [...project.concept.subjects, alley] },
+    previz: { cuts: [cut('k1', 'p-street', 0), cut('k2', 'p-alley', 2), cut('k3', 'p-alley', 4)], tracks: [] },
+  };
+  const board = { project: withAlley, locked: false, editProjectLocal: vi.fn(), saveProjectFields: vi.fn(), seekToScene: vi.fn() };
+  render(<MemoryRouter><PrevizStage board={board} /></MemoryRouter>);
+  const list = screen.getByRole('status', { name: 'Sets without a greybox' });
+  const link = within(list).getByRole('link', { name: 'Example Alley' });
+  expect(link.getAttribute('href')).toMatch(/\/cat-alley\/greybox$/);
+  expect(within(list).getByText('2 cuts')).toBeTruthy();
+  // The street has a greybox, so it is not listed.
+  expect(within(list).queryByText('Example Street')).toBeNull();
 });
