@@ -281,6 +281,7 @@ export * from './modelInventory.js';
 export * from './meatspaceRowIdentity.js';
 export * from './meetingUrl.js';
 export * from './minimaxH3Memory.js';
+export * from './lipsyncAlign.js';
 export * from './videoContinuity.js';
 export * from './videoContinuationProvenance.js';
 export * from './videoDisclosure.js';

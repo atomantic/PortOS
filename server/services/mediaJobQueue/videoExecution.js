@@ -45,9 +45,19 @@ const terminationSchema = z.object({
   observedAt: z.string().datetime(),
 });
 
+// Post-render a2v mouth-lead correction (lib/lipsyncAlign.js). `reason` is one of
+// that module's fixed tokens; the bounded pattern keeps this module light.
+const lipsyncAlignSchema = z.object({
+  shiftFrames: z.number().int().min(0).max(16),
+  lag: z.number().int().min(-16).max(16).nullable(),
+  peakScore: z.number().finite().min(-1).max(1).nullable(),
+  reason: z.string().regex(/^[a-z][a-z-]{0,31}$/),
+});
+
 export const videoExecutionDiagnosticsSchema = z.object({
   memory: memorySchema.optional(),
   termination: terminationSchema.optional(),
+  lipsyncAlign: lipsyncAlignSchema.optional(),
 });
 
 export const videoExecutionSchema = z.object({

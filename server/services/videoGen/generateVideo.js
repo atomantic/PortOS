@@ -889,6 +889,7 @@ async function renderLocalVideo(preparation, { pythonPath, prompt, negativePromp
       extendSplice: mode === 'extend' && extendFromVideoPath && (!hidden || keepExtendSource) && !batch && supportsContextWindow(model)
         ? { runtime: model.runtime, sourcePath: extendFromVideoPath, extendLatents: extendLatentFrames(parsedNumFrames, model.runtime), keepMaster: !hidden }
         : null,
+      lipsyncAlign: mode === 'a2v' && !batch,
     },
   });
 
