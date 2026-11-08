@@ -853,6 +853,68 @@ that could be better.
 For each finding: the view, the exact steps to reproduce, what happens, what
 should happen, and the \`file:LINE\` of the cause once you have traced it.`,
 
+  'app-bugs': `[Improvement: {appName}] App and server bug hunt
+
+Find the behavior bugs in {appName}'s server and core logic that a user would
+hit before you do: wrong results, broken edge cases, and the races its real
+usage can trigger.
+
+Repository: {repoPath}
+
+{modeInstructions}
+
+## Work from what the app promises
+
+Inventory the user-facing workflows the server owns: its routes and their
+handlers, background and scheduled jobs, imports and syncs, and any CLI the
+project documents. For each, read what it promises (the requirements, PRD,
+spec or design docs, route name, tests, the UI control that calls it), then
+trace the code that keeps the promise and look for where it does not.
+
+Run the project's own tests for the slice you review. When the app is running
+and a read-only request settles a question, make it; never write to the live
+install's real records to prove a bug. Reproduce a write-path bug with a
+focused test or a scratch data directory instead.
+
+## Hunt for
+
+- **Wrong results** — a calculation, filter, sort, merge, or status that is
+  wrong for an ordinary input: an inverted condition, a field read from the
+  wrong record, a default that overrides a real value.
+- **Edge inputs real users send** — empty, missing, very long, non-ASCII, a
+  duplicate name, a zero or negative number, the first and last item, a date
+  across midnight or a time zone. Check the input the UI or an import actually
+  produces, not every type the code could in theory receive.
+- **Success that did nothing** — a handler that answers 200 while the write,
+  job, or side effect it promises was skipped, partial, or failed.
+- **State machines that wedge** — a status that can be entered but never left,
+  a retry that repeats a completed step, a cancel that leaves work running.
+- **Races the user can actually trigger** — the same action fired twice (double
+  click, retry after a timeout), two tabs or devices on one record, a scheduled
+  or background job running while the user edits what it touches, two jobs
+  sharing one file, record, or external resource, a peer sync landing mid-edit,
+  a restart in the middle of a multi-step operation.
+- **Contract drift between producer and consumer** — the client, a job, or a
+  peer reading a field the server renamed, stopped sending, or sends in another
+  shape.
+
+## Not yours — name the overlap and move on
+
+Crashes and console errors seen while walking the interface belong to the
+UI-bug and console-error work; code-shape defects such as missing awaits, leaks,
+and unguarded nulls to the runtime-safety work; lost updates on a persisted
+record to the data-integrity work; per-call failure handling to the
+failure-path work; workflows stranded with no resume or cancel to the
+workflow-recovery work.
+
+## The bar: a user could hit it
+
+Every finding states the user action or job that triggers it, the inputs or
+interleaving, what happens, and what should happen. A race must name both
+actors and how they come to overlap in real use. Cite \`file:LINE\` for the
+defect and for the route, job, or control that reaches it. If you cannot
+describe how a user or a job of this app reaches the bug, drop it.`,
+
   'mobile-responsive': `[Improvement: {appName}] Mobile and Responsive Audit
 
 Check that {appName} is usable on a small screen and a touch device, not merely
@@ -2222,11 +2284,12 @@ serves stays correct — no duplicates, no silent loss, no quietly wrong results
 — under the retries, redeliveries, crashes, and concurrency it will actually
 see.
 
-**Proportionality boundary (single-user local install + explicit peer sync):**
-Do NOT recommend distributed commit protocols, multi-writer CAS/optimistic-locking
-ceremonies, hardlink inode anchors, or SHA-256 transfer manifests for local
-internal state where a PostgreSQL transaction or \`writeJsonAtomic\` suffices.
-Ephemeral runtime state, git worktrees, and caches are out of scope.
+**Proportionality boundary:** judge every interleaving against the deployment
+model in the reachability check below. Do NOT recommend distributed commit
+protocols, multi-writer CAS/optimistic-locking ceremonies, hardlink inode
+anchors, or transfer manifests where a database transaction or an atomic file
+rename suffices for the writers that model actually has. Ephemeral runtime
+state, git worktrees, and caches are out of scope.
 
 Repository: {repoPath}
 
@@ -2244,7 +2307,7 @@ with itself.
   at-least-once queue, a retried request, or a re-run job that inserts again
   instead of upserting by a natural or idempotency key, producing duplicates.
 - **Partial writes visible to readers** — a multi-object or multi-table write
-  with no database transaction or atomic file rename (\`writeJsonAtomic\`), so a
+  with no database transaction or atomic file rename, so a
   crash or a concurrent reader sees half a write as if it were whole.
 - **Lost updates** — read-modify-write on shared records with no transaction or
   in-process write serialization where two local paths race.
