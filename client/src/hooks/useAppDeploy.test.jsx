@@ -18,7 +18,8 @@ const NOT_CONFIRMED = 'Lost connection before the server confirmed this deploy s
 const fire = (event, payload) => act(() => { socketHandlers.get(event)(payload); });
 const listRequests = () => emitted.filter(e => e.event === 'app:operations:list').length;
 const active = (...operations) => fire('app:operations:active', { operations });
-const liveDeploy = (appId = 'app-a') => ({ appId, appName: 'Example App', type: 'deploy', steps: [] });
+const liveDeploy = (appId = 'app-a', startedAt = 1000, steps = []) => ({ appId, appName: 'Example App', type: 'deploy', startedAt, steps });
+const step = (message) => ({ step: message, status: 'running', message });
 
 describe('useAppDeploy', () => {
   beforeEach(() => {
@@ -88,9 +89,10 @@ describe('useAppDeploy', () => {
     expect(result.current.result).toBeNull();
   });
 
-  it('settles on the terminal frame, and a stale snapshot still listing the run cannot resurrect it', () => {
+  it('settles on the terminal frame, and a trailing snapshot listing the finished run cannot resurrect it', () => {
     const { result } = renderHook(() => useAppDeploy('app-a'));
     act(() => result.current.startDeploy());
+    active(liveDeploy('app-a', 1000));
     fire('app:deploy:status', { appId: 'app-a', message: 'Starting deploy...', phase: 'start' });
 
     fire('app:deploy:complete', { appId: 'app-a', success: true, code: 0 });
@@ -98,17 +100,80 @@ describe('useAppDeploy', () => {
     expect(result.current.result).toEqual({ appId: 'app-a', success: true, code: 0 });
 
     // A snapshot generated before the run ended arrives after its terminal frame.
-    active(liveDeploy());
+    active(liveDeploy('app-a', 1000));
     expect(result.current.isDeploying).toBe(false);
-    // The registry's end broadcast then arrives: no spurious lost-connection message.
+    // The registry's end broadcast does not clear the tombstone: a later
+    // trailing snapshot is still ignored, with no spurious lost-connection message.
     active();
+    active(liveDeploy('app-a', 1000));
     expect(result.current.isDeploying).toBe(false);
     expect(result.current.error).toBeNull();
+    expect(result.current.result).not.toBeNull();
 
-    // After the end broadcast a new deploy elsewhere can be followed again.
-    active(liveDeploy());
+    // A genuinely new run (different startedAt) is followed again.
+    active(liveDeploy('app-a', 2000));
     expect(result.current.isDeploying).toBe(true);
     expect(result.current.result).toBeNull();
+  });
+
+  it('a later run listed after a finished one replaces the old log instead of keeping its output', () => {
+    const { result } = renderHook(() => useAppDeploy('app-a'));
+    act(() => result.current.startDeploy());
+    active(liveDeploy('app-a', 1000));
+    fire('app:deploy:output', { appId: 'app-a', text: 'old run\n', stream: 'stdout', timestamp: 1 });
+    fire('app:deploy:complete', { appId: 'app-a', success: false, code: 1 });
+    active();
+    expect(result.current.output.map(o => o.text)).toEqual(['old run\n']);
+
+    active(liveDeploy('app-a', 2000, [step('Starting deploy...')]));
+    expect(result.current.isDeploying).toBe(true);
+    expect(result.current.result).toBeNull();
+    expect(result.current.error).toBeNull();
+    expect(result.current.output.map(o => o.text)).toEqual(['--- Starting deploy... ---\n']);
+  });
+
+  it('a different run started while disconnected replaces the log on reconnect', () => {
+    const { result } = renderHook(() => useAppDeploy('app-a'));
+    active(liveDeploy('app-a', 1000));
+    fire('app:deploy:output', { appId: 'app-a', text: 'old run\n', stream: 'stdout', timestamp: 1 });
+
+    fire('disconnect');
+    fire('connect');
+    active(liveDeploy('app-a', 2000, [step('New run')]));
+    expect(result.current.isDeploying).toBe(true);
+    expect(result.current.error).toBeNull();
+    expect(result.current.output.map(o => o.text)).toEqual(['--- New run ---\n']);
+
+    // The reconnect is behind us; the new run's terminal frame is reliable again.
+    active();
+    expect(result.current.isDeploying).toBe(true);
+    expect(result.current.error).toBeNull();
+  });
+
+  it('an empty snapshot while connected does not settle a confirmed live run', () => {
+    const { result } = renderHook(() => useAppDeploy('app-a'));
+    active(liveDeploy());
+    fire('app:deploy:output', { appId: 'app-a', text: 'building\n', stream: 'stdout', timestamp: 1 });
+    active();
+    expect(result.current.isDeploying).toBe(true);
+    expect(result.current.error).toBeNull();
+
+    // Still waiting for the terminal frame, which then settles it.
+    fire('app:deploy:complete', { appId: 'app-a', success: true, code: 0 });
+    expect(result.current.isDeploying).toBe(false);
+    expect(result.current.error).toBeNull();
+  });
+
+  it('keeps following the same run after a reconnect that still lists it, then waits for its terminal frame', () => {
+    const { result } = renderHook(() => useAppDeploy('app-a'));
+    active(liveDeploy());
+    fire('app:deploy:output', { appId: 'app-a', text: 'building\n', stream: 'stdout', timestamp: 1 });
+    fire('disconnect');
+    fire('connect');
+    active(liveDeploy());
+    expect(result.current.output.map(o => o.text)).toEqual(['building\n']);
+    active();
+    expect(result.current.isDeploying).toBe(true);
   });
 
   it('a terminal error also wins over a stale snapshot', () => {
@@ -151,7 +216,8 @@ describe('useAppDeploy', () => {
     expect(result.current.isDeploying).toBe(true);
     expect(result.current.error).toBeNull();
 
-    // Once acknowledged, a later empty snapshot is the finished-while-away case.
+    // Once acknowledged, an empty snapshot after another drop is the finished-while-away case.
+    fire('disconnect');
     fire('connect');
     active();
     expect(result.current.error).toBe(LOST);
@@ -183,18 +249,26 @@ describe('useAppDeploy', () => {
     expect(result.current.error).toBeNull();
   });
 
-  it('drops the duplicate refusal when the deploy it hit completes successfully, but keeps a failed completion', () => {
+  it('drops the duplicate refusal when the deploy it hit completes successfully', () => {
     const { result } = renderHook(() => useAppDeploy('app-a'));
     act(() => result.current.startDeploy());
     fire('app:deploy:error', { appId: 'app-a', duplicate: true, message: 'A deploy is already running for Example App' });
     fire('app:deploy:complete', { appId: 'app-a', success: true, code: 0 });
     expect(result.current.error).toBeNull();
     expect(result.current.result).toEqual({ appId: 'app-a', success: true, code: 0 });
+  });
 
+  it('a failed completion replaces a stale duplicate refusal with the failure', () => {
+    const { result } = renderHook(() => useAppDeploy('app-a'));
     act(() => result.current.startDeploy());
     fire('app:deploy:error', { appId: 'app-a', duplicate: true, message: 'A deploy is already running for Example App' });
     fire('app:deploy:complete', { appId: 'app-a', success: false, code: 1 });
-    expect(result.current.error).toBe('A deploy is already running for Example App');
+    expect(result.current.error).toBe('Deploy failed');
+
+    act(() => result.current.startDeploy());
+    fire('app:deploy:error', { appId: 'app-a', duplicate: true, message: 'A deploy is already running for Example App' });
+    fire('app:deploy:complete', { appId: 'app-a', success: false, code: 1, error: 'deploy.sh exited 1' });
+    expect(result.current.error).toBe('deploy.sh exited 1');
   });
 
   it('stops listening on unmount', () => {

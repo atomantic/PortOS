@@ -37,7 +37,7 @@ const STANDARDIZE_STEPS = [
   { id: 'apply', label: 'Writing ecosystem.config.cjs' }
 ];
 
-const STANDARDIZE_CONNECTION_LOST_MESSAGE = 'Connection lost during standardization; it may still finish on the server. Click Standardize again to see the result.';
+const STANDARDIZE_CONNECTION_LOST_MESSAGE = "Connection lost during standardization; it may still finish on the server. Wait for it to finish, then check the app's ecosystem.config.cjs or run Standardize again.";
 
 const stepIconFor = (step) => {
   if (!step) return <Circle size={16} className="text-gray-600" />;

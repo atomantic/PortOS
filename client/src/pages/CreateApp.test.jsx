@@ -135,7 +135,7 @@ describe('CreateApp — standardization when the socket drops', () => {
     // The terminal frame is lost with the old socket id; only the disconnect arrives.
     await act(async () => { handlers.disconnect('transport close'); });
 
-    expect(screen.getByText('Connection lost during standardization; it may still finish on the server. Click Standardize again to see the result.')).toBeInTheDocument();
+    expect(screen.getByText("Connection lost during standardization; it may still finish on the server. Wait for it to finish, then check the app's ecosystem.config.cjs or run Standardize again.")).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Standardize PM2 config' })).toBeEnabled();
 
     // Re-running starts a fresh attempt and clears the message.
