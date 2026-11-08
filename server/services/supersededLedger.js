@@ -42,6 +42,10 @@ export const sameSet = (a = [], b = []) => {
   return b.every((x) => left.has(x)) && left.size === new Set(b).size;
 };
 
+// Every recorded collision path still collides. Extra live paths are allowed.
+const coversCollisions = (live, recorded) => Array.isArray(live) && Array.isArray(recorded)
+  && recorded.every((path) => live.includes(path));
+
 /**
  * Read the ledger. Never throws and never partially trusts a malformed file —
  * an unparseable ledger is treated as no ledger (fail open → re-analyze).
@@ -90,8 +94,9 @@ export async function recordVerdict(entry, cosDir = PATHS.cos) {
  *   - the branch moved (`tip`) or its uncommitted change set moved (`dirtyPaths`)
  *     — an ABANDONED_WIP branch's whole deliverable is its dirty tree, so a tip
  *     SHA alone would not notice someone editing the worktree;
- *   - the collision set changed — the branch now touches files the judgment was
- *     never made against;
+ *   - a recorded collision path stopped colliding — the default branch put that
+ *     file back the way the branch found it, which is how a revert shows up when
+ *     its commit is not one of the recorded `replacedBy` SHAs;
  *   - a commit recorded as the replacement is no longer reachable from the
  *     default branch (a revert), so what superseded the branch is gone.
  *
@@ -102,6 +107,13 @@ export async function recordVerdict(entry, cosDir = PATHS.cos) {
  * nothing. Continued churn in a file the default branch already solved makes
  * supersession *more* certain, not less; a revert is the case that actually
  * undoes it, and `replacedBy` reachability catches that directly.
+ *
+ * A GROWING collision set is the same kind of churn. With `tip` and the dirty
+ * set pinned, the branch's own change set cannot move; a new collision path
+ * only means the default branch edited one more file the branch also touches.
+ * When growth expired the verdict, a hot repository dropped verdicts within
+ * minutes, and each expiry sent an already-superseded branch back to the
+ * coordinator as work.
  *
  * @param {object} entry - a ledger entry
  * @param {object} branch - the live reconcile entry { branch, tip, collisionPaths, dirtyPaths }
@@ -121,7 +133,7 @@ export function isVerdictFresh(entry, branch, { replacedByPresent = true, repoPa
   if (!Array.isArray(entry.replacedBy) || entry.replacedBy.length === 0) return false;
   if (!replacedByPresent) return false;
   if (!entry.tip || entry.tip !== branch.tip) return false;
-  if (!sameSet(entry.collisionPaths, branch.collisionPaths)) return false;
+  if (!coversCollisions(branch.collisionPaths, entry.collisionPaths)) return false;
   return sameDirtyPaths(entry.dirtyPaths, branch.dirtyPaths);
 }
 
@@ -188,7 +200,7 @@ export function formatSupersededForPrompt(superseded) {
   const lines = [
     `## Already verified SUPERSEDED — reap held back (${superseded.length}) — DO NOT ANALYZE`,
     '',
-    'Each branch below was analyzed by an earlier run and confirmed superseded: the default branch already solves its problem, so merging it would REGRESS shipped work. The verdict is cached and still valid (branch tip, uncommitted change set, and collision paths all unchanged; the replacing commits are still on the default branch). PortOS reaps a verified-superseded branch itself, after backing it up — these are the ones this cycle could NOT take, because something still holds them: a locked worktree, a live CoS agent, a worktree outside PortOS\'s managed roots that has not yet sat idle for an hour, or a tip that moved after the verdict was recorded. Each one names its hold below. Do not read these worktrees, do not re-derive the verdict, do not commit, rebase, resolve, or merge anything on them. Report them; the next cycle reaps whatever has since been released.',
+    'Each branch below was analyzed by an earlier run and confirmed superseded: the default branch already solves its problem, so merging it would REGRESS shipped work. The verdict is cached and still valid (branch tip and uncommitted change set unchanged, every recorded collision path still colliding; the replacing commits are still on the default branch). PortOS reaps a verified-superseded branch itself, after backing it up — these are the ones this cycle could NOT take, because something still holds them: a locked worktree, a live CoS agent, a worktree outside PortOS\'s managed roots that has not yet sat idle for an hour, or a tip that moved after the verdict was recorded. Each one names its hold below. Do not read these worktrees, do not re-derive the verdict, do not commit, rebase, resolve, or merge anything on them. Report them; the next cycle reaps whatever has since been released.',
     ''
   ];
   for (const b of superseded) {
