@@ -21,18 +21,14 @@ export default function SettingsTab({ onRefresh }) {
   const [xmlError, setXmlError] = useState(null);
   const [xmlFileName, setXmlFileName] = useState(null);
 
-  // WebSocket listeners for XML import progress
+  // Live record count only. Completion comes from the upload's own response:
+  // health:xml:complete is emitted once and never replayed, so a socket that
+  // dropped mid-import would leave the spinner stuck.
   useEffect(() => {
     const onProgress = ({ processed }) => setXmlProgress(processed);
-    const onComplete = (data) => {
-      setXmlResult(data);
-      setXmlImporting(false);
-    };
     socket.on('health:xml:progress', onProgress);
-    socket.on('health:xml:complete', onComplete);
     return () => {
       socket.off('health:xml:progress', onProgress);
-      socket.off('health:xml:complete', onComplete);
     };
   }, []);
 
@@ -96,11 +92,17 @@ export default function SettingsTab({ onRefresh }) {
 
     // Owns its own error UI (xmlError) so suppress the helper's toast — per
     // AGENTS.md "custom catch ⇒ silent: true" convention.
-    api.uploadAppleHealthXml(file, { silent: true }).catch(err => {
-      setXmlError(err.message);
-      setXmlImporting(false);
-    });
-    // Success handled via WebSocket health:xml:complete event
+    // The route answers only after the whole import (and any clinical records
+    // in a ZIP) has finished, so the resolved body is the terminal result.
+    api.uploadAppleHealthXml(file, { silent: true })
+      .then((result) => {
+        setXmlResult(result);
+        setXmlImporting(false);
+      })
+      .catch(err => {
+        setXmlError(err.message);
+        setXmlImporting(false);
+      });
   };
 
   const handleMortalLoomExport = () => {
@@ -269,6 +271,12 @@ export default function SettingsTab({ onRefresh }) {
                 <span className="text-gray-500">Days affected</span>
                 <p className="text-white font-semibold">{formatCount(xmlResult.days)}</p>
               </div>
+              {xmlResult.clinical && (
+                <div>
+                  <span className="text-gray-500">Clinical records</span>
+                  <p className="text-white font-semibold">{formatCount(xmlResult.clinical.clinicalRecords)}</p>
+                </div>
+              )}
             </div>
           </Banner>
         )}
