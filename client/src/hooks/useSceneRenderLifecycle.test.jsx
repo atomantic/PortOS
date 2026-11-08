@@ -220,6 +220,16 @@ describe('useSceneRenderLifecycle progress and settled outcomes (#10153)', () =>
     expect(result.current.sceneProgress.s1).toBeUndefined();
   });
 
+  it('carries a busy provider\'s retry wait on the job until the next ordinary frame', () => {
+    const { result } = renderLane(PROGRESS_CFG);
+    act(() => { result.current.startScene('s1'); result.current.trackJob('job-1', 's1'); });
+    const retry = { attempt: 1, of: 4, inMs: 60_000, reason: 'busy' };
+    fire('image-gen:progress', { generationId: 'job-1', progress: 0.03, retry });
+    expect(result.current.sceneJobs.s1[0]).toMatchObject({ running: true, retry });
+    fire('image-gen:progress', { generationId: 'job-1', progress: 0.15 });
+    expect(result.current.sceneJobs.s1[0].retry).toBeNull();
+  });
+
   it('reports each tracked job once with its terminal outcome, including an orphan that raced ahead', () => {
     const onSettled = vi.fn();
     const { result } = renderLane({ onSettled });

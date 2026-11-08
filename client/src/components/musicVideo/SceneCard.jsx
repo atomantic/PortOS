@@ -629,7 +629,7 @@ export default function SceneCard({
             <SceneRenderProgress kind="Frame" generating={generatingFrame} progress={frameProgress} />
             {clipJobs.map((job) => (
               <SceneRenderProgress key={job.key} kind={job.label ? `Video (${job.label})` : 'Video'} generating
-                progress={job.running ? { progress: job.progress } : null} />
+                progress={job.running ? { progress: job.progress } : null} retry={job.retry} />
             ))}
           </span>
         )}
