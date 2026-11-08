@@ -20,9 +20,10 @@ export default function CalendarTab() {
   // newer read or removal started after it, so a snapshot taken before a delete
   // cannot resurrect the removed row.
   const generationRef = useRef(0);
-  // Indexes with a delete in flight. The ref is the synchronous guard a second
-  // click reads before React has re-rendered; the state drives the disabled button.
-  const [removingIndexes, setRemovingIndexes] = useState([]);
+  // Activity names (or a row key when unnamed) with a delete in flight. Keyed by
+  // identity, not index, because an earlier removal shifts later rows. The ref is
+  // the synchronous guard a second click reads before React has re-rendered.
+  const [removingKeys, setRemovingKeys] = useState([]);
   const removingRef = useRef(new Set());
 
   const fetchData = useCallback(async () => {
@@ -49,14 +50,15 @@ export default function CalendarTab() {
   };
 
   const handleRemoveActivity = async (index) => {
-    if (removingRef.current.has(index)) return;
     const storedName = data?.budgets?.[index]?.name;
     const label = storedName || 'Activity';
     // A row without a stored name has no identity to send; the server's guard
     // only applies when a name is given, so omit it rather than send a placeholder.
     const expectedName = typeof storedName === 'string' && storedName ? storedName : undefined;
-    removingRef.current.add(index);
-    setRemovingIndexes([...removingRef.current]);
+    const key = expectedName ?? `#${index}`;
+    if (removingRef.current.has(key)) return;
+    removingRef.current.add(key);
+    setRemovingKeys([...removingRef.current]);
     const result = await api.removeActivity(index, expectedName, { silent: true }).catch(err => {
       if (err?.code === 'ACTIVITY_MOVED') {
         toast.error(`${label} moved; the list was refreshed`);
@@ -66,14 +68,23 @@ export default function CalendarTab() {
       }
       return null;
     });
-    removingRef.current.delete(index);
-    setRemovingIndexes([...removingRef.current]);
+    removingRef.current.delete(key);
+    setRemovingKeys([...removingRef.current]);
     if (result) {
       toast.success(`Removed ${label}`);
-      // Budgets are one-per-activity and independent of each other, so dropping
-      // this row's entry matches the server without a refetch.
+      // Any read started before this delete may still show the row; drop it.
       generationRef.current++;
-      setData(prev => prev && { ...prev, budgets: prev.budgets.filter((_, i) => i !== index) });
+      // Budgets are independent per activity, so dropping this entry matches the
+      // server without a refetch. Match the slot by name: an earlier removal may
+      // have shifted it, and a newer read may already have dropped it.
+      setData(prev => {
+        if (!prev?.budgets) return prev;
+        const at = prev.budgets[index]?.name === storedName
+          ? index
+          : prev.budgets.findIndex(b => b.name === storedName);
+        if (at === -1) return prev;
+        return { ...prev, budgets: prev.budgets.filter((_, i) => i !== at) };
+      });
     }
   };
 
@@ -227,7 +238,7 @@ export default function CalendarTab() {
               </div>
               <button
                 onClick={() => handleRemoveActivity(i)}
-                disabled={removingIndexes.includes(i)}
+                disabled={removingKeys.includes(b.name || `#${i}`)}
                 className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center opacity-40 [@media(hover:hover)]:sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 transition-opacity text-gray-600 hover:text-port-error p-0.5 disabled:opacity-30 disabled:cursor-progress"
                 title="Remove activity" aria-label="Remove activity"
               >

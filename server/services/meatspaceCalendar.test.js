@@ -67,8 +67,10 @@ describe('activity delete by index is guarded by the row the client saw', () => 
     const name = before[3].name;
     const [first, second] = await Promise.all(['a', 'b'].map(() =>
       request(makeApp()).delete(`/api/meatspace/activities/3?name=${encodeURIComponent(name)}`)));
-    expect([first.status, second.status].sort()).toEqual([200, 409]);
-    expect(second.body.code).toBe('ACTIVITY_MOVED');
+    const responses = [first, second];
+    const refused = responses.find(r => r.status === 409);
+    expect(responses.filter(r => r.status === 200)).toHaveLength(1);
+    expect(refused.body.code).toBe('ACTIVITY_MOVED');
     const after = await getActivities();
     expect(after).toHaveLength(before.length - 1);
     expect(after.some(a => a.name === name)).toBe(false);

@@ -71,6 +71,22 @@ describe('CalendarTab activity removal', () => {
     expect(api.getLifeCalendar).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps the in-flight row disabled after an earlier row is removed above it', async () => {
+    let resolveShowers;
+    api.removeActivity
+      .mockReturnValueOnce(new Promise(resolve => { resolveShowers = resolve; }))
+      .mockResolvedValueOnce([{ name: 'Showers' }, { name: 'Books' }]);
+    await act(async () => { renderTab(); });
+    await screen.findByText('Showers');
+
+    await act(async () => { fireEvent.click(removeButtons()[1]); });
+    await act(async () => { fireEvent.click(removeButtons()[0]); });
+    // Showers moved up to index 0 when Coffees was removed; it must still be the disabled row.
+    expect(removeButtons()[0].disabled).toBe(true);
+    expect(removeButtons()[1].disabled).toBe(false);
+    await act(async () => { resolveShowers([{ name: 'Books' }]); });
+  });
+
   it('refetches the list when the server reports the row moved, instead of deleting the wrong activity', async () => {
     api.removeActivity.mockRejectedValue(Object.assign(new Error('moved'), { code: 'ACTIVITY_MOVED' }));
     await act(async () => { renderTab(); });
