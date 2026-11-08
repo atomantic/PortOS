@@ -49,6 +49,19 @@ const shotEffectsVersion = (project) => {
   return `fx-${key.length.toString(36)}-${hashString(key).toString(36)}`;
 };
 
+// Why the server plays this document by exact per-frame seeks instead of smooth native playback.
+const FALLBACK_REASONS = {
+  'unrecognized-engine': 'its engine was customized',
+  'photo-sequence-exact-seek': 'a shot uses a photo sequence',
+  'wipe-exact-seek': 'a shot uses a wipe',
+  'unsupported-video-fps': 'a clip has an unknown or very low frame rate',
+  'unsupported-capture-protocol': 'the preview browser is too old',
+  'unsupported-frame-callbacks': 'the preview browser is too old',
+};
+export const playbackFallbackSummary = (fallback) => fallback
+  ? `Playing frame by frame, so motion is choppy: ${fallback.upgradable ? 'this document uses an older layered engine' : FALLBACK_REASONS[fallback.reason] || 'the document was customized'}.`
+  : '';
+
 const EFFECT_LABELS = { transition: 'glitch transitions', glitch: 'in-shot glitches', end: 'end-frame effects' };
 const SHOTS_SHOWN = 6;
 
@@ -354,7 +367,7 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
     if (mounted.current) setUpgrading(false);
     if (!result) return;
     if (result.project) onProject(result.project);
-    toast.success(result.changed ? 'Layered engine updated; every effect now previews' : 'Layered engine is already current');
+    toast.success(result.changed ? 'Layered engine updated' : 'Layered engine is already current');
   };
 
   if (!doc) return null;
@@ -375,6 +388,16 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
     <div className="space-y-2" aria-label={lyrics ? 'Lyric timing playthrough' : 'Composition preview'}>
       {failed && <p className="text-xs text-port-error" role="alert">{audioError || preview.reason || 'Preview unavailable'}</p>}
       {preview.playbackReason && <p className="text-xs text-port-text-muted" role="status">{preview.playbackReason}</p>}
+      {preview.ready && preview.playbackFallback && (
+        <div className="flex flex-wrap items-center gap-2 text-xs text-port-text-muted" role="status">
+          <span className="min-w-0 break-words">{playbackFallbackSummary(preview.playbackFallback)}</span>
+          {preview.playbackFallback.upgradable && unsupported.length === 0 && onProject && !draft && (
+            <button type="button" className={buttonCls} disabled={upgrading || !!project.composition?.documentDraft} onClick={upgradeEngine}>
+              {upgrading ? 'Updating…' : 'Update layered engine'}
+            </button>
+          )}
+        </div>
+      )}
       {unsupported.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 text-xs text-port-warning" role="status">
           <span className="min-w-0 break-words">Playing without effects this engine can't draw: {unsupportedEffectsSummary(unsupported, project.scenes)}.</span>

@@ -18,6 +18,7 @@ const EMPTY = {
   recording: null,
   playback: false,
   playbackReason: '',
+  playbackFallback: null,
   playbackResync: 0,
   playbackResyncReason: '',
   unsupportedEffects: [],
@@ -402,6 +403,8 @@ export default function useGeneratedPreview({ active, request, controls = null }
         height: Number(payload.height) || 0,
         audioStatus: payload.audio || 'none',
         playback: capable,
+        playbackFallback: !capable && payload.playbackFallback && typeof payload.playbackFallback.reason === 'string'
+          ? { reason: payload.playbackFallback.reason, upgradable: payload.playbackFallback.upgradable === true } : null,
         unsupportedEffects: Array.isArray(payload.unsupportedEffects) ? payload.unsupportedEffects : [],
       }));
       // A reconnect opens at time zero; restore the current scrub/playhead
