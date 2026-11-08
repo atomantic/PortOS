@@ -89,7 +89,7 @@ export async function importDocumentShots(id, input) {
   return changed(project);
 }
 
-/** Stills render from framePrompt alone, so it must carry who and what, not only where.
+/** The still renders from the shot's one prompt, so it must carry who and what, not only where.
  * Cast is free prose; structured entries (JSON array of {id|name, age, description}) are
  * attached only when the shot text names them, never guessed from prose. */
 function composeShotFramePrompt(shot, cast) {
@@ -124,7 +124,7 @@ export async function bindProductionShot(id, shotId) {
     if (!shot) throw new ServerError('Draft shot not found', { status: 404, code: 'NOT_FOUND' });
     if (shot.sceneId) throw new ServerError('This draft shot is already bound. Edit its existing Board scene.', { status: 409, code: 'SHOT_ALREADY_BOUND' });
     const out = addScene(current, { label: shot.id, startSec: shot.startSec ?? null, endSec: shot.endSec ?? null,
-      visualIntent: shot.action, prompt: [shot.action, shot.camera, shot.transition].join('\n'), framePrompt: composeShotFramePrompt(shot, draft.cast) });
+      visualIntent: shot.action, prompt: [composeShotFramePrompt(shot, draft.cast), shot.camera, shot.transition].filter(Boolean).join('\n'), framePrompt: null });
     out.project.productionReview = { ...current.productionReview, draft: { ...draft,
       storyboard: draft.storyboard.map(s => s === shot ? { ...s, sceneId: out.scene.sceneId } : s) } };
     return { project: out.project };
@@ -387,7 +387,7 @@ export async function reviseProductionFromFeedback(id, { stage, ...route }) {
       const draft = current.productionReview?.draft;
       const storyboard = draft?.storyboard?.map(shot => {
         const fields = updates.get(shot.sceneId);
-        return fields ? { ...shot, ...(fields.prompt ? { action: fields.prompt } : {}), ...(fields.framePrompt ? { staging: fields.framePrompt } : {}),
+        return fields ? { ...shot, ...(fields.prompt ? { action: fields.prompt, staging: '' } : {}),
           ...(fields.camera ? { camera: shotCameraLabel(fields.camera) } : {}) } : shot;
       });
       return { project: { ...current, scenes, updatedAt: new Date().toISOString(),

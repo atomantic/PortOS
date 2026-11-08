@@ -54,8 +54,7 @@ export const shotSheetProposeSchema = z.object({
 export const shotSheetBackfillSchema = z.object({ sceneId: text(64).min(1), sheet: musicVideoShotSheetSchema.omit({ checked: true, promptFromSheet: true }).strip() }).strip();
 // A split: the frame prompt's details as sheet columns, and the rest as the shot's general prompt.
 export const shotSheetSplitSchema = z.object({ sceneId: text(64).min(1), sheet: musicVideoShotSheetSchema.omit({ checked: true, promptFromSheet: true }).strip(), generalPrompt: z.string().max(8000) }).strip();
-export const shotSheetPromptProposalSchema = z.object({ sceneId: text(64).min(1), framePrompt: text(8000).optional(), prompt: text(8000).optional() }).strip()
-  .refine((shot) => shot.framePrompt !== undefined || shot.prompt !== undefined, 'Propose at least one prompt');
+export const shotSheetPromptProposalSchema = z.object({ sceneId: text(64).min(1), prompt: text(8000).min(1) }).strip();
 
 // AI edits to the previz (services/musicVideo/previzProposals.js): the director's request, and what may come back.
 export const previzProposeSchema = z.object({

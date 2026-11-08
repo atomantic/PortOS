@@ -402,7 +402,7 @@ export function buildTreatmentPrompt(project, draft) {
     parts.push(`planned medium: ${d.medium}; ${d.mediumPinned ? 'director-pinned, retain it' : 'may propose a revision'}; rationale: ${quote(d.mediumRationale)}`);
     parts.push(scene.lyricText ? `lyrics: "${quote(scene.lyricText)}"` : 'instrumental');
     if (scene.visualIntent) parts.push(`director intent: ${quote(scene.visualIntent)}`);
-    if (scene.prompt || scene.framePrompt) parts.push(`current prompt: ${quote(scene.framePrompt || scene.prompt, 160)}`);
+    if (scene.prompt || scene.framePrompt) parts.push(`current prompt: ${quote([scene.framePrompt, scene.prompt].filter(Boolean).join(' '), 160)}`);
     return parts.join('; ');
   });
 
@@ -419,7 +419,7 @@ ${project.styleReferences?.length ? '- "styleLook": one short sentence summarizi
 - Two or three recurring "motifs" (an image, object, color or gesture) with how each changes across the arc.
 - The balance of "performance", "cutaway" and "graphic" shots as percentages, with a rationale.
 - "graphicLanguage": a concise visual note for the graphic cards and typography (HUD, pictograms, counters), honoring any graphic direction in the brief.
-${hasLyrics ? '- "lyricInterpretation": what the lyrics mean and how the picture interprets them (not word-for-word illustration).\n' : '- The song is instrumental: set "lyricInterpretation" to null and invent no lyrics.\n'}- For EACH shot: "mode" (performance|cutaway|graphic), "route" (generated|supplied-asset|code-2d — code-2d becomes a code-rendered title card for a sung line or a moved still; prefer it where a video model cannot hold the requirement), "focalSubject", "framing", "negativeSpace" (none|upper|center|lower — the region kept clean for the separately composited text), "typographyRole" (none|subtitle|hero; must be none on instrumental shots), "emphasis", "transitionIn", "transitionOut", "rationale", and a "framePrompt" (the opening still) and "prompt" (the motion) for the image/video model. The motion "prompt" is plain physical action: no song times or timestamps ("on the 9.6s downbeat", "at 10.573"), clip lengths, trim notes ("use the first 2 s") or "no lip-sync" line, which the video model cannot act on.
+${hasLyrics ? '- "lyricInterpretation": what the lyrics mean and how the picture interprets them (not word-for-word illustration).\n' : '- The song is instrumental: set "lyricInterpretation" to null and invent no lyrics.\n'}- For EACH shot: "mode" (performance|cutaway|graphic), "route" (generated|supplied-asset|code-2d — code-2d becomes a code-rendered title card for a sung line or a moved still; prefer it where a video model cannot hold the requirement), "focalSubject", "framing", "negativeSpace" (none|upper|center|lower — the region kept clean for the separately composited text), "typographyRole" (none|subtitle|hero; must be none on instrumental shots), "emphasis", "transitionIn", "transitionOut", "rationale", and one "prompt" for the image/video model: the shot's single prompt, which both its opening still and its clip render from. It opens with the picture, then the motion as plain physical action: no song times or timestamps ("on the 9.6s downbeat", "at 10.573"), clip lengths, trim notes ("use the first 2 s") or "no lip-sync" line, which the video model cannot act on.
 - For EACH shot also supply "medium" (procedural|still|existing-footage|generated-footage) and "mediumRationale". Medium is independent of performance/cutaway intent. Retain director pins. Tie the medium to the shared motifs, their evolution across repeated sections, and entry/exit transitions.
 - MEDIA MODE: ${musicVideoMediaMode(project)}. Code authors scene composition, characters, environment, camera and timing in every mode. Code-only forbids images even for visual guides; code-images forbids generated or imported footage.
 - For code-first, prefer procedural or still. Existing footage must be selected already; generated footage is an explicit exception within the allowance. At zero allowance never assign generated footage: report unmet performance intent rather than quietly generating it. This is planning, not a claim that procedural rendering is ready.
@@ -433,7 +433,7 @@ Respond with ONLY a JSON object (replace every <…> with real content; do NOT o
   "beats": [{ "sectionIndex": 0, "objective": "<objective>", "rationale": "<rationale>" }],
   "motifs": [{ "name": "<motif>", "description": "<what it is>", "evolution": "<how it changes>", "rationale": "<why>" }],
   "balance": { "performance": 40, "cutaway": 45, "graphic": 15, "rationale": "<why>" },
-  "shots": [{ "index": 0, "medium": "<medium>", "mediumRationale": "<why this medium serves the motif and transition>", "mode": "<mode>", "route": "<route>", "focalSubject": "<subject>", "framing": "<framing>", "negativeSpace": "<region>", "typographyRole": "<role>", "emphasis": "<emphasis>", "transitionIn": "<entry>", "transitionOut": "<exit>", "rationale": "<why>", "framePrompt": "<still>", "prompt": "<motion>" }] }`;
+  "shots": [{ "index": 0, "medium": "<medium>", "mediumRationale": "<why this medium serves the motif and transition>", "mode": "<mode>", "route": "<route>", "focalSubject": "<subject>", "framing": "<framing>", "negativeSpace": "<region>", "typographyRole": "<role>", "emphasis": "<emphasis>", "transitionIn": "<entry>", "transitionOut": "<exit>", "rationale": "<why>", "prompt": "<the shot: opening picture, then motion>" }] }`;
 }
 
 const isPlaceholder = (s) => typeof s === 'string' && /^\s*<.+>\s*$/.test(s);
@@ -513,9 +513,7 @@ export function mergeAiTreatment(project, draft, parsed) {
       if (value !== undefined) d[field] = value;
     }
     if (entry.actionContract != null && !shotActionContractProblem(entry.actionContract, scenesById.get(d.sceneId))) d.actionContract = structuredClone(entry.actionContract);
-    const framePrompt = strField(entry.framePrompt, 2000);
     const prompt = strField(entry.prompt, 2000);
-    if (framePrompt !== undefined) d.suggestedFramePrompt = framePrompt;
     if (prompt !== undefined) d.suggestedPrompt = prompt;
     // Text needs somewhere to sit: a titled shot with no reserved region gets
     // the role's default region rather than text over the subject.

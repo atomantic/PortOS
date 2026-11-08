@@ -392,7 +392,7 @@ describe('planProject', () => {
     const planning = planProject('mv-1', { mode: 'replace' });
     await vi.waitFor(() => expect(runPromptThroughProvider).toHaveBeenCalled());
     current = { ...current, scenes: [{ ...current.scenes[0], referenceImageId: 'director-choice.png' }] };
-    reply.resolve({ text: JSON.stringify([{ index: 0, framePrompt: 'a new plan' }]) });
+    reply.resolve({ text: JSON.stringify([{ index: 0, prompt: 'a new plan' }]) });
     await expect(planning).rejects.toMatchObject({ status: 409, code: 'SHOT_PLAN_STALE' });
     expect(current.scenes[0].referenceImageId).toBe('director-choice.png');
   });
@@ -408,24 +408,24 @@ describe('planProject', () => {
     expect(result.promptsSkippedReason).toBe('not-requested');
   });
 
-  it('merges first-pass framePrompt/prompt into the matching scenes when the LLM call succeeds', async () => {
+  it('merges the first-pass shot prompt into the matching scenes when the LLM call succeeds', async () => {
     getProject.mockResolvedValue(makeProject());
     addProjectScenes.mockResolvedValue(freshProjectResult());
     resolveProviderAndModel.mockResolvedValue({ provider: { id: 'p1', type: 'api' }, selectedModel: 'gpt' });
     runPromptThroughProvider.mockResolvedValue({
       text: JSON.stringify([
-        { index: 0, framePrompt: 'wide establishing shot of a neon alley', prompt: 'slow dolly in' },
-        { index: 1, framePrompt: 'close-up under strobing lights', prompt: 'rapid cuts, handheld shake' },
-        { index: 2, framePrompt: 'empty street at dawn', prompt: 'static, lingering' },
+        { index: 0, prompt: 'wide establishing shot of a neon alley, slow dolly in' },
+        { index: 1, prompt: 'close-up under strobing lights, rapid cuts, handheld shake' },
+        { index: 2, prompt: 'empty street at dawn, static, lingering' },
       ]),
     });
 
     const result = await planProject('mv-1');
 
     const seededInputs = addProjectScenes.mock.calls[0][1];
-    expect(seededInputs[0].framePrompt).toBe('wide establishing shot of a neon alley');
-    expect(seededInputs[0].prompt).toBe('slow dolly in');
-    expect(seededInputs[1].framePrompt).toBe('close-up under strobing lights');
+    expect(seededInputs[0].prompt).toBe('wide establishing shot of a neon alley, slow dolly in');
+    expect(seededInputs[0].framePrompt).toBeNull();
+    expect(seededInputs[1].prompt).toBe('close-up under strobing lights, rapid cuts, handheld shake');
     expect(result.promptsSeeded).toBe(true);
     expect(result.promptsSkippedReason).toBeNull();
   });
@@ -441,17 +441,16 @@ describe('planProject', () => {
     resolveProviderAndModel.mockResolvedValue({ provider: { id: 'p1', type: 'api' }, selectedModel: 'gpt' });
     runPromptThroughProvider.mockResolvedValue({
       text: `Respond with ONLY a JSON array...
-[{ "index": 0, "framePrompt": "<the opening reference still, ready to render>", "prompt": "<the shot's motion, ready to render>" }]
+[{ "index": 0, "prompt": "<the shot, opening picture then motion, ready to render>" }]
 
 Here is my answer:
-[{ "index": 0, "framePrompt": "actual neon alley shot", "prompt": "slow dolly in" }]`,
+[{ "index": 0, "prompt": "actual neon alley shot, slow dolly in" }]`,
     });
 
     const result = await planProject('mv-1');
 
     const seededInputs = addProjectScenes.mock.calls[0][1];
-    expect(seededInputs[0].framePrompt).toBe('actual neon alley shot');
-    expect(seededInputs[0].prompt).toBe('slow dolly in');
+    expect(seededInputs[0].prompt).toBe('actual neon alley shot, slow dolly in');
     expect(result.promptsSeeded).toBe(true);
   });
 
@@ -460,7 +459,7 @@ Here is my answer:
     addProjectScenes.mockResolvedValue(freshProjectResult());
     resolveProviderAndModel.mockResolvedValue({ provider: { id: 'p1', type: 'api' }, selectedModel: 'gpt' });
     runPromptThroughProvider.mockResolvedValue({
-      text: '[{ "index": 0, "framePrompt": "<the opening reference still, ready to render>", "prompt": "<the shot\'s motion, ready to render>" }]',
+      text: '[{ "index": 0, "prompt": "<the shot, opening picture then motion, ready to render>" }]',
     });
 
     const result = await planProject('mv-1');
@@ -715,17 +714,17 @@ describe('directed planner', () => {
     expect(scenes.map((s) => [s.startSec, s.endSec])).toEqual(Array.from({ length: 16 }, (_, i) => [i * 5, (i + 1) * 5]));
     expect(scenes.slice(4, 8).every((s) => s.shotMode === 'performance')).toBe(true);
     for (const scene of scenes.filter((s) => s.shotMode === 'performance')) {
-      expect(scene.framePrompt).toMatch(/Frontal medium close-up.*mouth fully visible/);
+      expect(scene.prompt).toMatch(/Frontal medium close-up.*mouth fully visible/);
     }
     expect(scenes.slice(8, 12).every((s) => s.visualLayer === 'card')).toBe(true);
     // #11185: a silence card keeps the shot's own line; only a wordless silence stays blank.
     expect(scenes[8].cardText).toBe(scenes[8].lyricText || '');
     expect(scenes[10].cardText).toBe('Rise');
-    expect(scenes[0].framePrompt).toMatch(/Signal keeper.*Signal tower.*Ochre coat/);
-    expect(scenes[4].framePrompt).toMatch(/Echo hall.*Silver jacket/);
-    expect(scenes.every((s) => !s.framePrompt.includes('greenhouse'))).toBe(true);
+    expect(scenes[0].prompt).toMatch(/Signal keeper.*Signal tower.*Ochre coat/);
+    expect(scenes[4].prompt).toMatch(/Echo hall.*Silver jacket/);
+    expect(scenes.every((s) => !s.prompt.includes('greenhouse') && s.framePrompt === null)).toBe(true);
     // The fallback motion never quotes the lyric: a silent video model acts it out.
-    expect(scenes[0].prompt).toMatch(/^Stage a readable subject action/);
+    expect(scenes[0].prompt).toMatch(/Stage a readable subject action/);
     expect(scenes[0].prompt).not.toContain('We follow the signal');
     expect(planned.composition).toMatchObject({ mode: 'composed', style: { color: '#abcdef' } });
   });
@@ -746,7 +745,7 @@ describe('directed planner', () => {
 
   it('gives the provider per-shot direction and preserves keyframe requirements after partial seeding', async () => {
     resolveProviderAndModel.mockResolvedValue({ provider: { id: 'example' }, selectedModel: 'example' });
-    runPromptThroughProvider.mockResolvedValue({ text: JSON.stringify([{ index: 4, framePrompt: 'Soft light', prompt: 'Gentle camera arc' }]) });
+    runPromptThroughProvider.mockResolvedValue({ text: JSON.stringify([{ index: 4, prompt: 'Soft light. Gentle camera arc' }]) });
     const { project } = await runDirected(directedProject(), { seedPrompts: true });
     const prompt = runPromptThroughProvider.mock.calls[0][0].prompt;
     expect(prompt).toContain('mood board is LOOK-ONLY');
@@ -754,9 +753,9 @@ describe('directed planner', () => {
     expect(prompt).toContain('assigned set: Echo hall');
     expect(prompt).toContain('assigned look: Stage');
     expect(prompt).toContain('delivery: Whispered');
-    expect(project.scenes[4].framePrompt).toMatch(/mouth fully visible.*Echo hall.*Soft light/);
-    expect(project.scenes[4].prompt).toBe('Gentle camera arc');
-    expect(project.scenes[5].framePrompt).toContain('mouth fully visible');
+    expect(project.scenes[4].prompt).toMatch(/mouth fully visible.*Echo hall.*Soft light\. Gentle camera arc$/);
+    expect(project.scenes[4].framePrompt).toBeNull();
+    expect(project.scenes[5].prompt).toContain('mouth fully visible');
   });
 
   it('plans a code-only brief as code shots with short intents and no generation prose', async () => {
@@ -787,18 +786,18 @@ describe('directed planner', () => {
   it('names the lead only in shots that show them, and lets the planner empty, recast or move a shot', async () => {
     resolveProviderAndModel.mockResolvedValue({ provider: { id: 'example' }, selectedModel: 'example' });
     runPromptThroughProvider.mockResolvedValue({ text: JSON.stringify([
-      { index: 0, framePrompt: 'An empty platform', prompt: 'Wind', subject: 'none' },
-      { index: 1, framePrompt: 'A clerk stamps forms', prompt: 'Stamp', subject: 'a desk clerk', set: 'echo hall' },
-      { index: 2, framePrompt: 'She climbs', prompt: 'Climb', subject: 'lead' },
+      { index: 0, prompt: 'An empty platform. Wind', subject: 'none' },
+      { index: 1, prompt: 'A clerk stamps forms. Stamp', subject: 'a desk clerk', set: 'echo hall' },
+      { index: 2, prompt: 'She climbs. Climb', subject: 'lead' },
     ]) });
     const { project } = await runDirected(directedProject(), { seedPrompts: true });
     const [empty, clerk, lead] = project.scenes;
     expect(runPromptThroughProvider.mock.calls[0][0].prompt).toContain('"subject": who the frame shows');
-    expect(empty.framePrompt).toMatch(/^No people in frame\. Location: Signal tower.*An empty platform$/);
-    expect(clerk.framePrompt).toMatch(/^Subject: a desk clerk Location: Echo hall.*A clerk stamps forms$/);
-    expect(lead.framePrompt).toMatch(/^Subject: Signal keeper.*Location: Signal tower.*Wardrobe: Field.*She climbs$/);
-    for (const card of project.scenes.filter((s) => s.visualLayer === 'card')) expect(card.framePrompt).not.toMatch(/Signal keeper|Wardrobe/);
-    expect(project.scenes.filter((s) => s.shotMode === 'performance').every((s) => s.framePrompt.includes('Subject: Signal keeper'))).toBe(true);
+    expect(empty.prompt).toMatch(/^No people in frame\. Location: Signal tower.*An empty platform\. Wind$/);
+    expect(clerk.prompt).toMatch(/^Subject: a desk clerk Location: Echo hall.*A clerk stamps forms\. Stamp$/);
+    expect(lead.prompt).toMatch(/^Subject: Signal keeper.*Location: Signal tower.*Wardrobe: Field.*She climbs\. Climb$/);
+    for (const card of project.scenes.filter((s) => s.visualLayer === 'card')) expect(card.prompt).not.toMatch(/Signal keeper|Wardrobe/);
+    expect(project.scenes.filter((s) => s.shotMode === 'performance').every((s) => s.prompt.includes('Subject: Signal keeper'))).toBe(true);
   });
 
   // Uniquely catches a storyboard revision putting the lead back into a shot that was emptied, which no reviser could undo.
@@ -812,12 +811,12 @@ describe('directed planner', () => {
     ];
     resolveProviderAndModel.mockResolvedValue({ provider: { id: 'example' }, selectedModel: 'example' });
     runPromptThroughProvider.mockResolvedValue({ text: JSON.stringify([
-      { index: 0, framePrompt: 'Dust drifts over the platform', prompt: 'Wind rises' },
-      { index: 1, framePrompt: 'Only the badge on the floor', prompt: 'Hold', subject: 'none' },
+      { index: 0, prompt: 'Dust drifts over the platform. Wind rises' },
+      { index: 1, prompt: 'Only the badge on the floor. Hold', subject: 'none' },
     ]) });
     const updates = await proposeShotRevisions(project, [{ id: 'fb', stage: 'storyboard', target: 'overall', text: 'Tighten', decision: 'request-changes', basis: 'b' }]);
-    expect(updates.get('scene-empty').framePrompt).toBe('No people in frame. Location: Echo hall. A vaulted stone chamber. Blue lamps Dust drifts over the platform');
-    expect(updates.get('scene-lead').framePrompt).toBe('No people in frame. Location: Signal tower. An open steel platform. Dawn Only the badge on the floor');
+    expect(updates.get('scene-empty')).toMatchObject({ framePrompt: null, prompt: 'No people in frame. Location: Echo hall. A vaulted stone chamber. Blue lamps Dust drifts over the platform. Wind rises' });
+    expect(updates.get('scene-lead')).toMatchObject({ framePrompt: null, prompt: 'No people in frame. Location: Signal tower. An open steel platform. Dawn Only the badge on the floor. Hold' });
   });
 
   it('leaves skipped-stage projects on the legacy scene path even with retained direction', async () => {
@@ -855,15 +854,15 @@ describe('review feedback in shot planning', () => {
     const requests = [feedback('frame: 12.5s', 'Let the figure leap on the drop')];
     const project = makeProject({ scenes, productionReview: { feedback: requests } });
     resolveProviderAndModel.mockResolvedValue({ provider: { id: 'p1', type: 'api' }, selectedModel: 'gpt' });
-    runPromptThroughProvider.mockResolvedValue({ text: JSON.stringify([{ index: 0, framePrompt: 'rooftop at the peak', prompt: 'figure leaps on the downbeat' }]) });
+    runPromptThroughProvider.mockResolvedValue({ text: JSON.stringify([{ index: 0, prompt: 'rooftop at the peak, figure leaps on the downbeat' }]) });
 
     const updates = await proposeShotRevisions(project, requests);
 
     const prompt = runPromptThroughProvider.mock.calls[0][0].prompt;
-    expect(prompt).toContain('current frame: crowded rooftop; current motion: figure walks');
+    expect(prompt).toContain('current shot prompt: crowded rooftop figure walks');
     expect(prompt).not.toContain('quiet alley');
     expect(prompt).toContain('Let the figure leap on the drop');
-    expect([...updates]).toEqual([['scene-drop', { framePrompt: 'rooftop at the peak', prompt: 'figure leaps on the downbeat' }]]);
+    expect([...updates]).toEqual([['scene-drop', { framePrompt: null, prompt: 'rooftop at the peak, figure leaps on the downbeat' }]]);
   });
 
   it('treats a request that names no shot as addressing every shot, and fails loudly when nothing usable returns', async () => {
@@ -903,9 +902,9 @@ describe('shot camera planning (#10589)', () => {
     getProject.mockResolvedValue(makeProject());
     addProjectScenes.mockResolvedValue(freshProjectResult());
     llm([
-      { index: 0, framePrompt: 'neon alley', prompt: 'a courier waits', camera: { move: 'pedestal-up', speed: 'slow', endFraming: 'wide', onBeat: false } },
-      { index: 1, framePrompt: 'rooftop', prompt: 'the courier leaps', camera: { move: 'teleport-cam', speed: 'fast' } },
-      { index: 2, framePrompt: 'dawn street', prompt: 'the courier walks away', camera: { move: 'locked-off' } },
+      { index: 0, prompt: 'neon alley, a courier waits', camera: { move: 'pedestal-up', speed: 'slow', endFraming: 'wide', onBeat: false } },
+      { index: 1, prompt: 'rooftop, the courier leaps', camera: { move: 'teleport-cam', speed: 'fast' } },
+      { index: 2, prompt: 'dawn street, the courier walks away', camera: { move: 'locked-off' } },
     ]);
     await planProject('mv-1');
     const inputs = addProjectScenes.mock.calls[0][1];
@@ -930,7 +929,7 @@ describe('shot camera planning (#10589)', () => {
   it('shows the current camera when revising and returns a valid revised camera', async () => {
     const scenes = [{ sceneId: 'scene-drop', label: 'Drop', startSec: 10, endSec: 18, framePrompt: 'rooftop', prompt: 'figure walks', camera: { move: 'truck-left' } }];
     const requests = [{ id: 'fb', stage: 'storyboard', target: 'Drop', text: 'Hit the drop harder', decision: 'request-changes', basis: 'b' }];
-    llm([{ index: 0, framePrompt: 'rooftop', prompt: 'figure leaps', camera: { move: 'crash zoom', speed: 'snap', onBeat: true } }]);
+    llm([{ index: 0, prompt: 'rooftop, figure leaps', camera: { move: 'crash zoom', speed: 'snap', onBeat: true } }]);
     const updates = await proposeShotRevisions(makeProject({ scenes, productionReview: { feedback: requests } }), requests);
     expect(runPromptThroughProvider.mock.calls[0][0].prompt).toContain('current camera: truck-left');
     expect(updates.get('scene-drop').camera).toEqual({ move: 'crash-zoom', speed: 'snap', onBeat: true });
