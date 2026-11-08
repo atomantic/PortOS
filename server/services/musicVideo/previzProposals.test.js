@@ -48,15 +48,25 @@ describe('proposePrevizEdit', () => {
     expect(result.proposal.pawnColors).toBeUndefined();
     expect(result.dropped.join(' ')).toMatch(/cuts:.*pawnColors/);
   });
-  // Catches a set swapped for an environment the video never uses, or a night beat at a set that doesn't exist.
+  // Catches a set swapped for an environment the video never uses, or a timeline beat at a set that doesn't exist.
   it('refuses unknown environments and beats at missing sets', async () => {
     run.mockResolvedValue({ text: JSON.stringify({
       world: { ...world, sets: [{ id: 's9', ingredientId: 'env-other', position: [0, 0], rotationDegrees: 0 }] },
-      night: { startClock: 1200, lengthMin: 60, beats: [{ id: 'b1', kind: 'stay', subjectIds: ['k'], startMin: 0, endMin: 10, setId: 'nowhere' }] },
+      timeline: { startClock: 1200, lengthMin: 60, beats: [{ id: 'b1', kind: 'stay', subjectIds: ['k'], startMin: 0, endMin: 10, setId: 'nowhere' }] },
     }) });
     const result = await proposePrevizEdit('p', base);
     expect(result.proposal).toEqual({});
     expect(result.dropped).toHaveLength(2);
+  });
+  // Catches a model sending people by a vehicle the previz never listed, or listing an object that isn't in the cast.
+  it('keeps timeline beats that ride listed vehicles and refuses unlisted ones', async () => {
+    const beat = (vehicleSubjectId) => ({ id: 'b1', kind: 'stay', subjectIds: ['ada'], startMin: 0, endMin: 10, setId: 's1', vehicleSubjectId });
+    const ask = async (reply) => { run.mockResolvedValue({ text: JSON.stringify(reply) }); return proposePrevizEdit('p', base); };
+    const unlisted = await ask({ timeline: { startClock: 600, lengthMin: 60, beats: [beat('o-1')] } });
+    expect(unlisted.proposal.timeline).toBeUndefined();
+    expect(unlisted.dropped.join(' ')).toMatch(/timeline/);
+    const missing = await ask({ vehicles: [{ subjectId: 'not-an-object', speedMetersPerMin: 300 }] });
+    expect(missing.proposal.vehicles).toBeUndefined();
   });
   // Catches unusable output reaching the review as an empty success.
   it('refuses an unreadable reply', async () => {

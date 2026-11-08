@@ -27,7 +27,7 @@ import { executionOptionsSchema } from './aiToolkit/internal/executionOptionsVal
  */
 
 import { z } from 'zod';
-import { NIGHT_BEAT_KINDS, NIGHT_BEATS_MAX, NIGHT_LENGTH_MAX_MIN, NIGHT_PACES, PREVIZ_CAMERA_STYLES, PREVIZ_CUTS_MAX, PREVIZ_KEYS_MAX, PREVIZ_PAWN_COLOR_IDS, PREVIZ_POSES, PREVIZ_TRACKS_MAX, PREVIZ_VISIBLE_MAX } from './musicVideoPrevizLimits.js';
+import { TIMELINE_BEAT_KINDS, TIMELINE_BEATS_MAX, TIMELINE_LENGTH_MAX_MIN, TIMELINE_PACES, PREVIZ_CAMERA_STYLES, PREVIZ_CUTS_MAX, PREVIZ_KEYS_MAX, PREVIZ_PAWN_COLOR_IDS, PREVIZ_POSES, PREVIZ_TRACKS_MAX, PREVIZ_VEHICLES_MAX, PREVIZ_VISIBLE_MAX, VEHICLE_SPEED_MAX_METERS_PER_MIN } from './musicVideoPrevizLimits.js';
 import { MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX } from './musicVideoSubjectLimits.js';
 export const musicVideoDcpRequestSchema = z.object({ grade: z.enum(['rec709', 'rec1886']), renderHistoryId: z.string().min(1), sourceSha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 import { GROK_VIDEO_DURATIONS } from './grokVideoClip.js';
@@ -305,8 +305,8 @@ export const musicVideoPrevizSchema = z.object({
     aimSubjectId: previzSubjectId.nullable().optional(),
     // The camera starts on its own aim and swings to the keep-in-frame person during the cut.
     turnToAim: z.boolean().optional(),
-    // Where the cut starts on the night (story minutes) and an unheld camera's spot on the world map.
-    storyMin: z.number().finite().min(0).max(NIGHT_LENGTH_MAX_MIN).nullable().optional(),
+    // Where the cut starts on the timeline (story minutes) and an unheld camera's spot on the world map.
+    storyMin: z.number().finite().min(0).max(TIMELINE_LENGTH_MAX_MIN).nullable().optional(),
     cameraSpot: z.tuple([z.number().finite().min(-5000).max(5000), z.number().finite().min(-5000).max(5000)]).nullable().optional(),
   }).strict().refine((cut) => cut.endSec > cut.startSec, { message: 'A previz cut must end after it starts' })).max(PREVIZ_CUTS_MAX),
   tracks: z.array(z.object({
@@ -317,31 +317,41 @@ export const musicVideoPrevizSchema = z.object({
       position: z.tuple([previzCoord, previzCoord, previzCoord]),
       facingDegrees: z.number().finite().min(-36000).max(36000),
       pose: z.enum(PREVIZ_POSES).optional(),
+      // The vehicle (a cast object listed in `vehicles`) a figure in the 'ride' pose sits on.
+      vehicleSubjectId: previzSubjectId.optional(),
     }).strict()).min(1).max(PREVIZ_KEYS_MAX)
       .refine((keys) => keys.every((key, i) => i === 0 || key.timeSec > keys[i - 1].timeSec), { message: 'Track key times must strictly increase' }),
   }).strict()).max(PREVIZ_TRACKS_MAX)
     .refine((tracks) => new Set(tracks.map((t) => `${t.placeSubjectId}\u0000${t.subjectId}`)).size === tracks.length, { message: 'One track per person per set' }),
-  // Picked pawn colors by character; anyone missing takes the next unused color in cast order.
+  // Picked pawn colors by character or vehicle; anyone missing takes the next unused color in cast order.
   pawnColors: z.record(previzSubjectId, z.object({
     figure: z.enum(PREVIZ_PAWN_COLOR_IDS).optional(),
-    bike: z.enum(PREVIZ_PAWN_COLOR_IDS).optional(),
   }).strict()).optional(),
-  // The story night over the world map (lib/musicVideoPrevizNight.js); story minutes from `startClock`.
-  night: z.object({
+  // The cast's objects people ride (a bike, car, horse, skateboard...) and how fast each goes.
+  vehicles: z.array(z.object({
+    subjectId: previzSubjectId,
+    speedMetersPerMin: z.number().finite().min(1).max(VEHICLE_SPEED_MAX_METERS_PER_MIN),
+  }).strict()).max(PREVIZ_VEHICLES_MAX)
+    .refine((vehicles) => new Set(vehicles.map((v) => v.subjectId)).size === vehicles.length, { message: 'A vehicle is listed once' })
+    .optional(),
+  // The story timeline over the world map (lib/musicVideoPrevizTimeline.js); story minutes from `startClock`.
+  timeline: z.object({
     startClock: z.number().int().min(0).max(1439),
-    lengthMin: z.number().finite().min(1).max(NIGHT_LENGTH_MAX_MIN),
+    lengthMin: z.number().finite().min(1).max(TIMELINE_LENGTH_MAX_MIN),
     beats: z.array(z.object({
       id: z.string().min(1).max(64),
-      kind: z.enum(NIGHT_BEAT_KINDS),
+      kind: z.enum(TIMELINE_BEAT_KINDS),
       subjectIds: z.array(previzSubjectId).max(PREVIZ_VISIBLE_MAX),
-      startMin: z.number().finite().min(0).max(NIGHT_LENGTH_MAX_MIN),
-      endMin: z.number().finite().min(0).max(NIGHT_LENGTH_MAX_MIN),
+      startMin: z.number().finite().min(0).max(TIMELINE_LENGTH_MAX_MIN),
+      endMin: z.number().finite().min(0).max(TIMELINE_LENGTH_MAX_MIN),
       setId: z.string().min(1).max(64),
       toSetId: z.string().min(1).max(64).nullable().optional(),
-      pace: z.enum(NIGHT_PACES).nullable().optional(),
-    }).strict().refine((beat) => beat.endMin > beat.startMin, { message: 'A night beat must end after it starts' }))
-      .max(NIGHT_BEATS_MAX)
-      .refine((beats) => new Set(beats.map((b) => b.id)).size === beats.length, { message: 'Night beat ids must be unique' }),
+      pace: z.enum(TIMELINE_PACES).nullable().optional(),
+      // A travel by vehicle: a cast object listed in `vehicles`; its speed replaces the pace's.
+      vehicleSubjectId: previzSubjectId.nullable().optional(),
+    }).strict().refine((beat) => beat.endMin > beat.startMin, { message: 'A timeline beat must end after it starts' }))
+      .max(TIMELINE_BEATS_MAX)
+      .refine((beats) => new Set(beats.map((b) => b.id)).size === beats.length, { message: 'Timeline beat ids must be unique' }),
   }).strict().nullable().optional(),
 }).strict();
 // A path through several of the video's places, in travel order (lib/musicVideoRouteMaps.js).

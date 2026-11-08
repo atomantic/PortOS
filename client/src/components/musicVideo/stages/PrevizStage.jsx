@@ -8,9 +8,9 @@ import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import useMusicVideoGreyboxPlaces from '../../../hooks/useMusicVideoGreyboxPlaces.js';
 import usePrevizWorld from '../../../hooks/usePrevizWorld.js';
 import PrevizAi from './PrevizAi.jsx';
-import PrevizNight from './PrevizNight.jsx';
+import PrevizTimeline from './PrevizTimeline.jsx';
 import WorldMap, { fitWorldView } from '../../catalog/WorldMapView';
-import { nightActorsAt, nightClockAt, nightMinuteOfClock, previzNight } from '../../../../../server/lib/musicVideoPrevizNight.js';
+import { timelineActorsAt, timelineClockAt, timelineMinuteOfClock, previzTimeline } from '../../../../../server/lib/musicVideoPrevizTimeline.js';
 import { ingredientPath } from '../../../lib/creativeLibraries.js';
 import { createCatalogIngredient, saveCatalogWorld } from '../../../services/apiCatalog.js';
 import { draftWorldFromRouteMaps, worldClockText, worldSetFootprint } from '../../../../../server/lib/worldMap.js';
@@ -20,7 +20,7 @@ import { shotNumbers } from '../ShotStepper.jsx';
 import {
   backfillPrevizFromShots, previzCutProblems, previzPawnColors, updatePrevizCut, previzCutTiming, previzCutVisibleIds, previzPlaceGreybox, previzSetsWithoutGreybox, projectPreviz,
 } from '../../../../../server/lib/musicVideoPreviz.js';
-import { PREVIZ_CAMERA_STYLES, PREVIZ_PAWN_COLORS } from '../../../../../server/lib/musicVideoPrevizLimits.js';
+import { PREVIZ_CAMERA_STYLES, PREVIZ_PAWN_COLORS, PREVIZ_VEHICLES_MAX, VEHICLE_DEFAULT_METERS_PER_MIN, VEHICLE_SPEED_MAX_METERS_PER_MIN } from '../../../../../server/lib/musicVideoPrevizLimits.js';
 
 export const PREVIZ_ANCHOR = 'mv-previz';
 const selectCls = 'min-h-[44px] min-w-0 max-w-full rounded border border-port-border bg-port-bg px-1.5 py-1 text-xs text-port-text pointer-fine:sm:min-h-0';
@@ -39,27 +39,63 @@ function Picker({ id, label, value, options, empty, onChange }) {
   );
 }
 
-/** Each character's pawn color, and their bike's, so who is who reads at a glance in the previz. */
+const colorOptions = PREVIZ_PAWN_COLORS.map((color) => <option key={color.id} value={color.id}>{color.label}</option>);
+
+/** Each character's pawn color, so who is who reads at a glance in the previz. */
 function PawnColors({ project, characters, onChange }) {
   const colors = previzPawnColors(project);
   const picked = project.previz?.pawnColors || {};
-  const pick = (subjectId, part, id) => onChange({ ...picked, [subjectId]: { ...picked[subjectId], [part]: id } });
   return (
     <ul className="flex min-w-0 flex-wrap gap-x-4 gap-y-1.5 text-xs" aria-label="Pawn colors">
       {characters.map((subject) => (
         <li key={subject.id} className="inline-flex min-w-0 flex-wrap items-center gap-1">
           <span aria-hidden="true" className="inline-block h-3 w-3 shrink-0 rounded-full border border-port-border" style={{ background: colors[subject.id].figure.hex }} />
           <span className="font-medium text-port-text">{subject.name}</span>
-          {['figure', 'bike'].map((part) => (
-            <span key={part} className="inline-flex items-center gap-1">
-              <label htmlFor={`mv-previz-color-${subject.id}-${part}`} className="text-port-text-muted">{part === 'figure' ? 'Figure' : 'Bike'}</label>
-              <select id={`mv-previz-color-${subject.id}-${part}`} value={colors[subject.id][part].id} onChange={(event) => pick(subject.id, part, event.target.value)} className={selectCls}>
-                {PREVIZ_PAWN_COLORS.map((color) => <option key={color.id} value={color.id}>{color.label}</option>)}
-              </select>
-            </span>
-          ))}
+          <label htmlFor={`mv-previz-color-${subject.id}`} className="sr-only">{subject.name} color</label>
+          <select id={`mv-previz-color-${subject.id}`} value={colors[subject.id].figure.id} onChange={(event) => onChange({ ...picked, [subject.id]: { figure: event.target.value } })} className={selectCls}>
+            {colorOptions}
+          </select>
         </li>
       ))}
+    </ul>
+  );
+}
+
+/**
+ * The cast's objects the people can ride (a bike, car, horse, skateboard…): mark one as a
+ * vehicle to give it a pawn color and a travel speed; a timeline travel or a shot that names it puts people on it.
+ */
+function Vehicles({ project, objects, onChange }) {
+  const colors = previzPawnColors(project);
+  const vehicles = project.previz?.vehicles || [];
+  const picked = project.previz?.pawnColors || {};
+  const setVehicles = (next) => onChange({ vehicles: next });
+  return (
+    <ul className="flex min-w-0 flex-wrap gap-x-4 gap-y-1.5 text-xs" aria-label="Vehicles">
+      {objects.map((subject) => {
+        const entry = vehicles.find((vehicle) => vehicle.subjectId === subject.id);
+        return (
+          <li key={subject.id} className="inline-flex min-w-0 flex-wrap items-center gap-1">
+            <input id={`mv-previz-vehicle-${subject.id}`} type="checkbox" checked={!!entry}
+              onChange={(event) => setVehicles(event.target.checked ? [...vehicles, { subjectId: subject.id, speedMetersPerMin: VEHICLE_DEFAULT_METERS_PER_MIN }].slice(0, PREVIZ_VEHICLES_MAX) : vehicles.filter((vehicle) => vehicle.subjectId !== subject.id))} />
+            <label htmlFor={`mv-previz-vehicle-${subject.id}`} className="font-medium text-port-text">{subject.name} is a vehicle</label>
+            {entry && (
+              <>
+                <label htmlFor={`mv-previz-vehicle-color-${subject.id}`} className="text-port-text-muted">Color</label>
+                <select id={`mv-previz-vehicle-color-${subject.id}`} value={colors[subject.id]?.figure.id} onChange={(event) => onChange({ pawnColors: { ...picked, [subject.id]: { figure: event.target.value } } })} className={selectCls}>
+                  {colorOptions}
+                </select>
+                <label htmlFor={`mv-previz-vehicle-speed-${subject.id}`} className="text-port-text-muted">Speed (m/min)</label>
+                <input id={`mv-previz-vehicle-speed-${subject.id}`} type="number" min="1" max={VEHICLE_SPEED_MAX_METERS_PER_MIN} step="10" inputMode="numeric" className={`${selectCls} w-20`} value={entry.speedMetersPerMin}
+                  onChange={(event) => {
+                    const speed = Number(event.target.value);
+                    if (Number.isFinite(speed) && speed >= 1 && speed <= VEHICLE_SPEED_MAX_METERS_PER_MIN) setVehicles(vehicles.map((vehicle) => (vehicle.subjectId === subject.id ? { ...vehicle, speedMetersPerMin: speed } : vehicle)));
+                  }} />
+              </>
+            )}
+          </li>
+        );
+      })}
     </ul>
   );
 }
@@ -175,34 +211,34 @@ function CameraStyles({ cameras, onChange }) {
   );
 }
 
-/** A cut's moment on the previz night, and where an unheld camera stands for it (tap the map). */
-function CutOnNight({ project, cut, world, worldPlaces, onChange }) {
-  const night = previzNight(project);
+/** A cut's moment on the previz timeline, and where an unheld camera stands for it (tap the map). */
+function CutOnTimeline({ project, cut, world, worldPlaces, onChange }) {
+  const timeline = previzTimeline(project);
   const [picking, setPicking] = useState(false);
   const [view, setView] = useState(() => fitWorldView(world));
   const id = `mv-previz-${cut.id}-story`;
   const on = Number.isFinite(cut.storyMin);
   const spotActors = () => {
-    const actors = nightActorsAt(project, world, worldPlaces, cut.storyMin).map((actor) => ({ ...actor, color: '#d9dde3' }));
+    const actors = timelineActorsAt(project, world, worldPlaces, cut.storyMin).map((actor) => ({ ...actor, color: '#d9dde3' }));
     return cut.cameraSpot ? [...actors, { subjectId: 'camera-spot', name: 'Camera', position: [cut.cameraSpot[0], 0, cut.cameraSpot[1]], color: '#ffdd55' }] : actors;
   };
   return (
     <div className="min-w-0 space-y-1.5">
       <div className="flex min-w-0 flex-wrap items-center gap-2">
         <label className="flex items-center gap-1" htmlFor={id}>
-          <span className="text-port-text-muted">On the night at</span>
-          <input id={id} type="time" className={selectCls} value={on ? worldClockText(nightClockAt(night, cut.storyMin)) : ''}
+          <span className="text-port-text-muted">On the timeline at</span>
+          <input id={id} type="time" className={selectCls} value={on ? worldClockText(timelineClockAt(timeline, cut.storyMin)) : ''}
             onChange={(event) => {
               const [h, m] = event.target.value.split(':').map(Number);
               if (!Number.isFinite(h) || !Number.isFinite(m)) return;
-              // A time outside the night wraps past its end, where everyone has stopped.
-              const storyMin = nightMinuteOfClock(night, h * 60 + m);
-              if (storyMin <= night.lengthMin) onChange({ storyMin });
+              // A time outside the timeline wraps past its end, where everyone has stopped.
+              const storyMin = timelineMinuteOfClock(timeline, h * 60 + m);
+              if (storyMin <= timeline.lengthMin) onChange({ storyMin });
             }} />
         </label>
         {on
-          ? <button type="button" className={buttonCls} onClick={() => onChange({ storyMin: null })}>Off the night</button>
-          : <span className="text-port-text-muted">Not on the night: plays its set's own blocking</span>}
+          ? <button type="button" className={buttonCls} onClick={() => onChange({ storyMin: null })}>Off the timeline</button>
+          : <span className="text-port-text-muted">Not on the timeline: plays its set's own blocking</span>}
         {on && !cut.holderSubjectId && (
           <>
             <button type="button" className={buttonCls} aria-pressed={picking} onClick={() => setPicking(!picking)}><MapIcon size={12} aria-hidden="true" /> {cut.cameraSpot ? 'Move camera spot' : 'Pick camera spot'}</button>
@@ -259,7 +295,7 @@ function CutRow({ project, cut, number, scene, places, characters, placeSubjects
           </label>
         )}
       </div>
-      {world && previzNight(project) && <CutOnNight project={project} cut={cut} world={world} worldPlaces={worldPlaces} onChange={onChange} />}
+      {world && previzTimeline(project) && <CutOnTimeline project={project} cut={cut} world={world} worldPlaces={worldPlaces} onChange={onChange} />}
       {others.length > 0 && (
         <fieldset className="flex min-w-0 flex-wrap items-center gap-1.5">
           <legend className="sr-only">In shot</legend>
@@ -296,6 +332,7 @@ export default function PrevizStage({ board }) {
   // One entry per character: the alternate picked on the Story step.
   const characters = activeMusicVideoSubjects(project.concept).filter((subject) => subject.kind === 'character');
   const placeSubjects = subjects.filter((subject) => subject.kind === 'place');
+  const objectSubjects = subjects.filter((subject) => subject.kind === 'object');
   const placesLoaded = placeSubjects.every((subject) => !subject.ingredientId || places[subject.ingredientId] !== undefined);
   const scenes = useMemo(() => project.scenes || [], [project.scenes]);
   const numbers = useMemo(() => shotNumbers(scenes), [scenes]);
@@ -304,7 +341,7 @@ export default function PrevizStage({ board }) {
   const save = (next) => { editProjectLocal({ previz: next }); return saveProjectFields({ previz: next }); };
   // The label of the save in flight ('Building…' / 'Syncing…'), null when idle.
   const [building, setBuilding] = useState(null);
-  // World and night can come before any cuts exist.
+  // World and timeline can come before any cuts exist.
   const savePrevizField = (patch) => save({ ...(project.previz && Array.isArray(project.previz.cuts) ? project.previz : { cuts: [], tracks: [] }), ...patch });
   const build = () => {
     const { previz: built, added, removed } = backfillPrevizFromShots(project, places);
@@ -348,9 +385,9 @@ export default function PrevizStage({ board }) {
           <PrevizWorld project={project} worldId={worldId} entry={worldEntry} places={places} onPick={(next) => savePrevizField({ worldId: next })} />
         </fieldset>
         {world && (
-          <section className="min-w-0 space-y-1" aria-label="Night">
-            <h3 className="text-xs text-port-text-muted">Night</h3>
-            <PrevizNight project={project} world={world} places={worldPlaces} locked={locked} onSave={savePrevizField} />
+          <section className="min-w-0 space-y-1" aria-label="Timeline">
+            <h3 className="text-xs text-port-text-muted">Timeline</h3>
+            <PrevizTimeline project={project} world={world} places={worldPlaces} locked={locked} onSave={savePrevizField} />
           </section>
         )}
         <section className="min-w-0 space-y-1" aria-label="Edit with AI">
@@ -372,6 +409,12 @@ export default function PrevizStage({ board }) {
           <fieldset disabled={locked} className="min-w-0 space-y-1">
             <legend className="text-xs text-port-text-muted">Pawn colors</legend>
             <PawnColors project={project} characters={characters} onChange={(pawnColors) => save({ ...previz, pawnColors })} />
+          </fieldset>
+        )}
+        {previz && objectSubjects.length > 0 && (
+          <fieldset disabled={locked} className="min-w-0 space-y-1">
+            <legend className="text-xs text-port-text-muted">Vehicles (objects the people ride)</legend>
+            <Vehicles project={project} objects={objectSubjects} onChange={(patch) => save({ ...previz, ...patch })} />
           </fieldset>
         )}
         {previz && (

@@ -65,7 +65,7 @@ export function musicVideoReferenceSubjectIds(project, reference) {
 /**
  * The project's previz (`project.previz`) as the active cast sees it: every id of
  * a character's unused alternate (a cast entry with the same name) reads as the
- * active one, and characters with no active entry drop out of the night's beats.
+ * active one, and characters with no active entry drop out of the timeline's beats.
  * Lets the director switch alternates without re-blocking. Tracks, pawn colors
  * and beat casts keep the active entry's own data when both exist. Cached per
  * previz and cast, so playback can call it every frame.
@@ -105,7 +105,7 @@ export function musicVideoPrevizForActiveCast(project) {
       })),
       tracks: ownFirst(previz.tracks || [], (track) => `${track.placeSubjectId}\u0000${track.subjectId}`),
       ...(pawnColors ? { pawnColors } : {}),
-      ...(previz.night ? { night: { ...previz.night, beats: (previz.night.beats || []).map((beat) => ({ ...beat, subjectIds: ids(beat.subjectIds) })) } } : {}),
+      ...(previz.timeline ? { timeline: { ...previz.timeline, beats: (previz.timeline.beats || []).map((beat) => ({ ...beat, subjectIds: ids(beat.subjectIds) })) } } : {}),
     };
   }
   PREVIZ_FOR_CAST.set(previz, { subjects, value });

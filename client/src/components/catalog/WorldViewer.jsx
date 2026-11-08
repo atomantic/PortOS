@@ -85,7 +85,7 @@ export function worldExtent(world) {
 /**
  * Everything of the world inside a Canvas: sky and light for its setting and
  * `clockMinutes`, ground, paths, generated filler, lamps and every placed set.
- * Shared by the World tab's viewer and the previz player's night shots.
+ * Shared by the World tab's viewer and the previz player's timeline shots.
  */
 export function WorldScene({ world, places, clockMinutes, labelPortal }) {
   const fill = useMemo(() => worldFill(world), [world]);

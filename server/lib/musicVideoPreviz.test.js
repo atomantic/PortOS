@@ -6,7 +6,9 @@ const subjects = [
   { id: 'c-ana', kind: 'character', name: 'Ana' },
   { id: 'c-bo', kind: 'character', name: 'Bo' },
   { id: 'p-street', kind: 'place', name: 'Example Street', ingredientId: 'cat-street' },
+  { id: 'o-cart', kind: 'object', name: 'Hand cart' },
 ];
+const vehicles = [{ subjectId: 'o-cart', speedMetersPerMin: 120 }];
 const greybox = {
   anchors: [{ id: 'mark', label: 'Mark', kind: 'figure', position: [1, 0, 2], facingDegrees: 90 }],
   shots: [{ id: 'wide', label: 'Wide', position: [0, 3, 10], target: [0, 1, 0], focalLengthMm: 28, aspect: '16:9', figures: [{ anchorId: 'mark' }] }],
@@ -19,14 +21,14 @@ describe('greybox previz backfill', () => {
   // Catches a backfill that loses who holds the camera, whom the shot shows, or the riding pose.
   it('builds one linked cut per timed shot with the sheet holder, cast and saved camera, seeding marks', () => {
     const p = project([
-      scene('s1', 0, 4, { cameraId: 'cam-vhs', holder: 'Bo', characters: ['Ana', 'Bo'], action: 'Ana rides her bike past' }),
+      scene('s1', 0, 4, { cameraId: 'cam-vhs', holder: 'Bo', characters: ['Ana', 'Bo'], action: 'Ana pulls the Hand cart past' }),
       { sceneId: 'untimed', startSec: null, endSec: null },
     ]);
-    const { previz, added } = backfillPrevizFromShots(p, places);
+    const { previz, added } = backfillPrevizFromShots({ ...p, previz: { cuts: [], tracks: [], vehicles } }, places);
     expect(added).toBe(1);
     expect(previz.cuts).toEqual([expect.objectContaining({ sceneId: 's1', placeSubjectId: 'p-street', viewShotId: 'wide', holderSubjectId: 'c-bo', visibleSubjectIds: ['c-ana'], aimSubjectId: null })]);
     const ana = previz.tracks.find((t) => t.subjectId === 'c-ana');
-    expect(ana.keys[0]).toMatchObject({ timeSec: 0, position: [1, 0, 2], facingDegrees: 90, pose: 'ride' });
+    expect(ana.keys[0]).toMatchObject({ timeSec: 0, position: [1, 0, 2], facingDegrees: 90, pose: 'ride', vehicleSubjectId: 'o-cart' });
     const bo = previz.tracks.find((t) => t.subjectId === 'c-bo');
     expect(bo.keys[0].position).toEqual([0, 0, 10]);
     expect(musicVideoProjectUpdateSchema.safeParse({ previz }).success).toBe(true);
@@ -66,6 +68,16 @@ describe('greybox previz playback', () => {
     expect(previzFrameAt(p, places, 9)).toBeNull();
   });
 
+  // Catches a cast that only walks being put on a vehicle because the shot's words happen to mention riding.
+  it('keeps people on foot when no listed vehicle is named, and ignores an unlisted object', () => {
+    const p = project([scene('s1', 0, 4, { characters: ['Ana'], action: 'Ana rides her bike past the Hand cart' })]);
+    const walking = backfillPrevizFromShots(p, places).previz;
+    expect(walking.tracks[0].keys[0].pose).toBe('stand');
+    expect(walking.tracks[0].keys[0].vehicleSubjectId).toBeUndefined();
+    const driving = backfillPrevizFromShots({ ...p, previz: { cuts: [], tracks: [], vehicles } }, places).previz;
+    expect(driving.tracks[0].keys[0]).toMatchObject({ pose: 'ride', vehicleSubjectId: 'o-cart' });
+  });
+
   it('names what keeps a cut from playing', () => {
     const p = project([scene('s1', 0, 4)]);
     expect(previzCutProblems(p, { id: 'c', sceneId: 's1', startSec: 0, endSec: 4, placeSubjectId: 'p-street', viewShotId: 'gone' }, places)).toEqual(['Its greybox camera was removed']);
@@ -75,11 +87,14 @@ describe('greybox previz playback', () => {
 });
 
 // Catches two people sharing a pawn color, so the director (and later a model) can't tell them apart.
-it('gives every character a distinct named pawn color, keeps picks, and colors a bike like its rider unless picked', () => {
-  const colors = previzPawnColors(project([], { previz: { cuts: [], tracks: [], pawnColors: { 'c-bo': { figure: 'red', bike: 'chrome' } } } }));
-  expect(colors['c-bo']).toMatchObject({ figure: { id: 'red' }, bike: { id: 'chrome' } });
+it('gives every character and vehicle a distinct named pawn color and keeps picks', () => {
+  const colors = previzPawnColors(project([], { previz: { cuts: [], tracks: [], vehicles, pawnColors: { 'c-bo': { figure: 'red' }, 'o-cart': { figure: 'chrome' } } } }));
+  expect(colors['c-bo'].figure.id).toBe('red');
+  expect(colors['o-cart'].figure.id).toBe('chrome');
   expect(colors['c-ana'].figure.id).not.toBe('red');
-  expect(colors['c-ana'].bike).toBe(colors['c-ana'].figure);
+  expect(colors['c-ana'].figure.id).not.toBe('chrome');
+  // A legacy bike color no longer validates (migration 459 converts it).
+  expect(musicVideoProjectUpdateSchema.safeParse({ previz: { cuts: [], tracks: [], pawnColors: { 'c-bo': { bike: 'red' } } } }).success).toBe(false);
   expect(musicVideoProjectUpdateSchema.safeParse({ previz: { cuts: [], tracks: [], pawnColors: { 'c-bo': { figure: 'red' } } } }).success).toBe(true);
   expect(musicVideoProjectUpdateSchema.safeParse({ previz: { cuts: [], tracks: [], pawnColors: { 'c-bo': { figure: '#ff0000' } } } }).success).toBe(false);
 });
