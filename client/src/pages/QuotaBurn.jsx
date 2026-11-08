@@ -486,7 +486,7 @@ function QuotaBurnContent() {
         </span>
         <button
           type="button"
-          className="inline-flex items-center gap-1 text-xs text-gray-300 hover:text-white disabled:opacity-40"
+          className="inline-flex items-center gap-1 text-xs text-gray-300 hover:text-white disabled:opacity-40 pointer-coarse:min-h-11"
           disabled={refreshing}
           onClick={() => refreshQuota(true)}
         >

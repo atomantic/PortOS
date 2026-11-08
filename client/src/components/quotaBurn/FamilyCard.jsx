@@ -163,10 +163,10 @@ export default function FamilyCard({
             : 'no jobs'}
         </span>
 
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex items-center gap-2 pointer-coarse:gap-3">
           <button
             type="button"
-            className="text-xs text-port-accent hover:underline disabled:opacity-40"
+            className="inline-flex items-center rounded border border-port-accent/50 px-2.5 py-1 text-xs text-port-accent hover:bg-port-accent/10 disabled:opacity-40 pointer-coarse:min-h-11"
             disabled={actionsBusy || !hasEnabledJobs}
             onClick={() => onRunFamily(familyId)}
             title={hasEnabledJobs ? 'Force-run this family\'s next available job now' : 'Add an enabled job before running this family'}
@@ -175,7 +175,7 @@ export default function FamilyCard({
           </button>
           <button
             type="button"
-            className="inline-flex items-center gap-1 text-xs text-gray-300 hover:text-white"
+            className="inline-flex items-center gap-1 rounded border border-port-border px-2.5 py-1 text-xs text-gray-300 hover:text-white pointer-coarse:min-h-11"
             onClick={() => onToggleExpand(familyId)}
           >
             {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
