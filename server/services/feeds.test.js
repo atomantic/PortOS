@@ -136,6 +136,33 @@ describe('addFeed', () => {
     ]);
   });
 
+  it('rejects a non-feed HTML page without storing a subscription', async () => {
+    fetchMock.mockResolvedValue(makeResponse({ body: '<!doctype html><html><body>Hi</body></html>' }));
+    const result = await feeds.addFeed('https://example.com/');
+    expect(result).toEqual({ error: 'That URL is not an RSS or Atom feed' });
+    expect(await feeds.getFeeds()).toEqual([]);
+  });
+
+  it('parses RSS 1.0 (RDF) feeds whose items are siblings of the channel', async () => {
+    const rdf = `<?xml version="1.0"?>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns="http://purl.org/rss/1.0/">
+  <channel rdf:about="https://example.com/"><title>RDF Feed</title><items><rdf:Seq><rdf:li rdf:resource="https://example.com/1"/></rdf:Seq></items></channel>
+  <item rdf:about="https://example.com/1"><title>One</title><link>https://example.com/1</link></item>
+  <item rdf:about="https://example.com/2"><title>Two</title><link>https://example.com/2</link></item>
+</rdf:RDF>`;
+    fetchMock.mockResolvedValue(makeResponse({ body: rdf }));
+    const result = await feeds.addFeed('https://example.com/rdf');
+    expect(result.feed).toMatchObject({ title: 'RDF Feed', itemCount: 2 });
+    const items = await feeds.getItems({});
+    expect(items.map(i => i.title).sort()).toEqual(['One', 'Two']);
+  });
+
+  it('still subscribes to an RSS 2.0 feed with an empty channel', async () => {
+    fetchMock.mockResolvedValue(makeResponse({ body: '<rss version="2.0"><channel><title>Quiet</title></channel></rss>' }));
+    const result = await feeds.addFeed('https://example.com/quiet');
+    expect(result.feed).toMatchObject({ title: 'Quiet', itemCount: 0 });
+  });
+
   it('rejects duplicate URLs', async () => {
     fetchMock.mockResolvedValue(makeResponse({ body: RSS_FIXTURE }));
     await feeds.addFeed('https://example.com/rss');
