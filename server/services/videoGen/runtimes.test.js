@@ -489,6 +489,7 @@ describe('minimax_h3_cuda runtime registration', () => {
 
 describe('ltx25_cuda runtime registration', () => {
   const info = BYOV_RUNTIME_INFO.ltx25_cuda;
+  const python = resolveTestPython();
 
   it('registers the official cache-only CUDA pipeline in its own venv', () => {
     expect(BYOV_VIDEO_RUNTIMES.has('ltx25_cuda')).toBe(true);
@@ -502,9 +503,8 @@ describe('ltx25_cuda runtime registration', () => {
     expect(info.killProcessGroup).toBe(true);
   });
 
-  it('requires locked transitives, source revisions and Python before hiding Repair', () => {
+  it.skipIf(!python)('requires locked transitives, source revisions and Python before hiding Repair', () => {
     const root = mkdtempSync(join(tmpdir(), 'ltx25-currency-'));
-    const python = process.platform === 'win32' ? 'python' : 'python3';
     const digest = 'a'.repeat(64);
     const url = `https://github.com/Lightricks/LTX-2/archive/${'b'.repeat(40)}.tar.gz`;
     const lock = join(root, 'runtime.lock.txt');

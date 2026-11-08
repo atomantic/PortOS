@@ -1,9 +1,9 @@
 # LTX-2.5 CUDA direct pins. Install only the target hash lock.
 # Source packages use the immutable v1.2.0 archive, never git or a moving tag.
 # Regeneration, isolated build bootstrap and GPU evidence: docs/LTX25_CUDA.md.
-torch==2.14.1+cu126
-torchaudio==2.11.1
-torchvision==0.29.1+cu126
+torch==2.14.1+cu132
+torchaudio==2.11.1+cu132
+torchvision==0.29.1+cu132
 ltx-core @ https://github.com/Lightricks/LTX-2/archive/d151147788a9284cca791edc6ce898007e727fe6.tar.gz#subdirectory=packages/ltx-core
 ltx-pipelines @ https://github.com/Lightricks/LTX-2/archive/d151147788a9284cca791edc6ce898007e727fe6.tar.gz#subdirectory=packages/ltx-pipelines
 transformers==5.14.1

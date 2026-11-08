@@ -2,7 +2,7 @@
 
 Video Gen's explicit Install/Repair installs this runtime in
 `~/.portos/ltx-2.5-cuda/.venv`. It supports CPython 3.11 on x86_64 Windows
-(Git Bash) and Linux (glibc 2.28+), with an NVIDIA driver supporting CUDA 12.6.
+(Git Bash) and Linux (glibc 2.28+), with an NVIDIA driver supporting CUDA 13.2.
 [uv](https://docs.astral.sh/uv/) provisions a dedicated managed interpreter;
 other Python minors and Conda-based environments are rebuilt during Repair.
 Model weights remain a separate explicit Video Gen download.
@@ -14,9 +14,12 @@ SHA-256 hashes. Repair syncs the complete set, removing extra packages. The
 runtime currency probe checks every version and the LTX archive provenance, so
 an older importable environment still offers Upgrade/Repair.
 
-The stack uses torch 2.14.1+cu126, torchvision 0.29.1+cu126 and torchaudio
-2.11.1. Torchaudio 2.11.1 declares torch>=2.11 instead of requiring the same
-minor version; its PyPI wheel supplies the audio operations used by LTX.
+The stack uses torch 2.14.1+cu132, torchvision 0.29.1+cu132 and torchaudio
+2.11.1+cu132. Torchaudio 2.11.1 declares torch>=2.11 instead of requiring the same
+minor version. All three native packages use the same CUDA 13.2 index.
+This preserves Blackwell support; CUDA 12.6 wheels omit its SM120 kernels.
+PyPI's Linux torchaudio wheel requires CUDA 13, so selecting the explicit CUDA
+build also avoids mixing that native extension with an older torch runtime.
 The previous torch 2.10.0 pin matches OSV GHSA-rrmf-rvhw-rf47 and
 PYSEC-2026-139. The new stack removes those advisories. Transformers stays at
 5.14.1 because the pinned LTX package explicitly requires <5.15 for its Gemma
@@ -57,7 +60,7 @@ for target in windows linux; do
     --python-version 3.11 --python-platform "$platform" \
     --generate-hashes --only-binary :all: \
     --index-url https://pypi.org/simple \
-    --extra-index-url https://download.pytorch.org/whl/cu126 \
+    --extra-index-url https://download.pytorch.org/whl/cu132 \
     --index-strategy unsafe-best-match --emit-index-url \
     --no-header --annotation-style line \
     -o "scripts/requirements-ltx25-cuda-${target}.lock.txt"

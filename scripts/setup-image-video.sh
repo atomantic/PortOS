@@ -973,9 +973,9 @@ if [[ "$INSTALL_LTX25_CUDA" == "1" ]]; then
     x86_64|amd64|AMD64) ;;
     *) echo "❌ LTX-2.5 CUDA hash locks support x86_64 Windows/Linux only." >&2; exit 1 ;;
   esac
-  LTX25_CUDA_TORCH_INDEX="${PORTOS_LTX25_CUDA_TORCH_INDEX:-https://download.pytorch.org/whl/cu126}"
-  if [[ "$LTX25_CUDA_TORCH_INDEX" != "https://download.pytorch.org/whl/cu126" ]]; then
-    echo "❌ LTX-2.5 CUDA is locked to cu126. Unset PORTOS_LTX25_CUDA_TORCH_INDEX for this runtime; see docs/LTX25_CUDA.md." >&2
+  LTX25_CUDA_TORCH_INDEX="${PORTOS_LTX25_CUDA_TORCH_INDEX:-https://download.pytorch.org/whl/cu132}"
+  if [[ "$LTX25_CUDA_TORCH_INDEX" != "https://download.pytorch.org/whl/cu132" ]]; then
+    echo "❌ LTX-2.5 CUDA is locked to cu132. Unset PORTOS_LTX25_CUDA_TORCH_INDEX for this runtime; see docs/LTX25_CUDA.md." >&2
     exit 1
   fi
   LTX25_CUDA_DIR="${HOME}/.portos/ltx-2.5-cuda"

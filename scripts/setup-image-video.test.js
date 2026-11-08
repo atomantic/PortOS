@@ -772,7 +772,7 @@ source "$1"
         LOG: log.replaceAll('\\', '/'), STUB: stub.replaceAll('\\', '/'),
         TARGET: target === 'windows' ? 'MINGW64_NT-10.0' : 'Linux',
         PYTHON_BIN: 'true', INSTALL_LTX25_CUDA: '1',
-        PORTOS_LTX25_CUDA_TORCH_INDEX: 'https://download.pytorch.org/whl/cu126',
+        PORTOS_LTX25_CUDA_TORCH_INDEX: 'https://download.pytorch.org/whl/cu132',
         ...env,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -793,7 +793,7 @@ source "$1"
     expect(lock).toContain('d151147788a9284cca791edc6ce898007e727fe6.tar.gz');
     const backend = readFileSync(join(REPO_ROOT, 'scripts/requirements-ltx25-cuda-build.lock.txt'), 'utf8');
     expect(backend.match(/^uv-build==[^\n]+\n(?:[ \t]+[^\n]*\n?)*/m)?.[0]).toBe(lock.match(/^uv-build==[^\n]+\n(?:[ \t]+[^\n]*\n?)*/m)?.[0]);
-    expect(lock.includes('nvidia-cuda-runtime-cu12==')).toBe(target === 'linux');
+    expect(lock.includes('nvidia-cuda-runtime==')).toBe(target === 'linux');
 
     const install = installer(target);
     expect(install.run()).toContain('LTX-2.5 CUDA runtime ready');
