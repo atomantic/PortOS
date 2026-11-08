@@ -182,10 +182,14 @@ function formatNextDue(job) {
   if (!lastRun) return scheduledTime ? `at ${scheduledTime}` : 'Immediately';
   let nextDue = new Date(lastRun).getTime() + intervalMs;
   if (scheduledTime) {
+    // Mirrors server nextIntervalJobFireTime: snap to the HH:MM occurrence nearest
+    // lastRun + interval, so a run that finished a minute late stays on its weekday.
     const [hours, minutes] = scheduledTime.split(':').map(Number);
-    const nextDate = new Date(nextDue);
-    nextDate.setHours(hours, minutes, 0, 0);
-    if (nextDate.getTime() > nextDue) nextDue = nextDate.getTime();
+    const searchFrom = nextDue - Math.min(12 * 3600_000, intervalMs / 2);
+    const snapped = new Date(searchFrom);
+    snapped.setHours(hours, minutes, 0, 0);
+    if (snapped.getTime() < searchFrom) snapped.setDate(snapped.getDate() + 1);
+    nextDue = snapped.getTime();
   }
   return timeUntil(nextDue, 'Now');
 }

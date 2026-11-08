@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 
 vi.mock('../ui/Toast', () => ({
@@ -160,5 +160,29 @@ describe('JobCard on-demand cadence', () => {
     expect(select.value).toBe('on-demand');
     expect(screen.queryByLabelText('Run at a specific time (leave empty for any time)')).toBeNull();
     expect(screen.getByText('Runs only when you press Run now.')).toBeTruthy();
+  });
+});
+
+// #15352 — the card's "Next:" must use the server's nearest-occurrence rule, so
+// a weekly run that finished late shows the same weekday, not a day later.
+describe('JobCard next-due for a late weekly run', () => {
+  const WEEKLY_JOB = {
+    ...SCRIPT_JOB,
+    id: 'job-weekly',
+    interval: 'weekly',
+    intervalMs: 7 * 24 * 3600000,
+    scheduledTime: '03:00'
+  };
+
+  afterEach(() => vi.useRealTimers());
+
+  it('shows 6d, not 7d, when a Monday 03:00 job finished at 03:30', () => {
+    const lastRun = new Date(2026, 10, 2, 3, 30); // Monday, browser-local
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(lastRun);
+    renderCard({ ...WEEKLY_JOB, lastRun: lastRun.toISOString() });
+
+    // Next fire is the following Monday 03:00 (6d 23h 30m away), not 03:30.
+    expect(screen.getByText('Next: in 6d')).toBeTruthy();
   });
 });

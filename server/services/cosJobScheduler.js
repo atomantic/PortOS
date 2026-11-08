@@ -26,7 +26,6 @@ import { maintenance, isMaintenanceHold } from '../lib/maintenanceAdmission.js';
  */
 
 import { schedule as scheduleEvent, cancel as cancelEvent, getEvent as getScheduledEvent, parseCronToNextRun, parseRecurrenceToNextRun } from './eventScheduler.js';
-import { getLocalParts, nextLocalTime } from '../lib/timezone.js';
 import { getUserTimezone } from './userTimezone.js';
 import { formatDuration } from '../lib/fileUtils.js';
 import { loadState, isDaemonRunning, canQueueImprovementTasks } from './cosState.js';
@@ -39,6 +38,7 @@ import { getCosTasks } from './cosTaskStore.js';
 import { queueEligibleImprovementTasks } from './cosTaskGenerator.js';
 import { generateTaskFromJob, recordJobGateSkip, isScriptJob, executeScriptJob, isShellJob, executeShellJob } from './autonomousJobs.js';
 import { checkJobGate, hasGate } from './jobGates.js';
+import { nextIntervalJobFireTime } from './autonomousJobs/scheduler.js';
 import {
   acquireCosActionReservation,
   pendingCosActionReservations,
@@ -100,28 +100,7 @@ function computeNextJobFireTime(job, timezone) {
     return next.getTime();
   }
 
-  // Interval fallback: lastRun + intervalMs, then align to scheduledTime if set
-  const lastRun = job.lastRun ? new Date(job.lastRun).getTime() : 0;
-  let nextDue = lastRun + job.intervalMs;
-
-  // Restore scheduledTime alignment for interval-mode jobs (e.g. weekly at 00:00).
-  // nextLocalTime advances nextDue to the next occurrence of HH:MM in the user's timezone,
-  // preventing drift when a run occurs slightly late.
-  if (job.scheduledTime) {
-    const match = String(job.scheduledTime).match(/^([01]\d|2[0-3]):([0-5]\d)$/);
-    if (match) {
-      const candidate = nextLocalTime(nextDue, Number(match[1]), Number(match[2]), timezone);
-      if (candidate > nextDue) nextDue = candidate;
-    }
-  }
-
-  if (job.weekdaysOnly) {
-    const { dayOfWeek } = getLocalParts(new Date(nextDue), timezone);
-    if (dayOfWeek === 0) nextDue += 24 * 60 * 60 * 1000; // Sunday → Monday
-    if (dayOfWeek === 6) nextDue += 2 * 24 * 60 * 60 * 1000; // Saturday → Monday
-  }
-
-  return nextDue;
+  return nextIntervalJobFireTime(job, timezone);
 }
 
 /**

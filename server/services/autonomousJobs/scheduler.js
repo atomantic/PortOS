@@ -9,7 +9,7 @@
 import { getLocalParts, nextLocalTime } from '../../lib/timezone.js'
 import { getUserTimezone } from '../userTimezone.js'
 import { parseCronToNextRun, parseRecurrenceToNextRun } from '../eventScheduler.js'
-import { DAY, isOnDemandJob } from './constants.js'
+import { DAY, HOUR, isOnDemandJob } from './constants.js'
 import { loadJobs } from './store.js'
 
 // Reads enabled jobs straight from the store. Scheduler intentionally does NOT
@@ -103,6 +103,44 @@ async function getDueJobs() {
 }
 
 /**
+ * Next fire time of an interval-mode job: `lastRun + intervalMs`, snapped to the
+ * `scheduledTime` (HH:MM, user timezone) occurrence NEAREST that moment, then
+ * pushed off weekends for `weekdaysOnly`. The one implementation behind both the
+ * armed timer (cosJobScheduler) and the stats preview (computeNextJobRun), so
+ * they cannot drift.
+ *
+ * Nearest, not next: a run stamped a minute after HH:MM (script jobs stamp
+ * `lastRun` after the handler finishes) would otherwise round up a whole day,
+ * sliding a weekly job one weekday later every cycle. Searching from
+ * `nextDue - window` (half an interval, capped at 12h) also guarantees the result
+ * is later than `lastRun` and leaves hourly jobs resolving to the next HH:MM.
+ *
+ * @param {Object} job - interval-mode job (finite `intervalMs`)
+ * @param {string} timezone - IANA timezone for scheduledTime
+ * @returns {number|null} UTC timestamp in milliseconds
+ */
+export function nextIntervalJobFireTime(job, timezone) {
+  const lastRun = job.lastRun ? new Date(job.lastRun).getTime() : 0
+  let nextDue = lastRun + job.intervalMs
+
+  const match = job.scheduledTime && String(job.scheduledTime).match(/^([01]\d|2[0-3]):([0-5]\d)$/)
+  if (match) {
+    const window = Math.min(12 * HOUR, job.intervalMs / 2)
+    const snapped = nextLocalTime(nextDue - window, Number(match[1]), Number(match[2]), timezone)
+    // DST nudging in nextLocalTime can move the result by up to an hour.
+    if (snapped > lastRun) nextDue = snapped
+  }
+
+  if (job.weekdaysOnly && Number.isFinite(nextDue)) {
+    const { dayOfWeek } = getLocalParts(new Date(nextDue), timezone)
+    if (dayOfWeek === 0) nextDue += DAY // Sunday → Monday
+    if (dayOfWeek === 6) nextDue += 2 * DAY // Saturday → Monday
+  }
+
+  return Number.isFinite(nextDue) ? nextDue : null
+}
+
+/**
  * Compute one job's next scheduled timestamp.
  * @param {Object} job
  * @param {string} timezone
@@ -121,18 +159,7 @@ export function computeNextJobRun(job, timezone) {
   // rather than an arithmetic-on-null date.
   if (isOnDemandJob(job)) return null
 
-  const lastRun = job.lastRun ? new Date(job.lastRun).getTime() : 0
-  let nextDue = lastRun + job.intervalMs
-
-  if (job.scheduledTime) {
-    const match = String(job.scheduledTime).match(/^([01]\d|2[0-3]):([0-5]\d)$/)
-    if (match) {
-      const candidate = nextLocalTime(nextDue, Number(match[1]), Number(match[2]), timezone)
-      if (candidate > nextDue) nextDue = candidate
-    }
-  }
-
-  return Number.isFinite(nextDue) ? nextDue : null
+  return nextIntervalJobFireTime(job, timezone)
 }
 
 /**
