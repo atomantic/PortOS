@@ -92,15 +92,19 @@ it('reads stored lifecycle measurements under the renamed category', async () =>
 it('keeps local scores on old, offline, malformed, oversize or mismatched peers and rejects future evidence', async () => {
   const payload = await exportPortosQuality(peer.instanceId, 30, deps([row('security', 90)]));
   const local = deps([row('security', 20)]);
-  for (const fetch of [
-    async () => new Response('', { status: 404 }),
-    async () => { throw new Error('offline'); },
-    async () => response({ ...payload, schemaVersion: 2 }),
-    async () => response({ ...payload, repository: '0'.repeat(64) }),
-    async () => new Response('too large', { headers: { 'content-length': '4194305' } }),
+  // Each failure names the peer and a fixed reason code, never the peer's own error text.
+  for (const [fetch, reason] of [
+    [async () => new Response('', { status: 404 }), 'incompatible'],
+    [async () => new Response('', { status: 403 }), 'refused'],
+    [async () => new Response('', { status: 500 }), 'error'],
+    [async () => { throw new Error('offline'); }, 'unreachable'],
+    [async () => response({ ...payload, schemaVersion: 2 }), 'incompatible'],
+    [async () => response({ ...payload, repository: '0'.repeat(64) }), 'different-repository'],
+    [async () => new Response('too large', { headers: { 'content-length': '4194305' } }), 'too-large'],
   ]) {
     const [app] = await enrichAppsWithQuality([{ id: 'portos-default' }], { ...local, peerFetch: fetch });
     expect(app.quality).toMatchObject({ score: 20, federation: { available: 0, unavailable: 1 } });
+    expect(app.quality.federation.unavailablePeers).toEqual([{ id: 'peer-a', name: 'peer-a', reason }]);
   }
   // A malformed ROW costs that row, not the peer: the rest of its evidence counts.
   const oneBad = { ...payload, measurements: [{ ...payload.measurements[0], report: { ...payload.measurements[0].report, score: 101 } }] };

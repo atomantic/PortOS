@@ -62,14 +62,18 @@ it('distinguishes saved but excluded evidence from an app that was never assesse
 });
 
 it('identifies federated evidence and incomplete scores without linking to a local audit run', async () => {
-  const app = { id: 'portos-default', quality: { score: 80, federation: { available: 1, unavailable: 1 }, categories: [
+  const app = { id: 'portos-default', quality: { score: 80, federation: { available: 1, unavailable: 1,
+    unavailablePeers: [{ id: 'peer-b', name: 'Studio', reason: 'unreachable' }] }, categories: [
     { id: 'security', label: 'Security', score: 80, coverage: 'broad', sourcePeerId: 'peer-a', agentId: 'remote-run' },
   ] } };
   render(<MemoryRouter><AppQuality app={app} detail /></MemoryRouter>);
   await screen.findByText(/No scored assessments/);
-  expect(screen.getByText(/1 peer unavailable or incompatible/)).toBeInTheDocument();
+  expect(screen.getByText(/1 peer did not contribute; the score may be incomplete/)).toBeInTheDocument();
+  const peerLink = screen.getByRole('link', { name: 'Studio' });
+  expect(peerLink).toHaveAttribute('href', '/instances?peer=peer-b');
+  expect(peerLink.closest('li')).toHaveTextContent(/offline or unreachable/);
   fireEvent.click(screen.getByRole('button', { name: 'Security actions' }));
-  expect(screen.getByRole('menuitem', { name: 'View instances' })).toHaveAttribute('href', '/instances');
+  expect(screen.getByRole('menuitem', { name: 'View instances' })).toHaveAttribute('href', '/instances?peer=peer-a');
   expect(screen.queryByRole('menuitem', { name: 'View audit run' })).not.toBeInTheDocument();
 });
 

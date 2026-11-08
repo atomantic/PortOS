@@ -533,6 +533,21 @@ describe('Instances page connection drawers', () => {
     expect(screen.getAllByText('Recovered').length).toBeGreaterThan(0);
   });
 
+  // App Quality names an unavailable peer and links here with ?peer=<id>.
+  it('focuses the peer card named by a ?peer deep link and explains a stale one', async () => {
+    const scrollIntoView = vi.fn();
+    window.HTMLElement.prototype.scrollIntoView = scrollIntoView;
+    const view = renderUI(<MemoryRouter initialEntries={['/instances?peer=page-peer']}><Instances /></MemoryRouter>);
+    await screen.findByRole('button', { name: 'Sync now' });
+    const card = view.container.querySelector('[data-peer-id="page-peer"]');
+    expect(card).toHaveAttribute('aria-current', 'true');
+    expect(scrollIntoView).toHaveBeenCalled();
+    view.unmount();
+    renderUI(<MemoryRouter initialEntries={['/instances?peer=gone']}><Instances /></MemoryRouter>);
+    expect(await screen.findByText('The linked peer is no longer registered on this install.')).toBeInTheDocument();
+    delete window.HTMLElement.prototype.scrollIntoView;
+  });
+
   // Regression: the full setup stack displaced peer actions, and moving it to
   // remounting drawers could discard drafts or accidentally start networking.
   it('prioritizes peers and retains drafts across drawer sections and failed adds', async () => {
