@@ -1332,13 +1332,29 @@ if [[ "$INSTALL_MUSCRIPTOR" == "1" ]]; then
   fi
   MUSCRIPTOR_PY="$(venv_python "$MUSCRIPTOR_VENV")"
   echo "📦 Installing MuScriptor into ${MUSCRIPTOR_VENV} (pulls torch + audio deps)..."
-  "$MUSCRIPTOR_PY" -m pip install --upgrade pip wheel setuptools >/dev/null
-  # muscriptor declares its own deps (torch, soundfile, etc.), so installing the
-  # package pulls the matching stack. The import probe below catches a broken
-  # resolve before a transcription depends on it.
-  "$MUSCRIPTOR_PY" -m pip install --upgrade \
-    muscriptor \
-    "huggingface_hub[hf_xet]"
+  if is_apple_silicon; then
+    # Apple Silicon installs only from the hash-pinned lock
+    # (scripts/requirements-muscriptor-mlx.lock.txt): no install-time resolution,
+    # so a new or compromised transitive release can't land on the next Repair.
+    # Direct pins: scripts/requirements-muscriptor-mlx.txt.
+    # The lock needs CPython 3.11+: its filelock fix for advisory GHSA-2g95-wg33-c5x2
+    # (4.2.1) dropped 3.10, and 4.1.0, the last 3.10 release, is affected.
+    if ! "$MUSCRIPTOR_PY" -c 'import sys; sys.exit(0 if sys.version_info[:2] >= (3, 11) else 1)'; then
+      echo "❌ MuScriptor on Apple Silicon needs Python 3.11+; ${MUSCRIPTOR_PY} is older." >&2
+      echo "   Re-run with PYTHON_BIN pointing at a 3.11+ interpreter (e.g. 'brew install python@3.12')." >&2
+      exit 1
+    fi
+    "$MUSCRIPTOR_PY" -m pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-muscriptor-mlx.lock.txt"
+  else
+    # Linux/Windows still resolve at install time (hash-pinned CUDA lock: #15439).
+    "$MUSCRIPTOR_PY" -m pip install --upgrade pip wheel setuptools >/dev/null
+    # muscriptor declares its own deps (torch, soundfile, etc.), so installing the
+    # package pulls the matching stack. The import probe below catches a broken
+    # resolve before a transcription depends on it.
+    "$MUSCRIPTOR_PY" -m pip install --upgrade \
+      muscriptor \
+      "huggingface_hub[hf_xet]"
+  fi
   pin_venv_arm64 "$MUSCRIPTOR_VENV"
   # Verify the model class imports — a clean import means transcription only
   # needs the one-time weight download, not a broken venv.

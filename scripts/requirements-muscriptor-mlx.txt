@@ -1,0 +1,6 @@
+# MuScriptor (Apple Silicon) runtime: direct pins for ~/.portos/venv-muscriptor.
+# Installed only from requirements-muscriptor-mlx.lock.txt, which pins and
+# hashes every transitive package. After editing this file, regenerate the lock
+# with the command in the lock header.
+muscriptor==0.4.0
+huggingface-hub[hf_xet]==0.36.2
