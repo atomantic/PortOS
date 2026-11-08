@@ -212,16 +212,18 @@ const MALFORMED_LABEL = /^([A-Za-z0-9][A-Za-z0-9:._/-]*) (--color )?#?([0-9A-Fa-
 /**
  * True when `name` has the malformed shape and is safe to consider for pruning.
  * A "--color" marker is only produced by the broken loops, so it is decisive.
- * Otherwise an all-digit tail is an id ("ticket 123456"), and an all-letter
- * tail ("tests BFDADC") is trusted only when the prefix is itself a label.
+ * Otherwise an all-digit tail is an id ("ticket 123456"). An all-letter tail is
+ * a color only in the uppercase form the broken loops emit ("tests BFDADC"), and
+ * only when the prefix is itself a label; a lowercase word ("tests decade") stays.
  */
-export function isPrunableMalformedLabel(name, existingNames) {
+function isPrunableMalformedLabel(name, existingNames) {
   const malformed = name.match(MALFORMED_LABEL)
   if (!malformed) return false
   const [, prefix, colorFlag, hex] = malformed
   if (colorFlag) return true
   if (!/[A-Fa-f]/.test(hex)) return false
-  return /[0-9]/.test(hex) || existingNames.has(prefix)
+  if (/[0-9]/.test(hex)) return true
+  return hex === hex.toUpperCase() && existingNames.has(prefix)
 }
 
 /**

@@ -9,8 +9,7 @@ import {
   runSelfDiagnostics,
   MONITORING_LABEL,
   NEEDS_ATTENTION_LABEL,
-  DIAGNOSTICS_SLUG,
-  isPrunableMalformedLabel
+  DIAGNOSTICS_SLUG
 } from './selfDiagnostics.js'
 
 // Deterministic clock shared by the windowed fixtures and the tests (#2617).
@@ -238,34 +237,6 @@ describe('findMonitoringIssue', () => {
   })
 })
 
-describe('isPrunableMalformedLabel', () => {
-  const names = new Set(['good first issue', 'help wanted', 'area: ui', 'tests', 'ticket decade'])
-
-  it.each([
-    'data-integrity 0366D6',
-    'macos 0366D6',
-    'plan 428BCA Tracked by /do:replan',
-    'effort:low --color BFE5E5',
-    'tests BFDADC',
-    'effort:low --color BFDADC',
-    'release 20251a'
-  ])('flags malformed shape %s', name => {
-    expect(isPrunableMalformedLabel(name, names)).toBe(true)
-  })
-
-  it.each([
-    'good first issue',
-    'help wanted',
-    'area: ui',
-    'ticket decade',
-    'ticket 123456',
-    'sprint 202401',
-    'bug #123456'
-  ])('keeps ordinary or numeric label %s', name => {
-    expect(isPrunableMalformedLabel(name, names)).toBe(false)
-  })
-})
-
 describe('pruneMalformedLabels', () => {
   const invokeHandler = exec => runSelfDiagnostics({
     forgeGate: okForge,
@@ -282,15 +253,23 @@ describe('pruneMalformedLabels', () => {
         { name: 'help wanted' },
         { name: 'needs decade' },
         { name: 'needs decade' },
+        { name: 'ticket decade' },
         { name: 'sprint 202401' },
         { name: 'ticket 123456' },
+        { name: 'bug #123456' },
         { name: 'model:light D4C5F9' },
         { name: 'effort:medium --color 76C7C7' },
         { name: 'security 0366D6 Proposed from a security audit' },
         { name: 'data-integrity 0366D6' },
         { name: 'macos 0366D6' },
         { name: 'plan 428BCA Tracked by /do:replan' },
-        { name: 'effort:low --color BFE5E5' }
+        { name: 'effort:low --color BFE5E5' },
+        { name: 'effort:low --color BFDADC' },
+        { name: 'tests' },
+        { name: 'tests BFDADC' },
+        { name: 'bug' },
+        { name: 'bug facade' },
+        { name: 'tests decade' }
       ]) } },
       { match: argsHaveIssueLabel, result: { code: 0, stdout: '[]' } },
       { match: argsHavePrLabel, result: { code: 0, stdout: '[]' } },
@@ -307,9 +286,11 @@ describe('pruneMalformedLabels', () => {
       'data-integrity 0366D6',
       'macos 0366D6',
       'plan 428BCA Tracked by /do:replan',
-      'effort:low --color BFE5E5'
+      'effort:low --color BFE5E5',
+      'effort:low --color BFDADC',
+      'tests BFDADC'
     ])
-    expect(log).toHaveBeenCalledWith('🧹 Pruned 7 malformed labels')
+    expect(log).toHaveBeenCalledWith('🧹 Pruned 9 malformed labels')
     log.mockRestore()
   })
 
