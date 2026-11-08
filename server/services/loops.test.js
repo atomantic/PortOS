@@ -207,6 +207,13 @@ describe('loops.js', () => {
       expect(loop.id).toHaveLength(8);
     });
 
+    it('rejects an interval above the 2^31-1 ms timer limit but accepts 24d', async () => {
+      await expect(createLoop({ prompt: 'p', interval: '30d', runImmediately: false }))
+        .rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
+      const loop = await createLoop({ prompt: 'p', interval: '24d', runImmediately: false });
+      expect(loop.intervalMs).toBe(24 * 86_400_000);
+    });
+
     it('persists the loop to disk via atomicWrite', async () => {
       await createLoop({ prompt: 'test loop', interval: '30s', runImmediately: false });
       expect(atomicWrite).toHaveBeenCalled();
@@ -230,7 +237,7 @@ describe('loops.js', () => {
     it('throws when interval is shorter than 10 seconds', async () => {
       await expect(
         createLoop({ prompt: 'fast loop', interval: '5s', runImmediately: false })
-      ).rejects.toThrow('Interval must be at least 10 seconds');
+      ).rejects.toThrow('Interval must be between 10 seconds and 24 days');
     });
 
     it('throws when prompt is empty', async () => {
@@ -660,6 +667,13 @@ describe('loops.js', () => {
       expect(mockRunPrompt).toHaveBeenCalledTimes(2);
       await vi.advanceTimersByTimeAsync(12_000);
       expect(mockRunPrompt).toHaveBeenCalledTimes(4);
+    });
+
+    it('clamps a stored oversized interval so it never fires every 1 ms', async () => {
+      stubDisk([rec('big', Date.now(), 2_592_000_000)]);
+      await restoreLoops();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(mockRunPrompt).not.toHaveBeenCalled();
     });
 
     it('stopLoop before the first fire cancels it', async () => {

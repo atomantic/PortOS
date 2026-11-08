@@ -13,7 +13,7 @@ import { join } from 'path';
 import { PATHS, ensureDir, atomicWrite, tryReadFile } from '../lib/fileUtils.js';
 import { randomUUID } from 'crypto';
 import { ServerError } from '../lib/errorHandler.js';
-import { MIN_INTERVAL_MS, parseInterval } from '../lib/loopInterval.js';
+import { MAX_INTERVAL_MS, MIN_INTERVAL_MS, isValidLoopInterval, parseInterval } from '../lib/loopInterval.js';
 import { createRun, stopRun } from './runner.js';
 import { resolveProviderAndModel, runPromptThroughProvider } from './promptRunner.js';
 import { listSelectableProviders, getActiveProvider } from './providers.js';
@@ -30,7 +30,13 @@ const activeLoops = new Map();
 // all start together.
 const CATCHUP_BASE_DELAY_MS = 1000;
 const CATCHUP_STAGGER_MS = 10_000;
-const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
+const INTERVAL_RANGE_MESSAGE = `Interval must be between ${MIN_INTERVAL_MS / 1000} seconds and ${Math.floor(MAX_INTERVAL_MS / 86_400_000)} days`;
+
+// Clamp so a record stored before the cap existed never hits Node's 1 ms timer overflow.
+function safeIntervalMs(loop) {
+  if (loop.intervalMs > MAX_INTERVAL_MS) console.log(`🚫 Loop ${loop.id} interval ${loop.intervalMs}ms exceeds timer limit; clamped to ${MAX_INTERVAL_MS}ms`);
+  return Math.min(loop.intervalMs, MAX_INTERVAL_MS);
+}
 
 function formatInterval(ms) {
   if (ms >= 86_400_000) return `${ms / 86_400_000}d`;
@@ -280,8 +286,8 @@ async function updatePersistedLoop(id, updates) {
 
 export async function createLoop({ prompt, interval, name, cwd, providerId, timeout, runImmediately = true }) {
   const intervalMs = typeof interval === 'number' ? interval : parseInterval(interval);
-  if (!intervalMs || intervalMs < MIN_INTERVAL_MS) {
-    throw new ServerError('Interval must be at least 10 seconds', { status: 400, code: 'VALIDATION_ERROR' });
+  if (!isValidLoopInterval(intervalMs)) {
+    throw new ServerError(INTERVAL_RANGE_MESSAGE, { status: 400, code: 'VALIDATION_ERROR' });
   }
   if (!prompt?.trim()) {
     throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
@@ -340,12 +346,12 @@ function startLoopTimer(loop, runImmediately = false, firstDelayMs = null) {
     history: []
   };
   if (firstDelayMs === null) {
-    active.timer = setInterval(runWithLogging, loop.intervalMs);
+    active.timer = setInterval(runWithLogging, safeIntervalMs(loop));
   } else {
     active.timer = setTimeout(() => {
-      active.timer = setInterval(runWithLogging, loop.intervalMs);
+      active.timer = setInterval(runWithLogging, safeIntervalMs(loop));
       runWithLogging();
-    }, Math.min(Math.max(firstDelayMs, 0), MAX_TIMER_DELAY_MS));
+    }, Math.min(Math.max(firstDelayMs, 0), MAX_INTERVAL_MS));
   }
   activeLoops.set(loop.id, active);
 
@@ -467,7 +473,7 @@ export async function updateLoop(id, updates) {
       if (updates[key] !== undefined) {
         if (key === 'interval') {
           const ms = typeof updates[key] === 'number' ? updates[key] : parseInterval(updates[key]);
-          if (!ms || ms < MIN_INTERVAL_MS) throw new ServerError('Interval must be at least 10 seconds', { status: 400, code: 'VALIDATION_ERROR' });
+          if (!isValidLoopInterval(ms)) throw new ServerError(INTERVAL_RANGE_MESSAGE, { status: 400, code: 'VALIDATION_ERROR' });
           loops[idx].intervalMs = ms;
         } else {
           loops[idx][key] = updates[key];
@@ -482,7 +488,7 @@ export async function updateLoop(id, updates) {
   if (activeLoops.has(id) && updates.interval) {
     const active = activeLoops.get(id);
     clearLoopTimer(active);
-    active.timer = setInterval(() => runIteration(id), updatedRecord.intervalMs);
+    active.timer = setInterval(() => runIteration(id), safeIntervalMs(updatedRecord));
   }
 
   loopEvents.emit('updated', { loop: updatedRecord });
