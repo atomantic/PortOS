@@ -132,6 +132,12 @@ async function uploadParts(urls, path, size, signal, jobId) {
   return results;
 }
 
+// Matches FAL_MAX_STATUS_RETRIES / RUNWAY_MAX_STATUS_RETRIES: a status read is idempotent, so a blip
+// must not fail a run whose credits are already spent. Other Topaz calls are never retried, and a
+// canceling run keeps its existing fail-fast confirmation path.
+const TOPAZ_MAX_STATUS_RETRIES = 2;
+const isTransientStatusError = error => error?.code === 'TOPAZ_UNAVAILABLE'
+  || (error?.code === 'TOPAZ_REQUEST_FAILED' && (error.upstreamStatus === 429 || error.upstreamStatus >= 500));
 const wait = () => new Promise(resolve => setTimeout(resolve, 5000));
 const positiveInteger = value => Number.isSafeInteger(value) && value > 0;
 const positiveNumber = value => Number.isFinite(value) && value > 0;
@@ -304,11 +310,21 @@ export async function runVideoUpscale(params) {
       await receipt(jobId, 'processing');
       phase = 'processing';
     }
+    let statusFailures = 0;
     for (;;) {
       if (entry.cancelRequested) {
         await topazRequest(`/video/${requestId}`, { method: 'DELETE', key }).catch(() => null);
       }
-      status = await topazRequest(`/video/${requestId}/status`, { key });
+      try {
+        status = await topazRequest(`/video/${requestId}/status`, { key });
+        statusFailures = 0;
+      } catch (error) {
+        if (entry.cancelRequested || !isTransientStatusError(error) || ++statusFailures > TOPAZ_MAX_STATUS_RETRIES) throw error;
+        videoGenEvents.emit('activity', { generationId: jobId });
+        videoGenEvents.emit('progress', { generationId: jobId, progress: 0, message: 'Topaz: status check failed, retrying' });
+        await wait();
+        continue;
+      }
       if (status.status === 'canceled') { confirmedCancel = true; providerTerminal = true; throw safeError('Topaz confirmed cancellation.'); }
       if (entry.cancelRequested && status.status !== 'canceling') throw safeError('Local cancellation could not be confirmed by Topaz; remote processing or charges may continue.');
       if (status.status === 'failed') { providerTerminal = true; throw safeError('Topaz reported that processing failed.'); }
