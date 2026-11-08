@@ -59,6 +59,37 @@ describe('contactsSync pure helpers', () => {
       expect(merged[0].phones).toEqual(['+15551234567']);
     });
 
+    const alice = { uniqueId: 'A', firstName: 'Alice', lastName: 'Example', organization: 'Acme', phones: ['+1 555 010 0001', '+1 555 010 9999'], emails: ['alice@example.com'] };
+    const bob = { uniqueId: 'B', firstName: 'Bob', lastName: 'Example', phones: ['+1 555 010 0002', '+1 555 010 9999'], emails: [] };
+
+    it('keeps two different people who share a phone number apart', () => {
+      const out = mergeContacts([[alice, bob]]);
+      expect(out).toHaveLength(2);
+      const index = buildContactIndex(out);
+      expect(resolveHandleAgainstContacts('+15550100002', index).displayName).toBe('Bob Example');
+      expect(resolveHandleAgainstContacts('+15550100001', index).displayName).toBe('Alice Example');
+      expect(resolveHandleAgainstContacts('+15550109999', index).displayName).toBe('Alice Example');
+      expect(out.find((c) => c.uniqueId === 'B').phones).not.toContain('+15550100001');
+    });
+
+    it('collapses the same uniqueId even when names differ', () => {
+      const out = mergeContacts([
+        [{ uniqueId: 'X', firstName: 'Alice', phones: ['+15550100001'] }],
+        [{ uniqueId: 'X', firstName: 'Bob', phones: ['+15550100002'] }],
+      ]);
+      expect(out).toHaveLength(1);
+      expect(out[0].phones).toHaveLength(2);
+    });
+
+    it('does not chain distinct people through shared phone then shared email', () => {
+      const out = mergeContacts([[
+        { uniqueId: 'A', firstName: 'Alice', phones: ['+15550100001'] },
+        { uniqueId: 'B', firstName: 'Bob', phones: ['+15550100001'], emails: ['shared@example.com'] },
+        { uniqueId: 'C', firstName: 'Carol', emails: ['shared@example.com'] },
+      ]]);
+      expect(out.map((c) => c.displayName)).toEqual(['Alice', 'Bob', 'Carol']);
+    });
+
     it('resolves handle against contact index', () => {
       const contacts = mergeContacts([[
         { uniqueId: '1', firstName: 'Pat', lastName: 'Lee', phones: ['+1 (555) 987-6543'], emails: [] },

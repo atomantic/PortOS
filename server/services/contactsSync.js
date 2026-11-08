@@ -77,9 +77,29 @@ export function normalizeContactRecord(raw) {
   };
 }
 
+const nameKey = (v) => String(v || '').trim().replace(/\s+/g, ' ').toLowerCase();
+const nameSet = (c) => new Set([c.firstName, c.lastName].map(nameKey).filter(Boolean));
+const hasOwnName = (c) => Boolean(c.firstName || c.lastName || c.nickname || c.organization);
+
 /**
- * Merge contacts from multiple AddressBook sources. Same uniqueId or same
- * phone/email set collapses; prefers the record with more fields.
+ * True when two records sharing a phone/email look like one person: either has
+ * no name of its own, or one first/last-name set contains the other
+ * ("Jane" vs "Jane Doe").
+ */
+function sameContactPerson(a, b) {
+  if (!hasOwnName(a) || !hasOwnName(b)) return true;
+  const sa = nameSet(a);
+  const sb = nameSet(b);
+  if (!sa.size || !sb.size) return false;
+  const [small, big] = sa.size <= sb.size ? [sa, sb] : [sb, sa];
+  return [...small].every((n) => big.has(n));
+}
+
+/**
+ * Merge contacts from multiple AddressBook sources. The same uniqueId always
+ * collapses. A shared phone/email collapses only when the names are compatible
+ * (see sameContactPerson), because households and offices share numbers across
+ * different people. Prefers the record with more fields.
  */
 export function mergeContacts(lists = []) {
   const byKey = new Map();
@@ -97,13 +117,15 @@ export function mergeContacts(lists = []) {
 
       let existing = null;
       for (const k of keys) {
-        if (byKey.has(k)) {
-          existing = byKey.get(k);
+        const hit = byKey.get(k);
+        if (hit && (k.startsWith('id:') || sameContactPerson(hit, c))) {
+          existing = hit;
           break;
         }
       }
       if (!existing) {
-        for (const k of keys) byKey.set(k, c);
+        // First claim wins: a key shared with a different person stays with them.
+        for (const k of keys) if (!byKey.has(k)) byKey.set(k, c);
         continue;
       }
       // Merge phones/emails into the richer record.
@@ -122,7 +144,10 @@ export function mergeContacts(lists = []) {
       for (const p of merged.phones) allKeys.add(`p:${p}`);
       for (const e of merged.emails) allKeys.add(`e:${e}`);
       allKeys.add(`id:${merged.uniqueId}`);
-      for (const k of allKeys) byKey.set(k, merged);
+      for (const k of allKeys) {
+        const owner = byKey.get(k);
+        if (!owner || owner === existing) byKey.set(k, merged);
+      }
     }
   }
 
