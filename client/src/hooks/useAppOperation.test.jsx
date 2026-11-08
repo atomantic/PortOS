@@ -129,6 +129,21 @@ describe('useAppOperation — PortOS self-update handoff', () => {
     expect(mockToast.loading).not.toHaveBeenCalled();
   });
 
+  it('does not wait for a PortOS restart the update skipped', () => {
+    // A skipped restart step means nothing is coming back up, so arming here
+    // would leave the page waiting on a reload that never happens.
+    const { result } = renderHook(() => useAppOperation({ appId: PORTOS_APP_ID }));
+
+    act(() => {
+      socketHandlers.get('app:update:step')({
+        appId: PORTOS_APP_ID, step: 'restart', status: 'skipped', message: 'App is not running',
+      });
+    });
+
+    expect(result.current.restarting).toBe(false);
+    expect(mockToast.loading).not.toHaveBeenCalled();
+  });
+
   it('does not seed a baseline for a non-PortOS update', () => {
     const { result } = renderHook(() => useAppOperation({ appId: 'example-managed-app' }));
 

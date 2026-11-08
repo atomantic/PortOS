@@ -120,7 +120,7 @@ export function useAppOperation({ onComplete, appId: scopeAppId } = {}) {
       // for the same reason the subscriptions are — `app:update:step` is a
       // broadcast, so without it a surface scoped to some OTHER app would arm
       // the watch (and reload the page) off a PortOS update it has no part in.
-      if (watchable && data?.appId === PORTOS_APP_ID && data.status !== 'error'
+      if (watchable && data?.appId === PORTOS_APP_ID && data.status !== 'error' && data.status !== 'skipped'
         && (data.step === 'restart' || data.step === 'restarting')) arm();
       patch(data, current => ({ ...current, steps: mergeStep(current.steps, data) }));
     };

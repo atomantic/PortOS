@@ -16,6 +16,7 @@ const mock = vi.hoisted(() => ({
   dashboardRunning: vi.fn(),
   dashboardHandle: { on: vi.fn() },
   restart: vi.fn(),
+  runningNames: vi.fn(),
   syncFork: vi.fn(),
 }));
 
@@ -24,7 +25,7 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
   return { ...actual, PATHS: mock.paths };
 });
 vi.mock('./git.js', () => ({ updateDefaultBranch: mock.updateDefaultBranch }));
-vi.mock('./pm2.js', () => ({ restartApp: mock.restart }));
+vi.mock('./pm2.js', () => ({ restartApp: mock.restart, getProcessesToRestartOnUpdate: mock.runningNames }));
 vi.mock('../lib/bufferedSpawn.js', async (importOriginal) => {
   const actual = await importOriginal();
   return { ...actual, bufferedSpawnOrThrow: mock.spawn };
@@ -55,6 +56,7 @@ describe('managed app updates', () => {
     mock.dashboardRunning.mockResolvedValue(false);
     mock.dashboardOpen.mockResolvedValue(mock.dashboardHandle);
     mock.restart.mockResolvedValue({ success: true });
+    mock.runningNames.mockImplementation(async (names) => names);
     mock.addTask.mockResolvedValue({ id: 'sys-conflict' });
     mock.syncFork.mockResolvedValue({
       alreadyUpToDate: false,
@@ -329,6 +331,40 @@ describe('managed app updates', () => {
     expect(mock.startPortosSelfUpdate).not.toHaveBeenCalled();
     expect(mock.spawn).toHaveBeenCalled();
     expect(mock.restart).toHaveBeenCalledWith('example-app', undefined);
+  });
+
+  it('updates a stopped app\'s checkout without starting it', async () => {
+    mock.runningNames.mockResolvedValue([]);
+    const emit = vi.fn();
+
+    const result = await updateApp({
+      id: 'example-managed-app',
+      name: 'Example App',
+      type: 'express',
+      repoPath: repo,
+      pm2ProcessNames: ['example-app'],
+      pm2Home: '/example/pm2',
+    }, emit);
+
+    expect(result.success).toBe(true);
+    expect(mock.runningNames).toHaveBeenCalledWith(['example-app'], '/example/pm2');
+    expect(mock.updateDefaultBranch).toHaveBeenCalledWith(repo);
+    expect(mock.restart).not.toHaveBeenCalled();
+    expect(emit).toHaveBeenCalledWith('restart', 'skipped', expect.stringContaining('not running'));
+    expect(result.steps).toContainEqual(expect.objectContaining({ step: 'restart', skipped: true }));
+  });
+
+  it('restarts only the processes that were running before the update began', async () => {
+    await writeFile(join(repo, 'package.json'), JSON.stringify({ scripts: { 'portos:update': 'example-update' } }));
+    mock.runningNames.mockResolvedValueOnce(['example-ui']);
+
+    await updateApp({ id: 'example-managed-app', name: 'Example App', type: 'express', repoPath: repo, pm2ProcessNames: ['example-api', 'example-ui'] }, vi.fn());
+
+    expect(mock.restart.mock.calls).toEqual([['example-ui', undefined]]);
+    // Read before the routine runs, so a routine that stops its own processes
+    // cannot turn a running app into a skipped restart.
+    expect(mock.runningNames.mock.invocationCallOrder[0]).toBeLessThan(mock.updateDefaultBranch.mock.invocationCallOrder[0]);
+    expect(mock.runningNames.mock.invocationCallOrder[0]).toBeLessThan(mock.spawn.mock.invocationCallOrder[0]);
   });
 
   it('honors a custom update command configured on the PortOS record', async () => {
