@@ -73,11 +73,14 @@ export function greyboxStreetPromptLines(scene, shot) {
   const poles = furniture('pole');
   const lamps = furniture('lamp');
   if (poles.length) {
-    // Walk the line from one end: the pole farthest from the first is the other end.
-    const [first] = poles;
-    const reach = (a, b) => Math.hypot(a.position[0] - b.position[0], a.position[2] - b.position[2]);
-    const far = poles.reduce((best, part) => (reach(part, first) > reach(best, first) ? part : best), first);
-    const along = [far.position[0] - first.position[0], far.position[2] - first.position[2]];
+    // The line runs between the two poles farthest apart, so the order depends on geometry alone.
+    let along = [0, 0];
+    for (const a of poles) {
+      for (const b of poles) {
+        const vector = [b.position[0] - a.position[0], b.position[2] - a.position[2]];
+        if (Math.hypot(...vector) > Math.hypot(...along)) along = vector;
+      }
+    }
     // Orient the axis canonically so the listing does not depend on part order.
     const axis = along[0] < 0 || (along[0] === 0 && along[1] < 0) ? along.map((v) => -v) : along;
     const ordered = [...poles].sort((a, b) => (a.position[0] * axis[0] + a.position[2] * axis[1]) - (b.position[0] * axis[0] + b.position[2] * axis[1]));
@@ -88,7 +91,9 @@ export function greyboxStreetPromptLines(scene, shot) {
     const alongView = camera && range(lat) <= range(depth);
     const left = alongView ? ordered.filter((_, i) => lat[i] < -SIDE_MARGIN_M) : [];
     const right = alongView ? ordered.filter((_, i) => lat[i] > SIDE_MARGIN_M) : [];
-    if (left.length && right.length) {
+    const onAxis = alongView && ordered.some((_, i) => Math.abs(lat[i]) <= SIDE_MARGIN_M);
+    // Two lines only when nothing stands between the left and right clusters; otherwise it is one line.
+    if (left.length && right.length && !onAxis) {
       lines.push(`Utility poles stand on both sides of the street: ${nameList(left)} on the viewer's left and ${nameList(right)} on the right. Each side is its own line, its poles joined pole to pole by continuous overhead wires that run on past the end poles along that side; ${wireRule}`);
     } else {
       const side = left.length === ordered.length ? " on the viewer's left side of the street" : right.length === ordered.length ? " on the viewer's right side of the street" : '';
@@ -111,7 +116,9 @@ export function greyboxStreetPromptLines(scene, shot) {
     const many = parts.length > 1;
     const mounted = mount === 'pole' ? (many ? ' are bracketed on utility poles' : ' is bracketed on a utility pole')
       : mount === 'post' ? (many ? ' stand on their own posts' : ' stands on its own post') : '';
-    lines.push(`Streetlight${many ? 's' : ''} ${nameList(parts)}${mounted}: ${many ? 'their arms reach' : 'its arm reaches'} ${seen ? `${seen}, ` : ''}out over the road with the lamp head${many ? 's' : ''} above the pavement, never aimed at a house or yard.`);
+    // Without a usable camera aim the bearing itself is the only direction there is to give.
+    const reaches = seen ? `${seen}, ` : camera ? '' : `on bearing ${parts[0].street.armDegrees} degrees (0 toward +Z, 90 toward +X), `;
+    lines.push(`Streetlight${many ? 's' : ''} ${nameList(parts)}${mounted}: ${many ? 'their arms reach' : 'its arm reaches'} ${reaches}out over the road with the lamp head${many ? 's' : ''} above the pavement, never aimed at a house or yard.`);
   }
   const mounts = new Set(lamps.map((part) => part.street.mount));
   if (lamps.length > 1 && mounts.size === 1 && !mounts.has(undefined)) {

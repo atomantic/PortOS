@@ -129,6 +129,18 @@ describe('music video greybox selection', () => {
       // A line running across the frame has no single side, and a pole on the aim axis is on neither.
       expect((await texts(parts.map(moved('pole-a', [-8, 4, -20]))))[0]).not.toMatch(/viewer's (left|right) side|both sides/);
       expect((await texts(parts.map(moved('pole-a', [0, 4, -5])).map(moved('pole-b', [0, 4, -20]))))[0]).not.toMatch(/viewer's (left|right) side|both sides/);
+      // A pole between the two clusters keeps the street one line, and every pole is still named.
+      const middle = (await texts([...parts.map(moved('pole-a', [-8, 4, -5])).map(moved('pole-b', [8, 4, -60])), { id: 'pole-mid', label: 'Pole Mid', position: [0, 4, -30], street: { kind: 'pole' } }]))[0];
+      expect(middle).toContain('"Pole Mid"');
+      expect(middle).not.toMatch(/both sides|viewer's (left|right) side/);
+    });
+
+    it('states the absolute lamp bearing when the camera looks straight down and has no view direction', async () => {
+      const d = deps();
+      d.catalog.getIngredient.mockResolvedValue(street({ shots: [{ ...ingredient.payload.greybox.shots[0], position: [0, 50, 0], target: [0, 0, 0] }] }));
+      const texts = (await loadMusicVideoGreybox(project, scene, d)).streetAdditions.map((a) => a.text);
+      expect(texts.at(-1)).toContain('its arm reaches on bearing -90 degrees (0 toward +Z, 90 toward +X), out over the road');
+      expect(texts[0]).toContain('"Pole Behind"');
     });
 
     it('requires wires for pole-mounted lamps with no pole in frame and keeps every lamp bearing past eight lamps', async () => {
