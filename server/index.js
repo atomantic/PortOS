@@ -202,6 +202,7 @@ import { remoteDesktopBroker } from './services/remoteDesktop.js';
 import { authEvents } from './services/auth.js';
 import { mountEidoverseOnServer } from './services/eidoverseHost.js';
 import { bootstrapServices, runBootSequence, registerShutdownHandlers } from './services/bootstrap.js';
+import { syncLocalProviderModels } from './services/localLlm.js';
 import { errorMiddleware } from './lib/errorHandler.js';
 import { setHttpsEnabledAtBoot } from './lib/httpsState.js';
 import { JSON_BODY_LIMIT } from './lib/uploadLimits.js';
@@ -358,7 +359,7 @@ app.use('/api/scaffold', scaffoldRoutes);
 app.use('/api/provider-fallbacks', providerFallbackRoutes);
 app.use('/api/providers/comparison', createModelComparisonRoutes());
 app.use('/api/models/performance/task-benchmark', createModelPerformanceBenchmarkRoutes(aiToolkit.services.providers));
-app.use('/api/providers', createPortOSProviderRoutes(aiToolkit));
+app.use('/api/providers', createPortOSProviderRoutes(aiToolkit, { syncProviderCatalogs: (providers) => syncLocalProviderModels({ providers }) }));
 app.use('/api/runs', createPortOSRunsRoutes(aiToolkit));
 app.use('/api/prompts', createPortOSPromptsRoutes(aiToolkit));
 

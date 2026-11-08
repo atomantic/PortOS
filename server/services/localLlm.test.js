@@ -1601,3 +1601,122 @@ describe('listManagedBackendModels', () => {
     expect(result.error).toMatch(/unknown backend/);
   });
 });
+
+describe('syncLocalProviderModels', () => {
+  const emit = vi.fn();
+  const providerFixtures = {
+    ollama: [
+      { id: 'ollama', type: 'api', endpoint: 'http://localhost:11434/v1', models: ['example-a:7b'] },
+      { id: 'claude-ollama', type: 'tui', ollamaBacked: true, models: ['example-a:7b'] },
+    ],
+    lmstudio: [
+      { id: 'lmstudio', type: 'api', endpoint: 'http://localhost:1234/v1', models: ['example-a-7b'] },
+      { id: 'opencode-lmstudio', type: 'cli', lmstudioBacked: true, endpoint: 'http://localhost:1234/v1', models: ['example-a-7b'] },
+    ],
+  };
+  const installedIds = {
+    ollama: (ids) => mocks.ollama.getInstalledModels.mockResolvedValue(ids.map((id) => ({ id, name: id }))),
+    lmstudio: (ids) => mocks.lmstudio.getAvailableModels.mockResolvedValue(ids.map((id) => ({ id }))),
+  };
+  const stored = { ollama: 'example-a:7b', lmstudio: 'example-a-7b' };
+  const added = { ollama: 'example-b:3b', lmstudio: 'example-b-3b' };
+
+  beforeEach(() => {
+    emit.mockClear();
+    svc.bindLocalLlmIo({ emit });
+    mocks.providers.refreshProviderModelsBatch.mockImplementation(async (ids) => [
+      { ids: [...ids], leadId: ids[0], status: 'updated' },
+    ]);
+  });
+
+  it.each(['ollama', 'lmstudio'])('leaves a %s catalog that already matches the daemon untouched', async (backend) => {
+    installedIds[backend]([stored[backend]]);
+    await expect(svc.syncLocalProviderModels({ providers: providerFixtures[backend] })).resolves.toBe(false);
+    expect(mocks.providers.refreshProviderModelsBatch).not.toHaveBeenCalled();
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it.each(['ollama', 'lmstudio'])('picks up %s models installed or removed outside PortOS on the next read', async (backend) => {
+    const providers = providerFixtures[backend];
+    installedIds[backend]([stored[backend], added[backend]]);
+    await expect(svc.syncLocalProviderModels({ providers })).resolves.toBe(true);
+    expect(mocks.providers.refreshProviderModelsBatch).toHaveBeenCalledWith(providers.map((p) => p.id));
+    expect(emit).toHaveBeenCalledWith('providers:changed');
+
+    // Same installed set on the next read: no second refresh or write.
+    await expect(svc.syncLocalProviderModels({ providers })).resolves.toBe(false);
+    expect(mocks.providers.refreshProviderModelsBatch).toHaveBeenCalledTimes(1);
+
+    // Removed from a terminal: the following read sees it.
+    installedIds[backend]([stored[backend]]);
+    await svc.syncLocalProviderModels({ providers });
+    expect(mocks.providers.refreshProviderModelsBatch).toHaveBeenCalledTimes(2);
+  });
+
+  it('refreshes when one provider is stale even though a sibling already lists every model', async () => {
+    installedIds.lmstudio([stored.lmstudio, added.lmstudio]);
+    const providers = [
+      { ...providerFixtures.lmstudio[0], models: [stored.lmstudio, added.lmstudio] },
+      { ...providerFixtures.lmstudio[1], models: [] },
+    ];
+    await expect(svc.syncLocalProviderModels({ backend: 'lmstudio', providers })).resolves.toBe(true);
+    expect(mocks.providers.refreshProviderModelsBatch).toHaveBeenCalledWith(['lmstudio', 'opencode-lmstudio']);
+  });
+
+  it('retries on the next read when part of the refresh failed', async () => {
+    const providers = providerFixtures.lmstudio;
+    installedIds.lmstudio([stored.lmstudio, added.lmstudio]);
+    mocks.providers.refreshProviderModelsBatch.mockResolvedValueOnce([
+      { ids: ['lmstudio'], leadId: 'lmstudio', status: 'updated' },
+      { ids: ['opencode-lmstudio'], leadId: 'opencode-lmstudio', status: 'failed', error: new Error('unreachable') },
+    ]);
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await expect(svc.syncLocalProviderModels({ backend: 'lmstudio', providers })).resolves.toBe(true);
+    await svc.syncLocalProviderModels({ backend: 'lmstudio', providers });
+    expect(mocks.providers.refreshProviderModelsBatch).toHaveBeenCalledTimes(2);
+    errSpy.mockRestore();
+  });
+
+  it('probes nothing for a backend with no enabled provider on its local daemon', async () => {
+    const providers = [
+      { id: 'anthropic', type: 'api', endpoint: 'https://api.anthropic.com' },
+      { id: 'lmstudio', type: 'api', endpoint: 'http://localhost:1234/v1', enabled: false },
+      { id: 'remote-lmstudio', type: 'api', name: 'LM Studio box', endpoint: 'http://192.0.2.10:1234/v1' },
+    ];
+    await expect(svc.syncLocalProviderModels({ providers })).resolves.toBe(false);
+    expect(mocks.ollama.getInstalledModels).not.toHaveBeenCalled();
+    expect(mocks.lmstudio.getAvailableModels).not.toHaveBeenCalled();
+  });
+
+  it('never makes a read wait on a managed daemon that lives on another host', async () => {
+    mocks.lmstudio.getBaseUrl.mockReturnValueOnce('http://192.0.2.10:1234');
+    await svc.syncLocalProviderModels({ backend: 'lmstudio', providers: [{ id: 'lmstudio', type: 'api', endpoint: 'http://192.0.2.10:1234/v1' }] });
+    expect(mocks.lmstudio.getAvailableModels).not.toHaveBeenCalled();
+  });
+
+  it('leaves catalogs alone when LM Studio is unreachable', async () => {
+    mocks.lmstudio.getAvailableModels.mockResolvedValueOnce([]);
+    mocks.lmstudio.getStatus.mockResolvedValueOnce({ available: false });
+    await expect(svc.syncLocalProviderModels({ providers: providerFixtures.lmstudio })).resolves.toBe(false);
+    expect(mocks.providers.refreshProviderModelsBatch).not.toHaveBeenCalled();
+  });
+
+  it('refreshes LM Studio-backed providers once after an `lms get` install and after a delete', async () => {
+    cp.execFile = (cmd, _args, _opts, cb) => (cmd === 'lms' ? cb(null, '', '') : cb(new Error('ENOENT')));
+    mocks.providers.getAllProviders.mockResolvedValue({
+      providers: [...providerFixtures.lmstudio, ...providerFixtures.ollama],
+    });
+
+    expect((await svc.installModel('lmstudio', 'example/model-GGUF')).success).toBe(true);
+    await flushMicrotasks();
+    expect(mocks.providers.refreshProviderModelsBatch).toHaveBeenCalledTimes(1);
+    expect(mocks.providers.refreshProviderModelsBatch).toHaveBeenCalledWith(['lmstudio', 'opencode-lmstudio']);
+
+    expect((await svc.deleteModel('lmstudio', 'example/model-GGUF')).success).toBe(true);
+    await flushMicrotasks();
+    expect(mocks.providers.refreshProviderModelsBatch).toHaveBeenCalledTimes(2);
+    expect(mocks.providers.refreshProviderModelsBatch).toHaveBeenLastCalledWith(['lmstudio', 'opencode-lmstudio']);
+    expect(emit).toHaveBeenCalledWith('providers:changed');
+  });
+});
