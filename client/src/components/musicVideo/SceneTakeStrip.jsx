@@ -106,16 +106,15 @@ export default function SceneTakeStrip({
                 )}
               </button>
               {/* Only what the director acts on: how a take was made stays in the hover title. */}
-              {/* "In use" is already on the thumbnail. */}
-              {(verdict || rejected) && (
+              {/* "In use" is already on the thumbnail; a rejected take reads from its dimmed thumbnail and Restore. */}
+              {verdict && (
                 <div className="flex flex-wrap items-center gap-1 text-[10px] text-port-text-muted" title={take.originalName || take.prompt || takeProvenance(take)}>
-                  {verdict && (verdict.issues.length ? (
+                  {verdict.issues.length ? (
                     <button type="button" onClick={() => setOpenVerdict(verdictOpen ? null : take.takeId)} aria-expanded={verdictOpen}
                       className={`rounded px-1 pointer-coarse:min-h-8 ${VERDICT_TONE[verdict.tone]}`} title="Show what the check found">
                       {verdict.label} ({verdict.issues.length})
                     </button>
-                  ) : <span className={`rounded px-1 ${VERDICT_TONE[verdict.tone]}`} title="A vision check found it matches the shot">{verdict.label}</span>)}
-                  {rejected && <span>Not for this shot</span>}
+                  ) : <span className={`rounded px-1 ${VERDICT_TONE[verdict.tone]}`} title="A vision check found it matches the shot">{verdict.label}</span>}
                 </div>
               )}
               {verdictOpen && (

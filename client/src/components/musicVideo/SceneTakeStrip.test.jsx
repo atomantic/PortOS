@@ -15,10 +15,11 @@ it('flags a clip whose external cast guides cannot be tracked', () => {
 
 describe('rejecting a take versus marking it bad', () => {
   // Uniquely catches a take rejected from this shot reading as bad, or the Bad toggle not reaching the project-wide mark.
-  it('shows a rejected take as not for this shot, and marks or clears bad on its own', () => {
+  it('offers Restore on a rejected take without a label, and marks or clears bad on its own', () => {
     const onMark = vi.fn();
     const { rerender } = render(<SceneTakeStrip scene={scene} kind="image" marks={{}} onMark={onMark} />);
-    expect(screen.getByText('Not for this shot')).toBeTruthy();
+    expect(screen.queryByText('Not for this shot')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Restore' })).toBeTruthy();
     expect(screen.queryByText(/generated/)).toBeNull();
     expect(screen.queryByText('Bad', { selector: 'span' })).toBeNull();
     fireEvent.click(screen.getAllByRole('button', { name: 'Bad' })[1]);
