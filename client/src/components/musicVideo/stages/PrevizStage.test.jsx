@@ -166,3 +166,16 @@ it('shows server-side Previz progress and disables Build as In progress while a 
     jobsState.value = { running: [], finished: null, drafted: 0, setCount: 0, step: null };
   }
 });
+
+// Catches the selfie flag being unreachable from the cut row, or offered with no one holding the camera.
+it('offers a selfie toggle only for a held cut and saves it on the cut', async () => {
+  const cut = { id: 'k1', sceneId: 's1', startSec: 0, endSec: 4, placeSubjectId: 'p-street', viewShotId: 'wide', holderSubjectId: null, visibleSubjectIds: null, aimSubjectId: null };
+  const make = (extra) => ({ project: { ...project, previz: { cuts: [{ ...cut, ...extra }], tracks: [] } }, locked: false, editProjectLocal: vi.fn(), saveProjectFields: vi.fn(), seekToScene: vi.fn() });
+  const unheld = render(<MemoryRouter><PrevizStage board={make({})} /></MemoryRouter>);
+  expect(screen.queryByLabelText(/Selfie/)).toBeNull();
+  unheld.unmount();
+  const board = make({ holderSubjectId: 'c-bo' });
+  render(<MemoryRouter><PrevizStage board={board} /></MemoryRouter>);
+  fireEvent.click(await screen.findByLabelText(/Selfie/));
+  expect(board.saveProjectFields.mock.calls.at(-1)[0].previz.cuts[0]).toMatchObject({ holderSubjectId: 'c-bo', selfie: true });
+});

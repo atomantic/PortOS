@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { backfillPrevizFromShots, previzCutProblems, previzFrameAt, previzPawnColors, updatePrevizCut } from './musicVideoPreviz.js';
-import { musicVideoProjectUpdateSchema } from './musicVideoValidation.js';
+import { musicVideoPrevizSchema, musicVideoProjectUpdateSchema } from './musicVideoValidation.js';
 
 const subjects = [
   { id: 'c-ana', kind: 'character', name: 'Ana' },
@@ -158,4 +158,18 @@ it('seeds marks for anyone a picker edit adds, follows a set change with its cas
   // Sync seeds an existing cut whose picks changed outside the pickers too.
   const edited = { ...built, previz: { ...built.previz, cuts: [{ ...cut, visibleSubjectIds: ['c-ana', 'c-bo'] }] } };
   expect(backfillPrevizFromShots(edited, places2).previz.tracks.some((t) => t.subjectId === 'c-bo')).toBe(true);
+});
+
+// Catches a selfie cut still hiding its holder, or a plain held cut showing them.
+it('shows a selfie holder facing the camera 0.6 m away, and still hides the holder of a normal held cut', () => {
+  const tracks = ['c-ana', 'c-bo'].map((subjectId, i) => ({ subjectId, placeSubjectId: 'p-street', keys: [{ timeSec: 0, position: [i * 2, 0, 0], facingDegrees: 90, pose: 'stand' }, { timeSec: 4, position: [i * 2, 0, 0], facingDegrees: 90, pose: 'stand' }] }));
+  const cut = { id: 'cut-s1', sceneId: 's1', startSec: 0, endSec: 4, placeSubjectId: 'p-street', viewShotId: null, holderSubjectId: 'c-bo', visibleSubjectIds: null, aimSubjectId: null };
+  const frameOf = (extra) => previzFrameAt(project([scene('s1', 0, 4)], { previz: { cuts: [{ ...cut, ...extra }], tracks } }), places, 1);
+  expect(frameOf({}).actors.find((a) => a.subjectId === 'c-bo').visible).toBe(false);
+  const selfie = frameOf({ selfie: true });
+  expect(selfie.actors.map((a) => a.visible)).toEqual([true, true]);
+  const { position, target } = selfie.camera;
+  expect(Math.hypot(position[0] - target[0], position[2] - target[2])).toBeCloseTo(0.6, 1);
+  expect(position[0]).toBeGreaterThan(target[0]);
+  expect(musicVideoPrevizSchema.safeParse({ cuts: [{ ...cut, selfie: true }], tracks }).success).toBe(true);
 });

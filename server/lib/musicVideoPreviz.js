@@ -385,6 +385,17 @@ function aimedTarget(cut, timing, t, own, aim) {
   return own.map((v, i) => v + (aim[i] - v) * eased);
 }
 
+// A selfie cut: the camera is held out at arm's length, facing back at its holder.
+const SELFIE_DISTANCE = 0.6;
+function selfieCamera(holder, height) {
+  const eye = [holder.position[0], holder.position[1] + height, holder.position[2]];
+  const dir = facingDir(holder.facingDegrees);
+  return { position: [eye[0] + dir[0] * SELFIE_DISTANCE, eye[1], eye[2] + dir[2] * SELFIE_DISTANCE], target: eye };
+}
+
+/** Whether the holder is on screen: only for a selfie, else the camera is their eyes. */
+const holderShown = (cut, visibleIds) => !!cut.selfie && (!visibleIds || visibleIds.has(cut.holderSubjectId));
+
 const TIMELINE_HELD_LENS = 35;
 const TIMELINE_OBSERVER_LENS = 85;
 // An observer with no spot picked stands this far off the people, to their right.
@@ -400,7 +411,7 @@ function timelineFrame(project, cut, timing, songTime, t, style, storyCamera, ti
     subjectId: actor.subjectId, name: actor.name, position: actor.position, facingDegrees: actor.facingDegrees, pose: actor.pose,
     color: colors[actor.subjectId].figure.hex, ...vehicleOf(project, colors, actor.vehicleSubjectId),
     holder: actor.subjectId === cut.holderSubjectId,
-    visible: actor.subjectId !== cut.holderSubjectId && (!visibleIds || visibleIds.has(actor.subjectId)),
+    visible: actor.subjectId === cut.holderSubjectId ? holderShown(cut, visibleIds) : (!visibleIds || visibleIds.has(actor.subjectId)),
   }));
   const aimActor = cut.aimSubjectId ? actors.find((actor) => actor.subjectId === cut.aimSubjectId) : null;
   const aim = aimActor ? [aimActor.position[0], aimActor.position[1] + CHEST_HEIGHT[aimActor.pose], aimActor.position[2]] : null;
@@ -411,7 +422,9 @@ function timelineFrame(project, cut, timing, songTime, t, style, storyCamera, ti
   if (holder) {
     const position = [holder.position[0], holder.position[1] + EYE_HEIGHT[holder.pose], holder.position[2]];
     const dir = facingDir(holder.facingDegrees);
-    camera = { position, target: aimedTarget(cut, timing, t, [position[0] + dir[0] * 5, position[1], position[2] + dir[2] * 5], aim) };
+    camera = cut.selfie
+      ? selfieCamera(holder, EYE_HEIGHT[holder.pose])
+      : { position, target: aimedTarget(cut, timing, t, [position[0] + dir[0] * 5, position[1], position[2] + dir[2] * 5], aim) };
   } else {
     const middle = center ? [center[0], 1.2, center[2]] : [0, 1.2, 0];
     const look = aim || middle;
@@ -470,7 +483,7 @@ export function previzFrameAt(project, loadedPlaces, songTime, timelineWorld = n
       const pose = samplePrevizTrack(track, t);
       return pose && {
         subjectId: track.subjectId, name: names.get(track.subjectId), position: pose.position, facingDegrees: pose.facingDegrees,
-        pose: pose.pose || 'stand', color: colors[track.subjectId].figure.hex, ...vehicleOf(project, colors, pose.vehicleSubjectId), visible: visible.has(track.subjectId) && track.subjectId !== cut.holderSubjectId, holder: track.subjectId === cut.holderSubjectId,
+        pose: pose.pose || 'stand', color: colors[track.subjectId].figure.hex, ...vehicleOf(project, colors, pose.vehicleSubjectId), visible: track.subjectId === cut.holderSubjectId ? holderShown(cut, null) : visible.has(track.subjectId), holder: track.subjectId === cut.holderSubjectId,
       };
     })
     .filter(Boolean);
@@ -486,7 +499,7 @@ export function previzFrameAt(project, loadedPlaces, songTime, timelineWorld = n
     const reach = view ? Math.hypot(view.target[0] - view.position[0], view.target[2] - view.position[2]) || 5 : 5;
     const dir = facingDir(holder.facingDegrees);
     const ahead = [position[0] + dir[0] * reach, view ? view.target[1] - viewGround + holder.position[1] : position[1], position[2] + dir[2] * reach];
-    camera = { position, target: aimedTarget(cut, timing, t, ahead, aim) };
+    camera = cut.selfie ? selfieCamera(holder, height) : { position, target: aimedTarget(cut, timing, t, ahead, aim) };
   } else if (view) {
     camera = { position: view.position, target: aimedTarget(cut, timing, t, view.target, aim) };
   } else {
