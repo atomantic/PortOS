@@ -25,6 +25,7 @@
 #   INSTALL_ACESTEP '1' to bootstrap a venv at ~/.portos/venv-acestep (torch + the acestep package) for local ACE-Step full-song generation with vocals (Music studio, third backend). Default: 0; opt in with INSTALL_ACESTEP=1 (runs on MPS / CUDA / CPU; checkpoints auto-download to ~/.cache/ace-step on first run).
 #   ACESTEP_PIN    commit SHA of ace-step/ACE-Step to check out for ACE-Step (default: 1bee4c9f5b43e30995f8d4d33b3919197ce1bd68).
 #   INSTALL_ACESTEP15 '1' to bootstrap a venv at ~/.portos/venv-acestep15 (the ACE-Step 1.5 package + torch) for local ACE-Step 1.5 full-song generation (Music studio). Default: 0; opt in with INSTALL_ACESTEP15=1 (runs on MPS / CUDA / CPU; model weights are installed separately from Music).
+#   ACESTEP15_PIN  commit SHA of ace-step/ACE-Step-1.5 to check out for ACE-Step 1.5 (default: dce621408bee8c31b4fcf4811682eb9359e1bc94).
 #   INSTALL_MINIMAX_MUSIC3 '1' to bootstrap a venv at ~/.portos/venv-minimax-music3 (CUDA torch + a pinned diffusers) for local MiniMax Music 3 full-song generation up to five minutes (Music studio, fourth backend). Default: 0; opt in with INSTALL_MINIMAX_MUSIC3=1 (NVIDIA CUDA only; the ~29 GB of weights install separately from Music → Generate).
 #   INSTALL_MUSCRIPTOR '1' to bootstrap a venv at ~/.portos/venv-muscriptor (the muscriptor pip package + its torch stack) for local audio → MIDI transcription (Rounds reference audio + Music Video parsing). Default: 0; opt in with INSTALL_MUSCRIPTOR=1 (runs on MPS / CUDA / CPU; model weights auto-download from HuggingFace on first transcription).
 
@@ -1307,17 +1308,40 @@ if [[ "$INSTALL_ACESTEP15" == "1" ]]; then
   fi
   ACESTEP15_PY="$(venv_python "$ACESTEP15_VENV")"
   echo "📦 Installing ACE-Step 1.5 into ${ACESTEP15_VENV}..."
-  "$ACESTEP15_PY" -m pip install --upgrade pip wheel setuptools >/dev/null
-  # ACE-Step 1.5's Linux/Windows torch pins are published on PyTorch's CUDA
-  # index. Passing it as an extra index remains harmless on macOS, where the
-  # package selects its native MPS-compatible torch dependency.
-  # Pin the runtime to a vendor release. The model snapshot is installed
-  # separately through Music, but its custom-code loader depends on this
-  # package's handler contract.
-  ACESTEP15_TORCH_INDEX="${PORTOS_TORCH_CUDA_INDEX:-https://download.pytorch.org/whl/cu128}"
-  "$ACESTEP15_PY" -m pip install --upgrade --extra-index-url "$ACESTEP15_TORCH_INDEX" \
-    "git+https://github.com/ace-step/ACE-Step-1.5.git@v0.1.8" \
-    "huggingface_hub[hf_xet]"
+  if is_apple_silicon; then
+    # Apple Silicon installs only from the hash-pinned lock
+    # (scripts/requirements-acestep15-mlx.lock.txt): no install-time resolution,
+    # so a new or compromised transitive release can't land on the next Repair.
+    # Direct pins: scripts/requirements-acestep15-mlx.txt.
+    # The lock needs CPython 3.11+: its filelock fix for advisory GHSA-2g95-wg33-c5x2
+    # dropped 3.10.
+    if ! "$ACESTEP15_PY" -c 'import sys; sys.exit(0 if sys.version_info[:2] >= (3, 11) else 1)'; then
+      echo "❌ ACE-Step 1.5 on Apple Silicon needs Python 3.11+; ${ACESTEP15_PY} is older." >&2
+      echo "   Re-run with PYTHON_BIN pointing at a 3.11+ interpreter (e.g. 'brew install python@3.12')." >&2
+      exit 1
+    fi
+    ACESTEP15_PIN="${ACESTEP15_PIN:-dce621408bee8c31b4fcf4811682eb9359e1bc94}"
+    ACESTEP15_DIR="${HOME}/.portos/acestep15"
+    if [[ ! -d "${ACESTEP15_DIR}/.git" ]]; then
+      echo "📦 Cloning ace-step/ACE-Step-1.5..."
+      git clone --progress https://github.com/ace-step/ACE-Step-1.5.git "${ACESTEP15_DIR}"
+    fi
+    git_checkout_pin "${ACESTEP15_DIR}" "${ACESTEP15_PIN}"
+    "$ACESTEP15_PY" -m pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-acestep15-mlx.lock.txt"
+    "$ACESTEP15_PY" -m pip install --no-deps --no-build-isolation --ignore-requires-python "${ACESTEP15_DIR}"
+  else
+    "$ACESTEP15_PY" -m pip install --upgrade pip wheel setuptools >/dev/null
+    # ACE-Step 1.5's Linux/Windows torch pins are published on PyTorch's CUDA
+    # index. Passing it as an extra index remains harmless on macOS, where the
+    # package selects its native MPS-compatible torch dependency.
+    # Pin the runtime to a vendor release. The model snapshot is installed
+    # separately through Music, but its custom-code loader depends on this
+    # package's handler contract.
+    ACESTEP15_TORCH_INDEX="${PORTOS_TORCH_CUDA_INDEX:-https://download.pytorch.org/whl/cu128}"
+    "$ACESTEP15_PY" -m pip install --upgrade --extra-index-url "$ACESTEP15_TORCH_INDEX" \
+      "git+https://github.com/ace-step/ACE-Step-1.5.git@v0.1.8" \
+      "huggingface_hub[hf_xet]"
+  fi
   pin_venv_arm64 "$ACESTEP15_VENV"
   probe_or_fail \
     "ACE-Step 1.5 venv built but its Transformers runtime failed to import." \
