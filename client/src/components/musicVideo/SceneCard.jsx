@@ -260,8 +260,10 @@ export default function SceneCard({
   const ltxReferencesGreyboxBlocked = !!scene.setReference?.greyboxShotId;
   // The project's LTX 2.5 References mode makes the box default on; unticking is this shot's override.
   const ltxReferencesProjectDefault = renderSettings?.generationMode === LTX_REFERENCES_GENERATION_MODE && !ltxReferencesGreyboxBlocked;
-  // Say why References is not offered instead of hiding the option.
-  const ltxReferencesReason = layer === 'footage' && !canUseLtxReferences
+  // Say why References is not offered instead of hiding the option, but only where
+  // LTX is in play: on Grok, fal or Runway the shot sends its own references.
+  const ltxReferencesRelevant = referenceBackend === 'local' || renderSettings?.generationMode === LTX_REFERENCES_GENERATION_MODE;
+  const ltxReferencesReason = layer === 'footage' && !canUseLtxReferences && ltxReferencesRelevant
     ? ltxReferencesUnavailableReason({ performance, backend: referenceBackend, model: referenceModel,
       audioReactive: renderSettings?.generationMode === 'audioReactive', storyboardDefault })
     : null;
