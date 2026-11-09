@@ -83,6 +83,21 @@ describe('shot camera rule', () => {
     expect(ids(musicVideoFrameModelInput(ruled, { ...shot, shotSheet: {} }))).not.toContain('camera-rule');
     expect(ids(musicVideoShotModelInput(ruled, { ...shot, shotSheet: null }, { asTyped: true }))).not.toContain('camera-rule');
   });
+
+  // Catches a sheet-built shot listing two Camera chips, which the preview cannot tell apart.
+  it('folds the rule into the sheet Camera line so the preview has one Camera chip', () => {
+    const built = { ...shot, shotSheet: { promptFromSheet: true, cameraId: 'snap', holder: 'Ada' } };
+    const frame = musicVideoFrameModelInput(ruled, built);
+    const line = 'Camera: Snapshot camera, held by Ada. This camera is the one taking the picture, so it is not in the frame. Held at arm\'s length, facing back.';
+    expect(frame.promptAdditions.find((item) => item.id === 'shot-sheet-camera')?.text).toBe(line);
+    expect(frame.prompt).toContain(line);
+    expect(ids(frame)).not.toContain('camera-rule');
+    const clip = musicVideoShotModelInput(ruled, built, { asTyped: true });
+    expect(clip.promptAdditions.find((item) => item.id === 'shot-sheet-camera')?.text).toBe(line);
+    expect(ids(clip)).not.toContain('camera-rule');
+    const end = musicVideoFrameModelInput(ruled, built, { slot: 'end' });
+    expect(cameraText(end)).toBe('Camera: Snapshot camera, an in-world camera. This camera is the one taking the picture, so it is not in the frame. Held at arm\'s length, facing back.');
+  });
 });
 
 describe('musicVideoFrameModelInput', () => {

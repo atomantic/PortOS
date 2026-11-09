@@ -47,7 +47,9 @@ function selectedFrameOutdated(project, scene) {
   const framePrompt = typeof scene?.framePrompt === 'string' ? scene.framePrompt.trim() : '';
   // A sheet-built still records each ingredient's text, so an edited ingredient shows too.
   // The camera rule is composed even when the sheet does not drive the prompt.
-  const parts = [framePrompt, ...shotSheetPromptLines(project, scene).map((line) => line.text), shotCameraRuleText(project, scene)].filter(Boolean);
+  const sheet = shotSheetPromptLines(project, scene);
+  // A sheet-built still already records the camera inside its Camera line.
+  const parts = [framePrompt, ...sheet.map((line) => line.text), sheet.some((line) => line.id === 'shot-sheet-camera') ? '' : shotCameraRuleText(project, scene)].filter(Boolean);
   if (!parts.length || !scene?.referenceImageId) return false;
   const take = (Array.isArray(scene.takes) ? scene.takes : [])
     .find((entry) => entry?.kind === 'image' && entry.assetId === scene.referenceImageId);
@@ -72,10 +74,15 @@ export function shotSheetPromptLines(project, scene) {
   const sheet = scene.shotSheet;
   const camera = sheet.cameraId ? (project?.cameras || []).find((entry) => entry?.id === sheet.cameraId) : null;
   const holder = sheetText(sheet.holder);
-  const cameraText = camera
+  const owner = sheetText(camera?.owner);
+  const rule = sheetText(camera?.rule).replace(/[.!?]+$/, '');
+  let cameraText = camera
     ? camera.kind === 'observer' ? `${camera.name}, an unseen observer camera that nobody in the scene holds`
       : holder === SHOT_CAMERA_SET_DOWN ? `${camera.name}, set down with nobody holding it` : holder ? `${camera.name}, held by ${holder}` : camera.name
     : '';
+  // One Camera chip: the sheet line carries the rule, so the composer does not add a second one.
+  if (cameraText && camera.kind !== 'observer' && owner) cameraText += '. This camera is the one taking the picture, so it is not in the frame';
+  if (cameraText && rule) cameraText += `. ${rule}`;
   const place = [sheetText(sheet.location), sheetText(sheet.timeOfDay), sheetText(sheet.light) ? `lit by ${sheetText(sheet.light)}` : ''].filter(Boolean).join(', ');
   const who = (Array.isArray(sheet.characters) ? sheet.characters : []).map(sheetText).filter(Boolean);
   return [

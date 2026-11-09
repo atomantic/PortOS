@@ -127,7 +127,8 @@ function composeShotModelInput(project, scene, {
 
   // A detail-built shot's details follow the director's motion text, each its own labeled part.
   const sheet = shotSheetPromptLines(project, scene);
-  const cameraRule = addition('camera-rule', 'Camera', shotCameraRuleText(project, scene));
+  // The sheet's Camera line already carries the rule; a second Camera chip collides with it in the preview.
+  const cameraRule = sheet.some((item) => item.id === 'shot-sheet-camera') ? null : addition('camera-rule', 'Camera', shotCameraRuleText(project, scene));
   const firstLine = [text, ...[...look, ...direction].filter(Boolean).map((item) => item.text)].filter(Boolean).join(', ');
   const body = [firstLine, ...sheet.map((item) => item.text), cameraRule?.text, camera?.text, route?.text, actions?.text].filter(Boolean).join('\n');
   const prompt = [body, ...tail.filter(Boolean).map((item) => item.text)].filter(Boolean).join('. ');
@@ -251,9 +252,10 @@ function composeFrameModelInput(project, scene, {
       promptAdditions: [addition('keep-reference', 'Keep the start frame', KEEP_REFERENCE), others].filter(Boolean) };
   }
   // A sheet-built still's ingredients follow its general prompt, each its own labeled part.
-  // The camera rule is its own part on the start frame, the end frame and the clip.
+  // End frames omit those columns, so the camera rule is its own part there.
   const sheet = slot === 'start' ? shotSheetPromptLines(project, scene) : [];
-  const cameraRule = addition('camera-rule', 'Camera', shotCameraRuleText(project, scene));
+  // End frames omit the sheet columns, so they still get the camera on its own.
+  const cameraRule = sheet.some((item) => item.id === 'shot-sheet-camera') ? null : addition('camera-rule', 'Camera', shotCameraRuleText(project, scene));
   const shotText = [text, ...sheet.map((item) => item.text), cameraRule?.text].filter(Boolean).join('\n');
   const board = slot === 'start' && !fromFrame ? panel : null;
   const storyboard = board ? [

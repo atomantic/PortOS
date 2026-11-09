@@ -38,6 +38,13 @@ describe('selectedFrameOutdated', () => {
     expect(withCamera('Ada rides away at dusk')).toBe(true);
     expect(withCamera('Ada rides away at dusk\nCamera: Observer, an observer camera. Nobody looks at it.')).toBe(false);
   });
+  // Catches a sheet-built frame staying current after the rule moves into its Camera line.
+  it('judges a sheet-built frame by the Camera line that carries the rule', () => {
+    const project = { cameras: [{ id: 'snap', name: 'Snapshot camera', kind: 'in-world', owner: 'Ada', rule: 'Facing back' }] };
+    const shot = (prompt) => shotSheetRows({ ...project, scenes: [scene({ shotSheet: { promptFromSheet: true, cameraId: 'snap', holder: 'Ada' }, takes: [take(prompt)] })] })[0].frameOutdated;
+    expect(shot('Ada rides away at dusk\nCamera: Snapshot camera, held by Ada.')).toBe(true);
+    expect(shot('Ada rides away at dusk\nCamera: Snapshot camera, held by Ada. This camera is the one taking the picture, so it is not in the frame. Facing back.')).toBe(false);
+  });
 });
 
 describe('shotCameraRuleText', () => {
