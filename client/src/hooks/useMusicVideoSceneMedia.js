@@ -43,6 +43,16 @@ const REFERENCE_CAPABILITY_CODES = new Set([
   'TOO_MANY_INPUT_IMAGES',
 ]);
 
+// A shot card's frame pick. No mode means the project image pin. An explicit
+// mode wins on the server and blocks that pin's model from leaking.
+function explicitImageRequest(imageTarget) {
+  if (!imageTarget?.mode) return {};
+  const request = { mode: imageTarget.mode };
+  if (imageTarget.modelId) request.modelId = imageTarget.modelId;
+  if (imageTarget.cloudModel) request.cloudModel = imageTarget.cloudModel;
+  return request;
+}
+
 // A project-default reference render has no per-card length override.
 const ltxReferenceFrames = (scene, target) => ltxReferenceFramesFor(scene, target?.numFrames);
 
@@ -260,8 +270,9 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
    *
    * `refine` (with `referenceImageId`) edits that frame by a short instruction
    * instead: the prompt is the instruction, and the frame leads the shot's references.
+   * `imageTarget` names this render's image service. Omit it and the project pin applies.
    */
-  const generateFrame = (scene, { revisionId, onJob, referenceImageId = null, refine = null, replaceSelection = false, thenClip = null } = {}) => {
+  const generateFrame = (scene, { revisionId, onJob, referenceImageId = null, refine = null, replaceSelection = false, thenClip = null, imageTarget = null } = {}) => {
     const refining = Boolean(refine?.trim() && referenceImageId);
     if (castGuidesPending(scene)) return Promise.resolve({ ok: false });
     if (musicVideoMissingFrameLinkedPicks(project, scene, castMedia).length) {
@@ -285,6 +296,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     const projectId = project.id;
     const renderKey = frameLane.startScene(scene.sceneId);
     return generateImage({
+      ...explicitImageRequest(imageTarget),
       prompt,
       ...musicVideoFrameGenSize(project),
       ...(references.length ? { referenceImageFiles: references } : {}),
@@ -345,7 +357,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
    * `slot: 'end'` tag); a fal clip on a model that takes an end frame then ends
    * on it. Resolves `{ ok }` like generateFrame.
    */
-  const generateEndFrame = (scene, { referenceImageId = scene.referenceImageId, refine = null, replaceSelection = false } = {}) => {
+  const generateEndFrame = (scene, { referenceImageId = scene.referenceImageId, refine = null, replaceSelection = false, imageTarget = null } = {}) => {
     const refining = Boolean(refine?.trim() && referenceImageId);
     const endPrompt = scene.endFramePrompt?.trim();
     if (!endPrompt && !refining) { toast.error('Describe the end frame first'); return Promise.resolve({ ok: false }); }
@@ -359,6 +371,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     const castInputs = submittedCastInputs(scene, conditioning, references);
     const renderKey = endFrameLane.startScene(scene.sceneId);
     return generateImage({
+      ...explicitImageRequest(imageTarget),
       // From a frame the server keeps its shot and changes what the prompt asks; with no frame it renders like a start frame.
       prompt: refining ? refine.trim() : endPrompt,
       ...musicVideoFrameGenSize(project),

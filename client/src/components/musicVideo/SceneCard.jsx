@@ -19,7 +19,7 @@ import { LTX_REFERENCES_GENERATION_MODE, isLtx25Model, ltxReferenceSheetPrefix, 
 import SceneStoryboardClip, { storyboardClipOffered } from './SceneStoryboardClip.jsx';
 import { MUSIC_VIDEO_MEDIUM_LABELS } from '../../../../server/lib/musicVideoMediumPlan.js';
 import { storyboardShotDirection } from '../../../../server/lib/musicVideoShotPrompt.js';
-import { useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { Trash2, Activity, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, X, Video, AlertTriangle, Clapperboard, Shuffle } from 'lucide-react';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
 import SceneTakePicker from './SceneTakePicker.jsx';
@@ -218,6 +218,14 @@ export default function SceneCard({
   const [initialRender] = useState(() => lastRenderTarget({ performance: isPerformanceScene(scene), saved: falVideoSettings || {} }));
   const [renderPick, setRenderPick] = useState(initialRender.pick);
   const [renderOptions, setRenderOptions] = useState(initialRender.options);
+  // The Frames tab reports the image service for this shot. Retry and Clip from storyboard read it after the tab is hidden.
+  const frameImageTarget = useRef(null);
+  const onFrameImageTarget = useCallback((target) => { frameImageTarget.current = target; }, []);
+  const withFrameTarget = (extra) => {
+    const target = frameImageTarget.current;
+    if (!target) return extra;
+    return extra ? { ...extra, imageTarget: target } : { imageTarget: target };
+  };
   const renderOverrides = renderTargetOverrides(renderPick, falVideoSettings || {}, renderOptions,
     { models: videoModels, defaultModel: defaultVideoModel, performance: isPerformanceScene(scene), scene });
   const renderSettings = renderOverrides ? { ...falVideoSettings, ...renderOverrides } : falVideoSettings;
@@ -353,7 +361,7 @@ export default function SceneCard({
   const generateStoryboardClip = () => {
     if (storyboardRefusal) return;
     const model = renderOverrides?.modelId || renderOverrides?.falModelId || renderOverrides?.runwayModelId;
-    onGenerateFrame?.(scene, { thenClip: { ...(renderLane ? { backend: renderLane } : {}), ...(model ? { model } : {}), ...songAudioField } });
+    onGenerateFrame?.(scene, withFrameTarget({ thenClip: { ...(renderLane ? { backend: renderLane } : {}), ...(model ? { model } : {}), ...songAudioField } }));
   };
   const renderCost = performance ? performanceCost : timing.falCost;
   // A composed still shows its picture (the still, or the still playing its image effect) in place of a clip.
@@ -690,7 +698,7 @@ export default function SceneCard({
             each with its prompt and Render under it, then the tapped frame's takes. */}
         <div hidden={view !== 'frames'}>
         <SceneFrames project={project} castMedia={castMedia} onReloadCastMedia={onReloadCastMedia} greyboxPlaces={greyboxPlaces} greyboxSaving={greyboxSaving} onGreyboxSaving={setGreyboxSaving} scene={scene} index={index} endFrames={endFrames} endFrameToggle={layer === 'footage'} generatingFrame={!!generatingFrame} generatingEndFrame={!!generatingEndFrame}
-          onGenerateFrame={onGenerateFrame} onGenerateEndFrame={onGenerateEndFrame} onEditLocal={onEditLocal} onSave={onSave}
+          onGenerateFrame={onGenerateFrame} onGenerateEndFrame={onGenerateEndFrame} onImageTargetChange={onFrameImageTarget} onEditLocal={onEditLocal} onSave={onSave}
           onOpenPreview={onOpenPreview} takeBusy={takeBusy} onSelectTake={onSelectTake} onReviewTake={onReviewTake}
           onSwap={onPlacePoolItem ? setSwapKind : null} onSwapFrames={onSwapFrames ? () => onSwapFrames(scene) : null} onImportTake={onImportTake}
           onContinueFromPrevious={layer === 'footage' && index > 0 ? onContinueFromPrevious : null} previousHasClip={previousHasClip}
@@ -803,7 +811,11 @@ export default function SceneCard({
           <div className="flex flex-wrap items-center gap-2" data-testid="clip-actions">
             {storyboardDefault && (
               <SceneStoryboardClip refusal={storyboardRefusal} generatingFrame={!!generatingFrame}
-                onClip={generateStoryboardClip} onStill={onGenerateFrame ? () => onGenerateFrame(scene) : null} />
+                onClip={generateStoryboardClip} onStill={onGenerateFrame ? () => {
+                  const options = withFrameTarget(null);
+                  if (options) onGenerateFrame(scene, options);
+                  else onGenerateFrame(scene);
+                } : null} />
             )}
             {!storyboardDefault && <button onClick={generateVideo}
               disabled={renderBlocked}
@@ -890,7 +902,12 @@ export default function SceneCard({
           {failure.lane === 'video' ? 'Video' : 'Frame'} failed: {failure.error}
         </span>
         <button type="button"
-          onClick={() => (failure.lane === 'video' ? generateVideo() : onGenerateFrame?.(scene))}
+          onClick={() => {
+            if (failure.lane === 'video') { generateVideo(); return; }
+            const options = withFrameTarget(null);
+            if (options) onGenerateFrame?.(scene, options);
+            else onGenerateFrame?.(scene);
+          }}
           disabled={failure.lane === 'video' && renderBlocked}
           title={failure.lane === 'video' ? videoRefusal || undefined : undefined}
           className="inline-flex min-h-[44px] shrink-0 items-center px-1 font-medium underline disabled:opacity-50 pointer-fine:sm:min-h-0">

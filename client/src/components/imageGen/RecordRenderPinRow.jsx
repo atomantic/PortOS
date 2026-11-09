@@ -1,14 +1,8 @@
-import RunwayModelSelect from './RunwayModelSelect';
-import ModelSelect from '../ModelSelect';
-import FalModelSelect from './FalModelSelect';
+import ImageModelField, { imageModeHasModel } from './ImageModelField';
 import {
-  IMAGE_GEN_MODE, RENDER_TARGET_BACKEND_AUTO, localModelSelectOptions, modeLabel,
-  supportsCloudModelOverride,
+  IMAGE_PIN_MODES, RENDER_TARGET_BACKEND_AUTO, modeLabel,
 } from '../../lib/imageGenBackends';
-import useFieldDraft from '../../hooks/useFieldDraft';
-import useLocalImageModels from '../../hooks/useLocalImageModels';
 
-const DEFAULT_MODES = [IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX, IMAGE_GEN_MODE.GROK, IMAGE_GEN_MODE.AGY, IMAGE_GEN_MODE.FAL, IMAGE_GEN_MODE.RUNWAY];
 const FIELD = 'w-full max-w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent';
 
 // Per-record render pin editor (#3231 Phase 3) — one row pinning a record's
@@ -40,18 +34,14 @@ export default function RecordRenderPinRow({
   imageMode = null,
   imageModelId = null,
   onChange,
-  modes = DEFAULT_MODES,
+  modes = IMAGE_PIN_MODES,
   options = null,
   autoLabel = 'Auto (default)',
   showAuto = true,
 }) {
   const pinnedMode = imageMode && imageMode !== RENDER_TARGET_BACKEND_AUTO ? imageMode : '';
   const optionList = options || modes.map((m) => ({ id: m, label: modeLabel(m) }));
-  const isLocal = pinnedMode === IMAGE_GEN_MODE.LOCAL;
-  const { models, installDefault } = useLocalImageModels(isLocal);
-  const modelDraft = useFieldDraft(imageModelId, (v) => {
-    onChange({ imageMode: pinnedMode || null, imageModelId: v.trim() || null });
-  });
+  const setModel = (modelId) => onChange({ imageMode: pinnedMode || null, imageModelId: modelId });
   return (
     <div className="grid min-w-0 w-full grid-cols-1 gap-2 sm:w-auto sm:grid-cols-[auto_auto_1fr] sm:items-center">
       <label htmlFor={`${idPrefix}-mode`} className="text-xs font-medium text-gray-400">{label}</label>
@@ -64,62 +54,16 @@ export default function RecordRenderPinRow({
         {showAuto ? <option value="">{autoLabel}</option> : (!pinnedMode && <option value="" disabled>Pick a backend</option>)}
         {optionList.map((o) => <option key={o.id} value={o.id}>{o.label || o.id}</option>)}
       </select>
-      {isLocal ? (
-        <LocalModelPin
+      {imageModeHasModel(pinnedMode) ? (
+        <ImageModelField
           id={`${idPrefix}-model`}
-          ariaLabel={`${label} model`}
-          models={models}
-          installDefault={installDefault}
+          mode={pinnedMode}
           value={imageModelId}
-          onChange={(modelId) => onChange({ imageMode: pinnedMode, imageModelId: modelId })}
-        />
-      ) : pinnedMode === IMAGE_GEN_MODE.RUNWAY ? (
-        <RunwayModelSelect
-          id={`${idPrefix}-model`}
-          aria-label={`${label} model`}
-          value={imageModelId}
-          onChange={(v) => onChange({ imageMode: pinnedMode, imageModelId: v })}
-          className={`${FIELD} sm:w-52`}
-        />
-      ) : pinnedMode === IMAGE_GEN_MODE.FAL ? (
-        <FalModelSelect
-          id={`${idPrefix}-model`}
           ariaLabel={`${label} model`}
-          value={imageModelId || ''}
-          defaultLabel="Default (Settings)"
-          onChange={(modelId) => onChange({ imageMode: pinnedMode, imageModelId: modelId })}
           className={`${FIELD} sm:w-52`}
-        />
-      ) : supportsCloudModelOverride(pinnedMode) ? (
-        <input
-          id={`${idPrefix}-model`}
-          type="text"
-          value={modelDraft.value}
-          onChange={modelDraft.onChange}
-          onBlur={modelDraft.onBlur}
-          placeholder="Model (optional)"
-          aria-label={`${label} model`}
-          className={`${FIELD} sm:w-52`}
+          onChange={setModel}
         />
       ) : <span className="hidden sm:block" />}
     </div>
-  );
-}
-
-function LocalModelPin({ id, ariaLabel, models, installDefault, value, onChange }) {
-  const loading = models === null || installDefault === null;
-  const { options, fallbackLabel } = localModelSelectOptions(models, value, installDefault ?? undefined);
-  return (
-    <ModelSelect
-      id={id}
-      ariaLabel={ariaLabel}
-      models={options}
-      value={value || ''}
-      loading={loading}
-      onChange={(e) => onChange(e.target.value || null)}
-      getLabel={(m) => m.name || m.id}
-      emptyOption={`Default (${fallbackLabel})`}
-      className={`${FIELD} sm:w-52 disabled:opacity-50`}
-    />
   );
 }

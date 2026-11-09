@@ -184,6 +184,17 @@ export const MODE_LABELS = Object.freeze({
   [VIDEO_GEN_MODE.GEMINI]: 'Gemini',
 });
 
+// Backends a record pin or a one-shot frame render can name. External is an
+// install route, not a choice on those pickers.
+export const IMAGE_PIN_MODES = Object.freeze([
+  IMAGE_GEN_MODE.LOCAL,
+  IMAGE_GEN_MODE.CODEX,
+  IMAGE_GEN_MODE.GROK,
+  IMAGE_GEN_MODE.AGY,
+  IMAGE_GEN_MODE.FAL,
+  IMAGE_GEN_MODE.RUNWAY,
+]);
+
 export { RUNWAY_IMAGE_DISCLOSURE, RUNWAY_IMAGE_MODELS, RUNWAY_IMAGE_DEFAULT_MODEL, RUNWAY_IMAGE_MODEL_IDS, getRunwayImageModel } from '../../../server/lib/runwayImageModels.js';
 
 // The fal.ai model picker rows — one per catalog family, keyed by its
