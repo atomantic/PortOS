@@ -306,6 +306,13 @@ export const musicVideoPrevizSchema = z.object({
     // null = everyone on the set except the holder.
     visibleSubjectIds: z.array(previzSubjectId).max(PREVIZ_VISIBLE_MAX).nullable().optional(),
     aimSubjectId: previzSubjectId.nullable().optional(),
+    // What the last "Sync with shots" wrote for the picks it derives from the sheet; a pick that still equals it was not hand-edited, so the next sync may refresh it.
+    synced: z.object({
+      placeSubjectId: previzSubjectId.nullable().optional(),
+      viewShotId: z.string().min(1).max(GREYBOX_SHOT_ID_MAX).regex(GREYBOX_SHOT_ID_PATTERN).nullable().optional(),
+      holderSubjectId: previzSubjectId.nullable().optional(),
+      visibleSubjectIds: z.array(previzSubjectId).max(PREVIZ_VISIBLE_MAX).nullable().optional(),
+    }).strict().optional(),
     // The camera starts on its own aim and swings to the keep-in-frame person during the cut.
     turnToAim: z.boolean().optional(),
     // Where the cut starts on the timeline (story minutes) and an unheld camera's spot on the world map.
