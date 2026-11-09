@@ -739,13 +739,12 @@ async function cancelOwnedJobs(runId, { includeRunning = false, jobIds = null } 
 /**
  * A project rendering clips from Supplied song audio binds that into the run's
  * own video routes, so each clip takes its shot's song window and a later
- * settings change cannot alter a running grant. It needs local video.
+ * settings change cannot alter a running grant. It needs local video. LTX 2.5
+ * References binds likewise onto the local video routes (hosted routes render as usual).
  */
 function bindSuppliedAudio(pool, project) {
-  // Run clips do not yet send the shot's references to LTX 2.5 (#15482); refuse
-  // rather than render plain image-to-video clips the project did not choose.
-  if (project.videoSettings?.generationMode === 'ltxReferences' && pool.some((route) => route.kind === 'video')) {
-    throw new ServerError('Production runs do not support LTX 2.5 References yet; switch Video render settings to Prompt motion or Supplied song audio', { status: 409, code: 'MUSIC_VIDEO_RENDER_POOL_UNAVAILABLE' });
+  if (project.videoSettings?.generationMode === 'ltxReferences') {
+    return pool.map((route) => (route.kind === 'video' && route.mode === 'local' ? { ...route, references: 'ltx' } : route));
   }
   if (project.videoSettings?.generationMode !== 'suppliedAudio') return pool;
   if (pool.some((route) => route.kind === 'video' && route.mode !== 'local')) {

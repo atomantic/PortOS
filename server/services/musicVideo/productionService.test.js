@@ -266,12 +266,15 @@ describe('music video production run (#9066)', () => {
     expect(theRun().pool.filter((route) => route.kind === 'image').some((route) => 'audio' in route)).toBe(false);
   });
 
-  // Uniquely catches a References project silently producing plain image-to-video run clips.
-  it('refuses a project set to LTX 2.5 References until run clips can send the shot references (#15482)', async () => {
+  // Uniquely catches a References project producing plain image-to-video run clips: the run's own
+  // local video routes carry the mode.
+  it('binds LTX 2.5 References onto the run\'s local video routes (#15482)', async () => {
     seedProject({ videoSettings: { generationMode: 'ltxReferences', renderPool: { mode: 'local', peers: [] } } });
-    await expect(start()).rejects.toMatchObject({ code: 'MUSIC_VIDEO_RENDER_POOL_UNAVAILABLE' });
-    expect(dispatch).not.toHaveBeenCalled();
-    expect(current().productionRuns).toBeUndefined();
+    await start();
+    const videos = theRun().pool.filter((route) => route.kind === 'video');
+    expect(videos.length).toBeGreaterThan(0);
+    expect(videos.every((route) => route.references === 'ltx')).toBe(true);
+    expect(theRun().pool.filter((route) => route.kind === 'image').some((route) => 'references' in route)).toBe(false);
   });
 
   // Uniquely catches a failed halt being swallowed: the step failure and the halt failure both reach console.error with the project.
