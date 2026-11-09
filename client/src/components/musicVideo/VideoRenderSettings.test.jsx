@@ -32,3 +32,24 @@ describe('VideoRenderSettings catalog failure', () => {
     expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
   });
 });
+
+describe('LTX 2.5 References generation mode (#15482)', () => {
+  const ltx = { id: 'ltx25_example', name: 'LTX 2.5 Example', runtime: 'ltx25' };
+  const local = { ...base, settings: { ...base.settings, generationMode: 'image' }, audioReactiveSelected: false, models: [ltx],
+    ltxReferencesModels: [ltx], ltxReferencesSelected: false, catalogStatus: 'ready' };
+
+  it('lists the mode with an LTX 2.5 model and saves it with that model pinned', () => {
+    const change = vi.fn();
+    render(<VideoRenderSettings videoSettings={{ ...local, change }} />);
+    fireEvent.change(screen.getByLabelText('Scene generation mode'), { target: { value: 'ltxReferences' } });
+    expect(change).toHaveBeenCalledWith({ generationMode: 'ltxReferences', modelId: 'ltx25_example' });
+  });
+
+  it('disables the option without an LTX 2.5 model and explains the selected mode', () => {
+    const { unmount } = render(<VideoRenderSettings videoSettings={{ ...local, models: [], ltxReferencesModels: [] }} />);
+    expect(screen.getByRole('option', { name: /LTX 2.5 References/ }).disabled).toBe(true);
+    unmount();
+    render(<VideoRenderSettings videoSettings={{ ...local, settings: { ...local.settings, generationMode: 'ltxReferences', modelId: 'ltx25_example' }, ltxReferencesSelected: true }} />);
+    expect(screen.getByText(/clip references as IC references/)).toBeTruthy();
+  });
+});

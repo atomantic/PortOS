@@ -1308,6 +1308,43 @@ describe('LTX reference box default', () => {
   });
 });
 
+describe('project LTX 2.5 References mode on the shot card (#15482)', () => {
+  const models = [{ id: 'ltx25_example', name: 'LTX 2.5', runtime: 'ltx25', supportedModes: ['image', 'a2v'] }, { id: 'ltx23_example', name: 'LTX 2.3', runtime: 'ltx2', supportedModes: ['image'] }];
+  const renderCard = (settings, over = {}) => {
+    const scene = { sceneId: 's1', prompt: 'The rider turns', referenceImageId: 'start.png', clipReferenceIds: ['rider'], startSec: 0, endSec: 4, takes: [], ...over };
+    const project = { id: 'mv-reference', scenes: [scene], visualSpec: { references: [
+      { id: 'rider', imageId: 'rider.png', role: 'character', label: 'Rider', condition: true },
+    ] } };
+    const onGenerateVideo = vi.fn();
+    render(<SceneCard scene={scene} project={project} index={0} expanded onEditLocal={vi.fn()} onSave={vi.fn()}
+      onGenerateVideo={onGenerateVideo} videoModels={models} falVideoSettings={settings} />);
+    show('Clip');
+    return onGenerateVideo;
+  };
+
+  // Uniquely catches the project mode not turning the per-shot box on, or unticking it not reaching the request.
+  it('ticks the box by default and lets this shot untick it as an override', () => {
+    const onGenerateVideo = renderCard({ backend: 'local', modelId: 'ltx25_example', generationMode: 'ltxReferences' }, { clipReferenceIds: undefined, frameReferenceIds: ['rider'] });
+    const box = screen.getByLabelText(/Use LTX reference images/);
+    expect(box).toBeChecked();
+    fireEvent.click(box);
+    fireEvent.click(screen.getByRole('button', { name: 'Render' }));
+    expect(onGenerateVideo.mock.calls[0][1].card).toMatchObject({ ltxReferences: false });
+  });
+
+  // Uniquely catches the checkbox silently disappearing.
+  it.each([
+    ['a hosted backend', { backend: 'grok' }, {}, /Render on set to Local/],
+    ['a model that is not LTX 2.5', { backend: 'local', modelId: 'ltx23_example' }, {}, /LTX 2.5 local model/],
+    ['Audio reactive mode', { backend: 'local', modelId: 'ltx25_example', generationMode: 'audioReactive' }, {}, /Audio reactive/],
+    ['no start frame yet (storyboard shot)', { backend: 'local', modelId: 'ltx25_example' }, { panelId: 'panel-1', panelArt: 'panel.png', referenceImageId: null }, /Generate the storyboard frame first/],
+  ])('says why References is not offered for %s', (_name, settings, over, reason) => {
+    renderCard(settings, over);
+    expect(screen.queryByLabelText(/Use LTX reference images/)).toBeNull();
+    expect(screen.getByText(reason)).toBeTruthy();
+  });
+});
+
 it('does not offer LTX references for a storyboard clip that cannot carry them', () => {
   const scene = { sceneId: 's1', panelId: 'panel-1', panelArt: 'panel.png', prompt: 'The rider turns',
     clipReferenceIds: ['rider'], startSec: 0, endSec: 4, takes: [] };

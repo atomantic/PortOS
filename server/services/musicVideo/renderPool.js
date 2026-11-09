@@ -53,7 +53,7 @@ export async function applyProjectRenderPool(body) {
   if (body.backend && body.backend !== 'local') refuse('Peer pools support local GPU models only; choose Local video');
   if (body.mediaProviderPeerId) refuse('Choose peers in the saved project pool, not in the individual request');
   if (!['image', 'suppliedAudio'].includes(project.videoSettings.generationMode || 'image')) {
-    refuse('Audio-reactive LoRA weights cannot cross to peers; use Prompt motion or Supplied song audio');
+    refuse('Audio-reactive LoRA weights and LTX 2.5 References cannot cross to peers; use Prompt motion or Supplied song audio');
   }
   if (body.mode && !['image', 'a2v'].includes(body.mode)) refuse('Peer pools do not support video continuation or chain state');
   const suppliedAudio = supplied;
