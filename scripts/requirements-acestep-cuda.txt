@@ -1,0 +1,42 @@
+# ACE-Step CUDA: direct pins for the dedicated CPython 3.11 runtime.
+# Install from the windows/linux hash locks, never directly from this input.
+# Regeneration and hardware validation: docs/ACESTEP_CUDA.md.
+#
+# The acestep package itself is not in the lock: the installer checks out
+# ace-step/ACE-Step at ACESTEP_PIN and installs it with --no-deps, as on Apple
+# Silicon. Dependencies match requirements-acestep-mlx.txt except torch, which
+# is the cu126 build the other CUDA runtimes share.
+# torchvision stays the PyPI 0.29.2 wheel (the only build pinned to torch 2.14.1).
+# docopt and unidic-lite publish only source distributions; the installer
+# allows building exactly those two (both pure Python), still hash-verified.
+torch==2.14.1+cu126
+torchvision==0.29.2
+torchaudio==2.11.1
+accelerate==1.15.0
+diffusers==0.42.1
+transformers==5.22.1
+huggingface-hub[hf_xet]==2.4.0
+sentencepiece==0.2.2
+peft==0.21.2
+datasets>=3.4.1
+librosa==0.11.0
+loguru==0.7.3
+matplotlib>=3.10.1
+numpy==2.4.6
+pypinyin==0.53.0
+pytorch-lightning>=2.5.1
+soundfile>=0.13.1
+tqdm>=4.67.1
+py3langid==0.3.0
+hangul-romanize==0.1.0
+num2words==0.5.14
+spacy>=3.8.4
+cutlet
+fugashi[unidic-lite]
+click
+tensorboard
+tensorboardX
+filelock>=4.2.1
+pillow==13.0.0
+wheel
+setuptools
