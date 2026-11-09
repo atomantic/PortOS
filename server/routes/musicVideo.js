@@ -42,6 +42,10 @@ import {
   musicVideoPacingRecutSchema,
   musicVideoSceneStartSchema,
   musicVideoSceneEndSchema,
+  musicVideoSceneFrameRenderSchema,
+  musicVideoSceneFramesRenderSchema,
+  musicVideoSceneClipRenderSchema,
+  musicVideoSceneClipsRenderSchema,
   musicVideoPlanRequestSchema,
   musicVideoManualAnalysisSchema,
   musicVideoSectionsEditSchema,
@@ -158,6 +162,7 @@ import {
   refreshSongStyleFromSuno,
 } from '../services/musicVideo/projects.js';
 import { requireProject } from '../services/musicVideo/requireProject.js';
+import { renderSceneClips, renderSceneFrames } from '../services/musicVideo/sceneCardRender.js';
 import { labelProjectReferences } from '../services/musicVideo/referenceLabels.js';
 import { buildHandoffManifest, buildHandoffBundle, matchSceneByFileTag } from '../services/musicVideo/handoff.js';
 import { getHistoryItem } from '../services/videoGen/history.js';
@@ -1878,6 +1883,33 @@ router.post('/:id/scenes/:sceneId/merge-next', asyncHandler(async (req, res) => 
 router.post('/:id/scenes/:sceneId/merge-previous', asyncHandler(async (req, res) => {
   const { backend } = validateRequest(musicVideoSceneSplitSchema, req.body ?? {});
   res.json(await mergeProjectPreviousScene(req.params.id, req.params.sceneId, { backend }));
+}));
+
+// The shot card's frame and clip (#15583). One action loads cast media, resolves
+// the shot's references and submits the same image or video job the card would.
+router.post('/:id/scenes/frames', asyncHandler(async (req, res) => {
+  const project = await requireProject(req.params.id);
+  const { sceneIds, ...options } = validateRequest(musicVideoSceneFramesRenderSchema, req.body ?? {});
+  res.json(await renderSceneFrames(project, { sceneIds, ...options }));
+}));
+
+router.post('/:id/scenes/clips', asyncHandler(async (req, res) => {
+  const project = await requireProject(req.params.id);
+  const parsed = validateRequest(musicVideoSceneClipsRenderSchema, req.body ?? {});
+  const { sceneIds, ...options } = parsed;
+  res.json(await renderSceneClips(project, { sceneIds, ...options }));
+}));
+
+router.post('/:id/scenes/:sceneId/frame', asyncHandler(async (req, res) => {
+  const project = await requireProject(req.params.id);
+  const options = validateRequest(musicVideoSceneFrameRenderSchema, req.body ?? {});
+  res.json(await renderSceneFrames(project, { sceneId: req.params.sceneId, ...options }));
+}));
+
+router.post('/:id/scenes/:sceneId/clip', asyncHandler(async (req, res) => {
+  const project = await requireProject(req.params.id);
+  const options = validateRequest(musicVideoSceneClipRenderSchema, req.body ?? {});
+  res.json(await renderSceneClips(project, { sceneId: req.params.sceneId, ...options }));
 }));
 
 // Move a shot's start; the shot before it ends at the same time, so the cut between them moves.
