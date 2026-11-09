@@ -28,6 +28,8 @@ describe('trusted PR scheduling after discussion screening', () => {
     const result = await resolvePrWatcherBlock(app, 'pr-watcher', metadata, { recordExecution: vi.fn() });
     expect(result).toMatchObject({ skip: false, block: 'PR #8' });
     expect(metadata.forgeMaintenanceVersion).toBe(1);
+    // Finalize verifies only the PRs this run was actually handed (#15552).
+    expect(metadata.prWatcherTargets).toEqual({ repoFullName: 'example/project', prNumbers: [8] });
     expect(mock.persist).toHaveBeenCalledWith(app.id, expect.objectContaining({ activityByPr: { 7: 'old', 8: 'new' }, lastError: 'injection' }));
   });
 
@@ -38,6 +40,7 @@ describe('trusted PR scheduling after discussion screening', () => {
     expect(await resolvePrWatcherBlock(app, 'pr-watcher', metadata, { recordExecution })).toEqual({ skip: true });
     expect(mock.persist.mock.calls[0][1]).not.toHaveProperty('activityByPr');
     expect(metadata).not.toHaveProperty('forgeMaintenanceVersion');
+    expect(metadata).not.toHaveProperty('prWatcherTargets');
     expect(recordExecution).toHaveBeenCalledOnce();
   });
 });

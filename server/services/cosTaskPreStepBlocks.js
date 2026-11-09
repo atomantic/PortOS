@@ -37,6 +37,7 @@ import { NON_ACTIONABLE_ISSUE_LABELS } from './perpetualWork.js';
 import { DISPATCH_HINT_FANOUT_GUIDANCE } from '../lib/dispatchLabels.js';
 import { applyAppPlaceholders } from '../lib/appPromptPlaceholders.js';
 import { renderOrPrependSection } from '../lib/promptSectionRenderer.js';
+import { prWatcherTargetsMetadata } from './prWatcherCompletion.js';
 import {
   appendReviewerEffortBlock,
   appendReviewerMaxRoundsBlock,
@@ -1114,6 +1115,10 @@ export async function resolvePrWatcherBlock(app, taskType, metadata, taskSchedul
   }
 
   metadata.forgeMaintenanceVersion = FORGE_MAINTENANCE_VERSION;
+  // Finalize re-checks exactly these PRs on the forge when the run reports a
+  // no-op, so a selection that merged before spawn is not scored a failure.
+  const targets = prWatcherTargetsMetadata(check.newPrs, check.repoFullName);
+  if (targets) metadata.prWatcherTargets = targets;
   const block = prWatcher.formatPullRequestsForPrompt(check.newPrs, {
     repoFullName: check.repoFullName, defaultBranch: check.defaultBranch
   });

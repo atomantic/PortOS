@@ -138,7 +138,7 @@ export function releaseAgentLane({ agentId, success, duration, exitCode, executi
  *
  * @returns {Promise<boolean|null|'skip-learning'>}
  */
-export async function evaluateSuccessCriteria({ agentId = null, task, terminatedByUser, workspacePath, startedAt = null, success = false, hookResult = null, branchProvenEmpty = false, emptyBranchInconclusiveEvidence = null, claimDisposition = null, mergedReviewFollowUp = null, retirementCompletion = null, runtimeContinuation = null }) {
+export async function evaluateSuccessCriteria({ agentId = null, task, terminatedByUser, workspacePath, startedAt = null, success = false, hookResult = null, branchProvenEmpty = false, emptyBranchInconclusiveEvidence = null, claimDisposition = null, mergedReviewFollowUp = null, retirementCompletion = null, runtimeContinuation = null, prWatcherTargetsSettled = null }) {
   if (terminatedByUser) return null;
   if (isUpdateRepoRepairTask(task)) return success
     && await verifyUpdateRepoRepairCompletion(task, agentId, workspacePath).catch(() => false);
@@ -166,6 +166,7 @@ export async function evaluateSuccessCriteria({ agentId = null, task, terminated
   // claim shipping keeps its existing PR/fidelity gates and undeclared criterion.
   if (success && hasClaimFlowContract(task) && claimDisposition?.status === 'verified') return true;
   if (success && runtimeContinuation?.status === 'verified') return true;
+  if (success && prWatcherTargetsSettled?.status === 'verified') return true;
   // Interactive/user tasks declare no machine-checkable criterion; neither does
   // a run missing the task id or workspace needed to validate.
   if (taskType === 'user' || !task?.id || !workspacePath) return null;
@@ -2151,6 +2152,12 @@ async function finalizeAgentInCompletionContext({
     ? await import('./runtimeVerification.js')
       .then(({ verifyRuntimeVerificationContinuation }) => verifyRuntimeVerificationContinuation(task, agentId))
       .catch(() => null) : null;
+  // #15552: a pr-watcher target that merged between poll and spawn leaves a
+  // correct no-op; the forge, not the agent's report, establishes that.
+  const prWatcherTargetsSettled = forgeVerifiable && verdict.success && reportedTaskOutcome?.status === 'no-action-needed'
+    ? await import('./prWatcherCompletion.js')
+      .then(({ verifyPrWatcherTargetsSettled }) => verifyPrWatcherTargetsSettled(task, workspacePath))
+      .catch(() => null) : null;
 
   // Success-criteria validation (issue #2344): stamp an explicit pass/fail (or
   // null-when-undeclared) verdict onto the completion result, distinct from the
@@ -2171,6 +2178,7 @@ async function finalizeAgentInCompletionContext({
     mergedReviewFollowUp,
     retirementCompletion,
     runtimeContinuation,
+    prWatcherTargetsSettled,
   })
     .catch(err => {
       emitLog('warn', `⚠️ Success-criteria validation failed for ${agentId}: ${err.message}`, { agentId });
