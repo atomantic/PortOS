@@ -95,7 +95,7 @@ describe('FleetProviderSetup', () => {
     expect(apiKeyInput.value).toBe('host-secret-key-123456789012');
   });
 
-  it('creates provider with correct options on submit', async () => {
+  it('creates a Pi provider by default, with the endpoint on the record and no built-in provider pin', async () => {
     const onCreate = vi.fn().mockResolvedValue({});
     const onClose = vi.fn();
 
@@ -114,14 +114,33 @@ describe('FleetProviderSetup', () => {
     await waitFor(() => {
       expect(onCreate).toHaveBeenCalledWith(
         expect.objectContaining({
-          name: 'Fleet GPU · OpenCode TUI',
+          name: 'Fleet GPU · Pi',
           endpoint: 'http://workstation.tailnet.ts.net:18022/v1',
           apiKey: 'my-secret-key-at-least-24-characters',
           defaultModel: 'qwen3.8-27b',
           type: 'tui',
+          command: 'pi',
+          args: [],
           vllmBacked: true,
         })
       );
+    });
+  });
+
+  it('keeps OpenCode TUI available, preselected from the URL', async () => {
+    const onCreate = vi.fn().mockResolvedValue({});
+    render(
+      <MemoryRouter initialEntries={['/ai/fleet?fleetStep=client&peerId=peer-1&harness=opencode']}>
+        <FleetProviderSetup peers={peers} onClose={() => {}} onCreate={onCreate} />
+      </MemoryRouter>
+    );
+    expect(await screen.findByDisplayValue('Fleet GPU · OpenCode TUI')).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText('Enter host API key'), { target: { value: 'my-secret-key-at-least-24-characters' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create fleet provider' }));
+    await waitFor(() => {
+      const created = onCreate.mock.calls[0][0];
+      expect(created).toMatchObject({ name: 'Fleet GPU · OpenCode TUI', command: 'opencode', type: 'tui' });
+      expect(JSON.parse(created.envVars.OPENCODE_CONFIG_CONTENT).provider.vllm.options.baseURL).toBe('http://workstation.tailnet.ts.net:18022/v1');
     });
   });
 
@@ -236,7 +255,7 @@ describe('FleetProviderSetup', () => {
     expect(screen.getByDisplayValue('My OpenCode')).toBeInTheDocument();
 
     fireEvent.change(providerSelect, { target: { value: '' } });
-    expect(screen.getByDisplayValue('Fleet GPU · OpenCode TUI')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Fleet GPU · Pi')).toBeInTheDocument();
     expect(screen.getByDisplayValue('qwen3.8-27b')).toBeInTheDocument();
   });
 

@@ -90,6 +90,12 @@ const INHERITED_ENV = {
   XDG_CACHE_HOME: 'XDG base-directory spec, set by the desktop environment',
   XDG_DATA_HOME: 'XDG base-directory spec, set by the desktop environment (home trash location on Linux)',
 
+  // Set by PortOS on a spawned harness, read inside that child, never in `.env`.
+  PORTOS_PI_ENDPOINT_API_KEY: 'spawn env for the Pi endpoint extension (server/lib/pi.js#buildPiEndpointEnvVars)',
+  PORTOS_PI_ENDPOINT_BASE_URL: 'spawn env for the Pi endpoint extension (server/lib/pi.js#buildPiEndpointEnvVars)',
+  PORTOS_PI_ENDPOINT_MODELS: 'spawn env for the Pi endpoint extension (server/lib/pi.js#buildPiEndpointEnvVars)',
+  PORTOS_PI_ENDPOINT_NAME: 'spawn env for the Pi endpoint extension (server/lib/pi.js#buildPiEndpointEnvVars)',
+
   // Injected by a toolchain PortOS runs under.
   NODE_ENV: 'set by the launcher (pm2) and forced to "test" by vitest.config.js',
   npm_config_cache: 'injected by npm when it runs a script',
