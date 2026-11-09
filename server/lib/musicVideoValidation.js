@@ -487,7 +487,7 @@ export const musicVideoCastInputsSchema = z.object({
 export const musicVideoTakeInputSchema = z.object({
   kind: z.enum(MUSIC_VIDEO_TAKE_KINDS),
   assetId: z.string().min(1).max(256),
-  // `trimmed`: a clip take cut from a later start frame of another (the shot card's "Start clip here").
+  // `trimmed`: a clip take cut to a frame range of another (the shot card's "Start/End clip here").
   source: z.enum(['generated', 'imported', 'trimmed']).optional(),
   provider: providerSlug.optional(),
   originalName: z.string().max(255).optional(),

@@ -5,7 +5,7 @@ import {
   X, Copy, Sparkles, Film, Image as ImageIcon, Download, Eraser, Wand2,
   ChevronLeft, ChevronRight, Maximize2, Minimize2, Star, Box, ScanEye, Aperture, ThumbsUp, ThumbsDown, Pencil,
 } from 'lucide-react';
-import VideoStartTrimControl from './VideoStartTrimControl';
+import VideoTrimControl from './VideoTrimControl';
 import PromptRefineModal from './PromptRefineModal';
 import QuickImageEdit from './QuickImageEdit';
 import { PromptFromMediaModal } from './PromptFromMedia';
@@ -162,7 +162,7 @@ export default function MediaLightbox({
   onPromptChange,
   onPromptAnalysis,
   onPosterChange,
-  onTrimStart,
+  onTrimClip,
   variantGroup = null,
   onSelectVariant,
   onFilmLookComplete,
@@ -543,7 +543,7 @@ export default function MediaLightbox({
             onPromptChange={item.compact ? undefined : onPromptChange}
             onPosterChange={onPosterChange}
             getPlayhead={() => videoRef.current?.currentTime ?? 0}
-            onTrimStart={onTrimStart}
+            onTrimClip={onTrimClip}
             videoRef={videoRef}
             variantGroup={variantGroup}
             onSelectVariant={onSelectVariant}
@@ -602,7 +602,7 @@ function SettingsPane({
   item, meta, isVideo,
   onClose, onRemix, onSendToImage, onSendToVideo, onSendTo3d, onContinue, onClean, onRegenerate, onRemoveWatermark, regenAvailable, regenBounds,
   copy, onRefine, onPromptFrom,
-  annotation, onAnnotationChange, onPromptChange, onPosterChange, getPlayhead, onTrimStart, videoRef,
+  annotation, onAnnotationChange, onPromptChange, onPosterChange, getPlayhead, onTrimClip, videoRef,
   variantGroup, onSelectVariant, onFilmLook, pageActions, rating,
   quickEditParams, onQuickEditQueued, quickEditReferenceChoices,
 }) {
@@ -1152,9 +1152,9 @@ function SettingsPane({
             {posterError && <p role="alert" className="text-port-error">{posterError}</p>}
           </div>
         )}
-        {isVideo && onTrimStart && item.id && (
-          <VideoStartTrimControl videoRef={videoRef} fps={item.fps} sourceKey={item.key}
-            onTrim={(startSec) => onTrimStart(item, startSec)} />
+        {isVideo && onTrimClip && item.id && (
+          <VideoTrimControl videoRef={videoRef} fps={item.fps} sourceKey={item.key}
+            onTrim={(range) => onTrimClip(item, range)} />
         )}
         {isVideo && item.id && item.previewUrl && (
           <SharingDownloadButton itemId={item.id} />

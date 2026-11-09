@@ -251,7 +251,7 @@ vi.mock('../services/apiImageVideo.js', () => ({
   previewVideoPrompt: vi.fn(async () => ({ backend: 'local', shotPreviewUnavailable: true })),
   previewImagePrompt: vi.fn(async (body) => ({ sentPrompt: body.prompt, promptAdditions: [] })),
   uploadGalleryVideo: vi.fn(),
-  trimVideoStart: vi.fn(),
+  trimVideo: vi.fn(),
   listLorasFull: vi.fn(async () => [{
     filename: 'audio-reactive.safetensors',
     name: 'Audio Reactive',
@@ -325,7 +325,7 @@ import {
 } from '../services/apiMusicVideo.js';
 import { generateImage, uploadGalleryImage } from '../services/apiSystem.js';
 import { importTrackFromYoutube, importTrackFromSuno, trackImportEventsUrl, listTracks } from '../services/apiTracks.js';
-import { generateVideo, getVideoGenStatus, getVideoHistoryItem, previewVideoPrompt, trimVideoStart } from '../services/apiImageVideo.js';
+import { generateVideo, getVideoGenStatus, getVideoHistoryItem, previewVideoPrompt, trimVideo } from '../services/apiImageVideo.js';
 import { getUniverse } from '../services/apiUniverseBuilder.js';
 import { downloadBlob } from '../lib/downloadBlob.js';
 
@@ -2767,7 +2767,7 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     const scene = { sceneId: 's1', order: 0, prompt: 'waves', referenceImageId: 'img1', videoHistoryId: 'h1',
       takes: [{ takeId: 't-v', kind: 'video', assetId: 'h1', source: 'generated', provider: 'portos', sourceImageId: 'img1', status: 'selected', note: null }] };
     const trimmedTake = { takeId: 't-trim', kind: 'video', assetId: 'h1-trim', source: 'trimmed', provider: null, status: 'candidate', note: null };
-    trimVideoStart.mockResolvedValueOnce({ video: { id: 'h1-trim' } });
+    trimVideo.mockResolvedValueOnce({ video: { id: 'h1-trim' } });
     addMusicVideoSceneTake.mockResolvedValueOnce({ scene: { ...scene, takes: [...scene.takes, trimmedTake] }, take: trimmedTake });
     selectMusicVideoSceneTake.mockResolvedValueOnce({ ...scene, videoHistoryId: 'h1-trim', takes: [{ ...scene.takes[0], status: 'candidate' }, { ...trimmedTake, status: 'selected' }] });
     await openProject({ ...PROJECT_WITH_CLIP, id: 'mv-trim', scenes: [scene] }, 'produce');
@@ -2775,7 +2775,7 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     for (let i = 0; i < 12; i += 1) fireEvent.click(render.getByRole('button', { name: 'Next frame' }));
     fireEvent.click(render.getByRole('button', { name: /Start clip here/ }));
     await waitFor(() => expect(selectMusicVideoSceneTake).toHaveBeenCalledWith('mv-trim', 's1', 't-trim', { silent: true }));
-    expect(trimVideoStart).toHaveBeenCalledWith('h1', 0.5, { silent: true });
+    expect(trimVideo).toHaveBeenCalledWith('h1', { startSec: 0.5 }, { silent: true });
     expect(addMusicVideoSceneTake).toHaveBeenCalledWith('mv-trim', 's1', { kind: 'video', assetId: 'h1-trim', source: 'trimmed', sourceImageId: 'img1', provider: 'portos' }, { silent: true });
   });
 
