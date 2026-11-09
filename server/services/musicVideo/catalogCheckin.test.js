@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { resolveCatalogCheckin, withCatalogCheckin, assertCatalogCheckinReady, assertLegacyCheckin, dropStaleCatalogPicks } from './catalogCheckin.js';
 import { musicVideoCatalogReferenceId as refId } from '../../lib/musicVideoConditioning.js';
+import { musicVideoReferenceChoices, musicVideoCatalogPickPlans } from '../../lib/musicVideoConditioning.js';
 
 const subject = { id: 'subject-example', ingredientId: 'character-example', kind: 'character', name: 'Example actor' };
 const fixture = (extra = {}) => ({ concept: { subjects: [subject] }, castAndSets: { source: 'catalog', status: 'review',
@@ -128,5 +129,37 @@ describe('automatic clean-up of stale catalog shot picks (#15317)', () => {
     const withRetired = await resolve(fixture(), db);
     expect(withRetired.items[0]).toMatchObject({ images: ['catalog.png'], retiredImages: ['theme.mp3'] });
     expect(withRetired.basis).toBe(offered.basis);
+  });
+});
+
+describe('environment picks beyond the Auto set (#15544)', () => {
+  const place = { id: 'subject-house', ingredientId: 'env-house', kind: 'place', name: 'Example house' };
+  const stamp = (n) => `2026-01-0${n}T00:00:00.000Z`;
+  const views = (count) => Array.from({ length: count }, (_, i) => ({ kind: 'reference', mediaKey: `view-${i + 1}.png`, createdAt: stamp(i + 1) }));
+  const db = (media) => ({ getIngredient: vi.fn(async () => ({ id: place.ingredientId, type: 'place', name: 'House', payload: {} })), listMediaForIngredient: vi.fn(async () => media) });
+  const project = (pick) => ({ concept: { subjects: [place] }, castAndSets: { source: 'catalog', status: 'review' },
+    scenes: [{ sceneId: 'shot-a', frameReferenceIds: [refId(place.id, pick)] }] });
+  const withReport = async (media, pick) => {
+    const resolved = await resolveCatalogCheckin(project(pick), { catalog: db(media), exists: () => true });
+    return { resolved, choices: musicVideoReferenceChoices({ ...project(pick), castAndSets: { source: 'catalog', catalogCheckin: resolved } }) };
+  };
+
+  // Uniquely catches the 4-image cap hiding older views from explicit shot picks.
+  it('offers every non-rejected view as a pick while Auto keeps the capped set, and a 7th image keeps the pick', async () => {
+    for (const count of [6, 7]) {
+      const { resolved, choices } = await withReport(views(count), 'view-1.png');
+      expect(resolved.items[0].images).toHaveLength(4);
+      expect(resolved.items[0].pickableImages).toHaveLength(count - 4);
+      expect(choices.map(ref => ref.imageId)).toContain('view-1.png');
+      expect(choices.find(ref => ref.imageId === 'view-1.png').condition).toBe(false);
+      expect(resolved.items[0].retiredImages).toEqual([]);
+      expect(musicVideoCatalogPickPlans({ ...project('view-1.png'), castAndSets: { source: 'catalog', catalogCheckin: resolved } })).toEqual([]);
+    }
+  });
+
+  it('does not change the approval basis when images are added', async () => {
+    const six = await resolveCatalogCheckin(project('view-1.png'), { catalog: db(views(6)), exists: () => true });
+    const sixPlusOlder = await resolveCatalogCheckin(project('view-1.png'), { catalog: db([...views(6), { kind: 'reference', mediaKey: 'ancient.png', createdAt: '2025-01-01T00:00:00.000Z' }]), exists: () => true });
+    expect(sixPlusOlder.basis).toBe(six.basis);
   });
 });
