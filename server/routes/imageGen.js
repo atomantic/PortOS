@@ -124,7 +124,7 @@ router.get('/style-presets', (_req, res) => res.json(STYLE_PRESETS));
 const noNulPrompt = z.string().max(MAX_PROMPT_LENGTH)
   .refine((v) => !v.includes('\0'), { message: 'Prompt may not contain a NUL character' });
 
-const generateSchema = z.object({
+export const generateSchema = z.object({
   promptAdditions: promptAdditionsSchema,
   quickEdit: z.boolean().optional(),
   reviewedPromptDigest: z.string().regex(/^[a-f0-9]{64}$/).optional(),
@@ -276,6 +276,9 @@ const generateSchema = z.object({
     refine: z.boolean().optional(),
     greyboxImageId: galleryImageFilenameSchema('greybox capture').optional(),
     greyboxBlockingImageId: galleryImageFilenameSchema('greybox blocking capture').optional(),
+    // The frame a from-frame or refine reworks, when the caller did not put it
+    // first in referenceImageFiles. The card's frame route sends both.
+    leadImageId: galleryImageFilenameSchema('lead frame').optional(),
     // The guides and sheets this submit actually sent (#14154). The completion
     // hook copies them onto the take; it does not look them up again.
     castInputs: musicVideoCastInputsSchema.optional(),
@@ -521,16 +524,16 @@ router.post('/prompt-preview', asyncHandler(async (req, res) => {
   res.json(await previewImagePrompt(validateRequest(promptPreviewSchema, req.body ?? {})));
 }));
 
-router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
-  if (typeof req.body?.fableLoom === 'string' && Object.keys(req.files || {}).length) {
-    await Promise.allSettled(Object.values(req.files).map(file => unlinkGuarded(file.path)));
-    throw fableLoomMultipartUnsupported();
-  }
-  const data = validateRequest(generateSchema, coerceFormFields(req.body));
+// Shared by POST /generate and the music-video shot frame route (#15583).
+// `data` is already validated. Uploaded temp paths are returned so the HTTP
+// route can delete them when the response closes; a caller with no uploads
+// gets an empty list.
+export async function executeImageGenerate(req, data, files = {}) {
+  const finish = (responseBody) => ({ body: responseBody, uploadedTempPaths, params });
   if (data.catalogIngredientId) await assertCatalogIdentityWritable(data.catalogIngredientId);
   const { data: params, mode, settings, uploadedTempPaths } = await prepareGenerateParams({
     data,
-    files: req.files,
+    files,
     referenceImageFields: REFERENCE_IMAGE_FIELDS,
   });
 
@@ -588,16 +591,6 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
   }
   delete params.catalogIngredientId;
   delete params.catalogMediaKind;
-
-  // Multer's tmp upload is no longer needed once we've copied it into
-  // PATHS.images. Use res.on('close') so the temp files are cleaned up whether
-  // generateImage resolves, throws (handled by errorHandler middleware), or
-  // the client drops the connection mid-flight.
-  if (uploadedTempPaths.length) {
-    res.on('close', () => {
-      for (const p of uploadedTempPaths) unlinkGuarded(p).catch(() => {});
-    });
-  }
 
   // Local + codex both go through mediaJobQueue (separate lanes — codex
   // doesn't share MLX). External SD-API stays synchronous: it's a remote
@@ -665,7 +658,7 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
       kind: 'image',
       params: { ...jobParams, remoteMedia },
     });
-    return res.json(queuedImageResponse({
+    return finish(queuedImageResponse({
       ...queued,
       mode: null,
       model: request.modelId,
@@ -693,7 +686,7 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
     // `cloud.modelId` is the *effective* model so the response metadata reports
     // what actually renders (gpt-6-luna by default) instead of "codex"/null.
     const queued = await enqueueLoggedImage(req, { kind: 'image', params: { ...cloud.jobParams, ...params } });
-    return res.json(queuedImageResponse({ ...queued, mode, model: cloud.modelId }));
+    return finish(queuedImageResponse({ ...queued, mode, model: cloud.modelId }));
   }
   if (mode === IMAGE_GEN_MODE.LOCAL) {
     const { pythonPath: py, selectedModel } = resolveLocalImageModel(settings, params);
@@ -708,7 +701,7 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
     // selectedModel reflects the actual fallback chain resolveLocalImageModel
     // applied (caller modelId → 'dev' → allModels[0]) rather than just the
     // requested id.
-    return res.json(queuedImageResponse({
+    return finish(queuedImageResponse({
       ...queued,
       mode: IMAGE_GEN_MODE.LOCAL,
       model: selectedModel?.id || params.modelId || 'dev',
@@ -752,7 +745,27 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
     }).catch(() => {});
     catalogEvents.emit('primitive-changed', { ingredientId: params.catalogAttach.ingredientId });
   }
-  res.json(result);
+  return finish(result);
+}
+
+router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
+  if (typeof req.body?.fableLoom === 'string' && Object.keys(req.files || {}).length) {
+    await Promise.allSettled(Object.values(req.files).map(file => unlinkGuarded(file.path)));
+    throw fableLoomMultipartUnsupported();
+  }
+  const data = validateRequest(generateSchema, coerceFormFields(req.body));
+  const rendered = await executeImageGenerate(req, data, req.files);
+  // Multer's tmp upload is no longer needed once we've copied it into
+  // PATHS.images. Use res.on('close') so the temp files are cleaned up whether
+  // generateImage resolves, throws (handled by errorHandler middleware), or
+  // the client drops the connection mid-flight.
+  if (rendered.uploadedTempPaths.length) {
+    res.on('close', () => {
+      for (const p of rendered.uploadedTempPaths) unlinkGuarded(p).catch(() => {});
+    });
+  }
+
+  res.json(rendered.body);
 }));
 
 router.post('/avatar', asyncHandler(async (req, res) => {

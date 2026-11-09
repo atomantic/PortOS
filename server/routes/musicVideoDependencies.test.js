@@ -131,6 +131,37 @@ describe('public dependency save / repair / review workflow', () => {
     expect(result.body.shots).toEqual([]);
   });
 
+  it('lists thirty rewritten shot frames as stale from one project read', async () => {
+    const ids = Array.from({ length: 30 }, (_, i) => `s${i}`);
+    for (const id of ids) writeFileSync(join(ROOT(), 'images', `${id}.png`), 'synthetic-image');
+    await projects.updateProject(project.id, { scenes: ids.map((id, i) => ({
+      sceneId: id, startSec: i, endSec: i + 1, framePrompt: `Original frame ${id}`, visualLayer: 'footage', takes: [],
+    })) });
+    for (const id of ids) {
+      const posted = await request(app).post(`${base()}/scenes/${id}/takes`).send({ kind: 'image', assetId: `${id}.png`, source: 'generated' });
+      expect(posted.status).toBe(201);
+      expect(posted.body.scene.referenceImageId).toBe(`${id}.png`);
+    }
+    for (const id of ids) {
+      const patched = await request(app).patch(`${base()}/scenes/${id}`).send({ framePrompt: `Rewritten ${id}` });
+      expect(patched.status).toBe(200);
+    }
+    const read = await request(app).get(base());
+    expect(read.status).toBe(200);
+    const stale = read.body.scenes.filter((scene) => {
+      const take = scene.takes.find((entry) => entry.kind === 'image' && entry.assetId === scene.referenceImageId);
+      return take?.dependencyState?.status === 'stale' && take.dependencyState.reasons.includes('Frame prompt changed') && take.prompt == null;
+    });
+    expect(stale.map((scene) => scene.sceneId)).toEqual(ids);
+    const first = stale[0];
+    const restored = await request(app).patch(`${base()}/scenes/${first.sceneId}`).send({ framePrompt: `Original frame ${first.sceneId}` });
+    const take = restored.body.takes.find((entry) => entry.assetId === `${first.sceneId}.png`);
+    expect(restored.body.referenceImageId).toBe(`${first.sceneId}.png`);
+    expect(take.dependencyState.status).toBe('current');
+    expect(take.prompt).toBeNull();
+    expect(take.assetId).toBe(first.referenceImageId);
+  });
+
   it('keeps legacy assets loadable but never blesses a historical review without dependency evidence', async () => {
     await projects.updateProject(project.id, { scenes: [{ sceneId: 'legacy', startSec: 0, endSec: 5, referenceImageId: 'a.png', videoHistoryId: 'clip-a' }], excerpts: [{ id: 'old', status: 'complete', startSec: 0, endSec: 5 }] });
     await request(app).patch(`${base()}/scenes/legacy`).send({ referenceImageId: 'new.png' });

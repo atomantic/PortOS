@@ -46,6 +46,10 @@ const { sseState, ytSseStates, getYtSseState } = vi.hoisted(() => {
 // This page suite exercises existing controls with production approvals already granted.
 // ProductionReviewPanel and route integration suites exercise the real approval refusals.
 const feedbackCalls = vi.hoisted(() => ({ resolveFeedback: vi.fn(async () => null), syncLyricAnchors: vi.fn(async () => null), removeStaleRows: vi.fn(async () => null), revise: vi.fn(async () => ({ revision: { sceneIds: ['s-a'] } })) }));
+const sharedMedia = vi.hoisted(() => ({
+  generateVideo: vi.fn(),
+  renderMusicVideoSceneFrame: vi.fn(async () => ({ status: 'queued', jobId: 'example-frame-job' })),
+}));
 vi.mock('../hooks/useMusicVideoProductionReview.js', () => ({ default: ({ project }) => ({
   ...feedbackCalls,
   readiness: project?.productionReadiness || { readyForProduction: true, basis: {}, art: { approved: true, problems: [] }, storyboard: { approved: true, problems: [] }, proof: { approved: true, problems: [] } },
@@ -100,6 +104,8 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   prepareMusicVideoSharingCopy: vi.fn(async () => ({ jobId: 'sharing-example' })),
   musicVideoSharingCopyDownloadUrl: id => `/api/music-video/${id}/sharing-copy/download`,
   getMusicVideoSceneJobs: vi.fn(async () => ({ jobs: [] })),
+  renderMusicVideoSceneFrame: sharedMedia.renderMusicVideoSceneFrame,
+  renderMusicVideoSceneClip: (_id, _sceneId, body) => sharedMedia.generateVideo(body),
   renderMusicVideoProject: vi.fn(async () => ({ jobId: 'job-1' })),
   musicVideoRenderEventsUrl: (jobId) => `/api/music-video/render/${jobId}/events`,
   cancelMusicVideoRender: vi.fn(async () => ({ ok: true })),
@@ -249,7 +255,7 @@ vi.mock('../hooks/useMidiNotes.js', () => ({
 vi.mock('../services/apiImageVideo.js', () => ({
   listImageModels: vi.fn(async () => []),
   getVideoGenModelContext: vi.fn(async () => null),
-  generateVideo: vi.fn(),
+  generateVideo: sharedMedia.generateVideo,
   listOvernightRenders: vi.fn(async () => ({ batches: [] })),
   queueOvernightRenders: vi.fn(),
   cancelOvernightRenders: vi.fn(),
@@ -327,6 +333,7 @@ import {
   startMusicVideoRevision, resumeMusicVideoRevision, cancelMusicVideoRevision,
   linkMusicVideoCastAndSetsToCatalog, approveMusicVideoCastAndSets, stopMusicVideoProduction,
   getMusicVideoPublishPlatforms, draftMusicVideoPublishCopy,
+  renderMusicVideoSceneFrame,
 } from '../services/apiMusicVideo.js';
 import { generateImage, uploadGalleryImage } from '../services/apiSystem.js';
 import { importTrackFromYoutube, importTrackFromSuno, trackImportEventsUrl, listTracks } from '../services/apiTracks.js';
@@ -2670,33 +2677,22 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     scenes: [{ sceneId: 's1', order: 0, prompt: 'waves', framePrompt: 'harbor at dawn', referenceImageId: null, videoHistoryId: null, takes: [] }],
   };
 
-  it('sends flagged references as conditioning inputs and names the capability gap when the backend refuses them', async () => {
-    generateImage.mockRejectedValueOnce(Object.assign(
+  it('asks the server for the shot frame and names the capability gap when that render is refused', async () => {
+    renderMusicVideoSceneFrame.mockRejectedValueOnce(Object.assign(
       new Error('Reference images are only supported for FLUX.2 and Qwen Image 2.1 models on the local backend'),
       { code: 'REFERENCE_IMAGES_FLUX2_ONLY', status: 400 },
     ));
     await openProject(SPEC_PROJECT, 'produce');
     fireEvent.click(screen.getByRole('button', { name: /^Generate frame$/ }));
-    await waitFor(() => expect(generateImage).toHaveBeenCalledWith({
-      // The director's text; the server composes the look onto it (lib/musicVideoShotPrompt.js).
-      prompt: 'harbor at dawn',
-      // Frames are requested at the project's aspect (16:9 by default).
-      width: 1536,
-      height: 864,
-      referenceImageFiles: ['mood.png'],
-      musicVideo: {
-        projectId: 'mv-spec',
-        sceneId: 's1',
-        compose: true,
-        castInputs: { ingredientId: null, guides: [], sheets: [] },
-      },
-    }, { silent: true }));
+    await waitFor(() => expect(renderMusicVideoSceneFrame).toHaveBeenCalledWith(
+      'mv-spec', 's1', { slot: 'start' }, { silent: true },
+    ));
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith(
-      expect.stringMatching(/can't condition on 1 reference image: Reference images are only supported/),
+      expect.stringMatching(/Reference images are only supported.*Switch the image backend/),
     ));
   });
 
-  it('conditions the board frame on its approved character and section plate, including an unflagged plate', async () => {
+  it('asks the server for a frame on a shot whose section plate is approved', async () => {
     await openProject({ ...SPEC_PROJECT,
       scenes: [{ ...SPEC_PROJECT.scenes[0], sectionIndex: 1 }],
       castAndSets: { status: 'approved', direction: { songMap: [{ section: 0, setId: 'harbor' }, { section: 1, setId: 'roof' }] } },
@@ -2708,23 +2704,20 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
       ] },
     }, 'produce');
     fireEvent.click(screen.getByRole('button', { name: /^Generate frame$/ }));
-    await waitFor(() => expect(generateImage).toHaveBeenCalledWith(expect.objectContaining({
-      referenceImageFiles: ['character.png', 'roof.png'],
-      musicVideo: expect.objectContaining({ projectId: 'mv-spec', sceneId: 's1', compose: true }),
-    }), { silent: true }));
+    await waitFor(() => expect(renderMusicVideoSceneFrame).toHaveBeenCalledWith(
+      'mv-spec', 's1', { slot: 'start' }, { silent: true },
+    ));
   });
 
-  // Uniquely catches a frame picked as the render's image reference not reaching the request, or not leading the references.
+  // Uniquely catches a frame picked as the render's image reference not reaching the request.
   it('renders a new frame take from the shot\'s own start frame when it is picked as the reference', async () => {
     await openProject({ ...SPEC_PROJECT, scenes: [{ ...SPEC_PROJECT.scenes[0], referenceImageId: 'start.png' }] }, 'produce');
     fireEvent.change(screen.getByLabelText('From', { selector: '#mv-scene-s1-start-from' }), { target: { value: 'start' } });
     await showFrames();
     fireEvent.click(screen.getByRole('button', { name: /^New frame take$/ }));
-    await waitFor(() => expect(generateImage).toHaveBeenCalledWith(expect.objectContaining({
-      prompt: 'harbor at dawn',
-      referenceImageFiles: ['start.png', 'mood.png'],
-      musicVideo: expect.objectContaining({ projectId: 'mv-spec', sceneId: 's1', compose: true, fromFrame: true }),
-    }), { silent: true }));
+    await waitFor(() => expect(renderMusicVideoSceneFrame).toHaveBeenCalledWith(
+      'mv-spec', 's1', { slot: 'start', fromFrame: true, referenceImageId: 'start.png' }, { silent: true },
+    ));
   });
 
   // Uniquely catches Refine sending the shot prompt instead of the instruction, the frame not leading, or the shot's picked references not riding along.
@@ -2742,16 +2735,14 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Refine' }));
     fireEvent.change(screen.getByLabelText('What to change in the start frame'), { target: { value: 'remove the hand' } });
     fireEvent.click(screen.getByRole('button', { name: 'Render refined start frame' }));
-    await waitFor(() => expect(generateImage).toHaveBeenCalledWith(expect.objectContaining({
-      prompt: 'remove the hand',
-      referenceImageFiles: ['start.png', 'set.png'],
-      musicVideo: expect.objectContaining({ projectId: 'mv-spec', sceneId: 's1', compose: true, refine: true }),
-    }), { silent: true }));
+    await waitFor(() => expect(renderMusicVideoSceneFrame).toHaveBeenCalledWith(
+      'mv-spec', 's1', { slot: 'start', refine: 'remove the hand', referenceImageId: 'start.png' }, { silent: true },
+    ));
     expect(screen.queryByLabelText('What to change in the start frame')).toBeNull();
   });
 
-  // The board sends the ordered picks and lets the server apply the actual renderer's capacity.
-  it('refines a shot with four references by sending the frame and all four picks', async () => {
+  // The board sends the refine instruction and the frame; the server applies the shot's picks.
+  it('refines a shot with four references by sending the instruction and the start frame', async () => {
     const references = ['a', 'b', 'c', 'd'].map((key) => ({ id: `r-${key}`, imageId: `${key}.png`, role: 'character', label: key, note: '', condition: true }));
     await openProject({ ...SPEC_PROJECT, visualSpec: { ...SPEC_PROJECT.visualSpec, references },
       scenes: [{ ...SPEC_PROJECT.scenes[0], referenceImageId: 'start.png' }] }, 'produce');
@@ -2762,9 +2753,9 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Refine' }));
     fireEvent.change(screen.getByLabelText('What to change in the start frame'), { target: { value: 'remove the hand' } });
     fireEvent.click(screen.getByRole('button', { name: 'Render refined start frame' }));
-    await waitFor(() => expect(generateImage).toHaveBeenCalledWith(expect.objectContaining({
-      referenceImageFiles: ['start.png', 'a.png', 'b.png', 'c.png', 'd.png'],
-    }), { silent: true }));
+    await waitFor(() => expect(renderMusicVideoSceneFrame).toHaveBeenCalledWith(
+      'mv-spec', 's1', { slot: 'start', refine: 'remove the hand', referenceImageId: 'start.png' }, { silent: true },
+    ));
   });
 
   // Uniquely catches a trimmed clip landing only in Video Gen history, never as this shot's take, or not becoming the shot's clip.

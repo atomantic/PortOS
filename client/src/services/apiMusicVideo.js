@@ -170,6 +170,13 @@ export const getMusicVideoActiveJobs = (id, options = {}) =>
 export const addMusicVideoScene = (id, scene, options = {}) => request(`/music-video/${encodeURIComponent(id)}/scenes`, {
   method: 'POST', body: JSON.stringify(scene), ...options,
 });
+// The shot card's frame and clip (#15583). The server resolves the shot's references.
+export const renderMusicVideoSceneFrame = (id, sceneId, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/frame`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+export const renderMusicVideoSceneClip = (id, sceneId, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/clip`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
 // #14241: queue one planned sequence run (its scenes in timeline order) as a single timed fal request.
 export const renderMusicVideoSequence = (id, sceneIds, options = {}) => request(`/music-video/${encodeURIComponent(id)}/sequence-coverage/render`, {
   method: 'POST', body: JSON.stringify({ sceneIds }), ...options,

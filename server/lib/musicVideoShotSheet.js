@@ -43,18 +43,40 @@ export function normalizeShotSheet(sheet) {
  * judged and reads as current. Takes record the composed prompt, which contains
  * the shot's own text whole, so any edit to that text shows.
  */
-function selectedFrameOutdated(project, scene) {
+function selectedImageTake(scene) {
+  if (!scene?.referenceImageId) return null;
+  return (Array.isArray(scene.takes) ? scene.takes : [])
+    .find((entry) => entry?.kind === 'image' && entry.assetId === scene.referenceImageId) || null;
+}
+
+function promptDetailsChanged(project, scene, take) {
   const framePrompt = typeof scene?.framePrompt === 'string' ? scene.framePrompt.trim() : '';
   // A sheet-built still records each ingredient's text, so an edited ingredient shows too.
   // The camera rule is composed even when the sheet does not drive the prompt.
   const sheet = shotSheetPromptLines(project, scene);
   // A sheet-built still already records the camera inside its Camera line.
   const parts = [framePrompt, ...sheet.map((line) => line.text), sheet.some((line) => line.id === 'shot-sheet-camera') ? '' : shotCameraRuleText(project, scene)].filter(Boolean);
-  if (!parts.length || !scene?.referenceImageId) return false;
-  const take = (Array.isArray(scene.takes) ? scene.takes : [])
-    .find((entry) => entry?.kind === 'image' && entry.assetId === scene.referenceImageId);
-  if (typeof take?.prompt !== 'string' || !take.prompt) return false;
+  if (!parts.length || !take || typeof take.prompt !== 'string' || !take.prompt) return false;
   return parts.some((part) => !take.prompt.includes(part));
+}
+
+/** Recorded frame evidence, or the composed-prompt check for a still that predates it. */
+function frameFreshness(project, scene) {
+  const take = selectedImageTake(scene);
+  const end = scene?.endImageId
+    ? (Array.isArray(scene.takes) ? scene.takes : []).find((entry) => entry?.kind === 'endImage' && entry.assetId === scene.endImageId)
+    : null;
+  const reasons = [];
+  // A current snapshot still misses sheet lines (emotion, action) that the composed prompt records.
+  if (take?.dependencyState?.status === 'stale') {
+    reasons.push(...(take.dependencyState.reasons?.length ? take.dependencyState.reasons : ['Details changed since this frame']));
+  } else if (promptDetailsChanged(project, scene, take)) reasons.push('Details changed since this frame');
+  if (end?.dependencyState?.status === 'stale') {
+    for (const reason of end.dependencyState.reasons || []) {
+      if (!reasons.includes(reason)) reasons.push(reason);
+    }
+  }
+  return { outdated: reasons.length > 0, reasons };
 }
 
 /** Whether a shot's prompts are built from its sheet (its frame and motion prompts are then general prompts). */
@@ -160,11 +182,13 @@ export function shotSheetRows(project) {
     const sheet = scene.shotSheet || {};
     const sung = Number.isFinite(scene.startSec) && Number.isFinite(scene.endSec)
       ? sungLyricTextWithin(project?.lyricCues, scene.startSec, scene.endSec) : null;
+    const freshness = frameFreshness(project, scene);
     return {
       scene, sheet,
       lyric: (sung || (typeof scene.lyricText === 'string' ? scene.lyricText : '') || '').trim(),
       camera: sheet.cameraId ? cameras.get(sheet.cameraId) || null : null,
-      frameOutdated: selectedFrameOutdated(project, scene),
+      frameOutdated: freshness.outdated,
+      frameOutdatedReasons: freshness.reasons,
       hasDirection: directions.has(scene.sceneId),
       output: shotOutput(scene, directions.get(scene.sceneId)),
       // The picture layer can disagree with the plan, and a composed render reads the layer.

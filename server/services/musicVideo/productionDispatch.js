@@ -36,6 +36,7 @@ import { preMusicClipSound } from '../../lib/musicVideoColdOpen.js';
 import { conditioningReferences, falRouteVideoSettings, runwayRouteVideoSettings } from './productionPool.js';
 import { loadSceneCastMedia } from './castGuideMedia.js';
 import { castInputsFromReferences } from '../../lib/musicVideoCastLook.js';
+import { captureImageFrameDependencies } from '../../lib/musicVideoDependencies.js';
 import { musicVideoClipConditioningReferences, musicVideoLimitReferenceFiles, musicVideoMissingFrameLinkedPicks, musicVideoReferenceCapacity } from '../../lib/musicVideoConditioning.js';
 import { isPerformanceScene, ltxReferenceFrames } from '../../lib/musicVideoShotTiming.js';
 import { musicVideoFrameGenSize } from '../../lib/musicVideoAspect.js';
@@ -123,7 +124,7 @@ async function dispatchFrame({ project, scene, route, tag, settings }) {
     denoise,
     ...(referenceImagePaths.length ? { referenceImagePaths, referenceImageStrengths: referenceImagePaths.map(() => 1) } : {}),
     // Stamp the references this enqueue sends. The hook must not re-read Casting when the job finishes.
-    musicVideo: { ...tag, castInputs: castInputsFromReferences(scene, sent) },
+    musicVideo: { ...tag, castInputs: castInputsFromReferences(scene, sent), frameDependencies: captureImageFrameDependencies(project, scene, { slot: tag.slot === 'end' ? 'end' : 'start' }) },
   };
   const baseParams = resolved.cloud
     ? { ...resolved.cloud.jobParams, ...common }
