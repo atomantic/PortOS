@@ -24,6 +24,7 @@ vi.mock('../services/musicVideo/projects.js', () => ({
   updateProject: vi.fn(async (id, p) => ({ id, ...p })),
   deleteProject: vi.fn(async () => ({ ok: true })),
   setProjectAnalysis: vi.fn(async (id, analysis) => ({ id, audioAnalysis: analysis, status: 'analyzed' })),
+  setProjectSections: vi.fn(async (id, sections) => ({ id, audioAnalysis: { sections } })),
   addProjectScene: vi.fn(async (_id, s) => ({ sceneId: 'mvs-1', order: 0, ...s })),
   updateScene: vi.fn(async (_id, sceneId, p) => ({ sceneId, ...p })),
   deleteScene: vi.fn(async (id) => ({ id, scenes: [] })),
@@ -655,6 +656,17 @@ describe('musicVideo routes', () => {
       expect(r.status).toBe(200);
       expect(r.body.audioAnalysis).toEqual(analysis);
       expect(svc.setProjectAnalysis).toHaveBeenCalledWith('mv-1', analysis, { id: 'mv-1', trackId: 't1' });
+    });
+  });
+
+  describe('PATCH /:id/analyze/sections', () => {
+    it('400s on an empty section list and passes a valid list to the store', async () => {
+      const bad = await request(app).patch('/api/music-video/mv-1/analyze/sections').send({ sections: [] });
+      expect(bad.status).toBe(400);
+      const sections = [{ label: 'Verse', startSec: 0, endSec: 10 }, { label: 'Chorus', startSec: 10, endSec: 20 }];
+      const ok = await request(app).patch('/api/music-video/mv-1/analyze/sections').send({ sections });
+      expect(ok.status).toBe(200);
+      expect(svc.setProjectSections).toHaveBeenCalledWith('mv-1', sections);
     });
   });
 

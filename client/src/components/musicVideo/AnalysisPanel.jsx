@@ -1,4 +1,5 @@
 import { formatDurationSec } from '../../utils/formatters.js';
+import SectionEditor from './SectionEditor.jsx';
 
 /**
  * Beat-grid readout for the analyzed track, the "cuts are too long" nudge, and
@@ -7,7 +8,7 @@ import { formatDurationSec } from '../../utils/formatters.js';
  * is null on analyses cached before it existed — shown as "not analyzed" with a
  * Re-analyze action, never as zero-energy data.
  */
-export default function AnalysisPanel({ audioAnalysis, scenes, tempo, onReanalyze, analyzing = false }) {
+export default function AnalysisPanel({ projectId, audioAnalysis, scenes, tempo, onReanalyze, onUpdated, analyzing = false }) {
   const features = audioAnalysis?.features ?? null;
   const authoredCutDurations = scenes
     .filter((scene) => typeof scene.startSec === 'number' && typeof scene.endSec === 'number' && scene.endSec > scene.startSec)
@@ -28,6 +29,9 @@ export default function AnalysisPanel({ audioAnalysis, scenes, tempo, onReanalyz
           <span>Sections: {audioAnalysis.sections?.length || 0}</span>
           {averageCutSec != null && <span>Average cut: {averageCutSec.toFixed(1)}s</span>}
         </div>
+      )}
+      {audioAnalysis && projectId && audioAnalysis.sections?.length > 0 && (
+        <SectionEditor projectId={projectId} sections={audioAnalysis.sections} durationSec={audioAnalysis.durationSec} onUpdated={onUpdated} />
       )}
       {audioAnalysis && (
         <div data-testid="song-features" className="text-xs text-port-text-muted mt-1 flex flex-wrap items-center gap-x-4 gap-y-1">

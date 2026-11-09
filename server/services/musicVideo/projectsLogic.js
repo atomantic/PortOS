@@ -19,6 +19,7 @@ import { musicVideoMediaMode, assertMusicVideoMediaSelections } from '../../lib/
 
 import { remapMusicVideoDependencies, retainMusicVideoDependencies } from '../../lib/musicVideoDependencies.js';
 import { randomUUID } from 'node:crypto';
+import { applyEditedSections, remapScenesToSections } from '../../lib/musicVideoSections.js';
 import { normalizeMusicVideoProductionPolicy } from '../../lib/musicVideoMediumPlan.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import {
@@ -519,6 +520,22 @@ export function setAudioAnalysis(project, analysis, sourceProject) {
   const validated = musicVideoAudioAnalysisSchema.parse(analysis);
   const status = project.status === 'draft' ? 'analyzed' : project.status;
   return touch(project, { audioAnalysis: validated, status });
+}
+
+/**
+ * Replace the analysis's section list with the director's edited map. Beats,
+ * tempo and features stay; scenes tied to a section follow the new map, and the
+ * treatment's basis (which fingerprints the analysis) goes stale so it is
+ * recompiled against the edited arc.
+ */
+export function setAnalysisSections(project, sections) {
+  const analysis = project.audioAnalysis;
+  if (!analysis) throw new ServerError('Analyze the song before editing its sections', { status: 422, code: 'NOT_ANALYZED' });
+  const edited = applyEditedSections(sections, analysis.sections, analysis.durationSec);
+  return touch(project, {
+    audioAnalysis: musicVideoAudioAnalysisSchema.parse({ ...analysis, sections: edited }),
+    scenes: remapScenesToSections(project.scenes, edited),
+  });
 }
 
 /**

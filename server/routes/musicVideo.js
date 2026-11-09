@@ -44,6 +44,7 @@ import {
   musicVideoSceneEndSchema,
   musicVideoPlanRequestSchema,
   musicVideoManualAnalysisSchema,
+  musicVideoSectionsEditSchema,
   musicVideoTranscribeMidiRequestSchema,
   musicVideoLyricsImportSchema,
   musicVideoLyricsImportTrackSchema,
@@ -130,6 +131,7 @@ import {
   updateProject,
   deleteProject,
   setProjectAnalysis,
+  setProjectSections,
   addProjectScene,
   updateScene,
   deleteScene,
@@ -166,7 +168,7 @@ import {
   cancelMidiTranscription,
 } from '../services/audioMidiTranscription.js';
 import { analyzeAudioFileManual, buildManualAnalysisFromCached } from '../services/musicVideo/audioAnalysis.js';
-import { analyzeProjectSong, resolveProjectAudioPath } from '../services/musicVideo/projectAudio.js';
+import { analyzeProjectSong, resolveProjectAudioPath, setSectionsFromLyrics } from '../services/musicVideo/projectAudio.js';
 import { listInFlightSceneJobs } from '../services/musicVideo/sceneJobs.js';
 import { getSharingCopy, prepareSharingCopy, sharingCopyDownload } from '../services/musicVideo/sharingCopy.js';
 import { renderMusicVideo, attachRenderSseClient, cancelRender, getActiveRenderJobId } from '../services/musicVideo/render.js';
@@ -524,6 +526,18 @@ router.post('/:id/analyze/manual', asyncHandler(async (req, res) => {
   }
   const updated = await setProjectAnalysis(project.id, analysis, project);
   res.json(updated);
+}));
+
+// Director's edit of the song map: a gapless {label,startSec,endSec}[] that
+// tiles the song. Energy carries over by overlap; scene section labels follow.
+router.patch('/:id/analyze/sections', asyncHandler(async (req, res) => {
+  const { sections } = validateRequest(musicVideoSectionsEditSchema, req.body);
+  res.json(await setProjectSections(req.params.id, sections));
+}));
+
+// "Use lyric sections": take the boundaries from the aligned lyric sheet.
+router.post('/:id/analyze/sections/lyrics', asyncHandler(async (req, res) => {
+  res.json(await setSectionsFromLyrics(req.params.id));
 }));
 
 // Autonomous shot planner (#1855, the secondary "autonomous mode" path):

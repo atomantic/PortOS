@@ -302,6 +302,7 @@ export function relabelAnalysisSections(analysis, cues, markers) {
   const spans = lyricSectionSpans(cues, markers);
   const sections = analysis.sections.map((section) => {
     const base = restore(section);
+    if (base.labelSource === 'manual') return base; // the director named it
     if (spans.length === 0) return base;
     const length = base.endSec - base.startSec;
     if (!(length > 0)) return base;

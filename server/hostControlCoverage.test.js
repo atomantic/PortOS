@@ -872,6 +872,8 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/music-video/:id/cast-and-sets/reconfirm', RECORDS],
   ['POST /api/music-video/:id/cast-and-sets/edit-image-preview', READ_OVER_POST],
   ['POST /api/music-video/:id/cast-and-sets/discard-image-edit', RECORDS],
+  ['PATCH /api/music-video/:id/analyze/sections', RECORDS],
+  ['POST /api/music-video/:id/analyze/sections/lyrics', RECORDS],
   ['POST /api/music-video/:id/clone', RECORDS],
   ['DELETE /api/music-video/:id/composition/document', REMOVES_RECORD],
   ['POST /api/music-video/:id/composition/document/accept', HANDLER_GATED],

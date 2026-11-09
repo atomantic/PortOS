@@ -2238,6 +2238,14 @@ export const musicVideoPlanRequestSchema = z.object({
 // can come back null from auto-detection). `bpm` range is loosened from the
 // detector's own search window for manual entry (20-300 covers everything
 // from a ballad to hardcore/gabber); `offsetSec` is the first downbeat, by ear.
+export const musicVideoSectionsEditSchema = z.object({
+  sections: z.array(z.object({
+    label: z.string().max(120),
+    startSec: z.number().min(0),
+    endSec: z.number().min(0),
+  }).strict()).min(1).max(64),
+}).strict();
+
 export const musicVideoManualAnalysisSchema = z.object({
   bpm: z.number().min(20).max(300),
   offsetSec: z.number().min(0).max(600).default(0),
@@ -2309,7 +2317,7 @@ export const musicVideoAudioAnalysisSchema = z.object({
     // Set when the label came from the aligned lyric sheet ("Chorus") rather
     // than the detector ("Section 3"); `analysisLabel` keeps the detector's
     // label so a later pass can restore it. Additive, so older analyses validate.
-    labelSource: z.enum(['analysis', 'lyrics']).optional(),
+    labelSource: z.enum(['analysis', 'lyrics', 'manual']).optional(),
     analysisLabel: z.string().max(120).optional(),
   })),
   durationSec: z.number(),
