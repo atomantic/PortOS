@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseLyricCues } from './timedText.js';
+import { normalizeLyricCues, parseLyricCues } from './timedText.js';
 
 // The lyric importer is a parser with a real input matrix (LRC, SRT, WebVTT,
 // plain text) — each case pins a format rule the route test cannot see.
@@ -103,5 +103,12 @@ describe('parseLyricCues', () => {
     expect(parseLyricCues('[00:01.00]stamped', 'text').cues).toEqual([
       { text: '[00:01.00]stamped', startSec: null, endSec: null },
     ]);
+  });
+});
+
+describe('lyric cue voice', () => {
+  it('imports `A - hello` as a voiced cue and keeps the voice through normalization', () => {
+    const { cues } = parseLyricCues('A - hello', 'text');
+    expect(normalizeLyricCues(cues)).toEqual([expect.objectContaining({ text: 'hello', voice: 'A' })]);
   });
 });

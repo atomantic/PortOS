@@ -100,8 +100,10 @@ export const normalizeLyricCues = (cues) => normalizeList(cues, 'lc', (cue) => {
   const silentWords = words && Array.isArray(cue.silentWords)
     ? [...new Set(cue.silentWords.filter((index) => Number.isInteger(index) && index >= 0 && index < words.length))].sort((a, b) => a - b)
     : [];
+  const voice = typeof cue.voice === 'string' ? trimTo(cue.voice.replace(/\s+/g, ' ').trim(), 60) : '';
   return {
     text,
+    ...(voice ? { voice } : {}),
     ...(words ? { words, ...(cue.suspect === true ? { suspect: true } : {}), ...(silentWords.length ? { silentWords } : {}) } : {}),
     ...matched,
   };

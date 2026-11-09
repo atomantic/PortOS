@@ -43,3 +43,29 @@ describe('realignLyricMarkersToSheet', () => {
     expect(linesOf(repaired)).toEqual([['Verse', 0], ['Chorus', 1], ['Bridge', 3]]);
   });
 });
+
+describe('parseLyricSheet singer voices', () => {
+  const sung = (sheet) => parseLyricSheet(sheet).cues.map(({ text, voice }) => [text, voice]);
+
+  it('lifts a `Name - ` or `Name: ` prefix into voice and keeps it out of the sung text', () => {
+    expect(sung('A - hello\nSinger B: world\nAlice – again')).toEqual([['hello', 'A'], ['world', 'Singer B'], ['again', 'Alice']]);
+    expect(parseLyricSheet('A - hello').markers).toEqual([]);
+  });
+
+  it('carries a whole-line [Name] tag to the following lines until the next tag', () => {
+    const { cues, markers } = parseLyricSheet('[Singer A]\none\ntwo\n[Singer B]\nthree\n[Spoken, close]\nfour');
+    expect(cues.map((c) => [c.text, c.voice])).toEqual([['one', 'Singer A'], ['two', 'Singer A'], ['three', 'Singer B'], ['four', 'Singer B']]);
+    expect(markers).toEqual([{ type: 'direction', label: 'Spoken, close', kind: 'spoken', line: 3 }]);
+  });
+
+  it('reads a leading [Name] on a sung line as its singer', () => {
+    expect(sung('[A] hello there')).toEqual([['hello there', 'A']]);
+  });
+
+  it('leaves ordinary lyrics, sections and directions alone', () => {
+    expect(sung('oh - yeah\nWait, what: now\nI love you - really\nChorus: la la\n[Chorus]\nla')).toEqual([
+      ['oh - yeah', undefined], ['Wait, what: now', undefined], ['I love you - really', undefined],
+      ['Chorus: la la', undefined], ['la', undefined],
+    ]);
+  });
+});

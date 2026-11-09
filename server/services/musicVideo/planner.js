@@ -92,6 +92,7 @@ function sceneInputsFromShots(shots, sets = []) {
       ...(shot.codeOverlay ? { codeOverlay: true } : {}),
       ...(shot.visualLayer ? {
         visualLayer: shot.visualLayer, shotMode: shot.shotMode,
+        ...(shot.shotMode === 'performance' && shot.performanceSpeaker ? { performanceSpeaker: shot.performanceSpeaker } : {}),
         ...(shot.cardText !== undefined ? { cardText: shot.cardText } : {}),
         // A code shot is drawn by the composition: it carries no generation prose.
         ...(shot.visualLayer === 'code' ? {} : directedPrompts(shot, {}, sets)),
