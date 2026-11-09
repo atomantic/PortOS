@@ -23,6 +23,7 @@
 #   INSTALL_MINIMAX_MUSIC3_MLX '1' to bootstrap a separate venv at ~/.portos/venv-minimax-music3-mlx for native MiniMax Music 3 MLX generation (Music studio). Default: 0; opt in with INSTALL_MINIMAX_MUSIC3_MLX=1 (macOS / Apple Silicon only).
 #   INSTALL_AUDIOLDM2 '1' to bootstrap a venv at ~/.portos/venv-audioldm2 (torch + diffusers) for local AudioLDM2 long-form background-music generation (pipeline audio stage, second backend alongside MusicGen). Default: 0; opt in with INSTALL_AUDIOLDM2=1 (runs on MPS / CUDA / CPU).
 #   INSTALL_ACESTEP '1' to bootstrap a venv at ~/.portos/venv-acestep (torch + the acestep package) for local ACE-Step full-song generation with vocals (Music studio, third backend). Default: 0; opt in with INSTALL_ACESTEP=1 (runs on MPS / CUDA / CPU; checkpoints auto-download to ~/.cache/ace-step on first run).
+#   ACESTEP_PIN    commit SHA of ace-step/ACE-Step to check out for ACE-Step (default: 1bee4c9f5b43e30995f8d4d33b3919197ce1bd68).
 #   INSTALL_ACESTEP15 '1' to bootstrap a venv at ~/.portos/venv-acestep15 (the ACE-Step 1.5 package + torch) for local ACE-Step 1.5 full-song generation (Music studio). Default: 0; opt in with INSTALL_ACESTEP15=1 (runs on MPS / CUDA / CPU; model weights are installed separately from Music).
 #   INSTALL_MINIMAX_MUSIC3 '1' to bootstrap a venv at ~/.portos/venv-minimax-music3 (CUDA torch + a pinned diffusers) for local MiniMax Music 3 full-song generation up to five minutes (Music studio, fourth backend). Default: 0; opt in with INSTALL_MINIMAX_MUSIC3=1 (NVIDIA CUDA only; the ~29 GB of weights install separately from Music → Generate).
 #   INSTALL_MUSCRIPTOR '1' to bootstrap a venv at ~/.portos/venv-muscriptor (the muscriptor pip package + its torch stack) for local audio → MIDI transcription (Rounds reference audio + Music Video parsing). Default: 0; opt in with INSTALL_MUSCRIPTOR=1 (runs on MPS / CUDA / CPU; model weights auto-download from HuggingFace on first transcription).
@@ -1248,15 +1249,39 @@ if [[ "$INSTALL_ACESTEP" == "1" ]]; then
     "$PYTHON_BIN" -m venv "$ACESTEP_VENV"
   fi
   ACESTEP_PY="$(venv_python "$ACESTEP_VENV")"
-  echo "📦 Installing ACE-Step into ${ACESTEP_VENV} (this pulls torch + the acestep package)..."
-  "$ACESTEP_PY" -m pip install --upgrade pip wheel setuptools >/dev/null
-  # The acestep package declares its own deps (torch, diffusers, transformers,
-  # audio I/O, etc.), so installing it from git pulls the matching stack. Pinning
-  # nothing here keeps us on the upstream-tested set; the import probe below
-  # catches a broken resolve before generation depends on it.
-  "$ACESTEP_PY" -m pip install --upgrade \
-    "git+https://github.com/ace-step/ACE-Step.git" \
-    "huggingface_hub[hf_xet]"
+  echo "📦 Installing ACE-Step into ${ACESTEP_VENV}..."
+  if is_apple_silicon; then
+    # Apple Silicon installs only from the hash-pinned lock
+    # (scripts/requirements-acestep-mlx.lock.txt): no install-time resolution,
+    # so a new or compromised transitive release can't land on the next Repair.
+    # Direct pins: scripts/requirements-acestep-mlx.txt.
+    # The lock needs CPython 3.11+: its filelock fix for advisory GHSA-2g95-wg33-c5x2
+    # dropped 3.10.
+    if ! "$ACESTEP_PY" -c 'import sys; sys.exit(0 if sys.version_info[:2] >= (3, 11) else 1)'; then
+      echo "❌ ACE-Step on Apple Silicon needs Python 3.11+; ${ACESTEP_PY} is older." >&2
+      echo "   Re-run with PYTHON_BIN pointing at a 3.11+ interpreter (e.g. 'brew install python@3.12')." >&2
+      exit 1
+    fi
+    ACESTEP_PIN="${ACESTEP_PIN:-1bee4c9f5b43e30995f8d4d33b3919197ce1bd68}"
+    ACESTEP_DIR="${HOME}/.portos/acestep"
+    if [[ ! -d "${ACESTEP_DIR}/.git" ]]; then
+      echo "📦 Cloning ace-step/ACE-Step..."
+      git clone --progress https://github.com/ace-step/ACE-Step.git "${ACESTEP_DIR}"
+    fi
+    git_checkout_pin "${ACESTEP_DIR}" "${ACESTEP_PIN}"
+    "$ACESTEP_PY" -m pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-acestep-mlx.lock.txt"
+    "$ACESTEP_PY" -m pip install --no-deps --no-build-isolation "${ACESTEP_DIR}"
+  else
+    # Linux/Windows still resolve at install time (hash-pinned CUDA lock: #15481).
+    "$ACESTEP_PY" -m pip install --upgrade pip wheel setuptools >/dev/null
+    # The acestep package declares its own deps (torch, diffusers, transformers,
+    # audio I/O, etc.), so installing it from git pulls the matching stack. Pinning
+    # nothing here keeps us on the upstream-tested set; the import probe below
+    # catches a broken resolve before generation depends on it.
+    "$ACESTEP_PY" -m pip install --upgrade \
+      "git+https://github.com/ace-step/ACE-Step.git" \
+      "huggingface_hub[hf_xet]"
+  fi
   pin_venv_arm64 "$ACESTEP_VENV"
   # Verify the pipeline class imports — a clean import means generation only
   # needs the one-time checkpoint download, not a broken venv.
