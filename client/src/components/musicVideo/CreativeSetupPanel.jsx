@@ -116,7 +116,12 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange, o
     if (overlongSubjects.length) { setError('Shorten the highlighted descriptions before saving.'); return; }
     setSaving(true);
     setError('');
-    const concept = { subjects: draft.subjects, universeId: draft.universeId || null, characterStyleId: draft.characterStyleId || null };
+    // Blank lines in a character's "always visible" list are editing leftovers, not details.
+    const savedSubjects = draft.subjects.map(({ requiredDetails, ...subject }) => {
+      const details = (requiredDetails || []).map((line) => line.trim()).filter(Boolean);
+      return details.length ? { ...subject, requiredDetails: details } : subject;
+    });
+    const concept = { subjects: savedSubjects, universeId: draft.universeId || null, characterStyleId: draft.characterStyleId || null };
     const canon = { characters: [], places: [], objects: [] };
     for (const item of selectedCanon) {
       if (draft.subjects.some((s) => s.id === item.subjectId)) canon[fields[item.kind]].push(item.entry);
@@ -201,6 +206,11 @@ export default function CreativeSetupPanel({ project, onSave, onPendingChange, o
         <p id={idFor(`description-count-${subject.id}`)} className={`text-xs ${(subject.description || '').length > SUBJECT_DESCRIPTION_MAX ? 'text-port-error' : 'text-port-text-muted'}`}>
           {formatCount((subject.description || '').length)} / {formatCount(SUBJECT_DESCRIPTION_MAX)} characters{(subject.description || '').length > SUBJECT_DESCRIPTION_MAX ? ' — shorten before saving' : ''}
         </p>
+        {subject.kind === 'character' && <>
+          <label htmlFor={idFor(`details-${subject.id}`)} className="block text-xs">Always visible in frames, one per line</label>
+          <textarea id={idFor(`details-${subject.id}`)} aria-describedby={idFor(`details-hint-${subject.id}`)} rows={2} className={inputClass} placeholder="e.g. Silver watch on the left wrist" value={(subject.requiredDetails || []).join('\n')} onChange={(e) => setDraft((d) => ({ ...d, subjects: d.subjects.map((s) => (s.id === subject.id ? { ...s, requiredDetails: e.target.value.split('\n').slice(0, 8).map((line) => line.slice(0, 200)) } : s)) }))} />
+          <p id={idFor(`details-hint-${subject.id}`)} className="text-xs text-port-text-muted">A frame Check fails a still that is missing one of these on {subject.name}. Up to 8 lines.</p>
+        </>}
       </li>)}</ul>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         <div><label htmlFor={idFor('kind')} className="text-xs">Create for this video</label><select id={idFor('kind')} className={inputClass} value={newKind} onChange={(e) => setNewKind(e.target.value)}>{kinds.map(([kind, label]) => <option key={kind} value={kind}>{label}</option>)}</select></div>

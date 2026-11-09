@@ -130,6 +130,23 @@ describe('creative setup', () => {
     expect(onSave.mock.calls[0][0].concept.subjects[1]).toEqual(expect.objectContaining({ id: 'mvc-2', localOnly: true }));
   });
 
+  it('saves a character\'s always-visible details without blank lines, and offers none for objects', async () => {
+    const onSave = vi.fn(async () => {});
+    const cast = { ...project, concept: { subjects: [
+      { id: 'mvc-1', kind: 'character', name: 'Example singer' },
+      { id: 'mvc-2', kind: 'object', name: 'Glass guitar' },
+    ] } };
+    render(<MemoryRouter><CreativeSetupPanel project={cast} onSave={onSave} onPendingChange={vi.fn()} /></MemoryRouter>);
+    fireEvent.click(screen.getByText('Edit'));
+    expect(screen.getAllByLabelText('Always visible in frames, one per line')).toHaveLength(1);
+    fireEvent.change(screen.getByLabelText('Always visible in frames, one per line'), { target: { value: 'Silver watch on the left wrist\n\n  Red scarf  ' } });
+    fireEvent.click(screen.getByText('Save creative setup'));
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    const [singer, guitar] = onSave.mock.calls[0][0].concept.subjects;
+    expect(singer.requiredDetails).toEqual(['Silver watch on the left wrist', 'Red scarf']);
+    expect(guitar).not.toHaveProperty('requiredDetails');
+  });
+
   it('sends the linked description and its original value together when saving an edit', async () => {
     const onSave = vi.fn(async () => {});
     const cast = { ...project, concept: { subjects: [

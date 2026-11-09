@@ -890,7 +890,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // v54 = `previz.timeline` replaces `previz.night`, `previz.vehicles` (cast objects people ride, with a speed),
   // a beat's and a track key's `vehicleSubjectId`, and `pawnColors` loses `bike`: a v53 strict previz schema rejects
   // these and a v54 one rejects the v53 shapes (migration 459 / db-migration 031 convert stored projects).
-  musicVideoProjects: 54,
+  // v55 = `concept.subjects[].requiredDetails` (what every frame of a character must show,
+  // checked by the frame check), which a v54 strict subject schema rejects. Optional, no backfill.
+  musicVideoProjects: 55,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).
