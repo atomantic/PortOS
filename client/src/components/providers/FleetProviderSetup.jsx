@@ -21,6 +21,28 @@ const FLEET_TAB_IDS = FLEET_TABS.map(({ id }) => id);
 const DEFAULT_MODEL = 'qwen3.8-27b';
 const DEFAULT_PORT = PORTS.FLEET_LLM;
 
+// Harness choices for the client provider, recommended first. `pi` and
+// `opencode` are both TUI coding-agent harnesses; `api` is a Direct API record.
+export const FLEET_HARNESSES = [
+  { id: 'pi', label: 'Pi — coding agents (recommended)', short: 'Pi', name: 'Fleet GPU · Pi' },
+  { id: 'opencode', label: 'OpenCode TUI — coding agents', short: 'OpenCode TUI', name: 'Fleet GPU · OpenCode TUI' },
+  { id: 'api', label: 'Direct API — text and thinking workflows', short: 'Direct API', name: 'Fleet GPU · API' },
+];
+const DEFAULT_HARNESS = FLEET_HARNESSES[0].id;
+const harnessById = (id) => FLEET_HARNESSES.find((row) => row.id === id) || FLEET_HARNESSES[0];
+const TUI_COMMANDS = { pi: 'pi', opencode: 'opencode' };
+
+// The fleet harness an existing provider record already is, or null when this
+// walkthrough must not repoint it (a Claude/Codex/Grok TUI would be silently
+// converted, because the record built below overwrites `command`/`args`/`envVars`).
+const fleetHarnessFor = (provider) => {
+  if (isApiProvider(provider)) return 'api';
+  if (!isTuiProvider(provider)) return null;
+  if (!provider.command) return DEFAULT_HARNESS;
+  const command = commandBasename(provider.command);
+  return Object.keys(TUI_COMMANDS).find((id) => TUI_COMMANDS[id] === command) || null;
+};
+
 const endpointForPeer = (peer) => {
   const rawHost = String(peer?.host || peer?.address || '').trim();
   if (!rawHost) return '';
@@ -43,7 +65,9 @@ const normalizeEndpoint = (value) => {
  * The endpoint intentionally appears twice on an OpenCode record: the provider
  * field drives PortOS model refresh/readiness, while OPENCODE_CONFIG_CONTENT is
  * what the spawned harness actually uses. Updating only the former paints a
- * correct-looking remote card whose agent still calls localhost.
+ * correct-looking remote card whose agent still calls localhost. A Pi record
+ * carries the endpoint only on the field: with no `--provider` pin the server
+ * hands it to Pi at spawn (`isPiEndpointProvider` in server/lib/pi.js).
  */
 export const buildFleetProvider = ({ name, endpoint, apiKey, model, harness }) => {
   const common = {
@@ -60,11 +84,11 @@ export const buildFleetProvider = ({ name, endpoint, apiKey, model, harness }) =
     enabled: true,
   };
   if (harness === 'api') return { ...common, type: 'api' };
+  const tui = { ...common, type: 'tui', args: [], secretEnvVars: [], tuiIdleTimeoutMs: 180000 };
+  if (harness === 'pi') return { ...tui, command: 'pi', envVars: {} };
   return {
-    ...common,
-    type: 'tui',
+    ...tui,
     command: 'opencode',
-    args: [],
     envVars: {
       OPENCODE_CONFIG_CONTENT: JSON.stringify({
         permission: 'allow',
@@ -77,9 +101,7 @@ export const buildFleetProvider = ({ name, endpoint, apiKey, model, harness }) =
         },
       }),
     },
-    secretEnvVars: [],
     tuiPromptDelayMs: 2500,
-    tuiIdleTimeoutMs: 180000,
   };
 };
 
@@ -101,14 +123,16 @@ export default function FleetProviderSetup({
   // prefill the loopback address host setup already wired the auto-created
   // Direct API provider to, plus this machine's own key.
   const selfHost = searchParams.get('selfHost') === '1';
+  // `?harness=` preselects a harness (the host card links Pi and OpenCode).
+  const initialHarness = harnessById(searchParams.get('harness') || DEFAULT_HARNESS).id;
   const [activeTab, setActiveTab] = useDrawerTab('fleetStep', 'architecture', FLEET_TAB_IDS);
   const [selectedPeerId, setSelectedPeerId] = useState(initialPeerId);
   const [targetProviderId, setTargetProviderId] = useState('');
   const [endpointInput, setEndpointInput] = useState('');
-  const [name, setName] = useState('Fleet GPU · OpenCode TUI');
+  const [name, setName] = useState(harnessById(initialHarness).name);
   const [apiKey, setApiKey] = useState('');
   const [model, setModel] = useState(DEFAULT_MODEL);
-  const [harness, setHarness] = useState('tui');
+  const [harness, setHarness] = useState(initialHarness);
   const [saving, setSaving] = useState(false);
   const [fetchingKey, setFetchingKey] = useState(false);
   const [selfHostLoading, setSelfHostLoading] = useState(false);
@@ -118,17 +142,10 @@ export default function FleetProviderSetup({
     [peers],
   );
   // Repoint targets: providers a fleet endpoint can plausibly replace — an
-  // existing OpenCode TUI or Direct API provider. Without this, the only way
+  // existing Pi, OpenCode TUI or Direct API provider. Without this, the only way
   // to point an already-created provider at a fleet host was delete-and-recreate.
-  // A TUI provider must already be OpenCode (or have no command set yet) —
-  // `buildFleetProvider` always overwrites `command`/`args`/`envVars` with the
-  // OpenCode wiring, so repointing a Claude/Codex/Grok TUI provider here would
-  // silently convert it into an OpenCode one out from under the user.
   const repointCandidates = useMemo(
-    () => providers.filter((provider) => (
-      isApiProvider(provider)
-      || (isTuiProvider(provider) && (!provider.command || commandBasename(provider.command) === 'opencode'))
-    )),
+    () => providers.filter((provider) => fleetHarnessFor(provider)),
     [providers],
   );
   const repointTarget = useMemo(
@@ -202,7 +219,7 @@ export default function FleetProviderSetup({
 
   const selectHarness = (next) => {
     setHarness(next);
-    if (!targetProviderId) setName(next === 'tui' ? 'Fleet GPU · OpenCode TUI' : 'Fleet GPU · API');
+    if (!targetProviderId) setName(harnessById(next).name);
   };
 
   // Repointing an existing provider locks the harness to its current type —
@@ -215,12 +232,12 @@ export default function FleetProviderSetup({
       // Back to "create a new provider" — undo whatever a previously
       // selected target's type/name/model left behind, or the form keeps
       // showing that provider's values with no visible reason why.
-      setHarness('tui');
-      setName('Fleet GPU · OpenCode TUI');
+      setHarness(initialHarness);
+      setName(harnessById(initialHarness).name);
       setModel(DEFAULT_MODEL);
       return;
     }
-    setHarness(isTuiProvider(target) ? 'tui' : 'api');
+    setHarness(fleetHarnessFor(target));
     setName(target.name || name);
     if (target.defaultModel) setModel(target.defaultModel);
   };
@@ -268,7 +285,7 @@ export default function FleetProviderSetup({
       {activeTab === 'architecture' && (
         <div className="space-y-4 text-sm text-gray-300">
           <Banner tone="success" icon={WandSparkles}>
-            <p className="font-medium">Recommended for one RTX 3090: vLLM + Qwen3.8-27B + DFlash2 on the host, OpenCode TUI on coding clients.</p>
+            <p className="font-medium">Recommended for one RTX 3090: vLLM + Qwen3.8-27B + DFlash2 on the host, Pi (or OpenCode TUI) on coding clients.</p>
             <p className="mt-1 text-port-success/80">Use a direct API provider instead when PortOS only needs text synthesis. Both use the host’s authenticated OpenAI-compatible queue over Tailscale.</p>
           </Banner>
 
@@ -310,7 +327,7 @@ export default function FleetProviderSetup({
               ? (selfHostLoading
                 ? 'Reading this machine\'s own model host endpoint and API key…'
                 : 'This machine already runs the queue — its endpoint and key are filled in below. Pick a provider to point at it, or create a new one.')
-              : 'Create this provider on each client PortOS instance. The saved endpoint and the spawned OpenCode harness will point at the same fleet host.'}
+              : 'Create this provider on each client PortOS instance. The saved endpoint and the spawned coding harness will point at the same fleet host.'}
           </Banner>
 
           {repointCandidates.length > 0 && (
@@ -323,7 +340,7 @@ export default function FleetProviderSetup({
                 <option value="">Create a new provider</option>
                 {repointCandidates.map((provider) => (
                   <option key={provider.id} value={provider.id}>
-                    {provider.name} ({isTuiProvider(provider) ? 'OpenCode TUI' : 'Direct API'})
+                    {provider.name} ({harnessById(fleetHarnessFor(provider)).short})
                   </option>
                 ))}
               </select>
@@ -382,8 +399,7 @@ export default function FleetProviderSetup({
               disabled={Boolean(targetProviderId)}
               className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden disabled:opacity-50"
             >
-              <option value="tui">OpenCode TUI — coding agents (recommended)</option>
-              <option value="api">Direct API — text and thinking workflows</option>
+              {FLEET_HARNESSES.map((row) => <option key={row.id} value={row.id}>{row.label}</option>)}
             </select>
           </FormField>
 

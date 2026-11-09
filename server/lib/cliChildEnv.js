@@ -42,6 +42,7 @@
 
 import { withSpawnCwdEnv } from './spawnCwd.js';
 import { buildOpencodeEnvVars } from './opencodeConfig.js';
+import { buildPiEndpointEnvVars } from './pi.js';
 import {
   localRuntimeNamespace,
   isClaudeCommand,
@@ -200,6 +201,9 @@ export function composeProviderEnv({ before = null, provider = null, model = nul
     // reaches it because OpenCode's tool posture lives in that config — see
     // `hardenOpencodeConfigForNoTool`.
     ...buildOpencodeEnvVars(provider, model, { safetyProfile }),
+    // A Pi record on a custom endpoint hands it to the PortOS endpoint
+    // extension (server/lib/pi.js); empty for every other record.
+    ...buildPiEndpointEnvVars(provider, model),
     ...(extra || {}),
   };
 }
