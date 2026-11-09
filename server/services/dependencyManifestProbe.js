@@ -21,8 +21,29 @@ const PACKAGE_JSON_DEP_KEYS = ['dependencies', 'devDependencies', 'optionalDepen
 const PRESENCE_MANIFESTS = new Set([
   'pom.xml', 'build.gradle', 'build.gradle.kts', 'Gemfile', 'composer.json', 'pubspec.yaml',
   'Package.swift', 'mix.exs', 'Podfile', 'Pipfile', 'environment.yml', 'deno.json', 'deno.jsonc',
-  'setup.py', 'setup.cfg', 'pyproject.toml', 'Cargo.toml', 'go.mod'
+  'setup.py', 'setup.cfg', 'pyproject.toml', 'Cargo.toml', 'go.mod',
+  'renovate.json', 'renovate.json5', '.renovaterc', '.renovaterc.json', 'Cartfile'
 ]);
+
+// `.github/` is a dot-dir the walk skips, but it declares two things the
+// dependency-updates prompt acts on: a Dependabot/Renovate config (whose bot PRs
+// Phase 1 lands) and workflow `uses:` pins on third-party actions (the
+// github-actions ecosystem). A repo with only those still has work to do.
+const GITHUB_BOT_CONFIGS = ['dependabot.yml', 'dependabot.yaml', 'renovate.json', 'renovate.json5'];
+const EXTERNAL_ACTION_USE = /^\s*(?:-\s*)?uses:\s*['"]?(?!\.\/)[^\s'"#]+@/m;
+
+async function githubDeclaresDependencies(repoPath) {
+  const githubDir = join(repoPath, '.github');
+  const entries = await readdir(githubDir).catch(() => []);
+  if (entries.some((name) => GITHUB_BOT_CONFIGS.includes(name))) return true;
+  const workflowsDir = join(githubDir, 'workflows');
+  const workflows = (await readdir(workflowsDir).catch(() => [])).filter((name) => /\.ya?ml$/.test(name));
+  for (const name of workflows) {
+    const text = await readFile(join(workflowsDir, name), 'utf8').catch(() => '');
+    if (EXTERNAL_ACTION_USE.test(text)) return true;
+  }
+  return false;
+}
 
 const hasContentLine = (text, ignore = /^\s*(#|$)/) => text.split('\n').some((l) => !ignore.test(l));
 
@@ -44,6 +65,10 @@ async function manifestDeclaresDependencies(name, path) {
     return /^\[(.*dependencies.*)\]\s*\n\s*[^\s[#]/m.test(await readFile(path, 'utf8'))
       || /^\[(?:workspace\.)?dependencies\./m.test(await readFile(path, 'utf8'));
   }
+  if (name === 'project.pbxproj') {
+    // An Xcode app adds Swift packages in its project file, not a Package.swift.
+    return (await readFile(path, 'utf8')).includes('XCRemoteSwiftPackageReference');
+  }
   if (PRESENCE_MANIFESTS.has(name)) return true;
   return /\.(csproj|fsproj|vbproj)$/.test(name);
 }
@@ -54,6 +79,9 @@ async function manifestDeclaresDependencies(name, path) {
  */
 export async function probeDependencyManifests(repoPath) {
   if (!repoPath) return { hasDependencies: true, reason: 'no repo path' };
+  if (await githubDeclaresDependencies(repoPath)) {
+    return { hasDependencies: true, reason: 'GitHub Actions or a dependency-bot config found' };
+  }
   let visited = 0;
   let sawManifest = false;
 
@@ -62,7 +90,7 @@ export async function probeDependencyManifests(repoPath) {
     const entries = await readdir(dir, { withFileTypes: true });
     for (const e of entries) {
       if (e.isFile()) {
-        const isManifest = e.name === 'package.json' || /^requirements.*\.txt$/.test(e.name)
+        const isManifest = e.name === 'package.json' || e.name === 'project.pbxproj' || /^requirements.*\.txt$/.test(e.name)
           || PRESENCE_MANIFESTS.has(e.name) || /\.(csproj|fsproj|vbproj)$/.test(e.name);
         if (!isManifest) continue;
         sawManifest = true;
