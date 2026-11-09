@@ -35,7 +35,9 @@ const layerRef = (scene) => ({ role: 'layer', sceneId: scene.sceneId, assetId: s
     .concat(scene.imageEffect ? [['imageEffect', scene.imageEffect], ['imageEffectSec', scene.imageEffectSec ?? null]] : [])
     .concat(scene.photoSequence && scene.photoSequence.enabled !== false ? [['photoSequence', scene.photoSequence]] : [])
     // An effect from the start frame to the end frame renders the end frame too.
+    // Use end frame off plays the start frame only, so it changes the render.
     .concat(scene.imageEffect && isEndFrameImageEffect(scene.imageEffect) ? [['endImageId', scene.endImageId ?? null]] : [])
+    .concat(scene.endFrameOff === true ? [['endFrameOff', true]] : [])
     // Only a music-driven performance joins it, so lip-sync evidence stays current.
     .concat(scene.performanceStyle === 'music' ? [['performanceStyle', 'music']] : [])
     // A shot moved before the song (its length and sound) changes the render; a song shot keeps its evidence.

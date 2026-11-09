@@ -74,8 +74,9 @@ const RERENDER_HINT = 'Renders this frame again from the current Casting look an
  * With both frames set, `onSwapFrames` trades them (prompts included) in one tap.
  * The References row above them picks the character and set references every frame render sends;
  * Research and seed above it imports real photos of the shot's subject that lead those references.
- * With `endFrameToggle` (footage), Use end frame switches the end frame off (`scene.endFrameOff`):
- * its column hides and clips skip it, keeping its selection, prompt and takes for switching back on.
+ * With `endFrameToggle` (footage, and a still whose picture is an end-frame effect),
+ * Use end frame switches the end frame off (`scene.endFrameOff`): its column hides and
+ * the shot plays its start frame only, keeping its selection, prompt and takes for switching back on.
  */
 export default function SceneFrames({
   project = null, castMedia = null, onReloadCastMedia = null, greyboxPlaces = {}, greyboxSaving = false, onGreyboxSaving, scene, index, endFrames: endFramesAllowed, endFrameToggle = false, generatingFrame = false, generatingEndFrame = false, onGenerateFrame, onGenerateEndFrame, onImageTargetChange = null,

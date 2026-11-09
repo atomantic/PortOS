@@ -38,6 +38,17 @@ it('bounds checksum work by distinct current inputs across historical snapshots 
   expect(dependencies).toEqual(project.excerpts[0].dependencies);
 });
 
+it('marks a reviewed render stale when Use end frame turns off', () => {
+  const project = projectFixture();
+  project.scenes[0].imageEffect = 'end-flash';
+  project.scenes[0].endImageId = 'end.png';
+  project.renderHistoryId = 'final';
+  project.renderDependencies = captureMusicVideoEvidence(project);
+  expect(presentMusicVideoDependencies(project).renderDependencyState.status).toBe('current');
+  project.scenes[0].endFrameOff = true;
+  expect(presentMusicVideoDependencies(project).renderDependencyState.reasons).toContain('Shot timing or composition layer changed');
+});
+
 it('keeps distinct rendered windows independent when caching composition and scene-set references', () => {
   const project = projectFixture();
   project.excerpts = [0, 5].map(startSec => ({ dependencies: captureMusicVideoEvidence(project, { startSec, endSec: startSec + 5 }) }));

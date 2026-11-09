@@ -53,8 +53,8 @@ export function sceneClipOutFrameSec(scene, clipDurationSec, fps = 24) {
 
 /**
  * What the cut shows at the end of `shot`, for the shot after it to start from:
- * `{ imageId }` for a still shot (its end frame when an effect plays to it, else
- * its still), `{ clip: true }` for footage with a clip to read the out-frame
+ * `{ imageId }` for a still shot (its end frame when an effect plays to it and
+ * Use end frame is on, else its still), `{ clip: true }` for footage with a clip to read the out-frame
  * from, or null when there is nothing to hand over (a drawn card or code shot,
  * or a missing picture). A still shot's clip, left from before it became a
  * still, is never on screen, so it is never read.
@@ -65,7 +65,8 @@ export function shotHandoffSource(project, shot, { fps = 24 } = {}) {
   if (layer === 'still') {
     const sequence = sceneHasAuthoredSpan(shot) ? scenePhotoSequence(shot, { fps, beats: project.audioAnalysis?.beats || [] }) : null;
     const lastPhoto = sequence?.imageIds[photoSequenceIndex(sequence, (Math.round(shot.endSec * fps) - 1) / fps, { fps })];
-    const imageId = isEndFrameImageEffect(shot.imageEffect) && shot.endImageId ? shot.endImageId : sequence ? lastPhoto : shot.referenceImageId;
+    const imageId = isEndFrameImageEffect(shot.imageEffect) && shot.endFrameOff !== true && shot.endImageId
+      ? shot.endImageId : sequence ? lastPhoto : shot.referenceImageId;
     return imageId ? { imageId } : null;
   }
   return layer === 'footage' && shot.videoHistoryId ? { clip: true } : null;

@@ -137,7 +137,8 @@ export async function resolveSceneMedia(project, { history = [], probe = async (
     const layer = documentSceneVisualLayer(project, scene, { generated: strictLayers });
     // A code shot (#10297) is drawn by the document itself; it is handed no media.
     if (layer === 'code' || (strictLayers && layer === 'card')) continue;
-    const endPath = isEndFrameImageEffect(scene.imageEffect) && scene.endImageId ? safeUnder(PATHS.images, scene.endImageId) : null;
+    const endPath = isEndFrameImageEffect(scene.imageEffect) && scene.endFrameOff !== true && scene.endImageId
+      ? safeUnder(PATHS.images, scene.endImageId) : null;
     const end = endPath && existsSync(endPath)
       ? { path: endPath, ext: (/\.([a-z0-9]{2,5})$/i.exec(scene.endImageId)?.[1] || 'png').toLowerCase().replace('jpeg', 'jpg') } : null;
     const sequence = scenePhotoSequence(scene);

@@ -47,7 +47,7 @@ export const SCENE_FILTERS = Object.freeze(['all', 'attention', 'missing']);
 function takeKindsInUse(scene, layer) {
   if (layer === 'footage') return undefined;
   if (layer !== 'still') return [];
-  return isEndFrameImageEffect(scene.imageEffect) ? ['image', 'endImage'] : ['image'];
+  return isEndFrameImageEffect(scene.imageEffect) && scene.endFrameOff !== true ? ['image', 'endImage'] : ['image'];
 }
 
 /** The `?scenes=` value as a filter id; anything unknown is `all`. */

@@ -98,10 +98,14 @@ describe('end-frame effects on the storyboard', () => {
     expect(sceneImageEffect({ ...shot, imageEffectSec: 1 }, { layered: true }).changeSec).toBe(1);
     expect(sceneImageEffect({ ...shot, imageEffectSec: 6 }, { layered: true }).changeSec).toBe(1.5);
     expect(sceneImageEffect({ ...shot, endImageId: null }, { layered: true })).toBeNull();
+    // Use end frame off keeps the stored end frame and plays the start frame only.
+    expect(sceneImageEffect({ ...shot, endFrameOff: true }, { layered: true })).toBeNull();
+    expect(sceneImageEffect({ ...shot, endFrameOff: false }, { layered: true })).toEqual({ effect: 'end-glitch', changeSec: 1.5 });
   });
   it('places the glitch on the cut to the end frame, inside the shot', () => {
     expect(sceneImageEffectGlitchFrames([shot], 24, { layered: true }).map((g) => g.frame)).toEqual([275, 276, 277]);
     expect(sceneImageEffectGlitchFrames([shot], 24, { layered: false })).toEqual([]);
+    expect(sceneImageEffectGlitchFrames([{ ...shot, endFrameOff: true }], 24, { layered: true })).toEqual([]);
   });
 });
 
