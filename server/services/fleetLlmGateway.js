@@ -57,6 +57,7 @@ export function createFleetLlmGateway({
   let watchTimer = null;
   let polling = false;
   let lastRestartAt = null;
+  let restarting = false;
   // Coalesce discovery independently: a long generation must not make clients
   // mark a healthy provider offline just because /models waits for its slot.
   const models = () => {
@@ -113,16 +114,32 @@ export function createFleetLlmGateway({
     watchTimer.unref?.();
   };
   const disarmWatch = () => { clearInterval(watchTimer); watchTimer = null; };
-  const restartOnce = () => {
-    if (!restartRuntime) return;
-    if (lastRestartAt !== null && now() - lastRestartAt < restartCooldownMs) {
-      console.log('⏭️ Fleet host runtime stalled again inside the restart cooldown; leaving it surfaced without restarting');
-      return;
-    }
+  const cooldownElapsed = () => lastRestartAt === null || now() - lastRestartAt >= restartCooldownMs;
+  const requestRestart = () => {
     lastRestartAt = now();
+    restarting = true;
     Promise.resolve().then(restartRuntime)
       .then(() => console.log('🔄 Fleet host runtime restart requested'))
-      .catch((err) => console.error(`❌ Fleet host runtime restart failed: ${String(err?.message ?? err).split('\n')[0].slice(0, 200)}`));
+      .catch((err) => console.error(`❌ Fleet host runtime restart failed: ${String(err?.message ?? err).split('\n')[0].slice(0, 200)}`))
+      .finally(() => { restarting = false; });
+  };
+  const restartOnce = () => {
+    if (!restartRuntime) return;
+    if (!cooldownElapsed()) {
+      console.log('⏭️ Fleet host runtime stalled again inside the restart cooldown; restarting it once the cooldown passes');
+      return;
+    }
+    requestRestart();
+  };
+  // A stall only clears when the runtime shows life, and nothing is admitted
+  // while stalled, so a stall that began inside the cooldown or whose restart
+  // failed would refuse every request until someone restarted it by hand.
+  // Retry once the cooldown passes, but only while the runtime still answers
+  // /metrics: an unreachable one is mid-restart or cold-loading.
+  const retryRestart = () => {
+    if (!restartRuntime || restarting || !cooldownElapsed()) return;
+    console.log('🔄 Fleet host runtime is still not generating after the restart cooldown; restarting it again');
+    requestRestart();
   };
   const enterStall = () => {
     console.error('❌ Fleet host runtime stalled: a request is running but no tokens have moved');
@@ -154,7 +171,7 @@ export function createFleetLlmGateway({
         console.log('✅ Fleet host runtime is generating again');
         onChanged();
         pump();
-      }
+      } else if (progress && stalled()) retryRestart();
     } catch (err) {
       console.error(`❌ Fleet host stall check failed: ${String(err?.message ?? err).split('\n')[0].slice(0, 200)}`);
     } finally {
