@@ -1351,16 +1351,27 @@ if [[ "$INSTALL_ACESTEP15" == "1" ]]; then
   # multi-component pipeline whose DiT loads custom Transformers code with
   # trust_remote_code, so it must never share v1's `acestep` venv.
   ACESTEP15_VENV="${HOME}/.portos/venv-acestep15"
+  ACESTEP15_PIN="${ACESTEP15_PIN:-dce621408bee8c31b4fcf4811682eb9359e1bc94}"
+  ACESTEP15_DIR="${HOME}/.portos/acestep15"
+  if ! is_apple_silicon; then
+    # Linux/Windows install only from a hash lock, which covers x86_64 with the
+    # cu126 torch build. Other hosts have no lock.
+    if is_macos; then
+      echo "❌ ACE-Step 1.5 hash locks cover Apple Silicon and x86_64 Windows/Linux; Intel macOS is unsupported." >&2
+      exit 1
+    fi
+    require_cuda_lock_host "ACE-Step 1.5" docs/ACESTEP15_CUDA.md
+  fi
   mkdir -p "${HOME}/.portos"
   reset_universal_venv "$ACESTEP15_VENV" "$PYTHON_BIN"
 
-  if ! venv_exists "$ACESTEP15_VENV"; then
-    echo "📦 Creating ACE-Step 1.5 venv at ${ACESTEP15_VENV}..."
-    "$PYTHON_BIN" -m venv "$ACESTEP15_VENV"
-  fi
-  ACESTEP15_PY="$(venv_python "$ACESTEP15_VENV")"
-  echo "📦 Installing ACE-Step 1.5 into ${ACESTEP15_VENV}..."
   if is_apple_silicon; then
+    if ! venv_exists "$ACESTEP15_VENV"; then
+      echo "📦 Creating ACE-Step 1.5 venv at ${ACESTEP15_VENV}..."
+      "$PYTHON_BIN" -m venv "$ACESTEP15_VENV"
+    fi
+    ACESTEP15_PY="$(venv_python "$ACESTEP15_VENV")"
+    echo "📦 Installing ACE-Step 1.5 into ${ACESTEP15_VENV}..."
     # Apple Silicon installs only from the hash-pinned lock
     # (scripts/requirements-acestep15-mlx.lock.txt): no install-time resolution,
     # so a new or compromised transitive release can't land on the next Repair.
@@ -1372,8 +1383,6 @@ if [[ "$INSTALL_ACESTEP15" == "1" ]]; then
       echo "   Re-run with PYTHON_BIN pointing at a 3.11+ interpreter (e.g. 'brew install python@3.12')." >&2
       exit 1
     fi
-    ACESTEP15_PIN="${ACESTEP15_PIN:-dce621408bee8c31b4fcf4811682eb9359e1bc94}"
-    ACESTEP15_DIR="${HOME}/.portos/acestep15"
     if [[ ! -d "${ACESTEP15_DIR}/.git" ]]; then
       echo "📦 Cloning ace-step/ACE-Step-1.5..."
       git clone --progress https://github.com/ace-step/ACE-Step-1.5.git "${ACESTEP15_DIR}"
@@ -1382,17 +1391,19 @@ if [[ "$INSTALL_ACESTEP15" == "1" ]]; then
     "$ACESTEP15_PY" -m pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-acestep15-mlx.lock.txt"
     "$ACESTEP15_PY" -m pip install --no-deps --no-build-isolation --ignore-requires-python "${ACESTEP15_DIR}"
   else
-    "$ACESTEP15_PY" -m pip install --upgrade pip wheel setuptools >/dev/null
-    # ACE-Step 1.5's Linux/Windows torch pins are published on PyTorch's CUDA
-    # index. Passing it as an extra index remains harmless on macOS, where the
-    # package selects its native MPS-compatible torch dependency.
-    # Pin the runtime to a vendor release. The model snapshot is installed
-    # separately through Music, but its custom-code loader depends on this
-    # package's handler contract.
-    ACESTEP15_TORCH_INDEX="${PORTOS_TORCH_CUDA_INDEX:-https://download.pytorch.org/whl/cu128}"
-    "$ACESTEP15_PY" -m pip install --upgrade --extra-index-url "$ACESTEP15_TORCH_INDEX" \
-      "git+https://github.com/ace-step/ACE-Step-1.5.git@v0.1.8" \
-      "huggingface_hub[hf_xet]"
+    # Direct pins: scripts/requirements-acestep15-cuda.txt. The package is
+    # installed from the ACESTEP15_PIN checkout (the v0.1.8 release commit) with
+    # --no-deps, like Apple Silicon: a git SHA cannot satisfy --require-hashes.
+    # --no-deps also keeps the package's own cu128 torch pins from displacing the
+    # shared cu126 lock.
+    sync_cuda_lock_venv "ACE-Step 1.5" "$ACESTEP15_VENV" requirements-acestep15-cuda
+    ACESTEP15_PY="$(venv_python "$ACESTEP15_VENV")"
+    if [[ ! -d "${ACESTEP15_DIR}/.git" ]]; then
+      echo "📦 Cloning ace-step/ACE-Step-1.5..."
+      git clone --progress https://github.com/ace-step/ACE-Step-1.5.git "${ACESTEP15_DIR}"
+    fi
+    git_checkout_pin "${ACESTEP15_DIR}" "${ACESTEP15_PIN}"
+    uv pip install --no-deps --no-build-isolation --ignore-requires-python --python "$ACESTEP15_PY" "${ACESTEP15_DIR}"
   fi
   pin_venv_arm64 "$ACESTEP15_VENV"
   probe_or_fail \

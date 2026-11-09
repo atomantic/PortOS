@@ -1488,7 +1488,63 @@ describe('ACE-Step 1.5 Apple Silicon install is hash-pinned', () => {
     expect(appleBranch).toContain('sys.version_info[:2] >= (3, 11)');
   });
 
-  it('keeps the resolving install for Linux/Windows until the CUDA lock lands', () => {
-    expect(otherBranch).toMatch(/pip install --upgrade --extra-index-url/);
+  it('installs nothing on Linux/Windows outside the hash-pinned CUDA locks and the pinned checkout', () => {
+    expect(otherBranch).not.toMatch(/pip install --upgrade|git\+/);
+  });
+});
+
+describe.each(['windows', 'linux'])('ACE-Step 1.5 %s Install/Repair', (target) => {
+  const direct = readFileSync(join(REPO_ROOT, 'scripts/requirements-acestep15-cuda.txt'), 'utf8')
+    .split(/\r?\n/).filter((line) => /^[\w.-]+(\[[\w,-]+\])?==/.test(line))
+    .map((line) => line.replace(/\[[\w,-]+\]/, ''));
+  const installer = () => lockedCudaInstaller(target, { flag: 'INSTALL_ACESTEP15', probe: 'generate_music' });
+
+  it('locks every distribution with hashes and no VCS source', () => {
+    const lock = readFileSync(join(REPO_ROOT, 'scripts', `requirements-acestep15-cuda-${target}.lock.txt`), 'utf8');
+    const requirements = lock.split(/\r?\n/).filter((line) => /^\w/.test(line));
+    const blocks = lock.match(/^[\w.-]+==[^\n]+\n(?:[ \t]+[^\n]*\n?)*/gm) ?? [];
+    expect(blocks.length).toBe(requirements.length);
+    for (const block of blocks) expect(block).toMatch(/--hash=sha256:[0-9a-f]{64}/);
+    const pins = requirements.map((line) => line.replace(/\s*\\$/, ''));
+    for (const pin of direct) expect(pins).toContain(pin);
+    expect(lock).not.toMatch(/git\+|^[\w.-]+\s*@/m);
+    expect(lock).toMatch(/^setuptools==/m);
+    expect(lock).toMatch(/^hatchling==/m);
+  });
+
+  it('syncs the lock, then installs only the pinned checkout without dependencies, on Install and Repair', () => {
+    const install = installer();
+    const env = { ALLOW_LOCAL_INSTALL: '1' };
+    expect(install.run(env)).toContain('ACE-Step 1.5 venv ready');
+    expect(install.run(env)).toContain('ACE-Step 1.5 venv ready');
+    const commands = install.commands().split('\n');
+    const syncs = commands.filter((line) => line.startsWith('uv pip sync'));
+    expect(syncs).toHaveLength(2);
+    for (const sync of syncs) {
+      expect(sync).toContain('--require-hashes --only-binary :all:');
+      expect(sync).toContain(`requirements-acestep15-cuda-${target}.lock.txt`);
+    }
+    const checkouts = commands.filter((line) => /^git -C \S+ checkout /.test(line));
+    expect(checkouts).toHaveLength(2);
+    for (const checkout of checkouts) expect(checkout).toContain('dce621408bee8c31b4fcf4811682eb9359e1bc94');
+    const localInstalls = commands.filter((line) => line.startsWith('uv pip install'));
+    expect(localInstalls).toHaveLength(2);
+    for (const line of localInstalls) expect(line).toContain('--no-deps --no-build-isolation --ignore-requires-python');
+    expect(install.commands()).not.toMatch(/--upgrade|git\+|python -m pip/);
+  });
+
+  it('does not report ready or install the package when the lock sync fails', () => {
+    const install = installer();
+    let result;
+    try { install.run({ SYNC_EXIT: '42', ALLOW_LOCAL_INSTALL: '1' }); } catch (error) { result = error; }
+    expect(result).toBeDefined();
+    expect(result.stdout).not.toContain('ACE-Step 1.5 venv ready');
+    expect(install.commands()).not.toContain('uv pip install');
+  });
+
+  it('refuses a CUDA index the locks were not compiled for', () => {
+    let result;
+    try { installer().run({ PORTOS_TORCH_CUDA_INDEX: 'https://download.pytorch.org/whl/cu132' }); } catch (error) { result = error; }
+    expect(result?.stderr).toContain('ACE-Step 1.5 CUDA is locked to cu126');
   });
 });
