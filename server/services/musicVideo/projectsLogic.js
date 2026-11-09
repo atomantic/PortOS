@@ -587,6 +587,8 @@ function buildScene(input, { order }) {
     ...(input.frameFit ? { frameFit: input.frameFit } : {}),
     ...(input.speedFps ? { speedFps: input.speedFps } : {}),
     ...(input.offsetFrames ? { offsetFrames: input.offsetFrames } : {}),
+    ...(input.clipLengthSec ? { clipLengthSec: input.clipLengthSec } : {}),
+    ...(input.clipModelId ? { clipModelId: input.clipModelId } : {}),
     ...(input.reverse ? { reverse: true } : {}),
     ...(input.holdLastFrame ? { holdLastFrame: true } : {}),
     ...(input.filmLook ? { filmLook: normalizeFilmLook(input.filmLook) } : {}),
@@ -676,6 +678,8 @@ function carryOver(prior, fresh) {
     ...(prior.frameFit ? { frameFit: prior.frameFit } : {}),
     ...(prior.speedFps ? { speedFps: prior.speedFps } : {}),
     ...(prior.offsetFrames ? { offsetFrames: prior.offsetFrames } : {}),
+    ...(prior.clipLengthSec ? { clipLengthSec: prior.clipLengthSec } : {}),
+    ...(prior.clipModelId ? { clipModelId: prior.clipModelId } : {}),
     ...(prior.reverse ? { reverse: true } : {}),
     ...(prior.holdLastFrame ? { holdLastFrame: true } : {}),
     ...(prior.filmLook ? { filmLook: prior.filmLook } : {}),
@@ -789,7 +793,7 @@ export function applyStoryboardShotSync(project, plan) {
 // takes, and whether it plays as a clip or its still with an image effect) without
 // adding a shot or lyric the storyboard approval did not cover.
 const SCENE_SHOT_EDIT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'beatNeedsReview', 'pacingCut', 'label', 'prompt', 'framePrompt', 'visualIntent',
-  'referenceImageId', 'videoHistoryId', 'endImageId', 'endFrameOff', 'codeClip', 'frameFit', 'speedFps', 'offsetFrames', 'reverse', 'holdLastFrame', 'filmLook', 'transitionIn', 'transitionOut', 'wipeIn', 'wipeOut', 'glitches', 'cutEffect',
+  'referenceImageId', 'videoHistoryId', 'endImageId', 'endFrameOff', 'codeClip', 'frameFit', 'speedFps', 'offsetFrames', 'clipLengthSec', 'clipModelId', 'reverse', 'holdLastFrame', 'filmLook', 'transitionIn', 'transitionOut', 'wipeIn', 'wipeOut', 'glitches', 'cutEffect',
   'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec', 'photoSequence', 'frameReferenceIds', 'clipReferenceIds', 'researchReferences', 'setReference', 'characterVariant', 'panelId', 'panelRev', 'panelArt', 'preMusic', 'coverage', 'lyricAnchor',
   'cameoId', 'cameoVariantId', 'cameoLabel', 'shotSheet'];
 

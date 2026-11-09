@@ -15,7 +15,7 @@ import { silentMotionPrompt } from '../../lib/musicVideoMotion.js';
 import { musicVideoCreativeContext } from '../../lib/musicVideoCreativeContext.js';
 import { musicVideoShotModelInput } from '../../lib/musicVideoShotPrompt.js';
 import { isLayeredComposition, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
-import { falSceneTake, runwaySceneTake, sceneRenderShot } from '../../lib/musicVideoShotTiming.js';
+import { clipLengthShortfall, falSceneTake, runwaySceneTake, sceneRenderShot } from '../../lib/musicVideoShotTiming.js';
 import { VIDEO_GEN_MODE } from '../videoGen/modes.js';
 
 const SONG_SAMPLE_RATE = 48000;
@@ -105,6 +105,19 @@ function captureDependencies({ body, params, scene, prepared, project }) {
   params.musicVideoDependencies = captureTakeDependencies(scene, prepared.sourceImagePath ? basename(prepared.sourceImagePath) : null, endImageId);
   if (body.mode === 'ic-ingredients-25') params.musicVideoDependencies.references.push(captureClipReferenceDependency(project, scene));
   if (prepared.audio) params.musicVideoDependencies.references.push(...prepared.audio.audioDependencies.references);
+}
+
+/**
+ * A shot with a hand-set source clip length never renders shorter: a lane or
+ * model that cannot reach it is refused with the lengths it delivers, not clamped.
+ */
+function assertClipLength({ body, scene, backend }) {
+  const modelId = backend === VIDEO_GEN_MODE.FAL ? body.falModelId : backend === VIDEO_GEN_MODE.RUNWAY ? body.runwayModelId : null;
+  const short = clipLengthShortfall(scene, backend, body, modelId);
+  if (!short) return;
+  const lengths = `This model renders ${short.supported.join(', ')} s.`;
+  throw new ServerError(`A ${short.requestedSec} s source clip is longer than this render delivers. ${lengths} Pick another model or shorten the source clip length.`,
+    { status: 422, code: 'MUSIC_VIDEO_CLIP_LENGTH_UNSUPPORTED', context: { requestedSec: short.requestedSec, supportedSec: short.supported } });
 }
 
 // The priced hosted backends: each quotes the take it would render for a scene.
@@ -225,6 +238,7 @@ export async function applyMusicVideoSubmissionGuards({ body, params, prepared, 
   applyActionContract({ params, scene, performance });
   await assertSourceAudioCurrent({ project, prepared });
   captureDependencies({ body, params, scene, prepared, project });
+  assertClipLength({ body, scene, backend });
   stampSceneTakeCost({ body, params, scene, project, performance, backend });
   return composedAdditions;
 }

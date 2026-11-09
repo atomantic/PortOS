@@ -29,7 +29,7 @@ import { withMusicVideoStyle } from './styleReferences.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { resolveGalleryImage, resolveImageInputPath } from '../../lib/pathSafety.js';
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
-import { falSceneTake, falTakeRequestFields, grokCoverage, runwaySceneTake, runwayTakeRequestFields } from '../../lib/musicVideoShotTiming.js';
+import { falSceneTake, falTakeRequestFields, grokCoverage, runwaySceneTake, runwayTakeRequestFields, shotRequestSpanSec } from '../../lib/musicVideoShotTiming.js';
 import { authoredShotPrompt, musicVideoFrameModelInput } from '../../lib/musicVideoShotPrompt.js';
 import { sceneActiveEndImageId, sceneEndFrameRequestFields } from '../../lib/musicVideoEndFrame.js';
 import { preMusicClipSound } from '../../lib/musicVideoColdOpen.js';
@@ -175,8 +175,7 @@ async function dispatchClip({ project, scene, route, tag }) {
   // The director's text; the submit service composes the rest as labeled additions (#11317).
   const prompt = authoredShotPrompt(scene);
   if (!prompt) throw unprompted(scene, 'shot');
-  const spanSec = typeof scene.startSec === 'number' && typeof scene.endSec === 'number' && scene.endSec > scene.startSec
-    ? scene.endSec - scene.startSec : null;
+  const spanSec = shotRequestSpanSec(scene);
   // The autonomous run's pilot repair names what the last clip got wrong (autonomousService.js).
   const fixes = typeof scene.clipFixes?.text === 'string' ? scene.clipFixes.text : '';
   const byBackend = {

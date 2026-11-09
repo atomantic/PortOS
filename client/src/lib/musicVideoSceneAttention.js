@@ -72,7 +72,7 @@ function performanceBlocked(scene, { lipSyncBackend, songDurationSec, videoSetti
  */
 export function sceneAttention(scene, ctx = {}) {
   if (!scene) return [];
-  const { layered = false, footageOptional = false, lipSyncBackend = '', songDurationSec = null, clipSec = null, failed = {}, songReview = null, videoSettings = null, locked = false } = ctx;
+  const { layered = false, footageOptional = false, lipSyncBackend = '', songDurationSec = null, clipSec = null, failed = {}, songReview = null, videoSettings = null, locked = false, spanExtraSec = 0 } = ctx;
   const layer = sceneVisualLayer(scene, { layered });
   const codes = [];
   if (scene.beatNeedsReview) codes.push('beat-needs-review');
@@ -85,7 +85,7 @@ export function sceneAttention(scene, ctx = {}) {
   if (layer !== 'footage' && !sceneHasAuthoredSpan(scene)) codes.push('no-span');
   if (layer === 'footage' && sceneUsesAuthoredTiming(scene) && sceneHasAuthoredSpan(scene)
     && clipNeedsMoreFootage({ loop: clipLoops(scene, selectedPerformanceInstruction(scene)?.edit),
-      holdLastFrame: scene.holdLastFrame, spanSec: scene.endSec - scene.startSec, clipSec })) codes.push('under-covered');
+      holdLastFrame: scene.holdLastFrame, spanSec: scene.endSec - scene.startSec + spanExtraSec, clipSec })) codes.push('under-covered');
   const contract = scene.direction?.actionContract;
   if (contract && shotActionContractProblem(contract, scene)) codes.push('contract-problem');
   if (layer === 'footage' && isPerformanceScene(scene) && performanceBlocked(scene, { lipSyncBackend, songDurationSec, videoSettings })) codes.push('perf-blocked');

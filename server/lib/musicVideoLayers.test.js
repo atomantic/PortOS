@@ -41,3 +41,21 @@ describe('musicVideoLayers', () => {
     expect(documentSceneVisualLayer(project, { sceneId: 'code', visualLayer: 'code' })).toBe('code');
   });
 });
+
+describe('sharedTakeExtraSec', () => {
+  const piece = (sceneId, startSec, endSec, extra = {}) => ({ sceneId, startSec, endSec, videoHistoryId: 'take-1', ...extra });
+
+  it('asks the first piece of a shared take to cover the furthest offset among the pieces', async () => {
+    const { sharedTakeExtraSec } = await import('./musicVideoLayers.js');
+    const first = piece('a', 0, 1.75);
+    const later = piece('b', 5, 7, { offsetFrames: 180 }); // starts 7.5 s into the take, plays 2 s -> 9.5 s
+    expect(sharedTakeExtraSec(first, [first, later])).toBeCloseTo(9.5 - 1.75, 5);
+    expect(sharedTakeExtraSec(later, [first, later])).toBe(0);
+  });
+
+  it('is zero for an unshared take', async () => {
+    const { sharedTakeExtraSec } = await import('./musicVideoLayers.js');
+    const first = piece('a', 0, 1.75);
+    expect(sharedTakeExtraSec(first, [first, piece('b', 5, 9, { videoHistoryId: 'other' })])).toBe(0);
+  });
+});
