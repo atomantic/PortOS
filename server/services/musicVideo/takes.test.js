@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { captureImageFrameDependencies } from '../../lib/musicVideoDependencies.js';
 import { appendSceneTakes, rejectUnusedTakes, swapSceneFrames } from './takes.js';
 import { captureClipReferenceDependency, captureMusicVideoEvidence, captureTakeDependencies } from '../../lib/musicVideoDependencies.js';
 
@@ -135,6 +136,38 @@ describe('cast inputs on a new still (#14154)', () => {
     expect(appended[0]).not.toHaveProperty('dependencies');
     expect(appended[1].castInputs).toEqual(empty);
     expect(appended[2]).not.toHaveProperty('castInputs');
+  });
+
+  it('records what a generated still was rendered for, and skips an import, a clip, and a late job', () => {
+    const project = { id: 'mv-1', scenes: [{ sceneId: 's1', framePrompt: 'Harbor at dusk', shotSheet: { location: 'Dock' } }] };
+    const { appended, scene } = appendSceneTakes(project, 's1', [
+      { kind: 'image', assetId: 'frame.png', source: 'generated' },
+      { kind: 'image', assetId: 'import.png', source: 'imported' },
+      { kind: 'video', assetId: 'clip-1', source: 'generated', sourceImageId: 'frame.png' },
+      { kind: 'endImage', assetId: 'end.png', source: 'generated' },
+      { kind: 'image', assetId: 'late.png', source: 'generated', prompt: 'Harbor at dusk, grain.', skipFrameCapture: true },
+    ]);
+    expect(appended[0].frameDependencies.version).toBe(1);
+    expect(appended[0].frameDependencies.references.map((ref) => ref.role)).toEqual(['framePrompt', 'frameCamera', 'frameLocation', 'frameCast']);
+    expect(appended[1]).not.toHaveProperty('frameDependencies');
+    expect(appended[2]).not.toHaveProperty('frameDependencies');
+    expect(appended[3].frameDependencies.references[0].assetId).toBe('end');
+    expect(appended[4]).not.toHaveProperty('frameDependencies');
+    expect(appended[4]).not.toHaveProperty('skipFrameCapture');
+    expect(scene.referenceImageId).toBe('frame.png');
+    const stale = captureImageFrameDependencies({ scenes: [{ sceneId: 's1', framePrompt: 'Old harbor' }] }, { sceneId: 's1', framePrompt: 'Old harbor' }, { slot: 'start' });
+    const empty = appendSceneTakes({ id: 'mv-1', scenes: [{ sceneId: 's1', framePrompt: 'New harbor' }] }, 's1', [
+      { kind: 'image', assetId: 'old.png', source: 'generated', frameDependencies: stale },
+    ]);
+    expect(empty.scene.referenceImageId ?? null).toBeNull();
+    const blocked = appendSceneTakes({ id: 'mv-1', scenes: [{ sceneId: 's1', framePrompt: 'New harbor', referenceImageId: 'old.png' }] }, 's1', [
+      { kind: 'image', assetId: 'old.png', source: 'generated', frameDependencies: stale },
+      { kind: 'video', assetId: 'old-clip', source: 'generated', sourceImageId: 'old.png' },
+    ]);
+    const saved = blocked.project.scenes[0];
+    expect(saved.referenceImageId).toBe('old.png');
+    expect(saved.videoHistoryId ?? null).toBeNull();
+    expect(saved.takes.find((take) => take.assetId === 'old-clip').dependencyState.reasons).toContain('Frame prompt changed');
   });
 
   // Uniquely catches a one-tap re-render leaving the previous still selected, or a normal completion replacing it.

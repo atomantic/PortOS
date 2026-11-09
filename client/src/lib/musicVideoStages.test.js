@@ -731,6 +731,9 @@ describe('stepNotes', () => {
     expect(stepNotes(project, stills).produce).toMatch(/^To do: Timed storyboard/);
     const done = { ...locked, storyboard: { ...locked.storyboard, clipLocks: { s1: 'locked', s2: 'locked', s3: 'locked' }, clipsUnlocked: [] } };
     expect(stepNotes(project, done).produce).toBe('3 of 3 shots have their picture');
+    const stale = scene({ takes: [{ kind: 'image', assetId: scene().referenceImageId, dependencyState: { status: 'stale', reasons: ['Frame prompt changed'] } }] });
+    expect(stepNotes({ ...project, scenes: [stale, scene({ sceneId: 's2' }), scene({ sceneId: 's3' })] }, done).produce)
+      .toBe('3 of 3 shots have their picture · 1 frame out of date');
   });
 });
 

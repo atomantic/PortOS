@@ -26,10 +26,19 @@ describe('selectedFrameOutdated', () => {
     const built = scene({ shotSheet: { promptFromSheet: true, emotion: 'Scared' } });
     expect(selectedFrameOutdated({ ...built, takes: [take('Ada rides away at dusk\nEmotion: Scared.')] })).toBe(false);
     expect(selectedFrameOutdated({ ...built, takes: [take('Ada rides away at dusk\nEmotion: Playful.')] })).toBe(true);
+    // A snapshot that still matches camera and place must not hide an edited sheet line.
+    expect(selectedFrameOutdated({ ...built, takes: [{ ...take('Ada rides away at dusk\nEmotion: Playful.'), dependencyState: { status: 'current', reasons: [] } }] })).toBe(true);
   });
   // Catches an imported frame with no recorded prompt being reported as outdated.
   it('can\'t judge a frame with no recorded prompt', () => {
     expect(selectedFrameOutdated(scene({ takes: [take(null)] }))).toBe(false);
+  });
+
+  it('shows a recorded camera change even when the composed prompt still contains the shot text', () => {
+    const recorded = scene({ takes: [{ ...take('Style. Ada rides away at dusk, grain.'), dependencyState: { status: 'stale', reasons: ['Camera changed'] } }] });
+    const row = shotSheetRows({ scenes: [recorded] })[0];
+    expect(row.frameOutdated).toBe(true);
+    expect(row.frameOutdatedReasons).toEqual(['Camera changed']);
   });
 });
 

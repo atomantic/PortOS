@@ -66,6 +66,9 @@ const hook = createMediaJobImageHook({
       prompt: effectiveJobPrompt(job),
       // Copied from the submit, not recomputed: a long render can finish after Casting changes.
       ...(tag.castInputs ? { castInputs: tag.castInputs } : {}),
+      // Submit-time stamp, or an explicit skip so a late completion does not
+      // snapshot the shot after its prompt has already been rewritten.
+      ...(tag.frameDependencies ? { frameDependencies: tag.frameDependencies } : { skipFrameCapture: true }),
       ...(tag.replaceSelection === true ? { replaceSelection: true } : {}),
       ...(tag.expectedSelection !== undefined ? { expectedSelection: tag.expectedSelection } : {}),
       ...(typeof tag.stillRepairAt === 'string' ? { stillRepairAt: tag.stillRepairAt } : {}),
