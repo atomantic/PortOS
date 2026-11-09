@@ -69,11 +69,30 @@ export function worldSetFootprint(greybox) {
   if (!parts.length) return { x: -SET_SIZE / 2, z: -SET_SIZE / 2, w: SET_SIZE, d: SET_SIZE };
   let minX = Infinity; let maxX = -Infinity; let minZ = Infinity; let maxZ = -Infinity;
   for (const part of parts) {
-    const [w, , d] = part.type === 'plane' ? [part.size[0], 0, part.size[1]] : part.size;
-    minX = Math.min(minX, part.position[0] - w / 2); maxX = Math.max(maxX, part.position[0] + w / 2);
-    minZ = Math.min(minZ, part.position[2] - d / 2); maxZ = Math.max(maxZ, part.position[2] + d / 2);
+    for (const [x, , z] of partCorners(part)) {
+      minX = Math.min(minX, x); maxX = Math.max(maxX, x);
+      minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z);
+    }
   }
   return { x: minX, z: minZ, w: Math.max(2, maxX - minX), d: Math.max(2, maxZ - minZ) };
+}
+
+// A box's or plane's corners in its greybox, turned as the viewer draws it
+// (three.js 'XYZ' Euler). A plane lies flat until turned, so a backdrop stood
+// upright covers only its width on the ground, not its height.
+function partCorners(part) {
+  const [w, h, d] = part.type === 'plane' ? [part.size[0], 0, part.size[1]] : part.size;
+  const [rx, ry, rz] = (part.rotationDegrees || [0, 0, 0]).map((deg) => (deg * Math.PI) / 180);
+  const [px, py, pz] = part.position || [0, 0, 0];
+  const corners = [];
+  for (const sx of [-0.5, 0.5]) for (const sy of [-0.5, 0.5]) for (const sz of [-0.5, 0.5]) {
+    let [x, y, z] = [sx * w, sy * h, sz * d];
+    [x, y] = [x * Math.cos(rz) - y * Math.sin(rz), x * Math.sin(rz) + y * Math.cos(rz)];
+    [x, z] = [x * Math.cos(ry) + z * Math.sin(ry), -x * Math.sin(ry) + z * Math.cos(ry)];
+    [y, z] = [y * Math.cos(rx) - z * Math.sin(rx), y * Math.sin(rx) + z * Math.cos(rx)];
+    corners.push([px + x, py + y, pz + z]);
+  }
+  return corners;
 }
 
 // How far a set placed at the origin with `rotationDegrees` reaches along world direction `dir`: [min, max].

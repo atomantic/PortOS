@@ -136,7 +136,7 @@ export default function PrevizAi({ project, world, worldId, places, previz, disa
                   </ul>
                 )}
                 {key === 'world' && (
-                  <div className="max-w-sm"><WorldMap world={proposal.world} places={places} view={fitWorldView(proposal.world, places)} onView={() => {}} /></div>
+                  <div className="max-w-sm"><WorldMap world={proposal.world} places={places} view={fitWorldView(proposal.world)} onView={() => {}} /></div>
                 )}
               </li>
             ))}

@@ -251,7 +251,7 @@ function CameraStyles({ cameras, onChange }) {
 function CutOnTimeline({ project, cut, world, worldPlaces, onChange }) {
   const timeline = previzTimeline(project);
   const [picking, setPicking] = useState(false);
-  const { view, setView } = useWorldMapView(world, worldPlaces);
+  const { view, setView } = useWorldMapView(world);
   const id = `mv-previz-${cut.id}-story`;
   const on = Number.isFinite(cut.storyMin);
   const spotActors = () => {

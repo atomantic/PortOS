@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { draftWorldFromRouteMaps, worldFill, worldSkyAt } from './worldMap.js';
+import { draftWorldFromRouteMaps, worldFill, worldSetFootprint, worldSkyAt } from './worldMap.js';
 import { worldMapSchema } from './worldMapValidation.js';
 
 const idMaker = () => { let n = 0; return () => `t${++n}`; };
@@ -137,4 +137,13 @@ it('spaces route stops by their greyboxes so big sets never overlap', () => {
   const by = Object.fromEntries(spaced.sets.map((set) => [set.ingredientId, set.position]));
   // Now 300 m runs along the road: the next set starts 20 m past the last one's far edge.
   expect(by['cat-mall'][0] - by['cat-home'][0]).toBe(320);
+});
+
+// Catches an upright backdrop plane (or a turned box) counted by its height as ground depth, which blows a set's footprint up.
+it('measures a set footprint from its parts as they are turned', () => {
+  const backdrop = { type: 'plane', position: [0, 20, -10], rotationDegrees: [90, 0, 0], size: [40, 300] };
+  const wall = { type: 'box', position: [0, 0, 0], rotationDegrees: [0, 90, 0], size: [20, 3, 2] };
+  const box = worldSetFootprint({ parts: [backdrop, wall] });
+  expect(box.w).toBeCloseTo(40);
+  expect(box.d).toBeCloseTo(20);
 });
