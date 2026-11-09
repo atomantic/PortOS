@@ -1135,6 +1135,39 @@ describe('a still picture in the clip column', () => {
     fireEvent.change(change, { target: { value: '1' } });
     expect(onSave).toHaveBeenLastCalledWith('s1', { imageEffectSec: 1 });
   });
+
+  it('shows Use end frame on a still with an end-frame effect and plays the start frame when it is off', () => {
+    const onSave = vi.fn();
+    function Harness() {
+      const [scene, setScene] = useState({
+        sceneId: 's1', startSec: 0, endSec: 3, visualLayer: 'still', imageEffect: 'end-flash',
+        referenceImageId: 'start.png', endImageId: 'end.png', endFramePrompt: 'Door shut', takes: [],
+      });
+      return <SceneCard scene={scene} index={0} layered onGenerateEndFrame={() => {}}
+        onEditLocal={(_id, patch) => setScene((current) => ({ ...current, ...patch }))} onSave={onSave} />;
+    }
+    const { unmount } = render(<Harness />);
+    expect(screen.queryByRole('checkbox', { name: 'Use end frame' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Frames' }));
+    const toggle = screen.getByRole('checkbox', { name: 'Use end frame' });
+    expect(toggle.checked).toBe(true);
+    expect(screen.getByRole('textbox', { name: 'End frame prompt' })).toBeTruthy();
+    fireEvent.click(toggle);
+    expect(onSave).toHaveBeenLastCalledWith('s1', { endFrameOff: true });
+    expect(screen.queryByRole('textbox', { name: 'End frame prompt' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Picture' }));
+    expect(screen.getByText('Use end frame is off, so this shot plays its start frame only.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Frames' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Use end frame' }));
+    expect(onSave).toHaveBeenLastCalledWith('s1', { endFrameOff: null });
+    expect(screen.getByRole('textbox', { name: 'End frame prompt' }).value).toBe('Door shut');
+    unmount();
+
+    render(<SceneCard scene={{ sceneId: 's1', startSec: 0, endSec: 3, visualLayer: 'still', imageEffect: 'flash-develop', referenceImageId: 'start.png', endImageId: 'end.png', takes: [] }}
+      index={0} layered onGenerateEndFrame={() => {}} onEditLocal={() => {}} onSave={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Still' }));
+    expect(screen.queryByRole('checkbox', { name: 'Use end frame' })).toBeNull();
+  });
 });
 
 describe('clip speed and offset by hand', () => {

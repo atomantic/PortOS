@@ -367,8 +367,9 @@ export default function SceneCard({
   // A composed still shows its picture (the still, or the still playing its image effect) in place of a clip.
   const stillPicture = layered && layer === 'still';
   // A footage shot's start and end frames show as a pair, the end frame optional; an effect
-  // from the start frame to the end frame needs both.
-  const endFrames = Boolean(onGenerateEndFrame) && (layer === 'footage' || (stillPicture && isEndFrameImageEffect(scene.imageEffect)));
+  // from the start frame to the end frame needs both, and the same Use end frame switch.
+  const endFrameEffect = stillPicture && isEndFrameImageEffect(scene.imageEffect);
+  const endFrames = Boolean(onGenerateEndFrame) && (layer === 'footage' || endFrameEffect);
   // The editor shows one picture at a time: the frames, or the clip (the still stands in until it has one).
   // A shot that leads with Clip from storyboard opens on the clip, where that action lives.
   const [view, setView] = useState(() => (scene.videoHistoryId || scene.referenceImageId || stillPicture || storyboardDefault ? 'clip' : 'frames'));
@@ -697,7 +698,7 @@ export default function SceneCard({
         {/* Frames: the still this shot starts from and, optionally, the one it ends on (#11173),
             each with its prompt and Render under it, then the tapped frame's takes. */}
         <div hidden={view !== 'frames'}>
-        <SceneFrames project={project} castMedia={castMedia} onReloadCastMedia={onReloadCastMedia} greyboxPlaces={greyboxPlaces} greyboxSaving={greyboxSaving} onGreyboxSaving={setGreyboxSaving} scene={scene} index={index} endFrames={endFrames} endFrameToggle={layer === 'footage'} generatingFrame={!!generatingFrame} generatingEndFrame={!!generatingEndFrame}
+        <SceneFrames project={project} castMedia={castMedia} onReloadCastMedia={onReloadCastMedia} greyboxPlaces={greyboxPlaces} greyboxSaving={greyboxSaving} onGreyboxSaving={setGreyboxSaving} scene={scene} index={index} endFrames={endFrames} endFrameToggle={layer === 'footage' || endFrameEffect} generatingFrame={!!generatingFrame} generatingEndFrame={!!generatingEndFrame}
           onGenerateFrame={onGenerateFrame} onGenerateEndFrame={onGenerateEndFrame} onImageTargetChange={onFrameImageTarget} onEditLocal={onEditLocal} onSave={onSave}
           onOpenPreview={onOpenPreview} takeBusy={takeBusy} onSelectTake={onSelectTake} onReviewTake={onReviewTake}
           onSwap={onPlacePoolItem ? setSwapKind : null} onSwapFrames={onSwapFrames ? () => onSwapFrames(scene) : null} onImportTake={onImportTake}

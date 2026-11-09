@@ -411,6 +411,20 @@ describe('composition document staging', () => {
     expect(browser.seen.initScripts.some(script => script.includes('__portosMusicVideoGlitch'))).toBe(true);
   });
 
+  it('keeps the start still when Use end frame is off', async () => {
+    const { project, plan } = await fixture();
+    await writeFile(join(PATHS.images, 'end.png'), 'end-image');
+    Object.assign(project.scenes[1], {
+      videoHistoryId: 'vh-a', imageEffect: 'end-flash', imageEffectSec: 1, endImageId: 'end.png', endFrameOff: true,
+    });
+    await expect(encode(project, plan, 'job-end-off')).rejects.toThrow('stop after staging');
+    const scene = browser.seen.data.scenes.find(item => item.sceneId === 'b');
+    expect(scene.imageEffect).toBeNull();
+    expect(scene.media).toMatchObject({ kind: 'image', src: 'media/scene-b.png' });
+    expect(scene.media).not.toHaveProperty('end');
+    expect(browser.seen.data.effectFrames).toEqual([]);
+  });
+
   it.each([null, 'missing.png'])('keeps the start still when an end frame is absent or missing (%s)', async endImageId => {
     const { project, plan } = await fixture();
     Object.assign(project.scenes[1], { videoHistoryId: 'vh-a', imageEffect: 'end-glitch', endImageId });

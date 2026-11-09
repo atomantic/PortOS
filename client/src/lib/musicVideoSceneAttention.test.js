@@ -51,6 +51,7 @@ describe('sceneAttention', () => {
       takes: [{ takeId: 'v2', kind: 'video', assetId: 'old', status: 'candidate' }, { takeId: 'e1', kind: 'endImage', assetId: 'e.png', status: 'candidate' }] };
     expect(sceneAttention(still, { layered: true })).toEqual([]);
     expect(sceneAttention({ ...still, imageEffect: 'end-fade' }, { layered: true })).toEqual(['candidates-pending']);
+    expect(sceneAttention({ ...still, imageEffect: 'end-fade', endFrameOff: true }, { layered: true })).toEqual([]);
     expect(sceneAttention({ ...still, takes: [...still.takes, { takeId: 'i2', kind: 'image', assetId: 'g.png', status: 'candidate' }] }, { layered: true }))
       .toEqual(['candidates-pending']);
   });

@@ -702,7 +702,7 @@ function selectedEffectShots(project) {
   const generated = project.composition?.document?.source?.kind === 'generated';
   const imageExists = id => isTopLevelEntryName(id) && !id.includes('..') && existsSync(join(PATHS.images, id));
   const eligibleEnd = scenes.filter(scene => Number.isFinite(scene?.startSec) && scene?.visualLayer === 'still' && isEndFrameImageEffect(scene.imageEffect)
-    && scene.endImageId && documentSceneVisualLayer(project, scene, { generated }) === 'still').filter(scene => {
+    && scene.endFrameOff !== true && scene.endImageId && documentSceneVisualLayer(project, scene, { generated }) === 'still').filter(scene => {
     const sequence = scenePhotoSequence(scene);
     return imageExists(scene.endImageId) && (sequence ? sequence.imageIds.length > 0 && sequence.imageIds.every(imageExists) : imageExists(scene.referenceImageId));
   });
