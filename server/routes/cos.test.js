@@ -1400,7 +1400,11 @@ describe('CoS Routes', () => {
           optionalReviewers: ['codex'],
           // Per-reviewer `~max=<n>` caps ride along; `ollama` isn't in the list
           // but stays in the map (the emitter only marks tokens it emits).
-          reviewerMaxRounds: { codex: 2, ollama: 1 }
+          reviewerMaxRounds: { codex: 2, ollama: 1 },
+          // A `#412` forge target is verified before queueing, and its title is
+          // not epic-shaped, so the compact (server-provisioned) prompt is built.
+          preverified: true,
+          nonEpic: true,
         }
       );
       const [taskData] = addTask.mock.calls.at(-1);

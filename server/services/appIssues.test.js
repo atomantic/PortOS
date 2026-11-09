@@ -23,7 +23,7 @@ vi.mock('../lib/fileUtils.js', () => ({
 }));
 
 import { homedir } from 'os';
-import { fileForgeIssue, listAppIssues, prepareAppIssueClaim, probeForgeReachability, scrubForgeIssueText } from './appIssues.js';
+import { fileForgeIssue, listAppIssues, markAppIssueClaimed, prepareAppIssueClaim, probeForgeReachability, scrubForgeIssueText } from './appIssues.js';
 import { execGh } from './github.js';
 import { execGlab, execGlabJson } from './gitlab.js';
 import { getOriginInfo, readOriginRemoteUrl } from '../lib/gitRemote.js';
@@ -475,8 +475,16 @@ describe('prepareAppIssueClaim', () => {
 
   it('does not mutate an eligible issue without contributor labels', async () => {
     execGh.mockResolvedValueOnce(issue()).mockResolvedValueOnce(prs({ headRefName: 'feature', body: 'Refs #42; Closes #420', commits: [] }));
-    await prepareAppIssueClaim(APP, '42', 'github');
+    await expect(prepareAppIssueClaim(APP, '42', 'github')).resolves.toEqual({ epic: false });
     expect(execGh).toHaveBeenCalledTimes(2);
+  });
+
+  // An epic ships a child under the child's branch, so its claim must not get
+  // a server-provisioned checkout for the epic's own number (#15517).
+  it('reports an epic so its claim keeps the agent-cut checkout', async () => {
+    execGh.mockResolvedValueOnce(issue([{ name: 'Epic' }, { name: 'help wanted' }])).mockResolvedValueOnce(prs())
+      .mockResolvedValueOnce('').mockResolvedValueOnce(issue([{ name: 'Epic' }]));
+    await expect(prepareAppIssueClaim(APP, '42', 'github')).resolves.toEqual({ epic: true });
   });
 
   it('uses GitLab and preserves unrelated labels', async () => {
@@ -664,5 +672,33 @@ describe('scrubForgeIssueText', () => {
   it('leaves ordinary prose and repo-relative paths untouched', () => {
     const body = 'server/services/sync.js drops job 4f2a on retry.';
     expect(scrubForgeIssueText(body)).toBe(body);
+  });
+});
+
+describe('markAppIssueClaimed', () => {
+  it('assigns this account and applies in-progress on GitHub', async () => {
+    await markAppIssueClaimed(APP, '42');
+    const calls = execGh.mock.calls.map(([args]) => args);
+    expect(calls[0].slice(0, 3)).toEqual(['label', 'create', 'in-progress']);
+    expect(calls.slice(1)).toEqual([
+      ['issue', 'edit', '42', '--repo', 'github.com/acme/widget', '--add-assignee', '@me'],
+      ['issue', 'edit', '42', '--repo', 'github.com/acme/widget', '--add-label', 'in-progress'],
+    ]);
+  });
+
+  it('still applies the label when the assignment fails, then reports what is missing', async () => {
+    execGh.mockResolvedValueOnce('').mockRejectedValueOnce(new Error('not a collaborator')).mockResolvedValueOnce('');
+    await expect(markAppIssueClaimed(APP, '42')).rejects.toThrow('could not set assignee');
+    expect(execGh).toHaveBeenLastCalledWith(['issue', 'edit', '42', '--repo', 'github.com/acme/widget', '--add-label', 'in-progress'], undefined, expect.any(Object));
+  });
+
+  it('assigns the GitLab username rather than @me', async () => {
+    useGitlabOrigin();
+    execGlab.mockResolvedValueOnce(JSON.stringify({ username: 'alice' })).mockResolvedValue('');
+    await markAppIssueClaimed(APP, '42');
+    const calls = execGlab.mock.calls.map(([args]) => args);
+    expect(calls).toContainEqual(['issue', 'update', '42', '--assignee', 'alice']);
+    expect(calls).toContainEqual(['issue', 'update', '42', '--label', 'in-progress']);
+    expect(execGh).not.toHaveBeenCalled();
   });
 });

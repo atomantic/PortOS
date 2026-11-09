@@ -16,6 +16,8 @@ vi.mock('./agentPromptBuilder.js', () => ({ getAppWorkspace: vi.fn() }));
 vi.mock('./instanceIdentity.js', () => ({ ensureInstanceId: vi.fn() }));
 vi.mock('./appActivity.js', () => ({ releaseAppReviewMarker: vi.fn() }));
 vi.mock('./swarmCleanupDelivery.js', () => ({ validCleanupRefillSource }));
+const removeWorktree = vi.hoisted(() => vi.fn(async () => ({ removed: true })));
+vi.mock('./worktreeManager.js', () => ({ removeWorktree }));
 
 import { prepareAgentSpawn, createAgentSpawnContext } from './agentSpawnPreparation.js';
 import { cosEvents, emitLog } from './cosEvents.js';
@@ -96,5 +98,18 @@ describe('createAgentSpawnContext — failed bookkeeping writes', () => {
     expect(emitLog).toHaveBeenCalledWith('warn', expect.stringContaining('Failed to release claim for task task-9: store down'), { taskId: 'task-9' });
     expect(release).toHaveBeenCalledWith('agent-9');
     expect(cosEvents.emit).toHaveBeenCalledWith('agent:error', expect.objectContaining({ taskId: 'task-9' }));
+  });
+});
+
+describe('cleanupOnError — a server-provisioned claim checkout (#15517)', () => {
+  it('removes the unused claim directory and its fresh branch by path, once', async () => {
+    const context = createAgentSpawnContext({ id: 'task-claim', taskType: 'user', metadata: {} });
+    context.agentId = 'agent-claim';
+    context.spawnClaimCheckout = { repoPath: '/repos/example', worktreePath: '/worktrees/claim-example-issue-42', branchName: 'claim/issue-42', baseBranch: 'main' };
+    await context.cleanupOnError('spawn failed');
+    await context.cleanupOnError('spawn failed again');
+    expect(removeWorktree).toHaveBeenCalledTimes(1);
+    expect(removeWorktree).toHaveBeenCalledWith('/repos/example', '/worktrees/claim-example-issue-42',
+      { branchName: 'claim/issue-42', deleteBranch: true, force: true });
   });
 });

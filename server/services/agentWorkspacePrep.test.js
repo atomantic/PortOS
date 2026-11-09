@@ -66,6 +66,11 @@ vi.mock('./worktreeManager.js', async (importOriginal) => ({
   listWorktrees: vi.fn().mockResolvedValue([]),
   mergeBaseIntoFeatureWorktree: vi.fn().mockResolvedValue(undefined),
 }));
+const provisionClaimCheckoutMock = vi.hoisted(() => vi.fn());
+vi.mock('./claimCheckoutProvision.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  provisionClaimCheckout: (...args) => provisionClaimCheckoutMock(...args),
+}));
 vi.mock('./agentAppWorkspace.js', () => ({
   getAppWorkspace: vi.fn().mockResolvedValue('/repos/app-x'),
   getAppDataForTask: vi.fn().mockResolvedValue(null),
@@ -192,6 +197,38 @@ describe('prepareAgentWorkspace', () => {
     expect(r.explicitWorktree).toBe(true);
     expect(ensureLatest).not.toHaveBeenCalled();
     expect(createWorktree).toHaveBeenCalled();
+  });
+
+  describe('a pinned forge claim whose prompt omits the checkout phase (#15517)', () => {
+    const claimTask = () => ({ id: 't-claim', taskType: 'user', metadata: { claimFlow: true, claimTarget: '42', claimServerCheckout: true } });
+
+    it('runs the agent in the claim checkout PortOS cut, without pulling the shared checkout', async () => {
+      const claimCheckout = { repoPath: '/repos/app-x', worktreePath: '/mock/worktrees/claim-app-x-issue-42', branchName: 'claim/issue-42', baseBranch: 'main' };
+      provisionClaimCheckoutMock.mockResolvedValueOnce({ claimCheckout });
+      const r = await prepareAgentWorkspace({ agentId: 'agent-claim', task: claimTask() });
+      expect(provisionClaimCheckoutMock).toHaveBeenCalledWith(expect.objectContaining({ sourceWorkspace: expect.any(String), branch: 'claim/issue-42' }));
+      expect(r).toMatchObject({ outcome: 'ready', workspacePath: claimCheckout.worktreePath, worktreeInfo: null, claimCheckout });
+      expect(ensureLatest).not.toHaveBeenCalled();
+      expect(createWorktree).not.toHaveBeenCalled();
+    });
+
+    it('blocks the task when the checkout cannot be cut, rather than running in the source checkout', async () => {
+      provisionClaimCheckoutMock.mockResolvedValueOnce({ refused: 'claim/issue-42 already exists on origin' });
+      const r = await prepareAgentWorkspace({ agentId: 'agent-claim', task: claimTask() });
+      expect(r.outcome).toBe('blocked');
+      expect(updateTask).toHaveBeenCalledWith('t-claim', expect.objectContaining({
+        status: 'blocked', metadata: expect.objectContaining({ blockedCategory: 'worktree-failed', blockedReason: expect.stringContaining('already exists on origin') }),
+      }), 'user');
+    });
+
+    it('leaves an unflagged claim to cut its own checkout', async () => {
+      ensureLatest.mockResolvedValue({ success: true, upToDate: true });
+      const task = claimTask();
+      delete task.metadata.claimServerCheckout;
+      const r = await prepareAgentWorkspace({ agentId: 'agent-claim', task });
+      expect(provisionClaimCheckoutMock).not.toHaveBeenCalled();
+      expect(r).toMatchObject({ outcome: 'ready', claimCheckout: null });
+    });
   });
 
   describe('worktree isolation flags', () => {

@@ -326,6 +326,20 @@ run's completion releases everything; quiet diffs, cwd, or a missing basename
 never do. Bindings live on the run record (a `cos_agents` row) — no new
 store or migration; records without them keep their previous behavior.
 
+A manual `/do:next` claim pinned to one non-epic GitHub/GitLab issue skips the
+agent-run checkout phase (#15517). When the claim is queued, the issue is
+verified and the task is marked `claimServerCheckout`. At spawn,
+`server/services/claimCheckoutProvision.js` fetches the default branch and cuts
+`claim/issue-<n>` into the usual `claim-<app>-issue-<n>` directory, then links
+dependencies. That spawn refuses (blocking the task) when the branch or
+directory already exists locally or on origin. Once the run is registered, the
+dispatch binds the branch through the same ownership service and sets the
+assignee and `in-progress` markers. The agent starts with that checkout as its
+cwd, and its prompt replaces Phase 2 with a verification step. The run is still
+registered as a claim run (its source repository as `sourceWorkspace`), so
+continuation and claim cleanup treat the checkout like one the agent cut. A
+spawn that fails before launch removes the unused checkout and branch.
+
 branch-reconcile applies the same owners twice: its scan holds a branch with a
 live, possible or unreadable claim owner (never dispatched as `ABANDONED_WIP`,
 never retired by cleanup), and each dispatched branch carries a `check` command

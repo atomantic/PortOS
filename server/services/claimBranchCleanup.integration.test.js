@@ -161,6 +161,21 @@ describe('claim coordinator cleanup', () => {
     if (remote === 'present') expect(await remoteRef()).toContain(`refs/heads/${branch}`);
   });
 
+  // A server-provisioned claim (#15517) runs inside this checkout, so its own
+  // completion sentinel is the one untracked file a clean stand-down leaves.
+  it('removes a clean stand-down that holds only this run\'s completion sentinel', async () => {
+    await execGit(['reset', '--hard', 'origin/main'], checkout);
+    head = (await execGit(['rev-parse', 'HEAD'], checkout)).stdout.trim();
+    const identity = await readCompletedCheckoutIdentity({ repoPath: sandbox.repo, branch, path: checkout, head });
+    fixture.agent.metadata.completedCheckouts = [{ version: 1, agentId: id, startedAt: start, capturedAt: end, ...identity }];
+    fixture.probe = { readable: true, prState: null };
+    await execGit(['push', 'origin', `:refs/heads/${branch}`], sandbox.repo);
+    await writeFile(join(checkout, `.agent-done-${id}`), '{}\n');
+    expect(await run()).toEqual([]);
+    expect(existsSync(checkout)).toBe(false);
+    expect((await localRef()).exitCode).toBe(1);
+  });
+
   it.each(['active owner', 'changed head', 'locked checkout', 'unmerged work', 'different merged head'])('preserves %s', async scenario => {
     if (scenario === 'active owner') fixture.owners = [{ id: 'other', status: 'running', metadata: { sourceWorkspace: sandbox.repo, claimBranches: [branch] } }];
     if (scenario === 'changed head') {
