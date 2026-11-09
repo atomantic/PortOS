@@ -3,7 +3,6 @@
 // and slot still sends the references the card would.
 
 import { ServerError } from '../../lib/errorHandler.js';
-import { musicVideoFrameGenSize } from '../../lib/musicVideoAspect.js';
 import { musicVideoClipConditioningReferences } from '../../lib/musicVideoConditioning.js';
 import { preMusicClipSound } from '../../lib/musicVideoColdOpen.js';
 import { sceneEndFrameRequestFields } from '../../lib/musicVideoEndFrame.js';
@@ -14,7 +13,7 @@ import {
   runwaySceneTake, runwayTakeRequestFields, sceneRenderShot, shotRequestSpanSec,
 } from '../../lib/musicVideoShotTiming.js';
 import { loraFamilyOf, VIDEO_LORA_FAMILIES } from '../../lib/runners.js';
-import { resolveCardFrameRender } from './sceneFrameReferences.js';
+import { buildSceneFrameGenerateBody } from './sceneFrameReferences.js';
 
 const LTX_REFERENCES_MODE = 'ltxReferences';
 const LTX_IC_MODE = 'ic-ingredients-25';
@@ -24,45 +23,6 @@ const grokSceneRequestDuration = (scene, settings, target = null) => {
   const span = shotRequestSpanSec(scene);
   return target?.grokDuration || (span != null ? grokCoverage(span).requestSec : settings?.grokDuration);
 };
-
-function explicitImageRequest(imageTarget) {
-  if (!imageTarget?.mode) return {};
-  const request = { mode: imageTarget.mode };
-  if (imageTarget.modelId) request.modelId = imageTarget.modelId;
-  if (imageTarget.cloudModel) request.cloudModel = imageTarget.cloudModel;
-  return request;
-}
-
-/** The image-gen body the shot card used to build in the browser. */
-export async function buildSceneFrameGenerateBody(project, scene, input = {}) {
-  const slot = input.slot === 'end' ? 'end' : 'start';
-  const resolved = await resolveCardFrameRender(project, scene, {
-    slot, referenceImageId: input.referenceImageId || null, refine: input.refine || null, fromFrame: input.fromFrame === true,
-  });
-  const selected = slot === 'end' ? scene.endImageId : scene.referenceImageId;
-  return {
-    ...explicitImageRequest(input.imageTarget),
-    prompt: resolved.prompt,
-    ...musicVideoFrameGenSize(project),
-    ...(resolved.referenceImageFiles.length ? { referenceImageFiles: resolved.referenceImageFiles } : {}),
-    musicVideo: {
-      ...(project.castAndSets?.catalogCheckin?.basis ? { catalogBasis: project.castAndSets.catalogCheckin.basis } : {}),
-      projectId: project.id,
-      sceneId: scene.sceneId,
-      compose: true,
-      castInputs: resolved.castInputs,
-      ...(slot === 'end' ? { slot: 'end' } : {}),
-      ...(input.revisionId ? { revisionId: input.revisionId } : {}),
-      ...(input.select ? { replaceSelection: true, expectedSelection: selected || null } : {}),
-      ...(input.thenClip ? { thenClip: input.thenClip } : {}),
-      ...(resolved.greybox?.reference ? { greyboxImageId: resolved.greybox.reference.imageId } : {}),
-      ...(resolved.greybox?.blocking ? { greyboxBlockingImageId: resolved.greybox.blocking.imageId } : {}),
-      ...(resolved.leadImageId ? { leadImageId: resolved.leadImageId } : {}),
-      ...(resolved.refine ? { refine: true } : resolved.fromFrame ? { fromFrame: true } : {}),
-    },
-    castInputs: resolved.castInputs,
-  };
-}
 
 function sceneOrThrow(project, sceneId) {
   const scene = project?.scenes?.find((entry) => entry.sceneId === sceneId);
@@ -190,7 +150,7 @@ async function buildShortClipBody(project, scene, input) {
 }
 
 /** Fill LTX ingredient files the caller left out, from the shot's current picks. */
-export async function ensureSceneClipReferences(body, project, scene) {
+async function ensureSceneClipReferences(body, project, scene) {
   if (body.mode !== LTX_IC_MODE || (Array.isArray(body.icReferenceImageFiles) && body.icReferenceImageFiles.length)) return body;
   const { loadSceneCastMedia } = await import('./castGuideMedia.js');
   const castMedia = await loadSceneCastMedia(scene, { project });
@@ -206,7 +166,7 @@ export async function ensureSceneClipReferences(body, project, scene) {
   };
 }
 
-export async function buildSceneClipSubmission(project, scene, input = {}) {
+async function buildSceneClipSubmission(project, scene, input = {}) {
   const body = preparedClipBody(input) ? {
     ...input,
     musicVideo: {

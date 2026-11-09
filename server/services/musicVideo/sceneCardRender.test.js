@@ -24,7 +24,7 @@ vi.mock('../universeBuilder/crud.js', () => ({ getUniverseRenderPin: vi.fn(async
 vi.mock('../storyboards/index.js', () => ({ getStoryboard: vi.fn(async () => null) }));
 
 const { prepareGenerateParams } = await import('../imageGen/prepareParams.js');
-const { buildSceneFrameGenerateBody } = await import('./sceneCardRender.js');
+const { buildSceneFrameGenerateBody } = await import('./sceneFrameReferences.js');
 const { musicVideoLinkedReferenceId } = await import('../../lib/musicVideoConditioning.js');
 const { validateRequest } = await import('../../lib/validation.js');
 const { musicVideoSceneClipRenderSchema, musicVideoSceneClipsRenderSchema } = await import('../../lib/musicVideoValidation.js');

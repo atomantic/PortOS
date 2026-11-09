@@ -2,6 +2,7 @@
 // The card, prompt preview and POST /image-gen/generate share this set, so a
 // caller that only has the project JSON cannot drop a picked cast sheet.
 
+import { musicVideoFrameGenSize } from '../../lib/musicVideoAspect.js';
 import { castInputsFromReferences } from '../../lib/musicVideoCastLook.js';
 import {
   MUSIC_VIDEO_MAX_REFERENCE_CHOICES,
@@ -15,7 +16,7 @@ import { shotActionContractProblem } from '../../lib/musicVideoActionContract.js
 
 export const FRAME_REFERENCE_UNAVAILABLE = 'A reference picked for this shot is unavailable. Try again, or use Back to auto on its References row.';
 
-export function refuseMissingFrameReference() {
+function refuseMissingFrameReference() {
   throw new ServerError(FRAME_REFERENCE_UNAVAILABLE, { status: 409, code: 'MUSIC_VIDEO_FRAME_REFERENCE_MISSING' });
 }
 
@@ -24,7 +25,7 @@ export function refuseMissingFrameReference() {
  * files (lead frame, then the shot's picks, including a live greybox plate)
  * and the cast inputs those files record.
  */
-export async function resolveCardFrameRender(project, scene, { slot = 'start', referenceImageId = null, refine = null, fromFrame = false } = {}) {
+async function resolveCardFrameRender(project, scene, { slot = 'start', referenceImageId = null, refine = null, fromFrame = false } = {}) {
   const end = slot === 'end';
   const lead = referenceImageId || ((fromFrame || end) ? scene?.referenceImageId || null : null);
   const refining = Boolean(typeof refine === 'string' && refine.trim() && lead);
@@ -55,5 +56,44 @@ export async function resolveCardFrameRender(project, scene, { slot = 'start', r
     fromFrame: Boolean(!refining && lead && (fromFrame || end || referenceImageId)),
     refine: refining,
     leadImageId: lead,
+  };
+}
+
+function explicitImageRequest(imageTarget) {
+  if (!imageTarget?.mode) return {};
+  const request = { mode: imageTarget.mode };
+  if (imageTarget.modelId) request.modelId = imageTarget.modelId;
+  if (imageTarget.cloudModel) request.cloudModel = imageTarget.cloudModel;
+  return request;
+}
+
+/** The image-gen body the shot card used to build in the browser. */
+export async function buildSceneFrameGenerateBody(project, scene, input = {}) {
+  const slot = input.slot === 'end' ? 'end' : 'start';
+  const resolved = await resolveCardFrameRender(project, scene, {
+    slot, referenceImageId: input.referenceImageId || null, refine: input.refine || null, fromFrame: input.fromFrame === true,
+  });
+  const selected = slot === 'end' ? scene.endImageId : scene.referenceImageId;
+  return {
+    ...explicitImageRequest(input.imageTarget),
+    prompt: resolved.prompt,
+    ...musicVideoFrameGenSize(project),
+    ...(resolved.referenceImageFiles.length ? { referenceImageFiles: resolved.referenceImageFiles } : {}),
+    musicVideo: {
+      ...(project.castAndSets?.catalogCheckin?.basis ? { catalogBasis: project.castAndSets.catalogCheckin.basis } : {}),
+      projectId: project.id,
+      sceneId: scene.sceneId,
+      compose: true,
+      castInputs: resolved.castInputs,
+      ...(slot === 'end' ? { slot: 'end' } : {}),
+      ...(input.revisionId ? { revisionId: input.revisionId } : {}),
+      ...(input.select ? { replaceSelection: true, expectedSelection: selected || null } : {}),
+      ...(input.thenClip ? { thenClip: input.thenClip } : {}),
+      ...(resolved.greybox?.reference ? { greyboxImageId: resolved.greybox.reference.imageId } : {}),
+      ...(resolved.greybox?.blocking ? { greyboxBlockingImageId: resolved.greybox.blocking.imageId } : {}),
+      ...(resolved.leadImageId ? { leadImageId: resolved.leadImageId } : {}),
+      ...(resolved.refine ? { refine: true } : resolved.fromFrame ? { fromFrame: true } : {}),
+    },
+    castInputs: resolved.castInputs,
   };
 }
