@@ -412,6 +412,7 @@ export * from './secretText.js';
 export * from './securityAuditLog.js';
 export * from './piiRedactionPatterns.js';
 export * from './imageClean.js';
+export * from './imageReviewProviders.js';
 export * from './imageCleanDefaults.js';
 export * from './imageFrameStats.js';
 export * from './imageThumbnail.js';
