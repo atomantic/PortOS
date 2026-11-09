@@ -1144,3 +1144,84 @@ describe('AudioLDM2 Apple Silicon install is hash-pinned', () => {
     expect(otherBranch).toMatch(/pip install --upgrade \\\n\s+torch/);
   });
 });
+
+describe('shared mflux Apple Silicon install is hash-pinned', () => {
+  const lockPath = join(REPO_ROOT, 'scripts', 'requirements-mflux-mlx.lock.txt');
+  const lock = readFileSync(lockPath, 'utf8');
+  const directPins = readFileSync(join(REPO_ROOT, 'scripts', 'requirements-mflux-mlx.txt'), 'utf8');
+  const block = source.slice(source.indexOf('if [[ "$INSTALL_MFLUX" == "1" ]]; then'), source.indexOf('if [[ "$INSTALL_VIDEO" == "1" ]]; then'));
+
+  // Run the real install block on "Apple Silicon" with a fake interpreter and
+  // uv that record every call, so the branch logic and the mflux-only
+  // requirement extraction are exercised rather than pattern-matched.
+  const runBlock = ({ oldPython }) => {
+    const dir = mkdtempSync(join(tmpdir(), 'portos-mflux-'));
+    tempVenvs.push(dir);
+    const log = join(dir, 'calls.log');
+    const fakePython = join(dir, 'python3');
+    writeFileSync(fakePython, `#!/bin/bash
+echo "py $*" >> "${log}"
+case "$*" in
+  *version_info*) exit ${oldPython ? 1 : 0} ;;
+  *--force-reinstall*) cp "\${@: -1}" "${log}.self-req" ;;
+esac
+exit 0
+`);
+    chmodSync(fakePython, 0o755);
+    const script = `set -euo pipefail
+INSTALL_MFLUX=1; PYTHON_BIN="${fakePython}"; SCRIPT_DIR="${join(REPO_ROOT, 'scripts')}"; HOME="${dir}"
+is_apple_silicon() { return 0; }
+have() { return 0; }
+uv() { echo "uv $*" >> "${log}"; }
+reset_universal_venv() { :; }
+pin_venv_arm64() { :; }
+probe_or_fail() { shift 2; echo "probe $*" >> "${log}"; }
+${block}`;
+    const result = spawnSync(resolveBashBinary(), ['-c', script], { encoding: 'utf8' });
+    expect(result.status, result.stderr).toBe(0);
+    return {
+      calls: readFileSync(log, 'utf8'),
+      selfReq: existsSync(`${log}.self-req`) ? readFileSync(`${log}.self-req`, 'utf8') : null,
+    };
+  };
+
+  it('every locked package carries a sha256 hash, none comes from a VCS or URL source, and all are arm64-macOS scoped', () => {
+    const blocks = lock.split(/\n(?=[a-z][^\n]*==)/i).filter((b) => /^[a-z][^\n]*==/i.test(b));
+    expect(blocks.length).toBeGreaterThan(0);
+    for (const b of blocks) {
+      expect(b).toMatch(/--hash=sha256:[0-9a-f]{64}/);
+      const pin = b.split('\n')[0];
+      expect(pin).toContain("sys_platform == 'darwin'");
+      expect(pin).toContain("platform_machine == 'arm64'");
+    }
+    expect(lock).not.toMatch(/^[a-z][^\n]* @ /im);
+  });
+
+  it('locks the validated trio the resolving path still names', () => {
+    for (const name of ['MFLUX_PIN', 'MLX_PIN', 'MLX_METAL_PIN']) {
+      const pin = block.match(new RegExp(`${name}='([^']+)'`))[1];
+      expect(directPins).toMatch(new RegExp(`^${pin.replace(/[.]/g, '\\.')}$`, 'm'));
+      expect(lock).toMatch(new RegExp(`^${pin.replace(/[.]/g, '\\.')} ;`, 'm'));
+    }
+  });
+
+  it('a 3.11+ PYTHON_BIN installs to the user site from the lock and probes both CLIs', () => {
+    const { calls, selfReq } = runBlock({ oldPython: false });
+    expect(calls).toContain(`-m pip install --user --require-hashes --no-deps --force-reinstall -r`);
+    expect(calls).toContain(`-m pip install --user --require-hashes --no-deps -r ${lockPath}`);
+    expect(calls).not.toMatch(/pip install --upgrade|pip install --user mflux/);
+    expect(calls).toContain('from mflux.models.flux.cli.flux_generate import main; from mflux.models.common.cli.train import main');
+    expect(calls).not.toMatch(/^uv /m);
+    // The stale-layout flush reinstalls mflux alone, still hash-checked.
+    expect(selfReq).toMatch(/^mflux==[^\n]*\\\n\s+--hash=sha256:/);
+    expect(selfReq.match(/^[a-z][^\n]*==/gim)).toHaveLength(1);
+  });
+
+  it('an older PYTHON_BIN syncs the dedicated venv to the lock instead', () => {
+    const { calls } = runBlock({ oldPython: true });
+    expect(calls).not.toMatch(/pip install --user/);
+    expect(calls).toMatch(new RegExp(`^uv pip sync --python \\S+/\\.portos/venv-mflux/bin/python3 --require-hashes ${lockPath.replace(/[.]/g, '\\.')}$`, 'm'));
+    expect(calls).not.toMatch(/^uv pip install/m);
+    expect(calls).toMatch(/^probe \S+venv-mflux\/bin\/python3 -c from mflux\.models\.flux\.cli\.flux_generate import main/m);
+  });
+});

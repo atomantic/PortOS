@@ -1,0 +1,17 @@
+# Shared mflux (Apple Silicon) runtime: direct pins for the `pip install --user`
+# layout and its ~/.portos/venv-mflux fallback. Installed only from
+# requirements-mflux-mlx.lock.txt, which pins and hashes every transitive
+# package. After editing this file, regenerate the lock with the command in the
+# lock header.
+#
+# mflux · mlx · mlx-metal are the validated trio from #1329 (see the comment in
+# scripts/setup-image-video.sh): bump them only after a full LoRA training run on
+# the M5 that motivated the pin.
+mflux==0.17.5
+mlx==0.31.2
+mlx-metal==0.31.2
+# mflux 0.17.5 imports PIL._typing, which Pillow 13 broke (it imports a name
+# `numbers` does not define), so `mflux-generate` and `mflux-train` fail at
+# import. Pillow 13 is the first release without the 12.x advisories; only
+# mflux 0.24+ supports it, and that needs mlx 0.32.
+pillow==12.3.0

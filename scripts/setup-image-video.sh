@@ -436,45 +436,68 @@ if [[ "$INSTALL_MFLUX" == "1" ]]; then
   # (mflux's `dev` extra itself pins mlx==0.31.0, so 0.31.2 is in-range and
   # closer to what mflux develops against than the old 0.30.6.) Bump these only
   # after re-validating with another full run on the M5; record the proving run.
+  # Apple Silicon installs the trio from the hash-pinned lock, whose direct pins
+  # (scripts/requirements-mflux-mlx.txt) must match these.
   MFLUX_PIN='mflux==0.17.5'
   MLX_PIN='mlx==0.31.2'
   MLX_METAL_PIN='mlx-metal==0.31.2'
-  # mflux/mlx need Python 3.10+. The historical layout installs mflux with
-  # `pip install --user` against $PYTHON_BIN, and PortOS discovers the shared console scripts
-  # beside that interpreter. But when $PYTHON_BIN is too old (e.g. a system
-  # python3.8) or externally-managed (PEP 668) so the --user install fails or
-  # can't be imported, fall back to a dedicated venv at ~/.portos/venv-mflux —
-  # the same pattern the flux2/ltx/wan runtimes use. PortOS's resolveMfluxPython()
+  if is_apple_silicon; then
+    # Apple Silicon installs only from the hash-pinned lock
+    # (scripts/requirements-mflux-mlx.lock.txt): no install-time resolution, so
+    # a new or compromised transitive release can't land on the next Repair.
+    # Unpinned resolution had already broken it: Pillow 13 made mflux-generate
+    # and mflux-train fail at import while `import mflux` still succeeded, so
+    # the probe imports both CLIs. The lock needs CPython 3.11+: its filelock fix
+    # for advisory GHSA-2g95-wg33-c5x2 (4.2.1) dropped 3.10.
+    MFLUX_LOCK="$SCRIPT_DIR/requirements-mflux-mlx.lock.txt"
+    MFLUX_MIN_MINOR=11
+    MFLUX_PROBE='from mflux.models.flux.cli.flux_generate import main; from mflux.models.common.cli.train import main'
+  else
+    # mflux is MLX-only, so off Apple Silicon the resolving install is left as it was.
+    MFLUX_LOCK=""
+    MFLUX_MIN_MINOR=10
+    MFLUX_PROBE='import mflux'
+  fi
+  # The historical layout installs mflux with `pip install --user` against
+  # $PYTHON_BIN, and PortOS discovers the shared console scripts beside that
+  # interpreter. But when $PYTHON_BIN is too old (e.g. a system python3.8) or
+  # externally-managed (PEP 668) so the --user install fails or can't be
+  # imported, fall back to a dedicated venv at ~/.portos/venv-mflux — the same
+  # pattern the flux2/ltx/wan runtimes use. PortOS's resolveMfluxPython()
   # auto-discovers that venv, so no Settings change is needed either way.
   MFLUX_USE_VENV=0
-  if python_at_least_310 "$PYTHON_BIN"; then
+  if "$PYTHON_BIN" -c "import sys; sys.exit(0 if sys.version_info[:2] >= (3, ${MFLUX_MIN_MINOR}) else 1)" 2>/dev/null; then
     # Step 1: force-reinstall mflux's OWN files with --no-deps to flush a stale
     # file layout left by a partial reinstall (we hit this on 0.12.1, where
     # `mflux/models/flux/cli/` went missing, breaking the entry-point shim)
     # WITHOUT re-downloading the heavy torch/mlx tree.
-    #
-    # Step 2: let pip install mflux's DECLARED runtime deps — pip is the source
-    # of truth, not a hand-kept list. mflux 0.17 imports packages the 0.12.x set
-    # omitted (pillow, matplotlib, platformdirs, sentencepiece, piexif, …) and
-    # constrains transformers>=5,<6 and mlx<0.32; a hand list silently drifts and
-    # leaves `mflux-train` failing at import before it can reach the trainer.
-    # No --no-deps (so missing deps ARE pulled) and no --upgrade (so an
-    # already-satisfied heavyweight like torch isn't re-resolved/re-downloaded on
-    # repeat runs); a dep that violates mflux's constraints is still corrected.
-    # The explicit mlx/mlx-metal pins ride alongside mflux so pip resolves the
-    # proven backend rather than the latest in-range build.
-    "$PYTHON_BIN" -m pip install --upgrade --user --force-reinstall --no-deps "$MFLUX_PIN" \
-      && "$PYTHON_BIN" -m pip install --user "$MFLUX_PIN" "$MLX_PIN" "$MLX_METAL_PIN" \
-      || MFLUX_USE_VENV=1
+    if [[ -n "$MFLUX_LOCK" ]]; then
+      # Step 2: every other package at its locked version and hash. --no-deps
+      # because the lock is already the complete closure.
+      MFLUX_SELF_REQ="$(mktemp)"
+      awk '/^[^ #]/ { keep = /^mflux==/ } keep' "$MFLUX_LOCK" > "$MFLUX_SELF_REQ"
+      "$PYTHON_BIN" -m pip install --user --require-hashes --no-deps --force-reinstall -r "$MFLUX_SELF_REQ" \
+        && "$PYTHON_BIN" -m pip install --user --require-hashes --no-deps -r "$MFLUX_LOCK" \
+        || MFLUX_USE_VENV=1
+      rm -f "$MFLUX_SELF_REQ"
+    else
+      # Step 2: let pip install mflux's DECLARED runtime deps. No --upgrade, so
+      # an already-satisfied heavyweight like torch isn't re-resolved on repeat
+      # runs. The explicit mlx/mlx-metal pins ride alongside mflux so pip
+      # resolves the proven backend rather than the latest in-range build.
+      "$PYTHON_BIN" -m pip install --upgrade --user --force-reinstall --no-deps "$MFLUX_PIN" \
+        && "$PYTHON_BIN" -m pip install --user "$MFLUX_PIN" "$MLX_PIN" "$MLX_METAL_PIN" \
+        || MFLUX_USE_VENV=1
+    fi
     # A satisfied-looking pip run can still leave an unimportable stack on an odd
     # system Python — verify mflux actually imports before trusting the --user path.
-    if [[ "$MFLUX_USE_VENV" == "0" ]] && ! "$PYTHON_BIN" -c 'import mflux' 2>/dev/null; then
+    if [[ "$MFLUX_USE_VENV" == "0" ]] && ! "$PYTHON_BIN" -c "$MFLUX_PROBE" 2>/dev/null; then
       echo "⚠️  mflux installed under $PYTHON_BIN but does not import — falling back to a dedicated venv."
       MFLUX_USE_VENV=1
     fi
   else
     MFLUX_PYVER="$("$PYTHON_BIN" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || echo unknown)"
-    echo "⚠️  $PYTHON_BIN is Python ${MFLUX_PYVER} — mflux needs 3.10+; using a dedicated venv."
+    echo "⚠️  $PYTHON_BIN is Python ${MFLUX_PYVER} — mflux needs 3.${MFLUX_MIN_MINOR}+; using a dedicated venv."
     MFLUX_USE_VENV=1
   fi
 
@@ -484,7 +507,7 @@ if [[ "$INSTALL_MFLUX" == "1" ]]; then
     # unusable, which is exactly the case we're recovering from.
     if ! have uv; then
       echo "❌ Need 'uv' to build the mflux venv (system Python can't host mflux)." >&2
-      echo "   Install uv (https://docs.astral.sh/uv/) or point PYTHON_BIN at a Python 3.10+, then re-run." >&2
+      echo "   Install uv (https://docs.astral.sh/uv/) or point PYTHON_BIN at a Python 3.${MFLUX_MIN_MINOR}+, then re-run." >&2
       exit 1
     fi
     MFLUX_VENV="${HOME}/.portos/venv-mflux"
@@ -496,13 +519,19 @@ if [[ "$INSTALL_MFLUX" == "1" ]]; then
       mkdir -p "${HOME}/.portos"
       uv venv --python 3.11 "$MFLUX_VENV"
     fi
-    echo "📦 Installing ${MFLUX_PIN} · ${MLX_PIN} · ${MLX_METAL_PIN} into ${MFLUX_VENV}..."
-    uv pip install --python "$MFLUX_VENV_PY" "$MFLUX_PIN" "$MLX_PIN" "$MLX_METAL_PIN"
+    if [[ -n "$MFLUX_LOCK" ]]; then
+      # The venv is mflux's alone, so sync it to exactly the lock.
+      echo "📦 Installing the hash-pinned mflux lock into ${MFLUX_VENV}..."
+      uv pip sync --python "$MFLUX_VENV_PY" --require-hashes "$MFLUX_LOCK"
+    else
+      echo "📦 Installing ${MFLUX_PIN} · ${MLX_PIN} · ${MLX_METAL_PIN} into ${MFLUX_VENV}..."
+      uv pip install --python "$MFLUX_VENV_PY" "$MFLUX_PIN" "$MLX_PIN" "$MLX_METAL_PIN"
+    fi
     pin_venv_arm64 "$MFLUX_VENV"
     probe_or_fail \
-      "mflux venv built but 'import mflux' failed." \
+      "mflux venv built but its CLIs failed to import." \
       "Check that mflux and its MLX dependencies installed cleanly in ${MFLUX_VENV}." \
-      "$MFLUX_VENV_PY" -c 'import mflux'
+      "$MFLUX_VENV_PY" -c "$MFLUX_PROBE"
     echo "✅ mflux venv ready: ${MFLUX_VENV_PY} (PortOS auto-discovers it — no Settings change needed)."
   fi
 fi
@@ -1163,7 +1192,7 @@ if [[ "$INSTALL_AUDIOLDM2" == "1" ]]; then
     fi
     "$AUDIOLDM2_PY" -m pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-audioldm2-mlx.lock.txt"
   else
-    # Linux/Windows still resolve at install time (hash-pinned CUDA lock: #15439).
+    # Linux/Windows still resolve at install time (hash-pinned CUDA lock: #15481).
     "$AUDIOLDM2_PY" -m pip install --upgrade pip wheel setuptools >/dev/null
     # torch runs the model; diffusers provides AudioLDM2Pipeline; transformers +
     # sentencepiece supply the text encoders (T5 / GPT-2 / CLAP) AudioLDM2 chains;
@@ -1385,7 +1414,7 @@ if [[ "$INSTALL_MUSCRIPTOR" == "1" ]]; then
     fi
     "$MUSCRIPTOR_PY" -m pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-muscriptor-mlx.lock.txt"
   else
-    # Linux/Windows still resolve at install time (hash-pinned CUDA lock: #15439).
+    # Linux/Windows still resolve at install time (hash-pinned CUDA lock: #15481).
     "$MUSCRIPTOR_PY" -m pip install --upgrade pip wheel setuptools >/dev/null
     # muscriptor declares its own deps (torch, soundfile, etc.), so installing the
     # package pulls the matching stack. The import probe below catches a broken
