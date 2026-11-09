@@ -223,7 +223,7 @@ function travelPose(world, beat, subjectId, storyMin, routes) {
   const across = [Math.cos(rad(heading)), -Math.sin(rad(heading))];
   return {
     position: [round(at[0] + across[0] * slot * SIDE_BY_SIDE), 0, round(at[1] + across[1] * slot * SIDE_BY_SIDE)],
-    facingDegrees: round(heading), pose: beat.vehicleSubjectId ? 'ride' : 'stand', vehicleSubjectId: beat.vehicleSubjectId || null, setId: null,
+    facingDegrees: round(heading), pose: beat.vehicleSubjectId ? 'ride' : beat.pace === 'run' ? 'run' : 'walk', vehicleSubjectId: beat.vehicleSubjectId || null, setId: null,
   };
 }
 

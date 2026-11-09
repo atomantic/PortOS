@@ -11,11 +11,21 @@ const FIGURE_HEIGHT = 1.7;
 const rad = (deg) => (deg * Math.PI) / 180;
 const noop = () => {};
 
-// A person at their mark in their pawn color; the nose shows which way they face. Riding a vehicle, a two-wheeled frame in the vehicle's pawn color sits under a seated figure.
+// Body height and ground lift of each pose; a rider sits on the vehicle frame, a sitter on a seat block, a crouch is a short capsule.
+const POSE_BODY = {
+  stand: { body: FIGURE_HEIGHT, lift: 0 },
+  walk: { body: FIGURE_HEIGHT, lift: 0 },
+  run: { body: FIGURE_HEIGHT, lift: 0, lean: 0.35 },
+  crouch: { body: 1.0, lift: 0 },
+  sit: { body: 1.1, lift: 0.45 },
+  ride: { body: 1.1, lift: 0.55 },
+};
+
+// A person at their mark in their pawn color; the nose shows which way they face. Riding a vehicle, a two-wheeled frame in the vehicle's pawn color sits under a seated figure; a sitter has a seat block, a runner leans forward.
 function ActorProxy({ actor, labelPortal }) {
   const riding = actor.pose === 'ride';
-  const body = riding ? 1.1 : FIGURE_HEIGHT;
-  const lift = riding ? 0.55 : 0;
+  const sitting = actor.pose === 'sit';
+  const { body, lift, lean = 0 } = POSE_BODY[actor.pose] || POSE_BODY.stand;
   return (
     <group position={actor.position} rotation={[0, rad(actor.facingDegrees), 0]}>
       {riding && (
@@ -33,14 +43,22 @@ function ActorProxy({ actor, labelPortal }) {
           </mesh>
         </group>
       )}
-      <mesh position={[0, lift + body / 2, riding ? -0.1 : 0]}>
-        <capsuleGeometry args={[0.22, Math.max(body - 0.44, 0.01), 6, 16]} />
-        <meshStandardMaterial color={actor.color} roughness={0.9} />
-      </mesh>
-      <mesh position={[0, lift + body * 0.85, riding ? 0.18 : 0.28]} rotation={[Math.PI / 2, 0, 0]}>
-        <coneGeometry args={[0.07, 0.2, 12]} />
-        <meshStandardMaterial color="#ffffff" />
-      </mesh>
+      {sitting && (
+        <mesh position={[0, lift / 2, 0]}>
+          <boxGeometry args={[0.5, lift, 0.5]} />
+          <meshStandardMaterial color="#8a8f99" roughness={0.9} />
+        </mesh>
+      )}
+      <group position={[0, lift, riding ? -0.1 : 0]} rotation={[lean, 0, 0]}>
+        <mesh position={[0, body / 2, 0]}>
+          <capsuleGeometry args={[0.22, Math.max(body - 0.44, 0.01), 6, 16]} />
+          <meshStandardMaterial color={actor.color} roughness={0.9} />
+        </mesh>
+        <mesh position={[0, body * 0.85, 0.28]} rotation={[Math.PI / 2, 0, 0]}>
+          <coneGeometry args={[0.07, 0.2, 12]} />
+          <meshStandardMaterial color="#ffffff" />
+        </mesh>
+      </group>
       <Html portal={labelPortal} position={[0, lift + body + 0.25, 0]} center style={{ pointerEvents: 'none' }}>
         <span className="port-media-overlay-strong whitespace-nowrap rounded px-1 text-[10px]">{actor.name}</span>
       </Html>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { backfillPrevizFromShots, previzCutProblems, previzFrameAt, previzPawnColors, updatePrevizCut } from './musicVideoPreviz.js';
+import { backfillPrevizFromShots, previzCutProblems, previzFrameAt, previzPawnColors, previzPoseInText, updatePrevizCut } from './musicVideoPreviz.js';
 import { musicVideoPrevizSchema, musicVideoProjectUpdateSchema } from './musicVideoValidation.js';
 
 const subjects = [
@@ -16,6 +16,27 @@ const greybox = {
 const places = { 'cat-street': { ingredient: { type: 'place', payload: { greybox } }, media: [] } };
 const scene = (sceneId, startSec, endSec, sheet = {}) => ({ sceneId, startSec, endSec, setReference: { subjectId: 'p-street', greyboxShotId: 'wide' }, shotSheet: sheet });
 const project = (scenes, extra = {}) => ({ concept: { subjects }, cameras: [{ id: 'cam-vhs', name: 'VHS camera', kind: 'in-world' }], scenes, ...extra });
+
+describe('previz poses from shot actions', () => {
+  // Catches crouched, seated and running shots all drawing a standing pawn, and a plain walk or "stands" shot picking up a pose it never described.
+  it('seeds crouch, sit and run from the action and keeps everything else standing', () => {
+    expect(previzPoseInText('Ana crouches behind the hedge')).toBe('crouch');
+    expect(previzPoseInText('Bo sits on the fountain rim')).toBe('sit');
+    expect(previzPoseInText('They sprint across the lawn')).toBe('run');
+    expect(previzPoseInText('Ana stands at the gate')).toBeNull();
+    expect(previzPoseInText('Ana walks home')).toBeNull();
+    const posed = (action) => backfillPrevizFromShots(project([scene('s1', 0, 4, { characters: ['Ana'], action })]), places).previz.tracks[0].keys[0].pose;
+    expect(posed('Ana crouches behind the hedge')).toBe('crouch');
+    expect(posed('Ana runs past')).toBe('run');
+    expect(posed('Ana at the gate')).toBe('stand');
+  });
+
+  it('accepts every pose in a saved track and rejects an unknown one', () => {
+    const key = (pose) => ({ subjectId: 'c-ana', placeSubjectId: 'p-street', keys: [{ timeSec: 0, position: [0, 0, 0], facingDegrees: 0, pose }] });
+    for (const pose of ['stand', 'walk', 'run', 'crouch', 'sit', 'ride']) expect(musicVideoPrevizSchema.safeParse({ cuts: [], tracks: [key(pose)] }).success).toBe(true);
+    expect(musicVideoPrevizSchema.safeParse({ cuts: [], tracks: [key('fly')] }).success).toBe(false);
+  });
+});
 
 describe('greybox previz backfill', () => {
   // Catches a backfill that loses who holds the camera, whom the shot shows, or the riding pose.
