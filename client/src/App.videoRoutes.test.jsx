@@ -12,6 +12,7 @@ vi.mock('./pages/MediaGen', () => ({ default: () => (
   </>
 ) }));
 vi.mock('./pages/VideoGen', () => ({ default: () => { const location = useLocation(); return <pre data-testid="clip-location">{JSON.stringify({ pathname: location.pathname, search: location.search, hash: location.hash, state: location.state })}</pre>; } }));
+vi.mock('./pages/MusicVideo', () => ({ default: () => { const location = useLocation(); return <pre data-testid="mv-location">{JSON.stringify({ pathname: location.pathname, search: location.search, hash: location.hash })}</pre>; } }));
 vi.mock('./pages/CreativeDirectorDetail', () => ({ default: () => { const location = useLocation(); return <pre data-testid="project-location">{JSON.stringify({ pathname: location.pathname, search: location.search, hash: location.hash, state: location.state })}</pre>; } }));
 import App from './App.jsx';
 it('keeps Generate Video inside the Media Gen tab shell', async () => {
@@ -35,4 +36,12 @@ it('normalizes a bare Video project URL while preserving its identity and handof
 it('redirects a Video shot deep link to the same Creative Director shot', async () => {
   render(<MemoryRouter initialEntries={['/video/example-project/artifacts/example-shot?revision=2#script']}><App /></MemoryRouter>);
   expect(JSON.parse((await screen.findByTestId('project-location')).textContent)).toMatchObject({ pathname: '/creative-director/example-project/artifacts/example-shot', search: '?revision=2', hash: '#script' });
+});
+
+it.each([
+  ['/media/music-video/example-mv/previz', '/music-video/example-mv/previz'],
+  ['/media/music-video/example-mv/previz/scene/s1', '/music-video/example-mv/previz/scene/s1'],
+])('redirects legacy music video link %s', async (from, to) => {
+  render(<MemoryRouter initialEntries={[`${from}?x=1#h`]}><App /></MemoryRouter>);
+  expect(JSON.parse((await screen.findByTestId('mv-location')).textContent)).toEqual({ pathname: to, search: '?x=1', hash: '#h' });
 });
