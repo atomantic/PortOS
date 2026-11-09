@@ -30,12 +30,12 @@ it('uses uv only when requested and present, keeping the dedicated interpreter a
 });
 
 it('on Apple Silicon repairs mflux-owned packages from the hash-pinned lock, never by bare name', async () => {
-  await installPackages('/image/python', ['mflux', 'transformers', 'mlx_video'], vi.fn(), { appleSilicon: true }).promise;
+  await installPackages('/image/python', ['mflux', 'transformers', 'mlx_vlm'], vi.fn(), { appleSilicon: true }).promise;
   const calls = mock.spawn.mock.calls.map(([, args]) => args.join(' '));
   const lock = calls.find((c) => c.includes('--require-hashes'));
   expect(lock).toMatch(/--no-deps -r .*requirements-mflux-mlx\.lock\.txt$/);
   const named = calls.find((c) => c.includes('--upgrade'));
-  expect(named).toContain('mlx-video-with-audio');
+  expect(named).toContain('mlx_vlm');
   expect(named).not.toMatch(/mflux|transformers/);
 });
 
