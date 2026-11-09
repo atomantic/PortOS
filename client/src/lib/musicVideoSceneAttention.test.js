@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseSceneFilter, sceneAttention, sceneMatchesFilter, sceneMediaKind } from './musicVideoSceneAttention.js';
+import { parseSceneFilter, sceneAttention, sceneMatchesFilter, sceneMediaKind, selectedFrameReadiness } from './musicVideoSceneAttention.js';
 
 const ready = { sceneId: 's', order: 0, referenceImageId: 'f.png', videoHistoryId: 'v1', startSec: 0, endSec: 4, takes: [] };
 
@@ -62,6 +62,9 @@ describe('sceneAttention', () => {
     const scenes = [source, back];
     expect(sceneAttention(back, { scenes })).toEqual([]);
     expect(sceneMediaKind(back, { scenes })).toBe('clip');
+    source.takes = [{ kind: 'image', assetId: 'frame.png', dependencyState: { status: 'stale', reasons: ['Camera changed'] } }];
+    expect(sceneAttention(back, { scenes })).toEqual(['frame-stale']);
+    source.takes = [];
     source.videoHistoryId = null;
     expect(sceneAttention(back, { scenes })).toEqual(['missing-clip']);
     expect(sceneMediaKind(back, { scenes })).toBe('image');
@@ -72,6 +75,17 @@ describe('scene filters', () => {
   it('parses unknown values as all and splits missing from other attention', () => {
     expect(parseSceneFilter('nope')).toBe('all');
     expect(parseSceneFilter('missing')).toBe('missing');
+    expect(parseSceneFilter('stale-frame')).toBe('stale-frame');
+    const stale = { ...ready, takes: [{ kind: 'image', assetId: 'f.png', dependencyState: { status: 'stale', reasons: ['Frame prompt changed'] } }] };
+    expect(sceneAttention(stale)).toEqual(['frame-stale']);
+    expect(sceneMatchesFilter(['frame-stale'], 'stale-frame')).toBe(true);
+    expect(sceneMatchesFilter(['frame-stale'], 'missing')).toBe(false);
+    expect(sceneMatchesFilter(['frame-stale'], 'attention')).toBe(true);
+    expect(selectedFrameReadiness(stale)).toEqual({ text: 'frame out of date', reasons: ['Frame prompt changed'] });
+    expect(selectedFrameReadiness({ ...ready, takes: [{ kind: 'image', assetId: 'f.png', dependencyState: { status: 'current', reasons: [] } }, { kind: 'endImage', assetId: 'e.png', dependencyState: { status: 'stale', reasons: ['Camera changed'] } }], endImageId: 'e.png' }).text).toBe('end frame out of date');
+    expect(selectedFrameReadiness({ ...ready, takes: [{ kind: 'image', assetId: 'f.png', dependencyState: { status: 'unknown', reasons: ['Frame evidence was not recorded; review again'] } }] }).text).toBe('frame not checked');
+    expect(selectedFrameReadiness(ready).text).toBe('frame ready');
+    expect(sceneAttention(ready)).toEqual([]);
     expect(sceneMatchesFilter(['last-failure'], 'attention')).toBe(true);
     expect(sceneMatchesFilter(['last-failure'], 'missing')).toBe(false);
     expect(sceneMatchesFilter(['missing-clip'], 'missing')).toBe(true);

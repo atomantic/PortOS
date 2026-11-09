@@ -26,6 +26,16 @@ const renderBoard = (b, url = '/') => render(<MemoryRouter initialEntries={[url]
 describe('BoardStage scene filter', () => {
   const scenes = [scene(1), scene(2, { videoHistoryId: null }), scene(3)];
 
+  it('filters the board to frames that are out of date', () => {
+    const stale = scene(1, { takes: [{ kind: 'image', assetId: 'f.png', dependencyState: { status: 'stale', reasons: ['Location changed'] } }] });
+    renderBoard(board([stale, scene(2), scene(3)]), '/?scenes=stale-frame');
+    expect(screen.getByRole('button', { name: 'Frame out of date (1)' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('button', { name: 'Needs attention (1)' })).toBeTruthy();
+    expect(screen.getAllByText('Shot 1 · Part 1').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Shot 2 · Part 2')).toBeNull();
+    expect(screen.getAllByText('Frame out of date').length).toBeGreaterThan(0);
+  });
+
   it('shows chips and counts, and lists only affected scenes from ?scenes=missing', () => {
     renderBoard(board(scenes), '/?scenes=missing');
     expect(screen.getByRole('button', { name: 'Needs attention (1)' })).toBeTruthy();

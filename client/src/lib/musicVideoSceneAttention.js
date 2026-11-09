@@ -30,6 +30,7 @@ export const SCENE_ATTENTION_LABELS = Object.freeze({
   'song-changed': 'Lyrics changed',
   'song-new': 'New lyrics',
   'song-cut': 'Lyrics cut',
+  'frame-stale': 'Frame out of date',
 });
 
 // A revised song's verdict on a shot (server songRevision.js sceneReview) as its attention code.
@@ -38,7 +39,22 @@ const SONG_REVIEW_CODES = Object.freeze({ changed: 'song-changed', new: 'song-ne
 /** Codes that mean the shot still lacks material a render needs (the `missing` filter). */
 export const SCENE_MISSING_CODES = Object.freeze(['missing-frame', 'missing-clip', 'no-span']);
 
-export const SCENE_FILTERS = Object.freeze(['all', 'attention', 'missing']);
+export const SCENE_FILTERS = Object.freeze(['all', 'attention', 'missing', 'stale-frame']);
+
+const slotDependencyState = (scene, kind, assetId) => (
+  assetId ? (scene?.takes || []).find((take) => take?.kind === kind && take.assetId === assetId)?.dependencyState || null : null
+);
+
+/** Header label for the selected frame. A stale end frame is named on its own; unknown is not ready. */
+export function selectedFrameReadiness(scene) {
+  const start = slotDependencyState(scene, 'image', scene?.referenceImageId);
+  const end = slotDependencyState(scene, 'endImage', scene?.endImageId);
+  if (start?.status === 'stale') return { text: 'frame out of date', reasons: start.reasons || [] };
+  if (end?.status === 'stale') return { text: 'end frame out of date', reasons: end.reasons || [] };
+  if (start?.status === 'unknown') return { text: 'frame not checked', reasons: [] };
+  if (scene?.referenceImageId) return { text: 'frame ready', reasons: [] };
+  return { text: '', reasons: [] };
+}
 
 /**
  * The take slots a shot's picture uses: footage all of them, a still its frame
@@ -77,7 +93,9 @@ export function sceneAttention(scene, ctx = {}) {
   const layer = sceneVisualLayer(scene, { layered });
   const resolved = resolveSourceTake(scene, scenes);
   const playableClipId = scenePlayableClipId(scene, scenes);
-  const frameId = scene.referenceImageId || resolved?.referenceImageId || null;
+  // A return shows the source shot's frame, so readiness follows that frame.
+  const shown = resolved?.source || scene;
+  const frameId = resolved?.referenceImageId || scene.referenceImageId || null;
   const playbackEdit = resolved
     ? { inSec: resolved.inSec, outSec: resolved.outSec }
     : selectedPerformanceInstruction(scene)?.edit;
@@ -89,6 +107,8 @@ export function sceneAttention(scene, ctx = {}) {
   // A return shows the source shot's frame and clip, so those count as present.
   const codeRendered = scene.codeClip && playableClipId;
   if (!isSelfDrawnLayer(layer) && !frameId && !codeRendered) codes.push('missing-frame');
+  if (slotDependencyState(shown, 'image', frameId)?.status === 'stale'
+    || slotDependencyState(shown, 'endImage', shown.endImageId)?.status === 'stale') codes.push('frame-stale');
   if (layer === 'footage' && !footageOptional && !playableClipId) codes.push('missing-clip');
   if (layer !== 'footage' && !sceneHasAuthoredSpan(scene)) codes.push('no-span');
   if (layer === 'footage' && sceneUsesAuthoredTiming(scene) && sceneHasAuthoredSpan(scene)
@@ -110,6 +130,7 @@ export function sceneAttention(scene, ctx = {}) {
 export function sceneMatchesFilter(codes, filter) {
   if (filter === 'attention') return codes.length > 0;
   if (filter === 'missing') return codes.some((code) => SCENE_MISSING_CODES.includes(code));
+  if (filter === 'stale-frame') return codes.includes('frame-stale');
   return true;
 }
 

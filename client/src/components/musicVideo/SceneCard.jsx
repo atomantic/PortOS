@@ -53,7 +53,7 @@ import { buildSceneTimingPresentation } from '../../lib/musicVideoSceneTiming.js
 import SceneTimingPlan from './SceneTimingPlan.jsx';
 import SceneShotCuts, { SceneCutField, SceneDuration } from './SceneShotCuts.jsx';
 import SceneRenderProgress from './SceneRenderProgress.jsx';
-import { SCENE_ATTENTION_LABELS, sceneAttention } from '../../lib/musicVideoSceneAttention.js';
+import { SCENE_ATTENTION_LABELS, sceneAttention, selectedFrameReadiness } from '../../lib/musicVideoSceneAttention.js';
 import ScenePoster from './ScenePoster.jsx';
 import SceneRenderTarget, { lastRenderTarget, renderTargetOverrides } from './SceneRenderTarget.jsx';
 import SceneRenderInputs, { shotCardRenderRequest, shotCardRequestProblem } from './SceneRenderInputs.jsx';
@@ -257,6 +257,7 @@ export default function SceneCard({
   const shotModeId = `mv-shot-mode-${scene.sceneId}`;
   // #10152: what needs the director's attention, visible without opening the card.
   const attention = sceneAttention(scene, { layered, footageOptional, lipSyncBackend, songDurationSec, clipSec: playedSec, spanExtraSec, failed: failedScenes || {}, songReview, videoSettings: falVideoSettings, scenes: project?.scenes });
+  const frameReadiness = selectedFrameReadiness(sourceWindow?.source && sourceWindow.referenceImageId ? sourceWindow.source : scene);
   const songChange = songReview?.[scene.sceneId];
   // Every clip in flight for this shot, each with where it renders. A render whose
   // request is still on its way has no job yet: Render waits for it, so a double tap
@@ -633,8 +634,9 @@ export default function SceneCard({
             {typeof scene.startSec === 'number' && typeof scene.endSec === 'number'
               ? `${(scene.endSec - scene.startSec).toFixed(2)}s · ${formatTimecode(scene.startSec)}–${formatTimecode(scene.endSec)} · ${frameSpan(scene)}`
               : `#${scene.order + 1}`}
-            {(scene.referenceImageId || sourceWindow?.referenceImageId) ? ' · frame ready' : ''}
+            {frameReadiness.text ? ` · ${frameReadiness.text}` : ''}
             {clipPlayback.clipId ? ' · video ready' : ''}
+            {frameReadiness.reasons.length > 0 && <span className="block truncate text-port-warning">{frameReadiness.reasons.join(' · ')}</span>}
             {clipSec != null ? ` · clip ${clipSec.toFixed(1)}s` : ''}
           </div>
           {scene.lyricText && <div className="truncate text-[11px] italic text-port-text-muted">♪ {scene.lyricText}</div>}

@@ -36,6 +36,7 @@ import {
   MUSIC_VIDEO_TYPOGRAPHY_ROLES as TYPOGRAPHY_ROLES,
 } from '../../lib/musicVideoValidation.js';
 import { performanceCapability } from '../../lib/musicVideoShotTiming.js';
+import { lyricOverlayOff, sheetDirectionOverlay } from '../../lib/musicVideoShotSheet.js';
 import { validSections } from './shotPlan.js';
 import { CLIP_PROMPT_WRITING, FRAME_PROMPT_WRITING } from '../../lib/musicVideoShotPrompt.js';
 import { normalizeBrief } from './treatment.js';
@@ -178,6 +179,7 @@ function draftShotDirections(project, sections, beats, motifs) {
   const mapped = sceneSections(project.scenes || [], sections);
   const positions = new Map();
   const hasMotionReference = (project.visualSpec?.references || []).some((r) => r.use === 'motion-reference');
+  const overlayOff = lyricOverlayOff(project);
   // The first sung shot of the payoff carries the hero title treatment.
   let heroGiven = false;
   const directions = mapped.map(({ scene, sectionIndex }, i) => {
@@ -186,10 +188,10 @@ function draftShotDirections(project, sections, beats, motifs) {
     const beat = beats[sectionIndex];
     const sung = isNonBlankStr(scene.lyricText);
     const mode = scene.shotMode === 'performance' ? 'performance' : (!sung && beat.role === 'contrast' ? 'graphic' : 'cutaway');
-    let typographyRole = sung ? 'subtitle' : 'none';
-    if (sung && beat.role === 'payoff' && !heroGiven) { typographyRole = 'hero'; heroGiven = true; }
+    let typographyRole = !overlayOff && sung ? 'subtitle' : 'none';
+    if (!overlayOff && sung && beat.role === 'payoff' && !heroGiven) { typographyRole = 'hero'; heroGiven = true; }
     const negativeSpace = typographyRole === 'hero' ? 'upper' : (typographyRole === 'subtitle' ? 'lower' : 'none');
-    return {
+    return sheetDirectionOverlay(project, scene, {
       sceneId: scene.sceneId,
       beatId: beat.id,
       mode,
@@ -204,7 +206,7 @@ function draftShotDirections(project, sections, beats, motifs) {
       rationale: `${beat.role} beat${sung ? ' on a sung line' : ', instrumental'}: ${mode} shot${typographyRole !== 'none' ? ` with ${typographyRole} text in the ${negativeSpace} region` : ''}.`,
       suggestedFramePrompt: '',
       suggestedPrompt: '',
-    };
+    });
   });
   // Each shot exits the way the next one enters, so the pair reads as one cut.
   directions.forEach((d, i) => { d.transitionOut = directions[i + 1] ? directions[i + 1].transitionIn : 'hold on the final image, then cut to black'; });
@@ -519,8 +521,12 @@ export function mergeAiTreatment(project, draft, parsed) {
     if (framePrompt !== undefined) d.suggestedFramePrompt = framePrompt;
     if (prompt !== undefined) d.suggestedPrompt = prompt;
     // Text needs somewhere to sit: a titled shot with no reserved region gets
-    // the role's default region rather than text over the subject.
-    if (d.typographyRole !== 'none' && d.negativeSpace === 'none') d.negativeSpace = d.typographyRole === 'hero' ? 'upper' : 'lower';
+    // the role's default region rather than text over the subject. Lyric overlay
+    // off never grows a region back — the sheet overlay below clears it.
+    if (!lyricOverlayOff(project) && d.typographyRole !== 'none' && d.negativeSpace === 'none') d.negativeSpace = d.typographyRole === 'hero' ? 'upper' : 'lower';
+  }
+  for (let i = 0; i < directions.length; i++) {
+    directions[i] = sheetDirectionOverlay(project, scenesById.get(directions[i].sceneId), directions[i]);
   }
   const scenes = directions.map((d) => scenesById.get(d.sceneId)).filter(Boolean);
   const graphicLanguage = brief.graphicLanguage || strField(parsed.graphicLanguage, 1000) || draft.graphicLanguage;

@@ -170,6 +170,13 @@ export const getMusicVideoActiveJobs = (id, options = {}) =>
 export const addMusicVideoScene = (id, scene, options = {}) => request(`/music-video/${encodeURIComponent(id)}/scenes`, {
   method: 'POST', body: JSON.stringify(scene), ...options,
 });
+// The shot card's frame and clip (#15583). The server resolves the shot's references.
+export const renderMusicVideoSceneFrame = (id, sceneId, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/frame`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+export const renderMusicVideoSceneClip = (id, sceneId, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/clip`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
 // #14241: queue one planned sequence run (its scenes in timeline order) as a single timed fal request.
 export const renderMusicVideoSequence = (id, sceneIds, options = {}) => request(`/music-video/${encodeURIComponent(id)}/sequence-coverage/render`, {
   method: 'POST', body: JSON.stringify({ sceneIds }), ...options,
@@ -605,8 +612,13 @@ export const compileMusicVideoTreatment = (id, body, options = {}) => request(`/
 });
 // Read-only → { revision, stale, blocked, scenes, missingSceneIds, unmappedSceneIds, textCueCandidates }.
 export const previewMusicVideoTreatmentApply = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/treatment/apply-preview`, options);
-// Body: { revision, overwrite?: [{ sceneId, promptFingerprint }], addTextCues? } → { project, result }.
+// Body: { baseRevision, overwrite?: [{ sceneId, promptFingerprint }], addTextCues? } → { project, result }.
+// The server still accepts the legacy `revision` field.
 export const applyMusicVideoTreatment = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/treatment/apply`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+// Body: { baseRevision } → { project, treatment }. Copies the shot sheet onto compiled directions. No AI call.
+export const syncMusicVideoTreatmentFromShotSheet = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/treatment/sync-shot-sheet`, {
   method: 'POST', body: JSON.stringify(body), ...options,
 });
 // Body: { baseRevision, status, evidence?: { videoHistoryId?, imageId?, note } } → { project, treatment }.

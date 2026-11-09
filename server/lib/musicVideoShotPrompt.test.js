@@ -22,10 +22,13 @@ describe('sheet-built stills', () => {
     expect(input.prompt.startsWith('red raincoat\nCamera: Snapshot camera, held by Ada.\nView: Arm\u2019s-length selfie.\nPlace and time: Corner curb, Dusk, lit by Flash.\nWho: Ada and K.\nAction: They bump heads.\nEmotion: Playful.')).toBe(true);
     expect(ids(input).slice(0, 6)).toEqual(['shot-sheet-camera', 'shot-sheet-view', 'shot-sheet-place', 'shot-sheet-who', 'shot-sheet-action', 'shot-sheet-emotion']);
   });
-  // Catches an unsplit shot changing what it sends, or a sheet-built one borrowing the motion prompt.
-  it('leaves other shots alone and never falls back to the motion prompt', () => {
+  // Catches an unsplit shot sending its sheet columns, or a sheet-built one borrowing the motion prompt.
+  it('leaves other shots\' sheet columns alone and never falls back to the motion prompt', () => {
     const plain = { ...built, shotSheet: { ...built.shotSheet, promptFromSheet: undefined } };
-    expect(musicVideoFrameModelInput(sheetProject, plain).prompt).not.toContain('Camera:');
+    const input = musicVideoFrameModelInput(sheetProject, plain);
+    expect(input.prompt).not.toContain('held by Ada');
+    expect(input.prompt).not.toContain('View:');
+    expect(input.prompt).toContain('Camera: Snapshot camera, an in-world camera.');
     const noGeneral = musicVideoFrameModelInput(sheetProject, { ...built, framePrompt: '' });
     expect(noGeneral.prompt.startsWith('Camera:')).toBe(true);
     expect(noGeneral.prompt).not.toContain('they laugh');
@@ -36,13 +39,103 @@ describe('sheet-built stills', () => {
     expect(clip.prompt.startsWith('they laugh\nCamera: Snapshot camera, held by Ada.')).toBe(true);
     expect(ids(clip)).toContain('shot-sheet-emotion');
     expect(authoredShotPrompt({ ...built, prompt: '' })).toBe('');
-    expect(musicVideoShotModelInput(sheetProject, { ...built, shotSheet: { ...built.shotSheet, promptFromSheet: undefined } }, { asTyped: true }).prompt).not.toContain('Camera:');
+    const plain = musicVideoShotModelInput(sheetProject, { ...built, shotSheet: { ...built.shotSheet, promptFromSheet: undefined } }, { asTyped: true });
+    expect(plain.prompt).not.toContain('held by Ada');
+    expect(plain.prompt).toContain('Camera: Snapshot camera, an in-world camera.');
   });
-  // Catches an observer camera reading as held, and the details leaking into an end frame.
-  it('names an observer camera as unheld and keeps details off the end frame', () => {
+  // Catches an observer camera reading as held, and the sheet columns leaking into an end frame.
+  it('names an observer camera as unheld and keeps sheet columns off the end frame', () => {
     const observed = musicVideoFrameModelInput(sheetProject, { ...built, shotSheet: { promptFromSheet: true, cameraId: 'eye' } });
     expect(observed.prompt).toContain('Camera: Observer, an unseen observer camera that nobody in the scene holds.');
-    expect(musicVideoFrameModelInput(sheetProject, built, { slot: 'end' }).prompt).not.toContain('Camera:');
+    const end = musicVideoFrameModelInput(sheetProject, built, { slot: 'end' });
+    expect(end.prompt).not.toContain('View:');
+    expect(end.prompt).toContain('Camera: Snapshot camera, an in-world camera.');
+    expect(ids(end)).toContain('camera-rule');
+  });
+});
+
+// Uniquely catches a shot's camera rule staying out of the frame, end frame and clip (#15586).
+describe('shot camera rule', () => {
+  const ruled = {
+    cameras: [
+      { id: 'snap', name: 'Snapshot camera', kind: 'in-world', owner: 'Ada', rule: 'Held at arm\'s length, facing back.' },
+      { id: 'eye', name: 'Observer', kind: 'observer', rule: 'Subjects do not look at it.' },
+    ],
+  };
+  const shot = { sceneId: 's9', framePrompt: 'Ada on the curb', prompt: 'Ada laughs', endFramePrompt: 'the curb empties', shotSheet: { cameraId: 'snap', holder: 'Ada' } };
+  const cameraText = (input) => input.promptAdditions.find((item) => item.id === 'camera-rule')?.text;
+
+  it('adds the camera block to the frame, end frame and clip, and follows a camera change', () => {
+    const frame = musicVideoFrameModelInput(ruled, shot);
+    const block = 'Camera: Snapshot camera, an in-world camera. This camera is the one taking the picture, so it is not in the frame. Held at arm\'s length, facing back.';
+    expect(cameraText(frame)).toBe(block);
+    expect(frame.prompt).toContain(block);
+    expect(frame.prompt).toContain('Ada on the curb');
+    const end = musicVideoFrameModelInput(ruled, shot, { slot: 'end' });
+    expect(cameraText(end)).toBe(block);
+    expect(end.prompt).toContain(block);
+    const clip = musicVideoShotModelInput(ruled, shot, { asTyped: true });
+    expect(cameraText(clip)).toBe(block);
+    expect(clip.prompt).toContain(block);
+    const observed = musicVideoFrameModelInput(ruled, { ...shot, shotSheet: { cameraId: 'eye' } });
+    expect(cameraText(observed)).toBe('Camera: Observer, an observer camera. Subjects do not look at it.');
+    expect(observed.prompt).toContain('Ada on the curb');
+    expect(ids(musicVideoFrameModelInput(ruled, { ...shot, shotSheet: {} }))).not.toContain('camera-rule');
+    expect(ids(musicVideoShotModelInput(ruled, { ...shot, shotSheet: null }, { asTyped: true }))).not.toContain('camera-rule');
+  });
+
+  // Catches a sheet-built shot listing two Camera chips, which the preview cannot tell apart.
+  it('folds the rule into the sheet Camera line so the preview has one Camera chip', () => {
+    const built = { ...shot, shotSheet: { promptFromSheet: true, cameraId: 'snap', holder: 'Ada' } };
+    const frame = musicVideoFrameModelInput(ruled, built);
+    const line = 'Camera: Snapshot camera, held by Ada. This camera is the one taking the picture, so it is not in the frame. Held at arm\'s length, facing back.';
+    expect(frame.promptAdditions.find((item) => item.id === 'shot-sheet-camera')?.text).toBe(line);
+    expect(frame.prompt).toContain(line);
+    expect(ids(frame)).not.toContain('camera-rule');
+    const clip = musicVideoShotModelInput(ruled, built, { asTyped: true });
+    expect(clip.promptAdditions.find((item) => item.id === 'shot-sheet-camera')?.text).toBe(line);
+    expect(ids(clip)).not.toContain('camera-rule');
+    const end = musicVideoFrameModelInput(ruled, built, { slot: 'end' });
+    expect(cameraText(end)).toBe('Camera: Snapshot camera, an in-world camera. This camera is the one taking the picture, so it is not in the frame. Held at arm\'s length, facing back.');
+  });
+});
+
+describe('stale and contradictory direction clauses', () => {
+  const clause = 'focal subject: Red umbrella; framing: close-up; keep the lower third of the frame clean, low-detail negative space for a separately composited title; subject left third';
+
+  it('sends no direction clause after a sheet and prompt rewrite marks it stale', () => {
+    const rewritten = {
+      ...scene,
+      prompt: 'an empty wide of a fence',
+      shotSheet: { characters: ['Fence'], view: 'Wide' },
+      direction: { stale: true, frameClause: clause, motionClause: 'keep the lower third of the frame clear throughout the move' },
+    };
+    const frame = musicVideoFrameModelInput(project, rewritten);
+    const clip = musicVideoShotModelInput(project, rewritten);
+    expect(frame.prompt).not.toContain('Red umbrella');
+    expect(frame.prompt).not.toContain('lower third');
+    expect(frame.prompt).not.toContain('negative space');
+    expect(ids(frame)).not.toContain('frame-direction');
+    expect(clip.prompt).not.toContain('lower third');
+    expect(ids(clip)).not.toContain('shot-direction');
+  });
+
+  it('drops a type region when lyric overlay is off, and a focal or framing segment the sheet contradicts', () => {
+    const overlayOff = musicVideoFrameModelInput(
+      { ...project, lyricOverlayEnabled: false },
+      { ...scene, direction: { frameClause: clause } },
+    );
+    expect(overlayOff.prompt).not.toContain('lower third');
+    expect(overlayOff.prompt).toContain('subject left third');
+    expect(ids(overlayOff)).toContain('frame-direction');
+    const contradicted = musicVideoFrameModelInput(project, {
+      ...scene,
+      shotSheet: { characters: ['Fence'], view: 'Wide' },
+      direction: { frameClause: clause },
+    });
+    expect(contradicted.prompt).not.toContain('Red umbrella');
+    expect(contradicted.prompt).not.toContain('framing: close-up');
+    expect(contradicted.prompt).toContain('subject left third');
   });
 });
 
@@ -55,6 +148,7 @@ describe('musicVideoFrameModelInput', () => {
     expect(input.prompt).toContain('color palette #112233; camera: locked-off wides');
     expect(input.prompt).not.toContain('condensed sans');
     expect(ids(input)).toEqual(['project-style', 'creative-context', 'visual-direction', 'frame-direction']);
+    expect(input.prompt).toContain('subject left third');
     for (const item of input.promptAdditions) expect(input.prompt).toContain(item.text);
   });
 

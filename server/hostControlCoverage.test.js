@@ -969,6 +969,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['PATCH /api/music-video/:id/treatment', RECORDS],
   ['POST /api/music-video/:id/treatment/apply', RECORDS],
   ['POST /api/music-video/:id/treatment/proofs/:proofId/review', RECORDS],
+  ['POST /api/music-video/:id/treatment/sync-shot-sheet', RECORDS],
   ['DELETE /api/music-video/:id/vocal-stem', REMOVES_RECORD],
   ['POST /api/music-video/excerpt/:jobId/cancel', REDUCES_EXECUTION],
   ['POST /api/music-video/lyrics/align/:jobId/cancel', REDUCES_EXECUTION],

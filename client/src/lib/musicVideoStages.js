@@ -1238,7 +1238,11 @@ export function stepNotes(project, readiness = project?.productionReadiness, pub
   if (scenes.length && !FOOTAGE_OPTIONAL_MODES.has(mode)) {
     const layered = isLayeredComposition(project);
     const ready = scenes.filter((scene) => sceneRenderReady(scene, { layered, scenes })).length;
+    const staleFrames = scenes.filter((scene) => (scene.takes || []).some((take) => (
+      (take.kind === 'image' && take.assetId === scene.referenceImageId) || (take.kind === 'endImage' && take.assetId === scene.endImageId)
+    ) && take.dependencyState?.status === 'stale')).length;
     make = `${formatCount(ready)} of ${formatCount(scenes.length)} shots have their picture`;
+    if (staleFrames) make += ` · ${formatCount(staleFrames)} ${staleFrames === 1 ? 'frame' : 'frames'} out of date`;
   } else if (scenes.length) make = 'Picture drawn by the composition';
   // Once the picture is in, an unfinished Shots step names what is left instead.
   if (scenes.length && readiness && deriveStages(project, readiness, publish).stages.find((stage) => stage.id === 'produce')?.state !== 'done') {

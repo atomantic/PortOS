@@ -791,3 +791,126 @@ describe('structured shot intent', () => {
     }
   });
 });
+
+describe('shot sheet directions (#15587)', () => {
+  it('compiles focal subject and medium from each shot sheet, and reserves no type region when lyric overlay is off', async () => {
+    const project = await plannedProject();
+    await projects.updateProject(project.id, {
+      lyricOverlayEnabled: false,
+      cameras: [
+        { id: 'cam-photo', name: 'Photo camera', kind: 'observer', output: 'image' },
+        { id: 'cam-video', name: 'Video camera', kind: 'observer', output: 'video' },
+      ],
+    });
+    const scenes = (await reload(project.id)).scenes;
+    for (const [index, scene] of scenes.entries()) {
+      if (index === scenes.length - 1) continue;
+      const video = index % 2 === 0;
+      await projects.updateScene(project.id, scene.sceneId, {
+        visualLayer: 'still',
+        shotSheet: {
+          cameraId: video ? 'cam-video' : 'cam-photo',
+          characters: video ? ['Ada', 'Ben'] : [`Person ${index}`],
+          view: 'Wide',
+          location: 'Example fence',
+          action: 'stands at the fence',
+        },
+      });
+    }
+    const res = await compile(project.id, { baseRevision: 0, useAi: false });
+    expect(res.status).toBe(200);
+    const directions = res.body.treatment.shotDirections;
+    expect(directions).toHaveLength(scenes.length);
+    for (const [index, direction] of directions.entries()) {
+      expect(direction.negativeSpace).toBe('none');
+      expect(direction.typographyRole).toBe('none');
+      if (index === scenes.length - 1) {
+        expect(direction.focalSubject).not.toBe('Ada and Ben');
+        continue;
+      }
+      const video = index % 2 === 0;
+      expect(direction.focalSubject).toBe(video ? 'Ada and Ben' : `Person ${index}`);
+      expect(direction.medium).toBe(video ? 'generated-footage' : 'still');
+      expect(direction.mediumPinned).not.toBe(true);
+    }
+  });
+
+  it('syncs directions from the shot sheet and accepts baseRevision on apply', async () => {
+    const project = await plannedProject();
+    const compiled = await compile(project.id, { baseRevision: 0, useAi: false });
+    expect(compiled.status).toBe(200);
+    const revision = compiled.body.treatment.revision;
+    const preview = await request(app).get(`${base(project.id)}/treatment/apply-preview`);
+    expect(preview.status).toBe(200);
+    const applied = await request(app).post(`${base(project.id)}/treatment/apply`).send({ baseRevision: preview.body.revision });
+    expect(applied.status).toBe(200);
+    const legacy = await request(app).post(`${base(project.id)}/treatment/apply`).send({ revision: preview.body.revision });
+    expect(legacy.status).toBe(200);
+    const conflict = await request(app).post(`${base(project.id)}/treatment/apply`).send({ baseRevision: preview.body.revision, revision: preview.body.revision + 1 });
+    expect(conflict.status).toBe(400);
+
+    const before = await reload(project.id);
+    const scene = before.scenes[0];
+    const oldFocal = scene.direction.focalSubject;
+    await projects.updateProject(project.id, {
+      lyricOverlayEnabled: false,
+      cameras: [{ id: 'cam-video', name: 'Video camera', kind: 'observer', output: 'video' }],
+    });
+    await projects.updateScene(project.id, scene.sceneId, {
+      prompt: 'an empty wide of the fence',
+      visualLayer: 'still',
+      shotSheet: { cameraId: 'cam-video', characters: ['The fence'], view: 'Wide', location: 'Field' },
+    });
+    const rewritten = (await reload(project.id)).scenes.find((item) => item.sceneId === scene.sceneId);
+    expect(rewritten.direction.stale).toBe(true);
+    expect(rewritten.prompt).toBe('an empty wide of the fence');
+
+    const bare = await projects.createProject({ name: 'No arc' });
+    const missing = await request(app).post(`${base(bare.id)}/treatment/sync-shot-sheet`).send({ baseRevision: 0 });
+    expect(missing.status).toBe(409);
+    expect(missing.body.code).toBe('TREATMENT_NOT_COMPILED');
+    const stale = await request(app).post(`${base(project.id)}/treatment/sync-shot-sheet`).send({ baseRevision: revision - 1 });
+    expect(stale.status).toBe(409);
+
+    const synced = await request(app).post(`${base(project.id)}/treatment/sync-shot-sheet`).send({ baseRevision: revision });
+    expect(synced.status).toBe(200);
+    expect(synced.body.treatment.revision).toBe(revision + 1);
+    const shot = synced.body.project.scenes.find((item) => item.sceneId === scene.sceneId);
+    expect(shot.prompt).toBe('an empty wide of the fence');
+    expect(shot.direction.stale).toBeUndefined();
+    expect(shot.direction.focalSubject).toBe('The fence');
+    expect(shot.direction.medium).toBe('generated-footage');
+    expect(shot.direction.negativeSpace).toBe('none');
+    expect(shot.direction.frameClause).not.toContain(oldFocal);
+    expect(shot.direction.frameClause).not.toMatch(/lower third|upper third/);
+    expect(shot.direction.treatmentRevision).toBe(revision + 1);
+    const { musicVideoFrameModelInput } = await import('../lib/musicVideoShotPrompt.js');
+    const previewPrompt = musicVideoFrameModelInput(synced.body.project, shot);
+    expect(previewPrompt.prompt).not.toContain('lower third');
+    expect(previewPrompt.prompt).not.toContain(oldFocal);
+
+    const again = await request(app).post(`${base(project.id)}/treatment/sync-shot-sheet`).send({ baseRevision: revision + 1 });
+    expect(again.status).toBe(200);
+    expect(again.body.treatment.revision).toBe(revision + 1);
+  });
+
+  it('refuses a sync that would exceed the generated-video allowance', async () => {
+    const project = await plannedProject({ lyrics: [] });
+    await projects.updateProject(project.id, { productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 } });
+    const compiled = await compile(project.id, { baseRevision: 0, useAi: false });
+    expect(compiled.status).toBe(200);
+    const revision = compiled.body.treatment.revision;
+    await projects.updateProject(project.id, {
+      cameras: [{ id: 'cam-video', name: 'Video camera', kind: 'observer', output: 'video' }],
+    });
+    for (const scene of (await reload(project.id)).scenes) {
+      await projects.updateScene(project.id, scene.sceneId, {
+        shotSheet: { cameraId: 'cam-video', characters: ['Ada'], view: 'Wide' },
+      });
+    }
+    const synced = await request(app).post(`${base(project.id)}/treatment/sync-shot-sheet`).send({ baseRevision: revision });
+    expect(synced.status).toBe(422);
+    expect(synced.body.code).toBe('GENERATED_VIDEO_ALLOWANCE_EXCEEDED');
+    expect((await reload(project.id)).treatment.revision).toBe(revision);
+  });
+});

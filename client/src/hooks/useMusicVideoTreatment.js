@@ -6,6 +6,7 @@ import {
   compileMusicVideoTreatment,
   previewMusicVideoTreatmentApply,
   applyMusicVideoTreatment,
+  syncMusicVideoTreatmentFromShotSheet,
   reviewMusicVideoTreatmentProof,
 } from '../services/apiMusicVideo.js';
 
@@ -41,6 +42,7 @@ export default function useMusicVideoTreatment({ project, onProjectPatch, replac
   const revisionsRef = useRef(new Map());
   const chainRef = useRef(Promise.resolve());
   const [compiling, setCompiling] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [preview, setPreview] = useState(null);
   const [previewing, setPreviewing] = useState(false);
   const [applying, setApplying] = useState(false);
@@ -110,6 +112,27 @@ export default function useMusicVideoTreatment({ project, onProjectPatch, replac
     ).finally(() => setCompiling(false));
   };
 
+  const syncFromSheet = () => {
+    setSyncing(true);
+    return enqueue(
+      (id, baseRevision) => syncMusicVideoTreatmentFromShotSheet(id, { baseRevision }, { silent: true })
+        .then(({ project: next, treatment }) => {
+          // Adopt before the next chained write. replaceProject updates scenes,
+          // but the revision ref would otherwise wait for a render.
+          adopt(id, treatment);
+          replaceProject?.(next);
+          if (id === projectRef.current) setPreview(null);
+          const shots = treatment?.shotDirections?.length || 0;
+          const unchanged = treatment?.revision === baseRevision;
+          toast.success(unchanged
+            ? 'Directions already match the shot sheet'
+            : `Synced directions for ${shots} shot${shots === 1 ? '' : 's'} from the shot sheet`);
+          return treatment;
+        }),
+      'Could not sync directions from the shot sheet',
+    ).finally(() => setSyncing(false));
+  };
+
   const loadPreview = () => {
     const id = projectId;
     setPreviewing(true);
@@ -131,7 +154,7 @@ export default function useMusicVideoTreatment({ project, onProjectPatch, replac
     // follow-up runs after the server already applied the direction, so it
     // must not read as "Apply failed" and invite re-applying (#9940).
     const run = chainRef.current
-      .then(() => applyMusicVideoTreatment(id, { revision, overwrite, addTextCues }, { silent: true }))
+      .then(() => applyMusicVideoTreatment(id, { baseRevision: revision, overwrite, addTextCues }, { silent: true }))
       .then(({ project: next, result }) => {
         try {
           replaceProject?.(next);
@@ -163,8 +186,8 @@ export default function useMusicVideoTreatment({ project, onProjectPatch, replac
   );
 
   return {
-    compiling, preview, previewing, applying, pendingWrites,
-    save, compile, loadPreview, apply, reviewProof,
+    compiling, syncing, preview, previewing, applying, pendingWrites,
+    save, compile, syncFromSheet, loadPreview, apply, reviewProof,
     clearPreview: () => setPreview(null),
   };
 }

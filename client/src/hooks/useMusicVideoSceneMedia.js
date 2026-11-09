@@ -1,16 +1,13 @@
-import { castInputsFromReferences } from '../../../server/lib/musicVideoCastLook.js';
-import { musicVideoGreyboxReference } from '../../../server/lib/musicVideoGreybox.js';
 import { shotActionContractProblem } from '../../../server/lib/musicVideoActionContract.js';
-import { isOutsideMusicVideoReference, musicVideoClipConditioningReferences, musicVideoConditioningReferences, musicVideoFrameReferenceFiles, musicVideoLinkedCastIds, musicVideoMissingFrameLinkedPicks, musicVideoSceneCastIds, MUSIC_VIDEO_MAX_REFERENCE_CHOICES } from '../../../server/lib/musicVideoConditioning.js';
+import { isOutsideMusicVideoReference, musicVideoClipConditioningReferences, musicVideoConditioningReferences, musicVideoLinkedCastIds, musicVideoSceneCastIds } from '../../../server/lib/musicVideoConditioning.js';
 import { preMusicClipSound } from '../../../server/lib/musicVideoColdOpen.js';
 import { sceneEndFrameRequestFields } from '../../../server/lib/musicVideoEndFrame.js';
-import { authoredFramePromptText, authoredShotPrompt, musicVideoFrameModelInput, visualDirection } from '../../../server/lib/musicVideoShotPrompt.js';
+import { authoredShotPrompt, musicVideoFrameModelInput, visualDirection } from '../../../server/lib/musicVideoShotPrompt.js';
 import { useEffect, useRef, useState } from 'react';
 import socket from '../services/socket';
 import toast from '../components/ui/Toast';
-import { addMusicVideoSceneTake, getMusicVideoSceneJobs } from '../services/apiMusicVideo.js';
+import { addMusicVideoSceneTake, getMusicVideoSceneJobs, renderMusicVideoSceneClip, renderMusicVideoSceneFrame } from '../services/apiMusicVideo.js';
 import { listCatalogIngredientMedia } from '../services/apiCatalog.js';
-import { generateImage } from '../services/apiSystem.js';
 import { generateVideo } from '../services/apiImageVideo.js';
 import useMusicVideoGreyboxPlaces from './useMusicVideoGreyboxPlaces.js';
 import useSceneBatch from './useSceneBatch.js';
@@ -21,7 +18,6 @@ import { ltxReferenceFrames as ltxReferenceFramesFor } from '../../../server/lib
 import { sourceClipNeedSec } from '../../../server/lib/musicVideoSourceTake.js';
 import { LTX_REFERENCES_GENERATION_MODE, LTX_REFERENCES_IC_MODE, LTX_REFERENCES_MAX_REFERENCES, isLtx25Model } from '../lib/musicVideoLtxReferences.js';
 import { isLayeredComposition, isSelfDrawnLayer, sceneVisualLayer } from '../lib/musicVideoLayers.js';
-import { musicVideoFrameGenSize } from '../lib/musicVideoAspect.js';
 import {
   falSceneTake, falTakeRequestFields, grokSceneRequestDuration, isPerformanceScene, performanceBlockedReason, runwaySceneTake, runwayTakeRequestFields, sceneRenderShot,
 } from '../lib/musicVideoShotTiming.js';
@@ -29,30 +25,12 @@ import {
 // Refusals the image route returns when the resolved backend can't consume
 // reference images — surfaced as explicit capability feedback, never retried
 // silently without the references.
-// The guides and sheets this submit actually sends. Recorded on the job tag and,
-// for a lane that returns the file inline, on the take itself. A later Casting
-// edit must not be what the finished frame claims it used.
-function submittedCastInputs(scene, conditioning, referenceFiles) {
-  const sent = new Set(referenceFiles);
-  return castInputsFromReferences(scene, conditioning.filter((ref) => sent.has(ref.imageId)));
-}
-
 const REFERENCE_CAPABILITY_CODES = new Set([
   'REFERENCE_IMAGES_FLUX2_ONLY',
   'IMAGE_EDIT_UNSUPPORTED_MODE',
   'TOO_MANY_REFERENCE_IMAGES',
   'TOO_MANY_INPUT_IMAGES',
 ]);
-
-// A shot card's frame pick. No mode means the project image pin. An explicit
-// mode wins on the server and blocks that pin's model from leaking.
-function explicitImageRequest(imageTarget) {
-  if (!imageTarget?.mode) return {};
-  const request = { mode: imageTarget.mode };
-  if (imageTarget.modelId) request.modelId = imageTarget.modelId;
-  if (imageTarget.cloudModel) request.cloudModel = imageTarget.cloudModel;
-  return request;
-}
 
 // A project-default reference render has no per-card length override.
 const ltxReferenceFrames = (scene, target) => ltxReferenceFramesFor(scene, target?.numFrames);
@@ -70,11 +48,6 @@ export { visualDirection };
 
 /** Shared scene-aware frame conditioning. */
 export const conditioningReferences = musicVideoConditioningReferences;
-/**
- * A render's reference files: the frame it reworks leads, then the shot's references, kept
- * within the request limit. The server applies the chosen renderer's limit.
- */
-const frameReferenceFiles = musicVideoFrameReferenceFiles;
 /** A mood board / Pinterest reference: look text only, never a conditioning image. */
 export const isOutsideReference = isOutsideMusicVideoReference;
 
@@ -254,10 +227,9 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
    * spinner (so a failed render doesn't strand the button). The synchronous
    * external SD-API lane returns a finished filename inline — add it as a take.
    *
-   * References flagged "condition" on the visual spec ride along as real
-   * conditioning inputs (`referenceImageFiles`). A backend that can't consume
-   * them refuses the render, and the toast names that capability gap instead of
-   * quietly rendering without the references.
+   * The server loads cast media and the shot's references (POST .../frame).
+   * A backend that can't consume them refuses the render, and the toast names
+   * that capability gap instead of quietly rendering without the references.
    *
    * Returns a promise that always RESOLVES (never rejects) to `{ ok }` — `ok`
    * is false when the kickoff request itself failed (refused, network error),
@@ -275,42 +247,19 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
    */
   const generateFrame = (scene, { revisionId, onJob, referenceImageId = null, refine = null, replaceSelection = false, thenClip = null, imageTarget = null } = {}) => {
     const refining = Boolean(refine?.trim() && referenceImageId);
-    if (castGuidesPending(scene)) return Promise.resolve({ ok: false });
-    if (musicVideoMissingFrameLinkedPicks(project, scene, castMedia).length) {
-      toast.error('A reference picked for this shot is unavailable. Try again, or use Back to auto on its References row.');
-      return Promise.resolve({ ok: false });
-    }
-    // The shot's references (the card's References row) ride along on every frame render, a refine included.
-    const greybox = musicVideoGreyboxReference(project, scene, greyboxPlaces);
-    if (greybox?.error) { toast.error(greybox.error); return Promise.resolve({ ok: false }); }
-    const conditioning = conditioningReferences(project, scene, castMedia, greybox);
     const problem = refining ? null : shotActionContractProblem(scene.direction?.actionContract, scene);
     if (problem) { toast.error(problem); return Promise.resolve({ ok: false }); }
-    // The director's text (or a refine's instruction); the server composes the still's
-    // prompt and lists each block it adds (lib/musicVideoShotPrompt.js, #11317).
-    const prompt = refining ? refine.trim() : authoredFramePromptText(scene);
     // A planned shot with no text still renders from its look, frame clause and actions.
     if (!refining && !musicVideoFrameModelInput(project, scene).prompt) { toast.error('Add a frame prompt or shot prompt first'); return Promise.resolve({ ok: false }); }
-    // A frame picked on the card (its start or end frame) leads the references, as the image this render reworks.
-    const references = frameReferenceFiles(referenceImageId, conditioning, MUSIC_VIDEO_MAX_REFERENCE_CHOICES, { reservePanel: !Array.isArray(scene.frameReferenceIds) });
-    const castInputs = submittedCastInputs(scene, conditioning, references);
     const projectId = project.id;
     const renderKey = frameLane.startScene(scene.sceneId);
-    return generateImage({
-      ...explicitImageRequest(imageTarget),
-      prompt,
-      ...musicVideoFrameGenSize(project),
-      ...(references.length ? { referenceImageFiles: references } : {}),
-      musicVideo: {
-        catalogBasis: project.castAndSets?.catalogCheckin?.basis,
-        projectId, sceneId: scene.sceneId, compose: true, castInputs, ...(revisionId ? { revisionId } : {}),
-        ...(replaceSelection ? { replaceSelection: true, expectedSelection: scene.referenceImageId || null } : {}),
-        // Clip from storyboard: the server animates this still on this lane once it is the shot's selection.
-        ...(thenClip ? { thenClip } : {}),
-        ...(greybox?.reference ? { greyboxImageId: greybox.reference.imageId } : {}),
-        ...(greybox?.blocking ? { greyboxBlockingImageId: greybox.blocking.imageId } : {}),
-        ...(refining ? { refine: true } : referenceImageId ? { fromFrame: true } : {}),
-      },
+    return renderMusicVideoSceneFrame(projectId, scene.sceneId, {
+      slot: 'start',
+      ...(imageTarget?.mode ? { imageTarget } : {}),
+      ...(refining ? { refine: refine.trim(), referenceImageId } : referenceImageId ? { fromFrame: true, referenceImageId } : {}),
+      ...(revisionId ? { revisionId } : {}),
+      ...(replaceSelection ? { select: true } : {}),
+      ...(thenClip ? { thenClip } : {}),
     }, { silent: true })
       .then((res) => {
         const stillRunning = res?.status === 'queued' || res?.status === 'running';
@@ -326,8 +275,9 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
         }
         const filename = res?.filename;
         if (filename) {
+          const castInputs = res.castInputs;
           addMusicVideoSceneTake(projectId, scene.sceneId, {
-            kind: 'image', assetId: filename, source: 'generated', castInputs, ...(replaceSelection ? { replaceSelection: true, expectedSelection: scene.referenceImageId || null } : {}),
+            kind: 'image', assetId: filename, source: 'generated', ...(castInputs ? { castInputs } : {}), ...(replaceSelection ? { replaceSelection: true, expectedSelection: scene.referenceImageId || null } : {}),
           }, { silent: true })
             .then(({ scene: updated }) => applyScenePatch?.(projectId, scene.sceneId, {
               referenceImageId: updated.referenceImageId, takes: updated.takes,
@@ -340,11 +290,9 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
         return { ok: true };
       })
       .catch((err) => {
-        if (conditioning.length && REFERENCE_CAPABILITY_CODES.has(err?.code)) {
-          toast.error(`The current image backend can't condition on ${conditioning.length} reference image${conditioning.length === 1 ? '' : 's'}: ${err.message}. Switch the image backend, or take references off the shot's References row.`);
-        } else {
-          toast.error(err?.message || 'Frame generation failed');
-        }
+        toast.error(REFERENCE_CAPABILITY_CODES.has(err?.code)
+          ? `${err.message} Switch the image backend, or take references off the shot's References row.`
+          : err?.message || 'Frame generation failed');
         frameLane.clearScene(scene.sceneId, renderKey);
         return { ok: false };
       });
@@ -362,29 +310,13 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     const refining = Boolean(refine?.trim() && referenceImageId);
     const endPrompt = scene.endFramePrompt?.trim();
     if (!endPrompt && !refining) { toast.error('Describe the end frame first'); return Promise.resolve({ ok: false }); }
-    if (castGuidesPending(scene)) return Promise.resolve({ ok: false });
-    const greybox = musicVideoGreyboxReference(project, scene, greyboxPlaces);
-    if (greybox?.error) { toast.error(greybox.error); return Promise.resolve({ ok: false }); }
     const projectId = project.id;
-    // The frame it renders from leads, then the shot's references (the card's References row).
-    const conditioning = conditioningReferences(project, scene, castMedia, greybox);
-    const references = frameReferenceFiles(referenceImageId, conditioning, MUSIC_VIDEO_MAX_REFERENCE_CHOICES, { reservePanel: !Array.isArray(scene.frameReferenceIds) });
-    const castInputs = submittedCastInputs(scene, conditioning, references);
     const renderKey = endFrameLane.startScene(scene.sceneId);
-    return generateImage({
-      ...explicitImageRequest(imageTarget),
-      // From a frame the server keeps its shot and changes what the prompt asks; with no frame it renders like a start frame.
-      prompt: refining ? refine.trim() : endPrompt,
-      ...musicVideoFrameGenSize(project),
-      ...(references.length ? { referenceImageFiles: references } : {}),
-      musicVideo: {
-        catalogBasis: project.castAndSets?.catalogCheckin?.basis,
-        projectId, sceneId: scene.sceneId, slot: 'end', compose: true, castInputs,
-        ...(replaceSelection ? { replaceSelection: true, expectedSelection: scene.endImageId || null } : {}),
-        ...(greybox?.reference ? { greyboxImageId: greybox.reference.imageId } : {}),
-        ...(greybox?.blocking ? { greyboxBlockingImageId: greybox.blocking.imageId } : {}),
-        ...(refining ? { refine: true } : referenceImageId ? { fromFrame: true } : {}),
-      },
+    return renderMusicVideoSceneFrame(projectId, scene.sceneId, {
+      slot: 'end',
+      ...(imageTarget?.mode ? { imageTarget } : {}),
+      ...(refining ? { refine: refine.trim(), referenceImageId } : referenceImageId ? { fromFrame: true, referenceImageId } : {}),
+      ...(replaceSelection ? { select: true } : {}),
     }, { silent: true })
       .then((res) => {
         if (res?.status === 'queued' || res?.status === 'running') {
@@ -394,8 +326,9 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
           return { ok: true, jobId };
         }
         if (res?.filename) {
+          const castInputs = res.castInputs;
           addMusicVideoSceneTake(projectId, scene.sceneId, {
-            kind: 'endImage', assetId: res.filename, source: 'generated', castInputs, ...(replaceSelection ? { replaceSelection: true, expectedSelection: scene.endImageId || null } : {}),
+            kind: 'endImage', assetId: res.filename, source: 'generated', ...(castInputs ? { castInputs } : {}), ...(replaceSelection ? { replaceSelection: true, expectedSelection: scene.endImageId || null } : {}),
           }, { silent: true })
             .then(({ scene: updated }) => applyScenePatch?.(projectId, scene.sceneId, {
               endImageId: updated.endImageId ?? null, takes: updated.takes,
@@ -407,7 +340,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       })
       .catch((err) => {
         toast.error(REFERENCE_CAPABILITY_CODES.has(err?.code)
-          ? `The current image backend can't render from the start frame: ${err.message}. Switch the image backend to one that takes a reference image.`
+          ? `${err.message} Switch the image backend to one that takes a reference image.`
           : err?.message || 'End frame generation failed');
         endFrameLane.clearScene(scene.sceneId, renderKey);
         return { ok: false };
@@ -504,7 +437,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     // Only a cold-open shot playing its clip's own sound renders with sound (fal asks via falSceneTake).
     const disableAudio = !preMusicClipSound(scene);
     const renderKey = videoLane.startScene(scene.sceneId, { label: videoRenderLabel(settings) });
-    return generateVideo({
+    return renderMusicVideoSceneClip(project.id, scene.sceneId, {
       prompt,
       ...(settings.backend ? { backend: settings.backend } : {}),
       ...(settings.backend === 'grok'
@@ -557,7 +490,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
         ...(card?.wholeLine && performance ? { wholeLine: true } : {}),
         ...(card?.startFrameLayout ? { startFrameLayout: true } : {}),
       }),
-    })
+    }, { silent: true })
       .then((res) => trackVideoJob(res, scene.sceneId, renderKey, onJob))
       .catch((err) => handleVideoError(err, scene.sceneId, renderKey, 'Scene video generation failed'));
   };
