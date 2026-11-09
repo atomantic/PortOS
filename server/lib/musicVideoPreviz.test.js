@@ -47,6 +47,35 @@ describe('greybox previz backfill', () => {
   });
 });
 
+describe('greybox previz sync follows the sheet unless hand-edited', () => {
+  const sheet = { cameraId: 'cam-vhs', holder: 'Bo', characters: ['Ana', 'Bo'] };
+  const observer = { cameras: [{ id: 'cam-obs', name: 'Observer', kind: 'observer' }, { id: 'cam-vhs', name: 'VHS camera', kind: 'in-world' }] };
+  // Catches a sync that keeps the old holder after the sheet camera became the Observer.
+  it('clears the holder when the sheet camera becomes the Observer', () => {
+    const first = backfillPrevizFromShots(project([scene('s1', 0, 4, sheet)]), places).previz;
+    expect(first.cuts[0].holderSubjectId).toBe('c-bo');
+    const again = backfillPrevizFromShots(project([scene('s1', 0, 4, { ...sheet, cameraId: 'cam-obs' })], { ...observer, previz: first }), places).previz;
+    expect(again.cuts[0]).toMatchObject({ holderSubjectId: null, visibleSubjectIds: ['c-ana', 'c-bo'] });
+    expect(musicVideoProjectUpdateSchema.safeParse({ previz: again }).success).toBe(true);
+  });
+
+  // Catches a sync that overwrites a holder the director set on the Previz step.
+  it('keeps a hand-set holder and cast when the sheet changes', () => {
+    const first = backfillPrevizFromShots(project([scene('s1', 0, 4, sheet)]), places).previz;
+    const edited = { ...first, cuts: first.cuts.map((cut) => ({ ...cut, holderSubjectId: 'c-ana', visibleSubjectIds: ['c-bo'] })) };
+    const again = backfillPrevizFromShots(project([scene('s1', 0, 4, { ...sheet, cameraId: 'cam-obs', characters: [] })], { ...observer, previz: edited }), places).previz;
+    expect(again.cuts[0]).toMatchObject({ holderSubjectId: 'c-ana', visibleSubjectIds: ['c-bo'] });
+  });
+
+  // Catches a cut saved before sync tracking being overwritten when it can't be told apart from a hand edit.
+  it('leaves a legacy cut with a differing holder alone', () => {
+    const first = backfillPrevizFromShots(project([scene('s1', 0, 4, sheet)]), places).previz;
+    const { synced, ...legacy } = first.cuts[0];
+    const again = backfillPrevizFromShots(project([scene('s1', 0, 4, { ...sheet, cameraId: 'cam-obs' })], { ...observer, previz: { ...first, cuts: [legacy] } }), places).previz;
+    expect(again.cuts[0].holderSubjectId).toBe('c-bo');
+  });
+});
+
 describe('greybox previz playback', () => {
   // Catches a held camera that ignores its holder's movement, or an aim target that leaves the frame.
   it('rides a held camera on its holder and turns it to the aim target; an unheld camera stays on its saved view', () => {

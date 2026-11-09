@@ -179,6 +179,35 @@ function cutFromShot(project, scene) {
   };
 }
 
+// Picks a sync derives from the shot sheet, grouped by what the director edits together.
+const SHEET_PICK_GROUPS = [['placeSubjectId', 'viewShotId'], ['holderSubjectId'], ['visibleSubjectIds']];
+const SHEET_PICKS = SHEET_PICK_GROUPS.flat();
+const samePick = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+
+/**
+ * A cut's picks refreshed from the sheet unless the director changed them.
+ * `cut.synced` is what the last sync wrote; a group whose current value still
+ * equals it was never hand-edited, so it follows the sheet. A cut with no
+ * baseline for a group (made before this was tracked) is left alone unless it
+ * already matches the sheet, which then becomes the baseline.
+ */
+function refreshCutFromSheet(project, scene, cut) {
+  const fresh = cutFromShot(project, scene);
+  const synced = { ...(cut.synced || {}) };
+  const next = { ...cut };
+  for (const group of SHEET_PICK_GROUPS) {
+    const tracked = group.every((key) => key in synced);
+    const unchanged = group.every((key) => samePick(cut[key], synced[key]));
+    const matchesSheet = group.every((key) => samePick(cut[key], fresh[key]));
+    if (!(tracked ? unchanged : matchesSheet)) continue;
+    for (const key of group) {
+      next[key] = fresh[key];
+      synced[key] = fresh[key];
+    }
+  }
+  return { ...next, synced };
+}
+
 /** The vehicle the shot shows its people riding: one its sheet's action names, else one named by the travel of the route its place is on. Null on foot. */
 function shotVehicle(project, scene, placeSubjectId) {
   return previzVehicleInText(project, scene.shotSheet?.action)
@@ -294,8 +323,9 @@ export function updatePrevizCut(project, next, loadedPlaces = {}) {
 
 /**
  * Build or refresh the previz from the shot list. Every timed shot gets one
- * linked cut; a shot that already has one keeps it with its picks (place,
- * camera, holder, cast, aim), cuts whose shot is gone are dropped, and unlinked
+ * linked cut; a shot that already has one keeps the picks the director changed
+ * by hand, while place, holder and cast still matching what the last sync wrote
+ * follow the shot sheet (see refreshCutFromSheet); aim is never synced. Cuts whose shot is gone are dropped, and unlinked
  * cuts are kept. Marks are seeded only for people with no track yet on that
  * set, so hand-made blocking survives a refresh. `loadedPlaces` is the linked
  * catalog places by ingredient id. Returns `{ previz, added, removed }`.
@@ -309,8 +339,9 @@ export function backfillPrevizFromShots(project, loadedPlaces = {}) {
   const added = [];
   const cuts = shots.map((scene) => {
     const existing = linked.get(scene.sceneId);
-    if (existing) return { ...existing, startSec: scene.startSec, endSec: scene.endSec };
+    if (existing) return { ...refreshCutFromSheet(project, scene, existing), startSec: scene.startSec, endSec: scene.endSec };
     const cut = cutFromShot(project, scene);
+    cut.synced = Object.fromEntries(SHEET_PICKS.map((key) => [key, cut[key]]));
     added.push(cut);
     return cut;
   });
