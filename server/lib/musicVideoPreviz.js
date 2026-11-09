@@ -385,7 +385,7 @@ function aimedTarget(cut, timing, t, own, aim) {
   return own.map((v, i) => v + (aim[i] - v) * eased);
 }
 
-// A selfie cut: the camera is held out at arm's length, facing back at its holder.
+// A selfie cut shows its holder regardless of the in-shot picks (the Previz step strips the holder from them): the camera is held out at arm's length, facing back at its holder.
 const SELFIE_DISTANCE = 0.6;
 function selfieCamera(holder, height) {
   const eye = [holder.position[0], holder.position[1] + height, holder.position[2]];
@@ -393,8 +393,6 @@ function selfieCamera(holder, height) {
   return { position: [eye[0] + dir[0] * SELFIE_DISTANCE, eye[1], eye[2] + dir[2] * SELFIE_DISTANCE], target: eye };
 }
 
-/** Whether the holder is on screen: only for a selfie, else the camera is their eyes. */
-const holderShown = (cut, visibleIds) => !!cut.selfie && (!visibleIds || visibleIds.has(cut.holderSubjectId));
 
 const TIMELINE_HELD_LENS = 35;
 const TIMELINE_OBSERVER_LENS = 85;
@@ -411,7 +409,7 @@ function timelineFrame(project, cut, timing, songTime, t, style, storyCamera, ti
     subjectId: actor.subjectId, name: actor.name, position: actor.position, facingDegrees: actor.facingDegrees, pose: actor.pose,
     color: colors[actor.subjectId].figure.hex, ...vehicleOf(project, colors, actor.vehicleSubjectId),
     holder: actor.subjectId === cut.holderSubjectId,
-    visible: actor.subjectId === cut.holderSubjectId ? holderShown(cut, visibleIds) : (!visibleIds || visibleIds.has(actor.subjectId)),
+    visible: actor.subjectId === cut.holderSubjectId ? !!cut.selfie : (!visibleIds || visibleIds.has(actor.subjectId)),
   }));
   const aimActor = cut.aimSubjectId ? actors.find((actor) => actor.subjectId === cut.aimSubjectId) : null;
   const aim = aimActor ? [aimActor.position[0], aimActor.position[1] + CHEST_HEIGHT[aimActor.pose], aimActor.position[2]] : null;
@@ -483,7 +481,7 @@ export function previzFrameAt(project, loadedPlaces, songTime, timelineWorld = n
       const pose = samplePrevizTrack(track, t);
       return pose && {
         subjectId: track.subjectId, name: names.get(track.subjectId), position: pose.position, facingDegrees: pose.facingDegrees,
-        pose: pose.pose || 'stand', color: colors[track.subjectId].figure.hex, ...vehicleOf(project, colors, pose.vehicleSubjectId), visible: track.subjectId === cut.holderSubjectId ? holderShown(cut, null) : visible.has(track.subjectId), holder: track.subjectId === cut.holderSubjectId,
+        pose: pose.pose || 'stand', color: colors[track.subjectId].figure.hex, ...vehicleOf(project, colors, pose.vehicleSubjectId), visible: track.subjectId === cut.holderSubjectId ? !!cut.selfie : visible.has(track.subjectId), holder: track.subjectId === cut.holderSubjectId,
       };
     })
     .filter(Boolean);
