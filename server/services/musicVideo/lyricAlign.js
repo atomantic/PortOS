@@ -20,6 +20,7 @@ import {
   pickAlignmentPath,
   findSilentWords,
 } from './lyricAlignCore.js';
+import { spreadVocableCues } from './lyricVocables.js';
 import { relabelAnalysisSections } from '../../lib/lyricMarkers.js';
 
 async function decodeSourceToWav(sourcePath) {
@@ -214,6 +215,8 @@ export async function alignProjectLyrics(projectId, options = {}) {
     const aligned = align(freshCues);
     nextCues = cueId ? freshCues.map((entry, index) => (entry.id === cueId ? aligned[index] : entry)) : aligned;
   }
+  // CTC cannot anchor held oohs/ahs; re-time those runs from the stem energy.
+  if (stemPcm && !cueId) nextCues = spreadVocableCues(nextCues, stemPcm, wavDurationSec(wav));
   // Words placed where the vocal stem is silent are flagged on their line, not
   // refused: the director needs the timings saved to hear and fix them.
   const silentWords = stemPcm ? findSilentWords(nextCues, stemPcm) : [];
