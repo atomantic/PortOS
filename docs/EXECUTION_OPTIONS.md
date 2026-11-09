@@ -103,6 +103,7 @@ Every shared-selector consumer below uses the legacy reference bridge unless it 
 | `client/src/components/musicVideo/CodeVideoPanel.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/musicVideo/DocumentCompositionPanel.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/musicVideo/MusicVideoLlmPicker.jsx` | Shared structured options or saved provider reference |
+| `client/src/components/musicVideo/PlateReviewerSetting.jsx` | Saved per-project provider and model reference |
 | `client/src/components/musicVideo/PromotionPlanPanel.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/musicVideo/PublishKitPanel.jsx` | Shared structured options or saved provider reference |
 | `client/src/components/musicVideo/ResearchSeedForm.jsx` | Session-local structured options forwarded unchanged to shot and cameo research preview and execution requests; changing providers clears the options |
