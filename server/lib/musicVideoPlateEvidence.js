@@ -1,4 +1,5 @@
 import { activeMusicVideoSubjects } from './musicVideoCastSelection.js';
+import { shotCameraRuleText, shotOmitsOwnedCameraDetail } from './musicVideoShotSheet.js';
 import { RENDER_DEFECTS } from './imageRenderQuality.js';
 /** Asset-bound still-image admission for authored shots. Shared with the comparison UI. */
 import { extractJson } from './jsonExtract.js';
@@ -27,7 +28,7 @@ const sheetNames = (list) => (Array.isArray(list) ? list : [list]).map((name) =>
  * taken from the video's subjects: required for each character the shot sheet names,
  * and conditional for the point-of-view holder, whose hands may be all that shows.
  */
-function plateDetailRequirements(scene, subjects = []) {
+function plateDetailRequirements(scene, subjects = [], project = null) {
   const sheet = scene?.shotSheet || {};
   const inShot = new Set(sheetNames(sheet.characters));
   const holder = new Set(sheetNames(sheet.holder));
@@ -40,18 +41,23 @@ function plateDetailRequirements(scene, subjects = []) {
     if (!prefix) continue;
     for (const detail of subject.requiredDetails) {
       const text = String(detail || '').trim();
-      if (text) lines.push(`${prefix}: ${text}`);
+      // The camera taking the picture is not a prop on the person holding it.
+      if (!text || shotOmitsOwnedCameraDetail(project, scene, name, text)) continue;
+      lines.push(`${prefix}: ${text}`);
     }
   }
+  // The same camera block the frame prompt sends, so the check judges that rule.
+  const camera = shotCameraRuleText(project, scene);
+  if (camera) lines.push(camera);
   return [...new Set(lines)].map((requirement, index) => ({ id: `detail-${index + 1}`, requirement }));
 }
 
 const isDetailCheck = (check) => typeof check?.id === 'string' && /^detail-\d+$/.test(check.id);
 
 /** Still evidence proves starting-state support, never completion of timed actions. */
-export function plateRequirements(scene, subjects = [], role = 'start') {
+export function plateRequirements(scene, subjects = [], role = 'start', project = null) {
   const own = sceneRequirements(scene, role);
-  return [...own.slice(0, -1), ...plateDetailRequirements(scene, subjects), own[own.length - 1]];
+  return [...own.slice(0, -1), ...plateDetailRequirements(scene, subjects, project), own[own.length - 1]];
 }
 
 function sceneRequirements(scene, role = 'start') {
@@ -143,8 +149,8 @@ export function renderQualityAcknowledged(scene, take) {
 }
 
 /** Invalid, absent or incomplete responses fail closed with concrete unverified checks. */
-export function plateReviewEvidence(scene, assetId, runId, text, used = {}, subjects = [], frameRole = 'start') {
-  const requirements = plateRequirements(scene, subjects, frameRole);
+export function plateReviewEvidence(scene, assetId, runId, text, used = {}, subjects = [], frameRole = 'start', project = null) {
+  const requirements = plateRequirements(scene, subjects, frameRole, project);
   const { value } = extractJson(String(text || ''), { shapePredicate: (candidate) => candidate && Array.isArray(candidate.checks) });
   const checks = requirements.map(({ id, requirement }) => {
     const matches = Array.isArray(value?.checks) ? value.checks.filter((check) => check?.id === id) : [];

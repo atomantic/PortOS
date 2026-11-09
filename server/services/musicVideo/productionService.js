@@ -246,7 +246,7 @@ async function preflightPlate(projectId, runId, sceneId) {
         if (plateRequirementBasis(scene) !== basis || scene.referenceImageId !== original.referenceImageId
           || !ensureSceneTakes(scene).some((entry) => entry.assetId === take.assetId && entry.status !== 'rejected')) throw new ServerError('Plate changed during preflight', { code: 'PRODUCTION_PLATE_CHANGED' });
       };
-      const result = await deps.reviewPlate({ scene: original, subjects: project.concept?.subjects || [], assetId: take.assetId, prompt: take.prompt ?? original.framePrompt ?? original.prompt ?? '', runId, reviewer, beforeExecute: verifyCurrent }).catch((error) => ({ error }));
+      const result = await deps.reviewPlate({ scene: original, subjects: project.concept?.subjects || [], project, assetId: take.assetId, prompt: take.prompt ?? original.framePrompt ?? original.prompt ?? '', runId, reviewer, beforeExecute: verifyCurrent }).catch((error) => ({ error }));
       await mutateProjectRecord(projectId, (current) => settleProductionStep(current, runId, reserved.step.key, { status: result.error ? 'failed' : 'completed', error: result.error?.message }));
       if (result.error) return { halt: { status: 'blocked', reason: `Plate review needed: ${result.error.message}` } };
       evidence = result;
