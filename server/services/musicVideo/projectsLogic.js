@@ -55,6 +55,8 @@ import { normalizeMusicVideoAutomation } from '../../lib/musicVideoAutomation.js
 import { normalizeShotSheet } from '../../lib/musicVideoShotSheet.js';
 import { coldOpenScenes, isPreMusicShot, normalizePreMusic, songScenes, timedSongScenes } from '../../lib/musicVideoColdOpen.js';
 import { fillSceneFromCameo, findMusicVideoCameo, cameoStillFor } from '../../lib/musicVideoCameos.js';
+// The frozen v53 -> v54 previz transform; reused so a v2.114 peer's push converts exactly like stored rows did.
+import { migrateMusicVideoPreviz } from '../../../scripts/migrations/459-music-video-previz-timeline.js';
 
 /** The vocal-stem fields cleared together whenever the stem stops belonging to the song (#8977). */
 export const CLEARED_VOCAL_STEM = Object.freeze({ vocalStemFilename: null, vocalStemMasterFilename: null, vocalStemDerived: null });
@@ -1450,6 +1452,9 @@ export function mergeProjectRecord(local, remoteRaw) {
   // sync remains schema-v1 compatible, so apply the same projection inbound
   // before either inserting or restoring this machine's local choices.
   remote = stripMusicVideoLocalRenderPins(remote);
+  // A v51-v53 sender still pushes `previz.night` and bike pawn colors, which this
+  // install's strict previz schema rejects on the next edit (migration 459).
+  remote = migrateMusicVideoPreviz(remote);
   if (!local) return { next: remote, inserted: true, remoteWins: true, changed: true };
   // Render pins are install-capability choices and therefore wire-local
   // (#3245). sanitizeRecordForWire omits them from peer payloads; restore this
