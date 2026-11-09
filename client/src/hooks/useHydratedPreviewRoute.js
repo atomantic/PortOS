@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import usePreviewRoute from './usePreviewRoute';
+import socket from '../services/socket';
 import { fetchMediaRecord, mediaRecordRef, mergeMediaRecord } from '../components/media/mediaDetail';
 
 /**
@@ -61,6 +62,34 @@ export default function useHydratedPreviewRoute(items, options) {
   // map as a dependency and re-running on its own result (`useGallerySidecars`
   // does the same).
   const attemptedRef = useRef(new Set());
+  // Bumped when a server push names the open record, so the lookup effect re-runs.
+  const [refetchTick, setRefetchTick] = useState(0);
+
+  // A record changed server-side (hosted-copy deletion, visibility, prompt edit
+  // elsewhere) must not stay pinned by the cache. The stale record keeps
+  // showing until the refetch lands so the pane does not flash empty.
+  useEffect(() => {
+    if (!ref) return undefined;
+    const lookupKey = `${kind}:${ref}`;
+    const onChanged = (event) => {
+      if (event?.kind !== kind || !Array.isArray(event.ids) || !event.ids.includes(ref)) return;
+      attemptedRef.current.delete(lookupKey);
+      if (event.op === 'delete') {
+        // Gone server-side: nothing to refetch; fall back to the host item.
+        setRecords((prev) => {
+          if (!prev.has(lookupKey)) return prev;
+          const next = new Map(prev);
+          next.delete(lookupKey);
+          return next;
+        });
+        attemptedRef.current.add(lookupKey);
+        return;
+      }
+      setRefetchTick((n) => n + 1);
+    };
+    socket.on('media:history:changed', onChanged);
+    return () => socket.off('media:history:changed', onChanged);
+  }, [kind, ref]);
 
   useEffect(() => {
     const lookupKey = `${kind}:${ref}`;
@@ -83,7 +112,7 @@ export default function useHydratedPreviewRoute(items, options) {
     };
     fetchMediaRecord(kind, ref).then(settle, () => settle(null));
     return () => { cancelled = true; };
-  }, [kind, ref, compact]);
+  }, [kind, ref, compact, refetchTick]);
 
   const hydrated = useMemo(() => {
     const lookupKey = `${kind}:${ref}`;
