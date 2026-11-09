@@ -100,6 +100,45 @@ describe('shot camera rule', () => {
   });
 });
 
+describe('stale and contradictory direction clauses', () => {
+  const clause = 'focal subject: Red umbrella; framing: close-up; keep the lower third of the frame clean, low-detail negative space for a separately composited title; subject left third';
+
+  it('sends no direction clause after a sheet and prompt rewrite marks it stale', () => {
+    const rewritten = {
+      ...scene,
+      prompt: 'an empty wide of a fence',
+      shotSheet: { characters: ['Fence'], view: 'Wide' },
+      direction: { stale: true, frameClause: clause, motionClause: 'keep the lower third of the frame clear throughout the move' },
+    };
+    const frame = musicVideoFrameModelInput(project, rewritten);
+    const clip = musicVideoShotModelInput(project, rewritten);
+    expect(frame.prompt).not.toContain('Red umbrella');
+    expect(frame.prompt).not.toContain('lower third');
+    expect(frame.prompt).not.toContain('negative space');
+    expect(ids(frame)).not.toContain('frame-direction');
+    expect(clip.prompt).not.toContain('lower third');
+    expect(ids(clip)).not.toContain('shot-direction');
+  });
+
+  it('drops a type region when lyric overlay is off, and a focal or framing segment the sheet contradicts', () => {
+    const overlayOff = musicVideoFrameModelInput(
+      { ...project, lyricOverlayEnabled: false },
+      { ...scene, direction: { frameClause: clause } },
+    );
+    expect(overlayOff.prompt).not.toContain('lower third');
+    expect(overlayOff.prompt).toContain('subject left third');
+    expect(ids(overlayOff)).toContain('frame-direction');
+    const contradicted = musicVideoFrameModelInput(project, {
+      ...scene,
+      shotSheet: { characters: ['Fence'], view: 'Wide' },
+      direction: { frameClause: clause },
+    });
+    expect(contradicted.prompt).not.toContain('Red umbrella');
+    expect(contradicted.prompt).not.toContain('framing: close-up');
+    expect(contradicted.prompt).toContain('subject left third');
+  });
+});
+
 describe('musicVideoFrameModelInput', () => {
   it('composes a start frame from the director\'s text with each look block listed', () => {
     const input = musicVideoFrameModelInput(project, scene);
@@ -109,6 +148,7 @@ describe('musicVideoFrameModelInput', () => {
     expect(input.prompt).toContain('color palette #112233; camera: locked-off wides');
     expect(input.prompt).not.toContain('condensed sans');
     expect(ids(input)).toEqual(['project-style', 'creative-context', 'visual-direction', 'frame-direction']);
+    expect(input.prompt).toContain('subject left third');
     for (const item of input.promptAdditions) expect(input.prompt).toContain(item.text);
   });
 

@@ -665,9 +665,33 @@ export function addScenes(project, sceneInputs) {
   return { project: next, scenes: ids.map((id) => scenes.find((s) => s.sceneId === id)) };
 }
 
+// A rewrite of these fields makes a baked direction clause unsafe to send until
+// the treatment is applied again. visualLayer defaults to footage when omitted.
+const DIRECTION_STALE_FIELDS = ['prompt', 'framePrompt', 'visualIntent', 'visualLayer', 'shotSheet'];
+
+const stableValue = (value) => {
+  if (Array.isArray(value)) return value.map(stableValue);
+  if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map((key) => [key, stableValue(value[key])]));
+  return value ?? null;
+};
+
+const staleFieldValue = (field, value) => {
+  if (field === 'visualLayer') return value || 'footage';
+  if (field === 'shotSheet') return value && typeof value === 'object' ? stableValue(value) : null;
+  if (typeof value === 'string') return value.trim() || null;
+  return value ?? null;
+};
+
+function markDirectionStale(prior, next) {
+  if (!next?.direction) return next;
+  const changed = DIRECTION_STALE_FIELDS.some((field) => JSON.stringify(staleFieldValue(field, prior?.[field])) !== JSON.stringify(staleFieldValue(field, next[field])));
+  if (!changed || next.direction.stale === true) return next;
+  return { ...next, direction: { ...next.direction, stale: true } };
+}
+
 // What a shot replaced by a new plan keeps from the one it takes the place of: its id, picked media and finish.
 function carryOver(prior, fresh) {
-  return {
+  return markDirectionStale(prior, {
     ...fresh,
     sceneId: prior.sceneId,
     referenceImageId: prior.referenceImageId ?? null,
@@ -699,7 +723,7 @@ function carryOver(prior, fresh) {
     takes: prior.takes || [],
     ...(prior.direction ? { direction: prior.direction } : {}),
     ...(prior.cameoId ? { cameoId: prior.cameoId, ...(prior.cameoVariantId ? { cameoVariantId: prior.cameoVariantId } : {}), ...(prior.cameoLabel ? { cameoLabel: prior.cameoLabel } : {}) } : {}),
-  };
+  });
 }
 
 /**
@@ -855,15 +879,16 @@ export function applySceneUpdate(project, sceneId, patch) {
   if (retimed && !('lyricText' in data)) {
     updated.lyricText = sungLyricTextWithin(project.lyricCues, updated.startSec, updated.endSec);
   }
-  assertMusicVideoMediaSelections({ ...project, scenes: [updated], visualSpec: null });
+  const recorded = markDirectionStale(scenes[idx], updated);
+  assertMusicVideoMediaSelections({ ...project, scenes: [recorded], visualSpec: null });
   const nextScenes = scenes.slice();
-  nextScenes[idx] = updated;
+  nextScenes[idx] = recorded;
   const next = retimed ? anchorShotsToSungLyrics(touch(project, { scenes: nextScenes }), [sceneId]) : touch(project, { scenes: nextScenes });
   // Retiming or rewording a shot, or picking another take, keeps the storyboard approval it was judged on.
   const shotEdit = Object.keys(data).every((key) => SCENE_SHOT_EDIT_FIELDS.includes(key));
   const saved = shotEdit ? carryStoryboardApproval(project, next, 'Edited a shot') : next;
   // The saved scene, after dependency presentation, so a prompt edit returns the frame's new stale state.
-  return { project: saved, updated: saved.scenes.find((scene) => scene.sceneId === sceneId) || updated };
+  return { project: saved, updated: saved.scenes.find((scene) => scene.sceneId === sceneId) || recorded };
 }
 
 /**

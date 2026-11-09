@@ -60,6 +60,7 @@ import {
   musicVideoTreatmentUpdateSchema,
   musicVideoTreatmentCompileSchema,
   musicVideoTreatmentApplySchema,
+  musicVideoTreatmentSyncShotSheetSchema,
   musicVideoSequenceRenderSchema,
   musicVideoTreatmentProofReviewSchema,
   musicVideoExcerptRequestSchema,
@@ -232,6 +233,7 @@ import {
   compileTreatment,
   previewTreatmentApply,
   applyTreatment,
+  syncTreatmentFromShotSheet,
   reviewProof,
 } from '../services/musicVideo/treatmentService.js';
 import {
@@ -603,6 +605,13 @@ router.post('/:id/sequence-coverage/render', asyncHandler(async (req, res) => {
 router.post('/:id/treatment/apply', asyncHandler(async (req, res) => {
   const options = validateRequest(musicVideoTreatmentApplySchema, req.body);
   res.json(await applyTreatment(req.params.id, options));
+}));
+
+// Deterministic: copy focal subject, camera medium and type-region rules from
+// the shot sheet onto the compiled directions. No provider call.
+router.post('/:id/treatment/sync-shot-sheet', asyncHandler(async (req, res) => {
+  const options = validateRequest(musicVideoTreatmentSyncShotSheetSchema, req.body);
+  res.json(await syncTreatmentFromShotSheet(req.params.id, options));
 }));
 
 router.post('/:id/treatment/proofs/:proofId/review', asyncHandler(async (req, res) => {
