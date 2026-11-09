@@ -1225,3 +1225,41 @@ ${block}`;
     expect(calls).toMatch(/^probe \S+venv-mflux\/bin\/python3 -c from mflux\.models\.flux\.cli\.flux_generate import main/m);
   });
 });
+
+describe('FLUX.2 Apple Silicon install is hash-pinned', () => {
+  const lock = readFileSync(join(REPO_ROOT, 'scripts', 'requirements-flux2-mlx.lock.txt'), 'utf8');
+  const section = source.slice(source.indexOf('INSTALL_FLUX2" == "1"'), source.indexOf('flux2 venv built but'));
+  const [appleBranch, otherBranch] = section.split(/^    else$/m);
+
+  it('every locked package carries a sha256 hash, none comes from a VCS or URL source, and all are arm64-macOS scoped', () => {
+    const blocks = lock.split(/\n(?=[a-z][^\n]*==)/i).filter((b) => /^[a-z][^\n]*==/i.test(b));
+    expect(blocks.length).toBeGreaterThan(0);
+    for (const block of blocks) {
+      expect(block).toMatch(/--hash=sha256:[0-9a-f]{64}/);
+      const pin = block.split('\n')[0];
+      expect(pin).toContain("sys_platform == 'darwin'");
+      expect(pin).toContain("platform_machine == 'arm64'");
+    }
+    expect(lock).not.toMatch(/^[a-z][^\n]* @ /im);
+  });
+
+  it('Apple Silicon installs from the lock with --require-hashes and resolves nothing', () => {
+    expect(appleBranch).toContain('if is_apple_silicon; then');
+    expect(appleBranch).toContain('pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-flux2-mlx.lock.txt"');
+    expect(appleBranch).not.toMatch(/pip install --upgrade/);
+    expect(appleBranch).not.toContain('git+https');
+  });
+
+  it('refuses a Python older than the 3.11 floor the lock was compiled for', () => {
+    expect(appleBranch).toContain('sys.version_info[:2] >= (3, 11)');
+  });
+
+  it('never skips the sync on Apple Silicon because an unlocked venv already imports', () => {
+    const skipGuard = section.slice(section.indexOf('FLUX2_FORCE_REINSTALL:-}" != "1"'), section.indexOf('already ready'));
+    expect(skipGuard).toContain('! is_apple_silicon');
+  });
+
+  it('keeps the resolving install for Linux/Windows until the CUDA lock lands', () => {
+    expect(otherBranch).toMatch(/pip install --upgrade \\\n\s+"torch>=2\.5"/);
+  });
+});
