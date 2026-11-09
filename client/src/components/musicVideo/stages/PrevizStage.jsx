@@ -14,7 +14,7 @@ import PrevizTimeline from './PrevizTimeline.jsx';
 import WorldMap, { fitWorldView } from '../../catalog/WorldMapView';
 import { timelineActorsAt, timelineClockAt, timelineMinuteOfClock, previzTimeline } from '../../../../../server/lib/musicVideoPrevizTimeline.js';
 import { ingredientPath } from '../../../lib/creativeLibraries.js';
-import { createCatalogIngredient, saveCatalogWorld } from '../../../services/apiCatalog.js';
+import { createCatalogIngredient, finishCatalogPrevizBuildJob, saveCatalogWorld, startCatalogPrevizBuildJob } from '../../../services/apiCatalog.js';
 import { draftWorldFromRouteMaps, worldClockText, worldSetFootprint } from '../../../../../server/lib/worldMap.js';
 import { sceneShotName } from '../../../lib/musicVideoStages.js';
 import { formatCount, formatDateTime, formatTimecode } from '../../../utils/formatters.js';
@@ -324,6 +324,12 @@ function CutRow({ project, cut, number, scene, places, characters, placeSubjects
           onChange={(holderSubjectId) => onChange({ holderSubjectId, ...(Array.isArray(cut.visibleSubjectIds) ? { visibleSubjectIds: cut.visibleSubjectIds.filter((entry) => entry !== holderSubjectId) } : {}) })} />
         <Picker id={`${id}-aim`} label="Keep in frame" value={cut.aimSubjectId} options={others} empty="Camera's own aim"
           onChange={(aimSubjectId) => onChange({ aimSubjectId })} />
+        {cut.holderSubjectId && (
+          <label className="flex items-center gap-1" htmlFor={`${id}-selfie`}>
+            <input id={`${id}-selfie`} type="checkbox" className="h-4 w-4" checked={!!cut.selfie} onChange={(event) => onChange({ selfie: event.target.checked })} />
+            <span className="text-port-text-muted">Selfie (faces the holder)</span>
+          </label>
+        )}
         {cut.aimSubjectId && (
           <label className="flex items-center gap-1" htmlFor={`${id}-turn`}>
             <input id={`${id}-turn`} type="checkbox" className="h-4 w-4" checked={!!cut.turnToAim} onChange={(event) => onChange({ turnToAim: event.target.checked })} />
@@ -404,7 +410,14 @@ export default function PrevizStage({ board }) {
     const { previz: built, added, removed } = backfillPrevizFromShots(project, places);
     setBuilding(previz ? 'Syncing…' : 'Building…');
     // saveProjectFields toasts its own failure and always settles.
-    Promise.resolve(save({ ...built, builtAt: new Date().toISOString() })).finally(() => setBuilding(null));
+    // Reported to the server so another tab or an agent sees it; a failed report never blocks the build.
+    const label = previz ? 'Sync with shots' : 'Build previz';
+    const reported = startCatalogPrevizBuildJob({ projectId: project.id, label }).then((job) => job?.id).catch(() => null);
+    Promise.resolve(save({ ...built, builtAt: new Date().toISOString() }))
+      .finally(() => {
+        setBuilding(null);
+        reported.then((id) => id && finishCatalogPrevizBuildJob(id, { ok: true, summary: added || removed ? `${plural(added, 'cut')} added, ${formatCount(removed)} removed` : 'Already matches the shots' }).catch(() => {}));
+      });
     toast.success(added || removed
       ? `Previz: ${[added ? `${plural(added, 'cut')} added` : '', removed ? `${formatCount(removed)} removed` : ''].filter(Boolean).join(', ')}`
       : 'Previz already matches the shots');
@@ -426,7 +439,7 @@ export default function PrevizStage({ board }) {
         <fieldset disabled={locked} className="flex min-w-0 flex-wrap items-center gap-2">
           <button type="button" className={buttonCls} disabled={!timedShots || !placesLoaded || Boolean(building) || jobRunning} aria-busy={Boolean(building) || jobRunning} onClick={build}>
             {building ? <Loader2 size={12} aria-hidden="true" className="animate-spin" /> : previz ? <RefreshCw size={12} aria-hidden="true" /> : <Box size={12} aria-hidden="true" />}
-            {jobRunning ? 'In progress' : building || (previz ? 'Sync with shots' : `Build previz from ${plural(timedShots, 'shot')}`)}
+            {building || (jobRunning ? 'In progress' : previz ? 'Sync with shots' : `Build previz from ${plural(timedShots, 'shot')}`)}
           </button>
           {!timedShots && <span className="text-xs text-port-text-muted">Time the shots on the Storyboard step first.</span>}
           {timedShots > 0 && !placesLoaded && <span className="inline-flex items-center gap-1 text-xs text-port-text-muted"><Loader2 size={12} aria-hidden="true" className="animate-spin" /> Loading the sets…</span>}

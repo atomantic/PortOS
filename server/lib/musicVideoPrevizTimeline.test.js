@@ -83,6 +83,13 @@ describe('timelineActorsAt', () => {
     expect(Math.hypot(after.position[0] - 200, after.position[2])).toBeLessThan(4);
   });
 
+  // Catches an on-foot travel always drawn standing: a walk should read as walking and a run beat as running.
+  it('travels on foot in the walk or run pose by pace', () => {
+    const onFoot = (pace) => ({ ...project, previz: { ...project.previz, timeline: { ...timeline, beats: timeline.beats.map((b) => (b.id === 'b' ? { ...b, pace, vehicleSubjectId: null } : b)) } } });
+    expect(pose('c-a', 35, onFoot('walk')).pose).toBe('walk');
+    expect(pose('c-a', 35, onFoot('run')).pose).toBe('run');
+  });
+
   it('goes straight across when no path joins the sets', () => {
     const riding = pose('c-a', 35, project, { ...world, paths: [] });
     expect(riding.position[0]).toBeCloseTo(100, 0);
@@ -164,6 +171,20 @@ describe('shots on the timeline', () => {
     expect(first.actors.find((actor) => actor.subjectId === 'c-a').position[2]).toBeGreaterThan(bo.position[2]);
     // Without the world loaded the cut falls back to its set's own blocking.
     expect(previzFrameAt(observed, {}, 1).world).toBeUndefined();
+  });
+
+  // Catches a selfie that still hides its holder, or a POV cut that starts showing them.
+  it('shows the holder 0.6 m in front of the camera on a selfie cut, and hides them on a plain held cut', () => {
+    const frameOf = (extra) => previzFrameAt({ ...base, previz: { ...base.previz, cuts: [cut('k1', 0, 'p-home', { storyMin: 35, holderSubjectId: 'c-b', ...extra })] } }, {}, 1, timelineWorld);
+    const pov = frameOf({});
+    expect(pov.actors.find((a) => a.subjectId === 'c-b').visible).toBe(false);
+    const selfie = frameOf({ selfie: true });
+    const bo = selfie.actors.find((a) => a.subjectId === 'c-b');
+    expect(bo).toMatchObject({ holder: true, visible: true });
+    expect(selfie.actors.find((a) => a.subjectId === 'c-a').visible).toBe(true);
+    const { position, target } = selfie.camera;
+    expect(Math.hypot(position[0] - target[0], position[2] - target[2])).toBeCloseTo(0.6, 1);
+    expect(Math.hypot(target[0] - bo.position[0], target[2] - bo.position[2])).toBeLessThan(1e-6);
   });
 
   // Catches a held camera that never swings to the person it should turn to.

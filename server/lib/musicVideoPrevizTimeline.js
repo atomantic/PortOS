@@ -52,11 +52,34 @@ export function previzVehicles(project) {
   }));
 }
 
-/** The first vehicle whose name a text mentions (a shot's action, a route map's travel), or null. */
+// Words that clearly say someone rides: a riding verb, or "on" a rideable noun.
+const RIDING_TEXT = /\b(?:rid(?:e|es|ing|den)|rode|pedal(?:s|ed|ing)?|cycl(?:e|es|ed|ing)|bik(?:e|es|ed|ing)|skateboard(?:s|ed|ing)|scooting|driv(?:e|es|ing)|drove)\b|\bon\s+(?:[\p{L}'’-]+\s+){0,3}(?:bikes?|bicycles?|bmx|cruisers?|skateboards?|scooters?|cars?|motorcycles?)\b/iu;
+// An object a cast obviously rides, by name (matched with `\b`, so "Scarf" is not a car).
+const VEHICLE_NAME = /\b(?:bicycles?|bikes?|bmx|cruisers?|tricycles?|unicycles?|skateboards?|longboards?|scooters?|motorcycles?|motorbikes?|cars?|trucks?|vans?|buses|bus|sedans?|jeeps?|taxis?|cabs?)\b/iu;
+
+/**
+ * Cast objects that are obviously vehicles but not yet listed in `previz.vehicles`, as
+ * `[{ subjectId, speedMetersPerMin }]` entries to add to it (default speed).
+ */
+export function suggestPrevizVehicles(project) {
+  const listed = new Set((musicVideoPrevizForActiveCast(project)?.vehicles || []).map((entry) => entry.subjectId));
+  return (project?.concept?.subjects || [])
+    .filter((subject) => subject?.kind === 'object' && !listed.has(subject.id) && VEHICLE_NAME.test(textOf(subject.name)))
+    .map((subject) => ({ subjectId: subject.id, speedMetersPerMin: VEHICLE_DEFAULT_METERS_PER_MIN }));
+}
+
+/**
+ * The first vehicle whose name a text mentions (a shot's action, a route map's travel), or null.
+ * When none is named but the text clearly describes riding and the cast has exactly one vehicle,
+ * that vehicle: shots say "the BMX" or "bikes" where the object is "K and Renee's bicycles".
+ */
 export function previzVehicleInText(project, ...texts) {
   const text = texts.map(textOf).filter(Boolean).join('\n');
   if (!text) return null;
-  return previzVehicles(project).find((vehicle) => vehicle.name && new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(vehicle.name)}(?![\\p{L}\\p{N}])`, 'iu').test(text))?.subjectId || null;
+  const vehicles = previzVehicles(project);
+  const named = vehicles.find((vehicle) => vehicle.name && new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(vehicle.name)}(?![\\p{L}\\p{N}])`, 'iu').test(text));
+  if (named) return named.subjectId;
+  return vehicles.length === 1 && RIDING_TEXT.test(text) ? vehicles[0].subjectId : null;
 }
 
 /** The story clock (minutes after midnight, 0–1439) at story minute `storyMin`. */
@@ -200,7 +223,7 @@ function travelPose(world, beat, subjectId, storyMin, routes) {
   const across = [Math.cos(rad(heading)), -Math.sin(rad(heading))];
   return {
     position: [round(at[0] + across[0] * slot * SIDE_BY_SIDE), 0, round(at[1] + across[1] * slot * SIDE_BY_SIDE)],
-    facingDegrees: round(heading), pose: beat.vehicleSubjectId ? 'ride' : 'stand', vehicleSubjectId: beat.vehicleSubjectId || null, setId: null,
+    facingDegrees: round(heading), pose: beat.vehicleSubjectId ? 'ride' : beat.pace === 'run' ? 'run' : 'walk', vehicleSubjectId: beat.vehicleSubjectId || null, setId: null,
   };
 }
 

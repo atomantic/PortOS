@@ -21,6 +21,8 @@ export default function ImageGenOverlays({ preview, galleryPicker, settings, run
         onClean={preview.onClean}
         onRegenerate={preview.onRegenerate}
         onRemoveWatermark={preview.onRemoveWatermark}
+        onDelete={preview.onDelete}
+        onToggleHidden={preview.onToggleHidden}
         regenAvailable={preview.regenAvailable}
         regenBounds={preview.regenBounds}
       />

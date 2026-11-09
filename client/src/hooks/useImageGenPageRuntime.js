@@ -601,6 +601,8 @@ export function useImageGenPageRuntime() {
         onClean: (item) => gallery.actions.clean(item?.raw),
         onRegenerate: (item, options) => handleRegenerate(item?.raw, options),
         onRemoveWatermark: (item) => gallery.actions.removeWatermark(item?.raw),
+        onDelete: gallery.actions.delete,
+        onToggleHidden: gallery.actions.toggleHidden,
         regenAvailable,
         regenBounds: regenInfo,
       },

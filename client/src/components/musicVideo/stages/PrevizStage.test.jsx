@@ -3,6 +3,7 @@ import { waitFor } from '@testing-library/react';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import PrevizStage from './PrevizStage.jsx';
+import * as apiCatalog from '../../../services/apiCatalog.js';
 
 vi.mock('../../../hooks/useMusicVideoGreyboxPlaces.js', () => ({
   default: () => ({
@@ -40,6 +41,8 @@ vi.mock('../../../services/apiCatalog.js', () => ({
     { id: 'cat-street', type: 'place', name: 'Example Street', payload: {} },
   ].filter((row) => ids.includes(row.id))),
   listCatalogIngredientMedia: vi.fn(async () => []),
+  startCatalogPrevizBuildJob: vi.fn(async () => ({ id: 'job-1' })),
+  finishCatalogPrevizBuildJob: vi.fn(async () => ({ finished: true })),
 }));
 
 const project = {
@@ -129,7 +132,10 @@ it('shows the build as busy until the save settles, then summarizes it with the 
   const { previz } = board.saveProjectFields.mock.calls[0][0];
   expect(Number.isNaN(Date.parse(previz.builtAt))).toBe(false);
 
+  expect(apiCatalog.startCatalogPrevizBuildJob).toHaveBeenCalledWith({ projectId: 'mv-1', label: 'Build previz' });
+
   settle();
+  await waitFor(() => expect(apiCatalog.finishCatalogPrevizBuildJob).toHaveBeenCalledWith('job-1', expect.objectContaining({ ok: true })));
   await waitFor(() => expect(screen.getByRole('button', { name: /Build previz from 1 shot/ })).not.toBeDisabled());
   rerender(<MemoryRouter><PrevizStage board={{ ...board, project: { ...project, previz } }} /></MemoryRouter>);
   expect(screen.getByText(/^Built from 1 shot · 1 cut · updated /)).toBeTruthy();
@@ -231,4 +237,17 @@ it('shows server-side Previz progress and disables Build as In progress while a 
   } finally {
     jobsState.value = { running: [], finished: null, drafted: 0, setCount: 0, step: null };
   }
+});
+
+// Catches the selfie flag being unreachable from the cut row, or offered with no one holding the camera.
+it('offers a selfie toggle only for a held cut and saves it on the cut', async () => {
+  const cut = { id: 'k1', sceneId: 's1', startSec: 0, endSec: 4, placeSubjectId: 'p-street', viewShotId: 'wide', holderSubjectId: null, visibleSubjectIds: null, aimSubjectId: null };
+  const make = (extra) => ({ project: { ...project, previz: { cuts: [{ ...cut, ...extra }], tracks: [] } }, locked: false, editProjectLocal: vi.fn(), saveProjectFields: vi.fn(), seekToScene: vi.fn() });
+  const unheld = render(<MemoryRouter><PrevizStage board={make({})} /></MemoryRouter>);
+  expect(screen.queryByLabelText(/Selfie/)).toBeNull();
+  unheld.unmount();
+  const board = make({ holderSubjectId: 'c-bo' });
+  render(<MemoryRouter><PrevizStage board={board} /></MemoryRouter>);
+  fireEvent.click(await screen.findByLabelText(/Selfie/));
+  expect(board.saveProjectFields.mock.calls.at(-1)[0].previz.cuts[0]).toMatchObject({ holderSubjectId: 'c-bo', selfie: true });
 });

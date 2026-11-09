@@ -31,7 +31,7 @@ Coordinates are meters: x east, z south (north is -z). A set's position is [x, z
 
 The timeline runs from startClock (minutes after midnight) for lengthMin minutes. Each beat is a stay at a world set (setId) or a travel from setId to toSetId, with the cast ids in it, from startMin to endMin story minutes. A travel is on foot at pace walk or run, or, when vehicleSubjectId names one of the listed vehicles, by that vehicle at its speedMetersPerMin. Vehicles are the cast's objects (objects) that the previz treats as something people ride; list an object in vehicles to make it one. One person is never in two beats at once.
 
-A cut plays its moment at real speed from storyMin (story minute it starts). holderSubjectId holds the camera (null = an observer at cameraSpot [x, z]); aimSubjectId is kept in frame; turnToAim swings the camera to them during the cut; visibleSubjectIds is who is shown (null = everyone but the holder). Use only the ids given.
+A cut plays its moment at real speed from storyMin (story minute it starts). holderSubjectId holds the camera (null = an observer at cameraSpot [x, z]); aimSubjectId is kept in frame; turnToAim swings the camera to them during the cut; selfie (needs a holder) holds the camera at arm's length facing back at the holder, who is then shown; visibleSubjectIds is who is shown (null = everyone but the holder). Use only the ids given.
 
 Return only JSON with just the parts you change: {"summary":"one or two plain sentences on what you changed","world":{whole world map},"timeline":{whole timeline},"vehicles":[{"subjectId":"<object id>","speedMetersPerMin":270}],"cuts":[{"id":"","only changed fields"}],"pawnColors":{"<cast or vehicle id>":{"figure":"<color id>"}},"cameraStyles":{"<camera id>":"<style>"}}.`;
 
@@ -59,7 +59,7 @@ async function previzContext(project) {
       id: cut.id, shot: scene ? numbers.get(scene.sceneId) : null, startSec: timing?.startSec ?? null, endSec: timing?.endSec ?? null,
       action: scene?.shotSheet?.action || '', camera: scene?.shotSheet?.cameraId || null,
       placeSubjectId: cut.placeSubjectId || null, holderSubjectId: cut.holderSubjectId || null, aimSubjectId: cut.aimSubjectId || null,
-      turnToAim: !!cut.turnToAim, visibleSubjectIds: cut.visibleSubjectIds ?? null, storyMin: cut.storyMin ?? null, cameraSpot: cut.cameraSpot ?? null,
+      turnToAim: !!cut.turnToAim, selfie: !!cut.selfie, visibleSubjectIds: cut.visibleSubjectIds ?? null, storyMin: cut.storyMin ?? null, cameraSpot: cut.cameraSpot ?? null,
     };
   });
   return {

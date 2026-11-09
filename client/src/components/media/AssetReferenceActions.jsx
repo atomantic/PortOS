@@ -18,7 +18,7 @@ function shareableMediaUrl(value) {
 
 const FULL_BUTTON = 'min-h-[44px] min-w-0 rounded border border-port-border bg-port-bg px-1 text-[11px] font-medium hover:bg-port-border/70 focus-visible:ring-2 focus-visible:ring-port-accent aria-disabled:opacity-50';
 // Quiet text chips for dense cards, where they sit below the card's own actions.
-const COMPACT_BUTTON = 'inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] text-port-text-muted pointer-coarse:min-h-11 min-h-[32px] sm:min-h-0 hover:bg-port-border/70 hover:text-port-text focus-visible:ring-2 focus-visible:ring-port-accent aria-disabled:opacity-50';
+const COMPACT_BUTTON = 'inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] text-port-text-muted pointer-coarse:min-h-11 pointer-coarse:min-w-11 justify-center min-h-[32px] sm:min-h-0 hover:bg-port-border/70 hover:text-port-text focus-visible:ring-2 focus-visible:ring-port-accent aria-disabled:opacity-50';
 
 /** Copy an asset's ID or URL. `compact` shows small "ID"/"URL" chips for dense cards. */
 export default function AssetReferenceActions({ assetId, url, resolveUrl, compact = false }) {

@@ -21,7 +21,7 @@
  * - a track is where one character is in one place over time:
  *   `{ subjectId, placeSubjectId, keys: [{ timeSec, position, facingDegrees, pose, vehicleSubjectId }] }`,
  *   absolute song seconds, linearly interpolated, held before the first and after
- *   the last key. `pose: 'ride'` draws the figure on a proxy of the vehicle `vehicleSubjectId`
+ *   the last key. `pose` is stand, walk, run, crouch, sit or 'ride'; 'ride' draws the figure on a proxy of the vehicle `vehicleSubjectId`
  *   names (a catalog object listed in `previz.vehicles`).
  *
  * Units are the greybox's: meters, Y up, floor y=0; facing 0 looks along +Z.
@@ -31,11 +31,11 @@ import { isPreMusicShot } from './musicVideoColdOpen.js';
 import { musicVideoShotPlaceId, projectRouteMaps } from './musicVideoRouteMaps.js';
 import { SHOT_CAMERA_SET_DOWN } from './musicVideoShotSheet.js';
 import { activeMusicVideoSubjects, musicVideoPrevizForActiveCast } from './musicVideoCastSelection.js';
-import { timelineActorsAt, timelineClockAt, previzTimeline, previzVehicleInText, previzVehicles } from './musicVideoPrevizTimeline.js';
+import { timelineActorsAt, timelineClockAt, previzTimeline, previzVehicleInText, previzVehicles, suggestPrevizVehicles } from './musicVideoPrevizTimeline.js';
 import { PREVIZ_CUTS_MAX, PREVIZ_KEYS_MAX, PREVIZ_PAWN_COLORS, PREVIZ_TRACKS_MAX } from './musicVideoPrevizLimits.js';
 
-const EYE_HEIGHT = { stand: 1.6, ride: 1.75 };
-const CHEST_HEIGHT = { stand: 1.25, ride: 1.4 };
+const EYE_HEIGHT = { stand: 1.6, walk: 1.6, run: 1.5, crouch: 1.0, sit: 1.2, ride: 1.75 };
+const CHEST_HEIGHT = { stand: 1.25, walk: 1.25, run: 1.2, crouch: 0.8, sit: 0.95, ride: 1.4 };
 const FIGURE_SPACING = 0.9;
 // The end key of a cut sits this far before the cut's end, so a figure holds its mark for
 // the whole cut instead of sliding toward where it stands in the next one.
@@ -179,10 +179,52 @@ function cutFromShot(project, scene) {
   };
 }
 
+// Picks a sync derives from the shot sheet, grouped by what the director edits together.
+const SHEET_PICK_GROUPS = [['placeSubjectId', 'viewShotId'], ['holderSubjectId'], ['visibleSubjectIds']];
+const SHEET_PICKS = SHEET_PICK_GROUPS.flat();
+const samePick = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+
+/**
+ * A cut's picks refreshed from the sheet unless the director changed them.
+ * `cut.synced` is what the last sync wrote; a group whose current value still
+ * equals it was never hand-edited, so it follows the sheet. A cut with no
+ * baseline for a group (made before this was tracked) is left alone unless it
+ * already matches the sheet, which then becomes the baseline.
+ */
+function refreshCutFromSheet(project, scene, cut) {
+  const fresh = cutFromShot(project, scene);
+  const synced = { ...(cut.synced || {}) };
+  const next = { ...cut };
+  for (const group of SHEET_PICK_GROUPS) {
+    const tracked = group.every((key) => key in synced);
+    const unchanged = group.every((key) => samePick(cut[key], synced[key]));
+    const matchesSheet = group.every((key) => samePick(cut[key], fresh[key]));
+    if (!(tracked ? unchanged : matchesSheet)) continue;
+    for (const key of group) {
+      next[key] = fresh[key];
+      synced[key] = fresh[key];
+    }
+  }
+  return { ...next, synced };
+}
+
 /** The vehicle the shot shows its people riding: one its sheet's action names, else one named by the travel of the route its place is on. Null on foot. */
 function shotVehicle(project, scene, placeSubjectId) {
   return previzVehicleInText(project, scene.shotSheet?.action)
     || previzVehicleInText(project, ...projectRouteMaps(project).filter((map) => (map.stops || []).some((stop) => stop.subjectId === placeSubjectId)).map((map) => map.travel));
+}
+
+const CROUCH_TEXT = /\b(crouch\w*|squat\w*|kneel\w*|duck(?:s|ed|ing)?\s+(?:down|behind)|(?:hid(?:es|e|ing)|hunch\w*)\s+behind)\b/i;
+const SIT_TEXT = /\b(sits?|sitting|sat|seated|perch(?:es|ed)?)\b/i;
+const RUN_TEXT = /\b(runs?|running|ran|sprint\w*|dash(?:es|ed|ing)?|flees?|fleeing|fled|races|racing)\b/i;
+
+/** The on-foot pose a shot's action words describe (crouch, sit, run), else null: a shot that names none keeps people standing. */
+function previzPoseInText(text) {
+  const words = textOf(text);
+  if (CROUCH_TEXT.test(words)) return 'crouch';
+  if (SIT_TEXT.test(words)) return 'sit';
+  if (RUN_TEXT.test(words)) return 'run';
+  return null;
 }
 
 /** Everyone a cut stands on its set: the people it picks to show, then the camera's holder. */
@@ -257,7 +299,7 @@ function seedCutTracks(project, existingTracks, cuts, loadedPlaces) {
     if (!people.length) continue;
     const scene = (project?.scenes || []).find((entry) => entry.sceneId === cut.sceneId) || {};
     const vehicleSubjectId = shotVehicle(project, scene, cut.placeSubjectId);
-    const pose = vehicleSubjectId ? 'ride' : 'stand';
+    const pose = vehicleSubjectId ? 'ride' : previzPoseInText(scene.shotSheet?.action) || 'stand';
     const marks = seedMarks(cut, previzPlaceGreybox(project, cut.placeSubjectId, loadedPlaces), people);
     for (const id of people) {
       const key = trackKey(id, cut.placeSubjectId);
@@ -294,23 +336,29 @@ export function updatePrevizCut(project, next, loadedPlaces = {}) {
 
 /**
  * Build or refresh the previz from the shot list. Every timed shot gets one
- * linked cut; a shot that already has one keeps it with its picks (place,
- * camera, holder, cast, aim), cuts whose shot is gone are dropped, and unlinked
+ * linked cut; a shot that already has one keeps the picks the director changed
+ * by hand, while place, holder and cast still matching what the last sync wrote
+ * follow the shot sheet (see refreshCutFromSheet); aim is never synced. Cuts whose shot is gone are dropped, and unlinked
  * cuts are kept. Marks are seeded only for people with no track yet on that
  * set, so hand-made blocking survives a refresh. `loadedPlaces` is the linked
  * catalog places by ingredient id. Returns `{ previz, added, removed }`.
  */
-export function backfillPrevizFromShots(project, loadedPlaces = {}) {
-  const forCast = musicVideoPrevizForActiveCast(project);
-  const current = forCast && Array.isArray(forCast.cuts) ? forCast : { cuts: [], tracks: [] };
+export function backfillPrevizFromShots(sourceProject, loadedPlaces = {}) {
+  const forCast = musicVideoPrevizForActiveCast(sourceProject);
+  const base = forCast && Array.isArray(forCast.cuts) ? forCast : { cuts: [], tracks: [] };
+  // A cast with no listed vehicle gets its obvious ones (a bicycle, a car) listed, so riding shots ride without a hand edit.
+  const suggested = base.vehicles?.length ? [] : suggestPrevizVehicles({ ...sourceProject, previz: base });
+  const current = suggested.length ? { ...base, vehicles: suggested } : base;
+  const project = { ...sourceProject, previz: current };
   const shots = timedShots(project);
   const shotIds = new Set(shots.map((scene) => scene.sceneId));
   const linked = new Map(current.cuts.filter((cut) => cut.sceneId).map((cut) => [cut.sceneId, cut]));
   const added = [];
   const cuts = shots.map((scene) => {
     const existing = linked.get(scene.sceneId);
-    if (existing) return { ...existing, startSec: scene.startSec, endSec: scene.endSec };
+    if (existing) return { ...refreshCutFromSheet(project, scene, existing), startSec: scene.startSec, endSec: scene.endSec };
     const cut = cutFromShot(project, scene);
+    cut.synced = Object.fromEntries(SHEET_PICKS.map((key) => [key, cut[key]]));
     added.push(cut);
     return cut;
   });
@@ -536,6 +584,15 @@ function aimedTarget(cut, timing, t, own, aim) {
   return own.map((v, i) => v + (aim[i] - v) * eased);
 }
 
+// A selfie cut shows its holder regardless of the in-shot picks (the Previz step strips the holder from them): the camera is held out at arm's length, facing back at its holder.
+const SELFIE_DISTANCE = 0.6;
+function selfieCamera(holder, height) {
+  const eye = [holder.position[0], holder.position[1] + height, holder.position[2]];
+  const dir = facingDir(holder.facingDegrees);
+  return { position: [eye[0] + dir[0] * SELFIE_DISTANCE, eye[1], eye[2] + dir[2] * SELFIE_DISTANCE], target: eye };
+}
+
+
 const TIMELINE_HELD_LENS = 35;
 const TIMELINE_OBSERVER_LENS = 85;
 // An observer with no spot picked stands this far off the people, to their right.
@@ -551,7 +608,7 @@ function timelineFrame(project, cut, timing, songTime, t, style, storyCamera, ti
     subjectId: actor.subjectId, name: actor.name, position: actor.position, facingDegrees: actor.facingDegrees, pose: actor.pose,
     color: colors[actor.subjectId].figure.hex, ...vehicleOf(project, colors, actor.vehicleSubjectId),
     holder: actor.subjectId === cut.holderSubjectId,
-    visible: actor.subjectId !== cut.holderSubjectId && (!visibleIds || visibleIds.has(actor.subjectId)),
+    visible: actor.subjectId === cut.holderSubjectId ? !!cut.selfie : (!visibleIds || visibleIds.has(actor.subjectId)),
   }));
   const aimActor = cut.aimSubjectId ? actors.find((actor) => actor.subjectId === cut.aimSubjectId) : null;
   const aim = aimActor ? [aimActor.position[0], aimActor.position[1] + CHEST_HEIGHT[aimActor.pose], aimActor.position[2]] : null;
@@ -562,7 +619,9 @@ function timelineFrame(project, cut, timing, songTime, t, style, storyCamera, ti
   if (holder) {
     const position = [holder.position[0], holder.position[1] + EYE_HEIGHT[holder.pose], holder.position[2]];
     const dir = facingDir(holder.facingDegrees);
-    camera = { position, target: aimedTarget(cut, timing, t, [position[0] + dir[0] * 5, position[1], position[2] + dir[2] * 5], aim) };
+    camera = cut.selfie
+      ? selfieCamera(holder, EYE_HEIGHT[holder.pose])
+      : { position, target: aimedTarget(cut, timing, t, [position[0] + dir[0] * 5, position[1], position[2] + dir[2] * 5], aim) };
   } else {
     const middle = center ? [center[0], 1.2, center[2]] : [0, 1.2, 0];
     const look = aim || middle;
@@ -621,7 +680,7 @@ export function previzFrameAt(project, loadedPlaces, songTime, timelineWorld = n
       const pose = samplePrevizTrack(track, t);
       return pose && {
         subjectId: track.subjectId, name: names.get(track.subjectId), position: pose.position, facingDegrees: pose.facingDegrees,
-        pose: pose.pose || 'stand', color: colors[track.subjectId].figure.hex, ...vehicleOf(project, colors, pose.vehicleSubjectId), visible: visible.has(track.subjectId) && track.subjectId !== cut.holderSubjectId, holder: track.subjectId === cut.holderSubjectId,
+        pose: pose.pose || 'stand', color: colors[track.subjectId].figure.hex, ...vehicleOf(project, colors, pose.vehicleSubjectId), visible: track.subjectId === cut.holderSubjectId ? !!cut.selfie : visible.has(track.subjectId), holder: track.subjectId === cut.holderSubjectId,
       };
     })
     .filter(Boolean);
@@ -637,7 +696,7 @@ export function previzFrameAt(project, loadedPlaces, songTime, timelineWorld = n
     const reach = view ? Math.hypot(view.target[0] - view.position[0], view.target[2] - view.position[2]) || 5 : 5;
     const dir = facingDir(holder.facingDegrees);
     const ahead = [position[0] + dir[0] * reach, view ? view.target[1] - viewGround + holder.position[1] : position[1], position[2] + dir[2] * reach];
-    camera = { position, target: aimedTarget(cut, timing, t, ahead, aim) };
+    camera = cut.selfie ? selfieCamera(holder, height) : { position, target: aimedTarget(cut, timing, t, ahead, aim) };
   } else if (view) {
     camera = { position: view.position, target: aimedTarget(cut, timing, t, view.target, aim) };
   } else {

@@ -19,6 +19,7 @@ const cutLine = (patch, nameOf, numberOf) => {
   if ('placeSubjectId' in patch) bits.push(`set ${nameOf(patch.placeSubjectId) || 'none'}`);
   if ('holderSubjectId' in patch) bits.push(patch.holderSubjectId ? `held by ${nameOf(patch.holderSubjectId)}` : 'observer camera');
   if ('aimSubjectId' in patch) bits.push(patch.aimSubjectId ? `keeps ${nameOf(patch.aimSubjectId)} in frame` : 'camera\'s own aim');
+  if ('selfie' in patch) bits.push(patch.selfie ? 'selfie' : 'no selfie');
   if ('turnToAim' in patch) bits.push(patch.turnToAim ? 'turns to them' : 'no turn');
   if ('visibleSubjectIds' in patch) bits.push(patch.visibleSubjectIds ? `shows ${patch.visibleSubjectIds.map(nameOf).join(', ') || 'nobody'}` : 'shows everyone');
   if ('storyMin' in patch) bits.push(patch.storyMin == null ? 'off the timeline' : `story minute ${formatCount(Math.round(patch.storyMin))}`);

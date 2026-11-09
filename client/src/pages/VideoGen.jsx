@@ -97,7 +97,7 @@ import ModelInputPreview from '../components/media/ModelInputPreview';
 import RemoteMediaTargetPicker from '../components/federatedMedia/RemoteMediaTargetPicker';
 import {
   getVideoGenStatus, getVideoGenModelContext, generateVideo, cancelVideoGen, previewVideoPrompt,
-  listVideoHistory, getVideoHistoryItem, deleteVideoHistoryItem, cancelVideoPendingDelete, setVideoHidden,
+  listVideoHistory, getVideoHistoryItem, deleteVideoHistoryItem, cancelVideoPendingDelete,
   patchSettingsSlice,
   getActiveVideoJob,
   getSettings,
@@ -130,6 +130,7 @@ import { isMiniMaxH3SpeedProfile, VIDEO_EDGE_BOUNDS, videoEdgeBoundsForModel, IC
 import { finishTargetForRecord, isDeliveryVideoModel } from '../lib/videoFinish.js';
 import { peerModelRequiresInput } from '../lib/federatedMediaReadiness.js';
 import { refreshMediaUsages } from '../hooks/useMediaUsages';
+import { useMediaHideToggle } from '../hooks/useMediaHideToggle';
 const MODES = [
   { id: 'text',   label: 'Text',   icon: Type,       desc: 'Text-to-video' },
   { id: 'image',  label: 'Image',  icon: ImageIcon,  desc: 'Image-to-video (start frame)' },
@@ -543,17 +544,10 @@ export default function VideoGen() {
       ? { ...v, prompt: prompt === '(no prompt)' ? '' : prompt }
       : v));
   }, []);
-  const handleToggleHistoryHidden = useCallback(async (item) => {
-    const raw = item?.raw || item;
-    const nextHidden = !raw.hidden;
-    setHistory((h) => h.map((v) => (v.id === raw.id ? { ...v, hidden: nextHidden } : v)));
-    const result = await setVideoHidden(raw.id, nextHidden, { silent: true }).catch((err) => {
-      toast.error(err.message || 'Failed to update visibility');
-      setHistory((h) => h.map((v) => (v.id === raw.id ? { ...v, hidden: !nextHidden } : v)));
-      return null;
-    });
-    if (result) toast.success(nextHidden ? 'Video hidden' : 'Video unhidden');
-  }, []);
+  const handleToggleHistoryHidden = useMediaHideToggle(useCallback((item, hidden) => {
+    const id = (item?.raw || item).id;
+    setHistory((h) => h.map((v) => (v.id === id ? { ...v, hidden } : v)));
+  }, []));
   // The button opens a method-picker drawer (#6510) instead of upscaling
   // directly — the drawer owns the plan fetch, the disclosure, and the actual
   // submit; this page just supplies which item is open and how to fold the
@@ -2141,6 +2135,8 @@ export default function VideoGen() {
         onContinue={handleContinue}
         onRemix={(item) => item?.raw && handleRemixVideo(item.raw)}
         onTrimmed={handleTrimmed}
+        onDelete={handleDeleteHistory}
+        onToggleHidden={handleToggleHistoryHidden}
       />
 
       <GalleryImagePicker

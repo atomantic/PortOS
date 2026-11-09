@@ -8,7 +8,7 @@ import {
   previzSetGreyboxDraftInstruction,
   updatePrevizCut,
 } from './musicVideoPreviz.js';
-import { musicVideoProjectUpdateSchema } from './musicVideoValidation.js';
+import { musicVideoPrevizSchema, musicVideoProjectUpdateSchema } from './musicVideoValidation.js';
 
 const subjects = [
   { id: 'c-ana', kind: 'character', name: 'Ana' },
@@ -24,6 +24,24 @@ const greybox = {
 const places = { 'cat-street': { ingredient: { type: 'place', payload: { greybox } }, media: [] } };
 const scene = (sceneId, startSec, endSec, sheet = {}) => ({ sceneId, startSec, endSec, setReference: { subjectId: 'p-street', greyboxShotId: 'wide' }, shotSheet: sheet });
 const project = (scenes, extra = {}) => ({ concept: { subjects }, cameras: [{ id: 'cam-vhs', name: 'VHS camera', kind: 'in-world' }], scenes, ...extra });
+
+describe('previz poses from shot actions', () => {
+  // Catches crouched, seated and running shots all drawing a standing pawn, and a plain walk or "stands" shot picking up a pose it never described.
+  it('seeds crouch, sit and run from the action and keeps everything else standing', () => {
+    const posed = (action) => backfillPrevizFromShots(project([scene('s1', 0, 4, { characters: ['Ana'], action })]), places).previz.tracks[0].keys[0].pose;
+    expect(posed('Ana crouches behind the hedge')).toBe('crouch');
+    expect(posed('Ana runs past')).toBe('run');
+    expect(posed('Bo sits on the fountain rim')).toBe('sit');
+    expect(posed('Ana walks home')).toBe('stand');
+    expect(posed('Ana at the gate')).toBe('stand');
+  });
+
+  it('accepts every pose in a saved track and rejects an unknown one', () => {
+    const key = (pose) => ({ subjectId: 'c-ana', placeSubjectId: 'p-street', keys: [{ timeSec: 0, position: [0, 0, 0], facingDegrees: 0, pose }] });
+    for (const pose of ['stand', 'walk', 'run', 'crouch', 'sit', 'ride']) expect(musicVideoPrevizSchema.safeParse({ cuts: [], tracks: [key(pose)] }).success).toBe(true);
+    expect(musicVideoPrevizSchema.safeParse({ cuts: [], tracks: [key('fly')] }).success).toBe(false);
+  });
+});
 
 describe('greybox previz backfill', () => {
   // Catches a backfill that loses who holds the camera, whom the shot shows, or the riding pose.
@@ -52,6 +70,35 @@ describe('greybox previz backfill', () => {
     expect(previz.cuts.map((c) => c.sceneId)).toEqual(['s1', 's3']);
     expect(previz.cuts[0]).toMatchObject({ startSec: 1, endSec: 5, aimSubjectId: 'c-ana', visibleSubjectIds: ['c-ana', 'c-bo'] });
     expect(previz.tracks.find((t) => t.subjectId === 'c-ana').keys).toEqual([{ timeSec: 0, position: [5, 0, 5], facingDegrees: 0, pose: 'stand' }]);
+  });
+});
+
+describe('greybox previz sync follows the sheet unless hand-edited', () => {
+  const sheet = { cameraId: 'cam-vhs', holder: 'Bo', characters: ['Ana', 'Bo'] };
+  const observer = { cameras: [{ id: 'cam-obs', name: 'Observer', kind: 'observer' }, { id: 'cam-vhs', name: 'VHS camera', kind: 'in-world' }] };
+  // Catches a sync that keeps the old holder after the sheet camera became the Observer.
+  it('clears the holder when the sheet camera becomes the Observer', () => {
+    const first = backfillPrevizFromShots(project([scene('s1', 0, 4, sheet)]), places).previz;
+    expect(first.cuts[0].holderSubjectId).toBe('c-bo');
+    const again = backfillPrevizFromShots(project([scene('s1', 0, 4, { ...sheet, cameraId: 'cam-obs' })], { ...observer, previz: first }), places).previz;
+    expect(again.cuts[0]).toMatchObject({ holderSubjectId: null, visibleSubjectIds: ['c-ana', 'c-bo'] });
+    expect(musicVideoProjectUpdateSchema.safeParse({ previz: again }).success).toBe(true);
+  });
+
+  // Catches a sync that overwrites a holder the director set on the Previz step.
+  it('keeps a hand-set holder and cast when the sheet changes', () => {
+    const first = backfillPrevizFromShots(project([scene('s1', 0, 4, sheet)]), places).previz;
+    const edited = { ...first, cuts: first.cuts.map((cut) => ({ ...cut, holderSubjectId: 'c-ana', visibleSubjectIds: ['c-bo'] })) };
+    const again = backfillPrevizFromShots(project([scene('s1', 0, 4, { ...sheet, cameraId: 'cam-obs', characters: [] })], { ...observer, previz: edited }), places).previz;
+    expect(again.cuts[0]).toMatchObject({ holderSubjectId: 'c-ana', visibleSubjectIds: ['c-bo'] });
+  });
+
+  // Catches a cut saved before sync tracking being overwritten when it can't be told apart from a hand edit.
+  it('leaves a legacy cut with a differing holder alone', () => {
+    const first = backfillPrevizFromShots(project([scene('s1', 0, 4, sheet)]), places).previz;
+    const { synced, ...legacy } = first.cuts[0];
+    const again = backfillPrevizFromShots(project([scene('s1', 0, 4, { ...sheet, cameraId: 'cam-obs' })], { ...observer, previz: { ...first, cuts: [legacy] } }), places).previz;
+    expect(again.cuts[0].holderSubjectId).toBe('c-bo');
   });
 });
 
@@ -110,6 +157,24 @@ describe('greybox previz playback', () => {
     expect(driving.tracks[0].keys[0]).toMatchObject({ pose: 'ride', vehicleSubjectId: 'o-cart' });
   });
 
+  // Catches riding shots standing because the object's full name ("Ana and Bo's bicycles") never appears in the actions, and a cast whose obvious vehicle was never listed.
+  it('lists an obvious vehicle and rides it when the action describes riding without naming the object', () => {
+    const bikes = { id: 'o-bikes', kind: 'object', name: "Ana and Bo's bicycles" };
+    const p = project([
+      scene('s1', 0, 4, { characters: ['Ana'], action: 'Ana pedals the red BMX through the gate' }),
+      scene('s2', 4, 8, { characters: ['Ana'], action: 'Ana stands at the gate holding a coffee' }),
+    ], { concept: { subjects: [...subjects, bikes] } });
+    const { previz } = backfillPrevizFromShots(p, places);
+    expect(previz.vehicles).toEqual([{ subjectId: 'o-bikes', speedMetersPerMin: 270 }]);
+    const keys = previz.tracks.find((t) => t.subjectId === 'c-ana').keys;
+    expect(keys[0]).toMatchObject({ pose: 'ride', vehicleSubjectId: 'o-bikes' });
+    // A shot that never mentions riding stays on foot even with the bicycles listed.
+    const walkOnly = backfillPrevizFromShots({ ...p, scenes: [p.scenes[1]] }, places).previz;
+    expect(walkOnly.tracks[0].keys[0].pose).toBe('stand');
+    // A cast with no vehicle-like object lists none, so a bare 'rides' puts nobody on one.
+    expect(backfillPrevizFromShots(project([scene('s1', 0, 4, { characters: ['Ana'], action: 'Ana rides' })]), places).previz.vehicles).toBeUndefined();
+  });
+
   it('names what keeps a cut from playing', () => {
     const p = project([scene('s1', 0, 4)]);
     expect(previzCutProblems(p, { id: 'c', sceneId: 's1', startSec: 0, endSec: 4, placeSubjectId: 'p-street', viewShotId: 'gone' }, places)).toEqual(['Its greybox camera was removed']);
@@ -166,6 +231,20 @@ it('seeds marks for anyone a picker edit adds, follows a set change with its cas
   // Sync seeds an existing cut whose picks changed outside the pickers too.
   const edited = { ...built, previz: { ...built.previz, cuts: [{ ...cut, visibleSubjectIds: ['c-ana', 'c-bo'] }] } };
   expect(backfillPrevizFromShots(edited, places2).previz.tracks.some((t) => t.subjectId === 'c-bo')).toBe(true);
+});
+
+// Catches a selfie cut still hiding its holder, or a plain held cut showing them.
+it('shows a selfie holder facing the camera 0.6 m away, and still hides the holder of a normal held cut', () => {
+  const tracks = ['c-ana', 'c-bo'].map((subjectId, i) => ({ subjectId, placeSubjectId: 'p-street', keys: [{ timeSec: 0, position: [i * 2, 0, 0], facingDegrees: 90, pose: 'stand' }, { timeSec: 4, position: [i * 2, 0, 0], facingDegrees: 90, pose: 'stand' }] }));
+  const cut = { id: 'cut-s1', sceneId: 's1', startSec: 0, endSec: 4, placeSubjectId: 'p-street', viewShotId: null, holderSubjectId: 'c-bo', visibleSubjectIds: null, aimSubjectId: null };
+  const frameOf = (extra) => previzFrameAt(project([scene('s1', 0, 4)], { previz: { cuts: [{ ...cut, ...extra }], tracks } }), places, 1);
+  expect(frameOf({}).actors.find((a) => a.subjectId === 'c-bo').visible).toBe(false);
+  const selfie = frameOf({ selfie: true });
+  expect(selfie.actors.map((a) => a.visible)).toEqual([true, true]);
+  const { position, target } = selfie.camera;
+  expect(Math.hypot(position[0] - target[0], position[2] - target[2])).toBeCloseTo(0.6, 1);
+  expect(position[0]).toBeGreaterThan(target[0]);
+  expect(musicVideoPrevizSchema.safeParse({ cuts: [{ ...cut, selfie: true }], tracks }).success).toBe(true);
 });
 
 describe('draft missing greyboxes and link cameras', () => {
