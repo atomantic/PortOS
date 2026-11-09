@@ -145,6 +145,30 @@ describe('inbound usage accounting', () => {
     await vi.waitFor(() => expect(usage.openCount()).toBe(0));
   });
 
+  it('survives a client hanging up mid-stream while the usage tap is attached', async () => {
+    // Killing a remote agent aborts the upstream fetch mid-stream. The aborted
+    // body must reach the pipeline as a handled error; an unpiped tap source
+    // re-throws it as an uncaught 'error' and takes the host process down.
+    const usage = ledgerDouble();
+    const uncaught = [];
+    const onUncaught = (error) => uncaught.push(error);
+    process.on('uncaughtException', onUncaught);
+    try {
+      const { post, received, gateway } = await setup({ usage });
+      const abort = new AbortController();
+      const response = await post(abort.signal, JSON.stringify({ model: 'example-model' }));
+      await response.body.getReader().read();
+      abort.abort();
+      await vi.waitFor(() => expect(gateway.status().active).toBe(0));
+      await vi.waitFor(() => expect(usage.closed).toHaveLength(1));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(received[0].res.destroyed).toBe(true);
+      expect(uncaught).toEqual([]);
+    } finally {
+      process.removeListener('uncaughtException', onUncaught);
+    }
+  });
+
   it('does not count a /v1/models poll as a generation', async () => {
     const usage = ledgerDouble();
     const { base } = await setup({ usage });

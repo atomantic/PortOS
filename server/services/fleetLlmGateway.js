@@ -105,13 +105,15 @@ export function createFleetLlmGateway({ upstream, apiKey, usage = null, onRecord
     // A pass-through tap rather than a tee: the client's stream stays the
     // pipeline's only consumer (so backpressure and cancellation behave exactly
     // as before) and the sniffer just watches the bytes go past, holding a
-    // bounded tail of them to read the final `usage` frame out of.
-    const source = job.sniffer
-      ? Readable.fromWeb(response.body).pipe(new Transform({
-        transform(chunk, _enc, done) { job.sniffer.push(chunk); done(null, chunk); },
-      }))
-      : Readable.fromWeb(response.body);
-    await pipeline(source, job.res, { signal: job.controller.signal });
+    // bounded tail of them to read the final `usage` frame out of. The tap is a
+    // pipeline stage, never `.pipe()`d: `.pipe()` does not forward errors, so the
+    // AbortError a client hang-up raises on the body escaped as an uncaught
+    // 'error' and crashed the host.
+    const stages = [Readable.fromWeb(response.body)];
+    if (job.sniffer) stages.push(new Transform({
+      transform(chunk, _enc, done) { job.sniffer.push(chunk); done(null, chunk); },
+    }));
+    await pipeline(...stages, job.res, { signal: job.controller.signal });
   };
   const handle = async (req, res) => {
     if (!authenticated(req.headers.authorization)) return reply(res, 401, 'A valid model host API key is required.');
