@@ -744,8 +744,8 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
   // The shot on screen and the next few: each keeps one mounted clip, so the cut to the
   // next shot shows a clip that has already loaded and sits on its first frame.
   const clipShots = timed.slice(Math.max(index, 0), Math.max(index, 0) + 1 + CLIP_PRELOAD_SHOTS)
-    .map((scene) => playedScene(scene, allScenes))
-    .filter((scene) => scene.videoHistoryId && sceneVisualLayer(scene, { layered }) === 'footage');
+    .map((scene, offset) => ({ scene: playedScene(scene, allScenes), offset }))
+    .filter((item) => item.scene.videoHistoryId && sceneVisualLayer(item.scene, { layered }) === 'footage');
   const label = shot ? shot.label || `Shot ${index + 1}` : 'No shots yet';
   // With the lyrics drawn over the picture, a shot without a frame keeps its label and
   // intent under the picture instead, so no stand-in text sits under the sung words.
@@ -771,9 +771,9 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
             {shot?.visualIntent && <span className="line-clamp-3 text-xs text-port-text-muted">{shot.visualIntent}</span>}
           </div>
         ) : null}
-        {clipShots.map((scene) => (
+        {clipShots.map(({ scene, offset }) => (
           <ShotClip key={`${cold.active ? 'cold:' : ''}${scene.sceneId}:${scene.videoHistoryId}`} scene={scene} audioRef={clock.ref} time={clock.time} current={scene.sceneId === shot?.sceneId}
-            preload={timed.indexOf(scene) - Math.max(index, 0) <= 1 ? 'auto' : 'metadata'} />
+            preload={offset <= 1 ? 'auto' : 'metadata'} />
         ))}
         {nearToggles.map((toggle) => {
           const incoming = playedScene(scenes.find((scene) => scene.sceneId === toggle.toSceneId), allScenes);
