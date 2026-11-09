@@ -321,6 +321,47 @@ venv_python() {
 # shared with venv_python so the two probes can't drift apart.
 venv_exists() { [[ -x "$1/bin/python3" || -x "$1/Scripts/python.exe" ]]; }
 
+# Runtimes installed from x86_64 Windows/Linux cu126 hash locks
+# (scripts/requirements-<name>-cuda-{windows,linux}.lock.txt) share this flow.
+# $1 = label for messages, $2 = doc that explains regenerating the locks.
+require_cuda_lock_host() {
+  if ! have uv; then
+    echo "❌ $1 CUDA needs uv to provision its locked Python 3.11 runtime. Install uv and retry Repair." >&2
+    exit 1
+  fi
+  case "$(uname -m)" in
+    x86_64|amd64|AMD64) ;;
+    *) echo "❌ $1 CUDA hash locks support x86_64 Windows/Linux only." >&2; exit 1 ;;
+  esac
+  if [[ "$TORCH_CUDA_INDEX" != "https://download.pytorch.org/whl/cu126" ]]; then
+    echo "❌ $1 CUDA is locked to cu126. Unset PORTOS_TORCH_CUDA_INDEX; see $2." >&2
+    exit 1
+  fi
+}
+
+# $1 = label, $2 = venv, $3 = lock name prefix (requirements-<prefix>-<os>.lock.txt).
+# The locks target 3.11. Repair keeps a standalone 3.11 venv and rebuilds other
+# minors and Conda bases, whose DLL search path can stop CUDA torch loading on
+# Windows. Sync removes packages outside the lock.
+sync_cuda_lock_venv() {
+  local label="$1" venv="$2" lock py
+  if is_windows; then lock="${SCRIPT_DIR}/$3-windows.lock.txt"; else lock="${SCRIPT_DIR}/$3-linux.lock.txt"; fi
+  if venv_exists "$venv"; then
+    py="$(venv_python "$venv")"
+    if ! "$py" -c "import sys; from pathlib import Path; sys.exit(sys.version_info[:2] != (3, 11) or (Path(sys.base_prefix) / 'conda-meta').is_dir())"; then
+      echo "♻️ Rebuilding ${label} CUDA with its locked Python 3.11..."
+      uv venv --clear --managed-python --python 3.11 "$venv"
+    fi
+  fi
+  if ! venv_exists "$venv"; then
+    echo "📦 Creating ${label} CUDA venv (Python 3.11) at ${venv}..."
+    uv venv --managed-python --python 3.11 "$venv"
+  fi
+  py="$(venv_python "$venv")"
+  echo "📦 Syncing the hash-pinned ${label} CUDA runtime into ${venv}..."
+  uv pip sync --require-hashes --only-binary :all: --index-strategy unsafe-best-match --python "$py" "$lock"
+}
+
 # True when $1 is a Python 3.10+ interpreter. Mirrors MIN_VENV_PYTHON in
 # server/lib/pythonSetup.js, and for the same reason: below 3.10 pip resolves an
 # old setuptools (<77) inside its build isolation, which rejects the PEP 639
@@ -1186,18 +1227,7 @@ if [[ "$INSTALL_AUDIOLDM2" == "1" ]]; then
       echo "❌ AudioLDM2 hash locks cover Apple Silicon and x86_64 Windows/Linux; Intel macOS is unsupported." >&2
       exit 1
     fi
-    if ! have uv; then
-      echo "❌ AudioLDM2 needs uv to provision its locked Python 3.11 runtime. Install uv and retry Repair." >&2
-      exit 1
-    fi
-    case "$(uname -m)" in
-      x86_64|amd64|AMD64) ;;
-      *) echo "❌ AudioLDM2 CUDA hash locks support x86_64 Windows/Linux only." >&2; exit 1 ;;
-    esac
-    if [[ "$TORCH_CUDA_INDEX" != "https://download.pytorch.org/whl/cu126" ]]; then
-      echo "❌ AudioLDM2 CUDA is locked to cu126. Unset PORTOS_TORCH_CUDA_INDEX; see docs/AUDIOLDM2_CUDA.md." >&2
-      exit 1
-    fi
+    require_cuda_lock_host AudioLDM2 docs/AUDIOLDM2_CUDA.md
   fi
   mkdir -p "${HOME}/.portos"
   reset_universal_venv "$AUDIOLDM2_VENV" "$PYTHON_BIN"
@@ -1222,30 +1252,9 @@ if [[ "$INSTALL_AUDIOLDM2" == "1" ]]; then
     fi
     "$AUDIOLDM2_PY" -m pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-audioldm2-mlx.lock.txt"
   else
-    if is_windows; then
-      AUDIOLDM2_LOCK="${SCRIPT_DIR}/requirements-audioldm2-cuda-windows.lock.txt"
-    else
-      AUDIOLDM2_LOCK="${SCRIPT_DIR}/requirements-audioldm2-cuda-linux.lock.txt"
-    fi
-    # The locks target 3.11. Repair keeps a standalone 3.11 venv and rebuilds
-    # other minors and Conda bases, whose DLL search path can stop CUDA torch
-    # loading on Windows.
-    if venv_exists "$AUDIOLDM2_VENV"; then
-      AUDIOLDM2_PY="$(venv_python "$AUDIOLDM2_VENV")"
-      if ! "$AUDIOLDM2_PY" -c "import sys; from pathlib import Path; sys.exit(sys.version_info[:2] != (3, 11) or (Path(sys.base_prefix) / 'conda-meta').is_dir())"; then
-        echo "♻️ Rebuilding AudioLDM2 with its locked Python 3.11..."
-        uv venv --clear --managed-python --python 3.11 "$AUDIOLDM2_VENV"
-      fi
-    fi
-    if ! venv_exists "$AUDIOLDM2_VENV"; then
-      echo "📦 Creating AudioLDM2 venv (Python 3.11) at ${AUDIOLDM2_VENV}..."
-      uv venv --managed-python --python 3.11 "$AUDIOLDM2_VENV"
-    fi
+    # Direct pins: scripts/requirements-audioldm2-cuda.txt.
+    sync_cuda_lock_venv AudioLDM2 "$AUDIOLDM2_VENV" requirements-audioldm2-cuda
     AUDIOLDM2_PY="$(venv_python "$AUDIOLDM2_VENV")"
-    # Sync removes packages outside the lock. Direct pins:
-    # scripts/requirements-audioldm2-cuda.txt.
-    echo "📦 Syncing the hash-pinned AudioLDM2 CUDA runtime into ${AUDIOLDM2_VENV}..."
-    uv pip sync --require-hashes --only-binary :all: --index-strategy unsafe-best-match --python "$AUDIOLDM2_PY" "$AUDIOLDM2_LOCK"
   fi
   pin_venv_arm64 "$AUDIOLDM2_VENV"
   # Verify the pipeline class imports — a clean import means generation only
@@ -1385,42 +1394,12 @@ if [[ "$INSTALL_MINIMAX_MUSIC3" == "1" ]]; then
     echo "❌ MiniMax Music 3 CUDA needs an NVIDIA GPU. Use the Music 3 MLX runtime on Apple Silicon." >&2
     exit 1
   fi
-  if ! have uv; then
-    echo "❌ MiniMax Music 3 CUDA needs uv to provision its locked Python 3.11 runtime. Install uv and retry Repair." >&2
-    exit 1
-  fi
-  case "$(uname -m)" in
-    x86_64|amd64|AMD64) ;;
-    *) echo "❌ MiniMax Music 3 CUDA hash locks support x86_64 Windows/Linux only." >&2; exit 1 ;;
-  esac
-  if [[ "$TORCH_CUDA_INDEX" != "https://download.pytorch.org/whl/cu126" ]]; then
-    echo "❌ MiniMax Music 3 CUDA is locked to cu126. Unset PORTOS_TORCH_CUDA_INDEX; see docs/MINIMAX_MUSIC3_CUDA.md." >&2
-    exit 1
-  fi
+  require_cuda_lock_host "MiniMax Music 3" docs/MINIMAX_MUSIC3_CUDA.md
   MINIMAX_MUSIC3_VENV="${HOME}/.portos/venv-minimax-music3"
-  if is_windows; then
-    MINIMAX_MUSIC3_LOCK="${SCRIPT_DIR}/requirements-minimax-music3-cuda-windows.lock.txt"
-  else
-    MINIMAX_MUSIC3_LOCK="${SCRIPT_DIR}/requirements-minimax-music3-cuda-linux.lock.txt"
-  fi
   mkdir -p "${HOME}/.portos"
   reset_universal_venv "$MINIMAX_MUSIC3_VENV" "$PYTHON_BIN"
-  # Repair keeps standalone 3.11, but replaces incompatible minors and Conda
-  # bases whose DLL search path can prevent CUDA torch from loading on Windows.
-  if venv_exists "$MINIMAX_MUSIC3_VENV"; then
-    MINIMAX_MUSIC3_PY="$(venv_python "$MINIMAX_MUSIC3_VENV")"
-    if ! "$MINIMAX_MUSIC3_PY" -c "import sys; from pathlib import Path; sys.exit(sys.version_info[:2] != (3, 11) or (Path(sys.base_prefix) / 'conda-meta').is_dir())"; then
-      echo "♻️ Rebuilding MiniMax Music 3 CUDA with its locked Python 3.11..."
-      uv venv --clear --managed-python --python 3.11 "$MINIMAX_MUSIC3_VENV"
-    fi
-  fi
-  if ! venv_exists "$MINIMAX_MUSIC3_VENV"; then
-    echo "📦 Creating MiniMax Music 3 CUDA venv (Python 3.11)..."
-    uv venv --managed-python --python 3.11 "$MINIMAX_MUSIC3_VENV"
-  fi
+  sync_cuda_lock_venv "MiniMax Music 3" "$MINIMAX_MUSIC3_VENV" requirements-minimax-music3-cuda
   MINIMAX_MUSIC3_PY="$(venv_python "$MINIMAX_MUSIC3_VENV")"
-  echo "📦 Syncing the hash-pinned MiniMax Music 3 CUDA runtime..."
-  uv pip sync --require-hashes --only-binary :all: --index-strategy unsafe-best-match --python "$MINIMAX_MUSIC3_PY" "$MINIMAX_MUSIC3_LOCK"
   pin_venv_arm64 "$MINIMAX_MUSIC3_VENV"
   probe_or_fail \
     "MiniMax Music 3 CUDA installed but its runtime probe failed." \
@@ -1477,16 +1456,25 @@ if [[ "$INSTALL_MUSCRIPTOR" == "1" ]]; then
   # so this only builds the venv — no weights are fetched here. Weights are
   # CC BY-NC 4.0 (non-commercial).
   MUSCRIPTOR_VENV="${HOME}/.portos/venv-muscriptor"
+  if ! is_apple_silicon; then
+    # Linux/Windows install only from a hash lock, which covers x86_64 with the
+    # cu126 torch build (it also runs on CPU). Other hosts have no lock.
+    if is_macos; then
+      echo "❌ MuScriptor hash locks cover Apple Silicon and x86_64 Windows/Linux; Intel macOS is unsupported." >&2
+      exit 1
+    fi
+    require_cuda_lock_host MuScriptor docs/MUSCRIPTOR_CUDA.md
+  fi
   mkdir -p "${HOME}/.portos"
   reset_universal_venv "$MUSCRIPTOR_VENV" "$PYTHON_BIN"
 
-  if ! venv_exists "$MUSCRIPTOR_VENV"; then
-    echo "📦 Creating MuScriptor venv at ${MUSCRIPTOR_VENV}..."
-    "$PYTHON_BIN" -m venv "$MUSCRIPTOR_VENV"
-  fi
-  MUSCRIPTOR_PY="$(venv_python "$MUSCRIPTOR_VENV")"
-  echo "📦 Installing MuScriptor into ${MUSCRIPTOR_VENV} (pulls torch + audio deps)..."
   if is_apple_silicon; then
+    if ! venv_exists "$MUSCRIPTOR_VENV"; then
+      echo "📦 Creating MuScriptor venv at ${MUSCRIPTOR_VENV}..."
+      "$PYTHON_BIN" -m venv "$MUSCRIPTOR_VENV"
+    fi
+    MUSCRIPTOR_PY="$(venv_python "$MUSCRIPTOR_VENV")"
+    echo "📦 Installing MuScriptor into ${MUSCRIPTOR_VENV} (pulls torch + audio deps)..."
     # Apple Silicon installs only from the hash-pinned lock
     # (scripts/requirements-muscriptor-mlx.lock.txt): no install-time resolution,
     # so a new or compromised transitive release can't land on the next Repair.
@@ -1500,14 +1488,9 @@ if [[ "$INSTALL_MUSCRIPTOR" == "1" ]]; then
     fi
     "$MUSCRIPTOR_PY" -m pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-muscriptor-mlx.lock.txt"
   else
-    # Linux/Windows still resolve at install time (hash-pinned CUDA lock: #15481).
-    "$MUSCRIPTOR_PY" -m pip install --upgrade pip wheel setuptools >/dev/null
-    # muscriptor declares its own deps (torch, soundfile, etc.), so installing the
-    # package pulls the matching stack. The import probe below catches a broken
-    # resolve before a transcription depends on it.
-    "$MUSCRIPTOR_PY" -m pip install --upgrade \
-      muscriptor \
-      "huggingface_hub[hf_xet]"
+    # Direct pins: scripts/requirements-muscriptor-cuda.txt.
+    sync_cuda_lock_venv MuScriptor "$MUSCRIPTOR_VENV" requirements-muscriptor-cuda
+    MUSCRIPTOR_PY="$(venv_python "$MUSCRIPTOR_VENV")"
   fi
   pin_venv_arm64 "$MUSCRIPTOR_VENV"
   # Verify the model class imports — a clean import means transcription only
