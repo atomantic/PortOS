@@ -221,7 +221,7 @@ export const musicVideoVideoSettingsSchema = z.object({
   runwayModelId: z.string().min(1).max(64).nullable().optional(),
   runwayDuration: z.number().min(1).max(60).nullable().optional(),
   runwayResolution: z.string().min(1).max(16).nullable().optional(),
-  generationMode: z.enum(['image', 'audioReactive', 'suppliedAudio']).optional(),
+  generationMode: z.enum(['image', 'audioReactive', 'suppliedAudio', 'ltxReferences']).optional(),
   audioReactiveLora: z.string().max(255).regex(/^[^/\\]+\.safetensors$/i).nullable().optional(),
   audioReactiveScale: z.number().min(0).max(2).optional(),
 }).strict();
@@ -487,7 +487,7 @@ export const musicVideoCastInputsSchema = z.object({
 export const musicVideoTakeInputSchema = z.object({
   kind: z.enum(MUSIC_VIDEO_TAKE_KINDS),
   assetId: z.string().min(1).max(256),
-  // `trimmed`: a clip take cut from a later start frame of another (the shot card's "Start clip here").
+  // `trimmed`: a clip take cut to a frame range of another (the shot card's "Start/End clip here").
   source: z.enum(['generated', 'imported', 'trimmed']).optional(),
   provider: providerSlug.optional(),
   originalName: z.string().max(255).optional(),

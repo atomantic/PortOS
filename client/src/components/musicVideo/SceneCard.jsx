@@ -14,6 +14,7 @@ import { normalizeShotSheet, shotSheetDrivesPrompt, shotSheetPromptLines } from 
 import TabPills from '../ui/TabPills.jsx';
 import AutoSizeTextarea from '../ui/AutoSizeTextarea.jsx';
 import InfoTooltip from '../ui/InfoTooltip';
+import { LTX_REFERENCES_GENERATION_MODE, isLtx25Model, ltxReferenceSheetPrefix, ltxReferencesUnavailableReason } from '../../lib/musicVideoLtxReferences.js';
 import SceneStoryboardClip, { storyboardClipOffered } from './SceneStoryboardClip.jsx';
 import { MUSIC_VIDEO_MEDIUM_LABELS } from '../../../../server/lib/musicVideoMediumPlan.js';
 import { storyboardShotDirection } from '../../../../server/lib/musicVideoShotPrompt.js';
@@ -253,14 +254,21 @@ export default function SceneCard({
   // Storyboard-to-clip chaining cannot yet pass LTX reference inputs. Offer
   // them after the storyboard's first frame has landed instead.
   const storyboardDefault = storyboardClipOffered({ scene, layer, performance });
-  const ltxReferencesAvailable = !performance && referenceBackend === 'local' && referenceModel?.runtime === 'ltx25'
+  const ltxReferencesAvailable = !performance && referenceBackend === 'local' && isLtx25Model(referenceModel)
     && renderSettings?.generationMode !== 'audioReactive';
   const canUseLtxReferences = ltxReferencesAvailable && !storyboardDefault;
   const ltxReferencesGreyboxBlocked = !!scene.setReference?.greyboxShotId;
+  // The project's LTX 2.5 References mode makes the box default on; unticking is this shot's override.
+  const ltxReferencesProjectDefault = renderSettings?.generationMode === LTX_REFERENCES_GENERATION_MODE && !ltxReferencesGreyboxBlocked;
+  // Say why References is not offered instead of hiding the option.
+  const ltxReferencesReason = layer === 'footage' && !canUseLtxReferences
+    ? ltxReferencesUnavailableReason({ performance, backend: referenceBackend, model: referenceModel,
+      audioReactive: renderSettings?.generationMode === 'audioReactive', storyboardDefault })
+    : null;
   // References the director picked turn the box on. Auto cast does not, since it
   // costs the shot its song audio. Unticking, or asking for song audio or an end frame, wins.
   const ltxReferencesPicked = !ltxReferencesGreyboxBlocked && scene.clipReferenceIds?.length > 0;
-  const useLtxReferences = canUseLtxReferences && (renderInputs.ltxReferences ?? ltxReferencesPicked);
+  const useLtxReferences = canUseLtxReferences && (renderInputs.ltxReferences ?? (ltxReferencesProjectDefault || ltxReferencesPicked));
   // Exactly what Render sends: the prompt as typed and the inputs the card toggles.
   const cardRequest = shotCardRenderRequest({ project, scene, castMedia, greybox, settings: renderSettings || {}, performance, endFramePlan,
     models: videoModels, defaultModel: defaultVideoModel, inputs: useLtxReferences ? { ...renderInputs, songAudio: false, endFrame: false } : renderInputs, plan: timing.plan });
@@ -277,7 +285,7 @@ export default function SceneCard({
   const availableReferences = musicVideoClipReferenceChoices(project, scene, castMedia);
   const selectedClipReferences = musicVideoClipConditioningReferences(project, scene, castMedia, { limit: referenceCapacity });
   const referenceLabels = selectedClipReferences.map((ref) => ref.label || ref.role || 'visual reference');
-  const referenceSheetPrefix = `Reference sheet: ${referenceLabels.join(', ')}.\n\nGenerated video: `;
+  const referenceSheetPrefix = ltxReferenceSheetPrefix(referenceLabels);
   const previewRequest = useLtxReferences ? { ...cardRequest,
     prompt: `${referenceSheetPrefix}${cardRequest.prompt}`,
     promptAdditions: [{ id: 'ltx-reference-sheet', label: 'Reference sheet', text: referenceSheetPrefix.trim() }, ...cardRequest.promptAdditions],
@@ -317,7 +325,8 @@ export default function SceneCard({
       ...(wholeLine?.state === 'on' ? { wholeLine: true } : {}),
       expectedClipReferenceFiles: selectedClipReferences.map((ref) => ref.imageId),
       ...songAudioField,
-      ...(useLtxReferences ? { ltxReferences: true, songAudio: false, endFrame: false, expectedClipReferenceLabels: referenceLabels } : {}),
+      ...(useLtxReferences ? { ltxReferences: true, songAudio: false, endFrame: false, expectedClipReferenceLabels: referenceLabels }
+        : canUseLtxReferences && ltxReferencesProjectDefault ? { ltxReferences: false } : {}),
       ...(startFrameLayout ? { startFrameLayout: true } : {}),
     };
     onGenerateVideo?.(scene, { ...(renderOverrides ? { target: renderOverrides } : {}), card });
@@ -737,9 +746,7 @@ export default function SceneCard({
               Use LTX reference images (requires Ingredients adapter; at least 121 frames; no song audio or end frame)
             </label>
           )}
-          {storyboardDefault && ltxReferencesAvailable && (
-            <p className="text-xs text-port-text-muted">Generate the storyboard frame first to use LTX reference images.</p>
-          )}
+          {ltxReferencesReason && <p className="text-xs text-port-text-muted">{ltxReferencesReason}</p>}
           {canUseLtxReferences && ltxReferencesGreyboxBlocked && (
             <p className="text-xs text-port-text-muted">Clear the greybox reference to use LTX reference images.</p>
           )}

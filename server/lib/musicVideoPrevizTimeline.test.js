@@ -89,6 +89,13 @@ describe('timelineActorsAt', () => {
     expect(Math.abs(riding.position[2])).toBeLessThan(1);
   });
 
+  // Catches stay marks flattened to y=0, which floats people above a sloped set's ground.
+  it('keeps a figure mark\'s ground height at a stay', () => {
+    const hilly = { 'cat-home': { ingredient: { payload: { greybox: { anchors: [{ kind: 'figure', position: [3, -4.6, 0], facingDegrees: 0 }] } } } } };
+    const actor = timelineActorsAt(project, world, hilly, 20).find((a) => a.subjectId === 'c-a');
+    expect(actor.position[1]).toBe(-4.6);
+  });
+
   it('lists only people the timeline names', () => {
     const solo = { ...project, previz: { ...project.previz, timeline: { ...timeline, beats: [{ ...timeline.beats[0], subjectIds: ['c-b'] }] } } };
     expect(timelineActorsAt(solo, world, places, 15).map((actor) => actor.name)).toEqual(['Bo']);

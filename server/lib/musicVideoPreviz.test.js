@@ -68,6 +68,30 @@ describe('greybox previz playback', () => {
     expect(previzFrameAt(p, places, 9)).toBeNull();
   });
 
+  // Catches people seeded at y=0 and a held camera measured from y=0 on a hill, which leaves them floating above the road.
+  it('stands seeded people on a sloped set and measures a held camera from the holder\'s feet', () => {
+    const hill = {
+      anchors: [
+        { id: 'crest', kind: 'figure', position: [0, 0, 0], facingDegrees: 0 },
+        { id: 'low', kind: 'figure', position: [1, -4.6, -100], facingDegrees: 0 },
+      ],
+      shots: [{ id: 'down', label: 'Down', position: [1, -7.72, -114], target: [1, -6.9, -100], focalLengthMm: 28, aspect: '16:9', figures: [{ anchorId: 'low' }] }],
+    };
+    const hillPlaces = { 'cat-street': { ingredient: { type: 'place', payload: { greybox: hill } }, media: [] } };
+    const sc = { ...scene('s1', 0, 4, { holder: 'Bo', characters: ['Ana', 'Bo'] }), setReference: { subjectId: 'p-street', greyboxShotId: 'down' } };
+    const { previz } = backfillPrevizFromShots(project([sc]), hillPlaces);
+    const seeded = previz.tracks;
+    const ana = seeded.find((t) => t.subjectId === 'c-ana').keys[0].position;
+    const bo = seeded.find((t) => t.subjectId === 'c-bo').keys[0].position;
+    expect(ana[1]).toBe(-4.6);
+    expect(bo[1]).toBe(-4.6);
+    const p = project([sc], { previz });
+    const camera = previzFrameAt(p, hillPlaces, 2).camera;
+    // The view sits 3.12 m above the nearest ground (-4.6), so it rides 3.12 m above the holder's feet.
+    expect(camera.position[1]).toBeCloseTo(-4.6 + (-7.72 + 4.6), 5);
+    expect(camera.target[1]).toBeCloseTo(-6.9 + 4.6 - 4.6, 5);
+  });
+
   // Catches a cast that only walks being put on a vehicle because the shot's words happen to mention riding.
   it('keeps people on foot when no listed vehicle is named, and ignores an unlisted object', () => {
     const p = project([scene('s1', 0, 4, { characters: ['Ana'], action: 'Ana rides her bike past the Hand cart' })]);

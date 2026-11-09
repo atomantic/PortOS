@@ -1,5 +1,5 @@
 import { Maximize2 } from 'lucide-react';
-import VideoStartTrimControl from '../media/VideoStartTrimControl.jsx';
+import VideoTrimControl from '../media/VideoTrimControl.jsx';
 import { clipReversed } from '../../lib/musicVideoLayers.js';
 import { sceneFrameFit } from './SceneFrameFit.jsx';
 
@@ -40,11 +40,11 @@ export default function SceneClipPreview({ scene, index, performance, playback, 
           </button>
         </div>
       )}
-      {/* Keep the clip from a later frame as a new take of this shot. */}
+      {/* Keep a frame range of the clip as a new take of this shot. */}
       {scene.videoHistoryId && !performance && onTrimClip && (
-        <VideoStartTrimControl videoRef={clipPlayerRef} sourceKey={scene.videoHistoryId}
+        <VideoTrimControl videoRef={clipPlayerRef} sourceKey={scene.videoHistoryId}
           disabled={takeBusy || !!generatingVideo}
-          onTrim={(startSec) => onTrimClip(scene, startSec)} />
+          onTrim={(range) => onTrimClip(scene, range)} />
       )}
     </>
   );

@@ -16,6 +16,7 @@ import { previzTimeline, previzVehicles } from '../../lib/musicVideoPrevizTimeli
 import { placeWorld, worldSetFootprint } from '../../lib/worldMap.js';
 import { PREVIZ_CAMERA_STYLES, PREVIZ_PAWN_COLOR_IDS } from '../../lib/musicVideoPrevizLimits.js';
 import { requireProject } from './requireProject.js';
+import { runPrevizJob } from '../previzJobs.js';
 
 const deps = {
   getIngredient: async (id) => (await import('../catalogDB.js')).getIngredient(id),
@@ -151,8 +152,10 @@ export async function proposePrevizEdit(id, input, { hasHostControl = false } = 
   if (!provider || provider.id !== input.providerId || provider.enabled === false) throw new ServerError('The selected provider is unavailable.', { status: 400, code: 'NO_PROVIDER' });
   const refusal = toolFreeOneShotRefusal(provider, hasHostControl);
   if (refusal) throw new ServerError(refusal.message, { status: refusal.status, code: refusal.code });
-  const result = await deps.run({ provider, model: selectedModel, effort: input.effort || undefined,
-    executionOptions: input.executionOptions, prompt: sentPrompt, source: 'music-video-previz', allowFallback: false, toolFree: true });
+  const result = await runPrevizJob({ kind: 'proposal', projectId: project.id, label: 'AI previz proposal' },
+    () => deps.run({ provider, model: selectedModel, effort: input.effort || undefined,
+      executionOptions: input.executionOptions, prompt: sentPrompt, source: 'music-video-previz', allowFallback: false, toolFree: true }),
+    () => 'Proposal ready to review');
   const read = readProposal(result.text, { ...context, cameraIds: new Set((project.cameras || []).map((camera) => camera.id)) });
   return { sentPrompt, promptAdditions: additions, providerId: provider.id, model: result.model || selectedModel || null, runId: result.runId || null, ...read };
 }

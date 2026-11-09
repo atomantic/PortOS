@@ -69,6 +69,7 @@ import { parseBulkPayload, bundleToMarkdown, toYamlString } from '../lib/catalog
 import { resolveImageInputPath } from '../lib/fileUtils.js';
 import { embedIngredient, embedBatch, ingredientEmbedSeed } from '../services/embeddings.js';
 import { extractIngredientsForScrap } from '../services/catalogExtraction.js';
+import { listPrevizJobs } from '../services/previzJobs.js';
 import { captureGreyboxShot, draftGreybox, previewGreyboxPrompt, renderGreyboxShot, saveGreybox, saveWorld } from '../services/catalogGreybox.js';
 import { getPhotorealStatus, openPhotorealBlend, photorealBlendPath, startPhotorealRender } from '../services/catalogPhotoreal.js';
 import { installTexture, listInstalledTextures, searchTextures } from '../services/photorealTextures.js';
@@ -798,6 +799,9 @@ router.post('/ingredients/:id/media/upload', asyncHandler(async (req, res) => {
   const media = await uploadIngredientMediaFile({ ingredientId: req.params.id, ...body });
   res.status(201).json(media);
 }));
+
+// Previz work in flight (greybox drafts, AI previz proposals) and recently finished.
+router.get('/previz-jobs', (_req, res) => res.json(listPrevizJobs()));
 
 // Place greybox. Draft is a provider call on the user's tap (host-control gated,
 // see hostControlRoutes.js) and answers with a preview; save stores or clears it;

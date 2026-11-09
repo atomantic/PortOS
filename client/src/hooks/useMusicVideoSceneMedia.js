@@ -1,7 +1,7 @@
 import { castInputsFromReferences } from '../../../server/lib/musicVideoCastLook.js';
 import { musicVideoGreyboxReference } from '../../../server/lib/musicVideoGreybox.js';
 import { shotActionContractProblem } from '../../../server/lib/musicVideoActionContract.js';
-import { isOutsideMusicVideoReference, musicVideoConditioningReferences, musicVideoFrameReferenceFiles, musicVideoLinkedCastIds, musicVideoMissingFrameLinkedPicks, musicVideoSceneCastIds, MUSIC_VIDEO_MAX_REFERENCE_CHOICES } from '../../../server/lib/musicVideoConditioning.js';
+import { isOutsideMusicVideoReference, musicVideoClipConditioningReferences, musicVideoConditioningReferences, musicVideoFrameReferenceFiles, musicVideoLinkedCastIds, musicVideoMissingFrameLinkedPicks, musicVideoSceneCastIds, MUSIC_VIDEO_MAX_REFERENCE_CHOICES } from '../../../server/lib/musicVideoConditioning.js';
 import { normalizePreMusic, preMusicClipSound } from '../../../server/lib/musicVideoColdOpen.js';
 import { sceneEndFrameRequestFields } from '../../../server/lib/musicVideoEndFrame.js';
 import { authoredFramePromptText, authoredShotPrompt, musicVideoFrameModelInput, visualDirection } from '../../../server/lib/musicVideoShotPrompt.js';
@@ -18,6 +18,7 @@ import useSceneRenderLifecycle from './useSceneRenderLifecycle.js';
 import { useVisibilityEvent } from './useVisibilityEvent.js';
 import { isLtx2FamilyRuntime } from '../lib/runnerFamilies';
 import { FRAME_OPTIONS } from '../lib/videoGenParams.js';
+import { LTX_REFERENCES_GENERATION_MODE, LTX_REFERENCES_MAX_REFERENCES, isLtx25Model } from '../lib/musicVideoLtxReferences.js';
 import { isLayeredComposition, isSelfDrawnLayer, sceneVisualLayer } from '../lib/musicVideoLayers.js';
 import { musicVideoFrameGenSize } from '../lib/musicVideoAspect.js';
 import {
@@ -461,7 +462,20 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     // Hosted performance shots use their own server-prepared song window, not
     // the Local cutaway's supplied-audio route.
     const hostedPerformance = performance && settings.backend === 'fal';
-    const useLtxReferences = card?.ltxReferences === true && settings.backend === 'local' && !performance && !audioReactiveSelected;
+    // The shot card's checkbox (true/false) overrides the project's LTX 2.5 References mode. A project-default
+    // render without a card (bulk, revision) resolves the shot's clip references itself; the server then adds the
+    // reference-sheet prefix. A greybox shot, or a model that is not LTX 2.5, renders as usual.
+    const localCutaway = settings.backend === 'local' && !performance && !audioReactiveSelected;
+    const projectLtxReferences = settings.generationMode === LTX_REFERENCES_GENERATION_MODE && localCutaway
+      && isLtx25Model((videoSettings.models || []).find((m) => m.id === (settings.modelId || videoSettings.defaultModel)))
+      && !scene.setReference?.greyboxShotId;
+    const useLtxReferences = localCutaway && (typeof card?.ltxReferences === 'boolean' ? card.ltxReferences : projectLtxReferences);
+    const ltxReferenceFiles = !useLtxReferences ? null : card?.ltxReferences === true ? card.expectedClipReferenceFiles
+      : musicVideoClipConditioningReferences(project, scene, castMedia, { limit: LTX_REFERENCES_MAX_REFERENCES }).map((ref) => ref.imageId);
+    if (useLtxReferences && card?.ltxReferences !== true) {
+      if (castGuidesPending(scene)) return Promise.resolve({ ok: false });
+      if (!ltxReferenceFiles.length) { toast.error('Choose at least one clip reference for LTX 2.5 References'); return Promise.resolve({ ok: false }); }
+    }
     const referenceFrames = useLtxReferences ? ltxReferenceFrames(scene, target) : null;
     if (useLtxReferences && referenceFrames == null) {
       toast.error('This shot is too long for one LTX reference clip. Split it or choose a shorter clip length.');
@@ -502,7 +516,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
             // A scene card's pick names its model and length; else the saved model at the model's default length.
             ? { modelId: settings.modelId || undefined,
               ...(useLtxReferences ? { numFrames: referenceFrames,
-                icReferenceImageFiles: card.expectedClipReferenceFiles } : target?.numFrames ? { numFrames: target.numFrames } : {}), disableAudio }
+                icReferenceImageFiles: ltxReferenceFiles } : target?.numFrames ? { numFrames: target.numFrames } : {}), disableAudio }
             // A named model is local-only machinery at the server boundary and
             // would force the resolver off a Grok install default. Keep the
             // shared pin saved, but omit it until this peer chooses Local.
@@ -511,7 +525,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       sourceImageFile: scene.referenceImageId,
       // A style-break end frame (#11173), when this fal or local model takes one
       // (a local LTX clip then renders first+last frame, #11258).
-      ...(card && (card.endFrame === false || songAudio) ? {} : sceneEndFrameRequestFields(scene, {
+      ...(useLtxReferences || (card && (card.endFrame === false || songAudio)) ? {} : sceneEndFrameRequestFields(scene, {
         backend: settings.backend, falModelId: falFields?.falModelId, runwayModelId: runwayFields?.runwayModelId, mode, // A card's local pick names its own model; else the active one.
         localRuntime: (target?.modelId ? (videoSettings.models || []).find((m) => m.id === target.modelId)?.runtime : videoSettings.activeModel?.runtime) ?? null,
       })),
@@ -526,7 +540,8 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
         compose: true, expectedShot: sceneRenderShot(scene), ...(audioReactiveSelected ? { audioReactive: true } : {}),
         ...(hostedPerformance ? { songAudio: false } : {}),
         ...(card ? { promptAsTyped: true, ...(typeof card.songAudio === 'boolean' && !performance ? { songAudio: card.songAudio } : {}) } : {}),
-        ...(Array.isArray(card?.expectedClipReferenceFiles) ? { expectedClipReferenceFiles: card.expectedClipReferenceFiles } : {}),
+        ...(Array.isArray(card?.expectedClipReferenceFiles) ? { expectedClipReferenceFiles: card.expectedClipReferenceFiles }
+          : useLtxReferences ? { expectedClipReferenceFiles: ltxReferenceFiles } : {}),
         ...(Array.isArray(card?.expectedClipReferenceLabels) ? { expectedClipReferenceLabels: card.expectedClipReferenceLabels } : {}),
         ...(card?.wholeLine && performance ? { wholeLine: true } : {}),
         ...(card?.startFrameLayout ? { startFrameLayout: true } : {}),

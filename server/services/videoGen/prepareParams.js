@@ -52,7 +52,7 @@ import {
 } from '../../lib/icLoraWeights.js';
 import { getSettings } from '../settings.js';
 import { getProject as getMusicVideoProject } from '../musicVideo/projects.js';
-import { musicVideoLocalClipSize } from '../../lib/musicVideoAspect.js';
+import { musicVideoFrameGenSize, musicVideoLocalClipSize } from '../../lib/musicVideoAspect.js';
 import { localModelRendersCutaway, localModelRendersPerformance } from '../../lib/musicVideoLocalModels.js';
 import { isPerformanceScene } from '../../lib/musicVideoShotTiming.js';
 import { getTrack } from '../tracks/index.js';
@@ -487,6 +487,13 @@ export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys 
         );
       }
     }
+  }
+  // A Grok shot sent without a size names no resolution_name, so Grok falls back
+  // to its 480p default (848x480 at 16:9); size it to the project's frame instead.
+  if (backend === VIDEO_GEN_MODE.GROK && body.musicVideo?.projectId && body.width == null && body.height == null) {
+    const project = await Promise.resolve().then(() => getMusicVideoProject(body.musicVideo.projectId))
+      .catch(async (error) => { await cleanupMultipartTemp(uploads); throw error; });
+    if (project) Object.assign(body, musicVideoFrameGenSize(project));
   }
   validateVideoBatch({ ...body, backend }, effectiveModel);
   if (effectiveModel && !isHardwareCompatible(effectiveModel.hardwareCompatibility)) {

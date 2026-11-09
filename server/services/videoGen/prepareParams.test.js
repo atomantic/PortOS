@@ -301,6 +301,16 @@ describe('prepareVideoGenParams', () => {
       expect([picked.width, picked.height]).toEqual([768, 512]);
     });
 
+    // Uniquely catches a Grok shot render arriving unsized, which names no
+    // resolution_name and leaves Grok on its 480p default (848x480).
+    it('sizes an unsized Grok Music Video clip to the project frame', async () => {
+      getMusicVideoProject.mockResolvedValue({ treatment: { brief: { aspectRatio: '16:9' } }, scenes: [] });
+      const musicVideo = { projectId: 'project-example', sceneId: 'scene-example' };
+      const body = { prompt: 'a clip', backend: 'grok', mode: 'image', sourceImageFile: 'still.png', musicVideo };
+      await prepareVideoGenParams({ body, uploads: {}, localOnlyParamKeys: LOCAL_ONLY_KEYS });
+      expect([body.width, body.height]).toEqual([1536, 864]);
+    });
+
     // Uniquely catches an audio-only model (MiniMax H3 Ref2VA) failing a local
     // lip-sync shot on the image-mode contract before its song slice exists,
     // and a cutaway on it failing with the bare mode error instead of the fix.

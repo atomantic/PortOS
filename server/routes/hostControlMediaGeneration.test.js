@@ -48,7 +48,7 @@ vi.mock('../services/instanceIdentity.js', () => ({
     syncSecret: 'example-pair-secret-for-tests-only-123456',
   }] })),
 }));
-vi.mock('../services/videoGen/trimStart.js', () => ({ trimHistoryItemStart: effects.trim }));
+vi.mock('../services/videoGen/trim.js', () => ({ trimHistoryItem: effects.trim }));
 vi.mock('../services/videoGen/metalBufferProfiles.js', () => ({ clearMetalBufferProfiles: effects.clearMetal }));
 vi.mock('../services/settings.js', () => ({
   settingsEvents: new EventEmitter(), getSettings: vi.fn(async () => ({})),
@@ -295,7 +295,7 @@ describe('media generation and source publication authority (#9667)', () => {
 // Uniquely catches start-trim bypassing the shared gate before the ffmpeg
 // consumer, while preserving its intentional local/agent and read workflows.
 describe('video history trim authority (#11418)', () => {
-  const path = '/api/video-gen/history/22222222-2222-4222-8222-222222222222/trim-start';
+  const path = '/api/video-gen/history/22222222-2222-4222-8222-222222222222/trim';
   const body = { startSec: 1.25 };
   const peerHeaders = {
     [PEER_INSTANCE_HEADER]: 'example-instance',

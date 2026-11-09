@@ -26,6 +26,7 @@ import {
 import { CATALOG_PAYLOAD_MAX_CHARS } from '../lib/catalogValidation.js';
 import * as catalogDB from './catalogDB.js';
 import { uploadIngredientMediaFile } from './catalogMedia.js';
+import { runPrevizJob } from './previzJobs.js';
 
 // Overridable for tests (the provider runner is a process singleton).
 const deps = {
@@ -69,8 +70,14 @@ export async function previewGreyboxPrompt(ingredientId, { instruction, useCurre
   return { sentPrompt, promptAdditions, edited };
 }
 
-export async function draftGreybox(ingredientId, { instruction, providerId = '', model = '', effort = '', useCurrent = true }) {
+export async function draftGreybox(ingredientId, options) {
   const place = await requirePlace(ingredientId);
+  return runPrevizJob({ kind: 'greybox-draft', ingredientId: place.id, label: place.name || 'a set' },
+    () => runGreyboxDraft(place, options),
+    ({ greybox }) => `${greybox.parts.length} part(s), ${greybox.shots.length} shot(s)`);
+}
+
+async function runGreyboxDraft(place, { instruction, providerId = '', model = '', effort = '', useCurrent = true }) {
   const { sentPrompt, promptAdditions, edited } = composeGreyboxPrompt(place, { instruction, useCurrent });
 
   const { provider, selectedModel } = await deps.resolveProvider({ providerId: providerId || null, model: model || null });
