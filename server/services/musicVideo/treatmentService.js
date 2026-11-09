@@ -21,6 +21,7 @@ import {
   applyTreatmentToProject,
   buildApplyPreview,
   reviewTreatmentProof,
+  syncShotSheetDirections,
   treatmentBasis,
   writeCompiledTreatment,
 } from './treatment.js';
@@ -101,6 +102,20 @@ export async function compileTreatment(id, { baseRevision, useAi = true, provide
 /** What Apply would change right now (read-only). */
 export async function previewTreatmentApply(id) {
   return buildApplyPreview(await requireProject(id));
+}
+
+/**
+ * Refresh compiled directions from the shot sheet. No provider call.
+ * Returns `{ project, treatment }`.
+ */
+export async function syncTreatmentFromShotSheet(id, { baseRevision }) {
+  const outcome = await mutateProjectRecord(id, (current) => {
+    const result = syncShotSheetDirections(current, { baseRevision });
+    if (!result.changed) return { project: current, skipPersist: true };
+    return { project: result.project };
+  });
+  console.log(`🎬 Music Video treatment: ${outcome.skipPersist ? 'kept' : 'synced'} shot-sheet directions for ${id}`);
+  return { project: outcome.project, treatment: outcome.project.treatment };
 }
 
 /** Apply the reviewed treatment revision to the board. */

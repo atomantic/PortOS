@@ -77,6 +77,22 @@ describe('shot sheet storage', () => {
     expect(replanned.scenes[0].prompt).toBe('new');
     expect(replanned.scenes[0].shotSheet).toEqual({ emotion: 'Scared', checked: true });
   });
+  // Catches a re-plan or sheet rewrite leaving the previous direction clauses in the prompt.
+  it('marks a reused direction stale when the prompt or sheet changes, and not when the carry-over is unchanged', () => {
+    const direction = { focalSubject: 'Ada', frameClause: 'focal subject: Ada', framing: 'close-up' };
+    const start = { id: 'p', scenes: [{ sceneId: 's1', startSec: 0, endSec: 6, prompt: 'same', direction, shotSheet: { characters: ['Ada'] } }] };
+    const { project: kept } = replaceScenes(start, [{ startSec: 0, endSec: 6, prompt: 'same' }]);
+    expect(kept.scenes[0].direction.stale).toBeUndefined();
+    expect(kept.scenes[0].shotSheet).toEqual({ characters: ['Ada'] });
+    const { project: rewritten } = replaceScenes(start, [{ startSec: 0, endSec: 6, prompt: 'an empty wide of the fence' }]);
+    expect(rewritten.scenes[0].direction.stale).toBe(true);
+    expect(rewritten.scenes[0].prompt).toBe('an empty wide of the fence');
+    expect(rewritten.scenes[0].shotSheet).toEqual({ characters: ['Ada'] });
+    const { updated } = applySceneUpdate(start, 's1', { shotSheet: { characters: ['Ben'], view: 'Wide' } });
+    expect(updated.direction.stale).toBe(true);
+    expect(updated.shotSheet).toEqual({ characters: ['Ben'], view: 'Wide' });
+    expect(updated.prompt).toBe('same');
+  });
   // Catches the project patch dropping the camera list.
   it('saves the project\'s cameras', () => {
     const cameras = [{ id: 'obs', name: 'Observer', kind: 'observer', rule: 'Nobody looks at it' }];

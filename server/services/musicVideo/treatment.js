@@ -61,6 +61,7 @@ import { musicVideoAllowsMedia } from '../../lib/musicVideoMediaPolicy.js';
 import { normalizeComposition } from './composition.js';
 import { hookKey, hookLines, cueWordOnsets } from './hookTypography.js';
 import { stillMoveForCamera } from '../../lib/cameraMovements.js';
+import { applyShotSheetMedium, sheetDirectionOverlay } from '../../lib/musicVideoShotSheet.js';
 
 const TREATMENT_VERSION = 1;
 
@@ -758,9 +759,12 @@ export function buildApplyPreview(project) {
 /**
  * Apply the treatment's direction to the board. Refused when the revision the
  * director reviewed is not the current one, or when a blocking input is stale.
+ * `baseRevision` is the canonical field; `revision` remains accepted so older
+ * clients and in-process callers keep working. They must agree when both are sent.
  * Returns `{ project, result }`.
  */
-export function applyTreatmentToProject(project, { revision, overwrite = [], addTextCues = false }, now = new Date().toISOString()) {
+export function applyTreatmentToProject(project, { baseRevision, revision: legacyRevision, overwrite = [], addTextCues = false } = {}, now = new Date().toISOString()) {
+  const revision = baseRevision ?? legacyRevision;
   const treatment = normalizeTreatment(project.treatment, now);
   if (!treatment?.arc) throw treatmentError(409, 'TREATMENT_NOT_COMPILED', 'Compile the treatment before applying it');
   if (treatment.revision !== revision) {
@@ -838,6 +842,52 @@ export function applyTreatmentToProject(project, { revision, overwrite = [], add
     },
     result,
   };
+}
+
+/**
+ * Bring compiled directions and already-applied scene clauses in line with the
+ * shot sheet without recompiling the arc. A real director medium pin is kept.
+ * Revision bumps only when a direction or a baked clause actually changes.
+ * Returns `{ project, changed }`.
+ */
+export function syncShotSheetDirections(project, { baseRevision } = {}, now = new Date().toISOString()) {
+  assertRevision(project, baseRevision);
+  const treatment = normalizeTreatment(project.treatment, now);
+  if (!treatment?.arc) {
+    throw treatmentError(409, 'TREATMENT_NOT_COMPILED', 'Compile the treatment before syncing directions from the shot sheet');
+  }
+  const scenesById = new Map((project.scenes || []).map((scene) => [scene.sceneId, scene]));
+  const overlaid = treatment.shotDirections.map((direction) => {
+    const scene = scenesById.get(direction.sceneId);
+    const next = applyShotSheetMedium(project, scene, sheetDirectionOverlay(project, scene, direction));
+    return normalizeShotDirection(next);
+  });
+  const byScene = new Map(overlaid.map((direction) => [direction.sceneId, direction]));
+  let changed = treatment.shotDirections.some((direction, index) => directionKey(direction) !== directionKey(overlaid[index]));
+  const nextRevision = treatment.revision + 1;
+  const scenes = (project.scenes || []).map((scene) => {
+    const direction = byScene.get(scene.sceneId);
+    if (!direction || !scene.direction) return scene;
+    const baked = sceneDirection(treatment, direction);
+    const directionChanged = scene.direction.stale === true
+      || directionKey(scene.direction) !== directionKey(baked)
+      || scene.direction.frameClause !== baked.frameClause
+      || scene.direction.motionClause !== baked.motionClause;
+    if (!directionChanged) return scene;
+    changed = true;
+    return {
+      ...scene,
+      direction: {
+        ...baked,
+        treatmentRevision: nextRevision,
+        ...(scene.direction.appliedPrompts ? { appliedPrompts: scene.direction.appliedPrompts } : {}),
+      },
+    };
+  });
+  if (!changed) return { project, changed: false };
+  const mediumChanged = treatment.shotDirections.some((direction, index) => direction.medium !== overlaid[index].medium);
+  if (mediumChanged) assertMediumAllowance(project, overlaid);
+  return { project: stamp({ ...project, scenes }, { ...treatment, shotDirections: overlaid }, now), changed: true };
 }
 
 // ---- clone ------------------------------------------------------------------

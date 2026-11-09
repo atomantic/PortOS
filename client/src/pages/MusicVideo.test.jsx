@@ -122,6 +122,7 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   compileMusicVideoTreatment: vi.fn(),
   previewMusicVideoTreatmentApply: vi.fn(),
   applyMusicVideoTreatment: vi.fn(),
+  syncMusicVideoTreatmentFromShotSheet: vi.fn(),
   reviewMusicVideoTreatmentProof: vi.fn(),
   renderMusicVideoExcerpt: vi.fn(async () => ({ jobId: 'mve-job-1', excerptId: 'mve-job-1' })),
   musicVideoExcerptRenderEventsUrl: (jobId) => `/api/music-video/excerpt/${jobId}/events`,

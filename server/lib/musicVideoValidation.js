@@ -1084,13 +1084,29 @@ export const musicVideoSequenceRenderSchema = z.object({
   sceneIds: z.array(z.string().min(1).max(200)).min(2).max(30),
 });
 
+// `baseRevision` matches compile and patch. `revision` stays accepted so an older
+// client still applies. Sending both with different numbers is a conflict.
 export const musicVideoTreatmentApplySchema = z.object({
-  revision: z.number().int().min(0),
+  baseRevision: z.number().int().min(0).optional(),
+  revision: z.number().int().min(0).optional(),
   overwrite: z.array(z.object({
     sceneId: z.string().min(1).max(64),
     promptFingerprint: z.string().min(1).max(64),
   }).strict()).max(500).optional(),
   addTextCues: z.boolean().optional(),
+}).strict().superRefine((value, ctx) => {
+  const hasBase = value.baseRevision != null;
+  const hasLegacy = value.revision != null;
+  if (!hasBase && !hasLegacy) {
+    ctx.addIssue({ code: 'custom', message: 'baseRevision is required', path: ['baseRevision'] });
+  } else if (hasBase && hasLegacy && value.baseRevision !== value.revision) {
+    ctx.addIssue({ code: 'custom', message: 'baseRevision and revision disagree', path: ['baseRevision'] });
+  }
+});
+
+// POST /:id/treatment/sync-shot-sheet — deterministic record edit, no provider call.
+export const musicVideoTreatmentSyncShotSheetSchema = z.object({
+  baseRevision: z.number().int().min(0),
 }).strict();
 
 // Record a proof-checklist review. Evidence names a real artifact of this
