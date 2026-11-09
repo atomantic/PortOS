@@ -39,6 +39,15 @@ export const cloneMusicVideoProject = (id, data = {}, options = {}) => request(`
 export const updateMusicVideoProject = (id, patch, options = {}) => request(`/music-video/${encodeURIComponent(id)}`, {
   method: 'PATCH', body: JSON.stringify(patch), ...options,
 });
+export const measureMusicVideoColorMatch = (id, body = {}, options = {}) => request(`/music-video/${encodeURIComponent(id)}/color-match/measure`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+export const updateMusicVideoTakeColorMatch = (id, sceneId, takeId, patch, options = {}) => request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/takes/${encodeURIComponent(takeId)}/color-match`, {
+  method: 'PATCH', body: JSON.stringify(patch), ...options,
+});
+export const setMusicVideoColorMatchReference = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/color-match/reference`, {
+  method: 'PUT', body: JSON.stringify(body), ...options,
+});
 export const labelMusicVideoReferencesFromCatalog = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/references/catalog-labels`, {
   method: 'POST', ...options,
 });
