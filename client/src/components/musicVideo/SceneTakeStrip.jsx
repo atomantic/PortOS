@@ -35,7 +35,7 @@ async function videoTakeUrl(take) {
  * `grid` lays the takes out in rows that fit the width instead of one scrolling row.
  * `pending` lists renders still in flight for this slot (`{ key, label, running, progress }`):
  * each shows as a "Rendering grok…" placeholder after the takes until its take lands.
- * `onCheck(take)` runs a vision check of a frame take against its shot; `checking` holds
+ * `onCheck(take)` runs a vision check of a start or end frame take against its shot; `checking` holds
  * the take ids in flight. A checked take wears its verdict, which opens to the misses.
  */
 export default function SceneTakeStrip({
@@ -70,7 +70,8 @@ export default function SceneTakeStrip({
           const isSelected = take.assetId === selected;
           const rejected = take.status === 'rejected';
           const bad = marks?.[takeMarkKey(take)] === 'bad';
-          const verdict = kind === 'image' ? plateVerdict(scene, take) : null;
+          const frameTake = kind === 'image' || kind === 'endImage';
+          const verdict = frameTake ? plateVerdict(scene, take) : null;
           const verdictOpen = openVerdict === take.takeId && verdict?.issues.length > 0;
           const takeChecking = Boolean(take.takeId && checking?.has(take.takeId));
           const playKey = take.takeId || take.assetId;
@@ -157,10 +158,10 @@ export default function SceneTakeStrip({
                       <Ban size={11} /> Bad
                     </button>
                   )}
-                  {onCheck && kind === 'image' && !rejected && (
+                  {onCheck && frameTake && !rejected && (
                     <button type="button" disabled={takeChecking} onClick={() => onCheck(take)}
                       className="inline-flex items-center gap-0.5 rounded bg-port-border px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 min-h-[32px] sm:min-h-0 disabled:opacity-50"
-                      title="A vision model checks this frame against the shot prompt and for render defects">
+                      title={kind === 'endImage' ? 'A vision model checks this end frame against its end-frame prompt and for render defects' : 'A vision model checks this frame against the shot prompt and for render defects'}>
                       {takeChecking ? <Loader2 size={11} className="animate-spin" aria-hidden="true" /> : <Eye size={11} aria-hidden="true" />} {takeChecking ? 'Checking' : 'Check'}
                     </button>
                   )}
@@ -176,7 +177,7 @@ export default function SceneTakeStrip({
               <AssetReferenceActions assetId={take.assetId} compact
                 url={kind === 'video' ? null : takeThumbUrl(take)}
                 resolveUrl={kind === 'video' ? () => videoTakeUrl(take) : null} />
-              {kind === 'image' && currentPlateEvidence(scene, take)?.checks.filter((check) => check.id === 'render-quality' && check.status === 'fail').map((check) => (
+              {frameTake && currentPlateEvidence(scene, take)?.checks.filter((check) => check.id === 'render-quality' && check.status === 'fail').map((check) => (
                 <div key={check.id} className="space-y-1 text-xs text-port-warning">
                   <p className="break-words">Rendering defect: {check.note}</p>
                   {renderQualityAcknowledged(scene, take) ? <p>Explicitly acknowledged for this image.</p> : onReview && take.takeId && (

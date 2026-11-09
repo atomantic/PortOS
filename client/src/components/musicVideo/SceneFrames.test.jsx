@@ -131,6 +131,25 @@ describe('older Casting look (#14154)', () => {
   });
 });
 
+// Uniquely catches an end-frame take with no Check, or Check handing the start frame to the reviewer.
+it('offers Check on an end-frame take and calls it with the end-frame role', () => {
+  const onCheckTake = vi.fn();
+  const shot = {
+    ...scene,
+    takes: [
+      { takeId: 'start-take', kind: 'image', assetId: 'start.png', status: 'candidate' },
+      { takeId: 'end-take', kind: 'endImage', assetId: 'end.png', status: 'candidate' },
+    ],
+  };
+  render(<SceneFrames scene={shot} index={0} endFrames onEditLocal={vi.fn()} onSave={vi.fn()} onCheckTake={onCheckTake} />);
+  const checks = screen.getAllByRole('button', { name: 'Check' });
+  expect(checks).toHaveLength(2);
+  fireEvent.click(checks[1]);
+  expect(onCheckTake).toHaveBeenCalledWith(shot, expect.objectContaining({ takeId: 'end-take', kind: 'endImage' }));
+  fireEvent.click(checks[0]);
+  expect(onCheckTake).toHaveBeenLastCalledWith(shot, expect.objectContaining({ takeId: 'start-take', kind: 'image' }));
+});
+
 describe('Swap start and end', () => {
   it('swaps both frames in one tap and holds the action during take work', () => {
     const onSwapFrames = vi.fn();

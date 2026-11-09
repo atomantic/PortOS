@@ -665,15 +665,17 @@ export async function reviewSceneTake(id, sceneId, takeId, review) {
  * Its evidence carries a manual run id, so a production run still reviews for itself.
  */
 export async function checkSceneTakePlate(id, sceneId, takeId) {
-  const { plateCheckTake, recordTakePlateEvidence } = await import('./takes.js');
+  const { plateCheckPrompt, plateCheckTake, recordTakePlateEvidence } = await import('./takes.js');
+  const { plateFrameRole } = await import('../../lib/musicVideoPlateEvidence.js');
   const project = await getProject(id);
   if (!project) throw new ServerError('Music video project not found', { status: 404, code: 'NOT_FOUND' });
   const { scene, take } = plateCheckTake(project, sceneId, takeId);
   const { resolvePlateReviewer, reviewPlate } = await import('./plateReview.js');
   const pinned = project.plateReviewer?.providerId ? { providerId: project.plateReviewer.providerId, ...(project.plateReviewer.model ? { model: project.plateReviewer.model } : {}) } : {};
   const reviewer = await resolvePlateReviewer(pinned).catch((error) => { throw new ServerError(error.message, { status: error.status || 422, code: error.code || 'PLATE_REVIEWER_UNAVAILABLE' }); });
+  const frameRole = plateFrameRole(take);
   const evidence = await reviewPlate({ scene, subjects: project.concept?.subjects || [], assetId: take.assetId, runId: `manual-${randomUUID()}`, reviewer,
-    prompt: take.prompt ?? scene.framePrompt ?? scene.prompt ?? '' });
+    prompt: plateCheckPrompt(scene, take), frameRole });
   const { scene: saved } = await mutateProjectRecord(id, (current) => recordTakePlateEvidence(current, sceneId, takeId, evidence));
   return saved;
 }

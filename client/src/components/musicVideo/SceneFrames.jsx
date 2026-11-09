@@ -246,7 +246,7 @@ export default function SceneFrames({
           onSelect={(take) => onSelectTake?.(scene, take)}
           onReview={(take, review) => onReviewTake?.(scene, take, review)}
           onOpenPreview={onOpenPreview} marks={assetMarks} onMark={onMarkTake}
-          onCheck={start && onCheckTake ? (take) => onCheckTake(scene, take) : null} checking={checkingTakes} />
+          onCheck={onCheckTake ? (take) => onCheckTake(scene, take) : null} checking={checkingTakes} />
       </div>
     );
   };
