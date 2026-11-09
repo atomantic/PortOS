@@ -961,23 +961,20 @@ describe('Wan 2.2 CUDA hash-pinned installation', () => {
   });
 });
 
-describe('MiniMax Music 3 CUDA Install/Repair', () => {
-  const shell = resolveBashBinary();
-  const direct = readFileSync(join(REPO_ROOT, 'scripts/requirements-minimax-music3-cuda.txt'), 'utf8')
-    .split(/\r?\n/).filter((line) => /^[\w.-]+==/.test(line));
-
-  function installer(target) {
-    const home = mkdtempSync(join(tmpdir(), 'portos-music3-install-'));
-    tempVenvs.push(home);
-    const log = join(home, 'commands.log');
-    const stub = join(home, 'python-stub');
-    writeFileSync(stub, `#!/usr/bin/env bash
+// Runs the real installer with uv/python stubbed: only `uv venv` and `uv pip sync`
+// are allowed, so any unlocked install fails the run.
+function lockedCudaInstaller(target, { flag, probe }) {
+  const home = mkdtempSync(join(tmpdir(), 'portos-cuda-install-'));
+  tempVenvs.push(home);
+  const log = join(home, 'commands.log');
+  const stub = join(home, 'python-stub');
+  writeFileSync(stub, `#!/usr/bin/env bash
 printf 'python %s\\n' "$*" >> "$LOG"
 if [[ "$*" == *sys.version_info* ]]; then exit "\${COMPAT_EXIT:-0}"; fi
-if [[ "$*" == *ModularPipeline* ]]; then exit "\${PROBE_EXIT:-0}"; fi
+if [[ "$*" == *"$PROBE_MARKER"* ]]; then exit "\${PROBE_EXIT:-0}"; fi
 exit 0
 `);
-    const run = (env = {}) => execFileSync(shell, ['-c', `
+  const run = (env = {}) => execFileSync(resolveBashBinary(), ['-c', `
 set -euo pipefail
 export HOME="$TEST_HOME"
 uname() { if [[ "\${1:-}" == -m ]]; then echo x86_64; else echo "$TARGET"; fi; }
@@ -997,22 +994,28 @@ uv() {
 }
 source "$1"
 `, 'bash', SETUP_SCRIPT.replaceAll('\\', '/')], {
-      encoding: 'utf8',
-      env: {
-        ...process.env,
-        ...Object.fromEntries(installFlags.map((flag) => [flag, '0'])),
-        TEST_HOME: home.replaceAll('\\', '/'),
-        PORTOS_DATA: join(home, 'data').replaceAll('\\', '/'),
-        LOG: log.replaceAll('\\', '/'), STUB: stub.replaceAll('\\', '/'),
-        TARGET: target === 'windows' ? 'MINGW64_NT-10.0' : 'Linux',
-        PYTHON_BIN: 'true', INSTALL_MINIMAX_MUSIC3: '1',
-        PORTOS_TORCH_CUDA_INDEX: 'https://download.pytorch.org/whl/cu126',
-        ...env,
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    return { run, commands: () => readFileSync(log, 'utf8') };
-  }
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      ...Object.fromEntries(installFlags.map((flag) => [flag, '0'])),
+      TEST_HOME: home.replaceAll('\\', '/'),
+      PORTOS_DATA: join(home, 'data').replaceAll('\\', '/'),
+      LOG: log.replaceAll('\\', '/'), STUB: stub.replaceAll('\\', '/'),
+      TARGET: target === 'windows' ? 'MINGW64_NT-10.0' : 'Linux',
+      PYTHON_BIN: 'true', [flag]: '1', PROBE_MARKER: probe,
+      PORTOS_TORCH_CUDA_INDEX: 'https://download.pytorch.org/whl/cu126',
+      ...env,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  return { run, commands: () => readFileSync(log, 'utf8') };
+}
+
+describe('MiniMax Music 3 CUDA Install/Repair', () => {
+  const direct = readFileSync(join(REPO_ROOT, 'scripts/requirements-minimax-music3-cuda.txt'), 'utf8')
+    .split(/\r?\n/).filter((line) => /^[\w.-]+==/.test(line));
+
+  const installer = (target) => lockedCudaInstaller(target, { flag: 'INSTALL_MINIMAX_MUSIC3', probe: 'ModularPipeline' });
 
   it.each(['windows', 'linux'])('locks every %s distribution and uses that lock for fresh Install and Repair', (target) => {
     const lock = readFileSync(join(REPO_ROOT, 'scripts', `requirements-minimax-music3-cuda-${target}.lock.txt`), 'utf8');
@@ -1140,8 +1143,67 @@ describe('AudioLDM2 Apple Silicon install is hash-pinned', () => {
     expect(appleBranch).toContain('sys.version_info[:2] >= (3, 11)');
   });
 
-  it('keeps the resolving install for Linux/Windows until the CUDA lock lands', () => {
-    expect(otherBranch).toMatch(/pip install --upgrade \\\n\s+torch/);
+  it('installs nothing on Linux/Windows outside the hash-pinned CUDA locks', () => {
+    expect(otherBranch).not.toMatch(/pip install|--upgrade/);
+  });
+});
+
+describe('AudioLDM2 Windows/Linux Install/Repair', () => {
+  const direct = readFileSync(join(REPO_ROOT, 'scripts/requirements-audioldm2-cuda.txt'), 'utf8')
+    .split(/\r?\n/).filter((line) => /^[\w.-]+(\[[\w,-]+\])?==/.test(line))
+    .map((line) => line.replace(/\[[\w,-]+\]/, ''));
+  const installer = (target) => lockedCudaInstaller(target, { flag: 'INSTALL_AUDIOLDM2', probe: 'AudioLDM2Pipeline' });
+
+  it.each(['windows', 'linux'])('locks every %s distribution and uses that lock for fresh Install and Repair', (target) => {
+    const lock = readFileSync(join(REPO_ROOT, 'scripts', `requirements-audioldm2-cuda-${target}.lock.txt`), 'utf8');
+    const requirements = lock.split(/\r?\n/).filter((line) => /^\w/.test(line));
+    const blocks = lock.match(/^[\w.-]+==[^\n]+\n(?:[ \t]+[^\n]*\n?)*/gm) ?? [];
+    expect(blocks.length).toBe(requirements.length);
+    for (const block of blocks) expect(block).toMatch(/--hash=sha256:[0-9a-f]{64}/);
+    const pins = requirements.map((line) => line.replace(/\s*\\$/, ''));
+    expect(direct.length).toBeGreaterThan(0);
+    for (const pin of direct) expect(pins).toContain(pin);
+    expect(pins.some((pin) => pin.startsWith('hf-xet=='))).toBe(true);
+    expect(lock).not.toMatch(/git\+|^[\w.-]+\s*@/m);
+    expect(lock.includes('nvidia-cuda-runtime-cu12==')).toBe(target === 'linux');
+
+    const install = installer(target);
+    expect(install.run()).toContain('AudioLDM2 venv ready');
+    expect(install.run()).toContain('AudioLDM2 venv ready');
+    const commands = install.commands().split('\n');
+    const syncs = commands.filter((line) => line.startsWith('uv pip'));
+    expect(syncs).toHaveLength(2);
+    for (const sync of syncs) {
+      expect(sync).toContain('pip sync --require-hashes --only-binary :all:');
+      expect(sync).toContain(`requirements-audioldm2-cuda-${target}.lock.txt`);
+    }
+    expect(commands.filter((line) => line.startsWith('uv venv'))).toHaveLength(1);
+    expect(install.commands()).toContain('venv --managed-python --python 3.11');
+    expect(install.commands()).toContain('from diffusers import AudioLDM2Pipeline');
+    expect(install.commands()).not.toMatch(/pip install|--upgrade|git\+/);
+  });
+
+  it('rebuilds an incompatible existing interpreter before syncing during Repair', () => {
+    const install = installer('linux');
+    install.run();
+    expect(install.run({ COMPAT_EXIT: '1' })).toContain('Rebuilding AudioLDM2');
+    expect(install.commands()).toContain('venv --clear --managed-python --python 3.11');
+  });
+
+  it.each([{ SYNC_EXIT: '42' }, { PROBE_EXIT: '43' }])('fails Install without reporting ready when sync or the probe fails (%j)', (failure) => {
+    const install = installer('windows');
+    let result;
+    try { install.run(failure); } catch (error) { result = error; }
+    expect(result).toBeDefined();
+    expect(result.stdout).not.toContain('AudioLDM2 venv ready');
+    if (failure.PROBE_EXIT) expect(result.stderr).toContain('AudioLDM2 venv built but');
+    else expect(install.commands()).not.toContain('AudioLDM2Pipeline');
+  });
+
+  it('refuses a CUDA index the locks were not compiled for', () => {
+    let result;
+    try { installer('linux').run({ PORTOS_TORCH_CUDA_INDEX: 'https://download.pytorch.org/whl/cu132' }); } catch (error) { result = error; }
+    expect(result?.stderr).toContain('AudioLDM2 CUDA is locked to cu126');
   });
 });
 

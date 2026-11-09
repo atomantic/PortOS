@@ -15,6 +15,7 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 | [LTX25_CUDA.md](./LTX25_CUDA.md) | LTX-2.5 CUDA hash locks, immutable source packaging, regeneration and NVIDIA readiness validation |
 | [WAN22_CUDA.md](./WAN22_CUDA.md) | Wan 2.2 CUDA hash locks, Python/CUDA targets, regeneration, advisory scans and NVIDIA readiness validation |
 | [MINIMAX_MUSIC3_CUDA.md](./MINIMAX_MUSIC3_CUDA.md) | MiniMax Music 3 CUDA hash locks, Install/Repair, regeneration, advisory scans and NVIDIA readiness evidence |
+| [AUDIOLDM2_CUDA.md](./AUDIOLDM2_CUDA.md) | AudioLDM2 Windows/Linux hash locks, Install/Repair, regeneration, advisory scans and NVIDIA readiness evidence |
 | [MOSS_IMAGE.md](./MOSS_IMAGE.md) | Optional pinned MOSS Swift/MLX image runtime, explicit installation, resource needs and Apple Silicon validation |
 | [HTML_COMPOSITIONS.md](./HTML_COMPOSITIONS.md) | Seekable HTML scenes rendered offline to MP4 through hidden managed-browser targets |
 | [CONTAINMENT.md](./CONTAINMENT.md) | Every containment profile (bubblewrap, Seatbelt, Docker) and which consumer uses which; the opt-in Docker containment profile for untrusted installs/tests, its engine policy, two-phase network and `contained-run.js` |
