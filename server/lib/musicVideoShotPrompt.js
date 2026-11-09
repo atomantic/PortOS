@@ -23,7 +23,7 @@ import { musicVideoSubjectScaleText } from './musicVideoSubjectScale.js';
 import { musicVideoReferenceSubjectIds } from './musicVideoCastSelection.js';
 import { musicVideoConditioningReferences } from './musicVideoConditioning.js';
 import { routeMapShotText } from './musicVideoRouteMaps.js';
-import { shotSheetDrivesPrompt, shotSheetPromptLines } from './musicVideoShotSheet.js';
+import { shotCameraRuleText, shotSheetDrivesPrompt, shotSheetPromptLines } from './musicVideoShotSheet.js';
 import { shotFilmLook } from './musicVideoFilmLook.js';
 
 /**
@@ -63,7 +63,7 @@ export const authoredShotPrompt = (scene) => scene?.prompt?.trim() || storyboard
  * restates those. A revision rewrites to the same length instead of appending
  * fixes, so prompts don't grow with each review round.
  */
-const PROMPT_WRITING_SHARED = 'Name people, places and cameras by name, and leave out what the shot\'s references, look, sheet, camera move and route already carry (faces, wardrobe, props, set dressing, period, lighting rules). When revising, rewrite the whole prompt to this length; never append rules to it.';
+const PROMPT_WRITING_SHARED = 'Name people, places and cameras by name, and leave out what the shot\'s references, look, sheet, camera rule, camera move and route already carry (faces, wardrobe, props, set dressing, period, lighting rules). When revising, rewrite the whole prompt to this length; never append rules to it.';
 export const FRAME_PROMPT_WRITING = `Write the frame prompt as one still picture in one to three plain sentences, about 50 words at most: who is in frame and where, their pose and the framing. No motion. An in-world camera's holder may show at the edge of frame. ${PROMPT_WRITING_SHARED}`;
 export const CLIP_PROMPT_WRITING = `Write the clip prompt in one to three plain sentences, about 50 words at most: one main action, what moves and which way, what the camera does and how the shot ends. It starts from the frame, so never repeat what the frame prompt already shows. ${PROMPT_WRITING_SHARED}`;
 
@@ -144,10 +144,12 @@ function composeShotModelInput(project, scene, {
 
   // A detail-built shot's details follow the director's motion text, each its own labeled part.
   const sheet = shotSheetPromptLines(project, scene);
+  // The sheet's Camera line already carries the rule; a second Camera chip collides with it in the preview.
+  const cameraRule = sheet.some((item) => item.id === 'shot-sheet-camera') ? null : addition('camera-rule', 'Camera', shotCameraRuleText(project, scene));
   const firstLine = [text, ...[...look, ...direction].filter(Boolean).map((item) => item.text)].filter(Boolean).join(', ');
-  const body = [firstLine, ...sheet.map((item) => item.text), camera?.text, route?.text, actions?.text].filter(Boolean).join('\n');
+  const body = [firstLine, ...sheet.map((item) => item.text), cameraRule?.text, camera?.text, route?.text, actions?.text].filter(Boolean).join('\n');
   const prompt = [body, ...tail.filter(Boolean).map((item) => item.text)].filter(Boolean).join('. ');
-  return { prompt, promptAdditions: [...sheet, ...look, ...direction, camera, route, actions, ...tail].filter(Boolean) };
+  return { prompt, promptAdditions: [...sheet, cameraRule, ...look, ...direction, camera, route, actions, ...tail].filter(Boolean) };
 }
 
 /** A refine edit's wrapper around the director's instruction ("[instruction]" marks where it goes). */
@@ -267,8 +269,11 @@ function composeFrameModelInput(project, scene, {
       promptAdditions: [addition('keep-reference', 'Keep the start frame', KEEP_REFERENCE), others].filter(Boolean) };
   }
   // A sheet-built still's ingredients follow its general prompt, each its own labeled part.
+  // End frames omit those columns, so the camera rule is its own part there.
   const sheet = slot === 'start' ? shotSheetPromptLines(project, scene) : [];
-  const shotText = [text, ...sheet.map((item) => item.text)].filter(Boolean).join('\n');
+  // End frames omit the sheet columns, so they still get the camera on its own.
+  const cameraRule = sheet.some((item) => item.id === 'shot-sheet-camera') ? null : addition('camera-rule', 'Camera', shotCameraRuleText(project, scene));
+  const shotText = [text, ...sheet.map((item) => item.text), cameraRule?.text].filter(Boolean).join('\n');
   const board = slot === 'start' && !fromFrame ? panel : null;
   const storyboard = board ? [
     shotText ? null : addition('storyboard-action', 'Storyboard action', board.action),
@@ -292,10 +297,11 @@ function composeFrameModelInput(project, scene, {
   ].filter(Boolean);
   const lookText = look.map((item) => item.text).join(', ');
   // The storyboard leads on its own lines, ahead of the long look blocks.
-  const firstLine = storyboard.length || sheet.length
+  // A camera rule is its own line too: the comma form is only a still with neither.
+  const firstLine = storyboard.length || sheet.length || cameraRule
     ? [shotText, ...storyboard.map((item) => item.text), lookText].filter(Boolean).join('\n')
     : [text, lookText].filter(Boolean).join(', ');
-  if (slot === 'end') return { prompt: firstLine, promptAdditions: look };
+  if (slot === 'end') return { prompt: firstLine, promptAdditions: [cameraRule, ...look].filter(Boolean) };
   const unmet = [...new Set(repairs)];
   const tail = [
     addition('shot-actions', 'Shot actions', project ? shotActionPrompt(project, scene, { frame: true }) : ''),
@@ -303,7 +309,7 @@ function composeFrameModelInput(project, scene, {
     addition('plate-repairs', 'Plate repairs', unmet.length ? `Repair these visible plate mismatches while preserving the shot intent:\n${unmet.join('\n')}` : ''),
     addition('repair-notes', 'Repair notes', fixes ? `Fix these visible problems from the previous still while preserving the shot intent:\n${fixes}` : ''),
   ].filter(Boolean);
-  return { prompt: [firstLine, ...tail.map((item) => item.text)].filter(Boolean).join('\n'), promptAdditions: [...sheet, ...storyboard, ...look, ...tail] };
+  return { prompt: [firstLine, ...tail.map((item) => item.text)].filter(Boolean).join('\n'), promptAdditions: [...sheet, cameraRule, ...storyboard, ...look, ...tail].filter(Boolean) };
 }
 
 const withGreybox = (input, greybox) => {

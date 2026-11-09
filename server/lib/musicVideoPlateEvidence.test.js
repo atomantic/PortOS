@@ -8,7 +8,7 @@ const subjects = [
   { id: 'p', kind: 'object', name: 'Lamp', requiredDetails: ['Never checked for objects'] },
 ];
 const scene = (sheet) => ({ sceneId: 's1', startSec: 0, endSec: 2, framePrompt: 'Ada on a bike.', shotSheet: sheet });
-const plateDetailRequirements = (shot, list) => plateRequirements(shot, list).filter((entry) => entry.id.startsWith('detail-'));
+const plateDetailRequirements = (shot, list, project = null) => plateRequirements(shot, list, 'start', project).filter((entry) => entry.id.startsWith('detail-'));
 const pass = (list) => JSON.stringify({ checks: list.map(({ id }) => ({ id, status: 'pass', note: 'Visible' })) });
 
 describe('character detail requirements', () => {
@@ -27,6 +27,25 @@ describe('character detail requirements', () => {
   it('makes the point-of-view holder conditional on their hands showing', () => {
     expect(plateDetailRequirements(scene({ characters: [], holder: 'Ada' }), subjects)[0].requirement)
       .toBe("If Ada's hands or arms are visible, they show: Red watch on the left wrist");
+  });
+
+  // Catches a selfie still being required to show the camera that is taking it (#15586).
+  it('drops the shooting camera from its owner and holder, and checks the same camera rule', () => {
+    const project = { cameras: [{ id: 'snap', name: 'Snapshot camera', kind: 'in-world', owner: 'Ada', rule: 'Facing back.' }] };
+    const cast = subjects.map((subject) => (subject.id === 'b' ? { ...subject, requiredDetails: ['Blue cap', 'Pocket camera'] } : subject));
+    const selfie = scene({ characters: ['Ada', 'Bo'], holder: 'Ada', cameraId: 'snap' });
+    expect(plateDetailRequirements(selfie, cast, project).map((entry) => entry.requirement)).toEqual([
+      'Ada shows: Red watch on the left wrist',
+      'Bo shows: Blue cap',
+      'Bo shows: Pocket camera',
+      'Camera: Snapshot camera, an in-world camera. This camera is the one taking the picture, so it is not in the frame. Facing back.',
+    ]);
+    const borrowed = scene({ characters: ['Ada', 'Bo'], holder: 'Bo', cameraId: 'snap' });
+    expect(plateDetailRequirements(borrowed, cast, project).map((entry) => entry.requirement)).toEqual([
+      'Ada shows: Red watch on the left wrist',
+      'Bo shows: Blue cap',
+      'Camera: Snapshot camera, an in-world camera. This camera is the one taking the picture, so it is not in the frame. Facing back.',
+    ]);
   });
 
   it('adds details before the render-quality check and keeps the shot-only list unchanged', () => {
