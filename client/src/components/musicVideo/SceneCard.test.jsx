@@ -1336,9 +1336,15 @@ describe('project LTX 2.5 References mode on the shot card (#15482)', () => {
     expect(onGenerateVideo.mock.calls[0][1].card).toMatchObject({ ltxReferences: false });
   });
 
+  it('does not mention LTX references when a hosted backend renders the clip', () => {
+    renderCard({ backend: 'grok' });
+    expect(screen.queryByLabelText(/Use LTX reference images/)).toBeNull();
+    expect(screen.queryByText(/LTX reference images need/)).toBeNull();
+  });
+
   // Uniquely catches the checkbox silently disappearing.
   it.each([
-    ['a hosted backend', { backend: 'grok' }, {}, /Render on set to Local/],
+    ['a hosted backend in LTX References mode', { backend: 'grok', generationMode: 'ltxReferences' }, {}, /Render on set to Local/],
     ['a model that is not LTX 2.5', { backend: 'local', modelId: 'ltx23_example' }, {}, /LTX 2.5 local model/],
     ['Audio reactive mode', { backend: 'local', modelId: 'ltx25_example', generationMode: 'audioReactive' }, {}, /Audio reactive/],
     ['no start frame yet (storyboard shot)', { backend: 'local', modelId: 'ltx25_example' }, { panelId: 'panel-1', panelArt: 'panel.png', referenceImageId: null }, /Generate the storyboard frame first/],
