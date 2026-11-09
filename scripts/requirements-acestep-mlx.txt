@@ -1,0 +1,41 @@
+# ACE-Step (Apple Silicon) runtime: direct pins for ~/.portos/venv-acestep.
+# Installed only from requirements-acestep-mlx.lock.txt, which pins and
+# hashes every transitive package. After editing this file, regenerate the lock
+# with the command in the lock header.
+#
+# ACE-Step is cloned from ace-step/ACE-Step at ACESTEP_PIN and installed with
+# `pip install --no-deps --no-build-isolation ~/.portos/acestep` after the lock
+# is installed. Dependencies match the foundation music generation stack with
+# OSV-clean pins (torch 2.15.0, transformers 5.22.1, diffusers 0.42.1,
+# accelerate 1.15.0, filelock >= 4.2.1, pillow 13.0.0).
+torch==2.15.0
+torchvision==0.29.2
+torchaudio==2.11.1
+accelerate==1.15.0
+diffusers==0.42.1
+transformers==5.22.1
+huggingface-hub[hf_xet]==2.4.0
+sentencepiece==0.2.2
+peft==0.21.2
+datasets>=3.4.1
+librosa==0.11.0
+loguru==0.7.3
+matplotlib>=3.10.1
+numpy==2.4.6
+pypinyin==0.53.0
+pytorch-lightning>=2.5.1
+soundfile>=0.13.1
+tqdm>=4.67.1
+py3langid==0.3.0
+hangul-romanize==0.1.0
+num2words==0.5.14
+spacy>=3.8.4
+cutlet
+fugashi[unidic-lite]
+click
+tensorboard
+tensorboardX
+filelock>=4.2.1
+pillow==13.0.0
+wheel
+setuptools

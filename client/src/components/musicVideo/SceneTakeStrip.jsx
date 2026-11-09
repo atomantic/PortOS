@@ -1,6 +1,6 @@
 import { currentPlateEvidence, renderQualityAcknowledged } from '../../../../server/lib/musicVideoPlateEvidence.js';
 import { useRef, useState } from 'react';
-import { Ban, Check, Loader2, RotateCcw, X, MessageSquare } from 'lucide-react';
+import { Ban, Check, Loader2, RotateCcw, Eye, X, MessageSquare } from 'lucide-react';
 import { sceneTakeList, takePreviewKey, takeThumbUrl, takeClipUrl, takeProvenance, TAKE_SLOT } from '../../lib/musicVideoTakes.js';
 import { plateVerdict } from './PlateComparison.jsx';
 import AssetReferenceActions from '../media/AssetReferenceActions.jsx';
@@ -35,13 +35,17 @@ async function videoTakeUrl(take) {
  * `grid` lays the takes out in rows that fit the width instead of one scrolling row.
  * `pending` lists renders still in flight for this slot (`{ key, label, running, progress }`):
  * each shows as a "Rendering grok…" placeholder after the takes until its take lands.
+ * `onCheck(take)` runs a vision check of a frame take against its shot; `checking` holds
+ * the take ids in flight. A checked take wears its verdict, which opens to the misses.
  */
 export default function SceneTakeStrip({
   scene, kind, busy = false, large = false, grid = false, onSelect, onReview, onOpenPreview, marks = null, onMark = null, pending = [],
+  onCheck = null, checking = null,
 }) {
   const [noteFor, setNoteFor] = useState(null);
   const [noteDraft, setNoteDraft] = useState('');
   const [playingId, setPlayingId] = useState(null);
+  const [openVerdict, setOpenVerdict] = useState(null);
   const copyPointer = useRef(false);
   const takes = sceneTakeList(scene, kind);
   const selected = scene[TAKE_SLOT[kind]] || null;
@@ -67,6 +71,8 @@ export default function SceneTakeStrip({
           const rejected = take.status === 'rejected';
           const bad = marks?.[takeMarkKey(take)] === 'bad';
           const verdict = kind === 'image' ? plateVerdict(scene, take) : null;
+          const verdictOpen = openVerdict === take.takeId && verdict?.issues.length > 0;
+          const takeChecking = Boolean(take.takeId && checking?.has(take.takeId));
           const playKey = take.takeId || take.assetId;
           const playing = kind === 'video' && playingId === playKey;
           return (
@@ -100,12 +106,21 @@ export default function SceneTakeStrip({
                 )}
               </button>
               {/* Only what the director acts on: how a take was made stays in the hover title. */}
-              {/* "In use" is already on the thumbnail. */}
-              {(verdict || rejected) && (
-                <div className="text-[10px] text-port-text-muted truncate" title={take.originalName || take.prompt || takeProvenance(take)}>
-                  {verdict && <span className={`mr-1 rounded px-1 ${VERDICT_TONE[verdict.tone]}`} title="Plate preflight verdict">{verdict.label}</span>}
-                  {rejected ? 'Not for this shot' : ''}
+              {/* "In use" is already on the thumbnail; a rejected take reads from its dimmed thumbnail and Restore. */}
+              {verdict && (
+                <div className="flex flex-wrap items-center gap-1 text-[10px] text-port-text-muted" title={take.originalName || take.prompt || takeProvenance(take)}>
+                  {verdict.issues.length ? (
+                    <button type="button" onClick={() => setOpenVerdict(verdictOpen ? null : take.takeId)} aria-expanded={verdictOpen}
+                      className={`rounded px-1 pointer-coarse:min-h-8 ${VERDICT_TONE[verdict.tone]}`} title="Show what the check found">
+                      {verdict.label} ({verdict.issues.length})
+                    </button>
+                  ) : <span className={`rounded px-1 ${VERDICT_TONE[verdict.tone]}`} title="A vision check found it matches the shot">{verdict.label}</span>}
                 </div>
+              )}
+              {verdictOpen && (
+                <ul className="space-y-0.5 text-[10px] text-port-warning">
+                  {verdict.issues.map((check) => <li key={check.id} className="break-words">{check.note}</li>)}
+                </ul>
               )}
               {take.note && noteFor !== take.takeId && (
                 <p className="text-[10px] text-port-warning break-words">{take.note}</p>
@@ -113,9 +128,6 @@ export default function SceneTakeStrip({
               {take.dependencies?.references?.some((ref) => ref.role === 'clipReferences' && ref.untrackedCastGuides) && (
                 <p className="text-[10px] text-port-warning break-words">Cast guide changes are not tracked. Review this take before use.</p>
               )}
-              <AssetReferenceActions assetId={take.assetId}
-                url={kind === 'video' ? null : takeThumbUrl(take)}
-                resolveUrl={kind === 'video' ? () => videoTakeUrl(take) : null} />
               {take.takeId && (
                 <div className="flex flex-wrap gap-1">
                   {!isSelected && (
@@ -145,6 +157,13 @@ export default function SceneTakeStrip({
                       <Ban size={11} /> Bad
                     </button>
                   )}
+                  {onCheck && kind === 'image' && !rejected && (
+                    <button type="button" disabled={takeChecking} onClick={() => onCheck(take)}
+                      className="inline-flex items-center gap-0.5 rounded bg-port-border px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 min-h-[32px] sm:min-h-0 disabled:opacity-50"
+                      title="A vision model checks this frame against the shot prompt and for render defects">
+                      {takeChecking ? <Loader2 size={11} className="animate-spin" aria-hidden="true" /> : <Eye size={11} aria-hidden="true" />} {takeChecking ? 'Checking' : 'Check'}
+                    </button>
+                  )}
                   <button type="button" disabled={busy} onClick={() => openNote(take)}
                     aria-label="Edit take note"
                     className="pointer-coarse:min-h-11 pointer-coarse:min-w-11 inline-flex items-center rounded bg-port-border px-1.5 py-0.5 text-[10px] min-h-[32px] sm:min-h-0 disabled:opacity-50"
@@ -153,6 +172,10 @@ export default function SceneTakeStrip({
                   </button>
                 </div>
               )}
+              {/* Secondary: copy the file's ID or URL, after the review actions. */}
+              <AssetReferenceActions assetId={take.assetId} compact
+                url={kind === 'video' ? null : takeThumbUrl(take)}
+                resolveUrl={kind === 'video' ? () => videoTakeUrl(take) : null} />
               {kind === 'image' && currentPlateEvidence(scene, take)?.checks.filter((check) => check.id === 'render-quality' && check.status === 'fail').map((check) => (
                 <div key={check.id} className="space-y-1 text-xs text-port-warning">
                   <p className="break-words">Rendering defect: {check.note}</p>
@@ -175,7 +198,7 @@ export default function SceneTakeStrip({
                     onBlur={() => saveNote(take)}
                     onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
                     placeholder="What to change next time"
-                    className="w-full bg-port-bg border border-port-border rounded px-1 py-0.5 text-[11px] min-h-[44px] sm:min-h-0"
+                    className="w-full bg-port-bg border border-port-border rounded px-1 py-0.5 text-[11px] min-h-[44px] pointer-fine:sm:min-h-0"
                   />
                 </div>
               )}

@@ -52,7 +52,7 @@ import {
 } from '../../lib/icLoraWeights.js';
 import { getSettings } from '../settings.js';
 import { getProject as getMusicVideoProject } from '../musicVideo/projects.js';
-import { musicVideoLocalClipSize } from '../../lib/musicVideoAspect.js';
+import { musicVideoFrameGenSize, musicVideoLocalClipSize } from '../../lib/musicVideoAspect.js';
 import { localModelRendersCutaway, localModelRendersPerformance } from '../../lib/musicVideoLocalModels.js';
 import { isPerformanceScene } from '../../lib/musicVideoShotTiming.js';
 import { getTrack } from '../tracks/index.js';
@@ -83,6 +83,12 @@ import { validateVideoBatch } from './batch.js';
 import { audioDurationToFrames } from './audioDuration.js';
 import { RUNWAY_SPECIAL_VIDEO_MODES } from '../../lib/runwaySpecialVideoModels.js';
 import { isMiniMaxH3SpeedProfileRequest } from '../../lib/minimaxH3SpeedProfiles.js';
+
+// A hosted renderer is picked with `backend`, not `modelId`; say so to an API caller who sends its name.
+const HOSTED_VIDEO_BACKENDS = ['grok', 'fal', 'reactor', 'runway', 'gemini'];
+export const unknownVideoModelMessage = (modelId) => (HOSTED_VIDEO_BACKENDS.includes(modelId)
+  ? `Unknown modelId: ${modelId}. ${modelId} is a renderer: send backend: "${modelId}" instead of modelId`
+  : `Unknown modelId: ${modelId}`);
 
 /** Hosted lanes cannot consume the generic reference inputs used by local models, except Runway's own image picks (hostedSubmission.js). */
 export function hostedReferenceInputsError({ backend, body, uploads = {} }) {
@@ -155,7 +161,7 @@ export async function validateVideoRetryParams(params = {}) {
   await validateA2vLoraStages({ strengths: params.a2vLoraStageStrengths, model,
     mode: params.mode, hasLoras: params.loras?.length > 0 });
   if (!model) {
-    throw new ServerError(`Unknown modelId: ${modelId}`, { status: 400, code: 'VIDEO_GEN_UNKNOWN_MODEL' });
+    throw new ServerError(unknownVideoModelMessage(modelId), { status: 400, code: 'VIDEO_GEN_UNKNOWN_MODEL' });
   }
   if (!isHardwareCompatible(model.hardwareCompatibility)) {
     throw new ServerError(
@@ -444,7 +450,7 @@ export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys 
   if (body.modelId !== undefined && !effectiveModel) {
     await cleanupMultipartTemp(uploads);
     throw new ServerError(
-      `Unknown modelId: ${body.modelId}`,
+      unknownVideoModelMessage(body.modelId),
       { status: 400, code: 'VIDEO_GEN_UNKNOWN_MODEL' },
     );
   }
@@ -481,6 +487,13 @@ export async function prepareVideoGenParams({ body, uploads, localOnlyParamKeys 
         );
       }
     }
+  }
+  // A Grok shot sent without a size names no resolution_name, so Grok falls back
+  // to its 480p default (848x480 at 16:9); size it to the project's frame instead.
+  if (backend === VIDEO_GEN_MODE.GROK && body.musicVideo?.projectId && body.width == null && body.height == null) {
+    const project = await Promise.resolve().then(() => getMusicVideoProject(body.musicVideo.projectId))
+      .catch(async (error) => { await cleanupMultipartTemp(uploads); throw error; });
+    if (project) Object.assign(body, musicVideoFrameGenSize(project));
   }
   validateVideoBatch({ ...body, backend }, effectiveModel);
   if (effectiveModel && !isHardwareCompatible(effectiveModel.hardwareCompatibility)) {

@@ -1,5 +1,6 @@
 import { INTERVAL_OPTIONS } from '../../../server/lib/autonomousJobIntervals.js';
 export { ON_DEMAND_INTERVAL } from '../../../server/lib/autonomousJobIntervals.js';
+export { scheduleAnchorKindForInterval } from '../../../server/lib/scheduleAnchor.js';
 // Syntax/range validation shared with the scheduler and every save route, so
 // the editor cannot enable Save on an expression the server will 400 (#6634).
 // cronValidation.js is a pure leaf — importing it pulls in no service graph.

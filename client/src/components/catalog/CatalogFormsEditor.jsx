@@ -12,7 +12,7 @@ const labelClass = 'block text-xs uppercase tracking-wider text-gray-500 mb-1';
 const PLACEHOLDERS = {
   character: { label: 'Age 7', age: '7', description: 'Gap-toothed, oversized yellow raincoat, scabbed knees' },
   place: { label: 'Abandoned, 2040', age: '2040', description: 'Boarded windows, ivy over the sign, cracked lot' },
-  object: { label: 'Brand new', age: '1986', description: 'Glossy red paint, chrome still bright, tags attached' },
+  object: { label: 'Brand new', age: '1979', description: 'Glossy red paint, chrome still bright, tags attached' },
 };
 
 // The record's own fields are its canonical present-story form; `payload.forms`

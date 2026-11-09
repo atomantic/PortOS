@@ -104,7 +104,7 @@ export default function ReferenceImagePicker({
                       type="button"
                       onClick={() => onBrowse(i)}
                       disabled={disabled}
-                      className="flex items-center justify-center gap-1 min-h-[44px] sm:min-h-0 sm:h-[20px] border border-port-border rounded text-xs sm:text-[10px] text-gray-500 hover:text-white hover:border-port-accent transition-colors disabled:opacity-50"
+                      className="flex items-center justify-center gap-1 min-h-[44px] pointer-fine:sm:min-h-0 pointer-fine:sm:h-[20px] border border-port-border rounded text-xs sm:text-[10px] text-gray-500 hover:text-white hover:border-port-accent transition-colors disabled:opacity-50"
                       title="Pick a reference image from your gallery"
                     >
                       <Images className="w-3 h-3" /> Gallery

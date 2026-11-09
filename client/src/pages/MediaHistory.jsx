@@ -22,6 +22,7 @@ import RatingFilterChips from '../components/media/RatingFilterChips';
 import { normalizeImage, normalizeMediaRow, normalizeVideo } from '../components/media/normalize';
 import { useMediaCompletionRefresh } from '../hooks/useMediaCompletionRefresh';
 import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
+import { useMediaHideToggle } from '../hooks/useMediaHideToggle';
 import useMediaPreviewActions from '../hooks/useMediaPreviewActions';
 import useHydratedPreviewRoute from '../hooks/useHydratedPreviewRoute';
 import { useGalleryPage } from '../hooks/useGalleryPage';
@@ -172,6 +173,14 @@ export default function MediaHistory() {
     }
   }, [setItems, withPendingDelete, rememberPeerName, page.setTotal, refresh]);
 
+  // This page lists visible items only, so a hidden one leaves the list.
+  const handleToggleHidden = useMediaHideToggle(useCallback((item, hidden) => {
+    if (!hidden) return;
+    setItems((all) => all.filter((x) => x.key !== item.key));
+    page.setTotal(total => Math.max(0, total - 1));
+    refresh();
+  }, [setItems, page.setTotal, refresh]));
+
   const handleCancelPendingDelete = useCallback(async (item) => {
     try {
       await (item.kind === 'image'
@@ -251,7 +260,7 @@ export default function MediaHistory() {
               key={f.id}
               type="button"
               onClick={() => setFilter(f.id)}
-              className={`min-h-[44px] sm:min-h-0 px-2.5 py-1 rounded-full border ${
+              className={`min-h-[44px] pointer-fine:sm:min-h-0 px-2.5 py-1 rounded-full border ${
                 filter === f.id
                   ? 'bg-port-accent/20 border-port-accent text-port-accent'
                   : 'border-port-border text-gray-400 hover:text-white hover:bg-port-border/50'
@@ -334,6 +343,7 @@ export default function MediaHistory() {
                   onUpscale={!stitchMode && it.kind === 'video' ? handleUpscale : undefined}
                   onDelete={!stitchMode ? handleDelete : undefined}
                   onCancelPendingDelete={!stitchMode ? handleCancelPendingDelete : undefined}
+                  onToggleHidden={!stitchMode ? handleToggleHidden : undefined}
                   pendingPeerName={it.pendingDelete?.peerId ? peerNames[it.pendingDelete.peerId] : null}
                   selectionLabel={idx !== -1 ? idx + 1 : null}
                   selected={idx !== -1}
@@ -369,6 +379,8 @@ export default function MediaHistory() {
         onClean={(item) => handleClean(item?.raw)}
         onRemoveWatermark={(item) => handleRemoveWatermark(item?.raw)}
         onFilmLookComplete={handleFilmLookComplete}
+        onDelete={handleDelete}
+        onToggleHidden={handleToggleHidden}
       />
 
       <VideoUpscaleDrawer

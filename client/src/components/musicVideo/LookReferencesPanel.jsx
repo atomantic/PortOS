@@ -22,9 +22,9 @@ const ROLES = [
 const USES = [['reference', 'Look reference'], ['final-visible', 'Final visible'], ['motion-reference', 'Motion reference only']];
 const MAX_UPLOADS = 8;
 
-const controlCls = 'min-w-0 max-w-full rounded border border-port-border bg-port-bg px-1.5 py-0.5 text-[11px] min-h-[44px] sm:min-h-0';
+const controlCls = 'min-w-0 max-w-full rounded border border-port-border bg-port-bg px-1.5 py-0.5 text-[11px] min-h-[44px] pointer-fine:sm:min-h-0';
 const fieldCls = `block w-full ${controlCls}`;
-const actionCls = 'flex max-w-full items-center gap-1 rounded bg-port-border px-2 py-1 text-xs min-h-[44px] hover:bg-port-border/70 disabled:opacity-50 sm:min-h-0';
+const actionCls = 'flex max-w-full items-center gap-1 rounded bg-port-border px-2 py-1 text-xs min-h-[44px] hover:bg-port-border/70 disabled:opacity-50 pointer-fine:sm:min-h-0';
 // Column count follows this panel. On Look, the preview dock leaves a narrow
 // center column at xl, and a viewport 3-up grid clips the role, use and label.
 const cardListCls = 'grid min-w-0 grid-cols-[repeat(auto-fit,minmax(min(100%,18rem),1fr))] gap-2';
@@ -226,7 +226,7 @@ export default function LookReferencesPanel({ project, onSave, onSaveSpec, onAdd
                   {isOutsideReference(ref) ? (
                     <p className="break-words text-[11px] text-port-text-muted">Mood board image: shapes the look as text, never sent to the generator</p>
                   ) : (
-                    <label className="flex min-h-[44px] min-w-0 items-start gap-1.5 text-[11px] sm:min-h-0">
+                    <label className="flex min-h-[44px] min-w-0 items-start gap-1.5 text-[11px] pointer-fine:sm:min-h-0">
                       <input type="checkbox" className="mt-0.5 shrink-0" checked={!!ref.condition}
                         onChange={(e) => updateRef(ref.id, { condition: e.target.checked })} />
                       <span className="break-words">Condition frames</span>
@@ -249,7 +249,7 @@ export default function LookReferencesPanel({ project, onSave, onSaveSpec, onAdd
                   onChange={(e) => changeUploads(uploads.map((item, i) => (i === index ? { ...item, caption: e.target.value } : item)))}
                   className="block w-full min-w-0 max-w-full rounded border border-port-border bg-port-bg p-1 text-sm" />
                 <button type="button" aria-label={`Remove style upload ${index + 1}`} onClick={() => changeUploads(uploads.filter((_, i) => i !== index))}
-                  className="min-h-[44px] text-xs text-port-error sm:min-h-0">Remove</button>
+                  className="min-h-[44px] text-xs text-port-error pointer-fine:sm:min-h-0">Remove</button>
               </div>
             </div>
           </li>

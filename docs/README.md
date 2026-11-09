@@ -11,6 +11,15 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 | [CODEX_USAGE_PREVIEW.md](./CODEX_USAGE_PREVIEW.md) | Read-only bounded Codex raw/compressed/archive usage preview, deduplication and coverage limits |
 | [EXECUTION_OPTIONS.md](./EXECUTION_OPTIONS.md) | Capability-driven speed options, persistence, dispatch attribution and selector inventory |
 | [FLUX3_IMAGE.md](./FLUX3_IMAGE.md) | FLUX.3 Klein MLX profiles, isolated runtime, reference edits and license/access behavior |
+| [MINIMAX_H3_CUDA.md](./MINIMAX_H3_CUDA.md) | MiniMax H3 CUDA hash locks, Python/CUDA targets, advisory checks and NVIDIA readiness validation |
+| [LTX25_CUDA.md](./LTX25_CUDA.md) | LTX-2.5 CUDA hash locks, immutable source packaging, regeneration and NVIDIA readiness validation |
+| [WAN22_CUDA.md](./WAN22_CUDA.md) | Wan 2.2 CUDA hash locks, Python/CUDA targets, regeneration, advisory scans and NVIDIA readiness validation |
+| [MINIMAX_MUSIC3_CUDA.md](./MINIMAX_MUSIC3_CUDA.md) | MiniMax Music 3 CUDA hash locks, Install/Repair, regeneration, advisory scans and NVIDIA readiness evidence |
+| [AUDIOLDM2_CUDA.md](./AUDIOLDM2_CUDA.md) | AudioLDM2 Windows/Linux hash locks, Install/Repair, regeneration, advisory scans and NVIDIA readiness evidence |
+| [MUSCRIPTOR_CUDA.md](./MUSCRIPTOR_CUDA.md) | MuScriptor Windows/Linux hash locks, Install/Repair, regeneration, advisory scans and NVIDIA readiness evidence |
+| [ACESTEP_CUDA.md](./ACESTEP_CUDA.md) | ACE-Step Windows/Linux hash locks, pinned-checkout install, regeneration, advisory scans and NVIDIA readiness evidence |
+| [FLUX2_CUDA.md](./FLUX2_CUDA.md) | FLUX.2 / Qwen-Image 2.1 Windows/Linux hash locks, Install/Repair, regeneration, advisory scans and NVIDIA readiness evidence |
+| [ACESTEP15_CUDA.md](./ACESTEP15_CUDA.md) | ACE-Step 1.5 Windows/Linux hash locks, pinned-checkout install, regeneration, advisory scans and NVIDIA readiness evidence |
 | [MOSS_IMAGE.md](./MOSS_IMAGE.md) | Optional pinned MOSS Swift/MLX image runtime, explicit installation, resource needs and Apple Silicon validation |
 | [HTML_COMPOSITIONS.md](./HTML_COMPOSITIONS.md) | Seekable HTML scenes rendered offline to MP4 through hidden managed-browser targets |
 | [CONTAINMENT.md](./CONTAINMENT.md) | Every containment profile (bubblewrap, Seatbelt, Docker) and which consumer uses which; the opt-in Docker containment profile for untrusted installs/tests, its engine policy, two-phase network and `contained-run.js` |

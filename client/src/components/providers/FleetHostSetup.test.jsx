@@ -174,12 +174,12 @@ describe('dedicated model host setup', () => {
   expect(screen.queryByText(/serving its own model host/)).not.toBeInTheDocument();
  });
 
- it('offers a one-click self-host OpenCode TUI setup on the full host panel', async () => {
+ it('offers one-click self-host Pi and OpenCode TUI setups on the full host panel', async () => {
   api.getFleetLlmHost.mockResolvedValue(state);
   api.getFleetPeerHosts.mockResolvedValue({ hosts: [] });
   render(<MemoryRouter><FleetHostSetup /></MemoryRouter>);
-  const link = await screen.findByRole('link', { name: 'Set up OpenCode TUI on this machine' });
-  expect(link).toHaveAttribute('href', '/ai/fleet?fleetStep=client&selfHost=1');
+  expect(await screen.findByRole('link', { name: 'Set up Pi on this machine' })).toHaveAttribute('href', '/ai/fleet?fleetStep=client&selfHost=1&harness=pi');
+  expect(screen.getByRole('link', { name: 'Set up OpenCode TUI on this machine' })).toHaveAttribute('href', '/ai/fleet?fleetStep=client&selfHost=1&harness=opencode');
  });
 });
 

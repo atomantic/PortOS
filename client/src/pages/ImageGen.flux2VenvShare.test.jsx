@@ -41,7 +41,8 @@ describe('ImageGen shared-venv install offer for non-flux2 diffusers models', ()
   it('offers the runtime install from the readiness pill, with no HF-token banner', async () => {
     await renderImageGenPage();
 
-    expect(await screen.findByRole('button', { name: /Install runtime/i })).toBeInTheDocument();
+    // The pill and the model picker's weights badge both offer it.
+    expect((await screen.findAllByRole('button', { name: /Install runtime/i })).length).toBeGreaterThan(0);
     expect(screen.getByText(/not installed or healthy/i)).toBeInTheDocument();
     expect(screen.queryByText(/accept.*license/i)).not.toBeInTheDocument();
   });

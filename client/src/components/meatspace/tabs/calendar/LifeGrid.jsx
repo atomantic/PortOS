@@ -215,21 +215,21 @@ function DayGridView({ birthDate, deathDate, cellCfg, stats, showEvents }) {
       <div className="flex items-center gap-3 mb-3">
         <button
           onClick={() => setSelectedAge(Math.max(0, selectedAge - 1))}
-          className="px-2 py-0.5 text-xs text-gray-400 hover:text-white rounded bg-port-bg border border-port-border"
+          className="px-2 py-0.5 pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-xs text-gray-400 hover:text-white rounded bg-port-bg border border-port-border"
         >
           &larr;
         </button>
         <span className="text-sm text-white font-medium">Age {selectedAge}</span>
         <button
           onClick={() => setSelectedAge(Math.min(totalYears - 1, selectedAge + 1))}
-          className="px-2 py-0.5 text-xs text-gray-400 hover:text-white rounded bg-port-bg border border-port-border"
+          className="px-2 py-0.5 pointer-coarse:min-h-11 pointer-coarse:min-w-11 text-xs text-gray-400 hover:text-white rounded bg-port-bg border border-port-border"
         >
           &rarr;
         </button>
         {selectedAge !== currentAge && (
           <button
             onClick={() => setSelectedAge(currentAge)}
-            className="px-2 py-0.5 text-xs text-port-accent hover:text-white"
+            className="px-2 py-0.5 pointer-coarse:min-h-11 text-xs text-port-accent hover:text-white"
           >
             Current
           </button>
@@ -389,12 +389,12 @@ export default function LifeGrid({ grid, stats, birthDate, deathDate, lifeEvents
         <Calendar size={16} className="text-port-accent" />
         <h3 className="text-sm font-medium text-white">Life Calendar</h3>
         {/* Unit toggle */}
-        <div className="flex items-center gap-0.5 ml-1 bg-port-bg rounded-md p-0.5 border border-port-border">
+        <div className="flex items-center gap-0.5 pointer-coarse:gap-1 ml-1 bg-port-bg rounded-md p-0.5 border border-port-border">
           {UNIT_MODES.map(u => (
             <button
               key={u.id}
               onClick={() => setUnit(u.id)}
-              className={`px-2 py-0.5 text-xs rounded transition-colors ${unit === u.id ? 'bg-port-accent/20 text-port-accent font-medium' : 'text-gray-400 hover:text-white'}`}
+              className={`px-2 py-0.5 pointer-coarse:min-h-11 text-xs rounded transition-colors ${unit === u.id ? 'bg-port-accent/20 text-port-accent font-medium' : 'text-gray-400 hover:text-white'}`}
             >
               {u.label}
             </button>
@@ -402,12 +402,12 @@ export default function LifeGrid({ grid, stats, birthDate, deathDate, lifeEvents
         </div>
         {/* Week layout (only in weeks mode) */}
         {unit === 'weeks' && (
-          <div className="flex items-center gap-0.5 bg-port-bg rounded-md p-0.5 border border-port-border">
+          <div className="flex items-center gap-0.5 pointer-coarse:gap-1 bg-port-bg rounded-md p-0.5 border border-port-border">
             {WEEK_LAYOUTS.map(v => (
               <button
                 key={v.id}
                 onClick={() => setWeekLayout(v.id)}
-                className={`px-2 py-0.5 text-xs rounded ${weekLayout === v.id ? 'bg-port-accent/20 text-port-accent' : 'text-gray-400 hover:text-white'}`}
+                className={`px-2 py-0.5 pointer-coarse:min-h-11 text-xs rounded ${weekLayout === v.id ? 'bg-port-accent/20 text-port-accent' : 'text-gray-400 hover:text-white'}`}
               >
                 {v.label}
               </button>

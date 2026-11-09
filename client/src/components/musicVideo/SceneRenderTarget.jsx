@@ -7,7 +7,7 @@ import { GROK_VIDEO_DURATIONS } from '../../lib/grokVideoClip.js';
 import {
   RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, RUNWAY_VIDEO_MODELS, coerceRunwayVideoSeconds, describeRunwayVideoRate, getRunwayVideoModel, runwayVideoLengths, runwayVideoResolutions,
 } from '../../lib/runwayVideoModels.js';
-import { SOURCE_AUDIO_MUSIC, grokCoverage, performanceCapability } from '../../lib/musicVideoShotTiming.js';
+import { SOURCE_AUDIO_MUSIC, grokCoverage, performanceCapability, shotRequestSpanSec } from '../../lib/musicVideoShotTiming.js';
 import { localMusicVideoModels } from '../../../../server/lib/musicVideoLocalModels.js';
 import { normalizePreMusic } from '../../../../server/lib/musicVideoColdOpen.js';
 import { sceneActiveEndImageId } from '../../../../server/lib/musicVideoEndFrame.js';
@@ -38,7 +38,7 @@ import { safeReadJsonStorage, safeWriteJsonStorage } from '../../lib/safeStorage
 const BACKEND_LABELS = { local: 'Local LTX', grok: 'Grok', fal: 'fal.ai', runway: 'Runway', gemini: GEMINI_OMNI_WEB_MODEL.label };
 // The local render's frame rate when the request names none (generateVideo's default).
 const LOCAL_FPS = 24;
-const SELECT = 'min-w-0 max-w-full bg-port-bg border border-port-border rounded px-1 py-1 text-xs min-h-[44px] sm:min-h-0 disabled:opacity-50';
+const SELECT = 'min-w-0 max-w-full bg-port-bg border border-port-border rounded px-1 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50';
 
 // The fal model a performance shot renders on: the lip-sync route, or the
 // project's music-driven model for a music-driven shot. Never the cutaway model.
@@ -134,8 +134,7 @@ export function defaultLocalModelId({ models = [], saved = {}, defaultModel = ''
   return choices.find(isLtx25)?.id || (has(defaultModel) ? defaultModel : choices[0]?.id || '');
 }
 
-const shotSpan = (scene) => (typeof scene?.startSec === 'number' && typeof scene?.endSec === 'number' && scene.endSec > scene.startSec
-  ? scene.endSec - scene.startSec : null);
+const shotSpan = shotRequestSpanSec;
 const localShotSpan = (scene) => normalizePreMusic(scene?.preMusic)?.durationSec ?? shotSpan(scene);
 
 /** The shortest frame count of `model` that covers the shot, else its longest; null for an untimed shot. */

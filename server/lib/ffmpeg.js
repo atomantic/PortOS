@@ -1037,7 +1037,7 @@ export const installEncodedVideo = async (tmpPath, targetPath, label) => {
   }
 };
 
-// Keep frames [startFrame, end) of a clip, dropping everything before it.
+// Keep frames [startFrame, endFrame) of a clip (endFrame omitted = to the end).
 //
 // Both halves of the chained-render context window need exactly this cut: the
 // tail window handed to LTX-2's extend pipeline is "keep the last N frames"
@@ -1060,11 +1060,13 @@ export const installEncodedVideo = async (tmpPath, targetPath, label) => {
 // is renamed into place, so a failure leaves the original untouched.
 //
 // Returns `{ ok: true, outPath }` or `{ ok: false, reason }`.
-export const trimVideoFromFrame = async (videoPath, outPath, { startFrame, fps } = {}) => {
+export const trimVideoFromFrame = async (videoPath, outPath, { startFrame, endFrame, fps } = {}) => {
   if (typeof videoPath !== 'string' || !videoPath) return { ok: false, reason: 'invalid video path' };
   if (typeof outPath !== 'string' || !outPath) return { ok: false, reason: 'invalid output path' };
   if (!existsSync(videoPath)) return { ok: false, reason: 'video file missing' };
   const start = Math.max(0, Math.floor(Number(startFrame) || 0));
+  const end = endFrame == null ? null : Math.floor(Number(endFrame));
+  if (end !== null && !(end > start)) return { ok: false, reason: `invalid end frame: ${endFrame}` };
   const rate = Number(fps);
   if (!Number.isFinite(rate) || rate <= 0) return { ok: false, reason: `invalid fps: ${fps}` };
   let ffmpeg;
@@ -1085,11 +1087,11 @@ export const trimVideoFromFrame = async (videoPath, outPath, { startFrame, fps }
     bin: ffmpeg,
     args: [
       '-i', videoPath,
-      '-vf', appendFilter(`trim=start_frame=${start},setpts=PTS-STARTPTS`, colorFilter),
+      '-vf', appendFilter(`trim=start_frame=${start}${end === null ? '' : `:end_frame=${end}`},setpts=PTS-STARTPTS`, colorFilter),
       ...(audio
         // atrim takes seconds; the frame index converts exactly because the
         // clips this runs on are CFR renders straight out of the model.
-        ? ['-af', `atrim=start=${(start / rate).toFixed(6)},asetpts=PTS-STARTPTS`, ...AAC_ENCODE_ARGS]
+        ? ['-af', `atrim=start=${(start / rate).toFixed(6)}${end === null ? '' : `:end=${(end / rate).toFixed(6)}`},asetpts=PTS-STARTPTS`, ...AAC_ENCODE_ARGS]
         : ['-an']),
       ...H264_ENCODE_ARGS,
       ...BT709_CONTAINER_ARGS,

@@ -48,6 +48,21 @@ vi.mock('../lib/fileUtils.js', async (original) => {
   } };
 });
 
+// The vision reviewer itself is covered in plateReview.test.js; here it answers with real evidence for the scene it was handed.
+const plateCheck = vi.hoisted(() => ({ duringReview: null, reviewerAsked: null }));
+vi.mock('../services/musicVideo/plateReview.js', async () => {
+  const { plateReviewEvidence, plateRequirements } = await import('../lib/musicVideoPlateEvidence.js');
+  return {
+    resolvePlateReviewer: async (pinned) => { plateCheck.reviewerAsked = pinned; return { provider: { id: 'example-vision' }, model: 'example-model', costUsd: 0 }; },
+    reviewPlate: async ({ scene, assetId, runId }) => {
+      await plateCheck.duringReview?.();
+      return plateReviewEvidence(scene, assetId, runId, JSON.stringify({ checks: plateRequirements(scene).map(({ id }) => ({
+        id, status: id === 'plate-prompt' ? 'fail' : 'pass', note: id === 'plate-prompt' ? 'The lighthouse is missing.' : 'Clean',
+      })) }));
+    },
+  };
+});
+
 const ROOT = () => lazyTempDataRoot('mv-takes-route-test-');
 vi.mock('../lib/paths.js', async (importOriginal) => makePathsProxy(await importOriginal(), { dataRoot: ROOT }));
 vi.mock('../services/settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));
@@ -80,6 +95,7 @@ let sceneA;
 let sceneB;
 beforeEach(async () => {
   race.beforeDelete = race.beforeSave = race.onRequest = race.ownerAnswer = null;
+  plateCheck.duringReview = null;
   rmSync(join(ROOT(), 'music-video-projects.json'), { force: true });
   rmSync(join(ROOT(), 'images'), { recursive: true, force: true });
   seedVideoHistory([]);
@@ -146,6 +162,30 @@ describe('scene takes routes', () => {
     await expect(assertMusicVideoSceneReview(runTag, 'video')).rejects.toMatchObject({ code: 'MUSIC_VIDEO_APPROVAL_REQUIRED' });
     await projects.updateScene(project.id, sceneA.sceneId, { framePrompt: 'Another composition' });
     expect((await request(app).patch(url).send(body)).status).toBe(409);
+  });
+
+  // Uniquely catches a user-started check not saving its verdict on the take, or saving one for a shot edited mid-check.
+  it('checks one frame take on request and refuses evidence for a shot edited during the check', async () => {
+    seedImage('check.png');
+    const added = await addTake(sceneA.sceneId, { kind: 'image', assetId: 'check.png' });
+    const url = `${base()}/scenes/${sceneA.sceneId}/takes/${added.body.take.takeId}/check`;
+    const checked = await request(app).post(url);
+    expect(checked.status).toBe(200);
+    expect(checked.body.takes[0].plateEvidence).toMatchObject({ assetId: 'check.png', verdict: 'fail' });
+    expect(checked.body.takes[0].plateEvidence.runId).toMatch(/^manual-/);
+    expect(plateCheck.reviewerAsked).toEqual({});
+
+    // The project's chosen reviewer is the one asked for; null goes back to the default.
+    expect((await request(app).patch(base()).send({ plateReviewer: { providerId: 'example-api', model: 'example-vision-model' } })).status).toBe(200);
+    await request(app).post(url);
+    expect(plateCheck.reviewerAsked).toEqual({ providerId: 'example-api', model: 'example-vision-model' });
+    expect((await request(app).patch(base()).send({ plateReviewer: null })).status).toBe(200);
+    await request(app).post(url);
+    expect(plateCheck.reviewerAsked).toEqual({});
+
+    plateCheck.duringReview = () => projects.updateScene(project.id, sceneA.sceneId, { framePrompt: 'Another composition' });
+    expect((await request(app).post(url)).status).toBe(409);
+    expect((await reload()).scenes[0].takes[0].plateEvidence.basis).toBe(checked.body.takes[0].plateEvidence.basis);
   });
 
   it('rejecting the selected take clears the slot so the next take fills it', async () => {

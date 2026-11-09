@@ -262,11 +262,11 @@ const FULL_TRIGGER_RULES = [
   // prove themselves against the complete suite rather than their own scope.
   // Only the ones the windows-server job itself executes (ci-base-sha,
   // run-ci-tests and the githubOutput helper it imports) escalate Windows; the
-  // planner, lint runner, hidden-content and commit-message scans and status verifier run on Linux
+  // planner, lint runner, hidden-content scan and status verifier run on Linux
   // jobs only, so a Windows run would observe nothing they change.
   { re: /^scripts\/(?:lib\/githubOutput|ci-base-sha|run-ci-tests)(?:\.test)?\.js$/, reason: 'CI pipeline script changed', windowsRelevant: true },
   { re: /^scripts\/ci-test-plan(?:\.test)?\.js$/, reason: 'CI pipeline script changed', windowsRelevant: true },
-  { re: /^scripts\/(?:run-ci-lint|scan-diff-hidden-content|scan-commit-session-links|verify-ci-status)(?:\.test)?\.js$/, reason: 'CI pipeline script changed', windowsRelevant: false },
+  { re: /^scripts\/(?:run-ci-lint|scan-diff-hidden-content|verify-ci-status)(?:\.test)?\.js$/, reason: 'CI pipeline script changed', windowsRelevant: false },
 ];
 
 // Native Windows coverage is intentionally limited to CLI/TUI execution,
@@ -545,9 +545,15 @@ export const FIXTURE_OWNERS = [
     dir: 'server/services/promptSections/__snapshots__/reviewLoopMatrix',
     tests: ['server/services/promptSections/reviewLifecycleMatrix.test.js'],
   },
-  // Pip pins consumed only by an explicit Install/Repair (`setup-image-video.sh`).
-  // No Vitest suite reads the files; the installer-contract tests are the suites
-  // that exercise that script and server/lib/pythonSetup.js.
+  {
+    re: /^scripts\/ltx25_cuda_currency\.py$/,
+    dir: 'scripts',
+    fileRe: /^ltx25_cuda_currency\.py$/,
+    tests: ['server/services/videoGen/runtimes.test.js'],
+  },
+  // Pip pins consumed only by an explicit Install/Repair (`setup-image-video.sh`,
+  // and the FLUX.3 runtime lock read by services/imageGen/flux3Runtime.js). The
+  // installer-contract tests are the suites that exercise those installers.
   {
     re: /^scripts\/requirements-[^/]+\.txt$/,
     dir: 'scripts',
@@ -556,6 +562,8 @@ export const FIXTURE_OWNERS = [
       'scripts/setup-image-video.test.js',
       'server/lib/pythonSetup.install.test.js',
       'server/lib/pythonSetup.test.js',
+      'server/services/imageGen/flux3Runtime.test.js',
+      'server/services/videoGen/runtimes.test.js',
     ],
   },
 ];

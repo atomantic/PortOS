@@ -14,9 +14,9 @@ import {
 } from '../../../../server/lib/musicVideoRouteMaps.js';
 
 export const ROUTE_MAPS_ANCHOR = 'mv-route-maps';
-const inputCls = 'w-full min-w-0 rounded border border-port-border bg-port-bg px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0';
-const buttonCls = 'inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border px-2 py-1 text-xs disabled:opacity-50 sm:min-h-0';
-const iconButtonCls = 'flex min-h-[44px] min-w-[44px] items-center justify-center rounded border border-port-border text-port-text-muted disabled:opacity-40 sm:min-h-8 sm:min-w-8';
+const inputCls = 'w-full min-w-0 rounded border border-port-border bg-port-bg px-1.5 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0';
+const buttonCls = 'inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border px-2 py-1 text-xs disabled:opacity-50 pointer-fine:sm:min-h-0';
+const iconButtonCls = 'flex min-h-[44px] min-w-[44px] items-center justify-center rounded border border-port-border text-port-text-muted disabled:opacity-40 pointer-fine:sm:min-h-8 pointer-fine:sm:min-w-8';
 const HEADING_DEGREES = Object.fromEntries(ROUTE_MAP_HEADINGS.map((heading, at) => [heading, at * 45]));
 const newStopId = () => `rstop-${uuidv4().slice(0, 8)}`;
 const FEATURE_KIND_LABELS = { 'side-street': 'Side street', landmark: 'Landmark' };

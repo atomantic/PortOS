@@ -882,12 +882,21 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // v50 = `previz.worldId` (the catalog environment whose world map the previz plays
   // in, lib/worldMap.js), which a v49 strict previz schema rejects. Optional, no backfill.
   // v51 = `previz.night` (story clock and beats simulated over the world map,
-  // lib/musicVideoPrevizNight.js), which a v50 strict previz schema rejects. Optional, no backfill.
+  // lib/musicVideoPrevizTimeline.js), which a v50 strict previz schema rejects. Optional, no backfill.
   // v52 = `previz.cuts[].storyMin` and `cameraSpot` (a cut's moment on the night and its
   // observer spot), which a v51 strict cut schema rejects. Optional, no backfill.
   // v53 = `previz.cuts[].turnToAim` (the camera swings to its keep-in-frame person during
   // the cut), which a v52 strict cut schema rejects. Optional, no backfill.
-  musicVideoProjects: 53,
+  // v54 = `previz.timeline` replaces `previz.night`, `previz.vehicles` (cast objects people ride, with a speed),
+  // a beat's and a track key's `vehicleSubjectId`, and `pawnColors` loses `bike`: a v53 strict previz schema rejects
+  // these and a v54 one rejects the v53 shapes (migration 459 / db-migration 031 convert stored projects).
+  // v55 = `concept.subjects[].requiredDetails` (what every frame of a character must show,
+  // checked by the frame check), which a v54 strict subject schema rejects. Optional, no backfill.
+  // v56 = `previz.cuts[].selfie` (a held camera faces back at its holder, who is shown), which a v55 strict
+  // cut schema rejects. Optional, no backfill.
+  // v57 = `lyricCues[].voice` (who sings a line), which a v56 strict cue schema rejects and its
+  // normalizer drops on save. Optional, no backfill.
+  musicVideoProjects: 57,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

@@ -346,6 +346,7 @@ const createEnqueue = ({ body, prepared, performance, backend, inputs }) => asyn
   // The labeled additions the composers put around the user's text ride with the job to its record.
   const additions = [...(body.promptAdditions || []), ...composedAdditions];
   if (additions.length) params.promptAdditions = additions;
+  if (body.schedule && (body.schedule.startAt || body.schedule.stopBy)) params.schedule = body.schedule;
   const job = await enqueueJob({ kind: 'video', params });
   inputs.transfer();
   return job;
@@ -385,10 +386,11 @@ const submitHostedLane = async ({ body, prepared, backend, hosted, performancePa
   // A Music Video shot animated on Grok or Gemini carries its cast sheets beside the still,
   // so people stay recognizable once the clip moves past the opening frame.
   const carriesCast = backend === VIDEO_GEN_MODE.GROK || backend === VIDEO_GEN_MODE.GEMINI;
-  const castReferenceLimit = musicVideoClipReferenceCapacity(backend);
+  const startFrameLayout = backend === VIDEO_GEN_MODE.GROK && body.musicVideo?.startFrameLayout === true;
+  const castReferenceLimit = musicVideoClipReferenceCapacity(backend, null, { startFrameLayout });
   const musicVideoReferences = carriesCast && body.musicVideo && sourceImagePath && !prepared.guidanceImagePath
     ? await import('../musicVideo/clipCastReferences.js').then((mod) => (backend === VIDEO_GEN_MODE.GROK
-      ? mod.musicVideoClipCastReferences(body.musicVideo)
+      ? mod.musicVideoClipCastReferences(body.musicVideo, { startFrameLayout })
       : mod.musicVideoClipReferences(body.musicVideo, castReferenceLimit)))
     : [];
   // Caller-uploaded reference images (staged by the lane) follow any Music Video
@@ -418,7 +420,7 @@ const submitHostedLane = async ({ body, prepared, backend, hosted, performancePa
     uploadedTempPath,
     ...submissionTagParams(body),
     ...hosted.buildParams(body, prepared),
-    ...(castReferences.length ? { castReferences } : {}),
+    ...(castReferences.length ? { castReferences, ...(startFrameLayout ? { startFrameLayout } : {}) } : {}),
     ...(useClipReferences ? {
       referenceImagePaths: clipReferences.map((ref) => ref.path),
       clipReferenceLabels: clipReferences.map(({ label, role }) => ({ label, ...(role ? { role } : {}) })),
@@ -507,6 +509,13 @@ const submitValidatedVideoGenJob = async (body, uploads, inputs) => {
     const { applyProjectRenderPool } = await import('../musicVideo/renderPool.js');
     body = await applyProjectRenderPool(body);
   }
+  // The render pool's note (a shot rendering without song audio) rides on the response.
+  const notice = body._notice;
+  const result = await submitPreparedVideoGenJob(body, uploads, inputs, fableLoomRenderSettings);
+  return notice ? { ...result, notice } : result;
+};
+
+const submitPreparedVideoGenJob = async (body, uploads, inputs, fableLoomRenderSettings) => {
   let prepared;
   ({ body, prepared } = await prepareVideoSubmissionInputs(body, uploads, inputs));
   const { backend } = prepared;

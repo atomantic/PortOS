@@ -2,12 +2,12 @@ import { execFile, spawn } from './childProcess.js';
 import { existsSync, readdirSync } from 'node:fs';
 import { arch, homedir, platform } from 'node:os';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { PATHS } from './fileUtils.js';
 import { isAppleSilicon } from './platform.js';
 import { safeChildProcessOptions, whichFirst, whichFirstSync } from './processEnv.js';
 import { createLineReader } from './streamLines.js';
-import { getCudaCapability } from './cudaCapability.js';
 
 const execFileAsync = promisify(execFile);
 const IS_WIN = platform() === 'win32';
@@ -47,8 +47,9 @@ const MLX_VIDEO_PIP = 'mlx-video-with-audio>=0.1.35';
 
 const PIP_NAMES = {
   cv2: 'opencv-python',
-  // mlx-compatible transformers must stay <5; Windows torch path uses latest.
-  ...(IS_DARWIN ? { transformers: 'transformers<5' } : {}),
+  // Apple Silicon never installs transformers by name: the mflux lock pins the
+  // >=5,<6 build mflux 0.17.5 needs (see MFLUX_LOCK_PACKAGES). Other Macs keep <5.
+  ...(IS_DARWIN && !hostIsAppleSilicon() ? { transformers: 'transformers<5' } : {}),
   ...(IS_DARWIN ? { mlx_video: MLX_VIDEO_PIP } : {}),
 };
 
@@ -57,6 +58,12 @@ const PIP_NAMES = {
 const PIP_PRE_UNINSTALL = {
   [MLX_VIDEO_PIP]: ['mlx_video'],
 };
+
+// Import names whose distributions scripts/requirements-mflux-mlx.lock.txt owns
+// on Apple Silicon. Repairing any of them installs the whole hash-pinned lock
+// (as scripts/setup-image-video.sh does) instead of resolving fresh.
+const MFLUX_LOCK_PACKAGES = new Set(['mflux', 'mlx', 'transformers', 'safetensors', 'huggingface_hub', 'numpy', 'cv2', 'tqdm']);
+export const MFLUX_LOCK_FILE = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts', 'requirements-mflux-mlx.lock.txt');
 
 export const pipNameFor = (importName) => PIP_NAMES[importName] || importName;
 
@@ -317,19 +324,6 @@ export async function detectArm64Python() {
   if (!IS_DARWIN || !hostIsAppleSilicon()) return null;
   const present = PYTHON_CANDIDATES.filter((p) => existsSync(p));
   return firstArchMatch(present, (a) => a === 'arm64');
-}
-
-// True when an NVIDIA GPU is present. Used to decide whether the Windows FLUX.2
-// install pulls CUDA torch from the PyTorch index vs. the default CPU wheel.
-// Delegates to the shared probe in `cudaCapability.js` so there is one place that
-// knows how to interrogate `nvidia-smi` (the image-to-3D `local-cuda` lane reads
-// the richer result — VRAM per card — from the same cached call).
-//
-// Collapses the probe's three-way answer to a boolean deliberately: for a torch wheel
-// choice, "couldn't detect" must behave like "no GPU" — a CUDA wheel on a host without
-// one is an unusable venv, while the CPU wheel is merely slow.
-export async function hasNvidiaGpu() {
-  return (await getCudaCapability()).status === 'available';
 }
 
 // FLUX.2 runs in its own venv because mflux (MLX) and torch+diffusers-from-git
@@ -863,12 +857,19 @@ function streamSpawn(bin, args, onLog, onProc) {
   });
 }
 
+async function pythonIsVenv(pythonPath) {
+  const { stdout } = await execFileAsync(pythonPath, ['-c', 'import sys; print(sys.prefix != sys.base_prefix)'],
+    safeChildProcessOptions({ timeout: 10_000 })).catch(() => ({ stdout: '' }));
+  return stdout.trim() === 'True';
+}
+
 // Returns `{ promise, kill }` so the route can SIGTERM the pip child if the
 // SSE client disconnects mid-install — a 10-minute torch upgrade would
 // otherwise keep running invisibly.
-export function installPackages(pythonPath, importNames, onLog, { preferUv = false } = {}) {
+export function installPackages(pythonPath, importNames, onLog, { preferUv = false, appleSilicon = hostIsAppleSilicon() } = {}) {
   const uv = preferUv ? whichFirstSync('uv') : null;
-  const pipSpecs = importNames.map(pipNameFor);
+  const useLock = appleSilicon && importNames.some((n) => MFLUX_LOCK_PACKAGES.has(n));
+  const pipSpecs = importNames.filter((n) => !(useLock && MFLUX_LOCK_PACKAGES.has(n))).map(pipNameFor);
   const conflicts = [...new Set(pipSpecs.flatMap((s) => PIP_PRE_UNINSTALL[s] || []))];
 
   let currentProc = null;
@@ -891,8 +892,19 @@ export function installPackages(pythonPath, importNames, onLog, { preferUv = fal
       await runPip(['uninstall', '--yes', ...conflicts]);
       if (killed) return { ok: false, code: -1 };
     }
-    onLog({ type: 'log', message: `${uv ? 'uv pip' : 'pip'} install ${pipSpecs.join(' ')}` });
-    const code = await runPip(['install', '--upgrade', '--progress-bar', 'on', ...pipSpecs]);
+    let code = 0;
+    if (useLock) {
+      // --user matches the setup script's shared layout; a venv rejects it.
+      const inVenv = await pythonIsVenv(pythonPath);
+      const lockArgs = ['install', ...(uv || inVenv ? [] : ['--user']), '--require-hashes', '--no-deps', '-r', MFLUX_LOCK_FILE];
+      onLog({ type: 'log', message: `${uv ? 'uv pip' : 'pip'} ${lockArgs.join(' ')} (hash-pinned mflux lock)` });
+      code = await runPip(lockArgs);
+      if (killed) return { ok: false, code: -1 };
+    }
+    if (code === 0 && pipSpecs.length) {
+      onLog({ type: 'log', message: `${uv ? 'uv pip' : 'pip'} install ${pipSpecs.join(' ')}` });
+      code = await runPip(['install', '--upgrade', '--progress-bar', 'on', ...pipSpecs]);
+    }
     if (code === 0) {
       onLog({ type: 'complete', message: 'All packages installed successfully.' });
       return { ok: true, code: 0 };
@@ -910,25 +922,13 @@ export function installPackages(pythonPath, importNames, onLog, { preferUv = fal
   };
 }
 
-// torch + torchvision are split out from the rest of the FLUX.2 venv specs
-// because Windows needs the CUDA-enabled wheels from PyTorch's own index: the
-// default PyPI `torch` wheel on Windows is CPU-only (`torch==X+cpu`), which
-// makes local image-gen unusably slow on an NVIDIA box. Linux's default PyPI
-// torch already bundles CUDA and macOS uses the default MPS-capable wheel, so
-// only Windows + NVIDIA needs the index swap (see installFlux2Venv).
-export const FLUX2_TORCH_SPECS = ['torch>=2.5', 'torchvision'];
-
-// PyTorch CUDA wheel index used on Windows + NVIDIA. cu126 (CUDA 12.6) is the
-// broadest-compatible recent index — drivers >= ~525 support it — and serves
-// current torch builds. Override with PORTOS_TORCH_CUDA_INDEX (e.g.
-// https://download.pytorch.org/whl/cu130) if a newer/older CUDA is needed.
-export const WIN_TORCH_CUDA_INDEX = 'https://download.pytorch.org/whl/cu126';
-
-// Pip specs for the FLUX.2 venv. Mirrors scripts/setup-image-video.sh so the
-// shell path and the in-app installer stay in sync. diffusers + sdnq are
-// git-only because Flux2KleinPipeline isn't in any tagged release yet.
+// Pip specs for the macOS in-app FLUX.2 install. Linux/Windows never resolve:
+// installFlux2Venv hands them to the hash-pinned CUDA lock in
+// scripts/setup-image-video.sh. diffusers + sdnq are git-only here because
+// Flux2KleinPipeline isn't in any tagged release this path pins.
 export const FLUX2_PIP_SPECS = [
-  ...FLUX2_TORCH_SPECS,
+  'torch>=2.5',
+  'torchvision',
   'accelerate',
   'transformers>=5.17',
   'sentencepiece',
@@ -942,12 +942,64 @@ export const FLUX2_PIP_SPECS = [
   'pillow',
 ];
 
+// Linux/Windows FLUX.2 installs run the hash-pinned CUDA lock through
+// scripts/setup-image-video.sh (INSTALL_FLUX2=1) instead of resolving torch,
+// diffusers and sdnq at install time. The script owns the uv-provisioned
+// Python 3.11 venv, the lock sync and the pipeline import probe, so this only
+// streams its output and reports the exit. setupScriptRunner imports this
+// module, hence the lazy import.
+function installFlux2FromLock(onLog) {
+  let child = null;
+  let killed = false;
+  let stopSetupScript = () => {};
+
+  const promise = (async () => {
+    const runner = await import('./setupScriptRunner.js');
+    stopSetupScript = runner.stopSetupScript;
+    if (killed) return { ok: false, stage: 'install', cancelled: true };
+    onLog({ type: 'stage', stage: 'install', message: 'Syncing the hash-pinned FLUX.2 CUDA runtime (~6-10 min — large download)…' });
+    const code = await new Promise((resolve) => {
+      child = runner.spawnSetupScript({ INSTALL_FLUX2: '1' });
+      const onLine = (line) => {
+        const t = line.trim();
+        if (t) onLog({ type: 'log', message: t });
+      };
+      const stdoutReader = createLineReader(onLine, { splitRe: /[\r\n]+/ });
+      const stderrReader = createLineReader(onLine, { splitRe: /[\r\n]+/ });
+      child.stdout.on('data', stdoutReader.push);
+      child.stderr.on('data', stderrReader.push);
+      child.on('error', (err) => { onLog({ type: 'error', message: err.message }); resolve(-1); });
+      child.on('close', (exitCode) => { stdoutReader.flush(); stderrReader.flush(); resolve(exitCode ?? -1); });
+    });
+    child = null;
+    if (killed) return { ok: false, stage: 'install', cancelled: true };
+    if (code !== 0) {
+      onLog({ type: 'error', message: `The FLUX.2 installer exited with code ${code}. See the install log above for the failing step.` });
+      return { ok: false, stage: 'install' };
+    }
+    invalidateFlux2Health();
+    const pythonPath = resolveFlux2Python();
+    onLog({ type: 'stage', stage: 'verify', message: 'FLUX.2 and Qwen 2.1 pipeline imports verified by the installer.' });
+    onLog({ type: 'complete', message: `FLUX.2 venv ready: ${pythonPath}` });
+    return { ok: true, pythonPath };
+  })();
+
+  return {
+    promise,
+    kill: () => {
+      killed = true;
+      stopSetupScript(child);
+    },
+  };
+}
+
 // Bootstrap the FLUX.2 venv from inside the app so users don't have to drop to
 // a shell. Drives staged SSE progress: detect → venv → upgrade-pip → install
 // → verify. onLog gets `{ type: 'log' | 'stage' | 'error' | 'complete', stage?, message }`.
 // Returns `{ promise, kill }` like installPackages so the route can SIGTERM
 // pip if the EventSource is closed mid-install.
 export function installFlux2Venv(onLog) {
+  if (!IS_DARWIN) return installFlux2FromLock(onLog);
   let currentProc = null;
   let killed = false;
 
@@ -1057,26 +1109,7 @@ export function installFlux2Venv(onLog) {
     if (killed) return { ok: false, stage: 'upgrade-pip', cancelled: true };
 
     stage('install', 'Installing torch + diffusers + sdnq + transformers (~6-10 min — large download)…');
-    if (IS_WIN) {
-      // Windows: install torch+torchvision first so the right wheel sticks,
-      // then the rest WITHOUT torch in the list — otherwise the `--upgrade`
-      // below would re-pull the CPU-only PyPI torch over the CUDA build.
-      const useCuda = await hasNvidiaGpu();
-      const cudaIndex = process.env.PORTOS_TORCH_CUDA_INDEX || WIN_TORCH_CUDA_INDEX;
-      log(useCuda
-        ? `NVIDIA GPU detected — installing CUDA torch from ${cudaIndex}`
-        : 'No NVIDIA GPU detected — installing CPU torch (image-gen will be slow)');
-      const torchArgs = ['install', '--upgrade', '--progress-bar', 'on', ...FLUX2_TORCH_SPECS];
-      if (useCuda) torchArgs.push('--index-url', cudaIndex);
-      if (!await runPython([venvPython, '-m', 'pip', ...torchArgs])) {
-        return fail('install', 'Installing torch + torchvision failed.');
-      }
-      if (killed) return { ok: false, stage: 'install', cancelled: true };
-      const otherSpecs = FLUX2_PIP_SPECS.filter((s) => !FLUX2_TORCH_SPECS.includes(s));
-      if (!await runPython([venvPython, '-m', 'pip', 'install', '--upgrade', '--progress-bar', 'on', ...otherSpecs])) {
-        return fail('install', 'Installing the FLUX.2 packages failed.');
-      }
-    } else if (!await runPython([venvPython, '-m', 'pip', 'install', '--upgrade', '--progress-bar', 'on', ...FLUX2_PIP_SPECS])) {
+    if (!await runPython([venvPython, '-m', 'pip', 'install', '--upgrade', '--progress-bar', 'on', ...FLUX2_PIP_SPECS])) {
       return fail('install', 'Installing the FLUX.2 packages failed.');
     }
     if (killed) return { ok: false, stage: 'install', cancelled: true };

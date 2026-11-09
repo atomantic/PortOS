@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -243,7 +243,7 @@ it('narrows a shared basename to tests that can mean the changed copy, and keeps
 
 it('looks tests up by source basename from one indexed read, with git grep semantics (#14866)', () => {
   const root = mkdtempSync(join(tmpdir(), 'portos-ci-reference-index-'));
-  const trace = join(root, '..', `${root.split('/').pop()}.git-trace`);
+  const trace = `${root}.git-trace`;
   const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
   const write = (path, body) => {
     mkdirSync(dirname(join(root, path)), { recursive: true });
@@ -342,12 +342,11 @@ it('builds the same plan from an explicit working-tree override as from the equi
 
 describe('real shared-source import chains', () => {
   const cwd = REPO_ROOT;
-  let inputs;
+  // Collect this static repository fixture before timed hooks/tests: the
+  // synchronous whole-tree walk can exceed their budget on a loaded Windows host.
+  const inputs = realTree();
   // Synthetic mutation and recollection regressions below keep their separate
   // per-call snapshots.
-  beforeAll(() => {
-    inputs = realTree();
-  });
 
   it('schedules the real client precision-copy import chain for a shared scoring change', () => {
     const source = 'server/lib/postScoring.js';
@@ -1308,14 +1307,49 @@ describe('CI test impact planner', () => {
     it('scopes a requirements-pin change to the installer contract', () => {
       const requirements = [
         'scripts/requirements-ltx25-cuda.txt',
+        'scripts/requirements-ltx25-cuda-windows.lock.txt',
+        'scripts/requirements-ltx25-cuda-linux.lock.txt',
+        'scripts/requirements-ltx25-cuda-build.lock.txt',
+        'scripts/requirements-flux3-mlx.lock.txt',
         'scripts/requirements-minimax-h3-cuda.txt',
+        'scripts/requirements-minimax-h3-cuda-windows.lock.txt',
+        'scripts/requirements-minimax-h3-cuda-linux.lock.txt',
         'scripts/requirements-minimax-h3-mlx.lock.txt',
+        'scripts/requirements-minimax-music3-mlx.lock.txt',
+        'scripts/requirements-minimax-music3-cuda.txt',
+        'scripts/requirements-minimax-music3-cuda-windows.lock.txt',
+        'scripts/requirements-minimax-music3-cuda-linux.lock.txt',
+        'scripts/requirements-musicgen-mlx.lock.txt',
+        'scripts/requirements-audioldm2-mlx.lock.txt',
+        'scripts/requirements-audioldm2-cuda.txt',
+        'scripts/requirements-audioldm2-cuda-windows.lock.txt',
+        'scripts/requirements-audioldm2-cuda-linux.lock.txt',
+        'scripts/requirements-acestep-mlx.lock.txt',
+        'scripts/requirements-acestep-cuda.txt',
+        'scripts/requirements-acestep-cuda-windows.lock.txt',
+        'scripts/requirements-acestep-cuda-linux.lock.txt',
+        'scripts/requirements-acestep15-mlx.lock.txt',
+        'scripts/requirements-acestep15-cuda.txt',
+        'scripts/requirements-acestep15-cuda-windows.lock.txt',
+        'scripts/requirements-acestep15-cuda-linux.lock.txt',
+        'scripts/requirements-flux2-mlx.lock.txt',
+        'scripts/requirements-flux2-cuda.txt',
+        'scripts/requirements-flux2-cuda-windows.lock.txt',
+        'scripts/requirements-flux2-cuda-linux.lock.txt',
+        'scripts/requirements-fastvideo-mlx.lock.txt',
+        'scripts/requirements-muscriptor-mlx.lock.txt',
+        'scripts/requirements-muscriptor-cuda.txt',
+        'scripts/requirements-muscriptor-cuda-windows.lock.txt',
+        'scripts/requirements-muscriptor-cuda-linux.lock.txt',
+        'scripts/requirements-mflux-mlx.lock.txt',
         'scripts/requirements-wan22-cuda.txt',
       ];
       const owners = [
         'scripts/setup-image-video.test.js',
         'server/lib/pythonSetup.install.test.js',
         'server/lib/pythonSetup.test.js',
+        'server/services/imageGen/flux3Runtime.test.js',
+        'server/services/videoGen/runtimes.test.js',
       ];
       const plan = buildCiTestPlan(requirements, { trackedFiles: [...TRACKED, ...requirements, ...owners] });
 

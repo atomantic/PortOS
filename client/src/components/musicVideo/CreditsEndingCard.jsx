@@ -52,7 +52,7 @@ export default function CreditsEndingCard({ project, onEditLocal, onSave, onClos
           <span className="truncate">Ending · Credits</span>
         </h3>
         <button type="button" onClick={onClose} aria-label="Close the credits"
-          className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded text-port-text-muted sm:min-h-0 sm:min-w-0 sm:p-1">
+          className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded text-port-text-muted pointer-fine:sm:min-h-0 pointer-fine:sm:min-w-0 sm:p-1">
           <X size={16} aria-hidden="true" />
         </button>
       </div>
@@ -64,7 +64,7 @@ export default function CreditsEndingCard({ project, onEditLocal, onSave, onClos
             </FilmLookFrame>
           </figure>
           <button type="button" onClick={running ? preview.stop : preview.start}
-            className="flex min-h-[44px] items-center gap-1 rounded border border-port-border px-2 text-xs sm:min-h-0 sm:py-1">
+            className="flex min-h-[44px] items-center gap-1 rounded border border-port-border px-2 text-xs pointer-fine:sm:min-h-0 sm:py-1">
             {running ? <><Square size={14} aria-hidden="true" /> Stop</>
               : preview.active ? <><RotateCcw size={14} aria-hidden="true" /> Replay</>
                 : <><Play size={14} aria-hidden="true" /> Play {seconds}s</>}

@@ -9,6 +9,13 @@ export const GREYBOX_INSTRUCTION_MAX = 4000;
 
 export const GREYBOX_ASPECTS = Object.freeze(['16:9', '9:16', '1:1', '4:3', '21:9']);
 
+/**
+ * Light a part gives off once it is dark (the previz lights sets from the story clock): a lamp
+ * (streetlamp, porch light) throws a pool down, a headlight a beam ahead along the part's +Z,
+ * a window a soft glow.
+ */
+export const GREYBOX_PRACTICAL_LIGHTS = Object.freeze(['lamp', 'headlight', 'window']);
+
 /** Media role on a place's reference image that a saved shot's capture carries. */
 export const GREYBOX_SHOT_ROLE_PREFIX = 'greybox-shot:';
 

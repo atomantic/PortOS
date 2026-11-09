@@ -341,6 +341,26 @@ async function getOpenPrsByHead(repoPath, providedOrigin, { forgeExec = null, fo
 }
 
 /**
+ * Whether the forge shows `branch` never shipped: no open PR, and none closed
+ * unmerged (a deliberate decision, e.g. superseded, that a second PR must not
+ * override). A merged PR does not count — later commits are new work. Null when
+ * the forge cannot answer (non-GitHub origin, gh failure, unparseable output):
+ * an exact `--head` query rather than `getOpenPrsByHead`'s capped list, whose
+ * empty Map for a non-GitHub origin must never read as "no PR" to a caller
+ * releasing a hold.
+ * @returns {Promise<boolean|null>}
+ */
+export async function readBranchUnshipped(repoPath, branch, { origin, forgeExec = null, forgeAccount = null } = {}) {
+  const repoSpec = githubRepoSpec(origin === undefined ? await getOriginInfo(repoPath).catch(() => null) : origin);
+  if (!repoSpec || !branch) return null;
+  const { cwd, env } = forgeExec || await resolveForgeExecOptions(repoPath, { forgeAccount });
+  const raw = await execGh(['pr', 'list', '--repo', repoSpec, '--state', 'all', '--head', branch, '--json', 'state'],
+    undefined, { cwd, env }).catch(() => null);
+  const parsed = raw === null ? null : safeJSONParse(raw, null);
+  return Array.isArray(parsed) ? parsed.every(pr => pr?.state === 'MERGED') : null;
+}
+
+/**
  * Reason a worktree must NOT be torn down, or null if it's safe to remove.
  * Pure — the dangerous-to-remove cases the deterministic cleanup must respect
  * (mirrors the guards the existing worktree reaper honors), in gate order — a
@@ -994,11 +1014,15 @@ export async function gatherBranchState(repoPath, { defaultBranch, activeAgentId
     const claimOwnerReason = resolveClaimOwnerReason({ branch: b.name, path: worktreePath, claimOwners, sourceWorkspace: repoPath });
     const completionHold = await readBranchCompletionHoldDetail({ repoPath, branch: b.name, prUrl: prsByHead.get(b.name)?.url, tip, agents: completionPolicies, retirement: hasMergeEvidence });
     const completionPolicyReason = completionHold.reason;
+    // The scan and the coordinator's recheck (cosClaimOwnership) must agree on
+    // which review branches are unshipped, so both ask the same forge question.
+    const completionReviewUnshipped = completionHold.unshipped === true
+      && await readBranchUnshipped(repoPath, b.name, { origin, forgeExec, forgeAccount }) === true;
     inputs.push({
       branch: b.name,
       tip,
       completionPolicyReason,
-      completionReviewUnshipped: completionHold.unshipped === true,
+      completionReviewUnshipped,
       ...(completionPolicyReason ? { completionPolicyWorkflow: completionPolicyReason === 'pr-completion-review-required'
         ? 'Resume the configured review workflow; delivery success does not prove review passed.'
         : completionPolicyReason === 'pr-completion-human-handoff'
@@ -1277,6 +1301,7 @@ export async function reapSupersededBranches(repoPath, defaultBranch, superseded
       activeAgentIds,
       appId,
       allowLiveClaim: true,
+      superseded: true,
       label: `🔀 branch-reconcile: remove superseded worktree for ${b.branch}`,
       // A worktree outside the managed roots is reachable here and nowhere else —
       // the fresh verdict and a clean tree supply the preservation proof, and the
@@ -1426,7 +1451,7 @@ async function retireBranch(repoPath, b, opts) {
 }
 
 /** Every gate before the archive. Returns `{ result }` to stop, else the context removal needs. */
-async function admitBranchRetirement(repoPath, b, { activeAgentIds, staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false, label, requireCleanWorktree = true, unmanagedIdleMs, prepare, claimOwners, mergedRetirement = false, mergeTarget, forgeAccount = null, appId = null, disposableHead = null, deliveredHead = null, deliveredMergedAt = null }) {
+async function admitBranchRetirement(repoPath, b, { activeAgentIds, staleClaimIdleMs = STALE_CLAIM_IDLE_MS, allowLiveClaim = false, label, requireCleanWorktree = true, unmanagedIdleMs, prepare, claimOwners, mergedRetirement = false, mergeTarget, forgeAccount = null, appId = null, disposableHead = null, deliveredHead = null, deliveredMergedAt = null, superseded = false }) {
   const stop = result => ({ result });
   if (PROTECTED_BRANCHES.includes(b.branch)) return stop({ ok: false, reason: 'protected-branch' });
   const defaultBranch = await getDefaultBranch(repoPath, { strict: true }).catch(() => null);
@@ -1434,8 +1459,17 @@ async function admitBranchRetirement(repoPath, b, { activeAgentIds, staleClaimId
   if (b.branch === defaultBranch) return stop({ ok: false, reason: 'protected-branch' });
   const expectedHead = (await execGit(['rev-parse', '--verify', `refs/heads/${b.branch}`], repoPath).catch(() => null))?.stdout?.trim();
   if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(expectedHead || '')) return stop({ ok: false, reason: mergedRetirement ? 'not-merged-on-recheck' : 'branch-head-unavailable' });
-  const { readBranchCompletionHold } = await import('./branchCompletionPolicy.js');
-  const readPolicyHold = (tip = expectedHead) => readBranchCompletionHold({ repoPath, branch: b.branch, tip, retirement: mergedRetirement });
+  const completionPolicy = await import('./branchCompletionPolicy.js');
+  const readPolicyHold = async (tip = expectedHead) => {
+    const hold = await completionPolicy.readBranchCompletionHold({ repoPath, branch: b.branch, tip, retirement: mergedRetirement });
+    if (!superseded || b.openPr || hold !== 'pr-completion-review-required') return hold;
+    // A verified-superseded branch is never merged, so a review-then-merge
+    // obligation that never recorded a PR has no merge left to gate. A recorded
+    // PR, a human handoff and unreadable policy records still hold.
+    const agents = await completionPolicy.readBranchCompletionPolicies().catch(() => null);
+    const detail = agents && await completionPolicy.readBranchCompletionHoldDetail({ repoPath, branch: b.branch, tip, agents }).catch(() => null);
+    return detail?.reason === hold && detail.unshipped === true ? null : hold;
+  };
   if (prepare && expectedHead !== b.tip) return stop({ ok: false, reason: 'branch-head-changed' });
   const policyHold = await readPolicyHold();
   if (policyHold) return stop({ ok: false, reason: policyHold });

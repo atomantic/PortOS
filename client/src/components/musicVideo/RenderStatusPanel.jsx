@@ -43,7 +43,7 @@ export default function RenderStatusPanel({
             <a
               href={assetDownloadUrl(finalVideo.src)}
               download
-              className="min-h-[44px] sm:min-h-0 flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1 hover:bg-port-border/40"
+              className="min-h-[44px] pointer-fine:sm:min-h-0 flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1 hover:bg-port-border/40"
             >
               <Download size={13} /> Download MP4
             </a>
@@ -83,7 +83,7 @@ export default function RenderStatusPanel({
             }}
             aria-label="View final video full size"
             title="View final video full size"
-            className="always-dark absolute top-2 right-2 min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 p-1.5 flex items-center justify-center rounded bg-black/50 text-white hover:bg-black/80 focus:outline-none focus:ring-2 focus:ring-port-accent"
+            className="always-dark absolute top-2 right-2 min-h-[44px] min-w-[44px] pointer-fine:sm:min-h-0 pointer-fine:sm:min-w-0 p-1.5 flex items-center justify-center rounded bg-black/50 text-white hover:bg-black/80 focus:outline-none focus:ring-2 focus:ring-port-accent"
           >
             <Maximize2 className="w-3.5 h-3.5" />
           </button>
@@ -140,7 +140,7 @@ export function RenderFailure({ project, renderJob, onPatchShots, onRenderClips 
       {error}
       {fix && (
         <button type="button" onClick={apply} disabled={fixing}
-          className="mt-2 block min-h-[44px] sm:min-h-0 rounded border border-port-border bg-port-bg px-2 py-1 text-xs text-port-text hover:bg-port-border/40 disabled:opacity-50">
+          className="mt-2 block min-h-[44px] pointer-fine:sm:min-h-0 rounded border border-port-border bg-port-bg px-2 py-1 text-xs text-port-text hover:bg-port-border/40 disabled:opacity-50">
           {fixing ? (fix.render ? 'Starting…' : 'Saving…') : fix.label}
         </button>
       )}

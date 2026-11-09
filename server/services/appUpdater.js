@@ -232,6 +232,13 @@ async function _doUpdate(app, emit, {
   // other than this checkout, keeps the ordinary attached path rather than
   // silently running a different script than the one configured.
   const detachSelfUpdate = app.id === PORTOS_APP_ID && usesStandardScript && isSamePath(dir, PATHS.root);
+  // Snapshot what is running BEFORE any step: `pm2 restart` on a stopped
+  // process would START it, and an update routine that stops its own
+  // processes must not read as "the app was not running". The detached
+  // PortOS self-update restarts nothing from here: update.sh/update.ps1 bring
+  // the ecosystem back up and do their own dashboard handoff.
+  const declaredNames = detachSelfUpdate ? [] : (app.pm2ProcessNames || []);
+  const processNames = await pm2Service.getProcessesToRestartOnUpdate(declaredNames, app.pm2Home);
   if (syncFork) {
     emit('git-sync-fork', 'running', 'Syncing the origin fork from canonical upstream...');
     const sync = await syncManagedAppFork(app);
@@ -329,12 +336,11 @@ async function _doUpdate(app, emit, {
     steps.push({ step: 'app-update', success: true });
   }
 
-  // update.sh/update.ps1 close by starting the production app set from
-  // `ecosystem.config.cjs` without `portos-ui` (and perform their own dashboard
-  // handoff), so restarting PortOS on top of the detached script would be
-  // redundant and would race it — the script may not have finished
-  // re-registering the processes we would be restarting.
-  const processNames = detachSelfUpdate ? [] : (app.pm2ProcessNames || []);
+  if (declaredNames.length > 0 && processNames.length === 0) {
+    const msg = 'App is not running — checkout updated without restarting';
+    emit('restart', 'skipped', msg);
+    steps.push({ step: 'restart', success: true, skipped: true, message: msg });
+  }
   if (processNames.length > 0) {
     emit('restart', 'running', 'Restarting app...');
     await startDashboardHandoff(app);

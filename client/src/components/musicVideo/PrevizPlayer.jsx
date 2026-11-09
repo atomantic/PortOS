@@ -20,7 +20,7 @@ const PREVIZ_FPS = 24;
  * marks, every animation frame while it plays. Nothing is rendered to a file,
  * so blocking edits show on the next play. `seekRequest` (`{ t, n }`) is the
  * shot-card seek the other preview sources honour. A cut with a story time
- * on the previz night plays the simulated night in the whole world instead.
+ * on the previz timeline plays the simulated timeline in the whole world instead.
  */
 export default function PrevizPlayer({ project, audioUrl, seekRequest, collapsed, onEditShot = null }) {
   const audioRef = useRef(null);
@@ -29,7 +29,7 @@ export default function PrevizPlayer({ project, audioUrl, seekRequest, collapsed
   const [time, setTime] = useState(0);
   const places = useMusicVideoGreyboxPlaces(project);
   const { world, places: worldPlaces } = usePrevizWorld(project);
-  const nightWorld = useMemo(() => (world ? { world, places: worldPlaces } : null), [world, worldPlaces]);
+  const timelineWorld = useMemo(() => (world ? { world, places: worldPlaces } : null), [world, worldPlaces]);
   const scenes = project.scenes || [];
 
   useEffect(() => {
@@ -63,7 +63,7 @@ export default function PrevizPlayer({ project, audioUrl, seekRequest, collapsed
   }, []);
   const stepFrame = useCallback((t) => { audioRef.current?.pause?.(); seekTo(t); }, [seekTo]);
 
-  const frame = useMemo(() => previzFrameAt(project, places, time, nightWorld), [project, places, time, nightWorld]);
+  const frame = useMemo(() => previzFrameAt(project, places, time, timelineWorld), [project, places, time, timelineWorld]);
   const shot = frame?.cut.sceneId ? scenes.find((scene) => scene.sceneId === frame.cut.sceneId) : null;
   const number = shot ? shotNumbers(scenes).get(shot.sceneId) : null;
   const placeName = frame?.cut.placeSubjectId ? (project.concept?.subjects || []).find((s) => s.id === frame.cut.placeSubjectId)?.name : null;

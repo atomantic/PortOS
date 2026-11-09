@@ -27,7 +27,7 @@ import { executionOptionsSchema } from './aiToolkit/internal/executionOptionsVal
  */
 
 import { z } from 'zod';
-import { NIGHT_BEAT_KINDS, NIGHT_BEATS_MAX, NIGHT_LENGTH_MAX_MIN, NIGHT_PACES, PREVIZ_CAMERA_STYLES, PREVIZ_CUTS_MAX, PREVIZ_KEYS_MAX, PREVIZ_PAWN_COLOR_IDS, PREVIZ_POSES, PREVIZ_TRACKS_MAX, PREVIZ_VISIBLE_MAX } from './musicVideoPrevizLimits.js';
+import { TIMELINE_BEAT_KINDS, TIMELINE_BEATS_MAX, TIMELINE_LENGTH_MAX_MIN, TIMELINE_PACES, PREVIZ_CAMERA_STYLES, PREVIZ_CUTS_MAX, PREVIZ_KEYS_MAX, PREVIZ_PAWN_COLOR_IDS, PREVIZ_POSES, PREVIZ_TRACKS_MAX, PREVIZ_VEHICLES_MAX, PREVIZ_VISIBLE_MAX, VEHICLE_SPEED_MAX_METERS_PER_MIN } from './musicVideoPrevizLimits.js';
 import { MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX } from './musicVideoSubjectLimits.js';
 export const musicVideoDcpRequestSchema = z.object({ grade: z.enum(['rec709', 'rec1886']), renderHistoryId: z.string().min(1), sourceSha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 import { GROK_VIDEO_DURATIONS } from './grokVideoClip.js';
@@ -80,7 +80,7 @@ import {
   MUSIC_VIDEO_MAX_CAMEOS, MUSIC_VIDEO_CAMEO_ID_PATTERN, MUSIC_VIDEO_CAMEO_MAX_REFERENCES, MUSIC_VIDEO_CAMEO_MAX_SOURCES,
   MUSIC_VIDEO_CAMEO_REFERENCE_SOURCES, MUSIC_VIDEO_CAMEO_RESEARCH_STATUSES, MUSIC_VIDEO_CAMEO_VARIANT_ID_PATTERN,
 } from './musicVideoCameos.js';
-import { MUSIC_VIDEO_COVERAGE_MODES, MUSIC_VIDEO_PERFORMANCE_STYLES, MUSIC_VIDEO_SHOT_MODES, SOURCE_AUDIO_LIPSYNC } from './musicVideoShotTiming.js';
+import { CLIP_LENGTH_SEC_RANGE, MUSIC_VIDEO_COVERAGE_MODES, MUSIC_VIDEO_PERFORMANCE_STYLES, MUSIC_VIDEO_SHOT_MODES, SOURCE_AUDIO_LIPSYNC } from './musicVideoShotTiming.js';
 import {
   MUSIC_VIDEO_AUTOMATION_BUDGET_MAX_USD,
   MUSIC_VIDEO_AUTOMATION_GUIDANCE_MAX,
@@ -163,6 +163,9 @@ export const musicVideoConceptSchema = z.object({
     // Kept in this video only: saved to the catalog only when explicitly asked.
     localOnly: z.boolean().optional(),
     active: z.boolean().optional(),
+    // What every frame of this character must show (a watch, a bracelet, a camera
+    // on a strap); the frame check adds one requirement per line.
+    requiredDetails: z.array(z.string().trim().min(1).max(200)).max(8).optional(),
   }).strict()).max(24).optional(),
 }).strict();
 
@@ -218,7 +221,7 @@ export const musicVideoVideoSettingsSchema = z.object({
   runwayModelId: z.string().min(1).max(64).nullable().optional(),
   runwayDuration: z.number().min(1).max(60).nullable().optional(),
   runwayResolution: z.string().min(1).max(16).nullable().optional(),
-  generationMode: z.enum(['image', 'audioReactive', 'suppliedAudio']).optional(),
+  generationMode: z.enum(['image', 'audioReactive', 'suppliedAudio', 'ltxReferences']).optional(),
   audioReactiveLora: z.string().max(255).regex(/^[^/\\]+\.safetensors$/i).nullable().optional(),
   audioReactiveScale: z.number().min(0).max(2).optional(),
 }).strict();
@@ -242,6 +245,8 @@ const lyricWordSchema = z.object({
 export const musicVideoLyricCueSchema = z.object({
   id: z.string().min(1).max(64).optional(),
   text: z.string().max(500),
+  // Who sings the line (duet sheets). Never part of `text`, so alignment ignores it.
+  voice: z.string().trim().min(1).max(60).optional(),
   startSec: timedSec,
   endSec: timedSec,
   words: z.array(lyricWordSchema).max(400).optional(),
@@ -303,10 +308,21 @@ export const musicVideoPrevizSchema = z.object({
     // null = everyone on the set except the holder.
     visibleSubjectIds: z.array(previzSubjectId).max(PREVIZ_VISIBLE_MAX).nullable().optional(),
     aimSubjectId: previzSubjectId.nullable().optional(),
+    // What the last "Sync with shots" wrote for the picks it derives from the sheet; a pick that still equals it was not hand-edited, so the next sync may refresh it.
+    synced: z.object({
+      placeSubjectId: previzSubjectId.nullable().optional(),
+      viewShotId: z.string().min(1).max(GREYBOX_SHOT_ID_MAX).regex(GREYBOX_SHOT_ID_PATTERN).nullable().optional(),
+      holderSubjectId: previzSubjectId.nullable().optional(),
+      visibleSubjectIds: z.array(previzSubjectId).max(PREVIZ_VISIBLE_MAX).nullable().optional(),
+    }).strict().optional(),
     // The camera starts on its own aim and swings to the keep-in-frame person during the cut.
     turnToAim: z.boolean().optional(),
-    // Where the cut starts on the night (story minutes) and an unheld camera's spot on the world map.
-    storyMin: z.number().finite().min(0).max(NIGHT_LENGTH_MAX_MIN).nullable().optional(),
+    // The holder's camera is held at arm's length facing back at them: they are shown, about 0.6 m off.
+    selfie: z.boolean().optional(),
+    // Simple in-set action path: start mark -> end mark, or a loop.
+    actionPath: z.string().min(1).max(64).nullable().optional(),
+    // Where the cut starts on the timeline (story minutes) and an unheld camera's spot on the world map.
+    storyMin: z.number().finite().min(0).max(TIMELINE_LENGTH_MAX_MIN).nullable().optional(),
     cameraSpot: z.tuple([z.number().finite().min(-5000).max(5000), z.number().finite().min(-5000).max(5000)]).nullable().optional(),
   }).strict().refine((cut) => cut.endSec > cut.startSec, { message: 'A previz cut must end after it starts' })).max(PREVIZ_CUTS_MAX),
   tracks: z.array(z.object({
@@ -317,31 +333,41 @@ export const musicVideoPrevizSchema = z.object({
       position: z.tuple([previzCoord, previzCoord, previzCoord]),
       facingDegrees: z.number().finite().min(-36000).max(36000),
       pose: z.enum(PREVIZ_POSES).optional(),
+      // The vehicle (a cast object listed in `vehicles`) a figure in the 'ride' pose sits on.
+      vehicleSubjectId: previzSubjectId.optional(),
     }).strict()).min(1).max(PREVIZ_KEYS_MAX)
       .refine((keys) => keys.every((key, i) => i === 0 || key.timeSec > keys[i - 1].timeSec), { message: 'Track key times must strictly increase' }),
   }).strict()).max(PREVIZ_TRACKS_MAX)
     .refine((tracks) => new Set(tracks.map((t) => `${t.placeSubjectId}\u0000${t.subjectId}`)).size === tracks.length, { message: 'One track per person per set' }),
-  // Picked pawn colors by character; anyone missing takes the next unused color in cast order.
+  // Picked pawn colors by character or vehicle; anyone missing takes the next unused color in cast order.
   pawnColors: z.record(previzSubjectId, z.object({
     figure: z.enum(PREVIZ_PAWN_COLOR_IDS).optional(),
-    bike: z.enum(PREVIZ_PAWN_COLOR_IDS).optional(),
   }).strict()).optional(),
-  // The story night over the world map (lib/musicVideoPrevizNight.js); story minutes from `startClock`.
-  night: z.object({
+  // The cast's objects people ride (a bike, car, horse, skateboard...) and how fast each goes.
+  vehicles: z.array(z.object({
+    subjectId: previzSubjectId,
+    speedMetersPerMin: z.number().finite().min(1).max(VEHICLE_SPEED_MAX_METERS_PER_MIN),
+  }).strict()).max(PREVIZ_VEHICLES_MAX)
+    .refine((vehicles) => new Set(vehicles.map((v) => v.subjectId)).size === vehicles.length, { message: 'A vehicle is listed once' })
+    .optional(),
+  // The story timeline over the world map (lib/musicVideoPrevizTimeline.js); story minutes from `startClock`.
+  timeline: z.object({
     startClock: z.number().int().min(0).max(1439),
-    lengthMin: z.number().finite().min(1).max(NIGHT_LENGTH_MAX_MIN),
+    lengthMin: z.number().finite().min(1).max(TIMELINE_LENGTH_MAX_MIN),
     beats: z.array(z.object({
       id: z.string().min(1).max(64),
-      kind: z.enum(NIGHT_BEAT_KINDS),
+      kind: z.enum(TIMELINE_BEAT_KINDS),
       subjectIds: z.array(previzSubjectId).max(PREVIZ_VISIBLE_MAX),
-      startMin: z.number().finite().min(0).max(NIGHT_LENGTH_MAX_MIN),
-      endMin: z.number().finite().min(0).max(NIGHT_LENGTH_MAX_MIN),
+      startMin: z.number().finite().min(0).max(TIMELINE_LENGTH_MAX_MIN),
+      endMin: z.number().finite().min(0).max(TIMELINE_LENGTH_MAX_MIN),
       setId: z.string().min(1).max(64),
       toSetId: z.string().min(1).max(64).nullable().optional(),
-      pace: z.enum(NIGHT_PACES).nullable().optional(),
-    }).strict().refine((beat) => beat.endMin > beat.startMin, { message: 'A night beat must end after it starts' }))
-      .max(NIGHT_BEATS_MAX)
-      .refine((beats) => new Set(beats.map((b) => b.id)).size === beats.length, { message: 'Night beat ids must be unique' }),
+      pace: z.enum(TIMELINE_PACES).nullable().optional(),
+      // A travel by vehicle: a cast object listed in `vehicles`; its speed replaces the pace's.
+      vehicleSubjectId: previzSubjectId.nullable().optional(),
+    }).strict().refine((beat) => beat.endMin > beat.startMin, { message: 'A timeline beat must end after it starts' }))
+      .max(TIMELINE_BEATS_MAX)
+      .refine((beats) => new Set(beats.map((b) => b.id)).size === beats.length, { message: 'Timeline beat ids must be unique' }),
   }).strict().nullable().optional(),
 }).strict();
 // A path through several of the video's places, in travel order (lib/musicVideoRouteMaps.js).
@@ -474,7 +500,7 @@ export const musicVideoCastInputsSchema = z.object({
 export const musicVideoTakeInputSchema = z.object({
   kind: z.enum(MUSIC_VIDEO_TAKE_KINDS),
   assetId: z.string().min(1).max(256),
-  // `trimmed`: a clip take cut from a later start frame of another (the shot card's "Start clip here").
+  // `trimmed`: a clip take cut to a frame range of another (the shot card's "Start/End clip here").
   source: z.enum(['generated', 'imported', 'trimmed']).optional(),
   provider: providerSlug.optional(),
   originalName: z.string().max(255).optional(),
@@ -876,6 +902,10 @@ const sceneLayerFields = {
   // A footage clip played faster or slower by whole frames a second, and slid against the song by whole frames; null clears it.
   speedFps: z.number().int().min(CLIP_SPEED_FPS_RANGE.min).max(CLIP_SPEED_FPS_RANGE.max).nullable().optional(),
   offsetFrames: z.number().int().min(CLIP_OFFSET_FRAMES_RANGE.min).max(CLIP_OFFSET_FRAMES_RANGE.max).nullable().optional(),
+  // The source clip length to request (seconds), longer than the shot's span when one take is cut across several shots; null clears it.
+  clipLengthSec: z.number().min(CLIP_LENGTH_SEC_RANGE.min).max(CLIP_LENGTH_SEC_RANGE.max).nullable().optional(),
+  // This shot's own fal/Runway video model, falling back to the project's when null.
+  clipModelId: z.string().trim().min(1).max(120).nullable().optional(),
   // The clip plays backwards (a footage shot; never a lip-sync performance).
   reverse: z.boolean().nullable().optional(),
   // A clip shorter than its shot holds its last frame for the rest of the shot; null clears it.
@@ -1738,6 +1768,30 @@ export const musicVideoCastAndSetsDirectionEditSchema = z.object({
     && edits.sets.every((set) => Object.keys(set).every((key) => key === 'id' || key === 'setReference'));
 }, 'Save greybox selections separately from direction edits.');
 
+// Text-only edits to a catalog check-in's stored direction (no render, no image
+// roles). Same present-replaces / absent-keeps rule; caps mirror CAST_SETS_LIMITS.
+export const musicVideoCastAndSetsDirectionTextEditSchema = z.object({
+  look: castSetsText(500).optional(),
+  protagonist: z.object({
+    signature: castSetsText(1000).optional(),
+    rules: z.array(castSetsText(300)).max(6).optional(),
+    expressions: z.array(castSetsText(300)).max(8).optional(),
+  }).strict().optional(),
+  props: z.array(z.object({
+    id: z.string().max(64).optional(),
+    name: castSetsText(120).min(1),
+    owner: castSetsText(120).optional(),
+    description: castSetsText(1000).min(1),
+  }).strict()).max(6).optional(),
+  overlayConcept: z.object({
+    summary: castSetsText(1000).optional(),
+    elements: z.array(z.object({
+      name: castSetsText(120).min(1),
+      description: castSetsText(1000).min(1),
+    }).strict()).max(4).optional(),
+  }).strict().optional(),
+}).strict();
+
 // The cutting room floor outro (lib/musicVideoStatsOutro.js): an optional scene
 // after the song tallying the director's choices; null on the project = off.
 export const musicVideoStatsOutroSchema = z.object({
@@ -1826,7 +1880,14 @@ export const musicVideoProjectCreateSchema = z.object({
   creditsOutro: musicVideoCreditsOutroSchema.nullable().optional(),
 }).strict();
 
+// The vision model a frame take's Check uses; null = the default (Codex when ready, else an API provider).
+const musicVideoPlateReviewerSchema = z.object({
+  providerId: z.string().trim().min(1).max(200),
+  model: z.string().trim().max(200).nullable().optional(),
+}).strict();
+
 export const musicVideoProjectUpdateSchema = z.object({
+  plateReviewer: musicVideoPlateReviewerSchema.nullable().optional(),
   // The descriptions the editor started from, used only for conflict checks.
   catalogDescriptionBases: z.array(z.object({ subjectId: z.string().min(1).max(64), description: z.string().max(16000) }).strict()).max(24).optional(),
   festivalPacket: festivalPacketSchema.nullable().optional(),
@@ -2181,6 +2242,14 @@ export const musicVideoPlanRequestSchema = z.object({
 // can come back null from auto-detection). `bpm` range is loosened from the
 // detector's own search window for manual entry (20-300 covers everything
 // from a ballad to hardcore/gabber); `offsetSec` is the first downbeat, by ear.
+export const musicVideoSectionsEditSchema = z.object({
+  sections: z.array(z.object({
+    label: z.string().max(120),
+    startSec: z.number().min(0),
+    endSec: z.number().min(0),
+  }).strict()).min(1).max(64),
+}).strict();
+
 export const musicVideoManualAnalysisSchema = z.object({
   bpm: z.number().min(20).max(300),
   offsetSec: z.number().min(0).max(600).default(0),
@@ -2252,7 +2321,7 @@ export const musicVideoAudioAnalysisSchema = z.object({
     // Set when the label came from the aligned lyric sheet ("Chorus") rather
     // than the detector ("Section 3"); `analysisLabel` keeps the detector's
     // label so a later pass can restore it. Additive, so older analyses validate.
-    labelSource: z.enum(['analysis', 'lyrics']).optional(),
+    labelSource: z.enum(['analysis', 'lyrics', 'manual']).optional(),
     analysisLabel: z.string().max(120).optional(),
   })),
   durationSec: z.number(),

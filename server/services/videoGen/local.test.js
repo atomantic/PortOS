@@ -305,6 +305,10 @@ vi.mock('../../lib/ffmpeg.js', async () => ({
 vi.mock('./extendSplice.js', () => ({
   spliceExtendSource: vi.fn(async () => ({ applied: false, reason: 'mocked' })),
 }));
+// Real measurement/hold is covered by lib/lipsyncAlign.test.js.
+vi.mock('../../lib/lipsyncAlign.js', () => ({
+  alignLipsyncLead: vi.fn(async () => ({ shiftFrames: 2, lag: 2, peakScore: 0.61, reason: 'mouth-lead' })),
+}));
 
 vi.mock('../hfToken.js', () => ({
   hfChildEnv: vi.fn(async () => ({})),
@@ -453,6 +457,14 @@ vi.mock('../loraEffectProbe.js', () => ({
 }));
 
 vi.mock('fs/promises', () => fsPromisesMock);
+
+// The shard preflight stats real files; the substituted-encoder test uses
+// fabricated paths under the fs mock, and the preflight has its own coverage
+// in textEncoderPreflight.test.js.
+vi.mock('./ensureWeights.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  assertTextEncoderFilesComplete: vi.fn(async () => {}),
+}));
 
 // Fake EventEmitter-like process that completes immediately with exit code 0.
 // Shared shape for both the child_process spawn mock (ffmpeg/probe) and the
@@ -6969,5 +6981,44 @@ describe('generateVideo — native Extend keeps the original source (#11171)', (
   it('does not splice a render with no source clip', async () => {
     const splice = await extendRender('splice-text', { mode: 'text' });
     expect(splice).not.toHaveBeenCalled();
+  });
+});
+
+describe('generateVideo — a2v mouth-lead correction (#15409)', () => {
+  const render = async (jobId, request) => {
+    const { alignLipsyncLead } = await import('../../lib/lipsyncAlign.js');
+    vi.mocked(alignLipsyncLead).mockClear();
+    const recorder = await import('./executionRecorder.js');
+    const recordDiagnostics = vi.fn(async () => true);
+    recorder.setVideoExecutionRecorder({ recordExecution: vi.fn(async () => true), recordDiagnostics });
+    try {
+      await renderToTerminal({
+        jobId, pythonPath: '/usr/bin/python3', modelId: 'ltx2_unified', prompt: 'a singer on a rooftop',
+        width: 512, height: 512, numFrames: 25, fps: 24, ...request,
+      });
+    } finally {
+      recorder.setVideoExecutionRecorder(null);
+    }
+    const { atomicWrite } = await import('../../lib/fileUtils.js');
+    const record = vi.mocked(atomicWrite).mock.calls
+      .flatMap(([, value]) => Array.isArray(value) ? value : [])
+      .find(value => value.id === jobId);
+    return { align: vi.mocked(alignLipsyncLead), recordDiagnostics, record };
+  };
+
+  it('aligns the finished a2v clip and records the verdict on the history item and the job receipt', async () => {
+    const { align, recordDiagnostics, record } = await render('lipsync-a2v', {
+      mode: 'a2v', sourceImagePath: '/mock/source.png', audioFilePath: '/mock/song.wav',
+    });
+    expect(align).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ videoPath: expect.stringContaining('lipsync-a2v.mp4') }));
+    const verdict = { shiftFrames: 2, lag: 2, peakScore: 0.61, reason: 'mouth-lead' };
+    expect(record.lipsyncAlign).toEqual(verdict);
+    expect(recordDiagnostics).toHaveBeenCalledWith('lipsync-a2v', { lipsyncAlign: verdict });
+  });
+
+  it('leaves renders without conditioning audio alone', async () => {
+    const { align, record } = await render('lipsync-text', { mode: 'text' });
+    expect(align).not.toHaveBeenCalled();
+    expect(record).not.toHaveProperty('lipsyncAlign');
   });
 });

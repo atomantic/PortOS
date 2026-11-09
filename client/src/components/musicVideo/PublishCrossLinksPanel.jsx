@@ -5,7 +5,7 @@ import { crossLinkBackfill, crossLinksEnabled } from '../../../../server/lib/mus
 
 const LABELS = { youtube: 'YouTube description', suno: 'Suno caption', x: 'X reply', stackerNews: 'Stacker News comment', facebook: 'Facebook comment' };
 const ACTION = { youtube: 'Fill edit', suno: 'Fill edit', x: 'Fill reply', stackerNews: 'Fill comment', facebook: 'Fill comment' };
-const btn = 'flex items-center gap-1 border border-port-border disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0';
+const btn = 'flex items-center gap-1 border border-port-border disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] pointer-fine:sm:min-h-0';
 
 /** One posted platform: the links it lacks, a Fill that opens its edit in the PortOS Browser, and Saved. */
 function BackfillRow({ row, publishing }) {
@@ -79,7 +79,7 @@ export default function PublishCrossLinksPanel({ project, publishing }) {
   return (
     <PublishCard projectId={project.id} cardId="cross-links" label="Cross-links" icon={Link2}
       summary={pending ? `${pending} post${pending === 1 ? '' : 's'} missing links` : ''} defaultOpen={pending > 0}>
-      <label htmlFor={`mv-cross-links-${project.id}`} className="flex items-center gap-1.5 min-h-[44px] sm:min-h-0">
+      <label htmlFor={`mv-cross-links-${project.id}`} className="flex items-center gap-1.5 min-h-[44px] pointer-fine:sm:min-h-0">
         <input id={`mv-cross-links-${project.id}`} type="checkbox" checked={enabled} onChange={(e) => publishing.setCrossLinks(e.target.checked)} />
         New drafts link the posts already made (YouTube, Suno, X, Stacker News, Substack)
       </label>

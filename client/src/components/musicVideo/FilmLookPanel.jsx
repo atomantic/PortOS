@@ -18,7 +18,7 @@ function ShotSample({ project, activeSceneId }) {
       <div className="flex items-center gap-2 text-xs">
         <label htmlFor={selectId} className="text-port-text-muted">Sample</label>
         <select id={selectId} value={sample.scene.sceneId} onChange={(event) => setPickedId(event.target.value)}
-          className="min-h-[44px] min-w-0 flex-1 rounded border border-port-border bg-port-bg px-2 py-1 sm:min-h-0">
+          className="min-h-[44px] min-w-0 flex-1 rounded border border-port-border bg-port-bg px-2 py-1 pointer-fine:sm:min-h-0">
           {shots.map(({ scene, number }) => (
             <option key={scene.sceneId} value={scene.sceneId}>Shot {number}{scene.sectionLabel ? ` · ${scene.sectionLabel}` : ''}</option>
           ))}

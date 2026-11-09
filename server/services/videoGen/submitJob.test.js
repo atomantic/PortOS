@@ -177,7 +177,7 @@ describe('submitVideoGenJob', () => {
     });
     const tag = { projectId: 'mv-1', sceneId: 'shot-example' };
     await submitVideoGenJob({ prompt: 'a subject steps into view', backend: 'grok', mode: 'image', sourceImageFile: 'still.png', musicVideo: tag }, {});
-    expect(mocks.musicVideoClipCastReferences).toHaveBeenCalledWith(tag);
+    expect(mocks.musicVideoClipCastReferences).toHaveBeenCalledWith(tag, { startFrameLayout: false });
     expect(mocks.enqueueJob.mock.calls[0][0].params).toEqual(expect.objectContaining({ castReferences: cast, sourceImagePath: '/example/still.png' }));
   });
 
@@ -791,6 +791,31 @@ describe('shot intent at the video submission boundary', () => {
     mocks.prepareVideoGenParams.mockResolvedValue({ backend: 'fal', cleanupStaged: vi.fn(), sourceImagePath: '/example/frame.png' });
     await expect(submitVideoGenJob({ prompt: 'Legacy', backend: 'fal', falDuration: 1, musicVideo: { projectId: 'p', sceneId: 's' } }, {})).rejects.toMatchObject({ code: 'MUSIC_VIDEO_ACTION_CONTRACT_INVALID' });
     expect(mocks.enqueueJob).not.toHaveBeenCalled();
+  });
+
+  describe('per-shot source clip length', () => {
+    const shortShot = (extra) => ({ scenes: [{ sceneId: 's', startSec: 10, endSec: 11.75, clipLengthSec: 10, ...extra }] });
+    const fal = (body) => submitVideoGenJob({ prompt: 'Legacy', backend: 'fal', musicVideo: { projectId: 'p', sceneId: 's' }, ...body }, {});
+    beforeEach(() => { mocks.prepareVideoGenParams.mockResolvedValue({ backend: 'fal', cleanupStaged: vi.fn(), sourceImagePath: '/example/frame.png' }); });
+
+    it('sends a 10 s request for a 1.75 s shot to a model that delivers it', async () => {
+      mocks.getMusicVideoProject.mockResolvedValue(shortShot());
+      await fal({ falModelId: 'fal-ai/minimax/hailuo-02/standard/image-to-video', falDuration: 10 });
+      expect(mocks.enqueueJob).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses with the supported lengths instead of clamping a shorter request', async () => {
+      mocks.getMusicVideoProject.mockResolvedValue(shortShot());
+      await expect(fal({ falModelId: 'fal-ai/minimax/hailuo-02/standard/image-to-video', falDuration: 6 }))
+        .rejects.toMatchObject({ code: 'MUSIC_VIDEO_CLIP_LENGTH_UNSUPPORTED', status: 422, context: { requestedSec: 10, supportedSec: [6, 10] } });
+      expect(mocks.enqueueJob).not.toHaveBeenCalled();
+    });
+
+    it('leaves a shot without the field unchanged', async () => {
+      mocks.getMusicVideoProject.mockResolvedValue(shortShot({ clipLengthSec: undefined }));
+      await fal({ falDuration: 6 });
+      expect(mocks.enqueueJob).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('refuses a later shortened scene before queue spend and rolls back staged inputs', async () => {

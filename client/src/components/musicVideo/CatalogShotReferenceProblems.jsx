@@ -21,7 +21,7 @@ export default function CatalogShotReferenceProblems({ checkin, disabled = false
           {problems.map((problem) => (
             <li key={problem.sceneId} className="flex flex-wrap items-center gap-2">
               <span className="min-w-0 flex-1 basis-48">{problem.message}</span>
-              <button type="button" onClick={() => onOpenShot(problem.sceneId)} aria-label={`Open shot ${formatCount(problem.shot)}`} className="min-h-11 shrink-0 rounded border border-port-border px-3 text-port-text sm:min-h-8">Open shot</button>
+              <button type="button" onClick={() => onOpenShot(problem.sceneId)} aria-label={`Open shot ${formatCount(problem.shot)}`} className="min-h-11 shrink-0 rounded border border-port-border px-3 text-port-text pointer-fine:sm:min-h-8">Open shot</button>
             </li>
           ))}
         </ul>

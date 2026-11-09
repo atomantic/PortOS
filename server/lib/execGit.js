@@ -176,8 +176,10 @@ export function execGit(args, cwd, options = {}) {
           failure ||= Object.assign(new Error('Git work settlement is held'), { code: 'GIT_SETTLEMENT_HELD' });
           Object.assign(failure, windowsGitFailureMetadata(settlement));
           markUncertain(settlement.reason);
-        } else if (!child.gitSettlement && (killed || signal)) markUncertain('tree-unconfirmed');
-        else ownedWork.delete(work);
+        } else {
+          if (!child.gitSettlement && (killed || signal)) markUncertain('tree-unconfirmed');
+          ownedWork.delete(work);
+        }
         if (finished) return;
         finish();
         if (settlement?.launched === false) {

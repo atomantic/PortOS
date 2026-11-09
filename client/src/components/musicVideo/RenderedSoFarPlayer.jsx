@@ -4,7 +4,7 @@ import { buildMusicVideoRenderPreview, musicVideoShotRenderUrl } from '../../ser
 import { useLocalStorageBool } from '../../hooks/useLocalStorageBool.js';
 import { formatDurationSec } from '../../utils/formatters.js';
 
-const BUTTON = 'inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border bg-port-bg px-2 py-1.5 text-xs hover:bg-port-border/40 disabled:opacity-50 sm:min-h-0';
+const BUTTON = 'inline-flex min-h-[44px] items-center gap-1 rounded border border-port-border bg-port-bg px-2 py-1.5 text-xs hover:bg-port-border/40 disabled:opacity-50 pointer-fine:sm:min-h-0';
 
 /**
  * The composed final render's shots finished so far, stitched in order up to
@@ -47,7 +47,7 @@ export default function RenderedSoFarPlayer({ project }) {
           </span>
         )}
         <span className="ml-auto flex flex-wrap items-center gap-2">
-          <label htmlFor={`rendered-so-far-light-${projectId}`} className="inline-flex min-h-[44px] items-center gap-1 text-[11px] text-port-text-muted sm:min-h-0">
+          <label htmlFor={`rendered-so-far-light-${projectId}`} className="inline-flex min-h-[44px] items-center gap-1 text-[11px] text-port-text-muted pointer-fine:sm:min-h-0">
             <input id={`rendered-so-far-light-${projectId}`} type="checkbox" checked={light} onChange={(e) => pickLight(e.target.checked)} disabled={building} /> Phone copy
           </label>
           {preview ? (

@@ -29,12 +29,12 @@ const STATUS_TONES = {
   failed: 'text-port-error', canceled: 'text-port-text-muted',
 };
 const STEP_TONES = { completed: 'text-port-success', failed: 'text-port-error', canceled: 'text-port-text-muted', refused: 'text-port-text-muted' };
-const inputCls = 'w-24 bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0';
+const inputCls = 'w-24 bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0';
 const SHOWN_STEPS = 8;
 
 const toolLabel = new Map(POOL_TOOLS.map((t) => [t.id, t.label]));
 const briefToolLabel = new Map(MUSIC_VIDEO_AUTOMATION_TOOLS.map((t) => [t.id, t.label]));
-const actionClass = 'text-sm text-port-accent min-h-[44px] sm:min-h-0 px-1';
+const actionClass = 'text-sm text-port-accent min-h-[44px] pointer-fine:sm:min-h-0 px-1';
 const routeLabel = (route) => `${toolLabel.get(`${route.kind}:${route.mode}`) || `${route.kind} ${route.mode}`}${route.model ? ` · ${route.model}` : ''}`;
 
 const ROUTE_LABELS = [
@@ -118,7 +118,7 @@ function RunView({ run, production, codeFirst, project, readiness }) {
             <p>{pilot.operation}: {pilot.sceneId} · {pilot.status || 'pending'}</p>
             {/* Inline, not a raw-file link: a Home Screen app opens that in place with no way back. */}
             {excerpt?.filename && <details>
-              <summary className="cursor-pointer text-port-accent min-h-[44px] sm:min-h-0 py-1">Watch pilot</summary>
+              <summary className="cursor-pointer text-port-accent min-h-[44px] pointer-fine:sm:min-h-0 py-1">Watch pilot</summary>
               <video src={`/data/videos/${encodeURIComponent(excerpt.filename)}`} controls playsInline preload="metadata" className="mt-1 w-full max-h-64 rounded bg-black" />
             </details>}
             {pilot.evidence && <p className="text-port-text-muted">Continuous analysis: {pilot.evidence.continuous ? 'verified' : 'unverified'} · Sampled frames: {formatCount(pilot.evidence.continuousFrames)} · Temporal alignment: {pilot.evidence.temporal?.status || 'unverified'}</p>}
@@ -160,20 +160,20 @@ function RunView({ run, production, codeFirst, project, readiness }) {
       <div className="flex flex-wrap gap-2">
         {run.status === 'running' && !run.interrupted && (
           <button type="button" disabled={production.busy} onClick={() => production.stop(run.id)}
-            className="flex items-center gap-1 border border-port-border rounded px-3 py-2 min-h-[44px] sm:min-h-0 sm:px-2 sm:py-1 disabled:opacity-50">
+            className="flex items-center gap-1 border border-port-border rounded px-3 py-2 min-h-[44px] pointer-fine:sm:min-h-0 sm:px-2 sm:py-1 disabled:opacity-50">
             <Pause size={12} /> Stop
           </button>
         )}
         {live && (!codeFirst || run.authoring) && (run.status !== 'running' || run.interrupted) && (
           <button type="button" disabled={production.busy || !resumeValid}
             onClick={() => production.resume(run.id, { ...(needsReplan ? { acceptBasis: true } : {}), ...(budget ? { limits: budget } : {}), ...(swappedPool ? { pool: swappedPool } : {}) })}
-            className="flex items-center gap-1 bg-port-accent text-white rounded px-3 py-2 min-h-[44px] sm:min-h-0 sm:px-2 sm:py-1 disabled:opacity-50">
+            className="flex items-center gap-1 bg-port-accent text-white rounded px-3 py-2 min-h-[44px] pointer-fine:sm:min-h-0 sm:px-2 sm:py-1 disabled:opacity-50">
             <Play size={12} /> {needsReplan ? 'Resume with the new setup' : 'Resume'}
           </button>
         )}
         {live && (
           <button type="button" disabled={production.busy} onClick={() => production.cancel(run.id)}
-            className="flex items-center gap-1 border border-port-border rounded px-3 py-2 min-h-[44px] sm:min-h-0 sm:px-2 sm:py-1 disabled:opacity-50">
+            className="flex items-center gap-1 border border-port-border rounded px-3 py-2 min-h-[44px] pointer-fine:sm:min-h-0 sm:px-2 sm:py-1 disabled:opacity-50">
             <X size={12} /> Cancel
           </button>
         )}
@@ -298,7 +298,7 @@ function StartForm({ project, production }) {
           />
         )}
         <button type="button" id="mv-production-start" disabled={production.busy || !valid} onClick={start}
-          className="flex items-center gap-1 bg-port-accent text-white rounded px-3 py-2 min-h-[44px] sm:min-h-0 sm:px-2 sm:py-1 disabled:opacity-50">
+          className="flex items-center gap-1 bg-port-accent text-white rounded px-3 py-2 min-h-[44px] pointer-fine:sm:min-h-0 sm:px-2 sm:py-1 disabled:opacity-50">
           <Play size={12} /> {production.busy ? 'Starting…' : 'Start production'}
         </button>
       </div>
@@ -331,10 +331,10 @@ function BriefSection({ project, onSave, onKickoff, onCancelKickoff, kickoffBusy
       <fieldset disabled={saving} className="space-y-3 min-w-0">
         <AutomationBriefFields idPrefix={`mv-auto-${project.id}`} draft={draft} onChange={(patch) => setDraft((d) => ({ ...d, ...patch }))} />
         <div className="flex flex-wrap gap-3">
-          <button type="button" onClick={save} className="bg-port-accent text-white rounded px-3 py-2 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50">
+          <button type="button" onClick={save} className="bg-port-accent text-white rounded px-3 py-2 text-sm min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50">
             {saving ? 'Saving…' : 'Save brief'}
           </button>
-          <button type="button" onClick={() => setDraft(null)} className="text-sm min-h-[44px] sm:min-h-0">Cancel</button>
+          <button type="button" onClick={() => setDraft(null)} className="text-sm min-h-[44px] pointer-fine:sm:min-h-0">Cancel</button>
         </div>
       </fieldset>
     );
@@ -355,7 +355,7 @@ function BriefSection({ project, onSave, onKickoff, onCancelKickoff, kickoffBusy
             onClick={onKickoff}
             disabled={kickoffBusy || !!kickoffBlockedReason}
             title={kickoffBlockedReason || 'Analyze the song, import its lyrics, separate and align the vocal, build the Cast & Sets check-in, then plan every shot against the brief'}
-            className="flex items-center gap-1 bg-port-accent text-white rounded px-3 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50"
+            className="flex items-center gap-1 bg-port-accent text-white rounded px-3 py-1.5 text-sm min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50"
           >
             <Play size={14} /> {kickoffBusy ? 'Working…' : 'Analyze & plan'}
           </button>
@@ -364,7 +364,7 @@ function BriefSection({ project, onSave, onKickoff, onCancelKickoff, kickoffBusy
               type="button"
               onClick={onCancelKickoff}
               title="Stop the kickoff before its next step (or at once while it waits on Cast & Sets). Work the server already started keeps running."
-              className="flex items-center gap-1 rounded border border-port-border px-3 py-1.5 text-sm text-port-error min-h-[44px] sm:min-h-0"
+              className="flex items-center gap-1 rounded border border-port-border px-3 py-1.5 text-sm text-port-error min-h-[44px] pointer-fine:sm:min-h-0"
             >
               <X size={14} /> Stop
             </button>

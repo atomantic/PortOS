@@ -864,7 +864,7 @@ export default function DailyLogTab() {
           <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
             <button
               onClick={() => setHistoryOpen(true)}
-              className="md:hidden min-h-[44px] min-w-[44px] sm:min-h-[40px] sm:min-w-[40px] flex items-center justify-center rounded hover:bg-port-card text-gray-400 hover:text-white"
+              className="md:hidden min-h-[44px] min-w-[44px] pointer-fine:sm:min-h-[40px] pointer-fine:sm:min-w-[40px] flex items-center justify-center rounded hover:bg-port-card text-gray-400 hover:text-white"
               title="Show history"
               aria-label="Show history"
             >
@@ -872,7 +872,7 @@ export default function DailyLogTab() {
             </button>
             <button
               onClick={() => setDate(shiftISODate(date, -1))}
-              className="min-h-[44px] min-w-[44px] sm:min-h-[40px] sm:min-w-[40px] flex items-center justify-center rounded hover:bg-port-card text-gray-400 hover:text-white"
+              className="min-h-[44px] min-w-[44px] pointer-fine:sm:min-h-[40px] pointer-fine:sm:min-w-[40px] flex items-center justify-center rounded hover:bg-port-card text-gray-400 hover:text-white"
               title="Previous day" aria-label="Previous day"
             >
               <ChevronLeft size={16} />
@@ -882,12 +882,12 @@ export default function DailyLogTab() {
               value={date}
               onChange={(e) => setDate(e.target.value || serverToday)}
               aria-label="Log date"
-              className="min-w-0 bg-port-bg border border-port-border rounded px-2 min-h-[44px] sm:min-h-[40px] text-sm text-white"
+              className="min-w-0 bg-port-bg border border-port-border rounded px-2 min-h-[44px] pointer-fine:sm:min-h-[40px] text-sm text-white"
             />
             <button
               onClick={() => setDate(shiftISODate(date, 1))}
               disabled={date >= serverToday}
-              className="min-h-[44px] min-w-[44px] sm:min-h-[40px] sm:min-w-[40px] flex items-center justify-center rounded hover:bg-port-card text-gray-400 hover:text-white disabled:opacity-30"
+              className="min-h-[44px] min-w-[44px] pointer-fine:sm:min-h-[40px] pointer-fine:sm:min-w-[40px] flex items-center justify-center rounded hover:bg-port-card text-gray-400 hover:text-white disabled:opacity-30"
               title="Next day" aria-label="Next day"
             >
               <ChevronRight size={16} />
@@ -895,7 +895,7 @@ export default function DailyLogTab() {
             {!isToday && (
               <button
                 onClick={() => setDate(serverToday)}
-                className="px-3 min-h-[44px] sm:min-h-[40px] rounded bg-port-card text-xs text-gray-300 hover:text-white"
+                className="px-3 min-h-[44px] pointer-fine:sm:min-h-[40px] rounded bg-port-card text-xs text-gray-300 hover:text-white"
               >
                 Today
               </button>
@@ -937,7 +937,7 @@ export default function DailyLogTab() {
             </button>
             <button
               onClick={toggleDictation}
-              className={`flex shrink-0 items-center gap-1 px-3 min-h-[44px] min-w-[44px] sm:min-h-[40px] sm:min-w-0 justify-center rounded text-sm ${
+              className={`flex shrink-0 items-center gap-1 px-3 min-h-[44px] min-w-[44px] pointer-fine:sm:min-h-[40px] pointer-fine:sm:min-w-0 justify-center rounded text-sm ${
                 dictation
                   ? 'bg-port-accent text-white animate-pulse'
                   : 'bg-port-card text-gray-300 hover:text-white'
@@ -959,7 +959,7 @@ export default function DailyLogTab() {
             <button
               onClick={handleSave}
               disabled={!readReady || saving || !dirty}
-              className="flex shrink-0 items-center gap-1 px-3 min-h-[44px] min-w-[44px] sm:min-h-[40px] sm:min-w-0 justify-center rounded bg-port-accent text-white text-sm hover:bg-port-accent/80 disabled:opacity-50"
+              className="flex shrink-0 items-center gap-1 px-3 min-h-[44px] min-w-[44px] pointer-fine:sm:min-h-[40px] pointer-fine:sm:min-w-0 justify-center rounded bg-port-accent text-white text-sm hover:bg-port-accent/80 disabled:opacity-50"
               aria-label="Save"
             >
               <Save size={14} />

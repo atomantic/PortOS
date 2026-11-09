@@ -27,6 +27,7 @@
 import { performanceCapability } from '../../lib/musicVideoShotTiming.js';
 import { normalizeMusicVideoProductionPolicy } from '../../lib/musicVideoMediumPlan.js';
 import { deliveryNotesWithin } from '../../lib/lyricMarkers.js';
+import { singerWithin } from '../../lib/musicVideoLyricAnchors.js';
 import { snapSectionsToGrid } from './audioAnalysis.js';
 import { GROK_VIDEO_DURATIONS } from '../../lib/grokVideoClip.js';
 
@@ -348,6 +349,8 @@ function directShotsByCast(shots, project) {
       const duration = shot.endSec - shot.startSec;
       if (shot.performanceCandidate && used + duration <= footageSec * 0.4 + EPS) {
         shot.shotMode = 'performance';
+        const singer = singerWithin(cues, shot.startSec, shot.endSec);
+        if (singer) shot.performanceSpeaker = singer;
         used += duration;
       }
     }

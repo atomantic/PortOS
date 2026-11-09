@@ -1,4 +1,4 @@
-import { catalogGreyboxDraftSchema, catalogGreyboxSaveSchema, catalogWorldSaveSchema, catalogGreyboxCaptureSchema, catalogGreyboxRenderSchema, catalogPhotorealRenderSchema, catalogPhotorealOpenSchema, catalogPhotorealLookDraftSchema, catalogPhotorealLookSaveSchema, catalogPhotorealTextureIdSchema, catalogPhotorealTextureSearchSchema } from '../lib/catalogGreyboxValidation.js';
+import { previzBuildJobStartSchema, previzBuildJobFinishSchema, catalogGreyboxDraftSchema, catalogGreyboxSaveSchema, catalogWorldSaveSchema, catalogGreyboxCaptureSchema, catalogGreyboxRenderSchema, catalogPhotorealRenderSchema, catalogPhotorealOpenSchema, catalogPhotorealLookDraftSchema, catalogPhotorealLookSaveSchema, catalogPhotorealTextureIdSchema, catalogPhotorealTextureSearchSchema } from '../lib/catalogGreyboxValidation.js';
 import { getCatalogIdentityAccess } from '../services/catalogDB/identityAccess.js';
 // Creative Ingredients Catalog HTTP routes, mounted at /api/catalog. Backs
 // the Catalog page, Ingest workflow, picker integrations, and peer sync.
@@ -69,6 +69,7 @@ import { parseBulkPayload, bundleToMarkdown, toYamlString } from '../lib/catalog
 import { resolveImageInputPath } from '../lib/fileUtils.js';
 import { embedIngredient, embedBatch, ingredientEmbedSeed } from '../services/embeddings.js';
 import { extractIngredientsForScrap } from '../services/catalogExtraction.js';
+import { listPrevizJobs, startPrevizJob, finishPrevizJob } from '../services/previzJobs.js';
 import { captureGreyboxShot, draftGreybox, previewGreyboxPrompt, renderGreyboxShot, saveGreybox, saveWorld } from '../services/catalogGreybox.js';
 import { getPhotorealStatus, openPhotorealBlend, photorealBlendPath, startPhotorealRender } from '../services/catalogPhotoreal.js';
 import { installTexture, listInstalledTextures, searchTextures } from '../services/photorealTextures.js';
@@ -797,6 +798,19 @@ router.post('/ingredients/:id/media/upload', asyncHandler(async (req, res) => {
   const body = validateRequest(catalogMediaFileUploadSchema, req.body);
   const media = await uploadIngredientMediaFile({ ingredientId: req.params.id, ...body });
   res.status(201).json(media);
+}));
+
+// Previz work in flight (greybox drafts, AI previz proposals) and recently finished.
+router.get('/previz-jobs', (_req, res) => res.json(listPrevizJobs()));
+
+// Build / Sync with shots runs in the browser; the page reports it here so other tabs and agents see it.
+router.post('/previz-jobs', asyncHandler(async (req, res) => {
+  const { projectId, label } = validateRequest(previzBuildJobStartSchema, req.body);
+  res.status(201).json({ id: startPrevizJob({ kind: 'build', projectId, label }) });
+}));
+router.post('/previz-jobs/:id/finish', asyncHandler(async (req, res) => {
+  const body = validateRequest(previzBuildJobFinishSchema, req.body || {});
+  res.json({ finished: finishPrevizJob(req.params.id, body) });
 }));
 
 // Place greybox. Draft is a provider call on the user's tap (host-control gated,

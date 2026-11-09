@@ -40,7 +40,7 @@ export default function ConfirmButtonPair({
   const buttonSizeClass = largeTouchTargets
     ? 'min-h-[44px] min-w-[44px] justify-center'
     : responsiveTouchTargets
-      ? 'min-h-[44px] min-w-[44px] justify-center sm:min-h-9 sm:min-w-0'
+      ? 'min-h-[44px] min-w-[44px] justify-center pointer-fine:sm:min-h-9 pointer-fine:sm:min-w-0'
     : 'min-h-[36px] pointer-coarse:min-h-11 pointer-coarse:min-w-11 pointer-coarse:justify-center';
   // While in-flight, the confirm icon becomes a spinner and both buttons
   // disable; the label additionally swaps to the in-flight word ("Deleting")

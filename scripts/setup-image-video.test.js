@@ -1,9 +1,10 @@
-import { execFileSync } from 'child_process';
+import { execFileSync, spawnSync } from 'child_process';
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { afterEach, describe, expect, it } from 'vitest';
+import { resolveBashBinary } from '../server/lib/bashResolver.js';
 import { BYOV_RUNTIME_INFO } from '../server/services/videoGen/runtimes.js';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -148,18 +149,12 @@ describe('setup-image-video venv layout handling (issue #4200)', () => {
     ['Wan 2.2 CUDA', 'WAN22_CUDA_VENV', 'WAN22_CUDA_PY'],
     ['AudioLDM2', 'AUDIOLDM2_VENV', 'AUDIOLDM2_PY'],
     ['ACE-Step', 'ACESTEP_VENV', 'ACESTEP_PY'],
-    ['MiniMax Music 3', 'MINIMAX_MUSIC3_VENV', 'MINIMAX_MUSIC3_PY'],
     ['MiniMax Music 3 MLX', 'MINIMAX_MUSIC3_MLX_VENV', 'MINIMAX_MUSIC3_MLX_PY'],
     ['MuScriptor', 'MUSCRIPTOR_VENV', 'MUSCRIPTOR_PY'],
     ['FLUX.2', 'FLUX2_VENV', 'FLUX2_PY'],
   ])('%s reuses an existing Windows venv and resolves it with the helper', (_name, venv, python) => {
     expect(source).toContain(`if ! venv_exists "$${venv}"; then`);
     expect(source).toContain(`${python}="$(venv_python "$${venv}")"`);
-  });
-
-  it('pins LTX-2.5 CUDA to Lightricks Desktop\'s validated Windows torch stack', () => {
-    expect(source).toContain('https://download.pytorch.org/whl/cu128');
-    expect(source).toContain('"torch==2.10.0" "torchaudio==2.10.0" "torchvision==0.25.0"');
   });
 
   it('has no call site that hardcodes a venv interpreter path outside the shared helpers', () => {
@@ -708,4 +703,848 @@ describe('pinned runtime revisions', () => {
       )?.[1];
       expect(shellDefault).toBe(info.expectedRevision);
     });
+});
+
+describe('MiniMax H3 MLX hash-pinned lock', () => {
+  const pinnedNames = (text) => text.split('\n').filter((l) => /^[a-z]/i.test(l)).map((l) => l.split(/ |\\/)[0]);
+  const input = readFileSync(join(REPO_ROOT, 'scripts', 'requirements-minimax-h3-mlx.txt'), 'utf8');
+  const lock = readFileSync(join(REPO_ROOT, 'scripts', 'requirements-minimax-h3-mlx.lock.txt'), 'utf8');
+
+  it('locks exactly the validated input set, every package carrying sha256 hashes', () => {
+    const locked = pinnedNames(lock);
+    expect(locked).toEqual(pinnedNames(input));
+    const blocks = lock.split(/\n(?=[a-z][^\n]*==)/i).filter((b) => /^[a-z][^\n]*==/i.test(b));
+    expect(blocks).toHaveLength(locked.length);
+    for (const block of blocks) expect(block).toMatch(/--hash=sha256:[0-9a-f]{64}/);
+  });
+
+  it('installs the lock with --require-hashes so nothing resolves at install time', () => {
+    expect(source).toMatch(/pip sync --require-hashes --python "\$MINIMAX_H3_PY" "\$MINIMAX_H3_LOCK"/);
+  });
+});
+
+describe('LTX-2.5 CUDA Install/Repair', () => {
+  const shell = resolveBashBinary();
+  const direct = readFileSync(join(REPO_ROOT, 'scripts/requirements-ltx25-cuda.txt'), 'utf8')
+    .split(/\r?\n/).filter((line) => /^[\w.-]+==/.test(line));
+
+  function installer(target) {
+    const home = mkdtempSync(join(tmpdir(), 'portos-ltx25-install-'));
+    tempVenvs.push(home);
+    const log = join(home, 'commands.log');
+    const stub = join(home, 'python-stub');
+    writeFileSync(stub, `#!/usr/bin/env bash
+printf 'python %s\\n' "$*" >> "$LOG"
+if [[ "$*" == *sys.version_info* ]]; then exit "\${COMPAT_EXIT:-0}"; fi
+if [[ "$*" == *DistilledPipeline* ]]; then exit "\${PROBE_EXIT:-0}"; fi
+exit 0
+`);
+    const run = (env = {}) => execFileSync(shell, ['-c', `
+set -euo pipefail
+export HOME="$TEST_HOME"
+uname() { if [[ "\${1:-}" == -m ]]; then echo x86_64; else echo "$TARGET"; fi; }
+uv() {
+  printf 'uv %s\\n' "$*" >> "$LOG"
+  if [[ "$1" == venv ]]; then
+    local root="\${@: -1}" layout=bin/python3
+    if [[ "$TARGET" == MINGW64_NT* ]]; then layout=Scripts/python.exe; fi
+    mkdir -p "$(dirname "$root/$layout")"
+    cp "$STUB" "$root/$layout"
+    chmod +x "$root/$layout"
+  elif [[ "$1 $2" == 'pip install' ]]; then
+    [[ "$*" == *'--require-hashes --only-binary :all: --no-deps'* && "$*" == *requirements-ltx25-cuda-build.lock.txt ]] || return 92
+    return "\${BUILD_EXIT:-0}"
+  elif [[ "$1 $2" == 'pip sync' ]]; then
+    return "\${SYNC_EXIT:-0}"
+  else
+    echo 'Unexpected unlocked install' >&2; return 91
+  fi
+}
+source "$1"
+`, 'bash', SETUP_SCRIPT.replaceAll('\\', '/')], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        ...Object.fromEntries(installFlags.map((flag) => [flag, '0'])),
+        TEST_HOME: home.replaceAll('\\', '/'),
+        PORTOS_DATA: join(home, 'data').replaceAll('\\', '/'),
+        LOG: log.replaceAll('\\', '/'), STUB: stub.replaceAll('\\', '/'),
+        TARGET: target === 'windows' ? 'MINGW64_NT-10.0' : 'Linux',
+        PYTHON_BIN: 'true', INSTALL_LTX25_CUDA: '1',
+        PORTOS_LTX25_CUDA_TORCH_INDEX: 'https://download.pytorch.org/whl/cu132',
+        ...env,
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    return { run, commands: () => readFileSync(log, 'utf8') };
+  }
+
+  it.each(['windows', 'linux'])('locks every %s distribution and uses that lock for fresh Install and Repair', (target) => {
+    const lock = readFileSync(join(REPO_ROOT, 'scripts', `requirements-ltx25-cuda-${target}.lock.txt`), 'utf8');
+    const requirements = lock.split(/\r?\n/).filter((line) => /^\w/.test(line));
+    const blocks = lock.match(/^[\w.-]+(?:==| @ )[^\n]+\n(?:[ \t]+[^\n]*\n?)*/gm) ?? [];
+    expect(blocks.length).toBe(requirements.length);
+    for (const block of blocks) expect(block).toMatch(/--hash=sha256:[0-9a-f]{64}/);
+    const pins = requirements.map((line) => line.replace(/\s*\\$/, ''));
+    for (const pin of direct) expect(pins).toContain(pin);
+    expect(lock).not.toMatch(/git\+/);
+    expect(lock.match(/#subdirectory=packages\/ltx-/g)).toHaveLength(2);
+    expect(lock).toContain('d151147788a9284cca791edc6ce898007e727fe6.tar.gz');
+    const backend = readFileSync(join(REPO_ROOT, 'scripts/requirements-ltx25-cuda-build.lock.txt'), 'utf8');
+    expect(backend.match(/^uv-build==[^\n]+\n(?:[ \t]+[^\n]*\n?)*/m)?.[0]).toBe(lock.match(/^uv-build==[^\n]+\n(?:[ \t]+[^\n]*\n?)*/m)?.[0]);
+    expect(lock.includes('nvidia-cuda-runtime==')).toBe(target === 'linux');
+
+    const install = installer(target);
+    expect(install.run()).toContain('LTX-2.5 CUDA runtime ready');
+    expect(install.run()).toContain('LTX-2.5 CUDA runtime ready');
+    const commands = install.commands().split('\n');
+    const syncs = commands.filter((line) => line.startsWith('uv pip'));
+    expect(syncs).toHaveLength(4);
+    for (const sync of syncs.filter((line) => line.startsWith('uv pip sync'))) {
+      expect(sync).toContain('pip sync --require-hashes --only-binary :all:');
+      expect(sync).toContain('--no-binary ltx-core,ltx-pipelines --no-build-isolation');
+      expect(sync).toContain('--python ');
+      expect(sync).toContain(`requirements-ltx25-cuda-${target}.lock.txt`);
+    }
+    expect(commands.filter((line) => line.startsWith('uv venv'))).toHaveLength(1);
+    expect(install.commands()).toContain('venv --managed-python --python 3.11');
+    expect(install.commands()).toContain('from ltx_pipelines.distilled import DistilledPipeline');
+    expect(install.commands()).toContain('assert torch.cuda.is_available()');
+    expect(install.commands()).not.toMatch(/--upgrade|git\+/);
+  });
+
+  it('rebuilds an incompatible existing interpreter before syncing during Repair', () => {
+    const install = installer('windows');
+    install.run();
+    expect(install.run({ COMPAT_EXIT: '1' })).toContain('Rebuilding LTX-2.5 CUDA');
+    expect(install.commands()).toContain('venv --clear --managed-python --python 3.11');
+  });
+
+  it.each([{ BUILD_EXIT: '41' }, { SYNC_EXIT: '42' }, { PROBE_EXIT: '43' }])('fails Install without reporting ready when sync or the CUDA probe fails (%j)', (failure) => {
+    const install = installer('linux');
+    let result;
+    try { install.run(failure); } catch (error) { result = error; }
+    expect(result).toBeDefined();
+    expect(result.stdout).not.toContain('LTX-2.5 CUDA runtime ready');
+    if (failure.PROBE_EXIT) expect(result.stderr).toContain('LTX-2.5 CUDA installed but its runtime probe failed');
+    else expect(install.commands()).not.toContain('DistilledPipeline');
+  });
+});
+
+describe('MiniMax H3 CUDA hash-pinned installation', () => {
+  const section = source.slice(source.indexOf('INSTALL_MINIMAX_H3_CUDA="${'), source.indexOf('INSTALL_LTX25_CUDA="${'));
+  const direct = readFileSync(join(REPO_ROOT, 'scripts', 'requirements-minimax-h3-cuda.txt'), 'utf8')
+    .split(/\r?\n/).filter((line) => /^[\w.-]+==/.test(line));
+
+  it.each(['windows', 'linux'])('hashes the complete %s set, including CUDA torch and torchao', (target) => {
+    const lock = readFileSync(join(REPO_ROOT, 'scripts', `requirements-minimax-h3-cuda-${target}.lock.txt`), 'utf8');
+    const requirements = lock.split(/\r?\n/).filter((line) => /^\w/.test(line));
+    const blocks = lock.match(/^[\w.-]+==[^\n]+\n(?:[ \t]+[^\n]*\n?)*/gm) ?? [];
+    expect(blocks.length).toBe(requirements.length);
+    for (const block of blocks) expect(block).toMatch(/--hash=sha256:[0-9a-f]{64}/);
+    const pins = requirements.map((line) => line.replace(/\s*\\$/, ''));
+    // PEP 440 allows the Linux torchao CUDA build to satisfy its public pin.
+    for (const pin of direct) expect(pins.some((locked) => locked === pin || (!pin.includes('+') && locked.split('+')[0] === pin))).toBe(true);
+    expect(pins.find((pin) => pin.startsWith('torch=='))).toMatch(/\+cu126$/);
+    expect(pins.find((pin) => pin.startsWith('torchao=='))).toMatch(/^torchao==0\.18\.0(?:\+cu126)?$/);
+    expect(lock.includes('nvidia-cuda-runtime-cu12==')).toBe(target === 'linux');
+    expect(section).not.toMatch(/pip install|--upgrade|git\+|requirements-minimax-h3-cuda\.txt/);
+  });
+
+  // Executes the public Install/Repair entry point with package tools doubled.
+  // A Windows runner validates the real NVIDIA install separately; these shell
+  // doubles exercise both OS selections on POSIX CI without a GPU or downloads.
+  it.skipIf(process.platform === 'win32').each(['windows', 'linux'])('installs and repairs only the %s lock, and refuses failed sync/probes', (target) => {
+    const dir = mkdtempSync(join(tmpdir(), 'portos-h3-install-'));
+    tempVenvs.push(dir);
+    const log = join(dir, 'calls');
+    const bin = join(dir, 'bin');
+    mkdirSync(bin);
+    const executable = (name, script) => {
+      writeFileSync(join(bin, name), `#!/bin/bash\nset -eu\n${script}\n`);
+      chmodSync(join(bin, name), 0o755);
+    };
+    executable('uname', `if [[ "$1" == -m ]]; then echo x86_64; else echo "\${TEST_OS}"; fi`);
+    executable('python3', 'exit 0');
+    executable('ffmpeg', 'exit 0');
+    executable('ffprobe', 'exit 0');
+    executable('uv', `printf '%s\\n' "$*" >> "$CALL_LOG"
+if [[ "$1" == venv ]]; then
+  root="\${@: -1}"
+  mkdir -p "$root/$PY_LAYOUT"
+  cp "$FAKE_PY" "$root/$PY_LAYOUT/$PY_NAME"
+elif [[ "$1 $2" == 'pip sync' ]]; then
+  [[ "$*" == *'--require-hashes --only-binary :all:'* ]]
+  [[ "$*" == *"requirements-minimax-h3-cuda-$TARGET.lock.txt" ]]
+  [[ "\${FAIL_SYNC:-0}" == 0 ]] || exit 41
+else
+  exit 42
+fi`);
+    const fakePy = join(dir, 'fake-python');
+    writeFileSync(fakePy, `#!/bin/bash
+set -eu
+if [[ "$*" == *version_info* ]]; then exit "\${STALE_PYTHON:-0}"; fi
+[[ "$*" == *'import torch;'* && "$*" == *'import torchao;'* && "$*" == *MiniMaxH3Transformer3DModel* && "$*" == *MiniMaxH3ImageReference* && "$*" == *'torch.cuda.is_available()'* ]] || exit 43
+echo probe >> "$CALL_LOG"
+exit "\${FAIL_PROBE:-0}"
+`);
+    chmodSync(fakePy, 0o755);
+    const env = {
+      ...process.env,
+      ...Object.fromEntries(installFlags.map((flag) => [flag, '0'])),
+      INSTALL_MINIMAX_H3_CUDA: '1', HOME: dir, PORTOS_DATA: join(dir, 'data'),
+      PYTHON_BIN: 'python3', PATH: `${bin}:${process.env.PATH}`,
+      PORTOS_TORCH_CUDA_INDEX: 'https://download.pytorch.org/whl/cu126',
+      TARGET: target, TEST_OS: target === 'windows' ? 'MINGW64_NT' : 'Linux',
+      PY_LAYOUT: target === 'windows' ? 'Scripts' : 'bin',
+      PY_NAME: target === 'windows' ? 'python.exe' : 'python3', FAKE_PY: fakePy, CALL_LOG: log,
+    };
+    const run = (extra = {}) => {
+      writeFileSync(log, '');
+      const result = spawnSync('bash', [SETUP_SCRIPT], { env: { ...env, ...extra }, encoding: 'utf8', timeout: 10000 });
+      return { ...result, calls: readFileSync(log, 'utf8') };
+    };
+    const fresh = run();
+    expect(fresh.status, fresh.stderr).toBe(0);
+    expect(fresh.calls).toContain('venv --managed-python --python 3.11');
+    expect(fresh.calls).toContain(`requirements-minimax-h3-cuda-${target}.lock.txt`);
+    expect(fresh.stdout).toContain('MiniMax H3 CUDA runtime ready');
+    const repair = run();
+    expect(repair.status, repair.stderr).toBe(0);
+    expect(repair.calls).not.toContain('venv ');
+    expect(repair.calls).toContain('pip sync --require-hashes');
+    const stale = run({ STALE_PYTHON: '1' });
+    expect(stale.status, stale.stderr).toBe(0);
+    expect(stale.calls).toContain('venv --clear --managed-python --python 3.11');
+    const failedSync = run({ FAIL_SYNC: '1' });
+    expect(failedSync.status).toBe(41);
+    expect(failedSync.calls).not.toContain('probe');
+    expect(failedSync.stdout).not.toContain('runtime ready');
+    const failedProbe = run({ FAIL_PROBE: '1' });
+    expect(failedProbe.status).toBe(1);
+    expect(failedProbe.stderr).toContain('readiness check failed');
+    expect(failedProbe.stdout).not.toContain('runtime ready');
+    const wrongIndex = run({ PORTOS_TORCH_CUDA_INDEX: 'https://example.com/cu130' });
+    expect(wrongIndex.status).toBe(1);
+    expect(wrongIndex.calls).toBe('');
+    expect(wrongIndex.stderr).toContain('locked to cu126');
+  });
+});
+
+describe('Wan 2.2 CUDA hash-pinned installation', () => {
+  const section = source.slice(source.indexOf('INSTALL_WAN22_CUDA="${'), source.indexOf('INSTALL_MUSICGEN="${'));
+  const direct = readFileSync(join(REPO_ROOT, 'scripts', 'requirements-wan22-cuda.txt'), 'utf8')
+    .split(/\r?\n/).filter((line) => /^[\w.-]+==/.test(line));
+
+  it.each(['windows', 'linux'])('pins and hashes the entire %s runtime, including the CUDA torch stack', (target) => {
+    const lock = readFileSync(join(REPO_ROOT, 'scripts', `requirements-wan22-cuda-${target}.lock.txt`), 'utf8');
+    const requirements = lock.split(/\r?\n/).filter((line) => /^\w/.test(line));
+    const blocks = lock.match(/^[\w.-]+==[^\n]+\n(?:[ \t]+[^\n]*\n?)*/gm) ?? [];
+    expect(blocks.length).toBe(requirements.length);
+    for (const block of blocks) expect(block).toMatch(/--hash=sha256:[0-9a-f]{64}/);
+    const pins = requirements.map((line) => line.replace(/\s*\\$/, ''));
+    for (const pin of direct) expect(pins).toContain(pin);
+    expect(pins.find((pin) => pin.startsWith('torch=='))).toMatch(/\+cu126$/);
+    expect(pins.find((pin) => pin.startsWith('torchvision=='))).toMatch(/\+cu126$/);
+    expect(lock.includes('nvidia-cuda-runtime-cu12==')).toBe(target === 'linux');
+  });
+
+  it('uses only a host-selected hash lock for Install and Repair', () => {
+    expect(section).toContain('requirements-wan22-cuda-windows.lock.txt');
+    expect(section).toContain('requirements-wan22-cuda-linux.lock.txt');
+    expect(section).toContain('pip sync --require-hashes --only-binary :all: --index-strategy unsafe-best-match --python "$WAN22_CUDA_PY" "$WAN22_CUDA_LOCK"');
+    expect(section).not.toMatch(/pip install|--upgrade|requirements-wan22-cuda\.txt/);
+    expect(section).toContain('uv venv --managed-python --python 3.11');
+    expect(section).toContain('uv venv --clear --managed-python --python 3.11');
+    expect(section).toContain("(Path(sys.base_prefix) / 'conda-meta').is_dir()");
+  });
+});
+
+// Runs the real installer with uv/python stubbed: only `uv venv` and `uv pip sync`
+// are allowed, so any unlocked install fails the run.
+function lockedCudaInstaller(target, { flag, probe }) {
+  const home = mkdtempSync(join(tmpdir(), 'portos-cuda-install-'));
+  tempVenvs.push(home);
+  const log = join(home, 'commands.log');
+  const stub = join(home, 'python-stub');
+  writeFileSync(stub, `#!/usr/bin/env bash
+printf 'python %s\\n' "$*" >> "$LOG"
+if [[ "$*" == *sys.version_info* ]]; then exit "\${COMPAT_EXIT:-0}"; fi
+if [[ "$*" == *"$PROBE_MARKER"* ]]; then exit "\${PROBE_EXIT:-0}"; fi
+exit 0
+`);
+  const run = (env = {}) => execFileSync(resolveBashBinary(), ['-c', `
+set -euo pipefail
+export HOME="$TEST_HOME"
+uname() { if [[ "\${1:-}" == -m ]]; then echo x86_64; else echo "$TARGET"; fi; }
+git() {
+  printf 'git %s\\n' "$*" >> "$LOG"
+  if [[ "$1" == clone ]]; then mkdir -p "\${@: -1}/.git"; fi
+}
+uv() {
+  printf 'uv %s\\n' "$*" >> "$LOG"
+  if [[ "$1" == venv ]]; then
+    local root="\${@: -1}" layout=bin/python3
+    if [[ "$TARGET" == MINGW64_NT* ]]; then layout=Scripts/python.exe; fi
+    mkdir -p "$(dirname "$root/$layout")"
+    cp "$STUB" "$root/$layout"
+    chmod +x "$root/$layout"
+  elif [[ "$1 $2" == 'pip sync' ]]; then
+    return "\${SYNC_EXIT:-0}"
+  elif [[ "$1 $2 $3" == 'pip install --no-deps' && -n "\${ALLOW_LOCAL_INSTALL:-}" ]]; then
+    return 0
+  else
+    echo 'Unexpected unlocked install' >&2; return 91
+  fi
+}
+source "$1"
+`, 'bash', SETUP_SCRIPT.replaceAll('\\', '/')], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      ...Object.fromEntries(installFlags.map((flag) => [flag, '0'])),
+      TEST_HOME: home.replaceAll('\\', '/'),
+      PORTOS_DATA: join(home, 'data').replaceAll('\\', '/'),
+      LOG: log.replaceAll('\\', '/'), STUB: stub.replaceAll('\\', '/'),
+      TARGET: target === 'windows' ? 'MINGW64_NT-10.0' : 'Linux',
+      PYTHON_BIN: 'true', [flag]: '1', PROBE_MARKER: probe,
+      PORTOS_TORCH_CUDA_INDEX: 'https://download.pytorch.org/whl/cu126',
+      ...env,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  return { run, commands: () => readFileSync(log, 'utf8') };
+}
+
+describe('MiniMax Music 3 CUDA Install/Repair', () => {
+  const direct = readFileSync(join(REPO_ROOT, 'scripts/requirements-minimax-music3-cuda.txt'), 'utf8')
+    .split(/\r?\n/).filter((line) => /^[\w.-]+==/.test(line));
+
+  const installer = (target) => lockedCudaInstaller(target, { flag: 'INSTALL_MINIMAX_MUSIC3', probe: 'ModularPipeline' });
+
+  it.each(['windows', 'linux'])('locks every %s distribution and uses that lock for fresh Install and Repair', (target) => {
+    const lock = readFileSync(join(REPO_ROOT, 'scripts', `requirements-minimax-music3-cuda-${target}.lock.txt`), 'utf8');
+    const requirements = lock.split(/\r?\n/).filter((line) => /^\w/.test(line));
+    const blocks = lock.match(/^[\w.-]+==[^\n]+\n(?:[ \t]+[^\n]*\n?)*/gm) ?? [];
+    expect(blocks.length).toBe(requirements.length);
+    for (const block of blocks) expect(block).toMatch(/--hash=sha256:[0-9a-f]{64}/);
+    const pins = requirements.map((line) => line.replace(/\s*\\$/, ''));
+    for (const pin of direct) expect(pins).toContain(pin);
+    expect(lock).not.toMatch(/git\+|^[\w.-]+\s*@/m);
+    expect(lock.includes('nvidia-cuda-runtime-cu12==')).toBe(target === 'linux');
+
+    const install = installer(target);
+    expect(install.run()).toContain('MiniMax Music 3 venv ready');
+    expect(install.run()).toContain('MiniMax Music 3 venv ready');
+    const commands = install.commands().split('\n');
+    const syncs = commands.filter((line) => line.startsWith('uv pip'));
+    expect(syncs).toHaveLength(2);
+    for (const sync of syncs) {
+      expect(sync).toContain('pip sync --require-hashes --only-binary :all:');
+      expect(sync).toContain('--python ');
+      expect(sync).toContain(`requirements-minimax-music3-cuda-${target}.lock.txt`);
+    }
+    expect(commands.filter((line) => line.startsWith('uv venv'))).toHaveLength(1);
+    expect(install.commands()).toContain('venv --managed-python --python 3.11');
+    expect(install.commands()).toContain('from diffusers.modular_pipelines.minimax_music3 import MiniMaxMusic3Blocks');
+    expect(install.commands()).toContain('assert torch.cuda.is_available()');
+    expect(install.commands()).not.toMatch(/pip install|--upgrade|git\+/);
+  });
+
+  it('rebuilds an incompatible existing interpreter before syncing during Repair', () => {
+    const install = installer('windows');
+    install.run();
+    expect(install.run({ COMPAT_EXIT: '1' })).toContain('Rebuilding MiniMax Music 3 CUDA');
+    expect(install.commands()).toContain('venv --clear --managed-python --python 3.11');
+  });
+
+  it.each([{ SYNC_EXIT: '42' }, { PROBE_EXIT: '43' }])('fails Install without reporting ready when sync or the CUDA probe fails (%j)', (failure) => {
+    const install = installer('linux');
+    let result;
+    try { install.run(failure); } catch (error) { result = error; }
+    expect(result).toBeDefined();
+    expect(result.stdout).not.toContain('MiniMax Music 3 venv ready');
+    if (failure.PROBE_EXIT) expect(result.stderr).toContain('MiniMax Music 3 CUDA installed but its runtime probe failed');
+    else expect(install.commands()).not.toContain('ModularPipeline');
+  });
+});
+
+describe.each([
+  { runtime: 'MusicGen (MLX)', lock: 'requirements-musicgen-mlx.lock.txt', from: 'INSTALL_MUSICGEN" == "1"', to: 'INSTALL_AUDIOLDM2="${' },
+  { runtime: 'MiniMax Music 3 (MLX)', lock: 'requirements-minimax-music3-mlx.lock.txt', from: 'INSTALL_MINIMAX_MUSIC3_MLX" == "1"', to: 'INSTALL_MUSCRIPTOR="${' },
+])('$runtime install is hash-pinned', ({ lock: lockName, from, to }) => {
+  const lock = readFileSync(join(REPO_ROOT, 'scripts', lockName), 'utf8');
+
+  it('every locked package carries a sha256 hash and none comes from a VCS or URL source', () => {
+    const blocks = lock.split(/\n(?=[a-z][^\n]*==)/i).filter((b) => /^[a-z][^\n]*==/i.test(b));
+    expect(blocks.length).toBeGreaterThan(0);
+    for (const block of blocks) expect(block).toMatch(/--hash=sha256:[0-9a-f]{64}/);
+    expect(lock).not.toMatch(/^[a-z][^\n]* @ /im);
+  });
+
+  it('installs from the lock with --require-hashes and resolves nothing at install time', () => {
+    const section = source.slice(source.indexOf(from), source.indexOf(to));
+    expect(section).toContain(`pip install --require-hashes --no-deps -r "$SCRIPT_DIR/${lockName}"`);
+    expect(section).not.toMatch(/pip install --upgrade/);
+  });
+});
+
+describe('MuScriptor Apple Silicon install is hash-pinned', () => {
+  const lock = readFileSync(join(REPO_ROOT, 'scripts', 'requirements-muscriptor-mlx.lock.txt'), 'utf8');
+  const section = source.slice(source.indexOf('INSTALL_MUSCRIPTOR" == "1"'), source.indexOf('INSTALL_FLUX2="${'));
+  const [appleBranch, otherBranch] = section.split(/^  else$/m);
+
+  it('every locked package carries a sha256 hash, none comes from a VCS or URL source, and all are arm64-macOS scoped', () => {
+    const blocks = lock.split(/\n(?=[a-z][^\n]*==)/i).filter((b) => /^[a-z][^\n]*==/i.test(b));
+    expect(blocks.length).toBeGreaterThan(0);
+    for (const block of blocks) {
+      expect(block).toMatch(/--hash=sha256:[0-9a-f]{64}/);
+      const pin = block.split('\n')[0];
+      expect(pin).toContain("sys_platform == 'darwin'");
+      expect(pin).toContain("platform_machine == 'arm64'");
+    }
+    expect(lock).not.toMatch(/^[a-z][^\n]* @ /im);
+  });
+
+  it('Apple Silicon installs from the lock with --require-hashes and resolves nothing', () => {
+    expect(appleBranch).toContain('is_apple_silicon');
+    expect(appleBranch).toContain('pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-muscriptor-mlx.lock.txt"');
+    expect(appleBranch).not.toMatch(/pip install --upgrade/);
+  });
+
+  it('refuses a Python older than the 3.11 floor the lock was compiled for', () => {
+    expect(appleBranch).toContain('sys.version_info[:2] >= (3, 11)');
+  });
+
+  it('installs nothing on Linux/Windows outside the hash-pinned CUDA locks', () => {
+    expect(otherBranch).not.toMatch(/pip install|--upgrade/);
+  });
+});
+
+describe('AudioLDM2 Apple Silicon install is hash-pinned', () => {
+  const lock = readFileSync(join(REPO_ROOT, 'scripts', 'requirements-audioldm2-mlx.lock.txt'), 'utf8');
+  const section = source.slice(source.indexOf('INSTALL_AUDIOLDM2" == "1"'), source.indexOf('INSTALL_ACESTEP="${'));
+  const [appleBranch, otherBranch] = section.split(/^  else$/m);
+
+  it('every locked package carries a sha256 hash, none comes from a VCS or URL source, and all are arm64-macOS scoped', () => {
+    const blocks = lock.split(/\n(?=[a-z][^\n]*==)/i).filter((b) => /^[a-z][^\n]*==/i.test(b));
+    expect(blocks.length).toBeGreaterThan(0);
+    for (const block of blocks) {
+      expect(block).toMatch(/--hash=sha256:[0-9a-f]{64}/);
+      const pin = block.split('\n')[0];
+      expect(pin).toContain("sys_platform == 'darwin'");
+      expect(pin).toContain("platform_machine == 'arm64'");
+    }
+    expect(lock).not.toMatch(/^[a-z][^\n]* @ /im);
+  });
+
+  it('Apple Silicon installs from the lock with --require-hashes and resolves nothing', () => {
+    expect(appleBranch).toContain('is_apple_silicon');
+    expect(appleBranch).toContain('pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-audioldm2-mlx.lock.txt"');
+    expect(appleBranch).not.toMatch(/pip install --upgrade/);
+  });
+
+  it('refuses a Python older than the 3.11 floor the lock was compiled for', () => {
+    expect(appleBranch).toContain('sys.version_info[:2] >= (3, 11)');
+  });
+
+  it('installs nothing on Linux/Windows outside the hash-pinned CUDA locks', () => {
+    expect(otherBranch).not.toMatch(/pip install|--upgrade/);
+  });
+});
+
+describe.each([
+  { runtime: 'AudioLDM2', lockName: 'audioldm2', flag: 'INSTALL_AUDIOLDM2', probe: 'AudioLDM2Pipeline', probeImport: 'from diffusers import AudioLDM2Pipeline' },
+  { runtime: 'MuScriptor', lockName: 'muscriptor', flag: 'INSTALL_MUSCRIPTOR', probe: 'TranscriptionModel', probeImport: 'from muscriptor import TranscriptionModel' },
+  { runtime: 'FLUX.2', lockName: 'flux2', flag: 'INSTALL_FLUX2', probe: 'Flux2KleinPipeline', probeImport: 'from diffusers import Flux2KleinPipeline, QwenImage21Pipeline' },
+])('$runtime Windows/Linux Install/Repair', ({ runtime, lockName, flag, probe, probeImport }) => {
+  const direct = readFileSync(join(REPO_ROOT, `scripts/requirements-${lockName}-cuda.txt`), 'utf8')
+    .split(/\r?\n/).filter((line) => /^[\w.-]+(\[[\w,-]+\])?==/.test(line))
+    .map((line) => line.replace(/\[[\w,-]+\]/, ''));
+  const installer = (target) => lockedCudaInstaller(target, { flag, probe });
+
+  it.each(['windows', 'linux'])('locks every %s distribution and uses that lock for fresh Install and Repair', (target) => {
+    const lock = readFileSync(join(REPO_ROOT, 'scripts', `requirements-${lockName}-cuda-${target}.lock.txt`), 'utf8');
+    const requirements = lock.split(/\r?\n/).filter((line) => /^\w/.test(line));
+    const blocks = lock.match(/^[\w.-]+==[^\n]+\n(?:[ \t]+[^\n]*\n?)*/gm) ?? [];
+    expect(blocks.length).toBe(requirements.length);
+    for (const block of blocks) expect(block).toMatch(/--hash=sha256:[0-9a-f]{64}/);
+    const pins = requirements.map((line) => line.replace(/\s*\\$/, ''));
+    expect(direct.length).toBeGreaterThan(0);
+    for (const pin of direct) expect(pins).toContain(pin);
+    expect(pins.some((pin) => pin.startsWith('hf-xet=='))).toBe(true);
+    expect(lock).not.toMatch(/git\+|^[\w.-]+\s*@/m);
+    expect(lock.includes('nvidia-cuda-runtime-cu12==')).toBe(target === 'linux');
+
+    const install = installer(target);
+    expect(install.run()).toContain(`${runtime} venv ready`);
+    expect(install.run()).toContain(`${runtime} venv ready`);
+    const commands = install.commands().split('\n');
+    const syncs = commands.filter((line) => line.startsWith('uv pip'));
+    expect(syncs).toHaveLength(2);
+    for (const sync of syncs) {
+      expect(sync).toContain('pip sync --require-hashes --only-binary :all:');
+      expect(sync).toContain(`requirements-${lockName}-cuda-${target}.lock.txt`);
+    }
+    expect(commands.filter((line) => line.startsWith('uv venv'))).toHaveLength(1);
+    expect(install.commands()).toContain('venv --managed-python --python 3.11');
+    expect(install.commands()).toContain(probeImport);
+    expect(install.commands()).not.toMatch(/pip install|--upgrade|git\+/);
+  });
+
+  it('rebuilds an incompatible existing interpreter before syncing during Repair', () => {
+    const install = installer('linux');
+    install.run();
+    expect(install.run({ COMPAT_EXIT: '1' })).toContain(`Rebuilding ${runtime} CUDA`);
+    expect(install.commands()).toContain('venv --clear --managed-python --python 3.11');
+  });
+
+  it.each([{ SYNC_EXIT: '42' }, { PROBE_EXIT: '43' }])('fails Install without reporting ready when sync or the probe fails (%j)', (failure) => {
+    const install = installer('windows');
+    let result;
+    try { install.run(failure); } catch (error) { result = error; }
+    expect(result).toBeDefined();
+    expect(result.stdout).not.toContain(`${runtime} venv ready`);
+    if (failure.PROBE_EXIT) expect(result.stderr).toContain(`${runtime} venv built but`);
+    else expect(install.commands()).not.toContain(probe);
+  });
+
+  it('refuses a CUDA index the locks were not compiled for', () => {
+    let result;
+    try { installer('linux').run({ PORTOS_TORCH_CUDA_INDEX: 'https://download.pytorch.org/whl/cu132' }); } catch (error) { result = error; }
+    expect(result?.stderr).toContain(`${runtime} CUDA is locked to cu126`);
+  });
+});
+
+describe('shared mflux Apple Silicon install is hash-pinned', () => {
+  const lockPath = join(REPO_ROOT, 'scripts', 'requirements-mflux-mlx.lock.txt');
+  const lock = readFileSync(lockPath, 'utf8');
+  const directPins = readFileSync(join(REPO_ROOT, 'scripts', 'requirements-mflux-mlx.txt'), 'utf8');
+  const block = source.slice(source.indexOf('if [[ "$INSTALL_MFLUX" == "1" ]]; then'), source.indexOf('if [[ "$INSTALL_VIDEO" == "1" ]]; then'));
+
+  // Run the real install block on "Apple Silicon" with a fake interpreter and
+  // uv that record every call, so the branch logic and the mflux-only
+  // requirement extraction are exercised rather than pattern-matched.
+  const runBlock = ({ oldPython }) => {
+    const dir = mkdtempSync(join(tmpdir(), 'portos-mflux-'));
+    tempVenvs.push(dir);
+    const log = join(dir, 'calls.log');
+    const fakePython = join(dir, 'python3');
+    writeFileSync(fakePython, `#!/bin/bash
+echo "py $*" >> "${log}"
+case "$*" in
+  *version_info*) exit ${oldPython ? 1 : 0} ;;
+  *--force-reinstall*) cp "\${@: -1}" "${log}.self-req" ;;
+esac
+exit 0
+`);
+    chmodSync(fakePython, 0o755);
+    const script = `set -euo pipefail
+INSTALL_MFLUX=1; PYTHON_BIN="${fakePython}"; SCRIPT_DIR="${join(REPO_ROOT, 'scripts')}"; HOME="${dir}"
+is_apple_silicon() { return 0; }
+have() { return 0; }
+uv() { echo "uv $*" >> "${log}"; }
+reset_universal_venv() { :; }
+pin_venv_arm64() { :; }
+probe_or_fail() { shift 2; echo "probe $*" >> "${log}"; }
+${block}`;
+    const result = spawnSync(resolveBashBinary(), ['-c', script], { encoding: 'utf8' });
+    expect(result.status, result.stderr).toBe(0);
+    return {
+      calls: readFileSync(log, 'utf8'),
+      selfReq: existsSync(`${log}.self-req`) ? readFileSync(`${log}.self-req`, 'utf8') : null,
+    };
+  };
+
+  it('every locked package carries a sha256 hash, none comes from a VCS or URL source, and all are arm64-macOS scoped', () => {
+    const blocks = lock.split(/\n(?=[a-z][^\n]*==)/i).filter((b) => /^[a-z][^\n]*==/i.test(b));
+    expect(blocks.length).toBeGreaterThan(0);
+    for (const b of blocks) {
+      expect(b).toMatch(/--hash=sha256:[0-9a-f]{64}/);
+      const pin = b.split('\n')[0];
+      expect(pin).toContain("sys_platform == 'darwin'");
+      expect(pin).toContain("platform_machine == 'arm64'");
+    }
+    expect(lock).not.toMatch(/^[a-z][^\n]* @ /im);
+  });
+
+  it('locks the validated trio the resolving path still names', () => {
+    for (const name of ['MFLUX_PIN', 'MLX_PIN', 'MLX_METAL_PIN']) {
+      const pin = block.match(new RegExp(`${name}='([^']+)'`))[1];
+      expect(directPins).toMatch(new RegExp(`^${pin.replace(/[.]/g, '\\.')}$`, 'm'));
+      expect(lock).toMatch(new RegExp(`^${pin.replace(/[.]/g, '\\.')} ;`, 'm'));
+    }
+  });
+
+  it('locks Pillow 13+, the first release without the 12.x parser advisories (#15479)', () => {
+    const pillow = lock.match(/^pillow==(\d+)\./m);
+    expect(pillow, 'pillow must be locked').not.toBeNull();
+    expect(Number(pillow[1])).toBeGreaterThanOrEqual(13);
+    expect(directPins).toMatch(/^pillow==13\./m);
+  });
+
+  it('a 3.11+ PYTHON_BIN installs to the user site from the lock and probes both CLIs', () => {
+    const { calls, selfReq } = runBlock({ oldPython: false });
+    expect(calls).toContain(`-m pip install --user --require-hashes --no-deps --force-reinstall -r`);
+    expect(calls).toContain(`-m pip install --user --require-hashes --no-deps -r ${lockPath}`);
+    expect(calls).not.toMatch(/pip install --upgrade|pip install --user mflux/);
+    expect(calls).toContain('from mflux.models.flux.cli.flux_generate import main; from mflux.models.common.cli.train import main');
+    expect(calls).not.toMatch(/^uv /m);
+    // The stale-layout flush reinstalls mflux alone, still hash-checked.
+    expect(selfReq).toMatch(/^mflux==[^\n]*\\\n\s+--hash=sha256:/);
+    expect(selfReq.match(/^[a-z][^\n]*==/gim)).toHaveLength(1);
+  });
+
+  it('an older PYTHON_BIN syncs the dedicated venv to the lock instead', () => {
+    const { calls } = runBlock({ oldPython: true });
+    expect(calls).not.toMatch(/pip install --user/);
+    expect(calls).toMatch(new RegExp(`^uv pip sync --python \\S+/\\.portos/venv-mflux/bin/python3 --require-hashes ${lockPath.replace(/[.]/g, '\\.')}$`, 'm'));
+    expect(calls).not.toMatch(/^uv pip install/m);
+    expect(calls).toMatch(/^probe \S+venv-mflux\/bin\/python3 -c from mflux\.models\.flux\.cli\.flux_generate import main/m);
+  });
+});
+
+describe('FLUX.2 install is hash-pinned on every platform', () => {
+  const lock = readFileSync(join(REPO_ROOT, 'scripts', 'requirements-flux2-mlx.lock.txt'), 'utf8');
+  const section = source.slice(source.indexOf('INSTALL_FLUX2" == "1"'), source.indexOf('FLUX.2 venv built but'));
+  const [appleBranch, otherBranch] = section.split(/^  else$/m);
+
+  it('every locked package carries a sha256 hash, none comes from a VCS or URL source, and all are arm64-macOS scoped', () => {
+    const blocks = lock.split(/\n(?=[a-z][^\n]*==)/i).filter((b) => /^[a-z][^\n]*==/i.test(b));
+    expect(blocks.length).toBeGreaterThan(0);
+    for (const block of blocks) {
+      expect(block).toMatch(/--hash=sha256:[0-9a-f]{64}/);
+      const pin = block.split('\n')[0];
+      expect(pin).toContain("sys_platform == 'darwin'");
+      expect(pin).toContain("platform_machine == 'arm64'");
+    }
+    expect(lock).not.toMatch(/^[a-z][^\n]* @ /im);
+  });
+
+  it('Apple Silicon installs from the lock with --require-hashes and resolves nothing', () => {
+    expect(appleBranch).toContain('if is_apple_silicon; then');
+    expect(appleBranch).toContain('pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-flux2-mlx.lock.txt"');
+    expect(appleBranch).not.toMatch(/pip install --upgrade/);
+    expect(appleBranch).not.toContain('git+https');
+  });
+
+  it('refuses a Python older than the 3.11 floor the lock was compiled for', () => {
+    expect(appleBranch).toContain('sys.version_info[:2] >= (3, 11)');
+  });
+
+  it('syncs the lock on every run instead of skipping because an unlocked venv already imports', () => {
+    expect(section).not.toMatch(/FLUX2_FORCE_REINSTALL:-\}" != "1"|already ready/);
+  });
+
+  it('installs nothing on Linux/Windows outside the hash-pinned CUDA locks', () => {
+    expect(otherBranch).toContain('sync_cuda_lock_venv FLUX.2 "$FLUX2_VENV" requirements-flux2-cuda');
+    expect(otherBranch).not.toMatch(/pip install|--upgrade|git\+/);
+  });
+});
+
+describe('FastVideo MLX Apple Silicon install is hash-pinned', () => {
+  const lock = readFileSync(join(REPO_ROOT, 'scripts', 'requirements-fastvideo-mlx.lock.txt'), 'utf8');
+  const section = source.slice(source.indexOf('INSTALL_FASTVIDEO" == "1"'), source.indexOf('FastVideo MLX runtime ready'));
+
+  it('every locked package carries a sha256 hash, none comes from a VCS or URL source, and all are arm64-macOS scoped', () => {
+    const blocks = lock.split(/\n(?=[a-z][^\n]*==)/i).filter((b) => /^[a-z][^\n]*==/i.test(b));
+    expect(blocks.length).toBeGreaterThan(0);
+    for (const block of blocks) {
+      expect(block).toMatch(/--hash=sha256:[0-9a-f]{64}/);
+      const pin = block.split('\n')[0];
+      expect(pin).toContain("sys_platform == 'darwin'");
+      expect(pin).toContain("platform_machine == 'arm64'");
+    }
+    expect(lock).not.toMatch(/^[a-z][^\n]* @ /im);
+  });
+
+  it('installs the lock with uv pip sync --require-hashes and editable package with --no-deps', () => {
+    expect(section).toContain('"$FASTVIDEO_UV" pip sync --require-hashes --python "${FASTVIDEO_PY}" "$FASTVIDEO_LOCK"');
+    expect(section).toContain('"$FASTVIDEO_UV" pip install --no-deps --python "${FASTVIDEO_PY}" -e "${FASTVIDEO_DIR}"');
+    expect(section).not.toContain("pip install --python \"${FASTVIDEO_PY}\" -e '.[mlx]'");
+  });
+
+  it('refuses a Python older than the 3.11 floor the lock was compiled for', () => {
+    expect(section).toContain('sys.version_info[:2] >= (3, 11)');
+  });
+});
+
+describe('ACE-Step Apple Silicon install is hash-pinned', () => {
+  const lock = readFileSync(join(REPO_ROOT, 'scripts', 'requirements-acestep-mlx.lock.txt'), 'utf8');
+  const section = source.slice(source.indexOf('INSTALL_ACESTEP" == "1"'), source.indexOf('INSTALL_ACESTEP15="${'));
+  const [appleBranch, otherBranch] = section.split(/^  else$/m);
+
+  it('every locked package carries a sha256 hash, none comes from a VCS or URL source, and all are arm64-macOS scoped', () => {
+    const blocks = lock.split(/\n(?=[a-z][^\n]*==)/i).filter((b) => /^[a-z][^\n]*==/i.test(b));
+    expect(blocks.length).toBeGreaterThan(0);
+    for (const block of blocks) {
+      expect(block).toMatch(/--hash=sha256:[0-9a-f]{64}/);
+      const pin = block.split('\n')[0];
+      expect(pin).toContain("sys_platform == 'darwin'");
+      expect(pin).toContain("platform_machine == 'arm64'");
+    }
+    expect(lock).not.toMatch(/^[a-z][^\n]* @ /im);
+  });
+
+  it('Apple Silicon installs from the lock with --require-hashes and resolves nothing', () => {
+    expect(appleBranch).toContain('is_apple_silicon');
+    expect(appleBranch).toContain('pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-acestep-mlx.lock.txt"');
+    expect(appleBranch).toContain('pip install --no-deps --no-build-isolation "${ACESTEP_DIR}"');
+    expect(appleBranch).not.toMatch(/pip install --upgrade/);
+  });
+
+  it('refuses a Python older than the 3.11 floor the lock was compiled for', () => {
+    expect(appleBranch).toContain('sys.version_info[:2] >= (3, 11)');
+  });
+
+  it('installs nothing on Linux/Windows outside the hash-pinned CUDA locks and the pinned checkout', () => {
+    expect(otherBranch).not.toMatch(/pip install --upgrade|git\+/);
+    expect(otherBranch).toContain('--no-binary docopt --no-binary unidic-lite');
+  });
+});
+
+describe.each(['windows', 'linux'])('ACE-Step %s Install/Repair', (target) => {
+  const direct = readFileSync(join(REPO_ROOT, 'scripts/requirements-acestep-cuda.txt'), 'utf8')
+    .split(/\r?\n/).filter((line) => /^[\w.-]+(\[[\w,-]+\])?==/.test(line))
+    .map((line) => line.replace(/\[[\w,-]+\]/, ''));
+  const installer = () => lockedCudaInstaller(target, { flag: 'INSTALL_ACESTEP', probe: 'ACEStepPipeline' });
+
+  it('locks every distribution with hashes and no VCS source', () => {
+    const lock = readFileSync(join(REPO_ROOT, 'scripts', `requirements-acestep-cuda-${target}.lock.txt`), 'utf8');
+    const requirements = lock.split(/\r?\n/).filter((line) => /^\w/.test(line));
+    const blocks = lock.match(/^[\w.-]+==[^\n]+\n(?:[ \t]+[^\n]*\n?)*/gm) ?? [];
+    expect(blocks.length).toBe(requirements.length);
+    for (const block of blocks) expect(block).toMatch(/--hash=sha256:[0-9a-f]{64}/);
+    const pins = requirements.map((line) => line.replace(/\s*\\$/, ''));
+    for (const pin of direct) expect(pins).toContain(pin);
+    expect(lock).not.toMatch(/git\+|^[\w.-]+\s*@/m);
+    expect(lock).toMatch(/^setuptools==/m);
+    expect(lock).toMatch(/^wheel==/m);
+  });
+
+  it('syncs the lock, then installs only the pinned checkout without dependencies, on Install and Repair', () => {
+    const install = installer();
+    const env = { ALLOW_LOCAL_INSTALL: '1' };
+    expect(install.run(env)).toContain('ACE-Step venv ready');
+    expect(install.run(env)).toContain('ACE-Step venv ready');
+    const commands = install.commands().split('\n');
+    const syncs = commands.filter((line) => line.startsWith('uv pip sync'));
+    expect(syncs).toHaveLength(2);
+    for (const sync of syncs) {
+      expect(sync).toContain('--require-hashes --only-binary :all: --no-binary docopt --no-binary unidic-lite');
+      expect(sync).toContain(`requirements-acestep-cuda-${target}.lock.txt`);
+    }
+    const checkouts = commands.filter((line) => /^git -C \S+ checkout /.test(line));
+    expect(checkouts).toHaveLength(2);
+    for (const checkout of checkouts) expect(checkout).toContain('1bee4c9f5b43e30995f8d4d33b3919197ce1bd68');
+    const localInstalls = commands.filter((line) => line.startsWith('uv pip install'));
+    expect(localInstalls).toHaveLength(2);
+    for (const line of localInstalls) expect(line).toContain('--no-deps --no-build-isolation');
+    expect(install.commands()).not.toMatch(/--upgrade|git\+|python -m pip/);
+    expect(install.commands()).toContain('from acestep.pipeline_ace_step import ACEStepPipeline');
+  });
+
+  it('does not report ready or install the package when the lock sync fails', () => {
+    const install = installer();
+    let result;
+    try { install.run({ SYNC_EXIT: '42', ALLOW_LOCAL_INSTALL: '1' }); } catch (error) { result = error; }
+    expect(result).toBeDefined();
+    expect(result.stdout).not.toContain('ACE-Step venv ready');
+    expect(install.commands()).not.toContain('uv pip install');
+  });
+
+  it('refuses a CUDA index the locks were not compiled for', () => {
+    let result;
+    try { installer().run({ PORTOS_TORCH_CUDA_INDEX: 'https://download.pytorch.org/whl/cu132' }); } catch (error) { result = error; }
+    expect(result?.stderr).toContain('ACE-Step CUDA is locked to cu126');
+  });
+});
+
+describe('ACE-Step 1.5 Apple Silicon install is hash-pinned', () => {
+  const lock = readFileSync(join(REPO_ROOT, 'scripts', 'requirements-acestep15-mlx.lock.txt'), 'utf8');
+  const section = source.slice(source.indexOf('INSTALL_ACESTEP15" == "1"'), source.indexOf('INSTALL_MINIMAX_MUSIC3="${'));
+  const [appleBranch, otherBranch] = section.split(/^  else$/m);
+
+  it('every locked package carries a sha256 hash, none comes from a VCS or URL source, and all are arm64-macOS scoped', () => {
+    const blocks = lock.split(/\n(?=[a-z][^\n]*==)/i).filter((b) => /^[a-z][^\n]*==/i.test(b));
+    expect(blocks.length).toBeGreaterThan(0);
+    for (const block of blocks) {
+      expect(block).toMatch(/--hash=sha256:[0-9a-f]{64}/);
+      const pin = block.split('\n')[0];
+      expect(pin).toContain("sys_platform == 'darwin'");
+      expect(pin).toContain("platform_machine == 'arm64'");
+    }
+    expect(lock).not.toMatch(/^[a-z][^\n]* @ /im);
+  });
+
+  it('Apple Silicon installs from the lock with --require-hashes and resolves nothing', () => {
+    expect(appleBranch).toContain('is_apple_silicon');
+    expect(appleBranch).toContain('pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-acestep15-mlx.lock.txt"');
+    expect(appleBranch).toContain('pip install --no-deps --no-build-isolation --ignore-requires-python "${ACESTEP15_DIR}"');
+    expect(appleBranch).not.toMatch(/pip install --upgrade/);
+  });
+
+  it('refuses a Python older than the 3.11 floor the lock was compiled for', () => {
+    expect(appleBranch).toContain('sys.version_info[:2] >= (3, 11)');
+  });
+
+  it('installs nothing on Linux/Windows outside the hash-pinned CUDA locks and the pinned checkout', () => {
+    expect(otherBranch).not.toMatch(/pip install --upgrade|git\+/);
+  });
+});
+
+describe.each(['windows', 'linux'])('ACE-Step 1.5 %s Install/Repair', (target) => {
+  const direct = readFileSync(join(REPO_ROOT, 'scripts/requirements-acestep15-cuda.txt'), 'utf8')
+    .split(/\r?\n/).filter((line) => /^[\w.-]+(\[[\w,-]+\])?==/.test(line))
+    .map((line) => line.replace(/\[[\w,-]+\]/, ''));
+  const installer = () => lockedCudaInstaller(target, { flag: 'INSTALL_ACESTEP15', probe: 'generate_music' });
+
+  it('locks every distribution with hashes and no VCS source', () => {
+    const lock = readFileSync(join(REPO_ROOT, 'scripts', `requirements-acestep15-cuda-${target}.lock.txt`), 'utf8');
+    const requirements = lock.split(/\r?\n/).filter((line) => /^\w/.test(line));
+    const blocks = lock.match(/^[\w.-]+==[^\n]+\n(?:[ \t]+[^\n]*\n?)*/gm) ?? [];
+    expect(blocks.length).toBe(requirements.length);
+    for (const block of blocks) expect(block).toMatch(/--hash=sha256:[0-9a-f]{64}/);
+    const pins = requirements.map((line) => line.replace(/\s*\\$/, ''));
+    for (const pin of direct) expect(pins).toContain(pin);
+    expect(lock).not.toMatch(/git\+|^[\w.-]+\s*@/m);
+    expect(lock).toMatch(/^setuptools==/m);
+    expect(lock).toMatch(/^hatchling==/m);
+  });
+
+  it('syncs the lock, then installs only the pinned checkout without dependencies, on Install and Repair', () => {
+    const install = installer();
+    const env = { ALLOW_LOCAL_INSTALL: '1' };
+    expect(install.run(env)).toContain('ACE-Step 1.5 venv ready');
+    expect(install.run(env)).toContain('ACE-Step 1.5 venv ready');
+    const commands = install.commands().split('\n');
+    const syncs = commands.filter((line) => line.startsWith('uv pip sync'));
+    expect(syncs).toHaveLength(2);
+    for (const sync of syncs) {
+      expect(sync).toContain('--require-hashes --only-binary :all:');
+      expect(sync).toContain(`requirements-acestep15-cuda-${target}.lock.txt`);
+    }
+    const checkouts = commands.filter((line) => /^git -C \S+ checkout /.test(line));
+    expect(checkouts).toHaveLength(2);
+    for (const checkout of checkouts) expect(checkout).toContain('dce621408bee8c31b4fcf4811682eb9359e1bc94');
+    const localInstalls = commands.filter((line) => line.startsWith('uv pip install'));
+    expect(localInstalls).toHaveLength(2);
+    for (const line of localInstalls) expect(line).toContain('--no-deps --no-build-isolation --ignore-requires-python');
+    expect(install.commands()).not.toMatch(/--upgrade|git\+|python -m pip/);
+  });
+
+  it('does not report ready or install the package when the lock sync fails', () => {
+    const install = installer();
+    let result;
+    try { install.run({ SYNC_EXIT: '42', ALLOW_LOCAL_INSTALL: '1' }); } catch (error) { result = error; }
+    expect(result).toBeDefined();
+    expect(result.stdout).not.toContain('ACE-Step 1.5 venv ready');
+    expect(install.commands()).not.toContain('uv pip install');
+  });
+
+  it('refuses a CUDA index the locks were not compiled for', () => {
+    let result;
+    try { installer().run({ PORTOS_TORCH_CUDA_INDEX: 'https://download.pytorch.org/whl/cu132' }); } catch (error) { result = error; }
+    expect(result?.stderr).toContain('ACE-Step 1.5 CUDA is locked to cu126');
+  });
 });

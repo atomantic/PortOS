@@ -7,7 +7,7 @@ const ZONES = [
 ];
 const ROLE_LABELS = { line: 'Sung line', hook: 'Hook slam', stamp: 'Stamp', data: 'Data caption' };
 const SIZE_LABELS = { small: 'Small', large: 'Large' };
-const SELECT = 'min-w-0 bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0';
+const SELECT = 'min-w-0 bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] pointer-fine:sm:min-h-0';
 
 /**
  * Where the lyrics sung over a shot sit, their style and size. The player and

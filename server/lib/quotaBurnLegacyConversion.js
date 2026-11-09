@@ -150,6 +150,7 @@ export function buildQuotaBurnCustomJob({ id, familyId, stepId, label, appId, pr
     intervalMs: null,
     scheduledTime: null,
     weekdaysOnly: false,
+    scheduleAnchor: null,
     enabled: runnable,
     priority: 'MEDIUM',
     autonomyLevel: UNATTENDED_AUTONOMY_LEVEL,

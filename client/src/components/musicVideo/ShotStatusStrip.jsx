@@ -20,7 +20,7 @@ export default function ShotStatusStrip({ projectId, scenes, ctx }) {
               data-status={codes.length ? 'attention' : 'ready'}
               title={`Scene ${scene.order + 1}: ${label || 'ready'}`}
               aria-label={`Scene ${scene.order + 1}: ${label || 'ready'}`}
-              className={`flex min-h-[44px] min-w-[44px] items-center justify-center rounded border text-[11px] sm:min-h-0 sm:min-w-[28px] sm:px-1 sm:py-0.5 ${codes.length ? 'border-port-warning/40 bg-port-warning/10 text-port-warning' : 'border-port-success/40 bg-port-success/10 text-port-success'}`}
+              className={`flex min-h-[44px] min-w-[44px] items-center justify-center rounded border text-[11px] pointer-fine:sm:min-h-0 pointer-fine:sm:min-w-[28px] sm:px-1 sm:py-0.5 ${codes.length ? 'border-port-warning/40 bg-port-warning/10 text-port-warning' : 'border-port-success/40 bg-port-success/10 text-port-success'}`}
             >
               {scene.order + 1}
             </Link>

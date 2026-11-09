@@ -271,6 +271,31 @@ describe('production scene dispatch (#9066)', () => {
     expect(submitVideoGenJob.mock.calls[0][0].disableAudio).toBeUndefined();
   });
 
+  // Uniquely catches a References run clip dropping the shot's references or sending a short clip, song audio or end frame.
+  it('submits a References-bound local clip as ic-ingredients-25 with the shot clip references (#15482)', async () => {
+    const clipTag = { ...tag, productionStepKey: 'clip:mvs-a:base:1' };
+    const route = { kind: 'video', mode: 'local', model: 'ltx25_example', references: 'ltx' };
+    const refProject = { ...project, visualSpec: { references: [{ id: 'mvr-a', imageId: 'ref-example.png', role: 'character', label: 'Lou', condition: true }] } };
+    await dispatchProductionStep({ stepKind: 'clip', project: refProject, scene: { ...scene, endImageId: 'end.png' }, route, tag: clipTag, settings });
+    const body = submitVideoGenJob.mock.calls[0][0];
+    expect(body).toMatchObject({ backend: 'local', mode: 'ic-ingredients-25', modelId: 'ltx25_example', numFrames: 121, icReferenceImageFiles: ['ref-example.png'], disableAudio: true });
+    expect(body.musicVideo.expectedClipReferenceFiles).toEqual(['ref-example.png']);
+    expect(body).not.toHaveProperty('lastImageFile');
+    // A model that is not LTX 2.5 renders as the plain clip it always did.
+    await dispatchProductionStep({ stepKind: 'clip', project: refProject, scene, route: { ...route, model: 'fastmetal_example' }, tag: clipTag, settings });
+    expect(submitVideoGenJob.mock.calls[1][0]).toMatchObject({ mode: 'image' });
+    expect(submitVideoGenJob.mock.calls[1][0]).not.toHaveProperty('icReferenceImageFiles');
+  });
+
+  // Uniquely catches a References run clip going out with no reference sheet.
+  it('refuses a References clip whose shot has no clip reference', async () => {
+    const clipTag = { ...tag, productionStepKey: 'clip:mvs-a:base:1' };
+    await expect(dispatchProductionStep({ stepKind: 'clip', project: { ...project, visualSpec: { references: [] } }, scene,
+      route: { kind: 'video', mode: 'local', model: 'ltx25_example', references: 'ltx' }, tag: clipTag, settings }))
+      .rejects.toMatchObject({ code: 'PRODUCTION_CLIP_REFERENCES_MISSING' });
+    expect(submitVideoGenJob).not.toHaveBeenCalled();
+  });
+
   // Uniquely catches a production run rendering a cold-open shot with Clip sound silent (the shot card keeps its sound).
   it('keeps a local clip\'s sound only on a cold-open shot playing its clip sound', async () => {
     const clipTag = { ...tag, productionStepKey: 'clip:mvs-a:base:1' };

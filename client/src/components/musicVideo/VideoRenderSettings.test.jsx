@@ -1,6 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 vi.mock('../../services/apiRunwayCatalog.js', async (importOriginal) => ({ ...await importOriginal(), loadRunwayCatalog: vi.fn().mockResolvedValue(undefined) }));
 import { render, screen, fireEvent } from '@testing-library/react';
+const adapterDownload = vi.hoisted(() => ({ current: { getStatus: () => ({ cached: true }), startWhenIdle: () => {}, cancel: () => {}, queuedModelId: null, statusError: null } }));
+vi.mock('../../hooks/useModelDownloadStatus.js', () => ({ useModelDownloadStatus: () => adapterDownload.current }));
 vi.mock('../../hooks/useFederatedMediaTarget.js', () => ({ useFederatedMediaTarget: () => ({ peers: [] }) }));
 import VideoRenderSettings from './VideoRenderSettings.jsx';
 import { RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL } from '../../lib/runwayVideoModels.js';
@@ -30,5 +32,39 @@ describe('VideoRenderSettings catalog failure', () => {
     render(<VideoRenderSettings videoSettings={{ ...base, catalogStatus: 'ready', retryCatalog: vi.fn() }} />);
     expect(screen.getByText('audio-reactive unavailable')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+  });
+});
+
+describe('LTX 2.5 References generation mode (#15482)', () => {
+  const ltx = { id: 'ltx25_example', name: 'LTX 2.5 Example', runtime: 'ltx25' };
+  const local = { ...base, settings: { ...base.settings, generationMode: 'image' }, audioReactiveSelected: false, models: [ltx],
+    ltxReferencesModels: [ltx], ltxReferencesSelected: false, catalogStatus: 'ready' };
+
+  it('lists the mode with an LTX 2.5 model and saves it with that model pinned', () => {
+    const change = vi.fn();
+    render(<VideoRenderSettings videoSettings={{ ...local, change }} />);
+    fireEvent.change(screen.getByLabelText('Scene generation mode'), { target: { value: 'ltxReferences' } });
+    expect(change).toHaveBeenCalledWith({ generationMode: 'ltxReferences', modelId: 'ltx25_example' });
+  });
+
+  it('disables the option without an LTX 2.5 model and explains the selected mode', () => {
+    const { unmount } = render(<VideoRenderSettings videoSettings={{ ...local, models: [], ltxReferencesModels: [] }} />);
+    expect(screen.getByRole('option', { name: /LTX 2.5 References/ }).disabled).toBe(true);
+    unmount();
+    render(<VideoRenderSettings videoSettings={{ ...local, settings: { ...local.settings, generationMode: 'ltxReferences', modelId: 'ltx25_example' }, ltxReferencesSelected: true }} />);
+    expect(screen.getByText(/clip references as IC references/)).toBeTruthy();
+  });
+
+  it('shows the Ingredients adapter cache state and downloads it in place', () => {
+    const startWhenIdle = vi.fn();
+    const adapter = { id: 'ic-ingredients-25', repo: 'example/adapter', cached: false };
+    adapterDownload.current = { getStatus: (id) => (id === 'ic-ingredients-25' ? adapter : null), startWhenIdle, cancel: vi.fn(), queuedModelId: null, statusError: null };
+    const selected = { ...local, settings: { ...local.settings, generationMode: 'ltxReferences', modelId: 'ltx25_example' }, ltxReferencesSelected: true };
+    const { rerender } = render(<VideoRenderSettings videoSettings={selected} />);
+    fireEvent.click(screen.getByRole('button', { name: /Download/ }));
+    expect(startWhenIdle).toHaveBeenCalledWith('ic-ingredients-25');
+    adapterDownload.current = { ...adapterDownload.current, getStatus: () => ({ ...adapter, cached: true }) };
+    rerender(<VideoRenderSettings videoSettings={{ ...selected }} />);
+    expect(screen.getByRole('group', { name: 'LTX 2.5 References adapter' }).textContent).toMatch(/Available/);
   });
 });

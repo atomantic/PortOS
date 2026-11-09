@@ -15,6 +15,12 @@ vi.mock('./forgeAuth.js', () => ({
   resolveForgeTokenEnv: vi.fn(async () => ({}))
 }));
 
+// The live CoS claim registry the in-flight scan reads; null = unreadable.
+let cosAgents = {};
+vi.mock('./cosState.js', () => ({
+  readAgentsStateForSafetyCheck: async () => (cosAgents ? { trusted: true, agents: cosAgents } : { trusted: false, agents: null })
+}));
+
 import { spawn } from '../lib/childProcess.js';
 vi.mock('../lib/windowsGitProcess.js', async importOriginal => ({
   ...await importOriginal(), startGit: (args, options, wire) => wire(spawn('git', args, options)),
@@ -594,6 +600,57 @@ describe('perpetualWork', () => {
       const out = await detectGithubIssues(app, { issueAuthorFilter: 'any' });
       expect(out).toMatchObject({ actionable: false, reason: 'gh-unavailable', transient: true });
       expect(out.inFlightCount).toBeUndefined();
+    });
+
+    it('counts a live run\'s claim binding in flight before its branch, PR or markers exist', async () => {
+      // A pinned claim run binds its branch at dispatch but cuts it and labels
+      // the issue only after pre-claim checks; a picker dispatched in that
+      // window was refused by the ownership bind on every spawn.
+      cosAgents = {
+        pinned: { id: 'pinned', status: 'running', metadata: { sourceWorkspace: '/repo', claimBranch: 'claim/issue-4' } },
+        picker: { id: 'picker', status: 'paused', metadata: { workspacePath: '/repo', claimBranches: ['claim/issue-5', 'claim/issue-6'], claimReleasedBranches: ['claim/issue-6'] } },
+        done: { id: 'done', status: 'completed', metadata: { sourceWorkspace: '/repo', claimBranches: ['claim/issue-1'] } },
+        other: { id: 'other', status: 'running', metadata: { sourceWorkspace: '/elsewhere', claimBranches: ['claim/issue-2'] } },
+      };
+      try {
+        routeSpawn({
+          'gh issue': { stdout: JSON.stringify([1, 2, 4, 5, 6].map(number => ({ number, title: `#${number}`, assignees: [], labels: [] }))) },
+          'git branch': { stdout: 'main\n' },
+          'gh pr': { stdout: '' }
+        });
+        const out = await detectGithubIssues(app, { issueAuthorFilter: 'any' });
+        expect(out).toMatchObject({ count: 3, inFlightCount: 2, sample: [1, 2, 6] });
+
+        cosAgents = { pinned: cosAgents.pinned };
+        routeSpawn({
+          'gh issue': { stdout: JSON.stringify([{ number: 4, title: 'owned', assignees: [], labels: [] }]) },
+          'git branch': { stdout: 'main\n' },
+          'gh pr': { stdout: '' }
+        });
+        expect(await detectGithubIssues(app, { issueAuthorFilter: 'any' }))
+          .toMatchObject({ actionable: false, reason: 'no-actionable-issues', inFlightCount: 1 });
+        // The refill a task's completion triggers ignores that task's own run.
+        cosAgents.pinned.taskId = 'task-done';
+        expect(await detectGithubIssues(app, { issueAuthorFilter: 'any', ignoreTaskId: 'task-done' }))
+          .toMatchObject({ actionable: true, count: 1, inFlightCount: 0 });
+      } finally {
+        cosAgents = {};
+      }
+    });
+
+    it('stays transient when the live claim registry is unreadable', async () => {
+      cosAgents = null;
+      try {
+        routeSpawn({
+          'gh issue': { stdout: JSON.stringify([{ number: 7, title: 'maybe owned', assignees: [], labels: [] }]) },
+          'git branch': { stdout: 'main\n' },
+          'gh pr': { stdout: '' }
+        });
+        expect(await detectGithubIssues(app, { issueAuthorFilter: 'any' }))
+          .toMatchObject({ actionable: false, reason: 'claim-ownership-unreadable', transient: true });
+      } finally {
+        cosAgents = {};
+      }
     });
 
     it('reports the open/in-flight breakdown when nothing is claimable (the "40 open but parked" case)', async () => {

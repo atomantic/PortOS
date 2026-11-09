@@ -348,6 +348,16 @@ describe('generic notification-resolve lane (#13191)', () => {
     expect(agentHandoff({ account, row: ownPr })).toEqual({ lane: 'notification-resolve', repo: 'acme/app' });
   });
 
+  it('takes your own PR into someone else\'s repo when that repo\'s owner replied, and nothing else they wrote', () => {
+    const upstream = { ...ownPr, repo_full_name: 'upstream/project',
+      evidence: { ...ownPr.evidence, repoOwned: false, commenter: 'maintainer', commenterTrust: 'outside', commenterMaintainer: true } };
+    expect(agentHandoff({ account, row: upstream })).toEqual({ lane: 'notification-resolve', repo: 'upstream/project' });
+    expect(agentHandoff({ account, row: { ...upstream, subject_type: 'Issue' } }).refused).toBeTruthy();
+    expect(agentHandoff({ account, row: { ...upstream, trust: 'trusted' } })).toMatchObject({ refused: 'outside-content' });
+    expect(agentHandoff({ account, row: { ...upstream, evidence: { ...upstream.evidence, commenterMaintainer: false } } }))
+      .toMatchObject({ refused: 'outside-content' });
+  });
+
   it('refuses outside content that no screened lane takes, including a trusted author with an outside commenter', () => {
     expect(agentHandoff({ account, row: { ...ownPr, trust: 'outside' } })).toMatchObject({ refused: 'outside-content' });
     expect(agentHandoff({ account, row: { ...ownPr, evidence: { ...ownPr.evidence, commenter: 'visitor', commenterTrust: 'outside' } } }))

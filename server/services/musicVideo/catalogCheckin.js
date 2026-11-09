@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { musicVideoAllowsMedia } from '../../lib/musicVideoMediaPolicy.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { characterSheetReferenceCandidates } from '../../lib/characterSheetReferences.js';
-import { pickGuideMedia } from '../../lib/catalogMediaLibrary.js';
+import { listPickableImages, pickGuideMedia } from '../../lib/catalogMediaLibrary.js';
 import { resolveGalleryImage, resolveImageRef } from '../../lib/pathSafety.js';
 import { musicVideoCatalogPickPlans, musicVideoCatalogReferenceId } from '../../lib/musicVideoConditioning.js';
 import { shotNumbers } from '../../lib/musicVideoColdOpen.js';
@@ -57,7 +57,7 @@ export function dropStaleCatalogPicks(current, next) {
   const checkin = current?.castAndSets?.catalogCheckin;
   if (!isCatalogCheckin(next) || !checkin?.items || !Array.isArray(next?.scenes) || !musicVideoAllowsMedia(current, 'image')) return next;
   const kept = new Set((next.concept?.subjects || []).map(subject => subject?.id));
-  const ids = items => new Set(items.flatMap(item => [...(item.images || []), ...(item.retiredImages || [])]
+  const ids = items => new Set(items.flatMap(item => [...(item.images || []), ...(item.pickableImages || []), ...(item.retiredImages || [])]
     .map(filename => musicVideoCatalogReferenceId(item.subjectId, filename))));
   const held = ids(checkin.items.filter(item => kept.has(item.subjectId)));
   const removed = ids(checkin.items.filter(item => !kept.has(item.subjectId)));
@@ -87,7 +87,7 @@ export async function resolveCatalogCheckin(project, { catalog, exists = existsO
   const db = catalog || (subjects.some(subject => subject.ingredientId) ? await import('../catalogDB.js') : null);
   for (const subject of subjects) {
     const item = { subjectId: subject.id, ingredientId: subject.ingredientId || null, formId: subject.castForm?.id || null, formLabel: null,
-      kind: subject.kind, name: subject.name || '', description: '', images: [], retiredImages: [] };
+      kind: subject.kind, name: subject.name || '', description: '', images: [], pickableImages: [], retiredImages: [] };
     items.push(item);
     const problem = (code, message) => problems.push({ subjectId: subject.id, code, message });
     if (!subject.ingredientId) { problem('CATALOG_LINK_REQUIRED', `Link ${item.name || 'this subject'} to a catalog record.`); continue; }
@@ -114,13 +114,18 @@ export async function resolveCatalogCheckin(project, { catalog, exists = existsO
       ? characterSheetReferenceCandidates(payload, scopedRows, item.formId ? { formId: item.formId } : {}).filter(candidate => !candidate.leftOut && (!item.formId || candidate.scope === 'form')).map(candidate => candidate.filename)
       : pickGuideMedia(rows).map(row => row.mediaKey);
     item.images = allowsImages ? [...new Set(candidates.filter(exists))] : [];
+    // Environments and objects: every other usable image stays choosable for an explicit shot pick,
+    // but Auto only conditions on `images` (the 4-image budget). Character picks keep form scoping.
+    item.pickableImages = allowsImages && subject.kind !== 'character'
+      ? [...new Set(listPickableImages(media).map(row => row.mediaKey).filter(key => exists(key) && !item.images.includes(key)))] : [];
     // Still on the record (even a file missing on disk) but not offered: a stale pick names it and is not cleared.
-    item.retiredImages = allowsImages ? [...new Set((media || []).filter(row => !row.deleted).map(row => row.mediaKey).filter(key => typeof key === 'string' && !item.images.includes(key)))] : [];
+    item.retiredImages = allowsImages ? [...new Set((media || []).filter(row => !row.deleted).map(row => row.mediaKey).filter(key => typeof key === 'string' && !item.images.includes(key) && !item.pickableImages.includes(key)))] : [];
     if (allowsImages && !item.images.length) problem('CATALOG_IMAGES_REQUIRED', `Add a usable image to ${item.name}${item.formId ? "'s selected catalog look" : ' in the catalog'}.`);
   }
   if (!items.length) problems.push({ subjectId: null, code: 'CATALOG_SUBJECTS_REQUIRED', message: 'Add cast, environments or objects from the catalog before approving.' });
-  // `retiredImages` stays out of the basis so naming stale picks never stales an approval.
-  const basis = createHash('sha256').update(JSON.stringify({ items: items.map(({ retiredImages: _retired, ...item }) => item), problems, concept: project?.concept?.prompt || '',
+  // `retiredImages` and `pickableImages` stay out of the basis: they widen the choice list for explicit
+  // shot picks without changing the Auto set, so adding an image never stales an approval.
+  const basis = createHash('sha256').update(JSON.stringify({ items: items.map(({ retiredImages: _retired, pickableImages: _pickable, ...item }) => item), problems, concept: project?.concept?.prompt || '',
     song: [project?.trackId || null, project?.uploadedAudioFilename || null] })).digest('hex');
   return { items, problems, basis, approved: isCatalogCheckin(project) && project.castAndSets.status === 'approved'
     && !problems.length && project.castAndSets.catalogApprovedBasis === basis, ...shotReferenceReport(project, items, problems) };

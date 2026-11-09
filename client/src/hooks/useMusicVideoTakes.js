@@ -6,6 +6,7 @@ import {
   placeMusicVideoPoolItem,
   continueMusicVideoSceneFromPrevious,
   reviewMusicVideoSceneTake,
+  checkMusicVideoSceneTake,
   rejectUnusedMusicVideoSceneTakes,
   swapMusicVideoSceneFrames,
   markMusicVideoPoolAssets,
@@ -14,7 +15,7 @@ import {
   importMusicVideoHandoff,
 } from '../services/apiMusicVideo.js';
 import { uploadGalleryImage } from '../services/apiSystem.js';
-import { trimVideoStart, uploadGalleryVideo } from '../services/apiImageVideo.js';
+import { trimVideo, uploadGalleryVideo } from '../services/apiImageVideo.js';
 import { downloadBlob } from '../lib/downloadBlob.js';
 import { validateImageFile } from '../utils/fileUpload.js';
 
@@ -86,9 +87,9 @@ export default function useMusicVideoTakes({ project, applyScenePatch, patchProj
     'Failed to use that take',
   );
 
-  // "Start clip here": the shot's clip from a later frame becomes a new clip take, and the selected one.
+  // "Start/End clip here": a frame range (`{ startSec }` or `{ endSec }`) of the shot's clip becomes a new clip take, and the selected one.
   // It keeps the cut clip's still and provider, so a still change still marks it stale and the pool pairs it.
-  const trimClipTake = (scene, startSec) => {
+  const trimClipTake = (scene, range) => {
     const origin = scene.takes?.find((take) => take.kind === 'video' && take.assetId === scene.videoHistoryId);
     const provenance = {
       ...(origin?.sourceImageId ? { sourceImageId: origin.sourceImageId } : {}),
@@ -96,7 +97,7 @@ export default function useMusicVideoTakes({ project, applyScenePatch, patchProj
       ...(/^[a-z0-9][a-z0-9._-]{0,39}$/i.test(origin?.provider || '') ? { provider: origin.provider } : {}),
     };
     return runTakeOp(
-      (projectId) => trimVideoStart(scene.videoHistoryId, startSec, { silent: true })
+      (projectId) => trimVideo(scene.videoHistoryId, range, { silent: true })
         .then(({ video }) => addMusicVideoSceneTake(projectId, scene.sceneId, { kind: 'video', assetId: video.id, source: 'trimmed', ...provenance }, { silent: true }))
         .then(({ take }) => selectMusicVideoSceneTake(projectId, scene.sceneId, take.takeId, { silent: true })),
       'Failed to trim the clip',
@@ -114,6 +115,17 @@ export default function useMusicVideoTakes({ project, applyScenePatch, patchProj
     (projectId) => reviewMusicVideoSceneTake(projectId, scene.sceneId, take.takeId, review, { silent: true }),
     'Failed to update take',
   );
+
+  // A vision check can take minutes, so it stays off the serialized chain; its answer is the scene as saved after it.
+  const [checking, setChecking] = useState(() => new Set());
+  const checkTake = (scene, take) => {
+    const projectId = project.id;
+    setChecking((prev) => new Set(prev).add(take.takeId));
+    return checkMusicVideoSceneTake(projectId, scene.sceneId, take.takeId, { silent: true })
+      .then((saved) => { applyScene(projectId, saved); return true; })
+      .catch((err) => { toast.error(err?.message || 'Failed to check the frame'); return false; })
+      .finally(() => setChecking((prev) => { const next = new Set(prev); next.delete(take.takeId); return next; }));
+  };
 
   // Mark a take's file bad (or clear it): a project-wide mark, separate from rejecting it from this shot.
   // A mark's answer: the project's marks, and the shots whose takes a Bad mark rejected.
@@ -216,5 +228,5 @@ export default function useMusicVideoTakes({ project, applyScenePatch, patchProj
     if (failures.length) toast.error(failures.slice(0, 3).join(' · '));
   };
 
-  return { busy, selectTake, placePoolItem, trimClipTake, reviewTake, rejectUnusedTakes, swapFrames, markTake, applyPoolMarks, continueFromPrevious, importTake, importClipTake, exportHandoff, exportHandoffBundle, importHandoffFiles };
+  return { busy, selectTake, placePoolItem, trimClipTake, reviewTake, checkTake, checking, rejectUnusedTakes, swapFrames, markTake, applyPoolMarks, continueFromPrevious, importTake, importClipTake, exportHandoff, exportHandoffBundle, importHandoffFiles };
 }

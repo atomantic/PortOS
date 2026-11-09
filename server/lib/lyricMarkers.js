@@ -15,6 +15,10 @@
  * direction's `kind` is its delivery (`spoken`, `whispered`, `shouted`,
  * `silence`, `hits`, `rhythm`, `note`). `line` is the lyric-cue index the
  * marker applies to; a marker after the last line carries the line count.
+ *
+ * A duet sheet's singer is not a marker: `Singer A - line`, `Singer A: line`
+ * and a whole-line `[Singer A]` tag set `voice` on the cue instead, outside
+ * the sung `text` the aligner reads.
  */
 
 import { trimTo } from './textUtils.js';
@@ -87,6 +91,23 @@ function markersForTag(content, line) {
   return out;
 }
 
+export const LYRIC_VOICE_MAX = 60;
+
+// A singer name: up to three words, each capitalized (or a lone letter/digit),
+// so `Singer A` and `Alice` qualify while `oh - yeah` and `[guitar riff]` do not.
+const VOICE_WORD = /^(?:\p{Lu}[\p{L}\p{N}'’.]*|[\p{L}\p{N}])$/u;
+const SPOKEN_PREFIX = /^(\S[^\n]*?)\s*(?:\s[-–—]\s|:\s)\s*(\S.*)$/u;
+
+/** The singer name in `text`, normalized, or null when it reads as a lyric or structure tag. */
+function voiceName(text) {
+  const name = clean(text);
+  if (!name || name.length > LYRIC_VOICE_MAX) return null;
+  const words = name.split(' ');
+  if (words.length > 3 || !words.every((word) => VOICE_WORD.test(word))) return null;
+  if (sectionKind(name) || deliveryKind(name) !== 'note') return null;
+  return name;
+}
+
 const WHOLE_BRACKET = /^\[([^\]]*)\]$/;
 const WHOLE_PAREN = /^\(([^)]*)\)$/;
 const WHOLE_STAR = /^\*([^*]+)\*$/;
@@ -102,11 +123,15 @@ const INLINE_BRACKET = /\[([^\]]*\p{L}[^\]]*)\]/gu;
 export function parseLyricSheet(text) {
   const cues = [];
   const markers = [];
+  // A whole-line `[Name]` tag sings every following line until the next tag.
+  let tagged = null;
   for (const raw of String(text || '').split(/\r?\n/)) {
     const line = raw.trim();
     if (!line) continue;
     const bracket = line.match(WHOLE_BRACKET) || line.match(WHOLE_STAR);
     if (bracket) {
+      const tag = voiceName(bracket[1]);
+      if (tag) { tagged = tag; continue; }
       markers.push(...markersForTag(bracket[1], cues.length));
       continue;
     }
@@ -115,8 +140,15 @@ export function parseLyricSheet(text) {
       markers.push(...markersForTag(paren[1], cues.length));
       continue;
     }
-    const inline = [...line.matchAll(INLINE_BRACKET)].map((m) => m[1]);
-    const sung = inline.length ? line.replace(INLINE_BRACKET, ' ').replace(/\s+/g, ' ').trim() : line;
+    // A lead `[Name] line` or `Name - line` names the singer of this line only.
+    let voice = tagged;
+    let body = line;
+    const lead = line.match(/^\[([^\]]*)\]\s*(\S.*)$/u);
+    const prefixed = lead ? null : line.match(SPOKEN_PREFIX);
+    const leadVoice = lead ? voiceName(lead[1]) : prefixed ? voiceName(prefixed[1]) : null;
+    if (leadVoice) { voice = leadVoice; body = (lead || prefixed)[2]; }
+    const inline = [...body.matchAll(INLINE_BRACKET)].map((m) => m[1]);
+    const sung = inline.length ? body.replace(INLINE_BRACKET, ' ').replace(/\s+/g, ' ').trim() : body;
     if (!sung) {
       for (const tag of inline) markers.push(...markersForTag(tag, cues.length));
       continue;
@@ -124,7 +156,7 @@ export function parseLyricSheet(text) {
     for (const tag of inline) {
       markers.push(...markersForTag(tag, cues.length).map((m) => (m.type === 'section' ? m : { ...m, type: 'direction' })));
     }
-    cues.push({ text: sung, startSec: null, endSec: null });
+    cues.push({ text: sung, startSec: null, endSec: null, ...(voice ? { voice } : {}) });
   }
   return { cues, markers };
 }
@@ -270,6 +302,7 @@ export function relabelAnalysisSections(analysis, cues, markers) {
   const spans = lyricSectionSpans(cues, markers);
   const sections = analysis.sections.map((section) => {
     const base = restore(section);
+    if (base.labelSource === 'manual') return base; // the director named it
     if (spans.length === 0) return base;
     const length = base.endSec - base.startSec;
     if (!(length > 0)) return base;

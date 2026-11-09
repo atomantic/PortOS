@@ -3,6 +3,7 @@ import PlateComparison from './PlateComparison.jsx';
 import ShotActionInspector from './ShotActionInspector.jsx';
 import SceneCameraControls from './SceneCameraControls.jsx';
 import SceneStartFrame from './SceneStartFrame.jsx';
+import SceneClipLength from './SceneClipLength.jsx';
 import SceneClipTiming from './SceneClipTiming.jsx';
 import SceneRejectUnused from './SceneRejectUnused.jsx';
 import ShotFinalRender from './ShotFinalRender.jsx';
@@ -14,10 +15,11 @@ import { normalizeShotSheet, shotSheetDrivesPrompt, shotSheetPromptLines } from 
 import TabPills from '../ui/TabPills.jsx';
 import AutoSizeTextarea from '../ui/AutoSizeTextarea.jsx';
 import InfoTooltip from '../ui/InfoTooltip';
+import { LTX_REFERENCES_GENERATION_MODE, isLtx25Model, ltxReferenceSheetPrefix, ltxReferencesUnavailableReason } from '../../lib/musicVideoLtxReferences.js';
 import SceneStoryboardClip, { storyboardClipOffered } from './SceneStoryboardClip.jsx';
 import { MUSIC_VIDEO_MEDIUM_LABELS } from '../../../../server/lib/musicVideoMediumPlan.js';
 import { storyboardShotDirection } from '../../../../server/lib/musicVideoShotPrompt.js';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Trash2, Activity, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, X, Video, AlertTriangle, Clapperboard, Shuffle } from 'lucide-react';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
 import SceneTakePicker from './SceneTakePicker.jsx';
@@ -44,8 +46,8 @@ const LAYER_LABELS = { footage: 'Footage', still: 'Still image', card: 'Title ca
 const STILL_MOVE_LABELS = [['hold', 'Hold'], ['push', 'Push in'], ['pan', 'Pan']];
 // #10583: the shared lyric type's zone and style for this shot (composition documents).
 const SHOT_MODE_LABELS = { cutaway: 'Cutaway', performance: 'Performance (lip-sync)', music: 'Performance (music-driven)' };
-const PRIMARY_BUTTON = 'flex items-center gap-1 bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap';
-const SECONDARY_BUTTON = 'flex items-center gap-1 bg-port-bg border border-port-border hover:bg-port-border/40 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0 whitespace-nowrap';
+const PRIMARY_BUTTON = 'flex items-center gap-1 bg-port-accent text-white hover:bg-port-accent/80 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] pointer-fine:sm:min-h-0 whitespace-nowrap';
+const SECONDARY_BUTTON = 'flex items-center gap-1 bg-port-bg border border-port-border hover:bg-port-border/40 disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] pointer-fine:sm:min-h-0 whitespace-nowrap';
 import { buildSceneTimingPresentation } from '../../lib/musicVideoSceneTiming.js';
 import SceneTimingPlan from './SceneTimingPlan.jsx';
 import SceneShotCuts, { SceneCutField, SceneDuration } from './SceneShotCuts.jsx';
@@ -153,7 +155,7 @@ function SceneOrderActions({ index, isLast, manifestOwnsShots, onMove, onDelete 
             onConfirm={() => { setConfirming(false); onDelete(); }} onCancel={() => setConfirming(false)} responsiveTouchTargets />
         ) : (
           <button type="button" onClick={() => setConfirming(true)}
-            className="ml-auto flex min-h-[44px] items-center gap-1 rounded px-2 py-1.5 text-xs text-port-error hover:bg-port-error/15 sm:min-h-0">
+            className="ml-auto flex min-h-[44px] items-center gap-1 rounded px-2 py-1.5 text-xs text-port-error hover:bg-port-error/15 pointer-fine:sm:min-h-0">
             <Trash2 size={12} aria-hidden="true" /> Delete shot
           </button>
         ))}
@@ -180,19 +182,27 @@ export default function SceneCard({
   settingsSaving, videoBlockedReason, videoBlockedReasonFor = null, canContinueShot,
   onMove, onDelete, onEditLocal, onSave,
   project = null, castMedia = null, onReloadCastMedia = null, greyboxPlaces = {}, onGenerateFrame, onGenerateVideo, onContinueVideo, onGenerateEndFrame, generatingEndFrame = false, onContinueFromPrevious, previousHasClip = false,
-  onOpenPreview, onSelectTake, onReviewTake, onRejectUnusedTakes = null, onSwapFrames = null, onMarkTake = null, onPoolMarked = null, onImportTake, onImportClipTake, onPlacePoolItem, onTrimClip, projectId = null, aspect = '16:9', videoModels = [], defaultVideoModel = '', shotNumbers = undefined, takeBusy = false, layered = false, documentComposition = false, manifestOwnsShots = false,
+  onOpenPreview, onSelectTake, onReviewTake, onRejectUnusedTakes = null, onSwapFrames = null, onMarkTake = null, onCheckTake = null, checkingTakes = null, onPoolMarked = null, onImportTake, onImportClipTake, onPlacePoolItem, onTrimClip, projectId = null, aspect = '16:9', videoModels = [], defaultVideoModel = '', shotNumbers = undefined, takeBusy = false, layered = false, documentComposition = false, manifestOwnsShots = false,
   lipSyncBackend = '', songDurationSec = null, onSplit, onMergeNext, onMergePrevious = null, prevStartSec = null, onMoveStart = null, onMoveEnd = null, nextEndSec = null, falVideoSettings = null, performanceReview = null, onRepairPerformance, repairBusy = false,
   onClose = null, locked = false, stepShot = null, footageOptional = false, failedScenes = null, songReview = null,
   storyboardId = null, storyboardShot = null, onStoryboardBoard = null, onApplyCameos = null, onVaryWipes = null,
 }) {
   // Keep playback mounted even when this shot shows a still or performance evidence.
-  const clipPlayback = useSceneClipPlayback(scene);
-  const { clipSrc, clipSec, clipSize, loops, playedSec } = clipPlayback;
+  const clipPlayback = useSceneClipPlayback(scene, project?.scenes);
+  const { clipSrc, clipSec, clipSize, loops, playedSec, spanExtraSec } = clipPlayback;
   const [speakerDirty, setSpeakerDirty] = useState(false);
   const [speakerSaving, setSpeakerSaving] = useState(false);
   const [clipReferenceSaveState, setClipReferenceSaveState] = useState('saved');
   // Which slot's "Swap from unused" picker is open: 'image', 'video' or null.
   const [swapKind, setSwapKind] = useState(null);
+  // Fields typed in since they last loaded: a blur saves only those, so an untouched box never writes a stale copy over a newer edit made elsewhere.
+  const dirtyFields = useRef(new Set());
+  const markDirty = (key) => dirtyFields.current.add(key);
+  const saveIfDirty = (key, patch) => {
+    if (!dirtyFields.current.has(key)) return;
+    dirtyFields.current.delete(key);
+    Promise.resolve(onSave(scene.sceneId, patch)).then((saved) => { if (saved === false) markDirty(key); }, () => markDirty(key));
+  };
   const applyPatch = (patch) => { onEditLocal(scene.sceneId, patch); onSave(scene.sceneId, patch); };
   const layer = MUSIC_VIDEO_VISUAL_LAYERS.includes(scene.visualLayer) ? scene.visualLayer : 'footage';
   const lead = (project?.scenes || []).filter(s => !isPreMusicShot(s)).slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
@@ -230,7 +240,7 @@ export default function SceneCard({
     excerptStartSec: performanceReview?.excerptStartSec, backend: lipSyncBackend, videoSettings: falVideoSettings || {} });
   const shotModeId = `mv-shot-mode-${scene.sceneId}`;
   // #10152: what needs the director's attention, visible without opening the card.
-  const attention = sceneAttention(scene, { layered, footageOptional, lipSyncBackend, songDurationSec, clipSec: playedSec, failed: failedScenes || {}, songReview, videoSettings: falVideoSettings });
+  const attention = sceneAttention(scene, { layered, footageOptional, lipSyncBackend, songDurationSec, clipSec: playedSec, spanExtraSec, failed: failedScenes || {}, songReview, videoSettings: falVideoSettings });
   const songChange = songReview?.[scene.sceneId];
   // Every clip in flight for this shot, each with where it renders. A render whose
   // request is still on its way has no job yet: Render waits for it, so a double tap
@@ -253,28 +263,40 @@ export default function SceneCard({
   // Storyboard-to-clip chaining cannot yet pass LTX reference inputs. Offer
   // them after the storyboard's first frame has landed instead.
   const storyboardDefault = storyboardClipOffered({ scene, layer, performance });
-  const ltxReferencesAvailable = !performance && referenceBackend === 'local' && referenceModel?.runtime === 'ltx25'
+  const ltxReferencesAvailable = !performance && referenceBackend === 'local' && isLtx25Model(referenceModel)
     && renderSettings?.generationMode !== 'audioReactive';
   const canUseLtxReferences = ltxReferencesAvailable && !storyboardDefault;
   const ltxReferencesGreyboxBlocked = !!scene.setReference?.greyboxShotId;
+  // The project's LTX 2.5 References mode makes the box default on; unticking is this shot's override.
+  const ltxReferencesProjectDefault = renderSettings?.generationMode === LTX_REFERENCES_GENERATION_MODE && !ltxReferencesGreyboxBlocked;
+  // Say why References is not offered instead of hiding the option, but only where
+  // LTX is in play: on Grok, fal or Runway the shot sends its own references.
+  const ltxReferencesRelevant = referenceBackend === 'local' || renderSettings?.generationMode === LTX_REFERENCES_GENERATION_MODE;
+  const ltxReferencesReason = layer === 'footage' && !canUseLtxReferences && ltxReferencesRelevant
+    ? ltxReferencesUnavailableReason({ performance, backend: referenceBackend, model: referenceModel,
+      audioReactive: renderSettings?.generationMode === 'audioReactive', storyboardDefault })
+    : null;
   // References the director picked turn the box on. Auto cast does not, since it
   // costs the shot its song audio. Unticking, or asking for song audio or an end frame, wins.
   const ltxReferencesPicked = !ltxReferencesGreyboxBlocked && scene.clipReferenceIds?.length > 0;
-  const useLtxReferences = canUseLtxReferences && (renderInputs.ltxReferences ?? ltxReferencesPicked);
+  const useLtxReferences = canUseLtxReferences && (renderInputs.ltxReferences ?? (ltxReferencesProjectDefault || ltxReferencesPicked));
   // Exactly what Render sends: the prompt as typed and the inputs the card toggles.
   const cardRequest = shotCardRenderRequest({ project, scene, castMedia, greybox, settings: renderSettings || {}, performance, endFramePlan,
     models: videoModels, defaultModel: defaultVideoModel, inputs: useLtxReferences ? { ...renderInputs, songAudio: false, endFrame: false } : renderInputs, plan: timing.plan });
   // Most Runway models cannot mix keyframes with references, so an end frame sends none there.
   const runwayEndFrameOn = referenceBackend === 'runway' && cardRequest.endFrame?.state === 'on';
   const endFrameBlocksReferences = runwayEndFrameOn && !!referenceModel?.referenceImages && !referenceModel.referenceImages.keepsFrames;
-  const referenceCapacity = useLtxReferences ? 8 : musicVideoClipReferenceCapacity(referenceBackend, referenceModel, { endFrame: runwayEndFrameOn });
+  // Grok can take the start frame as a layout reference instead of the locked opening frame,
+  // so the people it shows can take the clip references' likeness.
+  const startFrameLayout = referenceBackend === 'grok' && !storyboardDefault && renderInputs.startFrameLayout === true;
+  const referenceCapacity = useLtxReferences ? 8 : musicVideoClipReferenceCapacity(referenceBackend, referenceModel, { endFrame: runwayEndFrameOn, startFrameLayout });
   const guidesPending = referenceCapacity > 0 && castMedia && musicVideoSceneCastIds(project, scene).some((id) => castMedia[id] === undefined);
   // A failed read (null) would otherwise send the clip without the member's guides.
   const guidesFailed = referenceCapacity > 0 && castMedia && musicVideoSceneCastIds(project, scene).some((id) => castMedia[id] === null);
   const availableReferences = musicVideoClipReferenceChoices(project, scene, castMedia);
   const selectedClipReferences = musicVideoClipConditioningReferences(project, scene, castMedia, { limit: referenceCapacity });
   const referenceLabels = selectedClipReferences.map((ref) => ref.label || ref.role || 'visual reference');
-  const referenceSheetPrefix = `Reference sheet: ${referenceLabels.join(', ')}.\n\nGenerated video: `;
+  const referenceSheetPrefix = ltxReferenceSheetPrefix(referenceLabels);
   const previewRequest = useLtxReferences ? { ...cardRequest,
     prompt: `${referenceSheetPrefix}${cardRequest.prompt}`,
     promptAdditions: [{ id: 'ltx-reference-sheet', label: 'Reference sheet', text: referenceSheetPrefix.trim() }, ...cardRequest.promptAdditions],
@@ -314,7 +336,9 @@ export default function SceneCard({
       ...(wholeLine?.state === 'on' ? { wholeLine: true } : {}),
       expectedClipReferenceFiles: selectedClipReferences.map((ref) => ref.imageId),
       ...songAudioField,
-      ...(useLtxReferences ? { ltxReferences: true, songAudio: false, endFrame: false, expectedClipReferenceLabels: referenceLabels } : {}),
+      ...(useLtxReferences ? { ltxReferences: true, songAudio: false, endFrame: false, expectedClipReferenceLabels: referenceLabels }
+        : canUseLtxReferences && ltxReferencesProjectDefault ? { ltxReferences: false } : {}),
+      ...(startFrameLayout ? { startFrameLayout: true } : {}),
     };
     onGenerateVideo?.(scene, { ...(renderOverrides ? { target: renderOverrides } : {}), card });
   };
@@ -368,21 +392,21 @@ export default function SceneCard({
     <div className="space-y-1">
       {scene.beatNeedsReview && <div className="flex flex-wrap items-center gap-2 text-xs text-port-warning">
         <span>Needs its own beat — this prompt was copied from the longer shot.</span>
-        <button type="button" onClick={() => applyPatch({ beatNeedsReview: false })} className="min-h-[44px] rounded border border-port-border px-2 sm:min-h-0">Mark beat ready</button>
+        <button type="button" onClick={() => applyPatch({ beatNeedsReview: false })} className="min-h-[44px] rounded border border-port-border px-2 pointer-fine:sm:min-h-0">Mark beat ready</button>
       </div>}
       <div className="flex items-center gap-1 text-[11px] text-port-text-muted">
-        <label htmlFor={fieldId('prompt')}>{layer === 'footage' ? 'Motion prompt' : 'Shot prompt'}</label>
-        <InfoTooltip label={layer === 'footage' ? 'About the motion prompt' : 'About the shot prompt'} placement="below" align="start" width={280}>
+        <label htmlFor={fieldId('prompt')}>{layer === 'footage' ? 'Clip prompt' : 'Shot prompt'}</label>
+        <InfoTooltip label={layer === 'footage' ? 'About the clip prompt' : 'About the shot prompt'} placement="below" align="start" width={280}>
           {layer === 'footage'
-            ? `What happens during the clip. The video model gets this text with the start frame (and end frame, if used)${fromSheet ? ', followed by the shot details' : ''}. What the still looks like is its own prompt on the Frames tab.`
-            : 'Describes the shot. The still renders from it only when its own still prompt is empty.'}
+            ? `What happens during the clip. The video model gets this text with the start frame (and end frame, if used)${fromSheet ? ', followed by the shot details' : ''}. What the frame looks like is its own prompt on the Frames tab.`
+            : 'Describes the shot. The frame renders from it only when its own frame prompt is empty.'}
         </InfoTooltip>
       </div>
       <AutoSizeTextarea
         id={fieldId('prompt')}
         value={followsBoard ? boardDirection : scene.prompt || ''} rows={3}
-        onChange={(e) => onEditLocal(scene.sceneId, { prompt: e.target.value })}
-        onBlur={(e) => onSave(scene.sceneId, { prompt: boardDirection && e.target.value.trim() === boardDirection ? '' : e.target.value })}
+        onChange={(e) => { markDirty('prompt'); onEditLocal(scene.sceneId, { prompt: e.target.value }); }}
+        onBlur={(e) => saveIfDirty('prompt', { prompt: boardDirection && e.target.value.trim() === boardDirection ? '' : e.target.value })}
         placeholder={layer === 'footage' ? 'What happens in this shot' : 'What this shot shows'}
         className="block w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm"
       />
@@ -391,7 +415,7 @@ export default function SceneCard({
       ) : (
         <div className="flex flex-wrap items-center gap-2 text-[11px] text-port-text-muted" data-testid="prompt-own">
           <span>This shot's own prompt, not the panel's</span>
-          <button type="button" onClick={() => { onEditLocal(scene.sceneId, { prompt: '' }); onSave(scene.sceneId, { prompt: '' }); }} className="underline min-h-[44px] sm:min-h-0">Use storyboard direction</button>
+          <button type="button" onClick={() => { dirtyFields.current.delete('prompt'); onEditLocal(scene.sceneId, { prompt: '' }); onSave(scene.sceneId, { prompt: '' }); }} className="underline min-h-[44px] pointer-fine:sm:min-h-0">Use storyboard direction</button>
         </div>
       ))}
     </div>
@@ -422,7 +446,7 @@ export default function SceneCard({
     : 'not in the prompts';
   const detailsGroup = !codeShot && layer !== 'card' && (
     <ShotEditorGroup title="Shot details" summary={detailsSummary} defaultOpen testId="shot-group-details">
-      <label htmlFor={fieldId('from-sheet')} className="flex items-center gap-1 text-xs min-h-[44px] sm:min-h-0">
+      <label htmlFor={fieldId('from-sheet')} className="flex items-center gap-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0">
         <input id={fieldId('from-sheet')} type="checkbox" checked={fromSheet}
           onChange={(e) => applyPatch({ shotSheet: normalizeShotSheet({ ...scene.shotSheet, promptFromSheet: e.target.checked }) })} />
         Use these details in the prompts
@@ -455,19 +479,19 @@ export default function SceneCard({
             if (cutMoves[key]) return <SceneCutField key={key} label={labelText} value={scene[key]} onCommit={(sec) => cutMoves[key](scene.sceneId, sec)} />;
             return (
               <label key={key} className="flex items-center gap-1">{labelText}
-                <input type="number" min="0" step="0.1" value={scene[key] ?? ''} className="w-20 bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0"
-                  onChange={(e) => onEditLocal(scene.sceneId, { [key]: toValue(e.target.value) })}
-                  onBlur={(e) => onSave(scene.sceneId, { [key]: toValue(e.target.value) })} />
+                <input type="number" min="0" step="0.1" value={scene[key] ?? ''} className="w-20 bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] pointer-fine:sm:min-h-0"
+                  onChange={(e) => { markDirty(key); onEditLocal(scene.sceneId, { [key]: toValue(e.target.value) }); }}
+                  onBlur={(e) => saveIfDirty(key, { [key]: toValue(e.target.value) })} />
                 {typeof scene[key] === 'number' && <span className="tabular-nums text-port-text-muted">fr {frameAt(scene[key])}</span>}
               </label>
             );
           })}
-          <label className="flex items-center gap-1 min-h-[44px] sm:min-h-0">
+          <label className="flex items-center gap-1 min-h-[44px] pointer-fine:sm:min-h-0">
             <input type="checkbox" checked={!!scene.beatAligned}
               onChange={(e) => { onEditLocal(scene.sceneId, { beatAligned: e.target.checked }); onSave(scene.sceneId, { beatAligned: e.target.checked }); }} />
             Beat-aligned
           </label>
-          <label className="flex items-center gap-1 min-h-[44px] sm:min-h-0" title="Repeat the generated clip to fill a span longer than the clip. Off: the shot must be covered by its clip (trim, continue, or replace it).">
+          <label className="flex items-center gap-1 min-h-[44px] pointer-fine:sm:min-h-0" title="Repeat the generated clip to fill a span longer than the clip. Off: the shot must be covered by its clip (trim, continue, or replace it).">
             <input type="checkbox" checked={loops} disabled={performance || clipReversed(scene)} onChange={(e) => applyPatch({ loop: e.target.checked })} />
             Loop clip
           </label>
@@ -505,7 +529,7 @@ export default function SceneCard({
         <div className="flex flex-wrap gap-2 items-center text-xs">
           <label htmlFor={fieldId('layer')}>Layer</label>
           <select id={fieldId('layer')} value={layer} onChange={(e) => applyPatch({ visualLayer: e.target.value })}
-            className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0">
+            className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] pointer-fine:sm:min-h-0">
             {MUSIC_VIDEO_VISUAL_LAYERS.map((value) => <option key={value} value={value}>{LAYER_LABELS[value]}</option>)}
           </select>
           {/* A performance is sung footage — only the footage layer offers it. */}
@@ -517,7 +541,7 @@ export default function SceneCard({
                   : e.target.value === 'music' ? { shotMode: 'performance', performanceStyle: 'music' }
                     // Clear the style only when one is stored, so a plain lip-sync switch stays one field.
                     : { shotMode: 'performance', ...(scene.performanceStyle ? { performanceStyle: null } : {}) })}
-                className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0"
+                className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] pointer-fine:sm:min-h-0"
                 title="Cutaway: any video lane animates the frame under the song. Lip-sync: a singer's mouth follows the song. Music-driven: the song slice drives the whole frame's motion (a drummer on the beat). Both need a source-audio provider.">
                 {Object.entries(SHOT_MODE_LABELS).map(([value, text]) => <option key={value} value={value}>{text}</option>)}
               </select>
@@ -527,7 +551,7 @@ export default function SceneCard({
                   <label htmlFor={fieldId('coverage')}>Coverage</label>
                   <select id={fieldId('coverage')} value={scene.coverage === 'sequence' ? 'sequence' : 'per-shot'}
                     onChange={(e) => applyPatch({ coverage: e.target.value })}
-                    className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0"
+                    className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] pointer-fine:sm:min-h-0"
                     title="Per shot: one clip per shot. Sequence: neighbouring cutaways that share a set and protagonist render in one timed request, cut back onto each shot.">
                     <option value="per-shot">Per shot</option>
                     <option value="sequence">Sequence</option>
@@ -541,7 +565,7 @@ export default function SceneCard({
               <label htmlFor={fieldId('move')}>Move</label>
               <select id={fieldId('move')} value={scene.stillMove || 'hold'} onChange={(e) => applyPatch({ stillMove: e.target.value })}
                 disabled={documentComposition && !!scene.camera?.move} title={documentComposition && scene.camera?.move ? 'The planned camera move drives this still.' : undefined}
-                className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0 disabled:opacity-50">
+                className="bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50">
                 {STILL_MOVE_LABELS.map(([value, text]) => <option key={value} value={value}>{text}</option>)}
               </select>
             </>
@@ -551,14 +575,14 @@ export default function SceneCard({
               <label htmlFor={fieldId('card-text')}>Card text</label>
               <input id={fieldId('card-text')} type="text" maxLength={500} value={scene.cardText || ''}
                 placeholder="Title shown on the card"
-                onChange={(e) => onEditLocal(scene.sceneId, { cardText: e.target.value })}
-                onBlur={(e) => onSave(scene.sceneId, { cardText: e.target.value.trim() || null })}
-                className="min-w-0 flex-1 basis-40 bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0" />
+                onChange={(e) => { markDirty('cardText'); onEditLocal(scene.sceneId, { cardText: e.target.value }); }}
+                onBlur={(e) => saveIfDirty('cardText', { cardText: e.target.value.trim() || null })}
+                className="min-w-0 flex-1 basis-40 bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] pointer-fine:sm:min-h-0" />
               <label htmlFor={fieldId('card-color')}>Background</label>
               <input id={fieldId('card-color')} type="color" value={scene.cardColor || '#000000'}
-                onChange={(e) => onEditLocal(scene.sceneId, { cardColor: e.target.value })}
-                onBlur={(e) => onSave(scene.sceneId, { cardColor: e.target.value })}
-                className="h-8 w-10 min-h-[44px] sm:min-h-0 bg-port-bg border border-port-border rounded" />
+                onChange={(e) => { markDirty('cardColor'); onEditLocal(scene.sceneId, { cardColor: e.target.value }); }}
+                onBlur={(e) => saveIfDirty('cardColor', { cardColor: e.target.value })}
+                className="h-8 w-10 min-h-[44px] pointer-fine:sm:min-h-0 bg-port-bg border border-port-border rounded" />
             </>
           )}
         </div>
@@ -603,10 +627,10 @@ export default function SceneCard({
         </div>
         {stepShot && (
           <>
-            <button type="button" onClick={stepShot.prev || undefined} disabled={!stepShot.prev} aria-label="Previous shot" title="Previous shot" className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-lg border border-port-border text-port-text hover:bg-port-border disabled:opacity-40 sm:min-h-[36px] sm:min-w-[36px]">
+            <button type="button" onClick={stepShot.prev || undefined} disabled={!stepShot.prev} aria-label="Previous shot" title="Previous shot" className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-lg border border-port-border text-port-text hover:bg-port-border disabled:opacity-40 pointer-fine:sm:min-h-[36px] pointer-fine:sm:min-w-[36px]">
               <ChevronLeft size={16} aria-hidden="true" />
             </button>
-            <button type="button" onClick={stepShot.next || undefined} disabled={!stepShot.next} aria-label="Next shot" title="Next shot" className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-lg border border-port-border text-port-text hover:bg-port-border disabled:opacity-40 sm:min-h-[36px] sm:min-w-[36px]">
+            <button type="button" onClick={stepShot.next || undefined} disabled={!stepShot.next} aria-label="Next shot" title="Next shot" className="inline-flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center rounded-lg border border-port-border text-port-text hover:bg-port-border disabled:opacity-40 pointer-fine:sm:min-h-[36px] pointer-fine:sm:min-w-[36px]">
               <ChevronRight size={16} aria-hidden="true" />
             </button>
           </>
@@ -629,7 +653,7 @@ export default function SceneCard({
             <SceneRenderProgress kind="Frame" generating={generatingFrame} progress={frameProgress} />
             {clipJobs.map((job) => (
               <SceneRenderProgress key={job.key} kind={job.label ? `Video (${job.label})` : 'Video'} generating
-                progress={job.running ? { progress: job.progress } : null} />
+                progress={job.running ? { progress: job.progress } : null} retry={job.retry} />
             ))}
           </span>
         )}
@@ -670,9 +694,9 @@ export default function SceneCard({
           onOpenPreview={onOpenPreview} takeBusy={takeBusy} onSelectTake={onSelectTake} onReviewTake={onReviewTake}
           onSwap={onPlacePoolItem ? setSwapKind : null} onSwapFrames={onSwapFrames ? () => onSwapFrames(scene) : null} onImportTake={onImportTake}
           onContinueFromPrevious={layer === 'footage' && index > 0 ? onContinueFromPrevious : null} previousHasClip={previousHasClip}
-          assetMarks={project?.assetMarks} onMarkTake={onMarkTake} onApplyCameos={onApplyCameos} />
+          assetMarks={project?.assetMarks} onMarkTake={onMarkTake} onCheckTake={onCheckTake} checkingTakes={checkingTakes} onApplyCameos={onApplyCameos} />
         </div>
-        {/* Clip: the picture and its takes, the motion prompt and where it renders, then Render and other ways to get a clip. */}
+        {/* Clip: the picture and its takes, where it renders and its references, the clip prompt, then Render and other ways to get a clip. */}
         <div hidden={view !== 'clip'}>
         <section aria-label="Render" className="min-w-0 space-y-2">
           {/* A clip, the still, or the still playing a code-drawn image effect (no model call). */}
@@ -692,6 +716,10 @@ export default function SceneCard({
           <SceneClipPreview scene={scene} index={index} performance={performance} playback={clipPlayback}
             onOpenPreview={onOpenPreview} onTrimClip={onTrimClip}
             takeBusy={takeBusy} generatingVideo={generatingVideo} />
+          {/* One take cut across shots needs a source clip longer than this shot's span, and may need another model. */}
+          {layer === 'footage' && !performance && (
+            <SceneClipLength fieldId={fieldId} scene={scene} settings={renderSettings || {}} onChange={applyPatch} />
+          )}
           {/* Speed and offset by hand, from the same clip file, in the player and the final render. */}
           {scene.videoHistoryId && layer === 'footage' && (
             <SceneClipTiming fieldId={fieldId} scene={scene} onChange={applyPatch} />
@@ -718,12 +746,6 @@ export default function SceneCard({
             onSelect={(take) => onSelectTake?.(scene, take)}
             onReview={(take, review) => onReviewTake?.(scene, take, review)}
             onOpenPreview={onOpenPreview} marks={project?.assetMarks} onMark={onMarkTake} />
-          {layer === 'footage' && promptField}
-          {/* The camera move sits with the motion prompt and shows the text it adds to it. */}
-          {layer === 'footage' && (
-            <SceneCameraControls scene={scene} fieldId={fieldId} onEditLocal={onEditLocal} onSave={onSave}
-              adds={cardRequest.promptAdditions.find((item) => item.id === 'camera-move')?.text || null} />
-          )}
           {speakerField}
           <div className="flex flex-wrap items-center gap-2">
             <SceneRenderTarget id={fieldId('render-on')} value={renderPick} onChange={setRenderPick} performance={performance}
@@ -739,15 +761,27 @@ export default function SceneCard({
               Use LTX reference images (requires Ingredients adapter; at least 121 frames; no song audio or end frame)
             </label>
           )}
-          {storyboardDefault && ltxReferencesAvailable && (
-            <p className="text-xs text-port-text-muted">Generate the storyboard frame first to use LTX reference images.</p>
-          )}
+          {ltxReferencesReason && <p className="text-xs text-port-text-muted">{ltxReferencesReason}</p>}
           {canUseLtxReferences && ltxReferencesGreyboxBlocked && (
             <p className="text-xs text-port-text-muted">Clear the greybox reference to use LTX reference images.</p>
           )}
-          {layer === 'footage' && <SceneClipReferences project={project} scene={scene} castMedia={castMedia}
+          {layer === 'footage' && referenceBackend === 'grok' && !storyboardDefault && scene.referenceImageId && (
+            <label className="flex items-center gap-2 text-xs text-port-text-muted">
+              <input type="checkbox" checked={startFrameLayout}
+                onChange={(event) => setRenderInputs((prev) => ({ ...prev, startFrameLayout: event.target.checked }))} />
+              Start frame for layout only (its people take the clip references' looks; the clip may not open on it exactly)
+            </label>
+          )}
+          {layer === 'footage' && <SceneClipReferences project={project} scene={scene} castMedia={castMedia} startFrameLayout={startFrameLayout}
             backend={referenceBackend} model={referenceModel} capacityOverride={useLtxReferences ? 8 : runwayEndFrameOn ? referenceCapacity : undefined} endFrameBlocksReferences={endFrameBlocksReferences} ltxReferencesOff={canUseLtxReferences && !useLtxReferences} onEditLocal={onEditLocal} onSave={onSave}
             saveState={clipReferenceSaveState} onSaveState={setClipReferenceSaveState} />}
+          {/* The clip prompt sits under the clip's references, like each frame's prompt under its frame. */}
+          {layer === 'footage' && promptField}
+          {/* The camera move sits with the clip prompt and shows the text it adds to it. */}
+          {layer === 'footage' && (
+            <SceneCameraControls scene={scene} fieldId={fieldId} onEditLocal={onEditLocal} onSave={onSave}
+              adds={cardRequest.promptAdditions.find((item) => item.id === 'camera-move')?.text || null} />
+          )}
           {timingPlan}
           {layer === 'footage' && (
             <SceneRenderInputs id={fieldId('inputs')} request={previewRequest} onChange={(patch) => setRenderInputs((prev) => ({ ...prev, ...patch,
@@ -755,7 +789,8 @@ export default function SceneCard({
               grokPreview={(!renderSettings?.backend || renderSettings.backend === 'grok') && project?.id && scene.referenceImageId ? {
                 ...(renderSettings?.backend ? { backend: renderSettings.backend } : {}), prompt: cardRequest.authored, mode: 'image', sourceImageFile: scene.referenceImageId,
                 grokDuration: renderSettings?.backend === 'grok' ? grokSceneRequestDuration(scene, renderSettings, renderOverrides) : renderSettings?.grokDuration,
-                musicVideo: { projectId: project.id, sceneId: scene.sceneId, catalogBasis: project.castAndSets?.catalogCheckin?.basis, compose: true, promptAsTyped: true, ...songAudioField },
+                musicVideo: { projectId: project.id, sceneId: scene.sceneId, catalogBasis: project.castAndSets?.catalogCheckin?.basis, compose: true, promptAsTyped: true, ...songAudioField,
+                  ...(startFrameLayout ? { startFrameLayout: true } : {}) },
               } : null} previewRevision={JSON.stringify([project?.updatedAt, castMedia])} />
           )}
           {layer === 'footage' && scene.coverage === 'sequence' && <SceneSequenceCoverage project={project} scene={scene} />}
@@ -858,7 +893,7 @@ export default function SceneCard({
           onClick={() => (failure.lane === 'video' ? generateVideo() : onGenerateFrame?.(scene))}
           disabled={failure.lane === 'video' && renderBlocked}
           title={failure.lane === 'video' ? videoRefusal || undefined : undefined}
-          className="inline-flex min-h-[44px] shrink-0 items-center px-1 font-medium underline disabled:opacity-50 sm:min-h-0">
+          className="inline-flex min-h-[44px] shrink-0 items-center px-1 font-medium underline disabled:opacity-50 pointer-fine:sm:min-h-0">
           Retry
         </button>
       </div>

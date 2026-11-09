@@ -30,8 +30,11 @@ describe('claim coordinator cleanup', () => {
   const id = 'agent-claim';
   const start = '2026-01-01T00:00:00.000Z';
   const end = '2026-01-01T00:01:00.000Z';
-  const run = async () => {
-    const warnings = await cleanupAgentWorktree(id, true, { originalTask: { id: 'task-claim', metadata: { claimFlow: true } } });
+  const run = async (opts = {}) => {
+    const warnings = await cleanupAgentWorktree(id, true, {
+      originalTask: { id: 'task-claim', metadata: { claimFlow: true } },
+      ...opts,
+    });
     await vi.waitFor(() => expect(verifyAgentRepoState).toHaveBeenCalled());
     return warnings;
   };
@@ -159,6 +162,44 @@ describe('claim coordinator cleanup', () => {
     expect(existsSync(checkout)).toBe(false);
     expect((await localRef()).exitCode).toBe(1);
     if (remote === 'present') expect(await remoteRef()).toContain(`refs/heads/${branch}`);
+  });
+
+  // A server-provisioned claim (#15517) runs inside this checkout, so its own
+  // completion sentinel is the one untracked file a clean stand-down leaves.
+  it('removes a clean stand-down that holds only this run\'s completion sentinel', async () => {
+    await execGit(['reset', '--hard', 'origin/main'], checkout);
+    head = (await execGit(['rev-parse', 'HEAD'], checkout)).stdout.trim();
+    const identity = await readCompletedCheckoutIdentity({ repoPath: sandbox.repo, branch, path: checkout, head });
+    fixture.agent.metadata.completedCheckouts = [{ version: 1, agentId: id, startedAt: start, capturedAt: end, ...identity }];
+    fixture.probe = { readable: true, prState: null };
+    await execGit(['push', 'origin', `:refs/heads/${branch}`], sandbox.repo);
+    await writeFile(join(checkout, `.agent-done-${id}`), '{}\n');
+    expect(await run()).toEqual([]);
+    expect(existsSync(checkout)).toBe(false);
+    expect((await localRef()).exitCode).toBe(1);
+  });
+
+  it('settles owned git work when a remote branch probe times out during cleanup', async () => {
+    await execGit(['config', `url.ssh://slow-host/.insteadOf`, sandbox.origin], sandbox.repo);
+    await execGit(['config', 'core.sshCommand', 'node -e "process.stdin.resume(); process.stdin.on(\'end\', () => process.exit(0)); setTimeout(() => {}, 10000);" --'], sandbox.repo);
+    const result = await run({ remoteTimeoutMs: 100 });
+    expect(result).toEqual([expect.stringContaining('remote branch state unavailable')]);
+    expect(existsSync(checkout)).toBe(false);
+  });
+
+  it('settles owned git work when an unmerged stand-down remote probe times out', async () => {
+    await execGit(['reset', '--hard', 'origin/main'], checkout);
+    head = (await execGit(['rev-parse', 'HEAD'], checkout)).stdout.trim();
+    const identity = await readCompletedCheckoutIdentity({ repoPath: sandbox.repo, branch, path: checkout, head });
+    fixture.agent.metadata.completedCheckouts = [{ version: 1, agentId: id, startedAt: start, capturedAt: end, ...identity }];
+    fixture.probe = { readable: true, prState: null };
+    await execGit(['push', 'origin', `:refs/heads/${branch}`], sandbox.repo);
+    await execGit(['config', `url.ssh://slow-host/.insteadOf`, sandbox.origin], sandbox.repo);
+    await execGit(['config', 'core.sshCommand', 'node -e "process.stdin.resume(); process.stdin.on(\'end\', () => process.exit(0)); setTimeout(() => {}, 10000);" --'], sandbox.repo);
+    const result = await run({ remoteTimeoutMs: 100 });
+    expect(result).toEqual([expect.stringContaining('remote branch state unavailable')]);
+    expect(existsSync(checkout)).toBe(false);
+    expect((await localRef()).exitCode).toBe(1);
   });
 
   it.each(['active owner', 'changed head', 'locked checkout', 'unmerged work', 'different merged head'])('preserves %s', async scenario => {

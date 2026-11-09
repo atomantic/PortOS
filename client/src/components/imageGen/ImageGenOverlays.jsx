@@ -2,9 +2,9 @@ import Drawer from '../Drawer';
 import { ImageGenTab } from '../settings/ImageGenTab';
 import MediaPreview from '../media/MediaPreview';
 import GalleryImagePicker from './GalleryImagePicker';
-import Flux2InstallModal from './Flux2InstallModal';
+import RuntimeRemedyModals from './RuntimeRemedyModals';
 
-export default function ImageGenOverlays({ preview, galleryPicker, settings, flux2 }) {
+export default function ImageGenOverlays({ preview, galleryPicker, settings, runtimeInstall }) {
   return (
     <>
       <MediaPreview
@@ -21,6 +21,8 @@ export default function ImageGenOverlays({ preview, galleryPicker, settings, flu
         onClean={preview.onClean}
         onRegenerate={preview.onRegenerate}
         onRemoveWatermark={preview.onRemoveWatermark}
+        onDelete={preview.onDelete}
+        onToggleHidden={preview.onToggleHidden}
         regenAvailable={preview.regenAvailable}
         regenBounds={preview.regenBounds}
       />
@@ -28,7 +30,7 @@ export default function ImageGenOverlays({ preview, galleryPicker, settings, flu
       <Drawer open={settings.open} onClose={settings.onClose} title="Media Generation Settings" size="lg">
         <ImageGenTab />
       </Drawer>
-      <Flux2InstallModal open={flux2.open} onClose={flux2.onClose} onComplete={flux2.onComplete} modelId={flux2.modelId} />
+      <RuntimeRemedyModals kind={runtimeInstall.kind} modelId={runtimeInstall.modelId} onClose={runtimeInstall.onClose} onComplete={runtimeInstall.onComplete} />
     </>
   );
 }

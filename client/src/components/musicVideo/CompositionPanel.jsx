@@ -24,14 +24,14 @@ export default function CompositionPanel({ board }) {
         <div className="flex flex-wrap items-center gap-2 text-xs text-port-text-muted">
           <span>Render style: <span className="text-port-text">{renderStyleLabel(mode)}</span></span>
           <span>Media: <span className="text-port-text">{MUSIC_VIDEO_MEDIA_MODE_LABELS[musicVideoMediaMode(project)]}</span></span>
-          <button type="button" onClick={() => board.openSettings('project')} aria-label="Change render style and media in Project settings" className="min-h-[44px] px-1 text-port-accent sm:min-h-0">
+          <button type="button" onClick={() => board.openSettings('project')} aria-label="Change render style and media in Project settings" className="min-h-[44px] px-1 text-port-accent pointer-fine:sm:min-h-0">
             Change
           </button>
         </div>
         {mode !== 'document' && (
           <p className="text-xs text-port-text-muted" role="status">
             No live preview for this style — render a draft excerpt to check changes.{' '}
-            <button type="button" onClick={() => board.goToStage('review', 'mv-draft-excerpts')} className="min-h-[44px] px-1 text-port-accent sm:min-h-0">Render a draft excerpt</button>
+            <button type="button" onClick={() => board.goToStage('review', 'mv-draft-excerpts')} className="min-h-[44px] px-1 text-port-accent pointer-fine:sm:min-h-0">Render a draft excerpt</button>
           </p>
         )}
         <GradePanel project={project} onSave={board.saveCompositionGrade} />

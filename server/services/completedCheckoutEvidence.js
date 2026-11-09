@@ -100,6 +100,41 @@ export async function captureCheckoutSeeds(agent, { allowUncreated = true } = {}
   return seeds;
 }
 
+/** A branch this run released may be re-cut under the same name once its
+ * seeded checkout is gone (#15463). Called with the pre-bind record, so the
+ * release is still visible. The retired generation moves to
+ * supersededCheckoutSeeds — completion evidence, never discarded — and the
+ * next capture records the new checkout. A prior checkout still present (or
+ * unreadable) keeps its seed, so a replacement generation still refuses.
+ * Returns the metadata patch, or null when nothing is superseded.
+ */
+export async function supersedeReleasedCheckoutSeed(agent, branch) {
+  const meta = agent?.metadata || {};
+  const released = meta.claimReleasedBranches ?? agent?.claimReleasedBranches ?? [];
+  const seeds = Array.isArray(meta.checkoutSeeds) ? meta.checkoutSeeds : [];
+  const retired = seeds.filter(seed => seed?.branch === branch);
+  if (!retired.length || !Array.isArray(released) || !released.includes(branch)) return null;
+  const { readCheckoutPathPresence } = await import('./repoCleanupObservation.js');
+  for (const seed of retired) {
+    if (await readCheckoutPathPresence(seed.path) !== false) return null;
+  }
+  const supersededAt = new Date().toISOString();
+  return { checkoutSeeds: seeds.filter(seed => seed?.branch !== branch),
+    supersededCheckoutSeeds: [...(Array.isArray(meta.supersededCheckoutSeeds) ? meta.supersededCheckoutSeeds : []),
+      ...retired.map(seed => ({ ...seed, supersededAt }))] };
+}
+
+/** Whether a superseded generation's physical checkout is still retired: true
+ * when its path is absent or now holds a different directory (the re-cut
+ * checkout), false when the original directory is back, null when unreadable.
+ */
+export async function readSupersededGenerationRetired(seed) {
+  if (!checkoutSeedSchema.safeParse(seed).success) return null;
+  return filesystemIdentity(seed.path, 'directory')
+    .then(current => !same(current, seed.checkout))
+    .catch(error => error.code === 'ENOENT' || error.message === 'checkout-incarnation-unavailable' ? true : null);
+}
+
 /** A late capture has an actual late timestamp and a separately bound early
  * physical generation; legacy v1 evidence retains its original time contract.
  */

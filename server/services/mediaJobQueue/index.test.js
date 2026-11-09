@@ -1894,6 +1894,25 @@ describe('mediaJobQueue', () => {
     expect(mediaJobQueue.getJob(ids[0]).videoExecution.diagnostics.termination).toMatchObject({ signal: 'SIGKILL', reason: 'failed' });
   });
 
+  it('retains the a2v lip-sync verdict beside termination evidence across restart (#15409)', async () => {
+    const meta = { seed: 42, modelId: 'example-mlx', width: 512, height: 512, numFrames: 97, fps: 24, steps: 9, mode: 'a2v' };
+    const { recordVideoExecution, recordVideoExecutionDiagnostics } = await import('../videoGen/executionRecorder.js');
+    const { jobId } = await mediaJobQueue.enqueueJob({ kind: 'video', params: { modelId: 'example-mlx', prompt: 'Synthetic singer' } });
+    await waitFor(() => stubs.generateVideo.mock.calls.some(([params]) => params.jobId === jobId));
+    await recordVideoExecution(jobId, meta);
+    const lipsyncAlign = { shiftFrames: 2, lag: 2, peakScore: 0.61, reason: 'mouth-lead' };
+    await recordVideoExecutionDiagnostics(jobId, { lipsyncAlign });
+    await expect(recordVideoExecutionDiagnostics(jobId, { lipsyncAlign: { ...lipsyncAlign, reason: 'ffmpeg exit 1: /tmp/x.mp4' } })).rejects.toThrow();
+    await recordVideoExecutionDiagnostics(jobId, { termination: {
+      exitCode: 0, signal: null, reason: 'completed', observedAt: new Date().toISOString(),
+    } });
+    videoGenEvents.emit('completed', { generationId: jobId, filename: `${jobId}.mp4`, path: `/data/videos/${jobId}.mp4` });
+    await waitFor(() => mediaJobQueue.getJob(jobId)?.status === 'completed');
+    await importFresh();
+    await mediaJobQueue.initMediaJobQueue();
+    expect(mediaJobQueue.getJob(jobId).videoExecution.diagnostics).toMatchObject({ lipsyncAlign, termination: { reason: 'completed' } });
+  });
+
   it('durably retains a first seed resolved after cancellation without reviving the canceled job', async () => {
     let resolveMetadata;
     const metadataReady = new Promise(resolve => { resolveMetadata = resolve; });

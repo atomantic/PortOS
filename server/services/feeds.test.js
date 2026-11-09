@@ -136,6 +136,33 @@ describe('addFeed', () => {
     ]);
   });
 
+  it('rejects a non-feed HTML page without storing a subscription', async () => {
+    fetchMock.mockResolvedValue(makeResponse({ body: '<!doctype html><html><body>Hi</body></html>' }));
+    const result = await feeds.addFeed('https://example.com/');
+    expect(result).toEqual({ error: 'That URL is not an RSS or Atom feed' });
+    expect(await feeds.getFeeds()).toEqual([]);
+  });
+
+  it('parses RSS 1.0 (RDF) feeds whose items are siblings of the channel', async () => {
+    const rdf = `<?xml version="1.0"?>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns="http://purl.org/rss/1.0/">
+  <channel rdf:about="https://example.com/"><title>RDF Feed</title><items><rdf:Seq><rdf:li rdf:resource="https://example.com/1"/></rdf:Seq></items></channel>
+  <item rdf:about="https://example.com/1"><title>One</title><link>https://example.com/1</link></item>
+  <item rdf:about="https://example.com/2"><title>Two</title><link>https://example.com/2</link></item>
+</rdf:RDF>`;
+    fetchMock.mockResolvedValue(makeResponse({ body: rdf }));
+    const result = await feeds.addFeed('https://example.com/rdf');
+    expect(result.feed).toMatchObject({ title: 'RDF Feed', itemCount: 2 });
+    const items = await feeds.getItems({});
+    expect(items.map(i => i.title).sort()).toEqual(['One', 'Two']);
+  });
+
+  it('still subscribes to an RSS 2.0 feed with an empty channel', async () => {
+    fetchMock.mockResolvedValue(makeResponse({ body: '<rss version="2.0"><channel><title>Quiet</title></channel></rss>' }));
+    const result = await feeds.addFeed('https://example.com/quiet');
+    expect(result.feed).toMatchObject({ title: 'Quiet', itemCount: 0 });
+  });
+
   it('rejects duplicate URLs', async () => {
     fetchMock.mockResolvedValue(makeResponse({ body: RSS_FIXTURE }));
     await feeds.addFeed('https://example.com/rss');
@@ -332,6 +359,25 @@ describe('refreshFeed', () => {
     const links = (await feeds.getItems({ feedId: feed.id, limit: 200 })).map(i => i.link);
     expect(links).toHaveLength(100);
     expect(links).not.toContain('https://example.com/p/999');
+  });
+
+  it('keeps new posts when every stored pubDate is unparseable by Date.parse', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-19T10:00:00Z'));
+    const item = (n) => `<item><title>T${n}</title><link>https://example.com/u/${n}</link><pubDate>Tue, 10 Jun 2003 04:00:00 CEST</pubDate></item>`;
+    const rss = (ns) => `<rss version="2.0"><channel><title>U</title>${ns.map(item).join('')}</channel></rss>`;
+    const initial = Array.from({ length: 100 }, (_, i) => i);
+    fetchMock.mockResolvedValueOnce(makeResponse({ body: rss(initial) }));
+    const { feed } = await feeds.addFeed('https://example.com/u');
+
+    vi.setSystemTime(new Date('2026-05-19T10:01:00Z'));
+    fetchMock.mockResolvedValueOnce(makeResponse({ body: rss([...initial, 100, 101, 102]) }));
+    const result = await feeds.refreshFeed(feed.id);
+    expect(result.newCount).toBe(3);
+
+    const links = (await feeds.getItems({ feedId: feed.id, limit: 200 })).map(i => i.link);
+    expect(links).toHaveLength(100);
+    for (const n of [100, 101, 102]) expect(links).toContain(`https://example.com/u/${n}`);
   });
 
   it('returns an error when the feed id is unknown', async () => {

@@ -16,7 +16,7 @@ import StaleApprovalActions from './StaleApprovalActions.jsx';
 
 const WORKING = new Set(['directing', 'imaging', 'assembling']);
 const REBUILD_TITLE = "Build a new sheet; the earlier one stays in the sheet's version history";
-const buttonClass = 'flex items-center gap-1 rounded px-3 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50';
+const buttonClass = 'flex items-center gap-1 rounded px-3 py-1.5 text-sm min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50';
 
 function progress(stage) {
   const images = Object.values(stage.images || {});

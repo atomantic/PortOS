@@ -12,10 +12,10 @@ vi.mock('../../catalog/WorldMapView', () => ({ default: () => <div>map preview</
 const { default: PrevizAi } = await import('./PrevizAi.jsx');
 
 const project = {
-  id: 'p', concept: { subjects: [{ id: 'renee', kind: 'character', name: 'Renee' }] },
+  id: 'p', concept: { subjects: [{ id: 'ada', kind: 'character', name: 'Ada' }] },
   cameras: [{ id: 'vhs', name: 'VHS' }], scenes: [{ sceneId: 'a' }],
 };
-const previz = { cuts: [{ id: 'c1', sceneId: 'a', holderSubjectId: 'renee' }, { id: 'c2', sceneId: null }], tracks: [] };
+const previz = { cuts: [{ id: 'c1', sceneId: 'a', holderSubjectId: 'ada' }, { id: 'c2', sceneId: null }], tracks: [] };
 const world = { version: 1, seed: 1, sets: [], paths: [] };
 
 describe('PrevizAi', () => {
@@ -26,7 +26,7 @@ describe('PrevizAi', () => {
     const onSavePreviz = vi.fn();
     const onSaveCameras = vi.fn();
     render(<PrevizAi project={project} world={world} worldId="w1" places={{}} previz={previz} onSavePreviz={onSavePreviz} onSaveCameras={onSaveCameras} />);
-    fireEvent.change(screen.getByLabelText('What to change in the previz'), { target: { value: 'Turn to Renee' } });
+    fireEvent.change(screen.getByLabelText('What to change in the previz'), { target: { value: 'Turn to Ada' } });
     fireEvent.click(screen.getByRole('button', { name: /Propose changes/ }));
     expect(await screen.findByText('Moved things.')).toBeTruthy();
     expect(screen.getByRole('status').textContent).toContain('pawnColors');
@@ -37,6 +37,6 @@ describe('PrevizAi', () => {
     await waitFor(() => expect(onSavePreviz).toHaveBeenCalledWith({ cuts: [{ ...previz.cuts[0], turnToAim: true }, previz.cuts[1]] }));
     expect(saveWorld).not.toHaveBeenCalled();
     expect(onSaveCameras).toHaveBeenCalledWith([{ id: 'vhs', name: 'VHS', previzStyle: 'handheld' }]);
-    expect(propose.mock.calls[0][1]).toMatchObject({ providerId: 'example-api', instruction: 'Turn to Renee' });
+    expect(propose.mock.calls[0][1]).toMatchObject({ providerId: 'example-api', instruction: 'Turn to Ada' });
   });
 });

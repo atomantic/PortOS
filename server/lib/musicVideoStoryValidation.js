@@ -46,7 +46,7 @@ export const artGuideProposeSchema = z.object({
 // AI on the shot sheet (services/musicVideo/shotSheetProposals.js): a proposal for a batch of shots, never a save.
 export const shotSheetProposeSchema = z.object({
   providerId: text(256).min(1), model: text(256).optional(), effort: text(32).optional(), executionOptions: executionOptionsSchema.optional(),
-  direction: z.enum(['from-prompts', 'to-prompts', 'split']),
+  direction: z.enum(['from-prompts', 'to-prompts', 'split', 'tighten']),
   sceneIds: z.array(text(64).min(1)).min(1).max(SHOT_SHEET_PROPOSE_BATCH),
   instruction: text(4000).optional(), preview: z.boolean().optional(),
 }).strict();
@@ -54,7 +54,9 @@ export const shotSheetProposeSchema = z.object({
 export const shotSheetBackfillSchema = z.object({ sceneId: text(64).min(1), sheet: musicVideoShotSheetSchema.omit({ checked: true, promptFromSheet: true }).strip() }).strip();
 // A split: the frame prompt's details as sheet columns, and the rest as the shot's general prompt.
 export const shotSheetSplitSchema = z.object({ sceneId: text(64).min(1), sheet: musicVideoShotSheetSchema.omit({ checked: true, promptFromSheet: true }).strip(), generalPrompt: z.string().max(8000) }).strip();
-export const shotSheetPromptProposalSchema = z.object({ sceneId: text(64).min(1), framePrompt: text(8000).optional(), prompt: text(8000).optional() }).strip()
+// A blank proposed prompt means "left out", never "clear the director's text".
+const proposedPrompt = z.preprocess((value) => (typeof value === 'string' && !value.trim() ? undefined : value), text(8000).optional());
+export const shotSheetPromptProposalSchema = z.object({ sceneId: text(64).min(1), framePrompt: proposedPrompt, prompt: proposedPrompt }).strip()
   .refine((shot) => shot.framePrompt !== undefined || shot.prompt !== undefined, 'Propose at least one prompt');
 
 // AI edits to the previz (services/musicVideo/previzProposals.js): the director's request, and what may come back.
@@ -70,6 +72,8 @@ export const previzCutPatchSchema = z.object({
   holderSubjectId: previzSubjectRef.nullable().optional(),
   aimSubjectId: previzSubjectRef.nullable().optional(),
   turnToAim: z.boolean().optional(),
+  selfie: z.boolean().optional(),
+  actionPath: z.string().min(1).max(64).nullable().optional(),
   visibleSubjectIds: z.array(previzSubjectRef).max(24).nullable().optional(),
   storyMin: z.number().finite().min(0).max(2880).nullable().optional(),
   cameraSpot: z.tuple([z.number().finite().min(-5000).max(5000), z.number().finite().min(-5000).max(5000)]).nullable().optional(),
@@ -77,7 +81,8 @@ export const previzCutPatchSchema = z.object({
 // Each part is checked on its own, so one bad part never costs the rest.
 export const previzProposalPartSchemas = {
   world: worldMapSchema,
-  night: musicVideoPrevizSchema.shape.night.unwrap().unwrap(),
+  timeline: musicVideoPrevizSchema.shape.timeline.unwrap().unwrap(),
+  vehicles: musicVideoPrevizSchema.shape.vehicles.unwrap(),
   cuts: z.array(z.unknown()).max(600),
   pawnColors: musicVideoPrevizSchema.shape.pawnColors.unwrap(),
   cameraStyles: z.record(z.string().min(1).max(128), z.enum(PREVIZ_CAMERA_STYLES)),

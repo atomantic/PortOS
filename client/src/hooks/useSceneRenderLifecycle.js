@@ -74,7 +74,8 @@ function failureToastMessage(failMessage, failures) {
  * Returns `{ genScenes, sceneProgress, sceneJobs, failedScenes, startScene, clearScene, trackJob, restoreJobs, reconcileJobs }`
  * (`sceneProgress`: sceneId → `{ progress }` once a job reports running; a scene
  * in `genScenes` with no entry is still queued;
- * `sceneJobs`: sceneId → every render in flight for it, `{ key, jobId, label, running, progress }`,
+ * `sceneJobs`: sceneId → every render in flight for it, `{ key, jobId, label, running, progress, retry }`
+ * (`retry`: `{ attempt, of, inMs, reason }` while the provider was busy and the lane waits to resend),
  * since one shot may render on several providers at once;
  * `failedScenes` — sceneId → true after a confirmed render failure this session, until that scene renders again):
  *   - `startScene(sceneId, { label })` — light the spinner before the kickoff
@@ -302,8 +303,10 @@ export default function useSceneRenderLifecycle({
         if (index === -1) return list;
         const entry = list[index];
         const nextProgress = progress ?? entry.progress;
-        if (entry.running && entry.progress === nextProgress) return list;
-        return list.map((item, i) => (i === index ? { ...item, running: true, progress: nextProgress } : item));
+        // A lane waiting to resend after a busy provider says so on each tick; any other frame clears it.
+        const nextRetry = data.retry && typeof data.retry === 'object' ? data.retry : null;
+        if (entry.running && entry.progress === nextProgress && (entry.retry ?? null) === nextRetry) return list;
+        return list.map((item, i) => (i === index ? { ...item, running: true, progress: nextProgress, retry: nextRetry } : item));
       });
     };
     // Deferred failure toast for an owned render. A render canceled WHILE RUNNING

@@ -194,6 +194,7 @@ export * from './useImageGenPageRuntime.js';
 export * from './useSpritePendingRenders.js';
 export { default as useSpriteRecordCrud } from './useSpriteRecordCrud.js';
 export * from './useMediaCompletionRefresh.js';
+export * from './useMediaHideToggle.js';
 export * from './useMediaHolders.js';
 export * from './useMediaUsages.js';
 export * from './useOpenClawAttachments.js';
@@ -313,5 +314,6 @@ export { default as useCatalogCards } from './useCatalogCards.js';
 export * from './useDraftCommitMode.js';
 
 export { default as useCatalogPlaces } from './useCatalogPlaces.js';
+export { default as usePrevizJobs } from './usePrevizJobs.js';
 export { default as usePrevizWorld } from './usePrevizWorld.js';
 export { default as useMusicVideoGreyboxPlaces } from './useMusicVideoGreyboxPlaces.js';

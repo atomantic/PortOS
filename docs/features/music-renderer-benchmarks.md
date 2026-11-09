@@ -46,6 +46,9 @@ excessive clipping, and catastrophic broad-band drift against an optional
 baseline report. A rejected report is a failed technical gate. A passed report
 does not approve the music.
 
+Install/Repair and hash-lock regeneration for the CUDA runtime are documented in
+[MiniMax Music 3 CUDA](../MINIMAX_MUSIC3_CUDA.md).
+
 For CUDA Diffusers MiniMax Music 3, `--seed` is a sidecar-only benchmark hook:
 
 ```bash

@@ -8,7 +8,7 @@ import { shouldIgnoreGlobalKey } from '../../lib/a11yKeyboard.js';
 import useGeneratedPreview from '../../hooks/useGeneratedPreview.js';
 import { generateMusicVideoCode, getMusicVideoCodeDocument, regenerateMusicVideoCodeSection } from '../../services/apiMusicVideo.js';
 
-const buttonCls = 'flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50';
+const buttonCls = 'flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50';
 const inputCls = 'block w-full rounded border border-port-border bg-port-card px-2 py-1.5 text-sm placeholder-port-text-muted focus:outline-none focus:ring-2 focus:ring-port-accent disabled:opacity-50';
 
 /**

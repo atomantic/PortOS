@@ -9,7 +9,7 @@
 
 import { basename } from 'node:path';
 import { resolveGalleryImage, resolveImageInputPath } from '../../lib/pathSafety.js';
-import { MUSIC_VIDEO_GROK_CLIP_REFERENCE_LIMIT, MUSIC_VIDEO_MAX_REFERENCE_CHOICES, musicVideoClipConditioningReferences, musicVideoClipReferenceChoices, isLegacyCatalogReference } from '../../lib/musicVideoConditioning.js';
+import { MUSIC_VIDEO_MAX_REFERENCE_CHOICES, musicVideoClipReferenceCapacity, musicVideoClipConditioningReferences, musicVideoClipReferenceChoices, isLegacyCatalogReference } from '../../lib/musicVideoConditioning.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { loadSceneCastMedia } from './castGuideMedia.js';
 
@@ -92,7 +92,8 @@ export async function musicVideoClipReferences({ projectId, sceneId } = {}, limi
 }
 
 /** The Grok CLI does not expose its video-model id; use the older model's cap. */
-export const musicVideoClipCastReferences = (tag) => musicVideoClipReferences(tag, MUSIC_VIDEO_GROK_CLIP_REFERENCE_LIMIT);
+export const musicVideoClipCastReferences = (tag, { startFrameLayout = false } = {}) => musicVideoClipReferences(tag,
+  musicVideoClipReferenceCapacity('grok', null, { startFrameLayout }));
 
 /**
  * Resolved paths of the shot's cast sheets for a local reference-to-video model

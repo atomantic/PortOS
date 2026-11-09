@@ -5,7 +5,7 @@ import { Html, MapControls } from '@react-three/drei';
 import { GreyboxModel, PartMesh } from './GreyboxViewer.jsx';
 import ErrorBoundary from '../ErrorBoundary';
 import { partColor } from '../../lib/greybox';
-import { worldFill, worldSkyAt } from '../../../../server/lib/worldMap.js';
+import { worldFill, worldSkyAt, worldSunDirection } from '../../../../server/lib/worldMap.js';
 
 const rad = (deg) => (deg * Math.PI) / 180;
 const noop = () => {};
@@ -85,18 +85,14 @@ export function worldExtent(world) {
 /**
  * Everything of the world inside a Canvas: sky and light for its setting and
  * `clockMinutes`, ground, paths, generated filler, lamps and every placed set.
- * Shared by the World tab's viewer and the previz player's night shots.
+ * Shared by the World tab's viewer and the previz player's timeline shots.
  */
 export function WorldScene({ world, places, clockMinutes, labelPortal }) {
   const fill = useMemo(() => worldFill(world), [world]);
   const extent = useMemo(() => worldExtent(world), [world]);
   const setting = world.setting || 'outdoor';
   const sky = worldSkyAt(clockMinutes, setting);
-  const sunDir = [
-    Math.sin(rad(sky.sunAzimuth)) * Math.cos(rad(sky.sunElevation)),
-    Math.max(0.05, Math.sin(rad(sky.sunElevation))),
-    -Math.cos(rad(sky.sunAzimuth)) * Math.cos(rad(sky.sunElevation)),
-  ];
+  const sunDir = worldSunDirection(sky);
   const pavingBy = (kind) => fill.paving.filter((strip) => strip.kind === kind);
   const [cx, cz] = extent.center;
   return (

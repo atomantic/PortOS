@@ -23,9 +23,12 @@ export { MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT };
 // is supported by both the older Imagine model and the newer 1.5 model.
 export const MUSIC_VIDEO_GROK_CLIP_REFERENCE_LIMIT = 7;
 
-/** Extra image slots beside the selected source frame for a video render. */
-export function musicVideoClipReferenceCapacity(backend, model = null, { endFrame = false } = {}) {
-  if (backend === 'grok') return MUSIC_VIDEO_GROK_CLIP_REFERENCE_LIMIT;
+/**
+ * Extra image slots beside the selected source frame for a video render. A Grok
+ * clip that sends its frame for layout only spends one of its image slots on it.
+ */
+export function musicVideoClipReferenceCapacity(backend, model = null, { endFrame = false, startFrameLayout = false } = {}) {
+  if (backend === 'grok') return MUSIC_VIDEO_GROK_CLIP_REFERENCE_LIMIT - (startFrameLayout ? 1 : 0);
   if (backend === 'gemini') return GEMINI_WEB_CLIP_REFERENCE_LIMIT;
   if (backend === 'fal') {
     const max = Number(model?.referenceImages?.max) || 0;
@@ -88,7 +91,7 @@ function isCloseFraming(scene) {
 
 /**
  * Whether a scene's frame or shot prompt shows one of the direction's props: by
- * its name without the owner ("Renee's camera" is shown by "camera"), so a shot
+ * its name without the owner ("Ada's camera" is shown by "camera"), so a shot
  * that only names its owner does not pull the prop sheet in.
  */
 function showsProp(direction, scene) {
@@ -132,7 +135,7 @@ export function isLegacyCatalogReference(project, ref) {
   if (stage?.source !== 'catalog') return false;
   if (String(ref?.id || '').startsWith('mvr-cs-')) return true;
   // A historical generated file may since have become a current catalog asset.
-  if (stage.catalogCheckin?.items?.some(item => item.images?.includes(ref?.imageId))) return false;
+  if (stage.catalogCheckin?.items?.some(item => item.images?.includes(ref?.imageId) || item.pickableImages?.includes(ref?.imageId))) return false;
   return Object.values(stage.images || {}).some((image) => image?.imageId === ref?.imageId || image?.history?.includes(ref?.imageId))
     || (project?.visualSpec?.references || []).some((saved) => String(saved?.id || '').startsWith('mvr-cs-') && saved.imageId === ref?.imageId)
     || (stage.overflowFaceReferences || []).some((saved) => saved.imageId && saved.imageId === ref?.imageId);
@@ -168,15 +171,17 @@ function musicVideoCatalogReferences(project) {
 }
 
 function catalogItemReferences(project) {
-  return (project.castAndSets.catalogCheckin?.items || []).flatMap((item) => (item.images || [])
-    .filter((filename) => typeof filename === 'string' && SENDABLE_REFERENCE_FILE.test(filename))
-    .map((filename) => ({
+  return (project.castAndSets.catalogCheckin?.items || []).flatMap((item) => [
+    ...(item.images || []).map((filename) => [filename, true]), ...(item.pickableImages || []).map((filename) => [filename, false]),
+  ].filter(([filename]) => typeof filename === 'string' && SENDABLE_REFERENCE_FILE.test(filename))
+    .map(([filename, auto]) => ({
       id: catalogReferenceId(item.subjectId, filename),
       imageId: filename,
       role: ['place', 'location'].includes(item.kind) ? 'set' : item.kind === 'object' ? 'prop' : item.kind,
       label: String(item.name || 'Catalog item').slice(0, 120),
       note: String(item.description || '').slice(0, 1000),
-      condition: true,
+      // Pick-only images never join Auto (automaticConditioningReferences keeps `condition` refs).
+      condition: auto,
       catalogSubjectId: item.subjectId,
       ingredientId: item.ingredientId,
       formId: item.formId || null,
@@ -492,7 +497,18 @@ function automaticConditioningReferences(project, scene, limit = MUSIC_VIDEO_MAX
         seen.add(ref.imageId);
       }
     }
-    for (const ref of choices.filter(ref => !ref.catalogSubjectId)) {
+    // Project-level set plates join only the shots that name their place (label match on the
+    // shot's own text/location, or the section's mapped set); other roles (mood/palette) stay global.
+    const sheet = scene?.shotSheet;
+    const text = [scene?.description, scene?.framePrompt, scene?.prompt, scene?.visualIntent, sheet?.action, sheet?.location]
+      .filter(Boolean).join(' ');
+    const direction = project?.castAndSets?.direction;
+    const mappedSetId = Number.isInteger(scene?.sectionIndex)
+      ? direction?.songMap?.find(entry => entry.section === scene.sectionIndex)?.setId : null;
+    const mappedName = direction?.sets?.find(set => set.id === mappedSetId)?.name;
+    const namesPlate = ref => ref.role !== 'set' || (mappedSetId && ref.id === `mvr-cs-set-${mappedSetId}`)
+      || [ref.label, ref.name].filter(Boolean).some(name => namesIn(text, name) || (mappedName && name.toLowerCase() === mappedName.toLowerCase()));
+    for (const ref of choices.filter(ref => !ref.catalogSubjectId && namesPlate(ref))) {
       if (seen.has(ref.imageId)) continue;
       selected.push(ref);
       seen.add(ref.imageId);

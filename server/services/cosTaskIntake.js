@@ -212,6 +212,8 @@ export function buildTaskMetadata(taskData, taskType, { now = Date.now() } = {})
   // consumers can associate lifecycle events with the row that launched it.
   // The route has already normalized this value, and unpinned runs omit it.
   if (typeof taskData.claimTarget === 'string' && taskData.claimTarget) metadata.claimTarget = taskData.claimTarget;
+  // The pinned claim's prompt omits its checkout phase; spawn must cut it (#15517).
+  if (taskData.claimServerCheckout === true) metadata.claimServerCheckout = true;
   // Same durability need as claimTarget, for the Issues tab's Replan button:
   // the row that launched a replan associates the run's lifecycle events with
   // itself by this value. Separate key so a replan can never light up the

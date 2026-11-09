@@ -1177,6 +1177,8 @@ describe('create-schema parity', () => {
     wipeOut: { style: 'push-left' },
     glitches: [{ atSec: 0.5, style: 'vhs-glitch' }],
     cutEffect: { style: 'dissolve' },
+    clipLengthSec: 10,
+    clipModelId: 'fal-ai/minimax/hailuo-02/standard/image-to-video',
     imageEffect: 'end-fade',
     imageEffectSec: 2,
     photoSequence: { enabled: true, imageIds: ['photo-example.png'], intervalFrames: 6, rate: 'frames' },

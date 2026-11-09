@@ -464,6 +464,22 @@ describe('CoS Job Routes', () => {
         expect.objectContaining({ interval: 'daily', cronExpression: null, scheduledTime: '09:00' })
       );
     });
+
+    it('forwards scheduleAnchor on create and update, and rejects a non-integer weekday', async () => {
+      autonomousJobs.updateJob.mockResolvedValue({ id: 'j1' });
+      autonomousJobs.createJob.mockResolvedValue({ id: 'j2' });
+
+      const put = (body) => request(app).put('/api/cos/jobs/j1').send(body);
+      expect((await put({ scheduleAnchor: 4 })).status).toBe(200);
+      expect(autonomousJobs.updateJob).toHaveBeenCalledWith('j1', expect.objectContaining({ scheduleAnchor: 4 }));
+
+      const created = await request(app).post('/api/cos/jobs')
+        .send({ name: 'W', type: 'agent', interval: 'weekly', scheduledTime: '03:00', scheduleAnchor: 1, promptTemplate: 'x' });
+      expect(created.status).toBe(200);
+      expect(autonomousJobs.createJob).toHaveBeenCalledWith(expect.objectContaining({ scheduleAnchor: 1 }));
+
+      expect((await put({ scheduleAnchor: 1.5 })).status).toBe(400);
+    });
   });
 
   describe('POST /api/cos/jobs/:id/toggle', () => {

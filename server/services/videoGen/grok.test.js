@@ -207,6 +207,18 @@ describe('videoGen/grok — generateVideo', () => {
     await vi.waitFor(() => expect(paths.map((path) => existsSync(path))).toEqual([false, false, false]));
   });
 
+  it('sends a layout-only start frame as the first image so its people can take the cast likeness', () => {
+    const prompt = grok.buildGrokVideoPrompt({ prompt: 'she rides', sourceImagePath: '/abs/frame.png', duration: 6,
+      stagingPath: '/tmp/result.mp4', scratchDir: '/tmp/shot', startFrameLayout: true,
+      castReferences: [{ path: '/abs/rider.png', label: 'Rider — sheet' }, { path: '/abs/bike.png', label: 'Bike', role: 'prop' }] });
+    expect(prompt).toContain('Do not set first_frame.');
+    expect(prompt).not.toContain('Set first_frame to');
+    expect(prompt).toContain('in this order: /abs/frame.png, /abs/rider.png, /abs/bike.png');
+    expect(prompt).toContain('The people in <IMAGE_1> are stand-ins');
+    expect(prompt).toContain('<IMAGE_2> shows how Rider looks; <IMAGE_3> is the prop reference for Bike.');
+    expect(prompt).toContain('she rides');
+  });
+
   it('describes a selected prop as a prop rather than a person', () => {
     const prompt = grok.buildGrokVideoPrompt({ prompt: 'she rides', sourceImagePath: '/abs/frame.png', duration: 6,
       stagingPath: '/tmp/result.mp4', scratchDir: '/tmp/shot',

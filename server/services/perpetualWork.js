@@ -37,7 +37,7 @@ import { redactPii } from '../lib/piiRedactionPatterns.js';
 // `label create` idiom the prompt bodies interpolate), so the detector and the
 // live claim agent cannot drift on how "already decomposed" or "claimed and
 // being worked" is spelled.
-import { EPIC_DECOMPOSED_LABEL, EPIC_LABEL, IN_PROGRESS_LABEL } from '../lib/dispatchLabels.js';
+import { EPIC_DECOMPOSED_LABEL, EPIC_LABEL, IN_PROGRESS_LABEL, titleMarksEpic } from '../lib/dispatchLabels.js';
 
 export { EPIC_DECOMPOSED_LABEL };
 
@@ -155,28 +155,51 @@ async function resolveGitlabNamespace(repoPath) {
 }
 
 /**
+ * Issue numbers whose claim branch a live CoS run in this repository owns. A
+ * pinned claim run binds its branch at dispatch but cuts it and stamps tracker
+ * markers only after its pre-claim checks, so refs and PRs alone miss it for
+ * minutes. Null when the agent records are unreadable: an under-counted set
+ * would dispatch a picker the ownership bind then refuses.
+ */
+async function liveClaimIssueNumbers(repoPath, ignoreTaskId) {
+  const [{ readAgentsStateForSafetyCheck }, { liveClaimBranches }] = await Promise.all([
+    import('./cosState.js'), import('../lib/claimContinuation.js'),
+  ]);
+  const snapshot = await readAgentsStateForSafetyCheck().catch(() => null);
+  const agents = snapshot?.trusted === true ? snapshot.agents : null;
+  if (!agents || typeof agents !== 'object' || Array.isArray(agents)) return null;
+  // The refill that a completion triggers must not count that task's own run.
+  const live = Object.values(agents).filter((agent) => !ignoreTaskId || agent?.taskId !== ignoreTaskId);
+  return liveClaimBranches(live, repoPath).map(issueNumberFromRef).filter((n) => n != null);
+}
+
+/**
  * Collect the set of issue numbers currently in flight, evidenced by an open
  * `claim/issue-<num>` / `cos/.../issue-<num>/...` / `next/issue-<num>` (slashdo
  * `/do:next`, #8161) branch (local or remote) or an open PR/MR source ref.
+ * A live CoS run's registered or bound claim branch counts too, before it exists.
  * Local branches are supplementary; a failed PR/MR listing (timeout, auth,
  * rate limit) returns `{ error, detail }` rather than an under-counted set,
  * since a short set makes issues with an open PR look claimable. `forge` selects
  * how open changes are listed: GitHub PR head refs (`gh pr list`) vs GitLab
  * MR source branches (`glab mr list`).
  */
-async function inFlightIssueNumbers(repoPath, forge = 'github', env) {
+async function inFlightIssueNumbers(repoPath, forge = 'github', env, ignoreTaskId = null) {
   const nums = new Set();
   // The branch list and the PR/MR list are independent CLI calls — run concurrently.
   const prListCall = forge === 'gitlab'
     ? runCli('glab', withGlabJson(['mr', 'list', '--per-page', '100']), repoPath, env)
     : runCli('gh', await withGithubHost(githubClaimPrArgs(), repoPath), repoPath, env);
-  const [branchRes, prRes] = await Promise.all([
+  const [branchRes, prRes, liveClaims] = await Promise.all([
     runCli('git', ['branch', '-a', '--no-color', '--format=%(refname:short)'], repoPath, env),
-    prListCall
+    prListCall,
+    liveClaimIssueNumbers(repoPath, ignoreTaskId)
   ]);
   if (prRes.code !== 0) {
     return { error: `${forge === 'gitlab' ? 'glab' : 'gh'}-unavailable`, detail: redactCliDetail(prRes.stderr) };
   }
+  if (!liveClaims) return { error: 'claim-ownership-unreadable', detail: 'CoS agent records could not be read' };
+  for (const number of liveClaims) nums.add(number);
   const refs = (branchRes.stdout || '').split('\n').map((s) => s.trim()).filter(Boolean);
   let changes;
   try { changes = JSON.parse(prRes.stdout); } catch { changes = null; }
@@ -200,24 +223,7 @@ async function inFlightIssueNumbers(repoPath, forge = 'github', env) {
   return { nums };
 }
 
-/**
- * Recognize a tracking/umbrella EPIC from its title alone — the programmatic
- * half of the claim-issue prompt's epic handling (`isActionableIssue` decides
- * what that means for claimability). Matches the epic-title conventions the
- * prompt names and the agent honors:
- *   - a trailing `(epic)` tag  — e.g. "Redesign nav (epic)"
- *   - a leading `[epic]` bracket or `Epic:` colon tag — e.g. "[Epic] Billing
- *     revamp", "[epic: theme] …", "Epic: Redesign nav" (case-insensitive)
- * The leading-tag branch is what makes an "[Epic] …" issue with no `epic` label
- * read as an epic at all (label check misses it, and it doesn't END in
- * "(epic)"). The `\b` + `[:\]]` terminator keeps a bare adjective ("Epic rework
- * of nav") and near-words ("[epicenter] …") from matching — only a real
- * bracketed/colon-delimited `epic` tag counts.
- */
-export function titleMarksEpic(title) {
-  const t = (title || '').trim().toLowerCase();
-  return t.endsWith('(epic)') || /^\[?\s*epic\b\s*[:\]]/.test(t);
-}
+export { titleMarksEpic };
 
 // True when an issue is a tracking/umbrella epic — by `epic` label or by the
 // title conventions above. `labels` is the caller's already-lowercased list.
@@ -704,7 +710,7 @@ async function fetchTrustedForgeIssues(cfg, repoPath, { issueAuthorFilter = 'sel
  * runs only when the list is non-empty, so an empty queue parks without a
  * wasted branch/PR scan.
  */
-async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', issueExcludeLabels = [], issueMinAgeMinutes, requireComplete = false } = {}, env) {
+async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', issueExcludeLabels = [], issueMinAgeMinutes, requireComplete = false, ignoreTaskId = null } = {}, env) {
   const cfg = FORGE_ISSUE_CONFIG[forgeKey];
   const repoPath = app?.repoPath;
   if (!repoPath) return { actionable: false, count: 0, reason: 'no-repo-path' };
@@ -753,7 +759,7 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self', is
     return parked('no-open-issues');
   }
 
-  const inFlightResult = await inFlightIssueNumbers(repoPath, cfg.inFlightForge, resolvedEnv);
+  const inFlightResult = await inFlightIssueNumbers(repoPath, cfg.inFlightForge, resolvedEnv, ignoreTaskId);
   if (inFlightResult.error) {
     console.log(`⏭️ In-flight claim evidence unavailable (${inFlightResult.error}); skipping this dispatch`);
     return forgeTransient(cfg, inFlightResult.error, null, inFlightResult.detail);

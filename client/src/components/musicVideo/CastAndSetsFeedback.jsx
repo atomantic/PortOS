@@ -3,7 +3,7 @@ import { MessageSquare, X } from 'lucide-react';
 import AutoSizeTextarea from '../ui/AutoSizeTextarea';
 import { formatCount } from '../../utils/formatters.js';
 
-const buttonClass = 'flex items-center gap-1 rounded px-3 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50';
+const buttonClass = 'flex items-center gap-1 rounded px-3 py-1.5 text-sm min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50';
 
 /**
  * Plain-text feedback on a Cast & Sets sheet. Aimed at the whole sheet, the
@@ -48,7 +48,7 @@ export default function CastAndSetsFeedback({ stage, busy, onApply, onRemove, on
           <>
             <label htmlFor="mv-cast-feedback-target" className="sr-only">Applies to</label>
             <select id="mv-cast-feedback-target" value={target} onChange={(e) => setTarget(e.target.value)}
-              className="min-h-[44px] min-w-0 max-w-full flex-1 rounded border border-port-border bg-port-bg px-2 py-1 text-sm sm:min-h-0 sm:flex-none">
+              className="min-h-[44px] min-w-0 max-w-full flex-1 rounded border border-port-border bg-port-bg px-2 py-1 text-sm pointer-fine:sm:min-h-0 sm:flex-none">
               <option value="">Whole sheet</option>
               {images.map((item) => <option key={item.key} value={item.key}>{item.label || item.key}</option>)}
             </select>
@@ -98,7 +98,7 @@ export default function CastAndSetsFeedback({ stage, busy, onApply, onRemove, on
                 <span className="min-w-0 flex-1 break-words">{f.text}</span>
                 <button type="button" disabled={busy || !onRemove} onClick={() => onRemove(f.id)} aria-label={`Stop applying: ${f.text}`}
                   title="Stop applying this to later revisions"
-                  className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center text-port-text-muted hover:text-port-error disabled:opacity-50 sm:min-h-0 sm:min-w-0">
+                  className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center text-port-text-muted hover:text-port-error disabled:opacity-50 pointer-fine:sm:min-h-0 pointer-fine:sm:min-w-0">
                   <X size={14} aria-hidden="true" />
                 </button>
               </li>
@@ -116,7 +116,7 @@ export default function CastAndSetsFeedback({ stage, busy, onApply, onRemove, on
                 <span className="min-w-0 flex-1 break-words">{stage.plan?.[key]?.label || key}: {text}</span>
                 <button type="button" disabled={busy || !onRemoveImage} onClick={() => onRemoveImage({ key, index, text })}
                   aria-label={`Remove image note from ${stage.plan?.[key]?.label || key}: ${text}`}
-                  className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center text-port-text-muted hover:text-port-error disabled:opacity-50 sm:min-h-0 sm:min-w-0">
+                  className="flex min-h-[44px] min-w-[44px] shrink-0 items-center justify-center text-port-text-muted hover:text-port-error disabled:opacity-50 pointer-fine:sm:min-h-0 pointer-fine:sm:min-w-0">
                   <X size={14} aria-hidden="true" />
                 </button>
               </li>

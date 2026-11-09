@@ -3,6 +3,7 @@ import toast from '../components/ui/Toast';
 import { updateMusicVideoProject } from '../services/apiMusicVideo.js';
 import { getVideoGenStatus, listLorasFull } from '../services/apiImageVideo.js';
 import { loraFamilyOf, VIDEO_LORA_FAMILIES } from '../lib/runnerFamilies';
+import { LTX_REFERENCES_GENERATION_MODE, isLtx25Model } from '../lib/musicVideoLtxReferences.js';
 
 const isLtx23 = (model) => !!model
   && model.runtime === 'ltx2'
@@ -126,6 +127,8 @@ export default function useMusicVideoModelSettings({ project, onProjectPatch } =
     || null;
   const audioReactiveReady = !!(isLtx23(activeModel) && detectedAudioReactiveLora);
   const audioReactiveSelected = settings.backend === 'local' && settings.generationMode === 'audioReactive';
+  const ltxReferencesModels = models.filter(isLtx25Model);
+  const ltxReferencesSelected = settings.backend === 'local' && settings.generationMode === LTX_REFERENCES_GENERATION_MODE;
 
   // One reason string for every scene-video kickoff gate, so the disabled
   // buttons, their tooltips, and the toast a blocked call raises all say the
@@ -139,11 +142,16 @@ export default function useMusicVideoModelSettings({ project, onProjectPatch } =
   const blockedReasonFor = (pick) => {
     const reads = pick.backend === 'local' && pick.generationMode === 'audioReactive'
       ? combinedStatus(statusRead, loraRead)
-      : pick.backend === 'fal' || pick.backend === 'runway' ? statusRead : 'ready';
+      : pick.backend === 'fal' || pick.backend === 'runway'
+        || (pick.backend === 'local' && pick.generationMode === LTX_REFERENCES_GENERATION_MODE) ? statusRead : 'ready';
     if (reads === 'error') return "Couldn't read Video Gen status — retry before rendering";
     if (reads === 'loading') return 'Checking Video Gen status…';
     if (pick.backend === 'local' && pick.generationMode === 'audioReactive' && !audioReactiveReady) {
       return 'Audio-reactive generation requires an installed LTX-2.3 audio-reactive LoRA and an LTX-2.3 local model';
+    }
+    if (pick.backend === 'local' && pick.generationMode === LTX_REFERENCES_GENERATION_MODE) {
+      const pickedModel = models.find((model) => model.id === (pick.modelId || defaultModel));
+      if (!isLtx25Model(pickedModel)) return 'LTX 2.5 References requires an LTX 2.5 local model';
     }
     if (pick.backend === 'fal' && !falEnabled) {
       return 'No fal.ai API key configured — set it in Settings → Video Gen (or the FAL_KEY env var) first';
@@ -222,6 +230,8 @@ export default function useMusicVideoModelSettings({ project, onProjectPatch } =
     detectedAudioReactiveLora,
     audioReactiveReady,
     audioReactiveSelected,
+    ltxReferencesModels,
+    ltxReferencesSelected,
     videoBlockedReason,
     blockedReasonFor,
     change,

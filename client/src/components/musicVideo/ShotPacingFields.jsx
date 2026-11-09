@@ -6,7 +6,7 @@ const PACING_FIELDS = [
   ['hookSec', 'Opening hook (s)', 'Cap on the very first shot so the video opens on a cut.', 0.5, 60],
 ];
 
-const inputCls = 'bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0 w-24';
+const inputCls = 'bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0 w-24';
 
 /**
  * Shot pacing for AI Plan (#8964), edited beside the AI Plan button on the

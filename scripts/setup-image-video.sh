@@ -14,17 +14,18 @@
 #   INSTALL_FASTVIDEO '1' to clone hao-ai-lab/FastVideo at ~/.portos/fastvideo and build an MLX venv for native Apple Silicon video generation (FastMetal models). Default: 0; opt in with INSTALL_FASTVIDEO=1.
 #   INSTALL_MINIMAX_H3 '1' to install the pinned MiniMax H3 MLX runtime at ~/.portos/minimax-h3-mlx (Apple Silicon). Weights remain a separate explicit Video Gen download. Default: 0.
 #   INSTALL_MERERUN '1' to install the signed mere.run v0.47.0 runtime at ~/.portos/mere-run for MiniMax H3 Ref2VA image+audio generation (Apple Silicon). Weights remain a separate explicit Video Gen download. Default: 0.
-#   INSTALL_MINIMAX_H3_CUDA '1' to install the MiniMax H3 CUDA runtime at ~/.portos/minimax-h3-cuda (Windows + NVIDIA), via diffusers' MiniMaxH3ModularPipeline. Weights remain a separate explicit Video Gen download (~144 GB). Default: 0.
+#   INSTALL_MINIMAX_H3_CUDA '1' to install the MiniMax H3 CUDA runtime at ~/.portos/minimax-h3-cuda (Windows/Linux + NVIDIA), via diffusers' MiniMaxH3ModularPipeline. Weights remain a separate explicit Video Gen download (~144 GB). Default: 0.
 #   INSTALL_LTX25_CUDA '1' to install the official LTX-2.5 CUDA runtime at ~/.portos/ltx-2.5-cuda (Windows/Linux + NVIDIA). Weights remain a separate explicit Video Gen download. Default: 0.
 #   INSTALL_WAN22_CUDA '1' to install the official Wan 2.2 Diffusers runtime at ~/.portos/wan2.2-cuda (Windows/Linux + NVIDIA). Weights remain a separate explicit Video Gen download. Default: 0.
-#   INSTALL_FLUX2  '1' to also bootstrap a separate venv at ~/.portos/venv-flux2 for FLUX.2-klein (default: 1 on macOS, 0 elsewhere)
+#   INSTALL_FLUX2  '1' to also bootstrap a separate venv at ~/.portos/venv-flux2 for FLUX.2-klein (Apple Silicon, or x86_64 Windows/Linux via a hash-locked CUDA runtime; default: 1 on Apple Silicon, 0 elsewhere)
 #   INSTALL_MUSICGEN '1' to bootstrap a venv at ~/.portos/venv-musicgen + clone ml-explore/mlx-examples to ~/.portos/mlx-examples for local MusicGen (MLX) background-music generation (pipeline audio stage). Default: 0; opt in with INSTALL_MUSICGEN=1 (macOS / Apple Silicon only).
 #   MLX_EXAMPLES_PIN  commit SHA of ml-explore/mlx-examples to check out for MusicGen (default: main).
 #   INSTALL_MINIMAX_MUSIC3_MLX '1' to bootstrap a separate venv at ~/.portos/venv-minimax-music3-mlx for native MiniMax Music 3 MLX generation (Music studio). Default: 0; opt in with INSTALL_MINIMAX_MUSIC3_MLX=1 (macOS / Apple Silicon only).
-#   MLX_AUDIO_PIN    commit SHA of Blaizzy/mlx-audio containing MiniMax Music 3 support (default: 784b29e2691a93ca7483147d86f61859dfaa6296).
-#   INSTALL_AUDIOLDM2 '1' to bootstrap a venv at ~/.portos/venv-audioldm2 (torch + diffusers) for local AudioLDM2 long-form background-music generation (pipeline audio stage, second backend alongside MusicGen). Default: 0; opt in with INSTALL_AUDIOLDM2=1 (runs on MPS / CUDA / CPU).
+#   INSTALL_AUDIOLDM2 '1' to bootstrap a venv at ~/.portos/venv-audioldm2 (torch + diffusers) for local AudioLDM2 long-form background-music generation (pipeline audio stage, second backend alongside MusicGen). Default: 0; opt in with INSTALL_AUDIOLDM2=1 (runs on MPS / CUDA / CPU; Apple Silicon or x86_64 Windows/Linux, hash-locked).
 #   INSTALL_ACESTEP '1' to bootstrap a venv at ~/.portos/venv-acestep (torch + the acestep package) for local ACE-Step full-song generation with vocals (Music studio, third backend). Default: 0; opt in with INSTALL_ACESTEP=1 (runs on MPS / CUDA / CPU; checkpoints auto-download to ~/.cache/ace-step on first run).
+#   ACESTEP_PIN    commit SHA of ace-step/ACE-Step to check out for ACE-Step (default: 1bee4c9f5b43e30995f8d4d33b3919197ce1bd68).
 #   INSTALL_ACESTEP15 '1' to bootstrap a venv at ~/.portos/venv-acestep15 (the ACE-Step 1.5 package + torch) for local ACE-Step 1.5 full-song generation (Music studio). Default: 0; opt in with INSTALL_ACESTEP15=1 (runs on MPS / CUDA / CPU; model weights are installed separately from Music).
+#   ACESTEP15_PIN  commit SHA of ace-step/ACE-Step-1.5 to check out for ACE-Step 1.5 (default: dce621408bee8c31b4fcf4811682eb9359e1bc94).
 #   INSTALL_MINIMAX_MUSIC3 '1' to bootstrap a venv at ~/.portos/venv-minimax-music3 (CUDA torch + a pinned diffusers) for local MiniMax Music 3 full-song generation up to five minutes (Music studio, fourth backend). Default: 0; opt in with INSTALL_MINIMAX_MUSIC3=1 (NVIDIA CUDA only; the ~29 GB of weights install separately from Music → Generate).
 #   INSTALL_MUSCRIPTOR '1' to bootstrap a venv at ~/.portos/venv-muscriptor (the muscriptor pip package + its torch stack) for local audio → MIDI transcription (Rounds reference audio + Music Video parsing). Default: 0; opt in with INSTALL_MUSCRIPTOR=1 (runs on MPS / CUDA / CPU; model weights auto-download from HuggingFace on first transcription).
 
@@ -320,6 +321,49 @@ venv_python() {
 # shared with venv_python so the two probes can't drift apart.
 venv_exists() { [[ -x "$1/bin/python3" || -x "$1/Scripts/python.exe" ]]; }
 
+# Runtimes installed from x86_64 Windows/Linux cu126 hash locks
+# (scripts/requirements-<name>-cuda-{windows,linux}.lock.txt) share this flow.
+# $1 = label for messages, $2 = doc that explains regenerating the locks.
+require_cuda_lock_host() {
+  if ! have uv; then
+    echo "❌ $1 CUDA needs uv to provision its locked Python 3.11 runtime. Install uv and retry Repair." >&2
+    exit 1
+  fi
+  case "$(uname -m)" in
+    x86_64|amd64|AMD64) ;;
+    *) echo "❌ $1 CUDA hash locks support x86_64 Windows/Linux only." >&2; exit 1 ;;
+  esac
+  if [[ "$TORCH_CUDA_INDEX" != "https://download.pytorch.org/whl/cu126" ]]; then
+    echo "❌ $1 CUDA is locked to cu126. Unset PORTOS_TORCH_CUDA_INDEX; see $2." >&2
+    exit 1
+  fi
+}
+
+# $1 = label, $2 = venv, $3 = lock name prefix (requirements-<prefix>-<os>.lock.txt),
+# remaining args = extra `uv pip sync` flags (e.g. --no-binary <sdist-only dep>).
+# The locks target 3.11. Repair keeps a standalone 3.11 venv and rebuilds other
+# minors and Conda bases, whose DLL search path can stop CUDA torch loading on
+# Windows. Sync removes packages outside the lock.
+sync_cuda_lock_venv() {
+  local label="$1" venv="$2" lock py
+  local sync_args=("${@:4}")
+  if is_windows; then lock="${SCRIPT_DIR}/$3-windows.lock.txt"; else lock="${SCRIPT_DIR}/$3-linux.lock.txt"; fi
+  if venv_exists "$venv"; then
+    py="$(venv_python "$venv")"
+    if ! "$py" -c "import sys; from pathlib import Path; sys.exit(sys.version_info[:2] != (3, 11) or (Path(sys.base_prefix) / 'conda-meta').is_dir())"; then
+      echo "♻️ Rebuilding ${label} CUDA with its locked Python 3.11..."
+      uv venv --clear --managed-python --python 3.11 "$venv"
+    fi
+  fi
+  if ! venv_exists "$venv"; then
+    echo "📦 Creating ${label} CUDA venv (Python 3.11) at ${venv}..."
+    uv venv --managed-python --python 3.11 "$venv"
+  fi
+  py="$(venv_python "$venv")"
+  echo "📦 Syncing the hash-pinned ${label} CUDA runtime into ${venv}..."
+  uv pip sync --require-hashes --only-binary :all: ${sync_args[@]+"${sync_args[@]}"} --index-strategy unsafe-best-match --python "$py" "$lock"
+}
+
 # True when $1 is a Python 3.10+ interpreter. Mirrors MIN_VENV_PYTHON in
 # server/lib/pythonSetup.js, and for the same reason: below 3.10 pip resolves an
 # old setuptools (<77) inside its build isolation, which rejects the PEP 639
@@ -407,7 +451,7 @@ ANY_BYOV="${INSTALL_LTX2:-0}${INSTALL_LTX25:-0}${INSTALL_LTX25_CUDA:-0}${INSTALL
 if [[ "$ANY_BYOV" != *[!0]* ]]; then
   DEFAULT_INSTALL_MFLUX=1
   DEFAULT_INSTALL_VIDEO=$(is_macos && echo 1 || echo 0)
-  DEFAULT_INSTALL_FLUX2=$(is_macos && echo 1 || echo 0)
+  DEFAULT_INSTALL_FLUX2=$(is_apple_silicon && echo 1 || echo 0)
 else
   DEFAULT_INSTALL_MFLUX=0
   DEFAULT_INSTALL_VIDEO=0
@@ -425,57 +469,80 @@ if [[ "$INSTALL_MFLUX" == "1" ]]; then
   # mflux comes with the mflux-generate CLI which the local image backend
   # spawns directly. The shared inference runtime remains supported.
   echo "📦 Installing image generation packages (mflux + deps)..."
-  # VALIDATED TRIO (issue #1329) — pin the MLX/Metal backend, do NOT leave it a
-  # floor. The original three M5 Max GPU-watchdog kernel panics
-  # (docs/research/2026-06-13-mflux-training-watchdog-panic.md) happened on
-  # mlx/mlx-metal 0.30.6. A `>=` floor lets pip resolve mlx silently under
-  # mflux's `mlx<0.32` cap, so the stack can drift back onto a known-bad build.
-  # The surviving trio is mflux 0.17.5 · mlx 0.31.2 · mlx-metal 0.31.2:
-  # run d36562a0 (flux2-klein-4b, bf16, 768px) completed a full LoRA training to
-  # adapter extraction on this stack on the panicking M5 Max (Mac17,7/T6050,
-  # macOS 26.5.1) with no panic — see the bisect log in the incident doc.
-  # (mflux's `dev` extra itself pins mlx==0.31.0, so 0.31.2 is in-range and
-  # closer to what mflux develops against than the old 0.30.6.) Bump these only
-  # after re-validating with another full run on the M5; record the proving run.
-  MFLUX_PIN='mflux==0.17.5'
-  MLX_PIN='mlx==0.31.2'
-  MLX_METAL_PIN='mlx-metal==0.31.2'
-  # mflux/mlx need Python 3.10+. The historical layout installs mflux with
-  # `pip install --user` against $PYTHON_BIN, and PortOS discovers the shared console scripts
-  # beside that interpreter. But when $PYTHON_BIN is too old (e.g. a system
-  # python3.8) or externally-managed (PEP 668) so the --user install fails or
-  # can't be imported, fall back to a dedicated venv at ~/.portos/venv-mflux —
-  # the same pattern the flux2/ltx/wan runtimes use. PortOS's resolveMfluxPython()
+  # PINNED TRIO — pin the MLX/Metal backend, do NOT leave it a floor, so a
+  # reinstall can't drift onto a different build. mflux 0.24 · mlx 0.32.4 ·
+  # mlx-metal 0.32.4 · Pillow 13 (#15479): mflux 0.17.5 imported the private
+  # PIL._typing that Pillow 13 broke, and 0.24 is the first release that
+  # supports Pillow 13 (the 12.x crafted-image advisories are fixed only there)
+  # and requires mlx>=0.32. The same mflux 0.24 · mlx 0.32.4 pair already runs
+  # FLUX.3 (requirements-flux3-mlx.txt). The earlier 0.17.5 · 0.31.2 trio was
+  # bisected for the M5 Max GPU-watchdog panics, which came from sustained LoRA
+  # TRAINING (docs/research/2026-06-13-mflux-training-watchdog-panic.md); LoRA
+  # training is retired (#13536), so this runtime serves inference only and
+  # needs no training run to bump. The runtime fingerprint (#1406) still records
+  # the stack for any future panic report.
+  # Apple Silicon installs the trio from the hash-pinned lock, whose direct pins
+  # (scripts/requirements-mflux-mlx.txt) must match these.
+  MFLUX_PIN='mflux==0.24.0'
+  MLX_PIN='mlx==0.32.4'
+  MLX_METAL_PIN='mlx-metal==0.32.4'
+  if is_apple_silicon; then
+    # Apple Silicon installs only from the hash-pinned lock
+    # (scripts/requirements-mflux-mlx.lock.txt): no install-time resolution, so
+    # a new or compromised transitive release can't land on the next Repair.
+    # Unpinned resolution had already broken it: Pillow 13 made mflux-generate
+    # and mflux-train fail at import while `import mflux` still succeeded, so
+    # the probe imports both CLIs. The lock needs CPython 3.11+: its filelock fix
+    # for advisory GHSA-2g95-wg33-c5x2 (4.2.1) dropped 3.10.
+    MFLUX_LOCK="$SCRIPT_DIR/requirements-mflux-mlx.lock.txt"
+    MFLUX_MIN_MINOR=11
+    MFLUX_PROBE='from mflux.models.flux.cli.flux_generate import main; from mflux.models.common.cli.train import main'
+  else
+    # mflux is MLX-only, so off Apple Silicon the resolving install is left as it was.
+    MFLUX_LOCK=""
+    MFLUX_MIN_MINOR=10
+    MFLUX_PROBE='import mflux'
+  fi
+  # The historical layout installs mflux with `pip install --user` against
+  # $PYTHON_BIN, and PortOS discovers the shared console scripts beside that
+  # interpreter. But when $PYTHON_BIN is too old (e.g. a system python3.8) or
+  # externally-managed (PEP 668) so the --user install fails or can't be
+  # imported, fall back to a dedicated venv at ~/.portos/venv-mflux — the same
+  # pattern the flux2/ltx/wan runtimes use. PortOS's resolveMfluxPython()
   # auto-discovers that venv, so no Settings change is needed either way.
   MFLUX_USE_VENV=0
-  if python_at_least_310 "$PYTHON_BIN"; then
+  if "$PYTHON_BIN" -c "import sys; sys.exit(0 if sys.version_info[:2] >= (3, ${MFLUX_MIN_MINOR}) else 1)" 2>/dev/null; then
     # Step 1: force-reinstall mflux's OWN files with --no-deps to flush a stale
     # file layout left by a partial reinstall (we hit this on 0.12.1, where
     # `mflux/models/flux/cli/` went missing, breaking the entry-point shim)
     # WITHOUT re-downloading the heavy torch/mlx tree.
-    #
-    # Step 2: let pip install mflux's DECLARED runtime deps — pip is the source
-    # of truth, not a hand-kept list. mflux 0.17 imports packages the 0.12.x set
-    # omitted (pillow, matplotlib, platformdirs, sentencepiece, piexif, …) and
-    # constrains transformers>=5,<6 and mlx<0.32; a hand list silently drifts and
-    # leaves `mflux-train` failing at import before it can reach the trainer.
-    # No --no-deps (so missing deps ARE pulled) and no --upgrade (so an
-    # already-satisfied heavyweight like torch isn't re-resolved/re-downloaded on
-    # repeat runs); a dep that violates mflux's constraints is still corrected.
-    # The explicit mlx/mlx-metal pins ride alongside mflux so pip resolves the
-    # proven backend rather than the latest in-range build.
-    "$PYTHON_BIN" -m pip install --upgrade --user --force-reinstall --no-deps "$MFLUX_PIN" \
-      && "$PYTHON_BIN" -m pip install --user "$MFLUX_PIN" "$MLX_PIN" "$MLX_METAL_PIN" \
-      || MFLUX_USE_VENV=1
+    if [[ -n "$MFLUX_LOCK" ]]; then
+      # Step 2: every other package at its locked version and hash. --no-deps
+      # because the lock is already the complete closure.
+      MFLUX_SELF_REQ="$(mktemp)"
+      awk '/^[^ #]/ { keep = /^mflux==/ } keep' "$MFLUX_LOCK" > "$MFLUX_SELF_REQ"
+      "$PYTHON_BIN" -m pip install --user --require-hashes --no-deps --force-reinstall -r "$MFLUX_SELF_REQ" \
+        && "$PYTHON_BIN" -m pip install --user --require-hashes --no-deps -r "$MFLUX_LOCK" \
+        || MFLUX_USE_VENV=1
+      rm -f "$MFLUX_SELF_REQ"
+    else
+      # Step 2: let pip install mflux's DECLARED runtime deps. No --upgrade, so
+      # an already-satisfied heavyweight like torch isn't re-resolved on repeat
+      # runs. The explicit mlx/mlx-metal pins ride alongside mflux so pip
+      # resolves the proven backend rather than the latest in-range build.
+      "$PYTHON_BIN" -m pip install --upgrade --user --force-reinstall --no-deps "$MFLUX_PIN" \
+        && "$PYTHON_BIN" -m pip install --user "$MFLUX_PIN" "$MLX_PIN" "$MLX_METAL_PIN" \
+        || MFLUX_USE_VENV=1
+    fi
     # A satisfied-looking pip run can still leave an unimportable stack on an odd
     # system Python — verify mflux actually imports before trusting the --user path.
-    if [[ "$MFLUX_USE_VENV" == "0" ]] && ! "$PYTHON_BIN" -c 'import mflux' 2>/dev/null; then
+    if [[ "$MFLUX_USE_VENV" == "0" ]] && ! "$PYTHON_BIN" -c "$MFLUX_PROBE" 2>/dev/null; then
       echo "⚠️  mflux installed under $PYTHON_BIN but does not import — falling back to a dedicated venv."
       MFLUX_USE_VENV=1
     fi
   else
     MFLUX_PYVER="$("$PYTHON_BIN" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || echo unknown)"
-    echo "⚠️  $PYTHON_BIN is Python ${MFLUX_PYVER} — mflux needs 3.10+; using a dedicated venv."
+    echo "⚠️  $PYTHON_BIN is Python ${MFLUX_PYVER} — mflux needs 3.${MFLUX_MIN_MINOR}+; using a dedicated venv."
     MFLUX_USE_VENV=1
   fi
 
@@ -485,7 +552,7 @@ if [[ "$INSTALL_MFLUX" == "1" ]]; then
     # unusable, which is exactly the case we're recovering from.
     if ! have uv; then
       echo "❌ Need 'uv' to build the mflux venv (system Python can't host mflux)." >&2
-      echo "   Install uv (https://docs.astral.sh/uv/) or point PYTHON_BIN at a Python 3.10+, then re-run." >&2
+      echo "   Install uv (https://docs.astral.sh/uv/) or point PYTHON_BIN at a Python 3.${MFLUX_MIN_MINOR}+, then re-run." >&2
       exit 1
     fi
     MFLUX_VENV="${HOME}/.portos/venv-mflux"
@@ -497,13 +564,19 @@ if [[ "$INSTALL_MFLUX" == "1" ]]; then
       mkdir -p "${HOME}/.portos"
       uv venv --python 3.11 "$MFLUX_VENV"
     fi
-    echo "📦 Installing ${MFLUX_PIN} · ${MLX_PIN} · ${MLX_METAL_PIN} into ${MFLUX_VENV}..."
-    uv pip install --python "$MFLUX_VENV_PY" "$MFLUX_PIN" "$MLX_PIN" "$MLX_METAL_PIN"
+    if [[ -n "$MFLUX_LOCK" ]]; then
+      # The venv is mflux's alone, so sync it to exactly the lock.
+      echo "📦 Installing the hash-pinned mflux lock into ${MFLUX_VENV}..."
+      uv pip sync --python "$MFLUX_VENV_PY" --require-hashes "$MFLUX_LOCK"
+    else
+      echo "📦 Installing ${MFLUX_PIN} · ${MLX_PIN} · ${MLX_METAL_PIN} into ${MFLUX_VENV}..."
+      uv pip install --python "$MFLUX_VENV_PY" "$MFLUX_PIN" "$MLX_PIN" "$MLX_METAL_PIN"
+    fi
     pin_venv_arm64 "$MFLUX_VENV"
     probe_or_fail \
-      "mflux venv built but 'import mflux' failed." \
+      "mflux venv built but its CLIs failed to import." \
       "Check that mflux and its MLX dependencies installed cleanly in ${MFLUX_VENV}." \
-      "$MFLUX_VENV_PY" -c 'import mflux'
+      "$MFLUX_VENV_PY" -c "$MFLUX_PROBE"
     echo "✅ mflux venv ready: ${MFLUX_VENV_PY} (PortOS auto-discovers it — no Settings change needed)."
   fi
 fi
@@ -684,6 +757,7 @@ if [[ "$INSTALL_FASTVIDEO" == "1" ]]; then
   FASTVIDEO_PIN="${FASTVIDEO_PIN:-fa2d1324c60050cd65209c6aaeac470e7fb412f5}"
   FASTVIDEO_DIR="${HOME}/.portos/fastvideo"
   FASTVIDEO_PY="${FASTVIDEO_DIR}/.venv/bin/python3"
+  FASTVIDEO_LOCK="${SCRIPT_DIR}/requirements-fastvideo-mlx.lock.txt"
   mkdir -p "${HOME}/.portos"
   if [[ ! -d "${FASTVIDEO_DIR}/.git" ]]; then
     echo "📦 Cloning hao-ai-lab/FastVideo..."
@@ -699,14 +773,21 @@ if [[ "$INSTALL_FASTVIDEO" == "1" ]]; then
     echo "📦 Creating FastVideo venv with Python 3.11..."
     (cd "${FASTVIDEO_DIR}" && "$FASTVIDEO_UV" venv --python 3.11)
   fi
-  # --python is mandatory. `uv pip install` resolves its target interpreter from
-  # VIRTUAL_ENV, then CONDA_PREFIX, and only then the cwd's .venv — so on a
-  # machine whose shell activates conda (PortOS inherits that env through PM2)
-  # this silently installed FastVideo into the user's conda base environment,
-  # downgrading torch/transformers/gradio there while leaving this venv empty.
-  # The import probe below then failed with a message that pointed nowhere.
-  echo "📦 Installing FastVideo MLX packages into ${FASTVIDEO_DIR}/.venv..."
-  (cd "${FASTVIDEO_DIR}" && "$FASTVIDEO_UV" pip install --python "${FASTVIDEO_PY}" -e '.[mlx]')
+  if ! "$FASTVIDEO_PY" -c 'import sys; sys.exit(0 if sys.version_info[:2] >= (3, 11) else 1)'; then
+    echo "❌ FastVideo on Apple Silicon needs Python 3.11+; ${FASTVIDEO_PY} is older." >&2
+    echo "   Re-run with PYTHON_BIN pointing at a 3.11+ interpreter (e.g. 'brew install python@3.12')." >&2
+    exit 1
+  fi
+  # FastVideo MLX on Apple Silicon installs only from the hash-pinned lock
+  # (scripts/requirements-fastvideo-mlx.lock.txt): no install-time resolution,
+  # so a new or compromised transitive release can't land on the next Repair.
+  # Direct pins: scripts/requirements-fastvideo-mlx.txt. The checkout itself
+  # is installed with --no-deps so no unpinned dependencies resolve.
+  # --python is mandatory: `uv pip sync` and `uv pip install` resolve their
+  # target interpreter from VIRTUAL_ENV/CONDA_PREFIX if --python is omitted.
+  echo "📦 Installing FastVideo MLX packages from hash-pinned lock into ${FASTVIDEO_DIR}/.venv..."
+  "$FASTVIDEO_UV" pip sync --require-hashes --python "${FASTVIDEO_PY}" "$FASTVIDEO_LOCK"
+  "$FASTVIDEO_UV" pip install --no-deps --python "${FASTVIDEO_PY}" -e "${FASTVIDEO_DIR}"
   pin_venv_arm64 "${FASTVIDEO_DIR}/.venv"
   probe_or_fail \
     "FastVideo synced but the runtime import failed in ${FASTVIDEO_PY}." \
@@ -837,7 +918,7 @@ if [[ "$INSTALL_MINIMAX_H3" == "1" ]]; then
     "$MINIMAX_H3_UV" venv --python 3.11 "${MINIMAX_H3_DIR}/.venv"
   fi
   echo "📦 Syncing pinned MiniMax H3 MLX packages..."
-  "$MINIMAX_H3_UV" pip sync --python "$MINIMAX_H3_PY" "$MINIMAX_H3_LOCK"
+  "$MINIMAX_H3_UV" pip sync --require-hashes --python "$MINIMAX_H3_PY" "$MINIMAX_H3_LOCK"
   pin_venv_arm64 "${MINIMAX_H3_DIR}/.venv"
   # --verify-seams is Install/Repair-only strictness: it also asserts the encoder
   # seams generate_minimax_h3.py patches, which the readiness probe deliberately
@@ -899,46 +980,48 @@ fi
 
 INSTALL_MINIMAX_H3_CUDA="${INSTALL_MINIMAX_H3_CUDA:-0}"
 if [[ "$INSTALL_MINIMAX_H3_CUDA" == "1" ]]; then
-  # MiniMax H3 on NVIDIA, through diffusers' MiniMaxH3ModularPipeline. Unlike
-  # the MLX sibling above there is no source checkout to pin — everything this
-  # runtime executes is an installed distribution, so the pin is the exact
-  # `==` set in requirements-minimax-h3-cuda.txt. Reached only from the
-  # explicit runtime Install / Repair action, never from PortOS boot.
+  # Reached only from explicit Install / Repair, never from PortOS boot.
   if is_macos; then
     echo "❌ MiniMax H3 CUDA needs an NVIDIA GPU. On Apple Silicon use INSTALL_MINIMAX_H3=1 (the MLX port) instead." >&2
     exit 1
   fi
-  # Windows and Linux both reach this model: since #4142 the catalog picks
-  # video.cuda[] vs video.mlx[] on `process.platform === 'darwin'`, so a Linux
-  # install is served the same CUDA list a Windows one is.
+  if ! have uv; then
+    echo "❌ MiniMax H3 CUDA needs uv to provision its locked Python 3.11 runtime. Install uv and retry Repair." >&2
+    exit 1
+  fi
+  case "$(uname -m)" in
+    x86_64|amd64|AMD64) ;;
+    *) echo "❌ MiniMax H3 CUDA hash locks support x86_64 Windows/Linux only." >&2; exit 1 ;;
+  esac
+  if [[ "$TORCH_CUDA_INDEX" != "https://download.pytorch.org/whl/cu126" ]]; then
+    echo "❌ MiniMax H3 CUDA is locked to cu126. Unset PORTOS_TORCH_CUDA_INDEX for this runtime; see docs/MINIMAX_H3_CUDA.md." >&2
+    exit 1
+  fi
   MINIMAX_H3_CUDA_DIR="${HOME}/.portos/minimax-h3-cuda"
   MINIMAX_H3_CUDA_VENV="${MINIMAX_H3_CUDA_DIR}/.venv"
-  MINIMAX_H3_CUDA_REQS="${SCRIPT_DIR}/requirements-minimax-h3-cuda.txt"
+  if is_windows; then
+    MINIMAX_H3_CUDA_LOCK="${SCRIPT_DIR}/requirements-minimax-h3-cuda-windows.lock.txt"
+  else
+    MINIMAX_H3_CUDA_LOCK="${SCRIPT_DIR}/requirements-minimax-h3-cuda-linux.lock.txt"
+  fi
   mkdir -p "${MINIMAX_H3_CUDA_DIR}"
-  # A Windows venv puts the interpreter under Scripts/, a POSIX one under bin/.
-  # Probe for either rather than branching on `uname`, so an MSYS/Cygwin bash on
-  # Windows (which is what the in-app installer runs) resolves correctly.
   reset_universal_venv "$MINIMAX_H3_CUDA_VENV" "$PYTHON_BIN"
+  # Locks target 3.11. Rebuild other minors and Conda bases whose DLL search
+  # path can prevent the Windows CUDA torch wheel from loading.
+  if venv_exists "$MINIMAX_H3_CUDA_VENV"; then
+    MINIMAX_H3_CUDA_PY="$(venv_python "$MINIMAX_H3_CUDA_VENV")"
+    if ! "$MINIMAX_H3_CUDA_PY" -c "import sys; from pathlib import Path; sys.exit(sys.version_info[:2] != (3, 11) or (Path(sys.base_prefix) / 'conda-meta').is_dir())"; then
+      echo "♻️ Rebuilding MiniMax H3 CUDA with its locked Python 3.11..."
+      uv venv --clear --managed-python --python 3.11 "$MINIMAX_H3_CUDA_VENV"
+    fi
+  fi
   if ! venv_exists "$MINIMAX_H3_CUDA_VENV"; then
-    echo "📦 Creating MiniMax H3 CUDA venv..."
-    "$PYTHON_BIN" -m venv "$MINIMAX_H3_CUDA_VENV"
+    echo "📦 Creating MiniMax H3 CUDA venv (Python 3.11)..."
+    uv venv --managed-python --python 3.11 "$MINIMAX_H3_CUDA_VENV"
   fi
   MINIMAX_H3_CUDA_PY="$(venv_python "$MINIMAX_H3_CUDA_VENV")"
-
-  "$MINIMAX_H3_CUDA_PY" -m pip install --disable-pip-version-check --upgrade pip wheel setuptools
-  # torch comes from PyTorch's own CUDA index on Windows — the default PyPI
-  # Windows wheel is CPU-only, which on a 33B model is not "slower" but
-  # unusable. Linux's PyPI torch already bundles CUDA, so it needs no swap.
-  # Mirrors WIN_TORCH_CUDA_INDEX in server/lib/pythonSetup.js.
-  if is_windows; then
-    echo "📦 Installing CUDA torch from ${TORCH_CUDA_INDEX}..."
-    "$MINIMAX_H3_CUDA_PY" -m pip install --upgrade --index-url "$TORCH_CUDA_INDEX" torch
-  else
-    echo "📦 Installing torch..."
-    "$MINIMAX_H3_CUDA_PY" -m pip install --upgrade torch
-  fi
-  echo "📦 Installing pinned MiniMax H3 CUDA packages..."
-  "$MINIMAX_H3_CUDA_PY" -m pip install --upgrade --progress-bar on -r "$MINIMAX_H3_CUDA_REQS"
+  echo "📦 Syncing the hash-pinned MiniMax H3 CUDA runtime..."
+  uv pip sync --require-hashes --only-binary :all: --index-strategy unsafe-best-match --python "$MINIMAX_H3_CUDA_PY" "$MINIMAX_H3_CUDA_LOCK"
   pin_venv_arm64 "$MINIMAX_H3_CUDA_VENV"
 
   # Three separate ways this install can look complete and not be: a CPU-only
@@ -959,31 +1042,54 @@ fi
 
 INSTALL_LTX25_CUDA="${INSTALL_LTX25_CUDA:-0}"
 if [[ "$INSTALL_LTX25_CUDA" == "1" ]]; then
+  # Reached only from explicit Install / Repair, never from PortOS boot.
   if is_macos; then
-    echo "❌ LTX-2.5 CUDA needs an NVIDIA GPU. On Apple Silicon use the LTX-2.5 MLX runtime instead." >&2
+    echo "❌ LTX-2.5 CUDA needs an NVIDIA GPU. On Apple Silicon use INSTALL_LTX25=1 (the MLX port) instead." >&2
+    exit 1
+  fi
+  if ! have uv; then
+    echo "❌ LTX-2.5 CUDA needs uv to provision its locked Python 3.11 runtime. Install uv and retry Repair." >&2
+    exit 1
+  fi
+  case "$(uname -m)" in
+    x86_64|amd64|AMD64) ;;
+    *) echo "❌ LTX-2.5 CUDA hash locks support x86_64 Windows/Linux only." >&2; exit 1 ;;
+  esac
+  LTX25_CUDA_TORCH_INDEX="${PORTOS_LTX25_CUDA_TORCH_INDEX:-https://download.pytorch.org/whl/cu132}"
+  if [[ "$LTX25_CUDA_TORCH_INDEX" != "https://download.pytorch.org/whl/cu132" ]]; then
+    echo "❌ LTX-2.5 CUDA is locked to cu132. Unset PORTOS_LTX25_CUDA_TORCH_INDEX for this runtime; see docs/LTX25_CUDA.md." >&2
     exit 1
   fi
   LTX25_CUDA_DIR="${HOME}/.portos/ltx-2.5-cuda"
   LTX25_CUDA_VENV="${LTX25_CUDA_DIR}/.venv"
-  LTX25_CUDA_REQS="${SCRIPT_DIR}/requirements-ltx25-cuda.txt"
-  LTX25_CUDA_TORCH_INDEX="${PORTOS_LTX25_CUDA_TORCH_INDEX:-https://download.pytorch.org/whl/cu128}"
-  mkdir -p "$LTX25_CUDA_DIR"
+  if is_windows; then
+    LTX25_CUDA_LOCK="${SCRIPT_DIR}/requirements-ltx25-cuda-windows.lock.txt"
+  else
+    LTX25_CUDA_LOCK="${SCRIPT_DIR}/requirements-ltx25-cuda-linux.lock.txt"
+  fi
+  mkdir -p "${LTX25_CUDA_DIR}"
   reset_universal_venv "$LTX25_CUDA_VENV" "$PYTHON_BIN"
+  # Locks target 3.11. Rebuild other minors and Conda bases whose DLL search
+  # path can prevent the Windows CUDA torch wheel from loading.
+  if venv_exists "$LTX25_CUDA_VENV"; then
+    LTX25_CUDA_PY="$(venv_python "$LTX25_CUDA_VENV")"
+    if ! "$LTX25_CUDA_PY" -c "import sys; from pathlib import Path; sys.exit(sys.version_info[:2] != (3, 11) or (Path(sys.base_prefix) / 'conda-meta').is_dir())"; then
+      echo "♻️ Rebuilding LTX-2.5 CUDA with its locked Python 3.11..."
+      uv venv --clear --managed-python --python 3.11 "$LTX25_CUDA_VENV"
+    fi
+  fi
   if ! venv_exists "$LTX25_CUDA_VENV"; then
-    echo "📦 Creating LTX-2.5 CUDA venv..."
-    "$PYTHON_BIN" -m venv "$LTX25_CUDA_VENV"
+    echo "📦 Creating LTX-2.5 CUDA venv (Python 3.11)..."
+    uv venv --managed-python --python 3.11 "$LTX25_CUDA_VENV"
   fi
   LTX25_CUDA_PY="$(venv_python "$LTX25_CUDA_VENV")"
-  "$LTX25_CUDA_PY" -m pip install --disable-pip-version-check --upgrade pip wheel setuptools
-  if is_windows; then
-    echo "📦 Installing LTX-validated CUDA torch 2.10 stack from ${LTX25_CUDA_TORCH_INDEX}..."
-    "$LTX25_CUDA_PY" -m pip install --upgrade --index-url "$LTX25_CUDA_TORCH_INDEX" "torch==2.10.0" "torchaudio==2.10.0" "torchvision==0.25.0"
-  else
-    "$LTX25_CUDA_PY" -m pip install --upgrade torch torchaudio torchvision
-  fi
-  echo "📦 Installing official LTX-2.5 CUDA packages..."
-  "$LTX25_CUDA_PY" -m pip install --upgrade --progress-bar on -r "$LTX25_CUDA_REQS"
+  echo "📦 Syncing the hash-pinned LTX-2.5 CUDA runtime..."
+  # Only the two hash-verified LTX archives may build. Bootstrap their sole
+  # backend from its own hash lock, then disable isolated build resolution.
+  uv pip install --require-hashes --only-binary :all: --no-deps --python "$LTX25_CUDA_PY" -r "${SCRIPT_DIR}/requirements-ltx25-cuda-build.lock.txt"
+  uv pip sync --require-hashes --only-binary :all: --no-binary ltx-core,ltx-pipelines --no-build-isolation --index-strategy unsafe-best-match --python "$LTX25_CUDA_PY" "$LTX25_CUDA_LOCK"
   pin_venv_arm64 "$LTX25_CUDA_VENV"
+
   probe_or_fail \
     "LTX-2.5 CUDA installed but its runtime probe failed." \
     "Check the CUDA torch and LTX package errors above, then use Repair in Video Gen." \
@@ -998,23 +1104,43 @@ if [[ "$INSTALL_WAN22_CUDA" == "1" ]]; then
     echo "❌ Wan 2.2 CUDA needs an NVIDIA GPU. Use the Wan 2.2 MLX runtime on Apple Silicon." >&2
     exit 1
   fi
+  if ! have uv; then
+    echo "❌ Wan 2.2 CUDA needs uv to provision its locked Python 3.11 runtime. Install uv and retry Repair." >&2
+    exit 1
+  fi
+  case "$(uname -m)" in
+    x86_64|amd64|AMD64) ;;
+    *) echo "❌ Wan 2.2 CUDA hash locks support x86_64 Windows/Linux only." >&2; exit 1 ;;
+  esac
+  if [[ "$TORCH_CUDA_INDEX" != "https://download.pytorch.org/whl/cu126" ]]; then
+    echo "❌ Wan 2.2 CUDA is locked to the cu126 stack. Unset PORTOS_TORCH_CUDA_INDEX for this runtime; see docs/WAN22_CUDA.md." >&2
+    exit 1
+  fi
   WAN22_CUDA_DIR="${HOME}/.portos/wan2.2-cuda"
   WAN22_CUDA_VENV="${WAN22_CUDA_DIR}/.venv"
-  WAN22_CUDA_REQS="${SCRIPT_DIR}/requirements-wan22-cuda.txt"
+  if is_windows; then
+    WAN22_CUDA_LOCK="${SCRIPT_DIR}/requirements-wan22-cuda-windows.lock.txt"
+  else
+    WAN22_CUDA_LOCK="${SCRIPT_DIR}/requirements-wan22-cuda-linux.lock.txt"
+  fi
   mkdir -p "$WAN22_CUDA_DIR"
   reset_universal_venv "$WAN22_CUDA_VENV" "$PYTHON_BIN"
+  # Keep an existing standalone 3.11, but rebuild older minors and Conda bases
+  # whose DLL search path can prevent CUDA torch from loading on Windows.
+  if venv_exists "$WAN22_CUDA_VENV"; then
+    WAN22_CUDA_PY="$(venv_python "$WAN22_CUDA_VENV")"
+    if ! "$WAN22_CUDA_PY" -c "import sys; from pathlib import Path; sys.exit(sys.version_info[:2] != (3, 11) or (Path(sys.base_prefix) / 'conda-meta').is_dir())"; then
+      echo "♻️ Rebuilding Wan 2.2 CUDA with its locked Python 3.11..."
+      uv venv --clear --managed-python --python 3.11 "$WAN22_CUDA_VENV"
+    fi
+  fi
   if ! venv_exists "$WAN22_CUDA_VENV"; then
-    echo "📦 Creating Wan 2.2 CUDA venv..."
-    "$PYTHON_BIN" -m venv "$WAN22_CUDA_VENV"
+    echo "📦 Creating Wan 2.2 CUDA venv (Python 3.11)..."
+    uv venv --managed-python --python 3.11 "$WAN22_CUDA_VENV"
   fi
   WAN22_CUDA_PY="$(venv_python "$WAN22_CUDA_VENV")"
-  "$WAN22_CUDA_PY" -m pip install --disable-pip-version-check --upgrade pip wheel setuptools
-  if is_windows; then
-    "$WAN22_CUDA_PY" -m pip install --upgrade --index-url "$TORCH_CUDA_INDEX" torch torchvision
-  else
-    "$WAN22_CUDA_PY" -m pip install --upgrade torch torchvision
-  fi
-  "$WAN22_CUDA_PY" -m pip install --upgrade --progress-bar on -r "$WAN22_CUDA_REQS"
+  echo "📦 Syncing the hash-pinned Wan 2.2 CUDA runtime..."
+  uv pip sync --require-hashes --only-binary :all: --index-strategy unsafe-best-match --python "$WAN22_CUDA_PY" "$WAN22_CUDA_LOCK"
   pin_venv_arm64 "$WAN22_CUDA_VENV"
   probe_or_fail \
     "Wan 2.2 CUDA installed but its runtime probe failed." \
@@ -1061,21 +1187,16 @@ if [[ "$INSTALL_MUSICGEN" == "1" ]]; then
       "$PYTHON_BIN" -m venv "$MUSICGEN_VENV"
     fi
     echo "📦 Installing MusicGen (MLX) packages into ${MUSICGEN_VENV}..."
-    "$MUSICGEN_PY" -m pip install --upgrade pip wheel setuptools >/dev/null
+    # Install only from the hash-pinned lock (scripts/requirements-musicgen-mlx.lock.txt):
+    # no install-time resolution, so a new or compromised transitive release can't
+    # land on the next Repair. Direct pins: scripts/requirements-musicgen-mlx.txt.
     # mlx + numpy run the model; transformers (<5 for MLX compat) + sentencepiece
     # provide the T5 text conditioner's tokenizer; scipy is imported by the
     # mlx-examples musicgen utils. torch is required because MusicGen.from_pretrained
     # loads the upstream PyTorch checkpoints (torch.load) before converting to MLX —
     # without it generation fails at model-load even though the class imports fine.
     # We write WAV via the stdlib `wave` module in the sidecar, so no soundfile dep.
-    "$MUSICGEN_PY" -m pip install --upgrade \
-      mlx \
-      numpy \
-      torch \
-      "transformers<5" \
-      sentencepiece \
-      "huggingface_hub[hf_xet]" \
-      scipy
+    "$MUSICGEN_PY" -m pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-musicgen-mlx.lock.txt"
     pin_venv_arm64 "$MUSICGEN_VENV"
     # Verify BOTH that the class imports AND that torch loaded — the import alone
     # passed even when torch was missing, so install used to report ready and
@@ -1101,29 +1222,42 @@ if [[ "$INSTALL_AUDIOLDM2" == "1" ]]; then
   # Git Bash on Windows creates Scripts/python.exe even though this is a bash
   # installer; venv_python keeps the installer aligned with the JS resolver.
   AUDIOLDM2_VENV="${HOME}/.portos/venv-audioldm2"
+  if ! is_apple_silicon; then
+    # Linux/Windows install only from a hash lock, which covers x86_64 with the
+    # cu126 torch build (it also runs on CPU). Other hosts have no lock.
+    if is_macos; then
+      echo "❌ AudioLDM2 hash locks cover Apple Silicon and x86_64 Windows/Linux; Intel macOS is unsupported." >&2
+      exit 1
+    fi
+    require_cuda_lock_host AudioLDM2 docs/AUDIOLDM2_CUDA.md
+  fi
   mkdir -p "${HOME}/.portos"
   reset_universal_venv "$AUDIOLDM2_VENV" "$PYTHON_BIN"
 
-  if ! venv_exists "$AUDIOLDM2_VENV"; then
-    echo "📦 Creating AudioLDM2 venv at ${AUDIOLDM2_VENV}..."
-    "$PYTHON_BIN" -m venv "$AUDIOLDM2_VENV"
+  if is_apple_silicon; then
+    if ! venv_exists "$AUDIOLDM2_VENV"; then
+      echo "📦 Creating AudioLDM2 venv at ${AUDIOLDM2_VENV}..."
+      "$PYTHON_BIN" -m venv "$AUDIOLDM2_VENV"
+    fi
+    AUDIOLDM2_PY="$(venv_python "$AUDIOLDM2_VENV")"
+    echo "📦 Installing AudioLDM2 (diffusers) packages into ${AUDIOLDM2_VENV}..."
+    # Apple Silicon installs only from the hash-pinned lock
+    # (scripts/requirements-audioldm2-mlx.lock.txt): no install-time resolution,
+    # so a new or compromised transitive release can't land on the next Repair.
+    # Direct pins: scripts/requirements-audioldm2-mlx.txt.
+    # The lock needs CPython 3.11+: its filelock fix for advisory GHSA-2g95-wg33-c5x2
+    # (4.2.1) dropped 3.10, and 4.1.0, the last 3.10 release, is affected.
+    if ! "$AUDIOLDM2_PY" -c 'import sys; sys.exit(0 if sys.version_info[:2] >= (3, 11) else 1)'; then
+      echo "❌ AudioLDM2 on Apple Silicon needs Python 3.11+; ${AUDIOLDM2_PY} is older." >&2
+      echo "   Re-run with PYTHON_BIN pointing at a 3.11+ interpreter (e.g. 'brew install python@3.12')." >&2
+      exit 1
+    fi
+    "$AUDIOLDM2_PY" -m pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-audioldm2-mlx.lock.txt"
+  else
+    # Direct pins: scripts/requirements-audioldm2-cuda.txt.
+    sync_cuda_lock_venv AudioLDM2 "$AUDIOLDM2_VENV" requirements-audioldm2-cuda
+    AUDIOLDM2_PY="$(venv_python "$AUDIOLDM2_VENV")"
   fi
-  AUDIOLDM2_PY="$(venv_python "$AUDIOLDM2_VENV")"
-  echo "📦 Installing AudioLDM2 (diffusers) packages into ${AUDIOLDM2_VENV}..."
-  "$AUDIOLDM2_PY" -m pip install --upgrade pip wheel setuptools >/dev/null
-  # torch runs the model; diffusers provides AudioLDM2Pipeline; transformers +
-  # sentencepiece supply the text encoders (T5 / GPT-2 / CLAP) AudioLDM2 chains;
-  # accelerate speeds device placement; numpy/scipy back the audio math. We write
-  # WAV via the stdlib `wave` module in the sidecar, so no soundfile dep.
-  "$AUDIOLDM2_PY" -m pip install --upgrade \
-    torch \
-    diffusers \
-    "transformers<5" \
-    sentencepiece \
-    accelerate \
-    numpy \
-    scipy \
-    "huggingface_hub[hf_xet]"
   pin_venv_arm64 "$AUDIOLDM2_VENV"
   # Verify the pipeline class imports — a clean import means generation only
   # needs the one-time weight download, not a broken venv.
@@ -1148,23 +1282,59 @@ if [[ "$INSTALL_ACESTEP" == "1" ]]; then
   # ACE-Step auto-downloads its 3.5B checkpoints to ~/.cache/ace-step on first
   # run, so this only builds the venv — no weights are fetched here.
   ACESTEP_VENV="${HOME}/.portos/venv-acestep"
+  ACESTEP_PIN="${ACESTEP_PIN:-1bee4c9f5b43e30995f8d4d33b3919197ce1bd68}"
+  ACESTEP_DIR="${HOME}/.portos/acestep"
+  if ! is_apple_silicon; then
+    # Linux/Windows install only from a hash lock, which covers x86_64 with the
+    # cu126 torch build. Other hosts have no lock.
+    if is_macos; then
+      echo "❌ ACE-Step hash locks cover Apple Silicon and x86_64 Windows/Linux; Intel macOS is unsupported." >&2
+      exit 1
+    fi
+    require_cuda_lock_host ACE-Step docs/ACESTEP_CUDA.md
+  fi
   mkdir -p "${HOME}/.portos"
   reset_universal_venv "$ACESTEP_VENV" "$PYTHON_BIN"
 
-  if ! venv_exists "$ACESTEP_VENV"; then
-    echo "📦 Creating ACE-Step venv at ${ACESTEP_VENV}..."
-    "$PYTHON_BIN" -m venv "$ACESTEP_VENV"
+  if is_apple_silicon; then
+    if ! venv_exists "$ACESTEP_VENV"; then
+      echo "📦 Creating ACE-Step venv at ${ACESTEP_VENV}..."
+      "$PYTHON_BIN" -m venv "$ACESTEP_VENV"
+    fi
+    ACESTEP_PY="$(venv_python "$ACESTEP_VENV")"
+    echo "📦 Installing ACE-Step into ${ACESTEP_VENV}..."
+    # Apple Silicon installs only from the hash-pinned lock
+    # (scripts/requirements-acestep-mlx.lock.txt): no install-time resolution,
+    # so a new or compromised transitive release can't land on the next Repair.
+    # Direct pins: scripts/requirements-acestep-mlx.txt.
+    # The lock needs CPython 3.11+: its filelock fix for advisory GHSA-2g95-wg33-c5x2
+    # dropped 3.10.
+    if ! "$ACESTEP_PY" -c 'import sys; sys.exit(0 if sys.version_info[:2] >= (3, 11) else 1)'; then
+      echo "❌ ACE-Step on Apple Silicon needs Python 3.11+; ${ACESTEP_PY} is older." >&2
+      echo "   Re-run with PYTHON_BIN pointing at a 3.11+ interpreter (e.g. 'brew install python@3.12')." >&2
+      exit 1
+    fi
+    if [[ ! -d "${ACESTEP_DIR}/.git" ]]; then
+      echo "📦 Cloning ace-step/ACE-Step..."
+      git clone --progress https://github.com/ace-step/ACE-Step.git "${ACESTEP_DIR}"
+    fi
+    git_checkout_pin "${ACESTEP_DIR}" "${ACESTEP_PIN}"
+    "$ACESTEP_PY" -m pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-acestep-mlx.lock.txt"
+    "$ACESTEP_PY" -m pip install --no-deps --no-build-isolation "${ACESTEP_DIR}"
+  else
+    # Direct pins: scripts/requirements-acestep-cuda.txt. docopt and unidic-lite
+    # publish only (hashed) source distributions, so exactly those two may build.
+    # The acestep package is installed from the ACESTEP_PIN checkout with
+    # --no-deps, like Apple Silicon: a git SHA cannot satisfy --require-hashes.
+    sync_cuda_lock_venv ACE-Step "$ACESTEP_VENV" requirements-acestep-cuda --no-binary docopt --no-binary unidic-lite
+    ACESTEP_PY="$(venv_python "$ACESTEP_VENV")"
+    if [[ ! -d "${ACESTEP_DIR}/.git" ]]; then
+      echo "📦 Cloning ace-step/ACE-Step..."
+      git clone --progress https://github.com/ace-step/ACE-Step.git "${ACESTEP_DIR}"
+    fi
+    git_checkout_pin "${ACESTEP_DIR}" "${ACESTEP_PIN}"
+    uv pip install --no-deps --no-build-isolation --python "$ACESTEP_PY" "${ACESTEP_DIR}"
   fi
-  ACESTEP_PY="$(venv_python "$ACESTEP_VENV")"
-  echo "📦 Installing ACE-Step into ${ACESTEP_VENV} (this pulls torch + the acestep package)..."
-  "$ACESTEP_PY" -m pip install --upgrade pip wheel setuptools >/dev/null
-  # The acestep package declares its own deps (torch, diffusers, transformers,
-  # audio I/O, etc.), so installing it from git pulls the matching stack. Pinning
-  # nothing here keeps us on the upstream-tested set; the import probe below
-  # catches a broken resolve before generation depends on it.
-  "$ACESTEP_PY" -m pip install --upgrade \
-    "git+https://github.com/ace-step/ACE-Step.git" \
-    "huggingface_hub[hf_xet]"
   pin_venv_arm64 "$ACESTEP_VENV"
   # Verify the pipeline class imports — a clean import means generation only
   # needs the one-time checkpoint download, not a broken venv.
@@ -1181,26 +1351,60 @@ if [[ "$INSTALL_ACESTEP15" == "1" ]]; then
   # multi-component pipeline whose DiT loads custom Transformers code with
   # trust_remote_code, so it must never share v1's `acestep` venv.
   ACESTEP15_VENV="${HOME}/.portos/venv-acestep15"
+  ACESTEP15_PIN="${ACESTEP15_PIN:-dce621408bee8c31b4fcf4811682eb9359e1bc94}"
+  ACESTEP15_DIR="${HOME}/.portos/acestep15"
+  if ! is_apple_silicon; then
+    # Linux/Windows install only from a hash lock, which covers x86_64 with the
+    # cu126 torch build. Other hosts have no lock.
+    if is_macos; then
+      echo "❌ ACE-Step 1.5 hash locks cover Apple Silicon and x86_64 Windows/Linux; Intel macOS is unsupported." >&2
+      exit 1
+    fi
+    require_cuda_lock_host "ACE-Step 1.5" docs/ACESTEP15_CUDA.md
+  fi
   mkdir -p "${HOME}/.portos"
   reset_universal_venv "$ACESTEP15_VENV" "$PYTHON_BIN"
 
-  if ! venv_exists "$ACESTEP15_VENV"; then
-    echo "📦 Creating ACE-Step 1.5 venv at ${ACESTEP15_VENV}..."
-    "$PYTHON_BIN" -m venv "$ACESTEP15_VENV"
+  if is_apple_silicon; then
+    if ! venv_exists "$ACESTEP15_VENV"; then
+      echo "📦 Creating ACE-Step 1.5 venv at ${ACESTEP15_VENV}..."
+      "$PYTHON_BIN" -m venv "$ACESTEP15_VENV"
+    fi
+    ACESTEP15_PY="$(venv_python "$ACESTEP15_VENV")"
+    echo "📦 Installing ACE-Step 1.5 into ${ACESTEP15_VENV}..."
+    # Apple Silicon installs only from the hash-pinned lock
+    # (scripts/requirements-acestep15-mlx.lock.txt): no install-time resolution,
+    # so a new or compromised transitive release can't land on the next Repair.
+    # Direct pins: scripts/requirements-acestep15-mlx.txt.
+    # The lock needs CPython 3.11+: its filelock fix for advisory GHSA-2g95-wg33-c5x2
+    # dropped 3.10.
+    if ! "$ACESTEP15_PY" -c 'import sys; sys.exit(0 if sys.version_info[:2] >= (3, 11) else 1)'; then
+      echo "❌ ACE-Step 1.5 on Apple Silicon needs Python 3.11+; ${ACESTEP15_PY} is older." >&2
+      echo "   Re-run with PYTHON_BIN pointing at a 3.11+ interpreter (e.g. 'brew install python@3.12')." >&2
+      exit 1
+    fi
+    if [[ ! -d "${ACESTEP15_DIR}/.git" ]]; then
+      echo "📦 Cloning ace-step/ACE-Step-1.5..."
+      git clone --progress https://github.com/ace-step/ACE-Step-1.5.git "${ACESTEP15_DIR}"
+    fi
+    git_checkout_pin "${ACESTEP15_DIR}" "${ACESTEP15_PIN}"
+    "$ACESTEP15_PY" -m pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-acestep15-mlx.lock.txt"
+    "$ACESTEP15_PY" -m pip install --no-deps --no-build-isolation --ignore-requires-python "${ACESTEP15_DIR}"
+  else
+    # Direct pins: scripts/requirements-acestep15-cuda.txt. The package is
+    # installed from the ACESTEP15_PIN checkout (the v0.1.8 release commit) with
+    # --no-deps, like Apple Silicon: a git SHA cannot satisfy --require-hashes.
+    # --no-deps also keeps the package's own cu128 torch pins from displacing the
+    # shared cu126 lock.
+    sync_cuda_lock_venv "ACE-Step 1.5" "$ACESTEP15_VENV" requirements-acestep15-cuda
+    ACESTEP15_PY="$(venv_python "$ACESTEP15_VENV")"
+    if [[ ! -d "${ACESTEP15_DIR}/.git" ]]; then
+      echo "📦 Cloning ace-step/ACE-Step-1.5..."
+      git clone --progress https://github.com/ace-step/ACE-Step-1.5.git "${ACESTEP15_DIR}"
+    fi
+    git_checkout_pin "${ACESTEP15_DIR}" "${ACESTEP15_PIN}"
+    uv pip install --no-deps --no-build-isolation --ignore-requires-python --python "$ACESTEP15_PY" "${ACESTEP15_DIR}"
   fi
-  ACESTEP15_PY="$(venv_python "$ACESTEP15_VENV")"
-  echo "📦 Installing ACE-Step 1.5 into ${ACESTEP15_VENV}..."
-  "$ACESTEP15_PY" -m pip install --upgrade pip wheel setuptools >/dev/null
-  # ACE-Step 1.5's Linux/Windows torch pins are published on PyTorch's CUDA
-  # index. Passing it as an extra index remains harmless on macOS, where the
-  # package selects its native MPS-compatible torch dependency.
-  # Pin the runtime to a vendor release. The model snapshot is installed
-  # separately through Music, but its custom-code loader depends on this
-  # package's handler contract.
-  ACESTEP15_TORCH_INDEX="${PORTOS_TORCH_CUDA_INDEX:-https://download.pytorch.org/whl/cu128}"
-  "$ACESTEP15_PY" -m pip install --upgrade --extra-index-url "$ACESTEP15_TORCH_INDEX" \
-    "git+https://github.com/ace-step/ACE-Step-1.5.git@v0.1.8" \
-    "huggingface_hub[hf_xet]"
   pin_venv_arm64 "$ACESTEP15_VENV"
   probe_or_fail \
     "ACE-Step 1.5 venv built but its Transformers runtime failed to import." \
@@ -1211,59 +1415,21 @@ fi
 
 INSTALL_MINIMAX_MUSIC3="${INSTALL_MINIMAX_MUSIC3:-0}"
 if [[ "$INSTALL_MINIMAX_MUSIC3" == "1" ]]; then
-  # MiniMax Music 3 (Music studio, CUDA-only) — full songs with vocals up to five
-  # minutes. diffusers is pinned to a git commit until a release carries the
-  # MiniMax-Music3 modular pipeline, so pip needs git to build that wheel. Say so
-  # up front rather than failing several minutes into a torch download.
-  if ! have git; then
-    echo "❌ INSTALL_MINIMAX_MUSIC3=1 requires git (the diffusers pin is a git commit)." >&2
+  if is_macos; then
+    echo "❌ MiniMax Music 3 CUDA needs an NVIDIA GPU. Use the Music 3 MLX runtime on Apple Silicon." >&2
     exit 1
   fi
+  require_cuda_lock_host "MiniMax Music 3" docs/MINIMAX_MUSIC3_CUDA.md
   MINIMAX_MUSIC3_VENV="${HOME}/.portos/venv-minimax-music3"
   mkdir -p "${HOME}/.portos"
-  # A venv built from a conda/anaconda base is the sticky Windows failure: pip
-  # installs torch happily, then `import torch` dies with
-  # "WinError 1114 ... c10.dll initialization routine failed" because conda's
-  # MKL/OpenMP DLLs poison the search path. Re-running never helped, because the
-  # venv already existed and got reused. Rebuild it when its recorded base is
-  # conda and the interpreter we'd build from is not.
-  if [[ -f "$MINIMAX_MUSIC3_VENV/pyvenv.cfg" ]] \
-     && grep -qiE '^home *=.*(miniconda|anaconda)' "$MINIMAX_MUSIC3_VENV/pyvenv.cfg" \
-     && [[ ! "$PYTHON_BIN" =~ [Mm]ini?conda|[Aa]naconda ]]; then
-    echo "♻️  Existing MiniMax Music 3 venv was built from a conda base (torch can't load there) — rebuilding from ${PYTHON_BIN}."
-    rm -rf "$MINIMAX_MUSIC3_VENV"
-  fi
   reset_universal_venv "$MINIMAX_MUSIC3_VENV" "$PYTHON_BIN"
-  if ! venv_exists "$MINIMAX_MUSIC3_VENV"; then
-    "$PYTHON_BIN" -m venv "$MINIMAX_MUSIC3_VENV"
-  fi
+  sync_cuda_lock_venv "MiniMax Music 3" "$MINIMAX_MUSIC3_VENV" requirements-minimax-music3-cuda
   MINIMAX_MUSIC3_PY="$(venv_python "$MINIMAX_MUSIC3_VENV")"
-  "$MINIMAX_MUSIC3_PY" -m pip install --upgrade pip wheel setuptools
-  # torch comes from PyTorch's own CUDA index on Windows — the default PyPI
-  # Windows wheel is CPU-only, which fails the cuda assert below. Linux's PyPI
-  # torch already bundles CUDA. Mirrors the MiniMax H3 CUDA block above.
-  MINIMAX_MUSIC3_TORCH_INDEX="${PORTOS_TORCH_CUDA_INDEX:-https://download.pytorch.org/whl/cu126}"
-  if is_windows; then
-    echo "📦 Installing CUDA torch from ${MINIMAX_MUSIC3_TORCH_INDEX}..."
-    "$MINIMAX_MUSIC3_PY" -m pip install --upgrade --index-url "$MINIMAX_MUSIC3_TORCH_INDEX" torch
-  else
-    "$MINIMAX_MUSIC3_PY" -m pip install --upgrade torch
-  fi
-  # Fail here, with the cause named, rather than 400 MB of diffusers later. The
-  # conda-base check above is a heuristic (a venv can inherit a poisoned DLL path
-  # other ways); this is the ground truth.
-  probe_or_fail \
-    "torch installed into ${MINIMAX_MUSIC3_VENV} but cannot be imported." \
-    "On Windows, use a standalone Python instead of a conda/anaconda base, then retry the install." \
-    "$MINIMAX_MUSIC3_PY" -c "import torch"
-  # Pinned to the main commit that merged MiniMax Music 3 (diffusers PR #14456,
-  # 2026-08-13) — the integration is in no tagged release yet. The pin must be a
-  # commit reachable from main: pip clones the default branch, so a PR-branch
-  # head SHA fails with "pathspec ... did not match any file(s) known to git".
-  "$MINIMAX_MUSIC3_PY" -m pip install --upgrade transformers accelerate huggingface_hub numpy \
-    'diffusers @ git+https://github.com/huggingface/diffusers.git@2da7040be1a2e5f2fcbc8b985083342a308f5a86'
   pin_venv_arm64 "$MINIMAX_MUSIC3_VENV"
-  "$MINIMAX_MUSIC3_PY" -c "import torch; from diffusers import ModularPipeline; assert torch.cuda.is_available()"
+  probe_or_fail \
+    "MiniMax Music 3 CUDA installed but its runtime probe failed." \
+    "Check the CUDA torch/import errors above, then use Repair in Music. Use standalone Python if Conda DLLs interfere." \
+    "$MINIMAX_MUSIC3_PY" -c "import torch; from diffusers import ModularPipeline; from diffusers.modular_pipelines.minimax_music3 import MiniMaxMusic3Blocks; assert torch.cuda.is_available(), 'no CUDA device'"
   echo "✅ MiniMax Music 3 venv ready: $MINIMAX_MUSIC3_PY"
   echo "   Model weights (~29 GB) install separately from Music → Generate."
 fi
@@ -1286,21 +1452,18 @@ if [[ "$INSTALL_MINIMAX_MUSIC3_MLX" == "1" ]]; then
       "$PYTHON_BIN" -m venv "$MINIMAX_MUSIC3_MLX_VENV"
     fi
     MINIMAX_MUSIC3_MLX_PY="$(venv_python "$MINIMAX_MUSIC3_MLX_VENV")"
-    MLX_AUDIO_PIN="${MLX_AUDIO_PIN:-784b29e2691a93ca7483147d86f61859dfaa6296}"
     echo "📦 Installing MiniMax Music 3 MLX packages into ${MINIMAX_MUSIC3_MLX_VENV}..."
-    "$MINIMAX_MUSIC3_MLX_PY" -m pip install --upgrade pip wheel setuptools >/dev/null
-    # MiniMax Music 3 support merged into mlx-audio after its latest release;
-    # pin the merge commit until a release containing it is published. The model
-    # cards themselves document this same upstream commit as the required API.
-    "$MINIMAX_MUSIC3_MLX_PY" -m pip install --upgrade \
-      "mlx-audio @ git+https://github.com/Blaizzy/mlx-audio.git@${MLX_AUDIO_PIN}" \
-      "huggingface_hub[hf_xet]"
+    # Install only from the hash-pinned lock (scripts/requirements-minimax-music3-mlx.lock.txt):
+    # no install-time resolution, so a new or compromised transitive release can't
+    # land on the next Repair. Direct pins: scripts/requirements-minimax-music3-mlx.txt
+    # (mlx-audio 0.5.0, the first release with the MiniMax Music 3 merge).
+    "$MINIMAX_MUSIC3_MLX_PY" -m pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-minimax-music3-mlx.lock.txt"
     pin_venv_arm64 "$MINIMAX_MUSIC3_MLX_VENV"
     probe_or_fail \
       "MiniMax Music 3 MLX venv built but 'import mlx; from mlx_audio.music import load' failed." \
       "Check that mlx-audio installed cleanly in ${MINIMAX_MUSIC3_MLX_VENV}." \
       "$MINIMAX_MUSIC3_MLX_PY" -c "import mlx; from mlx_audio.music import load"
-    echo "✅ MiniMax Music 3 MLX venv ready: $MINIMAX_MUSIC3_MLX_PY (mlx-audio @ ${MLX_AUDIO_PIN:0:12})"
+    echo "✅ MiniMax Music 3 MLX venv ready: $MINIMAX_MUSIC3_MLX_PY"
   fi
 fi
 
@@ -1318,22 +1481,42 @@ if [[ "$INSTALL_MUSCRIPTOR" == "1" ]]; then
   # so this only builds the venv — no weights are fetched here. Weights are
   # CC BY-NC 4.0 (non-commercial).
   MUSCRIPTOR_VENV="${HOME}/.portos/venv-muscriptor"
+  if ! is_apple_silicon; then
+    # Linux/Windows install only from a hash lock, which covers x86_64 with the
+    # cu126 torch build (it also runs on CPU). Other hosts have no lock.
+    if is_macos; then
+      echo "❌ MuScriptor hash locks cover Apple Silicon and x86_64 Windows/Linux; Intel macOS is unsupported." >&2
+      exit 1
+    fi
+    require_cuda_lock_host MuScriptor docs/MUSCRIPTOR_CUDA.md
+  fi
   mkdir -p "${HOME}/.portos"
   reset_universal_venv "$MUSCRIPTOR_VENV" "$PYTHON_BIN"
 
-  if ! venv_exists "$MUSCRIPTOR_VENV"; then
-    echo "📦 Creating MuScriptor venv at ${MUSCRIPTOR_VENV}..."
-    "$PYTHON_BIN" -m venv "$MUSCRIPTOR_VENV"
+  if is_apple_silicon; then
+    if ! venv_exists "$MUSCRIPTOR_VENV"; then
+      echo "📦 Creating MuScriptor venv at ${MUSCRIPTOR_VENV}..."
+      "$PYTHON_BIN" -m venv "$MUSCRIPTOR_VENV"
+    fi
+    MUSCRIPTOR_PY="$(venv_python "$MUSCRIPTOR_VENV")"
+    echo "📦 Installing MuScriptor into ${MUSCRIPTOR_VENV} (pulls torch + audio deps)..."
+    # Apple Silicon installs only from the hash-pinned lock
+    # (scripts/requirements-muscriptor-mlx.lock.txt): no install-time resolution,
+    # so a new or compromised transitive release can't land on the next Repair.
+    # Direct pins: scripts/requirements-muscriptor-mlx.txt.
+    # The lock needs CPython 3.11+: its filelock fix for advisory GHSA-2g95-wg33-c5x2
+    # (4.2.1) dropped 3.10, and 4.1.0, the last 3.10 release, is affected.
+    if ! "$MUSCRIPTOR_PY" -c 'import sys; sys.exit(0 if sys.version_info[:2] >= (3, 11) else 1)'; then
+      echo "❌ MuScriptor on Apple Silicon needs Python 3.11+; ${MUSCRIPTOR_PY} is older." >&2
+      echo "   Re-run with PYTHON_BIN pointing at a 3.11+ interpreter (e.g. 'brew install python@3.12')." >&2
+      exit 1
+    fi
+    "$MUSCRIPTOR_PY" -m pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-muscriptor-mlx.lock.txt"
+  else
+    # Direct pins: scripts/requirements-muscriptor-cuda.txt.
+    sync_cuda_lock_venv MuScriptor "$MUSCRIPTOR_VENV" requirements-muscriptor-cuda
+    MUSCRIPTOR_PY="$(venv_python "$MUSCRIPTOR_VENV")"
   fi
-  MUSCRIPTOR_PY="$(venv_python "$MUSCRIPTOR_VENV")"
-  echo "📦 Installing MuScriptor into ${MUSCRIPTOR_VENV} (pulls torch + audio deps)..."
-  "$MUSCRIPTOR_PY" -m pip install --upgrade pip wheel setuptools >/dev/null
-  # muscriptor declares its own deps (torch, soundfile, etc.), so installing the
-  # package pulls the matching stack. The import probe below catches a broken
-  # resolve before a transcription depends on it.
-  "$MUSCRIPTOR_PY" -m pip install --upgrade \
-    muscriptor \
-    "huggingface_hub[hf_xet]"
   pin_venv_arm64 "$MUSCRIPTOR_VENV"
   # Verify the model class imports — a clean import means transcription only
   # needs the one-time weight download, not a broken venv.
@@ -1347,71 +1530,73 @@ fi
 INSTALL_FLUX2="${INSTALL_FLUX2:-$DEFAULT_INSTALL_FLUX2}"
 
 if [[ "$INSTALL_FLUX2" == "1" ]]; then
-  # FLUX.2-klein needs torch>=2.5 + diffusers-from-git + sdnq + optimum-quanto.
-  # Mixing those into the mflux pip --user pile (mflux pulls older torch) is
-  # fragile, so we use a sibling venv. server/lib/pythonSetup.js looks for
-  # this venv's interpreter when the active model has runner=='flux2'.
+  # FLUX.2-klein needs torch>=2.5 + diffusers + sdnq + optimum-quanto. Mixing
+  # those into the mflux pip --user pile (mflux pulls older torch) is fragile,
+  # so we use a sibling venv. server/lib/pythonSetup.js looks for this venv's
+  # interpreter when the active model has runner=='flux2'.
+  # Every platform installs only from a hash-pinned lock: no install-time
+  # resolution, so a new or compromised transitive release can't land on the
+  # next Repair. diffusers 0.42.1 is a tagged release carrying Flux2KleinPipeline
+  # + QwenImage21Pipeline and sdnq is on PyPI, so no git source (which cannot
+  # satisfy --require-hashes) is needed. Every run syncs the lock — a venv built
+  # before the locks existed imports fine yet holds unpinned, unhashed packages,
+  # and syncing a lock the venv already matches is a no-op. (FLUX2_FORCE_REINSTALL
+  # is still accepted, but redundant.)
   FLUX2_VENV="${HOME}/.portos/venv-flux2"
-  # Prefer a base outside the venv. An activated universal venv is the first
-  # python3 on PATH; deleting it and then calling that path fails the rebuild.
-  # reset also refuses when the only interpreter lives inside the venv.
-  if ! FLUX2_BASE_PY="$(newest_supported_python "$FLUX2_VENV")" \
-      && ! FLUX2_BASE_PY="$(newest_supported_python)"; then
-    echo "❌ FLUX.2 needs Python 3.10+ to build its venv; \`$PYTHON_BIN\` is older and no newer python3.NN is on PATH." >&2
-    echo "   Install one (e.g. 'brew install python@3.12' or 'uv python install 3.12'), then re-run with PYTHON_BIN pointing at it." >&2
-    exit 1
+  if ! is_apple_silicon; then
+    # Linux/Windows hash locks cover x86_64 with the cu126 torch build (it also
+    # runs on CPU). Other hosts have no lock.
+    if is_macos; then
+      echo "❌ FLUX.2 hash locks cover Apple Silicon and x86_64 Windows/Linux; Intel macOS is unsupported." >&2
+      exit 1
+    fi
+    require_cuda_lock_host FLUX.2 docs/FLUX2_CUDA.md
   fi
   mkdir -p "${HOME}/.portos"
-  reset_universal_venv "$FLUX2_VENV" "$FLUX2_BASE_PY"
-  # A venv left behind by an earlier run against a too-old base can never
-  # install these packages, and `python -m venv` reuses it silently — so every
-  # retry would fail the same way. Rebuild it instead of pip-ing into it.
-  if venv_exists "$FLUX2_VENV" && ! python_at_least_310 "$(venv_python "$FLUX2_VENV")"; then
-    echo "♻️  FLUX.2 venv at ${FLUX2_VENV} predates Python 3.10 — recreating it..."
-    "$FLUX2_BASE_PY" -m venv --clear "$FLUX2_VENV"
-  elif ! venv_exists "$FLUX2_VENV"; then
-    echo "📦 Creating FLUX.2 venv at ${FLUX2_VENV} from ${FLUX2_BASE_PY}..."
-    "$FLUX2_BASE_PY" -m venv "$FLUX2_VENV"
-  fi
-  FLUX2_PY="$(venv_python "$FLUX2_VENV")"
 
-  # Skip the (slow, network-heavy) pip path when both FLUX.2 and Qwen 2.1 already
-  # import — diffusers-from-git is a git clone every run otherwise. Use
-  # FLUX2_FORCE_REINSTALL=1 to bypass.
-  if [[ "${FLUX2_FORCE_REINSTALL:-}" != "1" ]] && "$FLUX2_PY" -c "from diffusers import Flux2KleinPipeline, QwenImage21Pipeline" 2>/dev/null; then
-    echo "✅ FLUX.2 venv already ready: $FLUX2_PY"
-  else
+  if is_apple_silicon; then
+    # Prefer a base outside the venv. An activated universal venv is the first
+    # python3 on PATH; deleting it and then calling that path fails the rebuild.
+    # reset also refuses when the only interpreter lives inside the venv.
+    if ! FLUX2_BASE_PY="$(newest_supported_python "$FLUX2_VENV")" \
+        && ! FLUX2_BASE_PY="$(newest_supported_python)"; then
+      echo "❌ FLUX.2 needs Python 3.10+ to build its venv; \`$PYTHON_BIN\` is older and no newer python3.NN is on PATH." >&2
+      echo "   Install one (e.g. 'brew install python@3.12' or 'uv python install 3.12'), then re-run with PYTHON_BIN pointing at it." >&2
+      exit 1
+    fi
+    reset_universal_venv "$FLUX2_VENV" "$FLUX2_BASE_PY"
+    # A venv left behind by an earlier run against a too-old base can never
+    # install these packages, and `python -m venv` reuses it silently — so every
+    # retry would fail the same way. Rebuild it instead of pip-ing into it.
+    if venv_exists "$FLUX2_VENV" && ! python_at_least_310 "$(venv_python "$FLUX2_VENV")"; then
+      echo "♻️  FLUX.2 venv at ${FLUX2_VENV} predates Python 3.10 — recreating it..."
+      "$FLUX2_BASE_PY" -m venv --clear "$FLUX2_VENV"
+    elif ! venv_exists "$FLUX2_VENV"; then
+      echo "📦 Creating FLUX.2 venv at ${FLUX2_VENV} from ${FLUX2_BASE_PY}..."
+      "$FLUX2_BASE_PY" -m venv "$FLUX2_VENV"
+    fi
+    FLUX2_PY="$(venv_python "$FLUX2_VENV")"
     echo "📦 Installing FLUX.2 packages into $FLUX2_VENV..."
-    "$FLUX2_PY" -m pip install --upgrade pip wheel setuptools >/dev/null
-    # diffusers-from-git is required because Flux2KleinPipeline isn't in any
-    # tagged release as of late 2025 / early 2026. sdnq is git-only too —
-    # registers a custom config type at import-time which
-    # Flux2KleinPipeline.from_pretrained relies on.
-    "$FLUX2_PY" -m pip install --upgrade \
-      "torch>=2.5" \
-      torchvision \
-      accelerate \
-      "transformers>=5.17" \
-      sentencepiece \
-      protobuf \
-      safetensors \
-      "huggingface_hub[hf_xet]" \
-      "diffusers @ git+https://github.com/huggingface/diffusers" \
-      "sdnq @ git+https://github.com/Disty0/sdnq.git" \
-      "peft>=0.17" \
-      "optimum-quanto>=0.2.7" \
-      pillow
-    # Same-version dev snapshots are not replaced by --upgrade. Refresh the
-    # pipeline code without reinstalling torch or its platform-specific wheel.
-    "$FLUX2_PY" -m pip install --force-reinstall --no-deps \
-      "diffusers @ git+https://github.com/huggingface/diffusers"
-    pin_venv_arm64 "$FLUX2_VENV"
-    probe_or_fail \
-      "flux2 venv built but 'from diffusers import Flux2KleinPipeline, QwenImage21Pipeline' failed." \
-      "Try: $FLUX2_PY -m pip install --upgrade --force-reinstall 'diffusers @ git+https://github.com/huggingface/diffusers'" \
-      "$FLUX2_PY" -c "from diffusers import Flux2KleinPipeline, QwenImage21Pipeline"
-    echo "✅ FLUX.2 venv ready: $FLUX2_PY"
+    # Direct pins: scripts/requirements-flux2-mlx.txt.
+    # The lock needs CPython 3.11+: its filelock fix for advisory GHSA-2g95-wg33-c5x2
+    # (4.2.1) dropped 3.10, and 4.1.0, the last 3.10 release, is affected.
+    if ! "$FLUX2_PY" -c 'import sys; sys.exit(0 if sys.version_info[:2] >= (3, 11) else 1)'; then
+      echo "❌ FLUX.2 on Apple Silicon needs Python 3.11+; ${FLUX2_PY} is older." >&2
+      echo "   Re-run with PYTHON_BIN pointing at a 3.11+ interpreter (e.g. 'brew install python@3.12')." >&2
+      exit 1
+    fi
+    "$FLUX2_PY" -m pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-flux2-mlx.lock.txt"
+  else
+    # Direct pins: scripts/requirements-flux2-cuda.txt.
+    sync_cuda_lock_venv FLUX.2 "$FLUX2_VENV" requirements-flux2-cuda
+    FLUX2_PY="$(venv_python "$FLUX2_VENV")"
   fi
+  pin_venv_arm64 "$FLUX2_VENV"
+  probe_or_fail \
+    "FLUX.2 venv built but 'from diffusers import Flux2KleinPipeline, QwenImage21Pipeline' failed." \
+    "Try: INSTALL_FLUX2=1 bash scripts/setup-image-video.sh (re-syncs the hash-pinned lock)" \
+    "$FLUX2_PY" -c "from diffusers import Flux2KleinPipeline, QwenImage21Pipeline"
+  echo "✅ FLUX.2 venv ready: $FLUX2_PY"
 fi
 
 # ffmpeg — required for thumbnails, last-frame extraction, stitch, and the

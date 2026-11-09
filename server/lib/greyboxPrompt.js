@@ -12,7 +12,7 @@
  */
 
 import { GREYBOX_LIMITS, GREYBOX_SCHEMA_VERSION, greyboxSceneSchema } from './greyboxScene.js';
-import { GREYBOX_ASPECTS } from './greyboxVocabulary.js';
+import { GREYBOX_ASPECTS, GREYBOX_PRACTICAL_LIGHTS } from './greyboxVocabulary.js';
 import { extractJson } from './jsonExtract.js';
 
 export { GREYBOX_INSTRUCTION_MAX } from './greyboxVocabulary.js';
@@ -24,7 +24,7 @@ export function greyboxContractInstructions() {
     'Units are meters, Y up, the floor at y=0. X is right, Z is toward the default viewer. Keep the whole place within about 200 m of the origin and give things real-world sizes (a door is ~2.1 m tall, a person ~1.7 m).',
     'Answer with ONE raw JSON object and nothing else, in exactly this shape:',
     `{"version":${GREYBOX_SCHEMA_VERSION},"source":"spec","parts":[...],"zones":[...],"landmarks":[...],"anchors":[...],"shots":[...]}`,
-    '- parts: {"id","label"?,"zone"?,"position":[x,y,z],"rotationDegrees":[x,y,z]} plus ONE of:',
+    `- parts: {"id","label"?,"zone"?,"position":[x,y,z],"rotationDegrees":[x,y,z],"light"?:${GREYBOX_PRACTICAL_LIGHTS.map((l) => `"${l}"`).join('|')}} plus ONE of ("light" marks a practical light source: a streetlamp head or porch light is "lamp", a parked car's front "headlight" shining along its +Z, a lit window "window"):`,
     '  {"type":"box","size":[width,height,depth]} (centered on position)',
     '  {"type":"cylinder","radius":n,"height":n} (centered on position)',
     '  {"type":"plane","size":[width,depth]} (flat, at position)',

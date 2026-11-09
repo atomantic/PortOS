@@ -3,9 +3,9 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   X, Copy, Sparkles, Film, Image as ImageIcon, Download, Eraser, Wand2,
-  ChevronLeft, ChevronRight, Maximize2, Minimize2, Star, Box, ScanEye, Aperture, ThumbsUp, ThumbsDown, Pencil,
+  ChevronLeft, ChevronRight, Maximize2, Minimize2, Star, Box, ScanEye, Aperture, ThumbsUp, ThumbsDown, Pencil, Trash2, Eye, EyeOff,
 } from 'lucide-react';
-import VideoStartTrimControl from './VideoStartTrimControl';
+import VideoTrimControl from './VideoTrimControl';
 import PromptRefineModal from './PromptRefineModal';
 import QuickImageEdit from './QuickImageEdit';
 import { PromptFromMediaModal } from './PromptFromMedia';
@@ -26,6 +26,7 @@ import { formatDateTime, formatDateNumeric, formatDurationMs, formatBytes } from
 import SentPromptPanel from './SentPromptPanel';
 import ContinuationDetails from '../videoGen/ContinuationDetails';
 import MediaUsageList from './MediaUsageList';
+import MediaDeleteConfirm from './MediaDeleteConfirm';
 import { mediaAnnotationKey } from './mediaDetail';
 import { useMediaUsages } from '../../hooks/useMediaUsages';
 import { isLowResVideo } from '../../lib/videoResolution.js';
@@ -135,6 +136,12 @@ function describeImageExecution(item) {
 // top of the details pane so page-specific actions stay in place beside the
 // standard ones.
 //
+// onDelete(item, { force }) / onToggleHidden(item) — optional; the host's own
+// gallery delete and hide (the same handlers its cards use). The lightbox
+// offers small Hide and Delete buttons beside Download, Delete with the shared
+// inline confirm; MediaPreview moves to the neighboring item once the host
+// drops the item from its list.
+//
 // variantGroup — optional `{ active, group: [{ label, item }, ...] }` shape
 // from `computeImageVariantGroup` (in `./variants.js`). When present, the
 // SettingsPane renders a segmented control to swap between the original
@@ -162,7 +169,9 @@ export default function MediaLightbox({
   onPromptChange,
   onPromptAnalysis,
   onPosterChange,
-  onTrimStart,
+  onTrimClip,
+  onDelete,
+  onToggleHidden,
   variantGroup = null,
   onSelectVariant,
   onFilmLookComplete,
@@ -543,7 +552,9 @@ export default function MediaLightbox({
             onPromptChange={item.compact ? undefined : onPromptChange}
             onPosterChange={onPosterChange}
             getPlayhead={() => videoRef.current?.currentTime ?? 0}
-            onTrimStart={onTrimStart}
+            onTrimClip={onTrimClip}
+            onDelete={onDelete}
+            onToggleHidden={onToggleHidden}
             videoRef={videoRef}
             variantGroup={variantGroup}
             onSelectVariant={onSelectVariant}
@@ -602,11 +613,17 @@ function SettingsPane({
   item, meta, isVideo,
   onClose, onRemix, onSendToImage, onSendToVideo, onSendTo3d, onContinue, onClean, onRegenerate, onRemoveWatermark, regenAvailable, regenBounds,
   copy, onRefine, onPromptFrom,
-  annotation, onAnnotationChange, onPromptChange, onPosterChange, getPlayhead, onTrimStart, videoRef,
+  annotation, onAnnotationChange, onPromptChange, onPosterChange, getPlayhead, onTrimClip, onDelete, onToggleHidden, videoRef,
   variantGroup, onSelectVariant, onFilmLook, pageActions, rating,
   quickEditParams, onQuickEditQueued, quickEditReferenceChoices,
 }) {
   const [posterSaving, setPosterSaving] = useState(false);
+  // Keyed to the item so the confirm never carries over to the next one on
+  // prev/next (the pane stays mounted across navigation).
+  const [confirmDeleteKey, setConfirmDeleteKey] = useState(null);
+  const usages = useMediaUsages()[mediaAnnotationKey(item)] ?? null;
+  const canDelete = Boolean(onDelete) && !item.pendingDelete && Boolean(item.filename || item.id);
+  const confirmingDelete = canDelete && confirmDeleteKey === item.key;
   const [posterError, setPosterError] = useState(null);
   const savePoster = async atSec => {
     if (posterSaving) return;
@@ -1152,9 +1169,9 @@ function SettingsPane({
             {posterError && <p role="alert" className="text-port-error">{posterError}</p>}
           </div>
         )}
-        {isVideo && onTrimStart && item.id && (
-          <VideoStartTrimControl videoRef={videoRef} fps={item.fps} sourceKey={item.key}
-            onTrim={(startSec) => onTrimStart(item, startSec)} />
+        {isVideo && onTrimClip && item.id && (
+          <VideoTrimControl videoRef={videoRef} fps={item.fps} sourceKey={item.key}
+            onTrim={(range) => onTrimClip(item, range)} />
         )}
         {isVideo && item.id && item.previewUrl && (
           <SharingDownloadButton itemId={item.id} />
@@ -1169,6 +1186,34 @@ function SettingsPane({
         >
           <Download className="w-3.5 h-3.5" />
         </a>
+        {onToggleHidden && !confirmingDelete && (item.filename || item.id) && (
+          <button
+            type="button"
+            onClick={() => onToggleHidden(item)}
+            aria-label={item.hidden ? 'Unhide' : 'Hide'}
+            title={item.hidden ? 'Unhide (move out of hidden section)' : 'Hide (move to hidden section)'}
+            className="min-h-[44px] min-w-[44px] flex items-center justify-center px-2 py-1.5 text-xs bg-port-border hover:bg-port-border/70 text-white rounded"
+          >
+            {item.hidden ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+          </button>
+        )}
+        {canDelete && !confirmingDelete && (
+          <button
+            type="button"
+            onClick={() => setConfirmDeleteKey(item.key)}
+            aria-label="Delete"
+            title="Delete"
+            className="min-h-[44px] min-w-[44px] flex items-center justify-center px-2 py-1.5 text-xs bg-port-error/20 hover:bg-port-error/40 text-port-error rounded"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
+        )}
+        {confirmingDelete && (
+          <div className="w-full">
+            <MediaDeleteConfirm item={item} usages={usages} onDelete={onDelete}
+              onCancel={() => setConfirmDeleteKey(null)} onNavigate={onClose} />
+          </div>
+        )}
       </footer>
       </div>
     </aside>

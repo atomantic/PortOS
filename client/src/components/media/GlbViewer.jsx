@@ -236,7 +236,7 @@ export default function GlbViewer({
             aria-controls={controlsOpen ? controlsPanelId : undefined}
             aria-label="Preview display settings"
             title="Preview display settings"
-            className={`port-media-overlay-strong port-media-overlay-item absolute right-2 top-2 z-10 inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md border border-port-border focus-visible:ring-2 focus-visible:ring-port-accent sm:min-h-0 sm:min-w-0 sm:p-1.5 ${controlsOpen ? 'ring-1 ring-port-accent' : ''}`}
+            className={`port-media-overlay-strong port-media-overlay-item absolute right-2 top-2 z-10 inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md border border-port-border focus-visible:ring-2 focus-visible:ring-port-accent pointer-fine:sm:min-h-0 pointer-fine:sm:min-w-0 sm:p-1.5 ${controlsOpen ? 'ring-1 ring-port-accent' : ''}`}
           >
             <SlidersHorizontal className="h-4 w-4" />
           </button>

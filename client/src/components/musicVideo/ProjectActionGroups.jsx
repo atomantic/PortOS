@@ -20,7 +20,7 @@ import { batchActive, batchSummary, scenesWaitingForFrame, videoBatchPreview, vi
  * `renderJob`) and the page-owned in-flight flags in `busy`.
  */
 
-const buttonCls = 'flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50';
+const buttonCls = 'flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50';
 const groupCls = 'flex min-w-0 flex-wrap items-center gap-2';
 
 const uniqueCount = (scenes, key) => new Set(scenes.map((scene) => scene[key]).filter(Boolean)).size;
@@ -47,7 +47,7 @@ export function MidiAction({ project, midi, midiBound }) {
     <div className={groupCls}>
       {midiBound ? (
         <button onClick={midi.cancel} title="Cancel MIDI transcription"
-          className="flex items-center gap-1 bg-port-warning/20 text-port-warning border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0">
+          className="flex items-center gap-1 bg-port-warning/20 text-port-warning border border-port-border rounded px-2 py-1.5 text-sm min-h-[44px] pointer-fine:sm:min-h-0">
           <Activity size={15} className="animate-spin" /> {midi.stageLabel} · Cancel
         </button>
       ) : (
@@ -56,7 +56,7 @@ export function MidiAction({ project, midi, midiBound }) {
             disabled={midi.active}
             aria-label="MuScriptor model size"
             title="MuScriptor model size — larger is higher quality but slower and a bigger first-use download"
-            className="bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm capitalize min-h-[44px] sm:min-h-0 disabled:opacity-50">
+            className="bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm capitalize min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50">
             {MUSCRIPTOR_MODELS.map((m) => <option key={m} value={m}>{m}</option>)}
           </select>
           <button onClick={() => midi.start(project.id)}
@@ -129,7 +129,7 @@ function BatchStatus({ noun, batch }) {
         <button type="button" onClick={batch.cancel} className={`${buttonCls} !py-1 text-port-warning`}>Cancel remaining</button>
       )}
       {!active && (
-        <button type="button" onClick={batch.dismiss} aria-label={`Dismiss ${noun.toLowerCase()} summary`} className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center sm:min-h-0 sm:min-w-0"><X size={13} /></button>
+        <button type="button" onClick={batch.dismiss} aria-label={`Dismiss ${noun.toLowerCase()} summary`} className="inline-flex min-h-[44px] min-w-[44px] items-center justify-center pointer-fine:sm:min-h-0 pointer-fine:sm:min-w-0"><X size={13} /></button>
       )}
     </div>
   );
@@ -179,7 +179,7 @@ export function GenerationActions({ project, videoSettings, sceneMedia, onEditSe
       <span className="flex min-w-0 flex-wrap items-center gap-1 text-xs text-port-text-muted">
         {projectServicesSummary(project)}
         {onEditServices && (
-          <button type="button" onClick={onEditServices} className="min-h-[44px] px-1 text-port-accent sm:min-h-0">Change in Project settings</button>
+          <button type="button" onClick={onEditServices} className="min-h-[44px] px-1 text-port-accent pointer-fine:sm:min-h-0">Change in Project settings</button>
         )}
       </span>
       <button
@@ -240,7 +240,7 @@ export function RenderStyleSelect({ project, onRenderStyle }) {
       <label htmlFor="mv-toolbar-render-style" className="sr-only">Render style</label>
       <select id="mv-toolbar-render-style" value={compositionDraft(project).mode}
         onChange={(e) => onRenderStyle?.(e.target.value)}
-        className="bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm min-h-[44px] sm:min-h-0">
+        className="bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm min-h-[44px] pointer-fine:sm:min-h-0">
         {RENDER_STYLES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
       </select>
     </div>
@@ -297,7 +297,7 @@ export function RenderFinalButton({ project, renderJob, readiness }) {
   if (renderJob.active && renderJob.context === project.id) {
     return (
       <div className="flex flex-wrap items-center gap-2">
-        <span role="status" className="flex min-h-[44px] items-center gap-1 rounded border border-port-border bg-port-warning/20 px-2 py-1.5 text-sm text-port-warning sm:min-h-0">
+        <span role="status" className="flex min-h-[44px] items-center gap-1 rounded border border-port-border bg-port-warning/20 px-2 py-1.5 text-sm text-port-warning pointer-fine:sm:min-h-0">
           <Activity size={15} className="animate-spin" aria-hidden="true" /> {renderJob.pending ? 'Preparing render…' : `Rendering ${Math.round(renderJob.progress)}%`}
         </span>
         {!renderJob.pending && <CancelRenderButton onCancel={renderJob.cancel} cancelling={renderJob.cancelling} />}
@@ -310,7 +310,7 @@ export function RenderFinalButton({ project, renderJob, readiness }) {
   return (
     <div className="space-y-1">
       <button onClick={() => renderJob.start(project.id)} disabled={isDisabled}
-        className="flex items-center gap-1 bg-port-accent text-white rounded px-2 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50">
+        className="flex items-center gap-1 bg-port-accent text-white rounded px-2 py-1.5 text-sm min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50">
         <Film size={15} /> {renderJob.active ? 'Rendering another project…' : 'Render final'}
       </button>
       {isDisabled && blockerReason && (
@@ -328,7 +328,7 @@ export function RenderFinalButton({ project, renderJob, readiness }) {
       {!finalCurrent && shotRenders?.error && (
         <div className="flex flex-wrap items-center gap-1.5 text-xs text-port-warning" data-testid="shot-renders-error">
           <span role="status">{shotRenders.error.message}</span>
-          <button type="button" onClick={() => retryShotRenders?.()} className="min-h-[44px] underline hover:text-port-warning/80 sm:min-h-0">
+          <button type="button" onClick={() => retryShotRenders?.()} className="min-h-[44px] underline hover:text-port-warning/80 pointer-fine:sm:min-h-0">
             Retry
           </button>
         </div>

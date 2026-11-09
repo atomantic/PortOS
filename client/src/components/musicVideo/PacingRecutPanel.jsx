@@ -5,7 +5,7 @@ import Drawer from '../Drawer.jsx';
 import { previewMusicVideoPacingRecut, recutMusicVideoToPacing } from '../../services/apiMusicVideo.js';
 import { formatTimecode } from '../../utils/formatters.js';
 
-const buttonClass = 'min-h-[44px] rounded border border-port-border px-2 py-1.5 text-sm disabled:opacity-40 sm:min-h-0';
+const buttonClass = 'min-h-[44px] rounded border border-port-border px-2 py-1.5 text-sm disabled:opacity-40 pointer-fine:sm:min-h-0';
 const shots = (count) => `${count} shot${count === 1 ? '' : 's'}`;
 const cutLabel = { lyric: 'lyric start', downbeat: 'downbeat', beat: 'beat', even: 'even cut' };
 

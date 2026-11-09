@@ -868,7 +868,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
           onChange={(e) => setTitle(e.target.value)}
           onBlur={commitTitle}
           onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
-          className="bg-transparent text-base font-semibold text-white border-none focus:outline-none focus:bg-port-bg/50 px-1 rounded flex-1 min-w-0 w-0 sm:w-auto sm:min-w-[180px] min-h-[44px] sm:min-h-0"
+          className="bg-transparent text-base font-semibold text-white border-none focus:outline-none focus:bg-port-bg/50 px-1 rounded flex-1 min-w-0 w-0 sm:w-auto sm:min-w-[180px] min-h-[44px] pointer-fine:sm:min-h-0"
           aria-label="Work title"
         />
         {/* Secondary controls. `w-full order-last` gives them their own compact
@@ -878,7 +878,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
           <select
             value={status}
             onChange={(e) => commitStatus(e.target.value)}
-            className="bg-port-bg border border-port-border rounded px-2 py-1 min-h-[44px] sm:min-h-0 text-[11px] text-gray-300"
+            className="bg-port-bg border border-port-border rounded px-2 py-1 min-h-[44px] pointer-fine:sm:min-h-0 text-[11px] text-gray-300"
             aria-label="Status"
           >
             {Object.entries(STATUS_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
@@ -909,7 +909,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
         <button
           onClick={handleSave}
           disabled={!dirty || saving || switchingDraft || polishBusy || exercisePending}
-          className={`flex shrink-0 items-center justify-center gap-1 w-24 px-3 py-1 min-h-[44px] sm:min-h-0 text-xs rounded ${
+          className={`flex shrink-0 items-center justify-center gap-1 w-24 px-3 py-1 min-h-[44px] pointer-fine:sm:min-h-0 text-xs rounded ${
             dirty ? 'bg-port-accent text-white hover:bg-port-accent/80' : 'bg-port-bg text-gray-500'
           }`}
           aria-busy={saving}
@@ -922,7 +922,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
           onClick={handleSnapshot}
           disabled={dirty || saving || switchingDraft || polishBusy || exercisePending}
           aria-label="Snapshot"
-          className={`${headerCollapsed ? 'hidden' : 'flex'} items-center gap-1 px-3 py-1 min-h-[44px] sm:min-h-0 text-xs rounded bg-port-bg border border-port-border text-gray-300 hover:text-white disabled:text-gray-600 disabled:cursor-not-allowed`}
+          className={`${headerCollapsed ? 'hidden' : 'flex'} items-center gap-1 px-3 py-1 min-h-[44px] pointer-fine:sm:min-h-0 text-xs rounded bg-port-bg border border-port-border text-gray-300 hover:text-white disabled:text-gray-600 disabled:cursor-not-allowed`}
           title="Snapshot the active draft as a new version"
         >
           <GitCommit size={12} /> <span className="hidden sm:inline">Snapshot</span>

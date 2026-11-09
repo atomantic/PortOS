@@ -1,4 +1,5 @@
 import { formatDurationSec } from '../../utils/formatters.js';
+import SectionEditor from './SectionEditor.jsx';
 
 /**
  * Beat-grid readout for the analyzed track, the "cuts are too long" nudge, and
@@ -7,7 +8,7 @@ import { formatDurationSec } from '../../utils/formatters.js';
  * is null on analyses cached before it existed — shown as "not analyzed" with a
  * Re-analyze action, never as zero-energy data.
  */
-export default function AnalysisPanel({ audioAnalysis, scenes, tempo, onReanalyze, analyzing = false }) {
+export default function AnalysisPanel({ projectId, audioAnalysis, scenes, tempo, onReanalyze, onUpdated, analyzing = false }) {
   const features = audioAnalysis?.features ?? null;
   const authoredCutDurations = scenes
     .filter((scene) => typeof scene.startSec === 'number' && typeof scene.endSec === 'number' && scene.endSec > scene.startSec)
@@ -29,6 +30,9 @@ export default function AnalysisPanel({ audioAnalysis, scenes, tempo, onReanalyz
           {averageCutSec != null && <span>Average cut: {averageCutSec.toFixed(1)}s</span>}
         </div>
       )}
+      {audioAnalysis && projectId && audioAnalysis.sections?.length > 0 && (
+        <SectionEditor projectId={projectId} sections={audioAnalysis.sections} durationSec={audioAnalysis.durationSec} onUpdated={onUpdated} />
+      )}
       {audioAnalysis && (
         <div data-testid="song-features" className="text-xs text-port-text-muted mt-1 flex flex-wrap items-center gap-x-4 gap-y-1">
           {features ? (
@@ -44,7 +48,7 @@ export default function AnalysisPanel({ audioAnalysis, scenes, tempo, onReanalyz
               {onReanalyze && (
                 <button type="button" onClick={onReanalyze} disabled={analyzing}
                   title="Re-runs the offline analysis, including tempo detection (replaces a manually set tempo)"
-                  className="bg-port-card border border-port-border rounded px-2 py-1 min-h-[44px] sm:min-h-[32px] hover:bg-port-border/40 disabled:opacity-50">
+                  className="bg-port-card border border-port-border rounded px-2 py-1 min-h-[44px] pointer-fine:sm:min-h-[32px] hover:bg-port-border/40 disabled:opacity-50">
                   {analyzing ? 'Analyzing…' : 'Re-analyze'}
                 </button>
               )}

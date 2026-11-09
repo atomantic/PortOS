@@ -53,17 +53,17 @@ function NoteRow({ excerptId, note, busy, onEdit, onDelete, onSeek }) {
       <li className="flex flex-wrap items-center gap-1.5 text-xs">
         <input value={draft} maxLength={2000} onChange={(e) => setDraft(e.target.value)}
           aria-label="Edit review note"
-          className="min-w-0 flex-1 bg-port-bg border border-port-border rounded px-1.5 py-1 min-h-[44px] sm:min-h-0" />
+          className="min-w-0 flex-1 bg-port-bg border border-port-border rounded px-1.5 py-1 min-h-[44px] pointer-fine:sm:min-h-0" />
         <button type="button" disabled={busy || !draft.trim()}
           onClick={() => { onEdit(excerptId, note.id, { note: draft.trim() }); setEditing(false); }}
-          className="text-port-accent disabled:opacity-50 min-h-[44px] sm:min-h-0 px-1">Save</button>
-        <button type="button" onClick={() => setEditing(false)} className="text-port-text-muted min-h-[44px] sm:min-h-0 px-1">Cancel</button>
+          className="text-port-accent disabled:opacity-50 min-h-[44px] pointer-fine:sm:min-h-0 px-1">Save</button>
+        <button type="button" onClick={() => setEditing(false)} className="text-port-text-muted min-h-[44px] pointer-fine:sm:min-h-0 px-1">Cancel</button>
       </li>
     );
   }
   return (
     <li className="flex flex-wrap items-start gap-1.5 text-xs">
-      <button type="button" onClick={() => onSeek(note.atSec)} className="text-port-accent font-mono shrink-0 min-h-[44px] sm:min-h-0" title="Jump to this moment">
+      <button type="button" onClick={() => onSeek(note.atSec)} className="text-port-accent font-mono shrink-0 min-h-[44px] pointer-fine:sm:min-h-0" title="Jump to this moment">
         {fmt(note.atSec)}
       </button>
       <span className="min-w-0 flex-1 break-words">{note.note}</span>
@@ -71,18 +71,18 @@ function NoteRow({ excerptId, note, busy, onEdit, onDelete, onSeek }) {
       <div className="flex items-center gap-1 shrink-0">
         <button type="button" title="Flag an issue" aria-label="Flag an issue"
           onClick={() => onEdit(excerptId, note.id, { verdict: note.verdict === 'flagged' ? null : 'flagged' })}
-          disabled={busy} className={`p-1 rounded min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 ${note.verdict === 'flagged' ? 'text-port-error' : 'text-port-text-muted'}`}>
+          disabled={busy} className={`p-1 rounded min-h-[44px] min-w-[44px] pointer-fine:sm:min-h-0 pointer-fine:sm:min-w-0 ${note.verdict === 'flagged' ? 'text-port-error' : 'text-port-text-muted'}`}>
           <Flag size={12} />
         </button>
         <button type="button" title="Looks good" aria-label="Looks good"
           onClick={() => onEdit(excerptId, note.id, { verdict: note.verdict === 'approved' ? null : 'approved' })}
-          disabled={busy} className={`p-1 rounded min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 ${note.verdict === 'approved' ? 'text-port-success' : 'text-port-text-muted'}`}>
+          disabled={busy} className={`p-1 rounded min-h-[44px] min-w-[44px] pointer-fine:sm:min-h-0 pointer-fine:sm:min-w-0 ${note.verdict === 'approved' ? 'text-port-success' : 'text-port-text-muted'}`}>
           <CheckCircle2 size={12} />
         </button>
         <button type="button" title="Edit" aria-label="Edit note" onClick={() => setEditing(true)} disabled={busy}
-          className="p-1 rounded min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 text-port-text-muted">Edit</button>
+          className="p-1 rounded min-h-[44px] min-w-[44px] pointer-fine:sm:min-h-0 pointer-fine:sm:min-w-0 text-port-text-muted">Edit</button>
         <button type="button" title="Delete note" aria-label="Delete note" onClick={() => onDelete(excerptId, note.id)} disabled={busy}
-          className="p-1 rounded min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 text-port-error">
+          className="p-1 rounded min-h-[44px] min-w-[44px] pointer-fine:sm:min-h-0 pointer-fine:sm:min-w-0 text-port-error">
           <Trash2 size={12} />
         </button>
       </div>
@@ -115,10 +115,10 @@ function ExcerptCard({ projectId, onNavigate, excerpt, role, proofApproved, acti
           {excerpt.status === 'complete' && excerpt.sections?.length > 0 && excerpt.notes?.some((n) => n.verdict === 'flagged') && (
             <button type="button" disabled={!canRevise} onClick={() => onRevise(excerpt.id)}
               title="Reject the flagged sections and regenerate only those"
-              className="text-port-accent flex items-center gap-1 disabled:opacity-50 min-h-[44px] sm:min-h-0"><RotateCcw size={12} /> Revise flagged</button>
+              className="text-port-accent flex items-center gap-1 disabled:opacity-50 min-h-[44px] pointer-fine:sm:min-h-0"><RotateCcw size={12} /> Revise flagged</button>
           )}
           {excerpt.status === 'rendering'
-            ? <button type="button" onClick={() => onCancel(excerpt.id)} className="text-port-error flex items-center gap-1 min-h-[44px] sm:min-h-0"><X size={12} /> Cancel</button>
+            ? <button type="button" onClick={() => onCancel(excerpt.id)} className="text-port-error flex items-center gap-1 min-h-[44px] pointer-fine:sm:min-h-0"><X size={12} /> Cancel</button>
             : role === 'proof'
               ? <span className="flex min-w-0 flex-wrap items-center gap-2">
                   <span className="text-port-text-muted">Registered proof — replace it before deleting</span>
@@ -128,16 +128,16 @@ function ExcerptCard({ projectId, onNavigate, excerpt, role, proofApproved, acti
                       event.preventDefault();
                       onNavigate('produce', 'mv-review-render');
                     } : undefined}
-                    className="min-h-[44px] inline-flex items-center rounded border border-port-border px-2 py-1 text-port-accent hover:bg-port-accent/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-port-accent sm:min-h-0">
+                    className="min-h-[44px] inline-flex items-center rounded border border-port-border px-2 py-1 text-port-accent hover:bg-port-accent/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-port-accent pointer-fine:sm:min-h-0">
                     Open proof controls
                   </a>
                 </span>
               : confirmingDelete
                 ? <span className="flex items-center gap-2">
-                    <button type="button" disabled={deleting} onClick={() => { setConfirmingDelete(false); onDelete(excerpt.id); }} className="text-port-error disabled:opacity-50 min-h-[44px] sm:min-h-0">Confirm delete</button>
-                    <button type="button" onClick={() => setConfirmingDelete(false)} className="text-port-text-muted min-h-[44px] sm:min-h-0">Keep</button>
+                    <button type="button" disabled={deleting} onClick={() => { setConfirmingDelete(false); onDelete(excerpt.id); }} className="text-port-error disabled:opacity-50 min-h-[44px] pointer-fine:sm:min-h-0">Confirm delete</button>
+                    <button type="button" onClick={() => setConfirmingDelete(false)} className="text-port-text-muted min-h-[44px] pointer-fine:sm:min-h-0">Keep</button>
                   </span>
-                : <button type="button" disabled={deleting} onClick={() => setConfirmingDelete(true)} className="text-port-error flex items-center gap-1 disabled:opacity-50 min-h-[44px] sm:min-h-0"><Trash2 size={12} /> Delete</button>}
+                : <button type="button" disabled={deleting} onClick={() => setConfirmingDelete(true)} className="text-port-error flex items-center gap-1 disabled:opacity-50 min-h-[44px] pointer-fine:sm:min-h-0"><Trash2 size={12} /> Delete</button>}
         </div>
       </div>
       <p className="text-xs text-port-text-muted">{excerpt.dependencyState?.status === 'stale' ? 'Made before later changes · re-render this range to see them' : excerpt.dependencyState?.status === 'current' ? 'Matches current inputs · production approval is separate' : 'Draft · approval is separate'}{excerpt.createdAt ? ` · ${formatDateTime(excerpt.createdAt)}` : ''}</p>
@@ -166,9 +166,9 @@ function ExcerptCard({ projectId, onNavigate, excerpt, role, proofApproved, acti
             <div className="flex items-center gap-1.5">
               <input value={draft} maxLength={2000} onChange={(e) => setDraft(e.target.value)}
                 placeholder="Note at the current playhead…" aria-label="New review note"
-                className="min-w-0 flex-1 bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0" />
+                className="min-w-0 flex-1 bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0" />
               <button type="button" onClick={addNoteHere} disabled={noteBusy === excerpt.id || !draft.trim()}
-                className="text-port-accent disabled:opacity-50 text-xs min-h-[44px] sm:min-h-0 px-2">Add</button>
+                className="text-port-accent disabled:opacity-50 text-xs min-h-[44px] pointer-fine:sm:min-h-0 px-2">Add</button>
             </div>
           </div>
         </div>
@@ -249,32 +249,32 @@ export default function ExcerptPanel({ project, rendering, occupied = rendering,
           <label htmlFor={idFor('start')} className="block text-[10px] text-port-text-muted">Start (sec)</label>
           <input id={idFor('start')} type="number" min={0} step={0.5} value={startSec}
             onChange={(e) => setStartSec(Number(e.target.value))}
-            className="w-24 bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0" />
+            className="w-24 bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0" />
         </div>
         <div>
           <label htmlFor={idFor('end')} className="block text-[10px] text-port-text-muted">End (sec)</label>
           <input id={idFor('end')} type="number" min={0} step={0.5} value={endSec}
             onChange={(e) => setEndSec(Number(e.target.value))}
-            className="w-24 bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0" />
+            className="w-24 bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0" />
         </div>
         {canReframe && (
           <div>
             <label htmlFor={idFor('aspect')} className="block text-[10px] text-port-text-muted">Frame</label>
             <select id={idFor('aspect')} value={aspect} onChange={(e) => setAspect(e.target.value)}
-              className="bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0">
+              className="bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0">
               {MUSIC_VIDEO_ASPECTS.map((a) => <option key={a} value={a}>{ASPECT_LABELS[a] || a}</option>)}
             </select>
           </div>
         )}
         {canReframe && (
-          <label htmlFor={idFor('fade')} className="flex items-center gap-1 text-xs text-port-text-muted min-h-[44px] sm:min-h-0">
+          <label htmlFor={idFor('fade')} className="flex items-center gap-1 text-xs text-port-text-muted min-h-[44px] pointer-fine:sm:min-h-0">
             <input id={idFor('fade')} type="checkbox" checked={fade} onChange={(e) => setFade(e.target.checked)} />
             Fade audio edges
           </label>
         )}
         <button type="button" disabled={occupied || !valid}
           onClick={() => render(startSec, endSec, canReframe ? { aspect: aspect === projectAspect ? null : aspect, fade } : undefined)}
-          className="flex items-center gap-1 bg-port-accent/20 text-port-accent disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] sm:min-h-0">
+          className="flex items-center gap-1 bg-port-accent/20 text-port-accent disabled:opacity-50 rounded px-2 py-1.5 text-xs min-h-[44px] pointer-fine:sm:min-h-0">
           <Film size={13} /> Render excerpt
         </button>
       </div>
@@ -283,7 +283,7 @@ export default function ExcerptPanel({ project, rendering, occupied = rendering,
           <div className="flex flex-wrap items-center justify-between gap-2">
             <span className="text-xs text-port-text-muted flex items-center gap-1"><Smartphone size={12} /> Social cuts: vertical hooks for Shorts, TikTok and Reels</span>
             <button type="button" onClick={suggestHooks} disabled={suggesting}
-              className="flex items-center gap-1 text-port-accent disabled:opacity-50 text-xs min-h-[44px] sm:min-h-0">
+              className="flex items-center gap-1 text-port-accent disabled:opacity-50 text-xs min-h-[44px] pointer-fine:sm:min-h-0">
               <Sparkles size={12} /> {suggesting ? 'Finding hooks…' : 'Suggest hooks'}
             </button>
           </div>
@@ -301,10 +301,10 @@ export default function ExcerptPanel({ project, rendering, occupied = rendering,
                   <span className="font-mono shrink-0">{fmt(s.startSec)} – {fmt(s.endSec)}</span>
                   <span className="min-w-0 flex-1 break-words">{s.label ? `“${s.label}”` : ''} <span className="text-port-text-muted">{s.reasons.join(' · ')}</span></span>
                   <button type="button" onClick={() => { setStartSec(s.startSec); setEndSec(s.endSec); }}
-                    className="text-port-text-muted min-h-[44px] sm:min-h-0 px-1">Use range</button>
+                    className="text-port-text-muted min-h-[44px] pointer-fine:sm:min-h-0 px-1">Use range</button>
                   <button type="button" disabled={occupied}
                     onClick={() => { setStartSec(s.startSec); setEndSec(s.endSec); render(s.startSec, s.endSec, { aspect: projectAspect === '9:16' ? null : '9:16', fade: true }); }}
-                    className="text-port-accent disabled:opacity-50 min-h-[44px] sm:min-h-0 px-1">Render 9:16</button>
+                    className="text-port-accent disabled:opacity-50 min-h-[44px] pointer-fine:sm:min-h-0 px-1">Render 9:16</button>
                 </li>
               ))}
             </ul>

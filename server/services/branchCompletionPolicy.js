@@ -352,7 +352,7 @@ function precreationStartupFailure(policy, input, policies) {
     || meta.isWorktree !== false || meta.claimPicksOwnBranch !== false || meta.claimSelectionPending !== true
     || meta.claimBranch !== input.branch || !samePath(meta.workspacePath, input.repoPath) || meta.sourceWorkspace != null
     || meta.branchCompletionPolicy != null || meta.reviewLoopMergeTarget != null || meta.prDeliveryTarget != null || meta.recoveryMergeTarget != null
-    || ['claimBranches', 'claimReleasedBranches', 'checkoutSeeds', 'checkoutCapture', 'completedCheckouts'].some(key => Object.hasOwn(meta, key))
+    || ['claimBranches', 'claimReleasedBranches', 'checkoutSeeds', 'supersededCheckoutSeeds', 'checkoutCapture', 'completedCheckouts'].some(key => Object.hasOwn(meta, key))
     || typeof agent.taskId !== 'string' || !agent.taskId || typeof meta.instanceId !== 'string' || !meta.instanceId || meta.instanceId === 'unknown'
     || !Number.isFinite(started) || !Number.isFinite(ended) || started > ended
     || !isAbsolute(input.checkoutPath || '') || samePath(input.checkoutPath, input.repoPath)

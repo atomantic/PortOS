@@ -7,8 +7,8 @@ import useYoutubeTrackImport from '../../hooks/useYoutubeTrackImport.js';
 import { formatCount } from '../../utils/formatters.js';
 import { trackOptionLabels } from '../../utils/trackOptionLabels.js';
 
-const buttonClass = 'min-h-[44px] rounded border border-port-border bg-port-bg px-3 py-1.5 text-sm disabled:opacity-50 sm:min-h-0';
-const primaryClass = 'min-h-[44px] rounded bg-port-accent px-3 py-1.5 text-sm text-white disabled:opacity-50 sm:min-h-0';
+const buttonClass = 'min-h-[44px] rounded border border-port-border bg-port-bg px-3 py-1.5 text-sm disabled:opacity-50 pointer-fine:sm:min-h-0';
+const primaryClass = 'min-h-[44px] rounded bg-port-accent px-3 py-1.5 text-sm text-white disabled:opacity-50 pointer-fine:sm:min-h-0';
 
 const countLine = (parts) => parts.filter(([n]) => n > 0).map(([n, label]) => `${formatCount(n)} ${label}`).join(' · ');
 
@@ -86,14 +86,14 @@ export default function ReviseSongCard({ project, tracks = [], disabled = false,
         <label htmlFor={`mv-revise-song-url-${project.id}`} className="sr-only">New song link</label>
         <input id={`mv-revise-song-url-${project.id}`} type="url" value={url} onChange={(e) => setUrl(e.target.value)} disabled={working || disabled}
           onKeyDown={(e) => { if (e.key === 'Enter' && url.trim()) { e.preventDefault(); importJob.start(url); } }}
-          placeholder="Paste the new Suno link…" className="min-h-[44px] min-w-0 flex-1 rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm sm:min-h-0" />
+          placeholder="Paste the new Suno link…" className="min-h-[44px] min-w-0 flex-1 rounded border border-port-border bg-port-bg px-2 py-1.5 text-sm pointer-fine:sm:min-h-0" />
         {importJob.active
           ? <button type="button" onClick={importJob.cancel} className={buttonClass}>Importing {formatCount(importJob.percent, { fallback: '0' })}% · Cancel</button>
           : <button type="button" onClick={() => importJob.start(url)} disabled={!url.trim() || working || disabled} className={primaryClass}>Use this song</button>}
       </div>
       <label htmlFor={`mv-revise-song-track-${project.id}`} className="block text-xs text-port-text-muted">Or a song already in the library</label>
       <select id={`mv-revise-song-track-${project.id}`} value="" disabled={working || disabled} onChange={(e) => e.target.value && revise(e.target.value)}
-        className="min-h-[44px] w-full rounded border border-port-border bg-port-bg px-2 py-1 text-sm sm:min-h-0">
+        className="min-h-[44px] w-full rounded border border-port-border bg-port-bg px-2 py-1 text-sm pointer-fine:sm:min-h-0">
         <option value="">Pick a track…</option>
         {(() => {
           const labels = trackOptionLabels(tracks);

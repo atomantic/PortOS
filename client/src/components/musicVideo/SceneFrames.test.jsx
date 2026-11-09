@@ -167,7 +167,8 @@ it('shows the selected greybox capture, inspectable figure additions and a missi
   expect(screen.getByText('Singer stands at the "rail" mark, waving')).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: 'Show full prompt' }));
   expect(screen.getByText(/Door opens[\s\S]*Singer stands/)).toBeTruthy();
-  expect(screen.getByRole('textbox', { name: 'Still prompt' }).value).toBe('Door opens');
+  expect(screen.getByRole('textbox', { name: 'Frame prompt' }).value).toBe('Door opens');
+  expect(screen.getByRole('checkbox', { name: 'Greybox layout' }).checked).toBe(true);
   rerender(<SceneFrames {...props} greyboxPlaces={{ 'cat-rink': { ...greyboxPlaces['cat-rink'], ingredient: { type: 'place', payload: { greybox: { shots: [] } } } } }} />);
   expect(screen.getByRole('alert').textContent).toMatch(/removed/);
   expect(screen.getByRole('button', { name: 'New frame take' }).disabled).toBe(true);
@@ -180,6 +181,9 @@ it('waits for a greybox selection to save and keeps the previous selection on fa
   const onEditLocal = vi.fn();
   const project = { id: 'mv-example', concept: { subjects: [{ id: 'rink', kind: 'place', ingredientId: 'cat-rink', name: 'Example Rink' }] } };
   render(<SceneFrames project={project} scene={scene} index={0} onEditLocal={onEditLocal} onSave={onSave} />);
+  // The greybox card stays folded away until its checkbox under References opens it.
+  expect(screen.queryByRole('combobox', { name: 'Set' })).toBeNull();
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Greybox layout' }));
   fireEvent.change(screen.getByRole('combobox', { name: 'Set' }), { target: { value: 'rink' } });
   expect(onSave).toHaveBeenCalledWith('s1', { setReference: { subjectId: 'rink' } });
   expect(onEditLocal).not.toHaveBeenCalled();
@@ -188,6 +192,17 @@ it('waits for a greybox selection to save and keeps the previous selection on fa
   await waitFor(() => expect(screen.getByRole('alert').textContent).toMatch(/not saved/));
   expect(onEditLocal).not.toHaveBeenCalled();
   expect(screen.getByRole('combobox', { name: 'Set' }).value).toBe('');
+});
+
+// Catches the Greybox layout checkbox hiding a greybox that still reaches the renders.
+it('turns a shot\'s greybox reference off from its checkbox', async () => {
+  const onSave = vi.fn(async () => true);
+  const project = { id: 'mv-example', concept: { subjects: [{ id: 'rink', kind: 'place', ingredientId: 'cat-rink', name: 'Example Rink' }] } };
+  render(<SceneFrames project={project} scene={{ ...scene, setReference: { subjectId: 'rink' } }} index={0} onEditLocal={vi.fn()} onSave={onSave} />);
+  expect(screen.getByRole('combobox', { name: 'Set' }).value).toBe('rink');
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Greybox layout' }));
+  expect(onSave).toHaveBeenCalledWith('s1', { setReference: null });
+  await waitFor(() => expect(screen.getByRole('checkbox', { name: 'Greybox layout' }).disabled).toBe(false));
 });
 
 it('Use end frame off hides the end frame and keeps its selection for switching back on', () => {

@@ -137,7 +137,7 @@ export async function registerAgent(agentId, taskId, metadata = {}) {
   if (metadata.taskAnalysisType === 'do-release') {
     // A task's supplied metadata is not a server-observed checkout reservation.
     const { releaseCandidateRecovery: _recovery, releaseCandidateSuccessor: _successor, releaseCandidate: _candidate,
-      releaseSynchronizationCheckout: _syncCheckout, checkoutSeeds: _seeds, completedCheckouts: _completed, checkoutCapture: _capture, ...trusted } = metadata;
+      releaseSynchronizationCheckout: _syncCheckout, checkoutSeeds: _seeds, supersededCheckoutSeeds: _superseded, completedCheckouts: _completed, checkoutCapture: _capture, ...trusted } = metadata;
     metadata = trusted;
   }
   return withStateLock(async () => {
@@ -221,7 +221,7 @@ export async function updateAgent(agentId, updates) {
       // Only the ownership transaction and completion capture write these
       // fields; generic updates cannot manufacture or revoke their evidence.
       const { releaseCandidateRecovery: _recovery, releaseCandidateSuccessor: _successor, releaseCandidate: _candidate,
-        releaseSynchronizationCheckout: _syncCheckout, checkoutSeeds: _seeds, completedCheckouts: _completed, checkoutCapture: _capture, ...metadata } = updates.metadata;
+        releaseSynchronizationCheckout: _syncCheckout, checkoutSeeds: _seeds, supersededCheckoutSeeds: _superseded, completedCheckouts: _completed, checkoutCapture: _capture, ...metadata } = updates.metadata;
       updates = { ...updates, metadata };
     }
 
@@ -662,7 +662,7 @@ export async function settleAbsentTaskCompletion(agentId, expected) {
     const { getTaskById } = await import('./cosTaskStore.js');
     const { getInstanceId, UNKNOWN_INSTANCE_ID } = await import('./instanceIdentity.js');
     const instanceId = await getInstanceId();
-    const keys = ['instanceId', 'completionCleanup', 'completionTaskDispatch', 'completedCheckouts', 'checkoutSeeds',
+    const keys = ['instanceId', 'completionCleanup', 'completionTaskDispatch', 'completedCheckouts', 'checkoutSeeds', 'supersededCheckoutSeeds',
       'worktreeBranch', 'workspacePath', 'sourceWorkspace', 'isWorktree', 'claimBranches', 'claimReleasedBranches'];
     const successfulAudit = agent.result?.success === true && agent.result?.cleanupPending !== true;
     if (agent.startedAt !== expected.startedAt || agent.taskId !== expected.taskId

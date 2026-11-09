@@ -1,4 +1,4 @@
-import { currentPlateEvidence } from '../../lib/musicVideoPlateEvidence.js';
+import { currentPlateEvidence, plateRequirementBasis } from '../../lib/musicVideoPlateEvidence.js';
 import { assertMusicVideoMedia } from '../../lib/musicVideoMediaPolicy.js';
 /**
  * Music Video scene takes (#8965) — pure record transforms.
@@ -240,6 +240,23 @@ function locateTake(project, sceneId, takeId) {
   const take = takes.find((t) => t.takeId === takeId);
   if (!take) throw new ServerError('Take not found', { status: 404, code: 'NOT_FOUND' });
   return { idx, scene, takes, take };
+}
+
+/** The frame take a plate check may inspect; throws when it is missing or not a still. */
+export function plateCheckTake(project, sceneId, takeId) {
+  const { scene, take } = locateTake(project, sceneId, takeId);
+  if (take.kind !== 'image') throw new ServerError('Only frame takes can be checked', { status: 400, code: 'VALIDATION_ERROR' });
+  return { scene, take };
+}
+
+/** Save a plate check's evidence on the take, unless the shot's intent changed while it ran. */
+export function recordTakePlateEvidence(project, sceneId, takeId, evidence) {
+  const { idx, scene, takes, take } = locateTake(project, sceneId, takeId);
+  if (take.assetId !== evidence.assetId || plateRequirementBasis(scene) !== evidence.basis) {
+    throw new ServerError('The shot or frame changed during the check. Check it again.', { status: 409, code: 'MUSIC_VIDEO_REVIEW_STALE' });
+  }
+  const next = { ...scene, takes: takes.map((t) => (t.takeId === takeId ? { ...t, plateEvidence: evidence } : t)) };
+  return { project: replaceScene(project, idx, next), scene: next };
 }
 
 /** Explicitly select a take for its slot. Selecting a rejected take restores it. */

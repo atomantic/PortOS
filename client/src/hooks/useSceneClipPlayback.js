@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { useVideoFileSrc } from './useVideoFileSrc.js';
-import { clipCanLoop, clipLoops, clipNeedsMoreFootage, clipPlaybackWindow, clipSpeedRate, sceneUsesAuthoredTiming } from '../lib/musicVideoLayers.js';
+import { clipCanLoop, clipLoops, clipNeedsMoreFootage, clipPlaybackWindow, clipSpeedRate, sceneUsesAuthoredTiming, sharedTakeExtraSec } from '../lib/musicVideoLayers.js';
 import { selectedPerformanceInstruction } from '../lib/musicVideoShotTiming.js';
 
-/** A shot's native clip metadata and render-adjusted coverage. Keep mounted with the card. */
-export default function useSceneClipPlayback(scene) {
+/** A shot's native clip metadata and render-adjusted coverage (counting later shots that reuse its take via `scenes`). Keep mounted with the card. */
+export default function useSceneClipPlayback(scene, scenes = null) {
   const clipPlayerRef = useRef(null);
   // Imported .mov/.webm files keep their container. Preserve the historical
   // fallback while the existing filename lookup is in flight or has failed.
@@ -23,9 +23,10 @@ export default function useSceneClipPlayback(scene) {
   const spanSec = sceneUsesAuthoredTiming(scene) && typeof scene.startSec === 'number' && typeof scene.endSec === 'number'
     ? scene.endSec - scene.startSec
     : null;
+  const spanExtraSec = sharedTakeExtraSec(scene, scenes);
   const clipRate = clipSpeedRate(scene);
   const playedSec = clipSec != null ? clipPlaybackWindow(scene, edit, clipSec).sourceSec : null;
-  const underCovered = clipNeedsMoreFootage({ loop: loops, holdLastFrame: scene.holdLastFrame, spanSec, clipSec: playedSec });
+  const underCovered = clipNeedsMoreFootage({ loop: loops, holdLastFrame: scene.holdLastFrame, spanSec: spanSec != null ? spanSec + spanExtraSec : null, clipSec: playedSec });
   useEffect(() => { if (clipPlayerRef.current) clipPlayerRef.current.playbackRate = clipRate; }, [clipRate]);
 
   const onLoadedMetadata = (e) => {
@@ -35,5 +36,5 @@ export default function useSceneClipPlayback(scene) {
     if (Number.isFinite(sec) && sec > 0) setClipMeta({ id: scene.videoHistoryId, sec, width, height });
   };
 
-  return { clipPlayerRef, clipSrc, clipSec, clipSize, canLoop, loops, spanSec, playedSec, underCovered, onLoadedMetadata };
+  return { clipPlayerRef, clipSrc, clipSec, clipSize, canLoop, loops, spanSec, spanExtraSec, playedSec, underCovered, onLoadedMetadata };
 }

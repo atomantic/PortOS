@@ -130,9 +130,11 @@ const isMp4Header = (buf) =>
 // goes to reference_to_video instead: the frame is pinned as `first_frame` and
 // the sheets ride as `images`, so a face the frame hides or a person who walks
 // in later still matches the cast. image_to_video sees only the frame.
+// `startFrameLayout` sends the frame as <IMAGE_1> instead of first_frame, so the
+// clip takes its place and blocking but may replace its people with the cast.
 export function buildGrokVideoPrompt({
   prompt, negativePrompt, aspectRatio, duration, resolution = null, stagingPath, sourceImagePath, scratchDir,
-  guidanceImagePath = null, referenceImagePaths = [], castReferences = [],
+  guidanceImagePath = null, referenceImagePaths = [], castReferences = [], startFrameLayout = false,
 }) {
   const avoid = negativePrompt?.trim() ? `\nAvoid: ${negativePrompt.trim()}` : '';
   const ratio = aspectRatio ? `\nUse aspect_ratio "${aspectRatio}" for the ${guidanceImagePath ? 'first frame' : 'base image'}.` : '';
@@ -145,6 +147,14 @@ export function buildGrokVideoPrompt({
       storyboardGuidanceText({ guidance: guidanceImagePath, references: referenceImagePaths }),
       `Shot prompt: ${prompt.trim()}${avoid}${ratio}`,
       `Then use your built-in image_to_video tool to animate that first frame (never the storyboard panel) for ${duration} seconds, using the shot prompt as the motion description.`,
+    ].join('\n');
+  } else if (sourceImagePath && castReferences.length && startFrameLayout) {
+    const ratioArg = aspectRatio ? `\nCall it with aspect_ratio "${aspectRatio}".` : '';
+    steps = [
+      `Use your built-in reference_to_video tool (not image_to_video) to make a ${duration}-second clip. Do not set first_frame.`,
+      `Set images to the scene image followed by ${castReferences.length === 1 ? 'one reference' : `${castReferences.length} references`}, in this order: ${[sourceImagePath, ...castReferences.map((ref) => ref.path)].join(', ')}`,
+      `Start the tool's prompt with this note: ${grokLayoutCastNote(castReferences)}`,
+      `Then continue the tool's prompt with the motion/direction prompt: ${prompt.trim()}${avoid}${ratioArg}`,
     ].join('\n');
   } else if (sourceImagePath && castReferences.length) {
     const ratioArg = aspectRatio ? `\nCall it with aspect_ratio "${aspectRatio}".` : '';
@@ -184,6 +194,20 @@ export const grokCastNote = (castReferences) => {
   ].filter(Boolean).join(' ');
 };
 
+// Without first_frame, <IMAGE_1> is the scene image and the references follow it.
+export const grokLayoutCastNote = (castReferences) => {
+  const people = castReferences.some((ref) => !ref.role || ref.role === 'character');
+  return [
+    '<IMAGE_1> sets the place, camera, framing, light and blocking of the opening.',
+    people ? 'The people in <IMAGE_1> are stand-ins: replace each with the referenced character in the same position, pose and action.' : null,
+    castReferences.map((ref, i) => ref.role && ref.role !== 'character'
+      ? `<IMAGE_${i + 2}> is the ${ref.role} reference for ${castName(ref.label)}`
+      : `<IMAGE_${i + 2}> shows how ${castName(ref.label)} looks`).join('; ') + '.',
+    people ? 'Keep each person\'s face, hair, build and clothing matching their reference for the whole clip.' : null,
+    'Never add a person who is not in <IMAGE_1> or the shot.',
+  ].filter(Boolean).join(' ');
+};
+
 // Where a storyboard-guided render's first frame is directed, so it can be kept beside the clip.
 const grokFirstFramePath = (scratchDir) => join(scratchDir, 'first-frame.png');
 
@@ -193,7 +217,7 @@ const grokFirstFramePath = (scratchDir) => join(scratchDir, 'first-frame.png');
  */
 export function grokVideoSentPrompt({
   prompt = '', negativePrompt, aspectRatio, width, height, duration, sourceImagePath = null, scratchDir, promptAdditions = [],
-  guidanceImagePath = null, referenceImagePaths = [], castReferences = [],
+  guidanceImagePath = null, referenceImagePaths = [], castReferences = [], startFrameLayout = false,
 }) {
   const effectiveDuration = resolveGrokDuration(duration);
   const configured = GROK_ASPECT_RATIOS.includes(aspectRatio) ? aspectRatio : null;
@@ -201,7 +225,7 @@ export function grokVideoSentPrompt({
   const resolution = grokVideoResolution(width, height);
   const buildWith = (text) => buildGrokVideoPrompt({
     prompt: text, negativePrompt, aspectRatio: effectiveRatio, duration: effectiveDuration, resolution,
-    stagingPath: join(scratchDir, 'output.mp4'), sourceImagePath, scratchDir, guidanceImagePath, referenceImagePaths, castReferences,
+    stagingPath: join(scratchDir, 'output.mp4'), sourceImagePath, scratchDir, guidanceImagePath, referenceImagePaths, castReferences, startFrameLayout,
   });
   const fullPrompt = buildWith(prompt);
   const guidance = guidanceImagePath
@@ -224,7 +248,7 @@ async function generateVideoPrepared({
   jobId: providedJobId = null,
   promptAdditions = [],
   guidanceImagePath = null, referenceImagePaths = [],
-  castReferences = [],
+  castReferences = [], startFrameLayout = false,
 }) {
   await ensureDir(PATHS.videos);
 
@@ -251,7 +275,7 @@ async function generateVideoPrepared({
 
   const { fullPrompt, effectiveRatio, effectiveDuration, resolution, record: sentRecord } = grokVideoSentPrompt({
     prompt, negativePrompt, aspectRatio, width, height, duration, sourceImagePath, scratchDir, promptAdditions,
-    guidanceImagePath, referenceImagePaths, castReferences: sourceImagePath && !guidanceImagePath ? castReferences : [],
+    guidanceImagePath, referenceImagePaths, castReferences: sourceImagePath && !guidanceImagePath ? castReferences : [], startFrameLayout,
   });
 
   const bin = grokPath || DEFAULT_BIN;
@@ -277,7 +301,7 @@ async function generateVideoPrepared({
     mode: sourceImagePath ? 'image' : 'text',
     ...storyboardGuidanceMeta(guidanceImagePath, referenceImagePaths),
     ...(sourceImagePath && !guidanceImagePath && castReferences.length
-      ? { castReferenceFiles: castReferences.map((ref) => basename(ref.path)) } : {}),
+      ? { castReferenceFiles: castReferences.map((ref) => basename(ref.path)), ...(startFrameLayout ? { startFrameLayout: true } : {}) } : {}),
     ...sentRecord,
   };
   const job = { ...meta, clients: [], status: 'running', renderStartedAtMs };

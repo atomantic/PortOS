@@ -889,6 +889,7 @@ async function renderLocalVideo(preparation, { pythonPath, prompt, negativePromp
       extendSplice: mode === 'extend' && extendFromVideoPath && (!hidden || keepExtendSource) && !batch && supportsContextWindow(model)
         ? { runtime: model.runtime, sourcePath: extendFromVideoPath, extendLatents: extendLatentFrames(parsedNumFrames, model.runtime), keepMaster: !hidden }
         : null,
+      lipsyncAlign: mode === 'a2v' && !batch,
     },
   });
 
@@ -920,6 +921,10 @@ async function startPreparedLocalVideo({
     // and weight-download failures in the catch below.
     const { bin, args } = buildArgs({ ...buildParams, previewDir: stepwiseDir });
     if (batch) args.push('--batch-seeds', JSON.stringify(batch.map((item) => item.seed)));
+    if (buildParams.textEncoder) {
+      const { assertTextEncoderFilesComplete } = await import('./ensureWeights.js');
+      await assertTextEncoderFilesComplete(buildParams.textEncoder);
+    }
     if (buildParams.model.runtime === 'minimax_h3') {
       const { ensureMiniMaxH3Weights } = await import('./ensureWeights.js');
       await ensureMiniMaxH3Weights(buildParams.model, { cacheOnly: !!buildParams.speedProfile });

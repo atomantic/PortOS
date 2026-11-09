@@ -1,0 +1,6 @@
+# MuScriptor CUDA: direct pins for the dedicated CPython 3.11 runtime.
+# Install from the windows/linux hash locks, never directly from this input.
+# Regeneration and hardware validation: docs/MUSCRIPTOR_CUDA.md.
+torch==2.14.1+cu126
+muscriptor==0.4.0
+huggingface-hub[hf_xet]==0.36.2

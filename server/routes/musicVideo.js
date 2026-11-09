@@ -44,6 +44,7 @@ import {
   musicVideoSceneEndSchema,
   musicVideoPlanRequestSchema,
   musicVideoManualAnalysisSchema,
+  musicVideoSectionsEditSchema,
   musicVideoTranscribeMidiRequestSchema,
   musicVideoLyricsImportSchema,
   musicVideoLyricsImportTrackSchema,
@@ -99,6 +100,7 @@ import {
   musicVideoDevArtifactFileQuerySchema,
   musicVideoCastAndSetsStartSchema,
   musicVideoCastAndSetsDirectionEditSchema,
+  musicVideoCastAndSetsDirectionTextEditSchema,
   musicVideoCastAndSetsFeedbackSchema,
   musicVideoCastAndSetsFeedbackPlanSchema,
   musicVideoCastAndSetsFeedbackRenderSchema,
@@ -129,6 +131,7 @@ import {
   updateProject,
   deleteProject,
   setProjectAnalysis,
+  setProjectSections,
   addProjectScene,
   updateScene,
   deleteScene,
@@ -149,6 +152,7 @@ import {
   placeMediaPoolItem,
   markMediaPoolAssets,
   reviewSceneTake,
+  checkSceneTakePlate,
   rejectUnusedSceneTakes,
   swapProjectSceneFrames,
   refreshSongStyleFromSuno,
@@ -164,7 +168,7 @@ import {
   cancelMidiTranscription,
 } from '../services/audioMidiTranscription.js';
 import { analyzeAudioFileManual, buildManualAnalysisFromCached } from '../services/musicVideo/audioAnalysis.js';
-import { analyzeProjectSong, resolveProjectAudioPath } from '../services/musicVideo/projectAudio.js';
+import { analyzeProjectSong, resolveProjectAudioPath, setSectionsFromLyrics } from '../services/musicVideo/projectAudio.js';
 import { listInFlightSceneJobs } from '../services/musicVideo/sceneJobs.js';
 import { getSharingCopy, prepareSharingCopy, sharingCopyDownload } from '../services/musicVideo/sharingCopy.js';
 import { renderMusicVideo, attachRenderSseClient, cancelRender, getActiveRenderJobId } from '../services/musicVideo/render.js';
@@ -239,6 +243,7 @@ import { devArtifactTypeFor } from '../services/musicVideo/devArtifacts.js';
 import {
   startCastAndSets,
   editCastAndSetsDirection,
+  editCastAndSetsDirectionText,
   applyCastAndSetsFeedback,
   renderCastAndSetsFeedback,
   refreshCastAndSetsFeedbackRenderer,
@@ -521,6 +526,18 @@ router.post('/:id/analyze/manual', asyncHandler(async (req, res) => {
   }
   const updated = await setProjectAnalysis(project.id, analysis, project);
   res.json(updated);
+}));
+
+// Director's edit of the song map: a gapless {label,startSec,endSec}[] that
+// tiles the song. Energy carries over by overlap; scene section labels follow.
+router.patch('/:id/analyze/sections', asyncHandler(async (req, res) => {
+  const { sections } = validateRequest(musicVideoSectionsEditSchema, req.body);
+  res.json(await setProjectSections(req.params.id, sections));
+}));
+
+// "Use lyric sections": take the boundaries from the aligned lyric sheet.
+router.post('/:id/analyze/sections/lyrics', asyncHandler(async (req, res) => {
+  res.json(await setSectionsFromLyrics(req.params.id));
 }));
 
 // Autonomous shot planner (#1855, the secondary "autonomous mode" path):
@@ -1719,6 +1736,12 @@ router.patch('/:id/cast-and-sets/direction', asyncHandler(async (req, res) => {
   res.status(202).json(await editCastAndSetsDirection(req.params.id, input));
 }));
 
+// Text-only (catalog check-ins): saves words, renders nothing.
+router.patch('/:id/cast-and-sets/direction-text', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoCastAndSetsDirectionTextEditSchema, req.body || {});
+  res.json(await editCastAndSetsDirectionText(req.params.id, input));
+}));
+
 router.post('/:id/cast-and-sets/feedback', asyncHandler(async (req, res) => {
   const input = validateRequest(musicVideoCastAndSetsFeedbackSchema, req.body || {});
   res.status(202).json(await applyCastAndSetsFeedback(req.params.id, input));
@@ -1995,6 +2018,11 @@ router.post('/:id/scenes/:sceneId/takes/reject-unused', asyncHandler(async (req,
 // No body: the shot's start frame becomes its end frame and the end frame its start, prompts included.
 router.post('/:id/scenes/:sceneId/swap-frames', asyncHandler(async (req, res) => {
   res.json(await swapProjectSceneFrames(req.params.id, req.params.sceneId));
+}));
+
+// No body: a vision model checks this frame take against its shot (user-started) → the scene.
+router.post('/:id/scenes/:sceneId/takes/:takeId/check', asyncHandler(async (req, res) => {
+  res.json(await checkSceneTakePlate(req.params.id, req.params.sceneId, req.params.takeId));
 }));
 
 router.patch('/:id/scenes/:sceneId/takes/:takeId', asyncHandler(async (req, res) => {

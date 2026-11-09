@@ -123,6 +123,59 @@ describe('updateClaimOwnership', () => {
     } finally { await rm(scratch, { recursive: true, force: true, maxRetries: 3 }); }
   });
 
+  it('re-cuts a released branch only after its seeded checkout is retired, keeping the first generation (#15463)', async () => {
+    const { mkdtemp, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { materializeGitRepo } = await import('../lib/gitTestRepo.js');
+    const { execGit } = await import('../lib/execGit.js');
+    const scratch = await mkdtemp(join(tmpdir(), 'portos-claim-recut-'));
+    try {
+      const repo = join(scratch, 'repo');
+      const checkout = join(scratch, 'claim');
+      const branch = 'claim/issue-7';
+      await materializeGitRepo(repo);
+      store.state.agents['agent-epicrun'] = { id: 'agent-epicrun', status: 'running',
+        startedAt: new Date().toISOString(), metadata: { sourceWorkspace: repo, workspacePath: repo,
+          claimPicksOwnBranch: true, claimBranches: [] } };
+      const meta = () => store.state.agents['agent-epicrun'].metadata;
+      const bind = () => updateClaimOwnership({ agentId: 'agent-epicrun', action: 'bind', branch });
+      const release = () => updateClaimOwnership({ agentId: 'agent-epicrun', action: 'release', branch });
+      const cut = () => execGit(['worktree', 'add', '-b', branch, checkout, 'main'], repo);
+      const retire = async () => {
+        await execGit(['worktree', 'remove', '--force', checkout], repo);
+        await execGit(['branch', '-D', branch], repo);
+      };
+      expect(await bind()).toEqual({ bound: true, branch });
+      await cut();
+      expect(await bind()).toEqual({ bound: true, branch });
+      const [first] = meta().checkoutSeeds;
+
+      // Released while its checkout still exists: a re-cut is a replacement.
+      expect(await release()).toEqual({ released: true, branch });
+      expect(await bind()).toEqual({ bound: true, branch });
+      expect(meta().checkoutSeeds).toEqual([first]);
+      await retire();
+      await cut();
+      expect(await bind()).toEqual({ bound: false, reason: 'checkout-seed-unavailable' });
+      expect(meta().checkoutSeeds).toEqual([first]);
+      expect(meta().supersededCheckoutSeeds).toBeUndefined();
+
+      // Delivered, retired, then released: the next bind supersedes it.
+      await retire();
+      expect(await release()).toEqual({ released: true, branch });
+      expect(await bind()).toEqual({ bound: true, branch });
+      expect(meta().checkoutSeeds).toEqual([]);
+      expect(meta().supersededCheckoutSeeds).toEqual([{ ...first, supersededAt: expect.any(String) }]);
+      await cut();
+      expect(await bind()).toEqual({ bound: true, branch });
+      const [second] = meta().checkoutSeeds;
+      expect(second).toMatchObject({ branch, path: first.path });
+      expect(second.incarnation).not.toEqual(first.incarnation);
+      expect(meta().supersededCheckoutSeeds).toEqual([{ ...first, supersededAt: expect.any(String) }]);
+    } finally { await rm(scratch, { recursive: true, force: true, maxRetries: 3 }); }
+  });
+
   it('persists the bound child branch on the run record and settles its selection', async () => {
     expect(await updateClaimOwnership({ agentId: 'agent-epicrun', action: 'bind', branch: 'claim/issue-101' }))
       .toEqual({ bound: true, branch: 'claim/issue-101' });
@@ -135,6 +188,43 @@ describe('updateClaimOwnership', () => {
       .toEqual({ released: true, branch: 'claim/issue-101' });
     expect(store.state.agents['agent-epicrun'].metadata).toMatchObject({ claimBranches: [], claimReleasedBranches: ['claim/issue-101'] });
     expect(cosEvents.emit).toHaveBeenCalledWith('claim:ownership-changed', { agentId: 'agent-epicrun', repository: SOURCE });
+  });
+
+  it('frees a live holder\'s binding only once its recorded checkout, local and origin branch are all retired (#15459)', async () => {
+    const { mkdtemp, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { materializeGitRepo, attachBareOrigin } = await import('../lib/gitTestRepo.js');
+    const { execGit } = await import('../lib/execGit.js');
+    const scratch = await mkdtemp(join(tmpdir(), 'portos-claim-retired-'));
+    try {
+      const repo = join(scratch, 'repo');
+      const checkout = join(scratch, 'claim');
+      await materializeGitRepo(repo);
+      await attachBareOrigin(scratch, repo);
+      const branch = 'claim/issue-101';
+      const run = id => ({ id, status: 'running', startedAt: new Date().toISOString(),
+        metadata: { sourceWorkspace: repo, workspacePath: repo, claimPicksOwnBranch: true, claimBranches: [] } });
+      store.state.agents = { 'agent-swarm': run('agent-swarm'), 'agent-next': run('agent-next'), 'agent-unseeded': run('agent-unseeded') };
+      const bind = agentId => updateClaimOwnership({ agentId, action: 'bind', branch });
+      const refused = { bound: false, reason: 'owner-active' };
+      expect(await bind('agent-swarm')).toEqual({ bound: true, branch });
+      await execGit(['worktree', 'add', '-b', branch, checkout, 'main'], repo);
+      expect(await bind('agent-swarm')).toEqual({ bound: true, branch });
+      await execGit(['push', 'origin', branch], checkout);
+      expect(await bind('agent-next')).toEqual(refused);
+      // The checkout and local ref are gone, but origin still carries the PR head.
+      await execGit(['worktree', 'remove', '--force', checkout], repo);
+      await execGit(['branch', '-D', branch], repo);
+      expect(await bind('agent-next')).toEqual(refused);
+      await execGit(['push', 'origin', '--delete', branch], repo);
+      expect(await bind('agent-next')).toEqual({ bound: true, branch });
+      expect(store.state.agents['agent-swarm'].metadata).toMatchObject({ claimBranches: [], claimReleasedBranches: [branch] });
+      expect(store.state.agents['agent-next'].metadata.claimBranches).toEqual([branch]);
+      // A binding that never recorded a checkout may be about to cut one: it keeps the name.
+      expect(await bind('agent-unseeded')).toEqual(refused);
+      expect(store.state.agents['agent-next'].metadata.claimBranches).toEqual([branch]);
+    } finally { await rm(scratch, { recursive: true, force: true, maxRetries: 3 }); }
   });
 
   it('refuses an unknown or finished run without writing', async () => {
@@ -380,6 +470,28 @@ describe('checkReconcileOwnership', () => {
     expect(await check([], {}, { appId: 'app-missing' })).toEqual({ admitted: false, reason: 'app-unknown' });
     expect(await check([], { listWorktrees: async () => [] })).toEqual({ admitted: false, reason: 'holder-changed' });
     expect(await check([], { listWorktrees: async () => [{ ...holder, locked: true }] })).toEqual({ admitted: false, reason: 'worktree-locked' });
+  });
+
+  // The classifier dispatches an unshipped review branch for its PR to be opened;
+  // a recheck that kept refusing it stranded the branch on every cycle.
+  it('admits an unshipped review branch only while the forge shows no open or closed-unmerged PR', async () => {
+    const lookups = [];
+    const unshipped = (forgeUnshipped, detail = { reason: 'pr-completion-review-required', unshipped: true }) => ({
+      readCompletionHold: undefined,
+      readStrictCompletionHold: async () => detail.reason,
+      readCompletionHoldDetail: async () => detail,
+      readBranchUnshipped: async (...args) => { lookups.push(args); if (forgeUnshipped instanceof Error) throw forgeUnshipped; return forgeUnshipped; },
+    });
+    const held = { admitted: false, reason: 'pr-completion-review-required' };
+    expect(await check([], unshipped(true))).toEqual({ admitted: true });
+    expect(lookups[0]).toEqual([SOURCE, 'claim/issue-101', { forgeAccount: null }]);
+    expect(await check([], unshipped(false))).toEqual(held);
+    expect(await check([], unshipped(null))).toEqual(held);
+    expect(await check([], unshipped(new Error('gh failed')))).toEqual(held);
+    expect(await check([], unshipped(true), { prUrl: 'https://github.com/o/r/pull/1' })).toEqual(held);
+    expect(await check([], unshipped(true, { reason: 'pr-completion-review-required', unshipped: false }))).toEqual(held);
+    expect(await check([], unshipped(true, { reason: 'pr-completion-human-handoff', unshipped: false })))
+      .toEqual({ admitted: false, reason: 'pr-completion-human-handoff' });
   });
 });
 

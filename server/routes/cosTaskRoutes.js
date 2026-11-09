@@ -14,6 +14,7 @@ import { enhanceTaskPrompt } from '../services/taskEnhancer.js';
 import { buildClaimWorkTask, buildIssueReplanTask, buildJiraTicketTask } from '../services/cosTaskClaimWork.js';
 import { getAppById, getAppWorkTracker, PORTOS_APP_ID } from '../services/apps.js';
 import { prepareAppIssueClaim } from '../services/appIssues.js';
+import { titleMarksEpic } from '../lib/dispatchLabels.js';
 import { getAssignableInstances } from '../services/instances.js';
 import { resolveManagedAppIssueTarget } from '../services/managedAppRepositories.js';
 import { resolveAppPrCompletion } from '../lib/prDisposition.js';
@@ -383,7 +384,11 @@ router.post('/tasks/slashdo', asyncHandler(async (req, res) => {
       taskMetadata: { ...replan.taskMetadata, replanTarget: replan.target },
     };
   } else if (command === 'next') {
-    const claim = await buildClaimWorkTask(appObj, {
+    // A manual forge claim is verified by prepareAppIssueClaim below before the
+    // task is queued, so the prompt can skip repeating that work. A non-epic
+    // title is assumed optimistically; a label-only epic rebuilds the full prompt.
+    const forgeTarget = /^#?\d+$/.test(String(target ?? '').trim());
+    const claimOptions = {
       target,
       issueContext,
       ...(overrideContext !== undefined ? { overrideContext } : {}),
@@ -395,9 +400,16 @@ router.post('/tasks/slashdo', asyncHandler(async (req, res) => {
       reviewerMaxRounds,
       reviewerModels,
       reviewerEfforts
+    };
+    let claim = await buildClaimWorkTask(appObj, {
+      ...claimOptions,
+      ...(forgeTarget ? { preverified: true, nonEpic: !titleMarksEpic(issueContext?.title) } : {})
     });
     if (claim.target && ['github', 'gitlab'].includes(claim.tracker)) {
-      await prepareAppIssueClaim(appObj, claim.target, claim.tracker);
+      const { epic } = await prepareAppIssueClaim(appObj, claim.target, claim.tracker);
+      if (epic && !titleMarksEpic(issueContext?.title)) {
+        claim = await buildClaimWorkTask(appObj, { ...claimOptions, preverified: true });
+      }
     }
     const scope = claim.target
       ? `claim ${workTrackerLabel(claim.tracker)} item ${claim.target}`

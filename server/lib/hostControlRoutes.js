@@ -719,6 +719,8 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/music-video/:id/production-runs/:runId/resume',
   'POST /api/music-video/:id/auto-reviews',
   'POST /api/music-video/:id/auto-reviews/:runId/resume',
+  // A frame take's plate check runs the vision reviewer, Codex CLI by default.
+  'POST /api/music-video/:id/scenes/:sceneId/takes/:takeId/check',
   // Song revision drives the signed-in PortOS Browser to submit the song to
   // Suno, spending the operator's account credits (#13055).
   'POST /api/music-video/:id/song-revision/generate',
@@ -731,6 +733,7 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // Film-look bake launches a headless composition browser on the host (#13055).
   'POST /api/image-gen/:filename/film-look',
   'POST /api/video-gen',
+  'POST /api/video-gen/overnight',
   // Last-frame extraction runs ffmpeg over a gallery clip (#13055).
   'POST /api/video-gen/last-frame/:id',
   // Upscale (LTX subprocess / ffmpeg) and stitch (ffmpeg) run on the host (#11076).
@@ -741,8 +744,8 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/video-gen/upscale/topaz/jobs/:jobId/cancel',
   'POST /api/video-gen/upscale/topaz/jobs/:jobId/recover',
   'POST /api/video-gen/stitch',
-  // Start trim probes/transcodes a new gallery clip with ffprobe/ffmpeg (#11418).
-  'POST /api/video-gen/history/:id/trim-start',
+  // Clip trim probes/transcodes a new gallery clip with ffprobe/ffmpeg (#11418).
+  'POST /api/video-gen/history/:id/trim',
   'POST /api/video-gen/metal-buffer-profiles/clear',
   // Timeline render spawns ffmpeg/ffprobe on the host for segments and audio (#11432).
   'POST /api/video-timeline/projects/:id/render',

@@ -861,8 +861,11 @@ to protect and largely stops firing.
   Wan 2.2, MiniMax H3, and LTX) while keeping the system awake. This is on by
   default; disable **Sleep display during local MLX video renders** in Settings
   > Image Gen > Defaults only when another headless workflow manages it.
-- The mlx/mlx-metal backend is pinned to the validated 0.31.2 trio in
-  `scripts/setup-image-video.sh` (the original panics were on 0.30.6).
+- The mlx/mlx-metal backend is pinned in `scripts/setup-image-video.sh` (the
+  original panics were on 0.30.6 during LoRA training, bisected to a 0.31.2 trio;
+  the shared runtime moved to mflux 0.24 · mlx 0.32.4 for Pillow 13 in #15479,
+  after training was retired). On Apple Silicon the trio installs from the
+  hash-pinned `scripts/requirements-mflux-mlx.lock.txt`.
 - Training checkpoints at least every `ceil(totalSteps/4)` steps
   (`MFLUX_MIN_CHECKPOINTS`), so a crash loses at most ~¼ of a run. Resume from the
   newest `checkpoints/*.zip` via the UI's resume action or `--resume-checkpoint`.

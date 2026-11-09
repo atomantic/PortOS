@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { X } from 'lucide-react';
 import { TAKE_SLOT } from '../../lib/musicVideoTakes.js';
 
-const BTN = 'inline-flex min-h-[44px] items-center gap-1 rounded px-2 py-1 text-xs disabled:opacity-50 sm:min-h-0';
+const BTN = 'inline-flex min-h-[44px] items-center gap-1 rounded px-2 py-1 text-xs disabled:opacity-50 pointer-fine:sm:min-h-0';
 
 /** How many of a shot's takes are neither its selected frame, end frame nor clip, nor already rejected. */
 export const unusedTakeCount = (scene) => (Array.isArray(scene?.takes) ? scene.takes : [])

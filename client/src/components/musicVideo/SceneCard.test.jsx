@@ -6,7 +6,7 @@ vi.mock('../../hooks/useFilmLookPresets.js', () => ({ default: () => ({ presets:
 vi.mock('../../hooks/useVideoFileSrc.js', () => ({ useVideoFileSrc: vi.fn(() => ({})) }));
 vi.mock('../../services/apiMusicVideo.js', async (importOriginal) => ({ ...(await importOriginal()), getMusicVideoMediaPool: vi.fn(async () => ({ items: [] })) }));
 vi.mock('../../services/apiImageVideo.js', async (importOriginal) => ({
-  ...(await importOriginal()), previewVideoPrompt: vi.fn(async () => ({ backend: 'grok', sentPrompt: 'Cast reference preview', promptAdditions: [] })),
+  ...(await importOriginal()), previewImagePrompt: vi.fn(async (body) => ({ sentPrompt: body.prompt, promptAdditions: [] })), previewVideoPrompt: vi.fn(async () => ({ backend: 'grok', sentPrompt: 'Cast reference preview', promptAdditions: [] })),
 }));
 vi.mock('../../services/api', async (importOriginal) => ({ ...(await importOriginal()), listTracks: vi.fn(async () => []) }));
 import SceneCard from './SceneCard.jsx';
@@ -272,9 +272,9 @@ describe('planned camera move (#10589)', () => {
     expect(screen.getByLabelText('Move').value).toBe('hold');
   });
 
-  it('puts a footage shot\'s camera beside its motion prompt and shows the text it adds', () => {
+  it('puts a footage shot\'s camera beside its clip prompt and shows the text it adds', () => {
     render(<Harness initial={{ sceneId: 's1', visualLayer: 'footage', prompt: 'a hand turns the dial', startSec: 0, endSec: 5, takes: [] }} onSave={vi.fn()} />);
-    // With no still yet the editor opens on the Still; the camera sits with the clip's motion prompt.
+    // With no still yet the editor opens on the Still; the camera sits with the clip prompt.
     expect(screen.getByRole('button', { name: 'Still' }).getAttribute('aria-pressed')).toBe('true');
     show('Clip');
     const camera = screen.getByLabelText('Camera');
@@ -285,6 +285,22 @@ describe('planned camera move (#10589)', () => {
     // The same text is what Sent to the model lists as its Camera move addition.
     fireEvent.click(within(screen.getByTestId('render-inputs')).getByRole('button', { name: '+ Camera move' }));
     expect(screen.getByTestId('render-inputs').textContent).toContain(adds);
+  });
+
+  // Catches the frame and clip prompts merging into one box again, or the clip prompt leaving the Clip tab.
+  it('keeps a footage shot\'s frame prompt under its frame and its clip prompt on the Clip tab', () => {
+    const onSave = vi.fn();
+    render(<Harness initial={{ sceneId: 's1', visualLayer: 'footage', framePrompt: 'Porch at dusk', prompt: 'She waves', startSec: 0, endSec: 5, takes: [] }} onSave={onSave} />);
+    const frame = screen.getByRole('textbox', { name: 'Frame prompt' });
+    expect(frame.value).toBe('Porch at dusk');
+    expect(frame.closest('[hidden]')).toBeNull();
+    expect(screen.getByRole('textbox', { name: 'Clip prompt', hidden: true }).closest('[hidden]')).not.toBeNull();
+    show('Clip');
+    const clip = screen.getByRole('textbox', { name: 'Clip prompt' });
+    expect(clip.value).toBe('She waves');
+    fireEvent.change(clip, { target: { value: 'She waves back' } });
+    fireEvent.blur(clip);
+    expect(onSave).toHaveBeenLastCalledWith('s1', { prompt: 'She waves back' });
   });
 
   it('asks why a static camera holds, and offers no camera on a title card', () => {
@@ -561,10 +577,14 @@ describe('motion prompt from the storyboard panel', () => {
         <SceneCard scene={shot} index={0} expanded project={{ id: 'mv-example', scenes: [shot] }} onEditLocal={() => {}} onSave={onSave} onGenerateVideo={onGenerateVideo} falVideoSettings={{ backend: 'local' }} />
     );
     const { rerender } = render(card(scene));
-    const box = screen.getAllByLabelText('Motion prompt').find((el) => el.value);
+    const box = screen.getAllByLabelText('Clip prompt').find((el) => el.value);
     expect(box.value).toBe('She laces her skates');
     expect(screen.getByTestId('prompt-from-storyboard')).toBeTruthy();
-    // Blurring the panel's words keeps the shot linked rather than copying them.
+    // Blurring untouched words saves nothing; retyping the panel's own words keeps the shot linked rather than copying them.
+    fireEvent.blur(box);
+    expect(onSave).not.toHaveBeenCalled();
+    fireEvent.change(box, { target: { value: 'She laces her skates!' } });
+    fireEvent.change(box, { target: { value: 'She laces her skates' } });
     fireEvent.blur(box);
     expect(onSave).toHaveBeenLastCalledWith('s1', { prompt: '' });
     fireEvent.click(screen.getByRole('button', { name: 'Render again' }));
@@ -836,7 +856,7 @@ describe('clip playback and coverage', () => {
     expect(screen.getByRole('button', { name: 'Start clip here' })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'Next frame' }));
     fireEvent.click(screen.getByRole('button', { name: 'Start clip here' }));
-    expect(onTrimClip).toHaveBeenCalledWith(scene, 1 / 24);
+    expect(onTrimClip).toHaveBeenCalledWith(scene, { startSec: 1 / 24 });
     await waitFor(() => expect(screen.getByRole('button', { name: 'Start clip here' })).toBeEnabled());
     rerender(<SceneCard {...props} takeBusy />);
     expect(screen.getByRole('button', { name: 'Next frame' })).toBeDisabled();
@@ -1292,6 +1312,49 @@ describe('LTX reference box default', () => {
   });
 });
 
+describe('project LTX 2.5 References mode on the shot card (#15482)', () => {
+  const models = [{ id: 'ltx25_example', name: 'LTX 2.5', runtime: 'ltx25', supportedModes: ['image', 'a2v'] }, { id: 'ltx23_example', name: 'LTX 2.3', runtime: 'ltx2', supportedModes: ['image'] }];
+  const renderCard = (settings, over = {}) => {
+    const scene = { sceneId: 's1', prompt: 'The rider turns', referenceImageId: 'start.png', clipReferenceIds: ['rider'], startSec: 0, endSec: 4, takes: [], ...over };
+    const project = { id: 'mv-reference', scenes: [scene], visualSpec: { references: [
+      { id: 'rider', imageId: 'rider.png', role: 'character', label: 'Rider', condition: true },
+    ] } };
+    const onGenerateVideo = vi.fn();
+    render(<SceneCard scene={scene} project={project} index={0} expanded onEditLocal={vi.fn()} onSave={vi.fn()}
+      onGenerateVideo={onGenerateVideo} videoModels={models} falVideoSettings={settings} />);
+    show('Clip');
+    return onGenerateVideo;
+  };
+
+  // Uniquely catches the project mode not turning the per-shot box on, or unticking it not reaching the request.
+  it('ticks the box by default and lets this shot untick it as an override', () => {
+    const onGenerateVideo = renderCard({ backend: 'local', modelId: 'ltx25_example', generationMode: 'ltxReferences' }, { clipReferenceIds: undefined, frameReferenceIds: ['rider'] });
+    const box = screen.getByLabelText(/Use LTX reference images/);
+    expect(box).toBeChecked();
+    fireEvent.click(box);
+    fireEvent.click(screen.getByRole('button', { name: 'Render' }));
+    expect(onGenerateVideo.mock.calls[0][1].card).toMatchObject({ ltxReferences: false });
+  });
+
+  it('does not mention LTX references when a hosted backend renders the clip', () => {
+    renderCard({ backend: 'grok' });
+    expect(screen.queryByLabelText(/Use LTX reference images/)).toBeNull();
+    expect(screen.queryByText(/LTX reference images need/)).toBeNull();
+  });
+
+  // Uniquely catches the checkbox silently disappearing.
+  it.each([
+    ['a hosted backend in LTX References mode', { backend: 'grok', generationMode: 'ltxReferences' }, {}, /Render on set to Local/],
+    ['a model that is not LTX 2.5', { backend: 'local', modelId: 'ltx23_example' }, {}, /LTX 2.5 local model/],
+    ['Audio reactive mode', { backend: 'local', modelId: 'ltx25_example', generationMode: 'audioReactive' }, {}, /Audio reactive/],
+    ['no start frame yet (storyboard shot)', { backend: 'local', modelId: 'ltx25_example' }, { panelId: 'panel-1', panelArt: 'panel.png', referenceImageId: null }, /Generate the storyboard frame first/],
+  ])('says why References is not offered for %s', (_name, settings, over, reason) => {
+    renderCard(settings, over);
+    expect(screen.queryByLabelText(/Use LTX reference images/)).toBeNull();
+    expect(screen.getByText(reason)).toBeTruthy();
+  });
+});
+
 it('does not offer LTX references for a storyboard clip that cannot carry them', () => {
   const scene = { sceneId: 's1', panelId: 'panel-1', panelArt: 'panel.png', prompt: 'The rider turns',
     clipReferenceIds: ['rider'], startSec: 0, endSec: 4, takes: [] };
@@ -1384,7 +1447,7 @@ describe('shot details', () => {
   // the switch not saving, or the details not landing in the clip prompt.
   it('edits the shot sheet details in place and adds them to the clip prompt when switched on', () => {
     const onSave = vi.fn();
-    const project = { id: 'mv-1', cameras: [{ id: 'snap', name: 'Snapshot camera', kind: 'in-world' }], concept: { subjects: [{ kind: 'character', name: 'Renee' }] } };
+    const project = { id: 'mv-1', cameras: [{ id: 'snap', name: 'Snapshot camera', kind: 'in-world' }], concept: { subjects: [{ kind: 'character', name: 'Ada' }] } };
     function Harness() {
       const [scene, setScene] = useState({ sceneId: 's1', startSec: 0, endSec: 4, prompt: 'they laugh', takes: [], shotSheet: { emotion: 'Playful' } });
       return <SceneCard scene={scene} project={{ ...project, scenes: [scene] }} index={0} expanded
@@ -1401,5 +1464,35 @@ describe('shot details', () => {
     const inputs = screen.getByTestId('render-inputs');
     expect(within(inputs).getByRole('button', { name: '+ Emotion' })).toBeInTheDocument();
     expect(within(inputs).getByRole('button', { name: '+ Camera' })).toBeInTheDocument();
+  });
+});
+
+describe('shot prompt save-on-blur', () => {
+  const base = { sceneId: 's1', startSec: 0, endSec: 4, prompt: 'old prompt', takes: [] };
+  function Harness({ initial, onSave }) {
+    const [scene, setScene] = useState(initial);
+    return <SceneCard scene={scene} project={{ id: 'mv-1', scenes: [scene] }} index={0} expanded
+      falVideoSettings={{ backend: 'local' }} onEditLocal={(_id, patch) => setScene((c) => ({ ...c, ...patch }))} onSave={onSave} />;
+  }
+  const renderCard = (scene, onSave) => render(<Harness initial={scene} onSave={onSave} />);
+
+  it('does not save an untouched prompt that a newer copy replaced', () => {
+    const onSave = vi.fn();
+    const { rerender } = renderCard(base, onSave);
+    const newer = { ...base, prompt: 'newer prompt' };
+    rerender(<SceneCard scene={newer} project={{ id: 'mv-1', scenes: [newer] }} index={0} expanded falVideoSettings={{ backend: 'local' }} onEditLocal={vi.fn()} onSave={onSave} />);
+    const box = screen.getAllByLabelText(/shot prompt|clip prompt/i).find((el) => el.tagName === 'TEXTAREA');
+    fireEvent.focus(box);
+    fireEvent.blur(box);
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it('saves the typed prompt on blur', () => {
+    const onSave = vi.fn();
+    renderCard(base, onSave);
+    const box = screen.getAllByLabelText(/shot prompt|clip prompt/i).find((el) => el.tagName === 'TEXTAREA');
+    fireEvent.change(box, { target: { value: 'typed prompt' } });
+    fireEvent.blur(box);
+    expect(onSave).toHaveBeenCalledWith('s1', { prompt: 'typed prompt' });
   });
 });

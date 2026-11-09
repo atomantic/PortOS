@@ -57,6 +57,9 @@ export const MIGRATION_OWNED_PATHS = new Set([
   // and gallery image sidecars; a seed would be stamped as media made here.
   'video-history.json',
   'images',
+  // Migration 457 backfills stable ids onto this install's own Life Calendar
+  // activities; with no file the service serves code defaults with fixed ids.
+  'meatspace/activities.json',
 ]);
 
 /**

@@ -115,7 +115,7 @@ export default function EidoverseUpdateBanner({ appId, appName = 'Eidoverse Worl
               type="button"
               aria-label={`Update ${appName}`}
               onClick={() => startUpdate(appId, appName, { syncFork })}
-              className="inline-flex min-h-[44px] items-center gap-1.5 rounded bg-port-accent px-2 py-2 text-xs text-white hover:bg-port-accent/80 lg:min-h-0 lg:py-1"
+              className="inline-flex min-h-[44px] items-center gap-1.5 rounded bg-port-accent px-2 py-2 text-xs text-white hover:bg-port-accent/80 pointer-fine:lg:min-h-0 lg:py-1"
             >
               <Download size={13} aria-hidden="true" />
               Update
@@ -123,7 +123,7 @@ export default function EidoverseUpdateBanner({ appId, appName = 'Eidoverse Worl
             <button
               type="button"
               onClick={dismiss}
-              className="min-h-[44px] rounded bg-gray-600 px-2 py-2 text-xs text-white hover:bg-gray-500 lg:min-h-0 lg:py-1"
+              className="min-h-[44px] rounded bg-gray-600 px-2 py-2 text-xs text-white hover:bg-gray-500 pointer-fine:lg:min-h-0 lg:py-1"
             >
               Dismiss
             </button>

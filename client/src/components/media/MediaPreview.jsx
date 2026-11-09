@@ -1,10 +1,10 @@
 import { useMemo, useCallback, useEffect, useState } from 'react';
 import MediaLightbox from './MediaLightbox';
-import { getMediaNavProps } from '../../lib/mediaNavigation';
+import { getAdjacentMedia, getMediaNavProps } from '../../lib/mediaNavigation';
 import { computeImageVariantGroup } from './variants';
 import { mediaAnnotationKey, mediaRecordRef } from './mediaDetail';
 import useImageVariants from '../../hooks/useImageVariants';
-import { trimVideoStart, updateImagePrompt, updateVideoPrompt, updateVideoPoster } from '../../services/apiImageVideo';
+import { trimVideo, updateImagePrompt, updateVideoPrompt, updateVideoPoster } from '../../services/apiImageVideo';
 
 // Thin wrapper around MediaLightbox that owns the consistent wiring every
 // page repeated by hand: open/close, prev/next nav, and the annotation
@@ -25,6 +25,8 @@ export default function MediaPreview({
   onPromptSaved,
   onPosterSaved,
   onTrimmed,
+  onDelete,
+  onToggleHidden,
   ...handlers
 }) {
   const [promptOverride, setPromptOverride] = useState(null);
@@ -63,8 +65,8 @@ export default function MediaPreview({
   }, [onPosterSaved]);
   // The trim writes a new gallery clip; only a host that can list it (and open
   // it) offers the control.
-  const trimStart = useCallback(async (item, startSec) => {
-    const { video } = await trimVideoStart(item.id, startSec, { silent: true });
+  const trimClip = useCallback(async (item, range) => {
+    const { video } = await trimVideo(item.id, range, { silent: true });
     onTrimmed(video, item);
     return video;
   }, [onTrimmed]);
@@ -136,6 +138,26 @@ export default function MediaPreview({
     const prompt = item.kind === 'video' ? result?.videoPrompt : result?.imagePrompt;
     if (prompt) savePrompt(item, prompt, { silent: false }).catch(() => {});
   }, [savePrompt]);
+  // Delete and Hide run the host's own handlers, which drop the item from
+  // `items` when it leaves the list (deleted, or hidden on a page that lists
+  // visible items only) and keep it otherwise (pending on a peer, failed, or
+  // still listed). Once the host's list no longer holds it, open the neighbor
+  // the user was next to (or close at the end) instead of leaving it open.
+  const [removed, setRemoved] = useState(null);
+  const thenAdvance = useCallback((handler) => handler && (async (item, ...args) => {
+    const { next, previous } = getAdjacentMedia(items, item);
+    await handler(item, ...args);
+    setRemoved({ key: item.key, neighbor: next || previous });
+  }), [items]);
+  useEffect(() => {
+    if (!removed) return;
+    setRemoved(null);
+    if (preview && preview.key !== removed.key) return;
+    if (items?.some((i) => i?.key === removed.key)) return;
+    setPreview(removed.neighbor ?? null);
+  }, [removed, items, preview, setPreview]);
+  const deleteFromPreview = useMemo(() => thenAdvance(onDelete), [thenAdvance, onDelete]);
+  const hideFromPreview = useMemo(() => thenAdvance(onToggleHidden), [thenAdvance, onToggleHidden]);
   const annotationKey = mediaAnnotationKey(preview);
   return (
     <MediaLightbox
@@ -147,7 +169,9 @@ export default function MediaPreview({
       // prompt to save.
       onPromptChange={mediaRecordRef(displayedPreview) ? savePrompt : undefined}
       onPosterChange={savePoster}
-      onTrimStart={onTrimmed ? trimStart : undefined}
+      onTrimClip={onTrimmed ? trimClip : undefined}
+      onDelete={deleteFromPreview || undefined}
+      onToggleHidden={hideFromPreview || undefined}
       variantGroup={variantGroup}
       onSelectVariant={onSelectVariant}
       onPromptAnalysis={handlePromptAnalysis}

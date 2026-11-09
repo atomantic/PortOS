@@ -350,10 +350,10 @@ export const getUpscalePlan = (id, method, options = {}) => request(
 // `/ic-loras/:key/download` route (issue #3100) already resolves for every
 // registered IC-LoRA weight, remix mode or not.
 export const upscaleAdapterDownloadUrl = (key) => (key ? `${API_BASE}/video-gen/ic-loras/${encodeURIComponent(key)}/download` : null);
-// Keep a clip from `startSec` on as a NEW gallery entry; the source stays as is.
-export const trimVideoStart = (id, startSec, options = {}) => request(`/video-gen/history/${encodeURIComponent(id)}/trim-start`, {
+// Keep `{ startSec?, endSec? }` of a clip as a NEW gallery entry; the source stays as is.
+export const trimVideo = (id, { startSec, endSec } = {}, options = {}) => request(`/video-gen/history/${encodeURIComponent(id)}/trim`, {
   method: 'POST',
-  body: JSON.stringify({ startSec }),
+  body: JSON.stringify({ startSec, endSec }),
   ...options,
 });
 export const stitchVideos = (videoIds, options = {}) => request('/video-gen/stitch', {
@@ -710,3 +710,12 @@ export const updateVideoPoster = (id, atSec, options = {}) => request(`/video-ge
 export const downloadVideoSharingCopy = (id, options = {}) => request(`/video-gen/history/${encodeURIComponent(id)}/sharing-download`, {
   responseType: 'blob', silent: true, hostControlOptional: true, ...options,
 });
+
+// Overnight local clip batches (#15498): shot × local reference model renders held until a start time.
+export const queueOvernightRenders = (body, options = {}) => request('/video-gen/overnight', {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+export const listOvernightRenders = (projectId, options = {}) =>
+  request(`/video-gen/overnight?projectId=${encodeURIComponent(projectId)}`, options);
+export const cancelOvernightRenders = (batchId, options = {}) =>
+  request(`/video-gen/overnight/${encodeURIComponent(batchId)}`, { method: 'DELETE', ...options });

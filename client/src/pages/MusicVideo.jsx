@@ -6,6 +6,7 @@ import { useParams, useNavigate, useSearchParams, useLocation } from 'react-rout
 import { Plus, Film, Wand2 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import socket from '../services/socket';
+import usePrevizJobs from '../hooks/usePrevizJobs.js';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import PageHeader from '../components/PageHeader';
 import PageSkeleton from '../components/ui/PageSkeleton';
@@ -304,8 +305,8 @@ export default function MusicVideo() {
         onKeyDown={(e) => { if (e.key === 'Escape') setRenamingId(null); }}
         className="min-w-0 flex-1 basis-48 sm:max-w-md bg-port-bg border border-port-border rounded px-2 py-1.5 text-base sm:text-sm"
       />
-      <button type="submit" disabled={!renameDraft.trim()} className="rounded bg-port-accent px-3 py-1.5 text-sm text-white disabled:opacity-50 min-h-[44px] sm:min-h-0">Save</button>
-      <button type="button" onClick={() => setRenamingId(null)} className="rounded border border-port-border px-3 py-1.5 text-sm min-h-[44px] sm:min-h-0">Cancel</button>
+      <button type="submit" disabled={!renameDraft.trim()} className="rounded bg-port-accent px-3 py-1.5 text-sm text-white disabled:opacity-50 min-h-[44px] pointer-fine:sm:min-h-0">Save</button>
+      <button type="button" onClick={() => setRenamingId(null)} className="rounded border border-port-border px-3 py-1.5 text-sm min-h-[44px] pointer-fine:sm:min-h-0">Cancel</button>
     </form>
   ) : null;
   // A full record replaces its summary in the index list; the project card
@@ -436,6 +437,39 @@ export default function MusicVideo() {
     events.forEach((e) => socket.on(e, onRunEvent));
     return () => events.forEach((e) => socket.off(e, onRunEvent));
   }, []);
+
+  // Shot fields typed locally and not yet saved: a refetch after a change made elsewhere keeps these.
+  const unsavedSceneFields = useRef(new Map());
+  // An edit made elsewhere (an agent, another tab) reaches the open project here; fields typed
+  // locally and not yet saved keep their text, with a notice that the shot changed.
+  useEffect(() => {
+    if (!selectedId) return undefined;
+    let active = true;
+    const onChanged = (data) => {
+      if (data?.id !== selectedId) return;
+      getMusicVideoProject(selectedId, { silent: true }).then((fresh) => {
+        if (!active || !fresh) return;
+        let conflict = false;
+        setSelectedProject((prev) => {
+          if (prev?.id !== fresh.id) return prev;
+          const local = new Map((prev.scenes || []).map((s) => [s.sceneId, s]));
+          const scenes = (fresh.scenes || []).map((scene) => {
+            const mine = local.get(scene.sceneId);
+            const keys = unsavedSceneFields.current.get(scene.sceneId);
+            if (!mine || !keys?.size) return scene;
+            const kept = { ...scene };
+            keys.forEach((k) => { if (kept[k] !== mine[k]) { conflict = true; kept[k] = mine[k]; } });
+            return kept;
+          });
+          return { ...fresh, scenes };
+        });
+        summaries.setItems((prev) => prev.map((p) => (p.id === fresh.id ? fresh : p)));
+        if (conflict) toast.info('A shot changed elsewhere. Your unsaved text is kept; saving it replaces the other edit.');
+      }).catch(() => {});
+    };
+    socket.on('music-video:project:changed', onChanged);
+    return () => { active = false; socket.off('music-video:project:changed', onChanged); };
+  }, [selectedId]);
 
   // `youtube.editJob` is one shared job slot for the whole detail view (not
   // per-project) — switching the selected project while it has an import in
@@ -602,14 +636,14 @@ export default function MusicVideo() {
               type="button"
               onClick={() => setAutonomousOpen(true)}
               title="One prompt in — lyrics, a Suno song, a mood board and the video out"
-              className="flex items-center gap-1 rounded border border-port-accent text-port-accent px-3 py-1.5 text-sm min-h-[44px] sm:min-h-0"
+              className="flex items-center gap-1 rounded border border-port-accent text-port-accent px-3 py-1.5 text-sm min-h-[44px] pointer-fine:sm:min-h-0"
             >
               <Wand2 size={15} /> Autonomous
             </button>
             <button
               type="button"
               onClick={() => setCreateOpen(true)}
-              className="flex items-center gap-1 bg-port-accent text-white rounded px-3 py-1.5 text-sm min-h-[44px] sm:min-h-0"
+              className="flex items-center gap-1 bg-port-accent text-white rounded px-3 py-1.5 text-sm min-h-[44px] pointer-fine:sm:min-h-0"
             >
               <Plus size={15} /> New project
             </button>
@@ -746,6 +780,7 @@ export default function MusicVideo() {
           <ProjectWorkspace
             key={selected.id}
             selected={selected}
+            unsavedSceneFields={unsavedSceneFields}
             tracks={tracks}
             trackLibrary={trackLibrary}
             trackName={trackName}
@@ -790,12 +825,13 @@ export default function MusicVideo() {
 function ProjectWorkspace({
   selected, tracks, trackLibrary, trackName, youtube, separation, lyricAlign, midi, renderJob, videoSettings, publishing, analyzing, cloning,
   replaceProject, patchProject, patchScene, openProject, prepareSong, onAnalyze, onClone, onTrackImported,
-  onRename, renameForm, deletion,
+  onRename, renameForm, deletion, unsavedSceneFields,
 }) {
   const { projectId: routeProjectId, artifactId: routeArtifactId, stage: routeStage, sceneId: routeSceneId } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const selectedId = selected.id;
+  const previzRunning = usePrevizJobs(selected).running.length > 0;
   const [arranging, setArranging] = useState(false);
   const [creativeSetupPending, setCreativeSetupPending] = useState(false);
   const [styleReferencesPending, setStyleReferencesPending] = useState(false);
@@ -1099,12 +1135,15 @@ function ProjectWorkspace({
 
   // Optimistic local edit; PATCH on blur (silent — this owns its error toast).
   const editSceneLocal = (sceneId, patch) => {
+    const keys = unsavedSceneFields.current.get(sceneId) || new Set();
+    Object.keys(patch).forEach((k) => keys.add(k));
+    unsavedSceneFields.current.set(sceneId, keys);
     // Reads the current project: shot sheet Apply calls this repeatedly from one retained closure.
     patchProject(selected.id, (project) => ({ scenes: project.scenes?.map((s) => (s.sceneId === sceneId ? { ...s, ...patch } : s)) }));
   };
   const saveScene = (sceneId, patch) => {
     return updateMusicVideoScene(selected.id, sceneId, patch, { silent: true })
-      .then(() => true)
+      .then(() => { Object.keys(patch).forEach((k) => unsavedSceneFields.current.get(sceneId)?.delete(k)); return true; })
       .catch((err) => { toast.error(err?.message || 'Failed to save scene'); return false; });
   };
 
@@ -1832,7 +1871,7 @@ function ProjectWorkspace({
             onNextAction={runNextAction}
             spend={projectSpend(selected)}
             status={projectStatus}
-            notes={stepNotes(selected, productionReview.readiness, publish)}
+            notes={previzRunning ? { ...stepNotes(selected, productionReview.readiness, publish), previz: 'Running…' } : stepNotes(selected, productionReview.readiness, publish)}
             autopilot={autopilotStatus(selected, productionReview.readiness)}
             onOpenSettings={openHeaderSettings}
             playerFirst={playerFirst}

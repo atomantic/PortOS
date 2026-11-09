@@ -35,7 +35,7 @@ const pastedSunoSongId = (text) => {
   return isSunoSongUrl(value) ? sunoSongIdFromUrl(value) : null;
 };
 const inputClass = 'w-full min-w-0 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm';
-const buttonClass = 'flex items-center gap-1 rounded border border-port-border bg-port-bg px-3 py-1.5 text-sm min-h-[44px] sm:min-h-0 disabled:opacity-50';
+const buttonClass = 'flex items-center gap-1 rounded border border-port-border bg-port-bg px-3 py-1.5 text-sm min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50';
 
 /** The read-only output of one stage the director opened from the checklist. */
 function StageOutput({ run, row, editableBelow }) {
@@ -47,7 +47,7 @@ function StageOutput({ run, row, editableBelow }) {
         <div key={field.key} className="min-w-0">
           <div className="text-xs text-port-text-muted">{field.label}</div>
           {field.href ? (
-            <Link to={field.href} className="inline-flex items-center gap-1 text-sm text-port-accent hover:underline min-h-[44px] sm:min-h-0">
+            <Link to={field.href} className="inline-flex items-center gap-1 text-sm text-port-accent hover:underline min-h-[44px] pointer-fine:sm:min-h-0">
               {field.text} <ExternalLink size={12} aria-hidden="true" />
             </Link>
           ) : (
@@ -174,7 +174,7 @@ export default function AutonomousRunPanel({ project, auto, readiness, selectedS
                   aria-expanded={selected === row.id}
                   aria-controls={`mv-run-stage-${row.id}`}
                   onClick={() => onSelectStage(selected === row.id ? null : row.id)}
-                  className={`flex w-full min-w-0 items-center gap-1 rounded px-1 -mx-1 min-h-[44px] sm:min-h-0 hover:bg-port-bg ${selected === row.id ? 'bg-port-bg' : ''} ${tone}`}
+                  className={`flex w-full min-w-0 items-center gap-1 rounded px-1 -mx-1 min-h-[44px] pointer-fine:sm:min-h-0 hover:bg-port-bg ${selected === row.id ? 'bg-port-bg' : ''} ${tone}`}
                 >
                   {content}
                 </button>
@@ -209,7 +209,7 @@ export default function AutonomousRunPanel({ project, auto, readiness, selectedS
       )}
 
       {run.status === 'completed' && project.renderHistoryId && (
-        <Link to={`/music-video/${encodeURIComponent(project.id)}/review`} className="inline-flex items-center gap-1 text-sm text-port-accent hover:underline min-h-[44px] sm:min-h-0">
+        <Link to={`/music-video/${encodeURIComponent(project.id)}/review`} className="inline-flex items-center gap-1 text-sm text-port-accent hover:underline min-h-[44px] pointer-fine:sm:min-h-0">
           Watch final video <ExternalLink size={12} aria-hidden="true" />
         </Link>
       )}

@@ -29,9 +29,9 @@ const CALENDAR = {
   grid: [],
   events: [],
   budgets: [
-    { name: 'Coffees', cadence: 'day', frequency: 2, icon: 'coffee', remaining: 60000 },
-    { name: 'Showers', cadence: 'day', frequency: 1, icon: 'droplets', remaining: 30000 },
-    { name: 'Books', cadence: 'month', frequency: 1, icon: 'book-open', remaining: 400 },
+    { id: 'a-coffees', name: 'Coffees', cadence: 'day', frequency: 2, icon: 'coffee', remaining: 60000 },
+    { id: 'a-showers', name: 'Showers', cadence: 'day', frequency: 1, icon: 'droplets', remaining: 30000 },
+    { id: 'a-books', name: 'Books', cadence: 'month', frequency: 1, icon: 'book-open', remaining: 400 },
   ],
 };
 
@@ -47,7 +47,7 @@ afterEach(() => {
 });
 
 describe('CalendarTab activity removal', () => {
-  it('sends the row name, ignores a second click while in flight, and drops only that row locally', async () => {
+  it('sends the row id, ignores a second click while in flight, and drops only that row locally', async () => {
     let resolveRemoval;
     api.removeActivity.mockReturnValue(new Promise(resolve => { resolveRemoval = resolve; }));
     await act(async () => { renderTab(); });
@@ -58,7 +58,7 @@ describe('CalendarTab activity removal', () => {
     fireEvent.click(trash);
     fireEvent.click(trash);
     expect(api.removeActivity).toHaveBeenCalledTimes(1);
-    expect(api.removeActivity).toHaveBeenCalledWith(1, 'Showers', { silent: true });
+    expect(api.removeActivity).toHaveBeenCalledWith(1, { id: 'a-showers' }, { silent: true });
     expect(removeButtons()[1].disabled).toBe(true);
     expect(removeButtons()[0].disabled).toBe(false);
 
@@ -125,5 +125,41 @@ describe('CalendarTab activity removal', () => {
     await act(async () => { resolveFreshRead({ ...structuredClone(CALENDAR), budgets: [CALENDAR.budgets[0], CALENDAR.budgets[2]] }); });
     expect(screen.queryByText('Showers')).toBeNull();
     expect(screen.getByText('Coffees')).toBeInTheDocument();
+  });
+
+  it('removes only the clicked one of two same-named activities, and disables only it', async () => {
+    let resolveRemoval;
+    api.getLifeCalendar.mockResolvedValue({
+      ...structuredClone(CALENDAR),
+      budgets: [
+        { id: 'w1', name: 'Walks', cadence: 'day', frequency: 1, icon: 'circle', remaining: 100 },
+        { id: 'w2', name: 'Walks', cadence: 'week', frequency: 3, icon: 'circle', remaining: 50 },
+      ],
+    });
+    api.removeActivity.mockReturnValue(new Promise(resolve => { resolveRemoval = resolve; }));
+    await act(async () => { renderTab(); });
+    await screen.findAllByText('Walks');
+
+    await act(async () => { fireEvent.click(removeButtons()[1]); });
+    expect(api.removeActivity).toHaveBeenCalledWith(1, { id: 'w2' }, { silent: true });
+    expect(removeButtons().map(b => b.disabled)).toEqual([false, true]);
+
+    await act(async () => { resolveRemoval([{ id: 'w1', name: 'Walks' }]); });
+    expect(screen.getAllByText('Walks')).toHaveLength(1);
+    expect(screen.getByText('1/day')).toBeInTheDocument();
+  });
+
+  it('falls back to the row name for a row stored before activity ids', async () => {
+    api.getLifeCalendar.mockResolvedValue({
+      ...structuredClone(CALENDAR),
+      budgets: CALENDAR.budgets.map(({ id: _id, ...rest }) => rest),
+    });
+    api.removeActivity.mockResolvedValue([{ name: 'Coffees' }, { name: 'Books' }]);
+    await act(async () => { renderTab(); });
+    await screen.findByText('Showers');
+
+    await act(async () => { fireEvent.click(removeButtons()[1]); });
+    expect(api.removeActivity).toHaveBeenCalledWith(1, { name: 'Showers' }, { silent: true });
+    expect(screen.queryByText('Showers')).toBeNull();
   });
 });

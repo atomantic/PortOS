@@ -152,7 +152,7 @@ export default function ProductionReviewPanel({ project, review, onOpenArtifact,
         {approvalHelp(key) && <p id={fieldId(`${key}-approval-help`)} role="status" className="mt-1 text-sm text-port-warning">{approvalHelp(key)}</p>}
         {key === 'storyboard' && !ready?.storyboard.approved && !!ready?.storyboard.problems.length && planItems().length > 0 && <div className="mt-1 text-sm">
           <ul aria-label="Open Storyboard items" className="list-disc pl-5 text-port-text-muted">{planItems().map(item => <li key={item.id}>{item.text}</li>)}</ul>
-          {onNavigate && <button type="button" onClick={() => onNavigate('board')} className="mt-1 min-h-[44px] rounded border border-port-border px-2 py-1 text-port-accent sm:min-h-0">Open the Storyboard step</button>}
+          {onNavigate && <button type="button" onClick={() => onNavigate('board')} className="mt-1 min-h-[44px] rounded border border-port-border px-2 py-1 text-port-accent pointer-fine:sm:min-h-0">Open the Storyboard step</button>}
         </div>}
         {listedProblems(key).length > 0 && <ul className="mt-1 list-disc pl-5 text-xs text-port-text-muted">{listedProblems(key).map(problem => <li key={problem}>{problem}</li>)}</ul>}
         {/* Camera variety (#10589) is advice, never a blocker on approval. */}

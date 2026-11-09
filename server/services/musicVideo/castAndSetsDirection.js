@@ -288,7 +288,7 @@ const OUTPUT_SHAPE = `{
   },
   "looks": [{ "name": "<SHORT NAME>", "description": "<the complete outfit>", "chapters": "<which parts of the song>" }],
   "cast": [{ "id": "<short-slug>", "name": "<a name>", "role": "<what they are in the video: drummer, shopkeeper, ...>", "description": "<who they are: age, vibe, attitude>", "height": "<their height, e.g. 5 ft 10 in (178 cm)>", "face": "<face: skin, eyes, brows, distinguishing features>", "hair": "<hair>", "wardrobe": "<their one outfit>" }],
-  "props": [{ "id": "<short-slug>", "name": "<what it is and whose, e.g. Renee's camera>", "owner": "<who carries, uses or rides it, or empty>", "description": "<exactly how it looks: type, era, shape, size, colors, materials and distinguishing marks; no brand names or text>" }],
+  "props": [{ "id": "<short-slug>", "name": "<what it is and whose, e.g. Ada's camera>", "owner": "<who carries, uses or rides it, or empty>", "description": "<exactly how it looks: type, era, shape, size, colors, materials and distinguishing marks; no brand names or text>" }],
   "sets": [{ "id": "<short-slug>", "name": "<set name>", "description": "<the empty location, concrete and visual, with nobody in it; furniture and objects standing upright and apart, never stacked, interlocked or piled>", "lighting": "<its one dominant light>", "era": "<the year or period it is seen in when that is not the present story, or empty>", "look": "<the film stock, format and color of that era when it differs from the main look, or empty>", "sections": ["<section label it serves>"] }],
   "songMap": [{ "section": 0, "setId": "<short-slug>" }],
   "tests": [{ "setId": "<short-slug>", "look": "<SHORT NAME>", "action": "<what the protagonist does in this frame>", "caption": "<the lyric or beat it serves>", "formId": "<the protagonist.forms id when this frame shows them at that other age, or empty>" }],
@@ -1065,6 +1065,50 @@ function describeEdits(previous, direction) {
       .filter((line) => direction.medium !== 'procedural' || line.endsWith(' removed') || !direction.sets.some((s) => line === `set ${s.name}` && differs(previous.sets.find((p) => p.id === s.id)?.imageRole, s.imageRole) && !differs({ ...previous.sets.find((p) => p.id === s.id), imageRole: s.imageRole }, s))),
     ...(direction.testsFixed && differs(previous.tests || [], direction.tests || []) ? ['tests'] : []),
   ];
+}
+
+// ---- text-only edits (catalog check-ins) -------------------------------------
+
+const textList = (items, max, cap) => items.map((x) => String(x).trim().slice(0, max)).filter(Boolean).slice(0, cap);
+
+/**
+ * Apply a text-only edit to a stored direction: the look line, the
+ * protagonist's signature, rules and expressions, the props and the overlay
+ * concept. A catalog check-in keeps these words but renders nothing from the
+ * direction, so the edit changes no image role, set or cast member and starts
+ * no render. Present keys replace (an empty string or list clears); absent keys
+ * keep the stored value. Returns `{ direction, changed }`.
+ */
+export function applyCastAndSetsDirectionTextEdits(previous, edits = {}) {
+  const direction = { ...previous };
+  const changed = [];
+  if (typeof edits.look === 'string') direction.look = edits.look.trim().slice(0, 500);
+  if (edits.protagonist) {
+    const protagonist = { ...(previous.protagonist || {}) };
+    if (typeof edits.protagonist.signature === 'string') protagonist.signature = edits.protagonist.signature.trim().slice(0, TEXT);
+    if (Array.isArray(edits.protagonist.rules)) protagonist.rules = textList(edits.protagonist.rules, 300, CAST_SETS_LIMITS.rules);
+    if (Array.isArray(edits.protagonist.expressions)) protagonist.expressions = textList(edits.protagonist.expressions, 300, CAST_SETS_LIMITS.expressions);
+    direction.protagonist = protagonist;
+  }
+  if (Array.isArray(edits.props)) {
+    direction.props = normalizeProps(edits.props.map((p) => pickText(p, { id: 64, name: SHORT, owner: SHORT, description: TEXT })));
+  }
+  if (edits.overlayConcept) {
+    const overlay = { ...(previous.overlayConcept || {}) };
+    if (typeof edits.overlayConcept.summary === 'string') overlay.summary = edits.overlayConcept.summary.trim().slice(0, TEXT);
+    if (Array.isArray(edits.overlayConcept.elements)) {
+      overlay.elements = edits.overlayConcept.elements.map((el) => pickText(el, { name: SHORT, description: TEXT }))
+        .filter((el) => el.name && el.description).slice(0, CAST_SETS_LIMITS.overlayElements);
+    }
+    direction.overlayConcept = overlay;
+  }
+  if (differs(previous.look, direction.look)) changed.push('look');
+  for (const key of ['signature', 'rules', 'expressions']) {
+    if (differs(previous.protagonist?.[key] || (key === 'signature' ? '' : []), direction.protagonist?.[key] || (key === 'signature' ? '' : []))) changed.push(key);
+  }
+  if (differs(previous.props || [], direction.props || [])) changed.push('props');
+  if (differs(previous.overlayConcept || {}, direction.overlayConcept || {})) changed.push('overlay concept');
+  return { direction, changed };
 }
 
 // ---- what a revision changed -------------------------------------------------

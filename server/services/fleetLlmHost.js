@@ -73,7 +73,7 @@ export async function startFleetLlmHost() {
   // recorded against the history already on disk rather than starting a second
   // ledger that the hydrate would then overwrite.
   const usage = await getFleetHostUsageLedger();
-  const next = createFleetLlmGateway({ upstream, apiKey, usage, onRecorded: scheduleFleetHostUsagePersist, onChanged: () => noteFleetHostChanged({ usageOnly: true }) });
+  const next = createFleetLlmGateway({ upstream, apiKey, usage, onRecorded: scheduleFleetHostUsagePersist, restartRuntime: restartRuntimeContainer, onChanged: () => noteFleetHostChanged({ usageOnly: true }) });
   await new Promise((resolve, reject) => {
     next.server.once('error', reject);
     next.server.listen(PORTS.FLEET_LLM, '0.0.0.0', resolve);
@@ -95,12 +95,33 @@ export async function stopFleetLlmHost() {
 }
 
 export function getFleetLlmHostQueue() {
-  return gateway?.status() || { active: 0, queued: 0, maxActive: 1, maxQueued: 16 };
+  return gateway?.status() || { active: 0, queued: 0, maxActive: 1, maxQueued: 16, stalled: false, stalledSince: null };
 }
 
 /** Inbound usage, with this host's live admission state folded in. */
 export async function getFleetLlmHostUsage() {
   return getFleetHostUsageReport({ queue: gateway?.status() || null });
+}
+
+/** `-f` arguments for the host's compose invocation: the project file plus PortOS's override when setup wrote one. */
+async function hostComposeFiles(project) {
+  const override = join(project.dir, 'compose.portos-host.yaml');
+  return (await tryReadFile(override)) === null
+    ? ['-f', project.composeFile]
+    : ['-f', project.composeFile, '-f', override];
+}
+
+/** Restart the runtime container after the gateway's stall watchdog trips. Throws on failure; the gateway logs it. */
+async function restartRuntimeContainer() {
+  const project = await inspectVllmQwenProject();
+  if (!project.composeFile) throw new Error('No prepared compose project was found.');
+  const restarted = await runStreamingCommand(
+    'docker',
+    ['compose', ...await hostComposeFiles(project), '--profile', 'single', 'restart', 'single'],
+    () => {},
+    { cwd: project.dir, env: { PORT: String(PORTS.VLLM_QWEN) }, timeoutMs: 180000 },
+  );
+  if (!restarted.success) throw new Error(restarted.error);
 }
 
 /**
@@ -142,10 +163,7 @@ async function disableHost({ emit = () => {} } = {}) {
   if (!project.composeFile) {
     return { success: true, containerStopped: false, error: 'No prepared compose project was found, so no container was stopped. The API queue is closed and the host will stay off.' };
   }
-  const override = join(project.dir, 'compose.portos-host.yaml');
-  const files = (await tryReadFile(override)) === null
-    ? ['-f', project.composeFile]
-    : ['-f', project.composeFile, '-f', override];
+  const files = await hostComposeFiles(project);
   emit('Stopping and removing the vLLM container. Its image and weights stay on disk.');
   // `rm -s -f` stops AND removes: the host container carries
   // `restart: unless-stopped`, so a container merely stopped comes back the

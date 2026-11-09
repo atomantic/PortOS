@@ -26,7 +26,7 @@ const ACTION_LABELS = {
   generate: (a) => `Generating ${a.sections?.length || 0} revised section${a.sections?.length === 1 ? '' : 's'}…`,
 };
 const ACTIVE = new Set(['running', 'stopped', 'limit-reached']);
-const inputCls = 'w-20 bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0';
+const inputCls = 'w-20 bg-port-bg border border-port-border rounded px-1.5 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0';
 
 /** The latest run worth showing: the live one, else the most recent. */
 export const currentAutoReview = (project) => {
@@ -172,7 +172,7 @@ export default function AutoReviewPanel({ project, startSec, endSec, rangeValid,
             )}
             <button type="button" disabled={busy || rendering || !rangeValid || !limitsValid}
               onClick={() => autoReview.start(startSec, endSec, { maxAttempts: attempts, maxGenerations: generations }, { providerId: selectedProviderId, model: selectedModel })}
-              className="flex items-center gap-1 bg-port-accent/20 text-port-accent disabled:opacity-50 rounded px-2 py-1.5 min-h-[44px] sm:min-h-0">
+              className="flex items-center gap-1 bg-port-accent/20 text-port-accent disabled:opacity-50 rounded px-2 py-1.5 min-h-[44px] pointer-fine:sm:min-h-0">
               <Play size={12} /> Start auto-review
             </button>
           </div>
@@ -190,12 +190,12 @@ export default function AutoReviewPanel({ project, startSec, endSec, rangeValid,
               <div className="flex items-center gap-2">
                 {/* The server generates a run's revised sections itself; Continue re-derives the step of a run that stalled (e.g. across a restart). */}
                 {run.status === 'running' && !autoReview.action && (
-                  <button type="button" disabled={busy} onClick={() => autoReview.resume(run.id)} className="flex items-center gap-1 text-port-accent disabled:opacity-50 min-h-[44px] sm:min-h-0"><Play size={12} /> Continue</button>
+                  <button type="button" disabled={busy} onClick={() => autoReview.resume(run.id)} className="flex items-center gap-1 text-port-accent disabled:opacity-50 min-h-[44px] pointer-fine:sm:min-h-0"><Play size={12} /> Continue</button>
                 )}
                 {run.status === 'running'
-                  ? <button type="button" disabled={busy} onClick={() => autoReview.stop(run.id)} className="flex items-center gap-1 text-port-warning disabled:opacity-50 min-h-[44px] sm:min-h-0"><Pause size={12} /> Pause</button>
-                  : <button type="button" disabled={busy} onClick={resume} className="flex items-center gap-1 text-port-accent disabled:opacity-50 min-h-[44px] sm:min-h-0"><Play size={12} /> Resume</button>}
-                <button type="button" disabled={busy} onClick={() => autoReview.cancel(run.id)} className="flex items-center gap-1 text-port-error disabled:opacity-50 min-h-[44px] sm:min-h-0"><X size={12} /> Cancel run</button>
+                  ? <button type="button" disabled={busy} onClick={() => autoReview.stop(run.id)} className="flex items-center gap-1 text-port-warning disabled:opacity-50 min-h-[44px] pointer-fine:sm:min-h-0"><Pause size={12} /> Pause</button>
+                  : <button type="button" disabled={busy} onClick={resume} className="flex items-center gap-1 text-port-accent disabled:opacity-50 min-h-[44px] pointer-fine:sm:min-h-0"><Play size={12} /> Resume</button>}
+                <button type="button" disabled={busy} onClick={() => autoReview.cancel(run.id)} className="flex items-center gap-1 text-port-error disabled:opacity-50 min-h-[44px] pointer-fine:sm:min-h-0"><X size={12} /> Cancel run</button>
               </div>
             )}
           </div>

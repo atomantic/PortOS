@@ -107,7 +107,7 @@ describe.skipIf(!chrome)('shot editor render selector layout', () => {
         [await start.elementHandle(), wideWidth], { timeout: 5000 });
       const middleHeight = await fit(start);
       const middleWidth = await start.evaluate(el => el.clientWidth);
-      await page.locator('main').evaluate(el => { el.style.width = '180px'; });
+      await page.locator('main').evaluate(el => { el.style.width = '120px'; });
       await page.waitForFunction(([el, oldHeight]) => el.clientHeight > oldHeight && el.scrollHeight <= el.clientHeight + 1,
         [await start.elementHandle(), middleHeight], { timeout: 5000 });
       expect(await start.evaluate(el => el.clientWidth)).toBeLessThan(middleWidth);
@@ -119,7 +119,7 @@ describe.skipIf(!chrome)('shot editor render selector layout', () => {
 
       await page.goto(`${fixture.origin}shot-editor-test?width=1000`);
       await page.getByRole('group', { name: 'Show' }).getByRole('button', { name: 'Still' }).click();
-      expect(await fit(page.getByRole('textbox', { name: 'Still prompt' }))).toBeGreaterThan(320);
+      expect(await fit(page.getByRole('textbox', { name: 'Frame prompt' }))).toBeGreaterThan(320);
       expect(pageErrors).toEqual([]);
     } finally {
       await page.close();

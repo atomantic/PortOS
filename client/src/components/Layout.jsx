@@ -86,7 +86,7 @@ function ThemeModeToggle({ className = '' }) {
       onClick={toggleMode}
       title={`${theme?.label ?? 'Theme'}${pairLabel}`}
       aria-label={`Toggle day/night mode${pairLabel}`}
-      className={`inline-flex items-center justify-center min-w-[44px] min-h-[44px] lg:min-w-0 lg:min-h-0 lg:p-1.5 rounded-lg text-gray-500 hover:text-port-accent transition-colors ${className}`}
+      className={`inline-flex items-center justify-center min-w-[44px] min-h-[44px] pointer-fine:lg:min-w-0 pointer-fine:lg:min-h-0 lg:p-1.5 rounded-lg text-gray-500 hover:text-port-accent transition-colors ${className}`}
     >
       <Icon size={18} aria-hidden="true" />
     </button>
@@ -195,7 +195,7 @@ function PinButton({ label, pinned, onTogglePin }) {
       type="button"
       aria-label={pinned ? `Unpin ${label}` : `Pin ${label}`}
       onClick={(e) => { e.preventDefault(); e.stopPropagation(); onTogglePin(); }}
-      className={`inline-flex min-w-[44px] min-h-[44px] items-center justify-center rounded-lg hover:bg-port-border/50 lg:min-w-0 lg:min-h-0 lg:px-2 lg:py-1.5 ${pinned ? 'text-port-accent' : 'text-gray-500 opacity-40 [@media(hover:hover)]:sm:opacity-0 [@media(hover:hover)]:sm:group-hover:opacity-100 group-focus-within:opacity-100'}`}
+      className={`inline-flex min-w-[44px] min-h-[44px] items-center justify-center rounded-lg hover:bg-port-border/50 pointer-fine:lg:min-w-0 pointer-fine:lg:min-h-0 lg:px-2 lg:py-1.5 ${pinned ? 'text-port-accent' : 'text-gray-500 opacity-40 [@media(hover:hover)]:sm:opacity-0 [@media(hover:hover)]:sm:group-hover:opacity-100 group-focus-within:opacity-100'}`}
     >
       {pinned ? <PinOff size={14} /> : <Pin size={14} />}
     </button>
@@ -210,7 +210,7 @@ function PinButton({ label, pinned, onTogglePin }) {
 function WorkingSetRow({ entry, pinned, onTogglePin, onNavigate, isActive }) {
   const Icon = entry.icon;
   return (
-    <div className="group relative mx-2 min-w-0 min-h-[44px] lg:min-h-0">
+    <div className="group relative mx-2 min-w-0 min-h-[44px] pointer-fine:lg:min-h-0">
       <NavLink
         to={entry.path}
         end={entry.end}
@@ -240,7 +240,7 @@ function WorkingSetRow({ entry, pinned, onTogglePin, onNavigate, isActive }) {
 export function SingleNavRow({ item, collapsed, active, pinned, onTogglePin, onNavigate }) {
   const Icon = item.icon;
   return (
-    <div className={`group relative min-w-0 mx-2 min-h-[44px] lg:min-h-0 ${collapsed ? 'lg:flex lg:justify-center' : ''}`}>
+    <div className={`group relative min-w-0 mx-2 min-h-[44px] pointer-fine:lg:min-h-0 ${collapsed ? 'lg:flex lg:justify-center' : ''}`}>
       <NavLink
         to={item.to}
         end={item.to === '/'}
@@ -962,7 +962,7 @@ export default function Layout() {
               <button
                 type="button"
                 onClick={openCmdKSearch}
-                className={`inline-flex items-center justify-center min-w-[44px] min-h-[44px] lg:min-w-0 lg:min-h-0 lg:p-1.5 rounded-lg transition-colors ${collapsed ? 'lg:hidden' : ''} text-gray-500 hover:text-white`}
+                className={`inline-flex items-center justify-center min-w-[44px] min-h-[44px] pointer-fine:lg:min-w-0 pointer-fine:lg:min-h-0 lg:p-1.5 rounded-lg transition-colors ${collapsed ? 'lg:hidden' : ''} text-gray-500 hover:text-white`}
                 title="Search"
                 aria-label="Open command palette"
               >

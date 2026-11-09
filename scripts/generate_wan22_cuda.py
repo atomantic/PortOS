@@ -54,9 +54,8 @@ def main() -> None:
         snapshot = snapshot_download(repo_id=args.model_repo, revision=args.model_revision, local_files_only=True)
     except Exception as exc:
         raise RuntimeError("The pinned Wan 2.2 snapshot is incomplete. Use Download or Repair in Video Gen.") from exc
-    # accelerate trusts shard names from a sharded checkpoint index, and has no
-    # fixed release (GHSA-4j2p-28q2-5m79) — screen the snapshot before diffusers
-    # hands it over.
+    # Validate checkpoint shard paths before diffusers delegates loading to
+    # accelerate, including snapshots cached by older runtime versions.
     validate_checkpoint_indexes(Path(snapshot))
     import torch
     from diffusers import AutoencoderKLWan, WanPipeline

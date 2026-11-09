@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  falSceneTake, falTakeRequestFields, performanceCapability, planPerformanceWindow, planShotSplit, shotSplitLimit,
+  clipLengthShortfall, falSceneTake, falTakeRequestFields, performanceCapability, planPerformanceWindow, planShotSplit, shotSplitLimit,
   SOURCE_AUDIO_LIPSYNC, PERFORMANCE_WINDOW_MARGIN_SEC,
 } from './musicVideoShotTiming.js';
 
@@ -232,5 +232,23 @@ describe('cold-open clip sound', () => {
       expect(silent).toMatchObject({ generateAudio: false, costUsd: 0.7 });
       expect(falTakeRequestFields(silent)).not.toHaveProperty('falGenerateAudio');
     }
+  });
+});
+
+describe('per-shot source clip length', () => {
+  const shot = { startSec: 0, endSec: 1.75, clipLengthSec: 10 };
+
+  it('requests the longer of span and source length, and the shot model over the project model', () => {
+    const take = falSceneTake({ scene: { ...shot, clipModelId: 'fal-ai/minimax/hailuo-02/standard/image-to-video' }, videoSettings: { falModelId: 'other' } });
+    expect(take.seconds).toBe(10);
+    expect(take.modelId).toBe('fal-ai/minimax/hailuo-02/standard/image-to-video');
+    expect(falSceneTake({ scene: { startSec: 0, endSec: 1.75 }, videoSettings: {} }).seconds).toBe(6);
+  });
+
+  it('refuses a request that falls short, listing the supported lengths, and passes one that reaches it', () => {
+    expect(clipLengthShortfall(shot, 'grok', { grokDuration: 6 })).toEqual({ requestedSec: 10, supported: [6, 10, 15] });
+    expect(clipLengthShortfall(shot, 'grok', { grokDuration: 10 })).toBeNull();
+    expect(clipLengthShortfall({ startSec: 0, endSec: 2 }, 'grok', { grokDuration: 6 })).toBeNull();
+    expect(clipLengthShortfall(shot, 'local', {})).toBeNull();
   });
 });

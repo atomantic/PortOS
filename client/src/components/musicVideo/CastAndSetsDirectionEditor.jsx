@@ -68,7 +68,7 @@ export default function CastAndSetsDirectionEditor({ project, direction, busy, o
 
   if (!open) {
     return (
-      <button type="button" disabled={busy} onClick={() => setOpen(true)} className="flex items-center gap-1 rounded px-3 py-1.5 text-sm min-h-[44px] sm:min-h-0 border border-port-border disabled:opacity-50">
+      <button type="button" disabled={busy} onClick={() => setOpen(true)} className="flex items-center gap-1 rounded px-3 py-1.5 text-sm min-h-[44px] pointer-fine:sm:min-h-0 border border-port-border disabled:opacity-50">
         <Pencil size={14} aria-hidden="true" /> Edit direction
       </button>
     );
@@ -98,10 +98,10 @@ export default function CastAndSetsDirectionEditor({ project, direction, busy, o
       )}
       <p className="text-xs text-port-text-muted">Saving revises this check-in. Only images whose prompt changes are re-rendered.</p>
       <div className="flex flex-wrap gap-2">
-        <button type="button" disabled={!dirty} onClick={() => onSave(edits).then((res) => { if (res) setOpen(false); })} className="flex items-center gap-1 rounded px-3 py-1.5 text-sm min-h-[44px] sm:min-h-0 bg-port-accent text-white disabled:opacity-50">
+        <button type="button" disabled={!dirty} onClick={() => onSave(edits).then((res) => { if (res) setOpen(false); })} className="flex items-center gap-1 rounded px-3 py-1.5 text-sm min-h-[44px] pointer-fine:sm:min-h-0 bg-port-accent text-white disabled:opacity-50">
           <Save size={14} aria-hidden="true" /> Save direction
         </button>
-        <button type="button" onClick={() => { setDraft(draftFrom(direction)); setOpen(false); }} className="rounded px-3 py-1.5 text-sm min-h-[44px] sm:min-h-0 text-port-text-muted">Cancel</button>
+        <button type="button" onClick={() => { setDraft(draftFrom(direction)); setOpen(false); }} className="rounded px-3 py-1.5 text-sm min-h-[44px] pointer-fine:sm:min-h-0 text-port-text-muted">Cancel</button>
       </div>
     </fieldset>
   );

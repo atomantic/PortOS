@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import AnalysisPanel from './AnalysisPanel.jsx';
 
 const BASE = { bpm: 120, beats: [0, 0.5], downbeats: [0], sections: [], durationSec: 30 };
@@ -41,5 +41,23 @@ describe('AnalysisPanel ignored beat grid (#14240)', () => {
     expect(screen.queryByTestId('grid-ignored')).toBeNull();
     rerender(<AnalysisPanel audioAnalysis={{ ...BASE, gridDecision: 'ignore', tempoSource: 'manual' }} scenes={[]} tempo={TEMPO} />);
     expect(screen.queryByTestId('grid-ignored')).toBeNull();
+  });
+});
+
+describe('AnalysisPanel section editor (#15526)', () => {
+  it('splits a section and saves the edited map', async () => {
+    const api = await import('../../services/apiMusicVideo.js');
+    const spy = vi.spyOn(api, 'setMusicVideoSections').mockResolvedValue({ id: 'p1' });
+    const onUpdated = vi.fn();
+    const sections = [{ label: 'Chorus', startSec: 0, endSec: 20, energy: 1 }];
+    const { container } = render(<AnalysisPanel projectId="p1" audioAnalysis={{ ...BASE, durationSec: 20, sections }} scenes={[]} tempo={TEMPO} onUpdated={onUpdated} />);
+    container.querySelector('details').open = true;
+    fireEvent.click(screen.getByRole('button', { name: 'Split' }));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save sections' })); });
+    expect(onUpdated).toHaveBeenCalled();
+    expect(spy).toHaveBeenCalledWith('p1', [
+      { label: 'Chorus', startSec: 0, endSec: 10 },
+      { label: 'Chorus 2', startSec: 10, endSec: 20 },
+    ], { silent: true });
   });
 });

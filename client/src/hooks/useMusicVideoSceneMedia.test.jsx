@@ -359,15 +359,15 @@ it('sends LTX reference sheets separately from the opening frame on a shot', asy
   generateVideo.mockResolvedValueOnce({ jobId: 'job-reference', status: 'queued' });
   await act(async () => { await result.current.generateSceneVideo(shot, {
     target: { numFrames: 123 },
-    card: { prompt: 'Reference sheet: Renee.\n\nGenerated video: A rider turns', ltxReferences: true,
-      songAudio: false, endFrame: false, expectedClipReferenceFiles: ['renee.png'], expectedClipReferenceLabels: ['Renee'] },
+    card: { prompt: 'Reference sheet: Ada.\n\nGenerated video: A rider turns', ltxReferences: true,
+      songAudio: false, endFrame: false, expectedClipReferenceFiles: ['ada.png'], expectedClipReferenceLabels: ['Ada'] },
   }); });
   const payload = generateVideo.mock.calls.at(-1)[0];
   expect(payload).toMatchObject({
     modelId: 'ltx25_mlx_q8', mode: 'ic-ingredients-25', numFrames: 129,
-    sourceImageFile: 'start.png', icReferenceImageFiles: ['renee.png'],
+    sourceImageFile: 'start.png', icReferenceImageFiles: ['ada.png'],
   });
-  expect(JSON.parse(payload.musicVideo)).toMatchObject({ expectedClipReferenceFiles: ['renee.png'], expectedClipReferenceLabels: ['Renee'] });
+  expect(JSON.parse(payload.musicVideo)).toMatchObject({ expectedClipReferenceFiles: ['ada.png'], expectedClipReferenceLabels: ['Ada'] });
   expect(payload).not.toHaveProperty('lastImageFile');
   cleanup();
 });
@@ -381,11 +381,54 @@ it.each([[9, 193], [9.01, 201]])('covers a shot ending at %s when LTX references
   const { result } = renderHook(() => useMusicVideoSceneMedia({ project, videoSettings, applyScenePatch: vi.fn() }));
   generateVideo.mockResolvedValueOnce({ jobId: 'job-reference', status: 'queued' });
   await act(async () => { await result.current.generateSceneVideo(shot, { card: {
-    prompt: 'Reference sheet: Renee.\n\nGenerated video: A rider turns', ltxReferences: true,
-    expectedClipReferenceFiles: ['renee.png'], expectedClipReferenceLabels: ['Renee'],
+    prompt: 'Reference sheet: Ada.\n\nGenerated video: A rider turns', ltxReferences: true,
+    expectedClipReferenceFiles: ['ada.png'], expectedClipReferenceLabels: ['Ada'],
   } }); });
   expect(generateVideo.mock.calls.at(-1)[0]).toMatchObject({ mode: 'ic-ingredients-25', numFrames: frames });
   cleanup();
+});
+
+// Uniquely catches the project's LTX 2.5 References mode being ignored by a card-less render (bulk, revision), or still sending song audio or an end frame.
+describe('project LTX 2.5 References mode (#15482)', () => {
+  const models = [{ id: 'ltx25_mlx_q8', runtime: 'ltx25' }, { id: 'ltx23_example', runtime: 'ltx2' }];
+  const shot = { sceneId: 's1', shotMode: 'cutaway', prompt: 'A rider turns', referenceImageId: 'start.png', clipReferenceIds: ['rider'],
+    endFramePrompt: 'A rider leaves', endFrameImageId: 'end.png', startSec: 0, endSec: 4, takes: [] };
+  const project = { id: 'p-ref-mode', scenes: [shot], visualSpec: { references: [
+    { id: 'rider', imageId: 'rider.png', role: 'character', label: 'Rider', condition: true },
+  ] } };
+  const run = async (settings, scene = shot, options = {}) => {
+    const { generateVideo } = await import('../services/apiImageVideo.js');
+    generateVideo.mockClear();
+    generateVideo.mockResolvedValueOnce({ jobId: 'job-mode', status: 'queued' });
+    const { result } = renderHook(() => useMusicVideoSceneMedia({ project, videoSettings: { settings, models, defaultModel: 'ltx25_mlx_q8' }, applyScenePatch: vi.fn() }));
+    await act(async () => { await result.current.generateSceneVideo(scene, options); });
+    cleanup();
+    return generateVideo.mock.calls.at(-1)?.[0];
+  };
+
+  it('sends ic-ingredients-25 with the shot references, 121+ frames and no song audio or end frame', async () => {
+    const payload = await run({ backend: 'local', modelId: 'ltx25_mlx_q8', generationMode: 'ltxReferences' });
+    expect(payload).toMatchObject({ mode: 'ic-ingredients-25', numFrames: 121, sourceImageFile: 'start.png', icReferenceImageFiles: ['rider.png'], prompt: 'A rider turns' });
+    expect(payload).not.toHaveProperty('lastImageFile');
+    expect(JSON.parse(payload.musicVideo)).toMatchObject({ expectedClipReferenceFiles: ['rider.png'] });
+    expect(JSON.parse(payload.musicVideo)).not.toHaveProperty('songAudio');
+  });
+
+  it('lets the card unticking References override the project mode', async () => {
+    const payload = await run({ backend: 'local', modelId: 'ltx25_mlx_q8', generationMode: 'ltxReferences' }, shot,
+      { card: { prompt: 'A rider turns', ltxReferences: false, expectedClipReferenceFiles: [] } });
+    expect(payload.mode).toBe('image');
+    expect(payload).not.toHaveProperty('icReferenceImageFiles');
+  });
+
+  it('renders a non-LTX-2.5 model, or a shot with no clip references, without silently sending references', async () => {
+    const { default: toast } = await import('../components/ui/Toast');
+    expect((await run({ backend: 'local', modelId: 'ltx23_example', generationMode: 'ltxReferences' })).mode).toBe('image');
+    toast.error.mockClear();
+    const payload = await run({ backend: 'local', modelId: 'ltx25_mlx_q8', generationMode: 'ltxReferences' }, { ...shot, clipReferenceIds: [] });
+    expect(payload).toBeUndefined();
+    expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/at least one clip reference/i));
+  });
 });
 
 it('asks for a shorter clip when a cold open exceeds the LTX frame limit', async () => {
@@ -400,7 +443,7 @@ it('asks for a shorter clip when a cold open exceeds the LTX frame limit', async
   const { result } = renderHook(() => useMusicVideoSceneMedia({ project, videoSettings, applyScenePatch: vi.fn() }));
   let outcome;
   await act(async () => { outcome = await result.current.generateSceneVideo(shot, { card: {
-    prompt: 'A rider turns', ltxReferences: true, expectedClipReferenceFiles: ['renee.png'],
+    prompt: 'A rider turns', ltxReferences: true, expectedClipReferenceFiles: ['ada.png'],
   } }); });
   expect(outcome).toEqual({ ok: false });
   expect(generateVideo).not.toHaveBeenCalled();

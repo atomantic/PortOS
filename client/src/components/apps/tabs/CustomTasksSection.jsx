@@ -20,6 +20,7 @@ export function emptyForm() {
     scheduleMode: 'interval',
     interval: 'weekly',
     scheduledTime: '',
+    scheduleAnchor: null,
     cronExpression: '',
     cronSchedule: null,
     priority: 'MEDIUM',
@@ -42,6 +43,7 @@ export function formFromJob(job) {
     scheduleMode: job.cronExpression || job.cronSchedule ? 'cron' : 'interval',
     interval: job.interval || 'weekly',
     scheduledTime: job.scheduledTime || '',
+    scheduleAnchor: job.scheduleAnchor ?? null,
     cronExpression: job.cronExpression || '',
     cronSchedule: job.cronSchedule || (job.cronExpression ? parseCronToRecurrence(job.cronExpression) : null),
     priority: job.priority || 'MEDIUM',
@@ -78,11 +80,13 @@ export function toPayload(form, appId) {
     payload.cronExpression = buildCronFromRecurrence(form.cronSchedule) || form.cronExpression?.trim() || null;
     payload.cronSchedule = form.cronSchedule || null;
     payload.scheduledTime = null;
+    payload.scheduleAnchor = null;
   } else {
     payload.cronExpression = null;
     payload.cronSchedule = null;
     payload.interval = form.interval;
     payload.scheduledTime = form.scheduledTime || null;
+    payload.scheduleAnchor = form.scheduleAnchor ?? null;
   }
   return payload;
 }

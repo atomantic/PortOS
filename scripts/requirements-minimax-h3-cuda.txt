@@ -1,39 +1,16 @@
-# MiniMax H3 CUDA runtime — direct dependency pins for ~/.portos/minimax-h3-cuda/.venv.
-#
-# NOT a fully-resolved lock, unlike its MLX sibling
-# (requirements-minimax-h3-mlx.lock.txt). `torch` is installed separately and
-# from a different index depending on the host — PyTorch's own CUDA wheel index
-# on Windows, plain PyPI elsewhere (where the default wheel already bundles
-# CUDA) — so one resolved transitive lock cannot describe every install. Pinning
-# the direct dependencies exactly is the strongest guarantee that holds for all
-# of them.
-#
-# `torch` is deliberately absent for that reason — setup-image-video.sh installs
-# it first, from the host's correct index (see WIN_TORCH_CUDA_INDEX in
-# server/lib/pythonSetup.js, and PORTOS_TORCH_CUDA_INDEX to override).
-
+# MiniMax H3 CUDA: direct pins for the dedicated CPython 3.11 runtime.
+# Compile the Windows/Linux SHA-256 locks; never install this input directly.
+# Targets, regeneration and advisory/readiness checks: docs/MINIMAX_H3_CUDA.md.
+torch==2.14.1+cu126
+torchvision==0.29.1+cu126
 diffusers==0.42.0
-
-# int8 weight-only quantization. This is what makes H3 fit a consumer card at
-# all: the bf16 transformer + Qwen3-VL conditioner are 133 GB together, and
-# `Int8WeightOnlyConfig(version=2)` is specifically required because only
-# version=2 tensors are pinnable, which streamed group offload needs.
+# Int8WeightOnlyConfig(version=2) supports pinnable streamed-offload tensors.
 torchao==0.18.0
-
-# Qwen3VLForConditionalGeneration + the transformers-side TorchAoConfig.
-transformers==5.15.0
-# GHSA-4j2p-28q2-5m79 will NOT be fixed upstream: huggingface/accelerate#4067 was
-# closed with "not a real security threat", and both fix PRs were rejected, so
-# there is no patched version to move to (1.15.0 is still affected). Every runner
-# that hands accelerate a downloaded snapshot screens the checkpoint indexes
-# itself first — scripts/_checkpoint_index_guard.py. Do not un-pin expecting a fix.
-accelerate==1.14.0
-huggingface_hub==1.32.0
-
-# PyAV backs diffusers' encode_video() muxing of the joint video + audio output.
+transformers==5.22.1
+# OSV's GHSA-4j2p-28q2-5m79 range ends at 1.14.0. Keep the checkpoint index
+# guard: absence of an OSV match does not establish upstream path validation.
+accelerate==1.15.0
+huggingface-hub==1.33.0
 av==18.1.0
-
-# Keyframe decode (image / FFLF conditioning) and the frame arrays encode_video
-# writes.
 pillow==13.0.0
-numpy==2.5.2
+numpy==2.4.6

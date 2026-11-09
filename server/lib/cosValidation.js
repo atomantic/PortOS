@@ -17,7 +17,7 @@ import { MALFORMED_REVIEW_REASONS, REVIEW_FINISH_REASONS, MAX_REVIEW_RESPONSE_LE
 import { emptyToUndefined, emptyToNull, providerRefFieldSchema, providerRefSchema } from './zodCompat.js';
 import { isPlainObject } from './objects.js';
 import { isValidSelfManagedPrStaleMinutes, normalizeSelfManagedPrAuthors } from './selfManagedPrAuthors.js';
-import { MIN_INTERVAL_MS, isValidLoopInterval } from './loopInterval.js';
+import { MIN_INTERVAL_MS, MAX_INTERVAL_MS, isValidLoopInterval } from './loopInterval.js';
 import { EFFORT_LEVELS } from './providerModels.js';
 import { isValidSlashdoCommand } from './slashdoInvocation.js';
 import { PR_COMPLETION_VALUES, PR_REVIEW_MODE_VALUES } from './prDisposition.js';
@@ -450,7 +450,7 @@ export const goalFidelityFalsePositiveSchema = z.object({
 export const createLoopSchema = z.object({
   prompt: z.string().trim().min(1),
   interval: z.union([z.string().min(1), z.number().positive()])
-    .refine(isValidLoopInterval, `Interval must be at least ${MIN_INTERVAL_MS / 1000} seconds`),
+    .refine(isValidLoopInterval, `Interval must be between ${MIN_INTERVAL_MS / 1000} seconds and ${Math.floor(MAX_INTERVAL_MS / 86_400_000)} days`),
   name: z.string().optional(),
   cwd: z.string().optional(),
   providerId: z.preprocess(v => v === '' ? undefined : v, z.string().optional()),
@@ -507,6 +507,10 @@ export const createCosJobSchema = z.object({
   // always emitted null for the inactive mode; accepting it here lets updateJob
   // distinguish "clear this field" from an omitted field it should preserve.
   scheduledTime: z.string().nullable().optional(),
+  // Local weekday (0-6, weekly/biweekly) or day of month (1-31, monthly) a clock
+  // job stays on. Which range applies depends on the cadence, so updateJob checks
+  // the fit; null asks the server to default it from the job's lastRun.
+  scheduleAnchor: z.number().int().min(0).max(31).nullable().optional(),
   cronExpression: z.string().nullable().optional(),
   // Optional calendar rule for schedules that need an anchored interval (for
   // example every two weeks). cronExpression remains the compatibility preview

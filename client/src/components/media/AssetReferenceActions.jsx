@@ -1,4 +1,5 @@
 import { useId, useState } from 'react';
+import { Copy } from 'lucide-react';
 import { writeClipboardSilently } from '../../lib/clipboard.js';
 
 // Only share an existing, same-origin media URL without credentials or query
@@ -15,7 +16,12 @@ function shareableMediaUrl(value) {
   }
 }
 
-export default function AssetReferenceActions({ assetId, url, resolveUrl }) {
+const FULL_BUTTON = 'min-h-[44px] min-w-0 rounded border border-port-border bg-port-bg px-1 text-[11px] font-medium hover:bg-port-border/70 focus-visible:ring-2 focus-visible:ring-port-accent aria-disabled:opacity-50';
+// Quiet text chips for dense cards, where they sit below the card's own actions.
+const COMPACT_BUTTON = 'inline-flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] text-port-text-muted pointer-coarse:min-h-11 pointer-coarse:min-w-11 justify-center min-h-[32px] sm:min-h-0 hover:bg-port-border/70 hover:text-port-text focus-visible:ring-2 focus-visible:ring-port-accent aria-disabled:opacity-50';
+
+/** Copy an asset's ID or URL. `compact` shows small "ID"/"URL" chips for dense cards. */
+export default function AssetReferenceActions({ assetId, url, resolveUrl, compact = false }) {
   const inputId = useId();
   const [manual, setManual] = useState(null);
   const [status, setStatus] = useState('');
@@ -49,11 +55,11 @@ export default function AssetReferenceActions({ assetId, url, resolveUrl }) {
 
   return (
     <div className="@container space-y-1">
-      <div role="group" aria-label="Copy asset reference" className="grid grid-cols-1 @min-[9rem]:grid-cols-2 gap-1">
+      <div role="group" aria-label="Copy asset reference" className={compact ? 'flex flex-wrap gap-1' : 'grid grid-cols-1 @min-[9rem]:grid-cols-2 gap-1'}>
         {assetId && <button type="button" data-asset-copy-trigger="" aria-disabled={working} onClick={(event) => copy(event, 'ID')}
-          className="min-h-[44px] min-w-0 rounded border border-port-border bg-port-bg px-1 text-[11px] font-medium hover:bg-port-border/70 focus-visible:ring-2 focus-visible:ring-port-accent aria-disabled:opacity-50">Copy ID</button>}
+          aria-label="Copy ID" className={compact ? COMPACT_BUTTON : FULL_BUTTON}>{compact ? <><Copy size={11} aria-hidden="true" /> ID</> : 'Copy ID'}</button>}
         {(directUrl || resolveUrl) && <button type="button" data-asset-copy-trigger="" aria-disabled={working} onClick={(event) => copy(event, 'URL')}
-          className="min-h-[44px] min-w-0 rounded border border-port-border bg-port-bg px-1 text-[11px] font-medium hover:bg-port-border/70 focus-visible:ring-2 focus-visible:ring-port-accent aria-disabled:opacity-50">Copy URL</button>}
+          aria-label="Copy URL" className={compact ? COMPACT_BUTTON : FULL_BUTTON}>{compact ? <><Copy size={11} aria-hidden="true" /> URL</> : 'Copy URL'}</button>}
       </div>
       {status && <p role="status" className="break-words text-[11px] text-port-text-muted">{status}</p>}
       {manual && (

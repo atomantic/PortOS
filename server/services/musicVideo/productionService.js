@@ -246,7 +246,7 @@ async function preflightPlate(projectId, runId, sceneId) {
         if (plateRequirementBasis(scene) !== basis || scene.referenceImageId !== original.referenceImageId
           || !ensureSceneTakes(scene).some((entry) => entry.assetId === take.assetId && entry.status !== 'rejected')) throw new ServerError('Plate changed during preflight', { code: 'PRODUCTION_PLATE_CHANGED' });
       };
-      const result = await deps.reviewPlate({ scene: original, assetId: take.assetId, prompt: take.prompt ?? original.framePrompt ?? original.prompt ?? '', runId, reviewer, beforeExecute: verifyCurrent }).catch((error) => ({ error }));
+      const result = await deps.reviewPlate({ scene: original, subjects: project.concept?.subjects || [], assetId: take.assetId, prompt: take.prompt ?? original.framePrompt ?? original.prompt ?? '', runId, reviewer, beforeExecute: verifyCurrent }).catch((error) => ({ error }));
       await mutateProjectRecord(projectId, (current) => settleProductionStep(current, runId, reserved.step.key, { status: result.error ? 'failed' : 'completed', error: result.error?.message }));
       if (result.error) return { halt: { status: 'blocked', reason: `Plate review needed: ${result.error.message}` } };
       evidence = result;
@@ -739,9 +739,13 @@ async function cancelOwnedJobs(runId, { includeRunning = false, jobIds = null } 
 /**
  * A project rendering clips from Supplied song audio binds that into the run's
  * own video routes, so each clip takes its shot's song window and a later
- * settings change cannot alter a running grant. It needs local video.
+ * settings change cannot alter a running grant. It needs local video. LTX 2.5
+ * References binds likewise onto the local video routes (hosted routes render as usual).
  */
 function bindSuppliedAudio(pool, project) {
+  if (project.videoSettings?.generationMode === 'ltxReferences') {
+    return pool.map((route) => (route.kind === 'video' && route.mode === 'local' ? { ...route, references: 'ltx' } : route));
+  }
   if (project.videoSettings?.generationMode !== 'suppliedAudio') return pool;
   if (pool.some((route) => route.kind === 'video' && route.mode !== 'local')) {
     throw new ServerError('Supplied song audio needs Local video; remove the other video routes or use Prompt motion', { status: 409, code: 'MUSIC_VIDEO_RENDER_POOL_UNAVAILABLE' });

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import AutoSizeTextarea from '../ui/AutoSizeTextarea.jsx';
 import { SHOT_CAMERA_SET_DOWN, normalizeShotSheet, shotSheetCast, shotSheetOptions } from '../../../../server/lib/musicVideoShotSheet.js';
 
-const inputCls = 'w-full min-w-0 rounded border border-port-border bg-port-bg px-1.5 py-1 text-xs min-h-[44px] sm:min-h-0';
+const inputCls = 'w-full min-w-0 rounded border border-port-border bg-port-bg px-1.5 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0';
 const labelCls = 'block text-[11px] text-port-text-muted';
 
 /** A text box that commits on blur, only when its text changed; a save elsewhere replaces what's shown. */
@@ -76,7 +76,7 @@ export default function ShotSheetFields({ project, scene, disabled = false, onCh
             return (
               <button key={name} type="button" aria-pressed={on} disabled={disabled}
                 onClick={() => setField('characters', on ? (sheet.characters || []).filter((entry) => entry !== name) : [...(sheet.characters || []), name])}
-                className={`min-h-[44px] rounded-full border px-2 py-0.5 text-xs sm:min-h-0 ${on ? 'border-port-accent bg-port-accent/10 text-port-accent' : 'border-port-border text-port-text-muted'}`}>{name}</button>
+                className={`min-h-[44px] rounded-full border px-2 py-0.5 text-xs pointer-fine:sm:min-h-0 ${on ? 'border-port-accent bg-port-accent/10 text-port-accent' : 'border-port-border text-port-text-muted'}`}>{name}</button>
             );
           })}
         </div>

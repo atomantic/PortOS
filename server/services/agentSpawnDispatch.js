@@ -147,10 +147,11 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
       cosEvents.emit('agent:error', { taskId: task.id, error: prep.reason });
       return null;
     }
-    const { workspacePath, resolvedApp, resolvedAppName, worktreeInfo, jiraTicket, jiraBranchName, explicitWorktree } = prep;
+    const { workspacePath, resolvedApp, resolvedAppName, worktreeInfo, jiraTicket, jiraBranchName, explicitWorktree, claimCheckout } = prep;
     if (worktreeInfo?.branchName && !worktreeInfo.existingBranch && !worktreeInfo.isPersistentWorktree) {
       context.spawnWorktree = { branchName: worktreeInfo.branchName };
     }
+    if (claimCheckout) context.spawnClaimCheckout = claimCheckout;
 
     if (publicReview && !privateSecurity) {
       const reviewInput = await loadPublicReviewSpawnInput({
@@ -240,7 +241,7 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
     }
 
     const executionMode = resolveExecutionMode({ spawnHeadless, useRunner: dispatchUseRunner });
-    const sourceWorkspace = worktreeInfo
+    const sourceWorkspace = claimCheckout ? claimCheckout.repoPath : worktreeInfo
       ? (task.metadata?.app ? await getAppWorkspace(task.metadata.app) : ROOT_DIR)
       : null;
     const prOpenedBy = promptOpensOwnPr(task, {
@@ -319,7 +320,27 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
       return { runId, registeredAgent };
     });
 
-    emitLog('info', `Agent ${agentId} initializing...${worktreeInfo ? ' (worktree)' : ''}${jiraBranchName ? ` (JIRA: ${jiraTicket?.ticketId})` : ''}`, { agentId, taskId: task.id });
+    if (claimCheckout) {
+      // The run now exists to own the checkout PortOS cut for it. Binding it is
+      // what the agent-cut flow does after `git worktree add`: it settles the
+      // pinned selection and records the checkout's physical generation.
+      const { updateClaimOwnership } = await import('./cosClaimOwnership.js');
+      const bound = await updateClaimOwnership({ agentId, action: 'bind', branch: claimCheckout.branchName })
+        .catch(error => ({ bound: false, reason: error.message }));
+      if (bound?.bound !== true) {
+        return context.blockAndBail({
+          reason: `PortOS could not bind its claim checkout ${claimCheckout.branchName} to this run (${bound?.reason || 'unreadable response'}); the unused checkout was removed.`,
+          category: 'worktree-failed',
+        });
+      }
+      const issueNumber = claimCheckout.branchName.replace(/^claim\/issue-/, '');
+      const { markAppIssueClaimed } = await import('./appIssues.js');
+      await markAppIssueClaimed(resolvedApp, issueNumber).catch(error => {
+        emitLog('warn', `⚠️ Claim markers for issue ${issueNumber} were not set: ${error.message}`, { agentId, taskId: task.id });
+      });
+    }
+
+    emitLog('info', `Agent ${agentId} initializing...${worktreeInfo ? ' (worktree)' : ''}${claimCheckout ? ` (claim checkout ${claimCheckout.branchName})` : ''}${jiraBranchName ? ` (JIRA: ${jiraTicket?.ticketId})` : ''}`, { agentId, taskId: task.id });
     const newSpawnCount = (Number(task.metadata?.totalSpawnCount) || 0) + 1;
     const updateResult = await updateTask(task.id, {
       status: 'in_progress',
@@ -343,6 +364,7 @@ async function runAgentDispatch(context, { spawnViaRunner } = {}) {
       // not authority to release a possibly changed claim or discard work.
       context.claimAcquired = false;
       context.spawnWorktree = null;
+      context.spawnClaimCheckout = null;
       await context.cleanupOnError(reason);
     };
     if (updateResult?.statusChanged || (updateResult?.error

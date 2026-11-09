@@ -29,7 +29,7 @@ import { execGlab, execGlabJson } from './gitlab.js';
 import { resolveForgeExecOptions } from './forgeExecOptions.js';
 import { resolveAppForgeTarget } from '../lib/workTracker.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
-import { CONTRIBUTOR_LABELS } from '../lib/dispatchLabels.js';
+import { CONTRIBUTOR_LABELS, EPIC_LABEL, IN_PROGRESS_LABEL, dispatchLabelSpec, titleMarksEpic } from '../lib/dispatchLabels.js';
 import { withGlabJson } from '../lib/glabArgs.js';
 import { ServerError, boundedErrorMessage } from '../lib/errorHandler.js';
 import { forgeIssueCreateArgs, forgeLabelCreateArgs, parseCreatedForgeIssue } from '../lib/forgeIssueCli.js';
@@ -300,7 +300,10 @@ export async function listAppIssues(app) {
   };
 }
 
-/** Verify a fresh targeted claim, then retire contributor invitations before queueing. */
+/**
+ * Verify a fresh targeted claim, then retire contributor invitations before queueing.
+ * Resolves `{ epic }` so the caller can drop the epic-decomposition prompt phase.
+ */
 export async function prepareAppIssueClaim(app, issueNumber, tracker) {
   const { tracker: resolvedTracker, target } = await resolveAppForgeTarget(app);
   if (!target || resolvedTracker !== tracker || target.forge !== tracker) {
@@ -311,9 +314,10 @@ export async function prepareAppIssueClaim(app, issueNumber, tracker) {
     { forgeAccount: app?.forgeAccount }
   );
 
+  let epic = false;
   const readLabels = async () => {
     const raw = tracker === 'github'
-      ? await execGh(['issue', 'view', issueNumber, '--repo', target.repoSpec, '--json', 'labels,assignees,state'], undefined, { cwd, env })
+      ? await execGh(['issue', 'view', issueNumber, '--repo', target.repoSpec, '--json', 'labels,assignees,state,title'], undefined, { cwd, env })
       : await execGlab(withGlabJson(['issue', 'view', issueNumber]), app.repoPath, undefined, { rejectOnError: true });
     const issue = safeJSONParse(raw, null);
     if (!Array.isArray(issue?.labels) || issue.labels.some(label => typeof label !== 'string' && typeof label?.name !== 'string')) {
@@ -327,6 +331,7 @@ export async function prepareAppIssueClaim(app, issueNumber, tracker) {
       || !['open', 'opened'].includes(issue.state.toLowerCase())) {
       throw new ServerError('Issue is already claimed or closed', { status: 409, code: 'ISSUE_IN_FLIGHT' });
     }
+    epic = names.some(name => name.toLowerCase() === EPIC_LABEL) || titleMarksEpic(issue.title);
     return names.filter(name => CONTRIBUTOR_LABELS.includes(name.toLowerCase()));
   };
   const labels = await readLabels();
@@ -347,7 +352,7 @@ export async function prepareAppIssueClaim(app, issueNumber, tracker) {
   if (changeNumbers.has(Number(issueNumber))) {
     throw new ServerError('An open PR/MR already covers this issue', { status: 409, code: 'ISSUE_IN_FLIGHT' });
   }
-  if (!labels.length) return;
+  if (!labels.length) return { epic };
   if (tracker === 'github') {
     await execGh(['issue', 'edit', issueNumber, '--repo', target.repoSpec,
       ...labels.flatMap(label => ['--remove-label', label])], undefined, { cwd, env });
@@ -357,6 +362,42 @@ export async function prepareAppIssueClaim(app, issueNumber, tracker) {
   if ((await readLabels()).length) {
     throw new ServerError('Contributor labels remain on the issue; claim was not queued', { status: 502, code: 'CLAIM_LABELS_REMAIN' });
   }
+  return { epic };
+}
+
+/**
+ * Stamp the cross-machine claim markers (this account as assignee, `in-progress`)
+ * on an issue whose claim checkout PortOS provisioned at spawn. Each marker is
+ * attempted even when the other fails; a failure throws naming what is missing,
+ * and the prompt tells the agent to set any marker it finds absent.
+ */
+export async function markAppIssueClaimed(app, issueNumber) {
+  const { tracker, target } = await resolveAppForgeTarget(app);
+  if (!target || target.forge !== tracker || !['github', 'gitlab'].includes(tracker)) {
+    throw new Error('the issue tracker could not be resolved');
+  }
+  const cli = tracker === 'github' ? 'gh' : 'glab';
+  const spec = dispatchLabelSpec(IN_PROGRESS_LABEL, { cli });
+  let run;
+  let assignArgs;
+  let labelArgs;
+  if (tracker === 'github') {
+    const { cwd, env } = await resolveForgeExecOptions(app?.repoPath, { forgeAccount: app?.forgeAccount });
+    run = args => execGh(args, undefined, { cwd, env });
+    assignArgs = ['issue', 'edit', issueNumber, '--repo', target.repoSpec, '--add-assignee', '@me'];
+    labelArgs = ['issue', 'edit', issueNumber, '--repo', target.repoSpec, '--add-label', spec.name];
+  } else {
+    run = args => execGlab(args, app.repoPath, undefined, { rejectOnError: true });
+    // glab's --assignee wants a username; `@me` is not universally supported.
+    const me = safeJSONParse(await run(['api', 'user']).catch(() => null), null)?.username;
+    assignArgs = typeof me === 'string' && me ? ['issue', 'update', issueNumber, '--assignee', me] : null;
+    labelArgs = ['issue', 'update', issueNumber, '--label', spec.name];
+  }
+  await run(forgeLabelCreateArgs(cli, spec, { repo: tracker === 'github' ? target.repoSpec : null })).catch(() => null);
+  const missing = [];
+  if (!assignArgs || !await run(assignArgs).then(() => true, () => false)) missing.push('assignee');
+  if (!await run(labelArgs).then(() => true, () => false)) missing.push(spec.name);
+  if (missing.length) throw new Error(`could not set ${missing.join(' and ')}`);
 }
 
 /**

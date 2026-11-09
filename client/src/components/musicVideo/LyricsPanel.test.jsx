@@ -128,3 +128,14 @@ describe('LyricsPanel track lyrics', () => {
     expect(screen.queryByRole('button', { name: /Use track lyrics/ })).toBeNull();
   });
 });
+
+describe('LyricsPanel singer', () => {
+  it('shows a line\'s singer and edits it without touching its words', () => {
+    const project = { ...PROJECT, lyricCues: [{ ...PROJECT.lyricCues[0], voice: 'Singer A' }] };
+    const { onEditLocal } = renderPanel({ project });
+    const input = screen.getByLabelText('Line 1 singer');
+    expect(input).toHaveValue('Singer A');
+    fireEvent.change(input, { target: { value: 'Singer B' } });
+    expect(onEditLocal).toHaveBeenCalledWith({ lyricCues: [{ ...project.lyricCues[0], voice: 'Singer B' }] });
+  });
+});

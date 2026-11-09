@@ -62,16 +62,32 @@ describe('RunTaskButton', () => {
     expect(onTrigger.mock.calls[0]).toHaveLength(1);
   });
 
-  it('lists only active apps and runs the task on the picked one', async () => {
+  it('lists only active apps alphabetized by name and runs the task on the picked one', async () => {
     const user = userEvent.setup();
     const onTrigger = vi.fn();
-    render(<RunTaskButton taskType="review" apps={APPS} onTrigger={onTrigger} />);
+    const unsortedApps = [
+      { id: 'app-z', name: 'Zebra App' },
+      { id: 'app-a', name: 'Alpha App' },
+      { id: 'app-m', name: 'Mango App' },
+      { id: 'app-archived', name: 'Beta App', archived: true },
+    ];
+    render(<RunTaskButton taskType="review" apps={unsortedApps} onTrigger={onTrigger} />);
     await user.click(screen.getByRole('button', { name: /Run on App/i }));
-    expect(screen.queryByText('Second App')).toBeNull();
-    await user.click(screen.getByText('Example App'));
-    expect(onTrigger).toHaveBeenCalledWith('review', 'app-1');
+    expect(screen.queryByText('Beta App')).toBeNull();
+
+    // Verify alphabetical ordering of rendered app names
+    const renderedAppNames = screen
+      .getAllByRole('button')
+      .map(btn => btn.textContent)
+      .filter(text => ['Alpha App', 'Mango App', 'Zebra App'].some(name => text.includes(name)));
+    expect(renderedAppNames[0]).toContain('Alpha App');
+    expect(renderedAppNames[1]).toContain('Mango App');
+    expect(renderedAppNames[2]).toContain('Zebra App');
+
+    await user.click(screen.getByText('Alpha App'));
+    expect(onTrigger).toHaveBeenCalledWith('review', 'app-a');
     // Picking an app dismisses the panel.
-    expect(screen.queryByText('Example App')).toBeNull();
+    expect(screen.queryByText('Alpha App')).toBeNull();
   });
 
   it('shows sending progress and keeps a receipt at the app-card action', async () => {

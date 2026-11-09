@@ -32,6 +32,7 @@ const INITIAL_JOB = {
   scheduleMode: 'interval',
   interval: 'daily',
   scheduledTime: '',
+  scheduleAnchor: null,
   cronExpression: '',
   cronSchedule: null,
   priority: 'MEDIUM',

@@ -32,7 +32,7 @@ function ExternalAction({ action }) {
       href={action.url}
       target="_blank"
       rel="noreferrer"
-      className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-port-accent/40 px-3 py-2 text-xs font-medium text-port-accent hover:bg-port-accent/10 sm:min-h-0"
+      className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-port-accent/40 px-3 py-2 text-xs font-medium text-port-accent hover:bg-port-accent/10 pointer-fine:sm:min-h-0"
     >
       {action.label}
       <ArrowUpRight size={12} />
@@ -90,7 +90,7 @@ export default function NetworkSetupGuide({ networkExposure, compact = false }) 
         <button
           type="button"
           onClick={() => copyToClipboard(action.command, 'Command copied')}
-          className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-port-border px-3 py-2 font-mono text-xs text-gray-300 hover:border-port-accent/60 hover:text-white sm:min-h-0"
+          className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-port-border px-3 py-2 font-mono text-xs text-gray-300 hover:border-port-accent/60 hover:text-white pointer-fine:sm:min-h-0"
         >
           <Copy size={12} />
           {action.command}
@@ -109,7 +109,7 @@ export default function NetworkSetupGuide({ networkExposure, compact = false }) 
             type="button"
             onClick={provision}
             disabled={provisioning}
-            className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg bg-port-accent px-3 py-2 text-xs font-medium text-white hover:bg-port-accent/80 disabled:cursor-not-allowed disabled:opacity-40 sm:min-h-0"
+            className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg bg-port-accent px-3 py-2 text-xs font-medium text-white hover:bg-port-accent/80 disabled:cursor-not-allowed disabled:opacity-40 pointer-fine:sm:min-h-0"
           >
             <Lock size={12} />
             {provisioning ? 'Provisioning…' : action.label}
@@ -123,7 +123,7 @@ export default function NetworkSetupGuide({ networkExposure, compact = false }) 
           type="button"
           onClick={() => restartPortos(action.targetUrl)}
           disabled={restarting || !action.targetUrl}
-          className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg bg-port-accent px-3 py-2 text-xs font-medium text-white hover:bg-port-accent/80 disabled:cursor-not-allowed disabled:opacity-40 sm:min-h-0"
+          className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg bg-port-accent px-3 py-2 text-xs font-medium text-white hover:bg-port-accent/80 disabled:cursor-not-allowed disabled:opacity-40 pointer-fine:sm:min-h-0"
         >
           <RefreshCw size={12} className={restarting ? 'animate-spin' : ''} />
           {restarting ? 'Restarting…' : action.label}
@@ -172,7 +172,7 @@ export default function NetworkSetupGuide({ networkExposure, compact = false }) 
               type="button"
               onClick={() => restartPortos(provisionedTarget)}
               disabled={restarting}
-              className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-port-success/50 px-3 py-2 font-medium hover:bg-port-success/10 disabled:opacity-40 sm:min-h-0"
+              className="inline-flex min-h-[44px] items-center gap-1.5 rounded-lg border border-port-success/50 px-3 py-2 font-medium hover:bg-port-success/10 disabled:opacity-40 pointer-fine:sm:min-h-0"
             >
               <RefreshCw size={12} className={restarting ? 'animate-spin' : ''} />
               {restarting ? 'Restarting…' : 'Restart PortOS'}

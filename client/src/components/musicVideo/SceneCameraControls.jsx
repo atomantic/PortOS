@@ -1,6 +1,6 @@
 import { CAMERA_FAMILIES, CAMERA_MOVEMENTS, CAMERA_SPEEDS, getCameraMovement } from '../../../../server/lib/cameraMovements.js';
 
-const FIELD = 'bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] sm:min-h-0';
+const FIELD = 'bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] pointer-fine:sm:min-h-0';
 const BY_FAMILY = CAMERA_FAMILIES.map((family) => [family, CAMERA_MOVEMENTS.filter((move) => move.family === family)])
   .filter(([, moves]) => moves.length);
 

@@ -455,7 +455,7 @@ export default function MediaJobsQueue({ kind, recentLimit = 10, className = '',
                       setConfirmClear(true);
                     }}
                       title="Remove all failed and canceled jobs, including older jobs"
-                      className="flex min-h-[44px] items-center gap-1 rounded border border-port-border px-2 py-1 text-xs text-gray-300 hover:border-port-error/40 hover:text-port-error sm:min-h-9">
+                      className="flex min-h-[44px] items-center gap-1 rounded border border-port-border px-2 py-1 text-xs text-gray-300 hover:border-port-error/40 hover:text-port-error pointer-fine:sm:min-h-9">
                       <Trash2 className="w-3 h-3" /> Clear failed / canceled
                     </button>
                   )}

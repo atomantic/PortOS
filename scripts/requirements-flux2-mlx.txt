@@ -1,0 +1,21 @@
+# FLUX.2 (Apple Silicon) runtime: direct pins for ~/.portos/venv-flux2.
+# Installed only from requirements-flux2-mlx.lock.txt, which pins and hashes
+# every transitive package. After editing this file, regenerate the lock with
+# the command in the lock header.
+#
+# diffusers 0.42.1 is the first tagged release that ships both Flux2KleinPipeline
+# and QwenImage21Pipeline, and sdnq is published on PyPI, so no git source (which
+# cannot be hash-pinned) is needed.
+torch==2.15.0
+torchvision==0.29.2
+accelerate==1.15.0
+transformers==5.22.1
+sentencepiece==0.2.2
+protobuf==7.36.2
+safetensors==0.8.0
+huggingface-hub[hf_xet]==2.4.0
+diffusers==0.42.1
+sdnq==0.2.8
+peft==0.21.2
+optimum-quanto==0.2.7
+pillow==13.0.0

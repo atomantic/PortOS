@@ -21,7 +21,8 @@ vi.mock('../lib/fileUtils.js', () => ({
 }));
 
 vi.mock('./runner.js', () => ({
-  createRun: vi.fn()
+  createRun: vi.fn(),
+  stopRun: vi.fn().mockResolvedValue(undefined)
 }));
 
 vi.mock('./promptRunner.js', () => ({
@@ -41,13 +42,14 @@ vi.mock('./providers.js', () => ({
 }));
 
 import { tryReadFile, atomicWrite } from '../lib/fileUtils.js';
-import { createRun } from './runner.js';
+import { createRun, stopRun } from './runner.js';
 import { runPromptThroughProvider, resolveProviderAndModel } from './promptRunner.js';
 import { getActiveProvider, listSelectableProviders } from './providers.js';
 import {
   createLoop,
   restoreLoops,
   stopLoop,
+  deleteLoop,
   triggerLoop,
   updateLoop,
   getLoops,
@@ -205,6 +207,13 @@ describe('loops.js', () => {
       expect(loop.id).toHaveLength(8);
     });
 
+    it('rejects an interval above the 2^31-1 ms timer limit but accepts 24d', async () => {
+      await expect(createLoop({ prompt: 'p', interval: '30d', runImmediately: false }))
+        .rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
+      const loop = await createLoop({ prompt: 'p', interval: '24d', runImmediately: false });
+      expect(loop.intervalMs).toBe(24 * 86_400_000);
+    });
+
     it('persists the loop to disk via atomicWrite', async () => {
       await createLoop({ prompt: 'test loop', interval: '30s', runImmediately: false });
       expect(atomicWrite).toHaveBeenCalled();
@@ -228,7 +237,7 @@ describe('loops.js', () => {
     it('throws when interval is shorter than 10 seconds', async () => {
       await expect(
         createLoop({ prompt: 'fast loop', interval: '5s', runImmediately: false })
-      ).rejects.toThrow('Interval must be at least 10 seconds');
+      ).rejects.toThrow('Interval must be between 10 seconds and 24 days');
     });
 
     it('throws when prompt is empty', async () => {
@@ -330,6 +339,35 @@ describe('loops.js', () => {
   // ===========================================================================
   // executeIteration error logging via triggerLoop
   // ===========================================================================
+  describe('cancelling an in-flight iteration', () => {
+    async function startPendingIteration() {
+      const loop = await createLoop({ prompt: 'cancel test', interval: '30s', runImmediately: false });
+      tryReadFile.mockResolvedValue(JSON.stringify(atomicWrite.mock.calls[0][1]));
+      mockRunPrompt.mockReturnValue(new Promise(() => {}));
+      await triggerLoop(loop.id);
+      await flushAsync();
+      return loop;
+    }
+
+    it('stopLoop stops the in-flight run', async () => {
+      const loop = await startPendingIteration();
+      await stopLoop(loop.id);
+      expect(stopRun).toHaveBeenCalledWith('run-123');
+    });
+
+    it('deleteLoop stops the in-flight run', async () => {
+      const loop = await startPendingIteration();
+      await deleteLoop(loop.id);
+      expect(stopRun).toHaveBeenCalledWith('run-123');
+    });
+
+    it('stopLoop on an idle loop does not call stopRun', async () => {
+      const loop = await createLoop({ prompt: 'idle', interval: '30s', runImmediately: false });
+      await stopLoop(loop.id);
+      expect(stopRun).not.toHaveBeenCalled();
+    });
+  });
+
   describe('error handling in executeIteration', () => {
     it('logs console.error when the central prompt runner rejects', async () => {
       const loop = await createLoop({
@@ -629,6 +667,13 @@ describe('loops.js', () => {
       expect(mockRunPrompt).toHaveBeenCalledTimes(2);
       await vi.advanceTimersByTimeAsync(12_000);
       expect(mockRunPrompt).toHaveBeenCalledTimes(4);
+    });
+
+    it('clamps a stored oversized interval so it never fires every 1 ms', async () => {
+      stubDisk([rec('big', Date.now(), 2_592_000_000)]);
+      await restoreLoops();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(mockRunPrompt).not.toHaveBeenCalled();
     });
 
     it('stopLoop before the first fire cancels it', async () => {

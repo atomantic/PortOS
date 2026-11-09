@@ -44,7 +44,7 @@
  * cannot drift.
  */
 
-import { GROK_VIDEO_DURATIONS, nearestGrokDuration } from './grokVideoClip.js';
+import { GROK_VIDEO_DEFAULT_DURATION, GROK_VIDEO_DURATIONS, nearestGrokDuration } from './grokVideoClip.js';
 import { GEMINI_OMNI_WEB_MODEL } from './geminiWebVideo.js';
 import {
   FAL_AUDIO_VIDEO_MODELS,
@@ -62,10 +62,11 @@ import {
   RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL,
   coerceRunwayVideoSeconds,
   estimateRunwayVideoCostUsd,
+  runwayVideoLengths,
   getRunwayVideoModel,
   resolveRunwayVideoResolution,
 } from './runwayVideoModels.js';
-import { preMusicClipSound } from './musicVideoColdOpen.js';
+import { normalizePreMusic, preMusicClipSound } from './musicVideoColdOpen.js';
 
 /** How a scene is generated (#14241): `sequence` joins its run of cutaway footage shots into one timed request. */
 export const MUSIC_VIDEO_COVERAGE_MODES = Object.freeze(['per-shot', 'sequence']);
@@ -543,6 +544,69 @@ export function planPacingSplit({ startSec, endSec, minSec, maxSec, lyricCues = 
     : { ok: false, code: 'MUSIC_VIDEO_PACING_IMPOSSIBLE', message: 'This shot cannot fit both pacing bounds. Lower the minimum shot length or raise the maximum.' };
 }
 
+export const CLIP_LENGTH_SEC_RANGE = Object.freeze({ min: 1, max: 60 });
+
+/** A shot's hand-set source clip length (seconds), longer than its span when a take is shared across shots; null when unset. */
+export const sceneClipLengthSec = (scene) => (Number.isFinite(scene?.clipLengthSec) && scene.clipLengthSec > 0 ? scene.clipLengthSec : null);
+
+/**
+ * The length a clip render must cover: the shot's span, or the hand-set source
+ * clip length when that is longer. Null for an untimed shot with no length set.
+ */
+export function shotRequestSpanSec(scene) {
+  const span = typeof scene?.startSec === 'number' && typeof scene?.endSec === 'number' && scene.endSec > scene.startSec
+    ? scene.endSec - scene.startSec : null;
+  const length = sceneClipLengthSec(scene);
+  return span == null ? length : length == null ? span : Math.max(span, length);
+}
+
+/**
+ * The whole-second clip lengths `backend`'s model delivers, for a source-length
+ * picker and the refusal message. Empty when the lane has no length control (local, an uncurated model).
+ */
+export function clipLengthChoices(backend, modelId = null) {
+  if (backend === 'grok') return [...GROK_VIDEO_DURATIONS];
+  if (backend === 'runway') {
+    return runwayVideoLengths(getRunwayVideoModel(modelId || RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL));
+  }
+  if (backend === 'fal') {
+    const rule = getFalVideoModel(modelId || FAL_DEFAULT_IMAGE_VIDEO_MODEL)?.duration;
+    if (rule?.kind === 'enum') return [...rule.values];
+    if (rule?.kind === 'range') return Array.from({ length: rule.max - rule.min + 1 }, (_, i) => rule.min + i);
+  }
+  return [];
+}
+
+/**
+ * The clip length a request body sends on `backend`, or null when it names none
+ * (the lane then renders its default). Lengths are the lane's own request field.
+ */
+function requestedClipSec(backend, body = {}) {
+  const sec = backend === 'grok' ? body.grokDuration : backend === 'fal' ? body.falDuration : backend === 'runway' ? body.runwayDuration : null;
+  const n = Number(sec);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/**
+ * Null when a request on `backend` delivers at least the shot's hand-set source
+ * clip length; else `{ requestedSec, supported }`. The length is never clamped:
+ * a model that cannot reach it is refused with the lengths it can.
+ */
+export function clipLengthShortfall(scene, backend, body = {}, modelId = null) {
+  const wanted = sceneClipLengthSec(scene);
+  if (wanted == null || isPerformanceScene(scene)) return null;
+  const supported = clipLengthChoices(backend, modelId);
+  // Local renders size by frame count and an uncurated model has no length rule: nothing to check.
+  if (!supported.length) return null;
+  const sent = requestedClipSec(backend, body) ?? (backend === 'grok' ? GROK_VIDEO_DEFAULT_DURATION : coerceDefault(backend, modelId));
+  if (sent != null && sent >= wanted - 1e-6) return null;
+  return { requestedSec: wanted, supported };
+}
+
+const coerceDefault = (backend, modelId) => (backend === 'fal'
+  ? coerceFalVideoSeconds(getFalVideoModel(modelId || FAL_DEFAULT_IMAGE_VIDEO_MODEL), null)
+  : coerceRunwayVideoSeconds(getRunwayVideoModel(modelId || RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL), null));
+
 /**
  * The fal.ai request one take of `scene` makes on the fal lane, and its
  * estimated cost — the single answer the board's cost line, the submit
@@ -593,15 +657,15 @@ export function falSceneTake({ scene, videoSettings = {}, songDurationSec = null
   }
   const endFrameModel = scene?.endFrameOff !== true && typeof scene?.endImageId === 'string' && scene.endImageId.trim()
     ? getFalVideoModel(settings.falEndFrameModelId) : null;
-  const modelId = endFrameModel?.endImage ? endFrameModel.id : settings.falModelId || FAL_DEFAULT_IMAGE_VIDEO_MODEL;
+  // A shot's own model (clipModelId) wins over the project's; the project's setting is never written.
+  const ownModel = getFalVideoModel(scene?.clipModelId);
+  const modelId = ownModel ? ownModel.id : endFrameModel?.endImage ? endFrameModel.id : settings.falModelId || FAL_DEFAULT_IMAGE_VIDEO_MODEL;
   const model = getFalVideoModel(modelId);
   if (!model) {
     return { performance: false, modelId, seconds: settings.falDuration || null, resolution: settings.falResolution || null, costUsd: null };
   }
-  const spanSec = typeof scene?.startSec === 'number' && typeof scene?.endSec === 'number' && scene.endSec > scene.startSec
-    ? scene.endSec - scene.startSec
-    : null;
-  const seconds = coerceFalVideoSeconds(model, settings.falDuration || spanSec);
+  const spanSec = shotRequestSpanSec(scene);
+  const seconds = coerceFalVideoSeconds(model, sceneClipLengthSec(scene) != null ? spanSec : settings.falDuration || spanSec);
   const resolution = resolveFalVideoResolution(model, settings.falResolution);
   const generateAudio = Boolean(model.audio) && preMusicClipSound(scene);
   return {
@@ -637,15 +701,13 @@ export const falTakeRequestFields = (take) => (take.performance
  */
 export function runwaySceneTake({ scene, videoSettings = {} } = {}) {
   const settings = videoSettings || {};
-  const modelId = settings.runwayModelId || RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL;
+  const modelId = getRunwayVideoModel(scene?.clipModelId)?.id || settings.runwayModelId || RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL;
   const model = getRunwayVideoModel(modelId);
   if (isPerformanceScene(scene) || !model) {
     return { performance: isPerformanceScene(scene), modelId, seconds: null, resolution: null, costUsd: null };
   }
-  const spanSec = typeof scene?.startSec === 'number' && typeof scene?.endSec === 'number' && scene.endSec > scene.startSec
-    ? scene.endSec - scene.startSec
-    : null;
-  const seconds = coerceRunwayVideoSeconds(model, settings.runwayDuration || spanSec);
+  const spanSec = shotRequestSpanSec(scene);
+  const seconds = coerceRunwayVideoSeconds(model, sceneClipLengthSec(scene) != null ? spanSec : settings.runwayDuration || spanSec);
   const resolution = resolveRunwayVideoResolution(model, settings.runwayResolution);
   return { performance: false, modelId, seconds, resolution, costUsd: estimateRunwayVideoCostUsd({ modelId, seconds, resolution }) };
 }
@@ -724,4 +786,19 @@ export function planPerformanceRepair({ scene, temporal, excerptStartSec, backen
   return { ok: true, boundarySec, endSec: scene.endSec, suffixSec: round6(scene.endSec - boundarySec),
     referenceClipSec: round6(instruction.edit.inSec + boundarySec - scene.startSec),
     costUsd: take?.costUsd ?? null, sourceAssetId: scene.videoHistoryId };
+}
+
+// The longest local clip the video form offers (client FRAME_OPTIONS' last entry).
+export const LTX_REFERENCE_MAX_FRAMES = 1017;
+
+/**
+ * Frames for an LTX 2.5 reference clip of this shot: covers the shot (or the
+ * requested length) at 24 fps on LTX's 8n+1 grid, at least 121; null when the
+ * shot is too long for one reference clip.
+ */
+export function ltxReferenceFrames(scene, requestedFrames = null) {
+  const shotSeconds = normalizePreMusic(scene?.preMusic)?.durationSec ?? (scene?.endSec - scene?.startSec);
+  const covering = Number.isFinite(shotSeconds) && shotSeconds > 0 ? 1 + 8 * Math.ceil(shotSeconds * 24 / 8) : 121;
+  const frames = Math.max(121, 1 + 8 * Math.ceil(((requestedFrames || covering) - 1) / 8));
+  return frames <= LTX_REFERENCE_MAX_FRAMES ? frames : null;
 }

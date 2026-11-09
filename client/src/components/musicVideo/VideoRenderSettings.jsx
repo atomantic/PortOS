@@ -10,11 +10,14 @@ import {
   RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, describeRunwayVideoRate, getRunwayVideoModel, runwayVideoLengths, runwayVideoResolutions,
 } from '../../lib/runwayVideoModels.js';
 import { projectFalSpend } from '../../lib/musicVideoStages.js';
-import { formatUsd } from '../../utils/formatters.js';
 import { SOURCE_AUDIO_LIPSYNC, SOURCE_AUDIO_MUSIC, performanceCapability } from '../../lib/musicVideoShotTiming.js';
+import { LTX_REFERENCES_GENERATION_MODE, LTX_REFERENCES_IC_MODE, LTX_REFERENCES_MIN_FRAMES } from '../../lib/musicVideoLtxReferences.js';
+import { useModelDownloadStatus } from '../../hooks/useModelDownloadStatus.js';
+import ModelDownloadBadge from '../media/ModelDownloadBadge.jsx';
+import { formatBytes, formatUsd } from '../../utils/formatters.js';
 import { localModelRendersCutaway } from '../../../../server/lib/musicVideoLocalModels.js';
 
-const falSelectCls = 'w-full max-w-full bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50 sm:w-auto min-h-[44px] sm:min-h-0';
+const falSelectCls = 'w-full max-w-full bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50 sm:w-auto min-h-[44px] pointer-fine:sm:min-h-0';
 const falOptionLabel = (model) => {
   const rate = describeFalVideoRate(model.id);
   return rate ? `${model.label} · ${rate}` : model.label;
@@ -23,6 +26,24 @@ const runwayOptionLabel = (model, resolution) => {
   const rate = describeRunwayVideoRate(model.id, resolution);
   return rate ? `${model.label} · ${rate}` : model.label;
 };
+
+// The Ingredients adapter is a separate weight pull from the LTX 2.5 model, so the
+// panel shows its cache state with the same Download/progress badge Video Gen uses.
+// Mounted only while the mode is selected, so other projects never read the cache.
+function LtxReferencesAdapterStatus() {
+  const download = useModelDownloadStatus({ kind: 'video' });
+  const status = download.getStatus(LTX_REFERENCES_IC_MODE);
+  if (download.statusError) return <span className="text-xs text-port-warning">{download.statusError}</span>;
+  return (
+    <ModelDownloadBadge
+      status={status}
+      onDownload={() => download.startWhenIdle(LTX_REFERENCES_IC_MODE)}
+      onCancel={download.cancel}
+      estimateLabel={status?.estimatedBytes ? `~${formatBytes(status.estimatedBytes, 0)}` : undefined}
+      queued={download.queuedModelId === LTX_REFERENCES_IC_MODE}
+    />
+  );
+}
 
 // The project's saved scene-video render pins (backend → generation mode →
 // model → audio-reactive LoRA/strength, or Grok clip duration). Every control
@@ -34,7 +55,7 @@ export default function VideoRenderSettings({ videoSettings, generating, project
   const {
     settings, saving, models, modelsLoading, catalogStatus, retryCatalog, defaultModel, effectiveModelId,
     audioReactiveModels, audioReactiveLoras, detectedAudioReactiveLora,
-    audioReactiveReady, audioReactiveSelected, change,
+    audioReactiveReady, audioReactiveSelected, ltxReferencesModels = [], ltxReferencesSelected = false, change,
   } = videoSettings;
   // fal.ai (#8968) is image-to-video only here — every scene render already
   // starts from the director's chosen reference frame, so the model picker
@@ -76,7 +97,7 @@ export default function VideoRenderSettings({ videoSettings, generating, project
         onChange={(e) => change({ backend: e.target.value || null })}
         disabled={locked}
         title="Saved renderer for this project's scene videos"
-        className="w-full max-w-full bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50 min-h-[44px] sm:min-h-0 sm:w-auto"
+        className="w-full max-w-full bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50 min-h-[44px] pointer-fine:sm:min-h-0 sm:w-auto"
       >
         <option value="">Install default</option>
         <option value="local">Local video</option>
@@ -99,6 +120,7 @@ export default function VideoRenderSettings({ videoSettings, generating, project
               const generationMode = e.target.value;
               const compatibleModel = audioReactiveModels.find((model) => model.id === effectiveModelId)
                 || audioReactiveModels[0];
+              const ltxModel = ltxReferencesModels.find((model) => model.id === effectiveModelId) || ltxReferencesModels[0];
               change({
                 generationMode,
                 ...(generationMode === 'audioReactive' && detectedAudioReactiveLora
@@ -107,15 +129,19 @@ export default function VideoRenderSettings({ videoSettings, generating, project
                 ...(generationMode === 'audioReactive' && compatibleModel
                   ? { modelId: compatibleModel.id }
                   : {}),
+                ...(generationMode === LTX_REFERENCES_GENERATION_MODE && ltxModel
+                  ? { modelId: ltxModel.id }
+                  : {}),
               });
             }}
             disabled={locked}
-            title="Prompt motion uses the reference frame; audio reactive also conditions motion on this scene's song segment"
-            className="w-full max-w-full bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50 min-h-[44px] sm:min-h-0 sm:w-auto"
+            title="Prompt motion uses the reference frame; audio reactive also conditions motion on this scene's song segment; LTX 2.5 References renders each clip from the shot's clip references (at least 121 frames, no song audio or end frame)"
+            className="w-full max-w-full bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50 min-h-[44px] pointer-fine:sm:min-h-0 sm:w-auto"
           >
             <option value="image">Prompt motion</option>
             <option value="suppliedAudio">Supplied song audio (cutaway only)</option>
             <option value="audioReactive" disabled={!detectedAudioReactiveLora}>Audio reactive</option>
+            <option value={LTX_REFERENCES_GENERATION_MODE} disabled={ltxReferencesModels.length === 0 && !ltxReferencesSelected}>LTX 2.5 References (cutaway only)</option>
           </select>
           <label htmlFor="mv-video-model" className="sr-only">Local video model</label>
           <select
@@ -124,7 +150,7 @@ export default function VideoRenderSettings({ videoSettings, generating, project
             onChange={(e) => change({ modelId: e.target.value })}
             disabled={locked || models.length === 0}
             title="Saved local image-to-video model for this project"
-            className="w-full max-w-full bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50 min-h-[44px] sm:min-h-0 sm:w-auto sm:max-w-[240px]"
+            className="w-full max-w-full bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50 min-h-[44px] pointer-fine:sm:min-h-0 sm:w-auto sm:max-w-[240px]"
           >
             <option value="">
               {defaultModel
@@ -132,10 +158,22 @@ export default function VideoRenderSettings({ videoSettings, generating, project
                 : 'Local default model'}
             </option>
             {/* Cutaways animate their still, so an audio-only model (Ref2VA) is a per-shot pick for performance shots. */}
-            {(audioReactiveSelected ? audioReactiveModels : models.filter((model) => localModelRendersCutaway(model) || model.id === settings.modelId)).map((model) => (
+            {(audioReactiveSelected ? audioReactiveModels : ltxReferencesSelected ? ltxReferencesModels : models.filter((model) => localModelRendersCutaway(model) || model.id === settings.modelId)).map((model) => (
               <option key={model.id} value={model.id}>{model.name || model.id}</option>
             ))}
           </select>
+          {ltxReferencesSelected && (
+            <span className="text-xs text-port-text-muted">
+              {ltxReferencesModels.length === 0
+                ? (catalogStatus === 'ready' ? 'needs an LTX 2.5 local model' : 'checking local runtime…')
+                : `clip references as IC references · ${LTX_REFERENCES_MIN_FRAMES}+ frames · no song audio or end frame`}
+            </span>
+          )}
+          {ltxReferencesSelected && ltxReferencesModels.length > 0 && (
+            <div className="w-full sm:w-auto" role="group" aria-label="LTX 2.5 References adapter">
+              <LtxReferencesAdapterStatus />
+            </div>
+          )}
           {audioReactiveSelected && (
             <>
               <label htmlFor="mv-audio-reactive-lora" className="sr-only">Audio reactive LoRA</label>
@@ -145,7 +183,7 @@ export default function VideoRenderSettings({ videoSettings, generating, project
                 onChange={(e) => change({ audioReactiveLora: e.target.value })}
                 disabled={locked || audioReactiveLoras.length === 0}
                 title="Saved audio-reactive LoRA version for this project"
-                className="w-full max-w-full bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50 min-h-[44px] sm:min-h-0 sm:w-auto sm:max-w-[220px]"
+                className="w-full max-w-full bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50 min-h-[44px] pointer-fine:sm:min-h-0 sm:w-auto sm:max-w-[220px]"
               >
                 {audioReactiveLoras.length === 0 && (
                   <option value="">{catalogStatus === 'ready' ? 'No audio-reactive LoRA installed' : 'Audio-reactive LoRAs not loaded'}</option>
@@ -163,7 +201,7 @@ export default function VideoRenderSettings({ videoSettings, generating, project
                 onChange={(e) => change({ audioReactiveScale: Number(e.target.value) })}
                 disabled={locked}
                 title="How strongly the song drives visible motion"
-                className="w-full max-w-full bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50 min-h-[44px] sm:min-h-0 sm:w-auto"
+                className="w-full max-w-full bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50 min-h-[44px] pointer-fine:sm:min-h-0 sm:w-auto"
               >
                 <option value={1}>Reactive 1.0×</option>
                 <option value={1.2}>Reactive 1.2×</option>
@@ -199,7 +237,7 @@ export default function VideoRenderSettings({ videoSettings, generating, project
             onChange={(e) => change({ grokDuration: Number(e.target.value) })}
             disabled={locked}
             title="Native duration for each Grok scene clip"
-            className="w-full max-w-full bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50 min-h-[44px] sm:min-h-0 sm:w-auto"
+            className="w-full max-w-full bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50 min-h-[44px] pointer-fine:sm:min-h-0 sm:w-auto"
           >
             {GROK_VIDEO_DURATIONS.map((duration) => (
               <option key={duration} value={duration}>{duration}s clips</option>
@@ -271,7 +309,7 @@ export default function VideoRenderSettings({ videoSettings, generating, project
             disabled={locked}
             placeholder="shot length"
             title="Clip length in seconds for this project's fal.ai cutaway renders. Blank renders the shortest length the model offers that covers each shot (the model default for an untimed scene)."
-            className="w-full max-w-full bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50 min-h-[44px] sm:min-h-0 sm:w-24"
+            className="w-full max-w-full bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50 min-h-[44px] pointer-fine:sm:min-h-0 sm:w-24"
           />
           <label htmlFor="mv-fal-lipsync-resolution" className="sr-only">fal.ai lip-sync resolution</label>
           <select
@@ -287,7 +325,7 @@ export default function VideoRenderSettings({ videoSettings, generating, project
               <option key={res} value={res}>{`Lip-sync ${res} · ${describeFalVideoRate(lipSync.modelId, res)}`}</option>
             ))}
           </select>
-          <label className="flex items-center gap-1.5 text-xs text-port-text-muted min-h-[44px] sm:min-h-0"
+          <label className="flex items-center gap-1.5 text-xs text-port-text-muted min-h-[44px] pointer-fine:sm:min-h-0"
             title="Let the provider transcribe the sung audio to guide mouth shapes. Turn off if it mishears lyrics and shapes the wrong words (e.g. 'swarm' mouthed as 'sworn'); the take then follows the audio alone.">
             <input
               type="checkbox"

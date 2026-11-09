@@ -165,6 +165,25 @@ export const EPIC_DECOMPOSED_LABEL = 'decomposed';
 export const EPIC_LABEL = 'epic';
 
 /**
+ * Recognize a tracking/umbrella EPIC from its title alone — the programmatic
+ * half of the claim-issue prompt's epic handling (`isActionableIssue` decides
+ * what that means for claimability). Matches the epic-title conventions the
+ * prompt names and the agent honors:
+ *   - a trailing `(epic)` tag  — e.g. "Redesign nav (epic)"
+ *   - a leading `[epic]` bracket or `Epic:` colon tag — e.g. "[Epic] Billing
+ *     revamp", "[epic: theme] …", "Epic: Redesign nav" (case-insensitive)
+ * The leading-tag branch is what makes an "[Epic] …" issue with no `epic` label
+ * read as an epic at all (label check misses it, and it doesn't END in
+ * "(epic)"). The `\b` + `[:\]]` terminator keeps a bare adjective ("Epic rework
+ * of nav") and near-words ("[epicenter] …") from matching — only a real
+ * bracketed/colon-delimited `epic` tag counts.
+ */
+export function titleMarksEpic(title) {
+  const t = (title || '').trim().toLowerCase();
+  return t.endsWith('(epic)') || /^\[?\s*epic\b\s*[:\]]/.test(t);
+}
+
+/**
  * The claim marker: 'this issue is claimed and being worked'. Written by every
  * flow that takes ownership of an issue — a CoS claim, and the issue-watcher's
  * deterministic volunteer assignment — and read as a hard skip by the claim

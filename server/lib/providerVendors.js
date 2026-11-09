@@ -827,7 +827,7 @@ const GEMINI_LEGACY = {
 
 // Pi public review discards configured args and disables every tool/resource
 // discovery surface. --no-builtin-tools alone leaves extension tools enabled.
-const piCliArgs = (args, { model, effort }) => ensurePiHeadlessArgs(args, model, effort);
+const piCliArgs = (args, { model, effort, provider }) => ensurePiHeadlessArgs(args, model, effort, provider);
 const PI = {
   id: 'pi',
   idFragment: 'pi-',

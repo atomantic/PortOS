@@ -1,9 +1,36 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { buildPersonMatchIndex } from '../lib/tribeMatch.js';
+import { mergeContacts, buildContactIndex } from './contactsSync.js';
+import { enrichTribeFromContacts } from './tribeContacts.js';
+import * as tribe from './tribe.js';
 import {
   matchContactToPerson,
   computePhoneEmailFill,
 } from './tribeContacts.js';
+
+vi.mock('./tribe.js', () => ({ listPeople: vi.fn(), updatePerson: vi.fn() }));
+vi.mock('./humanActivity.js', () => ({}));
+vi.mock('./contactsSync.js', async (orig) => {
+  const actual = await orig();
+  return { ...actual, loadContactIndex: vi.fn() };
+});
+
+describe('enrichTribeFromContacts with a shared household phone', () => {
+  it("does not copy Bob's mobile onto Alice", async () => {
+    const { loadContactIndex } = await import('./contactsSync.js');
+    const contacts = mergeContacts([[
+      { uniqueId: 'A', firstName: 'Alice', lastName: 'Example', phones: ['+1 555 010 0001', '+1 555 010 9999'] },
+      { uniqueId: 'B', firstName: 'Bob', lastName: 'Example', phones: ['+1 555 010 0002', '+1 555 010 9999'] },
+    ]]);
+    loadContactIndex.mockResolvedValue({ contacts, index: buildContactIndex(contacts) });
+    tribe.listPeople.mockResolvedValue([
+      { id: 'p1', name: 'Alice Example', phones: ['+15550100001'], emails: [] },
+    ]);
+    const result = await enrichTribeFromContacts({ dryRun: true });
+    const all = result.changes.flatMap((c) => c.addPhones);
+    expect(all).not.toContain('+15550100002');
+  });
+});
 
 describe('tribeContacts pure helpers', () => {
   const people = [

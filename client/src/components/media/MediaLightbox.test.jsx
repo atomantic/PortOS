@@ -493,3 +493,41 @@ describe('MediaLightbox note save status', () => {
     expect(screen.getByText('Saves automatically')).toBeInTheDocument();
   });
 });
+
+describe('MediaLightbox delete and hide', () => {
+  afterEach(() => { usageIndex.value = {}; });
+
+  it('confirms inline before deleting, and offers nothing without a host handler', () => {
+    const onDelete = vi.fn();
+    const { unmount } = render(<MemoryRouter><MediaLightbox item={videoItem} onClose={() => {}} onDelete={onDelete} /></MemoryRouter>);
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    expect(onDelete).not.toHaveBeenCalled();
+    expect(screen.getByText('Delete this video?')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    expect(onDelete).toHaveBeenCalledWith(videoItem);
+    unmount();
+    render(<MemoryRouter><MediaLightbox item={videoItem} onClose={() => {}} /></MemoryRouter>);
+    expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Hide' })).toBeNull();
+  });
+
+  it('lists where a used file lives and deletes it anyway with force', () => {
+    usageIndex.value = { 'image:frame.png': [
+      { source: 'storyboard', label: 'Storyboard', id: 'sb-1', title: 'Example Board', role: 'Panel 3', href: '/storyboards/sb-1/panel/p-3' },
+    ] };
+    const onDelete = vi.fn();
+    render(<MemoryRouter><MediaLightbox item={imageItem} onClose={() => {}} onDelete={onDelete} /></MemoryRouter>);
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete anyway' }));
+    expect(onDelete).toHaveBeenCalledWith(imageItem, { force: true });
+  });
+
+  it('hides or unhides through the host handler', () => {
+    const onToggleHidden = vi.fn();
+    const { rerender } = render(<MemoryRouter><MediaLightbox item={videoItem} onClose={() => {}} onToggleHidden={onToggleHidden} /></MemoryRouter>);
+    fireEvent.click(screen.getByRole('button', { name: 'Hide' }));
+    expect(onToggleHidden).toHaveBeenCalledWith(videoItem);
+    rerender(<MemoryRouter><MediaLightbox item={{ ...videoItem, hidden: true }} onClose={() => {}} onToggleHidden={onToggleHidden} /></MemoryRouter>);
+    expect(screen.getByRole('button', { name: 'Unhide' })).toBeTruthy();
+  });
+});

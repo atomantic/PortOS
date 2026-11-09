@@ -43,7 +43,7 @@ export default function SceneResearchSeed({ project, scene, onEditLocal, onSave,
                   </a>
                 )}
                 <button type="button" onClick={() => drop(ref)} disabled={disabled} aria-label={`Drop research photo of ${ref.subject}`}
-                  className="absolute right-1 top-1 inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded bg-black/60 text-white disabled:opacity-50 sm:min-h-[28px] sm:min-w-[28px]">
+                  className="absolute right-1 top-1 inline-flex min-h-[44px] min-w-[44px] items-center justify-center rounded bg-black/60 text-white disabled:opacity-50 pointer-fine:sm:min-h-[28px] pointer-fine:sm:min-w-[28px]">
                   <X size={14} aria-hidden="true" />
                 </button>
               </li>

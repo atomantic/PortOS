@@ -39,7 +39,7 @@ export default function PublishCard({ projectId, cardId, label, icon: Icon, summ
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-sm font-medium min-w-0 flex-1">
           <button type="button" data-fold-toggle aria-expanded={open} aria-controls={bodyId} onClick={toggle}
-            className="flex w-full items-center gap-1.5 min-h-[44px] sm:min-h-0">
+            className="flex w-full items-center gap-1.5 min-h-[44px] pointer-fine:sm:min-h-0">
             <Chevron size={14} className="shrink-0" />
             {Icon && <Icon size={14} className="shrink-0" />}
             <span className="shrink-0">{label}</span>

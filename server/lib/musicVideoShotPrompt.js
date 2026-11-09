@@ -53,6 +53,19 @@ export const authoredShotPrompt = (scene) => scene?.prompt?.trim() || storyboard
   // A detail-built shot's frame prompt is the still's general prompt, so its clip never borrows it.
   || (shotSheetDrivesPrompt(scene) ? '' : scene?.framePrompt?.trim()) || '';
 
+/**
+ * How every AI writer of a shot's prompts words them (planner, treatment, shot
+ * sheet rewrite and tighten). A shot has a frame prompt (the start still) and a
+ * clip prompt (what happens from that still); the video model already sees the
+ * frame, so the clip prompt never redescribes it. Render time adds the look,
+ * production bible, shot sheet, camera, route and references, so neither prompt
+ * restates those. A revision rewrites to the same length instead of appending
+ * fixes, so prompts don't grow with each review round.
+ */
+const PROMPT_WRITING_SHARED = 'Name people, places and cameras by name, and leave out what the shot\'s references, look, sheet, camera move and route already carry (faces, wardrobe, props, set dressing, period, lighting rules). When revising, rewrite the whole prompt to this length; never append rules to it.';
+export const FRAME_PROMPT_WRITING = `Write the frame prompt as one still picture in one to three plain sentences, about 50 words at most: who is in frame and where, their pose and the framing. No motion. An in-world camera's holder may show at the edge of frame. ${PROMPT_WRITING_SHARED}`;
+export const CLIP_PROMPT_WRITING = `Write the clip prompt in one to three plain sentences, about 50 words at most: one main action, what moves and which way, what the camera does and how the shot ends. It starts from the frame, so never repeat what the frame prompt already shows. ${PROMPT_WRITING_SHARED}`;
+
 const addition = (id, label, text) => {
   const trimmed = typeof text === 'string' ? text.trim() : '';
   return trimmed ? { id, label, text: trimmed } : null;

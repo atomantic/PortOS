@@ -1,0 +1,23 @@
+# Build backend for the two immutable LTX source archives.
+# Bootstrap with --require-hashes before the --no-build-isolation runtime sync.
+uv-build==0.9.30 \
+    --hash=sha256:015cab944b4c4437549c4ad11ad65c37aed6a6eb390e326d8f81945acc423533 \
+    --hash=sha256:14ac36cb0ccdc7a847e3d41903eb5d0091db4f5efcd34e693da82d6484fc5539 \
+    --hash=sha256:15dfc9657b420d5fa55d20a3a2f4b3c0cafe8cfa2a5431352e939379b763c2cd \
+    --hash=sha256:2ce9e092115baa1852ee6b8e1ec68f2e6c077d0b7bef2ba7df705ffc1d48b1a7 \
+    --hash=sha256:330cae75119cbc0de893f0a97d7f2253bdeef58f01699b186cadab61faa54a7e \
+    --hash=sha256:3cc10f63ebbf70fe2b57d7e85ce8928e36819e8c14c6c871833b4a47f3be96c5 \
+    --hash=sha256:5354af469e3cb4b0695c18d06ea7a2754e4df1a42b5a3c271674a15ca128cfb4 \
+    --hash=sha256:57bd79be3970184c24fc33d1975c557359929f5b1a166c4ad98c2320ec5c1294 \
+    --hash=sha256:7bd3d425ac8bf41917789106a6ff475821db920542d2b7188e378fc7250a31f6 \
+    --hash=sha256:80bf57943d2231c6936d82dac6f6eed9082e8cf1680a6fe045f445fef6c78077 \
+    --hash=sha256:a4659fc84ad5810a76127c22eabbd19e17b48449e784a392999a12aa052e6c17 \
+    --hash=sha256:ad64747651997af65ad19fa2822e85fff21ba8f00ad579b09f02f7efed0b0162 \
+    --hash=sha256:bcb41287fef8ce3ecacb2de76ce3e1af05f297f55413528a092e783e76ef3802 \
+    --hash=sha256:c68563778333a3b796c48815fa08a47c9acb53748d4d82b48d79d47aee62639d \
+    --hash=sha256:df913100aa522ecb636518cf83fee76ee815d66fb58092c59fbacb283fb22c1b \
+    --hash=sha256:e12115037167d8be42101af99d189624fb1e07e4efa73e9d15552be56f6d5348 \
+    --hash=sha256:f0b13d1112748dfe0ddd206af32c4ec7fe5e0b9a2224de723fea63f225cffe42 \
+    --hash=sha256:f1c7e3115c51a652bea99ade840550cf2a926ab168ef113a56a8349acaec7db4 \
+    --hash=sha256:f1e47580ebeaad740b05232f737cc9243f9580d7f307546c434d32a8c4af7bc9
+    # via -r scripts/requirements-ltx25-cuda.txt

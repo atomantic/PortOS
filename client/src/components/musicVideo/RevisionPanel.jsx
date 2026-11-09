@@ -48,12 +48,12 @@ export default function RevisionPanel({ project, busy, genScenes = {}, genVideoS
           <div className="flex items-center gap-2">
             {revision.status === 'open' && (
               <button type="button" disabled={busy} onClick={() => onResume(revision.id)}
-                className="flex items-center gap-1 text-port-accent disabled:opacity-50 min-h-[44px] sm:min-h-0">
+                className="flex items-center gap-1 text-port-accent disabled:opacity-50 min-h-[44px] pointer-fine:sm:min-h-0">
                 <Play size={12} /> {readyCount === rejected.length ? 'Render revised draft' : 'Resume'}
               </button>
             )}
             <button type="button" disabled={busy} onClick={() => onCancel(revision.id)}
-              className="flex items-center gap-1 text-port-error disabled:opacity-50 min-h-[44px] sm:min-h-0">
+              className="flex items-center gap-1 text-port-error disabled:opacity-50 min-h-[44px] pointer-fine:sm:min-h-0">
               <X size={12} /> Cancel revision
             </button>
           </div>

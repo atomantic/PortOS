@@ -4,6 +4,9 @@ import { pipeline } from 'node:stream/promises';
 import { Readable, Transform } from 'node:stream';
 
 import { createUsageSniffer } from '../lib/fleetHostUsage.js';
+import { createStallDetector, readVllmProgress } from './fleetLlmStallWatch.js';
+
+const STALL_MESSAGE = 'Model runtime is not generating. The host is restarting it.';
 
 /**
  * The generation a job asked for, read from the request body it already holds.
@@ -33,11 +36,27 @@ function requestedModel(body) {
 // where their GPU went needs to see. Discovery calls (`GET /v1/models`) are NOT
 // recorded as generations: every connected client polls that on a timer, and
 // counting them would bury the real traffic.
-export function createFleetLlmGateway({ upstream, apiKey, usage = null, onRecorded = () => {}, onChanged = () => {}, maxQueued = 16, maxBodyBytes = 2 * 1024 ** 2, waitMs = 120000, runMs = 600000 }) {
+//
+// Stall watchdog: while a job is admitted, the private runtime's own progress
+// counters are polled every `stallPollMs` (nothing is called while idle). A
+// running request whose token totals do not move for `stalledAfterMs` marks the
+// engine `stalled`: the active job is aborted, waiting jobs and new arrivals get
+// an immediate 503, and `restartRuntime` (optional) runs at most once per
+// `restartCooldownMs`. `readProgress` and `now` are injectable for tests;
+// `stallPollMs: 0` disables the timer, leaving `pollStall()` to be driven by hand.
+export function createFleetLlmGateway({
+  upstream, apiKey, usage = null, onRecorded = () => {}, onChanged = () => {}, maxQueued = 16, maxBodyBytes = 2 * 1024 ** 2, waitMs = 120000, runMs = 600000,
+  stallPollMs = 15000, stalledAfterMs = 120000, restartCooldownMs = 600000, now = Date.now, readProgress = null, restartRuntime = null,
+}) {
   const pending = [];
   let active = null;
   let closing = false;
   let discovery = null;
+  const detector = createStallDetector({ stalledAfterMs, now });
+  const stalled = () => detector.stalledSince() !== null;
+  let watchTimer = null;
+  let polling = false;
+  let lastRestartAt = null;
   // Coalesce discovery independently: a long generation must not make clients
   // mark a healthy provider offline just because /models waits for its slot.
   const models = () => {
@@ -71,11 +90,12 @@ export function createFleetLlmGateway({ upstream, apiKey, usage = null, onRecord
     onRecorded();
   };
   const pump = () => {
-    if (active || closing || !pending[0]?.ready) return;
+    if (active || closing || stalled() || !pending[0]?.ready) return;
     const job = pending.shift();
     if (!job) return;
     active = job;
     onChanged();
+    armWatch();
     clearTimeout(job.waitTimer);
     job.runTimer = setTimeout(() => job.controller.abort(), runMs);
     execute(job).catch(() => reply(job.res, 502, 'Model connection failed or exceeded its time limit.'))
@@ -86,6 +106,60 @@ export function createFleetLlmGateway({ upstream, apiKey, usage = null, onRecord
         onChanged();
         pump();
       });
+  };
+  const armWatch = () => {
+    if (watchTimer || stallPollMs <= 0 || closing) return;
+    watchTimer = setInterval(() => { void pollStall(); }, stallPollMs);
+    watchTimer.unref?.();
+  };
+  const disarmWatch = () => { clearInterval(watchTimer); watchTimer = null; };
+  const restartOnce = () => {
+    if (!restartRuntime) return;
+    if (lastRestartAt !== null && now() - lastRestartAt < restartCooldownMs) {
+      console.log('⏭️ Fleet host runtime stalled again inside the restart cooldown; leaving it surfaced without restarting');
+      return;
+    }
+    lastRestartAt = now();
+    Promise.resolve().then(restartRuntime)
+      .then(() => console.log('🔄 Fleet host runtime restart requested'))
+      .catch((err) => console.error(`❌ Fleet host runtime restart failed: ${String(err?.message ?? err).split('\n')[0].slice(0, 200)}`));
+  };
+  const enterStall = () => {
+    console.error('❌ Fleet host runtime stalled: a request is running but no tokens have moved');
+    for (const job of pending.splice(0)) {
+      clearTimeout(job.waitTimer);
+      job.status = 503;
+      reply(job.res, 503, STALL_MESSAGE);
+      job.controller.abort();
+      settle(job, 503);
+    }
+    // The active job's own run path closes its ledger entry and answers its client 502.
+    active?.controller.abort();
+    onChanged();
+    restartOnce();
+  };
+  // One watchdog tick. A sample read while a different job took the slot is
+  // discarded, since the counters would be attributed to the wrong request.
+  const pollStall = async () => {
+    if (polling) return;
+    polling = true;
+    try {
+      if (closing || (!active && !stalled())) { detector.idle(); disarmWatch(); return; }
+      const job = active;
+      const progress = await (readProgress ? readProgress() : readVllmProgress({ upstream, apiKey })).catch(() => null);
+      if (closing || (!stalled() && active !== job)) return;
+      const transition = detector.sample(progress, job);
+      if (transition === 'stalled') enterStall();
+      else if (transition === 'cleared') {
+        console.log('✅ Fleet host runtime is generating again');
+        onChanged();
+        pump();
+      }
+    } catch (err) {
+      console.error(`❌ Fleet host stall check failed: ${String(err?.message ?? err).split('\n')[0].slice(0, 200)}`);
+    } finally {
+      polling = false;
+    }
   };
   const execute = async (job) => {
     const response = await fetch(`${upstream}${job.path}`, {
@@ -105,13 +179,15 @@ export function createFleetLlmGateway({ upstream, apiKey, usage = null, onRecord
     // A pass-through tap rather than a tee: the client's stream stays the
     // pipeline's only consumer (so backpressure and cancellation behave exactly
     // as before) and the sniffer just watches the bytes go past, holding a
-    // bounded tail of them to read the final `usage` frame out of.
-    const source = job.sniffer
-      ? Readable.fromWeb(response.body).pipe(new Transform({
-        transform(chunk, _enc, done) { job.sniffer.push(chunk); done(null, chunk); },
-      }))
-      : Readable.fromWeb(response.body);
-    await pipeline(source, job.res, { signal: job.controller.signal });
+    // bounded tail of them to read the final `usage` frame out of. The tap is a
+    // pipeline stage, never `.pipe()`d: `.pipe()` does not forward errors, so the
+    // AbortError a client hang-up raises on the body escaped as an uncaught
+    // 'error' and crashed the host.
+    const stages = [Readable.fromWeb(response.body)];
+    if (job.sniffer) stages.push(new Transform({
+      transform(chunk, _enc, done) { job.sniffer.push(chunk); done(null, chunk); },
+    }));
+    await pipeline(...stages, job.res, { signal: job.controller.signal });
   };
   const handle = async (req, res) => {
     if (!authenticated(req.headers.authorization)) return reply(res, 401, 'A valid model host API key is required.');
@@ -126,6 +202,7 @@ export function createFleetLlmGateway({ upstream, apiKey, usage = null, onRecord
     if (!((req.method === 'GET' && path === '/v1/models') || (req.method === 'POST' && path === '/v1/chat/completions'))) {
       return reply(res, 404, 'Use /v1/models or /v1/chat/completions.');
     }
+    if (stalled()) return reply(res, 503, STALL_MESSAGE);
     if (closing || pending.length >= maxQueued) return reply(res, 429, 'Model host queue is full. Retry later.');
     const job = { req, res, path, controller: new AbortController() };
     if (usage) {
@@ -168,9 +245,14 @@ export function createFleetLlmGateway({ upstream, apiKey, usage = null, onRecord
   server.requestTimeout = waitMs;
   return {
     server,
-    status: () => ({ active: active ? 1 : 0, queued: pending.length, maxActive: 1, maxQueued }),
+    pollStall,
+    status: () => ({
+      active: active ? 1 : 0, queued: pending.length, maxActive: 1, maxQueued,
+      stalled: stalled(), stalledSince: stalled() ? new Date(detector.stalledSince()).toISOString() : null,
+    }),
     close: async () => {
       closing = true;
+      disarmWatch();
       for (const job of [...pending, ...(active ? [active] : [])]) {
         clearTimeout(job.waitTimer);
         job.controller.abort();

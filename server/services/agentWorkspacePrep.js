@@ -17,7 +17,8 @@ import { isPrivateSecurityTask } from '../lib/privateSecurityPolicy.js';
  * must finish are returned as a discriminated result so the caller can fire
  * `cleanupOnError` + the matching `agent:deferred` / `agent:error` event:
  *
- *   { outcome: 'ready', workspacePath, resolvedApp, resolvedAppName, worktreeInfo, jiraTicket, jiraBranchName, explicitWorktree }
+ *   { outcome: 'ready', workspacePath, resolvedApp, resolvedAppName, worktreeInfo, jiraTicket, jiraBranchName, explicitWorktree, claimCheckout }
+ *     (`claimCheckout` names the `claim/issue-<n>` checkout PortOS cut for a pinned forge claim; worktreeInfo stays null)
  *   { outcome: 'deferred', reason, deferReason, branch }   // git conflict — task paused on a `git-conflict-wait` cooldown
  *   { outcome: 'blocked', reason }                          // explicit worktree requested but creation failed
  *                                                           // (`worktree-busy` blocks are a TIMED pause and revive themselves)
@@ -47,6 +48,7 @@ import { INVESTIGATION_TASK_DELIVERY, isInvestigationTask } from '../lib/investi
 import { isNonCommittingCoordinatorTask, resolveTaskHookType } from './taskTypeHooks.js';
 import { prHeldForOperator, resolvePrCompletion } from '../lib/prDisposition.js';
 import { claimBranchAdmission, claimContinuationAdmission, claimContinuationWorkspace } from '../lib/claimContinuation.js';
+import { provisionClaimCheckout, serverClaimCheckoutBranch } from './claimCheckoutProvision.js';
 
 const ROOT_DIR = PATHS.root;
 
@@ -868,12 +870,12 @@ async function prepareResolvedWorkspace({ agentId, task, workspacePath: sourceWo
   // abandons the work the pointer was recorded to save.
   const existingBranch = resolveTaskTargetBranch(task.metadata);
   const wantsWorktree = explicitWorktree || !!existingBranch;
-  const ready = ({ workspacePath, worktreeInfo, jiraTicket = null, jiraBranchName = null }) => {
+  const ready = ({ workspacePath, worktreeInfo, jiraTicket = null, jiraBranchName = null, claimCheckout = null }) => {
     // Announce the FINAL cwd, after any worktree reassignment, so the task log
     // names the directory the agent actually runs in rather than the repo it was
     // cut from (#3180).
     emitLog('info', `📂 Agent workspace: ${workspacePath}`, { taskId: task.id, workspace: workspacePath });
-    return { outcome: 'ready', workspacePath, resolvedApp, resolvedAppName, worktreeInfo, jiraTicket, jiraBranchName, explicitWorktree };
+    return { outcome: 'ready', workspacePath, resolvedApp, resolvedAppName, worktreeInfo, jiraTicket, jiraBranchName, explicitWorktree, claimCheckout };
   };
 
   // A checked-out claim branch skips every later provisioner so it cannot fall
@@ -881,6 +883,24 @@ async function prepareResolvedWorkspace({ agentId, task, workspacePath: sourceWo
   const claim = remediationPin === null ? await admitClaimWorkspace({ task, agentId, workspacePath: sourceWorkspace }) : null;
   if (claim?.outcome) return claim;
   if (claim) return ready(claim);
+
+  // A pinned forge claim whose prompt omits the checkout phase. Refusing is the
+  // only safe answer when the checkout cannot be cut: the prompt tells the agent
+  // it is already standing in it.
+  const serverClaimBranch = remediationPin === null ? serverClaimCheckoutBranch(task) : null;
+  if (serverClaimBranch) {
+    const provisioned = await provisionClaimCheckout({ app: resolvedApp, sourceWorkspace, branch: serverClaimBranch });
+    if (provisioned.refused) {
+      const reason = `PortOS could not create the claim checkout for ${serverClaimBranch}: ${provisioned.refused}. Nothing was claimed. If another run owns that branch, let it finish; otherwise remove the stale branch or directory and re-run this task.`;
+      emitLog('warn', `🌳 ${reason}`, { taskId: task.id, branch: serverClaimBranch });
+      await blockTask(task, reason, 'worktree-failed');
+      return { outcome: 'blocked', reason };
+    }
+    emitLog('info', `🌳 Agent ${agentId} claim checkout ${serverClaimBranch} provisioned at ${provisioned.claimCheckout.worktreePath}`, {
+      agentId, taskId: task.id, branchName: serverClaimBranch, worktreePath: provisioned.claimCheckout.worktreePath,
+    });
+    return ready({ workspacePath: provisioned.claimCheckout.worktreePath, worktreeInfo: null, claimCheckout: provisioned.claimCheckout });
+  }
 
   let jira = { jiraTicket: null, jiraBranchName: null };
   let featureCheckout = null;

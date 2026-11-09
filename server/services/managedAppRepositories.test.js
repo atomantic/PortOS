@@ -10,6 +10,7 @@ const mock = vi.hoisted(() => ({
   resolveForgeForRepo: vi.fn(),
   execGh: vi.fn(),
   inspectPinnedSubmoduleDrift: vi.fn(),
+  runningNames: vi.fn(),
 }));
 
 vi.mock('../lib/fileUtils.js', async (importOriginal) => ({
@@ -28,6 +29,7 @@ vi.mock('./git.js', () => ({
   resolveForgeForRepo: mock.resolveForgeForRepo,
 }));
 vi.mock('./github.js', () => ({ execGh: mock.execGh }));
+vi.mock('./pm2.js', () => ({ getProcessesToRestartOnUpdate: mock.runningNames }));
 vi.mock('./gitPinnedSubmodules.js', () => ({ inspectPinnedSubmoduleDrift: mock.inspectPinnedSubmoduleDrift }));
 
 import {
@@ -56,6 +58,7 @@ describe('managed app repository topology', () => {
     vi.clearAllMocks();
     mock.inspectPinnedSubmoduleDrift.mockResolvedValue({ repairablePaths: [], onlyRepairable: false });
     mock.pathExists.mockResolvedValue(true);
+    mock.runningNames.mockImplementation(async (names) => names);
     mock.getOriginInfo.mockResolvedValue(forkOrigin);
     mock.readRemoteUrl.mockResolvedValue(null);
     mock.fetchOrigin.mockResolvedValue(true);
@@ -107,6 +110,12 @@ describe('managed app repository topology', () => {
       60000,
       expect.objectContaining({ cwd: REPO }),
     );
+  });
+
+  it('only promises a restart when one of the app\'s processes is running', async () => {
+    expect((await getManagedAppRepositorySources(app)).updateRestartsApp).toBe(true);
+    mock.runningNames.mockResolvedValueOnce([]);
+    expect((await getManagedAppRepositorySources(app)).updateRestartsApp).toBe(false);
   });
 
   it('reports sanitized source state and defaults issue filing to upstream', async () => {

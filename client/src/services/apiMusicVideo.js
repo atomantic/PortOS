@@ -53,7 +53,7 @@ export const proposeMusicVideoStory = (id, body, options = {}) => request(`/musi
 export const proposeMusicVideoShotSheet = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/shot-sheet/propose`, {
   method: 'POST', body: JSON.stringify(body), ...options,
 });
-// A previz edit proposal (world, night, cuts, colors, camera styles); nothing is saved.
+// A previz edit proposal (world, timeline, vehicles, cuts, colors, camera styles); nothing is saved.
 export const proposeMusicVideoPrevizEdit = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/previz/propose`, {
   method: 'POST', body: JSON.stringify(body), ...options,
 });
@@ -95,6 +95,16 @@ export const analyzeMusicVideoProject = (id, options = {}) => request(`/music-vi
 // project with the same audioAnalysis shape the auto path produces.
 export const setMusicVideoManualTempo = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/analyze/manual`, {
   method: 'POST', body: JSON.stringify(body), ...options,
+});
+
+// Director's edit of the song map: a gapless {label,startSec,endSec}[] tiling the song.
+export const setMusicVideoSections = (id, sections, options = {}) => request(`/music-video/${encodeURIComponent(id)}/analyze/sections`, {
+  method: 'PATCH', body: JSON.stringify({ sections }), ...options,
+});
+
+// Re-cut the song map at the aligned lyric sheet's section boundaries.
+export const setMusicVideoSectionsFromLyrics = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/analyze/sections/lyrics`, {
+  method: 'POST', ...options,
 });
 
 // Autonomous shot planner (#1855, multi-shot #8964): tile each analyzed
@@ -292,6 +302,10 @@ export const reviewMusicVideoSceneTake = (id, sceneId, takeId, review, options =
   request(`${takesPath(id, sceneId)}/${encodeURIComponent(takeId)}`, {
     method: 'PATCH', body: JSON.stringify(review), ...options,
   });
+
+// A vision model checks one frame take against its shot → the scene.
+export const checkMusicVideoSceneTake = (id, sceneId, takeId, options = {}) =>
+  request(`${takesPath(id, sceneId)}/${encodeURIComponent(takeId)}/check`, { method: 'POST', ...options });
 
 // ---- External-asset handoff (#8965) ----
 // Export the per-scene prompt/reference manifest for a tool PortOS doesn't
@@ -661,6 +675,10 @@ export const discardMusicVideoCastAndSetsImageEdit = (id, body, options = {}) =>
 // (a list item is patched by id, a test by 1-based index; `remove: true` drops it).
 export const editMusicVideoCastAndSetsDirection = (id, body, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/direction`, { method: 'PATCH', body: JSON.stringify(body), ...options });
+// Text-only edit of a catalog check-in's stored direction; renders nothing.
+// Body: { look?, protagonist?: { signature?, rules?, expressions? }, props?, overlayConcept?: { summary?, elements? } }.
+export const editMusicVideoCastAndSetsDirectionText = (id, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/direction-text`, { method: 'PATCH', body: JSON.stringify(body), ...options });
 // Body: { text, target? } — plain-text feedback on the sheet. No target = the whole
 // sheet (standing feedback the direction keeps honoring); a target names one image.
 export const applyMusicVideoCastAndSetsFeedback = (id, body, options = {}) =>

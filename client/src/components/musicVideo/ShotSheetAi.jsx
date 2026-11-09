@@ -5,7 +5,7 @@ import useProviderModels from '../../hooks/useProviderModels.js';
 import { proposeMusicVideoShotSheet } from '../../services/apiMusicVideo.js';
 import { SHOT_SHEET_PROPOSE_BATCH, mergeShotSheetBackfill, normalizeShotSheet, shotSheetDrivesPrompt } from '../../../../server/lib/musicVideoShotSheet.js';
 
-const button = 'min-h-[44px] rounded border border-port-border px-2 py-1 text-xs disabled:opacity-50 sm:min-h-0';
+const button = 'min-h-[44px] rounded border border-port-border px-2 py-1 text-xs disabled:opacity-50 pointer-fine:sm:min-h-0';
 const input = 'w-full min-w-0 rounded border border-port-border bg-port-bg px-1.5 py-1 text-xs';
 const FIELD_LABELS = { cameraId: 'Camera', holder: 'Held by', view: 'View', location: 'Location', timeOfDay: 'Time of day', light: 'Light', characters: 'Who', action: 'Action', emotion: 'Emotion', notes: 'Notes' };
 
@@ -44,7 +44,7 @@ function SplitReview({ item, scene, cameras, disabled, onEdit }) {
 /** One proposed rewrite: current text beside an editable proposal, so the director has the last word. */
 function PromptReview({ item, scene, disabled, onEdit }) {
   return ['framePrompt', 'prompt'].filter((field) => item.proposed[field] !== undefined).map((field) => {
-    const name = field === 'prompt' ? 'Motion prompt' : 'Frame prompt';
+    const name = field === 'prompt' ? 'Clip prompt' : 'Frame prompt';
     return (
       <div key={field} className="grid min-w-0 gap-2 text-xs sm:grid-cols-2">
         <div className="min-w-0"><p className="font-medium">{name} now</p><p className="max-h-48 overflow-y-auto whitespace-pre-wrap break-words text-port-text-muted">{scene?.[field] || 'None'}</p></div>
@@ -59,7 +59,8 @@ function PromptReview({ item, scene, disabled, onEdit }) {
 /**
  * AI help for the shot sheet, only on request: fill a shot's empty columns from
  * its existing prompts, write its prompts from the sheet you edited, or split a
- * long frame prompt into columns and a general prompt so the still is built from the sheet. Works on the shots currently listed. Every result is a proposal you
+ * long frame prompt into columns and a general prompt so the still is built from the sheet, or
+ * tighten long frame and clip prompts that say things twice. Works on the shots currently listed. Every result is a proposal you
  * review, edit and select; nothing is saved until Apply, and Done is yours alone.
  */
 export default function ShotSheetAi({ project, rows, disabled, onApply, onApplyingChange }) {
@@ -84,7 +85,9 @@ export default function ShotSheetAi({ project, rows, disabled, onApply, onApplyi
   const promptRows = rows.filter((row) => row.sheet.checked);
   // Shots still rendering from a hand-written frame prompt, which a split moves onto their sheet.
   const splitRows = rows.filter((row) => !shotSheetDrivesPrompt(row.scene) && row.scene.framePrompt?.trim());
-  const targets = (direction) => (direction === 'split' ? splitRows : direction === 'from-prompts' ? backfillRows : promptRows);
+  // Any listed shot can be tightened: its prompt may be long whether or not its sheet is done.
+  const tightenRows = rows.filter((row) => row.scene.prompt?.trim() || row.scene.framePrompt?.trim());
+  const targets = (direction) => ({ split: splitRows, 'from-prompts': backfillRows, tighten: tightenRows }[direction] || promptRows);
 
   const request = (direction, sceneIds, preview = false) => proposeMusicVideoShotSheet(project.id, {
     providerId: llm.selectedProviderId, model: llm.selectedModel || undefined, effort: effort || undefined, executionOptions,
@@ -178,9 +181,13 @@ export default function ShotSheetAi({ project, rows, disabled, onApply, onApplyi
         <button type="button" className={button} disabled={busy || disabled || noProvider || !splitRows.length} onClick={() => run('split')}>
           Split frame prompts into details ({splitRows.length})
         </button>
+        <button type="button" className={button} disabled={busy || disabled || noProvider || !tightenRows.length} onClick={() => run('tighten')}>
+          Tighten prompts ({tightenRows.length})
+        </button>
         <button type="button" className={button} disabled={busy || !backfillRows.length} onClick={() => preview('from-prompts')}>Preview fill prompt</button>
         <button type="button" className={button} disabled={busy || !splitRows.length} onClick={() => preview('split')}>Preview split prompt</button>
         <button type="button" className={button} disabled={busy || !promptRows.length} onClick={() => preview('to-prompts')}>Preview shot prompt</button>
+        <button type="button" className={button} disabled={busy || !tightenRows.length} onClick={() => preview('tighten')}>Preview tighten prompt</button>
         {busy && progress && (
           <>
             <span role="status" className="text-xs text-port-text-muted">{progress}</span>
@@ -199,7 +206,7 @@ export default function ShotSheetAi({ project, rows, disabled, onApply, onApplyi
           <ul className="min-w-0 space-y-2">
             {review.items.map((item) => (
               <li key={item.sceneId} className="min-w-0 space-y-1 rounded border border-port-border p-2">
-                <label className="flex min-h-[44px] items-center gap-1 text-xs font-medium sm:min-h-0">
+                <label className="flex min-h-[44px] items-center gap-1 text-xs font-medium pointer-fine:sm:min-h-0">
                   <input type="checkbox" aria-label={`Apply ${item.label}`} checked={item.selected} disabled={applying} onChange={(event) => change(item.sceneId, (current) => ({ ...current, selected: event.target.checked }))} /> {item.label}
                 </label>
                 {review.direction === 'split'

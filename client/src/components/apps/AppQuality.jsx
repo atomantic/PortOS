@@ -2,6 +2,7 @@ import AppQualityRunner from './AppQualityRunner';
 import AppQualityHistory from './AppQualityHistory';
 import AppLaneHealth from './AppLaneHealth';
 import AppQualityScheduleForm from './AppQualityScheduleForm';
+import QualityPeerWarning, { instancePeerLink } from './QualityPeerWarning';
 import { useId, useState } from 'react';
 import { CalendarClock, Play } from 'lucide-react';
 import { Link, useSearchParams } from 'react-router';
@@ -134,9 +135,7 @@ export default function AppQuality({ app, detail = false }) {
           </Link>
           <OverflowMenu label="More quality actions" items={menuItems} />
         </div>
-        {(federation?.failed || federation?.unavailable > 0) && <p className="basis-full text-xs text-port-warning">
-          {federation.failed ? 'Peer quality could not be loaded; the score may be incomplete.' : `${pluralize(federation.unavailable, 'peer')} unavailable or incompatible; the score may be incomplete.`}
-        </p>}
+        <QualityPeerWarning federation={federation} subject="the score" className="basis-full" />
         {score == null && !quality?.unavailable && <p className="basis-full text-sm text-gray-400">
           {hasAssessments ? 'Saved assessments do not qualify for an overall score yet. See the breakdown for coverage, confidence and age.' : 'No audit assessment saved yet. Run checks to collect one.'}
         </p>}
@@ -202,7 +201,7 @@ function CategoryRow({ category, below, runLink }) {
   const menuItems = [
     { id: 'settings', label: 'Runner settings', to: `/cos/schedule?task=${encodeURIComponent(category.id)}` },
     ...(!category.sourcePeerId && category.agentId ? [{ id: 'run', label: 'View audit run', to: `/cos/agents/${category.agentId}` }] : []),
-    ...(category.sourcePeerId ? [{ id: 'instances', label: 'View instances', to: '/instances' }] : []),
+    ...(category.sourcePeerId ? [{ id: 'instances', label: 'View instances', to: instancePeerLink(category.sourcePeerId) }] : []),
   ];
   const inapplicable = category.applicable === false;
   const evidence = inapplicable ? <>Not applicable · {category.inapplicableReason}</> : <>
@@ -236,7 +235,7 @@ function CategoryRow({ category, below, runLink }) {
       <td className="col-span-1 sm:table-cell sm:py-1.5 sm:px-2">
         <div className="flex items-center justify-end gap-1">
           <Link to={runLink} aria-label={`Run ${category.label} check`} title="Run this check"
-            className="inline-flex min-h-[44px] min-w-[44px] sm:min-h-0 sm:min-w-0 items-center justify-center rounded border border-port-accent/60 bg-port-accent/10 p-1.5 text-port-accent hover:bg-port-accent/25">
+            className="inline-flex min-h-[44px] min-w-[44px] pointer-fine:sm:min-h-0 pointer-fine:sm:min-w-0 items-center justify-center rounded border border-port-accent/60 bg-port-accent/10 p-1.5 text-port-accent hover:bg-port-accent/25">
             <Play size={12} aria-hidden="true" />
           </Link>
           <OverflowMenu label={`${category.label} actions`} items={menuItems} />

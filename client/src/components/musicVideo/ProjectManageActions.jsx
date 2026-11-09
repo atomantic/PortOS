@@ -1,7 +1,7 @@
 import { Clapperboard, Copy, Trash2 } from 'lucide-react';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 
-const buttonCls = 'flex min-h-[44px] items-center gap-1 rounded border border-port-border bg-port-bg px-2.5 py-1.5 text-sm disabled:opacity-50 sm:min-h-0';
+const buttonCls = 'flex min-h-[44px] items-center gap-1 rounded border border-port-border bg-port-bg px-2.5 py-1.5 text-sm disabled:opacity-50 pointer-fine:sm:min-h-0';
 
 /**
  * The project's fork and delete controls, in Project settings › Project so the

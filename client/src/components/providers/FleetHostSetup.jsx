@@ -17,7 +17,7 @@ const readHost = ({ reconcile, signal }) => getFleetLlmHost({ silent: true, refr
 const readPeerHosts = () => getFleetPeerHosts({ silent: true });
 
 // A self-host provider (the auto-created Direct API one from `configure()` in
-// server/services/fleetLlmHost.js, and the OpenCode one from `?selfHost=1`)
+// server/services/fleetLlmHost.js, and the Pi/OpenCode one from `?selfHost=1`)
 // is always wired to the loopback queue address, never `status.endpoint` (the
 // tailnet-facing address published for OTHER machines to connect to) — dedupe
 // against the address these providers actually use, or the "add a provider"
@@ -56,9 +56,9 @@ export default function FleetHostSetup({ compact = false, providers = [], onConf
   }, [compact, peerHosts, providers]);
 
   // Host setup only ever creates a Direct API provider on the host itself
-  // (fleetLlmHost.js `configure()`), never an OpenCode TUI one — and the
+  // (fleetLlmHost.js `configure()`), never a coding-agent one — and the
   // peer-discovery cards above only ever surface OTHER instances, so a host
-  // machine that wants to also run OpenCode TUI against its own queue had no
+  // machine that wants to also run Pi or OpenCode against its own queue had no
   // discoverable path to it. Reuse the same dedupe the peer cards use, keyed
   // on the loopback address self-host providers are actually wired to.
   const selfNeedsProvider = useMemo(
@@ -106,7 +106,7 @@ export default function FleetHostSetup({ compact = false, providers = [], onConf
               ariaLabel="This machine's model host"
               headline="This machine is serving its own model host — add a provider for it?"
               badge={`${status.serving ? 'Serving' : 'Enabled'} · ${status.model || 'Qwen3.8-27B'}`}
-              description="Host setup already created a Direct API provider. Add OpenCode TUI (or another one) on this same machine to use it for coding agents too."
+              description="Host setup already created a Direct API provider. Add Pi or OpenCode TUI on this same machine to use it for coding agents too."
               href="/ai/fleet?fleetStep=client&selfHost=1"
               actionClass={actionClass}
             />
@@ -171,7 +171,7 @@ export default function FleetHostSetup({ compact = false, providers = [], onConf
           </ul>
           {status.recommendation.supported && (
             <section className="rounded-lg border border-port-border p-3 space-y-3 text-sm">
-              <p>Reserve this GPU for Qwen. Setup reuses prepared weights, fills in missing runtime settings, keeps the container loaded, and creates a Direct API provider on this machine (not an OpenCode TUI one — add that separately below if you want coding agents on this same machine). A new install can download about 30 GB.</p>
+              <p>Reserve this GPU for Qwen. Setup reuses prepared weights, fills in missing runtime settings, keeps the container loaded, and creates a Direct API provider on this machine (not a coding-agent one — add Pi or OpenCode TUI separately below if you want coding agents on this same machine). A new install can download about 30 GB.</p>
               <p className="text-xs text-gray-400">One active generation across all clients; up to 16 requests wait for at most two minutes. Disconnecting cancels the request. Requests are held in memory and are not replayed after a restart. Other GPU models must be unloaded first. Setup disables competing local providers so they do not reload automatically.</p>
               <button type="button" disabled={installing || status.setupRunning} onClick={() => setInstalling(true)} className={actionClass}>
                 {status.serving ? 'Reapply recommended host setup' : 'Set up dedicated host · download if needed'}
@@ -183,6 +183,7 @@ export default function FleetHostSetup({ compact = false, providers = [], onConf
             <Banner tone={status.serving ? 'success' : 'warning'}>
               {status.serving ? 'Ready for client connections.' : 'Configured; model is loading or unavailable. Refresh until all checks pass.'}
               <p className="mt-1 text-xs">{status.queue.active} generating · {status.queue.queued} queued · limit {status.queue.maxActive} active / {status.queue.maxQueued} waiting</p>
+              {status.queue.stalled && <p className="mt-1 text-xs text-port-warning">The model runtime stopped generating, so new requests are refused while the host restarts it. If this stays, restart the runtime container manually.</p>}
             </Banner>
           )}
           {/* Offered whenever there is anything to turn off — a listening
@@ -217,18 +218,23 @@ export default function FleetHostSetup({ compact = false, providers = [], onConf
             <section className="space-y-2 text-sm">
               <h3 className="font-medium">Use this host from this same machine</h3>
               <p className="text-xs text-gray-400">
-                The Direct API provider above was created automatically. To also run OpenCode coding agents against this queue on this machine, add that provider explicitly — its endpoint and key are filled in for you.
+                The Direct API provider above was created automatically. To also run coding agents against this queue on this machine, add a Pi (recommended) or OpenCode TUI provider — its endpoint and key are filled in for you.
               </p>
-              <Link to="/ai/fleet?fleetStep=client&selfHost=1" className={actionClass}>
-                Set up OpenCode TUI on this machine
-              </Link>
+              <div className="flex flex-wrap gap-2 items-center">
+                <Link to="/ai/fleet?fleetStep=client&selfHost=1&harness=pi" className={actionClass}>
+                  Set up Pi on this machine
+                </Link>
+                <Link to="/ai/fleet?fleetStep=client&selfHost=1&harness=opencode" className="min-h-[40px] px-3 py-2 text-sm text-port-accent">
+                  Set up OpenCode TUI on this machine
+                </Link>
+              </div>
             </section>
           )}
           <section className="space-y-3 text-sm">
             <h3 className="font-medium">Connect another PortOS instance</h3>
             <ol className="list-decimal pl-5 space-y-2">
               <li>On the other instance, open <strong>AI Providers → Model host setup → Connect client</strong>.</li>
-              <li>Use the queued API endpoint below and the host key. Choose <strong>Direct API</strong> for text calls or <strong>OpenCode TUI</strong> for coding agents. The coding tools run on that client.</li>
+              <li>Use the queued API endpoint below and the host key. Choose <strong>Direct API</strong> for text calls or <strong>Pi</strong> (or <strong>OpenCode TUI</strong>) for coding agents. The coding tools run on that client.</li>
               <li>Refresh models, then test a small request before assigning agent tasks.</li>
             </ol>
             {status.endpoint ? (

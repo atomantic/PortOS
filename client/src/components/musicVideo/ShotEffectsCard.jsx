@@ -43,7 +43,7 @@ export default function ShotEffectsCard({ counts, selected = null, onSelect }) {
   const top = used.slice(0, 3).map((row) => `${row.label} ${formatCount(row.total)}`).join(' · ');
   return (
     <details className="rounded-lg border border-port-border bg-port-card" open={!!selected || undefined}>
-      <summary className="flex min-h-[44px] cursor-pointer flex-wrap items-center gap-x-2 px-3 py-2 text-sm sm:min-h-0">
+      <summary className="flex min-h-[44px] cursor-pointer flex-wrap items-center gap-x-2 px-3 py-2 text-sm pointer-fine:sm:min-h-0">
         <span className="font-medium">Effects</span>
         <span className="min-w-0 truncate text-xs text-port-text-muted">{used.length ? top : 'None set yet'}</span>
       </summary>
@@ -61,7 +61,7 @@ export default function ShotEffectsCard({ counts, selected = null, onSelect }) {
               <th scope="row" className="px-1 py-0 text-left font-normal">
                 <button type="button" onClick={() => onSelect?.(row.id === selected ? null : row.id)} disabled={!row.total}
                   aria-pressed={row.id === selected} aria-label={row.total ? `Show shots with ${row.label}` : `${row.label}: not used`}
-                  className="min-h-[44px] w-full truncate rounded px-2 text-left hover:bg-port-border/40 disabled:hover:bg-transparent sm:min-h-[28px]">
+                  className="min-h-[44px] w-full truncate rounded px-2 text-left hover:bg-port-border/40 disabled:hover:bg-transparent pointer-fine:sm:min-h-[28px]">
                   {row.label}
                 </button>
               </th>

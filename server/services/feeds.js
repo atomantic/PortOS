@@ -23,7 +23,7 @@ const store = createCachedStore(FEEDS_FILE, DEFAULT_DATA, { context: 'feeds' });
 
 // Compare items newest-first by pubDate (or fetchedAt fallback). Both writes
 // and the legacy normalization pass use this so getItems can skip the sort.
-const itemSortKey = (item) => Date.parse(item.pubDate || item.fetchedAt) || 0;
+const itemSortKey = (item) => Date.parse(item.pubDate) || Date.parse(item.fetchedAt) || 0;
 const compareItemsNewestFirst = (a, b) => itemSortKey(b) - itemSortKey(a);
 
 // Drop items with no link, a link already in `seen`, or a link repeated within
@@ -121,14 +121,12 @@ const stripHtml = (html) => decodeXmlEntities(html.replace(/<[^>]+>/g, '')).trim
  * Parse RSS 2.0 feed XML into normalized items.
  */
 const parseRSS = (xml) => {
-  const channelMatch = xml.match(/<channel>([\s\S]*)<\/channel>/i);
-  if (!channelMatch) return { title: '', items: [] };
-  const channel = channelMatch[1];
+  // Channel only supplies the title; RSS 1.0 (RDF) puts <item> siblings after
+  // </channel>, so items are searched across the whole document.
+  const channelMatch = xml.match(/<channel\b[^>]*>([\s\S]*?)<\/channel>/i);
+  const feedTitle = extractTag(channelMatch ? channelMatch[1] : '', 'title');
 
-  const feedTitle = extractTag(channel, 'title');
-
-  // Split on <item> tags
-  const itemBlocks = channel.match(/<item>([\s\S]*?)<\/item>/gi) || [];
+  const itemBlocks = xml.match(/<item\b[^>]*>[\s\S]*?<\/item>/gi) || [];
   const items = itemBlocks.map(block => ({
     title: extractTag(block, 'title'),
     link: extractTag(block, 'link'),
@@ -162,8 +160,10 @@ const parseAtom = (xml) => {
  * Auto-detect feed format and parse.
  */
 const parseFeed = (xml) => {
-  if (/<feed[\s>]/i.test(xml)) return parseAtom(xml);
-  return parseRSS(xml);
+  if (/<feed[\s>]/i.test(xml)) return { format: 'atom', ...parseAtom(xml) };
+  if (/<rss[\s>]/i.test(xml)) return { format: 'rss', ...parseRSS(xml) };
+  if (/<rdf:RDF[\s>]/i.test(xml)) return { format: 'rdf', ...parseRSS(xml) };
+  return { format: null, title: '', items: [] };
 };
 
 // ─── Feed Management ────────────────────────────────────────────────────────
@@ -197,6 +197,7 @@ export async function addFeed(url) {
   }
 
   const parsed = parseFeed(xml);
+  if (!parsed.format) return { error: 'That URL is not an RSS or Atom feed' };
   const feed = {
     id: randomUUID(),
     url,
@@ -262,6 +263,7 @@ export async function refreshFeed(id) {
   if (!xml) return { error: 'Could not fetch feed' };
 
   const parsed = parseFeed(xml);
+  if (!parsed.format) return { error: 'Could not fetch feed' };
 
   let result = null;
   await store.mutate((data) => {
@@ -283,7 +285,9 @@ export async function refreshFeed(id) {
 async function fetchAndParseFeed(feed) {
   const xml = await fetchFeedXml(feed.url);
   if (!xml) return { feed, parsed: null, error: 'Could not fetch feed' };
-  return { feed, parsed: parseFeed(xml), error: null };
+  const parsed = parseFeed(xml);
+  if (!parsed.format) return { feed, parsed: null, error: 'Could not fetch feed' };
+  return { feed, parsed, error: null };
 }
 
 // Apply a parsed feed result to a loaded data object (no I/O — safe to call serially)

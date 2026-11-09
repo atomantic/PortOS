@@ -3,12 +3,12 @@ import { buildCastAndSetsImagePlan, castAndSetsReferences, castAndSetsSubjects, 
 
 const DIRECTION = {
   logline: 'Two teens ride all night.',
-  protagonist: { name: 'Renee', face: 'sunburned', hair: 'frizzy perm' },
+  protagonist: { name: 'Ada', face: 'sunburned', hair: 'frizzy perm' },
   looks: [{ name: 'TEE', description: 'lavender tee and cutoffs' }],
   sets: [{ id: 'street', name: 'Cul-de-sac', description: 'a curved street', lighting: 'golden hour' }],
   props: [
-    { id: 'camera', name: "Renee's camera", owner: 'Renee', description: 'matte black plastic 35mm snapshot camera on a wrist strap' },
-    { id: 'bmx', name: 'BMX', owner: 'Renee', description: 'chrome BMX with blue mag wheels' },
+    { id: 'camera', name: "Ada's camera", owner: 'Ada', description: 'matte black plastic 35mm snapshot camera on a wrist strap' },
+    { id: 'bmx', name: 'BMX', owner: 'Ada', description: 'chrome BMX with blue mag wheels' },
   ],
   songMap: [], tests: [],
 };
@@ -19,11 +19,11 @@ describe('Cast & Sets prop sheet', () => {
     const direction = { ...DIRECTION,
       protagonist: { ...DIRECTION.protagonist, signature,
         forms: [{ id: 'age-7', label: 'Age 7', age: '7', wardrobe: 'a plaid dress and a silver watch' }] },
-      cast: [{ id: 'kevin', name: 'Kevin', wardrobe: 'a denim jacket and a gold ring' }],
+      cast: [{ id: 'ben', name: 'Ben', wardrobe: 'a denim jacket and a gold ring' }],
     };
     for (const props of [direction.props, []]) {
       const plan = buildCastAndSetsImagePlan({ scenes: [] }, { ...direction, props });
-      for (const key of ['character', 'looks', 'form:age-7', 'cast:kevin']) {
+      for (const key of ['character', 'looks', 'form:age-7', 'cast:ben']) {
         expect(plan[key].prompt).toContain('Hands empty and relaxed, holding no device or carried object');
         expect(plan[key].prompt).toContain('Carried props are drawn on the prop sheet');
       }
@@ -33,7 +33,7 @@ describe('Cast & Sets prop sheet', () => {
       }
       expect(plan.character.prompt).toContain('lavender tee and cutoffs');
       expect(plan['form:age-7'].prompt).toContain('a plaid dress and a silver watch');
-      expect(plan['cast:kevin'].prompt).toContain('a denim jacket and a gold ring');
+      expect(plan['cast:ben'].prompt).toContain('a denim jacket and a gold ring');
       if (props.length) expect(plan.props.prompt).toContain(signature);
     }
     // The plan chooses fields for each sheet; it never edits the director's source text.
@@ -51,8 +51,8 @@ describe('Cast & Sets prop sheet', () => {
   it('plans one prop sheet naming every prop exactly, and none without props', () => {
     const plan = buildCastAndSetsImagePlan({ scenes: [] }, DIRECTION);
     expect(plan.props).toMatchObject({ kind: 'props', deps: [], refKeys: [] });
-    expect(plan.props.prompt).toContain("RENEE'S CAMERA (Renee): matte black plastic 35mm snapshot camera on a wrist strap");
-    expect(plan.props.prompt).toContain('BMX (Renee): chrome BMX with blue mag wheels');
+    expect(plan.props.prompt).toContain("ADA'S CAMERA (Ada): matte black plastic 35mm snapshot camera on a wrist strap");
+    expect(plan.props.prompt).toContain('BMX (Ada): chrome BMX with blue mag wheels');
     expect(plan.props.prompt).toMatch(/no brand names, logos or text/);
     expect(noteImageKeys('prop', plan)).toEqual(['props']);
     expect(buildCastAndSetsImagePlan({ scenes: [] }, { ...DIRECTION, props: [] }).props).toBeUndefined();
@@ -62,54 +62,54 @@ describe('Cast & Sets prop sheet', () => {
     const stage = { direction: DIRECTION, images: { character: { imageId: 'lead.png' }, props: { imageId: 'props.png' } } };
     const props = castAndSetsReferences({ visualSpec: { references: [] } }, stage).find((ref) => ref.id === 'mvr-cs-props');
     expect(props).toMatchObject({ imageId: 'props.png', role: 'prop', label: 'Props', condition: false });
-    expect(props.note).toContain("Renee's camera: matte black plastic 35mm snapshot camera");
+    expect(props.note).toContain("Ada's camera: matte black plastic 35mm snapshot camera");
     const objects = castAndSetsSubjects({ concept: { subjects: [] } }, stage).filter((s) => s.kind === 'object');
-    expect(objects.map((s) => s.name)).toEqual(["Renee's camera", 'BMX']);
+    expect(objects.map((s) => s.name)).toEqual(["Ada's camera", 'BMX']);
   });
 });
 
 describe('Cast & Sets face sheets', () => {
-  const WITH_CAST = { ...DIRECTION, cast: [{ id: 'kevin', name: 'Kevin', role: 'boyfriend', face: 'long narrow face, ears that stick out', hair: 'shaggy middle part' }] };
+  const WITH_CAST = { ...DIRECTION, cast: [{ id: 'ben', name: 'Ben', role: 'boyfriend', face: 'long narrow face, ears that stick out', hair: 'shaggy middle part' }] };
 
   it('opens every face sheet with the head angles and gives each cast member one built on their cast sheet', () => {
     const plan = buildCastAndSetsImagePlan({ scenes: [] }, WITH_CAST);
     expect(plan.expressions.label).toBe('Face sheet');
-    for (const key of ['expressions', 'face:kevin']) {
+    for (const key of ['expressions', 'face:ben']) {
       expect(plan[key].refTemplates).toEqual(['music-video-face-angles.png']);
       expect(plan[key].prompt).toContain('Reference image 1 is ONLY an angle/layout guide');
       expect(plan[key].prompt).toContain('LEFT faces image-left; RIGHT faces image-right');
       expect(plan[key].prompt).toContain('Never copy the template');
     }
     expect(plan.expressions.prompt).toContain('FRONT, 3/4 LEFT, PROFILE LEFT, 3/4 RIGHT, PROFILE RIGHT');
-    expect(plan['face:kevin']).toMatchObject({ kind: 'face', deps: ['cast:kevin'], refKeys: ['cast:kevin'], label: 'Kevin face sheet' });
-    expect(plan['face:kevin'].prompt).toContain('FRONT, 3/4 LEFT, PROFILE LEFT');
-    expect(plan['face:kevin'].prompt).toContain('nothing held in the hands');
+    expect(plan['face:ben']).toMatchObject({ kind: 'face', deps: ['cast:ben'], refKeys: ['cast:ben'], label: 'Ben face sheet' });
+    expect(plan['face:ben'].prompt).toContain('FRONT, 3/4 LEFT, PROFILE LEFT');
+    expect(plan['face:ben'].prompt).toContain('nothing held in the hands');
     // The labeled angle guide must not contradict the sheet's "no text" (#14795).
-    for (const key of ['expressions', 'face:kevin']) {
+    for (const key of ['expressions', 'face:ben']) {
       expect(plan[key].prompt).toContain('no text');
       expect(plan[key].prompt).toContain('Never copy the template\'s drawing style, grey skin, arrows or text labels');
     }
-    expect(noteImageKeys('kevin face sheet', plan)).toEqual(['face:kevin']);
+    expect(noteImageKeys('ben face sheet', plan)).toEqual(['face:ben']);
   });
 
   it('publishes each face sheet as an unconditioned reference with the face and hair note', () => {
-    const stage = { direction: { ...WITH_CAST, protagonist: { ...DIRECTION.protagonist, face: 'sunburned' } }, images: { character: { imageId: 'lead.png' }, expressions: { imageId: 'lead-face.png' }, 'cast:kevin': { imageId: 'kevin.png' }, 'face:kevin': { imageId: 'kevin-face.png' } } };
+    const stage = { direction: { ...WITH_CAST, protagonist: { ...DIRECTION.protagonist, face: 'sunburned' } }, images: { character: { imageId: 'lead.png' }, expressions: { imageId: 'lead-face.png' }, 'cast:ben': { imageId: 'ben.png' }, 'face:ben': { imageId: 'ben-face.png' } } };
     const refs = castAndSetsReferences({ visualSpec: { references: [] } }, stage);
-    expect(refs.find((ref) => ref.id === 'mvr-cs-face-kevin')).toMatchObject({ imageId: 'kevin-face.png', role: 'character', label: 'Kevin — face sheet', condition: false, note: 'long narrow face, ears that stick out; shaggy middle part' });
-    expect(refs.find((ref) => ref.id === 'mvr-cs-expressions')).toMatchObject({ label: 'Renee — face sheet', note: 'sunburned; frizzy perm' });
+    expect(refs.find((ref) => ref.id === 'mvr-cs-face-ben')).toMatchObject({ imageId: 'ben-face.png', role: 'character', label: 'Ben — face sheet', condition: false, note: 'long narrow face, ears that stick out; shaggy middle part' });
+    expect(refs.find((ref) => ref.id === 'mvr-cs-expressions')).toMatchObject({ label: 'Ada — face sheet', note: 'sunburned; frizzy perm' });
   });
 
   // A full reference list must not lose existing prop, wardrobe or protagonist sheets to the new cast faces.
   it('preserves existing reference types when cast face sheets exceed the list capacity', () => {
     const authored = Array.from({ length: 19 }, (_, i) => ({ id: `authored-${i}`, imageId: `authored-${i}.png`, condition: false }));
     const stage = { direction: WITH_CAST, images: {
-      character: { imageId: 'lead.png' }, 'cast:kevin': { imageId: 'kevin.png' }, 'face:kevin': { imageId: 'kevin-face.png' },
+      character: { imageId: 'lead.png' }, 'cast:ben': { imageId: 'ben.png' }, 'face:ben': { imageId: 'ben-face.png' },
       props: { imageId: 'props.png' }, looks: { imageId: 'looks.png' }, expressions: { imageId: 'lead-face.png' },
     } };
     const refs = castAndSetsReferences({ visualSpec: { references: authored } }, stage);
     expect(refs).toHaveLength(24);
     expect(refs.map((ref) => ref.id)).toEqual(expect.arrayContaining(['mvr-cs-props', 'mvr-cs-looks', 'mvr-cs-expressions']));
-    expect(refs.map((ref) => ref.id)).not.toContain('mvr-cs-face-kevin');
+    expect(refs.map((ref) => ref.id)).not.toContain('mvr-cs-face-ben');
   });
 });
 
@@ -140,15 +140,15 @@ describe('Cast & Sets set plates', () => {
 });
 
 describe('Cast & Sets test frames', () => {
-  const tests = [{ setId: 'street', look: 'TEE', action: 'Renee coasts past on her bike', caption: 'hands off' }];
+  const tests = [{ setId: 'street', look: 'TEE', action: 'Ada coasts past on her bike', caption: 'hands off' }];
 
   it('lets an in-set action use a signature prop without a sheet-only instruction', () => {
     const direction = { ...DIRECTION,
       protagonist: { ...DIRECTION.protagonist, signature: 'a black snapshot camera' },
-      tests: [{ setId: 'street', look: 'TEE', action: 'Renee holds the camera up to her eye', caption: 'the shutter clicks' }],
+      tests: [{ setId: 'street', look: 'TEE', action: 'Ada holds the camera up to her eye', caption: 'the shutter clicks' }],
     };
     const plan = buildCastAndSetsImagePlan({ scenes: [] }, direction);
-    expect(plan['test:1'].prompt).toContain('Renee holds the camera up to her eye');
+    expect(plan['test:1'].prompt).toContain('Ada holds the camera up to her eye');
     expect(plan['test:1'].prompt).not.toContain('carried objects belong on the prop sheet');
     const prior = buildCastAndSetsImagePlan({ scenes: [] }, { ...direction, protagonist: { ...direction.protagonist, signature: '' } });
     expect(plan['test:1'].prompt).toBe(prior['test:1'].prompt);

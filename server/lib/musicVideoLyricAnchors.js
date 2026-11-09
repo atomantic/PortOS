@@ -22,6 +22,12 @@ export function cuesSungWithin(cues, startSec, endSec) {
   });
 }
 
+/** The one singer of every voiced line in `[startSec, endSec)`, or null when none or several sing. */
+export function singerWithin(cues, startSec, endSec) {
+  const voices = new Set(cuesSungWithin(cues, startSec, endSec).map((cue) => cue.voice).filter(Boolean));
+  return voices.size === 1 ? [...voices][0] : null;
+}
+
 /** The sung lines shown on a shot, or null when its span contains no lyric. */
 export function sungLyricTextWithin(cues, startSec, endSec) {
   const sung = new Set(cuesSungWithin(cues, startSec, endSec));

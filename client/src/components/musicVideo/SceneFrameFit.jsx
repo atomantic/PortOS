@@ -24,7 +24,7 @@ export default function SceneFrameFit({ id, scene, clipSize, aspect = '16:9', on
     <span className="flex min-w-0 items-center gap-1">
       <label htmlFor={id} className="text-xs text-port-text-muted">{offShape ? `Not ${aspect}` : 'Frame'}</label>
       <select id={id} value={fit} disabled={disabled} onChange={(e) => onChange(e.target.value)}
-        className="min-w-0 max-w-full bg-port-bg border border-port-border rounded px-1 py-1 text-xs min-h-[44px] sm:min-h-0 disabled:opacity-50">
+        className="min-w-0 max-w-full bg-port-bg border border-port-border rounded px-1 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50">
         {MUSIC_VIDEO_FRAME_FITS.map((value) => <option key={value} value={value}>{FRAME_FIT_LABELS[value]}</option>)}
       </select>
     </span>

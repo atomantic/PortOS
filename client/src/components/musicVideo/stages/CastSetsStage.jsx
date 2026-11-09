@@ -6,6 +6,7 @@ import DevArtifactsPanel from '../DevArtifactsPanel.jsx';
 import StageSection from '../StageSection.jsx';
 import LookReferencesPanel from '../LookReferencesPanel.jsx';
 import CatalogLookReferences from '../CatalogLookReferences.jsx';
+import CatalogDirectionTextEditor from '../CatalogDirectionTextEditor.jsx';
 import VisualSpecPanel from '../VisualSpecPanel.jsx';
 import CameoRosterPanel from '../CameoRosterPanel.jsx';
 import { formatCount } from '../../../utils/formatters.js';
@@ -53,7 +54,7 @@ export default function CastSetsStage({ board }) {
     <div className="min-w-0 space-y-3">
       <p id="mv-setup-direction" className="px-1 text-xs text-port-text-muted" style={ANCHOR_STYLE}>
         Concept, song style and cast are on the{' '}
-        <button type="button" onClick={() => board.goToStage('story', 'mv-story-direction')} className="min-h-[44px] text-port-accent hover:underline sm:min-h-0">Story step</button>.
+        <button type="button" onClick={() => board.goToStage('story', 'mv-story-direction')} className="min-h-[44px] text-port-accent hover:underline pointer-fine:sm:min-h-0">Story step</button>.
       </p>
       <CatalogLookReferences key={`catalog-${project.id}`} project={project} onLinked={board.applyCastLinks}
         checkin={catalog.checkin} catalogOnly={catalogMode} disabled={catalogBusy}>
@@ -68,6 +69,7 @@ export default function CastSetsStage({ board }) {
               onClick={() => (project.castAndSets.status === 'approved' ? castSets.reconfirm : board.approveCastAndSets)(catalog.checkin.basis)}>Approve catalog Cast &amp; Sets</button>
             <button type="button" className="min-h-11 rounded border border-port-border px-3 text-sm disabled:opacity-50" disabled={catalogBusy || !catalog.checkin || catalog.checkin.problems.length > 0}
               onClick={() => castSets.rebuildCatalogGuide().then((res) => { if (res?.artifact) board.openArtifact(res.artifact.id); })}>Rebuild guide</button>
+            {project.castAndSets.direction && <CatalogDirectionTextEditor key={JSON.stringify(project.castAndSets.direction)} project={project} direction={project.castAndSets.direction} busy={catalogBusy} onSave={castSets.editDirectionText} />}
           </div>
         </div> : castSets.linkCatalog && <div className="space-y-1">
           <p className="text-xs text-port-text-muted">Switch this check-in to catalog links only. Generated sheets stay in history. Shots that picked one move to the same image in the catalog, and any shot the catalog cannot serve is listed here.</p>
@@ -125,7 +127,7 @@ export default function CastSetsStage({ board }) {
         <p id={CAST_CHECKIN_ANCHOR} tabIndex={-1} style={ANCHOR_STYLE} className="px-1 text-xs text-port-text-muted">
           Using your own sheets instead?{' '}
           <button type="button" onClick={() => castSets.skip()} disabled={locked || castSets.busy || kickoff.running}
-            className="min-h-[44px] text-port-accent hover:underline disabled:opacity-50 sm:min-h-0">
+            className="min-h-[44px] text-port-accent hover:underline disabled:opacity-50 pointer-fine:sm:min-h-0">
             Skip cast &amp; sets
           </button>
         </p>

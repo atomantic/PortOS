@@ -137,7 +137,7 @@ import {
   SHIPPED_CLAIM_IDLE_MS, STALE_CLAIM_IDLE_MS, SUPERSEDED_UNMANAGED_IDLE_MS,
   isMalformedClaimBranch,
   listRemoteHeads, upstreamBranchName, parseRemoteHeads, partitionRemoteOrphans, reapOrphanedRemotes,
-  reapSupersededBranches, buildActiveOwnerIds
+  reapSupersededBranches, buildActiveOwnerIds, readBranchUnshipped
 } from './branchReconcile.js';
 import * as git from './git.js';
 import * as wt from './worktreeManager.js';
@@ -734,6 +734,29 @@ describe('buildActiveOwnerIds', () => {
     expect(buildActiveOwnerIds(new Set(), null)).toBeNull();
     expect([...buildActiveOwnerIds(new Set(['agent-rt']), live)].sort()).toEqual(['agent-live', 'agent-rt', 'claim-x']);
     expect(buildActiveOwnerIds(new Set(), [])).toEqual(new Set());
+  });
+});
+
+// A review hold is released only on a definite "no open or closed-unmerged PR".
+describe('readBranchUnshipped', () => {
+  const read = () => readBranchUnshipped('/repo', 'cos/task-x/agent-1');
+  it('asks the forge for every PR at the exact head and never reports "unshipped" when it cannot answer', async () => {
+    execGh.mockResolvedValueOnce('[]');
+    expect(await read()).toBe(true);
+    expect(execGh.mock.lastCall[0]).toEqual(['pr', 'list', '--repo', 'github.com/atomantic/PortOS', '--state', 'all', '--head', 'cos/task-x/agent-1', '--json', 'state']);
+    expect(execGh.mock.lastCall[2]).toMatchObject({ env: PINNED_ENV });
+    execGh.mockResolvedValueOnce('[{"state":"MERGED"}]');
+    expect(await read()).toBe(true);
+    execGh.mockResolvedValueOnce('[{"state":"OPEN"}]');
+    expect(await read()).toBe(false);
+    execGh.mockResolvedValueOnce('[{"state":"MERGED"},{"state":"CLOSED"}]');
+    expect(await read()).toBe(false);
+    execGh.mockRejectedValueOnce(new Error('gh failed'));
+    expect(await read()).toBeNull();
+    execGh.mockResolvedValueOnce('not json');
+    expect(await read()).toBeNull();
+    getOriginInfo.mockResolvedValueOnce({ hasOrigin: true, isGithub: false, host: 'gitlab.example.com', fullName: 'o/r' });
+    expect(await read()).toBeNull();
   });
 });
 
@@ -2052,9 +2075,9 @@ describe('reconcile — cached SUPERSEDED verdicts (#3842)', () => {
     expect(res.superseded).toEqual([]);
   });
 
-  it('re-analyzes when the collision set changed', async () => {
+  it('re-analyzes when a recorded collision path stopped colliding', async () => {
     setupAbandoned();
-    tryReadFileMock.mockResolvedValue(ledger({ collisionPaths: [] }));
+    tryReadFileMock.mockResolvedValue(ledger({ collisionPaths: ['server/services/thing.js', 'server/services/restored.js'] }));
 
     const res = await reconcile('/repo', { reapSuperseded: true, activeAgentIds: new Set() });
     expect(res.inFlight.map((i) => i.branch)).toEqual([BRANCH]);

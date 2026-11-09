@@ -136,8 +136,8 @@ vi.mock('../services/videoGen/stitchJob.js', () => ({
   enqueueStitch: vi.fn(),
 }));
 
-vi.mock('../services/videoGen/trimStart.js', () => ({
-  trimHistoryItemStart: vi.fn(),
+vi.mock('../services/videoGen/trim.js', () => ({
+  trimHistoryItem: vi.fn(),
 }));
 
 vi.mock('../services/videoGen/local.js', () => ({
@@ -334,7 +334,7 @@ import * as videoGenService from '../services/videoGen/local.js';
 import * as mediaRemoteDelete from '../services/mediaRemoteDelete.js';
 import * as upscaleJobService from '../services/videoGen/upscaleJob.js';
 import * as stitchJobService from '../services/videoGen/stitchJob.js';
-import { trimHistoryItemStart } from '../services/videoGen/trimStart.js';
+import { trimHistoryItem } from '../services/videoGen/trim.js';
 import * as mediaJobQueue from '../services/mediaJobQueue/index.js';
 import { prepareRemoteMediaJob } from '../services/federatedMedia/remoteSubmission.js';
 import { getProject as getMusicVideoProject } from '../services/musicVideo/projects.js';
@@ -1355,7 +1355,7 @@ describe('videoGen routes', () => {
       const project = { id: 'mv-1', scenes: [scene] };
       const refs = [{ path: '/mock/inputs/person.png', label: 'Person · young' }];
       getSettings.mockResolvedValueOnce(settings).mockResolvedValueOnce(settings);
-      getMusicVideoProject.mockResolvedValueOnce(project).mockResolvedValueOnce(project).mockResolvedValueOnce(project).mockResolvedValueOnce(project).mockResolvedValueOnce(project);
+      getMusicVideoProject.mockResolvedValueOnce(project).mockResolvedValueOnce(project).mockResolvedValueOnce(project).mockResolvedValueOnce(project).mockResolvedValueOnce(project).mockResolvedValueOnce(project);
       clipCastReferences.mockResolvedValueOnce(refs).mockResolvedValueOnce(refs);
       const body = { backend: 'grok', mode: 'image', prompt: 'A person waves', sourceImageFile: 'still.png', grokDuration: 6,
         musicVideo: { projectId: 'mv-1', sceneId: 's1', compose: true, promptAsTyped: true, expectedClipReferenceFiles: ['person.png'] } };
@@ -3636,23 +3636,30 @@ describe('videoGen routes', () => {
     });
   });
 
-  describe('POST /history/:id/trim-start', () => {
+  describe('POST /history/:id/trim', () => {
     const id = 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaa1';
 
     it('returns the new trimmed clip', async () => {
-      trimHistoryItemStart.mockResolvedValue({ id: 'new-clip', trimStartSec: 1.25 });
-      const r = await request(app).post(`/api/video-gen/history/${id}/trim-start`).send({ startSec: 1.25 });
+      trimHistoryItem.mockResolvedValue({ id: 'new-clip', trimStartSec: 1.25 });
+      const r = await request(app).post(`/api/video-gen/history/${id}/trim`).send({ startSec: 1.25 });
       expect(r.status).toBe(200);
       expect(r.body.video).toEqual({ id: 'new-clip', trimStartSec: 1.25 });
-      expect(trimHistoryItemStart).toHaveBeenCalledWith(id, { startSec: 1.25 });
+      expect(trimHistoryItem).toHaveBeenCalledWith(id, { startSec: 1.25 });
     });
 
-    it('rejects a missing or non-positive start before trimming', async () => {
-      for (const body of [{}, { startSec: 0 }, { startSec: '2' }]) {
-        const r = await request(app).post(`/api/video-gen/history/${id}/trim-start`).send(body);
+    it('passes an end-only or start-and-end range through', async () => {
+      trimHistoryItem.mockResolvedValue({ id: 'new-clip' });
+      const r = await request(app).post(`/api/video-gen/history/${id}/trim`).send({ startSec: 1, endSec: 2.5 });
+      expect(r.status).toBe(200);
+      expect(trimHistoryItem).toHaveBeenCalledWith(id, { startSec: 1, endSec: 2.5 });
+    });
+
+    it('rejects a missing, non-positive or inverted range before trimming', async () => {
+      for (const body of [{}, { startSec: 0 }, { startSec: '2' }, { endSec: 0 }, { startSec: 2, endSec: 1 }]) {
+        const r = await request(app).post(`/api/video-gen/history/${id}/trim`).send(body);
         expect(r.status).toBe(400);
       }
-      expect(trimHistoryItemStart).not.toHaveBeenCalled();
+      expect(trimHistoryItem).not.toHaveBeenCalled();
     });
   });
 

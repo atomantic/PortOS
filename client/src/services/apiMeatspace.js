@@ -301,10 +301,12 @@ export const getActivities = (options = {}) => request('/meatspace/activities', 
 export const addActivity = (data) => request('/meatspace/activities', {
   method: 'POST', body: JSON.stringify(data)
 });
-export const removeActivity = (index, name, options = {}) => request(
-  `/meatspace/activities/${index}${name ? `?name=${encodeURIComponent(name)}` : ''}`,
-  { method: 'DELETE', ...options },
-);
+// `target` is `{ id }` (preferred) or `{ name }` for a row stored before ids;
+// the server refuses a stale one with 409 ACTIVITY_MOVED. `{}` is index-only.
+export const removeActivity = (index, target = {}, options = {}) => {
+  const query = new URLSearchParams(Object.entries(target).filter(([, v]) => v)).toString();
+  return request(`/meatspace/activities/${index}${query ? `?${query}` : ''}`, { method: 'DELETE', ...options });
+};
 export const addLifeEvent = (data) => request('/meatspace/life-events', {
   method: 'POST', body: JSON.stringify(data)
 });

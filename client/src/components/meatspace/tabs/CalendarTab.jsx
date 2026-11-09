@@ -12,6 +12,28 @@ import AddActivityForm from './calendar/AddActivityForm';
 import LifeEventsPanel from './calendar/LifeEventsPanel';
 import { formatCount, formatPercent } from '../../../utils/formatters';
 
+const isKey = (value) => typeof value === 'string' && value !== '';
+
+// What the server matches a removal against: the stable id, or the name for a row
+// stored before ids (the server still guards the index with it). Neither leaves
+// the request index-only.
+const activityTarget = (row) => {
+  if (isKey(row?.id)) return { id: row.id };
+  if (isKey(row?.name)) return { name: row.name };
+  return {};
+};
+
+const activityKey = (row, index) => {
+  const { id, name } = activityTarget(row);
+  return id !== undefined ? `id:${id}` : name !== undefined ? `name:${name}` : `#${index}`;
+};
+
+const activityMatcher = ({ id, name }) => {
+  if (id !== undefined) return (b) => b?.id === id;
+  if (name !== undefined) return (b) => b?.name === name;
+  return null;
+};
+
 export default function CalendarTab() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -21,7 +43,7 @@ export default function CalendarTab() {
   // cannot resurrect the removed row.
   const generationRef = useRef(0);
   const readsInFlightRef = useRef(0);
-  // Activity names (or a row key when unnamed) with a delete in flight. Keyed by
+  // Identity keys (see activityKey) of rows with a delete in flight. Keyed by
   // identity, not index, because an earlier removal shifts later rows. The ref is
   // the synchronous guard a second click reads before React has re-rendered.
   const [removingKeys, setRemovingKeys] = useState([]);
@@ -53,16 +75,14 @@ export default function CalendarTab() {
   };
 
   const handleRemoveActivity = async (index) => {
-    const storedName = data?.budgets?.[index]?.name;
-    const label = storedName || 'Activity';
-    // A row without a stored name has no identity to send; the server's guard
-    // only applies when a name is given, so omit it rather than send a placeholder.
-    const expectedName = typeof storedName === 'string' && storedName ? storedName : undefined;
-    const key = expectedName ?? `#${index}`;
+    const row = data?.budgets?.[index];
+    const label = row?.name || 'Activity';
+    const target = activityTarget(row);
+    const key = activityKey(row, index);
     if (removingRef.current.has(key)) return;
     removingRef.current.add(key);
     setRemovingKeys([...removingRef.current]);
-    const result = await api.removeActivity(index, expectedName, { silent: true }).catch(err => {
+    const result = await api.removeActivity(index, target, { silent: true }).catch(err => {
       if (err?.code === 'ACTIVITY_MOVED') {
         toast.error(`${label} moved; the list was refreshed`);
         fetchData();
@@ -79,18 +99,17 @@ export default function CalendarTab() {
       // if one was pending, refetch so the list is not left without a fresh read.
       const readPending = readsInFlightRef.current > 0;
       generationRef.current++;
-      if (expectedName === undefined) {
-        // An unnamed row has no identity to match a slot by, so take the server's list.
+      const matches = activityMatcher(target);
+      if (!matches) {
+        // A row with neither id nor name cannot be matched to a slot, so take the server's list.
         fetchData();
       } else {
         // Budgets are independent per activity, so dropping this entry matches the
-        // server without a refetch. Match the slot by name: an earlier removal may
-        // have shifted it, and a newer read may already have dropped it.
+        // server without a refetch. Match the slot by identity: an earlier removal
+        // may have shifted it, and a newer read may already have dropped it.
         setData(prev => {
           if (!prev?.budgets) return prev;
-          const at = prev.budgets[index]?.name === expectedName
-            ? index
-            : prev.budgets.findIndex(b => b.name === expectedName);
+          const at = matches(prev.budgets[index]) ? index : prev.budgets.findIndex(matches);
           if (at === -1) return prev;
           return { ...prev, budgets: prev.budgets.filter((_, i) => i !== at) };
         });
@@ -238,7 +257,7 @@ export default function CalendarTab() {
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2">
           {budgets.map((b, i) => (
-            <div key={i} className="bg-port-bg border border-port-border rounded-lg p-2.5 flex items-center gap-2.5 group">
+            <div key={isKey(b.id) ? `id:${b.id}` : i} className="bg-port-bg border border-port-border rounded-lg p-2.5 flex items-center gap-2.5 group">
               <IconForName name={b.icon} size={16} className="text-port-accent shrink-0" />
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-medium text-white truncate">{b.name}</div>
@@ -249,7 +268,7 @@ export default function CalendarTab() {
               </div>
               <button
                 onClick={() => handleRemoveActivity(i)}
-                disabled={removingKeys.includes(b.name || `#${i}`)}
+                disabled={removingKeys.includes(activityKey(b, i))}
                 className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center opacity-40 [@media(hover:hover)]:sm:opacity-0 sm:group-hover:opacity-100 focus-visible:opacity-100 transition-opacity text-gray-600 hover:text-port-error p-0.5 disabled:opacity-30 disabled:cursor-progress"
                 title="Remove activity" aria-label="Remove activity"
               >

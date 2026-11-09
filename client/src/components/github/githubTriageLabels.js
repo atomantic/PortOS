@@ -201,6 +201,12 @@ export function subjectStatusChip(subjectType, status) {
   if (subjectType === 'PullRequest' && status.draft) return { tone: 'muted', label: 'Draft', key: 'draft' };
   if (subjectType === 'PullRequest') {
     const merge = MERGE_STATE_VIEW[status.mergeState];
+    // A clean PR is only ready when nothing waits on you or on its maintainers:
+    // conflicts and failing checks still show first.
+    if (!merge || merge.tone === 'success') {
+      if (status.awaitingReply) return { tone: 'warning', label: 'Reply needed', key: 'reply' };
+      if (merge && status.canMerge === false) return { tone: 'muted', label: 'Awaiting maintainer', key: 'maintainer' };
+    }
     return merge ? { ...merge, key: status.mergeState } : { tone: 'success', label: 'Open', key: 'open' };
   }
   return status.state === 'open' ? { tone: 'success', label: 'Open', key: 'open' } : null;
