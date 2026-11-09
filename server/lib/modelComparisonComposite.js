@@ -57,9 +57,18 @@ function calibrateBenchmark(benchmark, entries, anchors) {
   const pairEvidence = pairs.flatMap(([pairKey, pair]) => [evidenceMetric(pair, 'quality', benchmark), evidenceMetric(anchors.get(pairKey), 'quality', COMPARISON_ANCHOR)]);
   const method = `Calibrated ${benchmark} onto ${COMPARISON_ANCHOR}; ${pairs.length} shared configurations; RMS error ${residual.toFixed(1)} points.`;
   const min = Math.min(...xs), max = Math.max(...xs);
-  // Do not extrapolate a calibration beyond the shared score range.
-  return [...entries].filter(([, row]) => row.quality.value >= min && row.quality.value <= max).map(([key, row]) => [key,
-    derived(Math.max(0, Math.min(100, my + slope * (row.quality.value - mx))), [evidenceMetric(row, 'quality', benchmark), ...pairEvidence], method)]);
+  // 10% of this span still excludes Fable 5.2 max (~14% past the shared v5 max);
+  // the nearest-effort fill then flattens it onto xhigh. 15% includes that score
+  // and still refuses a point far outside the fit (#15573).
+  const margin = (max - min) * 0.15;
+  const lo = min - margin, hi = max + margin;
+  return [...entries].filter(([, row]) => row.quality.value >= lo && row.quality.value <= hi).map(([key, row]) => {
+    const outside = row.quality.value < min || row.quality.value > max;
+    const pointMethod = outside
+      ? `${method} Extrapolated beyond the shared score range, within 15% of the shared span.`
+      : method;
+    return [key, derived(Math.max(0, Math.min(100, my + slope * (row.quality.value - mx))), [evidenceMetric(row, 'quality', benchmark), ...pairEvidence], pointMethod)];
+  });
 }
 
 /** Fills an effort with no direct score from the sourced efforts of this exact model, never from another model. */

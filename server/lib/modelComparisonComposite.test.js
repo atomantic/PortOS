@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 import { buildModelComparisonComposite, COMPARISON_ANCHOR } from './modelComparisonComposite.js';
 const metric = value => ({ value, source: { url: 'https://example.com/results', retrievedAt: '2026-09-01T00:00:00Z', methodology: 'Published result' } });
@@ -106,6 +109,40 @@ it('keeps specialist and routing endpoints unscored and relabels local builds of
   expect(local.quality).toMatchObject({ value: 30, estimated: true });
   expect(local.quality.method).toContain('local build');
   expect(local.blendedPerMillion.value).toBe(0);
+});
+
+it('extrapolates an accepted calibration within 15% of the shared span, clamps it, and refuses anything past the margin', () => {
+  const anchors = ['a', 'b', 'c'].map((model, i) => observation(model, 'high', [0, 50, 100][i]));
+  const scored = (model, value) => observation(model, 'high', value, { id: `other-${model}`, benchmark: 'Other evaluation v1' });
+  const shared = [scored('a', 0), scored('b', 10), scored('c', 20)];
+  const quality = (model, value) => buildModelComparisonComposite([...anchors, ...shared, scored(model, value)], inventory(model, ['high'])).rows[0].quality;
+  const edge = quality('edge', 23);
+  expect(edge).toMatchObject({ value: 100, estimated: true });
+  expect(edge.method).toContain('Extrapolated beyond the shared score range, within 15% of the shared span.');
+  const low = quality('low', -3);
+  expect(low).toMatchObject({ value: 0, estimated: true });
+  expect(low.method).toContain('Extrapolated beyond the shared score range');
+  expect(quality('past', 24)).toBeNull();
+});
+
+it('keeps Claude Fable 5.2 efforts distinct when v5 scores sit above the shared calibration range', () => {
+  const seed = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../../data.reference/model-comparison.json'), 'utf8'));
+  const efforts = ['low', 'medium', 'high', 'xhigh', 'max'];
+  const inventory = [{ id: 'claude-code', name: 'Claude Code', models: [{ model: 'claude-fable-5-2', efforts }] }];
+  const rows = buildModelComparisonComposite(seed.observations, inventory).rows;
+  expect(rows.map(row => row.effort)).toEqual(efforts);
+  const values = rows.map(row => row.quality.value);
+  expect(values.every((value, index) => index === 0 || value > values[index - 1])).toBe(true);
+  for (const row of rows) {
+    expect(row.quality.estimated).toBe(true);
+    expect(row.quality.method).toContain('Artificial Analysis Intelligence Index v5.0.1');
+  }
+  for (const row of rows.filter(row => ['high', 'xhigh', 'max'].includes(row.effort))) {
+    expect(row.quality.method).toContain('Extrapolated beyond the shared score range, within 15% of the shared span.');
+  }
+  for (const row of rows.filter(row => ['low', 'medium'].includes(row.effort))) {
+    expect(row.quality.method).not.toContain('Extrapolated beyond the shared score range');
+  }
 });
 
 it('scores from the newest anchor result and interns each shared source once', () => {
