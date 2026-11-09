@@ -457,6 +457,34 @@ describe('alignProjectLyrics', () => {
     }
   });
 
+  it('re-spreads squeezed held oohs over the voiced stem and leaves an unvoiced run untimed (#15528)', async () => {
+    const voice = (stem, start, end) => {
+      for (let i = start * 16000; i < end * 16000; i++) stem.writeInt16LE(5000, 44 + i * 2);
+    };
+    const line = (text, start, step = 0.5) => text.split(' ').map((w, i) => ({ w, startSec: start + i * step, endSec: start + (i + 1) * step, conf: 'matched' }));
+    const cues = [
+      { id: 'a', text: 'walking home', startSec: null, endSec: null },
+      { id: 'b', text: 'Ooh, ooh', startSec: null, endSec: null },
+      { id: 'c', text: 'under neon', startSec: null, endSec: null },
+      { id: 'd', text: 'Ah, ah', startSec: null, endSec: null },
+    ];
+    const stem = encodePcm16Wav(16000 * 30);
+    voice(stem, 1, 2); voice(stem, 4, 8.6); voice(stem, 9, 10);
+    const h = harness(vi.fn(), { ...project, vocalStemFilename: 'stem.wav', lyricCues: cues }, { resolveAudio: async () => ({ path: 'stem.wav', source: 'vocal-stem' }) });
+    h.decodeAudio.mockResolvedValue(stem);
+    // CTC squeezed each vocable into 0.2 s; the last one sits in a silent tail.
+    const forceAlign = vi.fn().mockResolvedValue([line('walking home', 1), line('ooh ooh', 3, 0.1), line('under neon', 9), line('ah ah', 20, 0.1)]);
+    const saved = await h.run({ deps: { forceAlign } });
+    const [, ooh, , ah] = saved.lyricCues;
+    expect(ooh.startSec).toBeCloseTo(4, 1);
+    expect(ooh.endSec).toBeCloseTo(8.6, 1);
+    expect(ooh.words.every((word) => word.conf === 'interpolated')).toBe(true);
+    expect(ooh.silentWords).toBeUndefined();
+    expect(saved.lyricCues[0].words[0].conf).toBe('matched');
+    expect(ah.startSec).toBeNull();
+    expect(ah.words).toBeUndefined();
+  });
+
   it('saves nothing when the song or text changes, or alignment is cancelled', async () => {
     for (const outcome of ['audio', 'text', 'cancel']) {
       const record = { ...project, vocalStemFilename: 'stem.wav', lyricCues: [{ id: 'a', text: 'walking', startSec: null, endSec: null }] };
