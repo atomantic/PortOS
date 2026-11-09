@@ -15,6 +15,7 @@ import { Router } from 'express';
 import { updateVideoPoster, createSharingCopy } from '../services/videoGen/poster.js';
 import { basename } from 'path';
 import os from 'os';
+import { randomUUID } from 'crypto';
 import { z } from 'zod';
 import { resolveGalleryImage } from '../lib/fileUtils.js';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
@@ -305,7 +306,20 @@ const referenceLabel = z.string().max(MAX_VIDEO_REFERENCE_LABEL_LENGTH).optional
 // Browsers send every line break in a multipart text field as CRLF (the HTML form
 // encoding rule), so undo that before a prompt is measured, compared or sent to a model.
 const lfLineBreaks = (value) => (typeof value === 'string' ? value.replace(/\r\n/g, '\n') : value);
-const generateBodySchema = z.object({
+const jsonField = (v) => {
+  if (v == null || v === '') return undefined;
+  if (typeof v === 'string') {
+    try { return JSON.parse(v); } catch { return v; }
+  }
+  return v;
+};
+
+export const generateBodySchema = z.object({
+  // Optional run window for the queued job (mediaJobQueue/jobSchedule.js).
+  schedule: z.preprocess(jsonField, z.object({
+    startAt: z.string().datetime().optional(),
+    stopBy: z.string().datetime().optional(),
+  }).optional()),
   referenceLabel1: referenceLabel,
   referenceLabel2: referenceLabel,
   referenceLabel3: referenceLabel,
@@ -564,6 +578,8 @@ const generateBodySchema = z.object({
       // The shot card's "Start frame for layout only" (Grok): the frame is sent as a
       // scene reference instead of the locked first frame, so its people can take the references' likeness.
       startFrameLayout: z.boolean().optional(),
+      // Names the overnight batch this take was queued in (musicVideo/overnightRenders.js).
+      batchId: z.string().uuid().optional(),
     }).optional(),
   ),
   // File the clip into this music video's media collection even when no shot
@@ -1101,6 +1117,68 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
     console.error(`❌ Failed to record media.video.enqueue: ${error.message}`);
   }
   res.json(queued);
+}));
+
+// Overnight local clip batches (#15498): queue each shot × local reference model
+// as its Shot card Render, held until `startAt`; anything still waiting at `stopBy` is dropped.
+const overnightBodySchema = z.object({
+  projectId: z.string().min(1).max(200),
+  sceneIds: z.array(z.string().min(1).max(200)).min(1).max(200),
+  modelIds: z.array(z.string().min(1).max(256)).min(1).max(4),
+  startAt: z.string().datetime().optional(),
+  stopBy: z.string().datetime().optional(),
+}).refine((b) => !b.startAt || !b.stopBy || Date.parse(b.stopBy) > Date.parse(b.startAt),
+  { message: 'The stop-by time must be after the start time', path: ['stopBy'] });
+
+router.post('/overnight', asyncHandler(async (req, res) => {
+  const { projectId, sceneIds, modelIds, startAt, stopBy } = validateRequest(overnightBodySchema, req.body ?? {});
+  const [{ getProject }, { musicVideoClipReferences }, { getVideoModels }, { overnightModelKind, overnightRenderBodies }] = await Promise.all([
+    import('../services/musicVideo/projects.js'), import('../services/musicVideo/clipCastReferences.js'),
+    import('../lib/mediaModels.js'), import('../services/musicVideo/overnightRenders.js'),
+  ]);
+  const project = await getProject(projectId);
+  if (!project) throw new ServerError('Music video not found', { status: 404, code: 'NOT_FOUND' });
+  const catalog = getVideoModels();
+  const models = modelIds.map((id) => catalog.find((model) => model.id === id));
+  const unusable = modelIds.filter((id, i) => !overnightModelKind(models[i]));
+  if (unusable.length) {
+    throw new ServerError(`Overnight renders use LTX 2.5 or FastH3 Omni; ${unusable.join(', ')} takes no clip references.`, { status: 400, code: 'OVERNIGHT_MODEL_UNSUPPORTED' });
+  }
+  const batchId = randomUUID();
+  const schedule = startAt || stopBy ? { ...(startAt ? { startAt } : {}), ...(stopBy ? { stopBy } : {}) } : undefined;
+  const { bodies, skipped } = await overnightRenderBodies({ project, sceneIds: [...new Set(sceneIds)], models, schedule, batchId, clipReferences: musicVideoClipReferences });
+  const queued = [];
+  for (const { sceneId, modelId, body } of bodies) {
+    const parsed = generateBodySchema.safeParse(body);
+    if (!parsed.success) { skipped.push({ sceneId, modelId, reason: parsed.error.issues[0]?.message || 'Invalid request' }); continue; }
+    try {
+      const job = await submitVideoGenJob(parsed.data, {});
+      queued.push({ sceneId, modelId, jobId: job.jobId });
+    } catch (err) {
+      skipped.push({ sceneId, modelId, reason: err.message });
+    }
+  }
+  console.log(`🌙 Overnight batch ${batchId.slice(0, 8)}: ${queued.length} queued, ${skipped.length} skipped`);
+  res.json({ batchId, queued, skipped });
+}));
+
+router.get('/overnight', asyncHandler(async (req, res) => {
+  const { projectId } = validateRequest(z.object({ projectId: z.string().min(1).max(200) }), req.query);
+  const { overnightBatches } = await import('../services/musicVideo/overnightRenders.js');
+  res.json({ batches: overnightBatches(listJobs({ kind: 'video' }), projectId) });
+}));
+
+// Cancel a batch's remaining jobs; a running render is stopped too, finished takes stay.
+router.delete('/overnight/:batchId', asyncHandler(async (req, res) => {
+  const { batchId } = validateRequest(z.object({ batchId: z.string().uuid() }), req.params);
+  const live = listJobs({ kind: 'video' }).filter((job) => job.params?.musicVideo?.batchId === batchId
+    && (job.status === 'queued' || job.status === 'running'));
+  let canceled = 0;
+  for (const job of live) {
+    const result = await cancelJob(job.id);
+    if (result?.ok) canceled += 1;
+  }
+  res.json({ canceled });
 }));
 
 // Currently-running video job (if any) so the page can re-attach after a

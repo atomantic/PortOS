@@ -733,6 +733,7 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // Film-look bake launches a headless composition browser on the host (#13055).
   'POST /api/image-gen/:filename/film-look',
   'POST /api/video-gen',
+  'POST /api/video-gen/overnight',
   // Last-frame extraction runs ffmpeg over a gallery clip (#13055).
   'POST /api/video-gen/last-frame/:id',
   // Upscale (LTX subprocess / ffmpeg) and stitch (ffmpeg) run on the host (#11076).

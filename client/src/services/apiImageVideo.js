@@ -710,3 +710,12 @@ export const updateVideoPoster = (id, atSec, options = {}) => request(`/video-ge
 export const downloadVideoSharingCopy = (id, options = {}) => request(`/video-gen/history/${encodeURIComponent(id)}/sharing-download`, {
   responseType: 'blob', silent: true, hostControlOptional: true, ...options,
 });
+
+// Overnight local clip batches (#15498): shot × local reference model renders held until a start time.
+export const queueOvernightRenders = (body, options = {}) => request('/video-gen/overnight', {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+export const listOvernightRenders = (projectId, options = {}) =>
+  request(`/video-gen/overnight?projectId=${encodeURIComponent(projectId)}`, options);
+export const cancelOvernightRenders = (batchId, options = {}) =>
+  request(`/video-gen/overnight/${encodeURIComponent(batchId)}`, { method: 'DELETE', ...options });

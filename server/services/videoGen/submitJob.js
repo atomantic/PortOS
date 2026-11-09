@@ -346,6 +346,7 @@ const createEnqueue = ({ body, prepared, performance, backend, inputs }) => asyn
   // The labeled additions the composers put around the user's text ride with the job to its record.
   const additions = [...(body.promptAdditions || []), ...composedAdditions];
   if (additions.length) params.promptAdditions = additions;
+  if (body.schedule && (body.schedule.startAt || body.schedule.stopBy)) params.schedule = body.schedule;
   const job = await enqueueJob({ kind: 'video', params });
   inputs.transfer();
   return job;
