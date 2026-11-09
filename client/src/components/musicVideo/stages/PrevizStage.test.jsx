@@ -10,6 +10,8 @@ vi.mock('../../../hooks/useMusicVideoGreyboxPlaces.js', () => ({
     'cat-alley': { ingredient: { type: 'place', payload: {} }, media: [] },
   }),
 }));
+const jobsState = vi.hoisted(() => ({ value: { running: [], finished: null, drafted: 0, setCount: 0, step: null } }));
+vi.mock('../../../hooks/usePrevizJobs.js', () => ({ default: () => jobsState.value }));
 vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 vi.mock('./PrevizAi.jsx', () => ({ default: () => null }));
 vi.mock('../../../services/apiCatalog.js', () => ({
@@ -150,4 +152,17 @@ it('marks a cast object as a vehicle, then saves its color and speed', () => {
   expect(board.saveProjectFields.mock.calls.at(-1)[0].previz.vehicles).toEqual([{ subjectId: 'o-cart', speedMetersPerMin: 120 }]);
   fireEvent.change(screen.getByLabelText('Color'), { target: { value: 'teal' } });
   expect(board.saveProjectFields.mock.calls.at(-1)[0].previz.pawnColors['o-cart']).toEqual({ figure: 'teal' });
+});
+
+// Catches the Build button staying live, and no progress showing, while a draft runs elsewhere.
+it('shows server-side Previz progress and disables Build as In progress while a job runs', () => {
+  const board = { project, locked: false, editProjectLocal: vi.fn(), saveProjectFields: vi.fn(), seekToScene: vi.fn() };
+  jobsState.value = { running: [{ id: 'j' }], finished: null, drafted: 2, setCount: 8, step: { label: 'Drafting greybox 3 of 8: Lawns in the headlights', value: 2, max: 8 } };
+  try {
+    render(<MemoryRouter><PrevizStage board={board} /></MemoryRouter>);
+    expect(screen.getByRole('progressbar', { name: /Drafting greybox 3 of 8: Lawns in the headlights/ })).toHaveAttribute('aria-valuenow', '2');
+    expect(screen.getByRole('button', { name: /In progress/ })).toBeDisabled();
+  } finally {
+    jobsState.value = { running: [], finished: null, drafted: 0, setCount: 0, step: null };
+  }
 });
