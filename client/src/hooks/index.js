@@ -313,5 +313,6 @@ export { default as useCatalogCards } from './useCatalogCards.js';
 export * from './useDraftCommitMode.js';
 
 export { default as useCatalogPlaces } from './useCatalogPlaces.js';
+export { default as usePrevizJobs } from './usePrevizJobs.js';
 export { default as usePrevizWorld } from './usePrevizWorld.js';
 export { default as useMusicVideoGreyboxPlaces } from './useMusicVideoGreyboxPlaces.js';
