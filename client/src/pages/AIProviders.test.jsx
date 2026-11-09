@@ -707,6 +707,7 @@ describe('fleet LLM setup walkthrough', () => {
 
     fireEvent.click(screen.getByRole('tab', { name: 'Connect client' }));
     fireEvent.change(await screen.findByLabelText('Known PortOS peer'), { target: { value: 'peer-example' } });
+    fireEvent.change(screen.getByLabelText('Harness'), { target: { value: 'opencode' } });
     fireEvent.change(screen.getByLabelText('vLLM API key'), { target: { value: 'example-secret' } });
     fireEvent.click(screen.getByRole('button', { name: 'Create fleet provider' }));
 
