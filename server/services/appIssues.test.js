@@ -443,10 +443,10 @@ describe('prepareAppIssueClaim', () => {
       .mockResolvedValueOnce(prs()).mockResolvedValueOnce('').mockResolvedValueOnce(issue([{ name: 'bug' }]));
     await prepareAppIssueClaim(APP, '42', 'github');
     expect(execGh.mock.calls.map(([args]) => args)).toEqual([
-      ['issue', 'view', '42', '--repo', 'github.com/acme/widget', '--json', 'labels,assignees,state'],
+      ['issue', 'view', '42', '--repo', 'github.com/acme/widget', '--json', 'labels,assignees,state,title'],
       expect.arrayContaining(['api', 'graphql', '--paginate', '--slurp', '-F', 'owner=acme', 'repo=widget', '--hostname', 'github.com']),
       ['issue', 'edit', '42', '--repo', 'github.com/acme/widget', '--remove-label', 'Help Wanted', '--remove-label', 'good first issue'],
-      ['issue', 'view', '42', '--repo', 'github.com/acme/widget', '--json', 'labels,assignees,state'],
+      ['issue', 'view', '42', '--repo', 'github.com/acme/widget', '--json', 'labels,assignees,state,title'],
     ]);
   });
 
@@ -527,7 +527,7 @@ describe('prepareAppIssueClaim', () => {
     await prepareAppIssueClaim({ ...APP, forgeAccount: 'other-user' }, '42', 'github');
     expect(resolveForgeForRepoMock).toHaveBeenCalledWith('/repo', { forgeAccount: 'other-user' });
     expect(execGh).toHaveBeenCalledWith(
-      ['issue', 'view', '42', '--repo', 'github.com/acme/widget', '--json', 'labels,assignees,state'], undefined,
+      ['issue', 'view', '42', '--repo', 'github.com/acme/widget', '--json', 'labels,assignees,state,title'], undefined,
       expect.objectContaining({ cwd: '/repo', env: expect.objectContaining({ GH_TOKEN: 'other-user-token' }) }),
     );
   });
