@@ -323,6 +323,157 @@ export function backfillPrevizFromShots(project, loadedPlaces = {}) {
   return { previz: { ...current, cuts: allCuts, tracks }, added: added.length, removed };
 }
 
+/**
+ * The shots and cuts that play on a given set, in song order.
+ * Reads existing previz cuts first; falls back to timed shots whose set reference or conditioning matches.
+ */
+function previzShotsOnSet(project, placeSubjectId) {
+  const previz = projectPreviz(project);
+  const scenes = project?.scenes || [];
+  if (previz && Array.isArray(previz.cuts) && previz.cuts.length) {
+    const setCuts = previz.cuts
+      .filter((cut) => cut.placeSubjectId === placeSubjectId)
+      .map((cut) => ({ cut, timing: previzCutTiming(project, cut) }))
+      .sort((a, b) => (a.timing?.startSec ?? Infinity) - (b.timing?.startSec ?? Infinity));
+    if (setCuts.length) {
+      return setCuts.map(({ cut, timing }, cutIndex) => {
+        const sceneIndex = cut.sceneId ? scenes.findIndex((s) => s.sceneId === cut.sceneId) : -1;
+        const scene = sceneIndex >= 0 ? scenes[sceneIndex] : null;
+        const shotNumber = sceneIndex >= 0 ? sceneIndex + 1 : cutIndex + 1;
+        return { cut, scene, shotNumber, timing };
+      });
+    }
+  }
+  const setScenes = timedShots(project)
+    .filter((scene) => musicVideoShotPlaceId(project, scene) === placeSubjectId);
+  return setScenes.map((scene, i) => {
+    const sceneIndex = scenes.findIndex((s) => s.sceneId === scene.sceneId);
+    return {
+      cut: null,
+      scene,
+      shotNumber: sceneIndex >= 0 ? sceneIndex + 1 : i + 1,
+      timing: { startSec: scene.startSec, endSec: scene.endSec },
+    };
+  });
+}
+
+/**
+ * An instruction to draft a greybox for `placeSubjectId` from the shots that play on it:
+ * lists each shot in order with its sheet camera, holder and action, asking for one
+ * saved camera per shot labeled "Shot N", plus figure marks.
+ */
+export function previzSetGreyboxDraftInstruction(project, placeSubjectId) {
+  const items = previzShotsOnSet(project, placeSubjectId);
+  const chars = characters(project);
+  if (!items.length) {
+    return 'Draft a 3D greybox layout for this set with saved cameras and figure marks.';
+  }
+  const lines = items.map(({ scene, cut, shotNumber }) => {
+    const sheet = scene?.shotSheet || {};
+    const cam = (project?.cameras || []).find((c) => c.id === sheet.cameraId);
+    const cameraName = cam?.name || sheet.view || sheet.cameraId || '';
+    const cameraText = cameraName ? `camera "${cameraName}"` : 'observer camera';
+    const holderName = sheet.holder || (cut?.holderSubjectId ? chars.find((c) => c.id === cut.holderSubjectId)?.name : '') || '';
+    const holderText = holderName ? `held by "${holderName}"` : 'observer camera';
+    const action = sheet.action || scene?.prompt || scene?.framePrompt || '';
+    const actionText = action ? `action: "${action}"` : '';
+    const cast = (Array.isArray(sheet.characters) && sheet.characters.length
+      ? sheet.characters
+      : cutPeople(cut || {}).map((id) => chars.find((c) => c.id === id)?.name).filter(Boolean)
+    ).filter(Boolean);
+    const castText = cast.length ? `people: ${cast.join(', ')}` : '';
+    const details = [cameraText, holderText, actionText, castText].filter(Boolean).join(', ');
+    return `- Shot ${shotNumber}: ${details}`;
+  });
+
+  return [
+    'Draft a 3D greybox layout for this set tailored to the following shots in order:',
+    ...lines,
+    '',
+    'Requirements:',
+    '- Provide one saved camera per shot labeled "Shot N" (e.g. Shot 1, Shot 2), positioned and aimed to frame the action.',
+    '- Place figure mark anchors (kind: "figure") on the floor for the characters in each shot, and link them in that camera\'s figures array.',
+  ].join('\n');
+}
+
+/**
+ * Link each cut for a set to its corresponding camera in `greyboxShots` in order,
+ * matching by label "Shot N" (or id), or falling back to the camera at that index.
+ */
+function linkPrevizCutsToCameras(cuts, greyboxShots = [], scenes = []) {
+  return cuts.map((cut, i) => {
+    const sceneIndex = cut.sceneId ? scenes.findIndex((s) => s.sceneId === cut.sceneId) : -1;
+    const shotNumber = sceneIndex >= 0 ? sceneIndex + 1 : i + 1;
+    const matched = greyboxShots.find((shot) => {
+      const label = textOf(shot.label);
+      const id = textOf(shot.id);
+      return new RegExp(`\\bShot\\s*#?${shotNumber}\\b`, 'i').test(label)
+        || new RegExp(`^shot[_-]?${shotNumber}$`, 'i').test(id);
+    }) || greyboxShots[i] || null;
+    return matched ? { ...cut, viewShotId: matched.id } : cut;
+  });
+}
+
+/**
+ * Apply a drafted or saved greybox for `placeSubjectId` to the project's previz:
+ * links each cut on that set to its camera in order, drops that set's seeded tracks,
+ * and syncs again so figure marks are seeded fresh from the new anchors.
+ * Returns `{ previz, loadedPlaces }`.
+ */
+export function applyPrevizGreybox(project, placeSubjectId, greybox, loadedPlaces = {}) {
+  const forCast = musicVideoPrevizForActiveCast(project);
+  let current = forCast && Array.isArray(forCast.cuts) && forCast.cuts.length ? forCast : null;
+  if (!current) {
+    const initial = backfillPrevizFromShots(project, loadedPlaces);
+    current = initial.previz;
+  }
+  const scenes = project?.scenes || [];
+
+  const setCutIndices = [];
+  const setCuts = [];
+  (current.cuts || []).forEach((cut, index) => {
+    if (cut.placeSubjectId === placeSubjectId) {
+      setCutIndices.push(index);
+      setCuts.push(cut);
+    }
+  });
+
+  const linkedCuts = linkPrevizCutsToCameras(setCuts, greybox?.shots || [], scenes);
+  const allCuts = [...(current.cuts || [])];
+  setCutIndices.forEach((cutIndex, i) => {
+    allCuts[cutIndex] = linkedCuts[i];
+  });
+
+  // Drop seeded tracks for this set so sync seeds them fresh from the new anchors
+  const keptTracks = (current.tracks || []).filter((track) => track.placeSubjectId !== placeSubjectId);
+
+  // Update loadedPlaces with this greybox so backfillPrevizFromShots can find the new anchors
+  const subject = places(project).find((place) => place.id === placeSubjectId);
+  const nextPlaces = { ...loadedPlaces };
+  if (subject?.ingredientId) {
+    const existingEntry = loadedPlaces[subject.ingredientId] || {};
+    nextPlaces[subject.ingredientId] = {
+      ...existingEntry,
+      ingredient: {
+        ...(existingEntry.ingredient || {}),
+        id: subject.ingredientId,
+        type: 'place',
+        name: subject.name,
+        payload: {
+          ...(existingEntry.ingredient?.payload || {}),
+          greybox,
+        },
+      },
+    };
+  }
+
+  const { previz } = backfillPrevizFromShots(
+    { ...project, previz: { ...current, cuts: allCuts, tracks: keptTracks } },
+    nextPlaces,
+  );
+  return { previz, loadedPlaces: nextPlaces };
+}
+
 /** A track's pose at `t`: interpolated position and facing, the earlier key's pose. */
 function samplePrevizTrack(track, t) {
   const keys = track?.keys || [];

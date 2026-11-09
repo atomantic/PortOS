@@ -12,11 +12,29 @@ vi.mock('../../../hooks/useMusicVideoGreyboxPlaces.js', () => ({
 }));
 const jobsState = vi.hoisted(() => ({ value: { running: [], finished: null, drafted: 0, setCount: 0, step: null } }));
 vi.mock('../../../hooks/usePrevizJobs.js', () => ({ default: () => jobsState.value }));
+vi.mock('../../../hooks/useProviderModels.js', () => ({
+  default: () => ({
+    providers: [{ id: 'example-api', name: 'Example API', enabled: true }],
+    selectedProviderId: 'example-api',
+    selectedModel: 'model-a',
+    availableModels: ['model-a'],
+    loading: false,
+    setSelectedProviderId: vi.fn(),
+    setSelectedModel: vi.fn(),
+  }),
+}));
 vi.mock('../../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 vi.mock('./PrevizAi.jsx', () => ({ default: () => null }));
 vi.mock('../../../services/apiCatalog.js', () => ({
   createCatalogIngredient: vi.fn(async (body) => ({ id: 'cat-world', ...body })),
   saveCatalogWorld: vi.fn(async (id, world) => ({ id, type: 'place', payload: { world } })),
+  draftCatalogGreybox: vi.fn(async () => ({
+    greybox: { anchors: [{ id: 'mark-1', kind: 'figure', position: [2, 0, 3] }], shots: [{ id: 'shot-1', label: 'Shot 2', figures: [{ anchorId: 'mark-1' }] }], parts: [] },
+    sentPrompt: 'Prompt',
+    promptAdditions: [],
+    providerId: 'example-api',
+  })),
+  saveCatalogGreybox: vi.fn(async (id, greybox) => ({ id, type: 'place', payload: { greybox } })),
   listCatalogIngredientsByIds: vi.fn(async (ids) => [
     { id: 'cat-world', type: 'place', name: 'Example world', payload: { world: { version: 1, seed: 1, sets: [{ id: 'w-street', ingredientId: 'cat-street', position: [0, 0], rotationDegrees: 0 }], paths: [] } } },
     { id: 'cat-street', type: 'place', name: 'Example Street', payload: {} },
@@ -135,6 +153,54 @@ it('lists the sets cuts use that have no greybox, with their cut counts and a li
   expect(within(list).getByText('2 cuts')).toBeTruthy();
   // The street has a greybox, so it is not listed.
   expect(within(list).queryByText('Example Street')).toBeNull();
+});
+
+it('drafts missing greyboxes from shots with a review step before saving and linking cameras', async () => {
+  const alley = { id: 'p-alley', kind: 'place', name: 'Example Alley', ingredientId: 'cat-alley' };
+  const cut = (id, placeSubjectId, startSec) => ({ id, sceneId: 's1', startSec, endSec: startSec + 2, placeSubjectId, viewShotId: null, holderSubjectId: null, visibleSubjectIds: null, aimSubjectId: null });
+  const withAlley = {
+    ...project,
+    concept: { subjects: [...project.concept.subjects, alley] },
+    previz: { cuts: [cut('k1', 'p-street', 0), cut('k2', 'p-alley', 2)], tracks: [] },
+  };
+  const board = { project: withAlley, locked: false, editProjectLocal: vi.fn(), saveProjectFields: vi.fn(), seekToScene: vi.fn() };
+  render(<MemoryRouter><PrevizStage board={board} /></MemoryRouter>);
+
+  const draftButton = screen.getByRole('button', { name: /Draft missing greyboxes from shots/ });
+  fireEvent.click(draftButton);
+
+  const reviewRegion = await screen.findByRole('region', { name: /Review greybox draft for Example Alley/ });
+  expect(reviewRegion).toBeTruthy();
+
+  const saveButton = within(reviewRegion).getByRole('button', { name: /Save & link cameras/ });
+  fireEvent.click(saveButton);
+
+  await waitFor(() => expect(board.saveProjectFields).toHaveBeenCalled());
+  const savedPreviz = board.saveProjectFields.mock.calls.at(-1)[0].previz;
+  expect(savedPreviz.cuts.find((c) => c.id === 'k2').viewShotId).toBe('shot-1');
+});
+
+it('drafts missing greyboxes in one action when review is unchecked', async () => {
+  const alley = { id: 'p-alley', kind: 'place', name: 'Example Alley', ingredientId: 'cat-alley' };
+  const cut = (id, placeSubjectId, startSec) => ({ id, sceneId: 's1', startSec, endSec: startSec + 2, placeSubjectId, viewShotId: null, holderSubjectId: null, visibleSubjectIds: null, aimSubjectId: null });
+  const withAlley = {
+    ...project,
+    concept: { subjects: [...project.concept.subjects, alley] },
+    previz: { cuts: [cut('k1', 'p-street', 0), cut('k2', 'p-alley', 2)], tracks: [] },
+  };
+  const board = { project: withAlley, locked: false, editProjectLocal: vi.fn(), saveProjectFields: vi.fn(), seekToScene: vi.fn() };
+  render(<MemoryRouter><PrevizStage board={board} /></MemoryRouter>);
+
+  const reviewCheckbox = screen.getByLabelText('Review each draft before saving');
+  fireEvent.click(reviewCheckbox);
+  expect(reviewCheckbox.checked).toBe(false);
+
+  const draftButton = screen.getByRole('button', { name: /Draft missing greyboxes from shots/ });
+  fireEvent.click(draftButton);
+
+  await waitFor(() => expect(board.saveProjectFields).toHaveBeenCalled());
+  const savedPreviz = board.saveProjectFields.mock.calls.at(-1)[0].previz;
+  expect(savedPreviz.cuts.find((c) => c.id === 'k2').viewShotId).toBe('shot-1');
 });
 
 // Catches vehicles being unreachable from the UI: marking a cast object as a vehicle, giving it a color and a speed.
