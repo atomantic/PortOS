@@ -36,6 +36,11 @@ const mockState = {
   // x64 Node on Apple Silicon hardware (Rosetta). Intel tests leave this false
   // so they do not call the real sysctl probe.
   appleSiliconHardware: false,
+  // INSTALL_* env of every setup-script run, and the exit code / stdout lines
+  // the next one produces (Linux/Windows FLUX.2 installs delegate to the script).
+  scriptRuns: [],
+  scriptExit: 0,
+  scriptOutput: [],
 };
 
 // pythonSetup composes paths with path.join, which is backslashed on a Windows
@@ -139,6 +144,26 @@ vi.mock('./processEnv.js', async (importOriginal) => ({
 
 vi.mock('./fileUtils.js', () => ({ PATHS: { data: '/data' } }));
 
+// The real runner spawns bash against the repo script. Fake child: emits the
+// scripted stdout, then closes with scriptExit.
+vi.mock('./setupScriptRunner.js', async () => {
+  const { EventEmitter } = await vi.importActual('node:events');
+  return {
+    spawnSetupScript: (env) => {
+      mockState.scriptRuns.push(env);
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      setImmediate(() => {
+        for (const line of mockState.scriptOutput) child.stdout.emit('data', Buffer.from(`${line}\n`));
+        child.emit('close', mockState.scriptExit);
+      });
+      return child;
+    },
+    stopSetupScript: vi.fn(),
+  };
+});
+
 // The real probe reads hw.optional.arm64. On this Apple Silicon Mac that bit
 // is 1, so an arch:'x64' Intel case would be classified as Apple Silicon.
 vi.mock('./platform.js', async () => {
@@ -176,6 +201,9 @@ const resetState = () => {
   mockState.spawnCalls = [];
   mockState.venvCalls = [];
   mockState.appleSiliconHardware = false;
+  mockState.scriptRuns = [];
+  mockState.scriptExit = 0;
+  mockState.scriptOutput = [];
 };
 
 describe('REQUIRED_PACKAGES', () => {
@@ -815,5 +843,49 @@ describe('installFlux2Venv failure reporting', () => {
     expect(result).toEqual({ ok: false, stage: 'upgrade-pip' });
     expect(events.find((ev) => ev.type === 'error').message)
       .toContain('Could not upgrade pip/wheel/setuptools');
+  });
+});
+
+// Linux/Windows must never resolve packages at install time: the in-app FLUX.2
+// install runs the hash-pinned CUDA lock through the setup script, not pip.
+describe.each(['linux', 'win32'])('installFlux2Venv on %s installs from the hash-pinned lock', (platform) => {
+  beforeEach(() => {
+    resetState();
+    mockState.platform = platform;
+  });
+
+  const run = async () => {
+    const events = [];
+    const mod = await loadModule();
+    const { promise } = mod.installFlux2Venv((ev) => events.push(ev));
+    return { result: await promise, events };
+  };
+
+  it('runs INSTALL_FLUX2=1 setup-image-video.sh and spawns no pip or venv step itself', async () => {
+    mockState.scriptOutput = ['Syncing the hash-pinned FLUX.2 CUDA runtime'];
+    const venvPython = platform === 'win32'
+      ? '/Users/test/.portos/venv-flux2/Scripts/python.exe'
+      : '/Users/test/.portos/venv-flux2/bin/python3';
+    mockState.presentPaths.add(venvPython);
+
+    const { result, events } = await run();
+
+    expect(result.ok).toBe(true);
+    expect(posixPath(result.pythonPath)).toBe(venvPython);
+    expect(mockState.scriptRuns).toEqual([{ INSTALL_FLUX2: '1' }]);
+    expect(mockState.spawnCalls).toEqual([]);
+    expect(mockState.venvCalls).toEqual([]);
+    expect(events).toContainEqual({ type: 'log', message: 'Syncing the hash-pinned FLUX.2 CUDA runtime' });
+    expect(events.at(-1).type).toBe('complete');
+  });
+
+  it('reports a failed installer as a terminal error frame instead of complete', async () => {
+    mockState.scriptExit = 42;
+
+    const { result, events } = await run();
+
+    expect(result).toEqual({ ok: false, stage: 'install' });
+    expect(events.find((ev) => ev.type === 'error').message).toContain('code 42');
+    expect(events.some((ev) => ev.type === 'complete')).toBe(false);
   });
 });
