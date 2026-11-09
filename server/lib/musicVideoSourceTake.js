@@ -25,7 +25,7 @@ const sceneKey = (scene) => scene?.sceneId ?? scene?.id ?? null;
 const finite = (n) => (typeof n === 'number' && Number.isFinite(n) ? n : null);
 
 /** `{ sceneId, offsetSec? }` or null. A self-link is not a take. */
-export function sourceTakeOf(scene) {
+function sourceTakeOf(scene) {
   const take = scene?.sourceTake;
   if (!take || typeof take !== 'object' || Array.isArray(take)) return null;
   const sceneId = typeof take.sceneId === 'string' ? take.sceneId.trim() : '';
@@ -122,22 +122,6 @@ export function sourceClipNeedSec(scene, scenes) {
 export function scenePlayableClipId(scene, scenes) {
   if (!isContinuingScene(scene)) return scene?.videoHistoryId || null;
   return resolveSourceTake(scene, scenes)?.videoHistoryId || null;
-}
-
-/** One row per continuing scene: which clip, and the window it plays. */
-export function sourceTakeWindows(scenes) {
-  const list = Array.isArray(scenes) ? scenes : [];
-  return list.flatMap((scene) => {
-    const resolved = resolveSourceTake(scene, list);
-    if (!resolved) return [];
-    return [{
-      sceneId: sceneKey(scene),
-      sourceId: sceneKey(resolved.source),
-      videoHistoryId: resolved.videoHistoryId,
-      inSec: resolved.inSec,
-      outSec: resolved.outSec,
-    }];
-  });
 }
 
 const textOf = (value) => (typeof value === 'string' ? value.trim() : '');

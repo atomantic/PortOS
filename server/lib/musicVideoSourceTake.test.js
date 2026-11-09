@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { clipPlaybackWindow } from './musicVideoLayers.js';
 import { shotRequestSpanSec } from './musicVideoShotTiming.js';
 import {
-  resolveSourceTake, scenePlayableClipId, sharedTakeOffers, sharedTakePatches, sourceTakeOf, sourceTakeWindows,
+  isContinuingScene, resolveSourceTake, scenePlayableClipId, sharedTakeOffers, sharedTakePatches,
 } from './musicVideoSourceTake.js';
 
 const shot = (sceneId, startSec, endSec, extra = {}) => ({
@@ -15,25 +15,24 @@ describe('source takes', () => {
     const returns = [0, 2, 4, 6, 8, 10].map((start, i) => shot(`r${i}`, start, start + 0.8, {
       sourceTake: { sceneId: 'src', offsetSec: start },
     }));
-    return { source, scenes: [source, ...returns] };
+    return { source, returns, scenes: [source, ...returns] };
   };
 
   it('plays six non-adjacent returns as six windows of one clip, and follows a changed source clip', () => {
-    const { source, scenes } = windowsOf('clip-a');
-    const windows = sourceTakeWindows(scenes);
+    const { source, returns, scenes } = windowsOf('clip-a');
+    const windows = returns.map((scene) => resolveSourceTake(scene, scenes));
     expect(windows).toHaveLength(6);
     expect(new Set(windows.map((row) => row.videoHistoryId))).toEqual(new Set(['clip-a']));
     expect(windows.map((row) => [row.inSec, row.outSec])).toEqual([
       [0, 0.8], [2, 2.8], [4, 4.8], [6, 6.8], [8, 8.8], [10, 10.8],
     ]);
-    for (const row of windows) {
-      const scene = scenes.find((item) => item.sceneId === row.sceneId);
+    for (const [scene, row] of returns.map((scene, i) => [scene, windows[i]])) {
       const playback = clipPlaybackWindow(scene, { inSec: row.inSec, outSec: row.outSec }, 30);
       expect(playback.inSec).toBe(row.inSec);
       expect(playback.outSec).toBe(row.outSec);
     }
     source.videoHistoryId = 'clip-b';
-    expect(sourceTakeWindows(scenes).every((row) => row.videoHistoryId === 'clip-b')).toBe(true);
+    expect(returns.every((scene) => resolveSourceTake(scene, scenes)?.videoHistoryId === 'clip-b')).toBe(true);
     expect(scenePlayableClipId(scenes[1], scenes)).toBe('clip-b');
   });
 
@@ -50,7 +49,7 @@ describe('source takes', () => {
     const b = shot('b', 2, 3, { sourceTake: { sceneId: 'a' } });
     expect(resolveSourceTake(a, [a, b])).toBeNull();
     expect(resolveSourceTake(shot('a', 0, 1, { sourceTake: { sceneId: 'gone' } }), [a])).toBeNull();
-    expect(sourceTakeOf(shot('a', 0, 1, { sourceTake: { sceneId: 'a' } }))).toBeNull();
+    expect(isContinuingScene(shot('a', 0, 1, { sourceTake: { sceneId: 'a' } }))).toBe(false);
     expect(scenePlayableClipId(a, [a, b])).toBeNull();
   });
 
