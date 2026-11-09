@@ -23,7 +23,10 @@ The direct pins (`scripts/requirements-muscriptor-cuda.txt`) are torch
 2.14.1+cu126 (the build the other cu126 runtimes share), muscriptor 0.4.0 and
 huggingface-hub 0.36.2 with hf-xet, matching the Apple Silicon lock's
 muscriptor and hub pins. The resolved torchaudio 2.11.1 (a `py3-none` wheel
-declaring `torch>=2.11`) is the version the Apple Silicon lock uses. The CUDA
+declaring `torch>=2.11`) is the version the Apple Silicon lock uses. TorchAudio
+2.11 is its final maintenance line, which upstream states works with torch 2.11
+and every later release, so no matched `+cu126` torchaudio build exists or is
+needed. The CUDA
 torch build also runs on a host without an NVIDIA GPU, so MuScriptor keeps its
 CPU fallback; the readiness probe imports `TranscriptionModel` and does not
 require a CUDA device. A different `PORTOS_TORCH_CUDA_INDEX` is rejected for
