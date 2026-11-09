@@ -21,7 +21,7 @@
 #   INSTALL_MUSICGEN '1' to bootstrap a venv at ~/.portos/venv-musicgen + clone ml-explore/mlx-examples to ~/.portos/mlx-examples for local MusicGen (MLX) background-music generation (pipeline audio stage). Default: 0; opt in with INSTALL_MUSICGEN=1 (macOS / Apple Silicon only).
 #   MLX_EXAMPLES_PIN  commit SHA of ml-explore/mlx-examples to check out for MusicGen (default: main).
 #   INSTALL_MINIMAX_MUSIC3_MLX '1' to bootstrap a separate venv at ~/.portos/venv-minimax-music3-mlx for native MiniMax Music 3 MLX generation (Music studio). Default: 0; opt in with INSTALL_MINIMAX_MUSIC3_MLX=1 (macOS / Apple Silicon only).
-#   INSTALL_AUDIOLDM2 '1' to bootstrap a venv at ~/.portos/venv-audioldm2 (torch + diffusers) for local AudioLDM2 long-form background-music generation (pipeline audio stage, second backend alongside MusicGen). Default: 0; opt in with INSTALL_AUDIOLDM2=1 (runs on MPS / CUDA / CPU).
+#   INSTALL_AUDIOLDM2 '1' to bootstrap a venv at ~/.portos/venv-audioldm2 (torch + diffusers) for local AudioLDM2 long-form background-music generation (pipeline audio stage, second backend alongside MusicGen). Default: 0; opt in with INSTALL_AUDIOLDM2=1 (runs on MPS / CUDA / CPU; Apple Silicon or x86_64 Windows/Linux, hash-locked).
 #   INSTALL_ACESTEP '1' to bootstrap a venv at ~/.portos/venv-acestep (torch + the acestep package) for local ACE-Step full-song generation with vocals (Music studio, third backend). Default: 0; opt in with INSTALL_ACESTEP=1 (runs on MPS / CUDA / CPU; checkpoints auto-download to ~/.cache/ace-step on first run).
 #   ACESTEP_PIN    commit SHA of ace-step/ACE-Step to check out for ACE-Step (default: 1bee4c9f5b43e30995f8d4d33b3919197ce1bd68).
 #   INSTALL_ACESTEP15 '1' to bootstrap a venv at ~/.portos/venv-acestep15 (the ACE-Step 1.5 package + torch) for local ACE-Step 1.5 full-song generation (Music studio). Default: 0; opt in with INSTALL_ACESTEP15=1 (runs on MPS / CUDA / CPU; model weights are installed separately from Music).
@@ -1179,16 +1179,36 @@ if [[ "$INSTALL_AUDIOLDM2" == "1" ]]; then
   # Git Bash on Windows creates Scripts/python.exe even though this is a bash
   # installer; venv_python keeps the installer aligned with the JS resolver.
   AUDIOLDM2_VENV="${HOME}/.portos/venv-audioldm2"
+  if ! is_apple_silicon; then
+    # Linux/Windows install only from a hash lock, which covers x86_64 with the
+    # cu126 torch build (it also runs on CPU). Other hosts have no lock.
+    if is_macos; then
+      echo "❌ AudioLDM2 hash locks cover Apple Silicon and x86_64 Windows/Linux; Intel macOS is unsupported." >&2
+      exit 1
+    fi
+    if ! have uv; then
+      echo "❌ AudioLDM2 needs uv to provision its locked Python 3.11 runtime. Install uv and retry Repair." >&2
+      exit 1
+    fi
+    case "$(uname -m)" in
+      x86_64|amd64|AMD64) ;;
+      *) echo "❌ AudioLDM2 CUDA hash locks support x86_64 Windows/Linux only." >&2; exit 1 ;;
+    esac
+    if [[ "$TORCH_CUDA_INDEX" != "https://download.pytorch.org/whl/cu126" ]]; then
+      echo "❌ AudioLDM2 CUDA is locked to cu126. Unset PORTOS_TORCH_CUDA_INDEX; see docs/AUDIOLDM2_CUDA.md." >&2
+      exit 1
+    fi
+  fi
   mkdir -p "${HOME}/.portos"
   reset_universal_venv "$AUDIOLDM2_VENV" "$PYTHON_BIN"
 
-  if ! venv_exists "$AUDIOLDM2_VENV"; then
-    echo "📦 Creating AudioLDM2 venv at ${AUDIOLDM2_VENV}..."
-    "$PYTHON_BIN" -m venv "$AUDIOLDM2_VENV"
-  fi
-  AUDIOLDM2_PY="$(venv_python "$AUDIOLDM2_VENV")"
-  echo "📦 Installing AudioLDM2 (diffusers) packages into ${AUDIOLDM2_VENV}..."
   if is_apple_silicon; then
+    if ! venv_exists "$AUDIOLDM2_VENV"; then
+      echo "📦 Creating AudioLDM2 venv at ${AUDIOLDM2_VENV}..."
+      "$PYTHON_BIN" -m venv "$AUDIOLDM2_VENV"
+    fi
+    AUDIOLDM2_PY="$(venv_python "$AUDIOLDM2_VENV")"
+    echo "📦 Installing AudioLDM2 (diffusers) packages into ${AUDIOLDM2_VENV}..."
     # Apple Silicon installs only from the hash-pinned lock
     # (scripts/requirements-audioldm2-mlx.lock.txt): no install-time resolution,
     # so a new or compromised transitive release can't land on the next Repair.
@@ -1202,21 +1222,30 @@ if [[ "$INSTALL_AUDIOLDM2" == "1" ]]; then
     fi
     "$AUDIOLDM2_PY" -m pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-audioldm2-mlx.lock.txt"
   else
-    # Linux/Windows still resolve at install time (hash-pinned CUDA lock: #15481).
-    "$AUDIOLDM2_PY" -m pip install --upgrade pip wheel setuptools >/dev/null
-    # torch runs the model; diffusers provides AudioLDM2Pipeline; transformers +
-    # sentencepiece supply the text encoders (T5 / GPT-2 / CLAP) AudioLDM2 chains;
-    # accelerate speeds device placement; numpy/scipy back the audio math. We write
-    # WAV via the stdlib `wave` module in the sidecar, so no soundfile dep.
-    "$AUDIOLDM2_PY" -m pip install --upgrade \
-      torch \
-      diffusers \
-      "transformers<5" \
-      sentencepiece \
-      accelerate \
-      numpy \
-      scipy \
-      "huggingface_hub[hf_xet]"
+    if is_windows; then
+      AUDIOLDM2_LOCK="${SCRIPT_DIR}/requirements-audioldm2-cuda-windows.lock.txt"
+    else
+      AUDIOLDM2_LOCK="${SCRIPT_DIR}/requirements-audioldm2-cuda-linux.lock.txt"
+    fi
+    # The locks target 3.11. Repair keeps a standalone 3.11 venv and rebuilds
+    # other minors and Conda bases, whose DLL search path can stop CUDA torch
+    # loading on Windows.
+    if venv_exists "$AUDIOLDM2_VENV"; then
+      AUDIOLDM2_PY="$(venv_python "$AUDIOLDM2_VENV")"
+      if ! "$AUDIOLDM2_PY" -c "import sys; from pathlib import Path; sys.exit(sys.version_info[:2] != (3, 11) or (Path(sys.base_prefix) / 'conda-meta').is_dir())"; then
+        echo "♻️ Rebuilding AudioLDM2 with its locked Python 3.11..."
+        uv venv --clear --managed-python --python 3.11 "$AUDIOLDM2_VENV"
+      fi
+    fi
+    if ! venv_exists "$AUDIOLDM2_VENV"; then
+      echo "📦 Creating AudioLDM2 venv (Python 3.11) at ${AUDIOLDM2_VENV}..."
+      uv venv --managed-python --python 3.11 "$AUDIOLDM2_VENV"
+    fi
+    AUDIOLDM2_PY="$(venv_python "$AUDIOLDM2_VENV")"
+    # Sync removes packages outside the lock. Direct pins:
+    # scripts/requirements-audioldm2-cuda.txt.
+    echo "📦 Syncing the hash-pinned AudioLDM2 CUDA runtime into ${AUDIOLDM2_VENV}..."
+    uv pip sync --require-hashes --only-binary :all: --index-strategy unsafe-best-match --python "$AUDIOLDM2_PY" "$AUDIOLDM2_LOCK"
   fi
   pin_venv_arm64 "$AUDIOLDM2_VENV"
   # Verify the pipeline class imports — a clean import means generation only
