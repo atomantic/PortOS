@@ -73,7 +73,8 @@ import { resolveReactorApiKey, mintReactorToken } from '../services/videoGen/rea
 import { isVideoModeUsable, VIDEO_GEN_MODE } from '../services/videoGen/modes.js';
 import { MAX_VIDEO_BATCH_SIZE } from '../services/videoGen/batch.js';
 import { VIDEO_GEN_LOCAL_ONLY_FIELDS, REFERENCE_AUDIO_FIELDS, VIDEO_REFERENCE_IMAGE_FIELDS, MAX_VIDEO_REFERENCE_LABEL_LENGTH } from '../services/videoGen/requestFields.js';
-import { attachSseClient, cancelJob, listJobs } from '../services/mediaJobQueue/index.js';
+import { attachSseClient, cancelJob, listJobs, laneConcurrencyFor } from '../services/mediaJobQueue/index.js';
+import { mediaJobExecutionLane } from '../lib/generationModes.js';
 import { getTextEncoderRepo, isHfRepoId } from '../lib/mediaModels.js';
 import {
   IC_LORA_MODE_VALUES, icLoraSpecForMode, listIcLoraWeights, listIcLoraRemixModes,
@@ -1317,23 +1318,36 @@ const pickJobParams = (job) => {
 };
 
 router.get('/active', (_req, res) => {
-  const running = listJobs({ kind: 'video', status: 'running' })[0];
-  const queuedList = !running ? listJobs({ kind: 'video', status: 'queued' }) : [];
+  const runningList = listJobs({ kind: 'video', status: 'running' });
+  const queuedList = runningList.length === 0 ? listJobs({ kind: 'video', status: 'queued' }) : [];
   const queued = queuedList.length ? queuedList[queuedList.length - 1] : null;
-  const job = running || queued;
-  if (!job) return res.json({ activeJob: null });
+  const primaryJob = runningList[0] || queued;
+
+  const formatJob = (job) => ({
+    jobId: job.id,
+    generationId: job.id,
+    status: job.status,
+    position: job.position,
+    startedAt: job.startedAt || null,
+    params: pickJobParams(job),
+  });
+
+  const activeJobs = runningList.map(formatJob);
+  const activeJob = primaryJob ? formatJob(primaryJob) : null;
+  const sampleJob = primaryJob || runningList[0];
+  const lane = sampleJob ? mediaJobExecutionLane({ kind: sampleJob.kind, mode: sampleJob.params?.mode }) : 'gpu';
+  const isLocal = lane === 'gpu';
+  const limit = (typeof laneConcurrencyFor === 'function' && sampleJob) ? laneConcurrencyFor(sampleJob) : 1;
+
+  if (!primaryJob && runningList.length === 0) {
+    return res.json({ activeJob: null });
+  }
+
   res.json({
-    activeJob: {
-      jobId: job.id,
-      generationId: job.id,
-      status: job.status,
-      position: job.position,
-      // When the worker dequeued this job. A page that reloads mid-render needs
-      // it to keep showing a truthful elapsed clock; without it the render
-      // status card would restart from zero and read as a fresh start (#5872).
-      startedAt: job.startedAt || null,
-      params: pickJobParams(job),
-    },
+    activeJob,
+    activeJobs,
+    limit,
+    ...(isLocal ? { memoryGoverned: true, limitReason: 'memory-governed' } : {}),
   });
 });
 

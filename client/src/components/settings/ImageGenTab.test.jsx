@@ -768,6 +768,31 @@ describe('ImageGenTab — Grok CLI section (#2859)', () => {
     await awaitSave();
     expect(sentSlices()).toEqual({ imageGen: { mode: 'local' }, 'imageGen.grok': { enabled: false } });
   });
+
+  it('loads and saves grok image and video parallel limits', async () => {
+    getSettings.mockResolvedValue({
+      imageGen: {
+        mode: 'external',
+        grok: { enabled: true, parallelLimit: 3 },
+      },
+      videoGen: {
+        grok: { parallelLimit: 4 },
+      },
+    });
+    await renderTab(['/media/image?mediaTab=grok']);
+    const imageInput = screen.getByLabelText('Parallel image render limit');
+    const videoInput = screen.getByLabelText('Parallel video render limit');
+    expect(imageInput.value).toBe('3');
+    expect(videoInput.value).toBe('4');
+    fireEvent.change(imageInput, { target: { value: '6' } });
+    fireEvent.blur(imageInput);
+    fireEvent.change(videoInput, { target: { value: '8' } });
+    fireEvent.blur(videoInput);
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+    await awaitSave();
+    expect(sentSlices()['imageGen.grok'].parallelLimit).toBe(6);
+    expect(sentSlices()['videoGen.grok'].parallelLimit).toBe(8);
+  });
 });
 
 describe('ImageGenTab — fal.ai section', () => {

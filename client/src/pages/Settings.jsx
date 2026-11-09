@@ -24,6 +24,7 @@ import SettingsTabsHeader from '../components/settings/SettingsTabsHeader';
 // stale palette entries keep working.
 const REDIRECTS = {
   'image-gen': '/media/image?settings=1',
+  render: '/media/image?settings=1',
   imessage: '/messages/imessage?settings=1',
   signal: '/messages/signal',
   catalog: '/catalog?settings=1',

@@ -76,9 +76,13 @@ vi.mock('../services/aiAssignments.js', () => ({
 }));
 vi.mock('../services/mediaJobQueue/index.js', () => ({
   setCodexParallelLimit: vi.fn(),
+  syncParallelLimits: vi.fn(),
   CODEX_PARALLEL_MIN: 1,
   CODEX_PARALLEL_MAX: 8,
   CODEX_PARALLEL_DEFAULT: 2,
+  PARALLEL_LIMIT_MIN: 1,
+  PARALLEL_LIMIT_MAX: 8,
+  PARALLEL_LIMIT_DEFAULT: 1,
 }));
 vi.mock('../services/datadog.js', () => ({
   hasConfiguredInstances: vi.fn(async () => false),
