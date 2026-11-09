@@ -729,6 +729,11 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   // execution containment (#9667). Gate before uploads, stores or queue writes,
   // including inference-first requests that can fall back to CLI/TUI.
   'POST /api/image-gen/generate',
+  // The shot card's frame and clip submit the same image and video jobs (#15583).
+  'POST /api/music-video/:id/scenes/frames',
+  'POST /api/music-video/:id/scenes/clips',
+  'POST /api/music-video/:id/scenes/:sceneId/frame',
+  'POST /api/music-video/:id/scenes/:sceneId/clip',
   'POST /api/image-gen/avatar',
   // Film-look bake launches a headless composition browser on the host (#13055).
   'POST /api/image-gen/:filename/film-look',

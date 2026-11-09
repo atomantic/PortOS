@@ -29,8 +29,10 @@
 
 import { createHash, randomUUID } from 'crypto';
 import { applyImageVisualProfile } from './visualProfile.js';
-import { musicVideoCastGuideReferences, musicVideoLimitReferenceFiles, musicVideoLinkedCastReferences, musicVideoPanelArtReferences, musicVideoResearchReferences, musicVideoReferenceChoices, musicVideoStyleImages, musicVideoReferenceCapacity, musicVideoStylePrompt, musicVideoStyleReferenceCapacity } from '../../lib/musicVideoConditioning.js';
+import { MUSIC_VIDEO_MAX_REFERENCE_CHOICES, musicVideoCastGuideReferences, musicVideoConditioningReferences, musicVideoFrameReferenceFiles, musicVideoLimitReferenceFiles, musicVideoLinkedCastReferences, musicVideoMissingFrameLinkedPicks, musicVideoPanelArtReferences, musicVideoResearchReferences, musicVideoReferenceChoices, musicVideoStyleImages, musicVideoReferenceCapacity, musicVideoStylePrompt, musicVideoStyleReferenceCapacity } from '../../lib/musicVideoConditioning.js';
+import { castInputsFromReferences } from '../../lib/musicVideoCastLook.js';
 import { musicVideoCameoReferences } from '../../lib/musicVideoCameos.js';
+import { FRAME_REFERENCE_UNAVAILABLE } from '../musicVideo/sceneFrameReferences.js';
 import { musicVideoFrameModelInput } from '../../lib/musicVideoShotPrompt.js';
 import { captureImageFrameDependencies } from '../../lib/musicVideoDependencies.js';
 import { musicVideoGreyboxReferences } from '../../lib/musicVideoGreybox.js';
@@ -173,10 +175,41 @@ function placeGreyboxReferences(namedReferenceFiles, imageIds, { cached = [], fr
   namedReferenceFiles.splice(0, namedReferenceFiles.length, ...(keepFrame ? [frame] : []), ...greybox, ...rest);
 }
 
+// The shot card's reference set, shared with POST /music-video/:id/scenes/:sceneId/frame.
+// An omitted file list is filled. An explicit pick that is missing, or a sent
+// list that drops one, is refused before a take is spent.
+function reconcileCardFrameReferences(data, namedReferenceFiles, { project, scene, castMedia, greybox, referenceFilesOmitted }) {
+  const tag = data.musicVideo;
+  if (!tag?.compose || !scene) return;
+  if (musicVideoMissingFrameLinkedPicks(project, scene, castMedia).length) {
+    throw new ServerError(FRAME_REFERENCE_UNAVAILABLE, { status: 409, code: 'MUSIC_VIDEO_FRAME_REFERENCE_MISSING' });
+  }
+  const explicit = Array.isArray(scene.frameReferenceIds);
+  if (!referenceFilesOmitted && !explicit) return;
+  const lead = ((tag.fromFrame || tag.refine) && namedReferenceFiles[0]) || tag.leadImageId
+    || ((tag.fromFrame || tag.refine || tag.slot === 'end') ? scene.referenceImageId : null) || null;
+  const conditioning = musicVideoConditioningReferences(project, scene, castMedia, greybox);
+  const expected = musicVideoFrameReferenceFiles(lead, conditioning, MUSIC_VIDEO_MAX_REFERENCE_CHOICES, { reservePanel: !explicit });
+  if (referenceFilesOmitted) {
+    if (!expected.length) return;
+    namedReferenceFiles.splice(0, namedReferenceFiles.length, ...expected);
+    data.referenceImageFiles = expected.slice();
+    if (!tag.castInputs) {
+      data.musicVideo = { ...data.musicVideo, castInputs: castInputsFromReferences(scene, conditioning.filter((ref) => expected.includes(ref.imageId))) };
+    }
+    return;
+  }
+  const required = conditioning.filter((ref) => !ref.greybox).map((ref) => ref.imageId);
+  const sent = new Set(namedReferenceFiles);
+  if (required.some((id) => !sent.has(id))) {
+    throw new ServerError(FRAME_REFERENCE_UNAVAILABLE, { status: 409, code: 'MUSIC_VIDEO_FRAME_REFERENCE_MISSING' });
+  }
+}
+
 // A music-video scene render adds its greybox capture, its composed shot prompt
 // and its mood-board style images. Mutates `data` and `namedReferenceFiles`.
-async function applyMusicVideoSceneInputs(data, { project, mode, localModel, cloudModel, namedReferenceFiles, referenceUploads, initInputCount }) {
-  const tag = data.musicVideo;
+async function applyMusicVideoSceneInputs(data, { project, mode, localModel, cloudModel, namedReferenceFiles, referenceUploads, initInputCount, referenceFilesOmitted = false }) {
+  let tag = data.musicVideo;
   const scene = project?.scenes?.find((entry) => entry.sceneId === tag.sceneId);
   const [{ loadMusicVideoGreybox }, { loadLinkedStoryboardPanel }, castGuideMedia, subjectScale] = await Promise.all([
     import('../musicVideo/greyboxReferences.js'), import('../musicVideo/linkedPanel.js'),
@@ -188,6 +221,8 @@ async function applyMusicVideoSceneInputs(data, { project, mode, localModel, clo
     castGuideMedia?.loadSceneCastMedia(scene, { project }),
     subjectScale?.loadMusicVideoSubjectSizes(project),
   ]);
+  reconcileCardFrameReferences(data, namedReferenceFiles, { project, scene, castMedia, greybox, referenceFilesOmitted });
+  tag = data.musicVideo;
   const greyboxFiles = musicVideoGreyboxReferences(greybox).map((ref) => ref.imageId);
   if (greybox) {
     placeGreyboxReferences(namedReferenceFiles, greyboxFiles, { cached: [tag.greyboxImageId, tag.greyboxBlockingImageId], fromFrame: tag.fromFrame || tag.refine });
@@ -416,7 +451,12 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
     if (localModel?.runner === 'flux3' && Number(data.width) === standardSize.width && Number(data.height) === standardSize.height) {
       Object.assign(data, musicVideoFrameGenSize(project, localModel));
     }
-    await applyMusicVideoSceneInputs(data, { project, mode, localModel, cloudModel: selectedCloudModel, namedReferenceFiles, referenceUploads, initInputCount });
+    await applyMusicVideoSceneInputs(data, {
+      project, mode, localModel, cloudModel: selectedCloudModel, namedReferenceFiles, referenceUploads, initInputCount,
+      referenceFilesOmitted: !Array.isArray(data.referenceImageFiles),
+    });
+    // A list the server filled still has to name the catalog basis the files came from.
+    assertCatalogInputBasis(project, data.musicVideo.catalogBasis, { required: namedReferenceFiles.length > 0 || !!data.initImageFile });
     assertCatalogReferenceFiles(project, namedReferenceFiles);
   }
   const referenceImageCount = namedReferenceFiles.length + referenceUploads.length;

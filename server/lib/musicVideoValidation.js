@@ -2223,6 +2223,71 @@ export const musicVideoSceneEndSchema = z.object({
   endSec: z.number().finite().positive(),
 }).strict();
 
+// Shot-card frame and clip renders (#15583). The server loads cast media and
+// the shot's references; the client sends the shot and the slot.
+const musicVideoFrameImageTargetSchema = z.object({
+  mode: z.string().min(1).max(40),
+  modelId: z.string().min(1).max(300).optional(),
+  cloudModel: z.string().min(1).max(300).optional(),
+}).strict();
+
+const musicVideoThenClipSchema = z.object({
+  backend: z.string().min(1).max(40).optional(),
+  model: z.string().min(1).max(300).optional(),
+  songAudio: z.boolean().optional(),
+}).strict();
+
+export const musicVideoSceneFrameRenderSchema = z.object({
+  slot: z.enum(['start', 'end']).optional(),
+  select: z.boolean().optional(),
+  imageTarget: musicVideoFrameImageTargetSchema.optional(),
+  refine: z.string().max(32000).optional(),
+  fromFrame: z.boolean().optional(),
+  referenceImageId: galleryImageName.optional(),
+  revisionId: z.string().min(1).max(200).optional(),
+  thenClip: musicVideoThenClipSchema.optional(),
+}).strict();
+
+const musicVideoSceneIdListSchema = z.array(z.string().min(1).max(64)).min(1).max(200);
+
+export const musicVideoSceneFramesRenderSchema = musicVideoSceneFrameRenderSchema.extend({
+  sceneIds: musicVideoSceneIdListSchema,
+}).strict();
+
+// A clip is either the video body the shot card already builds, or a short
+// form (`card` / `target`) the server expands. The video route re-validates
+// the assembled body, so provider fields stay on this object.
+const musicVideoClipCardSchema = z.object({
+  prompt: z.string().max(32000).optional(),
+  endFrame: z.boolean().optional(),
+  songAudio: z.boolean().optional(),
+  wholeLine: z.boolean().optional(),
+  ltxReferences: z.boolean().optional(),
+  startFrameLayout: z.boolean().optional(),
+  expectedClipReferenceFiles: z.array(galleryImageName).max(16).optional(),
+  expectedClipReferenceLabels: z.array(z.string().max(200)).max(16).optional(),
+}).strict();
+
+const musicVideoClipTargetSchema = z.object({
+  backend: z.enum(['local', 'grok', 'fal', 'runway', 'gemini']).optional(),
+  modelId: z.string().max(300).optional(),
+  generationMode: z.string().max(80).optional(),
+  grokDuration: z.number().positive().max(60).optional(),
+  numFrames: z.number().int().positive().max(1000).optional(),
+  audioReactiveScale: z.number().min(0).max(4).optional(),
+}).strict();
+
+export const musicVideoSceneClipRenderSchema = z.object({
+  revisionId: z.string().min(1).max(200).optional(),
+  prompt: z.string().max(32000).optional(),
+  card: musicVideoClipCardSchema.optional(),
+  target: musicVideoClipTargetSchema.optional(),
+}).passthrough();
+
+export const musicVideoSceneClipsRenderSchema = musicVideoSceneClipRenderSchema.and(z.object({
+  sceneIds: musicVideoSceneIdListSchema,
+}));
+
 // Autonomous shot planner (#1855): propose a scene per analyzed audio section.
 // `seedPrompts` (default true) additionally asks the active/given AI provider
 // for a first-pass framePrompt/prompt per scene — best-effort, never fails the
