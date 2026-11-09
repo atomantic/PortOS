@@ -2,9 +2,10 @@
  * Music Video — the visual guide for a catalog-linked Cast & Sets stage
  * (pure HTML generator, same self-contained rules as castAndSetsSheet.js).
  *
- * A catalog stage has no generated direction, so everything here comes from the
- * resolved check-in items and the project's own shots. Which set a shot belongs
- * to is the answer conditioning uses (`sceneCatalogSubjectIds`), so the song map
+ * A catalog stage renders nothing from a generated direction: the cast, sets and
+ * objects come from the resolved check-in items and the project's own shots.
+ * Only the direction's words it keeps (see directionTextSection) are shown.
+ * Which set a shot belongs to is the answer conditioning uses (`sceneCatalogSubjectIds`), so the song map
  * cannot disagree with what the shot would actually render from.
  */
 
@@ -27,6 +28,27 @@ const CATALOG_STYLE = `
 .extra{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:8px}
 .set figcaption em.off{color:var(--muted)}
 `;
+
+/**
+ * The stored direction's words a catalog check-in keeps (look line, protagonist
+ * signature/rules/expressions, props, overlay concept); the director edits them
+ * in Cast & Sets. Empty when the stage has no direction or every field is blank.
+ */
+function directionTextSection(direction) {
+  if (!direction) return '';
+  const p = direction.protagonist || {};
+  const facts = [
+    ['Look', direction.look],
+    ['Signature', p.signature],
+    ['Rules', (p.rules || []).map((r) => r.replace(/[.;]\s*$/, '')).join('; ')],
+    ['Expressions', (p.expressions || []).join('; ')],
+  ].filter(([, v]) => v).map(([k, v]) => `<dt>${e(k)}</dt><dd>${e(v)}</dd>`).join('');
+  const props = (direction.props || []).map((prop) => `<div><h3>${e(prop.name)}${prop.owner ? ` · ${e(prop.owner)}` : ''}</h3><p>${e(prop.description)}</p></div>`).join('');
+  const overlay = direction.overlayConcept || {};
+  const overlayCards = (overlay.elements || []).map((el) => `<div><h3>${e(el.name)}</h3><p>${e(el.description)}</p></div>`).join('');
+  if (!facts && !props && !overlay.summary && !overlayCards) return '';
+  return `<section><h2><small>Art direction</small>The look and rules every shot follows</h2>${facts ? `<dl class="facts wide">${facts}</dl>` : ''}${props ? `<h3>Props</h3><div class="overlay">${props}</div>` : ''}${overlay.summary || overlayCards ? `<h3>Overlay</h3>${overlay.summary ? `<p class="sub">${e(overlay.summary)}</p>` : ''}${overlayCards ? `<div class="overlay">${overlayCards}</div>` : ''}` : ''}</section>`;
+}
 
 /** The filenames the sheet embeds; the caller turns them into `data:` URIs. */
 export const catalogSheetImageFiles = (items) => [...new Set((items || []).flatMap((item) => (item.images || []).slice(0, IMAGES_PER_SUBJECT)))];
@@ -155,6 +177,7 @@ export function renderCatalogCastAndSetsSheet({ title = 'Music Video', project =
 <div class="hud"><span>Check-in <b>Cast &amp; Sets</b></span><span>Source <b>Catalog</b></span><span>Revision <b>${Number(revision) || 1}</b></span>${total ? `<span>Track ${formatSheetTime(total)}${bpm ? ` · ${Math.round(bpm)} BPM` : ''}</span>` : ''}<span>${plural(places.length, 'set')} · ${plural(objects.length, 'object')}</span></div>
 <h1>${e(title)}</h1>
 ${concept ? `<p class="lede">${e(concept)}</p>` : ''}
+${directionTextSection(project?.castAndSets?.direction)}
 ${castSections}
 ${places.length ? `<section><h2><small>Sets</small>${plural(places.length, 'set')}</h2><p class="sub">Each set's images and text come from its catalog record.</p><div class="sets">${places.map((item) => subjectCard(item, { images, placeholder, mark: setUse(item) })).join('')}</div></section>` : ''}
 ${objects.length ? `<section><h2><small>Objects</small>${plural(objects.length, 'object')}</h2><p class="sub">Shots that show one of these use its catalog images.</p><div class="sets">${objects.map((item) => subjectCard(item, { images, placeholder })).join('')}</div></section>` : ''}

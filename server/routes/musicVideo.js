@@ -99,6 +99,7 @@ import {
   musicVideoDevArtifactFileQuerySchema,
   musicVideoCastAndSetsStartSchema,
   musicVideoCastAndSetsDirectionEditSchema,
+  musicVideoCastAndSetsDirectionTextEditSchema,
   musicVideoCastAndSetsFeedbackSchema,
   musicVideoCastAndSetsFeedbackPlanSchema,
   musicVideoCastAndSetsFeedbackRenderSchema,
@@ -240,6 +241,7 @@ import { devArtifactTypeFor } from '../services/musicVideo/devArtifacts.js';
 import {
   startCastAndSets,
   editCastAndSetsDirection,
+  editCastAndSetsDirectionText,
   applyCastAndSetsFeedback,
   renderCastAndSetsFeedback,
   refreshCastAndSetsFeedbackRenderer,
@@ -1718,6 +1720,12 @@ router.post('/:id/cast-and-sets/discard-image-edit', asyncHandler(async (req, re
 router.patch('/:id/cast-and-sets/direction', asyncHandler(async (req, res) => {
   const input = validateRequest(musicVideoCastAndSetsDirectionEditSchema, req.body || {});
   res.status(202).json(await editCastAndSetsDirection(req.params.id, input));
+}));
+
+// Text-only (catalog check-ins): saves words, renders nothing.
+router.patch('/:id/cast-and-sets/direction-text', asyncHandler(async (req, res) => {
+  const input = validateRequest(musicVideoCastAndSetsDirectionTextEditSchema, req.body || {});
+  res.json(await editCastAndSetsDirectionText(req.params.id, input));
 }));
 
 router.post('/:id/cast-and-sets/feedback', asyncHandler(async (req, res) => {

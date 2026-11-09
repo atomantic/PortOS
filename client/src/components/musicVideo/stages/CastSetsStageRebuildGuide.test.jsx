@@ -57,4 +57,21 @@ describe('catalog Cast & Sets guide rebuild', () => {
     render(<CastSetsStage board={board()} />);
     expect(button().disabled).toBe(true);
   });
+
+  // Uniquely catches a catalog check-in offering no way to correct its kept direction text, or sending fields the director did not change (#15473).
+  it('edits the kept direction text and sends only what changed', async () => {
+    const direction = { look: 'Stale look', protagonist: { name: 'Example Lead', signature: 'Old key', rules: ['Never without the key'], expressions: ['wary'] },
+      props: [{ id: 'key', name: 'Brass key', owner: '', description: 'An old brass key' }], overlayConcept: { summary: 'Old overlay', elements: [] } };
+    const editDirectionText = vi.fn(async () => ({ project: {} }));
+    const stage = board({ project: { id: 'mv-example', castAndSets: { source: 'catalog', status: 'approved', direction }, concept: {} },
+      castSets: { busy: false, rebuildCatalogGuide: vi.fn(), editDirectionText } });
+    render(<CastSetsStage board={stage} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit direction text' }));
+    fireEvent.change(screen.getByLabelText('Look'), { target: { value: 'Clean daylight' } });
+    fireEvent.change(screen.getByLabelText(/Protagonist rules/), { target: { value: 'Always wears the scarf\n\n' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Remove prop 1' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save direction text' }));
+    expect(editDirectionText).toHaveBeenCalledWith({ look: 'Clean daylight', protagonist: { rules: ['Always wears the scarf'] }, props: [] });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Edit direction text' })).toBeTruthy());
+  });
 });

@@ -13,6 +13,7 @@ import {
   discardMusicVideoCastAndSetsImageEdit,
   regenerateMusicVideoCastAndSets,
   editMusicVideoCastAndSetsDirection,
+  editMusicVideoCastAndSetsDirectionText,
   applyMusicVideoCastAndSetsFeedback,
   renderMusicVideoCastAndSetsFeedback,
   refreshMusicVideoCastAndSetsFeedbackRenderer,
@@ -48,7 +49,7 @@ const reachedCheckpoint = (stage) => CHECKPOINTS.has(stage?.status) || stage?.in
  * `interrupted` by a restart), or null when it could not start or the wait was
  * abandoned with `cancelWait()` (the kickoff's Cancel).
  *
- * Returns `{ busy, refresh, start, regenerate, regenerateImages, editDirection, applyFeedback, removeFeedback, resume, approve, reconfirm, skip, discard, rebuildFromStory, runToCheckpoint, cancelWait }`.
+ * Returns `{ busy, refresh, start, regenerate, regenerateImages, editDirection, editDirectionText, applyFeedback, removeFeedback, resume, approve, reconfirm, skip, discard, rebuildFromStory, runToCheckpoint, cancelWait }`.
  */
 export default function useMusicVideoCastAndSets({ project, replaceProject } = {}) {
   const projectId = project?.id || null;
@@ -160,6 +161,7 @@ export default function useMusicVideoCastAndSets({ project, replaceProject } = {
   const acceptImageEdit = (input) => call(() => acceptMusicVideoCastAndSetsImageEdit(projectId, input, { silent: true }), 'Image edit accepted — review the updated check-in');
   const discardImageEdit = (input) => call(() => discardMusicVideoCastAndSetsImageEdit(projectId, input, { silent: true }));
   const editDirection = (edits) => call(() => editMusicVideoCastAndSetsDirection(projectId, edits, { silent: true }), edits.sets?.some((set) => Object.hasOwn(set, 'setReference')) ? 'Greybox selection saved' : 'Direction saved — re-rendering what changed');
+  const editDirectionText = (edits) => call(() => editMusicVideoCastAndSetsDirectionText(projectId, edits, { silent: true }), 'Direction text saved');
   const applyFeedback = ({ text, target = null }) => call(() => applyMusicVideoCastAndSetsFeedback(projectId, { text, ...(target ? { target } : {}) }, { silent: true }), 'Preparing your feedback without rendering images');
   const renderFeedback = (input) => call(() => renderMusicVideoCastAndSetsFeedback(projectId, input, { silent: true }), 'Starting the reviewed feedback plan');
   const refreshFeedbackRenderer = (input) => call(() => refreshMusicVideoCastAndSetsFeedbackRenderer(projectId, input, { silent: true }), 'Refreshing the image renderer');
@@ -212,5 +214,5 @@ export default function useMusicVideoCastAndSets({ project, replaceProject } = {
     w.resolve(null);
   };
 
-  return { busy, refresh, start, linkCatalog, rebuildCatalogGuide, remapCatalogReferences, useImage, editImage, acceptImageEdit, discardImageEdit, acknowledgeImage, reinspectImages, regenerate, regenerateImages, editDirection, applyFeedback, renderFeedback, refreshFeedbackRenderer, removeFeedback, removeImageFeedback, resume, approve, reconfirm, skip, discard, rebuildFromStory, runToCheckpoint, cancelWait };
+  return { busy, refresh, start, linkCatalog, rebuildCatalogGuide, remapCatalogReferences, useImage, editImage, acceptImageEdit, discardImageEdit, acknowledgeImage, reinspectImages, regenerate, regenerateImages, editDirection, editDirectionText, applyFeedback, renderFeedback, refreshFeedbackRenderer, removeFeedback, removeImageFeedback, resume, approve, reconfirm, skip, discard, rebuildFromStory, runToCheckpoint, cancelWait };
 }

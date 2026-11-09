@@ -1235,6 +1235,34 @@ describe('Cast & Sets procedural check-in', () => {
     expect(html).toContain('No raster image: drawn in code');
   });
 
+  // Uniquely catches an approval's background sheet re-save racing an immediate edit's re-assembly for the same artifact version, failing the edited stage.
+  it('re-assembles an edit made right after approval without colliding with the approved sheet save', async () => {
+    const project = await seedProcedural(['image:codex', 'code:render']);
+    await service.startCastAndSets(project.id);
+    await runTo(project.id, 'review');
+    // Hold the approval's re-save until the edit's re-assembly is underway.
+    let releaseApproved;
+    const assembling = new Promise((resolve) => { releaseApproved = resolve; });
+    const onStage = (event) => { if (event.projectId === project.id && event.stage?.status === 'assembling') releaseApproved(); };
+    musicVideoEvents.on('cast-and-sets', onStage);
+    const artifacts = await import('./devArtifactService.js');
+    const save = artifacts.saveGeneratedDevArtifact;
+    const spy = vi.spyOn(artifacts, 'saveGeneratedDevArtifact').mockImplementation(async (id, input) => {
+      if (input.status === 'approved') await assembling;
+      return save(id, input);
+    });
+    onTestFinished(() => { spy.mockRestore(); musicVideoEvents.off('cast-and-sets', onStage); });
+    await service.approveCastAndSets(project.id);
+    const edited = await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`).send({ world: { camera: 'locked off' } });
+    expect(edited.status).toBe(202);
+    await service.__settleCastAndSetsForTests();
+    const stage = (await current(project.id)).castAndSets;
+    expect(stage.stopReason || null).toBeNull();
+    expect(stage).toMatchObject({ status: 'review', direction: { world: { camera: 'locked off' } } });
+    expect(spy.mock.calls.map(([, input]) => input.status ?? null)).toEqual(['approved', null]);
+    expect((await Promise.allSettled(spy.mock.results.map((r) => r.value))).map((r) => r.status)).toEqual(['fulfilled', 'fulfilled']);
+  });
+
   it('keeps the medium of a saved direction when the project settings change before a revision', async () => {
     const project = await seedProcedural(['image:codex', 'code:render']);
     await service.startCastAndSets(project.id);
@@ -2971,6 +2999,46 @@ describe('rebuilding a catalog stage guide (#15086)', () => {
     const current = await guideHtml(project.id, first.body.artifact.id);
     expect(current).toContain('Renamed Harbor');
     expect(current).not.toContain('Example Harbor');
+    expect(runPrompt).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  // Uniquely catches a catalog check-in whose kept direction text cannot be corrected, or whose correction re-renders or drops the approval (#15473).
+  it('saves a text-only direction edit on an approved catalog check-in and the guide shows it', async () => {
+    await useCatalog();
+    const direction = { ...DIRECTION, look: 'Stale grainy look', overlayConcept: { summary: 'Old overlay', elements: [] },
+      protagonist: { ...DIRECTION.protagonist, signature: 'Carries the old brass key', rules: ['Never without the brass key'], expressions: ['wary'] },
+      props: [{ id: 'brass-key', name: 'Brass key', owner: '', description: 'An old brass key' }] };
+    const project = await catalogProject({ direction });
+    const { basis } = (await rebuild(project.id)).body.catalogCheckin;
+    expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/approve`).send({ catalogBasis: basis })).status).toBe(200);
+    const before = await current(project.id);
+
+    const legacyEditor = await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`).send({ protagonist: { signature: 'x' } });
+    expect(legacyEditor.body.code || legacyEditor.body.error?.code).toBe('CAST_SETS_CATALOG_ONLY');
+
+    const edit = { look: 'Clean daylight, fine grain', protagonist: { signature: 'A red scarf', rules: ['Always wears the scarf'], expressions: ['hopeful', 'tired'] },
+      props: [], overlayConcept: { summary: 'Hand-lettered titles', elements: [{ name: 'Title card', description: 'Painted on glass' }] } };
+    const saved = await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction-text`).send(edit);
+    expect(saved.status).toBe(200);
+    expect(saved.body.stage).toMatchObject({ status: 'approved', revision: before.castAndSets.revision, catalogApprovedBasis: basis });
+    expect(saved.body.stage.direction).toMatchObject({ look: edit.look, props: [], overlayConcept: edit.overlayConcept,
+      protagonist: { ...edit.protagonist, name: DIRECTION.protagonist.name } });
+    expect(saved.body.stage.direction.sets).toEqual(direction.sets);
+    expect(saved.body.project.castAndSets.catalogCheckin.approved).toBe(true);
+    expect((await projects.getStoredProject(project.id)).castAndSets.catalogCheckin).toBeUndefined();
+
+    const html = await guideHtml(project.id, (await rebuild(project.id)).body.artifact.id);
+    for (const text of ['Clean daylight, fine grain', 'A red scarf', 'Always wears the scarf', 'hopeful; tired', 'Hand-lettered titles', 'Painted on glass']) expect(html).toContain(text);
+    for (const stale of ['Stale grainy look', 'old brass key', 'Old overlay']) expect(html).not.toContain(stale);
+
+    const unchanged = await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction-text`).send({ look: edit.look });
+    expect(unchanged.status).toBe(422);
+    const legacy = await seed();
+    await projects.mutateProjectRecord(legacy.id, (c) => ({ project: { ...c, castAndSets: { status: 'review', revision: 1, direction, images: {} } } }));
+    const refused = await request(app).patch(`/api/music-video/${legacy.id}/cast-and-sets/direction-text`).send({ look: 'x' });
+    expect(refused.status).toBe(409);
+    expect(refused.body.code || refused.body.error?.code).toBe('CAST_SETS_NOT_CATALOG');
     expect(runPrompt).not.toHaveBeenCalled();
     expect(enqueue).not.toHaveBeenCalled();
   });

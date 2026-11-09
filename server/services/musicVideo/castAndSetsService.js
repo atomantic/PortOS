@@ -46,6 +46,7 @@ import { RENDER_TARGET } from '../../lib/renderTargets.js';
 import { trimTo } from '../../lib/textUtils.js';
 import { castAndSetsPendingGreyboxSetIds } from '../../lib/musicVideoGreybox.js';
 import { getProject, mutateProjectRecord } from './projects.js';
+import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { requireProject } from './requireProject.js';
 import { musicVideoEvents } from './events.js';
 import { effortArg, recordLlmRoute, resolveMusicVideoLlm } from './llmRoute.js';
@@ -73,6 +74,7 @@ import {
 } from './castAndSets.js';
 import {
   applyCastAndSetsDirectionEdits,
+  applyCastAndSetsDirectionTextEdits,
   buildCastAndSetsPrompt,
   castAndSetsAllowsImages,
   castAndSetsMedium,
@@ -805,6 +807,11 @@ const renderStageSheet = async (project, stage, status) => renderCastAndSetsShee
 });
 
 /** Build the sheet, save it as the stage's development artifact, then check in. */
+// Every save of a project's sheet takes the next artifact version, and storeVersion
+// refuses a version another save already took. An approval's background re-save and
+// an immediate edit's re-assembly would otherwise race, failing the edited stage.
+const queueSheetSave = createKeyCachedQueue();
+
 async function assemble(projectId) {
   const marked = await mutateProjectRecord(projectId, (current) => setCastAndSetsStatus(current, 'assembling'));
   publish(projectId, marked.project);
@@ -815,13 +822,13 @@ async function assemble(projectId) {
   const html = await renderStageSheet(project, stage, autoApprove ? 'approved' : 'review');
   const { saveGeneratedDevArtifact } = await import('./devArtifactService.js');
   const existing = stage.artifactId && (project.devArtifacts || []).some((a) => a.id === stage.artifactId && !a.deleted) ? stage.artifactId : null;
-  const { artifact } = await saveGeneratedDevArtifact(projectId, {
+  const { artifact } = await queueSheetSave(projectId, () => saveGeneratedDevArtifact(projectId, {
     artifactId: existing,
     kind: 'cast-sets',
     title: `Cast & Sets — ${stage.direction?.protagonist?.name || project.name}`,
     html,
     source: 'cast-and-sets',
-  });
+  }));
   const out = await mutateProjectRecord(projectId, (current) => setCastAndSetsStatus(current, 'review', {
     extra: { artifactId: artifact.id, artifactVersion: artifact.version },
   }));
@@ -835,7 +842,11 @@ async function assemble(projectId) {
 
 // A sheet rendered for review still asks its check-in questions; once approved,
 // save it again as an approved version that drops them.
-async function refreshApprovedSheet(projectId) {
+function refreshApprovedSheet(projectId) {
+  return queueSheetSave(projectId, () => saveApprovedSheet(projectId));
+}
+
+async function saveApprovedSheet(projectId) {
   const project = await requireProject(projectId);
   const stage = project.castAndSets;
   if (isCatalogCheckin(project) || stage?.status !== 'approved' || !stage.artifactId) return;
@@ -1285,6 +1296,30 @@ export async function editCastAndSetsDirection(projectId, edits) {
   console.log(`🎭 Music Video Cast & Sets ${short(projectId)} direction edited r${out.stage.revision} (${changed.length} field(s))`);
   publish(projectId, out.project);
   inBackground('The direction edit', projectId, () => writePlan(projectId));
+  return { project: out.project, stage: presentCastAndSets(out.stage, PROCESS_ID) };
+}
+
+/**
+ * Save a text-only edit to a catalog check-in's stored direction (look line,
+ * protagonist signature/rules/expressions, props, overlay concept). The catalog
+ * owns the cast, environments and objects, so nothing re-renders, the revision
+ * and status stay put, and the catalog approval (bound to the catalog, not this
+ * text) is untouched. Returns `{ project, stage }`.
+ */
+export async function editCastAndSetsDirectionText(projectId, edits) {
+  let changed = [];
+  const out = await mutateProjectRecord(projectId, (current) => {
+    if (!isCatalogCheckin(current)) throw new ServerError('This check-in renders from its direction. Edit it through the direction editor.', { status: 409, code: 'CAST_SETS_NOT_CATALOG' });
+    const stage = current.castAndSets;
+    if (!stage.direction) throw new ServerError('There is no Cast & Sets direction to edit yet', { status: 409, code: 'CAST_SETS_NO_DIRECTION' });
+    const edited = applyCastAndSetsDirectionTextEdits(stage.direction, edits);
+    if (!edited.changed.length) throw new ServerError('Nothing changed — edit a field first', { status: 422, code: 'CAST_SETS_NO_EDITS' });
+    changed = edited.changed;
+    const next = { ...current, castAndSets: { ...stage, direction: edited.direction, updatedAt: new Date().toISOString() } };
+    return { project: next, stage: next.castAndSets };
+  });
+  console.log(`🎭 Music Video Cast & Sets ${short(projectId)} catalog direction text edited (${changed.join(', ')})`);
+  publish(projectId, out.project);
   return { project: out.project, stage: presentCastAndSets(out.stage, PROCESS_ID) };
 }
 
