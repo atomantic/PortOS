@@ -221,7 +221,7 @@ export const musicVideoVideoSettingsSchema = z.object({
   runwayModelId: z.string().min(1).max(64).nullable().optional(),
   runwayDuration: z.number().min(1).max(60).nullable().optional(),
   runwayResolution: z.string().min(1).max(16).nullable().optional(),
-  generationMode: z.enum(['image', 'audioReactive', 'suppliedAudio']).optional(),
+  generationMode: z.enum(['image', 'audioReactive', 'suppliedAudio', 'ltxReferences']).optional(),
   audioReactiveLora: z.string().max(255).regex(/^[^/\\]+\.safetensors$/i).nullable().optional(),
   audioReactiveScale: z.number().min(0).max(2).optional(),
 }).strict();

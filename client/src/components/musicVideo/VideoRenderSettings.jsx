@@ -12,6 +12,7 @@ import {
 import { projectFalSpend } from '../../lib/musicVideoStages.js';
 import { formatUsd } from '../../utils/formatters.js';
 import { SOURCE_AUDIO_LIPSYNC, SOURCE_AUDIO_MUSIC, performanceCapability } from '../../lib/musicVideoShotTiming.js';
+import { LTX_REFERENCES_GENERATION_MODE, LTX_REFERENCES_MIN_FRAMES } from '../../lib/musicVideoLtxReferences.js';
 import { localModelRendersCutaway } from '../../../../server/lib/musicVideoLocalModels.js';
 
 const falSelectCls = 'w-full max-w-full bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50 sm:w-auto min-h-[44px] pointer-fine:sm:min-h-0';
@@ -34,7 +35,7 @@ export default function VideoRenderSettings({ videoSettings, generating, project
   const {
     settings, saving, models, modelsLoading, catalogStatus, retryCatalog, defaultModel, effectiveModelId,
     audioReactiveModels, audioReactiveLoras, detectedAudioReactiveLora,
-    audioReactiveReady, audioReactiveSelected, change,
+    audioReactiveReady, audioReactiveSelected, ltxReferencesModels = [], ltxReferencesSelected = false, change,
   } = videoSettings;
   // fal.ai (#8968) is image-to-video only here — every scene render already
   // starts from the director's chosen reference frame, so the model picker
@@ -99,6 +100,7 @@ export default function VideoRenderSettings({ videoSettings, generating, project
               const generationMode = e.target.value;
               const compatibleModel = audioReactiveModels.find((model) => model.id === effectiveModelId)
                 || audioReactiveModels[0];
+              const ltxModel = ltxReferencesModels.find((model) => model.id === effectiveModelId) || ltxReferencesModels[0];
               change({
                 generationMode,
                 ...(generationMode === 'audioReactive' && detectedAudioReactiveLora
@@ -107,15 +109,19 @@ export default function VideoRenderSettings({ videoSettings, generating, project
                 ...(generationMode === 'audioReactive' && compatibleModel
                   ? { modelId: compatibleModel.id }
                   : {}),
+                ...(generationMode === LTX_REFERENCES_GENERATION_MODE && ltxModel
+                  ? { modelId: ltxModel.id }
+                  : {}),
               });
             }}
             disabled={locked}
-            title="Prompt motion uses the reference frame; audio reactive also conditions motion on this scene's song segment"
+            title="Prompt motion uses the reference frame; audio reactive also conditions motion on this scene's song segment; LTX 2.5 References renders each clip from the shot's clip references (at least 121 frames, no song audio or end frame)"
             className="w-full max-w-full bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50 min-h-[44px] pointer-fine:sm:min-h-0 sm:w-auto"
           >
             <option value="image">Prompt motion</option>
             <option value="suppliedAudio">Supplied song audio (cutaway only)</option>
             <option value="audioReactive" disabled={!detectedAudioReactiveLora}>Audio reactive</option>
+            <option value={LTX_REFERENCES_GENERATION_MODE} disabled={ltxReferencesModels.length === 0 && !ltxReferencesSelected}>LTX 2.5 References (cutaway only)</option>
           </select>
           <label htmlFor="mv-video-model" className="sr-only">Local video model</label>
           <select
@@ -132,10 +138,17 @@ export default function VideoRenderSettings({ videoSettings, generating, project
                 : 'Local default model'}
             </option>
             {/* Cutaways animate their still, so an audio-only model (Ref2VA) is a per-shot pick for performance shots. */}
-            {(audioReactiveSelected ? audioReactiveModels : models.filter((model) => localModelRendersCutaway(model) || model.id === settings.modelId)).map((model) => (
+            {(audioReactiveSelected ? audioReactiveModels : ltxReferencesSelected ? ltxReferencesModels : models.filter((model) => localModelRendersCutaway(model) || model.id === settings.modelId)).map((model) => (
               <option key={model.id} value={model.id}>{model.name || model.id}</option>
             ))}
           </select>
+          {ltxReferencesSelected && (
+            <span className="text-xs text-port-text-muted" title="Install or repair the LTX 2.5 References adapter in Video Gen">
+              {ltxReferencesModels.length === 0
+                ? (catalogStatus === 'ready' ? 'needs an LTX 2.5 local model' : 'checking local runtime…')
+                : `clip references as IC references · ${LTX_REFERENCES_MIN_FRAMES}+ frames · no song audio or end frame · needs the Ingredients adapter (Video Gen)`}
+            </span>
+          )}
           {audioReactiveSelected && (
             <>
               <label htmlFor="mv-audio-reactive-lora" className="sr-only">Audio reactive LoRA</label>
