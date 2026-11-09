@@ -604,6 +604,12 @@ export default function SceneCard({
       </ShotEditorGroup>
     </>
   );
+  const showSongRevision = songChange && !songChange.resolved && songChange.status !== 'kept';
+  const showSpanWarning = layer !== 'footage' && layered && !sceneHasAuthoredSpan(scene);
+  // Chrome lays the @container body out at 0×0 when the coverage notice is inserted
+  // above that body inside the same fieldset. These rows stay above the body, in
+  // their own fieldset, so a locked shot still disables them.
+  const showAboveBody = showSongRevision || storyboardShot || clipPlayback.underCovered || showSpanWarning;
   return (
     <div className="min-w-0">
     <section id={`scene-${scene.sceneId}`} aria-labelledby={`scene-${scene.sceneId}-title`}>
@@ -667,19 +673,24 @@ export default function SceneCard({
           </span>
         )}
       </header>
-      <fieldset disabled={locked} className="min-w-0 space-y-3">
-        {songChange && !songChange.resolved && songChange.status !== 'kept' && (
-          <p className="break-words text-[11px] text-port-warning">{songChange.status === 'new' ? 'New shot for lines the revised song added.' : `Before the song revision: ${songChange.previousLyricText ? `♪ ${songChange.previousLyricText}` : 'instrumental'}`}</p>
+      <div className="space-y-3">
+        {showAboveBody && (
+          <fieldset disabled={locked} className="min-w-0 space-y-3">
+            {showSongRevision && (
+              <p className="break-words text-[11px] text-port-warning">{songChange.status === 'new' ? 'New shot for lines the revised song added.' : `Before the song revision: ${songChange.previousLyricText ? `♪ ${songChange.previousLyricText}` : 'instrumental'}`}</p>
+            )}
+            {/* The storyboard panel this shot is drawn from, first: shots and panels are linked 1:1. */}
+            <ShotStoryboardPanel projectId={project?.id} storyboardId={storyboardId} scene={scene} linked={storyboardShot}
+              onSceneUpdated={onEditLocal} onUnlink={() => applyPatch({ panelId: null, panelRev: null, panelArt: null })} onBoard={onStoryboardBoard} />
+            <SceneClipCoverageNotice scene={scene} playback={clipPlayback} onChange={applyPatch} />
+            {showSpanWarning && (
+              <p role="alert" className="text-[11px] text-port-warning">
+                Set a start and end — a {{ card: 'title card', code: 'code-drawn shot' }[layer] || 'still'} runs for exactly its span.
+              </p>
+            )}
+          </fieldset>
         )}
-        {/* The storyboard panel this shot is drawn from, first: shots and panels are linked 1:1. */}
-        <ShotStoryboardPanel projectId={project?.id} storyboardId={storyboardId} scene={scene} linked={storyboardShot}
-          onSceneUpdated={onEditLocal} onUnlink={() => applyPatch({ panelId: null, panelRev: null, panelArt: null })} onBoard={onStoryboardBoard} />
-        <SceneClipCoverageNotice scene={scene} playback={clipPlayback} onChange={applyPatch} />
-        {layer !== 'footage' && layered && !sceneHasAuthoredSpan(scene) && (
-          <p role="alert" className="text-[11px] text-port-warning">
-            Set a start and end — a {{ card: 'title card', code: 'code-drawn shot' }[layer] || 'still'} runs for exactly its span.
-          </p>
-        )}
+        <fieldset disabled={locked} className="min-w-0">
         {/* Two columns in a wide drawer: the picture, its takes and Render on the left, the settings groups on the right. */}
         <div className="@container">
         <div className="grid gap-3 @3xl:grid-cols-[minmax(0,5fr)_minmax(0,4fr)] @3xl:items-start">
@@ -889,7 +900,8 @@ export default function SceneCard({
         </div>
         </div>
         </div>
-      </fieldset>
+        </fieldset>
+      </div>
       {swapKind && (
         <SceneTakePicker open onClose={() => setSwapKind(null)} projectId={projectId} scene={scene} kind={swapKind}
           shotNumbers={shotNumbers} busy={takeBusy} onPlace={(pick) => onPlacePoolItem?.(scene, pick)}
