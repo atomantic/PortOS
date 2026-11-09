@@ -564,7 +564,13 @@ async function hasUncommittedLockfileDeliverable(task, workspacePath) {
   if (resolveTaskHookType(task) !== 'dependency-updates') return false;
   const { readWorktreeStatus, classifyWorktreeDirt } = await import('./worktreeManager.js');
   const status = await readWorktreeStatus(workspacePath).catch(() => null);
-  return status !== null && classifyWorktreeDirt(status, { preserveLockfiles: true }).hasRealChanges;
+  if (status === null) return false;
+  // The run's own completion sentinel (`.agent-done[-<id>]`) is pipeline state, not a
+  // deliverable; counting it turned every no-op run into a false `pr-missing`.
+  const withoutSentinel = status.split('\n')
+    .filter(line => !/(^|[\s/"])\.agent-done(-[\w.-]+)?"?$/.test(line.trimEnd()))
+    .join('\n');
+  return classifyWorktreeDirt(withoutSentinel, { preserveLockfiles: true }).hasRealChanges;
 }
 
 function prVerdictFromObservation(observation) {
