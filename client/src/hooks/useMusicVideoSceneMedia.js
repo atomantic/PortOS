@@ -529,6 +529,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
         ...(Array.isArray(card?.expectedClipReferenceFiles) ? { expectedClipReferenceFiles: card.expectedClipReferenceFiles } : {}),
         ...(Array.isArray(card?.expectedClipReferenceLabels) ? { expectedClipReferenceLabels: card.expectedClipReferenceLabels } : {}),
         ...(card?.wholeLine && performance ? { wholeLine: true } : {}),
+        ...(card?.startFrameLayout ? { startFrameLayout: true } : {}),
       }),
     })
       .then((res) => trackVideoJob(res, scene.sceneId, renderKey, onJob))
