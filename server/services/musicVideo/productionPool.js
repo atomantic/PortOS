@@ -31,6 +31,7 @@ import { QUEUEABLE_IMAGE_MODES, VIDEO_GEN_MODES } from '../../lib/generationMode
 import { musicVideoClipConditioningReferences, musicVideoConditioningReferences, musicVideoReferenceCapacity } from '../../lib/musicVideoConditioning.js';
 import { MUSIC_VIDEO_AUTOMATION_TOOLS } from '../../lib/musicVideoAutomation.js';
 import { falSceneTake, isPerformanceScene, performanceBlockedReason, runwaySceneTake } from '../../lib/musicVideoShotTiming.js';
+import { isContinuingScene } from '../../lib/musicVideoSourceTake.js';
 import { getRunwayVideoModel } from '../../lib/runwayVideoModels.js';
 import { supportsCloudModelOverride } from '../../lib/imageGenCapabilities.js';
 import { resolveVideoSupportedModes } from '../../lib/videoModeProfiles.js';
@@ -95,12 +96,14 @@ function routePriceUsd(route, project = null) {
  * length that covers the shot); otherwise the route's flat price.
  */
 export function stepPriceUsd({ route, project, scene, stepKind }) {
+  if (scene && isContinuingScene(scene)) return 0;
   if (stepKind !== 'frame' && route?.kind === 'video' && route.mode === 'runway' && scene) {
     return runwaySceneTake({ scene, videoSettings: runwayRouteVideoSettings(project, route) }).costUsd;
   }
   if (stepKind !== 'frame' && route?.kind === 'video' && route.mode === 'fal' && scene) {
     const take = falSceneTake({
       scene,
+      scenes: project?.scenes,
       videoSettings: falRouteVideoSettings(project, route),
       songDurationSec: project?.audioAnalysis?.durationSec ?? null,
     });

@@ -56,6 +56,7 @@ import { appendStatsOutro, sweepStatsOutroScratch } from './statsOutro.js';
 import { endingSeconds } from '../../lib/musicVideoEnding.js';
 import { coldOpenPlan, coldOpenScenes, withSongScenesOnly } from '../../lib/musicVideoColdOpen.js';
 import { selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
+import { resolveSourceTake, scenePlayableClipId } from '../../lib/musicVideoSourceTake.js';
 import { captureMusicVideoEvidence, musicVideoTakeChanges } from '../../lib/musicVideoDependencies.js';
 import { assertCurrentPerformanceTakes, withDraftPerformanceFallbacks } from './performanceShot.js';
 import { ensureInstanceId } from '../instanceIdentity.js';
@@ -304,10 +305,10 @@ async function footageGeometry(entry) {
 }
 
 // A footage shot's render clip, or `missing-clip` when its selected take cannot be read.
-async function footageClip(scene, entry, planned) {
+async function footageClip(scene, entry, planned, editOverride = undefined) {
   const geometry = await footageGeometry(entry);
   if (!geometry) return { problem: 'missing-clip' };
-  const edit = performanceEdit(scene);
+  const edit = editOverride !== undefined ? editOverride : performanceEdit(scene);
   const { rate, leadSec, inSec, outSec, sourceSec } = clipPlaybackWindow(scene, edit, geometry.duration);
   return { clip: {
     sceneId: scene.sceneId,
@@ -347,11 +348,17 @@ async function footageClip(scene, entry, planned) {
 // (422 UNTIMED_SECTIONS), since there is no clip to take a length from.
 export async function resolveSceneClips(project, { layered = false, stillForMissingClip = false } = {}) {
   // A draft shows a footage shot that has no clip yet as its still (layered renders only).
-  const standIn = (s) => stillForMissingClip && layered && !s.videoHistoryId && s.referenceImageId && sceneVisualLayer(s, { layered }) === 'footage';
-  const scenes = (Array.isArray(project.scenes) ? project.scenes : [])
+  const allScenes = Array.isArray(project.scenes) ? project.scenes : [];
+  const playableId = (s) => scenePlayableClipId(s, allScenes);
+  const standIn = (s) => {
+    if (!stillForMissingClip || !layered || playableId(s)) return false;
+    const resolved = resolveSourceTake(s, allScenes);
+    return Boolean(resolved?.referenceImageId || s.referenceImageId) && sceneVisualLayer(s, { layered }) === 'footage';
+  };
+  const scenes = allScenes
     .slice()
     .sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
-    .filter((s) => s && (s.videoHistoryId || sceneVisualLayer(s, { layered }) !== 'footage' || standIn(s)));
+    .filter((s) => s && (playableId(s) || sceneVisualLayer(s, { layered }) !== 'footage' || standIn(s)));
   if (scenes.length === 0) {
     throw new ServerError('No scene videos to render — generate at least one scene clip first', {
       status: 400, code: 'NO_SCENE_CLIPS',
@@ -363,10 +370,14 @@ export async function resolveSceneClips(project, { layered = false, stillForMiss
   const problems = { 'missing-clip': [], 'missing-still': [], untimed: [] };
   const clips = [];
   for (const scene of scenes) {
+    const resolved = resolveSourceTake(scene, allScenes);
+    const played = resolved
+      ? { ...scene, videoHistoryId: resolved.videoHistoryId, referenceImageId: resolved.referenceImageId || scene.referenceImageId || null }
+      : scene;
     const layer = standIn(scene) ? 'still' : sceneVisualLayer(scene, { layered });
     const { clip, problem } = layer === 'footage'
-      ? await footageClip(scene, historyMap.get(scene.videoHistoryId), planned)
-      : sectionClip(scene, layer, planned, { layered });
+      ? await footageClip(played, historyMap.get(played.videoHistoryId), planned, resolved ? { inSec: resolved.inSec, outSec: resolved.outSec } : undefined)
+      : sectionClip(played, layer, planned, { layered });
     if (clip) clips.push(clip);
     else problems[problem].push(scene);
   }
@@ -374,7 +385,7 @@ export async function resolveSceneClips(project, { layered = false, stillForMiss
   if (missingShots.length > 0) {
     const one = missingShots.length === 1;
     throw new ServerError(`${nameShots(project, missingShots.map((s) => s.sceneId))}: the selected clip file ${one ? 'is' : 'are'} missing or unreadable. Pick another take or render a new one`, {
-      status: 404, code: 'MISSING_CLIPS', context: { missingClipIds: missingShots.map((s) => s.videoHistoryId) },
+      status: 404, code: 'MISSING_CLIPS', context: { missingClipIds: missingShots.map((s) => playableId(s) || s.videoHistoryId) },
     });
   }
   if (problems['missing-still'].length > 0) {

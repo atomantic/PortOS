@@ -329,6 +329,21 @@ describe('composition document staging', () => {
     expect(browser.seen.data.scenes[0].media).toMatchObject({ inSec: 0, outSec: 4 });
   });
 
+  it('plays a source-take return as a different window of the source clip', async () => {
+    const { project } = await fixture();
+    project.scenes.push({ sceneId: 'e', order: 4, startSec: 2, endSec: 3, sourceTake: { sceneId: 'a', offsetSec: 1.5 } });
+    const history = JSON.parse(await readFile(join(PATHS.data, 'video-history.json'), 'utf8'));
+    const raw = await resolveSceneMedia(project, { history });
+    expect(raw.get('e')).toMatchObject({ path: raw.get('a').path, inSec: 1.5, outSec: 2.5 });
+    project.scenes[0].videoHistoryId = 'vh-b';
+    history.push({ id: 'vh-b', filename: 'clip-b.mp4', numFrames: 96, fps: 24, width: 1280, height: 720 });
+    await writeFile(join(PATHS.videos, 'clip-b.mp4'), 'video-b');
+    const moved = await resolveSceneMedia(project, { history });
+    expect(moved.get('e').path).toBe(moved.get('a').path);
+    expect(moved.get('e').path).not.toBe(raw.get('a').path);
+    expect(moved.get('e')).toMatchObject({ inSec: 1.5, outSec: 2.5 });
+  });
+
   it('keeps a performance in-point in the live preview timing and leaves untimed takes alone', async () => {
     const { project } = await fixture();
     Object.assign(project.scenes[3], { speedFps: -12, offsetFrames: 12 });

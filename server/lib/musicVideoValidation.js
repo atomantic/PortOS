@@ -2032,6 +2032,11 @@ const scenePanelFields = {
   panelArt: z.string().regex(/^[^/\\]+\.(png|jpe?g|webp)$/i, 'Panel art must be a gallery image').nullable().optional(),
 };
 
+const musicVideoSourceTakeSchema = z.object({
+  sceneId: z.string().min(1).max(80),
+  offsetSec: z.number().min(0).max(36000).optional(),
+}).strict();
+
 export const musicVideoSceneCreateSchema = z.object({
   label: z.string().max(120).optional(),
   sectionLabel: z.string().max(120).nullable().optional(),
@@ -2057,6 +2062,8 @@ export const musicVideoSceneCreateSchema = z.object({
   shotMode: z.enum(MUSIC_VIDEO_SHOT_MODES).optional(),
   // #14241: `sequence` generates a run of cutaway footage shots in one timed request.
   coverage: z.enum(MUSIC_VIDEO_COVERAGE_MODES).optional(),
+  // #15588: this shot plays a window of another scene's clip. Null clears the link.
+  sourceTake: musicVideoSourceTakeSchema.nullable().optional(),
   performanceSpeaker: z.string().trim().max(120).nullable().optional(),
   // How a performance follows the song: lip-sync (absent/null) or music-driven motion.
   performanceStyle: z.enum(MUSIC_VIDEO_PERFORMANCE_STYLES).nullable().optional(),
@@ -2103,6 +2110,8 @@ export const musicVideoSceneUpdateSchema = z.object({
   shotMode: z.enum(MUSIC_VIDEO_SHOT_MODES).optional(),
   // #14241: `sequence` generates a run of cutaway footage shots in one timed request.
   coverage: z.enum(MUSIC_VIDEO_COVERAGE_MODES).optional(),
+  // #15588: this shot plays a window of another scene's clip. Null clears the link.
+  sourceTake: musicVideoSourceTakeSchema.nullable().optional(),
   performanceSpeaker: z.string().trim().max(120).nullable().optional(),
   // How a performance follows the song: lip-sync (absent/null) or music-driven motion.
   performanceStyle: z.enum(MUSIC_VIDEO_PERFORMANCE_STYLES).nullable().optional(),

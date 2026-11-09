@@ -78,6 +78,14 @@ describe('local image pool eligibility', () => {
 });
 
 describe('fal step pricing names the model it priced', () => {
+  it('charges nothing when the shot plays another take', () => {
+    const route = { kind: 'video', mode: 'fal', model: null };
+    const project = { videoSettings: {} };
+    const scene = { sceneId: 'b', startSec: 4, endSec: 5, sourceTake: { sceneId: 'a' } };
+    expect(stepPriceUsd({ route, project, scene, stepKind: 'clip' })).toBe(0);
+    expect(stepPriceUsd({ route, project, scene, stepKind: 'frame' })).toBe(0);
+  });
+
   it('does not treat an output-only H3 quote as a bounded reference-input price', () => {
     const project = { videoSettings: {}, visualSpec: { references: [{ id: 'rider', imageId: 'rider.png', role: 'character', condition: true }] } };
     const route = { kind: 'video', mode: 'fal', model: 'minimax/h3-max/reference-to-video' };

@@ -4,6 +4,7 @@ const enqueueJob = vi.fn(async () => ({ jobId: 'job-seq-1' }));
 vi.mock('../mediaJobQueue/index.js', () => ({ enqueueJob }));
 let stored = null;
 vi.mock('./projects.js', () => ({ getProject: async () => stored }));
+vi.mock('../settings.js', () => ({ getSettings: async () => ({}) }));
 vi.mock('../../lib/pathSafety.js', async (importOriginal) => ({
   ...(await importOriginal()),
   resolveGalleryImage: (id) => (id ? `/gallery/${id}` : null),
@@ -68,6 +69,27 @@ describe('submitSequenceCoverage', () => {
     stored = project([scene('a', 0, 9), scene('b', 9, 18)]);
     await expect(submitSequenceCoverage('p1', { sceneIds: ['a', 'b'] })).rejects.toMatchObject({ code: 'SEQUENCE_NOT_PLANNED' });
     expect(enqueueJob).not.toHaveBeenCalled();
+  });
+
+  it('queues three short Grok shots as one 6s request and a local run as one frame count', async () => {
+    const shots = [scene('a', 0, 0.8), scene('b', 0.8, 1.6), scene('c', 1.6, 2.4)];
+    stored = { id: 'p1', videoSettings: { backend: 'grok' }, scenes: shots };
+    const grok = await submitSequenceCoverage('p1', { sceneIds: ['a', 'b', 'c'] });
+    expect(grok.sceneIds).toEqual(['a', 'b', 'c']);
+    expect(previewSequenceCoverage(stored).groups[0].request).toEqual({ seconds: 6 });
+    expect(enqueueJob.mock.calls.at(-1)[0].params).toMatchObject({
+      mode: 'grok', duration: 6, sourceImagePath: '/gallery/a.png',
+      musicVideo: { projectId: 'p1', sequence: { sceneIds: ['a', 'b', 'c'] } },
+    });
+    expect(enqueueJob.mock.calls.at(-1)[0].params.musicVideo.sceneId).toBeUndefined();
+    expect(enqueueJob.mock.calls.at(-1)[0].params.referenceImagePaths).toBeUndefined();
+    stored = { id: 'p1', videoSettings: { backend: 'local', modelId: 'ltx' }, scenes: shots };
+    await submitSequenceCoverage('p1', { sceneIds: ['a', 'b', 'c'] });
+    expect(enqueueJob.mock.calls.at(-1)[0].params).toMatchObject({
+      mode: 'image', numFrames: 121, modelId: 'ltx', fps: 24, disableAudio: true, sourceImagePath: '/gallery/a.png',
+    });
+    stored = { id: 'p1', videoSettings: { backend: 'local' }, scenes: shots };
+    await expect(submitSequenceCoverage('p1', { sceneIds: ['a', 'b', 'c'] })).rejects.toMatchObject({ code: 'SEQUENCE_NEEDS_MODEL' });
   });
 
   it('refuses before queueing when a shot has no reference frame', async () => {

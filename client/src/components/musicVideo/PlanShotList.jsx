@@ -71,7 +71,7 @@ export default function PlanShotList({ project, readiness, onOpenShot }) {
                 {coldOpen ? <span className="block">{durationSec.toFixed(2)}s</span>
                   : number && Number.isFinite(scene.endSec) && <span className="block">{(scene.endSec - scene.startSec).toFixed(2)}s</span>}
               </span>
-              <ScenePoster scene={scene} src={musicVideoImageSrc(scene.panelArt) || scenePosterSrc(scene)} className="aspect-video w-full rounded" iconSize={16} />
+              <ScenePoster scene={scene} src={musicVideoImageSrc(scene.panelArt) || scenePosterSrc(scene, project.scenes)} className="aspect-video w-full rounded" iconSize={16} />
               <span className="min-w-0">
                 <span className={`block truncate text-sm ${lyric && !coldOpen ? 'italic text-port-text' : 'text-port-text-muted'}`}>{coldOpen ? preMusicSoundSummary(scene.preMusic) : lyric ? `“${lyric}”` : 'Instrumental'}</span>
                 <span className="block truncate text-xs text-port-text-muted">{[name, camera, action].filter(Boolean).join(' · ')}</span>

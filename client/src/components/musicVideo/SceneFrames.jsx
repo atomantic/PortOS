@@ -1,5 +1,6 @@
 import { castLookForTake } from '../../../../server/lib/musicVideoCastLook.js';
 import { musicVideoGreyboxReference } from '../../../../server/lib/musicVideoGreybox.js';
+import { resolveSourceTake } from '../../../../server/lib/musicVideoSourceTake.js';
 import SceneFramePromptPreview from './SceneFramePromptPreview.jsx';
 import SceneFrameReferenceLimitNotice from './SceneFrameReferenceLimitNotice.jsx';
 import SceneGreyboxReference from './SceneGreyboxReference.jsx';
@@ -107,7 +108,12 @@ export default function SceneFrames({
   // Refine: which frame's edit box is open, and the instruction typed into it.
   const [refining, setRefining] = useState(null);
   const [instruction, setInstruction] = useState('');
-  const frames = { start: scene.referenceImageId || null, end: endFrames ? scene.endImageId || null : null };
+  // A return shows the source shot's frame and does not render one of its own.
+  const sourceWindow = resolveSourceTake(scene, project?.scenes);
+  const frames = {
+    start: sourceWindow?.referenceImageId || scene.referenceImageId || null,
+    end: endFrames ? scene.endImageId || null : null,
+  };
   const refOf = (which) => (frames[refs[which]] ? refs[which] : '');
   const id = (name) => `mv-scene-${scene.sceneId}-${name}`;
   // '' follows the project image pin. A named service is this render only, and stays for Retry.
@@ -126,15 +132,19 @@ export default function SceneFrames({
     const ref = refOf(which);
     const refChoices = ['', ...['start', 'end'].filter((key) => frames[key])];
     const needsPrompt = !start && !scene.endFramePrompt?.trim();
-    const render = () => (start ? onGenerateFrame : onGenerateEndFrame)?.(scene, withTarget({ referenceImageId: ref ? frames[ref] : null }));
+    const sharedTake = !!sourceWindow;
+    const render = () => {
+      if (sharedTake) return;
+      (start ? onGenerateFrame : onGenerateEndFrame)?.(scene, withTarget({ referenceImageId: ref ? frames[ref] : null }));
+    };
     const kind = start ? 'image' : 'endImage';
     const selected = imageId ? (scene.takes || []).find((take) => take?.kind === kind && take.assetId === imageId) : null;
     const olderLook = selected ? castLookForTake(project, scene, selected, castMedia).status === 'older' : false;
     const rerender = () => {
-      if (greyboxBlocked || generating || needsPrompt) return;
+      if (sharedTake || greyboxBlocked || generating || needsPrompt) return;
       (start ? onGenerateFrame : onGenerateEndFrame)?.(scene, withTarget({ referenceImageId: ref ? frames[ref] : null, replaceSelection: true }));
     };
-    const refineLocked = greyboxBlocked || !!generating;
+    const refineLocked = sharedTake || greyboxBlocked || !!generating;
     const refine = (e) => {
       e.preventDefault();
       if (!instruction.trim() || refineLocked) return;
@@ -155,13 +165,13 @@ export default function SceneFrames({
         {project && <SceneFramePromptPreview project={project} scene={scene} castMedia={castMedia} greybox={greybox} slot={which} referenceImageId={ref ? frames[ref] : null} />}
         {project && <SceneFrameReferenceLimitNotice project={project} scene={scene} castMedia={castMedia} greybox={greybox} sourceImageId={ref ? frames[ref] : null} />}
         <div className="flex flex-wrap items-center gap-2">
-          <button type="button" onClick={render} disabled={greyboxBlocked || !!generating || needsPrompt} className={PRIMARY_BUTTON}
-            title={needsPrompt ? 'Describe the end frame first' : imageId ? NEW_TAKE_HINT : ref ? `Render from the ${REFERENCE_LABELS[ref].toLowerCase()} with this prompt` : 'Render from this prompt'}>
+          <button type="button" onClick={render} disabled={sharedTake || greyboxBlocked || !!generating || needsPrompt} className={PRIMARY_BUTTON}
+            title={sharedTake ? `Plays ${sourceWindow.source?.label || 'the source shot'}'s frame` : needsPrompt ? 'Describe the end frame first' : imageId ? NEW_TAKE_HINT : ref ? `Render from the ${REFERENCE_LABELS[ref].toLowerCase()} with this prompt` : 'Render from this prompt'}>
             {generating ? <Activity size={14} className="animate-spin" /> : start ? <ImageIcon size={14} /> : <Wand2 size={14} />}
             {generating ? 'Generating…' : start ? (imageId ? 'New frame take' : 'Generate frame') : (imageId ? 'New end frame take' : 'Generate end frame')}
           </button>
           {olderLook && (
-            <button type="button" onClick={rerender} disabled={greyboxBlocked || !!generating || needsPrompt} className={SECONDARY_BUTTON}
+            <button type="button" onClick={rerender} disabled={sharedTake || greyboxBlocked || !!generating || needsPrompt} className={SECONDARY_BUTTON}
               aria-label={`Re-render ${start ? 'start' : 'end'} frame`}
               title={RERENDER_HINT}>
               Re-render

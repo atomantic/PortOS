@@ -25,6 +25,7 @@ import TransitionGlitch from './TransitionGlitch.jsx';
 import WipeOverlay from './WipeOverlay.jsx';
 import ImageEffectStill from './ImageEffectStill.jsx';
 import { clipOffsetSec, clipReversed, clipSpeedRate, isLayeredComposition, sceneVisualLayer, stillFrameTransform } from '../../lib/musicVideoLayers.js';
+import { resolveSourceTake, scenePlayableClipId } from '../../../../server/lib/musicVideoSourceTake.js';
 import { sceneImageEffect, scenePhotoSequence } from '../../lib/musicVideoImageEffects.js';
 import { plannedTransitions, sceneCutEffects } from '../../lib/musicVideoCutEffects.js';
 
@@ -225,7 +226,9 @@ function releaseVideo(video) {
  * frame, as the render does, rather than holding it.
  */
 export function clipTimeAt(scene, t, clipSec = null, { early = false, fromSec = null } = {}) {
-  const inSec = selectedPerformanceInstruction(scene)?.edit?.inSec ?? 0;
+  const sourceOffset = typeof scene?.sourceTake?.offsetSec === 'number' ? scene.sourceTake.offsetSec : null;
+  const inSec = sourceOffset ?? selectedPerformanceInstruction(scene)?.edit?.inSec ?? 0;
+  const holdsSource = sourceOffset != null;
   const local = early ? t - (scene.startSec || 0) : Math.max(0, t - (scene.startSec || 0));
   const rate = clipSpeedRate(scene);
   const start = inSec + clipOffsetSec(scene);
@@ -241,18 +244,35 @@ export function clipTimeAt(scene, t, clipSec = null, { early = false, fromSec = 
   }
   if (rate !== 1 || start !== inSec) {
     if (!(clipSec > 0) || at < clipSec) return at;
-    return scene.loop !== false && !(inSec > 0) ? at % clipSec : Math.max(0, clipSec - 0.05);
+    return !holdsSource && scene.loop !== false && !(inSec > 0) ? at % clipSec : Math.max(0, clipSec - 0.05);
   }
   if (local < 0) return at;
   if (!(clipSec > inSec)) return inSec + local;
   const span = clipSec - inSec;
   if (local < span) return inSec + local;
-  return scene.loop !== false ? inSec + (local % span) : Math.max(inSec, clipSec - 0.05);
+  return !holdsSource && scene.loop !== false ? inSec + (local % span) : Math.max(inSec, clipSec - 0.05);
 }
 
 // How many shots past the one on screen get their clip loaded ahead, so a short shot is
 // ready to show the moment the song reaches it.
 const CLIP_PRELOAD_SHOTS = 2;
+
+/** The picture a shot plays: a return uses its source clip and frame, and keeps the timeline shot's identity. */
+function playedScene(scene, scenes) {
+  if (!scene) return null;
+  const resolved = resolveSourceTake(scene, scenes);
+  if (!resolved) return scene;
+  return {
+    ...scene,
+    videoHistoryId: resolved.videoHistoryId,
+    referenceImageId: resolved.referenceImageId || scene.referenceImageId || null,
+    sourceTake: {
+      ...(scene.sourceTake || {}),
+      sceneId: resolved.source?.sceneId || scene.sourceTake?.sceneId,
+      offsetSec: resolved.offsetSec,
+    },
+  };
+}
 // The song frame the film look's grain and drift follow; footage renders run at 24 fps.
 const ANIMATIC_FPS = 24;
 /**
@@ -609,9 +629,10 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
   useShotClock(audioRef, scenes, setTime);
   const layered = isLayeredComposition(project);
   // The first footage source sets the composed render's frame rate, even when the current shot is a still.
+  const allScenes = project.scenes || [];
   const lead = scenes.slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
-    .find((scene) => scene.videoHistoryId && sceneVisualLayer(scene, { layered }) === 'footage');
-  const leadFile = useVideoFileSrc(layered ? lead?.videoHistoryId : null, { geometry: true });
+    .find((scene) => scenePlayableClipId(scene, allScenes) && sceneVisualLayer(scene, { layered }) === 'footage');
+  const leadFile = useVideoFileSrc(layered ? scenePlayableClipId(lead, allScenes) : null, { geometry: true });
   const stillFps = project.composition?.mode === 'document' ? ANIMATIC_FPS : leadFile.fps || ANIMATIC_FPS;
   const lyricsAvailable = project.lyricOverlayEnabled !== false && hasTimedLyrics(project);
   const { overlay, failed, capture: captureLyrics } = useLyricOverlay({ project, enabled: lyricsAvailable && lyricsOn, audioRef, time });
@@ -684,10 +705,11 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
     };
     if (!unchanged()) throw new Error('Preview changed during capture');
     const selected = shotAt(scenes, at);
-    if (!basis.outro && selected?.videoHistoryId && sceneVisualLayer(selected, { layered }) === 'footage') {
+    const playedSelected = playedScene(selected, project.scenes || []);
+    if (!basis.outro && playedSelected?.videoHistoryId && sceneVisualLayer(playedSelected, { layered }) === 'footage') {
       const figure = figureRef.current;
       const clip = figure?.querySelector('video[data-ready="true"]:not([aria-hidden="true"])');
-      const fallback = [...(figure?.querySelectorAll('img') || [])].find((image) => image.getAttribute('src') === `/data/images/${selected.referenceImageId}` && image.complete && image.naturalWidth > 0);
+      const fallback = [...(figure?.querySelectorAll('img') || [])].find((image) => image.getAttribute('src') === `/data/images/${playedSelected.referenceImageId}` && image.complete && image.naturalWidth > 0);
       if (!clip && !fallback) throw new Error('Video frame is still loading');
     }
     if (lyricsAvailable && lyricsOn && !overlay) throw new Error('Lyric frame unavailable');
@@ -713,46 +735,48 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
   // While the cold open plays, its shots follow its own sound instead of the song.
   const clock = cold.active ? { ref: cold.audioRef, time: cold.time, scenes: cold.scenes } : { ref: audioRef, time, scenes };
   const shot = shotAt(clock.scenes, clock.time);
+  const picture = playedScene(shot, allScenes);
   const timed = timedShots(clock.scenes);
   const index = shot ? timed.indexOf(shot) : -1;
   // A still shot with an image effect plays the effect over its still, as the composed render does, not its clip.
-  const shotEffect = shot ? sceneImageEffect(shot, { layered }) : null;
-  const stillShot = shot && layered && (sceneVisualLayer(shot, { layered }) === 'still' || !shot.videoHistoryId);
+  const shotEffect = picture ? sceneImageEffect(picture, { layered }) : null;
+  const stillShot = picture && layered && (sceneVisualLayer(picture, { layered }) === 'still' || !picture.videoHistoryId);
   // The shot on screen and the next few: each keeps one mounted clip, so the cut to the
   // next shot shows a clip that has already loaded and sits on its first frame.
   const clipShots = timed.slice(Math.max(index, 0), Math.max(index, 0) + 1 + CLIP_PRELOAD_SHOTS)
+    .map((scene) => playedScene(scene, allScenes))
     .filter((scene) => scene.videoHistoryId && sceneVisualLayer(scene, { layered }) === 'footage');
   const label = shot ? shot.label || `Shot ${index + 1}` : 'No shots yet';
   // With the lyrics drawn over the picture, a shot without a frame keeps its label and
   // intent under the picture instead, so no stand-in text sits under the sung words.
   const cardInFrame = !overlay;
-  const vhsEdges = !!shot?.videoHistoryId && sceneFrameFit(shot) === 'vhs';
+  const vhsEdges = !!picture?.videoHistoryId && sceneFrameFit(picture) === 'vhs';
   // The render cover-fits the still behind a still-edged clip; the preview matches it.
-  const stillEdges = !!shot?.videoHistoryId && sceneFrameFit(shot) === 'still';
+  const stillEdges = !!picture?.videoHistoryId && sceneFrameFit(picture) === 'still';
   return (
     <div className={`space-y-2 ${collapsed ? 'max-xl:hidden' : ''}`}>
       <figure ref={figureRef} aria-label="Storyboard animatic" className="relative aspect-video w-full overflow-hidden rounded border border-port-border bg-black">
         {/* The project's film look, as the final render applies it over the whole picture, lyrics included. */}
         <FilmLookFrame look={lookOn ? project.filmLook : null} frame={Math.round((outro.active ? songEndSec + outro.t : cold.active ? cold.time - cold.seconds : time) * ANIMATIC_FPS)}
           playing={playing || cold.active || (outro.active && !outro.paused && outro.t < outro.seconds)} className="h-full w-full">
-        {(shot?.referenceImageId || scenePhotoSequence(shot)?.imageIds.length) && stillShot ? (
-          <StillShot key={shot.sceneId} scene={shot} audioRef={clock.ref} time={clock.time} fps={stillFps} beats={beats} effect={shotEffect} />
-        ) : shot?.referenceImageId ? (
+        {(picture?.referenceImageId || scenePhotoSequence(picture)?.imageIds.length) && stillShot ? (
+          <StillShot key={picture.sceneId} scene={picture} audioRef={clock.ref} time={clock.time} fps={stillFps} beats={beats} effect={shotEffect} />
+        ) : picture?.referenceImageId ? (
           // Behind a VHS-edged clip the still stands in, blurred and faded, for the render's blur of the clip.
-          <img src={`/data/images/${shot.referenceImageId}`} alt=""
+          <img src={`/data/images/${picture.referenceImageId}`} alt=""
             className={`h-full w-full ${vhsEdges ? 'object-cover blur-md saturate-50 brightness-75' : stillEdges ? 'object-cover' : 'object-contain'}`} />
-        ) : cardInFrame && !shot?.videoHistoryId ? (
+        ) : cardInFrame && !picture?.videoHistoryId ? (
           <div className="flex h-full w-full flex-col items-center justify-center gap-1 p-4 text-center">
             <span className="text-sm font-medium text-port-text">{label}</span>
             {shot?.visualIntent && <span className="line-clamp-3 text-xs text-port-text-muted">{shot.visualIntent}</span>}
           </div>
         ) : null}
         {clipShots.map((scene) => (
-          <ShotClip key={`${cold.active ? 'cold:' : ''}${scene.sceneId}:${scene.videoHistoryId}`} scene={scene} audioRef={clock.ref} time={clock.time} current={scene === shot}
+          <ShotClip key={`${cold.active ? 'cold:' : ''}${scene.sceneId}:${scene.videoHistoryId}`} scene={scene} audioRef={clock.ref} time={clock.time} current={scene.sceneId === shot?.sceneId}
             preload={timed.indexOf(scene) - Math.max(index, 0) <= 1 ? 'auto' : 'metadata'} />
         ))}
         {nearToggles.map((toggle) => {
-          const incoming = scenes.find((scene) => scene.sceneId === toggle.toSceneId);
+          const incoming = playedScene(scenes.find((scene) => scene.sceneId === toggle.toSceneId), allScenes);
           return incoming ? <ToggleClip key={`toggle:${toggle.toSceneId}:${incoming.videoHistoryId || ''}`} scene={incoming} toggle={toggle} audioRef={audioRef} time={time} layered={layered} fps={stillFps} beats={beats} /> : null;
         })}
         {nearFades.map((fade) => <FadeBlack key={`fade:${fade.fromSceneId}`} fade={fade} audioRef={audioRef} time={time} />)}
@@ -777,7 +801,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
               <span className="tabular-nums">{formatDurationSec(shot.startSec)}</span>
             </div>
           )}
-          {!cardInFrame && shot && !shot.referenceImageId && !shot.videoHistoryId && (
+          {!cardInFrame && shot && !picture?.referenceImageId && !picture?.videoHistoryId && (
             <p className="line-clamp-2 break-words">
               <span className="font-medium text-port-text">{label}</span>{shot.visualIntent ? ` · ${shot.visualIntent}` : ''}
             </p>

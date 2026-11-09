@@ -43,6 +43,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS } from '../../lib/fileUtils.js';
 import { htmlCompositionContractSchemaFor } from '../../lib/validation.js';
 import { selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
+import { resolveSourceTake, scenePlayableClipId } from '../../lib/musicVideoSourceTake.js';
 import { clipSpeedRate, clipOffsetSec, documentSceneVisualLayer, MUSIC_VIDEO_LYRIC_ROLES, MUSIC_VIDEO_LYRIC_SIZES, MUSIC_VIDEO_TEXT_ZONES } from '../../lib/musicVideoLayers.js';
 import { musicVideoAspect, musicVideoLyricLayout } from '../../lib/musicVideoAspect.js';
 import { lyricAnchorOnset } from '../../lib/musicVideoLyricAnchors.js';
@@ -153,13 +154,16 @@ export async function resolveSceneMedia(project, { history = [], probe = async (
       out.set(scene.sceneId, { kind: 'image', ...photos[0], photos, ...(end ? { end } : {}), inSec: null, outSec: null, fps: null, width: null, height: null });
       continue;
     }
-    const entry = scene.videoHistoryId ? byId.get(scene.videoHistoryId) : null;
+    const scenes = Array.isArray(project?.scenes) ? project.scenes : [];
+    const resolved = resolveSourceTake(scene, scenes);
+    const clipId = resolved ? resolved.videoHistoryId : scene.videoHistoryId;
+    const entry = clipId ? byId.get(clipId) : null;
     const videoPath = entry?.filename ? safeUnder(PATHS.videos, entry.filename) : null;
     const selectedStillEffect = layer === 'still' && scene.visualLayer === 'still' && MUSIC_VIDEO_IMAGE_EFFECTS.includes(scene.imageEffect);
     if (!selectedStillEffect && (!strictLayers || layer === 'footage') && videoPath && existsSync(videoPath)) {
       const measured = entry.numFrames && entry.fps && entry.width && entry.height ? entry : { ...entry, ...((await probe(videoPath)) || {}) };
       const duration = measured.numFrames && measured.fps ? measured.numFrames / measured.fps : null;
-      const edit = selectedPerformanceInstruction(scene)?.edit ?? null;
+      const edit = resolved ? { inSec: resolved.inSec, outSec: resolved.outSec } : (selectedPerformanceInstruction(scene)?.edit ?? null);
       const ext = (/\.([a-z0-9]{2,5})$/i.exec(entry.filename)?.[1] || 'mp4').toLowerCase();
       const rate = clipSpeedRate(scene);
       const originalIn = edit ? Math.min(edit.inSec, duration ?? edit.inSec) : 0;
@@ -199,9 +203,10 @@ export async function resolveSceneMedia(project, { history = [], probe = async (
       });
       continue;
     }
-    const imagePath = (!strictLayers || layer === 'still') && scene.referenceImageId ? safeUnder(PATHS.images, scene.referenceImageId) : null;
+    const imageId = resolved?.referenceImageId || scene.referenceImageId;
+    const imagePath = (!strictLayers || layer === 'still') && imageId ? safeUnder(PATHS.images, imageId) : null;
     if (imagePath && existsSync(imagePath)) {
-      const ext = (/\.([a-z0-9]{2,5})$/i.exec(scene.referenceImageId)?.[1] || 'png').toLowerCase();
+      const ext = (/\.([a-z0-9]{2,5})$/i.exec(imageId)?.[1] || 'png').toLowerCase();
       out.set(scene.sceneId, { kind: 'image', path: imagePath, ext: ext === 'jpeg' ? 'jpg' : ext, ...(end ? { end } : {}), inSec: null, outSec: null, fps: null, width: null, height: null });
     }
   }
@@ -411,7 +416,7 @@ export async function openIsolatedDocumentPreview({ project, jobId, signal, onEv
   const { openComposition } = await import('../htmlComposition/browser.js');
   const { loadHistory } = await import('../videoGen/history.js');
   const generated = project.composition?.document?.source?.kind === 'generated';
-  const history = (project.scenes || []).some((scene) => scene?.videoHistoryId) ? await loadHistory() : [];
+  const history = (project.scenes || []).some((scene) => scenePlayableClipId(scene, project.scenes)) ? await loadHistory() : [];
   const media = await resolveSceneMedia(project, { history, probe: probeVideoGeometry, retimed: true, strictLayers: generated });
   const data = buildDocumentData(project, {
     media, frame: plan.frame, clock: plan.clock, songDurationSec: plan.songDurationSec, generated,
@@ -574,7 +579,7 @@ export async function encodeDocumentComposition({
   const { AUDIO_NORM, buildAudioBedMix } = await import('../videoTimeline/audioBedMix.js');
   const ffmpeg = await findFfmpeg();
   if (!ffmpeg) throw new ServerError('ffmpeg not found on PATH', { status: 500, code: 'FFMPEG_MISSING' });
-  const history = (project.scenes || []).some((s) => s?.videoHistoryId) ? await loadHistory() : [];
+  const history = (project.scenes || []).some((s) => scenePlayableClipId(s, project.scenes)) ? await loadHistory() : [];
   const media = await resolveSceneMedia(project, { history, probe: probeVideoGeometry, retimed: true, strictLayers: project.composition?.document?.source?.kind === 'generated' });
   const data = buildDocumentData(project, { media, frame: plan.frame, clock: plan.clock, songDurationSec: plan.songDurationSec,
     generated: project.composition?.document?.source?.kind === 'generated' });
@@ -725,7 +730,7 @@ export async function probeDocumentText({ project, jobId, signal, sampleTimes, o
   const { SRGB_TO_LINEAR } = await import('./overlayText.js');
   const { default: sharp } = await import('sharp');
   const generated = project.composition?.document?.source?.kind === 'generated';
-  const history = (project.scenes || []).some((s) => s?.videoHistoryId) ? await loadHistory() : [];
+  const history = (project.scenes || []).some((s) => scenePlayableClipId(s, project.scenes)) ? await loadHistory() : [];
   const media = await resolveSceneMedia(project, { history, probe: probeVideoGeometry, retimed: true, strictLayers: generated });
   const data = buildDocumentData(project, { media, frame: plan.frame, clock: plan.clock, songDurationSec: plan.songDurationSec, generated });
   let staged;

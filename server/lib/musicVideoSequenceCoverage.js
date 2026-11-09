@@ -14,19 +14,21 @@
  *   - `_sequenceClipSpans` maps each scene back to its in/out point inside the
  *     returned clip — the existing scene cut times, never new ones.
  *
- * Only reference-to-video models are eligible. Kling v3 Pro image-to-video does
- * take `multi_prompt` (fal schema read 2026-10-31), but each element's `duration`
- * is a whole-second enum ("1"-"15") beside one start image, so its shot changes
- * cannot land on a scene's own in/out point; rounding them would invent cut
- * times. Kling stays per-shot.
+ * fal.ai reference-to-video, Grok, and a local model can cover a run. Kling v3
+ * Pro image-to-video does take `multi_prompt` (fal schema read 2026-10-31), but
+ * each element's `duration` is a whole-second enum ("1"-"15") beside one start
+ * image, so its shot changes cannot land on a scene's own in/out point;
+ * rounding them would invent cut times. Kling stays per-shot. Other backends
+ * stay per-shot too.
  */
 
 import { falReferenceImageName } from './storyboardGuidance.js';
+import { nearestGrokDuration } from './grokVideoClip.js';
 import {
   FAL_DEFAULT_IMAGE_VIDEO_MODEL, falPromptExpansionAddition, falPromptExpansionMode, getFalVideoModel,
 } from './falVideoModels.js';
 import { authoredShotPrompt } from './musicVideoShotPrompt.js';
-import { isPerformanceScene } from './musicVideoShotTiming.js';
+import { isPerformanceScene, ltxReferenceFrames } from './musicVideoShotTiming.js';
 
 const EPS = 1e-6;
 const round3 = (n) => Math.round(n * 1000) / 1000;
@@ -46,8 +48,28 @@ function sequenceCoverageBlockedReason(modelId) {
   return null;
 }
 
-/** The longest sequence one request of `modelId` can hold, in seconds (null when ineligible). */
-const sequenceMaxSec = (modelId) => (sequenceCoverageBlockedReason(modelId) ? null : getFalVideoModel(modelId).duration.max);
+const OTHER_BACKEND_REASON = 'Sequence coverage renders on fal.ai, Grok, or a local model, so this shot stays per-shot';
+
+/**
+ * Which lane covers a run. Grok and local win even when a fal model id is also
+ * passed. An omitted backend keeps the fal catalog check the existing callers use.
+ */
+function coverageLane({ modelId, backend }) {
+  if (backend === 'grok') return { kind: 'grok', maxSec: 15 };
+  if (backend === 'local') return { kind: 'local', maxSec: 127 / 3 };
+  if (backend && backend !== 'fal') return { kind: 'blocked', reason: OTHER_BACKEND_REASON };
+  const reason = sequenceCoverageBlockedReason(modelId);
+  if (reason) return { kind: 'blocked', reason };
+  return { kind: 'fal', maxSec: getFalVideoModel(modelId).duration.max };
+}
+
+/** Grok rounds the run up to 6/10/15s. Local names the frame count that covers it. Fal is unchanged. */
+function annotateGroup(group, lane) {
+  if (lane.kind === 'grok') return { ...group, requestSec: nearestGrokDuration(group.durationSec) };
+  if (lane.kind !== 'local') return group;
+  const numFrames = ltxReferenceFrames({ startSec: 0, endSec: group.durationSec });
+  return numFrames == null ? null : { ...group, requestSec: group.durationSec, numFrames };
+}
 
 const sceneKey = (scene) => scene.sceneId ?? scene.id;
 const idOf = (v) => v?.id ?? v ?? null;
@@ -71,9 +93,11 @@ function sequenceShotIdentity(project, scene) {
 }
 
 /** `planSequenceCoverage` over a project's stored scenes, with each shot's set and lead resolved. */
-export function planProjectSequenceCoverage(project, { modelId } = {}) {
+export function planProjectSequenceCoverage(project, { modelId, backend } = {}) {
   const scenes = (Array.isArray(project?.scenes) ? project.scenes : []).map((scene) => ({ ...scene, ...sequenceShotIdentity(project, scene) }));
-  return planSequenceCoverage(scenes, { modelId });
+  const laneBackend = backend ?? project?.videoSettings?.backend ?? null;
+  const resolvedModel = modelId !== undefined ? modelId : sequenceModelId(project);
+  return planSequenceCoverage(scenes, { modelId: resolvedModel, backend: laneBackend });
 }
 
 function ineligibleReason(scene) {
@@ -87,13 +111,14 @@ function ineligibleReason(scene) {
  * Group sequence-section scenes into single-request runs.
  *
  * @param {Array<object>} scenes — timeline-ordered scenes (`sceneId`, `sectionIndex`, `coverage`, `startSec`, `endSec`, `shotMode`, `visualLayer`, `set`, `protagonist`)
- * @param {{ modelId: string }} options
- * @returns {{ groups: Array<{ sectionIndex, sceneIds, startSec, endSec, durationSec }>, perShot: Array<{ sceneId, reason }> }}
+ * @param {{ modelId?: string, backend?: string }} options
+ * @returns {{ groups: Array<{ sectionIndex, sceneIds, startSec, endSec, durationSec, requestSec?: number, numFrames?: number }>, perShot: Array<{ sceneId, reason }> }}
  *   `perShot` lists only shots of a `coverage: 'sequence'` section that stayed per-shot, with the reason.
  */
-export function planSequenceCoverage(scenes, { modelId } = {}) {
-  const blocked = sequenceCoverageBlockedReason(modelId);
-  const maxSec = sequenceMaxSec(modelId);
+export function planSequenceCoverage(scenes, { modelId, backend } = {}) {
+  const lane = coverageLane({ modelId, backend });
+  const blocked = lane.kind === 'blocked' ? lane.reason : null;
+  const maxSec = lane.maxSec;
   const groups = [];
   const perShot = [];
   const requested = (Array.isArray(scenes) ? scenes : []).filter((s) => s?.coverage === 'sequence');
@@ -131,10 +156,12 @@ export function planSequenceCoverage(scenes, { modelId } = {}) {
   }
   // A run longer than the model's longest clip cannot be covered by one request: the whole run stays per-shot.
   const fits = [];
+  const maxLabel = round3(maxSec);
   for (const group of groups) {
-    if (group.durationSec > maxSec + EPS) {
-      group.sceneIds.forEach((sceneId) => perShot.push({ sceneId, reason: `the run is ${group.durationSec}s; the model's longest clip is ${maxSec}s` }));
-    } else fits.push(group);
+    const annotated = group.durationSec > maxSec + EPS ? null : annotateGroup(group, lane);
+    if (!annotated) {
+      group.sceneIds.forEach((sceneId) => perShot.push({ sceneId, reason: `the run is ${group.durationSec}s; the model's longest clip is ${maxLabel}s` }));
+    } else fits.push(annotated);
   }
   return { groups: fits, perShot };
 }
@@ -196,7 +223,9 @@ export function sequenceGroupInput(project, group) {
   const members = group.sceneIds.map((id) => byId.get(id));
   const prompt = _composeSequencePrompt({
     modelId,
-    shots: members.map((s, i) => ({ prompt: authoredShotPrompt(s), startSec: s.startSec, endSec: s.endSec, imageIndex: i + 1 })),
+    shots: members.map((s, i) => ({
+      prompt: authoredShotPrompt(s), startSec: s.startSec, endSec: s.endSec, ...(modelId ? { imageIndex: i + 1 } : {}),
+    })),
   });
   const expansion = falPromptExpansionMode(getFalVideoModel(modelId), SEQUENCE_PROMPT_EXPANSION);
   return {

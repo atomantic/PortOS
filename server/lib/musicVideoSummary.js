@@ -82,7 +82,7 @@ function currentStage(project, readiness, run) {
   const mode = project.composition?.mode || 'concat';
   const layered = isLayeredComposition(project);
   const planned = Boolean(readiness?.storyboard?.approved);
-  const footageReady = FOOTAGE_OPTIONAL_MODES.has(mode) || scenes.every((scene) => sceneRenderReady(scene, { layered }));
+  const footageReady = FOOTAGE_OPTIONAL_MODES.has(mode) || scenes.every((scene) => sceneRenderReady(scene, { layered, scenes }));
   const done = {
     setup: Boolean(project.trackId || project.uploadedAudioFilename) && Boolean(project.audioAnalysis) && lyricsReady(project, readiness),
     'cast-sets': Boolean(readiness?.art?.approved),

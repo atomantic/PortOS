@@ -614,6 +614,7 @@ function buildScene(input, { order }) {
     ...(input.performanceSpeaker ? { performanceSpeaker: input.performanceSpeaker } : {}),
     ...(input.performanceStyle === 'music' ? { performanceStyle: 'music' } : {}),
     ...(input.coverage === 'sequence' ? { coverage: 'sequence' } : {}),
+    ...(input.sourceTake ? { sourceTake: input.sourceTake } : {}),
     ...(input.panelId ? { panelId: input.panelId, panelRev: input.panelRev ?? null, panelArt: input.panelArt ?? null } : {}),
     referenceImageId: null,
     videoHistoryId: null,
@@ -681,6 +682,7 @@ function carryOver(prior, fresh) {
     ...(prior.speedFps ? { speedFps: prior.speedFps } : {}),
     ...(prior.offsetFrames ? { offsetFrames: prior.offsetFrames } : {}),
     ...(prior.clipLengthSec ? { clipLengthSec: prior.clipLengthSec } : {}),
+    ...(prior.sourceTake ? { sourceTake: prior.sourceTake } : {}),
     ...(prior.clipModelId ? { clipModelId: prior.clipModelId } : {}),
     ...(prior.reverse ? { reverse: true } : {}),
     ...(prior.holdLastFrame ? { holdLastFrame: true } : {}),
@@ -796,7 +798,7 @@ export function applyStoryboardShotSync(project, plan) {
 // adding a shot or lyric the storyboard approval did not cover.
 const SCENE_SHOT_EDIT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'beatNeedsReview', 'pacingCut', 'label', 'prompt', 'framePrompt', 'visualIntent',
   'referenceImageId', 'videoHistoryId', 'endImageId', 'endFrameOff', 'codeClip', 'frameFit', 'speedFps', 'offsetFrames', 'clipLengthSec', 'clipModelId', 'reverse', 'holdLastFrame', 'filmLook', 'transitionIn', 'transitionOut', 'wipeIn', 'wipeOut', 'glitches', 'cutEffect',
-  'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec', 'photoSequence', 'frameReferenceIds', 'clipReferenceIds', 'researchReferences', 'setReference', 'characterVariant', 'panelId', 'panelRev', 'panelArt', 'preMusic', 'coverage', 'lyricAnchor',
+  'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec', 'photoSequence', 'frameReferenceIds', 'clipReferenceIds', 'researchReferences', 'setReference', 'characterVariant', 'panelId', 'panelRev', 'panelArt', 'preMusic', 'coverage', 'sourceTake', 'lyricAnchor',
   'cameoId', 'cameoVariantId', 'cameoLabel', 'shotSheet'];
 
 /**

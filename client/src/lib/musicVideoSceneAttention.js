@@ -8,6 +8,7 @@
  */
 import { shotActionContractProblem } from '../../../server/lib/musicVideoActionContract.js';
 import { currentPlateEvidence } from '../../../server/lib/musicVideoPlateEvidence.js';
+import { resolveSourceTake, scenePlayableClipId } from '../../../server/lib/musicVideoSourceTake.js';
 import { isEndFrameImageEffect } from './musicVideoImageEffects.js';
 import { clipLoops, clipNeedsMoreFootage, isSelfDrawnLayer, sceneVisualLayer, sceneHasAuthoredSpan, sceneUsesAuthoredTiming } from './musicVideoLayers.js';
 import { performanceBlockedReason, performanceCapability, planPerformanceWindow, isPerformanceScene, selectedPerformanceInstruction } from './musicVideoShotTiming.js';
@@ -72,19 +73,26 @@ function performanceBlocked(scene, { lipSyncBackend, songDurationSec, videoSetti
  */
 export function sceneAttention(scene, ctx = {}) {
   if (!scene) return [];
-  const { layered = false, footageOptional = false, lipSyncBackend = '', songDurationSec = null, clipSec = null, failed = {}, songReview = null, videoSettings = null, locked = false, spanExtraSec = 0 } = ctx;
+  const { layered = false, footageOptional = false, lipSyncBackend = '', songDurationSec = null, clipSec = null, failed = {}, songReview = null, videoSettings = null, locked = false, spanExtraSec = 0, scenes = null } = ctx;
   const layer = sceneVisualLayer(scene, { layered });
+  const resolved = resolveSourceTake(scene, scenes);
+  const playableClipId = scenePlayableClipId(scene, scenes);
+  const frameId = scene.referenceImageId || resolved?.referenceImageId || null;
+  const playbackEdit = resolved
+    ? { inSec: resolved.inSec, outSec: resolved.outSec }
+    : selectedPerformanceInstruction(scene)?.edit;
   const codes = [];
   if (scene.beatNeedsReview) codes.push('beat-needs-review');
   const songChange = songReview?.[scene.sceneId];
   if (songChange && !songChange.resolved && SONG_REVIEW_CODES[songChange.status]) codes.push(SONG_REVIEW_CODES[songChange.status]);
   // A code-rendered clip was made without a seed frame, so it needs none.
-  const codeRendered = scene.codeClip && scene.videoHistoryId;
-  if (!isSelfDrawnLayer(layer) && !scene.referenceImageId && !codeRendered) codes.push('missing-frame');
-  if (layer === 'footage' && !footageOptional && !scene.videoHistoryId) codes.push('missing-clip');
+  // A return shows the source shot's frame and clip, so those count as present.
+  const codeRendered = scene.codeClip && playableClipId;
+  if (!isSelfDrawnLayer(layer) && !frameId && !codeRendered) codes.push('missing-frame');
+  if (layer === 'footage' && !footageOptional && !playableClipId) codes.push('missing-clip');
   if (layer !== 'footage' && !sceneHasAuthoredSpan(scene)) codes.push('no-span');
   if (layer === 'footage' && sceneUsesAuthoredTiming(scene) && sceneHasAuthoredSpan(scene)
-    && clipNeedsMoreFootage({ loop: clipLoops(scene, selectedPerformanceInstruction(scene)?.edit),
+    && clipNeedsMoreFootage({ loop: clipLoops(scene, playbackEdit),
       holdLastFrame: scene.holdLastFrame, spanSec: scene.endSec - scene.startSec + spanExtraSec, clipSec })) codes.push('under-covered');
   const contract = scene.direction?.actionContract;
   if (contract && shotActionContractProblem(contract, scene)) codes.push('contract-problem');
@@ -114,11 +122,14 @@ export const SCENE_MEDIA_LABELS = Object.freeze({ clip: 'Clip', image: 'Image', 
  * composition draws it, or the clip was rendered from code), or null when
  * nothing is selected yet.
  */
-export function sceneMediaKind(scene, { layered = false } = {}) {
+export function sceneMediaKind(scene, { layered = false, scenes = null } = {}) {
   if (!scene) return null;
   const layer = sceneVisualLayer(scene, { layered });
   if (isSelfDrawnLayer(layer)) return layer;
   // A clip rendered from code (`codeClip`) is still footage to the render, but it reads as Code.
-  if (layer === 'footage' && scene.videoHistoryId) return scene.codeClip ? 'code' : 'clip';
-  return scene.referenceImageId ? 'image' : null;
+  // A return's badge follows the source clip it actually plays.
+  const playable = scenePlayableClipId(scene, scenes);
+  if (layer === 'footage' && playable) return scene.codeClip ? 'code' : 'clip';
+  const frame = scene.referenceImageId || resolveSourceTake(scene, scenes)?.referenceImageId;
+  return frame ? 'image' : null;
 }

@@ -44,6 +44,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { canonicalSnapshotChecksum } from '../../lib/snapshotChecksum.js';
 import { isNonBlankStr, trimTo } from '../../lib/textUtils.js';
 import { isLayeredComposition, isSelfDrawnLayer, sceneVisualLayer } from '../../lib/musicVideoLayers.js';
+import { isContinuingScene } from '../../lib/musicVideoSourceTake.js';
 import { codeFirstProductionAssets, normalizeMusicVideoProductionPolicy, summarizeMusicVideoMediumPlan } from '../../lib/musicVideoMediumPlan.js';
 import { projectAutoReviews } from './autoReview.js';
 import { projectRevisions } from './revision.js';
@@ -394,13 +395,17 @@ export function productionTargets(project) {
     const ids = (action) => new Set(assets.steps.filter((step) => step.action === action).map((step) => step.sceneId));
     const frames = ids('generate-image');
     const clips = ids('generate-video');
-    return { frame: project.scenes.filter((scene) => frames.has(scene.sceneId)), clip: project.scenes.filter((scene) => clips.has(scene.sceneId)) };
+    const kept = (scene) => !isContinuingScene(scene);
+    return {
+      frame: project.scenes.filter((scene) => frames.has(scene.sceneId) && kept(scene)),
+      clip: project.scenes.filter((scene) => clips.has(scene.sceneId) && kept(scene)),
+    };
   }
   const layered = isLayeredComposition(project);
   const scenes = Array.isArray(project?.scenes) ? project.scenes : [];
   return {
-    frame: scenes.filter((s) => sceneVisualLayer(s, { layered }) === 'still' || (!isSelfDrawnLayer(sceneVisualLayer(s, { layered })) && (!s.videoHistoryId || pendingStillRepair(s)))),
-    clip: scenes.filter((s) => sceneVisualLayer(s, { layered }) === 'footage'),
+    frame: scenes.filter((s) => !isContinuingScene(s) && (sceneVisualLayer(s, { layered }) === 'still' || (!isSelfDrawnLayer(sceneVisualLayer(s, { layered })) && (!s.videoHistoryId || pendingStillRepair(s))))),
+    clip: scenes.filter((s) => !isContinuingScene(s) && sceneVisualLayer(s, { layered }) === 'footage'),
   };
 }
 
