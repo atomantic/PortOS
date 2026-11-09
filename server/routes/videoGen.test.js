@@ -1355,7 +1355,7 @@ describe('videoGen routes', () => {
       const project = { id: 'mv-1', scenes: [scene] };
       const refs = [{ path: '/mock/inputs/person.png', label: 'Person · young' }];
       getSettings.mockResolvedValueOnce(settings).mockResolvedValueOnce(settings);
-      getMusicVideoProject.mockResolvedValueOnce(project).mockResolvedValueOnce(project).mockResolvedValueOnce(project).mockResolvedValueOnce(project).mockResolvedValueOnce(project);
+      getMusicVideoProject.mockResolvedValueOnce(project).mockResolvedValueOnce(project).mockResolvedValueOnce(project).mockResolvedValueOnce(project).mockResolvedValueOnce(project).mockResolvedValueOnce(project);
       clipCastReferences.mockResolvedValueOnce(refs).mockResolvedValueOnce(refs);
       const body = { backend: 'grok', mode: 'image', prompt: 'A person waves', sourceImageFile: 'still.png', grokDuration: 6,
         musicVideo: { projectId: 'mv-1', sceneId: 's1', compose: true, promptAsTyped: true, expectedClipReferenceFiles: ['person.png'] } };
