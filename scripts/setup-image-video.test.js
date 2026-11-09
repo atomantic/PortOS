@@ -1205,6 +1205,13 @@ ${block}`;
     }
   });
 
+  it('locks Pillow 13+, the first release without the 12.x parser advisories (#15479)', () => {
+    const pillow = lock.match(/^pillow==(\d+)\./m);
+    expect(pillow, 'pillow must be locked').not.toBeNull();
+    expect(Number(pillow[1])).toBeGreaterThanOrEqual(13);
+    expect(directPins).toMatch(/^pillow==13\./m);
+  });
+
   it('a 3.11+ PYTHON_BIN installs to the user site from the lock and probes both CLIs', () => {
     const { calls, selfReq } = runBlock({ oldPython: false });
     expect(calls).toContain(`-m pip install --user --require-hashes --no-deps --force-reinstall -r`);
