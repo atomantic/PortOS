@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeShotSheet, shotSheetBulkEdits, shotSheetCast, shotSheetMapRows, shotSheetMediaEdits, shotSheetOptions, SHOT_SHEET_MAP_BARS, shotSheetProblems, shotSheetRows, shotSheetStretches } from './musicVideoShotSheet.js';
+import { normalizeShotSheet, shotCameraRuleText, shotOmitsOwnedCameraDetail, shotSheetBulkEdits, shotSheetCast, shotSheetMapRows, shotSheetMediaEdits, shotSheetOptions, SHOT_SHEET_MAP_BARS, shotSheetProblems, shotSheetRows, shotSheetStretches } from './musicVideoShotSheet.js';
 import { musicVideoSceneUpdateSchema, musicVideoProjectUpdateSchema } from './musicVideoValidation.js';
 import { applySceneUpdate, applyProjectPatch, replaceScenes } from '../services/musicVideo/projectsLogic.js';
 
@@ -30,6 +30,35 @@ describe('selectedFrameOutdated', () => {
   // Catches an imported frame with no recorded prompt being reported as outdated.
   it('can\'t judge a frame with no recorded prompt', () => {
     expect(selectedFrameOutdated(scene({ takes: [take(null)] }))).toBe(false);
+  });
+  // Catches a camera-rule edit leaving a frame looking current.
+  it('flags a frame rendered before its camera rule', () => {
+    const project = { cameras: [{ id: 'eye', name: 'Observer', kind: 'observer', rule: 'Nobody looks at it' }] };
+    const withCamera = (prompt) => shotSheetRows({ ...project, scenes: [scene({ shotSheet: { cameraId: 'eye' }, takes: [take(prompt)] })] })[0].frameOutdated;
+    expect(withCamera('Ada rides away at dusk')).toBe(true);
+    expect(withCamera('Ada rides away at dusk\nCamera: Observer, an observer camera. Nobody looks at it.')).toBe(false);
+  });
+});
+
+describe('shotCameraRuleText', () => {
+  const project = { cameras: [
+    { id: 'snap', name: 'Snapshot camera', kind: 'in-world', owner: 'Ada', rule: 'Facing back.' },
+    { id: 'eye', name: 'Observer', kind: 'observer', rule: 'Subjects do not look at it.' },
+  ] };
+  it('names the camera and says an owned in-world camera is not in the frame', () => {
+    expect(shotCameraRuleText(project, { shotSheet: { cameraId: 'snap', holder: 'Ada' } })).toBe('Camera: Snapshot camera, an in-world camera. This camera is the one taking the picture, so it is not in the frame. Facing back.');
+    expect(shotCameraRuleText(project, { shotSheet: { cameraId: 'eye' } })).toBe('Camera: Observer, an observer camera. Subjects do not look at it.');
+    expect(shotCameraRuleText(project, { shotSheet: {} })).toBe('');
+  });
+  it('drops that camera from the owner and from the person holding it', () => {
+    const selfie = { shotSheet: { cameraId: 'snap', holder: 'Ada' } };
+    expect(shotOmitsOwnedCameraDetail(project, selfie, 'Ada', 'Camera on a wrist strap')).toBe(true);
+    expect(shotOmitsOwnedCameraDetail(project, selfie, 'Ada', 'Red watch on the left wrist')).toBe(false);
+    expect(shotOmitsOwnedCameraDetail(project, selfie, 'Bo', 'Pocket camera')).toBe(false);
+    const borrowed = { shotSheet: { cameraId: 'snap', holder: 'Bo' } };
+    expect(shotOmitsOwnedCameraDetail(project, borrowed, 'Bo', 'Pocket camera')).toBe(true);
+    expect(shotOmitsOwnedCameraDetail(project, borrowed, 'Ada', 'Snapshot camera on a strap')).toBe(true);
+    expect(shotOmitsOwnedCameraDetail(project, { shotSheet: { cameraId: 'eye', holder: 'Ada' } }, 'Ada', 'Camera on a wrist strap')).toBe(false);
   });
 });
 
