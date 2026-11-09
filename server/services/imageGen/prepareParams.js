@@ -32,6 +32,7 @@ import { applyImageVisualProfile } from './visualProfile.js';
 import { musicVideoCastGuideReferences, musicVideoLimitReferenceFiles, musicVideoLinkedCastReferences, musicVideoPanelArtReferences, musicVideoResearchReferences, musicVideoReferenceChoices, musicVideoStyleImages, musicVideoReferenceCapacity, musicVideoStylePrompt, musicVideoStyleReferenceCapacity } from '../../lib/musicVideoConditioning.js';
 import { musicVideoCameoReferences } from '../../lib/musicVideoCameos.js';
 import { musicVideoFrameModelInput } from '../../lib/musicVideoShotPrompt.js';
+import { captureImageFrameDependencies } from '../../lib/musicVideoDependencies.js';
 import { musicVideoGreyboxReferences } from '../../lib/musicVideoGreybox.js';
 import { musicVideoFrameGenSize } from '../../lib/musicVideoAspect.js';
 import { join } from 'node:path';
@@ -256,6 +257,12 @@ async function applyMusicVideoSceneInputs(data, { project, mode, localModel, clo
   if (look) {
     data.prompt = [data.prompt, look].filter(Boolean).join('. ');
     data.promptAdditions = [...(data.promptAdditions || []), promptAddition('mood-board-style', 'Mood board style', look)];
+  }
+  // Stamp at submit, including a job that does not compose, so completion
+  // files the shot the director sent rather than the shot it finds later.
+  if (scene) {
+    const currentTag = data.musicVideo || tag;
+    data.musicVideo = { ...currentTag, frameDependencies: captureImageFrameDependencies(project, scene, { slot: currentTag.slot === 'end' ? 'end' : 'start' }) };
   }
 }
 

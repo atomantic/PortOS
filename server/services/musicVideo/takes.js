@@ -25,7 +25,7 @@ import { assertMusicVideoMedia } from '../../lib/musicVideoMediaPolicy.js';
  */
 
 import { musicVideoCastInputsRecord } from '../../lib/musicVideoCastLook.js';
-import { captureTakeDependencies, musicVideoTakeChanges, retainMusicVideoDependencies } from '../../lib/musicVideoDependencies.js';
+import { captureImageFrameDependencies, captureTakeDependencies, musicVideoTakeChanges, retainMusicVideoDependencies } from '../../lib/musicVideoDependencies.js';
 import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { isNonBlankStr, trimTo } from '../../lib/textUtils.js';
@@ -55,7 +55,7 @@ const clip = (v, max) => (isNonBlankStr(v) ? trimTo(v, max) : null);
 // A basename only — an imported file's name is provenance, never a path.
 const takeOriginalName = (name) => (isNonBlankStr(name) ? clip(name.split(/[\\/]/).pop(), 200) : null);
 
-function buildTake({ kind, assetId, source, provider = null, jobId = null, prompt = null, sourceImageId = null, originalName = null, shotInstruction = null, use = 'final', dependencies = null, inputAssets = null, castInputs = null, costUsd = null, spendKind = null, costModelId = null, now }) {
+function buildTake({ kind, assetId, source, provider = null, jobId = null, prompt = null, sourceImageId = null, originalName = null, shotInstruction = null, use = 'final', dependencies = null, frameDependencies = null, inputAssets = null, castInputs = null, costUsd = null, spendKind = null, costModelId = null, now }) {
   const recordedCastInputs = kind === 'image' || kind === 'endImage' ? musicVideoCastInputsRecord(castInputs) : null;
   return {
     takeId: `mvt-${randomUUID()}`,
@@ -69,6 +69,7 @@ function buildTake({ kind, assetId, source, provider = null, jobId = null, promp
     originalName: takeOriginalName(originalName),
     status: 'candidate',
     ...(dependencies ? { dependencies: structuredClone(dependencies) } : {}),
+    ...(frameDependencies ? { frameDependencies: structuredClone(frameDependencies) } : {}),
     ...(recordedCastInputs ? { castInputs: recordedCastInputs } : {}),
     ...(inputAssets?.length ? { inputAssets: structuredClone(inputAssets) } : {}),
     // #8980 — 'motion-reference' scaffolding never fills the slot on its own.
@@ -156,11 +157,28 @@ function appendToScene(project, scene, inputs, now) {
   for (const input of inputs) {
     const existing = takes.find((t) => t.kind === input.kind && t.assetId === input.assetId);
     const dependencies = input.dependencies || (input.kind === 'video' && input.sourceImageId ? captureTakeDependencies(scene, input.sourceImageId) : null);
-    const take = existing || buildTake({ ...input, dependencies, now });
+    const frameSlot = input.kind === 'endImage' ? 'end' : 'start';
+    // A stamp from submit time wins. A generated still with no stamp (the
+    // synchronous lane, or a job queued before stamps existed) is captured
+    // here unless the caller sets skipFrameCapture — a late completion must
+    // not snapshot the shot as it stands now.
+    const frameDependencies = input.kind === 'image' || input.kind === 'endImage'
+      ? input.frameDependencies || (input.skipFrameCapture || input.source !== 'generated' ? null : captureImageFrameDependencies(project, scene, { slot: frameSlot }))
+      : null;
+    const { skipFrameCapture: _skipFrameCapture, ...stored } = input;
+    // A slot materialized before this completion has no stamp yet. Keep the
+    // first stamp; a replay must not replace evidence already recorded.
+    const stamped = existing && frameDependencies && !existing.frameDependencies
+      ? { ...existing, frameDependencies: structuredClone(frameDependencies) }
+      : existing;
+    const take = existing ? stamped : buildTake({ ...stored, dependencies, frameDependencies, now });
     if (!existing) takes = [...takes, take];
+    else if (take !== existing) takes = takes.map((entry) => (entry === existing ? take : entry));
     appended.push(take);
     const field = TAKE_SLOT[input.kind];
-    const selectable = input.autoSelect !== false && take.status !== 'rejected' && take.use !== 'motion-reference' && !musicVideoTakeChanges(project, scene, take).length;
+    // The takes appended in this batch are the plates a same-call clip was built on.
+    const selectable = input.autoSelect !== false && take.status !== 'rejected' && take.use !== 'motion-reference'
+      && !musicVideoTakeChanges(project, { ...scene, takes }, take).length;
     const replaceFrame = input.replaceSelection === true && (input.kind === 'image' || input.kind === 'endImage');
     const selectionUnchanged = input.expectedSelection !== undefined && (next[field] || null) === input.expectedSelection;
     const repairDone = input.kind === 'image' && input.stillRepairAt && next.stillFixes?.pending === true
@@ -293,7 +311,8 @@ export function rejectUnusedTakes(project, sceneId) {
   const rejected = takes.filter(unused).length;
   if (!rejected) return { project, scene, rejected };
   const next = { ...scene, takes: takes.map((take) => (unused(take) ? { ...take, status: 'rejected' } : take)) };
-  return { project: replaceScene(project, idx, next), scene: next, rejected };
+  const saved = replaceScene(project, idx, next);
+  return { project: saved, scene: saved.scenes[idx], rejected };
 }
 
 /**

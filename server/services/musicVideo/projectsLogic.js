@@ -257,6 +257,7 @@ export function cloneProjectRecord(source, {
   }));
   for (const scene of scenes) scene.takes = scene.takes.map((take) => ({ ...take,
     ...(take.dependencies ? { dependencies: remapMusicVideoDependencies(take.dependencies, sceneIdMap) } : {}),
+    ...(take.frameDependencies ? { frameDependencies: remapMusicVideoDependencies(take.frameDependencies, sceneIdMap) } : {}),
   }));
   const mediaReady = includeGeneratedMedia
     && scenes.length > 0
@@ -860,7 +861,9 @@ export function applySceneUpdate(project, sceneId, patch) {
   const next = retimed ? anchorShotsToSungLyrics(touch(project, { scenes: nextScenes }), [sceneId]) : touch(project, { scenes: nextScenes });
   // Retiming or rewording a shot, or picking another take, keeps the storyboard approval it was judged on.
   const shotEdit = Object.keys(data).every((key) => SCENE_SHOT_EDIT_FIELDS.includes(key));
-  return { project: shotEdit ? carryStoryboardApproval(project, next, 'Edited a shot') : next, updated };
+  const saved = shotEdit ? carryStoryboardApproval(project, next, 'Edited a shot') : next;
+  // The saved scene, after dependency presentation, so a prompt edit returns the frame's new stale state.
+  return { project: saved, updated: saved.scenes.find((scene) => scene.sceneId === sceneId) || updated };
 }
 
 /**
