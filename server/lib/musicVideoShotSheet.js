@@ -246,7 +246,7 @@ export function shotSheetFocalSubject(scene) {
  * camera can shoot both. A photo camera is a still even when a clip is selected;
  * a video camera reuses a selected clip, otherwise it plans generated footage.
  */
-export function shotSheetMedium(project, scene) {
+function shotSheetMedium(project, scene) {
   const cameraId = scene?.shotSheet?.cameraId;
   if (!cameraId) return null;
   const camera = (project?.cameras || []).find((entry) => entry?.id === cameraId);
@@ -259,7 +259,7 @@ export function shotSheetMedium(project, scene) {
 }
 
 /** close, medium, or wide when the wording names a scale. Close is matched before medium and wide. */
-export function framingScale(value) {
+function framingScale(value) {
   if (typeof value !== 'string' || !value.trim()) return null;
   if (/(?:extreme[\s-]*)?close(?:[\s-]*up)?|\bclose\b/i.test(value)) return 'close';
   if (/\b(?:wide|establishing)\b/i.test(value)) return 'wide';
