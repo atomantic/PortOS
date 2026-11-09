@@ -1270,3 +1270,30 @@ describe('FLUX.2 Apple Silicon install is hash-pinned', () => {
     expect(otherBranch).toMatch(/pip install --upgrade \\\n\s+"torch>=2\.5"/);
   });
 });
+
+describe('FastVideo MLX Apple Silicon install is hash-pinned', () => {
+  const lock = readFileSync(join(REPO_ROOT, 'scripts', 'requirements-fastvideo-mlx.lock.txt'), 'utf8');
+  const section = source.slice(source.indexOf('INSTALL_FASTVIDEO" == "1"'), source.indexOf('FastVideo MLX runtime ready'));
+
+  it('every locked package carries a sha256 hash, none comes from a VCS or URL source, and all are arm64-macOS scoped', () => {
+    const blocks = lock.split(/\n(?=[a-z][^\n]*==)/i).filter((b) => /^[a-z][^\n]*==/i.test(b));
+    expect(blocks.length).toBeGreaterThan(0);
+    for (const block of blocks) {
+      expect(block).toMatch(/--hash=sha256:[0-9a-f]{64}/);
+      const pin = block.split('\n')[0];
+      expect(pin).toContain("sys_platform == 'darwin'");
+      expect(pin).toContain("platform_machine == 'arm64'");
+    }
+    expect(lock).not.toMatch(/^[a-z][^\n]* @ /im);
+  });
+
+  it('installs the lock with uv pip sync --require-hashes and editable package with --no-deps', () => {
+    expect(section).toContain('"$FASTVIDEO_UV" pip sync --require-hashes --python "${FASTVIDEO_PY}" "$FASTVIDEO_LOCK"');
+    expect(section).toContain('"$FASTVIDEO_UV" pip install --no-deps --python "${FASTVIDEO_PY}" -e "${FASTVIDEO_DIR}"');
+    expect(section).not.toContain("pip install --python \"${FASTVIDEO_PY}\" -e '.[mlx]'");
+  });
+
+  it('refuses a Python older than the 3.11 floor the lock was compiled for', () => {
+    expect(section).toContain('sys.version_info[:2] >= (3, 11)');
+  });
+});
