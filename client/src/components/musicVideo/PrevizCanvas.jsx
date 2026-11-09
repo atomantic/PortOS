@@ -1,10 +1,12 @@
-import { Suspense, useEffect } from 'react';
+import { Suspense, useEffect, useMemo } from 'react';
+import * as THREE from 'three';
 import { Canvas, useThree } from '@react-three/fiber';
 import { Html } from '@react-three/drei';
 import { GreyboxModel, PartMesh } from '../catalog/GreyboxViewer.jsx';
 import { WorldScene } from '../catalog/WorldViewer.jsx';
 import ErrorBoundary from '../ErrorBoundary';
 import { GREYBOX_SKY_COLOR } from '../../../../server/lib/greyboxVocabulary.js';
+import { worldSkyAt, worldSunDirection } from '../../../../server/lib/worldMap.js';
 import { aspectRatio, fovFromFocalLength, partColor } from '../../lib/greybox';
 
 const FIGURE_HEIGHT = 1.7;
@@ -66,6 +68,99 @@ function ActorProxy({ actor, labelPortal }) {
   );
 }
 
+const LAMP_COLOR = '#ffd58a';
+const HEADLIGHT_COLOR = '#fff4dc';
+
+// A beam from where it sits along its local +Z, aimed at a target it carries with it.
+function Beam({ position = [0, 0, 0], intensity = 60, distance = 40 }) {
+  const target = useMemo(() => new THREE.Object3D(), []);
+  return (
+    <group position={position}>
+      <primitive object={target} position={[0, -0.6, 10]} />
+      <spotLight target={target} color={HEADLIGHT_COLOR} intensity={intensity} distance={distance} angle={0.45} penumbra={0.5} decay={1.5} />
+    </group>
+  );
+}
+
+// The light a greybox part marked as a practical gives off once it is dark (`part.light`, greyboxVocabulary.js).
+function PracticalLight({ part }) {
+  const [rx, ry, rz] = part.rotationDegrees || [0, 0, 0];
+  if (part.light === 'headlight') {
+    return <group position={part.position} rotation={[rad(rx), rad(ry), rad(rz)]}><Beam /></group>;
+  }
+  const pool = part.light === 'lamp';
+  return <pointLight position={part.position} color={LAMP_COLOR} intensity={pool ? 40 : 8} distance={pool ? 14 : 6} decay={1.5} />;
+}
+
+// A cast object at its mark (lib/musicVideoPreviz.js `cutProps`): a car (headlights on after dark), a bike lying on its side, or a small box.
+function PropProxy({ prop, dark, labelPortal }) {
+  const material = <meshStandardMaterial color={prop.color} roughness={0.9} />;
+  let body;
+  let top;
+  if (prop.shape === 'car') {
+    top = 1.5;
+    body = (
+      <group>
+        <mesh position={[0, 0.55, 0]}><boxGeometry args={[1.8, 0.7, 4.4]} />{material}</mesh>
+        <mesh position={[0, 1.15, -0.3]}><boxGeometry args={[1.6, 0.55, 2.2]} />{material}</mesh>
+        {[-0.65, 0.65].map((x) => (
+          <mesh key={x} position={[x, 0.6, 2.21]}>
+            <boxGeometry args={[0.3, 0.15, 0.02]} />
+            <meshStandardMaterial color={HEADLIGHT_COLOR} emissive={dark ? HEADLIGHT_COLOR : '#000000'} emissiveIntensity={dark ? 2 : 0} />
+          </mesh>
+        ))}
+        {dark && <Beam position={[0, 0.6, 2.3]} intensity={120} distance={60} />}
+      </group>
+    );
+  } else if (prop.shape === 'bike') {
+    // On its side: both wheels flat on the ground, the frame between them.
+    top = 0.4;
+    body = (
+      <group>
+        {[-0.55, 0.55].map((z) => (
+          <mesh key={z} position={[0, 0.06, z]}><cylinderGeometry args={[0.33, 0.33, 0.06, 20]} />{material}</mesh>
+        ))}
+        <mesh position={[0, 0.1, 0]}><boxGeometry args={[0.06, 0.06, 1.1]} />{material}</mesh>
+      </group>
+    );
+  } else {
+    top = 0.4;
+    body = <mesh position={[0, 0.15, 0]}><boxGeometry args={[0.35, 0.3, 0.25]} />{material}</mesh>;
+  }
+  return (
+    <group position={prop.position} rotation={[0, rad(prop.facingDegrees), 0]}>
+      {body}
+      <Html portal={labelPortal} position={[0, top + 0.25, 0]} center style={{ pointerEvents: 'none' }}>
+        <span className="port-media-overlay-strong whitespace-nowrap rounded px-1 text-[10px]">{prop.name}</span>
+      </Html>
+    </group>
+  );
+}
+
+// A set's light: plain daylight with no clock, else the sky at the cut's story clock, with a faint moon fill so figures still read at night.
+function SetLights({ clockMinutes }) {
+  if (clockMinutes == null) {
+    return (
+      <>
+        <color attach="background" args={[GREYBOX_SKY_COLOR]} />
+        <ambientLight intensity={0.9} />
+        <hemisphereLight args={['#ffffff', '#555a66', 0.6]} />
+        <directionalLight position={[10, 18, 8]} intensity={1.4} />
+      </>
+    );
+  }
+  const sky = worldSkyAt(clockMinutes, 'outdoor');
+  return (
+    <>
+      <color attach="background" args={[sky.sky]} />
+      <ambientLight intensity={sky.ambient} />
+      <hemisphereLight args={[sky.sky, '#222018', sky.ambient * 0.6]} />
+      {sky.sunIntensity > 0 && <directionalLight position={worldSunDirection(sky).map((v) => v * 50)} intensity={sky.sunIntensity} />}
+      {sky.lampsOn && <directionalLight position={[-20, 30, -10]} color="#8fa3d9" intensity={0.25} />}
+    </>
+  );
+}
+
 // Puts the render camera on the cut's camera each time the frame moves; the canvas renders on demand.
 function CameraRig({ camera: shot }) {
   const { camera, invalidate } = useThree();
@@ -83,7 +178,8 @@ function CameraRig({ camera: shot }) {
 
 /**
  * One previz frame (lib/musicVideoPreviz.js `previzFrameAt`) drawn over its
- * set's greybox, or over the whole world when the cut plays on the timeline: the layout, every visible person as a proxy, seen through the
+ * set's greybox, or over the whole world when the cut plays on the timeline: the layout lit by the frame's
+ * clock (its marked practicals on after dark), every visible person and named prop as a proxy, seen through the
  * cut's camera at its lens and aspect. `labelPortal` is the DOM overlay for names.
  */
 export default function PrevizCanvas({ frame, modelSrc = null, labelPortal }) {
@@ -102,6 +198,9 @@ export default function PrevizCanvas({ frame, modelSrc = null, labelPortal }) {
     );
   }
   const layout = { zones: greybox.zones || [] };
+  // Practicals switch on with the streetlamps (worldSkyAt `lampsOn`); with no clock it is day.
+  const dark = frame.clockMinutes != null && worldSkyAt(frame.clockMinutes, 'outdoor').lampsOn;
+  const practicals = dark && greybox.source !== 'glb' ? (greybox.parts || []).filter((part) => part.light) : [];
   return (
     <ErrorBoundary key={modelSrc || 'spec'} fallback={<p role="alert" className="p-4 text-sm text-port-text">The set's 3D model could not be drawn.</p>}>
       <Canvas
@@ -111,12 +210,13 @@ export default function PrevizCanvas({ frame, modelSrc = null, labelPortal }) {
         frameloop="demand"
         style={{ aspectRatio: aspectRatio(camera.aspect) }}
       >
-        <color attach="background" args={[GREYBOX_SKY_COLOR]} />
-        <ambientLight intensity={0.9} />
-        <hemisphereLight args={['#ffffff', '#555a66', 0.6]} />
-        <directionalLight position={[10, 18, 8]} intensity={1.4} />
+        <SetLights clockMinutes={frame.clockMinutes} />
         {greybox.source === 'glb' && modelSrc && <Suspense fallback={null}><GreyboxModel src={modelSrc} onReady={noop} /></Suspense>}
-        {greybox.source !== 'glb' && (greybox.parts || []).map((part) => <PartMesh key={part.id} part={part} color={partColor(layout, part)} />)}
+        {greybox.source !== 'glb' && (greybox.parts || []).map((part) => (
+          <PartMesh key={part.id} part={part} color={partColor(layout, part)} glow={dark && part.light ? (part.light === 'headlight' ? HEADLIGHT_COLOR : LAMP_COLOR) : null} />
+        ))}
+        {practicals.map((part) => <PracticalLight key={part.id} part={part} />)}
+        {(frame.props || []).map((prop) => <PropProxy key={prop.subjectId} prop={prop} dark={dark} labelPortal={labelPortal} />)}
         {frame.actors.filter((actor) => actor.visible).map((actor) => <ActorProxy key={actor.subjectId} actor={actor} labelPortal={labelPortal} />)}
         <CameraRig camera={camera} />
       </Canvas>

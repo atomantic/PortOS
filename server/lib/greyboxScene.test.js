@@ -63,3 +63,12 @@ describe('resolveGreybox', () => {
     expect(resolveGreybox({ greybox: rink() })?.parts).toHaveLength(2);
   });
 });
+
+describe('greybox practical lights (#15494)', () => {
+  // Catches a marked streetlamp being stripped or an unknown light kind slipping into a stored greybox.
+  it('keeps a part marked as a practical light and refuses an unknown kind', () => {
+    const scene = (light) => ({ parts: [{ id: 'lamp', type: 'cylinder', radius: 0.2, height: 0.4, position: [0, 5, 0], light }] });
+    expect(greyboxSceneSchema.parse(scene('lamp')).parts[0].light).toBe('lamp');
+    expect(greyboxSceneSchema.safeParse(scene('neon')).success).toBe(false);
+  });
+});

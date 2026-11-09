@@ -14,7 +14,7 @@
  */
 
 import { z } from 'zod';
-import { GREYBOX_ASPECTS, GREYBOX_SHOT_ID_MAX } from './greyboxVocabulary.js';
+import { GREYBOX_ASPECTS, GREYBOX_PRACTICAL_LIGHTS, GREYBOX_SHOT_ID_MAX } from './greyboxVocabulary.js';
 
 export const GREYBOX_SCHEMA_VERSION = 1;
 
@@ -68,6 +68,8 @@ const partSchema = z.intersection(
     zone: idSchema.optional(),
     position: vec3.default([0, 0, 0]),
     rotationDegrees: vec3.default([0, 0, 0]),
+    // A practical light the part gives off after dark (greyboxVocabulary.js).
+    light: z.enum(GREYBOX_PRACTICAL_LIGHTS).optional(),
   }),
 );
 

@@ -431,3 +431,52 @@ describe('in-set action paths and camera frustum seeding (#15493)', () => {
     expect(musicVideoProjectUpdateSchema.safeParse({ previz: { cuts: [cut], tracks: [] } }).success).toBe(true);
   });
 });
+
+describe('previz night lighting and prop proxies (#15494)', () => {
+  const propSubjects = [...subjects, { id: 'o-sedan', kind: 'object', name: 'Silver sedan' }, { id: 'o-bikes', kind: 'object', name: 'Bikes' }, { id: 'o-cam', kind: 'object', name: 'Camcorder' }];
+  const propProject = (scenes, extra = {}) => ({ ...project(scenes, extra), concept: { subjects: propSubjects } });
+
+  // Catches a set cut staying in flat daylight when its shot is at night, and "dusk into night" reading as night.
+  it('lights a set cut from the timeline clock, else the shot sheet time of day, else daylight', () => {
+    const scenes = [scene('s1', 0, 4, { characters: ['Ana'], timeOfDay: 'Dusk into night' }), scene('s2', 4, 8, { characters: ['Ana'], timeOfDay: 'around 9:30 pm' }), scene('s3', 8, 12, { characters: ['Ana'] })];
+    const { previz } = backfillPrevizFromShots(project(scenes), places);
+    const p = project(scenes, { previz });
+    expect(previzFrameAt(p, places, 1).clockMinutes).toBe(1190);
+    expect(previzFrameAt(p, places, 5).clockMinutes).toBe(21 * 60 + 30);
+    expect(previzFrameAt(p, places, 9).clockMinutes).toBeNull();
+    const onTimeline = project(scenes, {
+      previz: { ...previz, timeline: { startClock: 1320, lengthMin: 60, beats: [] }, cuts: previz.cuts.map((cut) => ({ ...cut, storyMin: 30 })) },
+    });
+    // No world loaded: the cut plays on its set but keeps the story clock, 30 story minutes after 22:00 plus 2 s.
+    expect(previzFrameAt(onTimeline, places, 2).clockMinutes).toBeCloseTo(1350 + 2 / 60, 5);
+  });
+
+  // Catches a passing car or a found camcorder never being drawn, and a car picking up a figure pose.
+  it('seeds named cast objects as moving prop tracks drawn only in the cuts that name them', () => {
+    const scenes = [
+      scene('s1', 0, 4, { characters: ['Ana'], action: 'Ana crouches as the silver sedan passes toward the camera', light: 'Its headlights sweep the hedge' }),
+      scene('s2', 4, 8, { characters: ['Ana'], action: 'Ana finds the camcorder in the grass' }),
+    ];
+    const { previz } = backfillPrevizFromShots(propProject(scenes), places);
+    expect(musicVideoPrevizSchema.safeParse(previz).success).toBe(true);
+    const sedan = previz.tracks.find((t) => t.subjectId === 'o-sedan');
+    expect(sedan.keys.every((key) => !('pose' in key) && !('vehicleSubjectId' in key))).toBe(true);
+    const p = propProject(scenes, { previz });
+    const start = previzFrameAt(p, places, 0);
+    const end = previzFrameAt(p, places, 3.9);
+    expect(start.actors.map((a) => [a.subjectId, a.pose])).toEqual([['c-ana', 'crouch']]);
+    expect(start.props).toEqual([expect.objectContaining({ subjectId: 'o-sedan', shape: 'car' })]);
+    expect(end.props[0].position).not.toEqual(start.props[0].position);
+    expect(previzFrameAt(p, places, 5).props.map((prop) => [prop.subjectId, prop.shape])).toEqual([['o-cam', 'small']]);
+  });
+
+  // Catches "bikes lying on the lawn" seating everyone on the bikes instead of laying the bikes down.
+  it('treats a vehicle set down on the grass as a prop, not a ride', () => {
+    const scenes = [scene('s1', 0, 4, { characters: ['Ana', 'Bo'], action: 'Ana and Bo sit, their bikes lying on the lawn' })];
+    const withBikes = (extra) => propProject(scenes, extra);
+    const { previz } = backfillPrevizFromShots(withBikes({ previz: { cuts: [], tracks: [], vehicles: [{ subjectId: 'o-bikes', speedMetersPerMin: 250 }] } }), places);
+    const frame = previzFrameAt(withBikes({ previz }), places, 1);
+    expect(frame.actors.map((a) => a.pose)).toEqual(['sit', 'sit']);
+    expect(frame.props).toEqual([expect.objectContaining({ subjectId: 'o-bikes', shape: 'bike' })]);
+  });
+});

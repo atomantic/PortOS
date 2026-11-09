@@ -1,8 +1,10 @@
 import { useId, useState } from 'react';
 import { newGreyboxItem, withoutGreyboxItem } from '../../lib/greybox';
+import { GREYBOX_PRACTICAL_LIGHTS } from '../../../../server/lib/greyboxVocabulary.js';
 
 const inputClass = 'w-full min-w-0 min-h-[44px] rounded-lg bg-port-bg border border-port-border px-2 text-sm text-white';
 const buttonClass = 'min-h-[44px] rounded-lg border border-port-border px-3 text-sm text-gray-200 hover:border-port-accent disabled:opacity-40';
+const LIGHT_LABELS = { lamp: 'Lamp (a pool of light below)', headlight: 'Headlight (a beam along +Z)', window: 'Window (a soft glow)' };
 const collections = [['parts', 'Parts'], ['anchors', 'Anchors'], ['landmarks', 'Landmarks'], ['zones', 'Zones']];
 
 function Field({ label, value, onChange, numeric = false, ...props }) {
@@ -40,6 +42,9 @@ function ItemFields({ collection, item, scene, update }) {
       {collection === 'parts' && <>
         <Picker label="Zone" value={item.zone || ''} onChange={(zone) => update({ zone: zone || undefined })}>
           <option value="">No zone</option>{scene.zones.map((zone) => <option key={zone.id} value={zone.id}>{zone.label}</option>)}
+        </Picker>
+        <Picker label="Light after dark" value={item.light || ''} onChange={(light) => update({ light: light || undefined })}>
+          <option value="">None</option>{GREYBOX_PRACTICAL_LIGHTS.map((light) => <option key={light} value={light}>{LIGHT_LABELS[light]}</option>)}
         </Picker>
         <VectorFields label="Rotation (degrees)" value={item.rotationDegrees} onChange={(rotationDegrees) => update({ rotationDegrees })} />
         {item.size && <VectorFields label="Size (m)" value={item.size} axes={item.type === 'plane' ? ['X', 'Z'] : undefined} positive onChange={(size) => update({ size })} />}
