@@ -46,7 +46,10 @@ export function normalizeShotSheet(sheet) {
 function selectedFrameOutdated(project, scene) {
   const framePrompt = typeof scene?.framePrompt === 'string' ? scene.framePrompt.trim() : '';
   // A sheet-built still records each ingredient's text, so an edited ingredient shows too.
-  const parts = [framePrompt, ...shotSheetPromptLines(project, scene).map((line) => line.text)].filter(Boolean);
+  // The camera rule is composed even when the sheet does not drive the prompt.
+  const sheet = shotSheetPromptLines(project, scene);
+  // A sheet-built still already records the camera inside its Camera line.
+  const parts = [framePrompt, ...sheet.map((line) => line.text), sheet.some((line) => line.id === 'shot-sheet-camera') ? '' : shotCameraRuleText(project, scene)].filter(Boolean);
   if (!parts.length || !scene?.referenceImageId) return false;
   const take = (Array.isArray(scene.takes) ? scene.takes : [])
     .find((entry) => entry?.kind === 'image' && entry.assetId === scene.referenceImageId);
@@ -71,10 +74,15 @@ export function shotSheetPromptLines(project, scene) {
   const sheet = scene.shotSheet;
   const camera = sheet.cameraId ? (project?.cameras || []).find((entry) => entry?.id === sheet.cameraId) : null;
   const holder = sheetText(sheet.holder);
-  const cameraText = camera
+  const owner = sheetText(camera?.owner);
+  const rule = sheetText(camera?.rule).replace(/[.!?]+$/, '');
+  let cameraText = camera
     ? camera.kind === 'observer' ? `${camera.name}, an unseen observer camera that nobody in the scene holds`
       : holder === SHOT_CAMERA_SET_DOWN ? `${camera.name}, set down with nobody holding it` : holder ? `${camera.name}, held by ${holder}` : camera.name
     : '';
+  // One Camera chip: the sheet line carries the rule, so the composer does not add a second one.
+  if (cameraText && camera.kind !== 'observer' && owner) cameraText += '. This camera is the one taking the picture, so it is not in the frame';
+  if (cameraText && rule) cameraText += `. ${rule}`;
   const place = [sheetText(sheet.location), sheetText(sheet.timeOfDay), sheetText(sheet.light) ? `lit by ${sheetText(sheet.light)}` : ''].filter(Boolean).join(', ');
   const who = (Array.isArray(sheet.characters) ? sheet.characters : []).map(sheetText).filter(Boolean);
   return [
@@ -86,6 +94,52 @@ export function shotSheetPromptLines(project, scene) {
     ['emotion', 'Emotion', sheetText(sheet.emotion)],
     ['notes', 'Notes', sheetText(sheet.notes)],
   ].filter(([, , text]) => text).map(([id, label, text]) => ({ id: `shot-sheet-${id}`, label, text: `${label}: ${text}.`.replace(/([.!?])\.$/, '$1') }));
+}
+
+const sheetCamera = (project, scene) => {
+  const id = scene?.shotSheet?.cameraId;
+  if (!id) return null;
+  return (project?.cameras || []).find((entry) => entry?.id === id) || null;
+};
+
+const withoutTerminalPunctuation = (value) => String(value || '').trim().replace(/[.!?]+$/, '');
+
+/**
+ * The shot's camera as one prompt block: its name, kind and rule. An in-world
+ * camera with an owner is the one taking the picture, so the block says it is
+ * not in the frame. '' when the shot names no camera. Composed into the frame,
+ * end frame and clip whether or not the sheet drives the prompt.
+ */
+export function shotCameraRuleText(project, scene) {
+  const camera = sheetCamera(project, scene);
+  const name = typeof camera?.name === 'string' ? camera.name.trim() : '';
+  if (!name) return '';
+  const parts = [`${name}, ${camera.kind === 'observer' ? 'an observer camera' : 'an in-world camera'}`];
+  const owner = typeof camera.owner === 'string' ? camera.owner.trim() : '';
+  if (camera.kind !== 'observer' && owner) parts.push('This camera is the one taking the picture, so it is not in the frame');
+  const rule = typeof camera.rule === 'string' ? withoutTerminalPunctuation(camera.rule) : '';
+  if (rule) parts.push(rule);
+  return `Camera: ${parts.join('. ')}.`;
+}
+
+/**
+ * A character's always-visible line is the camera taking this shot, so the
+ * frame must not ask for it. True for the owner, and for whoever holds that
+ * owner's in-world camera. A set-down camera still drops the owner's line;
+ * it has no holder to drop.
+ */
+export function shotOmitsOwnedCameraDetail(project, scene, subjectName, detail) {
+  const camera = sheetCamera(project, scene);
+  const owner = typeof camera?.owner === 'string' ? camera.owner.trim() : '';
+  if (!camera || camera.kind === 'observer' || !owner) return false;
+  const who = String(subjectName || '').trim().toLowerCase();
+  const holder = typeof scene?.shotSheet?.holder === 'string' ? scene.shotSheet.holder.trim() : '';
+  const holderKey = holder.toLowerCase();
+  const applies = who === owner.toLowerCase() || (holderKey && holderKey !== SHOT_CAMERA_SET_DOWN.toLowerCase() && who === holderKey);
+  if (!applies) return false;
+  const text = String(detail || '');
+  const cameraName = typeof camera.name === 'string' ? camera.name.trim().toLowerCase() : '';
+  return (cameraName.length >= 3 && text.toLowerCase().includes(cameraName)) || /\bcameras?\b/i.test(text);
 }
 
 /** What a shot is set to render: a photo or video, from its planned medium, else its picture layer. */

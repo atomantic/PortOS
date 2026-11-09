@@ -674,7 +674,7 @@ export async function checkSceneTakePlate(id, sceneId, takeId) {
   const pinned = project.plateReviewer?.providerId ? { providerId: project.plateReviewer.providerId, ...(project.plateReviewer.model ? { model: project.plateReviewer.model } : {}) } : {};
   const reviewer = await resolvePlateReviewer(pinned).catch((error) => { throw new ServerError(error.message, { status: error.status || 422, code: error.code || 'PLATE_REVIEWER_UNAVAILABLE' }); });
   const frameRole = plateFrameRole(take);
-  const evidence = await reviewPlate({ scene, subjects: project.concept?.subjects || [], assetId: take.assetId, runId: `manual-${randomUUID()}`, reviewer,
+  const evidence = await reviewPlate({ scene, subjects: project.concept?.subjects || [], project, assetId: take.assetId, runId: `manual-${randomUUID()}`, reviewer,
     prompt: plateCheckPrompt(scene, take), frameRole });
   const { scene: saved } = await mutateProjectRecord(id, (current) => recordTakePlateEvidence(current, sceneId, takeId, evidence));
   return saved;
