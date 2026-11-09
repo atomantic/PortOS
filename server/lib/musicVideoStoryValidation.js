@@ -73,6 +73,7 @@ export const previzCutPatchSchema = z.object({
   aimSubjectId: previzSubjectRef.nullable().optional(),
   turnToAim: z.boolean().optional(),
   selfie: z.boolean().optional(),
+  actionPath: z.string().min(1).max(64).nullable().optional(),
   visibleSubjectIds: z.array(previzSubjectRef).max(24).nullable().optional(),
   storyMin: z.number().finite().min(0).max(2880).nullable().optional(),
   cameraSpot: z.tuple([z.number().finite().min(-5000).max(5000), z.number().finite().min(-5000).max(5000)]).nullable().optional(),

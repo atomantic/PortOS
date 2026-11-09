@@ -312,3 +312,122 @@ describe('draft missing greyboxes and link cameras', () => {
     expect(musicVideoProjectUpdateSchema.safeParse({ previz: applied }).success).toBe(true);
   });
 });
+
+describe('in-set action paths and camera frustum seeding (#15493)', () => {
+  // Catches frozen people during in-set action cuts: away, toward and pass, and circle.
+  it('seeds in-set action movement for away, toward and pass, and circle (#15493)', () => {
+    const p = project([
+      scene('s16', 0, 4, { characters: ['Ana'], action: 'Renee pushes off and rolls downhill away' }),
+      scene('s22', 4, 8, { characters: ['Ana', 'Bo'], action: 'ride side by side toward the viewpoint and pass on either side' }),
+      scene('s66', 8, 12, { characters: ['Ana'], action: 'rides a wide counterclockwise circle under the lamp' }),
+    ]);
+    const { previz } = backfillPrevizFromShots(p, places);
+    const pWithPreviz = { ...p, previz };
+
+    // Shot 16: moving away from camera
+    const frame16Start = previzFrameAt(pWithPreviz, places, 0);
+    const frame16End = previzFrameAt(pWithPreviz, places, 3.9);
+    const cam16 = frame16Start.camera.position;
+    const a16Start = frame16Start.actors.find((a) => a.subjectId === 'c-ana').position;
+    const a16End = frame16End.actors.find((a) => a.subjectId === 'c-ana').position;
+    const dist16Start = Math.hypot(a16Start[0] - cam16[0], a16Start[2] - cam16[2]);
+    const dist16End = Math.hypot(a16End[0] - cam16[0], a16End[2] - cam16[2]);
+    expect(dist16End).toBeGreaterThan(dist16Start + 3);
+
+    // Shot 22: two people moving toward viewpoint and passing on either side
+    const frame22Start = previzFrameAt(pWithPreviz, places, 4);
+    const frame22End = previzFrameAt(pWithPreviz, places, 7.9);
+    const cam22 = frame22Start.camera.position;
+    const ana22Start = frame22Start.actors.find((a) => a.subjectId === 'c-ana').position;
+    const bo22Start = frame22Start.actors.find((a) => a.subjectId === 'c-bo').position;
+    const ana22End = frame22End.actors.find((a) => a.subjectId === 'c-ana').position;
+    const bo22End = frame22End.actors.find((a) => a.subjectId === 'c-bo').position;
+    const distAnaStart = Math.hypot(ana22Start[0] - cam22[0], ana22Start[2] - cam22[2]);
+    const distAnaEnd = Math.hypot(ana22End[0] - cam22[0], ana22End[2] - cam22[2]);
+    const distBoStart = Math.hypot(bo22Start[0] - cam22[0], bo22Start[2] - cam22[2]);
+    const distBoEnd = Math.hypot(bo22End[0] - cam22[0], bo22End[2] - cam22[2]);
+    expect(distAnaEnd).toBeLessThan(distAnaStart);
+    expect(distBoEnd).toBeLessThan(distBoStart);
+    // They pass on either side of the camera: one on negative across, one on positive across
+    expect(ana22End[0]).not.toEqual(bo22End[0]);
+    expect((ana22End[0] < cam22[0] && bo22End[0] > cam22[0]) || (ana22End[0] > cam22[0] && bo22End[0] < cam22[0])).toBe(true);
+
+    // Shot 66: counterclockwise circle
+    const frame66Start = previzFrameAt(pWithPreviz, places, 8);
+    const frame66Mid = previzFrameAt(pWithPreviz, places, 10);
+    const frame66End = previzFrameAt(pWithPreviz, places, 11.99);
+    const a66Start = frame66Start.actors.find((a) => a.subjectId === 'c-ana').position;
+    const a66Mid = frame66Mid.actors.find((a) => a.subjectId === 'c-ana').position;
+    const a66End = frame66End.actors.find((a) => a.subjectId === 'c-ana').position;
+    // Mid point is displaced across the circle
+    expect(Math.hypot(a66Mid[0] - a66Start[0], a66Mid[2] - a66Start[2])).toBeGreaterThan(4);
+    // End point returns near the start mark (loop)
+    expect(Math.hypot(a66End[0] - a66Start[0], a66End[2] - a66Start[2])).toBeLessThan(0.1);
+  });
+
+  // Catches auto-placed marks landing outside the cut camera view (shots 33, 60, 64, 69, 75, 79).
+  it('guarantees seeded marks are always inside the camera frustum and frame is never empty (#15493)', () => {
+    const wideHighAngleGreybox = {
+      anchors: [{ id: 'f1', label: 'F1', kind: 'figure', position: [0, 0, 0], facingDegrees: 0 }],
+      shots: [
+        { id: 'high', label: 'High', position: [-2, 34, 12], target: [-2, 0, 1.5], focalLengthMm: 24, aspect: '16:9', figures: [] },
+        { id: 'wide-rink', label: 'Wide', position: [26, 15, 14], target: [-5, 0, 2], focalLengthMm: 24, aspect: '16:9', figures: [{ anchorId: 'f1' }] },
+      ],
+    };
+    const testPlaces = { 'cat-street': { ingredient: { type: 'place', payload: { greybox: wideHighAngleGreybox } }, media: [] } };
+    const p = project([
+      { ...scene('s_high', 0, 4, { characters: ['Ana', 'Bo'] }), setReference: { subjectId: 'p-street', greyboxShotId: 'high' } },
+      { ...scene('s_rink', 4, 8, { characters: ['Ana', 'Bo'] }), setReference: { subjectId: 'p-street', greyboxShotId: 'wide-rink' } },
+    ]);
+    const { previz } = backfillPrevizFromShots(p, testPlaces);
+    const pWithPreviz = { ...p, previz };
+
+    const isFigureInFrustum = (pos, camera) => {
+      const [cx, cy, cz] = camera.position;
+      const [tx, ty, tz] = camera.target;
+      const [dx, dy, dz] = [tx - cx, ty - cy, tz - cz];
+      const dist = Math.hypot(dx, dy, dz) || 1;
+      const fwd = [dx / dist, dy / dist, dz / dist];
+      const rLen = Math.hypot(-fwd[2], fwd[0]);
+      const right = rLen < 1e-6 ? [1, 0, 0] : [-fwd[2] / rLen, 0, fwd[0] / rLen];
+      const up = [right[1] * fwd[2] - right[2] * fwd[1], right[2] * fwd[0] - right[0] * fwd[2], right[0] * fwd[1] - right[1] * fwd[0]];
+      const [w, h] = String(camera.aspect || '16:9').split(':').map(Number);
+      const aspect = w > 0 && h > 0 ? w / h : 16 / 9;
+      const tanV = 12 / (camera.focalLengthMm || 35);
+      const tanH = tanV * aspect;
+      const vx = pos[0] - cx;
+      const vyChest = pos[1] + 1.25 - cy;
+      const vz = pos[2] - cz;
+      const depth = vx * fwd[0] + vyChest * fwd[1] + vz * fwd[2];
+      if (depth < 0.2 || depth > 2000) return false;
+      const halfH = depth * tanV;
+      const halfW = depth * tanH;
+      const xCam = vx * right[0] + vyChest * right[1] + vz * right[2];
+      const yCamFeet = vx * up[0] + (pos[1] - cy) * up[1] + vz * up[2];
+      const yCamHead = vx * up[0] + (pos[1] + 1.7 - cy) * up[1] + vz * up[2];
+      return Math.abs(xCam) <= halfW && Math.max(yCamFeet, yCamHead) >= -halfH && Math.min(yCamFeet, yCamHead) <= halfH;
+    };
+
+    // High shot: 0 figure marks, 2 people auto-placed
+    const frameHigh = previzFrameAt(pWithPreviz, testPlaces, 1);
+    const visibleHigh = frameHigh.actors.filter((a) => a.visible);
+    expect(visibleHigh).toHaveLength(2);
+    for (const actor of visibleHigh) {
+      expect(isFigureInFrustum(actor.position, frameHigh.camera)).toBe(true);
+    }
+
+    // Wide rink shot: 1 figure mark, 2 people (person 2 auto-placed)
+    const frameRink = previzFrameAt(pWithPreviz, testPlaces, 5);
+    const visibleRink = frameRink.actors.filter((a) => a.visible);
+    expect(visibleRink).toHaveLength(2);
+    for (const actor of visibleRink) {
+      expect(isFigureInFrustum(actor.position, frameRink.camera)).toBe(true);
+    }
+  });
+
+  // Catches a cut carrying an explicit actionPath in schema
+  it('allows a cut to carry an explicit actionPath in the previz schema (#15493)', () => {
+    const cut = { id: 'cut-s1', sceneId: 's1', startSec: 0, endSec: 4, placeSubjectId: 'p-street', viewShotId: 'wide', actionPath: 'circle' };
+    expect(musicVideoProjectUpdateSchema.safeParse({ previz: { cuts: [cut], tracks: [] } }).success).toBe(true);
+  });
+});
