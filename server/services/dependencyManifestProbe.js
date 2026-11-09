@@ -39,8 +39,9 @@ async function githubDeclaresDependencies(repoPath) {
   const workflowsDir = join(githubDir, 'workflows');
   const workflows = (await readdir(workflowsDir).catch(() => [])).filter((name) => /\.ya?ml$/.test(name));
   for (const name of workflows) {
-    const text = await readFile(join(workflowsDir, name), 'utf8').catch(() => '');
-    if (EXTERNAL_ACTION_USE.test(text)) return true;
+    // An unreadable workflow fails open, like an unparsable manifest.
+    const text = await readFile(join(workflowsDir, name), 'utf8').catch(() => null);
+    if (text === null || EXTERNAL_ACTION_USE.test(text)) return true;
   }
   return false;
 }
