@@ -6,12 +6,11 @@
  * coverage math, imported rather than copied so the board and the server's
  * submission gate cannot disagree.
  */
-import { grokCoverage } from '../../../server/lib/musicVideoShotTiming.js';
+import { grokCoverage, shotRequestSpanSec } from '../../../server/lib/musicVideoShotTiming.js';
 
 /** The duration a shot card submits, including its per-shot override. */
 export function grokSceneRequestDuration(scene, settings, target = null) {
-  const span = typeof scene?.startSec === 'number' && typeof scene?.endSec === 'number' && scene.endSec > scene.startSec
-    ? scene.endSec - scene.startSec : null;
+  const span = shotRequestSpanSec(scene);
   return target?.grokDuration || (span != null ? grokCoverage(span).requestSec : settings?.grokDuration);
 }
 
@@ -19,7 +18,11 @@ export {
   MUSIC_VIDEO_SHOT_MODES,
   SOURCE_AUDIO_LIPSYNC,
   SOURCE_AUDIO_MUSIC,
+  CLIP_LENGTH_SEC_RANGE,
   approximateMotionCues,
+  clipLengthChoices,
+  sceneClipLengthSec,
+  shotRequestSpanSec,
   clipAudioOffsetSec,
   falSceneTake,
   falTakeRequestFields,

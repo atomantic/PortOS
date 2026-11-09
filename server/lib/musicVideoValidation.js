@@ -80,7 +80,7 @@ import {
   MUSIC_VIDEO_MAX_CAMEOS, MUSIC_VIDEO_CAMEO_ID_PATTERN, MUSIC_VIDEO_CAMEO_MAX_REFERENCES, MUSIC_VIDEO_CAMEO_MAX_SOURCES,
   MUSIC_VIDEO_CAMEO_REFERENCE_SOURCES, MUSIC_VIDEO_CAMEO_RESEARCH_STATUSES, MUSIC_VIDEO_CAMEO_VARIANT_ID_PATTERN,
 } from './musicVideoCameos.js';
-import { MUSIC_VIDEO_COVERAGE_MODES, MUSIC_VIDEO_PERFORMANCE_STYLES, MUSIC_VIDEO_SHOT_MODES, SOURCE_AUDIO_LIPSYNC } from './musicVideoShotTiming.js';
+import { CLIP_LENGTH_SEC_RANGE, MUSIC_VIDEO_COVERAGE_MODES, MUSIC_VIDEO_PERFORMANCE_STYLES, MUSIC_VIDEO_SHOT_MODES, SOURCE_AUDIO_LIPSYNC } from './musicVideoShotTiming.js';
 import {
   MUSIC_VIDEO_AUTOMATION_BUDGET_MAX_USD,
   MUSIC_VIDEO_AUTOMATION_GUIDANCE_MAX,
@@ -902,6 +902,10 @@ const sceneLayerFields = {
   // A footage clip played faster or slower by whole frames a second, and slid against the song by whole frames; null clears it.
   speedFps: z.number().int().min(CLIP_SPEED_FPS_RANGE.min).max(CLIP_SPEED_FPS_RANGE.max).nullable().optional(),
   offsetFrames: z.number().int().min(CLIP_OFFSET_FRAMES_RANGE.min).max(CLIP_OFFSET_FRAMES_RANGE.max).nullable().optional(),
+  // The source clip length to request (seconds), longer than the shot's span when one take is cut across several shots; null clears it.
+  clipLengthSec: z.number().min(CLIP_LENGTH_SEC_RANGE.min).max(CLIP_LENGTH_SEC_RANGE.max).nullable().optional(),
+  // This shot's own fal/Runway video model, falling back to the project's when null.
+  clipModelId: z.string().trim().min(1).max(120).nullable().optional(),
   // The clip plays backwards (a footage shot; never a lip-sync performance).
   reverse: z.boolean().nullable().optional(),
   // A clip shorter than its shot holds its last frame for the rest of the shot; null clears it.

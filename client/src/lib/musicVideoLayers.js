@@ -32,6 +32,7 @@ export {
   clipLoops,
   clipPlaybackWindow,
   clipNeedsMoreFootage,
+  sharedTakeExtraSec,
 } from '../../../server/lib/musicVideoLayers.js';
 
 /** The composed render's cover-fitted still move at a song time, clamped to its last frame. */

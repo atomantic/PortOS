@@ -3,6 +3,7 @@ import PlateComparison from './PlateComparison.jsx';
 import ShotActionInspector from './ShotActionInspector.jsx';
 import SceneCameraControls from './SceneCameraControls.jsx';
 import SceneStartFrame from './SceneStartFrame.jsx';
+import SceneClipLength from './SceneClipLength.jsx';
 import SceneClipTiming from './SceneClipTiming.jsx';
 import SceneRejectUnused from './SceneRejectUnused.jsx';
 import ShotFinalRender from './ShotFinalRender.jsx';
@@ -187,8 +188,8 @@ export default function SceneCard({
   storyboardId = null, storyboardShot = null, onStoryboardBoard = null, onApplyCameos = null, onVaryWipes = null,
 }) {
   // Keep playback mounted even when this shot shows a still or performance evidence.
-  const clipPlayback = useSceneClipPlayback(scene);
-  const { clipSrc, clipSec, clipSize, loops, playedSec } = clipPlayback;
+  const clipPlayback = useSceneClipPlayback(scene, project?.scenes);
+  const { clipSrc, clipSec, clipSize, loops, playedSec, spanExtraSec } = clipPlayback;
   const [speakerDirty, setSpeakerDirty] = useState(false);
   const [speakerSaving, setSpeakerSaving] = useState(false);
   const [clipReferenceSaveState, setClipReferenceSaveState] = useState('saved');
@@ -231,7 +232,7 @@ export default function SceneCard({
     excerptStartSec: performanceReview?.excerptStartSec, backend: lipSyncBackend, videoSettings: falVideoSettings || {} });
   const shotModeId = `mv-shot-mode-${scene.sceneId}`;
   // #10152: what needs the director's attention, visible without opening the card.
-  const attention = sceneAttention(scene, { layered, footageOptional, lipSyncBackend, songDurationSec, clipSec: playedSec, failed: failedScenes || {}, songReview, videoSettings: falVideoSettings });
+  const attention = sceneAttention(scene, { layered, footageOptional, lipSyncBackend, songDurationSec, clipSec: playedSec, spanExtraSec, failed: failedScenes || {}, songReview, videoSettings: falVideoSettings });
   const songChange = songReview?.[scene.sceneId];
   // Every clip in flight for this shot, each with where it renders. A render whose
   // request is still on its way has no job yet: Render waits for it, so a double tap
@@ -705,6 +706,10 @@ export default function SceneCard({
           <SceneClipPreview scene={scene} index={index} performance={performance} playback={clipPlayback}
             onOpenPreview={onOpenPreview} onTrimClip={onTrimClip}
             takeBusy={takeBusy} generatingVideo={generatingVideo} />
+          {/* One take cut across shots needs a source clip longer than this shot's span, and may need another model. */}
+          {layer === 'footage' && !performance && (
+            <SceneClipLength fieldId={fieldId} scene={scene} settings={renderSettings || {}} onChange={applyPatch} />
+          )}
           {/* Speed and offset by hand, from the same clip file, in the player and the final render. */}
           {scene.videoHistoryId && layer === 'footage' && (
             <SceneClipTiming fieldId={fieldId} scene={scene} onChange={applyPatch} />

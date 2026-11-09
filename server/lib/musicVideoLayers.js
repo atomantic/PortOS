@@ -141,6 +141,24 @@ export const clipReversed = (scene) => scene?.reverse === true && scene?.shotMod
 
 export const COVERAGE_TOLERANCE_SEC = 0.25;
 
+const sourceEndSec = (scene) => clipOffsetSec(scene) + (scene.endSec - scene.startSec) * clipSpeedRate(scene);
+
+/**
+ * Extra output seconds `scene`'s take must cover because other shots reuse the
+ * same take (Swap) further in: the longest source end among them (their offset
+ * plus the span they play) beyond this shot's own, back on this shot's clock.
+ * 0 when the take is not shared or this shot already reaches furthest.
+ */
+export function sharedTakeExtraSec(scene, scenes) {
+  if (!scene?.videoHistoryId || !Array.isArray(scenes) || !Number.isFinite(scene.startSec) || !Number.isFinite(scene.endSec)) return 0;
+  const own = sourceEndSec(scene);
+  const furthest = Math.max(own, ...scenes
+    .filter((other) => other.videoHistoryId === scene.videoHistoryId && other.sceneId !== scene.sceneId
+      && Number.isFinite(other.startSec) && Number.isFinite(other.endSec) && other.endSec > other.startSec)
+    .map(sourceEndSec));
+  return Math.max(0, (furthest - own) / clipSpeedRate(scene));
+}
+
 /** Performance edits and reversed clips read their source once. */
 export const clipCanLoop = (scene, edit = null) => !edit && !clipReversed(scene);
 // An absent loop preserves playback for projects saved before shot planning.
