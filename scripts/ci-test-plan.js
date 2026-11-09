@@ -545,6 +545,12 @@ export const FIXTURE_OWNERS = [
     dir: 'server/services/promptSections/__snapshots__/reviewLoopMatrix',
     tests: ['server/services/promptSections/reviewLifecycleMatrix.test.js'],
   },
+  {
+    re: /^scripts\/ltx25_cuda_currency\.py$/,
+    dir: 'scripts',
+    fileRe: /^ltx25_cuda_currency\.py$/,
+    tests: ['server/services/videoGen/runtimes.test.js'],
+  },
   // Pip pins consumed only by an explicit Install/Repair (`setup-image-video.sh`,
   // and the FLUX.3 runtime lock read by services/imageGen/flux3Runtime.js). The
   // installer-contract tests are the suites that exercise those installers.
@@ -557,6 +563,7 @@ export const FIXTURE_OWNERS = [
       'server/lib/pythonSetup.install.test.js',
       'server/lib/pythonSetup.test.js',
       'server/services/imageGen/flux3Runtime.test.js',
+      'server/services/videoGen/runtimes.test.js',
     ],
   },
 ];

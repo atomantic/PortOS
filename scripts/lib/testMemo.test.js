@@ -140,6 +140,9 @@ describe('fixture owners', () => {
     ...TREE,
     ...Object.fromEntries(owners.map((owner) => [owner, stub])),
     'scripts/requirements-ltx25-cuda.txt': 'pillow==1\n',
+    'scripts/requirements-ltx25-cuda-windows.lock.txt': 'torch==1\n',
+    'scripts/requirements-ltx25-cuda-linux.lock.txt': 'torch==1\n',
+    'scripts/requirements-ltx25-cuda-build.lock.txt': 'uv-build==1\n',
     'scripts/requirements-wan22-cuda.txt': 'diffusers==1\n',
     'scripts/requirements-minimax-music3-cuda-windows.lock.txt': 'diffusers==1 --hash=sha256:aaa\n',
     'scripts/requirements-minimax-music3-cuda-linux.lock.txt': 'diffusers==1 --hash=sha256:bbb\n',
@@ -164,6 +167,12 @@ describe('fixture owners', () => {
         const records = new Map([[owner, [owner]]]);
         expect(keyOf(changed, owner, { records }).recorded.key, owner)
           .not.toBe(keyOf(files, owner, { records }).recorded.key);
+      }
+      for (const target of ['windows', 'linux', 'build']) {
+        const changed = { ...files, [`scripts/requirements-ltx25-cuda-${target}.lock.txt`]: 'changed==2\n' };
+        const after = keyOf(changed, owner, { records: new Map([[owner, [owner]]]) });
+        expect(after.floor.key, owner).not.toBe(before.floor.key);
+        expect(after.recorded.key, owner).not.toBe(keyOf(files, owner, { records: new Map([[owner, [owner]]]) }).recorded.key);
       }
       const recorded = keyOf(files, owner, { records: new Map([[owner, [owner]]]) });
       expect(recorded.recorded.memoizable, owner).toBe(true);
