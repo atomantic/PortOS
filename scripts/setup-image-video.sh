@@ -453,7 +453,7 @@ if [[ "$INSTALL_MFLUX" == "1" ]]; then
     MFLUX_MIN_MINOR=11
     MFLUX_PROBE='from mflux.models.flux.cli.flux_generate import main; from mflux.models.common.cli.train import main'
   else
-    # Elsewhere mflux still resolves at install time (hash-pinned CUDA locks: #15439).
+    # mflux is MLX-only, so off Apple Silicon the resolving install is left as it was.
     MFLUX_LOCK=""
     MFLUX_MIN_MINOR=10
     MFLUX_PROBE='import mflux'
@@ -1192,7 +1192,7 @@ if [[ "$INSTALL_AUDIOLDM2" == "1" ]]; then
     fi
     "$AUDIOLDM2_PY" -m pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-audioldm2-mlx.lock.txt"
   else
-    # Linux/Windows still resolve at install time (hash-pinned CUDA lock: #15439).
+    # Linux/Windows still resolve at install time (hash-pinned CUDA lock: #15481).
     "$AUDIOLDM2_PY" -m pip install --upgrade pip wheel setuptools >/dev/null
     # torch runs the model; diffusers provides AudioLDM2Pipeline; transformers +
     # sentencepiece supply the text encoders (T5 / GPT-2 / CLAP) AudioLDM2 chains;
@@ -1414,7 +1414,7 @@ if [[ "$INSTALL_MUSCRIPTOR" == "1" ]]; then
     fi
     "$MUSCRIPTOR_PY" -m pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-muscriptor-mlx.lock.txt"
   else
-    # Linux/Windows still resolve at install time (hash-pinned CUDA lock: #15439).
+    # Linux/Windows still resolve at install time (hash-pinned CUDA lock: #15481).
     "$MUSCRIPTOR_PY" -m pip install --upgrade pip wheel setuptools >/dev/null
     # muscriptor declares its own deps (torch, soundfile, etc.), so installing the
     # package pulls the matching stack. The import probe below catches a broken
