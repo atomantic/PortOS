@@ -261,7 +261,7 @@ const CLOCK_TIME = /\b(\d{1,2})(?::([0-5]\d))?\s*(am|pm|a\.m\.|p\.m\.)?(?![\w:])
  * The clock time (minutes after midnight) a shot sheet's words state, or null:
  * the earliest clock time or time-of-day word written, so "dusk into night" is dusk.
  */
-export function previzClockInText(text) {
+function previzClockInText(text) {
   const words = textOf(text);
   if (!words) return null;
   let best = null;
@@ -287,7 +287,7 @@ const CAR_NAME = /\b(?:cars?|sedans?|trucks?|vans?|jeeps?|taxis?|cabs?|bus|buses
 const BIKE_NAME = /\b(?:bicycles?|bikes?|bmx|cruisers?|tricycles?|scooters?|motorcycles?|motorbikes?|mopeds?)\b/i;
 
 /** The proxy a cast object is drawn as, by its name: a car, a bike (lying on its side), else a small box. */
-export function previzPropShape(name) {
+function previzPropShape(name) {
   const words = textOf(name);
   if (CAR_NAME.test(words)) return 'car';
   if (BIKE_NAME.test(words)) return 'bike';
