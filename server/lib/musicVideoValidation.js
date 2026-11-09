@@ -1748,6 +1748,30 @@ export const musicVideoCastAndSetsDirectionEditSchema = z.object({
     && edits.sets.every((set) => Object.keys(set).every((key) => key === 'id' || key === 'setReference'));
 }, 'Save greybox selections separately from direction edits.');
 
+// Text-only edits to a catalog check-in's stored direction (no render, no image
+// roles). Same present-replaces / absent-keeps rule; caps mirror CAST_SETS_LIMITS.
+export const musicVideoCastAndSetsDirectionTextEditSchema = z.object({
+  look: castSetsText(500).optional(),
+  protagonist: z.object({
+    signature: castSetsText(1000).optional(),
+    rules: z.array(castSetsText(300)).max(6).optional(),
+    expressions: z.array(castSetsText(300)).max(8).optional(),
+  }).strict().optional(),
+  props: z.array(z.object({
+    id: z.string().max(64).optional(),
+    name: castSetsText(120).min(1),
+    owner: castSetsText(120).optional(),
+    description: castSetsText(1000).min(1),
+  }).strict()).max(6).optional(),
+  overlayConcept: z.object({
+    summary: castSetsText(1000).optional(),
+    elements: z.array(z.object({
+      name: castSetsText(120).min(1),
+      description: castSetsText(1000).min(1),
+    }).strict()).max(4).optional(),
+  }).strict().optional(),
+}).strict();
+
 // The cutting room floor outro (lib/musicVideoStatsOutro.js): an optional scene
 // after the song tallying the director's choices; null on the project = off.
 export const musicVideoStatsOutroSchema = z.object({

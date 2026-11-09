@@ -2975,6 +2975,46 @@ describe('rebuilding a catalog stage guide (#15086)', () => {
     expect(enqueue).not.toHaveBeenCalled();
   });
 
+  // Uniquely catches a catalog check-in whose kept direction text cannot be corrected, or whose correction re-renders or drops the approval (#15473).
+  it('saves a text-only direction edit on an approved catalog check-in and the guide shows it', async () => {
+    await useCatalog();
+    const direction = { ...DIRECTION, look: 'Stale grainy look', overlayConcept: { summary: 'Old overlay', elements: [] },
+      protagonist: { ...DIRECTION.protagonist, signature: 'Carries the old brass key', rules: ['Never without the brass key'], expressions: ['wary'] },
+      props: [{ id: 'brass-key', name: 'Brass key', owner: '', description: 'An old brass key' }] };
+    const project = await catalogProject({ direction });
+    const { basis } = (await rebuild(project.id)).body.catalogCheckin;
+    expect((await request(app).post(`/api/music-video/${project.id}/cast-and-sets/approve`).send({ catalogBasis: basis })).status).toBe(200);
+    const before = await current(project.id);
+
+    const legacyEditor = await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`).send({ protagonist: { signature: 'x' } });
+    expect(legacyEditor.body.code || legacyEditor.body.error?.code).toBe('CAST_SETS_CATALOG_ONLY');
+
+    const edit = { look: 'Clean daylight, fine grain', protagonist: { signature: 'A red scarf', rules: ['Always wears the scarf'], expressions: ['hopeful', 'tired'] },
+      props: [], overlayConcept: { summary: 'Hand-lettered titles', elements: [{ name: 'Title card', description: 'Painted on glass' }] } };
+    const saved = await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction-text`).send(edit);
+    expect(saved.status).toBe(200);
+    expect(saved.body.stage).toMatchObject({ status: 'approved', revision: before.castAndSets.revision, catalogApprovedBasis: basis });
+    expect(saved.body.stage.direction).toMatchObject({ look: edit.look, props: [], overlayConcept: edit.overlayConcept,
+      protagonist: { ...edit.protagonist, name: DIRECTION.protagonist.name } });
+    expect(saved.body.stage.direction.sets).toEqual(direction.sets);
+    expect(saved.body.project.castAndSets.catalogCheckin.approved).toBe(true);
+    expect((await projects.getStoredProject(project.id)).castAndSets.catalogCheckin).toBeUndefined();
+
+    const html = await guideHtml(project.id, (await rebuild(project.id)).body.artifact.id);
+    for (const text of ['Clean daylight, fine grain', 'A red scarf', 'Always wears the scarf', 'hopeful; tired', 'Hand-lettered titles', 'Painted on glass']) expect(html).toContain(text);
+    for (const stale of ['Stale grainy look', 'old brass key', 'Old overlay']) expect(html).not.toContain(stale);
+
+    const unchanged = await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction-text`).send({ look: edit.look });
+    expect(unchanged.status).toBe(422);
+    const legacy = await seed();
+    await projects.mutateProjectRecord(legacy.id, (c) => ({ project: { ...c, castAndSets: { status: 'review', revision: 1, direction, images: {} } } }));
+    const refused = await request(app).patch(`/api/music-video/${legacy.id}/cast-and-sets/direction-text`).send({ look: 'x' });
+    expect(refused.status).toBe(409);
+    expect(refused.body.code || refused.body.error?.code).toBe('CAST_SETS_NOT_CATALOG');
+    expect(runPrompt).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
   // Uniquely catches an unreadable catalog publishing a guide with its cast missing over the current version.
   it('refuses an unresolved check-in and a legacy stage without saving a version', async () => {
     await useCatalog();

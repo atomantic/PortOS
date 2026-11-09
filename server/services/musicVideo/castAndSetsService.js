@@ -73,6 +73,7 @@ import {
 } from './castAndSets.js';
 import {
   applyCastAndSetsDirectionEdits,
+  applyCastAndSetsDirectionTextEdits,
   buildCastAndSetsPrompt,
   castAndSetsAllowsImages,
   castAndSetsMedium,
@@ -1285,6 +1286,30 @@ export async function editCastAndSetsDirection(projectId, edits) {
   console.log(`🎭 Music Video Cast & Sets ${short(projectId)} direction edited r${out.stage.revision} (${changed.length} field(s))`);
   publish(projectId, out.project);
   inBackground('The direction edit', projectId, () => writePlan(projectId));
+  return { project: out.project, stage: presentCastAndSets(out.stage, PROCESS_ID) };
+}
+
+/**
+ * Save a text-only edit to a catalog check-in's stored direction (look line,
+ * protagonist signature/rules/expressions, props, overlay concept). The catalog
+ * owns the cast, environments and objects, so nothing re-renders, the revision
+ * and status stay put, and the catalog approval (bound to the catalog, not this
+ * text) is untouched. Returns `{ project, stage }`.
+ */
+export async function editCastAndSetsDirectionText(projectId, edits) {
+  let changed = [];
+  const out = await mutateProjectRecord(projectId, (current) => {
+    if (!isCatalogCheckin(current)) throw new ServerError('This check-in renders from its direction. Edit it through the direction editor.', { status: 409, code: 'CAST_SETS_NOT_CATALOG' });
+    const stage = current.castAndSets;
+    if (!stage.direction) throw new ServerError('There is no Cast & Sets direction to edit yet', { status: 409, code: 'CAST_SETS_NO_DIRECTION' });
+    const edited = applyCastAndSetsDirectionTextEdits(stage.direction, edits);
+    if (!edited.changed.length) throw new ServerError('Nothing changed — edit a field first', { status: 422, code: 'CAST_SETS_NO_EDITS' });
+    changed = edited.changed;
+    const next = { ...current, castAndSets: { ...stage, direction: edited.direction, updatedAt: new Date().toISOString() } };
+    return { project: next, stage: next.castAndSets };
+  });
+  console.log(`🎭 Music Video Cast & Sets ${short(projectId)} catalog direction text edited (${changed.join(', ')})`);
+  publish(projectId, out.project);
   return { project: out.project, stage: presentCastAndSets(out.stage, PROCESS_ID) };
 }
 

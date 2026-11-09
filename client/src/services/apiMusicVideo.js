@@ -665,6 +665,10 @@ export const discardMusicVideoCastAndSetsImageEdit = (id, body, options = {}) =>
 // (a list item is patched by id, a test by 1-based index; `remove: true` drops it).
 export const editMusicVideoCastAndSetsDirection = (id, body, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/direction`, { method: 'PATCH', body: JSON.stringify(body), ...options });
+// Text-only edit of a catalog check-in's stored direction; renders nothing.
+// Body: { look?, protagonist?: { signature?, rules?, expressions? }, props?, overlayConcept?: { summary?, elements? } }.
+export const editMusicVideoCastAndSetsDirectionText = (id, body, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/direction-text`, { method: 'PATCH', body: JSON.stringify(body), ...options });
 // Body: { text, target? } — plain-text feedback on the sheet. No target = the whole
 // sheet (standing feedback the direction keeps honoring); a target names one image.
 export const applyMusicVideoCastAndSetsFeedback = (id, body, options = {}) =>

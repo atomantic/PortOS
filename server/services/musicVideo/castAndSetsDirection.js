@@ -1067,6 +1067,50 @@ function describeEdits(previous, direction) {
   ];
 }
 
+// ---- text-only edits (catalog check-ins) -------------------------------------
+
+const textList = (items, max, cap) => items.map((x) => String(x).trim().slice(0, max)).filter(Boolean).slice(0, cap);
+
+/**
+ * Apply a text-only edit to a stored direction: the look line, the
+ * protagonist's signature, rules and expressions, the props and the overlay
+ * concept. A catalog check-in keeps these words but renders nothing from the
+ * direction, so the edit changes no image role, set or cast member and starts
+ * no render. Present keys replace (an empty string or list clears); absent keys
+ * keep the stored value. Returns `{ direction, changed }`.
+ */
+export function applyCastAndSetsDirectionTextEdits(previous, edits = {}) {
+  const direction = { ...previous };
+  const changed = [];
+  if (typeof edits.look === 'string') direction.look = edits.look.trim().slice(0, 500);
+  if (edits.protagonist) {
+    const protagonist = { ...(previous.protagonist || {}) };
+    if (typeof edits.protagonist.signature === 'string') protagonist.signature = edits.protagonist.signature.trim().slice(0, TEXT);
+    if (Array.isArray(edits.protagonist.rules)) protagonist.rules = textList(edits.protagonist.rules, 300, CAST_SETS_LIMITS.rules);
+    if (Array.isArray(edits.protagonist.expressions)) protagonist.expressions = textList(edits.protagonist.expressions, 300, CAST_SETS_LIMITS.expressions);
+    direction.protagonist = protagonist;
+  }
+  if (Array.isArray(edits.props)) {
+    direction.props = normalizeProps(edits.props.map((p) => pickText(p, { id: 64, name: SHORT, owner: SHORT, description: TEXT })));
+  }
+  if (edits.overlayConcept) {
+    const overlay = { ...(previous.overlayConcept || {}) };
+    if (typeof edits.overlayConcept.summary === 'string') overlay.summary = edits.overlayConcept.summary.trim().slice(0, TEXT);
+    if (Array.isArray(edits.overlayConcept.elements)) {
+      overlay.elements = edits.overlayConcept.elements.map((el) => pickText(el, { name: SHORT, description: TEXT }))
+        .filter((el) => el.name && el.description).slice(0, CAST_SETS_LIMITS.overlayElements);
+    }
+    direction.overlayConcept = overlay;
+  }
+  if (differs(previous.look, direction.look)) changed.push('look');
+  for (const key of ['signature', 'rules', 'expressions']) {
+    if (differs(previous.protagonist?.[key] || (key === 'signature' ? '' : []), direction.protagonist?.[key] || (key === 'signature' ? '' : []))) changed.push(key);
+  }
+  if (differs(previous.props || [], direction.props || [])) changed.push('props');
+  if (differs(previous.overlayConcept || {}, direction.overlayConcept || {})) changed.push('overlay concept');
+  return { direction, changed };
+}
+
 // ---- what a revision changed -------------------------------------------------
 
 const MAX_CHANGE_LINES = 8;
