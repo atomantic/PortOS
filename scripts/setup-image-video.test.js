@@ -1297,3 +1297,36 @@ describe('FastVideo MLX Apple Silicon install is hash-pinned', () => {
     expect(section).toContain('sys.version_info[:2] >= (3, 11)');
   });
 });
+
+describe('ACE-Step Apple Silicon install is hash-pinned', () => {
+  const lock = readFileSync(join(REPO_ROOT, 'scripts', 'requirements-acestep-mlx.lock.txt'), 'utf8');
+  const section = source.slice(source.indexOf('INSTALL_ACESTEP" == "1"'), source.indexOf('INSTALL_ACESTEP15="${'));
+  const [appleBranch, otherBranch] = section.split(/^  else$/m);
+
+  it('every locked package carries a sha256 hash, none comes from a VCS or URL source, and all are arm64-macOS scoped', () => {
+    const blocks = lock.split(/\n(?=[a-z][^\n]*==)/i).filter((b) => /^[a-z][^\n]*==/i.test(b));
+    expect(blocks.length).toBeGreaterThan(0);
+    for (const block of blocks) {
+      expect(block).toMatch(/--hash=sha256:[0-9a-f]{64}/);
+      const pin = block.split('\n')[0];
+      expect(pin).toContain("sys_platform == 'darwin'");
+      expect(pin).toContain("platform_machine == 'arm64'");
+    }
+    expect(lock).not.toMatch(/^[a-z][^\n]* @ /im);
+  });
+
+  it('Apple Silicon installs from the lock with --require-hashes and resolves nothing', () => {
+    expect(appleBranch).toContain('is_apple_silicon');
+    expect(appleBranch).toContain('pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-acestep-mlx.lock.txt"');
+    expect(appleBranch).toContain('pip install --no-deps --no-build-isolation "${ACESTEP_DIR}"');
+    expect(appleBranch).not.toMatch(/pip install --upgrade/);
+  });
+
+  it('refuses a Python older than the 3.11 floor the lock was compiled for', () => {
+    expect(appleBranch).toContain('sys.version_info[:2] >= (3, 11)');
+  });
+
+  it('keeps the resolving install for Linux/Windows until the CUDA lock lands', () => {
+    expect(otherBranch).toMatch(/pip install --upgrade \\\n\s+"git\+https:\/\/github\.com\/ace-step\/ACE-Step\.git"/);
+  });
+});
