@@ -892,7 +892,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // these and a v54 one rejects the v53 shapes (migration 459 / db-migration 031 convert stored projects).
   // v55 = `concept.subjects[].requiredDetails` (what every frame of a character must show,
   // checked by the frame check), which a v54 strict subject schema rejects. Optional, no backfill.
-  musicVideoProjects: 55,
+  // v56 = `previz.cuts[].selfie` (a held camera faces back at its holder, who is shown), which a v55 strict
+  // cut schema rejects. Optional, no backfill.
+  musicVideoProjects: 56,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

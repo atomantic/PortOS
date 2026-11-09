@@ -315,6 +315,8 @@ export const musicVideoPrevizSchema = z.object({
     }).strict().optional(),
     // The camera starts on its own aim and swings to the keep-in-frame person during the cut.
     turnToAim: z.boolean().optional(),
+    // The holder's camera is held at arm's length facing back at them: they are shown, about 0.6 m off.
+    selfie: z.boolean().optional(),
     // Where the cut starts on the timeline (story minutes) and an unheld camera's spot on the world map.
     storyMin: z.number().finite().min(0).max(TIMELINE_LENGTH_MAX_MIN).nullable().optional(),
     cameraSpot: z.tuple([z.number().finite().min(-5000).max(5000), z.number().finite().min(-5000).max(5000)]).nullable().optional(),

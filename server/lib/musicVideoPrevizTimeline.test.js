@@ -166,6 +166,20 @@ describe('shots on the timeline', () => {
     expect(previzFrameAt(observed, {}, 1).world).toBeUndefined();
   });
 
+  // Catches a selfie that still hides its holder, or a POV cut that starts showing them.
+  it('shows the holder 0.6 m in front of the camera on a selfie cut, and hides them on a plain held cut', () => {
+    const frameOf = (extra) => previzFrameAt({ ...base, previz: { ...base.previz, cuts: [cut('k1', 0, 'p-home', { storyMin: 35, holderSubjectId: 'c-b', ...extra })] } }, {}, 1, timelineWorld);
+    const pov = frameOf({});
+    expect(pov.actors.find((a) => a.subjectId === 'c-b').visible).toBe(false);
+    const selfie = frameOf({ selfie: true });
+    const bo = selfie.actors.find((a) => a.subjectId === 'c-b');
+    expect(bo).toMatchObject({ holder: true, visible: true });
+    expect(selfie.actors.find((a) => a.subjectId === 'c-a').visible).toBe(true);
+    const { position, target } = selfie.camera;
+    expect(Math.hypot(position[0] - target[0], position[2] - target[2])).toBeCloseTo(0.6, 1);
+    expect(Math.hypot(target[0] - bo.position[0], target[2] - bo.position[2])).toBeLessThan(1e-6);
+  });
+
   // Catches a held camera that never swings to the person it should turn to.
   it('swings a held camera from straight ahead to its keep-in-frame person when it turns to them', () => {
     const turning = { ...base, previz: { ...base.previz, cuts: [cut('k1', 0, 'p-home', { storyMin: 35, holderSubjectId: 'c-b', aimSubjectId: 'c-a', turnToAim: true })] } };

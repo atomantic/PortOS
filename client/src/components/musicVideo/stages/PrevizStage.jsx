@@ -312,6 +312,12 @@ function CutRow({ project, cut, number, scene, places, characters, placeSubjects
           onChange={(holderSubjectId) => onChange({ holderSubjectId, ...(Array.isArray(cut.visibleSubjectIds) ? { visibleSubjectIds: cut.visibleSubjectIds.filter((entry) => entry !== holderSubjectId) } : {}) })} />
         <Picker id={`${id}-aim`} label="Keep in frame" value={cut.aimSubjectId} options={others} empty="Camera's own aim"
           onChange={(aimSubjectId) => onChange({ aimSubjectId })} />
+        {cut.holderSubjectId && (
+          <label className="flex items-center gap-1" htmlFor={`${id}-selfie`}>
+            <input id={`${id}-selfie`} type="checkbox" className="h-4 w-4" checked={!!cut.selfie} onChange={(event) => onChange({ selfie: event.target.checked })} />
+            <span className="text-port-text-muted">Selfie (faces the holder)</span>
+          </label>
+        )}
         {cut.aimSubjectId && (
           <label className="flex items-center gap-1" htmlFor={`${id}-turn`}>
             <input id={`${id}-turn`} type="checkbox" className="h-4 w-4" checked={!!cut.turnToAim} onChange={(event) => onChange({ turnToAim: event.target.checked })} />
