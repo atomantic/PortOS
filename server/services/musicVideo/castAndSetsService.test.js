@@ -1235,6 +1235,34 @@ describe('Cast & Sets procedural check-in', () => {
     expect(html).toContain('No raster image: drawn in code');
   });
 
+  // Uniquely catches an approval's background sheet re-save racing an immediate edit's re-assembly for the same artifact version, failing the edited stage.
+  it('re-assembles an edit made right after approval without colliding with the approved sheet save', async () => {
+    const project = await seedProcedural(['image:codex', 'code:render']);
+    await service.startCastAndSets(project.id);
+    await runTo(project.id, 'review');
+    // Hold the approval's re-save until the edit's re-assembly is underway.
+    let releaseApproved;
+    const assembling = new Promise((resolve) => { releaseApproved = resolve; });
+    const onStage = (event) => { if (event.projectId === project.id && event.stage?.status === 'assembling') releaseApproved(); };
+    musicVideoEvents.on('cast-and-sets', onStage);
+    const artifacts = await import('./devArtifactService.js');
+    const save = artifacts.saveGeneratedDevArtifact;
+    const spy = vi.spyOn(artifacts, 'saveGeneratedDevArtifact').mockImplementation(async (id, input) => {
+      if (input.status === 'approved') await assembling;
+      return save(id, input);
+    });
+    onTestFinished(() => { spy.mockRestore(); musicVideoEvents.off('cast-and-sets', onStage); });
+    await service.approveCastAndSets(project.id);
+    const edited = await request(app).patch(`/api/music-video/${project.id}/cast-and-sets/direction`).send({ world: { camera: 'locked off' } });
+    expect(edited.status).toBe(202);
+    await service.__settleCastAndSetsForTests();
+    const stage = (await current(project.id)).castAndSets;
+    expect(stage.stopReason || null).toBeNull();
+    expect(stage).toMatchObject({ status: 'review', direction: { world: { camera: 'locked off' } } });
+    expect(spy.mock.calls.map(([, input]) => input.status ?? null)).toEqual(['approved', null]);
+    expect((await Promise.allSettled(spy.mock.results.map((r) => r.value))).map((r) => r.status)).toEqual(['fulfilled', 'fulfilled']);
+  });
+
   it('keeps the medium of a saved direction when the project settings change before a revision', async () => {
     const project = await seedProcedural(['image:codex', 'code:render']);
     await service.startCastAndSets(project.id);

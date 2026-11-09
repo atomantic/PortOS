@@ -46,6 +46,7 @@ import { RENDER_TARGET } from '../../lib/renderTargets.js';
 import { trimTo } from '../../lib/textUtils.js';
 import { castAndSetsPendingGreyboxSetIds } from '../../lib/musicVideoGreybox.js';
 import { getProject, mutateProjectRecord } from './projects.js';
+import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { requireProject } from './requireProject.js';
 import { musicVideoEvents } from './events.js';
 import { effortArg, recordLlmRoute, resolveMusicVideoLlm } from './llmRoute.js';
@@ -806,6 +807,11 @@ const renderStageSheet = async (project, stage, status) => renderCastAndSetsShee
 });
 
 /** Build the sheet, save it as the stage's development artifact, then check in. */
+// Every save of a project's sheet takes the next artifact version, and storeVersion
+// refuses a version another save already took. An approval's background re-save and
+// an immediate edit's re-assembly would otherwise race, failing the edited stage.
+const queueSheetSave = createKeyCachedQueue();
+
 async function assemble(projectId) {
   const marked = await mutateProjectRecord(projectId, (current) => setCastAndSetsStatus(current, 'assembling'));
   publish(projectId, marked.project);
@@ -816,13 +822,13 @@ async function assemble(projectId) {
   const html = await renderStageSheet(project, stage, autoApprove ? 'approved' : 'review');
   const { saveGeneratedDevArtifact } = await import('./devArtifactService.js');
   const existing = stage.artifactId && (project.devArtifacts || []).some((a) => a.id === stage.artifactId && !a.deleted) ? stage.artifactId : null;
-  const { artifact } = await saveGeneratedDevArtifact(projectId, {
+  const { artifact } = await queueSheetSave(projectId, () => saveGeneratedDevArtifact(projectId, {
     artifactId: existing,
     kind: 'cast-sets',
     title: `Cast & Sets — ${stage.direction?.protagonist?.name || project.name}`,
     html,
     source: 'cast-and-sets',
-  });
+  }));
   const out = await mutateProjectRecord(projectId, (current) => setCastAndSetsStatus(current, 'review', {
     extra: { artifactId: artifact.id, artifactVersion: artifact.version },
   }));
@@ -836,7 +842,11 @@ async function assemble(projectId) {
 
 // A sheet rendered for review still asks its check-in questions; once approved,
 // save it again as an approved version that drops them.
-async function refreshApprovedSheet(projectId) {
+function refreshApprovedSheet(projectId) {
+  return queueSheetSave(projectId, () => saveApprovedSheet(projectId));
+}
+
+async function saveApprovedSheet(projectId) {
   const project = await requireProject(projectId);
   const stage = project.castAndSets;
   if (isCatalogCheckin(project) || stage?.status !== 'approved' || !stage.artifactId) return;
