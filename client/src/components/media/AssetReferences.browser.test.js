@@ -87,14 +87,18 @@ describe.skipIf(!executablePath)('asset references on touch cards', () => {
       await page.goto(origin + 'asset-reference-test');
       const videoCard = page.locator('#cards > div').nth(1);
       const take = page.locator('#takes li').first();
-      for (const card of [videoCard, take]) {
+      // A take card shows the compact chips, which keep a 44px target on a
+      // touch phone and stay small on a desktop pointer.
+      for (const [card, fullTarget] of [[videoCard, true], [take, width < 500]]) {
         for (const name of ['Copy ID', 'Copy URL']) {
           const button = card.getByRole('button', { name, exact: true });
           await button.scrollIntoViewIfNeeded();
           const rect = await button.boundingBox();
           const parent = await card.boundingBox();
-          expect(rect.width).toBeGreaterThanOrEqual(44);
-          expect(rect.height).toBeGreaterThanOrEqual(44);
+          if (fullTarget) {
+            expect(rect.width).toBeGreaterThanOrEqual(44);
+            expect(rect.height).toBeGreaterThanOrEqual(44);
+          }
           expect(rect.x).toBeGreaterThanOrEqual(parent.x);
           expect(rect.x + rect.width).toBeLessThanOrEqual(parent.x + parent.width);
         }
