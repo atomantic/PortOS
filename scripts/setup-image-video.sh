@@ -424,23 +424,23 @@ if [[ "$INSTALL_MFLUX" == "1" ]]; then
   # mflux comes with the mflux-generate CLI which the local image backend
   # spawns directly. The shared inference runtime remains supported.
   echo "📦 Installing image generation packages (mflux + deps)..."
-  # VALIDATED TRIO (issue #1329) — pin the MLX/Metal backend, do NOT leave it a
-  # floor. The original three M5 Max GPU-watchdog kernel panics
-  # (docs/research/2026-06-13-mflux-training-watchdog-panic.md) happened on
-  # mlx/mlx-metal 0.30.6. A `>=` floor lets pip resolve mlx silently under
-  # mflux's `mlx<0.32` cap, so the stack can drift back onto a known-bad build.
-  # The surviving trio is mflux 0.17.5 · mlx 0.31.2 · mlx-metal 0.31.2:
-  # run d36562a0 (flux2-klein-4b, bf16, 768px) completed a full LoRA training to
-  # adapter extraction on this stack on the panicking M5 Max (Mac17,7/T6050,
-  # macOS 26.5.1) with no panic — see the bisect log in the incident doc.
-  # (mflux's `dev` extra itself pins mlx==0.31.0, so 0.31.2 is in-range and
-  # closer to what mflux develops against than the old 0.30.6.) Bump these only
-  # after re-validating with another full run on the M5; record the proving run.
+  # PINNED TRIO — pin the MLX/Metal backend, do NOT leave it a floor, so a
+  # reinstall can't drift onto a different build. mflux 0.24 · mlx 0.32.4 ·
+  # mlx-metal 0.32.4 · Pillow 13 (#15479): mflux 0.17.5 imported the private
+  # PIL._typing that Pillow 13 broke, and 0.24 is the first release that
+  # supports Pillow 13 (the 12.x crafted-image advisories are fixed only there)
+  # and requires mlx>=0.32. The same mflux 0.24 · mlx 0.32.4 pair already runs
+  # FLUX.3 (requirements-flux3-mlx.txt). The earlier 0.17.5 · 0.31.2 trio was
+  # bisected for the M5 Max GPU-watchdog panics, which came from sustained LoRA
+  # TRAINING (docs/research/2026-06-13-mflux-training-watchdog-panic.md); LoRA
+  # training is retired (#13536), so this runtime serves inference only and
+  # needs no training run to bump. The runtime fingerprint (#1406) still records
+  # the stack for any future panic report.
   # Apple Silicon installs the trio from the hash-pinned lock, whose direct pins
   # (scripts/requirements-mflux-mlx.txt) must match these.
-  MFLUX_PIN='mflux==0.17.5'
-  MLX_PIN='mlx==0.31.2'
-  MLX_METAL_PIN='mlx-metal==0.31.2'
+  MFLUX_PIN='mflux==0.24.0'
+  MLX_PIN='mlx==0.32.4'
+  MLX_METAL_PIN='mlx-metal==0.32.4'
   if is_apple_silicon; then
     # Apple Silicon installs only from the hash-pinned lock
     # (scripts/requirements-mflux-mlx.lock.txt): no install-time resolution, so

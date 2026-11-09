@@ -4,14 +4,14 @@
 # package. After editing this file, regenerate the lock with the command in the
 # lock header.
 #
-# mflux · mlx · mlx-metal are the validated trio from #1329 (see the comment in
-# scripts/setup-image-video.sh): bump them only after a full LoRA training run on
-# the M5 that motivated the pin.
-mflux==0.17.5
-mlx==0.31.2
-mlx-metal==0.31.2
-# mflux 0.17.5 imports PIL._typing, which Pillow 13 broke (it imports a name
-# `numbers` does not define), so `mflux-generate` and `mflux-train` fail at
-# import. Pillow 13 is the first release without the 12.x advisories; only
-# mflux 0.24+ supports it, and that needs mlx 0.32.
-pillow==12.3.0
+# mflux · mlx · mlx-metal move together: mflux 0.24 requires mlx>=0.32 and
+# pillow>=13 (mflux 0.17.5 imported the private PIL._typing, which Pillow 13
+# removed). The old 0.17.5 · 0.31.2 trio was proven by a LoRA training run on the
+# M5 (#1329); LoRA training is retired (#13536), so this runtime now serves
+# inference and the same mflux 0.24 · mlx 0.32 pair already runs FLUX.3
+# (requirements-flux3-mlx.txt). Pillow 13 is the first release without the 12.x
+# crafted-image advisories.
+mflux==0.24.0
+mlx==0.32.4
+mlx-metal==0.32.4
+pillow==13.0.0
