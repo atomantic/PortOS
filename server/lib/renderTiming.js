@@ -62,3 +62,32 @@ export function omitRenderTiming(record) {
   const { renderMs, renderStartedAt, renderCompletedAt, ...rest } = record;
   return rest;
 }
+
+// Whether THIS machine deleted the provider-hosted copy. Machine-local like `hidden`: it depends on this
+// machine's provider account and credentials, so it never crosses the federation wire or merges from a peer.
+export const HOSTED_DELETED_AT_FIELDS = Object.freeze(['runwayDeletedAt', 'falDeletedAt']);
+
+/** A copy of `record` without the machine-local hosted-deleted stamps. */
+export function omitHostedDeletedStamps(record) {
+  const rest = { ...record };
+  for (const field of HOSTED_DELETED_AT_FIELDS) delete rest[field];
+  return rest;
+}
+
+// Provider-side identity of ONE render (Runway task, fal.ai request, Topaz request, Gemini chat) and
+// the stamp saying its hosted copy was deleted. Never shared by a record derived from that render.
+export const HOSTED_PROVIDER_ID_FIELDS = [
+  'runwayTaskId', 'runwayDeletedAt', 'falRequestId', 'falDeletedAt', 'topazRequestId', 'geminiChatUrl',
+];
+
+function omitHostedProviderIds(record) {
+  const rest = { ...record };
+  for (const field of HOSTED_PROVIDER_ID_FIELDS) delete rest[field];
+  return rest;
+}
+
+/**
+ * Everything a record DERIVED from a source render (upscale, trim, cut, image variant) must not
+ * inherit from it: the source's timing and its provider request ids. Spread this, not the source.
+ */
+export const omitDerivedRenderFields = (record) => omitRenderTiming(omitHostedProviderIds(record));

@@ -48,6 +48,7 @@ import { discardUnpublishedVideo, finalizeGeneratedVideo, emitCloudRenderStatus,
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { mutateVideoHistory } from './history.js';
 import { getSettings } from '../settings.js';
+import { autoDeleteHostedCopy } from '../hostedRenderRemoteDelete.js';
 import { nearestAspectRatio } from '../imageGen/modes.js';
 import { frameDataUriAtAspect } from './falFrameAspect.js';
 import {
@@ -422,6 +423,7 @@ async function runFalVideo(job, jobId, {
     if (entry.aborted) return finishFailure('Canceled');
     const submitted = await submitFalRequest({ apiKey, modelId, body });
     entry.cancelUrl = submitted.cancel_url;
+    meta.falRequestId = submitted.request_id;
     const responseUrl = submitted.response_url;
 
     const polled = await awaitFalCompletion({
@@ -470,6 +472,7 @@ async function runFalVideo(job, jobId, {
     activeJobs.delete(jobId);
     await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta: { ...meta, ...measured }, actualSeed: null, mutateHistory: mutateVideoHistory, publication });
     closeJobAfterDelay(jobs, jobId);
+    void autoDeleteHostedCopy('fal', 'video', jobId, { apiKey });
   } catch (err) {
     // Best-effort: an unanticipated throw (e.g. from fetchFalResult or the
     // download) may still leave the remote render queued or running — cancel

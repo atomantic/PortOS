@@ -45,6 +45,7 @@ import { authorizeRemoteMediaTombstone } from './mediaTombstoneAuthorization.js'
 import { rowOwnerCandidates } from '../lib/mediaRowOwners.js';
 import { listMediaTombstones, listExportableMediaTombstones, mergeMediaTombstones, clearMediaTombstone } from './mediaTombstones.js';
 import { emitMediaHistoryChanged } from './peerSyncEventBus.js';
+import { omitHostedDeletedStamps } from '../lib/renderTiming.js';
 import { referenceCollectionAssetManifest } from './sharing/peerSyncAssets.js';
 import { mergeMediaCollectionsFromSync, listCollections, itemKey } from './mediaCollections.js';
 import { listSyncableSessionsForWire, mergeStorySessionsFromSync } from './storyBuilder.js';
@@ -972,12 +973,13 @@ async function getVideoHistorySnapshot() {
   // `suppliedByInstanceId` is likewise MACHINE-LOCAL (who handed THIS machine the
   // row); stripped so identical row sets hash identically. `originInstanceId` syncs.
   // `pendingDelete` (a delete queued for the row's owner) is this machine's own work.
+  // `runwayDeletedAt` / `falDeletedAt` (this machine deleted the provider-hosted copy) are machine-local too.
   // Canonicalize ordering for the wire so two peers holding identical sets
   // produce identical checksums regardless of insertion (newest-first) order.
   // Mirrors getMediaCollectionsSnapshot's sort-by-id rationale.
   const data = {
     videos: rows
-      .map(({ hidden, suppliedByInstanceId, pendingDelete, ...rest }) => rest)
+      .map(({ hidden, suppliedByInstanceId, pendingDelete, ...rest }) => omitHostedDeletedStamps(rest))
       .sort((a, b) => a.id.localeCompare(b.id)),
   };
   // Deliberate deletes ride the snapshot so a peer still holding the row can't
@@ -1101,7 +1103,7 @@ export async function mergeVideoRows(incomingRows, source) {
     const { merged: lwwMerged, changed: rowsChanged } = mergeArraysByKey(
       keyed,
       // suppliedByInstanceId and pendingDelete are local-only: never trust a sender's value.
-      incoming.filter(hasId).map(({ suppliedByInstanceId, pendingDelete, ...rest }) => rest),
+      incoming.filter(hasId).map(({ suppliedByInstanceId, pendingDelete, ...rest }) => omitHostedDeletedStamps(rest)),
       'id',
       'createdAt',
     );
