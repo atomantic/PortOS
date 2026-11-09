@@ -94,6 +94,7 @@ import { buildTuiShellLaunch } from '../lib/tuiShellLaunch.js';
 import { isMaskedEnvVar } from '../lib/credentialEnvVars.js';
 import { presetDerivable, presetKind } from '../lib/providerPresets.js';
 import { isDerivedPreset } from '../lib/providerGraphRecords.js';
+import { canReviewImages } from '../lib/imageReviewProviders.js';
 import {
   captureSystemCapabilities,
   detectSystemCapabilities,
@@ -219,6 +220,8 @@ const presentProvider = (provider, capabilities = captureSystemCapabilities()) =
     // a card offers a button the route refuses.
     canRefreshModels: decorated.canRefreshModels || Boolean(harnessCatalogRuntime(provider)),
     toolFreeOneShot: isToolFreeOneShotProvider(provider),
+    // Can run a Music Video frame check: sees an image with no host-writing tool (#15576).
+    imageReview: canReviewImages(provider),
     authoringOneShot: isAuthoringOneShotProvider(provider),
     publicReviewPostures,
     publicReviewEnforcedPostures: enforcedPublicReviewPosturesForProvider(provider),

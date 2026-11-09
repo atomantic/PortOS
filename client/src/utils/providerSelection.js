@@ -90,6 +90,9 @@ export const toolFreeLocalSelectionPolicy = (
 export const supportsToolFreeOneShot = (provider) => provider?.enabled !== false
   && (provider?.type === 'api' || provider?.type === 'cli' && (provider.toolFreeOneShot === true || provider.authoringOneShot === true));
 
+/** Can run a Music Video frame check: an enabled provider the server says sees an image with no host-writing tool (#15576). */
+export const supportsImageReview = (provider) => provider?.enabled !== false && provider?.imageReview === true;
+
 // No compose modes: an unmaterialized CLI combination has no server capability
 // annotation yet. Existing pins still render through the selector's saved-value
 // path, with incompatible records visible but disabled.

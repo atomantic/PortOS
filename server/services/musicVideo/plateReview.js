@@ -6,7 +6,7 @@ import { resolveGalleryImage } from '../../lib/pathSafety.js';
 import { PATHS } from '../../lib/fileUtils.js';
 import { COMPOSITION_SCRATCH_DIR } from './compositionRender.js';
 import { isFreeProvider } from '../../lib/modelPricing.js';
-import { isAuthoringOneShotProvider, isToolFreeOneShotProvider } from '../../lib/providerVendors.js';
+import { canReviewImages, isCodexVisionReviewer } from '../../lib/imageReviewProviders.js';
 import { CODEX_ACCOUNT_STATUS, isCodexSubscriptionProvider } from '../../lib/codexAccount.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { isOllamaBackedProvider, ollamaBaseFromProvider } from '../../lib/aiToolkit/internal/ollamaBacked.js';
@@ -54,10 +54,7 @@ async function resolveOllamaVisionModel(provider, selectedModel, pinned) {
   );
 }
 
-// Codex on its subscription attaches the image with `codex exec -i` and runs the
-// one-shot in a read-only sandbox, so image text cannot reach a host-writing tool.
-const isCodexVisionReviewer = (provider) => provider?.type === 'cli' && isCodexSubscriptionProvider(provider) && isAuthoringOneShotProvider(provider);
-const canReviewImages = (provider) => (provider?.type === 'api' && isToolFreeOneShotProvider(provider)) || isCodexVisionReviewer(provider);
+export { canReviewImages };
 
 // `enabled` alone doesn't mean the binary is installed: a scaffolded Codex must not
 // displace a working API reviewer when these runs refuse fallback.
@@ -88,7 +85,7 @@ export async function resolvePlateReviewer(reviewer = {}) {
     if (!provider) provider = await (await import('../aiProvider.js')).resolveAPIProvider();
     selectedModel = provider ? resolveEffectiveModel(provider, reviewer.model) : null;
   }
-  if (!provider || provider.enabled === false || !canReviewImages(provider)) throw new Error('No enabled vision reviewer is configured. Configure Codex or an API provider for image inspection.');
+  if (!provider || provider.enabled === false || !canReviewImages(provider)) throw new Error('No enabled vision reviewer is configured. Choose Codex, Claude Code, Grok or a vision API provider for image inspection.');
   if ((reviewer?.providerId && provider.id !== reviewer.providerId) || (reviewer?.model && selectedModel !== reviewer.model)) throw new Error('The selected plate reviewer is unavailable');
   selectedModel = await resolveOllamaVisionModel(provider, selectedModel, Boolean(reviewer.model));
   return { provider, model: selectedModel, costUsd: isFreeProvider(provider) ? 0 : null };

@@ -24,7 +24,8 @@ export { isEmbeddingModel, isToolUseModel, isVisionModel } from '../../../server
  * Whether a CLI-type provider can read an image file (its CLI accepts a
  * vision attachment). The client's own take on `isVisionCapableCliProvider`
  * in server/lib/localModelHeuristics.js: keyed on the command basename so a
- * path-configured Claude or Codex still qualifies, as on the server.
+ * path-configured Claude, Codex or Grok still qualifies, as on the server.
+ * Grok reads a staged image with its read_file tool (#15576).
  * API providers return false; use
  * `visionLocalModelFilter` for their model lists.
  * @param {{type?:string, command?:string}|null|undefined} provider
@@ -32,7 +33,7 @@ export { isEmbeddingModel, isToolUseModel, isVisionModel } from '../../../server
  */
 export const isVisionCapableCliProvider = (provider) =>
   provider?.type === 'cli'
-  && (commandBasename(provider.command) === 'codex' || commandBasename(provider.command) === 'claude');
+  && ['codex', 'claude', 'grok'].includes(commandBasename(provider.command));
 
 /**
  * Agent-picker tool-use annotation for a model id. Agent / CoS tasks (the CD
