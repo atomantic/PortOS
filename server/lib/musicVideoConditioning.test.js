@@ -267,6 +267,16 @@ describe('catalog-linked check-in conditioning', () => {
     expect(ids(musicVideoClipConditioningReferences(p, { prompt: 'Lead in the Room' }))).toEqual(['updated-lead.png']);
   });
 
+  it('Auto adds a project-level set plate only to the shot that names its place', () => {
+    const p = catalogProject();
+    p.visualSpec.references.push({ id: 'plate-kitchen', imageId: 'kitchen.png', role: 'set', label: 'Kitchen', condition: true });
+    const named = ids(musicVideoConditioningReferences(p, { prompt: 'Lead in the Kitchen' }));
+    const other = ids(musicVideoConditioningReferences(p, { prompt: 'Lead in the Room' }));
+    expect(named).toContain('kitchen.png');
+    expect(other).not.toContain('kitchen.png');
+    expect(other).toContain('current-room.png');
+  });
+
   it('drops stale explicit picks and aliases while retaining live picks and panel art', () => {
     const p = catalogProject();
     const scene = { panelId: 'p1', panelArt: 'panel.png', frameReferenceIds: [

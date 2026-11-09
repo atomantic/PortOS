@@ -495,7 +495,18 @@ function automaticConditioningReferences(project, scene, limit = MUSIC_VIDEO_MAX
         seen.add(ref.imageId);
       }
     }
-    for (const ref of choices.filter(ref => !ref.catalogSubjectId)) {
+    // Project-level set plates join only the shots that name their place (label match on the
+    // shot's own text/location, or the section's mapped set); other roles (mood/palette) stay global.
+    const sheet = scene?.shotSheet;
+    const text = [scene?.description, scene?.framePrompt, scene?.prompt, scene?.visualIntent, sheet?.action, sheet?.location]
+      .filter(Boolean).join(' ');
+    const direction = project?.castAndSets?.direction;
+    const mappedSetId = Number.isInteger(scene?.sectionIndex)
+      ? direction?.songMap?.find(entry => entry.section === scene.sectionIndex)?.setId : null;
+    const mappedName = direction?.sets?.find(set => set.id === mappedSetId)?.name;
+    const namesPlate = ref => ref.role !== 'set' || (mappedSetId && ref.id === `mvr-cs-set-${mappedSetId}`)
+      || [ref.label, ref.name].filter(Boolean).some(name => namesIn(text, name) || (mappedName && name.toLowerCase() === mappedName.toLowerCase()));
+    for (const ref of choices.filter(ref => !ref.catalogSubjectId && namesPlate(ref))) {
       if (seen.has(ref.imageId)) continue;
       selected.push(ref);
       seen.add(ref.imageId);
