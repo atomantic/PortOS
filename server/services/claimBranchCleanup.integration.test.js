@@ -179,6 +179,21 @@ describe('claim coordinator cleanup', () => {
     expect((await localRef()).exitCode).toBe(1);
   });
 
+  // A re-claim of an issue whose PR already merged reuses the claim branch name
+  // on a fresh checkout of the default branch; the forge reports the earlier
+  // delivery's head, which is not this checkout's.
+  it.each([['MERGED', 0], ['CLOSED', 0], ['OPEN', 1]])('handles a clean re-claim beside a %s PR at another head', async (prState, held) => {
+    await execGit(['reset', '--hard', 'origin/main'], checkout);
+    head = (await execGit(['rev-parse', 'HEAD'], checkout)).stdout.trim();
+    const identity = await readCompletedCheckoutIdentity({ repoPath: sandbox.repo, branch, path: checkout, head });
+    fixture.agent.metadata.completedCheckouts = [{ version: 1, agentId: id, startedAt: start, capturedAt: end, ...identity }];
+    fixture.probe = { readable: true, prState, prHead: 'a'.repeat(40) };
+    await execGit(['push', 'origin', `:refs/heads/${branch}`], sandbox.repo);
+    expect(await run()).toHaveLength(held);
+    expect(existsSync(checkout)).toBe(held === 1);
+    expect((await localRef()).exitCode).toBe(held === 1 ? 0 : 1);
+  });
+
   it('settles owned git work when a remote branch probe times out during cleanup', async () => {
     await execGit(['config', `url.ssh://slow-host/.insteadOf`, sandbox.origin], sandbox.repo);
     await execGit(['config', 'core.sshCommand', 'node -e "process.stdin.resume(); process.stdin.on(\'end\', () => process.exit(0)); setTimeout(() => {}, 10000);" --'], sandbox.repo);

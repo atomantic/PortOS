@@ -20,7 +20,7 @@ import {
 } from './projectsLogic.js';
 
 import { productionReviewBasis } from './productionReview.js';
-import { musicVideoProjectCreateSchema, musicVideoProjectUpdateSchema, musicVideoSceneCreateSchema } from '../../lib/musicVideoValidation.js';
+import { musicVideoPrevizSchema, musicVideoProjectCreateSchema, musicVideoProjectUpdateSchema, musicVideoSceneCreateSchema } from '../../lib/musicVideoValidation.js';
 
 const baseProject = () => buildProjectRecord({ name: 'Test MV' }, { id: 'mv-1', now: '2026-01-01T00:00:00.000Z' });
 
@@ -862,6 +862,27 @@ describe('mergeProjectRecord (#1770 LWW)', () => {
     expect(r.inserted).toBe(true);
     expect(r.remoteWins).toBe(true);
     expect(r.next.name).toBe('X');
+  });
+
+  // Catches a v2.114 peer's `previz.night` landing verbatim, which the strict previz schema then refuses on every edit.
+  it('converts a v53 previz from an older peer into the timeline shape', () => {
+    const remote = {
+      id: 'mv-1',
+      updatedAt: '2026-01-02T00:00:00Z',
+      concept: { subjects: [{ id: 'c-a', kind: 'character', name: 'Ana' }] },
+      previz: {
+        cuts: [], tracks: [], pawnColors: { 'c-a': { figure: 'red', bike: 'chrome' } },
+        night: { startClock: 1200, lengthMin: 60, beats: [
+          { id: 'b', kind: 'travel', subjectIds: ['c-a'], startMin: 0, endMin: 10, setId: 's1', toSetId: 's2', pace: 'ride' },
+        ] },
+      },
+    };
+    const local = { id: 'mv-1', updatedAt: '2026-01-01T00:00:00Z', name: 'L' };
+    for (const { next } of [mergeProjectRecord(null, remote), mergeProjectRecord(local, remote)]) {
+      expect(next.previz.night).toBeUndefined();
+      expect(next.previz.timeline.beats[0]).toMatchObject({ pace: 'walk', vehicleSubjectId: next.previz.vehicles[0].subjectId });
+      expect(musicVideoPrevizSchema.safeParse(next.previz).success).toBe(true);
+    }
   });
 
   it('strips render pins sent by a legacy peer before inserting (#3245)', () => {
