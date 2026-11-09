@@ -2,7 +2,7 @@ import { castInputsFromReferences } from '../../../server/lib/musicVideoCastLook
 import { musicVideoGreyboxReference } from '../../../server/lib/musicVideoGreybox.js';
 import { shotActionContractProblem } from '../../../server/lib/musicVideoActionContract.js';
 import { isOutsideMusicVideoReference, musicVideoClipConditioningReferences, musicVideoConditioningReferences, musicVideoFrameReferenceFiles, musicVideoLinkedCastIds, musicVideoMissingFrameLinkedPicks, musicVideoSceneCastIds, MUSIC_VIDEO_MAX_REFERENCE_CHOICES } from '../../../server/lib/musicVideoConditioning.js';
-import { normalizePreMusic, preMusicClipSound } from '../../../server/lib/musicVideoColdOpen.js';
+import { preMusicClipSound } from '../../../server/lib/musicVideoColdOpen.js';
 import { sceneEndFrameRequestFields } from '../../../server/lib/musicVideoEndFrame.js';
 import { authoredFramePromptText, authoredShotPrompt, musicVideoFrameModelInput, visualDirection } from '../../../server/lib/musicVideoShotPrompt.js';
 import { useEffect, useRef, useState } from 'react';
@@ -17,7 +17,7 @@ import useSceneBatch from './useSceneBatch.js';
 import useSceneRenderLifecycle from './useSceneRenderLifecycle.js';
 import { useVisibilityEvent } from './useVisibilityEvent.js';
 import { isLtx2FamilyRuntime } from '../lib/runnerFamilies';
-import { FRAME_OPTIONS } from '../lib/videoGenParams.js';
+import { ltxReferenceClipFrames } from '../../../server/lib/musicVideoLtxReferences.js';
 import { LTX_REFERENCES_GENERATION_MODE, LTX_REFERENCES_MAX_REFERENCES, isLtx25Model } from '../lib/musicVideoLtxReferences.js';
 import { isLayeredComposition, isSelfDrawnLayer, sceneVisualLayer } from '../lib/musicVideoLayers.js';
 import { musicVideoFrameGenSize } from '../lib/musicVideoAspect.js';
@@ -42,15 +42,6 @@ const REFERENCE_CAPABILITY_CODES = new Set([
   'TOO_MANY_REFERENCE_IMAGES',
   'TOO_MANY_INPUT_IMAGES',
 ]);
-
-// A project-default reference render has no per-card length override. Cover the
-// actual shot at the local video default of 24 fps, on LTX's 8n+1 grid.
-function ltxReferenceFrames(scene, target) {
-  const shotSeconds = normalizePreMusic(scene.preMusic)?.durationSec ?? (scene.endSec - scene.startSec);
-  const covering = Number.isFinite(shotSeconds) && shotSeconds > 0 ? 1 + 8 * Math.ceil(shotSeconds * 24 / 8) : 121;
-  const frames = Math.max(121, 1 + 8 * Math.ceil(((target?.numFrames || covering) - 1) / 8));
-  return frames <= FRAME_OPTIONS.at(-1) ? frames : null;
-}
 
 // The provider a clip render runs on, as its placeholder take names it ("Rendering grok…").
 // A pool that may pick either this machine or a peer names neither.
@@ -476,7 +467,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       if (castGuidesPending(scene)) return Promise.resolve({ ok: false });
       if (!ltxReferenceFiles.length) { toast.error('Choose at least one clip reference for LTX 2.5 References'); return Promise.resolve({ ok: false }); }
     }
-    const referenceFrames = useLtxReferences ? ltxReferenceFrames(scene, target) : null;
+    const referenceFrames = useLtxReferences ? ltxReferenceClipFrames(scene, target?.numFrames) : null;
     if (useLtxReferences && referenceFrames == null) {
       toast.error('This shot is too long for one LTX reference clip. Split it or choose a shorter clip length.');
       return Promise.resolve({ ok: false });

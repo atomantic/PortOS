@@ -36,7 +36,9 @@ import { preMusicClipSound } from '../../lib/musicVideoColdOpen.js';
 import { conditioningReferences, falRouteVideoSettings, runwayRouteVideoSettings } from './productionPool.js';
 import { loadSceneCastMedia } from './castGuideMedia.js';
 import { castInputsFromReferences } from '../../lib/musicVideoCastLook.js';
-import { musicVideoLimitReferenceFiles, musicVideoMissingFrameLinkedPicks, musicVideoReferenceCapacity } from '../../lib/musicVideoConditioning.js';
+import { ltxReferenceClipFrames } from '../../lib/musicVideoLtxReferences.js';
+import { musicVideoClipConditioningReferences, musicVideoLimitReferenceFiles, musicVideoMissingFrameLinkedPicks, musicVideoReferenceCapacity } from '../../lib/musicVideoConditioning.js';
+import { isPerformanceScene } from '../../lib/musicVideoShotTiming.js';
 import { musicVideoFrameGenSize } from '../../lib/musicVideoAspect.js';
 
 const unprompted = (scene, what) => new ServerError(
@@ -149,6 +151,23 @@ const falClipParams = (project, scene, route) => falTakeRequestFields(falSceneTa
   songDurationSec: project.audioAnalysis?.durationSec ?? null,
 }));
 
+/** The request fields of a References clip, or null when this shot cannot use them. */
+async function ltxReferenceFields({ project, scene, route }) {
+  if (isPerformanceScene(scene) || scene.setReference?.greyboxShotId) return null;
+  const { model } = await (await import('../videoGen/modelSelection.js')).resolveVideoModelSelection(route.model || undefined);
+  if (model?.runtime !== 'ltx25') return null;
+  const castMedia = await loadSceneCastMedia(scene, { project });
+  const files = musicVideoClipConditioningReferences(project, scene, castMedia, { limit: 8 }).map((ref) => ref.imageId);
+  if (!files.length) {
+    throw new ServerError(`"${scene.label || scene.sceneId}" has no clip reference for LTX 2.5 References`, { status: 409, code: 'PRODUCTION_CLIP_REFERENCES_MISSING', context: { sceneId: scene.sceneId } });
+  }
+  const numFrames = ltxReferenceClipFrames(scene);
+  if (numFrames == null) {
+    throw new ServerError(`"${scene.label || scene.sceneId}" is too long for one LTX reference clip; split the shot`, { status: 409, code: 'PRODUCTION_CLIP_TOO_LONG', context: { sceneId: scene.sceneId } });
+  }
+  return { files, body: { mode: 'ic-ingredients-25', numFrames, icReferenceImageFiles: files } };
+}
+
 /** Enqueue a scene's i2v clip on exactly `route` through the video submit service. Returns `{ jobId }`. */
 async function dispatchClip({ project, scene, route, tag }) {
   if (!scene.referenceImageId) {
@@ -169,6 +188,9 @@ async function dispatchClip({ project, scene, route, tag }) {
     reactor: { disableAudio: true },
     runway: runwayTakeRequestFields(runwaySceneTake({ scene, videoSettings: runwayRouteVideoSettings(project, route) })),
   };
+  // A route bound to LTX 2.5 References sends what the shot card's checkbox sends: the shot's clip
+  // references as IC references. A performance or greybox shot, or a model that is not LTX 2.5, renders as usual.
+  const ltxReferences = route.mode === 'local' && route.references === 'ltx' ? await ltxReferenceFields({ project, scene, route }) : null;
   // A local model ends on the end frame only when its runtime anchors the last
   // frame (#11258), so the plan needs the model this route actually renders on.
   const localRuntime = route.mode === 'local' && sceneActiveEndImageId(scene)
@@ -183,11 +205,12 @@ async function dispatchClip({ project, scene, route, tag }) {
     mode: 'image',
     sourceImageFile: scene.referenceImageId,
     ...(byBackend[route.mode] || {}),
+    ...(ltxReferences?.body || {}),
     // A style-break end frame (#11173), when this fal or local model takes one.
-    ...(tag.songAudio === true ? {} : sceneEndFrameRequestFields(scene, {
+    ...(tag.songAudio === true || ltxReferences ? {} : sceneEndFrameRequestFields(scene, {
       backend: route.mode, falModelId: byBackend.fal?.falModelId, runwayModelId: byBackend.runway?.runwayModelId, mode: byBackend[route.mode]?.mode || 'image', localRuntime,
     })),
-    musicVideo: { ...tag, compose: true },
+    musicVideo: { ...tag, compose: true, ...(ltxReferences ? { expectedClipReferenceFiles: ltxReferences.files } : {}) },
     ...(fixes ? { _clipFixes: fixes } : {}),
   }, {});
   return { jobId };

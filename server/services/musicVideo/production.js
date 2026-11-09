@@ -180,6 +180,8 @@ export function normalizeProductionPool(pool, { allowEmpty = false } = {}) {
     const route = { kind: entry.kind, mode: entry.mode.trim(), model: isNonBlankStr(entry.model) ? entry.model.trim() : null };
     // A local video route may carry each shot's song window (Supplied song audio).
     if (route.kind === 'video' && route.mode === 'local' && entry.audio === 'supplied') route.audio = 'supplied';
+    // ...or send the shot's clip references to LTX 2.5 (References mode, #15482).
+    if (route.kind === 'video' && route.mode === 'local' && entry.references === 'ltx') route.references = 'ltx';
     if (seen.has(routeKey(route))) continue;
     seen.add(routeKey(route));
     out.push(route);
