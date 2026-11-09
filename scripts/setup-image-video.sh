@@ -1126,20 +1126,36 @@ if [[ "$INSTALL_AUDIOLDM2" == "1" ]]; then
   fi
   AUDIOLDM2_PY="$(venv_python "$AUDIOLDM2_VENV")"
   echo "📦 Installing AudioLDM2 (diffusers) packages into ${AUDIOLDM2_VENV}..."
-  "$AUDIOLDM2_PY" -m pip install --upgrade pip wheel setuptools >/dev/null
-  # torch runs the model; diffusers provides AudioLDM2Pipeline; transformers +
-  # sentencepiece supply the text encoders (T5 / GPT-2 / CLAP) AudioLDM2 chains;
-  # accelerate speeds device placement; numpy/scipy back the audio math. We write
-  # WAV via the stdlib `wave` module in the sidecar, so no soundfile dep.
-  "$AUDIOLDM2_PY" -m pip install --upgrade \
-    torch \
-    diffusers \
-    "transformers<5" \
-    sentencepiece \
-    accelerate \
-    numpy \
-    scipy \
-    "huggingface_hub[hf_xet]"
+  if is_apple_silicon; then
+    # Apple Silicon installs only from the hash-pinned lock
+    # (scripts/requirements-audioldm2-mlx.lock.txt): no install-time resolution,
+    # so a new or compromised transitive release can't land on the next Repair.
+    # Direct pins: scripts/requirements-audioldm2-mlx.txt.
+    # The lock needs CPython 3.11+: its filelock fix for advisory GHSA-2g95-wg33-c5x2
+    # (4.2.1) dropped 3.10, and 4.1.0, the last 3.10 release, is affected.
+    if ! "$AUDIOLDM2_PY" -c 'import sys; sys.exit(0 if sys.version_info[:2] >= (3, 11) else 1)'; then
+      echo "❌ AudioLDM2 on Apple Silicon needs Python 3.11+; ${AUDIOLDM2_PY} is older." >&2
+      echo "   Re-run with PYTHON_BIN pointing at a 3.11+ interpreter (e.g. 'brew install python@3.12')." >&2
+      exit 1
+    fi
+    "$AUDIOLDM2_PY" -m pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-audioldm2-mlx.lock.txt"
+  else
+    # Linux/Windows still resolve at install time (hash-pinned CUDA lock: #15439).
+    "$AUDIOLDM2_PY" -m pip install --upgrade pip wheel setuptools >/dev/null
+    # torch runs the model; diffusers provides AudioLDM2Pipeline; transformers +
+    # sentencepiece supply the text encoders (T5 / GPT-2 / CLAP) AudioLDM2 chains;
+    # accelerate speeds device placement; numpy/scipy back the audio math. We write
+    # WAV via the stdlib `wave` module in the sidecar, so no soundfile dep.
+    "$AUDIOLDM2_PY" -m pip install --upgrade \
+      torch \
+      diffusers \
+      "transformers<5" \
+      sentencepiece \
+      accelerate \
+      numpy \
+      scipy \
+      "huggingface_hub[hf_xet]"
+  fi
   pin_venv_arm64 "$AUDIOLDM2_VENV"
   # Verify the pipeline class imports — a clean import means generation only
   # needs the one-time weight download, not a broken venv.

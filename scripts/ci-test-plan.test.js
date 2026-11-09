@@ -1317,6 +1317,7 @@ describe('CI test impact planner', () => {
         'scripts/requirements-minimax-music3-cuda-windows.lock.txt',
         'scripts/requirements-minimax-music3-cuda-linux.lock.txt',
         'scripts/requirements-musicgen-mlx.lock.txt',
+        'scripts/requirements-audioldm2-mlx.lock.txt',
         'scripts/requirements-muscriptor-mlx.lock.txt',
         'scripts/requirements-wan22-cuda.txt',
       ];
