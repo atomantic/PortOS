@@ -179,9 +179,10 @@ export function createFleetLlmGateway({
     // A pass-through tap rather than a tee: the client's stream stays the
     // pipeline's only consumer (so backpressure and cancellation behave exactly
     // as before) and the sniffer just watches the bytes go past, holding a
-    // bounded tail of them to read the final `usage` frame out of. Every stage
-    // is a pipeline member so an abort tears the upstream body down too, rather
-    // than leaving an unlistened `error` on it.
+    // bounded tail of them to read the final `usage` frame out of. The tap is a
+    // pipeline stage, never `.pipe()`d: `.pipe()` does not forward errors, so the
+    // AbortError a client hang-up raises on the body escaped as an uncaught
+    // 'error' and crashed the host.
     const stages = [Readable.fromWeb(response.body)];
     if (job.sniffer) stages.push(new Transform({
       transform(chunk, _enc, done) { job.sniffer.push(chunk); done(null, chunk); },
