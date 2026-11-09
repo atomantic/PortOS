@@ -31,7 +31,7 @@ import { isPreMusicShot } from './musicVideoColdOpen.js';
 import { musicVideoShotPlaceId, projectRouteMaps } from './musicVideoRouteMaps.js';
 import { SHOT_CAMERA_SET_DOWN } from './musicVideoShotSheet.js';
 import { activeMusicVideoSubjects, musicVideoPrevizForActiveCast } from './musicVideoCastSelection.js';
-import { timelineActorsAt, timelineClockAt, previzTimeline, previzVehicleInText, previzVehicles } from './musicVideoPrevizTimeline.js';
+import { timelineActorsAt, timelineClockAt, previzTimeline, previzVehicleInText, previzVehicles, suggestPrevizVehicles } from './musicVideoPrevizTimeline.js';
 import { PREVIZ_CUTS_MAX, PREVIZ_KEYS_MAX, PREVIZ_PAWN_COLORS, PREVIZ_TRACKS_MAX } from './musicVideoPrevizLimits.js';
 
 const EYE_HEIGHT = { stand: 1.6, ride: 1.75 };
@@ -300,9 +300,13 @@ export function updatePrevizCut(project, next, loadedPlaces = {}) {
  * set, so hand-made blocking survives a refresh. `loadedPlaces` is the linked
  * catalog places by ingredient id. Returns `{ previz, added, removed }`.
  */
-export function backfillPrevizFromShots(project, loadedPlaces = {}) {
-  const forCast = musicVideoPrevizForActiveCast(project);
-  const current = forCast && Array.isArray(forCast.cuts) ? forCast : { cuts: [], tracks: [] };
+export function backfillPrevizFromShots(sourceProject, loadedPlaces = {}) {
+  const forCast = musicVideoPrevizForActiveCast(sourceProject);
+  const base = forCast && Array.isArray(forCast.cuts) ? forCast : { cuts: [], tracks: [] };
+  // A cast with no listed vehicle gets its obvious ones (a bicycle, a car) listed, so riding shots ride without a hand edit.
+  const suggested = base.vehicles?.length ? [] : suggestPrevizVehicles({ ...sourceProject, previz: base });
+  const current = suggested.length ? { ...base, vehicles: suggested } : base;
+  const project = { ...sourceProject, previz: current };
   const shots = timedShots(project);
   const shotIds = new Set(shots.map((scene) => scene.sceneId));
   const linked = new Map(current.cuts.filter((cut) => cut.sceneId).map((cut) => [cut.sceneId, cut]));
