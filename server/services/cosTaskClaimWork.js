@@ -200,6 +200,10 @@ export async function buildClaimWorkTask(app, {
   const promptTaskType = trackerToClaimTaskType(wt.resolved) || 'plan-task';
   const targetRef = normalizeWorkItemRef(target);
   const effectivePrCompletion = prCompletion ?? metadata?.prCompletion ?? resolveAppPrCompletion(app, metadata);
+  // A verified non-epic issue gets its claim checkout from PortOS at spawn, so
+  // its prompt starts inside it (#15517). An epic ships a child under the
+  // child's own branch, so it keeps the agent-cut checkout.
+  const serverCheckout = preverified === true && nonEpic === true && /^\d+$/.test(targetRef || '');
 
   // Honor a direct claim-work prompt customization if the user set one;
   // otherwise delegate to the resolved tracker's prompt body. Mirrors the
@@ -207,7 +211,7 @@ export async function buildClaimWorkTask(app, {
   // overrides the tracker-specific body for both paths.
   const promptResult = await getTaskPrompt(
     interval.prompt ? 'claim-work' : promptTaskType,
-    { claimFlow: true, withSource: true, claimIssueOptions: { target: targetRef, prCompletion: effectivePrCompletion, preverified, nonEpic } }
+    { claimFlow: true, withSource: true, claimIssueOptions: { target: targetRef, prCompletion: effectivePrCompletion, preverified, nonEpic, serverCheckout } }
   );
   // The string case keeps callers that replace the prompt getter (including
   // integrations/tests) on the conservative, customized-prompt path.
@@ -276,6 +280,9 @@ export async function buildClaimWorkTask(app, {
   if (swarmBlock) taskMetadata.swarmCount = metadata.swarmCount;
   if ('useWorktree' in delegatedMeta) taskMetadata.useWorktree = delegatedMeta.useWorktree;
   if ('openPR' in delegatedMeta) taskMetadata.openPR = delegatedMeta.openPR;
+  // Only a composed shipped prompt omits the checkout phase; a customized one
+  // still tells the agent to cut its own, so PortOS must not cut it first.
+  if (serverCheckout && composed) taskMetadata.claimServerCheckout = true;
 
   return { tracker: wt.resolved, source: wt.source, promptTaskType, prompt, taskMetadata, target: targetRef };
 }

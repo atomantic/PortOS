@@ -32,6 +32,9 @@ export function createAgentSpawnContext(task) {
     laneAcquired: false,
     claimAcquired: false,
     spawnWorktree: null,
+    // A server-provisioned claim checkout (claimCheckoutProvision.js). Its
+    // directory is `claim-*`, not `agent-<id>`, so it is removed by path.
+    spawnClaimCheckout: null,
     handedOff: false,
     setupCatchArmed: false,
   };
@@ -57,6 +60,15 @@ export function createAgentSpawnContext(task) {
         : ROOT_DIR;
       await removeWorktree(context.agentId, sourceWorkspace, context.spawnWorktree.branchName, { discardDirt: true }).catch((cleanupErr) => {
         emitLog('warn', `Failed to remove the worktree of failed spawn ${context.agentId}: ${cleanupErr.message}`, { agentId: context.agentId, taskId: context.task.id });
+      });
+    }
+    if (context.spawnClaimCheckout) {
+      const { repoPath, worktreePath, branchName } = context.spawnClaimCheckout;
+      context.spawnClaimCheckout = null;
+      const { removeWorktree } = await import('./worktreeManager.js');
+      // Nothing has run in it yet, so the fresh branch carries no work to keep.
+      await removeWorktree(repoPath, worktreePath, { branchName, deleteBranch: true, force: true }).catch((cleanupErr) => {
+        emitLog('warn', `Failed to remove the claim checkout of failed spawn ${context.agentId}: ${cleanupErr.message}`, { agentId: context.agentId, taskId: context.task.id });
       });
     }
   };

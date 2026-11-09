@@ -387,7 +387,7 @@ router.post('/tasks/slashdo', asyncHandler(async (req, res) => {
     // A manual forge claim is verified by prepareAppIssueClaim below before the
     // task is queued, so the prompt can skip repeating that work. A non-epic
     // title is assumed optimistically; a label-only epic rebuilds the full prompt.
-    const forgeTarget = /^#?d+$/.test(String(target ?? '').trim());
+    const forgeTarget = /^#?\d+$/.test(String(target ?? '').trim());
     const claimOptions = {
       target,
       issueContext,

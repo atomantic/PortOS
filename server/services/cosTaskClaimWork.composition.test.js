@@ -117,6 +117,35 @@ describe('assembled forge claim prompts', () => {
     expect(prompt).toContain('replace `CI_VERIFIED_HEAD` with that full verified SHA');
   });
 
+  it.each(['github', 'gitlab'])('starts a verified non-epic %s claim inside the checkout PortOS provisions (#15517)', async (tracker) => {
+    state.tracker = tracker;
+    const claim = await buildClaimWorkTask(app, { target: '42', preverified: true, nonEpic: true });
+    expect(claim.taskMetadata.claimServerCheckout).toBe(true);
+    const prompt = renderAgent(claim);
+    expect(prompt).toContain('## Phase 2 — Claim (already provisioned by PortOS)');
+    expect(prompt).toContain('must print claim/issue-42');
+    expect(prompt).toContain('checkout for THIS run (Phase 2)');
+    expect(prompt).not.toContain('git worktree add');
+    expect(prompt).not.toContain('link-worktree-deps.js');
+    expect(prompt).toContain('Never remove this worktree or its branch yourself');
+  });
+
+  it('keeps the agent-cut checkout for an epic or an unverified target', async () => {
+    const epic = await buildClaimWorkTask(app, { target: '42', preverified: true });
+    const unverified = await buildClaimWorkTask(app, { target: '42', nonEpic: true });
+    for (const claim of [epic, unverified]) {
+      expect(claim.taskMetadata.claimServerCheckout).toBeUndefined();
+      expect(claim.prompt).toContain('git worktree add --no-track -b "claim/issue-${NUM}"');
+      expect(claim.prompt).not.toContain('already provisioned by PortOS');
+    }
+  });
+
+  it('does not provision for a customized workflow that cuts its own checkout', async () => {
+    state.prompts['claim-issue'] = { prompt: 'CUSTOM WORKFLOW', promptSource: 'user', promptCustomized: true };
+    const claim = await buildClaimWorkTask(app, { target: '42', preverified: true, nonEpic: true });
+    expect(claim.taskMetadata.claimServerCheckout).toBeUndefined();
+  });
+
   it('creates and verifies a GitLab draft explicitly', async () => {
     state.tracker = 'gitlab';
     const claim = await buildClaimWorkTask(app, { target: '42', prCompletion: 'draft' });

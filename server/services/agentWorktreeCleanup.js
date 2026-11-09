@@ -13,7 +13,7 @@ import { isLegacyDeepAudit } from '../lib/auditWorkflow.js';
  */
 
 import { existsSync } from 'fs';
-import { realpath } from 'node:fs/promises';
+import { realpath, rm } from 'node:fs/promises';
 import { isDeepStrictEqual } from 'node:util';
 import { PORTOS_APP_ID } from '../lib/appIdentity.js';
 import { join, resolve } from 'path';
@@ -31,6 +31,7 @@ import { isFalsyMeta } from '../lib/metadataFlags.js';
 import { canonicalizePath } from '../lib/pathContainment.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { execGit } from '../lib/execGit.js';
+import { doneSentinelCandidateNames } from '../lib/agentSentinel.js';
 import { isRetryHoldOwner, clearedRetryHoldMetadata } from '../lib/taskRetryHold.js';
 import { resolveTaskTargetBranch, resolveTaskRemoteBranch, shouldStripTaskTargetBranch } from '../lib/taskTargetBranch.js';
 import { ServerError } from '../lib/errorHandler.js';
@@ -305,6 +306,10 @@ async function cleanupClaimBranchWorktrees(agentId, { sourceWorkspace, claimBran
         }
         return null;
       });
+      // A claim that ran inside this checkout (server-provisioned, #15517) left
+      // its consumed completion sentinel here; it is not work, and an untracked
+      // file would make the non-forced removal of a clean stand-down refuse.
+      if (!merged) await Promise.all(doneSentinelCandidateNames(agentId).map(name => rm(join(capture.path, name), { force: true }).catch(() => null)));
       const removal = await forceRemoveWorktreeDir(sourceWorkspace, capture.path, { verifyRemoval, force: merged });
       if (!removal.removed) return held(branch, removal.reason || 'worktree removal unverified');
       const local = await deleteLocal();

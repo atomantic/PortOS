@@ -56,6 +56,10 @@ vi.mock('./agentCliSpawning.js', () => ({
   getClaudeSettingsEnv: async () => ({}),
   spawnDirectly: vi.fn(async () => 'agent-x'),
 }));
+const updateClaimOwnership = vi.hoisted(() => vi.fn(async ({ branch }) => ({ bound: true, branch })));
+vi.mock('./cosClaimOwnership.js', () => ({ updateClaimOwnership }));
+const markAppIssueClaimed = vi.hoisted(() => vi.fn(async () => undefined));
+vi.mock('./appIssues.js', () => ({ markAppIssueClaimed }));
 vi.mock('./agentTuiSpawning.js', () => ({ buildTuiSpawnConfig: () => ({ command: 'codex', args: [] }), spawnTuiAgent: vi.fn(async () => 'agent-x') }));
 
 import { dispatchAgentRun } from './agentSpawnDispatch.js';
@@ -89,6 +93,42 @@ beforeEach(() => {
   f.prep = { outcome: 'ready', workspacePath: '/repos/example', worktreeInfo: null };
   f.provider = { id: 'example-cli', type: 'cli', command: 'codex' };
   f.tui = false;
+});
+
+describe('dispatchAgentRun with a server-provisioned claim checkout (#15517)', () => {
+  const claimCheckout = { repoPath: '/repos/example', worktreePath: '/mock/worktrees/claim-example-issue-42', branchName: 'claim/issue-42', baseBranch: 'main' };
+  beforeEach(() => {
+    f.prep = { outcome: 'ready', workspacePath: claimCheckout.worktreePath, worktreeInfo: null, claimCheckout, resolvedApp: { id: 'example-app' } };
+  });
+
+  it('binds the checkout to the registered run and sets the markers before launching in it', async () => {
+    const context = newContext();
+    await dispatchAgentRun(context);
+    expect(registerAgent).toHaveBeenCalledWith('agent-x', task.id, expect.objectContaining({
+      workspacePath: claimCheckout.worktreePath, sourceWorkspace: claimCheckout.repoPath, worktreeBranch: null,
+    }));
+    expect(updateClaimOwnership).toHaveBeenCalledWith({ agentId: 'agent-x', action: 'bind', branch: 'claim/issue-42' });
+    expect(markAppIssueClaimed).toHaveBeenCalledWith({ id: 'example-app' }, '42');
+    expect(registerAgent.mock.invocationCallOrder[0]).toBeLessThan(updateClaimOwnership.mock.invocationCallOrder[0]);
+    expect(markAppIssueClaimed.mock.invocationCallOrder[0]).toBeLessThan(spawnDirectly.mock.invocationCallOrder[0]);
+    expect(spawnDirectly).toHaveBeenCalledWith(expect.objectContaining({ workspacePath: claimCheckout.worktreePath }));
+    expect(context.spawnClaimCheckout).toBe(claimCheckout);
+  });
+
+  it('blocks without launching when the run cannot bind its checkout', async () => {
+    updateClaimOwnership.mockResolvedValueOnce({ bound: false, reason: 'owner-active' });
+    const context = newContext();
+    await dispatchAgentRun(context);
+    expect(context.blockAndBail).toHaveBeenCalledWith(expect.objectContaining({ reason: expect.stringContaining('owner-active'), category: 'worktree-failed' }));
+    expect(markAppIssueClaimed).not.toHaveBeenCalled();
+    expect(spawnDirectly).not.toHaveBeenCalled();
+  });
+
+  it('still launches when the forge markers cannot be set', async () => {
+    markAppIssueClaimed.mockRejectedValueOnce(new Error('could not set assignee'));
+    await dispatchAgentRun(newContext());
+    expect(spawnDirectly).toHaveBeenCalled();
+  });
 });
 
 describe('dispatchAgentRun ownership window', () => {
