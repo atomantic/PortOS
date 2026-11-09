@@ -7,12 +7,12 @@ import { useRecentImageGallery } from './useRecentImageGallery';
 import toast from '../components/ui/Toast';
 import { mediaDeleteOutcome } from '../lib/mediaDeleteOutcome';
 import { refreshMediaUsages } from './useMediaUsages';
+import { useMediaHideToggle } from './useMediaHideToggle';
 import {
   cancelImagePendingDelete,
   cleanGalleryImage,
   deleteImage,
   removeImageWatermark,
-  setImageHidden,
 } from '../services/api';
 
 export function useImageGenGallery({ previewParam }) {
@@ -122,20 +122,11 @@ export function useImageGenGallery({ previewParam }) {
     refreshGallery();
   }, [refreshGallery, setGallery]);
 
-  const handleToggleHidden = useCallback(async (item) => {
-    const image = item?.raw || item;
-    const nextHidden = !image.hidden;
-    setGallery((current) => current.map((entry) => (entry.filename === image.filename ? { ...entry, hidden: nextHidden } : entry)));
-    const result = await setImageHidden(image.filename, nextHidden, { silent: true }).catch((error) => {
-      toast.error(error.message || 'Failed to update visibility');
-      setGallery((current) => current.map((entry) => (entry.filename === image.filename ? { ...entry, hidden: !nextHidden } : entry)));
-      return null;
-    });
-    if (result) {
-      toast.success(nextHidden ? 'Image hidden' : 'Image unhidden');
-      refreshGallery();
-    }
-  }, [refreshGallery, setGallery]);
+  const handleToggleHidden = useMediaHideToggle(useCallback((item, hidden) => {
+    const filename = (item?.raw || item).filename;
+    setGallery((current) => current.map((entry) => (entry.filename === filename ? { ...entry, hidden } : entry)));
+    refreshGallery();
+  }, [refreshGallery, setGallery]));
 
   const prependVariant = useCallback((variant) => {
     setGallery((current) => [variant, ...current.filter((image) => image.filename !== variant.filename)]);

@@ -712,6 +712,7 @@ function MediaCollectionDetailContent() {
         onContinue={(i) => handleContinue(i.raw || i)}
         onClean={(i) => handleClean(i?.raw || i)}
         onRemoveWatermark={(i) => handleRemoveWatermark(i?.raw || i)}
+        onDelete={handleDelete}
       />
     </div>
   );

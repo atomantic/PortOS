@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useMemo, useState } from 'react';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router';
 import MediaPreview from './MediaPreview';
 import usePreviewRoute from '../../hooks/usePreviewRoute';
@@ -19,8 +19,9 @@ vi.mock('../../services/apiImageVideo', () => ({
 // its own interaction coverage; this stub exposes the item it receives and
 // invokes the same callback the real Save prompt button uses.
 vi.mock('./MediaLightbox', () => ({
-  default: ({ item, annotation, onAnnotationChange, onPromptChange, onPromptAnalysis, onPosterChange, onTrimStart, variantGroup, onSelectVariant }) => item ? (
+  default: ({ item, annotation, onAnnotationChange, onPromptChange, onPromptAnalysis, onPosterChange, onTrimStart, onDelete, variantGroup, onSelectVariant }) => item ? (
     <div data-testid="lightbox">
+      {onDelete && <button type="button" onClick={() => onDelete(item)}>Delete</button>}
       {onTrimStart && <button type="button" onClick={() => onTrimStart(item, 1.25)}>Start clip here</button>}
       <button type="button" onClick={() => onPromptAnalysis(item, { videoPrompt: 'analysed prompt' })}>Analyze prompt</button>
       <span data-testid="lightbox-poster">{item.previewUrl}</span>
@@ -342,4 +343,35 @@ it('rates a /data/image-refs sheet under its image-ref: key, whatever key the pa
   expect(screen.getByTestId('lightbox-rating')).toHaveTextContent('bad');
   fireEvent.click(screen.getByRole('button', { name: 'Good' }));
   expect(updateAnnotation).toHaveBeenCalledWith('image-ref:sheet-1.png', { rating: 'good' });
+});
+
+function DeleteHarness({ remove = true }) {
+  const [items, setItems] = useState([
+    { ...VIDEO, key: 'video:a', id: 'a', prompt: 'first' },
+    { ...VIDEO, key: 'video:b', id: 'b', prompt: 'second' },
+  ]);
+  const [preview, setPreview] = useState(items[0]);
+  const onDelete = async (item) => {
+    if (remove) setItems((current) => current.filter((candidate) => candidate.key !== item.key));
+  };
+  return <MediaPreview preview={preview} setPreview={setPreview} items={items} onDelete={onDelete} />;
+}
+
+describe('MediaPreview delete', () => {
+  it('opens the neighboring item once the host drops the deleted one', async () => {
+    render(<DeleteHarness />);
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(screen.getByTestId('lightbox-prompt').textContent).toBe('second'));
+  });
+
+  it('stays on the item when the host keeps it (pending on a peer or failed)', async () => {
+    render(<DeleteHarness remove={false} />);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Delete' })); });
+    expect(screen.getByTestId('lightbox-prompt').textContent).toBe('first');
+  });
+
+  it('offers no delete to a host without a delete handler', () => {
+    render(<MediaPreview preview={VIDEO} setPreview={() => {}} items={[VIDEO]} />);
+    expect(screen.queryByRole('button', { name: 'Delete' })).toBeNull();
+  });
 });

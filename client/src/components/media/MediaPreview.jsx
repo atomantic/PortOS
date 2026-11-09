@@ -1,6 +1,6 @@
 import { useMemo, useCallback, useEffect, useState } from 'react';
 import MediaLightbox from './MediaLightbox';
-import { getMediaNavProps } from '../../lib/mediaNavigation';
+import { getAdjacentMedia, getMediaNavProps } from '../../lib/mediaNavigation';
 import { computeImageVariantGroup } from './variants';
 import { mediaAnnotationKey, mediaRecordRef } from './mediaDetail';
 import useImageVariants from '../../hooks/useImageVariants';
@@ -25,6 +25,8 @@ export default function MediaPreview({
   onPromptSaved,
   onPosterSaved,
   onTrimmed,
+  onDelete,
+  onToggleHidden,
   ...handlers
 }) {
   const [promptOverride, setPromptOverride] = useState(null);
@@ -136,6 +138,26 @@ export default function MediaPreview({
     const prompt = item.kind === 'video' ? result?.videoPrompt : result?.imagePrompt;
     if (prompt) savePrompt(item, prompt, { silent: false }).catch(() => {});
   }, [savePrompt]);
+  // Delete and Hide run the host's own handlers, which drop the item from
+  // `items` when it leaves the list (deleted, or hidden on a page that lists
+  // visible items only) and keep it otherwise (pending on a peer, failed, or
+  // still listed). Once the host's list no longer holds it, open the neighbor
+  // the user was next to (or close at the end) instead of leaving it open.
+  const [removed, setRemoved] = useState(null);
+  const thenAdvance = useCallback((handler) => handler && (async (item, ...args) => {
+    const { next, previous } = getAdjacentMedia(items, item);
+    await handler(item, ...args);
+    setRemoved({ key: item.key, neighbor: next || previous });
+  }), [items]);
+  useEffect(() => {
+    if (!removed) return;
+    setRemoved(null);
+    if (preview && preview.key !== removed.key) return;
+    if (items?.some((i) => i?.key === removed.key)) return;
+    setPreview(removed.neighbor ?? null);
+  }, [removed, items, preview, setPreview]);
+  const deleteFromPreview = useMemo(() => thenAdvance(onDelete), [thenAdvance, onDelete]);
+  const hideFromPreview = useMemo(() => thenAdvance(onToggleHidden), [thenAdvance, onToggleHidden]);
   const annotationKey = mediaAnnotationKey(preview);
   return (
     <MediaLightbox
@@ -148,6 +170,8 @@ export default function MediaPreview({
       onPromptChange={mediaRecordRef(displayedPreview) ? savePrompt : undefined}
       onPosterChange={savePoster}
       onTrimStart={onTrimmed ? trimStart : undefined}
+      onDelete={deleteFromPreview || undefined}
+      onToggleHidden={hideFromPreview || undefined}
       variantGroup={variantGroup}
       onSelectVariant={onSelectVariant}
       onPromptAnalysis={handlePromptAnalysis}
