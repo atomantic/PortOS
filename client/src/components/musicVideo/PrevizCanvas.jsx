@@ -11,7 +11,7 @@ const FIGURE_HEIGHT = 1.7;
 const rad = (deg) => (deg * Math.PI) / 180;
 const noop = () => {};
 
-// A person at their mark in their pawn color; the nose shows which way they face. Riding a vehicle, a low block in the vehicle's pawn color sits under a seated figure.
+// A person at their mark in their pawn color; the nose shows which way they face. Riding a vehicle, a two-wheeled frame in the vehicle's pawn color sits under a seated figure.
 function ActorProxy({ actor, labelPortal }) {
   const riding = actor.pose === 'ride';
   const body = riding ? 1.1 : FIGURE_HEIGHT;
@@ -19,10 +19,19 @@ function ActorProxy({ actor, labelPortal }) {
   return (
     <group position={actor.position} rotation={[0, rad(actor.facingDegrees), 0]}>
       {riding && (
-        <mesh position={[0, 0.3, 0]}>
-          <boxGeometry args={[0.7, 0.5, 1.8]} />
-          <meshStandardMaterial color={actor.vehicleColor || actor.color} roughness={0.9} />
-        </mesh>
+        // Two wheels and a thin frame: reads as a vehicle from ahead or behind, not as a plinth.
+        <group>
+          {[-0.65, 0.65].map((z) => (
+            <mesh key={z} position={[0, 0.3, z]} rotation={[0, 0, Math.PI / 2]}>
+              <cylinderGeometry args={[0.3, 0.3, 0.08, 20]} />
+              <meshStandardMaterial color={actor.vehicleColor || actor.color} roughness={0.9} />
+            </mesh>
+          ))}
+          <mesh position={[0, 0.5, 0]}>
+            <boxGeometry args={[0.06, 0.06, 1.3]} />
+            <meshStandardMaterial color={actor.vehicleColor || actor.color} roughness={0.9} />
+          </mesh>
+        </group>
       )}
       <mesh position={[0, lift + body / 2, riding ? -0.1 : 0]}>
         <capsuleGeometry args={[0.22, Math.max(body - 0.44, 0.01), 6, 16]} />

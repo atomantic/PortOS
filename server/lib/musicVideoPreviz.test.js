@@ -131,6 +131,24 @@ describe('greybox previz playback', () => {
     expect(driving.tracks[0].keys[0]).toMatchObject({ pose: 'ride', vehicleSubjectId: 'o-cart' });
   });
 
+  // Catches riding shots standing because the object's full name ("Ana and Bo's bicycles") never appears in the actions, and a cast whose obvious vehicle was never listed.
+  it('lists an obvious vehicle and rides it when the action describes riding without naming the object', () => {
+    const bikes = { id: 'o-bikes', kind: 'object', name: "Ana and Bo's bicycles" };
+    const p = project([
+      scene('s1', 0, 4, { characters: ['Ana'], action: 'Ana pedals the red BMX through the gate' }),
+      scene('s2', 4, 8, { characters: ['Ana'], action: 'Ana stands at the gate holding a coffee' }),
+    ], { concept: { subjects: [...subjects, bikes] } });
+    const { previz } = backfillPrevizFromShots(p, places);
+    expect(previz.vehicles).toEqual([{ subjectId: 'o-bikes', speedMetersPerMin: 270 }]);
+    const keys = previz.tracks.find((t) => t.subjectId === 'c-ana').keys;
+    expect(keys[0]).toMatchObject({ pose: 'ride', vehicleSubjectId: 'o-bikes' });
+    // A shot that never mentions riding stays on foot even with the bicycles listed.
+    const walkOnly = backfillPrevizFromShots({ ...p, scenes: [p.scenes[1]] }, places).previz;
+    expect(walkOnly.tracks[0].keys[0].pose).toBe('stand');
+    // A cast with no vehicle-like object lists none, so a bare 'rides' puts nobody on one.
+    expect(backfillPrevizFromShots(project([scene('s1', 0, 4, { characters: ['Ana'], action: 'Ana rides' })]), places).previz.vehicles).toBeUndefined();
+  });
+
   it('names what keeps a cut from playing', () => {
     const p = project([scene('s1', 0, 4)]);
     expect(previzCutProblems(p, { id: 'c', sceneId: 's1', startSec: 0, endSec: 4, placeSubjectId: 'p-street', viewShotId: 'gone' }, places)).toEqual(['Its greybox camera was removed']);
