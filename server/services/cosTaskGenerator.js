@@ -2303,6 +2303,21 @@ async function skipInapplicableAudit(app, taskType, taskSchedule) {
 }
 
 /**
+ * Pre-agent gate for `dependency-updates`: skip when the repo declares no
+ * dependencies. Probe failures fail open (see dependencyManifestProbe.js).
+ *
+ * @returns {Promise<boolean>} true when the dispatch must be skipped
+ */
+async function skipDependencyFreeApp(app, taskType, taskSchedule) {
+  const { probeDependencyManifests } = await import('./dependencyManifestProbe.js');
+  const verdict = await probeDependencyManifests(app.repoPath);
+  if (verdict.hasDependencies) return false;
+  emitLog('info', `⏭️ Skipping ${taskType} for ${app.name}: ${verdict.reason}`, { appId: app.id, analysisType: taskType });
+  await taskSchedule.recordExecution(taskType, app.id);
+  return true;
+}
+
+/**
  * Run a task type's registered buildTaskInput hook (taskTypeHooks.js) for
  * deterministic pre-agent data collection. Returns `{ skip: true }` when the
  * hook opts out (execution recorded so cadence advances), otherwise
@@ -2728,6 +2743,10 @@ export async function prepareManagedAppImprovementTask(taskType, app, state, {
   // user's recorded override from the schedule form.
   if (!skipPreconditions && !onDemand && isAuditTaskType(taskType) && metadata.runInapplicableAudit !== true
     && await skipInapplicableAudit(app, taskType, taskSchedule)) return skipped('audit-inapplicable');
+
+  // dependency-updates pre-filter: a repo declaring no dependencies has nothing
+  // for an agent to bump, so don't spawn one (also covers on-demand runs).
+  if (!skipPreconditions && taskType === 'dependency-updates' && await skipDependencyFreeApp(app, taskType, taskSchedule)) return skipped('no-dependencies');
 
   if (taskType === 'pr-reviewer') ensurePrReviewerPipeline(metadata);
   initializePipelineMetadata(metadata);
