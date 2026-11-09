@@ -9,6 +9,8 @@ vi.mock('../lib/maintenanceAdmission.js', () => ({ maintenance: { run: maintenan
 vi.mock('./catalogDB.js', () => db);
 vi.mock('./catalogMedia.js', () => ({ uploadIngredientMediaFile: upload }));
 
+const { listPrevizJobs, __resetPrevizJobsForTests } = await import('./previzJobs.js');
+const { catalogEvents } = await import('./catalogEvents.js');
 const { draftGreybox, previewGreyboxPrompt, saveGreybox, captureGreyboxShot, renderGreyboxShot, __setGreyboxDepsForTests } = await import('./catalogGreybox.js');
 
 const scene = {
@@ -89,6 +91,30 @@ describe('draftGreybox', () => {
     expect(out.sentPrompt).toContain('Add a booth');
     expect(out.promptAdditions.map((a) => a.id)).toEqual(expect.arrayContaining(['greybox-contract', 'greybox-place', 'greybox-current']));
     expect(db.setIngredientPayloadKey).not.toHaveBeenCalled();
+  });
+
+  // Catches a draft (from the API or an agent) that never shows as a running job on the Previz page.
+  it('tracks the draft as a Previz job that broadcasts while it runs and settles with a summary', async () => {
+    __resetPrevizJobsForTests();
+    const frames = [];
+    const onJobs = (snapshot) => frames.push(snapshot.jobs.map((job) => job.state));
+    catalogEvents.on('previz-jobs', onJobs);
+    let finish;
+    runPrompt.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    const drafting = draftGreybox('plc-1', { instruction: 'x' });
+    await vi.waitFor(() => expect(listPrevizJobs().jobs).toEqual([expect.objectContaining({ kind: 'greybox-draft', ingredientId: 'plc-1', label: 'Rink', state: 'running' })]));
+    finish({ text: JSON.stringify(scene) });
+    await drafting;
+    catalogEvents.off('previz-jobs', onJobs);
+    expect(frames).toEqual([['running'], ['done']]);
+    expect(listPrevizJobs().jobs).toEqual([expect.objectContaining({ state: 'done', summary: '1 part(s), 1 shot(s)' })]);
+  });
+
+  it('settles a draft the provider failed as a failed job and still throws', async () => {
+    __resetPrevizJobsForTests();
+    runPrompt.mockResolvedValue({ text: 'sorry' });
+    await expect(draftGreybox('plc-1', { instruction: 'x' })).rejects.toMatchObject({ code: 'GREYBOX_UNREADABLE' });
+    expect(listPrevizJobs().jobs).toEqual([expect.objectContaining({ state: 'failed', summary: expect.stringContaining('Try again') })]);
   });
 
   it('refuses an unreadable answer and a non-place', async () => {

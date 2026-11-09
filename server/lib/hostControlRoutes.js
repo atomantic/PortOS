@@ -744,8 +744,8 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/video-gen/upscale/topaz/jobs/:jobId/cancel',
   'POST /api/video-gen/upscale/topaz/jobs/:jobId/recover',
   'POST /api/video-gen/stitch',
-  // Start trim probes/transcodes a new gallery clip with ffprobe/ffmpeg (#11418).
-  'POST /api/video-gen/history/:id/trim-start',
+  // Clip trim probes/transcodes a new gallery clip with ffprobe/ffmpeg (#11418).
+  'POST /api/video-gen/history/:id/trim',
   'POST /api/video-gen/metal-buffer-profiles/clear',
   // Timeline render spawns ffmpeg/ffprobe on the host for segments and audio (#11432).
   'POST /api/video-timeline/projects/:id/render',

@@ -6,6 +6,7 @@ import { useParams, useNavigate, useSearchParams, useLocation } from 'react-rout
 import { Plus, Film, Wand2 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import socket from '../services/socket';
+import usePrevizJobs from '../hooks/usePrevizJobs.js';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import PageHeader from '../components/PageHeader';
 import PageSkeleton from '../components/ui/PageSkeleton';
@@ -796,6 +797,7 @@ function ProjectWorkspace({
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const selectedId = selected.id;
+  const previzRunning = usePrevizJobs(selected).running.length > 0;
   const [arranging, setArranging] = useState(false);
   const [creativeSetupPending, setCreativeSetupPending] = useState(false);
   const [styleReferencesPending, setStyleReferencesPending] = useState(false);
@@ -1832,7 +1834,7 @@ function ProjectWorkspace({
             onNextAction={runNextAction}
             spend={projectSpend(selected)}
             status={projectStatus}
-            notes={stepNotes(selected, productionReview.readiness, publish)}
+            notes={previzRunning ? { ...stepNotes(selected, productionReview.readiness, publish), previz: 'Running…' } : stepNotes(selected, productionReview.readiness, publish)}
             autopilot={autopilotStatus(selected, productionReview.readiness)}
             onOpenSettings={openHeaderSettings}
             playerFirst={playerFirst}

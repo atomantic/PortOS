@@ -6,6 +6,7 @@ import { activeMusicVideoSubjects } from '../../../../../server/lib/musicVideoCa
 import toast from '../../ui/Toast';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import useMusicVideoGreyboxPlaces from '../../../hooks/useMusicVideoGreyboxPlaces.js';
+import usePrevizJobs from '../../../hooks/usePrevizJobs.js';
 import usePrevizWorld from '../../../hooks/usePrevizWorld.js';
 import PrevizAi from './PrevizAi.jsx';
 import PrevizTimeline from './PrevizTimeline.jsx';
@@ -122,6 +123,29 @@ function SetsWithoutGreybox({ sets }) {
         ))}
       </ul>
     </section>
+  );
+}
+
+/** Server-side Previz work (a greybox draft, an AI proposal), shown the same whoever started it; then the last outcome. */
+function PrevizJobStatus({ jobs }) {
+  const { step, finished } = jobs;
+  if (step) {
+    const determinate = step.max != null;
+    return (
+      <div role="status" aria-label="Previz progress" className="min-w-0 space-y-1 text-xs">
+        <p className="flex items-center gap-1 text-port-text"><Loader2 size={12} aria-hidden="true" className="animate-spin" /> {step.label}</p>
+        <div role="progressbar" aria-label={step.label} aria-valuemin={0} aria-valuemax={determinate ? step.max : undefined} aria-valuenow={determinate ? step.value : undefined}
+          className="h-1.5 w-full max-w-sm overflow-hidden rounded bg-port-border">
+          <div className={`h-full bg-port-accent ${determinate ? '' : 'w-1/3 animate-pulse'}`} style={determinate ? { width: `${Math.round((step.value / step.max) * 100)}%` } : undefined} />
+        </div>
+      </div>
+    );
+  }
+  if (!finished) return null;
+  return (
+    <p role="status" className={`text-xs ${finished.state === 'failed' ? 'text-port-warning' : 'text-port-text-muted'}`}>
+      {finished.state === 'failed' ? `${finished.label} failed: ${finished.summary}` : `${finished.label}: ${finished.summary}`}
+    </p>
   );
 }
 
@@ -341,6 +365,8 @@ export default function PrevizStage({ board }) {
   const save = (next) => { editProjectLocal({ previz: next }); return saveProjectFields({ previz: next }); };
   // The label of the save in flight ('Building…' / 'Syncing…'), null when idle.
   const [building, setBuilding] = useState(null);
+  const jobs = usePrevizJobs(project);
+  const jobRunning = jobs.running.length > 0;
   // World and timeline can come before any cuts exist.
   const savePrevizField = (patch) => save({ ...(project.previz && Array.isArray(project.previz.cuts) ? project.previz : { cuts: [], tracks: [] }), ...patch });
   const build = () => {
@@ -367,9 +393,9 @@ export default function PrevizStage({ board }) {
           A Three.js greybox of each set, cut to each shot's camera and played with the song in the preview. Nothing is rendered, so it's free to change.
         </p>
         <fieldset disabled={locked} className="flex min-w-0 flex-wrap items-center gap-2">
-          <button type="button" className={buttonCls} disabled={!timedShots || !placesLoaded || Boolean(building)} aria-busy={Boolean(building)} onClick={build}>
+          <button type="button" className={buttonCls} disabled={!timedShots || !placesLoaded || Boolean(building) || jobRunning} aria-busy={Boolean(building) || jobRunning} onClick={build}>
             {building ? <Loader2 size={12} aria-hidden="true" className="animate-spin" /> : previz ? <RefreshCw size={12} aria-hidden="true" /> : <Box size={12} aria-hidden="true" />}
-            {building || (previz ? 'Sync with shots' : `Build previz from ${plural(timedShots, 'shot')}`)}
+            {jobRunning ? 'In progress' : building || (previz ? 'Sync with shots' : `Build previz from ${plural(timedShots, 'shot')}`)}
           </button>
           {!timedShots && <span className="text-xs text-port-text-muted">Time the shots on the Storyboard step first.</span>}
           {timedShots > 0 && !placesLoaded && <span className="inline-flex items-center gap-1 text-xs text-port-text-muted"><Loader2 size={12} aria-hidden="true" className="animate-spin" /> Loading the sets…</span>}
@@ -379,6 +405,7 @@ export default function PrevizStage({ board }) {
             </span>
           )}
         </fieldset>
+        <PrevizJobStatus jobs={jobs} />
         <SetsWithoutGreybox sets={missingGreybox} />
         <fieldset disabled={locked} className="min-w-0 space-y-1">
           <legend className="text-xs text-port-text-muted">World</legend>

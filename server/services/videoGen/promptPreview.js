@@ -17,6 +17,7 @@ import { RUNWAY_FORM_REFERENCE_LABEL } from '../../lib/runwayVideoModels.js';
 import { hostedReferenceInputsError, referenceImageUploadsError, resolveRequestedVideoBackend } from './prepareParams.js';
 import { VIDEO_GEN_LOCAL_ONLY_FIELD_NAMES, REFERENCE_AUDIO_FIELDS, VIDEO_REFERENCE_IMAGE_FIELDS, videoReferenceImageSlots } from './requestFields.js';
 import { grokVideoSentPrompt } from './grok.js';
+import { musicVideoFrameGenSize } from '../../lib/musicVideoAspect.js';
 import { resolveStoryboardGuidanceInputs, storyboardGuidanceRequestError } from './storyboardGuidance.js';
 import { falVideoSentPrompt } from './fal.js';
 import { musicVideoClipReferenceCapacity } from '../../lib/musicVideoConditioning.js';
@@ -71,6 +72,7 @@ export async function previewVideoPrompt({ previewUploads = [], ...body }) {
 
   if (backend === VIDEO_GEN_MODE.GROK) {
     let castReferences = [];
+    let shotProject = null;
     const startFrameLayout = body.musicVideo?.startFrameLayout === true;
     if (body.musicVideo) {
       if (!sourceImagePath) throw new ServerError('Music Video scene render needs a resolvable reference frame.', { status: 400, code: 'MUSIC_VIDEO_SOURCE_REQUIRED' });
@@ -79,6 +81,7 @@ export async function previewVideoPrompt({ previewUploads = [], ...body }) {
         import('../musicVideo/submissionGuards.js'), import('../musicVideo/clipCastReferences.js'),
       ]);
       const project = await getProject(body.musicVideo.projectId);
+      shotProject = project;
       const scene = project?.scenes?.find((entry) => entry.sceneId === body.musicVideo.sceneId);
       if (!scene) throw new ServerError('The requested music video shot no longer exists.', { status: 404, code: 'MUSIC_VIDEO_SCENE_NOT_FOUND' });
       const referenceError = hostedReferenceInputsError({ backend, body, uploads });
@@ -98,9 +101,12 @@ export async function previewVideoPrompt({ previewUploads = [], ...body }) {
       throw new ServerError(`Grok can send at most ${castReferenceLimit} combined clip references.`,
         { status: 400, code: 'VIDEO_REFERENCE_IMAGES_TOO_MANY' });
     }
+    // The size submission gives an unsized shot (prepareParams), so the preview names the same resolution.
+    const grokSize = body.width == null && body.height == null && shotProject
+      ? musicVideoFrameGenSize(shotProject) : { width: body.width, height: body.height };
     return { backend, ...grokVideoSentPrompt({ startFrameLayout,
       prompt, negativePrompt: body.negativePrompt,
-      aspectRatio: settings.imageGen?.grok?.aspectRatio, width: body.width, height: body.height,
+      aspectRatio: settings.imageGen?.grok?.aspectRatio, ...grokSize,
       duration: body.grokDuration, sourceImagePath, scratchDir: join(tmpdir(), 'portos-grok-video-<job>'), promptAdditions, castReferences, ...guidance,
     }).record };
   }

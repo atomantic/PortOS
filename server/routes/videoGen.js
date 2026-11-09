@@ -64,7 +64,7 @@ import { enqueueLtxUpscale } from '../services/videoGen/upscaleJob.js';
 import { quoteTopaz } from '../services/videoGen/topazQuote.js';
 import { assertNoPendingTopaz, enqueueTopazUpscale, reconcileTopazStatus, recoverTopazResult } from '../services/videoGen/topazJob.js';
 import { enqueueStitch } from '../services/videoGen/stitchJob.js';
-import { trimHistoryItemStart } from '../services/videoGen/trimStart.js';
+import { trimHistoryItem } from '../services/videoGen/trim.js';
 import { cleanupMultipartTemp } from '../services/videoGen/prepareParams.js';
 import { submitVideoGenJob } from '../services/videoGen/submitJob.js';
 import { PREVIEW_UPLOAD_FIELDS, previewVideoPrompt } from '../services/videoGen/promptPreview.js';
@@ -1560,14 +1560,19 @@ router.post('/upscale/:id', asyncHandler(async (req, res) => {
   res.json({ ok: true, video: entry });
 }));
 
-// Keep a clip from a later frame on (a start trim). Like an upscale, it writes
-// a NEW gallery row and leaves the source clip untouched.
-const trimStartBodySchema = z.object({ startSec: z.number().finite().positive().max(3600) });
-router.post('/history/:id/trim-start', asyncHandler(async (req, res) => {
+// Keep a frame range of a clip: `startSec` drops the frames before it, `endSec`
+// the frames from it on. Like an upscale, it writes a NEW gallery row and
+// leaves the source clip untouched.
+const trimBodySchema = z.object({
+  startSec: z.number().finite().positive().max(3600).optional(),
+  endSec: z.number().finite().positive().max(3600).optional(),
+}).refine((b) => b.startSec !== undefined || b.endSec !== undefined, { message: 'startSec or endSec is required' })
+  .refine((b) => b.startSec === undefined || b.endSec === undefined || b.endSec > b.startSec, { message: 'endSec must be after startSec', path: ['endSec'] });
+router.post('/history/:id/trim', asyncHandler(async (req, res) => {
   const parsed = historyIdSchema.safeParse(req.params.id);
   if (!parsed.success) failValidation(parsed);
-  const body = validateRequest(trimStartBodySchema, req.body ?? {});
-  res.json({ ok: true, video: await trimHistoryItemStart(parsed.data, body) });
+  const body = validateRequest(trimBodySchema, req.body ?? {});
+  res.json({ ok: true, video: await trimHistoryItem(parsed.data, body) });
 }));
 
 const stitchBodySchema = z.object({

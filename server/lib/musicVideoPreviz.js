@@ -195,6 +195,16 @@ function cutPeople(cut) {
  * the camera's own figure marks in order, then a row across the view; the holder
  * stands where the camera is, facing what it looks at.
  */
+/** Ground height under (x, z): the y of the greybox anchor nearest in plan, 0 when the set has none. */
+function groundHeightAt(greybox, x, z) {
+  let best = null;
+  for (const anchor of greybox?.anchors || []) {
+    const d = Math.hypot(anchor.position[0] - x, anchor.position[2] - z);
+    if (!best || d < best.d) best = { d, y: anchor.position[1] || 0 };
+  }
+  return best ? best.y : 0;
+}
+
 function seedMarks(cut, greybox, people) {
   const view = (greybox?.shots || []).find((shot) => shot.id === cut.viewShotId) || null;
   const anchors = new Map((greybox?.anchors || []).map((anchor) => [anchor.id, anchor]));
@@ -213,15 +223,17 @@ function seedMarks(cut, greybox, people) {
   shown.forEach((id, i) => {
     const anchor = figureMarks[i];
     if (anchor) {
-      marks.set(id, { position: [anchor.position[0], 0, anchor.position[2]], facingDegrees: anchor.facingDegrees ?? 0 });
+      marks.set(id, { position: [anchor.position[0], anchor.position[1] || 0, anchor.position[2]], facingDegrees: anchor.facingDegrees ?? 0 });
       return;
     }
     const slot = i - figureMarks.length - (rowCount - 1) / 2;
-    const position = [round(center[0] + across[0] * slot * FIGURE_SPACING), 0, round(center[2] + across[2] * slot * FIGURE_SPACING)];
+    const x = round(center[0] + across[0] * slot * FIGURE_SPACING);
+    const z = round(center[2] + across[2] * slot * FIGURE_SPACING);
+    const position = [x, groundHeightAt(greybox, x, z), z];
     marks.set(id, { position, facingDegrees: facingToward(position, cam) });
   });
   if (cut.holderSubjectId) {
-    marks.set(cut.holderSubjectId, { position: [cam[0], 0, cam[2]], facingDegrees: facingToward(cam, target) });
+    marks.set(cut.holderSubjectId, { position: [cam[0], groundHeightAt(greybox, cam[0], cam[2]), cam[2]], facingDegrees: facingToward(cam, target) });
   }
   return marks;
 }
@@ -391,13 +403,13 @@ function timelineFrame(project, cut, timing, songTime, t, style, storyCamera, ti
     visible: actor.subjectId !== cut.holderSubjectId && (!visibleIds || visibleIds.has(actor.subjectId)),
   }));
   const aimActor = cut.aimSubjectId ? actors.find((actor) => actor.subjectId === cut.aimSubjectId) : null;
-  const aim = aimActor ? [aimActor.position[0], CHEST_HEIGHT[aimActor.pose], aimActor.position[2]] : null;
+  const aim = aimActor ? [aimActor.position[0], aimActor.position[1] + CHEST_HEIGHT[aimActor.pose], aimActor.position[2]] : null;
   const holder = actors.find((actor) => actor.holder) || null;
   const shown = actors.filter((actor) => actor.visible);
   const center = shown.length ? [0, 1, 2].map((i) => shown.reduce((sum, actor) => sum + actor.position[i], 0) / shown.length) : null;
   let camera;
   if (holder) {
-    const position = [holder.position[0], EYE_HEIGHT[holder.pose], holder.position[2]];
+    const position = [holder.position[0], holder.position[1] + EYE_HEIGHT[holder.pose], holder.position[2]];
     const dir = facingDir(holder.facingDegrees);
     camera = { position, target: aimedTarget(cut, timing, t, [position[0] + dir[0] * 5, position[1], position[2] + dir[2] * 5], aim) };
   } else {
@@ -467,11 +479,13 @@ export function previzFrameAt(project, loadedPlaces, songTime, timelineWorld = n
   const holder = cut.holderSubjectId ? actors.find((actor) => actor.holder) : null;
   let camera;
   if (holder) {
-    const height = view ? view.position[1] : EYE_HEIGHT[holder.pose];
+    // The view's y values are absolute; measure them from the ground under the view so the holder's feet set the height.
+    const viewGround = view ? groundHeightAt(greybox, view.position[0], view.position[2]) : 0;
+    const height = view ? view.position[1] - viewGround : EYE_HEIGHT[holder.pose];
     const position = [holder.position[0], holder.position[1] + height, holder.position[2]];
     const reach = view ? Math.hypot(view.target[0] - view.position[0], view.target[2] - view.position[2]) || 5 : 5;
     const dir = facingDir(holder.facingDegrees);
-    const ahead = [position[0] + dir[0] * reach, view ? view.target[1] : position[1], position[2] + dir[2] * reach];
+    const ahead = [position[0] + dir[0] * reach, view ? view.target[1] - viewGround + holder.position[1] : position[1], position[2] + dir[2] * reach];
     camera = { position, target: aimedTarget(cut, timing, t, ahead, aim) };
   } else if (view) {
     camera = { position: view.position, target: aimedTarget(cut, timing, t, view.target, aim) };

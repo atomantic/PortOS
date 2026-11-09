@@ -338,6 +338,9 @@ export const saveCatalogWorld = (id, world, { source, ...options } = {}) =>
 export const captureCatalogGreyboxShot = (id, shotId, dataBase64, options) =>
   request(`/catalog/ingredients/${enc(id)}/greybox/shots/${enc(shotId)}/capture`, { method: 'POST', body: JSON.stringify({ dataBase64 }), ...options });
 
+// Previz work in flight (greybox drafts, AI proposals) and recently finished: `{ jobs }`.
+export const getCatalogPrevizJobs = (options) => request('/catalog/previz-jobs', options);
+
 // Environments › Photoreal: the place's greybox built in Blender and rendered
 // from saved cameras. Status reads memory and files only; render starts Blender.
 export const getCatalogPhotoreal = (id, options) =>
