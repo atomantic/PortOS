@@ -146,7 +146,7 @@ function legacyFrameState(scene, take) {
 }
 
 /** Selected-frame validity for one image or end-frame take. Null for any other kind. */
-export function imageFrameDependencyState(project, scene, take) {
+function imageFrameDependencyState(project, scene, take) {
   if (take?.kind !== 'image' && take?.kind !== 'endImage') return null;
   if (take.frameDependencies) return frameStatus(frameDependencyChanges(project, scene, take.frameDependencies));
   return legacyFrameState(scene, take);
