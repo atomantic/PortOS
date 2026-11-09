@@ -780,6 +780,7 @@ export default function MusicVideo() {
           <ProjectWorkspace
             key={selected.id}
             selected={selected}
+            unsavedSceneFields={unsavedSceneFields}
             tracks={tracks}
             trackLibrary={trackLibrary}
             trackName={trackName}
@@ -824,7 +825,7 @@ export default function MusicVideo() {
 function ProjectWorkspace({
   selected, tracks, trackLibrary, trackName, youtube, separation, lyricAlign, midi, renderJob, videoSettings, publishing, analyzing, cloning,
   replaceProject, patchProject, patchScene, openProject, prepareSong, onAnalyze, onClone, onTrackImported,
-  onRename, renameForm, deletion,
+  onRename, renameForm, deletion, unsavedSceneFields,
 }) {
   const { projectId: routeProjectId, artifactId: routeArtifactId, stage: routeStage, sceneId: routeSceneId } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
