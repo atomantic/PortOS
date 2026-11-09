@@ -14,4 +14,4 @@ mlx-metal==0.31.2
 # `numbers` does not define), so `mflux-generate` and `mflux-train` fail at
 # import. Pillow 13 is the first release without the 12.x advisories; only
 # mflux 0.24+ supports it, and that needs mlx 0.32.
-pillow==12.3.0
+pillow==13.0.0
