@@ -520,6 +520,7 @@ export default function App() {
                 bookmarks + in-app deep-links working. */}
             <Route path="music-video" element={<PrefixRedirect from={MEDIA_MUSIC_VIDEO_PREFIX} to="/music-video" />} />
             <Route path="music-video/:projectId" element={<PrefixRedirect from={MEDIA_MUSIC_VIDEO_PREFIX} to="/music-video" />} />
+            <Route path="music-video/*" element={<PrefixRedirect from={MEDIA_MUSIC_VIDEO_PREFIX} to="/music-video" />} />
             {/* Sprites live at /sprites (Create sidebar link). These redirects
                 keep legacy /media/sprites bookmarks working after the MediaGen
                 tab was removed. */}
