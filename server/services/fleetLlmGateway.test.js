@@ -15,9 +15,16 @@ afterEach(async () => {
 });
 async function setup(options = {}) {
   const received = [];
+  const runtime = { running: 1, generated: 0, silent: false };
   const upstream = http.createServer((req, res) => {
+    if (req.url === '/metrics') {
+      res.writeHead(200, { 'Content-Type': 'text/plain' });
+      res.end(`# TYPE vllm:num_requests_running gauge\nvllm:num_requests_running{engine="0"} ${runtime.running}.0\nvllm:prompt_tokens_total{engine="0"} 10.0\nvllm:generation_tokens_total{engine="0"} ${runtime.generated}.0\n`);
+      return;
+    }
     if (req.url === '/v1/models') { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end('{"data":[{"id":"example-model"}]}'); return; }
     received.push({ req, res });
+    if (runtime.silent) return;
     res.writeHead(200, { 'Content-Type': 'text/event-stream' });
     res.write('data: {"choices":[]}\n\n');
   });
@@ -27,7 +34,7 @@ async function setup(options = {}) {
   const base = await listen(gateway.server);
   resources.push(gateway.close);
   const post = (signal, body = '{}') => fetch(base + '/v1/chat/completions', { method: 'POST', headers, body, signal });
-  return { received, gateway, base, post };
+  return { received, gateway, base, post, runtime };
 }
 
 describe('shared inference HTTP boundary', () => {
@@ -151,5 +158,98 @@ describe('inbound usage accounting', () => {
     expect((await fetch(base + '/v1/models', { headers })).status).toBe(200);
     expect(usage.openCount()).toBe(0);
     expect(usage.closed).toHaveLength(0);
+  });
+});
+
+describe('stalled runtime watchdog', () => {
+  // The fake upstream accepts a generation and never answers it, as the wedged
+  // runtime did; only its /metrics counters say whether it is making progress.
+  const stallOptions = (clock, extra = {}) => ({ stallPollMs: 0, stalledAfterMs: 120000, restartCooldownMs: 600000, now: () => clock.t, ...extra });
+  const hangingRequest = async (ctx) => {
+    const pending = ctx.post(undefined, JSON.stringify({ model: 'qwen3.8-27b' })).catch(() => null);
+    await vi.waitFor(() => expect(ctx.received).toHaveLength(1));
+    return pending;
+  };
+  const ledger = () => {
+    const closed = [];
+    return { closed, beginRequest: () => ({}), endRequest: (_handle, detail) => closed.push(detail) };
+  };
+
+  it('marks a runtime whose counters never move as stalled, 503s new requests and closes the stalled job', async () => {
+    const clock = { t: 1_000_000 };
+    const usage = ledger();
+    const restarts = [];
+    const ctx = await setup({ usage, restartRuntime: () => restarts.push(clock.t), ...stallOptions(clock) });
+    ctx.runtime.silent = true;
+    const stuck = hangingRequest(ctx);
+    await vi.waitFor(() => expect(ctx.gateway.status().active).toBe(1));
+    const queued = ctx.post().catch(() => null);
+    await vi.waitFor(() => expect(ctx.gateway.status().queued).toBe(1));
+
+    await ctx.gateway.pollStall();
+    clock.t += 119000;
+    await ctx.gateway.pollStall();
+    expect(ctx.gateway.status().stalled).toBe(false);
+    clock.t += 1000;
+    await ctx.gateway.pollStall();
+
+    expect(ctx.gateway.status()).toMatchObject({ stalled: true, stalledSince: new Date(clock.t).toISOString(), queued: 0 });
+    expect((await queued)?.status).toBe(503);
+    expect((await stuck)?.status).toBe(502);
+    await vi.waitFor(() => expect(ctx.gateway.status().active).toBe(0));
+    expect(usage.closed.map((entry) => entry.status)).toEqual(expect.arrayContaining([503, 502]));
+    expect(restarts).toHaveLength(1);
+
+    const refused = await ctx.post();
+    expect(refused.status).toBe(503);
+    expect((await refused.json()).error.message).toContain('not generating');
+    expect(ctx.received).toHaveLength(1);
+  });
+
+  it('never flags a slow legitimate generation whose token counter advances', async () => {
+    const clock = { t: 5_000 };
+    const ctx = await setup(stallOptions(clock));
+    const slow = hangingRequest(ctx);
+    await vi.waitFor(() => expect(ctx.gateway.status().active).toBe(1));
+    for (let i = 0; i < 6; i += 1) {
+      ctx.runtime.generated += 50;
+      await ctx.gateway.pollStall();
+      clock.t += 60000;
+    }
+    expect(ctx.gateway.status().stalled).toBe(false);
+    ctx.received[0].res.end('data: [DONE]\n\n');
+    expect((await (await slow)?.text())).toContain('DONE');
+  });
+
+  it('restarts at most once per cooldown and survives a failing restart', async () => {
+    const clock = { t: 0 };
+    const restart = vi.fn().mockRejectedValue(new Error('docker unavailable'));
+    const ctx = await setup({ restartRuntime: restart, ...stallOptions(clock) });
+    const stallOnce = async () => {
+      const before = ctx.received.length;
+      const pending = ctx.post().catch(() => null);
+      await vi.waitFor(() => expect(ctx.received).toHaveLength(before + 1));
+      await ctx.gateway.pollStall();
+      clock.t += 120000;
+      await ctx.gateway.pollStall();
+      await pending;
+    };
+    await stallOnce();
+    expect(restart).toHaveBeenCalledTimes(1);
+    expect(ctx.gateway.status().stalled).toBe(true);
+
+    // Token movement proves the runtime is alive again; a second stall inside the cooldown is surfaced but not restarted.
+    ctx.runtime.generated += 1;
+    await ctx.gateway.pollStall();
+    expect(ctx.gateway.status().stalled).toBe(false);
+    await stallOnce();
+    expect(ctx.gateway.status().stalled).toBe(true);
+    expect(restart).toHaveBeenCalledTimes(1);
+
+    ctx.runtime.generated += 1;
+    await ctx.gateway.pollStall();
+    clock.t += 600000;
+    await stallOnce();
+    expect(restart).toHaveBeenCalledTimes(2);
   });
 });
