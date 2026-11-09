@@ -32,6 +32,18 @@ describe('probeDependencyManifests', () => {
     expect((await probeDependencyManifests(await mk({ 'requirements.txt': '# none\n\n' }))).hasDependencies).toBe(false);
     expect((await probeDependencyManifests(await mk({ 'requirements.txt': 'flask==3\n' }))).hasDependencies).toBe(true);
   });
+  it('counts third-party GitHub Actions and dependency-bot configs as dependencies', async () => {
+    const wf = (uses) => ({ '.github/workflows/ci.yml': `jobs:\n  t:\n    steps:\n      - uses: ${uses}\n` });
+    expect((await probeDependencyManifests(await mk(wf('actions/checkout@v4')))).hasDependencies).toBe(true);
+    expect((await probeDependencyManifests(await mk(wf('./.github/actions/local')))).hasDependencies).toBe(false);
+    expect((await probeDependencyManifests(await mk({ '.github/dependabot.yml': 'version: 2\n' }))).hasDependencies).toBe(true);
+    expect((await probeDependencyManifests(await mk({ 'renovate.json': '{}' }))).hasDependencies).toBe(true);
+  });
+  it('detects Swift packages an Xcode project adds without a Package.swift', async () => {
+    const pbx = (body) => ({ 'App.xcodeproj/project.pbxproj': `// !$*UTF8*$!\n{ objects = { ${body} }; }\n` });
+    expect((await probeDependencyManifests(await mk(pbx('A1 /* XCRemoteSwiftPackageReference "swift-log" */ = { isa = XCRemoteSwiftPackageReference; };')))).hasDependencies).toBe(true);
+    expect((await probeDependencyManifests(await mk(pbx('B1 = { isa = PBXProject; };')))).hasDependencies).toBe(false);
+  });
   it('fails open on an unparsable manifest or missing path', async () => {
     expect((await probeDependencyManifests(await mk({ 'package.json': '{bad' }))).hasDependencies).toBe(true);
     expect((await probeDependencyManifests('/nonexistent/path-xyz')).hasDependencies).toBe(true);
