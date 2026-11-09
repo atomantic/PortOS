@@ -6,8 +6,8 @@ lock (`scripts/requirements-acestep-mlx.lock.txt`). Windows (Git Bash) and Linux
 are supported on x86_64 and need [uv](https://docs.astral.sh/uv/), which
 provisions a dedicated managed CPython 3.11; Repair rebuilds other Python minors
 and Conda-based environments. Intel macOS and non-x86_64 Windows/Linux hosts
-have no lock and are refused. ACE-Step 1.5 is a separate runtime and is not
-covered here.
+have no lock and are refused. ACE-Step 1.5 is a separate runtime: see
+[ACESTEP15_CUDA.md](./ACESTEP15_CUDA.md).
 
 The installer selects `scripts/requirements-acestep-cuda-windows.lock.txt` or
 `scripts/requirements-acestep-cuda-linux.lock.txt` and runs
