@@ -106,6 +106,13 @@ describe('errorHandler.js', () => {
       expect(normalized.code).toBe('NOT_FOUND');
     });
 
+    it('reports an escaped AbortSignal.timeout() rejection as a 504 with a readable message', () => {
+      const normalized = normalizeError(new DOMException('The operation was aborted due to timeout', 'TimeoutError'));
+      expect(normalized).toMatchObject({ status: 504, code: 'GATEWAY_TIMEOUT' });
+      expect(normalized.message).toMatch(/did not answer in time/);
+      expect(normalized.originalMessage).toBe('The operation was aborted due to timeout');
+    });
+
     it('should preserve code from Error if present', () => {
       const error = new Error('Conflict');
       error.code = 'DUPLICATE_ENTRY';

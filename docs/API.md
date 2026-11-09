@@ -1084,6 +1084,7 @@ agent-tool resource advertises):
 | 500 | `INTERNAL_ERROR` | Server error (also the fallback for any unlisted status) |
 | 502 | `BAD_GATEWAY` | An upstream service failed |
 | 503 | `SERVICE_UNAVAILABLE` | A dependency is not available |
+| 504 | `GATEWAY_TIMEOUT` | A service PortOS called did not answer in time |
 
 Zod request validation (`validateRequest`) answers `400` with
 `VALIDATION_ERROR` and the field errors in `context.details`. Domain routes may
