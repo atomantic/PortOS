@@ -1,0 +1,62 @@
+# FastVideo MLX (Apple Silicon) runtime: direct pins for ~/.portos/fastvideo/.venv.
+# Installed only from requirements-fastvideo-mlx.lock.txt, which pins and
+# hashes every transitive package. After editing this file, regenerate the lock
+# with the command in the lock header.
+#
+# FastVideo is checked out from hao-ai-lab/FastVideo at FASTVIDEO_PIN and
+# installed with `uv pip install --no-deps -e ~/.portos/fastvideo` after the lock
+# sync. Dependencies match the MLX video generation runtime stack with OSV-clean
+# pins (Pillow 13.0.0, torch 2.15.0, accelerate 1.15.0, diffusers 0.42.1,
+# filelock 4.2.1, mlx 0.32.4).
+torch==2.15.0
+torchvision==0.29.2
+torchaudio==2.11.1
+accelerate==1.15.0
+diffusers==0.42.1
+peft==0.21.2
+timm==1.0.29
+mlx==0.32.4
+mlx-metal==0.32.4
+pillow==13.0.0
+filelock==4.2.1
+tokenizers==0.22.2
+transformers==5.15.1
+huggingface-hub[hf_xet]==1.33.0
+safetensors==0.8.0
+sentencepiece==0.2.2
+protobuf==7.36.2
+PyYAML==6.0.3
+tqdm==4.70.1
+scipy>=1.14.1
+opencv-python>=4.10.0.84
+imageio>=2.36.0
+imageio-ffmpeg>=0.5.1
+einops
+loguru
+aiohttp
+aiofiles
+cloudpickle
+omegaconf
+gpustat
+wheel
+torchdata
+pyarrow
+datasets>=4.0.0
+av
+torchcodec
+ray>=2.49.1
+ftfy>=6.3.1
+fastapi>=0.141.1
+orjson>=3.9.0
+python-multipart>=0.0.18
+uvicorn>=0.41.0
+remote-pdb
+watch
+wandb>=0.21.0
+test-tube>=0.7.5
+pytest
+flask
+flask-restful
+six>=1.16.0
+h5py>=3.12.1
+requests>=2.32.2

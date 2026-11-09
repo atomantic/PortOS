@@ -1322,6 +1322,7 @@ describe('CI test impact planner', () => {
         'scripts/requirements-musicgen-mlx.lock.txt',
         'scripts/requirements-audioldm2-mlx.lock.txt',
         'scripts/requirements-flux2-mlx.lock.txt',
+        'scripts/requirements-fastvideo-mlx.lock.txt',
         'scripts/requirements-muscriptor-mlx.lock.txt',
         'scripts/requirements-mflux-mlx.lock.txt',
         'scripts/requirements-wan22-cuda.txt',
