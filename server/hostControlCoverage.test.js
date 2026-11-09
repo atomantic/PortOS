@@ -1330,6 +1330,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/usage/tokens', CLIENT_TELEMETRY],
   // /api/video-gen
   ['POST /api/video-gen/cancel', REDUCES_EXECUTION],
+  ['DELETE /api/video-gen/overnight/:batchId', REDUCES_EXECUTION],
   ['DELETE /api/video-gen/history/:id', REMOVES_RECORD],
   ['POST /api/video-gen/history/:id/cancel-delete', REDUCES_EXECUTION],
   ['PATCH /api/video-gen/history/:id/prompt', RECORDS],
