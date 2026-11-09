@@ -564,7 +564,12 @@ async function hasUncommittedLockfileDeliverable(task, workspacePath) {
   if (resolveTaskHookType(task) !== 'dependency-updates') return false;
   const { readWorktreeStatus, classifyWorktreeDirt } = await import('./worktreeManager.js');
   const status = await readWorktreeStatus(workspacePath).catch(() => null);
-  return status !== null && classifyWorktreeDirt(status, { preserveLockfiles: true }).hasRealChanges;
+  if (status === null) return false;
+  // A managed app does not ignore PortOS's per-run `.agent-done-<agentId>` sentinel
+  // (only PortOS's own .gitignore does), so it reads as untracked dirt here and
+  // turned every clean no-op dependency-updates run into `pr-missing`.
+  const withoutSentinel = status.split("\n").filter(line => !/^\?\? "?\.agent-done(?:-[^/]*)?"?$/.test(line)).join("\n");
+  return classifyWorktreeDirt(withoutSentinel, { preserveLockfiles: true }).hasRealChanges;
 }
 
 function prVerdictFromObservation(observation) {
