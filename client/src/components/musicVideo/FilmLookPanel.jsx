@@ -41,8 +41,19 @@ function ShotSample({ project, activeSceneId }) {
  */
 export default function FilmLookPanel({ project, activeSceneId = null, onEditLocal, onSave }) {
   const saved = useFilmLookPresets();
+  const overscanId = useId();
   const documentMode = project.composition?.mode === 'document';
   const on = !isFilmLookNeutral(project.filmLook);
+  const overscan = Number.isFinite(project.overscan) && project.overscan > 0 ? project.overscan : 0;
+  // The draft stays as typed until blur, so a value like 4.5 is not rounded away mid-keystroke.
+  const [overscanDraft, setOverscanDraft] = useState(null);
+  const commitOverscan = (raw) => {
+    setOverscanDraft(null);
+    const n = Number(raw);
+    const next = Number.isFinite(n) && n > 0 ? Math.min(8, Math.round(n * 100) / 100) : null;
+    onEditLocal({ overscan: next });
+    onSave({ overscan: next });
+  };
   return (
     <section aria-label="Film look" className="space-y-2 border-t border-port-border pt-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -53,6 +64,14 @@ export default function FilmLookPanel({ project, activeSceneId = null, onEditLoc
       {!documentMode && (
         <p className="text-xs text-port-text-muted">Applied as a finishing pass after the cut is encoded, so the clips themselves never change.</p>
       )}
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <label htmlFor={overscanId} className="text-port-text-muted">Overscan</label>
+        <input id={overscanId} type="number" min={0} max={8} step={0.5} value={overscanDraft ?? String(overscan)}
+          onChange={(event) => setOverscanDraft(event.target.value)}
+          onBlur={(event) => commitOverscan(event.target.value)}
+          className="w-20 min-h-[44px] rounded border border-port-border bg-port-bg px-2 py-1 pointer-fine:sm:min-h-0" />
+        <span className="text-port-text-muted">% of each edge, cropped before the matte and the look</span>
+      </div>
       <ShotSample project={project} activeSceneId={activeSceneId} />
       <FilmLookControls look={project.filmLook} compact saved={saved}
         onChange={(look) => onEditLocal({ filmLook: look })}

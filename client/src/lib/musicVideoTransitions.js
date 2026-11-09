@@ -4,6 +4,7 @@
  * styles and frame placement as the final render.
  */
 export {
+  applyCameraCutDefaults,
   MUSIC_VIDEO_GLITCH_EDGES,
   MUSIC_VIDEO_GLITCH_LENGTHS,
   MUSIC_VIDEO_GLITCH_REPEAT_LIMIT,

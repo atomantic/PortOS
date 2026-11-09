@@ -10,7 +10,7 @@
  */
 import { MUSIC_VIDEO_CUT_EFFECTS, MUSIC_VIDEO_CUT_EFFECT_LABELS, sceneCutEffect } from './musicVideoCutEffects.js';
 import { MUSIC_VIDEO_IMAGE_EFFECTS, MUSIC_VIDEO_IMAGE_EFFECT_LABELS, sceneImageEffect } from './musicVideoImageEffects.js';
-import { MUSIC_VIDEO_TRANSITIONS, MUSIC_VIDEO_TRANSITION_LABELS, sceneTransitions } from './musicVideoTransitions.js';
+import { MUSIC_VIDEO_TRANSITIONS, MUSIC_VIDEO_TRANSITION_LABELS, applyCameraCutDefaults, sceneTransitions } from './musicVideoTransitions.js';
 import { MUSIC_VIDEO_WIPE_LABELS, MUSIC_VIDEO_WIPES } from './musicVideoWipes.js';
 
 /** Where an effect plays in its shot. */
@@ -37,8 +37,9 @@ export const shotEffectLabel = (id) => LABELS.get(id) || id;
  * of the storyboard rows, so a cut effect the row plans counts until the shot
  * sets its own.
  */
-export function shotEffects(scene, { layered = false, planned = null } = {}) {
-  const { transitionIn, transitionOut, wipeIn, wipeOut, shotGlitches = [] } = sceneTransitions(scene);
+export function shotEffects(scene, { layered = false, planned = null, cameras = null } = {}) {
+  const resolved = applyCameraCutDefaults(scene, cameras);
+  const { transitionIn, transitionOut, wipeIn, wipeOut, shotGlitches = [] } = sceneTransitions(resolved);
   const image = sceneImageEffect(scene, { layered });
   const cut = sceneCutEffect(scene, planned?.get(scene?.sceneId) ?? null);
   return {

@@ -24,7 +24,7 @@ const FIELD = 'min-w-0 bg-port-bg border border-port-border rounded px-1 py-1 te
  * or changes a lock. `onVaryWipes(count)` gives this shot and the next ones a
  * non-repeating run of wipes out.
  */
-export default function SceneTransitions({ fieldId, scene, onChange, onVaryWipes = null, isLast = false, disabled = false }) {
+export default function SceneTransitions({ fieldId, scene, onChange, onVaryWipes = null, isLast = false, disabled = false, defaults = null }) {
   const [varyCount, setVaryCount] = useState(VARY_COUNTS[1]);
   const [varying, setVarying] = useState(false);
   const vary = () => {
@@ -36,7 +36,10 @@ export default function SceneTransitions({ fieldId, scene, onChange, onVaryWipes
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         {SIDES.map(([side, glitchKey, wipeKey, label, title]) => {
           const wipe = MUSIC_VIDEO_WIPES.includes(scene[wipeKey]?.style) ? scene[wipeKey] : null;
-          const value = wipe ? wipe.style : MUSIC_VIDEO_TRANSITIONS.includes(scene[glitchKey]) ? scene[glitchKey] : '';
+          const explicit = MUSIC_VIDEO_TRANSITIONS.includes(scene[glitchKey]) ? scene[glitchKey] : null;
+          // Absent inherits the camera. Null is Off and stays off.
+          const inherited = scene[glitchKey] === undefined && !wipe && MUSIC_VIDEO_TRANSITIONS.includes(defaults?.[glitchKey]) ? defaults[glitchKey] : null;
+          const value = wipe ? wipe.style : explicit || inherited || '';
           const pick = (style) => {
             // A cut has a glitch or a wipe: choosing one clears the other when it is set.
             if (MUSIC_VIDEO_WIPES.includes(style)) {
@@ -51,6 +54,7 @@ export default function SceneTransitions({ fieldId, scene, onChange, onVaryWipes
           return (
             <span key={side} className="flex min-w-0 flex-wrap items-center gap-1">
               <label htmlFor={fieldId(`glitch-${side}`)} className={value ? 'text-port-accent' : 'text-port-text-muted'}>{label}</label>
+              {inherited && <span className="text-port-text-muted">from camera</span>}
               <select id={fieldId(`glitch-${side}`)} value={value} disabled={disabled} title={title} onChange={(e) => pick(e.target.value)} className={FIELD}>
                 <option value="">Off</option>
                 <optgroup label="Glitches">

@@ -42,6 +42,7 @@ import { ensureSceneTakes, keepCodeClipWithItsClip, TAKE_SLOT } from './takes.js
 import { normalizeComposition, invalidateCompositionTiming, withStoredCompositionDocument } from './composition.js';
 import { normalizeSoundBed } from './soundBed.js';
 import { normalizeFilmLook } from '../../lib/filmLook.js';
+import { normalizeOverscan } from '../../lib/musicVideoFilmLook.js';
 import { normalizeProductionMedium } from '../../lib/musicVideoProductionMedium.js';
 import { stillMoveForCamera } from '../../lib/cameraMovements.js';
 import { normalizeTitleCard } from '../../lib/musicVideoTitleCard.js';
@@ -125,6 +126,7 @@ export function buildProjectRecord(input, { id, now }) {
     uploadedAudioFilename = null, concept = null,
     videoSettings = {},
   } = input;
+  const overscan = normalizeOverscan(input.overscan);
   return {
     id,
     name,
@@ -194,6 +196,7 @@ export function buildProjectRecord(input, { id, now }) {
     soundBed: input.soundBed ? normalizeSoundBed(input.soundBed) : null,
     // The finishing film look every preview, render and baked still is viewed through; null = none.
     filmLook: input.filmLook ? normalizeFilmLook(input.filmLook) : null,
+    ...(overscan != null ? { overscan } : {}),
     // The handmade medium (stepped holds, compositor-only lettering); null = none.
     ...(normalizeProductionMedium(input.productionMedium) ? { productionMedium: normalizeProductionMedium(input.productionMedium) } : {}),
     // The opening title card (song, artist, year over the opener); null = none.
@@ -416,6 +419,12 @@ export function applyProjectPatch(project, patch) {
     ...('soundBed' in patch ? { soundBed: normalizeSoundBed(patch.soundBed) } : {}),
     // The film look is replaced whole (one bounded record); null clears it.
     ...('filmLook' in patch ? { filmLook: normalizeFilmLook(patch.filmLook) } : {}),
+    ...('overscan' in patch ? { overscan: normalizeOverscan(patch.overscan) } : {}),
+    ...(Array.isArray(patch.cameras) ? { cameras: patch.cameras.map((camera) => (
+      camera && typeof camera === 'object' && 'filmLook' in camera
+        ? { ...camera, filmLook: camera.filmLook == null ? null : normalizeFilmLook(camera.filmLook) }
+        : camera
+    )) } : {}),
     ...('productionMedium' in patch ? { productionMedium: normalizeProductionMedium(patch.productionMedium) } : {}),
     // The title card is replaced whole (one bounded record); null clears it.
     ...('titleCard' in patch ? { titleCard: normalizeTitleCard(patch.titleCard) } : {}),

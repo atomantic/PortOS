@@ -30,7 +30,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { AAC_ENCODE_ARGS, runFfmpegProcess, supportsSetparamsFilter } from '../../lib/ffmpeg.js';
 import { filterGraphViaFile } from '../../lib/ffmpegFilterGraph.js';
 import { isFilmLookNeutral, normalizeFilmLook } from '../../lib/filmLook.js';
-import { shotFilmLook } from '../../lib/musicVideoFilmLook.js';
+import { shotCamera, shotFilmLook } from '../../lib/musicVideoFilmLook.js';
 import { endingParts } from '../../lib/musicVideoEnding.js';
 import { AUDIO_NORM, buildAudioBedMix } from '../videoTimeline/audioBedMix.js';
 import { buildMusicVideoFfmpegArgs, planMusicVideoRender } from './render.js';
@@ -76,7 +76,11 @@ const hash = (value) => createHash('sha256').update(JSON.stringify(value)).diges
 const segmentLookKey = ({ baseKey, startSec }, look, fps) => hash({ v: SHOT_SEGMENT_VERSION, baseKey, look, startSec, fps });
 const segmentLookPath = (plan, segment, look) => join(plan.dir, `${segment.outro ? 'outro-' : ''}${segment.baseKey}-${segmentLookKey(segment, look, plan.fps)}.mp4`);
 
-const hasOwnLook = scene => !!(scene?.filmLook && typeof scene.filmLook === 'object');
+// A present shot or camera look, including an explicit Clean, does not follow the video-wide look cache.
+const hasOwnLook = (project, scene) => {
+  const cameraLook = shotCamera(project, scene)?.filmLook;
+  return !!((scene?.filmLook && typeof scene.filmLook === 'object') || (cameraLook && typeof cameraLook === 'object'));
+};
 
 /**
  * `value` with every timed entry (an object carrying a finite `startSec`) that
@@ -152,7 +156,7 @@ export async function planShotSegments(project, options) {
     const lookKey = look ? segmentLookKey({ baseKey, startSec: built.startSec }, look, fps) : null;
     segments.push({
       index, sceneId: built.shotId, layer: built.layer, startSec: built.startSec, endSec: built.endSec,
-      startFrame, frames: built.frames, window, segment, look, baseKey, lookKey, ownLook: hasOwnLook(scene),
+      startFrame, frames: built.frames, window, segment, look, baseKey, lookKey, ownLook: hasOwnLook(project, scene),
       basePath: join(dir, `${baseKey}.mp4`),
       path: join(dir, lookKey ? `${baseKey}-${lookKey}.mp4` : `${baseKey}.mp4`),
     });
@@ -195,7 +199,7 @@ async function planColdOpenSegments(project, coldOpen, { dir, width, height, fps
     const lookKey = look ? segmentLookKey({ baseKey, startSec }, look, fps) : null;
     segments.push({
       index, coldOpen: true, sceneId: built.shotId, layer: built.layer, startSec, endSec: built.endSec - leadSec,
-      startFrame: Math.round(startSec * fps), frames: built.frames, segment, look, baseKey, lookKey, ownLook: hasOwnLook(scene),
+      startFrame: Math.round(startSec * fps), frames: built.frames, segment, look, baseKey, lookKey, ownLook: hasOwnLook(project, scene),
       basePath: join(dir, `${baseKey}.mp4`),
       path: join(dir, lookKey ? `${baseKey}-${lookKey}.mp4` : `${baseKey}.mp4`),
     });

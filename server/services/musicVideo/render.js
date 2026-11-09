@@ -28,7 +28,8 @@ import { musicVideoGradeFilter } from '../../lib/musicVideoGrade.js';
 import { spawn } from '../../lib/childProcess.js';
 import { existsSync } from 'fs';
 import { unlink } from 'fs/promises';
-import { basename, join } from 'path';
+import { basename, dirname, join } from 'path';
+import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
@@ -66,7 +67,8 @@ import { intercutClips } from './intercut.js';
 import { applyFrameHold, projectFrameHold } from './frameHold.js';
 import { rendersIntercut, usesLoudTierEverywhere } from '../../lib/musicVideoProductionMedium.js';
 import { cutEffectCuts, plannedTransitions, sceneCutEffect } from '../../lib/musicVideoCutEffects.js';
-import { imageEffectGlitchFrames, mergeGlitchFrames, musicVideoTransitionFilter, sceneTransitions, shotGlitchFrames, transitionGlitchFrames } from '../../lib/musicVideoTransitions.js';
+import { applyCameraCutDefaults, imageEffectGlitchFrames, mergeGlitchFrames, musicVideoTransitionFilter, sceneTransitions, shotGlitchFrames, transitionGlitchFrames } from '../../lib/musicVideoTransitions.js';
+import { MUSIC_VIDEO_CAMERA_FRAME_ASPECTS, cameraFrameWindow, musicVideoOverscan, shotCamera } from '../../lib/musicVideoFilmLook.js';
 import { sumExpr } from '../../lib/ffmpegExpr.js';
 import { musicVideoWipeFilter, wipeCuts } from '../../lib/musicVideoWipes.js';
 import { stillMoveForCamera } from '../../lib/cameraMovements.js';
@@ -364,10 +366,11 @@ export async function resolveSceneClips(project, { layered = false, stillForMiss
   const clips = [];
   for (const scene of scenes) {
     const layer = standIn(scene) ? 'still' : sceneVisualLayer(scene, { layered });
+    const shot = applyCameraCutDefaults(scene, project.cameras);
     const { clip, problem } = layer === 'footage'
-      ? await footageClip(scene, historyMap.get(scene.videoHistoryId), planned)
-      : sectionClip(scene, layer, planned, { layered });
-    if (clip) clips.push(clip);
+      ? await footageClip(shot, historyMap.get(scene.videoHistoryId), planned)
+      : sectionClip(shot, layer, planned, { layered });
+    if (clip) clips.push(withCameraPicture(clip, scene, project));
     else problems[problem].push(scene);
   }
   const missingShots = problems['missing-clip'];
@@ -481,6 +484,67 @@ function footageFrameFit(scene) {
 const DEFAULT_CANVAS = Object.freeze({ width: 1280, height: 720, fps: 24 });
 const evenPx = (n) => Math.max(2, Math.round(n / 2) * 2);
 
+// Bundled pixel face for the camcorder date. A missing font still draws the record box.
+const OSD_FONT = join(dirname(fileURLToPath(import.meta.url)), '../../../client/public/fonts/GeistPixel-Square.ttf');
+let osdFontCached;
+const osdFont = () => {
+  if (osdFontCached === undefined) osdFontCached = existsSync(OSD_FONT) ? OSD_FONT : null;
+  return osdFontCached;
+};
+const filterQuoted = (value) => String(value).replace(/\\/g, '/').replace(/'/g, '').replace(/:/g, '\\:');
+const osdDateText = (value) => String(value || '').replace(/[^0-9A-Za-z :./-]/g, '').slice(0, 24).trim();
+
+/** Crop this percent off each edge before the picture is fitted. Empty when there is nothing to hide. */
+function overscanPrefix(overscan) {
+  const n = Number(overscan);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  const keep = Math.round((100 - 2 * Math.min(8, n)) * 1000) / 100000;
+  return keep > 0 && keep < 1 ? `crop=iw*${keep}:ih*${keep}:(iw-ow)/2:(ih-oh)/2,` : '';
+}
+
+/** The picture rectangle inside the video canvas. Full canvas when this camera has no different frame. */
+function pictureBox(c, canonW, canonH) {
+  const window = c.cameraFrame?.aspect ? cameraFrameWindow(canonW, canonH, c.cameraFrame.aspect) : null;
+  if (!window) return { w: canonW, h: canonH, framed: false, matte: '000000' };
+  const matte = String(c.cameraFrame.matte || '').replace('#', '');
+  return { w: window.w, h: window.h, framed: true, matte: /^[0-9a-f]{6}$/i.test(matte) ? matte.toLowerCase() : '000000' };
+}
+
+function osdFilter(osd, box) {
+  if (!osd?.record && !osd?.date) return '';
+  const font = osdFont();
+  const size = Math.max(12, Math.round(Math.min(box.w, box.h) * 0.028));
+  const margin = Math.max(8, Math.round(size * 0.8));
+  const parts = [];
+  if (osd.record) {
+    parts.push(`drawbox=x=${margin}:y=${margin}:w=${size}:h=${size}:color=red@0.95:t=fill`);
+    if (font) parts.push(`drawtext=fontfile='${filterQuoted(font)}':text='REC':x=${margin + size + 6}:y=${margin}:fontsize=${size}:fontcolor=white`);
+  }
+  const date = osdDateText(osd.date);
+  if (date && font) {
+    parts.push(`drawtext=fontfile='${filterQuoted(font)}':text='${filterQuoted(date)}':x=${margin}:y=${Math.max(margin, box.h - size - margin)}:fontsize=${size}:fontcolor=white`);
+  }
+  return parts.join(',');
+}
+
+/** Camera frame, overscan and OSD on a footage or still clip. Cards stay full frame, and an unset camera leaves the chain unchanged. */
+function withCameraPicture(clip, scene, project) {
+  if (!clip || clip.layer === 'card') return clip;
+  const camera = shotCamera(project, scene);
+  const aspect = MUSIC_VIDEO_CAMERA_FRAME_ASPECTS.includes(camera?.frame?.aspect) ? camera.frame.aspect : null;
+  const overscan = musicVideoOverscan(project);
+  const date = osdDateText(camera?.osd?.date);
+  const record = camera?.osd?.record === true;
+  const osd = record || date ? { ...(record ? { record: true } : {}), ...(date ? { date } : {}) } : null;
+  if (!aspect && !overscan && !osd) return clip;
+  return {
+    ...clip,
+    ...(aspect ? { cameraFrame: { aspect, matte: typeof camera.frame.matte === 'string' ? camera.frame.matte : '#000000' } } : {}),
+    ...(overscan ? { overscan } : {}),
+    ...(osd ? { osd } : {}),
+  };
+}
+
 // One overlay per photo arrival is the exact stacking order; past this many in
 // one rendered section the graph is refused rather than thinned.
 const PHOTO_STACK_RENDER_LIMIT = 240;
@@ -490,7 +554,7 @@ const PHOTO_STACK_RENDER_LIMIT = 240;
 // the shot's Move plays over the composed picture as it does over one still.
 // A laid-out photo is fitted whole, scaled, faded and turned about its centre;
 // a photo without a layout is cover-cropped like an ordinary still.
-function stackedPhotoChain(c, inputRefs, sequence, { coverW, coverH, fps, frames, after }) {
+function stackedPhotoChain(c, inputRefs, sequence, { coverW, coverH, fps, frames, after, zoom = '' }) {
   const id = inputRefs.clip;
   const inputs = [id, ...(inputRefs.photos || [])];
   const offset = Math.round((c.photoAtSec ?? c.effectAtSec ?? 0) * fps);
@@ -508,9 +572,9 @@ function stackedPhotoChain(c, inputRefs, sequence, { coverW, coverH, fps, frames
   const parts = [...copies].map(([index, count]) => {
     const layout = sequence.layouts[index];
     const labels = Array.from({ length: count }, (_, n) => `[stk${id}p${index}_${n}]`).join('');
-    if (!layout) return `[${inputs[index]}:v]fps=${fps},scale=${coverW}:${coverH}:force_original_aspect_ratio=increase,crop=${coverW}:${coverH},setsar=1,split=${count}${labels}`;
+    if (!layout) return `[${inputs[index]}:v]fps=${fps},${zoom}scale=${coverW}:${coverH}:force_original_aspect_ratio=increase,crop=${coverW}:${coverH},setsar=1,split=${count}${labels}`;
     const angle = Number((layout.rotation * Math.PI / 180).toFixed(6));
-    return `[${inputs[index]}:v]fps=${fps},scale=${Math.max(2, Math.round(coverW * layout.scale))}:${Math.max(2, Math.round(coverH * layout.scale))}:force_original_aspect_ratio=decrease,setsar=1,format=rgba`
+    return `[${inputs[index]}:v]fps=${fps},${zoom}scale=${Math.max(2, Math.round(coverW * layout.scale))}:${Math.max(2, Math.round(coverH * layout.scale))}:force_original_aspect_ratio=decrease,setsar=1,format=rgba`
       + (layout.opacity < 1 ? `,colorchannelmixer=aa=${layout.opacity}` : '')
       + (angle ? `,rotate=${angle}:c=none:ow=rotw(${angle}):oh=roth(${angle})` : '')
       + `,split=${count}${labels}`;
@@ -545,15 +609,18 @@ function sectionChain(c, inputRefs, { canonW, canonH, fps, frames, frameGrid, be
     return `color=c=0x${c.cardColor.slice(1)}:s=${canonW}x${canonH}:r=${fps},setsar=1,format=yuv420p,${trim},setpts=PTS-STARTPTS`;
   }
   if (c.layer === 'still') {
+    const box = pictureBox(c, canonW, canonH);
+    const zoom = overscanPrefix(c.overscan);
     const scale = c.move === 'push' ? 2 : c.move === 'pan' ? 1 + STILL_PAN_TRAVEL : 1;
-    const coverW = evenPx(canonW * scale);
-    const coverH = evenPx(canonH * scale);
+    const coverW = evenPx(box.w * scale);
+    const coverH = evenPx(box.h * scale);
     const move = c.move === 'push'
       // Rendered from a 2x cover so the slow zoom does not step pixel by pixel.
-      ? `zoompan=z='1+${STILL_PUSH_ZOOM}*on/${frames}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=${canonW}x${canonH}:fps=${fps},setsar=1,`
-      : c.move === 'pan' ? `crop=${canonW}:${canonH}:x='(iw-ow)*n/${Math.max(1, frames - 1)}':y='(ih-oh)/2',` : '';
+      ? `zoompan=z='1+${STILL_PUSH_ZOOM}*on/${frames}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=${box.w}x${box.h}:fps=${fps},setsar=1,`
+      : c.move === 'pan' ? `crop=${box.w}:${box.h}:x='(iw-ow)*n/${Math.max(1, frames - 1)}':y='(ih-oh)/2',` : '';
     // An end frame (an end-frame image effect) is fitted and moved exactly like the still.
-    const fitted = (id) => `[${id}:v]fps=${fps},scale=${coverW}:${coverH}:force_original_aspect_ratio=increase,crop=${coverW}:${coverH},setsar=1,`
+    // Overscan crops the source first, into the camera window, so a 4:3 frame is not a center crop of a 16:9 cover.
+    const fitted = (id) => `[${id}:v]fps=${fps},${zoom}scale=${coverW}:${coverH}:force_original_aspect_ratio=increase,crop=${coverW}:${coverH},setsar=1,`
       + `${move}format=yuv420p,${trim},setpts=PTS-STARTPTS`;
     const id = inputRefs.clip;
     const end = inputRefs.end != null ? `${fitted(inputRefs.end)}[fxend${id}];` : '';
@@ -561,7 +628,7 @@ function sectionChain(c, inputRefs, { canonW, canonH, fps, frames, frameGrid, be
       ? scenePhotoSequence({ visualLayer: 'still', photoSequence: c.photoSequence, startSec: c.photoStartSec, endSec: c.photoEndSec }, { fps, beats })
       : null;
     let picture = sequence?.stacked
-      ? stackedPhotoChain(c, inputRefs, sequence, { coverW, coverH, fps, frames, after: `${move}format=yuv420p,${trim},setpts=PTS-STARTPTS` })
+      ? stackedPhotoChain(c, inputRefs, sequence, { coverW, coverH, fps, frames, zoom, after: `${move}format=yuv420p,${trim},setpts=PTS-STARTPTS` })
       : fitted(id);
     if (inputRefs.photos?.length && !sequence?.stacked) {
       const frame = `max(0,t*${fps}+${Math.round((c.photoAtSec ?? c.effectAtSec ?? 0) * fps)}+0.000001)`;
@@ -570,8 +637,9 @@ function sectionChain(c, inputRefs, { canonW, canonH, fps, frames, frameGrid, be
         picture += `[seq${id}_${i}];${fitted(photo)}[photo${id}_${i}];[seq${id}_${i}][photo${id}_${i}]overlay=shortest=1:enable='eq(mod(${step},${sequence.imageIds.length}),${i + 1})'`;
       });
     }
-    return end + picture
-      + musicVideoImageEffectFilter(c.effect, { width: canonW, height: canonH, fps, key: id, atSec: c.effectAtSec || 0, end: end ? `fxend${id}` : null });
+    const effect = musicVideoImageEffectFilter(c.effect, { width: box.w, height: box.h, fps, key: id, atSec: c.effectAtSec || 0, end: end ? `fxend${id}` : null });
+    const finish = [osdFilter(c.osd, box), box.framed ? `pad=${canonW}:${canonH}:(ow-iw)/2:(oh-ih)/2:color=0x${box.matte}` : ''].filter(Boolean).join(',');
+    return end + picture + effect + (finish ? `,${finish}` : '');
   }
   // A non-looping shot a hair longer than its source holds the last frame for
   // the remainder instead of ending early and drifting every later cut. On the
@@ -585,22 +653,31 @@ function sectionChain(c, inputRefs, { canonW, canonH, fps, frames, frameGrid, be
   // A reversed clip plays from its last frame, before any speed, offset or trim.
   const reverse = c.reverse ? 'reverse,setpts=PTS-STARTPTS,' : '';
   const timed = `${reverse}${speed}${lead}fps=${fps},${hold}${trim},setpts=PTS-STARTPTS`;
-  const cover = `scale=${canonW}:${canonH}:force_original_aspect_ratio=increase,crop=${canonW}:${canonH},setsar=1`;
-  const fit = `scale=${canonW}:${canonH}:force_original_aspect_ratio=decrease,setsar=1`;
+  const box = pictureBox(c, canonW, canonH);
+  const zoom = overscanPrefix(c.overscan);
+  const cover = `${zoom}scale=${box.w}:${box.h}:force_original_aspect_ratio=increase,crop=${box.w}:${box.h},setsar=1`;
+  const fit = `${zoom}scale=${box.w}:${box.h}:force_original_aspect_ratio=decrease,setsar=1`;
   const centered = `overlay=(W-w)/2:(H-h)/2:shortest=1`;
+  const osd = osdFilter(c.osd, box);
+  const pad = box.framed ? `pad=${canonW}:${canonH}:(ow-iw)/2:(oh-ih)/2:color=0x${box.matte}` : '';
+  const tail = [osd, pad].filter(Boolean).join(',');
   const id = inputRefs.clip;
-  if (c.frameFit === 'fill') return `[${id}:v]${cover},${timed}`;
+  if (c.frameFit === 'fill') return `[${id}:v]${cover}${tail ? `,${tail}` : ''},${timed}`;
   // The shot's still, cover-fitted like a still section, fills the gaps beside the whole clip.
   if (c.frameFit === 'still' && inputRefs.still != null) {
-    return `[${inputRefs.still}:v]fps=${fps},${cover}[edge${id}];[${id}:v]${fit},${timed}[clip${id}];[edge${id}][clip${id}]${centered}`;
+    return `[${inputRefs.still}:v]fps=${fps},${cover}[edge${id}];[${id}:v]${fit},${timed}[clip${id}];[edge${id}][clip${id}]${centered}${tail ? `,${tail}` : ''}`;
   }
   // The clip itself, zoomed, blurred, faded and noisy with scanlines, like a worn tape behind it.
   if (c.frameFit === 'vhs') {
     return `[${id}:v]${fit},${timed},split[clip${id}][tape${id}];`
       + `[tape${id}]${cover},boxblur=lr=min(h\\,w)/20:lp=2:cr=min(ch\\,cw)/20:cp=2,eq=saturation=0.55:brightness=-0.12,noise=alls=24:allf=t+u,`
-      + `drawgrid=w=iw:h=3:t=1:c=black@0.35[edge${id}];[edge${id}][clip${id}]${centered}`;
+      + `drawgrid=w=iw:h=3:t=1:c=black@0.35[edge${id}];[edge${id}][clip${id}]${centered}${tail ? `,${tail}` : ''}`;
   }
-  return `[${id}:v]${fit},pad=${canonW}:${canonH}:(ow-iw)/2:(oh-ih)/2,${timed}`;
+  // Contain into the camera window, draw the OSD on that window, then matte it into the video.
+  if (box.framed) {
+    return `[${id}:v]${fit},pad=${box.w}:${box.h}:(ow-iw)/2:(oh-ih)/2:color=0x${box.matte}${osd ? `,${osd}` : ''},pad=${canonW}:${canonH}:(ow-iw)/2:(oh-ih)/2:color=0x${box.matte},${timed}`;
+  }
+  return `[${id}:v]${fit},pad=${canonW}:${canonH}:(ow-iw)/2:(oh-ih)/2${osd ? `,${osd}` : ''},${timed}`;
 }
 
 // One plan section of a composed render as its own silent, video-only encode

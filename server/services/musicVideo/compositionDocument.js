@@ -685,7 +685,7 @@ function selectedEffectShots(project) {
   const scenes = project.scenes || [];
   const duration = documentSongDuration(project);
   const { fps, frames } = documentRenderClock(duration || 0);
-  const sections = sceneTransitionSections(scenes, fps, { endSec: duration });
+  const sections = sceneTransitionSections(scenes, fps, { endSec: duration, cameras: project.cameras });
   const inSong = effect => effect.frame >= 0 && effect.frame < frames;
   const found = new Map();
   const add = (sceneId, kind) => {
@@ -719,7 +719,7 @@ function selectedEffectShots(project) {
       return state.end > 0 || state.flash > 0;
     })();
     if (visible || sceneImageEffectGlitchFrames(scenes.map(other => other === scene ? other : { ...other, imageEffect: null }),
-      fps, { layered: true, endSec: duration }).some(inSong)) add(scene.sceneId, 'end');
+      fps, { layered: true, endSec: duration, cameras: project.cameras }).some(inSong)) add(scene.sceneId, 'end');
   }
   return [...found].map(([sceneId, effects]) => ({ sceneId, effects }));
 }
