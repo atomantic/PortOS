@@ -169,10 +169,10 @@ function stayMarks(set, greybox, count) {
   const anchors = (greybox?.anchors || []).filter((anchor) => anchor.kind === 'figure');
   return Array.from({ length: count }, (_, i) => {
     const anchor = anchors[i];
-    if (anchor) return { at: setToWorld(set, [anchor.position[0], anchor.position[2]]), facing: (anchor.facingDegrees || 0) + (set.rotationDegrees || 0) };
+    if (anchor) return { at: setToWorld(set, [anchor.position[0], anchor.position[2]]), y: anchor.position[1] || 0, facing: (anchor.facingDegrees || 0) + (set.rotationDegrees || 0) };
     const angle = (i / Math.max(1, count)) * Math.PI * 2;
     const local = [Math.sin(angle) * STAY_RADIUS, Math.cos(angle) * STAY_RADIUS];
-    return { at: setToWorld(set, local), facing: null };
+    return { at: setToWorld(set, local), y: 0, facing: null };
   });
 }
 
@@ -185,7 +185,7 @@ function stayPose(beat, set, greybox, subjectId, storyMin) {
   const at = [mark.at[0] + drift(storyMin / 3, seed) * WANDER, mark.at[1] + drift(storyMin / 3, seed + 13) * WANDER];
   const center = marks.reduce((sum, m) => [sum[0] + m.at[0] / marks.length, sum[1] + m.at[1] / marks.length], [0, 0]);
   const facing = mark.facing ?? (people.length > 1 ? deg(Math.atan2(center[0] - at[0], center[1] - at[1])) : (set.rotationDegrees || 0));
-  return { position: [round(at[0]), 0, round(at[1])], facingDegrees: round(facing), pose: 'stand', vehicleSubjectId: null, setId: set.id };
+  return { position: [round(at[0]), mark.y, round(at[1])], facingDegrees: round(facing), pose: 'stand', vehicleSubjectId: null, setId: set.id };
 }
 
 function travelPose(world, beat, subjectId, storyMin, routes) {
