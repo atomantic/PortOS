@@ -19,7 +19,7 @@ import { LTX_REFERENCES_GENERATION_MODE, isLtx25Model, ltxReferenceSheetPrefix, 
 import SceneStoryboardClip, { storyboardClipOffered } from './SceneStoryboardClip.jsx';
 import { MUSIC_VIDEO_MEDIUM_LABELS } from '../../../../server/lib/musicVideoMediumPlan.js';
 import { storyboardShotDirection } from '../../../../server/lib/musicVideoShotPrompt.js';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Trash2, Activity, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, X, Video, AlertTriangle, Clapperboard, Shuffle } from 'lucide-react';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
 import SceneTakePicker from './SceneTakePicker.jsx';
@@ -195,6 +195,14 @@ export default function SceneCard({
   const [clipReferenceSaveState, setClipReferenceSaveState] = useState('saved');
   // Which slot's "Swap from unused" picker is open: 'image', 'video' or null.
   const [swapKind, setSwapKind] = useState(null);
+  // Fields typed in since they last loaded: a blur saves only those, so an untouched box never writes a stale copy over a newer edit made elsewhere.
+  const dirtyFields = useRef(new Set());
+  const markDirty = (key) => dirtyFields.current.add(key);
+  const saveIfDirty = (key, patch) => {
+    if (!dirtyFields.current.has(key)) return;
+    dirtyFields.current.delete(key);
+    Promise.resolve(onSave(scene.sceneId, patch)).then((saved) => { if (saved === false) markDirty(key); }, () => markDirty(key));
+  };
   const applyPatch = (patch) => { onEditLocal(scene.sceneId, patch); onSave(scene.sceneId, patch); };
   const layer = MUSIC_VIDEO_VISUAL_LAYERS.includes(scene.visualLayer) ? scene.visualLayer : 'footage';
   const lead = (project?.scenes || []).filter(s => !isPreMusicShot(s)).slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
@@ -395,8 +403,8 @@ export default function SceneCard({
       <AutoSizeTextarea
         id={fieldId('prompt')}
         value={followsBoard ? boardDirection : scene.prompt || ''} rows={3}
-        onChange={(e) => onEditLocal(scene.sceneId, { prompt: e.target.value })}
-        onBlur={(e) => onSave(scene.sceneId, { prompt: boardDirection && e.target.value.trim() === boardDirection ? '' : e.target.value })}
+        onChange={(e) => { markDirty('prompt'); onEditLocal(scene.sceneId, { prompt: e.target.value }); }}
+        onBlur={(e) => saveIfDirty('prompt', { prompt: boardDirection && e.target.value.trim() === boardDirection ? '' : e.target.value })}
         placeholder={layer === 'footage' ? 'What happens in this shot' : 'What this shot shows'}
         className="block w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm"
       />
@@ -405,7 +413,7 @@ export default function SceneCard({
       ) : (
         <div className="flex flex-wrap items-center gap-2 text-[11px] text-port-text-muted" data-testid="prompt-own">
           <span>This shot's own prompt, not the panel's</span>
-          <button type="button" onClick={() => { onEditLocal(scene.sceneId, { prompt: '' }); onSave(scene.sceneId, { prompt: '' }); }} className="underline min-h-[44px] pointer-fine:sm:min-h-0">Use storyboard direction</button>
+          <button type="button" onClick={() => { dirtyFields.current.delete('prompt'); onEditLocal(scene.sceneId, { prompt: '' }); onSave(scene.sceneId, { prompt: '' }); }} className="underline min-h-[44px] pointer-fine:sm:min-h-0">Use storyboard direction</button>
         </div>
       ))}
     </div>
@@ -470,8 +478,8 @@ export default function SceneCard({
             return (
               <label key={key} className="flex items-center gap-1">{labelText}
                 <input type="number" min="0" step="0.1" value={scene[key] ?? ''} className="w-20 bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] pointer-fine:sm:min-h-0"
-                  onChange={(e) => onEditLocal(scene.sceneId, { [key]: toValue(e.target.value) })}
-                  onBlur={(e) => onSave(scene.sceneId, { [key]: toValue(e.target.value) })} />
+                  onChange={(e) => { markDirty(key); onEditLocal(scene.sceneId, { [key]: toValue(e.target.value) }); }}
+                  onBlur={(e) => saveIfDirty(key, { [key]: toValue(e.target.value) })} />
                 {typeof scene[key] === 'number' && <span className="tabular-nums text-port-text-muted">fr {frameAt(scene[key])}</span>}
               </label>
             );
@@ -565,13 +573,13 @@ export default function SceneCard({
               <label htmlFor={fieldId('card-text')}>Card text</label>
               <input id={fieldId('card-text')} type="text" maxLength={500} value={scene.cardText || ''}
                 placeholder="Title shown on the card"
-                onChange={(e) => onEditLocal(scene.sceneId, { cardText: e.target.value })}
-                onBlur={(e) => onSave(scene.sceneId, { cardText: e.target.value.trim() || null })}
+                onChange={(e) => { markDirty('cardText'); onEditLocal(scene.sceneId, { cardText: e.target.value }); }}
+                onBlur={(e) => saveIfDirty('cardText', { cardText: e.target.value.trim() || null })}
                 className="min-w-0 flex-1 basis-40 bg-port-bg border border-port-border rounded px-1 py-1 min-h-[44px] pointer-fine:sm:min-h-0" />
               <label htmlFor={fieldId('card-color')}>Background</label>
               <input id={fieldId('card-color')} type="color" value={scene.cardColor || '#000000'}
-                onChange={(e) => onEditLocal(scene.sceneId, { cardColor: e.target.value })}
-                onBlur={(e) => onSave(scene.sceneId, { cardColor: e.target.value })}
+                onChange={(e) => { markDirty('cardColor'); onEditLocal(scene.sceneId, { cardColor: e.target.value }); }}
+                onBlur={(e) => saveIfDirty('cardColor', { cardColor: e.target.value })}
                 className="h-8 w-10 min-h-[44px] pointer-fine:sm:min-h-0 bg-port-bg border border-port-border rounded" />
             </>
           )}
