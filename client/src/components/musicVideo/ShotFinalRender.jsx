@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Activity, Film, Play, Square, X } from 'lucide-react';
+import ShotColorMatch from './ShotColorMatch.jsx';
 import ShotFilmLook from './ShotFilmLook.jsx';
 import { cancelMusicVideoShotRender, musicVideoShotRenderUrl, renderMusicVideoShot } from '../../services/apiMusicVideo.js';
 import useMusicVideoShotRenders from '../../hooks/useMusicVideoShotRenders.js';
@@ -12,7 +13,7 @@ const BUTTON = 'inline-flex min-h-[44px] items-center gap-1 rounded border borde
  * shot with its film look, and the shot's own look (kept when the video's
  * look changes). The final render reuses every cached shot and stitches.
  */
-export default function ShotFinalRender({ project, scene, onChange, fieldId }) {
+export default function ShotFinalRender({ project, scene, onChange, onLocal, fieldId }) {
   const projectId = project?.id;
   const sceneId = scene.sceneId;
   const { status, live: liveByShot, markLive, clearLive, retry } = useMusicVideoShotRenders(project);
@@ -94,6 +95,7 @@ export default function ShotFinalRender({ project, scene, onChange, fieldId }) {
         // The rendered shot as the final render cuts it: film look and text, without the song.
         <video key={file} src={musicVideoShotRenderUrl(projectId, file)} controls autoPlay loop muted playsInline className="w-full rounded bg-black" />
       )}
+      <ShotColorMatch project={project} scene={scene} onApplied={onLocal} fieldId={fieldId} />
       <ShotFilmLook project={project} scene={scene} onChange={patch => { setPlaying(false); onChange(patch); }} fieldId={fieldId} />
     </section>
   );

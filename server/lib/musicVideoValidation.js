@@ -32,6 +32,7 @@ import { MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX } from './musicVideoSubjectLimits.j
 export const musicVideoDcpRequestSchema = z.object({ grade: z.enum(['rec709', 'rec1886']), renderHistoryId: z.string().min(1), sourceSha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 import { GROK_VIDEO_DURATIONS } from './grokVideoClip.js';
 import { knownFilmStyleIdSchema } from './filmStyleGrammars.js';
+import { COLOR_MATCH_LIMITS } from './shotColorMatch.js';
 
 const makingOfId = z.string().regex(/^[A-Za-z0-9_-]{1,100}$/);
 export const musicVideoMakingOfSelectionSchema = z.object({
@@ -286,6 +287,8 @@ export const musicVideoCameraSchema = z.object({
   rule: z.string().trim().max(1000).optional(),
   // How the camera moves in the greybox previz while it is a cut's camera (lib/musicVideoPreviz.js).
   previzStyle: z.enum(PREVIZ_CAMERA_STYLES).optional(),
+  // Leave this camera's shots out of color matching (lib/shotColorMatch.js).
+  doNotMatch: z.boolean().optional(),
 }).strict();
 // The greybox previz: blocking over the song, played over each place's greybox (lib/musicVideoPreviz.js).
 const previzSec = z.number().finite().min(0).max(36000);
@@ -581,6 +584,45 @@ export const musicVideoTakeReviewSchema = z.object({
   status: z.enum(MUSIC_VIDEO_TAKE_STATUSES).optional(),
   note: z.string().max(1000).nullable().optional(),
 }).strict().refine((r) => r.status !== undefined || r.note !== undefined || r.acknowledgeRenderQuality !== undefined, { message: 'status, note or acknowledgement is required' });
+
+const colorMatchNumber = (key) => z.number().min(COLOR_MATCH_LIMITS[key][0]).max(COLOR_MATCH_LIMITS[key][1]);
+
+export const musicVideoColorMatchCorrectionSchema = z.object({
+  black: colorMatchNumber('black'),
+  white: colorMatchNumber('white'),
+  gamma: colorMatchNumber('gamma'),
+  balanceR: colorMatchNumber('balanceR'),
+  balanceB: colorMatchNumber('balanceB'),
+  saturation: colorMatchNumber('saturation'),
+}).strict();
+
+export const musicVideoColorMatchReferenceSchema = z.object({
+  cameraId: z.string().min(1).max(64),
+  location: z.string().min(1).max(200),
+  timeOfDay: z.string().min(1).max(100),
+  sceneId: z.string().min(1).max(128),
+}).strict();
+
+export const musicVideoColorMatchSchema = z.object({
+  references: z.array(musicVideoColorMatchReferenceSchema).max(400),
+}).strict();
+
+export const musicVideoColorMatchMeasureSchema = z.object({
+  sceneId: z.string().min(1).max(128).optional(),
+}).strict();
+
+export const musicVideoColorMatchTakePatchSchema = z.object({
+  enabled: z.boolean().optional(),
+  strength: z.number().min(0).max(1).optional(),
+  correction: musicVideoColorMatchCorrectionSchema.optional(),
+}).strict().refine((body) => body.enabled !== undefined || body.strength !== undefined || body.correction !== undefined, {
+  message: 'enabled, strength or correction is required',
+});
+
+export const musicVideoColorMatchReferenceUpdateSchema = z.object({
+  sceneId: z.string().min(1).max(128),
+  clear: z.boolean().optional(),
+}).strict();
 
 // Import externally generated assets (e.g. a Midjourney handoff). Each item is
 // an asset the client already stored through the existing gallery upload
@@ -1913,6 +1955,8 @@ export const musicVideoProjectUpdateSchema = z.object({
   phrases: phraseList.optional(),
   pacing: musicVideoPacingSchema.nullable().optional(),
   cameras: z.array(musicVideoCameraSchema).max(SHOT_CAMERA_MAX).optional(),
+  // Which shot each color-match group follows (lib/shotColorMatch.js). Null clears every pick.
+  colorMatch: musicVideoColorMatchSchema.nullable().optional(),
   routeMaps: z.array(musicVideoRouteMapSchema).max(ROUTE_MAP_MAX).optional(),
   previz: musicVideoPrevizSchema.nullable().optional(),
   composition: musicVideoCompositionSchema.nullable().optional(),

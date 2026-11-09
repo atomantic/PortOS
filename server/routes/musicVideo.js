@@ -1,4 +1,4 @@
-import { musicVideoCastSetsUseImageSchema, musicVideoCastSetsImageEditSchema, musicVideoCastSetsImageEditDecisionSchema } from '../lib/musicVideoValidation.js';
+import { musicVideoCastSetsUseImageSchema, musicVideoCastSetsImageEditSchema, musicVideoCastSetsImageEditDecisionSchema, musicVideoColorMatchMeasureSchema, musicVideoColorMatchReferenceUpdateSchema, musicVideoColorMatchTakePatchSchema } from '../lib/musicVideoValidation.js';
 import { musicVideoDcpRequestSchema } from '../lib/musicVideoValidation.js';
 import { inspectDcpReadiness } from '../services/musicVideo/dcpPreflight.js';
 import { activeDcp, startDcp, attachDcp, cancelDcp, dcpArtifactPaths } from '../services/musicVideo/dcp.js';
@@ -2023,6 +2023,26 @@ router.post('/:id/scenes/:sceneId/swap-frames', asyncHandler(async (req, res) =>
 // No body: a vision model checks this frame take against its shot (user-started) → the scene.
 router.post('/:id/scenes/:sceneId/takes/:takeId/check', asyncHandler(async (req, res) => {
   res.json(await checkSceneTakePlate(req.params.id, req.params.sceneId, req.params.takeId));
+}));
+
+// Shot color match: measure takes, edit one take's numbers, or pick a group's reference.
+// The picture files stay as they are; the composed render reads the numbers.
+router.post('/:id/color-match/measure', asyncHandler(async (req, res) => {
+  const { sceneId } = validateRequest(musicVideoColorMatchMeasureSchema, req.body ?? {});
+  const { measureShotColorMatch } = await import('../services/musicVideo/shotColorMatch.js');
+  res.json(await measureShotColorMatch(req.params.id, { sceneId }));
+}));
+
+router.put('/:id/color-match/reference', asyncHandler(async (req, res) => {
+  const body = validateRequest(musicVideoColorMatchReferenceUpdateSchema, req.body ?? {});
+  const { setShotColorMatchReference } = await import('../services/musicVideo/shotColorMatch.js');
+  res.json(await setShotColorMatchReference(req.params.id, body));
+}));
+
+router.patch('/:id/scenes/:sceneId/takes/:takeId/color-match', asyncHandler(async (req, res) => {
+  const patch = validateRequest(musicVideoColorMatchTakePatchSchema, req.body ?? {});
+  const { updateTakeColorMatch } = await import('../services/musicVideo/shotColorMatch.js');
+  res.json(await updateTakeColorMatch(req.params.id, req.params.sceneId, req.params.takeId, patch));
 }));
 
 router.patch('/:id/scenes/:sceneId/takes/:takeId', asyncHandler(async (req, res) => {

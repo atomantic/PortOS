@@ -751,7 +751,9 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/video-timeline/projects/:id/render',
   // Music Video ffmpeg renders: final render, per-shot segments, shot preview
   // concat with the song, the cold open's sound mix, excerpt encode, and
-  // platform encodes/thumbnails (#12514).
+  // platform encodes/thumbnails (#12514). Shot color match measures stored
+  // clips with ffmpeg (stills stay in-process sharp, but the route can do both).
+  'POST /api/music-video/:id/color-match/measure',
   'POST /api/music-video/:id/render',
   'POST /api/music-video/:id/shots/:sceneId/render',
   // A sequence take (#14241) queues a paid fal render and ffmpeg-cuts it onto its scenes on completion.
