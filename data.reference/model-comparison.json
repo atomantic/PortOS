@@ -56494,7 +56494,7 @@
       "billing": "api",
       "benchmark": "Anthropic publisher (Haiku 5.5 launch): Terminal-Bench 4.0 (%)",
       "quality": {
-        "value": 0.0,
+        "value": 0,
         "source": {
           "url": "https://x.com/claudeai/status/2107894042235166750",
           "retrievedAt": "2026-10-07T18:01:00Z",
@@ -58862,6 +58862,1843 @@
       "tokensPerSecond": null,
       "quota": null,
       "notes": "Sourced from Artificial Analysis (Gemini 4 Argon (high)). Averages about 62k output tokens per index task. Speed is not yet published. Low and medium thinking levels have no published scores."
+    },
+    {
+      "id": "aa-web-v5.0.1-mimo-v2-6-pro",
+      "provider": "Xiaomi",
+      "model": "mimo-v2.6-pro",
+      "effort": "unspecified",
+      "configuration": "MiMo-V2.6-Pro",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 29.8897833093321,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/mimo-v2-6-pro",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact value from public chart data. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "costPerTask": {
+        "value": 0.25718036275876155,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/mimo-v2-6-pro",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per task, including input, cached input and reasoning/output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "inputPerMillion": {
+        "value": 0.435,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/mimo-v2-6-pro",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M uncached input tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0.87,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/mimo-v2-6-pro",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-gpt-6-astra",
+      "provider": "OpenAI",
+      "model": "gpt-6-astra",
+      "effort": "max",
+      "configuration": "Max",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 56.8538559596797,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-astra",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact value from public chart data. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "costPerTask": {
+        "value": 6.244666943602518,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-astra",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per task, including input, cached input and reasoning/output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "inputPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-astra",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M uncached input tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "outputPerMillion": {
+        "value": 50,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-astra",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-claude-opus-5-5",
+      "provider": "Anthropic",
+      "model": "claude-opus-5.5",
+      "effort": "max",
+      "configuration": "Max, Default Fallback",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 59.1060336078904,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-opus-5-5",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact value from public chart data. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "costPerTask": {
+        "value": 10.036409719512749,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-opus-5-5",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per task, including input, cached input and reasoning/output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "inputPerMillion": {
+        "value": 4,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-opus-5-5",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M uncached input tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "outputPerMillion": {
+        "value": 20,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-opus-5-5",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-ling-3-1-flash-1019",
+      "provider": "InclusionAI",
+      "model": "ling-3.1-flash-1019",
+      "effort": "unspecified",
+      "configuration": "Ling 3.1 Flash 1019",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 29.570119369837,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/ling-3-1-flash-1019",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact value from public chart data. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "costPerTask": {
+        "value": 3.185145018337793,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/ling-3-1-flash-1019",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per task, including input, cached input and reasoning/output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "inputPerMillion": {
+        "value": 0.3,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/ling-3-1-flash-1019",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M uncached input tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0.9,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/ling-3-1-flash-1019",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-claude-fable-5-2",
+      "provider": "Anthropic",
+      "model": "claude-fable-5.2",
+      "effort": "max",
+      "configuration": "Max, Default Fallback",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 64.563595756626,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-fable-5-2",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact value from public chart data. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "costPerTask": {
+        "value": 26.53855780398091,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-fable-5-2",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per task, including input, cached input and reasoning/output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "inputPerMillion": {
+        "value": 8,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-fable-5-2",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M uncached input tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "outputPerMillion": {
+        "value": 40,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-fable-5-2",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-grok-4-7",
+      "provider": "SpaceXAI",
+      "model": "grok-4.7",
+      "effort": "xhigh",
+      "configuration": "Xhigh",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 35.4850117067196,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/grok-4-7",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact value from public chart data. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "costPerTask": {
+        "value": 7.771539401587139,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/grok-4-7",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per task, including input, cached input and reasoning/output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "inputPerMillion": {
+        "value": 2,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/grok-4-7",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M uncached input tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "outputPerMillion": {
+        "value": 6,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/grok-4-7",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-kimi-k3-1-pro",
+      "provider": "Kimi",
+      "model": "kimi-k3.1-pro",
+      "effort": "max",
+      "configuration": "Kimi K3.1 Pro",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 46.4526236744189,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/kimi-k3-1-pro",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact value from public chart data. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "costPerTask": {
+        "value": 3.6812002895742055,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/kimi-k3-1-pro",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per task, including input, cached input and reasoning/output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "inputPerMillion": {
+        "value": 2,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/kimi-k3-1-pro",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M uncached input tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "outputPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/kimi-k3-1-pro",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-reflection-beam",
+      "provider": "Reflection",
+      "model": "beam-1.0",
+      "effort": "unspecified",
+      "configuration": "Beam 1.0",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 17.7307282547205,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/reflection-beam",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact value from public chart data. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "costPerTask": {
+        "value": 0.28440671352465285,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/reflection-beam",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per task, including input, cached input and reasoning/output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "inputPerMillion": {
+        "value": 0.4,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/reflection-beam",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M uncached input tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "outputPerMillion": {
+        "value": 1.2,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/reflection-beam",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-gpt-6-luna",
+      "provider": "OpenAI",
+      "model": "gpt-6-luna",
+      "effort": "max",
+      "configuration": "Max",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 27.8552004938153,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-luna",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact value from public chart data. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "costPerTask": {
+        "value": 0.15195575732105837,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-luna",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per task, including input, cached input and reasoning/output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "inputPerMillion": {
+        "value": 0.1,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-luna",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M uncached input tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0.5,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-luna",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-claude-haiku-5-5",
+      "provider": "Anthropic",
+      "model": "claude-haiku-5.5",
+      "effort": "max",
+      "configuration": "Max",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 36.4845435880142,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-haiku-5-5",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact value from public chart data. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "costPerTask": {
+        "value": 0.41100741536816304,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-haiku-5-5",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per task, including input, cached input and reasoning/output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "inputPerMillion": {
+        "value": 0.1,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-haiku-5-5",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M uncached input tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0.5,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-haiku-5-5",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-gemini-3-8-flash",
+      "provider": "Google",
+      "model": "gemini-3.8-flash",
+      "effort": "high",
+      "configuration": "High",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 30.8468119957291,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-3-8-flash",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact value from public chart data. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "costPerTask": {
+        "value": 7.766006178152514,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-3-8-flash",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per task, including input, cached input and reasoning/output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "inputPerMillion": {
+        "value": 0.75,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-3-8-flash",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M uncached input tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "outputPerMillion": {
+        "value": 3.75,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-3-8-flash",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-gemini-4-carbon",
+      "provider": "Google",
+      "model": "gemini-4-carbon",
+      "effort": "high",
+      "configuration": "High",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 60.025738829526,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-carbon",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact value from public chart data. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "costPerTask": {
+        "value": 7.755545745286556,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-carbon",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per task, including input, cached input and reasoning/output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "inputPerMillion": {
+        "value": 4,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-carbon",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M uncached input tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "outputPerMillion": {
+        "value": 20,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gemini-4-carbon",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-qwen3-8-27b",
+      "provider": "Alibaba",
+      "model": "qwen3.8-27b",
+      "effort": "xhigh",
+      "configuration": "Xhigh",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 20.1068756031705,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/qwen3-8-27b",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact value from public chart data. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "costPerTask": {
+        "value": 3.5295494751410654,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/qwen3-8-27b",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per task, including input, cached input and reasoning/output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "inputPerMillion": {
+        "value": 0.5,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/qwen3-8-27b",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M uncached input tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "outputPerMillion": {
+        "value": 3,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/qwen3-8-27b",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-gpt-6-1-terra",
+      "provider": "OpenAI",
+      "model": "gpt-6.1-terra",
+      "effort": "max",
+      "configuration": "Max",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 51.3265188577015,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-1-terra",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact value from public chart data. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "costPerTask": {
+        "value": 0.961108031081634,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-1-terra",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per task, including input, cached input and reasoning/output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "inputPerMillion": {
+        "value": 1,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-1-terra",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M uncached input tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "outputPerMillion": {
+        "value": 5,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-1-terra",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-qwen3-8-max",
+      "provider": "Alibaba",
+      "model": "qwen3.8-max",
+      "effort": "xhigh",
+      "configuration": "Qwen3.8 Max",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 33.6545627367888,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/qwen3-8-max",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact value from public chart data. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "costPerTask": {
+        "value": 10.023891571541945,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/qwen3-8-max",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per task, including input, cached input and reasoning/output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "inputPerMillion": {
+        "value": 2,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/qwen3-8-max",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M uncached input tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "outputPerMillion": {
+        "value": 6,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/qwen3-8-max",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-claude-sonnet-5-5",
+      "provider": "Anthropic",
+      "model": "claude-sonnet-5.5",
+      "effort": "max",
+      "configuration": "Max, Default Fallback",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 54.54133407109,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact value from public chart data. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "costPerTask": {
+        "value": 10.020621343395753,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per task, including input, cached input and reasoning/output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "inputPerMillion": {
+        "value": 2,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M uncached input tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "outputPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-gpt-6-1-sol",
+      "provider": "OpenAI",
+      "model": "gpt-6.1-sol",
+      "effort": "max",
+      "configuration": "Max",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 54.6087338138148,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-1-sol",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact value from public chart data. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "costPerTask": {
+        "value": 1.2720632679446995,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-1-sol",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per task, including input, cached input and reasoning/output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "inputPerMillion": {
+        "value": 2,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-1-sol",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M uncached input tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "outputPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/gpt-6-1-sol",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-k2-horizon-375b-a23b",
+      "provider": "Institute of Foundation Models",
+      "model": "k2-horizon-375b-a23b",
+      "effort": "high",
+      "configuration": "K2 Horizon 375B A23B",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 17.8202731734027,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/k2-horizon-375b-a23b",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact value from public chart data. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "costPerTask": {
+        "value": 0,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/k2-horizon-375b-a23b",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per task, including input, cached input and reasoning/output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "inputPerMillion": {
+        "value": 0,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/k2-horizon-375b-a23b",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M uncached input tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/k2-horizon-375b-a23b",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-glm-5-3",
+      "provider": "Z AI",
+      "model": "glm-5.3",
+      "effort": "max",
+      "configuration": "Max",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 31.653381843882,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/glm-5-3",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact value from public chart data. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "costPerTask": {
+        "value": 5.009264601719954,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/glm-5-3",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per task, including input, cached input and reasoning/output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "inputPerMillion": {
+        "value": 1.4,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/glm-5-3",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M uncached input tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "outputPerMillion": {
+        "value": 4.4,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/glm-5-3",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-tencent-hy4",
+      "provider": "Tencent",
+      "model": "tencent-hy4",
+      "effort": "unspecified",
+      "configuration": "Tencent Hy4",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 34.5552385392508,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/tencent-hy4",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact value from public chart data. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "costPerTask": {
+        "value": 1.0311060706397974,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/tencent-hy4",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per task, including input, cached input and reasoning/output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "inputPerMillion": {
+        "value": 0.834,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/tencent-hy4",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M uncached input tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "outputPerMillion": {
+        "value": 2.501,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/tencent-hy4",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-muse-ember",
+      "provider": "Meta",
+      "model": "muse-ember",
+      "effort": "max",
+      "configuration": "Max",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 36.0212987864912,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/muse-ember",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact value from public chart data. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "costPerTask": {
+        "value": 0.1359356168986363,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/muse-ember",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per task, including input, cached input and reasoning/output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "inputPerMillion": {
+        "value": 0.1,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/muse-ember",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M uncached input tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0.5,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/muse-ember",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-nemotron-3-5-super-vl",
+      "provider": "NVIDIA",
+      "model": "nemotron-3.5-super-vl",
+      "effort": "high",
+      "configuration": "Nemotron 3.5 Super VL",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 13.6203422723141,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/nemotron-3-5-super-vl",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact value from public chart data. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "costPerTask": {
+        "value": 0.5196327287868884,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/nemotron-3-5-super-vl",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per task, including input, cached input and reasoning/output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "inputPerMillion": {
+        "value": 0.175,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/nemotron-3-5-super-vl",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M uncached input tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "outputPerMillion": {
+        "value": 0.5,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/nemotron-3-5-super-vl",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-inkling-2-small",
+      "provider": "Thinking Machines",
+      "model": "inkling-2-small",
+      "effort": "unspecified",
+      "configuration": "Inkling 2 Small",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 30.6286781498958,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/inkling-2-small",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact value from public chart data. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "costPerTask": {
+        "value": 1.1784281349617984,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/inkling-2-small",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per task, including input, cached input and reasoning/output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "inputPerMillion": {
+        "value": 0.3,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/inkling-2-small",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M uncached input tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "outputPerMillion": {
+        "value": 1,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/inkling-2-small",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-muse-wonder-full",
+      "provider": "Meta",
+      "model": "muse-wonder-full",
+      "effort": "max",
+      "configuration": "Max",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 50.0772123627021,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/muse-wonder-full",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact value from public chart data. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "costPerTask": null,
+      "inputPerMillion": null,
+      "outputPerMillion": null,
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-mistral-large-4",
+      "provider": "Mistral",
+      "model": "mistral-large-4",
+      "effort": "high",
+      "configuration": "High",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 26.1249946754784,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/mistral-large-4",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact value from public chart data. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "costPerTask": {
+        "value": 2.0617306268126856,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/mistral-large-4",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per task, including input, cached input and reasoning/output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "inputPerMillion": {
+        "value": 0.7,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/mistral-large-4",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M uncached input tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "outputPerMillion": {
+        "value": 2.1,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/mistral-large-4",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-deepseek-v4-1-flash-1017",
+      "provider": "DeepSeek",
+      "model": "deepseek-v4.1-flash-1017",
+      "effort": "max",
+      "configuration": "Max",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 32.5896393532027,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/deepseek-v4-1-flash-1017",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact value from public chart data. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "costPerTask": {
+        "value": 0.60210514783598,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/deepseek-v4-1-flash-1017",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per task, including input, cached input and reasoning/output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "inputPerMillion": {
+        "value": 0.3,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/deepseek-v4-1-flash-1017",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M uncached input tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "outputPerMillion": {
+        "value": 1.2,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/deepseek-v4-1-flash-1017",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-muse-wonder",
+      "provider": "Meta",
+      "model": "muse-wonder",
+      "effort": "max",
+      "configuration": "Max",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 43.5748225998431,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/muse-wonder",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact value from public chart data. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "costPerTask": {
+        "value": 6.9520364786062245,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/muse-wonder",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per task, including input, cached input and reasoning/output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "inputPerMillion": {
+        "value": 4,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/muse-wonder",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M uncached input tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "outputPerMillion": {
+        "value": 20,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/muse-wonder",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-claude-fable-5-2-xhigh",
+      "provider": "Anthropic",
+      "model": "claude-fable-5.2",
+      "effort": "xhigh",
+      "configuration": "Xhigh, Default Fallback",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 62.2167392403357,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-fable-5-2-xhigh",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact value from public chart data. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2-xhigh."
+        }
+      },
+      "costPerTask": {
+        "value": 14.828587632511116,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-fable-5-2-xhigh",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per task, including input, cached input and reasoning/output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2-xhigh."
+        }
+      },
+      "inputPerMillion": {
+        "value": 8,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-fable-5-2-xhigh",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M uncached input tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2-xhigh."
+        }
+      },
+      "outputPerMillion": {
+        "value": 40,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-fable-5-2-xhigh",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2-xhigh."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-claude-fable-5-2-high",
+      "provider": "Anthropic",
+      "model": "claude-fable-5.2",
+      "effort": "high",
+      "configuration": "High, Default Fallback",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 61.8218785440284,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-fable-5-2-high",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact value from public chart data. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2-high."
+        }
+      },
+      "costPerTask": {
+        "value": 9.078414777860381,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-fable-5-2-high",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per task, including input, cached input and reasoning/output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2-high."
+        }
+      },
+      "inputPerMillion": {
+        "value": 8,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-fable-5-2-high",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M uncached input tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2-high."
+        }
+      },
+      "outputPerMillion": {
+        "value": 40,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-fable-5-2-high",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2-high."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-claude-fable-5-2-medium",
+      "provider": "Anthropic",
+      "model": "claude-fable-5.2",
+      "effort": "medium",
+      "configuration": "Medium, Default Fallback",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 56.4083157101519,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-fable-5-2-medium",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact value from public chart data. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2-medium."
+        }
+      },
+      "costPerTask": {
+        "value": 3.8026050641787634,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-fable-5-2-medium",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per task, including input, cached input and reasoning/output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2-medium."
+        }
+      },
+      "inputPerMillion": {
+        "value": 8,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-fable-5-2-medium",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M uncached input tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2-medium."
+        }
+      },
+      "outputPerMillion": {
+        "value": 40,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-fable-5-2-medium",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2-medium."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-claude-fable-5-2-low",
+      "provider": "Anthropic",
+      "model": "claude-fable-5.2",
+      "effort": "low",
+      "configuration": "Low, Default Fallback",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 53.9249388799182,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-fable-5-2-low",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact value from public chart data. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2-low."
+        }
+      },
+      "costPerTask": {
+        "value": 3.097241904274546,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-fable-5-2-low",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per task, including input, cached input and reasoning/output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2-low."
+        }
+      },
+      "inputPerMillion": {
+        "value": 8,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-fable-5-2-low",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M uncached input tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2-low."
+        }
+      },
+      "outputPerMillion": {
+        "value": 40,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-fable-5-2-low",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-fable-5-2-low."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-claude-opus-5-5-xhigh",
+      "provider": "Anthropic",
+      "model": "claude-opus-5.5",
+      "effort": "xhigh",
+      "configuration": "Xhigh, Default Fallback",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 57.4447060170507,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-opus-5-5-xhigh",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact value from public chart data. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-opus-5-5-xhigh."
+        }
+      },
+      "costPerTask": {
+        "value": 6.047194490848774,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-opus-5-5-xhigh",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per task, including input, cached input and reasoning/output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-opus-5-5-xhigh."
+        }
+      },
+      "inputPerMillion": {
+        "value": 4,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-opus-5-5-xhigh",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M uncached input tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-opus-5-5-xhigh."
+        }
+      },
+      "outputPerMillion": {
+        "value": 20,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-opus-5-5-xhigh",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-opus-5-5-xhigh."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-claude-opus-5-5-high",
+      "provider": "Anthropic",
+      "model": "claude-opus-5.5",
+      "effort": "high",
+      "configuration": "High, Default Fallback",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 51.8359958227294,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-opus-5-5-high",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact value from public chart data. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-opus-5-5-high."
+        }
+      },
+      "costPerTask": {
+        "value": 3.4646622820973185,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-opus-5-5-high",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per task, including input, cached input and reasoning/output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-opus-5-5-high."
+        }
+      },
+      "inputPerMillion": {
+        "value": 4,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-opus-5-5-high",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M uncached input tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-opus-5-5-high."
+        }
+      },
+      "outputPerMillion": {
+        "value": 20,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-opus-5-5-high",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-opus-5-5-high."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-claude-opus-5-5-medium",
+      "provider": "Anthropic",
+      "model": "claude-opus-5.5",
+      "effort": "medium",
+      "configuration": "Medium, Default Fallback",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 48.2081024960691,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-opus-5-5-medium",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact value from public chart data. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-opus-5-5-medium."
+        }
+      },
+      "costPerTask": {
+        "value": 2.4510894376611723,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-opus-5-5-medium",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per task, including input, cached input and reasoning/output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-opus-5-5-medium."
+        }
+      },
+      "inputPerMillion": {
+        "value": 4,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-opus-5-5-medium",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M uncached input tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-opus-5-5-medium."
+        }
+      },
+      "outputPerMillion": {
+        "value": 20,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-opus-5-5-medium",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-opus-5-5-medium."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-claude-opus-5-5-low",
+      "provider": "Anthropic",
+      "model": "claude-opus-5.5",
+      "effort": "low",
+      "configuration": "Low, Default Fallback",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 34.752785007759,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-opus-5-5-low",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact value from public chart data. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-opus-5-5-low."
+        }
+      },
+      "costPerTask": {
+        "value": 0.9755293224458845,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-opus-5-5-low",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per task, including input, cached input and reasoning/output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-opus-5-5-low."
+        }
+      },
+      "inputPerMillion": {
+        "value": 4,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-opus-5-5-low",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M uncached input tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-opus-5-5-low."
+        }
+      },
+      "outputPerMillion": {
+        "value": 20,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-opus-5-5-low",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-opus-5-5-low."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-claude-sonnet-5-5-xhigh",
+      "provider": "Anthropic",
+      "model": "claude-sonnet-5.5",
+      "effort": "xhigh",
+      "configuration": "Xhigh, Default Fallback",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 49.9240327787242,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-xhigh",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact value from public chart data. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-sonnet-5-5-xhigh."
+        }
+      },
+      "costPerTask": {
+        "value": 4.091984916321919,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-xhigh",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per task, including input, cached input and reasoning/output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-sonnet-5-5-xhigh."
+        }
+      },
+      "inputPerMillion": {
+        "value": 2,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-xhigh",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M uncached input tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-sonnet-5-5-xhigh."
+        }
+      },
+      "outputPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-xhigh",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-sonnet-5-5-xhigh."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-claude-sonnet-5-5-high",
+      "provider": "Anthropic",
+      "model": "claude-sonnet-5.5",
+      "effort": "high",
+      "configuration": "High, Default Fallback",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 41.515109087048,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-high",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact value from public chart data. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-sonnet-5-5-high."
+        }
+      },
+      "costPerTask": {
+        "value": 1.6361294399784785,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-high",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per task, including input, cached input and reasoning/output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-sonnet-5-5-high."
+        }
+      },
+      "inputPerMillion": {
+        "value": 2,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-high",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M uncached input tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-sonnet-5-5-high."
+        }
+      },
+      "outputPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-high",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-sonnet-5-5-high."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-claude-sonnet-5-5-medium",
+      "provider": "Anthropic",
+      "model": "claude-sonnet-5.5",
+      "effort": "medium",
+      "configuration": "Medium, Default Fallback",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 30.8195522148431,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-medium",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact value from public chart data. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-sonnet-5-5-medium."
+        }
+      },
+      "costPerTask": {
+        "value": 0.7806560352024481,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-medium",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per task, including input, cached input and reasoning/output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-sonnet-5-5-medium."
+        }
+      },
+      "inputPerMillion": {
+        "value": 2,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-medium",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M uncached input tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-sonnet-5-5-medium."
+        }
+      },
+      "outputPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-medium",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-sonnet-5-5-medium."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "aa-web-v5.0.1-claude-sonnet-5-5-low",
+      "provider": "Anthropic",
+      "model": "claude-sonnet-5.5",
+      "effort": "low",
+      "configuration": "Low, Default Fallback",
+      "billing": "api",
+      "benchmark": "Artificial Analysis Intelligence Index v5.0.1",
+      "quality": {
+        "value": 25.649704549789,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-low",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1; exact value from public chart data. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-sonnet-5-5-low."
+        }
+      },
+      "costPerTask": {
+        "value": 0.5113424463897498,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-low",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Artificial Analysis Intelligence Index v5.0.1 weighted USD per task, including input, cached input and reasoning/output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-sonnet-5-5-low."
+        }
+      },
+      "inputPerMillion": {
+        "value": 2,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-low",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M uncached input tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-sonnet-5-5-low."
+        }
+      },
+      "outputPerMillion": {
+        "value": 10,
+        "source": {
+          "url": "https://artificialanalysis.ai/models/claude-sonnet-5-5-low",
+          "retrievedAt": "2026-11-09T20:02:37.258Z",
+          "methodology": "Published USD per 1M output tokens. Collected from the public model payload embedded at https://artificialanalysis.ai/models/claude-sonnet-5-5-low."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "Public publisher chart data retrieved online. API reference prices; not subscription or local operating costs."
+    },
+    {
+      "id": "openrouter-price-e8f88e63e891ed8ee1cefa57",
+      "provider": "OpenRouter",
+      "model": "claude-fable-5.2",
+      "effort": "unspecified",
+      "configuration": "OpenRouter routed model anthropic/claude-fable-5.2; standard pricing tier",
+      "billing": "api",
+      "benchmark": "OpenRouter routed API pricing",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 8,
+        "source": {
+          "url": "https://openrouter.ai/api/v1/models",
+          "retrievedAt": "2026-11-09T20:03:28.970Z",
+          "methodology": "OpenRouter published routed price for anthropic/claude-fable-5.2; standard. Rates are USD per million tokens. Prompt price is the uncached-input rate."
+        }
+      },
+      "outputPerMillion": {
+        "value": 40,
+        "source": {
+          "url": "https://openrouter.ai/api/v1/models",
+          "retrievedAt": "2026-11-09T20:03:28.970Z",
+          "methodology": "OpenRouter published routed price for anthropic/claude-fable-5.2; standard. Rates are USD per million tokens. Completion price is the output rate."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "OpenRouter routed price, not the model creator first-party price. Cached-token, audio and per-request charges are not represented by this schema; free routes remain subject to upstream limits and terms."
+    },
+    {
+      "id": "openrouter-price-7bf62b5ee576fea71485a172",
+      "provider": "OpenRouter",
+      "model": "claude-fable-5.2",
+      "effort": "unspecified",
+      "configuration": "OpenRouter routed model anthropic/claude-fable-5.2:batch; standard pricing tier",
+      "billing": "api",
+      "benchmark": "OpenRouter routed API pricing",
+      "quality": null,
+      "costPerTask": null,
+      "inputPerMillion": {
+        "value": 4,
+        "source": {
+          "url": "https://openrouter.ai/api/v1/models",
+          "retrievedAt": "2026-11-09T20:03:28.970Z",
+          "methodology": "OpenRouter published routed price for anthropic/claude-fable-5.2:batch; standard. Rates are USD per million tokens. Prompt price is the uncached-input rate."
+        }
+      },
+      "outputPerMillion": {
+        "value": 20,
+        "source": {
+          "url": "https://openrouter.ai/api/v1/models",
+          "retrievedAt": "2026-11-09T20:03:28.970Z",
+          "methodology": "OpenRouter published routed price for anthropic/claude-fable-5.2:batch; standard. Rates are USD per million tokens. Completion price is the output rate."
+        }
+      },
+      "reasoningPerMillion": null,
+      "responseSeconds": null,
+      "tokensPerSecond": null,
+      "quota": null,
+      "notes": "OpenRouter routed price, not the model creator first-party price. Cached-token, audio and per-request charges are not represented by this schema; free routes remain subject to upstream limits and terms."
     }
   ]
 }

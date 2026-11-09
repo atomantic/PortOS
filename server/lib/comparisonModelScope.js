@@ -105,6 +105,7 @@ const ALIASES = new Map([
   ['qwen3-coder-30b-a3b', 'qwen3-coder-30b-a3b-instruct'],
   ['nemotron-3-ultra', 'nemotron-3-ultra-550b-a55b'],
   ['claude-fable-5-1', 'claude-fable-5.1'],
+  ['claude-fable-5-2', 'claude-fable-5.2'],
   // Published Bedrock model ids and dated API aliases for the same weights.
   ['nemotron-nano-3-30b', 'nvidia-nemotron-3-nano-30b-a3b'],
   ['nemotron-super-3-120b', 'nemotron-3-super-120b-a12b'],

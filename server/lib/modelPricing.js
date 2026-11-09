@@ -39,6 +39,7 @@ export const PRICING_AS_OF = '2026-09-01';
 // Newer model launch rates are tracked separately so the baseline date above
 // does not imply that every vendor's pricing was re-verified on that date.
 const MODEL_RATE_AS_OF = Object.freeze({
+  'claude-fable-5-2': '2026-11-03',
   'claude-haiku-5-5': '2026-10-07',
   'claude-sonnet-5-5': '2026-10-07',
   'claude-opus-5-5': '2026-09-23',
@@ -179,11 +180,13 @@ const OPUS_MODEL_IDS = [
  * FIRST, same convention as OPUS_MODEL_IDS: its head is what the `/fable/i`
  * family rule reports for a fable id the table doesn't list.
  */
-const FABLE_MODEL_IDS = ['claude-fable-5-1', 'claude-fable-5'];
+const FABLE_MODEL_IDS = ['claude-fable-5-2', 'claude-fable-5-1', 'claude-fable-5'];
 
 /** USD per 1M tokens: [input, output]. Exact model-id matches. */
 const EXACT_RATES = {
   // Anthropic
+  // Fable 5.2 is the successor to 5.1 at a lower price ($8/$40).
+  'claude-fable-5-2': [8.0, 40.0],
   'claude-fable-5-1': [10.0, 50.0],
   // Opus 5.5 launched below the $5/$25 Opus tier rate, so it is its own row
   // rather than a member of OPUS_MODEL_IDS.
@@ -355,6 +358,8 @@ const CACHE_MULTIPLIER_RULES = [
   { test: /^grok-build-0\.1$/, cacheReadPer1M: 0.20, write: 1 },
   { test: /^grok/, read: 0.25, write: 1 },
   { test: /^claude-fable-5-1/, read: 0.025, write: 1.25 },
+  // Fable 5.2 cache reads are $0.20/MTok against an $8 input rate.
+  { test: /^claude-fable-5-2/, read: 0.025, write: 1.25 },
   // Opus 5.5 cache reads are $0.20/MTok against a $4 input rate.
   { test: /^claude-opus-5-5/, read: 0.05, write: 1.25 },
   // Sonnet 5.5 cache reads were halved to $0.10/MTok (2026-10-07) against a $2 input rate:
