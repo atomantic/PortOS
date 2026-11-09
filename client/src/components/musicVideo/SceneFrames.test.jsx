@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
 import SceneFrames from './SceneFrames.jsx';
@@ -6,6 +6,8 @@ import SceneFrames from './SceneFrames.jsx';
 vi.mock('../../services/apiImageVideo.js', () => ({ previewImagePrompt: vi.fn(async (body) => ({ sentPrompt: `${body.prompt}\nSinger stands at the "rail" mark, waving`, promptAdditions: [{ id: 'greybox-figure-0', label: 'Greybox figure 1', text: 'Singer stands at the "rail" mark, waving' }] })) }));
 
 const scene = { sceneId: 's1', referenceImageId: 'start.png', endImageId: 'end.png', framePrompt: 'Door opens', endFramePrompt: 'Door shut', takes: [] };
+// A remembered frame service would add a Model control beside From.
+beforeEach(() => localStorage.clear());
 const frames = (props) => render(<SceneFrames scene={scene} index={0} endFrames onEditLocal={vi.fn()} onSave={vi.fn()} {...props} />);
 
 it('edits and saves each frame prompt on blur', () => {

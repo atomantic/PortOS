@@ -17,6 +17,8 @@ import { previewVideoPrompt } from '../../services/apiImageVideo.js';
 const GROK_MAX = GROK_VIDEO_DURATIONS.at(-1);
 // The editor shows the still or the clip, one at a time.
 const show = (name) => fireEvent.click(within(screen.getByRole('group', { name: 'Show' })).getByRole('button', { name }));
+// getByLabelText also matches the hidden tab, so a clip "Render on" stays inside its section.
+const clipRenderOn = () => within(screen.getByRole('region', { name: 'Render', hidden: true })).getByLabelText('Render on');
 // A card opens on the last Render on pick, so each test starts from the project setting.
 beforeEach(() => {
   localStorage.clear();
@@ -647,10 +649,60 @@ describe('start and end frames', () => {
 
     show('Clip');
     expect(screen.getByTestId('end-frame-plan').textContent).toMatch(/animates from the start frame only/);
-    const pick = screen.getByLabelText('Render on');
+    const pick = clipRenderOn();
     expect(within(pick).getByRole('option', { name: /Kling v3 Pro.*ends on end frame/ })).toBeTruthy();
     fireEvent.change(pick, { target: { value: 'fal:fal-ai/kling-video/v3/pro/image-to-video' } });
     expect(screen.getByTestId('end-frame-plan').textContent).toBe('The clip ends on the end frame.');
+  });
+});
+
+describe('frame Render on', () => {
+  const scene = { sceneId: 's1', prompt: 'She looks into the lens', referenceImageId: 'start.png', startSec: 0, endSec: 4, takes: [] };
+  const project = { id: 'mv-example', imageMode: 'grok', scenes: [scene] };
+
+  // Uniquely catches a frame render ignoring the shot's image service, or that pick becoming the clip's Render on.
+  it('sends the picked image service with the frame, and the next card opens on it', () => {
+    const onGenerateFrame = vi.fn();
+    const first = render(<SceneCard scene={scene} index={0} expanded project={project} onEditLocal={() => {}} onSave={() => {}}
+      onGenerateFrame={onGenerateFrame} falVideoSettings={{ backend: 'local' }} />);
+    show('Still');
+    const still = screen.getByRole('region', { name: 'Still' });
+    expect(within(still).getByLabelText('Render on').textContent).toContain('Project setting · Grok');
+    expect(within(still).queryByLabelText('Model')).toBeNull();
+    fireEvent.change(within(still).getByLabelText('Render on'), { target: { value: 'codex' } });
+    fireEvent.change(within(still).getByLabelText('Model'), { target: { value: 'example-model' } });
+    fireEvent.click(within(still).getByRole('button', { name: 'New frame take' }));
+    expect(onGenerateFrame).toHaveBeenLastCalledWith(scene, {
+      referenceImageId: null, imageTarget: { mode: 'codex', cloudModel: 'example-model' },
+    });
+    show('Clip');
+    expect(clipRenderOn().value).toBe('');
+    first.unmount();
+
+    render(<SceneCard scene={{ ...scene, sceneId: 's2' }} index={1} expanded project={{ ...project, scenes: [{ ...scene, sceneId: 's2' }] }}
+      onEditLocal={() => {}} onSave={() => {}} onGenerateFrame={vi.fn()} falVideoSettings={{ backend: 'local' }} />);
+    show('Still');
+    const next = screen.getByRole('region', { name: 'Still' });
+    expect(within(next).getByLabelText('Render on').value).toBe('codex');
+    expect(within(next).getByLabelText('Model').value).toBe('example-model');
+  });
+
+  // Uniquely catches Retry or Clip from storyboard dropping the frame service once the Frames tab is hidden.
+  it('keeps the frame service on Retry and on Clip from storyboard', () => {
+    const failed = { ...scene, panelId: 'p1', panelArt: 'panel.png', referenceImageId: null,
+      lastFailure: { lane: 'image', error: 'render failed', at: '2026-10-05T00:00:00.000Z' } };
+    const onGenerateFrame = vi.fn();
+    render(<SceneCard scene={failed} index={0} expanded project={{ ...project, scenes: [failed] }} onEditLocal={() => {}} onSave={() => {}}
+      onGenerateFrame={onGenerateFrame} lipSyncBackend="grok" falVideoSettings={{ backend: 'grok' }} />);
+    show('Still');
+    fireEvent.change(within(screen.getByRole('region', { name: 'Still' })).getByLabelText('Render on'), { target: { value: 'grok' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(onGenerateFrame).toHaveBeenLastCalledWith(failed, { imageTarget: { mode: 'grok' } });
+    show('Clip');
+    fireEvent.click(screen.getByRole('button', { name: 'Clip from storyboard' }));
+    expect(onGenerateFrame).toHaveBeenLastCalledWith(failed, {
+      thenClip: { backend: 'grok', songAudio: false }, imageTarget: { mode: 'grok' },
+    });
   });
 });
 
@@ -661,18 +713,18 @@ describe('Render on remembers the last pick', () => {
       takes: [{ takeId: 't1', kind: 'image', assetId: 'start.png', status: 'selected' }] };
     const saved = { backend: 'fal' };
     const first = render(<SceneCard scene={scene} index={0} expanded onEditLocal={() => {}} onSave={() => {}} falVideoSettings={saved} />);
-    expect(screen.getByLabelText('Render on').value).toBe('');
-    fireEvent.change(screen.getByLabelText('Render on'), { target: { value: 'local' } });
+    expect(clipRenderOn().value).toBe('');
+    fireEvent.change(clipRenderOn(), { target: { value: 'local' } });
     first.unmount();
 
     const second = render(<SceneCard scene={{ ...scene, sceneId: 's2' }} index={1} expanded onEditLocal={() => {}} onSave={() => {}} falVideoSettings={saved} />);
-    expect(screen.getByLabelText('Render on').value).toBe('local');
-    fireEvent.change(screen.getByLabelText('Render on'), { target: { value: 'grok' } });
+    expect(clipRenderOn().value).toBe('local');
+    fireEvent.change(clipRenderOn(), { target: { value: 'grok' } });
     second.unmount();
 
     // Grok renders cutaways only, so a lip-synced shot opens on the project setting.
     render(<SceneCard scene={{ ...scene, sceneId: 's3', shotMode: 'performance' }} index={2} expanded onEditLocal={() => {}} onSave={() => {}} falVideoSettings={saved} />);
-    expect(screen.getByLabelText('Render on').value).toBe('');
+    expect(clipRenderOn().value).toBe('');
   });
 });
 
@@ -914,8 +966,8 @@ describe('Whole sung line', () => {
     const onGenerateVideo = vi.fn();
     render(<SceneCard scene={scene} project={project} index={0} expanded onEditLocal={() => {}} onSave={() => {}} onGenerateVideo={onGenerateVideo}
       lipSyncBackend="fal" songDurationSec={60} falVideoSettings={{ backend: 'fal' }} />);
-    expect(screen.getByLabelText('Render on').textContent).toContain('Project setting · fal.ai · MiniMax H3 Max lip-sync');
-    expect(screen.getByLabelText('Render on').textContent).not.toContain('Hailuo');
+    expect(clipRenderOn().textContent).toContain('Project setting · fal.ai · MiniMax H3 Max lip-sync');
+    expect(clipRenderOn().textContent).not.toContain('Hailuo');
     const plan = () => screen.getByTestId('performance-plan').textContent;
     expect(plan()).toContain('est. $0.81 (5.05s at 1080P)');
     fireEvent.click(within(screen.getByTestId('render-inputs')).getByLabelText('Whole sung line'));
@@ -1381,7 +1433,7 @@ it('shows the effective LTX reference clip length and refuses an empty motion pr
     onGenerateVideo={onGenerateVideo} videoModels={models}
     falVideoSettings={{ backend: 'local', modelId: 'ltx25_example' }} />);
   show('Clip');
-  fireEvent.change(screen.getByLabelText('Render on'), { target: { value: 'local' } });
+  fireEvent.change(clipRenderOn(), { target: { value: 'local' } });
   fireEvent.click(screen.getByLabelText(/Use LTX reference images/));
   fireEvent.change(screen.getByLabelText('Clip length'), { target: { value: '73' } });
   expect(screen.getByLabelText('Clip length').value).toBe('73');

@@ -183,9 +183,9 @@ export default function useMusicVideoModelSettings({ project, onProjectPatch } =
   };
 
   // #3231 Phase 4 — per-project frame-render pin (`imageMode`/`imageModelId`),
-  // the image-side sibling of the video renderer pin above. Scene
-  // reference-frame renders send no explicit mode, so the server resolves this
-  // record pin directly (imageGen/prepareParams) — no client seeding needed.
+  // the image-side sibling of the video renderer pin above. A shot card can
+  // name a service for one frame render. A render that sends no mode still
+  // resolves this record pin (imageGen/prepareParams) — no client seeding needed.
   // `framePinSaving` is the image-side counterpart of `saving`, and carries the
   // same obligation: the optimistic patch repaints the picker immediately, but
   // the server resolves the RECORD pin at kickoff — so a frame render started

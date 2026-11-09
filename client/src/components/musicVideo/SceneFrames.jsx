@@ -3,10 +3,11 @@ import { musicVideoGreyboxReference } from '../../../../server/lib/musicVideoGre
 import SceneFramePromptPreview from './SceneFramePromptPreview.jsx';
 import SceneFrameReferenceLimitNotice from './SceneFrameReferenceLimitNotice.jsx';
 import SceneGreyboxReference from './SceneGreyboxReference.jsx';
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Activity, ArrowLeftRight, ArrowRight, Image as ImageIcon, ImagePlus, PencilLine, Shuffle, SkipForward, Wand2, X } from 'lucide-react';
 import AutoSizeTextarea from '../ui/AutoSizeTextarea.jsx';
 import InfoTooltip from '../ui/InfoTooltip';
+import SceneFrameRenderTarget, { frameRenderTargetOverrides, lastFrameRenderTarget } from './SceneFrameRenderTarget.jsx';
 import SceneTakeStrip from './SceneTakeStrip.jsx';
 import SceneCameoLink from './SceneCameoLink.jsx';
 import SceneFrameReferences from './SceneFrameReferences.jsx';
@@ -64,7 +65,9 @@ const RERENDER_HINT = 'Renders this frame again from the current Casting look an
  * optional one it ends on (#11173). Each frame shows its prompt and its own
  * Render right under the picture, and can render from the start or end frame
  * as an image reference (`onGenerateFrame` / `onGenerateEndFrame` take
- * `{ referenceImageId }`, null for prompt only). Refine edits a frame by a
+ * `{ referenceImageId }`, null for prompt only). Render on names the image
+ * service for this shot's frames only; a pick rides along as `imageTarget`.
+ * Refine edits a frame by a
  * short instruction (`{ referenceImageId, refine }`), and Swap puts one of the
  * video's unused stills on it. Each frame's own takes sit under it as a grid,
  * so both frames' actions and takes show at once; tapping a frame opens it full size.
@@ -75,7 +78,7 @@ const RERENDER_HINT = 'Renders this frame again from the current Casting look an
  * its column hides and clips skip it, keeping its selection, prompt and takes for switching back on.
  */
 export default function SceneFrames({
-  project = null, castMedia = null, onReloadCastMedia = null, greyboxPlaces = {}, greyboxSaving = false, onGreyboxSaving, scene, index, endFrames: endFramesAllowed, endFrameToggle = false, generatingFrame = false, generatingEndFrame = false, onGenerateFrame, onGenerateEndFrame,
+  project = null, castMedia = null, onReloadCastMedia = null, greyboxPlaces = {}, greyboxSaving = false, onGreyboxSaving, scene, index, endFrames: endFramesAllowed, endFrameToggle = false, generatingFrame = false, generatingEndFrame = false, onGenerateFrame, onGenerateEndFrame, onImageTargetChange = null,
   onEditLocal, onSave, onOpenPreview, takeBusy = false, onSelectTake, onReviewTake, onSwap = null, onImportTake = null,
   onContinueFromPrevious = null, previousHasClip = false, onSwapFrames = null, assetMarks = null, onMarkTake = null, onCheckTake = null, checkingTakes = null, onApplyCameos = null,
 }) {
@@ -106,6 +109,12 @@ export default function SceneFrames({
   const frames = { start: scene.referenceImageId || null, end: endFrames ? scene.endImageId || null : null };
   const refOf = (which) => (frames[refs[which]] ? refs[which] : '');
   const id = (name) => `mv-scene-${scene.sceneId}-${name}`;
+  // '' follows the project image pin. A named service is this render only, and stays for Retry.
+  const [framePick, setFramePick] = useState(() => lastFrameRenderTarget().pick);
+  const [frameOptions, setFrameOptions] = useState(() => lastFrameRenderTarget().options);
+  const imageTarget = useMemo(() => frameRenderTargetOverrides(framePick, frameOptions), [framePick, frameOptions]);
+  useEffect(() => { onImageTargetChange?.(imageTarget); }, [imageTarget, onImageTargetChange]);
+  const withTarget = (extra) => (imageTarget ? { ...extra, imageTarget } : extra);
 
   const column = (which) => {
     const start = which === 'start';
@@ -116,19 +125,19 @@ export default function SceneFrames({
     const ref = refOf(which);
     const refChoices = ['', ...['start', 'end'].filter((key) => frames[key])];
     const needsPrompt = !start && !scene.endFramePrompt?.trim();
-    const render = () => (start ? onGenerateFrame : onGenerateEndFrame)?.(scene, { referenceImageId: ref ? frames[ref] : null });
+    const render = () => (start ? onGenerateFrame : onGenerateEndFrame)?.(scene, withTarget({ referenceImageId: ref ? frames[ref] : null }));
     const kind = start ? 'image' : 'endImage';
     const selected = imageId ? (scene.takes || []).find((take) => take?.kind === kind && take.assetId === imageId) : null;
     const olderLook = selected ? castLookForTake(project, scene, selected, castMedia).status === 'older' : false;
     const rerender = () => {
       if (greyboxBlocked || generating || needsPrompt) return;
-      (start ? onGenerateFrame : onGenerateEndFrame)?.(scene, { referenceImageId: ref ? frames[ref] : null, replaceSelection: true });
+      (start ? onGenerateFrame : onGenerateEndFrame)?.(scene, withTarget({ referenceImageId: ref ? frames[ref] : null, replaceSelection: true }));
     };
     const refineLocked = greyboxBlocked || !!generating;
     const refine = (e) => {
       e.preventDefault();
       if (!instruction.trim() || refineLocked) return;
-      (start ? onGenerateFrame : onGenerateEndFrame)?.(scene, { referenceImageId: imageId, refine: instruction.trim() });
+      (start ? onGenerateFrame : onGenerateEndFrame)?.(scene, withTarget({ referenceImageId: imageId, refine: instruction.trim() }));
       setRefining(null);
       setInstruction('');
     };
@@ -254,6 +263,8 @@ export default function SceneFrames({
           </label>
         )}
       </div>
+      <SceneFrameRenderTarget id={id('frame-render')} value={framePick} options={frameOptions} project={project}
+        disabled={!!generatingFrame || !!generatingEndFrame} onChange={setFramePick} onOptionsChange={setFrameOptions} />
       <SceneCameoLink project={project} scene={scene} onApplyCameos={onApplyCameos} onEditLocal={onEditLocal} onSave={onSave} />
       {project && <SceneResearchSeed project={project} scene={scene} onEditLocal={onEditLocal} onSave={onSave} />}
       <SceneFrameReferences project={project} scene={scene} castMedia={castMedia} onReloadCastMedia={onReloadCastMedia} greybox={greybox} onEditLocal={onEditLocal} onSave={onSave} />

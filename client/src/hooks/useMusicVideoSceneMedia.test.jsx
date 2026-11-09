@@ -498,3 +498,38 @@ it('tracks a local and a grok clip render on the same shot side by side', async 
   expect(result.current.genVideoScenes.s1).toBeUndefined();
   cleanup();
 });
+
+describe('shot frame image service', () => {
+  beforeEach(() => {
+    handlers.clear();
+    generateImage.mockClear();
+    getMusicVideoSceneJobs.mockReset();
+    getMusicVideoSceneJobs.mockResolvedValue({ jobs: [] });
+  });
+
+  // Uniquely catches a shot-card image service being dropped, or a project-setting render sending a stale mode.
+  it('sends an explicit frame service and omits mode when the card follows the project pin', async () => {
+    const { result } = setup();
+    await act(async () => {
+      await result.current.generateFrame(project.scenes[0], { imageTarget: { mode: 'codex', cloudModel: 'example-model' } });
+    });
+    expect(generateImage.mock.calls.at(-1)[0]).toMatchObject({ mode: 'codex', cloudModel: 'example-model', prompt: 'a lighthouse' });
+    expect(generateImage.mock.calls.at(-1)[0].modelId).toBeUndefined();
+
+    await act(async () => { await result.current.generateFrame(project.scenes[0]); });
+    const pinned = generateImage.mock.calls.at(-1)[0];
+    expect(pinned.mode).toBeUndefined();
+    expect(pinned.cloudModel).toBeUndefined();
+    expect(pinned.modelId).toBeUndefined();
+
+    await act(async () => {
+      await result.current.generateEndFrame(
+        { ...project.scenes[0], endFramePrompt: 'the light goes out' },
+        { imageTarget: { mode: 'local', modelId: 'example-local' } },
+      );
+    });
+    expect(generateImage.mock.calls.at(-1)[0]).toMatchObject({ mode: 'local', modelId: 'example-local', prompt: 'the light goes out' });
+    expect(generateImage.mock.calls.at(-1)[0].cloudModel).toBeUndefined();
+    cleanup();
+  });
+});
