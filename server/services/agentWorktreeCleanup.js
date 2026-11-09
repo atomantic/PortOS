@@ -255,7 +255,11 @@ async function cleanupClaimBranchWorktrees(agentId, { sourceWorkspace, claimBran
     }
     const probe = await probePrForBranch(sourceWorkspace, branch).catch(() => null);
     const merged = isExactMergedPrHead(probe, capture.head);
-    if (!merged && !(probe?.readable === true && probe.prState === null)) {
+    // A finished PR at another head is an earlier delivery on a reused claim
+    // branch (a re-claim provisioned from the default branch), not this
+    // checkout's work: the stand-down path below removes it only when clean
+    // and contained in the default branch. An open PR still holds.
+    if (!merged && !(probe?.readable === true && probe.prState !== 'OPEN')) {
       warnings.push(held(branch, 'merged head not verified'));
       continue;
     }
