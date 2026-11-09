@@ -580,7 +580,11 @@ describe('motion prompt from the storyboard panel', () => {
     const box = screen.getAllByLabelText('Clip prompt').find((el) => el.value);
     expect(box.value).toBe('She laces her skates');
     expect(screen.getByTestId('prompt-from-storyboard')).toBeTruthy();
-    // Blurring the panel's words keeps the shot linked rather than copying them.
+    // Blurring untouched words saves nothing; retyping the panel's own words keeps the shot linked rather than copying them.
+    fireEvent.blur(box);
+    expect(onSave).not.toHaveBeenCalled();
+    fireEvent.change(box, { target: { value: 'She laces her skates!' } });
+    fireEvent.change(box, { target: { value: 'She laces her skates' } });
     fireEvent.blur(box);
     expect(onSave).toHaveBeenLastCalledWith('s1', { prompt: '' });
     fireEvent.click(screen.getByRole('button', { name: 'Render again' }));
@@ -1454,5 +1458,35 @@ describe('shot details', () => {
     const inputs = screen.getByTestId('render-inputs');
     expect(within(inputs).getByRole('button', { name: '+ Emotion' })).toBeInTheDocument();
     expect(within(inputs).getByRole('button', { name: '+ Camera' })).toBeInTheDocument();
+  });
+});
+
+describe('shot prompt save-on-blur', () => {
+  const base = { sceneId: 's1', startSec: 0, endSec: 4, prompt: 'old prompt', takes: [] };
+  function Harness({ initial, onSave }) {
+    const [scene, setScene] = useState(initial);
+    return <SceneCard scene={scene} project={{ id: 'mv-1', scenes: [scene] }} index={0} expanded
+      falVideoSettings={{ backend: 'local' }} onEditLocal={(_id, patch) => setScene((c) => ({ ...c, ...patch }))} onSave={onSave} />;
+  }
+  const renderCard = (scene, onSave) => render(<Harness initial={scene} onSave={onSave} />);
+
+  it('does not save an untouched prompt that a newer copy replaced', () => {
+    const onSave = vi.fn();
+    const { rerender } = renderCard(base, onSave);
+    const newer = { ...base, prompt: 'newer prompt' };
+    rerender(<SceneCard scene={newer} project={{ id: 'mv-1', scenes: [newer] }} index={0} expanded falVideoSettings={{ backend: 'local' }} onEditLocal={vi.fn()} onSave={onSave} />);
+    const box = screen.getAllByLabelText(/shot prompt|clip prompt/i).find((el) => el.tagName === 'TEXTAREA');
+    fireEvent.focus(box);
+    fireEvent.blur(box);
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it('saves the typed prompt on blur', () => {
+    const onSave = vi.fn();
+    renderCard(base, onSave);
+    const box = screen.getAllByLabelText(/shot prompt|clip prompt/i).find((el) => el.tagName === 'TEXTAREA');
+    fireEvent.change(box, { target: { value: 'typed prompt' } });
+    fireEvent.blur(box);
+    expect(onSave).toHaveBeenCalledWith('s1', { prompt: 'typed prompt' });
   });
 });

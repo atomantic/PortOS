@@ -438,6 +438,37 @@ export default function MusicVideo() {
     return () => events.forEach((e) => socket.off(e, onRunEvent));
   }, []);
 
+  // An edit made elsewhere (an agent, another tab) reaches the open project here; fields typed
+  // locally and not yet saved keep their text, with a notice that the shot changed.
+  useEffect(() => {
+    if (!selectedId) return undefined;
+    let active = true;
+    const onChanged = (data) => {
+      if (data?.id !== selectedId) return;
+      getMusicVideoProject(selectedId, { silent: true }).then((fresh) => {
+        if (!active || !fresh) return;
+        let conflict = false;
+        setSelectedProject((prev) => {
+          if (prev?.id !== fresh.id) return prev;
+          const local = new Map((prev.scenes || []).map((s) => [s.sceneId, s]));
+          const scenes = (fresh.scenes || []).map((scene) => {
+            const mine = local.get(scene.sceneId);
+            const keys = unsavedSceneFields.current.get(scene.sceneId);
+            if (!mine || !keys?.size) return scene;
+            const kept = { ...scene };
+            keys.forEach((k) => { if (kept[k] !== mine[k]) { conflict = true; kept[k] = mine[k]; } });
+            return kept;
+          });
+          return { ...fresh, scenes };
+        });
+        summaries.setItems((prev) => prev.map((p) => (p.id === fresh.id ? fresh : p)));
+        if (conflict) toast.info('A shot changed elsewhere. Your unsaved text is kept; saving it replaces the other edit.');
+      }).catch(() => {});
+    };
+    socket.on('music-video:project:changed', onChanged);
+    return () => { active = false; socket.off('music-video:project:changed', onChanged); };
+  }, [selectedId]);
+
   // `youtube.editJob` is one shared job slot for the whole detail view (not
   // per-project) — switching the selected project while it has an import in
   // flight would silently orphan that job's SSE subscription (the finished
@@ -1100,13 +1131,18 @@ function ProjectWorkspace({
   };
 
   // Optimistic local edit; PATCH on blur (silent — this owns its error toast).
+  // Shot fields typed locally and not yet saved: a refetch after a change made elsewhere keeps these.
+  const unsavedSceneFields = useRef(new Map());
   const editSceneLocal = (sceneId, patch) => {
+    const keys = unsavedSceneFields.current.get(sceneId) || new Set();
+    Object.keys(patch).forEach((k) => keys.add(k));
+    unsavedSceneFields.current.set(sceneId, keys);
     // Reads the current project: shot sheet Apply calls this repeatedly from one retained closure.
     patchProject(selected.id, (project) => ({ scenes: project.scenes?.map((s) => (s.sceneId === sceneId ? { ...s, ...patch } : s)) }));
   };
   const saveScene = (sceneId, patch) => {
     return updateMusicVideoScene(selected.id, sceneId, patch, { silent: true })
-      .then(() => true)
+      .then(() => { Object.keys(patch).forEach((k) => unsavedSceneFields.current.get(sceneId)?.delete(k)); return true; })
       .catch((err) => { toast.error(err?.message || 'Failed to save scene'); return false; });
   };
 
