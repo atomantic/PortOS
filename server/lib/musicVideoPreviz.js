@@ -21,7 +21,7 @@
  * - a track is where one character is in one place over time:
  *   `{ subjectId, placeSubjectId, keys: [{ timeSec, position, facingDegrees, pose, vehicleSubjectId }] }`,
  *   absolute song seconds, linearly interpolated, held before the first and after
- *   the last key. `pose: 'ride'` draws the figure on a proxy of the vehicle `vehicleSubjectId`
+ *   the last key. `pose` is stand, walk, run, crouch, sit or 'ride'; 'ride' draws the figure on a proxy of the vehicle `vehicleSubjectId`
  *   names (a catalog object listed in `previz.vehicles`).
  *
  * Units are the greybox's: meters, Y up, floor y=0; facing 0 looks along +Z.
@@ -34,8 +34,8 @@ import { activeMusicVideoSubjects, musicVideoPrevizForActiveCast } from './music
 import { timelineActorsAt, timelineClockAt, previzTimeline, previzVehicleInText, previzVehicles, suggestPrevizVehicles } from './musicVideoPrevizTimeline.js';
 import { PREVIZ_CUTS_MAX, PREVIZ_KEYS_MAX, PREVIZ_PAWN_COLORS, PREVIZ_TRACKS_MAX } from './musicVideoPrevizLimits.js';
 
-const EYE_HEIGHT = { stand: 1.6, ride: 1.75 };
-const CHEST_HEIGHT = { stand: 1.25, ride: 1.4 };
+const EYE_HEIGHT = { stand: 1.6, walk: 1.6, run: 1.5, crouch: 1.0, sit: 1.2, ride: 1.75 };
+const CHEST_HEIGHT = { stand: 1.25, walk: 1.25, run: 1.2, crouch: 0.8, sit: 0.95, ride: 1.4 };
 const FIGURE_SPACING = 0.9;
 // The end key of a cut sits this far before the cut's end, so a figure holds its mark for
 // the whole cut instead of sliding toward where it stands in the next one.
@@ -214,6 +214,19 @@ function shotVehicle(project, scene, placeSubjectId) {
     || previzVehicleInText(project, ...projectRouteMaps(project).filter((map) => (map.stops || []).some((stop) => stop.subjectId === placeSubjectId)).map((map) => map.travel));
 }
 
+const CROUCH_TEXT = /\b(crouch\w*|squat\w*|kneel\w*|duck(?:s|ed|ing)?\s+(?:down|behind)|(?:hid(?:es|e|ing)|hunch\w*)\s+behind)\b/i;
+const SIT_TEXT = /\b(sits?|sitting|sat|seated|perch(?:es|ed)?)\b/i;
+const RUN_TEXT = /\b(runs?|running|ran|sprint\w*|dash(?:es|ed|ing)?|flees?|fleeing|fled|races|racing)\b/i;
+
+/** The on-foot pose a shot's action words describe (crouch, sit, run), else null: a shot that names none keeps people standing. */
+function previzPoseInText(text) {
+  const words = textOf(text);
+  if (CROUCH_TEXT.test(words)) return 'crouch';
+  if (SIT_TEXT.test(words)) return 'sit';
+  if (RUN_TEXT.test(words)) return 'run';
+  return null;
+}
+
 /** Everyone a cut stands on its set: the people it picks to show, then the camera's holder. */
 function cutPeople(cut) {
   return [...new Set([...(cut.visibleSubjectIds || []), ...(cut.holderSubjectId ? [cut.holderSubjectId] : [])])];
@@ -286,7 +299,7 @@ function seedCutTracks(project, existingTracks, cuts, loadedPlaces) {
     if (!people.length) continue;
     const scene = (project?.scenes || []).find((entry) => entry.sceneId === cut.sceneId) || {};
     const vehicleSubjectId = shotVehicle(project, scene, cut.placeSubjectId);
-    const pose = vehicleSubjectId ? 'ride' : 'stand';
+    const pose = vehicleSubjectId ? 'ride' : previzPoseInText(scene.shotSheet?.action) || 'stand';
     const marks = seedMarks(cut, previzPlaceGreybox(project, cut.placeSubjectId, loadedPlaces), people);
     for (const id of people) {
       const key = trackKey(id, cut.placeSubjectId);

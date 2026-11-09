@@ -68,3 +68,13 @@ export const catalogPhotorealTextureSearchSchema = z.object({
   q: z.string().max(80).optional().default(''),
 }).strict();
 export const catalogPhotorealTextureIdSchema = z.string().regex(PHOTOREAL_TEXTURE_ID);
+
+// The Previz page reports a browser-side build or sync as a tracked job so other tabs show it.
+export const previzBuildJobStartSchema = z.object({
+  projectId: z.string().trim().min(1).max(128),
+  label: z.string().trim().min(1).max(80).default('Previz build'),
+});
+export const previzBuildJobFinishSchema = z.object({
+  ok: z.boolean().default(true),
+  summary: z.string().trim().max(300).nullish(),
+});

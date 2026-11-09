@@ -180,7 +180,9 @@ export async function buildClaimWorkTask(app, {
   prCompletion,
   target,
   issueContext,
-  overrideContext
+  overrideContext,
+  preverified = false,
+  nonEpic = false
 } = {}) {
   const { resolveAppWorkTracker, trackerToClaimTaskType } = await import('../lib/workTracker.js');
   const { getTaskPrompt } = await import('./taskPromptService.js');
@@ -205,7 +207,7 @@ export async function buildClaimWorkTask(app, {
   // overrides the tracker-specific body for both paths.
   const promptResult = await getTaskPrompt(
     interval.prompt ? 'claim-work' : promptTaskType,
-    { claimFlow: true, withSource: true, claimIssueOptions: { target: targetRef, prCompletion: effectivePrCompletion } }
+    { claimFlow: true, withSource: true, claimIssueOptions: { target: targetRef, prCompletion: effectivePrCompletion, preverified, nonEpic } }
   );
   // The string case keeps callers that replace the prompt getter (including
   // integrations/tests) on the conservative, customized-prompt path.

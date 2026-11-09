@@ -3,6 +3,7 @@ import { waitFor } from '@testing-library/react';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import PrevizStage from './PrevizStage.jsx';
+import * as apiCatalog from '../../../services/apiCatalog.js';
 
 vi.mock('../../../hooks/useMusicVideoGreyboxPlaces.js', () => ({
   default: () => ({
@@ -22,6 +23,8 @@ vi.mock('../../../services/apiCatalog.js', () => ({
     { id: 'cat-street', type: 'place', name: 'Example Street', payload: {} },
   ].filter((row) => ids.includes(row.id))),
   listCatalogIngredientMedia: vi.fn(async () => []),
+  startCatalogPrevizBuildJob: vi.fn(async () => ({ id: 'job-1' })),
+  finishCatalogPrevizBuildJob: vi.fn(async () => ({ finished: true })),
 }));
 
 const project = {
@@ -111,7 +114,10 @@ it('shows the build as busy until the save settles, then summarizes it with the 
   const { previz } = board.saveProjectFields.mock.calls[0][0];
   expect(Number.isNaN(Date.parse(previz.builtAt))).toBe(false);
 
+  expect(apiCatalog.startCatalogPrevizBuildJob).toHaveBeenCalledWith({ projectId: 'mv-1', label: 'Build previz' });
+
   settle();
+  await waitFor(() => expect(apiCatalog.finishCatalogPrevizBuildJob).toHaveBeenCalledWith('job-1', expect.objectContaining({ ok: true })));
   await waitFor(() => expect(screen.getByRole('button', { name: /Build previz from 1 shot/ })).not.toBeDisabled());
   rerender(<MemoryRouter><PrevizStage board={{ ...board, project: { ...project, previz } }} /></MemoryRouter>);
   expect(screen.getByText(/^Built from 1 shot · 1 cut · updated /)).toBeTruthy();

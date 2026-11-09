@@ -712,6 +712,7 @@ if [[ "$INSTALL_FASTVIDEO" == "1" ]]; then
   FASTVIDEO_PIN="${FASTVIDEO_PIN:-fa2d1324c60050cd65209c6aaeac470e7fb412f5}"
   FASTVIDEO_DIR="${HOME}/.portos/fastvideo"
   FASTVIDEO_PY="${FASTVIDEO_DIR}/.venv/bin/python3"
+  FASTVIDEO_LOCK="${SCRIPT_DIR}/requirements-fastvideo-mlx.lock.txt"
   mkdir -p "${HOME}/.portos"
   if [[ ! -d "${FASTVIDEO_DIR}/.git" ]]; then
     echo "📦 Cloning hao-ai-lab/FastVideo..."
@@ -727,14 +728,21 @@ if [[ "$INSTALL_FASTVIDEO" == "1" ]]; then
     echo "📦 Creating FastVideo venv with Python 3.11..."
     (cd "${FASTVIDEO_DIR}" && "$FASTVIDEO_UV" venv --python 3.11)
   fi
-  # --python is mandatory. `uv pip install` resolves its target interpreter from
-  # VIRTUAL_ENV, then CONDA_PREFIX, and only then the cwd's .venv — so on a
-  # machine whose shell activates conda (PortOS inherits that env through PM2)
-  # this silently installed FastVideo into the user's conda base environment,
-  # downgrading torch/transformers/gradio there while leaving this venv empty.
-  # The import probe below then failed with a message that pointed nowhere.
-  echo "📦 Installing FastVideo MLX packages into ${FASTVIDEO_DIR}/.venv..."
-  (cd "${FASTVIDEO_DIR}" && "$FASTVIDEO_UV" pip install --python "${FASTVIDEO_PY}" -e '.[mlx]')
+  if ! "$FASTVIDEO_PY" -c 'import sys; sys.exit(0 if sys.version_info[:2] >= (3, 11) else 1)'; then
+    echo "❌ FastVideo on Apple Silicon needs Python 3.11+; ${FASTVIDEO_PY} is older." >&2
+    echo "   Re-run with PYTHON_BIN pointing at a 3.11+ interpreter (e.g. 'brew install python@3.12')." >&2
+    exit 1
+  fi
+  # FastVideo MLX on Apple Silicon installs only from the hash-pinned lock
+  # (scripts/requirements-fastvideo-mlx.lock.txt): no install-time resolution,
+  # so a new or compromised transitive release can't land on the next Repair.
+  # Direct pins: scripts/requirements-fastvideo-mlx.txt. The checkout itself
+  # is installed with --no-deps so no unpinned dependencies resolve.
+  # --python is mandatory: `uv pip sync` and `uv pip install` resolve their
+  # target interpreter from VIRTUAL_ENV/CONDA_PREFIX if --python is omitted.
+  echo "📦 Installing FastVideo MLX packages from hash-pinned lock into ${FASTVIDEO_DIR}/.venv..."
+  "$FASTVIDEO_UV" pip sync --require-hashes --python "${FASTVIDEO_PY}" "$FASTVIDEO_LOCK"
+  "$FASTVIDEO_UV" pip install --no-deps --python "${FASTVIDEO_PY}" -e "${FASTVIDEO_DIR}"
   pin_venv_arm64 "${FASTVIDEO_DIR}/.venv"
   probe_or_fail \
     "FastVideo synced but the runtime import failed in ${FASTVIDEO_PY}." \

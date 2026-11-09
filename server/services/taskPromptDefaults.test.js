@@ -11,6 +11,7 @@ import {
   readPromptIntegritySnapshot,
 } from './taskPromptDefaults/integrityHash.js';
 import { reconcileStoredPrompt } from './taskPromptDefaults/storedPrompt.js';
+import { composeClaimIssuePrompt } from './taskPromptDefaults/prompts.js';
 import { RETIRED_CONSOLE_ERRORS_PROMPT } from './taskPromptDefaults/retiredPromptFixtures.js';
 import { EPIC_DECOMPOSED_LABEL } from './perpetualWork.js';
 // The claim prompts build their contributor-label release from this helper, so the
@@ -1400,5 +1401,22 @@ describe('required-CI wait handles late check registration (#14873)', () => {
 
   it('leaves the GitLab claim prompt without the GitHub-only rule', () => {
     expect(DEFAULT_TASK_PROMPTS['claim-issue-gitlab']).not.toContain('no required checks reported');
+  });
+});
+
+describe('composeClaimIssuePrompt compact pinned claim', () => {
+  const full = composeClaimIssuePrompt({ forge: 'github', target: '12' });
+  const compact = composeClaimIssuePrompt({ forge: 'github', target: '12', preverified: true, nonEpic: true });
+
+  it('drops epic decomposition and server-verified listings for a verified non-epic target', () => {
+    expect(full).toContain('Decompose an epic');
+    expect(compact).not.toContain('Decompose an epic');
+    expect(compact).toContain('Epic decomposition (not applicable)');
+    expect(compact).toContain('PortOS already verified');
+    expect(compact.length).toBeLessThan(full.length - 8000);
+  });
+
+  it('keeps the epic phase for an unpinned queue claim even when nonEpic is passed', () => {
+    expect(composeClaimIssuePrompt({ forge: 'github', nonEpic: true })).toContain('Decompose an epic');
   });
 });

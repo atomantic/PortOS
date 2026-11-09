@@ -83,6 +83,13 @@ describe('timelineActorsAt', () => {
     expect(Math.hypot(after.position[0] - 200, after.position[2])).toBeLessThan(4);
   });
 
+  // Catches an on-foot travel always drawn standing: a walk should read as walking and a run beat as running.
+  it('travels on foot in the walk or run pose by pace', () => {
+    const onFoot = (pace) => ({ ...project, previz: { ...project.previz, timeline: { ...timeline, beats: timeline.beats.map((b) => (b.id === 'b' ? { ...b, pace, vehicleSubjectId: null } : b)) } } });
+    expect(pose('c-a', 35, onFoot('walk')).pose).toBe('walk');
+    expect(pose('c-a', 35, onFoot('run')).pose).toBe('run');
+  });
+
   it('goes straight across when no path joins the sets', () => {
     const riding = pose('c-a', 35, project, { ...world, paths: [] });
     expect(riding.position[0]).toBeCloseTo(100, 0);

@@ -37,7 +37,7 @@ import { redactPii } from '../lib/piiRedactionPatterns.js';
 // `label create` idiom the prompt bodies interpolate), so the detector and the
 // live claim agent cannot drift on how "already decomposed" or "claimed and
 // being worked" is spelled.
-import { EPIC_DECOMPOSED_LABEL, EPIC_LABEL, IN_PROGRESS_LABEL } from '../lib/dispatchLabels.js';
+import { EPIC_DECOMPOSED_LABEL, EPIC_LABEL, IN_PROGRESS_LABEL, titleMarksEpic } from '../lib/dispatchLabels.js';
 
 export { EPIC_DECOMPOSED_LABEL };
 
@@ -223,24 +223,7 @@ async function inFlightIssueNumbers(repoPath, forge = 'github', env, ignoreTaskI
   return { nums };
 }
 
-/**
- * Recognize a tracking/umbrella EPIC from its title alone — the programmatic
- * half of the claim-issue prompt's epic handling (`isActionableIssue` decides
- * what that means for claimability). Matches the epic-title conventions the
- * prompt names and the agent honors:
- *   - a trailing `(epic)` tag  — e.g. "Redesign nav (epic)"
- *   - a leading `[epic]` bracket or `Epic:` colon tag — e.g. "[Epic] Billing
- *     revamp", "[epic: theme] …", "Epic: Redesign nav" (case-insensitive)
- * The leading-tag branch is what makes an "[Epic] …" issue with no `epic` label
- * read as an epic at all (label check misses it, and it doesn't END in
- * "(epic)"). The `\b` + `[:\]]` terminator keeps a bare adjective ("Epic rework
- * of nav") and near-words ("[epicenter] …") from matching — only a real
- * bracketed/colon-delimited `epic` tag counts.
- */
-export function titleMarksEpic(title) {
-  const t = (title || '').trim().toLowerCase();
-  return t.endsWith('(epic)') || /^\[?\s*epic\b\s*[:\]]/.test(t);
-}
+export { titleMarksEpic };
 
 // True when an issue is a tracking/umbrella epic — by `epic` label or by the
 // title conventions above. `labels` is the caller's already-lowercased list.

@@ -3,6 +3,7 @@ import ShotTimingTools from '../ShotTimingTools.jsx';
 import ShotSheetPanel from '../ShotSheetPanel.jsx';
 import RouteMapsPanel from '../RouteMapsPanel.jsx';
 import ContactSheetButton from '../ContactSheetButton.jsx';
+import OvernightRendersPanel from '../OvernightRendersPanel.jsx';
 import StageSection from '../StageSection.jsx';
 import { GenerationActions } from '../ProjectActionGroups.jsx';
 import ShotStatusStrip from '../ShotStatusStrip.jsx';
@@ -46,6 +47,7 @@ export default function ProduceStage({ board }) {
             )}
             <div className="flex justify-end"><ContactSheetButton onOpen={board.openContactSheet} /></div>
             <GenerationActions project={project} videoSettings={videoSettings} sceneMedia={sceneMedia} onEditServices={() => board.openSettings('project')} />
+            {hasScenes && <OvernightRendersPanel project={project} models={videoSettings.models || []} />}
           </StageSection>
       </fieldset>
       <section id="mv-composition" aria-label="Composition" className="min-w-0 space-y-2">

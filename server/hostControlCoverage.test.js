@@ -237,6 +237,8 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/catalog/bulk-import', RECORDS],
   ['POST /api/catalog/embeddings/backfill', TOOL_FREE_INFERENCE],
   ['POST /api/catalog/identity/:id/abort', HANDLER_GATED],
+  ['POST /api/catalog/previz-jobs', RECORDS],
+  ['POST /api/catalog/previz-jobs/:id/finish', RECORDS],
   ['POST /api/catalog/identity/:id/accept', HANDLER_GATED],
   ['POST /api/catalog/identity/:id/advance', HANDLER_GATED],
   ['POST /api/catalog/identity/:id/recover', HANDLER_GATED],
@@ -1330,6 +1332,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/usage/tokens', CLIENT_TELEMETRY],
   // /api/video-gen
   ['POST /api/video-gen/cancel', REDUCES_EXECUTION],
+  ['DELETE /api/video-gen/overnight/:batchId', REDUCES_EXECUTION],
   ['DELETE /api/video-gen/history/:id', REMOVES_RECORD],
   ['POST /api/video-gen/history/:id/cancel-delete', REDUCES_EXECUTION],
   ['PATCH /api/video-gen/history/:id/prompt', RECORDS],

@@ -17,7 +17,7 @@ import useSceneBatch from './useSceneBatch.js';
 import useSceneRenderLifecycle from './useSceneRenderLifecycle.js';
 import { useVisibilityEvent } from './useVisibilityEvent.js';
 import { isLtx2FamilyRuntime } from '../lib/runnerFamilies';
-import { ltxReferenceClipFrames } from '../../../server/lib/musicVideoLtxReferences.js';
+import { ltxReferenceFrames as ltxReferenceFramesFor } from '../../../server/lib/musicVideoShotTiming.js';
 import { LTX_REFERENCES_GENERATION_MODE, LTX_REFERENCES_MAX_REFERENCES, isLtx25Model } from '../lib/musicVideoLtxReferences.js';
 import { isLayeredComposition, isSelfDrawnLayer, sceneVisualLayer } from '../lib/musicVideoLayers.js';
 import { musicVideoFrameGenSize } from '../lib/musicVideoAspect.js';
@@ -42,6 +42,9 @@ const REFERENCE_CAPABILITY_CODES = new Set([
   'TOO_MANY_REFERENCE_IMAGES',
   'TOO_MANY_INPUT_IMAGES',
 ]);
+
+// A project-default reference render has no per-card length override.
+const ltxReferenceFrames = (scene, target) => ltxReferenceFramesFor(scene, target?.numFrames);
 
 // The provider a clip render runs on, as its placeholder take names it ("Rendering grok…").
 // A pool that may pick either this machine or a peer names neither.
@@ -467,7 +470,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       if (castGuidesPending(scene)) return Promise.resolve({ ok: false });
       if (!ltxReferenceFiles.length) { toast.error('Choose at least one clip reference for LTX 2.5 References'); return Promise.resolve({ ok: false }); }
     }
-    const referenceFrames = useLtxReferences ? ltxReferenceClipFrames(scene, target?.numFrames) : null;
+    const referenceFrames = useLtxReferences ? ltxReferenceFrames(scene, target) : null;
     if (useLtxReferences && referenceFrames == null) {
       toast.error('This shot is too long for one LTX reference clip. Split it or choose a shorter clip length.');
       return Promise.resolve({ ok: false });

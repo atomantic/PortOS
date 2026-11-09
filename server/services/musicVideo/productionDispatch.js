@@ -36,9 +36,8 @@ import { preMusicClipSound } from '../../lib/musicVideoColdOpen.js';
 import { conditioningReferences, falRouteVideoSettings, runwayRouteVideoSettings } from './productionPool.js';
 import { loadSceneCastMedia } from './castGuideMedia.js';
 import { castInputsFromReferences } from '../../lib/musicVideoCastLook.js';
-import { ltxReferenceClipFrames } from '../../lib/musicVideoLtxReferences.js';
 import { musicVideoClipConditioningReferences, musicVideoLimitReferenceFiles, musicVideoMissingFrameLinkedPicks, musicVideoReferenceCapacity } from '../../lib/musicVideoConditioning.js';
-import { isPerformanceScene } from '../../lib/musicVideoShotTiming.js';
+import { isPerformanceScene, ltxReferenceFrames } from '../../lib/musicVideoShotTiming.js';
 import { musicVideoFrameGenSize } from '../../lib/musicVideoAspect.js';
 
 const unprompted = (scene, what) => new ServerError(
@@ -161,7 +160,7 @@ async function ltxReferenceFields({ project, scene, route }) {
   if (!files.length) {
     throw new ServerError(`"${scene.label || scene.sceneId}" has no clip reference for LTX 2.5 References`, { status: 409, code: 'PRODUCTION_CLIP_REFERENCES_MISSING', context: { sceneId: scene.sceneId } });
   }
-  const numFrames = ltxReferenceClipFrames(scene);
+  const numFrames = ltxReferenceFrames(scene);
   if (numFrames == null) {
     throw new ServerError(`"${scene.label || scene.sceneId}" is too long for one LTX reference clip; split the shot`, { status: 409, code: 'PRODUCTION_CLIP_TOO_LONG', context: { sceneId: scene.sceneId } });
   }

@@ -71,6 +71,7 @@ import {
 import { routedJobParams } from '../federatedMedia/routedJobParams.js';
 import { mediaRecoveryPending } from '../../lib/mediaRecoveryActivity.js';
 import { videoExecutionSchema, videoExecutionParentSchema, videoSegmentExecutionSchema, videoSegmentExecutionsSchema, mergeVideoExecutionDiagnostics } from './videoExecution.js';
+import { jobScheduleState, scheduledWaitMessage, SCHEDULED_WAIT_PATTERN, SCHEDULE_EXPIRED_ERROR } from './jobSchedule.js';
 import {
   MAX_PENDING_MEDIA_JOBS, MEDIA_QUEUE_PERSIST_FAILED, mediaQueueFullError,
 } from './admission.js';
@@ -1381,7 +1382,7 @@ function startLaneJob(job, { lane }) {
   job.progress = typeof job.progress === 'number' && Number.isFinite(job.progress) ? job.progress : 0;
   // A quota wait describes the queued state only; a persisted one also
   // survives a restart that outlasts the cooldown.
-  if (QUOTA_WAIT_PATTERN.test(job.statusMsg || '')) job.statusMsg = '';
+  if (QUOTA_WAIT_PATTERN.test(job.statusMsg || '') || SCHEDULED_WAIT_PATTERN.test(job.statusMsg || '')) job.statusMsg = '';
   job.statusMsg = job.statusMsg || 'Starting';
   if (lane === 'cloud') {
     cloudRunning.push(job);
@@ -1567,8 +1568,19 @@ async function drainLoop() {
     const freeSwimSlots = (job) => swimSlots.get(jobSwimlane(job)) ?? limits[jobLane(job)];
     for (const active of runningJobs()) swimSlots.set(jobSwimlane(active), freeSwimSlots(active) - 1);
     let quotaWaitChanged = false;
+    const expired = [];
     for (const job of candidates) {
       if (job.status !== 'queued' || job.hold || job.admitting) continue;
+      const scheduled = jobScheduleState(job);
+      if (scheduled?.expired) { expired.push(job); continue; }
+      if (scheduled) {
+        const waiting = scheduledWaitMessage(scheduled.startAt);
+        if (job.statusMsg !== waiting) {
+          job.statusMsg = waiting;
+          quotaWaitChanged = true;
+        }
+        continue;
+      }
       // The provider told us when it recovers; dispatching before then just
       // converts a queued job into a failed one. Hold rather than fail, and say
       // when it resumes — `statusMsg` is in the persisted field whitelist, so
@@ -1589,6 +1601,10 @@ async function drainLoop() {
       if (!startLaneJob(job, { lane })) continue;
       laneSlots[lane] -= 1;
       swimSlots.set(jobSwimlane(job), free - 1);
+    }
+    for (const job of expired) {
+      await settleQueuedJob(job, { status: 'canceled', error: SCHEDULE_EXPIRED_ERROR })
+        .catch((e) => console.error(`❌ media-job ${job.id} stop-by cancel failed: ${e.message}`));
     }
     // One snapshot for every hold this scan changed, not one per job.
     if (quotaWaitChanged) {
