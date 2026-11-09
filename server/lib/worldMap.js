@@ -367,6 +367,13 @@ export function worldSkyAt(clockMinutes, setting = 'outdoor') {
   };
 }
 
+/** A unit vector toward the sun of a `worldSkyAt` light, kept a little above the horizon so it never lights from below. */
+export function worldSunDirection(sky) {
+  const az = (sky.sunAzimuth * Math.PI) / 180;
+  const el = (sky.sunElevation * Math.PI) / 180;
+  return [Math.sin(az) * Math.cos(el), Math.max(0.05, Math.sin(el)), -Math.cos(az) * Math.cos(el)];
+}
+
 /** "21:30" for minutes after midnight. */
 export function worldClockText(clockMinutes) {
   const t = ((Math.round(Number(clockMinutes) || 0) % 1440) + 1440) % 1440;

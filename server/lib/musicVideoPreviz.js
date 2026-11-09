@@ -23,6 +23,12 @@
  *   absolute song seconds, linearly interpolated, held before the first and after
  *   the last key. `pose` is stand, walk, run, crouch, sit or 'ride'; 'ride' draws the figure on a proxy of the vehicle `vehicleSubjectId`
  *   names (a catalog object listed in `previz.vehicles`).
+ *   A track may also be a cast object's (a prop): it is drawn as a simple proxy
+ *   (car, bike lying on its side, or a small box) in each cut whose shot names it,
+ *   and carries no pose.
+ *
+ * A cut on its set is lit by the story clock: the timeline's clock at the cut's
+ * `storyMin`, else the time of day its shot sheet states; neither = daylight.
  *
  * Units are the greybox's: meters, Y up, floor y=0; facing 0 looks along +Z.
  * Browser-safe and pure.
@@ -34,6 +40,7 @@ import { SHOT_CAMERA_SET_DOWN } from './musicVideoShotSheet.js';
 import { activeMusicVideoSubjects, musicVideoPrevizForActiveCast } from './musicVideoCastSelection.js';
 import { timelineActorsAt, timelineClockAt, previzTimeline, previzVehicleInText, previzVehicles, suggestPrevizVehicles } from './musicVideoPrevizTimeline.js';
 import { PREVIZ_ACTION_PATHS, PREVIZ_CUTS_MAX, PREVIZ_KEYS_MAX, PREVIZ_PAWN_COLORS, PREVIZ_TRACKS_MAX } from './musicVideoPrevizLimits.js';
+import { escapeRegExp } from './textUtils.js';
 
 const EYE_HEIGHT = { stand: 1.6, walk: 1.6, run: 1.5, crouch: 1.0, sit: 1.2, ride: 1.75 };
 const CHEST_HEIGHT = { stand: 1.25, walk: 1.25, run: 1.2, crouch: 0.8, sit: 0.95, ride: 1.4 };
@@ -57,6 +64,7 @@ export function projectPreviz(project) {
 // The active cast: one entry per character, the director's chosen alternate (lib/musicVideoCastSelection.js).
 const characters = (project) => activeMusicVideoSubjects(project?.concept).filter((subject) => subject?.kind === 'character');
 const places = (project) => (project?.concept?.subjects || []).filter((subject) => subject?.kind === 'place');
+const castObjects = (project) => (project?.concept?.subjects || []).filter((subject) => subject?.kind === 'object');
 
 /** A character subject by the name a shot sheet writes (case and spacing ignored). */
 function characterByName(project, name) {
@@ -213,6 +221,9 @@ function refreshCutFromSheet(project, scene, cut) {
 
 /** The vehicle the shot shows its people riding: one its sheet's action names, else one named by the travel of the route its place is on. Null on foot. */
 function shotVehicle(project, scene, placeSubjectId) {
+  // "Bikes dropped on the lawn" and "a sedan passes" name a vehicle nobody in the shot is on: it stays a prop.
+  const action = textOf(scene.shotSheet?.action);
+  if (PARKED_TEXT.test(action) || (GOES_BY_TEXT.test(action) && !RIDING_VERB.test(action))) return null;
   return previzVehicleInText(project, scene.shotSheet?.action)
     || previzVehicleInText(project, ...projectRouteMaps(project).filter((map) => (map.stops || []).some((stop) => stop.subjectId === placeSubjectId)).map((map) => map.travel));
 }
@@ -228,6 +239,78 @@ function previzPoseInText(text) {
   if (SIT_TEXT.test(words)) return 'sit';
   if (RUN_TEXT.test(words)) return 'run';
   return null;
+}
+
+// A vehicle that goes by the people, unless they are the ones riding ("they ride past").
+const GOES_BY_TEXT = /\b(?:pass(?:es|ed|ing)?|(?:drives?|drove|rolls?|rolled|speeds?|sped|cruises?|cruised)\s+(?:by|past)|pulls?\s+up)\b/i;
+const RIDING_VERB = /\b(?:rid(?:e|es|ing)|rode|pedal(?:s|ed|ing)?|cycl(?:es|ed|ing)|skat(?:e|es|ed|ing))\b/i;
+// A vehicle set down rather than ridden.
+const PARKED_TEXT = /\b(?:lying|lies|lie|laid|dropped|parked|abandoned|tipped over|lean(?:s|ed|ing)?\s+against|(?:on|in)\s+the\s+(?:grass|lawn|ground))\b/i;
+
+// Time-of-day words a shot sheet may use, as minutes after midnight.
+const CLOCK_WORDS = [
+  [/\bmidnight\b/i, 0], [/\b(?:late night|small hours|wee hours)\b/i, 90], [/\b(?:pre-?dawn|before dawn)\b/i, 330],
+  [/\b(?:dawn|first light|daybreak)\b/i, 360], [/\bsunrise\b/i, 390], [/\bmorning\b/i, 540], [/\b(?:noon|midday|daylight|daytime)\b/i, 720],
+  [/\bafternoon\b/i, 900], [/\bgolden hour\b/i, 1110], [/\bsunset\b/i, 1150], [/\b(?:dusk|twilight|blue hour|nightfall)\b/i, 1190],
+  [/\bevening\b/i, 1215], [/\bnight(?:time)?\b/i, 1320],
+];
+// "21:30", "9:30 pm", "9pm"; a bare number is not a time.
+const CLOCK_TIME = /\b(\d{1,2})(?::([0-5]\d))?\s*(am|pm|a\.m\.|p\.m\.)?(?![\w:])/gi;
+
+/**
+ * The clock time (minutes after midnight) a shot sheet's words state, or null:
+ * the earliest clock time or time-of-day word written, so "dusk into night" is dusk.
+ */
+function previzClockInText(text) {
+  const words = textOf(text);
+  if (!words) return null;
+  let best = null;
+  const offer = (index, minutes) => { if (!best || index < best.index) best = { index, minutes }; };
+  for (const match of words.matchAll(CLOCK_TIME)) {
+    const [, h, m, meridiem] = match;
+    if (m === undefined && !meridiem) continue;
+    let hour = Number(h);
+    if (meridiem) {
+      if (hour < 1 || hour > 12) continue;
+      hour = (hour % 12) + (/^p/i.test(meridiem) ? 12 : 0);
+    } else if (hour > 23) continue;
+    offer(match.index, hour * 60 + Number(m || 0));
+  }
+  for (const [pattern, minutes] of CLOCK_WORDS) {
+    const match = pattern.exec(words);
+    if (match) offer(match.index, minutes);
+  }
+  return best ? best.minutes : null;
+}
+
+const CAR_NAME = /\b(?:cars?|sedans?|trucks?|vans?|jeeps?|taxis?|cabs?|bus|buses|suvs?|hatchbacks?|coupes?|wagons?|pickups?)\b/i;
+const BIKE_NAME = /\b(?:bicycles?|bikes?|bmx|cruisers?|tricycles?|scooters?|motorcycles?|motorbikes?|mopeds?)\b/i;
+
+/** The proxy a cast object is drawn as, by its name: a car, a bike (lying on its side), else a small box. */
+function previzPropShape(name) {
+  const words = textOf(name);
+  if (CAR_NAME.test(words)) return 'car';
+  if (BIKE_NAME.test(words)) return 'bike';
+  return 'small';
+}
+
+const nameMatcher = (word) => new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(word)}s?(?![\\p{L}\\p{N}])`, 'iu');
+
+/** Whether a text names a cast object: its whole name, or its last word ("the found camcorder" names "Camcorder"; "Silver sedan" is named by "the sedan"). */
+function objectNamedIn(subject, text) {
+  const name = textOf(subject?.name);
+  if (!name || !text) return false;
+  const head = name.split(/\s+/).at(-1);
+  return nameMatcher(name).test(text) || (head !== name && head.length >= 4 && nameMatcher(head).test(text));
+}
+
+// The words of a shot that say what is in it.
+const shotWords = (scene) => ['view', 'action', 'light', 'notes'].map((field) => textOf(scene?.shotSheet?.[field])).filter(Boolean).join('\n');
+
+/** The cast objects a shot names (its view, action, light or notes), minus the vehicle its people ride. */
+function shotPropIds(project, scene, ridden) {
+  const words = shotWords(scene);
+  return castObjects(project).filter((subject) => subject.id !== ridden && objectNamedIn(subject, words)).map((subject) => subject.id);
 }
 
 /** Everyone a cut stands on its set: the people it picks to show, then the camera's holder. */
@@ -560,20 +643,24 @@ function seedCutTracks(project, existingTracks, cuts, loadedPlaces) {
   for (const cut of cuts) {
     const timing = previzCutTiming(project, cut);
     if (!cut.placeSubjectId || !timing) continue;
+    const untracked = (id) => !tracks.has(trackKey(id, cut.placeSubjectId));
     const people = [...new Set([...cutPeople(cut), ...(cut.aimSubjectId ? [cut.aimSubjectId] : [])])]
-      .filter((id) => characters(project).some((subject) => subject.id === id) && !tracks.has(trackKey(id, cut.placeSubjectId)));
-    if (!people.length) continue;
+      .filter((id) => characters(project).some((subject) => subject.id === id) && untracked(id));
     const scene = (project?.scenes || []).find((entry) => entry.sceneId === cut.sceneId) || {};
     const vehicleSubjectId = shotVehicle(project, scene, cut.placeSubjectId);
+    // Props the shot names get a mark beside its people (a passing car passes with them).
+    const props = shotPropIds(project, scene, vehicleSubjectId).filter(untracked);
+    if (!people.length && !props.length) continue;
     const pose = vehicleSubjectId ? 'ride' : previzPoseInText(scene.shotSheet?.action) || 'stand';
     const greybox = previzPlaceGreybox(project, cut.placeSubjectId, loadedPlaces);
     const actionText = scene.shotSheet?.action || '';
     const actionPath = cut.actionPath || detectCutActionPath(actionText);
-    const keysByPerson = seedCutKeys(cut, greybox, people, timing, actionPath, actionText, pose, vehicleSubjectId);
-    for (const id of people) {
+    const keysByPerson = seedCutKeys(cut, greybox, [...people, ...props], timing, actionPath, actionText, pose, vehicleSubjectId);
+    const propSet = new Set(props);
+    for (const id of [...people, ...props]) {
       const key = trackKey(id, cut.placeSubjectId);
       const track = seeded.get(key) || { subjectId: id, placeSubjectId: cut.placeSubjectId, keys: [] };
-      const keys = keysByPerson.get(id) || [];
+      const keys = (keysByPerson.get(id) || []).map((entry) => (propSet.has(id) ? { timeSec: entry.timeSec, position: entry.position, facingDegrees: entry.facingDegrees } : entry));
       track.keys.push(...keys);
       seeded.set(key, track);
     }
@@ -810,8 +897,9 @@ function samplePrevizTrack(track, t) {
 export function previzCutVisibleIds(project, cut) {
   if (Array.isArray(cut?.visibleSubjectIds)) return cut.visibleSubjectIds;
   const previz = projectPreviz(project);
+  const people = new Set(characters(project).map((subject) => subject.id));
   return (previz?.tracks || [])
-    .filter((track) => track.placeSubjectId === cut?.placeSubjectId && track.subjectId !== cut?.holderSubjectId)
+    .filter((track) => track.placeSubjectId === cut?.placeSubjectId && track.subjectId !== cut?.holderSubjectId && people.has(track.subjectId))
     .map((track) => track.subjectId);
 }
 
@@ -905,9 +993,38 @@ function timelineFrame(project, cut, timing, songTime, t, style, storyCamera, ti
   if (camera.position.every((v, i) => Math.abs(v - camera.target[i]) < 1e-6)) camera.target = [camera.target[0], camera.target[1], camera.target[2] + 1];
   return {
     cut, timing, greybox: null, world: timelineWorld.world, worldPlaces: timelineWorld.places, storyMin, clockMinutes: timelineClockAt(timeline, storyMin),
-    actors, style, storyCamera,
+    actors, props: [], style, storyCamera,
     camera: { ...camera, focalLengthMm: holder ? TIMELINE_HELD_LENS : TIMELINE_OBSERVER_LENS, aspect: '16:9' },
   };
+}
+
+const PROP_COLOR = '#9aa0a8';
+
+/** The props a cut shows on its set at `t`: each cast object with a track there that its shot names (every one when the cut has no shot). */
+function cutProps(project, cut, t, colors) {
+  const scene = cut.sceneId ? (project?.scenes || []).find((entry) => entry.sceneId === cut.sceneId) : null;
+  const words = scene ? shotWords(scene) : null;
+  const objects = new Map(castObjects(project).map((subject) => [subject.id, subject]));
+  return (projectPreviz(project)?.tracks || [])
+    .filter((track) => track.placeSubjectId === cut.placeSubjectId && objects.has(track.subjectId))
+    .filter((track) => words === null || objectNamedIn(objects.get(track.subjectId), words))
+    .map((track) => {
+      const sample = samplePrevizTrack(track, t);
+      const name = textOf(objects.get(track.subjectId).name);
+      return sample && {
+        subjectId: track.subjectId, name, position: sample.position, facingDegrees: sample.facingDegrees,
+        shape: previzPropShape(name), color: colors[track.subjectId]?.figure.hex || PROP_COLOR,
+      };
+    })
+    .filter(Boolean);
+}
+
+/** The clock a cut on its set is lit by: the timeline's at the cut's story minute, else its shot sheet's time of day; null = plain daylight. */
+function cutClockMinutes(project, cut, timing, t) {
+  const timeline = previzTimeline(project);
+  if (timeline && Number.isFinite(cut.storyMin)) return timelineClockAt(timeline, cut.storyMin + (t - timing.startSec) / 60);
+  const sheet = cut.sceneId ? (project?.scenes || []).find((entry) => entry.sceneId === cut.sceneId)?.shotSheet : null;
+  return previzClockInText(sheet?.timeOfDay) ?? previzClockInText(sheet?.light);
 }
 
 /** Whether a cut plays on the timeline rather than on its set's own blocking. */
@@ -977,7 +1094,7 @@ export function previzFrameAt(project, loadedPlaces, songTime, timelineWorld = n
   camera = styledCamera(camera, style, songTime, holder?.pose === 'ride');
   if (camera.position.every((v, i) => Math.abs(v - camera.target[i]) < 1e-6)) camera.target = [camera.target[0], camera.target[1], camera.target[2] + 1];
   return {
-    cut, timing, greybox, actors, style, storyCamera,
+    cut, timing, greybox, actors, props: cutProps(project, cut, t, colors), clockMinutes: cutClockMinutes(project, cut, timing, t), style, storyCamera,
     camera: { ...camera, focalLengthMm: view?.focalLengthMm || 35, aspect: view?.aspect || '16:9' },
   };
 }

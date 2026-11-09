@@ -38,7 +38,8 @@ function extrudeGeometry(part) {
 }
 
 // Select on press so the click after an anchor drag cannot select the floor.
-export const PartMesh = memo(function PartMesh({ part, color, selected, onSelect }) {
+// `glow` (a hex color) lights the part up: a practical light switched on after dark.
+export const PartMesh = memo(function PartMesh({ part, color, selected, onSelect, glow = null }) {
   const geometry = useMemo(() => (part.type === 'extrude' ? extrudeGeometry(part) : null), [part]);
   const [px, py, pz] = part.position;
   const [rx, ry, rz] = part.rotationDegrees;
@@ -48,7 +49,8 @@ export const PartMesh = memo(function PartMesh({ part, color, selected, onSelect
         {part.type === 'box' && <boxGeometry args={part.size} />}
         {part.type === 'cylinder' && <cylinderGeometry args={[part.radius, part.radius, part.height, 32]} />}
         {part.type === 'plane' && <planeGeometry args={part.size} />}
-        <meshStandardMaterial color={color} roughness={1} metalness={0} side={part.type === 'plane' ? THREE.DoubleSide : THREE.FrontSide} />
+        <meshStandardMaterial color={color} roughness={1} metalness={0} side={part.type === 'plane' ? THREE.DoubleSide : THREE.FrontSide}
+          emissive={glow || '#000000'} emissiveIntensity={glow ? 1.4 : 0} />
         <Edges threshold={20} color="#2b2f38" />
         {selected && <Edges threshold={20} color="#ffdd55" userData={{ greyboxHelper: true }} />}
       </mesh>
