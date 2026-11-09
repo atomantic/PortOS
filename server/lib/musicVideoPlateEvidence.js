@@ -15,7 +15,7 @@ const sheetNames = (list) => (Array.isArray(list) ? list : [list]).map((name) =>
  * taken from the video's subjects: required for each character the shot sheet names,
  * and conditional for the point-of-view holder, whose hands may be all that shows.
  */
-export function plateDetailRequirements(scene, subjects = []) {
+function plateDetailRequirements(scene, subjects = []) {
   const sheet = scene?.shotSheet || {};
   const inShot = new Set(sheetNames(sheet.characters));
   const holder = new Set(sheetNames(sheet.holder));

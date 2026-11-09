@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { currentPlateEvidence, plateDetailRequirements, plateRequirements, plateReviewEvidence, selectedPlatePasses } from './musicVideoPlateEvidence.js';
+import { currentPlateEvidence, plateRequirements, plateReviewEvidence, selectedPlatePasses } from './musicVideoPlateEvidence.js';
 
 const subjects = [
   { id: 'a', kind: 'character', name: 'Ada', requiredDetails: ['Red watch on the left wrist', 'Camera on a wrist strap'] },
@@ -8,6 +8,7 @@ const subjects = [
   { id: 'p', kind: 'object', name: 'Lamp', requiredDetails: ['Never checked for objects'] },
 ];
 const scene = (sheet) => ({ sceneId: 's1', startSec: 0, endSec: 2, framePrompt: 'Ada on a bike.', shotSheet: sheet });
+const plateDetailRequirements = (shot, list) => plateRequirements(shot, list).filter((entry) => entry.id.startsWith('detail-'));
 const pass = (list) => JSON.stringify({ checks: list.map(({ id }) => ({ id, status: 'pass', note: 'Visible' })) });
 
 describe('character detail requirements', () => {
