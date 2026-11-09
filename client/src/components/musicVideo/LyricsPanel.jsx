@@ -313,6 +313,9 @@ export default function LyricsPanel({ project, onEditLocal, onSave, onImport, im
                   <input type="number" min={0} step={0.01} aria-label={`Line ${i + 1} end (s)`} placeholder="end"
                     value={cue.endSec ?? ''} onChange={(e) => editCue(cue.id, { endSec: toSec(e.target.value) })}
                     onBlur={() => saveCues()} className={`${inputCls} w-16`} />
+                  <input type="text" maxLength={60} aria-label={`Line ${i + 1} singer`} placeholder="singer"
+                    value={cue.voice ?? ''} onChange={(e) => editCue(cue.id, { voice: e.target.value || undefined })}
+                    onBlur={() => saveCues()} className={`${inputCls} w-20`} />
                   <input type="text" maxLength={500} aria-label={`Line ${i + 1} text`}
                     value={cue.text} onChange={(e) => {
                       const text = e.target.value;

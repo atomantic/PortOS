@@ -245,6 +245,8 @@ const lyricWordSchema = z.object({
 export const musicVideoLyricCueSchema = z.object({
   id: z.string().min(1).max(64).optional(),
   text: z.string().max(500),
+  // Who sings the line (duet sheets). Never part of `text`, so alignment ignores it.
+  voice: z.string().trim().min(1).max(60).optional(),
   startSec: timedSec,
   endSec: timedSec,
   words: z.array(lyricWordSchema).max(400).optional(),
