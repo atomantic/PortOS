@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { backfillPrevizFromShots, previzCutProblems, previzFrameAt, previzPawnColors, updatePrevizCut } from './musicVideoPreviz.js';
+import {
+  applyPrevizGreybox,
+  backfillPrevizFromShots,
+  previzCutProblems,
+  previzFrameAt,
+  previzPawnColors,
+  previzSetGreyboxDraftInstruction,
+  updatePrevizCut,
+} from './musicVideoPreviz.js';
 import { musicVideoPrevizSchema, musicVideoProjectUpdateSchema } from './musicVideoValidation.js';
 
 const subjects = [
@@ -237,4 +245,70 @@ it('shows a selfie holder facing the camera 0.6 m away, and still hides the hold
   expect(Math.hypot(position[0] - target[0], position[2] - target[2])).toBeCloseTo(0.6, 1);
   expect(position[0]).toBeGreaterThan(target[0]);
   expect(musicVideoPrevizSchema.safeParse({ cuts: [{ ...cut, selfie: true }], tracks }).success).toBe(true);
+});
+
+describe('draft missing greyboxes and link cameras', () => {
+  it('extracts shots on a set and drafts an instruction listing shots, cameras, holder and action', () => {
+    const p = project([
+      scene('s1', 0, 4, { cameraId: 'cam-vhs', holder: 'Bo', characters: ['Ana'], action: 'Ana runs' }),
+      scene('s2', 4, 8, { view: 'Close-up', characters: ['Ana'], action: 'Ana turns around' }),
+    ]);
+    const instruction = previzSetGreyboxDraftInstruction(p, 'p-street');
+    expect(instruction).toContain('Draft a 3D greybox layout for this set tailored to the following shots in order:');
+    expect(instruction).toContain('- Shot 1: camera "VHS camera", held by "Bo", action: "Ana runs", people: Ana');
+    expect(instruction).toContain('- Shot 2: camera "Close-up", observer camera, action: "Ana turns around", people: Ana');
+    expect(instruction).toContain('Provide one saved camera per shot labeled "Shot N" (e.g. Shot 1, Shot 2)');
+    expect(instruction).toContain('Place figure mark anchors (kind: "figure") on the floor');
+  });
+
+  it('applies a greybox to previz: links cameras, drops seeded tracks, and re-seeds marks from figure anchors', () => {
+    const p = project([
+      { sceneId: 's1', startSec: 0, endSec: 4, setReference: { subjectId: 'p-street', greyboxShotId: null }, shotSheet: { characters: ['Ana'] } },
+      { sceneId: 's2', startSec: 4, endSec: 8, setReference: { subjectId: 'p-street', greyboxShotId: null }, shotSheet: { characters: ['Bo'] } },
+    ]);
+    // Previz built without greybox cameras initially
+    const emptyPlaces = { 'cat-street': { ingredient: { id: 'cat-street', type: 'place', name: 'Example Street', payload: {} }, media: [] } };
+    const initial = backfillPrevizFromShots(p, emptyPlaces).previz;
+    expect(initial.cuts[0].viewShotId).toBeNull();
+    // Tracks were seeded at default row positions
+    const oldAnaTrack = initial.tracks.find((t) => t.subjectId === 'c-ana');
+    expect(oldAnaTrack).toBeDefined();
+
+    // Now a drafted greybox with specific figure anchors arrives
+    const draftedGreybox = {
+      anchors: [
+        { id: 'ana-mark', label: 'Ana Mark', kind: 'figure', position: [5, 0, 8], facingDegrees: 45 },
+        { id: 'bo-mark', label: 'Bo Mark', kind: 'figure', position: [-2, 0, 3], facingDegrees: 180 },
+      ],
+      shots: [
+        { id: 'shot1-cam', label: 'Shot 1', position: [0, 2, 12], target: [5, 1, 8], figures: [{ anchorId: 'ana-mark' }] },
+        { id: 'shot2-cam', label: 'Shot 2', position: [0, 2, 6], target: [-2, 1, 3], figures: [{ anchorId: 'bo-mark' }] },
+      ],
+      parts: [],
+    };
+
+    const { previz: applied, loadedPlaces } = applyPrevizGreybox(
+      { ...p, previz: initial },
+      'p-street',
+      draftedGreybox,
+      emptyPlaces,
+    );
+
+    // Cuts are now linked to their respective cameras
+    expect(applied.cuts[0].viewShotId).toBe('shot1-cam');
+    expect(applied.cuts[1].viewShotId).toBe('shot2-cam');
+
+    // Tracks were re-seeded from the figure anchors!
+    const newAnaTrack = applied.tracks.find((t) => t.subjectId === 'c-ana');
+    expect(newAnaTrack.keys[0].position).toEqual([5, 0, 8]);
+    expect(newAnaTrack.keys[0].facingDegrees).toBe(45);
+
+    const newBoTrack = applied.tracks.find((t) => t.subjectId === 'c-bo');
+    expect(newBoTrack.keys[0].position).toEqual([-2, 0, 3]);
+    expect(newBoTrack.keys[0].facingDegrees).toBe(180);
+
+    // Loaded places was updated with the greybox
+    expect(loadedPlaces['cat-street'].ingredient.payload.greybox).toEqual(draftedGreybox);
+    expect(musicVideoProjectUpdateSchema.safeParse({ previz: applied }).success).toBe(true);
+  });
 });

@@ -9,6 +9,7 @@ import useMusicVideoGreyboxPlaces from '../../../hooks/useMusicVideoGreyboxPlace
 import usePrevizJobs from '../../../hooks/usePrevizJobs.js';
 import usePrevizWorld from '../../../hooks/usePrevizWorld.js';
 import PrevizAi from './PrevizAi.jsx';
+import PrevizDraftMissingGreyboxes from './PrevizDraftMissingGreyboxes.jsx';
 import PrevizTimeline from './PrevizTimeline.jsx';
 import WorldMap, { fitWorldView } from '../../catalog/WorldMapView';
 import { timelineActorsAt, timelineClockAt, timelineMinuteOfClock, previzTimeline } from '../../../../../server/lib/musicVideoPrevizTimeline.js';
@@ -106,12 +107,12 @@ const CAMERA_STYLE_LABELS = { steady: 'Steady', handheld: 'Handheld shake', stil
 const plural = (count, word) => `${formatCount(count)} ${word}${count === 1 ? '' : 's'}`;
 
 /** The sets cuts play on that have no greybox, so those cuts play an empty set; each links to its Greybox panel. */
-function SetsWithoutGreybox({ sets }) {
+function SetsWithoutGreybox({ sets, project, places, locked, jobRunning, onSavePreviz, onPlaceUpdated }) {
   if (!sets.length) return null;
   return (
-    <section role="status" aria-label="Sets without a greybox" className="min-w-0 space-y-1 rounded border border-port-warning/50 p-2 text-xs">
+    <section role="status" aria-label="Sets without a greybox" className="min-w-0 space-y-2 rounded border border-port-warning/50 p-2 text-xs">
       <h3 className="flex items-center gap-1 font-medium text-port-warning"><AlertTriangle size={12} aria-hidden="true" /> Sets without a greybox</h3>
-      <p className="text-port-text-muted">These cuts play an empty set until the set has a greybox. Its Greybox panel can draft one.</p>
+      <p className="text-port-text-muted">These cuts play an empty set until the set has a greybox. Its Greybox panel can draft one, or draft them from the shots below.</p>
       <ul className="flex min-w-0 flex-wrap gap-2">
         {sets.map(({ subject, cuts }) => (
           <li key={subject.id} className="inline-flex min-w-0 flex-wrap items-center gap-1">
@@ -122,6 +123,17 @@ function SetsWithoutGreybox({ sets }) {
           </li>
         ))}
       </ul>
+      {project && (
+        <PrevizDraftMissingGreyboxes
+          sets={sets}
+          project={project}
+          places={places}
+          locked={locked}
+          jobRunning={jobRunning}
+          onSavePreviz={onSavePreviz}
+          onPlaceUpdated={onPlaceUpdated}
+        />
+      )}
     </section>
   );
 }
@@ -355,7 +367,26 @@ function CutRow({ project, cut, number, scene, places, characters, placeSubjects
  */
 export default function PrevizStage({ board }) {
   const { project, locked, editProjectLocal, saveProjectFields, seekToScene } = board;
-  const places = useMusicVideoGreyboxPlaces(project);
+  const loadedPlaces = useMusicVideoGreyboxPlaces(project);
+  const [localPlaces, setLocalPlaces] = useState({});
+  const places = useMemo(() => ({ ...loadedPlaces, ...localPlaces }), [loadedPlaces, localPlaces]);
+  const onPlaceUpdated = (ingredientId, greybox) => {
+    setLocalPlaces((prev) => ({
+      ...prev,
+      [ingredientId]: {
+        ...(prev[ingredientId] || loadedPlaces[ingredientId] || {}),
+        ingredient: {
+          ...((prev[ingredientId] || loadedPlaces[ingredientId])?.ingredient || {}),
+          id: ingredientId,
+          type: 'place',
+          payload: {
+            ...((prev[ingredientId] || loadedPlaces[ingredientId])?.ingredient?.payload || {}),
+            greybox,
+          },
+        },
+      },
+    }));
+  };
   const previz = projectPreviz(project);
   const { worldId, entry: worldEntry, world, places: worldPlaces } = usePrevizWorld(project);
   const subjects = project.concept?.subjects || [];
@@ -419,7 +450,15 @@ export default function PrevizStage({ board }) {
           )}
         </fieldset>
         <PrevizJobStatus jobs={jobs} />
-        <SetsWithoutGreybox sets={missingGreybox} />
+        <SetsWithoutGreybox
+          sets={missingGreybox}
+          project={project}
+          places={places}
+          locked={locked}
+          jobRunning={jobRunning}
+          onSavePreviz={save}
+          onPlaceUpdated={onPlaceUpdated}
+        />
         <fieldset disabled={locked} className="min-w-0 space-y-1">
           <legend className="text-xs text-port-text-muted">World</legend>
           <PrevizWorld project={project} worldId={worldId} entry={worldEntry} places={places} onPick={(next) => savePrevizField({ worldId: next })} />
