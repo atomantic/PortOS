@@ -63,13 +63,13 @@ export default function ImageModelField({
 
 function CloudModelInput({ id, value, onChange, className, ariaLabel, disabled, commit }) {
   const draft = useFieldDraft(value, (next) => onChange(typeof next === 'string' ? (next.trim() || null) : null));
-  const shared = {
-    id, type: 'text', disabled, placeholder: 'Model (optional)', 'aria-label': ariaLabel, className,
-  };
+  // aria-label stays on the tag: a spread name is invisible to the input-name scan, and a missing one announces as bare "edit text".
+  const named = ariaLabel || 'Model';
+  const shared = { type: 'text', disabled, placeholder: 'Model (optional)', className };
   if (commit === 'change') {
-    return <input {...shared} value={value || ''} onChange={(e) => onChange(e.target.value.trim() || null)} />;
+    return <input id={id} aria-label={named} {...shared} value={value || ''} onChange={(e) => onChange(e.target.value.trim() || null)} />;
   }
-  return <input {...shared} value={draft.value} onChange={draft.onChange} onBlur={draft.onBlur} />;
+  return <input id={id} aria-label={named} {...shared} value={draft.value} onChange={draft.onChange} onBlur={draft.onBlur} />;
 }
 
 function LocalModelPin({ id, ariaLabel, className, models, installDefault, value, onChange, disabled }) {
