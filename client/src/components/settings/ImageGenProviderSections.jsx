@@ -550,6 +550,7 @@ export default function ImageGenProviderSections({ mediaTab, setMediaTab, form, 
           </FormField>
           <RunwayCatalogStatus catalog={runwayCatalog} />
           <CleanersToggles mode={IMAGE_GEN_MODE.RUNWAY} form={form} />
+          <DeleteAfterDownloadToggle label="Delete from Runway after download" detail="Once a render is saved here, remove the rendered asset from Runway (image and video renders). Irreversible: the output can't be re-fetched from Runway afterward. Runway keeps its request history log, including the input prompt and input image. A failed delete is logged and never fails the render." checked={values.runwayDeleteAfterDownload} onChange={(v) => set('runwayDeleteAfterDownload', v)} />
         </div>
       )}
       {mediaTab === 'fal' && (
@@ -605,9 +606,24 @@ export default function ImageGenProviderSections({ mediaTab, setMediaTab, form, 
             <CleanersToggles mode={IMAGE_GEN_MODE.FAL} form={form} />
           </div>
         )}
+        <DeleteAfterDownloadToggle label="Delete from fal.ai after download" detail="Once a render is saved here, remove its stored payloads and output files from fal.ai (image and video renders). Irreversible: the output can't be re-fetched from fal.ai afterward. A failed delete is logged and never fails the render." checked={values.falDeleteAfterDownload} onChange={(v) => set('falDeleteAfterDownload', v)} />
       </div>
       )}
     </>
+  );
+}
+
+// Applies to both image and video renders from the provider. The saved file and its record are kept; what the
+// provider-side delete removes differs per provider, so the caller supplies the wording.
+function DeleteAfterDownloadToggle({ label, detail, checked, onChange }) {
+  return (
+    <div className="space-y-1">
+      <label className="flex items-center gap-3 cursor-pointer">
+        <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} className="rounded" />
+        <span className="text-sm text-gray-300">{label}</span>
+      </label>
+      <p className="text-xs text-gray-500 pl-7">{detail}</p>
+    </div>
   );
 }
 

@@ -18,7 +18,7 @@ import { fableLoomMultipartUnsupported, prepareFableLoomImageParams } from '../s
 import { finishVisualProfileImage } from '../services/imageGen/finishVisualProfile.js';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
 import {
-  validateRequest, mediaDeleteQuerySchema, modelDownloadQuerySchema, modelDownloadParamsSchema, imageCancelBodySchema, imageVisibilityBodySchema, imageEdgeSchema, refineImagePixelCap, PIXEL_CAP_MESSAGE,
+  validateRequest, hostedProviderParamSchema, mediaDeleteQuerySchema, modelDownloadQuerySchema, modelDownloadParamsSchema, imageCancelBodySchema, imageVisibilityBodySchema, imageEdgeSchema, refineImagePixelCap, PIXEL_CAP_MESSAGE,
 } from '../lib/validation.js';
 import { optionalUploadFields, optionalUpload } from '../lib/multipart.js';
 import * as imageGen from '../services/imageGen/index.js';
@@ -57,6 +57,7 @@ import * as characterService from '../services/character.js';
 import { randomUUID } from 'crypto';
 import { buildUniverseRunTag } from '../services/universeRunTag.js';
 import { getSettings } from '../services/settings.js';
+import { deleteImageHostedCopy } from '../services/hostedRenderRemoteDelete.js';
 import { prepareRemoteMediaJob } from '../services/federatedMedia/remoteSubmission.js';
 import { collectRemoteInputAssets } from '../services/federatedMedia/inputAssets.js';
 import { buildFederatedMediaRequest } from '../lib/federatedMediaRequest.js';
@@ -987,6 +988,14 @@ router.delete('/:filename', asyncHandler(async (req, res) => {
   const { force } = validateRequest(mediaDeleteQuerySchema, req.query ?? {});
   await assertMediaDeletable(`image:${req.params.filename}`, { force: force === '1' });
   res.json({ ok: true, ...(await deleteMediaAnywhere('image', req.params.filename)) });
+}));
+
+// Runs the provider's delete for a finished render (Runway: the rendered asset; fal.ai: stored payloads and output files);
+// the local image and sidecar stay, stamped with when the hosted copy was deleted.
+router.delete('/:filename/hosted/:provider', asyncHandler(async (req, res) => {
+  local.assertGalleryFilename(req.params.filename);
+  const provider = validateRequest(hostedProviderParamSchema, req.params.provider);
+  res.json(await deleteImageHostedCopy(provider, req.params.filename));
 }));
 
 router.post('/:filename/cancel-delete', asyncHandler(async (req, res) => {

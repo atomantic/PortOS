@@ -108,6 +108,23 @@ export async function cancelRunwayTask(entry) {
   if (!entry.remoteTerminal) maintenance.markCurrentUnsettled();
 }
 
+/**
+ * Delete a FINISHED task from Runway. This removes the rendered asset (verified against a real render); Runway
+ * keeps its request history log with the input prompt and image (`promptText`/`promptImage`). A 404 means it is already gone
+ * (expired or removed elsewhere) and counts as deleted. Unlike `cancelRunwayTask` this is the
+ * user-requested removal, so a failure throws instead of being swallowed.
+ */
+export async function deleteRunwayTask({ apiKey, taskId }) {
+  const res = await fetchWithTimeout(`${RUNWAY_API_BASE}/v1/tasks/${encodeURIComponent(taskId)}`, {
+    method: 'DELETE', headers: headers(apiKey),
+  }, RUNWAY_POLL_TIMEOUT_MS);
+  await res.body?.cancel?.();
+  if (!res.ok && res.status !== 404) {
+    throw new ServerError(`Runway delete failed: HTTP ${res.status}`, { status: 502, code: 'RUNWAY_DELETE_FAILED' });
+  }
+  return { alreadyGone: res.status === 404 };
+}
+
 /** Submit one paid generation to a generation endpoint. Resolves to the task id. */
 export async function submitRunwayTask({ apiKey, endpoint, body, signal }) {
   await assertRunwayCatalogModel(endpoint, body.model);

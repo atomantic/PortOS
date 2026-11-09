@@ -34,6 +34,7 @@ import { videoGenEvents } from './events.js';
 import { discardUnpublishedVideo, finalizeGeneratedVideo, emitCloudRenderStatus, CLOUD_RENDER_PHASE } from './generateVideoHelpers.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { mutateVideoHistory } from './history.js';
+import { autoDeleteHostedCopy } from '../hostedRenderRemoteDelete.js';
 import { getSettings } from '../settings.js';
 import { frameDataUriAtAspect } from './falFrameAspect.js';
 import {
@@ -291,6 +292,7 @@ async function runRunwayVideo(job, jobId, {
     const { body, endpoint } = build({ ...requestSpec, videoUri, characterVideoUri, imageUri: frame?.dataUri ?? null, endImageUri: endFrame?.dataUri ?? null, referenceImageUris: references.map((ref) => ref.dataUri) });
     if (entry.aborted) return finishFailure('Canceled');
     entry.taskId = await submitRunwayTask({ apiKey, endpoint, body, signal: entry.controller.signal });
+    meta.runwayTaskId = entry.taskId;
 
     const polled = await awaitRunwayTask({
       entry, apiKey, deadline, timeoutMs: RUNWAY_RENDER_TIMEOUT_MS,
@@ -319,6 +321,7 @@ async function runRunwayVideo(job, jobId, {
     activeJobs.delete(jobId);
     await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta: { ...meta, ...measured }, actualSeed: null, mutateHistory: mutateVideoHistory, publication });
     closeJobAfterDelay(jobs, jobId);
+    void autoDeleteHostedCopy('runway', 'video', jobId, { apiKey });
   } catch (err) {
     if (!publication.committed) await discardUnpublishedVideo({ jobId, outputPath }).catch((error) => {
       maintenance.markCurrentUnsettled();

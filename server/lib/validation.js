@@ -2348,7 +2348,12 @@ export const imageGenRunwaySettingsSchema = z.object({
   resolution: z.enum(RUNWAY_IMAGE_RESOLUTIONS).optional(),
   cleanC2PA: z.boolean().optional(),
   denoise: z.boolean().optional(),
+  // Run the provider delete (Runway asset / fal.ai stored files) once the output is saved locally.
+  deleteAfterDownload: z.boolean().optional(),
 });
+
+// Provider whose delete is being run for a finished render (services/hostedRenderRemoteDelete.js).
+export const hostedProviderParamSchema = z.enum(['runway', 'fal']);
 
 // fal.ai Imagegen settings slice (`imageGen.fal`). The API key is NOT here —
 // it is the fal.ai credential the video backend already owns (write-only via
@@ -2360,6 +2365,7 @@ export const imageGenFalSettingsSchema = z.object({
   model: z.preprocess((v) => (v === '' ? undefined : v), z.enum(FAL_IMAGE_MODEL_IDS).optional()),
   cleanC2PA: z.boolean().optional(),
   denoise: z.boolean().optional(),
+  deleteAfterDownload: z.boolean().optional(),
 });
 
 export const imageGenAgySettingsSchema = z.object({

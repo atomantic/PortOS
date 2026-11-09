@@ -8,7 +8,7 @@ import {
   generateThumbnail, probeFrameCount, probeVideoStreamInfo, trimVideoFromFrame,
 } from '../../lib/ffmpeg.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
-import { omitRenderTiming, renderTimingFields } from '../../lib/renderTiming.js';
+import { omitDerivedRenderFields, renderTimingFields } from '../../lib/renderTiming.js';
 import { discardUnpublishedVideo } from './generateVideoHelpers.js';
 import { mutateVideoHistory } from './history.js';
 import { resolveHistoryItem, resolveSourcePath } from './upscaleVideo.js';
@@ -76,7 +76,7 @@ export async function trimHistoryItem(historyId, { startSec, endSec } = {}) {
       const keptFrames = await probeFrameCount(newPath);
       const trimStartSec = Math.round((startFrame / fps) * 1000) / 1000;
       const newEntry = {
-        ...omitRenderTiming(item),
+        ...omitDerivedRenderFields(item),
         id: newId,
         filename: newFilename,
         thumbnail,

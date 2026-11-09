@@ -25,7 +25,7 @@ import { deleteHistoryItem } from './videoGen/historyOps.js';
 import { discardUnpublishedVideo } from './videoGen/generateVideoHelpers.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { cutVideoSegment, generateThumbnail, probeVideoDuration, safeUnder } from '../lib/ffmpeg.js';
-import { omitRenderTiming } from '../lib/renderTiming.js';
+import { omitDerivedRenderFields } from '../lib/renderTiming.js';
 
 // A provider clip may end a frame short of its requested length; more than that is a short clip.
 const END_TOLERANCE_SEC = 0.05;
@@ -54,7 +54,7 @@ async function registerPiece(item, clipPath, span) {
   let committed = false;
   try {
     const thumbnail = await generateThumbnail(outPath, id);
-    const { numFrames: _frames, posterSec: _poster, ...source } = omitRenderTiming(item);
+    const { numFrames: _frames, posterSec: _poster, ...source } = omitDerivedRenderFields(item);
     const entry = {
       ...source,
       id, filename, thumbnail,

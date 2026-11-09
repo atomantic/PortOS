@@ -10,6 +10,7 @@
 import { EventEmitter } from 'events';
 import { peerSyncEventSchema, PEER_SYNC_EVENT_VERSION } from '../lib/peerSyncEventSchema.js';
 import { PEER_INSTANCE_HEADER } from '../lib/peerHttpClient.js';
+import { omitHostedDeletedStamps } from '../lib/renderTiming.js';
 
 export const PEER_SYNC_ROOM = 'peer-sync';
 export const peerSyncBus = new EventEmitter();
@@ -25,7 +26,7 @@ const RECEIVER_GATE_FOR_EVENT = Object.freeze({
 // Per-machine row fields that never cross the wire (see getVideoHistorySnapshot).
 export function stripMachineLocalFields(record) {
   const { hidden, suppliedByInstanceId, pendingDelete, ...rest } = record;
-  return rest;
+  return omitHostedDeletedStamps(rest);
 }
 
 const safeEmit = (event, payload) => {

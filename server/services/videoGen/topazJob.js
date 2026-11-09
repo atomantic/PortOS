@@ -10,6 +10,7 @@ import { createWriteStream } from 'node:fs';
 import { PATHS, UUID_RE } from '../../lib/fileUtils.js';
 import { safeUnder, probeVideoStreamInfo, probeFrameCount, probeVideoDuration, probeSquareVideoPixels, probeVideoAudioPresence, generateThumbnail } from '../../lib/ffmpeg.js';
 import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js';
+import { omitDerivedRenderFields } from '../../lib/renderTiming.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { enqueueJob, getJob, listJobs, updateJobResult } from '../mediaJobQueue/index.js';
 import { HISTORY_UNCHANGED, loadHistory, mutateVideoHistory } from './history.js';
@@ -359,7 +360,7 @@ export async function runVideoUpscale(params) {
           thumbnail = await generateThumbnail(outputPath, jobId);
           if (!thumbnail) { await unlink(candidate).catch(error => { if (error.code !== 'ENOENT') throw error; }); thumbnailPath = null; }
         }
-        const row = { ...item, id: jobId, filename: `${jobId}.mp4`, thumbnail, createdAt: new Date().toISOString(), width: measured.width, height: measured.height, fps: measured.fps, numFrames: frames, duration, upscaledFrom: historyId, upscaleMethod: 'topaz', upscaleRuntime: 'topaz', upscaleModel: TOPAZ_MODELS[model], hidden: false };
+        const row = { ...omitDerivedRenderFields(item), topazRequestId: requestId, id: jobId, filename: `${jobId}.mp4`, thumbnail, createdAt: new Date().toISOString(), width: measured.width, height: measured.height, fps: measured.fps, numFrames: frames, duration, upscaledFrom: historyId, upscaleMethod: 'topaz', upscaleRuntime: 'topaz', upscaleModel: TOPAZ_MODELS[model], hidden: false };
         await mutateVideoHistory(rows => { rows.unshift(row); return rows; });
         return row;
       } catch (error) {

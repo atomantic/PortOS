@@ -104,12 +104,14 @@ const EMPTY_MEDIA_FORM = Object.freeze({
   runwayEnabled: false,
   runwayModel: 'gen4_image',
   runwayResolution: '720p',
+  runwayDeleteAfterDownload: false,
   // fal.ai image backend — a metered API, gated by its own toggle like the
   // CLIs. The API key is NOT part of this slice: it is the fal.ai credential
   // the video backend already owns (the Defaults tab's key row).
   falEnabled: false,
   // '' = no pin → FAL_IMAGE_DEFAULT_MODEL server-side.
   falModel: '',
+  falDeleteAfterDownload: false,
   // Per-provider cleaner toggles (see CleanersToggles in the provider sections).
   cleanC2PAByMode: { external: true, local: true, codex: true, grok: false, agy: false, fal: false, runway: false },
   denoiseByMode: { external: false, local: false, codex: false, grok: false, agy: false, fal: false, runway: false },
@@ -158,8 +160,10 @@ const mediaFormFromSettings = (s) => {
     runwayEnabled: ig.runway?.enabled === true,
     runwayModel: ig.runway?.model || 'gen4_image',
     runwayResolution: ig.runway?.resolution || '720p',
+    runwayDeleteAfterDownload: ig.runway?.deleteAfterDownload === true,
     falEnabled: fl.enabled === true,
     falModel: fl.model || '',
+    falDeleteAfterDownload: fl.deleteAfterDownload === true,
     cleanC2PAByMode: Object.fromEntries(Object.entries(cleaners).map(([m, c]) => [m, c.cleanC2PA])),
     denoiseByMode: Object.fromEntries(Object.entries(cleaners).map(([m, c]) => [m, c.denoise])),
     // Load every target entry whole (including videoModel keys this tab
@@ -231,11 +235,11 @@ const sliceFieldsOf = (f) => ({
     cleanC2PA: f.cleanC2PAByMode.agy, denoise: f.denoiseByMode.agy,
   },
   'imageGen.runway': {
-    enabled: f.runwayEnabled, model: f.runwayModel, resolution: f.runwayResolution,
+    enabled: f.runwayEnabled, model: f.runwayModel, resolution: f.runwayResolution, deleteAfterDownload: f.runwayDeleteAfterDownload,
     cleanC2PA: f.cleanC2PAByMode.runway, denoise: f.denoiseByMode.runway,
   },
   'imageGen.fal': {
-    enabled: f.falEnabled, model: falImageFamily(f.falModel) ? f.falModel : '',
+    enabled: f.falEnabled, model: falImageFamily(f.falModel) ? f.falModel : '', deleteAfterDownload: f.falDeleteAfterDownload,
     cleanC2PA: f.cleanC2PAByMode.fal, denoise: f.denoiseByMode.fal,
   },
   'imageGen.expose': { a1111: f.exposeA1111 },

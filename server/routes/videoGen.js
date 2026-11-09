@@ -22,7 +22,7 @@ import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.j
 import { createVideoHistoryItemRead, historyRecordIdSchema } from './videoHistoryRead.js';
 import { uploadFields, optionalUpload, optionalUploadFields } from '../lib/multipart.js';
 import {
-  validateRequest, mediaDeleteQuerySchema, modelDownloadQuerySchema, modelDownloadParamsSchema,
+  validateRequest, hostedProviderParamSchema, mediaDeleteQuerySchema, modelDownloadQuerySchema, modelDownloadParamsSchema,
   icLoraDownloadParamsSchema, textEncoderDownloadParamsSchema, videoCancelBodySchema, videoModelTermsSchema,
 } from '../lib/validation.js';
 import { grokVideoDurationSchema } from '../lib/sharedSchemas.js';
@@ -37,6 +37,7 @@ import {
   videoModelTermsGateId, isVideoModelTermsAccepted, videoModelTermsError,
 } from '../lib/videoDisclosure.js';
 import { getSettings, updateSettingsWith } from '../services/settings.js';
+import { deleteVideoHostedCopy } from '../services/hostedRenderRemoteDelete.js';
 import { recordUserAction } from '../services/userActions.js';
 import { checkPackages, isAllowedPython } from '../lib/pythonSetup.js';
 import {
@@ -1428,6 +1429,15 @@ router.delete('/history/:id', asyncHandler(async (req, res) => {
   const { force } = validateRequest(mediaDeleteQuerySchema, req.query ?? {});
   await assertMediaDeletable(`video:${parsed.data}`, { force: force === '1' });
   res.json({ ok: true, ...(await deleteMediaAnywhere('video', parsed.data)) });
+}));
+
+// Runs the provider's delete for a finished render (Runway: the rendered asset; fal.ai: stored payloads and output files);
+// the local file and record stay, stamped with when the hosted copy was deleted.
+router.delete('/history/:id/hosted/:provider', asyncHandler(async (req, res) => {
+  const parsed = historyRecordIdSchema.safeParse(req.params.id);
+  if (!parsed.success) failValidation(parsed);
+  const provider = validateRequest(hostedProviderParamSchema, req.params.provider);
+  res.json(await deleteVideoHostedCopy(provider, parsed.data));
 }));
 
 router.post('/history/:id/cancel-delete', asyncHandler(async (req, res) => {

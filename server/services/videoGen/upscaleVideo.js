@@ -12,7 +12,7 @@ import {
   probeVideoStreamInfo, probeFrameCount, probeVideoDuration, hasAudioStream,
 } from '../../lib/ffmpeg.js';
 import { loadHistory, mutateVideoHistory } from './history.js';
-import { omitRenderTiming, renderTimingFields } from '../../lib/renderTiming.js';
+import { omitDerivedRenderFields, renderTimingFields } from '../../lib/renderTiming.js';
 import {
   resolveIcLoraWeightByKey, icLoraSpecByKey, icLoraWeightKey, readIcLoraReferenceDownscaleFactor,
 } from '../../lib/icLoraWeights.js';
@@ -286,7 +286,7 @@ export async function upscaleHistoryItem(historyId, options = {}) {
         // `renderTimingFields` reports `{}` when it can't measure the span, and an
         // override that contributes no keys would silently leave the SOURCE render's
         // duration on a row that only ran an ffmpeg pass.
-        ...omitRenderTiming(item),
+        ...omitDerivedRenderFields(item),
         id: newId,
         filename: newFilename,
         width: (Number(item.width) || 0) * UPSCALE_SCALE,
