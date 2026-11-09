@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { backfillPrevizFromShots, previzCutProblems, previzFrameAt, previzPawnColors, previzPoseInText, updatePrevizCut } from './musicVideoPreviz.js';
+import { backfillPrevizFromShots, previzCutProblems, previzFrameAt, previzPawnColors, updatePrevizCut } from './musicVideoPreviz.js';
 import { musicVideoPrevizSchema, musicVideoProjectUpdateSchema } from './musicVideoValidation.js';
 
 const subjects = [
@@ -20,14 +20,11 @@ const project = (scenes, extra = {}) => ({ concept: { subjects }, cameras: [{ id
 describe('previz poses from shot actions', () => {
   // Catches crouched, seated and running shots all drawing a standing pawn, and a plain walk or "stands" shot picking up a pose it never described.
   it('seeds crouch, sit and run from the action and keeps everything else standing', () => {
-    expect(previzPoseInText('Ana crouches behind the hedge')).toBe('crouch');
-    expect(previzPoseInText('Bo sits on the fountain rim')).toBe('sit');
-    expect(previzPoseInText('They sprint across the lawn')).toBe('run');
-    expect(previzPoseInText('Ana stands at the gate')).toBeNull();
-    expect(previzPoseInText('Ana walks home')).toBeNull();
     const posed = (action) => backfillPrevizFromShots(project([scene('s1', 0, 4, { characters: ['Ana'], action })]), places).previz.tracks[0].keys[0].pose;
     expect(posed('Ana crouches behind the hedge')).toBe('crouch');
     expect(posed('Ana runs past')).toBe('run');
+    expect(posed('Bo sits on the fountain rim')).toBe('sit');
+    expect(posed('Ana walks home')).toBe('stand');
     expect(posed('Ana at the gate')).toBe('stand');
   });
 

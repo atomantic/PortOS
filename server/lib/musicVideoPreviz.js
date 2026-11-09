@@ -219,7 +219,7 @@ const SIT_TEXT = /\b(sits?|sitting|sat|seated|perch(?:es|ed)?)\b/i;
 const RUN_TEXT = /\b(runs?|running|ran|sprint\w*|dash(?:es|ed|ing)?|flees?|fleeing|fled|races|racing)\b/i;
 
 /** The on-foot pose a shot's action words describe (crouch, sit, run), else null: a shot that names none keeps people standing. */
-export function previzPoseInText(text) {
+function previzPoseInText(text) {
   const words = textOf(text);
   if (CROUCH_TEXT.test(words)) return 'crouch';
   if (SIT_TEXT.test(words)) return 'sit';
