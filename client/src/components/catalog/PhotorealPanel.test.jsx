@@ -5,6 +5,7 @@ import PhotorealPanel from './PhotorealPanel';
 import { draftCatalogPhotorealLook, getCatalogPhotoreal, getCatalogPhotorealTextures, installCatalogPhotorealTexture, searchCatalogPhotorealTextures, openCatalogPhotorealBlend, previewCatalogPhotorealLookPrompt, saveCatalogGreybox, saveCatalogPhotorealLook, startCatalogPhotorealRender } from '../../services/apiCatalog';
 import { findCodeAnimationBlender, getCodeAnimationExecution, probeCodeAnimationExecution, updateCodeAnimationExecutionTools } from '../../services/apiCodeAnimation';
 import { copyToClipboard } from '../../lib/clipboard';
+import { findEnabledByRole } from '../../test/enabledBarrier';
 
 const { handlers } = vi.hoisted(() => ({ handlers: new Map() }));
 vi.mock('../../services/socket', () => ({ default: { on: (event, handler) => handlers.set(event, handler), off: (event) => handlers.delete(event) } }));
@@ -191,7 +192,8 @@ describe('PhotorealPanel', () => {
 
   it('keeps every camera deselected when the last checked camera is unchecked', async () => {
     show();
-    const wide = await screen.findByLabelText(/Wide/);
+    await findEnabledByRole('button', { name: 'Render 2 cameras' });
+    const wide = screen.getByLabelText(/Wide/);
     const booth = screen.getByLabelText(/Booth/);
     expect(wide).toBeChecked();
     expect(booth).toBeChecked();
@@ -232,7 +234,7 @@ describe('PhotorealPanel', () => {
   // Catches a fly-through sent as stills, in the wrong camera order, or with no way to reach the saved MP4.
   it('renders a fly-through through the cameras in list order and links the MP4 in Media History', async () => {
     show();
-    const fly = await screen.findByRole('button', { name: /Render fly-through \(192 frames\)/ });
+    const fly = await findEnabledByRole('button', { name: /Render fly-through \(192 frames\)/ });
     fireEvent.change(screen.getByLabelText('Seconds'), { target: { value: '4' } });
     startCatalogPhotorealRender.mockResolvedValue({ id: 'pr-fly', state: 'running', engine: 'eevee', shotIds: ['wide', 'booth'], flythroughSeconds: 4, startedAt: new Date().toISOString() });
     fireEvent.click(screen.getByRole('button', { name: /Render fly-through \(96 frames\)/ }));
@@ -328,7 +330,7 @@ describe('PhotorealPanel', () => {
     saveCatalogPhotorealLook.mockImplementation(() => new Promise((resolve) => { finishSave = resolve; }));
     show();
     fireEvent.change(await screen.findByLabelText('Describe the look'), { target: { value: 'warm light' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Dress with AI' }));
+    fireEvent.click(await findEnabledByRole('button', { name: 'Dress with AI' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Apply look' }));
     await waitFor(() => expect(finishSave).toBeTypeOf('function'));
     expect(screen.getByRole('button', { name: 'Open in Blender' })).toBeDisabled();
@@ -350,7 +352,7 @@ describe('PhotorealPanel', () => {
     openCatalogPhotorealBlend.mockImplementation(() => new Promise((resolve) => { finishOpen = resolve; }));
     show();
     fireEvent.change(await screen.findByLabelText('Describe the look'), { target: { value: 'warm light' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Dress with AI' }));
+    fireEvent.click(await findEnabledByRole('button', { name: 'Dress with AI' }));
     const apply = await screen.findByRole('button', { name: 'Apply look' });
     const open = screen.getByRole('button', { name: 'Open in Blender' });
     await waitFor(() => expect(open).toBeEnabled());
@@ -541,7 +543,7 @@ describe('PhotorealPanel', () => {
     // Out-of-range text still in the field is clamped when the render starts.
     startCatalogPhotorealRender.mockResolvedValue({ id: 'pr-c', state: 'running', engine: 'eevee', shotIds: ['wide', 'booth'], startedAt: new Date().toISOString() });
     fireEvent.change(seconds, { target: { value: '9999' } });
-    fireEvent.click(screen.getByRole('button', { name: /Render fly-through/ }));
+    fireEvent.click(await findEnabledByRole('button', { name: /Render fly-through/ }));
     await waitFor(() => expect(startCatalogPhotorealRender).toHaveBeenCalled());
     const body = startCatalogPhotorealRender.mock.calls[0][1];
     expect(body.samples).toBe(64);
@@ -603,7 +605,7 @@ describe('PhotorealPanel', () => {
     const onSaved = vi.fn();
     saveCatalogGreybox.mockResolvedValue({ id: 'plc-example', payload: {} });
     show({ onSaved });
-    fireEvent.click(await screen.findByRole('button', { name: 'Use as photo plate' }));
+    fireEvent.click(await findEnabledByRole('button', { name: 'Use as photo plate' }));
     await waitFor(() => expect(onSaved).toHaveBeenCalled());
     const [, saved] = saveCatalogGreybox.mock.calls[0];
     expect(saved.shots.find((s) => s.id === 'wide')).toMatchObject({ plate: 'wide-render.png' });
@@ -617,7 +619,7 @@ describe('PhotorealPanel', () => {
     saveCatalogPhotorealLook.mockResolvedValue({ id: 'plc-example', payload: { photoreal: look } });
     show({ onSaved });
     fireEvent.change(await screen.findByLabelText('Describe the look'), { target: { value: 'waxed maple floor, light haze' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Dress with AI' }));
+    fireEvent.click(await findEnabledByRole('button', { name: 'Dress with AI' }));
     await waitFor(() => expect(draftCatalogPhotorealLook).toHaveBeenCalledWith('plc-example', expect.objectContaining({ instruction: 'waxed maple floor, light haze', useCurrent: false }), { silent: true }));
     expect(await screen.findByText(/Draft look, not saved yet/)).toBeInTheDocument();
     expect(screen.getByText(/floor: wood-floor, worn/)).toBeInTheDocument();
@@ -640,7 +642,7 @@ describe('PhotorealPanel', () => {
     show({ record: { ...record, payload: { ...record.payload, photoreal: saved } } });
 
     fireEvent.change(await screen.findByLabelText('What should change?'), { target: { value: 'more haze' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Draft the change' }));
+    fireEvent.click(await findEnabledByRole('button', { name: 'Draft the change' }));
     expect(await screen.findByText(/Draft look, not saved yet/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /Change/ }));
