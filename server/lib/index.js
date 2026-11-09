@@ -957,6 +957,7 @@ export * from './imageLimits.js';
 export * from './musicVideoActionContract.js';
 export * from './musicVideoGrade.js';
 export * from './musicVideoFilmLook.js';
+export * from './shotColorMatch.js';
 export * from './filmLook.js';
 export * from './filmLookValidation.js';
 export * from './filmLookGpu.js';

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import FilmLookFrame from '../media/FilmLookFrame.jsx';
+import ShotColorMatchFrame from './ShotColorMatchFrame.jsx';
 import { uuidv4 } from '../../lib/uuid.js';
 import { isFilmLookNeutral } from '../../lib/filmLook.js';
 import { Captions, Clapperboard, Scissors } from 'lucide-react';
@@ -760,11 +761,15 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
         <FilmLookFrame look={lookOn ? project.filmLook : null} frame={Math.round((outro.active ? songEndSec + outro.t : cold.active ? cold.time - cold.seconds : time) * ANIMATIC_FPS)}
           playing={playing || cold.active || (outro.active && !outro.paused && outro.t < outro.seconds)} className="h-full w-full">
         {(picture?.referenceImageId || scenePhotoSequence(picture)?.imageIds.length) && stillShot ? (
-          <StillShot key={picture.sceneId} scene={picture} audioRef={clock.ref} time={clock.time} fps={stillFps} beats={beats} effect={shotEffect} />
+          <ShotColorMatchFrame key={picture.sceneId} project={project} scene={picture}>
+            <StillShot scene={picture} audioRef={clock.ref} time={clock.time} fps={stillFps} beats={beats} effect={shotEffect} />
+          </ShotColorMatchFrame>
         ) : picture?.referenceImageId ? (
           // Behind a VHS-edged clip the still stands in, blurred and faded, for the render's blur of the clip.
-          <img src={`/data/images/${picture.referenceImageId}`} alt=""
-            className={`h-full w-full ${vhsEdges ? 'object-cover blur-md saturate-50 brightness-75' : stillEdges ? 'object-cover' : 'object-contain'}`} />
+          <ShotColorMatchFrame project={project} scene={picture}>
+            <img src={`/data/images/${picture.referenceImageId}`} alt=""
+              className={`h-full w-full ${vhsEdges ? 'object-cover blur-md saturate-50 brightness-75' : stillEdges ? 'object-cover' : 'object-contain'}`} />
+          </ShotColorMatchFrame>
         ) : cardInFrame && !picture?.videoHistoryId ? (
           <div className="flex h-full w-full flex-col items-center justify-center gap-1 p-4 text-center">
             <span className="text-sm font-medium text-port-text">{label}</span>
@@ -772,12 +777,18 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
           </div>
         ) : null}
         {clipShots.map(({ scene, offset }) => (
-          <ShotClip key={`${cold.active ? 'cold:' : ''}${scene.sceneId}:${scene.videoHistoryId}`} scene={scene} audioRef={clock.ref} time={clock.time} current={scene.sceneId === shot?.sceneId}
-            preload={offset <= 1 ? 'auto' : 'metadata'} />
+          <ShotColorMatchFrame key={`${cold.active ? 'cold:' : ''}${scene.sceneId}:${scene.videoHistoryId}`} project={project} scene={scene} className="pointer-events-none absolute inset-0 h-full w-full">
+            <ShotClip scene={scene} audioRef={clock.ref} time={clock.time} current={scene.sceneId === shot?.sceneId}
+              preload={offset <= 1 ? 'auto' : 'metadata'} />
+          </ShotColorMatchFrame>
         ))}
         {nearToggles.map((toggle) => {
           const incoming = playedScene(scenes.find((scene) => scene.sceneId === toggle.toSceneId), allScenes);
-          return incoming ? <ToggleClip key={`toggle:${toggle.toSceneId}:${incoming.videoHistoryId || ''}`} scene={incoming} toggle={toggle} audioRef={audioRef} time={time} layered={layered} fps={stillFps} beats={beats} /> : null;
+          return incoming ? (
+            <ShotColorMatchFrame key={`toggle:${toggle.toSceneId}:${incoming.videoHistoryId || ''}`} project={project} scene={incoming} className="pointer-events-none absolute inset-0 h-full w-full">
+              <ToggleClip scene={incoming} toggle={toggle} audioRef={audioRef} time={time} layered={layered} fps={stillFps} beats={beats} />
+            </ShotColorMatchFrame>
+          ) : null;
         })}
         {nearFades.map((fade) => <FadeBlack key={`fade:${fade.fromSceneId}`} fade={fade} audioRef={audioRef} time={time} />)}
         {/* The shots' VHS glitches on their cuts, on the frames the final render repaints. */}

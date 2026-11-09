@@ -7,6 +7,7 @@ import SceneClipLength from './SceneClipLength.jsx';
 import SceneClipTiming from './SceneClipTiming.jsx';
 import SceneRejectUnused from './SceneRejectUnused.jsx';
 import ShotFinalRender from './ShotFinalRender.jsx';
+import ShotColorMatch from './ShotColorMatch.jsx';
 import ShotFilmLook from './ShotFilmLook.jsx';
 import ShotStoryboardPanel from './ShotStoryboardPanel.jsx';
 import ShotEditorGroup from './ShotEditorGroup.jsx';
@@ -897,8 +898,13 @@ export default function SceneCard({
         {codeShot && speakerField}
         {settingsGroups}
         {/* This shot's piece of the composed final render: cached or not, Render shot, its film look. */}
-        {project?.composition?.mode === 'document' && <ShotFilmLook project={project} scene={scene} onChange={applyPatch} fieldId={fieldId} />}
-        {project?.composition?.mode === 'composed' && <ShotFinalRender project={project} scene={scene} onChange={applyPatch} fieldId={fieldId} />}
+        {project?.composition?.mode === 'document' && (
+          <>
+            <ShotColorMatch project={project} scene={scene} fieldId={fieldId} onApplied={(patch) => onEditLocal(scene.sceneId, patch)} />
+            <ShotFilmLook project={project} scene={scene} onChange={applyPatch} fieldId={fieldId} />
+          </>
+        )}
+        {project?.composition?.mode === 'composed' && <ShotFinalRender project={project} scene={scene} onChange={applyPatch} onLocal={(patch) => onEditLocal(scene.sceneId, patch)} fieldId={fieldId} />}
         {(scene.visualIntent || scene.direction || scene.direction?.actionContract) && (
           <ShotEditorGroup title="Direction" summary={scene.visualIntent} defaultOpen={false} testId="shot-group-direction">
             <div className="space-y-2 text-[11px] text-port-text-muted">
