@@ -1466,34 +1466,55 @@ if [[ "$INSTALL_FLUX2" == "1" ]]; then
 
   # Skip the (slow, network-heavy) pip path when both FLUX.2 and Qwen 2.1 already
   # import — diffusers-from-git is a git clone every run otherwise. Use
-  # FLUX2_FORCE_REINSTALL=1 to bypass.
-  if [[ "${FLUX2_FORCE_REINSTALL:-}" != "1" ]] && "$FLUX2_PY" -c "from diffusers import Flux2KleinPipeline, QwenImage21Pipeline" 2>/dev/null; then
+  # FLUX2_FORCE_REINSTALL=1 to bypass. Apple Silicon never skips: a venv built
+  # before the lock existed imports fine yet holds unpinned, unhashed packages,
+  # and syncing the lock is a no-op once the venv already matches it.
+  if [[ "${FLUX2_FORCE_REINSTALL:-}" != "1" ]] && ! is_apple_silicon \
+      && "$FLUX2_PY" -c "from diffusers import Flux2KleinPipeline, QwenImage21Pipeline" 2>/dev/null; then
     echo "✅ FLUX.2 venv already ready: $FLUX2_PY"
   else
     echo "📦 Installing FLUX.2 packages into $FLUX2_VENV..."
-    "$FLUX2_PY" -m pip install --upgrade pip wheel setuptools >/dev/null
-    # diffusers-from-git is required because Flux2KleinPipeline isn't in any
-    # tagged release as of late 2025 / early 2026. sdnq is git-only too —
-    # registers a custom config type at import-time which
-    # Flux2KleinPipeline.from_pretrained relies on.
-    "$FLUX2_PY" -m pip install --upgrade \
-      "torch>=2.5" \
-      torchvision \
-      accelerate \
-      "transformers>=5.17" \
-      sentencepiece \
-      protobuf \
-      safetensors \
-      "huggingface_hub[hf_xet]" \
-      "diffusers @ git+https://github.com/huggingface/diffusers" \
-      "sdnq @ git+https://github.com/Disty0/sdnq.git" \
-      "peft>=0.17" \
-      "optimum-quanto>=0.2.7" \
-      pillow
-    # Same-version dev snapshots are not replaced by --upgrade. Refresh the
-    # pipeline code without reinstalling torch or its platform-specific wheel.
-    "$FLUX2_PY" -m pip install --force-reinstall --no-deps \
-      "diffusers @ git+https://github.com/huggingface/diffusers"
+    if is_apple_silicon; then
+      # Apple Silicon installs only from the hash-pinned lock
+      # (scripts/requirements-flux2-mlx.lock.txt): no install-time resolution,
+      # so a new or compromised transitive release can't land on the next Repair.
+      # Direct pins: scripts/requirements-flux2-mlx.txt. diffusers 0.42.1 is a
+      # tagged release carrying Flux2KleinPipeline + QwenImage21Pipeline and sdnq
+      # is on PyPI, so no git source is needed.
+      # The lock needs CPython 3.11+: its filelock fix for advisory GHSA-2g95-wg33-c5x2
+      # (4.2.1) dropped 3.10, and 4.1.0, the last 3.10 release, is affected.
+      if ! "$FLUX2_PY" -c 'import sys; sys.exit(0 if sys.version_info[:2] >= (3, 11) else 1)'; then
+        echo "❌ FLUX.2 on Apple Silicon needs Python 3.11+; ${FLUX2_PY} is older." >&2
+        echo "   Re-run with PYTHON_BIN pointing at a 3.11+ interpreter (e.g. 'brew install python@3.12')." >&2
+        exit 1
+      fi
+      "$FLUX2_PY" -m pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-flux2-mlx.lock.txt"
+    else
+      # Linux/Windows still resolve at install time (hash-pinned CUDA lock: #15481).
+      "$FLUX2_PY" -m pip install --upgrade pip wheel setuptools >/dev/null
+      # diffusers-from-git is required because Flux2KleinPipeline isn't in any
+      # tagged release as of late 2025 / early 2026. sdnq is git-only too —
+      # registers a custom config type at import-time which
+      # Flux2KleinPipeline.from_pretrained relies on.
+      "$FLUX2_PY" -m pip install --upgrade \
+        "torch>=2.5" \
+        torchvision \
+        accelerate \
+        "transformers>=5.17" \
+        sentencepiece \
+        protobuf \
+        safetensors \
+        "huggingface_hub[hf_xet]" \
+        "diffusers @ git+https://github.com/huggingface/diffusers" \
+        "sdnq @ git+https://github.com/Disty0/sdnq.git" \
+        "peft>=0.17" \
+        "optimum-quanto>=0.2.7" \
+        pillow
+      # Same-version dev snapshots are not replaced by --upgrade. Refresh the
+      # pipeline code without reinstalling torch or its platform-specific wheel.
+      "$FLUX2_PY" -m pip install --force-reinstall --no-deps \
+        "diffusers @ git+https://github.com/huggingface/diffusers"
+    fi
     pin_venv_arm64 "$FLUX2_VENV"
     probe_or_fail \
       "flux2 venv built but 'from diffusers import Flux2KleinPipeline, QwenImage21Pipeline' failed." \
