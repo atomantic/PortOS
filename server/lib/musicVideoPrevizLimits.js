@@ -3,8 +3,8 @@ export const PREVIZ_CUTS_MAX = 600;
 export const PREVIZ_TRACKS_MAX = 240;
 export const PREVIZ_KEYS_MAX = 2000;
 export const PREVIZ_VISIBLE_MAX = 24;
-// How a figure is posed on a key: standing, or riding a vehicle (a catalog object listed in `previz.vehicles`, drawn as a low proxy under a seated figure).
-export const PREVIZ_POSES = Object.freeze(['stand', 'ride']);
+// How a figure is posed on a key: standing, walking or running (the same figure leaning into a stride), crouching (behind a hedge), sitting (a rim, a stool), or riding a vehicle (a catalog object listed in `previz.vehicles`, drawn as a low proxy under a seated figure).
+export const PREVIZ_POSES = Object.freeze(['stand', 'walk', 'run', 'crouch', 'sit', 'ride']);
 // Pawn colors with plain names, so a person (and later a model told "the lavender figure is Ana") can tell who is who.
 // New cast members take them in order; the director can repick any.
 export const PREVIZ_PAWN_COLORS = Object.freeze([
