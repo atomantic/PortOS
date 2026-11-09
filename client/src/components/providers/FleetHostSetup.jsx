@@ -183,6 +183,7 @@ export default function FleetHostSetup({ compact = false, providers = [], onConf
             <Banner tone={status.serving ? 'success' : 'warning'}>
               {status.serving ? 'Ready for client connections.' : 'Configured; model is loading or unavailable. Refresh until all checks pass.'}
               <p className="mt-1 text-xs">{status.queue.active} generating · {status.queue.queued} queued · limit {status.queue.maxActive} active / {status.queue.maxQueued} waiting</p>
+              {status.queue.stalled && <p className="mt-1 text-xs text-port-warning">The model runtime stopped generating, so new requests are refused while the host restarts it. If this stays, restart the runtime container manually.</p>}
             </Banner>
           )}
           {/* Offered whenever there is anything to turn off — a listening
