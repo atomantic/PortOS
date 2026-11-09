@@ -11,7 +11,7 @@ import usePrevizWorld from '../../../hooks/usePrevizWorld.js';
 import PrevizAi from './PrevizAi.jsx';
 import PrevizDraftMissingGreyboxes from './PrevizDraftMissingGreyboxes.jsx';
 import PrevizTimeline from './PrevizTimeline.jsx';
-import WorldMap, { fitWorldView } from '../../catalog/WorldMapView';
+import WorldMap, { useWorldMapView } from '../../catalog/WorldMapView';
 import { timelineActorsAt, timelineClockAt, timelineMinuteOfClock, previzTimeline } from '../../../../../server/lib/musicVideoPrevizTimeline.js';
 import { ingredientPath } from '../../../lib/creativeLibraries.js';
 import { createCatalogIngredient, finishCatalogPrevizBuildJob, saveCatalogWorld, startCatalogPrevizBuildJob } from '../../../services/apiCatalog.js';
@@ -251,7 +251,7 @@ function CameraStyles({ cameras, onChange }) {
 function CutOnTimeline({ project, cut, world, worldPlaces, onChange }) {
   const timeline = previzTimeline(project);
   const [picking, setPicking] = useState(false);
-  const [view, setView] = useState(() => fitWorldView(world));
+  const { view, setView } = useWorldMapView(world, worldPlaces);
   const id = `mv-previz-${cut.id}-story`;
   const on = Number.isFinite(cut.storyMin);
   const spotActors = () => {

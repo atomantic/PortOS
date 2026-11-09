@@ -4,7 +4,7 @@ import { Check, Loader2, Minus, Plus, RotateCcw, RotateCw, Route, Trash2, X } fr
 import toast from '../ui/Toast';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import useCatalogPlaces from '../../hooks/useCatalogPlaces';
-import WorldMap, { fitWorldView } from './WorldMapView';
+import WorldMap, { useWorldMapView } from './WorldMapView';
 import useListResource from '../../hooks/useListResource';
 import ListLoadError from '../ui/ListLoadError';
 import { listCatalogIngredients, saveCatalogWorld } from '../../services/apiCatalog';
@@ -73,8 +73,8 @@ export default function WorldPanel({ record, readOnly = false, disabled = false,
   const [clock, setClock] = useState(21 * 60);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const world = draft || saved;
-  const [view, setView] = useState(() => fitWorldView(world || blankWorld()));
   const places = useCatalogPlaces((world?.sets || []).map((set) => set.ingredientId));
+  const { view, setView, fit } = useWorldMapView(world, places);
   const selected = params.get('worldItem') || '';
   const select = (item) => setParams((current) => {
     const next = new URLSearchParams(current);
@@ -143,7 +143,7 @@ export default function WorldPanel({ record, readOnly = false, disabled = false,
           <span className="ml-auto inline-flex gap-1">
             <button type="button" className={iconCls} aria-label="Zoom in" onClick={() => zoom(0.7)}><Plus size={16} aria-hidden="true" /></button>
             <button type="button" className={iconCls} aria-label="Zoom out" onClick={() => zoom(1 / 0.7)}><Minus size={16} aria-hidden="true" /></button>
-            <button type="button" className={buttonCls} onClick={() => setView(fitWorldView(world))}>Fit</button>
+            <button type="button" className={buttonCls} onClick={fit}>Fit</button>
           </span>
         </div>
       </fieldset>

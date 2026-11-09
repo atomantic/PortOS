@@ -4,7 +4,7 @@ import { Clapperboard, Moon, Pause, Play, Plus, RefreshCw, Trash2 } from 'lucide
 import { activeMusicVideoSubjects } from '../../../../../server/lib/musicVideoCastSelection.js';
 import toast from '../../ui/Toast';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
-import WorldMap, { fitWorldView } from '../../catalog/WorldMapView';
+import WorldMap, { useWorldMapView } from '../../catalog/WorldMapView';
 import { formatCount } from '../../../utils/formatters.js';
 import { worldClockText } from '../../../../../server/lib/worldMap.js';
 import { musicVideoShotPlaceId } from '../../../../../server/lib/musicVideoRouteMaps.js';
@@ -180,7 +180,7 @@ export default function PrevizTimeline({ project, world, places, locked, onSave:
   const [hours, setHours] = useState(8);
   const [watchMin, setWatchMin] = useState(0);
   const [playing, setPlaying] = useState(false);
-  const [view, setView] = useState(() => fitWorldView(world));
+  const { view, setView } = useWorldMapView(world, places);
   const [confirmRedraft, setConfirmRedraft] = useState(false);
   const frame = useRef(null);
   const selected = params.get('beat') || '';
