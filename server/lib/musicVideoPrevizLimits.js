@@ -35,6 +35,8 @@ export const TIMELINE_BEAT_KINDS = Object.freeze(['stay', 'travel']);
 export const TIMELINE_PACES = Object.freeze(['walk', 'run']);
 // Meters per story minute: an easy walk, a jog.
 export const TIMELINE_PACE_METERS_PER_MIN = Object.freeze({ walk: 80, run: 180 });
+// Simple in-set action path a cut can carry: start mark -> end mark, or a loop.
+export const PREVIZ_ACTION_PATHS = Object.freeze(['away', 'toward', 'passes', 'circle', 'line', 'loop']);
 // Catalog objects the previz treats as vehicles (`previz.vehicles`), each with its own travel speed.
 export const PREVIZ_VEHICLES_MAX = 24;
 export const VEHICLE_DEFAULT_METERS_PER_MIN = 270;

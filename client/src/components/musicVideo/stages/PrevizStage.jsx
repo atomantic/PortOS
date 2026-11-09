@@ -293,6 +293,13 @@ function CutOnTimeline({ project, cut, world, worldPlaces, onChange }) {
   );
 }
 
+const ACTION_PATH_OPTIONS = [
+  { id: 'away', name: 'Move away' },
+  { id: 'toward', name: 'Move toward' },
+  { id: 'passes', name: 'Pass camera' },
+  { id: 'circle', name: 'Circle' },
+];
+
 /** One cut's row: the shot it plays, and its set, camera, holder, cast and aim pickers. */
 function CutRow({ project, cut, number, scene, places, characters, placeSubjects, world, worldPlaces, onChange, onWatch }) {
   const timing = previzCutTiming(project, cut);
@@ -330,6 +337,8 @@ function CutRow({ project, cut, number, scene, places, characters, placeSubjects
             <span className="text-port-text-muted">Selfie (faces the holder)</span>
           </label>
         )}
+        <Picker id={`${id}-action-path`} label="Action" value={cut.actionPath || ''} options={ACTION_PATH_OPTIONS} empty="Auto"
+          onChange={(actionPath) => onChange({ actionPath: actionPath || null })} />
         {cut.aimSubjectId && (
           <label className="flex items-center gap-1" htmlFor={`${id}-turn`}>
             <input id={`${id}-turn`} type="checkbox" className="h-4 w-4" checked={!!cut.turnToAim} onChange={(event) => onChange({ turnToAim: event.target.checked })} />

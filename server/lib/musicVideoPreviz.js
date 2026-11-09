@@ -27,12 +27,13 @@
  * Units are the greybox's: meters, Y up, floor y=0; facing 0 looks along +Z.
  * Browser-safe and pure.
  */
+import { aspectRatio, DEFAULT_FOCAL_LENGTH_MM } from './greyboxCapture.js';
 import { isPreMusicShot } from './musicVideoColdOpen.js';
 import { musicVideoShotPlaceId, projectRouteMaps } from './musicVideoRouteMaps.js';
 import { SHOT_CAMERA_SET_DOWN } from './musicVideoShotSheet.js';
 import { activeMusicVideoSubjects, musicVideoPrevizForActiveCast } from './musicVideoCastSelection.js';
 import { timelineActorsAt, timelineClockAt, previzTimeline, previzVehicleInText, previzVehicles, suggestPrevizVehicles } from './musicVideoPrevizTimeline.js';
-import { PREVIZ_CUTS_MAX, PREVIZ_KEYS_MAX, PREVIZ_PAWN_COLORS, PREVIZ_TRACKS_MAX } from './musicVideoPrevizLimits.js';
+import { PREVIZ_ACTION_PATHS, PREVIZ_CUTS_MAX, PREVIZ_KEYS_MAX, PREVIZ_PAWN_COLORS, PREVIZ_TRACKS_MAX } from './musicVideoPrevizLimits.js';
 
 const EYE_HEIGHT = { stand: 1.6, walk: 1.6, run: 1.5, crouch: 1.0, sit: 1.2, ride: 1.75 };
 const CHEST_HEIGHT = { stand: 1.25, walk: 1.25, run: 1.2, crouch: 0.8, sit: 0.95, ride: 1.4 };
@@ -173,9 +174,11 @@ function cutCastFromSheet(project, scene) {
 function cutFromShot(project, scene) {
   const placeSubjectId = musicVideoShotPlaceId(project, scene);
   const viewShotId = placeSubjectId && scene.setReference?.subjectId === placeSubjectId ? scene.setReference.greyboxShotId || null : null;
+  const actionPath = detectCutActionPath(scene.shotSheet?.action);
   return {
     id: cutIdFor(scene.sceneId), sceneId: scene.sceneId, startSec: scene.startSec, endSec: scene.endSec,
     placeSubjectId: placeSubjectId || null, viewShotId, ...cutCastFromSheet(project, scene), aimSubjectId: null,
+    ...(actionPath ? { actionPath } : {}),
   };
 }
 
@@ -247,37 +250,300 @@ function groundHeightAt(greybox, x, z) {
   return best ? best.y : 0;
 }
 
+/** Camera frustum vectors and tangent half-angles for a saved greybox shot. */
+function cameraFrustum(view) {
+  const cam = view?.position || [0, 1.6, 6];
+  const target = view?.target || [0, 1.2, 0];
+  const mm = view?.focalLengthMm || DEFAULT_FOCAL_LENGTH_MM;
+  const aspect = aspectRatio(view?.aspect || '16:9');
+  const dx = target[0] - cam[0];
+  const dy = target[1] - cam[1];
+  const dz = target[2] - cam[2];
+  const dist = Math.hypot(dx, dy, dz) || 1;
+  const fwd = [dx / dist, dy / dist, dz / dist];
+
+  const rLen = Math.hypot(-fwd[2], fwd[0]);
+  let right;
+  let up;
+  if (rLen < 1e-6) {
+    right = [1, 0, 0];
+    up = [0, 0, fwd[1] > 0 ? -1 : 1];
+  } else {
+    right = [-fwd[2] / rLen, 0, fwd[0] / rLen];
+    up = [
+      right[1] * fwd[2] - right[2] * fwd[1],
+      right[2] * fwd[0] - right[0] * fwd[2],
+      right[0] * fwd[1] - right[1] * fwd[0],
+    ];
+  }
+  const tanV = 12 / mm;
+  const tanH = tanV * aspect;
+  return { cam, target, fwd, right, up, tanV, tanH, dist };
+}
+
+/** Whether a figure standing on the ground at [x, y, z] falls inside the camera's view frustum. */
+function isFigureInFrustum(pos, frustum, margin = 0.92) {
+  const { cam, fwd, right, up, tanV, tanH } = frustum;
+  const vx = pos[0] - cam[0];
+  const vyFeet = pos[1] - cam[1];
+  const vyChest = pos[1] + 1.25 - cam[1];
+  const vyHead = pos[1] + 1.7 - cam[1];
+  const vz = pos[2] - cam[2];
+
+  const depth = vx * fwd[0] + vyChest * fwd[1] + vz * fwd[2];
+  if (depth < 0.2 || depth > 2000) return false;
+
+  const halfH = depth * tanV * margin;
+  const halfW = depth * tanH * margin;
+
+  const xCam = vx * right[0] + vyChest * right[1] + vz * right[2];
+  if (Math.abs(xCam) > halfW) return false;
+
+  const yCamFeet = vx * up[0] + vyFeet * up[1] + vz * up[2];
+  const yCamHead = vx * up[0] + vyHead * up[1] + vz * up[2];
+  const yMin = Math.min(yCamFeet, yCamHead);
+  const yMax = Math.max(yCamFeet, yCamHead);
+
+  return yMax >= -halfH && yMin <= halfH;
+}
+
+/** Find a ground position guaranteed to fall inside the camera view, spaced across the row. */
+function findInFrustumPosition(view, greybox, slot = 0, total = 1, nearPos = null) {
+  const frustum = cameraFrustum(view);
+  const { cam, target, tanH, dist } = frustum;
+  const dir = [target[0] - cam[0], 0, target[2] - cam[2]];
+  const flatDist = Math.hypot(dir[0], dir[2]) || 1;
+  const fwdDir = [dir[0] / flatDist, 0, dir[2] / flatDist];
+  const across = [fwdDir[2], 0, -fwdDir[0]];
+
+  if (nearPos && isFigureInFrustum(nearPos, frustum)) {
+    const nearDepth = Math.max(2, (nearPos[0] - cam[0]) * fwdDir[0] + (nearPos[2] - cam[2]) * fwdDir[2]);
+    const halfW = nearDepth * tanH;
+    for (const factor of [1.0, 0.75, 0.5, 0.3]) {
+      const spacing = Math.min(FIGURE_SPACING, total > 1 ? (halfW * 0.7) / Math.max(0.5, (total - 1) / 2) : FIGURE_SPACING) * factor;
+      for (const sign of [1, -1]) {
+        const x = round(nearPos[0] + across[0] * slot * spacing * sign);
+        const z = round(nearPos[2] + across[2] * slot * spacing * sign);
+        const pos = [x, groundHeightAt(greybox, x, z), z];
+        if (isFigureInFrustum(pos, frustum)) return pos;
+      }
+    }
+  }
+
+  const candidates = [dist, flatDist, dist * 0.8, dist * 0.6, dist * 0.4, 6, 10, 15, 20];
+  for (const d of candidates) {
+    if (d < 1) continue;
+    const halfW = d * tanH;
+    const spacing = Math.min(FIGURE_SPACING, total > 1 ? (halfW * 0.6) / Math.max(0.5, (total - 1) / 2) : FIGURE_SPACING);
+    const x = round(cam[0] + fwdDir[0] * d + across[0] * slot * spacing);
+    const z = round(cam[2] + fwdDir[2] * d + across[2] * slot * spacing);
+    const pos = [x, groundHeightAt(greybox, x, z), z];
+    if (isFigureInFrustum(pos, frustum)) return pos;
+  }
+
+  const halfW = dist * tanH;
+  const spacing = Math.min(FIGURE_SPACING, total > 1 ? (halfW * 0.5) / Math.max(0.5, (total - 1) / 2) : FIGURE_SPACING);
+  return [
+    round(target[0] + across[0] * slot * spacing),
+    groundHeightAt(greybox, target[0], target[2]),
+    round(target[2] + across[2] * slot * spacing),
+  ];
+}
+
 function seedMarks(cut, greybox, people) {
   const view = (greybox?.shots || []).find((shot) => shot.id === cut.viewShotId) || null;
+  const frustum = cameraFrustum(view);
   const anchors = new Map((greybox?.anchors || []).map((anchor) => [anchor.id, anchor]));
   const marks = new Map();
   const shown = people.filter((id) => id !== cut.holderSubjectId);
   const figureMarks = (view?.figures || []).map((figure) => anchors.get(figure.anchorId)).filter((anchor) => anchor?.kind === 'figure');
-  const cam = view?.position || [0, 1.6, 6];
-  const target = view?.target || [0, 1.2, 0];
-  const flat = [target[0] - cam[0], 0, target[2] - cam[2]];
-  const length = Math.hypot(flat[0], flat[2]) || 1;
-  const dir = [flat[0] / length, 0, flat[2] / length];
-  const distance = Math.min(6, Math.max(2, length));
-  const center = [cam[0] + dir[0] * distance, 0, cam[2] + dir[2] * distance];
-  const across = [dir[2], 0, -dir[0]];
-  const rowCount = Math.max(0, shown.length - figureMarks.length);
+  const cam = frustum.cam;
+  const target = frustum.target;
+
   shown.forEach((id, i) => {
     const anchor = figureMarks[i];
     if (anchor) {
-      marks.set(id, { position: [anchor.position[0], anchor.position[1] || 0, anchor.position[2]], facingDegrees: anchor.facingDegrees ?? 0 });
-      return;
+      const anchorPos = [anchor.position[0], anchor.position[1] || 0, anchor.position[2]];
+      if (isFigureInFrustum(anchorPos, frustum)) {
+        marks.set(id, { position: anchorPos, facingDegrees: anchor.facingDegrees ?? facingToward(anchorPos, cam) });
+        return;
+      }
     }
-    const slot = i - figureMarks.length - (rowCount - 1) / 2;
-    const x = round(center[0] + across[0] * slot * FIGURE_SPACING);
-    const z = round(center[2] + across[2] * slot * FIGURE_SPACING);
-    const position = [x, groundHeightAt(greybox, x, z), z];
+    const slot = i - (shown.length - 1) / 2;
+    const refPos = figureMarks[0]?.position;
+    const position = findInFrustumPosition(view, greybox, slot, shown.length, refPos);
     marks.set(id, { position, facingDegrees: facingToward(position, cam) });
   });
   if (cut.holderSubjectId) {
     marks.set(cut.holderSubjectId, { position: [cam[0], groundHeightAt(greybox, cam[0], cam[2]), cam[2]], facingDegrees: facingToward(cam, target) });
   }
   return marks;
+}
+
+/** Detect an in-set action path keyword from a shot sheet's action wording. */
+function detectCutActionPath(action) {
+  const text = textOf(action);
+  if (!text) return null;
+  if (/\b(?:circle|circular|loop)\b/i.test(text)) return 'circle';
+  if (/\bpass(?:es|ed|ing)?\b/i.test(text) && (/\btowards?\b/i.test(text) || /\beither side\b/i.test(text))) return 'passes';
+  if (/\baway\b/i.test(text)) return 'away';
+  if (/\btowards?\b/i.test(text)) return 'toward';
+  if (/\bpass(?:es|ed|ing)?\b/i.test(text)) return 'passes';
+  return null;
+}
+
+/**
+ * Build track keys for each person across a cut's duration, seeding an in-set action
+ * path (start mark -> end mark, or a loop) from keywords or multiple figure marks.
+ */
+function seedCutKeys(cut, greybox, people, timing, actionPath, actionText, pose, vehicleSubjectId) {
+  const view = (greybox?.shots || []).find((shot) => shot.id === cut.viewShotId) || null;
+  const frustum = cameraFrustum(view);
+  const anchors = new Map((greybox?.anchors || []).map((anchor) => [anchor.id, anchor]));
+  const figureMarks = (view?.figures || []).map((figure) => anchors.get(figure.anchorId)).filter((anchor) => anchor?.kind === 'figure');
+  const marks = seedMarks(cut, greybox, people);
+  const keysByPerson = new Map();
+
+  const cam = frustum.cam;
+  const target = frustum.target;
+  const dir = [target[0] - cam[0], 0, target[2] - cam[2]];
+  const flatDist = Math.hypot(dir[0], dir[2]) || 1;
+  const fwdDir = [dir[0] / flatDist, 0, dir[2] / flatDist];
+  const across = [fwdDir[2], 0, -fwdDir[0]];
+
+  const shown = people.filter((id) => id !== cut.holderSubjectId);
+  const N = Math.max(1, shown.length);
+
+  if (cut.holderSubjectId && marks.has(cut.holderSubjectId)) {
+    const mark = marks.get(cut.holderSubjectId);
+    const keys = [{ timeSec: timing.startSec, position: mark.position, facingDegrees: mark.facingDegrees, pose, ...(vehicleSubjectId ? { vehicleSubjectId } : {}) }];
+    if (timing.endSec - HOLD_EPSILON > timing.startSec) {
+      keys.push({ timeSec: round(timing.endSec - HOLD_EPSILON), position: mark.position, facingDegrees: mark.facingDegrees, pose, ...(vehicleSubjectId ? { vehicleSubjectId } : {}) });
+    }
+    keysByPerson.set(cut.holderSubjectId, keys);
+  }
+
+  shown.forEach((id, i) => {
+    const slot = i - (N - 1) / 2;
+    const baseMark = marks.get(id);
+    const keys = [];
+
+    if (actionPath === 'circle' || actionPath === 'loop' || /\b(?:circle|circular|loop)\b/i.test(actionText)) {
+      const center = baseMark ? baseMark.position : findInFrustumPosition(view, greybox, 0, 1);
+      const radius = 3.2;
+      const isCCW = !/\bclockwise\b/i.test(actionText) || /\bcounter-?clockwise\b/i.test(actionText);
+      const baseAngle = i * (2 * Math.PI / N);
+      const cutSpan = timing.endSec - HOLD_EPSILON - timing.startSec;
+
+      if (cutSpan >= 0.05) {
+        const waypoints = [];
+        for (let k = 0; k <= 4; k++) {
+          const tSec = k === 0 ? timing.startSec : (k === 4 ? round(timing.endSec - HOLD_EPSILON) : round(timing.startSec + cutSpan * (k / 4)));
+          const alpha = baseAngle + (isCCW ? 1 : -1) * (k / 4) * 2 * Math.PI;
+          const x = round(center[0] + radius * Math.cos(alpha));
+          const z = round(center[2] + radius * (isCCW ? -Math.sin(alpha) : Math.sin(alpha)));
+          const y = groundHeightAt(greybox, x, z);
+          const nextAlpha = alpha + (isCCW ? 1 : -1) * 0.1;
+          const nx = center[0] + radius * Math.cos(nextAlpha);
+          const nz = center[2] + radius * (isCCW ? -Math.sin(nextAlpha) : Math.sin(nextAlpha));
+          const facing = facingToward([x, y, z], [nx, y, nz]);
+          waypoints.push({ timeSec: tSec, position: [x, y, z], facingDegrees: facing });
+        }
+        if (waypoints.every((wp, idx, all) => idx === 0 || wp.timeSec > all[idx - 1].timeSec)) {
+          waypoints.forEach((wp) => keys.push({ ...wp, pose, ...(vehicleSubjectId ? { vehicleSubjectId } : {}) }));
+        }
+      }
+      if (!keys.length) {
+        keys.push({ timeSec: timing.startSec, position: baseMark.position, facingDegrees: baseMark.facingDegrees, pose, ...(vehicleSubjectId ? { vehicleSubjectId } : {}) });
+        if (timing.endSec - HOLD_EPSILON > timing.startSec) keys.push({ timeSec: round(timing.endSec - HOLD_EPSILON), position: baseMark.position, facingDegrees: baseMark.facingDegrees, pose, ...(vehicleSubjectId ? { vehicleSubjectId } : {}) });
+      }
+      keysByPerson.set(id, keys);
+      return;
+    }
+
+    if (actionPath === 'away' || /\baway\b/i.test(actionText)) {
+      let startPos, endPos;
+      if (N === 1 && figureMarks.length >= 2) {
+        const m0 = [figureMarks[0].position[0], figureMarks[0].position[1] || 0, figureMarks[0].position[2]];
+        const m1 = [figureMarks[1].position[0], figureMarks[1].position[1] || 0, figureMarks[1].position[2]];
+        const d0 = Math.hypot(m0[0] - cam[0], m0[2] - cam[2]);
+        const d1 = Math.hypot(m1[0] - cam[0], m1[2] - cam[2]);
+        startPos = d0 <= d1 ? m0 : m1;
+        endPos = d0 <= d1 ? m1 : m0;
+      } else {
+        startPos = baseMark.position;
+        const moveDist = Math.max(6, Math.min(18, flatDist * 0.8));
+        const endX = round(startPos[0] + fwdDir[0] * moveDist);
+        const endZ = round(startPos[2] + fwdDir[2] * moveDist);
+        endPos = [endX, groundHeightAt(greybox, endX, endZ), endZ];
+      }
+      const facing = facingToward(startPos, endPos);
+      keys.push({ timeSec: timing.startSec, position: startPos, facingDegrees: facing, pose, ...(vehicleSubjectId ? { vehicleSubjectId } : {}) });
+      if (timing.endSec - HOLD_EPSILON > timing.startSec) {
+        keys.push({ timeSec: round(timing.endSec - HOLD_EPSILON), position: endPos, facingDegrees: facing, pose, ...(vehicleSubjectId ? { vehicleSubjectId } : {}) });
+      }
+      keysByPerson.set(id, keys);
+      return;
+    }
+
+    if (actionPath === 'toward' || actionPath === 'passes' || /\btowards?\b/i.test(actionText) || /\bpass(?:es|ed|ing)?\b/i.test(actionText)) {
+      const isPasses = actionPath === 'passes' || /\bpass(?:es|ed|ing)?\b/i.test(actionText) || /\beither side\b/i.test(actionText);
+      let startPos, endPos;
+      if (N === 1 && figureMarks.length >= 2) {
+        const m0 = [figureMarks[0].position[0], figureMarks[0].position[1] || 0, figureMarks[0].position[2]];
+        const m1 = [figureMarks[1].position[0], figureMarks[1].position[1] || 0, figureMarks[1].position[2]];
+        const d0 = Math.hypot(m0[0] - cam[0], m0[2] - cam[2]);
+        const d1 = Math.hypot(m1[0] - cam[0], m1[2] - cam[2]);
+        startPos = d0 >= d1 ? m0 : m1;
+        endPos = d0 >= d1 ? m1 : m0;
+      } else {
+        const startDepth = Math.max(10, Math.min(25, flatDist + 4));
+        const startX = round(cam[0] + fwdDir[0] * startDepth + across[0] * slot * FIGURE_SPACING * 1.5);
+        const startZ = round(cam[2] + fwdDir[2] * startDepth + across[2] * slot * FIGURE_SPACING * 1.5);
+        startPos = [startX, groundHeightAt(greybox, startX, startZ), startZ];
+        if (isPasses) {
+          const passOffset = slot === 0 ? 1.5 : (slot > 0 ? 1.5 + slot * 1.2 : -1.5 + slot * 1.2);
+          const endX = round(cam[0] - fwdDir[0] * 1.0 + across[0] * passOffset);
+          const endZ = round(cam[2] - fwdDir[2] * 1.0 + across[2] * passOffset);
+          endPos = [endX, groundHeightAt(greybox, endX, endZ), endZ];
+        } else {
+          const endDepth = Math.max(3, startDepth * 0.35);
+          const endX = round(cam[0] + fwdDir[0] * endDepth + across[0] * slot * FIGURE_SPACING);
+          const endZ = round(cam[2] + fwdDir[2] * endDepth + across[2] * slot * FIGURE_SPACING);
+          endPos = [endX, groundHeightAt(greybox, endX, endZ), endZ];
+        }
+      }
+      const facing = facingToward(startPos, endPos);
+      keys.push({ timeSec: timing.startSec, position: startPos, facingDegrees: facing, pose, ...(vehicleSubjectId ? { vehicleSubjectId } : {}) });
+      if (timing.endSec - HOLD_EPSILON > timing.startSec) {
+        keys.push({ timeSec: round(timing.endSec - HOLD_EPSILON), position: endPos, facingDegrees: facing, pose, ...(vehicleSubjectId ? { vehicleSubjectId } : {}) });
+      }
+      keysByPerson.set(id, keys);
+      return;
+    }
+
+    if (N === 1 && figureMarks.length >= 2) {
+      const startPos = [figureMarks[0].position[0], figureMarks[0].position[1] || 0, figureMarks[0].position[2]];
+      const endPos = [figureMarks[1].position[0], figureMarks[1].position[1] || 0, figureMarks[1].position[2]];
+      const facing = facingToward(startPos, endPos);
+      keys.push({ timeSec: timing.startSec, position: startPos, facingDegrees: facing, pose, ...(vehicleSubjectId ? { vehicleSubjectId } : {}) });
+      if (timing.endSec - HOLD_EPSILON > timing.startSec) {
+        keys.push({ timeSec: round(timing.endSec - HOLD_EPSILON), position: endPos, facingDegrees: figureMarks[1].facingDegrees ?? facing, pose, ...(vehicleSubjectId ? { vehicleSubjectId } : {}) });
+      }
+      keysByPerson.set(id, keys);
+      return;
+    }
+
+    const pos = baseMark.position;
+    const facing = baseMark.facingDegrees;
+    keys.push({ timeSec: timing.startSec, position: pos, facingDegrees: facing, pose, ...(vehicleSubjectId ? { vehicleSubjectId } : {}) });
+    if (timing.endSec - HOLD_EPSILON > timing.startSec) {
+      keys.push({ timeSec: round(timing.endSec - HOLD_EPSILON), position: pos, facingDegrees: facing, pose, ...(vehicleSubjectId ? { vehicleSubjectId } : {}) });
+    }
+    keysByPerson.set(id, keys);
+  });
+
+  return keysByPerson;
 }
 
 const trackKey = (subjectId, placeSubjectId) => `${placeSubjectId}\u0000${subjectId}`;
@@ -300,13 +566,15 @@ function seedCutTracks(project, existingTracks, cuts, loadedPlaces) {
     const scene = (project?.scenes || []).find((entry) => entry.sceneId === cut.sceneId) || {};
     const vehicleSubjectId = shotVehicle(project, scene, cut.placeSubjectId);
     const pose = vehicleSubjectId ? 'ride' : previzPoseInText(scene.shotSheet?.action) || 'stand';
-    const marks = seedMarks(cut, previzPlaceGreybox(project, cut.placeSubjectId, loadedPlaces), people);
+    const greybox = previzPlaceGreybox(project, cut.placeSubjectId, loadedPlaces);
+    const actionText = scene.shotSheet?.action || '';
+    const actionPath = cut.actionPath || detectCutActionPath(actionText);
+    const keysByPerson = seedCutKeys(cut, greybox, people, timing, actionPath, actionText, pose, vehicleSubjectId);
     for (const id of people) {
       const key = trackKey(id, cut.placeSubjectId);
       const track = seeded.get(key) || { subjectId: id, placeSubjectId: cut.placeSubjectId, keys: [] };
-      const mark = marks.get(id);
-      track.keys.push({ timeSec: timing.startSec, position: mark.position, facingDegrees: mark.facingDegrees, pose, ...(vehicleSubjectId ? { vehicleSubjectId } : {}) });
-      if (timing.endSec - HOLD_EPSILON > timing.startSec) track.keys.push({ timeSec: round(timing.endSec - HOLD_EPSILON), position: mark.position, facingDegrees: mark.facingDegrees, pose, ...(vehicleSubjectId ? { vehicleSubjectId } : {}) });
+      const keys = keysByPerson.get(id) || [];
+      track.keys.push(...keys);
       seeded.set(key, track);
     }
   }
