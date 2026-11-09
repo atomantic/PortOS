@@ -27,10 +27,6 @@ const HOSTED_PROVIDERS = [
   { id: 'gemini', label: 'Gemini', idLabel: 'Gemini chat', idField: 'geminiChatUrl' },
 ];
 
-// Deletions confirmed this session, by provider request id. The row remounts (fullscreen toggle, prev/next) and
-// the hydrated record cache keeps the pre-delete record, so without this the Delete button would come back.
-const confirmedDeletions = new Map();
-
 // Provider id for the render plus a delete control for the copy the provider still hosts.
 // Keyed by the parent on the item, so confirm/busy state never carries across prev/next.
 export default function HostedCopyRow({ item }) {
@@ -41,7 +37,7 @@ export default function HostedCopyRow({ item }) {
   if (!provider) return null;
 
   const remoteId = item.raw[provider.idField];
-  const removedAt = provider.deletable ? deletedAt || confirmedDeletions.get(remoteId) || item.raw[provider.deletedField] : null;
+  const removedAt = provider.deletable ? deletedAt || item.raw[provider.deletedField] : null;
   const canDelete = provider.deletable && !removedAt;
   const recordId = item.kind === 'video' ? item.raw.id : item.filename;
   const remove = item.kind === 'video' ? deleteVideoHostedCopy : deleteImageHostedCopy;
@@ -52,7 +48,6 @@ export default function HostedCopyRow({ item }) {
     setBusy(false);
     setConfirming(false);
     if (!result?.deletedAt) return;
-    confirmedDeletions.set(remoteId, result.deletedAt);
     setDeletedAt(result.deletedAt);
     toast.success(provider.toast);
   };
