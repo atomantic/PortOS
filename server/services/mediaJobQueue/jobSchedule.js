@@ -17,4 +17,5 @@ export function jobScheduleState(job, now = Date.now()) {
 export const scheduledWaitMessage = (startAt) =>
   `Scheduled — starts at ${new Date(startAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}`;
 
+export const SCHEDULED_WAIT_PATTERN = /^Scheduled — starts at /;
 export const SCHEDULE_EXPIRED_ERROR = 'Its stop-by time passed before it started';

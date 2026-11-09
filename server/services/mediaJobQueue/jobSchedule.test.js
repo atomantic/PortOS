@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { jobScheduleState } from './jobSchedule.js';
+import { jobScheduleState, SCHEDULED_WAIT_PATTERN, scheduledWaitMessage } from './jobSchedule.js';
 
 const at = (iso) => Date.parse(iso);
 const job = (schedule) => ({ params: { schedule } });
@@ -19,5 +19,9 @@ describe('queued job run window', () => {
 
   it('leaves an unscheduled job alone', () => {
     expect(jobScheduleState({ params: {} })).toBeNull();
+  });
+
+  it('names its wait so the queue can clear it when the job starts', () => {
+    expect(SCHEDULED_WAIT_PATTERN.test(scheduledWaitMessage(at('2026-11-09T23:00:00Z')))).toBe(true);
   });
 });

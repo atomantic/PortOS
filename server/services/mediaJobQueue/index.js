@@ -71,7 +71,7 @@ import {
 import { routedJobParams } from '../federatedMedia/routedJobParams.js';
 import { mediaRecoveryPending } from '../../lib/mediaRecoveryActivity.js';
 import { videoExecutionSchema, videoExecutionParentSchema, videoSegmentExecutionSchema, videoSegmentExecutionsSchema, mergeVideoExecutionDiagnostics } from './videoExecution.js';
-import { jobScheduleState, scheduledWaitMessage, SCHEDULE_EXPIRED_ERROR } from './jobSchedule.js';
+import { jobScheduleState, scheduledWaitMessage, SCHEDULED_WAIT_PATTERN, SCHEDULE_EXPIRED_ERROR } from './jobSchedule.js';
 import {
   MAX_PENDING_MEDIA_JOBS, MEDIA_QUEUE_PERSIST_FAILED, mediaQueueFullError,
 } from './admission.js';
@@ -1382,7 +1382,7 @@ function startLaneJob(job, { lane }) {
   job.progress = typeof job.progress === 'number' && Number.isFinite(job.progress) ? job.progress : 0;
   // A quota wait describes the queued state only; a persisted one also
   // survives a restart that outlasts the cooldown.
-  if (QUOTA_WAIT_PATTERN.test(job.statusMsg || '')) job.statusMsg = '';
+  if (QUOTA_WAIT_PATTERN.test(job.statusMsg || '') || SCHEDULED_WAIT_PATTERN.test(job.statusMsg || '')) job.statusMsg = '';
   job.statusMsg = job.statusMsg || 'Starting';
   if (lane === 'cloud') {
     cloudRunning.push(job);
