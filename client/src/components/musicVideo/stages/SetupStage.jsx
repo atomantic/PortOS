@@ -102,6 +102,8 @@ export default function SetupStage({ board }) {
         <SongStep id="mv-analyze" number={2} title="Analyze" done={Boolean(project.audioAnalysis)}>
           <AnalyzeAction project={project} busy={busy} onAnalyze={board.onAnalyze} />
           <AnalysisPanel
+            projectId={project.id}
+            onUpdated={board.replaceProject}
             audioAnalysis={project.audioAnalysis}
             scenes={project.scenes || []}
             tempo={tempo}

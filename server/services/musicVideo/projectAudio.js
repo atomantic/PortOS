@@ -8,10 +8,11 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS } from '../../lib/fileUtils.js';
 import { safeUnder } from '../../lib/ffmpeg.js';
 import { getTrack } from '../tracks/index.js';
-import { setProjectAnalysis } from './projects.js';
+import { setProjectAnalysis, setProjectSections } from './projects.js';
 import { requireProject } from './requireProject.js';
 import { analyzeAudioFile } from './audioAnalysis.js';
 import { relabelAnalysisSections } from '../../lib/lyricMarkers.js';
+import { sectionsFromLyricSpans } from '../../lib/musicVideoSections.js';
 
 /**
  * Resolve a project's source audio to an absolute path under data/music/. The
@@ -47,4 +48,15 @@ export async function analyzeProjectSong(projectId) {
     throw new ServerError('Could not analyze audio (decode failed or ffmpeg unavailable)', { status: 422, code: 'ANALYZE_FAILED' });
   }
   return setProjectAnalysis(project.id, relabelAnalysisSections(analysis, project.lyricCues, project.lyricMarkers), project);
+}
+
+/** Re-cut the song map at the aligned lyric sheet's section boundaries. */
+export async function setSectionsFromLyrics(projectId) {
+  const project = await requireProject(projectId);
+  if (!project.audioAnalysis) throw new ServerError('Analyze the song first', { status: 422, code: 'NOT_ANALYZED' });
+  const sections = sectionsFromLyricSpans(project.lyricCues, project.lyricMarkers, project.audioAnalysis.durationSec);
+  if (sections.length === 0) {
+    throw new ServerError('No timed lyric sections — import lyrics with [Chorus]-style headers and align them first', { status: 422, code: 'NO_LYRIC_SECTIONS' });
+  }
+  return setProjectSections(project.id, sections);
 }

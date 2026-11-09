@@ -97,6 +97,16 @@ export const setMusicVideoManualTempo = (id, body, options = {}) => request(`/mu
   method: 'POST', body: JSON.stringify(body), ...options,
 });
 
+// Director's edit of the song map: a gapless {label,startSec,endSec}[] tiling the song.
+export const setMusicVideoSections = (id, sections, options = {}) => request(`/music-video/${encodeURIComponent(id)}/analyze/sections`, {
+  method: 'PATCH', body: JSON.stringify({ sections }), ...options,
+});
+
+// Re-cut the song map at the aligned lyric sheet's section boundaries.
+export const setMusicVideoSectionsFromLyrics = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/analyze/sections/lyrics`, {
+  method: 'POST', ...options,
+});
+
 // Autonomous shot planner (#1855, multi-shot #8964): tile each analyzed
 // section with bounded shots (cut on lyric lines / phrases / beats) and seed
 // them onto the board. `seedPrompts` (default true) also

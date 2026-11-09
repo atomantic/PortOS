@@ -294,6 +294,13 @@ export async function setProjectAnalysis(id, analysis, sourceProject) {
   return withCatalogDescriptions(next);
 }
 
+/** Replace the song map with the director's edited sections; resolves to the updated project. */
+export async function setProjectSections(id, sections) {
+  const { setAnalysisSections } = await import('./projectsLogic.js');
+  const { project } = await mutateProjectRecord(id, (current) => ({ project: setAnalysisSections(current, sections) }));
+  return project;
+}
+
 export async function setProjectMidiTranscription(id, midi) {
   const next = await (await selectBackend()).setProjectMidiTranscription(id, midi);
   emitRecordUpdated('musicVideoProject', id);
