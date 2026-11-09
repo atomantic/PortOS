@@ -2,6 +2,7 @@ import { execFile, spawn } from './childProcess.js';
 import { existsSync, readdirSync } from 'node:fs';
 import { arch, homedir, platform } from 'node:os';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { PATHS } from './fileUtils.js';
 import { isAppleSilicon } from './platform.js';
@@ -47,8 +48,9 @@ const MLX_VIDEO_PIP = 'mlx-video-with-audio>=0.1.35';
 
 const PIP_NAMES = {
   cv2: 'opencv-python',
-  // mlx-compatible transformers must stay <5; Windows torch path uses latest.
-  ...(IS_DARWIN ? { transformers: 'transformers<5' } : {}),
+  // Apple Silicon never installs transformers by name: the mflux lock pins the
+  // >=5,<6 build mflux 0.17.5 needs (see MFLUX_LOCK_PACKAGES). Other Macs keep <5.
+  ...(IS_DARWIN && !hostIsAppleSilicon() ? { transformers: 'transformers<5' } : {}),
   ...(IS_DARWIN ? { mlx_video: MLX_VIDEO_PIP } : {}),
 };
 
@@ -57,6 +59,12 @@ const PIP_NAMES = {
 const PIP_PRE_UNINSTALL = {
   [MLX_VIDEO_PIP]: ['mlx_video'],
 };
+
+// Import names whose distributions scripts/requirements-mflux-mlx.lock.txt owns
+// on Apple Silicon. Repairing any of them installs the whole hash-pinned lock
+// (as scripts/setup-image-video.sh does) instead of resolving fresh.
+const MFLUX_LOCK_PACKAGES = new Set(['mflux', 'mlx', 'transformers', 'safetensors', 'huggingface_hub', 'numpy', 'cv2', 'tqdm']);
+export const MFLUX_LOCK_FILE = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts', 'requirements-mflux-mlx.lock.txt');
 
 export const pipNameFor = (importName) => PIP_NAMES[importName] || importName;
 
@@ -863,12 +871,19 @@ function streamSpawn(bin, args, onLog, onProc) {
   });
 }
 
+async function pythonIsVenv(pythonPath) {
+  const { stdout } = await execFileAsync(pythonPath, ['-c', 'import sys; print(sys.prefix != sys.base_prefix)'],
+    safeChildProcessOptions({ timeout: 10_000 })).catch(() => ({ stdout: '' }));
+  return stdout.trim() === 'True';
+}
+
 // Returns `{ promise, kill }` so the route can SIGTERM the pip child if the
 // SSE client disconnects mid-install — a 10-minute torch upgrade would
 // otherwise keep running invisibly.
-export function installPackages(pythonPath, importNames, onLog, { preferUv = false } = {}) {
+export function installPackages(pythonPath, importNames, onLog, { preferUv = false, appleSilicon = hostIsAppleSilicon() } = {}) {
   const uv = preferUv ? whichFirstSync('uv') : null;
-  const pipSpecs = importNames.map(pipNameFor);
+  const useLock = appleSilicon && importNames.some((n) => MFLUX_LOCK_PACKAGES.has(n));
+  const pipSpecs = importNames.filter((n) => !(useLock && MFLUX_LOCK_PACKAGES.has(n))).map(pipNameFor);
   const conflicts = [...new Set(pipSpecs.flatMap((s) => PIP_PRE_UNINSTALL[s] || []))];
 
   let currentProc = null;
@@ -891,8 +906,19 @@ export function installPackages(pythonPath, importNames, onLog, { preferUv = fal
       await runPip(['uninstall', '--yes', ...conflicts]);
       if (killed) return { ok: false, code: -1 };
     }
-    onLog({ type: 'log', message: `${uv ? 'uv pip' : 'pip'} install ${pipSpecs.join(' ')}` });
-    const code = await runPip(['install', '--upgrade', '--progress-bar', 'on', ...pipSpecs]);
+    let code = 0;
+    if (useLock) {
+      // --user matches the setup script's shared layout; a venv rejects it.
+      const inVenv = await pythonIsVenv(pythonPath);
+      const lockArgs = ['install', ...(uv || inVenv ? [] : ['--user']), '--require-hashes', '--no-deps', '-r', MFLUX_LOCK_FILE];
+      onLog({ type: 'log', message: `${uv ? 'uv pip' : 'pip'} ${lockArgs.join(' ')} (hash-pinned mflux lock)` });
+      code = await runPip(lockArgs);
+      if (killed) return { ok: false, code: -1 };
+    }
+    if (code === 0 && pipSpecs.length) {
+      onLog({ type: 'log', message: `${uv ? 'uv pip' : 'pip'} install ${pipSpecs.join(' ')}` });
+      code = await runPip(['install', '--upgrade', '--progress-bar', 'on', ...pipSpecs]);
+    }
     if (code === 0) {
       onLog({ type: 'complete', message: 'All packages installed successfully.' });
       return { ok: true, code: 0 };

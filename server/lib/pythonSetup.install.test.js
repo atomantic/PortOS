@@ -28,3 +28,18 @@ it('uses uv only when requested and present, keeping the dedicated interpreter a
   await installPackages('/guard/python', ['torch==2.14.0'], vi.fn(), { preferUv: true }).promise;
   expect(mock.spawn).toHaveBeenLastCalledWith('/guard/python', ['-m', 'pip', 'install', '--upgrade', '--progress-bar', 'on', 'torch==2.14.0'], expect.any(Object));
 });
+
+it('on Apple Silicon repairs mflux-owned packages from the hash-pinned lock, never by bare name', async () => {
+  await installPackages('/image/python', ['mflux', 'transformers', 'mlx_video'], vi.fn(), { appleSilicon: true }).promise;
+  const calls = mock.spawn.mock.calls.map(([, args]) => args.join(' '));
+  const lock = calls.find((c) => c.includes('--require-hashes'));
+  expect(lock).toMatch(/--no-deps -r .*requirements-mflux-mlx\.lock\.txt$/);
+  const named = calls.find((c) => c.includes('--upgrade'));
+  expect(named).toContain('mlx-video-with-audio');
+  expect(named).not.toMatch(/mflux|transformers/);
+});
+
+it('off Apple Silicon keeps the by-name install', async () => {
+  await installPackages('/image/python', ['numpy'], vi.fn(), { appleSilicon: false }).promise;
+  expect(mock.spawn.mock.calls.at(-1)[1]).toEqual(['-m', 'pip', 'install', '--upgrade', '--progress-bar', 'on', 'numpy']);
+});
