@@ -4,7 +4,7 @@ import { getMediaNavProps } from '../../lib/mediaNavigation';
 import { computeImageVariantGroup } from './variants';
 import { mediaAnnotationKey, mediaRecordRef } from './mediaDetail';
 import useImageVariants from '../../hooks/useImageVariants';
-import { trimVideoStart, updateImagePrompt, updateVideoPrompt, updateVideoPoster } from '../../services/apiImageVideo';
+import { trimVideo, updateImagePrompt, updateVideoPrompt, updateVideoPoster } from '../../services/apiImageVideo';
 
 // Thin wrapper around MediaLightbox that owns the consistent wiring every
 // page repeated by hand: open/close, prev/next nav, and the annotation
@@ -63,8 +63,8 @@ export default function MediaPreview({
   }, [onPosterSaved]);
   // The trim writes a new gallery clip; only a host that can list it (and open
   // it) offers the control.
-  const trimStart = useCallback(async (item, startSec) => {
-    const { video } = await trimVideoStart(item.id, startSec, { silent: true });
+  const trimClip = useCallback(async (item, range) => {
+    const { video } = await trimVideo(item.id, range, { silent: true });
     onTrimmed(video, item);
     return video;
   }, [onTrimmed]);
@@ -147,7 +147,7 @@ export default function MediaPreview({
       // prompt to save.
       onPromptChange={mediaRecordRef(displayedPreview) ? savePrompt : undefined}
       onPosterChange={savePoster}
-      onTrimStart={onTrimmed ? trimStart : undefined}
+      onTrimClip={onTrimmed ? trimClip : undefined}
       variantGroup={variantGroup}
       onSelectVariant={onSelectVariant}
       onPromptAnalysis={handlePromptAnalysis}

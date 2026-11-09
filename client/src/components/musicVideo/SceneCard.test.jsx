@@ -852,7 +852,7 @@ describe('clip playback and coverage', () => {
     expect(screen.getByRole('button', { name: 'Start clip here' })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'Next frame' }));
     fireEvent.click(screen.getByRole('button', { name: 'Start clip here' }));
-    expect(onTrimClip).toHaveBeenCalledWith(scene, 1 / 24);
+    expect(onTrimClip).toHaveBeenCalledWith(scene, { startSec: 1 / 24 });
     await waitFor(() => expect(screen.getByRole('button', { name: 'Start clip here' })).toBeEnabled());
     rerender(<SceneCard {...props} takeBusy />);
     expect(screen.getByRole('button', { name: 'Next frame' })).toBeDisabled();

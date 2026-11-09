@@ -1,4 +1,4 @@
-/** Non-destructive start trim for video-history items: keep a clip from a later frame on. */
+/** Non-destructive trim for video-history items: keep a frame range of a clip as a new gallery row. */
 
 import { join } from 'path';
 import { randomUUID } from 'crypto';
@@ -26,32 +26,45 @@ const resolveFps = async (item, sourcePath) => {
   throw new ServerError('Could not read the clip frame rate', { status: 422, code: 'FPS_UNKNOWN' });
 };
 
-// Copy history item `historyId` into a NEW gallery row that starts at
-// `startSec` (snapped to the nearest frame). The source clip is untouched, so
-// a trim the user regrets costs nothing. Returns the new history entry.
-export async function trimHistoryItemStart(historyId, { startSec } = {}) {
+// Copy history item `historyId` into a NEW gallery row holding frames
+// [startSec, endSec) (each snapped to the nearest frame; either may be
+// omitted for the clip's own start or end). The source clip is untouched, so a
+// trim the user regrets costs nothing. Returns the new history entry.
+export async function trimHistoryItem(historyId, { startSec, endSec } = {}) {
   const item = await resolveHistoryItem(historyId);
   const sourcePath = resolveSourcePath(item);
-  const start = Number(startSec);
-  if (!Number.isFinite(start) || start <= 0) {
-    throw new ServerError('startSec must be a positive number of seconds', { status: 400, code: 'VALIDATION_ERROR' });
+  const hasStart = startSec !== undefined && startSec !== null;
+  const hasEnd = endSec !== undefined && endSec !== null;
+  if (!hasStart && !hasEnd) {
+    throw new ServerError('startSec or endSec is required', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  for (const [name, value] of [['startSec', startSec], ['endSec', endSec]]) {
+    if (value != null && !(Number.isFinite(Number(value)) && Number(value) > 0)) {
+      throw new ServerError(`${name} must be a positive number of seconds`, { status: 400, code: 'VALIDATION_ERROR' });
+    }
   }
   const fps = await resolveFps(item, sourcePath);
-  const startFrame = Math.round(start * fps);
   const totalFrames = await probeFrameCount(sourcePath);
-  if (startFrame < 1) {
+  const startFrame = hasStart ? Math.round(Number(startSec) * fps) : 0;
+  const endFrame = hasEnd ? Math.round(Number(endSec) * fps) : null;
+  if (hasStart && startFrame < 1) {
     throw new ServerError('That is already the first frame', { status: 400, code: 'TRIM_AT_START' });
   }
-  if (Number.isFinite(totalFrames) && totalFrames - startFrame < MIN_KEPT_FRAMES) {
-    throw new ServerError('Pick a frame before the end of the clip', { status: 400, code: 'TRIM_PAST_END' });
+  if (endFrame !== null && Number.isFinite(totalFrames) && endFrame >= totalFrames) {
+    throw new ServerError('That is already the last frame', { status: 400, code: 'TRIM_AT_END' });
+  }
+  const lastFrame = endFrame ?? totalFrames;
+  if (Number.isFinite(lastFrame) && lastFrame - startFrame < MIN_KEPT_FRAMES) {
+    throw new ServerError(hasEnd ? 'Pick a later frame to end on' : 'Pick a frame before the end of the clip',
+      { status: 400, code: hasEnd ? 'TRIM_TOO_SHORT' : 'TRIM_PAST_END' });
   }
 
   const newId = randomUUID();
   const newFilename = `${newId}.mp4`;
   const newPath = join(PATHS.videos, newFilename);
   const renderStartedAtMs = Date.now();
-  console.log(`✂️ Trimming video [${historyId.slice(0, 8)} → ${newId.slice(0, 8)}] from frame ${startFrame}`);
-  const result = await trimVideoFromFrame(sourcePath, newPath, { startFrame, fps });
+  console.log(`✂️ Trimming video [${historyId.slice(0, 8)} → ${newId.slice(0, 8)}] frames ${startFrame}–${endFrame ?? 'end'}`);
+  const result = await trimVideoFromFrame(sourcePath, newPath, { startFrame, endFrame, fps });
   if (!result.ok) {
     await discardUnpublishedVideo({ jobId: newId, outputPath: newPath });
     throw new ServerError(`Trim failed: ${result.reason}`, { status: 500, code: 'FFMPEG_FAILED' });
@@ -75,12 +88,15 @@ export async function trimHistoryItemStart(historyId, { startSec } = {}) {
         trimmedFrom: item.id,
         trimStartFrame: startFrame,
         trimStartSec,
+        ...(endFrame !== null
+          ? { trimEndFrame: endFrame, trimEndSec: Math.round((endFrame / fps) * 1000) / 1000 }
+          : { trimEndFrame: undefined, trimEndSec: undefined }),
         hidden: false,
         ...renderTimingFields(renderStartedAtMs),
       };
       await mutateVideoHistory((history) => { history.unshift(newEntry); return history; });
       committed = true;
-      console.log(`✅ Trimmed [${newId.slice(0, 8)}]: ${newFilename} starts at ${trimStartSec}s`);
+      console.log(`✅ Trimmed [${newId.slice(0, 8)}]: ${newFilename} from ${trimStartSec}s${endFrame !== null ? ` to ${newEntry.trimEndSec}s` : ''}`);
       return newEntry;
     } catch (error) {
       if (!committed) await discardUnpublishedVideo({ jobId: newId, outputPath: newPath });
