@@ -3,6 +3,7 @@
 // the shot card cannot offer the option.
 
 export const LTX_REFERENCES_GENERATION_MODE = 'ltxReferences';
+export const LTX_REFERENCES_IC_MODE = 'ic-ingredients-25';
 export const LTX_REFERENCES_MIN_FRAMES = 121;
 export const LTX_REFERENCES_MAX_REFERENCES = 8;
 

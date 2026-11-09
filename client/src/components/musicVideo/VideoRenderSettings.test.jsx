@@ -1,6 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 vi.mock('../../services/apiRunwayCatalog.js', async (importOriginal) => ({ ...await importOriginal(), loadRunwayCatalog: vi.fn().mockResolvedValue(undefined) }));
 import { render, screen, fireEvent } from '@testing-library/react';
+const adapterDownload = vi.hoisted(() => ({ current: { getStatus: () => ({ cached: true }), startWhenIdle: () => {}, cancel: () => {}, queuedModelId: null, statusError: null } }));
+vi.mock('../../hooks/useModelDownloadStatus.js', () => ({ useModelDownloadStatus: () => adapterDownload.current }));
 vi.mock('../../hooks/useFederatedMediaTarget.js', () => ({ useFederatedMediaTarget: () => ({ peers: [] }) }));
 import VideoRenderSettings from './VideoRenderSettings.jsx';
 import { RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL } from '../../lib/runwayVideoModels.js';
@@ -51,5 +53,18 @@ describe('LTX 2.5 References generation mode (#15482)', () => {
     unmount();
     render(<VideoRenderSettings videoSettings={{ ...local, settings: { ...local.settings, generationMode: 'ltxReferences', modelId: 'ltx25_example' }, ltxReferencesSelected: true }} />);
     expect(screen.getByText(/clip references as IC references/)).toBeTruthy();
+  });
+
+  it('shows the Ingredients adapter cache state and downloads it in place', () => {
+    const startWhenIdle = vi.fn();
+    const adapter = { id: 'ic-ingredients-25', repo: 'example/adapter', cached: false };
+    adapterDownload.current = { getStatus: (id) => (id === 'ic-ingredients-25' ? adapter : null), startWhenIdle, cancel: vi.fn(), queuedModelId: null, statusError: null };
+    const selected = { ...local, settings: { ...local.settings, generationMode: 'ltxReferences', modelId: 'ltx25_example' }, ltxReferencesSelected: true };
+    const { rerender } = render(<VideoRenderSettings videoSettings={selected} />);
+    fireEvent.click(screen.getByRole('button', { name: /Download/ }));
+    expect(startWhenIdle).toHaveBeenCalledWith('ic-ingredients-25');
+    adapterDownload.current = { ...adapterDownload.current, getStatus: () => ({ ...adapter, cached: true }) };
+    rerender(<VideoRenderSettings videoSettings={{ ...selected }} />);
+    expect(screen.getByRole('group', { name: 'LTX 2.5 References adapter' }).textContent).toMatch(/Available/);
   });
 });
