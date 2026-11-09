@@ -1,4 +1,4 @@
-vi.mock('../services/appIssues.js', () => ({ prepareAppIssueClaim: vi.fn() }));
+vi.mock('../services/appIssues.js', () => ({ prepareAppIssueClaim: vi.fn(async () => ({ epic: false })) }));
 import { prepareAppIssueClaim } from '../services/appIssues.js';
 vi.mock('../services/providers.js', () => ({ getProviderById: vi.fn() }));
 import { getProviderById } from '../services/providers.js';
