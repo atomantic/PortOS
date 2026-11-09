@@ -862,7 +862,9 @@ to protect and largely stops firing.
   default; disable **Sleep display during local MLX video renders** in Settings
   > Image Gen > Defaults only when another headless workflow manages it.
 - The mlx/mlx-metal backend is pinned to the validated 0.31.2 trio in
-  `scripts/setup-image-video.sh` (the original panics were on 0.30.6).
+  `scripts/setup-image-video.sh` (the original panics were on 0.30.6). On Apple
+  Silicon the trio installs from the hash-pinned
+  `scripts/requirements-mflux-mlx.lock.txt`.
 - Training checkpoints at least every `ceil(totalSteps/4)` steps
   (`MFLUX_MIN_CHECKPOINTS`), so a crash loses at most ~¼ of a run. Resume from the
   newest `checkpoints/*.zip` via the UI's resume action or `--resume-checkpoint`.
