@@ -339,12 +339,14 @@ require_cuda_lock_host() {
   fi
 }
 
-# $1 = label, $2 = venv, $3 = lock name prefix (requirements-<prefix>-<os>.lock.txt).
+# $1 = label, $2 = venv, $3 = lock name prefix (requirements-<prefix>-<os>.lock.txt),
+# remaining args = extra `uv pip sync` flags (e.g. --no-binary <sdist-only dep>).
 # The locks target 3.11. Repair keeps a standalone 3.11 venv and rebuilds other
 # minors and Conda bases, whose DLL search path can stop CUDA torch loading on
 # Windows. Sync removes packages outside the lock.
 sync_cuda_lock_venv() {
   local label="$1" venv="$2" lock py
+  local sync_args=("${@:4}")
   if is_windows; then lock="${SCRIPT_DIR}/$3-windows.lock.txt"; else lock="${SCRIPT_DIR}/$3-linux.lock.txt"; fi
   if venv_exists "$venv"; then
     py="$(venv_python "$venv")"
@@ -359,7 +361,7 @@ sync_cuda_lock_venv() {
   fi
   py="$(venv_python "$venv")"
   echo "📦 Syncing the hash-pinned ${label} CUDA runtime into ${venv}..."
-  uv pip sync --require-hashes --only-binary :all: --index-strategy unsafe-best-match --python "$py" "$lock"
+  uv pip sync --require-hashes --only-binary :all: ${sync_args[@]+"${sync_args[@]}"} --index-strategy unsafe-best-match --python "$py" "$lock"
 }
 
 # True when $1 is a Python 3.10+ interpreter. Mirrors MIN_VENV_PYTHON in
@@ -1280,16 +1282,27 @@ if [[ "$INSTALL_ACESTEP" == "1" ]]; then
   # ACE-Step auto-downloads its 3.5B checkpoints to ~/.cache/ace-step on first
   # run, so this only builds the venv — no weights are fetched here.
   ACESTEP_VENV="${HOME}/.portos/venv-acestep"
+  ACESTEP_PIN="${ACESTEP_PIN:-1bee4c9f5b43e30995f8d4d33b3919197ce1bd68}"
+  ACESTEP_DIR="${HOME}/.portos/acestep"
+  if ! is_apple_silicon; then
+    # Linux/Windows install only from a hash lock, which covers x86_64 with the
+    # cu126 torch build. Other hosts have no lock.
+    if is_macos; then
+      echo "❌ ACE-Step hash locks cover Apple Silicon and x86_64 Windows/Linux; Intel macOS is unsupported." >&2
+      exit 1
+    fi
+    require_cuda_lock_host ACE-Step docs/ACESTEP_CUDA.md
+  fi
   mkdir -p "${HOME}/.portos"
   reset_universal_venv "$ACESTEP_VENV" "$PYTHON_BIN"
 
-  if ! venv_exists "$ACESTEP_VENV"; then
-    echo "📦 Creating ACE-Step venv at ${ACESTEP_VENV}..."
-    "$PYTHON_BIN" -m venv "$ACESTEP_VENV"
-  fi
-  ACESTEP_PY="$(venv_python "$ACESTEP_VENV")"
-  echo "📦 Installing ACE-Step into ${ACESTEP_VENV}..."
   if is_apple_silicon; then
+    if ! venv_exists "$ACESTEP_VENV"; then
+      echo "📦 Creating ACE-Step venv at ${ACESTEP_VENV}..."
+      "$PYTHON_BIN" -m venv "$ACESTEP_VENV"
+    fi
+    ACESTEP_PY="$(venv_python "$ACESTEP_VENV")"
+    echo "📦 Installing ACE-Step into ${ACESTEP_VENV}..."
     # Apple Silicon installs only from the hash-pinned lock
     # (scripts/requirements-acestep-mlx.lock.txt): no install-time resolution,
     # so a new or compromised transitive release can't land on the next Repair.
@@ -1301,8 +1314,6 @@ if [[ "$INSTALL_ACESTEP" == "1" ]]; then
       echo "   Re-run with PYTHON_BIN pointing at a 3.11+ interpreter (e.g. 'brew install python@3.12')." >&2
       exit 1
     fi
-    ACESTEP_PIN="${ACESTEP_PIN:-1bee4c9f5b43e30995f8d4d33b3919197ce1bd68}"
-    ACESTEP_DIR="${HOME}/.portos/acestep"
     if [[ ! -d "${ACESTEP_DIR}/.git" ]]; then
       echo "📦 Cloning ace-step/ACE-Step..."
       git clone --progress https://github.com/ace-step/ACE-Step.git "${ACESTEP_DIR}"
@@ -1311,15 +1322,18 @@ if [[ "$INSTALL_ACESTEP" == "1" ]]; then
     "$ACESTEP_PY" -m pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-acestep-mlx.lock.txt"
     "$ACESTEP_PY" -m pip install --no-deps --no-build-isolation "${ACESTEP_DIR}"
   else
-    # Linux/Windows still resolve at install time (hash-pinned CUDA lock: #15481).
-    "$ACESTEP_PY" -m pip install --upgrade pip wheel setuptools >/dev/null
-    # The acestep package declares its own deps (torch, diffusers, transformers,
-    # audio I/O, etc.), so installing it from git pulls the matching stack. Pinning
-    # nothing here keeps us on the upstream-tested set; the import probe below
-    # catches a broken resolve before generation depends on it.
-    "$ACESTEP_PY" -m pip install --upgrade \
-      "git+https://github.com/ace-step/ACE-Step.git" \
-      "huggingface_hub[hf_xet]"
+    # Direct pins: scripts/requirements-acestep-cuda.txt. docopt and unidic-lite
+    # publish only (hashed) source distributions, so exactly those two may build.
+    # The acestep package is installed from the ACESTEP_PIN checkout with
+    # --no-deps, like Apple Silicon: a git SHA cannot satisfy --require-hashes.
+    sync_cuda_lock_venv ACE-Step "$ACESTEP_VENV" requirements-acestep-cuda --no-binary docopt --no-binary unidic-lite
+    ACESTEP_PY="$(venv_python "$ACESTEP_VENV")"
+    if [[ ! -d "${ACESTEP_DIR}/.git" ]]; then
+      echo "📦 Cloning ace-step/ACE-Step..."
+      git clone --progress https://github.com/ace-step/ACE-Step.git "${ACESTEP_DIR}"
+    fi
+    git_checkout_pin "${ACESTEP_DIR}" "${ACESTEP_PIN}"
+    uv pip install --no-deps --no-build-isolation --python "$ACESTEP_PY" "${ACESTEP_DIR}"
   fi
   pin_venv_arm64 "$ACESTEP_VENV"
   # Verify the pipeline class imports — a clean import means generation only
