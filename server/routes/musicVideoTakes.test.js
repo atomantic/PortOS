@@ -49,16 +49,17 @@ vi.mock('../lib/fileUtils.js', async (original) => {
 });
 
 // The vision reviewer itself is covered in plateReview.test.js; here it answers with real evidence for the scene it was handed.
-const plateCheck = vi.hoisted(() => ({ duringReview: null, reviewerAsked: null }));
+const plateCheck = vi.hoisted(() => ({ duringReview: null, reviewerAsked: null, asked: null }));
 vi.mock('../services/musicVideo/plateReview.js', async () => {
   const { plateReviewEvidence, plateRequirements } = await import('../lib/musicVideoPlateEvidence.js');
   return {
     resolvePlateReviewer: async (pinned) => { plateCheck.reviewerAsked = pinned; return { provider: { id: 'example-vision' }, model: 'example-model', costUsd: 0 }; },
-    reviewPlate: async ({ scene, assetId, runId }) => {
+    reviewPlate: async ({ scene, assetId, runId, prompt, frameRole = 'start' }) => {
+      plateCheck.asked = { prompt, frameRole };
       await plateCheck.duringReview?.();
-      return plateReviewEvidence(scene, assetId, runId, JSON.stringify({ checks: plateRequirements(scene).map(({ id }) => ({
+      return plateReviewEvidence(scene, assetId, runId, JSON.stringify({ checks: plateRequirements(scene, [], frameRole).map(({ id }) => ({
         id, status: id === 'plate-prompt' ? 'fail' : 'pass', note: id === 'plate-prompt' ? 'The lighthouse is missing.' : 'Clean',
-      })) }));
+      })) }), {}, [], frameRole);
     },
   };
 });
@@ -96,6 +97,7 @@ let sceneB;
 beforeEach(async () => {
   race.beforeDelete = race.beforeSave = race.onRequest = race.ownerAnswer = null;
   plateCheck.duringReview = null;
+  plateCheck.asked = null;
   rmSync(join(ROOT(), 'music-video-projects.json'), { force: true });
   rmSync(join(ROOT(), 'images'), { recursive: true, force: true });
   seedVideoHistory([]);
@@ -186,6 +188,25 @@ describe('scene takes routes', () => {
     plateCheck.duringReview = () => projects.updateScene(project.id, sceneA.sceneId, { framePrompt: 'Another composition' });
     expect((await request(app).post(url)).status).toBe(409);
     expect((await reload()).scenes[0].takes[0].plateEvidence.basis).toBe(checked.body.takes[0].plateEvidence.basis);
+  });
+
+  // Uniquely catches an end-frame check judged against the start prompt, or its verdict landing on the start take.
+  it('checks an end-frame take against the end-frame prompt and records the verdict on that take', async () => {
+    seedImage('end.png');
+    await projects.updateScene(project.id, sceneA.sceneId, { endFramePrompt: 'Door shut on the lighthouse' });
+    const added = await addTake(sceneA.sceneId, { kind: 'endImage', assetId: 'end.png' });
+    const url = `${base()}/scenes/${sceneA.sceneId}/takes/${added.body.take.takeId}/check`;
+    const checked = await request(app).post(url);
+    expect(checked.status).toBe(200);
+    expect(plateCheck.asked).toEqual({ prompt: 'Door shut on the lighthouse', frameRole: 'end' });
+    const endTake = checked.body.takes.find((take) => take.kind === 'endImage');
+    expect(endTake.plateEvidence).toMatchObject({ assetId: 'end.png', verdict: 'fail' });
+    expect(endTake.plateEvidence.checks.find((check) => check.id === 'plate-prompt').requirement).toBe('Matches the saved still prompt: Door shut on the lighthouse');
+
+    plateCheck.duringReview = () => projects.updateScene(project.id, sceneA.sceneId, { framePrompt: 'Another composition' });
+    expect((await request(app).post(url)).status).toBe(200);
+    plateCheck.duringReview = () => projects.updateScene(project.id, sceneA.sceneId, { endFramePrompt: 'A different ending' });
+    expect((await request(app).post(url)).status).toBe(409);
   });
 
   it('rejecting the selected take clears the slot so the next take fills it', async () => {

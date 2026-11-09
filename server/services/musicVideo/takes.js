@@ -1,4 +1,4 @@
-import { currentPlateEvidence, plateRequirementBasis } from '../../lib/musicVideoPlateEvidence.js';
+import { currentPlateEvidence, plateFrameRole, plateRequirementBasis } from '../../lib/musicVideoPlateEvidence.js';
 import { assertMusicVideoMedia } from '../../lib/musicVideoMediaPolicy.js';
 /**
  * Music Video scene takes (#8965) — pure record transforms.
@@ -242,17 +242,23 @@ function locateTake(project, sceneId, takeId) {
   return { idx, scene, takes, take };
 }
 
-/** The frame take a plate check may inspect; throws when it is missing or not a still. */
+/** The still a plate check may inspect: a start frame or an end frame, never a clip. */
 export function plateCheckTake(project, sceneId, takeId) {
   const { scene, take } = locateTake(project, sceneId, takeId);
-  if (take.kind !== 'image') throw new ServerError('Only frame takes can be checked', { status: 400, code: 'VALIDATION_ERROR' });
+  if (take.kind !== 'image' && take.kind !== 'endImage') throw new ServerError('Only frame takes can be checked', { status: 400, code: 'VALIDATION_ERROR' });
   return { scene, take };
+}
+
+/** The prompt a plate check judges. An end frame never falls through to the start prompt. */
+export function plateCheckPrompt(scene, take) {
+  if (plateFrameRole(take) === 'end') return take.prompt ?? scene.endFramePrompt ?? '';
+  return take.prompt ?? scene.framePrompt ?? scene.prompt ?? '';
 }
 
 /** Save a plate check's evidence on the take, unless the shot's intent changed while it ran. */
 export function recordTakePlateEvidence(project, sceneId, takeId, evidence) {
   const { idx, scene, takes, take } = locateTake(project, sceneId, takeId);
-  if (take.assetId !== evidence.assetId || plateRequirementBasis(scene) !== evidence.basis) {
+  if (take.assetId !== evidence.assetId || plateRequirementBasis(scene, plateFrameRole(take)) !== evidence.basis) {
     throw new ServerError('The shot or frame changed during the check. Check it again.', { status: 409, code: 'MUSIC_VIDEO_REVIEW_STALE' });
   }
   const next = { ...scene, takes: takes.map((t) => (t.takeId === takeId ? { ...t, plateEvidence: evidence } : t)) };
