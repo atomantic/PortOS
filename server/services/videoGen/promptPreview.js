@@ -19,7 +19,7 @@ import { VIDEO_GEN_LOCAL_ONLY_FIELD_NAMES, REFERENCE_AUDIO_FIELDS, VIDEO_REFEREN
 import { grokVideoSentPrompt } from './grok.js';
 import { resolveStoryboardGuidanceInputs, storyboardGuidanceRequestError } from './storyboardGuidance.js';
 import { falVideoSentPrompt } from './fal.js';
-import { MUSIC_VIDEO_GROK_CLIP_REFERENCE_LIMIT } from '../../lib/musicVideoConditioning.js';
+import { musicVideoClipReferenceCapacity } from '../../lib/musicVideoConditioning.js';
 
 export const PREVIEW_UPLOAD_FIELDS = ['sourceImage', 'lastImage', 'audioFile', ...REFERENCE_AUDIO_FIELDS, ...VIDEO_REFERENCE_IMAGE_FIELDS, 'icReference', 'runwayVideo', 'runwayCharacterVideo'];
 const UPLOADED_SOURCE_IMAGE = '(uploaded image)';
@@ -71,6 +71,7 @@ export async function previewVideoPrompt({ previewUploads = [], ...body }) {
 
   if (backend === VIDEO_GEN_MODE.GROK) {
     let castReferences = [];
+    const startFrameLayout = body.musicVideo?.startFrameLayout === true;
     if (body.musicVideo) {
       if (!sourceImagePath) throw new ServerError('Music Video scene render needs a resolvable reference frame.', { status: 400, code: 'MUSIC_VIDEO_SOURCE_REQUIRED' });
       const [{ getProject }, { loadMusicVideoGreybox }, { composeShotPrompt }, { musicVideoClipCastReferences }] = await Promise.all([
@@ -87,16 +88,17 @@ export async function previewVideoPrompt({ previewUploads = [], ...body }) {
       const additions = await composeShotPrompt({ body, params, project, scene, prepared: {}, performance: null, backend, greybox });
       prompt = params.prompt;
       promptAdditions = [...promptAdditions, ...additions];
-      if (!guidance.guidanceImagePath) castReferences = await musicVideoClipCastReferences(body.musicVideo);
+      if (!guidance.guidanceImagePath) castReferences = await musicVideoClipCastReferences(body.musicVideo, { startFrameLayout });
     }
     // Uploaded reference images follow, named in place of their staged paths.
     castReferences = [...castReferences, ...videoReferenceImageSlots(uploads, body)
       .map(({ field, label }) => ({ path: `(uploaded ${field})`, label }))];
-    if (castReferences.length > MUSIC_VIDEO_GROK_CLIP_REFERENCE_LIMIT) {
-      throw new ServerError(`Grok can send at most ${MUSIC_VIDEO_GROK_CLIP_REFERENCE_LIMIT} combined clip references.`,
+    const castReferenceLimit = musicVideoClipReferenceCapacity('grok', null, { startFrameLayout });
+    if (castReferences.length > castReferenceLimit) {
+      throw new ServerError(`Grok can send at most ${castReferenceLimit} combined clip references.`,
         { status: 400, code: 'VIDEO_REFERENCE_IMAGES_TOO_MANY' });
     }
-    return { backend, ...grokVideoSentPrompt({
+    return { backend, ...grokVideoSentPrompt({ startFrameLayout,
       prompt, negativePrompt: body.negativePrompt,
       aspectRatio: settings.imageGen?.grok?.aspectRatio, width: body.width, height: body.height,
       duration: body.grokDuration, sourceImagePath, scratchDir: join(tmpdir(), 'portos-grok-video-<job>'), promptAdditions, castReferences, ...guidance,

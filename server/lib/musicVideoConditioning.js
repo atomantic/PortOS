@@ -23,9 +23,12 @@ export { MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT };
 // is supported by both the older Imagine model and the newer 1.5 model.
 export const MUSIC_VIDEO_GROK_CLIP_REFERENCE_LIMIT = 7;
 
-/** Extra image slots beside the selected source frame for a video render. */
-export function musicVideoClipReferenceCapacity(backend, model = null, { endFrame = false } = {}) {
-  if (backend === 'grok') return MUSIC_VIDEO_GROK_CLIP_REFERENCE_LIMIT;
+/**
+ * Extra image slots beside the selected source frame for a video render. A Grok
+ * clip that sends its frame for layout only spends one of its image slots on it.
+ */
+export function musicVideoClipReferenceCapacity(backend, model = null, { endFrame = false, startFrameLayout = false } = {}) {
+  if (backend === 'grok') return MUSIC_VIDEO_GROK_CLIP_REFERENCE_LIMIT - (startFrameLayout ? 1 : 0);
   if (backend === 'gemini') return GEMINI_WEB_CLIP_REFERENCE_LIMIT;
   if (backend === 'fal') {
     const max = Number(model?.referenceImages?.max) || 0;

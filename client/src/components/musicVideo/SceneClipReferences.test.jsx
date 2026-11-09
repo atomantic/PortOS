@@ -23,6 +23,12 @@ describe('clip references', () => {
     expect(screen.getByRole('status')).toHaveTextContent('These references are not sent with this clip. Turn on Use LTX reference images to send them.');
   });
 
+  it('names a Grok layout-only start frame as a guide and gives up one slot for it', () => {
+    render(<SceneClipReferences project={project} scene={scene} backend="grok" startFrameLayout onEditLocal={vi.fn()} onSave={vi.fn()} onSaveState={vi.fn()} />);
+    expect(screen.getByText(/can send up to 6 additional image references/)).toBeTruthy();
+    expect(screen.getByText(/start frame is a guide/)).toBeTruthy();
+  });
+
   it('has nothing to warn about when no reference is listed', () => {
     render(<SceneClipReferences project={project} scene={{ ...scene, clipReferenceIds: [] }} backend="local" model={{ id: 'wan' }} onEditLocal={vi.fn()} onSave={vi.fn()} onSaveState={vi.fn()} />);
     expect(screen.queryByRole('status')).toBeNull();

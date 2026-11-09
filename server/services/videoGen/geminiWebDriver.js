@@ -54,6 +54,21 @@ async function enableVideoTool(page) {
   await chip.waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
 }
 
+// The composer keeps the account's last mode, and a Flash-Lite chat has answered a
+// Create video request with a still (2026-11-09), so every render picks Flash.
+const FLASH_MODE = /^[\d.]*\s*Flash\b(?!-Lite)/i;
+async function chooseFlashMode(page) {
+  const picker = page.getByRole('button', { name: /^Open mode picker/ });
+  const current = await picker.getAttribute('aria-label', { timeout: STEP_TIMEOUT_MS });
+  if (/currently Flash\b(?!-Lite)/i.test(current || '')) return;
+  await picker.click({ timeout: STEP_TIMEOUT_MS });
+  await page.getByRole('menuitemradio', { name: FLASH_MODE }).first().click({ timeout: STEP_TIMEOUT_MS });
+}
+
+// Sending without the tool would spend the prompt on an ordinary chat answer.
+const assertVideoToolOn = (page) => page.getByRole('button', { name: 'Deselect Videos' })
+  .waitFor({ state: 'visible', timeout: STEP_TIMEOUT_MS });
+
 async function chooseAspect(page, choice) {
   const button = page.getByRole('button', { name: /^Aspect ratio/ });
   const current = await button.getAttribute('aria-label', { timeout: STEP_TIMEOUT_MS });
@@ -101,6 +116,7 @@ const readLatestResponse = (page) => page.evaluate(() => {
     responded: true,
     videoUrl: video?.currentSrc || video?.src || video?.querySelector('source')?.src || null,
     text: (content.innerText || '').trim(),
+    image: Boolean(content.querySelector('img')),
     // Gemini shows the feedback row only on a finished answer.
     finished: Boolean(latest.querySelector('message-actions button')),
   };
@@ -114,6 +130,9 @@ async function waitForClip(page, { deadline, signal, onWait }) {
     if (signal?.aborted) throw fail('GEMINI_WEB_CANCELED', 'Canceled', 499);
     const state = await readLatestResponse(page);
     if (state.videoUrl) return state.videoUrl;
+    if (state.finished && state.image) {
+      throw fail('GEMINI_WEB_NO_VIDEO', 'Gemini answered with a still image instead of a video. Render again to try once more.', 502);
+    }
     const refused = state.responded && state.text.length <= REFUSAL_MAX_CHARS && REFUSAL.test(state.text) ? state.text : null;
     refusalPolls = refused && refused === refusal ? refusalPolls + 1 : 1;
     refusal = refused;
@@ -163,6 +182,7 @@ export async function renderOnGeminiWeb({ prompt, files = [], aspectChoice, outp
       if (signal?.aborted) throw fail('GEMINI_WEB_CANCELED', 'Canceled', 499);
       onPhase?.('open');
       const editor = await step(LABEL, 'open a new chat', () => openComposer(tab));
+      await step(LABEL, 'choose the Flash mode', () => chooseFlashMode(tab));
       await step(LABEL, 'turn on Create video', () => enableVideoTool(tab));
       await step(LABEL, 'choose the aspect ratio', () => chooseAspect(tab, aspectChoice));
       if (files.length) {
@@ -174,6 +194,7 @@ export async function renderOnGeminiWeb({ prompt, files = [], aspectChoice, outp
         await tab.keyboard.insertText(prompt);
       });
       const send = await step(LABEL, 'wait for the uploads', () => waitForSendReady(tab));
+      await step(LABEL, 'check Create video is still on', () => assertVideoToolOn(tab));
       if (signal?.aborted) throw fail('GEMINI_WEB_CANCELED', 'Canceled', 499);
       onPhase?.('send');
       await step(LABEL, 'send the prompt', () => send.click({ timeout: STEP_TIMEOUT_MS }));

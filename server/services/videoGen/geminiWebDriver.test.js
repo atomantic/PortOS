@@ -16,6 +16,7 @@ function fakeGemini({ consent = false, uploadClickFails = false, url = 'https://
   const chooserEvent = new Promise((resolve, reject) => { chooserResolve = resolve; chooserReject = reject; });
   const control = (name) => ({
     filter: () => control(name),
+    first: () => control(name),
     waitFor: async () => {
       if (name === 'dialog' && !consent) await new Promise(() => {});
     },
@@ -30,7 +31,7 @@ function fakeGemini({ consent = false, uploadClickFails = false, url = 'https://
   const page = {
     goto: async () => {},
     url: () => url,
-    getByRole: (role, { name } = {}) => control(role === 'dialog' ? 'dialog' : String(name)),
+    getByRole: (role, { name } = {}) => control(role === 'dialog' ? 'dialog' : role === 'menuitemradio' ? 'mode' : String(name)),
     locator: () => control('uploader'),
     waitForEvent: () => chooserEvent,
     keyboard: { insertText: async (text) => { log.typed = text; } },
@@ -79,6 +80,19 @@ describe('renderOnGeminiWeb', () => {
     expect(phases.slice(0, 3)).toEqual(['open', 'attach', 'send']);
     expect(phases.at(-1)).toBe('fetch');
     expect(fake.log.closed).toBe(true);
+  });
+
+  it('picks the Flash mode before turning on Create video', async () => {
+    const fake = fakeGemini({ answers: [CLIP] });
+    await render(fake);
+    expect(fake.log.clicks.indexOf('mode')).toBeGreaterThan(-1);
+    expect(fake.log.clicks.indexOf('mode')).toBeLessThan(fake.log.clicks.indexOf('Create video'));
+  });
+
+  it('fails at once when Gemini answers with a still instead of a clip, without sending again', async () => {
+    const fake = fakeGemini({ answers: [{ responded: true, videoUrl: null, text: '', image: true, finished: true }] });
+    await expect(render(fake)).rejects.toMatchObject({ code: 'GEMINI_WEB_NO_VIDEO' });
+    expect(sends(fake.log)).toBe(1);
   });
 
   it('stops at the upload terms without agreeing, sending or closing the tab', async () => {

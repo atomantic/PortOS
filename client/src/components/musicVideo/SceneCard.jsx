@@ -267,7 +267,10 @@ export default function SceneCard({
   // Most Runway models cannot mix keyframes with references, so an end frame sends none there.
   const runwayEndFrameOn = referenceBackend === 'runway' && cardRequest.endFrame?.state === 'on';
   const endFrameBlocksReferences = runwayEndFrameOn && !!referenceModel?.referenceImages && !referenceModel.referenceImages.keepsFrames;
-  const referenceCapacity = useLtxReferences ? 8 : musicVideoClipReferenceCapacity(referenceBackend, referenceModel, { endFrame: runwayEndFrameOn });
+  // Grok can take the start frame as a layout reference instead of the locked opening frame,
+  // so the people it shows can take the clip references' likeness.
+  const startFrameLayout = referenceBackend === 'grok' && !storyboardDefault && renderInputs.startFrameLayout === true;
+  const referenceCapacity = useLtxReferences ? 8 : musicVideoClipReferenceCapacity(referenceBackend, referenceModel, { endFrame: runwayEndFrameOn, startFrameLayout });
   const guidesPending = referenceCapacity > 0 && castMedia && musicVideoSceneCastIds(project, scene).some((id) => castMedia[id] === undefined);
   // A failed read (null) would otherwise send the clip without the member's guides.
   const guidesFailed = referenceCapacity > 0 && castMedia && musicVideoSceneCastIds(project, scene).some((id) => castMedia[id] === null);
@@ -315,6 +318,7 @@ export default function SceneCard({
       expectedClipReferenceFiles: selectedClipReferences.map((ref) => ref.imageId),
       ...songAudioField,
       ...(useLtxReferences ? { ltxReferences: true, songAudio: false, endFrame: false, expectedClipReferenceLabels: referenceLabels } : {}),
+      ...(startFrameLayout ? { startFrameLayout: true } : {}),
     };
     onGenerateVideo?.(scene, { ...(renderOverrides ? { target: renderOverrides } : {}), card });
   };
@@ -739,7 +743,14 @@ export default function SceneCard({
           {canUseLtxReferences && ltxReferencesGreyboxBlocked && (
             <p className="text-xs text-port-text-muted">Clear the greybox reference to use LTX reference images.</p>
           )}
-          {layer === 'footage' && <SceneClipReferences project={project} scene={scene} castMedia={castMedia}
+          {layer === 'footage' && referenceBackend === 'grok' && !storyboardDefault && scene.referenceImageId && (
+            <label className="flex items-center gap-2 text-xs text-port-text-muted">
+              <input type="checkbox" checked={startFrameLayout}
+                onChange={(event) => setRenderInputs((prev) => ({ ...prev, startFrameLayout: event.target.checked }))} />
+              Start frame for layout only (its people take the clip references' looks; the clip may not open on it exactly)
+            </label>
+          )}
+          {layer === 'footage' && <SceneClipReferences project={project} scene={scene} castMedia={castMedia} startFrameLayout={startFrameLayout}
             backend={referenceBackend} model={referenceModel} capacityOverride={useLtxReferences ? 8 : runwayEndFrameOn ? referenceCapacity : undefined} endFrameBlocksReferences={endFrameBlocksReferences} ltxReferencesOff={canUseLtxReferences && !useLtxReferences} onEditLocal={onEditLocal} onSave={onSave}
             saveState={clipReferenceSaveState} onSaveState={setClipReferenceSaveState} />}
           {/* The clip prompt sits under the clip's references, like each frame's prompt under its frame. */}
@@ -756,7 +767,8 @@ export default function SceneCard({
               grokPreview={(!renderSettings?.backend || renderSettings.backend === 'grok') && project?.id && scene.referenceImageId ? {
                 ...(renderSettings?.backend ? { backend: renderSettings.backend } : {}), prompt: cardRequest.authored, mode: 'image', sourceImageFile: scene.referenceImageId,
                 grokDuration: renderSettings?.backend === 'grok' ? grokSceneRequestDuration(scene, renderSettings, renderOverrides) : renderSettings?.grokDuration,
-                musicVideo: { projectId: project.id, sceneId: scene.sceneId, catalogBasis: project.castAndSets?.catalogCheckin?.basis, compose: true, promptAsTyped: true, ...songAudioField },
+                musicVideo: { projectId: project.id, sceneId: scene.sceneId, catalogBasis: project.castAndSets?.catalogCheckin?.basis, compose: true, promptAsTyped: true, ...songAudioField,
+                  ...(startFrameLayout ? { startFrameLayout: true } : {}) },
               } : null} previewRevision={JSON.stringify([project?.updatedAt, castMedia])} />
           )}
           {layer === 'footage' && scene.coverage === 'sequence' && <SceneSequenceCoverage project={project} scene={scene} />}

@@ -385,10 +385,11 @@ const submitHostedLane = async ({ body, prepared, backend, hosted, performancePa
   // A Music Video shot animated on Grok or Gemini carries its cast sheets beside the still,
   // so people stay recognizable once the clip moves past the opening frame.
   const carriesCast = backend === VIDEO_GEN_MODE.GROK || backend === VIDEO_GEN_MODE.GEMINI;
-  const castReferenceLimit = musicVideoClipReferenceCapacity(backend);
+  const startFrameLayout = backend === VIDEO_GEN_MODE.GROK && body.musicVideo?.startFrameLayout === true;
+  const castReferenceLimit = musicVideoClipReferenceCapacity(backend, null, { startFrameLayout });
   const musicVideoReferences = carriesCast && body.musicVideo && sourceImagePath && !prepared.guidanceImagePath
     ? await import('../musicVideo/clipCastReferences.js').then((mod) => (backend === VIDEO_GEN_MODE.GROK
-      ? mod.musicVideoClipCastReferences(body.musicVideo)
+      ? mod.musicVideoClipCastReferences(body.musicVideo, { startFrameLayout })
       : mod.musicVideoClipReferences(body.musicVideo, castReferenceLimit)))
     : [];
   // Caller-uploaded reference images (staged by the lane) follow any Music Video
@@ -418,7 +419,7 @@ const submitHostedLane = async ({ body, prepared, backend, hosted, performancePa
     uploadedTempPath,
     ...submissionTagParams(body),
     ...hosted.buildParams(body, prepared),
-    ...(castReferences.length ? { castReferences } : {}),
+    ...(castReferences.length ? { castReferences, ...(startFrameLayout ? { startFrameLayout } : {}) } : {}),
     ...(useClipReferences ? {
       referenceImagePaths: clipReferences.map((ref) => ref.path),
       clipReferenceLabels: clipReferences.map(({ label, role }) => ({ label, ...(role ? { role } : {}) })),

@@ -177,7 +177,7 @@ describe('submitVideoGenJob', () => {
     });
     const tag = { projectId: 'mv-1', sceneId: 'shot-example' };
     await submitVideoGenJob({ prompt: 'a subject steps into view', backend: 'grok', mode: 'image', sourceImageFile: 'still.png', musicVideo: tag }, {});
-    expect(mocks.musicVideoClipCastReferences).toHaveBeenCalledWith(tag);
+    expect(mocks.musicVideoClipCastReferences).toHaveBeenCalledWith(tag, { startFrameLayout: false });
     expect(mocks.enqueueJob.mock.calls[0][0].params).toEqual(expect.objectContaining({ castReferences: cast, sourceImagePath: '/example/still.png' }));
   });
 

@@ -561,6 +561,9 @@ const generateBodySchema = z.object({
       // The shot card's Whole sung line: a performance take's song slice covers
       // the full lyric line the shot sits in; its edit points still frame the shot.
       wholeLine: z.boolean().optional(),
+      // The shot card's "Start frame for layout only" (Grok): the frame is sent as a
+      // scene reference instead of the locked first frame, so its people can take the references' likeness.
+      startFrameLayout: z.boolean().optional(),
     }).optional(),
   ),
   // File the clip into this music video's media collection even when no shot

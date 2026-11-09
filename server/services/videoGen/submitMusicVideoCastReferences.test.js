@@ -115,7 +115,7 @@ describe('Music Video cast references at video submission', () => {
     m.settings.videoGen.mode = 'grok';
     await expect(submitVideoGenJob(body(), {})).resolves.toMatchObject({ mode: 'grok' });
     expect(m.localReferences).not.toHaveBeenCalled();
-    expect(m.hostedReferences).toHaveBeenCalledWith(tag);
+    expect(m.hostedReferences).toHaveBeenCalledWith(tag, { startFrameLayout: false });
     expect(m.enqueue.mock.calls[0][0].params.mode).toBe('grok');
   });
 
@@ -132,6 +132,16 @@ describe('Music Video cast references at video submission', () => {
     ]);
     expect(uploadedTempPaths).toEqual(castReferences.slice(1).map((ref) => ref.path));
     expect(m.copy.mock.calls.map(([from]) => from)).toEqual(['/tmp/one.png', '/tmp/two.png']);
+  });
+
+  it('sends a layout-only Grok start frame with one fewer cast sheet slot', async () => {
+    m.hostedReferences.mockResolvedValue([{ path: '/mock/images/lead.png', label: 'Lead' }]);
+    await submitVideoGenJob(body({ backend: 'grok', musicVideo: { ...tag, startFrameLayout: true } }), {});
+    expect(m.hostedReferences).toHaveBeenCalledWith({ ...tag, startFrameLayout: true }, { startFrameLayout: true });
+    expect(m.enqueue.mock.calls[0][0].params).toMatchObject({ startFrameLayout: true, castReferences: [{ path: '/mock/images/lead.png', label: 'Lead' }] });
+    m.hostedReferences.mockResolvedValue(Array.from({ length: 7 }, (_, i) => ({ path: `/mock/images/${i}.png`, label: `Person ${i}` })));
+    await expect(submitVideoGenJob(body({ backend: 'grok', musicVideo: { ...tag, startFrameLayout: true } }), {}))
+      .rejects.toMatchObject({ code: 'VIDEO_REFERENCE_IMAGES_TOO_MANY' });
   });
 
   it('refuses a combined Grok reference set beyond the supported limit before queuing', async () => {
