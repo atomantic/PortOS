@@ -17,7 +17,7 @@
 #   INSTALL_MINIMAX_H3_CUDA '1' to install the MiniMax H3 CUDA runtime at ~/.portos/minimax-h3-cuda (Windows/Linux + NVIDIA), via diffusers' MiniMaxH3ModularPipeline. Weights remain a separate explicit Video Gen download (~144 GB). Default: 0.
 #   INSTALL_LTX25_CUDA '1' to install the official LTX-2.5 CUDA runtime at ~/.portos/ltx-2.5-cuda (Windows/Linux + NVIDIA). Weights remain a separate explicit Video Gen download. Default: 0.
 #   INSTALL_WAN22_CUDA '1' to install the official Wan 2.2 Diffusers runtime at ~/.portos/wan2.2-cuda (Windows/Linux + NVIDIA). Weights remain a separate explicit Video Gen download. Default: 0.
-#   INSTALL_FLUX2  '1' to also bootstrap a separate venv at ~/.portos/venv-flux2 for FLUX.2-klein (default: 1 on macOS, 0 elsewhere)
+#   INSTALL_FLUX2  '1' to also bootstrap a separate venv at ~/.portos/venv-flux2 for FLUX.2-klein (Apple Silicon, or x86_64 Windows/Linux via a hash-locked CUDA runtime; default: 1 on Apple Silicon, 0 elsewhere)
 #   INSTALL_MUSICGEN '1' to bootstrap a venv at ~/.portos/venv-musicgen + clone ml-explore/mlx-examples to ~/.portos/mlx-examples for local MusicGen (MLX) background-music generation (pipeline audio stage). Default: 0; opt in with INSTALL_MUSICGEN=1 (macOS / Apple Silicon only).
 #   MLX_EXAMPLES_PIN  commit SHA of ml-explore/mlx-examples to check out for MusicGen (default: main).
 #   INSTALL_MINIMAX_MUSIC3_MLX '1' to bootstrap a separate venv at ~/.portos/venv-minimax-music3-mlx for native MiniMax Music 3 MLX generation (Music studio). Default: 0; opt in with INSTALL_MINIMAX_MUSIC3_MLX=1 (macOS / Apple Silicon only).
@@ -451,7 +451,7 @@ ANY_BYOV="${INSTALL_LTX2:-0}${INSTALL_LTX25:-0}${INSTALL_LTX25_CUDA:-0}${INSTALL
 if [[ "$ANY_BYOV" != *[!0]* ]]; then
   DEFAULT_INSTALL_MFLUX=1
   DEFAULT_INSTALL_VIDEO=$(is_macos && echo 1 || echo 0)
-  DEFAULT_INSTALL_FLUX2=$(is_macos && echo 1 || echo 0)
+  DEFAULT_INSTALL_FLUX2=$(is_apple_silicon && echo 1 || echo 0)
 else
   DEFAULT_INSTALL_MFLUX=0
   DEFAULT_INSTALL_VIDEO=0
@@ -1519,92 +1519,73 @@ fi
 INSTALL_FLUX2="${INSTALL_FLUX2:-$DEFAULT_INSTALL_FLUX2}"
 
 if [[ "$INSTALL_FLUX2" == "1" ]]; then
-  # FLUX.2-klein needs torch>=2.5 + diffusers-from-git + sdnq + optimum-quanto.
-  # Mixing those into the mflux pip --user pile (mflux pulls older torch) is
-  # fragile, so we use a sibling venv. server/lib/pythonSetup.js looks for
-  # this venv's interpreter when the active model has runner=='flux2'.
+  # FLUX.2-klein needs torch>=2.5 + diffusers + sdnq + optimum-quanto. Mixing
+  # those into the mflux pip --user pile (mflux pulls older torch) is fragile,
+  # so we use a sibling venv. server/lib/pythonSetup.js looks for this venv's
+  # interpreter when the active model has runner=='flux2'.
+  # Every platform installs only from a hash-pinned lock: no install-time
+  # resolution, so a new or compromised transitive release can't land on the
+  # next Repair. diffusers 0.42.1 is a tagged release carrying Flux2KleinPipeline
+  # + QwenImage21Pipeline and sdnq is on PyPI, so no git source (which cannot
+  # satisfy --require-hashes) is needed. Every run syncs the lock — a venv built
+  # before the locks existed imports fine yet holds unpinned, unhashed packages,
+  # and syncing a lock the venv already matches is a no-op. (FLUX2_FORCE_REINSTALL
+  # is still accepted, but redundant.)
   FLUX2_VENV="${HOME}/.portos/venv-flux2"
-  # Prefer a base outside the venv. An activated universal venv is the first
-  # python3 on PATH; deleting it and then calling that path fails the rebuild.
-  # reset also refuses when the only interpreter lives inside the venv.
-  if ! FLUX2_BASE_PY="$(newest_supported_python "$FLUX2_VENV")" \
-      && ! FLUX2_BASE_PY="$(newest_supported_python)"; then
-    echo "❌ FLUX.2 needs Python 3.10+ to build its venv; \`$PYTHON_BIN\` is older and no newer python3.NN is on PATH." >&2
-    echo "   Install one (e.g. 'brew install python@3.12' or 'uv python install 3.12'), then re-run with PYTHON_BIN pointing at it." >&2
-    exit 1
+  if ! is_apple_silicon; then
+    # Linux/Windows hash locks cover x86_64 with the cu126 torch build (it also
+    # runs on CPU). Other hosts have no lock.
+    if is_macos; then
+      echo "❌ FLUX.2 hash locks cover Apple Silicon and x86_64 Windows/Linux; Intel macOS is unsupported." >&2
+      exit 1
+    fi
+    require_cuda_lock_host FLUX.2 docs/FLUX2_CUDA.md
   fi
   mkdir -p "${HOME}/.portos"
-  reset_universal_venv "$FLUX2_VENV" "$FLUX2_BASE_PY"
-  # A venv left behind by an earlier run against a too-old base can never
-  # install these packages, and `python -m venv` reuses it silently — so every
-  # retry would fail the same way. Rebuild it instead of pip-ing into it.
-  if venv_exists "$FLUX2_VENV" && ! python_at_least_310 "$(venv_python "$FLUX2_VENV")"; then
-    echo "♻️  FLUX.2 venv at ${FLUX2_VENV} predates Python 3.10 — recreating it..."
-    "$FLUX2_BASE_PY" -m venv --clear "$FLUX2_VENV"
-  elif ! venv_exists "$FLUX2_VENV"; then
-    echo "📦 Creating FLUX.2 venv at ${FLUX2_VENV} from ${FLUX2_BASE_PY}..."
-    "$FLUX2_BASE_PY" -m venv "$FLUX2_VENV"
-  fi
-  FLUX2_PY="$(venv_python "$FLUX2_VENV")"
 
-  # Skip the (slow, network-heavy) pip path when both FLUX.2 and Qwen 2.1 already
-  # import — diffusers-from-git is a git clone every run otherwise. Use
-  # FLUX2_FORCE_REINSTALL=1 to bypass. Apple Silicon never skips: a venv built
-  # before the lock existed imports fine yet holds unpinned, unhashed packages,
-  # and syncing the lock is a no-op once the venv already matches it.
-  if [[ "${FLUX2_FORCE_REINSTALL:-}" != "1" ]] && ! is_apple_silicon \
-      && "$FLUX2_PY" -c "from diffusers import Flux2KleinPipeline, QwenImage21Pipeline" 2>/dev/null; then
-    echo "✅ FLUX.2 venv already ready: $FLUX2_PY"
-  else
-    echo "📦 Installing FLUX.2 packages into $FLUX2_VENV..."
-    if is_apple_silicon; then
-      # Apple Silicon installs only from the hash-pinned lock
-      # (scripts/requirements-flux2-mlx.lock.txt): no install-time resolution,
-      # so a new or compromised transitive release can't land on the next Repair.
-      # Direct pins: scripts/requirements-flux2-mlx.txt. diffusers 0.42.1 is a
-      # tagged release carrying Flux2KleinPipeline + QwenImage21Pipeline and sdnq
-      # is on PyPI, so no git source is needed.
-      # The lock needs CPython 3.11+: its filelock fix for advisory GHSA-2g95-wg33-c5x2
-      # (4.2.1) dropped 3.10, and 4.1.0, the last 3.10 release, is affected.
-      if ! "$FLUX2_PY" -c 'import sys; sys.exit(0 if sys.version_info[:2] >= (3, 11) else 1)'; then
-        echo "❌ FLUX.2 on Apple Silicon needs Python 3.11+; ${FLUX2_PY} is older." >&2
-        echo "   Re-run with PYTHON_BIN pointing at a 3.11+ interpreter (e.g. 'brew install python@3.12')." >&2
-        exit 1
-      fi
-      "$FLUX2_PY" -m pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-flux2-mlx.lock.txt"
-    else
-      # Linux/Windows still resolve at install time (hash-pinned CUDA lock: #15481).
-      "$FLUX2_PY" -m pip install --upgrade pip wheel setuptools >/dev/null
-      # diffusers-from-git is required because Flux2KleinPipeline isn't in any
-      # tagged release as of late 2025 / early 2026. sdnq is git-only too —
-      # registers a custom config type at import-time which
-      # Flux2KleinPipeline.from_pretrained relies on.
-      "$FLUX2_PY" -m pip install --upgrade \
-        "torch>=2.5" \
-        torchvision \
-        accelerate \
-        "transformers>=5.17" \
-        sentencepiece \
-        protobuf \
-        safetensors \
-        "huggingface_hub[hf_xet]" \
-        "diffusers @ git+https://github.com/huggingface/diffusers" \
-        "sdnq @ git+https://github.com/Disty0/sdnq.git" \
-        "peft>=0.17" \
-        "optimum-quanto>=0.2.7" \
-        pillow
-      # Same-version dev snapshots are not replaced by --upgrade. Refresh the
-      # pipeline code without reinstalling torch or its platform-specific wheel.
-      "$FLUX2_PY" -m pip install --force-reinstall --no-deps \
-        "diffusers @ git+https://github.com/huggingface/diffusers"
+  if is_apple_silicon; then
+    # Prefer a base outside the venv. An activated universal venv is the first
+    # python3 on PATH; deleting it and then calling that path fails the rebuild.
+    # reset also refuses when the only interpreter lives inside the venv.
+    if ! FLUX2_BASE_PY="$(newest_supported_python "$FLUX2_VENV")" \
+        && ! FLUX2_BASE_PY="$(newest_supported_python)"; then
+      echo "❌ FLUX.2 needs Python 3.10+ to build its venv; \`$PYTHON_BIN\` is older and no newer python3.NN is on PATH." >&2
+      echo "   Install one (e.g. 'brew install python@3.12' or 'uv python install 3.12'), then re-run with PYTHON_BIN pointing at it." >&2
+      exit 1
     fi
-    pin_venv_arm64 "$FLUX2_VENV"
-    probe_or_fail \
-      "flux2 venv built but 'from diffusers import Flux2KleinPipeline, QwenImage21Pipeline' failed." \
-      "Try: $FLUX2_PY -m pip install --upgrade --force-reinstall 'diffusers @ git+https://github.com/huggingface/diffusers'" \
-      "$FLUX2_PY" -c "from diffusers import Flux2KleinPipeline, QwenImage21Pipeline"
-    echo "✅ FLUX.2 venv ready: $FLUX2_PY"
+    reset_universal_venv "$FLUX2_VENV" "$FLUX2_BASE_PY"
+    # A venv left behind by an earlier run against a too-old base can never
+    # install these packages, and `python -m venv` reuses it silently — so every
+    # retry would fail the same way. Rebuild it instead of pip-ing into it.
+    if venv_exists "$FLUX2_VENV" && ! python_at_least_310 "$(venv_python "$FLUX2_VENV")"; then
+      echo "♻️  FLUX.2 venv at ${FLUX2_VENV} predates Python 3.10 — recreating it..."
+      "$FLUX2_BASE_PY" -m venv --clear "$FLUX2_VENV"
+    elif ! venv_exists "$FLUX2_VENV"; then
+      echo "📦 Creating FLUX.2 venv at ${FLUX2_VENV} from ${FLUX2_BASE_PY}..."
+      "$FLUX2_BASE_PY" -m venv "$FLUX2_VENV"
+    fi
+    FLUX2_PY="$(venv_python "$FLUX2_VENV")"
+    echo "📦 Installing FLUX.2 packages into $FLUX2_VENV..."
+    # Direct pins: scripts/requirements-flux2-mlx.txt.
+    # The lock needs CPython 3.11+: its filelock fix for advisory GHSA-2g95-wg33-c5x2
+    # (4.2.1) dropped 3.10, and 4.1.0, the last 3.10 release, is affected.
+    if ! "$FLUX2_PY" -c 'import sys; sys.exit(0 if sys.version_info[:2] >= (3, 11) else 1)'; then
+      echo "❌ FLUX.2 on Apple Silicon needs Python 3.11+; ${FLUX2_PY} is older." >&2
+      echo "   Re-run with PYTHON_BIN pointing at a 3.11+ interpreter (e.g. 'brew install python@3.12')." >&2
+      exit 1
+    fi
+    "$FLUX2_PY" -m pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-flux2-mlx.lock.txt"
+  else
+    # Direct pins: scripts/requirements-flux2-cuda.txt.
+    sync_cuda_lock_venv FLUX.2 "$FLUX2_VENV" requirements-flux2-cuda
+    FLUX2_PY="$(venv_python "$FLUX2_VENV")"
   fi
+  pin_venv_arm64 "$FLUX2_VENV"
+  probe_or_fail \
+    "FLUX.2 venv built but 'from diffusers import Flux2KleinPipeline, QwenImage21Pipeline' failed." \
+    "Try: INSTALL_FLUX2=1 bash scripts/setup-image-video.sh (re-syncs the hash-pinned lock)" \
+    "$FLUX2_PY" -c "from diffusers import Flux2KleinPipeline, QwenImage21Pipeline"
+  echo "✅ FLUX.2 venv ready: $FLUX2_PY"
 fi
 
 # ffmpeg — required for thumbnails, last-frame extraction, stitch, and the

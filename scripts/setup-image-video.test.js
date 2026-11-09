@@ -1156,6 +1156,7 @@ describe('AudioLDM2 Apple Silicon install is hash-pinned', () => {
 describe.each([
   { runtime: 'AudioLDM2', lockName: 'audioldm2', flag: 'INSTALL_AUDIOLDM2', probe: 'AudioLDM2Pipeline', probeImport: 'from diffusers import AudioLDM2Pipeline' },
   { runtime: 'MuScriptor', lockName: 'muscriptor', flag: 'INSTALL_MUSCRIPTOR', probe: 'TranscriptionModel', probeImport: 'from muscriptor import TranscriptionModel' },
+  { runtime: 'FLUX.2', lockName: 'flux2', flag: 'INSTALL_FLUX2', probe: 'Flux2KleinPipeline', probeImport: 'from diffusers import Flux2KleinPipeline, QwenImage21Pipeline' },
 ])('$runtime Windows/Linux Install/Repair', ({ runtime, lockName, flag, probe, probeImport }) => {
   const direct = readFileSync(join(REPO_ROOT, `scripts/requirements-${lockName}-cuda.txt`), 'utf8')
     .split(/\r?\n/).filter((line) => /^[\w.-]+(\[[\w,-]+\])?==/.test(line))
@@ -1303,10 +1304,10 @@ ${block}`;
   });
 });
 
-describe('FLUX.2 Apple Silicon install is hash-pinned', () => {
+describe('FLUX.2 install is hash-pinned on every platform', () => {
   const lock = readFileSync(join(REPO_ROOT, 'scripts', 'requirements-flux2-mlx.lock.txt'), 'utf8');
-  const section = source.slice(source.indexOf('INSTALL_FLUX2" == "1"'), source.indexOf('flux2 venv built but'));
-  const [appleBranch, otherBranch] = section.split(/^    else$/m);
+  const section = source.slice(source.indexOf('INSTALL_FLUX2" == "1"'), source.indexOf('FLUX.2 venv built but'));
+  const [appleBranch, otherBranch] = section.split(/^  else$/m);
 
   it('every locked package carries a sha256 hash, none comes from a VCS or URL source, and all are arm64-macOS scoped', () => {
     const blocks = lock.split(/\n(?=[a-z][^\n]*==)/i).filter((b) => /^[a-z][^\n]*==/i.test(b));
@@ -1331,13 +1332,13 @@ describe('FLUX.2 Apple Silicon install is hash-pinned', () => {
     expect(appleBranch).toContain('sys.version_info[:2] >= (3, 11)');
   });
 
-  it('never skips the sync on Apple Silicon because an unlocked venv already imports', () => {
-    const skipGuard = section.slice(section.indexOf('FLUX2_FORCE_REINSTALL:-}" != "1"'), section.indexOf('already ready'));
-    expect(skipGuard).toContain('! is_apple_silicon');
+  it('syncs the lock on every run instead of skipping because an unlocked venv already imports', () => {
+    expect(section).not.toMatch(/FLUX2_FORCE_REINSTALL:-\}" != "1"|already ready/);
   });
 
-  it('keeps the resolving install for Linux/Windows until the CUDA lock lands', () => {
-    expect(otherBranch).toMatch(/pip install --upgrade \\\n\s+"torch>=2\.5"/);
+  it('installs nothing on Linux/Windows outside the hash-pinned CUDA locks', () => {
+    expect(otherBranch).toContain('sync_cuda_lock_venv FLUX.2 "$FLUX2_VENV" requirements-flux2-cuda');
+    expect(otherBranch).not.toMatch(/pip install|--upgrade|git\+/);
   });
 });
 

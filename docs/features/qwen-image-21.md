@@ -9,10 +9,11 @@ selected model or customized settings.
 Install or repair the shared FLUX.2 image runtime through the app, or run:
 
 ```sh
-INSTALL_FLUX2=1 FLUX2_FORCE_REINSTALL=1 bash scripts/setup-image-video.sh
+INSTALL_FLUX2=1 bash scripts/setup-image-video.sh
 ```
 
-Both installers use current Diffusers from git and Transformers >=5.17.
+On Windows/Linux both run the hash-pinned CUDA lock ([FLUX2_CUDA.md](../FLUX2_CUDA.md)); the
+in-app installer on macOS still resolves current Diffusers from git. Both need Transformers >=5.17.
 An older runtime missing `QwenImage21Pipeline` reports the repair command
 before loading weights. Setup does not download model weights; those load
 when a render is requested.
