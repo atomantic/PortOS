@@ -4,7 +4,7 @@ import { Check, Loader2, Minus, Plus, RotateCcw, RotateCw, Route, Trash2, X } fr
 import toast from '../ui/Toast';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import useCatalogPlaces from '../../hooks/useCatalogPlaces';
-import WorldMap, { useWorldMapView } from './WorldMapView';
+import WorldMap, { useWorldMapView, worldSetView } from './WorldMapView';
 import useListResource from '../../hooks/useListResource';
 import ListLoadError from '../ui/ListLoadError';
 import { listCatalogIngredients, saveCatalogWorld } from '../../services/apiCatalog';
@@ -74,7 +74,7 @@ export default function WorldPanel({ record, readOnly = false, disabled = false,
   const [confirmRemove, setConfirmRemove] = useState(false);
   const world = draft || saved;
   const places = useCatalogPlaces((world?.sets || []).map((set) => set.ingredientId));
-  const { view, setView, fit } = useWorldMapView(world, places);
+  const { view, setView, fit } = useWorldMapView(world);
   const selected = params.get('worldItem') || '';
   const select = (item) => setParams((current) => {
     const next = new URLSearchParams(current);
@@ -151,6 +151,22 @@ export default function WorldPanel({ record, readOnly = false, disabled = false,
         onMoveSet={(id, position) => !readOnly && patchSet(id, { position })}
         onMovePoint={(id, index, point) => !readOnly && edit((t) => ({ ...t, paths: t.paths.map((entry) => (entry.id === id ? { ...entry, points: entry.points.map((p, i) => (i === index ? point : p)) } : entry)) }))}
         onAddPoint={onAddPoint} />
+      {world.sets.length > 0 && (
+        <ul className="flex min-w-0 flex-wrap gap-1.5" aria-label="Sets on the map">
+          {world.sets.map((entry) => {
+            const name = places[entry.ingredientId]?.ingredient?.name || (places[entry.ingredientId] === null ? 'Missing environment' : '…');
+            const on = selected === `set:${entry.id}`;
+            return (
+              <li key={entry.id} className="min-w-0">
+                <button type="button" aria-pressed={on} className={`${buttonCls} max-w-full ${on ? 'border-port-accent text-white' : ''}`} title="Show this set on the map"
+                  onClick={() => { select(`set:${entry.id}`); setView(worldSetView(entry, places[entry.ingredientId])); }}>
+                  <span className="truncate">{name}</span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
       {problems.length > 0 && <p role="status" className="text-xs text-port-warning">{problems.map((entry) => entry.problem).join(' · ')}</p>}
       <fieldset disabled={readOnly || disabled || busy} className="min-w-0 space-y-3">
         {set && (

@@ -180,7 +180,7 @@ export default function PrevizTimeline({ project, world, places, locked, onSave:
   const [hours, setHours] = useState(8);
   const [watchMin, setWatchMin] = useState(0);
   const [playing, setPlaying] = useState(false);
-  const { view, setView } = useWorldMapView(world, places);
+  const { view, setView } = useWorldMapView(world);
   const [confirmRedraft, setConfirmRedraft] = useState(false);
   const frame = useRef(null);
   const selected = params.get('beat') || '';
