@@ -438,6 +438,8 @@ export default function MusicVideo() {
     return () => events.forEach((e) => socket.off(e, onRunEvent));
   }, []);
 
+  // Shot fields typed locally and not yet saved: a refetch after a change made elsewhere keeps these.
+  const unsavedSceneFields = useRef(new Map());
   // An edit made elsewhere (an agent, another tab) reaches the open project here; fields typed
   // locally and not yet saved keep their text, with a notice that the shot changed.
   useEffect(() => {
@@ -1131,8 +1133,6 @@ function ProjectWorkspace({
   };
 
   // Optimistic local edit; PATCH on blur (silent — this owns its error toast).
-  // Shot fields typed locally and not yet saved: a refetch after a change made elsewhere keeps these.
-  const unsavedSceneFields = useRef(new Map());
   const editSceneLocal = (sceneId, patch) => {
     const keys = unsavedSceneFields.current.get(sceneId) || new Set();
     Object.keys(patch).forEach((k) => keys.add(k));
