@@ -34,6 +34,9 @@ import {
 // rows — the caller adds one by pasting its id into the add flow, which does
 // the full classify/refuse pass. `pipeline` scopes to `text-to-image` /
 // `text-to-video` etc. when provided. fetchImpl is injectable for tests.
+// A stalled Hub must fail the search, not leave the "add a model" picker spinning.
+const HF_SEARCH_TIMEOUT_MS = 10_000;
+
 export const searchHuggingfaceModels = async (query, { pipeline, limit = 12, fetchImpl = fetch } = {}) => {
   const params = new URLSearchParams();
   const search = typeof query === 'string' ? query.trim() : '';
@@ -43,6 +46,7 @@ export const searchHuggingfaceModels = async (query, { pipeline, limit = 12, fet
   params.set('sort', 'downloads');
   const res = await fetchImpl(`${HF_API}?${params.toString()}`, {
     headers: { Accept: 'application/json' },
+    signal: AbortSignal.timeout(HF_SEARCH_TIMEOUT_MS),
   });
   if (!res.ok) {
     throw new ServerError(`HuggingFace search failed: ${res.status}`, { status: 502, code: 'HF_SEARCH_FAILED' });
