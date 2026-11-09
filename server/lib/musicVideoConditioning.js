@@ -135,7 +135,7 @@ export function isLegacyCatalogReference(project, ref) {
   if (stage?.source !== 'catalog') return false;
   if (String(ref?.id || '').startsWith('mvr-cs-')) return true;
   // A historical generated file may since have become a current catalog asset.
-  if (stage.catalogCheckin?.items?.some(item => item.images?.includes(ref?.imageId))) return false;
+  if (stage.catalogCheckin?.items?.some(item => item.images?.includes(ref?.imageId) || item.pickableImages?.includes(ref?.imageId))) return false;
   return Object.values(stage.images || {}).some((image) => image?.imageId === ref?.imageId || image?.history?.includes(ref?.imageId))
     || (project?.visualSpec?.references || []).some((saved) => String(saved?.id || '').startsWith('mvr-cs-') && saved.imageId === ref?.imageId)
     || (stage.overflowFaceReferences || []).some((saved) => saved.imageId && saved.imageId === ref?.imageId);
@@ -171,15 +171,17 @@ function musicVideoCatalogReferences(project) {
 }
 
 function catalogItemReferences(project) {
-  return (project.castAndSets.catalogCheckin?.items || []).flatMap((item) => (item.images || [])
-    .filter((filename) => typeof filename === 'string' && SENDABLE_REFERENCE_FILE.test(filename))
-    .map((filename) => ({
+  return (project.castAndSets.catalogCheckin?.items || []).flatMap((item) => [
+    ...(item.images || []).map((filename) => [filename, true]), ...(item.pickableImages || []).map((filename) => [filename, false]),
+  ].filter(([filename]) => typeof filename === 'string' && SENDABLE_REFERENCE_FILE.test(filename))
+    .map(([filename, auto]) => ({
       id: catalogReferenceId(item.subjectId, filename),
       imageId: filename,
       role: ['place', 'location'].includes(item.kind) ? 'set' : item.kind === 'object' ? 'prop' : item.kind,
       label: String(item.name || 'Catalog item').slice(0, 120),
       note: String(item.description || '').slice(0, 1000),
-      condition: true,
+      // Pick-only images never join Auto (automaticConditioningReferences keeps `condition` refs).
+      condition: auto,
       catalogSubjectId: item.subjectId,
       ingredientId: item.ingredientId,
       formId: item.formId || null,

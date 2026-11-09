@@ -139,6 +139,17 @@ export function pickGuideMedia(media, want = {}, cap = MAX_CAST_GUIDES) {
     .slice(0, Math.max(0, cap));
 }
 
+/**
+ * Every non-rejected image of a record, newest first, ignoring guide flags and the
+ * conditioning cap: the choice list for explicit per-shot picks (Auto keeps `pickGuideMedia`).
+ */
+export function listPickableImages(media) {
+  const rejected = rejectedReferenceKeys(media);
+  const time = (m) => Date.parse(m.createdAt || 0) || 0;
+  return (Array.isArray(media) ? media : []).filter((m) => m && !m.deleted && IMAGE_KINDS.has(m.kind) && !rejected.has(m.mediaKey))
+    .sort((a, b) => time(b) - time(a));
+}
+
 // Known incompatible looks never fill spare conditioning slots. Untagged
 // legacy references remain usable until the operator assigns their variant.
 export function matchesReferenceVariant(m, want = {}) {
