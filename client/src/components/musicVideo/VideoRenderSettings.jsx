@@ -10,9 +10,11 @@ import {
   RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, describeRunwayVideoRate, getRunwayVideoModel, runwayVideoLengths, runwayVideoResolutions,
 } from '../../lib/runwayVideoModels.js';
 import { projectFalSpend } from '../../lib/musicVideoStages.js';
-import { formatUsd } from '../../utils/formatters.js';
 import { SOURCE_AUDIO_LIPSYNC, SOURCE_AUDIO_MUSIC, performanceCapability } from '../../lib/musicVideoShotTiming.js';
-import { LTX_REFERENCES_GENERATION_MODE, LTX_REFERENCES_MIN_FRAMES } from '../../lib/musicVideoLtxReferences.js';
+import { LTX_REFERENCES_GENERATION_MODE, LTX_REFERENCES_IC_MODE, LTX_REFERENCES_MIN_FRAMES } from '../../lib/musicVideoLtxReferences.js';
+import { useModelDownloadStatus } from '../../hooks/useModelDownloadStatus.js';
+import ModelDownloadBadge from '../media/ModelDownloadBadge.jsx';
+import { formatBytes, formatUsd } from '../../utils/formatters.js';
 import { localModelRendersCutaway } from '../../../../server/lib/musicVideoLocalModels.js';
 
 const falSelectCls = 'w-full max-w-full bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm disabled:opacity-50 sm:w-auto min-h-[44px] pointer-fine:sm:min-h-0';
@@ -24,6 +26,24 @@ const runwayOptionLabel = (model, resolution) => {
   const rate = describeRunwayVideoRate(model.id, resolution);
   return rate ? `${model.label} · ${rate}` : model.label;
 };
+
+// The Ingredients adapter is a separate weight pull from the LTX 2.5 model, so the
+// panel shows its cache state with the same Download/progress badge Video Gen uses.
+// Mounted only while the mode is selected, so other projects never read the cache.
+function LtxReferencesAdapterStatus() {
+  const download = useModelDownloadStatus({ kind: 'video' });
+  const status = download.getStatus(LTX_REFERENCES_IC_MODE);
+  if (download.statusError) return <span className="text-xs text-port-warning">{download.statusError}</span>;
+  return (
+    <ModelDownloadBadge
+      status={status}
+      onDownload={() => download.startWhenIdle(LTX_REFERENCES_IC_MODE)}
+      onCancel={download.cancel}
+      estimateLabel={status?.estimatedBytes ? `~${formatBytes(status.estimatedBytes, 0)}` : undefined}
+      queued={download.queuedModelId === LTX_REFERENCES_IC_MODE}
+    />
+  );
+}
 
 // The project's saved scene-video render pins (backend → generation mode →
 // model → audio-reactive LoRA/strength, or Grok clip duration). Every control
@@ -143,11 +163,16 @@ export default function VideoRenderSettings({ videoSettings, generating, project
             ))}
           </select>
           {ltxReferencesSelected && (
-            <span className="text-xs text-port-text-muted" title="Install or repair the LTX 2.5 References adapter in Video Gen">
+            <span className="text-xs text-port-text-muted">
               {ltxReferencesModels.length === 0
                 ? (catalogStatus === 'ready' ? 'needs an LTX 2.5 local model' : 'checking local runtime…')
-                : `clip references as IC references · ${LTX_REFERENCES_MIN_FRAMES}+ frames · no song audio or end frame · needs the Ingredients adapter (Video Gen)`}
+                : `clip references as IC references · ${LTX_REFERENCES_MIN_FRAMES}+ frames · no song audio or end frame`}
             </span>
+          )}
+          {ltxReferencesSelected && ltxReferencesModels.length > 0 && (
+            <div className="w-full sm:w-auto" role="group" aria-label="LTX 2.5 References adapter">
+              <LtxReferencesAdapterStatus />
+            </div>
           )}
           {audioReactiveSelected && (
             <>
