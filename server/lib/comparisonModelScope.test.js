@@ -62,6 +62,7 @@ describe('catalogSlugForProviderModel', () => {
     expect(catalogSlugForProviderModel('claude-sonnet-4-6')).toBe('claude-sonnet-4.6');
     expect(catalogSlugForProviderModel('claude-opus-4-6-thinking')).toBe('claude-opus-4.6');
     expect(catalogSlugForProviderModel('claude-fable-5-1')).toBe('claude-fable-5.1');
+    expect(catalogSlugForProviderModel('claude-fable-5-2')).toBe('claude-fable-5.2');
   });
 
   it('resolves names the two namespaces spell differently', () => {
