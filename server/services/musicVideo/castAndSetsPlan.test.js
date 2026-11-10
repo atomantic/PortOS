@@ -232,7 +232,8 @@ describe('Cast & Sets set plates', () => {
     expect(prompt).toContain('Keep new details consistent with the described place and its era');
     expect(prompt).toContain('foreground, midground and background');
     expect(prompt).toContain('physical in-world source');
-    expect(prompt).toContain('No fog, mist, haze');
+    expect(prompt).toContain('Preserve atmosphere explicitly requested by the director');
+    expect(prompt).toContain('no fog, mist, haze');
   });
 
   it('preserves an intentionally unusual set while asking for coherent additions', () => {

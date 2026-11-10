@@ -58,6 +58,7 @@ describe('Cast & Sets direction', () => {
     expect(prompt).toContain('foreground, midground and background');
     expect(prompt).toContain('physical in-world source');
     expect(prompt).toContain('softbox');
+    expect(prompt).toContain('Preserve atmosphere explicitly requested by the director');
     expect(prompt).toContain('"stillness"');
     expect(prompt).toContain('"movement"');
     const procedural = buildCastAndSetsPrompt({ ...project, productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 } });
