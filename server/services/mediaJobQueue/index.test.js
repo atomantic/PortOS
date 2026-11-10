@@ -5584,6 +5584,43 @@ describe('provider quota cooldowns', () => {
   });
 
   describe('per-provider parallel limits and 429 rate limit cooldowns (#15593)', () => {
+    it('keeps an unset image-provider limit at its default when the same video provider is configured wider', async () => {
+      mediaJobQueue.syncParallelLimits({ videoGen: { grok: { parallelLimit: 3 } } });
+      expect(mediaJobQueue.laneConcurrencyFor({ kind: 'image', params: { mode: 'grok' } })).toBe(1);
+      expect(mediaJobQueue.laneConcurrencyFor({ kind: 'video', params: { mode: 'grok' } })).toBe(3);
+      stubs.generateImageGrok.mockResolvedValue({ jobId: 'grok-img-job' });
+      const first = await mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'grok', prompt: 'frame 1' } });
+      const second = await mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'grok', prompt: 'frame 2' } });
+      await waitFor(() => stubs.generateImageGrok.mock.calls.length === 1);
+      expect(mediaJobQueue.getJob(second.jobId).status).toBe('queued');
+      imageGenEvents.emit('completed', { generationId: first.jobId, filename: 'first.png' });
+      await waitFor(() => stubs.generateImageGrok.mock.calls.length === 2);
+      imageGenEvents.emit('completed', { generationId: second.jobId, filename: 'second.png' });
+    });
+
+    it('holds a one-slot lane after a bare 429, preserves other lanes and resumes after the cooldown', async () => {
+      stubs.generateVideoGrok.mockResolvedValue({ jobId: 'grok-video-job' });
+      stubs.generateImageGrok.mockResolvedValue({ jobId: 'grok-image-job' });
+      const first = await mediaJobQueue.enqueueJob({ kind: 'video', params: { mode: 'grok', prompt: 'clip 1' } });
+      const second = await mediaJobQueue.enqueueJob({ kind: 'video', params: { mode: 'grok', prompt: 'clip 2' } });
+      await waitFor(() => stubs.generateVideoGrok.mock.calls.length === 1);
+      videoGenEvents.emit('failed', { generationId: first.jobId, error: 'HTTP 429 Too Many Requests', status: 429 });
+      await waitFor(() => (mediaJobQueue.getJob(second.jobId).statusMsg || '').startsWith('Rate-limited (429)'));
+      expect(mediaJobQueue.getJob(second.jobId).status).toBe('queued');
+      expect(stubs.generateVideoGrok).toHaveBeenCalledTimes(1);
+      const image = await mediaJobQueue.enqueueJob({ kind: 'image', params: { mode: 'grok', prompt: 'frame' } });
+      await waitFor(() => stubs.generateImageGrok.mock.calls.length === 1);
+      expect(mediaJobQueue.getJob(image.jobId).status).toBe('running');
+      imageGenEvents.emit('completed', { generationId: image.jobId, filename: 'frame.png' });
+      const realNow = Date.now.bind(Date);
+      const clock = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + mediaJobQueue.RATE_LIMIT_COOLDOWN_MS + 1);
+      try {
+        await waitFor(() => stubs.generateVideoGrok.mock.calls.length === 2);
+        expect(mediaJobQueue.getJob(second.jobId).statusMsg).toBe('Starting');
+        videoGenEvents.emit('completed', { generationId: second.jobId, filename: 'second.mp4' });
+      } finally { clock.mockRestore(); }
+    });
+
     it('runs Grok video up to its parallel limit and queues beyond it', async () => {
       stubs.generateVideoGrok.mockResolvedValue({ jobId: 'grok-job' });
       mediaJobQueue.setParallelLimit('video', 'grok', 2);
