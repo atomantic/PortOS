@@ -300,6 +300,9 @@ export default function LyricsPanel({ project, onEditLocal, onSave, onImport, im
                 className="flex items-center gap-1 text-port-accent min-h-[44px] pointer-fine:sm:min-h-0"><Plus size={13} /> Line</button>
             </span>
           </div>
+          {onAlign && <p className="text-port-text-muted">
+            Local MMS_FA alignment is unsupported on Intel Macs and macOS older than 14. This applies to the machine running PortOS, not your browser. Import LRC/SRT/WebVTT timings above, or edit line times and existing word times here.
+          </p>}
           {alignError && <p role="alert" className="text-port-error">{alignError}</p>}
           {cues.length === 0 && <p className="text-port-text-muted">No lyrics — instrumental tracks plan from sections and beats alone.</p>}
           <div className="max-h-64 overflow-y-auto space-y-1 pr-1">

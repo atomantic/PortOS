@@ -89,6 +89,7 @@ export async function alignProjectLyrics(projectId, options = {}) {
     masterFilename: async (record) => (await import('./songAudio.js')).currentMasterFilename(record),
     decodeAudio: decodeSourceToWav,
     resolveTranscriber,
+    requireCtcPlatform: async () => (await import('./lyricForcedAlign.js')).requireLyricAlignPlatform(),
     forceAlign: async (...args) => (await import('./lyricForcedAlign.js')).forceAlignLyrics(...args),
     separateVocals: async (...args) => (await import('./vocalSeparation.js')).separateProjectVocals(...args),
     stemOfOldSong: async (record) => {
@@ -110,6 +111,8 @@ export async function alignProjectLyrics(projectId, options = {}) {
   if (cueId && !cue) throw new ServerError('That lyric line is no longer on the project.', { status: 404, code: 'NOT_FOUND' });
 
   const expectedTextKey = textKey(cues);
+  // Explicit separation commits to CTC; refuse before provisioning Demucs.
+  if (options.separateVocals === true) await deps.requireCtcPlatform();
   // A stem of the song's previous file is re-separated from the current one.
   if (options.separateVocals === true && (!project.vocalStemFilename || await deps.stemOfOldSong(project))) {
     onProgress({ stage: 'separating' });
@@ -121,6 +124,7 @@ export async function alignProjectLyrics(projectId, options = {}) {
   const expectedMaster = await deps.masterFilename(project);
   onProgress({ stage: 'decoding' });
   const { path: audioPath, source } = await deps.resolveAudio(project);
+  if (source === 'vocal-stem' && options.separateVocals !== true) await deps.requireCtcPlatform();
   const wav = await deps.decodeAudio(audioPath);
   checkCancel();
   const windowed = cue

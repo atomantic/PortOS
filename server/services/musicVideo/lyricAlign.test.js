@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ServerError } from '../../lib/errorHandler.js';
 import { alignProjectLyrics } from './lyricAlign.js';
+import { _lyricAlignRuntimePlan, requireLyricAlignPlatform } from './lyricForcedAlign.js';
 import {
   alignDirectorWords,
   encodePcm16Wav,
@@ -280,6 +281,7 @@ describe('alignProjectLyrics', () => {
         deps: {
           getProject,
           updateProject,
+          requireCtcPlatform: () => {},
           resolveAudio: resolveAudio || (async () => ({ path: 'song.wav', source: 'master', mixPath: null })),
           decodeAudio,
           resolveTranscriber: async () => ({ kind: 'test', transcribe, release }),
@@ -505,6 +507,26 @@ describe('alignProjectLyrics', () => {
     }
   });
 
+  it('refuses Intel CTC before separation or decoding, preserves saved timings, and keeps the legacy master path usable', async () => {
+    const plan = _lyricAlignRuntimePlan({ platform: 'darwin', appleSilicon: false });
+    const requireCtcPlatform = () => requireLyricAlignPlatform(plan);
+    const separateVocals = vi.fn();
+    const forceAlign = vi.fn();
+    for (const separate of [true, false]) {
+      const record = { ...project, ...(separate ? {} : { vocalStemFilename: 'stem.wav' }) };
+      const h = harness(vi.fn(), record, { resolveAudio: async () => ({ path: 'stem.wav', source: 'vocal-stem' }) });
+      await expect(h.run({ separateVocals: separate, deps: { requireCtcPlatform, separateVocals, forceAlign } }))
+        .rejects.toMatchObject({ code: 'LYRIC_ALIGN_CTC_UNSUPPORTED_PLATFORM', message: expect.stringContaining('import LRC/SRT/WebVTT') });
+      expect(h.decodeAudio).not.toHaveBeenCalled();
+      expect(h.updateProject).not.toHaveBeenCalled();
+    }
+    expect(separateVocals).not.toHaveBeenCalled();
+    expect(forceAlign).not.toHaveBeenCalled();
+    const legacy = harness(async () => [{ text: 'walking', startSec: 1, endSec: 1.4 }]);
+    await legacy.run({ deps: { requireCtcPlatform } });
+    expect(legacy.updateProject).toHaveBeenCalledOnce();
+  });
+
   it('separates a missing or old-song stem only with explicit consent, then aligns that stem', async () => {
     const record = { ...project, lyricCues: [{ id: 'a', text: 'walking', startSec: null, endSec: null }] };
     const separated = { ...record, vocalStemFilename: 'stem.wav' };
@@ -514,7 +536,7 @@ describe('alignProjectLyrics', () => {
     const stem = encodePcm16Wav(16000 * 3);
     for (let i = 16000; i < 32000; i++) stem.writeInt16LE(5000, 44 + i * 2);
     const saved = await alignProjectLyrics('mv-1', { separateVocals: true, deps: {
-      getProject: vi.fn().mockResolvedValueOnce(record).mockResolvedValue(separated), updateProject, separateVocals, forceAlign,
+      getProject: vi.fn().mockResolvedValueOnce(record).mockResolvedValue(separated), updateProject, separateVocals, forceAlign, requireCtcPlatform: () => {},
       resolveAudio: async (project) => { expect(project.vocalStemFilename).toBe('stem.wav'); return { path: 'stem.wav', source: 'vocal-stem' }; },
       decodeAudio: async () => stem,
     } });
@@ -528,7 +550,7 @@ describe('alignProjectLyrics', () => {
     // A stem of the song's previous file is separated again from the current one.
     const oldStem = { ...record, vocalStemFilename: 'old-stem.wav', vocalStemMasterFilename: 'old-song.wav' };
     await alignProjectLyrics('mv-1', { separateVocals: true, deps: {
-      getProject: vi.fn().mockResolvedValueOnce(oldStem).mockResolvedValue(separated), updateProject, separateVocals, forceAlign,
+      getProject: vi.fn().mockResolvedValueOnce(oldStem).mockResolvedValue(separated), updateProject, separateVocals, forceAlign, requireCtcPlatform: () => {},
       stemOfOldSong: async (p) => p.vocalStemMasterFilename === 'old-song.wav',
       resolveAudio: async (project) => { expect(project.vocalStemFilename).toBe('stem.wav'); return { path: 'stem.wav', source: 'vocal-stem' }; },
       decodeAudio: async () => stem,
