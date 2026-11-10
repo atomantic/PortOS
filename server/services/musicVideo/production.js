@@ -299,7 +299,7 @@ export function assertProductionStepOpen(project, runId, stepKey, { sceneId, kin
   }
   if (kind === 'video' && step.plateAdmission) {
     const scene = project.scenes.find((entry) => entry.sceneId === sceneId);
-    if (scene.referenceImageId !== step.plateAdmission.assetId || plateRequirementBasis(scene) !== step.plateAdmission.basis || !selectedPlatePasses(scene, runId)) throw productionError(409, 'PRODUCTION_PLATE_CHANGED', 'The selected plate or its requirements changed before animation');
+    if (scene.referenceImageId !== step.plateAdmission.assetId || plateRequirementBasis(scene, 'start', project) !== step.plateAdmission.basis || !selectedPlatePasses(scene, runId, project)) throw productionError(409, 'PRODUCTION_PLATE_CHANGED', 'The selected plate or its requirements changed before animation');
   }
   if (kind === 'image' && step.stillRepair) {
     const scene = project.scenes.find((entry) => entry.sceneId === sceneId);
@@ -689,7 +689,7 @@ export function reserveProductionStep(project, runId, {
       ...(costUsd !== null && isNonBlankStr(costModelId) ? { costModelId: trimTo(costModelId, 200) } : {}),
       ...(['frame', 'clip'].includes(kind) ? { retryBasis: productionRetryBasis(project, sceneId, kind) } : {}),
       ...(['frame', 'clip'].includes(kind) ? { providerBasis: productionProviderBasis(project, kind) } : {}),
-      ...(kind === 'clip' && scene?.referenceImageId ? { plateAdmission: { assetId: scene.referenceImageId, basis: plateRequirementBasis(scene) } } : {}),
+      ...(kind === 'clip' && scene?.referenceImageId ? { plateAdmission: { assetId: scene.referenceImageId, basis: plateRequirementBasis(scene, 'start', project) } } : {}),
       ...(plateRepairBasis ? { plateRepairBasis } : {}),
       ...(stillRepair ? { stillRepair } : {}),
       ...(run.authoring && !author ? { submissionBasis: productionSceneBasis(project, sceneId) } : {}),

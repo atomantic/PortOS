@@ -80,6 +80,8 @@ it('marks a selected frame stale when its prompt, camera, location, cast or refe
   scene.camera = { move: 'push', speed: 'slow' };
   scene.shotSheet = { ...scene.shotSheet, cameraId: 'cam-2' };
   expect(frameState(project, scene, frame).reasons).toEqual(['Camera changed']);
+  delete scene.shotSheet.cameraId;
+  expect(frameState(project, scene, frame).reasons).toEqual(['Camera changed']);
   scene.shotSheet = { ...scene.shotSheet, cameraId: 'cam-1', location: 'Alley' };
   expect(frameState(project, scene, frame).reasons).toEqual(['Location changed']);
   scene.shotSheet = { cameraId: 'cam-1', location: 'Harbor', characters: ['Ben'] };

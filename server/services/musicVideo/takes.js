@@ -276,7 +276,7 @@ export function plateCheckPrompt(scene, take) {
 /** Save a plate check's evidence on the take, unless the shot's intent changed while it ran. */
 export function recordTakePlateEvidence(project, sceneId, takeId, evidence) {
   const { idx, scene, takes, take } = locateTake(project, sceneId, takeId);
-  if (take.assetId !== evidence.assetId || plateRequirementBasis(scene, plateFrameRole(take)) !== evidence.basis) {
+  if (take.assetId !== evidence.assetId || plateRequirementBasis(scene, plateFrameRole(take), project) !== evidence.basis) {
     throw new ServerError('The shot or frame changed during the check. Check it again.', { status: 409, code: 'MUSIC_VIDEO_REVIEW_STALE' });
   }
   const next = { ...scene, takes: takes.map((t) => (t.takeId === takeId ? { ...t, plateEvidence: evidence } : t)) };
@@ -346,7 +346,7 @@ export function swapSceneFrames(project, sceneId) {
 export function reviewSceneTake(project, sceneId, takeId, { status, note, acknowledgeRenderQuality, reviewer }) {
   const { idx, scene, takes, take } = locateTake(project, sceneId, takeId);
   if (acknowledgeRenderQuality) {
-    const evidence = currentPlateEvidence(scene, take);
+    const evidence = currentPlateEvidence(scene, take, project);
     const defect = evidence?.checks.find((check) => check.id === 'render-quality' && check.status === 'fail');
     if (!reviewer || !defect || acknowledgeRenderQuality.basis !== evidence.basis || acknowledgeRenderQuality.note !== defect.note) {
       throw new ServerError('The image or rendering defect changed. Inspect it again before acknowledging.', { status: 409, code: 'MUSIC_VIDEO_REVIEW_STALE' });

@@ -54,12 +54,12 @@ vi.mock('../services/musicVideo/plateReview.js', async () => {
   const { plateReviewEvidence, plateRequirements } = await import('../lib/musicVideoPlateEvidence.js');
   return {
     resolvePlateReviewer: async (pinned) => { plateCheck.reviewerAsked = pinned; return { provider: { id: 'example-vision' }, model: 'example-model', costUsd: 0 }; },
-    reviewPlate: async ({ scene, assetId, runId, prompt, frameRole = 'start' }) => {
+    reviewPlate: async ({ scene, assetId, runId, prompt, frameRole = 'start', project }) => {
       plateCheck.asked = { prompt, frameRole };
       await plateCheck.duringReview?.();
-      return plateReviewEvidence(scene, assetId, runId, JSON.stringify({ checks: plateRequirements(scene, [], frameRole).map(({ id }) => ({
+      return plateReviewEvidence(scene, assetId, runId, JSON.stringify({ checks: plateRequirements(scene, [], frameRole, project).map(({ id }) => ({
         id, status: id === 'plate-prompt' ? 'fail' : 'pass', note: id === 'plate-prompt' ? 'The lighthouse is missing.' : 'Clean',
-      })) }), {}, [], frameRole);
+      })) }), {}, [], frameRole, project);
     },
   };
 });
@@ -188,6 +188,20 @@ describe('scene takes routes', () => {
     plateCheck.duringReview = () => projects.updateScene(project.id, sceneA.sceneId, { framePrompt: 'Another composition' });
     expect((await request(app).post(url)).status).toBe(409);
     expect((await reload()).scenes[0].takes[0].plateEvidence.basis).toBe(checked.body.takes[0].plateEvidence.basis);
+  });
+
+  // Uniquely catches a camera-rule edit accepting evidence from the prior requirements.
+  it('refuses plate evidence when the selected camera rule changes while inspection runs', async () => {
+    seedImage('camera-check.png');
+    const added = await addTake(sceneA.sceneId, { kind: 'image', assetId: 'camera-check.png' });
+    await projects.updateProject(project.id, { cameras: [{ id: 'snap', name: 'Snapshot', kind: 'observer', rule: 'Nobody looks at it.' }] });
+    await projects.updateScene(project.id, sceneA.sceneId, { shotSheet: { cameraId: 'snap' } });
+    const url = `${base()}/scenes/${sceneA.sceneId}/takes/${added.body.take.takeId}/check`;
+    expect((await request(app).post(url)).status).toBe(200);
+    plateCheck.duringReview = () => projects.updateProject(project.id, { cameras: [{ id: 'snap', name: 'Snapshot', kind: 'observer', rule: 'Look into the lens.' }] });
+    const refused = await request(app).post(url);
+    expect(refused.status).toBe(409);
+    expect(refused.body.code).toBe('MUSIC_VIDEO_REVIEW_STALE');
   });
 
   // Uniquely catches an end-frame check judged against the start prompt, or its verdict landing on the start take.

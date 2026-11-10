@@ -88,7 +88,7 @@ export default function TreatmentShotList({ project, treatment, onSave }) {
                 <DirectionText id={idFor(d.sceneId, 'out')} label="Exit" value={d.transitionOut} maxLength={300}
                   onCommit={(transitionOut) => save(d.sceneId, { transitionOut })} />
               </div>
-              <PlateComparison scene={scene} />
+              <PlateComparison project={project} scene={scene} />
               <ShotActionInspector contract={d.actionContract} scene={scene} onSave={(actionContract) => save(d.sceneId, { actionContract })} />
               {d.rationale && <p className="text-[11px] text-port-text-muted">{d.rationale}</p>}
               {d.typographyRole !== 'none' && d.negativeSpace === 'none' && (

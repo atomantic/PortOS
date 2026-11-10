@@ -128,7 +128,7 @@ export function sceneAttention(scene, ctx = {}) {
   if (!locked && sceneHasPendingDecision(scene, { kinds: takeKindsInUse(scene, layer) })) codes.push('candidates-pending');
   if (contract && scene.referenceImageId) {
     const selected = sceneTakeList(scene, 'image').find((take) => take.assetId === scene.referenceImageId);
-    if (currentPlateEvidence(scene, selected)?.verdict !== 'pass') codes.push('plate-unverified');
+    if (currentPlateEvidence(scene, selected, ctx.project)?.verdict !== 'pass') codes.push('plate-unverified');
   }
   if (failed.frame?.[scene.sceneId] || failed.video?.[scene.sceneId]) codes.push('last-failure');
   const badSelected = shown.selectedTakeMarkedBad || (ctx.assetMarks && (

@@ -6,9 +6,9 @@ import { sceneTakeList, takeThumbUrl } from '../../lib/musicVideoTakes.js';
  * run for this image and shot as they are now: an unchecked take wears no badge.
  * `issues` are the other checks that did not pass, to show when the badge is opened.
  */
-export function plateVerdict(scene, take) {
+export function plateVerdict(scene, take, project = null) {
   if (!scene) return null;
-  const evidence = currentPlateEvidence(scene, take);
+  const evidence = currentPlateEvidence(scene, take, project);
   if (!evidence) return null;
   // A failed render-quality check has its own line and acknowledgement on the take card.
   const issues = evidence.checks.filter((check) => check.status !== 'pass' && !(check.id === 'render-quality' && check.status === 'fail'));
@@ -22,7 +22,7 @@ export function plateVerdict(scene, take) {
  * `frames={false}` omits the thumbnails for a card whose take strip already
  * shows each frame once with a verdict badge; only the evidence notes remain.
  */
-export default function PlateComparison({ scene, frames = true }) {
+export default function PlateComparison({ scene, project = null, frames = true }) {
   if (!scene) return null;
   const takes = sceneTakeList(scene, 'image');
   return (
@@ -31,7 +31,7 @@ export default function PlateComparison({ scene, frames = true }) {
       {!takes.length && <p className="text-xs text-port-warning">No plate selected. Generate or import a frame before preflight.</p>}
       <ul className="flex gap-3 overflow-x-auto pb-1">
         {takes.map((take) => {
-          const evidence = currentPlateEvidence(scene, take);
+          const evidence = currentPlateEvidence(scene, take, project);
           const selected = take.assetId === scene.referenceImageId;
           return (
             <li key={take.assetId} className={`${frames ? 'w-48' : 'w-56'} shrink-0 space-y-1`}>

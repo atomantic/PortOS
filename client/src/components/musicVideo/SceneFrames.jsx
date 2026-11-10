@@ -270,7 +270,7 @@ export default function SceneFrames({
             From previous shot: keep this frame as the end frame
           </label>
         )}
-        <SceneTakeStrip scene={scene} kind={start ? 'image' : 'endImage'} busy={takeBusy} grid
+        <SceneTakeStrip project={project} scene={scene} kind={start ? 'image' : 'endImage'} busy={takeBusy} grid
           onRefine={(take) => openRefine(which, take.assetId)} refineDisabled={sharedTake || !!generating}
           onSelect={(take) => onSelectTake?.(scene, take)}
           onReview={(take, review) => onReviewTake?.(scene, take, review)}
