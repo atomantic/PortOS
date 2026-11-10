@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { summarizeMusicVideoProject } from '../../../server/lib/musicVideoSummary.js';
 import {
   changedFieldsText,
-  MUSIC_VIDEO_STAGES, currentProductionRun, deriveNextAction, deriveStages, projectSpend, projectFalSpend, boardJobEstimate, listPreviewSources, describeProjectStatus, resolveStageParam, stageChecklist, stepNotes, autopilotStatus, compareMusicVideoProjectsNewestFirst,
+  MUSIC_VIDEO_STAGES, currentProductionRun, deriveNextAction, deriveStages, projectSpend, projectFalSpend, boardJobEstimate, listPreviewSources, describePreviewSourceChange, describeProjectStatus, resolveStageParam, stageChecklist, stepNotes, autopilotStatus, compareMusicVideoProjectsNewestFirst,
 } from './musicVideoStages.js';
 
 const APPROVED = { art: { approved: true }, storyboard: { approved: true }, proof: { approved: true }, readyForProduction: true };
@@ -405,14 +405,32 @@ describe('listPreviewSources', () => {
     const ids = (project, opts) => listPreviewSources(project, opts).map((source) => source.id);
     expect(ids({ renderHistoryId: 'r1', composition: { mode: 'document', document: { directory: 'd' } }, excerpts }, { finalVideoSrc: '/data/videos/final.mp4' }))
       .toEqual(['final', 'document', 'excerpt:b', 'excerpt:a']);
-    // The final render plays only once its file has resolved; a non-document mode has no live composition.
-    expect(ids({ renderHistoryId: 'r1', composition: { mode: 'concat', document: { directory: 'd' } }, excerpts })).toEqual(['excerpt:b', 'excerpt:a']);
+    // The final render plays only once its file has resolved. Footage keeps the live composite disabled.
+    const footage = listPreviewSources({ renderHistoryId: 'r1', composition: { mode: 'concat', document: { directory: 'd' } }, excerpts });
+    expect(footage.map((source) => source.id)).toEqual(['composite', 'excerpt:b', 'excerpt:a']);
+    expect(footage[0]).toMatchObject({ disabled: true, reason: expect.stringMatching(/no live composite/) });
     // Composing puts the live document ahead of an old final render, and a stale final says so.
     const stale = { renderHistoryId: 'r1', renderDependencyState: { status: 'stale' }, composition: { mode: 'document', document: { directory: 'd' } }, excerpts };
     expect(ids(stale, { finalVideoSrc: '/data/videos/final.mp4', leadWith: 'storyboard' })).toEqual(['document', 'final', 'excerpt:b', 'excerpt:a']);
     expect(listPreviewSources(stale, { finalVideoSrc: '/data/videos/final.mp4' })[0].label).toBe('Final render (out of date)');
-    expect(listPreviewSources({ excerpts: [{ id: 'c', status: 'error' }] })).toEqual([]);
-    expect(listPreviewSources({ excerpts })[0]).toMatchObject({ kind: 'video', src: '/data/videos/b.mp4', startSec: 10, endSec: 20 });
+    expect(listPreviewSources({ excerpts: [{ id: 'c', status: 'error' }] })).toMatchObject([{ id: 'composite', disabled: true }]);
+    expect(listPreviewSources({ excerpts }).find((source) => source.kind === 'video')).toMatchObject({ kind: 'video', src: '/data/videos/b.mp4', startSec: 10, endSec: 20 });
+  });
+
+  it('plays a composed take composite with no rendered segments, and explains every style that cannot', () => {
+    const composed = { composition: { mode: 'composed' }, trackId: 't1', scenes: [scene({ videoHistoryId: null })] };
+    expect(listPreviewSources(composed).filter((source) => !source.disabled).map((source) => source.id)).toEqual(['composite', 'animatic']);
+    expect(listPreviewSources(composed).find((source) => source.id === 'composite')).toMatchObject({ kind: 'composite', label: 'Composition (live)' });
+    const documentMissing = listPreviewSources({ composition: { mode: 'document' } });
+    expect(documentMissing[0]).toMatchObject({ id: 'document', disabled: true, reason: expect.stringMatching(/Attach a composition document/) });
+    expect(listPreviewSources({ composition: { mode: 'code' } })[0].reason).toMatch(/code/);
+    expect(listPreviewSources({ composition: { mode: 'eidoverse' } })[0].reason).toMatch(/Eidoverse/);
+    const fromDocument = listPreviewSources({ composition: { mode: 'document', document: { directory: 'd' } }, trackId: 't1', scenes: [scene()] });
+    const toComposed = listPreviewSources({ ...composed });
+    expect(describePreviewSourceChange(fromDocument, toComposed)).toBe('Preview drops Composition (live) from the composition document and adds Composition (live) from the selected takes.');
+    expect(describePreviewSourceChange(toComposed, listPreviewSources({ composition: { mode: 'concat' }, trackId: 't1', scenes: [scene()] })))
+      .toBe('Preview drops Composition (live) from the selected takes.');
+    expect(describePreviewSourceChange(listPreviewSources({ composition: { mode: 'concat' } }), listPreviewSources({ composition: { mode: 'code' } }))).toBe('');
   });
 
   // Catches the greybox previz missing from the player, or not leading on its own step.
@@ -421,9 +439,9 @@ describe('listPreviewSources', () => {
     const cut = (sceneId) => ({ id: `cut-${sceneId}`, sceneId, startSec: 0, endSec: 4 });
     const project = { trackId: 't1', scenes, previz: { cuts: [cut('s1')], tracks: [] } };
     const ids = (opts) => listPreviewSources(project, opts).map((source) => source.id);
-    expect(ids()).toEqual(['animatic', 'previz']);
-    expect(ids({ leadWith: 'previz' })).toEqual(['previz', 'animatic']);
-    expect(listPreviewSources({ ...project, previz: { cuts: [], tracks: [] } }).map((source) => source.id)).toEqual(['animatic']);
+    expect(ids()).toEqual(['composite', 'animatic', 'previz']);
+    expect(ids({ leadWith: 'previz' })).toEqual(['previz', 'composite', 'animatic']);
+    expect(listPreviewSources({ ...project, previz: { cuts: [], tracks: [] } }).map((source) => source.id)).toEqual(['composite', 'animatic']);
     const stateOf = (p) => deriveStages(p, null).stages.find((stage) => stage.id === 'previz').state;
     expect(stateOf(project)).toBe('todo');
     expect(stateOf({ ...project, previz: { cuts: [cut('s1'), cut('s2')], tracks: [] } })).toBe('done');
@@ -741,8 +759,8 @@ describe('preview source order on Storyboard', () => {
   it('leads with the storyboard, the live document or else the animatic, ahead of draft clips', () => {
     const drafts = [{ id: 'aaaaaa', status: 'complete', filename: 'a.mp4', startSec: 72, endSec: 95 }];
     const board = { trackId: 't1', scenes: [scene()], excerpts: drafts };
-    expect(listPreviewSources(board).map((s) => s.id)).toEqual(['excerpt:aaaaaa', 'animatic']);
-    expect(listPreviewSources(board, { leadWith: 'storyboard' }).map((s) => s.id)).toEqual(['animatic', 'excerpt:aaaaaa']);
+    expect(listPreviewSources(board).map((s) => s.id)).toEqual(['composite', 'excerpt:aaaaaa', 'animatic']);
+    expect(listPreviewSources(board, { leadWith: 'storyboard' }).map((s) => s.id)).toEqual(['composite', 'animatic', 'excerpt:aaaaaa']);
     const doc = { ...board, composition: { mode: 'document', document: { directory: 'd' } } };
     expect(listPreviewSources(doc, { leadWith: 'storyboard' }).map((s) => s.id)).toEqual(['document', 'animatic', 'excerpt:aaaaaa']);
   });
@@ -750,8 +768,8 @@ describe('preview source order on Storyboard', () => {
   // Uniquely catches the Song step opening the animatic, which hides the words when lyric overlays are off.
   it('leads with the lyric timing playthrough on the Song step once words are timed', () => {
     const song = { trackId: 't', audioAnalysis: { durationSec: 60 }, scenes: [{ sceneId: 's1' }], lyricCues: [{ id: 'c', text: 'hi', startSec: 1 }] };
-    expect(listPreviewSources(song, { leadWith: 'lyrics' }).map((s) => s.id)).toEqual(['lyrics', 'animatic']);
-    expect(listPreviewSources(song).map((s) => s.id)).toEqual(['animatic', 'lyrics']);
+    expect(listPreviewSources(song, { leadWith: 'lyrics' }).map((s) => s.id)).toEqual(['lyrics', 'composite', 'animatic']);
+    expect(listPreviewSources(song).map((s) => s.id)).toEqual(['composite', 'animatic', 'lyrics']);
   });
 });
 
@@ -765,11 +783,11 @@ describe('preview source order on Final render', () => {
 
 describe('storyboard animatic preview source', () => {
   it('is offered last once the project has a track and shots', () => {
-    expect(listPreviewSources({ trackId: 't1', scenes: [scene()] }).map((s) => s.id)).toEqual(['animatic']);
-    expect(listPreviewSources({ trackId: 't1', scenes: [] })).toEqual([]);
-    expect(listPreviewSources({ scenes: [scene()] })).toEqual([]);
+    expect(listPreviewSources({ trackId: 't1', scenes: [scene()] }).map((s) => s.id)).toEqual(['composite', 'animatic']);
+    expect(listPreviewSources({ trackId: 't1', scenes: [] })).toMatchObject([{ id: 'composite', disabled: true }]);
+    expect(listPreviewSources({ scenes: [scene()] })).toMatchObject([{ id: 'composite', disabled: true }]);
     const excerpts = [{ id: 'a', status: 'complete', filename: 'a.mp4', startSec: 0, endSec: 5 }];
-    expect(listPreviewSources({ trackId: 't1', scenes: [scene()], excerpts }).map((s) => s.id)).toEqual(['excerpt:a', 'animatic']);
+    expect(listPreviewSources({ trackId: 't1', scenes: [scene()], excerpts }).map((s) => s.id)).toEqual(['composite', 'excerpt:a', 'animatic']);
   });
 });
 

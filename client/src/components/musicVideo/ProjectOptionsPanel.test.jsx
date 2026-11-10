@@ -20,6 +20,22 @@ describe('ProjectOptionsPanel', () => {
     expect(screen.getByText(/Typography cues do not render/)).toBeInTheDocument();
   });
 
+  it('warns which preview sources a render-style change adds or drops', () => {
+    const onRenderStyle = vi.fn();
+    const project = {
+      id: 'mv1', trackId: 't1', scenes: [{ sceneId: 's1', startSec: 0, endSec: 4 }],
+      composition: { mode: 'document', document: { directory: 'd' } },
+    };
+    render(<ProjectOptionsPanel project={project} videoSettings={{ changeFramePin: vi.fn() }}
+      onMediaMode={vi.fn()} onRenderStyle={onRenderStyle} onSaveAutomation={vi.fn()} onSavePolicy={vi.fn()} />);
+    expect(screen.queryByRole('status')).toBeNull();
+    fireEvent.change(screen.getByLabelText('Render style'), { target: { value: 'composed' } });
+    expect(onRenderStyle).toHaveBeenCalledWith('composed');
+    expect(screen.getByRole('status')).toHaveTextContent('Preview drops Composition (live) from the composition document and adds Composition (live) from the selected takes.');
+    fireEvent.change(screen.getByLabelText('Render style'), { target: { value: 'concat' } });
+    expect(screen.getByRole('status')).toHaveTextContent('Preview drops Composition (live) from the composition document.');
+  });
+
   it('saves the production strategy and generated-video allowance in place', async () => {
     const onSavePolicy = open();
     expect(screen.queryByLabelText(/Maximum generated video/)).toBeNull();
