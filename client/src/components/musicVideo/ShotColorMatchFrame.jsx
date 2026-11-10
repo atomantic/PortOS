@@ -27,7 +27,7 @@ export default function ShotColorMatchFrame({ project, scene, className = 'h-ful
           <feColorMatrix type="matrix" values={parts.saturate} />
         </filter>
       </svg>
-      <div className={className} style={{ filter: `url(#${filterId})` }}>
+      <div className={className} data-document-color-match={String(scene.sceneId).replace(/[^A-Za-z0-9_-]/g, '')} style={{ filter: `url(#${filterId})` }}>
         {children}
       </div>
     </>

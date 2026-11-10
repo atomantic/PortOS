@@ -21,7 +21,7 @@ export function templateEffects(project, scene) {
   ]));
 }
 
-/** The native player cannot draw beat pulses/glitch strips; use the document renderer when they can be visible. */
+/** Older native playback responses have no drawing data; keep their visible beat reactions on the worker. */
 export function hasTemplateBeatReaction(project) {
   const analysis = project.audioAnalysis;
   if (!(analysis?.beats?.length || analysis?.downbeats?.length)) return false;

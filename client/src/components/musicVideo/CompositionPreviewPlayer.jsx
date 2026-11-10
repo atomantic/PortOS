@@ -19,11 +19,13 @@ const buttonCls = 'flex items-center gap-1 bg-port-bg border border-port-border 
 // Hashed: the preview socket caps `revision` at 500 characters and a whole song's word times run far past it.
 const playthroughKey = (project) => JSON.stringify([
   project.audioAnalysis?.durationSec ?? null,
+  project.lyricOverlayEnabled,
   (project.lyricCues || []).map((cue) => [cue.text, cue.startSec, cue.endSec, (cue.words || []).map((w) => [w.startSec, w.endSec])]),
   (project.lyricMarkers || []).map((m) => [m.type, m.label, m.line]),
   (project.scenes || []).map((s) => [s.startSec, s.endSec, s.textZone, s.lyricRole, s.lyricSize]),
   // The lyrics step off the title card's corner while it shows.
   titleCardVisible(project.titleCard) ? [project.titleCard.position, titleCardWindows(project.titleCard)] : null,
+  project.composition?.mode === 'document' ? [project.composition.textCues, project.composition.style, project.treatment?.brief] : null,
 ]);
 export const playthroughVersion = (project) => {
   const key = playthroughKey(project);

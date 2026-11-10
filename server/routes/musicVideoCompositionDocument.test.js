@@ -256,7 +256,9 @@ describe('music-video composition documents', () => {
     expect((await uploadZip(project.id, createZip(Object.entries(FILES).map(([name, data]) => ({ name, data }))))).status).toBe(201);
     expect((await request(app).get(playback)).body).toEqual({ native: false, reason: 'unrecognized-entrypoint' });
     expect((await request(app).post(`/api/music-video/${project.id}/composition/document/template`).send({})).status).toBe(201);
-    expect((await request(app).get(playback)).body).toEqual({ native: true });
+    const native = (await request(app).get(playback)).body;
+    expect(native).toMatchObject({ native: true, data: { render: { width: 1920, height: 1080, fps: 24 }, scenes: expect.any(Array), song: expect.any(Object) } });
+    expect(native.data.scenes.every(scene => scene.media === null)).toBe(true);
   });
 
   it('reports selected effects as unsupported until the recognized engine is explicitly updated', async () => {

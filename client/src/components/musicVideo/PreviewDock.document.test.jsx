@@ -38,6 +38,31 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('PreviewDock composition document', () => {
+  it('uses the native drawing data and refreshes it when a card or beat input changes', async ({ onTestFinished }) => {
+    // This test owns routing/data refresh; the browser suite owns canvas pixels.
+    const getContext = HTMLCanvasElement.prototype.getContext;
+    const context = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(function (...args) {
+      return this.dataset.testid === 'document-template-canvas' ? null : getContext.apply(this, args);
+    });
+    onTestFinished(() => context.mockRestore());
+    playback.mockResolvedValue({ native: true, data: { render: { width: 1920, height: 1080, fps: 24 }, scenes: [], song: {} } });
+    const active = { ...project, audioAnalysis: { beats: [0], features: { envelopes: { fps: 1, rms: [0.5] } } } };
+    const draw = value => <MemoryRouter><PreviewDock project={value} sources={listPreviewSources(value, { leadWith: 'storyboard' })} audioUrl="/song.mp3" /></MemoryRouter>;
+    const view = render(draw(active));
+    expect(await screen.findByTestId('document-template-canvas')).toBeTruthy();
+    expect(screen.queryByTestId('document-template-finish')).toBeNull();
+    expect(screen.getByText(/camera moves, beat reactions, cards, HUD and words/)).toBeTruthy();
+    const audio = screen.getByLabelText('Song for the composition preview');
+    const changed = { ...active, composition: { ...active.composition, overlay: { enabled: true, titleLines: ['Changed'] } } };
+    view.rerender(draw(changed));
+    await waitFor(() => expect(playback).toHaveBeenCalledTimes(2));
+    expect(await screen.findByTestId('document-template-canvas')).toBeTruthy();
+    expect(screen.getByLabelText('Song for the composition preview')).toBe(audio);
+    view.rerender(draw({ ...changed, templateEffects: { beatReaction: 0 } }));
+    await waitFor(() => expect(playback).toHaveBeenCalledTimes(3));
+    expect(opens()).toHaveLength(0);
+  });
+
   // Uniquely catches a stock-template video starting the isolated renderer just to play, or a paused frame that is not the document's own.
   it('plays the shipped template in the page and asks the worker only for the paused frame', async () => {
     playback.mockResolvedValue({ native: true });
@@ -98,7 +123,7 @@ it('updates the native template finish and camera when video or shot controls ch
 });
 
 // Uniquely catches a beat control changing export while the playing preview omits its pulse/glitch.
-it('uses the document renderer for active beat reaction, including shot overrides, and native playback when disabled', async () => {
+it('keeps active beat reactions on the worker for older playback responses without drawing data', async () => {
   playback.mockResolvedValue({ native: true });
   const active = { ...project, audioAnalysis: { beats: [0], features: { envelopes: { fps: 1, rms: [0.5] } } } };
   const draw = p => <MemoryRouter><PreviewDock project={p} sources={listPreviewSources(p, { leadWith: 'storyboard' })} audioUrl="/song.mp3" /></MemoryRouter>;

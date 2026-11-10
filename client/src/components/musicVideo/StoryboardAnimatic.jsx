@@ -27,6 +27,7 @@ import TransitionGlitch from './TransitionGlitch.jsx';
 import WipeOverlay from './WipeOverlay.jsx';
 import ExactDocumentFrame from './ExactDocumentFrame.jsx';
 import { DocumentFootageMove, DocumentTemplateFinish, useDocumentCamera } from './DocumentTemplateLayers.jsx';
+import DocumentTemplateCanvas from './DocumentTemplateCanvas.jsx';
 import ImageEffectStill from './ImageEffectStill.jsx';
 import { clipOffsetSec, clipReversed, clipSpeedRate, isLayeredComposition, isSelfDrawnLayer, sceneVisualLayer, stillFrameTransform } from '../../lib/musicVideoLayers.js';
 import { resolveSourceTake, scenePlayableClipId } from '../../../../server/lib/musicVideoSourceTake.js';
@@ -69,6 +70,8 @@ function useLyricOverlay({ project, enabled, audioRef, time }) {
   const captureRef = useRef(null);
   const seekState = useRef({ inFlight: false, pending: null, ready: false, sentAt: 0 });
   const version = enabled ? playthroughVersion(project) : null;
+  const documentClock = project.composition?.mode === 'document';
+  const frameTime = (t) => documentClock ? Math.floor(t * 24 + 1e-6) / 24 : t;
   // The opening title card rides on the lyric layer, posted live so its panel's edits show at once.
   const titleCard = useMemo(() => normalizeTitleCard(project.titleCard), [project.titleCard]);
   const titleCardRef = useRef(titleCard);
@@ -91,6 +94,7 @@ function useLyricOverlay({ project, enabled, audioRef, time }) {
   }, [project.id, version]);
 
   const postSeek = useCallback((t) => {
+    t = documentClock ? Math.floor(t * 24 + 1e-6) / 24 : t;
     const frame = iframeRef.current?.contentWindow;
     const state = seekState.current;
     if (!frame || !state.ready) return;
@@ -99,7 +103,7 @@ function useLyricOverlay({ project, enabled, audioRef, time }) {
     state.inFlight = true;
     state.sentAt = performance.now();
     frame.postMessage({ type: 'portos-mv:seek', t }, '*');
-  }, []);
+  }, [documentClock]);
 
   useEffect(() => {
     if (!preview) return undefined;
@@ -161,6 +165,7 @@ function useLyricOverlay({ project, enabled, audioRef, time }) {
   }, [preview, postSeek, audioRef]);
 
   const capture = (t) => new Promise((resolve, reject) => {
+    t = frameTime(t);
     if (!seekState.current.ready || failed || !iframeRef.current) { reject(new Error('Lyric frame unavailable')); return; }
     const id = uuidv4();
     const finish = (done, result) => { clearTimeout(timer); captureRef.current = null; done(result); };
@@ -390,6 +395,7 @@ function ShotClip({ scene, audioRef, time, current, preload = 'auto' }) {
       aria-label={`Clip for ${scene.label || 'this shot'}`}
       aria-hidden={current ? undefined : true}
       data-ready={ready ? 'true' : 'false'}
+      data-document-scene={scene.sceneId}
       className={`pointer-events-none absolute inset-0 h-full w-full ${fit === 'fill' ? 'object-cover' : 'object-contain'} ${fit === 'black' ? 'bg-black' : ''} ${current && ready ? 'opacity-100' : 'opacity-0'}`}
     />
   );
@@ -618,7 +624,7 @@ function useColdOpen({ project, songRef }) {
  * it once the words are timed (a toggle hides them). `seekRequest`
  * (`{ t, n }`) is the scene-card seek the other preview sources honour too.
  */
-export default function StoryboardAnimatic({ project, audioUrl, seekRequest, collapsed, onEditShot = null, variant = 'animatic' }) {
+export default function StoryboardAnimatic({ project, audioUrl, seekRequest, collapsed, onEditShot = null, variant = 'animatic', nativeData = null }) {
   const audioRef = useRef(null);
   const figureRef = useRef(null);
   const applied = useRef(null);
@@ -630,6 +636,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
   // A composition document plays here natively; once the viewer has played or
   // moved the song, a paused frame shows the document's own exact frame.
   const documentVariant = variant === 'document';
+  const nativeDrawing = documentVariant && !!nativeData;
   const [touched, setTouched] = useState(false);
   const exactRef = useRef(null);
   const documentCamera = useDocumentCamera(project, documentVariant);
@@ -649,7 +656,8 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
   // The opening title card rides on the lyric layer, so a video with its words switched off still
   // needs that layer for the card; the page itself keeps the words hidden.
   const cardOnly = project.lyricOverlayEnabled === false && hasTimedLyrics(project) && titleCardVisible(normalizeTitleCard(project.titleCard));
-  const { overlay, failed, capture: captureLyrics } = useLyricOverlay({ project, enabled: (lyricsAvailable && lyricsOn) || cardOnly, audioRef, time });
+  const templateCues = documentVariant && (project.composition?.textCues || []).some(cue => cue.text && Number.isFinite(cue.startSec) && cue.endSec > cue.startSec);
+  const { overlay, failed, capture: captureLyrics } = useLyricOverlay({ project, enabled: ((lyricsAvailable || templateCues) && lyricsOn) || cardOnly, audioRef, time });
   // The ending (cutting room floor, then credits): it plays when the song ends, and Ending plays it straight away; playing or seeking the song leaves it.
   const { statsOutro, creditsOutro } = project;
   const endingPlan = useMemo(() => endingParts({ statsOutro, creditsOutro }), [statsOutro, creditsOutro]);
@@ -852,9 +860,12 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
         <p className="text-xs text-port-text-muted">Selected takes cut on the song with the video look, per-shot looks, transitions and glitches. Final-quality shot renders are not required.</p>
       )}
       {documentVariant && (
-        <p className="text-xs text-port-text-muted">Plays the selected takes in this browser. Paused, it shows the composition's exact frame; the template's beat reactions, cards and HUD appear only there for now.</p>
+        <p className="text-xs text-port-text-muted">{nativeDrawing
+          ? "Plays the selected takes with the template's camera moves, beat reactions, cards, HUD and words. Paused, it shows the composition's exact frame."
+          : "Plays the selected takes in this browser. Paused, it shows the composition's exact frame; the template's beat reactions, cards and HUD appear only there for now."}</p>
       )}
-      <figure ref={figureRef} aria-label={pictureLabel} className="relative aspect-video w-full overflow-hidden rounded border border-port-border bg-black">
+      <figure ref={figureRef} aria-label={pictureLabel} className="relative aspect-video w-full overflow-hidden rounded border border-port-border bg-black"
+        style={nativeDrawing ? { aspectRatio: `${nativeData.render.width} / ${nativeData.render.height}` } : undefined}>
         {/* The shot's resolved film look over the whole picture, lyrics included. */}
         <FilmLookFrame look={resolvedLook} frame={Math.round((outro.active ? songEndSec + outro.t : cold.active ? cold.time - cold.seconds : time) * ANIMATIC_FPS)}
           playing={playing || cold.active || (outro.active && !outro.paused && outro.t < outro.seconds)} className="h-full w-full">
@@ -874,13 +885,14 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
             </div>
           </div>
         ) : animaticPictures}
-        {documentVariant && !outro.active && <DocumentTemplateFinish project={project} audioRef={clock.ref} time={clock.time} fps={ANIMATIC_FPS} />}
+        {nativeDrawing && !cold.active && !outro.active && <DocumentTemplateCanvas project={project} data={nativeData} figureRef={figureRef} audioRef={audioRef} time={time} />}
+        {documentVariant && !nativeDrawing && !outro.active && <DocumentTemplateFinish project={project} audioRef={clock.ref} time={clock.time} fps={ANIMATIC_FPS} />}
         {/* The shots' VHS glitches on their cuts, on the frames the final render repaints. */}
-        <TransitionGlitch scenes={clock.scenes} cameras={project.cameras} figureRef={figureRef} audioRef={clock.ref} time={clock.time} layered={layered}
-          endSec={cold.active ? cold.seconds : Number(project.audioAnalysis?.durationSec) || null} fps={ANIMATIC_FPS} />
+        {(!nativeDrawing || cold.active) && <TransitionGlitch scenes={clock.scenes} cameras={project.cameras} figureRef={figureRef} audioRef={clock.ref} time={clock.time} layered={layered}
+          endSec={cold.active ? cold.seconds : Number(project.audioAnalysis?.durationSec) || null} fps={ANIMATIC_FPS} />}
         {/* The shots' wipes on their cuts, on the frames the final render paints them. */}
-        <WipeOverlay scenes={clock.scenes} figureRef={figureRef} audioRef={clock.ref} time={clock.time} planned={planned}
-          endSec={cold.active ? cold.seconds : Number(project.audioAnalysis?.durationSec) || null} fps={ANIMATIC_FPS} />
+        {(!nativeDrawing || cold.active) && <WipeOverlay scenes={clock.scenes} figureRef={figureRef} audioRef={clock.ref} time={clock.time} planned={planned}
+          endSec={cold.active ? cold.seconds : Number(project.audioAnalysis?.durationSec) || null} fps={ANIMATIC_FPS} />}
         {!cold.active && overlay}
         {outro.active && <EndingCanvas parts={endingPlan} stats={outro.stats} t={outro.t} />}
         </FilmLookFrame>

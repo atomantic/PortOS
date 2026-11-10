@@ -76,7 +76,9 @@ export async function buildLyricPlaythroughPreview(project, { overlay = false } 
   const durationSec = documentSongDuration(project);
   if (!durationSec) throw new ServerError('Analyze the song before playing the lyrics through', { status: 409, code: 'NOT_ANALYZED' });
   const cues = project.lyricCues || [];
-  if (!cues.some((cue) => finite(cue?.startSec) && isNonBlankStr(cue?.text))) {
+  const templateCues = overlay && project.composition?.mode === 'document' && (project.composition.textCues || [])
+    .some(cue => finite(cue?.startSec) && finite(cue?.endSec) && cue.endSec > cue.startSec && isNonBlankStr(cue.text));
+  if (!templateCues && !cues.some((cue) => finite(cue?.startSec) && isNonBlankStr(cue?.text))) {
     throw new ServerError('Align the words before playing the lyrics through', { status: 409, code: 'NO_TIMED_LYRICS' });
   }
   return buildDocumentPreview(playthroughProject(project, durationSec, !overlay), { files: overlay ? await readLyricOverlayDocumentFiles() : await readTemplateDocumentFiles('layered') });
@@ -88,7 +90,9 @@ export async function buildLyricPlaythroughPreview(project, { overlay = false } 
 function playthroughProject(project, durationSec, timingOnly = false) {
   const shots = timedShots(project.scenes);
   const scenes = shots.length ? shots : lyricScenes(project.lyricCues || [], project.lyricMarkers, durationSec);
-  return { ...project, ...(timingOnly ? { lyricOverlayEnabled: true } : {}), scenes, composition: { mode: 'document', textCues: [] }, filmLook: null };
+  const templateWords = !timingOnly && project.composition?.mode === 'document';
+  return { ...project, ...(timingOnly ? { lyricOverlayEnabled: true } : {}), scenes,
+    composition: { mode: 'document', textCues: templateWords ? project.composition.textCues || [] : [], style: templateWords ? project.composition.style : null }, filmLook: null };
 }
 
 /**
