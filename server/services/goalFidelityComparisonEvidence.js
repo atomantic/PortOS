@@ -23,6 +23,13 @@ function exposedAnchor(diff) {
       || !/^\+\s*const composites = \[catalog\?\.currentComposite, catalog\?\.composite\]\.filter\(Boolean\);$/m.test(chart)
       || !/^\+\s*const composite = composites\.find\(item => item\.anchor === settings\.anchor\) \|\| composites\[0\];$/m.test(chart)
       || !/^\+\s*const rows = useMemo\(\(\) => \(composite\?\.rows \|\| \[\]\)\.map\(row => \{$/m.test(chart)) return null;
+  const calculation = [
+    '+  for (const row of scored.filter(row => row.benchmark === anchor)) keepNewestQuality(anchors, identity(row), row);',
+    "+    if (anchors.has(key)) return evidenceMetric(anchors.get(key), 'quality', anchor);",
+    "+      const taskRow = latest(modelRows.filter(row => effortKey(row.effort) === effort && row.benchmark === anchor), 'costPerTask');",
+    "+        costPerTask: incomparableReason ? null : provider.localInference ? localCost() : evidenceMetric(taskRow, 'costPerTask', `${anchor} task cost; API reference`, false),",
+  ];
+  if (!calculation.every(line => composite.split('\n').includes(line))) return null;
   return /^\+export const CURRENT_COMPARISON_ANCHOR = '([^'\n]+)';$/m.exec(composite)?.[1] || null;
 }
 

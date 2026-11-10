@@ -88,6 +88,10 @@ const brokenComparisonDiff = comparisonCase.diff.replace(
   '+  const composites = [catalog?.currentComposite, catalog?.composite].filter(Boolean);',
   '+  const composites = [catalog?.composite].filter(Boolean);',
 )
+const brokenComparisonCostDiff = comparisonCase.diff.replace(
+  "+      const taskRow = latest(modelRows.filter(row => effortKey(row.effort) === effort && row.benchmark === anchor), 'costPerTask');",
+  '+      const taskRow = null;',
+)
 const unrelatedComparisonDiff = 'diff --git a/client/src/components/models/ModelComparison.jsx b/client/src/components/models/ModelComparison.jsx\n--- a/client/src/components/models/ModelComparison.jsx\n+++ b/client/src/components/models/ModelComparison.jsx\n@@ -1 +1 @@\n-const title = "Model chart";\n+const title = "claude-fable-5.2";\n'
 // Public PR #11371 and a reconstructed one-finding audit objective, never live run data.
 const observabilityCase = JSON.parse(readFileSync(new URL('../test/fixtures/goal-fidelity-observability.json', import.meta.url), 'utf8'))
@@ -1411,6 +1415,7 @@ describe('codeReview helpers', () => {
     it.runIf(Boolean(process.env.GOAL_FIDELITY_EVAL_MODEL)).each([
       ['shipped data exposed by the route and chart', comparisonCase.diff, comparisonReference, 'ship'],
       ['chart ignores the current composite', brokenComparisonDiff, null, 'rethink'],
+      ['current composite loses the task cost', brokenComparisonCostDiff, null, 'rethink'],
       ['unrelated chart title', unrelatedComparisonDiff, null, 'rethink'],
     ])('judges the comparison-chart case with a local model: %s', async (_name, diff, referenceEvidence, expected) => {
       global.fetch = nativeFetch

@@ -71,6 +71,14 @@ describe('comparison evidence for goal-fidelity review', () => {
       '+    res.json({ ...catalog, inventory, composite });',
     ) })).toBeNull();
     expect(await evidence({ diff: fixture.diff.replace(
+      "+      const taskRow = latest(modelRows.filter(row => effortKey(row.effort) === effort && row.benchmark === anchor), 'costPerTask');",
+      '+      const taskRow = null;',
+    ) })).toBeNull();
+    expect(await evidence({ diff: fixture.diff.replace(
+      "+    if (anchors.has(key)) return evidenceMetric(anchors.get(key), 'quality', anchor);",
+      '+    if (anchors.has(key)) return null;',
+    ) })).toBeNull();
+    expect(await evidence({ diff: fixture.diff.replace(
       "+export const CURRENT_COMPARISON_ANCHOR = 'Artificial Analysis Intelligence Index v5.0.1';",
       "+export const CURRENT_COMPARISON_ANCHOR = 'Different benchmark';",
     ) })).toBeNull();
