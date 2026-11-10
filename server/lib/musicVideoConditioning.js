@@ -55,6 +55,7 @@ export function musicVideoClipReferenceCapacity(backend, model = null, { endFram
 export function musicVideoReferenceCapacity(mode, { modelId = null, localModel = null } = {}) {
   if (!isEditCapableMode(mode)) return 0;
   if (mode === 'local') {
+    if (Number.isInteger(localModel?.maxReferenceImages)) return localModel.maxReferenceImages;
     if (localModel?.pipelineClass === 'QwenImage21Pipeline' || localModel?.runner === 'flux3') return 10;
     return localModel?.runner === RUNNER_FAMILIES.FLUX2 ? 4 : 0;
   }

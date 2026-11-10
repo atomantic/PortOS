@@ -20,6 +20,7 @@ export const SELF_SERVE_RUNTIME_REMEDIES = Object.freeze([
   IMAGE_RUNTIME_REMEDY.INSTALL_FLUX3,
   IMAGE_RUNTIME_REMEDY.INSTALL_MOSS_SWIFT,
   IMAGE_RUNTIME_REMEDY.DOWNLOAD_MOSS_WEIGHTS,
+  IMAGE_RUNTIME_REMEDY.INSTALL_MINIMAX_H3,
 ]);
 
 export const isSelfServeRuntimeRemedy = (kind) => SELF_SERVE_RUNTIME_REMEDIES.includes(kind);
@@ -45,6 +46,12 @@ export default function RuntimeRemedyModals({ kind, modelId = null, onClose, onC
         doneText={mossWeights ? 'MOSS SFT weights are verified.' : 'MOSS Swift is installed. Download the SFT weights separately.'}
         onClose={onClose}
         onComplete={onComplete}
+      />
+      <RuntimeInstallModal
+        open={kind === IMAGE_RUNTIME_REMEDY.INSTALL_MINIMAX_H3}
+        runtime="minimax_h3" label="MiniMax H3 MLX runtime"
+        description="Installing the pinned MLX runtime shared with H3 video. Requires Apple Silicon macOS 14+. Model weights download separately."
+        onClose={onClose} onComplete={onComplete}
       />
     </>
   );
