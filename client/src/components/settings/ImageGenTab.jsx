@@ -98,13 +98,18 @@ const EMPTY_MEDIA_FORM = Object.freeze({
   grokEnabled: false,
   grokPath: '',
   grokAspectRatio: '',
+  grokImageParallelLimit: 1,
+  grokVideoParallelLimit: 1,
   agyEnabled: false,
   agyPath: '',
   agyModel: '',
+  agyImageParallelLimit: 1,
   runwayEnabled: false,
   runwayModel: 'gen4_image',
   runwayResolution: '720p',
   runwayDeleteAfterDownload: false,
+  runwayImageParallelLimit: 1,
+  runwayVideoParallelLimit: 1,
   // fal.ai image backend — a metered API, gated by its own toggle like the
   // CLIs. The API key is NOT part of this slice: it is the fal.ai credential
   // the video backend already owns (the Defaults tab's key row).
@@ -112,6 +117,10 @@ const EMPTY_MEDIA_FORM = Object.freeze({
   // '' = no pin → FAL_IMAGE_DEFAULT_MODEL server-side.
   falModel: '',
   falDeleteAfterDownload: false,
+  falImageParallelLimit: 1,
+  falVideoParallelLimit: 1,
+  geminiImageParallelLimit: 1,
+  geminiVideoParallelLimit: 1,
   // Per-provider cleaner toggles (see CleanersToggles in the provider sections).
   cleanC2PAByMode: { external: true, local: true, codex: true, grok: false, agy: false, fal: false, runway: false },
   denoiseByMode: { external: false, local: false, codex: false, grok: false, agy: false, fal: false, runway: false },
@@ -154,16 +163,25 @@ const mediaFormFromSettings = (s) => {
     grokEnabled: gk.enabled === true,
     grokPath: gk.grokPath || '',
     grokAspectRatio: gk.aspectRatio || '',
+    grokImageParallelLimit: clampParallel(gk.parallelLimit, gk.parallelLimitBounds || bounds),
+    grokVideoParallelLimit: clampParallel(vg.grok?.parallelLimit, vg.grok?.parallelLimitBounds || bounds),
     agyEnabled: ay.enabled === true,
     agyPath: ay.agyPath || '',
     agyModel: ay.model || '',
+    agyImageParallelLimit: clampParallel(ay.parallelLimit, ay.parallelLimitBounds || bounds),
     runwayEnabled: ig.runway?.enabled === true,
     runwayModel: ig.runway?.model || 'gen4_image',
     runwayResolution: ig.runway?.resolution || '720p',
     runwayDeleteAfterDownload: ig.runway?.deleteAfterDownload === true,
+    runwayImageParallelLimit: clampParallel(ig.runway?.parallelLimit, ig.runway?.parallelLimitBounds || bounds),
+    runwayVideoParallelLimit: clampParallel(vg.runway?.parallelLimit, vg.runway?.parallelLimitBounds || bounds),
     falEnabled: fl.enabled === true,
     falModel: fl.model || '',
     falDeleteAfterDownload: fl.deleteAfterDownload === true,
+    falImageParallelLimit: clampParallel(fl.parallelLimit, fl.parallelLimitBounds || bounds),
+    falVideoParallelLimit: clampParallel(vg.fal?.parallelLimit, vg.fal?.parallelLimitBounds || bounds),
+    geminiImageParallelLimit: clampParallel(ig.gemini?.parallelLimit, ig.gemini?.parallelLimitBounds || bounds),
+    geminiVideoParallelLimit: clampParallel(vg.gemini?.parallelLimit, vg.gemini?.parallelLimitBounds || bounds),
     cleanC2PAByMode: Object.fromEntries(Object.entries(cleaners).map(([m, c]) => [m, c.cleanC2PA])),
     denoiseByMode: Object.fromEntries(Object.entries(cleaners).map(([m, c]) => [m, c.denoise])),
     // Load every target entry whole (including videoModel keys this tab
@@ -198,8 +216,17 @@ const normalizeMediaForm = (f, parallelBounds) => ({
   codexParallelLimit: clampParallel(f.codexParallelLimit, parallelBounds),
   grokPath: f.grokPath.trim(),
   grokAspectRatio: f.grokAspectRatio.trim(),
+  grokImageParallelLimit: clampParallel(f.grokImageParallelLimit, parallelBounds),
+  grokVideoParallelLimit: clampParallel(f.grokVideoParallelLimit, parallelBounds),
   agyPath: f.agyPath.trim(),
   agyModel: f.agyModel.trim(),
+  agyImageParallelLimit: clampParallel(f.agyImageParallelLimit, parallelBounds),
+  runwayImageParallelLimit: clampParallel(f.runwayImageParallelLimit, parallelBounds),
+  runwayVideoParallelLimit: clampParallel(f.runwayVideoParallelLimit, parallelBounds),
+  falImageParallelLimit: clampParallel(f.falImageParallelLimit, parallelBounds),
+  falVideoParallelLimit: clampParallel(f.falVideoParallelLimit, parallelBounds),
+  geminiImageParallelLimit: clampParallel(f.geminiImageParallelLimit, parallelBounds),
+  geminiVideoParallelLimit: clampParallel(f.geminiVideoParallelLimit, parallelBounds),
   renderDefaults: pruneRenderDefaults(f.renderDefaults),
 });
 
@@ -228,19 +255,38 @@ const sliceFieldsOf = (f) => ({
   },
   'imageGen.grok': {
     enabled: f.grokEnabled, grokPath: f.grokPath, aspectRatio: f.grokAspectRatio,
+    parallelLimit: f.grokImageParallelLimit,
     cleanC2PA: f.cleanC2PAByMode.grok, denoise: f.denoiseByMode.grok,
   },
   'imageGen.agy': {
     enabled: f.agyEnabled, agyPath: f.agyPath, model: f.agyModel,
+    parallelLimit: f.agyImageParallelLimit,
     cleanC2PA: f.cleanC2PAByMode.agy, denoise: f.denoiseByMode.agy,
   },
   'imageGen.runway': {
     enabled: f.runwayEnabled, model: f.runwayModel, resolution: f.runwayResolution, deleteAfterDownload: f.runwayDeleteAfterDownload,
+    parallelLimit: f.runwayImageParallelLimit,
     cleanC2PA: f.cleanC2PAByMode.runway, denoise: f.denoiseByMode.runway,
   },
   'imageGen.fal': {
     enabled: f.falEnabled, model: falImageFamily(f.falModel) ? f.falModel : '', deleteAfterDownload: f.falDeleteAfterDownload,
+    parallelLimit: f.falImageParallelLimit,
     cleanC2PA: f.cleanC2PAByMode.fal, denoise: f.denoiseByMode.fal,
+  },
+  'imageGen.gemini': {
+    parallelLimit: f.geminiImageParallelLimit,
+  },
+  'videoGen.grok': {
+    parallelLimit: f.grokVideoParallelLimit,
+  },
+  'videoGen.gemini': {
+    parallelLimit: f.geminiVideoParallelLimit,
+  },
+  'videoGen.fal': {
+    parallelLimit: f.falVideoParallelLimit,
+  },
+  'videoGen.runway': {
+    parallelLimit: f.runwayVideoParallelLimit,
   },
   'imageGen.expose': { a1111: f.exposeA1111 },
   renderDefaults: Object.fromEntries(RENDER_TARGET_OPTIONS.map(({ id }) => [id, f.renderDefaults[id] ?? null])),

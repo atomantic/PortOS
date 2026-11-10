@@ -213,6 +213,17 @@ describe('ShotSheetPanel', () => {
     expect(board.treatment.save).toHaveBeenCalledWith({ shotDirections: [{ sceneId: 'a', medium: 'still', mediumPinned: true }] });
   });
 
+  // Catches a camera's do-not-match flag not saving with the rest of the camera.
+  it('saves a camera that should not be color matched', () => {
+    const board = boardFor();
+    render(<ShotSheetPanel board={board} />);
+    openPanel();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'VHS: do not match' }));
+    const saved = board.saveProjectFields.mock.calls[0][0].cameras;
+    expect(saved.find((camera) => camera.id === 'vhs')).toMatchObject({ doNotMatch: true });
+    expect(saved.find((camera) => camera.id === 'obs').doNotMatch).toBeUndefined();
+  });
+
   // Catches a camera edit not persisting to the project.
   it('adds a camera to the project', () => {
     const board = boardFor();

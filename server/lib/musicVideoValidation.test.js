@@ -16,6 +16,23 @@ describe('musicVideoPublishPrepareSchema (DistroKid release answers)', () => {
   });
 });
 
+describe('source take (#15588)', () => {
+  const sourceTake = { sceneId: 'mvs-source', offsetSec: 1.5 };
+
+  it('accepts a source take on create and update, and clears it with null', () => {
+    expect(musicVideoSceneCreateSchema.safeParse({ sourceTake }).data?.sourceTake).toEqual(sourceTake);
+    expect(musicVideoSceneCreateSchema.safeParse({ sourceTake: { sceneId: 'mvs-source' } }).success).toBe(true);
+    expect(musicVideoSceneUpdateSchema.safeParse({ sourceTake: null }).data).toEqual({ sourceTake: null });
+  });
+
+  it('refuses a blank scene, a negative offset, and extra keys', () => {
+    expect(musicVideoSceneUpdateSchema.safeParse({ sourceTake: { sceneId: '' } }).success).toBe(false);
+    expect(musicVideoSceneUpdateSchema.safeParse({ sourceTake: { sceneId: 'mvs-source', offsetSec: -1 } }).success).toBe(false);
+    expect(musicVideoSceneUpdateSchema.safeParse({ sourceTake: { sceneId: 'mvs-source', clip: 'a' } }).success).toBe(false);
+    expect(musicVideoSceneCreateSchema.safeParse({ sourceTake, extra: true }).success).toBe(false);
+  });
+});
+
 describe('scene camera (#10589)', () => {
   it('accepts a catalog camera on create and update, and clears it with null', () => {
     const camera = { move: 'whip-pan', speed: 'snap', endFraming: 'medium', onBeat: true };

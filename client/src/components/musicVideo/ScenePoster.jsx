@@ -7,8 +7,9 @@ import { scenePosterSrc } from '../../lib/musicVideoPreview.js';
  * when the poster is missing) a placeholder icon. `src` overrides the picture
  * (Plan shows the storyboard panel). `className` sizes both.
  */
-export default function ScenePoster({ scene, src = scenePosterSrc(scene), className = '', iconSize = 22 }) {
+export default function ScenePoster({ scene, scenes = null, src, className = '', iconSize = 22 }) {
+  const picture = src ?? scenePosterSrc(scene, scenes);
   const [failed, setFailed] = useState(null);
-  if (src && failed !== src) return <img src={src} alt="" loading="lazy" onError={() => setFailed(src)} className={`object-cover ${className}`} />;
+  if (picture && failed !== picture) return <img src={picture} alt="" loading="lazy" onError={() => setFailed(picture)} className={`object-cover ${className}`} />;
   return <span className={`flex items-center justify-center bg-port-bg text-port-text-muted ${className}`}><ImageIcon size={iconSize} aria-hidden="true" /></span>;
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseSceneFilter, sceneAttention, sceneMatchesFilter, selectedFrameReadiness } from './musicVideoSceneAttention.js';
+import { parseSceneFilter, sceneAttention, sceneMatchesFilter, sceneMediaKind, selectedFrameReadiness } from './musicVideoSceneAttention.js';
 
 const ready = { sceneId: 's', order: 0, referenceImageId: 'f.png', videoHistoryId: 'v1', startSec: 0, endSec: 4, takes: [] };
 
@@ -54,6 +54,20 @@ describe('sceneAttention', () => {
     expect(sceneAttention({ ...still, imageEffect: 'end-fade', endFrameOff: true }, { layered: true })).toEqual([]);
     expect(sceneAttention({ ...still, takes: [...still.takes, { takeId: 'i2', kind: 'image', assetId: 'g.png', status: 'candidate' }] }, { layered: true }))
       .toEqual(['candidates-pending']);
+  });
+
+  it('counts a source-take return as having the source frame and clip', () => {
+    const source = { sceneId: 'src', startSec: 0, endSec: 6, referenceImageId: 'frame.png', videoHistoryId: 'vh-a' };
+    const back = { sceneId: 'back', startSec: 8, endSec: 8.8, sourceTake: { sceneId: 'src', offsetSec: 4 } };
+    const scenes = [source, back];
+    expect(sceneAttention(back, { scenes })).toEqual([]);
+    expect(sceneMediaKind(back, { scenes })).toBe('clip');
+    source.takes = [{ kind: 'image', assetId: 'frame.png', dependencyState: { status: 'stale', reasons: ['Camera changed'] } }];
+    expect(sceneAttention(back, { scenes })).toEqual(['frame-stale']);
+    source.takes = [];
+    source.videoHistoryId = null;
+    expect(sceneAttention(back, { scenes })).toEqual(['missing-clip']);
+    expect(sceneMediaKind(back, { scenes })).toBe('image');
   });
 });
 

@@ -23,7 +23,7 @@ import { musicVideoSubjectScaleText } from './musicVideoSubjectScale.js';
 import { musicVideoReferenceSubjectIds } from './musicVideoCastSelection.js';
 import { musicVideoConditioningReferences } from './musicVideoConditioning.js';
 import { routeMapShotText } from './musicVideoRouteMaps.js';
-import { shotCameraRuleText, shotSheetDrivesPrompt, shotSheetPromptLines } from './musicVideoShotSheet.js';
+import { lyricOverlayOff, shotCameraRuleText, shotSheetDrivesPrompt, shotSheetFocalSubject, shotSheetFramingConflicts, shotSheetPromptLines } from './musicVideoShotSheet.js';
 import { shotFilmLook } from './musicVideoFilmLook.js';
 
 /**
@@ -88,6 +88,34 @@ function finishingStyleText(style) {
     .trim();
 }
 
+const REGION_CLAUSE = /^keep the (upper third|center|lower third) of the frame/i;
+
+/**
+ * The baked direction clause to send. A scene rewrite marks `direction.stale`,
+ * and nothing from that clause may reach the model until the treatment is
+ * applied again. Otherwise drop only the segments the sheet or lyric overlay
+ * has made untrue, and keep the rest.
+ */
+function directionClauseForPrompt(project, scene, clause) {
+  if (typeof clause !== 'string' || !clause.trim()) return '';
+  if (scene?.direction?.stale === true) return '';
+  const focal = shotSheetFocalSubject(scene);
+  const overlayOff = lyricOverlayOff(project);
+  return clause.split('; ').filter((part) => {
+    if (overlayOff && REGION_CLAUSE.test(part)) return false;
+    if (/^focal subject:/i.test(part)) {
+      if (focal === '') return false;
+      if (typeof focal === 'string') {
+        const named = part.slice(part.indexOf(':') + 1).trim().toLowerCase();
+        const want = focal.toLowerCase();
+        if (!named.includes(want) && !want.includes(named)) return false;
+      }
+    }
+    if (/^framing:/i.test(part) && shotSheetFramingConflicts(scene, part.slice(part.indexOf(':') + 1).trim())) return false;
+    return true;
+  }).join('; ');
+}
+
 /**
  * What a reference model is told about the song slice it hears (and, where its
  * start frame is only a reference, that frame), in the names its prompt uses
@@ -124,7 +152,7 @@ function composeShotModelInput(project, scene, {
     addition('visual-direction', 'Palette and camera rules', visualDirection(project?.visualSpec)),
   ] : [];
   const direction = asTyped ? [] : [
-    addition('shot-direction', 'Shot direction', scene?.direction?.motionClause),
+    addition('shot-direction', 'Shot direction', directionClauseForPrompt(project, scene, scene?.direction?.motionClause)),
     addition('lighting-continuity', 'Lighting continuity', MOTION_CONTINUITY_CLAUSE),
     productionMediumAddition(project),
   ];
@@ -291,7 +319,7 @@ function composeFrameModelInput(project, scene, {
     addition('real-world-scale', 'Real-world scale', musicVideoSubjectScaleText(concept, sizes)),
     addition('route-map', 'Route', routeMapShotText(project, scene)),
     addition('visual-direction', 'Palette and camera rules', visualDirection(project?.visualSpec)),
-    ...(slot === 'end' ? [] : [addition('frame-direction', 'Frame direction', scene?.direction?.frameClause)]),
+    ...(slot === 'end' ? [] : [addition('frame-direction', 'Frame direction', directionClauseForPrompt(project, scene, scene?.direction?.frameClause))]),
     productionMediumAddition(project),
     addition('people-light', 'Lighting on people', peopleLightLine([project?.concept?.style, musicVideoDirectorLook(project)])),
   ].filter(Boolean);

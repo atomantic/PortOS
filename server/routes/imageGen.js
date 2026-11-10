@@ -27,7 +27,8 @@ import { resolveCloudProviderConfig } from '../services/imageGen/cloudProviderCo
 import setupRouter, { streamMossAction } from './imageGenSetup.js';
 import { usesMossSwift } from '../lib/imageRuntimeRemedies.js';
 import { downloadMossWeights, mossModelCacheStatus, verifyMossWeights, repairMossWeights } from '../services/imageGen/mossWeights.js';
-import { enqueueJob, attachSseClient as attachQueueSseClient, cancelJob, listJobs } from '../services/mediaJobQueue/index.js';
+import { enqueueJob, attachSseClient as attachQueueSseClient, cancelJob, listJobs, laneConcurrencyFor } from '../services/mediaJobQueue/index.js';
+import { mediaJobExecutionLane } from '../lib/generationModes.js';
 import { recordUserAction } from '../services/userActions.js';
 import { getImageModels, requiredReposForModel } from '../lib/mediaModels.js';
 import { inspectModelCache, verifyModelCache, repairModelCache, aggregateVerifies } from '../lib/hfCache.js';
@@ -462,7 +463,38 @@ router.get('/status', asyncHandler(async (req, res) => {
 }));
 
 router.get('/active', asyncHandler(async (_req, res) => {
-  res.json({ activeJob: await imageGen.getActiveJob() });
+  const activeJob = await imageGen.getActiveJob();
+  const queueRunning = listJobs({ kind: 'image', status: 'running' }).map((job) => ({
+    jobId: job.id,
+    generationId: job.id,
+    status: job.status,
+    position: job.position,
+    startedAt: job.startedAt || null,
+    params: job.params,
+  }));
+  const serviceJobs = (await imageGen.getActiveJobs?.()) || [];
+  const seen = new Set();
+  const activeJobs = [];
+  for (const j of [...queueRunning, ...serviceJobs]) {
+    const id = j.jobId || j.generationId || j.id;
+    if (id && !seen.has(id)) {
+      seen.add(id);
+      activeJobs.push(j);
+    } else if (!id) {
+      activeJobs.push(j);
+    }
+  }
+  const sampleJob = queueRunning[0] || (activeJob ? { kind: 'image', params: activeJob } : null);
+  const lane = sampleJob ? mediaJobExecutionLane({ kind: 'image', mode: sampleJob.params?.mode }) : 'gpu';
+  const isLocal = lane === 'gpu';
+  const limit = (typeof laneConcurrencyFor === 'function' && sampleJob) ? laneConcurrencyFor(sampleJob) : 1;
+
+  res.json({
+    activeJob,
+    activeJobs: activeJobs.length > 0 ? activeJobs : (activeJob ? [activeJob] : []),
+    limit,
+    ...(isLocal ? { memoryGoverned: true, limitReason: 'memory-governed' } : {}),
+  });
 }));
 
 router.get('/agy/models', asyncHandler(async (_req, res) => {

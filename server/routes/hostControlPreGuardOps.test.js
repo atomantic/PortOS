@@ -83,7 +83,7 @@ vi.mock('../services/providers.js', () => ({
   getProviderById: vi.fn(async (id) => ({ id, type: 'api', models: [] })),
 }));
 vi.mock('../services/mediaJobQueue/index.js', () => ({
-  setCodexParallelLimit: vi.fn(), CODEX_PARALLEL_MIN: 1, CODEX_PARALLEL_MAX: 8, CODEX_PARALLEL_DEFAULT: 2,
+  setCodexParallelLimit: vi.fn(), syncParallelLimits: vi.fn(), CODEX_PARALLEL_MIN: 1, CODEX_PARALLEL_MAX: 8, CODEX_PARALLEL_DEFAULT: 2,
 }));
 // Unrelated service graphs the mounted routers import; their handlers are not reached.
 vi.mock('../services/cos.js', () => ({}));

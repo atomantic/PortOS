@@ -298,6 +298,105 @@ export function shotSheetMediaEdits(rows) {
   });
 }
 
+// The sentence planMusicVideoMedia stores when a still/card/code layer pins the medium.
+// A pin with this rationale and that layer's medium is the automatic pin, not a director choice.
+export const VISUAL_LAYER_PIN_RATIONALE = 'Retain the director-selected visual layer.';
+
+const SHEET_MEDIA = ['procedural', 'still', 'existing-footage', 'generated-footage'];
+
+/** Lyric overlay is on unless the project explicitly turns it off. */
+export const lyricOverlayOff = (project) => project?.lyricOverlayEnabled === false;
+
+/**
+ * Who the sheet says the shot is about. null when there is no sheet, so the
+ * treatment's motif fallback stays. '' when a sheet exists but names nobody,
+ * so an incomplete sheet does not inherit the first motif.
+ */
+export function shotSheetFocalSubject(scene) {
+  const sheet = scene?.shotSheet;
+  if (!sheet || typeof sheet !== 'object') return null;
+  const names = (Array.isArray(sheet.characters) ? sheet.characters : []).map(sheetText).filter(Boolean);
+  return listNames(names);
+}
+
+/**
+ * Medium the sheet's camera implies. null when the shot has no camera or that
+ * camera can shoot both. A photo camera is a still even when a clip is selected;
+ * a video camera reuses a selected clip, otherwise it plans generated footage.
+ */
+function shotSheetMedium(project, scene) {
+  const cameraId = scene?.shotSheet?.cameraId;
+  if (!cameraId) return null;
+  const camera = (project?.cameras || []).find((entry) => entry?.id === cameraId);
+  if (camera?.output === 'image') return { medium: 'still', mediumRationale: 'The shot sheet camera shoots photos.' };
+  if (camera?.output === 'video') {
+    if (scene?.videoHistoryId) return { medium: 'existing-footage', mediumRationale: 'The shot sheet camera shoots video; reuse the selected footage.' };
+    return { medium: 'generated-footage', mediumRationale: 'The shot sheet camera shoots video.' };
+  }
+  return null;
+}
+
+/** close, medium, or wide when the wording names a scale. Close is matched before medium and wide. */
+function framingScale(value) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  if (/(?:extreme[\s-]*)?close(?:[\s-]*up)?|\bclose\b/i.test(value)) return 'close';
+  if (/\b(?:wide|establishing)\b/i.test(value)) return 'wide';
+  if (/\bmedium\b/i.test(value)) return 'medium';
+  return null;
+}
+
+/** True when the sheet's view and a direction framing name different scales. */
+export function shotSheetFramingConflicts(scene, framing) {
+  const viewScale = framingScale(scene?.shotSheet?.view);
+  const framed = framingScale(framing);
+  return viewScale != null && framed != null && viewScale !== framed;
+}
+
+const automaticLayerMedium = (scene) => (
+  scene?.visualLayer === 'still' ? 'still'
+    : scene?.visualLayer === 'card' || scene?.visualLayer === 'code' ? 'procedural'
+      : null
+);
+
+/** The pin planMusicVideoMedia writes for a still, card or code layer — not a medium the director chose. */
+export function isAutomaticLayerPin(scene, direction) {
+  if (direction?.mediumPinned !== true) return false;
+  const auto = automaticLayerMedium(scene);
+  return auto != null && direction.medium === auto && direction.mediumRationale === VISUAL_LAYER_PIN_RATIONALE;
+}
+
+/**
+ * Prefer the sheet camera's medium unless a real director pin says otherwise.
+ * `fromSheet` is a planning mark only: callers strip it before the direction is stored,
+ * so the camera does not freeze the medium the way a director pin does.
+ */
+export function applyShotSheetMedium(project, scene, direction) {
+  const sheet = shotSheetMedium(project, scene);
+  if (!sheet || !direction) return direction;
+  const pinned = direction.mediumPinned === true && SHEET_MEDIA.includes(direction.medium);
+  if (pinned && !isAutomaticLayerPin(scene, direction)) return direction;
+  return { ...direction, medium: sheet.medium, mediumRationale: sheet.mediumRationale, mediumPinned: false, fromSheet: true };
+}
+
+/**
+ * Shot-sheet facts that replace a compiled direction's subject, framing and type
+ * region. Medium is separate (`applyShotSheetMedium`) because the media planner
+ * also has to see it. Lyric overlay off clears the type region on every shot,
+ * including one with no sheet.
+ */
+export function sheetDirectionOverlay(project, scene, direction) {
+  if (!direction || typeof direction !== 'object') return direction;
+  const next = { ...direction };
+  const focal = shotSheetFocalSubject(scene);
+  if (focal !== null) next.focalSubject = focal;
+  if (shotSheetFramingConflicts(scene, next.framing)) next.framing = '';
+  if (lyricOverlayOff(project)) {
+    next.typographyRole = 'none';
+    next.negativeSpace = 'none';
+  }
+  return next;
+}
+
 /**
  * A column set across a run of shots: the sheet each one saves, leaving out shots
  * it wouldn't change. With `onlyEmpty`, a value the director already set stays.

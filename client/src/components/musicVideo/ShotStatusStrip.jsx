@@ -8,7 +8,7 @@ import { SCENE_ATTENTION_LABELS, sceneAttention } from '../../lib/musicVideoScen
  */
 export default function ShotStatusStrip({ projectId, scenes, ctx }) {
   if (!scenes?.length) return null;
-  const cells = scenes.map((scene) => ({ scene, codes: sceneAttention(scene, ctx) }));
+  const cells = scenes.map((scene) => ({ scene, codes: sceneAttention(scene, { ...ctx, scenes }) }));
   return (
     <ul aria-label="Shot status" className="flex flex-wrap gap-1">
       {cells.map(({ scene, codes }) => {

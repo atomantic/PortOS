@@ -458,6 +458,9 @@ describe('StoryboardAnimatic clips', () => {
     expect(clipTimeAt(performance, 13, 9)).toBe(5);
     expect(clipTimeAt({ startSec: 10 }, 16, 4)).toBe(2);
     expect(clipTimeAt({ startSec: 10, loop: false }, 16, 4)).toBeCloseTo(3.95);
+    const source = { startSec: 10, endSec: 12, sourceTake: { sceneId: 'a', offsetSec: 4 } };
+    expect(clipTimeAt(source, 10.5, 6)).toBeCloseTo(4.5);
+    expect(clipTimeAt(source, 14, 6)).toBeCloseTo(5.95);
   });
 
   // Uniquely catches the preview playing a shot's hand-set speed or offset differently from the render.

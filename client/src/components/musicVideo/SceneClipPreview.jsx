@@ -5,10 +5,12 @@ import { sceneFrameFit } from './SceneFrameFit.jsx';
 
 /** Native playback and source trim; metadata lifetime belongs to the card's hook. */
 export default function SceneClipPreview({ scene, index, performance, playback, onOpenPreview, onTrimClip, takeBusy, generatingVideo }) {
-  const { clipPlayerRef, clipSrc, onLoadedMetadata } = playback;
+  const { clipPlayerRef, clipSrc, onLoadedMetadata, clipId: playbackClipId } = playback;
+  // A source-take return plays the owner's clip. Trim stays on this shot's own file.
+  const clipId = playbackClipId || scene.videoHistoryId;
   return (
     <>
-      {scene.videoHistoryId && !performance && (
+      {clipId && !performance && (
         <div className="relative w-full">
           <video
             ref={clipPlayerRef}
@@ -30,7 +32,7 @@ export default function SceneClipPreview({ scene, index, performance, playback, 
             type="button"
             onClick={() => {
               clipPlayerRef.current?.pause();
-              onOpenPreview?.(`video:${scene.videoHistoryId}`);
+              onOpenPreview?.(`video:${clipId}`);
             }}
             aria-label={`View scene ${index + 1} clip full size`}
             title={`View scene ${index + 1} clip full size`}
@@ -41,7 +43,7 @@ export default function SceneClipPreview({ scene, index, performance, playback, 
         </div>
       )}
       {/* Keep a frame range of the clip as a new take of this shot. */}
-      {scene.videoHistoryId && !performance && onTrimClip && (
+      {scene.videoHistoryId && scene.videoHistoryId === clipId && !performance && onTrimClip && (
         <VideoTrimControl videoRef={clipPlayerRef} sourceKey={scene.videoHistoryId}
           disabled={takeBusy || !!generatingVideo}
           onTrim={(range) => onTrimClip(scene, range)} />

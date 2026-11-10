@@ -15,6 +15,7 @@ vi.mock('../../services/apiMusicVideo.js', () => ({
   compileMusicVideoTreatment: vi.fn(),
   previewMusicVideoTreatmentApply: vi.fn(),
   applyMusicVideoTreatment: vi.fn(),
+  syncMusicVideoTreatmentFromShotSheet: vi.fn(),
   reviewMusicVideoTreatmentProof: vi.fn(),
 }));
 vi.mock('../../hooks/useProviderModels.js', () => ({
@@ -107,7 +108,7 @@ describe('TreatmentPanel apply review', () => {
     fireEvent.click(screen.getByText('Apply treatment'));
     await waitFor(() => expect(api.applyMusicVideoTreatment).toHaveBeenCalledWith(
       'mv-1',
-      { revision: 3, overwrite: [{ sceneId: 's1', promptFingerprint: 'fp-s1' }], addTextCues: false },
+      { baseRevision: 3, overwrite: [{ sceneId: 's1', promptFingerprint: 'fp-s1' }], addTextCues: false },
       { silent: true },
     ));
     await waitFor(() => expect(screen.getByTestId('applied').textContent).toBe('3'));
@@ -165,6 +166,23 @@ describe('TreatmentPanel edits and compile', () => {
     expect(api.compileMusicVideoTreatment).not.toHaveBeenCalled();
     fireEvent.click(screen.getByText('Draft without AI'));
     await waitFor(() => expect(api.compileMusicVideoTreatment).toHaveBeenCalledWith('mv-1', { baseRevision: 3, useAi: false }, { silent: true }));
+  });
+
+  it('syncs directions from the shot sheet with the treatment revision, and explains when no sheet exists', async () => {
+    api.syncMusicVideoTreatmentFromShotSheet.mockResolvedValue({
+      project: { ...PROJECT, treatment: { ...TREATMENT, revision: 4 } },
+      treatment: { ...TREATMENT, revision: 4 },
+    });
+    const { unmount } = render(<Harness />);
+    const blocked = screen.getByText('Sync directions from the shot sheet').closest('button');
+    expect(blocked.disabled).toBe(true);
+    expect(screen.getByText('Add a shot sheet before syncing directions from it.')).toBeTruthy();
+    unmount();
+
+    const withSheet = { ...PROJECT, scenes: [{ ...PROJECT.scenes[0], shotSheet: { characters: ['Ada'], view: 'Wide' } }, PROJECT.scenes[1]] };
+    render(<Harness initial={withSheet} />);
+    fireEvent.click(screen.getByText('Sync directions from the shot sheet'));
+    await waitFor(() => expect(api.syncMusicVideoTreatmentFromShotSheet).toHaveBeenCalledWith('mv-1', { baseRevision: 3 }, { silent: true }));
   });
 
   it('re-sends only the editable fields of existing reference notes', async () => {

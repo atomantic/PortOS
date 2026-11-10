@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import LlmRouteNote from './LlmRouteNote.jsx';
-import { Sparkles, Wand2, AlertTriangle, Plus, Trash2 } from 'lucide-react';
+import { Sparkles, Wand2, AlertTriangle, Plus, Trash2, RefreshCw } from 'lucide-react';
 import useFieldDraft from '../../hooks/useFieldDraft.js';
 import useProviderModels from '../../hooks/useProviderModels.js';
 import ProviderModelSelector from '../ProviderModelSelector.jsx';
@@ -96,6 +96,7 @@ export default function TreatmentPanel({ project, treatment: api, storyboardAppr
     providers, selectedProviderId, selectedModel, availableModels, setSelectedProviderId, setSelectedModel,
   } = useProviderModels({ allowDefault: true, silent: true });
   const analyzed = !!project.audioAnalysis;
+  const hasSheet = (project.scenes || []).some((scene) => scene?.shotSheet);
 
   const addNote = () => {
     if (notesSaving || (!noteText.trim() && !noteUrl.trim()) || !urlValid) return;
@@ -220,7 +221,14 @@ export default function TreatmentPanel({ project, treatment: api, storyboardAppr
             className="flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0">
             <Wand2 size={13} /> Draft without AI
           </button>
+          {arc && (
+            <button type="button" disabled={!hasSheet || api.compiling || api.syncing} onClick={() => api.syncFromSheet?.()}
+              className="flex items-center gap-1 bg-port-border hover:bg-port-border/70 disabled:opacity-50 rounded px-2 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0">
+              <RefreshCw size={13} /> {api.syncing ? 'Syncing…' : 'Sync directions from the shot sheet'}
+            </button>
+          )}
           {!analyzed && <span className="text-xs text-port-text-muted">Analyze the song first — the arc is built on its sections.</span>}
+          {arc && !hasSheet && <span className="text-xs text-port-text-muted">Add a shot sheet before syncing directions from it.</span>}
           {t?.compiledAt && (
             t.compiledWith?.source === 'ai'
               ? <LlmRouteNote route={project.automation?.routes?.treatment || t.compiledWith} prefix="Compiled with" />

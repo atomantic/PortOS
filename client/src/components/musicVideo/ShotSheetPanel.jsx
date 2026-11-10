@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
+import ColorMatchBoard from './ColorMatchBoard.jsx';
 import StageSection from './StageSection.jsx';
 import ShotSheetAi from './ShotSheetAi.jsx';
 import ScenePoster from './ScenePoster.jsx';
@@ -214,8 +215,15 @@ function CameraList({ project, disabled, onChange }) {
       {cameras.map((camera) => (
         <div key={camera.id} className="space-y-1">
           <div className="grid min-w-0 gap-1.5 sm:grid-cols-[10rem_7.5rem_7rem_8rem_minmax(0,1fr)_2.75rem]">
-            <input key={`n-${camera.name}`} aria-label="Camera name" defaultValue={camera.name} maxLength={120} className={inputCls}
-              onBlur={(event) => { const name = event.target.value.trim(); if (name && name !== camera.name) patch(camera.id, { name }); }} />
+            <div className="min-w-0">
+              <input key={`n-${camera.name}`} aria-label="Camera name" defaultValue={camera.name} maxLength={120} className={inputCls}
+                onBlur={(event) => { const name = event.target.value.trim(); if (name && name !== camera.name) patch(camera.id, { name }); }} />
+              <label className="mt-1 flex min-h-[44px] items-center gap-1 text-xs pointer-fine:sm:min-h-0">
+                <input type="checkbox" aria-label={`${camera.name}: do not match`} checked={!!camera.doNotMatch}
+                  onChange={(event) => patch(camera.id, { doNotMatch: event.target.checked })} />
+                Do not match
+              </label>
+            </div>
             <select aria-label={`${camera.name} kind`} value={camera.kind} className={inputCls} onChange={(event) => patch(camera.id, { kind: event.target.value })}>
               <option value="in-world">In world</option>
               <option value="observer">Observer</option>
@@ -273,7 +281,7 @@ function SheetRow({ project, row, cast, showPrompts, disabled, onEdit, onOpen })
       </td>
       <td className="w-28 p-1.5">
         <button type="button" onClick={() => onOpen(scene.sceneId)} aria-label={`Open ${label} from preview`} className="block min-h-[44px] min-w-[44px] rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-port-accent">
-          <ScenePoster scene={scene} src={scenePosterSrc(scene) || musicVideoImageSrc(scene.panelArt)} className="aspect-video w-24 rounded" iconSize={14} />
+          <ScenePoster scene={scene} src={scenePosterSrc(scene, project.scenes) || musicVideoImageSrc(scene.panelArt)} className="aspect-video w-24 rounded" iconSize={14} />
         </button>
         {frameOutdated && <span className="mt-0.5 block text-xs text-port-warning">{row.frameOutdatedReasons?.length ? row.frameOutdatedReasons.join(' · ') : 'Details changed since this frame'}</span>}
       </td>
@@ -385,6 +393,7 @@ export default function ShotSheetPanel({ board }) {
     <StageSection id={SHOT_SHEET_ANCHOR} title="Shot sheet" summary={summary}>
       <ShotSheetMap rows={rows} active={mapFilter} onPick={setMapFilter} />
       <CameraList project={project} disabled={locked} onChange={editCameras} />
+      <ColorMatchBoard project={project} disabled={locked} onProject={editProjectLocal} />
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <input type="search" aria-label="Search shots" placeholder="Search shots" value={query} onChange={(event) => setQuery(event.target.value)} className={`${inputCls} max-w-xs`} />
         <select aria-label="Filter by camera" value={cameraFilter} onChange={(event) => setCameraFilter(event.target.value)} className={`${inputCls} max-w-[12rem]`}>

@@ -38,13 +38,14 @@
  *   - `runwaySceneTake` — the same answer for a cutaway on the Runway lane;
  *     `meteredSceneTake` picks the paid lane's take for a backend.
  *
- * Dependency-free (only grokVideoClip.js, falVideoModels.js,
- * runwayVideoModels.js and musicVideoColdOpen.js, themselves dependency-free) so the client
- * re-exports it from `client/src/lib/musicVideoShotTiming.js` and the two sides
- * cannot drift.
+ * Depends only on grokVideoClip.js, falVideoModels.js, runwayVideoModels.js,
+ * musicVideoColdOpen.js and musicVideoSourceTake.js (the length a source clip
+ * must cover). Those stay free of this module, so the client re-exports it
+ * from `client/src/lib/musicVideoShotTiming.js` and the two sides cannot drift.
  */
 
 import { GROK_VIDEO_DEFAULT_DURATION, GROK_VIDEO_DURATIONS, nearestGrokDuration } from './grokVideoClip.js';
+import { sourceClipNeedSec } from './musicVideoSourceTake.js';
 import { GEMINI_OMNI_WEB_MODEL } from './geminiWebVideo.js';
 import {
   FAL_AUDIO_VIDEO_MODELS,
@@ -550,14 +551,18 @@ export const CLIP_LENGTH_SEC_RANGE = Object.freeze({ min: 1, max: 60 });
 export const sceneClipLengthSec = (scene) => (Number.isFinite(scene?.clipLengthSec) && scene.clipLengthSec > 0 ? scene.clipLengthSec : null);
 
 /**
- * The length a clip render must cover: the shot's span, or the hand-set source
- * clip length when that is longer. Null for an untimed shot with no length set.
+ * The length a clip render must cover: the shot's span, the hand-set source
+ * clip length, or — when `scenes` is passed — the end of every return that
+ * plays this shot's clip. Null for an untimed shot with no length set. A need
+ * past the longest clip is returned as-is so the lane can refuse it.
  */
-export function shotRequestSpanSec(scene) {
+export function shotRequestSpanSec(scene, scenes = null) {
   const span = typeof scene?.startSec === 'number' && typeof scene?.endSec === 'number' && scene.endSec > scene.startSec
     ? scene.endSec - scene.startSec : null;
   const length = sceneClipLengthSec(scene);
-  return span == null ? length : length == null ? span : Math.max(span, length);
+  const shared = Array.isArray(scenes) ? sourceClipNeedSec(scene, scenes) : null;
+  const values = [span, length, shared].filter((n) => Number.isFinite(n) && n > 0);
+  return values.length ? Math.max(...values) : null;
 }
 
 /**
@@ -635,7 +640,7 @@ const coerceDefault = (backend, modelId) => (backend === 'fal'
  * `seconds` and `costUsd` are null when unknown (an untimed or unplannable
  * performance, an uncurated model).
  */
-export function falSceneTake({ scene, videoSettings = {}, songDurationSec = null, lineCues = null } = {}) {
+export function falSceneTake({ scene, videoSettings = {}, songDurationSec = null, lineCues = null, scenes = null } = {}) {
   const settings = videoSettings || {};
   if (isPerformanceScene(scene)) {
     const capability = performanceCapability('fal', { scene, videoSettings: settings });
@@ -664,7 +669,7 @@ export function falSceneTake({ scene, videoSettings = {}, songDurationSec = null
   if (!model) {
     return { performance: false, modelId, seconds: settings.falDuration || null, resolution: settings.falResolution || null, costUsd: null };
   }
-  const spanSec = shotRequestSpanSec(scene);
+  const spanSec = shotRequestSpanSec(scene, scenes);
   const seconds = coerceFalVideoSeconds(model, sceneClipLengthSec(scene) != null ? spanSec : settings.falDuration || spanSec);
   const resolution = resolveFalVideoResolution(model, settings.falResolution);
   const generateAudio = Boolean(model.audio) && preMusicClipSound(scene);
@@ -699,14 +704,14 @@ export const falTakeRequestFields = (take) => (take.performance
  * `{ performance: false, modelId, seconds, resolution, costUsd }`; Runway has
  * no performance lane, so a performance scene is priced as nothing (null).
  */
-export function runwaySceneTake({ scene, videoSettings = {} } = {}) {
+export function runwaySceneTake({ scene, videoSettings = {}, scenes = null } = {}) {
   const settings = videoSettings || {};
   const modelId = getRunwayVideoModel(scene?.clipModelId)?.id || settings.runwayModelId || RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL;
   const model = getRunwayVideoModel(modelId);
   if (isPerformanceScene(scene) || !model) {
     return { performance: isPerformanceScene(scene), modelId, seconds: null, resolution: null, costUsd: null };
   }
-  const spanSec = shotRequestSpanSec(scene);
+  const spanSec = shotRequestSpanSec(scene, scenes);
   const seconds = coerceRunwayVideoSeconds(model, sceneClipLengthSec(scene) != null ? spanSec : settings.runwayDuration || spanSec);
   const resolution = resolveRunwayVideoResolution(model, settings.runwayResolution);
   return { performance: false, modelId, seconds, resolution, costUsd: estimateRunwayVideoCostUsd({ modelId, seconds, resolution }) };

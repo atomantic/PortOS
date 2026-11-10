@@ -95,7 +95,7 @@ export const mediaJobExecutionLane = ({ kind, mode, remote } = {}) => {
  */
 export const mediaJobSwimlane = ({ kind, mode, remote, peerId } = {}) => {
   const lane = mediaJobExecutionLane({ kind, mode, remote });
-  if (lane === 'cloud') return `cloud:${mode}`;
+  if (lane === 'cloud') return kind ? `cloud:${kind}:${mode}` : `cloud:${mode}`;
   if (lane === 'remote') return `remote:${peerId || 'unknown'}`;
   return 'gpu:local';
 };

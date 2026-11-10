@@ -51,6 +51,23 @@ describe('planSequenceCoverage', () => {
     expect(perShot.map((p) => p.sceneId)).toEqual(['a', 'b', 'c']);
   });
 
+  it('covers three adjacent sub-1.2s Grok shots with one 6s request, and a local run with one frame count', () => {
+    const scenes = [shot('a', 0, 0.8), shot('b', 0.8, 1.6), shot('c', 1.6, 2.4)];
+    const grok = planSequenceCoverage(scenes, { backend: 'grok', modelId: H3 });
+    expect(grok.perShot).toEqual([]);
+    expect(grok.groups).toHaveLength(1);
+    expect(grok.groups[0]).toMatchObject({ sceneIds: ['a', 'b', 'c'], durationSec: 2.4, requestSec: 6 });
+    expect(grok.groups[0].numFrames).toBeUndefined();
+    const spans = _sequenceClipSpans(grok.groups[0], scenes).spans.map((s) => [s.clipStartSec, s.clipEndSec]);
+    expect(spans).toEqual([[0, 0.8], [0.8, 1.6], [1.6, 2.4]]);
+    const local = planSequenceCoverage(scenes, { backend: 'local' });
+    expect(local.groups[0]).toMatchObject({ requestSec: 2.4, numFrames: 121 });
+    expect(planSequenceCoverage([shot('a', 0, 8), shot('b', 8, 16)], { backend: 'grok' }).groups).toEqual([]);
+    const runway = planSequenceCoverage(scenes, { backend: 'runway' });
+    expect(runway.groups).toEqual([]);
+    expect(runway.perShot[0].reason).toBe('Sequence coverage renders on fal.ai, Grok, or a local model, so this shot stays per-shot');
+  });
+
   it('keeps Kling per-shot with the reason recorded', () => {
     const kling = 'fal-ai/kling-video/v3/pro/image-to-video';
     const { groups, perShot } = planSequenceCoverage([shot('a', 0, 3), shot('b', 3, 6)], { modelId: kling });

@@ -2254,6 +2254,7 @@ export const imageGenGrokSettingsSchema = z.object({
   enabled: z.boolean().optional(),
   grokPath: z.preprocess((v) => (v === '' ? undefined : v), z.string().trim().max(500).optional()),
   aspectRatio: z.preprocess((v) => (v === '' ? undefined : v), z.string().trim().regex(/^\d{1,2}:\d{1,2}$/, 'aspect ratio must look like 16:9').optional()),
+  parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
   cleanC2PA: z.boolean().optional(),
   denoise: z.boolean().optional(),
 });
@@ -2317,19 +2318,28 @@ export const videoGenSettingsSchema = z.object({
   // POST /api/video-gen/model-terms; typed here so a Settings save can't put
   // junk where the render gate reads authorization from.
   acceptedModelTerms: z.array(z.string().trim().min(1).max(128)).max(50).optional(),
+  grok: z.object({
+    parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
+  }).optional(),
+  gemini: z.object({
+    parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
+  }).optional(),
   // fal.ai queue REST provider (#6213) — settings-stored key wins over the
   // FAL_KEY env var (same precedence as loras.js's Civitai key).
   fal: z.object({
     apiKey: z.preprocess((v) => (v === '' ? undefined : v), z.string().trim().max(200).optional()),
+    parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
   }).optional(),
   // reactor.inc fast-h3 provider (#6214) — same settings-wins-over-env
   // precedence as `fal` above.
   reactor: z.object({
     apiKey: z.preprocess((v) => (v === '' ? undefined : v), z.string().trim().max(200).optional()),
+    parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
   }).optional(),
   // Runway developer API — same settings-wins-over-env (RUNWAYML_API_SECRET) precedence.
   runway: z.object({
     apiKey: z.preprocess((v) => (v === '' ? undefined : v), z.string().trim().max(200).optional()),
+    parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
   }).optional(),
 });
 
@@ -2346,6 +2356,7 @@ export const imageGenRunwaySettingsSchema = z.object({
   enabled: z.boolean().optional(),
   model: z.preprocess((v) => v === '' ? undefined : v, z.enum(RUNWAY_IMAGE_MODEL_IDS).optional()),
   resolution: z.enum(RUNWAY_IMAGE_RESOLUTIONS).optional(),
+  parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
   cleanC2PA: z.boolean().optional(),
   denoise: z.boolean().optional(),
   // Run the provider delete (Runway asset / fal.ai stored files) once the output is saved locally.
@@ -2363,6 +2374,7 @@ export const hostedProviderParamSchema = z.enum(['runway', 'fal']);
 export const imageGenFalSettingsSchema = z.object({
   enabled: z.boolean().optional(),
   model: z.preprocess((v) => (v === '' ? undefined : v), z.enum(FAL_IMAGE_MODEL_IDS).optional()),
+  parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
   cleanC2PA: z.boolean().optional(),
   denoise: z.boolean().optional(),
   deleteAfterDownload: z.boolean().optional(),
@@ -2372,6 +2384,14 @@ export const imageGenAgySettingsSchema = z.object({
   enabled: z.boolean().optional(),
   agyPath: z.preprocess((v) => (v === '' ? undefined : v), z.string().trim().max(500).optional()),
   model: agyImageModelSchema,
+  parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
+  cleanC2PA: z.boolean().optional(),
+  denoise: z.boolean().optional(),
+});
+
+export const imageGenGeminiSettingsSchema = z.object({
+  enabled: z.boolean().optional(),
+  parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
   cleanC2PA: z.boolean().optional(),
   denoise: z.boolean().optional(),
 });
@@ -2484,9 +2504,18 @@ export const settingsSlicePartialSchemas = Object.freeze({
   'imageGen.agy': imageGenAgySettingsSchema.strict(),
   'imageGen.fal': imageGenFalSettingsSchema.strict(),
   'imageGen.runway': imageGenRunwaySettingsSchema.strict(),
+  'imageGen.gemini': imageGenGeminiSettingsSchema.strict(),
   'imageGen.expose': z.object({ a1111: z.boolean().optional() }).strict(),
   renderDefaults: renderDefaultsSettingsSchema,
-  videoGen: videoGenSettingsSchema.pick({ mode: true, defaultModelId: true, displaySleep: true }).strict(),
+  videoGen: videoGenSettingsSchema.pick({
+    mode: true, defaultModelId: true, displaySleep: true,
+    grok: true, gemini: true, fal: true, runway: true, reactor: true,
+  }).partial().strict(),
+  'videoGen.grok': z.object({ parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional() }).strict(),
+  'videoGen.gemini': z.object({ parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional() }).strict(),
+  'videoGen.fal': z.object({ parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional() }).strict(),
+  'videoGen.runway': z.object({ parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional() }).strict(),
+  'videoGen.reactor': z.object({ parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional() }).strict(),
   pipeline: z.object({ imageGen: renderFormSettingsSchema.nullable().optional() }).strict(),
   writersRoom: z.object({ imageGen: renderFormSettingsSchema.nullable().optional() }).strict(),
   seriesAutopilot: seriesAutopilotSettingsSchema.partial(),

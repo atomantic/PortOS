@@ -1214,6 +1214,7 @@ describe('create-schema parity', () => {
     performanceSpeaker: 'Singer',
     performanceStyle: 'music',
     coverage: 'sequence',
+    sourceTake: { sceneId: 'mvs-source', offsetSec: 1.5 },
     panelId: 'panel-example-1',
     panelRev: 'abc123',
     panelArt: 'panel-art.png',

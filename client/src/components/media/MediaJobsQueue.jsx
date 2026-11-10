@@ -61,7 +61,7 @@ const KIND_ICON = { video: Film, image: ImageIcon, training: Cpu };
 // one section; each provider is its own server swim lane, so a row's position
 // counts only work from the same provider.
 const VIDEO_QUEUE_LANES = Object.freeze([
-  { id: 'gpu', label: 'Local machine', description: 'Local GPU renders run one at a time.' },
+  { id: 'gpu', label: 'Local machine', description: 'Local GPU renders stay at their memory-governed limit (1 at a time).' },
   { id: 'cloud', label: 'Cloud renders', description: 'Each cloud provider has its own lane, running in parallel with local work and other providers.' },
   { id: 'remote', label: 'Remote machines', description: 'Each selected peer owns the queue for work it receives.' },
 ]);

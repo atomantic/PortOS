@@ -1,5 +1,6 @@
 import { videoSrcForJob, videoPosterForJob } from './creativeDirectorPreview.js';
 import { latestMusicVideoReviewDraft } from '../../../server/lib/musicVideoReviewDraft.js';
+import { resolveSourceTake } from '../../../server/lib/musicVideoSourceTake.js';
 
 const nonEmptyString = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);
 
@@ -14,8 +15,12 @@ export const musicVideoImageSrc = (assetId) => {
  * The picture a scene card shows: its frame, else a poster cut from its selected
  * clip (a code-rendered or uploaded clip often has no frame), else null.
  */
-export const scenePosterSrc = (scene) => musicVideoImageSrc(scene?.referenceImageId)
-  || (nonEmptyString(scene?.videoHistoryId) ? videoPosterForJob(encodeURIComponent(scene.videoHistoryId)) : null);
+export const scenePosterSrc = (scene, scenes = null) => {
+  const resolved = resolveSourceTake(scene, scenes);
+  const frame = resolved?.referenceImageId || scene?.referenceImageId;
+  const clip = resolved?.videoHistoryId || scene?.videoHistoryId;
+  return musicVideoImageSrc(frame) || (nonEmptyString(clip) ? videoPosterForJob(encodeURIComponent(clip)) : null);
+};
 
 export const musicVideoImageFallback = (assetId) => {
   const raw = nonEmptyString(assetId);

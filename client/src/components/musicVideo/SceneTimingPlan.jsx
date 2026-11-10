@@ -6,8 +6,10 @@ import { meteredModelLabel } from '../../lib/musicVideoShotTiming.js';
 export default function SceneTimingPlan({ timing, lipSyncBackend }) {
   const {
     performance, performanceBlocked, capability, plan, performanceCost,
-    falTake, falCost, grokPlan, timedSpan,
+    falTake, falCost, grokPlan, timedSpan, coverageSpan, coverageNoun, sharedNotice,
   } = timing;
+  const shownSpan = coverageSpan ?? timedSpan;
+  const shownNoun = coverageNoun ?? 'cutaway';
   return (
     <>
       {performance && performanceBlocked && (
@@ -30,9 +32,12 @@ export default function SceneTimingPlan({ timing, lipSyncBackend }) {
       )}
       {grokPlan && (
         <p className={`text-[11px] break-words ${grokPlan.needsSplit ? 'text-port-warning' : 'text-port-text-muted'}`}>
-          Grok renders a {grokPlan.requestSec}s clip for this {timedSpan.toFixed(1)}s cutaway
+          Grok renders a {grokPlan.requestSec}s clip for this {shownSpan.toFixed(1)}s {shownNoun}
           {grokPlan.needsSplit ? ` — ${grokPlan.uncoveredSec.toFixed(1)}s uncovered; split the scene rather than loop it` : ''}. Motion timing in the prompt is approximate.
         </p>
+      )}
+      {sharedNotice && (
+        <p className="text-[11px] text-port-text-muted break-words" data-testid="shared-take-notice">{sharedNotice}</p>
       )}
     </>
   );
