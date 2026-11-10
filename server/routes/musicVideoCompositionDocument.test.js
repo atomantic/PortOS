@@ -162,6 +162,26 @@ describe('music-video composition documents', () => {
     expect(again.body).toMatchObject({ changed: false, document: selected.composition.document });
   });
 
+  it('explicitly upgrades the shipped engine whose card glitch ignored beat-reaction controls', async () => {
+    const shipped = await readFile(new URL('../services/musicVideo/documentTemplates/layered/engine.js', import.meta.url), 'utf8');
+    const legacy = shipped.replace('state.reactiveGain * templateEffects(scene).beatReaction);', 'state.reactiveGain);');
+    // Pin the exact outgoing bytes, rather than accepting any synthesized engine.
+    expect(createHash('sha256').update(legacy).digest('hex')).toBe('4ee3ae7c78bce6d9dde36a1f2336c7bfd899918f359b6a9906b619c07a0bfb1b');
+    const imported = await uploadZip(project.id, createZip([
+      { name: 'index.html', data: PAGE }, { name: 'engine.js', data: legacy },
+    ]));
+    expect(imported.status).toBe(201);
+    const clone = await projects.cloneProject(project.id);
+    const result = await request(app).post(`/api/music-video/${project.id}/composition/document/engine/upgrade`)
+      .send({ directory: imported.body.document.directory });
+    expect(result.status).toBe(200);
+    expect(result.body.changed).toBe(true);
+    const upgraded = await request(app).get(`/api/music-video/${project.id}/composition/document/file?path=engine.js`);
+    expect(upgraded.text).toBe(shipped);
+    const retained = await request(app).get(`/api/music-video/${clone.id}/composition/document/file?path=engine.js`);
+    expect(retained.text).toBe(legacy);
+  });
+
   it('replaces the unchanged initial still-effect module when upgrading its shipped engine', async () => {
     const legacy = await readFile(new URL('./fixtures/musicVideoLayeredEngine11319.txt', import.meta.url));
     const effects = await readFile(new URL('./fixtures/musicVideoImageEffects11319.txt', import.meta.url));
