@@ -861,3 +861,14 @@ it('queues a video with the live layout and recorded figures, and queues nothing
   await expect(submitVideoGenJob(body, {})).rejects.toMatchObject({ code: 'MUSIC_VIDEO_GREYBOX_UNAVAILABLE' });
   expect(mocks.enqueueJob).not.toHaveBeenCalled();
 });
+
+it('sizes a Higgsfield song window at the requested fps before any enqueue', async () => {
+  const failure = new Error('example audio extraction failure');
+  mocks.getMusicVideoProject.mockResolvedValue({ id: 'mv-1', videoSettings: {}, scenes: [{ sceneId: 'mvs-1', startSec: 2, endSec: 12 }] });
+  mocks.prepareVideoGenParams.mockResolvedValue(localPrepared({ backend: 'higgsfield', sourceImagePath: '/example/frame.png' }));
+  mocks.prepareSourceAudioWindow.mockRejectedValue(failure);
+  await expect(submitVideoGenJob({ backend: 'higgsfield', mode: 'image', prompt: 'A dancer turns', higgsfieldDuration: 10, fps: 30,
+    musicVideo: { projectId: 'mv-1', sceneId: 'mvs-1', songAudio: true } }, {})).rejects.toBe(failure);
+  expect(mocks.prepareSourceAudioWindow).toHaveBeenCalledWith(expect.objectContaining({ numFrames: 301, fps: 30 }));
+  expect(mocks.enqueueJob).not.toHaveBeenCalled();
+});

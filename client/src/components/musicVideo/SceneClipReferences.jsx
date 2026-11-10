@@ -13,7 +13,7 @@ const BUTTON = 'inline-flex min-h-[44px] max-w-full items-center gap-1 rounded b
 const nameOf = (ref) => ref.label || ref.role || 'Reference';
 
 /** The extra images this model will receive alongside the shot's frame. */
-export default function SceneClipReferences({ project, scene, castMedia, backend, model, capacityOverride, endFrameBlocksReferences = false, ltxReferencesOff = false, startFrameLayout = false, onEditLocal, onSave, onSaveState, saveState }) {
+export default function SceneClipReferences({ project, scene, castMedia, backend, model, capacityOverride, songAudio = false, endFrameBlocksReferences = false, ltxReferencesOff = false, startFrameLayout = false, onEditLocal, onSave, onSaveState, saveState }) {
   const [adding, setAdding] = useState(false);
   const allChoices = musicVideoClipReferenceChoices(project, scene, castMedia);
   const choices = musicVideoOfferedReferences(allChoices).filter((ref) => ref.imageId !== scene.referenceImageId);
@@ -28,7 +28,7 @@ export default function SceneClipReferences({ project, scene, castMedia, backend
   const locked = saveState === 'saving' || Boolean(castMedia && musicVideoSceneCastIds(project, scene).some((id) => castMedia[id] === undefined));
   // Most Runway models pin the start frame unless references go with it: their keyframe and reference modes cannot mix.
   const runwayUnpinsStart = backend === 'runway' && capacity > 0 && !!model?.referenceImages && !model.referenceImages.keepsFrames;
-  const looseStart = (backend === 'higgsfield' && capacity > 0 && chosen.length > 0)
+  const looseStart = (backend === 'higgsfield' && (chosen.length > 0 || songAudio))
     || (backend === 'fal' && model?.referenceImages && !model.image)
     || (runwayUnpinsStart && chosen.length > 0)
     || (backend === 'local' && model?.fastvideoFamily === 'fasth3omni')

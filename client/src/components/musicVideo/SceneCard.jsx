@@ -807,7 +807,7 @@ export default function SceneCard({
             </label>
           )}
           {layer === 'footage' && <SceneClipReferences project={project} scene={scene} castMedia={castMedia} startFrameLayout={startFrameLayout}
-            backend={referenceBackend} model={referenceModel} capacityOverride={useLtxReferences ? 8 : runwayEndFrameOn ? referenceCapacity : undefined} endFrameBlocksReferences={endFrameBlocksReferences} ltxReferencesOff={canUseLtxReferences && !useLtxReferences} onEditLocal={onEditLocal} onSave={onSave}
+            backend={referenceBackend} model={referenceModel} songAudio={cardRequest.songAudio.state === 'on'} capacityOverride={useLtxReferences ? 8 : runwayEndFrameOn ? referenceCapacity : undefined} endFrameBlocksReferences={endFrameBlocksReferences} ltxReferencesOff={canUseLtxReferences && !useLtxReferences} onEditLocal={onEditLocal} onSave={onSave}
             saveState={clipReferenceSaveState} onSaveState={setClipReferenceSaveState} />}
           {/* The clip prompt sits under the clip's references, like each frame's prompt under its frame. */}
           {layer === 'footage' && promptField}

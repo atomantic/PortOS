@@ -135,7 +135,7 @@ export function buildHiggsfieldVideoRequest({
   const route = refs.length || audioUrls.length ? 'reference' : imageUrl ? 'image' : 'text';
   const text = higgsfieldVideoPromptText(prompt, negativePrompt);
   // The image route is the one where the start frame can carry the whole instruction.
-  if (!text && route !== 'image') throw refuse('Prompt is required');
+  if (!text.trim() && route !== 'image') throw refuse('Prompt is required');
   if (model.promptMax && text.length > model.promptMax) {
     throw refuse(`${model.label} prompt is ${text.length}/${model.promptMax} characters. Shorten it; nothing was submitted or truncated.`);
   }
@@ -171,7 +171,7 @@ export function buildHiggsfieldVideoRequest({
 /** Shot settings shared by the board and server card endpoint. */
 export function higgsfieldShotRequestFields(settings, spanSec = null) {
   const model = getHiggsfieldVideoModel(settings.higgsfieldModelId || HIGGSFIELD_DEFAULT_VIDEO_MODEL);
-  const duration = settings.higgsfieldDuration ?? (spanSec != null ? Math.ceil(spanSec) : 5);
+  const duration = settings.higgsfieldDuration ?? Math.max(model?.duration.min || 1, spanSec != null ? Math.ceil(spanSec) : model?.duration.defaultSec || 5);
   if (model && duration > model.duration.max) throw refuse(`${model.label} takes at most ${model.duration.max} seconds; shorten the shot or choose another model`);
   return {
     higgsfieldModelId: settings.higgsfieldModelId || HIGGSFIELD_DEFAULT_VIDEO_MODEL,

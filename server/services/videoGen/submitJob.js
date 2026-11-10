@@ -183,7 +183,8 @@ async function prepareVideoSubmissionInputs(body, uploads, inputs) {
     const scene = project?.scenes?.find((entry) => entry.sceneId === body.musicVideo.sceneId);
     const seconds = body.higgsfieldDuration || Math.ceil(scene.endSec - scene.startSec);
     if (prepared.backend === VIDEO_GEN_MODE.HIGGSFIELD && seconds > 30) throw new ServerError('Higgsfield song references support at most 30 seconds; shorten this shot.', { status: 400, code: 'VALIDATION_ERROR' });
-    const audio = await prepareSourceAudioWindow({ project, scene, numFrames: prepared.backend === VIDEO_GEN_MODE.HIGGSFIELD ? 1 + seconds * 24 : prepared.effectiveNumFrames, fps: body.fps || 24 });
+    const fps = body.fps || 24;
+    const audio = await prepareSourceAudioWindow({ project, scene, numFrames: prepared.backend === VIDEO_GEN_MODE.HIGGSFIELD ? 1 + seconds * fps : prepared.effectiveNumFrames, fps });
     inputs.own(() => discardSourceAudioWindow(audio.audioFilePath));
     prepared.audio = audio;
     prepared.audioFilePath = audio.audioFilePath;
