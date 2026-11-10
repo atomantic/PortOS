@@ -7,10 +7,13 @@
 
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import express from 'express';
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { existsSync, readdirSync, rmSync } from 'node:fs';
 import { mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { createZip } from '../lib/zipWriter.js';
@@ -29,7 +32,7 @@ const { createSession } = await import('../services/auth.js');
 
 const { default: musicVideoRoutes } = await import('./musicVideo.js');
 const projects = await import('../services/musicVideo/projects.js');
-const { unsupportedDocumentEffects } = await import('../services/musicVideo/compositionDocument.js');
+const { unsupportedDocumentEffects, UPGRADABLE_IMAGE_EFFECT_MODULES, COMPATIBLE_IMAGE_EFFECT_MODULES } = await import('../services/musicVideo/compositionDocument.js');
 const { captureMusicVideoEvidence, musicVideoDependencyChanges } = await import('../lib/musicVideoDependencies.js');
 
 const appFor = (address = '127.0.0.1') => {
@@ -207,6 +210,25 @@ describe('music-video composition documents', () => {
     const exported = await fetchBytes(`/api/music-video/${project.id}/composition/document/export`);
     const files = Object.fromEntries(readZipArchive(exported.bytes).map(entry => [entry.name, entry.read()]));
     expect(files['musicVideoImageEffects.js']).toEqual(effects);
+  });
+
+  it('upgrades an older document carrying the 16f8de61cd still-effect module and engine 106e8a14 to the shipped files', async () => {
+    const legacyEngine = await readFile(new URL('./fixtures/musicVideoLayeredEngine14833.txt', import.meta.url));
+    const legacyEffects = await readFile(new URL('./fixtures/musicVideoImageEffects16f8de61cd.txt', import.meta.url));
+    const shippedEffects = await readFile(new URL('../lib/musicVideoImageEffects.js', import.meta.url));
+    const shippedEngine = await readFile(new URL('../services/musicVideo/documentTemplates/layered/engine.js', import.meta.url));
+    const imported = await uploadZip(project.id, createZip([
+      { name: 'index.html', data: PAGE }, { name: 'engine.js', data: legacyEngine },
+      { name: 'musicVideoImageEffects.js', data: legacyEffects },
+    ]));
+    const result = await request(app).post(`/api/music-video/${project.id}/composition/document/engine/upgrade`)
+      .send({ directory: imported.body.document.directory });
+    expect(result.status).toBe(200);
+    expect(result.body.changed).toBe(true);
+    const exported = await fetchBytes(`/api/music-video/${project.id}/composition/document/export`);
+    const files = Object.fromEntries(readZipArchive(exported.bytes).map(entry => [entry.name, entry.read()]));
+    expect(files['engine.js']).toEqual(shippedEngine);
+    expect(files['musicVideoImageEffects.js']).toEqual(shippedEffects);
   });
 
   it('refuses customized engines, pending candidates and invalid upgrade pointers without changing the document', async () => {
@@ -493,5 +515,30 @@ describe('music-video composition documents', () => {
     const missing = await request(app).get(`/api/music-video/${project.id}/composition/document/export`);
     expect(missing.status).toBe(409);
     expect(missing.body.code).toBe('COMPOSITION_DOCUMENT_MISSING');
+  });
+
+  it('registers every historical still-effect module digest in upgradable or compatible sets', async () => {
+    const repoRoot = join(fileURLToPath(import.meta.url), '..', '..', '..');
+    const relPath = 'server/lib/musicVideoImageEffects.js';
+    const commits = execFileSync('git', ['log', '--follow', '--format=%H', '--', relPath], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+    }).trim().split('\n').filter(Boolean);
+    expect(commits.length).toBeGreaterThan(0);
+
+    const currentBytes = await readFile(join(repoRoot, relPath));
+    const currentDigest = createHash('sha256').update(currentBytes.toString('utf8').replace(/\r\n?/g, '\n')).digest('hex');
+
+    for (const commit of commits) {
+      const content = execFileSync('git', ['show', `${commit}:${relPath}`], {
+        cwd: repoRoot,
+        encoding: 'utf8',
+      });
+      const digest = createHash('sha256').update(content.replace(/\r\n?/g, '\n')).digest('hex');
+      const registered = digest === currentDigest
+        || UPGRADABLE_IMAGE_EFFECT_MODULES.has(digest)
+        || COMPATIBLE_IMAGE_EFFECT_MODULES.has(digest);
+      expect(registered, `Still-effect module digest at commit ${commit.slice(0, 10)} (${digest}) must be registered`).toBe(true);
+    }
   });
 });

@@ -476,7 +476,10 @@ const UPGRADABLE_LAYERED_ENGINES = new Set([
   '02ca75c17c58eec1bb37463fdd187a133d8c10499bb2b6556c793af8d63b93e8',
 ]);
 // Shipped still-effect modules a document may carry; adoption replaces them with the current one.
-const UPGRADABLE_IMAGE_EFFECT_MODULES = new Set([
+export const UPGRADABLE_IMAGE_EFFECT_MODULES = new Set([
+  // #15571: still-effect module before honoring Use end frame (`endFrameOff`).
+  // Commit 16f8de61cd (module-private photo layout normalizer).
+  'bf072f2842ff71aa5b95da0a42c47b861b7d7e8d3c1759524907538ccc8f157a',
   // #11319's initial still-effect module.
   '4f13c0c26039cdecd0dab5450ebe702d49653e207594af07297ced8f21c2eb1e',
   'b771bf1da99500e14b751ffe82a95ddee749df2030d1a8be7c21b068a7def1e8',
@@ -485,7 +488,7 @@ const UPGRADABLE_IMAGE_EFFECT_MODULES = new Set([
 ]);
 // This shipped module already supplies the new engine's imports and also
 // exposes an extra export. Keep its bytes for documents that may use it.
-const COMPATIBLE_IMAGE_EFFECT_MODULES = new Set([
+export const COMPATIBLE_IMAGE_EFFECT_MODULES = new Set([
   'b5905e6d5be37d5d8b1ed0a1c741e3f9813b65c70eec182a3a3cf86efd4ec92d',
 ]);
 const engineDigest = bytes => createHash('sha256').update(bytes.toString('utf8').replace(/\r\n?/g, '\n')).digest('hex');
