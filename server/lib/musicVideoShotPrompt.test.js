@@ -407,6 +407,14 @@ describe('clip motion guards', () => {
     }
   });
 
+  it('preserves deliberately coordinated choreography within the individuality guard', () => {
+    const shot = { ...continued, shotMode: 'performance', prompt: 'Ada and K dance in synchronized steps.' };
+    const input = musicVideoShotModelInput(null, shot);
+    expect(input.prompt.startsWith(shot.prompt)).toBe(true);
+    expect(input.promptAdditions.find((item) => item.id === 'performer-individuality')?.text)
+      .toContain('while preserving explicitly directed coordinated action');
+  });
+
   it('recognizes only the selected handoff take, including a continued still', () => {
     const take = { kind: 'image', assetId: 'previous-still.png', prompt: 'The picture the previous shot ends on' };
     const shot = { ...scene, referenceImageId: take.assetId, takes: [take] };
