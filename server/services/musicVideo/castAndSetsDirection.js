@@ -55,10 +55,10 @@ import { CAST_SETS_DEFINITION_LIMITS, normalizeDefinitions } from './castAndSets
 // shape the direction as words and are never image-generation inputs.
 const MOOD_BOARD_TEXT_ONLY = 'The image generator never sees the mood board: carry what you take from it (light, color, texture, grain, wardrobe feel) into your own words in the descriptions, lighting and looks.';
 
-// The look line rides on every plate prompt, and a plate is shot empty: a person
+// Set plates and in-set frames carry the scene look. A set plate is empty: a person
 // in either (a mood board's composed style often describes one) lands in the plate.
 const LOOK_AND_SET_RULES = [
-  '- look: palette, light quality, film stock, grain and texture only. Never a person, place, object or pose: it is appended to every image, including the empty set plates.',
+  '- look: palette, light quality, film stock, grain, texture and any explicitly requested rendering medium only. Never a person, place, object or pose: the scene look is appended to set plates and in-set frames; people reference sheets retain only the rendering medium on a neutral field.',
   '- sets: describe the EMPTY place. No people, characters, figures or actions; the protagonist appears only in tests.',
   '- sets: preserve the director\'s requested story details, including deliberate unusual or stylized arrangements. Otherwise, choose details consistent with each other, the described place and its era; avoid unexplained contradictions such as a pristine parked car at a place described as deserted or an unintended second post on a single-pole hoop. Name each fixture once.',
 ].join('\n');
@@ -456,13 +456,13 @@ export function buildCastAndSetsPrompt(project, { moodImages = [], board = null,
   const rules = procedural ? proceduralRules : photographicRules;
 
   // The director's standing sheet feedback: every direction call honors it,
-  // a fresh rebuild included, and it rewrites the look line every image
-  // prompt carries (`look` in the answer) instead of being pasted onto prompts.
+  // a fresh rebuild included, and it rewrites the scene look for set plates
+  // and in-set frames (`look` in the answer) instead of being pasted onto prompts.
   const standing = (Array.isArray(feedback) ? feedback : []).map((f) => trimTo(f?.text, FEEDBACK_TEXT)).filter(Boolean);
   const standingBlock = standing.length ? [
     'DIRECTOR FEEDBACK ON EARLIER SHEETS (always honor it; where it disagrees with the mood board or visual style, the feedback wins):',
     ...standing.map((t) => `- ${t}`),
-    'Carry it into every field it touches (each set\'s description and lighting, the looks, the protagonist), and write "look": one line, under 400 characters, of the look every image prompt carries (film stock, light quality and sources, grain, color), rewritten so it agrees with this feedback.',
+    'Carry it into every field it touches (each set\'s description and lighting, the looks, the protagonist), and write "look": one line, under 400 characters, of the scene look set plates and in-set frames carry (film stock, light quality and sources, grain, color, and any explicitly requested rendering medium), rewritten so it agrees with this feedback.',
   ].join('\n') : '';
 
   const revision = previous ? [
@@ -1128,7 +1128,7 @@ export function describeDirectionChanges(previous, next) {
   const norm = (v) => (v == null || (Array.isArray(v) && !v.length) ? '' : v);
   const same = (a, b) => JSON.stringify(norm(a)) === JSON.stringify(norm(b));
   const out = [];
-  if (!same(previous.look, next.look)) out.push('Look rewritten for every image');
+  if (!same(previous.look, next.look)) out.push('Scene look rewritten for set plates and in-set frames');
   const p0 = previous.protagonist || {};
   const p1 = next.protagonist || {};
   const protagonistFields = Object.keys({ ...p0, ...p1 }).filter((k) => !same(p0[k], p1[k]));

@@ -13,6 +13,84 @@ const DIRECTION = {
   songMap: [], tests: [],
 };
 
+describe('Cast & Sets neutral people sheets', () => {
+  const direction = { ...DIRECTION,
+    look: 'Kodak film grain, warm amber grade and hard rim light',
+    protagonist: { ...DIRECTION.protagonist, forms: [{ id: 'age-7', label: 'Age 7', age: '7', look: 'Faded sepia film', era: '1965' }] },
+    cast: [{ id: 'ben', name: 'Ben', face: 'wide-set brown eyes' }],
+    looks: [...DIRECTION.looks, { name: 'Coat', description: 'a red wool coat' }],
+    tests: [{ setId: 'street', formId: 'age-7', action: 'walking home', caption: 'memory' }], testsFixed: true,
+  };
+  const sheets = ['character', 'expressions', 'looks', 'form:age-7', 'cast:ben', 'face:ben'];
+
+  it('isolates every people plate from scene lighting and grading while keeping scene and era looks', () => {
+    const source = structuredClone(direction);
+    const plan = buildCastAndSetsImagePlan({ scenes: [] }, direction);
+    for (const key of sheets) {
+      const prompt = plan[key].prompt;
+      expect(prompt).toContain('Flat 18% neutral gray color field, uniform corner-to-corner');
+      expect(prompt).toContain('not a physical room, backdrop, floor or wall');
+      expect(prompt).toContain('zero cast, contact, floor or ambient-occlusion shadow');
+      expect(prompt).toContain('zero light bleed outside the silhouette');
+      expect(prompt).toContain('identical skin value and hue across front, rear and face panels');
+      expect(prompt).toContain('no depth-of-field blur');
+      expect(prompt).toContain('Render no text, no labels, no captions, no numbering anywhere in the image');
+      expect(prompt).not.toMatch(/Look:|Light:|golden hour|Kodak|sepia|dark grey backdrop|typewriter captions/);
+      expect(prompt).toContain('photorealistic, editorial photography');
+    }
+    for (const key of ['character', 'looks', 'form:age-7', 'cast:ben']) {
+      expect(plan[key].prompt).toContain('FRONT views dead-on orthographic');
+      expect(plan[key].prompt).toContain('weight even across both feet, regardless of how the figure stands in the reference');
+    }
+    for (const key of ['character', 'form:age-7', 'cast:ben']) {
+      expect(plan[key].prompt).toContain('BACK view dead-on orthographic from directly behind');
+      expect(plan[key].prompt).toContain('no glance back');
+    }
+    for (const key of sheets.filter((key) => key !== 'looks')) {
+      expect(plan[key].prompt).toContain('FACE close-ups and FRONT face panels dead-on orthographic and level');
+    }
+    expect(plan.looks.prompt).toContain('Panel 1 from the left wears TEE: lavender tee and cutoffs');
+    expect(plan.looks.prompt).toContain('Panel 2 from the left wears Coat: a red wool coat');
+    expect(plan['set:street'].prompt).toContain('Lighting: golden hour');
+    expect(plan['set:street'].prompt).toContain(`Look: ${direction.look}`);
+    expect(plan['test:1'].prompt).toContain('Light: golden hour');
+    expect(plan['test:1'].prompt).toContain('Look: Faded sepia film');
+    expect(plan['test:1'].prompt).toContain('1965');
+    expect(direction).toEqual(source);
+  });
+
+  it('retains known nonphotographic rendering media without carrying their scene grade onto people', () => {
+    const look = 'Watercolor illustration and hand-drawn animation, warm amber grade, hard rim light';
+    const plan = buildCastAndSetsImagePlan({ scenes: [] }, { ...direction, look });
+    for (const key of sheets) {
+      expect(plan[key].prompt).toContain('Rendering medium: Watercolor illustration, hand-drawn animation');
+      expect(plan[key].prompt).not.toMatch(/photorealistic|Photographic|warm amber grade|hard rim light/);
+    }
+    expect(plan['set:street'].prompt).toContain(`Look: ${look}`);
+    const animated = buildCastAndSetsImagePlan({ scenes: [] }, { ...direction, look: '3D animated, warm amber grade' });
+    expect(animated.character.prompt).toContain('Rendering medium: 3D animated');
+    expect(animated.character.prompt).not.toMatch(/photorealistic|warm amber grade/);
+    const photographic = buildCastAndSetsImagePlan({ scenes: [] }, { ...direction, look: 'Editorial photography, not an anime or cartoon' });
+    expect(photographic.character.prompt).toContain('photorealistic, editorial photography');
+    expect(photographic.character.prompt).not.toContain('Rendering medium:');
+    const excludedList = buildCastAndSetsImagePlan({ scenes: [] }, { ...direction, look: 'No anime, cartoon and pixel art; watercolor illustration, warm amber grade' });
+    expect(excludedList.character.prompt).toContain('Rendering medium: watercolor illustration');
+    expect(excludedList.character.prompt).not.toMatch(/anime|cartoon|pixel art|warm amber grade/);
+    const memory = buildCastAndSetsImagePlan({ scenes: [] }, { ...direction,
+      protagonist: { ...direction.protagonist, forms: [{ ...direction.protagonist.forms[0], look: 'oil painting, sepia grade' }] } });
+    expect(memory.character.prompt).toContain('photorealistic, editorial photography');
+    expect(memory['form:age-7'].prompt).toContain('Rendering medium: oil painting');
+    expect(memory['form:age-7'].prompt).not.toMatch(/photorealistic|sepia grade/);
+    expect(memory['test:1'].prompt).toContain('Look: oil painting, sepia grade');
+    const inherited = buildCastAndSetsImagePlan({ scenes: [], concept: { style: 'acrylic painting, warm amber grade' } }, { ...direction, look: 'hard rim light' });
+    expect(inherited.character.prompt).toContain('Rendering medium: acrylic painting');
+    expect(inherited.character.prompt).not.toMatch(/photorealistic|warm amber grade|hard rim light/);
+    const explicit = buildCastAndSetsImagePlan({ scenes: [] }, { ...direction, look: 'acrylic painting, warm amber grade' });
+    expect(explicit.character.prompt).toContain('Rendering medium: acrylic painting');
+    expect(explicit.character.prompt).not.toMatch(/photorealistic|warm amber grade/);
+  });
+});
+
 describe('Cast & Sets prop sheet', () => {
   it('preserves the signature while keeping carried objects on the prop sheet', () => {
     const signature = 'matte black plastic 35mm snapshot camera on a wrist strap';
