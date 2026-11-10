@@ -6,7 +6,6 @@ import {
   PIXAL3D_CONDA_ENV,
   PIXAL3D_SETUP_FLAGS,
   PIXAL3D_NATTEN_VERSION,
-  PIXAL3D_UTILS3D_WHEEL,
   PIXAL3D_RESOLUTIONS,
   PIXAL3D_STANDARD_MODE_MIN_VRAM_GB,
   PIXAL3D_HIGH_RES_MIN_VRAM_GB,
@@ -154,8 +153,10 @@ describe('buildPixal3dInstallSteps', () => {
     expect(natten.args[1]).toContain('NATTEN_N_WORKERS=');
   });
 
-  it('installs the pinned utils3d wheel', () => {
-    expect(stageOf(fresh(), 'utils3d').args[1]).toContain(PIXAL3D_UTILS3D_WHEEL);
+  it('passes the utils3d wheel URL and its SHA-256 to pip together', () => {
+    expect(stageOf(fresh(), 'utils3d').args[1]).toMatch(
+      /pip install "https:\/\/github\.com\/LDYang694\/Storages\/releases\/download\/20260430\/utils3d-0\.0\.2-py3-none-any\.whl#sha256=[a-f0-9]{64}"$/,
+    );
   });
 
   it('is resumable — skips the env and clones that already exist', () => {
