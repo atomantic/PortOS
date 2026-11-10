@@ -28,9 +28,11 @@ describe('phoneticLipSyncSummary', () => {
     ] }], 0, 2);
     expect(summary).toContain('on: "\\"Boom!\\"".');
     expect(summary).toContain('on: "Phone", "very".');
-    expect(summary).toContain('"\\"Boom!\\"" 0.000s–0.450s');
-    expect(summary).toContain('"ah" 1.540s–2.000s');
-    expect(summary).not.toContain('"very" 1.100s');
+    const holdLine = summary.split('\n').find((line) => line.startsWith('Sustained vowel holds'));
+    expect(holdLine).toContain('preserve consonant closures');
+    expect(holdLine).toContain('"ah"');
+    expect(holdLine).not.toContain('"very"');
+    expect(holdLine).not.toMatch(/\d+\.\d+s/);
   });
 
   it('skips untimed, invalid, unsupported, and adjacent words without fabricating lyrics', () => {

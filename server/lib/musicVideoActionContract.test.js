@@ -22,8 +22,9 @@ describe('vocal performance model input', () => {
     expect(actions).toContain('Sing in sync with the audio track.\nLip-seal closures');
     expect(actions).toContain('on: "Burn", "my".');
     expect(actions).toContain('on: "fire", "voice".');
-    expect(actions).toContain('"Burn" 0.750s–1.250s');
-    expect(actions).toContain('"my" 1.250s–1.700s');
+    expect(actions).toContain('Sustained vowel holds (within each timed word, preserve consonant closures');
+    expect(actions).toContain('on: "Burn", "my", "voice".');
+    expect(actions).toContain('Word 1.250s–1.700s: my');
     expect(actions).toContain('Word 0.750s–1.250s: Burn');
     expect(actions).toContain('Mouth Visibility Guard:');
     expect(actions).toContain('microphone head');

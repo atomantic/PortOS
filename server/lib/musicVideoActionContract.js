@@ -80,7 +80,7 @@ export function shotActionPrompt(project, scene, { frame = false, offsetSec = 0,
     const selected = cues.map((cue) => ({ cue, words: (Array.isArray(cue.words) ? cue.words : []).filter(window).slice(0, 64) }));
     if (vocalClip && cues.length) {
       lines.push('Sing in sync with the audio track.');
-      const phonetics = phoneticLipSyncSummary(cues, scene.startSec, scene.endSec, { words: selected.flatMap((item) => item.words), offsetSec });
+      const phonetics = phoneticLipSyncSummary(cues, scene.startSec, scene.endSec, { words: selected.flatMap((item) => item.words) });
       if (phonetics) lines.push(phonetics);
       lines.push("Mouth Visibility Guard: Keep the active singer's mouth clearly visible and unobstructed toward the camera in every frame — no hands, hair, microphone head, or other bodies crossing the lips; keep any strobe or hard flash soft on the singer's face so lip closures stay readable.");
       const otherSubjects = [...(intent.actions || []), ...(intent.reactions || [])]
