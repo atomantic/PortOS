@@ -1314,7 +1314,7 @@ describe('cleanupAgentWorktree - PR-creation path', () => {
   });
 
   describe('reviewer identity preflight (#13115)', () => {
-    const missing = (login) => (args) => (args.includes(`users/${login}`)
+    const missing = (login) => (args) => ((args.includes(`users/${login}`) || args.includes(`users/${encodeURIComponent(`${login}[bot]`)}`))
       ? Promise.reject(Object.assign(new Error('gh: Not Found (HTTP 404)'), { ghNoAccess: true, ghStderr: 'gh: Not Found (HTTP 404)' }))
       : Promise.resolve('{}'));
     const run = (extra) => cleanupAgentWorktree('agent-1', true, {
