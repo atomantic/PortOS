@@ -89,10 +89,6 @@ router.get('/rolling-cost', asyncHandler(async (req, res) => {
   res.json(await getFleetRollingCost({ providers, range }));
 }));
 
-// GET /api/usage/subscriptions - The Subscriptions page's own model: one row
-// per manageable plan (enabled state, plan tier, monthly price, the provider
-// records the toggle fans out to). The savings/spend figures for those rows
-// come from GET /api/usage; the quota meters from GET /api/usage/providers.
 // GET /api/usage/tips - Retention settings this machine's CLIs still need so
 // their session history stays readable. Reads the CLI config; never writes it.
 router.get('/tips', asyncHandler(async (req, res) => {
@@ -105,6 +101,10 @@ router.post('/tips/:id/dismiss', asyncHandler(async (req, res) => {
   res.json({ tips: await dismissUsageRetentionTip(id) });
 }));
 
+// GET /api/usage/subscriptions - The Subscriptions page's own model: one row
+// per manageable plan (enabled state, plan tier, monthly price, the provider
+// records the toggle fans out to). The savings/spend figures for those rows
+// come from GET /api/usage; the quota meters from GET /api/usage/providers.
 router.get('/subscriptions', asyncHandler(async (req, res) => {
   res.json(await getSubscriptionOverview());
 }));

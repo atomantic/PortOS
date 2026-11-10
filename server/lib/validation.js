@@ -1705,12 +1705,12 @@ export const usageQuerySchema = z.object({
   to: isoDay.optional()
 }).refine((q) => !(q.from && q.to) || q.from <= q.to, { message: 'from must be on or before to' });
 
-/** Query for GET /api/usage/rolling-cost — the chart's span, independent of the report window. */
 /** Params for POST /api/usage/tips/:id/dismiss. */
 export const usageTipParamsSchema = z.object({
   id: z.string().regex(/^[a-z0-9-]{1,64}$/)
 });
 
+/** Query for GET /api/usage/rolling-cost — the chart's span, independent of the report window. */
 export const usageRollingCostQuerySchema = z.object({
   range: z.enum(['1m', '3m', '6m', '1y', 'all']).optional()
 });
