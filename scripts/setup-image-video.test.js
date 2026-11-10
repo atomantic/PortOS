@@ -23,6 +23,24 @@ const installFlags = [
   'INSTALL_MUSCRIPTOR', 'INSTALL_FLUX2',
 ];
 
+// Install the fixture's uv function at the private executable boundary. An
+// ambient executable is deliberately unnecessary; production must select this
+// path for both POSIX and native Windows venv layouts.
+const seedPrivateUv = `
+for layout in bin/uv Scripts/uv.exe; do
+  tool="$HOME/.portos/tools/uv-0.13.6/$layout"
+  mkdir -p "$(dirname "$tool")"
+  {
+    printf '#!/usr/bin/env bash\\n'
+    printf 'if [[ "$1" == --version ]]; then echo "uv 0.13.6"; exit 0; fi\\n'
+    declare -f uv
+    printf 'uv "$@"\\n'
+  } > "$tool"
+  chmod +x "$tool"
+done
+uv() { echo "Ambient uv must not execute" >&2; return 96; }
+`;
+
 it('tells UI-driven BYOV installs that no manual Python configuration is needed', () => {
   expect(source).toContain('PortOS auto-discovers the requested runtime; no Python path or other manual configuration is needed.');
 });
@@ -669,7 +687,7 @@ describe('uv installs target their own venv, not an inherited one', () => {
     // GHSA-hq85-5cpj-mr62 needs 0.13.4; that also includes the entry-point,
     // RECORD, ZIP and TAR extraction fixes. Check every executable install.
     const installs = [...source.matchAll(/pip install[^\n]*-r "\$SCRIPT_DIR\/requirements-uv-bootstrap\.lock\.txt"/g)];
-    expect(installs).toHaveLength(3);
+    expect(installs).toHaveLength(1);
     for (const [install] of installs) expect(install).toContain('--require-hashes --no-deps');
     expect(source).not.toMatch(/pip install[^\n]*["']uv==/);
     const pin = readFileSync(join(REPO_ROOT, 'scripts', 'requirements-uv-bootstrap.txt'), 'utf8').match(/^uv==(\d+)\.(\d+)\.(\d+)$/m);
@@ -677,8 +695,8 @@ describe('uv installs target their own venv, not an inherited one', () => {
     expect(major > 0 || minor > 13 || (minor === 13 && patch >= 4)).toBe(true);
     // The tool directory and version probe must track the locked release.
     const version = pin.slice(1).join('.');
-    expect(source.match(new RegExp(`uv-${version.replaceAll('.', '\\.')}`, 'g'))).toHaveLength(3);
-    expect(source.match(new RegExp(`"uv ${version.replaceAll('.', '\\.')}"`, 'g'))).toHaveLength(3);
+    expect(source.match(new RegExp(`uv-${version.replaceAll('.', '\\.')}`, 'g'))).toHaveLength(1);
+    expect(source).toContain('^uv\\ 0\\.13\\.6($|[[:space:]])');
   });
 
   it('passes --python to every uv pip install', () => {
@@ -693,6 +711,152 @@ describe('uv installs target their own venv, not an inherited one', () => {
       .filter((line) => !line.includes('--python'));
 
     expect(undirected).toEqual([]);
+  });
+});
+
+describe('private uv and upstream lock installation boundary', () => {
+  function installer(flag, { privateVersion } = {}) {
+    // Spaces exercise quoting of both tool and runtime paths.
+    const home = mkdtempSync(join(tmpdir(), 'portos private uv '));
+    tempVenvs.push(home);
+    const log = join(home, 'calls');
+    const uv = join(home, 'fake-uv');
+    const pip = join(home, 'fake-pip-python');
+    const python = join(home, 'bootstrap-python');
+    const executable = (path, body) => {
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, `#!/usr/bin/env bash\nset -eu\n${body}\n`);
+      chmodSync(path, 0o755);
+    };
+    executable(uv, `
+if [[ "$1" == --version ]]; then echo 'uv 0.13.6 (fixture)'; exit 0; fi
+printf 'private %s\\n' "$*" >> "$LOG"
+case "$1" in
+  python) echo "$HOME/managed-python" ;;
+  venv)
+    root="\${@: -1}"
+    [[ "$root" == 3.11 ]] && root=.venv
+    mkdir -p "$root/bin"
+    printf '#!/usr/bin/env bash\\nexit 0\\n' > "$root/bin/python3"
+    chmod +x "$root/bin/python3"
+    ;;
+  sync)
+    [[ "$*" == 'sync --locked' ]] || exit 91
+    [[ -f uv.lock && "\${STALE_LOCK:-0}" == 0 ]] || exit 42
+    ;;
+  *) exit 92 ;;
+esac`);
+    executable(pip, `
+printf 'bootstrap %s\\n' "$*" >> "$LOG"
+[[ "$*" == *'--require-hashes --no-deps --only-binary :all:'* && "$*" == *requirements-uv-bootstrap.lock.txt ]] || exit 93
+echo 'pip progress on stdout'
+[[ "\${FAIL_PIP:-0}" == 0 ]] || exit 43
+cp "$UV_FIXTURE" "$(dirname "$0")/uv"`);
+    executable(python, `
+if [[ "$1" == -c ]]; then
+  [[ "\${NO_BOOTSTRAP_MODULES:-0}" == 0 || "$0" == *alternate-python ]]
+  exit $?
+fi
+printf 'base %s\\n' "$*" >> "$LOG"
+[[ "$1 $2" == '-m venv' ]] || exit 94
+echo 'venv progress on stdout'
+[[ "\${FAIL_VENV:-0}" == 0 ]] || exit 44
+mkdir -p "\${@: -1}/bin"
+cp "$PIP_FIXTURE" "\${@: -1}/bin/python3"`);
+    const alternatePython = join(home, 'alternate-python');
+    writeFileSync(alternatePython, readFileSync(python));
+    chmodSync(alternatePython, 0o755);
+    if (privateVersion) executable(join(home, '.portos/tools/uv-0.13.6/bin/uv'), `[[ \"$1\" == --version ]] || echo 'stale execute' >> \"$LOG\"; echo 'uv ${privateVersion}'`);
+    const run = (extra = {}) => {
+      writeFileSync(log, '');
+      return spawnSync(resolveBashBinary(), ['-c', `
+set -euo pipefail
+uname() { if [[ "$1" == -m ]]; then echo arm64; else echo Darwin; fi; }
+uv() { echo 'AMBIENT UV MUST NEVER RUN' >&2; exit 95; }
+python3.14() { [[ "\${ALLOW_ALT:-0}" == 1 ]] && "$ALT_PYTHON" "$@"; }
+python3.13() { return 1; }
+python3.12() { return 1; }
+python3.11() { return 1; }
+python3.10() { return 1; }
+python3.9() { return 1; }
+python3.8() { return 1; }
+python3() { return 1; }
+git() {
+  if [[ "$1" == clone ]]; then
+    root="\${@: -1}"
+    mkdir -p "$root/.git"
+    [[ "\${MISSING_LOCK:-0}" == 1 ]] || touch "$root/uv.lock"
+  elif [[ "$*" == *show-ref* ]]; then return 1; fi
+}
+# Record the exact Python path forwarded into the architecture-repair probe.
+lipo() { printf 'architecture %s\\n' "$*" >> "$LOG"; }
+source "$1"
+printf 'captured %s\\n' "\${LTX2_BASE_PY:-\${LTX25_BASE_PY:-\${WAN22_BASE_PY:-}}}" >> "$LOG"
+`, 'bash', SETUP_SCRIPT], {
+        encoding: 'utf8',
+        env: {
+          ...process.env, ...Object.fromEntries(installFlags.map((name) => [name, '0'])),
+          HOME: home, PORTOS_DATA: join(home, 'data'), PYTHON_BIN: python,
+          LOG: log, UV_FIXTURE: uv, PIP_FIXTURE: pip, ALT_PYTHON: alternatePython, [flag]: '1', ...extra,
+        },
+      });
+    };
+    return { run, calls: () => readFileSync(log, 'utf8'), home };
+  }
+
+  it.each(['INSTALL_LTX2', 'INSTALL_LTX25', 'INSTALL_WAN22'])('bootstraps private uv and preserves the upstream lock for %s', (flag) => {
+    const install = installer(flag);
+    const fresh = install.run();
+    expect(fresh.status, fresh.stderr).toBe(0);
+    expect(install.calls()).toContain('bootstrap -m pip install --disable-pip-version-check --require-hashes --no-deps --only-binary :all:');
+    expect(install.calls()).toContain('private sync --locked');
+    expect(install.calls()).toContain(`captured ${install.home}/managed-python\n`);
+    expect(install.calls()).not.toMatch(/captured.*(?:pip progress|venv progress)/);
+    const repair = install.run();
+    expect(repair.status, repair.stderr).toBe(0);
+    expect(install.calls()).not.toContain('bootstrap ');
+    expect(install.calls()).toContain('private sync --locked');
+    const failedLock = install.run({ STALE_LOCK: '1' });
+    expect(failedLock.status).toBe(42);
+    expect(failedLock.stdout).not.toContain('venv ready');
+  });
+
+  it('uses a complete alternate Python when the selected system Python lacks bootstrap modules', () => {
+    const install = installer('INSTALL_LTX2');
+    const result = install.run({ NO_BOOTSTRAP_MODULES: '1', ALLOW_ALT: '1' });
+    expect(result.status, result.stderr).toBe(0);
+    expect(install.calls()).toContain('bootstrap -m pip install');
+    expect(install.calls()).toContain('private sync --locked');
+  });
+
+  it('reports a missing bootstrap prerequisite before mutating the private tool or runtime venv', () => {
+    const install = installer('INSTALL_LTX2');
+    const result = install.run({ NO_BOOTSTRAP_MODULES: '1' });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('needs Python 3.8+ with venv and ensurepip');
+    expect(install.calls()).not.toMatch(/^(base |bootstrap |private |stale execute)/m);
+    expect(existsSync(join(install.home, '.portos/tools'))).toBe(false);
+  });
+
+  it('refuses a missing upstream lock instead of resolving one', () => {
+    const install = installer('INSTALL_LTX2');
+    expect(install.run({ MISSING_LOCK: '1' }).status).toBe(42);
+  });
+
+  it.each(['0.13.3', '0.13.60'])('replaces a private uv reporting %s before using it', (privateVersion) => {
+    const install = installer('INSTALL_LTX2', { privateVersion });
+    const result = install.run();
+    expect(result.status, result.stderr).toBe(0);
+    expect(install.calls()).toContain('bootstrap ');
+    expect(install.calls()).toContain('private sync --locked');
+  });
+
+  it.each([{ FAIL_VENV: '1' }, { FAIL_PIP: '1' }])('never executes stale uv after failed bootstrap in a command substitution (%j)', (failure) => {
+    const install = installer('INSTALL_LTX2', { privateVersion: '0.13.3' });
+    const result = install.run(failure);
+    expect(result.status).not.toBe(0);
+    expect(install.calls()).not.toMatch(/^(private |stale execute)/m);
+    expect(result.stdout).not.toContain('venv ready');
   });
 });
 
@@ -800,6 +964,7 @@ uv() {
     echo 'Unexpected unlocked install' >&2; return 91
   fi
 }
+${seedPrivateUv}
 source "$1"
 `, 'bash', SETUP_SCRIPT.replaceAll('\\', '/')], {
       encoding: 'utf8',
@@ -908,7 +1073,7 @@ describe('MiniMax H3 CUDA hash-pinned installation', () => {
     executable('python3', 'exit 0');
     executable('ffmpeg', 'exit 0');
     executable('ffprobe', 'exit 0');
-    executable('uv', `printf '%s\\n' "$*" >> "$CALL_LOG"
+    executable('uv', `if [[ \"$1\" == --version ]]; then echo 'uv 0.13.6'; exit 0; fi\nprintf '%s\\n' "$*" >> "$CALL_LOG"
 if [[ "$1" == venv ]]; then
   root="\${@: -1}"
   mkdir -p "$root/$PY_LAYOUT"
@@ -920,6 +1085,13 @@ elif [[ "$1 $2" == 'pip sync' ]]; then
 else
   exit 42
 fi`);
+    for (const layout of ['bin/uv', 'Scripts/uv.exe']) {
+      const tool = join(dir, '.portos/tools/uv-0.13.6', layout);
+      mkdirSync(dirname(tool), { recursive: true });
+      writeFileSync(tool, readFileSync(join(bin, 'uv')));
+      chmodSync(tool, 0o755);
+    }
+    executable('uv', 'echo \"Ambient uv must not execute\" >&2; exit 96');
     const fakePy = join(dir, 'fake-python');
     writeFileSync(fakePy, `#!/bin/bash
 set -eu
@@ -994,8 +1166,8 @@ describe('Wan 2.2 CUDA hash-pinned installation', () => {
     expect(section).toContain('requirements-wan22-cuda-linux.lock.txt');
     expect(section).toContain('pip sync --require-hashes --only-binary :all: --index-strategy unsafe-best-match --python "$WAN22_CUDA_PY" "$WAN22_CUDA_LOCK"');
     expect(section).not.toMatch(/pip install|--upgrade|requirements-wan22-cuda\.txt/);
-    expect(section).toContain('uv venv --managed-python --python 3.11');
-    expect(section).toContain('uv venv --clear --managed-python --python 3.11');
+    expect(section).toContain('portos_uv venv --managed-python --python 3.11');
+    expect(section).toContain('portos_uv venv --clear --managed-python --python 3.11');
     expect(section).toContain("(Path(sys.base_prefix) / 'conda-meta').is_dir()");
   });
 });
@@ -1037,6 +1209,7 @@ uv() {
     echo 'Unexpected unlocked install' >&2; return 91
   fi
 }
+${seedPrivateUv}
 source "$1"
 `, 'bash', SETUP_SCRIPT.replaceAll('\\', '/')], {
     encoding: 'utf8',
@@ -1265,7 +1438,7 @@ describe('shared mflux Apple Silicon install is hash-pinned', () => {
   // Run the real install block on "Apple Silicon" with a fake interpreter and
   // uv that record every call, so the branch logic and the mflux-only
   // requirement extraction are exercised rather than pattern-matched.
-  const runBlock = ({ oldPython }) => {
+  const runBlock = ({ oldPython, appleSilicon = true }) => {
     const dir = mkdtempSync(join(tmpdir(), 'portos-mflux-'));
     tempVenvs.push(dir);
     const log = join(dir, 'calls.log');
@@ -1281,14 +1454,15 @@ exit 0
     chmodSync(fakePython, 0o755);
     const script = `set -euo pipefail
 INSTALL_MFLUX=1; PYTHON_BIN="${fakePython}"; SCRIPT_DIR="${join(REPO_ROOT, 'scripts')}"; HOME="${dir}"
-is_apple_silicon() { return 0; }
+is_apple_silicon() { return ${appleSilicon ? 0 : 1}; }
 have() { return 0; }
-uv() { echo "uv $*" >> "${log}"; }
+portos_uv() { echo "uv $*" >> "${log}"; }
 reset_universal_venv() { :; }
 pin_venv_arm64() { :; }
 probe_or_fail() { shift 2; echo "probe $*" >> "${log}"; }
 ${block}`;
     const result = spawnSync(resolveBashBinary(), ['-c', script], { encoding: 'utf8' });
+    if (!appleSilicon) return { ...result, calls: existsSync(log) ? readFileSync(log, 'utf8') : '' };
     expect(result.status, result.stderr).toBe(0);
     return {
       calls: readFileSync(log, 'utf8'),
@@ -1308,9 +1482,15 @@ ${block}`;
     expect(lock).not.toMatch(/^[a-z][^\n]* @ /im);
   });
 
-  it('locks the validated trio the resolving path still names', () => {
-    for (const name of ['MFLUX_PIN', 'MLX_PIN', 'MLX_METAL_PIN']) {
-      const pin = block.match(new RegExp(`${name}='([^']+)'`))[1];
+  it('rejects the non-Apple mflux profile before any Python or installer subprocess', () => {
+    const result = runBlock({ oldPython: false, appleSilicon: false });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('no locked mflux profile exists for this host');
+    expect(result.calls).toBe('');
+  });
+
+  it('locks every direct requirement in the Apple Silicon profile', () => {
+    for (const pin of directPins.split('\n').filter((line) => /^[a-z].*==/.test(line))) {
       expect(directPins).toMatch(new RegExp(`^${pin.replace(/[.]/g, '\\.')}$`, 'm'));
       expect(lock).toMatch(new RegExp(`^${pin.replace(/[.]/g, '\\.')} ;`, 'm'));
     }
@@ -1399,8 +1579,8 @@ describe('FastVideo MLX Apple Silicon install is hash-pinned', () => {
   });
 
   it('installs the lock with uv pip sync --require-hashes and editable package with --no-deps', () => {
-    expect(section).toContain('"$FASTVIDEO_UV" pip sync --require-hashes --python "${FASTVIDEO_PY}" "$FASTVIDEO_LOCK"');
-    expect(section).toContain('"$FASTVIDEO_UV" pip install --no-deps --python "${FASTVIDEO_PY}" -e "${FASTVIDEO_DIR}"');
+    expect(section).toContain('portos_uv pip sync --require-hashes --python "${FASTVIDEO_PY}" "$FASTVIDEO_LOCK"');
+    expect(section).toContain('portos_uv pip install --no-deps --python "${FASTVIDEO_PY}" -e "${FASTVIDEO_DIR}"');
     expect(section).not.toContain("pip install --python \"${FASTVIDEO_PY}\" -e '.[mlx]'");
   });
 
