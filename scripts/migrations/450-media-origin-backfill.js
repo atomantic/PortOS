@@ -13,10 +13,17 @@
  *   re-adding to date its arrival. Its creator is resolved across machines
  *   instead (#14133).
  * - A supplier or host names a machine that held the media, not its creator, so
- *   it never becomes an origin; any such id marks the install as federated.
- *   Media tombstones carry no machine id, so an install whose every peer was
- *   removed before this release leaves no trace and its old pulls are claimed
- *   here; #14133 settles such a claim against an earlier holder.
+ *   it never becomes an origin; any such id marks the install as federated, as
+ *   does another machine named by the holders record (`media-holders.json`, or
+ *   the `peer-media-holdings.json` migration 451 folds into it), which removing
+ *   a peer leaves behind (#15664).
+ * - A file written later than its record's `createdAt` by more than clock skew
+ *   (ORIGIN_CLAIM_SKEW_MS in server/lib/mediaOriginClaim.js) is a copy that
+ *   arrived after it was made, or a render that ran longer than the skew; it
+ *   stays origin-less so the earliest-holder proof settles it once paired. A
+ *   record without `createdAt` has no such evidence and is claimed as before;
+ *   if that claim is wrong, the earliest-holder proof replaces it once paired
+ *   (services/mediaOriginReconcile.js).
  * - A record whose bytes are not on this machine is not claimed.
  *
  * An existing origin is never changed, so a re-run is a no-op. Writes go
@@ -39,10 +46,46 @@ const sidecarPaths = (dir, filename) => [
   join(dir, `${filename}.metadata.json`),
 ];
 
-const isHeldFile = (path) => stat(path).then((s) => s.isFile(), (err) => {
-  if (err.code === 'ENOENT') return false;
+// Frozen copy of ORIGIN_CLAIM_SKEW_MS (server/lib/mediaOriginClaim.js).
+const CLAIM_SKEW_MS = 5 * 60 * 1000;
+
+// The held file's modify time, or null when it is not a file on this machine.
+const heldFileMtime = (path) => stat(path).then((s) => (s.isFile() ? s.mtimeMs : null), (err) => {
+  if (err.code === 'ENOENT') return null;
   throw err;
 });
+
+// A file made here is written with its record; one written well after `createdAt` arrived later.
+const writtenAfterCreation = (mtimeMs, createdAt) => {
+  const createdMs = typeof createdAt === 'string' ? Date.parse(createdAt) : NaN;
+  return Number.isFinite(createdMs) && mtimeMs - createdMs > CLAIM_SKEW_MS;
+};
+
+/**
+ * True when a holders record names a machine other than `localId`: a peer's
+ * reported holdings or file times, or a queued release. An unreadable record,
+ * or one whose fields have an unexpected shape, cannot rule federation out.
+ */
+async function holdersNameAnotherMachine(dataDir, localId) {
+  const other = (id) => isId(id) && id !== localId;
+  const keysOf = (map) => (map === undefined ? [] : isPlainObject(map) ? Object.keys(map) : null);
+  const read = async (name) => (existsSync(join(dataDir, name)) ? readJsonOrNull(join(dataDir, name)) : undefined);
+  const store = await read('media-holders.json');
+  if (store !== undefined) {
+    if (!isPlainObject(store) || (store.releases !== undefined && !Array.isArray(store.releases))) return true;
+    const holders = keysOf(store.holdings);
+    const reporters = keysOf(store.reports);
+    if (!holders || !reporters) return true;
+    const released = (store.releases ?? []).flatMap((r) => (isPlainObject(r) ? [r.peerId, r.primaryInstanceId] : [null]));
+    if ([...holders, ...reporters].some(other) || released.some((id) => id === null || other(id))) return true;
+  }
+  const legacy = await read('peer-media-holdings.json');
+  if (legacy !== undefined) {
+    const reporters = isPlainObject(legacy) ? keysOf(legacy.peers) : null;
+    if (!reporters || reporters.some(other)) return true;
+  }
+  return false;
+}
 
 /** Gallery `.png` names in data/images: each image file, plus each sidecar whose bytes are elsewhere. */
 async function galleryNames(dir) {
@@ -77,7 +120,8 @@ export default {
     // Unreadable identity or registry: federation cannot be ruled out.
     if (!localId || (instances.peers !== undefined && !Array.isArray(instances.peers))) return { videos: 0, images: 0, reason: 'no-identity' };
     const hosted = await readJsonOrNull(join(dataDir, 'peer-hosted-media.json'));
-    let federated = instances.peers?.length > 0 || (isPlainObject(hosted?.entries) && Object.keys(hosted.entries).length > 0);
+    let federated = instances.peers?.length > 0 || (isPlainObject(hosted?.entries) && Object.keys(hosted.entries).length > 0)
+      || await holdersNameAnotherMachine(dataDir, localId);
     const foreign = (record) => [record.originInstanceId, record.suppliedByInstanceId].some((id) => isId(id) && id !== localId);
 
     // Absent or unreadable history is left alone; an unreadable one is never rewritten.
@@ -104,14 +148,16 @@ export default {
 
     let videos = 0;
     for (const row of videoClaims) {
-      if (!await isHeldFile(join(dataDir, 'videos', row.filename))) continue;
+      const mtimeMs = await heldFileMtime(join(dataDir, 'videos', row.filename));
+      if (mtimeMs === null || writtenAfterCreation(mtimeMs, row.createdAt)) continue;
       row.originInstanceId = localId;
       videos++;
     }
     if (videos > 0) await writeJsonAtomic(historyPath, history);
     let images = 0;
     for (const { filename, path, sidecar } of imageClaims) {
-      if (!await isHeldFile(join(imagesDir, filename))) continue;
+      const mtimeMs = await heldFileMtime(join(imagesDir, filename));
+      if (mtimeMs === null || writtenAfterCreation(mtimeMs, sidecar.createdAt)) continue;
       // No createdAt is invented: a local origin makes the file's modify time the live stamp.
       await writeJsonAtomic(path, { ...sidecar, originInstanceId: localId });
       images++;
