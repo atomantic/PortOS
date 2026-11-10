@@ -18,6 +18,8 @@ const catalog = vi.hoisted(() => ({ getIngredient: vi.fn(), listMediaForIngredie
 vi.mock('../catalogDB.js', () => catalog);
 
 const getProject = vi.fn(async () => null);
+const clipQueue = vi.hoisted(() => ({ submit: vi.fn(async () => ({ jobId: 'synthetic-clip-job' })) }));
+vi.mock('../videoGen/submitJob.js', () => ({ submitVideoGenJob: clipQueue.submit }));
 vi.mock('./projects.js', () => ({ getProject: (...args) => getProject(...args) }));
 vi.mock('../settings.js', () => ({ getSettings: vi.fn(async () => ({ imageGen: { mode: 'codex', codex: { enabled: true, codexPath: '/bin/codex' } } })) }));
 vi.mock('../universeBuilder/crud.js', () => ({ getUniverseRenderPin: vi.fn(async () => null), getUniverseVisualProfile: vi.fn(async () => null) }));
@@ -28,6 +30,7 @@ const { buildSceneFrameGenerateBody } = await import('./sceneFrameReferences.js'
 const { musicVideoLinkedReferenceId } = await import('../../lib/musicVideoConditioning.js');
 const { validateRequest } = await import('../../lib/validation.js');
 const { musicVideoSceneClipRenderSchema, musicVideoSceneClipsRenderSchema } = await import('../../lib/musicVideoValidation.js');
+const { renderSceneClips } = await import('./sceneCardRender.js');
 
 const names = (result) => result.data.referenceImagePaths.map((file) => file.split(/[\\/]/).at(-1));
 
@@ -65,6 +68,18 @@ function installCardCatalog({ portrait = true } = {}) {
 }
 
 describe('shot-card clip body validation', () => {
+  it('requests enough hosted footage for every return to a shared source', async () => {
+    for (const [backend, field, seconds] of [['fal', 'falDuration', 10], ['runway', 'runwayDuration', 9], ['grok', 'grokDuration', 10]]) {
+      clipQueue.submit.mockClear();
+      const project = { id: 'mv-card', videoSettings: { backend, falDuration: 6, runwayDuration: 5 }, scenes: [
+        { sceneId: 'source', startSec: 0, endSec: 1, referenceImageId: 'start.png', prompt: 'The rider turns' },
+        { sceneId: 'return', startSec: 8, endSec: 9, sourceTake: { sceneId: 'source' } },
+      ] };
+      const result = await renderSceneClips(project, { sceneId: 'source' });
+      expect(result.jobId).toBe('synthetic-clip-job');
+      expect(clipQueue.submit.mock.calls[0][0][field]).toBe(seconds);
+    }
+  });
   const videoBody = {
     mode: 'image', sourceImageFile: 'start.png', prompt: 'a rider turns', backend: 'grok',
     musicVideo: JSON.stringify({ projectId: 'mv-card', sceneId: 's1', compose: true }),

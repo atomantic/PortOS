@@ -19,8 +19,8 @@ const LTX_REFERENCES_MODE = 'ltxReferences';
 const LTX_IC_MODE = 'ic-ingredients-25';
 const LTX_MAX_REFERENCES = 8;
 
-const grokSceneRequestDuration = (scene, settings, target = null) => {
-  const span = shotRequestSpanSec(scene);
+const grokSceneRequestDuration = (scene, settings, target = null, scenes = null) => {
+  const span = shotRequestSpanSec(scene, scenes);
   return target?.grokDuration || (span != null ? grokCoverage(span).requestSec : settings?.grokDuration);
 };
 
@@ -118,9 +118,9 @@ async function buildShortClipBody(project, scene, input) {
   }
   const songAudio = useLtx || hostedPerformance ? false : typeof card.songAudio === 'boolean' ? card.songAudio : settings.generationMode === 'suppliedAudio';
   const mode = useLtx ? LTX_IC_MODE : audioReactive || songAudio ? 'a2v' : 'image';
-  const falFields = settings.backend === 'fal' ? falTakeRequestFields(falSceneTake({ scene, videoSettings: settings, songDurationSec: project?.audioAnalysis?.durationSec ?? null })) : null;
-  const runwayFields = settings.backend === 'runway' ? runwayTakeRequestFields(runwaySceneTake({ scene, videoSettings: settings })) : null;
-  const providerFields = settings.backend === 'grok' ? { grokDuration: grokSceneRequestDuration(scene, settings, input.target) }
+  const falFields = settings.backend === 'fal' ? falTakeRequestFields(falSceneTake({ scene, scenes: project.scenes, videoSettings: settings, songDurationSec: project?.audioAnalysis?.durationSec ?? null })) : null;
+  const runwayFields = settings.backend === 'runway' ? runwayTakeRequestFields(runwaySceneTake({ scene, scenes: project.scenes, videoSettings: settings })) : null;
+  const providerFields = settings.backend === 'grok' ? { grokDuration: grokSceneRequestDuration(scene, settings, input.target, project.scenes) }
     : falFields || runwayFields ? falFields || runwayFields
       : settings.backend === 'gemini' ? {}
         : settings.backend === 'local' ? {
