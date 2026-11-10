@@ -66,13 +66,19 @@ const loadImage = async (image, decoding = Promise.resolve()) => {
 
 const opens = () => socket.emit.mock.calls.filter(([event]) => event === 'generated-preview:open');
 
+// The player decodes each frame off screen before the visible element takes
+// it. happy-dom loads no blob images, so these tests drive the visible
+// element's own boundary; the off-screen step has its own test below.
 beforeEach(() => {
+  vi.stubGlobal('Image', undefined);
   for (const fn of Object.values(api)) fn.mockReset();
   socket.emit.mockReset();
   socket.emit.mockImplementation(socket.reply);
   socket.__handlers.clear();
   socket.connected = true;
 });
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe('playthroughVersion', () => {
   // Uniquely catches the lyric overlay keeping a stale layout when the title card starts or stops showing.
@@ -576,6 +582,32 @@ describe('CompositionPreviewPlayer', () => {
     for (const { value: url } of create.mock.results) expect(revoke.mock.calls.filter(([value]) => value === url)).toHaveLength(1);
     create.mockRestore();
     revoke.mockRestore();
+  });
+
+  // Uniquely catches the visible element taking a frame before it is decoded, which WebKit paints as a blank flash (#15616).
+  it('shows a frame only after it has decoded off screen, and never a superseded one', async () => {
+    const loaders = [];
+    vi.stubGlobal('Image', function OffscreenImage() {
+      const loader = { src: '' };
+      loader.decode = () => new Promise((resolve, reject) => { loader.resolve = resolve; loader.reject = reject; });
+      loaders.push(loader);
+      return loader;
+    });
+    const { container } = render(<CompositionPreviewPlayer project={project} audioUrl={null} />);
+    expect(container.querySelector('img')).toBeNull();
+    await act(async () => loaders[0].resolve());
+    const image = container.querySelector('img');
+    const first = image.src;
+    expect(first).toBe(loaders[0].src);
+    const session = { requestId: opens()[0][1].requestId, generation: 0 };
+    const frame = (data) => act(() => { for (const fn of socket.__handlers.get('generated-preview:frame')) fn({ ...session, data: btoa(data) }); });
+    frame('second');
+    frame('third');
+    expect(image.src).toBe(first);
+    await act(async () => loaders[2].reject(new Error('undecodable')));
+    expect(image.src).toBe(loaders[2].src);
+    await act(async () => loaders[1].resolve());
+    expect(image.src).toBe(loaders[2].src);
   });
 
   it('saves the docked preview frame on screen to the gallery', async () => {
