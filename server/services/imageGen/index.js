@@ -244,14 +244,10 @@ export async function generateAvatar({ name, characterClass, prompt }) {
 
 // Snapshot of any in-flight generation across all modes — lets the UI
 // rehydrate prompt + settings + progress + last frame after navigating away
-// during a render. Each provider enforces its own single-job invariant
-// (cancel() relies on this — see the note there), so up to three jobs can
-// be in flight concurrently. Return the most-recently-started one based on
-// `createdAt`, falling back to provider order if timestamps are missing.
-// Callers wanting all of them can read individual providers via the
-// re-exports below.
+// during a render. Return the most-recently-started job across all provider
+// slots, falling back to provider order if timestamps are missing.
 export async function getActiveJob() {
-  const jobs = [local.getActiveJob(), external.getActiveJob(), codex.getActiveJob(), grok.getActiveJob(), agy.getActiveJob(), fal.getActiveJob(), runway.getActiveJob()].filter(Boolean);
+  const jobs = await getActiveJobs();
   if (!jobs.length) return null;
   return jobs.sort((a, b) => {
     const ta = a.createdAt ? Date.parse(a.createdAt) : 0;
@@ -266,9 +262,9 @@ export async function getActiveJobs() {
     external.getActiveJob(),
     ...(codex.getActiveJobs ? codex.getActiveJobs() : [codex.getActiveJob()]),
     ...(grok.getActiveJobs ? grok.getActiveJobs() : [grok.getActiveJob()]),
-    agy.getActiveJob(),
-    fal.getActiveJob(),
-    runway.getActiveJob(),
+    ...(agy.getActiveJobs ? agy.getActiveJobs() : [agy.getActiveJob()]),
+    ...(fal.getActiveJobs ? fal.getActiveJobs() : [fal.getActiveJob()]),
+    ...(runway.getActiveJobs ? runway.getActiveJobs() : [runway.getActiveJob()]),
   ].filter(Boolean);
   return jobs;
 }
