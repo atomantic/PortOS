@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { musicVideoCodeDirectionContext, musicVideoDirectionContext } from './musicVideoCreativeContext.js';
+import { musicVideoCodeDirectionContext, musicVideoCreativeContext, musicVideoDirectionContext } from './musicVideoCreativeContext.js';
 
 const character = (id, partCount) => ({
   id, name: id, renderer: 'svg', palette: [],
@@ -52,5 +52,56 @@ describe('musicVideoDirectionContext', () => {
       cast,
     });
     for (const c of cast) expect(text).toContain(`Cast ${c.name} (${c.role})`);
+  });
+});
+
+// #15639: a shot-specific bible must select an identity without changing the
+// saved snapshot, erasing a face-only identity, or filtering places and props.
+describe('framing-aware creative bible', () => {
+  const close = 'Identity (close and medium shots, verbatim): amber irises and freckles';
+  const wide = 'Identity (full length and wider, verbatim): tall figure with a red bob';
+  const concept = {
+    characterStyle: [close, wide, 'Rules: Keep the red bob.', 'Wardrobe options: coat'].join('\n'),
+    subjects: [
+      { id: 'lead', kind: 'character', name: 'Example Lead', description: 'build: tall; face: fine freckles; hair: red bob; wardrobe: blue coat; signature: white sleeve stripe' },
+      { id: 'only', kind: 'character', name: 'Example Face', description: 'face: a distinctive scar' },
+      { id: 'mask', kind: 'object', name: 'Example Mask', description: 'face: painted freckles; silhouette: oval' },
+    ],
+  };
+
+  it.each([null, 'medium', 'close'])('keeps facial descriptions at %s scale and selects the available identity', (scale) => {
+    const text = musicVideoCreativeContext(concept, { framingScale: scale });
+    expect(text).toContain(close);
+    expect(text.includes(wide)).toBe(scale === null);
+    expect(text).toContain('face: fine freckles');
+    expect(text).not.toContain('Wide framing:');
+  });
+
+  it('projects only labeled character face clauses for wide shots and preserves source data', () => {
+    const original = structuredClone(concept);
+    const text = musicVideoCreativeContext(concept, { framingScale: 'wide' });
+    expect(text).toContain(wide);
+    expect(text).not.toContain(close);
+    expect(text).not.toContain('fine freckles');
+    expect(text).toContain('build: tall; hair: red bob; wardrobe: blue coat; signature: white sleeve stripe');
+    expect(text).toContain('face: a distinctive scar');
+    expect(text).toContain('face: painted freckles');
+    expect(text).toContain('Wide framing: anchor characters by full-body silhouette');
+    expect(concept).toEqual(original);
+    expect(musicVideoCreativeContext({ characterStyle: close }, { framingScale: 'wide' })).toContain(close);
+    expect(musicVideoCreativeContext({ characterStyle: wide }, { framingScale: 'close' })).toContain(wide);
+  });
+
+  // Filtering must happen before the existing 300-character per-subject cap:
+  // otherwise a long face clause consumes the wardrobe and hair budget.
+  it('retains wide anchors after a long facial clause within the shared context budget', () => {
+    const text = musicVideoCreativeContext({ subjects: Array.from({ length: 24 }, (_, i) => ({
+      id: `c${i}`, kind: 'character', name: `Example Cast ${i}`,
+      description: `face: ${'tiny freckles '.repeat(60)}; hair: red bob; wardrobe: blue coat`,
+    })) }, { framingScale: 'wide' });
+    expect(text.length).toBeLessThanOrEqual(6000);
+    expect(text).not.toContain('tiny freckles');
+    expect(text.match(/hair: red bob; wardrobe: blue coat/g)).toHaveLength(24);
+    expect(text).toContain('Wide framing:');
   });
 });

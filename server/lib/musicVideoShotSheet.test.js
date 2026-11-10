@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { normalizeShotSheet, shotCameraRuleText, shotOmitsOwnedCameraDetail, shotSheetBulkEdits, shotSheetCast, shotSheetMapRows, shotSheetMediaEdits, shotSheetOptions, SHOT_SHEET_MAP_BARS, shotSheetProblems, shotSheetRows, shotSheetStretches } from './musicVideoShotSheet.js';
+import { framingScale, sceneFramingScale, normalizeShotSheet, shotCameraRuleText, shotOmitsOwnedCameraDetail, shotSheetBulkEdits, shotSheetCast, shotSheetMapRows, shotSheetMediaEdits, shotSheetOptions, SHOT_SHEET_MAP_BARS, shotSheetProblems, shotSheetRows, shotSheetStretches } from './musicVideoShotSheet.js';
 import { musicVideoSceneUpdateSchema, musicVideoProjectUpdateSchema } from './musicVideoValidation.js';
 import { applySceneUpdate, applyProjectPatch, replaceScenes } from '../services/musicVideo/projectsLogic.js';
 
@@ -258,5 +258,25 @@ describe('shotSheetCast', () => {
   // Catches sets and props being offered as people in a shot.
   it('offers only character subjects', () => {
     expect(shotSheetCast({ concept: { subjects: [{ kind: 'character', name: 'Ada' }, { kind: 'place', name: 'Mall' }] } })).toEqual(['Ada']);
+  });
+});
+
+// #15639: scale parsing is a public compatibility boundary for free-text shot
+// sheets and storyboard sizes; unknown wording must fall through, not mask them.
+describe('scene framing scale', () => {
+  it.each([
+    ['extreme close-up', 'close'], ['medium close up', 'close'],
+    ['wide establishing shot', 'wide'], ['medium shot', 'medium'],
+    ['from behind', null], ['from a closed doorway', null], ['enclosed hallway', null], [undefined, null],
+  ])('classifies %s as %s', (value, expected) => {
+    expect(framingScale(value)).toBe(expected);
+  });
+
+  it('takes the first recognized sheet, direction or panel scale', () => {
+    expect(sceneFramingScale({ shotSheet: { view: 'wide' }, direction: { framing: 'close' } }, { shotSize: 'medium' })).toBe('wide');
+    expect(sceneFramingScale({ shotSheet: { view: 'from above' }, direction: { framing: 'medium' } }, { shotSize: 'close' })).toBe('medium');
+    expect(sceneFramingScale({}, { shotSize: 'close-up' })).toBe('close');
+    expect(sceneFramingScale({ shotSheet: { view: 'from a closed doorway' }, direction: { framing: 'wide' } })).toBe('wide');
+    expect(sceneFramingScale(null)).toBeNull();
   });
 });

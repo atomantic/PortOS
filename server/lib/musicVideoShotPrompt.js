@@ -23,7 +23,7 @@ import { musicVideoSubjectScaleText } from './musicVideoSubjectScale.js';
 import { musicVideoReferenceSubjectIds } from './musicVideoCastSelection.js';
 import { musicVideoConditioningReferences } from './musicVideoConditioning.js';
 import { routeMapShotText } from './musicVideoRouteMaps.js';
-import { lyricOverlayOff, shotCameraRuleText, shotSheetDrivesPrompt, shotSheetFocalSubject, shotSheetFramingConflicts, shotSheetPromptLines } from './musicVideoShotSheet.js';
+import { sceneFramingScale, lyricOverlayOff, shotCameraRuleText, shotSheetDrivesPrompt, shotSheetFocalSubject, shotSheetFramingConflicts, shotSheetPromptLines } from './musicVideoShotSheet.js';
 import { shotFilmLook } from './musicVideoFilmLook.js';
 
 /**
@@ -148,7 +148,7 @@ function composeShotModelInput(project, scene, {
   const bible = backend !== 'local';
   const look = !asTyped && hears ? [
     addition('project-style', 'Project style', project?.concept?.style),
-    bible ? addition('creative-context', 'Production bible', musicVideoCreativeContext(project?.concept, { moodBoard: false, look: musicVideoDirectorLook(project) })) : null,
+    bible ? addition('creative-context', 'Production bible', musicVideoCreativeContext(project?.concept, { moodBoard: false, look: musicVideoDirectorLook(project), framingScale: sceneFramingScale(scene) })) : null,
     addition('visual-direction', 'Palette and camera rules', visualDirection(project?.visualSpec)),
   ] : [];
   const direction = asTyped ? [] : [
@@ -315,7 +315,7 @@ function composeFrameModelInput(project, scene, {
     addition('reference-map', 'Reference images', musicVideoReferenceMapText(references)),
     addition('project-style', 'Project style', finishing ? finishingStyleText(project?.concept?.style) : project?.concept?.style),
     finishing ? addition('clean-frame', 'Clean frame', CLEAN_FRAME_LINE) : null,
-    addition('creative-context', 'Production bible', musicVideoCreativeContext(concept, { look: musicVideoDirectorLook(project) })),
+    addition('creative-context', 'Production bible', musicVideoCreativeContext(concept, { look: musicVideoDirectorLook(project), framingScale: sceneFramingScale(scene, board) })),
     addition('real-world-scale', 'Real-world scale', musicVideoSubjectScaleText(concept, sizes)),
     addition('route-map', 'Route', routeMapShotText(project, scene)),
     addition('visual-direction', 'Palette and camera rules', visualDirection(project?.visualSpec)),
