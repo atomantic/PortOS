@@ -93,6 +93,7 @@ export default function ModelComparison() {
       models: Array.isArray(saved?.models) ? saved.models : null,
       efforts: Array.isArray(saved?.efforts) ? saved.efforts : null,
       provider: typeof saved?.provider === 'string' ? saved.provider : '',
+      anchor: typeof saved?.anchor === 'string' ? saved.anchor : '',
       // Upgrade the old token-rate default once, retaining model/effort filters.
       axisVersion: 2,
       priceId: saved?.axisVersion !== 2 && saved?.priceId === 'blendedPerMillion'
@@ -120,14 +121,16 @@ export default function ModelComparison() {
     setLoading(true); setError('');
     getModelComparison({ silent: true }).then(setCatalog).catch(err => setError(err.message)).finally(() => setLoading(false));
   }, []);
-  const rows = useMemo(() => (catalog?.composite?.rows || []).map(row => {
+  const composites = [catalog?.currentComposite, catalog?.composite].filter(Boolean);
+  const composite = composites.find(item => item.anchor === settings.anchor) || composites[0];
+  const rows = useMemo(() => (composite?.rows || []).map(row => {
     const result = { ...row, endpointModel: row.model, model: row.comparisonModel || row.model };
     for (const field of ['quality', 'inputPerMillion', 'outputPerMillion', 'blendedPerMillion', 'costPerTask']) {
       const metric = row[field];
-      if (metric) result[field] = { ...metric, sources: metric.sources || (metric.sourceIds || []).map(id => catalog.composite.sources[id]).filter(Boolean) };
+      if (metric) result[field] = { ...metric, sources: metric.sources || (metric.sourceIds || []).map(id => composite.sources[id]).filter(Boolean) };
     }
     return result;
-  }), [catalog]);
+  }), [composite]);
   const providers = [...new Map(rows.map(row => [row.providerId, row.provider])).entries()];
   const providerColorMap = useMemo(() => {
     const map = new Map();
@@ -222,6 +225,7 @@ export default function ModelComparison() {
     )}
     <section className="min-w-0 rounded-xl border border-port-border bg-port-card p-4 space-y-3" aria-label="Comparison controls">
       <div className="flex flex-wrap items-end gap-3">
+        {composites.length > 1 && <div className="min-w-0"><label htmlFor="comparison-anchor" className="block text-xs mb-1">Intelligence index</label><select className="max-w-full rounded-lg border border-port-border bg-port-bg p-2 text-sm" id="comparison-anchor" value={composite.anchor} onChange={event => update({ anchor: event.target.value })}>{composites.map(item => <option key={item.anchor} value={item.anchor}>{item.anchor}</option>)}</select></div>}
         <div className="min-w-0"><label htmlFor="comparison-price" className="block text-xs mb-1">Cost axis</label><select className="max-w-full rounded-lg border border-port-border bg-port-bg p-2 text-sm" id="comparison-price" value={price[0]} onChange={event => update({ priceId: event.target.value })}>{PRICES.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></div>
         <div className="min-w-0"><label htmlFor="comparison-provider" className="block text-xs mb-1">Provider filter</label><select className="max-w-full rounded-lg border border-port-border bg-port-bg p-2 text-sm" id="comparison-provider" value={settings.provider} onChange={event => update({ provider: event.target.value })}><option value="">All providers</option>{providers.map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></div>
         <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={showEstimates} onChange={event => setShowEstimates(event.target.checked)} />Include estimates</label>
@@ -236,6 +240,7 @@ export default function ModelComparison() {
         return <button key={model} className={`${buttonClass} max-w-full break-all text-left inline-flex items-center gap-1.5`} aria-pressed={isSelected} onClick={() => toggle('models', model, models)}><span className="inline-block h-2 w-2 rounded-full shrink-0" style={{ backgroundColor: color }} /><span>{isSelected ? '✓ ' : ''}{model}</span></button>;
       })}</div>
       <p className="text-xs text-port-text-muted">{formatCount(plotted.length)} plotted / {formatCount(selected.length)} selected configurations · {formatCount(excludedCount)} missing this metric or excluded · {formatCount(plotCandidates.length - plotted.length)} identical provider points combined. ≈ identifies estimates. Zero prices remain visible on the linear scale.</p>
+      {composites.length > 1 && <p className="text-xs text-port-text-muted">Newer indexes can have fewer historical task-cost measurements. Select an earlier index to compare its published results.</p>}
     </section>
     <section className="min-w-0 rounded-xl border border-port-border bg-port-card p-3" aria-label="Cost versus intelligence chart">
       <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="font-semibold">PortOS intelligence index vs. {price[1].toLowerCase()}</h2><div className="flex flex-wrap gap-2"><button className={buttonClass} aria-pressed={zoom} onClick={() => setZoom(value => !value)}>{zoom ? 'Reset axes' : 'Fit visible'}</button>{[420, 600, 720].map(height => <button key={height} className={buttonClass} aria-pressed={settings.height === height} onClick={() => update({ height })}>{height}px</button>)}</div></div>
@@ -259,13 +264,13 @@ export default function ModelComparison() {
         return <span key={model} className="break-all inline-flex items-center gap-1" style={{ color }}>● {model}</span>;
       })}</div>
       <p className="mt-3 text-xs text-port-text-muted">{price[0] === 'costPerTask'
-        ? 'Task cost includes the token usage of each model and effort on the same benchmark. It is an API reference cost, not a quote for your workload or subscription. Missing task costs stay unplotted until researched; token rates are never substituted.'
+        ? `Task cost includes the token usage of each model and effort on ${composite?.anchor || 'the selected benchmark'}. It is an API reference cost, not a quote for your workload or subscription. Missing task costs stay unplotted until researched; token rates are never substituted.`
         : 'Token price is the rate per token, not cost per task. Higher effort can use more reasoning tokens at the same rate, so vertical effort curves do not mean equal task cost. Choose Cost per benchmark task to compare reasoning expense.'}</p>
     </section>
     <p className="text-xs text-port-text-muted">Local inference shows $0 API charges; hardware and electricity are excluded. Local quality references are estimates until measured on your build. Zero-cost points are hidden on the log cost scale.</p>
     <ComparisonValueGuide rows={selected} />
     <GenerationDelta rows={selected} priceId={price[0]} />
-    <details className="rounded-xl border border-port-border bg-port-card p-4"><summary className="cursor-pointer font-medium">Methodology and confidence</summary><p className="mt-2 text-sm text-port-text-muted">PortOS index v1 uses {catalog?.composite?.anchor || 'the versioned reference index'} as its stable scale. Exact results take priority. Other evaluations are calibrated using at least three shared model/effort configurations, then combined by their median. Uncalibrated benchmark scores are never mixed directly. Missing effort levels use interpolation or a low-confidence nearest-effort estimate for the same model. Unknown members of a recognized family receive a low-confidence median family baseline with source range. No improvement is assumed for a new generation without evidence. Each estimate retains its method and source dates below; missing models stay in the coverage list for research.</p></details>
+    <details className="rounded-xl border border-port-border bg-port-card p-4"><summary className="cursor-pointer font-medium">Methodology and confidence</summary><p className="mt-2 text-sm text-port-text-muted">PortOS index v1 uses {composite?.anchor || 'the versioned reference index'} as its scale. Exact results take priority. Other evaluations are calibrated using at least three shared model/effort configurations, then combined by their median. Uncalibrated benchmark scores are never mixed directly. Missing effort levels use interpolation or a low-confidence nearest-effort estimate for the same model. Unknown members of a recognized family receive a low-confidence median family baseline with source range. No improvement is assumed for a new generation without evidence. Each estimate retains its method and source dates below; missing models stay in the coverage list for research.</p></details>
     <details className="rounded-xl border border-port-border bg-port-card p-4"><summary className="cursor-pointer font-medium">Selected configurations and evidence ({formatCount(selected.length)})</summary><div className="mt-3 overflow-x-auto"><table className="w-full min-w-[800px] text-left text-sm"><thead><tr><th className="p-2">Model / provider</th><th className="p-2">Effort</th><th className="p-2">Intelligence</th><th className="p-2">Cost</th><th className="p-2">Performance evidence</th><th className="p-2">Cost evidence</th></tr></thead><tbody>{selected.slice(0, evidenceLimit).map(row => <tr key={row.id} className="border-t border-port-border"><td className="p-2">{row.model}<span className="block text-xs text-port-text-muted">{row.provider}{row.endpointModel !== row.model ? ` · ${row.endpointModel}` : ''}</span></td><td className="p-2">{row.effort}</td><td className="p-2">{valueText(row.quality)}</td><td className="p-2">{valueText(row[price[0]], true)}</td><td className="p-2">{row.incomparableReason ? <p className="max-w-sm whitespace-normal">{row.incomparableReason}</p> : <MetricEvidence metric={row.quality} />}</td><td className="p-2"><MetricEvidence metric={row[price[0]]} /></td></tr>)}</tbody></table></div>{selected.length > evidenceLimit && <button className={buttonClass} onClick={() => setEvidenceLimit(value => value + 100)}>Show 100 more configurations</button>}</details>
   </div>;
 }

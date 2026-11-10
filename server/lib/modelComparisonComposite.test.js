@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
-import { buildModelComparisonComposite, COMPARISON_ANCHOR } from './modelComparisonComposite.js';
+import { buildModelComparisonComposite, COMPARISON_ANCHOR, CURRENT_COMPARISON_ANCHOR } from './modelComparisonComposite.js';
 const metric = value => ({ value, source: { url: 'https://example.com/results', retrievedAt: '2026-09-01T00:00:00Z', methodology: 'Published result' } });
 const observation = (model, effort, value, extra = {}) => ({ id: `${model}-${effort}`, model, effort, provider: 'Example', benchmark: COMPARISON_ANCHOR, quality: value === null ? null : metric(value), inputPerMillion: metric(1), outputPerMillion: metric(5), ...extra });
 const inventory = (model, efforts = ['low', 'medium', 'high']) => [{ id: 'example', name: 'Example', models: [{ model, efforts }] }];
@@ -37,6 +37,12 @@ it('keeps zero-priced exact endpoints, separates task workloads, and labels publ
   expect(row.blendedPerMillion.value).toBe(0);
   expect(row.quality.estimated).toBe(true);
   expect(row.costPerTask.value).toBe(0.1);
+});
+
+it('does not treat a research estimate on the older scale as a result on the current scale', () => {
+  const research = observation('example', 'high', 40, { benchmark: 'PortOS Research Index v1 (AA v4.3.2 scale)', quality: { ...metric(40), source: { ...metric(40).source, methodology: 'PortOS estimate: older scale' } } });
+  expect(buildModelComparisonComposite([research], inventory('example', ['high'])).rows[0].quality.value).toBe(40);
+  expect(buildModelComparisonComposite([research], inventory('example', ['high']), CURRENT_COMPARISON_ANCHOR).rows[0].quality).toBeNull();
 });
 
 it('uses route-specific standard prices without leaking free or long-context prices to paid routes', () => {

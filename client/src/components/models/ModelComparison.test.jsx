@@ -15,10 +15,9 @@ const row = (model, effort, quality, price, estimated = false) => ({ id: `${mode
 const rows = [row('gpt-6-luna', 'low', 21, 0.2), row('gpt-6-luna', 'high', 32, 0.2), row('gpt-5.6-luna', 'low', 20, 0.45), row('claude-opus-5-5', 'high', 56, 8), row('unknown-model', 'high', null, 0)];
 beforeEach(() => { localStorage.clear(); vi.clearAllMocks(); api.getModelComparison.mockResolvedValue({ composite: { anchor: 'Reference v1', rows } }); });
 
-it('compares generations and vendors together with quick model and effort toggles and no benchmark picker', async () => {
+it('compares generations and vendors together with quick model and effort toggles', async () => {
   render(<ModelComparison />);
   await screen.findByTestId('scatter-example:gpt-6-luna');
-  expect(screen.queryByLabelText('Benchmark')).toBeNull();
   fireEvent.change(screen.getByLabelText('Filter models'), { target: { value: 'gpt-6-luna,opus' } });
   fireEvent.click(screen.getByRole('button', { name: 'Compare matching' }));
   expect(screen.getByTestId('scatter-example:gpt-6-luna')).toHaveAttribute('data-values', '[[0.2,21],[0.6000000000000001,32]]');
@@ -32,6 +31,29 @@ it('compares generations and vendors together with quick model and effort toggle
   expect(screen.getByText('Research configuration')).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: /Research selected/ }));
   expect(screen.getByText('Research configuration')).toBeTruthy();
+});
+
+it('plots current-workload measurements by default and preserves a choice of the historical workload', async () => {
+  const fable = row('claude-fable-5.2', 'medium', 56.4, 3.8);
+  const legacyFable = { ...fable, quality: metric(54.8, true), costPerTask: null };
+  api.getModelComparison.mockResolvedValue({
+    composite: { anchor: 'Artificial Analysis Intelligence Index v4.3.2', rows: [legacyFable] },
+    currentComposite: { anchor: 'Artificial Analysis Intelligence Index v5.0.1', rows: [fable] },
+  });
+  const { unmount } = render(<ModelComparison />);
+  await screen.findByTestId('scatter-example:claude-fable-5.2');
+  const index = screen.getByLabelText('Intelligence index');
+  expect(index).toHaveValue('Artificial Analysis Intelligence Index v5.0.1');
+  expect(screen.getByTestId('scatter-example:claude-fable-5.2')).toHaveAttribute('data-values', '[[3.8,56.4]]');
+  fireEvent.click(screen.getByLabelText('Include estimates'));
+  expect(screen.getByTestId('scatter-example:claude-fable-5.2')).toBeTruthy();
+  fireEvent.change(index, { target: { value: 'Artificial Analysis Intelligence Index v4.3.2' } });
+  expect(screen.queryByTestId('scatter-example:claude-fable-5.2')).toBeNull();
+  expect(screen.getByText(/Task cost includes the token usage.*v4\.3\.2/)).toBeTruthy();
+  unmount();
+  render(<ModelComparison />);
+  await waitFor(() => expect(screen.getByLabelText('Intelligence index')).toHaveValue('Artificial Analysis Intelligence Index v4.3.2'));
+  expect(screen.queryByTestId('scatter-example:claude-fable-5.2')).toBeNull();
 });
 
 it('preserves empty selections across reload, handles zero costs and switches axes', async () => {
