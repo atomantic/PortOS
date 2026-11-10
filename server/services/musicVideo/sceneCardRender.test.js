@@ -68,6 +68,27 @@ function installCardCatalog({ portrait = true } = {}) {
 }
 
 describe('shot-card clip body validation', () => {
+  it('covers shared source windows in an LTX reference clip and refuses an explicitly shorter or oversized window', async () => {
+    const mediaModels = await import('../../lib/mediaModels.js');
+    const models = vi.spyOn(mediaModels, 'getVideoModels').mockReturnValue([{ id: 'example-ltx', runtime: 'ltx25' }]);
+    try {
+      clipQueue.submit.mockClear();
+      const project = { id: 'mv-card', videoSettings: { backend: 'local', modelId: 'example-ltx' }, scenes: [
+        { sceneId: 'source', startSec: 0, endSec: 1, referenceImageId: 'start.png', prompt: 'The rider turns' },
+        { sceneId: 'return', startSec: 8, endSec: 9, sourceTake: { sceneId: 'source' } },
+      ] };
+      const input = { sceneId: 'source', card: { ltxReferences: true, expectedClipReferenceFiles: ['sheet.png'] } };
+      await renderSceneClips(project, input);
+      expect(clipQueue.submit.mock.calls[0][0]).toMatchObject({ mode: 'ic-ingredients-25', numFrames: 217 });
+      clipQueue.submit.mockClear();
+      await expect(renderSceneClips(project, { ...input, target: { numFrames: 121 } })).rejects.toMatchObject({ code: 'MUSIC_VIDEO_CLIP_TOO_LONG' });
+      project.scenes[1].endSec = 100;
+      await expect(renderSceneClips(project, input)).rejects.toMatchObject({ code: 'MUSIC_VIDEO_CLIP_TOO_LONG' });
+      expect(clipQueue.submit).not.toHaveBeenCalled();
+    } finally {
+      models.mockRestore();
+    }
+  });
   it('requests enough hosted footage for every return to a shared source', async () => {
     for (const [backend, field, seconds] of [['fal', 'falDuration', 10], ['runway', 'runwayDuration', 9], ['grok', 'grokDuration', 10]]) {
       clipQueue.submit.mockClear();
