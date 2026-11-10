@@ -1343,12 +1343,15 @@ describe('CI test impact planner', () => {
         'scripts/requirements-muscriptor-cuda-linux.lock.txt',
         'scripts/requirements-mflux-mlx.lock.txt',
         'scripts/requirements-wan22-cuda.txt',
+        'scripts/requirements-lyric-align.txt',
+        'scripts/requirements-lyric-align.lock.txt',
       ];
       const owners = [
         'scripts/setup-image-video.test.js',
         'server/lib/pythonSetup.install.test.js',
         'server/lib/pythonSetup.test.js',
         'server/services/imageGen/flux3Runtime.test.js',
+        'server/services/musicVideo/lyricForcedAlign.test.js',
         'server/services/videoGen/runtimes.test.js',
       ];
       const plan = buildCiTestPlan(requirements, { trackedFiles: [...TRACKED, ...requirements, ...owners] });

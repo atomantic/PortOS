@@ -552,8 +552,8 @@ export const FIXTURE_OWNERS = [
     tests: ['server/services/videoGen/runtimes.test.js'],
   },
   // Pip pins consumed only by an explicit Install/Repair (`setup-image-video.sh`,
-  // and the FLUX.3 runtime lock read by services/imageGen/flux3Runtime.js). The
-  // installer-contract tests are the suites that exercise those installers.
+  // and the FLUX.3 and lyric-alignment locks read by flux3Runtime.js and
+  // lyricForcedAlign.js). The installer-contract tests exercise those installers.
   {
     re: /^scripts\/requirements-[^/]+\.txt$/,
     dir: 'scripts',
@@ -563,6 +563,7 @@ export const FIXTURE_OWNERS = [
       'server/lib/pythonSetup.install.test.js',
       'server/lib/pythonSetup.test.js',
       'server/services/imageGen/flux3Runtime.test.js',
+      'server/services/musicVideo/lyricForcedAlign.test.js',
       'server/services/videoGen/runtimes.test.js',
     ],
   },

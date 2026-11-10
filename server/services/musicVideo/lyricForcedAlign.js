@@ -15,7 +15,8 @@ const SCRIPT = fileURLToPath(new URL('../../../scripts/align_lyrics_ctc.py', imp
 // Every transitive package, including a patched torch, is version- and hash-pinned;
 // pip resolves nothing at install time. Regeneration: the lock's header.
 const LOCK = fileURLToPath(new URL('../../../scripts/requirements-lyric-align.lock.txt', import.meta.url));
-const PYTHON_MINORS = [11, 14];
+const MIN_MINOR = 11;
+const MAX_MINOR = 14;
 let provisioning = null;
 
 const lockedVersion = (lock, name) => new RegExp(`^${name}==([^\\s;\\\\]+)`, 'm').exec(lock)?.[1];
@@ -26,7 +27,7 @@ const lockedVersion = (lock, name) => new RegExp(`^${name}==([^\\s;\\\\]+)`, 'm'
 // install rather than given an older, vulnerable torch.
 // Leading underscore: the platform-plan contract test is the only out-of-file caller.
 export function _lyricAlignRuntimePlan({
-  platform = process.platform, appleSilicon, darwinMajor, lock = readFileSync(LOCK, 'utf8'),
+  platform = process.platform, appleSilicon, darwinMajor,
 } = {}) {
   if (platform === 'darwin') {
     const silicon = appleSilicon ?? isAppleSilicon({ platform });
@@ -37,23 +38,23 @@ export function _lyricAlignRuntimePlan({
       return { unsupported: 'MMS_FA lyric alignment needs macOS 14 or later for patched PyTorch.' };
     }
   }
+  const lock = readFileSync(LOCK, 'utf8');
   const torch = lockedVersion(lock, 'torch');
   const torchaudio = lockedVersion(lock, 'torchaudio');
-  const [minMinor, maxMinor] = PYTHON_MINORS;
   const arch = platform === 'darwin' ? 'arm64' : null;
-  const versionBound = `(3, ${minMinor}) <= sys.version_info[:2] <= (3, ${maxMinor})`;
+  const versionBound = `(3, ${MIN_MINOR}) <= sys.version_info[:2] <= (3, ${MAX_MINOR})`;
   return {
     unsupported: null,
     arch,
-    minMinor,
-    maxMinor,
+    minMinor: MIN_MINOR,
+    maxMinor: MAX_MINOR,
     install: ['-m', 'pip', 'install', '--disable-pip-version-check', '--require-hashes', '--no-deps',
       '--only-binary', ':all:', '-r', LOCK],
     probe: `import numpy, torch, torchaudio; assert torch.__version__.split("+")[0] == "${torch}"; assert torchaudio.__version__.split("+")[0] == "${torchaudio}"; assert callable(torchaudio.models.wav2vec2_model)`,
     versionProbe: arch
       ? `import sys, platform; assert ${versionBound}; assert platform.machine() == ${JSON.stringify(arch)}`
       : `import sys; assert ${versionBound}`,
-    pythonRange: `${arch ? `${arch} ` : ''}Python 3.${minMinor}–3.${maxMinor}`,
+    pythonRange: `${arch ? `${arch} ` : ''}Python 3.${MIN_MINOR}–3.${MAX_MINOR}`,
   };
 }
 
