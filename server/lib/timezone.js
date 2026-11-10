@@ -233,17 +233,53 @@ const ZONE_SUFFIX = /(?:Z|[+-]\d{2}:?\d{2})$/i
  * @param {string} [timezone] IANA zone for offset-less values
  * @returns {Date|null}
  */
+// Offset at the wall-clock instant, not at local midnight. Adding the hours to
+// midnight uses the pre-transition offset for the whole day, so on a US
+// spring-forward day 23:59 lands an hour into the next date and on a fall-back
+// day the last hour is dropped.
+function resolveLocalWallTime(y, mo, d, hh, mm, ss, timezone) {
+  const year = Number(y)
+  const month = Number(mo)
+  const day = Number(d)
+  const hour = Number(hh) || 0
+  const minute = Number(mm) || 0
+  const second = Number(ss) || 0
+  if (month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59 || second > 59) return null
+  const asUtc = Date.UTC(year, month - 1, day, hour, minute, second)
+  const stamped = new Date(asUtc)
+  if (
+    stamped.getUTCFullYear() !== year
+    || stamped.getUTCMonth() !== month - 1
+    || stamped.getUTCDate() !== day
+  ) return null
+  const offsetAt = (ms) => getUtcOffsetMs(new Date(ms), timezone)
+  const first = asUtc - offsetAt(asUtc)
+  const resolved = asUtc - offsetAt(first)
+  const matches = (ms) => {
+    const parts = getLocalParts(new Date(ms), timezone)
+    return parts.year === year && parts.month === month && parts.day === day
+      && parts.hour === hour && parts.minute === minute
+  }
+  if (matches(resolved)) return new Date(resolved)
+  if (matches(first)) return new Date(first)
+  // A spring-forward gap has no such wall time. Keep the later instant that
+  // still falls on the requested local date — the clock after the jump.
+  const onDate = (ms) => {
+    const parts = getLocalParts(new Date(ms), timezone)
+    return parts.year === year && parts.month === month && parts.day === day
+  }
+  const options = [first, resolved].filter(onDate)
+  if (options.length === 0) return null
+  return new Date(Math.max(...options))
+}
+
 export function resolveEventInstant(value, timezone) {
   if (!value) return null
   if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value
   const s = String(value).trim()
   const m = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?)?$/.exec(s)
   if (m && timezone) {
-    const [, y, mo, d, hh, mm, ss] = m
-    const midnightMs = anchorLocalMidnightUtc(`${y}-${mo}-${d}`, timezone)
-    if (!Number.isFinite(midnightMs)) return null
-    const dayMs = ((Number(hh) || 0) * 3600 + (Number(mm) || 0) * 60 + (Number(ss) || 0)) * 1000
-    return new Date(midnightMs + dayMs)
+    return resolveLocalWallTime(m[1], m[2], m[3], m[4], m[5], m[6], timezone)
   }
   const parsed = new Date(s)
   return Number.isNaN(parsed.getTime()) ? null : parsed

@@ -46,6 +46,7 @@ import { syncOutlookCalendarApi } from './calendarApiSync.js';
 import { syncAccount, logCalendarTouchpoints, loadCache, getEvents, CACHE_DIR } from './calendarSync.js';
 import { getUserTimezone } from './userTimezone.js';
 import { localDayWindowUtc } from '../lib/timezone.js';
+import { toUserDayKey } from '../lib/activeDays.js';
 import { autoLogTouchpoints } from './tribe.js';
 import { mcpSyncAccount, mcpDiscoverCalendars, pushSyncEvents } from './calendarGoogleSync.js';
 import { apiSyncAccount, apiDiscoverCalendars } from './calendarGoogleApiSync.js';
@@ -137,7 +138,7 @@ describe('logCalendarTouchpoints — candidate building (#2033)', () => {
       source: 'calendar',
       dedupeKey: `cal:${ACCOUNT_ID}:evt-1`,
       calendarEventId: 'evt-1',
-      happenedAt: PAST,
+      happenedAt: new Date(PAST).toISOString(),
       summary: 'Coffee with Ada',
     });
     expect(candidates[0].identities).toHaveLength(2);
@@ -270,6 +271,31 @@ describe('getEvents places all-day events on the user\'s local day', () => {
     });
     expect(agenda).toEqual({ events: [], total: 0 });
   });
+
+  it('keeps each daylight-saving transition day inside that local day', async () => {
+    await writeFile(join(CACHE_DIR, `${ACCOUNT_ID}.json`), JSON.stringify({
+      events: [
+        { id: 'spring-late', title: 'Spring late', startTime: '2026-03-08T23:30:00', endTime: '2026-03-09T00:00:00' },
+        { id: 'spring-next', title: 'Spring next', startTime: '2026-03-09T00:30:00', endTime: '2026-03-09T01:00:00' },
+        { id: 'fall-late', title: 'Fall late', startTime: '2026-11-01T23:30:00', endTime: '2026-11-02T00:00:00' },
+        { id: 'fall-next', title: 'Fall next', startTime: '2026-11-02T00:30:00', endTime: '2026-11-02T01:00:00' },
+      ],
+    }));
+    const spring = await getEvents({
+      accountId: ACCOUNT_ID,
+      startDate: '2026-03-08T00:00:00',
+      endDate: '2026-03-08T23:59:59',
+      limit: 20,
+    });
+    expect(spring.events.map(event => event.title)).toEqual(['Spring late']);
+    const fall = await getEvents({
+      accountId: ACCOUNT_ID,
+      startDate: '2026-11-01T00:00:00',
+      endDate: '2026-11-01T23:59:59',
+      limit: 20,
+    });
+    expect(fall.events.map(event => event.title)).toEqual(['Fall late']);
+  });
 });
 
 describe('logCalendarTouchpoints waits for an all-day event\'s local end', () => {
@@ -292,6 +318,25 @@ describe('logCalendarTouchpoints waits for an all-day event\'s local end', () =>
       attendees: [{ email: 'ada@work.com' }],
     }]);
     expect(autoLogTouchpoints).not.toHaveBeenCalled();
+  });
+
+  it('dates an all-day touchpoint on the local calendar day', async () => {
+    getUserTimezone.mockResolvedValue('America/Los_Angeles');
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-05T08:00:00Z'));
+    autoLogTouchpoints.mockClear();
+    autoLogTouchpoints.mockResolvedValue({ created: 1, matched: 1 });
+    await logCalendarTouchpoints(ACCOUNT_ID, [{
+      externalId: 'jul4',
+      title: 'July 4',
+      isAllDay: true,
+      startTime: '2026-07-04T00:00:00.000Z',
+      endTime: '2026-07-05T00:00:00.000Z',
+      attendees: [{ email: 'ada@work.com' }],
+    }]);
+    expect(autoLogTouchpoints).toHaveBeenCalledTimes(1);
+    const [candidates] = autoLogTouchpoints.mock.calls[0];
+    expect(toUserDayKey(candidates[0].happenedAt, 'America/Los_Angeles')).toBe('2026-07-04');
   });
 });
 

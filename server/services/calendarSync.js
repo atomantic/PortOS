@@ -353,7 +353,10 @@ export async function logCalendarTouchpoints(accountId, events = []) {
     candidates.push({
       identities,
       source: 'calendar',
-      happenedAt: event.startTime || event.endTime,
+      // The resolved instant, not the raw producer string. An all-day midnight
+      // stored as `...T00:00:00Z` is UTC midnight; Tribe turns that into the
+      // user's local day and would record July 3 for a July 4 event west of UTC.
+      happenedAt: startedAt.toISOString(),
       channel: event.location || 'Calendar',
       summary: event.title || 'Calendar touchpoint',
       dedupeKey: calendarTouchpointDedupeKey(accountId, event),

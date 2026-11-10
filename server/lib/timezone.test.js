@@ -7,7 +7,7 @@ vi.mock('../services/settings.js', () => ({
 }))
 
 import { getSettings } from '../services/settings.js'
-import { getLocalParts, getUtcOffsetMs, nextLocalTime, todayInTimezone, anchorLocalMidnightUtc, localDayWindowUtc, localDayRangeUtc, HHMM_RE, HHMM_STRICT_RE, parseHHMM, isWithinTimeWindow } from './timezone.js'
+import { getLocalParts, getUtcOffsetMs, nextLocalTime, todayInTimezone, anchorLocalMidnightUtc, localDayWindowUtc, localDayRangeUtc, resolveEventInstant, HHMM_RE, HHMM_STRICT_RE, parseHHMM, isWithinTimeWindow } from './timezone.js'
 import { getTimezoneUpdatedAt } from '../services/userTimezone.js'
 
 describe('timezone', () => {
@@ -234,6 +234,19 @@ describe('timezone', () => {
       const anchor = anchorLocalMidnightUtc('2026-04-17', 'Asia/Tokyo')
       expect(anchor).toBe(Date.parse('2026-04-17T00:00:00Z') - 9 * 3600 * 1000)
       expect(localClock(anchor, 'Asia/Tokyo')).toBe('00:00')
+    })
+  })
+
+  describe('resolveEventInstant', () => {
+    it('reads an offset-less end bound at the offset in force then, including both DST edges', () => {
+      // Spring-forward 2026-03-08: 23:59 is PDT (UTC-7), not the PST midnight offset.
+      expect(resolveEventInstant('2026-03-08T23:59:59', 'America/Los_Angeles').toISOString())
+        .toBe('2026-03-09T06:59:59.000Z')
+      // Fall-back 2026-11-01: 23:59 is PST (UTC-8). Midnight that day is still PDT.
+      expect(resolveEventInstant('2026-11-01T23:59:59', 'America/Los_Angeles').toISOString())
+        .toBe('2026-11-02T07:59:59.000Z')
+      expect(resolveEventInstant('2026-11-01T00:00:00', 'America/Los_Angeles').toISOString())
+        .toBe('2026-11-01T07:00:00.000Z')
     })
   })
 
