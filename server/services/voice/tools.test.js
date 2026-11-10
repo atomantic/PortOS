@@ -50,17 +50,21 @@ vi.mock('../../lib/fetchWithTimeout.js', () => ({
 }));
 // Timezone — pin to deterministic values so calendar/time tests don't depend
 // on the host TZ or settings file.
-vi.mock('../../lib/timezone.js', () => ({
-  todayInTimezone: vi.fn(() => '2026-04-17'),
-  getLocalParts: vi.fn(() => ({ year: 2026, month: 4, day: 17 })),
-  getUtcOffsetMs: vi.fn(() => -7 * 3600 * 1000),
-  // Pinned PDT day window; the real DST math is covered in lib/timezone.test.js.
-  localDayWindowUtc: vi.fn(() => ({
-    date: '2026-04-17',
-    startDate: '2026-04-17T07:00:00.000Z',
-    endDate: '2026-04-18T06:59:59.999Z',
-  })),
-}));
+vi.mock('../../lib/timezone.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    todayInTimezone: vi.fn(() => '2026-04-17'),
+    getLocalParts: vi.fn(() => ({ year: 2026, month: 4, day: 17 })),
+    getUtcOffsetMs: vi.fn(() => -7 * 3600 * 1000),
+    // Pinned PDT day window; the real DST math is covered in lib/timezone.test.js.
+    localDayWindowUtc: vi.fn(() => ({
+      date: '2026-04-17',
+      startDate: '2026-04-17T07:00:00.000Z',
+      endDate: '2026-04-18T06:59:59.999Z',
+    })),
+  };
+});
 vi.mock('../userTimezone.js', () => ({
   getUserTimezone: vi.fn(async () => 'America/Los_Angeles'),
 }));
@@ -1525,6 +1529,21 @@ describe('calendar_next', () => {
     const r = await dispatchTool('calendar_next', {});
     expect(r.found).toBe(true);
     expect(r.title).toBe('Standup (in progress)');
+  });
+
+  it('names a floating all-day event on its calendar date, not the previous local day', async () => {
+    // Offset-less and Z-stamped midnights are calendar dates. On the UTC server
+    // `new Date` of either would format as November 30 in America/Los_Angeles.
+    calendarEventsRef.value = [{
+      title: 'Planning Day',
+      startTime: '2026-12-01T00:00:00',
+      endTime: '2026-12-02T00:00:00.000Z',
+      isAllDay: true,
+    }];
+    const r = await dispatchTool('calendar_next', {});
+    expect(r.found).toBe(true);
+    expect(r.summary).toMatch(/December 1/);
+    expect(r.summary).not.toMatch(/November 30/);
   });
 
   it('returns an all-day event occurring today (start at past midnight, end later today)', async () => {

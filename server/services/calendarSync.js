@@ -1,10 +1,11 @@
 import { readdir, unlink } from 'fs/promises';
 import { join } from 'path';
-import { atomicWrite, ensureDir, filterBySearch as genericFilterBySearch, PATHS, readJSONFile, safeDate, UUID_RE } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, filterBySearch as genericFilterBySearch, PATHS, readJSONFile, UUID_RE } from '../lib/fileUtils.js';
 import { createKeyedFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { overlapsSyncWindow } from '../lib/calendarSyncWindow.js';
 import { calendarTouchpointDedupeKey } from '../lib/tribeMatch.js';
+import { resolveCalendarInstant, resolveEventInstant } from '../lib/timezone.js';
 import { getUserTimezone } from './userTimezone.js';
 import { getAccount, updateSyncStatus } from './calendarAccounts.js';
 
@@ -17,17 +18,43 @@ function filterBySearch(events, search) {
   return genericFilterBySearch(events, search, CALENDAR_SEARCH_FIELDS);
 }
 
-function filterByDateRange(events, startDate, endDate) {
-  let filtered = events;
-  if (startDate) {
-    const start = safeDate(startDate);
-    filtered = filtered.filter(e => safeDate(e.endTime || e.startTime) >= start);
-  }
-  if (endDate) {
-    const end = safeDate(endDate);
-    filtered = filtered.filter(e => safeDate(e.startTime) <= end);
-  }
-  return filtered;
+// Epoch ms of a query bound or event field. Offset-less bounds (the daily
+// review's `YYYY-MM-DDT00:00:00`) are the user's wall clock; bounds that
+// already carry an offset (agenda's localDayWindowUtc) stay absolute.
+function boundMs(value, timezone) {
+  const at = resolveEventInstant(value, timezone);
+  return at ? at.getTime() : null;
+}
+
+function eventMs(event, field, timezone) {
+  const at = resolveCalendarInstant(event?.[field], timezone, event?.isAllDay === true);
+  return at ? at.getTime() : null;
+}
+
+// Half-open on the event end: an all-day event stored through the next
+// midnight must not also occupy the day that starts at that midnight.
+// A point event (no later end) still counts when its start is inside the
+// window. The window end stays inclusive — callers pass either the last
+// millisecond of the local day or a zoneless `T23:59:59`.
+function filterByDateRange(events, startDate, endDate, timezone) {
+  if (!startDate && !endDate) return events;
+  const rangeStart = startDate ? boundMs(startDate, timezone) : null;
+  const rangeEnd = endDate ? boundMs(endDate, timezone) : null;
+  // A bound the caller asked for but we cannot read must not widen into
+  // "no bound" and return the whole calendar.
+  if ((startDate && rangeStart == null) || (endDate && rangeEnd == null)) return [];
+  return events.filter((event) => {
+    const start = eventMs(event, 'startTime', timezone) ?? eventMs(event, 'endTime', timezone);
+    if (start == null) return false;
+    const end = eventMs(event, 'endTime', timezone) ?? start;
+    if (rangeEnd != null && start > rangeEnd) return false;
+    if (rangeStart == null) return true;
+    return end > start ? end > rangeStart : start >= rangeStart;
+  });
+}
+
+function compareEventStart(timezone) {
+  return (a, b) => (eventMs(a, 'startTime', timezone) ?? 0) - (eventMs(b, 'startTime', timezone) ?? 0);
 }
 
 const DEFAULT_CACHE = { syncCursor: null, events: [] };
@@ -89,9 +116,10 @@ export async function getEvents(options = {}) {
     events = filterDeclinedAndCancelled(events);
     events = filterByEnabledSubcalendars(events, account);
     events = filterBySearch(events, search);
-    events = filterByDateRange(events, startDate, endDate);
+    const timezone = await getUserTimezone();
+    events = filterByDateRange(events, startDate, endDate, timezone);
     return {
-      events: events.sort((a, b) => safeDate(a.startTime) - safeDate(b.startTime)).slice(offset, offset + limit),
+      events: events.sort(compareEventStart(timezone)).slice(offset, offset + limit),
       total: events.length
     };
   }
@@ -120,8 +148,9 @@ export async function getEvents(options = {}) {
     allEvents.push(...events);
   }
   allEvents = filterBySearch(allEvents, search);
-  allEvents = filterByDateRange(allEvents, startDate, endDate);
-  allEvents.sort((a, b) => safeDate(a.startTime) - safeDate(b.startTime));
+  const timezone = await getUserTimezone();
+  allEvents = filterByDateRange(allEvents, startDate, endDate, timezone);
+  allEvents.sort(compareEventStart(timezone));
   return {
     events: allEvents.slice(offset, offset + limit),
     total: allEvents.length
@@ -304,15 +333,19 @@ export async function getSyncStatus(accountId) {
 // static import cycle (tribe.js → calendarSync.js).
 export async function logCalendarTouchpoints(accountId, events = []) {
   const now = Date.now();
+  const timezone = await getUserTimezone();
   const candidates = [];
   for (const event of events) {
     if (event.isCancelled || event.myStatus === 'declined') continue;
-    const startedAt = event.startTime || event.endTime;
+    const at = (field) => resolveCalendarInstant(event[field], timezone, event.isAllDay === true);
+    const startedAt = at('startTime') || at('endTime');
     if (!startedAt) continue;
     // Gate on the event's END (completion), not its start: an in-progress or
-    // all-day event isn't a finished contact until it ends.
-    const completedAt = event.endTime || event.startTime;
-    if (safeDate(completedAt) > now) continue; // not finished yet
+    // all-day event isn't a finished contact until it ends. All-day midnights
+    // are the user's calendar dates, so a July 4 all-day is not over at UTC
+    // midnight while it is still July 4 locally.
+    const completedAt = at('endTime') || startedAt;
+    if (completedAt.getTime() > now) continue; // not finished yet
     const identities = [event.organizer, ...(event.attendees || [])].filter(Boolean);
     if (identities.length === 0) continue;
     const eventKey = event.externalId || event.id;
@@ -320,7 +353,7 @@ export async function logCalendarTouchpoints(accountId, events = []) {
     candidates.push({
       identities,
       source: 'calendar',
-      happenedAt: startedAt,
+      happenedAt: event.startTime || event.endTime,
       channel: event.location || 'Calendar',
       summary: event.title || 'Calendar touchpoint',
       dedupeKey: calendarTouchpointDedupeKey(accountId, event),

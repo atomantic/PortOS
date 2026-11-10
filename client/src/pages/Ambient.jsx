@@ -58,9 +58,14 @@ export default function Ambient() {
   const { data: calendarEvents, error: calendarError, refetch: refreshCalendar } = useSocketResource(async () => {
     const now = new Date();
     reconciledDays.current.calendar = now.toDateString();
+    const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const nextMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+    // The events query treats its end as inclusive. The next local midnight is
+    // the exclusive end of today, and an all-day event for tomorrow starts at
+    // that exact instant — asking for it would put tomorrow's all-day on today.
     const params = {
-      startDate: new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString(),
-      endDate: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString(),
+      startDate: dayStart.toISOString(),
+      endDate: new Date(nextMidnight.getTime() - 1).toISOString(),
       limit: 200
     };
     const events = [];

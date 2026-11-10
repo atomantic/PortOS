@@ -217,6 +217,54 @@ export function anchorLocalMidnightUtc(dayStr, tz) {
     : NaN
 }
 
+// A calendar all-day value is midnight on a calendar date. Google leaves the
+// zone off (`YYYY-MM-DDT00:00:00`); Outlook stores that same midnight with a
+// `Z`. Neither is an absolute instant — reading it with `new Date()` on the
+// UTC server puts the date on the previous local day for anyone west of UTC.
+const FLOATING_ALL_DAY = /^\d{4}-\d{2}-\d{2}T00:00:00(?:\.0+)?(?:Z|[+-]\d{2}:?\d{2})?$/
+const ZONE_SUFFIX = /(?:Z|[+-]\d{2}:?\d{2})$/i
+
+/**
+ * Resolve a calendar time to a UTC instant, interpreting OFFSET-LESS values
+ * in `timezone` instead of the Node process's OS timezone. Values with an
+ * explicit offset (`Z` / `±hh:mm`) pass through. Returns null when `value`
+ * does not name an instant.
+ * @param {string|Date|null|undefined} value
+ * @param {string} [timezone] IANA zone for offset-less values
+ * @returns {Date|null}
+ */
+export function resolveEventInstant(value, timezone) {
+  if (!value) return null
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value
+  const s = String(value).trim()
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?)?$/.exec(s)
+  if (m && timezone) {
+    const [, y, mo, d, hh, mm, ss] = m
+    const midnightMs = anchorLocalMidnightUtc(`${y}-${mo}-${d}`, timezone)
+    if (!Number.isFinite(midnightMs)) return null
+    const dayMs = ((Number(hh) || 0) * 3600 + (Number(mm) || 0) * 60 + (Number(ss) || 0)) * 1000
+    return new Date(midnightMs + dayMs)
+  }
+  const parsed = new Date(s)
+  return Number.isNaN(parsed.getTime()) ? null : parsed
+}
+
+/**
+ * Instant of a calendar event field. All-day midnights are floating calendar
+ * dates in `timezone` even when a producer stamped `Z` on them; a timed value
+ * keeps its offset.
+ * @param {string|Date|null|undefined} value
+ * @param {string} [timezone]
+ * @param {boolean} [allDay]
+ * @returns {Date|null}
+ */
+export function resolveCalendarInstant(value, timezone, allDay = false) {
+  if (allDay && typeof value === 'string' && FLOATING_ALL_DAY.test(value.trim())) {
+    return resolveEventInstant(value.trim().replace(ZONE_SUFFIX, ''), timezone)
+  }
+  return resolveEventInstant(value, timezone)
+}
+
 /**
  * The user's current local calendar day expressed as UTC ISO bounds — the
  * shared "today's events" query window (calendar agenda route, voice

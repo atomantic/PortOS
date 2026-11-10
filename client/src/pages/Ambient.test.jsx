@@ -103,7 +103,7 @@ describe('Ambient resource updates', () => {
     expect(reads()).toEqual([2, 2, 1, 2]);
     expect(api.getCalendarEvents).toHaveBeenLastCalledWith({
       startDate: new Date(2026, 0, 16).toISOString(),
-      endDate: new Date(2026, 0, 17).toISOString(), limit: 200, offset: 0
+      endDate: new Date(new Date(2026, 0, 17).getTime() - 1).toISOString(), limit: 200, offset: 0
     }, { silent: true });
     expect(screen.getByText(formatDateFull(new Date()))).toBeTruthy();
   });

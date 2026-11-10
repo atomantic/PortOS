@@ -252,6 +252,12 @@ describe('calendarActivityCandidates', () => {
     ], nowLate, 'America/Los_Angeles');
     expect(c.happenedAt).toBe('2026-07-04T07:00:00.000Z');
     expect(c.durationS).toBe(24 * 3600);
+    // Outlook stamps the same midnight with Z. It is still July 4 locally,
+    // not the UTC instant (which would be July 3 evening in Los Angeles).
+    const [outlook] = calendarActivityCandidates(account, [
+      { externalId: 'ad3', title: 'July 4', isAllDay: true, startTime: '2026-07-04T00:00:00.000Z', endTime: '2026-07-05T00:00:00.000Z' },
+    ], nowLate, 'America/Los_Angeles');
+    expect(outlook.happenedAt).toBe('2026-07-04T07:00:00.000Z');
     // Values WITH an explicit offset pass straight through untouched.
     const [z] = calendarActivityCandidates(account, [
       { externalId: 'ad2', title: 'Zoomed', startTime: '2026-07-04T09:00:00Z', endTime: '2026-07-04T09:30:00Z' },
