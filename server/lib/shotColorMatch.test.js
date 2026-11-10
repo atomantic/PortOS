@@ -5,12 +5,16 @@ import {
   activeShotColorMatch,
   _applyColorMatchBuffer,
   _applyColorMatchPixel,
+  _colorMatchFilterMarkup,
   colorMatchGroups,
   colorMatchGroupOf,
   colorMatchSvgParts,
   colorMatchVideoFilter,
+  documentShotColorMatchRuntime,
   _effectiveColorMatch,
+  hasMusicVideoColorMatch,
   measureRgbStats,
+  _projectColorMatchEntries,
   segmentCacheName,
   segmentLookHashPayload,
   shotSkipsColorMatch,
@@ -198,5 +202,69 @@ describe('shot color match', () => {
     expect(parts.balance.split(' ')).toHaveLength(20);
     expect(parts.saturate.split(' ')).toHaveLength(20);
     expect(parts.balance.startsWith('1.2')).toBe(true);
+  });
+
+  it('builds document shot color match runtime only when active', () => {
+    const camera = { id: 'cam1', name: 'Main' };
+    const take = (enabled = true, strength = 1) => ({
+      kind: 'image',
+      assetId: 'img1',
+      colorMatch: {
+        enabled,
+        strength,
+        correction: { ...COLOR_MATCH_IDENTITY, white: 1.25, gamma: 0.95 },
+      },
+    });
+    const matchedScene = {
+      sceneId: 'sc1',
+      referenceImageId: 'img1',
+      shotSheet: { cameraId: 'cam1', location: 'Studio', timeOfDay: 'Day' },
+      takes: [take(true)],
+    };
+    const skippedCameraScene = {
+      sceneId: 'sc2',
+      referenceImageId: 'img1',
+      shotSheet: { cameraId: 'cam2', location: 'Studio', timeOfDay: 'Day' },
+      takes: [take(true)],
+    };
+    const flashScene = {
+      sceneId: 'sc3',
+      imageEffect: 'flash-develop',
+      referenceImageId: 'img1',
+      shotSheet: { cameraId: 'cam1', location: 'Studio', timeOfDay: 'Day' },
+      takes: [take(true)],
+    };
+
+    const projectOff = { cameras: [camera], scenes: [{ ...matchedScene, takes: [take(false)] }] };
+    expect(hasMusicVideoColorMatch(projectOff)).toBe(false);
+    expect(_projectColorMatchEntries(projectOff)).toEqual([]);
+    expect(documentShotColorMatchRuntime(projectOff)).toBe('');
+
+    const projectDoNotMatch = {
+      cameras: [camera, { id: 'cam2', name: 'Raw', doNotMatch: true }],
+      scenes: [skippedCameraScene, flashScene],
+    };
+    expect(hasMusicVideoColorMatch(projectDoNotMatch)).toBe(false);
+    expect(_projectColorMatchEntries(projectDoNotMatch)).toEqual([]);
+    expect(documentShotColorMatchRuntime(projectDoNotMatch)).toBe('');
+
+    const projectOn = {
+      cameras: [camera, { id: 'cam2', name: 'Raw', doNotMatch: true }],
+      scenes: [matchedScene, skippedCameraScene, flashScene],
+    };
+    expect(hasMusicVideoColorMatch(projectOn)).toBe(true);
+    const entries = _projectColorMatchEntries(projectOn);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].sceneId).toBe('sc1');
+    expect(entries[0].filterId).toBe('portos-color-match-sc1');
+
+    const markup = _colorMatchFilterMarkup(entries[0].parts, entries[0].filterId);
+    expect(markup).toContain('id="portos-color-match-sc1"');
+    expect(markup).toContain('color-interpolation-filters="sRGB"');
+    expect(markup).toContain('exponent="0.95"');
+
+    const runtime = documentShotColorMatchRuntime(projectOn);
+    expect(runtime).toContain('portos-color-match-sc1');
+    expect(runtime).toContain('__portosColorMatch');
   });
 });

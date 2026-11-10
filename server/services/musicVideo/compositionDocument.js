@@ -451,6 +451,8 @@ export async function stageGeneratedDocument(projectId, generatedFiles, { verify
 // Known compatible shipped layered engines. Recognition only;
 // customized engines belong to the author and are never silently replaced.
 const UPGRADABLE_LAYERED_ENGINES = new Set([
+  // The shipped engine before shot color match (#15596).
+  '106e8a140d76e7fa33734d24ec5ea90f57e8f5a21ba873e505edc49e80eb550e',
   // The shipped engine before cut wipes (#14831).
   'b5180a986424a2d6c15cde037baa72088ebf347e79e21b0e89f3c957936d1062',
   // The shipped engine before document end-frame and selected glitch effects.
