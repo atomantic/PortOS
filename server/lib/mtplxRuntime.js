@@ -108,6 +108,11 @@ export async function describeMtplxRuntime(binaryPath, { env = process.env } = {
 export const mtplxVenvDir = () => join(PATHS.tools, 'mtplx');
 export const mtplxManagedBinary = () => join(mtplxVenvDir(), 'bin', 'mtplx');
 
+let mtplxInstallInProgress = false;
+export const setMtplxInstallInProgress = (value) => { mtplxInstallInProgress = value; };
+
 export function resolveMtplxBinary() {
-  return findCommandOnPath(mtplxManagedBinary()) || findCommandOnPath('mtplx');
+  // uv writes console scripts before its whole sync finishes. Polls, cache
+  // reads and starts must keep using any existing external runtime until then.
+  return (!mtplxInstallInProgress && findCommandOnPath(mtplxManagedBinary())) || findCommandOnPath('mtplx');
 }

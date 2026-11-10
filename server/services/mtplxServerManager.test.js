@@ -722,6 +722,33 @@ describe('mtplxServerManager', () => {
       expect(start[1]).toBe(mtplxRuntime.mtplxManagedBinary());
     });
 
+    it('hides a partially synced private executable from status, cache reads and starts', async () => {
+      vi.stubEnv('PATH', '');
+      let finishSync;
+      let startSync;
+      const gate = new Promise((resolve) => { finishSync = resolve; });
+      const started = new Promise((resolve) => { startSync = resolve; });
+      streamingSpawn.runStreamingCommand.mockImplementation(async (_cmd, args) => {
+        if (args[0] === 'pip') {
+          await createManagedEntry();
+          startSync();
+          await gate;
+        }
+        return { success: true };
+      });
+      const installed = installMtplx();
+      await started;
+      const status = await getMtplxServerStatus();
+      expect(status).toMatchObject({ installed: false, runtimeReady: false });
+      expect(mtplxModels.listMtplxCachedModels).not.toHaveBeenCalled();
+      const startError = await startMtplxServer().catch((error) => error);
+      finishSync();
+      await installed;
+      expect(startError).toMatchObject({ code: 'MTPLX_NOT_INSTALLED' });
+      expect(execPm2Calls.some((args) => args[0] === 'start')).toBe(false);
+      expect(await getMtplxServerStatus()).toMatchObject({ installed: true, runtimeReady: true });
+    });
+
     it('does not report success when the installer leaves no executable', async () => {
       streamingSpawn.runStreamingCommand.mockResolvedValue({ success: true });
       await expect(installMtplx()).rejects.toMatchObject({ code: 'MTPLX_INSTALL_FAILED', message: expect.stringContaining('executable') });

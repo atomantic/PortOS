@@ -30,7 +30,7 @@ import { ServerError } from '../lib/errorHandler.js';
 import { launchArgs, normalizeTuning, tuningSpecsFor } from '../lib/localModelTuning.js';
 import { LOCAL_RUNTIMES, localEndpointPort, localRuntimeKind, isLocalInstanceEndpoint } from '../lib/localProviderRuntime.js';
 import { listMtplxCachedModels, pickMtplxCachedModel } from '../lib/mtplxModels.js';
-import { describeMtplxRuntime, mtplxManagedBinary, mtplxVenvDir, resolveMtplxBinary } from '../lib/mtplxRuntime.js';
+import { describeMtplxRuntime, mtplxManagedBinary, mtplxVenvDir, resolveMtplxBinary, setMtplxInstallInProgress } from '../lib/mtplxRuntime.js';
 import { LOCK_PROFILES } from '../lib/pythonLockProfiles.js';
 import { probeOpenAiModels } from '../lib/openAiModelsProbe.js';
 import { createDaemonWatcher, createOnDemandDaemon, createPm2ExitTail, pm2ArgValue, MTPLX_APP } from '../lib/managedDaemon.js';
@@ -398,9 +398,15 @@ export function installMtplx({ onProgress = () => {} } = {}) {
   }
   const listener = (event) => onProgress(event);
   mtplxProgressListeners.add(listener);
-  mtplxInstallation ??= installLockedMtplx((event) => {
-    for (const progress of mtplxProgressListeners) progress(event);
-  }).finally(() => { mtplxInstallation = null; });
+  if (!mtplxInstallation) {
+    setMtplxInstallInProgress(true);
+    mtplxInstallation = installLockedMtplx((event) => {
+      for (const progress of mtplxProgressListeners) progress(event);
+    }).finally(() => {
+      mtplxInstallation = null;
+      setMtplxInstallInProgress(false);
+    });
+  }
   return mtplxInstallation.finally(() => { mtplxProgressListeners.delete(listener); });
 }
 
