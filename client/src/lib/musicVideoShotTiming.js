@@ -9,8 +9,8 @@
 import { grokCoverage, shotRequestSpanSec } from '../../../server/lib/musicVideoShotTiming.js';
 
 /** The duration a shot card submits, including its per-shot override. */
-export function grokSceneRequestDuration(scene, settings, target = null) {
-  const span = shotRequestSpanSec(scene);
+export function grokSceneRequestDuration(scene, settings, target = null, scenes = null) {
+  const span = shotRequestSpanSec(scene, scenes);
   return target?.grokDuration || (span != null ? grokCoverage(span).requestSec : settings?.grokDuration);
 }
 

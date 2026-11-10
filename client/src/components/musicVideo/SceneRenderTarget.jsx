@@ -134,8 +134,8 @@ export function defaultLocalModelId({ models = [], saved = {}, defaultModel = ''
   return choices.find(isLtx25)?.id || (has(defaultModel) ? defaultModel : choices[0]?.id || '');
 }
 
-const shotSpan = shotRequestSpanSec;
-const localShotSpan = (scene) => normalizePreMusic(scene?.preMusic)?.durationSec ?? shotSpan(scene);
+const shotSpan = (scene, scenes) => shotRequestSpanSec(scene, scenes);
+const localShotSpan = (scene, scenes) => normalizePreMusic(scene?.preMusic)?.durationSec ?? shotSpan(scene, scenes);
 
 /** The shortest frame count of `model` that covers the shot, else its longest; null for an untimed shot. */
 export function coveringFrames(model, spanSec) {
@@ -158,7 +158,7 @@ const falLengths = (model) => {
  */
 export function renderTargetOverrides(value, saved, options = {}, context = {}) {
   if (!value) return null;
-  const spanSec = value === 'local' ? localShotSpan(context.scene) : shotSpan(context.scene);
+  const spanSec = value === 'local' ? localShotSpan(context.scene, context.scenes) : shotSpan(context.scene, context.scenes);
   if (value === 'local') {
     // A remembered model this shot can't use (a non-lip-sync model on a lip-synced shot) falls back to the default.
     const choices = localModelChoices(context.models || [], context.performance);
@@ -204,7 +204,7 @@ export function renderTargetOverrides(value, saved, options = {}, context = {}) 
 const formatSec = (sec) => `${Math.round(sec * 10) / 10}s`;
 
 export default function SceneRenderTarget({
-  id, value, onChange, options = {}, onOptionsChange, performance, saved, scene = null, models = [], defaultModel = '', disabled = false, minFrames = null,
+  id, value, onChange, options = {}, onOptionsChange, performance, saved, scene = null, scenes = null, models = [], defaultModel = '', disabled = false, minFrames = null,
 }) {
   const runwayCatalog = useRunwayCatalog();
   const set = (patch) => {
@@ -212,8 +212,8 @@ export default function SceneRenderTarget({
     onOptionsChange?.(next);
     rememberRenderTarget(value, next);
   };
-  const spanSec = value === 'local' ? localShotSpan(scene) : shotSpan(scene);
-  const overrides = renderTargetOverrides(value, saved, options, { models, defaultModel, performance, scene });
+  const spanSec = value === 'local' ? localShotSpan(scene, scenes) : shotSpan(scene, scenes);
+  const overrides = renderTargetOverrides(value, saved, options, { models, defaultModel, performance, scene, scenes });
   const localChoices = localModelChoices(models, performance);
   const localModel = value === 'local' ? models.find((model) => model.id === overrides.modelId) : null;
   const selectedFrames = minFrames && localModel

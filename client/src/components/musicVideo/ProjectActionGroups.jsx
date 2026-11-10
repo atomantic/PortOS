@@ -262,7 +262,7 @@ export function RenderFinalButton({ project, renderJob, readiness }) {
   const eidoverseBlocked = !eidoverseMode ? '' : noAudioOf(project) ? 'Link a track first'
     : !(project.audioAnalysis?.durationSec > 0) ? 'Analyze the master song first'
       : !project.composition?.eidoverseScene?.inlineScript ? 'Save an Eidoverse scene in Make first' : '';
-  const readySceneCount = scenes.filter((scene) => sceneRenderReady(scene, { layered })).length;
+  const readySceneCount = scenes.filter((scene) => sceneRenderReady(scene, { layered, scenes })).length;
   const noAudio = noAudioOf(project);
   const codeDuration = Math.max(
     project.audioAnalysis?.durationSec || 0,

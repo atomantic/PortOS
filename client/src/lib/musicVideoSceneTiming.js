@@ -1,4 +1,6 @@
 import { formatUsd } from '../utils/formatters.js';
+import { planProjectSequenceCoverage } from '../../../server/lib/musicVideoSequenceCoverage.js';
+import { resolveSourceTake } from '../../../server/lib/musicVideoSourceTake.js';
 import {
   grokCoverage, isPerformanceScene, meteredSceneTake, performanceBlockedReason, performanceCapability, planPerformanceWindow, shotSplitLimit,
 } from './musicVideoShotTiming.js';
@@ -11,10 +13,42 @@ const falEstimate = (take) => (take?.costUsd == null ? null
  * Provider timing and cost presentation for one scene. Domain policy remains
  * in the canonical shot-timing helpers shared with media submission.
  */
+function sharedCoverage({ scene, project, layer, lipSyncBackend, songDurationSec, falVideoSettings, lineCues }) {
+  if (!project || layer !== 'footage') return null;
+  const scenes = project.scenes || [];
+  const resolved = resolveSourceTake(scene, scenes);
+  if (resolved) {
+    return {
+      grokPlan: null, falTake: null, coverageSpan: null, coverageNoun: null,
+      sharedNotice: `Plays ${resolved.source?.label || 'the source shot'}'s take from ${resolved.offsetSec.toFixed(2)}s`,
+    };
+  }
+  if (scene?.coverage !== 'sequence') return null;
+  const group = planProjectSequenceCoverage(project).groups.find((item) => item.sceneIds.includes(scene.sceneId));
+  if (!group) return null;
+  const seconds = group.requestSec ?? group.durationSec;
+  if (group.sceneIds.indexOf(scene.sceneId) > 0) {
+    return {
+      grokPlan: null, falTake: null, coverageSpan: null, coverageNoun: null,
+      sharedNotice: `Included in one ${seconds}s sequence request`,
+    };
+  }
+  const synthetic = { ...scene, startSec: 0, endSec: group.durationSec, clipLengthSec: group.durationSec };
+  return {
+    coverageSpan: group.durationSec,
+    coverageNoun: 'run',
+    grokPlan: lipSyncBackend === 'grok' ? grokCoverage(group.durationSec) : null,
+    falTake: meteredSceneTake(lipSyncBackend, {
+      scene: synthetic, scenes, videoSettings: falVideoSettings || {}, songDurationSec, lineCues,
+    }),
+    sharedNotice: null,
+  };
+}
+
 export function buildSceneTimingPresentation({
   scene, layer, lipSyncBackend, songDurationSec, falVideoSettings,
   nextEndSec, isLast, manifestOwnsShots, hasMergeNext, lineCues = null,
-  prevStartSec = null, isFirst = true, hasMergePrevious = false,
+  prevStartSec = null, isFirst = true, hasMergePrevious = false, project = null,
 }) {
   const performance = isPerformanceScene(scene);
   const capability = performance ? performanceCapability(lipSyncBackend, { scene, videoSettings: falVideoSettings }) : null;
@@ -27,11 +61,12 @@ export function buildSceneTimingPresentation({
   const performanceBlocked = performance
     ? (capability ? (plan.ok ? null : plan.message) : performanceBlockedReason(lipSyncBackend))
     : null;
-  const grokPlan = !performance && lipSyncBackend === 'grok' && timedSpan != null ? grokCoverage(timedSpan) : null;
+  const shared = sharedCoverage({ scene, project, layer, lipSyncBackend, songDurationSec, falVideoSettings, lineCues });
+  const grokPlan = shared ? shared.grokPlan : (!performance && lipSyncBackend === 'grok' && timedSpan != null ? grokCoverage(timedSpan) : null);
   // The priced take on a paid lane (fal.ai or Runway); `falTake` keeps its name for the fal-shaped consumers.
-  const falTake = layer === 'footage'
-    ? meteredSceneTake(lipSyncBackend, { scene, videoSettings: falVideoSettings || {}, songDurationSec, lineCues })
-    : null;
+  const falTake = shared ? shared.falTake : (layer === 'footage'
+    ? meteredSceneTake(lipSyncBackend, { scene, scenes: project?.scenes, videoSettings: falVideoSettings || {}, songDurationSec, lineCues })
+    : null);
   const falCost = falEstimate(falTake);
   const performanceCost = falTake?.performance ? (falCost || capability?.costLabel) : capability?.costLabel;
   const splitLimit = layer === 'footage' ? shotSplitLimit(scene, lipSyncBackend, falVideoSettings) : null;
@@ -53,5 +88,6 @@ export function buildSceneTimingPresentation({
     mergeBlocked, mergePreviousBlocked,
     performance, capability, timedSpan, plan, performanceBlocked, grokPlan,
     falTake, falCost, performanceCost, splitLimit, canSplit, mergedSpan, canMerge, canMergePrevious,
+    coverageSpan: shared?.coverageSpan ?? null, coverageNoun: shared?.coverageNoun ?? null, sharedNotice: shared?.sharedNotice ?? null,
   };
 }

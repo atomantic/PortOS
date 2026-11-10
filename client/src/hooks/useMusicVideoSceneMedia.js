@@ -15,6 +15,7 @@ import useSceneRenderLifecycle from './useSceneRenderLifecycle.js';
 import { useVisibilityEvent } from './useVisibilityEvent.js';
 import { isLtx2FamilyRuntime } from '../lib/runnerFamilies';
 import { ltxReferenceFrames as ltxReferenceFramesFor } from '../../../server/lib/musicVideoShotTiming.js';
+import { sourceClipNeedSec } from '../../../server/lib/musicVideoSourceTake.js';
 import { LTX_REFERENCES_GENERATION_MODE, LTX_REFERENCES_IC_MODE, LTX_REFERENCES_MAX_REFERENCES, isLtx25Model } from '../lib/musicVideoLtxReferences.js';
 import { isLayeredComposition, isSelfDrawnLayer, sceneVisualLayer } from '../lib/musicVideoLayers.js';
 import {
@@ -416,7 +417,10 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       if (castGuidesPending(scene)) return Promise.resolve({ ok: false });
       if (!ltxReferenceFiles.length) { toast.error('Choose at least one clip reference for LTX 2.5 References'); return Promise.resolve({ ok: false }); }
     }
-    const referenceFrames = useLtxReferences ? ltxReferenceFrames(scene, target) : null;
+    const coverSec = sourceClipNeedSec(scene, project?.scenes);
+    const ownSpan = typeof scene?.endSec === 'number' && typeof scene?.startSec === 'number' ? scene.endSec - scene.startSec : null;
+    const ltxScene = coverSec != null && ownSpan != null && coverSec > ownSpan + 1e-6 ? { startSec: 0, endSec: coverSec } : scene;
+    const referenceFrames = useLtxReferences ? ltxReferenceFrames(ltxScene, target) : null;
     if (useLtxReferences && referenceFrames == null) {
       toast.error('This shot is too long for one LTX reference clip. Split it or choose a shorter clip length.');
       return Promise.resolve({ ok: false });
@@ -424,11 +428,11 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     const songAudio = useLtxReferences || hostedPerformance ? false : typeof card?.songAudio === 'boolean' ? card.songAudio : settings.generationMode === 'suppliedAudio';
     const mode = useLtxReferences ? LTX_REFERENCES_IC_MODE : audioReactiveSelected || songAudio ? 'a2v' : 'image';
     const falFields = settings.backend === 'fal'
-      ? falTakeRequestFields(falSceneTake({ scene, videoSettings: settings, songDurationSec: project?.audioAnalysis?.durationSec ?? null }))
+      ? falTakeRequestFields(falSceneTake({ scene, scenes: project?.scenes, videoSettings: settings, songDurationSec: project?.audioAnalysis?.durationSec ?? null }))
       : null;
     // Runway — image-to-video cutaways, the take the scene card prices (runwaySceneTake).
     const runwayFields = settings.backend === 'runway'
-      ? runwayTakeRequestFields(runwaySceneTake({ scene, videoSettings: settings }))
+      ? runwayTakeRequestFields(runwaySceneTake({ scene, scenes: project?.scenes, videoSettings: settings }))
       : null;
     // Only a cold-open shot playing its clip's own sound renders with sound (fal asks via falSceneTake).
     const disableAudio = !preMusicClipSound(scene);
@@ -440,7 +444,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
         // Request the 6/10s clip that COVERS this shot; the saved pin is only
         // the fallback for a scene not yet timed on the song.
         // A scene card's Length pick wins.
-        ? { grokDuration: grokSceneRequestDuration(scene, settings, target) }
+        ? { grokDuration: grokSceneRequestDuration(scene, settings, target, project?.scenes) }
         // fal.ai (#8968) — image-to-video only (see VideoRenderSettings). The
         // request is exactly the take the scene card prices (falSceneTake):
         // a cutaway names its model, the length covering the shot (or the

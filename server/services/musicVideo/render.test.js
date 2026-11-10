@@ -313,6 +313,31 @@ describe('resolveSceneClips', () => {
     expect(clips[0].duration).toBe(2); // 48/24
   });
 
+  it('plays six source-take returns as different windows of one clip, and follows a changed source clip', async () => {
+    loadHistory.mockResolvedValue([
+      { id: 'h1', filename: 'take.mp4', width: 1280, height: 720, fps: 24, numFrames: 360 },
+      { id: 'h2', filename: 'take-b.mp4', width: 1280, height: 720, fps: 24, numFrames: 360 },
+    ]);
+    const source = { sceneId: 'src', order: 0, startSec: 0, endSec: 0.8, videoHistoryId: 'h1', referenceImageId: 'frame.png' };
+    const returns = [0, 2, 4, 6, 8, 10].map((offset, i) => ({
+      sceneId: `r${i}`, order: i + 1, startSec: offset + 1, endSec: offset + 1.8,
+      sourceTake: { sceneId: 'src', offsetSec: offset },
+    }));
+    const project = { scenes: [source, ...returns] };
+    const clips = await resolveSceneClips(project);
+    const played = returns.map((scene) => clips.find((clip) => clip.sceneId === scene.sceneId));
+    expect(played.map((clip) => clip.videoPath)).toEqual(Array(6).fill(played[0].videoPath));
+    expect(played.map((clip) => [clip.inSec, clip.outSec])).toEqual([0, 2, 4, 6, 8, 10].map((offset) => [offset, offset + 0.8]));
+    expect(played.every((clip) => clip.loop === false)).toBe(true);
+    expect(clips.find((clip) => clip.sceneId === 'src').videoPath).toBe(played[0].videoPath);
+    source.videoHistoryId = 'h2';
+    const next = await resolveSceneClips(project);
+    const moved = returns.map((scene) => next.find((clip) => clip.sceneId === scene.sceneId));
+    expect(moved[0].videoPath).toBe(next.find((clip) => clip.sceneId === 'src').videoPath);
+    expect(moved[0].videoPath).not.toBe(played[0].videoPath);
+    expect(moved.map((clip) => [clip.inSec, clip.outSec])).toEqual(played.map((clip) => [clip.inSec, clip.outSec]));
+  });
+
   // Uniquely catches a planned camera move overriding the Move the shot shows (the render panning a Hold still).
   it('moves a still as its Move is set, whatever camera was planned for it', async () => {
     loadHistory.mockResolvedValue([]);

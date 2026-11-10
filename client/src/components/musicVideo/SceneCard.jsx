@@ -30,6 +30,7 @@ import SceneClipPreview from './SceneClipPreview.jsx';
 import SceneClipCoverageNotice from './SceneClipCoverageNotice.jsx';
 import PerformanceEvidence from './PerformanceEvidence.jsx';
 import { grokSceneRequestDuration, isPerformanceScene, planPerformanceRepair } from '../../lib/musicVideoShotTiming.js';
+import { resolveSourceTake } from '../../../../server/lib/musicVideoSourceTake.js';
 import SceneTakeStrip from './SceneTakeStrip.jsx';
 import { sceneEndFramePlanFor } from './SceneEndFrame.jsx';
 import SceneFrames from './SceneFrames.jsx';
@@ -59,6 +60,7 @@ import SceneRenderTarget, { lastRenderTarget, renderTargetOverrides } from './Sc
 import SceneRenderInputs, { shotCardRenderRequest, shotCardRequestProblem } from './SceneRenderInputs.jsx';
 import { isLowResVideo } from '../../lib/videoResolution.js';
 import SceneSequenceCoverage from './SceneSequenceCoverage.jsx';
+import SharedTakeOffers from './SharedTakeOffers.jsx';
 import SceneFrameFit from './SceneFrameFit.jsx';
 import SceneCutEffect from './SceneCutEffect.jsx';
 import { plannedTransitions } from '../../lib/musicVideoCutEffects.js';
@@ -206,6 +208,11 @@ export default function SceneCard({
   };
   const applyPatch = (patch) => { onEditLocal(scene.sceneId, patch); onSave(scene.sceneId, patch); };
   const layer = MUSIC_VIDEO_VISUAL_LAYERS.includes(scene.visualLayer) ? scene.visualLayer : 'footage';
+  // A return plays another shot's clip. Its own frame and clip are not rendered.
+  const sourceWindow = resolveSourceTake(scene, project?.scenes);
+  const sourceNotice = sourceWindow
+    ? `Plays ${sourceWindow.source?.label || 'the source shot'}'s take from ${sourceWindow.offsetSec.toFixed(2)}s`
+    : null;
   const lead = (project?.scenes || []).filter(s => !isPreMusicShot(s)).slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
     .find(s => s.videoHistoryId && sceneVisualLayer(s, { layered }) === 'footage');
   const leadFile = useVideoFileSrc(documentComposition ? null : lead?.videoHistoryId, { geometry: true, enabled: layered && layer === 'still' });
@@ -228,7 +235,7 @@ export default function SceneCard({
     return extra ? { ...extra, imageTarget: target } : { imageTarget: target };
   };
   const renderOverrides = renderTargetOverrides(renderPick, falVideoSettings || {}, renderOptions,
-    { models: videoModels, defaultModel: defaultVideoModel, performance: isPerformanceScene(scene), scene });
+    { models: videoModels, defaultModel: defaultVideoModel, performance: isPerformanceScene(scene), scene, scenes: project?.scenes });
   const renderSettings = renderOverrides ? { ...falVideoSettings, ...renderOverrides } : falVideoSettings;
   // The card's input toggles (SceneRenderInputs); Whole sung line also re-plans the take below.
   const [renderInputs, setRenderInputs] = useState({});
@@ -242,6 +249,7 @@ export default function SceneCard({
     nextEndSec, isLast, manifestOwnsShots, hasMergeNext: !!onMergeNext,
     prevStartSec, isFirst: index === 0, hasMergePrevious: !!onMergePrevious,
     lineCues: isPerformanceScene(scene) && renderInputs.wholeLine === true ? project?.lyricCues || [] : null,
+    project,
   });
   const { performance, capability, performanceBlocked, performanceCost } = timing;
   const instruction = scene.takes?.find((take) => take.kind === 'video' && take.assetId === scene.videoHistoryId)?.shotInstruction;
@@ -249,8 +257,8 @@ export default function SceneCard({
     excerptStartSec: performanceReview?.excerptStartSec, backend: lipSyncBackend, videoSettings: falVideoSettings || {} });
   const shotModeId = `mv-shot-mode-${scene.sceneId}`;
   // #10152: what needs the director's attention, visible without opening the card.
-  const attention = sceneAttention(scene, { layered, footageOptional, lipSyncBackend, songDurationSec, clipSec: playedSec, spanExtraSec, failed: failedScenes || {}, songReview, videoSettings: falVideoSettings });
-  const frameReadiness = selectedFrameReadiness(scene);
+  const attention = sceneAttention(scene, { layered, footageOptional, lipSyncBackend, songDurationSec, clipSec: playedSec, spanExtraSec, failed: failedScenes || {}, songReview, videoSettings: falVideoSettings, scenes: project?.scenes });
+  const frameReadiness = selectedFrameReadiness(sourceWindow?.source && sourceWindow.referenceImageId ? sourceWindow.source : scene);
   const songChange = songReview?.[scene.sceneId];
   // Every clip in flight for this shot, each with where it renders. A render whose
   // request is still on its way has no job yet: Render waits for it, so a double tap
@@ -335,7 +343,7 @@ export default function SceneCard({
           : useLtxReferences && ltxReferencesGreyboxBlocked ? 'Clear the greybox reference before using LTX reference images'
             : useLtxReferences && !selectedClipReferences.length ? 'Choose at least one clip reference'
               : useLtxReferences && !cardRequest.authored?.trim() ? 'Add a shot prompt first' : null;
-  const videoRefusal = greyboxRefusal || referenceRefusal || otherRefusal;
+  const videoRefusal = sourceNotice || greyboxRefusal || referenceRefusal || otherRefusal;
   const sendRender = () => {
     const { endFrame, wholeLine } = cardRequest;
     const card = {
@@ -359,7 +367,7 @@ export default function SceneCard({
   };
   // A shot fitted from a storyboard panel with no still yet leads with Clip from storyboard:
   // its still renders first, then the server animates it on this card's lane.
-  const storyboardRefusal = storyboardDefault ? greyboxRefusal || referenceRefusal || videoGenerationRefusal({ ...refusalInputs, needsStill: false }) : null;
+  const storyboardRefusal = storyboardDefault ? sourceNotice || greyboxRefusal || referenceRefusal || videoGenerationRefusal({ ...refusalInputs, needsStill: false }) : null;
   const generateStoryboardClip = () => {
     if (storyboardRefusal) return;
     const model = renderOverrides?.modelId || renderOverrides?.falModelId || renderOverrides?.runwayModelId;
@@ -618,7 +626,7 @@ export default function SceneCard({
       {/* The drawer's header: it stays put while the editor scrolls, and sits outside the
           locked fieldset so stepping between shots and closing always work. */}
       <header className="port-opaque-surface sticky top-0 z-10 -mx-4 -mt-4 mb-3 flex flex-wrap items-center gap-3 border-b border-port-border px-4 py-2">
-        <ScenePoster scene={scene} iconSize={14} className="aspect-video w-20 shrink-0 rounded border border-port-border max-sm:hidden" />
+        <ScenePoster scene={scene} scenes={project?.scenes} iconSize={14} className="aspect-video w-20 shrink-0 rounded border border-port-border max-sm:hidden" />
         <div className="min-w-0 flex-1">
           <h2 id={`scene-${scene.sceneId}-title`} tabIndex={-1} data-shot-heading className="truncate text-base font-medium text-white focus:outline-hidden">
             {shotName || sceneShotName(scene)}
@@ -628,7 +636,7 @@ export default function SceneCard({
               ? `${(scene.endSec - scene.startSec).toFixed(2)}s · ${formatTimecode(scene.startSec)}–${formatTimecode(scene.endSec)} · ${frameSpan(scene)}`
               : `#${scene.order + 1}`}
             {frameReadiness.text ? ` · ${frameReadiness.text}` : ''}
-            {scene.videoHistoryId ? ' · video ready' : ''}
+            {clipPlayback.clipId ? ' · video ready' : ''}
             {frameReadiness.reasons.length > 0 && <span className="block truncate text-port-warning">{frameReadiness.reasons.join(' · ')}</span>}
             {clipSec != null ? ` · clip ${clipSec.toFixed(1)}s` : ''}
           </div>
@@ -713,7 +721,7 @@ export default function SceneCard({
             each with its prompt and Render under it, then the tapped frame's takes. */}
         <div hidden={view !== 'frames'}>
         <SceneFrames project={project} castMedia={castMedia} onReloadCastMedia={onReloadCastMedia} greyboxPlaces={greyboxPlaces} greyboxSaving={greyboxSaving} onGreyboxSaving={setGreyboxSaving} scene={scene} index={index} endFrames={endFrames} endFrameToggle={layer === 'footage' || endFrameEffect} generatingFrame={!!generatingFrame} generatingEndFrame={!!generatingEndFrame}
-          onGenerateFrame={onGenerateFrame} onGenerateEndFrame={onGenerateEndFrame} onImageTargetChange={onFrameImageTarget} onEditLocal={onEditLocal} onSave={onSave}
+          onGenerateFrame={sourceWindow ? undefined : onGenerateFrame} onGenerateEndFrame={sourceWindow ? undefined : onGenerateEndFrame} onImageTargetChange={onFrameImageTarget} onEditLocal={onEditLocal} onSave={onSave}
           onOpenPreview={onOpenPreview} takeBusy={takeBusy} onSelectTake={onSelectTake} onReviewTake={onReviewTake}
           onSwap={onPlacePoolItem ? setSwapKind : null} onSwapFrames={onSwapFrames ? () => onSwapFrames(scene) : null} onImportTake={onImportTake}
           onContinueFromPrevious={layer === 'footage' && index > 0 ? onContinueFromPrevious : null} previousHasClip={previousHasClip}
@@ -748,21 +756,21 @@ export default function SceneCard({
             <SceneClipTiming fieldId={fieldId} scene={scene} onChange={applyPatch} />
           )}
           {/* A clip of another shape (a 3:2 local render) zooms to fill, or keeps its ratio with covered edges. */}
-          {scene.videoHistoryId && (
+          {clipPlayback.clipId && (
             <SceneFrameFit id={fieldId('frame-fit')} scene={scene} clipSize={clipSize} aspect={aspect}
               onChange={(frameFit) => applyPatch({ frameFit })} />
           )}
           {/* A clip under 720p (grok's 480p default) goes soft in a 1080p render. */}
-          {scene.videoHistoryId && clipSize && isLowResVideo(clipSize) && (
+          {clipPlayback.clipId && clipSize && isLowResVideo(clipSize) && (
             <p className="text-xs text-port-warning" data-testid="clip-low-res">
               Low-res clip: {clipSize.width}×{clipSize.height}, under 720p. Upscale it in Media History or regenerate it before the final render.
             </p>
           )}
           {/* Until the clip exists its still stands in, so the player is never an empty box. */}
-          {!scene.videoHistoryId && layer === 'footage' && (
+          {!clipPlayback.clipId && layer === 'footage' && (
             <div className="relative" data-testid="clip-placeholder">
-              <ScenePoster scene={scene} className="aspect-video w-full rounded border border-port-border" />
-              <span className="absolute right-1.5 top-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white">{scene.referenceImageId ? 'Still · no clip yet' : 'No clip yet'}</span>
+              <ScenePoster scene={scene} scenes={project?.scenes} className="aspect-video w-full rounded border border-port-border" />
+              <span className="absolute right-1.5 top-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white">{(scene.referenceImageId || sourceWindow?.referenceImageId) ? 'Still · no clip yet' : 'No clip yet'}</span>
             </div>
           )}
           <SceneTakeStrip scene={scene} kind="video" busy={takeBusy} grid pending={clipJobs}
@@ -772,7 +780,7 @@ export default function SceneCard({
           {speakerField}
           <div className="flex flex-wrap items-center gap-2">
             <SceneRenderTarget id={fieldId('render-on')} value={renderPick} onChange={setRenderPick} performance={performance}
-              options={renderOptions} onOptionsChange={setRenderOptions} scene={scene} models={videoModels} defaultModel={defaultVideoModel}
+              options={renderOptions} onOptionsChange={setRenderOptions} scene={scene} scenes={project?.scenes} models={videoModels} defaultModel={defaultVideoModel}
               saved={falVideoSettings || {}} minFrames={useLtxReferences ? 121 : null} />
             {renderCost && <span className="text-[11px] text-port-text-muted">{renderCost}</span>}
           </div>
@@ -811,12 +819,15 @@ export default function SceneCard({
               ...(patch.songAudio === true || patch.endFrame === true ? { ltxReferences: false } : {}) }))}
               grokPreview={(!renderSettings?.backend || renderSettings.backend === 'grok') && project?.id && scene.referenceImageId ? {
                 ...(renderSettings?.backend ? { backend: renderSettings.backend } : {}), prompt: cardRequest.authored, mode: 'image', sourceImageFile: scene.referenceImageId,
-                grokDuration: renderSettings?.backend === 'grok' ? grokSceneRequestDuration(scene, renderSettings, renderOverrides) : renderSettings?.grokDuration,
+                grokDuration: renderSettings?.backend === 'grok' ? grokSceneRequestDuration(scene, renderSettings, renderOverrides, project?.scenes) : renderSettings?.grokDuration,
                 musicVideo: { projectId: project.id, sceneId: scene.sceneId, catalogBasis: project.castAndSets?.catalogCheckin?.basis, compose: true, promptAsTyped: true, ...songAudioField,
                   ...(startFrameLayout ? { startFrameLayout: true } : {}) },
               } : null} previewRevision={JSON.stringify([project?.updatedAt, castMedia])} />
           )}
           {layer === 'footage' && scene.coverage === 'sequence' && <SceneSequenceCoverage project={project} scene={scene} />}
+          {layer === 'footage' && (
+            <SharedTakeOffers scenes={project?.scenes || []} sceneId={scene.sceneId} onSave={(sceneId, patch) => { onEditLocal(sceneId, patch); return onSave(sceneId, patch); }} />
+          )}
           {endFramePlan.endImageId && (
             <p className={`text-[11px] ${endFramePlan.used ? 'text-port-text-muted' : 'text-port-warning'}`} data-testid="end-frame-plan">
               {endFramePlan.used ? 'The clip ends on the end frame.' : `${endFramePlan.reason}.`}
@@ -826,7 +837,7 @@ export default function SceneCard({
           <div className="flex flex-wrap items-center gap-2" data-testid="clip-actions">
             {storyboardDefault && (
               <SceneStoryboardClip refusal={storyboardRefusal} generatingFrame={!!generatingFrame}
-                onClip={generateStoryboardClip} onStill={onGenerateFrame ? () => {
+                onClip={generateStoryboardClip} onStill={onGenerateFrame && !sourceWindow ? () => {
                   const options = withFrameTarget(null);
                   if (options) onGenerateFrame(scene, options);
                   else onGenerateFrame(scene);
@@ -867,6 +878,11 @@ export default function SceneCard({
           {videoRefusal && videoRefusal !== performanceBlocked && layer === 'footage' && !storyboardDefault && (
             <div className="flex flex-wrap items-center gap-2 text-[11px] text-port-warning" data-testid="render-refusal">
               <span>{videoRefusal}</span>
+              {sourceWindow && (
+                <button type="button" className={SECONDARY_BUTTON} onClick={() => applyPatch({ sourceTake: null })}>
+                  Use its own clip
+                </button>
+              )}
             </div>
           )}
           {guidesFailed && onReloadCastMedia && layer === 'footage' && !storyboardDefault && <CastGuidesRetry onRetry={onReloadCastMedia} consequence="this clip" />}
@@ -925,11 +941,12 @@ export default function SceneCard({
         <button type="button"
           onClick={() => {
             if (failure.lane === 'video') { generateVideo(); return; }
+            if (sourceWindow) return;
             const options = withFrameTarget(null);
             if (options) onGenerateFrame?.(scene, options);
             else onGenerateFrame?.(scene);
           }}
-          disabled={failure.lane === 'video' && renderBlocked}
+          disabled={(failure.lane === 'video' && renderBlocked) || (failure.lane !== 'video' && !!sourceWindow)}
           title={failure.lane === 'video' ? videoRefusal || undefined : undefined}
           className="inline-flex min-h-[44px] shrink-0 items-center px-1 font-medium underline disabled:opacity-50 pointer-fine:sm:min-h-0">
           Retry

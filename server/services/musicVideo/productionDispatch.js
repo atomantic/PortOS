@@ -30,6 +30,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { resolveGalleryImage, resolveImageInputPath } from '../../lib/pathSafety.js';
 import { RENDER_TARGET } from '../../lib/renderTargets.js';
 import { falSceneTake, falTakeRequestFields, grokCoverage, runwaySceneTake, runwayTakeRequestFields, shotRequestSpanSec } from '../../lib/musicVideoShotTiming.js';
+import { sourceClipNeedSec } from '../../lib/musicVideoSourceTake.js';
 import { authoredShotPrompt, musicVideoFrameModelInput } from '../../lib/musicVideoShotPrompt.js';
 import { sceneActiveEndImageId, sceneEndFrameRequestFields } from '../../lib/musicVideoEndFrame.js';
 import { preMusicClipSound } from '../../lib/musicVideoColdOpen.js';
@@ -147,6 +148,7 @@ async function dispatchFrame({ project, scene, route, tag, settings }) {
  */
 const falClipParams = (project, scene, route) => falTakeRequestFields(falSceneTake({
   scene,
+  scenes: project.scenes,
   videoSettings: falRouteVideoSettings(project, route),
   songDurationSec: project.audioAnalysis?.durationSec ?? null,
 }));
@@ -161,7 +163,10 @@ async function ltxReferenceFields({ project, scene, route }) {
   if (!files.length) {
     throw new ServerError(`"${scene.label || scene.sceneId}" has no clip reference for LTX 2.5 References`, { status: 409, code: 'PRODUCTION_CLIP_REFERENCES_MISSING', context: { sceneId: scene.sceneId } });
   }
-  const numFrames = ltxReferenceFrames(scene);
+  const coverSec = sourceClipNeedSec(scene, project?.scenes);
+  const ownSpan = typeof scene?.endSec === 'number' && typeof scene?.startSec === 'number' ? scene.endSec - scene.startSec : null;
+  const numFrames = ltxReferenceFrames(coverSec != null && ownSpan != null && coverSec > ownSpan + 1e-6
+    ? { startSec: 0, endSec: coverSec } : scene);
   if (numFrames == null) {
     throw new ServerError(`"${scene.label || scene.sceneId}" is too long for one LTX reference clip; split the shot`, { status: 409, code: 'PRODUCTION_CLIP_TOO_LONG', context: { sceneId: scene.sceneId } });
   }
@@ -176,7 +181,7 @@ async function dispatchClip({ project, scene, route, tag }) {
   // The director's text; the submit service composes the rest as labeled additions (#11317).
   const prompt = authoredShotPrompt(scene);
   if (!prompt) throw unprompted(scene, 'shot');
-  const spanSec = shotRequestSpanSec(scene);
+  const spanSec = shotRequestSpanSec(scene, project.scenes);
   // The autonomous run's pilot repair names what the last clip got wrong (autonomousService.js).
   const fixes = typeof scene.clipFixes?.text === 'string' ? scene.clipFixes.text : '';
   const byBackend = {
@@ -185,7 +190,7 @@ async function dispatchClip({ project, scene, route, tag }) {
     grok: { grokDuration: spanSec != null ? grokCoverage(spanSec).requestSec : (project.videoSettings?.grokDuration || 10), disableAudio: !preMusicClipSound(scene) },
     fal: falClipParams(project, scene, route),
     reactor: { disableAudio: true },
-    runway: runwayTakeRequestFields(runwaySceneTake({ scene, videoSettings: runwayRouteVideoSettings(project, route) })),
+    runway: runwayTakeRequestFields(runwaySceneTake({ scene, scenes: project.scenes, videoSettings: runwayRouteVideoSettings(project, route) })),
   };
   // A route bound to LTX 2.5 References sends what the shot card's checkbox sends: the shot's clip
   // references as IC references. A performance or greybox shot, or a model that is not LTX 2.5, renders as usual.

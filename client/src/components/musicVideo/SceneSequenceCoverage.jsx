@@ -1,5 +1,5 @@
 import { Film } from 'lucide-react';
-import { planProjectSequenceCoverage, sequenceGroupInput, sequenceModelId } from '../../../../server/lib/musicVideoSequenceCoverage.js';
+import { planProjectSequenceCoverage, sequenceGroupInput } from '../../../../server/lib/musicVideoSequenceCoverage.js';
 import { renderMusicVideoSequence } from '../../services/apiMusicVideo.js';
 import useAsyncAction from '../../hooks/useAsyncAction.js';
 import toast from '../ui/Toast';
@@ -15,11 +15,12 @@ const BUTTON = 'flex items-center gap-1 bg-port-bg border border-port-border hov
  * The plan and prompt are the server's own (lib/musicVideoSequenceCoverage.js).
  */
 export default function SceneSequenceCoverage({ project, scene }) {
-  const { groups, perShot } = planProjectSequenceCoverage(project, { modelId: sequenceModelId(project) });
+  const { groups, perShot } = planProjectSequenceCoverage(project);
   const group = groups.find((g) => g.sceneIds.includes(scene.sceneId));
+  const requestSec = group ? (group.requestSec ?? group.durationSec) : null;
   const [render, rendering] = useAsyncAction(async () => {
     await renderMusicVideoSequence(project.id, group.sceneIds, { silent: true });
-    toast.success(`Queued one ${group.durationSec}s request for ${group.sceneIds.length} shots`);
+    toast.success(`Queued one ${requestSec}s request for ${group.sceneIds.length} shots`);
   }, { errorMessage: 'Could not queue the sequence' });
 
   if (!group) {
@@ -37,7 +38,7 @@ export default function SceneSequenceCoverage({ project, scene }) {
   return (
     <div className="min-w-0 space-y-1 rounded border border-port-border p-2 text-xs" data-testid="sequence-coverage">
       <div className="text-port-text-muted">
-        Sequence: shot {index + 1} of {members.length} in one {group.durationSec}s request ({labels.join(', ')})
+        Sequence: shot {index + 1} of {members.length} in one {requestSec}s request ({labels.join(', ')})
       </div>
       <p className="whitespace-pre-wrap break-words">{prompt}</p>
       <SentPromptPanel prompt={prompt} sentPrompt={prompt} additions={promptAdditions} />
