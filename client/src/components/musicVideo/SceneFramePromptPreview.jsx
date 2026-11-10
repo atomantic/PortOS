@@ -6,7 +6,7 @@ import ModelInputPreview from '../media/ModelInputPreview.jsx';
 
 /** The actual image backend's prompt preview, including its wrappers and style additions.
  * References are resolved on the server from the shot, the same way the frame render is (#15583). */
-export default function SceneFramePromptPreview({ project, scene, slot, referenceImageId = null, instruction = null }) {
+export default function SceneFramePromptPreview({ project, scene, slot, referenceImageId = null, instruction = null, includeReferences = true }) {
   const prompt = instruction ?? authoredFramePromptText(scene, slot);
   const preview = useModelInputPreview(previewImagePrompt, {
     prompt, ...musicVideoFrameGenSize(project),
@@ -15,6 +15,7 @@ export default function SceneFramePromptPreview({ project, scene, slot, referenc
       ...(referenceImageId ? { leadImageId: referenceImageId } : {}),
       ...(slot === 'end' ? { slot: 'end' } : {}),
       ...(instruction !== null ? { refine: true } : referenceImageId ? { fromFrame: true } : {}),
+      ...(!includeReferences ? { includeReferences: false } : {}),
     },
   });
   return <ModelInputPreview prompt={prompt} preview={preview} />;

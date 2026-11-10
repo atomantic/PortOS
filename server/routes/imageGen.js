@@ -275,6 +275,7 @@ export const generateSchema = z.object({
     compose: z.boolean().optional(),
     fromFrame: z.boolean().optional(),
     refine: z.boolean().optional(),
+    includeReferences: z.boolean().optional(),
     greyboxImageId: galleryImageFilenameSchema('greybox capture').optional(),
     greyboxBlockingImageId: galleryImageFilenameSchema('greybox blocking capture').optional(),
     // The frame a from-frame or refine reworks, when the caller did not put it

@@ -108,6 +108,12 @@ export default function SceneFrames({
   // Refine: which frame's edit box is open, and the instruction typed into it.
   const [refining, setRefining] = useState(null);
   const [instruction, setInstruction] = useState('');
+  const [includeReferences, setIncludeReferences] = useState(true);
+  const openRefine = (which, imageId) => {
+    setRefining((current) => current?.which === which && current.imageId === imageId ? null : { which, imageId });
+    setInstruction('');
+    setIncludeReferences(true);
+  };
   // A return shows the source shot's frame and does not render one of its own.
   const sourceWindow = resolveSourceTake(scene, project?.scenes);
   const frames = {
@@ -144,11 +150,12 @@ export default function SceneFrames({
       if (sharedTake || greyboxBlocked || generating || needsPrompt) return;
       (start ? onGenerateFrame : onGenerateEndFrame)?.(scene, withTarget({ referenceImageId: ref ? frames[ref] : null, replaceSelection: true }));
     };
-    const refineLocked = sharedTake || greyboxBlocked || !!generating;
+    const refineLocked = sharedTake || (includeReferences && greyboxBlocked) || !!generating || takeBusy;
+    const refineImageId = refining?.which === which ? refining.imageId : null;
     const refine = (e) => {
       e.preventDefault();
-      if (!instruction.trim() || refineLocked) return;
-      (start ? onGenerateFrame : onGenerateEndFrame)?.(scene, withTarget({ referenceImageId: imageId, refine: instruction.trim() }));
+      if (!instruction.trim() || !refineImageId || refineLocked) return;
+      (start ? onGenerateFrame : onGenerateEndFrame)?.(scene, withTarget({ referenceImageId: refineImageId, refine: instruction, ...(includeReferences ? {} : { includeReferences: false }) }));
       setRefining(null);
       setInstruction('');
     };
@@ -193,8 +200,8 @@ export default function SceneFrames({
             </span>
           )}
           {imageId && (
-            <button type="button" onClick={() => { setRefining(refining === which ? null : which); setInstruction(''); }} disabled={refineLocked}
-              aria-expanded={refining === which} className={SECONDARY_BUTTON} title="Edit this frame with a short instruction, keeping the rest">
+            <button type="button" onClick={() => openRefine(which, imageId)} disabled={sharedTake || !!generating || takeBusy}
+              aria-expanded={refineImageId === imageId} className={SECONDARY_BUTTON} title="Edit this frame with a short instruction, keeping the rest">
               <PencilLine size={14} /> Refine
             </button>
           )}
@@ -209,19 +216,29 @@ export default function SceneFrames({
         {olderLook && (
           <p className="text-xs text-port-text-muted">Older look: Casting changed since this was rendered. Re-render to use the new look.</p>
         )}
-        {refining === which && imageId && (<>
-          <form onSubmit={refine} className="flex min-w-0 gap-2">
-            <label htmlFor={id(`${which}-refine`)} className="sr-only">{`What to change in the ${start ? 'start' : 'end'} frame`}</label>
-            <input id={id(`${which}-refine`)} type="text" value={instruction} onChange={(e) => setInstruction(e.target.value)}
-              placeholder="What to change, e.g. remove the hand"
-              className="min-w-0 flex-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-base sm:text-sm" />
-            {greybox?.reference && <SceneFramePromptPreview project={project} scene={scene} castMedia={castMedia} greybox={greybox} slot={which} referenceImageId={imageId} instruction={instruction} />}
-            <button type="submit" disabled={!instruction.trim() || refineLocked} className={PRIMARY_BUTTON}
-              aria-label={`Render refined ${start ? 'start' : 'end'} frame`}>
-              <Wand2 size={14} /> Render
-            </button>
+        {refineImageId && (<>
+          <form onSubmit={refine} className="min-w-0 space-y-2 rounded border border-port-border p-2">
+            {refineImageId !== imageId && <FrameTile label="Refining this take" imageId={refineImageId}
+              onOpen={() => onOpenPreview?.(`image:${refineImageId}`)} openLabel="View refinement source full size" />}
+            <p className="text-xs text-port-text-muted">Creates a new take. The frame in use stays selected.</p>
+            <div className="flex min-w-0 gap-2">
+              <label htmlFor={id(`${which}-refine`)} className="sr-only">{`What to change in the ${start ? 'start' : 'end'} frame`}</label>
+              <AutoSizeTextarea id={id(`${which}-refine`)} rows={2} value={instruction} onChange={(e) => setInstruction(e.target.value)}
+                placeholder="What to change, e.g. remove the hand"
+                className="min-w-0 flex-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-base sm:text-sm" />
+              <button type="submit" disabled={!instruction.trim() || refineLocked} className={PRIMARY_BUTTON}
+                aria-label={`Render refined ${start ? 'start' : 'end'} frame`}>
+                <Wand2 size={14} /> Render
+              </button>
+            </div>
+            <label htmlFor={id(`${which}-refine-references`)} className="flex items-center gap-2 text-xs min-h-[44px] pointer-fine:sm:min-h-0">
+              <input id={id(`${which}-refine-references`)} type="checkbox" checked={includeReferences} onChange={(e) => setIncludeReferences(e.target.checked)} />
+              Include shot reference images
+            </label>
+            <p className="text-xs text-port-text-muted">{includeReferences ? 'Sends this image plus the shot’s references, including mood-board and greybox images.' : 'Sends only the image to refine with your instruction.'}</p>
+            {project && <SceneFramePromptPreview project={project} scene={scene} slot={which} referenceImageId={refineImageId} instruction={instruction} includeReferences={includeReferences} />}
           </form>
-          {project && <SceneFrameReferenceLimitNotice project={project} scene={scene} castMedia={castMedia} greybox={greybox} sourceImageId={imageId} />}
+          {project && includeReferences && <SceneFrameReferenceLimitNotice project={project} scene={scene} castMedia={castMedia} greybox={greybox} sourceImageId={refineImageId} />}
         </>)}
         {(start ? onImportTake || onContinueFromPrevious : scene.endImageId) && (
           <div className="flex flex-wrap gap-2">
@@ -254,6 +271,7 @@ export default function SceneFrames({
           </label>
         )}
         <SceneTakeStrip scene={scene} kind={start ? 'image' : 'endImage'} busy={takeBusy} grid
+          onRefine={(take) => openRefine(which, take.assetId)} refineDisabled={sharedTake || !!generating}
           onSelect={(take) => onSelectTake?.(scene, take)}
           onReview={(take, review) => onReviewTake?.(scene, take, review)}
           onOpenPreview={onOpenPreview} marks={assetMarks} onMark={onMarkTake}

@@ -25,7 +25,7 @@ function refuseMissingFrameReference() {
  * files (lead frame, then the shot's picks, including a live greybox plate)
  * and the cast inputs those files record.
  */
-async function resolveCardFrameRender(project, scene, { slot = 'start', referenceImageId = null, refine = null, fromFrame = false } = {}) {
+async function resolveCardFrameRender(project, scene, { slot = 'start', referenceImageId = null, refine = null, fromFrame = false, includeReferences = true } = {}) {
   const end = slot === 'end';
   const lead = referenceImageId || ((fromFrame || end) ? scene?.referenceImageId || null : null);
   const refining = Boolean(typeof refine === 'string' && refine.trim() && lead);
@@ -39,6 +39,10 @@ async function resolveCardFrameRender(project, scene, { slot = 'start', referenc
       throw new ServerError('Add a frame prompt or shot prompt first', { status: 422, code: 'MUSIC_VIDEO_FRAME_UNPROMPTED' });
     }
   }
+  if (refining && !includeReferences) {
+    return { prompt: refine, referenceImageFiles: [lead], castInputs: castInputsFromReferences(scene, []),
+      greybox: null, fromFrame: false, refine: true, leadImageId: lead };
+  }
   const { loadSceneCastMedia } = await import('./castGuideMedia.js');
   const { loadMusicVideoGreybox } = await import('./greyboxReferences.js');
   const castMedia = await loadSceneCastMedia(scene, { project });
@@ -49,7 +53,7 @@ async function resolveCardFrameRender(project, scene, { slot = 'start', referenc
     reservePanel: !Array.isArray(scene?.frameReferenceIds),
   });
   return {
-    prompt: refining ? refine.trim() : (end ? scene.endFramePrompt.trim() : authoredFramePromptText(scene)),
+    prompt: refining ? refine : (end ? scene.endFramePrompt.trim() : authoredFramePromptText(scene)),
     referenceImageFiles,
     castInputs: castInputsFromReferences(scene, conditioning.filter((ref) => referenceImageFiles.includes(ref.imageId))),
     greybox,
@@ -71,7 +75,7 @@ function explicitImageRequest(imageTarget) {
 export async function buildSceneFrameGenerateBody(project, scene, input = {}) {
   const slot = input.slot === 'end' ? 'end' : 'start';
   const resolved = await resolveCardFrameRender(project, scene, {
-    slot, referenceImageId: input.referenceImageId || null, refine: input.refine || null, fromFrame: input.fromFrame === true,
+    slot, referenceImageId: input.referenceImageId || null, refine: input.refine || null, fromFrame: input.fromFrame === true, includeReferences: input.includeReferences !== false,
   });
   const selected = slot === 'end' ? scene.endImageId : scene.referenceImageId;
   return {
@@ -85,6 +89,7 @@ export async function buildSceneFrameGenerateBody(project, scene, input = {}) {
       sceneId: scene.sceneId,
       compose: true,
       castInputs: resolved.castInputs,
+      ...(resolved.refine && input.includeReferences === false ? { includeReferences: false } : {}),
       ...(slot === 'end' ? { slot: 'end' } : {}),
       ...(input.revisionId ? { revisionId: input.revisionId } : {}),
       ...(input.select ? { replaceSelection: true, expectedSelection: selected || null } : {}),

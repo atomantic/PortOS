@@ -1,6 +1,6 @@
 import { currentPlateEvidence, renderQualityAcknowledged } from '../../../../server/lib/musicVideoPlateEvidence.js';
 import { useRef, useState } from 'react';
-import { Ban, Check, Loader2, RotateCcw, Eye, X, MessageSquare } from 'lucide-react';
+import { Ban, Check, Loader2, RotateCcw, Eye, X, MessageSquare, PencilLine } from 'lucide-react';
 import { sceneTakeList, takePreviewKey, takeThumbUrl, takeClipUrl, takeProvenance, TAKE_SLOT } from '../../lib/musicVideoTakes.js';
 import { plateVerdict } from './PlateComparison.jsx';
 import AssetReferenceActions from '../media/AssetReferenceActions.jsx';
@@ -40,7 +40,7 @@ async function videoTakeUrl(take) {
  */
 export default function SceneTakeStrip({
   scene, kind, busy = false, large = false, grid = false, onSelect, onReview, onOpenPreview, marks = null, onMark = null, pending = [],
-  onCheck = null, checking = null,
+  onCheck = null, checking = null, onRefine = null, refineDisabled = false,
 }) {
   const [noteFor, setNoteFor] = useState(null);
   const [noteDraft, setNoteDraft] = useState('');
@@ -128,6 +128,13 @@ export default function SceneTakeStrip({
               )}
               {take.dependencies?.references?.some((ref) => ref.role === 'clipReferences' && ref.untrackedCastGuides) && (
                 <p className="text-[10px] text-port-warning break-words">Cast guide changes are not tracked. Review this take before use.</p>
+              )}
+              {frameTake && onRefine && (
+                <button type="button" disabled={busy || refineDisabled} onClick={() => onRefine(take)}
+                  className="inline-flex items-center gap-0.5 rounded border border-port-border bg-port-bg px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 min-h-[32px] sm:min-h-0 disabled:opacity-50"
+                  title="Refine this image with an instruction without selecting it">
+                  <PencilLine size={11} /> Refine take
+                </button>
               )}
               {take.takeId && (
                 <div className="flex flex-wrap gap-1">
