@@ -443,6 +443,26 @@ export default function MusicVideo() {
   const unsavedSceneFields = useRef(new Map());
   // The open workspace's take actions: a change made elsewhere is read once this tab's queued take decisions land.
   const takesRef = useRef(null);
+  // A freshly read record replaces the open project; shot fields typed and not yet saved keep their text.
+  // Resolves true when a kept field differed from the saved one.
+  const mergeFetchedProject = (fresh) => {
+    let conflict = false;
+    setSelectedProject((prev) => {
+      if (prev?.id !== fresh.id) return prev;
+      const local = new Map((prev.scenes || []).map((s) => [s.sceneId, s]));
+      const scenes = (fresh.scenes || []).map((scene) => {
+        const mine = local.get(scene.sceneId);
+        const keys = unsavedSceneFields.current.get(scene.sceneId);
+        if (!mine || !keys?.size) return scene;
+        const kept = { ...scene };
+        keys.forEach((k) => { if (kept[k] !== mine[k]) { conflict = true; kept[k] = mine[k]; } });
+        return kept;
+      });
+      return { ...fresh, scenes };
+    });
+    summaries.setItems((prev) => prev.map((p) => (p.id === fresh.id ? fresh : p)));
+    return conflict;
+  };
   // An edit made elsewhere (an agent, another tab) reaches the open project here; fields typed
   // locally and not yet saved keep their text, with a notice that the shot changed.
   useEffect(() => {
@@ -455,22 +475,7 @@ export default function MusicVideo() {
       const read = () => getMusicVideoProject(selectedId, { silent: true });
       (takesRef.current ? takesRef.current.afterTakeWrites(read) : read()).then((fresh) => {
         if (!active || !fresh) return;
-        let conflict = false;
-        setSelectedProject((prev) => {
-          if (prev?.id !== fresh.id) return prev;
-          const local = new Map((prev.scenes || []).map((s) => [s.sceneId, s]));
-          const scenes = (fresh.scenes || []).map((scene) => {
-            const mine = local.get(scene.sceneId);
-            const keys = unsavedSceneFields.current.get(scene.sceneId);
-            if (!mine || !keys?.size) return scene;
-            const kept = { ...scene };
-            keys.forEach((k) => { if (kept[k] !== mine[k]) { conflict = true; kept[k] = mine[k]; } });
-            return kept;
-          });
-          return { ...fresh, scenes };
-        });
-        summaries.setItems((prev) => prev.map((p) => (p.id === fresh.id ? fresh : p)));
-        if (conflict) toast.info('A shot changed elsewhere. Your unsaved text is kept; saving it replaces the other edit.');
+        if (mergeFetchedProject(fresh)) toast.info('A shot changed elsewhere. Your unsaved text is kept; saving it replaces the other edit.');
       }).catch(() => {});
     };
     socket.on('music-video:project:changed', onChanged);
@@ -788,6 +793,7 @@ export default function MusicVideo() {
             selected={selected}
             unsavedSceneFields={unsavedSceneFields}
             takesRef={takesRef}
+            mergeFetchedProject={mergeFetchedProject}
             tracks={tracks}
             trackLibrary={trackLibrary}
             trackName={trackName}
@@ -832,7 +838,7 @@ export default function MusicVideo() {
 function ProjectWorkspace({
   selected, tracks, trackLibrary, trackName, youtube, separation, lyricAlign, midi, renderJob, videoSettings, publishing, analyzing, cloning,
   replaceProject, patchProject, patchScene, openProject, prepareSong, onAnalyze, onClone, onTrackImported,
-  onRename, renameForm, deletion, unsavedSceneFields, takesRef,
+  onRename, renameForm, deletion, unsavedSceneFields, takesRef, mergeFetchedProject,
 }) {
   const { projectId: routeProjectId, artifactId: routeArtifactId, stage: routeStage, sceneId: routeSceneId } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -902,7 +908,7 @@ function ProjectWorkspace({
     // Renders that finished while the socket was down missed their attach events.
     onReconciled: (projectId) => getMusicVideoProject(projectId, { silent: true }).then(replaceProject).catch(() => {}),
   });
-  const takes = useMusicVideoTakes({ project: selected, applyScenePatch: patchScene, patchProject, replaceProject });
+  const takes = useMusicVideoTakes({ project: selected, applyScenePatch: patchScene, patchProject, reloadProject: mergeFetchedProject });
   // The page's change listener reads through it; this workspace remounts per project.
   takesRef.current = takes;
   // Selective section revision (#8987): regenerate only a draft's flagged

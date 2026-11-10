@@ -83,15 +83,15 @@ describe('useMusicVideoTakes decisions', () => {
   // Uniquely catches a refused decision leaving the card showing a change the server never saved.
   it('reloads the saved project when the server refuses a decision', async () => {
     const board = boardScene({ sceneId: 's1', referenceImageId: 'a.png', takes: [takeA, takeB] });
-    const replaceProject = vi.fn();
+    const reloadProject = vi.fn();
     const saved = { id: 'mv-1', scenes: [{ sceneId: 's1', referenceImageId: 'a.png', takes: [takeA, takeB] }] };
     getMusicVideoProject.mockResolvedValueOnce(saved);
     selectMusicVideoSceneTake.mockRejectedValueOnce(new Error('Image not found'));
-    const { result } = renderHook(() => useMusicVideoTakes({ project: { id: 'mv-1' }, applyScenePatch: board.applyScenePatch, replaceProject }));
+    const { result } = renderHook(() => useMusicVideoTakes({ project: { id: 'mv-1' }, applyScenePatch: board.applyScenePatch, reloadProject }));
 
     let landed;
     await act(async () => { landed = await result.current.selectTake(board.current(), takeB); });
     expect(landed).toBe(false);
-    await vi.waitFor(() => expect(replaceProject).toHaveBeenCalledWith(saved));
+    await vi.waitFor(() => expect(reloadProject).toHaveBeenCalledWith(saved));
   });
 });

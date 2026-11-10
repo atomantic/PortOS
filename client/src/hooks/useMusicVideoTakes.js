@@ -57,7 +57,7 @@ const handoffBundleFilename = (name) => `${handoffSlug(name)}-handoff.zip`;
  * routes (image → data/images, video → video history), then asks the server to
  * associate them with scenes by the file tags the exported manifest assigned.
  */
-export default function useMusicVideoTakes({ project, applyScenePatch, patchProject = null, replaceProject = null }) {
+export default function useMusicVideoTakes({ project, applyScenePatch, patchProject = null, reloadProject = null }) {
   const [busy, setBusy] = useState(false);
   const chainRef = useRef(Promise.resolve());
   // Queued decisions per shot: an earlier reply must not undo a later optimistic change.
@@ -91,8 +91,9 @@ export default function useMusicVideoTakes({ project, applyScenePatch, patchProj
         queue(sceneId, -1);
         toast.error(err?.message || failMessage);
         // Back to the saved record, read once the decisions queued behind this one land.
-        if (optimistic && replaceProject) {
-          afterTakeWrites(() => getMusicVideoProject(projectId, { silent: true })).then(replaceProject).catch(() => {});
+        // `reloadProject(fresh)` applies it (the page keeps shot text typed and not yet saved).
+        if (optimistic && reloadProject) {
+          afterTakeWrites(() => getMusicVideoProject(projectId, { silent: true })).then(reloadProject).catch(() => {});
         }
         return false;
       });
