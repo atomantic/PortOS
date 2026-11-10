@@ -8,7 +8,6 @@ import { MUSIC_VIDEO_MEDIA_MODES } from './musicVideoMediaPolicy.js';
 import { MUSIC_VIDEO_GRADE_PRESETS, MUSIC_VIDEO_GRADE_MAX_GRAIN } from './musicVideoGrade.js';
 import { filmLookSchema } from './filmLookValidation.js';
 import { TEMPLATE_EFFECT_CONTROLS } from './musicVideoTemplateEffects.js';
-
 import { MUSIC_VIDEO_CAMERA_FRAME_ASPECTS } from './musicVideoFilmLook.js';
 import { PRODUCTION_MEDIUMS } from './musicVideoProductionMedium.js';
 import { TITLE_CARD_FONTS, TITLE_CARD_LIMITS, TITLE_CARD_POSITIONS, TITLE_CARD_STYLES } from './musicVideoTitleCard.js';
