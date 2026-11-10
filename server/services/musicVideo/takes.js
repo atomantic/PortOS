@@ -289,6 +289,13 @@ export function selectSceneTake(project, sceneId, takeId) {
   assertMusicVideoMedia(project, take.kind, 'take selection');
   const nextTakes = takes.map((t) => (t.takeId === takeId && t.status === 'rejected' ? { ...t, status: 'candidate' } : t));
   const next = { ...scene, takes: nextTakes, [TAKE_SLOT[take.kind]]: take.assetId };
+  if (next.selectedTakeMarkedBad) {
+    const selectedVideo = nextTakes.find((entry) => entry.kind === 'video' && entry.assetId === next.videoHistoryId);
+    const source = selectedVideo?.sourceImageId || selectedVideo?.dependencies?.references?.find((ref) => ref.role === 'plate')?.assetId;
+    const mismatch = source && next.referenceImageId && source !== next.referenceImageId;
+    const bad = Object.entries(TAKE_SLOT).some(([kind, field]) => next[field] && project.assetMarks?.[`${kind === 'video' ? 'video' : 'image'}:${next[field]}`] === 'bad');
+    if (!mismatch && !bad) delete next.selectedTakeMarkedBad;
+  }
   return { project: replaceScene(project, idx, next), scene: next };
 }
 

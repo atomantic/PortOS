@@ -523,6 +523,29 @@ describe('Swap\'s prompt search', () => {
 });
 
 describe('the shot asset manager', () => {
+  it('reconciles a clip after a bad start frame falls back, and flags an unmatched clip until a compatible choice returns', async () => {
+    for (const name of ['start-a.png', 'start-b.png', 'start-c.png']) seedImage(name);
+    seedVideoHistory([{ id: 'clip-a' }, { id: 'clip-b' }]);
+    await addTake(sceneA.sceneId, { kind: 'image', assetId: 'start-a.png', source: 'generated' });
+    const b = await addTake(sceneA.sceneId, { kind: 'image', assetId: 'start-b.png', source: 'generated' });
+    await addTake(sceneA.sceneId, { kind: 'video', assetId: 'clip-a', source: 'generated', sourceImageId: 'start-a.png' });
+    await addTake(sceneA.sceneId, { kind: 'video', assetId: 'clip-b', source: 'generated', sourceImageId: 'start-b.png' });
+    const mark = (assetId, value) => request(app).patch(`${base()}/media-pool/marks`).send({ items: [{ kind: 'image', assetId }], mark: value });
+    const fallback = await mark('start-a.png', 'bad');
+    expect(fallback.status).toBe(200);
+    expect(fallback.body.scenes[0]).toMatchObject({ referenceImageId: 'start-b.png', videoHistoryId: 'clip-b' });
+    expect(fallback.body.scenes[0].takes.find((take) => take.assetId === 'clip-a').status).toBe('candidate');
+    await addTake(sceneA.sceneId, { kind: 'image', assetId: 'start-c.png', source: 'generated' });
+    const unmatched = await mark('start-b.png', 'bad');
+    expect(unmatched.body.scenes[0]).toMatchObject({ referenceImageId: 'start-c.png', videoHistoryId: 'clip-b', selectedTakeMarkedBad: true });
+    await mark('start-b.png', null);
+    expect((await reload()).scenes.find((scene) => scene.sceneId === sceneA.sceneId).selectedTakeMarkedBad).toBe(true);
+    const restored = await request(app).post(`${base()}/scenes/${sceneA.sceneId}/takes/${b.body.take.takeId}/select`).send({ expectedSelectedAssetId: 'start-c.png' });
+    expect(restored.status).toBe(200);
+    expect(restored.body).toMatchObject({ referenceImageId: 'start-b.png', videoHistoryId: 'clip-b' });
+    expect(restored.body.selectedTakeMarkedBad).toBeFalsy();
+  });
+
   // Uniquely catches a take rejected from one shot reading as bad in Swap, where another shot may want it.
   it('lists a take rejected from its shot as not bad until the director marks it', async () => {
     for (const name of ['first.png', 'second.png']) seedImage(name);

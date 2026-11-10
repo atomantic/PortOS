@@ -22,6 +22,12 @@ function takeSourceImageId(take) {
   return take?.dependencies?.references?.find((ref) => ref?.role === 'plate')?.assetId || null;
 }
 
+function selectedVideoFrameMismatch(scene) {
+  const video = (scene.takes || []).find((take) => take.kind === 'video' && take.assetId === scene.videoHistoryId);
+  const source = takeSourceImageId(video);
+  return Boolean(source && scene.referenceImageId && source !== scene.referenceImageId);
+}
+
 /** Every asset the project's shots hold as a take or a selection: `{ kind, ref, sceneId, take }`. */
 export function projectTakeAssets(project) {
   const assets = [];
@@ -78,7 +84,7 @@ export function markPoolAssets(project, keys, mark, options = {}) {
         const ref = scene[field];
         return Boolean(ref && assetMarks[`${KIND_OF_SLOT[slot]}:${ref}`] === 'bad');
       };
-      const stillBad = Object.entries(TAKE_SLOT).some(([slot, field]) => isBad(slot, field));
+      const stillBad = Object.entries(TAKE_SLOT).some(([slot, field]) => isBad(slot, field)) || selectedVideoFrameMismatch(scene);
       if (!stillBad) {
         cleaned = true;
         const { selectedTakeMarkedBad: _flag, ...rest } = scene;
@@ -222,7 +228,9 @@ export function markPoolAssets(project, keys, mark, options = {}) {
     }
 
     // 3. Selected clip: video
-    if (scene.videoHistoryId && bad.has(`video:${scene.videoHistoryId}`)) {
+    const changedFrame = current.referenceImageId !== scene.referenceImageId;
+    const mismatchedClip = changedFrame && selectedVideoFrameMismatch({ ...current, takes });
+    if (scene.videoHistoryId && (bad.has(`video:${scene.videoHistoryId}`) || mismatchedClip)) {
       const oldAssetId = scene.videoHistoryId;
       const oldTake = findTake('video', oldAssetId);
       const currentFrame = current.referenceImageId;
@@ -238,7 +246,7 @@ export function markPoolAssets(project, keys, mark, options = {}) {
 
       if (candidate) {
         current.videoHistoryId = candidate.assetId;
-        takes = takes.map((t) => (t.kind === 'video' && t.assetId === oldAssetId ? { ...t, status: 'rejected' } : t));
+        takes = takes.map((t) => (t.kind === 'video' && t.assetId === oldAssetId && bad.has(`video:${oldAssetId}`) ? { ...t, status: 'rejected' } : t));
         modified = true;
         takesModified = true;
         changes.push({
@@ -296,7 +304,7 @@ export function markPoolAssets(project, keys, mark, options = {}) {
         const ref = current[field];
         return Boolean(ref && (bad.has(`${KIND_OF_SLOT[slot]}:${ref}`) || assetMarks[`${KIND_OF_SLOT[slot]}:${ref}`] === 'bad'));
       };
-      const stillBad = Object.entries(TAKE_SLOT).some(([slot, field]) => isBad(slot, field));
+      const stillBad = Object.entries(TAKE_SLOT).some(([slot, field]) => isBad(slot, field)) || selectedVideoFrameMismatch({ ...current, takes });
       if (!stillBad) {
         delete current.selectedTakeMarkedBad;
         modified = true;
