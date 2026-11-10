@@ -59,7 +59,9 @@ export function documentCameraView(rig, scene, t, { footage = false, index = 0, 
   const effects = templateEffects({ templateEffects: videoEffects }, scene);
   // A handheld operator (template additions handheld/handheldSteps) moves on top of the camera move, on shot time.
   const handheld = (view) => applyDocumentHandheld(view, documentHandheld(effects, scene.sceneId, aspect), t - scene.startSec, aspect);
-  const strength = footage ? effects.footagePush : effects.stillMotion;
+  // Keep the shot's planned camera independent of the template's default motion.
+  const planned = !footage && scene.camera?.move && rig.has(scene.camera.move);
+  const strength = planned ? 1 : footage ? effects.footagePush : effects.stillMotion;
   if (strength === 0) return handheld({ scale: 1, x: 0, y: 0, rotation: 0 });
   const original = moveFor(rig, scene, { footage, index });
   const move = strength === 1 ? original : { ...original, amount: original.amount * strength, base: 1 + (original.base - 1) * strength };

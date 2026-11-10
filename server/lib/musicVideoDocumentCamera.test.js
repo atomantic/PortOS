@@ -130,3 +130,22 @@ it('matches the shipped engine for a handheld shot, on its own and over a planne
   expect(new Set(views.slice(0, 4).map((view) => view.x.toFixed(5))).size).toBe(4);
   expect(views.slice(0, 4).every((view) => view.rotation !== 0)).toBe(true);
 });
+
+// The addition controls must never remove a camera move deliberately planned for a still.
+it('preserves planned still cameras with template motion off or partially reduced in both players', async () => {
+  const scenes = [0, 0.5, 1].map((stillMotion, index) => ({
+    sceneId: `planned-${index}`, startSec: index * 4, endSec: index * 4 + 4,
+    visualLayer: 'still', media: { kind: 'image', src: `planned-${index}.png` },
+    camera: { move: 'dutch-roll', speed: 'fast' }, templateEffects: { stillMotion },
+  }));
+  const times = scenes.map(scene => scene.startSec + 1.3);
+  const { views, rig } = await engineViews(scenes, { sections: [] }, times);
+  expect(Math.abs(views[2].rotation)).toBeGreaterThan(0);
+  for (let index = 0; index < scenes.length; index++) {
+    const native = documentCameraView(rig, scenes[index], times[index]);
+    for (const key of ['scale', 'x', 'y', 'rotation']) {
+      expect(views[index][key]).toBeCloseTo(views[2][key], 6);
+      expect(native[key]).toBeCloseTo(views[index][key], 6);
+    }
+  }
+});
