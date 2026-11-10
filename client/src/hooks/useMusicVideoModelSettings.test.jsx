@@ -11,6 +11,7 @@ import useMusicVideoModelSettings from './useMusicVideoModelSettings.js';
 const render = () => renderHook(() => useMusicVideoModelSettings({ project: { id: 'p', videoSettings: {} } }));
 const FAL = { backend: 'fal' };
 const RUNWAY = { backend: 'runway' };
+const HIGGSFIELD = { backend: 'higgsfield' };
 const REACTIVE = { backend: 'local', generationMode: 'audioReactive' };
 
 describe('useMusicVideoModelSettings catalog status', () => {
@@ -24,7 +25,7 @@ describe('useMusicVideoModelSettings catalog status', () => {
     api.getVideoGenStatus.mockRejectedValue(new Error('boom'));
     const { result } = render();
     await waitFor(() => expect(result.current.catalogStatus).toBe('error'));
-    for (const pick of [FAL, RUNWAY, REACTIVE]) {
+    for (const pick of [FAL, RUNWAY, HIGGSFIELD, REACTIVE]) {
       expect(result.current.blockedReasonFor(pick)).toMatch(/Couldn't read Video Gen status/);
     }
   });
@@ -53,4 +54,15 @@ describe('useMusicVideoModelSettings catalog status', () => {
     await waitFor(() => expect(result.current.catalogStatus).toBe('ready'));
     expect(result.current.blockedReasonFor(FAL)).toBeNull();
   });
+});
+
+it('gates Higgsfield shot renders on the live credential status', async () => {
+  api.getVideoGenStatus.mockResolvedValue({ models: [], higgsfieldEnabled: false });
+  const { result } = render();
+  await waitFor(() => expect(result.current.catalogStatus).toBe('ready'));
+  expect(result.current.blockedReasonFor(HIGGSFIELD)).toMatch(/No Higgsfield credential/);
+  api.getVideoGenStatus.mockResolvedValue({ models: [], higgsfieldEnabled: true });
+  act(() => result.current.retryCatalog());
+  await waitFor(() => expect(result.current.higgsfieldEnabled).toBe(true));
+  expect(result.current.blockedReasonFor(HIGGSFIELD)).toBeNull();
 });

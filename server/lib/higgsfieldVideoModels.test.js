@@ -30,6 +30,14 @@ describe('buildHiggsfieldVideoRequest', () => {
     expect(buildHiggsfieldVideoRequest({ prompt: '', imageUrl: 'u' }).route).toBe('image');
   });
 
+  it('sends Seedance reference audio and user words unchanged, and refuses other families', () => {
+    const prompt = '  dance\nwith the beat  ';
+    const request = buildHiggsfieldVideoRequest({ prompt, audioUrls: ['song.wav'], referenceImageUrls: ['cast.png'] });
+    expect(request.endpointId).toBe('bytedance/seedance-2.5/reference-to-video');
+    expect(request.body).toMatchObject({ prompt, audio_urls: ['song.wav'], image_urls: ['cast.png'] });
+    expect(() => buildHiggsfieldVideoRequest({ modelId: 'alibaba/wan-3.0', prompt, audioUrls: ['song.wav'] })).toThrow(/at most 0 audio references/);
+  });
+
   it('lists every whole-second length a family accepts', () => {
     expect(higgsfieldVideoLengths(getHiggsfieldVideoModel('kling-video/v3.0/pro'))).toEqual([3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
   });

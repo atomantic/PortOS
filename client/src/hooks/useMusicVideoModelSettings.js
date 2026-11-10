@@ -31,6 +31,7 @@ export default function useMusicVideoModelSettings({ project, onProjectPatch } =
   // null = unknown (read pending or failed) — never collapsed into "not configured".
   const [falEnabled, setFalEnabled] = useState(null);
   const [runwayEnabled, setRunwayEnabled] = useState(null);
+  const [higgsfieldEnabled, setHiggsfieldEnabled] = useState(null);
   const catalogGeneration = useRef(0);
   const [saving, setSaving] = useState(false);
   const [framePinSaving, setFramePinSaving] = useState(false);
@@ -55,6 +56,7 @@ export default function useMusicVideoModelSettings({ project, onProjectPatch } =
         // general Video Gen page's `falEnabled`).
         setFalEnabled(status?.falEnabled === true);
         setRunwayEnabled(status?.runwayEnabled === true);
+        setHiggsfieldEnabled(status?.higgsfieldEnabled === true);
         setStatusRead('ready');
       })
       .catch(() => { if (current()) setStatusRead('error'); });
@@ -106,6 +108,9 @@ export default function useMusicVideoModelSettings({ project, onProjectPatch } =
     // Runway cutaway model / clip length / size — null means the catalog
     // default (RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, the shot's covering length,
     // the project aspect), resolved by runwaySceneTake.
+    higgsfieldModelId: project?.videoSettings?.higgsfieldModelId ?? null,
+    higgsfieldDuration: project?.videoSettings?.higgsfieldDuration ?? null,
+    higgsfieldResolution: project?.videoSettings?.higgsfieldResolution ?? null,
     runwayModelId: project?.videoSettings?.runwayModelId ?? null,
     runwayDuration: project?.videoSettings?.runwayDuration ?? null,
     runwayResolution: project?.videoSettings?.runwayResolution ?? null,
@@ -142,7 +147,7 @@ export default function useMusicVideoModelSettings({ project, onProjectPatch } =
   const blockedReasonFor = (pick) => {
     const reads = pick.backend === 'local' && pick.generationMode === 'audioReactive'
       ? combinedStatus(statusRead, loraRead)
-      : pick.backend === 'fal' || pick.backend === 'runway'
+      : pick.backend === 'fal' || pick.backend === 'runway' || pick.backend === 'higgsfield'
         || (pick.backend === 'local' && pick.generationMode === LTX_REFERENCES_GENERATION_MODE) ? statusRead : 'ready';
     if (reads === 'error') return "Couldn't read Video Gen status — retry before rendering";
     if (reads === 'loading') return 'Checking Video Gen status…';
@@ -159,6 +164,7 @@ export default function useMusicVideoModelSettings({ project, onProjectPatch } =
     if (pick.backend === 'runway' && !runwayEnabled) {
       return 'No Runway API key configured — set it in Settings → Video Gen (or the RUNWAYML_API_SECRET env var) first';
     }
+    if (pick.backend === 'higgsfield' && !higgsfieldEnabled) return 'No Higgsfield credential configured — set it in Settings → Credentials first';
     return null;
   };
   const videoBlockedReason = blockedReasonFor(settings);
@@ -220,6 +226,7 @@ export default function useMusicVideoModelSettings({ project, onProjectPatch } =
     defaultModel,
     falEnabled,
     runwayEnabled,
+    higgsfieldEnabled,
     saving,
     framePinSaving,
     settings,

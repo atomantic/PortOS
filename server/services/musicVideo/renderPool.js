@@ -1,4 +1,5 @@
 /** Project-scoped shot placement. A saved pool narrows existing grants; it never enables one. */
+import { HIGGSFIELD_DEFAULT_VIDEO_MODEL, getHiggsfieldVideoModel } from '../../lib/higgsfieldVideoModels.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { isPerformanceScene } from '../../lib/musicVideoShotTiming.js';
 
@@ -23,8 +24,9 @@ export async function applyProjectRenderPool(body) {
     ? body.musicVideo.songAudio : project?.videoSettings?.generationMode === 'suppliedAudio';
   // A render song audio cannot ride with (a hosted renderer, continuation, end
   // frames) still renders, silent, and says so, rather than refusing the shot.
+  const higgsfieldAudio = body.backend === 'higgsfield' && getHiggsfieldVideoModel(body.higgsfieldModelId || HIGGSFIELD_DEFAULT_VIDEO_MODEL)?.maxReferenceAudio > 0;
   const songAudioBlocker = !supplied ? null
-    : body.backend && body.backend !== 'local' ? `${body.backend} cannot take song audio`
+    : body.backend && body.backend !== 'local' && !higgsfieldAudio ? `${body.backend} cannot take song audio`
       : ((body.mode && !['image', 'a2v'].includes(body.mode)) || body.extendFromVideoId
         || body.lastImageFile || body.keyframes?.length || body.chunks > 1)
         ? 'song audio cannot combine with continuation, end frames, keyframes or chained clips' : null;
@@ -40,7 +42,7 @@ export async function applyProjectRenderPool(body) {
   // Existing projects retain their renderer pins until a pool is saved.
   if (!pool || pool.mode === 'local') {
     if (body.mediaProviderPeerId) refuse('Select a peer in the saved project render pool first');
-    return supplied ? { ...body, backend: 'local', mode: 'a2v', _suppliedAudio: true } : body;
+    return supplied ? { ...body, backend: higgsfieldAudio ? 'higgsfield' : 'local', mode: higgsfieldAudio ? 'image' : 'a2v', _suppliedAudio: true } : body;
   }
   const scene = project.scenes?.find((entry) => entry.sceneId === body.musicVideo.sceneId);
   if (!scene) refuse('The requested scene is no longer in this project');

@@ -1,3 +1,4 @@
+import { HIGGSFIELD_VIDEO_MODELS, HIGGSFIELD_DEFAULT_VIDEO_MODEL, getHiggsfieldVideoModel } from '../../../../server/lib/higgsfieldVideoModels.js';
 import { useRunwayCatalog } from '../../hooks/useRunwayCatalog.js';
 import { GEMINI_OMNI_WEB_MODEL } from '../../../../server/lib/geminiWebVideo.js';
 import {
@@ -54,6 +55,7 @@ function savedLabel(saved, performance, scene) {
   if (saved.backend === 'runway' && !performance) {
     return `Runway · ${getRunwayVideoModel(saved.runwayModelId || RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL)?.label || 'video'}`;
   }
+  if (saved.backend === 'higgsfield') return `Higgsfield · ${getHiggsfieldVideoModel(saved.higgsfieldModelId || HIGGSFIELD_DEFAULT_VIDEO_MODEL)?.label || 'video'}`;
   return BACKEND_LABELS[saved.backend] || 'install default';
 }
 
@@ -76,6 +78,7 @@ export function renderTargetOptions({ performance, saved, endFrame = false, scen
         const rate = describeFalVideoRate(model.id);
         return { value: `fal:${model.id}`, label: `fal.ai · ${model.label}${rate ? ` · ${rate}` : ''}${endFrame && model.endImage ? ' · ends on end frame' : ''}` };
       })),
+    ...HIGGSFIELD_VIDEO_MODELS.map((model) => ({ value: `higgsfield:${model.id}`, label: `Higgsfield · ${model.label}${performance ? ' (cutaways only)' : ''}`, disabled: performance })),
     // Runway takes no song audio, so a performance shot cannot render there.
     ...(performance
       ? [{ value: 'runway', label: 'Runway (cutaways only)', disabled: true }]
@@ -184,6 +187,7 @@ export function renderTargetOverrides(value, saved, options = {}, context = {}) 
       ...(options.runwayResolution ? { runwayResolution: options.runwayResolution } : {}),
     };
   }
+  if (value.startsWith('higgsfield:')) return { backend: 'higgsfield', higgsfieldModelId: value.slice(11), higgsfieldDuration: null, higgsfieldResolution: null };
   const falModelId = value.slice(4) || null;
   if (!falModelId) return { backend: 'fal' };
   // A music-driven shot's pick is its music model, at that model's own default size.

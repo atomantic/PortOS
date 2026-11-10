@@ -852,6 +852,22 @@ describe('videoGen routes', () => {
     });
   });
 
+  describe('Higgsfield Music Video references', () => {
+    it('refuses the complete over-cap shot reference set before enqueueing', async () => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockResolvedValueOnce({ videoGen: { higgsfield: { apiKey: 'example-key' } } });
+      getMusicVideoProject.mockResolvedValueOnce({ id: 'mv-hf', videoSettings: {}, scenes: [{ sceneId: 'shot-hf' }] });
+      clipCastReferences.mockResolvedValueOnce(Array.from({ length: 31 }, (_, i) => ({ path: `/mock/images/ref-${i}.png`, label: `Ref ${i}` })));
+      const response = await request(app).post('/api/video-gen/').send({
+        backend: 'higgsfield', mode: 'image', prompt: '  A dancer turns  ', sourceImageFile: 'frame.png',
+        musicVideo: { projectId: 'mv-hf', sceneId: 'shot-hf' },
+      });
+      expect(response.status).toBe(400);
+      expect(response.body.error).toMatch(/at most 30 reference images.*received 31/);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    });
+  });
+
   describe('POST / — hosted submission contracts', () => {
     const settings = {
       imageGen: { grok: { enabled: true, grokPath: '/example/grok', aspectRatio: '16:9' } },

@@ -60,6 +60,20 @@ beforeEach(() => {
 });
 
 describe('Music Video cast references at video submission', () => {
+  it('queues all Higgsfield shot references on the reference route, with no competing start frame', async () => {
+    m.settings.videoGen.higgsfield = { apiKey: 'test-key' };
+    m.hostedReferences.mockResolvedValue([{ path: '/mock/images/cast.png', label: 'Cast' }, { path: '/mock/images/set.png', label: 'Set' }]);
+    await submitVideoGenJob(body({ backend: 'higgsfield' }), {});
+    expect(m.hostedReferences).toHaveBeenCalledWith(tag, Infinity, { excludePath: '/mock/images/still.png' });
+    expect(m.enqueue.mock.calls[0][0].params).toMatchObject({ mode: 'higgsfield', sourceImagePath: null,
+      referenceImagePaths: ['/mock/images/cast.png', '/mock/images/set.png'] });
+  });
+
+  it('keeps an unreferenced Higgsfield shot anchored to its frame', async () => {
+    m.settings.videoGen.higgsfield = { apiKey: 'test-key' };
+    await submitVideoGenJob(body({ backend: 'higgsfield', higgsfieldModelId: 'kling-video/v3.0/pro' }), {});
+    expect(m.enqueue.mock.calls[0][0].params).toMatchObject({ mode: 'higgsfield', sourceImagePath: '/mock/images/still.png' });
+  });
   it('queues an LTX 2.5 shot with its opening frame and selected cast sheet', async () => {
     m.hostedReferences.mockResolvedValue([{ path: '/mock/image-refs/lead.png', label: 'Lead' }]);
     await submitVideoGenJob(body({ backend: 'local', modelId: 'ltx25_mlx_q8',

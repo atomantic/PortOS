@@ -7,3 +7,6 @@ export const IMAGE_REFERENCE_REQUEST_LIMIT = 16;
 
 /** Research photos one music-video shot holds (scene.researchReferences, #14822). */
 export const MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT = 6;
+
+// Clip selections may exceed a provider cap so submission can refuse the full set.
+export const MUSIC_VIDEO_CLIP_REFERENCE_REQUEST_LIMIT = 64;

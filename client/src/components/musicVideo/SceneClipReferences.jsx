@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Plus, X } from 'lucide-react';
 import {
-  MUSIC_VIDEO_MAX_REFERENCE_CHOICES, musicVideoClipConditioningReferences, musicVideoClipReferenceCapacity, musicVideoClipReferenceChoices, musicVideoOfferedReferences, musicVideoSceneCastIds,
+  MUSIC_VIDEO_CLIP_REFERENCE_REQUEST_LIMIT, musicVideoClipConditioningReferences, musicVideoClipReferenceCapacity, musicVideoClipReferenceChoices, musicVideoOfferedReferences, musicVideoSceneCastIds,
 } from '../../../../server/lib/musicVideoConditioning.js';
 import MediaImage from '../MediaImage';
 import SceneReferencePicker from './SceneReferencePicker.jsx';
@@ -24,11 +24,12 @@ export default function SceneClipReferences({ project, scene, castMedia, backend
   const others = choices.filter((ref) => !chosenIds.includes(ref.id));
   const auto = !Array.isArray(scene.clipReferenceIds);
   const capacity = capacityOverride ?? musicVideoClipReferenceCapacity(backend, model, { startFrameLayout });
-  const unknownModel = !backend || (['local', 'fal', 'runway'].includes(backend) && !model);
+  const unknownModel = !backend || (['local', 'fal', 'runway', 'higgsfield'].includes(backend) && !model);
   const locked = saveState === 'saving' || Boolean(castMedia && musicVideoSceneCastIds(project, scene).some((id) => castMedia[id] === undefined));
   // Most Runway models pin the start frame unless references go with it: their keyframe and reference modes cannot mix.
   const runwayUnpinsStart = backend === 'runway' && capacity > 0 && !!model?.referenceImages && !model.referenceImages.keepsFrames;
-  const looseStart = (backend === 'fal' && model?.referenceImages && !model.image)
+  const looseStart = (backend === 'higgsfield' && capacity > 0 && chosen.length > 0)
+    || (backend === 'fal' && model?.referenceImages && !model.image)
     || (runwayUnpinsStart && chosen.length > 0)
     || (backend === 'local' && model?.fastvideoFamily === 'fasth3omni')
     || (backend === 'grok' && startFrameLayout && chosen.length > 0);
@@ -49,7 +50,7 @@ export default function SceneClipReferences({ project, scene, castMedia, backend
     Promise.resolve(onSave(scene.sceneId, { clipReferenceIds: next }))
       .then((saved) => onSaveState(saved === false ? 'failed' : 'saved'), () => onSaveState('failed'));
   };
-  const update = (ids) => save(ids && [...ids, ...retained].slice(0, MUSIC_VIDEO_MAX_REFERENCE_CHOICES));
+  const update = (ids) => save(ids && [...ids, ...retained].slice(0, MUSIC_VIDEO_CLIP_REFERENCE_REQUEST_LIMIT));
 
   return (
     <div role="group" aria-label="Clip references" className="space-y-1">
@@ -59,7 +60,7 @@ export default function SceneClipReferences({ project, scene, castMedia, backend
       </div>
       <p className="text-[11px] text-port-text-muted">
         {scene.referenceImageId
-          ? looseStart ? 'The selected start frame is a guide; this model does not pin the opening frame.' : 'The selected start frame is sent with the clip.'
+          ? backend === 'higgsfield' && looseStart ? 'The reference route sends the selected references instead of the start frame.' : looseStart ? 'The selected start frame is a guide; this model does not pin the opening frame.' : 'The selected start frame is sent with the clip.'
           : 'Select a start frame before rendering.'}
         {!notSent && ` ${capacityNote}`}
         {songUnheard && ' This model does not hear the song, so the clip renders without song audio.'}

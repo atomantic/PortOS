@@ -112,7 +112,7 @@ function captureDependencies({ body, params, scene, prepared, project }) {
  * model that cannot reach it is refused with the lengths it delivers, not clamped.
  */
 function assertClipLength({ body, scene, backend, project }) {
-  const modelId = backend === VIDEO_GEN_MODE.FAL ? body.falModelId : backend === VIDEO_GEN_MODE.RUNWAY ? body.runwayModelId : null;
+  const modelId = backend === VIDEO_GEN_MODE.FAL ? body.falModelId : backend === VIDEO_GEN_MODE.RUNWAY ? body.runwayModelId : backend === VIDEO_GEN_MODE.HIGGSFIELD ? body.higgsfieldModelId : null;
   const short = clipLengthShortfall(scene, backend, body, modelId, project?.scenes);
   if (!short) return;
   const lengths = `This model renders ${short.supported.join(', ')} s.`;
