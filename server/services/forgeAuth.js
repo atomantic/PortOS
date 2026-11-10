@@ -323,7 +323,7 @@ const WORKFLOW_SCOPE_REMEDY = 'gh auth refresh -h github.com -s workflow';
  * Returns an array of scopes, or `null` when the header is absent (fine-grained
  * and app tokens carry none, so absence means "unknown", never "granted").
  */
-export function parseOAuthScopes(output) {
+function parseOAuthScopes(output) {
   const match = /^x-oauth-scopes:[ \t]*(.*)$/im.exec(output || '');
   if (!match) return null;
   return match[1].split(',').map((s) => s.trim()).filter(Boolean);
