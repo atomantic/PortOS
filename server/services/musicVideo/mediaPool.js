@@ -310,6 +310,7 @@ export function markPoolAssets(project, keys, mark, options = {}) {
     }
     if (modified) {
       current.takes = takes;
+      changed.push(current);
       return current;
     }
     return scene;

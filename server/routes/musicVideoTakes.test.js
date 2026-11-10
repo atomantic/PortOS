@@ -530,8 +530,9 @@ describe('the shot asset manager', () => {
     await addTake(sceneB.sceneId, { kind: 'endImage', assetId: 'a-pick.png', source: 'generated' });
     const marked = await request(app).patch(`${base()}/media-pool/marks`).send({ items: [{ kind: 'image', assetId: 'spare.png' }, { kind: 'image', assetId: 'a-pick.png' }], mark: 'bad' });
     expect(marked.status).toBe(200);
-    // Shot A uses a-pick and shot B uses spare (its first take), so only A's spare changes.
-    expect(marked.body.scenes.map((scene) => scene.sceneId)).toEqual([sceneA.sceneId]);
+    // A's unused spare is rejected; both shots return their newly flagged selected assets.
+    expect(marked.body.scenes.map((scene) => scene.sceneId)).toEqual([sceneA.sceneId, sceneB.sceneId]);
+    expect(marked.body.scenes.every((scene) => scene.selectedTakeMarkedBad)).toBe(true);
     const statuses = (scene) => Object.fromEntries(scene.takes.map((take) => [`${take.kind}:${take.assetId}`, take.status]));
     expect(statuses(marked.body.scenes[0])).toEqual({ 'image:a-pick.png': 'candidate', 'image:spare.png': 'rejected' });
     const saved = (await reload()).scenes;
@@ -622,6 +623,7 @@ describe('the shot asset manager', () => {
     const scene = stored.scenes.find((s) => s.sceneId === sceneA.sceneId);
     expect(scene.referenceImageId).toBe('only.png');
     expect(scene.selectedTakeMarkedBad).toBe(true);
+    expect(markRes.body.scenes.find((entry) => entry.sceneId === sceneA.sceneId).selectedTakeMarkedBad).toBe(true);
 
     const { sceneRenderReady } = await import('../lib/musicVideoLayers.js');
     expect(sceneRenderReady(scene)).toBe(false);
@@ -668,6 +670,7 @@ describe('the shot asset manager', () => {
     const scene = (await reload()).scenes.find((s) => s.sceneId === sceneA.sceneId);
     expect(scene.selectedTakeMarkedBad).toBeFalsy();
     expect(scene.referenceImageId).toBe('lone.png');
+    expect(unmark.body.scenes.find((entry) => entry.sceneId === sceneA.sceneId).selectedTakeMarkedBad).toBeFalsy();
   });
 
   // Uniquely catches a deleted still or clip leaving a take, mark or collection row pointing at a file that is gone, and a shot's own still being deletable.
