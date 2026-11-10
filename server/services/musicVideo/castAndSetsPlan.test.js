@@ -70,9 +70,18 @@ describe('Cast & Sets neutral people sheets', () => {
     const animated = buildCastAndSetsImagePlan({ scenes: [] }, { ...direction, look: '3D animated, warm amber grade' });
     expect(animated.character.prompt).toContain('Rendering medium: 3D animated');
     expect(animated.character.prompt).not.toMatch(/photorealistic|warm amber grade/);
-    const photographic = buildCastAndSetsImagePlan({ scenes: [] }, { ...direction, look: 'Editorial photography, no anime' });
+    const photographic = buildCastAndSetsImagePlan({ scenes: [] }, { ...direction, look: 'Editorial photography, no anime or cartoon' });
     expect(photographic.character.prompt).toContain('photorealistic, editorial photography');
     expect(photographic.character.prompt).not.toContain('Rendering medium:');
+    const excludedList = buildCastAndSetsImagePlan({ scenes: [] }, { ...direction, look: 'No anime, cartoon and pixel art; watercolor illustration, warm amber grade' });
+    expect(excludedList.character.prompt).toContain('Rendering medium: watercolor illustration');
+    expect(excludedList.character.prompt).not.toMatch(/anime|cartoon|pixel art|warm amber grade/);
+    const memory = buildCastAndSetsImagePlan({ scenes: [] }, { ...direction,
+      protagonist: { ...direction.protagonist, forms: [{ ...direction.protagonist.forms[0], look: 'oil painting, sepia grade' }] } });
+    expect(memory.character.prompt).toContain('photorealistic, editorial photography');
+    expect(memory['form:age-7'].prompt).toContain('Rendering medium: oil painting');
+    expect(memory['form:age-7'].prompt).not.toMatch(/photorealistic|sepia grade/);
+    expect(memory['test:1'].prompt).toContain('Look: oil painting, sepia grade');
   });
 });
 

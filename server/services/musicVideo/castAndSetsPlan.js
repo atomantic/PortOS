@@ -65,14 +65,17 @@ const FIVE_VIEWS = `Five views: FRONT, 3/4, PROFILE, BACK full-body, plus a FACE
 // Select only known rendering media, never rewrite or forward the mixed scene
 // look to identity sheets. Authored look text remains intact on scene frames.
 const SHEET_MEDIA = /\b(?:watercolou?r(?: illustration)?|oil painting|gouache|pencil drawing|charcoal drawing|ink drawing|hand[- ]drawn(?: animation| illustration)?|(?:2d|3d)(?: animation| animated| render(?:ing)?)|cel[- ]shaded(?: animation)?|stop[- ]motion|claymation|anime|cartoon|comic[- ]book(?: illustration)?|pixel art|digital illustration|vector illustration|animation|animated|illustration|illustrated|non[- ]photorealistic)\b/gi;
-function sheetMedium(look) {
+function sheetMedium(look, fallback = PHOTO) {
   const text = String(look || '');
-  const media = [...text.matchAll(SHEET_MEDIA)]
-    .filter((match) => !/\b(?:no|not|without)\s+$/i.test(text.slice(0, match.index)))
-    .map((match) => match[0]);
+  const { media } = [...text.matchAll(SHEET_MEDIA)].reduce((state, match) => {
+    const gap = text.slice(state.end, match.index);
+    const negated = /\b(?:no|not|without)\s+$/i.test(gap)
+      || (state.negated && /^(?:\s*(?:,|\/|&|\band\b|\bor\b))+\s*$/i.test(gap));
+    return { media: negated ? state.media : [...state.media, match[0]], end: match.index + match[0].length, negated };
+  }, { media: [], end: 0, negated: false });
   return media.length
     ? `Rendering medium: ${[...new Set(media)].join(', ')}. Retain this rendering medium only; omit scene lighting, color grading, film stock and grain`
-    : PHOTO;
+    : fallback;
 }
 // Identity and wardrobe sheets define the person; recurring objects have their
 // own sheet, even when a legacy signature or wardrobe mentions carrying one.
@@ -398,7 +401,7 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
         EMPTY_HANDS,
         form.era && `Era: ${form.era}`,
         FIVE_VIEWS,
-        peopleMedium,
+        sheetMedium(form.look, peopleMedium),
         FLAT_GRAY_SHEET_CLOSE,
         note(key),
       ),
