@@ -3,6 +3,9 @@ import { useCallback, useEffect, useMemo, useRef } from 'react';
 import '../../../../server/services/musicVideo/documentTemplates/layered/cameraRig.js';
 import { documentCameraCss, documentCameraView, documentSceneIndexes } from '../../../../server/lib/musicVideoDocumentCamera.js';
 
+// Held from module load: the script runs once per module graph, and a global read later may not carry it.
+const RIG = globalThis.PORTOS_CAMERA_RIG;
+
 // The layered engine's constants (documentTemplates/layered/engine.js: vignette, grain, buildGrain).
 const VIGNETTE = 0.5;
 const GRAIN = 0.09;
@@ -64,20 +67,19 @@ export function useDocumentCamera(project, enabled) {
   const beats = project.audioAnalysis?.beats;
   const downbeats = project.audioAnalysis?.downbeats;
   return useMemo(() => {
-    const rig = globalThis.PORTOS_CAMERA_RIG;
-    if (!enabled || !rig) return null;
+    if (!enabled || !RIG) return null;
     const indexes = documentSceneIndexes(scenes);
-    return (scene, t, footage) => documentCameraCss(documentCameraView(rig, scene, t, {
+    return (scene, t, footage) => documentCameraCss(documentCameraView(RIG, scene, t, {
       footage, index: indexes.get(scene.sceneId) ?? 0, beats: beats || [], downbeats: downbeats || [],
     }));
   }, [enabled, scenes, beats, downbeats]);
 }
 
-/** A clip under the document's footage move. Without `camera` it only positions its children. */
+/** A clip under the document's footage move (`camera` from `useDocumentCamera`). */
 export function DocumentFootageMove({ scene, camera, audioRef, time, children }) {
   const ref = useRef(null);
   const apply = useCallback((t) => {
-    if (ref.current) ref.current.style.transform = camera ? camera(scene, t, true) : 'none';
+    if (ref.current) ref.current.style.transform = camera(scene, t, true);
   }, [camera, scene]);
   useEffect(() => { apply(time); }, [time, apply]);
   useSongFrames(audioRef, apply);

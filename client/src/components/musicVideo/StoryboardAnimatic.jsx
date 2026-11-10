@@ -685,7 +685,8 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
     const at = audio?.currentTime || 0;
     setTime(at);
     setPlaying(false);
-    if (documentVariant) {
+    // The exact frame never shows over the cold open or the ending, so those save the native picture.
+    if (documentVariant && !basis.outro && !cold.active) {
       setTouched(true);
       // The saved frame is the document's own. Fall back to the native picture
       // only when no isolated worker answers.
@@ -819,10 +820,15 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
       ) : null}
       {clipShots.map(({ scene, offset }) => (
         <ShotColorMatchFrame key={`${cold.active ? 'cold:' : ''}${scene.sceneId}:${scene.videoHistoryId}`} project={project} scene={scene} className="pointer-events-none absolute inset-0 h-full w-full">
-          <DocumentFootageMove scene={scene} camera={documentCamera} audioRef={clock.ref} time={clock.time}>
+          {documentCamera ? (
+            <DocumentFootageMove scene={scene} camera={documentCamera} audioRef={clock.ref} time={clock.time}>
+              <ShotClip scene={scene} audioRef={clock.ref} time={clock.time} current={scene.sceneId === shot?.sceneId}
+                preload={offset <= 1 ? 'auto' : 'metadata'} />
+            </DocumentFootageMove>
+          ) : (
             <ShotClip scene={scene} audioRef={clock.ref} time={clock.time} current={scene.sceneId === shot?.sceneId}
               preload={offset <= 1 ? 'auto' : 'metadata'} />
-          </DocumentFootageMove>
+          )}
         </ShotColorMatchFrame>
       ))}
       {nearToggles.map((toggle) => {
