@@ -60,6 +60,21 @@ describe('LyricsPanel word alignment', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(/Settings → Voice/);
   });
 
+  it('explains Intel host limits before alignment and retains timing edits after refusal', async () => {
+    const onAlign = vi.fn().mockRejectedValue(new Error('MMS_FA lyric alignment is unsupported on Intel macOS. Import LRC/SRT/WebVTT timings.'));
+    const { onSave } = renderPanel({ onAlign });
+    expect(screen.getByText(/Local MMS_FA alignment is unsupported/)).toHaveTextContent('machine running PortOS, not your browser');
+    expect(onAlign).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Align words' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('unsupported on Intel macOS');
+    expect(onSave).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText('Start of word 1 (walking), line 1'), { target: { value: '0.9' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save word times for line 1' }));
+    expect(onSave).toHaveBeenCalledWith({ lyricCues: [{ ...PROJECT.lyricCues[0], words: [
+      { ...PROJECT.lyricCues[0].words[0], startSec: 0.9 }, PROJECT.lyricCues[0].words[1],
+    ] }] });
+  });
+
   it('requires named model consent before separating a missing stem, and supports declining', () => {
     const { onAlign } = renderPanel({ project: { ...PROJECT, vocalStemFilename: null } });
     fireEvent.click(screen.getByRole('button', { name: 'Align words' }));

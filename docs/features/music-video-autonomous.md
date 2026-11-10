@@ -2,6 +2,39 @@
 
 One prompt in, a finished music video out. The Music Video page's **Autonomous** entry point (and the `music-video-autopilot` scheduled task) starts a server-owned run that does everything the hand-driven flow asks you to set up first: it writes the creative brief, the lyrics and a mood board, makes the song (in Suno, or on this machine), and produces the video with the tools you allowed. Song-writing checkpoints are optional. Production requires revision-bound approval of the visual guide and lyric-timed storyboard. An animated proof is an optional check; it never holds the final render. Authenticated sessions may grant automatic planning approvals.
 
+## Local lyric alignment platforms
+
+**MMS_FA CTC alignment is unsupported on Intel macOS and on macOS older than 14.**
+The platform is the machine running PortOS, independent of the browser used to open
+Music Video. Apple Silicon requires macOS 14+ and an arm64 Python 3.11–3.14.
+The existing hash-locked PyTorch profile also covers Linux x86_64/aarch64 and
+Windows x86_64. It installs on demand, never at server boot.
+
+In **Song → Lyrics & phrases**, import LRC, SRT or WebVTT timings, edit each line's
+start/end, and adjust existing word timings with **Exact word times**. Existing
+saved timings remain usable when alignment is refused. Master-only API callers
+retain their existing Whisper path; it is not an MMS_FA replacement or an ONNX
+profile. Asking to separate vocals and align requires CTC support before Demucs
+starts, so unsupported hosts do not download or install models for a doomed run.
+
+The maintained-wheel check for [#15665](https://github.com/atomantic/PortOS/issues/15665)
+on 2026-11-10 found no qualifying non-PyTorch profile:
+
+- [ONNX Runtime 1.24.1 release notes](https://github.com/microsoft/onnxruntime/releases/tag/v1.24.1)
+  explicitly retire macOS x86_64 binaries. [1.31.1 files](https://pypi.org/project/onnxruntime/1.31.1/#files)
+  provide macOS arm64 wheels only; [1.23.2](https://pypi.org/project/onnxruntime/1.23.2/#files)
+  is the last release with Intel macOS Python wheels.
+- [OpenVINO 2026.4.1 files](https://pypi.org/project/openvino/2026.4.1/#files)
+  likewise provide only arm64 macOS wheels. Building a runtime from source or
+  pinning an obsolete Intel wheel does not meet this profile's current-wheel contract.
+
+PortOS therefore keeps its pre-install refusal and ships no ONNX model artifact
+or alternate dependency lock. Restoring Intel support requires a maintained runtime
+with current Intel macOS wheels, a reproducible digest-pinned MMS_FA export, and
+emission/word-clock parity with the existing numpy Viterbi path. Real Intel hardware
+validation remains pending; fake-process and workflow tests verify refusal and
+preservation of saved timings, not Intel inference.
+
 ## Automatic lyric overlays
 
 In **Setup → Time and verify**, turn off **Show automatic lyric overlays** for a cinematic video that uses lyrics as timing and story inputs without displaying them. The per-project `lyricOverlayEnabled` boolean is accepted by project creation and update; omitted means legacy behavior. A scoped update containing only `{ "lyricOverlayEnabled": false }` preserves the renderer, aligned cues, shot decisions, selected assets and history. Timing verification still shows the words deliberately. This preference does not prohibit lip-sync or change existing shots.

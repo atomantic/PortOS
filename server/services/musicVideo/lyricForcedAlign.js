@@ -26,14 +26,14 @@ const lockedVersion = (lock, name) => new RegExp(`^${name}==([^\\s;\\\\]+)`, 'm'
 // (including a Rosetta Node) needs an arm64 Python. The lock's torch has no
 // Intel macOS or pre-macOS 14 wheel; those hosts are refused before any
 // install rather than given an older, vulnerable torch.
-// Leading underscore: the platform-plan contract test is the only out-of-file caller.
+// Leading underscore: only platform contract tests supply an alternate host.
 export function _lyricAlignRuntimePlan({
   platform = process.platform, appleSilicon, darwinMajor,
 } = {}) {
   if (platform === 'darwin') {
     const silicon = appleSilicon ?? isAppleSilicon({ platform });
     if (!silicon) {
-      return { unsupported: 'MMS_FA lyric alignment needs an Apple Silicon Mac: patched PyTorch has no Intel macOS build.' };
+      return { unsupported: 'MMS_FA lyric alignment is unsupported on Intel macOS: patched PyTorch and current ONNX Runtime have no Intel macOS wheels. Use an Apple Silicon Mac with macOS 14 or later, or import LRC/SRT/WebVTT timings and edit them in Lyrics & phrases.' };
     }
     if ((darwinMajor ?? Number(release().split('.')[0])) < 23) {
       return { unsupported: 'MMS_FA lyric alignment needs macOS 14 or later for patched PyTorch.' };
@@ -82,8 +82,13 @@ async function defaultFindPython(plan) {
   return null;
 }
 
-async function ensureRuntime({ run, onProgress, dir, plan, findPython }) {
+/** Refuse unsupported hosts before a caller starts separation or installs a runtime. */
+export function requireLyricAlignPlatform(plan = _lyricAlignRuntimePlan()) {
   if (plan.unsupported) throw failure(plan.unsupported, 'LYRIC_ALIGN_CTC_UNSUPPORTED_PLATFORM');
+}
+
+async function ensureRuntime({ run, onProgress, dir, plan, findPython }) {
+  requireLyricAlignPlatform(plan);
   const python = process.platform === 'win32' ? join(dir, 'Scripts', 'python.exe') : join(dir, 'bin', 'python');
   // Written only after a clean install of this exact lock; a venv without it
   // (an older pin, a failed or interrupted install) is rebuilt, never patched.
