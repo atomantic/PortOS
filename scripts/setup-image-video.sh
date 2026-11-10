@@ -325,12 +325,25 @@ venv_exists() { [[ -x "$1/bin/python3" || -x "$1/Scripts/python.exe" ]]; }
 # execute or upgrade a user-wide PATH copy. This stays lazy for installs that
 # only need pip (and for the Python-free mere.run lane).
 portos_uv() {
-  local tool_dir="${HOME}/.portos/tools/uv-0.13.6" bin banner
+  local tool_dir="${HOME}/.portos/tools/uv-0.13.6" bin banner candidate bootstrap_python=""
   if is_windows; then bin="$tool_dir/Scripts/uv.exe"; else bin="$tool_dir/bin/uv"; fi
   banner="$("$bin" --version 2>/dev/null || true)"
   if [[ ! "$banner" =~ ^uv\ 0\.13\.6($|[[:space:]]) ]]; then
+    # A runtime may need recovery precisely because PYTHON_BIN is an old or
+    # minimal system Python. Select a complete interpreter for this tool only;
+    # runtime interpreter selection stays with its lane below.
+    for candidate in "$PYTHON_BIN" python3.14 python3.13 python3.12 python3.11 python3.10 python3.9 python3.8 python3; do
+      if have "$candidate" && "$candidate" -c 'import ensurepip, sys, venv; sys.exit(sys.version_info[:2] < (3, 8))' >/dev/null 2>&1; then
+        bootstrap_python="$candidate"
+        break
+      fi
+    done
+    if [[ -z "$bootstrap_python" ]]; then
+      echo "❌ PortOS-private uv needs Python 3.8+ with venv and ensurepip. Install Python with venv support or set PYTHON_BIN to a complete Python installation, then retry Repair." >&2
+      return 1
+    fi
     echo "📦 Bootstrapping PortOS-private uv 0.13.6..." >&2
-    "$PYTHON_BIN" -m venv --clear "$tool_dir" >&2 || return
+    "$bootstrap_python" -m venv --clear "$tool_dir" >&2 || return
     "$(venv_python "$tool_dir")" -m pip install --disable-pip-version-check --require-hashes --no-deps --only-binary :all: -r "$SCRIPT_DIR/requirements-uv-bootstrap.lock.txt" >&2 || return
     banner="$("$bin" --version 2>/dev/null || true)"
     if [[ ! "$banner" =~ ^uv\ 0\.13\.6($|[[:space:]]) ]]; then

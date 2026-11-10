@@ -753,12 +753,19 @@ echo 'pip progress on stdout'
 [[ "\${FAIL_PIP:-0}" == 0 ]] || exit 43
 cp "$UV_FIXTURE" "$(dirname "$0")/uv"`);
     executable(python, `
+if [[ "$1" == -c ]]; then
+  [[ "\${NO_BOOTSTRAP_MODULES:-0}" == 0 || "$0" == *alternate-python ]]
+  exit $?
+fi
 printf 'base %s\\n' "$*" >> "$LOG"
 [[ "$1 $2" == '-m venv' ]] || exit 94
 echo 'venv progress on stdout'
 [[ "\${FAIL_VENV:-0}" == 0 ]] || exit 44
 mkdir -p "\${@: -1}/bin"
 cp "$PIP_FIXTURE" "\${@: -1}/bin/python3"`);
+    const alternatePython = join(home, 'alternate-python');
+    writeFileSync(alternatePython, readFileSync(python));
+    chmodSync(alternatePython, 0o755);
     if (privateVersion) executable(join(home, '.portos/tools/uv-0.13.6/bin/uv'), `[[ \"$1\" == --version ]] || echo 'stale execute' >> \"$LOG\"; echo 'uv ${privateVersion}'`);
     const run = (extra = {}) => {
       writeFileSync(log, '');
@@ -766,6 +773,14 @@ cp "$PIP_FIXTURE" "\${@: -1}/bin/python3"`);
 set -euo pipefail
 uname() { if [[ "$1" == -m ]]; then echo arm64; else echo Darwin; fi; }
 uv() { echo 'AMBIENT UV MUST NEVER RUN' >&2; exit 95; }
+python3.14() { [[ "\${ALLOW_ALT:-0}" == 1 ]] && "$ALT_PYTHON" "$@"; }
+python3.13() { return 1; }
+python3.12() { return 1; }
+python3.11() { return 1; }
+python3.10() { return 1; }
+python3.9() { return 1; }
+python3.8() { return 1; }
+python3() { return 1; }
 git() {
   if [[ "$1" == clone ]]; then
     root="\${@: -1}"
@@ -782,7 +797,7 @@ printf 'captured %s\\n' "\${LTX2_BASE_PY:-\${LTX25_BASE_PY:-\${WAN22_BASE_PY:-}}
         env: {
           ...process.env, ...Object.fromEntries(installFlags.map((name) => [name, '0'])),
           HOME: home, PORTOS_DATA: join(home, 'data'), PYTHON_BIN: python,
-          LOG: log, UV_FIXTURE: uv, PIP_FIXTURE: pip, [flag]: '1', ...extra,
+          LOG: log, UV_FIXTURE: uv, PIP_FIXTURE: pip, ALT_PYTHON: alternatePython, [flag]: '1', ...extra,
         },
       });
     };
@@ -804,6 +819,23 @@ printf 'captured %s\\n' "\${LTX2_BASE_PY:-\${LTX25_BASE_PY:-\${WAN22_BASE_PY:-}}
     const failedLock = install.run({ STALE_LOCK: '1' });
     expect(failedLock.status).toBe(42);
     expect(failedLock.stdout).not.toContain('venv ready');
+  });
+
+  it('uses a complete alternate Python when the selected system Python lacks bootstrap modules', () => {
+    const install = installer('INSTALL_LTX2');
+    const result = install.run({ NO_BOOTSTRAP_MODULES: '1', ALLOW_ALT: '1' });
+    expect(result.status, result.stderr).toBe(0);
+    expect(install.calls()).toContain('bootstrap -m pip install');
+    expect(install.calls()).toContain('private sync --locked');
+  });
+
+  it('reports a missing bootstrap prerequisite before mutating the private tool or runtime venv', () => {
+    const install = installer('INSTALL_LTX2');
+    const result = install.run({ NO_BOOTSTRAP_MODULES: '1' });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('needs Python 3.8+ with venv and ensurepip');
+    expect(install.calls()).not.toMatch(/^(base |bootstrap |private |stale execute)/m);
+    expect(existsSync(join(install.home, '.portos/tools'))).toBe(false);
   });
 
   it('refuses a missing upstream lock instead of resolving one', () => {
