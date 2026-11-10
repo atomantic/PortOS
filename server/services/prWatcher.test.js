@@ -1001,7 +1001,9 @@ describe('checkPullRequests trusted maintenance boundary', () => {
 
   it('refreshes authority every poll and pins repository and permission queries to the enterprise host', async () => {
     forge([rawPr(10, 'collaborator')], { host: 'github.enterprise.example' });
-    expect((await checkPullRequests(app)).newPrs).toHaveLength(1);
+    const result = await checkPullRequests(app);
+    expect(result.newPrs).toHaveLength(1);
+    expect(result.repoHost).toBe('github.enterprise.example');
     expect(execGhMock.mock.calls.filter(([a]) => a[0] === 'api').every(([a]) => a.includes('github.enterprise.example'))).toBe(true);
     expect(execGhMock.mock.calls.filter(([a]) => a.includes('--repo')).every(([a]) => a.includes('github.enterprise.example/example/project'))).toBe(true);
     expect(execGhMock.mock.calls

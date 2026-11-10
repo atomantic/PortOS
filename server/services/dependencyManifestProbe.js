@@ -22,7 +22,9 @@ const PRESENCE_MANIFESTS = new Set([
   'pom.xml', 'build.gradle', 'build.gradle.kts', 'Gemfile', 'composer.json', 'pubspec.yaml',
   'Package.swift', 'mix.exs', 'Podfile', 'Pipfile', 'environment.yml', 'deno.json', 'deno.jsonc',
   'setup.py', 'setup.cfg', 'pyproject.toml', 'Cargo.toml', 'go.mod',
-  'renovate.json', 'renovate.json5', '.renovaterc', '.renovaterc.json', 'Cartfile'
+  'renovate.json', 'renovate.json5', '.renovaterc', '.renovaterc.json', 'Cartfile',
+  'vcpkg.json', 'conanfile.py', 'conanfile.txt', 'CMakeLists.txt', 'meson.build',
+  'MODULE.bazel', 'WORKSPACE', 'WORKSPACE.bazel'
 ]);
 
 // `.github/` is a dot-dir the walk skips, but it declares two things the
@@ -30,18 +32,41 @@ const PRESENCE_MANIFESTS = new Set([
 // Phase 1 lands) and workflow `uses:` pins on third-party actions (the
 // github-actions ecosystem). A repo with only those still has work to do.
 const GITHUB_BOT_CONFIGS = ['dependabot.yml', 'dependabot.yaml', 'renovate.json', 'renovate.json5'];
-const EXTERNAL_ACTION_USE = /^\s*(?:-\s*)?uses:\s*['"]?(?!\.\/)[^\s'"#]+@/m;
+const EXTERNAL_ACTION_USE = /^\s*(?:-\s*)?uses:\s*['"]?(?!\.\/)[^\s'"#]+/m;
+const LOCAL_ACTION_USE = /^\s*(?:-\s*)?uses:\s*['"]?(\.\/[^\s'"#]+)/gm;
+
+async function localActionsDeclareDependencies(repoPath, workflow) {
+  for (const [, actionPath] of workflow.matchAll(LOCAL_ACTION_USE)) {
+    if (actionPath.split('/').includes('..')) return true;
+    let definition = null;
+    for (const filename of ['action.yml', 'action.yaml']) {
+      definition = await readFile(join(repoPath, actionPath, filename), 'utf8')
+        .catch(error => error.code === 'ENOENT' ? null : undefined);
+      if (definition === undefined) return true;
+      if (definition !== null) break;
+    }
+    // Missing definitions and nested local actions have not been inspected.
+    // Non-composite actions can declare packages in their own skipped tree.
+    if (definition === null || EXTERNAL_ACTION_USE.test(definition)
+      || [...definition.matchAll(LOCAL_ACTION_USE)].length
+      || !/^\s*using:\s*['"]?composite\b/m.test(definition)) return true;
+  }
+  return false;
+}
 
 async function githubDeclaresDependencies(repoPath) {
   const githubDir = join(repoPath, '.github');
-  const entries = await readdir(githubDir).catch(() => []);
+  const entries = await readdir(githubDir).catch(error => error.code === 'ENOENT' ? [] : null);
+  if (entries === null) return true;
   if (entries.some((name) => GITHUB_BOT_CONFIGS.includes(name))) return true;
   const workflowsDir = join(githubDir, 'workflows');
-  const workflows = (await readdir(workflowsDir).catch(() => [])).filter((name) => /\.ya?ml$/.test(name));
+  const workflowEntries = await readdir(workflowsDir).catch(error => error.code === 'ENOENT' ? [] : null);
+  if (workflowEntries === null) return true;
+  const workflows = workflowEntries.filter((name) => /\.ya?ml$/.test(name));
   for (const name of workflows) {
     // An unreadable workflow fails open, like an unparsable manifest.
     const text = await readFile(join(workflowsDir, name), 'utf8').catch(() => null);
-    if (text === null || EXTERNAL_ACTION_USE.test(text)) return true;
+    if (text === null || EXTERNAL_ACTION_USE.test(text) || await localActionsDeclareDependencies(repoPath, text)) return true;
   }
   return false;
 }
@@ -63,8 +88,15 @@ async function manifestDeclaresDependencies(name, path) {
     return /^\s*(require\s|\t)/m.test(await readFile(path, 'utf8'));
   }
   if (name === 'Cargo.toml') {
-    return /^\[(.*dependencies.*)\]\s*\n\s*[^\s[#]/m.test(await readFile(path, 'utf8'))
-      || /^\[(?:workspace\.)?dependencies\./m.test(await readFile(path, 'utf8'));
+    let dependencySection = false;
+    for (const line of (await readFile(path, 'utf8')).split('\n')) {
+      const section = line.match(/^\s*\[([^\]]+)\]\s*(?:#.*)?$/);
+      if (section) {
+        if (/(?:^|\.)(?:dev-|build-)?dependencies\./.test(section[1])) return true;
+        dependencySection = /(?:^|\.)(?:dev-|build-)?dependencies$/.test(section[1]);
+      } else if (dependencySection && hasContentLine(line)) return true;
+    }
+    return false;
   }
   if (name === 'project.pbxproj') {
     // An Xcode app adds Swift packages in its project file, not a Package.swift.
@@ -99,11 +131,11 @@ export async function probeDependencyManifests(repoPath) {
         if (declares) return true;
       }
     }
-    if (depth >= MAX_DEPTH) return false;
-    for (const e of entries) {
-      if (e.isDirectory() && !e.name.startsWith('.') && !SKIP_DIRS.has(e.name)) {
-        if (await walk(join(dir, e.name), depth + 1)) return true;
-      }
+    const directories = entries.filter(e => e.isDirectory() && !e.name.startsWith('.') && !SKIP_DIRS.has(e.name));
+    // Reaching the bound leaves descendants uninspected, not dependency-free.
+    if (depth >= MAX_DEPTH) return directories.length > 0;
+    for (const e of directories) {
+      if (await walk(join(dir, e.name), depth + 1)) return true;
     }
     return false;
   };

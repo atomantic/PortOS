@@ -21,6 +21,8 @@ export default function HandheldCameraControl({ clipId, onApply, disabled = fals
   const [source, setSource] = useState(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+  const [loadError, setLoadError] = useState(null);
+  const [retry, setRetry] = useState(0);
   const videoRef = useRef(null);
 
   // The steady clip to preview, and a handheld take's own settings to start from.
@@ -28,16 +30,21 @@ export default function HandheldCameraControl({ clipId, onApply, disabled = fals
     if (!open || !clipId) return undefined;
     let live = true;
     setSource(null);
+    setLoadError(null);
     (async () => {
       const item = await getVideoHistoryItem(clipId, { silent: true }).catch(() => null);
       const original = item?.handheldFrom ? await getVideoHistoryItem(item.handheldFrom, { silent: true }).catch(() => null) : null;
       if (!live) return;
-      const steady = original || item;
+      const steady = item?.handheldFrom ? original : item;
+      if (!steady?.filename) {
+        setLoadError(item?.handheldFrom ? 'Could not load the steady original. Retry before making a handheld take.' : 'Could not load the clip. Retry before making a handheld take.');
+        return;
+      }
       if (item?.handheld) setSettings(normalizeHandheld(item.handheld));
       setSource(steady?.filename ? `/data/videos/${encodeURIComponent(steady.filename)}` : null);
     })();
     return () => { live = false; };
-  }, [open, clipId]);
+  }, [open, clipId, retry]);
 
   // The clip's own shape, so the preview frames and zooms it as handheldFfmpegFilter will.
   const [aspect, setAspect] = useState(16 / 9);
@@ -60,7 +67,7 @@ export default function HandheldCameraControl({ clipId, onApply, disabled = fals
   const set = (key, value) => setSettings((prev) => ({ ...prev, [key]: value }));
   const still = settings.shake <= 0 && settings.steps <= 0;
   const apply = async () => {
-    if (saving || still) return;
+    if (saving || still || !source) return;
     videoRef.current?.pause();
     setSaving(true);
     setError(null);
@@ -85,7 +92,7 @@ export default function HandheldCameraControl({ clipId, onApply, disabled = fals
         {source
           ? <video ref={videoRef} src={source} className="block w-full h-full object-cover" muted playsInline loop autoPlay controls={false}
             onLoadedMetadata={(e) => { const { videoWidth: w, videoHeight: h } = e.currentTarget; if (w > 0 && h > 0) setAspect(w / h); }} />
-          : <p className="p-2 text-xs text-port-text-muted">Loading the clip…</p>}
+          : <p className="p-2 text-xs text-port-text-muted">{loadError ? 'Clip unavailable' : 'Loading the clip…'}</p>}
       </div>
       {HANDHELD_CONTROLS.map((control) => (
         <label key={control.id} className="flex items-center gap-2 text-xs" title={control.hint}>
@@ -103,12 +110,13 @@ export default function HandheldCameraControl({ clipId, onApply, disabled = fals
           title="Same amount of shake, a different path for it">
           <Dices className="w-3.5 h-3.5" /> New shake
         </button>
-        <button type="button" disabled={disabled || saving || still} onClick={apply}
+        <button type="button" disabled={disabled || saving || still || !source} onClick={apply}
           className="min-h-[44px] flex items-center gap-1.5 px-2 rounded bg-port-accent text-sm text-white disabled:opacity-50">
           <Video className="w-3.5 h-3.5" /> {saving ? 'Making handheld take…' : 'Make handheld take'}
         </button>
         <button type="button" disabled={saving} onClick={() => setOpen(false)} className={buttonClass}>Cancel</button>
       </div>
+      {loadError && <div className="flex flex-wrap items-center gap-2"><p role="alert" className="text-xs text-port-error">{loadError}</p><button type="button" className={buttonClass} onClick={() => setRetry((n) => n + 1)}>Retry</button></div>}
       {error && <p role="alert" className="text-xs text-port-error">{error}</p>}
     </div>
   );

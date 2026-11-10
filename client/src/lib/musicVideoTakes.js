@@ -21,6 +21,21 @@ export function sceneTakeList(scene, kind) {
   return takes;
 }
 
+/** Merge a color measurement without replacing newer take decisions or newly added takes. */
+export function mergeTakeColorMatch(scene, measuredTakes) {
+  const takes = (scene.takes || []).map((take) => {
+    const measured = measuredTakes.find((entry) => entry.takeId === take.takeId
+      || (entry.kind === take.kind && entry.assetId === take.assetId));
+    return measured && Object.hasOwn(measured, 'colorMatch') ? { ...take, colorMatch: measured.colorMatch } : take;
+  });
+  // Measurement materializes legacy selected assets; retain those rows only
+  // while they still belong to the current selection.
+  for (const take of measuredTakes) {
+    if (scene[TAKE_SLOT[take.kind]] === take.assetId && !takes.some((entry) => entry.kind === take.kind && entry.assetId === take.assetId)) takes.push(take);
+  }
+  return takes;
+}
+
 /** Preview/lightbox key for a take (`image:<filename>` / `video:<historyId>`); an end frame is a gallery image. */
 export const takePreviewKey = (take) => `${take.kind === 'video' ? 'video' : 'image'}:${take.assetId}`;
 

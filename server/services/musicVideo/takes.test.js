@@ -148,7 +148,7 @@ describe('cast inputs on a new still (#14154)', () => {
       { kind: 'image', assetId: 'late.png', source: 'generated', prompt: 'Harbor at dusk, grain.', skipFrameCapture: true },
     ]);
     expect(appended[0].frameDependencies.version).toBe(1);
-    expect(appended[0].frameDependencies.references.map((ref) => ref.role)).toEqual(['framePrompt', 'frameCamera', 'frameLocation', 'frameCast']);
+    expect(appended[0].frameDependencies.references.map((ref) => ref.role)).toEqual(['framePrompt', 'frameCamera', 'frameLocation', 'frameCast', 'frameReferences']);
     expect(appended[1]).not.toHaveProperty('frameDependencies');
     expect(appended[2]).not.toHaveProperty('frameDependencies');
     expect(appended[3].frameDependencies.references[0].assetId).toBe('end');

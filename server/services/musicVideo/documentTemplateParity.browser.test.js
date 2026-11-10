@@ -88,17 +88,23 @@ function App(){const[value,setValue]=useState(null);window.show=(project,data,t)
     });
   }), 30000);
 
-  async function compare(project, t, { words = false, reuse = false } = {}) {
+  async function compare(project, t, { words = false, reuse = false, clockJump = false, lyricsOff = false } = {}) {
     // Media elements store microseconds; use a frame's centre so rounding a
     // fractional 24fps boundary cannot move the native clock back one frame.
     t = (Math.floor(t * 24 + 1e-6) + 0.5) / 24;
     current = project;
     const media = new Map(project.scenes.filter(s => s.visualLayer !== 'card').map(s => [s.sceneId, { kind: s.videoHistoryId ? 'video' : 'image', ext: s.videoHistoryId ? 'webm' : 'png', fps: 24, ...(s.endImageId ? { end: { kind: 'image', ext: 'png' } } : {}) }]));
-    engineData = dataFor(project, media);
+    engineData = dataFor(lyricsOff ? { ...project, lyricOverlayEnabled: false } : project, media);
     await engine.setViewportSize({ width: 640, height: Math.round(640 * engineData.render.height / engineData.render.width) });
     await engine.goto(`http://127.0.0.1:${server.address().port}/engine/index.html`);
     await engine.waitForFunction(() => !!window.portosComposition);
     await engine.evaluate(t => window.portosComposition.seek(t), t);
+    if (clockJump) await native.evaluate(() => {
+      // Advance the playing clock without a seek event: this case owns a dropped
+      // playback frame, while the neighboring seek tests own scrub invalidation.
+      const audio = document.querySelector('audio'); let clock = audio.currentTime;
+      Object.defineProperty(audio, 'currentTime', { configurable: true, get: () => clock, set: value => { clock = value; } });
+    });
     await native.evaluate(({ project, data, t, reuse }) => (reuse ? window.update : window.show)(project, data, t), { project, data: dataFor(project), t, reuse });
     await native.waitForFunction(frame => document.querySelector('[data-testid="document-template-canvas"]')?.dataset.songFrame === String(frame), Math.floor(t * 24 + 1e-6));
     await native.evaluate(() => document.fonts.ready);
@@ -106,6 +112,10 @@ function App(){const[value,setValue]=useState(null);window.show=(project,data,t)
     if (currentScene?.visualLayer === 'footage' && currentScene.videoHistoryId) await native.waitForFunction(() => document.querySelector('video[data-ready="true"]')?.readyState >= 2);
     if (words) {
       await native.waitForSelector('[data-testid="animatic-lyrics"]');
+      if (lyricsOff) {
+        await native.getByRole('button', { name: 'Lyrics', exact: true }).click();
+        await native.frameLocator('[data-testid="animatic-lyrics"]').locator('#stage').waitFor({ state: 'hidden' });
+      }
       // Use the public seek bridge's response to know its exact lyric frame landed.
       await native.waitForFunction(t => window.lyricFrames.includes(t), Math.floor(t * 24 + 1e-6) / 24);
     }
@@ -197,11 +207,17 @@ function App(){const[value,setValue]=useState(null);window.show=(project,data,t)
     await compare(value, 3.125, { reuse: true });
     await compare(value, 1.625, { reuse: true });
   });
+  it('rebuilds a same-cut wipe hold when seeking from an early outgoing frame', async () => {
+    const value = base({ ...still, stillMove: 'push', endSec: 2, wipeOut: { style: 'push-left', lengthSec: 0.5 } });
+    value.scenes.push({ ...still, sceneId: 'second', order: 1, startSec: 2, endSec: 4, referenceImageId: 'end.png' });
+    await compare(value, 0.5);
+    await compare(value, 2.125, { reuse: true });
+  });
   it('retains outgoing footage when playback skips the last frame before a wipe', async () => {
     const value = base({ ...still, visualLayer: 'footage', videoHistoryId: 'uniform', endSec: 2, wipeOut: { style: 'push-left', lengthSec: 0.5 } });
     value.scenes.push({ ...still, sceneId: 'second', order: 1, startSec: 2, endSec: 4, referenceImageId: 'end.png' });
     await compare(value, 0.5);
-    await compare(value, 2.125, { reuse: true });
+    await compare(value, 2.125, { reuse: true, clockJump: true });
   });
   it('uses the render aspect for square and portrait camera moves and HUD', async () => {
     for (const aspectRatio of ['1:1', '9:16']) {
@@ -209,6 +225,11 @@ function App(){const[value,setValue]=useState(null);window.show=(project,data,t)
       value.composition.overlay = { enabled: true, titleLines: ['EXAMPLE'] };
       await compare(value, 1.25);
     }
+  });
+  it('keeps the title pixels while the local Lyrics toggle hides sung words', async () => {
+    const value = base(still, { titleCard: { enabled: true, title: 'EXAMPLE TITLE', startSec: 0, endSec: 4 } });
+    value.lyricCues = [{ text: 'Example sung words', startSec: 0.25, endSec: 3.5 }];
+    await compare(value, 1.25, { words: true, lyricsOff: true });
   });
   it('matches hook priority over sung lyrics, subtitle replacement, and hooks without sung lyrics', async () => {
     const value = base(); value.composition.textCues = [{ text: 'EXAMPLE HOOK', startSec: 1, endSec: 2, emphasis: 'hero', placement: 'center' }];

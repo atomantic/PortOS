@@ -12,13 +12,18 @@ export function plateFrameRole(take) {
 
 const savedFramePrompt = (scene, role) => (role === 'end' ? scene?.endFramePrompt || '' : scene?.framePrompt || scene?.prompt || '');
 
-export function plateRequirementBasis(scene, role = 'start') {
+export function plateRequirementBasis(scene, role = 'start', project = null) {
+  const cameraId = scene.shotSheet?.cameraId || null;
+  const camera = {
+    ...(cameraId ? { camera: { id: cameraId, holder: scene.shotSheet?.holder || null, rule: shotCameraRuleText(project, scene) } } : {}),
+    ...(scene.camera ? { cameraMove: scene.camera } : {}),
+  };
   // The start-frame hash is the one already stored on takes. An end frame adds
   // its own prompt so editing the start prompt cannot stale it, and the reverse.
   if (role === 'end') {
-    return canonicalStringify({ frameRole: 'end', direction: scene.direction || null, endFramePrompt: scene.endFramePrompt || '', startSec: scene.startSec, endSec: scene.endSec });
+    return canonicalStringify({ frameRole: 'end', direction: scene.direction || null, endFramePrompt: scene.endFramePrompt || '', startSec: scene.startSec, endSec: scene.endSec, ...camera });
   }
-  return canonicalStringify({ direction: scene.direction || null, framePrompt: scene.framePrompt || scene.prompt || '', startSec: scene.startSec, endSec: scene.endSec });
+  return canonicalStringify({ direction: scene.direction || null, framePrompt: scene.framePrompt || scene.prompt || '', startSec: scene.startSec, endSec: scene.endSec, ...camera });
 }
 
 const sheetNames = (list) => (Array.isArray(list) ? list : [list]).map((name) => String(name || '').trim().toLowerCase()).filter(Boolean);
@@ -86,10 +91,10 @@ function sceneRequirements(scene, role = 'start') {
 /** A selection or shot edit cannot borrow evidence from a different image or intent. */
 // Character detail checks come from the video's subjects at review time, so the
 // shot alone cannot re-derive them; they count as long as each one is well formed.
-export function currentPlateEvidence(scene, take) {
+export function currentPlateEvidence(scene, take, project = null) {
   const evidence = take?.plateEvidence;
   const role = plateFrameRole(take);
-  if (!evidence || !take || evidence.assetId !== take.assetId || evidence.basis !== plateRequirementBasis(scene, role) || !Array.isArray(evidence.checks)) return null;
+  if (!evidence || !take || evidence.assetId !== take.assetId || evidence.basis !== plateRequirementBasis(scene, role, project) || !Array.isArray(evidence.checks)) return null;
   const requirements = sceneRequirements(scene, role);
   const wellFormed = (check) => ['pass', 'fail', 'unverified'].includes(check?.status) && typeof check.note === 'string' && check.note.trim();
   const details = evidence.checks.filter(isDetailCheck);
@@ -133,16 +138,16 @@ export function plateStripFindings(strip, text) {
   });
 }
 
-export function selectedPlatePasses(scene, runId) {
+export function selectedPlatePasses(scene, runId, project = null) {
   const take = scene.takes?.find((entry) => entry.kind === 'image' && entry.assetId === scene.referenceImageId && entry.status !== 'rejected');
-  const evidence = currentPlateEvidence(scene, take);
+  const evidence = currentPlateEvidence(scene, take, project);
   return evidence?.runId === runId && !plateAdjacencyFailed(evidence, runId) && evidence.checks.every((check) => check.status === 'pass'
-    || (check.id === 'render-quality' && renderQualityAcknowledged(scene, take)));
+    || (check.id === 'render-quality' && renderQualityAcknowledged(scene, take, project)));
 }
 
 /** Explicit acknowledgement is bound to one image, exact shot intent and visible defect. */
-export function renderQualityAcknowledged(scene, take) {
-  const evidence = currentPlateEvidence(scene, take);
+export function renderQualityAcknowledged(scene, take, project = null) {
+  const evidence = currentPlateEvidence(scene, take, project);
   const defect = evidence?.checks.find((check) => check.id === 'render-quality' && check.status === 'fail');
   const ack = take?.renderQualityAcknowledgement;
   return !!defect && ack?.basis === evidence.basis && ack?.note === defect.note && !!ack?.reviewer;
@@ -158,7 +163,7 @@ export function plateReviewEvidence(scene, assetId, runId, text, used = {}, subj
     const usable = ['pass', 'fail', 'unverified'].includes(result?.status) && typeof result.note === 'string' && result.note.trim();
     return { id, requirement, status: usable ? result.status : 'unverified', note: usable ? result.note.trim().slice(0, 1000) : 'The reviewer supplied no usable evidence for this requirement' };
   });
-  return { assetId, runId, basis: plateRequirementBasis(scene, frameRole), checks,
+  return { assetId, runId, basis: plateRequirementBasis(scene, frameRole, project), checks,
     verdict: checks.some((check) => check.status === 'unverified') ? 'unverified' : checks.some((check) => check.status === 'fail') ? 'fail' : 'pass',
     ...used, reviewedAt: new Date().toISOString() };
 }

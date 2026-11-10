@@ -97,8 +97,7 @@ export function captureImageFrameDependencies(project, scene, { slot = 'start' }
     frameRef(scene, slot, 'frameLocation', frameLocationValue(scene)),
     frameRef(scene, slot, 'frameCast', frameCastValue(project, scene)),
   ];
-  const referencesValue = frameReferenceValue(scene);
-  if (referencesValue) references.push(frameRef(scene, slot, 'frameReferences', referencesValue));
+  references.push(frameRef(scene, slot, 'frameReferences', frameReferenceValue(scene)));
   return snapshot(references);
 }
 
@@ -109,7 +108,6 @@ function readFrameReference(project, scene, ref) {
       : ref.role === 'frameLocation' ? frameLocationValue(scene)
         : ref.role === 'frameCast' ? frameCastValue(project, scene)
           : frameReferenceValue(scene);
-  if (ref.role === 'frameReferences' && !value) return null;
   return { assetId: frameSlot(ref.assetId), revision: checksum(value) };
 }
 
@@ -118,6 +116,11 @@ function frameDependencyChanges(project, scene, dependencies) {
     return [{ role: 'unknown', reason: FRAME_UNKNOWN }];
   }
   const changes = [];
+  // Earlier v1 captures omitted this role only when no explicit references
+  // were chosen. Preserve that absence when checking stored takes after upgrade.
+  if (!dependencies.references.some((ref) => ref.role === 'frameReferences') && frameReferenceValue(scene) !== null) {
+    changes.push({ role: 'frameReferences', reason: FRAME_ROLES.frameReferences });
+  }
   for (const ref of dependencies.references) {
     const current = readFrameReference(project, scene, ref);
     if (!current || current.assetId !== ref.assetId || current.revision !== ref.revision) {
@@ -134,16 +137,16 @@ function frameStatus(changes) {
 }
 
 /**
- * Legacy stills recorded only the composed prompt. A prompt that still contains
- * the shot's frame text is current; a prompt that does not is stale; anything
- * we cannot compare (no prompt, or no frame text to match) stays unknown.
+ * Legacy stills recorded only the composed prompt. An exact match is current;
+ * absence of the frame text is stale. Inclusion alone cannot distinguish a
+ * composed prompt from a shortened shot, so that evidence stays unknown.
  */
 function legacyFrameState(scene, take) {
   const prompt = textOf(take?.prompt);
   const framePrompt = framePromptText(scene, take?.kind === 'endImage' ? 'end' : 'start');
   if (!prompt || !framePrompt) return { status: 'unknown', reasons: [FRAME_UNKNOWN] };
   if (!prompt.includes(framePrompt)) return { status: 'stale', reasons: ['Frame prompt changed'] };
-  return { status: 'current', reasons: [] };
+  return prompt === framePrompt ? { status: 'current', reasons: [] } : { status: 'unknown', reasons: [FRAME_UNKNOWN] };
 }
 
 /** Selected-frame validity for one image or end-frame take. Null for any other kind. */

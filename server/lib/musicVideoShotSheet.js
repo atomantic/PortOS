@@ -72,7 +72,7 @@ function frameFreshness(project, scene) {
     reasons.push(...(take.dependencyState.reasons?.length ? take.dependencyState.reasons : ['Details changed since this frame']));
   } else if (promptDetailsChanged(project, scene, take)) reasons.push('Details changed since this frame');
   if (end?.dependencyState?.status === 'stale') {
-    for (const reason of end.dependencyState.reasons || []) {
+    for (const reason of end.dependencyState.reasons?.length ? end.dependencyState.reasons : ['End-frame details changed since this frame']) {
       if (!reasons.includes(reason)) reasons.push(reason);
     }
   }

@@ -1916,6 +1916,8 @@ function ProjectWorkspace({
               />
             ) : null}
             attention={(
+              <>
+              {takes.reconcileError && <div role="alert" className="flex flex-wrap items-center gap-2 rounded border border-port-warning/40 p-2 text-xs"><p className="text-port-warning">Take changes could not be confirmed: {takes.reconcileError.message}. Reload the saved decisions before relying on this selection.</p><button type="button" className="min-h-[44px] rounded border border-port-border px-2 disabled:opacity-50 pointer-fine:sm:min-h-0" disabled={takes.reconciling} onClick={takes.retryReconcile}>{takes.reconciling ? 'Reloading saved takes…' : 'Retry saved takes'}</button></div>}
               <NeedsAttentionBanner
                 // A parked autonomous or production run with nothing to resume, while the
                 // header's Autopilot button reports that run, is that button (which opens it); no second row.
@@ -1937,6 +1939,7 @@ function ProjectWorkspace({
                   onKeepSongTiming: () => keepMusicVideoSongTiming(selected.id).then(replaceProject),
                 }}
               />
+              </>
             )}
             dock={NO_DOCK_STAGES.has(activeStage) ? null : withTitleCard(
               <PreviewDock

@@ -574,6 +574,12 @@ export const musicVideoPoolMarkSchema = z.object({
   items: z.array(musicVideoPoolAssetSchema).min(1).max(500),
   mark: z.enum(['ingredient', 'bad']).nullable(),
   keepInUse: z.boolean().optional(),
+  expectedMark: z.enum(['ingredient', 'bad']).nullable().optional(),
+}).strict();
+
+/** Undo restores a take only while its slot still holds the operation's result. */
+export const musicVideoTakeSelectSchema = z.object({
+  expectedSelectedAssetId: z.string().min(1).max(256).nullable().optional(),
 }).strict();
 
 /** Delete unused stills and clips from the media library (the asset manager's "Delete bad"). */

@@ -60,6 +60,9 @@ const handoffBundleFilename = (name) => `${handoffSlug(name)}-handoff.zip`;
 export default function useMusicVideoTakes({ project, applyScenePatch, patchProject = null, reloadProject = null }) {
   const [busy, setBusy] = useState(false);
   const chainRef = useRef(Promise.resolve());
+  const [reconcileError, setReconcileError] = useState(null);
+  const [reconciling, setReconciling] = useState(false);
+  const reconcileGeneration = useRef(0);
   // Queued decisions per shot: an earlier reply must not undo a later optimistic change.
   const queuedRef = useRef(new Map());
   const queue = (sceneId, by) => {
@@ -93,7 +96,7 @@ export default function useMusicVideoTakes({ project, applyScenePatch, patchProj
         // Back to the saved record, read once the decisions queued behind this one land.
         // `reloadProject(fresh)` applies it (the page keeps shot text typed and not yet saved).
         if (optimistic && reloadProject) {
-          afterTakeWrites(() => getMusicVideoProject(projectId, { silent: true })).then(reloadProject).catch(() => {});
+          void reconcileProject(projectId);
         }
         return false;
       });
@@ -108,6 +111,25 @@ export default function useMusicVideoTakes({ project, applyScenePatch, patchProj
       await tail;
       const result = await read();
       if (tail === chainRef.current) return result;
+    }
+  };
+
+  // A refused optimistic edit stays explicitly unconfirmed until a saved read
+  // succeeds. Retry waits behind later queued decisions before replacing state.
+  const reconcileProject = async (projectId) => {
+    const generation = ++reconcileGeneration.current;
+    setReconciling(true);
+    try {
+      const saved = await afterTakeWrites(() => getMusicVideoProject(projectId, { silent: true }));
+      if (generation !== reconcileGeneration.current) return false;
+      reloadProject?.(saved);
+      setReconcileError(null);
+      return true;
+    } catch (err) {
+      if (generation === reconcileGeneration.current) setReconcileError({ projectId, message: err?.message || 'Could not load the saved take decisions' });
+      return false;
+    } finally {
+      if (generation === reconcileGeneration.current) setReconciling(false);
     }
   };
 
@@ -289,5 +311,5 @@ export default function useMusicVideoTakes({ project, applyScenePatch, patchProj
     if (failures.length) toast.error(failures.slice(0, 3).join(' · '));
   };
 
-  return { busy, afterTakeWrites, selectTake, placePoolItem, trimClipTake, handheldClipTake, reviewTake, checkTake, checking, rejectUnusedTakes, swapFrames, markTake, applyPoolMarks, continueFromPrevious, importTake, importClipTake, exportHandoff, exportHandoffBundle, importHandoffFiles };
+  return { busy, reconcileError: reconcileError?.projectId === project.id ? reconcileError : null, reconciling, retryReconcile: () => reconcileProject(project.id), afterTakeWrites, selectTake, placePoolItem, trimClipTake, handheldClipTake, reviewTake, checkTake, checking, rejectUnusedTakes, swapFrames, markTake, applyPoolMarks, continueFromPrevious, importTake, importClipTake, exportHandoff, exportHandoffBundle, importHandoffFiles };
 }

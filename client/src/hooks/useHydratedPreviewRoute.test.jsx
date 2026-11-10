@@ -45,3 +45,14 @@ it('does not refetch when the open item is deleted', async () => {
   emit({ kind: 'video', op: 'delete', ids: ['vid-1'] });
   expect(fetchMediaRecord).toHaveBeenCalledTimes(1);
 });
+
+// A pending update must not resurrect cached details after the deletion event.
+it('discards a pending record response when that record is deleted', async () => {
+  let finish;
+  fetchMediaRecord.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+  const { result } = renderHook(() => useHydratedPreviewRoute([]));
+  emit({ kind: 'video', op: 'delete', ids: ['vid-1'] });
+  await act(async () => finish({ id: 'vid-1', prompt: 'deleted details' }));
+  expect(result.current[0].prompt).toBeUndefined();
+  expect(fetchMediaRecord).toHaveBeenCalledTimes(1);
+});

@@ -24,6 +24,7 @@ const ExactDocumentFrame = forwardRef(function ExactDocumentFrame({ project, tim
   const card = useMemo(() => normalizeTitleCard(project.titleCard), [project.titleCard]);
   // `look` is a new object each render; its serialization is its identity.
   const controls = useMemo(() => ({ look, card }), [lookKey, card]);
+  const controlsKey = JSON.stringify([revision, look, card]);
   const preview = useGeneratedPreview({ active: !!request, request, controls });
   const { ready, status, seek, resume, frameUrl, frameTime, captureFrame } = preview;
   // The frame on screen when the current time was asked for: a session that
@@ -37,12 +38,12 @@ const ExactDocumentFrame = forwardRef(function ExactDocumentFrame({ project, tim
     if (ready) lapsed.current = true;
     else if (status === 'idle' && lapsed.current) { lapsed.current = false; resume(); }
     if (!ready) return;
-    setAsked({ t: time, url: frameUrl });
+    setAsked({ t: time, url: frameUrl, controlsKey });
     seek(time);
     // frameUrl is read as "the picture before this seek", not as a trigger.
-  }, [active, ready, status, time, seek, resume, lookKey, card]);
-  const fresh = active && !!frameUrl && asked?.t === time
-    && (frameTime != null ? Math.abs(frameTime - time) < 1e-6 : frameUrl !== asked.url);
+  }, [active, ready, status, time, seek, resume, controlsKey]);
+  const fresh = active && !!frameUrl && asked?.t === time && asked.controlsKey === controlsKey
+    && frameUrl !== asked.url && (frameTime == null || Math.abs(frameTime - time) < 1e-6);
   const shown = useRef(null);
   shown.current = fresh ? time : null;
   useImperativeHandle(ref, () => ({

@@ -18,6 +18,8 @@ const catalog = vi.hoisted(() => ({ getIngredient: vi.fn(), listMediaForIngredie
 vi.mock('../catalogDB.js', () => catalog);
 
 const getProject = vi.fn(async () => null);
+const clipQueue = vi.hoisted(() => ({ submit: vi.fn(async () => ({ jobId: 'synthetic-clip-job' })) }));
+vi.mock('../videoGen/submitJob.js', () => ({ submitVideoGenJob: clipQueue.submit }));
 vi.mock('./projects.js', () => ({ getProject: (...args) => getProject(...args) }));
 vi.mock('../settings.js', () => ({ getSettings: vi.fn(async () => ({ imageGen: { mode: 'codex', codex: { enabled: true, codexPath: '/bin/codex' } } })) }));
 vi.mock('../universeBuilder/crud.js', () => ({ getUniverseRenderPin: vi.fn(async () => null), getUniverseVisualProfile: vi.fn(async () => null) }));
@@ -28,6 +30,7 @@ const { buildSceneFrameGenerateBody } = await import('./sceneFrameReferences.js'
 const { musicVideoLinkedReferenceId } = await import('../../lib/musicVideoConditioning.js');
 const { validateRequest } = await import('../../lib/validation.js');
 const { musicVideoSceneClipRenderSchema, musicVideoSceneClipsRenderSchema } = await import('../../lib/musicVideoValidation.js');
+const { renderSceneClips } = await import('./sceneCardRender.js');
 
 const names = (result) => result.data.referenceImagePaths.map((file) => file.split(/[\\/]/).at(-1));
 
@@ -65,6 +68,39 @@ function installCardCatalog({ portrait = true } = {}) {
 }
 
 describe('shot-card clip body validation', () => {
+  it('covers shared source windows in an LTX reference clip and refuses an explicitly shorter or oversized window', async () => {
+    const mediaModels = await import('../../lib/mediaModels.js');
+    const models = vi.spyOn(mediaModels, 'getVideoModels').mockReturnValue([{ id: 'example-ltx', runtime: 'ltx25' }]);
+    try {
+      clipQueue.submit.mockClear();
+      const project = { id: 'mv-card', videoSettings: { backend: 'local', modelId: 'example-ltx' }, scenes: [
+        { sceneId: 'source', startSec: 0, endSec: 1, referenceImageId: 'start.png', prompt: 'The rider turns' },
+        { sceneId: 'return', startSec: 8, endSec: 9, sourceTake: { sceneId: 'source' } },
+      ] };
+      const input = { sceneId: 'source', card: { ltxReferences: true, expectedClipReferenceFiles: ['sheet.png'] } };
+      await renderSceneClips(project, input);
+      expect(clipQueue.submit.mock.calls[0][0]).toMatchObject({ mode: 'ic-ingredients-25', numFrames: 217 });
+      clipQueue.submit.mockClear();
+      await expect(renderSceneClips(project, { ...input, target: { numFrames: 121 } })).rejects.toMatchObject({ code: 'MUSIC_VIDEO_CLIP_TOO_LONG' });
+      project.scenes[1].endSec = 100;
+      await expect(renderSceneClips(project, input)).rejects.toMatchObject({ code: 'MUSIC_VIDEO_CLIP_TOO_LONG' });
+      expect(clipQueue.submit).not.toHaveBeenCalled();
+    } finally {
+      models.mockRestore();
+    }
+  });
+  it('requests enough hosted footage for every return to a shared source', async () => {
+    for (const [backend, field, seconds] of [['fal', 'falDuration', 10], ['runway', 'runwayDuration', 9], ['grok', 'grokDuration', 10]]) {
+      clipQueue.submit.mockClear();
+      const project = { id: 'mv-card', videoSettings: { backend, falDuration: 6, runwayDuration: 5 }, scenes: [
+        { sceneId: 'source', startSec: 0, endSec: 1, referenceImageId: 'start.png', prompt: 'The rider turns' },
+        { sceneId: 'return', startSec: 8, endSec: 9, sourceTake: { sceneId: 'source' } },
+      ] };
+      const result = await renderSceneClips(project, { sceneId: 'source' });
+      expect(result.jobId).toBe('synthetic-clip-job');
+      expect(clipQueue.submit.mock.calls[0][0][field]).toBe(seconds);
+    }
+  });
   const videoBody = {
     mode: 'image', sourceImageFile: 'start.png', prompt: 'a rider turns', backend: 'grok',
     musicVideo: JSON.stringify({ projectId: 'mv-card', sceneId: 's1', compose: true }),
@@ -82,6 +118,12 @@ describe('shot-card clip body validation', () => {
 });
 
 describe('shot-card frame references (#15583)', () => {
+  it('uses an explicitly supplied start-frame source as the leading conditioning reference without requiring fromFrame', async () => {
+    const project = { id: 'mv-card', scenes: [{ sceneId: 's1', framePrompt: 'A rider at dawn', referenceImageId: 'selected.png' }] };
+    const body = await buildSceneFrameGenerateBody(project, project.scenes[0], { referenceImageId: 'source-take.png' });
+    expect(body.referenceImageFiles[0]).toBe('source-take.png');
+    expect(body.musicVideo).toMatchObject({ leadImageId: 'source-take.png', fromFrame: true });
+  });
   it('sends the same files and prompt for a linked portrait, a set plate and a greybox plate', async () => {
     const { PATHS } = await import('../../lib/paths.js');
     mkdirSync(PATHS.images, { recursive: true });

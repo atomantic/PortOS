@@ -266,11 +266,11 @@ function claudeToolFreeArgs(args) {
 }
 
 // Claude Code reading a staged image (#15576): the tool-free posture, but the
-// Read tool stays so the model can open the image file in its working directory.
+// Read tool stays inside the staged-image directory under restricted mode.
 function claudeImageReadArgs(args) {
-  const toolFree = claudeToolFreeArgs(args);
-  const at = toolFree.lastIndexOf('--tools');
-  return [...toolFree.slice(0, at), '--tools', 'Read', ...toolFree.slice(at + 2)];
+  const confined = dropOptions(dropOptions(claudeToolFreeArgs(args), ['--add-dir'], { variadic: true }), ['--settings']);
+  const at = confined.lastIndexOf('--tools');
+  return [...confined.slice(0, at), '--restricted', '--tools', 'Read', ...confined.slice(at + 2)];
 }
 
 // Grok's read-only permission mode with every built-in tool removed — the same

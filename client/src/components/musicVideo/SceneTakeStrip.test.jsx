@@ -73,3 +73,14 @@ it('shows compact copy chips on a take card', () => {
   const copyId = screen.getAllByRole('button', { name: 'Copy ID' })[0];
   expect(copyId.textContent.trim()).toBe('ID');
 });
+
+// A camera-bound review must stay visible for its exact project camera and retire when its rule changes.
+it('keeps camera-bound verdict badges current against the project camera rule', () => {
+  const selected = { ...scene, shotSheet: { cameraId: 'camera' }, framePrompt: 'A view across the room', takes: [take('t1', 'a.png')] };
+  const project = { cameras: [{ id: 'camera', name: 'Main', kind: 'observer', rule: 'Stay at the doorway' }] };
+  selected.takes[0].plateEvidence = plateReviewEvidence(selected, 'a.png', 'camera-review', JSON.stringify({ checks: plateRequirements(selected, [], 'start', project).map(({ id }) => ({ id, status: 'pass', note: 'Matches the inspected frame' })) }), {}, [], 'start', project);
+  const { rerender } = render(<SceneTakeStrip scene={selected} project={project} kind="image" />);
+  expect(screen.getByText('Checked')).toBeInTheDocument();
+  rerender(<SceneTakeStrip scene={selected} project={{ cameras: [{ ...project.cameras[0], rule: 'Stay behind the subject' }] }} kind="image" />);
+  expect(screen.queryByText('Checked')).toBeNull();
+});

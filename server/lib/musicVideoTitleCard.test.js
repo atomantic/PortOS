@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { TITLE_CARD_DEFAULTS, TITLE_CARD_FONT_FACES, TITLE_CARD_FONTS, normalizeTitleCard, titleCardOutroWindow, titleCardPrefill, titleCardVisible, titleCardWindows } from './musicVideoTitleCard.js';
+import { createContext, runInContext } from 'node:vm';
+import { TITLE_CARD_DEFAULTS, TITLE_CARD_FONT_FACES, TITLE_CARD_FONTS, normalizeTitleCard, titleCardOutroWindow, titleCardPrefill, titleCardVisible, titleCardWindows, titleCardRuntimeSource } from './musicVideoTitleCard.js';
 
 describe('normalizeTitleCard', () => {
   it('fills defaults, clamps ranges and keeps the window open', () => {
@@ -63,6 +64,31 @@ describe('titleCardPrefill', () => {
 });
 
 describe('title card fonts', () => {
+  it('keeps a timed-out font on the fallback after the late font loads and later seeks redraw', async () => {
+    vi.useFakeTimers();
+    try {
+      let loaded;
+      const loading = new Promise((resolve) => { loaded = resolve; });
+      const sandbox = { document: { body: null, fonts: { load: () => loading } }, setTimeout,
+        innerWidth: 640, innerHeight: 360, portosComposition: { seek() {} } };
+      sandbox.window = sandbox;
+      runInContext(titleCardRuntimeSource({ title: 'Example Song', font: 'oswald' }), createContext(sandbox));
+      const card = sandbox.__portosTitleCard;
+      const firstSeek = sandbox.portosComposition.seek(3);
+      await vi.advanceTimersByTimeAsync(1999);
+      expect(card.card.font).toBe('oswald');
+      await vi.advanceTimersByTimeAsync(1);
+      await firstSeek;
+      expect(card.card.font).toBe('sans');
+      loaded([]);
+      await sandbox.portosComposition.seek(4);
+      expect(card.card.font).toBe('sans');
+      await card.apply({ ...card.card, font: 'oswald' });
+      expect(card.card.font).toBe('sans');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it('keeps a bundled font choice, and the panel\'s swatch copies match the files renders embed', () => {
     expect(normalizeTitleCard({ font: 'oswald' }).font).toBe('oswald');
     expect(normalizeTitleCard({ font: 'comic' }).font).toBe('display');

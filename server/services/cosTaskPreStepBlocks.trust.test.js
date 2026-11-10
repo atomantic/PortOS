@@ -19,7 +19,7 @@ describe('trusted PR scheduling after discussion screening', () => {
   const app = { id: 'example', name: 'Example', repoPath: '/repo', prWatcherState: { activityByPr: { 7: 'old' } } };
   beforeEach(() => {
     vi.clearAllMocks();
-    mock.check.mockResolvedValue({ ok: true, firstRun: false, newPrs: [{ number: 7 }, { number: 8 }], newLastSeen: 8, activityByPr: { 7: 'changed', 8: 'new' }, repoFullName: 'example/project', defaultBranch: 'main' });
+    mock.check.mockResolvedValue({ ok: true, firstRun: false, newPrs: [{ number: 7 }, { number: 8 }], newLastSeen: 8, activityByPr: { 7: 'changed', 8: 'new' }, repoFullName: 'example/project', repoHost: 'github.com', defaultBranch: 'main' });
   });
 
   it('dispatches cleared records and keeps the withheld fingerprint retryable', async () => {
@@ -29,7 +29,7 @@ describe('trusted PR scheduling after discussion screening', () => {
     expect(result).toMatchObject({ skip: false, block: 'PR #8' });
     expect(metadata.forgeMaintenanceVersion).toBe(1);
     // Finalize verifies only the PRs this run was actually handed (#15552).
-    expect(metadata.prWatcherTargets).toEqual({ repoFullName: 'example/project', prNumbers: [8] });
+    expect(metadata.prWatcherTargets).toEqual({ repoFullName: 'example/project', repoHost: 'github.com', prNumbers: [8] });
     expect(mock.persist).toHaveBeenCalledWith(app.id, expect.objectContaining({ activityByPr: { 7: 'old', 8: 'new' }, lastError: 'injection' }));
   });
 

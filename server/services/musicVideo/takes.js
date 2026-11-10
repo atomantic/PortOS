@@ -276,7 +276,7 @@ export function plateCheckPrompt(scene, take) {
 /** Save a plate check's evidence on the take, unless the shot's intent changed while it ran. */
 export function recordTakePlateEvidence(project, sceneId, takeId, evidence) {
   const { idx, scene, takes, take } = locateTake(project, sceneId, takeId);
-  if (take.assetId !== evidence.assetId || plateRequirementBasis(scene, plateFrameRole(take)) !== evidence.basis) {
+  if (take.assetId !== evidence.assetId || plateRequirementBasis(scene, plateFrameRole(take), project) !== evidence.basis) {
     throw new ServerError('The shot or frame changed during the check. Check it again.', { status: 409, code: 'MUSIC_VIDEO_REVIEW_STALE' });
   }
   const next = { ...scene, takes: takes.map((t) => (t.takeId === takeId ? { ...t, plateEvidence: evidence } : t)) };
@@ -284,11 +284,21 @@ export function recordTakePlateEvidence(project, sceneId, takeId, evidence) {
 }
 
 /** Explicitly select a take for its slot. Selecting a rejected take restores it. */
-export function selectSceneTake(project, sceneId, takeId) {
+export function selectSceneTake(project, sceneId, takeId, options = {}) {
   const { idx, scene, takes, take } = locateTake(project, sceneId, takeId);
+  if (Object.hasOwn(options, 'expectedSelectedAssetId') && (scene[TAKE_SLOT[take.kind]] || null) !== options.expectedSelectedAssetId) {
+    throw new ServerError('This shot has a newer take selection; Undo kept it.', { status: 409, code: 'MUSIC_VIDEO_UNDO_CONFLICT' });
+  }
   assertMusicVideoMedia(project, take.kind, 'take selection');
   const nextTakes = takes.map((t) => (t.takeId === takeId && t.status === 'rejected' ? { ...t, status: 'candidate' } : t));
   const next = { ...scene, takes: nextTakes, [TAKE_SLOT[take.kind]]: take.assetId };
+  if (next.selectedTakeMarkedBad) {
+    const selectedVideo = nextTakes.find((entry) => entry.kind === 'video' && entry.assetId === next.videoHistoryId);
+    const source = selectedVideo?.sourceImageId || selectedVideo?.dependencies?.references?.find((ref) => ref.role === 'plate')?.assetId;
+    const mismatch = source && next.referenceImageId && source !== next.referenceImageId;
+    const bad = Object.entries(TAKE_SLOT).some(([kind, field]) => next[field] && project.assetMarks?.[`${kind === 'video' ? 'video' : 'image'}:${next[field]}`] === 'bad');
+    if (!mismatch && !bad) delete next.selectedTakeMarkedBad;
+  }
   return { project: replaceScene(project, idx, next), scene: next };
 }
 
@@ -346,7 +356,7 @@ export function swapSceneFrames(project, sceneId) {
 export function reviewSceneTake(project, sceneId, takeId, { status, note, acknowledgeRenderQuality, reviewer }) {
   const { idx, scene, takes, take } = locateTake(project, sceneId, takeId);
   if (acknowledgeRenderQuality) {
-    const evidence = currentPlateEvidence(scene, take);
+    const evidence = currentPlateEvidence(scene, take, project);
     const defect = evidence?.checks.find((check) => check.id === 'render-quality' && check.status === 'fail');
     if (!reviewer || !defect || acknowledgeRenderQuality.basis !== evidence.basis || acknowledgeRenderQuality.note !== defect.note) {
       throw new ServerError('The image or rendering defect changed. Inspect it again before acknowledging.', { status: 409, code: 'MUSIC_VIDEO_REVIEW_STALE' });

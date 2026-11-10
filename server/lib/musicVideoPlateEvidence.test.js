@@ -12,6 +12,23 @@ const plateDetailRequirements = (shot, list, project = null) => plateRequirement
 const pass = (list) => JSON.stringify({ checks: list.map(({ id }) => ({ id, status: 'pass', note: 'Visible' })) });
 
 describe('character detail requirements', () => {
+  it('invalidates reviewed plates when a camera is assigned, its rule changes, or its selection is removed', () => {
+    const project = { cameras: [{ id: 'snap', name: 'Snapshot', kind: 'observer', rule: 'Nobody looks at it.' }] };
+    const shot = scene({ characters: ['Ada'] });
+    const review = () => plateReviewEvidence(shot, 'a.png', 'run-1', pass(plateRequirements(shot, subjects, 'start', project)), {}, subjects, 'start', project);
+    const take = { kind: 'image', assetId: 'a.png', plateEvidence: review() };
+    expect(currentPlateEvidence(shot, take, project)?.verdict).toBe('pass');
+    shot.shotSheet.cameraId = 'snap';
+    expect(currentPlateEvidence(shot, take, project)).toBeNull();
+    take.plateEvidence = review();
+    expect(currentPlateEvidence(shot, take, project)?.verdict).toBe('pass');
+    project.cameras[0].rule = 'Subjects look directly into the lens.';
+    expect(currentPlateEvidence(shot, take, project)).toBeNull();
+    take.plateEvidence = review();
+    expect(currentPlateEvidence(shot, take, project)?.verdict).toBe('pass');
+    delete shot.shotSheet.cameraId;
+    expect(currentPlateEvidence(shot, take, project)).toBeNull();
+  });
   it('requires each named character\'s details and skips characters not in the shot', () => {
     expect(plateDetailRequirements(scene({ characters: ['Ada'] }), subjects).map((entry) => entry.requirement)).toEqual([
       'Ada shows: Red watch on the left wrist',

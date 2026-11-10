@@ -15,17 +15,19 @@ vi.mock('./local.js', () => ({
 vi.mock('../../lib/mediaModels.js', () => ({ getImageModels: vi.fn(() => models.value) }));
 vi.mock('./external.js', () => ({ checkConnection: vi.fn(), getActiveJob: () => null }));
 const codexMock = vi.hoisted(() => ({ cancel: vi.fn(() => false), cancelAll: vi.fn(() => false) }));
-vi.mock('./codex.js', () => ({ checkConnection: vi.fn(), getActiveJob: () => null, cancel: codexMock.cancel, cancelAll: codexMock.cancelAll }));
+vi.mock('./codex.js', () => ({ checkConnection: vi.fn(), getActiveJob: () => null, getActiveJobs: () => [], cancel: codexMock.cancel, cancelAll: codexMock.cancelAll }));
 const grokMock = vi.hoisted(() => ({ cancel: vi.fn(() => false), cancelAll: vi.fn(() => false) }));
-vi.mock('./grok.js', () => ({ checkConnection: vi.fn(), getActiveJob: () => null, cancel: grokMock.cancel, cancelAll: grokMock.cancelAll }));
-const agyMock = vi.hoisted(() => ({ cancel: vi.fn(() => false), cancelAll: vi.fn(() => false) }));
-vi.mock('./agy.js', () => ({ checkConnection: vi.fn(), getActiveJob: () => null, cancel: agyMock.cancel, cancelAll: agyMock.cancelAll }));
-const falMock = vi.hoisted(() => ({ cancel: vi.fn(() => false), cancelAll: vi.fn(() => false) }));
-vi.mock('./fal.js', async (importOriginal) => ({ ...(await importOriginal()), cancel: falMock.cancel, cancelAll: falMock.cancelAll }));
+vi.mock('./grok.js', () => ({ checkConnection: vi.fn(), getActiveJob: () => null, getActiveJobs: () => [], cancel: grokMock.cancel, cancelAll: grokMock.cancelAll }));
+const agyMock = vi.hoisted(() => ({ activeJobs: [], cancel: vi.fn(() => false), cancelAll: vi.fn(() => false) }));
+vi.mock('./agy.js', () => ({ checkConnection: vi.fn(), getActiveJob: () => agyMock.activeJobs.at(-1) || null, getActiveJobs: () => agyMock.activeJobs, cancel: agyMock.cancel, cancelAll: agyMock.cancelAll }));
+const falMock = vi.hoisted(() => ({ activeJobs: [], cancel: vi.fn(() => false), cancelAll: vi.fn(() => false) }));
+vi.mock('./fal.js', async (importOriginal) => ({ ...(await importOriginal()), getActiveJob: () => falMock.activeJobs.at(-1) || null, getActiveJobs: () => falMock.activeJobs, cancel: falMock.cancel, cancelAll: falMock.cancelAll }));
+const runwayMock = vi.hoisted(() => ({ activeJobs: [] }));
+vi.mock('./runway.js', async importOriginal => ({ ...await importOriginal(), getActiveJob: () => runwayMock.activeJobs.at(-1) || null, getActiveJobs: () => runwayMock.activeJobs }));
 vi.mock('./setup.js', () => ({ getSetupCheck: vi.fn() }));
 vi.mock('../../lib/pythonSetup.js', () => ({ isFlux2VenvHealthy: vi.fn(), FLUX2_VENV_DEFAULT: '/test/venv-flux2/bin/python3' }));
 
-import { checkConnection, cancelJob } from './index.js';
+import { checkConnection, cancelJob, getActiveJob, getActiveJobs } from './index.js';
 import { getSetupCheck } from './setup.js';
 import { isFlux2VenvHealthy } from '../../lib/pythonSetup.js';
 
@@ -39,10 +41,19 @@ const mfluxModel = {
 beforeEach(() => {
   vi.clearAllMocks();
   localMock.activeJob = null;
+  for (const backend of [agyMock, falMock, runwayMock]) backend.activeJobs = [];
   localMock.cancel.mockReturnValue(true);
   for (const m of [codexMock, grokMock, agyMock, falMock]) m.cancel.mockReset().mockReturnValue(false);
   models.value = [mfluxModel];
   settings.value = { imageGen: { mode: 'local', local: { modelId: 'dev', pythonPath: '/test/python3' } } };
+});
+
+it('rehydrates every parallel hosted image job and selects the newest across all active slots', async () => {
+  agyMock.activeJobs = [{ id: 'agy-new', createdAt: '2026-01-01T12:00:00Z' }, { id: 'agy-old', createdAt: '2026-01-01T10:00:00Z' }];
+  falMock.activeJobs = [{ id: 'fal-1' }, { id: 'fal-2' }];
+  runwayMock.activeJobs = [{ id: 'runway-1' }, { id: 'runway-2' }];
+  expect((await getActiveJobs()).map(job => job.id)).toEqual(['agy-new', 'agy-old', 'fal-1', 'fal-2', 'runway-1', 'runway-2']);
+  expect(await getActiveJob()).toMatchObject({ id: 'agy-new' });
 });
 
 describe('local image connection readiness', () => {

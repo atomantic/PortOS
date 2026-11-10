@@ -70,6 +70,23 @@ describe('sceneAttention', () => {
     expect(sceneMediaKind(back, { scenes })).toBe('image');
   });
 
+  it('ignores a stale end frame while its visual effect is unused or disabled', () => {
+    const end = { ...ready, visualLayer: 'still', endImageId: 'end.png', imageEffect: 'end-fade',
+      takes: [{ kind: 'endImage', assetId: 'end.png', dependencyState: { status: 'stale', reasons: ['End prompt changed'] } }] };
+    expect(sceneAttention(end, { layered: true })).toContain('frame-stale');
+    expect(sceneAttention({ ...end, endFrameOff: true }, { layered: true })).not.toContain('frame-stale');
+    expect(sceneAttention({ ...end, imageEffect: 'hold' }, { layered: true })).not.toContain('frame-stale');
+    expect(sceneAttention({ ...end, visualLayer: 'card' }, { layered: true })).not.toContain('frame-stale');
+  });
+
+  it('flags bad assets actually played by a source-take return', () => {
+    const source = { ...ready, sceneId: 'src' };
+    const back = { sceneId: 'back', startSec: 8, endSec: 9, sourceTake: { sceneId: 'src', offsetSec: 2 } };
+    expect(sceneAttention(back, { scenes: [source, back], assetMarks: { 'video:v1': 'bad' } })).toContain('bad-take');
+    expect(sceneAttention(back, { scenes: [{ ...source, selectedTakeMarkedBad: true }, back] })).toContain('bad-take');
+    expect(sceneAttention({ ...back, referenceImageId: 'unused.png' }, { scenes: [source, back], assetMarks: { 'image:unused.png': 'bad' } })).not.toContain('bad-take');
+  });
+
   it('flags a shot whose selected take is marked bad', () => {
     expect(sceneAttention({ ...ready, selectedTakeMarkedBad: true })).toContain('bad-take');
     expect(sceneAttention(ready, { assetMarks: { 'image:f.png': 'bad' } })).toContain('bad-take');

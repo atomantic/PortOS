@@ -56,7 +56,7 @@ async function guardRevision(tag, kind) {
 /** Enqueue a scene's reference frame on exactly `route`. Returns `{ jobId }`. */
 async function dispatchFrame({ project, scene, route, tag, settings }) {
   const repairing = project.productionRuns?.find((run) => run.id === tag.productionRunId)?.steps?.find((step) => step.key === tag.productionStepKey)?.plateRepairBasis;
-  const unmet = repairing ? (scene.takes || []).flatMap((take) => currentPlateEvidence(scene, take)?.checks.filter((check) => check.status === 'fail').map((check) => `${check.requirement}: ${check.note}`) || []) : [];
+  const unmet = repairing ? (scene.takes || []).flatMap((take) => currentPlateEvidence(scene, take, project)?.checks.filter((check) => check.status === 'fail').map((check) => `${check.requirement}: ${check.note}`) || []) : [];
   // The autonomous run's stills review names what the last still got wrong (autonomousService.js).
   const fixes = typeof scene.stillFixes?.text === 'string' ? scene.stillFixes.text : '';
   const { loadMusicVideoGreybox } = await import('./greyboxReferences.js');

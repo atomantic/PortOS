@@ -270,8 +270,12 @@ const takesPath = (id, sceneId) => `/music-video/${encodeURIComponent(id)}/scene
 export const addMusicVideoSceneTake = (id, sceneId, body, options = {}) => request(takesPath(id, sceneId), {
   method: 'POST', body: JSON.stringify(body), ...options,
 });
-export const selectMusicVideoSceneTake = (id, sceneId, takeId, options = {}) =>
-  request(`${takesPath(id, sceneId)}/${encodeURIComponent(takeId)}/select`, { method: 'POST', ...options });
+export const selectMusicVideoSceneTake = (id, sceneId, takeId, options = {}) => {
+  const { expectedSelectedAssetId, ...rest } = options;
+  return request(`${takesPath(id, sceneId)}/${encodeURIComponent(takeId)}/select`, {
+    method: 'POST', ...(expectedSelectedAssetId !== undefined ? { body: JSON.stringify({ expectedSelectedAssetId }) } : {}), ...rest,
+  });
+};
 // The project's unused stills and clips (the shot card's "Swap from unused") → { collectionId, items }.
 export const getMusicVideoMediaPool = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/media-pool`, options);
 /** Swap's prompt search: `{ items: [{ kind, assetId }] }`, the pool items whose prompts hold every word. */
@@ -283,10 +287,10 @@ export const getMusicVideoCreditsPrefill = (id, options = {}) => request(`/music
 export const getMusicVideoOutroStats = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/stats-outro`, options);
 // Asset manager: mark unused pool items ★ 'ingredient' / ✕ 'bad' (null clears) → { assetMarks }.
 export const markMusicVideoPoolAssets = (id, items, mark, options = {}) => {
-  const { keepInUse, ...rest } = options;
+  const { keepInUse, expectedMark, ...rest } = options;
   return request(`/music-video/${encodeURIComponent(id)}/media-pool/marks`, {
     method: 'PATCH',
-    body: JSON.stringify({ items, mark, ...(keepInUse !== undefined ? { keepInUse } : {}) }),
+    body: JSON.stringify({ items, mark, ...(keepInUse !== undefined ? { keepInUse } : {}), ...(expectedMark !== undefined ? { expectedMark } : {}) }),
     ...rest,
   });
 };

@@ -488,7 +488,7 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
         plateLight && `Lighting: ${plateLight}`,
         setLook && `Look: ${setLook}`,
         PLAUSIBLE_SET,
-        'Photorealistic music video location still',
+        direction.renderingMedium ? `Rendering medium: ${direction.renderingMedium}. Use this medium for the set` : 'Photorealistic music video location still',
         note(key),
       ),
     };
@@ -515,7 +515,7 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
       deps: (form ? [`form:${form.id}`, `set:${test.setId}`] : ['character', `set:${test.setId}`, 'looks']).filter((k) => plan[k]),
       refKeys: (form ? [`set:${test.setId}`, `form:${form.id}`] : [`set:${test.setId}`, 'character', 'looks']).filter((k) => plan[k]),
       prompt: join(
-        `Photorealistic music video still, wide 16:9. Recreate the ${set?.name || 'set'} from the set plate reference, same camera angle and light`,
+        `${form?.renderingMedium || direction.renderingMedium ? `Music video still. Rendering medium: ${form?.renderingMedium || direction.renderingMedium}` : 'Photorealistic music video still'}, wide 16:9. Recreate the ${set?.name || 'set'} from the set plate reference, same camera angle and light`,
         // Test actions may use a prop, and legacy cards match their exact saved
         // prompt. Keep sheet-only signature instructions out of these frames.
         form

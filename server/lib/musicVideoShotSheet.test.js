@@ -39,6 +39,14 @@ describe('selectedFrameOutdated', () => {
     expect(row.frameOutdated).toBe(true);
     expect(row.frameOutdatedReasons).toEqual(['Camera changed']);
   });
+  it('shows a stale end frame even when its evidence has no explanatory reasons', () => {
+    const row = shotSheetRows({ scenes: [scene({ endImageId: 'end.png', takes: [
+      take('Ada rides away at dusk'),
+      { kind: 'endImage', assetId: 'end.png', dependencyState: { status: 'stale', reasons: [] } },
+    ] })] })[0];
+    expect(row.frameOutdated).toBe(true);
+    expect(row.frameOutdatedReasons).toEqual(['End-frame details changed since this frame']);
+  });
   // Catches a camera-rule edit leaving a frame looking current.
   it('flags a frame rendered before its camera rule', () => {
     const project = { cameras: [{ id: 'eye', name: 'Observer', kind: 'observer', rule: 'Nobody looks at it' }] };
