@@ -74,6 +74,7 @@ describe('media origin backfill migration', () => {
     ['a queued release', 'media-holders.json', { version: 1, holdings: {}, releases: [{ peerId: 'inst-gone', kind: 'video', filename: 'v.mp4' }] }],
     ['the pre-451 holdings file', 'peer-media-holdings.json', { version: 1, peers: { 'inst-gone': { video: {} } } }],
     ['an unreadable holders record', 'media-holders.json', '{not json'],
+    ['a malformed holdings field', 'media-holders.json', { version: 1, holdings: [{ 'inst-gone': {} }], releases: [] }],
   ])('claims nothing when the holders record names another machine by %s', async (_label, file, body) => {
     const m = await install({ history: [{ id: 'v', filename: 'v.mp4' }] });
     await m.put('videos/v.mp4');

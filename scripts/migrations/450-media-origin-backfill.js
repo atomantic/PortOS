@@ -63,27 +63,26 @@ const writtenAfterCreation = (mtimeMs, createdAt) => {
 
 /**
  * True when a holders record names a machine other than `localId`: a peer's
- * reported holdings or file times, or a queued release. An unreadable record
- * cannot rule federation out.
+ * reported holdings or file times, or a queued release. An unreadable record,
+ * or one whose fields have an unexpected shape, cannot rule federation out.
  */
 async function holdersNameAnotherMachine(dataDir, localId) {
   const other = (id) => isId(id) && id !== localId;
-  const store = join(dataDir, 'media-holders.json');
-  if (existsSync(store)) {
-    const record = await readJsonOrNull(store);
-    if (!isPlainObject(record)) return true;
-    const named = [
-      ...Object.keys(isPlainObject(record.holdings) ? record.holdings : {}),
-      ...Object.keys(isPlainObject(record.reports) ? record.reports : {}),
-      ...(Array.isArray(record.releases) ? record.releases : []).flatMap((r) => (isPlainObject(r) ? [r.peerId, r.primaryInstanceId] : [])),
-    ];
-    if (named.some(other)) return true;
+  const keysOf = (map) => (map === undefined ? [] : isPlainObject(map) ? Object.keys(map) : null);
+  const read = async (name) => (existsSync(join(dataDir, name)) ? readJsonOrNull(join(dataDir, name)) : undefined);
+  const store = await read('media-holders.json');
+  if (store !== undefined) {
+    if (!isPlainObject(store) || (store.releases !== undefined && !Array.isArray(store.releases))) return true;
+    const holders = keysOf(store.holdings);
+    const reporters = keysOf(store.reports);
+    if (!holders || !reporters) return true;
+    const released = (store.releases ?? []).flatMap((r) => (isPlainObject(r) ? [r.peerId, r.primaryInstanceId] : [null]));
+    if ([...holders, ...reporters].some(other) || released.some((id) => id === null || other(id))) return true;
   }
-  const legacy = join(dataDir, 'peer-media-holdings.json');
-  if (existsSync(legacy)) {
-    const record = await readJsonOrNull(legacy);
-    if (!isPlainObject(record)) return true;
-    if (Object.keys(isPlainObject(record.peers) ? record.peers : {}).some(other)) return true;
+  const legacy = await read('peer-media-holdings.json');
+  if (legacy !== undefined) {
+    const reporters = isPlainObject(legacy) ? keysOf(legacy.peers) : null;
+    if (!reporters || reporters.some(other)) return true;
   }
   return false;
 }

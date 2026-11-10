@@ -31,14 +31,15 @@ import { emitMediaHistoryChanged } from './peerSyncEventBus.js';
 
 // A report older than this no longer proves what the peer holds; treated as unreported.
 const REPORT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-// A scan that found nothing to attribute is not repeated every sync cycle.
-const EMPTY_RECHECK_MS = 10 * 60 * 1000;
-// A proof that keeps this machine's own claims stands, so they alone re-ask the
-// gallery-wide library once a day (well inside REPORT_MAX_AGE_MS).
+// A gallery scan's outcome is reused for this long rather than repeated every sync cycle.
+const SCAN_RECHECK_MS = 10 * 60 * 1000;
+// A proof that keeps this machine's own claims stands, so they alone re-ask a
+// peer for its gallery-wide library only once its last answer is a day old
+// (well inside REPORT_MAX_AGE_MS).
 const LOCAL_CLAIM_RECHECK_MS = 24 * 60 * 60 * 1000;
 const KINDS = { video: () => PATHS.videos, image: () => PATHS.images };
-const emptyUntil = new Map();
-const localClaimsDueAt = new Map();
+// kind → { until, localClaims }: the last scan found nothing unclaimed, only (or no) local claims.
+const scanCache = new Map();
 
 /** Record one peer's inventory scope with its file times (the shared holdings record, services/mediaHolders.js). */
 export async function recordPeerHoldings(peerId, kind, category, report) {
@@ -96,18 +97,30 @@ async function unattributedFiles(kind, localId) {
   return out;
 }
 
-/** Cheap gate for the sync cycle: is anything of `kind` still to attribute here? */
-export async function hasUnattributedMedia(kind) {
-  if (!KINDS[kind] || (emptyUntil.get(kind) ?? 0) > Date.now()) return false;
-  const files = await unattributedFiles(kind, await resolveLocalId());
-  if (files.some((file) => !file.replacesLocal)) return true;
-  const now = Date.now();
-  if (files.length > 0 && (localClaimsDueAt.get(kind) ?? 0) <= now) {
-    localClaimsDueAt.set(kind, now + LOCAL_CLAIM_RECHECK_MS);
-    return true;
+// Has `peerId` answered a gallery-wide library inventory recently? Only images have one.
+async function libraryReportedRecently(peerId, kind, nowMs) {
+  const reports = await import('./mediaHolders.js').then((m) => m.readPeerReports()).catch(() => null);
+  const at = Date.parse(reports?.[peerId]?.[kind]?.imageLibrary?.at);
+  return Number.isFinite(at) && nowMs - at < LOCAL_CLAIM_RECHECK_MS;
+}
+
+/**
+ * Cheap gate for the sync cycle: is the gallery-wide inventory worth asking
+ * `peerId` for? Yes while anything of `kind` here has no origin, and for
+ * replaceable claims naming this machine until that peer's last library answer
+ * is fresh, so a failed request or an offline peer is asked again next time.
+ */
+export async function hasUnattributedMedia(kind, { peerId = null } = {}) {
+  if (!KINDS[kind]) return false;
+  const nowMs = Date.now();
+  let cached = scanCache.get(kind);
+  if (!cached || cached.until <= nowMs) {
+    const files = await unattributedFiles(kind, await resolveLocalId());
+    if (files.some((file) => !file.replacesLocal)) return true;
+    cached = { until: nowMs + SCAN_RECHECK_MS, localClaims: files.length > 0 };
+    scanCache.set(kind, cached);
   }
-  emptyUntil.set(kind, now + EMPTY_RECHECK_MS);
-  return false;
+  return cached.localClaims && isNonBlankStr(peerId) && !(await libraryReportedRecently(peerId, kind, nowMs));
 }
 
 // Re-checked under the writer: a supplier recorded since the scan wins, and a
@@ -185,6 +198,6 @@ export async function reconcileMediaOrigins(kind, { nowMs = Date.now() } = {}) {
     ? await stampVideoOrigins(claims, localId)
     : (await Promise.all(claims.map((claim) => stampImageOrigin(claim, localId)))).filter(Boolean).length;
   if (stamped > 0) console.log(`🧭 mediaOrigin: attributed ${stamped} ${kind}(s) to their earliest holder`);
-  emptyUntil.delete(kind);
+  scanCache.delete(kind);
   return stamped;
 }

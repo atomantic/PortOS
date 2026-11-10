@@ -218,16 +218,17 @@ describe('correcting a local claim on a late copy', () => {
     touch(join(PATHS.images, 'c1.png'), T + DAY);
     vi.useFakeTimers({ toFake: ['Date'] });
     onTestFinished(() => vi.useRealTimers());
-    expect(await hasUnattributedMedia('image')).toBe(true); // asks for the library inventory
-    vi.advanceTimersByTime(11 * 60_000);
-    expect(await hasUnattributedMedia('image')).toBe(false); // a local claim alone is re-checked daily, not every cycle
+    const asks = (peerId) => hasUnattributedMedia('image', { peerId });
+    expect(await asks('a')).toBe(true); // asks a for its library inventory
+    await recordPeerHoldings('a', 'image', 'imageLibrary', { mtimes: { 'c1.png': T }, checked: ['c1.png'] });
+    expect(await asks('a')).toBe(false); // a local claim alone re-asks a peer daily, not every cycle
+    expect(await asks('b')).toBe(true); // b has not answered (offline, or its request failed)
     vi.advanceTimersByTime(11 * 60_000);
     writeFileSync(join(PATHS.images, 'c2.png'), 'png');
     onTestFinished(() => rmSync(join(PATHS.images, 'c2.png'), { force: true }));
-    expect(await hasUnattributedMedia('image')).toBe(true); // newly origin-less media is not held back by that
+    expect(await asks('a')).toBe(true); // newly origin-less media is not held back by that
     rmSync(join(PATHS.images, 'c2.png'));
     vi.useRealTimers();
-    await recordPeerHoldings('a', 'image', 'imageLibrary', { mtimes: { 'c1.png': T }, checked: ['c1.png'] });
     await recordPeerHoldings('b', 'image', 'imageLibrary', { mtimes: {}, checked: ['c1.png'] });
     expect(await reconcileMediaOrigins('image')).toBe(1);
     expect(JSON.parse(await readFile(join(PATHS.images, 'c1.metadata.json'), 'utf8')).originInstanceId).toBe('a');
