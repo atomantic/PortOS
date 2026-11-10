@@ -26,3 +26,17 @@ export function earliestHolderOrigin({ localId, localMtimeMs, holders, skewMs = 
   if (ranked[1].ms - ranked[0].ms <= skewMs) return null;
   return ranked[0].mayDelete ? ranked[0].id : null;
 }
+
+/**
+ * May the earliest-holder proof replace a claim naming THIS machine as a file's
+ * origin? Media made here is written with its record, so a file written later
+ * than `createdAt` by more than the skew is a copy that arrived afterwards (or
+ * a render that outlasted the skew, which the proof then keeps as this
+ * machine's). A record with no usable `createdAt` gives no evidence either way,
+ * so only the proof decides.
+ */
+export function localOriginMayBeReplaced({ mtimeMs, createdAt, skewMs = ORIGIN_CLAIM_SKEW_MS }) {
+  const createdMs = typeof createdAt === 'string' ? Date.parse(createdAt) : NaN;
+  if (!Number.isFinite(createdMs)) return true;
+  return validMs(mtimeMs) && mtimeMs - createdMs > skewMs;
+}

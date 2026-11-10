@@ -3,7 +3,7 @@
  * origin (#14133): by adoption from an owner candidate, and by the earliest
  * holder's file time in the exchanged inventory. Real files under a temp data root.
  */
-import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll, onTestFinished } from 'vitest';
 import { mkdirSync, writeFileSync, rmSync, utimesSync } from 'fs';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
@@ -25,7 +25,10 @@ const { loadHistory, saveHistory } = await import('./videoGen/history.js');
 const { PATHS } = await import('../lib/fileUtils.js');
 const { editImageSidecar } = await import('./imageGen/sidecarStore.js');
 const { heldImageAdoptsOrigin } = await import('./sharing/sidecarSync.js');
-const { reconcileMediaOrigins, recordPeerHoldings } = await import('./mediaOriginReconcile.js');
+const { reconcileMediaOrigins, recordPeerHoldings, hasUnattributedMedia } = await import('./mediaOriginReconcile.js');
+const { mutateVideoHistory } = await import('./videoGen/history.js');
+const { authorizeRemoteMediaTombstone } = await import('./mediaTombstoneAuthorization.js');
+const { deleteMediaAnywhere } = await import('./mediaRemoteDelete.js');
 
 afterAll(cleanup);
 
@@ -38,7 +41,7 @@ const videoRow = { id: 'v1', filename: 'v1.mp4', createdAt: '2026-05-22T00:00:00
 beforeEach(async () => {
   mkdirSync(PATHS.videos, { recursive: true });
   mkdirSync(PATHS.images, { recursive: true });
-  for (const name of ['peer-hosted-media.json', 'media-holders.json', 'video-history.json']) rmSync(join(PATHS.data, name), { force: true });
+  for (const name of ['peer-hosted-media.json', 'media-holders.json', 'video-history.json', 'media-delete-queue.json']) rmSync(join(PATHS.data, name), { force: true });
   writeFileSync(join(PATHS.videos, 'v1.mp4'), 'bytes');
   peers.list = [peer('a'), peer('b')];
   await saveHistory([{ ...videoRow }]);
@@ -154,6 +157,71 @@ describe('earliest holder of a pre-upgrade video', () => {
     await saveHistory([{ ...videoRow, suppliedByInstanceId: 'b' }]);
     expect(await reconcileMediaOrigins('video')).toBe(0);
     expect(await originOf()).toBeUndefined();
+  });
+});
+
+// Migration 450 claimed a copy pulled before origins existed on an install whose peers were all removed (#15664).
+describe('correcting a local claim on a late copy', () => {
+  const report = (id, ms) => recordPeerHoldings(id, 'video', 'videoHistory', { mtimes: ms === undefined ? {} : { 'v1.mp4': ms }, checked: ['v1.mp4'] });
+  const claimed = (extra = {}) => saveHistory([{ ...videoRow, originInstanceId: 'me', ...extra }]);
+  const created = Date.parse(videoRow.createdAt);
+
+  it('hands the copy to the proven creator, so its deletes are accepted and a delete here goes to it', async () => {
+    await claimed();
+    touch(join(PATHS.videos, 'v1.mp4'), created + DAY); // pulled a day after it was made
+    await report('a', created);
+    expect(await reconcileMediaOrigins('video')).toBe(0); // b has not reported: no proof, the claim stands
+    expect(await originOf()).toBe('me');
+    await report('b', undefined);
+    expect(await reconcileMediaOrigins('video')).toBe(1);
+    expect(await originOf()).toBe('a');
+
+    // A later local edit keeps the corrected origin.
+    await mutateVideoHistory((rows) => rows.map((r) => ({ ...r, prompt: 'edited' })));
+    expect(await loadHistory()).toEqual([expect.objectContaining({ prompt: 'edited', originInstanceId: 'a' })]);
+
+    const tombstone = { key: 'v1', deletedAt: new Date().toISOString() };
+    const localRow = (await loadHistory())[0];
+    expect(authorizeRemoteMediaTombstone({ peer: peer('a'), tombstone, localRow, hostedIndex: {}, via: 'snapshot' })).toEqual({ allowed: true, reason: null });
+
+    peers.list = [peer('a', { id: 'rec-a', status: 'offline' }), peer('b')];
+    expect(await deleteMediaAnywhere('video', 'v1')).toMatchObject({ status: 'pending', pendingDelete: { peerId: 'rec-a' } });
+  });
+
+  it('keeps a claim on a file written with its record, and an origin naming another machine', async () => {
+    await claimed();
+    touch(join(PATHS.videos, 'v1.mp4'), created + 60_000);
+    await report('a', created - DAY);
+    await report('b', undefined);
+    expect(await reconcileMediaOrigins('video')).toBe(0);
+    expect(await originOf()).toBe('me');
+
+    await claimed({ originInstanceId: 'b' });
+    touch(join(PATHS.videos, 'v1.mp4'), created + DAY);
+    expect(await reconcileMediaOrigins('video')).toBe(0);
+    expect(await originOf()).toBe('b');
+  });
+
+  it('keeps a late claim the proof confirms as this machine\'s', async () => {
+    await claimed();
+    touch(join(PATHS.videos, 'v1.mp4'), created + DAY); // e.g. a render that ran past the skew
+    await report('a', created + 2 * DAY);
+    await report('b', undefined);
+    expect(await reconcileMediaOrigins('video')).toBe(0);
+    expect(await originOf()).toBe('me');
+  });
+
+  it('re-attributes a claimed gallery image with no creation time', async () => {
+    onTestFinished(() => { for (const name of ['c1.png', 'c1.metadata.json']) rmSync(join(PATHS.images, name), { force: true }); });
+    writeFileSync(join(PATHS.images, 'c1.png'), 'png');
+    writeFileSync(join(PATHS.images, 'c1.metadata.json'), JSON.stringify({ prompt: 'p', originInstanceId: 'me' }));
+    touch(join(PATHS.images, 'c1.png'), T + DAY);
+    expect(await hasUnattributedMedia('image')).toBe(true); // asks for the library inventory
+    expect(await hasUnattributedMedia('image')).toBe(false); // a local claim alone is re-checked daily, not every cycle
+    await recordPeerHoldings('a', 'image', 'imageLibrary', { mtimes: { 'c1.png': T }, checked: ['c1.png'] });
+    await recordPeerHoldings('b', 'image', 'imageLibrary', { mtimes: {}, checked: ['c1.png'] });
+    expect(await reconcileMediaOrigins('image')).toBe(1);
+    expect(JSON.parse(await readFile(join(PATHS.images, 'c1.metadata.json'), 'utf8')).originInstanceId).toBe('a');
   });
 });
 
