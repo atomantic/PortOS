@@ -68,7 +68,8 @@ export function CredentialsTab() {
 
   if (payload == null) return <BrailleSpinner text="Loading credentials" />;
 
-  const credentials = payload.credentials || [];
+  // Cards read alphabetically by service name, whatever order the inventory arrives in.
+  const credentials = [...(payload.credentials || [])].sort((a, b) => String(a.label ?? a.id).localeCompare(String(b.label ?? b.id), 'en', { sensitivity: 'base' }));
 
   return (
     <div className="space-y-6">
