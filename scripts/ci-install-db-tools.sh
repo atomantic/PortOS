@@ -24,6 +24,7 @@ OFFICIAL_ARCHIVE='https://archive.ubuntu.com/ubuntu/'
 RUNNER_MIRROR='(mirror\+file:/etc/apt/apt-mirrors\.txt|https?://[a-z0-9.-]+\.archive\.ubuntu\.com/ubuntu/?)'
 PACKAGES=("postgresql-client-${PG_MAJOR}" ffmpeg)
 APT_OPTS=(-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30)
+ARCHIVES="${ROOT}/var/cache/apt/archives"
 
 fail() {
   echo "::error title=DB tool installation failed::$1 No test ran; this is an installation failure, not a test failure." >&2
@@ -38,8 +39,30 @@ bounded() {
   timeout --kill-after=10 "$remaining" "$@"
 }
 
+# apt accepts an existing archive by size alone. Only import restored downloads
+# whose SHA256 matches the current signed index, never cached indexes or state.
+restore_archives() {
+  [[ -n "${APT_PACKAGE_CACHE:-}" ]] || return 0
+  local manifest uri filename size hash
+  manifest=$(bounded "$1" sudo apt-get "${APT_OPTS[@]}" \
+    -o "Dir::Cache::archives=${ARCHIVES}/verify-empty" -o Acquire::ForceHash=sha256 \
+    --print-uris install -y "${PACKAGES[@]}") || return
+  sudo install -d "$ARCHIVES"
+  while read -r uri filename size hash; do
+    [[ "$hash" =~ ^SHA256:[a-fA-F0-9]{64}$ && "$filename" != */* ]] || continue
+    [[ -f "${APT_PACKAGE_CACHE}/${filename}" ]] || continue
+    if printf '%s  %s\n' "${hash#SHA256:}" "${APT_PACKAGE_CACHE}/${filename}" | sha256sum --check --status; then
+      sudo install -m 644 "${APT_PACKAGE_CACHE}/${filename}" "${ARCHIVES}/${filename}"
+      echo "♻️ Reused verified APT package ${filename}"
+    else
+      echo "♻️ Ignoring invalid cached APT package ${filename}; APT will download it again"
+    fi
+  done <<< "$manifest"
+}
+
 download_by() {
   bounded "$1" sudo apt-get "${APT_OPTS[@]}" update &&
+    restore_archives "$1" &&
     bounded "$1" sudo apt-get "${APT_OPTS[@]}" install -y --download-only "${PACKAGES[@]}"
 }
 
@@ -66,6 +89,14 @@ if ! download_by "$PRIMARY_BUDGET"; then
     fail "Packages did not download from the runner mirror or ${OFFICIAL_ARCHIVE} within ${TOTAL_BUDGET}s."
 fi
 
-sudo apt-get install -y --no-download "${PACKAGES[@]}" || fail "Downloaded packages did not install."
+sudo apt-get -o APT::Keep-Downloaded-Packages=true install -y --no-download "${PACKAGES[@]}" || fail "Downloaded packages did not install."
+if [[ -n "${APT_PACKAGE_CACHE:-}" ]]; then
+  mkdir -p "$APT_PACKAGE_CACHE"
+  # Only completed .debs enter the Actions cache, never partial downloads/locks.
+  for archive in "$ARCHIVES/"*.deb; do
+    [[ -f "$archive" ]] || continue
+    install -m 644 "$archive" "$APT_PACKAGE_CACHE/"
+  done
+fi
 echo "/usr/lib/postgresql/${PG_MAJOR}/bin" >> "$GITHUB_PATH"
 echo "✅ Installed ${PACKAGES[*]} in ${SECONDS}s"

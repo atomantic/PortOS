@@ -784,20 +784,29 @@ jobs:
       - name: Provision test database (portos_test)
         run: npm run setup:db:test --prefix server
 
-      # Backup restore coverage takes a real pg_dump. The runner's default
-      # PostgreSQL 16 client cannot dump the PostgreSQL 17 service above.
-      #
-      # The pull is ~95 ffmpeg dependency packages from the runner's mirror, and
-      # a slow mirror has eaten this job's budget before any test ran (#10369,
-      # #10562): apt's retries and timeouts cannot bound a connection that
-      # trickles bytes. The script bounds the download, falls back from the
-      # runner mirror to the official Ubuntu archive with signing intact, and
-      # fails with an installation-failure annotation once its budget is spent.
-      # The step timeout stays as a backstop above the script's own budget.
+      # Share only package downloads across DB/browser jobs. The helper checks
+      # restored bytes against fresh signed indexes; cache hits never skip setup.
+      - name: Identify APT package cache
+        id: apt-cache
+        env:
+          PG_MAJOR: '17'
+        run: |
+          . /etc/os-release
+          echo "key=apt-debs-v1-${ID}-${VERSION_ID}-$(dpkg --print-architecture)-pg${PG_MAJOR}-${{ hashFiles('scripts/ci-install-db-tools.sh') }}" >> "$GITHUB_OUTPUT"
+
+      - name: Cache APT package downloads
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/portos-apt-packages/*.deb
+          key: ${{ steps.apt-cache.outputs.key }}
+
+      # pg_dump must match the service major. Preserve bounded mirror fallback
+      # on a miss; this timeout backs up the helper's 390-second download budget.
       - name: Install PostgreSQL client and audio verification tools
         timeout-minutes: 9
         env:
           PG_MAJOR: '17'
+          APT_PACKAGE_CACHE: ${{ runner.temp }}/portos-apt-packages
         run: bash scripts/ci-install-db-tools.sh
 
       # Same contract as the server job's memo steps. The Postgres schema is
@@ -966,20 +975,29 @@ jobs:
             vitest-server-${{ runner.os }}-${{ hashFiles('server/package-lock.json') }}-
             vitest-server-${{ runner.os }}-
 
-      # Backup restore coverage takes a real pg_dump. The runner's default
-      # PostgreSQL 16 client cannot dump the PostgreSQL 17 service above.
-      #
-      # The pull is ~95 ffmpeg dependency packages from the runner's mirror, and
-      # a slow mirror has eaten this job's budget before any test ran (#10369,
-      # #10562): apt's retries and timeouts cannot bound a connection that
-      # trickles bytes. The script bounds the download, falls back from the
-      # runner mirror to the official Ubuntu archive with signing intact, and
-      # fails with an installation-failure annotation once its budget is spent.
-      # The step timeout stays as a backstop above the script's own budget.
+      # Share only package downloads across DB/browser jobs. The helper checks
+      # restored bytes against fresh signed indexes; cache hits never skip setup.
+      - name: Identify APT package cache
+        id: apt-cache
+        env:
+          PG_MAJOR: '17'
+        run: |
+          . /etc/os-release
+          echo "key=apt-debs-v1-${ID}-${VERSION_ID}-$(dpkg --print-architecture)-pg${PG_MAJOR}-${{ hashFiles('scripts/ci-install-db-tools.sh') }}" >> "$GITHUB_OUTPUT"
+
+      - name: Cache APT package downloads
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/portos-apt-packages/*.deb
+          key: ${{ steps.apt-cache.outputs.key }}
+
+      # pg_dump must match the service major. Preserve bounded mirror fallback
+      # on a miss; this timeout backs up the helper's 390-second download budget.
       - name: Install PostgreSQL client and audio verification tools
         timeout-minutes: 9
         env:
           PG_MAJOR: '17'
+          APT_PACKAGE_CACHE: ${{ runner.temp }}/portos-apt-packages
         run: bash scripts/ci-install-db-tools.sh
 
       # Read the runner's Chrome tree into the page cache before any suite
