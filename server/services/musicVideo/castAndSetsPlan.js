@@ -64,12 +64,12 @@ const SQUARE_FACE = 'FACE close-ups and FRONT face panels dead-on orthographic a
 const FIVE_VIEWS = `Five views: FRONT, 3/4, PROFILE, BACK full-body, plus a FACE close-up. ${SQUARE_FRONT}. BACK view dead-on orthographic from directly behind, shoulders and hips square and level, weight even across both feet, no glance back, regardless of how the figure stands in the reference. ${SQUARE_FACE}`;
 // Select only known rendering media, never rewrite or forward the mixed scene
 // look to identity sheets. Authored look text remains intact on scene frames.
-const SHEET_MEDIA = /\b(?:watercolou?r(?: illustration)?|oil painting|gouache|pencil drawing|charcoal drawing|ink drawing|hand[- ]drawn(?: animation| illustration)?|(?:2d|3d)(?: animation| animated| render(?:ing)?)|cel[- ]shaded(?: animation)?|stop[- ]motion|claymation|anime|cartoon|comic[- ]book(?: illustration)?|pixel art|digital illustration|vector illustration|animation|animated|illustration|illustrated|non[- ]photorealistic)\b/gi;
+const SHEET_MEDIA = /\b(?:watercolou?r(?: illustration)?|oil painting|gouache|pencil drawing|charcoal drawing|ink drawing|hand[- ]drawn(?: animation| illustration)?|(?:2d|3d)(?: animation| animated| render(?:ing)?)|cel[- ]shaded(?: animation)?|stop[- ]motion|claymation|anime|cartoon|comic[- ]book(?: illustration)?|pixel art|digital illustration|vector illustration|animation|animated|illustration|illustrated|non[- ]photorealistic|(?:(?!(?:no|not|without|a|an|the|and|or)\b)[a-z][a-z-]*\s+)?(?:painting|drawing|illustration|animation))\b/gi;
 function sheetMedium(look, fallback = PHOTO) {
   const text = String(look || '');
   const { media } = [...text.matchAll(SHEET_MEDIA)].reduce((state, match) => {
     const gap = text.slice(state.end, match.index);
-    const negated = /\b(?:no|not|without)\s+$/i.test(gap)
+    const negated = /\b(?:no|not|without)\s+(?:(?:a|an|the)\s+)?$/i.test(gap)
       || (state.negated && /^(?:\s*(?:,|\/|&|\band\b|\bor\b))+\s*$/i.test(gap));
     return { media: negated ? state.media : [...state.media, match[0]], end: match.index + match[0].length, negated };
   }, { media: [], end: 0, negated: false });
@@ -235,7 +235,7 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
   const looks = direction.looks || [];
   const firstLook = looks[0];
   const style = trimTo(direction.look, 500) || trimTo(project?.concept?.style, 500);
-  const peopleMedium = sheetMedium(direction.look || project?.concept?.style || '');
+  const peopleMedium = sheetMedium(direction.look, sheetMedium(project?.concept?.style));
   const note = (key) => (revisionNotes[key] ? `Revision: ${revisionNotes[key]}` : '');
   const forms = p.forms || [];
   const bindings = formBindings(project, forms, catalogLikeness);

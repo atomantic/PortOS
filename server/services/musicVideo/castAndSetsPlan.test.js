@@ -70,7 +70,7 @@ describe('Cast & Sets neutral people sheets', () => {
     const animated = buildCastAndSetsImagePlan({ scenes: [] }, { ...direction, look: '3D animated, warm amber grade' });
     expect(animated.character.prompt).toContain('Rendering medium: 3D animated');
     expect(animated.character.prompt).not.toMatch(/photorealistic|warm amber grade/);
-    const photographic = buildCastAndSetsImagePlan({ scenes: [] }, { ...direction, look: 'Editorial photography, no anime or cartoon' });
+    const photographic = buildCastAndSetsImagePlan({ scenes: [] }, { ...direction, look: 'Editorial photography, not an anime or cartoon' });
     expect(photographic.character.prompt).toContain('photorealistic, editorial photography');
     expect(photographic.character.prompt).not.toContain('Rendering medium:');
     const excludedList = buildCastAndSetsImagePlan({ scenes: [] }, { ...direction, look: 'No anime, cartoon and pixel art; watercolor illustration, warm amber grade' });
@@ -82,6 +82,12 @@ describe('Cast & Sets neutral people sheets', () => {
     expect(memory['form:age-7'].prompt).toContain('Rendering medium: oil painting');
     expect(memory['form:age-7'].prompt).not.toMatch(/photorealistic|sepia grade/);
     expect(memory['test:1'].prompt).toContain('Look: oil painting, sepia grade');
+    const inherited = buildCastAndSetsImagePlan({ scenes: [], concept: { style: 'acrylic painting, warm amber grade' } }, { ...direction, look: 'hard rim light' });
+    expect(inherited.character.prompt).toContain('Rendering medium: acrylic painting');
+    expect(inherited.character.prompt).not.toMatch(/photorealistic|warm amber grade|hard rim light/);
+    const explicit = buildCastAndSetsImagePlan({ scenes: [] }, { ...direction, look: 'acrylic painting, warm amber grade' });
+    expect(explicit.character.prompt).toContain('Rendering medium: acrylic painting');
+    expect(explicit.character.prompt).not.toMatch(/photorealistic|warm amber grade/);
   });
 });
 
