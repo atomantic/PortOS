@@ -133,7 +133,8 @@ def forced_align(log_probs, targets, blank=BLANK):
     path = np.empty(frames, dtype=np.int64)
     for t in range(frames - 1, -1, -1):
         path[t] = states[state]
-        state -= back[t, state]
+        # int(): NumPy 2 would keep `state` int8 and overflow past 127 states.
+        state -= int(back[t, state])
     return path
 
 

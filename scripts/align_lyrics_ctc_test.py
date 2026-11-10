@@ -93,6 +93,17 @@ class Viterbi(unittest.TestCase):
         with self.assertRaises(ValueError):
             forced_align([[0.0, 0.0]] * 4, [0, 1])
 
+    def test_backtraces_a_song_length_transcript(self):
+        # Over 127 CTC states: the int8 back-pointers must not narrow the state index.
+        lines = [['bright', 'morning', 'river']] * 8
+        tokens, _ = targets_for_lines(lines, DICTIONARY)
+        self.assertGreater(2 * len(tokens) + 1, 127)
+        owners = [token for token in tokens for _ in range(2)]
+        emissions = [[0.0 if c == owner else -20.0 for c in range(len(DICTIONARY))] for owner in owners]
+        spans = merge_tokens(forced_align(emissions, tokens))
+        self.assertEqual([(span.token, span.start, span.end) for span in spans],
+                         [(token, 2 * i, 2 * i + 2) for i, token in enumerate(tokens)])
+
     def test_word_slots_keep_frame_exact_song_clock(self):
         lines = [['oh'], ['no', 'no']]
         tokens, slots = targets_for_lines(lines, DICTIONARY)
