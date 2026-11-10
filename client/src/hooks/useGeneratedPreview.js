@@ -77,9 +77,23 @@ export default function useGeneratedPreview({ active, request, controls = null }
     if (previous && previous !== entry) previous.retired = true;
     entry.retired = false;
     frameUrl.current = entry.url;
-    setState((prev) => frameUrl.current === entry.url ? { ...prev, frameUrl: entry.url } : prev);
     retireUrls();
-  }, [retireUrls]);
+    const show = () => {
+      entry.loader = null;
+      if (mounted.current && frameUrl.current === entry.url) setState((prev) => ({ ...prev, frameUrl: entry.url }));
+    };
+    // WebKit paints an <img> empty between a src change and the new picture's
+    // decode, so every frame flashed the container through (#15616). Decode
+    // off screen first: the visible element then only receives a picture this
+    // document already holds, and that swap is immediate. `entry.loader`
+    // keeps the decoded picture alive until then.
+    const loader = typeof Image === 'function' ? new Image() : null;
+    if (typeof loader?.decode !== 'function') { show(); return; }
+    entry.loader = loader;
+    loader.src = entry.url;
+    // A failed decode still reaches the visible element, whose load path reports it.
+    loader.decode().then(show, show);
+  }, [mounted, retireUrls]);
 
   const cancelPresentation = useCallback(() => {
     const viewer = presentation.current;
@@ -99,9 +113,11 @@ export default function useGeneratedPreview({ active, request, controls = null }
     if (viewer.current?.url === frameUrl.current && frameUrl.current !== decodedUrl.current) {
       frameUrl.current = decodedUrl.current;
       const image = imageRef.current;
+      // The canceled frame may still be decoding off screen; reassigning the
+      // picture already shown would only restart its load.
       if (image) {
-        if (decodedUrl.current) image.src = decodedUrl.current;
-        else image.removeAttribute('src');
+        if (!decodedUrl.current) image.removeAttribute('src');
+        else if (image.src !== decodedUrl.current) image.src = decodedUrl.current;
       }
       if (mounted.current) setState((prev) => ({ ...prev, frameUrl: frameUrl.current }));
     }
