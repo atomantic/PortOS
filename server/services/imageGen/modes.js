@@ -102,6 +102,7 @@ const MODE_LABELS = Object.freeze({
   [IMAGE_GEN_MODE.AGY]: 'Agy',
   [IMAGE_GEN_MODE.FAL]: 'fal.ai',
   [IMAGE_GEN_MODE.RUNWAY]: 'Runway',
+  [IMAGE_GEN_MODE.HIGGSFIELD]: 'Higgsfield',
   [IMAGE_GEN_MODE.EXTERNAL]: 'External',
 });
 

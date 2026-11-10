@@ -714,6 +714,8 @@ export * from './generationModes.js';
 export * from './imageGenCapabilities.js';
 export * from './imageQuotaSignal.js';
 export * from './falImageModels.js';
+export * from './higgsfieldImageModels.js';
+export * from './higgsfieldVideoModels.js';
 export * from './imageRuntimeRemedies.js';
 export * from './renderModeLadder.js';
 export * from './spriteVocabulary.js';

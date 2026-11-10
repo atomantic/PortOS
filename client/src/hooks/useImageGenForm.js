@@ -6,7 +6,7 @@ import { composeStyledPrompt } from '../lib/composeStyledPrompt';
 import { universeStylePreset, withUniverseLabel } from '../lib/universeStylePreset';
 import { RUNNER_FAMILIES, loraCompatKey, loraCompatKeysMatch, loraFamilyOf, usesDiffusersRunner } from '../lib/runnerFamilies';
 import {
-  FAL_IMAGE_DEFAULT_MODEL, RUNWAY_IMAGE_DEFAULT_MODEL,
+  FAL_IMAGE_DEFAULT_MODEL, HIGGSFIELD_IMAGE_DEFAULT_MODEL, RUNWAY_IMAGE_DEFAULT_MODEL,
   IMAGE_GEN_MODE,
   LOCAL_IMAGEGEN_DEFAULT_MODEL,
   cloudPromptRequired,
@@ -121,6 +121,8 @@ export function useImageGenForm({ searchParams, setSearchParams, backend, handof
   // the picker's "Settings default (…)" row.
   const [falModel, setFalModel] = useState('');
   const [savedFalModel, setSavedFalModel] = useState('');
+  const [higgsfieldModel, setHiggsfieldModel] = useState('');
+  const [savedHiggsfieldModel, setSavedHiggsfieldModel] = useState('');
   const [savedLocalModelId, setSavedLocalModelId] = useState(null);
   const [initImage, setInitImage] = useState({ source: null, file: null, name: null, previewUrl: null });
   const initImagePreviewRef = useRef(initImage.previewUrl);
@@ -157,6 +159,7 @@ export function useImageGenForm({ searchParams, setSearchParams, backend, handof
       agy: resolveCleanersFromConfig(settings?.imageGen?.agy, IMAGE_GEN_MODE.AGY),
       runway: resolveCleanersFromConfig(settings?.imageGen?.runway, IMAGE_GEN_MODE.RUNWAY),
       fal: resolveCleanersFromConfig(settings?.imageGen?.fal, IMAGE_GEN_MODE.FAL),
+      higgsfield: resolveCleanersFromConfig(settings?.imageGen?.higgsfield, IMAGE_GEN_MODE.HIGGSFIELD),
     };
     const c2 = {
       external: perMode.external.cleanC2PA,
@@ -166,6 +169,7 @@ export function useImageGenForm({ searchParams, setSearchParams, backend, handof
       agy: perMode.agy.cleanC2PA,
       runway: perMode.runway.cleanC2PA,
       fal: perMode.fal.cleanC2PA,
+      higgsfield: perMode.higgsfield.cleanC2PA,
     };
     const dn = {
       external: perMode.external.denoise,
@@ -175,12 +179,14 @@ export function useImageGenForm({ searchParams, setSearchParams, backend, handof
       agy: perMode.agy.denoise,
       runway: perMode.runway.denoise,
       fal: perMode.fal.denoise,
+      higgsfield: perMode.higgsfield.denoise,
     };
     const saved = settings?.imageGen?.mode || IMAGE_GEN_MODE.EXTERNAL;
     const next = configureBackends(backends, saved);
     setSavedAgyModel(settings?.imageGen?.agy?.model || '');
     setSavedRunwayModel(settings?.imageGen?.runway?.model || RUNWAY_IMAGE_DEFAULT_MODEL);
     setSavedFalModel(settings?.imageGen?.fal?.model || '');
+    setSavedHiggsfieldModel(settings?.imageGen?.higgsfield?.model || '');
     setSavedLocalModelId(settings?.imageGen?.local?.modelId || '');
     setSavedCleanC2PAByMode(c2);
     setSavedDenoiseByMode(dn);
@@ -528,6 +534,7 @@ export function useImageGenForm({ searchParams, setSearchParams, backend, handof
     ? remoteTarget.acceptsInput('initImage') || initImage.source != null
     : isI2iCapableMode(effectiveMode) && (!isLocalMode || currentModel?.supportsImg2Img !== false);
   const isFalMode = effectiveMode === IMAGE_GEN_MODE.FAL;
+  const isHiggsfieldMode = effectiveMode === IMAGE_GEN_MODE.HIGGSFIELD;
   // A model that declares its own reference cap (separate from any init image).
   const localDeclaredRefs = Number.isInteger(currentModel?.maxReferenceImages) && currentModel.maxReferenceImages > 0;
   const referenceSlotCount = remoteTargetActive
@@ -541,7 +548,8 @@ export function useImageGenForm({ searchParams, setSearchParams, backend, handof
         : (isLocalMode && (isQwen21Model || isFlux3Model)) || isFalMode ? 10 : 4,
     localSupportsReferences: isFlux2Model || isQwen21Model || isFlux3Model || localDeclaredRefs,
     localInputCap: isQwen21Model || isFlux3Model ? 10 : null,
-    cloudModelId: effectiveMode === IMAGE_GEN_MODE.RUNWAY ? (runwayModel || savedRunwayModel || 'gen4_image') : isFalMode ? (falModel || savedFalModel || FAL_IMAGE_DEFAULT_MODEL) : null,
+    cloudModelId: effectiveMode === IMAGE_GEN_MODE.RUNWAY ? (runwayModel || savedRunwayModel || 'gen4_image') : isFalMode ? (falModel || savedFalModel || FAL_IMAGE_DEFAULT_MODEL)
+      : isHiggsfieldMode ? (higgsfieldModel || savedHiggsfieldModel || HIGGSFIELD_IMAGE_DEFAULT_MODEL) : null,
   });
   const activeStylePresets = useMemo(() => [
     selectedUniverse ? withUniverseLabel(universeStylePreset(selectedUniverse)) : null,
@@ -752,6 +760,8 @@ export function useImageGenForm({ searchParams, setSearchParams, backend, handof
       runwayModel, setRunwayModel,
       falModel,
       setFalModel,
+      higgsfieldModel,
+      setHiggsfieldModel,
       batchCount,
       setBatchCount,
       cleanC2PA,
@@ -773,6 +783,7 @@ export function useImageGenForm({ searchParams, setSearchParams, backend, handof
       savedAgyModel,
       savedRunwayModel,
       savedFalModel,
+      savedHiggsfieldModel,
       savedCleanC2PAByMode,
       savedDenoiseByMode,
       reloadBackends,

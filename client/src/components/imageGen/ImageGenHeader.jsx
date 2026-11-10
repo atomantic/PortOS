@@ -15,6 +15,7 @@ const CONNECTED_MODE_LABELS = {
   [IMAGE_GEN_MODE.AGY]: 'agy CLI',
   [IMAGE_GEN_MODE.FAL]: 'fal.ai',
   [IMAGE_GEN_MODE.RUNWAY]: 'Runway',
+  [IMAGE_GEN_MODE.HIGGSFIELD]: 'Higgsfield',
 };
 
 export default function ImageGenHeader({ status, backends, remix, actions }) {

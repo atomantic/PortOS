@@ -51,6 +51,12 @@ export const CREDENTIALS = Object.freeze([
     settingsPath: 'videoGen.runway.apiKey', configurePath: '/settings/credentials',
   }),
   Object.freeze({
+    id: 'higgsfield', label: 'Higgsfield', privateStore: true,
+    unlocks: 'Image and video generation through Higgsfield\'s developer API. Paste KEY_ID:KEY_SECRET.', tier: 'metered',
+    getUrl: 'https://console.higgsfield.ai', envVars: Object.freeze(['HIGGSFIELD_API_KEY']),
+    settingsPath: 'videoGen.higgsfield.apiKey', configurePath: '/settings/credentials',
+  }),
+  Object.freeze({
     id: 'github',
     label: 'GitHub',
     unlocks: 'CoS agent PRs, `gh` on spawned CLIs, and the GitHub Dev Tools page.',

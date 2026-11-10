@@ -1,6 +1,6 @@
 /**
  * Run the provider's delete call for a finished render: Runway deletes the task and its rendered asset (it keeps
- * its request history log with the input prompt and image), fal.ai deletes the request's stored payloads and output files. Runs on demand from the media details pane, or automatically
+ * its request history log with the input prompt and image), fal.ai deletes the request's stored payloads and output files, Higgsfield deletes the request's files, prompt and parameters. Runs on demand from the media details pane, or automatically
  * once the output is saved locally when `imageGen.<provider>.deleteAfterDownload` is on (one
  * toggle per provider, covering its image and video renders). The record keeps its provider id
  * and gains a deleted-at stamp, so the details pane can say it was done.
@@ -9,6 +9,7 @@
 import { ServerError } from '../lib/errorHandler.js';
 import { deleteRunwayTask, resolveRunwayApiKey } from './runwayApi.js';
 import { deleteFalRequestPayloads, resolveFalApiKey } from './falQueue.js';
+import { deleteHiggsfieldRequest, resolveHiggsfieldApiKey } from './higgsfieldApi.js';
 import { getSettings } from './settings.js';
 import { getHistoryItem, mutateVideoHistory } from './videoGen/history.js';
 import { editImageSidecar, readImageSidecar } from './imageGen/sidecarStore.js';
@@ -21,6 +22,10 @@ const PROVIDERS = {
   fal: {
     label: 'fal.ai', idField: 'falRequestId', deletedField: 'falDeletedAt', resolveKey: resolveFalApiKey,
     remove: (apiKey, id) => deleteFalRequestPayloads({ apiKey, requestId: id }),
+  },
+  higgsfield: {
+    label: 'Higgsfield', idField: 'higgsfieldRequestId', deletedField: 'higgsfieldDeletedAt', resolveKey: resolveHiggsfieldApiKey,
+    remove: (apiKey, id) => deleteHiggsfieldRequest({ apiKey, requestId: id }),
   },
 };
 

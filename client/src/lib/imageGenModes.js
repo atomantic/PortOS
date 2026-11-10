@@ -70,6 +70,12 @@ import {
   falImageFamily,
   falImagePriceLabel,
 } from '../../../server/lib/falImageModels.js';
+import {
+  HIGGSFIELD_IMAGE_DEFAULT_MODEL,
+  HIGGSFIELD_IMAGE_FAMILIES,
+  HIGGSFIELD_IMAGE_MODEL_IDS,
+  higgsfieldImageFamily,
+} from '../../../server/lib/higgsfieldImageModels.js';
 
 export {
   // Shipped per-backend defaults, so a UI that displays "the model/effort a job
@@ -92,6 +98,11 @@ export {
   FAL_IMAGE_MODEL_IDS,
   falImageFamily,
   falImagePriceLabel,
+  // The curated Higgsfield image catalog — same contract as the fal.ai one above.
+  HIGGSFIELD_IMAGE_DEFAULT_MODEL,
+  HIGGSFIELD_IMAGE_FAMILIES,
+  HIGGSFIELD_IMAGE_MODEL_IDS,
+  higgsfieldImageFamily,
   // The ratios grok's image tools accept — the Settings default-ratio picker.
   GROK_ASPECT_RATIOS,
   // Backends that support image-to-image, ordered best-first: what the i2i-only
@@ -182,6 +193,7 @@ export const MODE_LABELS = Object.freeze({
   [VIDEO_GEN_MODE.REACTOR]: 'Reactor.inc',
   [VIDEO_GEN_MODE.RUNWAY]: 'Runway',
   [VIDEO_GEN_MODE.GEMINI]: 'Gemini',
+  [VIDEO_GEN_MODE.HIGGSFIELD]: 'Higgsfield',
 });
 
 // Backends a record pin or a one-shot frame render can name. External is an
@@ -193,6 +205,7 @@ export const IMAGE_PIN_MODES = Object.freeze([
   IMAGE_GEN_MODE.AGY,
   IMAGE_GEN_MODE.FAL,
   IMAGE_GEN_MODE.RUNWAY,
+  IMAGE_GEN_MODE.HIGGSFIELD,
 ]);
 
 export { RUNWAY_IMAGE_DISCLOSURE, RUNWAY_IMAGE_MODELS, RUNWAY_IMAGE_DEFAULT_MODEL, RUNWAY_IMAGE_MODEL_IDS, getRunwayImageModel } from '../../../server/lib/runwayImageModels.js';
@@ -204,6 +217,13 @@ export { RUNWAY_IMAGE_DISCLOSURE, RUNWAY_IMAGE_MODELS, RUNWAY_IMAGE_DEFAULT_MODE
 export const FAL_IMAGE_MODEL_OPTIONS = Object.freeze(FAL_IMAGE_FAMILIES.map((family) => Object.freeze({
   id: family.textEndpoint,
   label: `${family.label} (${falImagePriceLabel(family)}, up to ${family.maxInputImages} refs)`,
+})));
+
+// The Higgsfield picker rows — one per family, keyed by its text-to-image
+// endpoint; the provider switches to the edit endpoint when a render carries images.
+export const HIGGSFIELD_IMAGE_MODEL_OPTIONS = Object.freeze(HIGGSFIELD_IMAGE_FAMILIES.map((family) => Object.freeze({
+  id: family.textEndpoint,
+  label: `${family.label} (${family.maxInputImages ? `up to ${family.maxInputImages} ref${family.maxInputImages === 1 ? '' : 's'}` : 'text only'})`,
 })));
 
 // True for a cloud-CLI backend: one that picks model/steps/seed internally,

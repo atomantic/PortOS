@@ -27,6 +27,7 @@ import * as grok from './grok.js';
 import * as agy from './agy.js';
 import * as fal from './fal.js';
 import * as runway from './runway.js';
+import * as higgsfield from './higgsfield.js';
 import {
   IMAGE_GEN_MODE, IMAGE_GEN_MODES, CLOUD_IMAGE_GEN_MODES, isEditCapableMode,
 } from './modes.js';
@@ -44,6 +45,7 @@ const CLOUD_PROVIDERS = {
   [IMAGE_GEN_MODE.AGY]: agy,
   [IMAGE_GEN_MODE.FAL]: fal,
   [IMAGE_GEN_MODE.RUNWAY]: runway,
+  [IMAGE_GEN_MODE.HIGGSFIELD]: higgsfield,
 };
 
 // Re-export the enum + array so the existing import surface from this module
@@ -265,6 +267,7 @@ export async function getActiveJobs() {
     ...(agy.getActiveJobs ? agy.getActiveJobs() : [agy.getActiveJob()]),
     ...(fal.getActiveJobs ? fal.getActiveJobs() : [fal.getActiveJob()]),
     ...(runway.getActiveJobs ? runway.getActiveJobs() : [runway.getActiveJob()]),
+    ...higgsfield.getActiveJobs(),
   ].filter(Boolean);
   return jobs;
 }
@@ -279,6 +282,7 @@ export const attachSseClient = (jobId, res) => {
   if (agy.attachSseClient(jobId, res)) return true;
   if (fal.attachSseClient(jobId, res)) return true;
   if (runway.attachSseClient(jobId, res)) return true;
+  if (higgsfield.attachSseClient(jobId, res)) return true;
   return false;
 };
 
@@ -295,7 +299,8 @@ export const cancel = () => {
   const agyCancelled = agy.cancelAll();
   const falCancelled = fal.cancelAll();
   const runwayCancelled = runway.cancelAll();
-  return Boolean(localCancelled || codexCancelled || grokCancelled || agyCancelled || falCancelled || runwayCancelled);
+  const higgsfieldCancelled = higgsfield.cancelAll();
+  return Boolean(localCancelled || codexCancelled || grokCancelled || agyCancelled || falCancelled || runwayCancelled || higgsfieldCancelled);
 };
 
 // Exact-ID cancel (#9932). The explicit-target counterpart to cancel(): stops
@@ -308,10 +313,10 @@ export const cancelJob = (jobId) => {
   if (!jobId) return false;
   const localJob = local.getActiveJob();
   if ((localJob?.id === jobId || localJob?.generationId === jobId) && local.cancel()) return true;
-  return codex.cancel(jobId) || grok.cancel(jobId) || agy.cancel(jobId) || fal.cancel(jobId) || runway.cancel(jobId);
+  return codex.cancel(jobId) || grok.cancel(jobId) || agy.cancel(jobId) || fal.cancel(jobId) || runway.cancel(jobId) || higgsfield.cancel(jobId);
 };
 
 // Re-exports so routes can hit a specific backend directly when the request
 // is shape-specific (gallery, LoRAs). The dispatcher is for the generic
 // generate/status flow used by all modes.
-export { local, external, codex, grok, agy, fal, runway };
+export { local, external, codex, grok, agy, fal, runway, higgsfield };

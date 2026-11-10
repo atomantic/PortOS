@@ -11,6 +11,7 @@ import FormField from '../ui/FormField';
 import BrailleSpinner from '../BrailleSpinner';
 import RunwayModelSelect from '../imageGen/RunwayModelSelect';
 import FalModelSelect from '../imageGen/FalModelSelect';
+import HiggsfieldModelSelect from '../imageGen/HiggsfieldModelSelect';
 import {
   IMAGE_GEN_MODE, IMAGE_PIN_MODES, RENDER_TARGET_BACKEND_AUTO, RENDER_TARGET_OPTIONS, VIDEO_RENDER_MODES, modeLabel,
   normalizeRenderPinValue, supportsCloudModelOverride,
@@ -27,6 +28,7 @@ const BACKEND_TILES = [
   { mode: IMAGE_GEN_MODE.AGY, icon: Terminal, label: 'Agy CLI', blurb: "Text-to-image through Antigravity's generate_image tool and your selected model.", enabledKey: 'agyEnabled' },
   { mode: IMAGE_GEN_MODE.RUNWAY, icon: Cloud, label: 'Runway', blurb: 'Hosted Gen-4 stills with up to three tagged references. Billed per image.', enabledKey: 'runwayEnabled' },
   { mode: IMAGE_GEN_MODE.FAL, icon: Sparkles, label: 'fal.ai', blurb: "Hosted image and reference-edit models through fal.ai's API. Billed per image to your fal.ai account.", enabledKey: 'falEnabled' },
+  { mode: IMAGE_GEN_MODE.HIGGSFIELD, icon: Cloud, label: 'Higgsfield', blurb: "Hosted Soul, Qwen Image, Ideogram and Z-Image models through Higgsfield's API. Billed to your Higgsfield account.", enabledKey: 'higgsfieldEnabled' },
 ];
 
 // fal.ai / reactor.inc video keys (#6213/#6214) — write-only since #8997:
@@ -48,6 +50,11 @@ const VIDEO_KEY_ROWS = [
     id: 'runway', label: 'Runway API key', placeholder: 'key_...', envLabel: 'RUNWAYML_API_SECRET',
     hint: 'Enables the Runway video backend on the Video Gen page and in Music Video shots. Get a key at dev.runwayml.com, or set the RUNWAYML_API_SECRET environment variable instead.',
     missing: 'No Runway key configured — the Runway video backend will be unavailable.',
+  },
+  {
+    id: 'higgsfield', label: 'Higgsfield API key', placeholder: 'KEY_ID:KEY_SECRET', envLabel: 'HIGGSFIELD_API_KEY',
+    hint: 'Enables the Higgsfield video backend (Seedance, Kling, Wan) on the Video Gen page and the Higgsfield image backend (Higgsfield tab). Create a key at console.higgsfield.ai and paste it as KEY_ID:KEY_SECRET, or set the HIGGSFIELD_API_KEY environment variable instead.',
+    missing: 'No Higgsfield key configured — the Higgsfield video and image backends will be unavailable.',
   },
 ];
 
@@ -259,6 +266,16 @@ export default function ImageGenBackendSections({ mediaTab, form, credentials })
                       value={entry.imageModel || ''}
                       onChange={(v) => setPin('imageModel', v)}
                       defaultLabel="Model: fal.ai default"
+                      className={`${SELECT_CLASS} sm:w-52`}
+                    />
+                  </FormField>
+                ) : pinnedMode === IMAGE_GEN_MODE.HIGGSFIELD ? (
+                  <FormField label={`${label} model`} labelClassName="sr-only" className="contents">
+                    <HiggsfieldModelSelect
+                      id={modelInputId}
+                      value={entry.imageModel || ''}
+                      onChange={(v) => setPin('imageModel', v)}
+                      defaultLabel="Model: Higgsfield default"
                       className={`${SELECT_CLASS} sm:w-52`}
                     />
                   </FormField>

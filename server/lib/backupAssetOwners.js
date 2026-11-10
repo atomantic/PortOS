@@ -359,7 +359,8 @@ export const BACKUP_ASSET_OWNERS = Object.freeze([
     status: 'admitted',
     modules: [
       'services/imageGen/local.js', 'services/imageGen/agy.js', 'services/imageGen/codex.js',
-      'services/imageGen/grok.js', 'services/imageGen/fal.js', 'services/imageGen/runway.js', 'services/imageGen/external.js',
+      'services/imageGen/grok.js', 'services/imageGen/fal.js', 'services/imageGen/runway.js', 'services/imageGen/higgsfield.js',
+      'services/imageGen/external.js',
       'services/imageGen/remote.js', 'services/imageGen/variants.js', 'services/mediaSketches.js',
       'services/imageGen/publication.js', 'services/imageGen/index.js',
       // A storyboard-guided Grok clip files the first frame it built into the

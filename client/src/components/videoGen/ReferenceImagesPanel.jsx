@@ -12,29 +12,31 @@ import ImagePreview from './ImagePreview';
 export default function ReferenceImagesPanel({
   maxImages, files = [], onAdd, onBrowse, onRemove,
   maxVideos = 0, videoIds = [], history = [], onAddVideo, onPickVideo, onRemoveVideo,
-  maxAudios = 0, audioFiles = [], onAddAudio, onRemoveAudio,
+  maxAudios = 0, audioFiles = [], onAddAudio, onRemoveAudio, withInputImage = true,
 }) {
-  const maxExtra = Math.max(0, maxImages - 1);
+  // `withInputImage={false}`: a reference-only render (no start frame), so every row is a reference.
+  const offset = withInputImage ? 1 : 0;
+  const maxExtra = Math.max(0, maxImages - offset);
   return (
     <section aria-label="Reference images" className="space-y-2 border border-port-border rounded p-3">
       <div className="flex items-center justify-between">
         <h3 className="text-xs font-semibold text-gray-300">Reference images</h3>
-        <span className="text-[10px] text-gray-500">{files.length + 1}/{maxImages} incl. input image</span>
+        <span className="text-[10px] text-gray-500">{files.length + offset}/{maxImages}{withInputImage ? ' incl. input image' : ''}</span>
       </div>
       {files.map((file, i) => (
         <div key={i} className="flex items-start gap-2">
           <div className="flex-1 space-y-1">
             <GalleryPickButton
-              label={`Reference image ${i + 2}`}
+              label={`Reference image ${i + 1 + offset}`}
               filled={!!file}
               onClick={() => onBrowse(i)}
             />
-            {file && <ImagePreview src={`/data/images/${file}`} alt={`Reference image ${i + 2}`} label={file} />}
+            {file && <ImagePreview src={`/data/images/${file}`} alt={`Reference image ${i + 1 + offset}`} label={file} />}
           </div>
           <button
             type="button"
             onClick={() => onRemove(i)}
-            aria-label={`Remove reference image ${i + 2}`}
+            aria-label={`Remove reference image ${i + 1 + offset}`}
             className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center mt-1 p-1 text-gray-400 hover:text-port-error"
           >
             <X className="w-3.5 h-3.5" />
@@ -50,7 +52,7 @@ export default function ReferenceImagesPanel({
         <ListPlus className="w-3.5 h-3.5" /> Add reference image
       </button>
       <p className="text-[10px] text-gray-500 leading-snug">
-        The input image is read first, then these in order. Pull from your gallery only.
+        {withInputImage ? 'The input image is read first, then these in order.' : 'Read in this order.'} Pull from your gallery only.
       </p>
       {maxVideos > 0 && (
         <div className="space-y-1.5 border-t border-port-border/50 pt-2">

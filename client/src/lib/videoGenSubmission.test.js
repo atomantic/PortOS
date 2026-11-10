@@ -289,6 +289,13 @@ describe('buildVideoGenSubmission — prompt additions (#11317)', () => {
     expect(buildVideoGenSubmission(baseArgs({ ...args, mode: 'text' }))).not.toHaveProperty('referenceImageFiles');
   });
 
+  it('sends Higgsfield reference images only in Text mode on a family with a reference route', () => {
+    const args = { hostedLane: 'higgsfield', mode: 'text', referenceImageFiles: ['one.png', ''] };
+    expect(buildVideoGenSubmission(baseArgs({ ...args, higgsfieldModelId: 'bytedance/seedance-2.5' })).referenceImageFiles).toEqual(['one.png']);
+    expect(buildVideoGenSubmission(baseArgs({ ...args, higgsfieldModelId: 'kling-video/v3.0/pro' }))).not.toHaveProperty('referenceImageFiles');
+    expect(buildVideoGenSubmission(baseArgs({ ...args, mode: 'image', sourceImageFile: 'start.png' }))).not.toHaveProperty('referenceImageFiles');
+  });
+
   it('drops carried style metadata when switching to Runway character performance', () => {
     const payload = buildVideoGenSubmission(baseArgs({
       hostedLane: 'runway', mode: 'character-performance', runwayModelId: 'act_two',

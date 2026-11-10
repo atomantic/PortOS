@@ -449,7 +449,7 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
   // per gate and having to keep the spellings in sync.
   const localModel = !data.mediaProviderPeerId && mode === IMAGE_GEN_MODE.LOCAL ? selectLocalImageModelFromSettings(settings, data.modelId, getImageModels(), localModelCandidates) : null;
   const initInputCount = initUpload || data.initImageFile ? 1 : 0;
-  const selectedCloudModel = [IMAGE_GEN_MODE.RUNWAY, IMAGE_GEN_MODE.FAL].includes(mode)
+  const selectedCloudModel = [IMAGE_GEN_MODE.RUNWAY, IMAGE_GEN_MODE.FAL, IMAGE_GEN_MODE.HIGGSFIELD].includes(mode)
     ? data.cloudModel || resolveCloudProviderConfig(settings, mode)?.modelId : data.cloudModel || null;
   if (data.musicVideo?.sceneId) {
     const { requireCatalogRenderReady, assertCatalogReferenceFiles, assertCatalogInputBasis } = await import('../musicVideo/clipCastReferences.js');

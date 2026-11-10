@@ -198,6 +198,7 @@ const CONDITIONING_MODEL_BY_BACKEND = {
   [VIDEO_GEN_MODE.REACTOR]: { id: 'reactor-video', supportedModes: ['text', 'image'] },
   [VIDEO_GEN_MODE.RUNWAY]: { id: 'runway-video', supportedModes: ['text', 'image'] },
   [VIDEO_GEN_MODE.GEMINI]: { id: 'gemini-video', supportedModes: ['text', 'image'] },
+  [VIDEO_GEN_MODE.HIGGSFIELD]: { id: 'higgsfield-video', supportedModes: ['text', 'image'] },
 };
 
 /** The tagged loom's render dimensions, applied to `body`; null when untagged or the loom is gone. */
@@ -380,7 +381,7 @@ const submitHostedLane = async ({ body, prepared, backend, hosted, performancePa
   // the model takes an aspect ratio, and its frames cropped to it where the
   // output follows the start frame (falFrameAspect.js). An explicit
   // visual-conditioning aspect (FableLoom) still wins.
-  const projectAspect = (backend === VIDEO_GEN_MODE.FAL || backend === VIDEO_GEN_MODE.RUNWAY || backend === VIDEO_GEN_MODE.GEMINI) && body.musicVideo && !body.visualConditioning?.render?.parameters?.aspectRatio
+  const projectAspect = (backend === VIDEO_GEN_MODE.FAL || backend === VIDEO_GEN_MODE.RUNWAY || backend === VIDEO_GEN_MODE.GEMINI || backend === VIDEO_GEN_MODE.HIGGSFIELD) && body.musicVideo && !body.visualConditioning?.render?.parameters?.aspectRatio
     ? await musicVideoProjectAspect(body.musicVideo.projectId)
     : null;
   // A Music Video shot animated on Grok or Gemini carries its cast sheets beside the still,

@@ -16,6 +16,7 @@ import { validateRunwayVideoInput } from './runwayVideoInputs.js';
 import { storyboardGuidanceJobParams } from './storyboardGuidance.js';
 import { videoReferenceImageSlots } from './requestFields.js';
 import { GEMINI_OMNI_WEB_MODEL } from '../../lib/geminiWebVideo.js';
+import { HIGGSFIELD_DEFAULT_VIDEO_MODEL, buildHiggsfieldVideoRequest } from '../../lib/higgsfieldVideoModels.js';
 
 // Every hosted backend anchors a reference image as frame one, so a loose
 // reference mode is a local-runtime promise it can never keep. Submission
@@ -118,6 +119,39 @@ async function stageRunwayInputs(ctx) {
     if (!sourceImagePath) await refuse('Reference images need a start frame — supply a source image.');
     if (hasEndFrame && !model.referenceImages.keepsFrames) await refuse(`${model.label} cannot combine an end frame with reference images. Turn one of them off.`);
     if (pickedReferences.length + (hasEndFrame ? 2 : 1) > model.referenceImages.max) await refuse(`${model.label} takes at most ${model.referenceImages.max} images, its frames included.`);
+  }
+  const referenceImagePaths = [];
+  for (const file of pickedReferences) {
+    const path = resolveGalleryImage(file);
+    if (!path) await refuse(`The reference image ${file} could not be found in the gallery.`);
+    referenceImagePaths.push(path);
+  }
+  const references = referenceImagePaths.length ? { referenceImagePaths } : {};
+  if (!hasEndFrame) return references;
+  const endFrame = await stageEndFrame(ctx);
+  return { ...references, lastImagePath: endFrame.path, ...(endFrame.owned ? { uploadedTempPaths: [endFrame.path] } : {}) };
+}
+
+// Higgsfield renders a cutaway from a prompt, a start frame (optionally with an
+// end frame) or gallery reference images. The catalog dry run refuses a
+// combination the chosen family cannot take before anything is staged.
+async function stageHiggsfieldInputs(ctx) {
+  const { body, uploads, sourceImagePath, cleanupStaged } = ctx;
+  const refuse = async (message) => {
+    await cleanupStaged();
+    throw new ServerError(message, { status: 400, code: 'VALIDATION_ERROR' });
+  };
+  if (uploads.audioFile) await refuse('Higgsfield renders cutaways only here; it takes no source audio.');
+  const hasEndFrame = !!uploads.lastImage || !!body.lastImageFile;
+  const pickedReferences = body.musicVideo ? [] : body.referenceImageFiles || [];
+  try {
+    buildHiggsfieldVideoRequest({
+      modelId: body.higgsfieldModelId || HIGGSFIELD_DEFAULT_VIDEO_MODEL, prompt: body.prompt, negativePrompt: body.negativePrompt,
+      imageUrl: sourceImagePath ? 'pending:image' : null, endImageUrl: hasEndFrame ? 'pending:end-image' : null,
+      referenceImageUrls: pickedReferences.map((_, i) => `pending:reference-${i + 1}`),
+    });
+  } catch (err) {
+    await refuse(err.message);
   }
   const referenceImagePaths = [];
   for (const file of pickedReferences) {
@@ -243,6 +277,27 @@ export const HOSTED_VIDEO_SUBMISSIONS = {
       height: body.height,
       duration: body.runwayDuration,
       ...(body.runwayResolution ? { resolution: body.runwayResolution } : {}),
+    }),
+  },
+  [VIDEO_GEN_MODE.HIGGSFIELD]: {
+    prepare: (settings) => ({ usable: isVideoModeUsable(settings, VIDEO_GEN_MODE.HIGGSFIELD), extras: {} }),
+    stageInputs: stageHiggsfieldInputs,
+    validateRetry: (params) => assertAnchoredReference(VIDEO_GEN_MODE.HIGGSFIELD, params),
+    errorCode: 'HIGGSFIELD_NOT_CONFIGURED',
+    errorMessage: 'No Higgsfield credential configured — add it in Settings → Credentials (or the HIGGSFIELD_API_KEY env var) first',
+    // The family, length, size and audio flag are resolved against the catalog by videoGen/higgsfield.js.
+    buildParams: (body, prepared) => ({
+      modelId: body.higgsfieldModelId,
+      ...(prepared.lastImagePath ? { lastImagePath: prepared.lastImagePath } : {}),
+      ...(prepared.referenceImagePaths?.length ? { referenceImagePaths: prepared.referenceImagePaths } : {}),
+      ...(prepared.uploadedTempPaths?.length ? { uploadedTempPaths: prepared.uploadedTempPaths } : {}),
+      aspectRatio: body.visualConditioning?.render?.parameters?.aspectRatio,
+      width: body.width,
+      height: body.height,
+      duration: body.higgsfieldDuration,
+      ...(body.higgsfieldResolution ? { resolution: body.higgsfieldResolution } : {}),
+      ...(body.higgsfieldGenerateAudio === true ? { generateAudio: true } : {}),
+      ...(body.higgsfieldSeed != null ? { seed: body.higgsfieldSeed } : {}),
     }),
   },
   [VIDEO_GEN_MODE.GEMINI]: {

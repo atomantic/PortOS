@@ -19,7 +19,8 @@ import ReferenceImagePicker from './ReferenceImagePicker';
 import { appendTriggerWords } from '../../lib/loraTriggers';
 import {
   RUNWAY_IMAGE_DEFAULT_MODEL,
-  AGY_IMAGEGEN_DEFAULT_MODEL, FAL_IMAGE_DEFAULT_MODEL, FAL_IMAGE_MODEL_OPTIONS, IMAGE_GEN_MODE, falImageFamily,
+  AGY_IMAGEGEN_DEFAULT_MODEL, FAL_IMAGE_DEFAULT_MODEL, FAL_IMAGE_MODEL_OPTIONS, HIGGSFIELD_IMAGE_DEFAULT_MODEL,
+  HIGGSFIELD_IMAGE_MODEL_OPTIONS, IMAGE_GEN_MODE, falImageFamily, higgsfieldImageFamily,
 } from '../../lib/imageGenBackends';
 
 const ERROR_HEADINGS = {
@@ -44,10 +45,10 @@ export default function ImageGenFormEditor({ form, backend, generation }) {
     effectiveMode,
     isLocalMode,
     isAgyMode,
-    isFalMode, isRunwayMode, effectiveRunwayModel,
+    isFalMode, isHiggsfieldMode, isRunwayMode, effectiveRunwayModel,
     remoteTarget,
     effectiveAgyModel,
-    effectiveFalModel,
+    effectiveFalModel, effectiveHiggsfieldModel,
   } = backend;
   const {
     generating,
@@ -249,12 +250,14 @@ export default function ImageGenFormEditor({ form, backend, generation }) {
             onModelDownloadCancel={modelDownload.cancel}
             runtimeStatus={isLocalMode ? backend.status : null}
             onRuntimeRemedy={backend.openRuntimeInstall}
-            cloudModels={isAgyMode ? backend.agy.models : isFalMode ? FAL_IMAGE_MODEL_OPTIONS : isRunwayMode ? [...runwayCatalog.imageModels, ...(effectiveRunwayModel && !runwayCatalog.imageModels.some((m) => m.id === effectiveRunwayModel) ? [{ id: effectiveRunwayModel, label: `${effectiveRunwayModel} (unavailable)` }] : [])] : []}
-            cloudModel={isRunwayMode ? effectiveRunwayModel : isFalMode ? effectiveFalModel : effectiveAgyModel}
-            onCloudModelChange={isRunwayMode ? fields.setRunwayModel : isFalMode ? fields.setFalModel : fields.setAgyModel}
-            cloudModelLabel={isRunwayMode ? 'Runway model' : isFalMode ? 'fal.ai model' : 'Agent model'}
+            cloudModels={isAgyMode ? backend.agy.models : isFalMode ? FAL_IMAGE_MODEL_OPTIONS : isHiggsfieldMode ? HIGGSFIELD_IMAGE_MODEL_OPTIONS : isRunwayMode ? [...runwayCatalog.imageModels, ...(effectiveRunwayModel && !runwayCatalog.imageModels.some((m) => m.id === effectiveRunwayModel) ? [{ id: effectiveRunwayModel, label: `${effectiveRunwayModel} (unavailable)` }] : [])] : []}
+            cloudModel={isRunwayMode ? effectiveRunwayModel : isFalMode ? effectiveFalModel : isHiggsfieldMode ? effectiveHiggsfieldModel : effectiveAgyModel}
+            onCloudModelChange={isRunwayMode ? fields.setRunwayModel : isFalMode ? fields.setFalModel : isHiggsfieldMode ? fields.setHiggsfieldModel : fields.setAgyModel}
+            cloudModelLabel={isRunwayMode ? 'Runway model' : isFalMode ? 'fal.ai model' : isHiggsfieldMode ? 'Higgsfield model' : 'Agent model'}
             cloudModelDefaultLabel={isRunwayMode ? settings.savedRunwayModel || RUNWAY_IMAGE_DEFAULT_MODEL : isFalMode
               ? falImageFamily(settings.savedFalModel || FAL_IMAGE_DEFAULT_MODEL)?.label || FAL_IMAGE_DEFAULT_MODEL
+              : isHiggsfieldMode
+              ? higgsfieldImageFamily(settings.savedHiggsfieldModel || HIGGSFIELD_IMAGE_DEFAULT_MODEL)?.label || HIGGSFIELD_IMAGE_DEFAULT_MODEL
               : settings.savedAgyModel || AGY_IMAGEGEN_DEFAULT_MODEL}
           />
           {isAgyMode && backend.agy.error && (

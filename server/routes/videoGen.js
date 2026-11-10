@@ -108,6 +108,7 @@ import { deleteMediaAnywhere, cancelPendingDelete } from '../services/mediaRemot
 import { assertMediaDeletable } from '../services/mediaUsage.js';
 import { VIDEO_TILING_MODES } from '../lib/videoTiling.js';
 import { RUNWAY_SPECIAL_VIDEO_MODES, RUNWAY_ACT_TWO_RATIOS, RUNWAY_ALEPH_ASPECTS } from '../lib/runwaySpecialVideoModels.js';
+import { HIGGSFIELD_VIDEO_MODEL_IDS } from '../lib/higgsfieldVideoModels.js';
 
 const router = Router();
 
@@ -331,7 +332,7 @@ export const generateBodySchema = z.object({
   // ignore the local-only knobs below; they read prompt/negativePrompt,
   // width/height (mapped to an aspect ratio), sourceImageFile/sourceImage,
   // and their own duration field.
-  backend: z.enum(['local', 'grok', 'fal', 'reactor', 'runway', 'gemini']).optional(),
+  backend: z.enum(['local', 'grok', 'fal', 'reactor', 'runway', 'gemini', 'higgsfield']).optional(),
   // Grok image_to_video clip length in seconds — the shared schema (see
   // lib/grokVideoClip.js for which lengths grok actually delivers). Multipart
   // bodies arrive as strings, so coerce first.
@@ -374,6 +375,19 @@ export const generateBodySchema = z.object({
   ),
   // Output size ('720p', '1080p'); resolved per model, falling back to its default.
   runwayResolution: z.preprocess((v) => (v === '' ? undefined : v), z.string().min(1).max(16).optional()),
+  // Higgsfield family (lib/higgsfieldVideoModels.js), length, tier, audio and
+  // seed. The provider refuses an uncatalogued family and clamps the length.
+  higgsfieldModelId: z.enum(HIGGSFIELD_VIDEO_MODEL_IDS).optional(),
+  higgsfieldDuration: z.preprocess(
+    (v) => (v == null || v === '' ? undefined : Number(v)),
+    optionalNum(1, 60, 'higgsfieldDuration'),
+  ),
+  higgsfieldResolution: z.preprocess((v) => (v === '' ? undefined : v), z.enum(['480p', '720p', '1080p']).optional()),
+  higgsfieldGenerateAudio: z.preprocess(
+    (v) => (v === 'true' ? true : v === 'false' || v === '' ? undefined : v),
+    z.boolean().optional(),
+  ),
+  higgsfieldSeed: optionalNum(0, 2147483647, 'higgsfieldSeed'),
   // reactor.inc fast-h3 (#6214): the clip id to chain from
   // (continue_from_clip_id — frame-accurate continuation, unlike fal/grok
   // which start a fresh render each time) and clip length in seconds. The
@@ -676,6 +690,7 @@ router.get('/status', asyncHandler(async (_req, res) => {
     reactorEnabled: isVideoModeUsable(s, VIDEO_GEN_MODE.REACTOR),
     runwayEnabled: isVideoModeUsable(s, VIDEO_GEN_MODE.RUNWAY),
     geminiEnabled: isVideoModeUsable(s, VIDEO_GEN_MODE.GEMINI),
+    higgsfieldEnabled: isVideoModeUsable(s, VIDEO_GEN_MODE.HIGGSFIELD),
   });
 }));
 

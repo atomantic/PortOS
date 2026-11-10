@@ -32,6 +32,7 @@ import { RENDER_TARGET, normalizeRenderPinValue } from '../../lib/renderTargets.
 import { nearestGrokDuration } from '../../lib/grokVideoClip.js';
 import { nearestReactorAspect } from '../../lib/reactorVideoClip.js';
 import { getRunwayVideoModel } from '../../lib/runwayVideoModels.js';
+import { getHiggsfieldVideoModel } from '../../lib/higgsfieldVideoModels.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { renderTargetDefaults } from '../imageGen/cloudProviderConfig.js';
 import { VIDEO_GEN_MODE, VIDEO_GEN_MODES, resolveVideoMode, hasVideoPin, isVideoModeUsable } from './modes.js';
@@ -73,7 +74,7 @@ export function resolveVideoBackendPin(project, settings, { target = RENDER_TARG
   // only a curated catalog id); Reactor and Grok choose their models in the
   // renderer. A lapsed fal or Runway pin must not pass its model id into the
   // legacy local fallback either.
-  const cloudModelPin = mode === VIDEO_GEN_MODE.FAL || mode === VIDEO_GEN_MODE.REACTOR || mode === VIDEO_GEN_MODE.RUNWAY;
+  const cloudModelPin = mode === VIDEO_GEN_MODE.FAL || mode === VIDEO_GEN_MODE.REACTOR || mode === VIDEO_GEN_MODE.RUNWAY || mode === VIDEO_GEN_MODE.HIGGSFIELD;
   const localModelId = (!cloudModelPin && normalizeRenderPinValue(raw?.modelId))
     || targetDefaults.videoModel || null;
   const modelId = resolvedMode === VIDEO_GEN_MODE.LOCAL ? localModelId
@@ -81,7 +82,9 @@ export function resolveVideoBackendPin(project, settings, { target = RENDER_TARG
       ? normalizeRenderPinValue(raw?.modelId)
       : resolvedMode === VIDEO_GEN_MODE.RUNWAY && mode === VIDEO_GEN_MODE.RUNWAY
         ? getRunwayVideoModel(normalizeRenderPinValue(raw?.modelId))?.id || null
-        : null;
+        : resolvedMode === VIDEO_GEN_MODE.HIGGSFIELD && mode === VIDEO_GEN_MODE.HIGGSFIELD
+          ? getHiggsfieldVideoModel(normalizeRenderPinValue(raw?.modelId))?.id || null
+          : null;
   return {
     // A model pin counts as a pin even with no mode beside it. Naming a local
     // video model IS a configured choice, and the resolved mode for an
@@ -194,6 +197,15 @@ export function videoBackendJobParams(settings, pin, params = {}, { durationSeco
     return {
       ...base,
       mode: VIDEO_GEN_MODE.FAL,
+      videoMode: sourceImagePath ? 'image' : 'text',
+      ...(pin.modelId ? { modelId: pin.modelId } : {}),
+      ...(duration != null ? { duration } : {}),
+    };
+  }
+  if (pin.mode === VIDEO_GEN_MODE.HIGGSFIELD) {
+    return {
+      ...base,
+      mode: VIDEO_GEN_MODE.HIGGSFIELD,
       videoMode: sourceImagePath ? 'image' : 'text',
       ...(pin.modelId ? { modelId: pin.modelId } : {}),
       ...(duration != null ? { duration } : {}),
