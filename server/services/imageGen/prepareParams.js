@@ -181,6 +181,14 @@ function placeGreyboxReferences(namedReferenceFiles, imageIds, { cached = [], fr
 function reconcileCardFrameReferences(data, namedReferenceFiles, { project, scene, castMedia, greybox, referenceFilesOmitted }) {
   const tag = data.musicVideo;
   if (!tag?.compose || !scene) return;
+  if (tag.refine && tag.includeReferences === false) {
+    const lead = tag.leadImageId || namedReferenceFiles[0];
+    if (!lead) throw new ServerError('Choose an image to refine', { status: 422, code: 'MUSIC_VIDEO_REFINE_IMAGE_REQUIRED' });
+    namedReferenceFiles.splice(0, namedReferenceFiles.length, lead);
+    data.referenceImageFiles = [lead];
+    data.musicVideo = { ...tag, castInputs: castInputsFromReferences(scene, []) };
+    return;
+  }
   if (musicVideoMissingFrameLinkedPicks(project, scene, castMedia).length) {
     throw new ServerError(FRAME_REFERENCE_UNAVAILABLE, { status: 409, code: 'MUSIC_VIDEO_FRAME_REFERENCE_MISSING' });
   }
@@ -210,6 +218,7 @@ function reconcileCardFrameReferences(data, namedReferenceFiles, { project, scen
 // and its mood-board style images. Mutates `data` and `namedReferenceFiles`.
 async function applyMusicVideoSceneInputs(data, { project, mode, localModel, cloudModel, namedReferenceFiles, referenceUploads, initInputCount, referenceFilesOmitted = false }) {
   let tag = data.musicVideo;
+  const referencesOff = tag.refine === true && tag.includeReferences === false;
   const scene = project?.scenes?.find((entry) => entry.sceneId === tag.sceneId);
   const [{ loadMusicVideoGreybox }, { loadLinkedStoryboardPanel }, castGuideMedia, subjectScale] = await Promise.all([
     import('../musicVideo/greyboxReferences.js'), import('../musicVideo/linkedPanel.js'),
@@ -217,9 +226,9 @@ async function applyMusicVideoSceneInputs(data, { project, mode, localModel, clo
     tag.compose ? import('../musicVideo/subjectScale.js') : null,
   ]);
   const [greybox, panel, castMedia, sizes] = await Promise.all([
-    loadMusicVideoGreybox(project, scene), tag.compose ? loadLinkedStoryboardPanel(project, scene) : null,
-    castGuideMedia?.loadSceneCastMedia(scene, { project }),
-    subjectScale?.loadMusicVideoSubjectSizes(project),
+    referencesOff ? null : loadMusicVideoGreybox(project, scene), tag.compose && !referencesOff ? loadLinkedStoryboardPanel(project, scene) : null,
+    referencesOff ? null : castGuideMedia?.loadSceneCastMedia(scene, { project }),
+    referencesOff ? null : subjectScale?.loadMusicVideoSubjectSizes(project),
   ]);
   reconcileCardFrameReferences(data, namedReferenceFiles, { project, scene, castMedia, greybox, referenceFilesOmitted });
   tag = data.musicVideo;
@@ -285,10 +294,10 @@ async function applyMusicVideoSceneInputs(data, { project, mode, localModel, clo
   }
   const reservedSlots = referenceUploads.length + initInputCount;
   const capacity = Math.max(0, musicVideoStyleReferenceCapacity(mode, localModel, cloudModel) - reservedSlots);
-  const styles = musicVideoStyleImages(project, namedReferenceFiles, capacity);
+  const styles = referencesOff ? [] : musicVideoStyleImages(project, namedReferenceFiles, capacity);
   // Named inputs precede uploads. Keep the latter's packed strength positions intact.
   if (!referenceUploads.length) namedReferenceFiles.push(...styles);
-  const look = musicVideoStylePrompt(project, referenceUploads.length ? 0 : styles.length);
+  const look = referencesOff ? '' : musicVideoStylePrompt(project, referenceUploads.length ? 0 : styles.length);
   if (look) {
     data.prompt = [data.prompt, look].filter(Boolean).join('. ');
     data.promptAdditions = [...(data.promptAdditions || []), promptAddition('mood-board-style', 'Mood board style', look)];

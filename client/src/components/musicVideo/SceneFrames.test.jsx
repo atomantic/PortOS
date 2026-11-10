@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useState } from 'react';
 import SceneFrames from './SceneFrames.jsx';
 
@@ -9,6 +9,40 @@ const scene = { sceneId: 's1', referenceImageId: 'start.png', endImageId: 'end.p
 // A remembered frame service would add a Model control beside From.
 beforeEach(() => localStorage.clear());
 const frames = (props) => render(<SceneFrames scene={scene} index={0} endFrames onEditLocal={vi.fn()} onSave={vi.fn()} {...props} />);
+
+// Catches refining the selection instead of the clicked candidate, or selecting it as a side effect.
+it.each(['image', 'endImage'])('refines an unselected %s take with optional shot references', async (kind) => {
+  const onGenerate = vi.fn();
+  const onSelectTake = vi.fn();
+  const shot = { ...scene, takes: [{ takeId: 'candidate', kind, assetId: 'candidate.png', status: 'candidate' }] };
+  const props = { project: { id: 'mv-example' }, scene: shot, onSelectTake,
+    ...(kind === 'image' ? { onGenerateFrame: onGenerate } : { onGenerateEndFrame: onGenerate }) };
+  const { rerender } = frames(props);
+  const candidate = () => within(screen.getAllByRole('listitem').find((item) => item.querySelector('img')?.getAttribute('src') === '/data/images/candidate.png'));
+  fireEvent.click(candidate().getByRole('button', { name: 'Refine take' }));
+  expect(screen.getByRole('button', { name: 'View refinement source full size' }).querySelector('img').getAttribute('src')).toBe('/data/images/candidate.png');
+  const input = screen.getByRole('textbox', { name: /What to change/ });
+  fireEvent.change(input, { target: { value: '  Raise the hand\nKeep the lighting  ' } });
+  const include = screen.getByRole('checkbox', { name: 'Include shot reference images' });
+  expect(include.checked).toBe(true);
+  fireEvent.click(include);
+  const { previewImagePrompt } = await import('../../services/apiImageVideo.js');
+  await waitFor(() => expect(previewImagePrompt).toHaveBeenCalledWith(expect.objectContaining({
+    musicVideo: expect.objectContaining({ leadImageId: 'candidate.png', refine: true, includeReferences: false }),
+  }), expect.anything()));
+  fireEvent.click(screen.getByRole('button', { name: /Render refined/ }));
+  expect(onGenerate).toHaveBeenLastCalledWith(shot, { referenceImageId: 'candidate.png', refine: '  Raise the hand\nKeep the lighting  ', includeReferences: false });
+  expect(onSelectTake).not.toHaveBeenCalled();
+  expect(candidate().queryByText('In use')).toBeNull();
+
+  fireEvent.click(candidate().getByRole('button', { name: 'Refine take' }));
+  fireEvent.change(screen.getByRole('textbox', { name: /What to change/ }), { target: { value: 'Change the hat' } });
+  fireEvent.click(screen.getByRole('button', { name: /Render refined/ }));
+  expect(onGenerate).toHaveBeenLastCalledWith(shot, { referenceImageId: 'candidate.png', refine: 'Change the hat' });
+
+  rerender(<SceneFrames {...props} index={0} endFrames onEditLocal={vi.fn()} onSave={vi.fn()} generatingFrame generatingEndFrame />);
+  expect(candidate().getByRole('button', { name: 'Refine take' }).disabled).toBe(true);
+});
 
 it('edits and saves each frame prompt on blur', () => {
   const onSave = vi.fn();

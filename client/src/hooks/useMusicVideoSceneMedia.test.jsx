@@ -55,6 +55,17 @@ describe('useMusicVideoSceneMedia in-flight restore and failure chip (#10154)', 
   beforeEach(() => { handlers.clear(); renderMusicVideoSceneFrame.mockClear(); getMusicVideoSceneJobs.mockReset(); });
   afterEach(cleanup);
 
+  it('forwards a candidate refinement and reference opt-out for either frame slot', async () => {
+    getMusicVideoSceneJobs.mockResolvedValue({ jobs: [] });
+    const { result } = setup();
+    for (const [method, slot] of [['generateFrame', 'start'], ['generateEndFrame', 'end']]) {
+      await act(async () => { await result.current[method](project.scenes[0], { referenceImageId: 'candidate.png', refine: '  Raise the hand  ', includeReferences: false }); });
+      expect(renderMusicVideoSceneFrame).toHaveBeenLastCalledWith('p1', 's1', {
+        slot, referenceImageId: 'candidate.png', refine: '  Raise the hand  ', includeReferences: false,
+      }, { silent: true });
+    }
+  });
+
   it('restores spinners for the server queue\'s in-flight renders after a reload, and "generate missing" skips them', async () => {
     getMusicVideoSceneJobs.mockResolvedValue({ jobs: [
       { jobId: 'job-a', lane: 'image', sceneId: 's1', status: 'running' },

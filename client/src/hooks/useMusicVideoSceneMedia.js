@@ -245,7 +245,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
    * instead: the prompt is the instruction, and the frame leads the shot's references.
    * `imageTarget` names this render's image service. Omit it and the project pin applies.
    */
-  const generateFrame = (scene, { revisionId, onJob, referenceImageId = null, refine = null, replaceSelection = false, thenClip = null, imageTarget = null } = {}) => {
+  const generateFrame = (scene, { revisionId, onJob, referenceImageId = null, refine = null, includeReferences = true, replaceSelection = false, thenClip = null, imageTarget = null } = {}) => {
     const refining = Boolean(refine?.trim() && referenceImageId);
     const problem = refining ? null : shotActionContractProblem(scene.direction?.actionContract, scene);
     if (problem) { toast.error(problem); return Promise.resolve({ ok: false }); }
@@ -256,7 +256,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     return renderMusicVideoSceneFrame(projectId, scene.sceneId, {
       slot: 'start',
       ...(imageTarget?.mode ? { imageTarget } : {}),
-      ...(refining ? { refine: refine.trim(), referenceImageId } : referenceImageId ? { fromFrame: true, referenceImageId } : {}),
+      ...(refining ? { refine, referenceImageId, ...(includeReferences ? {} : { includeReferences: false }) } : referenceImageId ? { fromFrame: true, referenceImageId } : {}),
       ...(revisionId ? { revisionId } : {}),
       ...(replaceSelection ? { select: true } : {}),
       ...(thenClip ? { thenClip } : {}),
@@ -306,7 +306,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
    * `slot: 'end'` tag); a fal clip on a model that takes an end frame then ends
    * on it. Resolves `{ ok }` like generateFrame.
    */
-  const generateEndFrame = (scene, { referenceImageId = scene.referenceImageId, refine = null, replaceSelection = false, imageTarget = null } = {}) => {
+  const generateEndFrame = (scene, { referenceImageId = scene.referenceImageId, refine = null, includeReferences = true, replaceSelection = false, imageTarget = null } = {}) => {
     const refining = Boolean(refine?.trim() && referenceImageId);
     const endPrompt = scene.endFramePrompt?.trim();
     if (!endPrompt && !refining) { toast.error('Describe the end frame first'); return Promise.resolve({ ok: false }); }
@@ -315,7 +315,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
     return renderMusicVideoSceneFrame(projectId, scene.sceneId, {
       slot: 'end',
       ...(imageTarget?.mode ? { imageTarget } : {}),
-      ...(refining ? { refine: refine.trim(), referenceImageId } : referenceImageId ? { fromFrame: true, referenceImageId } : {}),
+      ...(refining ? { refine, referenceImageId, ...(includeReferences ? {} : { includeReferences: false }) } : referenceImageId ? { fromFrame: true, referenceImageId } : {}),
       ...(replaceSelection ? { select: true } : {}),
     }, { silent: true })
       .then((res) => {

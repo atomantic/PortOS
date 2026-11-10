@@ -2344,6 +2344,7 @@ export const musicVideoSceneFrameRenderSchema = z.object({
   select: z.boolean().optional(),
   imageTarget: musicVideoFrameImageTargetSchema.optional(),
   refine: z.string().max(32000).optional(),
+  includeReferences: z.boolean().optional(),
   fromFrame: z.boolean().optional(),
   referenceImageId: galleryImageName.optional(),
   revisionId: z.string().min(1).max(200).optional(),
