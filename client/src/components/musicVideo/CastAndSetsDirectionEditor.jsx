@@ -14,6 +14,7 @@ const WORLD_FIELDS = [
 ];
 
 const draftFrom = (direction) => ({
+  renderingMedium: direction.renderingMedium || '',
   protagonist: {
     ...Object.fromEntries(PROTAGONIST_FIELDS.map(([key]) => [key, direction.protagonist?.[key] || ''])),
     expressions: (direction.protagonist?.expressions || []).join('\n'),
@@ -33,6 +34,7 @@ function editsFrom(direction, draft) {
   const world = pick(WORLD_FIELDS.map(([key]) => key), 'world');
   const sets = (direction.sets || []).filter((set) => draft.roles[set.id] !== base.roles[set.id]).map((set) => ({ id: set.id, imageRole: draft.roles[set.id] }));
   return {
+    ...(draft.renderingMedium !== base.renderingMedium ? { renderingMedium: draft.renderingMedium } : {}),
     ...(Object.keys(protagonist).length ? { protagonist } : {}),
     ...(Object.keys(world).length ? { world } : {}),
     ...(sets.length ? { sets } : {}),
@@ -40,12 +42,13 @@ function editsFrom(direction, draft) {
 }
 
 /**
- * Direct edits to a procedural Cast & Sets direction — how the character is
- * built and moves, the world's rules and each set's image role — saved through
+ * Direct edits to the people-sheet rendering medium, or a procedural direction
+ * (character construction, world rules and set image roles), saved through
  * the check-in's revision path. Only changed fields are sent; the parent keys
  * this by revision so a saved (or regenerated) direction resets the draft.
  */
 export default function CastAndSetsDirectionEditor({ project, direction, busy, onSave }) {
+  const procedural = direction.medium === 'procedural';
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState(() => draftFrom(direction));
   const edits = editsFrom(direction, draft);
@@ -77,14 +80,21 @@ export default function CastAndSetsDirectionEditor({ project, direction, busy, o
     <fieldset disabled={busy} className="w-full min-w-0 space-y-3 rounded border border-port-border p-2">
       <legend className="px-1 text-xs text-port-text-muted">Edit direction</legend>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        {PROTAGONIST_FIELDS.map((f) => field('protagonist', f))}
-        <div className="sm:col-span-2">
+        {!procedural && <div className="sm:col-span-2">
+          <label htmlFor={idFor('renderingMedium')} className="text-xs">People-sheet rendering medium</label>
+          <textarea id={idFor('renderingMedium')} rows={2} className={inputClass} value={draft.renderingMedium}
+            onChange={(e) => setDraft((d) => ({ ...d, renderingMedium: e.target.value }))} />
+          <p className="text-xs text-port-text-muted">Sent verbatim, separate from scene lighting and grading. Each age can override it in its image editor. Empty uses legacy inference: recognized media from the scene look or project style, otherwise photorealistic editorial photography. Inference cannot recognize every medium; set one here before regenerating.</p>
+          {draft.renderingMedium.length > 500 && <p role="alert" className="text-xs text-port-warning">Rendering medium exceeds 500 characters. Shorten it before saving.</p>}
+        </div>}
+        {procedural && PROTAGONIST_FIELDS.map((f) => field('protagonist', f))}
+        {procedural && <div className="sm:col-span-2">
           <label htmlFor={idFor('expressions')} className="text-xs">Expressions (one per line)</label>
           <textarea id={idFor('expressions')} rows={3} className={inputClass} value={draft.protagonist.expressions} onChange={(e) => setField('protagonist', 'expressions', e.target.value)} />
-        </div>
-        {WORLD_FIELDS.map((f) => field('world', f))}
+        </div>}
+        {procedural && WORLD_FIELDS.map((f) => field('world', f))}
       </div>
-      {(direction.sets || []).length > 0 && (
+      {procedural && (direction.sets || []).length > 0 && (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {direction.sets.map((set) => (
             <div key={set.id}>
@@ -98,7 +108,7 @@ export default function CastAndSetsDirectionEditor({ project, direction, busy, o
       )}
       <p className="text-xs text-port-text-muted">Saving revises this check-in. Only images whose prompt changes are re-rendered.</p>
       <div className="flex flex-wrap gap-2">
-        <button type="button" disabled={!dirty} onClick={() => onSave(edits).then((res) => { if (res) setOpen(false); })} className="flex items-center gap-1 rounded px-3 py-1.5 text-sm min-h-[44px] pointer-fine:sm:min-h-0 bg-port-accent text-white disabled:opacity-50">
+        <button type="button" disabled={!dirty || draft.renderingMedium.length > 500} onClick={() => onSave(edits).then((res) => { if (res) setOpen(false); })} className="flex items-center gap-1 rounded px-3 py-1.5 text-sm min-h-[44px] pointer-fine:sm:min-h-0 bg-port-accent text-white disabled:opacity-50">
           <Save size={14} aria-hidden="true" /> Save direction
         </button>
         <button type="button" onClick={() => { setDraft(draftFrom(direction)); setOpen(false); }} className="rounded px-3 py-1.5 text-sm min-h-[44px] pointer-fine:sm:min-h-0 text-port-text-muted">Cancel</button>

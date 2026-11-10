@@ -59,6 +59,7 @@ const MOOD_BOARD_TEXT_ONLY = 'The image generator never sees the mood board: car
 // in either (a mood board's composed style often describes one) lands in the plate.
 const LOOK_AND_SET_RULES = [
   '- look: palette, light quality, film stock, grain, texture and any explicitly requested rendering medium only. Never a person, place, object or pose: the scene look is appended to set plates and in-set frames; people reference sheets retain only the rendering medium on a neutral field.',
+  '- renderingMedium: the explicit visual medium (for example scratchboard, watercolor or photography), separate from scene look and the execution-policy medium. Preserve a director-specified medium verbatim, without adding lighting, film stock or grading. Populate it for new photographic directions. An age form may override it; empty or absent inherits the direction medium. On revisions preserve existing renderingMedium values unless the director requests a change.',
   '- sets: describe the EMPTY place. No people, characters, figures or actions; the protagonist appears only in tests.',
   '- sets: preserve the director\'s requested story details, including deliberate unusual or stylized arrangements. Otherwise, choose details consistent with each other, the described place and its era; avoid unexplained contradictions such as a pristine parked car at a place described as deserted or an unintended second post on a single-pole hoop. Name each fixture once.',
 ].join('\n');
@@ -271,6 +272,7 @@ function fixedCastingBlock(project) {
 }
 
 const OUTPUT_SHAPE = `{
+  "renderingMedium": "<visual medium only, preserving the director's words; e.g. scratchboard>",
   "logline": "<one or two sentences: who, where, what happens>",
   "interpretation": "<how the song's references and themes shape this world>",
   "look": "<one line of photographic look: palette, light quality, film stock, grain, texture; no people, places, objects or poses>",
@@ -284,7 +286,7 @@ const OUTPUT_SHAPE = `{
     "gesture": "<a recurring gesture tied to a lyric hook, quoting the hook>",
     "rules": ["<continuity or safety rule>"],
     "expressions": ["<a mood from the story: what the face, eyes and head do>"],
-    "forms": [{ "id": "<short-slug>", "label": "<e.g. Age 7>", "age": "<age>", "description": "<how they look at that age>", "hair": "<hair at that age>", "wardrobe": "<their outfit at that age>", "height": "<their height at that age, e.g. 4 ft (122 cm) at 7>", "era": "<the year or period this age is seen in, e.g. 1965>", "look": "<the film stock, format and color of that memory when it differs from the main look, e.g. black-and-white 8mm home movie, heavy grain; or empty>", "subjectId": "<the FIXED CASTING subject id of the protagonist at this age, or empty>" }]
+    "forms": [{ "id": "<short-slug>", "label": "<e.g. Age 7>", "age": "<age>", "description": "<how they look at that age>", "hair": "<hair at that age>", "wardrobe": "<their outfit at that age>", "height": "<their height at that age, e.g. 4 ft (122 cm) at 7>", "era": "<the year or period this age is seen in, e.g. 1965>", "look": "<the film stock, format and color of that memory when it differs from the main look, e.g. black-and-white 8mm home movie, heavy grain; or empty>", "renderingMedium": "<visual medium override for this age, or empty to inherit>", "subjectId": "<the FIXED CASTING subject id of the protagonist at this age, or empty>" }]
   },
   "looks": [{ "name": "<SHORT NAME>", "description": "<the complete outfit>", "chapters": "<which parts of the song>" }],
   "cast": [{ "id": "<short-slug>", "name": "<a name>", "role": "<what they are in the video: drummer, shopkeeper, ...>", "description": "<who they are: age, vibe, attitude>", "height": "<their height, e.g. 5 ft 10 in (178 cm)>", "face": "<face: skin, eyes, brows, distinguishing features>", "hair": "<hair>", "wardrobe": "<their one outfit>" }],
@@ -529,6 +531,7 @@ const formSchema = z.preprocess(withoutNulls, z.object({
   height: prose(HEIGHT).optional(),
   era: prose(SHORT).optional(),
   look: prose(500).optional(),
+  renderingMedium: z.string().max(500).optional(),
   subjectId: text(64).optional(),
 }).passthrough());
 
@@ -607,6 +610,7 @@ const overlaySchema = z.union([
 // One lenient parser per field: a field that does not fit its shape counts as
 // absent (the merge keeps the current value) rather than failing the answer.
 const FIELD_PARSERS = {
+  renderingMedium: z.string().max(500),
   look: text(500),
   logline: text(TEXT),
   interpretation: text(2000),
@@ -770,6 +774,8 @@ function normalizeForms(forms, previous = []) {
       // The bound subject's name (stamped by the service), kept while the binding is.
       const subjectName = subjectId && String((subjectId === prior?.subjectId && prior?.subjectName) || f.subjectName || '').trim().slice(0, 120);
       return { id, label: f.label || `Age ${f.age}`, age: f.age || '', description: f.description, hair: f.hair || '', wardrobe: f.wardrobe || '',
+        ...((hasOwn(f, 'renderingMedium') || hasOwn(prior, 'renderingMedium'))
+          ? { renderingMedium: hasOwn(f, 'renderingMedium') ? f.renderingMedium : prior.renderingMedium } : {}),
         ...(f.height ? { height: f.height } : {}), ...(f.era ? { era: f.era } : {}), ...(f.look ? { look: f.look } : {}),
         ...(subjectId ? { subjectId } : {}), ...(subjectName ? { subjectName } : {}) };
     });
@@ -864,6 +870,8 @@ export function mergeCastAndSetsDirection(previous, parsed, { sections = [], med
     logline: pick('logline', ''),
     interpretation: pick('interpretation', ''),
     look: pick('look', ''),
+    ...((hasOwn(parsed, 'renderingMedium') || hasOwn(base, 'renderingMedium'))
+      ? { renderingMedium: pick('renderingMedium', '') } : {}),
     protagonist,
     looks,
     // Photographic only: a procedural cast lives in `definitions`.
@@ -946,7 +954,7 @@ function patchItems(list, patches, { what, keyOf, fields, extra = () => ({}) }) 
  * catalog-linked supporting character (`fixedCast`; unlink it in Creative setup).
  */
 export function applyCastAndSetsDirectionEdits(previous, edits, { sections = [], fixedCast = [] } = {}) {
-  if (edits?.sets?.length && !edits.protagonist && !edits.world && edits.sets.every((s) => Object.hasOwn(s, 'setReference') && !Object.hasOwn(s, 'imageRole'))) {
+  if (!hasOwn(edits, 'renderingMedium') && edits?.sets?.length && !edits.protagonist && !edits.world && edits.sets.every((s) => Object.hasOwn(s, 'setReference') && !Object.hasOwn(s, 'imageRole'))) {
     const updates = new Map(edits.sets.map((s) => [s.id, s.setReference]));
     if ([...updates.keys()].some((id) => !previous.sets?.some((s) => s.id === id))) {
       throw new ServerError('Unknown set', { status: 422, code: 'CAST_SETS_UNKNOWN_SET' });
@@ -957,6 +965,7 @@ export function applyCastAndSetsDirectionEdits(previous, edits, { sections = [],
   }
   const procedural = previous?.medium === 'procedural';
   const parsed = {};
+  if (hasOwn(edits, 'renderingMedium')) parsed.renderingMedium = edits.renderingMedium;
   let renamedLooks = new Map(), currentLookNames = new Set(), currentLookNamesExact = new Set();
   if (edits?.protagonist) {
     const protagonist = pickText(edits.protagonist, procedural ? CAST_SETS_EDITABLE_PROTAGONIST : CAST_SETS_EDITABLE_PHOTO_PROTAGONIST);
@@ -1052,6 +1061,7 @@ function describeEdits(previous, direction) {
     });
   };
   return [
+    ...((hasOwn(previous, 'renderingMedium') !== hasOwn(direction, 'renderingMedium') || differs(previous.renderingMedium, direction.renderingMedium)) ? ['rendering medium'] : []),
     ...Object.keys({ ...CAST_SETS_EDITABLE_PROTAGONIST, ...CAST_SETS_EDITABLE_PHOTO_PROTAGONIST }).filter((key) => differs(p0[key], p1[key])),
     ...['expressions', 'forms'].filter((key) => differs(p0[key] || [], p1[key] || [])),
     ...Object.keys(CAST_SETS_EDITABLE_WORLD).filter((key) => differs(previous.world?.[key], direction.world?.[key])).map((key) => `world ${key}`),

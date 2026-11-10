@@ -11,11 +11,11 @@ const fieldClass = 'w-full min-w-0 rounded border border-port-border bg-port-bg 
 
 const PROTAGONIST_FIELDS = [['name', 'Name'], ['description', 'Who they are'], ['height', 'Height'], ['face', 'Face'], ['hair', 'Hair'], ['signature', 'Signature detail'], ['gesture', 'Gesture']];
 const FORM_FIELDS = [['label', 'Label'], ['age', 'Age'], ['description', 'How they look at that age'], ['height', 'Height at that age'], ['hair', 'Hair'], ['wardrobe', 'Wardrobe'],
-  ['era', 'Era (year or period)'], ['look', 'Film look of that memory']];
+  ['era', 'Era (year or period)'], ['look', 'Film look of that memory'], ['renderingMedium', 'Rendering medium (empty inherits direction)']];
 const CAST_FIELDS = [['name', 'Name'], ['role', 'Role'], ['description', 'Who they are'], ['height', 'Height'], ['face', 'Face'], ['hair', 'Hair'], ['wardrobe', 'Wardrobe']];
 const SET_FIELDS = [['name', 'Name'], ['description', 'The empty place'], ['lighting', 'Lighting'], ['era', 'Era (year or period)'], ['look', 'Film look of that era']];
 const TEST_FIELDS = [['action', 'What happens in the frame'], ['caption', 'Caption']];
-const LONG = new Set(['description', 'action', 'face', 'wardrobe']);
+const LONG = new Set(['description', 'action', 'face', 'wardrobe', 'renderingMedium']);
 
 // A prop line is "name: description".
 const propLine = (line) => {
@@ -32,6 +32,10 @@ const cardIdentity = (projectId, revision, item) => JSON.stringify([projectId, r
 const subjectField = (subjects, current) => ['subjectId', 'Catalog reference for this age',
   [['', 'None: draw from the main sheet'], ...subjects.map((s) => [s.id, s.castForm?.label ? `${s.name} (${s.castForm.label})` : s.name]),
     ...(current && !subjects.some((s) => s.id === current) ? [[current, 'A character no longer cast in this video']] : [])]];
+const formMediumPatch = (values, previous = {}) => {
+  const { renderingMedium, ...rest } = values;
+  return { ...rest, ...(renderingMedium || Object.hasOwn(previous, 'renderingMedium') ? { renderingMedium } : {}) };
+};
 const formField = (forms) => ['formId', 'Age shown', [['', 'Present day'], ...forms.map((f) => [f.id, f.label])]];
 
 /**
@@ -46,7 +50,7 @@ function editorFor(item, direction, adding = false, subjects = []) {
     if (adding) {
       const fields = formFields('');
       return { fields, values: Object.fromEntries(fields.map(([key]) => [key, ''])),
-        toEdits: (v) => ({ protagonist: { forms: [...forms, v] } }) };
+        toEdits: (v) => ({ protagonist: { forms: [...forms, formMediumPatch(v)] } }) };
     }
     return { fields: PROTAGONIST_FIELDS, values: Object.fromEntries(PROTAGONIST_FIELDS.map(([key]) => [key, p[key] || ''])),
       toEdits: (v) => ({ protagonist: v }) };
@@ -72,7 +76,7 @@ function editorFor(item, direction, adding = false, subjects = []) {
     const form = forms.find((f) => f.id === item.formId) || {};
     const fields = formFields(form.subjectId);
     return { fields, values: Object.fromEntries(fields.map(([key]) => [key, form[key] || ''])),
-      toEdits: (v) => ({ protagonist: { forms: forms.map((f) => (f.id === form.id ? { ...v, id: f.id } : f)) } }),
+      toEdits: (v) => ({ protagonist: { forms: forms.map((f) => (f.id === form.id ? { ...formMediumPatch(v, f), id: f.id } : f)) } }),
       removeEdits: () => ({ protagonist: { forms: forms.filter((f) => f.id !== form.id) } }) };
   }
   if (item.kind === 'cast') {
@@ -111,7 +115,7 @@ function ItemEditor({ editor, label, busy, onSave, onCancel }) {
     <form className="space-y-2 rounded border border-port-border p-2" aria-label={`Edit ${label}`}
       onSubmit={(e) => {
         e.preventDefault();
-        const error = editor.validate?.(values);
+        const error = values.renderingMedium?.length > 500 ? 'Rendering medium exceeds 500 characters. Shorten it before saving.' : editor.validate?.(values);
         if (error) { setValidationError(error); return; }
         onSave(editor.toEdits(values));
       }}>
@@ -146,6 +150,7 @@ function ItemEditor({ editor, label, busy, onSave, onCancel }) {
         </label>
       ))}
       {validationError && <p role="alert" className="text-xs text-port-warning">{validationError}</p>}
+      {Object.hasOwn(values, 'renderingMedium') && <p className="text-xs text-port-text-muted">The medium is sent verbatim. Empty inherits the direction medium. If that is also empty, legacy inference uses recognized media from this age’s film look, then the direction look or project style, otherwise photorealistic editorial photography.</p>}
       <p className="text-[11px] text-port-text-muted">Saving re-renders this image and anything drawn from it.</p>
       <div className="flex flex-wrap gap-2">
         <button type="submit" disabled={busy} className={`${buttonClass} bg-port-accent text-white border-transparent`}>Save and re-render</button>

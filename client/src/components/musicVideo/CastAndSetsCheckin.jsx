@@ -212,7 +212,7 @@ export default function CastAndSetsCheckin({ id, project, stale = null, storySta
               className={`${buttonClass} border border-port-border`}>
               <RotateCcw size={14} aria-hidden="true" /> {openNotes ? 'Regenerate with notes' : 'Regenerate'}
             </button>
-            {onEditDirection && stage.direction?.medium === 'procedural' && (
+            {onEditDirection && stage.direction && (
               <CastAndSetsDirectionEditor key={stage.revision} project={project} direction={stage.direction} busy={busy} onSave={onEditDirection} />
             )}
             <button type="button" disabled={busy || greyboxPending || inspectionPending} onClick={onApprove} className={`${buttonClass} bg-port-accent text-white`}>

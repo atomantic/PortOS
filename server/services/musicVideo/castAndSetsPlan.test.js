@@ -59,6 +59,27 @@ describe('Cast & Sets neutral people sheets', () => {
     expect(direction).toEqual(source);
   });
 
+  it('uses arbitrary explicit media verbatim on every people sheet, with age override then direction inheritance', () => {
+    const medium = '  scratchboard / silverpoint\nwith crosshatching  ';
+    const explicit = { ...direction, renderingMedium: medium,
+      protagonist: { ...direction.protagonist, forms: [{ ...direction.protagonist.forms[0], look: 'oil painting, sepia grade' }] } };
+    const plan = buildCastAndSetsImagePlan({}, explicit);
+    for (const key of sheets) {
+      expect(plan[key].prompt).toContain(`Rendering medium: ${medium}.`);
+      expect(plan[key].prompt).not.toMatch(/photorealistic|oil painting|sepia|warm amber|Kodak/);
+    }
+    expect(plan['set:street'].prompt).toContain(direction.look);
+    expect(plan['test:1'].prompt).toContain('Look: oil painting, sepia grade');
+    const overridden = buildCastAndSetsImagePlan({}, { ...explicit,
+      protagonist: { ...explicit.protagonist, forms: [{ ...explicit.protagonist.forms[0], renderingMedium: '  cyanotype  ' }] } });
+    expect(overridden['form:age-7'].prompt).toContain('Rendering medium:   cyanotype  .');
+    expect(overridden['form:age-7'].prompt).not.toContain('scratchboard');
+    expect(overridden.character.prompt).toContain(medium);
+    const legacy = buildCastAndSetsImagePlan({}, { ...direction, look: 'scratchboard, warm amber light' });
+    expect(legacy.character.prompt).toContain('photorealistic, editorial photography');
+    expect(legacy.character.prompt).not.toContain('scratchboard');
+  });
+
   it('retains known nonphotographic rendering media without carrying their scene grade onto people', () => {
     const look = 'Watercolor illustration and hand-drawn animation, warm amber grade, hard rim light';
     const plan = buildCastAndSetsImagePlan({ scenes: [] }, { ...direction, look });
