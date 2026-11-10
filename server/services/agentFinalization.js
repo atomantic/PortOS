@@ -1004,6 +1004,18 @@ async function evaluateGoalFidelity({ task, workspacePath, startedAt }) {
       .catch(() => null)
     : null;
 
+  // The comparison chart can expose observations that were already in the
+  // shipped catalog before this run, so their absence from the diff is not
+  // evidence that the metrics are absent. This never reads live instance data.
+  const referenceEvidence = /\bcomparison\b/i.test(objective)
+    ? await import('./goalFidelityComparisonEvidence.js')
+      .then(({ comparisonReferenceEvidence }) => comparisonReferenceEvidence({
+        workspacePath, base, head, objective, diff,
+        maxChars: MAX_FIDELITY_DIFF_CHARS - diff.trim().length - (priorDelivery?.diff.trim().length || 0),
+      }))
+      .catch(() => null)
+    : null;
+
   const result = await runLocalGoalFidelityReview({
     backend: config.backend,
     model: config.model,
@@ -1014,6 +1026,7 @@ async function evaluateGoalFidelity({ task, workspacePath, startedAt }) {
     objectiveScreenshots: task.metadata?.screenshots,
     diff,
     ...(priorDelivery ? { priorDeliveryDiff: priorDelivery.diff } : {}),
+    ...(referenceEvidence ? { referenceEvidence } : {}),
   }).catch(err => ({ ok: false, error: err.message }));
   if (!result?.ok) return noFidelityVerdict(result?.error || 'goal-fidelity review returned no verdict');
   return {

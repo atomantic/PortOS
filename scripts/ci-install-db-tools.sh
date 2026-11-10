@@ -18,7 +18,8 @@ set -euo pipefail
 ROOT="${APT_ROOT:-}"
 PRIMARY_BUDGET="${APT_PRIMARY_BUDGET_SECONDS:-180}"
 TOTAL_BUDGET="${APT_TOTAL_BUDGET_SECONDS:-390}"
-OFFICIAL_ARCHIVE='http://archive.ubuntu.com/ubuntu/'
+# The HTTP archive can trickle while the same index is reachable over HTTPS.
+OFFICIAL_ARCHIVE='https://archive.ubuntu.com/ubuntu/'
 # The runner's Azure mirror, by URL or through its mirror list.
 RUNNER_MIRROR='(mirror\+file:/etc/apt/apt-mirrors\.txt|https?://[a-z0-9.-]+\.archive\.ubuntu\.com/ubuntu/?)'
 PACKAGES=("postgresql-client-${PG_MAJOR}" ffmpeg)
