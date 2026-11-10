@@ -345,9 +345,10 @@ export const VIDEO_MODEL_DISCLOSURES = Object.freeze({
     },
   },
   // FastVideo's own FastH3 Dense / Data-Free snapshot — the checkpoint the
-  // repack below is converted FROM, so same weights, same license. The three rows share one 144 GB download: the format in the
-  // id names a LOCAL conversion of the snapshot's transformer/, not a separate
-  // repo, which is why they all quote the same figure.
+  // repack below is converted FROM, so same weights, same license. The three
+  // rows share one 144 GB download: the format in the id names a LOCAL
+  // conversion of the snapshot's transformer/, not a separate repo, which is
+  // why they all quote the same figure.
   ...Object.fromEntries(['int8', 'int6', 'int4'].map((format) => [`fasth3_dense_datafree_${format}`, {
     shippedRepo: 'FastVideo/FastVideo-FastH3-4-step-Preview-v1-Dense-DataFree',
     disclosure: {

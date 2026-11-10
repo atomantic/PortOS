@@ -5099,9 +5099,6 @@ describe('resolveVideoLoras — adapter-effect gate (#4872)', () => {
 });
 
 describe('generateVideo — MiniMax H3 CUDA contract', () => {
-  // Same license gate as the MLX entry: it is the same weights under the same
-  // terms, so acceptance is recorded once and honored by both runtimes.
-
   const cudaCall = (spawnMock) => spawnMock.mock.calls.find(([, args]) => (
     Array.isArray(args) && args.some((arg) => basename(String(arg)) === 'generate_minimax_h3_cuda.py')
   ));
