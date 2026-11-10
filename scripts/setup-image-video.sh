@@ -746,12 +746,12 @@ if [[ "$INSTALL_FASTVIDEO" == "1" ]]; then
     exit 1
   fi
 
-  FASTVIDEO_UV_TOOL_DIR="${HOME}/.portos/tools/uv-0.8.14"
+  FASTVIDEO_UV_TOOL_DIR="${HOME}/.portos/tools/uv-0.13.6"
   FASTVIDEO_UV="${FASTVIDEO_UV_TOOL_DIR}/bin/uv"
-  if [[ ! -x "$FASTVIDEO_UV" ]] || [[ "$("$FASTVIDEO_UV" --version 2>/dev/null || true)" != "uv 0.8.14" ]]; then
-    echo "📦 Bootstrapping pinned uv 0.8.14 for FastVideo..."
+  if [[ ! -x "$FASTVIDEO_UV" ]] || [[ "$("$FASTVIDEO_UV" --version 2>/dev/null || true)" != "uv 0.13.6" ]]; then
+    echo "📦 Bootstrapping pinned uv 0.13.6 for FastVideo..."
     "$PYTHON_BIN" -m venv --clear "$FASTVIDEO_UV_TOOL_DIR"
-    "${FASTVIDEO_UV_TOOL_DIR}/bin/python3" -m pip install --disable-pip-version-check "uv==0.8.14"
+    "${FASTVIDEO_UV_TOOL_DIR}/bin/python3" -m pip install --disable-pip-version-check "uv==0.13.6"
   fi
 
   FASTVIDEO_PIN="${FASTVIDEO_PIN:-fa2d1324c60050cd65209c6aaeac470e7fb412f5}"
@@ -826,16 +826,16 @@ if [[ "$INSTALL_WAN22" == "1" ]]; then
   # a BYOV model should gain no global package or tool. If uv is not already
   # available, bootstrap a pinned copy inside ~/.portos using the Python that
   # PortOS already validated above; all output streams back to the install UI.
-  WAN22_UV_TOOL_DIR="${HOME}/.portos/tools/uv-0.8.14"
+  WAN22_UV_TOOL_DIR="${HOME}/.portos/tools/uv-0.13.6"
   WAN22_UV="${WAN22_UV_TOOL_DIR}/bin/uv"
   # Always use the PortOS-owned exact uv version. A random PATH copy can be too
   # old for this lockfile or a future release with different sync semantics,
   # which would defeat the reproducible runtime pin even though MLX-Gen itself
   # is checked out at an immutable commit.
-  if [[ ! -x "$WAN22_UV" ]] || [[ "$("$WAN22_UV" --version 2>/dev/null || true)" != "uv 0.8.14" ]]; then
-    echo "📦 Bootstrapping pinned uv 0.8.14 for MLX-Gen..."
+  if [[ ! -x "$WAN22_UV" ]] || [[ "$("$WAN22_UV" --version 2>/dev/null || true)" != "uv 0.13.6" ]]; then
+    echo "📦 Bootstrapping pinned uv 0.13.6 for MLX-Gen..."
     "$PYTHON_BIN" -m venv --clear "$WAN22_UV_TOOL_DIR"
-    "${WAN22_UV_TOOL_DIR}/bin/python3" -m pip install --disable-pip-version-check "uv==0.8.14"
+    "${WAN22_UV_TOOL_DIR}/bin/python3" -m pip install --disable-pip-version-check "uv==0.13.6"
   fi
   # v0.25.0 exact commit, statically audited before integration. Keep the full
   # SHA so existing installs get an explicit, reproducible UI-driven upgrade.
@@ -883,12 +883,12 @@ if [[ "$INSTALL_MINIMAX_H3" == "1" ]]; then
     exit 1
   fi
 
-  MINIMAX_H3_UV_TOOL_DIR="${HOME}/.portos/tools/uv-0.8.14"
+  MINIMAX_H3_UV_TOOL_DIR="${HOME}/.portos/tools/uv-0.13.6"
   MINIMAX_H3_UV="${MINIMAX_H3_UV_TOOL_DIR}/bin/uv"
-  if [[ ! -x "$MINIMAX_H3_UV" ]] || [[ "$("$MINIMAX_H3_UV" --version 2>/dev/null || true)" != "uv 0.8.14" ]]; then
-    echo "📦 Bootstrapping pinned uv 0.8.14 for MiniMax H3 MLX..."
+  if [[ ! -x "$MINIMAX_H3_UV" ]] || [[ "$("$MINIMAX_H3_UV" --version 2>/dev/null || true)" != "uv 0.13.6" ]]; then
+    echo "📦 Bootstrapping pinned uv 0.13.6 for MiniMax H3 MLX..."
     "$PYTHON_BIN" -m venv --clear "$MINIMAX_H3_UV_TOOL_DIR"
-    "${MINIMAX_H3_UV_TOOL_DIR}/bin/python3" -m pip install --disable-pip-version-check "uv==0.8.14"
+    "${MINIMAX_H3_UV_TOOL_DIR}/bin/python3" -m pip install --disable-pip-version-check "uv==0.13.6"
   fi
 
   MINIMAX_H3_PIN="${MINIMAX_H3_PIN:-fcd9e9b79a1d6018d91ac477c0968de1fa067e49}"

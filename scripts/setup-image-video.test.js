@@ -641,6 +641,17 @@ exit 0
 // "No module named 'fastvideo'" pointing at a venv nothing was ever written to.
 // `uv sync` is not affected: it always resolves the project's own .venv.
 describe('uv installs target their own venv, not an inherited one', () => {
+  it('keeps bundled uv bootstraps above the wheel traversal and compromised CA fixes', () => {
+    // GHSA-hq85-5cpj-mr62 needs 0.13.4; that also includes the entry-point,
+    // RECORD, ZIP and TAR extraction fixes. Check every executable install.
+    const versions = [...source.matchAll(/pip install[^\n]*["']uv==(\d+)\.(\d+)\.(\d+)["']/g)]
+      .map((match) => match.slice(1).map(Number));
+    expect(versions).toHaveLength(3);
+    for (const [major, minor, patch] of versions) {
+      expect(major > 0 || minor > 13 || (minor === 13 && patch >= 4)).toBe(true);
+    }
+  });
+
   it('passes --python to every uv pip install', () => {
     // Every other install in this script runs `<interpreter> -m pip install`,
     // which names its target outright. A bare `pip install` subcommand is uv's,
