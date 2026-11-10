@@ -391,3 +391,71 @@ describe('framing-aware production bible additions', () => {
     expect(bible(musicVideoFrameModelInput(cast, shot))).toContain('freckles');
   });
 });
+
+// Catches clip-only physical guards missing from the sent prompt or its visible additions.
+describe('clip motion guards', () => {
+  const guardIds = ['continuation-handoff', 'performer-individuality', 'mouth-lock'];
+  const continued = { ...scene, prompt: 'Ada turns toward K.', referenceImageId: 'handoff-clip-1000.png', shotSheet: { characters: ['Ada', 'K'] } };
+
+  it('labels continuation, independent timing and silent mouths without rewriting authored text', () => {
+    const input = musicVideoShotModelInput(null, continued);
+    expect(ids(input)).toEqual(expect.arrayContaining(guardIds));
+    expect(input.prompt.startsWith(continued.prompt)).toBe(true);
+    for (const item of input.promptAdditions.filter((item) => guardIds.includes(item.id))) expect(input.prompt).toContain(item.text);
+    for (const input of [musicVideoShotModelInput(null, continued, { asTyped: true }), musicVideoFrameModelInput(null, continued)]) {
+      expect(ids(input).filter((id) => guardIds.includes(id))).toEqual([]);
+    }
+  });
+
+  it('preserves deliberately coordinated choreography within the individuality guard', () => {
+    const shot = { ...continued, shotMode: 'performance', prompt: 'Ada and K dance in synchronized steps.' };
+    const input = musicVideoShotModelInput(null, shot);
+    expect(input.prompt.startsWith(shot.prompt)).toBe(true);
+    expect(input.promptAdditions.find((item) => item.id === 'performer-individuality')?.text)
+      .toContain('while preserving explicitly directed coordinated action');
+  });
+
+  it('lets explicit stillness and speech take precedence over automatic guards', () => {
+    const shot = { ...continued, prompt: 'Ada holds her pose and says hello to K.' };
+    const input = musicVideoShotModelInput(null, shot);
+    expect(input.prompt.startsWith(shot.prompt)).toBe(true);
+    expect(input.promptAdditions.find((item) => item.id === 'continuation-handoff')?.text)
+      .toContain('unless the shot explicitly directs stillness or a sustained pose');
+    expect(input.promptAdditions.find((item) => item.id === 'mouth-lock')?.text)
+      .toContain('Except for explicitly directed speech or singing');
+  });
+
+  it('recognizes only the selected handoff take, including a continued still', () => {
+    const take = { kind: 'image', assetId: 'previous-still.png', prompt: 'The picture the previous shot ends on' };
+    const shot = { ...scene, referenceImageId: take.assetId, takes: [take] };
+    expect(ids(musicVideoShotModelInput(null, shot))).toContain('continuation-handoff');
+    expect(ids(musicVideoShotModelInput(null, { ...shot, takes: [{ ...take, prompt: 'Out-frame of the previous shot at 2s of its clip' }] }))).toContain('continuation-handoff');
+    for (const referenceImageId of ['ordinary.png', undefined]) {
+      expect(ids(musicVideoShotModelInput(null, { ...shot, referenceImageId }))).not.toContain('continuation-handoff');
+    }
+  });
+
+  it('counts conditioned characters while leaving unselected cast out', () => {
+    const cast = { concept: { subjects: [
+      { id: 'a', kind: 'character', name: 'Ada' },
+      { id: 'b', kind: 'character', name: 'K' },
+      { id: 'unused', kind: 'character', ingredientId: 'offscreen', name: 'Other' },
+    ] } };
+    expect(ids(musicVideoShotModelInput(cast, scene))).toContain('performer-individuality');
+    expect(ids(musicVideoShotModelInput({ concept: { subjects: cast.concept.subjects.slice(1) } }, scene))).not.toContain('performer-individuality');
+    expect(ids(musicVideoShotModelInput(null, scene))).not.toContain('mouth-lock');
+  });
+
+  it('preserves vocals and deliberate speech and avoids duplicating the audio-reactive guard', () => {
+    for (const [shot, options] of [
+      [{ ...continued, shotMode: 'performance' }, {}],
+      [{ ...continued, direction: { actionContract: { activeSpeaker: ' Ada ' } } }, {}],
+      [continued, { audioReactive: true }],
+    ]) expect(ids(musicVideoShotModelInput(null, shot, options))).not.toContain('mouth-lock');
+    const music = { ...continued, shotMode: 'performance', performanceStyle: 'music' };
+    expect(ids(musicVideoShotModelInput(null, music))).toContain('mouth-lock');
+    const reactive = musicVideoShotModelInput(null, music, { audioReactive: true });
+    expect(ids(reactive)).toContain('audio-reactive-guard');
+    expect(ids(reactive)).not.toContain('mouth-lock');
+  });
+});

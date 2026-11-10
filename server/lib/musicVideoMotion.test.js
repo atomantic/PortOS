@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MOTION_CONTINUITY_CLAUSE, silentMotionPrompt } from './musicVideoMotion.js';
+import { CONTINUATION_HOLD_BREAK_CLAUSE, MULTI_PERFORMER_INDIVIDUALITY_CLAUSE, NON_VOCAL_MOUTH_LOCK_CLAUSE, MOTION_CONTINUITY_CLAUSE, silentMotionPrompt } from './musicVideoMotion.js';
 import { musicVideoCreativeContext } from './musicVideoCreativeContext.js';
 
 // Regression: a silent i2v model acted out song cues and look words, and stripping must never erase the action itself.
@@ -16,6 +16,12 @@ describe('silentMotionPrompt', () => {
     ['Shallow depth of field', 'Shallow depth of field'],
   ])('%s', (input, expected) => {
     expect(silentMotionPrompt(input)).toBe(expected);
+  });
+
+  it('preserves physical guards after stripping an old creative-context block', () => {
+    const guards = [CONTINUATION_HOLD_BREAK_CLAUSE, MULTI_PERFORMER_INDIVIDUALITY_CLAUSE, NON_VOCAL_MOUTH_LOCK_CLAUSE];
+    const prompt = `She turns, Universe style: an old palette, ${guards.join(', ')}`;
+    expect(silentMotionPrompt(prompt)).toBe(`She turns, ${guards.join(', ')}`);
   });
 
   it('drops song-timed intent lines and the project look but keeps the generated contract and camera lines', () => {
