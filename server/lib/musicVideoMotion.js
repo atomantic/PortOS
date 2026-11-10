@@ -11,9 +11,9 @@ export const MOTION_CONTINUITY_CLAUSE = "hold the reference frame's lighting, ti
 /** Appended to an audio-reactive (LoRA) shot's prompt so the music moves the scene, never a performer. */
 export const AUDIO_REACTIVE_PERFORMANCE_GUARD = 'The music drives only environmental motion, lighting, particles, reflections, fabric, and subtle camera accents. No singing, lip-sync, speaking, mouth movement, dancing, instruments, performers, or musical performance.';
 
-export const CONTINUATION_HOLD_BREAK_CLAUSE = 'Continue motion unbroken from the opening handoff frame with no static hold or reset; break the held pose within the first quarter second';
+export const CONTINUATION_HOLD_BREAK_CLAUSE = 'Continue motion unbroken from the opening handoff frame with no unintended static hold or reset; unless the shot explicitly directs stillness or a sustained pose, break the held pose within the first quarter second';
 export const MULTI_PERFORMER_INDIVIDUALITY_CLAUSE = 'Each person keeps their own micro-timing, posture, and blink cadence; avoid accidental synchronized or mirrored silhouettes while preserving explicitly directed coordinated action';
-export const NON_VOCAL_MOUTH_LOCK_CLAUSE = 'Mouths stay closed or naturally parted for breathing only; no unprompted speaking, singing, or mouthing words';
+export const NON_VOCAL_MOUTH_LOCK_CLAUSE = 'Except for explicitly directed speech or singing, mouths stay closed or naturally parted for breathing only; no unprompted speaking, singing, or mouthing words';
 
 /** Recognize the selected continuation frame, including a previous shot's still. */
 export function isContinuationHandoffScene(scene) {

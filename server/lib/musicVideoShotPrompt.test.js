@@ -415,6 +415,16 @@ describe('clip motion guards', () => {
       .toContain('while preserving explicitly directed coordinated action');
   });
 
+  it('lets explicit stillness and speech take precedence over automatic guards', () => {
+    const shot = { ...continued, prompt: 'Ada holds her pose and says hello to K.' };
+    const input = musicVideoShotModelInput(null, shot);
+    expect(input.prompt.startsWith(shot.prompt)).toBe(true);
+    expect(input.promptAdditions.find((item) => item.id === 'continuation-handoff')?.text)
+      .toContain('unless the shot explicitly directs stillness or a sustained pose');
+    expect(input.promptAdditions.find((item) => item.id === 'mouth-lock')?.text)
+      .toContain('Except for explicitly directed speech or singing');
+  });
+
   it('recognizes only the selected handoff take, including a continued still', () => {
     const take = { kind: 'image', assetId: 'previous-still.png', prompt: 'The picture the previous shot ends on' };
     const shot = { ...scene, referenceImageId: take.assetId, takes: [take] };
