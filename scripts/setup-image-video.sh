@@ -464,8 +464,8 @@ require_mlx_video_profile() {
 }
 
 sync_locked_mlx_video() (
-  local label="$1" dir="$2" python="$3" pin="$4" base_python checkout_status
-  shift 4
+  local label="$1" dir="$2" python="$3" pin="$4" lock="$5" base_python checkout_status
+  shift 5
   cd "$dir"
   checkout_status="$(git status --porcelain=v1 --untracked-files=all)"
   if [[ "$(git rev-parse HEAD)" != "$pin" || ! -f uv.lock || -n "$checkout_status" ]]; then
@@ -479,18 +479,50 @@ sync_locked_mlx_video() (
   export UV_PROJECT_ENVIRONMENT="$PWD/.venv"
   base_python="$(portos_uv --no-config python find 3.11 2>/dev/null || true)"
   reset_universal_venv "$UV_PROJECT_ENVIRONMENT" "$base_python"
-  if [[ ! -x "$python" ]]; then
+  if [[ ! -x "$python" ]] || ! "$python" -I -S -c 'import sys; sys.exit(sys.version_info[:2] != (3, 11))'; then
     echo "📦 Creating ${label} venv with Python 3.11..."
-    portos_uv --no-config venv --python 3.11 "$UV_PROJECT_ENVIRONMENT"
+    portos_uv --no-config venv --clear --python 3.11 "$UV_PROJECT_ENVIRONMENT"
   fi
-  # Upstream uv.lock supplies the runtime hashes. Build workspace packages in
-  # a second step because uv.lock doesn't pin their isolated PEP 517 backends.
-  echo "📦 Syncing ${label} wheels from the pinned upstream lock..."
-  portos_uv --no-config --no-cache sync --locked --no-build --no-install-workspace --python "$python"
+  echo "📦 Syncing ${label} wheels from ${lock##*/}..."
+  portos_uv --no-config --no-cache pip sync --require-hashes --only-binary :all: --python "$python" "$lock"
+  if [[ "$1" == --wan22-source ]]; then
+    # Bash 3.2 drops function locals before the subshell's EXIT trap on error.
+    build_dir="$(mktemp -d "${TMPDIR:-/tmp}/portos-wan22.XXXXXX")"
+    trap 'rm -rf -- "$build_dir"' EXIT
+    stage_wan22_source "$python" "$pin" "$build_dir"
+    set -- --no-binary mlx-gen "$build_dir"
+  fi
   echo "📦 Building pinned ${label} source with hash-locked build tools..."
   portos_uv --no-config --no-cache pip install --no-deps --only-binary :all: --preview-features build-dependency-hashes --require-build-hashes --build-constraints "$SCRIPT_DIR/requirements-mlx-video-build.lock.txt" --python "$python" --reinstall "$@"
+  portos_uv --no-config pip check --python "$python"
   pin_venv_arm64 "$UV_PROJECT_ENVIRONMENT"
 )
+
+stage_wan22_source() {
+  local python="$1" revision="$2" build_dir="$3"
+  git archive "$revision" -- pyproject.toml README.md LICENSE src | tar -xf - -C "$build_dir"
+  # Pillow 13's private typing module fails to import on CPython 3.11.
+  # MLX-Gen only uses the alias in an annotation. Build from the archive with
+  # the equivalent stdlib type, keeping the upstream checkout pristine.
+  "$python" -I -S - "$build_dir/src/mflux/utils/image_util.py" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+source = path.read_text(encoding="utf-8")
+old_import = "from PIL._typing import StrOrBytesPath\n"
+if source.count(old_import) != 1:
+    raise SystemExit("Unexpected MLX-Gen image typing import")
+source = source.replace(old_import, "")
+source = source.replace("from pathlib import Path\n", "from os import PathLike\nfrom pathlib import Path\n", 1)
+source = source.replace(
+    "log = logging.getLogger(__name__)",
+    "StrOrBytesPath = str | bytes | PathLike[str] | PathLike[bytes]\n\nlog = logging.getLogger(__name__)",
+    1,
+)
+path.write_text(source, encoding="utf-8")
+PY
+}
 
 if python_required && ! have "$PYTHON_BIN"; then
   echo "❌ $PYTHON_BIN not found. Install Python 3.10+ first." >&2
@@ -703,7 +735,7 @@ if [[ "$INSTALL_LTX2" == "1" ]]; then
   fi
   echo "📦 Checking out pinned commit ${LTX2_PIN:0:12}..."
   git_checkout_pin "${LTX2_DIR}" "${LTX2_PIN}"
-  sync_locked_mlx_video "LTX-2 MLX" "$LTX2_DIR" "$LTX2_PY" "$LTX2_PIN" \
+  sync_locked_mlx_video "LTX-2 MLX" "$LTX2_DIR" "$LTX2_PY" "$LTX2_PIN" "$SCRIPT_DIR/requirements-ltx23-mlx.lock.txt" \
     -e packages/ltx-core-mlx -e packages/ltx-pipelines-mlx
   probe_or_fail \
     "ltx-2-mlx synced but 'import ltx_pipelines_mlx' failed." \
@@ -747,7 +779,7 @@ if [[ "$INSTALL_LTX25" == "1" ]]; then
   fi
   echo "📦 Checking out pinned commit ${LTX25_PIN:0:12}..."
   git_checkout_pin "${LTX25_DIR}" "${LTX25_PIN}"
-  sync_locked_mlx_video "LTX-2.5 MLX" "$LTX25_DIR" "$LTX25_PY" "$LTX25_PIN" \
+  sync_locked_mlx_video "LTX-2.5 MLX" "$LTX25_DIR" "$LTX25_PY" "$LTX25_PIN" "$SCRIPT_DIR/requirements-ltx25-mlx.lock.txt" \
     -e packages/ltx-core-mlx -e packages/ltx-pipelines-mlx
   probe_or_fail \
     "ltx-2.5-mlx synced but 'import ltx_pipelines_mlx' failed." \
@@ -853,7 +885,7 @@ if [[ "$INSTALL_WAN22" == "1" ]]; then
     (cd "${WAN22_DIR}" && git fetch --progress origin)
   fi
   git_checkout_pin "${WAN22_DIR}" "${WAN22_PIN}"
-  sync_locked_mlx_video "Wan 2.2 MLX" "$WAN22_DIR" "$WAN22_PY" "$WAN22_PIN" -e .
+  sync_locked_mlx_video "Wan 2.2 MLX" "$WAN22_DIR" "$WAN22_PY" "$WAN22_PIN" "$SCRIPT_DIR/requirements-wan22-mlx.lock.txt" --wan22-source
   probe_or_fail \
     "MLX-Gen synced but the Wan runtime import failed." \
     "Use Repair / Upgrade from the Video Gen runtime panel to retry." \
