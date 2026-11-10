@@ -27,6 +27,8 @@ export default function ShotFinalRender({ project, scene, onChange, onLocal, fie
   const shot = status.shots.find((entry) => entry.sceneId === sceneId);
   const rendering = live?.state === 'rendering' || (!live && shot?.rendering);
   const rendered = shot?.state === 'rendered' && !rendering;
+  const failed = !rendering && !rendered && (live?.state === 'failed' || shot?.state === 'failed');
+  const failedError = live?.state === 'failed' && live.error ? live.error : shot?.error;
   const file = rendered ? shot.files[shot.files.length - 1] : null;
 
   const start = () => {
@@ -38,13 +40,14 @@ export default function ShotFinalRender({ project, scene, onChange, onLocal, fie
       .finally(() => setStarting(false));
   };
 
-  const state = status.error ? null : rendering ? (live ? `Rendering ${Math.round((live.progress || 0) * 100)}%` : 'Rendering') : rendered ? 'Rendered' : shot ? 'Not rendered' : 'Not in the cut';
+  const state = status.error ? null : rendering ? (live ? `Rendering ${Math.round((live.progress || 0) * 100)}%` : 'Rendering') : rendered ? 'Rendered' : failed ? 'Failed' : shot ? 'Not rendered' : 'Not in the cut';
+  const tone = rendered ? 'bg-port-success/10 text-port-success' : failed ? 'bg-port-error/10 text-port-error' : 'bg-port-border/60 text-port-text-muted';
   return (
     <section aria-label="Final render" className="min-w-0 space-y-2 rounded border border-port-border p-2">
       <div className="flex flex-wrap items-center gap-2">
         <h4 className="inline-flex items-center gap-1 text-xs font-medium"><Film size={14} aria-hidden="true" /> Final render</h4>
         {state && (
-          <span data-testid="shot-render-state" className={`rounded px-1.5 text-[11px] ${rendered ? 'bg-port-success/10 text-port-success' : 'bg-port-border/60 text-port-text-muted'}`}>
+          <span data-testid="shot-render-state" className={`rounded px-1.5 text-[11px] ${tone}`}>
             {rendering && <Activity size={11} className="mr-1 inline animate-spin" aria-hidden="true" />}{state}
           </span>
         )}
@@ -90,7 +93,7 @@ export default function ShotFinalRender({ project, scene, onChange, onLocal, fie
           </button>
         </div>
       )}
-      {live?.state === 'failed' && live.error && <p role="alert" className="break-words text-[11px] text-port-error">{live.error}</p>}
+      {failed && failedError && <p role="alert" className="break-words text-[11px] text-port-error">{failedError}</p>}
       {playing && file && (
         // The rendered shot as the final render cuts it: film look and text, without the song.
         <video key={file} src={musicVideoShotRenderUrl(projectId, file)} controls autoPlay loop muted playsInline className="w-full rounded bg-black" />

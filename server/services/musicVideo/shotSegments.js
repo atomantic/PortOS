@@ -386,7 +386,8 @@ async function renderShotBase(plan, segment, outputPath, { jobId, signal, onProg
   try {
     const overlays = needsOverlay ? await renderTypographyOverlays({
       jobId, cues: plan.cues, style: plan.style, width: plan.width, height: plan.height, fps: plan.fps, durationSec: plan.totalDuration,
-      lyrics: plan.lyricWindows.length ? { project: plan.project, windows: plan.lyricWindows } : null, window: segment.window, signal,
+      lyrics: plan.lyricWindows.length ? { project: plan.project, windows: plan.lyricWindows } : null, window: segment.window,
+      sceneId: segment.sceneId, signal,
       onProgress: (f) => onProgress?.(f * 0.5),
     }) : [];
     signal?.throwIfAborted();
@@ -679,7 +680,18 @@ const shotJobs = trackedRenderMap('music-video-shot', {
 });
 const shotJobKey = (projectId, sceneId) => `${projectId}:${sceneId}`;
 
+// The failure of the last attempt. Gone when that shot starts again or renders.
+// In memory, like shotJobs: a restart drops both, and the cache is regenerated.
+const shotFailures = new Map();
+
 const emitShotRender = (payload) => musicVideoEvents.emit('shot-render', payload);
+
+function withShotOutcome(projectId, shot, running) {
+  if (running.has(shot.sceneId)) return { ...shot, rendering: true, startedAt: running.get(shot.sceneId) };
+  if (shot.state === 'rendered') return shot;
+  const failure = shotFailures.get(shotJobKey(projectId, shot.sceneId));
+  return failure ? { ...shot, state: 'failed', error: failure.error, failedAt: failure.failedAt } : shot;
+}
 
 async function loadProjectScene(projectId, sceneId) {
   const project = await requireProject(projectId);
@@ -702,7 +714,7 @@ export async function getShotRenderStatus(projectId, options) {
   if (plan.error) return { available: true, error: plan.error, shots: [], outro: null, ready: 0, total: 0 };
   const status = segmentStatus(plan);
   const running = new Map([...shotJobs.entries()].filter(([key]) => key.startsWith(`${projectId}:`)).map(([key, job]) => [key.slice(projectId.length + 1), job.startedAt]));
-  return { available: true, ...status, shots: status.shots.map((shot) => (running.has(shot.sceneId) ? { ...shot, rendering: true, startedAt: running.get(shot.sceneId) } : shot)) };
+  return { available: true, ...status, shots: status.shots.map((shot) => withShotOutcome(projectId, shot, running)) };
 }
 
 /**
@@ -724,6 +736,7 @@ export async function startShotRender(projectId, sceneId) {
         throw new ServerError(`${nameShots(project, [sceneId])}: not in the cut yet. Give it a clip, or a still with a start and end time`, { status: 422, code: 'SHOT_NOT_IN_CUT' });
       }
       if (segments.every(segmentRendered)) {
+        shotFailures.delete(key);
         await cleanupAfterShot(projectId, sceneId).catch(err => console.warn(`⚠️ Music-video shot cache cleanup failed: ${err.message}`));
         return { sceneId, state: 'rendered' };
       }
@@ -732,6 +745,7 @@ export async function startShotRender(projectId, sceneId) {
       const controller = new AbortController();
       // startedAt identifies this attempt: a client can tell a replacement render from a progress tick of the same one.
       const startedAt = Date.now();
+      shotFailures.delete(key);
       shotJobs.set(key, { controller, startedAt });
       handedOff = true;
       const total = segments.reduce((sum, s) => sum + s.frames, 0) || 1;
@@ -753,13 +767,20 @@ export async function startShotRender(projectId, sceneId) {
         }
       }).then(() => {
         rendered = true;
+        shotFailures.delete(key);
         console.log(`🎬 Music-video ${nameShots(project, [sceneId])} rendered [${projectId.slice(0, 8)}] in ${((Date.now() - started) / 1000).toFixed(1)}s`);
         emitShotRender({ projectId, sceneId, state: 'rendered', progress: 1 });
       }, (err) => {
         const canceled = controller.signal.aborted || err?.code === 'CANCELED';
         const log = canceled ? console.log : console.error;
         log(`${canceled ? '🛑' : '❌'} Music-video shot render ${canceled ? 'cancelled' : 'failed'} [${projectId.slice(0, 8)}]: ${err.message}`);
-        emitShotRender({ projectId, sceneId, state: canceled ? 'canceled' : 'failed', error: canceled ? null : err.message });
+        if (canceled) {
+          emitShotRender({ projectId, sceneId, state: 'canceled', error: null });
+          return;
+        }
+        const failedAt = new Date().toISOString();
+        shotFailures.set(key, { error: err.message, failedAt });
+        emitShotRender({ projectId, sceneId, state: 'failed', error: err.message, failedAt });
       }).finally(async () => {
         shotJobs.delete(key);
         await cleanupAfterShot(projectId, rendered ? sceneId : null).catch(err => console.warn(`⚠️ Music-video shot cache cleanup failed: ${err.message}`));
