@@ -1,0 +1,8 @@
+# MMS_FA lyric alignment: direct pins for the private lyric-align venv.
+# Installed only from requirements-lyric-align.lock.txt, which pins and hashes
+# every transitive package. After editing this file, regenerate the lock with
+# the command in the lock header.
+torch==2.14.1
+torchaudio==2.11.1
+numpy==2.4.6 ; python_version < "3.12"
+numpy==2.5.4 ; python_version >= "3.12"
