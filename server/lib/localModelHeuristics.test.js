@@ -26,11 +26,13 @@ describe('localModelHeuristics', () => {
         'lfm2.5:8b',
         'lfm2.5-thinking:1.2b',
         'lfm3:1.7b',
+        'lfm3-audio',
         'ornith:35b',
         'muse-glimmer:30b',
         'north-mini-code-1.0',
         'olmo-3.1:32b-instruct',
         'nemotron-3-nano:4b',
+        'nemotron-3-super',
         'deepseek-r1:8b',
         'qwen2.5-coder:7b',
       ]) {

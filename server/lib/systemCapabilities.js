@@ -67,6 +67,7 @@ const LOCAL_LLM_HARDWARE_REQUIREMENTS = Object.freeze({
   'qwen3.6-27b': Object.freeze({ minMemoryGb: 32 }),
   'qwen3-32b': Object.freeze({ minMemoryGb: 32 }),
   'gpt-oss-120b': Object.freeze({ minMemoryGb: 96 }),
+  'nemotron-3-super-120b': Object.freeze({ minMemoryGb: 96 }),
   'qwen3.5-122b-a10b': Object.freeze({ minMemoryGb: 96 }),
   'qwen3-coder-30b': Object.freeze({ minMemoryGb: 32 }),
   'devstral-small-2-24b': Object.freeze({ minMemoryGb: 32 }),
@@ -83,6 +84,7 @@ const LOCAL_LLM_HARDWARE_REQUIREMENTS = Object.freeze({
 // for stored provider pins too, including the MLX-only variants.
 const LOCAL_MODEL_HARDWARE_REQUIREMENTS = Object.freeze({
   ...LOCAL_LLM_HARDWARE_REQUIREMENTS,
+  'nemotron-3-super': Object.freeze({ minMemoryGb: 96 }),
   'qwen3.8-27b-mlx': Object.freeze({
     platforms: ['darwin'],
     requiresAppleSilicon: true,
