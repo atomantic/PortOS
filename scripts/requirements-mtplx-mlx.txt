@@ -1,0 +1,5 @@
+# MTPLX server on Apple Silicon. 2.12.2 is the newest release before the
+# 2026-11-03 cooldown cutoff; 2.12.3 was published 2026-11-06.
+# Include server extras for llguidance. Its wheel and every dependency are
+# installed from the generated lock, with no source builds or resolution.
+mtplx[server]==2.12.2

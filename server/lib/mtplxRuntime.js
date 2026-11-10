@@ -40,6 +40,8 @@
 import { constants } from 'fs';
 import { access, readFile, stat } from 'fs/promises';
 import { isAbsolute, join } from 'path';
+import { PATHS } from './paths.js';
+import { findCommandOnPath } from './processEnv.js';
 
 /**
  * Above this, the file on PATH is a compiled binary or a bundled script, not
@@ -99,4 +101,13 @@ export async function describeMtplxRuntime(binaryPath, { env = process.env } = {
 
   const ready = await access(join(venvPath, 'bin', 'mtplx'), constants.X_OK).then(() => true).catch(() => false);
   return { ready, wrapper: true, venvPath };
+}
+
+// New installs are private and locked. Existing user-managed/Homebrew installs
+// still work when no private runtime is present; no global PATH mutation.
+export const mtplxVenvDir = () => join(PATHS.tools, 'mtplx');
+export const mtplxManagedBinary = () => join(mtplxVenvDir(), 'bin', 'mtplx');
+
+export function resolveMtplxBinary() {
+  return findCommandOnPath(mtplxManagedBinary()) || findCommandOnPath('mtplx');
 }

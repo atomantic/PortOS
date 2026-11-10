@@ -1,5 +1,7 @@
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
+import * as os from 'os';
+vi.mock('os', async (importOriginal) => ({ ...(await importOriginal()), release: vi.fn(() => '23.0.0') }));
 import { join } from 'path';
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import {
@@ -20,9 +22,13 @@ import * as platform from '../lib/platform.js';
 import * as openAiModelsProbe from '../lib/openAiModelsProbe.js';
 import * as mtplxModels from '../lib/mtplxModels.js';
 import * as pm2Module from './pm2.js';
-import * as commandExistsModule from '../lib/commandExists.js';
+import * as pythonSetup from '../lib/pythonSetup.js';
+import * as mtplxRuntime from '../lib/mtplxRuntime.js';
+import { PATHS } from '../lib/paths.js';
+import { LOCK_PROFILES } from '../lib/pythonLockProfiles.js';
 import * as streamingSpawn from '../lib/streamingSpawn.js';
 
+const originalTools = PATHS.tools;
 const BINARY = '/opt/homebrew/bin/mtplx';
 const cachedModel = (repoId, extra = {}) => ({ repo_id: repoId, validation: { ok: true }, ...extra });
 
@@ -70,6 +76,8 @@ describe('mtplxServerManager', () => {
       },
     });
     vi.restoreAllMocks();
+    vi.spyOn(pythonSetup, 'resolvePatchedUv').mockResolvedValue({ ok: true, uv: '/private/uv' });
+    PATHS.tools = join(testLogDir, 'tools');
     pm2State = null;
     execPm2Calls = [];
     settingsStore = {};
@@ -89,6 +97,7 @@ describe('mtplxServerManager', () => {
     vi.spyOn(openAiModelsProbe, 'probeOpenAiModels')
       .mockImplementation(async () => ({ reachable: pm2State?.status === 'online' }));
     vi.spyOn(platform, 'isAppleSilicon').mockReturnValue(true);
+    os.release.mockReturnValue('23.0.0');
     // The dump is a real file on the developer's machine; pin it so the
     // startsAtBoot assertions are about this code, not their PM2 state.
     vi.spyOn(pm2Module, 'getSavedProcessNames').mockResolvedValue([]);
@@ -117,6 +126,8 @@ describe('mtplxServerManager', () => {
 
   afterEach(async () => {
     _resetMtplxServerStateForTests();
+    PATHS.tools = originalTools;
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
     await rm(testLogDir, { recursive: true, force: true });
     testLogDir = null;
@@ -677,22 +688,56 @@ describe('mtplxServerManager', () => {
       vi.spyOn(streamingSpawn, 'runStreamingCommand').mockResolvedValue({ success: true });
     });
 
-    it('installs from upstream\'s Homebrew tap, never the privileged fan-control helper', async () => {
-      vi.spyOn(commandExistsModule, 'commandExists').mockResolvedValue(true);
-      const result = await installMtplx();
+    it('installs the complete hash lock into a native private venv without brew or ambient pip', async () => {
+      const emitted = [];
+      const result = await installMtplx({ onProgress: ({ message }) => emitted.push(message) });
       expect(result.success).toBe(true);
-      const [cmd, args] = streamingSpawn.runStreamingCommand.mock.calls[0];
-      expect(cmd).toBe('brew');
-      expect(args).toEqual(['install', 'youssofal/mtplx/mtplx']);
-      // `mtplx max --install` is upstream's one privileged path (a sudo fan
-      // controller). It stays an explicit operator action outside PortOS.
-      expect(streamingSpawn.runStreamingCommand.mock.calls.flatMap(([, a]) => a)).not.toContain('max');
+      const calls = streamingSpawn.runStreamingCommand.mock.calls;
+      expect(calls.map(([cmd]) => cmd)).toEqual(['/private/uv', '/private/uv']);
+      expect(calls[0][1]).toEqual(['venv', '--python', 'cpython-3.11-macos-aarch64-none', '--managed-python', '--allow-existing', join(testLogDir, 'tools', 'mtplx')]);
+      expect(calls[1][1]).toEqual(['pip', 'sync', '--python', join(testLogDir, 'tools', 'mtplx', 'bin', 'python3'), '--require-hashes', '--only-binary', ':all:', LOCK_PROFILES['mtplx-mlx'].lockFile]);
+      expect(calls[1][3].timeoutMs).toBeGreaterThanOrEqual(20 * 60 * 1000);
+      expect(emitted.join(' ')).toContain('hash-pinned');
+      expect(calls.flatMap(([, args]) => args)).not.toContain('max');
     });
 
-    it('falls back to pip on a host without Homebrew', async () => {
-      vi.spyOn(commandExistsModule, 'commandExists').mockImplementation(async (cmd) => cmd !== 'brew');
+    it('discovers and starts the private installation without a global PATH entry', async () => {
+      vi.stubEnv('PATH', '');
+      streamingSpawn.runStreamingCommand.mockImplementation(async (_cmd, args) => {
+        if (args[0] === 'pip') {
+          const binary = mtplxRuntime.mtplxManagedBinary();
+          await mkdir(join(mtplxRuntime.mtplxVenvDir(), 'bin'), { recursive: true });
+          await writeFile(binary, '#!/bin/sh\necho mtplx\n');
+          await chmod(binary, 0o755);
+        }
+        return { success: true };
+      });
       await installMtplx();
-      expect(streamingSpawn.runStreamingCommand.mock.calls[0][0]).toBe('python3');
+      expect(await getMtplxServerStatus()).toMatchObject({ installed: true, runtimeReady: true });
+      await startMtplxServer();
+      const start = execPm2Calls.find((args) => args[0] === 'start');
+      expect(start[1]).toBe(mtplxRuntime.mtplxManagedBinary());
+    });
+
+    it('refuses before install when the private patched tool is unavailable', async () => {
+      pythonSetup.resolvePatchedUv.mockResolvedValue({ ok: false, reason: 'Private uv bootstrap failed' });
+      await expect(installMtplx()).rejects.toMatchObject({ code: 'MTPLX_INSTALLER_UNAVAILABLE' });
+      expect(streamingSpawn.runStreamingCommand).not.toHaveBeenCalled();
+    });
+
+    it('shares overlapping installs instead of mutating the same virtualenv twice', async () => {
+      const first = installMtplx();
+      const second = installMtplx();
+      expect(first).toBe(second);
+      await Promise.all([first, second]);
+      expect(streamingSpawn.runStreamingCommand).toHaveBeenCalledTimes(2);
+    });
+
+    it('refuses an older macOS before creating the runtime or installing packages', async () => {
+      os.release.mockReturnValue('22.6.0');
+      await expect(installMtplx()).rejects.toMatchObject({ code: 'MTPLX_UNSUPPORTED_PLATFORM', message: expect.stringContaining('macOS 14') });
+      expect(pythonSetup.resolvePatchedUv).not.toHaveBeenCalled();
+      expect(streamingSpawn.runStreamingCommand).not.toHaveBeenCalled();
     });
 
     it('refuses on a host that cannot run MLX at all', async () => {
@@ -788,45 +833,28 @@ describe('mtplxServerManager', () => {
       expect(execPm2Calls.some((args) => args[0] === 'start')).toBe(false);
     });
 
-    it('warms the runtime inside the install, where the user pressed a button and the budget fits', async () => {
+    it('replaces an unbootstrapped wrapper through the locked installer without executing it', async () => {
       const binary = await wrapperOnPath(join(runtimeDir, 'venv-2.10.1'));
-      vi.spyOn(commandExistsModule, 'commandExists').mockResolvedValue(true);
-      vi.spyOn(streamingSpawn, 'runStreamingCommand').mockResolvedValue({ success: true });
-      const emitted = [];
-
-      const result = await installMtplx({ onProgress: (p) => emitted.push(p.message) });
-
-      expect(result.success).toBe(true);
-      const calls = streamingSpawn.runStreamingCommand.mock.calls;
-      expect(calls[0][0]).toBe('brew');
-      // One invocation of the wrapper, AFTER the package install, on the
-      // 20-minute install budget rather than a status poll's 30 seconds.
-      expect(calls[1].slice(0, 2)).toEqual([binary, ['--version']]);
-      expect(calls[1][3].timeoutMs).toBeGreaterThanOrEqual(20 * 60 * 1000);
-      expect(emitted.join(' ')).toMatch(/bootstraps its own Python runtime/i);
-    });
-
-    it('fails the install when the bootstrap fails, instead of succeeding into a card that cannot start', async () => {
-      await wrapperOnPath(join(runtimeDir, 'venv-2.10.1'));
-      vi.spyOn(commandExistsModule, 'commandExists').mockResolvedValue(true);
-      vi.spyOn(streamingSpawn, 'runStreamingCommand').mockImplementation(async (cmd) => (
-        cmd === 'brew' ? { success: true } : { success: false, error: 'ensurepip returned non-zero exit status 1' }
-      ));
-
-      await expect(installMtplx()).rejects.toMatchObject({ code: 'MTPLX_RUNTIME_BOOTSTRAP_FAILED' });
-    });
-
-    it('skips the warm-up when the runtime is already bootstrapped', async () => {
-      const venv = join(runtimeDir, 'venv-2.10.1');
-      await buildVenv(venv);
-      await wrapperOnPath(venv);
-      vi.spyOn(commandExistsModule, 'commandExists').mockResolvedValue(true);
-      vi.spyOn(streamingSpawn, 'runStreamingCommand').mockResolvedValue({ success: true });
-
+      const run = vi.spyOn(streamingSpawn, 'runStreamingCommand').mockResolvedValue({ success: true });
       await installMtplx();
-
-      expect(streamingSpawn.runStreamingCommand).toHaveBeenCalledTimes(1);
+      expect(run.mock.calls.map(([cmd]) => cmd)).toEqual(['/private/uv', '/private/uv']);
+      expect(run.mock.calls.some(([cmd]) => cmd === binary)).toBe(false);
     });
+
+    it('removes a partial entry point on sync failure and allows a caller-triggered retry', async () => {
+      const entry = mtplxRuntime.mtplxManagedBinary();
+      const run = vi.spyOn(streamingSpawn, 'runStreamingCommand').mockImplementation(async (_cmd, args) => {
+        if (args[0] === 'venv') return { success: true };
+        await mkdir(join(testLogDir, 'tools', 'mtplx', 'bin'), { recursive: true });
+        await writeFile(entry, '#!/bin/sh');
+        return { success: false, error: 'hash mismatch' };
+      });
+      await expect(installMtplx()).rejects.toMatchObject({ code: 'MTPLX_INSTALL_FAILED' });
+      await expect(readFile(entry)).rejects.toMatchObject({ code: 'ENOENT' });
+      run.mockResolvedValue({ success: true });
+      await expect(installMtplx()).resolves.toMatchObject({ success: true });
+    });
+
   });
 
   describe('stopMtplxServer', () => {

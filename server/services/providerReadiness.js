@@ -44,6 +44,7 @@ import { probeOpenAiModelsCached, resetOpenAiModelsProbeCache } from '../lib/ope
 import { aliasServedContextWindows } from '../lib/providerContextWindows.js';
 import { managedOllamaContextLength } from '../lib/ollamaContext.js';
 import { findCommandOnPath } from '../lib/processEnv.js';
+import { resolveMtplxBinary } from '../lib/mtplxRuntime.js';
 import { actionCovers, describeRuntimeSetup, readRuntimeWeights, weightsBlockStart } from './localRuntimeSetup.js';
 import { isAppInstalled as isLmStudioAppInstalled } from './lmStudioManager.js';
 
@@ -107,7 +108,7 @@ function readWeightsStateCached(kind) {
 function findCommandCached(command) {
   const cached = binaryCache.get(command);
   if (cached && Date.now() - cached.at < BINARY_TTL_MS) return cached.path;
-  const path = findCommandOnPath(command);
+  const path = command === 'mtplx' ? resolveMtplxBinary() : findCommandOnPath(command);
   binaryCache.set(command, { at: Date.now(), path });
   return path;
 }

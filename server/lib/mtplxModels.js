@@ -33,6 +33,7 @@
 import { bufferedSpawn, spawnFailureDetail } from './bufferedSpawn.js';
 import { safeJSONParse } from './fileUtils.js';
 import { findCommandOnPath } from './processEnv.js';
+import { resolveMtplxBinary } from './mtplxRuntime.js';
 
 /** A cache listing walks the model directories to size them; be generous. */
 const CACHE_QUERY_TIMEOUT_MS = 30_000;
@@ -51,7 +52,7 @@ const CACHE_QUERY_TIMEOUT_MS = 30_000;
  * @returns {Promise<{models: object[]|null, error: string|null}>}
  */
 export async function listMtplxCachedModels({ command = 'mtplx' } = {}) {
-  const binary = findCommandOnPath(command);
+  const binary = command === 'mtplx' ? resolveMtplxBinary() : findCommandOnPath(command);
   if (!binary) return { models: null, error: `\`${command}\` is not on PortOS's PATH` };
 
   const result = await bufferedSpawn(binary, ['models', '--json'], { timeoutMs: CACHE_QUERY_TIMEOUT_MS, shell: false });

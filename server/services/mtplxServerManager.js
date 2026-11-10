@@ -22,16 +22,16 @@
  *     outside PortOS.
  */
 
-import { commandExists } from '../lib/commandExists.js';
-import { writeFile } from 'fs/promises';
-import { tmpdir } from 'os';
+import { unlink, writeFile } from 'fs/promises';
+import { release, tmpdir } from 'os';
 import { join } from 'path';
 import { sleep } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { launchArgs, normalizeTuning, tuningSpecsFor } from '../lib/localModelTuning.js';
 import { LOCAL_RUNTIMES, localEndpointPort, localRuntimeKind, isLocalInstanceEndpoint } from '../lib/localProviderRuntime.js';
 import { listMtplxCachedModels, pickMtplxCachedModel } from '../lib/mtplxModels.js';
-import { describeMtplxRuntime } from '../lib/mtplxRuntime.js';
+import { describeMtplxRuntime, mtplxManagedBinary, mtplxVenvDir, resolveMtplxBinary } from '../lib/mtplxRuntime.js';
+import { LOCK_PROFILES } from '../lib/pythonLockProfiles.js';
 import { probeOpenAiModels } from '../lib/openAiModelsProbe.js';
 import { createDaemonWatcher, createOnDemandDaemon, createPm2ExitTail, pm2ArgValue, MTPLX_APP } from '../lib/managedDaemon.js';
 import { persistDaemonLaunchConfig } from './localDaemonLaunchConfig.js';
@@ -42,7 +42,6 @@ import { persistDaemonLaunchConfig } from './localDaemonLaunchConfig.js';
 // `localModelHealing`.
 
 import { isAppleSilicon, isPortInUse } from '../lib/platform.js';
-import { findCommandOnPath } from '../lib/processEnv.js';
 import { runStreamingCommand } from '../lib/streamingSpawn.js';
 import { execPm2, getAppStatusStrict, clearJlistCache, getSavedProcessNames } from './pm2.js';
 
@@ -112,7 +111,8 @@ const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = Number(localEndpointPort(LOCAL_RUNTIMES.mtplx.defaultBaseUrl)) || 8000;
 
 /** MTPLX is an Apple-Silicon MLX runtime — nothing to install anywhere else. */
-export const MTPLX_UNSUPPORTED_REASON = 'MTPLX runs only on macOS with Apple Silicon.';
+export const MTPLX_UNSUPPORTED_REASON = 'MTPLX runs only on macOS with Apple Silicon (macOS 14 or newer).';
+const supportsMtplxInstall = () => isAppleSilicon() && Number(release().split('.')[0]) >= 23;
 
 /**
  * Why an installed MTPLX still cannot be started. Weights are a multi-gigabyte
@@ -132,7 +132,7 @@ const MTPLX_RUNTIME_BOOTSTRAP_ERROR = 'MTPLX\'s own Python runtime failed to boo
  * contract as MTPLX_NO_MODEL_ERROR: a large download is a button the user
  * presses, never something a start does behind them.
  */
-const MTPLX_RUNTIME_NOT_BOOTSTRAPPED_ERROR = `MTPLX's Python runtime has not been downloaded yet — Homebrew installs a wrapper that fetches it (several hundred megabytes) on first run, and PortOS will not do that inside a server start. Use "Download MTPLX runtime" on the MTPLX card to run it as its own step, then start MTPLX again.`;
+const MTPLX_RUNTIME_NOT_BOOTSTRAPPED_ERROR = `MTPLX's Python runtime has not been downloaded yet — Homebrew installs a wrapper that fetches it (several hundred megabytes) on first run, and PortOS will not do that inside a server start. Use "Download MTPLX runtime" on the MTPLX card to install the private locked runtime, then start MTPLX again.`;
 
 /**
  * Keep MTPLX startup logs raw while scoping each diagnosis to the current
@@ -304,9 +304,6 @@ const waitForPortRelease = daemon.waitForPortRelease;
 // `onDemand.waitForReady` — shared with `slotstreamServerManager.js`, whose
 // copy of the same loop reported only a bare PM2 status word (#8105).
 
-/** Resolve the `mtplx` executable on the child-process PATH. */
-const resolveMtplxBinary = () => findCommandOnPath('mtplx');
-
 /** Just the base URL MTPLX is serving on — no endpoint probe, no PM2 log fetch. */
 export async function getMtplxServerEndpoint() {
   if (!currentConfig) {
@@ -337,7 +334,7 @@ export async function getMtplxServerStatus() {
   // already there: a binary on PATH (or a server answering) is proof enough that
   // this host runs it, and reporting "macOS only" over a working install would
   // be a false negative.
-  const supported = installed || isAppleSilicon();
+  const supported = installed || supportsMtplxInstall();
 
   const base = await daemon.getStatusBase({ installed });
 
@@ -388,63 +385,44 @@ export async function getMtplxServerStatus() {
 }
 
 /**
- * Run the Homebrew wrapper's deferred bootstrap HERE, where the user pressed a
- * button and the budget fits.
- *
- * `brew install` finishes with only a shell shim on PATH; the actual MTPLX —
- * fastapi, huggingface_hub, numpy/scipy, the MLX stack — is downloaded by the
- * wrapper's first invocation (`lib/mtplxRuntime.js`). Left alone, that lands on
- * whatever runs `mtplx` next: a 30s status poll or an 8s-judged PM2 start,
- * neither of which can survive it, both of which misreport it. `mtplx --version`
- * is the cheapest invocation that trips the same guard, and it streams into the
- * install modal under the 20-minute install budget.
- *
- * A failure here FAILS the install: returning success would leave a card
- * reporting `installed: true` for something that cannot serve a request.
- *
- * Skipped when the runtime is already present — a re-run of the install (the
- * card's "Download MTPLX runtime" button drives this same flow) then costs a
- * `brew install` no-op rather than another invocation.
+ * Caller-triggered install into PortOS's private virtualenv. Never executes a
+ * Homebrew wrapper: its deferred pip bootstrap resolves an unconstrained graph.
+ * Ready external installs remain usable through resolveMtplxBinary().
  */
-async function warmMtplxRuntime(emit) {
-  const binaryPath = resolveMtplxBinary();
-  if (!binaryPath) return;
-  const runtime = await describeMtplxRuntime(binaryPath);
-  if (runtime.ready) return;
-
-  emit('MTPLX bootstraps its own Python runtime on first run — downloading it now. This can take several minutes.');
-  const result = await runStreamingCommand(binaryPath, ['--version'], emit, { timeoutMs: INSTALL_TIMEOUT_MS });
-  if (!result.success) {
-    throw new ServerError(`MTPLX installed, but its Python runtime failed to bootstrap: ${result.error}`, { status: 500, code: 'MTPLX_RUNTIME_BOOTSTRAP_FAILED' });
+let mtplxInstallation = null;
+export function installMtplx({ onProgress = () => {} } = {}) {
+  if (!supportsMtplxInstall()) {
+    return Promise.reject(new ServerError(MTPLX_UNSUPPORTED_REASON, { status: 400, code: 'MTPLX_UNSUPPORTED_PLATFORM' }));
   }
+  mtplxInstallation ??= installLockedMtplx(onProgress).finally(() => { mtplxInstallation = null; });
+  return mtplxInstallation;
 }
 
-/**
- * Install MTPLX from upstream's Homebrew tap, falling back to pip on a host
- * without Homebrew. Both install the same `mtplx` binary, and neither runs the
- * optional privileged fan-control helper.
- */
-export async function installMtplx({ onProgress = () => {} } = {}) {
+async function installLockedMtplx(onProgress) {
   const emit = (message) => onProgress({ event: 'progress', message });
-  if (!isAppleSilicon()) {
-    throw new ServerError(MTPLX_UNSUPPORTED_REASON, { status: 400, code: 'MTPLX_UNSUPPORTED_PLATFORM' });
+  const { resolvePatchedUv } = await import('../lib/pythonSetup.js');
+  const resolved = await resolvePatchedUv(({ message }) => emit(message));
+  if (!resolved.ok) throw new ServerError(resolved.reason, { status: 400, code: 'MTPLX_INSTALLER_UNAVAILABLE' });
+  emit('Installing the hash-pinned MTPLX runtime in a private environment…');
+  const python = join(mtplxVenvDir(), 'bin', 'python3');
+  const steps = [
+    // Native managed Python avoids an ambient 3.15 or Rosetta interpreter
+    // selecting a different dependency marker set from the arm64 lock.
+    ['venv', '--python', 'cpython-3.11-macos-aarch64-none', '--managed-python', '--allow-existing', mtplxVenvDir()],
+    // sync consumes the complete set without dependency resolution, and removes
+    // packages left over from an older runtime. Builders never run.
+    ['pip', 'sync', '--python', python, '--require-hashes', '--only-binary', ':all:', LOCK_PROFILES['mtplx-mlx'].lockFile],
+  ];
+  for (const args of steps) {
+    const result = await runStreamingCommand(resolved.uv, args, emit, { timeoutMs: INSTALL_TIMEOUT_MS });
+    if (!result.success) {
+      // A failed sync may have written the entry point before all dependencies.
+      // Do not advertise that partial runtime as installed on the next poll.
+      if (args[0] === 'pip') await unlink(mtplxManagedBinary()).catch((error) => { if (error.code !== 'ENOENT') throw error; });
+      throw new ServerError(`MTPLX install failed: ${result.error}`, { status: 500, code: 'MTPLX_INSTALL_FAILED' });
+    }
   }
-  if (await commandExists('brew', ['--version'])) {
-    emit('Installing MTPLX via Homebrew (youssofal/mtplx/mtplx)…');
-    const result = await runStreamingCommand('brew', ['install', 'youssofal/mtplx/mtplx'], emit, { timeoutMs: INSTALL_TIMEOUT_MS });
-    if (!result.success) throw new ServerError(`MTPLX install failed: ${result.error}`, { status: 500 });
-    await warmMtplxRuntime(emit);
-    return { success: true, message: 'MTPLX installed' };
-  }
-  if (await commandExists('python3', ['--version'])) {
-    // No warm-up here: pip installs the REAL package, not a wrapper, so there is
-    // no deferred runtime left to fetch.
-    emit('Homebrew was not found — installing MTPLX with pip instead…');
-    const result = await runStreamingCommand('python3', ['-m', 'pip', 'install', '--upgrade', 'mtplx'], emit, { timeoutMs: INSTALL_TIMEOUT_MS });
-    if (!result.success) throw new ServerError(`MTPLX install failed: ${result.error}`, { status: 500 });
-    return { success: true, message: 'MTPLX installed' };
-  }
-  throw new ServerError('Neither Homebrew nor python3 is available. Install Homebrew from https://brew.sh, then try again.', { status: 400 });
+  return { success: true, message: 'MTPLX installed' };
 }
 
 /**
@@ -515,7 +493,7 @@ async function launchMtplxServer(options = {}) {
   const binaryPath = resolveMtplxBinary();
   if (!binaryPath) {
     throw new ServerError(
-      'The `mtplx` binary was not found on PATH. Install it from this card (Homebrew tap, or pip as a fallback), then try again.',
+      'The `mtplx` binary was not found on PATH. Install it from this card, then try again.',
       { status: 400, code: 'MTPLX_NOT_INSTALLED' }
     );
   }
