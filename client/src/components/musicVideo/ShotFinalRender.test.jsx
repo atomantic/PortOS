@@ -200,10 +200,10 @@ describe('ShotFinalRender', () => {
     expect(screen.getByRole('button', { name: /Render shot/ })).toBeTruthy();
   });
 
-  it('shows a failure pushed on the socket while the status read still says not rendered', async () => {
-    getMusicVideoShotRenders.mockResolvedValue({ available: true, shots: [shot('a', 'stale')], ready: 0, total: 1 });
+  it('shows a new failure while the status read still reports an earlier rendered shot', async () => {
+    getMusicVideoShotRenders.mockResolvedValue({ available: true, shots: [shot('a', 'rendered', ['a-old.mp4'])], ready: 1, total: 1 });
     render(<ShotFinalRender project={project} scene={project.scenes[0]} onChange={() => {}} fieldId={fieldId} />);
-    expect((await screen.findByTestId('shot-render-state')).textContent).toBe('Not rendered');
+    expect((await screen.findByTestId('shot-render-state')).textContent).toBe('Rendered');
     act(() => handlers.get('music-video:shot-render')({ projectId: 'mv-1', sceneId: 'a', state: 'failed', error: 'overlay timed out', failedAt: '2026-01-01T00:00:00.000Z' }));
     expect(screen.getByTestId('shot-render-state').textContent).toBe('Failed');
     expect(screen.getByRole('alert').textContent).toBe('overlay timed out');
