@@ -97,7 +97,8 @@ export default function AssetsStage({ board }) {
   const run = (work) => { setWorking(true); setError(null); return work().catch((err) => setError(err?.message || 'That did not work')).finally(() => setWorking(false)); };
   // Tapping the active mark clears it.
   const toggleMark = (mark, options = {}) => run(async () => {
-    const next = picked.mark === mark ? null : mark;
+    const previousMark = picked.mark || null;
+    const next = previousMark === mark ? null : mark;
     const opt = { ...(options.keepInUse ? { keepInUse: true } : {}), silent: true };
     const result = await markMusicVideoPoolAssets(projectId, [{ kind: picked.kind, assetId: picked.assetId }], next, opt);
     // Bad rejects its takes on the shots not using it; the shots pick that up at once.
@@ -120,7 +121,7 @@ export default function AssetsStage({ board }) {
             type="button"
             onClick={async () => {
               try {
-                const unmark = await markMusicVideoPoolAssets(projectId, [{ kind: picked.kind, assetId: picked.assetId }], null, { silent: true });
+                const unmark = await markMusicVideoPoolAssets(projectId, [{ kind: picked.kind, assetId: picked.assetId }], previousMark, { silent: true });
                 takes?.applyPoolMarks?.(projectId, unmark);
                 for (const change of result.changes) {
                   if (change.previousTakeId) {
@@ -128,7 +129,7 @@ export default function AssetsStage({ board }) {
                     if (placed?.scene) takes?.applyScene?.(projectId, placed.scene);
                   }
                 }
-                setPool((prev) => prev.map((item) => (poolKey(item) === poolKey(picked) ? { ...item, mark: null } : item)));
+                setPool((prev) => prev.map((item) => (poolKey(item) === poolKey(picked) ? { ...item, mark: previousMark } : item)));
               } catch (err) {
                 toast.error(err?.message || 'Failed to undo');
               } finally {

@@ -103,6 +103,18 @@ describe('Music video Assets page', () => {
     await waitFor(() => expect(api.selectMusicVideoSceneTake).toHaveBeenCalledWith('mv-1', 's1', 'take-early', { silent: true }));
   });
 
+  // Uniquely catches Undo losing the ingredient mark that preceded a bad decision.
+  it('restores the prior ingredient mark when undoing a bad mark', async () => {
+    api.getMusicVideoMediaPool.mockResolvedValueOnce({ items: pool.map((item) => item.assetId === 'early.png' ? { ...item, mark: 'ingredient' } : item) });
+    api.markMusicVideoPoolAssets.mockResolvedValueOnce({ changes: [{ sceneId: 's1', action: 'flagged' }] });
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: /still from shot 1: Splicer close-up/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Bad' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Undo/i }));
+    await waitFor(() => expect(api.markMusicVideoPoolAssets).toHaveBeenCalledWith('mv-1', [{ kind: 'image', assetId: 'early.png' }], 'ingredient', { silent: true }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Ingredient' })).toHaveAttribute('aria-pressed', 'true'));
+  });
+
   // Uniquely catches an in-use file missing the keep-in-use override or the option not being sent.
   it('offers Mark bad, keep in use for a file currently in use', async () => {
     renderPage();
