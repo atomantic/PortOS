@@ -96,6 +96,18 @@ describe('shot color match', () => {
     expect(neutral.outlier).toBe(false);
   });
 
+  it('removes a red cast without muting the underlying color variation', () => {
+    const reference = new Uint8ClampedArray([160, 80, 60, 60, 160, 80, 80, 60, 160]);
+    const source = new Uint8ClampedArray(reference);
+    for (let i = 0; i < source.length; i += 3) source[i] *= 1.1;
+    const { correction, outlier } = _solveColorMatch(measureRgbStats(source, 3, 1), measureRgbStats(reference, 3, 1));
+    const matched = _applyColorMatchBuffer(source, 3, 1, correction);
+    const meanError = [...matched].reduce((sum, value, i) => sum + Math.abs(value - reference[i]), 0) / matched.length;
+    expect(correction.saturation).toBe(1);
+    expect(outlier).toBe(false);
+    expect(meanError).toBeLessThan(3);
+  });
+
   it('flags a correction past the clamp instead of forcing it', () => {
     const reference = measureRgbStats(solid(0.8), 4, 4, 3);
     const source = measureRgbStats(solid(0.2), 4, 4, 3);
