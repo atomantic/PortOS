@@ -65,7 +65,7 @@ export function videoPromptAdditions({ prompt, negativePrompt, stylePreset, sele
   ];
 }
 
-// Hosted lanes (Grok, fal, reactor, Runway, Gemini) take only text or image mode, and the
+// Hosted lanes (Grok, fal, reactor, Runway, Gemini, Higgsfield) take only text or image mode, and the
 // source pair is meaningful only in image mode. '' is the wire value otherwise.
 const hostedImageFields = (mode, sourceImageFile, sourceImageUpload) => {
   const isImage = mode === 'image';
@@ -122,6 +122,28 @@ function geminiVideoSubmission({ composed, width, height, mode, sourceImageFile,
   return {
     backend: 'gemini',
     prompt: composed.prompt,
+    ...clampedSize(width, height),
+    ...hostedImageFields(mode, sourceImageFile, sourceImageUpload),
+  };
+}
+
+// Higgsfield picks its endpoint from the inputs: a start frame (Image mode),
+// reference images (Text mode on a family that takes them), or the prompt alone.
+// The negative prompt is sent; the server folds it in as a visible "Avoid:" line.
+function higgsfieldVideoSubmission({
+  composed, higgsfieldModelId, higgsfieldDuration, higgsfieldResolution, higgsfieldGenerateAudio,
+  referenceImageFiles = [], width, height, mode, sourceImageFile, sourceImageUpload,
+}) {
+  const referenceFiles = mode === 'image' ? [] : referenceImageFiles.filter(Boolean);
+  return {
+    backend: 'higgsfield',
+    prompt: composed.prompt,
+    negativePrompt: composed.negativePrompt,
+    higgsfieldModelId: higgsfieldModelId || undefined,
+    ...(higgsfieldDuration ? { higgsfieldDuration: Number(higgsfieldDuration) } : {}),
+    ...(higgsfieldResolution ? { higgsfieldResolution } : {}),
+    ...(higgsfieldGenerateAudio ? { higgsfieldGenerateAudio: true } : {}),
+    ...(referenceFiles.length ? { referenceImageFiles: referenceFiles } : {}),
     ...clampedSize(width, height),
     ...hostedImageFields(mode, sourceImageFile, sourceImageUpload),
   };
@@ -377,6 +399,7 @@ const HOSTED_VIDEO_SUBMISSIONS = {
   reactor: reactorVideoSubmission,
   runway: runwayVideoSubmission,
   gemini: geminiVideoSubmission,
+  higgsfield: higgsfieldVideoSubmission,
 };
 
 export function buildVideoGenSubmission(args) {

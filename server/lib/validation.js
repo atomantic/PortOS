@@ -24,6 +24,7 @@ import { MAX_PLAN_TIER_LENGTH } from './subscriptionPlanTiers.js';
 import { IMAGE_GEN_MODES, QUEUEABLE_IMAGE_MODES, VIDEO_GEN_MODES } from './generationModes.js';
 import { RUNWAY_IMAGE_MODEL_IDS, RUNWAY_IMAGE_RESOLUTIONS } from './runwayImageModels.js';
 import { FAL_IMAGE_MODEL_IDS } from './falImageModels.js';
+import { HIGGSFIELD_IMAGE_MODEL_IDS } from './higgsfieldImageModels.js';
 import { RENDER_TARGETS, RENDER_TARGET_BACKEND_AUTO } from './renderTargets.js';
 import {
   grokVideoDurationSchema, cloudModelIdString, recordRenderPinFields, isSafeSnapshotSource, isSafeSubdirFilter, csvIdsParam,
@@ -2336,6 +2337,11 @@ export const videoGenSettingsSchema = z.object({
     apiKey: z.preprocess((v) => (v === '' ? undefined : v), z.string().trim().max(200).optional()),
     parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
   }).optional(),
+  // Higgsfield developer API — KEY_ID:KEY_SECRET; settings win over HIGGSFIELD_API_KEY.
+  higgsfield: z.object({
+    apiKey: z.preprocess((v) => (v === '' ? undefined : v), z.string().trim().max(400).optional()),
+    parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
+  }).optional(),
 });
 
 // Runway images share the private video credential; only render settings live here.
@@ -2351,7 +2357,7 @@ export const imageGenRunwaySettingsSchema = z.object({
 });
 
 // Provider whose delete is being run for a finished render (services/hostedRenderRemoteDelete.js).
-export const hostedProviderParamSchema = z.enum(['runway', 'fal']);
+export const hostedProviderParamSchema = z.enum(['runway', 'fal', 'higgsfield']);
 
 // fal.ai Imagegen settings slice (`imageGen.fal`). The API key is NOT here —
 // it is the fal.ai credential the video backend already owns (write-only via
@@ -2361,6 +2367,17 @@ export const hostedProviderParamSchema = z.enum(['runway', 'fal']);
 export const imageGenFalSettingsSchema = z.object({
   enabled: z.boolean().optional(),
   model: z.preprocess((v) => (v === '' ? undefined : v), z.enum(FAL_IMAGE_MODEL_IDS).optional()),
+  parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
+  cleanC2PA: z.boolean().optional(),
+  denoise: z.boolean().optional(),
+  deleteAfterDownload: z.boolean().optional(),
+});
+
+// Higgsfield Imagegen slice (`imageGen.higgsfield`). The key is the shared
+// video credential; `model` must name a catalog endpoint (lib/higgsfieldImageModels.js).
+export const imageGenHiggsfieldSettingsSchema = z.object({
+  enabled: z.boolean().optional(),
+  model: z.preprocess((v) => (v === '' ? undefined : v), z.enum(HIGGSFIELD_IMAGE_MODEL_IDS).optional()),
   parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
   cleanC2PA: z.boolean().optional(),
   denoise: z.boolean().optional(),
@@ -2491,17 +2508,19 @@ export const settingsSlicePartialSchemas = Object.freeze({
   'imageGen.agy': imageGenAgySettingsSchema.strict(),
   'imageGen.fal': imageGenFalSettingsSchema.strict(),
   'imageGen.runway': imageGenRunwaySettingsSchema.strict(),
+  'imageGen.higgsfield': imageGenHiggsfieldSettingsSchema.strict(),
   'imageGen.gemini': imageGenGeminiSettingsSchema.strict(),
   'imageGen.expose': z.object({ a1111: z.boolean().optional() }).strict(),
   renderDefaults: renderDefaultsSettingsSchema,
   videoGen: videoGenSettingsSchema.pick({
     mode: true, defaultModelId: true, displaySleep: true,
-    grok: true, gemini: true, fal: true, runway: true, reactor: true,
+    grok: true, gemini: true, fal: true, runway: true, reactor: true, higgsfield: true,
   }).partial().strict(),
   'videoGen.grok': z.object({ parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional() }).strict(),
   'videoGen.gemini': z.object({ parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional() }).strict(),
   'videoGen.fal': z.object({ parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional() }).strict(),
   'videoGen.runway': z.object({ parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional() }).strict(),
+  'videoGen.higgsfield': z.object({ parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional() }).strict(),
   'videoGen.reactor': z.object({ parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional() }).strict(),
   pipeline: z.object({ imageGen: renderFormSettingsSchema.nullable().optional() }).strict(),
   writersRoom: z.object({ imageGen: renderFormSettingsSchema.nullable().optional() }).strict(),

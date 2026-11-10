@@ -122,6 +122,7 @@ import { styledVideoPrompt } from '../lib/videoGenSubmission.js';
 import ReactorPanel from '../components/videoGen/ReactorPanel';
 import FalVideoSettings from '../components/videoGen/FalVideoSettings';
 import RunwayVideoSettings from '../components/videoGen/RunwayVideoSettings';
+import HiggsfieldVideoSettings from '../components/videoGen/HiggsfieldVideoSettings';
 import MusicVideoFilingSelect from '../components/media/MusicVideoFilingSelect';
 import { MUSIC_VIDEO_FILING_PARAM, musicVideoFilingFields, musicVideoOf } from '../lib/musicVideoFiling';
 import { formatCount, timeAgo } from '../utils/formatters';
@@ -246,6 +247,7 @@ export default function VideoGen() {
   const reactorEnabled = status?.reactorEnabled === true;
   const runwayEnabled = status?.runwayEnabled === true;
   const geminiEnabled = status?.geminiEnabled === true;
+  const higgsfieldEnabled = status?.higgsfieldEnabled === true;
   const models = useMemo(() => modelContext?.models || [], [modelContext]);
   const refreshGrokEnabled = useCallback(() => {
     getSettings({ silent: true })
@@ -283,7 +285,9 @@ export default function VideoGen() {
   // Every field the form submits, plus the payload builder both submit paths
   // share. See client/src/hooks/useVideoGenForm.js.
   const {
-    backend, hostedLane, isGrok, isFal, isReactor, isRunway, isGemini, handleBackendChange, grokDuration, setGrokDuration,
+    backend, hostedLane, isGrok, isFal, isReactor, isRunway, isGemini, isHiggsfield, handleBackendChange, grokDuration, setGrokDuration,
+    higgsfieldModel, setHiggsfieldModelId, higgsfieldDuration, setHiggsfieldDuration,
+    higgsfieldResolution, setHiggsfieldResolution, higgsfieldGenerateAudio, setHiggsfieldGenerateAudio,
     runwayModelId, setRunwayModelId, runwayDuration, setRunwayDuration, runwayResolution, setRunwayResolution, runwayInputs, setRunwayInputs,
     falDuration, setFalDuration, falModelId, setFalModelId,
     falResolution, setFalResolution, falGenerateAudio, setFalGenerateAudio,
@@ -329,7 +333,7 @@ export default function VideoGen() {
     icStrength, setIcStrength, icSkipStage2, setIcSkipStage2,
     applyRemix, applyFinish, applyResumedParams, buildGeneratePayload,
   } = useVideoGenForm({
-    models, modelContext, availableLoras, grokEnabled, falEnabled, reactorEnabled, runwayEnabled, geminiEnabled,
+    models, modelContext, availableLoras, grokEnabled, falEnabled, reactorEnabled, runwayEnabled, geminiEnabled, higgsfieldEnabled,
     remoteSubmissionFields: remoteTarget.isRemote ? remoteTarget.submissionFields : null,
     displaySleepEnabled,
   });
@@ -366,6 +370,7 @@ export default function VideoGen() {
       ['the reactor.inc backend', isReactor],
       ['the Runway backend', isRunway],
       ['the Gemini backend', isGemini],
+      ['the Higgsfield backend', isHiggsfield],
       // Each remaining pipeline semantic has its own input listed below, but the
       // mode can be set before that input is filled — so gate the mode too
       // rather than letting an a2v render reach the peer as plain text-to-video.
@@ -392,7 +397,7 @@ export default function VideoGen() {
       return `${model?.modelName || 'The selected peer model'} renders only from a source image — add a start frame, or pick a text-to-video model.`;
     }
     return null;
-  }, [remoteTarget.isRemote, remoteTarget.model, remoteTarget.acceptsInput, isGrok, isFal, isReactor, isRunway, isGemini, mode, sourceImageFile, sourceImageUpload,
+  }, [remoteTarget.isRemote, remoteTarget.model, remoteTarget.acceptsInput, isGrok, isFal, isReactor, isRunway, isGemini, isHiggsfield, mode, sourceImageFile, sourceImageUpload,
     lastImageFile, lastImageUpload, keyframesActive, extendFromVideoId, audioFile, icReferenceFile,
     icReferenceVideoId, icReferenceImageFiles, selectedLoras, chunks]);
   // One reading for the Generate button, the enqueue guard and the caption.
@@ -1087,8 +1092,8 @@ export default function VideoGen() {
   // number the user can watch while writing.
   // Runway caps the prompt per model; the server refuses an over-cap prompt
   // with its count rather than shortening it.
-  const promptCap = isReactor ? REACTOR_MAX_PROMPT_LENGTH : isRunway ? runwayModel?.promptMaxChars ?? null : null;
-  const promptCapLabel = isReactor ? 'Reactor' : 'Runway';
+  const promptCap = isReactor ? REACTOR_MAX_PROMPT_LENGTH : isRunway ? runwayModel?.promptMaxChars ?? null : isHiggsfield ? higgsfieldModel.promptMax : null;
+  const promptCapLabel = isReactor ? 'Reactor' : isHiggsfield ? higgsfieldModel.label : 'Runway';
   const submittedPromptLength = useMemo(
     () => (promptCap != null
       ? styledVideoPrompt(prompt, { negativePrompt, stylePreset, selectedUniverse }).length
@@ -1116,7 +1121,7 @@ export default function VideoGen() {
   // dead field that quietly does nothing. A federated render is the PEER's
   // model to judge, so the local selection's gate must not take away a field
   // that lane does submit.
-  const negativePromptSupported = isGrok || isRunway || remoteTarget.isRemote
+  const negativePromptSupported = isGrok || isRunway || isHiggsfield || remoteTarget.isRemote
     || (!isFal && !isReactor && !isGemini && currentModel?.supportsNegativePrompt !== false);
 
   // Every completed reactor render stamps its fast-h3 clip id on the history
@@ -1261,7 +1266,7 @@ export default function VideoGen() {
           cloud backend's image-to-video only supports text (image-first) and
           image modes, so switching to one snaps an unsupported mode back to
           the nearest one. */}
-      {(grokEnabled || falEnabled || reactorEnabled || runwayEnabled || geminiEnabled) && (
+      {(grokEnabled || falEnabled || reactorEnabled || runwayEnabled || geminiEnabled || higgsfieldEnabled) && (
         <div className="bg-port-card border border-port-border rounded-xl p-1 flex gap-1" role="group" aria-label="Video generation backend">
           {[
             { id: 'local', label: 'Local' },
@@ -1270,6 +1275,7 @@ export default function VideoGen() {
             ...(reactorEnabled ? [{ id: 'reactor', label: 'Reactor.inc' }] : []),
             ...(runwayEnabled ? [{ id: 'runway', label: 'Runway' }] : []),
             ...(geminiEnabled ? [{ id: 'gemini', label: GEMINI_OMNI_WEB_MODEL.label }] : []),
+            ...(higgsfieldEnabled ? [{ id: 'higgsfield', label: 'Higgsfield' }] : []),
           ].map(({ id, label }) => (
             <button
               key={id}
@@ -1289,7 +1295,9 @@ export default function VideoGen() {
                       ? 'Render from text or animate a start frame via the Runway API. Counts against your Runway credits.'
                       : id === 'gemini'
                         ? 'Render through the Gemini web app in the PortOS Browser. Counts against the signed-in Google account.'
-                        : 'Render on this machine with the local runtimes.'}
+                        : id === 'higgsfield'
+                          ? 'Render Seedance, Kling or Wan via the Higgsfield API. Billed to your Higgsfield account.'
+                          : 'Render on this machine with the local runtimes.'}
             >
               {label}
             </button>
@@ -1691,6 +1699,22 @@ export default function VideoGen() {
             </div>
           )}
 
+          {isHiggsfield && mode === 'text' && higgsfieldModel.maxReferenceImages > 0 && (
+            <div className="space-y-1">
+              <ReferenceImagesPanel
+                maxImages={higgsfieldModel.maxReferenceImages}
+                withInputImage={false}
+                files={referenceImageFiles}
+                onAdd={addReferenceImage}
+                onBrowse={(index) => setGalleryPicker({ kind: 'reference', index })}
+                onRemove={removeReferenceImage}
+              />
+              <p className="text-xs text-port-text-muted">
+                Optional. With references, {higgsfieldModel.label} renders from them instead of from text alone. Switch to Image mode to pin a start frame instead.
+              </p>
+            </div>
+          )}
+
           {icModeActive && (
             <IcLoraPanel
               spec={icSpec}
@@ -1790,6 +1814,20 @@ export default function VideoGen() {
                 Gemini sets the length (about {GEMINI_OMNI_WEB_MODEL.clipSeconds} seconds), and renders count against the Google account signed in there.
               </p>
             </div>
+          ) : isHiggsfield ? (
+            <HiggsfieldVideoSettings
+              higgsfieldModel={higgsfieldModel}
+              setHiggsfieldModelId={setHiggsfieldModelId}
+              higgsfieldDuration={higgsfieldDuration}
+              setHiggsfieldDuration={setHiggsfieldDuration}
+              higgsfieldResolution={higgsfieldResolution}
+              setHiggsfieldResolution={setHiggsfieldResolution}
+              higgsfieldGenerateAudio={higgsfieldGenerateAudio}
+              setHiggsfieldGenerateAudio={setHiggsfieldGenerateAudio}
+              width={width}
+              height={height}
+              handleResolutionChange={handleResolutionChange}
+            />
           ) : isRunway ? (
             <RunwayVideoSettings
               mode={mode}

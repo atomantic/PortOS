@@ -32,6 +32,11 @@ export function useVideoGenFieldState({
   const [runwayDuration, setRunwayDuration] = useState('');
   const [runwayResolution, setRunwayResolution] = useState('');
   const [runwayInputs, setRunwayInputs] = useState({});
+  // Higgsfield: '' = the catalog default family / the family's default length and tier.
+  const [higgsfieldModelId, setHiggsfieldModelId] = useState('');
+  const [higgsfieldDuration, setHiggsfieldDuration] = useState('');
+  const [higgsfieldResolution, setHiggsfieldResolution] = useState('');
+  const [higgsfieldGenerateAudio, setHiggsfieldGenerateAudio] = useState(false);
   const [reactorClipId, setReactorClipId] = useState('');
   const [reactorSeconds, setReactorSeconds] = useState(REACTOR_DEFAULT_CLIP_LENGTH);
   const [reactorSeed, setReactorSeed] = useState('');
@@ -113,6 +118,10 @@ export function useVideoGenFieldState({
     runwayDuration, setRunwayDuration,
     runwayResolution, setRunwayResolution,
     runwayInputs, setRunwayInputs,
+    higgsfieldModelId, setHiggsfieldModelId,
+    higgsfieldDuration, setHiggsfieldDuration,
+    higgsfieldResolution, setHiggsfieldResolution,
+    higgsfieldGenerateAudio, setHiggsfieldGenerateAudio,
     reactorClipId, setReactorClipId,
     reactorSeconds, setReactorSeconds,
     reactorSeed, setReactorSeed,

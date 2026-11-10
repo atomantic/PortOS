@@ -18,6 +18,7 @@ const MODE_ICONS = {
   [IMAGE_GEN_MODE.AGY]: Sparkles,
   [IMAGE_GEN_MODE.FAL]: Zap,
   [IMAGE_GEN_MODE.RUNWAY]: Cloud,
+  [IMAGE_GEN_MODE.HIGGSFIELD]: Cloud,
   [IMAGE_GEN_MODE.EXTERNAL]: Cloud,
 };
 
@@ -52,6 +53,8 @@ export function deriveAvailableBackends(settings, { excludeExternal = false } = 
     out.push({ id: IMAGE_GEN_MODE.RUNWAY, ...metaFor(IMAGE_GEN_MODE.RUNWAY) });
   if (ig.fal?.enabled === true)
     out.push({ id: IMAGE_GEN_MODE.FAL, ...metaFor(IMAGE_GEN_MODE.FAL) });
+  if (ig.higgsfield?.enabled === true)
+    out.push({ id: IMAGE_GEN_MODE.HIGGSFIELD, ...metaFor(IMAGE_GEN_MODE.HIGGSFIELD) });
   if (!excludeExternal && (ig.external?.sdapiUrl || ig.sdapiUrl || '').trim())
     out.push({ id: IMAGE_GEN_MODE.EXTERNAL, ...metaFor(IMAGE_GEN_MODE.EXTERNAL) });
   return out;
