@@ -1,11 +1,12 @@
 import { execFile, spawn } from './childProcess.js';
 import { existsSync, readdirSync } from 'node:fs';
-import { arch, homedir, platform } from 'node:os';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { arch, homedir, platform, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { PATHS } from './fileUtils.js';
 import { isAppleSilicon } from './platform.js';
-import { LOCK_PROFILES, lockProfileUnsupportedReason, planLockedRepair } from './pythonLockProfiles.js';
+import { LOCK_PROFILES, lockEntryText, lockProfileUnsupportedReason, planLockedRepair } from './pythonLockProfiles.js';
 import { ensurePrivateUv } from './privateUv.js';
 import { safeChildProcessOptions, whichFirst, whichFirstSync } from './processEnv.js';
 import { createLineReader } from './streamLines.js';
@@ -57,6 +58,7 @@ const PIP_NAMES = {
 // Packages whose wrong namesake must be removed before the mflux-video lock
 // installs the real one (see MLX_VIDEO_PIP). Mirrors `scripts/setup-image-video.sh`.
 const MFLUX_VIDEO_PRE_UNINSTALL = ['mlx_video'];
+const MLX_VIDEO_DISTRIBUTION = 'mlx-video-with-audio';
 
 export const pipNameFor = (importName) => PIP_NAMES[importName] || importName;
 
@@ -885,6 +887,9 @@ function launchInstall(pythonPath, onLog, { preferUv }, work) {
   const trackProc = (p) => { currentProc = p; };
   const promise = (async () => {
     const uv = preferUv ? await resolveUvOrPip(onLog) : null;
+    // kill() cannot stop a bootstrap shared with other callers, but a cancelled
+    // install must not start its package subprocess once the bootstrap settles.
+    if (killed) return { ok: false, code: -1 };
     const runPip = (args) => {
       if (!uv) return streamSpawn(pythonPath, ['-m', 'pip', ...args], onLog, trackProc);
       // uv does not accept pip's progress-bar/yes options. Keep the same
@@ -955,11 +960,30 @@ export function installPackages(pythonPath, importNames, onLog, { preferUv = fal
       // message that's noise, not an error.
       await ctx.runPip(['uninstall', '--yes', ...conflicts]);
       if (ctx.isKilled()) return { ok: false, code: -1 };
+      // The wrong namesake shares module files with the real package, so removing
+      // it can leave the real one "installed" but broken, and the lock install
+      // would then skip it. Force-reinstall only that entry (--no-deps) first.
+      const selfCode = await reinstallLockEntry(ctx, plan.profile, MLX_VIDEO_DISTRIBUTION, onLog);
+      if (selfCode !== 0) return ctx.isKilled() ? { ok: false, code: -1 } : { ok: false, code: selfCode };
     }
     // --user matches the setup script's shared layout; a venv or uv target rejects it.
     const user = !ctx.usingUv && !await pythonIsVenv(pythonPath);
     return runLockInstall(ctx, plan.profile, onLog, { user });
   });
+}
+
+async function reinstallLockEntry({ runPip, tool }, profile, name, onLog) {
+  const dir = await mkdtemp(join(tmpdir(), 'portos-lock-entry-'));
+  try {
+    const file = join(dir, 'requirements.txt');
+    await writeFile(file, lockEntryText(profile, name));
+    onLog({ type: 'log', message: `${tool} install --force-reinstall --no-deps ${name} (hash-pinned ${profile.label} lock)` });
+    const code = await runPip(['install', '--force-reinstall', '--require-hashes', '--no-deps', '-r', file]);
+    if (code !== 0) onLog({ type: 'error', message: `${tool} exited with code ${code}` });
+    return code;
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 }
 
 // FLUX.2 installs run the hash-pinned lock (Apple Silicon MLX or CUDA) through

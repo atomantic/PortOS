@@ -4,12 +4,13 @@
 // a user-wide executable is not ours to do. So PortOS tools run a private copy,
 // bootstrapped once into ~/.portos/tools/uv-<version> exactly like the
 // bundled bootstraps in scripts/setup-image-video.sh (same directory, so the
-// two share one install).
+// two share one install), from the hash-pinned scripts/requirements-uv-bootstrap.lock.txt.
 import { execFile } from './childProcess.js';
 import { existsSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
+import { LOCK_PROFILES } from './pythonLockProfiles.js';
 import { safeChildProcessOptions } from './processEnv.js';
 
 const execFileAsync = promisify(execFile);
@@ -61,7 +62,10 @@ export function ensurePrivateUv({ basePython, onLog = () => {} } = {}) {
     if (!basePython) return { ok: false, reason: `No Python found to bootstrap uv ${PRIVATE_UV_VERSION}. Install Python 3.11+ and retry.` };
     onLog({ type: 'log', message: `Bootstrapping PortOS-private uv ${PRIVATE_UV_VERSION}...` });
     await run(basePython, ['-m', 'venv', '--clear', privateUvDir()], 120_000);
-    await run(venvPythonPath(), ['-m', 'pip', 'install', '--disable-pip-version-check', `uv==${PRIVATE_UV_VERSION}`], 300_000);
+    // The bootstrap installer is itself hash-verified: every uv wheel/sdist digest
+    // is pinned in the lock, so a substituted package fails before it can run.
+    await run(venvPythonPath(), ['-m', 'pip', 'install', '--disable-pip-version-check', '--require-hashes', '--no-deps', '--only-binary', ':all:',
+      '-r', LOCK_PROFILES['uv-bootstrap'].lockFile], 300_000);
     if (!await privateUvIsCurrent()) return { ok: false, reason: `Bootstrapped uv did not report version ${PRIVATE_UV_VERSION}.` };
     return { ok: true, uv: privateUvPath() };
   })()

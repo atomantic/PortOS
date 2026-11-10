@@ -26,6 +26,18 @@ export const LOCK_PROFILES = Object.freeze({
     lockFile: join(SCRIPTS_DIR, 'requirements-mflux-video-mlx.lock.txt'),
     environments: [APPLE_SILICON],
   },
+  'uv-bootstrap': {
+    id: 'uv-bootstrap',
+    label: 'private uv bootstrap',
+    lockFile: join(SCRIPTS_DIR, 'requirements-uv-bootstrap.lock.txt'),
+    environments: [
+      APPLE_SILICON,
+      { platform: 'darwin', arch: 'x64' },
+      { platform: 'linux', arch: 'x64' },
+      { platform: 'linux', arch: 'arm64' },
+      { platform: 'win32', arch: 'x64' },
+    ],
+  },
   'guard-runtime': {
     id: 'guard-runtime',
     label: 'Prompt Guard / jev classifier runtime',
@@ -45,6 +57,19 @@ const APPLE_SILICON_REPAIR_PROFILES = ['mflux', 'mflux-video'];
 
 export const canonicalPackageName = (spec) =>
   String(spec).split(/[\s<>=!~;[]/)[0].toLowerCase().replace(/[-_.]+/g, '-');
+
+// The pinned requirement plus its --hash lines, exactly as the lock spells them,
+// so a caller can force-reinstall one distribution without re-resolving or
+// touching the rest of the closure. Empty when the lock has no such entry.
+export function lockEntryText(profile, name) {
+  let keep = false;
+  const lines = [];
+  for (const line of readFileSync(profile.lockFile, 'utf8').split('\n')) {
+    if (/^[^\s#]/.test(line)) keep = canonicalPackageName(line) === canonicalPackageName(name) && line.includes('==');
+    if (keep) lines.push(line);
+  }
+  return lines.length ? `${lines.join('\n')}\n` : '';
+}
 
 const lockEntries = (profile) => readFileSync(profile.lockFile, 'utf8').split('\n')
   .map((line) => /^([A-Za-z0-9][A-Za-z0-9._-]*)==([^\s;\\]+)/.exec(line))

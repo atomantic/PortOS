@@ -2,7 +2,8 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { JEV_PYTHON_PACKAGES } from './jev.js';
 import { MODEL_ABUSE_GUARD_PYTHON_PACKAGES } from './modelAbuseGuard.js';
-import { LOCK_PROFILES, lockProfileUnsupportedReason, planLockedRepair } from './pythonLockProfiles.js';
+import { PRIVATE_UV_VERSION } from './privateUv.js';
+import { LOCK_PROFILES, lockEntryText, lockProfileUnsupportedReason, planLockedRepair } from './pythonLockProfiles.js';
 
 const directPins = (lockFile) => readFileSync(lockFile.replace('.lock.txt', '.txt'), 'utf8')
   .split('\n').filter((line) => /^[A-Za-z0-9]/.test(line)).map((line) => line.trim());
@@ -31,6 +32,22 @@ describe('locked runtime profiles', () => {
     const video = directPins(LOCK_PROFILES['mflux-video'].lockFile);
     expect(mflux.length).toBeGreaterThan(0);
     for (const pin of mflux) expect(video).toContain(pin);
+  });
+
+  it('pins the private uv bootstrap to the version PortOS runs, with a digest for every distribution', () => {
+    const { lockFile } = LOCK_PROFILES['uv-bootstrap'];
+    expect(directPins(lockFile)).toEqual([`uv==${PRIVATE_UV_VERSION}`]);
+    const lock = readFileSync(lockFile, 'utf8');
+    expect(lock).toContain(`uv==${PRIVATE_UV_VERSION}`);
+    expect(lock.match(/--hash=sha256:/g).length).toBeGreaterThan(5);
+  });
+
+  it('extracts exactly one distribution, with its hashes, for a targeted force-reinstall', () => {
+    const entry = lockEntryText(LOCK_PROFILES['mflux-video'], 'mlx-video-with-audio');
+    expect(entry).toMatch(/^mlx-video-with-audio==/);
+    expect(entry.match(/^[A-Za-z0-9][\w.-]*==/gm)).toHaveLength(1);
+    expect(entry).toMatch(/--hash=sha256:[0-9a-f]{64}/);
+    expect(lockEntryText(LOCK_PROFILES['mflux-video'], 'not-a-package')).toBe('');
   });
 
   it('refuses hosts no lock environment covers with a precise report', () => {

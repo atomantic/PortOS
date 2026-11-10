@@ -36,7 +36,7 @@ describe('private patched uv', () => {
     expect(a).toEqual({ ok: true, uv: privateUvPath() });
     expect(b).toEqual(a);
     expect(calls().filter((c) => c.includes('-m venv'))).toEqual(['/py/python3 -m venv --clear /home/example/.portos/tools/uv-0.13.6']);
-    expect(calls().some((c) => c.endsWith(`pip install --disable-pip-version-check uv==${PRIVATE_UV_VERSION}`))).toBe(true);
+    expect(calls().some((c) => /-m pip install --disable-pip-version-check --require-hashes --no-deps --only-binary :all: -r .*requirements-uv-bootstrap\.lock\.txt$/.test(c))).toBe(true);
   });
 
   it('replaces an outdated private uv and reports failure instead of falling back to PATH', async () => {

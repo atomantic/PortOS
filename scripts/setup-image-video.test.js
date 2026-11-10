@@ -639,7 +639,10 @@ describe('legacy INSTALL_VIDEO installs only hash-pinned locks', () => {
   const block = source.slice(source.indexOf('if [[ "$INSTALL_VIDEO" == "1" ]]; then'), source.indexOf('INSTALL_LTX2="${INSTALL_LTX2:-0}"'));
 
   it('installs the mflux-video lock with --require-hashes --no-deps and never by bare package name', () => {
-    expect(block).toMatch(/pip install --user --require-hashes --no-deps \\\n\s+-r "\$SCRIPT_DIR\/requirements-mflux-video-mlx\.lock\.txt"/);
+    expect(block).toContain('VIDEO_LOCK="$SCRIPT_DIR/requirements-mflux-video-mlx.lock.txt"');
+    expect(block).toContain('pip install --user --require-hashes --no-deps -r "$VIDEO_LOCK"');
+    // Removing the wrong `mlx_video` namesake must be followed by a force-reinstall of the real package's own files.
+    expect(block).toMatch(/--require-hashes --no-deps --force-reinstall -r "\$VIDEO_SELF_REQ"[\s\S]*-r "\$VIDEO_LOCK"/);
     expect(existsSync(join(REPO_ROOT, 'scripts', 'requirements-mflux-video-mlx.lock.txt'))).toBe(true);
     expect(block).not.toMatch(/pip install --upgrade/);
     expect(block).not.toMatch(/^\s+(torch|diffusers|accelerate|mlx_vlm|mlx) *\\?$/m);
@@ -660,15 +663,20 @@ describe('legacy INSTALL_VIDEO installs only hash-pinned locks', () => {
 // "No module named 'fastvideo'" pointing at a venv nothing was ever written to.
 // `uv sync` is not affected: it always resolves the project's own .venv.
 describe('uv installs target their own venv, not an inherited one', () => {
-  it('keeps bundled uv bootstraps above the wheel traversal and compromised CA fixes', () => {
+  it('bootstraps every bundled uv from the hash-pinned lock, above the wheel traversal and compromised CA fixes', () => {
     // GHSA-hq85-5cpj-mr62 needs 0.13.4; that also includes the entry-point,
     // RECORD, ZIP and TAR extraction fixes. Check every executable install.
-    const versions = [...source.matchAll(/pip install[^\n]*["']uv==(\d+)\.(\d+)\.(\d+)["']/g)]
-      .map((match) => match.slice(1).map(Number));
-    expect(versions).toHaveLength(3);
-    for (const [major, minor, patch] of versions) {
-      expect(major > 0 || minor > 13 || (minor === 13 && patch >= 4)).toBe(true);
-    }
+    const installs = [...source.matchAll(/pip install[^\n]*-r "\$SCRIPT_DIR\/requirements-uv-bootstrap\.lock\.txt"/g)];
+    expect(installs).toHaveLength(3);
+    for (const [install] of installs) expect(install).toContain('--require-hashes --no-deps');
+    expect(source).not.toMatch(/pip install[^\n]*["']uv==/);
+    const pin = readFileSync(join(REPO_ROOT, 'scripts', 'requirements-uv-bootstrap.txt'), 'utf8').match(/^uv==(\d+)\.(\d+)\.(\d+)$/m);
+    const [major, minor, patch] = pin.slice(1).map(Number);
+    expect(major > 0 || minor > 13 || (minor === 13 && patch >= 4)).toBe(true);
+    // The tool directory and version probe must track the locked release.
+    const version = pin.slice(1).join('.');
+    expect(source.match(new RegExp(`uv-${version.replaceAll('.', '\\.')}`, 'g'))).toHaveLength(3);
+    expect(source.match(new RegExp(`"uv ${version.replaceAll('.', '\\.')}"`, 'g'))).toHaveLength(3);
   });
 
   it('passes --python to every uv pip install', () => {

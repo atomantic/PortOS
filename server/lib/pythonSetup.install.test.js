@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { LOCK_PROFILES } from './pythonLockProfiles.js';
 
@@ -8,12 +9,16 @@ vi.mock('./processEnv.js', async (original) => ({ ...await original(), whichFirs
 vi.mock('./privateUv.js', async (original) => ({ ...await original(), ensurePrivateUv: mock.ensureUv }));
 const { installLockedRuntime, installPackages } = await import('./pythonSetup.js');
 
+const forced = [];
 const spawned = () => mock.spawn.mock.calls.map(([bin, args]) => [bin, ...args].join(' '));
 
 beforeEach(() => {
   mock.ambientUv.mockClear();
   mock.ensureUv.mockReset().mockResolvedValue({ ok: true, uv: '/private/tools/uv' });
-  mock.spawn.mockReset().mockImplementation(() => {
+  forced.length = 0;
+  mock.spawn.mockReset().mockImplementation((_bin, args) => {
+    // The one-entry requirements file is removed once the install ends; capture it live.
+    if (args.includes('--force-reinstall')) forced.push(readFileSync(args.at(-1), 'utf8'));
     const child = new EventEmitter();
     child.stdout = new EventEmitter();
     child.stderr = new EventEmitter();
@@ -73,12 +78,28 @@ describe('installPackages generic repair', () => {
     expect(calls[0]).not.toContain('--upgrade');
   });
 
-  it('dispatches mlx_vlm / mlx_video repair to the video lock after removing the wrong-namesake mlx_video', async () => {
+  it('dispatches mlx_vlm / mlx_video repair to the video lock, restoring the real package after removing the wrong namesake', async () => {
     await installPackages('/image/python', ['mlx-video-with-audio>=0.1.35', 'mlx_vlm', 'mflux'], vi.fn(), { appleSilicon: true }).promise;
     const calls = spawned();
     expect(calls[0]).toBe('/image/python -m pip uninstall --yes mlx_video');
-    expect(calls[1]).toMatch(/--require-hashes --no-deps -r .*requirements-mflux-video-mlx\.lock\.txt$/);
-    expect(calls).toHaveLength(2);
+    // Uninstalling the namesake can delete files the real package shares; only that entry is force-reinstalled.
+    expect(calls[1]).toMatch(/^\/image\/python -m pip install --force-reinstall --require-hashes --no-deps -r .*requirements\.txt$/);
+    expect(forced).toHaveLength(1);
+    expect(forced[0]).toMatch(/^mlx-video-with-audio==[\d.]+ ;/);
+    expect(forced[0]).toMatch(/--hash=sha256:[0-9a-f]{64}/);
+    expect(forced[0].match(/^[A-Za-z0-9][\w.-]*==/gm)).toHaveLength(1);
+    expect(calls[2]).toMatch(/--require-hashes --no-deps -r .*requirements-mflux-video-mlx\.lock\.txt$/);
+    expect(calls).toHaveLength(3);
+  });
+
+  it('does not start any package subprocess when cancelled while the private uv is still bootstrapping', async () => {
+    let finishUv;
+    mock.ensureUv.mockReturnValue(new Promise((resolve) => { finishUv = resolve; }));
+    const install = installPackages('/image/python', ['mflux'], vi.fn(), { appleSilicon: true, preferUv: true });
+    install.kill();
+    finishUv({ ok: true, uv: '/private/tools/uv' });
+    await expect(install.promise).resolves.toEqual({ ok: false, code: -1 });
+    expect(mock.spawn).not.toHaveBeenCalled();
   });
 
   it('uses the private uv for preferUv repairs', async () => {

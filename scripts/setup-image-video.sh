@@ -606,11 +606,20 @@ if [[ "$INSTALL_VIDEO" == "1" ]]; then
         exit 1
         ;;
     esac
-    "$PYTHON_BIN" -m pip install --user --require-hashes --no-deps \
-      -r "$SCRIPT_DIR/requirements-mflux-video-mlx.lock.txt"
+    VIDEO_LOCK="$SCRIPT_DIR/requirements-mflux-video-mlx.lock.txt"
+    # Uninstalling the wrong-namesake `mlx_video` can delete files the real
+    # package shares, and a satisfied-looking lock install would not restore
+    # them. Force-reinstall mlx-video-with-audio's OWN files (--no-deps, so the
+    # heavy tree is untouched), then install the rest of the lock.
+    VIDEO_SELF_REQ="$(mktemp)"
+    awk '/^[^ #]/ { keep = /^mlx-video-with-audio==/ } keep' "$VIDEO_LOCK" > "$VIDEO_SELF_REQ"
+    "$PYTHON_BIN" -m pip install --user --require-hashes --no-deps --force-reinstall -r "$VIDEO_SELF_REQ" \
+      && "$PYTHON_BIN" -m pip install --user --require-hashes --no-deps -r "$VIDEO_LOCK"
+    rm -f "$VIDEO_SELF_REQ"
   elif is_macos; then
     # mlx ships arm64-only wheels and the lock covers only arm64 macOS.
-    echo "⚠️  mlx_video needs Apple Silicon; this Mac has no hash-pinned lock. Skipping the video packages." >&2
+    echo "❌ INSTALL_VIDEO=1 needs Apple Silicon: mlx ships arm64-only wheels and this Mac has no hash-pinned lock." >&2
+    exit 1
   else
     # No hash-pinned lock covers a bare-interpreter torch + diffusers install.
     # The CUDA video runtimes each own a locked venv instead (INSTALL_LTX25_CUDA,
@@ -766,7 +775,7 @@ if [[ "$INSTALL_FASTVIDEO" == "1" ]]; then
   if [[ ! -x "$FASTVIDEO_UV" ]] || [[ "$("$FASTVIDEO_UV" --version 2>/dev/null || true)" != "uv 0.13.6" ]]; then
     echo "📦 Bootstrapping pinned uv 0.13.6 for FastVideo..."
     "$PYTHON_BIN" -m venv --clear "$FASTVIDEO_UV_TOOL_DIR"
-    "${FASTVIDEO_UV_TOOL_DIR}/bin/python3" -m pip install --disable-pip-version-check "uv==0.13.6"
+    "${FASTVIDEO_UV_TOOL_DIR}/bin/python3" -m pip install --disable-pip-version-check --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-uv-bootstrap.lock.txt"
   fi
 
   FASTVIDEO_PIN="${FASTVIDEO_PIN:-fa2d1324c60050cd65209c6aaeac470e7fb412f5}"
@@ -850,7 +859,7 @@ if [[ "$INSTALL_WAN22" == "1" ]]; then
   if [[ ! -x "$WAN22_UV" ]] || [[ "$("$WAN22_UV" --version 2>/dev/null || true)" != "uv 0.13.6" ]]; then
     echo "📦 Bootstrapping pinned uv 0.13.6 for MLX-Gen..."
     "$PYTHON_BIN" -m venv --clear "$WAN22_UV_TOOL_DIR"
-    "${WAN22_UV_TOOL_DIR}/bin/python3" -m pip install --disable-pip-version-check "uv==0.13.6"
+    "${WAN22_UV_TOOL_DIR}/bin/python3" -m pip install --disable-pip-version-check --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-uv-bootstrap.lock.txt"
   fi
   # v0.25.0 exact commit, statically audited before integration. Keep the full
   # SHA so existing installs get an explicit, reproducible UI-driven upgrade.
@@ -903,7 +912,7 @@ if [[ "$INSTALL_MINIMAX_H3" == "1" ]]; then
   if [[ ! -x "$MINIMAX_H3_UV" ]] || [[ "$("$MINIMAX_H3_UV" --version 2>/dev/null || true)" != "uv 0.13.6" ]]; then
     echo "📦 Bootstrapping pinned uv 0.13.6 for MiniMax H3 MLX..."
     "$PYTHON_BIN" -m venv --clear "$MINIMAX_H3_UV_TOOL_DIR"
-    "${MINIMAX_H3_UV_TOOL_DIR}/bin/python3" -m pip install --disable-pip-version-check "uv==0.13.6"
+    "${MINIMAX_H3_UV_TOOL_DIR}/bin/python3" -m pip install --disable-pip-version-check --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-uv-bootstrap.lock.txt"
   fi
 
   MINIMAX_H3_PIN="${MINIMAX_H3_PIN:-fcd9e9b79a1d6018d91ac477c0968de1fa067e49}"
