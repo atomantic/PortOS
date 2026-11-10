@@ -673,6 +673,9 @@ wipes and lyric type. A native canvas draws the template's vignette, grain,
 beat punch, high-energy downbeat glitch, card scenes and HUD over the browser's
 playing media. The words-only page merges hook cues with sung lyrics (or the
 director's subtitle cues), using the template's palette and frame clock.
+Video and shot template-effect controls apply to the native drawing too; a
+response from an older server without drawing data keeps visible beat reactions
+on the worker.
 `GET /playback` supplies the same structured song, scene and composition drawing
 data as the renderer, without document code or media files. The dock refreshes
 that data when its drawing inputs change. Every other document

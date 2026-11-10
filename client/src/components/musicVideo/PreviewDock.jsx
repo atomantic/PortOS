@@ -88,7 +88,7 @@ function useDocumentPlayback(project) {
   const directory = (project.composition?.mode === 'document' && project.composition?.document?.directory) || '';
   const target = `${project.id}|${directory}`;
   const revision = hashString(JSON.stringify([directory, project.composition, project.scenes, project.audioAnalysis,
-    project.lyricCues, project.lyricMarkers, project.titleCard, project.lyricOverlayEnabled, project.productionReview, project.cameras, project.colorMatch, project.treatment]));
+    project.lyricCues, project.lyricMarkers, project.titleCard, project.lyricOverlayEnabled, project.productionReview, project.cameras, project.colorMatch, project.treatment, project.templateEffects]));
   const [playback, setPlayback] = useState(null);
   useEffect(() => {
     if (!directory) { setPlayback(null); return undefined; }

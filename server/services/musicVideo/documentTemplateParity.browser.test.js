@@ -145,6 +145,18 @@ function App(){const[value,setValue]=useState(null);window.show=(project,data,t)
     value.audioAnalysis.features = { envelopes: { fps: 24, rms: Array(96).fill(1) } };
     await compare(value, 1); await compare(value, 1 + 2 / 24);
   });
+  it('honors video and shot template-effect controls, including zero and inherited overrides', async () => {
+    const value = base(); value.audioAnalysis.sections[0].label = 'Chorus';
+    value.audioAnalysis.features = { envelopes: { fps: 24, rms: Array(96).fill(1) } };
+    value.templateEffects = { beatReaction: 0, stillMotion: 0, footagePush: 0, grain: 0, vignette: 0 };
+    await compare(value, 1);
+    value.scenes[0].templateEffects = { beatReaction: 0.6, stillMotion: 0.4, grain: 0.14, vignette: 0.2 };
+    await compare(value, 1 + 2 / 24);
+    value.scenes[0] = { ...still, visualLayer: 'footage', videoHistoryId: 'clip' };
+    await compare(value, 1.25);
+    value.scenes[0].templateEffects = { footagePush: 0.4, beatReaction: 0.6 };
+    await compare(value, 1.25);
+  });
   it('matches the card painter including its intro and exit fades', async () => {
     const value = base({ ...still, visualLayer: 'card', cardText: 'Example card', cardColor: '#243b71' });
     for (const t of [1 / 24, 1.25, 3 + 23 / 24]) await compare(value, t);

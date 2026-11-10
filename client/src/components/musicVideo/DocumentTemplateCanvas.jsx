@@ -107,7 +107,7 @@ export default function DocumentTemplateCanvas({ project, data, figureRef, audio
         const fx = drawScene(scene, t);
         raw.getContext('2d').drawImage(canvas, 0, 0);
         wipe(ctx, { outgoing: held, incoming: raw, style: cut.style, index: frame - cut.cutFrame, frames: cut.frames, color: cut.color || null, width: canvas.width, height: canvas.height });
-        drawing.finish(t, fx);
+        drawing.finish(t, fx, scene);
       } else {
         const fx = drawScene(scene, t);
         const nextWipe = wipeAfter.get(scene?.sceneId);
@@ -116,7 +116,7 @@ export default function DocumentTemplateCanvas({ project, data, figureRef, audio
         if (nextWipe && frame < nextWipe.cutFrame) {
           held.getContext('2d').drawImage(canvas, 0, 0); heldScene = `${scene.sceneId}:${nextWipe.cutFrame}`;
         }
-        drawing.finish(t, fx);
+        drawing.finish(t, fx, scene);
       }
       const selectedEffect = effects.get(frame);
       if (selectedEffect) glitch(canvas, selectedEffect, frame);

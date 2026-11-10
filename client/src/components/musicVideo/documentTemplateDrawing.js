@@ -2,6 +2,7 @@ import { documentCameraView } from '../../../../server/lib/musicVideoDocumentCam
 import { narrativeFrameState } from '../../../../server/lib/musicVideoNarrativeEvents.js';
 import { imageEffectState, IMAGE_EFFECT_FOG_COLOR } from '../../lib/musicVideoImageEffects.js';
 import { formatPercent } from '../../utils/formatters.js';
+import { templateEffects } from '../../../../server/lib/musicVideoTemplateEffects.js';
 
 // The template's inline canvas painters have no importable module. Keep their
 // drawing order and pixels pinned against the unchanged shipped engine in
@@ -167,6 +168,7 @@ export function createDocumentTemplateDrawing(canvas, data, rig) {
     state,
     scene(t, scene, source, { index = 0, footage = false, effect = null, end = null, filter = null } = {}) {
       const s = state(t); t = s.t;
+      const additions = templateEffects(data.project, scene);
       ctx.fillStyle = C.ink; ctx.fillRect(0, 0, W, H);
       if (!scene) return null;
       const card = cardFor(scene);
@@ -174,8 +176,8 @@ export function createDocumentTemplateDrawing(canvas, data, rig) {
       if (card) card(t, t - scene.startSec, scene.endSec - scene.startSec, scene, source, s);
       else if (source) {
         const energetic = isHighEnergy(t) || scene.shotMode === 'performance';
-        const punch = 1 + 0.018 * pulse(t, energetic ? beats : downs, 8) * s.reactiveGain;
-        const view = documentCameraView(rig, scene, t, { footage, index, aspect: W / H, beats, downbeats: downs });
+        const punch = 1 + 0.018 * pulse(t, energetic ? beats : downs, 8) * s.reactiveGain * additions.beatReaction;
+        const view = documentCameraView(rig, scene, t, { footage, index, aspect: W / H, beats, downbeats: downs, templateEffects: data.project.templateEffects });
         ctx.save();
         const filters = [filter, fx ? `contrast(${fx.contrast}) saturate(${fx.saturation})` : null].filter(Boolean);
         if (filters.length) ctx.filter = filters.join(' ');
@@ -184,10 +186,15 @@ export function createDocumentTemplateDrawing(canvas, data, rig) {
         ctx.restore();
         if (fx) _flash(fx.fog, IMAGE_EFFECT_FOG_COLOR);
       }
-      if (isHighEnergy(t)) glitch(t, pulse(t, downs, 8) * s.reactiveGain);
+      if (isHighEnergy(t)) glitch(t, pulse(t, downs, 8) * s.reactiveGain * additions.beatReaction);
       return fx;
     },
-    finish(t, effect) { vignette(0.5); grain(t, 0.09); if (effect) _flash(effect.flash); },
+    finish(t, effect, scene) {
+      const additions = templateEffects(data.project, scene);
+      if (additions.vignette > 0) vignette(additions.vignette);
+      if (additions.grain > 0) grain(t, additions.grain);
+      if (effect) _flash(effect.flash);
+    },
     hud: drawHud,
   };
 }
