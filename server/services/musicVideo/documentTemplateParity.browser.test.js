@@ -45,7 +45,7 @@ describe.skipIf(!canRun)('native composition versus the shipped layered engine',
       await symlink(join(client, 'node_modules'), join(dir, 'node_modules'), 'dir');
       await writeFile(join(dir, 'entry.jsx'), `import React,{useState}from'react';import{createRoot}from'react-dom/client';import Animatic from ${JSON.stringify(join(client, 'src/components/musicVideo/StoryboardAnimatic.jsx'))};import ${JSON.stringify(join(client, 'src/index.css'))};
 window.lyricFrames=[];window.addEventListener('message',event=>{if(event.data?.type==='portos-mv:seeked')window.lyricFrames.push(event.data.t)});
-function App(){const[value,setValue]=useState(null);window.show=(project,data,t)=>{window.lyricFrames=[];setValue({project,data,seek:{t,n:(window.seq=(window.seq||0)+1)}})};return <main style={{width:640}}>{value&&<Animatic key={window.seq} project={value.project} nativeData={value.data} variant='document' audioUrl='/song.wav' seekRequest={value.seek}/>}</main>};createRoot(document.getElementById('root')).render(<App/>);`);
+function App(){const[value,setValue]=useState(null);window.show=(project,data,t)=>{window.lyricFrames=[];setValue({project,data,seek:{t,n:(window.seq=(window.seq||0)+1)}})};window.update=(project,data,t)=>{window.lyricFrames=[];setValue(previous=>({...previous,project,data,seek:{t,n:(window.seekSeq=(window.seekSeq||1000)+1)}}))};return <main style={{width:640}}>{value&&<Animatic key={window.seq} project={value.project} nativeData={value.data} variant='document' audioUrl='/song.wav' seekRequest={value.seek}/>}</main>};createRoot(document.getElementById('root')).render(<App/>);`);
       await writeFile(join(dir, 'index.html'), '<html><head><style>figure{border:0!important;border-radius:0!important}</style></head><body style="margin:0"><div id="root"></div><script type="module" src="/entry.jsx"></script></body></html>');
     });
     await phase('bundle', async () => {
@@ -86,7 +86,7 @@ function App(){const[value,setValue]=useState(null);window.show=(project,data,t)
     });
   }), 30000);
 
-  async function compare(project, t, { words = false } = {}) {
+  async function compare(project, t, { words = false, reuse = false } = {}) {
     // Media elements store microseconds; use a frame's centre so rounding a
     // fractional 24fps boundary cannot move the native clock back one frame.
     t = (Math.floor(t * 24 + 1e-6) + 0.5) / 24;
@@ -97,7 +97,7 @@ function App(){const[value,setValue]=useState(null);window.show=(project,data,t)
     await engine.goto(`http://127.0.0.1:${server.address().port}/engine/index.html`);
     await engine.waitForFunction(() => !!window.portosComposition);
     await engine.evaluate(t => window.portosComposition.seek(t), t);
-    await native.evaluate(({ project, data, t }) => window.show(project, data, t), { project, data: dataFor(project), t });
+    await native.evaluate(({ project, data, t, reuse }) => (reuse ? window.update : window.show)(project, data, t), { project, data: dataFor(project), t, reuse });
     await native.waitForFunction(frame => document.querySelector('[data-testid="document-template-canvas"]')?.dataset.songFrame === String(frame), Math.floor(t * 24 + 1e-6));
     await native.evaluate(() => document.fonts.ready);
     if (project.scenes.some(s => s.videoHistoryId)) await native.waitForFunction(() => document.querySelector('video[data-ready="true"]')?.readyState >= 2);
@@ -161,6 +161,14 @@ function App(){const[value,setValue]=useState(null);window.show=(project,data,t)
     expect(dataFor(value).scenes[1].wipe).toMatchObject({ style: 'push-left', cutFrame: 48 });
     await compare(value, 2.125);
   });
+  it('invalidates a held wipe picture when seeking between different cuts', async () => {
+    const value = base({ ...still, endSec: 1.5, wipeOut: { style: 'push-left', lengthSec: 0.5 } });
+    value.scenes.push({ ...still, sceneId: 'second', order: 1, startSec: 1.5, endSec: 3, referenceImageId: 'end.png', wipeOut: { style: 'push-left', lengthSec: 0.5 } },
+      { ...still, sceneId: 'third', order: 2, startSec: 3, endSec: 4 });
+    await compare(value, 35 / 24);
+    await compare(value, 3.125, { reuse: true });
+    await compare(value, 1.625, { reuse: true });
+  });
   it('uses the render aspect for square and portrait camera moves and HUD', async () => {
     for (const aspectRatio of ['1:1', '9:16']) {
       const value = base({ ...still, camera: { move: 'dutch-roll', speed: 'fast' } }, { treatment: { brief: { aspectRatio } } });
@@ -176,5 +184,7 @@ function App(){const[value,setValue]=useState(null);window.show=(project,data,t)
     value.composition.textCues.push({ text: 'Example subtitle', startSec: 2.5, endSec: 3.8, emphasis: 'normal' });
     await compare(value, 2.75, { words: true });
     value.lyricCues = []; await compare(value, 1.25, { words: true });
+    value.treatment = { brief: { aspectRatio: '9:16' } };
+    await compare(value, 1.25, { words: true, reuse: true });
   });
 });

@@ -1,6 +1,7 @@
 import { documentCameraView } from '../../../../server/lib/musicVideoDocumentCamera.js';
 import { narrativeFrameState } from '../../../../server/lib/musicVideoNarrativeEvents.js';
 import { imageEffectState, IMAGE_EFFECT_FOG_COLOR } from '../../lib/musicVideoImageEffects.js';
+import { formatPercent } from '../../utils/formatters.js';
 
 // The template's inline canvas painters have no importable module. Keep their
 // drawing order and pixels pinned against the unchanged shipped engine in
@@ -110,7 +111,7 @@ export function createDocumentTemplateDrawing(canvas, data, rig) {
       const bw = Math.min(360 * U, W * 0.36); const bx = W - pad - bw; const by = pad + 8 * U;
       const color = pct < 25 ? C.alert : pct < 60 ? C.accent : C.ok;
       text(HUD.meter.label || 'LEVEL', bx, by + 14 * U, F.mono(Math.round(18 * U), 600), C.paper);
-      text(`${pct.toFixed(0)}%`, W - pad, by + 14 * U, F.mono(Math.round(26 * U), 600), color, 'right');
+      text(formatPercent(pct, { decimals: 0 }), W - pad, by + 14 * U, F.mono(Math.round(26 * U), 600), color, 'right');
       ctx.strokeStyle = C.dim; ctx.strokeRect(bx, by + 28 * U, bw, 14 * U);
       ctx.fillStyle = color;
       const segs = 30; const sw = (bw - 6 * U) / segs;

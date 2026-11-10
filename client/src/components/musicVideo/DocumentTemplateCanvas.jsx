@@ -100,6 +100,9 @@ export default function DocumentTemplateCanvas({ project, data, figureRef, audio
         if (heldScene !== `${outgoing?.sceneId}:${cut.cutFrame}`) {
           drawScene(outgoing, (cut.cutFrame - 0.5) / fps);
           held.getContext('2d').drawImage(canvas, 0, 0);
+          // A seek fallback overwrites the playback cache and may still be
+          // waiting on media. Repaint it until a real last-frame hold is cached.
+          heldScene = null;
         }
         const fx = drawScene(scene, t);
         raw.getContext('2d').drawImage(canvas, 0, 0);
