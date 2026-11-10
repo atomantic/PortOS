@@ -99,6 +99,10 @@ const priorTaskDeliveryMock = vi.fn(async () => null);
 vi.mock('./goalFidelityPriorDelivery.js', () => ({
   priorTaskDelivery: (...args) => priorTaskDeliveryMock(...args),
 }));
+const comparisonReferenceEvidenceMock = vi.fn(async () => null);
+vi.mock('./goalFidelityComparisonEvidence.js', () => ({
+  comparisonReferenceEvidence: (...args) => comparisonReferenceEvidenceMock(...args),
+}));
 
 vi.mock('./agentCompletion.js', () => ({ processAgentCompletion: vi.fn(async () => null) }));
 vi.mock('./agentSummaryExtraction.js', () => ({ extractSimplifySummaries: vi.fn(() => null), extractFinalSummary: vi.fn(() => null) }));
@@ -231,6 +235,26 @@ beforeEach(() => {
 });
 
 describe('finalizeAgent — goal-fidelity gate', () => {
+  it('supplies pinned comparison evidence within the shared budget without overriding a rethink', async () => {
+    const head = 'b'.repeat(40), base = 'a'.repeat(40);
+    const diff = 'diff --git a/server/routes/modelComparison.js b/server/routes/modelComparison.js\n+currentComposite';
+    const prior = { diff: 'earlier change', heads: ['c'.repeat(40)] };
+    execGit.mockResolvedValueOnce({ stdout: `${head}\n`, stderr: '', exitCode: 0 });
+    runWindowDiffMock.mockResolvedValueOnce({ diff, base, truncated: false, reason: null });
+    priorTaskDeliveryMock.mockResolvedValueOnce(prior);
+    comparisonReferenceEvidenceMock.mockResolvedValueOnce('[{"model":"example-5.2"}]');
+    runLocalGoalFidelityReviewMock.mockResolvedValueOnce(verdict({ verdict: 'rethink', missing: ['chart still broken'] }));
+    await finalize({ task: { id: 'task-comparison', description: 'Fix example-5.2 comparison chart', metadata: { totalSpawnCount: 2 } } });
+    expect(comparisonReferenceEvidenceMock).toHaveBeenCalledWith({
+      workspacePath: '/example/worktree', base, head, objective: 'Fix example-5.2 comparison chart', diff,
+      maxChars: 60_000 - diff.length - prior.diff.length,
+    });
+    expect(runLocalGoalFidelityReviewMock).toHaveBeenCalledWith(expect.objectContaining({
+      diff, priorDeliveryDiff: prior.diff, referenceEvidence: '[{"model":"example-5.2"}]',
+    }));
+    expect(completion()).toMatchObject({ success: false, goalFidelity: { verdict: 'rethink', missing: ['chart still broken'] } });
+  });
+
   describe('a retry whose earlier attempt already merged', () => {
     const retryTask = { id: 'task-retry', description: 'Investigate the provider timeout and fix its cause', taskType: 'internal', metadata: { totalSpawnCount: '2' } };
     const earlier = { diff: '# fix: bound the prompt\ndiff --git a/fix.js b/fix.js', heads: ['a'.repeat(40)] };
