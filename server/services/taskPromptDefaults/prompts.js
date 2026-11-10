@@ -705,8 +705,9 @@ repo (a globally-configured \`gh\` will silently target an unrelated GitHub repo
    (\`gh run list --workflow runtime-image-security.yml --branch <default> --limit 5 --json databaseId,conclusion,headSha,createdAt\`)
    and read its \`provenance.json\`, \`findings.json\` and any \`*.unavailable.json\`
    artifacts (\`gh run download <id>\`). Use a target's result only when its scan
-   completed (a run red solely over unreviewed findings still carries valid evidence)
-   and its recorded image digests and recipe hashes match the current tree; a missing
+   completed (a run red solely over unreviewed findings still carries valid evidence),
+   the run is at most 14 days old (scheduled scans run weekly; older evidence has a
+   stale vulnerability database) and its recorded image digests and recipe hashes match the current tree; a missing
    or cancelled run, a scanner/evidence failure, a stale recipe, or a target reported
    unavailable is a coverage gap you name with its owner, never zero findings.
    Reconcile unreviewed findings under item 4. A repo with image recipes and no such

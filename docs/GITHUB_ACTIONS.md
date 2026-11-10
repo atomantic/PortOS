@@ -1262,9 +1262,11 @@ package ecosystem, or an unparseable scan always fail the run: a scanner that
 did not run is never zero findings.
 
 Findings are reconciled in `docker/runtime-image-security.reviews.json`
-(`target`, advisory `id`, optional `package`, `disposition` of `fixed`,
-`not-reachable` or `blocked`, `rationale`, `tracking` issue/PR). Every severity
-needs an entry that cites a verified fix or a tracked blocker; do not move the
+(`target`, advisory `id`, optional `package`, `version` and `arch` scopes,
+`disposition` of `not-reachable` or `blocked`, `rationale`, `tracking` issue/PR).
+Every severity needs an entry that cites verified unreachability or a tracked
+blocker; a fix removes the finding from the scan, so it needs no entry and a
+finding still detected is never suppressed as "fixed"; do not move the
 Debian snapshot or an image digest merely to silence a scanner.
 
 **Known coverage gap.** The `eidoverse:render` parent image and the
@@ -1276,8 +1278,8 @@ never counts as a pass. Closing it needs the pinned parent digest and lock from
 that project's build.
 
 The scheduled `dependency-updates` task reads the latest default-branch run of
-this workflow and its artifacts, and reports a missing, failed, stale or
-`unavailable` target as a coverage gap instead of a clean result.
+this workflow and its artifacts, and reports a missing, scanner-failed, older-than-14-days,
+stale-recipe or `unavailable` target as a coverage gap instead of a clean result.
 
 ## Release Workflow (`release.yml`)
 

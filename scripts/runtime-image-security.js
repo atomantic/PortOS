@@ -41,7 +41,8 @@ export const EVIDENCE_SCHEMA = 1;
 
 const DIGEST_RE = /@sha256:[0-9a-f]{64}$/;
 const SEVERITIES = ['Critical', 'High', 'Medium', 'Low', 'Negligible', 'Unknown'];
-const DISPOSITIONS = ['fixed', 'not-reachable', 'blocked'];
+// A fix removes the finding from the scan, so "fixed" is not a disposition: a finding still detected is never suppressed by one.
+const DISPOSITIONS = ['not-reachable', 'blocked'];
 
 /** Targets this checkout cannot scan, reported instead of faked (acceptance: "explicitly unavailable"). */
 export const UNAVAILABLE_TARGETS = Object.freeze([{
@@ -182,10 +183,18 @@ export function validateReviews(doc) {
   return doc.reviews;
 }
 
-/** Split findings into those covered by a reviewed disposition for this target and those still unreviewed. */
-export function reconcileFindings(findings, reviews, targetId) {
+/**
+ * Split findings into those covered by a reviewed disposition and those still
+ * unreviewed. A review is scoped to its target and advisory, and to the package,
+ * installed version and architecture whenever it names them, so a changed
+ * package version or another architecture's finding is re-reviewed.
+ */
+export function reconcileFindings(findings, reviews, targetId, arch = null) {
   const mine = reviews.filter((review) => review.target === targetId);
-  const reviewFor = (finding) => mine.find((review) => review.id === finding.id && (!review.package || review.package === finding.package));
+  const reviewFor = (finding) => mine.find((review) => review.id === finding.id
+    && (!review.package || review.package === finding.package)
+    && (!review.version || review.version === finding.version)
+    && (!review.arch || review.arch === arch));
   const reviewed = [];
   const unreviewed = [];
   for (const finding of findings) {
@@ -246,7 +255,7 @@ export function verifyRun({ target, arch, sbomPath, scanPath, outDir, strict = f
   const sbom = validateSbom(readJson(sbomPath), def);
   const scan = validateScan(readJson(scanPath));
   const reviews = validateReviews(reviewLedger ?? readJson(join(root, REVIEWS_PATH)));
-  const { reviewed, unreviewed } = reconcileFindings(scan.findings, reviews, target);
+  const { reviewed, unreviewed } = reconcileFindings(scan.findings, reviews, target, arch);
 
   const provenance = {
     schema: EVIDENCE_SCHEMA,

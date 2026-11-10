@@ -80,19 +80,20 @@ describe('fail-closed evidence validation', () => {
 
   it('requires rationale and a tracker reference for every reviewed disposition', () => {
     expect(validateReviews({ schema: 1, reviews: [] })).toEqual([]);
-    expect(() => validateReviews({ schema: 1, reviews: [{ target: 'pgvector', id: 'CVE-1', disposition: 'not-reachable', rationale: 'x' }] })).toThrow('needs rationale and tracking');
-    expect(() => validateReviews({ schema: 1, reviews: [{ target: 'pgvector', id: 'CVE-1', disposition: 'ignore', rationale: 'x', tracking: '#1' }] })).toThrow('disposition must be one of');
+    expect(() => validateReviews({ schema: 1, reviews: [{ target: 'pgvector', id: 'CVE-1', disposition: 'blocked', rationale: 'x' }] })).toThrow('needs rationale and tracking');
+    expect(() => validateReviews({ schema: 1, reviews: [{ target: 'pgvector', id: 'CVE-1', disposition: 'fixed', rationale: 'x', tracking: '#1' }] })).toThrow('disposition must be one of');
     expect(() => validateReviews({ reviews: [] })).toThrow('expected');
-    expect(JSON.parse(read('docker/runtime-image-security.reviews.json'))).toEqual({ schema: 1, reviews: [] });
+    expect(() => validateReviews(JSON.parse(read('docker/runtime-image-security.reviews.json')))).not.toThrow();
   });
 
-  it('scopes a review to its target and, when named, its package', () => {
-    const findings = validateScan(scanFor([matchFor('CVE-1', 'High', 'libfoo'), matchFor('CVE-1', 'High', 'libbar')])).findings;
-    const reviews = [{ target: 'pgvector', id: 'CVE-1', package: 'libfoo', disposition: 'blocked', rationale: 'no upstream fix', tracking: '#9' }];
-    const split = reconcileFindings(findings, reviews, 'pgvector');
-    expect(split.reviewed.map((f) => f.package)).toEqual(['libfoo']);
-    expect(split.unreviewed.map((f) => f.package)).toEqual(['libbar']);
-    expect(reconcileFindings(findings, reviews, 'supercollider').reviewed).toEqual([]);
+  it('scopes a review to its target and, when named, its package, installed version and architecture', () => {
+    const findings = validateScan(scanFor([matchFor('CVE-1', 'High', 'libfoo', '1.0'), matchFor('CVE-1', 'High', 'libbar'), matchFor('CVE-1', 'High', 'libfoo', '2.0')])).findings;
+    const reviews = [{ target: 'pgvector', id: 'CVE-1', package: 'libfoo', version: '1.0', arch: 'amd64', disposition: 'blocked', rationale: 'no upstream fix', tracking: '#9' }];
+    const split = reconcileFindings(findings, reviews, 'pgvector', 'amd64');
+    expect(split.reviewed.map((f) => `${f.package}@${f.version}`)).toEqual(['libfoo@1.0']);
+    expect(split.unreviewed.map((f) => `${f.package}@${f.version}`).sort()).toEqual(['libbar@1.0', 'libfoo@2.0']);
+    expect(reconcileFindings(findings, reviews, 'pgvector', 'arm64').reviewed).toEqual([]);
+    expect(reconcileFindings(findings, reviews, 'supercollider', 'amd64').reviewed).toEqual([]);
   });
 });
 
