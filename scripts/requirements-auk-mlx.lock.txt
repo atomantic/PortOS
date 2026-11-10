@@ -6,7 +6,11 @@
 # hash-pinned and a tampered or substituted distribution fails the install.
 # There is no install-time resolution: a host this lock does not cover is
 # reported as unsupported before anything is installed.
-# AuK itself is the commit-pinned checkout; setuptools below is its locked build backend.
+# AuK itself is the commit-pinned checkout; setuptools below is its locked build
+# backend. Upstream AuK constrains torch<2.8 and transformers<5, so this lock keeps
+# torch 2.7.1 and transformers 4.57.6; OSV reports advisories on exactly those two
+# pins (fixed in torch 2.13 / transformers 5.10, outside upstream's supported
+# range). Every other pin is clean. Moving the stack is tracked in #15670.
 # Universal across CPython 3.11+ (filelock's security fix needs 3.11), arm64
 # macOS wheels only. A cross-platform resolve is not a runtime certification.
 #

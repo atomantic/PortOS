@@ -8,6 +8,8 @@
 mlx>=0.29
 soundfile
 soxr
+# torch / transformers stay inside upstream AuK's ranges; OSV advisories on the
+# resolved pins are tracked in #15670.
 torch>=2.7,<2.8
 torchaudio>=2.7,<2.8
 torchvision>=0.22,<0.23
