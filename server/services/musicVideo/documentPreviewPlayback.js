@@ -14,7 +14,23 @@ const BRIDGE = `
   let previewBack = null;
   (${installLayeredPreviewPlayback.toString()})({
     ready, duration: DURATION, fps: FPS,
-    state: eventState, scene: sceneAt, source: sourceFor,
+    state: eventState, scene: sceneAt,
+    source(scene, t) {
+      // A live step must not wait on a cold decode: warm the next photos too.
+      const sequence = scene?.photoSequence, photos = scene?.media?.photos;
+      if (sequence && photos?.length && imageEffects) {
+        const at = imageEffects.photoSequenceIndex(sequence, t, { fps: FPS });
+        for (let ahead = 1; ahead <= Math.min(3, photos.length - 1); ahead++) loadImage(photos[(at + ahead) % photos.length].src).catch(() => {});
+      }
+      return sourceFor(scene, t);
+    },
+    sourceKey(scene, t) {
+      const sequence = scene?.photoSequence;
+      if (!sequence || !scene.media?.photos || !imageEffects) return null;
+      return sequence.stacked
+        ? imageEffects.photoSequenceLayers(sequence, t, { fps: FPS }).map(layer => layer.step).join(',')
+        : String(imageEffects.photoSequenceIndex(sequence, t, { fps: FPS }));
+    },
     playback: on => globalThis.__portosFilmLook?.playback(on),
     needsSource: scene => !cardFor(scene),
     videos: () => [...videos.values()].map(entry => entry.el),
@@ -61,9 +77,6 @@ export async function adaptStagedDocumentPreview(directory, { scenes = [] } = {}
     const { isUpgradableLayeredEngine } = await import('./compositionDocument.js');
     return { ...declined('unrecognized-engine'), ...(isUpgradableLayeredEngine(original) ? { upgradable: true } : {}) };
   }
-  // Photo selection changes within a scene; retain exact seek until the
-  // cooperative image owner supports changing sources at those boundaries.
-  if (scenes.some(scene => scene.photoSequence)) return declined('photo-sequence-exact-seek');
   // A wipe paints the outgoing shot's held frame, which only the exact seek resolves.
   if (scenes.some(scene => scene.wipe)) return declined('wipe-exact-seek');
   const marker = '<script src="engine.js"></script>';
