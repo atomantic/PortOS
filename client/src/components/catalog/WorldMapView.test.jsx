@@ -27,3 +27,18 @@ it('fits the whole world to set markers and zooms one set to its footprint', () 
   const entry = { ingredient: { payload: { greybox: { parts: [{ type: 'box', position: [0, 0, 0], rotationDegrees: [0, 0, 0], size: [200, 5, 40] }] } } } };
   expect(worldSetView(world.sets[0], entry)).toMatchObject({ cx: 0, cz: 0, size: 260 });
 });
+
+// Catches the right/left fitted-world labels being clipped outside the visible SVG.
+it('keeps fitted edge labels within the current map bounds', () => {
+  const items = [{ id: 'right', text: 'Rightmost named set', x: 100, y: 0 }, { id: 'left', text: 'Leftmost named set', x: 0, y: 0 }];
+  const bounds = { x0: -10, x1: 110, y0: -60, y1: 60 };
+  const labels = layoutWorldLabels(items, 0.3, 11, bounds);
+  expect(labels).toHaveLength(2);
+  for (const entry of labels) {
+    const width = (entry.text.length * 11 * 0.62 + 4) * 0.3;
+    expect(entry.x - width / 2).toBeGreaterThanOrEqual(bounds.x0);
+    expect(entry.x + width / 2).toBeLessThanOrEqual(bounds.x1);
+    expect(entry.y - 11 * 1.3 * 0.3 / 2).toBeGreaterThanOrEqual(bounds.y0);
+    expect(entry.y + 11 * 1.3 * 0.3 / 2).toBeLessThanOrEqual(bounds.y1);
+  }
+});
