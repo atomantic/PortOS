@@ -84,21 +84,26 @@ function VideoPreview({ source, scenes, projectName, seekRequest, collapsed, onE
  * The docked preview card, on every watched step (not Story, Plan or Assets). `MusicVideoLayout` places it: a
  * right-hand column from `xl` up; below it, a folded row above the step that
  * opens into the player. `sources` is `listPreviewSources(…)`; the picked one is the
- * `?play=` param, defaulting to the first (final render, then the live
- * composition, then the newest draft, then the storyboard animatic). With
- * nothing to play yet it says what makes something playable. `seekRequest`
- * (`{ t, n }`) is the scene-card seek.
+ * `?play=` param, defaulting to the first playable source (final render, then
+ * the live composition, then the newest draft, then the storyboard animatic).
+ * A source the current render style cannot play stays in the picker, disabled,
+ * with its reason. With nothing to play yet it says what makes something
+ * playable. `seekRequest` (`{ t, n }`) is the scene-card seek.
  */
 export default function PreviewDock({ project, sources, audioUrl, seekRequest, collapsed, onToggleCollapsed, expanded = false, onToggleExpanded, onEditShot = null, onProject = null }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const requested = searchParams.get('play');
-  const source = sources.find((entry) => entry.id === requested) || sources[0] || null;
-  const pick = (id) => setSearchParams((prev) => {
-    const next = new URLSearchParams(prev);
-    if (id === sources[0].id) next.delete('play');
-    else next.set('play', id);
-    return next;
-  }, { replace: true });
+  const playable = sources.filter((entry) => !entry.disabled);
+  const source = playable.find((entry) => entry.id === requested) || playable[0] || null;
+  const pick = (id) => {
+    if (!playable.some((entry) => entry.id === id)) return;
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (id === playable[0].id) next.delete('play');
+      else next.set('play', id);
+      return next;
+    }, { replace: true });
+  };
   // The folded row sits in the page, so it opens downward.
   const Chevron = collapsed ? ChevronDown : ChevronUp;
   const SizeIcon = expanded ? Minimize2 : Maximize2;
@@ -115,11 +120,15 @@ export default function PreviewDock({ project, sources, audioUrl, seekRequest, c
             <label htmlFor={pickerId} className="sr-only">Preview source</label>
             <select
               id={pickerId}
-              value={source.id}
+              value={source?.id || ''}
               onChange={(e) => pick(e.target.value)}
               className="order-last min-h-[44px] min-w-0 basis-full truncate rounded border border-port-border bg-port-bg px-1.5 py-1 text-xs text-port-text pointer-fine:sm:min-h-[28px] @min-[32rem]/mv-preview:order-none @min-[32rem]/mv-preview:basis-auto @min-[32rem]/mv-preview:flex-1"
             >
-              {sources.map((entry) => <option key={entry.id} value={entry.id}>{entry.label}</option>)}
+              {sources.map((entry) => (
+                <option key={entry.id} value={entry.id} disabled={!!entry.disabled}>
+                  {entry.disabled ? `${entry.label} — ${entry.reason}` : entry.label}
+                </option>
+              ))}
             </select>
           </>
         ) : (
@@ -152,10 +161,14 @@ export default function PreviewDock({ project, sources, audioUrl, seekRequest, c
           {project.trackId || project.uploadedAudioFilename
             ? 'The lyric timing playthrough plays here once the song is analyzed and its words are aligned; the storyboard, drafts and final render join it as you make them.'
             : 'Attach a track to watch the lyric timing playthrough here; the storyboard, drafts and final render join it as you make them.'}
+          {sources.filter((entry) => entry.disabled).map((entry) => (
+            <span key={entry.id} className="mt-1 block">{entry.label}: {entry.reason}</span>
+          ))}
         </p>
       )}
       {/* Folded below xl, the dock is one row: the player and its controls wait for the expand. */}
       {source?.kind === 'document' && <div className={collapsed ? 'max-xl:hidden' : ''}><CompositionPreviewPlayer project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} shotNav onEditShot={onEditShot} onProject={onProject} /></div>}
+      {source?.kind === 'composite' && <StoryboardAnimatic project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} onEditShot={onEditShot} variant="composite" />}
       {source?.kind === 'lyrics' && <div className={collapsed ? 'max-xl:hidden' : ''}><CompositionPreviewPlayer project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} lyrics shotNav onEditShot={onEditShot} /></div>}
       {source?.kind === 'animatic' && <StoryboardAnimatic project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} onEditShot={onEditShot} />}
       {source?.kind === 'previz' && <Suspense fallback={<p className="text-xs text-port-text-muted">Loading the greybox previz…</p>}>

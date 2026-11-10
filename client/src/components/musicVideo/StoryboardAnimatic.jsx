@@ -615,7 +615,7 @@ function useColdOpen({ project, songRef }) {
  * it once the words are timed (a toggle hides them). `seekRequest`
  * (`{ t, n }`) is the scene-card seek the other preview sources honour too.
  */
-export default function StoryboardAnimatic({ project, audioUrl, seekRequest, collapsed, onEditShot = null }) {
+export default function StoryboardAnimatic({ project, audioUrl, seekRequest, collapsed, onEditShot = null, variant = 'animatic' }) {
   const audioRef = useRef(null);
   const figureRef = useRef(null);
   const applied = useRef(null);
@@ -803,9 +803,15 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
       {nearFades.map((fade) => <FadeBlack key={`fade:${fade.fromSceneId}`} fade={fade} audioRef={audioRef} time={time} />)}
     </>
   );
+  const composite = variant === 'composite';
+  const pictureLabel = composite ? 'Composition preview' : 'Storyboard animatic';
+  const songLabel = composite ? 'Song for the composition preview' : 'Song for the storyboard animatic';
   return (
     <div className={`space-y-2 ${collapsed ? 'max-xl:hidden' : ''}`}>
-      <figure ref={figureRef} aria-label="Storyboard animatic" className="relative aspect-video w-full overflow-hidden rounded border border-port-border bg-black">
+      {composite && (
+        <p className="text-xs text-port-text-muted">Selected takes cut on the song with the video look, per-shot looks, transitions and glitches. Final-quality shot renders are not required.</p>
+      )}
+      <figure ref={figureRef} aria-label={pictureLabel} className="relative aspect-video w-full overflow-hidden rounded border border-port-border bg-black">
         {/* The shot's resolved film look over the whole picture, lyrics included. */}
         <FilmLookFrame look={resolvedLook} frame={Math.round((outro.active ? songEndSec + outro.t : cold.active ? cold.time - cold.seconds : time) * ANIMATIC_FPS)}
           playing={playing || cold.active || (outro.active && !outro.paused && outro.t < outro.seconds)} className="h-full w-full">
@@ -911,7 +917,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
         src={audioUrl}
         controls
         preload="metadata"
-        aria-label="Song for the storyboard animatic"
+        aria-label={songLabel}
         onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
         onSeeked={(e) => { outro.stop(); setTime(e.currentTarget.currentTime); }}
         onPlay={(e) => {

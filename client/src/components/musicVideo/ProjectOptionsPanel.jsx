@@ -7,6 +7,7 @@ import ToggleChip from '../ui/ToggleChip.jsx';
 import Pill from '../ui/Pill.jsx';
 import { RenderStyleSelect } from './ProjectActionGroups.jsx';
 import { compositionDraft, RENDER_STYLE_HELP } from './compositionDraft.js';
+import { describePreviewSourceChange, listPreviewSources } from '../../lib/musicVideoStages.js';
 import { normalizeMusicVideoProductionPolicy } from '../../../../server/lib/musicVideoMediumPlan.js';
 import { MUSIC_VIDEO_AUTOMATION_TOOLS, automationDraftFrom, automationFromDraft } from '../../lib/musicVideoAutomation.js';
 import { musicVideoMediaMode } from '../../../../server/lib/musicVideoMediaPolicy.js';
@@ -45,6 +46,12 @@ export default function ProjectOptionsPanel({
       .then((next) => { setOutsideNote(''); onProjectUpdated?.(next); })
       .catch(() => {}) // request() already toasted
       .finally(() => setOutsideSaving(false));
+  };
+  const [styleNotice, setStyleNotice] = useState('');
+  const changeRenderStyle = (mode) => {
+    const next = { ...project, composition: compositionDraft(project, { mode }) };
+    setStyleNotice(describePreviewSourceChange(listPreviewSources(project), listPreviewSources(next)));
+    onRenderStyle?.(mode);
   };
   const [policyError, setPolicyError] = useState('');
   const [allowanceText, setAllowanceText] = useState(null);
@@ -93,9 +100,10 @@ export default function ProjectOptionsPanel({
       <div className={rowCls}>
         <span className={headCls} aria-hidden="true">Render style</span>
         <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <RenderStyleSelect project={project} onRenderStyle={onRenderStyle} />
+          <RenderStyleSelect project={project} onRenderStyle={changeRenderStyle} />
           <span className="text-xs text-port-text-muted">How the final video is put together; Compose holds its details.</span>
           <p className="w-full text-xs text-port-text-muted" id="mv-setup-render-style-help">{RENDER_STYLE_HELP[compositionDraft(project).mode] || RENDER_STYLE_HELP.concat}</p>
+          {styleNotice && <p role="status" className="w-full text-xs text-port-warning">{styleNotice}</p>}
         </div>
       </div>
       <div className={rowCls}>

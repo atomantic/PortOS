@@ -184,27 +184,72 @@ export function boardJobEstimate(project) {
 }
 
 /**
+ * The dock's live composite. Layered styles can play it without final-quality
+ * shot segments: a composition document plays its document, and a composed
+ * video cuts the selected takes. Every other style keeps the same row disabled
+ * and says why, so the picker does not drop it silently.
+ */
+function liveCompositeSource(project) {
+  const mode = project?.composition?.mode || 'concat';
+  if (mode === 'document') {
+    return project.composition?.document
+      ? { id: 'document', kind: 'document', label: 'Composition (live)' }
+      : { id: 'document', kind: 'document', label: 'Composition (live)', disabled: true, reason: 'Attach a composition document to play the live composite.' };
+  }
+  if (mode === 'composed') return { id: 'composite', kind: 'composite', label: 'Composition (live)' };
+  const reason = mode === 'code'
+    ? 'Code-rendered video draws the song in code and has no take composite.'
+    : mode === 'eidoverse'
+      ? 'Eidoverse video renders a saved scene and has no take composite.'
+      : 'Footage cuts the clips as they are and has no live composite.';
+  return { id: 'composite', kind: 'composite', label: 'Composition (live)', disabled: true, reason };
+}
+
+const previewChangeName = (source) => (source.id === 'document'
+  ? 'Composition (live) from the composition document'
+  : source.id === 'composite'
+    ? 'Composition (live) from the selected takes'
+    : source.label);
+
+/**
+ * What a render-style change does to the dock: the playable sources that
+ * leave and the ones that arrive. Disabled rows stay listed, so they are not
+ * counted as appearing or disappearing. Empty when the playable set is unchanged.
+ */
+export function describePreviewSourceChange(before, after) {
+  const playable = (list) => (list || []).filter((source) => !source.disabled);
+  const beforePlayable = playable(before);
+  const afterPlayable = playable(after);
+  const dropped = beforePlayable.filter((source) => !afterPlayable.some((next) => next.id === source.id));
+  const added = afterPlayable.filter((source) => !beforePlayable.some((prev) => prev.id === source.id));
+  if (!dropped.length && !added.length) return '';
+  const parts = [];
+  if (dropped.length) parts.push(`drops ${dropped.map(previewChangeName).join(', ')}`);
+  if (added.length) parts.push(`adds ${added.map(previewChangeName).join(', ')}`);
+  return `Preview ${parts.join(' and ')}.`;
+}
+
+/**
  * Everything the docked preview can play, in the order it picks a default:
- * the final render (its resolved `finalVideoSrc`), the composition document,
+ * the final render (its resolved `finalVideoSrc`), the live composite,
  * then each finished draft excerpt, newest first. `leadWith` picks the
  * ordering: `"final"` (default) as above; `"drafts"` (Final render stage)
  * puts the drafts before the composition; `"storyboard"` (Plan and Shots
- * stages) puts the live document, then the animatic, first; `"previz"` (Previz
+ * stages) puts the live composite, then the animatic, first; `"previz"` (Previz
  * stage) puts the greybox previz first. A final render whose
  * inputs changed is labelled out of date. Last comes the storyboard animatic —
  * the song under each shot's frame or card — so a project with a track and
  * shots always has something to watch — and after it the lyric timing
- * playthrough once the words are aligned. Each entry has a stable `id` (the
- * `?play=` value) and a `label` for the source picker.
+ * playthrough once the words are aligned. The live composite is always
+ * listed: a style that cannot play it is disabled and carries `reason`.
+ * Each entry has a stable `id` (the `?play=` value) and a `label` for the source picker.
  */
 export function listPreviewSources(project, { finalVideoSrc = null, leadWith = 'final' } = {}) {
   const sources = [];
   const final = project?.renderHistoryId && finalVideoSrc
     ? { id: 'final', kind: 'video', label: project.renderDependencyState?.status === 'stale' ? 'Final render (out of date)' : 'Final render', src: finalVideoSrc, startSec: 0, endSec: null }
     : null;
-  const live = project?.composition?.mode === 'document' && project.composition.document
-    ? { id: 'document', kind: 'document', label: 'Composition (live)' }
-    : null;
+  const live = liveCompositeSource(project);
   const drafts = (project?.excerpts || []).filter((e) => e.status === 'complete' && e.filename).reverse().map((excerpt) => ({
     id: `excerpt:${excerpt.id}`, kind: 'video', src: `/data/videos/${excerpt.filename}`,
     startSec: excerpt.startSec, endSec: excerpt.endSec,
@@ -217,7 +262,8 @@ export function listPreviewSources(project, { finalVideoSrc = null, leadWith = '
     const animatic = { id: 'animatic', kind: 'animatic', label: 'Storyboard animatic' };
     // On Storyboard the storyboard itself leads (the live document, else the animatic): a draft
     // clip covers only its own range, so most shots could not be played from it.
-    if (leadWith === 'storyboard') sources.splice(live ? 1 : 0, 0, animatic);
+    // The live composite is always present, so the animatic follows it on Storyboard.
+    if (leadWith === 'storyboard') sources.splice(1, 0, animatic);
     else sources.push(animatic);
   }
   // The song over the live Three.js greybox, cut to each shot's camera: blocking is watched before anything renders.
