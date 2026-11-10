@@ -490,7 +490,7 @@ sync_locked_mlx_video() (
     build_dir="$(mktemp -d "${TMPDIR:-/tmp}/portos-wan22.XXXXXX")"
     trap 'rm -rf -- "$build_dir"' EXIT
     stage_wan22_source "$python" "$pin" "$build_dir"
-    set -- "$build_dir"
+    set -- --no-binary mlx-gen "$build_dir"
   fi
   echo "📦 Building pinned ${label} source with hash-locked build tools..."
   portos_uv --no-config --no-cache pip install --no-deps --only-binary :all: --preview-features build-dependency-hashes --require-build-hashes --build-constraints "$SCRIPT_DIR/requirements-mlx-video-build.lock.txt" --python "$python" --reinstall "$@"

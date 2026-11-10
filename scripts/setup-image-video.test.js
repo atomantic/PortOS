@@ -844,7 +844,7 @@ source "$1"
     expect(install.calls()).toMatch(syncCall);
     if (flag === 'INSTALL_WAN22') {
       expect(install.calls()).toContain(`archived ${BYOV_RUNTIME_INFO.wan22.expectedRevision}\n`);
-      expect(install.calls()).toMatch(/--reinstall .*\/portos-wan22\.[^/\n]+$/m);
+      expect(install.calls()).toMatch(/--reinstall --no-binary mlx-gen .*\/portos-wan22\.[^/\n]+$/m);
     } else {
       expect(install.calls()).toContain('--reinstall -e packages/ltx-core-mlx -e packages/ltx-pipelines-mlx\n');
     }
