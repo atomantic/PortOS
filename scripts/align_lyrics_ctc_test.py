@@ -125,9 +125,6 @@ class CheckpointGate(unittest.TestCase):
         self.fetches = []
 
     def tearDown(self):
-        for root, _, files in os.walk(self.dir.name):
-            for name in files:
-                os.chmod(os.path.join(root, name), 0o600)
         self.dir.cleanup()
 
     def fetch(self, body):
@@ -160,12 +157,14 @@ class CheckpointGate(unittest.TestCase):
             self.assertEqual(handle.read(), self.genuine)
         self.assertEqual(len(self.fetches), 1)
 
-    def test_a_genuine_legacy_cache_is_used_without_downloading(self):
+    def test_a_genuine_shared_legacy_cache_is_copied_in_without_downloading(self):
         legacy = os.path.join(self.dir.name, 'hub', 'model.pt')
         self.write(legacy, self.genuine)
         with open_verified_checkpoint(self.models, (legacy,), fetch=self.fetch(b''), **self.pin) as handle:
+            self.assertEqual(handle.name, self.target)
             self.assertEqual(handle.read(), self.genuine)
         self.assertEqual(self.fetches, [])
+        self.assertEqual(os.listdir(self.models), [os.path.basename(self.target)])
 
     def test_only_the_verified_handle_is_deserialized_with_weights_only(self):
         self.write(self.target, self.genuine)

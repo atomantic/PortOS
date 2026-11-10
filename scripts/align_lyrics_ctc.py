@@ -183,46 +183,60 @@ def _open_if_genuine(path, sha256):
     return None
 
 
-def open_verified_checkpoint(model_dir, legacy=(), *, url=MODEL_URL, sha256=MODEL_SHA256, size=MODEL_BYTES,
-                             fetch=urllib.request.urlopen):
-    """Return a handle to genuine checkpoint bytes, downloading them if no copy verifies.
-
-    A cached or legacy file that fails the digest is ignored; a download that
-    fails it is deleted and raises CheckpointRejected. Nothing is deserialized.
-    """
-    target = os.path.join(model_dir, f'mms_fa-{sha256[:16]}.pt')
-    for path in (target, *legacy):
-        handle = _open_if_genuine(path, sha256)
-        if handle:
-            return handle
+def _cache_if_genuine(source, model_dir, target, sha256, size, report=False):
+    """Copy `source` into the private cache while hashing it; publish only genuine bytes."""
     os.makedirs(model_dir, exist_ok=True)
     fd, partial = tempfile.mkstemp(dir=model_dir, suffix='.partial')
     try:
         digest, received, reported = hashlib.sha256(), 0, -1
-        with os.fdopen(fd, 'wb') as output, fetch(url, timeout=60) as response:
-            for block in iter(lambda: response.read(1 << 20), b''):
+        with os.fdopen(fd, 'wb') as output, source:
+            for block in iter(lambda: source.read(1 << 20), b''):
                 received += len(block)
                 if received > size:
-                    raise CheckpointRejected('MMS_FA checkpoint is larger than the pinned file.')
+                    return False
                 digest.update(block)
                 output.write(block)
                 percent = received * 100 // size
-                if percent != reported:
+                if report and percent != reported:
                     reported = percent
                     print(f'PROGRESS:downloading-model:{percent}', flush=True)
-        if received != size or digest.hexdigest() != sha256:
-            raise CheckpointRejected('MMS_FA checkpoint does not match the pinned digest.')
-        if os.path.exists(target):
-            os.chmod(target, 0o600)
-            os.remove(target)
-        os.chmod(partial, 0o444)
-        os.replace(partial, target)
+        if digest.hexdigest() != sha256:
+            return False
+        try:
+            os.replace(partial, target)
+        except OSError:
+            pass  # Windows: a concurrent publisher may hold the target open; the caller re-verifies it.
+        return True
     finally:
         if os.path.exists(partial):
             os.remove(partial)
+
+
+def open_verified_checkpoint(model_dir, legacy=(), *, url=MODEL_URL, sha256=MODEL_SHA256, size=MODEL_BYTES,
+                             fetch=urllib.request.urlopen):
+    """Return a handle to genuine checkpoint bytes in the private cache. Nothing is deserialized.
+
+    A genuine legacy file (another tool's shared cache) is copied in rather than
+    loaded in place; otherwise the file is downloaded. A download that fails
+    the digest is discarded and raises CheckpointRejected.
+    """
+    target = os.path.join(model_dir, f'mms_fa-{sha256[:16]}.pt')
+    handle = _open_if_genuine(target, sha256)
+    if handle:
+        return handle
+    for path in legacy:
+        try:
+            source = open(path, 'rb')
+        except OSError:
+            continue
+        if _cache_if_genuine(source, model_dir, target, sha256, size):
+            break
+    else:
+        if not _cache_if_genuine(fetch(url, timeout=60), model_dir, target, sha256, size, report=True):
+            raise CheckpointRejected('MMS_FA checkpoint does not match the pinned digest.')
     handle = _open_if_genuine(target, sha256)
     if not handle:
-        raise CheckpointRejected('MMS_FA checkpoint changed after download.')
+        raise CheckpointRejected('MMS_FA checkpoint changed after it was cached.')
     return handle
 
 

@@ -1,4 +1,5 @@
 /** User-triggered MMS_FA alignment in a private, hash-locked Python venv. */
+import { createHash } from 'crypto';
 import { existsSync, readFileSync } from 'fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { homedir, release, tmpdir } from 'os';
@@ -45,6 +46,7 @@ export function _lyricAlignRuntimePlan({
   const versionBound = `(3, ${MIN_MINOR}) <= sys.version_info[:2] <= (3, ${MAX_MINOR})`;
   return {
     unsupported: null,
+    lockId: createHash('sha256').update(lock).digest('hex'),
     arch,
     minMinor: MIN_MINOR,
     maxMinor: MAX_MINOR,
@@ -83,26 +85,35 @@ async function defaultFindPython(plan) {
 async function ensureRuntime({ run, onProgress, dir, plan, findPython }) {
   if (plan.unsupported) throw failure(plan.unsupported, 'LYRIC_ALIGN_CTC_UNSUPPORTED_PLATFORM');
   const python = process.platform === 'win32' ? join(dir, 'Scripts', 'python.exe') : join(dir, 'bin', 'python');
+  // Written only after a clean install of this exact lock; a venv without it
+  // (an older pin, a failed or interrupted install) is rebuilt, never patched.
+  const stamp = join(dir, 'portos-lock.sha256');
   const passes = async (code) => (await run(python, ['-c', code], null, { timeoutMs: 120_000 })).success;
-  if (existsSync(python) && await passes(plan.probe)) return python;
+  if (existsSync(python) && (await readFile(stamp, 'utf8').catch(() => null)) === plan.lockId
+      && await passes(plan.probe)) return python;
   if (!provisioning) {
     provisioning = (async () => {
       const exists = existsSync(python);
-      // A venv on a compatible interpreter (including an older torch pin) is
-      // upgraded in place; any other venv is rebuilt from a compatible base.
-      if (!(exists && await passes(plan.versionProbe))) {
-        const base = await findPython(plan);
-        if (!base) throw failure(`MMS_FA lyric alignment needs ${plan.pythonRange}.`, 'LYRIC_ALIGN_CTC_PYTHON_MISSING');
-        await mkdir(dirname(dir), { recursive: true });
-        onProgress({ stage: 'installing', detail: 'Creating the MMS_FA environment (first run only)' });
-        const result = await run(base, ['-m', 'venv', ...(exists ? ['--clear'] : []), dir], null, { timeoutMs: 300_000 });
-        if (!result.success) throw failure('Could not create the MMS_FA environment.', 'LYRIC_ALIGN_CTC_INSTALL_FAILED');
+      // Rebuild from the venv's own base when compatible: discovery can miss it.
+      let base = null;
+      if (exists) {
+        const own = await run(python, ['-c', `${plan.versionProbe}; print("BASE:" + sys._base_executable)`], (line) => {
+          if (line.startsWith('BASE:')) base = line.slice(5);
+        }, { timeoutMs: 120_000 });
+        if (!own.success) base = null;
       }
+      base ??= await findPython(plan);
+      if (!base) throw failure(`MMS_FA lyric alignment needs ${plan.pythonRange}.`, 'LYRIC_ALIGN_CTC_PYTHON_MISSING');
+      await mkdir(dirname(dir), { recursive: true });
+      onProgress({ stage: 'installing', detail: 'Creating the MMS_FA environment (first run only)' });
+      const created = await run(base, ['-m', 'venv', ...(exists ? ['--clear'] : []), dir], null, { timeoutMs: 300_000 });
+      if (!created.success) throw failure('Could not create the MMS_FA environment.', 'LYRIC_ALIGN_CTC_INSTALL_FAILED');
       onProgress({ stage: 'installing', detail: 'Installing hash-locked MMS_FA dependencies (first run only)' });
-      const result = await run(python, plan.install, null, { timeoutMs: 45 * 60_000 });
-      if (!result.success || !await passes(plan.probe)) {
+      const installed = await run(python, plan.install, null, { timeoutMs: 45 * 60_000 });
+      if (!installed.success || !await passes(plan.probe)) {
         throw failure(`Could not install MMS_FA dependencies. Use ${plan.pythonRange}.`, 'LYRIC_ALIGN_CTC_INSTALL_FAILED');
       }
+      await writeFile(stamp, plan.lockId);
     })().finally(() => { provisioning = null; });
   }
   await provisioning;

@@ -20,6 +20,7 @@ async function harness(transform = (words) => words, { scriptLines = ['PROGRESS:
   let scriptArgs;
   const findPython = vi.fn(async () => 'test-python');
   const run = vi.fn(async (_bin, args, onLine, options) => {
+    if (args[1] === 'venv') await mkdir(args.at(-1), { recursive: true });
     if (args[0] !== '-m' && args[0] !== '-c') {
       scriptArgs = args;
       runDir = args[args.indexOf('--output') + 1];
@@ -36,10 +37,11 @@ async function harness(transform = (words) => words, { scriptLines = ['PROGRESS:
     return { success: true };
   });
   const dir = join(root, 'venv');
-  const makeVenv = async () => {
+  const makeVenv = async (stamp) => {
     const bin = join(dir, process.platform === 'win32' ? 'Scripts' : 'bin');
     await mkdir(bin, { recursive: true });
     await writeFile(join(bin, process.platform === 'win32' ? 'python.exe' : 'python'), '');
+    if (stamp) await writeFile(join(dir, 'portos-lock.sha256'), stamp);
   };
   return {
     root, dir, run, findPython, makeVenv, runDir: () => runDir, scriptArgs: () => scriptArgs,
@@ -69,45 +71,43 @@ describe('MMS_FA process contract', () => {
     await expect(readFile(h.runDir())).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
-  it('rebuilds a venv created from an incompatible interpreter before installing the lock', async () => {
+  it('rebuilds a venv on an incompatible interpreter from a discovered base', async () => {
     const h = await harness();
     await h.makeVenv();
     const implementation = h.run.getMockImplementation();
-    let installed = false;
-    h.run.mockImplementation(async (...args) => {
-      if (args[1][0] === '-c' && !installed) return { success: false };
-      if (args[1][1] === 'pip') installed = true;
-      return implementation(...args);
-    });
+    h.run.mockImplementation(async (...args) => (args[1][1]?.includes('BASE:') ? { success: false } : implementation(...args)));
     await h.align();
-    expect(calls(h, (args) => args.join(' ') === `-m venv --clear ${h.dir}`)).toHaveLength(1);
-    expect(calls(h, (args) => args[0] === '-c' && args[1] === LINUX.versionProbe)).toHaveLength(1);
+    expect(h.findPython).toHaveBeenCalledWith(LINUX);
+    expect(calls(h, (args) => args.join(' ') === `-m venv --clear ${h.dir}`).map(([bin]) => bin)).toEqual(['test-python']);
+    expect(await readFile(join(h.dir, 'portos-lock.sha256'), 'utf8')).toBe(LINUX.lockId);
   });
 
-  it('upgrades a venv holding an older torch pin in place without rediscovering an interpreter', async () => {
+  it('rebuilds a compatible venv from another lock with its own base, even when torch already matches', async () => {
     const h = await harness();
-    await h.makeVenv();
+    await h.makeVenv('stamp-of-an-older-lock');
     const implementation = h.run.getMockImplementation();
-    let installed = false;
-    h.run.mockImplementation(async (...args) => {
-      const probe = args[1][0] === '-c' ? args[1][1] : '';
-      if (probe === LINUX.probe) return { success: installed };
-      if (probe === LINUX.versionProbe) return { success: true };
-      if (args[1][1] === 'pip') installed = true;
-      return implementation(...args);
+    h.run.mockImplementation(async (bin, args, onLine, options) => {
+      if (args[1]?.includes('BASE:')) {
+        expect(args[1]).toContain(LINUX.versionProbe);
+        onLine('BASE:own-base-python');
+        return { success: true };
+      }
+      return implementation(bin, args, onLine, options);
     });
     await h.align();
     expect(h.findPython).not.toHaveBeenCalled();
-    expect(calls(h, (args) => args[1] === 'venv')).toHaveLength(0);
+    // Packages are only ever installed into a cleared venv, so nothing outside the lock survives.
+    const order = h.run.mock.calls.map(([bin, args]) => (args[1] === 'venv' ? `${bin} venv ${args[2]}` : args[1]));
+    expect(order.indexOf('own-base-python venv --clear')).toBeLessThan(order.indexOf('pip'));
     expect(calls(h, (args) => args[1] === 'pip')).toHaveLength(1);
   });
 
-  it('does not discover a base interpreter when the venv already matches the lock', async () => {
+  it('does not discover a base interpreter when the venv carries this lock', async () => {
     const h = await harness();
-    await h.makeVenv();
+    await h.makeVenv(LINUX.lockId);
     await h.align();
     expect(h.findPython).not.toHaveBeenCalled();
-    expect(calls(h, (args) => args[1] === 'pip')).toHaveLength(0);
+    expect(calls(h, (args) => args[1] === 'pip' || args[1] === 'venv')).toHaveLength(0);
     expect(h.run.mock.calls[0][1]).toEqual(['-c', LINUX.probe]);
   });
 
