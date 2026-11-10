@@ -25,7 +25,9 @@ vi.mock('../services/settings.js', () => ({ getSettings: vi.fn(async () => ({}))
 vi.mock('../lib/streamingSpawn.js', () => ({ runStreamingCommand: vi.fn() }));
 vi.mock('../lib/pythonSetup.js', async (importOriginal) => ({
   ...(await importOriginal()),
-  classifyVenvBases: vi.fn(async () => ({ supported: ['/opt/python3.12/bin/python3'], rejected: [] })),
+  probePythonVersion: vi.fn(async () => ({ major: 3, minor: 11 })),
+  probePythonArch: vi.fn(async () => process.arch === 'arm64' ? 'arm64' : 'x86_64'),
+  classifyVenvBases: vi.fn(async () => ({ supported: ['/opt/python3.11/bin/python3'], rejected: [] })),
 }));
 vi.mock('../lib/cudaCapability.js', async (importOriginal) => ({
   ...(await importOriginal()),
@@ -35,6 +37,7 @@ vi.mock('../lib/cudaCapability.js', async (importOriginal) => ({
 const { default: musicVideoRoutes } = await import('./musicVideo.js');
 const projects = await import('../services/musicVideo/projects.js');
 const { runStreamingCommand } = await import('../lib/streamingSpawn.js');
+const { _demucsRuntimePlan } = await import('../services/musicVideo/demucsRuntime.js');
 const { separateProjectVocals } = await import('../services/musicVideo/vocalSeparation.js');
 const { findFfmpeg } = await import('../lib/ffmpeg.js');
 
@@ -182,8 +185,13 @@ describe.skipIf(!ffmpeg)('music-video vocal separation', () => {
     expect(existsSync(join(MUSIC(), stem))).toBe(true);
 
     const kinds = calls.map((argv) => argv.slice(1, 3).join(' '));
-    expect(kinds[0]).toBe('-m venv');
-    expect(kinds[1]).toBe('-m pip');
+    expect(kinds).toContain('-m venv');
+    const installs = calls.filter((argv) => argv[2] === 'pip');
+    expect(installs).toHaveLength(2);
+    for (const argv of installs) expect(argv).toEqual(expect.arrayContaining(['--require-hashes', '--no-deps']));
+    expect(installs[0].at(-1)).toMatch(/requirements-demucs-build.lock.txt$/);
+    expect(installs[1]).toEqual(expect.arrayContaining(['--no-build-isolation', '--only-binary', ':all:', '--no-binary', 'demucs']));
+    expect(installs[1].at(-1)).toMatch(/requirements-demucs.lock.txt$/);
     const demucsRuns = calls.filter((argv) => argv[2] === 'demucs');
     expect(demucsRuns[0]).toEqual(expect.arrayContaining(['--two-stems=vocals', '-n', 'htdemucs_ft']));
     expect(demucsRuns.at(-1)[demucsRuns.at(-1).indexOf('-d') + 1]).toBe('cpu');
@@ -193,6 +201,7 @@ describe.skipIf(!ffmpeg)('music-video vocal separation', () => {
   it('reuses a working venv, and attaches a separated stem whose length differs from the song\'s container duration', async () => {
     mkdirSync(dirname(PYTHON()), { recursive: true });
     writeFileSync(PYTHON(), '');
+    writeFileSync(join(VENV(), 'portos-lock.sha256'), _demucsRuntimePlan().lockId);
     // demucs decodes the master itself, so its output is on the master's
     // timebase even when the two durations disagree (an estimated MP3 length).
     const calls = demucsDouble({ stemSeconds: 5 });

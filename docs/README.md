@@ -14,6 +14,7 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 | [MINIMAX_H3_CUDA.md](./MINIMAX_H3_CUDA.md) | MiniMax H3 CUDA hash locks, Python/CUDA targets, advisory checks and NVIDIA readiness validation |
 | [LTX25_CUDA.md](./LTX25_CUDA.md) | LTX-2.5 CUDA hash locks, immutable source packaging, regeneration and NVIDIA readiness validation |
 | [WAN22_CUDA.md](./WAN22_CUDA.md) | Wan 2.2 CUDA hash locks, Python/CUDA targets, regeneration, advisory scans and NVIDIA readiness validation |
+| [DEMUCS_RUNTIME.md](./DEMUCS_RUNTIME.md) | Vocal separation hash locks, source-build contract, supported interpreters and validation limits |
 | [MINIMAX_MUSIC3_CUDA.md](./MINIMAX_MUSIC3_CUDA.md) | MiniMax Music 3 CUDA hash locks, Install/Repair, regeneration, advisory scans and NVIDIA readiness evidence |
 | [AUDIOLDM2_CUDA.md](./AUDIOLDM2_CUDA.md) | AudioLDM2 Windows/Linux hash locks, Install/Repair, regeneration, advisory scans and NVIDIA readiness evidence |
 | [MUSCRIPTOR_CUDA.md](./MUSCRIPTOR_CUDA.md) | MuScriptor Windows/Linux hash locks, Install/Repair, regeneration, advisory scans and NVIDIA readiness evidence |
