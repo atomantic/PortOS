@@ -1,5 +1,5 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
-import { pinPlatform } from '../../lib/testHelper.js';
+import { pinArch, pinPlatform } from '../../lib/testHelper.js';
 
 const probe = vi.hoisted(() => vi.fn());
 const command = vi.hoisted(() => vi.fn());
@@ -13,14 +13,17 @@ vi.mock('node:os', async original => ({ ...await original(), release: () => '25.
 import { readFileSync } from 'node:fs';
 import { diagnoseFlux3Runtime, flux3Python, flux3LockPath, installFlux3Runtime } from './flux3Runtime.js';
 let restore;
+let restoreArch;
 beforeEach(() => {
   restore = pinPlatform('darwin');
+  // Native arm64 Node: otherwise (an x64 CI runner) uv is launched via `/usr/bin/arch -arm64`.
+  restoreArch = pinArch('arm64');
   vi.clearAllMocks();
   probe.mockImplementation((_bin, _args, _opts, done) => done(null, { stdout: '', stderr: '' }));
   command.mockResolvedValue({ success: true });
   patchedUv.mockResolvedValue({ ok: true, uv: '/private/tools/uv' });
 });
-afterEach(() => restore());
+afterEach(() => { restoreArch(); restore(); });
 
 describe('isolated FLUX.3 runtime lifecycle', () => {
   it('distinguishes missing/broken and healthy FLUX.3 CLIs without importing legacy packages or weights', async () => {
