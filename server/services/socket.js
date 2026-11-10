@@ -429,7 +429,7 @@ function setupPeerSyncEventForwarding() {
 
 // Bounded invalidations only: records remain behind their existing HTTP gates.
 function setupRecordEventForwarding() {
-  const forward = ({ recordKind, recordId }) => {
+  const forward = ({ recordKind, recordId, origin }) => {
     if (recordKind === 'creativeDirectorProject') {
       ioInstance?.emit('creative-director:project:changed', { id: recordId });
     } else if (recordKind === 'creativeCommission') {
@@ -441,7 +441,8 @@ function setupRecordEventForwarding() {
     } else if (recordKind === 'universe') {
       ioInstance?.emit('universe:changed', { id: recordId });
     } else if (recordKind === 'musicVideoProject') {
-      ioInstance?.emit('music-video:project:changed', { id: recordId });
+      // `origin`: the socket whose own write this was; that tab already applied the reply.
+      ioInstance?.emit('music-video:project:changed', { id: recordId, ...(origin ? { origin } : {}) });
     }
   };
   recordEvents.on('updated', forward);

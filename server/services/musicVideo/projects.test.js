@@ -38,6 +38,14 @@ vi.mock('../tracks/index.js', () => ({ getTrack: (...a) => getTrack(...a), updat
 const readSunoSongStyle = vi.fn();
 vi.mock('../trackSunoImport.js', () => ({ readSunoSongStyle: (...a) => readSunoSongStyle(...a) }));
 
+// Passthrough spy: counts the catalog check-in resolutions a write pays for.
+const withCatalogCheckin = vi.fn();
+vi.mock('./catalogCheckin.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  withCatalogCheckin.mockImplementation(actual.withCatalogCheckin);
+  return { ...actual, withCatalogCheckin: (...a) => withCatalogCheckin(...a) };
+});
+
 const projects = await import('./projects.js');
 
 function reset() {
@@ -263,6 +271,34 @@ describe('legacy shot approvals', () => {
     const selected = await projects.selectSceneTake(p.id, scene.sceneId, appended[1].takeId);
     expect(selected).toMatchObject({ prompt: 'Director edit', videoHistoryId: 'alternate-clip' });
     expect(selected.takes.map(take => take.assetId)).toEqual(['approved-clip', 'alternate-clip']);
+  });
+});
+
+describe('take decisions', () => {
+  // Uniquely catches a Use/Reject/Bad click paying for the catalog check-in (every linked record
+  // read and its media stat'd) before and after its write, when it answers with scenes only.
+  it('select, reject and mark skip the catalog check-in, and still save', async () => {
+    const p = await projects.createProject({ name: 'Take decisions' });
+    const scene = await projects.addProjectScene(p.id, { startSec: 0, endSec: 2, prompt: 'One' });
+    const { appended } = await projects.appendSceneTakes(p.id, scene.sceneId, [
+      { kind: 'video', assetId: 'clip-a' }, { kind: 'video', assetId: 'clip-b' },
+    ]);
+    await projects.mutateProjectRecord(p.id, current => ({ project: { ...current, castAndSets: { ...current.castAndSets, source: 'catalog' } } }));
+    withCatalogCheckin.mockClear();
+
+    const selected = await projects.selectSceneTake(p.id, scene.sceneId, appended[1].takeId);
+    expect(selected.videoHistoryId).toBe('clip-b');
+    const reviewed = await projects.reviewSceneTake(p.id, scene.sceneId, appended[0].takeId, { status: 'rejected' });
+    expect(reviewed.takes.find(take => take.takeId === appended[0].takeId).status).toBe('rejected');
+    const marked = await projects.markMediaPoolAssets(p.id, ['video:clip-a'], 'bad');
+    expect(marked.assetMarks).toEqual({ 'video:clip-a': 'bad' });
+    await projects.rejectUnusedSceneTakes(p.id, scene.sceneId);
+    expect(withCatalogCheckin).not.toHaveBeenCalled();
+
+    // An ordinary edit still resolves it.
+    await projects.updateScene(p.id, scene.sceneId, { prompt: 'Edited' });
+    expect(withCatalogCheckin).toHaveBeenCalled();
+    expect((await projects.getProject(p.id)).scenes[0]).toMatchObject({ prompt: 'Edited', videoHistoryId: 'clip-b' });
   });
 });
 

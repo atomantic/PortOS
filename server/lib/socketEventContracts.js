@@ -578,8 +578,8 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
   }),
   'music-video:project:changed': Object.freeze({
     direction: 'server-to-client',
-    summary: 'A music video project was created, changed or deleted after persistence; refetch the names list or the referenced project.',
-    payloadSchema: { type: 'object', required: ['id'], properties: { id: { type: 'string' } }, additionalProperties: false },
+    summary: 'A music video project was created, changed or deleted after persistence; refetch the names list or the referenced project. `origin` names the socket whose own write it was, which already applied the reply.',
+    payloadSchema: { type: 'object', required: ['id'], properties: { id: { type: 'string' }, origin: { type: 'string' } }, additionalProperties: false },
   }),
   'fableloom:export:job': Object.freeze({
     direction: 'server-to-client',
