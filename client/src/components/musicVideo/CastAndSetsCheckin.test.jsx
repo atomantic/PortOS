@@ -272,10 +272,10 @@ describe('Cast & Sets direction editing', () => {
   });
   const review = (dir, extra = {}) => ({ id: 'example-project', castAndSets: { revision: 1, status: 'review', plan: {}, images: {}, direction: dir, ...extra } });
 
-  it('offers the editor only for a procedural direction waiting in review', async () => {
+  it('offers the editor for a direction waiting in review but not an approved one', async () => {
     const view = render(<Harness initial={review(direction())} locked={false} />);
     await act(async () => {});
-    expect(screen.queryByRole('button', { name: /Edit direction/ })).toBeNull();
+    expect(screen.getByRole('button', { name: /Edit direction/ })).toBeInTheDocument();
     view.unmount();
     render(<Harness initial={review(direction('procedural'), { status: 'approved' })} locked={false} />);
     await act(async () => {});
@@ -328,6 +328,20 @@ describe('Cast & Sets per-image actions', () => {
   const direction = { protagonist: { name: 'June', description: 'a girl', expressions: ['eyes closed, looking down'], forms: [] },
     cast: [{ id: 'dad', name: 'Dad', role: 'father', description: 'tall' }], sets: [], tests: [] };
   const sheet = (status, extra = {}) => ({ id: 'example-project', castAndSets: { revision: 1, status, plan: photoPlan, images: {}, direction, ...extra } });
+
+  it('lets a legacy photographic project set its exact rendering medium and explains the fallback', async () => {
+    api.editMusicVideoCastAndSetsDirection.mockResolvedValue({ project: sheet('review', { revision: 2 }) });
+    render(<Harness initial={sheet('review')} locked={false} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit direction' }));
+    expect(screen.getByText(/Inference cannot recognize every medium/)).toBeInTheDocument();
+    const input = screen.getByLabelText('People-sheet rendering medium');
+    fireEvent.change(input, { target: { value: 'x'.repeat(501) } });
+    expect(screen.getByRole('button', { name: 'Save direction' })).toBeDisabled();
+    const medium = '  scratchboard / silverpoint\nwith crosshatching  ';
+    fireEvent.change(input, { target: { value: medium } });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save direction' })); });
+    expect(api.editMusicVideoCastAndSetsDirection).toHaveBeenLastCalledWith('example-project', { renderingMedium: medium }, { silent: true });
+  });
 
   it('edits moods, removes a cast member and re-renders one image from its card', async () => {
     api.regenerateMusicVideoCastAndSets.mockResolvedValue({ project: sheet('imaging', { revision: 2 }) });
@@ -407,9 +421,11 @@ describe('Cast & Sets per-image actions', () => {
     const subject = card('June · Age 7').getByLabelText('Catalog reference for this age');
     expect([...subject.options].map((o) => o.value)).toEqual(['', 'mvc-child']);
     fireEvent.change(subject, { target: { value: 'mvc-child' } });
+    const medium = '  cyanotype / scratchboard\nwith crosshatching  ';
+    fireEvent.change(card('June · Age 7').getByLabelText('Rendering medium (empty inherits direction)'), { target: { value: medium } });
     await act(async () => { fireEvent.click(card('June · Age 7').getByRole('button', { name: 'Save and re-render' })); });
     expect(api.editMusicVideoCastAndSetsDirection).toHaveBeenLastCalledWith('example-project',
-      { protagonist: { forms: [{ ...age, id: 'age-7', subjectId: 'mvc-child' }] } }, { silent: true });
+      { protagonist: { forms: [{ ...age, id: 'age-7', subjectId: 'mvc-child', renderingMedium: medium }] } }, { silent: true });
     fireEvent.click(card('Memory').getByRole('button', { name: 'Edit Memory' }));
     fireEvent.change(card('Memory').getByLabelText('Age shown'), { target: { value: 'age-7' } });
     await act(async () => { fireEvent.click(card('Memory').getByRole('button', { name: 'Save and re-render' })); });

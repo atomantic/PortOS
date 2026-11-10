@@ -103,6 +103,31 @@ describe('Cast & Sets direction', () => {
     expect(direction).not.toHaveProperty('moodRefs');
   });
 
+  it('preserves verbatim optional rendering media across parsing, partial revisions and direct edits', () => {
+    const medium = '  scratchboard / silverpoint\nwith crosshatching  ';
+    const legacy = mergeCastAndSetsDirection(null, parseCastAndSetsResponse(JSON.stringify(ANSWER)), { sections }).direction;
+    expect(legacy).not.toHaveProperty('renderingMedium');
+    expect(applyCastAndSetsDirectionEdits(legacy, { renderingMedium: '' }, { sections }).changed).toContain('rendering medium');
+    const form = { id: 'age-7', age: '7', description: 'small', renderingMedium: '  cyanotype  ' };
+    const parsed = parseCastAndSetsResponse(JSON.stringify({ renderingMedium: medium, protagonist: { forms: [form] } }));
+    const first = mergeCastAndSetsDirection(legacy, parsed, { sections }).direction;
+    expect(first.renderingMedium).toBe(medium);
+    expect(first.protagonist.forms[0].renderingMedium).toBe(form.renderingMedium);
+    const revised = mergeCastAndSetsDirection(first, parseCastAndSetsResponse(JSON.stringify({
+      renderingMedium: null, protagonist: { forms: [{ id: 'age-7', age: '7', description: 'smiling' }] },
+    })), { sections }).direction;
+    expect(revised.renderingMedium).toBe(medium);
+    expect(revised.protagonist.forms[0].renderingMedium).toBe(form.renderingMedium);
+    const edited = applyCastAndSetsDirectionEdits(revised, { renderingMedium: 'scratchboard',
+      protagonist: { forms: [{ ...form, renderingMedium: '' }] } }, { sections });
+    expect(edited.direction.renderingMedium).toBe('scratchboard');
+    expect(edited.direction.protagonist.forms[0].renderingMedium).toBe('');
+    expect(edited.changed).toEqual(expect.arrayContaining(['rendering medium', 'forms']));
+    expect(applyCastAndSetsDirectionEdits(edited.direction, { renderingMedium: '' }, { sections }).direction.renderingMedium).toBe('');
+    expect(buildCastAndSetsPrompt(project)).toContain('"renderingMedium"');
+    expect(buildCastAndSetsPrompt(project, { previous: first })).toContain('preserve existing renderingMedium values');
+  });
+
   it('refuses a first pass missing the protagonist or enough sets', () => {
     const parsed = parseCastAndSetsResponse(JSON.stringify({ logline: 'x', sets: [{ name: 'A', description: 'a' }] }));
     expect(mergeCastAndSetsDirection(null, parsed, { sections }).missing).toEqual(['protagonist', 'looks', 'sets']);

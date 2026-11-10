@@ -1766,6 +1766,7 @@ export const musicVideoCastAndSetsImageNoteRemovalSchema = z.object({
 // a test by its 1-based index); `remove: true` drops one.
 const castSetsText = (max) => z.string().max(max);
 export const musicVideoCastAndSetsDirectionEditSchema = z.object({
+  renderingMedium: castSetsText(500).optional(),
   protagonist: z.object({
     construction: castSetsText(1000).optional(),
     shapeLanguage: castSetsText(500).optional(),
@@ -1790,6 +1791,7 @@ export const musicVideoCastAndSetsDirectionEditSchema = z.object({
       height: castSetsText(80).optional(),
       era: castSetsText(120).optional(),
       look: castSetsText(500).optional(),
+      renderingMedium: castSetsText(500).optional(),
       // The fixed-casting subject whose reference grounds this age (null clears).
       subjectId: z.string().max(64).nullable().optional(),
       // Echoed back from the saved form; the server re-stamps it from the subject.
@@ -1850,7 +1852,7 @@ export const musicVideoCastAndSetsDirectionEditSchema = z.object({
   }).strict()).max(8).optional(),
 }).strict().refine((edits) => {
   if (!edits.sets?.some((set) => Object.hasOwn(set, 'setReference'))) return true;
-  return !edits.protagonist && !edits.world && !edits.looks && !edits.cast && !edits.tests
+  return !Object.hasOwn(edits, 'renderingMedium') && !edits.protagonist && !edits.world && !edits.looks && !edits.cast && !edits.tests
     && edits.sets.every((set) => Object.keys(set).every((key) => key === 'id' || key === 'setReference'));
 }, 'Save greybox selections separately from direction edits.');
 

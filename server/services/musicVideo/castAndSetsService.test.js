@@ -1993,6 +1993,36 @@ it('grounds an age form and its test frames on the catalog reference selected fo
   expect(buildCastAndSetsImagePlan(removed, saved.castAndSets.direction).character.refImages).toEqual(['keeper.png']);
 });
 
+it('saves exact explicit media through the direction API and uses the same medium in planned and submitted prompts', async () => {
+  runPrompt.mockResolvedValue({ text: JSON.stringify({ ...DIRECTION, look: 'warm amber light',
+    protagonist: { ...DIRECTION.protagonist, forms: [{ id: 'age-7', age: '7', description: 'small', look: 'sepia film' }] } }) });
+  const project = await seed({ concept: { prompt: 'a vigil', subjects: [] } });
+  await service.startCastAndSets(project.id);
+  await runTo(project.id, 'review');
+  const url = `/api/music-video/${project.id}/cast-and-sets/direction`;
+  const medium = '  scratchboard / silverpoint\nwith crosshatching  ';
+  expect((await request(app).patch(url).send({ renderingMedium: 'x'.repeat(501) })).status).toBe(400);
+  expect((await request(app).patch(url).send({ renderingMedium: 42 })).status).toBe(400);
+  expect((await request(app).patch(url).send({ renderingMedium: medium, sets: [{ id: 'lab', setReference: null }] })).status).toBe(400);
+  expect((await request(app).patch(url).send({ renderingMedium: medium })).status).toBe(202);
+  await runTo(project.id, 'review');
+  const saved = (await current(project.id)).castAndSets;
+  expect(saved.direction.renderingMedium).toBe(medium);
+  for (const key of ['character', 'expressions', 'looks', 'form:age-7']) {
+    const instruction = `Rendering medium: ${medium}. Retain this rendering medium only; omit scene lighting, color grading, film stock and grain`;
+    const sent = jobs.findLast((job) => keyOf(job) === key).params.prompt;
+    expect(saved.plan[key].prompt).toContain(instruction);
+    expect(saved.images[key].submittedPrompt).toBe(sent);
+    expect(sent).toContain(instruction);
+    expect(sent).not.toMatch(/warm amber light|sepia film/);
+  }
+  const forms = saved.direction.protagonist.forms.map((form) => ({ ...form, renderingMedium: 'cyanotype' }));
+  expect((await request(app).patch(url).send({ protagonist: { forms } })).status).toBe(202);
+  await runTo(project.id, 'review');
+  expect(jobs.findLast((job) => keyOf(job) === 'form:age-7').params.prompt).toContain('Rendering medium: cyanotype.');
+  expect((await current(project.id)).castAndSets.direction.renderingMedium).toBe(medium);
+});
+
 it('keeps an age sheet neutral while carrying memory era and film stock into scene frames and plates', async () => {
   const present = '1985 color, muted purples, 35mm grain';
   const memory = 'black-and-white 8mm home movie, heavy grain';

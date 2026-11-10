@@ -77,6 +77,9 @@ function sheetMedium(look, fallback = PHOTO) {
     ? `Rendering medium: ${[...new Set(media)].join(', ')}. Retain this rendering medium only; omit scene lighting, color grading, film stock and grain`
     : fallback;
 }
+// Explicit artist input is never inferred, trimmed or rewritten. The bounded
+// recognizer above is only the compatibility fallback for older directions.
+const explicitSheetMedium = (medium) => `Rendering medium: ${medium}. Retain this rendering medium only; omit scene lighting, color grading, film stock and grain`;
 // Identity and wardrobe sheets define the person; recurring objects have their
 // own sheet, even when a legacy signature or wardrobe mentions carrying one.
 const EMPTY_HANDS = 'Hands empty and relaxed, holding no device or carried object. Carried props are drawn on the prop sheet. Use wardrobe descriptions for worn clothing and accessories only, drawn as worn (a watch on the wrist, a camera hanging from its wrist strap), never gripped in a hand; never put a carried object from the description or reference images in their hands';
@@ -235,7 +238,9 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
   const looks = direction.looks || [];
   const firstLook = looks[0];
   const style = trimTo(direction.look, 500) || trimTo(project?.concept?.style, 500);
-  const peopleMedium = sheetMedium(direction.look, sheetMedium(project?.concept?.style));
+  const peopleMedium = direction.renderingMedium
+    ? explicitSheetMedium(direction.renderingMedium)
+    : sheetMedium(direction.look, sheetMedium(project?.concept?.style));
   const note = (key) => (revisionNotes[key] ? `Revision: ${revisionNotes[key]}` : '');
   const forms = p.forms || [];
   const bindings = formBindings(project, forms, catalogLikeness);
@@ -401,7 +406,7 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
         EMPTY_HANDS,
         form.era && `Era: ${form.era}`,
         FIVE_VIEWS,
-        sheetMedium(form.look, peopleMedium),
+        form.renderingMedium ? explicitSheetMedium(form.renderingMedium) : direction.renderingMedium ? peopleMedium : sheetMedium(form.look, peopleMedium),
         FLAT_GRAY_SHEET_CLOSE,
         note(key),
       ),
