@@ -248,6 +248,7 @@ import {
   removeDevArtifact,
 } from '../services/musicVideo/devArtifactService.js';
 import { devArtifactTypeFor } from '../services/musicVideo/devArtifacts.js';
+import { writeOriginScope } from '../lib/writeOrigin.js';
 import {
   startCastAndSets,
   editCastAndSetsDirection,
@@ -282,6 +283,8 @@ import {
 } from '../lib/musicVideoSummary.js';
 
 const router = Router();
+// A take decision's reply carries the change, so its own tab can skip the refetch its broadcast asks for.
+router.use(writeOriginScope);
 
 // #3231 Phase 4 — the per-record image render pin (`imageMode`/`imageModelId`,
 // the shared universe/series/sprite field pair) on Music Video projects: scene

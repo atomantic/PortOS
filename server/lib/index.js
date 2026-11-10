@@ -19,6 +19,7 @@
 export * from './windowsAgentProcess.js';
 export * from './providerCallActivity.js';
 export * from './releaseAttemptMembership.js';
+export * from './writeOrigin.js';
 export * from './releasePublication.js';
 export * from './releaseSynchronization.js';
 export * from './appOperationErrorContext.js';
