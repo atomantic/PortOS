@@ -381,7 +381,7 @@ async function resolveLocalSpeedProfile({
       model, profileId: speedProfileId, mode: speedProfileMode,
       width: w, height: h, steps, guidanceScale,
       keyframes, lastImagePath, extendFromVideoPath, audioFilePath,
-    }, await getSettings());
+    });
   }
   if (['minimax_h3', 'minimax_h3_cuda'].includes(model.runtime) && resolvedLoras.length) {
     const { validateMiniMaxH3CudaLoras, validateMiniMaxH3MlxLoras } = await import('./ensureWeights.js');

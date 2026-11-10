@@ -80,7 +80,6 @@ describe('media model registry freshly loaded', () => {
     for (const id of ids) expect(upgraded.video.mlx.find((entry) => entry.id === id)).toBeDefined();
     const v2 = upgraded.video.mlx.find((entry) => entry.id === 'fasth3_v2_int6');
     expect(v2).toMatchObject({ steps: 8, samplerLocked: true, fastvideoVsa: true, fastvideoMlxFormat: 'int6', supportedModes: ['text'] });
-    expect(v2.termsGate.id).toBe('minimax-h3-community-license-2026-08-02');
     upgraded.video.mlx = upgraded.video.mlx.filter((entry) => entry.id !== v2.id);
     writeFileSync(registryFile, JSON.stringify(upgraded));
     expect(reloadMediaModels().video.mlx.some((entry) => entry.id === v2.id)).toBe(false);
@@ -357,9 +356,6 @@ describe('mediaModels registry', () => {
     expect(fasth3.supportsNegativePrompt).toBe(false);
     expect(fasth3.supportsTiling).toBe(false);
     expect(fasth3.supportsDisableAudio).toBe(false);
-    // The MiniMax H3 Community License travels with the distilled weights, so
-    // the row carries the same territory gate as the other H3 entries.
-    expect(fasth3.termsGate?.id).toBe('minimax-h3-community-license-2026-08-02');
   });
 
   it('ships the upstream FastH3 snapshot at three MLX formats off ONE pinned download', async () => {
@@ -388,8 +384,6 @@ describe('mediaModels registry', () => {
       expect(row.supportsNegativePrompt).toBe(false);
       expect(row.supportsTiling).toBe(false);
       expect(row.supportsDisableAudio).toBe(false);
-      // The MiniMax H3 Community License travels with the distilled weights.
-      expect(row.termsGate?.id).toBe('minimax-h3-community-license-2026-08-02');
     }
   });
 
@@ -476,7 +470,6 @@ describe('mediaModels registry', () => {
         ),
         'FL2VA/text_encoder/model-00014-of-00014.safetensors',
       ]);
-    expect(h3.termsGate.id).toBe('minimax-h3-community-license-2026-08-02');
   });
 
   it('ships MiniMax H3 CUDA as the NVIDIA H3 profile', async () => {
@@ -510,8 +503,6 @@ describe('mediaModels registry', () => {
     expect(h3.frameOptions).not.toContain(107);
     expect(h3.frameOptions).not.toContain(362);
     expect(h3.frameOptions.every((n) => n % 17 === 5)).toBe(true);
-    // Same weights, same license, so one acceptance covers both entries.
-    expect(h3.termsGate.id).toBe(mlx.termsGate.id);
   });
 
   it('pins an explicit file list for MiniMax H3 CUDA rather than a repo snapshot', async () => {

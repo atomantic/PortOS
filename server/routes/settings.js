@@ -157,25 +157,11 @@ const redactExternalTokens = (settings) => {
 //   - imageGen.hfToken / civitai.apiKey: write-only tokens, redacted out of
 //     GET, owned by /setup/hf-token and /loras/auth/civitai. Re-injected only
 //     when the incoming parent omits them, so those routes can still write.
-//   - videoGen.acceptedModelTerms: the install's restricted-model license
-//     acknowledgements, owned exclusively by /api/video-gen/model-terms — which
-//     is where an id is checked against a model that actually declares it. The
-//     stored value ALWAYS wins here, so a settings save can neither drop an
-//     acknowledgement (silently 403ing every gated render) nor mint one that
-//     no model's terms gate would ever match.
 const preserveExternallyOwnedKeys = (next, current) => {
-  const carryOver = (parentKey, childKey, { alwaysStored = false } = {}) => {
+  const carryOver = (parentKey, childKey) => {
     const incoming = next[parentKey];
     const stored = current?.[parentKey]?.[childKey];
-    if (!isPlainObject(incoming)) return;
-    if (!alwaysStored && childKey in incoming) return;
-    if (stored === undefined) {
-      if (alwaysStored && childKey in incoming) {
-        const { [childKey]: _dropped, ...rest } = incoming;
-        next[parentKey] = rest;
-      }
-      return;
-    }
+    if (!isPlainObject(incoming) || childKey in incoming || stored === undefined) return;
     next[parentKey] = { ...incoming, [childKey]: stored };
   };
   // Same carryOver contract, one level deeper — for `videoGen.fal.apiKey` /
@@ -192,7 +178,6 @@ const preserveExternallyOwnedKeys = (next, current) => {
   };
   carryOver('imageGen', 'hfToken');
   carryOver('civitai', 'apiKey');
-  carryOver('videoGen', 'acceptedModelTerms', { alwaysStored: true });
   carryOverNested('videoGen', 'fal', 'apiKey');
   carryOverNested('videoGen', 'reactor', 'apiKey');
   carryOverNested('videoGen', 'runway', 'apiKey');

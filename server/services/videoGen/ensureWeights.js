@@ -5,7 +5,6 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { downloadHfRepo } from '../hfDownload.js';
 import { sha256File } from '../../lib/fileUtils.js';
 import { MINIMAX_H3_LIGHTX2V_PROFILE, MINIMAX_H3_FLEX_MLX_PROFILE, miniMaxH3SpeedProfileContract, isMiniMaxH3SpeedProfileRequest, miniMaxH3SpeedProfileDeclineReason } from '../../lib/minimaxH3SpeedProfiles.js';
-import { acceptedVideoModelTerms, isVideoModelTermsAccepted, videoModelTermsError } from '../../lib/videoDisclosure.js';
 import { resolveByovRuntimeLoraCapable, resolveMiniMaxH3MlxSpeedCapable } from './runtimes.js';
 import { readSafetensorsHeader } from '../../lib/safetensors.js';
 
@@ -65,11 +64,10 @@ export async function validateMiniMaxH3MlxLoras(loras, speedProfile = null) {
 
 // Each explicit request checks the cache and digest; never download from a
 // render path, and never treat a revision pointer alone as content integrity.
-export async function prepareMiniMaxH3SpeedProfile(params, settings) {
+export async function prepareMiniMaxH3SpeedProfile(params) {
   if (!isMiniMaxH3SpeedProfileRequest(params.profileId)) return null;
   const reason = miniMaxH3SpeedProfileDeclineReason(params);
   if (reason) throw new ServerError(reason.message, { status: 400, code: reason.code });
-  if (!isVideoModelTermsAccepted(params.model, acceptedVideoModelTerms(settings))) throw videoModelTermsError(params.model);
   if ((params.model.runtime === 'minimax_h3' && !(await resolveMiniMaxH3MlxSpeedCapable(params.profileId)))
     || !(await resolveByovRuntimeLoraCapable(params.model.runtime))) {
     throw new ServerError('This speed profile requires its pinned H3 runtime and scheduler/quantized-LoRA capability probes. Install or repair the selected MiniMax H3 runtime in Video Gen.',

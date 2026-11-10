@@ -657,8 +657,7 @@ const DEFAULT_REGISTRY = {
       // The quantized DiT is one HF snapshot; the released conditioner + VAEs
       // are an exact selective file set from MiniMax's upstream snapshot. Both
       // downloads are explicit in Video Gen, and render-time resolution is
-      // cache-only. The server-owned disclosure attaches the mandatory,
-      // versioned territory/license acceptance gate.
+      // cache-only.
       ...[
         { bits: 8, revision: '3ac52081470b0488921c3ec3ba84a39097bf2361' },
         { bits: 6, revision: '58ea790a856734132293164b8305c8bb80bee6fe' },

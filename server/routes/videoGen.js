@@ -23,7 +23,7 @@ import { createVideoHistoryItemRead, historyRecordIdSchema } from './videoHistor
 import { uploadFields, optionalUpload, optionalUploadFields } from '../lib/multipart.js';
 import {
   validateRequest, hostedProviderParamSchema, mediaDeleteQuerySchema, modelDownloadQuerySchema, modelDownloadParamsSchema,
-  icLoraDownloadParamsSchema, textEncoderDownloadParamsSchema, videoCancelBodySchema, videoModelTermsSchema,
+  icLoraDownloadParamsSchema, textEncoderDownloadParamsSchema, videoCancelBodySchema,
 } from '../lib/validation.js';
 import { grokVideoDurationSchema } from '../lib/sharedSchemas.js';
 import {
@@ -32,11 +32,8 @@ import {
 } from '../lib/reactorVideoClip.js';
 import { MIN_CONTEXT_FRAMES, MAX_CONTEXT_FRAMES } from '../lib/videoContinuity.js';
 import { I2V_REFERENCE_MODES } from '../lib/videoReferenceModes.js';
-import {
-  VIDEO_BACKEND_DISCLOSURES, acceptedVideoModelTerms,
-  videoModelTermsGateId, isVideoModelTermsAccepted, videoModelTermsError,
-} from '../lib/videoDisclosure.js';
-import { getSettings, updateSettingsWith } from '../services/settings.js';
+import { VIDEO_BACKEND_DISCLOSURES } from '../lib/videoDisclosure.js';
+import { getSettings } from '../services/settings.js';
 import { deleteVideoHostedCopy } from '../services/hostedRenderRemoteDelete.js';
 import { recordUserAction } from '../services/userActions.js';
 import { checkPackages, isAllowedPython } from '../lib/pythonSetup.js';
@@ -682,41 +679,8 @@ router.get('/status', asyncHandler(async (_req, res) => {
   });
 }));
 
-// Restricted-model license acknowledgement (#3674 follow-up). Acceptance is a
-// fact about the operator of this install, not about one browser or one
-// request, so it lives in settings and every render surface reads it: the
-// Video Gen page, the music video director board, and producers with no UI to
-// prompt through (queued jobs, pipeline stages, agent runs).
-router.get('/model-terms', asyncHandler(async (_req, res) => {
-  res.json({ accepted: acceptedVideoModelTerms(await getSettings()) });
-}));
-
 router.post('/metal-buffer-profiles/clear', asyncHandler(async (_req, res) => {
   res.json(await clearMetalBufferProfiles());
-}));
-
-router.post('/model-terms', asyncHandler(async (req, res) => {
-  const parsed = videoModelTermsSchema.safeParse(req.body || {});
-  if (!parsed.success) failValidation(parsed);
-  const { termsId, accepted } = parsed.data;
-  // Only ids a shipped model actually declares are storable — otherwise a
-  // typo'd or stale id accumulates in settings and silently authorizes
-  // nothing, which reads to the user as "I accepted and it still fails".
-  const known = listVideoModels().some((model) => videoModelTermsGateId(model) === termsId);
-  if (!known) {
-    throw new ServerError(
-      `Unknown model terms id: ${termsId}`,
-      { status: 400, code: 'VIDEO_MODEL_TERMS_UNKNOWN_ID' },
-    );
-  }
-  const next = await updateSettingsWith((current) => {
-    const existing = acceptedVideoModelTerms(current);
-    const updated = accepted
-      ? [...new Set([...existing, termsId])]
-      : existing.filter((id) => id !== termsId);
-    return { ...current, videoGen: { ...(current.videoGen || {}), acceptedModelTerms: updated } };
-  });
-  res.json({ accepted: acceptedVideoModelTerms(next) });
 }));
 
 // Mints a short-lived reactor.inc session JWT scoped to `reactor/fast-h3`
@@ -928,9 +892,6 @@ router.post('/models/:modelId/download', asyncHandler(async (req, res) => {
   const { modelId } = validateRequest(modelDownloadParamsSchema, req.params);
   const model = listVideoModels().find((m) => m.id === modelId);
   if (!model) throw new ServerError(`Unknown video model: ${modelId}`, { status: 404, code: 'UNKNOWN_MODEL' });
-  if (speedProfileId && !isVideoModelTermsAccepted(model, acceptedVideoModelTerms(await getSettings()))) {
-    throw videoModelTermsError(model, 'adapter download');
-  }
   const repos = modelDownloadTargets(model, { speedProfileId });
   if (repos.length === 0) throw new ServerError(`Model "${model.id}" has no HuggingFace repo on file.`, { status: 400, code: 'NO_REPO_FOR_MODEL' });
   const runtimeInfo = BYOV_RUNTIME_INFO[model.runtime];

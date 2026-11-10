@@ -138,7 +138,7 @@ Download explicitly to cache Pika's original 2.77 GB F32 adapter, pinned release
 manifest, LICENSE and NOTICE from its original repository. Admission and the
 Python helper verify their digests; rendering never downloads them. The adapter
 is a MiniMax H3 Model Derivative by Mellis, Inc., under the MiniMax H3 Community
-License and its existing territory restrictions. The original file is not
+License; PortOS links the license and does not gate on it. The original file is not
 repacked or redistributed by PortOS. Runtime residuals use the manifest's
 alpha=rank=128 and BF16 precision, leaving quantized base weights intact.
 The existing LoRA applicator handles split Q/K/V and SwiGLU row layout, and

@@ -44,7 +44,6 @@ describe('migration 242 — MiniMax H3 MLX model', () => {
       repo: 'pipenetwork/MiniMax-H3-MLX-8bit',
       revision: '3ac52081470b0488921c3ec3ba84a39097bf2361',
       runtime: 'minimax_h3',
-      termsGate: { id: 'minimax-h3-community-license-2026-08-02' },
     });
     // The snapshot it creates uses the canonical #4142 keys even though the
     // registry it read is still legacy-keyed — mediaModels.js reads either.

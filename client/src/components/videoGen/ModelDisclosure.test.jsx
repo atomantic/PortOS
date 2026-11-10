@@ -192,20 +192,4 @@ describe('ModelDisclosure', () => {
     const { container: empty } = render(<ModelDisclosure backend="grok" backendDisclosures={[]} model={null} />);
     expect(empty.querySelector('details')).toBeNull();
   });
-
-  it('lists excluded territories as a disclosure fact, not an acknowledgement checkbox', () => {
-    renderDisclosure({
-      backend: 'local',
-      model: {
-        ...SHIPPED_MODEL,
-        termsGate: {
-          id: 'example-license-v1',
-          excludedTerritories: ['European Union', 'United States of America'],
-        },
-      },
-    });
-    expect(screen.getByText(/Excludes European Union, United States of America/)).toBeInTheDocument();
-    expect(screen.queryByLabelText('Model terms acceptance')).toBeNull();
-    expect(screen.queryByRole('checkbox')).toBeNull();
-  });
 });

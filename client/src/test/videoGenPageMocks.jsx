@@ -156,15 +156,6 @@ export const videoGenModel = (id, overrides = {}) => ({
   ...overrides,
 });
 
-/** The eligibility gate a territory-restricted model carries. */
-export const videoGenTermsGate = (termsId) => ({
-  id: termsId,
-  title: `Terms for ${termsId}`,
-  summary: 'This model is available only in its applicable territory.',
-  acknowledgement: `I am eligible and accept ${termsId}.`,
-  licenseUrl: 'https://example.com/license',
-});
-
 /**
  * A `/model-context` payload over `models` — the model list plus the three
  * shaping numbers the picker's auto-select reads, with no python probe behind

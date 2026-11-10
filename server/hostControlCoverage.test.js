@@ -1347,7 +1347,6 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/video-gen/history/:id/visibility', RECORDS],
   ['POST /api/video-gen/ic-loras/:mode/download', MODEL_DATA],
   ['POST /api/video-gen/ic-loras/:mode/repair', MODEL_DATA],
-  ['POST /api/video-gen/model-terms', RECORDS],
   ['POST /api/video-gen/models/:modelId/download', MODEL_DATA],
   ['POST /api/video-gen/models/:modelId/repair', MODEL_DATA],
   ['POST /api/video-gen/models/verify', MODEL_DATA],

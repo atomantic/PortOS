@@ -2018,8 +2018,8 @@ export default function VideoGen() {
           )}
 
           {/* Provenance / licensing / policy scope for the selected backend +
-              model (#3674). Territory and Community License live here as
-              facts — they do not block download or generate. */}
+              model (#3674). Licenses are informational links — they never
+              block download or generate. */}
           <ModelDisclosure
             backend={backend}
             backendDisclosures={status?.backendDisclosures}
