@@ -98,7 +98,7 @@ export const JEV_STAGES = Object.freeze([
   {
     id: 'python',
     label: 'Host Python',
-    description: 'Python 3.10 or newer, with a supported PyTorch wheel for this machine.',
+    description: 'Python 3.11 or newer, with a supported PyTorch wheel for this machine.',
   },
   {
     id: 'venv',

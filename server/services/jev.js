@@ -47,7 +47,7 @@ import {
 import { PORTS } from '../lib/ports.js';
 import { safeChildProcessOptions } from '../lib/processEnv.js';
 import { diagnosePythonRuntimeText } from '../lib/pythonRuntimeDiagnosis.js';
-import { createVenv, detectVenvBasePythonSync, installPackages } from '../lib/pythonSetup.js';
+import { createVenv, detectVenvBasePythonSync, installLockedRuntime } from '../lib/pythonSetup.js';
 import { withSpawnCwdEnv } from '../lib/spawnCwd.js';
 import { downloadHfRepo } from './hfDownload.js';
 // One path helper, from the leaf that owns the directory. Re-deriving
@@ -170,7 +170,7 @@ export function jevVenvSpawnTarget(overrides = {}) {
 
 async function isBasePythonSupported(pythonPath) {
   if (!pythonPath) return false;
-  return execFileAsync(pythonPath, ['-c', 'import sys; print("supported" if sys.version_info >= (3, 10) else "unsupported")'],
+  return execFileAsync(pythonPath, ['-c', 'import sys; print("supported" if sys.version_info >= (3, 11) else "unsupported")'],
     safeChildProcessOptions({ env: buildJevEnv(), timeout: 5_000, maxBuffer: 1000 }))
     .then(({ stdout }) => stdout.trim() === 'supported').catch(() => false);
 }
@@ -268,7 +268,7 @@ export function installJev({ onEvent } = {}) {
     activeStage = 'packages';
     let packageIssue = null;
     emitInstall(onEvent, 'stage', 'Installing the fixed scorer runtime packages…', 'packages');
-    const packageRun = installPackages(pythonPath, [...JEV_PYTHON_PACKAGES], ({ type, message }) => {
+    const packageRun = installLockedRuntime(pythonPath, 'guard-runtime', ({ type, message }) => {
       const issue = setupIssue(message);
       if (issue.code !== 'runtime-check-failed' && !packageIssue) {
         packageIssue = issue;

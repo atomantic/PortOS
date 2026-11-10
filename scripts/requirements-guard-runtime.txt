@@ -1,0 +1,11 @@
+# Prompt Guard and jev classifier runtime: direct pins for the dedicated
+# <data>/python/venv-model-abuse-guard and <data>/python/venv-jev virtualenvs.
+# Installed only from requirements-guard-runtime.lock.txt, which pins and hashes
+# every transitive package. After editing this file, regenerate the lock with
+# the command in the lock header. These pins must equal
+# MODEL_ABUSE_GUARD_PYTHON_PACKAGES (server/lib/modelAbuseGuard.js) and
+# JEV_PYTHON_PACKAGES (server/lib/jev.js); a test enforces it.
+torch==2.14.0
+transformers==5.16.1
+safetensors==0.8.0
+huggingface_hub==1.30.0

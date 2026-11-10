@@ -3,7 +3,7 @@
  *
  * Every managed Python runtime in PortOS (Prompt Guard, jev, and any future
  * pinned-model boundary) hits the same short list of real-world failures: a
- * missing module, a broken certificate chain, no wheel for this platform, an
+ * missing module, a broken certificate chain, no wheel (or no lock) for this platform, an
  * unsolvable resolution, a full disk, an unreachable index. Each one needs a
  * DIFFERENT operator action, so a single "install failed" is useless.
  *
@@ -15,6 +15,7 @@
  */
 
 const EVIDENCE = [
+  [/has no hash-pinned lock for/i, 'unsupported-platform', (subject) => `No hash-pinned ${subject} runtime lock covers this platform.`, 'Use a supported platform (Apple Silicon macOS, x64/arm64 Linux, or x64 Windows); PortOS installs no unlocked packages.'],
   [/No module named/, 'package-missing', (subject) => `A ${subject} package or dependency is missing.`, 'repair-packages'],
   [/CERTIFICATE_VERIFY_FAILED|certificate verify failed/i, 'certificate-failed', () => 'Python could not verify the package server certificate.', 'Repair Python certificate trust, then retry installation.'],
   [/No matching distribution|Could not find a version that satisfies/i, 'wheel-unavailable', () => 'A pinned package has no matching distribution for this Python and platform.', 'Use a Python version and platform supported by the pinned packages, then repair the runtime.'],
