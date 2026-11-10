@@ -3,8 +3,9 @@
 set -euo pipefail
 
 SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REVISION=0be9e69a729432323dfb60a418801e5e9e7a1437
 [[ "$(uname -s)" == Darwin && "$(uname -m)" == arm64 ]] || { echo 'Pixal3D Metal requires Apple Silicon macOS.' >&2; exit 1; }
-[[ "$(git rev-parse HEAD)" == 0be9e69a729432323dfb60a418801e5e9e7a1437 ]] || { echo 'Unexpected Pixal3D source revision.' >&2; exit 1; }
+[[ "$(git rev-parse HEAD)" == "$REVISION" ]] || { echo 'Unexpected Pixal3D source revision.' >&2; exit 1; }
 # Finding the stub is insufficient when Xcode's downloadable component is absent.
 xcrun -sdk macosx metal --version
 
@@ -24,18 +25,25 @@ VPY=.venv/bin/python
 "$VPY" -m pip install --disable-pip-version-check --require-hashes --no-deps --only-binary :all: -r "$SCRIPTS_DIR/requirements-pixal3d-mps.lock.txt"
 "$VPY" -m pip install --disable-pip-version-check --require-hashes --no-deps --no-build-isolation -r "$SCRIPTS_DIR/requirements-pixal3d-mps-sources.lock.txt"
 
-# Torch 2.15 headers require C++20. The pinned fork builds all extensions as C++17.
-"$VPY" - <<'PY'
+# Archive Git objects, not the working directory: Repair must not reuse local
+# source changes, compiled extensions or shaders left by an earlier install.
+NATIVE_SOURCE=.venv/portos-native
+mkdir -p "$NATIVE_SOURCE"
+git archive --format=tar "$REVISION" extern | tar -xf - -C "$NATIVE_SOURCE"
+
+# Torch 2.15 headers require C++20. Patch only the private build sources.
+"$VPY" - "$NATIVE_SOURCE" <<'PY'
 from pathlib import Path
+import sys
 for package in ('mtlmesh', 'mtlgemm', 'mtlbvh', 'mtldiffrast', 'o_voxel'):
-    setup = Path('extern') / package / 'setup.py'
+    setup = Path(sys.argv[1]) / 'extern' / package / 'setup.py'
     source = setup.read_text()
-    assert '-std=c++17' in source or '-std=c++20' in source, f'Unexpected build flags in {package}'
+    assert '-std=c++17' in source, f'Unexpected build flags in {package}'
     setup.write_text(source.replace('-std=c++17', '-std=c++20'))
 PY
 
 for package in mtlmesh mtlgemm mtlbvh mtldiffrast o_voxel natten-mps; do
-  "$VPY" -m pip install --disable-pip-version-check --no-deps --no-build-isolation --no-cache-dir -e "extern/$package"
+  "$VPY" -m pip install --disable-pip-version-check --no-deps --no-build-isolation --no-cache-dir -e "$NATIVE_SOURCE/extern/$package"
 done
 
 "$VPY" - <<'PY'

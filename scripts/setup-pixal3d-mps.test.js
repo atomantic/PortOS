@@ -16,7 +16,7 @@ function fixture() {
   mkdirSync(bin);
   const executable = (name, source) => writeFileSync(join(bin, name), source, { mode: 0o755 });
   executable('uname', '#!/bin/sh\nif [ "$1" = -s ]; then echo Darwin; else echo arm64; fi\n');
-  executable('git', '#!/bin/sh\necho 0be9e69a729432323dfb60a418801e5e9e7a1437\n');
+  executable('git', '#!/bin/sh\nif [ "$1" = archive ]; then exec tar -cf - -T /dev/null; fi\necho 0be9e69a729432323dfb60a418801e5e9e7a1437\n');
   executable('xcrun', '#!/bin/sh\nexit 0\n');
   executable('python', `#!${process.execPath}
 const fs = require('node:fs');
@@ -32,6 +32,8 @@ if (process.env.FAIL_LOCK === '1' && args.some(a => a.endsWith('requirements-pix
 `);
   mkdirSync(join(root, '.venv'));
   writeFileSync(join(root, '.venv', 'old-python-3.10'), 'stale native ABI');
+  mkdirSync(join(root, 'extern', 'mtlmesh'), { recursive: true });
+  writeFileSync(join(root, 'extern', 'mtlmesh', 'setup.py'), 'stale native source');
   writeFileSync(join(root, 'model.safetensors'), 'synthetic retained asset');
   const env = { ...process.env, PATH: `${bin}${delimiter}${process.env.PATH}`, PYTHON_BIN: join(bin, 'python'), RECORD: join(root, 'commands.jsonl') };
   const run = (extra = {}) => execFileSync('bash', [script], { cwd: root, env: { ...env, ...extra }, stdio: 'pipe' });
@@ -51,11 +53,13 @@ describe.skipIf(process.platform === 'win32')('Pixal3D Metal install/Repair boun
     expect(installs[0].at(-1)).toMatch(/requirements-pixal3d-mps\.lock\.txt$/);
     expect(installs[1]).toEqual(expect.arrayContaining(['--require-hashes', '--no-deps', '--no-build-isolation']));
     expect(installs[1].at(-1)).toMatch(/requirements-pixal3d-mps-sources\.lock\.txt$/);
-    expect(installs.slice(2).map(args => args.at(-1))).toEqual([
-      'extern/mtlmesh', 'extern/mtlgemm', 'extern/mtlbvh', 'extern/mtldiffrast', 'extern/o_voxel', 'extern/natten-mps',
-    ]);
+    expect(installs.slice(2).map(args => args.at(-1))).toEqual(
+      ['mtlmesh', 'mtlgemm', 'mtlbvh', 'mtldiffrast', 'o_voxel', 'natten-mps']
+        .map(name => `.venv/portos-native/extern/${name}`),
+    );
     for (const args of installs.slice(2)) expect(args).toEqual(expect.arrayContaining(['--no-deps', '--no-build-isolation', '--no-cache-dir']));
     expect(existsSync(join(f.root, '.venv', 'old-python-3.10'))).toBe(false);
+    expect(readFileSync(join(f.root, 'extern', 'mtlmesh', 'setup.py'), 'utf8')).toBe('stale native source');
     expect(readFileSync(join(f.root, 'model.safetensors'), 'utf8')).toBe('synthetic retained asset');
   });
 

@@ -12,8 +12,10 @@ Install and **Repair install** both select the immutable fork revision and run
 including when it contains Python 3.10. Model assets are retained. Setup installs
 the complete hashed wheel closure, then four hashed source packages with
 `--no-deps --no-build-isolation`, then the six vendored native packages against
-that Torch ABI. The pinned fork's C++17 build flags are changed to C++20, as
-required by Torch 2.15 headers. Native import and MPS checks finish setup.
+that Torch ABI. Git archives the vendored source into the rebuilt environment,
+so Repair never uses stale files from the working checkout. The private build
+sources use C++20, as required by Torch 2.15 headers. Native import and MPS
+checks finish setup.
 
 PortOS does **not** run upstream `scripts/setup_mac.sh`: that script restores
 Torch 2.12.0/torchvision 0.27.0 and upgrades build tools outside the lock.
