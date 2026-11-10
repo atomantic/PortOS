@@ -77,6 +77,35 @@ it('exposes Terra pricing and measured effort scores to existing Codex installs'
   expect(ultra.needsResearch).toBe(true);
 });
 
+it('exposes Fable 5.2 task costs and scores on the matching v5 workload without changing the legacy composite', async () => {
+  await writeFile(join(dir, 'model-comparison.json'), JSON.stringify({ schemaVersion: 1, observations: [observation] }));
+  const claudeApp = express();
+  claudeApp.use('/comparison', createModelComparisonRoutes({ getSelectableProviders: async () => ({ providers: [
+    { id: 'claude-code', name: 'Claude Code', command: 'claude', models: ['claude-fable-5-2'] },
+  ] }) }));
+  claudeApp.use(errorMiddleware);
+
+  const result = await request(claudeApp).get('/comparison');
+  expect(result.status).toBe(200);
+  expect(result.body.composite.anchor).toBe('Artificial Analysis Intelligence Index v4.3.2');
+  expect(result.body.composite.rows.every(row => row.costPerTask === null)).toBe(true);
+  expect(result.body.currentComposite.anchor).toBe('Artificial Analysis Intelligence Index v5.0.1');
+  const rows = result.body.currentComposite.rows;
+  const expected = [
+    ['low', 53.9249388799182, 3.097241904274546],
+    ['medium', 56.4083157101519, 3.8026050641787634],
+    ['high', 61.8218785440284, 9.078414777860381],
+    ['xhigh', 62.2167392403357, 14.828587632511116],
+    ['max', 64.563595756626, 26.53855780398091],
+  ];
+  for (const [effort, score, cost] of expected) {
+    const row = rows.find(candidate => candidate.effort === effort);
+    expect(row.quality).toMatchObject({ value: score, estimated: false });
+    expect(row.costPerTask).toMatchObject({ value: cost, estimated: false });
+    expect(row.costPerTask.method).toContain('v5.0.1');
+  }
+});
+
 it('imports sourced public observations durably, retains newer metrics, and serializes concurrent imports', async () => {
   const input = { schemaVersion: 1, observations: [{ ...observation, id: 'example-new', model: 'example-new-model' }] };
   await importModelComparison(input);

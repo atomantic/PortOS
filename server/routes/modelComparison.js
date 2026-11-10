@@ -6,7 +6,7 @@ import { getSelectableProviders } from '../services/providers.js';
 import { effortLevelsForProvider, filterSelectableModels } from '../lib/providerModels.js';
 import { localRuntimeKind } from '../lib/modelPinMembership.js';
 import { gatewayIdForProvider } from '../lib/providerGateways.js';
-import { buildModelComparisonComposite } from '../lib/modelComparisonComposite.js';
+import { buildModelComparisonComposite, CURRENT_COMPARISON_ANCHOR } from '../lib/modelComparisonComposite.js';
 
 export function createModelComparisonRoutes(providerService = { getSelectableProviders }) {
   const router = Router();
@@ -19,7 +19,9 @@ export function createModelComparisonRoutes(providerService = { getSelectablePro
         model, efforts: effortLevelsForProvider(provider, model) || [],
       })),
     }));
-    res.json({ ...catalog, inventory, composite: buildModelComparisonComposite(catalog.observations, inventory) });
+    const composite = buildModelComparisonComposite(catalog.observations, inventory);
+    const currentComposite = buildModelComparisonComposite(catalog.observations, inventory, CURRENT_COMPARISON_ANCHOR);
+    res.json({ ...catalog, inventory, composite, currentComposite });
   }));
   router.post('/import', asyncHandler(async (req, res) => {
     const result = await importModelComparison(validateRequest(modelComparisonImportSchema, req.body));
