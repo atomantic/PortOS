@@ -19,6 +19,7 @@ import MonthlyUsageCard from '../components/usage/MonthlyUsageCard';
 import RollingCostCard from '../components/usage/RollingCostCard';
 import FreeTierUsageCard from '../components/usage/FreeTierUsageCard';
 import ProviderQuotaBody from '../components/usage/ProviderQuotaBody';
+import UsageRetentionTips from '../components/usage/UsageRetentionTips';
 import ModelsTabsHeader from '../components/models/ModelsTabsHeader';
 import { USAGE_PERIOD_OPTIONS, DEFAULT_USAGE_PERIOD } from '../lib/usagePeriods';
 import { expireQuotaWindows, groupQuotaCards, mergeRefreshedFamily, nextQuotaReset, reconcileLocalQuota } from '../lib/quotaCards';
@@ -1441,6 +1442,7 @@ export function UsagePage() {
   return (
     <PageLayout header={<PageHeader icon={BarChart3} title="Subscription Usage" />} navigation={<ModelsTabsHeader activeTab="usage" />}>
       <div className="space-y-6">
+        <UsageRetentionTips />
         <ProviderQuotaSection billingRevision={billingRevision} />
         <InternalUsageMetrics onBillingSaved={onBillingSaved} />
       </div>

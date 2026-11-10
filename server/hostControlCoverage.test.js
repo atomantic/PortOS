@@ -1336,6 +1336,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/usage/messages', CLIENT_TELEMETRY],
   ['POST /api/usage/session', CLIENT_TELEMETRY],
   ['PUT /api/usage/subscriptions', RECORDS],
+  ['POST /api/usage/tips/:id/dismiss', RECORDS],
   ['POST /api/usage/tokens', CLIENT_TELEMETRY],
   // /api/video-gen
   ['POST /api/video-gen/cancel', REDUCES_EXECUTION],
