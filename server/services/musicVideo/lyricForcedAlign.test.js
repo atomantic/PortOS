@@ -1,26 +1,33 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { forceAlignLyrics, _lyricAlignRuntimePlan, _resolveLyricAlignRuntime } from './lyricForcedAlign.js';
+import { fileURLToPath } from 'url';
+import { forceAlignLyrics, _lyricAlignRuntimePlan } from './lyricForcedAlign.js';
 import { encodePcm16Wav, wavDurationSec } from './lyricAlignCore.js';
 
+const LOCK_PATH = fileURLToPath(new URL('../../../scripts/requirements-lyric-align.lock.txt', import.meta.url));
+const SOURCE_PATH = fileURLToPath(new URL('../../../scripts/requirements-lyric-align.txt', import.meta.url));
+const LINUX = _lyricAlignRuntimePlan({ platform: 'linux' });
 const roots = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((dir) => rm(dir, { recursive: true, force: true }))); });
 
-async function harness(transform = (words) => words, { ownInterpreter = true } = {}) {
+async function harness(transform = (words) => words, { scriptLines = ['PROGRESS:emissions:50'], scriptSuccess = true } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'ctc-contract-'));
   roots.push(root);
   let runDir;
-  const resolveRuntime = vi.fn();
+  let scriptArgs;
+  const findPython = vi.fn(async () => 'test-python');
   const run = vi.fn(async (_bin, args, onLine, options) => {
     if (args[0] !== '-m' && args[0] !== '-c') {
+      scriptArgs = args;
       runDir = args[args.indexOf('--output') + 1];
       expect(wavDurationSec(await readFile(args[args.indexOf('--audio') + 1]))).toBe(2);
       expect(JSON.parse(await readFile(args[args.indexOf('--lyrics') + 1], 'utf8'))).toEqual([['Hello,', 'café!'], ['Hello,']]);
       expect(options.isCancelled).toEqual(expect.any(Function));
-      onLine('PROGRESS:emissions:50');
-      onLine('unstructured output is ignored');
+      for (const line of [...scriptLines, 'unstructured output is ignored']) onLine(line);
+      if (!scriptSuccess) return { success: false };
       await writeFile(runDir, JSON.stringify(transform([
         [{ w: 'Hello,', startSec: 0.1, endSec: 0.4 }, { w: 'café!', startSec: 0.4, endSec: 0.8 }],
         [{ w: 'Hello,', startSec: 1.4, endSec: 1.8 }],
@@ -28,16 +35,23 @@ async function harness(transform = (words) => words, { ownInterpreter = true } =
     }
     return { success: true };
   });
-  const resolver = ownInterpreter
-    ? { resolveBasePython: async () => 'test-python' }
-    : { resolveRuntime };
-  return { root, run, resolveRuntime, runDir: () => runDir, align: (options = {}) => forceAlignLyrics(encodePcm16Wav(16000 * 8),
-    [{ text: 'Hello, café!' }, { text: 'Hello,' }], { startSec: 4, endSec: 6, dir: join(root, 'venv'),
-      ...resolver, run, ...options }) };
+  const dir = join(root, 'venv');
+  const makeVenv = async () => {
+    const bin = join(dir, process.platform === 'win32' ? 'Scripts' : 'bin');
+    await mkdir(bin, { recursive: true });
+    await writeFile(join(bin, process.platform === 'win32' ? 'python.exe' : 'python'), '');
+  };
+  return {
+    root, dir, run, findPython, makeVenv, runDir: () => runDir, scriptArgs: () => scriptArgs,
+    align: (options = {}) => forceAlignLyrics(encodePcm16Wav(16000 * 8),
+      [{ text: 'Hello, café!' }, { text: 'Hello,' }], { startSec: 4, endSec: 6, dir, plan: LINUX, findPython, run, ...options }),
+  };
 }
 
+const calls = (h, predicate) => h.run.mock.calls.filter(([, args]) => predicate(args));
+
 describe('MMS_FA process contract', () => {
-  it('provisions compatible wheels on demand, preserves word occurrences and offsets the cropped song clock', async () => {
+  it('provisions the hash lock on demand, preserves word occurrences and offsets the cropped song clock', async () => {
     const h = await harness();
     expect(h.run).not.toHaveBeenCalled();
     const onProgress = vi.fn();
@@ -46,17 +60,18 @@ describe('MMS_FA process contract', () => {
       [{ w: 'Hello,', startSec: 4.1, endSec: 4.4, conf: 'matched' }, { w: 'café!', startSec: 4.4, endSec: 4.8, conf: 'matched' }],
       [{ w: 'Hello,', startSec: 5.4, endSec: 5.8, conf: 'matched' }],
     ]);
-    expect(h.run.mock.calls[1][1]).toEqual(['-m', 'pip', 'install', ..._lyricAlignRuntimePlan().packages]);
+    expect(h.run.mock.calls[0][1]).toEqual(['-m', 'venv', h.dir]);
+    expect(h.run.mock.calls[1][1]).toEqual(['-m', 'pip', 'install', '--disable-pip-version-check', '--require-hashes',
+      '--no-deps', '--only-binary', ':all:', '-r', LOCK_PATH]);
+    // The checkpoint cache sits beside the venv so a venv rebuild keeps it.
+    expect(h.scriptArgs().slice(-2)).toEqual(['--model-dir', join(h.root, 'venv-models')]);
     expect(onProgress).toHaveBeenCalledWith({ stage: 'emissions', percent: 50 });
     await expect(readFile(h.runDir())).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
-  it('repairs a venv created from an incompatible interpreter before installing pinned wheels', async () => {
+  it('rebuilds a venv created from an incompatible interpreter before installing the lock', async () => {
     const h = await harness();
-    const dir = join(h.root, 'venv');
-    const bin = join(dir, process.platform === 'win32' ? 'Scripts' : 'bin');
-    await mkdir(bin, { recursive: true });
-    await writeFile(join(bin, process.platform === 'win32' ? 'python.exe' : 'python'), '');
+    await h.makeVenv();
     const implementation = h.run.getMockImplementation();
     let installed = false;
     h.run.mockImplementation(async (...args) => {
@@ -65,70 +80,64 @@ describe('MMS_FA process contract', () => {
       return implementation(...args);
     });
     await h.align();
-    expect(h.run.mock.calls.some(([, args]) => args.join(' ') === `-m venv --clear ${dir}`)).toBe(true);
-    expect(h.run.mock.calls.some(([, args]) => args[0] === '-c' && args[1] === _lyricAlignRuntimePlan().versionProbe)).toBe(true);
+    expect(calls(h, (args) => args.join(' ') === `-m venv --clear ${h.dir}`)).toHaveLength(1);
+    expect(calls(h, (args) => args[0] === '-c' && args[1] === LINUX.versionProbe)).toHaveLength(1);
   });
 
-  it('repairs an existing hardware-compatible venv when discovery only found the Intel plan', async () => {
-    const h = await harness((words) => words, { ownInterpreter: false });
-    const bin = join(h.root, 'venv', process.platform === 'win32' ? 'Scripts' : 'bin');
-    await mkdir(bin, { recursive: true });
-    await writeFile(join(bin, process.platform === 'win32' ? 'python.exe' : 'python'), '');
-    const hardware = _lyricAlignRuntimePlan();
-    const fallback = _lyricAlignRuntimePlan({ platform: 'darwin', appleSilicon: false });
-    h.resolveRuntime.mockResolvedValue({ plan: fallback, python: null });
+  it('upgrades a venv holding an older torch pin in place without rediscovering an interpreter', async () => {
+    const h = await harness();
+    await h.makeVenv();
     const implementation = h.run.getMockImplementation();
     let installed = false;
     h.run.mockImplementation(async (...args) => {
       const probe = args[1][0] === '-c' ? args[1][1] : '';
-      if (probe === hardware.probe) return { success: installed };
-      if (probe === hardware.versionProbe) return { success: true };
-      if (probe) return { success: false };
-      if (args[1][1] === 'pip') {
-        installed = true;
-        return { success: true };
-      }
+      if (probe === LINUX.probe) return { success: installed };
+      if (probe === LINUX.versionProbe) return { success: true };
+      if (args[1][1] === 'pip') installed = true;
       return implementation(...args);
     });
     await h.align();
-    expect(h.resolveRuntime).toHaveBeenCalledTimes(1);
-    expect(h.run.mock.calls.some(([, args]) => args[1] === 'venv')).toBe(false);
-    expect(h.run.mock.calls.find(([, args]) => args[1] === 'pip')[1]).toEqual(['-m', 'pip', 'install', ...hardware.packages]);
+    expect(h.findPython).not.toHaveBeenCalled();
+    expect(calls(h, (args) => args[1] === 'venv')).toHaveLength(0);
+    expect(calls(h, (args) => args[1] === 'pip')).toHaveLength(1);
   });
 
-  it('reuses a healthy Intel-fallback venv without rediscovering interpreters', async () => {
-    const hardware = _lyricAlignRuntimePlan();
-    const fallback = _lyricAlignRuntimePlan({ platform: 'darwin', appleSilicon: false });
-    if (hardware.probe === fallback.probe) return;
-    const h = await harness((words) => words, { ownInterpreter: false });
-    const bin = join(h.root, 'venv', process.platform === 'win32' ? 'Scripts' : 'bin');
-    await mkdir(bin, { recursive: true });
-    await writeFile(join(bin, process.platform === 'win32' ? 'python.exe' : 'python'), '');
-    h.resolveRuntime.mockResolvedValue({ plan: fallback, python: null });
-    const implementation = h.run.getMockImplementation();
-    h.run.mockImplementation(async (...args) => {
-      const probe = args[1][0] === '-c' ? args[1][1] : '';
-      if (probe === hardware.probe) return { success: false };
-      if (probe === fallback.probe) return { success: true };
-      if (probe) return { success: false };
-      return implementation(...args);
+  it('does not discover a base interpreter when the venv already matches the lock', async () => {
+    const h = await harness();
+    await h.makeVenv();
+    await h.align();
+    expect(h.findPython).not.toHaveBeenCalled();
+    expect(calls(h, (args) => args[1] === 'pip')).toHaveLength(0);
+    expect(h.run.mock.calls[0][1]).toEqual(['-c', LINUX.probe]);
+  });
+
+  it('refuses Intel macOS before probing, discovering or installing anything, even beside an old venv', async () => {
+    const h = await harness();
+    await h.makeVenv();
+    const plan = _lyricAlignRuntimePlan({ platform: 'darwin', appleSilicon: false });
+    await expect(h.align({ plan })).rejects.toMatchObject({ code: 'LYRIC_ALIGN_CTC_UNSUPPORTED_PLATFORM' });
+    expect(h.run).not.toHaveBeenCalled();
+    expect(h.findPython).not.toHaveBeenCalled();
+  });
+
+  it('names the arm64 interpreter Apple Silicon needs instead of installing for an x86_64 one', async () => {
+    const h = await harness();
+    h.findPython.mockResolvedValue(null);
+    const plan = _lyricAlignRuntimePlan({ platform: 'darwin', appleSilicon: true, darwinMajor: 24 });
+    await expect(h.align({ plan })).rejects.toMatchObject({
+      code: 'LYRIC_ALIGN_CTC_PYTHON_MISSING', message: expect.stringContaining('arm64 Python 3.11–3.14'),
     });
-    await h.align();
-    expect(h.resolveRuntime).toHaveBeenCalledTimes(1);
-    h.resolveRuntime.mockClear();
-    await h.align();
-    expect(h.resolveRuntime).not.toHaveBeenCalled();
+    expect(h.findPython).toHaveBeenCalledWith(plan);
+    expect(calls(h, (args) => args[1] === 'pip' || args[1] === 'venv')).toHaveLength(0);
   });
 
-  it('does not discover a base interpreter when the venv already matches the pin', async () => {
-    const h = await harness((words) => words, { ownInterpreter: false });
-    const bin = join(h.root, 'venv', process.platform === 'win32' ? 'Scripts' : 'bin');
-    await mkdir(bin, { recursive: true });
-    await writeFile(join(bin, process.platform === 'win32' ? 'python.exe' : 'python'), '');
-    await h.align();
-    expect(h.resolveRuntime).not.toHaveBeenCalled();
-    expect(h.run.mock.calls.some(([, args]) => args[1] === 'pip')).toBe(false);
-    expect(h.run.mock.calls[0][1][0]).toBe('-c');
+  it('reports a rejected checkpoint distinctly and forwards download progress', async () => {
+    const h = await harness(undefined, {
+      scriptLines: ['PROGRESS:downloading-model:40', 'ERROR:checkpoint-rejected'], scriptSuccess: false,
+    });
+    const onProgress = vi.fn();
+    await expect(h.align({ onProgress })).rejects.toMatchObject({ code: 'LYRIC_ALIGN_CTC_MODEL_REJECTED' });
+    expect(onProgress).toHaveBeenCalledWith({ stage: 'downloading-model', percent: 40 });
   });
 
   it('rejects missing, foreign, overlapping and out-of-window results instead of publishing invented words', async () => {
@@ -148,53 +157,56 @@ describe('MMS_FA process contract', () => {
   });
 });
 
-describe('lyric alignment wheel pins', () => {
-  it('uses current wheels on Apple Silicon even when the caller says the process is x64', () => {
-    const plan = _lyricAlignRuntimePlan({ platform: 'darwin', appleSilicon: true });
-    expect(plan.torch).toBe('2.8.0');
-    expect(plan.maxPythonMinor).toBe(13);
-    expect(plan.arch).toBe('arm64');
-    expect(plan.versionProbe).toContain('platform.machine() == "arm64"');
-    expect(plan.packages).toEqual(['torch==2.8.0', 'torchaudio==2.8.0']);
+describe('lyric alignment platform plans', () => {
+  it('installs only the hash lock on Linux, Windows and Apple Silicon, with an arm64 interpreter on macOS', () => {
+    const plans = {
+      linux: LINUX,
+      win32: _lyricAlignRuntimePlan({ platform: 'win32' }),
+      darwin: _lyricAlignRuntimePlan({ platform: 'darwin', appleSilicon: true, darwinMajor: 23 }),
+    };
+    for (const plan of Object.values(plans)) {
+      expect(plan.unsupported).toBeNull();
+      expect(plan.install.slice(-2)).toEqual(['-r', LOCK_PATH]);
+      expect(plan.install).toEqual(expect.arrayContaining(['--require-hashes', '--no-deps', '--only-binary']));
+      expect(plan.versionProbe).toContain('(3, 11) <= sys.version_info[:2] <= (3, 14)');
+    }
+    expect(plans.darwin.versionProbe).toContain('platform.machine() == "arm64"');
+    expect(plans.linux.versionProbe).not.toContain('platform.machine()');
+    expect(plans.win32.arch).toBeNull();
   });
 
-  it('keeps the last Intel Mac wheels on real Intel hardware', () => {
-    const plan = _lyricAlignRuntimePlan({ platform: 'darwin', appleSilicon: false });
-    expect(plan.torch).toBe('2.2.2');
-    expect(plan.maxPythonMinor).toBe(12);
-    expect(plan.arch).toBeNull();
-    expect(plan.versionProbe).not.toContain('platform.machine()');
-    expect(plan.packages).toContain('numpy<2');
+  it('refuses Macs patched PyTorch cannot run instead of picking an older wheel', () => {
+    expect(_lyricAlignRuntimePlan({ platform: 'darwin', appleSilicon: false }).unsupported).toMatch(/Apple Silicon/);
+    expect(_lyricAlignRuntimePlan({ platform: 'darwin', appleSilicon: true, darwinMajor: 22 }).unsupported).toMatch(/macOS 14/);
   });
 
-  it('uses current wheels off macOS', () => {
-    const plan = _lyricAlignRuntimePlan({ platform: 'linux', appleSilicon: false });
-    expect(plan.torch).toBe('2.8.0');
-    expect(plan.arch).toBeNull();
-    expect(plan.versionProbe).not.toContain('platform.machine()');
+  it('probes for exactly the locked torch and torchaudio', () => {
+    expect(LINUX.probe).toContain('torch.__version__.split("+")[0] == "2.14.1"');
+    expect(LINUX.probe).toContain('torchaudio.__version__.split("+")[0] == "2.11.1"');
+  });
+});
+
+describe('lyric alignment hash lock', () => {
+  const lock = readFileSync(LOCK_PATH, 'utf8');
+  const blocks = lock.split(/\n(?=[a-z][^\n]*==)/i).filter((block) => /^[a-z][^\n]*==/i.test(block));
+  const pin = (name) => blocks.filter((block) => block.startsWith(`${name}==`)).map((block) => block.split(/[ ;\\]/)[0]);
+  const numeric = (version) => version.split('.').map(Number);
+
+  it('hashes every package from PyPI, with no URL or VCS source', () => {
+    expect(blocks.length).toBeGreaterThan(10);
+    for (const block of blocks) expect(block).toMatch(/--hash=sha256:[0-9a-f]{64}/);
+    expect(lock).not.toMatch(/^[a-z][^\n]* @ /im);
+    expect(lock).not.toMatch(/^--(?:extra-)?index-url/m);
+    expect(lock).toMatch(/^# exclude-newer \d{4}-\d{2}-\d{2}$/m);
   });
 
-  it('prefers an arm64 interpreter and current wheels on Apple Silicon', async () => {
-    const findPython = vi.fn(async (_plan, opts = {}) => (opts.arch === 'arm64' ? '/opt/homebrew/bin/python3' : '/opt/anaconda3/bin/python3'));
-    const selected = await _resolveLyricAlignRuntime({ platform: 'darwin', appleSilicon: true, findPython });
-    expect(selected.plan.torch).toBe('2.8.0');
-    expect(selected.python).toBe('/opt/homebrew/bin/python3');
-    expect(findPython).toHaveBeenCalledTimes(1);
-  });
-
-  it('falls back to Intel wheels when Apple Silicon has only an x86_64 interpreter', async () => {
-    const findPython = vi.fn(async (plan, opts = {}) => (opts.arch === 'arm64' ? null : `/python-${plan.maxPythonMinor}`));
-    const selected = await _resolveLyricAlignRuntime({ platform: 'darwin', appleSilicon: true, findPython });
-    expect(selected.plan.torch).toBe('2.2.2');
-    expect(selected.python).toBe('/python-12');
-    expect(findPython).toHaveBeenCalledTimes(2);
-  });
-
-  it('does not look for an arm64 interpreter on a real Intel Mac', async () => {
-    const findPython = vi.fn(async () => '/usr/local/bin/python3');
-    const selected = await _resolveLyricAlignRuntime({ platform: 'darwin', appleSilicon: false, findPython });
-    expect(selected.plan.torch).toBe('2.2.2');
-    expect(selected.python).toBe('/usr/local/bin/python3');
-    expect(findPython).toHaveBeenCalledTimes(1);
+  it('locks one patched torch, its torchaudio, and the direct pins of the source file', () => {
+    expect(pin('torch')).toHaveLength(1);
+    // GHSA-rrmf-rvhw-rf47 is the latest first-fixed release in the #15652 audit.
+    const [major, minor] = numeric(pin('torch')[0].split('==')[1]);
+    expect(major > 2 || (major === 2 && minor >= 13)).toBe(true);
+    const direct = readFileSync(SOURCE_PATH, 'utf8').split('\n').filter((line) => /^[a-z]/i.test(line))
+      .map((line) => line.split(/[ ;]/)[0]);
+    for (const requirement of direct) expect(blocks.some((block) => block.startsWith(`${requirement} `))).toBe(true);
   });
 });
