@@ -8,6 +8,8 @@ import { browserSuiteCanRun, resolveTestChrome } from '../../../../lib/browserSu
 import { startOwnedBrowserFixture } from '../../../../test/browserFixture.js';
 
 const engine = readFileSync(new URL('./engine.js', import.meta.url), 'utf8');
+// Frozen shipped engine: compare both engines in the same browser, since canvas rasterization differs across OS/Chrome builds.
+const priorEngine = readFileSync(new URL('../../../../routes/fixtures/musicVideoLayeredEngineBeforeTemplateControls.txt', import.meta.url), 'utf8');
 const rig = readFileSync(new URL('./cameraRig.js', import.meta.url), 'utf8');
 const chrome = resolveTestChrome();
 const ffmpeg = await findFfmpeg();
@@ -24,7 +26,7 @@ describe.skipIf(!canRun)('layered template additions at fixed song frames', () =
   }, 30000);
   afterAll(async () => { await fixture?.close(); });
 
-  async function frames({ video, shot, selected = false, footage = false } = {}) {
+  async function frames({ video, shot, selected = false, footage = false, engineSource = engine } = {}) {
     const page = await fixture.browser.newPage();
     try {
       await page.setContent('<canvas id="stage"></canvas>');
@@ -48,7 +50,7 @@ describe.skipIf(!canRun)('layered template additions at fixed song frames', () =
         return Array.from(ctx.getImageData(0, 0, 320, 180).data);
       }, { video, shot, selected, clip: footage ? clip : null });
       await page.addScriptTag({ content: rig });
-      await page.addScriptTag({ content: engine });
+      await page.addScriptTag({ content: engineSource });
       const pixels = [];
       for (const t of [0, 0.25, 2, 3.75]) {
         pixels.push(await page.evaluate(async t => {
@@ -63,9 +65,8 @@ describe.skipIf(!canRun)('layered template additions at fixed song frames', () =
   // Pins the pre-controls engine's pixels (texture only, no font/platform-dependent glyphs).
   it('keeps shipped default frames pixel-identical, with explicit defaults or absent settings', async () => {
     const implicit = await frames();
-    expect(implicit.hashes).toEqual([
-      '521eda204a3c41afab604a4412de71052d645765f08b882ddf53dc392eaca4bf', 'f2552d0d406381e1b0031f96cf5ca56df1d7053c26e0db52d5675bf525359cdb', 'e8a07824de1b2a2947539605e696f2ce97d861a547d62ecd74a53b367d6278f0', '433f232980aafc47493f93baa6a9f22211f1dbd61d219dd3f3bc04418bb16afc',
-    ]);
+    expect(createHash('sha256').update(priorEngine).digest('hex')).toBe('b45ad91d8def477e02761e4a2b61c4546b68a3e53cf5f4038fcaa30c9596bac8');
+    expect(implicit.hashes).toEqual((await frames({ engineSource: priorEngine })).hashes);
     expect((await frames({ video: defaults })).hashes).toEqual(implicit.hashes);
   });
 
