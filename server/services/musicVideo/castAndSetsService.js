@@ -324,7 +324,7 @@ async function runDirection(projectId, { providerId, model, effort, notes = [], 
   const merged = mergeCastAndSetsDirection(notes.length ? previous : null, parsed, { sections, medium, fixedCast: fixedSupportingCast(project), fixedProps: fixedProps(project) });
   if (merged.missing.length) return fail(projectId, `The creative direction answer is missing: ${merged.missing.join(', ')}`);
   const direction = withCheckedFormSubjects(project, merged.direction, notes.length ? previous : null);
-  // The look every image prompt carries. While the director's sheet feedback
+  // The scene look set plates and in-set frames carry. While the director's sheet feedback
   // stands, the look line rewritten to agree with it wins; otherwise the
   // director's palette/light/texture line, else the project's visual style.
   // Never the board's composed style verbatim: it can describe a whole person
@@ -1131,7 +1131,7 @@ export async function regenerateCastAndSets(projectId, { notes = null, keys = nu
  * (`target`: `character`, `looks`, `set:<id>`, a set's name, …) it is that
  * image's revision note (see regenerateCastAndSets). Aimed at the whole sheet
  * (no target) it becomes STANDING feedback: the direction is rewritten to
- * honor it, including the look line every image prompt carries, and every
+ * honor it, including the scene look line set plates and in-set frames carry, and every
  * later direction call (a rebuild included) keeps honoring it until the
  * director removes it. The resulting image plan is held for explicit review.
  * Returns `{ project, stage }`.
