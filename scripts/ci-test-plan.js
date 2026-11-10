@@ -266,7 +266,8 @@ const FULL_TRIGGER_RULES = [
   // jobs only, so a Windows run would observe nothing they change.
   { re: /^scripts\/(?:lib\/githubOutput|ci-base-sha|run-ci-tests)(?:\.test)?\.js$/, reason: 'CI pipeline script changed', windowsRelevant: true },
   { re: /^scripts\/ci-test-plan(?:\.test)?\.js$/, reason: 'CI pipeline script changed', windowsRelevant: true },
-  { re: /^scripts\/(?:run-ci-lint|scan-diff-hidden-content|verify-ci-status)(?:\.test)?\.js$/, reason: 'CI pipeline script changed', windowsRelevant: false },
+  { re: /^scripts\/(?:run-ci-lint|run-actionlint|scan-diff-hidden-content|verify-ci-status)(?:\.test)?\.js$/, reason: 'CI pipeline script changed', windowsRelevant: false },
+  { re: /^scripts\/(?:lib\/actionlint|fixtures\/actionlint\/.+)(?:\.test)?\.(?:js|yml)$/, reason: 'CI pipeline script changed', windowsRelevant: false },
 ];
 
 // Native Windows coverage is intentionally limited to CLI/TUI execution,

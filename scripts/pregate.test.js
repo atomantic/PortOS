@@ -30,6 +30,7 @@ import {
   sweepStageGroup,
   suiteSelected,
   uncoveredSuites,
+  workflowLintSelected,
   UNCOVERED_SUITES,
   unmergedIndexPaths,
 } from './pregate.js';
@@ -157,7 +158,7 @@ describe('resolvePlanStages', () => {
     expect(resolvePlanStages(planWith({ promptHistory: false })).map((stage) => stage.name))
       .not.toContain('shipped prompt history');
     const stages = resolvePlanStages(planWith({ promptHistory: true, lint: { mode: 'full', files: [] } }));
-    expect(stages.map((stage) => stage.name)).toEqual(['hidden-content scan', 'shipped prompt history', 'client/server lint', 'server tests']);
+    expect(stages.map((stage) => stage.name)).toEqual(['hidden-content scan', 'shipped prompt history', 'client/server lint', 'workflow lint (actionlint)', 'server tests']);
     expect(stages[1]).toEqual({
       name: 'shipped prompt history', suite: 'prompt-history', script: 'migrations/check-shipped-prompt-history.js', args: [], env: {},
     });
@@ -206,7 +207,7 @@ describe('resolvePlanStages', () => {
       : [`${scope} tests`];
     expect(stages.map(stage => stage.name)).toEqual([
       'hidden-content scan', 'server structural guards', 'client structural guards',
-      'client/server lint', ...unit('server'), ...unit('client'), 'client build',
+      'client/server lint', 'workflow lint (actionlint)', ...unit('server'), ...unit('client'), 'client build',
       'boot smoke', 'browser suites', 'DB provision (portos_test)', 'DB suite (portos_test)',
     ]);
     for (const scope of ['server', 'client']) {
@@ -254,7 +255,7 @@ describe('pregate hidden-content invocation', () => {
       'lib/gitMergeTree.js', 'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js', 'scripts/lib/githubActionsApi.js',
       'scripts/ci-test-plan.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
       'scripts/lib/directInvocation.js', 'scripts/lib/serverLintSurface.js', 'scripts/lib/importReach.js', 'scripts/lib/workspaceTests.js', 'scripts/lib/browserFidelity.js', 'scripts/lib/browserTestProfiles.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js',
-      'scripts/lib/browserSuites.js', 'scripts/lib/sourceTokens.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js', 'scripts/lib/cosWorkerBudget.js',
+      'scripts/lib/browserSuites.js', 'scripts/lib/sourceTokens.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js', 'scripts/lib/actionlint.js', 'scripts/run-actionlint.js', 'scripts/lib/cosWorkerBudget.js',
       'scripts/migrations/shippedPromptHistory.js', 'server/lib/aiToolkit/internal/windowsSafeSpawn.js',
       'server/lib/diffHiddenContentScan.js', 'server/lib/modelAbuseGuard.js',
       'server/lib/textUtils.js',
@@ -650,7 +651,7 @@ describe('pregate hidden-content invocation', () => {
       } }));
       // Changing scripts selects full lint; any accidental stage run leaves a
       // durable marker. Startup/package-manager repair is a separate trap.
-      for (const name of ['run-ci-lint.js', 'run-ci-tests.js', 'ensure-deps.js']) {
+      for (const name of ['run-ci-lint.js', 'run-actionlint.js', 'run-ci-tests.js', 'ensure-deps.js']) {
         write(`scripts/${name}`, `import { writeFileSync } from 'fs'; writeFileSync('unexpected-stage', '${name}');`);
       }
       const result = run();
@@ -1181,11 +1182,16 @@ describe('UNCOVERED_SUITES', () => {
         expect(Array.isArray(plan.browserFiles)).toBe(true);
         return;
       }
+      // actionlint is a tool probe over the lint selection, not a plan flag.
+      if (key === 'actionlint') {
+        expect(typeof workflowLintSelected(plan)).toBe('boolean');
+        return;
+      }
       expect(plan, `plan has no '${key}' field`).toHaveProperty(key);
       expect(typeof plan[key]).toBe('boolean');
     });
     const normalized = { ...plan, browser: { files: plan.browserFiles } };
-    expect(Object.keys(UNCOVERED_SUITES).every((key) => suiteSelected(normalized, key))).toBe(true);
+    expect(Object.keys(UNCOVERED_SUITES).filter((key) => key !== 'actionlint').every((key) => suiteSelected(normalized, key))).toBe(true);
   });
 });
 
@@ -1327,7 +1333,7 @@ describe('the gate end to end', () => {
         'lib/gitMergeTree.js', 'scripts/pregate.js', 'scripts/checkNodeVersion.js', 'scripts/scan-diff-hidden-content.js',
         'scripts/ci-test-plan.js', 'scripts/ci-base-sha.js', 'server/lib/staticImportGraph.js',
         'scripts/lib/directInvocation.js', 'scripts/lib/serverLintSurface.js', 'scripts/lib/importReach.js', 'scripts/lib/workspaceTests.js', 'scripts/lib/browserFidelity.js', 'scripts/lib/browserTestProfiles.js', 'scripts/lib/githubOutput.js', 'scripts/lib/dbTestFiles.js',
-        'scripts/lib/browserSuites.js', 'scripts/lib/sourceTokens.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js', 'scripts/lib/cosWorkerBudget.js',
+        'scripts/lib/browserSuites.js', 'scripts/lib/sourceTokens.js', 'scripts/lib/workspaceDependencies.js', 'scripts/lib/pregateReport.js', 'scripts/lib/actionlint.js', 'scripts/run-actionlint.js', 'scripts/lib/cosWorkerBudget.js',
         'scripts/migrations/shippedPromptHistory.js', 'server/lib/aiToolkit/internal/windowsSafeSpawn.js',
         'server/lib/diffHiddenContentScan.js', 'server/lib/modelAbuseGuard.js',
         'server/lib/textUtils.js', 'server/lib/workspaceTestCacheRoots.js',
@@ -1434,13 +1440,14 @@ describe('resource suite stages', () => {
   it('orders every selected stage the way CI depends on them, DB suite last', () => {
     const stages = resolvePlanStages(fullPlan, { baseSha: 'base', databaseEnv });
     expect(stages.map((stage) => stage.name)).toEqual([
-      'hidden-content scan', 'client/server lint', 'server tests', 'client tests',
+      'hidden-content scan', 'client/server lint', 'workflow lint (actionlint)', 'server tests', 'client tests',
       'client build', 'boot smoke', 'browser suites',
       'DB provision (portos_test)', 'DB suite (portos_test)',
     ]);
     expect(stages.map(describeStageCommand)).toEqual([
       'node scripts/scan-diff-hidden-content.js --base base --worktree',
       'node scripts/run-ci-lint.js',
+      'node scripts/run-actionlint.js',
       'node scripts/run-ci-tests.js server',
       'node scripts/run-ci-tests.js client',
       'npm run build --prefix client',
@@ -1480,8 +1487,8 @@ describe('resource suite stages', () => {
     expect(names({ browser: true })).not.toContain('browser');
     expect(names({ build: true })).not.toContain('build');
     expect(names({ smoke: true })).not.toContain('smoke');
-    expect(names({ db: true, browser: true, build: true, smoke: true })).toEqual(['scan', 'lint', 'server', 'client']);
-    expect(names({})).toEqual(['scan', 'lint', 'server', 'client', 'build', 'smoke', 'browser', 'db', 'db']);
+    expect(names({ db: true, browser: true, build: true, smoke: true })).toEqual(['scan', 'lint', 'actionlint', 'server', 'client']);
+    expect(names({})).toEqual(['scan', 'lint', 'actionlint', 'server', 'client', 'build', 'smoke', 'browser', 'db', 'db']);
   });
 
   it('plans no resource stage the planner did not select', () => {
@@ -1770,5 +1777,42 @@ describe('focused local policy', () => {
     expect(local.server).toEqual({ mode: 'files', files: ['server/lib/a.test.js', 'scripts/tool.test.js'], sources: [] });
     expect(local.client.files).toContain('client/src/Card.test.jsx');
     expect(resolvePlanStages(local, { skip: { db: true, browser: true, build: true, smoke: true } }).every(stage => !['db', 'browser', 'build', 'smoke'].includes(stage.suite))).toBe(true);
+  });
+});
+
+describe('workflow lint (actionlint) stage', () => {
+  const workflowPlan = planWith({ lint: { mode: 'files', files: ['.github/workflows/ci.yml'] } });
+  const available = { actionlint: { ok: true, bin: 'actionlint', version: '1.7.12' } };
+  const missing = { actionlint: { ok: false, bin: 'actionlint', reason: 'no actionlint at PATH (need 1.7.12)' } };
+
+  it('selects the stage only when the plan lints a workflow file', () => {
+    expect(workflowLintSelected(workflowPlan)).toBe(true);
+    expect(workflowLintSelected(planWith({ lint: { mode: 'files', files: ['client/src/App.jsx'] } }))).toBe(false);
+    expect(workflowLintSelected(planWith({ lint: { mode: 'full', files: [] } }))).toBe(true);
+  });
+
+  it('runs actionlint with the same CI lint env as the client/server lint stage', () => {
+    const stage = resolvePlanStages(workflowPlan, { skip: {} }).find((item) => item.suite === 'actionlint');
+    expect(stage).toEqual({
+      name: 'workflow lint (actionlint)', suite: 'actionlint', script: 'run-actionlint.js', args: [],
+      env: { CI_LINT_MODE: 'files', CI_LINT_FILES: '[".github/workflows/ci.yml"]' },
+    });
+  });
+
+  it('is reported as not covered, with no stage, when the pinned tool is unavailable', () => {
+    const uncovered = uncoveredSuites(workflowPlan, { prerequisites: missing });
+    expect(uncovered).toEqual([{
+      suite: 'actionlint', reason: 'prerequisite missing: no actionlint at PATH (need 1.7.12)', remedy: UNCOVERED_SUITES.actionlint,
+    }]);
+    const stages = resolvePlanStages(workflowPlan, { skip: { actionlint: true } });
+    expect(stages.map((stage) => stage.suite)).not.toContain('actionlint');
+  });
+
+  it('stays out of a JavaScript-only plan and under --skip-lint', () => {
+    const jsPlan = planWith({ lint: { mode: 'files', files: ['client/src/App.jsx'] } });
+    expect(uncoveredSuites(jsPlan, { prerequisites: missing })).toEqual([]);
+    expect(uncoveredSuites(workflowPlan, { options: { skipLint: true }, prerequisites: missing })).toEqual([]);
+    expect(resolvePlanStages(workflowPlan, { skipLint: true }).map((stage) => stage.suite)).not.toContain('actionlint');
+    expect(uncoveredSuites(workflowPlan, { prerequisites: available })).toEqual([]);
   });
 });

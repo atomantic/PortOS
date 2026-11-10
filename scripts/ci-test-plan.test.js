@@ -999,6 +999,13 @@ describe('CI test impact planner', () => {
     }
   });
 
+  it('runs the full lint job, with actionlint over every workflow, for any workflow change', () => {
+    // `.github/workflows/` escalates to the full plan, so the lint job lints every workflow file.
+    const plan = buildCiTestPlan(['.github/workflows/release.yml'], { trackedFiles: [...TRACKED, '.github/workflows/release.yml'] });
+    expect(plan.full).toBe(true);
+    expect(plan.lint).toEqual({ mode: 'full', files: [] });
+  });
+
   it('does not treat a source .grit or a mistyped biome.json as lint configuration', () => {
     // Guards the trigger regex against over-matching: only the client's top-level
     // config and its sibling .grit plugins should force a full run.

@@ -22,6 +22,7 @@ import { assertNodeVersion } from './checkNodeVersion.js';
 import { isDirectlyInvoked } from './lib/directInvocation.js';
 import { needsBrowserFidelity } from './lib/browserFidelity.js';
 import { cosWorkerBudget } from './lib/cosWorkerBudget.js';
+import { ACTIONLINT_VERSION, probeActionlint, selectWorkflowFiles } from './lib/actionlint.js';
 import { buildPregateReport, guardInputSnapshot, PREGATE_REPORT_PATH, validatedTreeHash, writePregateReport } from './lib/pregateReport.js';
 import { assertGitMergeTree } from '../lib/gitMergeTree.js';
 import { dependencyConsistencyProblems } from './lib/workspaceDependencies.js';
@@ -36,6 +37,7 @@ const IS_WIN32 = process.platform === 'win32';
  * while the one suite that can destroy real data went unmentioned.
  */
 export const UNCOVERED_SUITES = Object.freeze({
+  actionlint: `set ACTIONLINT_BIN to a pinned actionlint ${ACTIONLINT_VERSION} binary (the rhysd/actionlint v${ACTIONLINT_VERSION} release, checked against its checksums file) and put shellcheck on PATH; CI runs the same check`,
   db: 'needs a reachable test Postgres: npm run setup:db:test && npm run test:db (never against the real `portos` database)',
   browser: 'needs Chrome, ffmpeg and the client bundler; run `npm run pregate -- --full` once they are installed',
   build: 'npm run build',
@@ -53,6 +55,11 @@ const PROBE_FAILED_REMEDY = 'the prerequisite probe itself failed, which does no
 /** Does the plan select this suite at all? `browser` is a file list, the rest flags. */
 export function suiteSelected(plan, suite) {
   return suite === 'browser' ? (plan.browser?.files?.length ?? 0) > 0 : Boolean(plan[suite]);
+}
+
+/** Does the plan lint any workflow file? A full plan lints them all. */
+export function workflowLintSelected(plan) {
+  return plan.lint.mode === 'full' || (plan.lint.mode === 'files' && selectWorkflowFiles(plan.lint.files).length > 0);
 }
 
 /**
@@ -80,6 +87,9 @@ export function uncoveredSuites(plan, { options = {}, downgraded = false, prereq
       continue;
     }
     if (reason) uncovered.push({ suite, reason, remedy: UNCOVERED_SUITES[suite] });
+  }
+  if (workflowLintSelected(plan) && !options.skipLint && prerequisites.actionlint?.ok === false) {
+    uncovered.push({ suite: 'actionlint', reason: `prerequisite missing: ${prerequisites.actionlint.reason}`, remedy: UNCOVERED_SUITES.actionlint });
   }
   if (suiteSelected(plan, 'windows')) {
     uncovered.push({ suite: 'windows', reason: 'a Windows runner has no local equivalent', remedy: UNCOVERED_SUITES.windows });
@@ -201,6 +211,16 @@ export function resolvePlanStages(plan, { skipLint = false, baseSha, baseRef, sk
       name: 'client/server lint',
       suite: 'lint',
       script: 'run-ci-lint.js',
+      args: [],
+      env: { CI_LINT_MODE: plan.lint.mode, CI_LINT_FILES: JSON.stringify(plan.lint.files) },
+    });
+  }
+
+  if (!skipLint && !skip.actionlint && workflowLintSelected(plan)) {
+    stages.push({
+      name: 'workflow lint (actionlint)',
+      suite: 'actionlint',
+      script: 'run-actionlint.js',
       args: [],
       env: { CI_LINT_MODE: plan.lint.mode, CI_LINT_FILES: JSON.stringify(plan.lint.files) },
     });
@@ -919,7 +939,9 @@ async function main() {
 
   /** Stages for the suites that stay here, after the uncovered ones are announced. */
   const planStages = (prerequisites, databaseEnv) => {
-    const uncovered = uncoveredSuites(plan, { options, downgraded, prerequisites });
+    // actionlint is a local tool probe, not a resource suite: it needs no Chrome or DB.
+    const tools = { actionlint: workflowLintSelected(plan) ? probeActionlint() : null, ...prerequisites };
+    const uncovered = uncoveredSuites(plan, { options, downgraded, prerequisites: tools });
     const skip = Object.fromEntries(uncovered.map(({ suite }) => [suite, true]));
     const stages = resolvePlanStages(plan, { skipLint: options.skipLint, baseSha, baseRef, skip, databaseEnv,
       guardPlan: options.guardsOnly ? null : guardPlan });
