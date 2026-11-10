@@ -93,8 +93,8 @@ export const PIXAL3D_PYTHON_VERSION = '3.10';
 /** NATTEN pin from upstream's install guide (neighborhood attention for the NAF upsampler). */
 export const PIXAL3D_NATTEN_VERSION = '0.21.0';
 
-/** The `utils3d` wheel upstream pins by URL (not on PyPI at this version). */
-export const PIXAL3D_UTILS3D_WHEEL = 'https://github.com/LDYang694/Storages/releases/download/20260430/utils3d-0.0.2-py3-none-any.whl';
+/** The upstream release wheel and its SHA-256 digest (see docs/THREEJS_MODELS.md). */
+export const PIXAL3D_UTILS3D_WHEEL = 'https://github.com/LDYang694/Storages/releases/download/20260430/utils3d-0.0.2-py3-none-any.whl#sha256=ff63440827d6933807dd06c8a5a2db7e51fd5f33c7f3dddcc766a80e0f419252';
 
 /** Clone/install root. `base` overridable for tests. */
 export function pixal3dRoot(base = join(HOME, '.portos')) {
@@ -234,7 +234,7 @@ export function buildPixal3dInstallSteps(base, { exists = existsSync, env, compu
       `${nattenEnv} pip install natten==${PIXAL3D_NATTEN_VERSION} --no-build-isolation`,
       { optional: true },
     ),
-    condaStep('utils3d', `pip install ${PIXAL3D_UTILS3D_WHEEL}`),
+    condaStep('utils3d', `pip install "${PIXAL3D_UTILS3D_WHEEL}"`),
   );
   return steps;
 }
