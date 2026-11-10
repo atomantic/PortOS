@@ -680,10 +680,15 @@ jobs:
           CI_LINT_FILES: ${{ needs.impact.outputs.lint_files }}
         run: node scripts/run-actionlint.js
 
-      # Proves the check still bites: the #15657 shape must be rejected. A
-      # linter that passed this fixture would be a silent no-op.
+      # Proves the check still bites: the #15657 shape must be rejected with the
+      # runner-context diagnostic. A nonzero exit alone also means a missing
+      # shellcheck or a broken launch, which would be a silent no-op.
       - name: Prove actionlint rejects the known-bad fixture
-        run: '! node scripts/run-actionlint.js scripts/fixtures/actionlint/runner-context-in-job-env.yml'
+        run: |
+          fixture=scripts/fixtures/actionlint/runner-context-in-job-env.yml
+          out=$(node scripts/run-actionlint.js "$fixture" 2>&1) && { echo "$out"; echo "::error::actionlint accepted the known-bad fixture"; exit 1; }
+          echo "$out"
+          grep -F 'context "runner" is not allowed here' <<< "$out" || { echo "::error::expected runner-context diagnostic missing"; exit 1; }
 
   database:
     # The serial Postgres suite. The browser suites used to run after it on
