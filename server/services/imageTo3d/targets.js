@@ -134,7 +134,7 @@ export const IMAGE_TO_3D_TARGETS = Object.freeze({
       appleSilicon: true,
       minUnifiedMemoryGb: 24,
       diskGb: 40,
-      python: '3.10',
+      python: '3.13',
     }),
     // PortOS starts the fork at its 1024 cascade. The 1536 cascade is intentionally
     // not exposed through the shared detail control yet: the community port documents

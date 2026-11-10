@@ -1,0 +1,15 @@
+# Hashed source dependencies of the pinned Pixal3D Metal fork.
+# Installed AFTER the wheel closure with --no-deps --no-build-isolation:
+# natten metadata imports torch; MoGe declares these same Git revisions.
+# Re-download each immutable archive and verify metadata/build code before updating
+# its SHA-256. natten 0.21.0 was uploaded 2025-07-14; Git revisions predate the
+# fork's 2026-06-12 commit. No unconstrained source/build dependency is installed.
+# Included in the complete 106-distribution OSV/MAL audit, 2026-11-10: 0 matches.
+natten==0.21.0 \
+    --hash=sha256:810aaf179e1a6fdb0a9279d7858d00412a0d3f045e546cada415205215ccd539
+moge @ https://codeload.github.com/microsoft/MoGe/tar.gz/07444410f1e33f402353b99d6ccd26bd31e469e8 \
+    --hash=sha256:08e5fcbaa4421a0e3e284ac7e3196965904677bb479c29b19c95ead47407f734
+pipeline @ https://codeload.github.com/EasternJournalist/pipeline/tar.gz/866f059d2a05cde05e4a52211ec5051fd5f276d6 \
+    --hash=sha256:36e2fc484c98ff4b9e007457ab45b71009434e9834992336bd2efda22f532523
+utils3d @ https://codeload.github.com/EasternJournalist/utils3d/tar.gz/3fab839f0be9931dac7c8488eb0e1600c236e183 \
+    --hash=sha256:f1f167b1f68809bea391a66dd0d2ad0e14f7382cbddf087b655181c31a285abb
