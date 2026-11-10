@@ -2,7 +2,9 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import ModelComparison from './ModelComparison';
 import * as api from '../../services/apiModelComparison';
+import { triggerCosOnDemandTask } from '../../services/apiAgents';
 vi.mock('../../services/apiModelComparison', () => ({ getModelComparison: vi.fn() }));
+vi.mock('../../services/apiAgents', () => ({ triggerCosOnDemandTask: vi.fn() }));
 vi.mock('./ComparisonResearch', () => ({ default: () => <div>Research configuration</div> }));
 vi.mock('recharts', () => ({
   ResponsiveContainer: ({ children }) => <div>{children}</div>, ScatterChart: ({ children }) => <div>{children}</div>,
@@ -14,6 +16,42 @@ const metric = (value, estimated = false) => ({ value, estimated, method: 'Examp
 const row = (model, effort, quality, price, estimated = false) => ({ id: `${model}:${effort}`, providerId: 'example', provider: 'Example', model, modelKey: `example:${model}`, effort, quality: quality === null ? null : metric(quality, estimated), blendedPerMillion: metric(price), inputPerMillion: metric(price / 2), outputPerMillion: metric(price * 2), costPerTask: metric(price * (effort === 'high' ? 3 : 1)), needsResearch: quality === null || estimated });
 const rows = [row('gpt-6-luna', 'low', 21, 0.2), row('gpt-6-luna', 'high', 32, 0.2), row('gpt-5.6-luna', 'low', 20, 0.45), row('claude-opus-5-5', 'high', 56, 8), row('unknown-model', 'high', null, 0)];
 beforeEach(() => { localStorage.clear(); vi.clearAllMocks(); api.getModelComparison.mockResolvedValue({ composite: { anchor: 'Reference v1', rows } }); });
+
+it('queues only the chosen comparison model, regardless of filtered efforts, and keeps other models actionable', async () => {
+  const example = { ...row('example-vendor/example-model-1-2', 'low', null, 1), comparisonModel: 'example-model-1.2' };
+  const other = row('other-model', 'low', null, 1);
+  api.getModelComparison.mockResolvedValue({ composite: { rows: [example, { ...example, id: 'example-high', effort: 'high' }, other] } });
+  let finish;
+  triggerCosOnDemandTask.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  triggerCosOnDemandTask.mockResolvedValueOnce({ success: true, request: { id: 'demand-other' } });
+  render(<ModelComparison />);
+  const button = await screen.findByRole('button', { name: 'Research example-model-1.2' });
+  fireEvent.click(screen.getByRole('button', { name: '✓ high' }));
+  fireEvent.click(button);
+  fireEvent.click(button);
+  expect(triggerCosOnDemandTask).toHaveBeenCalledTimes(1);
+  expect(triggerCosOnDemandTask).toHaveBeenCalledWith('model-comparison-refresh', null, { targetModels: ['example-model-1.2'], silent: true });
+  expect(button).toBeDisabled();
+  fireEvent.click(screen.getByRole('button', { name: 'Research other-model' }));
+  await screen.findByText(/Research request queued in CoS/);
+  expect(triggerCosOnDemandTask).toHaveBeenLastCalledWith('model-comparison-refresh', null, { targetModels: ['other-model'], silent: true });
+  finish({ success: true, request: { id: 'demand-example' } });
+  await waitFor(() => expect(button).toHaveTextContent('Research requested'));
+  expect(screen.getAllByRole('status')).toHaveLength(2);
+});
+
+it('shows queue failures on the affected model and allows retry', async () => {
+  triggerCosOnDemandTask.mockRejectedValueOnce(new Error('CoS improvement is disabled'));
+  triggerCosOnDemandTask.mockResolvedValueOnce({ success: true, request: { id: 'demand-retry' } });
+  render(<ModelComparison />);
+  const button = await screen.findByRole('button', { name: 'Research unknown-model' });
+  fireEvent.click(button);
+  expect(await screen.findByRole('alert')).toHaveTextContent('CoS improvement is disabled');
+  expect(button).toBeEnabled();
+  fireEvent.click(button);
+  expect(await screen.findByRole('status')).toHaveTextContent('Research request queued');
+  expect(screen.queryByRole('alert')).toBeNull();
+});
 
 it('compares generations and vendors together with quick model and effort toggles', async () => {
   render(<ModelComparison />);

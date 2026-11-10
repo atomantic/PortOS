@@ -551,6 +551,16 @@ describe.each(ENGINES)('%s — skip gates', (_name, makeAdapter) => {
     expect(mocks.generateSelfImprovementTaskForType).toHaveBeenCalledWith('code-quality', STATE, { providerOverride, targetModels: null });
     expect(spawned).toHaveLength(1);
   });
+
+  it('forwards a single-model comparison research target through the on-demand drain', async () => {
+    const targetModels = ['example-model-1.2'];
+    mocks.loadSchedule.mockResolvedValue({ tasks: { 'model-comparison-refresh': { enabled: false } } });
+    mocks.getOnDemandRequests.mockResolvedValue([appRequest({ taskType: 'model-comparison-refresh', appId: null, targetModels })]);
+    const { spawned, adapter } = makeAdapter();
+    await drainOnDemandRequests({ state: STATE }, adapter);
+    expect(mocks.generateSelfImprovementTaskForType).toHaveBeenCalledWith('model-comparison-refresh', STATE, { providerOverride: null, targetModels });
+    expect(spawned).toHaveLength(1);
+  });
 });
 
 // ── The three real differences the adapters own ─────────────────────────────

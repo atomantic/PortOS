@@ -405,7 +405,24 @@ describe('generateSelfImprovementTaskForType model-comparison-refresh', () => {
     expect(task.metadata.executionOptions).toEqual({ serviceTier: 'fast' });
     expect(task.metadata.targetModels).toEqual(['claude-3-7-sonnet', 'gpt-4o']);
     expect(task.description).toContain('## Target models to investigate');
-    expect(task.description).toContain('- claude-3-7-sonnet');
-    expect(task.description).toContain('- gpt-4o');
+    expect(task.description).toContain('["claude-3-7-sonnet","gpt-4o"]');
+    expect(task.description).toContain('every supported effort, including efforts hidden');
+    expect(task.description).toContain('benchmark task costs for the current and historical index versions');
+    expect(task.description).toContain('Import verified observations into this instance');
+    expect(task.description).toContain('data.reference/model-comparison.json');
+  });
+
+  it('keeps separate model requests distinct for task deduplication while identifying the same target set consistently', async () => {
+    getTaskIntervalMock.mockResolvedValue({ type: 'on-demand', taskMetadata: {} });
+    const generate = targetModels => generateSelfImprovementTaskForType('model-comparison-refresh', STATE, { targetModels });
+    const [first, same, other, both, reversed, all] = await Promise.all([
+      generate(['model-a']), generate(['model-a']), generate(['model-b']),
+      generate(['model-a', 'model-b']), generate(['model-b', 'model-a']), generate(null),
+    ]);
+    const title = task => task.description.split('\n')[0];
+    expect(title(first)).toBe(title(same));
+    expect(title(first)).not.toBe(title(other));
+    expect(title(first)).not.toBe(title(all));
+    expect(title(both)).toBe(title(reversed));
   });
 });
