@@ -978,6 +978,7 @@ export * from './musicVideoEnding.js';
 export * from './musicVideoTitleCard.js';
 export * from './musicVideoDependencies.js';
 export * from './musicVideoColdOpen.js';
+export * from './musicVideoDocumentCamera.js';
 export * from './musicVideoEndFrame.js';
 export * from './musicVideoLocalModels.js';
 export * from './musicVideoHandoffFrame.js';

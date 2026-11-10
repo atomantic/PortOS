@@ -13,7 +13,7 @@ import useMusicVideoStatsOutro from '../../hooks/useMusicVideoStatsOutro.js';
 import { playthroughVersion } from './CompositionPreviewPlayer.jsx';
 import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
 import { selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
-import { normalizeTitleCard } from '../../../../server/lib/musicVideoTitleCard.js';
+import { normalizeTitleCard, titleCardVisible } from '../../../../server/lib/musicVideoTitleCard.js';
 import { endingParts } from '../../../../server/lib/musicVideoEnding.js';
 import EndingCanvas from './EndingCanvas.jsx';
 import ShotStepper from './ShotStepper.jsx';
@@ -26,6 +26,7 @@ import { sceneFrameFit } from './SceneFrameFit.jsx';
 import TransitionGlitch from './TransitionGlitch.jsx';
 import WipeOverlay from './WipeOverlay.jsx';
 import ExactDocumentFrame from './ExactDocumentFrame.jsx';
+import { DocumentFootageMove, DocumentTemplateFinish, useDocumentCamera } from './DocumentTemplateLayers.jsx';
 import ImageEffectStill from './ImageEffectStill.jsx';
 import { clipOffsetSec, clipReversed, clipSpeedRate, isLayeredComposition, isSelfDrawnLayer, sceneVisualLayer, stillFrameTransform } from '../../lib/musicVideoLayers.js';
 import { resolveSourceTake, scenePlayableClipId } from '../../../../server/lib/musicVideoSourceTake.js';
@@ -429,13 +430,14 @@ function useShotClock(audioRef, scenes, setTime) {
   useSongFrames(audioRef, syncShot);
 }
 
-function StillShot({ scene, audioRef, time, effect = null, fps, beats = [], startSec = scene.startSec, endSec = scene.endSec }) {
+// `camera` (a composition document's move for the scene) replaces the composed render's still move.
+function StillShot({ scene, audioRef, time, effect = null, fps, beats = [], startSec = scene.startSec, endSec = scene.endSec, camera = null }) {
   const ref = useRef(null);
   const sequence = useMemo(() => scenePhotoSequence(scene, { fps, beats }), [scene, fps, beats]);
   const getTime = useCallback(() => audioRef.current?.currentTime || 0, [audioRef]);
   const apply = useCallback((t) => {
-    if (ref.current) ref.current.style.transform = stillFrameTransform(scene, t, { fps, startSec, endSec });
-  }, [scene, fps, startSec, endSec]);
+    if (ref.current) ref.current.style.transform = camera ? camera(scene, t, false) : stillFrameTransform(scene, t, { fps, startSec, endSec });
+  }, [scene, fps, startSec, endSec, camera]);
   useEffect(() => { apply(time); }, [time, apply]);
   useSongFrames(audioRef, apply);
   return (
@@ -630,6 +632,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
   const documentVariant = variant === 'document';
   const [touched, setTouched] = useState(false);
   const exactRef = useRef(null);
+  const documentCamera = useDocumentCamera(project, documentVariant);
   const captureBasis = useRef(null);
   const lookAvailable = !isFilmLookNeutral(project.filmLook);
   // The song's shots; shots before the song play on the cold open's clock (useColdOpen).
@@ -643,7 +646,10 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
   const leadFile = useVideoFileSrc(layered ? scenePlayableClipId(lead, allScenes) : null, { geometry: true });
   const stillFps = project.composition?.mode === 'document' ? ANIMATIC_FPS : leadFile.fps || ANIMATIC_FPS;
   const lyricsAvailable = project.lyricOverlayEnabled !== false && hasTimedLyrics(project);
-  const { overlay, failed, capture: captureLyrics } = useLyricOverlay({ project, enabled: lyricsAvailable && lyricsOn, audioRef, time });
+  // The opening title card rides on the lyric layer, so a video with its words switched off still
+  // needs that layer for the card; the page itself keeps the words hidden.
+  const cardOnly = project.lyricOverlayEnabled === false && hasTimedLyrics(project) && titleCardVisible(normalizeTitleCard(project.titleCard));
+  const { overlay, failed, capture: captureLyrics } = useLyricOverlay({ project, enabled: (lyricsAvailable && lyricsOn) || cardOnly, audioRef, time });
   // The ending (cutting room floor, then credits): it plays when the song ends, and Ending plays it straight away; playing or seeking the song leaves it.
   const { statsOutro, creditsOutro } = project;
   const endingPlan = useMemo(() => endingParts({ statsOutro, creditsOutro }), [statsOutro, creditsOutro]);
@@ -739,7 +745,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
       const fallback = [...(figure?.querySelectorAll('img') || [])].find((image) => image.getAttribute('src') === `/data/images/${playedSelected.referenceImageId}` && image.complete && image.naturalWidth > 0);
       if (!clip && !fallback) throw new Error('Video frame is still loading');
     }
-    if (lyricsAvailable && lyricsOn && !overlay) throw new Error('Lyric frame unavailable');
+    if (((lyricsAvailable && lyricsOn) || cardOnly) && !overlay) throw new Error('Lyric frame unavailable');
     const iframeImages = new Map();
     const iframe = figureRef.current?.querySelector('iframe');
     if (iframe) iframeImages.set(iframe, await captureLyrics(at));
@@ -797,7 +803,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
     <>
       {(picture?.referenceImageId || scenePhotoSequence(picture)?.imageIds.length) && stillShot ? (
         <ShotColorMatchFrame key={picture.sceneId} project={project} scene={picture}>
-          <StillShot scene={picture} audioRef={clock.ref} time={clock.time} fps={stillFps} beats={beats} effect={shotEffect} />
+          <StillShot scene={picture} audioRef={clock.ref} time={clock.time} fps={stillFps} beats={beats} effect={shotEffect} camera={documentCamera} />
         </ShotColorMatchFrame>
       ) : picture?.referenceImageId ? (
         // Behind a VHS-edged clip the still stands in, blurred and faded, for the render's blur of the clip.
@@ -813,8 +819,10 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
       ) : null}
       {clipShots.map(({ scene, offset }) => (
         <ShotColorMatchFrame key={`${cold.active ? 'cold:' : ''}${scene.sceneId}:${scene.videoHistoryId}`} project={project} scene={scene} className="pointer-events-none absolute inset-0 h-full w-full">
-          <ShotClip scene={scene} audioRef={clock.ref} time={clock.time} current={scene.sceneId === shot?.sceneId}
-            preload={offset <= 1 ? 'auto' : 'metadata'} />
+          <DocumentFootageMove scene={scene} camera={documentCamera} audioRef={clock.ref} time={clock.time}>
+            <ShotClip scene={scene} audioRef={clock.ref} time={clock.time} current={scene.sceneId === shot?.sceneId}
+              preload={offset <= 1 ? 'auto' : 'metadata'} />
+          </DocumentFootageMove>
         </ShotColorMatchFrame>
       ))}
       {nearToggles.map((toggle) => {
@@ -838,7 +846,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
         <p className="text-xs text-port-text-muted">Selected takes cut on the song with the video look, per-shot looks, transitions and glitches. Final-quality shot renders are not required.</p>
       )}
       {documentVariant && (
-        <p className="text-xs text-port-text-muted">Plays the selected takes in this browser. Paused, it shows the composition's exact frame; the template's grain, vignette, camera moves and beat reactions appear only there for now.</p>
+        <p className="text-xs text-port-text-muted">Plays the selected takes in this browser. Paused, it shows the composition's exact frame; the template's beat reactions, cards and HUD appear only there for now.</p>
       )}
       <figure ref={figureRef} aria-label={pictureLabel} className="relative aspect-video w-full overflow-hidden rounded border border-port-border bg-black">
         {/* The shot's resolved film look over the whole picture, lyrics included. */}
@@ -860,6 +868,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
             </div>
           </div>
         ) : animaticPictures}
+        {documentVariant && !outro.active && <DocumentTemplateFinish audioRef={clock.ref} time={clock.time} fps={ANIMATIC_FPS} />}
         {/* The shots' VHS glitches on their cuts, on the frames the final render repaints. */}
         <TransitionGlitch scenes={clock.scenes} cameras={project.cameras} figureRef={figureRef} audioRef={clock.ref} time={clock.time} layered={layered}
           endSec={cold.active ? cold.seconds : Number(project.audioAnalysis?.durationSec) || null} fps={ANIMATIC_FPS} />
@@ -887,7 +896,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
               <span className="font-medium text-port-text">{label}</span>{shot.visualIntent ? ` · ${shot.visualIntent}` : ''}
             </p>
           )}
-          {lyricsOn && failed && <p className="text-port-error">The lyrics could not be drawn over the animatic.</p>}
+          {(cardOnly || lyricsOn) && failed && <p className="text-port-error">{cardOnly ? 'The title card' : 'The lyrics'} could not be drawn over the animatic.</p>}
         </div>
         {cold.seconds > 0 && (
           <button

@@ -649,8 +649,12 @@ by matching its engine, entrypoint, helpers and fonts byte for byte
 (`shippedLayeredDocument`). The dock plays such a project's selected takes in
 the page with the storyboard animatic's player and opens the worker only for
 the exact frame of a paused, scrubbed, stepped or saved moment. The page still
-never loads the document. Every other document keeps the worker for playback
-too. Design record: [native composition preview](plans/2026-11-09-native-composition-preview.md).
+never loads the document. The playing picture repeats the template's own
+drawing with shared code: its camera move for each clip and still
+(`server/lib/musicVideoDocumentCamera.js`, checked against the engine by its
+test), its vignette and its grain. Beat reactions, card scenes and the HUD are
+not repeated yet and appear only on the paused frame. Every other document
+keeps the worker for playback too. Design record: [native composition preview](plans/2026-11-09-native-composition-preview.md).
 
 Seek, film look, and the title card go over the private render protocol.
 Project media stays on the server (`streamMedia`); the client never fetches it

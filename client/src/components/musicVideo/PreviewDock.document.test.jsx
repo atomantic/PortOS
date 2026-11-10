@@ -47,6 +47,9 @@ describe('PreviewDock composition document', () => {
     const audio = screen.getByLabelText('Song for the composition preview');
     expect(opens()).toHaveLength(0);
     expect(screen.queryByTestId('exact-document-frame')).toBeNull();
+    // The playing picture carries the template's own still move, vignette and grain.
+    expect(screen.getByTestId('animatic-still').style.transform).toMatch(/^translate\(.+\) scale\(1\.\d+\)$/);
+    expect(screen.getByTestId('document-template-finish')).toBeTruthy();
     await act(async () => fireEvent.play(audio));
     expect(opens()).toHaveLength(0);
     await act(async () => fireEvent.pause(audio));

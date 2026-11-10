@@ -225,6 +225,16 @@ describe('StoryboardAnimatic lyrics', () => {
     expect(screen.getByText('Opening').closest('figure')).toBeTruthy();
   });
 
+  // Uniquely catches a video with its words switched off losing its opening title card in the preview.
+  it('keeps the lyric layer for the title card when the words are switched off', async () => {
+    const hidden = { ...lyricProject, lyricOverlayEnabled: false };
+    const { rerender } = render(<StoryboardAnimatic project={{ ...hidden, titleCard: { enabled: true, title: 'Example Song', startSec: 2, endSec: 8 } }} audioUrl="/song.mp3" />);
+    expect(await screen.findByTestId('animatic-lyrics')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Lyrics' })).toBeNull();
+    rerender(<StoryboardAnimatic project={{ ...hidden, titleCard: { enabled: false, title: 'Example Song' } }} audioUrl="/song.mp3" />);
+    await waitFor(() => expect(screen.queryByTestId('animatic-lyrics')).toBeNull());
+  });
+
   // Uniquely catches the animatic's lyric layer dropping the opening title card or its live edits.
   it('hands the opening title card to the lyric layer and again when it is edited', async () => {
     const card = { enabled: true, title: 'Example Song', startSec: 2, endSec: 8 };
