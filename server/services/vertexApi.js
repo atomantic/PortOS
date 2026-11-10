@@ -44,7 +44,7 @@ const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
  * when nothing usable is stored. A JSON value that is not a service account key
  * is refused rather than sent as an API key.
  */
-export function parseVertexCredential(raw) {
+function parseVertexCredential(raw) {
   const value = typeof raw === 'string' ? raw.trim() : '';
   if (!value) return null;
   if (value.startsWith('{')) {
@@ -64,7 +64,7 @@ export function parseVertexCredential(raw) {
 }
 
 /** The raw stored credential (API key or service account JSON): settings first, then VERTEX_API_KEY. */
-export function resolveVertexCredentialValue(settings) {
+function resolveVertexCredentialValue(settings) {
   const fromSettings = (settings?.videoGen?.vertex?.apiKey || '').trim();
   if (fromSettings) return fromSettings;
   return (process.env.VERTEX_API_KEY || '').trim() || null;
@@ -98,7 +98,7 @@ const base64url = (input) => Buffer.from(input).toString('base64url');
 const tokenCache = new Map();
 
 /** Exchange a service account key for an access token (cached per account). */
-export async function getVertexAccessToken(credential, { now = Date.now } = {}) {
+async function getVertexAccessToken(credential, { now = Date.now } = {}) {
   const cached = tokenCache.get(credential.clientEmail);
   if (cached && cached.privateKey === credential.privateKey && cached.expiresAt - TOKEN_REFRESH_MARGIN_MS > now()) return cached.token;
   const iat = Math.floor(now() / 1000);

@@ -100,7 +100,7 @@ function nearestRatio(w, h, ratios) {
 }
 
 /** The prompt text the model receives: the user's words plus a folded "Avoid:" clause. */
-export function vertexImagePromptText(prompt = '', negativePrompt = '') {
+function vertexImagePromptText(prompt = '', negativePrompt = '') {
   const negative = typeof negativePrompt === 'string' ? negativePrompt.trim() : '';
   const base = String(prompt ?? '').trim();
   return negative ? `${base}\nAvoid: ${negative}` : base;
