@@ -538,6 +538,7 @@ export const musicVideoPoolSearchQuerySchema = z.object({
 export const musicVideoPoolMarkSchema = z.object({
   items: z.array(musicVideoPoolAssetSchema).min(1).max(500),
   mark: z.enum(['ingredient', 'bad']).nullable(),
+  keepInUse: z.boolean().optional(),
 }).strict();
 
 /** Delete unused stills and clips from the media library (the asset manager's "Delete bad"). */

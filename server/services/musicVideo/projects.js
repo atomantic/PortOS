@@ -538,13 +538,18 @@ export async function moveProjectSceneEnd(id, sceneId, { endSec }) {
 }
 
 /**
- * Mark assets ★ ingredient or ✕ bad (null clears). Returns the project's marks and
- * the shots whose takes a bad mark rejected.
+ * Mark assets ★ ingredient or ✕ bad (null clears). Returns the project's marks,
+ * the shots whose takes a bad mark rejected or moved, and the per-shot changes list.
  */
-export async function markMediaPoolAssets(id, keys, mark) {
+export async function markMediaPoolAssets(id, keys, mark, options = {}) {
   const { markPoolAssets } = await import('./mediaPool.js');
-  const { project, scenes } = await mutateProjectRecord(id, (current) => markPoolAssets(current, keys, mark));
-  return { assetMarks: project.assetMarks || {}, scenes };
+  let resultChanges = [];
+  const { project, scenes } = await mutateProjectRecord(id, (current) => {
+    const outcome = markPoolAssets(current, keys, mark, options);
+    resultChanges = outcome.changes || [];
+    return outcome;
+  });
+  return { assetMarks: project.assetMarks || {}, scenes, changes: resultChanges };
 }
 
 // ---- scene takes (#8965) ----

@@ -26,7 +26,7 @@ import { formatTimecode } from '../../../utils/formatters.js';
 import { getStoryboard } from '../../../services/api';
 import { storyboardShotPanel } from '../../../../../server/lib/storyboardFit.js';
 
-const FILTER_LABELS = [['all', 'All'], ['attention', 'Needs attention'], ['missing', 'Missing footage'], ['stale-frame', 'Frame out of date']];
+const FILTER_LABELS = [['all', 'All'], ['attention', 'Needs attention'], ['missing', 'Missing footage'], ['stale-frame', 'Frame out of date'], ['bad-take', 'Selected take marked bad']];
 const MEDIA_ICONS = { clip: Film, image: ImageIcon, code: Code2, card: Type };
 const isTypingTarget = (el) => !!el && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName));
 
@@ -104,16 +104,18 @@ export default function BoardStage({ board }) {
     songReview: project.songRevision?.sceneReview || null,
     videoSettings: videoSettings.settings,
     scenes,
+    assetMarks: project.assetMarks || {},
   };
   const codesById = new Map(scenes.map((scene) => [scene.sceneId, sceneAttention(scene, attentionCtx)]));
   const numbers = shotNumbers(scenes);
   const coldNumbers = new Map(coldOpenScenes(project).map((scene, i) => [scene.sceneId, i + 1]));
   const shotName = (scene) => sceneShotName(scene, { number: numbers.get(scene.sceneId), coldOpen: coldNumbers.get(scene.sceneId) });
-  const counts = { all: scenes.length, attention: 0, missing: 0, 'stale-frame': 0 };
+  const counts = { all: scenes.length, attention: 0, missing: 0, 'stale-frame': 0, 'bad-take': 0 };
   for (const codes of codesById.values()) {
     if (sceneMatchesFilter(codes, 'attention')) counts.attention += 1;
     if (sceneMatchesFilter(codes, 'missing')) counts.missing += 1;
     if (sceneMatchesFilter(codes, 'stale-frame')) counts['stale-frame'] += 1;
+    if (sceneMatchesFilter(codes, 'bad-take')) counts['bad-take'] += 1;
   }
   // Each shot's start, mid-shot and end effects, and the option the board is narrowed to (`?effect=`).
   const planned = plannedTransitions(project.productionReview?.draft?.storyboard);

@@ -257,8 +257,8 @@ export default function SceneCard({
     excerptStartSec: performanceReview?.excerptStartSec, backend: lipSyncBackend, videoSettings: falVideoSettings || {} });
   const shotModeId = `mv-shot-mode-${scene.sceneId}`;
   // #10152: what needs the director's attention, visible without opening the card.
-  const attention = sceneAttention(scene, { layered, footageOptional, lipSyncBackend, songDurationSec, clipSec: playedSec, spanExtraSec, failed: failedScenes || {}, songReview, videoSettings: falVideoSettings, scenes: project?.scenes });
-  const frameReadiness = selectedFrameReadiness(sourceWindow?.source && sourceWindow.referenceImageId ? sourceWindow.source : scene);
+  const attention = sceneAttention(scene, { layered, footageOptional, lipSyncBackend, songDurationSec, clipSec: playedSec, spanExtraSec, failed: failedScenes || {}, songReview, videoSettings: falVideoSettings, scenes: project?.scenes, assetMarks: project?.assetMarks });
+  const frameReadiness = selectedFrameReadiness(sourceWindow?.source && sourceWindow.referenceImageId ? sourceWindow.source : scene, project?.assetMarks);
   const songChange = songReview?.[scene.sceneId];
   // Every clip in flight for this shot, each with where it renders. A render whose
   // request is still on its way has no job yet: Render waits for it, so a double tap
@@ -636,7 +636,7 @@ export default function SceneCard({
               ? `${(scene.endSec - scene.startSec).toFixed(2)}s · ${formatTimecode(scene.startSec)}–${formatTimecode(scene.endSec)} · ${frameSpan(scene)}`
               : `#${scene.order + 1}`}
             {frameReadiness.text ? ` · ${frameReadiness.text}` : ''}
-            {clipPlayback.clipId ? ' · video ready' : ''}
+            {clipPlayback.clipId && project?.assetMarks?.[`video:${clipPlayback.clipId}`] !== 'bad' ? ' · video ready' : ''}
             {frameReadiness.reasons.length > 0 && <span className="block truncate text-port-warning">{frameReadiness.reasons.join(' · ')}</span>}
             {clipSec != null ? ` · clip ${clipSec.toFixed(1)}s` : ''}
           </div>
