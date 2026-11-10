@@ -54,7 +54,6 @@ const shotEffectsVersion = (project) => {
 // Why the server plays this document by exact per-frame seeks instead of smooth native playback.
 const FALLBACK_REASONS = {
   'unrecognized-engine': 'its engine was customized',
-  'wipe-exact-seek': 'a shot uses a wipe',
   'unsupported-video-fps': 'a clip has an unknown or very low frame rate',
   'unsupported-capture-protocol': 'the preview browser is too old',
   'unsupported-frame-callbacks': 'the preview browser is too old',

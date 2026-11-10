@@ -391,10 +391,10 @@ describe('CompositionPreviewPlayer', () => {
       socket.reply(event, payload);
       for (const fn of socket.__handlers.get('generated-preview:opened') || []) fn({ requestId: payload.requestId,
         sessionId: '00000000-0000-4000-8000-0000000000ac', durationSec: 10, fps: 24, width: 1920, height: 1080, audio: 'none',
-        playbackFallback: { reason: 'wipe-exact-seek', upgradable: false } });
+        playbackFallback: { reason: 'unsupported-video-fps', upgradable: false } });
     });
     render(<CompositionPreviewPlayer project={project} audioUrl="/data/music/song.mp3" onProject={vi.fn()} />);
-    expect(await screen.findByText(/Playing frame by frame.*a shot uses a wipe/)).toBeInTheDocument();
+    expect(await screen.findByText(/Playing frame by frame.*a clip has an unknown or very low frame rate/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Update layered engine' })).not.toBeInTheDocument();
   });
 
