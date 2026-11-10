@@ -26,6 +26,18 @@ export const LOCK_PROFILES = Object.freeze({
     lockFile: join(SCRIPTS_DIR, 'requirements-mflux-video-mlx.lock.txt'),
     environments: [APPLE_SILICON],
   },
+  'auk-mlx': {
+    id: 'auk-mlx',
+    label: 'AuK-Flash MLX runtime',
+    lockFile: join(SCRIPTS_DIR, 'requirements-auk-mlx.lock.txt'),
+    environments: [APPLE_SILICON],
+  },
+  'laya-mlx': {
+    id: 'laya-mlx',
+    label: 'Laya-MLX runtime',
+    lockFile: join(SCRIPTS_DIR, 'requirements-laya-mlx.lock.txt'),
+    environments: [APPLE_SILICON],
+  },
   'uv-bootstrap': {
     id: 'uv-bootstrap',
     label: 'private uv bootstrap',
