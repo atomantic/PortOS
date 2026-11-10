@@ -1228,6 +1228,59 @@ successor run".
   CI. More than 125 selected tests on one runner keeps the scoped selection
   and shards that runner instead.
 
+## Runtime image security (`runtime-image-security.yml`)
+
+Generates an SBOM (syft) and a vulnerability scan (grype, OS packages and
+language dependencies) for the pinned runtime recipes that the npm/Python
+audits cannot see (#15656). It is separate from `ci.yml`, is **not** part of
+`CI Gate`, and never blocks an unrelated PR on a new upstream advisory. Native
+audio build/boot results (`supercollider-live`) stay functional evidence; this
+workflow is the security inventory.
+
+| Target | Subject | Architectures |
+| --- | --- | --- |
+| `pgvector` | the digest-pinned image in `docker-compose.yml`, pulled by digest | amd64, arm64 |
+| `supercollider` | `docker/supercollider/` built with the product's own build argv (same labels and recipe hash) | amd64, arm64 |
+| `eidoverse-rapier` | the inline `npm:@dimforge/rapier3d-compat` pin in `docker/eidoverse-video/Dockerfile`, resolved to a lockfile at scan time | one run |
+
+Targets are derived from the recipes by `scripts/runtime-image-security.js`, so a
+digest or pin change moves the scan with it and a recipe that loses its digest
+fails the run. Each run uploads `runtime-image-security-<target>-<arch>`
+(90 days): `sbom.syft.json`, `sbom.cdx.json`, `vulnerabilities.grype.json`,
+`grype-db-status.json`, `findings.json` and `provenance.json` (image ref, image
+ID and repo digests, recipe path and hash, commit, run, architecture, syft/grype
+versions, vulnerability DB identity). Scanner binaries are pinned by version and
+archive SHA-256 and actions by commit SHA. The vulnerability DB is the one
+moving input, so it is recorded rather than pinned.
+
+Triggers: weekly, `workflow_dispatch`, and pull requests touching
+`docker-compose.yml`, `docker/`, the helper script or the supercollider runtime
+constants. Scheduled and dispatched runs fail on any finding without a reviewed
+disposition; pull request runs report findings in the job summary without
+failing on them. Scanner errors, an empty or malformed SBOM, a missing OS or npm
+package ecosystem, or an unparseable scan always fail the run: a scanner that
+did not run is never zero findings.
+
+Findings are reconciled in `docker/runtime-image-security.reviews.json`
+(`target`, advisory `id`, optional `package`, `version` and `arch` scopes,
+`disposition` of `not-reachable` or `blocked`, `rationale`, `tracking` issue/PR).
+Every severity needs an entry that cites verified unreachability or a tracked
+blocker; a fix removes the finding from the scan, so it needs no entry and a
+finding still detected is never suppressed as "fixed"; do not move the
+Debian snapshot or an image digest merely to silence a scanner.
+
+**Known coverage gap.** The `eidoverse:render` parent image and the
+`deno.json`/`deno.lock` build context are built from the independent
+eidoverse-video checkout and do not ship here, so they cannot be inventoried by
+this repository. The `unavailable` job reports them in every run's summary (and a
+`runtime-image-security-unavailable` artifact) with the owning project; it
+never counts as a pass. Closing it needs the pinned parent digest and lock from
+that project's build.
+
+The scheduled `dependency-updates` task reads the latest default-branch run of
+this workflow and its artifacts, and reports a missing, scanner-failed, older-than-14-days,
+stale-recipe or `unavailable` target as a coverage gap instead of a clean result.
+
 ## Release Workflow (`release.yml`)
 
 Triggers on push to `release` branch. Steps:

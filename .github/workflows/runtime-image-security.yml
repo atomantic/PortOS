@@ -1,0 +1,172 @@
+name: Runtime image security
+
+# SBOM + vulnerability inventories for the pinned runtime container images
+# (#15656). Deliberately NOT part of ci.yml / CI Gate: a new upstream advisory
+# must never block an unrelated PR. It runs weekly, on demand, and on PRs that
+# change a scanned recipe. Contract and coverage gaps: docs/GITHUB_ACTIONS.md
+# ("Runtime image security").
+
+on:
+  schedule:
+    - cron: '23 5 * * 1'
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - docker-compose.yml
+      - docker/**
+      - scripts/runtime-image-security.js
+      - server/lib/superColliderRuntime.js
+      - .github/workflows/runtime-image-security.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runtime-image-security-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  scan:
+    name: ${{ matrix.target }} ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: pgvector, arch: amd64, runner: ubuntu-24.04 }
+          - { target: pgvector, arch: arm64, runner: ubuntu-24.04-arm }
+          - { target: supercollider, arch: amd64, runner: ubuntu-24.04 }
+          - { target: supercollider, arch: arm64, runner: ubuntu-24.04-arm }
+          # Inline npm pin from docker/eidoverse-video/Dockerfile; no image to build here.
+          - { target: eidoverse-rapier, arch: any, runner: ubuntu-24.04 }
+    env:
+      # Scanner binaries are pinned by version and archive SHA-256 (from the
+      # upstream release checksum files). The vulnerability DB is the one moving
+      # input; its identity is recorded in each run's provenance.json.
+      SYFT_VERSION: 1.55.0
+      SYFT_SHA256_AMD64: bb65249542db5fedeeb4d3f9b018b75e7264dbfbbb10486f044581a92f90490d
+      SYFT_SHA256_ARM64: 929bd163db2d7cd2255d3bcb8967208079813d7b46b0c952f7b794d8e2c7d304
+      GRYPE_VERSION: 0.121.0
+      GRYPE_SHA256_AMD64: 64e07133d3486115de647a66581461dccf5c732748a0a3119077395565f15519
+      GRYPE_SHA256_ARM64: 86f570f75ca947ea3dd6486309232bcff6d78e44ba081ae75ab14eab72be3dae
+      SYFT_CHECK_FOR_APP_UPDATE: 'false'
+      GRYPE_CHECK_FOR_APP_UPDATE: 'false'
+      TARGET: ${{ matrix.target }}
+      ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Require maintainer release for Dependabot
+        run: node scripts/ci-dependabot-admission.js
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26.x
+
+      - name: Verify the native host architecture
+        run: |
+          if [ "$ARCH" = any ]; then expected=amd64; else expected="$ARCH"; fi
+          actual=$(docker version --format '{{.Server.Arch}}')
+          test "$actual" = "$expected" || { echo "::error::Docker server is $actual, expected $expected"; exit 1; }
+          echo "TOOL_ARCH=$expected" >> "$GITHUB_ENV"
+          # The runner context is unavailable in job-level env, so derive it here.
+          EVIDENCE_DIR="$RUNNER_TEMP/evidence"
+          echo "EVIDENCE_DIR=$EVIDENCE_DIR" >> "$GITHUB_ENV"
+          mkdir -p "$EVIDENCE_DIR"
+          node scripts/runtime-image-security.js describe "$TARGET" | tee -a "$GITHUB_ENV"
+
+      - name: Install pinned syft and grype
+        run: |
+          bin="$RUNNER_TEMP/scanner-bin"
+          mkdir -p "$bin"
+          for tool in syft grype; do
+            version_var="${tool^^}_VERSION"
+            sha_var="${tool^^}_SHA256_${TOOL_ARCH^^}"
+            version="${!version_var}"
+            archive="${tool}_${version}_linux_${TOOL_ARCH}.tar.gz"
+            curl -fsSL --retry 5 -o "$RUNNER_TEMP/$archive" "https://github.com/anchore/${tool}/releases/download/v${version}/${archive}"
+            echo "${!sha_var}  $RUNNER_TEMP/$archive" | sha256sum -c -
+            tar -xzf "$RUNNER_TEMP/$archive" -C "$bin" "$tool"
+          done
+          echo "$bin" >> "$GITHUB_PATH"
+
+      - name: Pull the pinned image
+        if: matrix.target == 'pgvector'
+        run: |
+          # Pulling by digest fails on any mismatch with the pin in docker-compose.yml.
+          docker pull "$TARGET_IMAGE_REF"
+
+      - name: Build the SuperCollider recipe
+        if: matrix.target == 'supercollider'
+        timeout-minutes: 90
+        run: node scripts/runtime-image-security.js build supercollider
+
+      - name: Resolve the inline npm pin
+        if: matrix.target == 'eidoverse-rapier'
+        run: |
+          project="$RUNNER_TEMP/rapier-project"
+          node scripts/runtime-image-security.js rapier-project "$project"
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund --prefix "$project"
+          test -s "$project/package-lock.json"
+          echo "SBOM_SOURCE=dir:$project" >> "$GITHUB_ENV"
+
+      - name: Generate the SBOM
+        run: |
+          source_ref="${SBOM_SOURCE:-docker:$TARGET_IMAGE_REF}"
+          syft scan "$source_ref" -o "syft-json=$EVIDENCE_DIR/sbom.syft.json" -o "cyclonedx-json=$EVIDENCE_DIR/sbom.cdx.json"
+          if [ "$TARGET_KIND" = image ]; then
+            echo "IMAGE_ID=$(docker image inspect --format '{{.Id}}' "$TARGET_IMAGE_REF")" >> "$GITHUB_ENV"
+            echo "REPO_DIGESTS=$(docker image inspect --format '{{join .RepoDigests ","}}' "$TARGET_IMAGE_REF")" >> "$GITHUB_ENV"
+          fi
+
+      - name: Scan the SBOM for vulnerabilities
+        run: |
+          grype db update
+          grype db status -o json > "$EVIDENCE_DIR/grype-db-status.json"
+          # The DB just recorded is the one used; findings alone never fail this step,
+          # but any scanner error does (set -e), and verify rejects malformed output.
+          GRYPE_DB_AUTO_UPDATE=false grype "sbom:$EVIDENCE_DIR/sbom.syft.json" -o "json=$EVIDENCE_DIR/vulnerabilities.grype.json"
+
+      - name: Validate evidence and record provenance
+        run: |
+          args=(verify --target "$TARGET" --arch "$ARCH" --sbom "$EVIDENCE_DIR/sbom.syft.json" --scan "$EVIDENCE_DIR/vulnerabilities.grype.json" --db-status "$EVIDENCE_DIR/grype-db-status.json" --out "$EVIDENCE_DIR")
+          [ -n "${IMAGE_ID:-}" ] && args+=(--image-id "$IMAGE_ID" --repo-digests "${REPO_DIGESTS:-}")
+          # Scheduled and dispatched runs fail on findings with no reviewed
+          # disposition in docker/runtime-image-security.reviews.json; PR runs
+          # report them without turning an upstream advisory into a PR failure.
+          [ "$GITHUB_EVENT_NAME" != pull_request ] && args+=(--strict)
+          node scripts/runtime-image-security.js "${args[@]}"
+
+      - name: Save SBOM, scan and provenance
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: runtime-image-security-${{ matrix.target }}-${{ matrix.arch }}
+          retention-days: 90
+          if-no-files-found: warn
+          path: ${{ runner.temp }}/evidence/
+
+  unavailable:
+    name: Report uncovered inputs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26.x
+      - name: Name every input this checkout cannot scan
+        run: node scripts/runtime-image-security.js unavailable --out "$RUNNER_TEMP/unavailable"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: runtime-image-security-unavailable
+          retention-days: 90
+          if-no-files-found: error
+          path: ${{ runner.temp }}/unavailable/
