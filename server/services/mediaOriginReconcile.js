@@ -33,11 +33,12 @@ import { emitMediaHistoryChanged } from './peerSyncEventBus.js';
 const REPORT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 // A scan that found nothing to attribute is not repeated every sync cycle.
 const EMPTY_RECHECK_MS = 10 * 60 * 1000;
-// Only local claims left to re-check: a proof that keeps them stands, so the
-// gallery-wide library is re-asked once a day (well inside REPORT_MAX_AGE_MS).
+// A proof that keeps this machine's own claims stands, so they alone re-ask the
+// gallery-wide library once a day (well inside REPORT_MAX_AGE_MS).
 const LOCAL_CLAIM_RECHECK_MS = 24 * 60 * 60 * 1000;
 const KINDS = { video: () => PATHS.videos, image: () => PATHS.images };
 const emptyUntil = new Map();
+const localClaimsDueAt = new Map();
 
 /** Record one peer's inventory scope with its file times (the shared holdings record, services/mediaHolders.js). */
 export async function recordPeerHoldings(peerId, kind, category, report) {
@@ -99,9 +100,14 @@ async function unattributedFiles(kind, localId) {
 export async function hasUnattributedMedia(kind) {
   if (!KINDS[kind] || (emptyUntil.get(kind) ?? 0) > Date.now()) return false;
   const files = await unattributedFiles(kind, await resolveLocalId());
-  if (files.length === 0) emptyUntil.set(kind, Date.now() + EMPTY_RECHECK_MS);
-  else if (files.every((file) => file.replacesLocal)) emptyUntil.set(kind, Date.now() + LOCAL_CLAIM_RECHECK_MS);
-  return files.length > 0;
+  if (files.some((file) => !file.replacesLocal)) return true;
+  const now = Date.now();
+  if (files.length > 0 && (localClaimsDueAt.get(kind) ?? 0) <= now) {
+    localClaimsDueAt.set(kind, now + LOCAL_CLAIM_RECHECK_MS);
+    return true;
+  }
+  emptyUntil.set(kind, now + EMPTY_RECHECK_MS);
+  return false;
 }
 
 // Re-checked under the writer: a supplier recorded since the scan wins, and a

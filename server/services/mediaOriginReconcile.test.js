@@ -216,8 +216,17 @@ describe('correcting a local claim on a late copy', () => {
     writeFileSync(join(PATHS.images, 'c1.png'), 'png');
     writeFileSync(join(PATHS.images, 'c1.metadata.json'), JSON.stringify({ prompt: 'p', originInstanceId: 'me' }));
     touch(join(PATHS.images, 'c1.png'), T + DAY);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    onTestFinished(() => vi.useRealTimers());
     expect(await hasUnattributedMedia('image')).toBe(true); // asks for the library inventory
+    vi.advanceTimersByTime(11 * 60_000);
     expect(await hasUnattributedMedia('image')).toBe(false); // a local claim alone is re-checked daily, not every cycle
+    vi.advanceTimersByTime(11 * 60_000);
+    writeFileSync(join(PATHS.images, 'c2.png'), 'png');
+    onTestFinished(() => rmSync(join(PATHS.images, 'c2.png'), { force: true }));
+    expect(await hasUnattributedMedia('image')).toBe(true); // newly origin-less media is not held back by that
+    rmSync(join(PATHS.images, 'c2.png'));
+    vi.useRealTimers();
     await recordPeerHoldings('a', 'image', 'imageLibrary', { mtimes: { 'c1.png': T }, checked: ['c1.png'] });
     await recordPeerHoldings('b', 'image', 'imageLibrary', { mtimes: {}, checked: ['c1.png'] });
     expect(await reconcileMediaOrigins('image')).toBe(1);
