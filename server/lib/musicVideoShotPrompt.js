@@ -10,7 +10,7 @@
  * acts style words out literally) and no lyric, word or onset timings. Nothing
  * is removed from the director's text.
  */
-import { AUDIO_REACTIVE_PERFORMANCE_GUARD, MOTION_CONTINUITY_CLAUSE } from './musicVideoMotion.js';
+import { AUDIO_REACTIVE_PERFORMANCE_GUARD, CONTINUATION_HOLD_BREAK_CLAUSE, MULTI_PERFORMER_INDIVIDUALITY_CLAUSE, NON_VOCAL_MOUTH_LOCK_CLAUSE, isContinuationHandoffScene, MOTION_CONTINUITY_CLAUSE } from './musicVideoMotion.js';
 import { musicVideoCreativeContext, musicVideoDirectorLook } from './musicVideoCreativeContext.js';
 import { shotCameraPrompt } from './cameraMovements.js';
 import { shotActionPrompt } from './musicVideoActionContract.js';
@@ -151,7 +151,14 @@ function composeShotModelInput(project, scene, {
     bible ? addition('creative-context', 'Production bible', musicVideoCreativeContext(project?.concept, { moodBoard: false, look: musicVideoDirectorLook(project), framingScale: sceneFramingScale(scene) })) : null,
     addition('visual-direction', 'Palette and camera rules', visualDirection(project?.visualSpec)),
   ] : [];
+  const characters = asTyped ? 0 : Math.max(scene?.shotSheet?.characters?.length || 0,
+    (shotSubjects(project, scene) || []).filter((subject) => subject?.kind === 'character').length);
+  const lipSync = scene?.shotMode === 'performance' && scene?.performanceStyle !== 'music';
+  const activeSpeaker = String(scene?.direction?.actionContract?.activeSpeaker || '').trim();
   const direction = asTyped ? [] : [
+    isContinuationHandoffScene(scene) ? addition('continuation-handoff', 'Continuation handoff', CONTINUATION_HOLD_BREAK_CLAUSE) : null,
+    characters >= 2 ? addition('performer-individuality', 'Performer individuality', MULTI_PERFORMER_INDIVIDUALITY_CLAUSE) : null,
+    characters >= 1 && !lipSync && !audioReactive && !activeSpeaker ? addition('mouth-lock', 'Mouth lock', NON_VOCAL_MOUTH_LOCK_CLAUSE) : null,
     addition('shot-direction', 'Shot direction', directionClauseForPrompt(project, scene, scene?.direction?.motionClause)),
     addition('lighting-continuity', 'Lighting continuity', MOTION_CONTINUITY_CLAUSE),
     productionMediumAddition(project),
