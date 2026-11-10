@@ -127,7 +127,9 @@ export default function DocumentTemplateCanvas({ project, data, figureRef, audio
     const tick = () => { paint(); handle = requestAnimationFrame(tick); };
     const start = () => { cancelAnimationFrame(handle); handle = requestAnimationFrame(tick); };
     const stop = () => { cancelAnimationFrame(handle); paint(); };
+    const onSeek = () => { heldScene = null; paint(); };
     audio.addEventListener('play', start); audio.addEventListener('pause', stop); audio.addEventListener('ended', stop);
+    audio.addEventListener('seeking', onSeek); audio.addEventListener('seeked', onSeek);
     const figure = figureRef.current;
     figure?.addEventListener('loadeddata', paint, true); figure?.addEventListener('seeked', paint, true);
     Promise.all(['900 40px "MV Stencil"', '400 20px "MV Mono"', '600 20px "MV Mono"'].map(font => document.fonts.load(font))).then(() => { if (active) paint(); });
@@ -135,6 +137,7 @@ export default function DocumentTemplateCanvas({ project, data, figureRef, audio
     return () => {
       active = false; cancelAnimationFrame(handle); paintRef.current = null;
       audio.removeEventListener('play', start); audio.removeEventListener('pause', stop); audio.removeEventListener('ended', stop);
+      audio.removeEventListener('seeking', onSeek); audio.removeEventListener('seeked', onSeek);
       figure?.removeEventListener('loadeddata', paint, true); figure?.removeEventListener('seeked', paint, true);
       for (const img of images.values()) img.onload = null;
     };

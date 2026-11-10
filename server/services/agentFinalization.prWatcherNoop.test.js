@@ -88,7 +88,7 @@ const watcherTask = (prNumbers = [7]) => ({
   id: 'sys-app-pr-watcher-1',
   taskType: 'internal',
   description: 'review new PRs',
-  metadata: { analysisType: 'pr-watcher', prWatcherTargets: { repoFullName: REPO, prNumbers } },
+  metadata: { analysisType: 'pr-watcher', prWatcherTargets: { repoFullName: REPO, repoHost: 'github.com', prNumbers } },
 });
 const noOpSentinel = JSON.stringify({ summary: 'PR already merged.', taskOutcome: {
   status: 'no-action-needed', reason: 'The listed PR is already MERGED with CI green.',
@@ -134,6 +134,8 @@ describe('finalizeAgent — pr-watcher no-op against an already-settled selectio
     ['a target PR is still open', () => getPullRequestStateMock.mockResolvedValue({ status: 'known', state: 'OPEN', detail: null }), {}],
     ['the forge cannot answer', () => getPullRequestStateMock.mockResolvedValue({ status: 'unavailable', state: null, detail: 'offline' }), {}],
     ['the workspace is another repository', () => getOriginInfoMock.mockResolvedValue({ host: 'github.com', fullName: 'someone/else' }), {}],
+    ['the same repository name is on another forge', () => getOriginInfoMock.mockResolvedValue({ host: 'github.example.com', fullName: REPO }), {}],
+    ['the dispatched repository host was not captured', () => {}, { task: { ...watcherTask(), metadata: { analysisType: 'pr-watcher', prWatcherTargets: { repoFullName: REPO, prNumbers: [7] } } } }],
     ['no targets were stamped at dispatch', () => {}, { task: { ...watcherTask(), metadata: { analysisType: 'pr-watcher' } } }],
   ])('keeps the no-op incomplete when %s', async (_name, arrange, overrides) => {
     arrange();

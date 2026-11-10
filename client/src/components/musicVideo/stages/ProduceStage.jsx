@@ -36,6 +36,7 @@ export default function ProduceStage({ board }) {
             summary={footageOptional ? 'Optional for this render style: frames and clips the composition can use' : 'Make the frames and clips each shot still needs'}>
             {hasScenes && (
               <ShotStatusStrip projectId={project.id} scenes={project.scenes} ctx={{
+                project,
                 layered: isLayeredComposition(project),
                 footageOptional,
                 lipSyncBackend: videoSettings.audioReactiveSelected ? 'local' : videoSettings.settings.backend,

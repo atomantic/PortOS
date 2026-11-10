@@ -50,7 +50,7 @@ export function shotAt(scenes, t) {
 // How long a seek may wait for its `portos-mv:seeked` reply before the next one goes anyway.
 const SEEK_REPLY_MS = 1000;
 
-// The overlay page needs the song's analysis and at least one timed line (else the server answers 409).
+// Words need song analysis and at least one timed line; a title card can draw without words.
 const hasTimedLyrics = (project) => Number(project.audioAnalysis?.durationSec) > 0
   && (project.lyricCues || []).some((cue) => Number.isFinite(cue?.startSec) && String(cue?.text || '').trim());
 
@@ -63,7 +63,7 @@ const hasTimedLyrics = (project) => Number(project.audioAnalysis?.durationSec) >
  * while the song plays. Returns the overlay element, or null while there is
  * nothing to draw.
  */
-function useLyricOverlay({ project, enabled, audioRef, time }) {
+function useLyricOverlay({ project, enabled, lyricsVisible, audioRef, time }) {
   const [preview, setPreview] = useState(null);
   const [failed, setFailed] = useState(false);
   const iframeRef = useRef(null);
@@ -75,6 +75,11 @@ function useLyricOverlay({ project, enabled, audioRef, time }) {
   // The opening title card rides on the lyric layer, posted live so its panel's edits show at once.
   const titleCard = useMemo(() => normalizeTitleCard(project.titleCard), [project.titleCard]);
   const titleCardRef = useRef(titleCard);
+  const lyricsVisibleRef = useRef(lyricsVisible);
+  lyricsVisibleRef.current = lyricsVisible;
+  useEffect(() => {
+    if (seekState.current.ready) iframeRef.current?.contentWindow?.postMessage({ type: 'portos-mv:lyrics-visible', visible: lyricsVisible }, '*');
+  }, [lyricsVisible]);
   useEffect(() => {
     titleCardRef.current = titleCard;
     if (seekState.current.ready) iframeRef.current?.contentWindow?.postMessage({ type: 'portos-mv:title-card', card: titleCard }, '*');
@@ -114,6 +119,7 @@ function useLyricOverlay({ project, enabled, audioRef, time }) {
       if (message.type === 'portos-mv:loaded') {
         event.source.postMessage({ type: 'portos-mv:manifest', keys: [] }, '*');
         event.source.postMessage({ type: 'portos-mv:title-card', card: titleCardRef.current }, '*');
+        event.source.postMessage({ type: 'portos-mv:lyrics-visible', visible: lyricsVisibleRef.current }, '*');
         state.ready = true;
         postSeek(audioRef.current?.currentTime || 0);
       } else if (message.type === 'portos-mv:request') {
@@ -655,9 +661,9 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
   const lyricsAvailable = project.lyricOverlayEnabled !== false && hasTimedLyrics(project);
   // The opening title card rides on the lyric layer, so a video with its words switched off still
   // needs that layer for the card; the page itself keeps the words hidden.
-  const cardOnly = project.lyricOverlayEnabled === false && hasTimedLyrics(project) && titleCardVisible(normalizeTitleCard(project.titleCard));
+  const cardOnly = (!lyricsAvailable || !lyricsOn) && titleCardVisible(normalizeTitleCard(project.titleCard));
   const templateCues = documentVariant && (project.composition?.textCues || []).some(cue => cue.text && Number.isFinite(cue.startSec) && cue.endSec > cue.startSec);
-  const { overlay, failed, capture: captureLyrics } = useLyricOverlay({ project, enabled: ((lyricsAvailable || templateCues) && lyricsOn) || cardOnly, audioRef, time });
+  const { overlay, failed, capture: captureLyrics } = useLyricOverlay({ project, enabled: ((lyricsAvailable || templateCues) && lyricsOn) || cardOnly, lyricsVisible: lyricsOn, audioRef, time });
   // The ending (cutting room floor, then credits): it plays when the song ends, and Ending plays it straight away; playing or seeking the song leaves it.
   const { statsOutro, creditsOutro } = project;
   const endingPlan = useMemo(() => endingParts({ statsOutro, creditsOutro }), [statsOutro, creditsOutro]);

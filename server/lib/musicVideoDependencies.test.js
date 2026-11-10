@@ -80,6 +80,8 @@ it('marks a selected frame stale when its prompt, camera, location, cast or refe
   scene.camera = { move: 'push', speed: 'slow' };
   scene.shotSheet = { ...scene.shotSheet, cameraId: 'cam-2' };
   expect(frameState(project, scene, frame).reasons).toEqual(['Camera changed']);
+  delete scene.shotSheet.cameraId;
+  expect(frameState(project, scene, frame).reasons).toEqual(['Camera changed']);
   scene.shotSheet = { ...scene.shotSheet, cameraId: 'cam-1', location: 'Alley' };
   expect(frameState(project, scene, frame).reasons).toEqual(['Location changed']);
   scene.shotSheet = { cameraId: 'cam-1', location: 'Harbor', characters: ['Ben'] };
@@ -91,11 +93,14 @@ it('marks a selected frame stale when its prompt, camera, location, cast or refe
   expect(frameState(project, scene, frame).status).toBe('current');
 });
 
-it('backfills a composed prompt by inclusion and leaves an unrecorded still unknown without blocking selection', () => {
+it('keeps ambiguous legacy prompt inclusion unknown without blocking selection, but detects a definite replacement', () => {
   const scene = frameShot();
   const project = { scenes: [scene] };
   const composed = { kind: 'image', assetId: 'a.png', prompt: 'Style. Ada rides away at dusk, grain.' };
-  expect(frameState(project, scene, composed)).toEqual({ status: 'current', reasons: [] });
+  expect(frameState(project, scene, composed).status).toBe('unknown');
+  expect(frameState(project, scene, { ...composed, prompt: scene.framePrompt })).toEqual({ status: 'current', reasons: [] });
+  scene.framePrompt = 'Ada rides';
+  expect(frameState(project, scene, composed).status).toBe('unknown');
   const rewritten = { ...composed, prompt: 'A different street' };
   expect(frameState(project, scene, rewritten)).toEqual({ status: 'stale', reasons: ['Frame prompt changed'] });
   const imported = { kind: 'image', assetId: 'a.png', prompt: null };
@@ -105,6 +110,21 @@ it('backfills a composed prompt by inclusion and leaves an unrecorded still unkn
   const clip = presentMusicVideoDependencies(project).scenes[0].takes[1];
   expect(clip.dependencyState.status).toBe('stale');
   expect(clip.dependencyState.reasons).toContain('Frame prompt changed');
+});
+
+it('records an unset reference choice so later adding a reference stales the frame', () => {
+  const scene = frameShot({ frameReferenceIds: undefined });
+  const project = { scenes: [scene] };
+  const frame = { kind: 'image', assetId: 'a.png', frameDependencies: captureImageFrameDependencies(project, scene) };
+  const older = { ...frame, frameDependencies: { ...frame.frameDependencies,
+    references: frame.frameDependencies.references.filter((ref) => ref.role !== 'frameReferences') } };
+  expect(frameState(project, scene, frame).status).toBe('current');
+  expect(frameState(project, scene, older).status).toBe('current');
+  scene.frameReferenceIds = ['new-reference.png'];
+  expect(frameState(project, scene, frame)).toEqual({ status: 'stale', reasons: ['Reference image replaced'] });
+  expect(frameState(project, scene, older)).toEqual({ status: 'stale', reasons: ['Reference image replaced'] });
+  scene.frameReferenceIds = undefined;
+  expect(frameState(project, scene, frame).status).toBe('current');
 });
 
 it('lists thirty rewritten shots as stale frames from one read', () => {

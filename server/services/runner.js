@@ -10,7 +10,7 @@ import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { atomicWrite, ensureDir, tryReadFile, PATHS } from '../lib/fileUtils.js';
 import { resolveSpawnCwd } from '../lib/spawnCwd.js';
-import { hasModelFlag, extractBakedModel, isCodexProvider } from '../lib/providerModels.js';
+import { hasModelFlag, extractBakedModel, isCodexProvider, isClaudeProvider } from '../lib/providerModels.js';
 import { buildCliArgs, prepareCliPrompt } from '../lib/cliProviderArgs.js';
 import { imageReadOneShotArgs, toolFreeOneShotArgs } from '../lib/providerVendors.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
@@ -446,7 +446,13 @@ async function executeAdmittedCliRun({ runId, provider, prompt, workspacePath, s
   // CLAUDECODE strip) — see buildCliChildEnv. `guard: true` prepends the pm2
   // shim onto the final PATH so an unrestricted agent can't `pm2 kill` the
   // shared daemon.
+  // Restricted Claude image reads ignore settings files. Carry only the user's
+  // configured environment forward so Bedrock/gateway authentication still works.
+  const visionSettingsEnv = vision && toolFree && isClaudeProvider(provider)
+    ? await import('./agentCliSpawning.js').then(({ getClaudeSettingsEnv }) => getClaudeSettingsEnv())
+    : null;
   const childEnv = buildCliChildEnv({
+    before: visionSettingsEnv,
     provider,
     cwd: vision?.invocation.cwd || effectiveCwd,
     guard: true,

@@ -26,7 +26,7 @@ export default function ShotFinalRender({ project, scene, onChange, onLocal, fie
   if (!status?.available) return null;
   const shot = status.shots.find((entry) => entry.sceneId === sceneId);
   const rendering = live?.state === 'rendering' || (!live && shot?.rendering);
-  const rendered = shot?.state === 'rendered' && !rendering;
+  const rendered = shot?.state === 'rendered' && !rendering && live?.state !== 'failed';
   const failed = !rendering && !rendered && (live?.state === 'failed' || shot?.state === 'failed');
   const failedError = live?.state === 'failed' && live.error ? live.error : shot?.error;
   const file = rendered ? shot.files[shot.files.length - 1] : null;

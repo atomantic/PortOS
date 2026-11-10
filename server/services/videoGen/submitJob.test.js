@@ -816,6 +816,15 @@ describe('shot intent at the video submission boundary', () => {
       await fal({ falDuration: 6 });
       expect(mocks.enqueueJob).toHaveBeenCalledTimes(1);
     });
+
+    it('refuses a shared return beyond the model\'s longest clip before queue spend', async () => {
+      const project = shortShot({ clipLengthSec: undefined });
+      project.scenes.push({ sceneId: 'return', startSec: 21, endSec: 22, sourceTake: { sceneId: 's' } });
+      mocks.getMusicVideoProject.mockResolvedValue(project);
+      await expect(fal({ falModelId: 'fal-ai/minimax/hailuo-02/standard/image-to-video', falDuration: 10 }))
+        .rejects.toMatchObject({ code: 'MUSIC_VIDEO_CLIP_LENGTH_UNSUPPORTED', status: 422, context: { requestedSec: 12, supportedSec: [6, 10] } });
+      expect(mocks.enqueueJob).not.toHaveBeenCalled();
+    });
   });
 
   it('refuses a later shortened scene before queue spend and rolls back staged inputs', async () => {

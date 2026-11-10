@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
+import { mergeTakeColorMatch } from '../../lib/musicVideoTakes.js';
 import { COLOR_MATCH_LIMITS, colorMatchGroupOf, selectedColorMatchTake, shotSkipsColorMatch } from '../../../../server/lib/shotColorMatch.js';
 import { measureMusicVideoColorMatch, updateMusicVideoTakeColorMatch } from '../../services/apiMusicVideo.js';
 
@@ -22,6 +23,8 @@ const FIELDS = [
 export default function ShotColorMatch({ project, scene, onApplied, fieldId }) {
   const id = (name) => (fieldId ? fieldId(name) : `mv-scene-${scene.sceneId}-${name}`);
   const camera = (project?.cameras || []).find((entry) => entry.id === scene?.shotSheet?.cameraId) || null;
+  const latest = useRef({ scene, projectId: project?.id });
+  latest.current = { scene, projectId: project?.id };
   const take = selectedColorMatchTake(scene);
   const stored = take?.colorMatch || null;
   const [busy, setBusy] = useState(false);
@@ -32,7 +35,9 @@ export default function ShotColorMatch({ project, scene, onApplied, fieldId }) {
   const applyLocal = (resultScene) => {
     setDrafts({});
     setAmount(null);
-    if (resultScene?.takes) onApplied?.({ takes: resultScene.takes });
+    if (resultScene?.takes && resultScene.sceneId === latest.current.scene.sceneId && project?.id === latest.current.projectId) {
+      onApplied?.({ takes: mergeTakeColorMatch(latest.current.scene, resultScene.takes) });
+    }
   };
 
   const save = (patch) => {

@@ -113,8 +113,10 @@ export function sceneAttention(scene, ctx = {}) {
   // A return shows the source shot's frame and clip, so those count as present.
   const codeRendered = scene.codeClip && playableClipId;
   if (!isSelfDrawnLayer(layer) && !frameId && !codeRendered) codes.push('missing-frame');
-  if (slotDependencyState(shown, 'image', frameId)?.status === 'stale'
-    || slotDependencyState(shown, 'endImage', shown.endImageId)?.status === 'stale') codes.push('frame-stale');
+  const usesEnd = !resolved && shown.endFrameOff !== true
+    && (layer === 'footage' || (layer === 'still' && isEndFrameImageEffect(shown.imageEffect)));
+  if (!isSelfDrawnLayer(layer) && (slotDependencyState(shown, 'image', frameId)?.status === 'stale'
+    || (usesEnd && slotDependencyState(shown, 'endImage', shown.endImageId)?.status === 'stale'))) codes.push('frame-stale');
   if (layer === 'footage' && !footageOptional && !playableClipId) codes.push('missing-clip');
   if (layer !== 'footage' && !sceneHasAuthoredSpan(scene)) codes.push('no-span');
   if (layer === 'footage' && sceneUsesAuthoredTiming(scene) && sceneHasAuthoredSpan(scene)
@@ -126,13 +128,13 @@ export function sceneAttention(scene, ctx = {}) {
   if (!locked && sceneHasPendingDecision(scene, { kinds: takeKindsInUse(scene, layer) })) codes.push('candidates-pending');
   if (contract && scene.referenceImageId) {
     const selected = sceneTakeList(scene, 'image').find((take) => take.assetId === scene.referenceImageId);
-    if (currentPlateEvidence(scene, selected)?.verdict !== 'pass') codes.push('plate-unverified');
+    if (currentPlateEvidence(scene, selected, ctx.project)?.verdict !== 'pass') codes.push('plate-unverified');
   }
   if (failed.frame?.[scene.sceneId] || failed.video?.[scene.sceneId]) codes.push('last-failure');
-  const badSelected = scene.selectedTakeMarkedBad || (ctx.assetMarks && (
-    (scene.referenceImageId && ctx.assetMarks[`image:${scene.referenceImageId}`] === 'bad') ||
-    (scene.endImageId && ctx.assetMarks[`image:${scene.endImageId}`] === 'bad') ||
-    (scene.videoHistoryId && ctx.assetMarks[`video:${scene.videoHistoryId}`] === 'bad')
+  const badSelected = shown.selectedTakeMarkedBad || (ctx.assetMarks && (
+    (frameId && ctx.assetMarks[`image:${frameId}`] === 'bad') ||
+    (usesEnd && shown.endImageId && ctx.assetMarks[`image:${shown.endImageId}`] === 'bad') ||
+    (playableClipId && ctx.assetMarks[`video:${playableClipId}`] === 'bad')
   ));
   if (badSelected) codes.push('bad-take');
   return codes;

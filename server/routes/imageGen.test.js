@@ -248,6 +248,29 @@ describe('Image Gen Routes', () => {
     vi.clearAllMocks();
   });
 
+  it('removes multipart uploads when queue submission fails after staging', async () => {
+    getSettings.mockResolvedValue({ imageGen: { mode: 'codex', codex: { enabled: true } } });
+    mediaJobQueue.enqueueJob.mockRejectedValueOnce(new Error('Synthetic queue failure'));
+    const unlink = vi.spyOn(fileUtils, 'unlinkGuarded');
+    const server = await startLoopbackServer(app);
+    try {
+      const form = new FormData();
+      form.set('prompt', 'a red cube');
+      form.set('initImage', new Blob(['synthetic image'], { type: 'image/png' }), 'reference.png');
+      const response = await fetch(`http://127.0.0.1:${server.address().port}/api/image-gen/generate`, { method: 'POST', body: form });
+      expect(response.status).toBe(500);
+      await response.json();
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalled();
+      expect(unlink).toHaveBeenCalled();
+      const uploadPath = unlink.mock.calls[0][0];
+      await expect(import('fs/promises').then(({ access }) => access(uploadPath))).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      getSettings.mockResolvedValue({ imageGen: { mode: 'external' } });
+      unlink.mockRestore();
+      await closeLoopbackServer(server);
+    }
+  });
+
   it('refuses synchronous image dispatch if the catalog changes after preparation', async () => {
     const project = { scenes: [{ sceneId: 's1' }], castAndSets: { source: 'catalog', catalogCheckin: { approved: true, problems: [], basis: 'original' } } };
     catalogDispatch.getProject.mockResolvedValueOnce(project).mockResolvedValueOnce(project);

@@ -111,9 +111,9 @@ function captureDependencies({ body, params, scene, prepared, project }) {
  * A shot with a hand-set source clip length never renders shorter: a lane or
  * model that cannot reach it is refused with the lengths it delivers, not clamped.
  */
-function assertClipLength({ body, scene, backend }) {
+function assertClipLength({ body, scene, backend, project }) {
   const modelId = backend === VIDEO_GEN_MODE.FAL ? body.falModelId : backend === VIDEO_GEN_MODE.RUNWAY ? body.runwayModelId : null;
-  const short = clipLengthShortfall(scene, backend, body, modelId);
+  const short = clipLengthShortfall(scene, backend, body, modelId, project?.scenes);
   if (!short) return;
   const lengths = `This model renders ${short.supported.join(', ')} s.`;
   throw new ServerError(`A ${short.requestedSec} s source clip is longer than this render delivers. ${lengths} Pick another model or shorten the source clip length.`,
@@ -122,12 +122,14 @@ function assertClipLength({ body, scene, backend }) {
 
 // The priced hosted backends: each quotes the take it would render for a scene.
 const SCENE_TAKE_BY_BACKEND = {
-  [VIDEO_GEN_MODE.RUNWAY]: ({ body, scene }) => runwaySceneTake({
+  [VIDEO_GEN_MODE.RUNWAY]: ({ body, scene, project }) => runwaySceneTake({
     scene,
+    scenes: project.scenes,
     videoSettings: { runwayModelId: body.runwayModelId, runwayDuration: body.runwayDuration, runwayResolution: body.runwayResolution },
   }),
   [VIDEO_GEN_MODE.FAL]: ({ body, scene, project, performance }) => falSceneTake({
     scene,
+    scenes: project.scenes,
     videoSettings: {
       falMusicModelId: (performance?.shotInstruction?.performanceStyle === 'music' ? performance.modelId : null)
         ?? project.videoSettings?.falMusicModelId ?? null,
@@ -238,7 +240,7 @@ export async function applyMusicVideoSubmissionGuards({ body, params, prepared, 
   applyActionContract({ params, scene, performance });
   await assertSourceAudioCurrent({ project, prepared });
   captureDependencies({ body, params, scene, prepared, project });
-  assertClipLength({ body, scene, backend });
+  assertClipLength({ body, scene, backend, project });
   stampSceneTakeCost({ body, params, scene, project, performance, backend });
   return composedAdditions;
 }

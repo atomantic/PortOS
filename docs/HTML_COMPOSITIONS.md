@@ -313,7 +313,8 @@ and automatic chorus glitch), still zoom/pan, footage push, grain and vignette
 from zero (off) to full strength. The default motion strengths are 100%, grain
 is 9%, and vignette is 50%, preserving existing frames. These are separate from
 chosen shot glitches, cut transitions, and the finishing Film look. A note warns
-when template texture stacks with Film look texture.
+when template texture stacks with Film look texture. Planned still-camera moves
+remain part of the shot when the template's default motion is reduced or off.
 
 Each shot's Film look editor can override individual additions or **Follow video**.
 Sparse `templateEffects` records on the video and shot carry these choices into

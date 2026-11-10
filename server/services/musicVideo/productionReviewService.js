@@ -32,8 +32,8 @@ export async function assertMusicVideoSceneReview(tag, kind = null) {
   const project = await requireProject(tag.projectId);
   const scene = project.scenes?.find((entry) => entry.sceneId === tag.sceneId);
   const take = scene && selectedPlateTake(scene);
-  if (kind === 'video' && currentPlateEvidence(scene, take)?.checks.some((check) => check.id === 'render-quality' && check.status === 'fail')
-    && !renderQualityAcknowledged(scene, take)) throw new ServerError('Rendering defect: regenerate this still or explicitly acknowledge its defect before animation.', { status: 409, code: 'MUSIC_VIDEO_RENDER_QUALITY_REQUIRED' });
+  if (kind === 'video' && currentPlateEvidence(scene, take, project)?.checks.some((check) => check.id === 'render-quality' && check.status === 'fail')
+    && !renderQualityAcknowledged(scene, take, project)) throw new ServerError('Rendering defect: regenerate this still or explicitly acknowledge its defect before animation.', { status: 409, code: 'MUSIC_VIDEO_RENDER_QUALITY_REQUIRED' });
   assertProductionApproval(project, 'storyboard');
   const run = project.productionRuns?.find(r => r.id === tag.productionRunId);
   const stillsOnly = kind === 'image' && run?.stopBefore === 'clips';

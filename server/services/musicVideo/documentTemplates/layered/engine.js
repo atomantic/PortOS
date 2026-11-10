@@ -130,7 +130,9 @@
   // offsets in frame fractions, rotation in radians. Never shows a frame edge.
   function cameraView(scene, k) {
     const effects = templateEffects(scene);
-    const strength = scene.media?.kind === 'video' ? effects.footagePush : effects.stillMotion;
+    // A planned still camera belongs to the shot; additions scale only default motion.
+    const planned = scene.media?.kind !== 'video' && RIG && scene.camera?.move && RIG.has(scene.camera.move);
+    const strength = planned ? 1 : scene.media?.kind === 'video' ? effects.footagePush : effects.stillMotion;
     if (strength === 0) return { scale: 1, x: 0, y: 0, rotation: 0 };
     if (!RIG) return { scale: strength === 1 ? lerp(1.04, 1.1, easeInOut(k)) : 1 + (lerp(1.04, 1.1, easeInOut(k)) - 1) * strength, x: 0, y: 0, rotation: 0 };
     const original = moveFor(scene);

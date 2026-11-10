@@ -7,7 +7,7 @@ import useMounted from '../../hooks/useMounted.js';
 import socket from '../../services/socket';
 import * as api from '../../services/api.js';
 import Pill from '../ui/Pill';
-import { timeAgo } from '../../utils/formatters';
+import { formatCount, timeAgo } from '../../utils/formatters';
 import {
   FEDERATED_MEDIA_KINDS,
   resolvePeerMediaReadiness,
@@ -25,18 +25,18 @@ const CUDA_META = {
 
 const LANES = [
   { id: 'gpu', label: 'Local GPU', help: 'Serialized — one render at a time.' },
-  { id: 'cloud', label: 'Cloud CLI', help: 'Parallel — external quota, no local GPU.' },
+  { id: 'cloud', label: 'Cloud CLI', help: 'Parallel — limits apply per provider.', aggregate: true },
   { id: 'remote', label: 'Federated', help: 'Parallel — rendered on a peer.' },
 ];
 
-function LaneRow({ label, help, lane }) {
-  const saturated = lane.running >= lane.limit;
+function LaneRow({ label, help, lane, aggregate = false }) {
+  const saturated = !aggregate && lane.running >= lane.limit;
   return (
     <div className="rounded-lg border border-port-border bg-port-bg px-3 py-2">
       <div className="flex items-center gap-2">
         <span className="text-xs font-medium text-gray-300">{label}</span>
         <span className={`ml-auto text-xs font-mono ${saturated ? 'text-port-warning' : 'text-gray-400'}`}>
-          {lane.running}/{lane.limit}
+          {aggregate ? `${formatCount(lane.running)} active` : `${lane.running}/${lane.limit}`}
         </span>
       </div>
       <div className="mt-0.5 text-[10px] text-gray-600">
@@ -142,8 +142,8 @@ export default function MediaCapacityPanel({ media }) {
       ) : (
         <>
           <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
-            {LANES.map(({ id, label, help }) => (
-              <LaneRow key={id} label={label} help={help} lane={media.lanes[id]} />
+            {LANES.map(({ id, label, help, aggregate }) => (
+              <LaneRow key={id} label={label} help={help} aggregate={aggregate} lane={media.lanes[id]} />
             ))}
           </div>
 

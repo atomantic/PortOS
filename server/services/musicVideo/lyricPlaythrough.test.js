@@ -65,6 +65,15 @@ describe('lyric timing playthrough', () => {
     await expect(buildLyricPlaythroughPreview({ ...project, lyricCues: [cue('untimed', null)] })).rejects.toMatchObject({ status: 409, code: 'NO_TIMED_LYRICS' });
   });
 
+  it('draws an instrumental title overlay without admitting an untimed lyric check', async () => {
+    const titleOnly = { ...project, lyricCues: [], composition: { mode: 'composed' }, titleCard: { enabled: true, title: 'Instrumental', startSec: 0, endSec: 4 } };
+    const preview = await buildLyricPlaythroughPreview(titleOnly, { overlay: true });
+    const data = portosData(preview.html);
+    expect(preview.html).toContain('\"title\":\"Instrumental\"');
+    expect(data.lyrics).toEqual([]);
+    await expect(buildLyricPlaythroughPreview(titleOnly)).rejects.toMatchObject({ status: 409, code: 'NO_TIMED_LYRICS' });
+  });
+
   it('draws the aligned words with the shipped template over the lyrics laid out as scenes, with no project document', async () => {
     const preview = await buildLyricPlaythroughPreview(project);
     const data = portosData(preview.html);

@@ -19,8 +19,8 @@ const LTX_REFERENCES_MODE = 'ltxReferences';
 const LTX_IC_MODE = 'ic-ingredients-25';
 const LTX_MAX_REFERENCES = 8;
 
-const grokSceneRequestDuration = (scene, settings, target = null) => {
-  const span = shotRequestSpanSec(scene);
+const grokSceneRequestDuration = (scene, settings, target = null, scenes = null) => {
+  const span = shotRequestSpanSec(scene, scenes);
   return target?.grokDuration || (span != null ? grokCoverage(span).requestSec : settings?.grokDuration);
 };
 
@@ -105,6 +105,7 @@ async function buildShortClipBody(project, scene, input) {
   const projectLtx = settings.generationMode === LTX_REFERENCES_MODE && localCutaway && model?.runtime === 'ltx25' && !scene.setReference?.greyboxShotId;
   const useLtx = localCutaway && (typeof card.ltxReferences === 'boolean' ? card.ltxReferences : projectLtx);
   let ltxFiles = null;
+  let ltxFrames = null;
   if (useLtx) {
     const { loadSceneCastMedia } = await import('./castGuideMedia.js');
     const castMedia = await loadSceneCastMedia(scene, { project });
@@ -112,20 +113,24 @@ async function buildShortClipBody(project, scene, input) {
       ? card.expectedClipReferenceFiles
       : musicVideoClipConditioningReferences(project, scene, castMedia, { limit: LTX_MAX_REFERENCES }).map((ref) => ref.imageId);
     if (!ltxFiles.length) throw new ServerError('Choose at least one clip reference for LTX 2.5 References', { status: 422, code: 'MUSIC_VIDEO_CLIP_REFERENCE_MISSING' });
-    if (ltxReferenceFrames(scene, input.target?.numFrames) == null) {
+    const need = shotRequestSpanSec(scene, project.scenes);
+    const coverScene = need != null ? { ...scene, startSec: 0, endSec: need } : scene;
+    const coveringFrames = ltxReferenceFrames(coverScene);
+    ltxFrames = ltxReferenceFrames(coverScene, input.target?.numFrames);
+    if (coveringFrames == null || ltxFrames == null || ltxFrames < coveringFrames) {
       throw new ServerError('This shot is too long for one LTX reference clip. Split it or choose a shorter clip length.', { status: 422, code: 'MUSIC_VIDEO_CLIP_TOO_LONG' });
     }
   }
   const songAudio = useLtx || hostedPerformance ? false : typeof card.songAudio === 'boolean' ? card.songAudio : settings.generationMode === 'suppliedAudio';
   const mode = useLtx ? LTX_IC_MODE : audioReactive || songAudio ? 'a2v' : 'image';
-  const falFields = settings.backend === 'fal' ? falTakeRequestFields(falSceneTake({ scene, videoSettings: settings, songDurationSec: project?.audioAnalysis?.durationSec ?? null })) : null;
-  const runwayFields = settings.backend === 'runway' ? runwayTakeRequestFields(runwaySceneTake({ scene, videoSettings: settings })) : null;
-  const providerFields = settings.backend === 'grok' ? { grokDuration: grokSceneRequestDuration(scene, settings, input.target) }
+  const falFields = settings.backend === 'fal' ? falTakeRequestFields(falSceneTake({ scene, scenes: project.scenes, videoSettings: settings, songDurationSec: project?.audioAnalysis?.durationSec ?? null })) : null;
+  const runwayFields = settings.backend === 'runway' ? runwayTakeRequestFields(runwaySceneTake({ scene, scenes: project.scenes, videoSettings: settings })) : null;
+  const providerFields = settings.backend === 'grok' ? { grokDuration: grokSceneRequestDuration(scene, settings, input.target, project.scenes) }
     : falFields || runwayFields ? falFields || runwayFields
       : settings.backend === 'gemini' ? {}
         : settings.backend === 'local' ? {
           modelId: settings.modelId || undefined,
-          ...(useLtx ? { numFrames: ltxReferenceFrames(scene, input.target?.numFrames), icReferenceImageFiles: ltxFiles }
+          ...(useLtx ? { numFrames: ltxFrames, icReferenceImageFiles: ltxFiles }
             : input.target?.numFrames ? { numFrames: input.target.numFrames } : {}),
           disableAudio: !preMusicClipSound(scene),
         } : { grokDuration: settings.grokDuration, disableAudio: !preMusicClipSound(scene) };

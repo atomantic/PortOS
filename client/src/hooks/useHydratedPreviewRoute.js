@@ -62,6 +62,7 @@ export default function useHydratedPreviewRoute(items, options) {
   // map as a dependency and re-running on its own result (`useGallerySidecars`
   // does the same).
   const attemptedRef = useRef(new Set());
+  const recordVersions = useRef(new Map());
   // Bumped when a server push names the open record, so the lookup effect re-runs.
   const [refetchTick, setRefetchTick] = useState(0);
 
@@ -73,6 +74,7 @@ export default function useHydratedPreviewRoute(items, options) {
     const lookupKey = `${kind}:${ref}`;
     const onChanged = (event) => {
       if (event?.kind !== kind || !Array.isArray(event.ids) || !event.ids.includes(ref)) return;
+      recordVersions.current.set(lookupKey, (recordVersions.current.get(lookupKey) || 0) + 1);
       attemptedRef.current.delete(lookupKey);
       if (event.op === 'delete') {
         // Gone server-side: nothing to refetch; fall back to the host item.
@@ -95,9 +97,10 @@ export default function useHydratedPreviewRoute(items, options) {
     const lookupKey = `${kind}:${ref}`;
     if (!ref || attemptedRef.current.has(lookupKey)) return undefined;
     let cancelled = false;
+    const version = recordVersions.current.get(lookupKey) || 0;
     setFailed((prev) => (prev.has(lookupKey) ? withoutKey(prev, lookupKey) : prev));
     const settle = (record) => {
-      if (cancelled) return;
+      if (cancelled || version !== (recordVersions.current.get(lookupKey) || 0)) return;
       if (record) {
         attemptedRef.current.add(lookupKey);
         setRecords((prev) => new Map(prev).set(lookupKey, record));

@@ -17,7 +17,6 @@ const LUMA_G = 0.7152;
 const LUMA_B = 0.0722;
 const EPS = 1e-4;
 const LEVEL_FLOOR = 0.02;
-const CHROMA_FLOOR = 0.01;
 
 export const COLOR_MATCH_IDENTITY = Object.freeze({
   black: 0, white: 1, gamma: 1, balanceR: 1, balanceB: 1, saturation: 1,
@@ -164,7 +163,8 @@ function medianColorStats(list) {
 /**
  * The correction that takes `source` toward `reference`.
  * White balance first (green-normalized ratios), then black, white and gamma
- * on the luma percentiles, then saturation. Each parameter is clamped; a value
+ * on the luma percentiles. Saturation stays unchanged because mean chroma
+ * cannot separate a color cast from color variation. Each parameter is clamped; a value
  * the clamp had to move is an outlier, so a bad render is flagged rather than forced.
  */
 // Leading underscore: the render calls solveProjectColorMatch and the filters.
@@ -197,10 +197,9 @@ export function _solveColorMatch(source, reference) {
   } else {
     white = reference.lumaMean / Math.max(balancedY, 1e-4);
   }
-  const srcMag = Math.hypot(source.chromaU, source.chromaV);
-  const refMag = Math.hypot(reference.chromaU, reference.chromaV);
-  const saturation = srcMag > CHROMA_FLOOR ? (refMag / srcMag) / white / wbScale : 1;
-  return clampCorrection({ black, white, gamma, balanceR, balanceB, saturation });
+  // Mean chroma measures a color cast, not color variation. White balance
+  // already corrects that cast; these statistics cannot justify desaturation.
+  return clampCorrection({ black, white, gamma, balanceR, balanceB, saturation: 1 });
 }
 
 /** The correction a render applies, or null when matching is off, at zero strength, or already identity. */
@@ -266,9 +265,9 @@ const fmt = (n) => Number(n).toFixed(6);
 export function colorMatchVideoFilter(correction) {
   if (!correction) return null;
   const curve = (channel, balance) => `pow(clip(${channel}/255*${fmt(balance)}*${fmt(correction.white)}+${fmt(correction.black)}\\,0\\,1)\\,${fmt(correction.gamma)})`;
-  const red = curve('r', correction.balanceR);
-  const green = curve('g', 1);
-  const blue = curve('b', correction.balanceB);
+  const red = curve('r(X\\,Y)', correction.balanceR);
+  const green = curve('g(X\\,Y)', 1);
+  const blue = curve('b(X\\,Y)', correction.balanceB);
   const y = `(${LUMA_R}*(${red})+${LUMA_G}*(${green})+${LUMA_B}*(${blue}))`;
   const sat = fmt(correction.saturation);
   const chan = (curved) => `clip((${y}+((${curved})-${y})*${sat})*255\\,0\\,255)`;

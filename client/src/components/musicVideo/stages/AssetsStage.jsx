@@ -97,7 +97,8 @@ export default function AssetsStage({ board }) {
   const run = (work) => { setWorking(true); setError(null); return work().catch((err) => setError(err?.message || 'That did not work')).finally(() => setWorking(false)); };
   // Tapping the active mark clears it.
   const toggleMark = (mark, options = {}) => run(async () => {
-    const next = picked.mark === mark ? null : mark;
+    const previousMark = picked.mark || null;
+    const next = previousMark === mark ? null : mark;
     const opt = { ...(options.keepInUse ? { keepInUse: true } : {}), silent: true };
     const result = await markMusicVideoPoolAssets(projectId, [{ kind: picked.kind, assetId: picked.assetId }], next, opt);
     // Bad rejects its takes on the shots not using it; the shots pick that up at once.
@@ -113,25 +114,39 @@ export default function AssetsStage({ board }) {
           : `${name} flagged (selected take marked bad)`;
       });
       const toastText = summaries.join(' · ');
+      let undoing = false;
       toast((t) => (
         <span className="flex items-center gap-3 text-xs">
           <span>{toastText}</span>
           <button
             type="button"
             onClick={async () => {
+              if (undoing) return;
+              undoing = true;
+              const conflicts = [];
               try {
-                const unmark = await markMusicVideoPoolAssets(projectId, [{ kind: picked.kind, assetId: picked.assetId }], null, { silent: true });
-                takes?.applyPoolMarks?.(projectId, unmark);
+                await markMusicVideoPoolAssets(projectId, [{ kind: picked.kind, assetId: picked.assetId }], previousMark, { expectedMark: 'bad', silent: true })
+                  .then((unmark) => {
+                    takes?.applyPoolMarks?.(projectId, unmark);
+                    setPool((prev) => prev.map((item) => (poolKey(item) === poolKey(picked) && item.mark === 'bad' ? { ...item, mark: previousMark } : item)));
+                  }).catch((err) => {
+                    if (err?.code !== 'MUSIC_VIDEO_UNDO_CONFLICT') throw err;
+                    conflicts.push('asset mark');
+                  });
                 for (const change of result.changes) {
-                  if (change.previousTakeId) {
-                    const placed = await selectMusicVideoSceneTake(projectId, change.sceneId, change.previousTakeId, { silent: true });
-                    if (placed?.scene) takes?.applyScene?.(projectId, placed.scene);
-                  }
+                  if (!change.previousTakeId) continue;
+                  await selectMusicVideoSceneTake(projectId, change.sceneId, change.previousTakeId, { expectedSelectedAssetId: change.toAssetId ?? null, silent: true })
+                    .then((placed) => { if (placed?.sceneId) takes?.applyScene?.(projectId, placed); })
+                    .catch((err) => {
+                      if (err?.code !== 'MUSIC_VIDEO_UNDO_CONFLICT') throw err;
+                      conflicts.push(shotNumbers.has(change.sceneId) ? `shot ${shotNumbers.get(change.sceneId)}` : 'shot selection');
+                    });
                 }
-                setPool((prev) => prev.map((item) => (poolKey(item) === poolKey(picked) ? { ...item, mark: null } : item)));
+                if (conflicts.length) toast.error(`Kept newer decisions for ${conflicts.join(', ')}. Other unchanged choices were restored.`);
               } catch (err) {
                 toast.error(err?.message || 'Failed to undo');
               } finally {
+                undoing = false;
                 toast.dismiss(t.id);
               }
             }}

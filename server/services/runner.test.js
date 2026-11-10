@@ -53,6 +53,12 @@ vi.mock('fs/promises', () => ({
   readFile: vi.fn().mockResolvedValue('{}'),
 }));
 
+vi.mock('./agentCliSpawning.js', () => ({ getClaudeSettingsEnv: vi.fn(async () => ({ AWS_PROFILE: 'example-bedrock' })) }));
+vi.mock('./visionCli.js', () => ({ prepareCliVisionRun: vi.fn(async () => ({
+  invocation: { command: 'claude', args: ['-p', '-', '--add-dir', '/example/outside'], stdin: 'Read the staged image', cwd: process.cwd() },
+  cleanup: async () => {},
+})) }));
+
 const { spawn } = await import('../lib/childProcess.js');
 const { writeFile, readFile } = await import('fs/promises');
 const { atomicWrite, tryReadFile } = await import('../lib/fileUtils.js');
@@ -373,6 +379,22 @@ describe('patchRunMetadata — serialized merges', () => {
       return writeFile(filePath, payload);
     });
   });
+});
+
+it('confines an untrusted Claude image read while preserving configured authentication', async () => {
+  const child = makeChild();
+  spawn.mockReturnValueOnce(child);
+  await executeCliRun({ runId: 'restricted-image', provider: { id: 'claude-code', type: 'cli', command: 'claude', args: [] },
+    prompt: 'Inspect this image', workspacePath: TEST_WORKSPACE, screenshots: ['frame.png'], toolFree: true });
+  const [, args, options] = spawn.mock.calls[0];
+  expect(args).toContain('--restricted');
+  expect(args[args.indexOf('--tools') + 1]).toBe('Read');
+  expect(args).not.toContain('--add-dir');
+  expect(options.cwd).toBe(TEST_WORKSPACE);
+  expect(options.env.AWS_PROFILE).toBe('example-bedrock');
+  child.stdout.emit('data', Buffer.from('A staged image'));
+  child.emit('close', 0);
+  await flushMicrotasks();
 });
 
 describe('executeCliRun execution ownership', () => {

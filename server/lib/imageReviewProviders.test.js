@@ -9,10 +9,13 @@ import { GROK_BUILTIN_TOOLS } from './grok.js';
 const cli = (id, command, extra = {}) => ({ id, type: 'cli', command, enabled: true, ...extra });
 
 describe('imageReadOneShotArgs', () => {
-  it('keeps only the Read tool for Claude Code and drops approval bypasses and MCP servers', () => {
-    const { args, imageRead } = imageReadOneShotArgs(cli('claude-code', 'claude'), ['-p', '-', '--dangerously-skip-permissions', '--tools', 'Bash,Read']);
+  it('confines Claude image reads to the staged directory and drops wider settings', () => {
+    const { args, imageRead } = imageReadOneShotArgs(cli('claude-code', 'claude'), ['-p', '-', '--dangerously-skip-permissions', '--tools', 'Bash,Read', '--add-dir', '/example/outside', '--settings', '{"permissions":{}}']);
     expect(imageRead).toBe('read-tool');
     expect(args).not.toContain('--dangerously-skip-permissions');
+    expect(args).toContain('--restricted');
+    expect(args).not.toContain('--add-dir');
+    expect(args).not.toContain('--settings');
     expect(args.filter((arg) => arg === '--tools')).toHaveLength(1);
     expect(args[args.indexOf('--tools') + 1]).toBe('Read');
     expect(args).toContain('--strict-mcp-config');

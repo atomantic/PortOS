@@ -99,7 +99,7 @@ export default function BoardStage({ board }) {
   const lipSyncBackend = videoSettings.audioReactiveSelected ? 'local' : videoSettings.settings.backend;
   const songDurationSec = project.audioAnalysis?.durationSec ?? null;
   const attentionCtx = {
-    layered, lipSyncBackend, songDurationSec, failed: sceneMedia.failedScenes,
+    project, layered, lipSyncBackend, songDurationSec, failed: sceneMedia.failedScenes,
     footageOptional: FOOTAGE_OPTIONAL_MODES.has(project.composition?.mode || 'concat'),
     songReview: project.songRevision?.sceneReview || null,
     videoSettings: videoSettings.settings,

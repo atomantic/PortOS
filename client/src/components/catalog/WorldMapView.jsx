@@ -59,7 +59,7 @@ export function useWorldMapView(world) {
  * selected one first. `items`: `{ id, text, x, y }` at marker centers;
  * `unitPerPx` scales the pixel font and marker size.
  */
-export function layoutWorldLabels(items, unitPerPx, fontPx = LABEL_PX) {
+export function layoutWorldLabels(items, unitPerPx, fontPx = LABEL_PX, bounds = null) {
   const h = fontPx * 1.3 * unitPerPx;
   const r = (MARKER_PX + 2) * unitPerPx;
   const box = (x, y, w, hh) => ({ x0: x - w / 2, x1: x + w / 2, y0: y - hh / 2, y1: y + hh / 2 });
@@ -71,7 +71,8 @@ export function layoutWorldLabels(items, unitPerPx, fontPx = LABEL_PX) {
     const side = r + w / 2;
     const spots = [[item.x + side, item.y], [item.x - side, item.y], [item.x, item.y - r - h / 2], [item.x, item.y + r + h / 2]];
     for (let step = 1; step <= 3; step += 1) spots.push([item.x + side, item.y - h * step], [item.x + side, item.y + h * step], [item.x - side, item.y - h * step], [item.x - side, item.y + h * step]);
-    const spot = spots.map(([x, y]) => box(x, y, w, h)).find((candidate) => !hits(candidate));
+    const spot = spots.map(([x, y]) => box(x, y, w, h)).find((candidate) => !hits(candidate) && (!bounds
+      || (candidate.x0 >= bounds.x0 && candidate.x1 <= bounds.x1 && candidate.y0 >= bounds.y0 && candidate.y1 <= bounds.y1)));
     if (!spot) continue;
     placed.push(spot);
     const y = (spot.y0 + spot.y1) / 2;
@@ -152,7 +153,10 @@ export default function WorldMap({ world, places, selected = '', drawing = null,
   const selectedSetId = selected.startsWith('set:') ? selected.slice(4) : '';
   const labelItems = world.sets.map((set) => ({ id: set.id, text: label(nameOf(set)), x: set.position[0], y: set.position[1] }))
     .sort((a, b) => (b.id === selectedSetId) - (a.id === selectedSetId));
-  const labels = layoutWorldLabels(labelItems, unitPerPx);
+  const labels = layoutWorldLabels(labelItems, unitPerPx, LABEL_PX, {
+    x0: view.cx - viewW / 2 + stroke * 2, x1: view.cx + viewW / 2 - stroke * 2,
+    y0: view.cz - viewH / 2 + stroke * 2, y1: view.cz + viewH / 2 - stroke * 2,
+  });
   return (
     <svg
       ref={svgRef}

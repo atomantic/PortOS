@@ -416,7 +416,6 @@ export const getCodexParallelLimit = () => codexParallelLimit;
 export function setCodexParallelLimit(n) {
   codexParallelLimit = clampParallel(n);
   parallelLimits.set('image:codex', codexParallelLimit);
-  parallelLimits.set('codex', codexParallelLimit);
   return codexParallelLimit;
 }
 
@@ -427,11 +426,7 @@ export function _getParallelLimit(target, maybeMode) {
     const specific = parallelLimits.get(`${kind}:${mode}`);
     if (specific !== undefined) return specific;
   }
-  if (mode) {
-    const byMode = parallelLimits.get(mode);
-    if (byMode !== undefined) return byMode;
-  }
-  if (mode === 'codex' || (kind === 'image' && mode === 'codex')) {
+  if (kind === 'image' && mode === 'codex') {
     return codexParallelLimit;
   }
   return PARALLEL_LIMIT_DEFAULT;
@@ -452,10 +447,7 @@ export function _setParallelLimit(target, modeOrN, maybeN) {
   if (kind && mode) {
     parallelLimits.set(`${kind}:${mode}`, clamped);
   }
-  if (mode) {
-    parallelLimits.set(mode, clamped);
-  }
-  if (mode === 'codex' || (kind === 'image' && mode === 'codex')) {
+  if (kind === 'image' && mode === 'codex') {
     codexParallelLimit = clamped;
   }
   return clamped;
@@ -539,7 +531,9 @@ export function _recordRateLimitCooldown(target, errorTextOrMode, payloadOrReset
   const configured = getParallelLimit(job);
   const existing = rateLimitCooldowns.get(key);
   const currentLimit = (existing && existing.expiresAt > now) ? existing.effectiveLimit : configured;
-  const effectiveLimit = Math.max(1, currentLimit - 1);
+  // At one slot there is no smaller positive concurrency: hold the lane until
+  // the provider's cooldown expires instead of burning each waiting job.
+  const effectiveLimit = Math.max(0, currentLimit - 1);
   const deferral = parseQuotaDeferral(errStr);
   const duration = payload?.resetsInMs || deferral?.resetsInMs || RATE_LIMIT_COOLDOWN_MS;
   const expiresAt = now + duration;
@@ -1549,7 +1543,8 @@ function startLaneJob(job, { lane }) {
   job.progress = typeof job.progress === 'number' && Number.isFinite(job.progress) ? job.progress : 0;
   // A quota wait describes the queued state only; a persisted one also
   // survives a restart that outlasts the cooldown.
-  if (QUOTA_WAIT_PATTERN.test(job.statusMsg || '') || SCHEDULED_WAIT_PATTERN.test(job.statusMsg || '')) job.statusMsg = '';
+  if (QUOTA_WAIT_PATTERN.test(job.statusMsg || '') || SCHEDULED_WAIT_PATTERN.test(job.statusMsg || '')
+    || /^Rate-limited \(429\)/.test(job.statusMsg || '')) job.statusMsg = '';
   job.statusMsg = job.statusMsg || 'Starting';
   if (lane === 'cloud') {
     cloudRunning.push(job);

@@ -71,7 +71,21 @@ describe('source takes', () => {
 });
 
 describe('shared-take offers', () => {
-  it('offers sequence coverage for an adjacent run and a source take for a later return', () => {
+  it('chooses an actual clip owner instead of offering a cycle through an earlier return', () => {
+    const scenes = [
+      shot('early', 0, 1, { sourceTake: { sceneId: 'owner', offsetSec: 0 } }),
+      shot('owner', 2, 3),
+      shot('later', 4, 5),
+    ];
+    expect(sharedTakeOffers(scenes)).toEqual([{ kind: 'sourceTake', sceneId: 'later', sourceId: 'owner', offsetSec: 2 }]);
+    expect(sharedTakePatches(scenes, { kind: 'sourceTake', sceneId: 'owner', sourceId: 'early', offsetSec: 0 })).toEqual([]);
+    expect(sharedTakePatches(scenes, { kind: 'sourceTake', sceneId: 'owner', sourceId: 'owner', offsetSec: 0 })).toEqual([]);
+    const offer = sharedTakeOffers(scenes)[0];
+    const patches = sharedTakePatches(scenes, offer);
+    const linked = scenes.map((scene) => ({ ...scene, ...patches.find((patch) => patch.sceneId === scene.sceneId)?.patch }));
+    expect(resolveSourceTake(linked[2], linked)?.source.sceneId).toBe('owner');
+  });
+  it('offers sequence coverage without sending a later return past the first member\'s cut clip', () => {
     const scenes = [
       shot('a', 0, 0.8, { shotSheet: { cameraId: 'cam-a', location: 'room' }, label: 'Hold' }),
       shot('b', 0.8, 1.6, { shotSheet: { cameraId: 'cam-a', location: 'room' } }),
@@ -81,16 +95,21 @@ describe('shared-take offers', () => {
     const offers = sharedTakeOffers(scenes);
     expect(offers).toEqual([
       { kind: 'sequence', sceneIds: ['a', 'b'] },
-      { kind: 'sourceTake', sceneId: 'c', sourceId: 'a', offsetSec: 3 },
-    ]);
-    expect(sharedTakePatches(scenes, offers[1])).toEqual([
-      { sceneId: 'c', patch: { sourceTake: { sceneId: 'a', offsetSec: 3 } } },
-      { sceneId: 'a', patch: { clipLengthSec: 3.8 } },
     ]);
     expect(sharedTakePatches(scenes, offers[0])).toEqual([
       { sceneId: 'a', patch: { coverage: 'sequence' } },
       { sceneId: 'b', patch: { coverage: 'sequence' } },
     ]);
+    scenes[1].startSec = 1;
+    scenes[1].framePrompt = 'a different shot';
+    const returnOffer = sharedTakeOffers(scenes).find((offer) => offer.kind === 'sourceTake');
+    expect(sharedTakePatches(scenes, returnOffer)).toEqual([
+      { sceneId: 'c', patch: { sourceTake: { sceneId: 'a', offsetSec: 3 } } },
+      { sceneId: 'a', patch: { clipLengthSec: 3.8 } },
+    ]);
+    scenes[0].coverage = 'sequence';
+    expect(sharedTakePatches(scenes, returnOffer)).toEqual([]);
+    expect(sharedTakeOffers(scenes)).toEqual([]);
   });
 
   it('does not offer a link that is already set, a blank frame, or a different camera', () => {

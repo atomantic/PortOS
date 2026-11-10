@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  clipLengthShortfall, falSceneTake, falTakeRequestFields, performanceCapability, planPerformanceWindow, planShotSplit, shotSplitLimit,
+  clipLengthShortfall, falSceneTake, falTakeRequestFields, runwaySceneTake, performanceCapability, planPerformanceWindow, planShotSplit, shotSplitLimit,
   SOURCE_AUDIO_LIPSYNC, PERFORMANCE_WINDOW_MARGIN_SEC,
 } from './musicVideoShotTiming.js';
 
@@ -250,5 +250,15 @@ describe('per-shot source clip length', () => {
     expect(clipLengthShortfall(shot, 'grok', { grokDuration: 10 })).toBeNull();
     expect(clipLengthShortfall({ startSec: 0, endSec: 2 }, 'grok', { grokDuration: 6 })).toBeNull();
     expect(clipLengthShortfall(shot, 'local', {})).toBeNull();
+  });
+
+  it('covers shared returns even when a hosted backend pins a shorter default duration', () => {
+    const source = { sceneId: 'source', startSec: 0, endSec: 1 };
+    const back = { sceneId: 'return', startSec: 8, endSec: 9, sourceTake: { sceneId: 'source' } };
+    const scenes = [source, back];
+    expect(falSceneTake({ scene: source, scenes, videoSettings: { falDuration: 6 } }).seconds).toBe(10);
+    expect(runwaySceneTake({ scene: source, scenes, videoSettings: { runwayDuration: 5 } }).seconds).toBe(9);
+    expect(clipLengthShortfall(source, 'fal', { falDuration: 6 }, null, scenes)).toEqual({ requestedSec: 9, supported: [6, 10] });
+    expect(clipLengthShortfall(source, 'fal', { falDuration: 10 }, null, scenes)).toBeNull();
   });
 });

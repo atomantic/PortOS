@@ -257,7 +257,7 @@ export default function SceneCard({
     excerptStartSec: performanceReview?.excerptStartSec, backend: lipSyncBackend, videoSettings: falVideoSettings || {} });
   const shotModeId = `mv-shot-mode-${scene.sceneId}`;
   // #10152: what needs the director's attention, visible without opening the card.
-  const attention = sceneAttention(scene, { layered, footageOptional, lipSyncBackend, songDurationSec, clipSec: playedSec, spanExtraSec, failed: failedScenes || {}, songReview, videoSettings: falVideoSettings, scenes: project?.scenes, assetMarks: project?.assetMarks });
+  const attention = sceneAttention(scene, { project, layered, footageOptional, lipSyncBackend, songDurationSec, clipSec: playedSec, spanExtraSec, failed: failedScenes || {}, songReview, videoSettings: falVideoSettings, scenes: project?.scenes, assetMarks: project?.assetMarks });
   const frameReadiness = selectedFrameReadiness(sourceWindow?.source && sourceWindow.referenceImageId ? sourceWindow.source : scene, project?.assetMarks);
   const songChange = songReview?.[scene.sceneId];
   // Every clip in flight for this shot, each with where it renders. A render whose
@@ -774,7 +774,7 @@ export default function SceneCard({
               <span className="absolute right-1.5 top-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white">{(scene.referenceImageId || sourceWindow?.referenceImageId) ? 'Still · no clip yet' : 'No clip yet'}</span>
             </div>
           )}
-          <SceneTakeStrip scene={scene} kind="video" busy={takeBusy} grid pending={clipJobs}
+          <SceneTakeStrip project={project} scene={scene} kind="video" busy={takeBusy} grid pending={clipJobs}
             onSelect={(take) => onSelectTake?.(scene, take)}
             onReview={(take, review) => onReviewTake?.(scene, take, review)}
             onOpenPreview={onOpenPreview} marks={project?.assetMarks} onMark={onMarkTake} />
@@ -918,7 +918,7 @@ export default function SceneCard({
                 </p>
               )}
               <ShotActionInspector contract={scene.direction?.actionContract} scene={scene} />
-              <PlateComparison scene={scene} frames={false} />
+              <PlateComparison project={project} scene={scene} frames={false} />
             </div>
           </ShotEditorGroup>
         )}

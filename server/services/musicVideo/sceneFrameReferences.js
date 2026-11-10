@@ -49,7 +49,7 @@ async function resolveCardFrameRender(project, scene, { slot = 'start', referenc
   if (musicVideoMissingFrameLinkedPicks(project, scene, castMedia).length) refuseMissingFrameReference();
   const greybox = await loadMusicVideoGreybox(project, scene);
   const conditioning = musicVideoConditioningReferences(project, scene, castMedia, greybox);
-  const referenceImageFiles = musicVideoFrameReferenceFiles(refining || fromFrame || end ? lead : null, conditioning, MUSIC_VIDEO_MAX_REFERENCE_CHOICES, {
+  const referenceImageFiles = musicVideoFrameReferenceFiles(lead, conditioning, MUSIC_VIDEO_MAX_REFERENCE_CHOICES, {
     reservePanel: !Array.isArray(scene?.frameReferenceIds),
   });
   return {

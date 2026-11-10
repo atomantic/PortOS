@@ -94,4 +94,31 @@ describe('useMusicVideoTakes decisions', () => {
     expect(landed).toBe(false);
     await vi.waitFor(() => expect(reloadProject).toHaveBeenCalledWith(saved));
   });
+  it('exposes a failed reconciliation with retry that preserves later queued decisions', async () => {
+    const board = boardScene({ sceneId: 's1', referenceImageId: 'a.png', takes: [takeA, takeB] });
+    const reloadProject = vi.fn();
+    selectMusicVideoSceneTake.mockRejectedValueOnce(new Error('Refused'));
+    getMusicVideoProject.mockRejectedValueOnce(new Error('Project service unavailable'));
+    const { result } = renderHook(() => useMusicVideoTakes({ project: { id: 'mv-1' }, applyScenePatch: board.applyScenePatch, reloadProject }));
+    await act(() => result.current.selectTake(board.current(), takeB));
+    await vi.waitFor(() => expect(result.current.reconcileError?.message).toBe('Project service unavailable'));
+    expect(reloadProject).not.toHaveBeenCalled();
+    const later = deferred();
+    reviewMusicVideoSceneTake.mockReturnValueOnce(later.promise);
+    let saving;
+    act(() => { saving = result.current.reviewTake(board.current(), takeB, { status: 'rejected' }); });
+    const savedScene = { sceneId: 's1', referenceImageId: null, takes: [takeA, { ...takeB, status: 'rejected' }] };
+    const saved = { id: 'mv-1', scenes: [savedScene] };
+    getMusicVideoProject.mockResolvedValueOnce(saved);
+    let retry;
+    act(() => { retry = result.current.retryReconcile(); });
+    expect(reloadProject).not.toHaveBeenCalled();
+    later.resolve(savedScene);
+    await act(() => saving);
+    await act(() => retry);
+    expect(reloadProject).toHaveBeenCalledWith(saved);
+    expect(result.current.reconcileError).toBeNull();
+    expect(board.current().referenceImageId).toBeNull();
+  });
+
 });

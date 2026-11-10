@@ -39,7 +39,7 @@ async function videoTakeUrl(take) {
  * the take ids in flight. A checked take wears its verdict, which opens to the misses.
  */
 export default function SceneTakeStrip({
-  scene, kind, busy = false, large = false, grid = false, onSelect, onReview, onOpenPreview, marks = null, onMark = null, pending = [],
+  scene, project = null, kind, busy = false, large = false, grid = false, onSelect, onReview, onOpenPreview, marks = null, onMark = null, pending = [],
   onCheck = null, checking = null, onRefine = null, refineDisabled = false,
 }) {
   const [noteFor, setNoteFor] = useState(null);
@@ -71,7 +71,7 @@ export default function SceneTakeStrip({
           const rejected = take.status === 'rejected';
           const bad = marks?.[takeMarkKey(take)] === 'bad';
           const frameTake = kind === 'image' || kind === 'endImage';
-          const verdict = frameTake ? plateVerdict(scene, take) : null;
+          const verdict = frameTake ? plateVerdict(scene, take, project) : null;
           const verdictOpen = openVerdict === take.takeId && verdict?.issues.length > 0;
           const takeChecking = Boolean(take.takeId && checking?.has(take.takeId));
           const playKey = take.takeId || take.assetId;
@@ -184,10 +184,10 @@ export default function SceneTakeStrip({
               <AssetReferenceActions assetId={take.assetId} compact
                 url={kind === 'video' ? null : takeThumbUrl(take)}
                 resolveUrl={kind === 'video' ? () => videoTakeUrl(take) : null} />
-              {frameTake && currentPlateEvidence(scene, take)?.checks.filter((check) => check.id === 'render-quality' && check.status === 'fail').map((check) => (
+              {frameTake && currentPlateEvidence(scene, take, project)?.checks.filter((check) => check.id === 'render-quality' && check.status === 'fail').map((check) => (
                 <div key={check.id} className="space-y-1 text-xs text-port-warning">
                   <p className="break-words">Rendering defect: {check.note}</p>
-                  {renderQualityAcknowledged(scene, take) ? <p>Explicitly acknowledged for this image.</p> : onReview && take.takeId && (
+                  {renderQualityAcknowledged(scene, take, project) ? <p>Explicitly acknowledged for this image.</p> : onReview && take.takeId && (
                     <button type="button" disabled={busy} className="min-h-11 rounded border border-port-warning px-2 py-1 disabled:opacity-50"
                       onClick={() => onReview(take, { acknowledgeRenderQuality: { basis: take.plateEvidence.basis, note: check.note } })}>
                       Acknowledge rendering defect

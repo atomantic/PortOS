@@ -1,4 +1,5 @@
 import { createHash } from 'crypto';
+import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import {
   COLOR_MATCH_IDENTITY,
@@ -23,6 +24,7 @@ import {
 } from './shotColorMatch.js';
 
 const hash = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex').slice(0, 32);
+const hasFfmpeg = spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' }).status === 0;
 
 function solid(level, width = 8, height = 8) {
   const data = new Uint8ClampedArray(width * height * 3);
@@ -45,6 +47,17 @@ function ramp(scale, width = 32, height = 8) {
 const lumaOf = (data, width, height) => measureRgbStats(data, width, height, 3).lumaMean;
 
 describe('shot color match', () => {
+  it.skipIf(!hasFfmpeg)('renders an active correction with ffmpeg instead of failing to parse the pixel expressions', () => {
+    const correction = { ...COLOR_MATCH_IDENTITY, white: 1.2 };
+    const result = spawnSync('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-filter_threads', '1',
+      '-f', 'rawvideo', '-pixel_format', 'rgb24', '-video_size', '4x4', '-i', 'pipe:0',
+      '-vf', colorMatchVideoFilter(correction), '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'rgb24', 'pipe:1'],
+    { input: Buffer.alloc(4 * 4 * 3, 100) });
+    expect(result.stderr.toString()).toBe('');
+    expect(result.status).toBe(0);
+    expect(result.stdout).toHaveLength(4 * 4 * 3);
+    expect(Math.abs(result.stdout[0] - 120)).toBeLessThanOrEqual(2);
+  });
   it('brings two exposures of one shot within a small tolerance', () => {
     const reference = measureRgbStats(ramp(1), 32, 8, 3);
     const source = measureRgbStats(ramp(1.2), 32, 8, 3);
@@ -81,6 +94,18 @@ describe('shot color match', () => {
     const neutral = _solveColorMatch(reference, reference);
     expect(neutral.correction.saturation).toBe(1);
     expect(neutral.outlier).toBe(false);
+  });
+
+  it('removes a red cast without muting the underlying color variation', () => {
+    const reference = new Uint8ClampedArray([160, 80, 60, 60, 160, 80, 80, 60, 160]);
+    const source = new Uint8ClampedArray(reference);
+    for (let i = 0; i < source.length; i += 3) source[i] *= 1.1;
+    const { correction, outlier } = _solveColorMatch(measureRgbStats(source, 3, 1), measureRgbStats(reference, 3, 1));
+    const matched = _applyColorMatchBuffer(source, 3, 1, correction);
+    const meanError = [...matched].reduce((sum, value, i) => sum + Math.abs(value - reference[i]), 0) / matched.length;
+    expect(correction.saturation).toBe(1);
+    expect(outlier).toBe(false);
+    expect(meanError).toBeLessThan(3);
   });
 
   it('flags a correction past the clamp instead of forcing it', () => {

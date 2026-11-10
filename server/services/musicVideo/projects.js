@@ -594,9 +594,9 @@ export async function appendTakesAcrossScenes(id, items) {
 }
 
 /** Explicitly select a take for its scene slot. Returns the updated scene. */
-export async function selectSceneTake(id, sceneId, takeId) {
+export async function selectSceneTake(id, sceneId, takeId, options = {}) {
   const { selectSceneTake: select } = await import('./takes.js');
-  const { scene } = await mutateProjectRecord(id, (current) => select(current, sceneId, takeId), SCENE_ONLY);
+  const { scene } = await mutateProjectRecord(id, (current) => select(current, sceneId, takeId, options), SCENE_ONLY);
   return scene;
 }
 

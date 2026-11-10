@@ -63,3 +63,24 @@ it('frames and zooms the preview to the clip\'s own shape', async () => {
   await waitFor(() => expect(video.parentElement.style.aspectRatio).toMatch(/^0\.5625/));
   expect(screen.getByText(/Zooms in \d+%/).textContent).not.toBe(wide);
 });
+
+// Uniquely catches previewing/re-shooting a shaken file after its original lookup fails.
+it('requires the steady original and offers a retry when it cannot be loaded', async () => {
+  getVideoHistoryItem.mockImplementation(async (id) => {
+    if (id === 'take-2') return { id, filename: 'take-2.mp4', handheldFrom: 'clip-1' };
+    throw new Error('offline');
+  });
+  const onApply = vi.fn();
+  const { container } = render(<HandheldCameraControl clipId="take-2" onApply={onApply} />);
+  fireEvent.click(screen.getByRole('button', { name: /Handheld camera/ }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('Could not load the steady original');
+  expect(container.querySelector('video')).toBeNull();
+  expect(screen.getByRole('button', { name: 'Make handheld take' })).toBeDisabled();
+  getVideoHistoryItem.mockImplementation(async (id) => id === 'take-2'
+    ? { id, filename: 'take-2.mp4', handheldFrom: 'clip-1' }
+    : { id, filename: 'clip-1.mp4' });
+  fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+  await waitFor(() => expect(container.querySelector('video')?.getAttribute('src')).toBe('/data/videos/clip-1.mp4'));
+  expect(screen.getByRole('button', { name: 'Make handheld take' })).not.toBeDisabled();
+  expect(onApply).not.toHaveBeenCalled();
+});

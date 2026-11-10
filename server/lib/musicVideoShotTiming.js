@@ -597,8 +597,8 @@ function requestedClipSec(backend, body = {}) {
  * clip length; else `{ requestedSec, supported }`. The length is never clamped:
  * a model that cannot reach it is refused with the lengths it can.
  */
-export function clipLengthShortfall(scene, backend, body = {}, modelId = null) {
-  const wanted = sceneClipLengthSec(scene);
+export function clipLengthShortfall(scene, backend, body = {}, modelId = null, scenes = null) {
+  const wanted = Math.max(sceneClipLengthSec(scene) || 0, sharedClipSpanSec(scene, scenes) || 0) || null;
   if (wanted == null || isPerformanceScene(scene)) return null;
   const supported = clipLengthChoices(backend, modelId);
   // Local renders size by frame count and an uncurated model has no length rule: nothing to check.
@@ -606,6 +606,20 @@ export function clipLengthShortfall(scene, backend, body = {}, modelId = null) {
   const sent = requestedClipSec(backend, body) ?? (backend === 'grok' ? GROK_VIDEO_DEFAULT_DURATION : coerceDefault(backend, modelId));
   if (sent != null && sent >= wanted - 1e-6) return null;
   return { requestedSec: wanted, supported };
+}
+
+function sharedClipSpanSec(scene, scenes) {
+  if (!Array.isArray(scenes)) return null;
+  const need = sourceClipNeedSec(scene, scenes);
+  const ownSpan = typeof scene?.startSec === 'number' && typeof scene?.endSec === 'number' ? scene.endSec - scene.startSec : 0;
+  return need > ownSpan + 1e-6 ? need : null;
+}
+
+function hostedClipRequestSec(scene, scenes, pinned) {
+  const span = shotRequestSpanSec(scene, scenes);
+  if (sceneClipLengthSec(scene) != null) return span;
+  const shared = sharedClipSpanSec(scene, scenes);
+  return shared != null ? Math.max(shared, Number(pinned) || 0) : pinned || span;
 }
 
 const coerceDefault = (backend, modelId) => (backend === 'fal'
@@ -669,8 +683,7 @@ export function falSceneTake({ scene, videoSettings = {}, songDurationSec = null
   if (!model) {
     return { performance: false, modelId, seconds: settings.falDuration || null, resolution: settings.falResolution || null, costUsd: null };
   }
-  const spanSec = shotRequestSpanSec(scene, scenes);
-  const seconds = coerceFalVideoSeconds(model, sceneClipLengthSec(scene) != null ? spanSec : settings.falDuration || spanSec);
+  const seconds = coerceFalVideoSeconds(model, hostedClipRequestSec(scene, scenes, settings.falDuration));
   const resolution = resolveFalVideoResolution(model, settings.falResolution);
   const generateAudio = Boolean(model.audio) && preMusicClipSound(scene);
   return {
@@ -711,8 +724,7 @@ export function runwaySceneTake({ scene, videoSettings = {}, scenes = null } = {
   if (isPerformanceScene(scene) || !model) {
     return { performance: isPerformanceScene(scene), modelId, seconds: null, resolution: null, costUsd: null };
   }
-  const spanSec = shotRequestSpanSec(scene, scenes);
-  const seconds = coerceRunwayVideoSeconds(model, sceneClipLengthSec(scene) != null ? spanSec : settings.runwayDuration || spanSec);
+  const seconds = coerceRunwayVideoSeconds(model, hostedClipRequestSec(scene, scenes, settings.runwayDuration));
   const resolution = resolveRunwayVideoResolution(model, settings.runwayResolution);
   return { performance: false, modelId, seconds, resolution, costUsd: estimateRunwayVideoCostUsd({ modelId, seconds, resolution }) };
 }
