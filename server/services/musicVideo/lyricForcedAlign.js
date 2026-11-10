@@ -110,8 +110,14 @@ async function ensureRuntime({ run, onProgress, dir, plan, findPython }) {
       if (!created.success) throw failure('Could not create the MMS_FA environment.', 'LYRIC_ALIGN_CTC_INSTALL_FAILED');
       onProgress({ stage: 'installing', detail: 'Installing hash-locked MMS_FA dependencies (first run only)' });
       const installed = await run(python, plan.install, null, { timeoutMs: 45 * 60_000 });
-      if (!installed.success || !await passes(plan.probe)) {
-        throw failure(`Could not install MMS_FA dependencies. Use ${plan.pythonRange}.`, 'LYRIC_ALIGN_CTC_INSTALL_FAILED');
+      // The interpreter already passed the version/arch probe, so the cause is
+      // pip's (disk space, network, index); keep its output tail in the log.
+      const reason = !installed.success ? `pip ${installed.error ?? 'failed'}`
+        : !await passes(plan.probe) ? 'installed packages failed the import probe' : null;
+      if (reason) {
+        console.error(`❌ MMS_FA dependency install failed: ${reason}`);
+        throw failure('Could not install MMS_FA dependencies; the server log has pip\'s error. Check free disk space and network access, then retry.',
+          'LYRIC_ALIGN_CTC_INSTALL_FAILED');
       }
       await writeFile(stamp, plan.lockId);
     })().finally(() => { provisioning = null; });

@@ -153,7 +153,13 @@ describe('MMS_FA process contract', () => {
     const h = await harness();
     await expect(h.align({ isCancelled: () => true })).rejects.toMatchObject({ canceled: true });
     expect(h.run).not.toHaveBeenCalled();
-    await expect(h.align({ run: async () => ({ success: false }) })).rejects.toMatchObject({ code: 'LYRIC_ALIGN_CTC_INSTALL_FAILED' });
+    // pip's own error reaches the log instead of a "use another Python" guess.
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const pipError = 'exit 1: ERROR: Could not install packages due to an OSError: [Errno 28] No space left on device';
+    const run = async (_bin, args) => (args[1] === 'pip' ? { success: false, error: pipError } : { success: true });
+    await expect(h.align({ run })).rejects.toMatchObject({ code: 'LYRIC_ALIGN_CTC_INSTALL_FAILED' });
+    expect(log).toHaveBeenCalledWith(`❌ MMS_FA dependency install failed: pip ${pipError}`);
+    log.mockRestore();
   });
 });
 
