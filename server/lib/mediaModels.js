@@ -59,7 +59,7 @@
  *   - selectedTextEncoder: id of the active text encoder
  */
 
-import { MOSS_IMAGE_MODEL_ID } from './imageRuntimeRemedies.js';
+import { MOSS_IMAGE_MODEL_ID, MINIMAX_H3_IMAGE_MODEL_ID } from './imageRuntimeRemedies.js';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, openSync, closeSync, rmSync } from 'fs';
 import { join, dirname, resolve } from 'path';
 import { randomUUID } from 'node:crypto';
@@ -334,6 +334,25 @@ const shardFiles = (dir, stem, count) => Array.from(
 // PortOS does not expose (~66 GB), and the ORIGINAL non-diffusers `FL2VA/` +
 // `Ref2VA/` layouts (~144 GB each) that the MLX port consumes. A snapshot would
 // pull 3.5x what the render path can use.
+// MiniMax H3-Image renders on its own transformer + 2D VAE plus the H3 video
+// repo's Qwen3-VL conditioner (byte-identical blobs). Both repos are
+// aggregates, so both are pinned to exact file lists: the image repo also
+// ships a diffusers layout, and the conditioner skips text-encoder shards
+// 12-13 (layers 53-63, past the layer-50 readout) like the video entries do.
+const MINIMAX_H3_IMAGE_REPO_FILES = Object.freeze([
+  'LICENSE', 'model_index.json', 'pdd_config.json', 'pdd_fused_heads.safetensors',
+  'transformer/config.json', 'transformer/model.safetensors.index.json',
+  ...Array.from({ length: 12 }, (_, i) => `transformer/model-${String(i + 1).padStart(5, '0')}-of-00012.safetensors`),
+  'vae/config.json', 'vae/diffusion_pytorch_model.safetensors',
+]);
+const MINIMAX_H3_CONDITIONER_FILES = Object.freeze([
+  'FL2VA/text_encoder/config.json', 'FL2VA/text_encoder/model.safetensors.index.json',
+  ...[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 14].map(n => `FL2VA/text_encoder/model-${String(n).padStart(5, '0')}-of-00014.safetensors`),
+  ...['chat_template.json', 'merges.txt', 'preprocessor_config.json', 'tokenizer.json', 'tokenizer_config.json',
+    'video_preprocessor_config.json', 'vocab.json'].map(f => `FL2VA/processor/${f}`),
+  ...['merges.txt', 'tokenizer.json', 'tokenizer_config.json', 'vocab.json'].map(f => `FL2VA/tokenizer/${f}`),
+]);
+
 const MINIMAX_H3_CUDA_REPO_FILES = Object.freeze([
   'LICENSE',
   'modular_model_index.json',
@@ -1070,6 +1089,18 @@ const DEFAULT_REGISTRY = {
       steps: 50, guidance: 3, quantization: 'bf16', supportsImg2Img: false, supportsLoras: false,
       hardwareRequirements: { platforms: ['darwin'], architectures: ['arm64'], requiresAppleSilicon: true, minMemoryGb: 48 },
       license: 'apache-2.0', licenseUrl: 'https://huggingface.co/OpenMOSS-Team/MOSS-Image-SFT/blob/fc5de0d56fc910cbca6f6625a70f5f582b26deb1/LICENSE',
+    },
+    {
+      id: MINIMAX_H3_IMAGE_MODEL_ID, name: 'MiniMax H3-Image (MLX bf16, up to 16 refs, 4K, 69 GB download, 128 GB RAM)',
+      runner: 'minimax-h3-image', repo: 'MiniMaxAI/MiniMax-H3-Image',
+      revision: '492fd8c4eca666f1085f57e30738c1e0d86b3439', repoFiles: MINIMAX_H3_IMAGE_REPO_FILES,
+      requiredWeights: [{ repo: 'MiniMaxAI/MiniMax-H3', revision: '6818f6c32d12b210915e44ad56a4228c2608f160', files: MINIMAX_H3_CONDITIONER_FILES }],
+      steps: 6, guidance: 0, cfgDisabled: true, samplerLocked: true, quantization: 'bf16',
+      supportsImg2Img: false, supportsLoras: false, supportsNegativePrompt: false,
+      maxReferenceImages: 16,
+      hardwareRequirements: { platforms: ['darwin'], architectures: ['arm64'], requiresAppleSilicon: true, minMemoryGb: 96 },
+      license: 'minimax-h3-image-community-license',
+      licenseUrl: 'https://huggingface.co/MiniMaxAI/MiniMax-H3-Image',
     },
     // The community conversions contain all components and are ungated. Their
     // availability does not certify acceptance of BFL's upstream terms.
@@ -2285,6 +2316,22 @@ export const requiredReposForModel = (model) => {
   const aux = [];
   if (isNonBlankStr(model?.textEncoderRepo)) aux.push(model.textEncoderRepo);
   return [main, ...aux];
+};
+
+// Pinned `{ repo, revision, only }` download targets for an image model that
+// narrows its repos to exact files (`repoFiles` / `requiredWeights[].files`).
+// `null` means the model is a whole-repo snapshot and uses
+// `requiredReposForModel` instead.
+export const imageModelDownloadTargets = (model) => {
+  const deps = Array.isArray(model?.requiredWeights) ? model.requiredWeights : [];
+  if (!Array.isArray(model?.repoFiles) && !deps.length) return null;
+  const main = repoForModel(model);
+  if (!main) return null;
+  return [
+    { repo: main, revision: model.revision || null, only: [...(model.repoFiles || [])] },
+    ...deps.filter(dep => isNonBlankStr(dep?.repo) && Array.isArray(dep.files) && dep.files.length)
+      .map(dep => ({ repo: dep.repo, revision: dep.revision || null, only: [...dep.files] })),
+  ];
 };
 
 // `getTextEncoderRepo()` can return either an HF repo id (`org/name`) or a

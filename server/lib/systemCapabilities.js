@@ -363,7 +363,7 @@ export function hardwareRequirementsForMediaModel(model, { kind = 'image', bucke
       runtimeRequirements.platforms = ['linux', 'win32'];
       runtimeRequirements.requiresNvidiaGpu = true;
     }
-  } else if (['mflux', 'flux3'].includes(model?.runner) || (!model?.runner && ['dev', 'schnell'].includes(model?.id))) {
+  } else if (['mflux', 'flux3', 'minimax-h3-image'].includes(model?.runner) || (!model?.runner && ['dev', 'schnell'].includes(model?.id))) {
     runtimeRequirements.platforms = ['darwin'];
     runtimeRequirements.requiresAppleSilicon = true;
   }

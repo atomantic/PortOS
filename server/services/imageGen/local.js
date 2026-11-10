@@ -31,7 +31,7 @@ import { rejectDegenerateFrame } from './frameGuard.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, dispatchTerminalEvent, PYTHON_NOISE_RE } from '../../lib/sseUtils.js';
 import { resolveFlux2Python, FLUX2_VENV_DEFAULT, isFlux2VenvHealthy, invalidateFlux2Health } from '../../lib/pythonSetup.js';
-import { usesTorchVenv, usesMossSwift, usesFlux3 } from '../../lib/imageRuntimeRemedies.js';
+import { usesTorchVenv, usesMossSwift, usesFlux3, usesMinimaxH3Image } from '../../lib/imageRuntimeRemedies.js';
 import { mossRenderArgs, mossChildEnv, MOSS_MANIFEST } from './mossRuntime.js';
 import { hfChildEnv } from '../hfToken.js';
 import { extractGatedRepo, isGatedRepoError } from '../../lib/hfErrors.js';
@@ -47,6 +47,9 @@ import { parseByteProgress, formatDownloadMessage, bufferChildExit } from '../vi
 import { getImageModels, isFlux2, isErnie, isHiDream, isQwen } from '../../lib/mediaModels.js';
 import { hardwareUnavailableReason, isHardwareCompatible } from '../../lib/systemCapabilities.js';
 import { flux3RenderArgs, assertFlux3Inputs, flux3Env } from './flux3Runtime.js';
+import {
+  minimaxH3ImageRenderArgs, assertMinimaxH3ImageInputs, minimaxH3ImageEnv, minimaxH3ImageWeightsCached, loadMinimaxH3Runtime,
+} from './minimaxH3ImageRuntime.js';
 import { usesDiffusersRunner, flux2Bf16BaseRepo } from '../../lib/runners.js';
 import { weaveLoraTriggers } from '../../lib/loraTriggers.js';
 import { provenanceForRender } from '../../lib/assetProvenance.js';
@@ -319,6 +322,7 @@ export const buildArgs = ({ loraPaths = [], loraScales = [], referenceImagePaths
   const inputs = { ...rest, loraPaths, loraScales, referenceImagePaths, referenceImageStrengths };
   const { model } = inputs;
   if (usesFlux3(model)) return flux3RenderArgs(inputs);
+  if (usesMinimaxH3Image(model)) return minimaxH3ImageRenderArgs(inputs);
   if (usesMossSwift(model)) return mossRenderArgs(inputs);
   if (usesDiffusersRunner(model)) return diffusersRenderArgs(inputs);
   if (isFlux2(model)) return flux2RenderArgs(model, inputs);
@@ -653,6 +657,19 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     const runtime = await diagnoseLocalRuntime({ modelId });
     if (runtime.readiness !== 'ready') throw new ServerError(runtime.reason, { status: 400, code: 'FLUX3_NOT_READY' });
   }
+  let minimaxRuntime = null;
+  if (usesMinimaxH3Image(model)) {
+    assertMinimaxH3ImageInputs({ negativePrompt, width: Number(width), height: Number(height), steps: steps || null, hasInitImage: Boolean(initImagePath),
+      referenceCount: referenceImagePaths.length, referenceImageStrengths, loraCount: loraPaths.length + loraFilenames.length });
+    const { diagnoseLocalRuntime } = await import('./localRuntime.js');
+    const runtime = await diagnoseLocalRuntime({ modelId });
+    if (runtime.readiness !== 'ready') throw new ServerError(runtime.reason, { status: 400, code: 'MINIMAX_H3_IMAGE_NOT_READY' });
+    if (!await minimaxH3ImageWeightsCached(model)) {
+      throw new ServerError('MiniMax H3-Image weights are not downloaded. Use Download beside the model in Image Gen, then retry.',
+        { status: 400, code: 'MINIMAX_H3_IMAGE_WEIGHTS_NOT_CACHED' });
+    }
+    minimaxRuntime = await loadMinimaxH3Runtime();
+  }
   assertFlux2InputsCompatible(model, {
     hasInitImage: Boolean(initImagePath), referenceCount: referenceImagePaths.length,
     loraCount: loraFilenames.length + loraPaths.length,
@@ -669,7 +686,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     const runtime = await diagnoseLocalRuntime({ modelId });
     if (runtime.readiness !== 'ready') throw new ServerError(runtime.reason, { status: 400, code: 'MOSS_NOT_READY' });
   }
-  if (!usesTorchVenv(model) && !usesMossSwift(model) && !usesFlux3(model) && !pythonPath) {
+  if (!usesTorchVenv(model) && !usesMossSwift(model) && !usesFlux3(model) && !usesMinimaxH3Image(model) && !pythonPath) {
     throw new ServerError('Python path not configured — set it in Settings > Image Gen', { status: 400, code: 'IMAGE_GEN_NOT_CONFIGURED' });
   }
   // Health, not mere presence. buildArgs below only checks that the shared
@@ -771,6 +788,13 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     meta.guidance = 0;
     meta.modelRepo = model.repo;
   }
+  if (usesMinimaxH3Image(model)) {
+    meta.quantize = null;
+    meta.quantization = 'bf16';
+    meta.guidance = 0;
+    meta.modelRepo = model.repo;
+    meta.modelRevision = model.revision;
+  }
   if (usesMossSwift(model)) {
     meta.quantize = null;
     meta.quantization = 'bf16';
@@ -813,7 +837,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
   try {
     // `renderPrompt` — the user's prompt plus any LoRA activation tokens it was
     // missing (#4665). Identical to `prompt` when nothing was woven.
-    ({ bin, args, providerInputs } = buildArgs({ pythonPath, model, prompt: renderPrompt, negativePrompt, width: Number(width), height: Number(height), steps: actualSteps, guidance: actualGuidance, seed: actualSeed, quantize, outputPath, loraPaths: validLoras, loraScales, stepwiseDir, initImagePath: validInitImagePath, initImageStrength: validInitImageStrength, referenceImagePaths: validReferenceImagePaths, referenceImageStrengths: validReferenceImageStrengths }));
+    ({ bin, args, providerInputs } = buildArgs({ pythonPath, model, prompt: renderPrompt, negativePrompt, width: Number(width), height: Number(height), steps: actualSteps, guidance: actualGuidance, seed: actualSeed, quantize, outputPath, loraPaths: validLoras, loraScales, stepwiseDir, initImagePath: validInitImagePath, initImageStrength: validInitImageStrength, referenceImagePaths: validReferenceImagePaths, referenceImageStrengths: validReferenceImageStrengths, minimaxRuntime }));
     // Record only inputs the selected runner actually receives. Unsupported
     // references and Windows mflux init images remain explicit request evidence.
     const requestedInputs = [
@@ -858,8 +882,9 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     }
     if (memoryReport.unloaded.length) console.log(`🧹 Image generation [${jobId.slice(0, 8)}] freed ${memoryReport.unloaded.length} resident model(s)`);
 
-    const tokenEnv = usesMossSwift(model) ? null : await hfChildEnv();
-    const childEnv = usesMossSwift(model) ? mossChildEnv() : usesFlux3(model) ? flux3Env(tokenEnv) : tokenEnv;
+    const tokenEnv = usesMossSwift(model) || usesMinimaxH3Image(model) ? null : await hfChildEnv();
+    const childEnv = usesMossSwift(model) ? mossChildEnv() : usesFlux3(model) ? flux3Env(tokenEnv)
+      : usesMinimaxH3Image(model) ? minimaxH3ImageEnv() : tokenEnv;
     // Last spawn gate: a cancel() during the awaits above found no child to signal.
     if (preparation.cancelRequested) {
       throw new ServerError('Canceled before the render started', { status: 409, code: 'IMAGE_GEN_CANCELED' });
