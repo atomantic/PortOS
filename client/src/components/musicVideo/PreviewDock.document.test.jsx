@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 const playback = vi.hoisted(() => vi.fn());
@@ -47,6 +47,10 @@ describe('PreviewDock composition document', () => {
     const audio = screen.getByLabelText('Song for the composition preview');
     expect(opens()).toHaveLength(0);
     expect(screen.queryByTestId('exact-document-frame')).toBeNull();
+    // The playing picture carries the template's own still move, vignette and grain.
+    // The move is written by an effect, which can land after the figure is found.
+    await waitFor(() => expect(screen.getByTestId('animatic-still').style.transform).toMatch(/^translate\(.+\) scale\(1\.\d+\)$/));
+    expect(screen.getByTestId('document-template-finish')).toBeTruthy();
     await act(async () => fireEvent.play(audio));
     expect(opens()).toHaveLength(0);
     await act(async () => fireEvent.pause(audio));
