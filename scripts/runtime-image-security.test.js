@@ -87,6 +87,17 @@ describe('fail-closed evidence validation', () => {
     expect(() => validateReviews(JSON.parse(read('docker/runtime-image-security.reviews.json')))).not.toThrow();
   });
 
+  it('keeps the shipped ledger unambiguous: a derived target, a pinned package version and a tracker reference per entry', () => {
+    const reviews = validateReviews(JSON.parse(read('docker/runtime-image-security.reviews.json')));
+    const keys = reviews.map((r) => `${r.target}|${r.id}|${r.package}|${r.version}`);
+    expect(new Set(keys).size).toBe(keys.length);
+    for (const review of reviews) {
+      expect(Object.keys(targets)).toContain(review.target);
+      expect(review.package && review.version).toBeTruthy();
+      expect(review.tracking).toMatch(/^#\d+$/);
+    }
+  });
+
   it('scopes a review to its target and, when named, its package, installed version and architecture', () => {
     const findings = validateScan(scanFor([matchFor('CVE-1', 'High', 'libfoo', '1.0'), matchFor('CVE-1', 'High', 'libbar'), matchFor('CVE-1', 'High', 'libfoo', '2.0')])).findings;
     const reviews = [{ target: 'pgvector', id: 'CVE-1', package: 'libfoo', version: '1.0', arch: 'amd64', disposition: 'blocked', rationale: 'no upstream fix', tracking: '#9' }];

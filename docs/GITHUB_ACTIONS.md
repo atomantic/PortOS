@@ -1269,6 +1269,29 @@ blocker; a fix removes the finding from the scan, so it needs no entry and a
 finding still detected is never suppressed as "fixed"; do not move the
 Debian snapshot or an image digest merely to silence a scanner.
 
+### Ledger triage
+
+The initial entries (#15662) were triaged at package level from the scanned
+image, not advisory by advisory; re-triage an entry when its package version
+changes. Two dispositions are used:
+
+- `not-reachable`: the package is not loaded by the long-running process (the
+  postgres server, or `sclang`/`scsynth`) and is not run by the entrypoint,
+  health probe or PortOS. For `pgvector` the container publishes only the
+  loopback PostgreSQL port, so there is no shell, login or package-manager entry
+  point. For `supercollider` untrusted `.scd` can run arbitrary commands, so
+  the argument is the sandbox (`--network none`, `--cap-drop ALL`,
+  `no-new-privileges`, read-only root, unprivileged user, disposable per
+  render): the tool grants nothing the render sandbox does not already allow.
+- `blocked`: the package is loaded (found by `ldd` over `bin/postgres`,
+  `lib/*.so` and libpq for pgvector; over the runtime packages for SuperCollider)
+  and Debian ships no fix (`wont-fix` or `not-fixed`), tracked at #15662, or a
+  fix exists upstream but the newest image digest does not carry it yet, tracked
+  at #15669. The rationale names the exposure that bounds the risk.
+
+Delete the `#15669` entries when a rebuilt upstream digest is adopted; a fixed
+finding disappears from the scan, so it never needs a disposition.
+
 **Known coverage gap.** The `eidoverse:render` parent image and the
 `deno.json`/`deno.lock` build context are built from the independent
 eidoverse-video checkout and do not ship here, so they cannot be inventoried by
