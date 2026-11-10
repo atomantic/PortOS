@@ -1,13 +1,16 @@
 import { assertMusicVideoMediaSelections, musicVideoMediaMode } from '../../lib/musicVideoMediaPolicy.js';
 import { isEndFrameImageEffect, MUSIC_VIDEO_IMAGE_EFFECTS, sceneImageEffect, scenePhotoSequence } from '../../lib/musicVideoImageEffects.js';
 import { musicVideoGlitchRuntime } from '../../lib/musicVideoGlitchCanvas.js';
-import { glitchFrameParams, mergeGlitchFrames, sceneImageEffectGlitchFrames, sceneShotGlitchFrames, sceneTransitionSections, sceneWipeCuts, transitionGlitchFrames } from '../../lib/musicVideoTransitions.js';
+import { applyCameraCutDefaults, glitchFrameParams, mergeGlitchFrames, sceneImageEffectGlitchFrames, sceneShotGlitchFrames, sceneTransitionSections, sceneWipeCuts, transitionGlitchFrames } from '../../lib/musicVideoTransitions.js';
 import { musicVideoWipeRuntime } from '../../lib/musicVideoWipes.js';
 import { plannedTransitions } from '../../lib/musicVideoCutEffects.js';
 import { musicVideoGradeFilter } from '../../lib/musicVideoGrade.js';
 import { documentFilmLookRuntime, hasMusicVideoFilmLook } from '../../lib/musicVideoFilmLook.js';
+import { activeShotColorMatch, colorMatchSvgParts, documentShotColorMatchRuntime, hasMusicVideoColorMatch } from '../../lib/shotColorMatch.js';
 import { titleCardVisible, titleCardWindows } from '../../lib/musicVideoTitleCard.js';
 import { titleCardRuntime } from './titleCardFonts.js';
+import { normalizeTemplateEffects, templateEffects } from '../../lib/musicVideoTemplateEffects.js';
+import { documentHandheld } from '../../lib/handheldCamera.js';
 import { documentSceneCameo, documentCameos } from '../../lib/musicVideoCameos.js';
 /**
  * Music Video — render a project's composition document over the song.
@@ -43,6 +46,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS } from '../../lib/fileUtils.js';
 import { htmlCompositionContractSchemaFor } from '../../lib/validation.js';
 import { selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
+import { resolveSourceTake, scenePlayableClipId } from '../../lib/musicVideoSourceTake.js';
 import { clipSpeedRate, clipOffsetSec, documentSceneVisualLayer, MUSIC_VIDEO_LYRIC_ROLES, MUSIC_VIDEO_LYRIC_SIZES, MUSIC_VIDEO_TEXT_ZONES } from '../../lib/musicVideoLayers.js';
 import { musicVideoAspect, musicVideoLyricLayout } from '../../lib/musicVideoAspect.js';
 import { lyricAnchorOnset } from '../../lib/musicVideoLyricAnchors.js';
@@ -69,8 +73,10 @@ const documentImageEffect = (scene, media) => {
   return effect && (!isEndFrameImageEffect(effect.effect) || media?.end) ? effect : null;
 };
 
-const hasSelectedGlitches = (project) => (project?.scenes || []).some(scene =>
-  scene?.transitionIn || scene?.transitionOut || scene?.glitches?.length || scene?.imageEffect === 'end-glitch');
+const hasSelectedGlitches = (project) => (project?.scenes || []).some((scene) => {
+  const shot = applyCameraCutDefaults(scene, project?.cameras);
+  return shot?.transitionIn || shot?.transitionOut || shot?.glitches?.length || scene?.imageEffect === 'end-glitch';
+});
 const hasSelectedWipes = (project) => (project?.scenes || []).some(scene => scene?.wipeIn || scene?.wipeOut);
 
 /** The project's aspect ratio (brief), defaulting to 16:9 (lib/musicVideoAspect.js). */
@@ -78,7 +84,7 @@ export const documentAspect = musicVideoAspect;
 
 /**
  * The browser init scripts a document render opens its page with: the film
- * look runtime when the project or a shot has a non-neutral look, and
+ * look runtime when the project, a camera or a shot has a non-neutral look, and
  * the opening title card (lib/musicVideoTitleCard.js) when it has one to show,
  * so every captured frame, probe sample and worker browser draws what the live
  * preview shows. Pure.
@@ -87,6 +93,7 @@ export function documentRenderInitScripts(project) {
   return [
     ...(hasSelectedGlitches(project) ? [musicVideoGlitchRuntime()] : []),
     ...(hasSelectedWipes(project) ? [musicVideoWipeRuntime()] : []),
+    ...(hasMusicVideoColorMatch(project) ? [documentShotColorMatchRuntime(project)] : []),
     ...(!hasMusicVideoFilmLook(project) ? [] : [documentFilmLookRuntime(project)]),
     ...(titleCardVisible(project?.titleCard) ? [titleCardRuntime(project.titleCard)] : []),
   ];
@@ -137,7 +144,8 @@ export async function resolveSceneMedia(project, { history = [], probe = async (
     const layer = documentSceneVisualLayer(project, scene, { generated: strictLayers });
     // A code shot (#10297) is drawn by the document itself; it is handed no media.
     if (layer === 'code' || (strictLayers && layer === 'card')) continue;
-    const endPath = isEndFrameImageEffect(scene.imageEffect) && scene.endImageId ? safeUnder(PATHS.images, scene.endImageId) : null;
+    const endPath = isEndFrameImageEffect(scene.imageEffect) && scene.endFrameOff !== true && scene.endImageId
+      ? safeUnder(PATHS.images, scene.endImageId) : null;
     const end = endPath && existsSync(endPath)
       ? { path: endPath, ext: (/\.([a-z0-9]{2,5})$/i.exec(scene.endImageId)?.[1] || 'png').toLowerCase().replace('jpeg', 'jpg') } : null;
     const sequence = scenePhotoSequence(scene);
@@ -152,13 +160,16 @@ export async function resolveSceneMedia(project, { history = [], probe = async (
       out.set(scene.sceneId, { kind: 'image', ...photos[0], photos, ...(end ? { end } : {}), inSec: null, outSec: null, fps: null, width: null, height: null });
       continue;
     }
-    const entry = scene.videoHistoryId ? byId.get(scene.videoHistoryId) : null;
+    const scenes = Array.isArray(project?.scenes) ? project.scenes : [];
+    const resolved = resolveSourceTake(scene, scenes);
+    const clipId = resolved ? resolved.videoHistoryId : scene.videoHistoryId;
+    const entry = clipId ? byId.get(clipId) : null;
     const videoPath = entry?.filename ? safeUnder(PATHS.videos, entry.filename) : null;
     const selectedStillEffect = layer === 'still' && scene.visualLayer === 'still' && MUSIC_VIDEO_IMAGE_EFFECTS.includes(scene.imageEffect);
     if (!selectedStillEffect && (!strictLayers || layer === 'footage') && videoPath && existsSync(videoPath)) {
       const measured = entry.numFrames && entry.fps && entry.width && entry.height ? entry : { ...entry, ...((await probe(videoPath)) || {}) };
       const duration = measured.numFrames && measured.fps ? measured.numFrames / measured.fps : null;
-      const edit = selectedPerformanceInstruction(scene)?.edit ?? null;
+      const edit = resolved ? { inSec: resolved.inSec, outSec: resolved.outSec } : (selectedPerformanceInstruction(scene)?.edit ?? null);
       const ext = (/\.([a-z0-9]{2,5})$/i.exec(entry.filename)?.[1] || 'mp4').toLowerCase();
       const rate = clipSpeedRate(scene);
       const originalIn = edit ? Math.min(edit.inSec, duration ?? edit.inSec) : 0;
@@ -198,9 +209,10 @@ export async function resolveSceneMedia(project, { history = [], probe = async (
       });
       continue;
     }
-    const imagePath = (!strictLayers || layer === 'still') && scene.referenceImageId ? safeUnder(PATHS.images, scene.referenceImageId) : null;
+    const imageId = resolved?.referenceImageId || scene.referenceImageId;
+    const imagePath = (!strictLayers || layer === 'still') && imageId ? safeUnder(PATHS.images, imageId) : null;
     if (imagePath && existsSync(imagePath)) {
-      const ext = (/\.([a-z0-9]{2,5})$/i.exec(scene.referenceImageId)?.[1] || 'png').toLowerCase();
+      const ext = (/\.([a-z0-9]{2,5})$/i.exec(imageId)?.[1] || 'png').toLowerCase();
       out.set(scene.sceneId, { kind: 'image', path: imagePath, ext: ext === 'jpeg' ? 'jpg' : ext, ...(end ? { end } : {}), inSec: null, outSec: null, fps: null, width: null, height: null });
     }
   }
@@ -244,6 +256,7 @@ export function buildDocumentData(project, { media = new Map(), frame, clock, so
       const m = media.get(scene.sceneId) || null;
       const start = finite(scene.startSec);
       const end = finite(scene.endSec);
+      const colorMatch = activeShotColorMatch(project, scene);
       return {
         sceneId: scene.sceneId,
         label: typeof scene.label === 'string' ? scene.label : '',
@@ -253,7 +266,20 @@ export function buildDocumentData(project, { media = new Map(), frame, clock, so
         shotMode: scene.shotMode === 'performance' ? 'performance' : 'cutaway',
         visualLayer: documentSceneVisualLayer(project, scene, { generated }),
         imageEffect: documentImageEffect(scene, m),
+        ...(colorMatch ? {
+          colorMatch: {
+            ...colorMatch,
+            filterId: `portos-color-match-${String(scene.sceneId).replace(/[^A-Za-z0-9_-]/g, '')}`,
+            parts: colorMatchSvgParts(colorMatch),
+          },
+        } : {}),
         ...(m?.photos ? { photoSequence: scenePhotoSequence(scene, { fps: clock.fps, beats: analysis.beats || [] }) } : {}),
+        templateEffects: normalizeTemplateEffects(scene.templateEffects),
+        // A person holding the camera (the shot's or video's Handheld additions), as the engine's handheldView reads it.
+        ...(() => {
+          const handheld = documentHandheld(templateEffects(project, scene), scene.sceneId, frame?.width && frame?.height ? frame.width / frame.height : 16 / 9);
+          return handheld ? { handheld } : {};
+        })(),
         stillMove: typeof scene.stillMove === 'string' ? scene.stillMove : null,
         // #10589: the planned camera move the template's camera rig follows (only when planned).
         ...(typeof scene.camera?.move === 'string' ? { camera: structuredClone(scene.camera) } : {}),
@@ -284,10 +310,11 @@ export function buildDocumentData(project, { media = new Map(), frame, clock, so
   const songDocument = buildSongDocument(project);
   const effectScenes = (project.scenes || []).map(scene => isEndFrameImageEffect(scene?.imageEffect) && !media.get(scene.sceneId)?.end
     ? { ...scene, imageEffect: null } : scene);
-  const sections = sceneTransitionSections(effectScenes, clock.fps, { endSec: songDurationSec });
+  const cameras = project?.cameras;
+  const sections = sceneTransitionSections(effectScenes, clock.fps, { endSec: songDurationSec, cameras });
   const effectFrames = mergeGlitchFrames(transitionGlitchFrames(sections, { totalFrames: clock.frames }),
-    sceneImageEffectGlitchFrames(effectScenes, clock.fps, { layered: true, endSec: songDurationSec }),
-    sceneShotGlitchFrames(effectScenes, clock.fps, { endSec: songDurationSec }))
+    sceneImageEffectGlitchFrames(effectScenes, clock.fps, { layered: true, endSec: songDurationSec, cameras }),
+    sceneShotGlitchFrames(effectScenes, clock.fps, { endSec: songDurationSec, cameras }))
     .map(effect => ({ frame: effect.frame, params: glitchFrameParams(effect) }));
   const lyrics = songDocument.lyrics;
   const narrative = resolveNarrativeEvents(project, songDocument.sections, clock.fps);
@@ -298,7 +325,7 @@ export function buildDocumentData(project, { media = new Map(), frame, clock, so
   const composition = project?.composition || {};
   return {
     version: 1,
-    project: { id: project?.id ?? null, name: project?.name ?? '', aspect: documentAspect(project), lyricLayout: musicVideoLyricLayout(project) },
+    project: { id: project?.id ?? null, name: project?.name ?? '', templateEffects: normalizeTemplateEffects(project?.templateEffects), aspect: documentAspect(project), lyricLayout: musicVideoLyricLayout(project) },
     render: { width: frame.width, height: frame.height, fps: clock.fps, frames: clock.frames, durationSec: clock.durationSec },
     song: {
       durationSec: songDurationSec,
@@ -410,7 +437,7 @@ export async function openIsolatedDocumentPreview({ project, jobId, signal, onEv
   const { openComposition } = await import('../htmlComposition/browser.js');
   const { loadHistory } = await import('../videoGen/history.js');
   const generated = project.composition?.document?.source?.kind === 'generated';
-  const history = (project.scenes || []).some((scene) => scene?.videoHistoryId) ? await loadHistory() : [];
+  const history = (project.scenes || []).some((scene) => scenePlayableClipId(scene, project.scenes)) ? await loadHistory() : [];
   const media = await resolveSceneMedia(project, { history, probe: probeVideoGeometry, retimed: true, strictLayers: generated });
   const data = buildDocumentData(project, {
     media, frame: plan.frame, clock: plan.clock, songDurationSec: plan.songDurationSec, generated,
@@ -573,7 +600,7 @@ export async function encodeDocumentComposition({
   const { AUDIO_NORM, buildAudioBedMix } = await import('../videoTimeline/audioBedMix.js');
   const ffmpeg = await findFfmpeg();
   if (!ffmpeg) throw new ServerError('ffmpeg not found on PATH', { status: 500, code: 'FFMPEG_MISSING' });
-  const history = (project.scenes || []).some((s) => s?.videoHistoryId) ? await loadHistory() : [];
+  const history = (project.scenes || []).some((s) => scenePlayableClipId(s, project.scenes)) ? await loadHistory() : [];
   const media = await resolveSceneMedia(project, { history, probe: probeVideoGeometry, retimed: true, strictLayers: project.composition?.document?.source?.kind === 'generated' });
   const data = buildDocumentData(project, { media, frame: plan.frame, clock: plan.clock, songDurationSec: plan.songDurationSec,
     generated: project.composition?.document?.source?.kind === 'generated' });
@@ -724,7 +751,7 @@ export async function probeDocumentText({ project, jobId, signal, sampleTimes, o
   const { SRGB_TO_LINEAR } = await import('./overlayText.js');
   const { default: sharp } = await import('sharp');
   const generated = project.composition?.document?.source?.kind === 'generated';
-  const history = (project.scenes || []).some((s) => s?.videoHistoryId) ? await loadHistory() : [];
+  const history = (project.scenes || []).some((s) => scenePlayableClipId(s, project.scenes)) ? await loadHistory() : [];
   const media = await resolveSceneMedia(project, { history, probe: probeVideoGeometry, retimed: true, strictLayers: generated });
   const data = buildDocumentData(project, { media, frame: plan.frame, clock: plan.clock, songDurationSec: plan.songDurationSec, generated });
   let staged;

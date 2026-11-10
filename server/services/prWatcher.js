@@ -1136,7 +1136,7 @@ export async function checkPullRequests(app, {
   }
   const newLastSeen = Math.max(prevLastSeen || 0, ...prs.map(pr => Number.isInteger(pr.number) ? pr.number : 0));
   return { ok: true, firstRun, newPrs, newLastSeen, activityByPr, selfManagedHeld,
-    candidateCount: prs.length, repoFullName, defaultBranch };
+    candidateCount: prs.length, repoFullName, repoHost: githubApiHost(origin.host), defaultBranch };
 
 }
 

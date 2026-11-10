@@ -19,6 +19,7 @@ import {
 } from '../../lib/sseUtils.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { getSettings } from '../settings.js';
+import { autoDeleteHostedCopy } from '../hostedRenderRemoteDelete.js';
 import {
   awaitRunwayTask, cancelRunwayTask, createRunwayTaskEntry, resolveRunwayApiKey, submitRunwayTask,
 } from '../runwayApi.js';
@@ -43,6 +44,7 @@ export const getActiveJob = () => {
   const entries = [...activeJobs.values()];
   return entries.length ? entries[entries.length - 1] : null;
 };
+export const getActiveJobs = () => [...activeJobs.values()];
 
 export const attachSseClient = (jobId, res) => attachSse(jobs, jobId, res);
 const preparations = createMediaJobPreparation();
@@ -198,6 +200,7 @@ async function runRunway(job, jobId, {
     for (const [index, ref] of references.entries()) referenceImages.push({ uri: await encodeInputImage(ref.path, index === 0 ? reviewedReferenceBytes : null), ...(family.referenceTags ? { tag: ref.tag } : {}) });
     if (entry.aborted) return finalizeCanceled(job, jobId);
     entry.taskId = await submitRunwayTask({ apiKey, endpoint: 'text_to_image', body: { ...request.body, ...(referenceImages.length ? { referenceImages } : {}) }, signal: entry.controller.signal });
+    meta.runwayTaskId = entry.taskId;
     // THROTTLED waits on this accepted task. A failed/moderated task is terminal, never resubmitted.
     const polled = await awaitRunwayTask({
       entry, apiKey, deadline, timeoutMs: RUNWAY_IMAGE_TIMEOUT_MS, verbatimFailure: true,
@@ -266,6 +269,7 @@ async function runRunway(job, jobId, {
         throw err;
       }
     });
+    if (job.status === 'complete') void autoDeleteHostedCopy('runway', 'image', filename, { apiKey });
   } catch (err) {
     await cancelRunwayTask(entry);
     if (entry.aborted) return finalizeCanceled(job, jobId);

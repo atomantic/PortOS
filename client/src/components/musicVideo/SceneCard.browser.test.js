@@ -120,6 +120,16 @@ describe.skipIf(!chrome)('shot editor render selector layout', () => {
       await page.goto(`${fixture.origin}shot-editor-test?width=1000`);
       await page.getByRole('group', { name: 'Show' }).getByRole('button', { name: 'Still' }).click();
       expect(await fit(page.getByRole('textbox', { name: 'Frame prompt' }))).toBeGreaterThan(320);
+      const still = page.getByRole('region', { name: 'Still' });
+      const frameService = still.getByLabel('Render on');
+      await frameService.selectOption('codex');
+      const frameModel = still.getByLabel('Model');
+      await frameModel.fill('example-model');
+      expect(await frameModel.inputValue()).toBe('example-model');
+      await frameService.selectOption('grok');
+      await still.getByLabel('Model').waitFor({ state: 'hidden' });
+      await page.getByRole('group', { name: 'Show' }).getByRole('button', { name: 'Clip' }).click();
+      expect(await page.getByRole('region', { name: 'Render' }).getByLabel('Render on').inputValue()).toBe('');
       expect(pageErrors).toEqual([]);
     } finally {
       await page.close();
@@ -138,7 +148,8 @@ describe.skipIf(!chrome)('shot editor render selector layout', () => {
     });
     try {
       await page.goto(`${fixture.origin}shot-editor-test?width=${containerWidth}`);
-      const renderer = page.getByLabel('Render on');
+      const renderer = page.getByRole('region', { name: 'Render' }).getByLabel('Render on');
+      await page.locator('#mv-scene-layout-frame-render').waitFor({ state: 'hidden' });
       await renderer.waitFor();
       for (const value of ['', 'grok', 'local']) {
         await renderer.selectOption(value);

@@ -1,4 +1,4 @@
-import { currentPlateEvidence, plateRequirementBasis } from '../../lib/musicVideoPlateEvidence.js';
+import { currentPlateEvidence, plateFrameRole, plateRequirementBasis } from '../../lib/musicVideoPlateEvidence.js';
 import { assertMusicVideoMedia } from '../../lib/musicVideoMediaPolicy.js';
 /**
  * Music Video scene takes (#8965) — pure record transforms.
@@ -25,7 +25,7 @@ import { assertMusicVideoMedia } from '../../lib/musicVideoMediaPolicy.js';
  */
 
 import { musicVideoCastInputsRecord } from '../../lib/musicVideoCastLook.js';
-import { captureTakeDependencies, musicVideoTakeChanges, retainMusicVideoDependencies } from '../../lib/musicVideoDependencies.js';
+import { captureImageFrameDependencies, captureTakeDependencies, musicVideoTakeChanges, retainMusicVideoDependencies } from '../../lib/musicVideoDependencies.js';
 import { randomUUID } from 'crypto';
 import { ServerError } from '../../lib/errorHandler.js';
 import { isNonBlankStr, trimTo } from '../../lib/textUtils.js';
@@ -55,7 +55,7 @@ const clip = (v, max) => (isNonBlankStr(v) ? trimTo(v, max) : null);
 // A basename only — an imported file's name is provenance, never a path.
 const takeOriginalName = (name) => (isNonBlankStr(name) ? clip(name.split(/[\\/]/).pop(), 200) : null);
 
-function buildTake({ kind, assetId, source, provider = null, jobId = null, prompt = null, sourceImageId = null, originalName = null, shotInstruction = null, use = 'final', dependencies = null, inputAssets = null, castInputs = null, costUsd = null, spendKind = null, costModelId = null, now }) {
+function buildTake({ kind, assetId, source, provider = null, jobId = null, prompt = null, sourceImageId = null, originalName = null, shotInstruction = null, use = 'final', dependencies = null, frameDependencies = null, inputAssets = null, castInputs = null, costUsd = null, spendKind = null, costModelId = null, now }) {
   const recordedCastInputs = kind === 'image' || kind === 'endImage' ? musicVideoCastInputsRecord(castInputs) : null;
   return {
     takeId: `mvt-${randomUUID()}`,
@@ -69,6 +69,7 @@ function buildTake({ kind, assetId, source, provider = null, jobId = null, promp
     originalName: takeOriginalName(originalName),
     status: 'candidate',
     ...(dependencies ? { dependencies: structuredClone(dependencies) } : {}),
+    ...(frameDependencies ? { frameDependencies: structuredClone(frameDependencies) } : {}),
     ...(recordedCastInputs ? { castInputs: recordedCastInputs } : {}),
     ...(inputAssets?.length ? { inputAssets: structuredClone(inputAssets) } : {}),
     // #8980 — 'motion-reference' scaffolding never fills the slot on its own.
@@ -156,11 +157,28 @@ function appendToScene(project, scene, inputs, now) {
   for (const input of inputs) {
     const existing = takes.find((t) => t.kind === input.kind && t.assetId === input.assetId);
     const dependencies = input.dependencies || (input.kind === 'video' && input.sourceImageId ? captureTakeDependencies(scene, input.sourceImageId) : null);
-    const take = existing || buildTake({ ...input, dependencies, now });
+    const frameSlot = input.kind === 'endImage' ? 'end' : 'start';
+    // A stamp from submit time wins. A generated still with no stamp (the
+    // synchronous lane, or a job queued before stamps existed) is captured
+    // here unless the caller sets skipFrameCapture — a late completion must
+    // not snapshot the shot as it stands now.
+    const frameDependencies = input.kind === 'image' || input.kind === 'endImage'
+      ? input.frameDependencies || (input.skipFrameCapture || input.source !== 'generated' ? null : captureImageFrameDependencies(project, scene, { slot: frameSlot }))
+      : null;
+    const { skipFrameCapture: _skipFrameCapture, ...stored } = input;
+    // A slot materialized before this completion has no stamp yet. Keep the
+    // first stamp; a replay must not replace evidence already recorded.
+    const stamped = existing && frameDependencies && !existing.frameDependencies
+      ? { ...existing, frameDependencies: structuredClone(frameDependencies) }
+      : existing;
+    const take = existing ? stamped : buildTake({ ...stored, dependencies, frameDependencies, now });
     if (!existing) takes = [...takes, take];
+    else if (take !== existing) takes = takes.map((entry) => (entry === existing ? take : entry));
     appended.push(take);
     const field = TAKE_SLOT[input.kind];
-    const selectable = input.autoSelect !== false && take.status !== 'rejected' && take.use !== 'motion-reference' && !musicVideoTakeChanges(project, scene, take).length;
+    // The takes appended in this batch are the plates a same-call clip was built on.
+    const selectable = input.autoSelect !== false && take.status !== 'rejected' && take.use !== 'motion-reference'
+      && !musicVideoTakeChanges(project, { ...scene, takes }, take).length;
     const replaceFrame = input.replaceSelection === true && (input.kind === 'image' || input.kind === 'endImage');
     const selectionUnchanged = input.expectedSelection !== undefined && (next[field] || null) === input.expectedSelection;
     const repairDone = input.kind === 'image' && input.stillRepairAt && next.stillFixes?.pending === true
@@ -242,17 +260,23 @@ function locateTake(project, sceneId, takeId) {
   return { idx, scene, takes, take };
 }
 
-/** The frame take a plate check may inspect; throws when it is missing or not a still. */
+/** The still a plate check may inspect: a start frame or an end frame, never a clip. */
 export function plateCheckTake(project, sceneId, takeId) {
   const { scene, take } = locateTake(project, sceneId, takeId);
-  if (take.kind !== 'image') throw new ServerError('Only frame takes can be checked', { status: 400, code: 'VALIDATION_ERROR' });
+  if (take.kind !== 'image' && take.kind !== 'endImage') throw new ServerError('Only frame takes can be checked', { status: 400, code: 'VALIDATION_ERROR' });
   return { scene, take };
+}
+
+/** The prompt a plate check judges. An end frame never falls through to the start prompt. */
+export function plateCheckPrompt(scene, take) {
+  if (plateFrameRole(take) === 'end') return take.prompt ?? scene.endFramePrompt ?? '';
+  return take.prompt ?? scene.framePrompt ?? scene.prompt ?? '';
 }
 
 /** Save a plate check's evidence on the take, unless the shot's intent changed while it ran. */
 export function recordTakePlateEvidence(project, sceneId, takeId, evidence) {
   const { idx, scene, takes, take } = locateTake(project, sceneId, takeId);
-  if (take.assetId !== evidence.assetId || plateRequirementBasis(scene) !== evidence.basis) {
+  if (take.assetId !== evidence.assetId || plateRequirementBasis(scene, plateFrameRole(take), project) !== evidence.basis) {
     throw new ServerError('The shot or frame changed during the check. Check it again.', { status: 409, code: 'MUSIC_VIDEO_REVIEW_STALE' });
   }
   const next = { ...scene, takes: takes.map((t) => (t.takeId === takeId ? { ...t, plateEvidence: evidence } : t)) };
@@ -260,11 +284,21 @@ export function recordTakePlateEvidence(project, sceneId, takeId, evidence) {
 }
 
 /** Explicitly select a take for its slot. Selecting a rejected take restores it. */
-export function selectSceneTake(project, sceneId, takeId) {
+export function selectSceneTake(project, sceneId, takeId, options = {}) {
   const { idx, scene, takes, take } = locateTake(project, sceneId, takeId);
+  if (Object.hasOwn(options, 'expectedSelectedAssetId') && (scene[TAKE_SLOT[take.kind]] || null) !== options.expectedSelectedAssetId) {
+    throw new ServerError('This shot has a newer take selection; Undo kept it.', { status: 409, code: 'MUSIC_VIDEO_UNDO_CONFLICT' });
+  }
   assertMusicVideoMedia(project, take.kind, 'take selection');
   const nextTakes = takes.map((t) => (t.takeId === takeId && t.status === 'rejected' ? { ...t, status: 'candidate' } : t));
   const next = { ...scene, takes: nextTakes, [TAKE_SLOT[take.kind]]: take.assetId };
+  if (next.selectedTakeMarkedBad) {
+    const selectedVideo = nextTakes.find((entry) => entry.kind === 'video' && entry.assetId === next.videoHistoryId);
+    const source = selectedVideo?.sourceImageId || selectedVideo?.dependencies?.references?.find((ref) => ref.role === 'plate')?.assetId;
+    const mismatch = source && next.referenceImageId && source !== next.referenceImageId;
+    const bad = Object.entries(TAKE_SLOT).some(([kind, field]) => next[field] && project.assetMarks?.[`${kind === 'video' ? 'video' : 'image'}:${next[field]}`] === 'bad');
+    if (!mismatch && !bad) delete next.selectedTakeMarkedBad;
+  }
   return { project: replaceScene(project, idx, next), scene: next };
 }
 
@@ -287,7 +321,8 @@ export function rejectUnusedTakes(project, sceneId) {
   const rejected = takes.filter(unused).length;
   if (!rejected) return { project, scene, rejected };
   const next = { ...scene, takes: takes.map((take) => (unused(take) ? { ...take, status: 'rejected' } : take)) };
-  return { project: replaceScene(project, idx, next), scene: next, rejected };
+  const saved = replaceScene(project, idx, next);
+  return { project: saved, scene: saved.scenes[idx], rejected };
 }
 
 /**
@@ -321,7 +356,7 @@ export function swapSceneFrames(project, sceneId) {
 export function reviewSceneTake(project, sceneId, takeId, { status, note, acknowledgeRenderQuality, reviewer }) {
   const { idx, scene, takes, take } = locateTake(project, sceneId, takeId);
   if (acknowledgeRenderQuality) {
-    const evidence = currentPlateEvidence(scene, take);
+    const evidence = currentPlateEvidence(scene, take, project);
     const defect = evidence?.checks.find((check) => check.id === 'render-quality' && check.status === 'fail');
     if (!reviewer || !defect || acknowledgeRenderQuality.basis !== evidence.basis || acknowledgeRenderQuality.note !== defect.note) {
       throw new ServerError('The image or rendering defect changed. Inspect it again before acknowledging.', { status: 409, code: 'MUSIC_VIDEO_REVIEW_STALE' });

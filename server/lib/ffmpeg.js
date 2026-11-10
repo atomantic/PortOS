@@ -1107,6 +1107,43 @@ export const trimVideoFromFrame = async (videoPath, outPath, { startFrame, endFr
   return installEncodedVideo(encodePath, videoPath, 'trimmed');
 };
 
+// Re-encode a clip through a spatial video filter (lib/handheldCamera.js's
+// shake) into a NEW file, copying any audio untouched: the filter keeps every
+// frame and its timing, so the soundtrack still lines up.
+// Returns `{ ok: true, outPath }` or `{ ok: false, reason }`.
+export const filterVideoFrames = async (videoPath, outPath, { filter, label = 'filter' } = {}) => {
+  if (typeof videoPath !== 'string' || !videoPath) return { ok: false, reason: 'invalid video path' };
+  if (typeof outPath !== 'string' || !outPath || resolvePath(videoPath) === resolvePath(outPath)) return { ok: false, reason: 'invalid output path' };
+  if (!existsSync(videoPath)) return { ok: false, reason: 'video file missing' };
+  if (typeof filter !== 'string' || !filter) return { ok: false, reason: 'no filter' };
+  let ffmpeg;
+  try {
+    ffmpeg = await findFfmpeg({ requiredEncoder: 'libx264' });
+  } catch (err) {
+    return { ok: false, reason: err.message };
+  }
+  if (!ffmpeg) return { ok: false, reason: 'ffmpeg not found' };
+  await ensureDir(dirname(outPath));
+  const audio = await hasAudioStream(videoPath);
+  const result = await runFfmpegProcess({
+    bin: ffmpeg,
+    args: [
+      '-i', videoPath,
+      '-vf', appendFilter(filter, await bt709TagFilter()),
+      ...(audio ? ['-c:a', 'copy'] : ['-an']),
+      ...H264_ENCODE_ARGS,
+      ...BT709_CONTAINER_ARGS,
+      '-movflags', '+faststart',
+      '-y', outPath,
+    ],
+  });
+  if (!result.ok) {
+    await unlink(outPath).catch(() => {});
+    return { ok: false, reason: `ffmpeg ${label} failed: ${result.reason}` };
+  }
+  return { ok: true, outPath };
+};
+
 // Cut `[startSec, endSec)` of a clip into a new file (a music-video sequence
 // take split onto its scenes, #14241). Re-encodes for the same reason as
 // trimVideoFromFrame. Returns `{ ok: true, outPath }` or `{ ok: false, reason }`.

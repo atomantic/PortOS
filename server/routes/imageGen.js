@@ -18,7 +18,7 @@ import { fableLoomMultipartUnsupported, prepareFableLoomImageParams } from '../s
 import { finishVisualProfileImage } from '../services/imageGen/finishVisualProfile.js';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
 import {
-  validateRequest, mediaDeleteQuerySchema, modelDownloadQuerySchema, modelDownloadParamsSchema, imageCancelBodySchema, imageVisibilityBodySchema, imageEdgeSchema, refineImagePixelCap, PIXEL_CAP_MESSAGE,
+  validateRequest, hostedProviderParamSchema, mediaDeleteQuerySchema, modelDownloadQuerySchema, modelDownloadParamsSchema, imageCancelBodySchema, imageVisibilityBodySchema, imageEdgeSchema, refineImagePixelCap, PIXEL_CAP_MESSAGE,
 } from '../lib/validation.js';
 import { optionalUploadFields, optionalUpload } from '../lib/multipart.js';
 import * as imageGen from '../services/imageGen/index.js';
@@ -27,7 +27,8 @@ import { resolveCloudProviderConfig } from '../services/imageGen/cloudProviderCo
 import setupRouter, { streamMossAction } from './imageGenSetup.js';
 import { usesMossSwift } from '../lib/imageRuntimeRemedies.js';
 import { downloadMossWeights, mossModelCacheStatus, verifyMossWeights, repairMossWeights } from '../services/imageGen/mossWeights.js';
-import { enqueueJob, attachSseClient as attachQueueSseClient, cancelJob, listJobs } from '../services/mediaJobQueue/index.js';
+import { enqueueJob, attachSseClient as attachQueueSseClient, cancelJob, listJobs, laneConcurrencyFor } from '../services/mediaJobQueue/index.js';
+import { mediaJobExecutionLane } from '../lib/generationModes.js';
 import { recordUserAction } from '../services/userActions.js';
 import { getImageModels, requiredReposForModel } from '../lib/mediaModels.js';
 import { inspectModelCache, verifyModelCache, repairModelCache, aggregateVerifies } from '../lib/hfCache.js';
@@ -57,6 +58,7 @@ import * as characterService from '../services/character.js';
 import { randomUUID } from 'crypto';
 import { buildUniverseRunTag } from '../services/universeRunTag.js';
 import { getSettings } from '../services/settings.js';
+import { deleteImageHostedCopy } from '../services/hostedRenderRemoteDelete.js';
 import { prepareRemoteMediaJob } from '../services/federatedMedia/remoteSubmission.js';
 import { collectRemoteInputAssets } from '../services/federatedMedia/inputAssets.js';
 import { buildFederatedMediaRequest } from '../lib/federatedMediaRequest.js';
@@ -123,7 +125,7 @@ router.get('/style-presets', (_req, res) => res.json(STYLE_PRESETS));
 const noNulPrompt = z.string().max(MAX_PROMPT_LENGTH)
   .refine((v) => !v.includes('\0'), { message: 'Prompt may not contain a NUL character' });
 
-const generateSchema = z.object({
+export const generateSchema = z.object({
   promptAdditions: promptAdditionsSchema,
   quickEdit: z.boolean().optional(),
   reviewedPromptDigest: z.string().regex(/^[a-f0-9]{64}$/).optional(),
@@ -273,8 +275,12 @@ const generateSchema = z.object({
     compose: z.boolean().optional(),
     fromFrame: z.boolean().optional(),
     refine: z.boolean().optional(),
+    includeReferences: z.boolean().optional(),
     greyboxImageId: galleryImageFilenameSchema('greybox capture').optional(),
     greyboxBlockingImageId: galleryImageFilenameSchema('greybox blocking capture').optional(),
+    // The frame a from-frame or refine reworks, when the caller did not put it
+    // first in referenceImageFiles. The card's frame route sends both.
+    leadImageId: galleryImageFilenameSchema('lead frame').optional(),
     // The guides and sheets this submit actually sent (#14154). The completion
     // hook copies them onto the take; it does not look them up again.
     castInputs: musicVideoCastInputsSchema.optional(),
@@ -458,7 +464,38 @@ router.get('/status', asyncHandler(async (req, res) => {
 }));
 
 router.get('/active', asyncHandler(async (_req, res) => {
-  res.json({ activeJob: await imageGen.getActiveJob() });
+  const activeJob = await imageGen.getActiveJob();
+  const queueRunning = listJobs({ kind: 'image', status: 'running' }).map((job) => ({
+    jobId: job.id,
+    generationId: job.id,
+    status: job.status,
+    position: job.position,
+    startedAt: job.startedAt || null,
+    params: job.params,
+  }));
+  const serviceJobs = (await imageGen.getActiveJobs?.()) || [];
+  const seen = new Set();
+  const activeJobs = [];
+  for (const j of [...queueRunning, ...serviceJobs]) {
+    const id = j.jobId || j.generationId || j.id;
+    if (id && !seen.has(id)) {
+      seen.add(id);
+      activeJobs.push(j);
+    } else if (!id) {
+      activeJobs.push(j);
+    }
+  }
+  const sampleJob = queueRunning[0] || (activeJob ? { kind: 'image', params: activeJob } : null);
+  const lane = sampleJob ? mediaJobExecutionLane({ kind: 'image', mode: sampleJob.params?.mode }) : 'gpu';
+  const isLocal = lane === 'gpu';
+  const limit = (typeof laneConcurrencyFor === 'function' && sampleJob) ? laneConcurrencyFor(sampleJob) : 1;
+
+  res.json({
+    activeJob,
+    activeJobs: activeJobs.length > 0 ? activeJobs : (activeJob ? [activeJob] : []),
+    limit,
+    ...(isLocal ? { memoryGoverned: true, limitReason: 'memory-governed' } : {}),
+  });
 }));
 
 router.get('/agy/models', asyncHandler(async (_req, res) => {
@@ -520,16 +557,16 @@ router.post('/prompt-preview', asyncHandler(async (req, res) => {
   res.json(await previewImagePrompt(validateRequest(promptPreviewSchema, req.body ?? {})));
 }));
 
-router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
-  if (typeof req.body?.fableLoom === 'string' && Object.keys(req.files || {}).length) {
-    await Promise.allSettled(Object.values(req.files).map(file => unlinkGuarded(file.path)));
-    throw fableLoomMultipartUnsupported();
-  }
-  const data = validateRequest(generateSchema, coerceFormFields(req.body));
+// Shared by POST /generate and the music-video shot frame route (#15583).
+// `data` is already validated. Uploaded temp paths are returned for callers that own cleanup;
+// the HTTP route cleans every upload after dispatch settles. A caller with no uploads
+// gets an empty list.
+export async function executeImageGenerate(req, data, files = {}) {
+  const finish = (responseBody) => ({ body: responseBody, uploadedTempPaths, params });
   if (data.catalogIngredientId) await assertCatalogIdentityWritable(data.catalogIngredientId);
   const { data: params, mode, settings, uploadedTempPaths } = await prepareGenerateParams({
     data,
-    files: req.files,
+    files,
     referenceImageFields: REFERENCE_IMAGE_FIELDS,
   });
 
@@ -587,16 +624,6 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
   }
   delete params.catalogIngredientId;
   delete params.catalogMediaKind;
-
-  // Multer's tmp upload is no longer needed once we've copied it into
-  // PATHS.images. Use res.on('close') so the temp files are cleaned up whether
-  // generateImage resolves, throws (handled by errorHandler middleware), or
-  // the client drops the connection mid-flight.
-  if (uploadedTempPaths.length) {
-    res.on('close', () => {
-      for (const p of uploadedTempPaths) unlinkGuarded(p).catch(() => {});
-    });
-  }
 
   // Local + codex both go through mediaJobQueue (separate lanes — codex
   // doesn't share MLX). External SD-API stays synchronous: it's a remote
@@ -664,7 +691,7 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
       kind: 'image',
       params: { ...jobParams, remoteMedia },
     });
-    return res.json(queuedImageResponse({
+    return finish(queuedImageResponse({
       ...queued,
       mode: null,
       model: request.modelId,
@@ -692,7 +719,7 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
     // `cloud.modelId` is the *effective* model so the response metadata reports
     // what actually renders (gpt-6-luna by default) instead of "codex"/null.
     const queued = await enqueueLoggedImage(req, { kind: 'image', params: { ...cloud.jobParams, ...params } });
-    return res.json(queuedImageResponse({ ...queued, mode, model: cloud.modelId }));
+    return finish(queuedImageResponse({ ...queued, mode, model: cloud.modelId }));
   }
   if (mode === IMAGE_GEN_MODE.LOCAL) {
     const { pythonPath: py, selectedModel } = resolveLocalImageModel(settings, params);
@@ -707,7 +734,7 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
     // selectedModel reflects the actual fallback chain resolveLocalImageModel
     // applied (caller modelId → 'dev' → allModels[0]) rather than just the
     // requested id.
-    return res.json(queuedImageResponse({
+    return finish(queuedImageResponse({
       ...queued,
       mode: IMAGE_GEN_MODE.LOCAL,
       model: selectedModel?.id || params.modelId || 'dev',
@@ -751,7 +778,21 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
     }).catch(() => {});
     catalogEvents.emit('primitive-changed', { ingredientId: params.catalogAttach.ingredientId });
   }
-  res.json(result);
+  return finish(result);
+}
+
+router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
+  const uploadedTempPaths = Object.values(req.files || {}).map(file => file.path).filter(Boolean);
+  try {
+    if (typeof req.body?.fableLoom === 'string' && uploadedTempPaths.length) throw fableLoomMultipartUnsupported();
+    const data = validateRequest(generateSchema, coerceFormFields(req.body));
+    const rendered = await executeImageGenerate(req, data, req.files);
+    res.json(rendered.body);
+  } finally {
+    // Keep uploads alive until preparation/dispatch settles, even if the client
+    // disconnects; validation and generation failures must clean them up too.
+    await Promise.allSettled(uploadedTempPaths.map(path => unlinkGuarded(path)));
+  }
 }));
 
 router.post('/avatar', asyncHandler(async (req, res) => {
@@ -987,6 +1028,14 @@ router.delete('/:filename', asyncHandler(async (req, res) => {
   const { force } = validateRequest(mediaDeleteQuerySchema, req.query ?? {});
   await assertMediaDeletable(`image:${req.params.filename}`, { force: force === '1' });
   res.json({ ok: true, ...(await deleteMediaAnywhere('image', req.params.filename)) });
+}));
+
+// Runs the provider's delete for a finished render (Runway: the rendered asset; fal.ai: stored payloads and output files);
+// the local image and sidecar stay, stamped with when the hosted copy was deleted.
+router.delete('/:filename/hosted/:provider', asyncHandler(async (req, res) => {
+  local.assertGalleryFilename(req.params.filename);
+  const provider = validateRequest(hostedProviderParamSchema, req.params.provider);
+  res.json(await deleteImageHostedCopy(provider, req.params.filename));
 }));
 
 router.post('/:filename/cancel-delete', asyncHandler(async (req, res) => {

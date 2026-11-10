@@ -8,6 +8,7 @@
  */
 import { shotActionContractProblem } from '../../../server/lib/musicVideoActionContract.js';
 import { currentPlateEvidence } from '../../../server/lib/musicVideoPlateEvidence.js';
+import { resolveSourceTake, scenePlayableClipId } from '../../../server/lib/musicVideoSourceTake.js';
 import { isEndFrameImageEffect } from './musicVideoImageEffects.js';
 import { clipLoops, clipNeedsMoreFootage, isSelfDrawnLayer, sceneVisualLayer, sceneHasAuthoredSpan, sceneUsesAuthoredTiming } from './musicVideoLayers.js';
 import { performanceBlockedReason, performanceCapability, planPerformanceWindow, isPerformanceScene, selectedPerformanceInstruction } from './musicVideoShotTiming.js';
@@ -29,6 +30,8 @@ export const SCENE_ATTENTION_LABELS = Object.freeze({
   'song-changed': 'Lyrics changed',
   'song-new': 'New lyrics',
   'song-cut': 'Lyrics cut',
+  'frame-stale': 'Frame out of date',
+  'bad-take': 'Selected take marked bad',
 });
 
 // A revised song's verdict on a shot (server songRevision.js sceneReview) as its attention code.
@@ -37,7 +40,27 @@ const SONG_REVIEW_CODES = Object.freeze({ changed: 'song-changed', new: 'song-ne
 /** Codes that mean the shot still lacks material a render needs (the `missing` filter). */
 export const SCENE_MISSING_CODES = Object.freeze(['missing-frame', 'missing-clip', 'no-span']);
 
-export const SCENE_FILTERS = Object.freeze(['all', 'attention', 'missing']);
+export const SCENE_FILTERS = Object.freeze(['all', 'attention', 'missing', 'stale-frame', 'bad-take']);
+
+const slotDependencyState = (scene, kind, assetId) => (
+  assetId ? (scene?.takes || []).find((take) => take?.kind === kind && take.assetId === assetId)?.dependencyState || null : null
+);
+
+/** Header label for the selected frame. A stale end frame is named on its own; unknown is not ready. */
+export function selectedFrameReadiness(scene, marksOrOpts = {}) {
+  const assetMarks = marksOrOpts?.assetMarks || marksOrOpts || {};
+  const isStartBad = scene?.selectedTakeMarkedBad ||
+    (scene?.referenceImageId && assetMarks[`image:${scene.referenceImageId}`] === 'bad') ||
+    (scene?.endImageId && assetMarks[`image:${scene.endImageId}`] === 'bad');
+  if (isStartBad) return { text: 'selected take marked bad', reasons: ['Selected take marked bad'] };
+  const start = slotDependencyState(scene, 'image', scene?.referenceImageId);
+  const end = slotDependencyState(scene, 'endImage', scene?.endImageId);
+  if (start?.status === 'stale') return { text: 'frame out of date', reasons: start.reasons || [] };
+  if (end?.status === 'stale') return { text: 'end frame out of date', reasons: end.reasons || [] };
+  if (start?.status === 'unknown') return { text: 'frame not checked', reasons: [] };
+  if (scene?.referenceImageId) return { text: 'frame ready', reasons: [] };
+  return { text: '', reasons: [] };
+}
 
 /**
  * The take slots a shot's picture uses: footage all of them, a still its frame
@@ -47,7 +70,7 @@ export const SCENE_FILTERS = Object.freeze(['all', 'attention', 'missing']);
 function takeKindsInUse(scene, layer) {
   if (layer === 'footage') return undefined;
   if (layer !== 'still') return [];
-  return isEndFrameImageEffect(scene.imageEffect) ? ['image', 'endImage'] : ['image'];
+  return isEndFrameImageEffect(scene.imageEffect) && scene.endFrameOff !== true ? ['image', 'endImage'] : ['image'];
 }
 
 /** The `?scenes=` value as a filter id; anything unknown is `all`. */
@@ -72,19 +95,32 @@ function performanceBlocked(scene, { lipSyncBackend, songDurationSec, videoSetti
  */
 export function sceneAttention(scene, ctx = {}) {
   if (!scene) return [];
-  const { layered = false, footageOptional = false, lipSyncBackend = '', songDurationSec = null, clipSec = null, failed = {}, songReview = null, videoSettings = null, locked = false, spanExtraSec = 0 } = ctx;
+  const { layered = false, footageOptional = false, lipSyncBackend = '', songDurationSec = null, clipSec = null, failed = {}, songReview = null, videoSettings = null, locked = false, spanExtraSec = 0, scenes = null } = ctx;
   const layer = sceneVisualLayer(scene, { layered });
+  const resolved = resolveSourceTake(scene, scenes);
+  const playableClipId = scenePlayableClipId(scene, scenes);
+  // A return shows the source shot's frame, so readiness follows that frame.
+  const shown = resolved?.source || scene;
+  const frameId = resolved?.referenceImageId || scene.referenceImageId || null;
+  const playbackEdit = resolved
+    ? { inSec: resolved.inSec, outSec: resolved.outSec }
+    : selectedPerformanceInstruction(scene)?.edit;
   const codes = [];
   if (scene.beatNeedsReview) codes.push('beat-needs-review');
   const songChange = songReview?.[scene.sceneId];
   if (songChange && !songChange.resolved && SONG_REVIEW_CODES[songChange.status]) codes.push(SONG_REVIEW_CODES[songChange.status]);
   // A code-rendered clip was made without a seed frame, so it needs none.
-  const codeRendered = scene.codeClip && scene.videoHistoryId;
-  if (!isSelfDrawnLayer(layer) && !scene.referenceImageId && !codeRendered) codes.push('missing-frame');
-  if (layer === 'footage' && !footageOptional && !scene.videoHistoryId) codes.push('missing-clip');
+  // A return shows the source shot's frame and clip, so those count as present.
+  const codeRendered = scene.codeClip && playableClipId;
+  if (!isSelfDrawnLayer(layer) && !frameId && !codeRendered) codes.push('missing-frame');
+  const usesEnd = !resolved && shown.endFrameOff !== true
+    && (layer === 'footage' || (layer === 'still' && isEndFrameImageEffect(shown.imageEffect)));
+  if (!isSelfDrawnLayer(layer) && (slotDependencyState(shown, 'image', frameId)?.status === 'stale'
+    || (usesEnd && slotDependencyState(shown, 'endImage', shown.endImageId)?.status === 'stale'))) codes.push('frame-stale');
+  if (layer === 'footage' && !footageOptional && !playableClipId) codes.push('missing-clip');
   if (layer !== 'footage' && !sceneHasAuthoredSpan(scene)) codes.push('no-span');
   if (layer === 'footage' && sceneUsesAuthoredTiming(scene) && sceneHasAuthoredSpan(scene)
-    && clipNeedsMoreFootage({ loop: clipLoops(scene, selectedPerformanceInstruction(scene)?.edit),
+    && clipNeedsMoreFootage({ loop: clipLoops(scene, playbackEdit),
       holdLastFrame: scene.holdLastFrame, spanSec: scene.endSec - scene.startSec + spanExtraSec, clipSec })) codes.push('under-covered');
   const contract = scene.direction?.actionContract;
   if (contract && shotActionContractProblem(contract, scene)) codes.push('contract-problem');
@@ -92,9 +128,15 @@ export function sceneAttention(scene, ctx = {}) {
   if (!locked && sceneHasPendingDecision(scene, { kinds: takeKindsInUse(scene, layer) })) codes.push('candidates-pending');
   if (contract && scene.referenceImageId) {
     const selected = sceneTakeList(scene, 'image').find((take) => take.assetId === scene.referenceImageId);
-    if (currentPlateEvidence(scene, selected)?.verdict !== 'pass') codes.push('plate-unverified');
+    if (currentPlateEvidence(scene, selected, ctx.project)?.verdict !== 'pass') codes.push('plate-unverified');
   }
   if (failed.frame?.[scene.sceneId] || failed.video?.[scene.sceneId]) codes.push('last-failure');
+  const badSelected = shown.selectedTakeMarkedBad || (ctx.assetMarks && (
+    (frameId && ctx.assetMarks[`image:${frameId}`] === 'bad') ||
+    (usesEnd && shown.endImageId && ctx.assetMarks[`image:${shown.endImageId}`] === 'bad') ||
+    (playableClipId && ctx.assetMarks[`video:${playableClipId}`] === 'bad')
+  ));
+  if (badSelected) codes.push('bad-take');
   return codes;
 }
 
@@ -102,6 +144,8 @@ export function sceneAttention(scene, ctx = {}) {
 export function sceneMatchesFilter(codes, filter) {
   if (filter === 'attention') return codes.length > 0;
   if (filter === 'missing') return codes.some((code) => SCENE_MISSING_CODES.includes(code));
+  if (filter === 'stale-frame') return codes.includes('frame-stale');
+  if (filter === 'bad-take') return codes.includes('bad-take');
   return true;
 }
 
@@ -114,11 +158,14 @@ export const SCENE_MEDIA_LABELS = Object.freeze({ clip: 'Clip', image: 'Image', 
  * composition draws it, or the clip was rendered from code), or null when
  * nothing is selected yet.
  */
-export function sceneMediaKind(scene, { layered = false } = {}) {
+export function sceneMediaKind(scene, { layered = false, scenes = null } = {}) {
   if (!scene) return null;
   const layer = sceneVisualLayer(scene, { layered });
   if (isSelfDrawnLayer(layer)) return layer;
   // A clip rendered from code (`codeClip`) is still footage to the render, but it reads as Code.
-  if (layer === 'footage' && scene.videoHistoryId) return scene.codeClip ? 'code' : 'clip';
-  return scene.referenceImageId ? 'image' : null;
+  // A return's badge follows the source clip it actually plays.
+  const playable = scenePlayableClipId(scene, scenes);
+  if (layer === 'footage' && playable) return scene.codeClip ? 'code' : 'clip';
+  const frame = scene.referenceImageId || resolveSourceTake(scene, scenes)?.referenceImageId;
+  return frame ? 'image' : null;
 }

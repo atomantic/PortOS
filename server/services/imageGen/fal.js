@@ -48,6 +48,7 @@ import {
 } from '../../lib/sseUtils.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { getSettings } from '../settings.js';
+import { autoDeleteHostedCopy } from '../hostedRenderRemoteDelete.js';
 import {
   awaitFalCompletion, cancelFalRequest, createFalRequestEntry, readCompletedFalResult, resolveFalApiKey,
   submitFalRequest,
@@ -93,6 +94,7 @@ export const getActiveJob = () => {
   const entries = [...activeJobs.values()];
   return entries.length ? entries[entries.length - 1] : null;
 };
+export const getActiveJobs = () => [...activeJobs.values()];
 
 export const attachSseClient = (jobId, res) => attachSse(jobs, jobId, res);
 
@@ -346,6 +348,7 @@ async function runFal(job, jobId, {
 
     const submitted = await submitFalRequest({ apiKey, modelId: request.endpointId, body: request.body });
     entry.cancelUrl = submitted.cancel_url;
+    meta.falRequestId = submitted.request_id;
     broadcastSse(job, { type: 'status', message: 'Queued at fal.ai…' });
 
     const polled = await awaitFalCompletion({
@@ -428,6 +431,7 @@ async function runFal(job, jobId, {
         throw err;
       }
     });
+    if (job.status === 'complete') void autoDeleteHostedCopy('fal', 'image', filename, { apiKey });
   } catch (err) {
     // An unanticipated throw (input encode, retrieval, transcode) may still
     // leave the remote request queued or running — cancel it. cancelFalRequest

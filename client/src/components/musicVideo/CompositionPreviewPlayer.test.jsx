@@ -66,13 +66,19 @@ const loadImage = async (image, decoding = Promise.resolve()) => {
 
 const opens = () => socket.emit.mock.calls.filter(([event]) => event === 'generated-preview:open');
 
+// The player decodes each frame off screen before the visible element takes
+// it. happy-dom loads no blob images, so these tests drive the visible
+// element's own boundary; the off-screen step has its own test below.
 beforeEach(() => {
+  vi.stubGlobal('Image', undefined);
   for (const fn of Object.values(api)) fn.mockReset();
   socket.emit.mockReset();
   socket.emit.mockImplementation(socket.reply);
   socket.__handlers.clear();
   socket.connected = true;
 });
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe('playthroughVersion', () => {
   // Uniquely catches the lyric overlay keeping a stale layout when the title card starts or stops showing.
@@ -391,10 +397,10 @@ describe('CompositionPreviewPlayer', () => {
       socket.reply(event, payload);
       for (const fn of socket.__handlers.get('generated-preview:opened') || []) fn({ requestId: payload.requestId,
         sessionId: '00000000-0000-4000-8000-0000000000ac', durationSec: 10, fps: 24, width: 1920, height: 1080, audio: 'none',
-        playbackFallback: { reason: 'wipe-exact-seek', upgradable: false } });
+        playbackFallback: { reason: 'unsupported-video-fps', upgradable: false } });
     });
     render(<CompositionPreviewPlayer project={project} audioUrl="/data/music/song.mp3" onProject={vi.fn()} />);
-    expect(await screen.findByText(/Playing frame by frame.*a shot uses a wipe/)).toBeInTheDocument();
+    expect(await screen.findByText(/Playing frame by frame.*a clip has an unknown or very low frame rate/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Update layered engine' })).not.toBeInTheDocument();
   });
 
@@ -576,6 +582,32 @@ describe('CompositionPreviewPlayer', () => {
     for (const { value: url } of create.mock.results) expect(revoke.mock.calls.filter(([value]) => value === url)).toHaveLength(1);
     create.mockRestore();
     revoke.mockRestore();
+  });
+
+  // Uniquely catches the visible element taking a frame before it is decoded, which WebKit paints as a blank flash (#15616).
+  it('shows a frame only after it has decoded off screen, and never a superseded one', async () => {
+    const loaders = [];
+    vi.stubGlobal('Image', function OffscreenImage() {
+      const loader = { src: '' };
+      loader.decode = () => new Promise((resolve, reject) => { loader.resolve = resolve; loader.reject = reject; });
+      loaders.push(loader);
+      return loader;
+    });
+    const { container } = render(<CompositionPreviewPlayer project={project} audioUrl={null} />);
+    expect(container.querySelector('img')).toBeNull();
+    await act(async () => loaders[0].resolve());
+    const image = container.querySelector('img');
+    const first = image.src;
+    expect(first).toBe(loaders[0].src);
+    const session = { requestId: opens()[0][1].requestId, generation: 0 };
+    const frame = (data) => act(() => { for (const fn of socket.__handlers.get('generated-preview:frame')) fn({ ...session, data: btoa(data) }); });
+    frame('second');
+    frame('third');
+    expect(image.src).toBe(first);
+    await act(async () => loaders[2].reject(new Error('undecodable')));
+    expect(image.src).toBe(loaders[2].src);
+    await act(async () => loaders[1].resolve());
+    expect(image.src).toBe(loaders[2].src);
   });
 
   it('saves the docked preview frame on screen to the gallery', async () => {
@@ -1199,6 +1231,33 @@ describe('native composition playback', () => {
     expect(image.src).toBe(paused);
     act(() => frame(4));
     expect(image.src).not.toBe(paused);
+  });
+
+  // Uniquely catches the fallback shot counter running ahead of the delayed picture (#15609).
+  it('names the shot pictured, not the shot the audio has reached, during fallback playback', async () => {
+    const native = installNative({ roundTrips: [120, 160, 200] });
+    const { raf } = media();
+    const scenes = [{ sceneId: 'a', startSec: 0 }, { sceneId: 'b', startSec: 1 }, { sceneId: 'c', startSec: 2 }];
+    const { container } = render(<CompositionPreviewPlayer project={{ ...project, scenes }} audioUrl='/song.mp3' shotNav />);
+    fireEvent.click(screen.getByRole('button', { name: 'Play' }));
+    await screen.findByText(/Native playback clock could not be synchronized/);
+    await waitFor(() => expect(raf).toHaveBeenCalled());
+    const audio = container.querySelector('audio');
+    const frame = (generation) => receive('frame', { ...native.session(), generation, data: btoa(`fallback-${generation}`) });
+    audio.currentTime = 0.5;
+    act(() => raf.mock.calls.at(-1)[0]());
+    audio.currentTime = 1.5;
+    act(() => raf.mock.calls.at(-1)[0]());
+    act(() => frame(1)); // The 0.5 s picture arrives while the audio is in shot 2.
+    expect(screen.getByText('Shot 1 / 3')).toBeTruthy();
+    audio.currentTime = 2.5;
+    act(() => raf.mock.calls.at(-1)[0]());
+    act(() => frame(2));
+    expect(screen.getByText('Shot 2 / 3')).toBeTruthy();
+    act(() => frame(3));
+    expect(screen.getByText('Shot 3 / 3')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Pause' }));
+    expect(screen.getByText('Shot 3 / 3')).toBeTruthy();
   });
 
   it('resynchronizes clock drift at actual audio time and stops repeated clock failures with a visible error', async () => {

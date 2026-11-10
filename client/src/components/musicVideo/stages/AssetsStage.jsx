@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router';
-import { Activity, Ban, Check, Film, FolderInput, Image as ImageIcon, Library, Pencil, Search, Star, Trash2 } from 'lucide-react';
+import { Activity, Ban, Check, Film, FolderInput, Image as ImageIcon, Library, Pencil, Search, Star, Trash2, Undo2 } from 'lucide-react';
 import TabPills from '../../ui/TabPills.jsx';
 import InfiniteScrollFooter from '../../ui/InfiniteScrollFooter.jsx';
+import toast from '../../ui/Toast.jsx';
 import { DeleteConfirm, applyPoolDelete, filterPool, poolKey, settlePoolDelete, usedLabel } from '../SceneTakePicker.jsx';
 import { shotNumbers as numberShots } from '../ShotStepper.jsx';
-import { addMusicVideoLibraryMedia, deleteMusicVideoPoolAssets, getMusicVideoMediaPool, importMusicVideoPool, listMusicVideoProjectSummaries, markMusicVideoPoolAssets, searchMusicVideoLibrary, searchMusicVideoMediaPool } from '../../../services/apiMusicVideo.js';
+import { addMusicVideoLibraryMedia, deleteMusicVideoPoolAssets, getMusicVideoMediaPool, importMusicVideoPool, listMusicVideoProjectSummaries, markMusicVideoPoolAssets, searchMusicVideoLibrary, searchMusicVideoMediaPool, selectMusicVideoSceneTake } from '../../../services/apiMusicVideo.js';
 import { takeThumbUrl, takeClipUrl } from '../../../lib/musicVideoTakes.js';
 import { formatCount } from '../../../utils/formatters.js';
 
@@ -95,12 +96,67 @@ export default function AssetsStage({ board }) {
 
   const run = (work) => { setWorking(true); setError(null); return work().catch((err) => setError(err?.message || 'That did not work')).finally(() => setWorking(false)); };
   // Tapping the active mark clears it.
-  const toggleMark = (mark) => run(async () => {
-    const next = picked.mark === mark ? null : mark;
-    const result = await markMusicVideoPoolAssets(projectId, [{ kind: picked.kind, assetId: picked.assetId }], next, { silent: true });
+  const toggleMark = (mark, options = {}) => run(async () => {
+    const previousMark = picked.mark || null;
+    const next = previousMark === mark ? null : mark;
+    const opt = { ...(options.keepInUse ? { keepInUse: true } : {}), silent: true };
+    const result = await markMusicVideoPoolAssets(projectId, [{ kind: picked.kind, assetId: picked.assetId }], next, opt);
     // Bad rejects its takes on the shots not using it; the shots pick that up at once.
     takes?.applyPoolMarks?.(projectId, result);
     setPool((prev) => prev.map((item) => (poolKey(item) === poolKey(picked) ? { ...item, mark: next } : item)));
+
+    if (next === 'bad' && result?.changes?.length > 0) {
+      const summaries = result.changes.map((c) => {
+        const shotNum = shotNumbers.get(c.sceneId);
+        const name = shotNum ? `Shot ${shotNum}` : (c.label || 'Shot');
+        return c.action === 'moved' || c.moved
+          ? `${name} moved to next take`
+          : `${name} flagged (selected take marked bad)`;
+      });
+      const toastText = summaries.join(' · ');
+      let undoing = false;
+      toast((t) => (
+        <span className="flex items-center gap-3 text-xs">
+          <span>{toastText}</span>
+          <button
+            type="button"
+            onClick={async () => {
+              if (undoing) return;
+              undoing = true;
+              const conflicts = [];
+              try {
+                await markMusicVideoPoolAssets(projectId, [{ kind: picked.kind, assetId: picked.assetId }], previousMark, { expectedMark: 'bad', silent: true })
+                  .then((unmark) => {
+                    takes?.applyPoolMarks?.(projectId, unmark);
+                    setPool((prev) => prev.map((item) => (poolKey(item) === poolKey(picked) && item.mark === 'bad' ? { ...item, mark: previousMark } : item)));
+                  }).catch((err) => {
+                    if (err?.code !== 'MUSIC_VIDEO_UNDO_CONFLICT') throw err;
+                    conflicts.push('asset mark');
+                  });
+                for (const change of result.changes) {
+                  if (!change.previousTakeId) continue;
+                  await selectMusicVideoSceneTake(projectId, change.sceneId, change.previousTakeId, { expectedSelectedAssetId: change.toAssetId ?? null, silent: true })
+                    .then((placed) => { if (placed?.sceneId) takes?.applyScene?.(projectId, placed); })
+                    .catch((err) => {
+                      if (err?.code !== 'MUSIC_VIDEO_UNDO_CONFLICT') throw err;
+                      conflicts.push(shotNumbers.has(change.sceneId) ? `shot ${shotNumbers.get(change.sceneId)}` : 'shot selection');
+                    });
+                }
+                if (conflicts.length) toast.error(`Kept newer decisions for ${conflicts.join(', ')}. Other unchanged choices were restored.`);
+              } catch (err) {
+                toast.error(err?.message || 'Failed to undo');
+              } finally {
+                undoing = false;
+                toast.dismiss(t.id);
+              }
+            }}
+            className="inline-flex shrink-0 items-center gap-1 rounded border border-port-border px-2 py-0.5 text-[11px] text-port-accent hover:border-port-accent/40 hover:text-white"
+          >
+            <Undo2 size={12} aria-hidden="true" /> Undo
+          </button>
+        </span>
+      ), { duration: 8000, label: toastText });
+    }
   });
   const remove = (targets) => run(async () => {
     const result = await deleteMusicVideoPoolAssets(projectId, targets.map(({ kind: k, assetId }) => ({ kind: k, assetId })), { silent: true });
@@ -170,10 +226,16 @@ export default function AssetsStage({ board }) {
               title="Good, not placed yet: keep it as an ingredient" className={`${ACTION} ${picked.mark === 'ingredient' ? 'border-port-warning text-port-warning' : ''}`}>
               <Star size={14} aria-hidden="true" />Ingredient
             </button>
-            <button type="button" disabled={working} onClick={() => toggleMark('bad')} aria-pressed={picked.mark === 'bad'}
-              title="Failed or unusable: clean it up later" className={`${ACTION} ${picked.mark === 'bad' ? 'border-port-error text-port-error' : ''}`}>
+            <button type="button" disabled={working} onClick={(e) => toggleMark('bad', { keepInUse: e.shiftKey || e.altKey })} aria-pressed={picked.mark === 'bad'}
+              title="Failed or unusable: clean it up later (Shift+click to keep in use)" className={`${ACTION} ${picked.mark === 'bad' ? 'border-port-error text-port-error' : ''}`}>
               <Ban size={14} aria-hidden="true" />Bad
             </button>
+            {inUse(picked) && picked.mark !== 'bad' && (
+              <button type="button" disabled={working} onClick={() => toggleMark('bad', { keepInUse: true })}
+                title="Mark bad, keep in use without moving selections" className={`${ACTION} text-xs text-port-text-muted hover:text-port-text`}>
+                Mark bad, keep in use
+              </button>
+            )}
             {!inUse(picked) && (
               <button type="button" disabled={working} onClick={() => setConfirmDelete('picked')} className={ACTION}>
                 <Trash2 size={14} aria-hidden="true" />Delete

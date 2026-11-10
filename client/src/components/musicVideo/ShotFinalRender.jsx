@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Activity, Film, Play, Square, X } from 'lucide-react';
+import ShotColorMatch from './ShotColorMatch.jsx';
 import ShotFilmLook from './ShotFilmLook.jsx';
 import { cancelMusicVideoShotRender, musicVideoShotRenderUrl, renderMusicVideoShot } from '../../services/apiMusicVideo.js';
 import useMusicVideoShotRenders from '../../hooks/useMusicVideoShotRenders.js';
@@ -12,7 +13,7 @@ const BUTTON = 'inline-flex min-h-[44px] items-center gap-1 rounded border borde
  * shot with its film look, and the shot's own look (kept when the video's
  * look changes). The final render reuses every cached shot and stitches.
  */
-export default function ShotFinalRender({ project, scene, onChange, fieldId }) {
+export default function ShotFinalRender({ project, scene, onChange, onLocal, fieldId }) {
   const projectId = project?.id;
   const sceneId = scene.sceneId;
   const { status, live: liveByShot, markLive, clearLive, retry } = useMusicVideoShotRenders(project);
@@ -25,7 +26,9 @@ export default function ShotFinalRender({ project, scene, onChange, fieldId }) {
   if (!status?.available) return null;
   const shot = status.shots.find((entry) => entry.sceneId === sceneId);
   const rendering = live?.state === 'rendering' || (!live && shot?.rendering);
-  const rendered = shot?.state === 'rendered' && !rendering;
+  const rendered = shot?.state === 'rendered' && !rendering && live?.state !== 'failed';
+  const failed = !rendering && !rendered && (live?.state === 'failed' || shot?.state === 'failed');
+  const failedError = live?.state === 'failed' && live.error ? live.error : shot?.error;
   const file = rendered ? shot.files[shot.files.length - 1] : null;
 
   const start = () => {
@@ -37,13 +40,14 @@ export default function ShotFinalRender({ project, scene, onChange, fieldId }) {
       .finally(() => setStarting(false));
   };
 
-  const state = status.error ? null : rendering ? (live ? `Rendering ${Math.round((live.progress || 0) * 100)}%` : 'Rendering') : rendered ? 'Rendered' : shot ? 'Not rendered' : 'Not in the cut';
+  const state = status.error ? null : rendering ? (live ? `Rendering ${Math.round((live.progress || 0) * 100)}%` : 'Rendering') : rendered ? 'Rendered' : failed ? 'Failed' : shot ? 'Not rendered' : 'Not in the cut';
+  const tone = rendered ? 'bg-port-success/10 text-port-success' : failed ? 'bg-port-error/10 text-port-error' : 'bg-port-border/60 text-port-text-muted';
   return (
     <section aria-label="Final render" className="min-w-0 space-y-2 rounded border border-port-border p-2">
       <div className="flex flex-wrap items-center gap-2">
         <h4 className="inline-flex items-center gap-1 text-xs font-medium"><Film size={14} aria-hidden="true" /> Final render</h4>
         {state && (
-          <span data-testid="shot-render-state" className={`rounded px-1.5 text-[11px] ${rendered ? 'bg-port-success/10 text-port-success' : 'bg-port-border/60 text-port-text-muted'}`}>
+          <span data-testid="shot-render-state" className={`rounded px-1.5 text-[11px] ${tone}`}>
             {rendering && <Activity size={11} className="mr-1 inline animate-spin" aria-hidden="true" />}{state}
           </span>
         )}
@@ -89,11 +93,12 @@ export default function ShotFinalRender({ project, scene, onChange, fieldId }) {
           </button>
         </div>
       )}
-      {live?.state === 'failed' && live.error && <p role="alert" className="break-words text-[11px] text-port-error">{live.error}</p>}
+      {failed && failedError && <p role="alert" className="break-words text-[11px] text-port-error">{failedError}</p>}
       {playing && file && (
         // The rendered shot as the final render cuts it: film look and text, without the song.
         <video key={file} src={musicVideoShotRenderUrl(projectId, file)} controls autoPlay loop muted playsInline className="w-full rounded bg-black" />
       )}
+      <ShotColorMatch project={project} scene={scene} onApplied={onLocal} fieldId={fieldId} />
       <ShotFilmLook project={project} scene={scene} onChange={patch => { setPlaying(false); onChange(patch); }} fieldId={fieldId} />
     </section>
   );

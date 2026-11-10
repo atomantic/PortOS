@@ -85,8 +85,9 @@ describe('resolveModelRates', () => {
   it('resolves fable/mythos to the Claude 5 flagship rates', () => {
     expect(resolveModelRates('claude-code', 'claude-fable-5')).toMatchObject({ inputPer1M: 10, outputPer1M: 50 });
     expect(resolveModelRates('claude-code', 'claude-fable-5-1')).toMatchObject({ inputPer1M: 10, outputPer1M: 50 });
+    expect(resolveModelRates('claude-code', 'claude-fable-5-2')).toMatchObject({ matched: 'exact', inputPer1M: 8, outputPer1M: 40, cacheReadPer1M: 0.2, cacheWritePer1M: 10 });
     // Bare "fable" (no version) resolves to the newest generation, same convention as opus.
-    expect(resolveModelRates('claude-code', 'fable')).toMatchObject({ rateModel: 'claude-fable-5-1', matched: 'family' });
+    expect(resolveModelRates('claude-code', 'fable')).toMatchObject({ rateModel: 'claude-fable-5-2', matched: 'family' });
   });
 
   it('prices Fable 5.1 cache reads at its own discounted rate, leaving Fable 5 unchanged', () => {

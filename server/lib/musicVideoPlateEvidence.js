@@ -1,11 +1,29 @@
 import { activeMusicVideoSubjects } from './musicVideoCastSelection.js';
+import { shotCameraRuleText, shotOmitsOwnedCameraDetail } from './musicVideoShotSheet.js';
 import { RENDER_DEFECTS } from './imageRenderQuality.js';
 /** Asset-bound still-image admission for authored shots. Shared with the comparison UI. */
 import { extractJson } from './jsonExtract.js';
 import { canonicalStringify } from './objects.js';
 
-export function plateRequirementBasis(scene) {
-  return canonicalStringify({ direction: scene.direction || null, framePrompt: scene.framePrompt || scene.prompt || '', startSec: scene.startSec, endSec: scene.endSec });
+/** An end-frame take is reviewed against the end prompt; every other still stays on the start prompt. */
+export function plateFrameRole(take) {
+  return take?.kind === 'endImage' ? 'end' : 'start';
+}
+
+const savedFramePrompt = (scene, role) => (role === 'end' ? scene?.endFramePrompt || '' : scene?.framePrompt || scene?.prompt || '');
+
+export function plateRequirementBasis(scene, role = 'start', project = null) {
+  const cameraId = scene.shotSheet?.cameraId || null;
+  const camera = {
+    ...(cameraId ? { camera: { id: cameraId, holder: scene.shotSheet?.holder || null, rule: shotCameraRuleText(project, scene) } } : {}),
+    ...(scene.camera ? { cameraMove: scene.camera } : {}),
+  };
+  // The start-frame hash is the one already stored on takes. An end frame adds
+  // its own prompt so editing the start prompt cannot stale it, and the reverse.
+  if (role === 'end') {
+    return canonicalStringify({ frameRole: 'end', direction: scene.direction || null, endFramePrompt: scene.endFramePrompt || '', startSec: scene.startSec, endSec: scene.endSec, ...camera });
+  }
+  return canonicalStringify({ direction: scene.direction || null, framePrompt: scene.framePrompt || scene.prompt || '', startSec: scene.startSec, endSec: scene.endSec, ...camera });
 }
 
 const sheetNames = (list) => (Array.isArray(list) ? list : [list]).map((name) => String(name || '').trim().toLowerCase()).filter(Boolean);
@@ -15,7 +33,7 @@ const sheetNames = (list) => (Array.isArray(list) ? list : [list]).map((name) =>
  * taken from the video's subjects: required for each character the shot sheet names,
  * and conditional for the point-of-view holder, whose hands may be all that shows.
  */
-function plateDetailRequirements(scene, subjects = []) {
+function plateDetailRequirements(scene, subjects = [], project = null) {
   const sheet = scene?.shotSheet || {};
   const inShot = new Set(sheetNames(sheet.characters));
   const holder = new Set(sheetNames(sheet.holder));
@@ -28,25 +46,30 @@ function plateDetailRequirements(scene, subjects = []) {
     if (!prefix) continue;
     for (const detail of subject.requiredDetails) {
       const text = String(detail || '').trim();
-      if (text) lines.push(`${prefix}: ${text}`);
+      // The camera taking the picture is not a prop on the person holding it.
+      if (!text || shotOmitsOwnedCameraDetail(project, scene, name, text)) continue;
+      lines.push(`${prefix}: ${text}`);
     }
   }
+  // The same camera block the frame prompt sends, so the check judges that rule.
+  const camera = shotCameraRuleText(project, scene);
+  if (camera) lines.push(camera);
   return [...new Set(lines)].map((requirement, index) => ({ id: `detail-${index + 1}`, requirement }));
 }
 
 const isDetailCheck = (check) => typeof check?.id === 'string' && /^detail-\d+$/.test(check.id);
 
 /** Still evidence proves starting-state support, never completion of timed actions. */
-export function plateRequirements(scene, subjects = []) {
-  const own = sceneRequirements(scene);
-  return [...own.slice(0, -1), ...plateDetailRequirements(scene, subjects), own[own.length - 1]];
+export function plateRequirements(scene, subjects = [], role = 'start', project = null) {
+  const own = sceneRequirements(scene, role);
+  return [...own.slice(0, -1), ...plateDetailRequirements(scene, subjects, project), own[own.length - 1]];
 }
 
-function sceneRequirements(scene) {
+function sceneRequirements(scene, role = 'start') {
   const direction = scene.direction || {};
   const contract = direction.actionContract;
   if (!contract) return [
-    { id: 'plate-prompt', requirement: `Matches the saved still prompt: ${scene.framePrompt || scene.prompt || ''}` },
+    { id: 'plate-prompt', requirement: `Matches the saved still prompt: ${savedFramePrompt(scene, role)}` },
     { id: 'render-quality', requirement: `Rendering defect check: no ${RENDER_DEFECTS}` },
   ];
   const subjects = [...new Set([contract.activeSpeaker, ...(contract.actions || []).map((event) => event.subject), ...(contract.reactions || []).map((event) => event.subject)].filter(Boolean))];
@@ -68,10 +91,11 @@ function sceneRequirements(scene) {
 /** A selection or shot edit cannot borrow evidence from a different image or intent. */
 // Character detail checks come from the video's subjects at review time, so the
 // shot alone cannot re-derive them; they count as long as each one is well formed.
-export function currentPlateEvidence(scene, take) {
+export function currentPlateEvidence(scene, take, project = null) {
   const evidence = take?.plateEvidence;
-  if (!evidence || !take || evidence.assetId !== take.assetId || evidence.basis !== plateRequirementBasis(scene) || !Array.isArray(evidence.checks)) return null;
-  const requirements = sceneRequirements(scene);
+  const role = plateFrameRole(take);
+  if (!evidence || !take || evidence.assetId !== take.assetId || evidence.basis !== plateRequirementBasis(scene, role, project) || !Array.isArray(evidence.checks)) return null;
+  const requirements = sceneRequirements(scene, role);
   const wellFormed = (check) => ['pass', 'fail', 'unverified'].includes(check?.status) && typeof check.note === 'string' && check.note.trim();
   const details = evidence.checks.filter(isDetailCheck);
   if (evidence.checks.length !== requirements.length + details.length || new Set(evidence.checks.map((check) => check?.id)).size !== evidence.checks.length
@@ -114,24 +138,24 @@ export function plateStripFindings(strip, text) {
   });
 }
 
-export function selectedPlatePasses(scene, runId) {
+export function selectedPlatePasses(scene, runId, project = null) {
   const take = scene.takes?.find((entry) => entry.kind === 'image' && entry.assetId === scene.referenceImageId && entry.status !== 'rejected');
-  const evidence = currentPlateEvidence(scene, take);
+  const evidence = currentPlateEvidence(scene, take, project);
   return evidence?.runId === runId && !plateAdjacencyFailed(evidence, runId) && evidence.checks.every((check) => check.status === 'pass'
-    || (check.id === 'render-quality' && renderQualityAcknowledged(scene, take)));
+    || (check.id === 'render-quality' && renderQualityAcknowledged(scene, take, project)));
 }
 
 /** Explicit acknowledgement is bound to one image, exact shot intent and visible defect. */
-export function renderQualityAcknowledged(scene, take) {
-  const evidence = currentPlateEvidence(scene, take);
+export function renderQualityAcknowledged(scene, take, project = null) {
+  const evidence = currentPlateEvidence(scene, take, project);
   const defect = evidence?.checks.find((check) => check.id === 'render-quality' && check.status === 'fail');
   const ack = take?.renderQualityAcknowledgement;
   return !!defect && ack?.basis === evidence.basis && ack?.note === defect.note && !!ack?.reviewer;
 }
 
 /** Invalid, absent or incomplete responses fail closed with concrete unverified checks. */
-export function plateReviewEvidence(scene, assetId, runId, text, used = {}, subjects = []) {
-  const requirements = plateRequirements(scene, subjects);
+export function plateReviewEvidence(scene, assetId, runId, text, used = {}, subjects = [], frameRole = 'start', project = null) {
+  const requirements = plateRequirements(scene, subjects, frameRole, project);
   const { value } = extractJson(String(text || ''), { shapePredicate: (candidate) => candidate && Array.isArray(candidate.checks) });
   const checks = requirements.map(({ id, requirement }) => {
     const matches = Array.isArray(value?.checks) ? value.checks.filter((check) => check?.id === id) : [];
@@ -139,7 +163,7 @@ export function plateReviewEvidence(scene, assetId, runId, text, used = {}, subj
     const usable = ['pass', 'fail', 'unverified'].includes(result?.status) && typeof result.note === 'string' && result.note.trim();
     return { id, requirement, status: usable ? result.status : 'unverified', note: usable ? result.note.trim().slice(0, 1000) : 'The reviewer supplied no usable evidence for this requirement' };
   });
-  return { assetId, runId, basis: plateRequirementBasis(scene), checks,
+  return { assetId, runId, basis: plateRequirementBasis(scene, frameRole, project), checks,
     verdict: checks.some((check) => check.status === 'unverified') ? 'unverified' : checks.some((check) => check.status === 'fail') ? 'fail' : 'pass',
     ...used, reviewedAt: new Date().toISOString() };
 }

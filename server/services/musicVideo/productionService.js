@@ -219,14 +219,14 @@ async function preflightPlate(projectId, runId, sceneId) {
   const project = await requireProject(projectId);
   const run = assertProductionActive(project, runId, PROCESS_ID);
   const original = project.scenes.find((scene) => scene.sceneId === sceneId);
-  const basis = plateRequirementBasis(original);
+  const basis = plateRequirementBasis(original, 'start', project);
   const repairSteps = run.steps.filter((step) => step.sceneId === sceneId && step.plateRepairBasis === basis);
   if (repairSteps.some((step) => ['reserved', 'queued'].includes(step.status))) return { ok: false };
   const takes = ensureSceneTakes(original).filter((take) => take.kind === 'image' && take.status !== 'rejected' && take.use !== 'motion-reference')
     .sort((a, b) => Number(b.assetId === original.referenceImageId) - Number(a.assetId === original.referenceImageId));
   let reviewer;
   for (const take of takes) {
-    let evidence = currentPlateEvidence(original, take);
+    let evidence = currentPlateEvidence(original, take, project);
     if (evidence?.runId !== runId || (evidence.verdict === 'unverified' && evidence.reviewedAt < run.resumedAt)) evidence = null;
     if (!evidence) {
       const prepared = reviewer || await deps.resolvePlateReviewer(run.reviewer).catch((error) => ({ error }));
@@ -234,7 +234,7 @@ async function preflightPlate(projectId, runId, sceneId) {
       reviewer = prepared;
       const reserved = await mutateProjectRecord(projectId, (current) => {
         const scene = current.scenes.find((entry) => entry.sceneId === sceneId);
-        if (plateRequirementBasis(scene) !== basis || scene.referenceImageId !== original.referenceImageId) throw new ServerError('Plate selection or intent changed during preflight', { code: 'PRODUCTION_PLATE_CHANGED' });
+        if (plateRequirementBasis(scene, 'start', current) !== basis || scene.referenceImageId !== original.referenceImageId) throw new ServerError('Plate selection or intent changed during preflight', { code: 'PRODUCTION_PLATE_CHANGED' });
         return reserveProductionStep(current, runId, { kind: 'plate', sceneId, rationale: 'Inspect the saved still prompt and rendering quality before animation', route: { kind: 'plate', mode: reviewer.provider.id, model: reviewer.model }, costUsd: reviewer.costUsd, processId: PROCESS_ID });
       }).catch((error) => ({ error }));
       if (reserved.error) return { halt: { status: LIMIT_CODES.has(reserved.error.code) ? 'limit-reached' : 'blocked', reason: `Plate review needed: ${reserved.error.message}` } };
@@ -243,17 +243,17 @@ async function preflightPlate(projectId, runId, sceneId) {
         const current = await requireProject(projectId);
         assertProductionStepOpen(current, runId, reserved.step.key, { sceneId, kind: 'plate', processId: PROCESS_ID });
         const scene = current.scenes.find((entry) => entry.sceneId === sceneId);
-        if (plateRequirementBasis(scene) !== basis || scene.referenceImageId !== original.referenceImageId
+        if (plateRequirementBasis(scene, 'start', current) !== basis || scene.referenceImageId !== original.referenceImageId
           || !ensureSceneTakes(scene).some((entry) => entry.assetId === take.assetId && entry.status !== 'rejected')) throw new ServerError('Plate changed during preflight', { code: 'PRODUCTION_PLATE_CHANGED' });
       };
-      const result = await deps.reviewPlate({ scene: original, subjects: project.concept?.subjects || [], assetId: take.assetId, prompt: take.prompt ?? original.framePrompt ?? original.prompt ?? '', runId, reviewer, beforeExecute: verifyCurrent }).catch((error) => ({ error }));
+      const result = await deps.reviewPlate({ scene: original, subjects: project.concept?.subjects || [], project, assetId: take.assetId, prompt: take.prompt ?? original.framePrompt ?? original.prompt ?? '', runId, reviewer, beforeExecute: verifyCurrent }).catch((error) => ({ error }));
       await mutateProjectRecord(projectId, (current) => settleProductionStep(current, runId, reserved.step.key, { status: result.error ? 'failed' : 'completed', error: result.error?.message }));
       if (result.error) return { halt: { status: 'blocked', reason: `Plate review needed: ${result.error.message}` } };
       evidence = result;
       const saved = await mutateProjectRecord(projectId, (current) => {
         assertProductionActive(current, runId, PROCESS_ID);
         const scene = current.scenes.find((entry) => entry.sceneId === sceneId);
-        if (plateRequirementBasis(scene) !== basis || scene.referenceImageId !== original.referenceImageId) throw new ServerError('Plate changed during review', { code: 'PRODUCTION_PLATE_CHANGED' });
+        if (plateRequirementBasis(scene, 'start', current) !== basis || scene.referenceImageId !== original.referenceImageId) throw new ServerError('Plate changed during review', { code: 'PRODUCTION_PLATE_CHANGED' });
         const sceneTakes = ensureSceneTakes(scene);
         if (!sceneTakes.some((entry) => entry.assetId === take.assetId && entry.status !== 'rejected')) throw new ServerError('Plate was removed or rejected during review', { code: 'PRODUCTION_PLATE_CHANGED' });
         return { project: { ...current, scenes: current.scenes.map((entry) => entry.sceneId === sceneId ? { ...entry, takes: sceneTakes.map((candidate) => candidate.assetId === take.assetId && candidate.kind === 'image' ? { ...candidate, plateEvidence: evidence } : candidate) } : entry) } };
@@ -261,15 +261,15 @@ async function preflightPlate(projectId, runId, sceneId) {
       if (saved.error) return { halt: { status: 'blocked', reason: `Plate review needed: ${saved.error.message}` } };
     }
     if (evidence.verdict === 'unverified') return { halt: { status: 'blocked', reason: 'Plate review needed: inconclusive evidence. Select or repair a plate, then resume.' } };
-    if (selectedPlatePasses({ ...original, referenceImageId: take.assetId, takes: [{ ...take, plateEvidence: evidence }] }, runId)) {
+    if (selectedPlatePasses({ ...original, referenceImageId: take.assetId, takes: [{ ...take, plateEvidence: evidence }] }, runId, project)) {
       const selected = await mutateProjectRecord(projectId, (current) => {
         assertProductionActive(current, runId, PROCESS_ID);
         const scene = current.scenes.find((entry) => entry.sceneId === sceneId);
-        if (plateRequirementBasis(scene) !== basis || scene.referenceImageId !== original.referenceImageId) throw new ServerError('Plate changed before selection', { code: 'PRODUCTION_PLATE_CHANGED' });
+        if (plateRequirementBasis(scene, 'start', current) !== basis || scene.referenceImageId !== original.referenceImageId) throw new ServerError('Plate changed before selection', { code: 'PRODUCTION_PLATE_CHANGED' });
         const liveTake = ensureSceneTakes(scene).find((entry) => entry.assetId === take.assetId && entry.kind === 'image');
         if (!liveTake || liveTake.status === 'rejected') throw new ServerError('The qualifying plate was rejected', { code: 'PRODUCTION_PLATE_CHANGED' });
         const out = selectSceneTake(current, sceneId, liveTake.takeId);
-        if (!selectedPlatePasses(out.scene, runId)) throw new ServerError('Plate evidence is stale', { code: 'PRODUCTION_PLATE_CHANGED' });
+        if (!selectedPlatePasses(out.scene, runId, out.project)) throw new ServerError('Plate evidence is stale', { code: 'PRODUCTION_PLATE_CHANGED' });
         return out;
       }).catch((error) => ({ error }));
       return selected.error ? { halt: { status: 'blocked', reason: `Plate review needed: ${selected.error.message}` } } : { ok: true };
@@ -293,7 +293,7 @@ async function checkPlateAdjacency(projectId, runId) {
       if (run.steps.some((step) => step.sceneId === sceneId && step.kind === 'frame' && ['reserved', 'queued'].includes(step.status))) return { stop: { ok: false } };
       continue;
     }
-    if (selectedPlatePasses(scene, runId) || plateAdjacencyFailed(selectedPlateTake(scene)?.plateEvidence, runId)) continue;
+    if (selectedPlatePasses(scene, runId, project) || plateAdjacencyFailed(selectedPlateTake(scene)?.plateEvidence, runId)) continue;
     const admission = await preflightPlate(projectId, runId, sceneId);
     if (admission.repair) return { stop: await dispatchSlot(projectId, runId, { stepKind: 'frame', sceneId, plateRepairBasis: admission.basis }) };
     if (!admission.ok) return { stop: admission };

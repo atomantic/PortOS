@@ -30,8 +30,10 @@ it('edits the path and set picked in the URL and saves the world', async () => {
   expect(saveCatalogWorld.mock.calls[0][1].paths[0]).toMatchObject({ id: 'main', sides: 'fence' });
   unmount();
 
-  render(<MemoryRouter initialEntries={['/environments/cat-world/world?worldItem=set:set-a']}><WorldPanel record={record} onSaved={onSaved} /></MemoryRouter>);
-  expect(screen.getByText('Example Street', { selector: 'span' })).toBeTruthy();
+  // Picking a set from the list under the map selects it for editing.
+  render(<MemoryRouter initialEntries={['/environments/cat-world/world']}><WorldPanel record={record} onSaved={onSaved} /></MemoryRouter>);
+  fireEvent.click(screen.getByRole('button', { name: 'Example Street' }));
+  expect(screen.getByRole('button', { name: 'Example Street' }).getAttribute('aria-pressed')).toBe('true');
   fireEvent.click(screen.getByRole('button', { name: 'Turn right 15°' }));
   fireEvent.click(screen.getByRole('button', { name: /Save world/ }));
   await waitFor(() => expect(saveCatalogWorld).toHaveBeenCalledTimes(2));

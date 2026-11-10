@@ -322,11 +322,12 @@ export function productionReviewBasis(project) {
     scenes: (project.scenes || []).map(({ sceneId, lyricText }) => ({ sceneId, lyricText })) });
   const window = project.productionReview?.proof;
   const proof = hash({ storyboard, composition: project.composition,
+    ...(project.templateEffects ? { templateEffects: project.templateEffects } : {}),
     ...(project.lyricOverlayEnabled === false ? { lyricOverlayEnabled: false } : {}),
     window: window && { startSec: window.startSec, endSec: window.endSec },
     scenes: (project.scenes || []).filter(s => !window || s.startSec < window.endSec && s.endSec > window.startSec)
-      .map(({ sceneId, referenceImageId, videoHistoryId, performanceEdit, direction, visualLayer, preMusic, photoSequence }) =>
-        ({ sceneId, referenceImageId, videoHistoryId, performanceEdit, direction, visualLayer, ...(preMusic ? { preMusic } : {}),
+      .map(({ sceneId, referenceImageId, videoHistoryId, performanceEdit, direction, visualLayer, preMusic, photoSequence, templateEffects }) =>
+        ({ sceneId, referenceImageId, videoHistoryId, performanceEdit, direction, visualLayer, ...(templateEffects ? { templateEffects } : {}), ...(preMusic ? { preMusic } : {}),
           ...(photoSequence && photoSequence.enabled !== false ? { photoSequence } : {}) })),
     soundBed: project.soundBed, videoSettings: project.videoSettings });
   return { art, storyboard, storyboardShots, proof };
@@ -685,6 +686,14 @@ function shotProblems(project, draft, scenes, { documentShots, cues, duration })
     }
     const wordProblem = wordAnchorProblem(scene, cues, documentShots);
     if (wordProblem) problems.push(wordProblem);
+    const badSelectedTake = scene.selectedTakeMarkedBad || (project.assetMarks && (
+      (scene.referenceImageId && project.assetMarks[`image:${scene.referenceImageId}`] === 'bad') ||
+      (scene.endImageId && project.assetMarks[`image:${scene.endImageId}`] === 'bad') ||
+      (scene.videoHistoryId && project.assetMarks[`video:${scene.videoHistoryId}`] === 'bad')
+    ));
+    if (badSelectedTake) {
+      problems.push(`Selected take marked bad for ${scene.label || scene.sceneId || 'shot'}.`);
+    }
   }
   return { problems, incompleteShots, lyricAnchors };
 }
@@ -741,11 +750,16 @@ export function productionReadiness(project) {
   // previously completed per-shot reviews valid for projects saved before this change.
   const storyboardApproved = !boardProblems.length && (storyboardApprovalCurrent(review.approvals?.storyboard, basis)
     || (byShot && scenes.length > 0 && !unlocked.length));
+  const selectedTakeMarkedBad = (project.scenes || []).some((s) => s.selectedTakeMarkedBad || (project.assetMarks && (
+    (s.referenceImageId && project.assetMarks[`image:${s.referenceImageId}`] === 'bad') ||
+    (s.endImageId && project.assetMarks[`image:${s.endImageId}`] === 'bad') ||
+    (s.videoHistoryId && project.assetMarks[`video:${s.videoHistoryId}`] === 'bad')
+  )));
   const camera = storyboardCameraReport(scenes, documentShots ? null : boardStoryboard(project));
   const proof = proofReadiness(project, review, basis, storyboardApproved);
   return { basis, inputs, alignment: { basis: alignmentBasis, status: alignmentStatus(review, draft, alignmentBasis) }, documentShotImport: { documentDirectory: project.composition?.document?.directory || null, audioBasis: alignmentBasis }, art: { approved: artApproved, problems: [...new Set(artProblems)], stale: artApproved ? null : staleApproval(project, 'art', basis.art, inputs) },
     // The overlay text check is advice on the storyboard, like camera variety; it never blocks approval.
-    storyboard: { approved: storyboardApproved, problems: [...new Set(boardProblems)], camera,
+    storyboard: { approved: storyboardApproved, problems: [...new Set(boardProblems)], camera, selectedTakeMarkedBad,
       // Board shots as reviewed, derived rows included, so the editor and approval card show what the gate checked.
       shots: documentShots ? null : boardStoryboard(project), lyricAnchors: shots.lyricAnchors, staleRows, coverage, incompleteShots: shots.incompleteShots, text: overlayTextReport(project, overlayTextBasis), stale: storyboardApproved ? null : staleApproval(project, 'storyboard', basis.storyboard, inputs),
       shotLocks: locks, unlocked: byShot ? unlocked : [], clipLocks: clips,
@@ -753,6 +767,7 @@ export function productionReadiness(project) {
       clipsUnlocked: clips ? Object.keys(clips).filter(id => clips[id] && clips[id] !== 'locked') : [] },
     proof: { ...proof, stale: proof.approved ? null : staleApproval(project, 'proof', basis.proof, inputs) },
     castAndSets: castAndSetsApproval(project),
+    selectedTakeMarkedBad,
     // The animated proof is optional review evidence: the approved storyboard is what the final render needs.
     readyForProduction: storyboardApproved };
 }

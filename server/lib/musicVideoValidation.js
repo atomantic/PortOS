@@ -7,6 +7,8 @@ import { festivalPacketSchema } from './musicVideoFestivalPacket.js';
 import { MUSIC_VIDEO_MEDIA_MODES } from './musicVideoMediaPolicy.js';
 import { MUSIC_VIDEO_GRADE_PRESETS, MUSIC_VIDEO_GRADE_MAX_GRAIN } from './musicVideoGrade.js';
 import { filmLookSchema } from './filmLookValidation.js';
+import { TEMPLATE_EFFECT_CONTROLS } from './musicVideoTemplateEffects.js';
+import { MUSIC_VIDEO_CAMERA_FRAME_ASPECTS } from './musicVideoFilmLook.js';
 import { PRODUCTION_MEDIUMS } from './musicVideoProductionMedium.js';
 import { TITLE_CARD_FONTS, TITLE_CARD_LIMITS, TITLE_CARD_POSITIONS, TITLE_CARD_STYLES } from './musicVideoTitleCard.js';
 import { STATS_OUTRO_LIMITS, STATS_OUTRO_LINES } from './musicVideoStatsOutro.js';
@@ -27,11 +29,14 @@ import { executionOptionsSchema } from './aiToolkit/internal/executionOptionsVal
  */
 
 import { z } from 'zod';
+
+const musicVideoTemplateEffectsSchema = z.object(Object.fromEntries(TEMPLATE_EFFECT_CONTROLS.map(({ id }) => [id, z.number().min(0).max(1).nullable().optional()]))).strict();
 import { TIMELINE_BEAT_KINDS, TIMELINE_BEATS_MAX, TIMELINE_LENGTH_MAX_MIN, TIMELINE_PACES, PREVIZ_CAMERA_STYLES, PREVIZ_CUTS_MAX, PREVIZ_KEYS_MAX, PREVIZ_PAWN_COLOR_IDS, PREVIZ_POSES, PREVIZ_TRACKS_MAX, PREVIZ_VEHICLES_MAX, PREVIZ_VISIBLE_MAX, VEHICLE_SPEED_MAX_METERS_PER_MIN } from './musicVideoPrevizLimits.js';
 import { MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX } from './musicVideoSubjectLimits.js';
 export const musicVideoDcpRequestSchema = z.object({ grade: z.enum(['rec709', 'rec1886']), renderHistoryId: z.string().min(1), sourceSha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
 import { GROK_VIDEO_DURATIONS } from './grokVideoClip.js';
 import { knownFilmStyleIdSchema } from './filmStyleGrammars.js';
+import { COLOR_MATCH_LIMITS } from './shotColorMatch.js';
 
 const makingOfId = z.string().regex(/^[A-Za-z0-9_-]{1,100}$/);
 export const musicVideoMakingOfSelectionSchema = z.object({
@@ -275,6 +280,18 @@ export const musicVideoPacingSchema = z.object({
   hookSec: z.number().min(0.5).max(60).optional(),
 }).strict();
 
+// One glitch inside a shot, or a camera's default glitch (musicVideoTransitions.js).
+const musicVideoShotGlitchSchema = z.object({
+  atSec: z.number().min(0).max(3600),
+  style: z.enum(MUSIC_VIDEO_TRANSITIONS),
+  lengthSec: z.number().positive().max(4).nullable().optional(),
+  strength: z.number().min(0).max(1).nullable().optional(),
+  count: z.number().int().min(1).max(MUSIC_VIDEO_GLITCH_REPEAT_LIMIT).nullable().optional(),
+  everySec: z.number().min(MUSIC_VIDEO_GLITCH_REPEAT_SEC.min).max(MUSIC_VIDEO_GLITCH_REPEAT_SEC.max).nullable().optional(),
+  color: z.string().regex(/^#[0-9a-f]{6}$/i, 'color is #rrggbb').nullable().optional(),
+  edge: z.enum(MUSIC_VIDEO_GLITCH_EDGES).nullable().optional(),
+});
+
 // The cameras that exist in this video, and each shot's plan (lib/musicVideoShotSheet.js).
 export const musicVideoCameraSchema = z.object({
   id: z.string().min(1).max(64),
@@ -286,6 +303,26 @@ export const musicVideoCameraSchema = z.object({
   rule: z.string().trim().max(1000).optional(),
   // How the camera moves in the greybox previz while it is a cut's camera (lib/musicVideoPreviz.js).
   previzStyle: z.enum(PREVIZ_CAMERA_STYLES).optional(),
+  // This camera's finishing look. A shot with no look of its own uses it; null follows the video.
+  filmLook: filmLookSchema.nullable().optional(),
+  // The frame this camera plays inside the video: 4:3 pillarboxes in 16:9. Null is the video's own frame.
+  frame: z.object({
+    aspect: z.enum(MUSIC_VIDEO_CAMERA_FRAME_ASPECTS),
+    matte: z.string().regex(/^#[0-9a-f]{6}$/i, 'matte is #rrggbb').optional(),
+  }).strict().nullable().optional(),
+  // Cut defaults for shots on this camera that have not set their own. Null on a shot stays off.
+  cuts: z.object({
+    transitionIn: z.enum(MUSIC_VIDEO_TRANSITIONS).nullable().optional(),
+    transitionOut: z.enum(MUSIC_VIDEO_TRANSITIONS).nullable().optional(),
+    glitches: z.array(musicVideoShotGlitchSchema).max(MUSIC_VIDEO_SHOT_GLITCH_LIMIT).nullable().optional(),
+  }).strict().nullable().optional(),
+  // Camcorder date and record mark, drawn on the picture. Absent is off.
+  osd: z.object({
+    record: z.boolean().optional(),
+    date: z.string().trim().max(24).optional(),
+  }).strict().nullable().optional(),
+  // Leave this camera's shots out of color matching (lib/shotColorMatch.js).
+  doNotMatch: z.boolean().optional(),
 }).strict();
 // The greybox previz: blocking over the song, played over each place's greybox (lib/musicVideoPreviz.js).
 const previzSec = z.number().finite().min(0).max(36000);
@@ -500,8 +537,9 @@ export const musicVideoCastInputsSchema = z.object({
 export const musicVideoTakeInputSchema = z.object({
   kind: z.enum(MUSIC_VIDEO_TAKE_KINDS),
   assetId: z.string().min(1).max(256),
-  // `trimmed`: a clip take cut to a frame range of another (the shot card's "Start/End clip here").
-  source: z.enum(['generated', 'imported', 'trimmed']).optional(),
+  // `trimmed`: a clip take cut to a frame range of another (the shot card's "Start/End clip here");
+  // `handheld`: a clip take re-shot with handheld camera motion (lib/handheldCamera.js).
+  source: z.enum(['generated', 'imported', 'trimmed', 'handheld']).optional(),
   provider: providerSlug.optional(),
   originalName: z.string().max(255).optional(),
   sourceImageId: galleryImageName.optional(),
@@ -535,6 +573,13 @@ export const musicVideoPoolSearchQuerySchema = z.object({
 export const musicVideoPoolMarkSchema = z.object({
   items: z.array(musicVideoPoolAssetSchema).min(1).max(500),
   mark: z.enum(['ingredient', 'bad']).nullable(),
+  keepInUse: z.boolean().optional(),
+  expectedMark: z.enum(['ingredient', 'bad']).nullable().optional(),
+}).strict();
+
+/** Undo restores a take only while its slot still holds the operation's result. */
+export const musicVideoTakeSelectSchema = z.object({
+  expectedSelectedAssetId: z.string().min(1).max(256).nullable().optional(),
 }).strict();
 
 /** Delete unused stills and clips from the media library (the asset manager's "Delete bad"). */
@@ -581,6 +626,45 @@ export const musicVideoTakeReviewSchema = z.object({
   status: z.enum(MUSIC_VIDEO_TAKE_STATUSES).optional(),
   note: z.string().max(1000).nullable().optional(),
 }).strict().refine((r) => r.status !== undefined || r.note !== undefined || r.acknowledgeRenderQuality !== undefined, { message: 'status, note or acknowledgement is required' });
+
+const colorMatchNumber = (key) => z.number().min(COLOR_MATCH_LIMITS[key][0]).max(COLOR_MATCH_LIMITS[key][1]);
+
+export const musicVideoColorMatchCorrectionSchema = z.object({
+  black: colorMatchNumber('black'),
+  white: colorMatchNumber('white'),
+  gamma: colorMatchNumber('gamma'),
+  balanceR: colorMatchNumber('balanceR'),
+  balanceB: colorMatchNumber('balanceB'),
+  saturation: colorMatchNumber('saturation'),
+}).strict();
+
+export const musicVideoColorMatchReferenceSchema = z.object({
+  cameraId: z.string().min(1).max(64),
+  location: z.string().min(1).max(200),
+  timeOfDay: z.string().min(1).max(100),
+  sceneId: z.string().min(1).max(128),
+}).strict();
+
+export const musicVideoColorMatchSchema = z.object({
+  references: z.array(musicVideoColorMatchReferenceSchema).max(400),
+}).strict();
+
+export const musicVideoColorMatchMeasureSchema = z.object({
+  sceneId: z.string().min(1).max(128).optional(),
+}).strict();
+
+export const musicVideoColorMatchTakePatchSchema = z.object({
+  enabled: z.boolean().optional(),
+  strength: z.number().min(0).max(1).optional(),
+  correction: musicVideoColorMatchCorrectionSchema.optional(),
+}).strict().refine((body) => body.enabled !== undefined || body.strength !== undefined || body.correction !== undefined, {
+  message: 'enabled, strength or correction is required',
+});
+
+export const musicVideoColorMatchReferenceUpdateSchema = z.object({
+  sceneId: z.string().min(1).max(128),
+  clear: z.boolean().optional(),
+}).strict();
 
 // Import externally generated assets (e.g. a Midjourney handoff). Each item is
 // an asset the client already stored through the existing gallery upload
@@ -910,8 +994,9 @@ const sceneLayerFields = {
   reverse: z.boolean().nullable().optional(),
   // A clip shorter than its shot holds its last frame for the rest of the shot; null clears it.
   holdLastFrame: z.boolean().nullable().optional(),
-  // The shot's own film look (lib/filmLook.js), kept when the video's look changes; null follows the video's.
+  // The shot's own film look (lib/filmLook.js), kept when the video's look changes; null follows the camera, then the video.
   filmLook: filmLookSchema.nullable().optional(),
+  templateEffects: musicVideoTemplateEffectsSchema.nullable().optional(),
   // A VHS glitch over the cut into / out of this shot (musicVideoTransitions.js); null clears it.
   transitionIn: z.enum(MUSIC_VIDEO_TRANSITIONS).nullable().optional(),
   transitionOut: z.enum(MUSIC_VIDEO_TRANSITIONS).nullable().optional(),
@@ -921,16 +1006,7 @@ const sceneLayerFields = {
   wipeOut: musicVideoWipeSchema.nullable().optional(),
   // Glitches at moments inside the shot: `atSec` from the shot's start, `lengthSec` stretching the style,
   // `strength` (0 = off), `count` repeats `everySec` apart, and a light leak's `color`/`edge`; null clears them.
-  glitches: z.array(z.object({
-    atSec: z.number().min(0).max(3600),
-    style: z.enum(MUSIC_VIDEO_TRANSITIONS),
-    lengthSec: z.number().positive().max(4).nullable().optional(),
-    strength: z.number().min(0).max(1).nullable().optional(),
-    count: z.number().int().min(1).max(MUSIC_VIDEO_GLITCH_REPEAT_LIMIT).nullable().optional(),
-    everySec: z.number().min(MUSIC_VIDEO_GLITCH_REPEAT_SEC.min).max(MUSIC_VIDEO_GLITCH_REPEAT_SEC.max).nullable().optional(),
-    color: z.string().regex(/^#[0-9a-f]{6}$/i, 'color is #rrggbb').nullable().optional(),
-    edge: z.enum(MUSIC_VIDEO_GLITCH_EDGES).nullable().optional(),
-  })).max(MUSIC_VIDEO_SHOT_GLITCH_LIMIT).nullable().optional(),
+  glitches: z.array(musicVideoShotGlitchSchema).max(MUSIC_VIDEO_SHOT_GLITCH_LIMIT).nullable().optional(),
   // An effect across the cut out of this shot (musicVideoCutEffects.js), kept with its settings while switched off; null clears it.
   cutEffect: z.object({
     style: z.enum(MUSIC_VIDEO_CUT_EFFECTS),
@@ -1084,13 +1160,29 @@ export const musicVideoSequenceRenderSchema = z.object({
   sceneIds: z.array(z.string().min(1).max(200)).min(2).max(30),
 });
 
+// `baseRevision` matches compile and patch. `revision` stays accepted so an older
+// client still applies. Sending both with different numbers is a conflict.
 export const musicVideoTreatmentApplySchema = z.object({
-  revision: z.number().int().min(0),
+  baseRevision: z.number().int().min(0).optional(),
+  revision: z.number().int().min(0).optional(),
   overwrite: z.array(z.object({
     sceneId: z.string().min(1).max(64),
     promptFingerprint: z.string().min(1).max(64),
   }).strict()).max(500).optional(),
   addTextCues: z.boolean().optional(),
+}).strict().superRefine((value, ctx) => {
+  const hasBase = value.baseRevision != null;
+  const hasLegacy = value.revision != null;
+  if (!hasBase && !hasLegacy) {
+    ctx.addIssue({ code: 'custom', message: 'baseRevision is required', path: ['baseRevision'] });
+  } else if (hasBase && hasLegacy && value.baseRevision !== value.revision) {
+    ctx.addIssue({ code: 'custom', message: 'baseRevision and revision disagree', path: ['baseRevision'] });
+  }
+});
+
+// POST /:id/treatment/sync-shot-sheet — deterministic record edit, no provider call.
+export const musicVideoTreatmentSyncShotSheetSchema = z.object({
+  baseRevision: z.number().int().min(0),
 }).strict();
 
 // Record a proof-checklist review. Evidence names a real artifact of this
@@ -1680,6 +1772,7 @@ export const musicVideoCastAndSetsImageNoteRemovalSchema = z.object({
 // a test by its 1-based index); `remove: true` drops one.
 const castSetsText = (max) => z.string().max(max);
 export const musicVideoCastAndSetsDirectionEditSchema = z.object({
+  renderingMedium: castSetsText(500).optional(),
   protagonist: z.object({
     construction: castSetsText(1000).optional(),
     shapeLanguage: castSetsText(500).optional(),
@@ -1704,6 +1797,7 @@ export const musicVideoCastAndSetsDirectionEditSchema = z.object({
       height: castSetsText(80).optional(),
       era: castSetsText(120).optional(),
       look: castSetsText(500).optional(),
+      renderingMedium: castSetsText(500).optional(),
       // The fixed-casting subject whose reference grounds this age (null clears).
       subjectId: z.string().max(64).nullable().optional(),
       // Echoed back from the saved form; the server re-stamps it from the subject.
@@ -1764,7 +1858,7 @@ export const musicVideoCastAndSetsDirectionEditSchema = z.object({
   }).strict()).max(8).optional(),
 }).strict().refine((edits) => {
   if (!edits.sets?.some((set) => Object.hasOwn(set, 'setReference'))) return true;
-  return !edits.protagonist && !edits.world && !edits.looks && !edits.cast && !edits.tests
+  return !Object.hasOwn(edits, 'renderingMedium') && !edits.protagonist && !edits.world && !edits.looks && !edits.cast && !edits.tests
     && edits.sets.every((set) => Object.keys(set).every((key) => key === 'id' || key === 'setReference'));
 }, 'Save greybox selections separately from direction edits.');
 
@@ -1870,6 +1964,9 @@ export const musicVideoProjectCreateSchema = z.object({
   soundBed: musicVideoSoundBedSchema.nullable().optional(),
   // The finishing film look (lib/filmLook.js); null = none.
   filmLook: filmLookSchema.nullable().optional(),
+  templateEffects: musicVideoTemplateEffectsSchema.nullable().optional(),
+  // Percent cropped from each edge of the picture before the matte and the look (0–8). Null crops nothing.
+  overscan: z.number().min(0).max(8).nullable().optional(),
   // The handmade production medium (lib/musicVideoProductionMedium.js); null = none.
   productionMedium: z.enum(PRODUCTION_MEDIUMS).nullable().optional(),
   // The opening title card (lib/musicVideoTitleCard.js); null = none.
@@ -1913,12 +2010,17 @@ export const musicVideoProjectUpdateSchema = z.object({
   phrases: phraseList.optional(),
   pacing: musicVideoPacingSchema.nullable().optional(),
   cameras: z.array(musicVideoCameraSchema).max(SHOT_CAMERA_MAX).optional(),
+  // Which shot each color-match group follows (lib/shotColorMatch.js). Null clears every pick.
+  colorMatch: musicVideoColorMatchSchema.nullable().optional(),
   routeMaps: z.array(musicVideoRouteMapSchema).max(ROUTE_MAP_MAX).optional(),
   previz: musicVideoPrevizSchema.nullable().optional(),
   composition: musicVideoCompositionSchema.nullable().optional(),
   soundBed: musicVideoSoundBedSchema.nullable().optional(),
   // The finishing film look (lib/filmLook.js); null = none.
   filmLook: filmLookSchema.nullable().optional(),
+  templateEffects: musicVideoTemplateEffectsSchema.nullable().optional(),
+  // Percent cropped from each edge of the picture before the matte and the look (0–8). Null crops nothing.
+  overscan: z.number().min(0).max(8).nullable().optional(),
   // The handmade production medium (lib/musicVideoProductionMedium.js); null = none.
   productionMedium: z.enum(PRODUCTION_MEDIUMS).nullable().optional(),
   // The opening title card (lib/musicVideoTitleCard.js); null = none.
@@ -2032,6 +2134,11 @@ const scenePanelFields = {
   panelArt: z.string().regex(/^[^/\\]+\.(png|jpe?g|webp)$/i, 'Panel art must be a gallery image').nullable().optional(),
 };
 
+const musicVideoSourceTakeSchema = z.object({
+  sceneId: z.string().min(1).max(80),
+  offsetSec: z.number().min(0).max(36000).optional(),
+}).strict();
+
 export const musicVideoSceneCreateSchema = z.object({
   label: z.string().max(120).optional(),
   sectionLabel: z.string().max(120).nullable().optional(),
@@ -2057,6 +2164,8 @@ export const musicVideoSceneCreateSchema = z.object({
   shotMode: z.enum(MUSIC_VIDEO_SHOT_MODES).optional(),
   // #14241: `sequence` generates a run of cutaway footage shots in one timed request.
   coverage: z.enum(MUSIC_VIDEO_COVERAGE_MODES).optional(),
+  // #15588: this shot plays a window of another scene's clip. Null clears the link.
+  sourceTake: musicVideoSourceTakeSchema.nullable().optional(),
   performanceSpeaker: z.string().trim().max(120).nullable().optional(),
   // How a performance follows the song: lip-sync (absent/null) or music-driven motion.
   performanceStyle: z.enum(MUSIC_VIDEO_PERFORMANCE_STYLES).nullable().optional(),
@@ -2103,6 +2212,8 @@ export const musicVideoSceneUpdateSchema = z.object({
   shotMode: z.enum(MUSIC_VIDEO_SHOT_MODES).optional(),
   // #14241: `sequence` generates a run of cutaway footage shots in one timed request.
   coverage: z.enum(MUSIC_VIDEO_COVERAGE_MODES).optional(),
+  // #15588: this shot plays a window of another scene's clip. Null clears the link.
+  sourceTake: musicVideoSourceTakeSchema.nullable().optional(),
   performanceSpeaker: z.string().trim().max(120).nullable().optional(),
   // How a performance follows the song: lip-sync (absent/null) or music-driven motion.
   performanceStyle: z.enum(MUSIC_VIDEO_PERFORMANCE_STYLES).nullable().optional(),
@@ -2222,6 +2333,72 @@ export const musicVideoSceneStartSchema = z.object({
 export const musicVideoSceneEndSchema = z.object({
   endSec: z.number().finite().positive(),
 }).strict();
+
+// Shot-card frame and clip renders (#15583). The server loads cast media and
+// the shot's references; the client sends the shot and the slot.
+const musicVideoFrameImageTargetSchema = z.object({
+  mode: z.string().min(1).max(40),
+  modelId: z.string().min(1).max(300).optional(),
+  cloudModel: z.string().min(1).max(300).optional(),
+}).strict();
+
+const musicVideoThenClipSchema = z.object({
+  backend: z.string().min(1).max(40).optional(),
+  model: z.string().min(1).max(300).optional(),
+  songAudio: z.boolean().optional(),
+}).strict();
+
+export const musicVideoSceneFrameRenderSchema = z.object({
+  slot: z.enum(['start', 'end']).optional(),
+  select: z.boolean().optional(),
+  imageTarget: musicVideoFrameImageTargetSchema.optional(),
+  refine: z.string().max(32000).optional(),
+  includeReferences: z.boolean().optional(),
+  fromFrame: z.boolean().optional(),
+  referenceImageId: galleryImageName.optional(),
+  revisionId: z.string().min(1).max(200).optional(),
+  thenClip: musicVideoThenClipSchema.optional(),
+}).strict();
+
+const musicVideoSceneIdListSchema = z.array(z.string().min(1).max(64)).min(1).max(200);
+
+export const musicVideoSceneFramesRenderSchema = musicVideoSceneFrameRenderSchema.extend({
+  sceneIds: musicVideoSceneIdListSchema,
+}).strict();
+
+// A clip is either the video body the shot card already builds, or a short
+// form (`card` / `target`) the server expands. The video route re-validates
+// the assembled body, so provider fields stay on this object.
+const musicVideoClipCardSchema = z.object({
+  prompt: z.string().max(32000).optional(),
+  endFrame: z.boolean().optional(),
+  songAudio: z.boolean().optional(),
+  wholeLine: z.boolean().optional(),
+  ltxReferences: z.boolean().optional(),
+  startFrameLayout: z.boolean().optional(),
+  expectedClipReferenceFiles: z.array(galleryImageName).max(16).optional(),
+  expectedClipReferenceLabels: z.array(z.string().max(200)).max(16).optional(),
+}).strict();
+
+const musicVideoClipTargetSchema = z.object({
+  backend: z.enum(['local', 'grok', 'fal', 'runway', 'gemini']).optional(),
+  modelId: z.string().max(300).optional(),
+  generationMode: z.string().max(80).optional(),
+  grokDuration: z.number().positive().max(60).optional(),
+  numFrames: z.number().int().positive().max(1000).optional(),
+  audioReactiveScale: z.number().min(0).max(4).optional(),
+}).strict();
+
+export const musicVideoSceneClipRenderSchema = z.object({
+  revisionId: z.string().min(1).max(200).optional(),
+  prompt: z.string().max(32000).optional(),
+  card: musicVideoClipCardSchema.optional(),
+  target: musicVideoClipTargetSchema.optional(),
+}).passthrough();
+
+export const musicVideoSceneClipsRenderSchema = musicVideoSceneClipRenderSchema.and(z.object({
+  sceneIds: musicVideoSceneIdListSchema,
+}));
 
 // Autonomous shot planner (#1855): propose a scene per analyzed audio section.
 // `seedPrompts` (default true) additionally asks the active/given AI provider

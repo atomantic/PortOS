@@ -5,6 +5,7 @@ import { meatspaceEvents, invalidateMeatspace } from './meatspaceEvents.js';
 import { dashboardEvents } from './dashboardEvents.js';
 import { settingsEvents } from './settings.js';
 import { emitRecordUpdated, emitRecordDeleted, emitRecordInvalidated } from './sharing/recordEvents.js';
+import { writeOriginScope } from '../lib/writeOrigin.js';
 import { fableLoomRunEvents } from './fableLoom/runEvents.js';
 import { trainingEvents } from './loraTraining/events.js';
 import { authEvents } from './auth.js';
@@ -491,6 +492,9 @@ describe('socket.js — initSocket', () => {
     emitRecordUpdated('series', 'series-example');
     emitRecordDeleted('universe', 'universe-example');
     emitRecordUpdated('musicVideoProject', 'mv-example');
+    // A write made for a tab's request names that tab's socket, so it can skip refetching its own change.
+    writeOriginScope({ get: () => 'socket-example' }, {}, () => emitRecordUpdated('musicVideoProject', 'mv-own'));
+    writeOriginScope({ get: () => 'not a socket id!' }, {}, () => emitRecordUpdated('musicVideoProject', 'mv-unlabeled'));
     emitRecordUpdated('unrelated', 'example');
     expect(io.emitted.filter(([name]) => name === 'pipeline-series:changed')).toEqual([
       ['pipeline-series:changed', { id: 'series-example' }],
@@ -500,6 +504,8 @@ describe('socket.js — initSocket', () => {
     ]);
     expect(io.emitted.filter(([name]) => name === 'music-video:project:changed')).toEqual([
       ['music-video:project:changed', { id: 'mv-example' }],
+      ['music-video:project:changed', { id: 'mv-own', origin: 'socket-example' }],
+      ['music-video:project:changed', { id: 'mv-unlabeled' }],
     ]);
     expect(io.emitted.filter(([name]) => name === 'creative-director:project:changed')).toEqual(
       Array.from({ length: 3 }, () => ['creative-director:project:changed', { id: 'cd-example' }]),

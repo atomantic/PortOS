@@ -1,4 +1,4 @@
-import { musicVideoCastSetsUseImageSchema, musicVideoCastSetsImageEditSchema, musicVideoCastSetsImageEditDecisionSchema } from '../lib/musicVideoValidation.js';
+import { musicVideoCastSetsUseImageSchema, musicVideoCastSetsImageEditSchema, musicVideoCastSetsImageEditDecisionSchema, musicVideoColorMatchMeasureSchema, musicVideoColorMatchReferenceUpdateSchema, musicVideoColorMatchTakePatchSchema } from '../lib/musicVideoValidation.js';
 import { musicVideoDcpRequestSchema } from '../lib/musicVideoValidation.js';
 import { inspectDcpReadiness } from '../services/musicVideo/dcpPreflight.js';
 import { activeDcp, startDcp, attachDcp, cancelDcp, dcpArtifactPaths } from '../services/musicVideo/dcp.js';
@@ -42,6 +42,10 @@ import {
   musicVideoPacingRecutSchema,
   musicVideoSceneStartSchema,
   musicVideoSceneEndSchema,
+  musicVideoSceneFrameRenderSchema,
+  musicVideoSceneFramesRenderSchema,
+  musicVideoSceneClipRenderSchema,
+  musicVideoSceneClipsRenderSchema,
   musicVideoPlanRequestSchema,
   musicVideoManualAnalysisSchema,
   musicVideoSectionsEditSchema,
@@ -56,6 +60,7 @@ import {
   musicVideoTreatmentUpdateSchema,
   musicVideoTreatmentCompileSchema,
   musicVideoTreatmentApplySchema,
+  musicVideoTreatmentSyncShotSheetSchema,
   musicVideoSequenceRenderSchema,
   musicVideoTreatmentProofReviewSchema,
   musicVideoExcerptRequestSchema,
@@ -158,6 +163,7 @@ import {
   refreshSongStyleFromSuno,
 } from '../services/musicVideo/projects.js';
 import { requireProject } from '../services/musicVideo/requireProject.js';
+import { renderSceneClips, renderSceneFrames } from '../services/musicVideo/sceneCardRender.js';
 import { labelProjectReferences } from '../services/musicVideo/referenceLabels.js';
 import { buildHandoffManifest, buildHandoffBundle, matchSceneByFileTag } from '../services/musicVideo/handoff.js';
 import { getHistoryItem } from '../services/videoGen/history.js';
@@ -202,6 +208,7 @@ import {
   detachDocument,
   discardGeneratedDocument,
   documentMimeType,
+  documentNativePlayback,
   exportDocumentZip,
   importDocumentDirectory,
   importDocumentTemplate,
@@ -227,6 +234,7 @@ import {
   compileTreatment,
   previewTreatmentApply,
   applyTreatment,
+  syncTreatmentFromShotSheet,
   reviewProof,
 } from '../services/musicVideo/treatmentService.js';
 import {
@@ -240,6 +248,7 @@ import {
   removeDevArtifact,
 } from '../services/musicVideo/devArtifactService.js';
 import { devArtifactTypeFor } from '../services/musicVideo/devArtifacts.js';
+import { writeOriginScope } from '../lib/writeOrigin.js';
 import {
   startCastAndSets,
   editCastAndSetsDirection,
@@ -274,6 +283,8 @@ import {
 } from '../lib/musicVideoSummary.js';
 
 const router = Router();
+// A take decision's reply carries the change, so its own tab can skip the refetch its broadcast asks for.
+router.use(writeOriginScope);
 
 // #3231 Phase 4 — the per-record image render pin (`imageMode`/`imageModelId`,
 // the shared universe/series/sprite field pair) on Music Video projects: scene
@@ -598,6 +609,13 @@ router.post('/:id/sequence-coverage/render', asyncHandler(async (req, res) => {
 router.post('/:id/treatment/apply', asyncHandler(async (req, res) => {
   const options = validateRequest(musicVideoTreatmentApplySchema, req.body);
   res.json(await applyTreatment(req.params.id, options));
+}));
+
+// Deterministic: copy focal subject, camera medium and type-region rules from
+// the shot sheet onto the compiled directions. No provider call.
+router.post('/:id/treatment/sync-shot-sheet', asyncHandler(async (req, res) => {
+  const options = validateRequest(musicVideoTreatmentSyncShotSheetSchema, req.body);
+  res.json(await syncTreatmentFromShotSheet(req.params.id, options));
 }));
 
 router.post('/:id/treatment/proofs/:proofId/review', asyncHandler(async (req, res) => {
@@ -1132,6 +1150,11 @@ router.get('/:id/composition/document/export', asyncHandler(async (req, res) => 
   res.set('Content-Type', 'application/zip');
   res.set('Content-Disposition', `attachment; filename="${filename}"`);
   res.send(zip);
+}));
+
+// Whether the document is the unmodified shipped template, whose scenes may play in the page itself.
+router.get('/:id/composition/document/playback', asyncHandler(async (req, res) => {
+  res.json(await documentNativePlayback(await requireProject(req.params.id)));
 }));
 
 router.get('/:id/composition/document/preview', asyncHandler(async (req, res) => {
@@ -1880,6 +1903,33 @@ router.post('/:id/scenes/:sceneId/merge-previous', asyncHandler(async (req, res)
   res.json(await mergeProjectPreviousScene(req.params.id, req.params.sceneId, { backend }));
 }));
 
+// The shot card's frame and clip (#15583). One action loads cast media, resolves
+// the shot's references and submits the same image or video job the card would.
+router.post('/:id/scenes/frames', asyncHandler(async (req, res) => {
+  const project = await requireProject(req.params.id);
+  const { sceneIds, ...options } = validateRequest(musicVideoSceneFramesRenderSchema, req.body ?? {});
+  res.json(await renderSceneFrames(project, { sceneIds, ...options }));
+}));
+
+router.post('/:id/scenes/clips', asyncHandler(async (req, res) => {
+  const project = await requireProject(req.params.id);
+  const parsed = validateRequest(musicVideoSceneClipsRenderSchema, req.body ?? {});
+  const { sceneIds, ...options } = parsed;
+  res.json(await renderSceneClips(project, { sceneIds, ...options }));
+}));
+
+router.post('/:id/scenes/:sceneId/frame', asyncHandler(async (req, res) => {
+  const project = await requireProject(req.params.id);
+  const options = validateRequest(musicVideoSceneFrameRenderSchema, req.body ?? {});
+  res.json(await renderSceneFrames(project, { sceneId: req.params.sceneId, ...options }));
+}));
+
+router.post('/:id/scenes/:sceneId/clip', asyncHandler(async (req, res) => {
+  const project = await requireProject(req.params.id);
+  const options = validateRequest(musicVideoSceneClipRenderSchema, req.body ?? {});
+  res.json(await renderSceneClips(project, { sceneId: req.params.sceneId, ...options }));
+}));
+
 // Move a shot's start; the shot before it ends at the same time, so the cut between them moves.
 router.post('/:id/scenes/:sceneId/start', asyncHandler(async (req, res) => {
   const { startSec } = validateRequest(musicVideoSceneStartSchema, req.body ?? {});
@@ -1957,8 +2007,8 @@ router.get('/:id/credits-prefill', asyncHandler(async (req, res) => {
 
 // The asset manager: mark unused stills and clips ★ ingredient / ✕ bad, or delete them from the library.
 router.patch('/:id/media-pool/marks', asyncHandler(async (req, res) => {
-  const { items, mark } = validateRequest(musicVideoPoolMarkSchema, req.body);
-  res.json(await markMediaPoolAssets(req.params.id, items.map((item) => `${item.kind}:${item.assetId}`), mark));
+  const { items, mark, ...options } = validateRequest(musicVideoPoolMarkSchema, req.body);
+  res.json(await markMediaPoolAssets(req.params.id, items.map((item) => `${item.kind}:${item.assetId}`), mark, options));
 }));
 
 // Bring an earlier draft's stills and clips into this video's assets (references; the draft is untouched).
@@ -2007,7 +2057,9 @@ router.post('/:id/scenes/:sceneId/takes/use', asyncHandler(async (req, res) => {
 }));
 
 router.post('/:id/scenes/:sceneId/takes/:takeId/select', asyncHandler(async (req, res) => {
-  res.json(await selectSceneTake(req.params.id, req.params.sceneId, req.params.takeId));
+  const { musicVideoTakeSelectSchema } = await import('../lib/musicVideoValidation.js');
+  const options = validateRequest(musicVideoTakeSelectSchema, req.body ?? {});
+  res.json(await selectSceneTake(req.params.id, req.params.sceneId, req.params.takeId, options));
 }));
 
 // No body: marks the shot's unselected takes rejected, keeping their files.
@@ -2023,6 +2075,26 @@ router.post('/:id/scenes/:sceneId/swap-frames', asyncHandler(async (req, res) =>
 // No body: a vision model checks this frame take against its shot (user-started) → the scene.
 router.post('/:id/scenes/:sceneId/takes/:takeId/check', asyncHandler(async (req, res) => {
   res.json(await checkSceneTakePlate(req.params.id, req.params.sceneId, req.params.takeId));
+}));
+
+// Shot color match: measure takes, edit one take's numbers, or pick a group's reference.
+// The picture files stay as they are; the composed render reads the numbers.
+router.post('/:id/color-match/measure', asyncHandler(async (req, res) => {
+  const { sceneId } = validateRequest(musicVideoColorMatchMeasureSchema, req.body ?? {});
+  const { measureShotColorMatch } = await import('../services/musicVideo/shotColorMatch.js');
+  res.json(await measureShotColorMatch(req.params.id, { sceneId }));
+}));
+
+router.put('/:id/color-match/reference', asyncHandler(async (req, res) => {
+  const body = validateRequest(musicVideoColorMatchReferenceUpdateSchema, req.body ?? {});
+  const { setShotColorMatchReference } = await import('../services/musicVideo/shotColorMatch.js');
+  res.json(await setShotColorMatchReference(req.params.id, body));
+}));
+
+router.patch('/:id/scenes/:sceneId/takes/:takeId/color-match', asyncHandler(async (req, res) => {
+  const patch = validateRequest(musicVideoColorMatchTakePatchSchema, req.body ?? {});
+  const { updateTakeColorMatch } = await import('../services/musicVideo/shotColorMatch.js');
+  res.json(await updateTakeColorMatch(req.params.id, req.params.sceneId, req.params.takeId, patch));
 }));
 
 router.patch('/:id/scenes/:sceneId/takes/:takeId', asyncHandler(async (req, res) => {

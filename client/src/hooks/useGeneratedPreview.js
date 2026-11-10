@@ -12,6 +12,9 @@ const EMPTY = {
   width: 0,
   height: 0,
   frameUrl: '',
+  // Song time of the exact/fallback frame on screen (null when unknown). A
+  // playing fallback frame trails the audio clock by a server round trip.
+  frameTime: null,
   ready: false,
   audioStatus: 'none',
   lastEvent: null,
@@ -69,14 +72,29 @@ export default function useGeneratedPreview({ active, request, controls = null }
     }
   }, []);
 
-  const commitFrame = useCallback((entry) => {
+  // `shown` is state that must land with the picture, such as its song time.
+  const commitFrame = useCallback((entry, shown = null) => {
     const previous = frameUrls.current.get(frameUrl.current);
     if (previous && previous !== entry) previous.retired = true;
     entry.retired = false;
     frameUrl.current = entry.url;
-    setState((prev) => frameUrl.current === entry.url ? { ...prev, frameUrl: entry.url } : prev);
     retireUrls();
-  }, [retireUrls]);
+    const show = () => {
+      entry.loader = null;
+      if (mounted.current && frameUrl.current === entry.url) setState((prev) => ({ ...prev, ...shown, frameUrl: entry.url }));
+    };
+    // WebKit paints an <img> empty between a src change and the new picture's
+    // decode, so every frame flashed the container through (#15616). Decode
+    // off screen first: the visible element then only receives a picture this
+    // document already holds, and that swap is immediate. `entry.loader`
+    // keeps the decoded picture alive until then.
+    const loader = typeof Image === 'function' ? new Image() : null;
+    if (typeof loader?.decode !== 'function') { show(); return; }
+    entry.loader = loader;
+    loader.src = entry.url;
+    // A failed decode still reaches the visible element, whose load path reports it.
+    loader.decode().then(show, show);
+  }, [mounted, retireUrls]);
 
   const cancelPresentation = useCallback(() => {
     const viewer = presentation.current;
@@ -96,9 +114,11 @@ export default function useGeneratedPreview({ active, request, controls = null }
     if (viewer.current?.url === frameUrl.current && frameUrl.current !== decodedUrl.current) {
       frameUrl.current = decodedUrl.current;
       const image = imageRef.current;
+      // The canceled frame may still be decoding off screen; reassigning the
+      // picture already shown would only restart its load.
       if (image) {
-        if (decodedUrl.current) image.src = decodedUrl.current;
-        else image.removeAttribute('src');
+        if (!decodedUrl.current) image.removeAttribute('src');
+        else if (image.src !== decodedUrl.current) image.src = decodedUrl.current;
       }
       if (mounted.current) setState((prev) => ({ ...prev, frameUrl: frameUrl.current }));
     }
@@ -236,7 +256,8 @@ export default function useGeneratedPreview({ active, request, controls = null }
         current.completedGeneration = current.generation - 1;
       }
       current.mode = 'legacy-playing';
-    }
+    } else current.seekTimes.clear();
+    current.seekTimes.set(current.generation, t);
     socket.emit('generated-preview:seek', {
       requestId: current.requestId,
       sessionId: current.sessionId,
@@ -364,7 +385,7 @@ export default function useGeneratedPreview({ active, request, controls = null }
       stoppedStatus = null;
       requestId = newRequestId();
       const openControls = { look: controlsRef.current?.look ?? null, card: controlsRef.current?.card ?? null };
-      pending.current = { requestId, sessionId: null, generation: 0, generationFloor: 0, completedGeneration: -1, controls: openControls, epoch: 0, sequence: 0, probeId: 0, receivedSequence: -1, presentedSequence: -1, mode: 'exact', offset: null, playback: false, responses: new Map() };
+      pending.current = { requestId, sessionId: null, generation: 0, generationFloor: 0, completedGeneration: -1, controls: openControls, epoch: 0, sequence: 0, probeId: 0, receivedSequence: -1, presentedSequence: -1, mode: 'exact', offset: null, playback: false, responses: new Map(), seekTimes: new Map() };
       if (mounted.current) setState((prev) => ({ ...prev, status: 'opening', sessionId: null, ready: false, reason: '', lastEvent: null, playback: false, playbackReason: '' }));
       socket.emit('generated-preview:open', {
         requestId,
@@ -416,6 +437,7 @@ export default function useGeneratedPreview({ active, request, controls = null }
       if (pending.current.sessionId && payload.sessionId && payload.sessionId !== pending.current.sessionId) return;
       const current = pending.current;
       if (current.terminalError) return;
+      let frameTime = null;
       if (payload.playbackEpoch !== undefined) {
         if (presentation.current.blocked || current.mode !== 'playing' || payload.playbackEpoch !== current.epoch || !Number.isInteger(payload.sequence) || payload.sequence <= current.receivedSequence) return;
         current.receivedSequence = payload.sequence;
@@ -426,6 +448,8 @@ export default function useGeneratedPreview({ active, request, controls = null }
           if (!Number.isInteger(payload.generation) || payload.generation < current.generationFloor || payload.generation > current.generation || payload.generation <= current.completedGeneration) return;
           current.completedGeneration = payload.generation;
         } else if (current.mode !== 'exact' || payload.generation !== current.generation) return;
+        frameTime = current.seekTimes.get(payload.generation) ?? null;
+        for (const generation of current.seekTimes.keys()) if (generation < payload.generation) current.seekTimes.delete(generation);
       }
       let url = '';
       try {
@@ -453,8 +477,8 @@ export default function useGeneratedPreview({ active, request, controls = null }
       if (!mounted.current) { entry.retired = true; retireUrls(); return; }
       const opened = !!current.sessionId;
       if (opened) { stoppedStatus = null; current.hasError = false; }
-      commitFrame(entry);
-      setState((prev) => ({ ...prev, ...(opened ? { status: 'ready', ready: true } : {}) }));
+      commitFrame(entry, { frameTime });
+      if (opened) setState((prev) => ({ ...prev, status: 'ready', ready: true }));
     };
     const onUnavailable = (payload) => {
       if (!mine(payload) || !mounted.current) return;

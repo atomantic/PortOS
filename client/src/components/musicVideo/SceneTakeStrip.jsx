@@ -1,6 +1,6 @@
 import { currentPlateEvidence, renderQualityAcknowledged } from '../../../../server/lib/musicVideoPlateEvidence.js';
 import { useRef, useState } from 'react';
-import { Ban, Check, Loader2, RotateCcw, Eye, X, MessageSquare } from 'lucide-react';
+import { Ban, Check, Loader2, RotateCcw, Eye, X, MessageSquare, PencilLine } from 'lucide-react';
 import { sceneTakeList, takePreviewKey, takeThumbUrl, takeClipUrl, takeProvenance, TAKE_SLOT } from '../../lib/musicVideoTakes.js';
 import { plateVerdict } from './PlateComparison.jsx';
 import AssetReferenceActions from '../media/AssetReferenceActions.jsx';
@@ -35,12 +35,12 @@ async function videoTakeUrl(take) {
  * `grid` lays the takes out in rows that fit the width instead of one scrolling row.
  * `pending` lists renders still in flight for this slot (`{ key, label, running, progress }`):
  * each shows as a "Rendering grok…" placeholder after the takes until its take lands.
- * `onCheck(take)` runs a vision check of a frame take against its shot; `checking` holds
+ * `onCheck(take)` runs a vision check of a start or end frame take against its shot; `checking` holds
  * the take ids in flight. A checked take wears its verdict, which opens to the misses.
  */
 export default function SceneTakeStrip({
-  scene, kind, busy = false, large = false, grid = false, onSelect, onReview, onOpenPreview, marks = null, onMark = null, pending = [],
-  onCheck = null, checking = null,
+  scene, project = null, kind, busy = false, large = false, grid = false, onSelect, onReview, onOpenPreview, marks = null, onMark = null, pending = [],
+  onCheck = null, checking = null, onRefine = null, refineDisabled = false,
 }) {
   const [noteFor, setNoteFor] = useState(null);
   const [noteDraft, setNoteDraft] = useState('');
@@ -70,7 +70,8 @@ export default function SceneTakeStrip({
           const isSelected = take.assetId === selected;
           const rejected = take.status === 'rejected';
           const bad = marks?.[takeMarkKey(take)] === 'bad';
-          const verdict = kind === 'image' ? plateVerdict(scene, take) : null;
+          const frameTake = kind === 'image' || kind === 'endImage';
+          const verdict = frameTake ? plateVerdict(scene, take, project) : null;
           const verdictOpen = openVerdict === take.takeId && verdict?.issues.length > 0;
           const takeChecking = Boolean(take.takeId && checking?.has(take.takeId));
           const playKey = take.takeId || take.assetId;
@@ -128,6 +129,13 @@ export default function SceneTakeStrip({
               {take.dependencies?.references?.some((ref) => ref.role === 'clipReferences' && ref.untrackedCastGuides) && (
                 <p className="text-[10px] text-port-warning break-words">Cast guide changes are not tracked. Review this take before use.</p>
               )}
+              {frameTake && onRefine && (
+                <button type="button" disabled={busy || refineDisabled} onClick={() => onRefine(take)}
+                  className="inline-flex items-center gap-0.5 rounded border border-port-border bg-port-bg px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 min-h-[32px] sm:min-h-0 disabled:opacity-50"
+                  title="Refine this image with an instruction without selecting it">
+                  <PencilLine size={11} /> Refine take
+                </button>
+              )}
               {take.takeId && (
                 <div className="flex flex-wrap gap-1">
                   {!isSelected && (
@@ -157,10 +165,10 @@ export default function SceneTakeStrip({
                       <Ban size={11} /> Bad
                     </button>
                   )}
-                  {onCheck && kind === 'image' && !rejected && (
+                  {onCheck && frameTake && !rejected && (
                     <button type="button" disabled={takeChecking} onClick={() => onCheck(take)}
                       className="inline-flex items-center gap-0.5 rounded bg-port-border px-1.5 py-0.5 text-[10px] pointer-coarse:min-h-11 min-h-[32px] sm:min-h-0 disabled:opacity-50"
-                      title="A vision model checks this frame against the shot prompt and for render defects">
+                      title={kind === 'endImage' ? 'A vision model checks this end frame against its end-frame prompt and for render defects' : 'A vision model checks this frame against the shot prompt and for render defects'}>
                       {takeChecking ? <Loader2 size={11} className="animate-spin" aria-hidden="true" /> : <Eye size={11} aria-hidden="true" />} {takeChecking ? 'Checking' : 'Check'}
                     </button>
                   )}
@@ -176,10 +184,10 @@ export default function SceneTakeStrip({
               <AssetReferenceActions assetId={take.assetId} compact
                 url={kind === 'video' ? null : takeThumbUrl(take)}
                 resolveUrl={kind === 'video' ? () => videoTakeUrl(take) : null} />
-              {kind === 'image' && currentPlateEvidence(scene, take)?.checks.filter((check) => check.id === 'render-quality' && check.status === 'fail').map((check) => (
+              {frameTake && currentPlateEvidence(scene, take, project)?.checks.filter((check) => check.id === 'render-quality' && check.status === 'fail').map((check) => (
                 <div key={check.id} className="space-y-1 text-xs text-port-warning">
                   <p className="break-words">Rendering defect: {check.note}</p>
-                  {renderQualityAcknowledged(scene, take) ? <p>Explicitly acknowledged for this image.</p> : onReview && take.takeId && (
+                  {renderQualityAcknowledged(scene, take, project) ? <p>Explicitly acknowledged for this image.</p> : onReview && take.takeId && (
                     <button type="button" disabled={busy} className="min-h-11 rounded border border-port-warning px-2 py-1 disabled:opacity-50"
                       onClick={() => onReview(take, { acknowledgeRenderQuality: { basis: take.plateEvidence.basis, note: check.note } })}>
                       Acknowledge rendering defect

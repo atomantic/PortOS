@@ -16,7 +16,7 @@
   let H = MV.render.height;
   function resize(width, height) { W = width; H = height; canvas.width = W; canvas.height = H; }
   resize(W, H);
-  const palette = { fill: '#eef1ea', ink: '#07090a', accent: '#ff5a1f', strike: '#ff2a2a' };
+  const palette = { fill: MV.composition?.style?.color || '#eef1ea', ink: '#07090a', accent: '#ff5a1f', strike: '#ff2a2a' };
   // lyricType.js is a module, so it runs after this classic script; it publishes
   // itself on globalThis before DOMContentLoaded.
   const lyricTypeModule = () => new Promise((resolve, reject) => {
@@ -27,7 +27,17 @@
   });
   const ready = (async () => {
     const { createLyricType } = await lyricTypeModule();
-    const lyricType = createLyricType(MV, { palette });
+    const cues = (MV.textCues || []).filter(c => Number.isFinite(c.startSec) && Number.isFinite(c.endSec) && c.endSec > c.startSec);
+    const hooks = cues.filter(c => c.emphasis === 'hero').map(c => ({ text: c.text, startSec: c.startSec, endSec: c.endSec, role: 'hook', zone: ['upper', 'center', 'lower'].includes(c.placement) ? c.placement : null }));
+    const subtitles = cues.filter(c => c.emphasis !== 'hero').map(c => ({ text: c.text, startSec: c.startSec, endSec: c.endSec, role: 'line' }));
+    const sung = createLyricType(MV, { palette });
+    const hero = createLyricType(MV, { palette, lines: hooks });
+    const custom = subtitles.length ? createLyricType(MV, { palette, lines: [...hooks, ...subtitles] }) : null;
+    const lyricType = custom || (hooks.length ? {
+      ready: Promise.all([sung.ready, hero.ready]),
+      draw(target, t, size) { (hero.linesAt(t).length ? hero : sung).draw(target, t, size); },
+      unfit: (target, window) => [...hero.unfit(target, window), ...sung.unfit(target, window)],
+    } : sung);
     await lyricType.ready;
     return lyricType;
   })();

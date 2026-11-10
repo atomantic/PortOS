@@ -310,8 +310,9 @@ describe('claim dispatch reviewer identity preflight (#13522)', () => {
     expect(prepared.skip.reason).toContain('Settings → Code Reviewers (usernames)');
     expect(recordPreflightOutcome).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'failed', reason: 'REVIEWER_IDENTITY_NOT_FOUND', note: prepared.skip.reason }));
     await prepare();
-    expect(identityLookup).toHaveBeenCalledTimes(1);
-    expect(identityLookup).toHaveBeenCalledWith(['api', '--hostname', 'github.example.test', 'users/missing-reviewer'], 8000);
+    expect(identityLookup).toHaveBeenCalledTimes(2);
+    expect(identityLookup).toHaveBeenNthCalledWith(1, ['api', '--hostname', 'github.example.test', 'users/missing-reviewer'], 8000);
+    expect(identityLookup).toHaveBeenNthCalledWith(2, ['api', '--hostname', 'github.example.test', `users/${encodeURIComponent('missing-reviewer[bot]')}`], 8000);
     const emitted = vi.fn();
     cosEvents.on('schedule:on-demand-empty', emitted);
     try {
@@ -327,7 +328,7 @@ describe('claim dispatch reviewer identity preflight (#13522)', () => {
     getTaskIntervalMock.mockResolvedValue({ type: 'weekly', taskMetadata: { usernames: ['missing-reviewer'] } });
     await expect(buildClaimWorkTask(APP)).rejects.toMatchObject({ code: 'REVIEWER_IDENTITY_NOT_FOUND', message: expect.stringContaining('Tasks → Schedule → claim-work → Reviewers (taskMetadata.usernames)') });
     await expect(buildJiraTicketTask(APP, 'TEST-123')).rejects.toMatchObject({ code: 'REVIEWER_IDENTITY_NOT_FOUND' });
-    expect(identityLookup).toHaveBeenCalledTimes(1);
+    expect(identityLookup).toHaveBeenCalledTimes(2);
   });
 
   it('names the per-app settings entry when an app override supplied the missing reviewer', async () => {
@@ -404,7 +405,24 @@ describe('generateSelfImprovementTaskForType model-comparison-refresh', () => {
     expect(task.metadata.executionOptions).toEqual({ serviceTier: 'fast' });
     expect(task.metadata.targetModels).toEqual(['claude-3-7-sonnet', 'gpt-4o']);
     expect(task.description).toContain('## Target models to investigate');
-    expect(task.description).toContain('- claude-3-7-sonnet');
-    expect(task.description).toContain('- gpt-4o');
+    expect(task.description).toContain('["claude-3-7-sonnet","gpt-4o"]');
+    expect(task.description).toContain('every supported effort, including efforts hidden');
+    expect(task.description).toContain('benchmark task costs for the current and historical index versions');
+    expect(task.description).toContain('Import verified observations into this instance');
+    expect(task.description).toContain('data.reference/model-comparison.json');
+  });
+
+  it('keeps separate model requests distinct for task deduplication while identifying the same target set consistently', async () => {
+    getTaskIntervalMock.mockResolvedValue({ type: 'on-demand', taskMetadata: {} });
+    const generate = targetModels => generateSelfImprovementTaskForType('model-comparison-refresh', STATE, { targetModels });
+    const [first, same, other, both, reversed, all] = await Promise.all([
+      generate(['model-a']), generate(['model-a']), generate(['model-b']),
+      generate(['model-a', 'model-b']), generate(['model-b', 'model-a']), generate(null),
+    ]);
+    const title = task => task.description.split('\n')[0];
+    expect(title(first)).toBe(title(same));
+    expect(title(first)).not.toBe(title(other));
+    expect(title(first)).not.toBe(title(all));
+    expect(title(both)).toBe(title(reversed));
   });
 });

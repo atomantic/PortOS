@@ -13,6 +13,7 @@ export const errorEvents = new EventEmitter();
 const SYSTEM_ERROR_KEYS = ['code', 'errno', 'syscall', 'hostname', 'address', 'port'];
 const FILESYSTEM_ERROR_CODES = new Set(['ENOENT', 'EACCES', 'EISDIR', 'ENOTDIR', 'EPERM']);
 const FILESYSTEM_ERROR_MESSAGE = 'Filesystem operation failed';
+const UPSTREAM_TIMEOUT_MESSAGE = 'A service PortOS called did not answer in time. Try again in a moment.';
 
 const errorMessage = (error) => error.originalMessage || error.message;
 
@@ -324,11 +325,17 @@ export function normalizeError(err) {
   }
 
   if (err instanceof Error) {
-    const status = err.status || 500;
-    const code = err.code || getErrorCode(status);
+    // An escaped `AbortSignal.timeout()` rejection is an outbound call that ran
+    // out of time, not a server crash. Its message names no service and its
+    // numeric legacy DOMException `code` (23) is not one a client can act on.
+    const timedOut = err.name === 'TimeoutError' && !err.status;
+    const status = err.status || (timedOut ? 504 : 500);
+    const code = timedOut ? getErrorCode(504) : err.code || getErrorCode(status);
     const context = { originalError: err.constructor.name, ...describeCauseChain(err) };
+    const message = timedOut ? UPSTREAM_TIMEOUT_MESSAGE
+      : FILESYSTEM_ERROR_CODES.has(err.code) ? FILESYSTEM_ERROR_MESSAGE : err.message;
     const normalized = new ServerError(
-      FILESYSTEM_ERROR_CODES.has(err.code) ? FILESYSTEM_ERROR_MESSAGE : err.message,
+      message,
       { status, code, context, responseMessage: err.responseMessage },
     );
     if (normalized.message !== err.message) normalized.originalMessage = err.message;
@@ -365,6 +372,7 @@ export const ERROR_CODES_BY_STATUS = Object.freeze({
   500: 'INTERNAL_ERROR',
   502: 'BAD_GATEWAY',
   503: 'SERVICE_UNAVAILABLE',
+  504: 'GATEWAY_TIMEOUT',
 });
 
 /**

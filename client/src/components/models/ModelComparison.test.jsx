@@ -2,7 +2,9 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import ModelComparison from './ModelComparison';
 import * as api from '../../services/apiModelComparison';
+import { triggerCosOnDemandTask } from '../../services/apiAgents';
 vi.mock('../../services/apiModelComparison', () => ({ getModelComparison: vi.fn() }));
+vi.mock('../../services/apiAgents', () => ({ triggerCosOnDemandTask: vi.fn() }));
 vi.mock('./ComparisonResearch', () => ({ default: () => <div>Research configuration</div> }));
 vi.mock('recharts', () => ({
   ResponsiveContainer: ({ children }) => <div>{children}</div>, ScatterChart: ({ children }) => <div>{children}</div>,
@@ -15,10 +17,45 @@ const row = (model, effort, quality, price, estimated = false) => ({ id: `${mode
 const rows = [row('gpt-6-luna', 'low', 21, 0.2), row('gpt-6-luna', 'high', 32, 0.2), row('gpt-5.6-luna', 'low', 20, 0.45), row('claude-opus-5-5', 'high', 56, 8), row('unknown-model', 'high', null, 0)];
 beforeEach(() => { localStorage.clear(); vi.clearAllMocks(); api.getModelComparison.mockResolvedValue({ composite: { anchor: 'Reference v1', rows } }); });
 
-it('compares generations and vendors together with quick model and effort toggles and no benchmark picker', async () => {
+it('queues only the chosen comparison model, regardless of filtered efforts, and keeps other models actionable', async () => {
+  const example = { ...row('example-vendor/example-model-1-2', 'low', null, 1), comparisonModel: 'example-model-1.2' };
+  const other = row('other-model', 'low', null, 1);
+  api.getModelComparison.mockResolvedValue({ composite: { rows: [example, { ...example, id: 'example-high', effort: 'high' }, other] } });
+  let finish;
+  triggerCosOnDemandTask.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  triggerCosOnDemandTask.mockResolvedValueOnce({ success: true, request: { id: 'demand-other' } });
+  render(<ModelComparison />);
+  const button = await screen.findByRole('button', { name: 'Research example-model-1.2' });
+  fireEvent.click(screen.getByRole('button', { name: '✓ high' }));
+  fireEvent.click(button);
+  fireEvent.click(button);
+  expect(triggerCosOnDemandTask).toHaveBeenCalledTimes(1);
+  expect(triggerCosOnDemandTask).toHaveBeenCalledWith('model-comparison-refresh', null, { targetModels: ['example-model-1.2'], silent: true });
+  expect(button).toBeDisabled();
+  fireEvent.click(screen.getByRole('button', { name: 'Research other-model' }));
+  await screen.findByText(/Research request queued in CoS/);
+  expect(triggerCosOnDemandTask).toHaveBeenLastCalledWith('model-comparison-refresh', null, { targetModels: ['other-model'], silent: true });
+  finish({ success: true, request: { id: 'demand-example' } });
+  await waitFor(() => expect(button).toHaveTextContent('Research requested'));
+  expect(screen.getAllByRole('status')).toHaveLength(2);
+});
+
+it('shows queue failures on the affected model and allows retry', async () => {
+  triggerCosOnDemandTask.mockRejectedValueOnce(new Error('CoS improvement is disabled'));
+  triggerCosOnDemandTask.mockResolvedValueOnce({ success: true, request: { id: 'demand-retry' } });
+  render(<ModelComparison />);
+  const button = await screen.findByRole('button', { name: 'Research unknown-model' });
+  fireEvent.click(button);
+  expect(await screen.findByRole('alert')).toHaveTextContent('CoS improvement is disabled');
+  expect(button).toBeEnabled();
+  fireEvent.click(button);
+  expect(await screen.findByRole('status')).toHaveTextContent('Research request queued');
+  expect(screen.queryByRole('alert')).toBeNull();
+});
+
+it('compares generations and vendors together with quick model and effort toggles', async () => {
   render(<ModelComparison />);
   await screen.findByTestId('scatter-example:gpt-6-luna');
-  expect(screen.queryByLabelText('Benchmark')).toBeNull();
   fireEvent.change(screen.getByLabelText('Filter models'), { target: { value: 'gpt-6-luna,opus' } });
   fireEvent.click(screen.getByRole('button', { name: 'Compare matching' }));
   expect(screen.getByTestId('scatter-example:gpt-6-luna')).toHaveAttribute('data-values', '[[0.2,21],[0.6000000000000001,32]]');
@@ -32,6 +69,29 @@ it('compares generations and vendors together with quick model and effort toggle
   expect(screen.getByText('Research configuration')).toBeTruthy();
   fireEvent.click(screen.getByRole('button', { name: /Research selected/ }));
   expect(screen.getByText('Research configuration')).toBeTruthy();
+});
+
+it('plots current-workload measurements by default and preserves a choice of the historical workload', async () => {
+  const fable = row('claude-fable-5.2', 'medium', 56.4, 3.8);
+  const legacyFable = { ...fable, quality: metric(54.8, true), costPerTask: null };
+  api.getModelComparison.mockResolvedValue({
+    composite: { anchor: 'Artificial Analysis Intelligence Index v4.3.2', rows: [legacyFable] },
+    currentComposite: { anchor: 'Artificial Analysis Intelligence Index v5.0.1', rows: [fable] },
+  });
+  const { unmount } = render(<ModelComparison />);
+  await screen.findByTestId('scatter-example:claude-fable-5.2');
+  const index = screen.getByLabelText('Intelligence index');
+  expect(index).toHaveValue('Artificial Analysis Intelligence Index v5.0.1');
+  expect(screen.getByTestId('scatter-example:claude-fable-5.2')).toHaveAttribute('data-values', '[[3.8,56.4]]');
+  fireEvent.click(screen.getByLabelText('Include estimates'));
+  expect(screen.getByTestId('scatter-example:claude-fable-5.2')).toBeTruthy();
+  fireEvent.change(index, { target: { value: 'Artificial Analysis Intelligence Index v4.3.2' } });
+  expect(screen.queryByTestId('scatter-example:claude-fable-5.2')).toBeNull();
+  expect(screen.getByText(/Task cost includes the token usage.*v4\.3\.2/)).toBeTruthy();
+  unmount();
+  render(<ModelComparison />);
+  await waitFor(() => expect(screen.getByLabelText('Intelligence index')).toHaveValue('Artificial Analysis Intelligence Index v4.3.2'));
+  expect(screen.queryByTestId('scatter-example:claude-fable-5.2')).toBeNull();
 });
 
 it('preserves empty selections across reload, handles zero costs and switches axes', async () => {

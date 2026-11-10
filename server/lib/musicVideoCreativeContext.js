@@ -40,7 +40,29 @@ export function musicVideoDirectorLook(project) {
 
 // A shot needs the character's identity, look, rules and never-list; the
 // wardrobe catalogue is for Cast & Sets, which reads the full snapshot.
-const characterStyleForShots = (snapshot) => snapshot.split('\n').filter((line) => !line.startsWith('Wardrobe options:')).join('\n');
+const CLOSE_IDENTITY = 'Identity (close and medium shots, verbatim):';
+const WIDE_IDENTITY = 'Identity (full length and wider, verbatim):';
+const WIDE_FRAMING = 'Wide framing: anchor characters by full-body silhouette, posture, hair, and wardrobe color blocks rather than close-up facial detail. Do not crop in for facial close-ups.';
+
+function characterStyleForShots(snapshot, scale) {
+  const lines = snapshot.split('\n').filter((line) => !line.startsWith('Wardrobe options:'));
+  const identity = (label) => lines.find((line) => line.startsWith(label))?.slice(label.length).trim();
+  // A legacy snapshot with only one identity keeps it, whatever the framing.
+  const omit = identity(CLOSE_IDENTITY) && identity(WIDE_IDENTITY)
+    ? scale === 'wide' ? CLOSE_IDENTITY : ['close', 'medium'].includes(scale) ? WIDE_IDENTITY : null
+    : null;
+  return lines.filter((line) => !omit || !line.startsWith(omit)).join('\n');
+}
+
+// Only labeled facial clauses are unambiguous. Keep an otherwise face-only
+// identity, and leave prose, signature marks and all non-character text alone.
+function filterWideCharacterDescription(text) {
+  if (typeof text !== 'string') return text;
+  const clauses = text.split(';');
+  const kept = clauses.filter((clause) => !/^\s*face\s*:/i.test(clause));
+  return kept.some((clause) => /\b(?:build|hair|wardrobe|silhouette)\b/i.test(clause))
+    ? kept.join(';').trim() : text;
+}
 
 /**
  * Shared, bounded creative bible for planning, media generation and handoff.
@@ -48,20 +70,23 @@ const characterStyleForShots = (snapshot) => snapshot.split('\n').filter((line) 
  * reference frame that already carries the look, and the board's pictured
  * places and subjects only fight the shot there. `look` is the director-written
  * look (musicVideoDirectorLook); when set it replaces the mood board snapshot.
- * Either way, sentences that picture a person are dropped.
+ * Either way, sentences that picture a person are dropped. `framingScale`
+ * selects a snapshot identity and projects labeled character clauses for a
+ * particular shot; the saved concept and the director's text are unchanged.
  */
-export function musicVideoCreativeContext(concept, { moodBoard = true, look = '' } = {}) {
+export function musicVideoCreativeContext(concept, { moodBoard = true, look = '', framingScale = null } = {}) {
   if (!concept) return '';
   const directorLook = withoutPeople(look);
   const boardLook = directorLook ? '' : withoutPeople(trimTo(concept.moodBoardStyle, 800));
   const sameAsStyle = directorLook && directorLook === withoutPeople(trimTo(concept.style, 500));
   const styles = [
-    concept.characterStyle && `Character style (fixed identity; use the identity text verbatim): ${trimTo(characterStyleForShots(concept.characterStyle), 1900)}`,
+    concept.characterStyle && `Character style (fixed identity; use the identity text verbatim): ${trimTo(characterStyleForShots(concept.characterStyle, framingScale), 1900)}`,
     concept.universeStyle && `Universe style: ${trimTo(concept.universeStyle, 800)}`,
     moodBoard && directorLook && !sameAsStyle && `Look (palette, light and texture only): ${directorLook}`,
     moodBoard && boardLook && `${MOOD_BOARD_LOOK_LABEL}: ${boardLook}`,
   ].filter(Boolean);
   const subjects = activeMusicVideoSubjects(concept).slice(0, 24);
+  if (framingScale === 'wide' && (concept.characterStyle || subjects.some((s) => s.kind === 'character'))) styles.push(WIDE_FRAMING);
   const identities = subjects.map((s) =>
     `${s.kind}${s.kind === 'character' && s.role ? ` (${s.role})` : ''}: ${trimTo(s.name, 120)}`);
   // Reserve every identity first; share the remaining description budget so
@@ -70,7 +95,8 @@ export function musicVideoCreativeContext(concept, { moodBoard = true, look = ''
   const descriptionLimit = subjects.length
     ? Math.max(0, Math.min(300, Math.floor((CONTEXT_MAX - fixedSize) / subjects.length) - 3)) : 0;
   const lines = subjects.map((subject, i) => {
-    const description = trimTo(subject.description, descriptionLimit);
+    const description = trimTo(framingScale === 'wide' && subject.kind === 'character'
+      ? filterWideCharacterDescription(subject.description) : subject.description, descriptionLimit);
     return `${identities[i]}${description ? ` — ${description}` : ''}`;
   });
   return [...styles, ...(lines.length ? [BIBLE_HEADER, ...lines] : [])].join('\n').slice(0, CONTEXT_MAX);
@@ -116,7 +142,7 @@ function directionCastLines(cast) {
   const share = cast.length > 4 ? Math.floor(CAST_CONTEXT_MAX / cast.length) : null;
   return cast.map((c) => {
     const head = `Cast ${trimTo(c.name, 80)}${c.role ? ` (${trimTo(c.role, 60)})` : ''}`;
-    const body = [c.description, c.face, c.hair, c.wardrobe].filter(Boolean).map((v) => trimTo(v, 200)).join('; ');
+    const body = [c.description, c.face, c.hair, c.wardrobe, c.stillness && `stillness: ${c.stillness}`, c.movement && `movement: ${c.movement}`].filter(Boolean).map((v) => trimTo(v, 200)).join('; ');
     const text = share == null ? body : trimTo(body, Math.max(0, share - head.length - 2));
     return text ? `${head}: ${text}` : head;
   });
@@ -142,9 +168,10 @@ export function musicVideoDirectionContext(direction) {
     'The mood board is LOOK-ONLY: borrow palette, lighting and texture, never its literal locations, objects or narrative. Use the assigned set for each shot.',
     `Story: ${trimTo(direction.logline, 400)} ${trimTo(direction.interpretation, 600)}`,
     `Protagonist: ${[p.name, p.description, p.face, p.hair, p.signature, p.gesture, ...(p.rules || [])].filter(Boolean).map((s) => trimTo(s, 300)).join('; ')}`,
+    ...lines('Physical behavior:', [['stillness', p.stillness], ['movement', p.movement]]),
     ...(procedural ? lines('Character build:', [
       ['construction', p.construction], ['shape language', p.shapeLanguage], ['materials', p.materials], ['palette', p.palette],
-      ['expressions', (p.expressions || []).join(' | ')], ['movement', p.movement],
+      ['expressions', (p.expressions || []).join(' | ')],
     ]) : []),
     ...(procedural ? lines('World rules:', [
       ['layout', w.layout], ['depth', w.depth], ['lighting', w.lighting], ['camera', w.camera], ['transitions', w.transitions],

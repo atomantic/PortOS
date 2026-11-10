@@ -537,14 +537,24 @@ export async function moveProjectSceneEnd(id, sceneId, { endSec }) {
   return moveCutOnBoard(id, outcome, [outcome.scene, outcome.next]);
 }
 
+// Take decisions (select, reject, mark, swap) touch only scenes and marks and answer with
+// scenes, so they skip the catalog check-in and description resolution around the write:
+// those read every linked catalog record and stat its media, twice per click.
+const SCENE_ONLY = Object.freeze({ sceneOnly: true });
+
 /**
- * Mark assets ★ ingredient or ✕ bad (null clears). Returns the project's marks and
- * the shots whose takes a bad mark rejected.
+ * Mark assets ★ ingredient or ✕ bad (null clears). Returns the project's marks,
+ * the shots whose takes a bad mark rejected or moved, and the per-shot changes list.
  */
-export async function markMediaPoolAssets(id, keys, mark) {
+export async function markMediaPoolAssets(id, keys, mark, options = {}) {
   const { markPoolAssets } = await import('./mediaPool.js');
-  const { project, scenes } = await mutateProjectRecord(id, (current) => markPoolAssets(current, keys, mark));
-  return { assetMarks: project.assetMarks || {}, scenes };
+  let resultChanges = [];
+  const { project, scenes } = await mutateProjectRecord(id, (current) => {
+    const outcome = markPoolAssets(current, keys, mark, options);
+    resultChanges = outcome.changes || [];
+    return outcome;
+  }, SCENE_ONLY);
+  return { assetMarks: project.assetMarks || {}, scenes, changes: resultChanges };
 }
 
 // ---- scene takes (#8965) ----
@@ -584,9 +594,9 @@ export async function appendTakesAcrossScenes(id, items) {
 }
 
 /** Explicitly select a take for its scene slot. Returns the updated scene. */
-export async function selectSceneTake(id, sceneId, takeId) {
+export async function selectSceneTake(id, sceneId, takeId, options = {}) {
   const { selectSceneTake: select } = await import('./takes.js');
-  const { scene } = await mutateProjectRecord(id, (current) => select(current, sceneId, takeId));
+  const { scene } = await mutateProjectRecord(id, (current) => select(current, sceneId, takeId, options), SCENE_ONLY);
   return scene;
 }
 
@@ -640,21 +650,21 @@ export async function placeMediaPoolItem(id, sceneId, { kind, assetId, withAsset
 /** Reject every take of a shot that is not its selected frame, end frame or clip. Returns `{ scene, rejected }`. */
 export async function rejectUnusedSceneTakes(id, sceneId) {
   const { rejectUnusedTakes } = await import('./takes.js');
-  const { scene, rejected } = await mutateProjectRecord(id, (current) => rejectUnusedTakes(current, sceneId));
+  const { scene, rejected } = await mutateProjectRecord(id, (current) => rejectUnusedTakes(current, sceneId), SCENE_ONLY);
   return { scene, rejected };
 }
 
 /** Swap a shot's start and end frames (and their prompts). Returns the scene. */
 export async function swapProjectSceneFrames(id, sceneId) {
   const { swapSceneFrames } = await import('./takes.js');
-  const { scene } = await mutateProjectRecord(id, (current) => swapSceneFrames(current, sceneId));
+  const { scene } = await mutateProjectRecord(id, (current) => swapSceneFrames(current, sceneId), SCENE_ONLY);
   return scene;
 }
 
 /** Reject/restore a take and/or set its note. Returns the updated scene. */
 export async function reviewSceneTake(id, sceneId, takeId, review) {
   const { reviewSceneTake: reviewTake } = await import('./takes.js');
-  const { scene } = await mutateProjectRecord(id, (current) => reviewTake(current, sceneId, takeId, review));
+  const { scene } = await mutateProjectRecord(id, (current) => reviewTake(current, sceneId, takeId, review), SCENE_ONLY);
   return scene;
 }
 
@@ -665,15 +675,17 @@ export async function reviewSceneTake(id, sceneId, takeId, review) {
  * Its evidence carries a manual run id, so a production run still reviews for itself.
  */
 export async function checkSceneTakePlate(id, sceneId, takeId) {
-  const { plateCheckTake, recordTakePlateEvidence } = await import('./takes.js');
+  const { plateCheckPrompt, plateCheckTake, recordTakePlateEvidence } = await import('./takes.js');
+  const { plateFrameRole } = await import('../../lib/musicVideoPlateEvidence.js');
   const project = await getProject(id);
   if (!project) throw new ServerError('Music video project not found', { status: 404, code: 'NOT_FOUND' });
   const { scene, take } = plateCheckTake(project, sceneId, takeId);
   const { resolvePlateReviewer, reviewPlate } = await import('./plateReview.js');
   const pinned = project.plateReviewer?.providerId ? { providerId: project.plateReviewer.providerId, ...(project.plateReviewer.model ? { model: project.plateReviewer.model } : {}) } : {};
   const reviewer = await resolvePlateReviewer(pinned).catch((error) => { throw new ServerError(error.message, { status: error.status || 422, code: error.code || 'PLATE_REVIEWER_UNAVAILABLE' }); });
-  const evidence = await reviewPlate({ scene, subjects: project.concept?.subjects || [], assetId: take.assetId, runId: `manual-${randomUUID()}`, reviewer,
-    prompt: take.prompt ?? scene.framePrompt ?? scene.prompt ?? '' });
+  const frameRole = plateFrameRole(take);
+  const evidence = await reviewPlate({ scene, subjects: project.concept?.subjects || [], project, assetId: take.assetId, runId: `manual-${randomUUID()}`, reviewer,
+    prompt: plateCheckPrompt(scene, take), frameRole });
   const { scene: saved } = await mutateProjectRecord(id, (current) => recordTakePlateEvidence(current, sceneId, takeId, evidence));
   return saved;
 }
@@ -707,7 +719,16 @@ async function mutateProjectRecordAdmitted(id, transform, options = {}, mutate =
   let catalogRecords = [];
   let descriptions = null;
   const write = mutate || (await selectBackend()).mutateProjectRecord;
+  const sceneOnly = options.sceneOnly === true;
   const outcome = await write(id, async (stored, context = {}) => {
+    if (sceneOnly) {
+      const outcome = await transform(stored, { ...context, storedProject: stored });
+      const cleaned = renumberShotLabels(outcome.project);
+      if (cleaned !== outcome.project) Object.assign(outcome, withCleanedScenes(outcome, cleaned));
+      await assertNewMediaSelections(stored, outcome.project);
+      dropped = { project: stored, assets: droppedTakeAssets(stored, outcome.project) };
+      return { ...outcome, project: retainMusicVideoDependencies(stored, outcome.project) };
+    }
     if (context.client && hasLinkedSubjects(stored)) descriptions = await import('./subjectDescriptionSync.js');
     let current = descriptions ? await descriptions.resolveProjectCatalogDescriptions(stored, { client: context.client }) : stored;
     if (current?.castAndSets?.source === 'catalog') {
@@ -754,7 +775,7 @@ async function mutateProjectRecordAdmitted(id, transform, options = {}, mutate =
   }
   // Presentation is reconstructed after commit: sockets and mutation replies need
   // the same live catalog state as GET, without storing its derived media list.
-  if (outcome.project?.castAndSets?.source === 'catalog') {
+  if (!sceneOnly && outcome.project?.castAndSets?.source === 'catalog') {
     const { withCatalogCheckin } = await import('./catalogCheckin.js');
     outcome.project = await withCatalogCheckin(outcome.project);
   }

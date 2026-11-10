@@ -38,12 +38,12 @@ function paintGlitch(canvas, figure, params, frame) {
  * paints the glitch of what is on screen; every other frame it stays hidden.
  * Below the lyric layer, as the render keeps its typography clean.
  */
-export default function TransitionGlitch({ scenes, figureRef, audioRef, time, endSec = null, fps, layered = false }) {
+export default function TransitionGlitch({ scenes, figureRef, audioRef, time, endSec = null, fps, layered = false, cameras = null }) {
   const canvasRef = useRef(null);
   // A still's glitch to its end frame (an image effect) paints the same way, on the frames the render repaints.
-  // So do the glitches a shot sets at moments inside it.
-  const glitches = useMemo(() => mergeGlitchFrames(transitionGlitchFrames(sceneTransitionSections(scenes, fps, { endSec })),
-    sceneImageEffectGlitchFrames(scenes, fps, { layered, endSec }), sceneShotGlitchFrames(scenes, fps, { endSec })), [scenes, fps, endSec, layered]);
+  // So do the glitches a shot sets at moments inside it, including a camera's default cuts.
+  const glitches = useMemo(() => mergeGlitchFrames(transitionGlitchFrames(sceneTransitionSections(scenes, fps, { endSec, cameras })),
+    sceneImageEffectGlitchFrames(scenes, fps, { layered, endSec, cameras }), sceneShotGlitchFrames(scenes, fps, { endSec, cameras })), [scenes, fps, endSec, layered, cameras]);
   const paint = useCallback((t) => {
     const canvas = canvasRef.current;
     if (!canvas) return;

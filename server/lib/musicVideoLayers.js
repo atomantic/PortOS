@@ -12,8 +12,10 @@
  * typography. Cards and code shots need no frame or clip. A plain concat render always
  * uses footage. Pure and dependency-free: the server render and the client
  * board read the same rules, so the Render button's readiness matches what the
- * render preflight accepts.
+ * render preflight accepts. A return is ready when its source clip is (#15588).
  */
+
+import { isContinuingScene, scenePlayableClipId } from './musicVideoSourceTake.js';
 
 export const MUSIC_VIDEO_VISUAL_LAYERS = ['footage', 'still', 'card', 'code'];
 
@@ -115,9 +117,13 @@ export function wordTimedScenes(project, scenes = project?.scenes) {
  * Whether the render can include this scene as-is: footage needs its clip, a
  * still needs its reference frame and a span, and a card or code shot needs only a span.
  */
-export function sceneRenderReady(scene, { layered = false } = {}) {
+export function sceneRenderReady(scene, { layered = false, scenes = null } = {}) {
+  if (scene?.selectedTakeMarkedBad) return false;
   const layer = sceneVisualLayer(scene, { layered });
-  if (layer === 'footage') return Boolean(scene?.videoHistoryId);
+  if (layer === 'footage') {
+    if (isContinuingScene(scene)) return Boolean(scenePlayableClipId(scene, scenes));
+    return Boolean(scene?.videoHistoryId);
+  }
   if (!sceneHasAuthoredSpan(scene)) return false;
   if (layer === 'still' && scene.photoSequence && scene.photoSequence.enabled !== false) return !!scene.photoSequence.imageIds?.length;
   return isSelfDrawnLayer(layer) || Boolean(scene.referenceImageId);

@@ -1,12 +1,14 @@
 import { castLookForTake } from '../../../../server/lib/musicVideoCastLook.js';
 import { musicVideoGreyboxReference } from '../../../../server/lib/musicVideoGreybox.js';
+import { resolveSourceTake } from '../../../../server/lib/musicVideoSourceTake.js';
 import SceneFramePromptPreview from './SceneFramePromptPreview.jsx';
 import SceneFrameReferenceLimitNotice from './SceneFrameReferenceLimitNotice.jsx';
 import SceneGreyboxReference from './SceneGreyboxReference.jsx';
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Activity, ArrowLeftRight, ArrowRight, Image as ImageIcon, ImagePlus, PencilLine, Shuffle, SkipForward, Wand2, X } from 'lucide-react';
 import AutoSizeTextarea from '../ui/AutoSizeTextarea.jsx';
 import InfoTooltip from '../ui/InfoTooltip';
+import SceneFrameRenderTarget, { frameRenderTargetOverrides, lastFrameRenderTarget } from './SceneFrameRenderTarget.jsx';
 import SceneTakeStrip from './SceneTakeStrip.jsx';
 import SceneCameoLink from './SceneCameoLink.jsx';
 import SceneFrameReferences from './SceneFrameReferences.jsx';
@@ -64,18 +66,21 @@ const RERENDER_HINT = 'Renders this frame again from the current Casting look an
  * optional one it ends on (#11173). Each frame shows its prompt and its own
  * Render right under the picture, and can render from the start or end frame
  * as an image reference (`onGenerateFrame` / `onGenerateEndFrame` take
- * `{ referenceImageId }`, null for prompt only). Refine edits a frame by a
+ * `{ referenceImageId }`, null for prompt only). Render on names the image
+ * service for this shot's frames only; a pick rides along as `imageTarget`.
+ * Refine edits a frame by a
  * short instruction (`{ referenceImageId, refine }`), and Swap puts one of the
  * video's unused stills on it. Each frame's own takes sit under it as a grid,
  * so both frames' actions and takes show at once; tapping a frame opens it full size.
  * With both frames set, `onSwapFrames` trades them (prompts included) in one tap.
  * The References row above them picks the character and set references every frame render sends;
  * Research and seed above it imports real photos of the shot's subject that lead those references.
- * With `endFrameToggle` (footage), Use end frame switches the end frame off (`scene.endFrameOff`):
- * its column hides and clips skip it, keeping its selection, prompt and takes for switching back on.
+ * With `endFrameToggle` (footage, and a still whose picture is an end-frame effect),
+ * Use end frame switches the end frame off (`scene.endFrameOff`): its column hides and
+ * the shot plays its start frame only, keeping its selection, prompt and takes for switching back on.
  */
 export default function SceneFrames({
-  project = null, castMedia = null, onReloadCastMedia = null, greyboxPlaces = {}, greyboxSaving = false, onGreyboxSaving, scene, index, endFrames: endFramesAllowed, endFrameToggle = false, generatingFrame = false, generatingEndFrame = false, onGenerateFrame, onGenerateEndFrame,
+  project = null, castMedia = null, onReloadCastMedia = null, greyboxPlaces = {}, greyboxSaving = false, onGreyboxSaving, scene, index, endFrames: endFramesAllowed, endFrameToggle = false, generatingFrame = false, generatingEndFrame = false, onGenerateFrame, onGenerateEndFrame, onImageTargetChange = null,
   onEditLocal, onSave, onOpenPreview, takeBusy = false, onSelectTake, onReviewTake, onSwap = null, onImportTake = null,
   onContinueFromPrevious = null, previousHasClip = false, onSwapFrames = null, assetMarks = null, onMarkTake = null, onCheckTake = null, checkingTakes = null, onApplyCameos = null,
 }) {
@@ -103,9 +108,26 @@ export default function SceneFrames({
   // Refine: which frame's edit box is open, and the instruction typed into it.
   const [refining, setRefining] = useState(null);
   const [instruction, setInstruction] = useState('');
-  const frames = { start: scene.referenceImageId || null, end: endFrames ? scene.endImageId || null : null };
+  const [includeReferences, setIncludeReferences] = useState(true);
+  const openRefine = (which, imageId) => {
+    setRefining((current) => current?.which === which && current.imageId === imageId ? null : { which, imageId });
+    setInstruction('');
+    setIncludeReferences(true);
+  };
+  // A return shows the source shot's frame and does not render one of its own.
+  const sourceWindow = resolveSourceTake(scene, project?.scenes);
+  const frames = {
+    start: sourceWindow?.referenceImageId || scene.referenceImageId || null,
+    end: endFrames ? scene.endImageId || null : null,
+  };
   const refOf = (which) => (frames[refs[which]] ? refs[which] : '');
   const id = (name) => `mv-scene-${scene.sceneId}-${name}`;
+  // '' follows the project image pin. A named service is this render only, and stays for Retry.
+  const [framePick, setFramePick] = useState(() => lastFrameRenderTarget().pick);
+  const [frameOptions, setFrameOptions] = useState(() => lastFrameRenderTarget().options);
+  const imageTarget = useMemo(() => frameRenderTargetOverrides(framePick, frameOptions), [framePick, frameOptions]);
+  useEffect(() => { onImageTargetChange?.(imageTarget); }, [imageTarget, onImageTargetChange]);
+  const withTarget = (extra) => (imageTarget ? { ...extra, imageTarget } : extra);
 
   const column = (which) => {
     const start = which === 'start';
@@ -116,19 +138,24 @@ export default function SceneFrames({
     const ref = refOf(which);
     const refChoices = ['', ...['start', 'end'].filter((key) => frames[key])];
     const needsPrompt = !start && !scene.endFramePrompt?.trim();
-    const render = () => (start ? onGenerateFrame : onGenerateEndFrame)?.(scene, { referenceImageId: ref ? frames[ref] : null });
+    const sharedTake = !!sourceWindow;
+    const render = () => {
+      if (sharedTake) return;
+      (start ? onGenerateFrame : onGenerateEndFrame)?.(scene, withTarget({ referenceImageId: ref ? frames[ref] : null }));
+    };
     const kind = start ? 'image' : 'endImage';
     const selected = imageId ? (scene.takes || []).find((take) => take?.kind === kind && take.assetId === imageId) : null;
     const olderLook = selected ? castLookForTake(project, scene, selected, castMedia).status === 'older' : false;
     const rerender = () => {
-      if (greyboxBlocked || generating || needsPrompt) return;
-      (start ? onGenerateFrame : onGenerateEndFrame)?.(scene, { referenceImageId: ref ? frames[ref] : null, replaceSelection: true });
+      if (sharedTake || greyboxBlocked || generating || needsPrompt) return;
+      (start ? onGenerateFrame : onGenerateEndFrame)?.(scene, withTarget({ referenceImageId: ref ? frames[ref] : null, replaceSelection: true }));
     };
-    const refineLocked = greyboxBlocked || !!generating;
+    const refineLocked = sharedTake || (includeReferences && greyboxBlocked) || !!generating || takeBusy;
+    const refineImageId = refining?.which === which ? refining.imageId : null;
     const refine = (e) => {
       e.preventDefault();
-      if (!instruction.trim() || refineLocked) return;
-      (start ? onGenerateFrame : onGenerateEndFrame)?.(scene, { referenceImageId: imageId, refine: instruction.trim() });
+      if (!instruction.trim() || !refineImageId || refineLocked) return;
+      (start ? onGenerateFrame : onGenerateEndFrame)?.(scene, withTarget({ referenceImageId: refineImageId, refine: instruction, ...(includeReferences ? {} : { includeReferences: false }) }));
       setRefining(null);
       setInstruction('');
     };
@@ -145,13 +172,13 @@ export default function SceneFrames({
         {project && <SceneFramePromptPreview project={project} scene={scene} castMedia={castMedia} greybox={greybox} slot={which} referenceImageId={ref ? frames[ref] : null} />}
         {project && <SceneFrameReferenceLimitNotice project={project} scene={scene} castMedia={castMedia} greybox={greybox} sourceImageId={ref ? frames[ref] : null} />}
         <div className="flex flex-wrap items-center gap-2">
-          <button type="button" onClick={render} disabled={greyboxBlocked || !!generating || needsPrompt} className={PRIMARY_BUTTON}
-            title={needsPrompt ? 'Describe the end frame first' : imageId ? NEW_TAKE_HINT : ref ? `Render from the ${REFERENCE_LABELS[ref].toLowerCase()} with this prompt` : 'Render from this prompt'}>
+          <button type="button" onClick={render} disabled={sharedTake || greyboxBlocked || !!generating || needsPrompt} className={PRIMARY_BUTTON}
+            title={sharedTake ? `Plays ${sourceWindow.source?.label || 'the source shot'}'s frame` : needsPrompt ? 'Describe the end frame first' : imageId ? NEW_TAKE_HINT : ref ? `Render from the ${REFERENCE_LABELS[ref].toLowerCase()} with this prompt` : 'Render from this prompt'}>
             {generating ? <Activity size={14} className="animate-spin" /> : start ? <ImageIcon size={14} /> : <Wand2 size={14} />}
             {generating ? 'Generating…' : start ? (imageId ? 'New frame take' : 'Generate frame') : (imageId ? 'New end frame take' : 'Generate end frame')}
           </button>
           {olderLook && (
-            <button type="button" onClick={rerender} disabled={greyboxBlocked || !!generating || needsPrompt} className={SECONDARY_BUTTON}
+            <button type="button" onClick={rerender} disabled={sharedTake || greyboxBlocked || !!generating || needsPrompt} className={SECONDARY_BUTTON}
               aria-label={`Re-render ${start ? 'start' : 'end'} frame`}
               title={RERENDER_HINT}>
               Re-render
@@ -173,8 +200,8 @@ export default function SceneFrames({
             </span>
           )}
           {imageId && (
-            <button type="button" onClick={() => { setRefining(refining === which ? null : which); setInstruction(''); }} disabled={refineLocked}
-              aria-expanded={refining === which} className={SECONDARY_BUTTON} title="Edit this frame with a short instruction, keeping the rest">
+            <button type="button" onClick={() => openRefine(which, imageId)} disabled={sharedTake || !!generating || takeBusy}
+              aria-expanded={refineImageId === imageId} className={SECONDARY_BUTTON} title="Edit this frame with a short instruction, keeping the rest">
               <PencilLine size={14} /> Refine
             </button>
           )}
@@ -189,19 +216,29 @@ export default function SceneFrames({
         {olderLook && (
           <p className="text-xs text-port-text-muted">Older look: Casting changed since this was rendered. Re-render to use the new look.</p>
         )}
-        {refining === which && imageId && (<>
-          <form onSubmit={refine} className="flex min-w-0 gap-2">
-            <label htmlFor={id(`${which}-refine`)} className="sr-only">{`What to change in the ${start ? 'start' : 'end'} frame`}</label>
-            <input id={id(`${which}-refine`)} type="text" value={instruction} onChange={(e) => setInstruction(e.target.value)}
-              placeholder="What to change, e.g. remove the hand"
-              className="min-w-0 flex-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-base sm:text-sm" />
-            {greybox?.reference && <SceneFramePromptPreview project={project} scene={scene} castMedia={castMedia} greybox={greybox} slot={which} referenceImageId={imageId} instruction={instruction} />}
-            <button type="submit" disabled={!instruction.trim() || refineLocked} className={PRIMARY_BUTTON}
-              aria-label={`Render refined ${start ? 'start' : 'end'} frame`}>
-              <Wand2 size={14} /> Render
-            </button>
+        {refineImageId && (<>
+          <form onSubmit={refine} className="min-w-0 space-y-2 rounded border border-port-border p-2">
+            {refineImageId !== imageId && <FrameTile label="Refining this take" imageId={refineImageId}
+              onOpen={() => onOpenPreview?.(`image:${refineImageId}`)} openLabel="View refinement source full size" />}
+            <p className="text-xs text-port-text-muted">Creates a new take. The frame in use stays selected.</p>
+            <div className="flex min-w-0 gap-2">
+              <label htmlFor={id(`${which}-refine`)} className="sr-only">{`What to change in the ${start ? 'start' : 'end'} frame`}</label>
+              <AutoSizeTextarea id={id(`${which}-refine`)} rows={2} value={instruction} onChange={(e) => setInstruction(e.target.value)}
+                placeholder="What to change, e.g. remove the hand"
+                className="min-w-0 flex-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-base sm:text-sm" />
+              <button type="submit" disabled={!instruction.trim() || refineLocked} className={PRIMARY_BUTTON}
+                aria-label={`Render refined ${start ? 'start' : 'end'} frame`}>
+                <Wand2 size={14} /> Render
+              </button>
+            </div>
+            <label htmlFor={id(`${which}-refine-references`)} className="flex items-center gap-2 text-xs min-h-[44px] pointer-fine:sm:min-h-0">
+              <input id={id(`${which}-refine-references`)} type="checkbox" checked={includeReferences} onChange={(e) => setIncludeReferences(e.target.checked)} />
+              Include shot reference images
+            </label>
+            <p className="text-xs text-port-text-muted">{includeReferences ? 'Sends this image plus the shot’s references, including mood-board and greybox images.' : 'Sends only the image to refine with your instruction.'}</p>
+            {project && <SceneFramePromptPreview project={project} scene={scene} slot={which} referenceImageId={refineImageId} instruction={instruction} includeReferences={includeReferences} />}
           </form>
-          {project && <SceneFrameReferenceLimitNotice project={project} scene={scene} castMedia={castMedia} greybox={greybox} sourceImageId={imageId} />}
+          {project && includeReferences && <SceneFrameReferenceLimitNotice project={project} scene={scene} castMedia={castMedia} greybox={greybox} sourceImageId={refineImageId} />}
         </>)}
         {(start ? onImportTake || onContinueFromPrevious : scene.endImageId) && (
           <div className="flex flex-wrap gap-2">
@@ -233,11 +270,12 @@ export default function SceneFrames({
             From previous shot: keep this frame as the end frame
           </label>
         )}
-        <SceneTakeStrip scene={scene} kind={start ? 'image' : 'endImage'} busy={takeBusy} grid
+        <SceneTakeStrip project={project} scene={scene} kind={start ? 'image' : 'endImage'} busy={takeBusy} grid
+          onRefine={(take) => openRefine(which, take.assetId)} refineDisabled={sharedTake || !!generating}
           onSelect={(take) => onSelectTake?.(scene, take)}
           onReview={(take, review) => onReviewTake?.(scene, take, review)}
           onOpenPreview={onOpenPreview} marks={assetMarks} onMark={onMarkTake}
-          onCheck={start && onCheckTake ? (take) => onCheckTake(scene, take) : null} checking={checkingTakes} />
+          onCheck={onCheckTake ? (take) => onCheckTake(scene, take) : null} checking={checkingTakes} />
       </div>
     );
   };
@@ -254,6 +292,8 @@ export default function SceneFrames({
           </label>
         )}
       </div>
+      <SceneFrameRenderTarget id={id('frame-render')} value={framePick} options={frameOptions} project={project}
+        disabled={!!generatingFrame || !!generatingEndFrame} onChange={setFramePick} onOptionsChange={setFrameOptions} />
       <SceneCameoLink project={project} scene={scene} onApplyCameos={onApplyCameos} onEditLocal={onEditLocal} onSave={onSave} />
       {project && <SceneResearchSeed project={project} scene={scene} onEditLocal={onEditLocal} onSave={onSave} />}
       <SceneFrameReferences project={project} scene={scene} castMedia={castMedia} onReloadCastMedia={onReloadCastMedia} greybox={greybox} onEditLocal={onEditLocal} onSave={onSave} />

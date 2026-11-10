@@ -10,9 +10,9 @@ import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { atomicWrite, ensureDir, tryReadFile, PATHS } from '../lib/fileUtils.js';
 import { resolveSpawnCwd } from '../lib/spawnCwd.js';
-import { hasModelFlag, extractBakedModel, isCodexProvider } from '../lib/providerModels.js';
+import { hasModelFlag, extractBakedModel, isCodexProvider, isClaudeProvider } from '../lib/providerModels.js';
 import { buildCliArgs, prepareCliPrompt } from '../lib/cliProviderArgs.js';
-import { toolFreeOneShotArgs } from '../lib/providerVendors.js';
+import { imageReadOneShotArgs, toolFreeOneShotArgs } from '../lib/providerVendors.js';
 import { buildCliChildEnv } from '../lib/cliChildEnv.js';
 import { resolveCliSpawn, needsProcessGroup, processGroupKillable, trackDetachedGroup } from '../lib/credentialBootstrap.js';
 import { createImmediateFallbackSignalDetector, ERROR_CATEGORIES } from '../lib/aiToolkit/errorDetection.js';
@@ -408,11 +408,12 @@ async function executeAdmittedCliRun({ runId, provider, prompt, workspacePath, s
   const cleanupVisionFiles = vision?.cleanup || (() => Promise.resolve());
   // Build provider-specific args for prompt delivery
   // `toolFree`: a one-shot over caller-supplied text gets no approval bypass
-  // and no tools where the vendor can disable them (#9008). The vision argv is
-  // held to it too: a vendor that needs a tool to read the staged images fails
-  // closed rather than running with its tools on.
+  // and no tools where the vendor can disable them (#9008). A vision run keeps
+  // only the read tool its vendor opens the staged image with (#15576); a vendor
+  // with no such posture gets the tool-free argv and fails closed rather than
+  // running with its tools on.
   const builtArgs = vision
-    ? (toolFree ? toolFreeOneShotArgs(provider, vision.invocation.args).args : vision.invocation.args)
+    ? (toolFree ? (imageReadOneShotArgs(provider, vision.invocation.args) ?? toolFreeOneShotArgs(provider, vision.invocation.args)).args : vision.invocation.args)
     : buildCliArgs(provider, { toolFree });
   // Rewrite the argv for prompt delivery and learn whether to still write stdin:
   //   - Antigravity (`agy`): prompt spliced in as the --print VALUE (agy doesn't
@@ -445,7 +446,13 @@ async function executeAdmittedCliRun({ runId, provider, prompt, workspacePath, s
   // CLAUDECODE strip) — see buildCliChildEnv. `guard: true` prepends the pm2
   // shim onto the final PATH so an unrestricted agent can't `pm2 kill` the
   // shared daemon.
+  // Restricted Claude image reads ignore settings files. Carry only the user's
+  // configured environment forward so Bedrock/gateway authentication still works.
+  const visionSettingsEnv = vision && toolFree && isClaudeProvider(provider)
+    ? await import('./agentCliSpawning.js').then(({ getClaudeSettingsEnv }) => getClaudeSettingsEnv())
+    : null;
   const childEnv = buildCliChildEnv({
+    before: visionSettingsEnv,
     provider,
     cwd: vision?.invocation.cwd || effectiveCwd,
     guard: true,

@@ -50,3 +50,8 @@ A composition document needs the current playback engine (photo-sequence
 level 2) to preview or render a stacked sequence; adopting the shipped engine
 upgrades a document created for plain sequences. Continuing the next shot from
 a stacked sequence starts from its top photo, not the composed stack.
+
+The docked composition preview keeps smooth playback when a shot uses a photo
+sequence: the photo or stack changes on the frame its step begins, and the
+other shots play unaffected. A step whose photo could not load in time is
+skipped rather than shown late, so the picture never steps backward.

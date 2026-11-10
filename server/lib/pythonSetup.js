@@ -922,27 +922,7 @@ export function installPackages(pythonPath, importNames, onLog, { preferUv = fal
   };
 }
 
-// Pip specs for the macOS in-app FLUX.2 install. Linux/Windows never resolve:
-// installFlux2Venv hands them to the hash-pinned CUDA lock in
-// scripts/setup-image-video.sh. diffusers + sdnq are git-only here because
-// Flux2KleinPipeline isn't in any tagged release this path pins.
-export const FLUX2_PIP_SPECS = [
-  'torch>=2.5',
-  'torchvision',
-  'accelerate',
-  'transformers>=5.17',
-  'sentencepiece',
-  'protobuf',
-  'safetensors',
-  'huggingface_hub[hf_xet]',
-  'diffusers @ git+https://github.com/huggingface/diffusers',
-  'sdnq @ git+https://github.com/Disty0/sdnq.git',
-  'peft>=0.17',
-  'optimum-quanto>=0.2.7',
-  'pillow',
-];
-
-// Linux/Windows FLUX.2 installs run the hash-pinned CUDA lock through
+// FLUX.2 installs run the hash-pinned lock (Apple Silicon MLX or CUDA) through
 // scripts/setup-image-video.sh (INSTALL_FLUX2=1) instead of resolving torch,
 // diffusers and sdnq at install time. The script owns the uv-provisioned
 // Python 3.11 venv, the lock sync and the pipeline import probe, so this only
@@ -957,7 +937,7 @@ function installFlux2FromLock(onLog) {
     const runner = await import('./setupScriptRunner.js');
     stopSetupScript = runner.stopSetupScript;
     if (killed) return { ok: false, stage: 'install', cancelled: true };
-    onLog({ type: 'stage', stage: 'install', message: 'Syncing the hash-pinned FLUX.2 CUDA runtime (~6-10 min — large download)…' });
+    onLog({ type: 'stage', stage: 'install', message: 'Syncing the hash-pinned FLUX.2 runtime (~6-10 min — large download)…' });
     const code = await new Promise((resolve) => {
       child = runner.spawnSetupScript({ INSTALL_FLUX2: '1' });
       const onLine = (line) => {
@@ -993,152 +973,8 @@ function installFlux2FromLock(onLog) {
   };
 }
 
-// Bootstrap the FLUX.2 venv from inside the app so users don't have to drop to
-// a shell. Drives staged SSE progress: detect → venv → upgrade-pip → install
-// → verify. onLog gets `{ type: 'log' | 'stage' | 'error' | 'complete', stage?, message }`.
-// Returns `{ promise, kill }` like installPackages so the route can SIGTERM
-// pip if the EventSource is closed mid-install.
-export function installFlux2Venv(onLog) {
-  if (!IS_DARWIN) return installFlux2FromLock(onLog);
-  let currentProc = null;
-  let killed = false;
-
-  const stage = (name, message) => onLog({ type: 'stage', stage: name, message });
-  const log = (message) => onLog({ type: 'log', message });
-
-  const trackProc = (p) => { currentProc = p; };
-  // Last non-zero exit, so `fail` can name it. streamSpawn already forwards the
-  // child's own output as `log` frames, so the error frame only has to say
-  // which step died and point at those lines.
-  let lastExitCode = null;
-  const runPython = async (args) => {
-    const code = await streamSpawn(args[0], args.slice(1), onLog, trackProc);
-    if (code !== 0) lastExitCode = code;
-    return code === 0;
-  };
-
-  // Every non-cancelled failure MUST emit a terminal `error` frame. The SSE
-  // route ends the stream when this promise settles, and useInstallStream reads
-  // a close with no terminal frame as "Connection to installer lost. Restart
-  // PortOS or try again." — so a plain pip failure used to surface as a
-  // phantom transport error with the real cause buried in the log.
-  const fail = (stageName, message) => {
-    const exit = lastExitCode == null ? '' : ` (exit code ${lastExitCode})`;
-    onLog({ type: 'error', message: `${message}${exit} See the install log above for the failing step.` });
-    return { ok: false, stage: stageName };
-  };
-
-  const promise = (async () => {
-    stage('detect', `Looking for Python ${MIN_VENV_PYTHON_LABEL}+…`);
-    // The base to CREATE the FLUX.2 venv from — deliberately not detectPython(),
-    // which ranks PortOS's own already-provisioned image-gen venv first and is
-    // answering a different question ("which interpreter can we pip into").
-    // Building a venv from an already-provisioned venv is fragile — its
-    // pyvenv.cfg can pin an interpreter path a later system upgrade removes.
-    //
-    // Version-filtered, not just "first one that exists": the candidate list is
-    // ranked for torch loading correctly, and its lower tiers routinely hold a
-    // long-EOL interpreter (a stock /opt/anaconda3 ships 3.8) that installs the
-    // whole multi-GB torch tree and only then fails building sdnq's wheel. See
-    // MIN_VENV_PYTHON.
-    const { supported: baseCandidates, rejected } = await classifyVenvBases();
-    if (!baseCandidates.length) {
-      // Same last resort detectVenvBasePythonSync() carries: with nothing in the
-      // ranked pool, an app-managed venv or a PATH python (the WindowsApps alias
-      // is already filtered out there) beats refusing to install — as long as it
-      // clears the floor.
-      const lastResort = detectPythonSync();
-      const probed = await probePythonVersion(lastResort);
-      if (meetsMinVenvPython(probed)) baseCandidates.push(lastResort);
-      else if (lastResort && !rejected.some((r) => r.path === lastResort)) {
-        rejected.push({ path: lastResort, version: probed?.version || 'unknown' });
-      }
-    }
-    const basePython = baseCandidates[0];
-    if (!basePython) {
-      const seen = rejected.map(({ path, version }) => `${path} (${version})`).join(', ');
-      onLog({
-        type: 'error',
-        message: seen
-          ? `No Python ${MIN_VENV_PYTHON_LABEL}+ found — FLUX.2 needs one to build its venv. Found only: ${seen}. Install a newer Python (e.g. \`brew install python@3.12\` or \`uv python install 3.12\`) and try again.`
-          : `No system Python 3 found. Install Python ${MIN_VENV_PYTHON_LABEL}+ and try again.`,
-      });
-      return { ok: false, stage: 'detect' };
-    }
-    log(`Using base Python: ${basePython}`);
-    if (killed) return { ok: false, stage: 'detect', cancelled: true };
-
-    stage('venv', `Creating FLUX.2 venv at ${FLUX2_VENV_DEFAULT}…`);
-    // `<venv>/bin/python3` (or `<venv>\\Scripts\\python.exe`) → `<venv>`. Two
-    // dirnames rather than a separator-specific regex: the regex silently
-    // no-ops on the other platform's spelling, leaving targetDir pointing at
-    // the interpreter itself and the venv nested a level too deep.
-    const targetDir = dirname(dirname(FLUX2_VENV_DEFAULT));
-    // createVenv reuses an existing interpreter as-is, so a venv left behind by
-    // an earlier run against a too-old base would survive every retry — and
-    // keep failing the same way. Rebuild it rather than pip into it.
-    const staleVenv = existsSync(FLUX2_VENV_DEFAULT) && !await isSupportedVenvBase(FLUX2_VENV_DEFAULT);
-    if (staleVenv) log(`Existing venv is older than Python ${MIN_VENV_PYTHON_LABEL} — rebuilding it.`);
-    if (killed) return { ok: false, stage: 'venv', cancelled: true };
-    const venvFallback = baseCandidates.find((p) => p !== basePython);
-    let venvPython = await createVenv(basePython, targetDir, { clear: staleVenv }).catch((err) => {
-      log(`venv creation failed against ${basePython}: ${err.message}`);
-      return null;
-    });
-    if (killed) return { ok: false, stage: 'venv', cancelled: true };
-    if (!venvPython && venvFallback) {
-      log(`Retrying venv creation with ${venvFallback}…`);
-      venvPython = await createVenv(venvFallback, targetDir, { clear: true }).catch((err) => {
-        log(`venv creation also failed against ${venvFallback}: ${err.message}`);
-        return null;
-      });
-    }
-    if (!venvPython) {
-      onLog({
-        type: 'error',
-        message: 'venv creation failed. Try INSTALL_FLUX2=1 FLUX2_FORCE_REINSTALL=1 bash scripts/setup-image-video.sh',
-      });
-      return { ok: false, stage: 'venv' };
-    }
-    if (killed) return { ok: false, stage: 'venv', cancelled: true };
-
-    stage('upgrade-pip', 'Upgrading pip + wheel + setuptools…');
-    if (!await runPython([venvPython, '-m', 'pip', 'install', '--upgrade', 'pip', 'wheel', 'setuptools'])) {
-      return fail('upgrade-pip', 'Could not upgrade pip/wheel/setuptools in the new venv.');
-    }
-    if (killed) return { ok: false, stage: 'upgrade-pip', cancelled: true };
-
-    stage('install', 'Installing torch + diffusers + sdnq + transformers (~6-10 min — large download)…');
-    if (!await runPython([venvPython, '-m', 'pip', 'install', '--upgrade', '--progress-bar', 'on', ...FLUX2_PIP_SPECS])) {
-      return fail('install', 'Installing the FLUX.2 packages failed.');
-    }
-    if (killed) return { ok: false, stage: 'install', cancelled: true };
-
-    // Git snapshots can share a dev version; --upgrade alone then keeps the
-    // older installed code. Refresh only diffusers, preserving the torch wheel.
-    if (!await runPython([venvPython, '-m', 'pip', 'install', '--force-reinstall', '--no-deps',
-      FLUX2_PIP_SPECS.find((spec) => spec.startsWith('diffusers @ '))])) {
-      return fail('install', 'Refreshing the diffusers pipeline code failed.');
-    }
-    if (killed) return { ok: false, stage: 'install', cancelled: true };
-
-    stage('verify', 'Verifying FLUX.2 and Qwen 2.1 pipeline imports…');
-    if (!await runPython([venvPython, '-c', `from diffusers import ${FLUX2_VERIFY_PIPELINE_CLASSES.join(', ')}; print("ok")`])) {
-      onLog({ type: 'error', message: 'Verification failed: FLUX.2 or Qwen 2.1 pipeline did not import. Try INSTALL_FLUX2=1 FLUX2_FORCE_REINSTALL=1 bash scripts/setup-image-video.sh' });
-      return { ok: false, stage: 'verify' };
-    }
-
-    invalidateFlux2Health();
-
-    onLog({ type: 'complete', message: `FLUX.2 venv ready: ${venvPython}` });
-    return { ok: true, pythonPath: venvPython };
-  })();
-
-  return {
-    promise,
-    kill: () => {
-      killed = true;
-      if (currentProc && !currentProc.killed) currentProc.kill('SIGTERM');
-    },
-  };
-}
+// Bootstrap the FLUX.2 venv from inside the app. One path on every platform:
+// the hash-pinned lock (Apple Silicon MLX or CUDA) via the setup script.
+// Returns `{ promise, kill }` so the route can stop the script if the
+// EventSource closes mid-install.
+export const installFlux2Venv = installFlux2FromLock;

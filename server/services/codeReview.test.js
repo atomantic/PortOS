@@ -80,6 +80,19 @@ import { updateSettingsWith } from './settings.js'
 
 // Preserve the real transport for the explicitly requested local-model evaluation.
 const nativeFetch = global.fetch
+// Public #15627 and its unchanged shipped reference rows, not live instance data.
+const comparisonCase = JSON.parse(readFileSync(new URL('../test/fixtures/goal-fidelity-comparison-chart.json', import.meta.url), 'utf8'))
+const comparisonReference = JSON.stringify(comparisonCase.observations.map(({ id, provider, model, effort, benchmark, quality, costPerTask }) =>
+  ({ id, provider, model, effort, benchmark, quality, costPerTask })), null, 2)
+const brokenComparisonDiff = comparisonCase.diff.replace(
+  '+  const composites = [catalog?.currentComposite, catalog?.composite].filter(Boolean);',
+  '+  const composites = [catalog?.composite].filter(Boolean);',
+)
+const brokenComparisonCostDiff = comparisonCase.diff.replace(
+  "+      const taskRow = latest(modelRows.filter(row => effortKey(row.effort) === effort && row.benchmark === anchor), 'costPerTask');",
+  '+      const taskRow = null;',
+)
+const unrelatedComparisonDiff = 'diff --git a/client/src/components/models/ModelComparison.jsx b/client/src/components/models/ModelComparison.jsx\n--- a/client/src/components/models/ModelComparison.jsx\n+++ b/client/src/components/models/ModelComparison.jsx\n@@ -1 +1 @@\n-const title = "Model chart";\n+const title = "claude-fable-5.2";\n'
 // Public PR #11371 and a reconstructed one-finding audit objective, never live run data.
 const observabilityCase = JSON.parse(readFileSync(new URL('../test/fixtures/goal-fidelity-observability.json', import.meta.url), 'utf8'))
 const observabilityTestsOnly = observabilityCase.diff.split(/(?=^diff --git )/m)
@@ -1377,6 +1390,43 @@ describe('codeReview helpers', () => {
       expect(request.messages[1].content).toContain(objective)
       expect(request.messages[1].content).toContain(injection)
     })
+
+    it('presents shipped measurements as source evidence and preserves the reviewer verdict', async () => {
+      global.fetch = vi.fn().mockResolvedValueOnce(mockJsonResponse({
+        choices: [{ message: { content: '{"verdict":"ship","missing":[],"unrequested":[],"evidence":"regression coverage; test execution not established"}' } }],
+      })).mockResolvedValueOnce(mockJsonResponse({
+        choices: [{ message: { content: '{"verdict":"rethink","missing":["chart is disconnected"],"unrequested":[],"evidence":"no test execution results"}' } }],
+      }))
+      const args = { backend: 'ollama', model: 'example-model', objective: comparisonCase.objective, diff: comparisonCase.diff, referenceEvidence: comparisonReference }
+      expect(await runLocalGoalFidelityReview(args)).toMatchObject({ ok: true, verdict: 'ship', missing: [], unrequested: [] })
+      expect(await runLocalGoalFidelityReview(args)).toMatchObject({ ok: true, verdict: 'rethink', missing: ['chart is disconnected'] })
+      const content = JSON.parse(global.fetch.mock.calls[0][1].body).messages[1].content
+      expect(content).toContain('EXISTING COMMITTED SOURCE DATA: data.reference/model-comparison.json')
+      expect(content).toContain('their presence alone does not prove they are displayed')
+      expect(content).toContain(comparisonReference)
+      expect(content).toContain(comparisonCase.diff.trim())
+      const overBudget = await runLocalGoalFidelityReview({ ...args, priorDeliveryDiff: 'x'.repeat(60_000) })
+      expect(overBudget).toMatchObject({ ok: false, error: expect.stringContaining('over the') })
+      expect(global.fetch).toHaveBeenCalledTimes(2)
+    })
+
+    // Actual-model calibration is opt-in: source assertions cannot prove a model
+    // understood the supplied evidence. The ordinary tests never call a provider.
+    it.runIf(Boolean(process.env.GOAL_FIDELITY_EVAL_MODEL)).each([
+      ['shipped data exposed by the route and chart', comparisonCase.diff, comparisonReference, 'ship'],
+      ['chart ignores the current composite', brokenComparisonDiff, null, 'rethink'],
+      ['current composite loses the task cost', brokenComparisonCostDiff, null, 'rethink'],
+      ['unrelated chart title', unrelatedComparisonDiff, null, 'rethink'],
+    ])('judges the comparison-chart case with a local model: %s', async (_name, diff, referenceEvidence, expected) => {
+      global.fetch = nativeFetch
+      const result = await runLocalGoalFidelityReview({
+        backend: 'ollama', model: process.env.GOAL_FIDELITY_EVAL_MODEL,
+        objective: comparisonCase.objective, diff, referenceEvidence, timeoutMs: 180_000,
+      })
+      expect(result.ok, result.error).toBe(true)
+      expect(result.verdict, JSON.stringify(result)).toBe(expected)
+      if (expected === 'ship') expect(result).toMatchObject({ missing: [], unrequested: [] })
+    }, 200_000)
 
     it('ships a local-admission release when its in-flight regression test proves non-local work can claim the shared slot', async () => {
       const objective = 'When a local inference agent is running, it must not block non-local inference.'

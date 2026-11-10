@@ -10,8 +10,12 @@
  *         (the same chain the whole-film graph draws there: cut effects from
  *         the next shot, fades, grade, glitches and the typography over it),
  *         keyed on everything that reaches those pixels.
- *   look  the base re-captured through the shot's film look (its own pinned
- *         look, else the video's) on song time, keyed on the base and the look.
+ *   match the base through the shot's color match, when one is on. Off inserts
+ *         no filter and leaves the cache key unchanged, so the previous file
+ *         still serves.
+ *   look  the matched base (or the base, when matching is off) re-captured
+ *         through the shot's film look (its own pinned look, else the video's)
+ *         on song time, keyed on the base, the match and the look.
  *
  * A look change redoes only the look stage, a shot change only that shot.
  * The final render renders what is missing, joins the segments by stream copy
@@ -27,10 +31,11 @@ import { join, sep } from 'path';
 import { PATHS, safeJSONParse, atomicWrite, readJSONFile } from '../../lib/fileUtils.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { AAC_ENCODE_ARGS, runFfmpegProcess, supportsSetparamsFilter } from '../../lib/ffmpeg.js';
+import { AAC_ENCODE_ARGS, BT709_CONTAINER_ARGS, H264_ENCODE_ARGS, runFfmpegProcess, supportsSetparamsFilter } from '../../lib/ffmpeg.js';
 import { filterGraphViaFile } from '../../lib/ffmpegFilterGraph.js';
 import { isFilmLookNeutral, normalizeFilmLook } from '../../lib/filmLook.js';
-import { shotFilmLook } from '../../lib/musicVideoFilmLook.js';
+import { shotCamera, shotFilmLook } from '../../lib/musicVideoFilmLook.js';
+import { activeShotColorMatch, colorMatchVideoFilter, segmentCacheName, segmentLookHashPayload } from '../../lib/shotColorMatch.js';
 import { endingParts } from '../../lib/musicVideoEnding.js';
 import { AUDIO_NORM, buildAudioBedMix } from '../videoTimeline/audioBedMix.js';
 import { buildMusicVideoFfmpegArgs, planMusicVideoRender } from './render.js';
@@ -73,10 +78,32 @@ const SEGMENT_TAG = 'setparams=range=tv:color_primaries=bt709:color_trc=bt709:co
 const hash = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex').slice(0, 32);
 // A segment's film-look file is keyed by its base file, its place in the song
 // and the (normalized) look, so any look's files can be found again from the plan.
-const segmentLookKey = ({ baseKey, startSec }, look, fps) => hash({ v: SHOT_SEGMENT_VERSION, baseKey, look, startSec, fps });
+// A color match joins the key only while it is on, so turning it off finds the
+// file this segment had before matching existed.
+const segmentLookKey = ({ baseKey, startSec, matchKey }, look, fps) => hash(segmentLookHashPayload({
+  version: SHOT_SEGMENT_VERSION, baseKey, look, startSec, fps, matchKey,
+}));
 const segmentLookPath = (plan, segment, look) => join(plan.dir, `${segment.outro ? 'outro-' : ''}${segment.baseKey}-${segmentLookKey(segment, look, plan.fps)}.mp4`);
 
-const hasOwnLook = scene => !!(scene?.filmLook && typeof scene.filmLook === 'object');
+// The file a segment is delivered as. Matching off leaves the base and look
+// paths exactly as they were; matching on writes a file ahead of the look.
+function finishSegment(fields, { project, scene, fps, dir, prefix = '' }) {
+  const match = scene ? activeShotColorMatch(project, scene) : null;
+  const matchKey = match ? hash(match) : null;
+  const lookKey = fields.look ? segmentLookKey({ baseKey: fields.baseKey, startSec: fields.startSec, matchKey }, fields.look, fps) : null;
+  return {
+    ...fields,
+    lookKey,
+    path: join(dir, segmentCacheName({ baseKey: fields.baseKey, lookKey, matchKey, prefix })),
+    ...(match ? { match, matchKey, matchPath: join(dir, segmentCacheName({ baseKey: fields.baseKey, matchKey, prefix })) } : {}),
+  };
+}
+
+// A present shot or camera look, including an explicit Clean, does not follow the video-wide look cache.
+const hasOwnLook = (project, scene) => {
+  const cameraLook = shotCamera(project, scene)?.filmLook;
+  return !!((scene?.filmLook && typeof scene.filmLook === 'object') || (cameraLook && typeof cameraLook === 'object'));
+};
 
 /**
  * `value` with every timed entry (an object carrying a finite `startSec`) that
@@ -149,13 +176,11 @@ export async function planShotSegments(project, options) {
     // render, look and cached files cover exactly its own time on the song.
     const scene = scenes.get(built.shotId);
     const look = shotFilmLook(project, scene);
-    const lookKey = look ? segmentLookKey({ baseKey, startSec: built.startSec }, look, fps) : null;
-    segments.push({
+    segments.push(finishSegment({
       index, sceneId: built.shotId, layer: built.layer, startSec: built.startSec, endSec: built.endSec,
-      startFrame, frames: built.frames, window, segment, look, baseKey, lookKey, ownLook: hasOwnLook(scene),
+      startFrame, frames: built.frames, window, segment, look, baseKey, ownLook: hasOwnLook(project, scene),
       basePath: join(dir, `${baseKey}.mp4`),
-      path: join(dir, lookKey ? `${baseKey}-${lookKey}.mp4` : `${baseKey}.mp4`),
-    });
+    }, { project, scene, fps, dir }));
   }
   if (!segments.length) throw new ServerError('Nothing to render — no shot spans a frame of the song', { status: 422, code: 'NO_SCENE_CLIPS' });
   const songFrames = segments.reduce((sum, s) => sum + s.frames, 0);
@@ -192,13 +217,11 @@ async function planColdOpenSegments(project, coldOpen, { dir, width, height, fps
     const scene = scenes.get(built.shotId);
     const look = shotFilmLook(project, scene);
     const startSec = built.startSec - leadSec;
-    const lookKey = look ? segmentLookKey({ baseKey, startSec }, look, fps) : null;
-    segments.push({
+    segments.push(finishSegment({
       index, coldOpen: true, sceneId: built.shotId, layer: built.layer, startSec, endSec: built.endSec - leadSec,
-      startFrame: Math.round(startSec * fps), frames: built.frames, segment, look, baseKey, lookKey, ownLook: hasOwnLook(scene),
+      startFrame: Math.round(startSec * fps), frames: built.frames, segment, look, baseKey, ownLook: hasOwnLook(project, scene),
       basePath: join(dir, `${baseKey}.mp4`),
-      path: join(dir, lookKey ? `${baseKey}-${lookKey}.mp4` : `${baseKey}.mp4`),
-    });
+    }, { project, scene, fps, dir }));
   }
   const audio = await coldOpenAudioShots(project, segments.map((segment) => ({ sceneId: segment.sceneId,
     clip: coldOpen.clips.find((clip) => clip.sceneId === segment.sceneId) || null, durationSec: segment.frames / fps })));
@@ -284,18 +307,40 @@ export function renderSegment(plan, segment, { signal, onProgress } = {}) {
 
 const label = (plan, segment) => (segment.outro ? 'the ending card' : nameShots(plan.project, [segment.sceneId]));
 
+// The base graph is video-only. The stitch copies these files and muxes the
+// song afterwards, so the match encode stays silent and uses the same H.264
+// profile as the other segments. A different profile breaks the concat.
+async function renderColorMatch(plan, segment, outputPath, { signal }) {
+  const curve = colorMatchVideoFilter(segment.match);
+  if (!curve) throw new Error('Color match produced no filter');
+  const filter = [curve, segment.segment?.tagFilter].filter(Boolean).join(',');
+  const result = await runFfmpegProcess({
+    bin: plan.ffmpeg,
+    args: [
+      '-hide_banner', '-loglevel', 'error', '-i', segment.basePath,
+      '-vf', filter, '-an', '-r', String(plan.fps),
+      ...H264_ENCODE_ARGS, ...BT709_CONTAINER_ARGS, '-y', outputPath,
+    ],
+    signal,
+  });
+  signal?.throwIfAborted();
+  if (!result.ok) throw new Error(`ffmpeg failed: ${result.reason}`);
+}
+
 async function renderSegmentFiles(plan, segment, { signal, onProgress }) {
   await mkdir(plan.dir, { recursive: true });
   const jobId = randomUUID();
+  const matchShare = segment.match ? 0.25 : 0;
   const lookShare = segment.look ? 0.5 : 0;
+  const baseShare = 1 - matchShare - lookShare;
   if (!existsSync(segment.basePath)) {
     const partial = `${segment.basePath}.${jobId}.partial.mp4`;
     try {
       if (segment.outro) {
         await renderStatsOutroClip({ project: plan.project, outputPath: partial, width: plan.width, height: plan.height, fps: plan.fps, jobId,
-          stats: segment.stats, signal, onProgress: (f) => onProgress?.(f * (1 - lookShare)) });
+          stats: segment.stats, signal, onProgress: (f) => onProgress?.(f * baseShare) });
       } else {
-        await renderShotBase(plan, segment, partial, { jobId, signal, onProgress: (f) => onProgress?.(f * (1 - lookShare)) });
+        await renderShotBase(plan, segment, partial, { jobId, signal, onProgress: (f) => onProgress?.(f * baseShare) });
       }
       await rename(partial, segment.basePath);
     } catch (err) {
@@ -304,13 +349,26 @@ async function renderSegmentFiles(plan, segment, { signal, onProgress }) {
       throw new ServerError(`${label(plan, segment)}: ${err.message}`, { status: err.status || 500, code: err.code || 'SHOT_RENDER_FAILED' });
     }
   }
+  if (segment.match && segment.matchPath && !existsSync(segment.matchPath)) {
+    const partial = `${segment.matchPath}.${jobId}.partial.mp4`;
+    try {
+      await renderColorMatch(plan, segment, partial, { signal });
+      await rename(partial, segment.matchPath);
+      onProgress?.(baseShare + matchShare);
+    } catch (err) {
+      await rm(partial, { force: true }).catch(() => {});
+      if (signal.aborted) throw Object.assign(new Error('Render cancelled'), { code: 'CANCELED' });
+      throw new ServerError(`${label(plan, segment)}: color match failed: ${err.message}`, { status: err.status || 500, code: err.code || 'SHOT_MATCH_FAILED' });
+    }
+  }
   if (segment.look && !existsSync(segment.path)) {
     const partial = `${segment.path}.${jobId}.partial.mp4`;
+    const source = segment.matchPath && existsSync(segment.matchPath) ? segment.matchPath : segment.basePath;
     try {
-      await copyFile(segment.basePath, partial);
+      await copyFile(source, partial);
       await applyFilmLookFinish({ project: plan.project, look: segment.look, path: partial, jobId, signal, offsetSec: segment.startSec, workers: 1,
         label: `Music-video film look ${segment.outro ? 'ending card' : `shot ${segment.sceneId.slice(0, 8)}`}`,
-        onProgress: (f) => onProgress?.(1 - lookShare + f * lookShare) });
+        onProgress: (f) => onProgress?.(baseShare + matchShare + f * lookShare) });
       await rename(partial, segment.path);
       // A shot rendered from its card lists its look too, so it can be deleted later.
       if (!segment.ownLook) await rememberFilmLook(plan.dir, segment.look);
@@ -332,7 +390,8 @@ async function renderShotBase(plan, segment, outputPath, { jobId, signal, onProg
   try {
     const overlays = needsOverlay ? await renderTypographyOverlays({
       jobId, cues: plan.cues, style: plan.style, width: plan.width, height: plan.height, fps: plan.fps, durationSec: plan.totalDuration,
-      lyrics: plan.lyricWindows.length ? { project: plan.project, windows: plan.lyricWindows } : null, window: segment.window, signal,
+      lyrics: plan.lyricWindows.length ? { project: plan.project, windows: plan.lyricWindows } : null, window: segment.window,
+      sceneId: segment.sceneId, signal,
       onProgress: (f) => onProgress?.(f * 0.5),
     }) : [];
     signal?.throwIfAborted();
@@ -493,7 +552,7 @@ export async function stitchSegments(plan, outputPath, { signal, segments = [...
  * legacy caches without that journal are handled by full/explicit cleanup.
  */
 async function staleSegmentFiles(plan, { startedAtMs = Infinity, unusedLooks = false, previews = false, sceneId = null } = {}) {
-  const keep = new Set([...plan.segments, ...(plan.outro ? [plan.outro] : [])].flatMap((s) => [s.path, s.basePath]));
+  const keep = new Set([...plan.segments, ...(plan.outro ? [plan.outro] : [])].flatMap((s) => [s.path, s.basePath, s.matchPath].filter(Boolean)));
   const owners = sceneId ? await readJSONFile(segmentOwnersFile(plan.dir), {}, { strict: true }) : null;
   const names = await readdir(plan.dir).catch(error => { if (error.code === 'ENOENT') return []; throw error; });
   const stale = [];
@@ -625,7 +684,18 @@ const shotJobs = trackedRenderMap('music-video-shot', {
 });
 const shotJobKey = (projectId, sceneId) => `${projectId}:${sceneId}`;
 
+// The failure of the last attempt. Gone when that shot starts again or renders.
+// In memory, like shotJobs: a restart drops both, and the cache is regenerated.
+const shotFailures = new Map();
+
 const emitShotRender = (payload) => musicVideoEvents.emit('shot-render', payload);
+
+function withShotOutcome(projectId, shot, running) {
+  if (running.has(shot.sceneId)) return { ...shot, rendering: true, startedAt: running.get(shot.sceneId) };
+  if (shot.state === 'rendered') return shot;
+  const failure = shotFailures.get(shotJobKey(projectId, shot.sceneId));
+  return failure ? { ...shot, state: 'failed', error: failure.error, failedAt: failure.failedAt } : shot;
+}
 
 async function loadProjectScene(projectId, sceneId) {
   const project = await requireProject(projectId);
@@ -648,7 +718,7 @@ export async function getShotRenderStatus(projectId, options) {
   if (plan.error) return { available: true, error: plan.error, shots: [], outro: null, ready: 0, total: 0 };
   const status = segmentStatus(plan);
   const running = new Map([...shotJobs.entries()].filter(([key]) => key.startsWith(`${projectId}:`)).map(([key, job]) => [key.slice(projectId.length + 1), job.startedAt]));
-  return { available: true, ...status, shots: status.shots.map((shot) => (running.has(shot.sceneId) ? { ...shot, rendering: true, startedAt: running.get(shot.sceneId) } : shot)) };
+  return { available: true, ...status, shots: status.shots.map((shot) => withShotOutcome(projectId, shot, running)) };
 }
 
 /**
@@ -670,6 +740,7 @@ export async function startShotRender(projectId, sceneId) {
         throw new ServerError(`${nameShots(project, [sceneId])}: not in the cut yet. Give it a clip, or a still with a start and end time`, { status: 422, code: 'SHOT_NOT_IN_CUT' });
       }
       if (segments.every(segmentRendered)) {
+        shotFailures.delete(key);
         await cleanupAfterShot(projectId, sceneId).catch(err => console.warn(`⚠️ Music-video shot cache cleanup failed: ${err.message}`));
         return { sceneId, state: 'rendered' };
       }
@@ -678,6 +749,7 @@ export async function startShotRender(projectId, sceneId) {
       const controller = new AbortController();
       // startedAt identifies this attempt: a client can tell a replacement render from a progress tick of the same one.
       const startedAt = Date.now();
+      shotFailures.delete(key);
       shotJobs.set(key, { controller, startedAt });
       handedOff = true;
       const total = segments.reduce((sum, s) => sum + s.frames, 0) || 1;
@@ -699,13 +771,20 @@ export async function startShotRender(projectId, sceneId) {
         }
       }).then(() => {
         rendered = true;
+        shotFailures.delete(key);
         console.log(`🎬 Music-video ${nameShots(project, [sceneId])} rendered [${projectId.slice(0, 8)}] in ${((Date.now() - started) / 1000).toFixed(1)}s`);
         emitShotRender({ projectId, sceneId, state: 'rendered', progress: 1 });
       }, (err) => {
         const canceled = controller.signal.aborted || err?.code === 'CANCELED';
         const log = canceled ? console.log : console.error;
         log(`${canceled ? '🛑' : '❌'} Music-video shot render ${canceled ? 'cancelled' : 'failed'} [${projectId.slice(0, 8)}]: ${err.message}`);
-        emitShotRender({ projectId, sceneId, state: canceled ? 'canceled' : 'failed', error: canceled ? null : err.message });
+        if (canceled) {
+          emitShotRender({ projectId, sceneId, state: 'canceled', error: null });
+          return;
+        }
+        const failedAt = new Date().toISOString();
+        shotFailures.set(key, { error: err.message, failedAt });
+        emitShotRender({ projectId, sceneId, state: 'failed', error: err.message, failedAt });
       }).finally(async () => {
         shotJobs.delete(key);
         await cleanupAfterShot(projectId, rendered ? sceneId : null).catch(err => console.warn(`⚠️ Music-video shot cache cleanup failed: ${err.message}`));
@@ -728,7 +807,7 @@ export function cancelShotRender(projectId, sceneId) {
 
 /** A cached segment file of `projectId` by name, or null when the name is not one or it is gone. */
 export function shotSegmentFile(projectId, name) {
-  if (typeof name !== 'string' || !/^(?:(outro-)?[0-9a-f]{32}(-[0-9a-f]{32})?|preview-[0-9a-f]{32}(-light)?)\.mp4$/.test(name)) return null;
+  if (typeof name !== 'string' || !/^(?:(outro-)?[0-9a-f]{32}(?:-match-[0-9a-f]{32}|-[0-9a-f]{32})?|preview-[0-9a-f]{32}(-light)?)\.mp4$/.test(name)) return null;
   const path = join(shotSegmentDir(projectId), name);
   return existsSync(path) ? path : null;
 }

@@ -136,6 +136,16 @@ export const GROK_NO_TOOL_ARGS = Object.freeze([
 ]);
 
 /**
+ * grok's image-reading posture (#15576): the no-tool posture, but `read_file`
+ * stays so the model can open a staged image. grok has no image-attach flag;
+ * `read_file` is how it sees a picture. Plan mode keeps it read-only.
+ */
+export const GROK_IMAGE_READ_ARGS = Object.freeze([
+  '--permission-mode', 'plan',
+  '--disallowed-tools', GROK_BUILTIN_TOOLS.filter((tool) => tool !== 'read_file').join(','),
+]);
+
+/**
  * Tools a no-tool grok run still offered or called, read from its
  * `streaming-json` transcript: `offered` holds non-MCP names in the last
  * `available_commands` event, `called` every `tool_call`. Both empty when the

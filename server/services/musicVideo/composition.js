@@ -371,6 +371,9 @@ export function overlayWindows(cues, { joinGapSec = 1 } = {}) {
 
 // Title-safe area: 10% in from every edge of the frame, at any aspect.
 export const SAFE_INSET = 0.1;
+// A hidden target schedules no animation frames. The capture still has to
+// move on so its own timeout can fail the shot instead of waiting forever.
+const OVERLAY_SEEK_PAINT_MS = 250;
 // The lyric type face, copied next to the overlay page by renderTypographyOverlays.
 export const LYRIC_FONT_FILE = 'archivo-variable.woff2';
 const FONT_STACKS = {
@@ -501,7 +504,13 @@ globalThis.portosComposition = {
   durationSec: ${Number(durationSec)}, fps: ${Number(fps)}, width: ${Number(width)}, height: ${Number(height)},
   layout,
   state: (t) => nodes.map((node) => ({ id: node.cue.id, state: cueStateAt(node.cue, t) })),
-  async seek(t) { draw(t); await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))); },
+  async seek(t) {
+    draw(t);
+    await new Promise((resolve) => {
+      const timer = setTimeout(resolve, ${OVERLAY_SEEK_PAINT_MS});
+      requestAnimationFrame(() => requestAnimationFrame(() => { clearTimeout(timer); resolve(); }));
+    });
+  },
 };
 </script></body></html>`;
 }

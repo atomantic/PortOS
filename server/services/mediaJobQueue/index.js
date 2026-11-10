@@ -116,7 +116,7 @@ const isTopazUpscale = (job) => job.kind === 'video-upscale' && job.params?.mode
 
 const laneInput = (job) => ({
   kind: job.kind,
-  mode: job.params?.mode,
+  mode: job.params?.mode || job.mode,
   remote: isRemoteMediaJob(job),
   peerId: job.params?.remoteMedia?.peerId,
 });
@@ -395,20 +395,179 @@ export const CODEX_PARALLEL_MIN = 1;
 // Keep counts exactly representable without imposing a provider throughput cap.
 export const CODEX_PARALLEL_MAX = Number.MAX_SAFE_INTEGER;
 export const CODEX_PARALLEL_DEFAULT = 1;
+
+export const PARALLEL_LIMIT_MIN = 1;
+export const PARALLEL_LIMIT_MAX = Number.MAX_SAFE_INTEGER;
+export const PARALLEL_LIMIT_DEFAULT = 1;
+export const RATE_LIMIT_COOLDOWN_MS = 60 * 1000;
+
 let codexParallelLimit = CODEX_PARALLEL_DEFAULT;
+const parallelLimits = new Map();
+const rateLimitCooldowns = new Map();
+
 const clampParallel = (n) => {
   const x = Number(n);
   if (!Number.isFinite(x) || x < 1) return CODEX_PARALLEL_DEFAULT;
   return Math.min(Math.floor(x), CODEX_PARALLEL_MAX);
 };
+export const clampParallelLimit = clampParallel;
+
 export const getCodexParallelLimit = () => codexParallelLimit;
 export function setCodexParallelLimit(n) {
   codexParallelLimit = clampParallel(n);
+  parallelLimits.set('image:codex', codexParallelLimit);
   return codexParallelLimit;
 }
+
+export function _getParallelLimit(target, maybeMode) {
+  const kind = typeof target === 'string' ? target : target?.kind;
+  const mode = typeof target === 'string' ? maybeMode : (target?.params?.mode || target?.mode);
+  if (kind && mode) {
+    const specific = parallelLimits.get(`${kind}:${mode}`);
+    if (specific !== undefined) return specific;
+  }
+  if (kind === 'image' && mode === 'codex') {
+    return codexParallelLimit;
+  }
+  return PARALLEL_LIMIT_DEFAULT;
+}
+
+export function _setParallelLimit(target, modeOrN, maybeN) {
+  let kind, mode, n;
+  if (typeof target === 'string') {
+    kind = target;
+    mode = modeOrN;
+    n = maybeN;
+  } else {
+    kind = target?.kind;
+    mode = target?.mode;
+    n = modeOrN;
+  }
+  const clamped = clampParallel(n);
+  if (kind && mode) {
+    parallelLimits.set(`${kind}:${mode}`, clamped);
+  }
+  if (kind === 'image' && mode === 'codex') {
+    codexParallelLimit = clamped;
+  }
+  return clamped;
+}
+
+const getParallelLimit = _getParallelLimit;
+const setParallelLimit = _setParallelLimit;
+
+export function syncParallelLimits(s) {
+  if (!s) return;
+  const ig = s.imageGen || {};
+  const vg = s.videoGen || {};
+  if (ig.codex?.parallelLimit !== undefined) setParallelLimit({ kind: 'image', mode: 'codex' }, ig.codex.parallelLimit);
+  if (ig.grok?.parallelLimit !== undefined) setParallelLimit({ kind: 'image', mode: 'grok' }, ig.grok.parallelLimit);
+  if (vg.grok?.parallelLimit !== undefined) setParallelLimit({ kind: 'video', mode: 'grok' }, vg.grok.parallelLimit);
+  if (ig.gemini?.parallelLimit !== undefined) setParallelLimit({ kind: 'image', mode: 'gemini' }, ig.gemini.parallelLimit);
+  if (vg.gemini?.parallelLimit !== undefined) setParallelLimit({ kind: 'video', mode: 'gemini' }, vg.gemini.parallelLimit);
+  if (ig.fal?.parallelLimit !== undefined) setParallelLimit({ kind: 'image', mode: 'fal' }, ig.fal.parallelLimit);
+  if (vg.fal?.parallelLimit !== undefined) setParallelLimit({ kind: 'video', mode: 'fal' }, vg.fal.parallelLimit);
+  if (ig.runway?.parallelLimit !== undefined) setParallelLimit({ kind: 'image', mode: 'runway' }, ig.runway.parallelLimit);
+  if (vg.runway?.parallelLimit !== undefined) setParallelLimit({ kind: 'video', mode: 'runway' }, vg.runway.parallelLimit);
+  if (ig.agy?.parallelLimit !== undefined) setParallelLimit({ kind: 'image', mode: 'agy' }, ig.agy.parallelLimit);
+  if (vg.reactor?.parallelLimit !== undefined) setParallelLimit({ kind: 'video', mode: 'reactor' }, vg.reactor.parallelLimit);
+}
+
 export async function refreshCodexParallelLimit() {
   const s = await getSettings();
+  syncParallelLimits(s);
   return setCodexParallelLimit(s?.imageGen?.codex?.parallelLimit ?? CODEX_PARALLEL_DEFAULT);
+}
+
+export function _getEffectiveParallelLimit(target, maybeMode, now = Date.now()) {
+  const job = typeof target === 'string' ? { kind: target, params: { mode: maybeMode } } : target;
+  const configured = getParallelLimit(job);
+  const cooldown = getRateLimitCooldown(job, now);
+  if (cooldown && cooldown.expiresAt > now) {
+    return Math.min(configured, cooldown.effectiveLimit);
+  }
+  return configured;
+}
+
+export function _getRateLimitCooldown(target, maybeModeOrNow, maybeNow) {
+  let job, now;
+  if (typeof target === 'string') {
+    job = { kind: target, params: { mode: maybeModeOrNow } };
+    now = typeof maybeNow === 'number' ? maybeNow : Date.now();
+  } else {
+    job = target;
+    now = typeof maybeModeOrNow === 'number' ? maybeModeOrNow : Date.now();
+  }
+  const key = jobSwimlane(job);
+  const cooldown = rateLimitCooldowns.get(key);
+  if (cooldown && cooldown.expiresAt > now) {
+    return {
+      ...cooldown,
+      active: true,
+      penalty: Math.max(0, getParallelLimit(job) - cooldown.effectiveLimit),
+    };
+  }
+  if (cooldown) rateLimitCooldowns.delete(key);
+  return null;
+}
+
+export function _recordRateLimitCooldown(target, errorTextOrMode, payloadOrReset, now = Date.now()) {
+  let job, errorText, payload;
+  if (typeof target === 'string') {
+    job = { kind: target, params: { mode: errorTextOrMode } };
+    errorText = typeof payloadOrReset === 'string' ? payloadOrReset : 'HTTP 429 Too Many Requests';
+    payload = typeof payloadOrReset === 'object' ? payloadOrReset : (typeof payloadOrReset === 'number' ? { resetsInMs: payloadOrReset, status: 429 } : { status: 429 });
+  } else {
+    job = target;
+    errorText = errorTextOrMode;
+    payload = payloadOrReset || {};
+  }
+  const errStr = String(errorText || payload?.error || payload?.message || '');
+  const status = payload?.status || payload?.statusCode || payload?.upstreamStatus;
+  const is429 = status === 429 || /\b429\b|rate.?limit|too many requests/i.test(errStr);
+  if (!is429) return false;
+
+  const key = jobSwimlane(job);
+  const configured = getParallelLimit(job);
+  const existing = rateLimitCooldowns.get(key);
+  const currentLimit = (existing && existing.expiresAt > now) ? existing.effectiveLimit : configured;
+  // At one slot there is no smaller positive concurrency: hold the lane until
+  // the provider's cooldown expires instead of burning each waiting job.
+  const effectiveLimit = Math.max(0, currentLimit - 1);
+  const deferral = parseQuotaDeferral(errStr);
+  const duration = payload?.resetsInMs || deferral?.resetsInMs || RATE_LIMIT_COOLDOWN_MS;
+  const expiresAt = now + duration;
+
+  rateLimitCooldowns.set(key, {
+    effectiveLimit,
+    expiresAt,
+    cause: errStr.slice(0, 200),
+  });
+  console.log(`⚠️ media-job: ${key} received 429 / rate-limit — lowering effective limit to ${effectiveLimit} for cool-down (${Math.round(duration / 1000)}s)`);
+  return true;
+}
+
+const getEffectiveParallelLimit = _getEffectiveParallelLimit;
+const getRateLimitCooldown = _getRateLimitCooldown;
+const recordRateLimitCooldown = _recordRateLimitCooldown;
+
+export {
+  _getParallelLimit as getParallelLimit,
+  _setParallelLimit as setParallelLimit,
+  _getEffectiveParallelLimit as getEffectiveParallelLimit,
+  _getRateLimitCooldown as getRateLimitCooldown,
+  _recordRateLimitCooldown as recordRateLimitCooldown,
+};
+
+function rateLimitWaitMessage(effectiveLimit, expiresAt) {
+  const at = new Date(expiresAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  return `Rate-limited (429) — cooling down (limit: ${effectiveLimit}) until ${at}`;
+}
+
+export function __resetRateLimitCooldownsForTest() {
+  rateLimitCooldowns.clear();
+  parallelLimits.clear();
+  codexParallelLimit = CODEX_PARALLEL_DEFAULT;
 }
 
 // jobId → entry consumed by lib/sseUtils.js#{broadcastSse,attachSseClient,
@@ -623,7 +782,9 @@ function swimlanePositions() {
  * @returns {number} the lane's configured concurrency
  */
 export function laneConcurrencyFor(job) {
-  return laneLimits()[jobLane(job)];
+  const lane = jobLane(job);
+  if (lane === 'gpu' || lane === 'remote') return 1;
+  return getEffectiveParallelLimit(job);
 }
 
 /**
@@ -650,7 +811,7 @@ export function laneConcurrencyFor(job) {
 export function getQueueCapacity() {
   const limits = laneLimits();
   const lanes = {
-    gpu: { running: running ? 1 : 0, queued: 0, limit: limits.gpu },
+    gpu: { running: running ? 1 : 0, queued: 0, limit: 1, limitReason: 'memory-governed' },
     cloud: { running: cloudRunning.length, queued: 0, limit: limits.cloud },
     remote: { running: remoteRunning.length, queued: 0, limit: laneTotalLimits().remote },
   };
@@ -1382,7 +1543,8 @@ function startLaneJob(job, { lane }) {
   job.progress = typeof job.progress === 'number' && Number.isFinite(job.progress) ? job.progress : 0;
   // A quota wait describes the queued state only; a persisted one also
   // survives a restart that outlasts the cooldown.
-  if (QUOTA_WAIT_PATTERN.test(job.statusMsg || '') || SCHEDULED_WAIT_PATTERN.test(job.statusMsg || '')) job.statusMsg = '';
+  if (QUOTA_WAIT_PATTERN.test(job.statusMsg || '') || SCHEDULED_WAIT_PATTERN.test(job.statusMsg || '')
+    || /^Rate-limited \(429\)/.test(job.statusMsg || '')) job.statusMsg = '';
   job.statusMsg = job.statusMsg || 'Starting';
   if (lane === 'cloud') {
     cloudRunning.push(job);
@@ -1557,7 +1719,6 @@ async function drainLoop() {
     // Single queue scan, promoting work independently into each open lane.
     // Each swim lane has its own slots, and each lane its own total bound, so
     // a full swim lane only skips its own work.
-    const limits = laneLimits();
     const totals = laneTotalLimits();
     const laneSlots = {
       gpu: totals.gpu - Number(Boolean(running)),
@@ -1565,7 +1726,12 @@ async function drainLoop() {
       remote: totals.remote - remoteRunning.length,
     };
     const swimSlots = new Map();
-    const freeSwimSlots = (job) => swimSlots.get(jobSwimlane(job)) ?? limits[jobLane(job)];
+    const freeSwimSlots = (job) => {
+      const key = jobSwimlane(job);
+      const lane = jobLane(job);
+      const limit = (lane === 'gpu' || lane === 'remote') ? 1 : getEffectiveParallelLimit(job);
+      return swimSlots.get(key) ?? limit;
+    };
     for (const active of runningJobs()) swimSlots.set(jobSwimlane(active), freeSwimSlots(active) - 1);
     let quotaWaitChanged = false;
     const expired = [];
@@ -1593,6 +1759,17 @@ async function drainLoop() {
           quotaWaitChanged = true;
         }
         continue;
+      }
+      const rlCooldown = getRateLimitCooldown(job);
+      if (rlCooldown) {
+        const free = freeSwimSlots(job);
+        if (free <= 0) {
+          const waiting = rateLimitWaitMessage(rlCooldown.effectiveLimit, rlCooldown.expiresAt);
+          if (job.statusMsg !== waiting) {
+            job.statusMsg = waiting;
+            quotaWaitChanged = true;
+          }
+        }
       }
       const lane = jobLane(job);
       const free = freeSwimSlots(job);
@@ -2155,6 +2332,7 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
           // path. What it buys is every job queued BEHIND it: they hold for the
           // provider's stated reset instead of dispatching into the same 429.
           recordQuotaCooldown(j, j.error);
+          recordRateLimitCooldown(j, j.error, payload);
           videoHolds.captureFailure(j, j.error, payload);
         }, payload.remoteInputsDisposable === true)
           .catch((e) => console.error(`❌ media-job [${job.id.slice(0, 8)}] terminal handler failed: ${e.message}`)),
@@ -2772,6 +2950,8 @@ export async function __resetForTests() {
   // Reset the lane limit too — a test that called setCodexParallelLimit(N)
   // otherwise leaks N into subsequent tests and makes ordering matter.
   codexParallelLimit = CODEX_PARALLEL_DEFAULT;
+  parallelLimits.clear();
+  rateLimitCooldowns.clear();
   // Reset the persist chain so a leftover rejection from a previous test's
   // ENOENT writes doesn't poison subsequent persist() calls.
   persistChain = Promise.resolve();

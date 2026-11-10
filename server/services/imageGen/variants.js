@@ -25,7 +25,7 @@ import { join } from 'node:path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { atomicWrite, PATHS } from '../../lib/fileUtils.js';
 import { stripPngC2PAChunk } from '../../lib/imageClean.js';
-import { omitRenderTiming } from '../../lib/renderTiming.js';
+import { omitDerivedRenderFields } from '../../lib/renderTiming.js';
 import { withLocalImageOrigin } from './imageRecords.js';
 import { removeCornerWatermark } from '../../lib/imageWatermark.js';
 import { applyLightRegen, computePixelDelta } from './regen.js';
@@ -101,7 +101,7 @@ export async function persistVariant({
   // current and future caller.
   // The variant is made here: this machine is its origin whatever the source's
   // was, and the source's machine-local fields (hide, pending delete) stay behind.
-  const untimedVariantMeta = await withLocalImageOrigin(omitRenderTiming(variantMeta));
+  const untimedVariantMeta = await withLocalImageOrigin(omitDerivedRenderFields(variantMeta));
 
   return withBackupAssetPublication(() => publishImageFiles([outPath, sidecarPath], async () => {
     await atomicWrite(outPath, data);

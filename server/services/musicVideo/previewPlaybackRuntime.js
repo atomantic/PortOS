@@ -90,6 +90,12 @@ export function installLayeredPreviewPlayback(bridge, composition = globalThis.p
     return { songTime: t, state, t: state.t, scene: bridge.scene(state.t) };
   };
   const videoOf = (item) => item?.scene?.media?.kind === 'video' && item.source ? item.source : null;
+  // Which drawable a still needs at item.t (a photo sequence's current step);
+  // null where one source serves the whole scene. A change is a transition.
+  const keyOf = (item) => item?.scene && bridge.needsSource(item.scene) ? bridge.sourceKey?.(item.scene, item.t) ?? null : null;
+  // Extra drawables a frame paints besides its source (a wipe's held outgoing
+  // shot). An item whose layers no longer fit its time is reloaded like a step.
+  const layersFit = (item) => !item?.scene || (bridge.layersReady?.(item.scene, item.t, item.layers ?? null) ?? true);
   // Autonomous media advances on song time, while narrative holds deliberately
   // freeze its source clock. Camera/code drawing still uses quantized item.t.
   const sourceClock = (item) => item.state.hold ? item.t : item.songTime;
@@ -115,15 +121,19 @@ export function installLayeredPreviewPlayback(bridge, composition = globalThis.p
   const load = async (t, token, live = false) => {
     const item = stateAt(t);
     const sourceTime = live && item.scene?.media?.kind === 'video' ? sourceClock(item) : item.t;
+    // Layers first: a held layer draws from a source the incoming one may reuse.
+    item.layers = item.scene ? await bridge.layers?.(item.scene, item.t) ?? null : null;
+    if (token !== lease || disposed) return null;
     item.source = item.scene && bridge.needsSource(item.scene) ? await bridge.source(item.scene, sourceTime) : null;
     if (token !== lease || disposed) return null;
+    item.sourceKey = keyOf(item);
     item.endHold = endHold(item);
     return item;
   };
   const freshSource = (aligned, latest, startedAt) => {
-    const video = videoOf(aligned), item = { ...latest, source: aligned.source };
+    const video = videoOf(aligned), item = { ...latest, source: aligned.source, sourceKey: aligned.sourceKey ?? null, layers: aligned.layers ?? null };
     const same = latest.scene === aligned.scene && latest.state.hold === aligned.state.hold
-      && (!latest.state.hold || latest.t === aligned.t) && endHold(item) === endHold(aligned);
+      && (!latest.state.hold || latest.t === aligned.t) && endHold(item) === endHold(aligned) && layersFit(item);
     const drift = video && latest.scene === aligned.scene ? video.currentTime - sourceTarget(item) : 0;
     return { item, drift, valid: same && now() - startedAt < 100
       && (!video || video.readyState >= 2 && !video.seeking && Number.isFinite(drift) && Math.abs(drift) < 0.1) };
@@ -146,12 +156,12 @@ export function installLayeredPreviewPlayback(bridge, composition = globalThis.p
     return progress;
   };
   const publish = (item, token, valid = () => true) => bridge.publish(item.songTime, item.t, item.scene, item.source, item.state,
-    () => token === lease && !disposed && valid());
+    () => token === lease && !disposed && valid(), item.layers ?? null);
   const liveVideo = (item) => videoOf(item) && !item.state.hold && !item.endHold;
   const ownVideo = (item, token, transitionLease = null) => {
     retireVideo();
     const video = videoOf(item);
-    const owner = { epoch, token, video, scene: item.scene, handle: null, timer: null, resolveFirst: null,
+    const owner = { epoch, token, video, scene: item.scene, layers: item.layers ?? null, handle: null, timer: null, resolveFirst: null,
       mediaTime: null, presentedFrames: null, lastFreshAt: now(), origin: null, bucket: -1, transitionLease };
     videoOwner = owner;
     const first = new Promise(resolve => { owner.resolveFirst = resolve; });
@@ -168,9 +178,9 @@ export function installLayeredPreviewPlayback(bridge, composition = globalThis.p
           if (at - lastAnchor > 1000) { resync((at - lastAnchor) / 1000); return; }
           const next = stateAt(advance(at));
           if (at - owner.lastFreshAt >= FRAME_FRESH_MS) { resync((at - owner.lastFreshAt) / 1000); return; }
-          const item = { ...next, source: video };
+          const item = { ...next, source: video, layers: owner.layers };
           item.endHold = endHold(item);
-          if (item.scene !== owner.scene || item.state.hold || item.endHold) {
+          if (item.scene !== owner.scene || item.state.hold || item.endHold || !layersFit(item)) {
             // RAF owns the next scene/hold preparation. Never publish this old
             // callback under that new mapping, including during initial play.
             if (owner.resolveFirst) resync(0.1);
@@ -220,15 +230,23 @@ export function installLayeredPreviewPlayback(bridge, composition = globalThis.p
       if (at - lastAnchor > 1000) { resync((at - lastAnchor) / 1000); return; }
       const t = advance(at), next = stateAt(t);
       const nextEndHold = active ? endHold({ ...next, source: active.source }) : false;
-      if (!active || active.scene !== next.scene || active.state.hold !== next.state.hold || active.endHold !== nextEndHold) {
+      if (!active || active.scene !== next.scene || active.state.hold !== next.state.hold || active.endHold !== nextEndHold
+        || (active.sourceKey ?? null) !== keyOf(next) || !layersFit({ ...next, layers: active.layers })) {
         if (!transition) {
           if (videoOwner?.resolveFirst) { resync(0.1); return; }
           const progress = beginTransition(token, at);
           const task = bounded((async () => {
             const startedAt = progress.startedAt;
-            const item = await load(t, token, true);
+            let item = await load(t, token, true);
             if (!item || !freshTransition(progress)) return;
-            const latest = stateAt(advance(now()));
+            let latest = stateAt(advance(now()));
+            // A photo step that passed while loading is stale and never shown:
+            // load the current one inside this transition's freshness bound.
+            while (latest.scene === item.scene && (keyOf(latest) !== item.sourceKey || !layersFit({ ...latest, layers: item.layers }))) {
+              item = await load(latest.songTime, token, true);
+              if (!item || !freshTransition(progress)) return;
+              latest = stateAt(advance(now()));
+            }
             // Slow preparation must not silently play media behind the master.
             let fresh = freshSource(item, latest, startedAt);
             if (!fresh.valid) { resync(fresh.drift || (now() - startedAt) / 1000); return; }
@@ -310,7 +328,7 @@ export function installLayeredPreviewPlayback(bridge, composition = globalThis.p
         // Cold preparation precedes audio startup. Align its already-loaded
         // source once to the now-running master; never repeat this seek in sync.
         if (wanted.scene !== prepared.scene) return resync(wanted.songTime - prepared.songTime);
-        let aligned = { ...wanted, source: prepared.source };
+        let aligned = { ...wanted, source: prepared.source, sourceKey: prepared.sourceKey ?? null, layers: prepared.layers ?? null };
         if (videoOf(prepared)) {
           aligned = await load(wanted.songTime, token, true);
           if (token !== lease || disposed || !aligned) return { epoch: input.epoch, status: 'superseded' };

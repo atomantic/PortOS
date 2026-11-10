@@ -637,7 +637,7 @@ describe('Cast & Sets check-in', () => {
     await runTo(project.id, 'review');
     const planned = (await current(project.id)).castAndSets;
     expect(jobs).toHaveLength(before);
-    expect(new Set(planned.feedbackRenderPlan.keys)).toEqual(new Set(Object.keys(planned.plan)));
+    expect(new Set(planned.feedbackRenderPlan.keys)).toEqual(new Set(['set:lab', 'set:harbor', 'set:roof', 'test:1', 'test:2']));
     expect(planned.images.character.imageId).toBe(priorImages.character.imageId);
     expect(planned.images.character).toMatchObject({ jobId: priorImages.character.jobId, submittedPrompt: priorImages.character.submittedPrompt,
       submittedReferences: priorImages.character.submittedReferences, submittedRevision: priorImages.character.submittedRevision,
@@ -657,15 +657,15 @@ describe('Cast & Sets check-in', () => {
     expect(revisionPrompt).toContain('"look":');
     const after = await current(project.id);
     expect(after.castAndSets.direction.look).toBe(look);
-    // The look line changed, so every image re-renders on the rewritten prompt, never the board's look.
+    // Scene look changes re-render scene plates and frames; neutral identity sheets stay unchanged.
     const rerendered = jobs.slice(before);
-    expect(new Set(rerendered.map(keyOf))).toEqual(new Set(Object.keys(after.castAndSets.plan)));
+    expect(new Set(rerendered.map(keyOf))).toEqual(new Set(['set:lab', 'set:harbor', 'set:roof', 'test:1', 'test:2']));
     for (const job of rerendered) {
       expect(job.params.prompt).toContain(`Look: ${look}`);
       expect(job.params.prompt).not.toContain('raw flash, green light');
     }
     expect(after.castAndSets.changeSummary).toMatchObject({ revision: 2, planned: rerendered.length });
-    expect(after.castAndSets.changeSummary.changes).toEqual(['Look rewritten for every image', 'Lighting: Harbor']);
+    expect(after.castAndSets.changeSummary.changes).toEqual(['Scene look rewritten for set plates and in-set frames', 'Lighting: Harbor']);
     expect(after.castAndSets.feedback).toEqual([expect.objectContaining({ text: note, revision: 2 })]);
 
     // Approve, then rebuild: the fresh direction still carries the standing feedback and its look.
@@ -1008,7 +1008,7 @@ describe('Cast & Sets check-in', () => {
     await runTo(project.id, 'review');
     expect(runPrompt.mock.calls[0][0].prompt).toMatch(/- cast: the RECURRING supporting characters/);
     const sheet = jobs.find((j) => keyOf(j) === 'cast:rico');
-    expect(sheet.params.prompt).toMatch(/character reference sheet of ONE consistent person, Rico, the drummer/);
+    expect(sheet.params.prompt).toMatch(/Character reference sheet of ONE consistent person, Rico, the drummer/);
     expect(sheet.params.prompt).toMatch(/A different person from Keeper/);
     expect(sheet.params.referenceImagePaths).toBeUndefined();
     expect(jobs.map(keyOf)).not.toContain('cast:keeper');
@@ -1364,8 +1364,8 @@ describe('Cast & Sets per-item actions', () => {
     expect(plan.looks.refKeys).toEqual(['character']);
     expect(plan.looks.prompt).toContain('never their clothing');
     expect(plan.looks.prompt).toContain('nobody else in frame');
-    expect(plan.looks.prompt).toContain('LOOK 01 WATCH: oilskin coat, wool sweater');
-    expect(plan.looks.prompt).toContain('LOOK 02 STORM: soaked dark sweater');
+    expect(plan.looks.prompt).toContain('Panel 1 from the left wears Watch: oilskin coat, wool sweater');
+    expect(plan.looks.prompt).toContain('Panel 2 from the left wears Storm: soaked dark sweater');
   });
 
   it('preserves wardrobe mappings and controls automatic tests through the route', async () => {
@@ -1914,7 +1914,7 @@ it('conditions linked cast on their Casting images, not just a reference with th
 
 it('grounds an age form and its test frames on the catalog reference selected for that age', async () => {
   onDisk('keeper.png', 'keeper-7.png');
-  runPrompt.mockResolvedValue({ text: JSON.stringify({ ...DIRECTION,
+  runPrompt.mockResolvedValue({ text: JSON.stringify({ ...DIRECTION, look: 'Faded color film',
     protagonist: { ...DIRECTION.protagonist, forms: [
       { id: 'age-7', label: 'Age 7', age: '7', description: 'a small girl with the same eyes', hair: 'pigtails', wardrobe: 'a plaid dress', subjectId: 'mvc-2' },
       { id: 'age-15', label: 'Age 15', age: '15', description: 'a lanky teen', subjectId: 'mvc-404' },
@@ -1954,9 +1954,10 @@ it('grounds an age form and its test frames on the catalog reference selected fo
   expect(refs('test:2')).toEqual([png('set:harbor'), png('form:age-7')]);
   expect(job('test:2').params.prompt).toContain('Place the person from the Age 7 character sheet');
   expect(job('test:2').params.prompt).toContain('Wearing a plaid dress');
-  // An age with no era or film look of its own still keeps the present look off the memory.
+  // An age with no era or film look of its own keeps the age setting and uses the scene look.
   expect(job('test:2').params.prompt).toContain('The place as it was when Keeper was 7');
-  expect(job('test:2').params.prompt).toContain('Match the color, film stock and grain of the Age 7 character sheet');
+  expect(job('test:2').params.prompt).not.toContain('Match the color, film stock and grain');
+  expect(job('test:2').params.prompt).toContain('Look: Faded color film');
   expect(refs('test:1')).toEqual([png('set:lab'), png('character'), png('looks')]);
 
   // Binding an adult test to the age re-renders just it, on the child sheet.
@@ -1992,7 +1993,37 @@ it('grounds an age form and its test frames on the catalog reference selected fo
   expect(buildCastAndSetsImagePlan(removed, saved.castAndSets.direction).character.refImages).toEqual(['keeper.png']);
 });
 
-it('carries a memory\'s era and film stock into its age sheet, test frames and set plate', async () => {
+it('saves exact explicit media through the direction API and uses the same medium in planned and submitted prompts', async () => {
+  runPrompt.mockResolvedValue({ text: JSON.stringify({ ...DIRECTION, look: 'warm amber light',
+    protagonist: { ...DIRECTION.protagonist, forms: [{ id: 'age-7', age: '7', description: 'small', look: 'sepia film' }] } }) });
+  const project = await seed({ concept: { prompt: 'a vigil', subjects: [] } });
+  await service.startCastAndSets(project.id);
+  await runTo(project.id, 'review');
+  const url = `/api/music-video/${project.id}/cast-and-sets/direction`;
+  const medium = '  scratchboard / silverpoint\nwith crosshatching  ';
+  expect((await request(app).patch(url).send({ renderingMedium: 'x'.repeat(501) })).status).toBe(400);
+  expect((await request(app).patch(url).send({ renderingMedium: 42 })).status).toBe(400);
+  expect((await request(app).patch(url).send({ renderingMedium: medium, sets: [{ id: 'lab', setReference: null }] })).status).toBe(400);
+  expect((await request(app).patch(url).send({ renderingMedium: medium })).status).toBe(202);
+  await runTo(project.id, 'review');
+  const saved = (await current(project.id)).castAndSets;
+  expect(saved.direction.renderingMedium).toBe(medium);
+  for (const key of ['character', 'expressions', 'looks', 'form:age-7']) {
+    const instruction = `Rendering medium: ${medium}. Retain this rendering medium only; omit scene lighting, color grading, film stock and grain`;
+    const sent = jobs.findLast((job) => keyOf(job) === key).params.prompt;
+    expect(saved.plan[key].prompt).toContain(instruction);
+    expect(saved.images[key].submittedPrompt).toBe(sent);
+    expect(sent).toContain(instruction);
+    expect(sent).not.toMatch(/warm amber light|sepia film/);
+  }
+  const forms = saved.direction.protagonist.forms.map((form) => ({ ...form, renderingMedium: 'cyanotype' }));
+  expect((await request(app).patch(url).send({ protagonist: { forms } })).status).toBe(202);
+  await runTo(project.id, 'review');
+  expect(jobs.findLast((job) => keyOf(job) === 'form:age-7').params.prompt).toContain('Rendering medium: cyanotype.');
+  expect((await current(project.id)).castAndSets.direction.renderingMedium).toBe(medium);
+});
+
+it('keeps an age sheet neutral while carrying memory era and film stock into scene frames and plates', async () => {
   const present = '1985 color, muted purples, 35mm grain';
   const memory = 'black-and-white 8mm home movie, heavy grain';
   runPrompt.mockResolvedValue({ text: JSON.stringify({ ...DIRECTION, look: present,
@@ -2004,10 +2035,11 @@ it('carries a memory\'s era and film stock into its age sheet, test frames and s
   await runTo(project.id, 'review');
   const prompt = (key) => jobs.findLast((j) => keyOf(j) === key).params.prompt;
   expect(prompt('form:age-7')).toContain(`Era: 1965. Five views`);
-  expect(prompt('form:age-7')).toContain(`Look: ${memory}`);
+  expect(prompt('form:age-7')).not.toContain('Look:');
+  expect(prompt('form:age-7')).not.toContain(memory);
   expect(prompt('set:home')).toContain('Era: 1965, with period-correct buildings, vehicles');
   // The age's era and stock win over a present-day set; a memory set carries its own.
-  for (const key of ['form:age-7', 'set:home', 'test:2', 'test:3']) {
+  for (const key of ['set:home', 'test:2', 'test:3']) {
     expect(prompt(key)).toContain(`Look: ${memory}`);
     expect(prompt(key)).not.toContain(present);
   }
@@ -2662,6 +2694,9 @@ describe('editing a saved Cast & Sets image', () => {
     const preview = await request(app).post(editUrl(project.id, 'edit-image-preview')).send({ key: 'character', revision: before.revision, imageId: before.images.character.imageId, instruction });
     expect(preview.status).toBe(200);
     expect(preview.body.sentPrompt).toContain(instruction);
+    const firewall = 'Anatomical identity firewall: preserve head shape, bone structure, jaw and chin, cheekbones, eye shape, spacing and tilt, iris color, brow shape, nose, mouth width, ears, skin tone and finish, body build and proportions, and existing identity markers in their exact positions unless specifically targeted by the edit instruction';
+    expect(preview.body.sentPrompt).toContain(firewall);
+    expect(preview.body.promptAdditions).toContainEqual(expect.objectContaining({ text: expect.stringContaining(firewall) }));
     expect(preview.body.promptAdditions).toContainEqual(expect.objectContaining({ id: 'cast-sets-image-edit' }));
     expect(jobs).toHaveLength(count);
     const rendered = await requestEdit(project, instruction);
@@ -2671,6 +2706,8 @@ describe('editing a saved Cast & Sets image', () => {
     expect(job.params.initImagePath).toBe(join(IMAGES(), before.images.character.imageId));
     expect(job.params.referenceImagePaths).toBeUndefined();
     expect(job.params.prompt.endsWith(instruction)).toBe(true);
+    expect(rendered.body.project.castAndSets.images.character.edit.modelInput.sentPrompt).toBe(preview.body.sentPrompt);
+    expect(job.params.prompt).toContain(firewall);
     expect(job.params.promptAdditions).toEqual([expect.objectContaining({ id: 'cast-sets-image-edit' })]);
     expect(rendered.body.project.castAndSets.status).toBe('approved');
     expect(rendered.body.project.castAndSets.images.character.imageId).toBe(before.images.character.imageId);

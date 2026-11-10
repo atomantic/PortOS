@@ -75,7 +75,7 @@ export default function ContactSheetDrawer({
                 <p className="text-[11px] text-port-text-muted">No takes yet.</p>
               )}
               {['image', 'video'].map((kind) => (
-                <SceneTakeStrip key={kind} scene={scene} kind={kind} busy={busy} large
+                <SceneTakeStrip key={kind} project={project} scene={scene} kind={kind} busy={busy} large
                   onSelect={(take) => onSelectTake(scene, take)}
                   onReview={(take, review) => onReviewTake(scene, take, review)}
                   onOpenPreview={onOpenPreview} />

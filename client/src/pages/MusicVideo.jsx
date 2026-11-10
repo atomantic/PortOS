@@ -350,8 +350,9 @@ export default function MusicVideo() {
     // was persisted, so fetch it again.
     if (fetchingIdRef.current === projectId) setSelectedReload((n) => n + 1);
   };
+  // `patch` may be a function of the scene as it stands, for a change built on its latest take list.
   const patchScene = (projectId, sceneId, patch) => patchProject(projectId, (project) => ({
-    scenes: (project.scenes || []).map((s) => (s.sceneId === sceneId ? { ...s, ...patch } : s)),
+    scenes: (project.scenes || []).map((s) => (s.sceneId === sceneId ? { ...s, ...(typeof patch === 'function' ? patch(s) : patch) } : s)),
   }));
 
   const youtube = useMusicVideoYoutubeImport({
@@ -440,6 +441,28 @@ export default function MusicVideo() {
 
   // Shot fields typed locally and not yet saved: a refetch after a change made elsewhere keeps these.
   const unsavedSceneFields = useRef(new Map());
+  // The open workspace's take actions: a change made elsewhere is read once this tab's queued take decisions land.
+  const takesRef = useRef(null);
+  // A freshly read record replaces the open project; shot fields typed and not yet saved keep their text.
+  // Resolves true when a kept field differed from the saved one.
+  const mergeFetchedProject = (fresh) => {
+    let conflict = false;
+    setSelectedProject((prev) => {
+      if (prev?.id !== fresh.id) return prev;
+      const local = new Map((prev.scenes || []).map((s) => [s.sceneId, s]));
+      const scenes = (fresh.scenes || []).map((scene) => {
+        const mine = local.get(scene.sceneId);
+        const keys = unsavedSceneFields.current.get(scene.sceneId);
+        if (!mine || !keys?.size) return scene;
+        const kept = { ...scene };
+        keys.forEach((k) => { if (kept[k] !== mine[k]) { conflict = true; kept[k] = mine[k]; } });
+        return kept;
+      });
+      return { ...fresh, scenes };
+    });
+    summaries.setItems((prev) => prev.map((p) => (p.id === fresh.id ? fresh : p)));
+    return conflict;
+  };
   // An edit made elsewhere (an agent, another tab) reaches the open project here; fields typed
   // locally and not yet saved keep their text, with a notice that the shot changed.
   useEffect(() => {
@@ -447,24 +470,12 @@ export default function MusicVideo() {
     let active = true;
     const onChanged = (data) => {
       if (data?.id !== selectedId) return;
-      getMusicVideoProject(selectedId, { silent: true }).then((fresh) => {
+      // This tab's own take decision: its reply already updated the shot.
+      if (data.origin && data.origin === socket.id) return;
+      const read = () => getMusicVideoProject(selectedId, { silent: true });
+      (takesRef.current ? takesRef.current.afterTakeWrites(read) : read()).then((fresh) => {
         if (!active || !fresh) return;
-        let conflict = false;
-        setSelectedProject((prev) => {
-          if (prev?.id !== fresh.id) return prev;
-          const local = new Map((prev.scenes || []).map((s) => [s.sceneId, s]));
-          const scenes = (fresh.scenes || []).map((scene) => {
-            const mine = local.get(scene.sceneId);
-            const keys = unsavedSceneFields.current.get(scene.sceneId);
-            if (!mine || !keys?.size) return scene;
-            const kept = { ...scene };
-            keys.forEach((k) => { if (kept[k] !== mine[k]) { conflict = true; kept[k] = mine[k]; } });
-            return kept;
-          });
-          return { ...fresh, scenes };
-        });
-        summaries.setItems((prev) => prev.map((p) => (p.id === fresh.id ? fresh : p)));
-        if (conflict) toast.info('A shot changed elsewhere. Your unsaved text is kept; saving it replaces the other edit.');
+        if (mergeFetchedProject(fresh)) toast.info('A shot changed elsewhere. Your unsaved text is kept; saving it replaces the other edit.');
       }).catch(() => {});
     };
     socket.on('music-video:project:changed', onChanged);
@@ -781,6 +792,8 @@ export default function MusicVideo() {
             key={selected.id}
             selected={selected}
             unsavedSceneFields={unsavedSceneFields}
+            takesRef={takesRef}
+            mergeFetchedProject={mergeFetchedProject}
             tracks={tracks}
             trackLibrary={trackLibrary}
             trackName={trackName}
@@ -825,7 +838,7 @@ export default function MusicVideo() {
 function ProjectWorkspace({
   selected, tracks, trackLibrary, trackName, youtube, separation, lyricAlign, midi, renderJob, videoSettings, publishing, analyzing, cloning,
   replaceProject, patchProject, patchScene, openProject, prepareSong, onAnalyze, onClone, onTrackImported,
-  onRename, renameForm, deletion, unsavedSceneFields,
+  onRename, renameForm, deletion, unsavedSceneFields, takesRef, mergeFetchedProject,
 }) {
   const { projectId: routeProjectId, artifactId: routeArtifactId, stage: routeStage, sceneId: routeSceneId } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -895,7 +908,9 @@ function ProjectWorkspace({
     // Renders that finished while the socket was down missed their attach events.
     onReconciled: (projectId) => getMusicVideoProject(projectId, { silent: true }).then(replaceProject).catch(() => {}),
   });
-  const takes = useMusicVideoTakes({ project: selected, applyScenePatch: patchScene, patchProject });
+  const takes = useMusicVideoTakes({ project: selected, applyScenePatch: patchScene, patchProject, reloadProject: mergeFetchedProject });
+  // The page's change listener reads through it; this workspace remounts per project.
+  takesRef.current = takes;
   // Selective section revision (#8987): regenerate only a draft's flagged
   // sections, resumable from the server's checkpoint.
   const revisions = useMusicVideoRevisions({ project: selected, replaceProject, sceneMedia, attachRender: excerpts.attachRender });
@@ -1901,6 +1916,8 @@ function ProjectWorkspace({
               />
             ) : null}
             attention={(
+              <>
+              {takes.reconcileError && <div role="alert" className="flex flex-wrap items-center gap-2 rounded border border-port-warning/40 p-2 text-xs"><p className="text-port-warning">Take changes could not be confirmed: {takes.reconcileError.message}. Reload the saved decisions before relying on this selection.</p><button type="button" className="min-h-[44px] rounded border border-port-border px-2 disabled:opacity-50 pointer-fine:sm:min-h-0" disabled={takes.reconciling} onClick={takes.retryReconcile}>{takes.reconciling ? 'Reloading saved takes…' : 'Retry saved takes'}</button></div>}
               <NeedsAttentionBanner
                 // A parked autonomous or production run with nothing to resume, while the
                 // header's Autopilot button reports that run, is that button (which opens it); no second row.
@@ -1922,6 +1939,7 @@ function ProjectWorkspace({
                   onKeepSongTiming: () => keepMusicVideoSongTiming(selected.id).then(replaceProject),
                 }}
               />
+              </>
             )}
             dock={NO_DOCK_STAGES.has(activeStage) ? null : withTitleCard(
               <PreviewDock

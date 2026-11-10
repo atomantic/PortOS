@@ -88,7 +88,7 @@ let cache = null; // { fetchedAt: number, items: card[] }
 const fetchCards = async ({ fetchImpl }) => {
   const token = (await getHfToken().catch(() => null)) || '';
   return Promise.all(CURATED_VIDEO_LORAS.map(async (entry) => {
-    const model = await fetchHuggingfaceModel(entry.repo, { token, fetchImpl })
+    const model = await fetchHuggingfaceModel(entry.repo, { token, fetchImpl, signal: AbortSignal.timeout(SEARCH_METADATA_TIMEOUT_MS) })
       .catch((err) => {
         console.log(`⚠️ Video LoRA suggestion ${entry.repo} metadata fetch failed: ${err?.message || err}`);
         return null;

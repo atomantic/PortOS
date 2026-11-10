@@ -306,6 +306,10 @@ export const uploadGalleryVideo = (base64Data, filename, options = {}) => reques
 // `removedHere` when another holder already deleted), `owner-unknown` (hidden
 // here only) or `cancelled`; lib/mediaDeleteOutcome.js maps it for a list.
 export const deleteVideoHistoryItem = (id, { force = false, ...options } = {}) => request(`/video-gen/history/${encodeURIComponent(id)}${forceQuery(force)}`, { method: 'DELETE', ...options });
+// Runs the provider delete (Runway: the rendered asset; fal.ai: stored payloads and output files) for a finished render;
+// the local file stays. Resolves `{ ok, deletedAt }`.
+export const deleteVideoHostedCopy = (id, provider, options = {}) => request(`/video-gen/history/${encodeURIComponent(id)}/hosted/${provider}`, { method: 'DELETE', ...options });
+export const deleteImageHostedCopy = (filename, provider, options = {}) => request(`/image-gen/${encodeURIComponent(filename)}/hosted/${provider}`, { method: 'DELETE', ...options });
 export const cancelVideoPendingDelete = (id, options = {}) => request(`/video-gen/history/${encodeURIComponent(id)}/cancel-delete`, { method: 'POST', ...options });
 export const setVideoHidden = (id, hidden, options = {}) => request(`/video-gen/history/${encodeURIComponent(id)}/visibility`, {
   method: 'POST',
@@ -354,6 +358,12 @@ export const upscaleAdapterDownloadUrl = (key) => (key ? `${API_BASE}/video-gen/
 export const trimVideo = (id, { startSec, endSec } = {}, options = {}) => request(`/video-gen/history/${encodeURIComponent(id)}/trim`, {
   method: 'POST',
   body: JSON.stringify({ startSec, endSec }),
+  ...options,
+});
+// Re-shoot a clip with handheld camera motion `{ shake, steps, seed }` as a NEW gallery entry.
+export const handheldVideo = (id, { shake, steps, seed } = {}, options = {}) => request(`/video-gen/history/${encodeURIComponent(id)}/handheld`, {
+  method: 'POST',
+  body: JSON.stringify({ shake, steps, seed }),
   ...options,
 });
 export const stitchVideos = (videoIds, options = {}) => request('/video-gen/stitch', {

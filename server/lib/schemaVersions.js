@@ -896,7 +896,17 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // cut schema rejects. Optional, no backfill.
   // v57 = `lyricCues[].voice` (who sings a line), which a v56 strict cue schema rejects and its
   // normalizer drops on save. Optional, no backfill.
-  musicVideoProjects: 57,
+  // v58 = per-take shot color match (`take.colorMatch`) and a camera's `doNotMatch`,
+  // plus `colorMatch.references` (the shot a group matches to). A v57 strict camera
+  // schema rejects `doNotMatch` and a v57 project schema rejects `colorMatch`.
+  // Optional, no backfill: absent matching leaves the picture unchanged.
+  // v59 = a camera's film look, frame (aspect and matte), cut defaults and on-screen display,
+  // and the video's overscan. A v58 strict camera or project schema rejects them. Optional, no backfill:
+  // absent follows the video look, the video frame, and no crop.
+  // v60 = per-video/shot layered-template effects; older strict schemas reject the optional record.
+  // v61 = handheld camera template additions (`templateEffects.handheld`/`handheldSteps`), which a v60
+  // strict template-effects schema rejects. Optional, no backfill: absent is a steady camera.
+  musicVideoProjects: 61,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

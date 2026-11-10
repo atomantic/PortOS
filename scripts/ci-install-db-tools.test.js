@@ -1,11 +1,16 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
+import { workflowJobs } from './lib/workflowJobs.js';
 
 const script = fileURLToPath(new URL('./ci-install-db-tools.sh', import.meta.url));
+const PACKAGE_FILE = 'libcodec2_1_amd64.deb';
+const PACKAGE_BYTES = 'verified package';
+const PACKAGE_HASH = createHash('sha256').update(PACKAGE_BYTES).digest('hex');
 
 const RUNNER_SOURCES = `Types: deb
 URIs: http://azure.archive.ubuntu.com/ubuntu/
@@ -29,7 +34,7 @@ Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
 // Inject a Bash clock and watchdog instead of sleeping against 1–3 second
 // budgets: startup/source rewriting consumed those budgets under load, and
 // macOS does not ship GNU timeout. The real script still computes deadlines.
-function run(mirror) {
+function run(mirror, cache) {
   const dir = mkdtempSync(join(tmpdir(), 'ci-db-tools-'));
   const bin = join(dir, 'bin');
   const root = join(dir, 'root');
@@ -38,11 +43,19 @@ function run(mirror) {
   const githubPath = join(dir, 'github_path');
   const clock = join(dir, 'clock');
   const bashEnv = join(dir, 'bash-env');
+  const archives = join(root, 'var/cache/apt/archives');
+  const packageCache = join(dir, 'package-cache');
   writeFileSync(clock, '0\n');
   // Unsetting Bash's special SECONDS turns it into an ordinary variable.
   // DEBUG/functrace refresh it before commands inside bounded() too.
   writeFileSync(bashEnv, `unset SECONDS\nSECONDS=0\nset -T\ntrap 'read -r SECONDS < "$TEST_CLOCK"' DEBUG\n`);
   mkdirSync(bin);
+  mkdirSync(archives, { recursive: true });
+  mkdirSync(packageCache);
+  if (cache === 'warm' || cache === 'corrupt') {
+    // Equal size catches the case apt's own existing-archive check accepts.
+    writeFileSync(join(packageCache, PACKAGE_FILE), cache === 'warm' ? PACKAGE_BYTES : 'untrusted bytes!');
+  }
   mkdirSync(join(root, 'etc/apt/sources.list.d'), { recursive: true });
   writeFileSync(join(root, 'etc/os-release'), 'VERSION_CODENAME=noble\n');
   writeFileSync(sourcesFile, RUNNER_SOURCES);
@@ -52,6 +65,7 @@ function run(mirror) {
   // flag only inside this synthetic command fixture on macOS.
   fake('sed', 'if [ "$(uname -s)" = Darwin ]; then\n  [ "$1" = "-i" ] && [ "$2" = "-E" ] || exit 2\n  shift 2\n  exec /usr/bin/sed -i "" -E "$@"\nfi\nexec /usr/bin/sed -i -E "$@"');
   fake('curl', 'while [ $# -gt 0 ]; do [ "$1" = -o ] && echo key > "$2"; shift; done');
+  fake('sha256sum', 'if [ "$(uname -s)" = Darwin ]; then exec shasum -a 256 "$@"; fi\nexec /usr/bin/sha256sum "$@"');
   const stall = { ok: 'false', slowRunner: `grep -q azure '${sourcesFile}'`, dead: 'true' }[mirror];
   fake('timeout', `
 [ "$1" = --kill-after=10 ] || exit 2
@@ -67,7 +81,21 @@ if [ "$status" = 124 ]; then
   echo "$((elapsed + budget))" > "$TEST_CLOCK"
 fi
 exit "$status"`);
-  fake('apt-get', `echo "apt-get $*" >> '${log}'\nif ${stall}; then exit 124; fi`);
+  fake('apt-get', `
+echo "apt-get $*" >> '${log}'
+if ${stall}; then exit 124; fi
+if [[ " $* " = *" --print-uris "* ]]; then
+  echo "'https://example.com/${PACKAGE_FILE}' ${PACKAGE_FILE} ${PACKAGE_BYTES.length} SHA256:${PACKAGE_HASH}"
+elif [[ " $* " = *" --download-only "* ]]; then
+  if [[ ! -f '${archives}/${PACKAGE_FILE}' ]]; then
+    echo 'download ${PACKAGE_FILE}' >> '${log}'
+    printf '%s' '${PACKAGE_BYTES}' > '${archives}/${PACKAGE_FILE}'
+  fi
+  mkdir -p '${archives}/partial'
+  echo incomplete > '${archives}/partial/unfinished.deb'
+elif [[ " $* " = *" --no-download "* ]]; then
+  [[ "$(cat '${archives}/${PACKAGE_FILE}')" = '${PACKAGE_BYTES}' ]] || exit 1
+fi`);
 
   const result = spawnSync('/bin/bash', [script], {
     encoding: 'utf8',
@@ -78,6 +106,7 @@ exit "$status"`);
       TEST_CLOCK: clock,
       PG_MAJOR: '17',
       GITHUB_PATH: githubPath,
+      ...(cache ? { APT_PACKAGE_CACHE: packageCache } : {}),
     },
   });
   const read = (file) => readFileSync(file, { encoding: 'utf8', flag: 'a+' });
@@ -88,6 +117,9 @@ exit "$status"`);
     sources: read(sourcesFile),
     pgdg: read(join(root, 'etc/apt/sources.list.d/pgdg.list')),
     githubPath: read(githubPath),
+    downloaded: read(log).includes(`download ${PACKAGE_FILE}`),
+    cachedPackage: read(join(packageCache, PACKAGE_FILE)),
+    cachedPartial: existsSync(join(packageCache, 'unfinished.deb')),
   };
   rmSync(dir, { recursive: true, force: true });
   return out;
@@ -110,24 +142,25 @@ describe.skipIf(process.platform === 'win32')('CI DB tool installation', () => {
   });
 
   it('recovers from a stalled runner mirror through the official archive, keeping signing', () => {
-    const result = run('slowRunner');
+    const result = run('slowRunner', 'cold');
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain('switching to http://archive.ubuntu.com/ubuntu/');
-    expect(result.sources).toBe(RUNNER_SOURCES.replace('azure.archive.ubuntu.com', 'archive.ubuntu.com'));
+    expect(result.stdout).toContain('switching to https://archive.ubuntu.com/ubuntu/');
+    expect(result.sources).toBe(RUNNER_SOURCES.replace('http://azure.archive.ubuntu.com/ubuntu/', 'https://archive.ubuntu.com/ubuntu/'));
     expect(result.calls).toEqual([
       'apt-get update',
       'apt-get update',
+      'apt-get --print-uris install -y postgresql-client-17 ffmpeg',
       'apt-get install -y --download-only postgresql-client-17 ffmpeg',
       INSTALL_FROM_CACHE,
     ]);
     // The primary stall spends 180s of fake time, leaving 210s of the one
-    // total deadline for BOTH fallback commands (no per-command reset).
-    expect(result.budgets).toEqual([180, 210, 210]);
+    // total deadline for all fallback commands (no per-command reset).
+    expect(result.budgets).toEqual([180, 210, 210, 210]);
     expect(result.githubPath).toBe('/usr/lib/postgresql/17/bin\n');
   });
 
   it('fails as an installation failure once the whole budget is spent', () => {
-    const result = run('dead');
+    const result = run('dead', 'warm');
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('::error title=DB tool installation failed::');
     expect(result.stderr).toContain('within 390s');
@@ -136,10 +169,59 @@ describe.skipIf(process.platform === 'win32')('CI DB tool installation', () => {
     expect(result.githubPath).toBe('');
   });
 
+  it('saves complete downloads on a cold cache and reuses verified bytes on a warm cache', () => {
+    const cold = run('ok', 'cold');
+    expect(cold.status, cold.stderr).toBe(0);
+    expect(cold.downloaded).toBe(true);
+    expect(cold.cachedPackage).toBe(PACKAGE_BYTES);
+    expect(cold.cachedPartial).toBe(false);
+
+    const warm = run('ok', 'warm');
+    expect(warm.status, warm.stderr).toBe(0);
+    expect(warm.downloaded).toBe(false);
+    expect(warm.stdout).toContain(`Reused verified APT package ${PACKAGE_FILE}`);
+    expect(warm.calls).toEqual([
+      'apt-get update',
+      'apt-get --print-uris install -y postgresql-client-17 ffmpeg',
+      'apt-get install -y --download-only postgresql-client-17 ffmpeg',
+      INSTALL_FROM_CACHE,
+    ]);
+    expect(warm.budgets).toEqual([180, 180, 180]);
+    expect(warm.pgdg).toContain('[signed-by=');
+  });
+
+  it('downloads a replacement for a same-size cache entry that fails signed-index hash verification', () => {
+    const result = run('ok', 'corrupt');
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.downloaded).toBe(true);
+    expect(result.stdout).toContain('Ignoring invalid cached APT package');
+    expect(result.cachedPackage).toBe(PACKAGE_BYTES);
+  });
+
   it('installs the client major of the DB job\'s PostgreSQL service', () => {
     const workflow = readFileSync(fileURLToPath(new URL('../.github/workflows/ci.yml', import.meta.url)), 'utf8');
     const serviceMajor = workflow.match(/image: pgvector\/pgvector:pg(\d+)@/)?.[1];
     expect(serviceMajor).toBeTruthy();
-    expect(workflow).toMatch(new RegExp(`PG_MAJOR: '${serviceMajor}'\\n\\s+run: bash scripts/ci-install-db-tools\\.sh`));
+    const jobs = workflowJobs(workflow);
+    for (const id of ['database', 'browser']) {
+      const body = jobs[id];
+      const identify = body.split('- name: Identify APT package cache\n')[1].split('\n      - name:')[0];
+      const cache = body.split('- name: Cache APT package downloads\n')[1].split('\n      - name:')[0];
+      const install = body.split('- name: Install PostgreSQL client and audio verification tools\n')[1].split('\n      - name:')[0];
+      expect(identify).toContain(`PG_MAJOR: '${serviceMajor}'`);
+      expect(install).toContain(`PG_MAJOR: '${serviceMajor}'`);
+      expect(identify).toContain('. /etc/os-release');
+      expect(identify).toContain('prefix="apt-debs-v1-${ID}-${VERSION_ID}-$(dpkg --print-architecture)-pg${PG_MAJOR}-${{ hashFiles(\'scripts/ci-install-db-tools.sh\') }}-"');
+      expect(identify).toContain('echo "prefix=$prefix" >> "$GITHUB_OUTPUT"');
+      expect(identify).toContain('echo "key=${prefix}$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"');
+      expect(cache).toContain('uses: actions/cache@');
+      expect(cache).toContain('path: ${{ runner.temp }}/portos-apt-packages/*.deb');
+      expect(cache).toContain('key: ${{ steps.apt-cache.outputs.key }}');
+      expect(cache).toContain('restore-keys: ${{ steps.apt-cache.outputs.prefix }}');
+      expect(install).toContain('APT_PACKAGE_CACHE: ${{ runner.temp }}/portos-apt-packages');
+      expect(install).toContain('run: bash scripts/ci-install-db-tools.sh');
+      expect(install).not.toContain('if:');
+      expect(body.indexOf('- name: Cache APT package downloads')).toBeLessThan(body.indexOf('- name: Install PostgreSQL client'));
+    }
   });
 });

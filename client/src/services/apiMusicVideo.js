@@ -39,6 +39,15 @@ export const cloneMusicVideoProject = (id, data = {}, options = {}) => request(`
 export const updateMusicVideoProject = (id, patch, options = {}) => request(`/music-video/${encodeURIComponent(id)}`, {
   method: 'PATCH', body: JSON.stringify(patch), ...options,
 });
+export const measureMusicVideoColorMatch = (id, body = {}, options = {}) => request(`/music-video/${encodeURIComponent(id)}/color-match/measure`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+export const updateMusicVideoTakeColorMatch = (id, sceneId, takeId, patch, options = {}) => request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/takes/${encodeURIComponent(takeId)}/color-match`, {
+  method: 'PATCH', body: JSON.stringify(patch), ...options,
+});
+export const setMusicVideoColorMatchReference = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/color-match/reference`, {
+  method: 'PUT', body: JSON.stringify(body), ...options,
+});
 export const labelMusicVideoReferencesFromCatalog = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/references/catalog-labels`, {
   method: 'POST', ...options,
 });
@@ -170,6 +179,13 @@ export const getMusicVideoActiveJobs = (id, options = {}) =>
 export const addMusicVideoScene = (id, scene, options = {}) => request(`/music-video/${encodeURIComponent(id)}/scenes`, {
   method: 'POST', body: JSON.stringify(scene), ...options,
 });
+// The shot card's frame and clip (#15583). The server resolves the shot's references.
+export const renderMusicVideoSceneFrame = (id, sceneId, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/frame`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+export const renderMusicVideoSceneClip = (id, sceneId, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/scenes/${encodeURIComponent(sceneId)}/clip`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
 // #14241: queue one planned sequence run (its scenes in timeline order) as a single timed fal request.
 export const renderMusicVideoSequence = (id, sceneIds, options = {}) => request(`/music-video/${encodeURIComponent(id)}/sequence-coverage/render`, {
   method: 'POST', body: JSON.stringify({ sceneIds }), ...options,
@@ -254,8 +270,12 @@ const takesPath = (id, sceneId) => `/music-video/${encodeURIComponent(id)}/scene
 export const addMusicVideoSceneTake = (id, sceneId, body, options = {}) => request(takesPath(id, sceneId), {
   method: 'POST', body: JSON.stringify(body), ...options,
 });
-export const selectMusicVideoSceneTake = (id, sceneId, takeId, options = {}) =>
-  request(`${takesPath(id, sceneId)}/${encodeURIComponent(takeId)}/select`, { method: 'POST', ...options });
+export const selectMusicVideoSceneTake = (id, sceneId, takeId, options = {}) => {
+  const { expectedSelectedAssetId, ...rest } = options;
+  return request(`${takesPath(id, sceneId)}/${encodeURIComponent(takeId)}/select`, {
+    method: 'POST', ...(expectedSelectedAssetId !== undefined ? { body: JSON.stringify({ expectedSelectedAssetId }) } : {}), ...rest,
+  });
+};
 // The project's unused stills and clips (the shot card's "Swap from unused") → { collectionId, items }.
 export const getMusicVideoMediaPool = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/media-pool`, options);
 /** Swap's prompt search: `{ items: [{ kind, assetId }] }`, the pool items whose prompts hold every word. */
@@ -266,9 +286,14 @@ export const getMusicVideoCreditsPrefill = (id, options = {}) => request(`/music
 /** The cutting room floor outro's tally for a video: `{ stats }`. */
 export const getMusicVideoOutroStats = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/stats-outro`, options);
 // Asset manager: mark unused pool items ★ 'ingredient' / ✕ 'bad' (null clears) → { assetMarks }.
-export const markMusicVideoPoolAssets = (id, items, mark, options = {}) => request(`/music-video/${encodeURIComponent(id)}/media-pool/marks`, {
-  method: 'PATCH', body: JSON.stringify({ items, mark }), ...options,
-});
+export const markMusicVideoPoolAssets = (id, items, mark, options = {}) => {
+  const { keepInUse, expectedMark, ...rest } = options;
+  return request(`/music-video/${encodeURIComponent(id)}/media-pool/marks`, {
+    method: 'PATCH',
+    body: JSON.stringify({ items, mark, ...(keepInUse !== undefined ? { keepInUse } : {}), ...(expectedMark !== undefined ? { expectedMark } : {}) }),
+    ...rest,
+  });
+};
 // Asset manager: delete unused pool items from the media library → { deleted }.
 export const deleteMusicVideoPoolAssets = (id, items, options = {}) => request(`/music-video/${encodeURIComponent(id)}/media-pool/delete`, {
   method: 'POST', body: JSON.stringify({ items }), ...options,
@@ -605,8 +630,13 @@ export const compileMusicVideoTreatment = (id, body, options = {}) => request(`/
 });
 // Read-only → { revision, stale, blocked, scenes, missingSceneIds, unmappedSceneIds, textCueCandidates }.
 export const previewMusicVideoTreatmentApply = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/treatment/apply-preview`, options);
-// Body: { revision, overwrite?: [{ sceneId, promptFingerprint }], addTextCues? } → { project, result }.
+// Body: { baseRevision, overwrite?: [{ sceneId, promptFingerprint }], addTextCues? } → { project, result }.
+// The server still accepts the legacy `revision` field.
 export const applyMusicVideoTreatment = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/treatment/apply`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+// Body: { baseRevision } → { project, treatment }. Copies the shot sheet onto compiled directions. No AI call.
+export const syncMusicVideoTreatmentFromShotSheet = (id, body, options = {}) => request(`/music-video/${encodeURIComponent(id)}/treatment/sync-shot-sheet`, {
   method: 'POST', body: JSON.stringify(body), ...options,
 });
 // Body: { baseRevision, status, evidence?: { videoHistoryId?, imageId?, note } } → { project, treatment }.
@@ -724,6 +754,8 @@ export const importMusicVideoCompositionDirectory = (id, directory, options = {}
   request(`${compositionDocumentPath(id)}/directory`, { method: 'POST', body: JSON.stringify({ directory }), ...options });
 export const startMusicVideoCompositionTemplate = (id, template = 'layered', options = {}) =>
   request(`${compositionDocumentPath(id)}/template`, { method: 'POST', body: JSON.stringify({ template }), ...options });
+/** `{ native, reason? }`: whether the document is the unmodified shipped template, whose scenes may play in the page. */
+export const getMusicVideoCompositionPlayback = (id, options = {}) => request(`${compositionDocumentPath(id)}/playback`, options);
 export const upgradeMusicVideoCompositionEngine = (id, directory, options = {}) =>
   request(`${compositionDocumentPath(id)}/engine/upgrade`, { method: 'POST', body: JSON.stringify({ directory }), ...options });
 export const getMusicVideoCompositionExport = (id, options = {}) =>

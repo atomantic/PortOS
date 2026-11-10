@@ -116,7 +116,13 @@ export async function capturePreviewFrame(root, { iframeImages = new Map() } = {
 export function lyricFrameCaptureBridge() {
   addEventListener('message', (event) => {
     const request = event.data;
-    if (event.source !== parent || request?.type !== 'portos-mv:capture-lyrics'
+    if (event.source !== parent) return;
+    if (request?.type === 'portos-mv:lyrics-visible' && typeof request.visible === 'boolean') {
+      const stage = document.getElementById('stage');
+      if (stage) stage.style.visibility = request.visible ? 'visible' : 'hidden';
+      return;
+    }
+    if (request?.type !== 'portos-mv:capture-lyrics'
       || typeof request.id !== 'string' || request.id.length > 100 || !Number.isFinite(request.t)) return;
     try {
       const output = document.createElement('canvas');

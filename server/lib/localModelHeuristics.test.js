@@ -26,11 +26,13 @@ describe('localModelHeuristics', () => {
         'lfm2.5:8b',
         'lfm2.5-thinking:1.2b',
         'lfm3:1.7b',
+        'lfm3-audio',
         'ornith:35b',
         'muse-glimmer:30b',
         'north-mini-code-1.0',
         'olmo-3.1:32b-instruct',
         'nemotron-3-nano:4b',
+        'nemotron-3-super',
         'deepseek-r1:8b',
         'qwen2.5-coder:7b',
       ]) {
@@ -219,6 +221,7 @@ describe('localModelHeuristics', () => {
     it('accepts codex / claude CLI providers', () => {
       expect(isVisionCapableCliProvider({ type: 'cli', command: 'codex' })).toBe(true);
       expect(isVisionCapableCliProvider({ type: 'cli', command: 'claude' })).toBe(true);
+      expect(isVisionCapableCliProvider({ type: 'cli', command: '/Users/me/.grok/bin/grok' })).toBe(true);
       // A path-configured binary must pass, or an image review it ran is rejected as image-blind.
       expect(isVisionCapableCliProvider({ type: 'cli', command: '/usr/local/bin/codex' })).toBe(true);
       expect(isVisionCapableCliProvider({ type: 'cli', command: 'C:\\tools\\Codex.exe' })).toBe(true);

@@ -2,6 +2,7 @@
 import { catalogSlugForProviderModel } from './comparisonModelScope.js';
 
 export const COMPARISON_ANCHOR = 'Artificial Analysis Intelligence Index v4.3.2';
+export const CURRENT_COMPARISON_ANCHOR = 'Artificial Analysis Intelligence Index v5.0.1';
 export const COMPARISON_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
 const effortKey = effort => effort === 'non-reasoning' ? 'none' : effort;
 const slug = model => catalogSlugForProviderModel(model.replace(/:(free|batch)$/, '')) || model.replace(/^opencode\//, '');
@@ -42,7 +43,7 @@ const pushTo = (map, key, value) => {
 };
 
 /** Least-squares mapping of one benchmark onto the anchor scale; null when the shared evidence cannot support it. */
-function calibrateBenchmark(benchmark, entries, anchors) {
+function calibrateBenchmark(benchmark, entries, anchors, anchor) {
   const pairs = [...entries].filter(([key, row]) => anchors.has(key) && isMeasured(row) && isMeasured(anchors.get(key)));
   if (pairs.length < 3) return null;
   const xs = pairs.map(([, row]) => row.quality.value);
@@ -54,12 +55,21 @@ function calibrateBenchmark(benchmark, entries, anchors) {
   if (!Number.isFinite(slope) || slope <= 0) return null;
   const residual = Math.sqrt(mean(xs.map((x, index) => (my + slope * (x - mx) - ys[index]) ** 2)));
   if (residual > 10) return null;
-  const pairEvidence = pairs.flatMap(([pairKey, pair]) => [evidenceMetric(pair, 'quality', benchmark), evidenceMetric(anchors.get(pairKey), 'quality', COMPARISON_ANCHOR)]);
-  const method = `Calibrated ${benchmark} onto ${COMPARISON_ANCHOR}; ${pairs.length} shared configurations; RMS error ${residual.toFixed(1)} points.`;
+  const pairEvidence = pairs.flatMap(([pairKey, pair]) => [evidenceMetric(pair, 'quality', benchmark), evidenceMetric(anchors.get(pairKey), 'quality', anchor)]);
+  const method = `Calibrated ${benchmark} onto ${anchor}; ${pairs.length} shared configurations; RMS error ${residual.toFixed(1)} points.`;
   const min = Math.min(...xs), max = Math.max(...xs);
-  // Do not extrapolate a calibration beyond the shared score range.
-  return [...entries].filter(([, row]) => row.quality.value >= min && row.quality.value <= max).map(([key, row]) => [key,
-    derived(Math.max(0, Math.min(100, my + slope * (row.quality.value - mx))), [evidenceMetric(row, 'quality', benchmark), ...pairEvidence], method)]);
+  // When mapping v5 onto v4.3.2, 10% excludes Fable 5.2 max (~14% past the
+  // shared v5 max) and flattens it onto xhigh. 15% includes it while still
+  // refusing a point far outside the fit (#15573).
+  const margin = (max - min) * 0.15;
+  const lo = min - margin, hi = max + margin;
+  return [...entries].filter(([, row]) => row.quality.value >= lo && row.quality.value <= hi).map(([key, row]) => {
+    const outside = row.quality.value < min || row.quality.value > max;
+    const pointMethod = outside
+      ? `${method} Extrapolated beyond the shared score range, within 15% of the shared span.`
+      : method;
+    return [key, derived(Math.max(0, Math.min(100, my + slope * (row.quality.value - mx))), [evidenceMetric(row, 'quality', benchmark), ...pairEvidence], pointMethod)];
+  });
 }
 
 /** Fills an effort with no direct score from the sourced efforts of this exact model, never from another model. */
@@ -108,7 +118,7 @@ function internSources(rows) {
 }
 
 /** Never average raw scores from unlike evaluations. Calibrate only with >=3 shared configurations. */
-export function buildModelComparisonComposite(observations, inventory) {
+export function buildModelComparisonComposite(observations, inventory, anchor = COMPARISON_ANCHOR) {
   const slugCache = new Map();
   const modelSlug = model => {
     if (!slugCache.has(model)) slugCache.set(model, slug(model));
@@ -119,11 +129,11 @@ export function buildModelComparisonComposite(observations, inventory) {
   const researchByIdentity = new Map();
   for (const row of observations) {
     pushTo(byModel, modelSlug(row.model), row);
-    if (row.quality && row.benchmark === 'PortOS Research Index v1 (AA v4.3.2 scale)') keepNewestQuality(researchByIdentity, identity(row), row);
+    if (anchor === COMPARISON_ANCHOR && row.quality && row.benchmark === 'PortOS Research Index v1 (AA v4.3.2 scale)') keepNewestQuality(researchByIdentity, identity(row), row);
   }
   const scored = observations.filter(row => row.quality && !row.id.startsWith('portos:'));
   const anchors = new Map();
-  for (const row of scored.filter(row => row.benchmark === COMPARISON_ANCHOR)) keepNewestQuality(anchors, identity(row), row);
+  for (const row of scored.filter(row => row.benchmark === anchor)) keepNewestQuality(anchors, identity(row), row);
   const families = new Map();
   for (const row of scored) {
     if (!families.has(row.benchmark)) families.set(row.benchmark, new Map());
@@ -131,12 +141,12 @@ export function buildModelComparisonComposite(observations, inventory) {
   }
   const calibrated = new Map();
   for (const [benchmark, entries] of families) {
-    if (benchmark === COMPARISON_ANCHOR) continue;
-    for (const [key, metric] of calibrateBenchmark(benchmark, entries, anchors) || []) pushTo(calibrated, key, metric);
+    if (benchmark === anchor) continue;
+    for (const [key, metric] of calibrateBenchmark(benchmark, entries, anchors, anchor) || []) pushTo(calibrated, key, metric);
   }
   const qualityFor = (model, effort) => {
     const key = identity({ model, effort });
-    if (anchors.has(key)) return evidenceMetric(anchors.get(key), 'quality', COMPARISON_ANCHOR);
+    if (anchors.has(key)) return evidenceMetric(anchors.get(key), 'quality', anchor);
     const research = researchByIdentity.get(key);
     if (research) return evidenceMetric(research, 'quality', research.quality.source.methodology, true);
     const metrics = calibrated.get(key) || [];
@@ -158,7 +168,7 @@ export function buildModelComparisonComposite(observations, inventory) {
     const baseline = (field, candidates) => {
       const values = candidates.filter(row => row[field] && (field === 'quality' || row[field].value > 0));
       if (!values.length) return null;
-      const metrics = values.map(row => evidenceMetric(row, field, COMPARISON_ANCHOR));
+      const metrics = values.map(row => evidenceMetric(row, field, anchor));
       return derived(median(metrics.map(metric => metric.value)), metrics,
         `Low-confidence family baseline, not a measurement of ${entry.model}: median of ${values.length} ${family} reference configurations (${[...new Set(values.map(row => row.model))].slice(0, 3).join(', ') + (values.length > 3 ? ', …; full evidence below' : '')}). No generational improvement or endpoint price is known; research required. Reference range ${Math.min(...metrics.map(metric => metric.value)).toFixed(2)}–${Math.max(...metrics.map(metric => metric.value)).toFixed(2)}.`);
     };
@@ -192,14 +202,14 @@ export function buildModelComparisonComposite(observations, inventory) {
       if (incomparableReason) quality = null;
       const input = price('inputPerMillion'), output = price('outputPerMillion');
       const blended = input && output ? { ...derived((3 * input.value + output.value) / 4, [input, output], provider.localInference ? input.method : '3:1 uncached input/output token mix; USD per 1M total tokens. API reference, not subscription or local operating cost.'), estimated: input.estimated || output.estimated } : null;
-      const taskRow = latest(modelRows.filter(row => effortKey(row.effort) === effort && row.benchmark === COMPARISON_ANCHOR), 'costPerTask');
+      const taskRow = latest(modelRows.filter(row => effortKey(row.effort) === effort && row.benchmark === anchor), 'costPerTask');
       rows.push({ id: `${provider.id}:${entry.model}:${effort}`, providerId: provider.id, provider: provider.name,
         model: entry.model, comparisonModel: modelSlug(entry.model), modelKey: `${provider.id}:${entry.model}`, effort, quality, incomparableReason,
         inputPerMillion: input, outputPerMillion: output, blendedPerMillion: blended,
-        costPerTask: incomparableReason ? null : provider.localInference ? localCost() : evidenceMetric(taskRow, 'costPerTask', `${COMPARISON_ANCHOR} task cost; API reference`, false),
+        costPerTask: incomparableReason ? null : provider.localInference ? localCost() : evidenceMetric(taskRow, 'costPerTask', `${anchor} task cost; API reference`, false),
         needsResearch: !quality || quality.estimated || !input || !output || input.estimated || output.estimated,
       });
     }
   }
-  return { version: 1, anchor: COMPARISON_ANCHOR, sources: internSources(rows), rows };
+  return { version: 1, anchor, sources: internSources(rows), rows };
 }

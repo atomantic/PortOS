@@ -74,6 +74,48 @@ function findDirectLocalModelPinReads(root = SERVER_ROOT) {
 const CODEX_ON = { codex: { enabled: true, codexPath: '/bin/codex' } };
 const run = (data) => prepareGenerateParams({ data, files: undefined, referenceImageFields: [] });
 
+// Exercises the card's request builder and the backend preparation shared by preview and render.
+it('refines an unselected take with references on or off without replacing the selection', async () => {
+  const { buildSceneFrameGenerateBody } = await import('../musicVideo/sceneFrameReferences.js');
+  const { musicVideoSceneFrameRenderSchema } = await import('../../lib/musicVideoValidation.js');
+  const { PATHS } = await import('../../lib/paths.js');
+  mkdirSync(PATHS.images, { recursive: true });
+  for (const file of ['candidate.png', 'cast.png', 'panel.png', 'style.png']) writeFileSync(join(PATHS.images, file), 'fixture');
+  getSettings.mockResolvedValue({ imageGen: { mode: 'codex', ...CODEX_ON } });
+  const scene = { sceneId: 's1', referenceImageId: 'selected.png', endImageId: 'end.png', frameReferenceIds: ['cast'],
+    panelArt: 'panel.png', takes: [{ kind: 'image', assetId: 'candidate.png' }] };
+  const project = { id: 'mv-example', scenes: [scene],
+    visualSpec: { references: [{ id: 'cast', imageId: 'cast.png', label: 'Example cast', role: 'character' }] },
+    styleReferences: [{ imageId: 'style.png', caption: 'Soft lighting' }] };
+  getProject.mockResolvedValue(project);
+  const input = { referenceImageId: 'candidate.png', refine: 'Raise the hand' };
+  const body = await buildSceneFrameGenerateBody(project, scene, input);
+  const withReferences = await run(body);
+  expect(withReferences.data.referenceImagePaths.map((p) => p.split(/[\\/]/).at(-1))).toEqual(['candidate.png', 'cast.png', 'style.png']);
+  expect(withReferences.data.prompt).toContain('The other reference images');
+  expect(body.musicVideo.replaceSelection).toBeUndefined();
+
+  // Even stale shot picks and a missing greybox cannot block an image-only edit.
+  scene.frameReferenceIds = ['missing-reference'];
+  scene.setReference = { subjectId: 'missing-set', greyboxShotId: 'missing-camera' };
+  for (const slot of ['start', 'end']) {
+    const request = musicVideoSceneFrameRenderSchema.parse({ ...input, slot, includeReferences: false });
+    const imageOnlyBody = await buildSceneFrameGenerateBody(project, scene, request);
+    expect(imageOnlyBody).toMatchObject({ referenceImageFiles: ['candidate.png'], musicVideo: { includeReferences: false } });
+    expect(imageOnlyBody.musicVideo.replaceSelection).toBeUndefined();
+    const imageOnly = await run(structuredClone(imageOnlyBody));
+    expect(imageOnly.data.referenceImagePaths.map((p) => p.split(/[\\/]/).at(-1))).toEqual(['candidate.png']);
+    expect(imageOnly.data.musicVideo.castInputs).toMatchObject({ guides: [], sheets: [] });
+    expect(imageOnly.data.prompt).not.toMatch(/other reference images|Soft lighting|greybox/i);
+    // Preview has no explicit file list; the lead must still be the candidate.
+    const preview = await prepareGenerateParams({ data: { ...imageOnlyBody, referenceImageFiles: undefined }, referenceImageFields: [], preview: true });
+    expect(preview.data.referenceImagePaths.map((p) => p.split(/[\\/]/).at(-1))).toEqual(['candidate.png']);
+    expect(preview.data.prompt).toBe(imageOnly.data.prompt);
+  }
+  expect(scene.referenceImageId).toBe('selected.png');
+  expect(scene.endImageId).toBe('end.png');
+});
+
 describe('selectLocalImageModel', () => {
   it('keeps an explicit model pin', () => {
     const models = [

@@ -1,12 +1,48 @@
-import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useState } from 'react';
 import SceneFrames from './SceneFrames.jsx';
 
 vi.mock('../../services/apiImageVideo.js', () => ({ previewImagePrompt: vi.fn(async (body) => ({ sentPrompt: `${body.prompt}\nSinger stands at the "rail" mark, waving`, promptAdditions: [{ id: 'greybox-figure-0', label: 'Greybox figure 1', text: 'Singer stands at the "rail" mark, waving' }] })) }));
 
 const scene = { sceneId: 's1', referenceImageId: 'start.png', endImageId: 'end.png', framePrompt: 'Door opens', endFramePrompt: 'Door shut', takes: [] };
+// A remembered frame service would add a Model control beside From.
+beforeEach(() => localStorage.clear());
 const frames = (props) => render(<SceneFrames scene={scene} index={0} endFrames onEditLocal={vi.fn()} onSave={vi.fn()} {...props} />);
+
+// Catches refining the selection instead of the clicked candidate, or selecting it as a side effect.
+it.each(['image', 'endImage'])('refines an unselected %s take with optional shot references', async (kind) => {
+  const onGenerate = vi.fn();
+  const onSelectTake = vi.fn();
+  const shot = { ...scene, takes: [{ takeId: 'candidate', kind, assetId: 'candidate.png', status: 'candidate' }] };
+  const props = { project: { id: 'mv-example' }, scene: shot, onSelectTake,
+    ...(kind === 'image' ? { onGenerateFrame: onGenerate } : { onGenerateEndFrame: onGenerate }) };
+  const { rerender } = frames(props);
+  const candidate = () => within(screen.getAllByRole('listitem').find((item) => item.querySelector('img')?.getAttribute('src') === '/data/images/candidate.png'));
+  fireEvent.click(candidate().getByRole('button', { name: 'Refine take' }));
+  expect(screen.getByRole('button', { name: 'View refinement source full size' }).querySelector('img').getAttribute('src')).toBe('/data/images/candidate.png');
+  const input = screen.getByRole('textbox', { name: /What to change/ });
+  fireEvent.change(input, { target: { value: '  Raise the hand\nKeep the lighting  ' } });
+  const include = screen.getByRole('checkbox', { name: 'Include shot reference images' });
+  expect(include.checked).toBe(true);
+  fireEvent.click(include);
+  const { previewImagePrompt } = await import('../../services/apiImageVideo.js');
+  await waitFor(() => expect(previewImagePrompt).toHaveBeenCalledWith(expect.objectContaining({
+    musicVideo: expect.objectContaining({ leadImageId: 'candidate.png', refine: true, includeReferences: false }),
+  }), expect.anything()));
+  fireEvent.click(screen.getByRole('button', { name: /Render refined/ }));
+  expect(onGenerate).toHaveBeenLastCalledWith(shot, { referenceImageId: 'candidate.png', refine: '  Raise the hand\nKeep the lighting  ', includeReferences: false });
+  expect(onSelectTake).not.toHaveBeenCalled();
+  expect(candidate().queryByText('In use')).toBeNull();
+
+  fireEvent.click(candidate().getByRole('button', { name: 'Refine take' }));
+  fireEvent.change(screen.getByRole('textbox', { name: /What to change/ }), { target: { value: 'Change the hat' } });
+  fireEvent.click(screen.getByRole('button', { name: /Render refined/ }));
+  expect(onGenerate).toHaveBeenLastCalledWith(shot, { referenceImageId: 'candidate.png', refine: 'Change the hat' });
+
+  rerender(<SceneFrames {...props} index={0} endFrames onEditLocal={vi.fn()} onSave={vi.fn()} generatingFrame generatingEndFrame />);
+  expect(candidate().getByRole('button', { name: 'Refine take' }).disabled).toBe(true);
+});
 
 it('edits and saves each frame prompt on blur', () => {
   const onSave = vi.fn();
@@ -127,6 +163,25 @@ describe('older Casting look (#14154)', () => {
     rerender(<SceneFrames {...props} scene={{ ...older, endImageId: null, takes: [{ takeId: 'legacy', kind: 'image', assetId: 'start.png' }] }} index={0} />);
     expect(screen.queryByText(/Older look:/)).toBeNull();
   });
+});
+
+// Uniquely catches an end-frame take with no Check, or Check handing the start frame to the reviewer.
+it('offers Check on an end-frame take and calls it with the end-frame role', () => {
+  const onCheckTake = vi.fn();
+  const shot = {
+    ...scene,
+    takes: [
+      { takeId: 'start-take', kind: 'image', assetId: 'start.png', status: 'candidate' },
+      { takeId: 'end-take', kind: 'endImage', assetId: 'end.png', status: 'candidate' },
+    ],
+  };
+  render(<SceneFrames scene={shot} index={0} endFrames onEditLocal={vi.fn()} onSave={vi.fn()} onCheckTake={onCheckTake} />);
+  const checks = screen.getAllByRole('button', { name: 'Check' });
+  expect(checks).toHaveLength(2);
+  fireEvent.click(checks[1]);
+  expect(onCheckTake).toHaveBeenCalledWith(shot, expect.objectContaining({ takeId: 'end-take', kind: 'endImage' }));
+  fireEvent.click(checks[0]);
+  expect(onCheckTake).toHaveBeenLastCalledWith(shot, expect.objectContaining({ takeId: 'start-take', kind: 'image' }));
 });
 
 describe('Swap start and end', () => {

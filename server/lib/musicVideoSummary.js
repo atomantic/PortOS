@@ -82,7 +82,7 @@ function currentStage(project, readiness, run) {
   const mode = project.composition?.mode || 'concat';
   const layered = isLayeredComposition(project);
   const planned = Boolean(readiness?.storyboard?.approved);
-  const footageReady = FOOTAGE_OPTIONAL_MODES.has(mode) || scenes.every((scene) => sceneRenderReady(scene, { layered }));
+  const footageReady = FOOTAGE_OPTIONAL_MODES.has(mode) || scenes.every((scene) => sceneRenderReady(scene, { layered, scenes }));
   const done = {
     setup: Boolean(project.trackId || project.uploadedAudioFilename) && Boolean(project.audioAnalysis) && lyricsReady(project, readiness),
     'cast-sets': Boolean(readiness?.art?.approved),
@@ -156,6 +156,11 @@ export function summarizeMusicVideoProject(project, readiness) {
   const preview = projectPreview(project);
   const video = project.videoSettings || {};
   const concept = project.concept || {};
+  const selectedTakeMarkedBad = scenes.some((s) => s.selectedTakeMarkedBad || (project.assetMarks && (
+    (s.referenceImageId && project.assetMarks[`image:${s.referenceImageId}`] === 'bad') ||
+    (s.endImageId && project.assetMarks[`image:${s.endImageId}`] === 'bad') ||
+    (s.videoHistoryId && project.assetMarks[`video:${s.videoHistoryId}`] === 'bad')
+  )));
   return {
     id: project.id,
     name: project.name,
@@ -178,6 +183,7 @@ export function summarizeMusicVideoProject(project, readiness) {
     sceneCount: scenes.length,
     clipCount: scenes.filter((s) => s.videoHistoryId).length,
     frameCount: scenes.filter((s) => s.referenceImageId).length,
+    selectedTakeMarkedBad,
     createdAt: project.createdAt,
     updatedAt: project.updatedAt,
     trackId: project.trackId || null,

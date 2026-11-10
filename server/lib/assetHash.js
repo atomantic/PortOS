@@ -4,6 +4,7 @@ import { createHash } from 'crypto';
 import { atomicWrite, readJSONFile, sha256File, PATHS } from './fileUtils.js';
 import { isPlainObject, canonicalStringify, POLLUTING_KEYS } from './objects.js';
 import { compareNewerWins } from './lwwTimestamp.js';
+import { HOSTED_DELETED_AT_FIELDS } from './renderTiming.js';
 
 // Each image at `data/images/{uuid}.png` has a sibling `.metadata.json`
 // sidecar carrying its generation provenance (model, prompt, dimensions, etc).
@@ -154,11 +155,12 @@ function genParamsHash(sidecar, extra) {
 
 /**
  * Per-machine image sidecar fields: this machine's hide state, a delete it has
- * queued for the image's owner, and the peer that handed it the image. They are
+ * queued for the image's owner, the peer that handed it the image, and whether it
+ * deleted the provider-hosted copy. They are
  * never served to a peer, never taken from a peer's copy, and not part of
  * `sidecarGenParamsHash`. `originInstanceId` is not among them: it syncs.
  */
-export const IMAGE_SIDECAR_LOCAL_FIELDS = Object.freeze(['hidden', 'pendingDelete', 'suppliedByInstanceId']);
+export const IMAGE_SIDECAR_LOCAL_FIELDS = Object.freeze(['hidden', 'pendingDelete', 'suppliedByInstanceId', ...HOSTED_DELETED_AT_FIELDS]);
 
 /** A copy of `sidecar` without the machine-local fields (non-objects pass through). */
 export function stripImageSidecarLocalFields(sidecar) {

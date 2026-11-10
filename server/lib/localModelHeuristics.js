@@ -116,7 +116,8 @@ const VISION_RE = new RegExp([
 // CLI providers expose no enumerable model list with capability tags, so this
 // command-based allow-list is how the captioner knows a CLI provider can read
 // images. Keyed on `command` so a renamed/duplicated provider still qualifies.
-const VISION_CLI_COMMANDS = new Set(['codex', 'claude']);
+// grok has no attach flag; it opens a staged image with its read_file tool (#15576).
+const VISION_CLI_COMMANDS = new Set(['codex', 'claude', 'grok']);
 
 /**
  * Whether a CLI-type provider can caption images (its model reads vision and

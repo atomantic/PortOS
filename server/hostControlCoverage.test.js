@@ -53,6 +53,7 @@ const MANAGED_INSTALL = 'Installs a fixed, allowlisted package set into a PortOS
 const PIPELINE_DETERMINISTIC = 'Deterministic Pipeline route that never reaches the staged runner (#10068).';
 const TOOL_FREE_INFERENCE = 'Sends caller or stored text only through a tool-free transport (an HTTP chat completion or the sandboxed Codex text turn), with no CLI/TUI runner or agent fallback (#9008).';
 const IN_PROCESS_MEDIA = 'Transforms a stored gallery image in-process (sharp or pure JS) into a new variant; spawns no process and calls no provider.';
+const REMOVES_HOSTED_COPY = 'Runs a provider\'s delete (Runway asset, fal.ai stored files) for a finished render with the already-configured provider key (one fixed DELETE request, nothing chosen by the caller); runs nothing on the host.';
 const READ_OVER_POST = 'Reads or previews stored records over POST; writes nothing and runs nothing.';
 const DERIVED_REPORT = 'Recomputes a report from stored records without a provider; runs nothing on the host.';
 // From the route-by-route audit of the routes that were open when this guard landed (#13055).
@@ -579,6 +580,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/image-clean/result/:jobId/save', RECORDS],
   // /api/image-gen
   ['DELETE /api/image-gen/:filename', REMOVES_RECORD],
+  ['DELETE /api/image-gen/:filename/hosted/:provider', REMOVES_HOSTED_COPY],
   ['POST /api/image-gen/:filename/cancel-delete', REDUCES_EXECUTION],
   ['POST /api/image-gen/:filename/clean', IN_PROCESS_MEDIA],
   ['PATCH /api/image-gen/:filename/prompt', RECORDS],
@@ -875,6 +877,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['PATCH /api/music-video/:id/analyze/sections', RECORDS],
   ['POST /api/music-video/:id/analyze/sections/lyrics', RECORDS],
   ['POST /api/music-video/:id/clone', RECORDS],
+  ['PUT /api/music-video/:id/color-match/reference', RECORDS],
   ['DELETE /api/music-video/:id/composition/document', REMOVES_RECORD],
   ['POST /api/music-video/:id/composition/document/accept', HANDLER_GATED],
   ['DELETE /api/music-video/:id/composition/document/candidate', REMOVES_RECORD],
@@ -947,6 +950,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/music-video/:id/scenes/:sceneId/swap-frames', RECORDS],
   ['POST /api/music-video/:id/scenes/:sceneId/takes', RECORDS],
   ['PATCH /api/music-video/:id/scenes/:sceneId/takes/:takeId', RECORDS],
+  ['PATCH /api/music-video/:id/scenes/:sceneId/takes/:takeId/color-match', RECORDS],
   ['POST /api/music-video/:id/scenes/:sceneId/takes/:takeId/select', RECORDS],
   ['POST /api/music-video/:id/scenes/:sceneId/takes/reject-unused', RECORDS],
   ['POST /api/music-video/:id/scenes/:sceneId/takes/use', RECORDS],
@@ -967,6 +971,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['PATCH /api/music-video/:id/treatment', RECORDS],
   ['POST /api/music-video/:id/treatment/apply', RECORDS],
   ['POST /api/music-video/:id/treatment/proofs/:proofId/review', RECORDS],
+  ['POST /api/music-video/:id/treatment/sync-shot-sheet', RECORDS],
   ['DELETE /api/music-video/:id/vocal-stem', REMOVES_RECORD],
   ['POST /api/music-video/excerpt/:jobId/cancel', REDUCES_EXECUTION],
   ['POST /api/music-video/lyrics/align/:jobId/cancel', REDUCES_EXECUTION],
@@ -1336,6 +1341,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/video-gen/cancel', REDUCES_EXECUTION],
   ['DELETE /api/video-gen/overnight/:batchId', REDUCES_EXECUTION],
   ['DELETE /api/video-gen/history/:id', REMOVES_RECORD],
+  ['DELETE /api/video-gen/history/:id/hosted/:provider', REMOVES_HOSTED_COPY],
   ['POST /api/video-gen/history/:id/cancel-delete', REDUCES_EXECUTION],
   ['PATCH /api/video-gen/history/:id/prompt', RECORDS],
   ['POST /api/video-gen/history/:id/visibility', RECORDS],
@@ -1621,6 +1627,7 @@ const REVIEWED_PROCESS_GETS = [
   ['GET /api/github/notifications/:accountId/:threadId/deployment', FORGE_READ],
   ['GET /api/harnesses', PROVIDER_STATUS],
   ['GET /api/html-composition/beats', 'Measures the beat grid of an existing Music-library track (the caller picks the track, never a path); the ffmpeg decode runs once per file modification time and every later read serves the cached grid (#13156).'],
+  ['GET /api/image-gen/active', JOB_TABLE],
   ['GET /api/image-gen/status', RUNTIME_STATUS],
   ['GET /api/image-to-3d/targets', 'Reports image-to-3D target install state with each adapter\'s fixed probes (Metal toolchain, module imports); the adapter table\'s install and generate functions run only from the gated install and generate routes.'],
   ['GET /api/image-to-3d/targets/:targetId/install', 'Reports image-to-3D target install state with each adapter\'s fixed probes (Metal toolchain, module imports); the adapter table\'s install and generate functions run only from the gated install and generate routes.'],

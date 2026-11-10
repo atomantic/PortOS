@@ -1,4 +1,5 @@
 import { musicVideoAllowsMedia } from './musicVideoMediaPolicy.js';
+import { applyShotSheetMedium, isAutomaticLayerPin, VISUAL_LAYER_PIN_RATIONALE } from './musicVideoShotSheet.js';
 import { performanceCapability } from './musicVideoShotTiming.js';
 /**
  * Planning-only medium policy. Final-edit seconds are an interval union, not
@@ -179,7 +180,17 @@ export function planMusicVideoMedia(project, directions) {
   const planned = directions.map((d) => {
     const scene = scenes.get(d.sceneId);
     const prior = previous.has(d.sceneId) ? previous.get(d.sceneId) : scene?.direction;
-    if (prior?.mediumPinned && MUSIC_VIDEO_MEDIA.includes(prior.medium)) {
+    const priorPinned = prior?.mediumPinned === true && MUSIC_VIDEO_MEDIA.includes(prior.medium);
+    // A pin the director chose wins over the shot sheet. The automatic layer pin does not.
+    if (priorPinned && !isAutomaticLayerPin(scene, prior)) {
+      return { ...d, medium: prior.medium, mediumRationale: prior.mediumRationale, mediumPinned: true };
+    }
+    const sheeted = applyShotSheetMedium(project, scene, priorPinned
+      ? { ...d, medium: prior.medium, mediumRationale: prior.mediumRationale, mediumPinned: true }
+      : d);
+    // fromSheet stays on the in-memory plan so the allowance loop below cannot demote it.
+    if (sheeted.fromSheet) return sheeted;
+    if (priorPinned) {
       return { ...d, medium: prior.medium, mediumRationale: prior.mediumRationale, mediumPinned: true };
     }
     let medium = d.medium;
@@ -187,7 +198,7 @@ export function planMusicVideoMedia(project, directions) {
     const manualLayer = ['still', 'card', 'code'].includes(scene?.visualLayer);
     if (manualLayer) {
       medium = scene.visualLayer === 'still' ? 'still' : 'procedural';
-      rationale = 'Retain the director-selected visual layer.';
+      rationale = VISUAL_LAYER_PIN_RATIONALE;
     } else if (scene?.videoHistoryId) {
       medium = 'existing-footage';
       rationale = 'Reuse the selected footage without a new video request.';
@@ -208,15 +219,17 @@ export function planMusicVideoMedia(project, directions) {
     return { ...d, medium, mediumRationale: rationale || d.rationale || 'Director-selected medium.', mediumPinned: manualLayer };
   });
   // Reserve pinned exceptions first. Automatic suggestions never displace a pin.
-  const accepted = planned.map((d) => codeFirst && d.medium === 'generated-footage' && !d.mediumPinned
+  // A sheet camera's generated footage is not a suggestion: over-allowance blocks Apply.
+  const sheetSourced = (d) => d.fromSheet === true;
+  const accepted = planned.map((d) => codeFirst && d.medium === 'generated-footage' && !d.mediumPinned && !sheetSourced(d)
     ? { ...d, medium: 'procedural' } : d);
   for (let i = 0; codeFirst && i < planned.length; i++) {
-    if (planned[i].medium !== 'generated-footage' || planned[i].mediumPinned) continue;
+    if (planned[i].medium !== 'generated-footage' || planned[i].mediumPinned || sheetSourced(planned[i])) continue;
     const candidate = [...accepted];
     candidate[i] = planned[i];
     const summary = summarizeMusicVideoMediumPlan(project, candidate);
     if (!summary.blocked && policy.maxGeneratedVideoPercent > 0) accepted[i] = planned[i];
     else accepted[i] = { ...accepted[i], mediumRationale: 'Use procedural visuals to stay within the generated-video allowance; any visible performance remains unresolved.' };
   }
-  return codeFirst ? accepted : planned;
+  return (codeFirst ? accepted : planned).map(({ fromSheet, ...rest }) => rest);
 }

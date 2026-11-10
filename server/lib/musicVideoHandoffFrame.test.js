@@ -45,6 +45,7 @@ describe('shotHandoffSource', () => {
     expect(shotHandoffSource(composed, { ...still, imageEffect: 'end-glitch' })).toEqual({ imageId: 'end.png' });
     expect(shotHandoffSource(composed, { ...still, imageEffect: 'flash-develop' })).toEqual({ imageId: 'still.png' });
     expect(shotHandoffSource(composed, { ...still, imageEffect: 'end-glitch', endImageId: null })).toEqual({ imageId: 'still.png' });
+    expect(shotHandoffSource(composed, { ...still, imageEffect: 'end-glitch', endFrameOff: true })).toEqual({ imageId: 'still.png' });
     expect(shotHandoffSource(composed, { sceneId: 's2', videoHistoryId: 'clip' })).toEqual({ clip: true });
     expect(shotHandoffSource(composed, { sceneId: 's3', visualLayer: 'card' })).toBeNull();
     // A plain concat render plays footage only, so a still-tagged shot there plays its clip.

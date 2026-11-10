@@ -80,6 +80,11 @@ describe('prepareAnimationHtml', () => {
   });
 });
 
+// Frames decode off screen before the visible element takes them. happy-dom
+// loads no blob images, so these tests show each frame directly.
+beforeEach(() => { vi.stubGlobal('Image', undefined); });
+afterEach(() => vi.unstubAllGlobals());
+
 describe('CodeAnimationPreview', () => {
   beforeEach(() => {
     globalThis.URL.createObjectURL = vi.fn(() => 'blob:recorded');

@@ -329,6 +329,21 @@ describe('composition document staging', () => {
     expect(browser.seen.data.scenes[0].media).toMatchObject({ inSec: 0, outSec: 4 });
   });
 
+  it('plays a source-take return as a different window of the source clip', async () => {
+    const { project } = await fixture();
+    project.scenes.push({ sceneId: 'e', order: 4, startSec: 2, endSec: 3, sourceTake: { sceneId: 'a', offsetSec: 1.5 } });
+    const history = JSON.parse(await readFile(join(PATHS.data, 'video-history.json'), 'utf8'));
+    const raw = await resolveSceneMedia(project, { history });
+    expect(raw.get('e')).toMatchObject({ path: raw.get('a').path, inSec: 1.5, outSec: 2.5 });
+    project.scenes[0].videoHistoryId = 'vh-b';
+    history.push({ id: 'vh-b', filename: 'clip-b.mp4', numFrames: 96, fps: 24, width: 1280, height: 720 });
+    await writeFile(join(PATHS.videos, 'clip-b.mp4'), 'video-b');
+    const moved = await resolveSceneMedia(project, { history });
+    expect(moved.get('e').path).toBe(moved.get('a').path);
+    expect(moved.get('e').path).not.toBe(raw.get('a').path);
+    expect(moved.get('e')).toMatchObject({ inSec: 1.5, outSec: 2.5 });
+  });
+
   it('keeps a performance in-point in the live preview timing and leaves untimed takes alone', async () => {
     const { project } = await fixture();
     Object.assign(project.scenes[3], { speedFps: -12, offsetFrames: 12 });
@@ -409,6 +424,32 @@ describe('composition document staging', () => {
     expect(frames.find(item => item.frame === 120)).toBeDefined();
     expect(preview.html).toContain(`window.PORTOS_MV = ${JSON.stringify(browser.seen.data).replace(/</g, '\\u003c')}`);
     expect(browser.seen.initScripts.some(script => script.includes('__portosMusicVideoGlitch'))).toBe(true);
+  });
+
+  // Uniquely catches a switched-off sequence still reaching the stager, which reads any photoSequence as one.
+  it('stages a disabled photo sequence as the plain still', async () => {
+    const { project, plan } = await canonicalPreview();
+    await writeFile(join(PATHS.images, 'photo-two.png'), 'photo-two');
+    project.scenes[1].photoSequence = { enabled: false, imageIds: ['still-b.png', 'photo-two.png'], intervalFrames: 6 };
+    await expect(encode(project, plan, 'job-disabled-sequence')).rejects.toThrow('stop after staging');
+    const scene = browser.seen.data.scenes.find(item => item.sceneId === 'b');
+    expect(scene).not.toHaveProperty('photoSequence');
+    expect(scene.media).toMatchObject({ kind: 'image', src: 'media/scene-b.png' });
+    expect(scene.media).not.toHaveProperty('photos');
+  });
+
+  it('keeps the start still when Use end frame is off', async () => {
+    const { project, plan } = await fixture();
+    await writeFile(join(PATHS.images, 'end.png'), 'end-image');
+    Object.assign(project.scenes[1], {
+      videoHistoryId: 'vh-a', imageEffect: 'end-flash', imageEffectSec: 1, endImageId: 'end.png', endFrameOff: true,
+    });
+    await expect(encode(project, plan, 'job-end-off')).rejects.toThrow('stop after staging');
+    const scene = browser.seen.data.scenes.find(item => item.sceneId === 'b');
+    expect(scene.imageEffect).toBeNull();
+    expect(scene.media).toMatchObject({ kind: 'image', src: 'media/scene-b.png' });
+    expect(scene.media).not.toHaveProperty('end');
+    expect(browser.seen.data.effectFrames).toEqual([]);
   });
 
   it.each([null, 'missing.png'])('keeps the start still when an end frame is absent or missing (%s)', async endImageId => {
@@ -504,6 +545,61 @@ it('installs the project film look in the render page before the document runs, 
   expect(await scratchEntries()).toEqual([]);
 });
 
+// Uniquely catches the document render page opening without shot color match filters.
+it('installs shot color match in the render page before the document runs, and nothing when matching is off', async () => {
+  const { project, plan } = await fixture();
+  const matchedProject = {
+    ...project,
+    cameras: [{ id: 'cam1', name: 'Main' }],
+    scenes: [
+      {
+        sceneId: 'sc1',
+        startSec: 0,
+        endSec: 4,
+        shotSheet: { cameraId: 'cam1', location: 'Studio', timeOfDay: 'Day' },
+        referenceImageId: 'still-b.png',
+        takes: [{
+          kind: 'image',
+          assetId: 'still-b.png',
+          colorMatch: {
+            enabled: true,
+            strength: 1,
+            correction: { black: 0.02, white: 1.15, gamma: 0.95, balanceR: 1.05, balanceB: 0.95, saturation: 1 },
+          },
+        }],
+      },
+    ],
+  };
+  await expect(encode(matchedProject, plan, 'job-match')).rejects.toThrow('stop after staging');
+  expect(browser.seen.initScripts).toHaveLength(1);
+  expect(browser.seen.initScripts[0]).toContain('__portosColorMatch');
+  expect(browser.seen.initScripts[0]).toContain('portos-color-match-sc1');
+  expect(browser.seen.data.scenes[0].colorMatch).toMatchObject({
+    filterId: 'portos-color-match-sc1',
+    white: 1.15,
+  });
+
+  const matchingOff = {
+    ...matchedProject,
+    scenes: [
+      {
+        ...matchedProject.scenes[0],
+        takes: [{
+          ...matchedProject.scenes[0].takes[0],
+          colorMatch: {
+            ...matchedProject.scenes[0].takes[0].colorMatch,
+            enabled: false,
+          },
+        }],
+      },
+    ],
+  };
+  await expect(encode(matchingOff, plan, 'job-match-off')).rejects.toThrow('stop after staging');
+  expect(browser.seen.initScripts).toEqual([]);
+  expect(browser.seen.data.scenes[0].colorMatch).toBeUndefined();
+  expect(await scratchEntries()).toEqual([]);
+});
+
 // Uniquely catches the final render dropping the opening title card the live preview shows.
 it('installs the opening title card in the render page only while it is on and has text', async () => {
   const { project, plan } = await fixture();
@@ -538,4 +634,19 @@ it('carries the lyric layout to the document: social by default, cinematic from 
   const cinematic = { ...project, treatment: { brief: { lyricLayout: 'cinematic' } } };
   await expect(encode(cinematic, plan, 'job-layout-cinematic')).rejects.toThrow();
   expect(browser.seen.data.project.lyricLayout).toBe('cinematic');
+});
+
+// The preview and encoder must stage the same sparse choices, without coupling them to selected glitches or film look.
+it('carries video and shot template controls unchanged through preview and final staging', async () => {
+  const { project, plan } = await canonicalPreview();
+  project.templateEffects = { beatReaction: 0, footagePush: 0, grain: 0, vignette: 0 };
+  project.scenes[0].templateEffects = { grain: 0.1 };
+  project.filmLook = { preset: 'super8' };
+  project.scenes[0].glitches = [{ atSec: 1, style: 'vhs-glitch' }];
+  const preview = await buildDocumentPreview(project);
+  await expect(encode(project, plan, 'template-controls')).rejects.toThrow('stop after staging');
+  expect(browser.seen.data.project.templateEffects).toEqual(project.templateEffects);
+  expect(browser.seen.data.scenes[0].templateEffects).toEqual({ grain: 0.1 });
+  expect(preview.html).toContain(`window.PORTOS_MV = ${JSON.stringify(browser.seen.data).replace(/</g, '\\u003c')}`);
+  expect(browser.seen.data.effectFrames.length).toBeGreaterThan(0);
 });

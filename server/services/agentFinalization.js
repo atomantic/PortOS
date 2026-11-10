@@ -138,7 +138,7 @@ export function releaseAgentLane({ agentId, success, duration, exitCode, executi
  *
  * @returns {Promise<boolean|null|'skip-learning'>}
  */
-export async function evaluateSuccessCriteria({ agentId = null, task, terminatedByUser, workspacePath, startedAt = null, success = false, hookResult = null, branchProvenEmpty = false, emptyBranchInconclusiveEvidence = null, claimDisposition = null, mergedReviewFollowUp = null, retirementCompletion = null, runtimeContinuation = null }) {
+export async function evaluateSuccessCriteria({ agentId = null, task, terminatedByUser, workspacePath, startedAt = null, success = false, hookResult = null, branchProvenEmpty = false, emptyBranchInconclusiveEvidence = null, claimDisposition = null, mergedReviewFollowUp = null, retirementCompletion = null, runtimeContinuation = null, prWatcherTargetsSettled = null }) {
   if (terminatedByUser) return null;
   if (isUpdateRepoRepairTask(task)) return success
     && await verifyUpdateRepoRepairCompletion(task, agentId, workspacePath).catch(() => false);
@@ -166,6 +166,7 @@ export async function evaluateSuccessCriteria({ agentId = null, task, terminated
   // claim shipping keeps its existing PR/fidelity gates and undeclared criterion.
   if (success && hasClaimFlowContract(task) && claimDisposition?.status === 'verified') return true;
   if (success && runtimeContinuation?.status === 'verified') return true;
+  if (success && prWatcherTargetsSettled?.status === 'verified') return true;
   // Interactive/user tasks declare no machine-checkable criterion; neither does
   // a run missing the task id or workspace needed to validate.
   if (taskType === 'user' || !task?.id || !workspacePath) return null;
@@ -564,7 +565,12 @@ async function hasUncommittedLockfileDeliverable(task, workspacePath) {
   if (resolveTaskHookType(task) !== 'dependency-updates') return false;
   const { readWorktreeStatus, classifyWorktreeDirt } = await import('./worktreeManager.js');
   const status = await readWorktreeStatus(workspacePath).catch(() => null);
-  return status !== null && classifyWorktreeDirt(status, { preserveLockfiles: true }).hasRealChanges;
+  if (status === null) return false;
+  // A managed app does not ignore PortOS's per-run `.agent-done-<agentId>` sentinel
+  // (only PortOS's own .gitignore does), so it reads as untracked dirt here and
+  // turned every clean no-op dependency-updates run into `pr-missing`.
+  const withoutSentinel = status.split("\n").filter(line => !/^\?\? "?\.agent-done(?:-[^/]*)?"?$/.test(line)).join("\n");
+  return classifyWorktreeDirt(withoutSentinel, { preserveLockfiles: true }).hasRealChanges;
 }
 
 function prVerdictFromObservation(observation) {
@@ -998,6 +1004,18 @@ async function evaluateGoalFidelity({ task, workspacePath, startedAt }) {
       .catch(() => null)
     : null;
 
+  // The comparison chart can expose observations that were already in the
+  // shipped catalog before this run, so their absence from the diff is not
+  // evidence that the metrics are absent. This never reads live instance data.
+  const referenceEvidence = /\bcomparison\b/i.test(objective)
+    ? await import('./goalFidelityComparisonEvidence.js')
+      .then(({ comparisonReferenceEvidence }) => comparisonReferenceEvidence({
+        workspacePath, base, head, objective, diff,
+        maxChars: MAX_FIDELITY_DIFF_CHARS - diff.trim().length - (priorDelivery?.diff.trim().length || 0),
+      }))
+      .catch(() => null)
+    : null;
+
   const result = await runLocalGoalFidelityReview({
     backend: config.backend,
     model: config.model,
@@ -1008,6 +1026,7 @@ async function evaluateGoalFidelity({ task, workspacePath, startedAt }) {
     objectiveScreenshots: task.metadata?.screenshots,
     diff,
     ...(priorDelivery ? { priorDeliveryDiff: priorDelivery.diff } : {}),
+    ...(referenceEvidence ? { referenceEvidence } : {}),
   }).catch(err => ({ ok: false, error: err.message }));
   if (!result?.ok) return noFidelityVerdict(result?.error || 'goal-fidelity review returned no verdict');
   return {
@@ -2146,6 +2165,12 @@ async function finalizeAgentInCompletionContext({
     ? await import('./runtimeVerification.js')
       .then(({ verifyRuntimeVerificationContinuation }) => verifyRuntimeVerificationContinuation(task, agentId))
       .catch(() => null) : null;
+  // #15552: a pr-watcher target that merged between poll and spawn leaves a
+  // correct no-op; the forge, not the agent's report, establishes that.
+  const prWatcherTargetsSettled = forgeVerifiable && verdict.success && reportedTaskOutcome?.status === 'no-action-needed'
+    ? await import('./prWatcherCompletion.js')
+      .then(({ verifyPrWatcherTargetsSettled }) => verifyPrWatcherTargetsSettled(task, workspacePath))
+      .catch(() => null) : null;
 
   // Success-criteria validation (issue #2344): stamp an explicit pass/fail (or
   // null-when-undeclared) verdict onto the completion result, distinct from the
@@ -2166,6 +2191,7 @@ async function finalizeAgentInCompletionContext({
     mergedReviewFollowUp,
     retirementCompletion,
     runtimeContinuation,
+    prWatcherTargetsSettled,
   })
     .catch(err => {
       emitLog('warn', `⚠️ Success-criteria validation failed for ${agentId}: ${err.message}`, { agentId });

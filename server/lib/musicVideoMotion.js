@@ -11,6 +11,19 @@ export const MOTION_CONTINUITY_CLAUSE = "hold the reference frame's lighting, ti
 /** Appended to an audio-reactive (LoRA) shot's prompt so the music moves the scene, never a performer. */
 export const AUDIO_REACTIVE_PERFORMANCE_GUARD = 'The music drives only environmental motion, lighting, particles, reflections, fabric, and subtle camera accents. No singing, lip-sync, speaking, mouth movement, dancing, instruments, performers, or musical performance.';
 
+export const CONTINUATION_HOLD_BREAK_CLAUSE = 'Continue motion unbroken from the opening handoff frame with no unintended static hold or reset; unless the shot explicitly directs stillness or a sustained pose, break the held pose within the first quarter second';
+export const MULTI_PERFORMER_INDIVIDUALITY_CLAUSE = 'Each person keeps their own micro-timing, posture, and blink cadence; avoid accidental synchronized or mirrored silhouettes while preserving explicitly directed coordinated action';
+export const NON_VOCAL_MOUTH_LOCK_CLAUSE = 'Except for explicitly directed speech or singing, mouths stay closed or naturally parted for breathing only; no unprompted speaking, singing, or mouthing words';
+
+/** Recognize the selected continuation frame, including a previous shot's still. */
+export function isContinuationHandoffScene(scene) {
+  const imageId = String(scene?.referenceImageId || '');
+  if (imageId.startsWith('handoff-')) return true;
+  if (!imageId) return false;
+  return (Array.isArray(scene?.takes) ? scene.takes : []).some((take) => take?.kind === 'image'
+    && take.assetId === imageId && /^(?:Out-frame of the previous shot|The picture the previous shot ends on)/.test(take.prompt || ''));
+}
+
 // A song reference a silent i2v model cannot hear: a quoted lyric cue ("on
 // 'Sleep'"), a musical event ("on the downbeat", "in time with the snare") or
 // a song timestamp ("at 1:42").
@@ -67,7 +80,7 @@ export function silentMotionPrompt(prompt, { styleParts = [], keep = [] } = {}) 
     const trimmed = typeof part === 'string' ? part.trim() : '';
     if (trimmed) text = text.split(trimmed).join('');
   }
-  const ends = [MOTION_CONTINUITY_CLAUSE, ...keep].map((part) => (typeof part === 'string' ? part.trim() : '')).filter(Boolean);
+  const ends = [MOTION_CONTINUITY_CLAUSE, CONTINUATION_HOLD_BREAK_CLAUSE, MULTI_PERFORMER_INDIVIDUALITY_CLAUSE, NON_VOCAL_MOUTH_LOCK_CLAUSE, ...keep].map((part) => (typeof part === 'string' ? part.trim() : '')).filter(Boolean);
   return withoutCreativeContext(text, ends).split('\n')
     .filter((line) => !SONG_INTENT_LINE.test(line.trim()))
     .map((line) => {

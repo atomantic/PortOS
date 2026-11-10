@@ -56,15 +56,36 @@ const MAX_SUBJECTS = 24;
 export const CAST_SETS_REF_PREFIX = 'mvr-cs-';
 export { CAST_SETS_SUBJECT_PREFIX };
 
-// Only the medium is fixed; the look (film stock, light, texture) comes from
-// the project's own mood board / style via `direction.look`.
+// Scene plates and in-set frames carry film stock, lighting and grading.
 const PHOTO = 'photorealistic, editorial photography';
+const FLAT_GRAY_SHEET_CLOSE = 'Flat 18% neutral gray color field, uniform corner-to-corner: not a physical room, backdrop, floor or wall; no seam, gradient or vignette. Flat, shadowless frontal illumination with matched frontal fill in every panel: zero cast, contact, floor or ambient-occlusion shadow, zero light bleed outside the silhouette. Natural true skin tone and wardrobe colors, without cool-shifting; identical skin value and hue across front, rear and face panels, never darken the rear panel. Everything in sharp focus, no depth-of-field blur. Render no text, no labels, no captions, no numbering anywhere in the image';
+const SQUARE_FRONT = 'FRONT views dead-on orthographic: shoulders and hips square to the lens and level, weight even across both feet, regardless of how the figure stands in the reference';
+const SQUARE_FACE = 'FACE close-ups and FRONT face panels dead-on orthographic and level, eyes level and face square to the lens, regardless of how the face is angled in the reference; keep the other explicitly requested head angles and mood poses';
+const FIVE_VIEWS = `Five views: FRONT, 3/4, PROFILE, BACK full-body, plus a FACE close-up. ${SQUARE_FRONT}. BACK view dead-on orthographic from directly behind, shoulders and hips square and level, weight even across both feet, no glance back, regardless of how the figure stands in the reference. ${SQUARE_FACE}`;
+// Select only known rendering media, never rewrite or forward the mixed scene
+// look to identity sheets. Authored look text remains intact on scene frames.
+const SHEET_MEDIA = /\b(?:watercolou?r(?: illustration)?|oil painting|gouache|pencil drawing|charcoal drawing|ink drawing|hand[- ]drawn(?: animation| illustration)?|(?:2d|3d)(?: animation| animated| render(?:ing)?)|cel[- ]shaded(?: animation)?|stop[- ]motion|claymation|anime|cartoon|comic[- ]book(?: illustration)?|pixel art|digital illustration|vector illustration|animation|animated|illustration|illustrated|non[- ]photorealistic|(?:(?!(?:no|not|without|a|an|the|and|or)\b)[a-z][a-z-]*\s+)?(?:painting|drawing|illustration|animation))\b/gi;
+function sheetMedium(look, fallback = PHOTO) {
+  const text = String(look || '');
+  const { media } = [...text.matchAll(SHEET_MEDIA)].reduce((state, match) => {
+    const gap = text.slice(state.end, match.index);
+    const negated = /\b(?:no|not|without)\s+(?:(?:a|an|the)\s+)?$/i.test(gap)
+      || (state.negated && /^(?:\s*(?:,|\/|&|\band\b|\bor\b))+\s*$/i.test(gap));
+    return { media: negated ? state.media : [...state.media, match[0]], end: match.index + match[0].length, negated };
+  }, { media: [], end: 0, negated: false });
+  return media.length
+    ? `Rendering medium: ${[...new Set(media)].join(', ')}. Retain this rendering medium only; omit scene lighting, color grading, film stock and grain`
+    : fallback;
+}
+// Explicit artist input is never inferred, trimmed or rewritten. The bounded
+// recognizer above is only the compatibility fallback for older directions.
+const explicitSheetMedium = (medium) => `Rendering medium: ${medium}. Retain this rendering medium only; omit scene lighting, color grading, film stock and grain`;
 // Identity and wardrobe sheets define the person; recurring objects have their
 // own sheet, even when a legacy signature or wardrobe mentions carrying one.
 const EMPTY_HANDS = 'Hands empty and relaxed, holding no device or carried object. Carried props are drawn on the prop sheet. Use wardrobe descriptions for worn clothing and accessories only, drawn as worn (a watch on the wrist, a camera hanging from its wrist strap), never gripped in a hand; never put a carried object from the description or reference images in their hands';
 // Stacked, interlocked or piled look-alike objects are where image models fuse
 // geometry (chairs molded into a table), and every shot on the set copies it.
-const PLAUSIBLE_SET = 'Unless the set description or revision deliberately calls for another arrangement, keep every object solid, separate and physically supported: furniture stands upright on its own legs, nothing stacked, interlocked or piled on like objects. Keep new details consistent with the described place and its era; preserve explicitly requested or intentionally unusual details';
+const PLAUSIBLE_SET = 'Compose continuous concrete foreground, midground and background depth planes. Light comes from a physical in-world source with direction, quality and color temperature; avoid unspecified studio fixtures such as softboxes, C-stands or beauty dishes, while preserving explicitly requested or story-appropriate in-world fixtures. Preserve atmosphere explicitly requested by the director; otherwise no fog, mist, haze, smoke plumes or volumetric shafts unless physically produced by an in-frame source named in the set description. Unless the set description or revision deliberately calls for another arrangement, keep every object solid, separate and physically supported: furniture stands upright on its own legs, nothing stacked, interlocked or piled on like objects. Keep new details consistent with the described place and its era; preserve explicitly requested or intentionally unusual details';
 const sentence = (s) => {
   const t = String(s || '').trim();
   return t && !/[.!?]$/.test(t) ? `${t}.` : t;
@@ -217,7 +238,9 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
   const looks = direction.looks || [];
   const firstLook = looks[0];
   const style = trimTo(direction.look, 500) || trimTo(project?.concept?.style, 500);
-  const firstLight = direction.sets?.[0]?.lighting || '';
+  const peopleMedium = direction.renderingMedium
+    ? explicitSheetMedium(direction.renderingMedium)
+    : sheetMedium(direction.look, sheetMedium(project?.concept?.style));
   const note = (key) => (revisionNotes[key] ? `Revision: ${revisionNotes[key]}` : '');
   const forms = p.forms || [];
   const bindings = formBindings(project, forms, catalogLikeness);
@@ -272,16 +295,16 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
     refKeys: [],
     refImages: identities,
     prompt: join(
-      `Photographic character reference sheet of ONE consistent person, ${p.name || 'the protagonist'}: ${p.description || ''}`,
+      `Character reference sheet of ONE consistent person, ${p.name || 'the protagonist'}: ${p.description || ''}`,
       identities.length && 'The SAME person as the identity reference images: keep their face, hair and build exactly',
       identity(p),
       heightLine(protagonistHeight),
       firstLook && `Wearing ${firstLook.description}`,
       rulesLine(p),
       EMPTY_HANDS,
-      'Five views on a seamless dark grey backdrop: FRONT, 3/4, PROFILE, BACK full-body, plus a FACE close-up, with small typewriter captions',
-      style && `Look: ${style}`,
-      `${PHOTO}, even studio light, lookbook realism`,
+      FIVE_VIEWS,
+      peopleMedium,
+      FLAT_GRAY_SHEET_CLOSE,
       note('character'),
     ),
   };
@@ -297,7 +320,7 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
     refImages: identities,
     prompt: join(
       FACE_SHEET_TEMPLATE_INSTRUCTION,
-      `Photographic face reference sheet of the SAME person as the character reference, on a seamless dark grey backdrop. ${FACE_SHEET_ANGLES}. BELOW IT, a ${expressionGrid(moods.length)} grid of tight close-ups of the moods`,
+      `Face reference sheet of the SAME person as the character reference, with separate panels. ${FACE_SHEET_ANGLES}. BELOW IT, a ${expressionGrid(moods.length)} grid of tight close-ups of the moods`,
       identity(p),
       moods.length
         ? `Panels: ${moods.map((mood, i) => `${i + 1}) ${mood}`).join('; ')}`
@@ -305,9 +328,9 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
           : 'Panels: 1) eyes closed, head bowed; 2) thoughtful gaze aside; 3) gentle smile; 4) quiet resolve; 5) eyes lowered; 6) head tilted back, eyes shut',
       !musicVideoLipSyncs(project) && 'Mouth closed in every panel: nobody is singing or speaking',
       'Consistent identity across all panels',
-      firstLight && `Light: ${firstLight}`,
-      style && `Look: ${style}`,
-      `${PHOTO}, thin black gutters between panels, no text`,
+      SQUARE_FACE,
+      peopleMedium,
+      FLAT_GRAY_SHEET_CLOSE,
       note('expressions'),
     ),
   };
@@ -347,11 +370,11 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
       'The same one person alone in every panel, nobody else in frame',
       identity(p),
       rulesLine(p),
-      ...looks.map((l, i) => `LOOK 0${i + 1} ${l.name.toUpperCase()}: ${l.description}`),
+      ...looks.map((l, i) => `Panel ${i + 1} from the left wears ${l.name}: ${l.description}`),
       EMPTY_HANDS,
-      `Seamless dark grey backdrop, typewriter captions ${looks.map((l, i) => `LOOK 0${i + 1} ${l.name.toUpperCase()}`).join(', ')}`,
-      style && `Look: ${style}`,
-      `${PHOTO}, lookbook realism`,
+      SQUARE_FRONT,
+      peopleMedium,
+      FLAT_GRAY_SHEET_CLOSE,
       note('looks'),
     ),
   };
@@ -372,7 +395,7 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
       refKeys: ['character'],
       ...(formRefs.length ? { refImages: formRefs } : {}),
       prompt: join(
-        `Photographic character reference sheet of ${p.name || 'the protagonist'}${form.age ? ` at age ${form.age}` : ''}: the SAME person as the character reference, at a different age`,
+        `Character reference sheet of ${p.name || 'the protagonist'}${form.age ? ` at age ${form.age}` : ''}: the SAME person as the character reference, at a different age`,
         formRefs.length && 'The SAME person as the age reference images: keep their face, hair and build at this age exactly',
         form.description,
         heightLine(formHeight(form)),
@@ -382,9 +405,9 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
         rulesLine(p),
         EMPTY_HANDS,
         form.era && `Era: ${form.era}`,
-        'Five views on a seamless dark grey backdrop: FRONT, 3/4, PROFILE, BACK full-body, plus a FACE close-up, with small typewriter captions',
-        (form.look || style) && `Look: ${form.look || style}`,
-        `${PHOTO}, even studio light, lookbook realism`,
+        FIVE_VIEWS,
+        form.renderingMedium ? explicitSheetMedium(form.renderingMedium) : direction.renderingMedium ? peopleMedium : sheetMedium(form.look, peopleMedium),
+        FLAT_GRAY_SHEET_CLOSE,
         note(key),
       ),
     };
@@ -404,16 +427,16 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
       refKeys: [],
       ...(castImages.length ? { refImages: castImages } : {}),
       prompt: join(
-        `Photographic character reference sheet of ONE consistent person, ${c.name}${c.role ? `, the ${c.role}` : ''}: ${c.description || ''}`,
+        `Character reference sheet of ONE consistent person, ${c.name}${c.role ? `, the ${c.role}` : ''}: ${c.description || ''}`,
         castImages.length && 'The SAME person as the reference images: keep their face, hair and build exactly',
         identity(c),
         heightLine(castHeight(c)),
         c.wardrobe && `Wearing ${c.wardrobe}`,
         EMPTY_HANDS,
         p.name && `A different person from ${p.name}`,
-        'Five views on a seamless dark grey backdrop: FRONT, 3/4, PROFILE, BACK full-body, plus a FACE close-up, with small typewriter captions',
-        style && `Look: ${style}`,
-        `${PHOTO}, even studio light, lookbook realism`,
+        FIVE_VIEWS,
+        peopleMedium,
+        FLAT_GRAY_SHEET_CLOSE,
         note(key),
       ),
     };
@@ -428,13 +451,14 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
       refTemplates: [FACE_SHEET_ANGLE_TEMPLATE],
       prompt: join(
         FACE_SHEET_TEMPLATE_INSTRUCTION,
-        `Photographic face reference sheet of the SAME person as the cast sheet, ${c.name}, on a seamless dark grey backdrop. ${FACE_SHEET_ANGLES}. BOTTOM ROW, five close-ups of their moods, front or near-front`,
+        `Face reference sheet of the SAME person as the cast sheet, ${c.name}, with separate panels. ${FACE_SHEET_ANGLES}. BOTTOM ROW, five close-ups of their moods, front or near-front`,
         identity(c),
         `Panels: ${CAST_FACE_MOODS}`,
         !lipSyncs && 'Mouth closed or relaxed in every panel: nobody is singing or speaking',
         'Consistent identity across all panels, nothing held in the hands',
-        style && `Look: ${style}`,
-        `${PHOTO}, thin black gutters between panels, no text`,
+        SQUARE_FACE,
+        peopleMedium,
+        FLAT_GRAY_SHEET_CLOSE,
         note(faceKey),
       ),
     };
@@ -464,7 +488,7 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
         plateLight && `Lighting: ${plateLight}`,
         setLook && `Look: ${setLook}`,
         PLAUSIBLE_SET,
-        'Photorealistic music video location still',
+        direction.renderingMedium ? `Rendering medium: ${direction.renderingMedium}. Use this medium for the set` : 'Photorealistic music video location still',
         note(key),
       ),
     };
@@ -491,7 +515,7 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
       deps: (form ? [`form:${form.id}`, `set:${test.setId}`] : ['character', `set:${test.setId}`, 'looks']).filter((k) => plan[k]),
       refKeys: (form ? [`set:${test.setId}`, `form:${form.id}`] : [`set:${test.setId}`, 'character', 'looks']).filter((k) => plan[k]),
       prompt: join(
-        `Photorealistic music video still, wide 16:9. Recreate the ${set?.name || 'set'} from the set plate reference, same camera angle and light`,
+        `${form?.renderingMedium || direction.renderingMedium ? `Music video still. Rendering medium: ${form?.renderingMedium || direction.renderingMedium}` : 'Photorealistic music video still'}, wide 16:9. Recreate the ${set?.name || 'set'} from the set plate reference, same camera angle and light`,
         // Test actions may use a prop, and legacy cards match their exact saved
         // prompt. Keep sheet-only signature instructions out of these frames.
         form
@@ -505,9 +529,8 @@ export function buildCastAndSetsImagePlan(project, direction, { revisionNotes = 
         // A test frame puts a person into a plate: lit apart from it, they read as pasted in.
         // Judged on the look this frame uses (an era's own look overrides the project's).
         peopleLightLine([testLook || style], { always: true }),
-        // A dated age with no look of its own shares the project look; an undated
-        // (older) one follows its sheet, whose description may carry the stock.
-        testLook ? `Look: ${testLook}` : form && !form.era ? `Match the color, film stock and grain of the ${form.label} character sheet` : style && `Look: ${style}`,
+        // Identity sheets carry no film stock; every frame takes its scene look.
+        (testLook || style) && `Look: ${testLook || style}`,
         note(key),
       ),
     };
@@ -659,7 +682,7 @@ export function castAndSetsSubjects(project, stage) {
       id: `${CAST_SETS_SUBJECT_PREFIX}protagonist`,
       kind: 'character',
       name: trimTo(p.name, 120),
-      description: trimTo([p.description, p.construction, p.shapeLanguage, p.materials, p.palette, p.face, p.hair, p.signature,
+      description: trimTo([p.description, p.construction, p.shapeLanguage, p.materials, p.palette, p.face, p.hair, p.signature, p.stillness && `stillness: ${p.stillness}`, p.movement && `movement: ${p.movement}`,
         (p.forms || []).length && `Also seen at: ${p.forms.map((f) => `${f.label} (${f.description})`).join('; ')}`].filter(Boolean).join('; '), 1000),
       role: 'protagonist',
     });
@@ -669,7 +692,7 @@ export function castAndSetsSubjects(project, stage) {
       id: `${CAST_SETS_SUBJECT_PREFIX}cast-${c.id}`.slice(0, 64),
       kind: 'character',
       name: trimTo(c.name, 120),
-      description: trimTo([c.role, c.description, c.face, c.hair, c.wardrobe].filter(Boolean).join('; '), 1000),
+      description: trimTo([c.role, c.description, c.face, c.hair, c.wardrobe, c.stillness && `stillness: ${c.stillness}`, c.movement && `movement: ${c.movement}`].filter(Boolean).join('; '), 1000),
       role: 'supporting',
     });
   }

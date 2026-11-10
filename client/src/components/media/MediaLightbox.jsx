@@ -27,6 +27,7 @@ import SentPromptPanel from './SentPromptPanel';
 import ContinuationDetails from '../videoGen/ContinuationDetails';
 import MediaUsageList from './MediaUsageList';
 import MediaDeleteConfirm from './MediaDeleteConfirm';
+import HostedCopyRow from './HostedCopyRow';
 import { mediaAnnotationKey } from './mediaDetail';
 import { useMediaUsages } from '../../hooks/useMediaUsages';
 import { isLowResVideo } from '../../lib/videoResolution.js';
@@ -947,6 +948,8 @@ function SettingsPane({
             })}
           </dl>
         )}
+
+        <HostedCopyRow key={item.key} item={item} />
       </div>
 
       <footer className="shrink-0 flex flex-wrap gap-1.5 p-3 border-t border-port-border">

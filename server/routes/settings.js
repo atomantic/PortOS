@@ -9,6 +9,7 @@ import { savePlanTiers } from '../services/subscriptions.js';
 import { saveApiBilledInstanceIds } from '../services/usageFleetBilling.js';
 import {
   setCodexParallelLimit,
+  syncParallelLimits,
   CODEX_PARALLEL_MIN,
   CODEX_PARALLEL_MAX,
   CODEX_PARALLEL_DEFAULT,
@@ -27,7 +28,7 @@ import { storableAutoUpdateConfig } from '../lib/sharedSchemas.js';
 import { DEFAULT_UNTRUSTED_CONTENT_POLICY, untrustedContentSettingsSchema } from '../lib/untrustedContent.js';
 import { agentContextSettingsSchema } from '../lib/agentContextValidation.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
-import { settingsSlicePatchSchema, privateCredentialParamsSchema, privateCredentialInputSchema, backupConfigSchema, autoUpdateSettingsSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, autofixerSettingsSchema, codeReviewSettingsSchema, locationSettingsSchema, hideFirstRunCardSchema, networkSetupPreferenceSchema, settingsEmbeddingsSchema, localLlmSettingsSchema, imessageConfigSchema, signalConfigSchema, beeperSettingsSchema, beeperSavedScopesSchema, spotifyConfigSchema, youtubeConfigSchema, apiAccessSettingsSchema, instanceFeatureSettingsSchema, instanceFeatureIdSchema, instanceFeatureUpdateSchema, instanceFeatureGroupSettingsSchema, instanceFeatureGroupIdSchema, instanceFeatureGroupUpdateSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, musicSettingsSchema, federationSettingsSchema, privacySettingsSchema, seriesAutopilotSettingsSchema, layeredIntelligenceSettingsSchema, imageGenGrokSettingsSchema, imageGenAgySettingsSchema, imageGenFalSettingsSchema, imageGenRunwaySettingsSchema, renderDefaultsSettingsSchema, videoGenSettingsSchema, subscriptionCostsMapSchema, subscriptionPlanTiersMapSchema, usageApiBilledInstanceIdsSchema, namedOrchestrationProfileSchema, orchestrationProfilesSettingsSchema, harnessSettingsSchema, credentialBootstrapsSettingsSchema, validateRequest } from '../lib/validation.js';
+import { settingsSlicePatchSchema, privateCredentialParamsSchema, privateCredentialInputSchema, backupConfigSchema, autoUpdateSettingsSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, autofixerSettingsSchema, codeReviewSettingsSchema, locationSettingsSchema, hideFirstRunCardSchema, networkSetupPreferenceSchema, settingsEmbeddingsSchema, localLlmSettingsSchema, imessageConfigSchema, signalConfigSchema, beeperSettingsSchema, beeperSavedScopesSchema, spotifyConfigSchema, youtubeConfigSchema, apiAccessSettingsSchema, instanceFeatureSettingsSchema, instanceFeatureIdSchema, instanceFeatureUpdateSchema, instanceFeatureGroupSettingsSchema, instanceFeatureGroupIdSchema, instanceFeatureGroupUpdateSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, musicSettingsSchema, federationSettingsSchema, privacySettingsSchema, seriesAutopilotSettingsSchema, layeredIntelligenceSettingsSchema, imageGenGrokSettingsSchema, imageGenAgySettingsSchema, imageGenFalSettingsSchema, imageGenRunwaySettingsSchema, imageGenGeminiSettingsSchema, renderDefaultsSettingsSchema, videoGenSettingsSchema, subscriptionCostsMapSchema, subscriptionPlanTiersMapSchema, usageApiBilledInstanceIdsSchema, namedOrchestrationProfileSchema, orchestrationProfilesSettingsSchema, harnessSettingsSchema, credentialBootstrapsSettingsSchema, validateRequest } from '../lib/validation.js';
 import { filmLookSavedPresetsSchema } from '../lib/filmLookValidation.js';
 import { dockerContainmentSettingsSchema } from '../lib/dockerContainmentValidation.js';
 
@@ -48,6 +49,19 @@ const eidoverseRepoSchema = z.object({
 // clamp never drifts away from what the queue actually enforces. Stitched
 // under `imageGen.codex.parallelLimitBounds` since that's where the field
 // the bounds describe lives.
+const PARALLEL_BOUNDS = Object.freeze({
+  min: CODEX_PARALLEL_MIN,
+  max: CODEX_PARALLEL_MAX,
+  default: CODEX_PARALLEL_DEFAULT,
+});
+const LOCAL_PARALLEL_BOUNDS = Object.freeze({
+  min: 1,
+  max: 1,
+  default: 1,
+  memoryGoverned: true,
+  description: 'Local model lanes stay at their memory-governed limit (1 render at a time).',
+});
+
 const decorateBounds = (settings) => ({
   ...settings,
   untrustedContent: { scopeAdherenceEnabled: settings.untrustedContent?.scopeAdherenceEnabled !== false, defaults: { ...DEFAULT_UNTRUSTED_CONTENT_POLICY, ...settings.untrustedContent?.defaults }, sources: settings.untrustedContent?.sources || {} },
@@ -55,13 +69,26 @@ const decorateBounds = (settings) => ({
     ...(settings.imageGen || {}),
     codex: {
       ...(settings.imageGen?.codex || {}),
-      parallelLimitBounds: {
-        min: CODEX_PARALLEL_MIN,
-        max: CODEX_PARALLEL_MAX,
-        default: CODEX_PARALLEL_DEFAULT,
-      },
+      parallelLimitBounds: PARALLEL_BOUNDS,
     },
+    ...(settings.imageGen?.grok ? { grok: { ...settings.imageGen.grok, parallelLimitBounds: PARALLEL_BOUNDS } } : {}),
+    ...(settings.imageGen?.agy ? { agy: { ...settings.imageGen.agy, parallelLimitBounds: PARALLEL_BOUNDS } } : {}),
+    ...(settings.imageGen?.fal ? { fal: { ...settings.imageGen.fal, parallelLimitBounds: PARALLEL_BOUNDS } } : {}),
+    ...(settings.imageGen?.runway ? { runway: { ...settings.imageGen.runway, parallelLimitBounds: PARALLEL_BOUNDS } } : {}),
+    ...(settings.imageGen?.gemini ? { gemini: { ...settings.imageGen.gemini, parallelLimitBounds: PARALLEL_BOUNDS } } : {}),
+    ...(settings.imageGen?.local ? { local: { ...settings.imageGen.local, parallelLimitBounds: LOCAL_PARALLEL_BOUNDS } } : {}),
   },
+  ...(settings.videoGen ? {
+    videoGen: {
+      ...settings.videoGen,
+      ...(settings.videoGen.grok ? { grok: { ...settings.videoGen.grok, parallelLimitBounds: PARALLEL_BOUNDS } } : {}),
+      ...(settings.videoGen.gemini ? { gemini: { ...settings.videoGen.gemini, parallelLimitBounds: PARALLEL_BOUNDS } } : {}),
+      ...(settings.videoGen.fal ? { fal: { ...settings.videoGen.fal, parallelLimitBounds: PARALLEL_BOUNDS } } : {}),
+      ...(settings.videoGen.runway ? { runway: { ...settings.videoGen.runway, parallelLimitBounds: PARALLEL_BOUNDS } } : {}),
+      ...(settings.videoGen.reactor ? { reactor: { ...settings.videoGen.reactor, parallelLimitBounds: PARALLEL_BOUNDS } } : {}),
+      ...(settings.videoGen.local ? { local: { ...settings.videoGen.local, parallelLimitBounds: LOCAL_PARALLEL_BOUNDS } } : {}),
+    },
+  } : {}),
 });
 
 // Third-party API tokens that live OUTSIDE the `secrets.*` hierarchy but must
@@ -622,6 +649,9 @@ const validateSettingsPatch = async (body) => {
   if (body?.imageGen?.fal !== undefined) {
     validateRequest(imageGenFalSettingsSchema.partial(), body.imageGen.fal);
   }
+  if (body?.imageGen?.gemini !== undefined) {
+    validateRequest(imageGenGeminiSettingsSchema.partial(), body.imageGen.gemini);
+  }
   // Every local media lane spawns this interpreter (and image gen spawns the
   // `mflux-generate` beside it), so hold it to the guard the setup routes use:
   // a python basename, never an arbitrary binary (#8751). A cleared value
@@ -801,9 +831,10 @@ const saveSettingsPatch = async (body, slicePatch) => {
     const ids = await saveApiBilledInstanceIds(apiBilledPatch, { actor: 'user' });
     merged = { ...merged, usageApiBilledInstanceIds: ids };
   }
-  // The queue caches codex.parallelLimit in-process; sync it from the
+  // The queue caches parallel limits in-process; sync them from the
   // merged value so a save takes effect without a restart and without
   // re-reading the file.
+  syncParallelLimits(merged);
   setCodexParallelLimit(merged.imageGen?.codex?.parallelLimit ?? CODEX_PARALLEL_DEFAULT);
   // Series Autopilot crons re-register themselves off settings.js's
   // `settings:updated` event (see seriesAutopilotScheduler.js) — the save above

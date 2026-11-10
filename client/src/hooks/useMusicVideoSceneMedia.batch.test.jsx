@@ -10,11 +10,13 @@ vi.mock('../services/socket', () => ({
   },
 }));
 const generateVideo = vi.fn();
-vi.mock('../services/apiImageVideo.js', () => ({ generateVideo: (...a) => generateVideo(...a) }));
+vi.mock('../services/apiImageVideo.js', () => ({ generateVideo }));
 vi.mock('../services/apiSystem.js', () => ({ generateImage: vi.fn() }));
 vi.mock('../services/apiMusicVideo.js', () => ({
   addMusicVideoSceneTake: vi.fn(),
   getMusicVideoSceneJobs: vi.fn(async () => ({ jobs: [] })),
+  renderMusicVideoSceneFrame: vi.fn(async () => ({ status: 'queued', jobId: 'frame-job' })),
+  renderMusicVideoSceneClip: (_id, _sceneId, body) => generateVideo(body),
 }));
 const cancelMediaJob = vi.fn(() => Promise.resolve({}));
 vi.mock('../services/apiMediaJobs', () => ({ getMediaJob: vi.fn(), cancelMediaJob: (...a) => cancelMediaJob(...a) }));

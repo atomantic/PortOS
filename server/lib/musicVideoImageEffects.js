@@ -17,7 +17,8 @@
  * when unset): "Fade to end frame" dissolves over FADE_SEC, "Flash to end
  * frame" cuts under a white camera flash, and "Glitch to end frame" cuts under
  * a VHS glitch (the cut transitions' own `vhs-glitch` frames). Without an end
- * frame the shot plays its still.
+ * frame, or with Use end frame off (`endFrameOff`), the shot plays its still.
+ * The chosen end frame stays stored for switching back on.
  *
  * One definition serves both players: every value is a pure function of the
  * time into the shot (`imageEffectState`), the storyboard animatic paints it
@@ -198,15 +199,18 @@ const clampSec = (sec) => Math.min(IMAGE_EFFECT_SEC_RANGE.max, Math.max(IMAGE_EF
 /**
  * The effect a scene plays, `{ effect, developSec }` (an end-frame effect:
  * `{ effect, changeSec }`), or null. Only a still shot in a layered
- * composition plays one, and an end-frame effect needs the shot's end frame:
- * anywhere else the shot shows its footage or still as before.
+ * composition plays one, and an end-frame effect needs the shot's end frame
+ * with Use end frame on (`endFrameOff` is not true): anywhere else the shot
+ * shows its footage or still as before.
  */
 export function sceneImageEffect(scene, { layered = false } = {}) {
   if (!layered || scene?.visualLayer !== 'still' || !isEffect(scene?.imageEffect)) return null;
   const sec = Number(scene.imageEffectSec);
   const set = Number.isFinite(sec) && sec > 0;
   if (!isEndFrameImageEffect(scene.imageEffect)) return { effect: scene.imageEffect, developSec: set ? clampSec(sec) : DEFAULT_IMAGE_EFFECT_SEC };
-  if (!scene.endImageId) return null;
+  // Same switch as sceneActiveEndImageId. This file ships inside composition
+  // documents, so it cannot import that helper.
+  if (scene.endFrameOff === true || !scene.endImageId) return null;
   const spanSec = typeof scene.startSec === 'number' && typeof scene.endSec === 'number' ? scene.endSec - scene.startSec : null;
   const middle = spanSec != null && spanSec > 0 ? spanSec / 2 : DEFAULT_IMAGE_EFFECT_SEC;
   return { effect: scene.imageEffect, changeSec: set && (spanSec == null || sec < spanSec) ? sec : Math.round(middle * 1000) / 1000 };

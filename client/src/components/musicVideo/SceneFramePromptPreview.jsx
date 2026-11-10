@@ -1,19 +1,21 @@
-import { musicVideoConditioningReferences, musicVideoFrameReferenceFiles, MUSIC_VIDEO_MAX_REFERENCE_CHOICES } from '../../../../server/lib/musicVideoConditioning.js';
 import { authoredFramePromptText } from '../../../../server/lib/musicVideoShotPrompt.js';
 import { musicVideoFrameGenSize } from '../../../../server/lib/musicVideoAspect.js';
 import useModelInputPreview from '../../hooks/useModelInputPreview.js';
 import { previewImagePrompt } from '../../services/apiImageVideo.js';
 import ModelInputPreview from '../media/ModelInputPreview.jsx';
 
-/** The actual image backend's prompt preview, including its wrappers and style additions. */
-export default function SceneFramePromptPreview({ project, scene, castMedia, greybox, slot, referenceImageId = null, instruction = null }) {
-  const references = musicVideoFrameReferenceFiles(referenceImageId, musicVideoConditioningReferences(project, scene, castMedia, greybox), MUSIC_VIDEO_MAX_REFERENCE_CHOICES, { reservePanel: !Array.isArray(scene.frameReferenceIds) });
+/** The actual image backend's prompt preview, including its wrappers and style additions.
+ * References are resolved on the server from the shot, the same way the frame render is (#15583). */
+export default function SceneFramePromptPreview({ project, scene, slot, referenceImageId = null, instruction = null, includeReferences = true }) {
   const prompt = instruction ?? authoredFramePromptText(scene, slot);
   const preview = useModelInputPreview(previewImagePrompt, {
-    prompt, ...musicVideoFrameGenSize(project), referenceImageFiles: references,
-    musicVideo: { projectId: project.id, sceneId: scene.sceneId, catalogBasis: project.castAndSets?.catalogCheckin?.basis, compose: true, greyboxImageId: greybox?.reference?.imageId, greyboxBlockingImageId: greybox?.blocking?.imageId,
+    prompt, ...musicVideoFrameGenSize(project),
+    musicVideo: {
+      projectId: project.id, sceneId: scene.sceneId, catalogBasis: project.castAndSets?.catalogCheckin?.basis, compose: true,
+      ...(referenceImageId ? { leadImageId: referenceImageId } : {}),
       ...(slot === 'end' ? { slot: 'end' } : {}),
       ...(instruction !== null ? { refine: true } : referenceImageId ? { fromFrame: true } : {}),
+      ...(!includeReferences ? { includeReferences: false } : {}),
     },
   });
   return <ModelInputPreview prompt={prompt} preview={preview} />;

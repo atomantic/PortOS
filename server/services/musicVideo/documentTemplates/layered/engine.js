@@ -82,6 +82,15 @@
   const sectionAt = (t) => sections.filter((s) => s.startSec <= t).pop() || null;
   const isHighEnergy = (t) => /chorus|hook|drop|final|climax/i.test(sectionAt(t)?.label || '');
 
+  function templateEffects(scene) {
+    const own = scene?.templateEffects || {};
+    const video = MV.project?.templateEffects || {};
+    return { beatReaction: own.beatReaction ?? video.beatReaction ?? 1,
+      stillMotion: own.stillMotion ?? video.stillMotion ?? 1,
+      footagePush: own.footagePush ?? video.footagePush ?? 1,
+      grain: own.grain ?? video.grain ?? 0.09, vignette: own.vignette ?? video.vignette ?? 0.5 };
+  }
+
   // ---------- scenes ----------
   const SCENES = (MV.scenes || [])
     .filter((s) => Number.isFinite(s.startSec) && Number.isFinite(s.endSec) && s.endSec > s.startSec)
@@ -120,8 +129,14 @@
   // The cover transform for scene time k (0..1): scale over the cover fit,
   // offsets in frame fractions, rotation in radians. Never shows a frame edge.
   function cameraView(scene, k) {
-    if (!RIG) return { scale: lerp(1.04, 1.1, easeInOut(k)), x: 0, y: 0, rotation: 0 };
-    const move = moveFor(scene);
+    const effects = templateEffects(scene);
+    // A planned still camera belongs to the shot; additions scale only default motion.
+    const planned = scene.media?.kind !== 'video' && RIG && scene.camera?.move && RIG.has(scene.camera.move);
+    const strength = planned ? 1 : scene.media?.kind === 'video' ? effects.footagePush : effects.stillMotion;
+    if (strength === 0) return { scale: 1, x: 0, y: 0, rotation: 0 };
+    if (!RIG) return { scale: strength === 1 ? lerp(1.04, 1.1, easeInOut(k)) : 1 + (lerp(1.04, 1.1, easeInOut(k)) - 1) * strength, x: 0, y: 0, rotation: 0 };
+    const original = moveFor(scene);
+    const move = strength === 1 ? original : { ...original, amount: original.amount * strength, base: 1 + (original.base - 1) * strength };
     const options = { amount: move.amount, speed: move.speed, onBeat: move.onBeat, beat: beatIn(scene), aspect: W / H };
     const view = RIG.flatView(move.move, k, options);
     const lowest = Math.min(1, RIG.flatView(move.move, 0, options).zoom, RIG.flatView(move.move, 1, options).zoom);
@@ -130,6 +145,24 @@
     const sx = 1 + 2 * Math.abs(view.x); const sy = 1 + 2 * Math.abs(view.y);
     const cover = Math.max(sx * c + sy * s * (H / W), sy * c + sx * s * (W / H));
     return { scale: Math.max((move.base * view.zoom) / lowest, cover), x: view.x, y: view.y, rotation: view.rotation };
+  }
+  // A person holding the camera: PortOS writes a scene's handheld motion (the template
+  // additions Handheld shake / footsteps, lib/handheldCamera.js) as `handheld: { zoom, terms }`,
+  // each term [axis, amp, freq, phase, bob] on shot seconds. The picture moves against the
+  // window's sway, rolls, and zooms enough that no edge shows.
+  function handheldView(scene, view, lt) {
+    const motion = scene.handheld;
+    if (!motion?.terms?.length) return view;
+    let x = 0; let y = 0; let r = 0;
+    for (const [axis, amp, freq, phase, bob] of motion.terms) {
+      const v = bob ? amp * (Math.abs(Math.sin(Math.PI * freq * lt + phase)) - 2 / Math.PI) : amp * Math.sin(2 * Math.PI * freq * lt + phase);
+      if (axis === 'x') x += v; else if (axis === 'y') y += v; else r += v;
+    }
+    const nx = view.x - x; const ny = view.y - y; const rotation = view.rotation + r * Math.PI / 180;
+    const c = Math.abs(Math.cos(rotation)); const s = Math.abs(Math.sin(rotation));
+    const sx = 1 + 2 * Math.abs(nx); const sy = 1 + 2 * Math.abs(ny);
+    const cover = Math.max(sx * c + sy * s * (H / W), sy * c + sx * s * (W / H));
+    return { scale: Math.max(view.scale * motion.zoom, cover), x: nx, y: ny, rotation };
   }
   // The rig's camera state for a code-drawn shot with a planned move (authored code may follow it).
   function cameraSample(scene, t) {
@@ -441,7 +474,7 @@
       ctx.translate(W / 2, H / 2 + px * 0.36); ctx.scale(lerp(1.2, 1, k), lerp(1.2, 1, k));
       text(str, 0, 0, F.stencil(px), C.paper, 'center');
       ctx.restore();
-      glitch(t, pulse(t, downs, 9) * state.reactiveGain);
+      glitch(t, pulse(t, downs, 9) * state.reactiveGain * templateEffects(scene).beatReaction);
     },
   };
   const cardFor = (scene) => (scene?.visualLayer === 'card' ? CARDS.title : null);
@@ -547,9 +580,39 @@
 
   let imageEffects = null;
 
+  function ensureColorMatchFilter(scene) {
+    const cm = scene?.colorMatch;
+    if (!cm?.parts || !cm.filterId) return null;
+    if (document.getElementById(cm.filterId)) return `url(#${cm.filterId})`;
+    let host = document.getElementById('portos-color-match-svg');
+    if (!host) {
+      host = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      host.id = 'portos-color-match-svg';
+      host.setAttribute('width', '0');
+      host.setAttribute('height', '0');
+      host.setAttribute('aria-hidden', 'true');
+      host.style.cssText = 'position:absolute;width:0;height:0;overflow:hidden;pointer-events:none';
+      (document.body || document.documentElement).appendChild(host);
+    }
+    const filter = document.createElementNS('http://www.w3.org/2000/svg', 'filter');
+    filter.id = cm.filterId;
+    filter.setAttribute('color-interpolation-filters', 'sRGB');
+    const { balance, gamma, saturate } = cm.parts;
+    filter.innerHTML = `<feColorMatrix type="matrix" values="${balance}"/>`
+      + `<feComponentTransfer>`
+      + `<feFuncR type="gamma" amplitude="1" exponent="${gamma}" offset="0"/>`
+      + `<feFuncG type="gamma" amplitude="1" exponent="${gamma}" offset="0"/>`
+      + `<feFuncB type="gamma" amplitude="1" exponent="${gamma}" offset="0"/>`
+      + `</feComponentTransfer>`
+      + `<feColorMatrix type="matrix" values="${saturate}"/>`;
+    host.appendChild(filter);
+    return `url(#${cm.filterId})`;
+  }
+
   // The scene's picture (its take or card, camera move, image effect and beat glitch), under every overlay.
   function drawSceneLayer(t, scene, source, state, authored) {
     ctx.fillStyle = C.ink; ctx.fillRect(0, 0, W, H);
+    const effects = templateEffects(scene);
     const effect = source && scene?.visualLayer === 'still' && scene.media?.kind === 'image' && scene.imageEffect
       ? imageEffects?.imageEffectState(scene.imageEffect, (frameOf(t) - Math.round(scene.startSec * FPS)) / FPS, { fps: FPS }) : null;
     if (scene) {
@@ -558,17 +621,22 @@
       if (card) card(t, lt, d, scene, source, state);
       else if (source) {
         const energetic = isHighEnergy(t) || scene.shotMode === 'performance';
-        const punch = 1 + 0.018 * pulse(t, energetic ? beats : downs, 8) * state.reactiveGain;
+        const punch = 1 + 0.018 * pulse(t, energetic ? beats : downs, 8) * state.reactiveGain * effects.beatReaction;
         ctx.save();
-        if (effect) ctx.filter = `contrast(${effect.contrast}) saturate(${effect.saturation})`;
-        const view = cameraView(scene, seg(t, scene.startSec, scene.endSec));
+        const filters = [];
+        const matchFilter = globalThis.__portosColorMatch?.filterCss?.(scene.sceneId)
+          || ensureColorMatchFilter(scene);
+        if (matchFilter) filters.push(matchFilter);
+        if (effect) filters.push(`contrast(${effect.contrast}) saturate(${effect.saturation})`);
+        if (filters.length) ctx.filter = filters.join(' ');
+        const view = handheldView(scene, cameraView(scene, seg(t, scene.startSec, scene.endSec)), lt);
         drawCover(source, view, punch);
         const end = effect?.end > 0 && scene.media.end?.src ? images.get(scene.media.end.src)?.el : null;
         if (end) { ctx.globalAlpha = effect.end; drawCover(end, view, punch); }
         ctx.restore();
         if (effect) _flash(effect.fog, imageEffects.IMAGE_EFFECT_FOG_COLOR);
       }
-      if (isHighEnergy(t)) glitch(t, pulse(t, downs, 8) * state.reactiveGain);
+      if (isHighEnergy(t)) glitch(t, pulse(t, downs, 8) * state.reactiveGain * effects.beatReaction);
     }
     return effect;
   }
@@ -622,8 +690,9 @@
         });
       } finally { ctx.restore(); }
     }
-    vignette(0.5);
-    grain(t, 0.09);
+    const effects = templateEffects(scene);
+    if (effects.vignette > 0) vignette(effects.vignette);
+    if (effects.grain > 0) grain(t, effects.grain);
     if (effect) _flash(effect.flash);
     const selectedEffect = effectFrames.get(frameOf(t));
     if (selectedEffect) {

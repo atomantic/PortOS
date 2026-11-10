@@ -73,12 +73,14 @@ export default function SceneImageEffect({ fieldId, scene, onChange, disabled = 
         )}
       </div>
       {effect && (
-        <p className={`text-[11px] ${toEnd && !scene.endImageId ? 'text-port-warning' : 'text-port-text-muted'}`}>
-          {toEnd && !scene.endImageId
-            ? 'Needs an end frame: make or pick one beside the start frame. Until then the shot plays its still.'
-            : !toEnd && spanSec != null && developSec > spanSec
-              ? `The shot ends at ${spanSec.toFixed(1)}s, before the photo finishes developing.`
-              : 'No video render: the still plays the effect.'}
+        <p className={`text-[11px] ${toEnd && scene.endFrameOff !== true && !scene.endImageId ? 'text-port-warning' : 'text-port-text-muted'}`}>
+          {toEnd && scene.endFrameOff === true
+            ? 'Use end frame is off, so this shot plays its start frame only.'
+            : toEnd && !scene.endImageId
+              ? 'Needs an end frame: make or pick one beside the start frame. Until then the shot plays its still.'
+              : !toEnd && spanSec != null && developSec > spanSec
+                ? `The shot ends at ${spanSec.toFixed(1)}s, before the photo finishes developing.`
+                : 'No video render: the still plays the effect.'}
         </p>
       )}
       {scene.visualLayer === 'still' && <ScenePhotoSequence scene={scene} fieldId={fieldId} onChange={onChange} disabled={disabled} beats={beats} fps={fps} />}

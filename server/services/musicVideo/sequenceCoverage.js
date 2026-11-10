@@ -1,7 +1,8 @@
 /**
- * Music Video sequence coverage (#14241): a run of cutaway shots that share a
- * set and protagonist generated in ONE timed fal request, then cut back onto
- * each scene's existing in/out points (musicVideoSequenceVideoHook.js).
+ * Music Video sequence coverage (#14241, #15588): a run of cutaway shots that
+ * share a set and protagonist generated in ONE timed request on fal.ai, Grok,
+ * or a local model, then cut back onto each scene's existing in/out points
+ * (musicVideoSequenceVideoHook.js).
  *
  * `previewSequenceCoverage` is read-only: the runs, the exact prompt and fal
  * body, each scene's cut inside the clip, and why other shots stay per-shot.
@@ -16,6 +17,23 @@ import {
   planProjectSequenceCoverage, SEQUENCE_PROMPT_EXPANSION, sequenceGroupInput, sequenceModelId,
 } from '../../lib/musicVideoSequenceCoverage.js';
 
+function previewRequest(project, group, { modelId, members, prompt, resolution, promptAdditions }) {
+  const backend = project?.videoSettings?.backend;
+  if (backend === 'grok') return { seconds: group.requestSec };
+  if (backend === 'local') return { seconds: group.durationSec, numFrames: group.numFrames };
+  try {
+    // Placeholder image URLs: the preview shows the body's shape, not hosted inputs.
+    const built = buildFalVideoRequest({
+      modelId, prompt, seconds: group.durationSec, resolution,
+      referenceImageUrls: members.map((s) => s.referenceImageId || 'pending-frame'),
+      promptExpansion: SEQUENCE_PROMPT_EXPANSION,
+    });
+    return { body: built.body, seconds: built.seconds, estimatedCostUsd: built.estimatedCostUsd, promptAdditions };
+  } catch (err) {
+    return { refusal: err.message };
+  }
+}
+
 export function previewSequenceCoverage(project) {
   const modelId = sequenceModelId(project);
   const { groups, perShot } = planProjectSequenceCoverage(project, { modelId });
@@ -23,20 +41,8 @@ export function previewSequenceCoverage(project) {
     modelId,
     perShot,
     groups: groups.map((group) => {
-      const { members, prompt, resolution, promptAdditions, spans } = sequenceGroupInput(project, group);
-      let request;
-      try {
-        // Placeholder image URLs: the preview shows the body's shape, not hosted inputs.
-        const built = buildFalVideoRequest({
-          modelId, prompt, seconds: group.durationSec, resolution,
-          referenceImageUrls: members.map((s) => s.referenceImageId || 'pending-frame'),
-          promptExpansion: SEQUENCE_PROMPT_EXPANSION,
-        });
-        request = { body: built.body, seconds: built.seconds, estimatedCostUsd: built.estimatedCostUsd, promptAdditions };
-      } catch (err) {
-        request = { refusal: err.message };
-      }
-      return { ...group, prompt, request, spans };
+      const input = sequenceGroupInput(project, group);
+      return { ...group, prompt: input.prompt, request: previewRequest(project, group, { modelId, ...input }), spans: input.spans };
     }),
   };
 }
@@ -58,8 +64,14 @@ export async function submitSequenceCoverage(projectId, { sceneIds } = {}) {
   if (!musicVideoBriefAllowsVideo(project)) {
     refuse(409, 'MUSIC_VIDEO_NO_VIDEO_TOOL', 'No video tool is selected in this project\'s brief, so generated footage is not dispatched.');
   }
+  const backend = project?.videoSettings?.backend || null;
   const modelId = sequenceModelId(project);
-  if (!modelId) refuse(409, 'SEQUENCE_NEEDS_FAL', 'Sequence coverage renders on fal.ai; this project renders clips on another backend.');
+  if (backend !== 'grok' && backend !== 'local' && !modelId) {
+    refuse(409, 'SEQUENCE_NEEDS_FAL', 'Sequence coverage renders on fal.ai, Grok, or a local model. This project renders clips on another backend.');
+  }
+  if (backend === 'local' && !project.videoSettings?.modelId) {
+    refuse(409, 'SEQUENCE_NEEDS_MODEL', 'Pick a local video model before rendering this sequence.');
+  }
   const wanted = (sceneIds || []).join('\u0000');
   const group = planProjectSequenceCoverage(project, { modelId }).groups.find((g) => g.sceneIds.join('\u0000') === wanted);
   if (!group) refuse(409, 'SEQUENCE_NOT_PLANNED', 'Those shots are not a planned sequence run any more. Reload the sequence preview.');
@@ -72,20 +84,50 @@ export async function submitSequenceCoverage(projectId, { sceneIds } = {}) {
     if (!path) refuse(409, 'PRODUCTION_FRAME_MISSING', `"${scene.label || scene.sceneId}" has no reference frame yet`);
     return path;
   });
-  let built;
-  try {
-    built = buildFalVideoRequest({
-      modelId, prompt, seconds: group.durationSec, resolution, referenceImageUrls: referenceImagePaths, promptExpansion: SEQUENCE_PROMPT_EXPANSION,
-    });
-  } catch (err) {
-    refuse(400, 'VALIDATION_ERROR', err.message);
-  }
+  const sequence = { sceneIds: group.sceneIds, startSec: group.startSec, durationSec: group.durationSec, spans };
+  const dependencies = Object.fromEntries(members.map((s) => [s.sceneId, captureTakeDependencies(s, basename(s.referenceImageId))]));
   const aspect = musicVideoAspect(project);
   const { enqueueJob } = await import('../mediaJobQueue/index.js');
-  const { jobId } = await enqueueJob({
-    kind: 'video',
-    owner: `music-video-sequence:${projectId}`,
-    params: {
+  let params;
+  let loggedSeconds;
+  if (backend === 'grok' || backend === 'local') {
+    const { getSettings } = await import('../settings.js');
+    const settings = await getSettings();
+    const present = (value) => (typeof value === 'string' && value.trim() ? value : null);
+    params = backend === 'grok'
+      ? {
+        mode: 'grok',
+        prompt,
+        duration: group.requestSec,
+        sourceImagePath: referenceImagePaths[0],
+        ...(present(settings.imageGen?.grok?.grokPath) ? { grokPath: settings.imageGen.grok.grokPath } : {}),
+        ...(aspect ? { aspectRatio: aspect } : {}),
+        musicVideo: { projectId, sequence },
+        musicVideoSequenceDependencies: dependencies,
+      }
+      : {
+        mode: 'image',
+        prompt,
+        numFrames: group.numFrames,
+        modelId: project.videoSettings.modelId,
+        fps: 24,
+        disableAudio: true,
+        sourceImagePath: referenceImagePaths[0],
+        ...(present(settings.imageGen?.local?.pythonPath) ? { pythonPath: settings.imageGen.local.pythonPath } : {}),
+        musicVideo: { projectId, sequence },
+        musicVideoSequenceDependencies: dependencies,
+      };
+    loggedSeconds = backend === 'grok' ? group.requestSec : group.durationSec;
+  } else {
+    let built;
+    try {
+      built = buildFalVideoRequest({
+        modelId, prompt, seconds: group.durationSec, resolution, referenceImageUrls: referenceImagePaths, promptExpansion: SEQUENCE_PROMPT_EXPANSION,
+      });
+    } catch (err) {
+      refuse(400, 'VALIDATION_ERROR', err.message);
+    }
+    params = {
       mode: 'fal',
       videoMode: 'text',
       modelId,
@@ -96,11 +138,13 @@ export async function submitSequenceCoverage(projectId, { sceneIds } = {}) {
       ...(aspect ? { aspectRatio: aspect, frameAspect: aspect } : {}),
       referenceImagePaths,
       // No sceneId: the per-scene hooks ignore this job; the sequence hook cuts it onto `spans`.
-      musicVideo: { projectId, sequence: { sceneIds: group.sceneIds, startSec: group.startSec, durationSec: group.durationSec, spans } },
-      musicVideoSequenceDependencies: Object.fromEntries(members.map((s) => [s.sceneId, captureTakeDependencies(s, basename(s.referenceImageId))])),
+      musicVideo: { projectId, sequence },
+      musicVideoSequenceDependencies: dependencies,
       ...(Number.isFinite(built.estimatedCostUsd) ? { musicVideoCostUsd: built.estimatedCostUsd, musicVideoCostModelId: modelId } : {}),
-    },
-  });
-  console.log(`🎞️ music-video sequence ${projectId.slice(0, 8)} [${group.sceneIds.join(', ')}] → one ${built.seconds}s fal request ${jobId.slice(0, 8)}`);
+    };
+    loggedSeconds = built.seconds;
+  }
+  const { jobId } = await enqueueJob({ kind: 'video', owner: `music-video-sequence:${projectId}`, params });
+  console.log(`🎞️ music-video sequence ${projectId.slice(0, 8)} [${group.sceneIds.join(', ')}] → one ${loggedSeconds}s ${backend || 'fal'} request ${jobId.slice(0, 8)}`);
   return { jobId, sceneIds: group.sceneIds, prompt };
 }

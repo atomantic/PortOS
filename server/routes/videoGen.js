@@ -22,7 +22,7 @@ import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.j
 import { createVideoHistoryItemRead, historyRecordIdSchema } from './videoHistoryRead.js';
 import { uploadFields, optionalUpload, optionalUploadFields } from '../lib/multipart.js';
 import {
-  validateRequest, mediaDeleteQuerySchema, modelDownloadQuerySchema, modelDownloadParamsSchema,
+  validateRequest, hostedProviderParamSchema, mediaDeleteQuerySchema, modelDownloadQuerySchema, modelDownloadParamsSchema,
   icLoraDownloadParamsSchema, textEncoderDownloadParamsSchema, videoCancelBodySchema, videoModelTermsSchema,
 } from '../lib/validation.js';
 import { grokVideoDurationSchema } from '../lib/sharedSchemas.js';
@@ -37,6 +37,7 @@ import {
   videoModelTermsGateId, isVideoModelTermsAccepted, videoModelTermsError,
 } from '../lib/videoDisclosure.js';
 import { getSettings, updateSettingsWith } from '../services/settings.js';
+import { deleteVideoHostedCopy } from '../services/hostedRenderRemoteDelete.js';
 import { recordUserAction } from '../services/userActions.js';
 import { checkPackages, isAllowedPython } from '../lib/pythonSetup.js';
 import {
@@ -65,6 +66,8 @@ import { quoteTopaz } from '../services/videoGen/topazQuote.js';
 import { assertNoPendingTopaz, enqueueTopazUpscale, reconcileTopazStatus, recoverTopazResult } from '../services/videoGen/topazJob.js';
 import { enqueueStitch } from '../services/videoGen/stitchJob.js';
 import { trimHistoryItem } from '../services/videoGen/trim.js';
+import { handheldHistoryItem } from '../services/videoGen/handheld.js';
+import { HANDHELD_SEED_MAX } from '../lib/handheldCamera.js';
 import { cleanupMultipartTemp } from '../services/videoGen/prepareParams.js';
 import { submitVideoGenJob } from '../services/videoGen/submitJob.js';
 import { PREVIEW_UPLOAD_FIELDS, previewVideoPrompt } from '../services/videoGen/promptPreview.js';
@@ -72,7 +75,8 @@ import { resolveReactorApiKey, mintReactorToken } from '../services/videoGen/rea
 import { isVideoModeUsable, VIDEO_GEN_MODE } from '../services/videoGen/modes.js';
 import { MAX_VIDEO_BATCH_SIZE } from '../services/videoGen/batch.js';
 import { VIDEO_GEN_LOCAL_ONLY_FIELDS, REFERENCE_AUDIO_FIELDS, VIDEO_REFERENCE_IMAGE_FIELDS, MAX_VIDEO_REFERENCE_LABEL_LENGTH } from '../services/videoGen/requestFields.js';
-import { attachSseClient, cancelJob, listJobs } from '../services/mediaJobQueue/index.js';
+import { attachSseClient, cancelJob, listJobs, laneConcurrencyFor } from '../services/mediaJobQueue/index.js';
+import { mediaJobExecutionLane } from '../lib/generationModes.js';
 import { getTextEncoderRepo, isHfRepoId } from '../lib/mediaModels.js';
 import {
   IC_LORA_MODE_VALUES, icLoraSpecForMode, listIcLoraWeights, listIcLoraRemixModes,
@@ -1316,23 +1320,36 @@ const pickJobParams = (job) => {
 };
 
 router.get('/active', (_req, res) => {
-  const running = listJobs({ kind: 'video', status: 'running' })[0];
-  const queuedList = !running ? listJobs({ kind: 'video', status: 'queued' }) : [];
+  const runningList = listJobs({ kind: 'video', status: 'running' });
+  const queuedList = runningList.length === 0 ? listJobs({ kind: 'video', status: 'queued' }) : [];
   const queued = queuedList.length ? queuedList[queuedList.length - 1] : null;
-  const job = running || queued;
-  if (!job) return res.json({ activeJob: null });
+  const primaryJob = runningList[0] || queued;
+
+  const formatJob = (job) => ({
+    jobId: job.id,
+    generationId: job.id,
+    status: job.status,
+    position: job.position,
+    startedAt: job.startedAt || null,
+    params: pickJobParams(job),
+  });
+
+  const activeJobs = runningList.map(formatJob);
+  const activeJob = primaryJob ? formatJob(primaryJob) : null;
+  const sampleJob = primaryJob || runningList[0];
+  const lane = sampleJob ? mediaJobExecutionLane({ kind: sampleJob.kind, mode: sampleJob.params?.mode }) : 'gpu';
+  const isLocal = lane === 'gpu';
+  const limit = (typeof laneConcurrencyFor === 'function' && sampleJob) ? laneConcurrencyFor(sampleJob) : 1;
+
+  if (!primaryJob && runningList.length === 0) {
+    return res.json({ activeJob: null });
+  }
+
   res.json({
-    activeJob: {
-      jobId: job.id,
-      generationId: job.id,
-      status: job.status,
-      position: job.position,
-      // When the worker dequeued this job. A page that reloads mid-render needs
-      // it to keep showing a truthful elapsed clock; without it the render
-      // status card would restart from zero and read as a fresh start (#5872).
-      startedAt: job.startedAt || null,
-      params: pickJobParams(job),
-    },
+    activeJob,
+    activeJobs,
+    limit,
+    ...(isLocal ? { memoryGoverned: true, limitReason: 'memory-governed' } : {}),
   });
 });
 
@@ -1428,6 +1445,15 @@ router.delete('/history/:id', asyncHandler(async (req, res) => {
   const { force } = validateRequest(mediaDeleteQuerySchema, req.query ?? {});
   await assertMediaDeletable(`video:${parsed.data}`, { force: force === '1' });
   res.json({ ok: true, ...(await deleteMediaAnywhere('video', parsed.data)) });
+}));
+
+// Runs the provider's delete for a finished render (Runway: the rendered asset; fal.ai: stored payloads and output files);
+// the local file and record stay, stamped with when the hosted copy was deleted.
+router.delete('/history/:id/hosted/:provider', asyncHandler(async (req, res) => {
+  const parsed = historyRecordIdSchema.safeParse(req.params.id);
+  if (!parsed.success) failValidation(parsed);
+  const provider = validateRequest(hostedProviderParamSchema, req.params.provider);
+  res.json(await deleteVideoHostedCopy(provider, parsed.data));
 }));
 
 router.post('/history/:id/cancel-delete', asyncHandler(async (req, res) => {
@@ -1573,6 +1599,21 @@ router.post('/history/:id/trim', asyncHandler(async (req, res) => {
   if (!parsed.success) failValidation(parsed);
   const body = validateRequest(trimBodySchema, req.body ?? {});
   res.json({ ok: true, video: await trimHistoryItem(parsed.data, body) });
+}));
+
+// Re-shoot a clip as if handheld (lib/handheldCamera.js): zoomed in a little,
+// with the margin swaying, rolling and bobbing with footsteps. Like a trim, it
+// writes a NEW gallery row and leaves the source clip untouched.
+const handheldBodySchema = z.object({
+  shake: z.number().finite().min(0).max(1),
+  steps: z.number().finite().min(0).max(1),
+  seed: z.number().int().min(1).max(HANDHELD_SEED_MAX).optional(),
+}).strict();
+router.post('/history/:id/handheld', asyncHandler(async (req, res) => {
+  const parsed = historyIdSchema.safeParse(req.params.id);
+  if (!parsed.success) failValidation(parsed);
+  const body = validateRequest(handheldBodySchema, req.body ?? {});
+  res.json({ ok: true, video: await handheldHistoryItem(parsed.data, body) });
 }));
 
 const stitchBodySchema = z.object({

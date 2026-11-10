@@ -276,4 +276,44 @@ describe('stalled runtime watchdog', () => {
     await stallOnce();
     expect(restart).toHaveBeenCalledTimes(2);
   });
+
+  // Nothing is admitted while stalled, so the counters cannot move on their own:
+  // without a retry, a stall that began inside the cooldown (or whose restart
+  // failed) refused every request until someone restarted the container by hand.
+  it('restarts a stall that is still in place once the cooldown passes, but not while the runtime is unreachable', async () => {
+    const clock = { t: 0 };
+    const metrics = { progress: { running: 1, tokens: 10 } };
+    const restart = vi.fn().mockRejectedValue(new Error('docker unavailable'));
+    const ctx = await setup({ restartRuntime: restart, readProgress: async () => metrics.progress, ...stallOptions(clock) });
+    ctx.runtime.silent = true;
+    const stuck = hangingRequest(ctx);
+    await vi.waitFor(() => expect(ctx.gateway.status().active).toBe(1));
+    await ctx.gateway.pollStall();
+    clock.t += 120000;
+    await ctx.gateway.pollStall();
+    await stuck;
+    expect(ctx.gateway.status().stalled).toBe(true);
+    await vi.waitFor(() => expect(restart).toHaveBeenCalledTimes(1));
+
+    clock.t += 599000;
+    await ctx.gateway.pollStall();
+    expect(restart).toHaveBeenCalledTimes(1);
+
+    clock.t += 1000;
+    await ctx.gateway.pollStall();
+    await vi.waitFor(() => expect(restart).toHaveBeenCalledTimes(2));
+    await ctx.gateway.pollStall();
+    expect(restart).toHaveBeenCalledTimes(2);
+    expect(ctx.gateway.status().stalled).toBe(true);
+
+    // Unreachable means a restart or cold load is under way: no extra restart, and its return clears the stall.
+    clock.t += 600000;
+    metrics.progress = null;
+    await ctx.gateway.pollStall();
+    expect(restart).toHaveBeenCalledTimes(2);
+    metrics.progress = { running: 0, tokens: 10 };
+    await ctx.gateway.pollStall();
+    expect(restart).toHaveBeenCalledTimes(2);
+    expect(ctx.gateway.status().stalled).toBe(false);
+  });
 });

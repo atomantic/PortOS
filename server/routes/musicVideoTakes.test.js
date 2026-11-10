@@ -49,16 +49,17 @@ vi.mock('../lib/fileUtils.js', async (original) => {
 });
 
 // The vision reviewer itself is covered in plateReview.test.js; here it answers with real evidence for the scene it was handed.
-const plateCheck = vi.hoisted(() => ({ duringReview: null, reviewerAsked: null }));
+const plateCheck = vi.hoisted(() => ({ duringReview: null, reviewerAsked: null, asked: null }));
 vi.mock('../services/musicVideo/plateReview.js', async () => {
   const { plateReviewEvidence, plateRequirements } = await import('../lib/musicVideoPlateEvidence.js');
   return {
     resolvePlateReviewer: async (pinned) => { plateCheck.reviewerAsked = pinned; return { provider: { id: 'example-vision' }, model: 'example-model', costUsd: 0 }; },
-    reviewPlate: async ({ scene, assetId, runId }) => {
+    reviewPlate: async ({ scene, assetId, runId, prompt, frameRole = 'start', project }) => {
+      plateCheck.asked = { prompt, frameRole };
       await plateCheck.duringReview?.();
-      return plateReviewEvidence(scene, assetId, runId, JSON.stringify({ checks: plateRequirements(scene).map(({ id }) => ({
+      return plateReviewEvidence(scene, assetId, runId, JSON.stringify({ checks: plateRequirements(scene, [], frameRole, project).map(({ id }) => ({
         id, status: id === 'plate-prompt' ? 'fail' : 'pass', note: id === 'plate-prompt' ? 'The lighthouse is missing.' : 'Clean',
-      })) }));
+      })) }), {}, [], frameRole, project);
     },
   };
 });
@@ -96,6 +97,7 @@ let sceneB;
 beforeEach(async () => {
   race.beforeDelete = race.beforeSave = race.onRequest = race.ownerAnswer = null;
   plateCheck.duringReview = null;
+  plateCheck.asked = null;
   rmSync(join(ROOT(), 'music-video-projects.json'), { force: true });
   rmSync(join(ROOT(), 'images'), { recursive: true, force: true });
   seedVideoHistory([]);
@@ -186,6 +188,39 @@ describe('scene takes routes', () => {
     plateCheck.duringReview = () => projects.updateScene(project.id, sceneA.sceneId, { framePrompt: 'Another composition' });
     expect((await request(app).post(url)).status).toBe(409);
     expect((await reload()).scenes[0].takes[0].plateEvidence.basis).toBe(checked.body.takes[0].plateEvidence.basis);
+  });
+
+  // Uniquely catches a camera-rule edit accepting evidence from the prior requirements.
+  it('refuses plate evidence when the selected camera rule changes while inspection runs', async () => {
+    seedImage('camera-check.png');
+    const added = await addTake(sceneA.sceneId, { kind: 'image', assetId: 'camera-check.png' });
+    await projects.updateProject(project.id, { cameras: [{ id: 'snap', name: 'Snapshot', kind: 'observer', rule: 'Nobody looks at it.' }] });
+    await projects.updateScene(project.id, sceneA.sceneId, { shotSheet: { cameraId: 'snap' } });
+    const url = `${base()}/scenes/${sceneA.sceneId}/takes/${added.body.take.takeId}/check`;
+    expect((await request(app).post(url)).status).toBe(200);
+    plateCheck.duringReview = () => projects.updateProject(project.id, { cameras: [{ id: 'snap', name: 'Snapshot', kind: 'observer', rule: 'Look into the lens.' }] });
+    const refused = await request(app).post(url);
+    expect(refused.status).toBe(409);
+    expect(refused.body.code).toBe('MUSIC_VIDEO_REVIEW_STALE');
+  });
+
+  // Uniquely catches an end-frame check judged against the start prompt, or its verdict landing on the start take.
+  it('checks an end-frame take against the end-frame prompt and records the verdict on that take', async () => {
+    seedImage('end.png');
+    await projects.updateScene(project.id, sceneA.sceneId, { endFramePrompt: 'Door shut on the lighthouse' });
+    const added = await addTake(sceneA.sceneId, { kind: 'endImage', assetId: 'end.png' });
+    const url = `${base()}/scenes/${sceneA.sceneId}/takes/${added.body.take.takeId}/check`;
+    const checked = await request(app).post(url);
+    expect(checked.status).toBe(200);
+    expect(plateCheck.asked).toEqual({ prompt: 'Door shut on the lighthouse', frameRole: 'end' });
+    const endTake = checked.body.takes.find((take) => take.kind === 'endImage');
+    expect(endTake.plateEvidence).toMatchObject({ assetId: 'end.png', verdict: 'fail' });
+    expect(endTake.plateEvidence.checks.find((check) => check.id === 'plate-prompt').requirement).toBe('Matches the saved still prompt: Door shut on the lighthouse');
+
+    plateCheck.duringReview = () => projects.updateScene(project.id, sceneA.sceneId, { framePrompt: 'Another composition' });
+    expect((await request(app).post(url)).status).toBe(200);
+    plateCheck.duringReview = () => projects.updateScene(project.id, sceneA.sceneId, { endFramePrompt: 'A different ending' });
+    expect((await request(app).post(url)).status).toBe(409);
   });
 
   it('rejecting the selected take clears the slot so the next take fills it', async () => {
@@ -488,6 +523,53 @@ describe('Swap\'s prompt search', () => {
 });
 
 describe('the shot asset manager', () => {
+  it('keeps later mark and take decisions when Undo no longer matches its own result', async () => {
+    for (const name of ['first.png', 'fallback.png', 'newer.png']) seedImage(name);
+    const first = await addTake(sceneA.sceneId, { kind: 'image', assetId: 'first.png', source: 'generated' });
+    await addTake(sceneA.sceneId, { kind: 'image', assetId: 'fallback.png', source: 'generated' });
+    const mark = (body) => request(app).patch(`${base()}/media-pool/marks`).send({ items: [{ kind: 'image', assetId: 'first.png' }], ...body });
+    const bad = await mark({ mark: 'bad' });
+    expect(bad.body.scenes[0].referenceImageId).toBe('fallback.png');
+    const newer = await addTake(sceneA.sceneId, { kind: 'image', assetId: 'newer.png', source: 'generated' });
+    const select = (takeId, body = {}) => request(app).post(`${base()}/scenes/${sceneA.sceneId}/takes/${takeId}/select`).send(body);
+    await select(newer.body.take.takeId);
+    await mark({ mark: 'ingredient' });
+    const markConflict = await mark({ mark: null, expectedMark: 'bad' });
+    expect(markConflict.status).toBe(409);
+    expect(markConflict.body.code).toBe('MUSIC_VIDEO_UNDO_CONFLICT');
+    const selectionConflict = await select(first.body.take.takeId, { expectedSelectedAssetId: 'fallback.png' });
+    expect(selectionConflict.status).toBe(409);
+    expect(selectionConflict.body.code).toBe('MUSIC_VIDEO_UNDO_CONFLICT');
+    const kept = await reload();
+    expect(kept.assetMarks['image:first.png']).toBe('ingredient');
+    expect(kept.scenes.find((scene) => scene.sceneId === sceneA.sceneId).referenceImageId).toBe('newer.png');
+    expect((await select(first.body.take.takeId, { expectedSelectedAssetId: 'newer.png' })).status).toBe(200);
+    expect((await mark({ mark: null, expectedMark: 'ingredient' })).status).toBe(200);
+    expect((await select(first.body.take.takeId, { expectedSelectedAssetId: 42 })).status).toBe(400);
+  });
+
+  it('reconciles a clip after a bad start frame falls back, and flags an unmatched clip until a compatible choice returns', async () => {
+    for (const name of ['start-a.png', 'start-b.png', 'start-c.png']) seedImage(name);
+    seedVideoHistory([{ id: 'clip-a' }, { id: 'clip-b' }]);
+    await addTake(sceneA.sceneId, { kind: 'image', assetId: 'start-a.png', source: 'generated' });
+    const b = await addTake(sceneA.sceneId, { kind: 'image', assetId: 'start-b.png', source: 'generated' });
+    await addTake(sceneA.sceneId, { kind: 'video', assetId: 'clip-a', source: 'generated', sourceImageId: 'start-a.png' });
+    await addTake(sceneA.sceneId, { kind: 'video', assetId: 'clip-b', source: 'generated', sourceImageId: 'start-b.png' });
+    const mark = (assetId, value) => request(app).patch(`${base()}/media-pool/marks`).send({ items: [{ kind: 'image', assetId }], mark: value });
+    const fallback = await mark('start-a.png', 'bad');
+    expect(fallback.status).toBe(200);
+    expect(fallback.body.scenes[0]).toMatchObject({ referenceImageId: 'start-b.png', videoHistoryId: 'clip-b' });
+    expect(fallback.body.scenes[0].takes.find((take) => take.assetId === 'clip-a').status).toBe('candidate');
+    await addTake(sceneA.sceneId, { kind: 'image', assetId: 'start-c.png', source: 'generated' });
+    const unmatched = await mark('start-b.png', 'bad');
+    expect(unmatched.body.scenes[0]).toMatchObject({ referenceImageId: 'start-c.png', videoHistoryId: 'clip-b', selectedTakeMarkedBad: true });
+    await mark('start-b.png', null);
+    expect((await reload()).scenes.find((scene) => scene.sceneId === sceneA.sceneId).selectedTakeMarkedBad).toBe(true);
+    const restored = await request(app).post(`${base()}/scenes/${sceneA.sceneId}/takes/${b.body.take.takeId}/select`).send({ expectedSelectedAssetId: 'start-c.png' });
+    expect(restored.status).toBe(200);
+    expect(restored.body).toMatchObject({ referenceImageId: 'start-b.png', videoHistoryId: 'clip-b' });
+    expect(restored.body.selectedTakeMarkedBad).toBeFalsy();
+  });
   // Uniquely catches a take rejected from one shot reading as bad in Swap, where another shot may want it.
   it('lists a take rejected from its shot as not bad until the director marks it', async () => {
     for (const name of ['first.png', 'second.png']) seedImage(name);
@@ -509,13 +591,147 @@ describe('the shot asset manager', () => {
     await addTake(sceneB.sceneId, { kind: 'endImage', assetId: 'a-pick.png', source: 'generated' });
     const marked = await request(app).patch(`${base()}/media-pool/marks`).send({ items: [{ kind: 'image', assetId: 'spare.png' }, { kind: 'image', assetId: 'a-pick.png' }], mark: 'bad' });
     expect(marked.status).toBe(200);
-    // Shot A uses a-pick and shot B uses spare (its first take), so only A's spare changes.
-    expect(marked.body.scenes.map((scene) => scene.sceneId)).toEqual([sceneA.sceneId]);
+    // A's unused spare is rejected; both shots return their newly flagged selected assets.
+    expect(marked.body.scenes.map((scene) => scene.sceneId)).toEqual([sceneA.sceneId, sceneB.sceneId]);
+    expect(marked.body.scenes.every((scene) => scene.selectedTakeMarkedBad)).toBe(true);
     const statuses = (scene) => Object.fromEntries(scene.takes.map((take) => [`${take.kind}:${take.assetId}`, take.status]));
     expect(statuses(marked.body.scenes[0])).toEqual({ 'image:a-pick.png': 'candidate', 'image:spare.png': 'rejected' });
     const saved = (await reload()).scenes;
     expect(statuses(saved.find((scene) => scene.sceneId === sceneB.sceneId))).toEqual({ 'image:spare.png': 'candidate', 'endImage:a-pick.png': 'candidate' });
     expect(saved.find((scene) => scene.sceneId === sceneA.sceneId).referenceImageId).toBe('a-pick.png');
+  });
+
+  // Uniquely catches marking a selected frame bad failing to fall back to the next good candidate take, or failing to reject the bad take.
+  it('falls back to the next good take when a selected frame or clip is marked bad', async () => {
+    for (const name of ['start-1.png', 'start-2.png', 'start-3.png']) seedImage(name);
+    seedVideoHistory([
+      { id: 'clip-1', filename: 'clip-1.mp4', musicVideo: { projectId: project.id, sceneId: sceneA.sceneId } },
+      { id: 'clip-2', filename: 'clip-2.mp4', musicVideo: { projectId: project.id, sceneId: sceneA.sceneId } },
+      { id: 'clip-other-frame', filename: 'clip-o.mp4', musicVideo: { projectId: project.id, sceneId: sceneA.sceneId } },
+    ]);
+
+    await addTake(sceneA.sceneId, { kind: 'image', assetId: 'start-1.png', source: 'generated' });
+    await addTake(sceneA.sceneId, { kind: 'image', assetId: 'start-2.png', source: 'generated' });
+    await addTake(sceneA.sceneId, { kind: 'image', assetId: 'start-3.png', source: 'generated' });
+
+    const markRes = await request(app).patch(`${base()}/media-pool/marks`).send({
+      items: [{ kind: 'image', assetId: 'start-1.png' }],
+      mark: 'bad',
+    });
+    expect(markRes.status).toBe(200);
+    expect(markRes.body.changes).toEqual([
+      expect.objectContaining({
+        sceneId: sceneA.sceneId,
+        shotNumber: 1,
+        slot: 'image',
+        action: 'moved',
+        fromAssetId: 'start-1.png',
+        toAssetId: 'start-3.png',
+      }),
+    ]);
+
+    const afterFrameFallback = (await reload()).scenes.find((s) => s.sceneId === sceneA.sceneId);
+    expect(afterFrameFallback.referenceImageId).toBe('start-3.png');
+    const badTake = afterFrameFallback.takes.find((t) => t.assetId === 'start-1.png');
+    expect(badTake.status).toBe('rejected');
+
+    await addTake(sceneA.sceneId, { kind: 'video', assetId: 'clip-1', source: 'generated', sourceImageId: 'start-3.png' });
+    await addTake(sceneA.sceneId, { kind: 'video', assetId: 'clip-2', source: 'generated', sourceImageId: 'start-3.png' });
+    await addTake(sceneA.sceneId, { kind: 'video', assetId: 'clip-other-frame', source: 'generated', sourceImageId: 'start-2.png' });
+
+    const clipMarkRes = await request(app).patch(`${base()}/media-pool/marks`).send({
+      items: [{ kind: 'video', assetId: 'clip-1' }],
+      mark: 'bad',
+    });
+    expect(clipMarkRes.status).toBe(200);
+    expect(clipMarkRes.body.changes).toEqual([
+      expect.objectContaining({
+        sceneId: sceneA.sceneId,
+        shotNumber: 1,
+        slot: 'video',
+        action: 'moved',
+        fromAssetId: 'clip-1',
+        toAssetId: 'clip-2',
+      }),
+    ]);
+    const afterClipFallback = (await reload()).scenes.find((s) => s.sceneId === sceneA.sceneId);
+    expect(afterClipFallback.videoHistoryId).toBe('clip-2');
+    expect(afterClipFallback.takes.find((t) => t.assetId === 'clip-1').status).toBe('rejected');
+  });
+
+  // Uniquely catches a shot with no remaining good candidate takes clearing its selection instead of flagging selectedTakeMarkedBad and blocking readiness.
+  it('flags a shot when no good candidate take remains, blocking production readiness', async () => {
+    seedImage('only.png');
+    await addTake(sceneA.sceneId, { kind: 'image', assetId: 'only.png', source: 'generated' });
+
+    const markRes = await request(app).patch(`${base()}/media-pool/marks`).send({
+      items: [{ kind: 'image', assetId: 'only.png' }],
+      mark: 'bad',
+    });
+    expect(markRes.status).toBe(200);
+    expect(markRes.body.changes).toEqual([
+      expect.objectContaining({
+        sceneId: sceneA.sceneId,
+        shotNumber: 1,
+        slot: 'image',
+        action: 'flagged',
+        fromAssetId: 'only.png',
+        toAssetId: 'only.png',
+      }),
+    ]);
+
+    const stored = await reload();
+    const scene = stored.scenes.find((s) => s.sceneId === sceneA.sceneId);
+    expect(scene.referenceImageId).toBe('only.png');
+    expect(scene.selectedTakeMarkedBad).toBe(true);
+    expect(markRes.body.scenes.find((entry) => entry.sceneId === sceneA.sceneId).selectedTakeMarkedBad).toBe(true);
+
+    const { sceneRenderReady } = await import('../lib/musicVideoLayers.js');
+    expect(sceneRenderReady(scene)).toBe(false);
+
+    const { productionReadiness } = await import('../services/musicVideo/productionReview.js');
+    const readiness = productionReadiness(stored);
+    expect(readiness.selectedTakeMarkedBad).toBe(true);
+    expect(readiness.storyboard.selectedTakeMarkedBad).toBe(true);
+    expect(readiness.storyboard.problems.some((p) => p.includes('Selected take marked bad'))).toBe(true);
+    expect(readiness.readyForProduction).toBe(false);
+
+    const { summarizeMusicVideoProject } = await import('../lib/musicVideoSummary.js');
+    expect(summarizeMusicVideoProject(stored).selectedTakeMarkedBad).toBe(true);
+  });
+
+  // Uniquely catches keepInUse: true not keeping the bad take selected or applying fallback when requested.
+  it('respects keepInUse: true when marking bad, keeping the selection without fallback or flagging', async () => {
+    for (const name of ['primary.png', 'backup.png']) seedImage(name);
+    await addTake(sceneA.sceneId, { kind: 'image', assetId: 'primary.png', source: 'generated' });
+    await addTake(sceneA.sceneId, { kind: 'image', assetId: 'backup.png', source: 'generated' });
+
+    const markRes = await request(app).patch(`${base()}/media-pool/marks`).send({
+      items: [{ kind: 'image', assetId: 'primary.png' }],
+      mark: 'bad',
+      keepInUse: true,
+    });
+    expect(markRes.status).toBe(200);
+    expect(markRes.body.changes).toEqual([]);
+    const scene = (await reload()).scenes.find((s) => s.sceneId === sceneA.sceneId);
+    expect(scene.referenceImageId).toBe('primary.png');
+    expect(scene.selectedTakeMarkedBad).toBeFalsy();
+    expect(scene.takes.find((t) => t.assetId === 'primary.png').status).toBe('candidate');
+  });
+
+  // Uniquely catches clearing a mark reverting a moved selection, or failing to clear selectedTakeMarkedBad.
+  it('clears selectedTakeMarkedBad when unmarking if selections are clean, without reverting takes', async () => {
+    seedImage('lone.png');
+    await addTake(sceneA.sceneId, { kind: 'image', assetId: 'lone.png', source: 'generated' });
+    await request(app).patch(`${base()}/media-pool/marks`).send({ items: [{ kind: 'image', assetId: 'lone.png' }], mark: 'bad' });
+    expect((await reload()).scenes.find((s) => s.sceneId === sceneA.sceneId).selectedTakeMarkedBad).toBe(true);
+
+    const unmark = await request(app).patch(`${base()}/media-pool/marks`).send({ items: [{ kind: 'image', assetId: 'lone.png' }], mark: null });
+    expect(unmark.status).toBe(200);
+    const scene = (await reload()).scenes.find((s) => s.sceneId === sceneA.sceneId);
+    expect(scene.selectedTakeMarkedBad).toBeFalsy();
+    expect(scene.referenceImageId).toBe('lone.png');
+    expect(unmark.body.scenes.find((entry) => entry.sceneId === sceneA.sceneId).selectedTakeMarkedBad).toBeFalsy();
   });
 
   // Uniquely catches a deleted still or clip leaving a take, mark or collection row pointing at a file that is gone, and a shot's own still being deletable.

@@ -12,7 +12,7 @@ import BrailleSpinner from '../BrailleSpinner';
 import RunwayModelSelect from '../imageGen/RunwayModelSelect';
 import FalModelSelect from '../imageGen/FalModelSelect';
 import {
-  IMAGE_GEN_MODE, RENDER_TARGET_BACKEND_AUTO, RENDER_TARGET_OPTIONS, VIDEO_RENDER_MODES, modeLabel,
+  IMAGE_GEN_MODE, IMAGE_PIN_MODES, RENDER_TARGET_BACKEND_AUTO, RENDER_TARGET_OPTIONS, VIDEO_RENDER_MODES, modeLabel,
   normalizeRenderPinValue, supportsCloudModelOverride,
 } from '../../lib/imageGenBackends';
 
@@ -238,7 +238,7 @@ export default function ImageGenBackendSections({ mediaTab, form, credentials })
                     className={`${SELECT_CLASS} sm:w-44`}
                   >
                     <option value="">Auto (install default)</option>
-                    {[IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX, IMAGE_GEN_MODE.GROK, IMAGE_GEN_MODE.AGY, IMAGE_GEN_MODE.FAL, IMAGE_GEN_MODE.RUNWAY].map((m) => (
+                    {IMAGE_PIN_MODES.map((m) => (
                       <option key={m} value={m}>{modeLabel(m)}</option>
                     ))}
                   </select>

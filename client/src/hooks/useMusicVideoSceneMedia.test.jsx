@@ -18,15 +18,17 @@ vi.mock('../services/socket', () => ({
 }));
 
 const getMusicVideoSceneJobs = vi.fn();
+const renderMusicVideoSceneFrame = vi.fn(async () => ({ status: 'queued', jobId: 'new-job' }));
+const generateVideo = vi.fn();
 vi.mock('../services/apiMusicVideo.js', () => ({
   addMusicVideoSceneTake: vi.fn(),
   getMusicVideoSceneJobs: (...a) => getMusicVideoSceneJobs(...a),
+  renderMusicVideoSceneFrame: (...a) => renderMusicVideoSceneFrame(...a),
+  renderMusicVideoSceneClip: (_id, _sceneId, body) => generateVideo(body),
 }));
 const getMediaJob = vi.fn(async () => ({ status: 'failed' }));
 vi.mock('../services/apiMediaJobs', () => ({ getMediaJob: (...a) => getMediaJob(...a) }));
-const generateImage = vi.fn(async () => ({ status: 'queued', jobId: 'new-job' }));
-vi.mock('../services/apiSystem.js', () => ({ generateImage: (...a) => generateImage(...a) }));
-vi.mock('../services/apiImageVideo.js', () => ({ generateVideo: vi.fn() }));
+vi.mock('../services/apiImageVideo.js', () => ({ generateVideo }));
 vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn(), info: vi.fn(), success: vi.fn() } }));
 const { default: toast } = await import('../components/ui/Toast');
 const toastError = toast.error;
@@ -50,8 +52,19 @@ const setup = () => {
 };
 
 describe('useMusicVideoSceneMedia in-flight restore and failure chip (#10154)', () => {
-  beforeEach(() => { handlers.clear(); generateImage.mockClear(); getMusicVideoSceneJobs.mockReset(); });
+  beforeEach(() => { handlers.clear(); renderMusicVideoSceneFrame.mockClear(); getMusicVideoSceneJobs.mockReset(); });
   afterEach(cleanup);
+
+  it('forwards a candidate refinement and reference opt-out for either frame slot', async () => {
+    getMusicVideoSceneJobs.mockResolvedValue({ jobs: [] });
+    const { result } = setup();
+    for (const [method, slot] of [['generateFrame', 'start'], ['generateEndFrame', 'end']]) {
+      await act(async () => { await result.current[method](project.scenes[0], { referenceImageId: 'candidate.png', refine: '  Raise the hand  ', includeReferences: false }); });
+      expect(renderMusicVideoSceneFrame).toHaveBeenLastCalledWith('p1', 's1', {
+        slot, referenceImageId: 'candidate.png', refine: '  Raise the hand  ', includeReferences: false,
+      }, { silent: true });
+    }
+  });
 
   it('restores spinners for the server queue\'s in-flight renders after a reload, and "generate missing" skips them', async () => {
     getMusicVideoSceneJobs.mockResolvedValue({ jobs: [
@@ -64,8 +77,8 @@ describe('useMusicVideoSceneMedia in-flight restore and failure chip (#10154)', 
     expect(result.current.genVideoScenes.s2).toBe(true);
 
     act(() => { result.current.generateMissingFrames(); });
-    await waitFor(() => expect(generateImage).toHaveBeenCalledTimes(1));
-    expect(generateImage.mock.calls[0][0].musicVideo).toMatchObject({ projectId: 'p1', sceneId: 's2' });
+    await waitFor(() => expect(renderMusicVideoSceneFrame).toHaveBeenCalledTimes(1));
+    expect(renderMusicVideoSceneFrame.mock.calls[0]).toEqual(['p1', 's2', { slot: 'start' }, { silent: true }]);
   });
 
   it('a failed lookup leaves the board usable (no restored spinners, no throw)', async () => {
@@ -182,11 +195,19 @@ describe('useMusicVideoSceneMedia socket reconnect reconcile (#15166)', () => {
 });
 
 describe('useMusicVideoSceneMedia Casting guides (#12763)', () => {
-  beforeEach(() => { handlers.clear(); generateImage.mockClear(); getMusicVideoSceneJobs.mockReset(); getMusicVideoSceneJobs.mockResolvedValue({ jobs: [] }); listCatalogIngredientMedia.mockReset(); });
+  beforeEach(() => {
+    handlers.clear();
+    renderMusicVideoSceneFrame.mockReset();
+    renderMusicVideoSceneFrame.mockResolvedValue({ status: 'queued', jobId: 'new-job' });
+    getMusicVideoSceneJobs.mockReset();
+    getMusicVideoSceneJobs.mockResolvedValue({ jobs: [] });
+    listCatalogIngredientMedia.mockReset();
+    listCatalogIngredientMedia.mockResolvedValue([]);
+  });
   afterEach(cleanup);
 
-  // Uniquely catches a board render sent without the shot's cast guides, before or after they load.
-  it('refuses a frame render until the cast member\'s media loads, then sends only age-compatible guides', async () => {
+  // Uniquely catches the board waiting on cast media the server now loads itself.
+  it('posts the shot while cast media is still loading, and again once it has loaded', async () => {
     let resolveMedia;
     listCatalogIngredientMedia.mockReturnValue(new Promise((resolve) => { resolveMedia = resolve; }));
     const cast = {
@@ -197,38 +218,41 @@ describe('useMusicVideoSceneMedia Casting guides (#12763)', () => {
     const { result } = renderHook(() => useMusicVideoSceneMedia({ project: cast, videoSettings: { settings: {} }, applyScenePatch: vi.fn() }));
     expect(listCatalogIngredientMedia).toHaveBeenCalledWith('cat-chr-x', { silent: true });
 
-    let outcome;
-    await act(async () => { outcome = await result.current.generateFrame(cast.scenes[0]); });
-    expect(outcome).toEqual({ ok: false });
-    expect(generateImage).not.toHaveBeenCalled();
+    await act(async () => { await result.current.generateFrame(cast.scenes[0]); });
+    expect(renderMusicVideoSceneFrame).toHaveBeenCalledWith('p2', 's1', { slot: 'start' }, { silent: true });
 
     await act(async () => { resolveMedia([
       { mediaKey: 'adult.png', kind: 'reference', library: { variant: { age: 30 }, guide: true } },
       { mediaKey: 'child.png', kind: 'reference', library: { variant: { age: 7 }, guide: true } },
     ]); });
     await act(async () => { await result.current.generateFrame(cast.scenes[0]); });
-    expect(generateImage.mock.calls.at(-1)[0].referenceImageFiles).toEqual(['child.png']);
-    expect(generateImage.mock.calls.at(-1)[0].musicVideo.castInputs).toEqual({ ingredientId: 'cat-chr-x', guides: ['child.png'], sheets: [] });
+    expect(renderMusicVideoSceneFrame.mock.calls.at(-1)).toEqual(['p2', 's1', { slot: 'start' }, { silent: true }]);
   });
 
-  // Uniquely catches a paid frame going out without the catalog sheet the director picked.
-  it.each(['linked', 'guide'])('refuses a frame whose picked %s asset failed to load', async (kind) => {
-    listCatalogIngredientMedia.mockRejectedValueOnce(new Error('offline'));
+  // Uniquely catches the board swallowing the server's refusal of a picked catalog asset.
+  it.each(['linked', 'guide'])('toasts the server refusal when a picked %s asset cannot be rendered', async (kind) => {
+    const { default: toast } = await import('../components/ui/Toast');
+    toast.error.mockClear();
+    listCatalogIngredientMedia.mockResolvedValue([]);
+    renderMusicVideoSceneFrame.mockRejectedValueOnce(Object.assign(
+      new Error('A reference picked for this shot is unavailable. Try again, or use Back to auto on its References row.'),
+      { status: 409, code: 'MUSIC_VIDEO_FRAME_REFERENCE_MISSING' },
+    ));
     const cast = {
       id: 'p2',
       concept: { subjects: [{ id: 'mvc-1', kind: 'character', name: 'Example Lead', ingredientId: 'cat-chr-x' }] },
       scenes: [{ sceneId: 's1', order: 0, label: 'Intro', prompt: 'a lighthouse', referenceImageId: null, takes: [], characterVariant: { ingredientId: 'cat-chr-x' }, frameReferenceIds: [kind === 'guide' ? 'mvr-guide-face.png' : musicVideoLinkedReferenceId('face.png')] }],
     };
     const { result } = renderHook(() => useMusicVideoSceneMedia({ project: cast, videoSettings: { settings: {} }, applyScenePatch: vi.fn() }));
-    await waitFor(() => expect(result.current.castMedia['cat-chr-x']).toBeNull());
     let outcome;
     await act(async () => { outcome = await result.current.generateFrame(cast.scenes[0]); });
     expect(outcome).toEqual({ ok: false });
-    expect(generateImage).not.toHaveBeenCalled();
+    expect(renderMusicVideoSceneFrame).toHaveBeenCalledWith('p2', 's1', { slot: 'start' }, { silent: true });
+    expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/unavailable/));
   });
 
-  // Uniquely catches a failed cast-guide read letting a paid frame or end-frame render go out without the guides.
-  it('blocks frame and end-frame renders with a toast after a failed guide read, until reloadCastMedia succeeds', async () => {
+  // Uniquely catches a failed or in-flight guide read blocking a render the server can resolve.
+  it('still submits frame and end-frame renders while a guide read has failed or is reloading', async () => {
     const { default: toast } = await import('../components/ui/Toast');
     toast.error.mockClear();
     listCatalogIngredientMedia.mockRejectedValueOnce(new Error('offline'));
@@ -239,25 +263,20 @@ describe('useMusicVideoSceneMedia Casting guides (#12763)', () => {
     };
     const { result } = renderHook(() => useMusicVideoSceneMedia({ project: cast, videoSettings: { settings: {} }, applyScenePatch: vi.fn() }));
     await waitFor(() => expect(result.current.castMedia['cat-chr-x']).toBeNull());
-    let a; let b;
-    await act(async () => { a = await result.current.generateFrame(cast.scenes[0]); b = await result.current.generateEndFrame(cast.scenes[0]); });
-    expect(a).toEqual({ ok: false });
-    expect(b).toEqual({ ok: false });
-    expect(toast.error).toHaveBeenCalledWith('Cast guides could not be loaded for Example Lead. Retry before rendering.');
-    expect(generateImage).not.toHaveBeenCalled();
+    await act(async () => { await result.current.generateFrame(cast.scenes[0]); await result.current.generateEndFrame(cast.scenes[0]); });
+    expect(renderMusicVideoSceneFrame.mock.calls.map((call) => call[2])).toEqual([{ slot: 'start' }, { slot: 'end' }]);
+    expect(toast.error).not.toHaveBeenCalled();
 
     let release;
     listCatalogIngredientMedia.mockReset();
     listCatalogIngredientMedia.mockReturnValueOnce(new Promise((r) => { release = r; }));
     await act(async () => { result.current.reloadCastMedia(); });
     expect(result.current.castMedia['cat-chr-x']).toBeUndefined();
-    toast.error.mockClear();
     await act(async () => { await result.current.generateFrame(cast.scenes[0]); });
-    expect(toast.error).toHaveBeenCalledWith('Cast guides are still loading. Try again in a moment.');
+    expect(toast.error).not.toHaveBeenCalled();
+    expect(renderMusicVideoSceneFrame.mock.calls.at(-1)[2]).toEqual({ slot: 'start' });
     await act(async () => { release([{ mediaKey: 'child.png', kind: 'reference', library: { variant: { age: 7 }, guide: true } }]); });
     await waitFor(() => expect(result.current.castMedia['cat-chr-x']).toHaveLength(1));
-    await act(async () => { await result.current.generateFrame(cast.scenes[0]); });
-    expect(generateImage.mock.calls.at(-1)[0].referenceImageFiles).toEqual(['child.png']);
   });
 
   // Uniquely catches a failed reload on tab refocus wiping loaded guides, so renders go out without them.
@@ -276,16 +295,16 @@ describe('useMusicVideoSceneMedia Casting guides (#12763)', () => {
     await act(async () => { await Promise.resolve(); });
     expect(result.current.castMedia['cat-chr-x']).toHaveLength(1);
     await act(async () => { await result.current.generateFrame(cast.scenes[0]); });
-    expect(generateImage.mock.calls.at(-1)[0].referenceImageFiles).toEqual(['child.png']);
-    expect(generateImage.mock.calls.at(-1)[0].musicVideo.castInputs).toEqual({ ingredientId: 'cat-chr-x', guides: ['child.png'], sheets: [] });
+    expect(renderMusicVideoSceneFrame.mock.calls.at(-1)).toEqual(['p3', 's1', { slot: 'start' }, { silent: true }]);
   });
 
-  // Uniquely catches a synchronous frame, or a one-tap re-render, posting the take without the guides it sent.
-  it('posts the sent guides and a one-tap re-render on a frame that finishes inline', async () => {
+  // Uniquely catches a synchronous frame, or a one-tap re-render, posting the take without the guides the server recorded.
+  it('posts the server guides and a one-tap re-render on a frame that finishes inline', async () => {
     const { addMusicVideoSceneTake } = await import('../services/apiMusicVideo.js');
+    const castInputs = { ingredientId: 'cat-chr-x', guides: ['child.png'], sheets: [] };
     addMusicVideoSceneTake.mockReset();
     addMusicVideoSceneTake.mockResolvedValue({ scene: { referenceImageId: 'done.png', takes: [] } });
-    generateImage.mockResolvedValueOnce({ filename: 'done.png' });
+    renderMusicVideoSceneFrame.mockResolvedValueOnce({ filename: 'done.png', castInputs });
     listCatalogIngredientMedia.mockResolvedValue([{ mediaKey: 'child.png', kind: 'reference', library: { variant: { age: 7 }, guide: true } }]);
     const cast = {
       id: 'p4',
@@ -295,14 +314,13 @@ describe('useMusicVideoSceneMedia Casting guides (#12763)', () => {
     const { result } = renderHook(() => useMusicVideoSceneMedia({ project: cast, videoSettings: { settings: {} }, applyScenePatch: vi.fn() }));
     await waitFor(() => expect(result.current.castMedia['cat-chr-x']).toHaveLength(1));
     await act(async () => { await result.current.generateFrame(cast.scenes[0], { replaceSelection: true }); });
-    const castInputs = { ingredientId: 'cat-chr-x', guides: ['child.png'], sheets: [] };
-    expect(generateImage.mock.calls.at(-1)[0].musicVideo).toMatchObject({ castInputs, replaceSelection: true });
+    expect(renderMusicVideoSceneFrame.mock.calls.at(-1)).toEqual(['p4', 's1', { slot: 'start', select: true }, { silent: true }]);
     expect(addMusicVideoSceneTake).toHaveBeenCalledWith('p4', 's1', {
       kind: 'image', assetId: 'done.png', source: 'generated', castInputs, replaceSelection: true, expectedSelection: null,
     }, { silent: true });
-    generateImage.mockResolvedValueOnce({ filename: 'end.png' });
+    renderMusicVideoSceneFrame.mockResolvedValueOnce({ filename: 'end.png', castInputs });
     await act(async () => { await result.current.generateEndFrame(cast.scenes[0], { replaceSelection: true }); });
-    expect(generateImage.mock.calls.at(-1)[0].musicVideo).toMatchObject({ slot: 'end', castInputs, replaceSelection: true });
+    expect(renderMusicVideoSceneFrame.mock.calls.at(-1)).toEqual(['p4', 's1', { slot: 'end', select: true }, { silent: true }]);
     expect(addMusicVideoSceneTake).toHaveBeenLastCalledWith('p4', 's1', {
       kind: 'endImage', assetId: 'end.png', source: 'generated', castInputs, replaceSelection: true, expectedSelection: null,
     }, { silent: true });
@@ -317,7 +335,7 @@ describe('useMusicVideoSceneMedia clip from the storyboard panel', () => {
     const boardProject = { id: 'p5', scenes: [{ sceneId: 's1', order: 0, prompt: 'she laces her skates', panelId: 'pn-1', panelArt: 'panel.png', takes: [], startSec: 0, endSec: 4 }] };
     const { result } = renderHook(() => useMusicVideoSceneMedia({ project: boardProject, videoSettings: { settings: { backend: 'grok' } }, applyScenePatch: vi.fn() }));
     await act(async () => { await result.current.generateFrame(boardProject.scenes[0], { thenClip: { backend: 'grok', songAudio: false } }); });
-    expect(generateImage.mock.calls.at(-1)[0].musicVideo).toMatchObject({ projectId: 'p5', sceneId: 's1', thenClip: { backend: 'grok', songAudio: false } });
+    expect(renderMusicVideoSceneFrame.mock.calls.at(-1)).toEqual(['p5', 's1', { slot: 'start', thenClip: { backend: 'grok', songAudio: false } }, { silent: true }]);
   });
 });
 
@@ -459,15 +477,15 @@ it('binds shot render inputs to the catalog basis the board displayed', async ()
   const catalogBasis = 'a'.repeat(64);
   const project = { id: 'p-basis', scenes: [shot], castAndSets: { source: 'catalog', catalogCheckin: { basis: catalogBasis, items: [] } } };
   getMusicVideoSceneJobs.mockResolvedValue({ jobs: [] });
-  generateImage.mockClear();
+  renderMusicVideoSceneFrame.mockClear();
   generateVideo.mockResolvedValue({ jobId: 'clip', status: 'queued' });
   const { result } = renderHook(() => useMusicVideoSceneMedia({ project,
     videoSettings: { settings: { backend: 'grok' } }, applyScenePatch: vi.fn() }));
   await act(async () => { await result.current.generateFrame(shot); });
   await act(async () => { await result.current.generateEndFrame(shot); });
-  expect(generateImage.mock.calls.map(([body]) => body.musicVideo)).toEqual([
-    expect.objectContaining({ catalogBasis, sceneId: 's1' }),
-    expect.objectContaining({ catalogBasis, sceneId: 's1', slot: 'end' }),
+  expect(renderMusicVideoSceneFrame.mock.calls.map((call) => call.slice(0, 3))).toEqual([
+    ['p-basis', 's1', { slot: 'start' }],
+    ['p-basis', 's1', { slot: 'end', fromFrame: true, referenceImageId: 'start.png' }],
   ]);
   await act(async () => { await result.current.generateSceneVideo(shot); });
   expect(JSON.parse(generateVideo.mock.calls.at(-1)[0].musicVideo)).toMatchObject({ catalogBasis });
@@ -497,4 +515,38 @@ it('tracks a local and a grok clip render on the same shot side by side', async 
   expect(result.current.videoSceneJobs.s1).toBeUndefined();
   expect(result.current.genVideoScenes.s1).toBeUndefined();
   cleanup();
+});
+
+describe('shot frame image service', () => {
+  beforeEach(() => {
+    handlers.clear();
+    renderMusicVideoSceneFrame.mockClear();
+    getMusicVideoSceneJobs.mockReset();
+    getMusicVideoSceneJobs.mockResolvedValue({ jobs: [] });
+  });
+
+  // Uniquely catches a shot-card image service being dropped, or a project-setting render sending a stale mode.
+  it('sends an explicit frame service and omits mode when the card follows the project pin', async () => {
+    const { result } = setup();
+    await act(async () => {
+      await result.current.generateFrame(project.scenes[0], { imageTarget: { mode: 'codex', cloudModel: 'example-model' } });
+    });
+    expect(renderMusicVideoSceneFrame.mock.calls.at(-1)).toEqual([
+      'p1', 's1', { slot: 'start', imageTarget: { mode: 'codex', cloudModel: 'example-model' } }, { silent: true },
+    ]);
+
+    await act(async () => { await result.current.generateFrame(project.scenes[0]); });
+    expect(renderMusicVideoSceneFrame.mock.calls.at(-1)).toEqual(['p1', 's1', { slot: 'start' }, { silent: true }]);
+
+    await act(async () => {
+      await result.current.generateEndFrame(
+        { ...project.scenes[0], endFramePrompt: 'the light goes out' },
+        { imageTarget: { mode: 'local', modelId: 'example-local' } },
+      );
+    });
+    expect(renderMusicVideoSceneFrame.mock.calls.at(-1)).toEqual([
+      'p1', 's1', { slot: 'end', imageTarget: { mode: 'local', modelId: 'example-local' } }, { silent: true },
+    ]);
+    cleanup();
+  });
 });

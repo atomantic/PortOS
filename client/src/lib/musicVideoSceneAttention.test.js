@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseSceneFilter, sceneAttention, sceneMatchesFilter } from './musicVideoSceneAttention.js';
+import { parseSceneFilter, sceneAttention, sceneMatchesFilter, sceneMediaKind, selectedFrameReadiness } from './musicVideoSceneAttention.js';
 
 const ready = { sceneId: 's', order: 0, referenceImageId: 'f.png', videoHistoryId: 'v1', startSec: 0, endSec: 4, takes: [] };
 
@@ -51,8 +51,47 @@ describe('sceneAttention', () => {
       takes: [{ takeId: 'v2', kind: 'video', assetId: 'old', status: 'candidate' }, { takeId: 'e1', kind: 'endImage', assetId: 'e.png', status: 'candidate' }] };
     expect(sceneAttention(still, { layered: true })).toEqual([]);
     expect(sceneAttention({ ...still, imageEffect: 'end-fade' }, { layered: true })).toEqual(['candidates-pending']);
+    expect(sceneAttention({ ...still, imageEffect: 'end-fade', endFrameOff: true }, { layered: true })).toEqual([]);
     expect(sceneAttention({ ...still, takes: [...still.takes, { takeId: 'i2', kind: 'image', assetId: 'g.png', status: 'candidate' }] }, { layered: true }))
       .toEqual(['candidates-pending']);
+  });
+
+  it('counts a source-take return as having the source frame and clip', () => {
+    const source = { sceneId: 'src', startSec: 0, endSec: 6, referenceImageId: 'frame.png', videoHistoryId: 'vh-a' };
+    const back = { sceneId: 'back', startSec: 8, endSec: 8.8, sourceTake: { sceneId: 'src', offsetSec: 4 } };
+    const scenes = [source, back];
+    expect(sceneAttention(back, { scenes })).toEqual([]);
+    expect(sceneMediaKind(back, { scenes })).toBe('clip');
+    source.takes = [{ kind: 'image', assetId: 'frame.png', dependencyState: { status: 'stale', reasons: ['Camera changed'] } }];
+    expect(sceneAttention(back, { scenes })).toEqual(['frame-stale']);
+    source.takes = [];
+    source.videoHistoryId = null;
+    expect(sceneAttention(back, { scenes })).toEqual(['missing-clip']);
+    expect(sceneMediaKind(back, { scenes })).toBe('image');
+  });
+
+  it('ignores a stale end frame while its visual effect is unused or disabled', () => {
+    const end = { ...ready, visualLayer: 'still', endImageId: 'end.png', imageEffect: 'end-fade',
+      takes: [{ kind: 'endImage', assetId: 'end.png', dependencyState: { status: 'stale', reasons: ['End prompt changed'] } }] };
+    expect(sceneAttention(end, { layered: true })).toContain('frame-stale');
+    expect(sceneAttention({ ...end, endFrameOff: true }, { layered: true })).not.toContain('frame-stale');
+    expect(sceneAttention({ ...end, imageEffect: 'hold' }, { layered: true })).not.toContain('frame-stale');
+    expect(sceneAttention({ ...end, visualLayer: 'card' }, { layered: true })).not.toContain('frame-stale');
+  });
+
+  it('flags bad assets actually played by a source-take return', () => {
+    const source = { ...ready, sceneId: 'src' };
+    const back = { sceneId: 'back', startSec: 8, endSec: 9, sourceTake: { sceneId: 'src', offsetSec: 2 } };
+    expect(sceneAttention(back, { scenes: [source, back], assetMarks: { 'video:v1': 'bad' } })).toContain('bad-take');
+    expect(sceneAttention(back, { scenes: [{ ...source, selectedTakeMarkedBad: true }, back] })).toContain('bad-take');
+    expect(sceneAttention({ ...back, referenceImageId: 'unused.png' }, { scenes: [source, back], assetMarks: { 'image:unused.png': 'bad' } })).not.toContain('bad-take');
+  });
+
+  it('flags a shot whose selected take is marked bad', () => {
+    expect(sceneAttention({ ...ready, selectedTakeMarkedBad: true })).toContain('bad-take');
+    expect(sceneAttention(ready, { assetMarks: { 'image:f.png': 'bad' } })).toContain('bad-take');
+    expect(sceneAttention(ready, { assetMarks: { 'video:v1': 'bad' } })).toContain('bad-take');
+    expect(sceneAttention(ready, { assetMarks: { 'image:other.png': 'bad' } })).not.toContain('bad-take');
   });
 });
 
@@ -60,9 +99,25 @@ describe('scene filters', () => {
   it('parses unknown values as all and splits missing from other attention', () => {
     expect(parseSceneFilter('nope')).toBe('all');
     expect(parseSceneFilter('missing')).toBe('missing');
+    expect(parseSceneFilter('stale-frame')).toBe('stale-frame');
+    const stale = { ...ready, takes: [{ kind: 'image', assetId: 'f.png', dependencyState: { status: 'stale', reasons: ['Frame prompt changed'] } }] };
+    expect(sceneAttention(stale)).toEqual(['frame-stale']);
+    expect(sceneMatchesFilter(['frame-stale'], 'stale-frame')).toBe(true);
+    expect(sceneMatchesFilter(['frame-stale'], 'missing')).toBe(false);
+    expect(sceneMatchesFilter(['frame-stale'], 'attention')).toBe(true);
+    expect(selectedFrameReadiness(stale)).toEqual({ text: 'frame out of date', reasons: ['Frame prompt changed'] });
+    expect(selectedFrameReadiness({ ...ready, takes: [{ kind: 'image', assetId: 'f.png', dependencyState: { status: 'current', reasons: [] } }, { kind: 'endImage', assetId: 'e.png', dependencyState: { status: 'stale', reasons: ['Camera changed'] } }], endImageId: 'e.png' }).text).toBe('end frame out of date');
+    expect(selectedFrameReadiness({ ...ready, takes: [{ kind: 'image', assetId: 'f.png', dependencyState: { status: 'unknown', reasons: ['Frame evidence was not recorded; review again'] } }] }).text).toBe('frame not checked');
+    expect(selectedFrameReadiness(ready).text).toBe('frame ready');
+    expect(sceneAttention(ready)).toEqual([]);
     expect(sceneMatchesFilter(['last-failure'], 'attention')).toBe(true);
     expect(sceneMatchesFilter(['last-failure'], 'missing')).toBe(false);
     expect(sceneMatchesFilter(['missing-clip'], 'missing')).toBe(true);
+    expect(sceneMatchesFilter(['bad-take'], 'bad-take')).toBe(true);
+    expect(sceneMatchesFilter(['bad-take'], 'attention')).toBe(true);
+    expect(sceneMatchesFilter(['bad-take'], 'missing')).toBe(false);
+    expect(selectedFrameReadiness({ ...ready, selectedTakeMarkedBad: true })).toEqual({ text: 'selected take marked bad', reasons: ['Selected take marked bad'] });
+    expect(selectedFrameReadiness(ready, { assetMarks: { 'image:f.png': 'bad' } })).toEqual({ text: 'selected take marked bad', reasons: ['Selected take marked bad'] });
     expect(sceneMatchesFilter([], 'attention')).toBe(false);
     expect(sceneMatchesFilter([], 'all')).toBe(true);
   });

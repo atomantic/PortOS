@@ -451,6 +451,16 @@ export async function stageGeneratedDocument(projectId, generatedFiles, { verify
 // Known compatible shipped layered engines. Recognition only;
 // customized engines belong to the author and are never silently replaced.
 const UPGRADABLE_LAYERED_ENGINES = new Set([
+  // Shipped before template additions preserved planned still-camera moves.
+  '8d811b406d1c7440df7ab83dea4ed83ced5b797ca2ae73c5d3c6d861230a1e34',
+  // Shipped before the handheld camera template additions.
+  'a20bb2cf128153aada5c963baf8af22ca4a5ca72bda56d801b2d41a693cb606e',
+  // Shipped before card painters honored beat-reaction controls (#15629).
+  '4ee3ae7c78bce6d9dde36a1f2336c7bfd899918f359b6a9906b619c07a0bfb1b',
+  // Shipped before per-video and per-shot template controls (#15622).
+  'b45ad91d8def477e02761e4a2b61c4546b68a3e53cf5f4038fcaa30c9596bac8',
+  // The shipped engine before shot color match (#15596).
+  '106e8a140d76e7fa33734d24ec5ea90f57e8f5a21ba873e505edc49e80eb550e',
   // The shipped engine before cut wipes (#14831).
   'b5180a986424a2d6c15cde037baa72088ebf347e79e21b0e89f3c957936d1062',
   // The shipped engine before document end-frame and selected glitch effects.
@@ -474,7 +484,10 @@ const UPGRADABLE_LAYERED_ENGINES = new Set([
   '02ca75c17c58eec1bb37463fdd187a133d8c10499bb2b6556c793af8d63b93e8',
 ]);
 // Shipped still-effect modules a document may carry; adoption replaces them with the current one.
-const UPGRADABLE_IMAGE_EFFECT_MODULES = new Set([
+export const UPGRADABLE_IMAGE_EFFECT_MODULES = new Set([
+  // #15571: still-effect module before honoring Use end frame (`endFrameOff`).
+  // Commit 16f8de61cd (module-private photo layout normalizer).
+  'bf072f2842ff71aa5b95da0a42c47b861b7d7e8d3c1759524907538ccc8f157a',
   // #11319's initial still-effect module.
   '4f13c0c26039cdecd0dab5450ebe702d49653e207594af07297ced8f21c2eb1e',
   'b771bf1da99500e14b751ffe82a95ddee749df2030d1a8be7c21b068a7def1e8',
@@ -483,7 +496,7 @@ const UPGRADABLE_IMAGE_EFFECT_MODULES = new Set([
 ]);
 // This shipped module already supplies the new engine's imports and also
 // exposes an extra export. Keep its bytes for documents that may use it.
-const COMPATIBLE_IMAGE_EFFECT_MODULES = new Set([
+export const COMPATIBLE_IMAGE_EFFECT_MODULES = new Set([
   'b5905e6d5be37d5d8b1ed0a1c741e3f9813b65c70eec182a3a3cf86efd4ec92d',
 ]);
 const engineDigest = bytes => createHash('sha256').update(bytes.toString('utf8').replace(/\r\n?/g, '\n')).digest('hex');
@@ -597,6 +610,25 @@ async function requireDocument(project) {
   return dir;
 }
 
+/**
+ * Whether the project's composition document can play in the viewer's browser:
+ * `{ native: true }` for the unmodified shipped layered template, else
+ * `{ native: false, reason }`. Authored or customized documents stay in the
+ * isolated preview worker.
+ */
+export async function documentNativePlayback(project) {
+  if (project?.composition?.mode !== 'document' || !(await documentAvailable(project))) return { native: false, reason: 'no-document' };
+  const { shippedLayeredDocument } = await import('./documentPreviewPlayback.js');
+  const result = await shippedLayeredDocument(resolveDocumentDirectory(project.composition.document));
+  if (!result.shipped) return { native: false, reason: result.reason };
+  const { buildDocumentData, documentRenderClock, documentSongDuration, documentAspect, DOCUMENT_FRAME_SIZES } = await import('./documentRender.js');
+  const durationSec = documentSongDuration(project);
+  const data = buildDocumentData(project, {
+    frame: DOCUMENT_FRAME_SIZES[documentAspect(project)], clock: documentRenderClock(durationSec, 24), songDurationSec: durationSec,
+  });
+  return { native: true, data };
+}
+
 /** The document's file list: `{ document, files: [{ path, bytes }], totalBytes }`. */
 export async function readDocumentManifest(project) {
   const document = project?.composition?.document || null;
@@ -685,7 +717,7 @@ function selectedEffectShots(project) {
   const scenes = project.scenes || [];
   const duration = documentSongDuration(project);
   const { fps, frames } = documentRenderClock(duration || 0);
-  const sections = sceneTransitionSections(scenes, fps, { endSec: duration });
+  const sections = sceneTransitionSections(scenes, fps, { endSec: duration, cameras: project.cameras });
   const inSong = effect => effect.frame >= 0 && effect.frame < frames;
   const found = new Map();
   const add = (sceneId, kind) => {
@@ -702,7 +734,7 @@ function selectedEffectShots(project) {
   const generated = project.composition?.document?.source?.kind === 'generated';
   const imageExists = id => isTopLevelEntryName(id) && !id.includes('..') && existsSync(join(PATHS.images, id));
   const eligibleEnd = scenes.filter(scene => Number.isFinite(scene?.startSec) && scene?.visualLayer === 'still' && isEndFrameImageEffect(scene.imageEffect)
-    && scene.endImageId && documentSceneVisualLayer(project, scene, { generated }) === 'still').filter(scene => {
+    && scene.endFrameOff !== true && scene.endImageId && documentSceneVisualLayer(project, scene, { generated }) === 'still').filter(scene => {
     const sequence = scenePhotoSequence(scene);
     return imageExists(scene.endImageId) && (sequence ? sequence.imageIds.length > 0 && sequence.imageIds.every(imageExists) : imageExists(scene.referenceImageId));
   });
@@ -719,7 +751,7 @@ function selectedEffectShots(project) {
       return state.end > 0 || state.flash > 0;
     })();
     if (visible || sceneImageEffectGlitchFrames(scenes.map(other => other === scene ? other : { ...other, imageEffect: null }),
-      fps, { layered: true, endSec: duration }).some(inSong)) add(scene.sceneId, 'end');
+      fps, { layered: true, endSec: duration, cameras: project.cameras }).some(inSong)) add(scene.sceneId, 'end');
   }
   return [...found].map(([sceneId, effects]) => ({ sceneId, effects }));
 }

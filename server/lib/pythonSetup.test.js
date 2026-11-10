@@ -734,121 +734,9 @@ describe('classifyVenvBases', () => {
   });
 });
 
-// A stock /opt/anaconda3 ships Python 3.8, and it outranks Homebrew in the
-// candidate list (conda is not PEP 668 externally-managed). Building the FLUX.2
-// venv from it downloads the whole multi-GB torch tree and only THEN dies
-// building sdnq's wheel, because pip's build isolation resolves a setuptools
-// too old to parse PEP 639's string `project.license`. The gate has to happen
-// at detect time, on the base interpreter.
-describe('installFlux2Venv base-interpreter floor', () => {
-  beforeEach(resetState);
-
-  const runInstall = async (mod) => {
-    const events = [];
-    const { promise } = mod.installFlux2Venv((ev) => events.push(ev));
-    return { result: await promise, events };
-  };
-
-  it('skips a too-old base that outranks a supported one', async () => {
-    mockState.presentPaths.add('/opt/anaconda3/bin/python3');
-    mockState.presentPaths.add('/opt/homebrew/bin/python3');
-    mockState.versionByPath.set('/opt/anaconda3/bin/python3', '3.8.5');
-    mockState.versionByPath.set('/opt/homebrew/bin/python3', '3.12.7');
-
-    const mod = await loadModule();
-    const { result } = await runInstall(mod);
-
-    expect(result.ok).toBe(true);
-    expect(mockState.venvCalls.map(([bin]) => posixPath(bin))).toEqual(['/opt/homebrew/bin/python3']);
-  });
-
-  it('fails at detect naming the versions it found, instead of downloading torch first', async () => {
-    mockState.presentPaths.add('/opt/anaconda3/bin/python3');
-    mockState.versionByPath.set('/opt/anaconda3/bin/python3', '3.8.5');
-
-    const mod = await loadModule();
-    const { result, events } = await runInstall(mod);
-
-    expect(result).toEqual({ ok: false, stage: 'detect' });
-    expect(mockState.venvCalls).toEqual([]);
-    expect(mockState.spawnCalls).toEqual([]);
-    const error = events.find((ev) => ev.type === 'error');
-    expect(error.message).toContain('/opt/anaconda3/bin/python3 (3.8.5)');
-    expect(error.message).toContain('3.10+');
-  });
-
-  it('rebuilds a venv left behind by an earlier run against a too-old base', async () => {
-    mockState.presentPaths.add('/opt/homebrew/bin/python3');
-    mockState.presentPaths.add('/Users/test/.portos/venv-flux2/bin/python3');
-    mockState.versionByPath.set('/opt/homebrew/bin/python3', '3.12.7');
-    mockState.versionByPath.set('/Users/test/.portos/venv-flux2/bin/python3', '3.8.5');
-
-    const mod = await loadModule();
-    const { result } = await runInstall(mod);
-
-    expect(result.ok).toBe(true);
-    // Without --clear, `python -m venv` reuses the 3.8 interpreter in place and
-    // every retry fails identically.
-    expect(mockState.venvCalls[0]).toContain('--clear');
-  });
-
-  it('reuses a venv that already clears the floor', async () => {
-    mockState.presentPaths.add('/opt/homebrew/bin/python3');
-    mockState.presentPaths.add('/Users/test/.portos/venv-flux2/bin/python3');
-    mockState.versionByPath.set('/opt/homebrew/bin/python3', '3.12.7');
-    mockState.versionByPath.set('/Users/test/.portos/venv-flux2/bin/python3', '3.12.7');
-
-    const mod = await loadModule();
-    const { result } = await runInstall(mod);
-
-    expect(result.ok).toBe(true);
-    expect(mockState.venvCalls).toEqual([]);
-  });
-});
-
-// The SSE client reads a stream that closes without a terminal frame as
-// "Connection to installer lost. Restart PortOS or try again." — so a pip step
-// that exits non-zero used to surface as a phantom transport error with the
-// real cause buried in the scrollback.
-describe('installFlux2Venv failure reporting', () => {
-  beforeEach(resetState);
-
-  const failingStage = async (needle) => {
-    mockState.presentPaths.add('/opt/homebrew/bin/python3');
-    mockState.spawnExitByArgs.set(needle, 1);
-    const mod = await loadModule();
-    const events = [];
-    const { promise } = mod.installFlux2Venv((ev) => events.push(ev));
-    return { result: await promise, events };
-  };
-
-  it('emits a terminal error frame when the pip install exits non-zero', async () => {
-    const { result, events } = await failingStage('--progress-bar');
-
-    expect(result).toEqual({ ok: false, stage: 'install' });
-    const error = events.find((ev) => ev.type === 'error');
-    expect(error.message).toContain('Installing the FLUX.2 packages failed');
-    expect(error.message).toContain('exit code 1');
-  });
-
-  it('fails the install when refreshing same-version diffusers code fails', async () => {
-    const { result, events } = await failingStage('--force-reinstall --no-deps');
-    expect(result).toEqual({ ok: false, stage: 'install' });
-    expect(events.find((ev) => ev.type === 'error').message).toContain('Refreshing the diffusers pipeline code failed');
-  });
-
-  it('emits a terminal error frame when the pip bootstrap exits non-zero', async () => {
-    const { result, events } = await failingStage('--upgrade pip wheel setuptools');
-
-    expect(result).toEqual({ ok: false, stage: 'upgrade-pip' });
-    expect(events.find((ev) => ev.type === 'error').message)
-      .toContain('Could not upgrade pip/wheel/setuptools');
-  });
-});
-
-// Linux/Windows must never resolve packages at install time: the in-app FLUX.2
-// install runs the hash-pinned CUDA lock through the setup script, not pip.
-describe.each(['linux', 'win32'])('installFlux2Venv on %s installs from the hash-pinned lock', (platform) => {
+// No platform resolves packages at install time: the in-app FLUX.2 install
+// runs the hash-pinned lock through the setup script, not pip.
+describe.each(['darwin', 'linux', 'win32'])('installFlux2Venv on %s installs from the hash-pinned lock', (platform) => {
   beforeEach(() => {
     resetState();
     mockState.platform = platform;
@@ -862,7 +750,7 @@ describe.each(['linux', 'win32'])('installFlux2Venv on %s installs from the hash
   };
 
   it('runs INSTALL_FLUX2=1 setup-image-video.sh and spawns no pip or venv step itself', async () => {
-    mockState.scriptOutput = ['Syncing the hash-pinned FLUX.2 CUDA runtime'];
+    mockState.scriptOutput = ['Syncing the hash-pinned FLUX.2 runtime'];
     const venvPython = platform === 'win32'
       ? '/Users/test/.portos/venv-flux2/Scripts/python.exe'
       : '/Users/test/.portos/venv-flux2/bin/python3';
@@ -875,7 +763,7 @@ describe.each(['linux', 'win32'])('installFlux2Venv on %s installs from the hash
     expect(mockState.scriptRuns).toEqual([{ INSTALL_FLUX2: '1' }]);
     expect(mockState.spawnCalls).toEqual([]);
     expect(mockState.venvCalls).toEqual([]);
-    expect(events).toContainEqual({ type: 'log', message: 'Syncing the hash-pinned FLUX.2 CUDA runtime' });
+    expect(events).toContainEqual({ type: 'log', message: 'Syncing the hash-pinned FLUX.2 runtime' });
     expect(events.at(-1).type).toBe('complete');
   });
 

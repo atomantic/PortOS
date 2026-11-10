@@ -78,6 +78,23 @@ describe('local image pool eligibility', () => {
 });
 
 describe('fal step pricing names the model it priced', () => {
+  it('prices the same shared Runway span dispatch submits and keeps unbounded input-image charges unknown', () => {
+    const source = { sceneId: 'source', startSec: 0, endSec: 1 };
+    const project = { videoSettings: { runwayDuration: 5 }, scenes: [source,
+      { sceneId: 'return', startSec: 8, endSec: 9, sourceTake: { sceneId: 'source' } }] };
+    const route = { kind: 'video', mode: 'runway', model: 'gen4.5' };
+    expect(stepPriceUsd({ route, project, scene: source, stepKind: 'clip' })).toBe(1.08);
+    expect(stepPriceUsd({ route: { ...route, model: 'hailuo3' }, project,
+      scene: { ...source, clipReferenceIds: ['reference'] }, stepKind: 'clip' })).toBeNull();
+  });
+  it('charges nothing when the shot plays another take', () => {
+    const route = { kind: 'video', mode: 'fal', model: null };
+    const project = { videoSettings: {} };
+    const scene = { sceneId: 'b', startSec: 4, endSec: 5, sourceTake: { sceneId: 'a' } };
+    expect(stepPriceUsd({ route, project, scene, stepKind: 'clip' })).toBe(0);
+    expect(stepPriceUsd({ route, project, scene, stepKind: 'frame' })).toBe(0);
+  });
+
   it('does not treat an output-only H3 quote as a bounded reference-input price', () => {
     const project = { videoSettings: {}, visualSpec: { references: [{ id: 'rider', imageId: 'rider.png', role: 'character', condition: true }] } };
     const route = { kind: 'video', mode: 'fal', model: 'minimax/h3-max/reference-to-video' };

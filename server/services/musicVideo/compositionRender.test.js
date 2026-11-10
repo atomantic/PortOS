@@ -14,7 +14,12 @@ import { COMPOSITION_SCRATCH_DIR, removeCompositionScratch, renderTypographyOver
 import { browserSuiteCanRun, resolveTestChrome } from '../../lib/browserSuiteGate.js';
 
 let endpoint;
-vi.mock('../browserService.js', () => ({ cdpRequest: path => fetch(`${endpoint}${path}`) }));
+// Overlay capture launches its own headless browser. Point that launch at the
+// suite's Chrome; the shared debugging endpoint stays for the managed path.
+vi.mock('../browserService.js', () => ({
+  loadConfig: async () => ({ chromePath: chrome }),
+  cdpRequest: path => fetch(`${endpoint}${path}`),
+}));
 vi.mock('../../lib/fileUtils.js', async importOriginal => makePathsProxy(await importOriginal(), {
   dataRoot: () => lazyTempDataRoot('portos-mv-composition-'),
 }));

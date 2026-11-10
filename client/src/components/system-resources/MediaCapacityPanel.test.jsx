@@ -74,12 +74,24 @@ describe('MediaCapacityPanel', () => {
     api.getInstances.mockResolvedValue({ peers: [] });
   });
 
-  it('shows each lane’s occupancy against its configured limit', async () => {
+  it('shows fixed-capacity lane occupancy and aggregate cloud activity', async () => {
     renderPanel();
     expect(await screen.findByText('Local GPU')).toBeInTheDocument();
     expect(screen.getByText('1/1')).toBeInTheDocument();
     expect(screen.getByText('3/20')).toBeInTheDocument();
+    expect(screen.getByText('0 active')).toBeInTheDocument();
     expect(screen.getByText('4 running · 2 queued')).toBeInTheDocument();
+  });
+
+  it('does not present the legacy Codex limit as a cap on independent cloud providers', async () => {
+    // Three Grok video jobs can run while Codex retains its default one slot.
+    const value = media();
+    value.lanes.cloud = { running: 3, queued: 1, limit: 1 };
+    renderPanel({ media: value });
+    const active = await screen.findByText('3 active');
+    expect(active).not.toHaveClass('text-port-warning');
+    expect(screen.queryByText('3/1')).not.toBeInTheDocument();
+    expect(screen.getByText(/limits apply per provider/)).toBeInTheDocument();
   });
 
   it('reports queue depth per kind, skipping idle kinds', async () => {

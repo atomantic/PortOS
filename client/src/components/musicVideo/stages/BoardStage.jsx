@@ -10,6 +10,7 @@ import { SHOT_SHEET_MAP_BARS, shotSheetMapRows, shotSheetRows } from '../../../.
 import EndingCard, { EndingThumbnail } from '../EndingCard.jsx';
 import CreditsEndingCard, { CreditsThumbnail } from '../CreditsEndingCard.jsx';
 import ScenePoster from '../ScenePoster.jsx';
+import SharedTakeOffers from '../SharedTakeOffers.jsx';
 import { sceneActiveEndImageId } from '../../../../../server/lib/musicVideoEndFrame.js';
 import ShotEffectsCard, { SceneEffectBadges } from '../ShotEffectsCard.jsx';
 import { shotNumbers } from '../ShotStepper.jsx';
@@ -25,13 +26,13 @@ import { formatTimecode } from '../../../utils/formatters.js';
 import { getStoryboard } from '../../../services/api';
 import { storyboardShotPanel } from '../../../../../server/lib/storyboardFit.js';
 
-const FILTER_LABELS = [['all', 'All'], ['attention', 'Needs attention'], ['missing', 'Missing footage']];
+const FILTER_LABELS = [['all', 'All'], ['attention', 'Needs attention'], ['missing', 'Missing footage'], ['stale-frame', 'Frame out of date'], ['bad-take', 'Selected take marked bad']];
 const MEDIA_ICONS = { clip: Film, image: ImageIcon, code: Code2, card: Type };
 const isTypingTarget = (el) => !!el && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName));
 
 /** Corner chips on a Board thumbnail: what the shot's selected media is, plus an end-frame mark. */
-function SceneMediaBadges({ scene, layered }) {
-  const kind = sceneMediaKind(scene, { layered });
+function SceneMediaBadges({ scene, layered, scenes }) {
+  const kind = sceneMediaKind(scene, { layered, scenes });
   const endFrame = sceneActiveEndImageId(scene);
   if (!kind && !endFrame) return null;
   const Icon = MEDIA_ICONS[kind];
@@ -98,23 +99,27 @@ export default function BoardStage({ board }) {
   const lipSyncBackend = videoSettings.audioReactiveSelected ? 'local' : videoSettings.settings.backend;
   const songDurationSec = project.audioAnalysis?.durationSec ?? null;
   const attentionCtx = {
-    layered, lipSyncBackend, songDurationSec, failed: sceneMedia.failedScenes,
+    project, layered, lipSyncBackend, songDurationSec, failed: sceneMedia.failedScenes,
     footageOptional: FOOTAGE_OPTIONAL_MODES.has(project.composition?.mode || 'concat'),
     songReview: project.songRevision?.sceneReview || null,
     videoSettings: videoSettings.settings,
+    scenes,
+    assetMarks: project.assetMarks || {},
   };
   const codesById = new Map(scenes.map((scene) => [scene.sceneId, sceneAttention(scene, attentionCtx)]));
   const numbers = shotNumbers(scenes);
   const coldNumbers = new Map(coldOpenScenes(project).map((scene, i) => [scene.sceneId, i + 1]));
   const shotName = (scene) => sceneShotName(scene, { number: numbers.get(scene.sceneId), coldOpen: coldNumbers.get(scene.sceneId) });
-  const counts = { all: scenes.length, attention: 0, missing: 0 };
+  const counts = { all: scenes.length, attention: 0, missing: 0, 'stale-frame': 0, 'bad-take': 0 };
   for (const codes of codesById.values()) {
     if (sceneMatchesFilter(codes, 'attention')) counts.attention += 1;
     if (sceneMatchesFilter(codes, 'missing')) counts.missing += 1;
+    if (sceneMatchesFilter(codes, 'stale-frame')) counts['stale-frame'] += 1;
+    if (sceneMatchesFilter(codes, 'bad-take')) counts['bad-take'] += 1;
   }
   // Each shot's start, mid-shot and end effects, and the option the board is narrowed to (`?effect=`).
   const planned = plannedTransitions(project.productionReview?.draft?.storyboard);
-  const effectsById = new Map(scenes.map((scene) => [scene.sceneId, shotEffects(scene, { layered, planned })]));
+  const effectsById = new Map(scenes.map((scene) => [scene.sceneId, shotEffects(scene, { layered, planned, cameras: project.cameras })]));
   const effectFilter = SHOT_EFFECT_OPTIONS.some((option) => option.id === searchParams.get('effect')) ? searchParams.get('effect') : null;
   const setEffectFilter = (next) => setSearchParams((prev) => {
     const params = new URLSearchParams(prev);
@@ -221,6 +226,7 @@ export default function BoardStage({ board }) {
           <span className="hidden text-port-text-muted sm:inline">j / k to move between scenes</span>
         </div>
       )}
+      {scenes.length > 0 && <SharedTakeOffers scenes={scenes} onSave={board.saveScene} />}
       {scenes.length > 0 && (
         <ShotEffectsCard counts={shotEffectCounts([...effectsById.values()])} selected={effectFilter} onSelect={setEffectFilter} />
       )}
@@ -237,8 +243,8 @@ export default function BoardStage({ board }) {
               Object.values(effectsById.get(scene.sceneId)).some((list) => list.length) && `scene-effects-${scene.sceneId}`].filter(Boolean).join(' ') || undefined}
             className={`min-w-0 rounded border p-2 text-left ${activeSceneId === scene.sceneId ? 'border-port-accent bg-port-accent/10' : 'border-port-border bg-port-card'}`}>
             <span className="relative block">
-              <ScenePoster scene={scene} className="aspect-video w-full rounded" />
-              <SceneMediaBadges scene={scene} layered={layered} />
+              <ScenePoster scene={scene} scenes={scenes} className="aspect-video w-full rounded" />
+              <SceneMediaBadges scene={scene} layered={layered} scenes={scenes} />
               <SceneEffectBadges sceneId={scene.sceneId} effects={effectsById.get(scene.sceneId)} />
             </span>
             <span className="mt-1 block truncate text-sm">{shotName(scene)}</span>
@@ -345,6 +351,7 @@ export default function BoardStage({ board }) {
               onImportClipTake={(target) => board.setPickerTarget({ type: 'clip', sceneId: target.sceneId })}
               onPlacePoolItem={takes.placePoolItem}
               onTrimClip={takes.trimClipTake}
+              onHandheldClip={takes.handheldClipTake}
               projectId={project.id}
               aspect={musicVideoAspect(project)}
               shotNumbers={numbers}

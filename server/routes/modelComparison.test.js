@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import express from 'express';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { request } from '../lib/testHelper.js';
@@ -11,6 +11,7 @@ import { importModelComparison } from '../services/modelComparison.js';
 
 let dir;
 let originalData;
+let originalRoot;
 let app;
 let seed;
 let observation;
@@ -18,6 +19,7 @@ let observation;
 beforeEach(async () => {
   vi.clearAllMocks();
   originalData = PATHS.data;
+  originalRoot = PATHS.root;
   dir = await mkdtemp(join(tmpdir(), 'portos-comparison-test-'));
   PATHS.data = dir;
   seed = JSON.parse(await readFile(join(PATHS.root, 'data.reference/model-comparison.json'), 'utf8'));
@@ -30,7 +32,26 @@ beforeEach(async () => {
 
 afterEach(async () => {
   PATHS.data = originalData;
+  PATHS.root = originalRoot;
   await rm(dir, { recursive: true, force: true });
+});
+
+it('exposes newly shipped evidence to an existing instance without replacing its local observations', async () => {
+  await mkdir(join(dir, 'data.reference'));
+  const shippedPath = join(dir, 'data.reference/model-comparison.json');
+  const localPath = join(dir, 'model-comparison.json');
+  const local = { ...observation, id: 'local-research' };
+  const addition = { ...observation, id: 'new-shipped-research' };
+  const localContents = JSON.stringify({ schemaVersion: 1, observations: [local] });
+  await writeFile(localPath, localContents);
+  await writeFile(shippedPath, JSON.stringify({ schemaVersion: 1, observations: [observation] }));
+  PATHS.root = dir;
+  expect((await request(app).get('/comparison')).body.observations.map(row => row.id)).not.toContain(addition.id);
+  await writeFile(shippedPath, JSON.stringify({ schemaVersion: 1, observations: [observation, addition] }));
+  const updated = await request(app).get('/comparison');
+  expect(updated.status).toBe(200);
+  expect(updated.body.observations.map(row => row.id)).toEqual(expect.arrayContaining([local.id, addition.id]));
+  expect(await readFile(localPath, 'utf8')).toBe(localContents);
 });
 
 it('merges newer installed evidence with shipped evidence and includes only selectable enabled models', async () => {
@@ -75,6 +96,35 @@ it('exposes Terra pricing and measured effort scores to existing Codex installs'
   expect(ultra.quality.method).toContain('Nearest effort of this exact model');
   expect(ultra.costPerTask).toBeNull();
   expect(ultra.needsResearch).toBe(true);
+});
+
+it('exposes Fable 5.2 task costs and scores on the matching v5 workload without changing the legacy composite', async () => {
+  await writeFile(join(dir, 'model-comparison.json'), JSON.stringify({ schemaVersion: 1, observations: [observation] }));
+  const claudeApp = express();
+  claudeApp.use('/comparison', createModelComparisonRoutes({ getSelectableProviders: async () => ({ providers: [
+    { id: 'claude-code', name: 'Claude Code', command: 'claude', models: ['claude-fable-5-2'] },
+  ] }) }));
+  claudeApp.use(errorMiddleware);
+
+  const result = await request(claudeApp).get('/comparison');
+  expect(result.status).toBe(200);
+  expect(result.body.composite.anchor).toBe('Artificial Analysis Intelligence Index v4.3.2');
+  expect(result.body.composite.rows.every(row => row.costPerTask === null)).toBe(true);
+  expect(result.body.currentComposite.anchor).toBe('Artificial Analysis Intelligence Index v5.0.1');
+  const rows = result.body.currentComposite.rows;
+  const expected = [
+    ['low', 53.9249388799182, 3.097241904274546],
+    ['medium', 56.4083157101519, 3.8026050641787634],
+    ['high', 61.8218785440284, 9.078414777860381],
+    ['xhigh', 62.2167392403357, 14.828587632511116],
+    ['max', 64.563595756626, 26.53855780398091],
+  ];
+  for (const [effort, score, cost] of expected) {
+    const row = rows.find(candidate => candidate.effort === effort);
+    expect(row.quality).toMatchObject({ value: score, estimated: false });
+    expect(row.costPerTask).toMatchObject({ value: cost, estimated: false });
+    expect(row.costPerTask.method).toContain('v5.0.1');
+  }
 });
 
 it('imports sourced public observations durably, retains newer metrics, and serializes concurrent imports', async () => {

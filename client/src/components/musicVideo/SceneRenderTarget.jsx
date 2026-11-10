@@ -13,6 +13,7 @@ import { normalizePreMusic } from '../../../../server/lib/musicVideoColdOpen.js'
 import { sceneActiveEndImageId } from '../../../../server/lib/musicVideoEndFrame.js';
 import { frameOptionsForModel } from '../../lib/videoGenParams.js';
 import { safeReadJsonStorage, safeWriteJsonStorage } from '../../lib/safeStorage.js';
+import { RenderOnSelect, RenderOptionSelect } from '../media/RenderOnSelect.jsx';
 
 /**
  * Where one shot's clip renders, picked on its card: the project's saved
@@ -38,7 +39,6 @@ import { safeReadJsonStorage, safeWriteJsonStorage } from '../../lib/safeStorage
 const BACKEND_LABELS = { local: 'Local LTX', grok: 'Grok', fal: 'fal.ai', runway: 'Runway', gemini: GEMINI_OMNI_WEB_MODEL.label };
 // The local render's frame rate when the request names none (generateVideo's default).
 const LOCAL_FPS = 24;
-const SELECT = 'min-w-0 max-w-full bg-port-bg border border-port-border rounded px-1 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0 disabled:opacity-50';
 
 // The fal model a performance shot renders on: the lip-sync route, or the
 // project's music-driven model for a music-driven shot. Never the cutaway model.
@@ -134,8 +134,8 @@ export function defaultLocalModelId({ models = [], saved = {}, defaultModel = ''
   return choices.find(isLtx25)?.id || (has(defaultModel) ? defaultModel : choices[0]?.id || '');
 }
 
-const shotSpan = shotRequestSpanSec;
-const localShotSpan = (scene) => normalizePreMusic(scene?.preMusic)?.durationSec ?? shotSpan(scene);
+const shotSpan = (scene, scenes) => shotRequestSpanSec(scene, scenes);
+const localShotSpan = (scene, scenes) => normalizePreMusic(scene?.preMusic)?.durationSec ?? shotSpan(scene, scenes);
 
 /** The shortest frame count of `model` that covers the shot, else its longest; null for an untimed shot. */
 export function coveringFrames(model, spanSec) {
@@ -158,7 +158,7 @@ const falLengths = (model) => {
  */
 export function renderTargetOverrides(value, saved, options = {}, context = {}) {
   if (!value) return null;
-  const spanSec = value === 'local' ? localShotSpan(context.scene) : shotSpan(context.scene);
+  const spanSec = value === 'local' ? localShotSpan(context.scene, context.scenes) : shotSpan(context.scene, context.scenes);
   if (value === 'local') {
     // A remembered model this shot can't use (a non-lip-sync model on a lip-synced shot) falls back to the default.
     const choices = localModelChoices(context.models || [], context.performance);
@@ -203,17 +203,8 @@ export function renderTargetOverrides(value, saved, options = {}, context = {}) 
 
 const formatSec = (sec) => `${Math.round(sec * 10) / 10}s`;
 
-function OptionSelect({ id, label, value, onChange, disabled, children }) {
-  return (
-    <span className="flex min-w-0 max-w-full items-center gap-1">
-      <label htmlFor={id} className="shrink-0 text-xs text-port-text-muted">{label}</label>
-      <select id={id} value={value} onChange={(e) => onChange(e.target.value)} disabled={disabled} className={`${SELECT} flex-1`}>{children}</select>
-    </span>
-  );
-}
-
 export default function SceneRenderTarget({
-  id, value, onChange, options = {}, onOptionsChange, performance, saved, scene = null, models = [], defaultModel = '', disabled = false, minFrames = null,
+  id, value, onChange, options = {}, onOptionsChange, performance, saved, scene = null, scenes = null, models = [], defaultModel = '', disabled = false, minFrames = null,
 }) {
   const runwayCatalog = useRunwayCatalog();
   const set = (patch) => {
@@ -221,8 +212,8 @@ export default function SceneRenderTarget({
     onOptionsChange?.(next);
     rememberRenderTarget(value, next);
   };
-  const spanSec = value === 'local' ? localShotSpan(scene) : shotSpan(scene);
-  const overrides = renderTargetOverrides(value, saved, options, { models, defaultModel, performance, scene });
+  const spanSec = value === 'local' ? localShotSpan(scene, scenes) : shotSpan(scene, scenes);
+  const overrides = renderTargetOverrides(value, saved, options, { models, defaultModel, performance, scene, scenes });
   const localChoices = localModelChoices(models, performance);
   const localModel = value === 'local' ? models.find((model) => model.id === overrides.modelId) : null;
   const selectedFrames = minFrames && localModel
@@ -239,82 +230,77 @@ export default function SceneRenderTarget({
   };
   return (
     <>
-      <span className="flex min-w-0 max-w-full flex-1 basis-48 items-center gap-1 sm:flex-initial">
-        <label htmlFor={id} className="shrink-0 text-xs">Render on</label>
-        <select id={id} value={value} onChange={(e) => { onChange(e.target.value); onOptionsChange?.({}); rememberRenderTarget(e.target.value); }} disabled={disabled}
-          title="Where this shot's clip renders. Only this shot; the project setting stays as it is."
-          className={`${SELECT} flex-1`}>
-          {value.startsWith('runway:') && !runwayCatalog.videoModels.some((m) => `runway:${m.id}` === value) && <option value={value}>{value} (unavailable)</option>}
-          {renderTargetOptions({ performance, saved, endFrame: Boolean(sceneActiveEndImageId(scene)), scene, runwayModels: runwayCatalog.videoModels }).map((option) => (
-            <option key={option.value} value={option.value} disabled={option.disabled}>{option.label}</option>
-          ))}
-        </select>
-      </span>
+      <RenderOnSelect id={id} value={value} disabled={disabled}
+        title="Where this shot's clip renders. Only this shot; the project setting stays as it is."
+        unavailable={value.startsWith('runway:') && !runwayCatalog.videoModels.some((m) => `runway:${m.id}` === value)
+          ? <option value={value}>{value} (unavailable)</option> : null}
+        options={renderTargetOptions({ performance, saved, endFrame: Boolean(sceneActiveEndImageId(scene)), scene, runwayModels: runwayCatalog.videoModels })}
+        onChange={(next) => { onChange(next); onOptionsChange?.({}); rememberRenderTarget(next); }} />
       {value === 'local' && (
         <>
-          <OptionSelect id={`${id}-model`} label="Model" value={overrides.modelId || ''} disabled={disabled || localChoices.length === 0}
+          <RenderOptionSelect id={`${id}-model`} label="Model" value={overrides.modelId || ''} disabled={disabled || localChoices.length === 0}
             onChange={(modelId) => set({ modelId, numFrames: null })}>
             {localChoices.length === 0 && <option value="">{performance ? 'No lip-sync model installed' : 'No local model installed'}</option>}
             {localChoices.map((model) => <option key={model.id} value={model.id}>{model.name || model.id}</option>)}
-          </OptionSelect>
+          </RenderOptionSelect>
           {localModel && !performance && (
-            <OptionSelect id={`${id}-length`} label="Clip length" value={selectedFrames || ''} disabled={disabled}
+            <RenderOptionSelect id={`${id}-length`} label="Clip length" value={selectedFrames || ''} disabled={disabled}
               onChange={(frames) => set({ numFrames: Number(frames) || null })}>
               {localFrameOptions.map((frames) => (
                 <option key={frames} value={frames}>
                   {frames === coveringFrames(localModel, spanSec) ? localCoversLabel(frames) : formatSec(frames / LOCAL_FPS)}
                 </option>
               ))}
-            </OptionSelect>
+            </RenderOptionSelect>
           )}
         </>
       )}
       {value === 'grok' && (
-        <OptionSelect id={`${id}-length`} label="Clip length" value={overrides.grokDuration || ''} disabled={disabled}
+        <RenderOptionSelect id={`${id}-length`} label="Clip length" value={overrides.grokDuration || ''} disabled={disabled}
           onChange={(sec) => set({ grokDuration: Number(sec) || null })}>
           {overrides.grokDuration == null && <option value="">Default</option>}
           {GROK_VIDEO_DURATIONS.map((sec) => (
             <option key={sec} value={sec}>{spanSec != null && sec === grokCoverage(spanSec).requestSec ? coversLabel(sec) : formatSec(sec)}</option>
           ))}
-        </OptionSelect>
+        </RenderOptionSelect>
       )}
       {falModel && !performance && (
         <>
           {falLengths(falModel).length > 0 && (
-            <OptionSelect id={`${id}-length`} label="Clip length" value={options.falDuration || ''} disabled={disabled}
+            <RenderOptionSelect id={`${id}-length`} label="Clip length" value={options.falDuration || ''} disabled={disabled}
               onChange={(sec) => set({ falDuration: Number(sec) || null })}>
               <option value="">{coversLabel(coerceFalVideoSeconds(falModel, spanSec))}</option>
               {falLengths(falModel).map((sec) => <option key={sec} value={sec}>{formatSec(sec)}</option>)}
-            </OptionSelect>
+            </RenderOptionSelect>
           )}
           {falVideoResolutions(falModel).length > 1 && (
-            <OptionSelect id={`${id}-resolution`} label="Size" value={options.falResolution || ''} disabled={disabled}
+            <RenderOptionSelect id={`${id}-resolution`} label="Size" value={options.falResolution || ''} disabled={disabled}
               onChange={(falResolution) => set({ falResolution: falResolution || null })}>
               <option value="">{`${falModel.resolution.default} · default`}</option>
               {falVideoResolutions(falModel).filter((res) => res !== falModel.resolution.default).map((res) => (
                 <option key={res} value={res}>{`${res} · ${describeFalVideoRate(falModel.id, res)}`}</option>
               ))}
-            </OptionSelect>
+            </RenderOptionSelect>
           )}
         </>
       )}
       {runwayModel && !performance && (
         <>
           {runwayVideoLengths(runwayModel).length > 0 && (
-            <OptionSelect id={`${id}-length`} label="Clip length" value={options.runwayDuration || ''} disabled={disabled}
+            <RenderOptionSelect id={`${id}-length`} label="Clip length" value={options.runwayDuration || ''} disabled={disabled}
               onChange={(sec) => set({ runwayDuration: Number(sec) || null })}>
               <option value="">{coversLabel(coerceRunwayVideoSeconds(runwayModel, spanSec))}</option>
               {runwayVideoLengths(runwayModel).map((sec) => <option key={sec} value={sec}>{formatSec(sec)}</option>)}
-            </OptionSelect>
+            </RenderOptionSelect>
           )}
           {runwayVideoResolutions(runwayModel).length > 1 && (
-            <OptionSelect id={`${id}-resolution`} label="Size" value={options.runwayResolution || ''} disabled={disabled}
+            <RenderOptionSelect id={`${id}-resolution`} label="Size" value={options.runwayResolution || ''} disabled={disabled}
               onChange={(runwayResolution) => set({ runwayResolution: runwayResolution || null })}>
               <option value="">{`${runwayModel.size.default} · default`}</option>
               {runwayVideoResolutions(runwayModel).filter((res) => res !== runwayModel.size.default).map((res) => (
                 <option key={res} value={res}>{`${res} · ${describeRunwayVideoRate(runwayModel.id, res)}`}</option>
               ))}
-            </OptionSelect>
+            </RenderOptionSelect>
           )}
         </>
       )}

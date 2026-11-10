@@ -977,8 +977,9 @@ describe('isVisionModel', () => {
 });
 
 describe('isVisionCapableCliProvider', () => {
-  it('accepts Claude and Codex CLIs, including a path-configured command', () => {
+  it('accepts Claude, Codex and Grok CLIs, including a path-configured command', () => {
     expect(isVisionCapableCliProvider({ type: 'cli', command: 'codex' })).toBe(true);
+    expect(isVisionCapableCliProvider({ type: 'cli', command: 'grok' })).toBe(true);
     expect(isVisionCapableCliProvider({ type: 'cli', command: 'claude' })).toBe(true);
     expect(isVisionCapableCliProvider({ type: 'cli', command: '/opt/homebrew/bin/claude' })).toBe(true);
   });

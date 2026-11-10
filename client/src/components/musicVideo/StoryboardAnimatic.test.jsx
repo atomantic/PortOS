@@ -225,6 +225,35 @@ describe('StoryboardAnimatic lyrics', () => {
     expect(screen.getByText('Opening').closest('figure')).toBeTruthy();
   });
 
+  // Uniquely catches a video with its words switched off losing its opening title card in the preview.
+  it('keeps the lyric layer for the title card when the words are switched off', async () => {
+    const hidden = { ...lyricProject, lyricOverlayEnabled: false };
+    const { rerender } = render(<StoryboardAnimatic project={{ ...hidden, titleCard: { enabled: true, title: 'Example Song', startSec: 2, endSec: 8 } }} audioUrl="/song.mp3" />);
+    expect(await screen.findByTestId('animatic-lyrics')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Lyrics' })).toBeNull();
+    rerender(<StoryboardAnimatic project={{ ...hidden, titleCard: { enabled: false, title: 'Example Song' } }} audioUrl="/song.mp3" />);
+    await waitFor(() => expect(screen.queryByTestId('animatic-lyrics')).toBeNull());
+  });
+
+  it('keeps the title card while the local Lyrics toggle hides only the lyric canvas', async () => {
+    render(<StoryboardAnimatic project={{ ...lyricProject, titleCard: { enabled: true, title: 'Example Song' } }} audioUrl="/song.mp3" />);
+    const overlay = await screen.findByTestId('animatic-lyrics');
+    await act(async () => {});
+    const post = vi.spyOn(overlay.contentWindow, 'postMessage');
+    await act(async () => window.dispatchEvent(new MessageEvent('message', { source: overlay.contentWindow, data: { type: 'portos-mv:loaded' } })));
+    fireEvent.click(screen.getByRole('button', { name: 'Lyrics' }));
+    expect(screen.getByTestId('animatic-lyrics')).toBe(overlay);
+    expect(post).toHaveBeenCalledWith({ type: 'portos-mv:lyrics-visible', visible: false }, '*');
+    expect(post).toHaveBeenCalledWith({ type: 'portos-mv:title-card', card: expect.objectContaining({ title: 'Example Song' }) }, '*');
+  });
+
+  // Uniquely catches an instrumental video losing its enabled title card.
+  it('shows a title card without requiring timed lyrics', async () => {
+    render(<StoryboardAnimatic project={{ ...lyricProject, lyricCues: [], titleCard: { enabled: true, title: 'Instrumental', startSec: 0, endSec: 4 } }} audioUrl="/song.mp3" />);
+    expect(await screen.findByTestId('animatic-lyrics')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Lyrics' })).toBeNull();
+  });
+
   // Uniquely catches the animatic's lyric layer dropping the opening title card or its live edits.
   it('hands the opening title card to the lyric layer and again when it is edited', async () => {
     const card = { enabled: true, title: 'Example Song', startSec: 2, endSec: 8 };
@@ -458,6 +487,9 @@ describe('StoryboardAnimatic clips', () => {
     expect(clipTimeAt(performance, 13, 9)).toBe(5);
     expect(clipTimeAt({ startSec: 10 }, 16, 4)).toBe(2);
     expect(clipTimeAt({ startSec: 10, loop: false }, 16, 4)).toBeCloseTo(3.95);
+    const source = { startSec: 10, endSec: 12, sourceTake: { sceneId: 'a', offsetSec: 4 } };
+    expect(clipTimeAt(source, 10.5, 6)).toBeCloseTo(4.5);
+    expect(clipTimeAt(source, 14, 6)).toBeCloseTo(5.95);
   });
 
   // Uniquely catches the preview playing a shot's hand-set speed or offset differently from the render.

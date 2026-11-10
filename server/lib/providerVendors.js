@@ -112,6 +112,7 @@ import {
   withGrokCodeReviewOutput,
   GROK_STREAMING_JSON_FORMAT,
   GROK_NO_TOOL_ARGS,
+  GROK_IMAGE_READ_ARGS,
   grokServiceTierModel,
   grokSpeedArgsConflict,
 } from './grok.js';
@@ -264,10 +265,22 @@ function claudeToolFreeArgs(args) {
   return [...cleared, ...CLAUDE_TOOL_FREE_ARGS];
 }
 
+// Claude Code reading a staged image (#15576): the tool-free posture, but the
+// Read tool stays inside the staged-image directory under restricted mode.
+function claudeImageReadArgs(args) {
+  const confined = dropOptions(dropOptions(claudeToolFreeArgs(args), ['--add-dir'], { variadic: true }), ['--settings']);
+  const at = confined.lastIndexOf('--tools');
+  return [...confined.slice(0, at), '--restricted', '--tools', 'Read', ...confined.slice(at + 2)];
+}
+
 // Grok's read-only permission mode with every built-in tool removed — the same
 // posture its no-tool public-review recipe enforces (#14476).
 function grokToolFreeArgs(args) {
   return [...dropOptions(args, ['--permission-mode', '--tools', '--disallowed-tools']), ...GROK_NO_TOOL_ARGS];
+}
+
+function grokImageReadArgs(args) {
+  return [...dropOptions(args, ['--permission-mode', '--tools', '--disallowed-tools']), ...GROK_IMAGE_READ_ARGS];
 }
 
 // Pi: `--no-builtin-tools` alone leaves extension tools enabled, so extensions
@@ -739,7 +752,7 @@ const GROK = {
   tuiArgs: ensureGrokTuiArgs,
   cliArgs: grokCliArgs,
   spawnArgs: defaultSpawnArgs(grokCliArgs, 'grok'),
-  toolFreeOneShot: { matchCommand: isGrokCommand, toolFreeArgs: grokToolFreeArgs },
+  toolFreeOneShot: { matchCommand: isGrokCommand, toolFreeArgs: grokToolFreeArgs, imageReadArgs: grokImageReadArgs },
   // The code reviewer parses a strict JSON envelope from the reply, so it needs
   // grok's final message alone, not plain output's gluing of pre-tool narration
   // onto it (#14391). Pipeline public-review stages keep plain text.
@@ -1030,7 +1043,7 @@ const CLAUDE = {
   spawnArgs: claudeSpawnArgs,
   // Positive binary match: the row's always-true `matchCommand` must never
   // hand an unknown command claude's flags or a tool-free verdict.
-  toolFreeOneShot: { matchCommand: isClaudeCommand, toolFreeArgs: claudeToolFreeArgs },
+  toolFreeOneShot: { matchCommand: isClaudeCommand, toolFreeArgs: claudeToolFreeArgs, imageReadArgs: claudeImageReadArgs },
   publicReview: {
     // Claude is the historical always-true fallback row, so its posture
     // matcher must positively identify the binary — an unknown command must
@@ -1258,6 +1271,30 @@ export function isToolFreeOneShotProvider(provider) {
   if (provider?.type === PROVIDER_TYPES.API) return true;
   return provider?.type === PROVIDER_TYPES.CLI && toolFreeOneShotArgs(provider).toolFree;
 }
+
+/**
+ * A one-shot over untrusted text that must look at a staged image file (#15576).
+ * Vendors that read images with a file tool (claude, grok) keep only that read
+ * tool; codex attaches with `-i` under its read-only sandbox; an API provider
+ * sends the image inline. Returns null when the vendor has no such posture, so
+ * the caller fails closed rather than running with every tool on.
+ *
+ * @param {object} provider - provider record (type, command)
+ * @param {string[]} [args] - the built vision argv
+ * @returns {{ args: string[], imageRead: 'inline'|'attach'|'read-tool' } | null}
+ */
+export function imageReadOneShotArgs(provider, args = []) {
+  if (provider?.type === PROVIDER_TYPES.API) return { args: [...args], imageRead: 'inline' };
+  if (provider?.type !== PROVIDER_TYPES.CLI) return null;
+  const spec = PROVIDER_VENDORS.find((v) => v.toolFreeOneShot?.matchCommand(provider?.command))?.toolFreeOneShot;
+  const { args: stripped } = stripApprovalBypassArgs(args, spec?.bypassAliases);
+  if (spec?.imageReadArgs) return { args: spec.imageReadArgs(stripped), imageRead: 'read-tool' };
+  if (spec?.sandboxArgs) return { args: spec.sandboxArgs(stripped), imageRead: 'attach' };
+  return null;
+}
+
+/** Whether a provider can run {@link imageReadOneShotArgs}: look at an image without host-writing tools. */
+export const canReadImagesOneShot = (provider) => imageReadOneShotArgs(provider) !== null;
 
 /**
  * Whether a headless CLI one-shot is held to an OS read-only sandbox (codex)

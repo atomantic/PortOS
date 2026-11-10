@@ -10,6 +10,7 @@
  */
 
 import { EventEmitter } from 'events';
+import { currentWriteOrigin } from '../../lib/writeOrigin.js';
 
 export const recordEvents = new EventEmitter();
 // Many subscriptions per record + the subscriptions listener itself can
@@ -19,7 +20,8 @@ recordEvents.setMaxListeners(100);
 /** Fire-and-forget — listeners' failures shouldn't poison the caller. */
 export function emitRecordUpdated(recordKind, recordId) {
   if (!recordKind || !recordId) return;
-  recordEvents.emit('updated', { recordKind, recordId });
+  const origin = currentWriteOrigin();
+  recordEvents.emit('updated', { recordKind, recordId, ...(origin ? { origin } : {}) });
 }
 
 /** UI-only invalidation after persistence; does not enqueue a federation push. */

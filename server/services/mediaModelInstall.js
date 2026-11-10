@@ -30,6 +30,9 @@ import { ServerError } from '../lib/errorHandler.js';
 // (URL or org/name@rev). Optional `kind` ('image'|'video'), `runtime` (video),
 // `runner` (image) let the UI correct a mis-detected repo. `name`/`steps`/
 // `guidance` override the derived defaults. Returns the new registry entry.
+// A stalled Hub would otherwise hold the add request open with no answer.
+const METADATA_FETCH_TIMEOUT_MS = 10_000;
+
 export const addModelFromHuggingface = async (input, { fetchImpl = fetch } = {}) => {
   const { repo, revision } = parseHuggingfaceLoraRef(input?.url);
   // Refuse a pinned revision (`org/name@rev`, `/tree/<rev>`). The registry
@@ -47,7 +50,7 @@ export const addModelFromHuggingface = async (input, { fetchImpl = fetch } = {})
   }
   // Stored/env/CLI token — needed only for gated repos, harmless on public ones.
   const token = (typeof input?.token === 'string' && input.token.trim()) || (await getHfToken()) || '';
-  const model = await fetchHuggingfaceModel(repo, { token, revision, fetchImpl });
+  const model = await fetchHuggingfaceModel(repo, { token, revision, fetchImpl, signal: AbortSignal.timeout(METADATA_FETCH_TIMEOUT_MS) });
 
   // Strict classification: throws HF_UNSUPPORTED_FORMAT (GGUF-only),
   // HF_NO_SAFETENSORS, HF_UNSUPPORTED_RUNTIME (wan/hunyuan),

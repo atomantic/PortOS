@@ -93,6 +93,7 @@
       ],
       "models": [
         "claude-opus-5-5",
+        "claude-fable-5-2",
         "claude-fable-5-1",
         "claude-sonnet-5-5",
         "claude-haiku-5-5",
@@ -109,7 +110,7 @@
       "lightModel": "claude-haiku-5-5",
       "mediumModel": "claude-sonnet-5",
       "heavyModel": "claude-opus-5-5",
-      "ultraModel": "claude-fable-5-1",
+      "ultraModel": "claude-fable-5-2",
       "timeout": 900000,
       "enabled": true,
       "envVars": {},
@@ -907,6 +908,7 @@
       ],
       "models": [
         "claude-opus-5-5",
+        "claude-fable-5-2",
         "claude-fable-5-1",
         "claude-sonnet-5-5",
         "claude-haiku-5-5",
@@ -923,7 +925,7 @@
       "lightModel": "claude-haiku-5-5",
       "mediumModel": "claude-sonnet-5",
       "heavyModel": "claude-opus-5-5",
-      "ultraModel": "claude-fable-5-1",
+      "ultraModel": "claude-fable-5-2",
       "timeout": 900000,
       "enabled": true,
       "envVars": {},

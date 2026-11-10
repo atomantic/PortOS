@@ -19,11 +19,13 @@ const buttonCls = 'flex items-center gap-1 bg-port-bg border border-port-border 
 // Hashed: the preview socket caps `revision` at 500 characters and a whole song's word times run far past it.
 const playthroughKey = (project) => JSON.stringify([
   project.audioAnalysis?.durationSec ?? null,
+  project.lyricOverlayEnabled,
   (project.lyricCues || []).map((cue) => [cue.text, cue.startSec, cue.endSec, (cue.words || []).map((w) => [w.startSec, w.endSec])]),
   (project.lyricMarkers || []).map((m) => [m.type, m.label, m.line]),
   (project.scenes || []).map((s) => [s.startSec, s.endSec, s.textZone, s.lyricRole, s.lyricSize]),
   // The lyrics step off the title card's corner while it shows.
   titleCardVisible(project.titleCard) ? [project.titleCard.position, titleCardWindows(project.titleCard)] : null,
+  project.composition?.mode === 'document' ? [project.composition.textCues, project.composition.style, project.treatment?.brief] : null,
 ]);
 export const playthroughVersion = (project) => {
   const key = playthroughKey(project);
@@ -40,20 +42,32 @@ const lyricAt = (cues, t) => {
 // makes an end-frame effect eligible (its still's media and medium). A change
 // reopens it, so a new effect draws (or is named as unsupported) and a removed one clears.
 const shotEffectsKey = (project) => JSON.stringify([project.audioAnalysis?.durationSec ?? null, project.productionPolicy?.strategy ?? null,
+  project.overscan ?? null, project.templateEffects ?? null,
+  (project.cameras || []).map((camera) => [camera.id, camera.filmLook, camera.frame, camera.cuts, camera.osd]),
   (project.treatment?.shotDirections || []).map((d) => [d.sceneId, d.medium]),
   (project.scenes || []).map((s) => [s.sceneId, s.startSec, s.endSec,
     s.transitionIn, s.transitionOut, s.glitches, s.imageEffect, s.endImageId, s.visualLayer,
-    s.referenceImageId, s.photoSequence, s.direction?.medium, s.filmLook])]);
+    s.referenceImageId, s.photoSequence, s.direction?.medium, s.filmLook, s.templateEffects])]);
 const shotEffectsVersion = (project) => {
   const key = shotEffectsKey(project);
   return `fx-${key.length.toString(36)}-${hashString(key).toString(36)}`;
 };
 
+/** The reopen key of a project's live document preview, or null without a document. */
+export const documentPreviewRevision = (project, { draft = false } = {}) => {
+  const doc = draft ? project.composition?.documentDraft : project.composition?.document;
+  return doc ? `${doc.directory}|${doc.updatedAt || ''}${project.lyricOverlayEnabled === false ? '|lyrics-off' : ''}|${shotEffectsVersion(project)}` : null;
+};
+
+const shotLooksAvailable = (project) => (project.scenes || []).some(scene => !isFilmLookNeutral(scene.filmLook))
+  || (project.cameras || []).some(camera => !isFilmLookNeutral(camera.filmLook));
+
+/** The film look a document preview sends its worker: the video's, a neutral base under per-shot looks, or none. */
+export const documentPreviewLook = (project, lookOn) => (lookOn ? (project.filmLook ?? (shotLooksAvailable(project) ? { preset: 'none' } : null)) : null);
+
 // Why the server plays this document by exact per-frame seeks instead of smooth native playback.
 const FALLBACK_REASONS = {
   'unrecognized-engine': 'its engine was customized',
-  'photo-sequence-exact-seek': 'a shot uses a photo sequence',
-  'wipe-exact-seek': 'a shot uses a wipe',
   'unsupported-video-fps': 'a clip has an unknown or very low frame rate',
   'unsupported-capture-protocol': 'the preview browser is too old',
   'unsupported-frame-callbacks': 'the preview browser is too old',
@@ -129,11 +143,11 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
   const [lookOn, toggleLook] = usePreviewFilmLook();
   useEffect(() => { reportedAudioError.current = false; setAudioError(''); }, [audioUrl]);
   const appliedSeek = useRef(null);
-  const shotLookAvailable = (project.scenes || []).some(scene => !isFilmLookNeutral(scene.filmLook));
-  const filmLook = !lyrics && lookOn ? (project.filmLook ?? (shotLookAvailable ? { preset: 'none' } : null)) : null;
+  const shotLookAvailable = shotLooksAvailable(project);
+  const filmLook = lyrics ? null : documentPreviewLook(project, lookOn);
   const lookAvailable = !lyrics && (!isFilmLookNeutral(project.filmLook) || shotLookAvailable);
   const titleCard = useMemo(() => normalizeTitleCard(project.titleCard), [project.titleCard]);
-  const revision = lyrics ? playthroughVersion(project) : doc ? `${doc.directory}|${doc.updatedAt || ''}${project.lyricOverlayEnabled === false ? '|lyrics-off' : ''}|${shotEffectsVersion(project)}` : null;
+  const revision = lyrics ? playthroughVersion(project) : documentPreviewRevision(project, { draft });
   const request = useMemo(() => {
     if (!wanted || !revision || !doc) return null;
     return {
@@ -375,7 +389,9 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
   const title = lyrics ? 'Lyric timing playthrough' : draft ? 'Composition candidate preview' : 'Composition document preview';
   const aspect = preview.width && preview.height ? `${preview.width} / ${preview.height}` : '16 / 9';
   const lyric = lyricAt(project.lyricCues, t);
-  const shotStep = shotNav ? shotSteps(project.scenes, t) : null;
+  // Fallback frames trail the audio clock; while playing, name the shot pictured.
+  const shownT = playing && !preview.playback && preview.frameTime != null ? preview.frameTime : t;
+  const shotStep = shotNav ? shotSteps(project.scenes, shownT) : null;
   const shotIndex = shotStep?.index || 0;
   const activeShot = shotStep?.scene || null;
   const failed = preview.status === 'error' || preview.status === 'unavailable' || !!audioError;
@@ -428,7 +444,7 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
         <span className="text-xs text-port-text-muted tabular-nums">{timeLabel}</span>
         {lookAvailable && <PreviewFilmLook enabled={lookOn} onToggle={toggleLook} />}
       </div>
-      {shotNav && <ShotStepper scenes={project.scenes} time={t} onSeek={seek} onEditShot={onEditShot ? (sceneId) => { stopPlayback(); onEditShot(sceneId); } : null} disabled={!preview.ready || failed} keys />}
+      {shotNav && <ShotStepper scenes={project.scenes} time={shownT} onSeek={seek} onEditShot={onEditShot ? (sceneId) => { stopPlayback(); onEditShot(sceneId); } : null} disabled={!preview.ready || failed} keys />}
       {shotNav && (
         <FrameStepper
           time={t}

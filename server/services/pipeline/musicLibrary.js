@@ -149,7 +149,8 @@ export async function importUploadedTrack(tempPath, originalName) {
   const dest = join(PATHS.music, filename);
   // The copy is the whole publication: a snapshot copying the library while it
   // runs would capture a truncated file under its final name (#9982). The temp
-  // file lives outside `data/`, so its cleanup stays outside the lease.
+  // file lives outside `data/`, so its cleanup stays outside the lease, and it
+  // runs on failure too: a full disk must not also strand the upload in tmpdir.
   const sizeBytes = await withBackupAssetPublication(async () => {
     await ensureDir(PATHS.music);
     // copyFile + unlink instead of rename — the multipart helper writes to
@@ -158,8 +159,7 @@ export async function importUploadedTrack(tempPath, originalName) {
     await copyFileGuarded(tempPath, dest);
     const s = await stat(dest).catch(() => null);
     return s?.size ?? 0;
-  });
-  await unlinkGuarded(tempPath).catch(() => {});
+  }).finally(() => unlinkGuarded(tempPath).catch(() => {}));
   return { filename, sizeBytes };
 }
 

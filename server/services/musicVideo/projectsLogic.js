@@ -42,6 +42,8 @@ import { ensureSceneTakes, keepCodeClipWithItsClip, TAKE_SLOT } from './takes.js
 import { normalizeComposition, invalidateCompositionTiming, withStoredCompositionDocument } from './composition.js';
 import { normalizeSoundBed } from './soundBed.js';
 import { normalizeFilmLook } from '../../lib/filmLook.js';
+import { normalizeTemplateEffects } from '../../lib/musicVideoTemplateEffects.js';
+import { normalizeOverscan } from '../../lib/musicVideoFilmLook.js';
 import { normalizeProductionMedium } from '../../lib/musicVideoProductionMedium.js';
 import { stillMoveForCamera } from '../../lib/cameraMovements.js';
 import { normalizeTitleCard } from '../../lib/musicVideoTitleCard.js';
@@ -55,6 +57,8 @@ import { normalizeMusicVideoAutomation } from '../../lib/musicVideoAutomation.js
 import { normalizeShotSheet } from '../../lib/musicVideoShotSheet.js';
 import { coldOpenScenes, isPreMusicShot, normalizePreMusic, songScenes, timedSongScenes } from '../../lib/musicVideoColdOpen.js';
 import { fillSceneFromCameo, findMusicVideoCameo, cameoStillFor } from '../../lib/musicVideoCameos.js';
+// The frozen v53 -> v54 previz transform; reused so a v2.114 peer's push converts exactly like stored rows did.
+import { migrateMusicVideoPreviz } from '../../../scripts/migrations/459-music-video-previz-timeline.js';
 
 /** The vocal-stem fields cleared together whenever the stem stops belonging to the song (#8977). */
 export const CLEARED_VOCAL_STEM = Object.freeze({ vocalStemFilename: null, vocalStemMasterFilename: null, vocalStemDerived: null });
@@ -123,6 +127,7 @@ export function buildProjectRecord(input, { id, now }) {
     uploadedAudioFilename = null, concept = null,
     videoSettings = {},
   } = input;
+  const overscan = normalizeOverscan(input.overscan);
   return {
     id,
     name,
@@ -192,6 +197,8 @@ export function buildProjectRecord(input, { id, now }) {
     soundBed: input.soundBed ? normalizeSoundBed(input.soundBed) : null,
     // The finishing film look every preview, render and baked still is viewed through; null = none.
     filmLook: input.filmLook ? normalizeFilmLook(input.filmLook) : null,
+    ...(input.templateEffects ? { templateEffects: normalizeTemplateEffects(input.templateEffects) } : {}),
+    ...(overscan != null ? { overscan } : {}),
     // The handmade medium (stepped holds, compositor-only lettering); null = none.
     ...(normalizeProductionMedium(input.productionMedium) ? { productionMedium: normalizeProductionMedium(input.productionMedium) } : {}),
     // The opening title card (song, artist, year over the opener); null = none.
@@ -255,6 +262,7 @@ export function cloneProjectRecord(source, {
   }));
   for (const scene of scenes) scene.takes = scene.takes.map((take) => ({ ...take,
     ...(take.dependencies ? { dependencies: remapMusicVideoDependencies(take.dependencies, sceneIdMap) } : {}),
+    ...(take.frameDependencies ? { frameDependencies: remapMusicVideoDependencies(take.frameDependencies, sceneIdMap) } : {}),
   }));
   const mediaReady = includeGeneratedMedia
     && scenes.length > 0
@@ -414,6 +422,13 @@ export function applyProjectPatch(project, patch) {
     ...('soundBed' in patch ? { soundBed: normalizeSoundBed(patch.soundBed) } : {}),
     // The film look is replaced whole (one bounded record); null clears it.
     ...('filmLook' in patch ? { filmLook: normalizeFilmLook(patch.filmLook) } : {}),
+    ...('templateEffects' in patch ? { templateEffects: normalizeTemplateEffects(patch.templateEffects) } : {}),
+    ...('overscan' in patch ? { overscan: normalizeOverscan(patch.overscan) } : {}),
+    ...(Array.isArray(patch.cameras) ? { cameras: patch.cameras.map((camera) => (
+      camera && typeof camera === 'object' && 'filmLook' in camera
+        ? { ...camera, filmLook: camera.filmLook == null ? null : normalizeFilmLook(camera.filmLook) }
+        : camera
+    )) } : {}),
     ...('productionMedium' in patch ? { productionMedium: normalizeProductionMedium(patch.productionMedium) } : {}),
     // The title card is replaced whole (one bounded record); null clears it.
     ...('titleCard' in patch ? { titleCard: normalizeTitleCard(patch.titleCard) } : {}),
@@ -592,6 +607,7 @@ function buildScene(input, { order }) {
     ...(input.reverse ? { reverse: true } : {}),
     ...(input.holdLastFrame ? { holdLastFrame: true } : {}),
     ...(input.filmLook ? { filmLook: normalizeFilmLook(input.filmLook) } : {}),
+    ...(input.templateEffects ? { templateEffects: normalizeTemplateEffects(input.templateEffects) } : {}),
     ...(input.transitionIn ? { transitionIn: input.transitionIn } : {}),
     ...(input.transitionOut ? { transitionOut: input.transitionOut } : {}),
     ...(input.wipeIn ? { wipeIn: input.wipeIn } : {}),
@@ -612,6 +628,7 @@ function buildScene(input, { order }) {
     ...(input.performanceSpeaker ? { performanceSpeaker: input.performanceSpeaker } : {}),
     ...(input.performanceStyle === 'music' ? { performanceStyle: 'music' } : {}),
     ...(input.coverage === 'sequence' ? { coverage: 'sequence' } : {}),
+    ...(input.sourceTake ? { sourceTake: input.sourceTake } : {}),
     ...(input.panelId ? { panelId: input.panelId, panelRev: input.panelRev ?? null, panelArt: input.panelArt ?? null } : {}),
     referenceImageId: null,
     videoHistoryId: null,
@@ -662,9 +679,33 @@ export function addScenes(project, sceneInputs) {
   return { project: next, scenes: ids.map((id) => scenes.find((s) => s.sceneId === id)) };
 }
 
+// A rewrite of these fields makes a baked direction clause unsafe to send until
+// the treatment is applied again. visualLayer defaults to footage when omitted.
+const DIRECTION_STALE_FIELDS = ['prompt', 'framePrompt', 'visualIntent', 'visualLayer', 'shotSheet'];
+
+const stableValue = (value) => {
+  if (Array.isArray(value)) return value.map(stableValue);
+  if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map((key) => [key, stableValue(value[key])]));
+  return value ?? null;
+};
+
+const staleFieldValue = (field, value) => {
+  if (field === 'visualLayer') return value || 'footage';
+  if (field === 'shotSheet') return value && typeof value === 'object' ? stableValue(value) : null;
+  if (typeof value === 'string') return value.trim() || null;
+  return value ?? null;
+};
+
+function markDirectionStale(prior, next) {
+  if (!next?.direction) return next;
+  const changed = DIRECTION_STALE_FIELDS.some((field) => JSON.stringify(staleFieldValue(field, prior?.[field])) !== JSON.stringify(staleFieldValue(field, next[field])));
+  if (!changed || next.direction.stale === true) return next;
+  return { ...next, direction: { ...next.direction, stale: true } };
+}
+
 // What a shot replaced by a new plan keeps from the one it takes the place of: its id, picked media and finish.
 function carryOver(prior, fresh) {
-  return {
+  return markDirectionStale(prior, {
     ...fresh,
     sceneId: prior.sceneId,
     referenceImageId: prior.referenceImageId ?? null,
@@ -679,10 +720,12 @@ function carryOver(prior, fresh) {
     ...(prior.speedFps ? { speedFps: prior.speedFps } : {}),
     ...(prior.offsetFrames ? { offsetFrames: prior.offsetFrames } : {}),
     ...(prior.clipLengthSec ? { clipLengthSec: prior.clipLengthSec } : {}),
+    ...(prior.sourceTake ? { sourceTake: prior.sourceTake } : {}),
     ...(prior.clipModelId ? { clipModelId: prior.clipModelId } : {}),
     ...(prior.reverse ? { reverse: true } : {}),
     ...(prior.holdLastFrame ? { holdLastFrame: true } : {}),
     ...(prior.filmLook ? { filmLook: prior.filmLook } : {}),
+    ...(prior.templateEffects ? { templateEffects: prior.templateEffects } : {}),
     ...(prior.transitionIn ? { transitionIn: prior.transitionIn } : {}),
     ...(prior.transitionOut ? { transitionOut: prior.transitionOut } : {}),
     ...(prior.wipeIn ? { wipeIn: prior.wipeIn } : {}),
@@ -696,7 +739,7 @@ function carryOver(prior, fresh) {
     takes: prior.takes || [],
     ...(prior.direction ? { direction: prior.direction } : {}),
     ...(prior.cameoId ? { cameoId: prior.cameoId, ...(prior.cameoVariantId ? { cameoVariantId: prior.cameoVariantId } : {}), ...(prior.cameoLabel ? { cameoLabel: prior.cameoLabel } : {}) } : {}),
-  };
+  });
 }
 
 /**
@@ -793,8 +836,8 @@ export function applyStoryboardShotSync(project, plan) {
 // takes, and whether it plays as a clip or its still with an image effect) without
 // adding a shot or lyric the storyboard approval did not cover.
 const SCENE_SHOT_EDIT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'beatNeedsReview', 'pacingCut', 'label', 'prompt', 'framePrompt', 'visualIntent',
-  'referenceImageId', 'videoHistoryId', 'endImageId', 'endFrameOff', 'codeClip', 'frameFit', 'speedFps', 'offsetFrames', 'clipLengthSec', 'clipModelId', 'reverse', 'holdLastFrame', 'filmLook', 'transitionIn', 'transitionOut', 'wipeIn', 'wipeOut', 'glitches', 'cutEffect',
-  'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec', 'photoSequence', 'frameReferenceIds', 'clipReferenceIds', 'researchReferences', 'setReference', 'characterVariant', 'panelId', 'panelRev', 'panelArt', 'preMusic', 'coverage', 'lyricAnchor',
+  'referenceImageId', 'videoHistoryId', 'endImageId', 'endFrameOff', 'codeClip', 'frameFit', 'speedFps', 'offsetFrames', 'clipLengthSec', 'clipModelId', 'reverse', 'holdLastFrame', 'filmLook', 'templateEffects', 'transitionIn', 'transitionOut', 'wipeIn', 'wipeOut', 'glitches', 'cutEffect',
+  'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec', 'photoSequence', 'frameReferenceIds', 'clipReferenceIds', 'researchReferences', 'setReference', 'characterVariant', 'panelId', 'panelRev', 'panelArt', 'preMusic', 'coverage', 'sourceTake', 'lyricAnchor',
   'cameoId', 'cameoVariantId', 'cameoLabel', 'shotSheet'];
 
 /**
@@ -825,7 +868,8 @@ export function applySceneUpdate(project, sceneId, patch) {
   // A shot's own look is stored complete; null returns it to the video's look.
   const planned = 'shotSheet' in parsed ? { ...parsed, shotSheet: normalizeShotSheet(parsed.shotSheet) } : parsed;
   const looked = 'filmLook' in planned ? { ...planned, filmLook: planned.filmLook ? normalizeFilmLook(planned.filmLook) : null } : planned;
-  const data = 'preMusic' in looked ? { ...looked, preMusic: normalizePreMusic(looked.preMusic) } : looked;
+  const finished = 'templateEffects' in looked ? { ...looked, templateEffects: normalizeTemplateEffects(looked.templateEffects) } : looked;
+  const data = 'preMusic' in finished ? { ...finished, preMusic: normalizePreMusic(finished.preMusic) } : finished;
   const scenes = project.scenes || [];
   const idx = scenes.findIndex((s) => s.sceneId === sceneId);
   if (idx < 0) throw new ServerError('Scene not found', { status: 404, code: 'NOT_FOUND' });
@@ -852,13 +896,16 @@ export function applySceneUpdate(project, sceneId, patch) {
   if (retimed && !('lyricText' in data)) {
     updated.lyricText = sungLyricTextWithin(project.lyricCues, updated.startSec, updated.endSec);
   }
-  assertMusicVideoMediaSelections({ ...project, scenes: [updated], visualSpec: null });
+  const recorded = markDirectionStale(scenes[idx], updated);
+  assertMusicVideoMediaSelections({ ...project, scenes: [recorded], visualSpec: null });
   const nextScenes = scenes.slice();
-  nextScenes[idx] = updated;
+  nextScenes[idx] = recorded;
   const next = retimed ? anchorShotsToSungLyrics(touch(project, { scenes: nextScenes }), [sceneId]) : touch(project, { scenes: nextScenes });
   // Retiming or rewording a shot, or picking another take, keeps the storyboard approval it was judged on.
   const shotEdit = Object.keys(data).every((key) => SCENE_SHOT_EDIT_FIELDS.includes(key));
-  return { project: shotEdit ? carryStoryboardApproval(project, next, 'Edited a shot') : next, updated };
+  const saved = shotEdit ? carryStoryboardApproval(project, next, 'Edited a shot') : next;
+  // The saved scene, after dependency presentation, so a prompt edit returns the frame's new stale state.
+  return { project: saved, updated: saved.scenes.find((scene) => scene.sceneId === sceneId) || recorded };
 }
 
 /**
@@ -1450,6 +1497,9 @@ export function mergeProjectRecord(local, remoteRaw) {
   // sync remains schema-v1 compatible, so apply the same projection inbound
   // before either inserting or restoring this machine's local choices.
   remote = stripMusicVideoLocalRenderPins(remote);
+  // A v51-v53 sender still pushes `previz.night` and bike pawn colors, which this
+  // install's strict previz schema rejects on the next edit (migration 459).
+  remote = migrateMusicVideoPreviz(remote);
   if (!local) return { next: remote, inserted: true, remoteWins: true, changed: true };
   // Render pins are install-capability choices and therefore wire-local
   // (#3245). sanitizeRecordForWire omits them from peer payloads; restore this

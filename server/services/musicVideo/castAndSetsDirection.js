@@ -55,11 +55,13 @@ import { CAST_SETS_DEFINITION_LIMITS, normalizeDefinitions } from './castAndSets
 // shape the direction as words and are never image-generation inputs.
 const MOOD_BOARD_TEXT_ONLY = 'The image generator never sees the mood board: carry what you take from it (light, color, texture, grain, wardrobe feel) into your own words in the descriptions, lighting and looks.';
 
-// The look line rides on every plate prompt, and a plate is shot empty: a person
+// Set plates and in-set frames carry the scene look. A set plate is empty: a person
 // in either (a mood board's composed style often describes one) lands in the plate.
 const LOOK_AND_SET_RULES = [
-  '- look: palette, light quality, film stock, grain and texture only. Never a person, place, object or pose: it is appended to every image, including the empty set plates.',
-  '- sets: describe the EMPTY place. No people, characters, figures or actions; the protagonist appears only in tests.',
+  '- look: palette, light quality, film stock, grain, texture and any explicitly requested rendering medium only. Never a person, place, object or pose: the scene look is appended to set plates and in-set frames; people reference sheets retain only the rendering medium on a neutral field.',
+  '- renderingMedium: the explicit visual medium (for example scratchboard, watercolor or photography), separate from scene look and the execution-policy medium. Preserve a director-specified medium verbatim, without adding lighting, film stock or grading. Populate it for new photographic directions. An age form may override it; empty or absent inherits the direction medium. On revisions preserve existing renderingMedium values unless the director requests a change.',
+  '- sets: describe the EMPTY place. No people, characters, figures or actions; the protagonist appears only in tests. In description, name concrete foreground, midground and background planes with environmental or architectural geometry and surface wear.',
+  '- sets.lighting: name a physical in-world source and its direction, quality and color temperature. Avoid unspecified studio or film fixtures such as softbox, C-stand, beauty dish or key light rig; preserve explicitly requested or story-appropriate in-world fixtures. Preserve atmosphere explicitly requested by the director; otherwise no fog, mist, haze, smoke plumes or volumetric light shafts unless physically produced by a named in-frame source.',
   '- sets: preserve the director\'s requested story details, including deliberate unusual or stylized arrangements. Otherwise, choose details consistent with each other, the described place and its era; avoid unexplained contradictions such as a pristine parked car at a place described as deserted or an unintended second post on a single-pole hoop. Name each fixture once.',
 ].join('\n');
 
@@ -271,6 +273,7 @@ function fixedCastingBlock(project) {
 }
 
 const OUTPUT_SHAPE = `{
+  "renderingMedium": "<visual medium only, preserving the director's words; e.g. scratchboard>",
   "logline": "<one or two sentences: who, where, what happens>",
   "interpretation": "<how the song's references and themes shape this world>",
   "look": "<one line of photographic look: palette, light quality, film stock, grain, texture; no people, places, objects or poses>",
@@ -282,14 +285,16 @@ const OUTPUT_SHAPE = `{
     "hair": "<hair that reads in silhouette>",
     "signature": "<one signature prop or detail present in every look>",
     "gesture": "<a recurring gesture tied to a lyric hook, quoting the hook>",
+    "stillness": "<weight, posture, hands and default expression at rest>",
+    "movement": "<gait, gesture quality and physical habits>",
     "rules": ["<continuity or safety rule>"],
     "expressions": ["<a mood from the story: what the face, eyes and head do>"],
-    "forms": [{ "id": "<short-slug>", "label": "<e.g. Age 7>", "age": "<age>", "description": "<how they look at that age>", "hair": "<hair at that age>", "wardrobe": "<their outfit at that age>", "height": "<their height at that age, e.g. 4 ft (122 cm) at 7>", "era": "<the year or period this age is seen in, e.g. 1965>", "look": "<the film stock, format and color of that memory when it differs from the main look, e.g. black-and-white 8mm home movie, heavy grain; or empty>", "subjectId": "<the FIXED CASTING subject id of the protagonist at this age, or empty>" }]
+    "forms": [{ "id": "<short-slug>", "label": "<e.g. Age 7>", "age": "<age>", "description": "<how they look at that age>", "hair": "<hair at that age>", "wardrobe": "<their outfit at that age>", "height": "<their height at that age, e.g. 4 ft (122 cm) at 7>", "era": "<the year or period this age is seen in, e.g. 1965>", "look": "<the film stock, format and color of that memory when it differs from the main look, e.g. black-and-white 8mm home movie, heavy grain; or empty>", "renderingMedium": "<visual medium override for this age, or empty to inherit>", "subjectId": "<the FIXED CASTING subject id of the protagonist at this age, or empty>" }]
   },
   "looks": [{ "name": "<SHORT NAME>", "description": "<the complete outfit>", "chapters": "<which parts of the song>" }],
-  "cast": [{ "id": "<short-slug>", "name": "<a name>", "role": "<what they are in the video: drummer, shopkeeper, ...>", "description": "<who they are: age, vibe, attitude>", "height": "<their height, e.g. 5 ft 10 in (178 cm)>", "face": "<face: skin, eyes, brows, distinguishing features>", "hair": "<hair>", "wardrobe": "<their one outfit>" }],
+  "cast": [{ "id": "<short-slug>", "name": "<a name>", "role": "<what they are in the video: drummer, shopkeeper, ...>", "description": "<who they are: age, vibe, attitude>", "height": "<their height, e.g. 5 ft 10 in (178 cm)>", "face": "<face: skin, eyes, brows, distinguishing features>", "hair": "<hair>", "wardrobe": "<their one outfit>", "stillness": "<weight, posture, hands and default expression at rest>", "movement": "<gait, gesture quality and physical habits>" }],
   "props": [{ "id": "<short-slug>", "name": "<what it is and whose, e.g. Ada's camera>", "owner": "<who carries, uses or rides it, or empty>", "description": "<exactly how it looks: type, era, shape, size, colors, materials and distinguishing marks; no brand names or text>" }],
-  "sets": [{ "id": "<short-slug>", "name": "<set name>", "description": "<the empty location, concrete and visual, with nobody in it; furniture and objects standing upright and apart, never stacked, interlocked or piled>", "lighting": "<its one dominant light>", "era": "<the year or period it is seen in when that is not the present story, or empty>", "look": "<the film stock, format and color of that era when it differs from the main look, or empty>", "sections": ["<section label it serves>"] }],
+  "sets": [{ "id": "<short-slug>", "name": "<set name>", "description": "<the empty location with concrete foreground, midground and background geometry and wear; furniture and objects upright and apart>", "lighting": "<physical in-world source, direction, quality and color temperature>", "era": "<the year or period it is seen in when that is not the present story, or empty>", "look": "<the film stock, format and color of that era when it differs from the main look, or empty>", "sections": ["<section label it serves>"] }],
   "songMap": [{ "section": 0, "setId": "<short-slug>" }],
   "tests": [{ "setId": "<short-slug>", "look": "<SHORT NAME>", "action": "<what the protagonist does in this frame>", "caption": "<the lyric or beat it serves>", "formId": "<the protagonist.forms id when this frame shows them at that other age, or empty>" }],
   "overlayConcept": { "summary": "<one persistent graphic layer that ties every shot together>", "elements": [{ "name": "<element>", "description": "<what it shows and when it changes>" }] },
@@ -308,12 +313,14 @@ const PROCEDURAL_OUTPUT_SHAPE = `{
     "materials": "<fills, gradients, outlines, glow, texture>",
     "palette": "<the exact colors, as hex values>",
     "expressions": ["<expression name: how the face or shape changes>"],
+    "stillness": "<how the character holds its shape at rest>",
     "movement": "<motion rules: easing, idle loop, how it reacts to the beat>",
     "signature": "<one detail present in every pose>",
     "gesture": "<a recurring gesture tied to a lyric hook, quoting the hook>",
     "rules": ["<continuity rule>"]
   },
   "looks": [{ "name": "<SHORT NAME>", "description": "<a palette or costume variant>", "chapters": "<which parts of the song>" }],
+  "cast": [{ "id": "<short-slug>", "name": "<a name>", "role": "<role in the story>", "description": "<who or what they are>", "stillness": "<how they hold their shape at rest>", "movement": "<motion rules and physical habits>" }],
   "world": {
     "layout": "<how the environments are composed>",
     "depth": "<the layers and parallax planes>",
@@ -425,6 +432,7 @@ export function buildCastAndSetsPrompt(project, { moodImages = [], board = null,
 
   const proceduralRules = [
     `- ${CAST_SETS_LIMITS.sets.min}–${CAST_SETS_LIMITS.sets.max} sets; looks are optional palette or costume variants (at most ${CAST_SETS_LIMITS.looks.max}).`,
+    '- Describe stillness and movement for the protagonist and recurring supporting cast; keep cast consistent with their code definitions.',
     '- Never describe photographic people: no skin, pores, realistic hair, wardrobe photography or singing close-ups. A human or photo cutout is allowed ONLY as a set whose imageRole is "cutout", and only when the director guidance asks for one.',
     '- imageRole says what each planned image is FOR: "background" (a full-bleed environment layer), "texture" (a seamless surface), "decoration" (an isolated ornament) or "cutout" (an isolated subject to composite). Default to "background".',
     '- Give every set ONE dominant light color or quality so a cut tells the viewer where we are.',
@@ -439,6 +447,7 @@ export function buildCastAndSetsPrompt(project, { moodImages = [], board = null,
     LOOK_AND_SET_RULES,
     '- songMap: one entry per song section index listed above, naming the set that section plays in.',
     '- looks: each is a different complete outfit the protagonist wears at their present-story age. An outfit from another age goes in that age\'s protagonist.forms wardrobe, never in looks.',
+    '- For protagonist and each cast member, stillness describes weight, posture, hands and default expression at rest; movement describes gait, gesture quality and physical habits.',
     '- People and wardrobe sheets show empty, relaxed hands. In protagonist/cast/form appearance descriptions, looks and wardrobe, describe the person, worn clothing and worn accessories only. Put carried or held objects in props, never in these descriptions; signature may describe a story prop, but it is not drawn on a person or wardrobe sheet.',
     '- sets in another era: a place the story shows in a memory or another period gets that era and, when the story gives the era its own film stock or color, that look; the same place in two eras is two sets. Present-story sets leave both empty.',
     '- tests: in-set frames of the protagonist that prove the cast works in the world; each names a set id and a look name, and shows a moment from the story. A test showing the protagonist at one of their other ages names that form\'s id in formId; otherwise formId is empty.',
@@ -456,13 +465,13 @@ export function buildCastAndSetsPrompt(project, { moodImages = [], board = null,
   const rules = procedural ? proceduralRules : photographicRules;
 
   // The director's standing sheet feedback: every direction call honors it,
-  // a fresh rebuild included, and it rewrites the look line every image
-  // prompt carries (`look` in the answer) instead of being pasted onto prompts.
+  // a fresh rebuild included, and it rewrites the scene look for set plates
+  // and in-set frames (`look` in the answer) instead of being pasted onto prompts.
   const standing = (Array.isArray(feedback) ? feedback : []).map((f) => trimTo(f?.text, FEEDBACK_TEXT)).filter(Boolean);
   const standingBlock = standing.length ? [
     'DIRECTOR FEEDBACK ON EARLIER SHEETS (always honor it; where it disagrees with the mood board or visual style, the feedback wins):',
     ...standing.map((t) => `- ${t}`),
-    'Carry it into every field it touches (each set\'s description and lighting, the looks, the protagonist), and write "look": one line, under 400 characters, of the look every image prompt carries (film stock, light quality and sources, grain, color), rewritten so it agrees with this feedback.',
+    'Carry it into every field it touches (each set\'s description and lighting, the looks, the protagonist), and write "look": one line, under 400 characters, of the scene look set plates and in-set frames carry (film stock, light quality and sources, grain, color, and any explicitly requested rendering medium), rewritten so it agrees with this feedback.',
   ].join('\n') : '';
 
   const revision = previous ? [
@@ -529,6 +538,7 @@ const formSchema = z.preprocess(withoutNulls, z.object({
   height: prose(HEIGHT).optional(),
   era: prose(SHORT).optional(),
   look: prose(500).optional(),
+  renderingMedium: z.string().max(500).optional(),
   subjectId: text(64).optional(),
 }).passthrough());
 
@@ -540,6 +550,7 @@ const protagonistSchema = z.preprocess(withoutNulls, z.object({
   hair: prose(TEXT).optional(),
   signature: prose(TEXT).optional(),
   gesture: prose(TEXT).optional(),
+  stillness: prose(TEXT).optional(),
   rules: proseList(300).optional(),
   // Procedural medium: how the character is built and moves in code.
   construction: prose(TEXT).optional(),
@@ -588,6 +599,8 @@ const castSchema = z.preprocess(withoutNulls, z.object({
   face: prose(TEXT).optional(),
   hair: prose(TEXT).optional(),
   wardrobe: prose(TEXT).optional(),
+  stillness: prose(TEXT).optional(),
+  movement: prose(TEXT).optional(),
 }).passthrough());
 const propSchema = z.preprocess(withoutNulls, z.object({
   id: z.string().optional(),
@@ -607,6 +620,7 @@ const overlaySchema = z.union([
 // One lenient parser per field: a field that does not fit its shape counts as
 // absent (the merge keeps the current value) rather than failing the answer.
 const FIELD_PARSERS = {
+  renderingMedium: z.string().max(500),
   look: text(500),
   logline: text(TEXT),
   interpretation: text(2000),
@@ -735,7 +749,8 @@ function normalizeCast(cast, protagonist, { fixed = [], forms = [] } = {}) {
     while (seen.has(id)) id = `${id}-${i + 1}`;
     seen.add(id);
     return { id, name: c.name, role: c.role || '', description: c.description || '', face: c.face || '', hair: c.hair || '', wardrobe: c.wardrobe || '',
-      ...(c.height ? { height: c.height } : {}) };
+      ...(c.height ? { height: c.height } : {}),
+      ...(c.stillness ? { stillness: c.stillness } : {}), ...(c.movement ? { movement: c.movement } : {}) };
   });
 }
 
@@ -770,6 +785,8 @@ function normalizeForms(forms, previous = []) {
       // The bound subject's name (stamped by the service), kept while the binding is.
       const subjectName = subjectId && String((subjectId === prior?.subjectId && prior?.subjectName) || f.subjectName || '').trim().slice(0, 120);
       return { id, label: f.label || `Age ${f.age}`, age: f.age || '', description: f.description, hair: f.hair || '', wardrobe: f.wardrobe || '',
+        ...((hasOwn(f, 'renderingMedium') || hasOwn(prior, 'renderingMedium'))
+          ? { renderingMedium: hasOwn(f, 'renderingMedium') ? f.renderingMedium : prior.renderingMedium } : {}),
         ...(f.height ? { height: f.height } : {}), ...(f.era ? { era: f.era } : {}), ...(f.look ? { look: f.look } : {}),
         ...(subjectId ? { subjectId } : {}), ...(subjectName ? { subjectName } : {}) };
     });
@@ -825,6 +842,8 @@ export function mergeCastAndSetsDirection(previous, parsed, { sections = [], med
   };
   // Optional so a protagonist without one keeps its legacy shape.
   if (!procedural && pField('height')) protagonist.height = pField('height');
+  if (pField('stillness')) protagonist.stillness = pField('stillness');
+  if (!procedural && pField('movement')) protagonist.movement = pField('movement');
   const expressions = (hasOwn(p1, 'expressions') ? p1.expressions : (p0.expressions || [])).filter(Boolean).slice(0, CAST_SETS_LIMITS.expressions);
   const forms = procedural ? [] : normalizeForms(hasOwn(p1, 'forms') ? p1.forms : p0.forms, p0.forms || []);
   // A photographic protagonist without moods or other ages keeps its legacy shape
@@ -859,15 +878,23 @@ export function mergeCastAndSetsDirection(previous, parsed, { sections = [], med
       .map((e) => ({ name: e.name, description: e.description })),
   };
   const definitions = hasOwn(parsed, 'definitions') ? parsed.definitions : (base.definitions || { characters: [] });
+  const cast = pick('cast', []).map((person) => {
+    const prior = (person.id && (base.cast || []).find((c) => c.id === person.id))
+      || (base.cast || []).find((c) => castKey(c.name) === castKey(person.name));
+    return { ...person, ...Object.fromEntries(['stillness', 'movement'].filter((key) => !hasOwn(person, key) && prior?.[key]).map((key) => [key, prior[key]])) };
+  });
   const direction = {
     ...(procedural ? { medium: 'procedural', world, definitions } : {}),
     logline: pick('logline', ''),
     interpretation: pick('interpretation', ''),
     look: pick('look', ''),
+    ...((hasOwn(parsed, 'renderingMedium') || hasOwn(base, 'renderingMedium'))
+      ? { renderingMedium: pick('renderingMedium', '') } : {}),
     protagonist,
     looks,
-    // Photographic only: a procedural cast lives in `definitions`.
-    ...(procedural ? {} : { cast: normalizeCast(pick('cast', []), protagonist, { fixed: fixedCast, forms }) }),
+    // Procedural directions created before cast prose existed keep their shape.
+    ...(!procedural || hasOwn(parsed, 'cast') || hasOwn(base, 'cast')
+      ? { cast: normalizeCast(cast, protagonist, { fixed: fixedCast, forms }) } : {}),
     // Photographic only; a direction saved before props existed keeps its shape.
     ...(!procedural && (hasOwn(parsed, 'props') || base.props || fixedPropList.length)
       ? { props: normalizeProps(pick('props', []), { fixed: fixedPropList }) } : {}),
@@ -946,7 +973,7 @@ function patchItems(list, patches, { what, keyOf, fields, extra = () => ({}) }) 
  * catalog-linked supporting character (`fixedCast`; unlink it in Creative setup).
  */
 export function applyCastAndSetsDirectionEdits(previous, edits, { sections = [], fixedCast = [] } = {}) {
-  if (edits?.sets?.length && !edits.protagonist && !edits.world && edits.sets.every((s) => Object.hasOwn(s, 'setReference') && !Object.hasOwn(s, 'imageRole'))) {
+  if (!hasOwn(edits, 'renderingMedium') && edits?.sets?.length && !edits.protagonist && !edits.world && edits.sets.every((s) => Object.hasOwn(s, 'setReference') && !Object.hasOwn(s, 'imageRole'))) {
     const updates = new Map(edits.sets.map((s) => [s.id, s.setReference]));
     if ([...updates.keys()].some((id) => !previous.sets?.some((s) => s.id === id))) {
       throw new ServerError('Unknown set', { status: 422, code: 'CAST_SETS_UNKNOWN_SET' });
@@ -957,6 +984,7 @@ export function applyCastAndSetsDirectionEdits(previous, edits, { sections = [],
   }
   const procedural = previous?.medium === 'procedural';
   const parsed = {};
+  if (hasOwn(edits, 'renderingMedium')) parsed.renderingMedium = edits.renderingMedium;
   let renamedLooks = new Map(), currentLookNames = new Set(), currentLookNamesExact = new Set();
   if (edits?.protagonist) {
     const protagonist = pickText(edits.protagonist, procedural ? CAST_SETS_EDITABLE_PROTAGONIST : CAST_SETS_EDITABLE_PHOTO_PROTAGONIST);
@@ -1052,6 +1080,7 @@ function describeEdits(previous, direction) {
     });
   };
   return [
+    ...((hasOwn(previous, 'renderingMedium') !== hasOwn(direction, 'renderingMedium') || differs(previous.renderingMedium, direction.renderingMedium)) ? ['rendering medium'] : []),
     ...Object.keys({ ...CAST_SETS_EDITABLE_PROTAGONIST, ...CAST_SETS_EDITABLE_PHOTO_PROTAGONIST }).filter((key) => differs(p0[key], p1[key])),
     ...['expressions', 'forms'].filter((key) => differs(p0[key] || [], p1[key] || [])),
     ...Object.keys(CAST_SETS_EDITABLE_WORLD).filter((key) => differs(previous.world?.[key], direction.world?.[key])).map((key) => `world ${key}`),
@@ -1128,7 +1157,7 @@ export function describeDirectionChanges(previous, next) {
   const norm = (v) => (v == null || (Array.isArray(v) && !v.length) ? '' : v);
   const same = (a, b) => JSON.stringify(norm(a)) === JSON.stringify(norm(b));
   const out = [];
-  if (!same(previous.look, next.look)) out.push('Look rewritten for every image');
+  if (!same(previous.look, next.look)) out.push('Scene look rewritten for set plates and in-set frames');
   const p0 = previous.protagonist || {};
   const p1 = next.protagonist || {};
   const protagonistFields = Object.keys({ ...p0, ...p1 }).filter((k) => !same(p0[k], p1[k]));

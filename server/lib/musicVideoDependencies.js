@@ -1,7 +1,7 @@
 /** Versioned Music Video provenance. Only pointers/checksums live on project rows. */
 import { canonicalSnapshotChecksum } from './snapshotChecksum.js';
 import { isEndFrameImageEffect } from './musicVideoImageEffects.js';
-import { musicVideoClipConditioningReferences, musicVideoClipReferenceChoices } from './musicVideoConditioning.js';
+import { musicVideoClipConditioningReferences, musicVideoClipReferenceChoices, musicVideoSceneCastIds } from './musicVideoConditioning.js';
 
 export const MUSIC_VIDEO_DEPENDENCY_VERSION = 1;
 // `endPlate` (#11173): the style-break end frame a fal clip was generated to end on.
@@ -30,12 +30,15 @@ const layerRef = (scene) => ({ role: 'layer', sceneId: scene.sceneId, assetId: s
     .concat(scene.glitches?.length ? [['glitches', scene.glitches]] : [])
     // A shot's own film look changes the render; a shot following the video's keeps its evidence.
     .concat(scene.filmLook ? [['filmLook', scene.filmLook]] : [])
+    .concat(scene.templateEffects ? [['templateEffects', scene.templateEffects]] : [])
     .concat(scene.cutEffect && scene.cutEffect.enabled !== false ? [['cutEffect', scene.cutEffect]] : [])
     // An image effect over a still changes the render; a still without one keeps its evidence.
     .concat(scene.imageEffect ? [['imageEffect', scene.imageEffect], ['imageEffectSec', scene.imageEffectSec ?? null]] : [])
     .concat(scene.photoSequence && scene.photoSequence.enabled !== false ? [['photoSequence', scene.photoSequence]] : [])
     // An effect from the start frame to the end frame renders the end frame too.
+    // Use end frame off plays the start frame only, so it changes the render.
     .concat(scene.imageEffect && isEndFrameImageEffect(scene.imageEffect) ? [['endImageId', scene.endImageId ?? null]] : [])
+    .concat(scene.endFrameOff === true ? [['endFrameOff', true]] : [])
     // Only a music-driven performance joins it, so lip-sync evidence stays current.
     .concat(scene.performanceStyle === 'music' ? [['performanceStyle', 'music']] : [])
     // A shot moved before the song (its length and sound) changes the render; a song shot keeps its evidence.
@@ -57,6 +60,129 @@ export function captureClipReferenceDependency(project, scene) {
     untrackedCastGuides, revision: checksum({ ids, selected, characterVariant: scene.characterVariant || null }) };
 }
 
+// Frame provenance stays BESIDE `dependencies`. New roles inside
+// `dependencies.references` are unknown to render evidence and mark every
+// render stale (`captureMusicVideoEvidence` spreads the selected take's
+// references). Same snapshot shape, different field, like `castInputs`.
+const FRAME_ROLES = Object.freeze({
+  framePrompt: 'Frame prompt changed',
+  frameCamera: 'Camera changed',
+  frameLocation: 'Location changed',
+  frameCast: 'Cast changed',
+  frameReferences: 'Reference image replaced',
+});
+const FRAME_UNKNOWN = 'Frame evidence was not recorded; review again';
+const textOf = (value) => (typeof value === 'string' ? value.trim() : '');
+const frameSlot = (slot) => (slot === 'end' ? 'end' : 'start');
+const framePromptText = (scene, slot) => textOf(frameSlot(slot) === 'end' ? scene?.endFramePrompt : scene?.framePrompt);
+const frameCameraValue = (scene) => ({
+  cameraId: scene?.shotSheet?.cameraId || null,
+  move: scene?.camera || null,
+});
+const frameLocationValue = (scene) => textOf(scene?.shotSheet?.location) || null;
+const frameCastValue = (project, scene) => ({
+  names: (Array.isArray(scene?.shotSheet?.characters) ? scene.shotSheet.characters : []).map(textOf).filter(Boolean).sort(),
+  ids: musicVideoSceneCastIds(project, scene).slice().sort(),
+});
+const frameReferenceValue = (scene) => (Array.isArray(scene?.frameReferenceIds) ? scene.frameReferenceIds.slice().sort() : null);
+const frameRef = (scene, slot, role, value) => ({
+  role, sceneId: scene.sceneId, assetId: frameSlot(slot), revision: checksum(value),
+});
+
+/** What an image take was rendered for: prompt, camera, place, cast, and explicit references. */
+export function captureImageFrameDependencies(project, scene, { slot = 'start' } = {}) {
+  const references = [
+    frameRef(scene, slot, 'framePrompt', framePromptText(scene, slot)),
+    frameRef(scene, slot, 'frameCamera', frameCameraValue(scene)),
+    frameRef(scene, slot, 'frameLocation', frameLocationValue(scene)),
+    frameRef(scene, slot, 'frameCast', frameCastValue(project, scene)),
+  ];
+  references.push(frameRef(scene, slot, 'frameReferences', frameReferenceValue(scene)));
+  return snapshot(references);
+}
+
+function readFrameReference(project, scene, ref) {
+  if (!scene || !FRAME_ROLES[ref.role]) return null;
+  const value = ref.role === 'framePrompt' ? framePromptText(scene, ref.assetId)
+    : ref.role === 'frameCamera' ? frameCameraValue(scene)
+      : ref.role === 'frameLocation' ? frameLocationValue(scene)
+        : ref.role === 'frameCast' ? frameCastValue(project, scene)
+          : frameReferenceValue(scene);
+  return { assetId: frameSlot(ref.assetId), revision: checksum(value) };
+}
+
+function frameDependencyChanges(project, scene, dependencies) {
+  if (!dependencies || dependencies.version !== MUSIC_VIDEO_DEPENDENCY_VERSION || !Array.isArray(dependencies.references)) {
+    return [{ role: 'unknown', reason: FRAME_UNKNOWN }];
+  }
+  const changes = [];
+  // Earlier v1 captures omitted this role only when no explicit references
+  // were chosen. Preserve that absence when checking stored takes after upgrade.
+  if (!dependencies.references.some((ref) => ref.role === 'frameReferences') && frameReferenceValue(scene) !== null) {
+    changes.push({ role: 'frameReferences', reason: FRAME_ROLES.frameReferences });
+  }
+  for (const ref of dependencies.references) {
+    const current = readFrameReference(project, scene, ref);
+    if (!current || current.assetId !== ref.assetId || current.revision !== ref.revision) {
+      changes.push({ ...ref, role: FRAME_ROLES[ref.role] ? ref.role : 'unknown', reason: FRAME_ROLES[ref.role] || FRAME_UNKNOWN });
+    }
+  }
+  return changes;
+}
+
+function frameStatus(changes) {
+  if (!changes.length) return { status: 'current', reasons: [] };
+  const reasons = [...new Set(changes.map((change) => change.reason))];
+  return { status: changes.some((change) => change.role !== 'unknown') ? 'stale' : 'unknown', reasons };
+}
+
+/**
+ * Legacy stills recorded only the composed prompt. An exact match is current;
+ * absence of the frame text is stale. Inclusion alone cannot distinguish a
+ * composed prompt from a shortened shot, so that evidence stays unknown.
+ */
+function legacyFrameState(scene, take) {
+  const prompt = textOf(take?.prompt);
+  const framePrompt = framePromptText(scene, take?.kind === 'endImage' ? 'end' : 'start');
+  if (!prompt || !framePrompt) return { status: 'unknown', reasons: [FRAME_UNKNOWN] };
+  if (!prompt.includes(framePrompt)) return { status: 'stale', reasons: ['Frame prompt changed'] };
+  return prompt === framePrompt ? { status: 'current', reasons: [] } : { status: 'unknown', reasons: [FRAME_UNKNOWN] };
+}
+
+/** Selected-frame validity for one image or end-frame take. Null for any other kind. */
+function imageFrameDependencyState(project, scene, take) {
+  if (take?.kind !== 'image' && take?.kind !== 'endImage') return null;
+  if (take.frameDependencies) return frameStatus(frameDependencyChanges(project, scene, take.frameDependencies));
+  return legacyFrameState(scene, take);
+}
+
+const takeByAsset = (scene, kind, assetId) => (assetId ? (scene?.takes || []).find((entry) => entry?.kind === kind && entry.assetId === assetId) : null);
+
+function recordedPlateAsset(scene, take, role) {
+  const recorded = take?.dependencies?.references?.find((ref) => ref.role === role)?.assetId || null;
+  if (role === 'plate') {
+    if (take?.sourceImageId) return take.sourceImageId;
+    if (recorded) return recorded;
+    if (!take?.dependencies && !take?.sourceImageId) return scene?.referenceImageId || null;
+    return null;
+  }
+  if (recorded) return recorded;
+  if (!take?.dependencies) return scene?.endImageId || null;
+  return null;
+}
+
+/** Stale reasons from the still a clip was actually built on. Unknown stills do not carry over. */
+function inheritedFrameReasons(project, scene, take) {
+  if (take?.kind !== 'video') return [];
+  const reasons = [];
+  for (const [role, kind] of [['plate', 'image'], ['endPlate', 'endImage']]) {
+    const assetId = recordedPlateAsset(scene, take, role);
+    const frame = imageFrameDependencyState(project, scene, takeByAsset(scene, kind, assetId));
+    if (frame?.status === 'stale') reasons.push(...frame.reasons);
+  }
+  return [...new Set(reasons)];
+}
+
 /** Capture the actual submitted plate (and end frame), including optional crop/mask provenance. */
 export function captureTakeDependencies(scene, sourceImageId = scene?.referenceImageId, endImageId = null) {
   return snapshot([
@@ -73,7 +199,7 @@ const compositionRef = (project, startSec, endSec) => {
     cues: (composition.cues || []).filter((cue) => intersects(cue, startSec, endSec)),
   } : null;
   return { role: 'composition', assetId: 'composition', // A chosen production medium changes the render; a project without one keeps its evidence.
-  revision: checksum({ mediaMode: project.mediaMode || null, composition: value, ...(project.productionMedium ? { productionMedium: project.productionMedium } : {}) }), startSec, endSec };
+  revision: checksum({ mediaMode: project.mediaMode || null, composition: value, ...(project.templateEffects ? { templateEffects: project.templateEffects } : {}), ...(project.productionMedium ? { productionMedium: project.productionMedium } : {}) }), startSec, endSec };
 };
 
 const songRef = (project) => ({ role: 'song', assetId: 'master', revision: checksum({
@@ -160,17 +286,23 @@ export function musicVideoDependencyChanges(project, dependencies) {
   return dependencyChanges(dependencies, createDependencyReader(project));
 }
 
-function takeChanges(scene, take, readCurrent) {
-  if (take?.dependencies) return dependencyChanges(take.dependencies, readCurrent);
+function takeChanges(project, scene, take, readCurrent) {
+  const changes = [];
+  if (take?.dependencies) changes.push(...dependencyChanges(take.dependencies, readCurrent));
   // Pre-provenance generated clips still recorded their actual source basename.
-  if (take?.sourceImageId && take.sourceImageId !== scene.referenceImageId) {
-    return [{ role: 'plate', sceneId: scene.sceneId, reason: 'Selected plate changed' }];
+  else if (take?.sourceImageId && take.kind !== 'image' && take.kind !== 'endImage' && take.sourceImageId !== scene.referenceImageId) {
+    changes.push({ role: 'plate', sceneId: scene.sceneId, reason: 'Selected plate changed' });
   }
-  return [];
+  // Unknown frame evidence must not block selecting an import. An explicit
+  // mismatch must, so a late job rendered for an old shot cannot fill the slot.
+  const frame = imageFrameDependencyState(project, scene, take);
+  if (frame?.status === 'stale') changes.push(...frame.reasons.map((reason) => ({ role: 'frame', sceneId: scene.sceneId, reason })));
+  else if (take?.kind === 'video') changes.push(...inheritedFrameReasons(project, scene, take).map((reason) => ({ role: 'frame', sceneId: scene.sceneId, reason })));
+  return changes;
 }
 
 export function musicVideoTakeChanges(project, scene, take) {
-  return takeChanges(scene, take, createDependencyReader(project));
+  return takeChanges(project, scene, take, createDependencyReader(project));
 }
 
 /** Before a write, materialize legacy provenance from the PRE-image, never new inputs. */
@@ -200,7 +332,7 @@ export function musicVideoDependencyImpact(project, performanceChanges = []) {
   for (const scene of project.scenes || []) {
     const take = selectedTake(scene, 'clip') || (!scene.videoHistoryId
       ? (scene.takes || []).findLast((entry) => entry.kind === 'video' && entry.status === 'rejected') : null);
-    const changes = take ? takeChanges(scene, take, readCurrent) : [];
+    const changes = take ? takeChanges(project, scene, take, readCurrent) : [];
     const audio = performanceChanges.filter((entry) => entry.sceneId === scene.sceneId);
     const unfinished = !scene.videoHistoryId && (project.revisions || []).some((revision) => revision.type === 'dependencies'
       && revision.sections?.some((section) => section.sceneId === scene.sceneId && section.verdict === 'rejected'));
@@ -247,9 +379,14 @@ export function presentMusicVideoDependencies(project) {
   return { ...project,
     // Legacy renders recorded no evidence; leave them unflagged rather than calling them stale.
     ...(project.renderHistoryId && project.renderDependencies ? { renderDependencyState: state(project.renderDependencies) } : {}),
-    scenes: (project.scenes || []).map((scene) => ({ ...scene, takes: (scene.takes || []).map((take) => ({ ...take,
-      ...(take.dependencies ? { dependencyState: state(take.dependencies) } : {}),
-    })) })),
+    scenes: (project.scenes || []).map((scene) => ({ ...scene, takes: (scene.takes || []).map((take) => {
+      const frame = take.kind === 'image' || take.kind === 'endImage' ? imageFrameDependencyState(project, scene, take) : null;
+      const inherited = inheritedFrameReasons(project, scene, take);
+      const base = take.dependencies ? state(take.dependencies) : null;
+      const dependencyState = frame
+        || (inherited.length ? { status: 'stale', reasons: [...new Set([...(base?.reasons || []), ...inherited])] } : base);
+      return { ...take, ...(dependencyState ? { dependencyState } : {}) };
+    }) })),
     ...(project.excerpts ? { excerpts: project.excerpts.map((excerpt) => ({ ...excerpt, dependencyState: state(excerpt.dependencies) })) } : {}),
     ...(Array.isArray(project.treatment?.proofs) ? { treatment: { ...project.treatment, proofs: (project.treatment.proofs || []).map((proof) => ({ ...proof,
       ...(proof.evidence ? { evidence: { ...proof.evidence, dependencyState: state(proof.evidence.dependencies) } } : {}),

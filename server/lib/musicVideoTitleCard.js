@@ -308,6 +308,11 @@ function drawTitleCard(ctx, card, t, { width, height }) {
  * `fonts` maps a bundled family (TITLE_CARD_FONT_FACES) to its data URL; each is
  * registered with `document.fonts` up front and loads only when the card uses it.
  */
+// A background page can defer document.fonts.load until Chrome's resource
+// timeout (minutes). After this, the frame draws with the fallback and later
+// frames do not wait again. A timed-out face stays on the fallback for this page.
+const TITLE_CARD_FONT_WAIT_MS = 2000;
+
 export function titleCardRuntimeSource(card = null, { fonts = {} } = {}) {
   const faces = Object.entries(fonts).filter(([family, src]) => typeof family === 'string' && /^data:font\/woff2;base64,[a-z0-9+/=]+$/i.test(src));
   return `(() => {
@@ -323,20 +328,34 @@ export function titleCardRuntimeSource(card = null, { fonts = {} } = {}) {
   let t = 0;
   let canvas = null;
   const fonts = new Map();
+  const fallbackFonts = new Set();
   const frame = () => {
     const r = globalThis.PORTOS_MV && globalThis.PORTOS_MV.render;
     return { width: (r && r.width) || innerWidth || 1920, height: (r && r.height) || innerHeight || 1080 };
   };
-  // Resolves once the card's faces are loaded; null when they already are (the seek stays synchronous).
+  // Resolves once the card's faces are loaded, or after ${TITLE_CARD_FONT_WAIT_MS}ms so a
+  // deferred font fetch cannot hold the frame. null when they already are
+  // (the seek stays synchronous).
   const ready = () => {
     if (!card || !card.enabled || !document.fonts || !document.fonts.load) return null;
+    if (fallbackFonts.has(card.font)) card = { ...card, font: 'sans' };
+    const fontChoice = card.font;
     const { width, height } = frame();
     const wanted = titleCardLayout(card, { width, height, measure: () => 0 }).map((line) => line.font);
     const pending = [];
     for (const font of wanted) {
       if (!fonts.has(font)) {
         const entry = { done: false };
-        entry.promise = document.fonts.load(font).catch(() => null).then(() => { entry.done = true; });
+        entry.promise = Promise.race([
+          document.fonts.load(font).then(() => true, () => false),
+          new Promise((resolve) => setTimeout(resolve, ${TITLE_CARD_FONT_WAIT_MS})).then(() => false),
+        ]).then((loaded) => {
+          entry.done = true;
+          if (!loaded) {
+            fallbackFonts.add(fontChoice);
+            if (card && card.font === fontChoice) card = { ...card, font: 'sans' };
+          }
+        });
         fonts.set(font, entry);
       }
       const entry = fonts.get(font);

@@ -5,9 +5,9 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runInNewContext } from 'node:vm';
 vi.mock('./compositionDocument.js', () => ({ isUpgradableLayeredEngine: bytes => bytes.toString().startsWith('// older shipped engine') }));
-import { adaptStagedDocumentPreview } from './documentPreviewPlayback.js';
+import { adaptStagedDocumentPreview, shippedLayeredDocument } from './documentPreviewPlayback.js';
 import { installLayeredPreviewPlayback } from './previewPlaybackRuntime.js';
-import { imageEffectState, IMAGE_EFFECT_FOG_COLOR } from '../../lib/musicVideoImageEffects.js';
+import { imageEffectState, IMAGE_EFFECT_FOG_COLOR, photoSequenceIndex, photoSequenceLayers, scenePhotoSequence } from '../../lib/musicVideoImageEffects.js';
 
 const roots = [];
 const templates = fileURLToPath(new URL('./documentTemplates/', import.meta.url));
@@ -50,6 +50,24 @@ describe('recognized staged composition playback capability', () => {
     await writeFile(join(generated, 'index.html'), index.replace('<script src="engine.js"></script>', '<script src="generated.js"></script>\n<script src="engine.js"></script>'));
     await writeFile(join(generated, 'generated.js'), 'window.PORTOS_MV_GENERATED = { sections: {} };');
     expect(await adaptStagedDocumentPreview(generated)).toMatchObject({ adapted: false, reason: 'generated-contract-not-admitted' });
+  });
+
+  // Uniquely catches authored or customized document code being cleared to play in the viewer's own browser.
+  it('reports only the unmodified shipped template as shipped, without touching the document', async () => {
+    const root = await staged();
+    const before = await readFile(join(root, 'engine.js'));
+    expect(await shippedLayeredDocument(root)).toEqual({ shipped: true });
+    expect(await readFile(join(root, 'engine.js'))).toEqual(before);
+    const custom = await staged();
+    await writeFile(join(custom, 'cameraRig.js'), 'globalThis.custom = true;');
+    expect(await shippedLayeredDocument(custom)).toEqual({ shipped: false, reason: 'custom-helper' });
+    const generated = await staged();
+    const index = await readFile(join(generated, 'index.html'), 'utf8');
+    await writeFile(join(generated, 'index.html'), index.replace('<script src="engine.js"></script>', '<script src="generated.js"></script>\n<script src="engine.js"></script>'));
+    expect(await shippedLayeredDocument(generated)).toEqual({ shipped: false, reason: 'generated-contract-not-admitted' });
+    const older = await staged();
+    await writeFile(join(older, 'engine.js'), '// older shipped engine\n');
+    expect(await shippedLayeredDocument(older)).toEqual({ shipped: false, reason: 'unrecognized-engine', upgradable: true });
   });
 
   // Uniquely catches the player losing its one-tap way back to smooth playback for an older shipped engine.
@@ -170,13 +188,154 @@ describe('recognized staged composition playback capability', () => {
     expect(loaded).toEqual(['start.png', 'end.png']);
     await api.dispose();
   });
+
+  // Uniquely catches one photo-sequence shot dropping the whole document to exact seek (#15609).
+  it.each([0, 3])('keeps a photo-sequence document live and swaps each photo in order at its step boundary (overlap %i)', async overlapFrames => {
+    const root = await staged();
+    const photos = ['p0.png', 'p1.png', 'p2.png'].map(src => ({ src }));
+    const photoSequence = scenePhotoSequence({ visualLayer: 'still', startSec: 0, endSec: 2, photoSequence: { imageIds: ['a', 'b', 'c'], intervalFrames: 6, overlapFrames } }, { fps: 24 });
+    const scenes = [{ sceneId: 'photos', startSec: 0, endSec: 2, visualLayer: 'still', photoSequence, media: { kind: 'image', src: 'p0.png', photos } }];
+    expect(await adaptStagedDocumentPreview(root, { scenes })).toMatchObject({ adapted: true });
+    let clock = 0, animation = null;
+    const canvases = [], events = [];
+    const makeCanvas = () => {
+      const calls = [];
+      const context = new Proxy({ calls }, { get(target, key) {
+        if (key in target) return target[key];
+        if (key === 'createImageData' || key === 'getImageData') return (_x, _y, w, h) => ({ data: new Uint8ClampedArray((w || _x) * (h || _y) * 4) });
+        if (key === 'measureText') return text => ({ width: String(text).length * 10 });
+        if (key === 'createRadialGradient' || key === 'createLinearGradient') return () => ({ addColorStop() {} });
+        if (key === 'createPattern') return () => ({});
+        return (...args) => { calls.push([key, ...args]); };
+      } });
+      const canvas = { width: 1920, height: 1080, context, getContext: () => context };
+      canvases.push(canvas); return canvas;
+    };
+    const loaded = [];
+    function TestImage() { this.naturalWidth = 1920; this.naturalHeight = 1080; }
+    Object.defineProperty(TestImage.prototype, 'src', { set(value) { this.url = value; loaded.push(value); queueMicrotask(() => this.onload()); } });
+    const front = makeCanvas();
+    const sandbox = { setTimeout, clearTimeout, queueMicrotask, Image: TestImage, performance: { now: () => clock },
+      requestAnimationFrame: callback => { animation = callback; return 1; }, cancelAnimationFrame: () => { animation = null; },
+      document: { getElementById: () => front, createElement: () => makeCanvas(), fonts: { load: () => Promise.resolve() } },
+      PORTOS_MV: { render: { width: 1920, height: 1080, fps: 24, durationSec: 2 }, song: { sections: [] }, composition: {}, scenes },
+      PORTOS_MV_EVENT_STATE: (_song, t) => ({ t, hold: false, activeEvents: [], reactiveGain: 0 }),
+      PORTOS_MV_IMAGE_EFFECTS: { imageEffectState, IMAGE_EFFECT_FOG_COLOR, photoSequenceIndex, photoSequenceLayers },
+      PORTOS_LYRIC_TYPE: { createLyricType: () => ({ ready: Promise.resolve(), draw() {} }) }, postMessage: message => events.push(message) };
+    sandbox.window = sandbox;
+    runInNewContext(await readFile(join(root, 'engine.js'), 'utf8'), sandbox);
+    const api = sandbox.portosComposition.previewPlayback;
+    const presented = () => front.context.calls.filter(call => call[0] === 'drawImage').length;
+    const shown = [];
+    // Each publication copies the backbuffer once; record the photo it drew.
+    const record = () => {
+      const urls = canvases.flatMap(canvas => canvas.context.calls.filter(call => call[0] === 'drawImage' && call[1] instanceof TestImage).map(call => call[1].url));
+      if (presented() > shown.length) shown.push(urls.at(-1));
+    };
+    await api.prepare({ epoch: 1, t: 0 });
+    // Warming the next photos keeps a live step off a cold decode.
+    expect(loaded).toEqual(expect.arrayContaining(['p0.png', 'p1.png', 'p2.png']));
+    await api.play({ epoch: 1, sequence: 1, t: 0, workerTime: 0 });
+    record();
+    for (let frame = 1; frame <= 20; frame++) {
+      clock = frame * 1000 / 24;
+      animation();
+      await new Promise(resolve => setTimeout(resolve, 0));
+      record();
+    }
+    expect(events).toEqual([]);
+    if (!overlapFrames) {
+      // Frames 0-5 show p0, 6-11 p1, 12-17 p2, then the sequence wraps to p0.
+      expect(shown).toHaveLength(21);
+      expect(shown).toEqual([...Array(6).fill('p0.png'), ...Array(6).fill('p1.png'), ...Array(6).fill('p2.png'), ...Array(3).fill('p0.png')]);
+    } else {
+      // A stack recomposes when a photo arrives and again when the older one's overlap ends.
+      const stack = canvases.find(canvas => canvas.context.calls.some(call => call[0] === 'drawImage' && call[1] instanceof TestImage));
+      const groups = [];
+      for (const call of stack.context.calls) {
+        if (call[0] === 'fillRect') groups.push([]);
+        else if (call[0] === 'drawImage' && call[1] instanceof TestImage) groups.at(-1).push(call[1].url);
+      }
+      expect(groups).toEqual([['p0.png'], ['p0.png', 'p1.png'], ['p1.png'], ['p1.png', 'p2.png'], ['p2.png'], ['p2.png', 'p0.png']]);
+    }
+    await api.dispose();
+  });
+
+  // Uniquely catches one wiped shot dropping the whole document to exact seek, or the
+  // live wipe painting a different held/incoming frame than the exact seek (#15611).
+  it('keeps a wiped document live and paints each wipe frame exactly as the exact seek does', async () => {
+    const root = await staged();
+    const wipe = { style: 'iris', frames: 6, cutFrame: 24, fromSceneId: 'out', color: null };
+    const scenes = [
+      { sceneId: 'out', startSec: 0, endSec: 1, visualLayer: 'still', media: { kind: 'image', src: 'out.png' } },
+      { sceneId: 'in', startSec: 1, endSec: 2, visualLayer: 'still', wipe, media: { kind: 'image', src: 'in.png' } },
+    ];
+    expect(await adaptStagedDocumentPreview(root, { scenes })).toMatchObject({ adapted: true });
+    let clock = 0, animation = null;
+    // Each context tracks what its pixels last came from, through canvas copies,
+    // including the drawn geometry so a camera difference cannot pass.
+    const makeCanvas = () => {
+      const target = { calls: [], content: null };
+      const context = new Proxy(target, { get(_target, key) {
+        if (key in target) return target[key];
+        if (key === 'createImageData' || key === 'getImageData') return (_x, _y, w, h) => ({ data: new Uint8ClampedArray((w || _x) * (h || _y) * 4) });
+        if (key === 'measureText') return text => ({ width: String(text).length * 10 });
+        if (key === 'createRadialGradient' || key === 'createLinearGradient') return () => ({ addColorStop() {} });
+        if (key === 'createPattern') return () => ({});
+        return (...args) => {
+          target.calls.push([key, ...args]);
+          if (key !== 'drawImage') return;
+          if (args[0] instanceof TestImage) target.content = [args[0].url, ...args.slice(1)].join(',');
+          else if (args[0]?.context) target.content = args[0].context.content;
+        };
+      } });
+      return { width: 1920, height: 1080, context, getContext: () => context };
+    };
+    function TestImage() { this.naturalWidth = 1920; this.naturalHeight = 1080; }
+    Object.defineProperty(TestImage.prototype, 'src', { set(value) { this.url = value; queueMicrotask(() => this.onload()); } });
+    const front = makeCanvas(), events = [], published = [];
+    let wiped = [];
+    const sandbox = { setTimeout, clearTimeout, queueMicrotask, Image: TestImage, performance: { now: () => clock },
+      requestAnimationFrame: callback => { animation = callback; return 1; }, cancelAnimationFrame: () => { animation = null; },
+      document: { getElementById: () => front, createElement: () => makeCanvas(), fonts: { load: () => Promise.resolve() } },
+      PORTOS_MV: { render: { width: 1920, height: 1080, fps: 24, durationSec: 2 }, song: { sections: [] }, composition: {}, scenes },
+      // Frame-quantized time, so both paths draw each frame at the same t.
+      PORTOS_MV_EVENT_STATE: (_song, t) => ({ t: Math.floor(t * 24 + 1e-6) / 24, hold: false, activeEvents: [], reactiveGain: 0 }),
+      __portosMusicVideoWipe: (_ctx, paint) => wiped.push({ index: paint.index, outgoing: paint.outgoing.context.content,
+        incoming: paint.incoming.context.content, held: paint.outgoing }),
+      __portosFilmLook: { frame: frame => published.push(frame), playback() {} },
+      PORTOS_LYRIC_TYPE: { createLyricType: () => ({ ready: Promise.resolve(), draw() {} }) }, postMessage: message => events.push(message) };
+    sandbox.window = sandbox;
+    runInNewContext(await readFile(join(root, 'engine.js'), 'utf8'), sandbox);
+    const composition = sandbox.portosComposition, api = composition.previewPlayback;
+    for (let frame = 20; frame < 34; frame++) await composition.seek(frame / 24);
+    const exact = wiped.map(({ held: _held, ...paint }) => paint);
+    expect(exact.map(paint => paint.index)).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(exact[0].outgoing).toMatch(/^out\.png,/);
+    expect(exact[0].incoming).toMatch(/^in\.png,/);
+    wiped = [];
+    await api.prepare({ epoch: 1, t: 20 / 24 });
+    await api.play({ epoch: 1, sequence: 1, t: 20 / 24, workerTime: 0 });
+    for (let step = 1; step < 14; step++) {
+      clock = step * 1000 / 24;
+      animation();
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+    expect(events).toEqual([]);
+    expect(wiped.map(({ held: _held, ...paint }) => paint)).toEqual(exact);
+    // The held frame is prepared once for the wipe, not redrawn per frame.
+    expect(new Set(wiped.map(paint => paint.held)).size).toBe(1);
+    // Every song frame across the cut publishes once, in order.
+    expect(published).toEqual(Array.from({ length: 14 }, (_, k) => 20 + k));
+    await api.dispose();
+  });
 });
 
-function player({ hold = false, quantized = false, inSec = 0, outSec = 5, cutAt = null, fps = 30, autoFirst = true } = {}) {
+function player({ hold = false, quantized = false, inSec = 0, outSec = 5, cutAt = null, fps = 30, autoFirst = true, wipe = null } = {}) {
   let clock = 0, frame = null, time = 0, writes = 0, readyResolve, playResolve, autoFrame = false, frameId = 0, presented = 0, drawMs = 0;
   const callbacks = new Map();
   const frameWaiters = [];
-  const events = [], paints = [], modes = [], sourceTimes = [], scenes = [{ startSec: 0, endSec: cutAt ?? 5, media: { kind: 'video', inSec, outSec, fps } },
+  const events = [], paints = [], modes = [], sourceTimes = [], heldFor = [], scenes = [{ startSec: 0, endSec: cutAt ?? 5, media: { kind: 'video', inSec, outSec, fps } },
     { startSec: cutAt, endSec: 5, media: { kind: 'video', inSec: 0, outSec: 5, fps } }];
   const present = (metadata = {}, callback = callbacks.values().next().value) => callback?.(clock,
     { mediaTime: Math.floor(time * fps + 1e-6) / fps, presentedFrames: ++presented, ...metadata });
@@ -202,12 +361,18 @@ function player({ hold = false, quantized = false, inSec = 0, outSec = 5, cutAt 
       video.currentTime = Math.min(Math.max(scene.media.inSec + t - scene.startSec, scene.media.inSec), scene.media.outSec - 0.5 / 30);
       return video;
     },
-    publish(songTime, t, _scene, _source, _state, valid) { if (drawMs) elapse(clock + drawMs); if (!valid()) return false; paints.push({ songTime, t }); return true; }, dispose() { video.pause(); } };
+    publish(songTime, t, _scene, _source, _state, valid, layers) { if (drawMs) elapse(clock + drawMs); if (!valid()) return false; paints.push({ songTime, t, ...(wipe ? { layers } : {}) }); return true; }, dispose() { video.pause(); } };
+  // A wipe window [from, to) on the first scene needs its held layer.
+  const wiping = t => wipe && t >= wipe[0] && t < wipe[1];
+  if (wipe) Object.assign(bridge, {
+    async layers(scene, t) { if (!wiping(t)) return null; heldFor.push(t); return { scene }; },
+    layersReady: (scene, t, layers) => !wiping(t) || layers?.scene === scene,
+  });
   const sandbox = { setTimeout, clearTimeout, __bridge: bridge, performance: { now: () => clock }, requestAnimationFrame: callback => { frame = callback; return 1; }, cancelAnimationFrame: () => { frame = null; },
     window: { postMessage: message => events.push(message) }, portosComposition: {} };
   runInNewContext(`(${installLayeredPreviewPlayback.toString()})(__bridge)`, sandbox);
   const elapse = (ms) => { const elapsed = (ms - clock) / 1000; if (!video.paused) time += elapsed * video.playbackRate; clock = ms; };
-  return { api: sandbox.portosComposition.previewPlayback, video, events, paints, modes, sourceTimes, present,
+  return { api: sandbox.portosComposition.previewPlayback, video, events, paints, modes, sourceTimes, heldFor, present,
     pendingCallback: () => callbacks.values().next().value,
     waitForFrame: () => callbacks.size ? Promise.resolve() : new Promise(resolve => frameWaiters.push(resolve)),
     get pendingCallbacks() { return callbacks.size; },
@@ -228,6 +393,41 @@ function player({ hold = false, quantized = false, inSec = 0, outSec = 5, cutAt 
 }
 
 describe('cooperative preview public runtime lifecycle', () => {
+  // Uniquely catches a slow photo load publishing a step the clock already passed.
+  it('skips a photo step that passed while loading and publishes the current one in order', async () => {
+    let clock = 0, frame = null, gate = null;
+    const paints = [], events = [], scene = { startSec: 0, endSec: 5, media: { kind: 'image' } };
+    const step = t => Math.floor(t * 20 + 1e-9);
+    const bridge = { duration: 5, fps: 24, ready: Promise.resolve(), videos: () => [], scene: () => scene, needsSource: () => true, playback() {},
+      state: t => ({ t, hold: false, activeEvents: [], reactiveGain: 0 }),
+      async source(_scene, t) { if (gate) await gate.promise; return { step: step(t) }; },
+      sourceKey: (_scene, t) => String(step(t)),
+      publish(songTime, _t, _scene, source, _state, valid) { if (!valid()) return false; paints.push({ songTime, step: source.step }); return true; },
+      dispose() {} };
+    const sandbox = { setTimeout, clearTimeout, __bridge: bridge, performance: { now: () => clock }, requestAnimationFrame: callback => { frame = callback; return 1; }, cancelAnimationFrame: () => { frame = null; },
+      window: { postMessage: message => events.push(message) }, portosComposition: {} };
+    runInNewContext(`(${installLayeredPreviewPlayback.toString()})(__bridge)`, sandbox);
+    const api = sandbox.portosComposition.previewPlayback;
+    const tick = (ms) => { clock = ms; const callback = frame; frame = null; callback?.(); };
+    await api.prepare({ epoch: 1, t: 0 });
+    await api.play({ epoch: 1, sequence: 1, t: 0, workerTime: 0 });
+    tick(20); tick(40);
+    expect(paints.map(paint => paint.step)).toEqual([0, 0, 0]);
+    let release;
+    gate = { promise: new Promise(resolve => { release = resolve; }) };
+    tick(60); // Step 1 begins; its photo is slow to load.
+    tick(80);
+    clock = 110; // Step 2 begins before step 1's photo arrives.
+    gate = null; release();
+    await vi.waitFor(() => expect(paints.at(-1).step).toBe(2));
+    expect(paints.map(paint => paint.step)).toEqual([0, 0, 0, 2]);
+    expect(events).toEqual([]);
+    tick(145); // The next 30 fps frame of step 2.
+    tick(160); // Step 3 arrives.
+    await vi.waitFor(() => expect(paints.map(paint => paint.step)).toEqual([0, 0, 0, 2, 2, 3]));
+    await api.dispose();
+  });
+
   it('publishes each fresh video callback independent of RAF/audio phase and never republishes video on RAF alone', async () => {
     const p = player();
     await p.api.prepare({ epoch: 1, t: 0 });
@@ -240,6 +440,23 @@ describe('cooperative preview public runtime lifecycle', () => {
     expect(p.pendingCallbacks).toBe(1);
     await p.api.pause({ epoch: 2 });
     expect(p.pendingCallbacks).toBe(0);
+  });
+
+  // Uniquely catches a live video frame painting a wipe without its held layer (#15611).
+  it('reloads once when a wipe needs its held layer, then publishes every video frame with it', async () => {
+    const p = player({ wipe: [0.1, 0.2] });
+    await p.api.prepare({ epoch: 1, t: 0 });
+    await p.api.play({ epoch: 1, sequence: 1, t: 0, workerTime: 0 });
+    for (let time = 33; time <= 330; time += 33) { await p.step(time); await new Promise(resolve => setTimeout(resolve, 0)); }
+    expect(p.events).toEqual([]);
+    expect(p.heldFor).toHaveLength(1);
+    const during = p.paints.filter(paint => paint.t >= 0.1 && paint.t < 0.2);
+    expect(during.length).toBeGreaterThan(1);
+    expect(during.every(paint => paint.layers)).toBe(true);
+    expect(p.paints.filter(paint => paint.t < 0.1).every(paint => !paint.layers)).toBe(true);
+    expect(p.paints.some(paint => paint.t >= 0.2)).toBe(true);
+    expect(p.paints.map(paint => paint.songTime)).toEqual(p.paints.map(paint => paint.songTime).sort((a, b) => a - b));
+    await p.api.dispose();
   });
 
   it('caps a faster source by source-time bins while preserving native 24 fps and holds', async () => {

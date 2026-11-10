@@ -4,6 +4,7 @@
  * attach), and arc-driven audio cues.
  */
 
+import { unlink } from 'fs/promises';
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
@@ -466,8 +467,12 @@ router.post('/issues/:id/stages/audio/music/upload', musicUpload, asyncHandler(a
     });
   }
   // Guard the filesystem write that follows — `updateStageWithLatest`'s 404
-  // would otherwise orphan the imported file in the music library.
-  await issuesSvc.getIssue(req.params.id).catch((err) => { throw mapServiceError(err); });
+  // would otherwise orphan the imported file in the music library. A refusal
+  // here deletes the temp upload, which importUploadedTrack would have removed.
+  await issuesSvc.getIssue(req.params.id).catch(async (err) => {
+    await unlink(req.file.path).catch(() => {});
+    throw mapServiceError(err);
+  });
   const { filename, sizeBytes } = await importUploadedTrack(req.file.path, req.file.originalname);
   const label = typeof req.body?.label === 'string' && req.body.label.trim()
     ? req.body.label.trim()

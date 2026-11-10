@@ -137,6 +137,27 @@ async function sendFalCancel(entry) {
   }
 }
 
+export const FAL_PLATFORM_BASE = 'https://api.fal.ai';
+
+/**
+ * Delete a COMPLETED request's stored payloads and its output CDN files
+ * (`DELETE /v1/models/requests/{id}/payloads`; irreversible, input files are kept).
+ * A 404 means it is already gone; a per-file `exception` in the answer is a failure.
+ */
+export async function deleteFalRequestPayloads({ apiKey, requestId }) {
+  const res = await fetchWithTimeout(`${FAL_PLATFORM_BASE}/v1/models/requests/${encodeURIComponent(requestId)}/payloads`, {
+    method: 'DELETE', headers: { Authorization: `Key ${apiKey}` },
+  }, FAL_POLL_TIMEOUT_MS);
+  const payload = res.ok ? await res.json().catch(() => null) : (await res.body?.cancel?.(), null);
+  if (res.status === 404) return { alreadyGone: true };
+  if (!res.ok) throw new ServerError(`fal.ai delete failed: HTTP ${res.status}`, { status: 502, code: 'FAL_DELETE_FAILED' });
+  // A 200 whose body cannot be read says nothing about whether the files were removed.
+  if (!payload || typeof payload !== 'object') throw new ServerError('fal.ai delete returned an unreadable answer', { status: 502, code: 'FAL_DELETE_FAILED' });
+  const failed = (Array.isArray(payload.cdn_delete_results) ? payload.cdn_delete_results : []).filter((r) => r?.exception);
+  if (failed.length) throw new ServerError(`fal.ai could not delete ${failed.length} output file(s)`, { status: 502, code: 'FAL_DELETE_FAILED' });
+  return { alreadyGone: false };
+}
+
 /**
  * Submit one paid request. Resolves to the queue receipt with every URL the
  * rest of the run needs, falling back to the documented URL shapes when a

@@ -43,15 +43,40 @@ export function normalizeShotSheet(sheet) {
  * judged and reads as current. Takes record the composed prompt, which contains
  * the shot's own text whole, so any edit to that text shows.
  */
-function selectedFrameOutdated(project, scene) {
+function selectedImageTake(scene) {
+  if (!scene?.referenceImageId) return null;
+  return (Array.isArray(scene.takes) ? scene.takes : [])
+    .find((entry) => entry?.kind === 'image' && entry.assetId === scene.referenceImageId) || null;
+}
+
+function promptDetailsChanged(project, scene, take) {
   const framePrompt = typeof scene?.framePrompt === 'string' ? scene.framePrompt.trim() : '';
   // A sheet-built still records each ingredient's text, so an edited ingredient shows too.
-  const parts = [framePrompt, ...shotSheetPromptLines(project, scene).map((line) => line.text)].filter(Boolean);
-  if (!parts.length || !scene?.referenceImageId) return false;
-  const take = (Array.isArray(scene.takes) ? scene.takes : [])
-    .find((entry) => entry?.kind === 'image' && entry.assetId === scene.referenceImageId);
-  if (typeof take?.prompt !== 'string' || !take.prompt) return false;
+  // The camera rule is composed even when the sheet does not drive the prompt.
+  const sheet = shotSheetPromptLines(project, scene);
+  // A sheet-built still already records the camera inside its Camera line.
+  const parts = [framePrompt, ...sheet.map((line) => line.text), sheet.some((line) => line.id === 'shot-sheet-camera') ? '' : shotCameraRuleText(project, scene)].filter(Boolean);
+  if (!parts.length || !take || typeof take.prompt !== 'string' || !take.prompt) return false;
   return parts.some((part) => !take.prompt.includes(part));
+}
+
+/** Recorded frame evidence, or the composed-prompt check for a still that predates it. */
+function frameFreshness(project, scene) {
+  const take = selectedImageTake(scene);
+  const end = scene?.endImageId
+    ? (Array.isArray(scene.takes) ? scene.takes : []).find((entry) => entry?.kind === 'endImage' && entry.assetId === scene.endImageId)
+    : null;
+  const reasons = [];
+  // A current snapshot still misses sheet lines (emotion, action) that the composed prompt records.
+  if (take?.dependencyState?.status === 'stale') {
+    reasons.push(...(take.dependencyState.reasons?.length ? take.dependencyState.reasons : ['Details changed since this frame']));
+  } else if (promptDetailsChanged(project, scene, take)) reasons.push('Details changed since this frame');
+  if (end?.dependencyState?.status === 'stale') {
+    for (const reason of end.dependencyState.reasons?.length ? end.dependencyState.reasons : ['End-frame details changed since this frame']) {
+      if (!reasons.includes(reason)) reasons.push(reason);
+    }
+  }
+  return { outdated: reasons.length > 0, reasons };
 }
 
 /** Whether a shot's prompts are built from its sheet (its frame and motion prompts are then general prompts). */
@@ -71,10 +96,15 @@ export function shotSheetPromptLines(project, scene) {
   const sheet = scene.shotSheet;
   const camera = sheet.cameraId ? (project?.cameras || []).find((entry) => entry?.id === sheet.cameraId) : null;
   const holder = sheetText(sheet.holder);
-  const cameraText = camera
+  const owner = sheetText(camera?.owner);
+  const rule = sheetText(camera?.rule).replace(/[.!?]+$/, '');
+  let cameraText = camera
     ? camera.kind === 'observer' ? `${camera.name}, an unseen observer camera that nobody in the scene holds`
       : holder === SHOT_CAMERA_SET_DOWN ? `${camera.name}, set down with nobody holding it` : holder ? `${camera.name}, held by ${holder}` : camera.name
     : '';
+  // One Camera chip: the sheet line carries the rule, so the composer does not add a second one.
+  if (cameraText && camera.kind !== 'observer' && owner) cameraText += '. This camera is the one taking the picture, so it is not in the frame';
+  if (cameraText && rule) cameraText += `. ${rule}`;
   const place = [sheetText(sheet.location), sheetText(sheet.timeOfDay), sheetText(sheet.light) ? `lit by ${sheetText(sheet.light)}` : ''].filter(Boolean).join(', ');
   const who = (Array.isArray(sheet.characters) ? sheet.characters : []).map(sheetText).filter(Boolean);
   return [
@@ -86,6 +116,52 @@ export function shotSheetPromptLines(project, scene) {
     ['emotion', 'Emotion', sheetText(sheet.emotion)],
     ['notes', 'Notes', sheetText(sheet.notes)],
   ].filter(([, , text]) => text).map(([id, label, text]) => ({ id: `shot-sheet-${id}`, label, text: `${label}: ${text}.`.replace(/([.!?])\.$/, '$1') }));
+}
+
+const sheetCamera = (project, scene) => {
+  const id = scene?.shotSheet?.cameraId;
+  if (!id) return null;
+  return (project?.cameras || []).find((entry) => entry?.id === id) || null;
+};
+
+const withoutTerminalPunctuation = (value) => String(value || '').trim().replace(/[.!?]+$/, '');
+
+/**
+ * The shot's camera as one prompt block: its name, kind and rule. An in-world
+ * camera with an owner is the one taking the picture, so the block says it is
+ * not in the frame. '' when the shot names no camera. Composed into the frame,
+ * end frame and clip whether or not the sheet drives the prompt.
+ */
+export function shotCameraRuleText(project, scene) {
+  const camera = sheetCamera(project, scene);
+  const name = typeof camera?.name === 'string' ? camera.name.trim() : '';
+  if (!name) return '';
+  const parts = [`${name}, ${camera.kind === 'observer' ? 'an observer camera' : 'an in-world camera'}`];
+  const owner = typeof camera.owner === 'string' ? camera.owner.trim() : '';
+  if (camera.kind !== 'observer' && owner) parts.push('This camera is the one taking the picture, so it is not in the frame');
+  const rule = typeof camera.rule === 'string' ? withoutTerminalPunctuation(camera.rule) : '';
+  if (rule) parts.push(rule);
+  return `Camera: ${parts.join('. ')}.`;
+}
+
+/**
+ * A character's always-visible line is the camera taking this shot, so the
+ * frame must not ask for it. True for the owner, and for whoever holds that
+ * owner's in-world camera. A set-down camera still drops the owner's line;
+ * it has no holder to drop.
+ */
+export function shotOmitsOwnedCameraDetail(project, scene, subjectName, detail) {
+  const camera = sheetCamera(project, scene);
+  const owner = typeof camera?.owner === 'string' ? camera.owner.trim() : '';
+  if (!camera || camera.kind === 'observer' || !owner) return false;
+  const who = String(subjectName || '').trim().toLowerCase();
+  const holder = typeof scene?.shotSheet?.holder === 'string' ? scene.shotSheet.holder.trim() : '';
+  const holderKey = holder.toLowerCase();
+  const applies = who === owner.toLowerCase() || (holderKey && holderKey !== SHOT_CAMERA_SET_DOWN.toLowerCase() && who === holderKey);
+  if (!applies) return false;
+  const text = String(detail || '');
+  const cameraName = typeof camera.name === 'string' ? camera.name.trim().toLowerCase() : '';
+  return (cameraName.length >= 3 && text.toLowerCase().includes(cameraName)) || /\bcameras?\b/i.test(text);
 }
 
 /** What a shot is set to render: a photo or video, from its planned medium, else its picture layer. */
@@ -106,11 +182,13 @@ export function shotSheetRows(project) {
     const sheet = scene.shotSheet || {};
     const sung = Number.isFinite(scene.startSec) && Number.isFinite(scene.endSec)
       ? sungLyricTextWithin(project?.lyricCues, scene.startSec, scene.endSec) : null;
+    const freshness = frameFreshness(project, scene);
     return {
       scene, sheet,
       lyric: (sung || (typeof scene.lyricText === 'string' ? scene.lyricText : '') || '').trim(),
       camera: sheet.cameraId ? cameras.get(sheet.cameraId) || null : null,
-      frameOutdated: selectedFrameOutdated(project, scene),
+      frameOutdated: freshness.outdated,
+      frameOutdatedReasons: freshness.reasons,
       hasDirection: directions.has(scene.sceneId),
       output: shotOutput(scene, directions.get(scene.sceneId)),
       // The picture layer can disagree with the plan, and a composed render reads the layer.
@@ -218,6 +296,112 @@ export function shotSheetMediaEdits(rows) {
       ...(layerOutput !== camera.output ? { visualLayer: camera.output === 'image' ? 'still' : 'footage' } : {}),
     }];
   });
+}
+
+// The sentence planMusicVideoMedia stores when a still/card/code layer pins the medium.
+// A pin with this rationale and that layer's medium is the automatic pin, not a director choice.
+export const VISUAL_LAYER_PIN_RATIONALE = 'Retain the director-selected visual layer.';
+
+const SHEET_MEDIA = ['procedural', 'still', 'existing-footage', 'generated-footage'];
+
+/** Lyric overlay is on unless the project explicitly turns it off. */
+export const lyricOverlayOff = (project) => project?.lyricOverlayEnabled === false;
+
+/**
+ * Who the sheet says the shot is about. null when there is no sheet, so the
+ * treatment's motif fallback stays. '' when a sheet exists but names nobody,
+ * so an incomplete sheet does not inherit the first motif.
+ */
+export function shotSheetFocalSubject(scene) {
+  const sheet = scene?.shotSheet;
+  if (!sheet || typeof sheet !== 'object') return null;
+  const names = (Array.isArray(sheet.characters) ? sheet.characters : []).map(sheetText).filter(Boolean);
+  return listNames(names);
+}
+
+/**
+ * Medium the sheet's camera implies. null when the shot has no camera or that
+ * camera can shoot both. A photo camera is a still even when a clip is selected;
+ * a video camera reuses a selected clip, otherwise it plans generated footage.
+ */
+function shotSheetMedium(project, scene) {
+  const cameraId = scene?.shotSheet?.cameraId;
+  if (!cameraId) return null;
+  const camera = (project?.cameras || []).find((entry) => entry?.id === cameraId);
+  if (camera?.output === 'image') return { medium: 'still', mediumRationale: 'The shot sheet camera shoots photos.' };
+  if (camera?.output === 'video') {
+    if (scene?.videoHistoryId) return { medium: 'existing-footage', mediumRationale: 'The shot sheet camera shoots video; reuse the selected footage.' };
+    return { medium: 'generated-footage', mediumRationale: 'The shot sheet camera shoots video.' };
+  }
+  return null;
+}
+
+/** close, medium, or wide when the wording names a scale. Close is matched before medium and wide. */
+export function framingScale(value) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  if (/\b(?:extreme[\s-]*)?close(?:[\s-]*up)?\b/i.test(value)) return 'close';
+  if (/\b(?:wide|establishing)\b/i.test(value)) return 'wide';
+  if (/\bmedium\b/i.test(value)) return 'medium';
+  return null;
+}
+
+/** The sheet leads, then treatment direction, then a live storyboard panel. */
+export function sceneFramingScale(scene, panel = null) {
+  return framingScale(scene?.shotSheet?.view)
+    ?? framingScale(scene?.direction?.framing)
+    ?? framingScale(panel?.shotSize);
+}
+
+/** True when the sheet's view and a direction framing name different scales. */
+export function shotSheetFramingConflicts(scene, framing) {
+  const viewScale = framingScale(scene?.shotSheet?.view);
+  const framed = framingScale(framing);
+  return viewScale != null && framed != null && viewScale !== framed;
+}
+
+const automaticLayerMedium = (scene) => (
+  scene?.visualLayer === 'still' ? 'still'
+    : scene?.visualLayer === 'card' || scene?.visualLayer === 'code' ? 'procedural'
+      : null
+);
+
+/** The pin planMusicVideoMedia writes for a still, card or code layer — not a medium the director chose. */
+export function isAutomaticLayerPin(scene, direction) {
+  if (direction?.mediumPinned !== true) return false;
+  const auto = automaticLayerMedium(scene);
+  return auto != null && direction.medium === auto && direction.mediumRationale === VISUAL_LAYER_PIN_RATIONALE;
+}
+
+/**
+ * Prefer the sheet camera's medium unless a real director pin says otherwise.
+ * `fromSheet` is a planning mark only: callers strip it before the direction is stored,
+ * so the camera does not freeze the medium the way a director pin does.
+ */
+export function applyShotSheetMedium(project, scene, direction) {
+  const sheet = shotSheetMedium(project, scene);
+  if (!sheet || !direction) return direction;
+  const pinned = direction.mediumPinned === true && SHEET_MEDIA.includes(direction.medium);
+  if (pinned && !isAutomaticLayerPin(scene, direction)) return direction;
+  return { ...direction, medium: sheet.medium, mediumRationale: sheet.mediumRationale, mediumPinned: false, fromSheet: true };
+}
+
+/**
+ * Shot-sheet facts that replace a compiled direction's subject, framing and type
+ * region. Medium is separate (`applyShotSheetMedium`) because the media planner
+ * also has to see it. Lyric overlay off clears the type region on every shot,
+ * including one with no sheet.
+ */
+export function sheetDirectionOverlay(project, scene, direction) {
+  if (!direction || typeof direction !== 'object') return direction;
+  const next = { ...direction };
+  const focal = shotSheetFocalSubject(scene);
+  if (focal !== null) next.focalSubject = focal;
+  if (shotSheetFramingConflicts(scene, next.framing)) next.framing = '';
+  if (lyricOverlayOff(project)) {
+    next.typographyRole = 'none';
+    next.negativeSpace = 'none';
+  }
+  return next;
 }
 
 /**

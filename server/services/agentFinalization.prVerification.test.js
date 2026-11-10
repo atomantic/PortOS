@@ -41,6 +41,13 @@ vi.mock('./gitlab.js', () => ({
   getMergeRequestState: (...args) => getMergeRequestStateMock(...args),
 }));
 
+// Dependency-updates empty-branch check reads the worktree status.
+let worktreeStatus = "";
+vi.mock("./worktreeManager.js", async (importOriginal) => ({
+  ...(await importOriginal()),
+  readWorktreeStatus: vi.fn(async () => worktreeStatus),
+}));
+
 const resolveForgeForRepoMock = vi.fn(async () => ({ cli: 'gh' }));
 const getDefaultBranchMock = vi.fn(async () => 'main');
 vi.mock('./git.js', () => ({
@@ -110,6 +117,7 @@ vi.mock('./agentSummaryExtraction.js', () => ({
   extractFinalSummary: vi.fn(() => summaryText),
 }));
 
+import { resolveTaskHookType } from "./taskTypeHooks.js";
 import {
   verifyPrClaim,
   finalizeAgent,
@@ -250,6 +258,22 @@ describe('verifyPrClaim (#3358)', () => {
     expect(verdict.ok).toBe(true);
     expect(verdict.branchProvenEmpty).toBe(true);
     expect(verdict.category).toBeUndefined();
+  });
+
+  it("treats a dependency-updates branch dirty only with the run's own sentinel as empty, but keeps a real lockfile change", async () => {
+    // A managed app does not gitignore .agent-done-<agentId>; it must not read as a deliverable.
+    onBranch("cos/sys-1/agent-1");
+    git.ahead = 0;
+    resolveTaskHookType.mockReturnValue("dependency-updates");
+    findPullRequestForBranchMock.mockResolvedValue({ status: "none", number: null, url: null, detail: null });
+    worktreeStatus = "?? .agent-done-agent-1\n";
+    let verdict = await verifyPrClaim({ task: prTask(), workspacePath: "/w", success: true, prExpected: true });
+    expect(verdict.ok).toBe(true);
+    worktreeStatus = "?? .agent-done-agent-1\n M package-lock.json\n";
+    verdict = await verifyPrClaim({ task: prTask(), workspacePath: "/w", success: true, prExpected: true });
+    expect(verdict.category).toBe(PR_MISSING_CATEGORY);
+    worktreeStatus = "";
+    resolveTaskHookType.mockReturnValue(null);
   });
 
   it('counts against origin/<default>, not the worktree\'s stale local copy', async () => {

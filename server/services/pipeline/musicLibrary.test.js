@@ -183,6 +183,15 @@ describe('importUploadedTrack', () => {
     expect(existsSync(tmp)).toBe(false);
   });
 
+  it('removes the temp upload when copying it into the library fails', async () => {
+    const tmp = join(TEST_HOME, 'upload-tmp.mp3');
+    await writeFile(tmp, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    await rm(FAKE_MUSIC_DIR, { recursive: true, force: true });
+    await writeFile(FAKE_MUSIC_DIR, 'not a directory');
+    await expect(importUploadedTrack(tmp, 'song.mp3')).rejects.toThrow();
+    expect(existsSync(tmp)).toBe(false);
+  });
+
   // The file check reads a second window when the tag outgrows the first.
   it('refuses a playlist hidden behind an ID3v2 tag longer than the read window', async () => {
     const tmp = join(TEST_HOME, 'upload-tmp.mp3');

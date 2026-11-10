@@ -62,7 +62,10 @@ export default function ImageGenProviderSections({ mediaTab, setMediaTab, form, 
   const {
     mode, sdapiUrl, pythonPath, localModelId, localVideoModelId,
     codexEnabled, codexPath, codexModel, codexEffort, codexParallelLimit,
-    grokEnabled, grokPath, grokAspectRatio, agyEnabled, agyPath, agyModel, falEnabled, falModel,
+    grokEnabled, grokPath, grokAspectRatio, grokImageParallelLimit, grokVideoParallelLimit,
+    agyEnabled, agyPath, agyModel, agyImageParallelLimit,
+    runwayImageParallelLimit, runwayVideoParallelLimit,
+    falEnabled, falModel, falImageParallelLimit, falVideoParallelLimit,
   } = values;
   const localConfigured = isLocalImageConfigured({ pythonPath, modelId: localModelId });
   // Disabling a provider while it is the active backend would leave the saved
@@ -164,10 +167,17 @@ export default function ImageGenProviderSections({ mediaTab, setMediaTab, form, 
   const codexParallelId = useId();
   const grokPathId = useId();
   const grokRatioId = useId();
+  const grokImageParallelId = useId();
+  const grokVideoParallelId = useId();
   const agyPathId = useId();
   const agyModelId = useId();
   const agyModelsListId = useId();
+  const agyImageParallelId = useId();
+  const runwayImageParallelId = useId();
+  const runwayVideoParallelId = useId();
   const falModelId = useId();
+  const falImageParallelId = useId();
+  const falVideoParallelId = useId();
 
   return (
     <>
@@ -196,6 +206,9 @@ export default function ImageGenProviderSections({ mediaTab, setMediaTab, form, 
             missing packages directly. HF model weights stream into the standard <code>~/.cache/huggingface</code>
             and are surfaced in <a href="/models/media" className="text-port-accent hover:underline">{getNavPageForPath('/models/media')?.breadcrumb || 'its management page'}</a>.
           </p>
+          <div className="bg-port-bg border border-port-border rounded-lg p-3 text-xs text-gray-400">
+            <span className="font-medium text-gray-300">Parallel limit:</span> Local model lanes stay at their memory-governed limit (1 render at a time) to protect system memory and GPU stability.
+          </div>
           {/* The verdict first, then the interpreter detail below it. The
               packages panel only ever probes the mflux interpreter, so on its
               own it reported "All required packages installed" for a machine
@@ -432,6 +445,24 @@ export default function ImageGenProviderSections({ mediaTab, setMediaTab, form, 
                 Applied when a render doesn't specify dimensions. A render's width/height maps to the nearest supported ratio automatically.
               </p>
             </FormField>
+            <ParallelLimitField
+              id={grokImageParallelId}
+              label="Parallel image render limit"
+              value={grokImageParallelLimit}
+              onChange={(v) => set('grokImageParallelLimit', v)}
+              bounds={parallelBounds}
+              helpText="How many image renders Grok runs at once. Default 1."
+              warningText={`${formatCount(grokImageParallelLimit)} concurrent renders can burn credits quickly during a long batch.`}
+            />
+            <ParallelLimitField
+              id={grokVideoParallelId}
+              label="Parallel video render limit"
+              value={grokVideoParallelLimit}
+              onChange={(v) => set('grokVideoParallelLimit', v)}
+              bounds={parallelBounds}
+              helpText="How many video renders Grok runs at once. Default 1."
+              warningText={`${formatCount(grokVideoParallelLimit)} concurrent video renders can burn credits or hit rate limits quickly.`}
+            />
             <CleanersToggles mode={IMAGE_GEN_MODE.GROK} form={form} />
           </div>
         )}
@@ -520,6 +551,15 @@ export default function ImageGenProviderSections({ mediaTab, setMediaTab, form, 
                 </span>
               </p>
             </div>
+            <ParallelLimitField
+              id={agyImageParallelId}
+              label="Parallel image render limit"
+              value={agyImageParallelLimit}
+              onChange={(v) => set('agyImageParallelLimit', v)}
+              bounds={parallelBounds}
+              helpText="How many image renders Agy runs at once. Default 1."
+              warningText={`${formatCount(agyImageParallelLimit)} concurrent renders can hit CLI session limits.`}
+            />
             <CleanersToggles mode={IMAGE_GEN_MODE.AGY} form={form} />
           </div>
         )}
@@ -548,8 +588,27 @@ export default function ImageGenProviderSections({ mediaTab, setMediaTab, form, 
               ))}
             </select>
           </FormField>
+          <ParallelLimitField
+            id={runwayImageParallelId}
+            label="Parallel image render limit"
+            value={runwayImageParallelLimit}
+            onChange={(v) => set('runwayImageParallelLimit', v)}
+            bounds={parallelBounds}
+            helpText="How many image renders Runway runs at once. Default 1."
+            warningText={`${formatCount(runwayImageParallelLimit)} concurrent renders can burn Runway credits quickly.`}
+          />
+          <ParallelLimitField
+            id={runwayVideoParallelId}
+            label="Parallel video render limit"
+            value={runwayVideoParallelLimit}
+            onChange={(v) => set('runwayVideoParallelLimit', v)}
+            bounds={parallelBounds}
+            helpText="How many video renders Runway runs at once. Default 1."
+            warningText={`${formatCount(runwayVideoParallelLimit)} concurrent video renders can burn Runway credits quickly.`}
+          />
           <RunwayCatalogStatus catalog={runwayCatalog} />
           <CleanersToggles mode={IMAGE_GEN_MODE.RUNWAY} form={form} />
+          <DeleteAfterDownloadToggle label="Delete from Runway after download" detail="Once a render is saved here, remove the rendered asset from Runway (image and video renders). Irreversible: the output can't be re-fetched from Runway afterward. Runway keeps its request history log, including the input prompt and input image. A failed delete is logged and never fails the render." checked={values.runwayDeleteAfterDownload} onChange={(v) => set('runwayDeleteAfterDownload', v)} />
         </div>
       )}
       {mediaTab === 'fal' && (
@@ -602,12 +661,89 @@ export default function ImageGenProviderSections({ mediaTab, setMediaTab, form, 
               output plus reference megapixels). Renders can pick a different model per queue item on the
               Image Gen page, and each surface can pin one under Defaults.
             </p>
+            <ParallelLimitField
+              id={falImageParallelId}
+              label="Parallel image render limit"
+              value={falImageParallelLimit}
+              onChange={(v) => set('falImageParallelLimit', v)}
+              bounds={parallelBounds}
+              helpText="How many image renders fal.ai runs at once. Default 1."
+              warningText={`${formatCount(falImageParallelLimit)} concurrent renders can burn fal credits quickly.`}
+            />
+            <ParallelLimitField
+              id={falVideoParallelId}
+              label="Parallel video render limit"
+              value={falVideoParallelLimit}
+              onChange={(v) => set('falVideoParallelLimit', v)}
+              bounds={parallelBounds}
+              helpText="How many video renders fal.ai runs at once. Default 1."
+              warningText={`${formatCount(falVideoParallelLimit)} concurrent video renders can burn fal credits quickly.`}
+            />
             <CleanersToggles mode={IMAGE_GEN_MODE.FAL} form={form} />
           </div>
         )}
+        <DeleteAfterDownloadToggle label="Delete from fal.ai after download" detail="Once a render is saved here, remove its stored payloads and output files from fal.ai (image and video renders). Irreversible: the output can't be re-fetched from fal.ai afterward. A failed delete is logged and never fails the render." checked={values.falDeleteAfterDownload} onChange={(v) => set('falDeleteAfterDownload', v)} />
       </div>
       )}
     </>
+  );
+}
+
+function ParallelLimitField({
+  id,
+  label = 'Parallel render limit',
+  value,
+  onChange,
+  bounds = PARALLEL_FALLBACK,
+  helpText,
+  warningThreshold = 5,
+  warningText,
+}) {
+  const [draft, setDraft] = useState(String(value ?? bounds.default));
+  useEffect(() => {
+    setDraft(String(value ?? bounds.default));
+  }, [value, bounds.default]);
+
+  const numValue = Number(value ?? bounds.default);
+
+  return (
+    <FormField label={label} labelClassName={FIELD_LABEL_CLASS}>
+      <input
+        id={id}
+        type="number"
+        min={bounds.min}
+        max={bounds.max}
+        step={1}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => {
+          const clamped = clampParallel(draft, bounds);
+          onChange(clamped);
+          setDraft(String(clamped));
+        }}
+        className="w-24 bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
+      />
+      {helpText && <p className="text-xs text-gray-500 mt-1">{helpText}</p>}
+      {numValue > warningThreshold && warningText && (
+        <span className="block mt-1 text-xs text-port-warning">
+          ⚠️ {warningText}
+        </span>
+      )}
+    </FormField>
+  );
+}
+
+// Applies to both image and video renders from the provider. The saved file and its record are kept; what the
+// provider-side delete removes differs per provider, so the caller supplies the wording.
+function DeleteAfterDownloadToggle({ label, detail, checked, onChange }) {
+  return (
+    <div className="space-y-1">
+      <label className="flex items-center gap-3 cursor-pointer">
+        <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} className="rounded" />
+        <span className="text-sm text-gray-300">{label}</span>
+      </label>
+      <p className="text-xs text-gray-500 pl-7">{detail}</p>
+    </div>
   );
 }
 

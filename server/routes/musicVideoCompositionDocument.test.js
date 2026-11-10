@@ -7,10 +7,13 @@
 
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 import express from 'express';
+import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { existsSync, readdirSync, rmSync } from 'node:fs';
 import { mkdir, readFile, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { createZip } from '../lib/zipWriter.js';
@@ -29,7 +32,7 @@ const { createSession } = await import('../services/auth.js');
 
 const { default: musicVideoRoutes } = await import('./musicVideo.js');
 const projects = await import('../services/musicVideo/projects.js');
-const { unsupportedDocumentEffects } = await import('../services/musicVideo/compositionDocument.js');
+const { unsupportedDocumentEffects, UPGRADABLE_IMAGE_EFFECT_MODULES, COMPATIBLE_IMAGE_EFFECT_MODULES } = await import('../services/musicVideo/compositionDocument.js');
 const { captureMusicVideoEvidence, musicVideoDependencyChanges } = await import('../lib/musicVideoDependencies.js');
 
 const appFor = (address = '127.0.0.1') => {
@@ -126,6 +129,7 @@ describe('music-video composition documents', () => {
 
   it.each([
     'musicVideoLayeredEngine.txt', 'musicVideoLayeredEngineBeforeEffects.js',
+    'musicVideoLayeredEngineBeforePlannedCameraControls.txt',
     'musicVideoLayeredEngine11319.txt', 'musicVideoLayeredEngine11406.txt', 'musicVideoLayeredEngineOctober25.txt',
   ])(
     'upgrades the recognized %s engine without rewriting authored files or validating an old review', async fixture => {
@@ -157,6 +161,46 @@ describe('music-video composition documents', () => {
     expect((await upgrade()).status).toBe(409);
     const again = await request(app).post(`/api/music-video/${project.id}/composition/document/engine/upgrade`).send({ directory: selected.composition.document.directory });
     expect(again.body).toMatchObject({ changed: false, document: selected.composition.document });
+  });
+
+  // Reconstruct older shipped bytes from the frozen outgoing fixture, never from today's engine.
+  const withoutHandheld = (engine) => engine
+    .replace(/  \/\/ A person holding the camera: PortOS writes[\s\S]*?\n  }\n(?=  \/\/ The rig's camera state)/, '')
+    .replace('handheldView(scene, cameraView(scene, seg(t, scene.startSec, scene.endSec)), lt)', 'cameraView(scene, seg(t, scene.startSec, scene.endSec))');
+
+  it('explicitly upgrades the shipped engine from before the handheld camera additions', async () => {
+    const shipped = await readFile(new URL('../services/musicVideo/documentTemplates/layered/engine.js', import.meta.url), 'utf8');
+    const legacy = withoutHandheld(await readFile(new URL('./fixtures/musicVideoLayeredEngineBeforePlannedCameraControls.txt', import.meta.url), 'utf8'));
+    expect(createHash('sha256').update(legacy).digest('hex')).toBe('a20bb2cf128153aada5c963baf8af22ca4a5ca72bda56d801b2d41a693cb606e');
+    const imported = await uploadZip(project.id, createZip([
+      { name: 'index.html', data: PAGE }, { name: 'engine.js', data: legacy },
+    ]));
+    expect(imported.status).toBe(201);
+    const result = await request(app).post(`/api/music-video/${project.id}/composition/document/engine/upgrade`)
+      .send({ directory: imported.body.document.directory });
+    expect([result.status, result.body.changed]).toEqual([200, true]);
+    const upgraded = await request(app).get(`/api/music-video/${project.id}/composition/document/file?path=engine.js`);
+    expect(upgraded.text).toBe(shipped);
+  });
+
+  it('explicitly upgrades the shipped engine whose card glitch ignored beat-reaction controls', async () => {
+    const shipped = await readFile(new URL('../services/musicVideo/documentTemplates/layered/engine.js', import.meta.url), 'utf8');
+    const legacy = withoutHandheld(await readFile(new URL('./fixtures/musicVideoLayeredEngineBeforePlannedCameraControls.txt', import.meta.url), 'utf8')).replace('state.reactiveGain * templateEffects(scene).beatReaction);', 'state.reactiveGain);');
+    // Pin the exact outgoing bytes, rather than accepting any synthesized engine.
+    expect(createHash('sha256').update(legacy).digest('hex')).toBe('4ee3ae7c78bce6d9dde36a1f2336c7bfd899918f359b6a9906b619c07a0bfb1b');
+    const imported = await uploadZip(project.id, createZip([
+      { name: 'index.html', data: PAGE }, { name: 'engine.js', data: legacy },
+    ]));
+    expect(imported.status).toBe(201);
+    const clone = await projects.cloneProject(project.id);
+    const result = await request(app).post(`/api/music-video/${project.id}/composition/document/engine/upgrade`)
+      .send({ directory: imported.body.document.directory });
+    expect(result.status).toBe(200);
+    expect(result.body.changed).toBe(true);
+    const upgraded = await request(app).get(`/api/music-video/${project.id}/composition/document/file?path=engine.js`);
+    expect(upgraded.text).toBe(shipped);
+    const retained = await request(app).get(`/api/music-video/${clone.id}/composition/document/file?path=engine.js`);
+    expect(retained.text).toBe(legacy);
   });
 
   it('replaces the unchanged initial still-effect module when upgrading its shipped engine', async () => {
@@ -209,6 +253,25 @@ describe('music-video composition documents', () => {
     expect(files['musicVideoImageEffects.js']).toEqual(effects);
   });
 
+  it('upgrades an older document carrying the 16f8de61cd still-effect module and engine 106e8a14 to the shipped files', async () => {
+    const legacyEngine = await readFile(new URL('./fixtures/musicVideoLayeredEngine14833.txt', import.meta.url));
+    const legacyEffects = await readFile(new URL('./fixtures/musicVideoImageEffects16f8de61cd.txt', import.meta.url));
+    const shippedEffects = await readFile(new URL('../lib/musicVideoImageEffects.js', import.meta.url));
+    const shippedEngine = await readFile(new URL('../services/musicVideo/documentTemplates/layered/engine.js', import.meta.url));
+    const imported = await uploadZip(project.id, createZip([
+      { name: 'index.html', data: PAGE }, { name: 'engine.js', data: legacyEngine },
+      { name: 'musicVideoImageEffects.js', data: legacyEffects },
+    ]));
+    const result = await request(app).post(`/api/music-video/${project.id}/composition/document/engine/upgrade`)
+      .send({ directory: imported.body.document.directory });
+    expect(result.status).toBe(200);
+    expect(result.body.changed).toBe(true);
+    const exported = await fetchBytes(`/api/music-video/${project.id}/composition/document/export`);
+    const files = Object.fromEntries(readZipArchive(exported.bytes).map(entry => [entry.name, entry.read()]));
+    expect(files['engine.js']).toEqual(shippedEngine);
+    expect(files['musicVideoImageEffects.js']).toEqual(shippedEffects);
+  });
+
   it('refuses customized engines, pending candidates and invalid upgrade pointers without changing the document', async () => {
     const legacy = await readFile(new URL('./fixtures/musicVideoLayeredEngine.txt', import.meta.url));
     const imported = await uploadZip(project.id, createZip([{ name: 'index.html', data: PAGE }, { name: 'engine.js', data: Buffer.concat([legacy, Buffer.from('\n// authored customization')]) }]));
@@ -225,6 +288,18 @@ describe('music-video composition documents', () => {
     await projects.mutateProjectRecord(project.id, current => ({ project: { ...current, composition: { ...current.composition, documentDraft: current.composition.document } } }));
     expect((await request(app).post(path).send({ directory })).body.code).toBe('COMPOSITION_DRAFT_STALE');
     expect((await projects.getProject(project.id)).composition.document.directory).toBe(directory);
+  });
+
+  // Uniquely catches an imported or customized document being cleared to play in the viewer's own browser.
+  it('allows native playback only for the unmodified shipped template', async () => {
+    const playback = `/api/music-video/${project.id}/composition/document/playback`;
+    expect((await request(app).get(playback)).body).toEqual({ native: false, reason: 'no-document' });
+    expect((await uploadZip(project.id, createZip(Object.entries(FILES).map(([name, data]) => ({ name, data }))))).status).toBe(201);
+    expect((await request(app).get(playback)).body).toEqual({ native: false, reason: 'unrecognized-entrypoint' });
+    expect((await request(app).post(`/api/music-video/${project.id}/composition/document/template`).send({})).status).toBe(201);
+    const native = (await request(app).get(playback)).body;
+    expect(native).toMatchObject({ native: true, data: { render: { width: 1920, height: 1080, fps: 24 }, scenes: expect.any(Array), song: expect.any(Object) } });
+    expect(native.data.scenes.every(scene => scene.media === null)).toBe(true);
   });
 
   it('reports selected effects as unsupported until the recognized engine is explicitly updated', async () => {
@@ -493,5 +568,30 @@ describe('music-video composition documents', () => {
     const missing = await request(app).get(`/api/music-video/${project.id}/composition/document/export`);
     expect(missing.status).toBe(409);
     expect(missing.body.code).toBe('COMPOSITION_DOCUMENT_MISSING');
+  });
+
+  it('registers every historical still-effect module digest in upgradable or compatible sets', async () => {
+    const repoRoot = join(fileURLToPath(import.meta.url), '..', '..', '..');
+    const relPath = 'server/lib/musicVideoImageEffects.js';
+    const commits = execFileSync('git', ['log', '--follow', '--format=%H', '--', relPath], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+    }).trim().split('\n').filter(Boolean);
+    expect(commits.length).toBeGreaterThan(0);
+
+    const currentBytes = await readFile(join(repoRoot, relPath));
+    const currentDigest = createHash('sha256').update(currentBytes.toString('utf8').replace(/\r\n?/g, '\n')).digest('hex');
+
+    for (const commit of commits) {
+      const content = execFileSync('git', ['show', `${commit}:${relPath}`], {
+        cwd: repoRoot,
+        encoding: 'utf8',
+      });
+      const digest = createHash('sha256').update(content.replace(/\r\n?/g, '\n')).digest('hex');
+      const registered = digest === currentDigest
+        || UPGRADABLE_IMAGE_EFFECT_MODULES.has(digest)
+        || COMPATIBLE_IMAGE_EFFECT_MODULES.has(digest);
+      expect(registered, `Still-effect module digest at commit ${commit.slice(0, 10)} (${digest}) must be registered`).toBe(true);
+    }
   });
 });

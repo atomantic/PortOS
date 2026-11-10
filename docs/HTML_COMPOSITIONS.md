@@ -306,6 +306,25 @@ Saving the selection gates rendering until the server has accepted it.
 
 See the [synthetic visual validation and remaining acceptance](validation/9302-music-video-grade.md).
 
+## Layered-template additions
+
+In **Compose → Film look → Template additions**, set the beat reaction (pulse
+and automatic chorus glitch), still zoom/pan, footage push, grain and vignette
+from zero (off) to full strength. The default motion strengths are 100%, grain
+is 9%, and vignette is 50%, preserving existing frames. These are separate from
+chosen shot glitches, cut transitions, and the finishing Film look. A note warns
+when template texture stacks with Film look texture. Planned still-camera moves
+remain part of the shot when the template's default motion is reduced or off.
+
+Each shot's Film look editor can override individual additions or **Follow video**.
+Sparse `templateEffects` records on the video and shot carry these choices into
+both preview and final render; zero is explicit, while null/absent inherits.
+Use **Update layered engine** for older documents to adopt the controls in a new
+version. Existing documents remain unchanged until that explicit upgrade;
+custom and 3D engines retain their own behavior. When beat reaction can draw,
+the preview uses the composition renderer for the same pulse and chorus glitch
+as export; with beat reaction off, the lightweight native player remains available.
+
 ## Music-video film look
 
 A finishing filter for the analog, imperfect feel image and video models rarely
@@ -347,8 +366,11 @@ what the preview shows and what the render bakes:
   frames from `buildMusicVideoFfmpegArgs`' `segment` mode, which draws the same
   chain the whole-film graph draws there, cut effects borrowing the next shot,
   fades, grade, glitches and the typography over it) and the look (the base
-  through the shot's film look on song time). A shot may keep its own look
-  (`scene.filmLook`; `null` follows the video's). A look change redoes only the
+  through the shot's film look on song time). A shot uses its own look, then
+  its camera's (`cameras[].filmLook`), then the video's (`null` follows the
+  camera, then the video). A camera may also play in its own frame (4:3 or 3:2
+  inside the video) and the video may crop a few percent from each edge
+  (overscan) before that matte and the look. A look change redoes only the
   look stage of the shots it reaches, a shot change only that shot (and a
   neighbor whose cut effect reads it). The shot card's **Final render** row
   renders one shot now and plays it silent; **Render final** renders whatever
@@ -467,6 +489,8 @@ symlinks, special files, traversal names and the reserved names below
 `/api/music-video/:id/composition/document`: `GET` (manifest), `POST /zip`
 (multipart `file`), `POST /directory` (`{ directory }`), `POST /template`
 (`{ template: "layered" }`), `GET /export` (zip), `GET /preview`,
+`GET /playback` (`{ native, reason?, data? }`: whether the document is the unmodified
+shipped template),
 `GET /file?path=` (one document file, served inert), `DELETE` (detach).
 
 Every render of the project — the final render, a draft excerpt, its contact
@@ -637,6 +661,36 @@ WebSocket collector, including a nested srcdoc, and treats a silent negative
 control (no jail) as an invalid proof. DNS is not proven by binding port 53.
 On macOS the same profile must make `getaddrinfo` fail for a name that resolves
 outside the jail, because the system resolver would send that query itself.
+
+One document is exempt from running in the worker while it plays: the unmodified
+shipped layered template. It carries no authored code, which the server proves
+by matching its engine, entrypoint, helpers and fonts byte for byte
+(`shippedLayeredDocument`). The dock plays such a project's selected takes in
+the page with the storyboard animatic's player and opens the worker only for
+the exact frame of a paused, scrubbed, stepped or saved moment. The page still
+never loads the document. The playing picture repeats the template's own
+drawing with shared camera paths, image effects, beat timing, selected glitches,
+wipes and lyric type. A native canvas draws the template's vignette, grain,
+beat punch, high-energy downbeat glitch, card scenes and HUD over the browser's
+playing media. The words-only page merges hook cues with sung lyrics (or the
+director's subtitle cues), using the template's palette and frame clock.
+Video and shot template-effect controls apply to the native drawing too; a
+response from an older server without drawing data keeps visible beat reactions
+on the worker.
+`GET /playback` supplies the same structured song, scene and composition drawing
+data as the renderer, without document code or media files. The dock refreshes
+that data when its drawing inputs change. Every other document
+keeps the worker for playback too. Design record: [native composition preview](plans/2026-11-09-native-composition-preview.md).
+
+`documentTemplateParity.browser.test.js` compares the native player's visible
+picture with the unchanged shipped engine at fixed song frames: finish, footage
+and still camera moves, beat reactions, cards, HUD and hook/sung/subtitle type.
+Landscape cases render at 1920×1080 and display at 640×360; square and portrait
+cases use their render aspect at the same display width. The tolerance is mean
+RGB error below 0.3 out of 255 and fewer than 0.4% of channel samples differing by more
+than 12. Frame centres avoid media-element microsecond rounding at 24fps
+boundaries. These are synthetic headless Chromium comparisons; they do not
+claim physical-phone playback measurements. Final document renders are unchanged.
 
 Seek, film look, and the title card go over the private render protocol.
 Project media stays on the server (`streamMedia`); the client never fetches it

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import PreviewDock from './PreviewDock.jsx';
+import { listPreviewSources } from '../../lib/musicVideoStages.js';
 
 describe('PreviewDock video shot steps', () => {
   it('steps a draft excerpt through its own shots in song time', () => {
@@ -43,5 +44,29 @@ describe('PreviewDock video shot steps', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Edit shot' }));
     expect(video.pause).toHaveBeenCalled();
     expect(onEditShot).toHaveBeenCalledWith('a');
+  });
+});
+
+describe('PreviewDock live composite', () => {
+  it('plays a composed video from the selected takes when no shot segment is rendered', () => {
+    const project = {
+      id: 'p', trackId: 't1', composition: { mode: 'composed' },
+      scenes: [{ sceneId: 's1', startSec: 0, endSec: 4, referenceImageId: 'frame.png', videoHistoryId: null }],
+    };
+    render(<MemoryRouter><PreviewDock project={project} sources={listPreviewSources(project, { leadWith: 'storyboard' })} audioUrl="/song.mp3" /></MemoryRouter>);
+    expect(screen.getByLabelText('Preview source')).toHaveValue('composite');
+    expect(screen.getByLabelText('Composition preview')).toBeTruthy();
+    expect(screen.getByText(/Final-quality shot renders are not required/)).toBeTruthy();
+    expect(screen.getByRole('option', { name: 'Storyboard animatic' })).toBeEnabled();
+  });
+
+  it('keeps a style with no live composite in the picker and says why', () => {
+    const project = { id: 'p', trackId: 't1', composition: { mode: 'concat' }, scenes: [{ sceneId: 's1', startSec: 0, endSec: 4 }] };
+    render(<MemoryRouter><PreviewDock project={project} sources={listPreviewSources(project)} audioUrl="/song.mp3" /></MemoryRouter>);
+    const unavailable = screen.getByRole('option', { name: /Composition \(live\)/ });
+    expect(unavailable).toBeDisabled();
+    expect(unavailable).toHaveTextContent('Footage cuts the clips as they are and has no live composite.');
+    expect(screen.getByLabelText('Preview source')).toHaveValue('animatic');
+    expect(screen.getByLabelText('Storyboard animatic')).toBeTruthy();
   });
 });

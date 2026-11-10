@@ -35,7 +35,7 @@ import { spawnDetached } from '../../lib/detachedSpawn.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { safeChildProcessEnv } from '../../lib/processEnv.js';
 import { PYTHON_NOISE_RE } from '../../lib/sseUtils.js';
-import { omitRenderTiming, renderTimingFields } from '../../lib/renderTiming.js';
+import { omitDerivedRenderFields, renderTimingFields } from '../../lib/renderTiming.js';
 import { resolveIcLoraWeightByKey } from '../../lib/icLoraWeights.js';
 import { isHardwareCompatible, hardwareUnavailableReason } from '../../lib/systemCapabilities.js';
 import { hfChildEnv } from '../hfToken.js';
@@ -453,7 +453,7 @@ export async function runVideoUpscale({
         // poster for a clip that does not exist.
         thumbnailPath = thumbnail ? safeUnder(PATHS.videoThumbnails, thumbnail) : null;
         const newEntry = {
-          ...omitRenderTiming(item),
+          ...omitDerivedRenderFields(item),
           id: newId,
           filename: newFilename,
           thumbnail,
