@@ -4,16 +4,20 @@
 # download. Installed only from requirements-auk-mlx.lock.txt, then AuK itself
 # is installed editable with `--no-deps --no-build-isolation`. After editing this
 # file, regenerate the lock with the command in the lock header. When bumping
-# AUK_REVISION, re-copy the ranges from that revision's pyproject.toml.
+# AUK_REVISION, re-copy the ranges from that revision's pyproject.toml, except
+# the torch-family / transformers overrides below.
 mlx>=0.29
 soundfile
 soxr
-# torch / transformers stay inside upstream AuK's ranges; OSV advisories on the
-# resolved pins are tracked in #15670.
-torch>=2.7,<2.8
-torchaudio>=2.7,<2.8
-torchvision>=0.22,<0.23
-transformers>=4.52.0,<5
+# torch / transformers deliberately override upstream AuK's ranges (torch<2.8,
+# transformers<5): every release inside them carries OSV advisories (#15670). The
+# MLX path uses torch only to read checkpoints in auk_mlx.convert and transformers
+# only for the Qwen2.5-Omni processor; conversion and rendering were validated on
+# the pins in the lock. torchaudio stopped tracking torch minors after 2.11.
+torch>=2.13
+torchaudio>=2.11
+torchvision>=0.28
+transformers>=5.10
 qwen-omni-utils>=0.0.9
 omegaconf>=2.3.0
 torchdiffeq
