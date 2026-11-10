@@ -198,8 +198,8 @@ describe('setup-image-video venv layout handling (issue #4200)', () => {
     expect(source).toMatch(/PORTOS_SETUP_NATIVE=1 exec \/usr\/bin\/arch -arm64 \/bin\/bash "\$0" "\$@"/);
     expect(helper).not.toContain('pin_venv_arm64');
     for (const root of [
-      '$MFLUX_VENV', '${LTX2_DIR}/.venv', '${LTX25_DIR}/.venv', '${FASTVIDEO_DIR}/.venv',
-      '${WAN22_DIR}/.venv', '${MINIMAX_H3_DIR}/.venv', '$MUSICGEN_VENV', '$AUDIOLDM2_VENV',
+      '$MFLUX_VENV', '$UV_PROJECT_ENVIRONMENT', '${FASTVIDEO_DIR}/.venv',
+      '${MINIMAX_H3_DIR}/.venv', '$MUSICGEN_VENV', '$AUDIOLDM2_VENV',
       '$ACESTEP_VENV', '$ACESTEP15_VENV', '$MINIMAX_MUSIC3_VENV', '$MINIMAX_MUSIC3_MLX_VENV',
       '$MUSCRIPTOR_VENV', '$FLUX2_VENV', '$MINIMAX_H3_CUDA_VENV', '$LTX25_CUDA_VENV',
       '$WAN22_CUDA_VENV',
@@ -730,19 +730,29 @@ describe('private uv and upstream lock installation boundary', () => {
     };
     executable(uv, `
 if [[ "$1" == --version ]]; then echo 'uv 0.13.6 (fixture)'; exit 0; fi
+[[ -z "\${UV_PROJECT+x}\${UV_WORKING_DIR+x}\${UV_NO_BUILD_ISOLATION+x}\${UV_NO_VERIFY_HASHES+x}" ]] || exit 98
+[[ "$1" == --no-config ]] || exit 90
+shift
+cache=1
+if [[ "$1" == --no-cache ]]; then cache=0; shift; fi
 printf 'private %s\\n' "$*" >> "$LOG"
 case "$1" in
   python) echo "$HOME/managed-python" ;;
   venv)
     root="\${@: -1}"
-    [[ "$root" == 3.11 ]] && root=.venv
+    [[ "$root" == "$PWD/.venv" ]] || exit 96
     mkdir -p "$root/bin"
     printf '#!/usr/bin/env bash\\nexit 0\\n' > "$root/bin/python3"
     chmod +x "$root/bin/python3"
     ;;
   sync)
-    [[ "$*" == 'sync --locked' ]] || exit 91
+    [[ "$cache" == 0 && "$UV_PROJECT_ENVIRONMENT" == "$PWD/.venv" ]] || exit 96
+    [[ "$*" == "sync --locked --no-build --no-install-workspace --python $PWD/.venv/bin/python3" ]] || exit 91
     [[ -f uv.lock && "\${STALE_LOCK:-0}" == 0 ]] || exit 42
+    ;;
+  pip)
+    [[ "$cache" == 0 && "$*" == 'pip install --no-deps --only-binary :all: --preview-features build-dependency-hashes --require-build-hashes --build-constraints '*'/requirements-mlx-video-build.lock.txt --python '"$PWD/.venv/bin/python3"' --reinstall -e '* ]] || exit 97
+    [[ "\${FAIL_BUILD:-0}" == 0 ]] || exit 45
     ;;
   *) exit 92 ;;
 esac`);
@@ -771,7 +781,7 @@ cp "$PIP_FIXTURE" "\${@: -1}/bin/python3"`);
       writeFileSync(log, '');
       return spawnSync(resolveBashBinary(), ['-c', `
 set -euo pipefail
-uname() { if [[ "$1" == -m ]]; then echo arm64; else echo Darwin; fi; }
+uname() { if [[ "$1" == -m ]]; then echo arm64; else echo "\${FIXTURE_OS:-Darwin}"; fi; }
 uv() { echo 'AMBIENT UV MUST NEVER RUN' >&2; exit 95; }
 python3.14() { [[ "\${ALLOW_ALT:-0}" == 1 ]] && "$ALT_PYTHON" "$@"; }
 python3.13() { return 1; }
@@ -782,21 +792,30 @@ python3.9() { return 1; }
 python3.8() { return 1; }
 python3() { return 1; }
 git() {
+  printf 'git %s\\n' "$*" >> "$LOG"
   if [[ "$1" == clone ]]; then
     root="\${@: -1}"
     mkdir -p "$root/.git"
     [[ "\${MISSING_LOCK:-0}" == 1 ]] || touch "$root/uv.lock"
-  elif [[ "$*" == *show-ref* ]]; then return 1; fi
+  elif [[ "$*" == *show-ref* ]]; then return 1
+  elif [[ "$1" == -C && "$3" == checkout ]]; then
+    printf '%s\\n' "\${@: -1}" > "$2/.git/fixture-head"
+  elif [[ "$1" == rev-parse ]]; then
+    cat .git/fixture-head
+  elif [[ "$1" == status && "\${DIRTY_SOURCE:-0}" == 1 ]]; then
+    echo ' M uv.lock'
+  fi
 }
-# Record the exact Python path forwarded into the architecture-repair probe.
-lipo() { printf 'architecture %s\\n' "$*" >> "$LOG"; }
+lipo() { return 1; }
 source "$1"
-printf 'captured %s\\n' "\${LTX2_BASE_PY:-\${LTX25_BASE_PY:-\${WAN22_BASE_PY:-}}}" >> "$LOG"
 `, 'bash', SETUP_SCRIPT], {
         encoding: 'utf8',
         env: {
           ...process.env, ...Object.fromEntries(installFlags.map((name) => [name, '0'])),
           HOME: home, PORTOS_DATA: join(home, 'data'), PYTHON_BIN: python,
+          UV_PROJECT_ENVIRONMENT: join(home, 'foreign-env'),
+          UV_PROJECT: join(home, 'foreign-project'), UV_WORKING_DIR: join(home, 'foreign-cwd'),
+          UV_NO_BUILD_ISOLATION: '1', UV_NO_VERIFY_HASHES: '1',
           LOG: log, UV_FIXTURE: uv, PIP_FIXTURE: pip, ALT_PYTHON: alternatePython, [flag]: '1', ...extra,
         },
       });
@@ -809,16 +828,21 @@ printf 'captured %s\\n' "\${LTX2_BASE_PY:-\${LTX25_BASE_PY:-\${WAN22_BASE_PY:-}}
     const fresh = install.run();
     expect(fresh.status, fresh.stderr).toBe(0);
     expect(install.calls()).toContain('bootstrap -m pip install --disable-pip-version-check --require-hashes --no-deps --only-binary :all:');
-    expect(install.calls()).toContain('private sync --locked');
-    expect(install.calls()).toContain(`captured ${install.home}/managed-python\n`);
-    expect(install.calls()).not.toMatch(/captured.*(?:pip progress|venv progress)/);
+    expect(install.calls()).toContain('private sync --locked --no-build --no-install-workspace');
+    expect(install.calls()).toContain(flag === 'INSTALL_WAN22'
+      ? '--reinstall -e .\n' : '--reinstall -e packages/ltx-core-mlx -e packages/ltx-pipelines-mlx\n');
+    expect(install.calls()).not.toContain('foreign-env');
     const repair = install.run();
     expect(repair.status, repair.stderr).toBe(0);
     expect(install.calls()).not.toContain('bootstrap ');
     expect(install.calls()).toContain('private sync --locked');
     const failedLock = install.run({ STALE_LOCK: '1' });
     expect(failedLock.status).toBe(42);
+    expect(install.calls()).not.toContain('private pip install');
     expect(failedLock.stdout).not.toContain('venv ready');
+    const failedBuild = install.run({ FAIL_BUILD: '1' });
+    expect(failedBuild.status).toBe(45);
+    expect(failedBuild.stdout).not.toContain('venv ready');
   });
 
   it('uses a complete alternate Python when the selected system Python lacks bootstrap modules', () => {
@@ -838,9 +862,23 @@ printf 'captured %s\\n' "\${LTX2_BASE_PY:-\${LTX25_BASE_PY:-\${WAN22_BASE_PY:-}}
     expect(existsSync(join(install.home, '.portos/tools'))).toBe(false);
   });
 
-  it('refuses a missing upstream lock instead of resolving one', () => {
+  it.each([{ MISSING_LOCK: '1' }, { DIRTY_SOURCE: '1' }])('refuses unaudited source inputs before invoking uv (%j)', (failure) => {
     const install = installer('INSTALL_LTX2');
-    expect(install.run({ MISSING_LOCK: '1' }).status).toBe(42);
+    const result = install.run(failure);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('requires the clean pinned source and uv.lock');
+    expect(install.calls()).not.toMatch(/^(base |bootstrap |private )/m);
+  });
+
+  it.each([
+    [{ FIXTURE_OS: 'Linux' }, 'requires an Apple-Silicon Mac'],
+    [{ LTX2_PIN: 'main' }, 'has no audited install profile for revision'],
+  ])('refuses an unsupported host or revision before cloning (%j)', (overrides, message) => {
+    const install = installer('INSTALL_LTX2');
+    const result = install.run(overrides);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(message);
+    expect(install.calls()).toBe('');
   });
 
   it.each(['0.13.3', '0.13.60'])('replaces a private uv reporting %s before using it', (privateVersion) => {
@@ -905,7 +943,10 @@ describe('pinned runtime revisions', () => {
       const shellDefault = source.match(
         new RegExp(`^\\s*${info.pinEnvVar}="\\$\\{${info.pinEnvVar}:-([^}"]+)\\}"`, 'm'),
       )?.[1];
-      expect(shellDefault).toBe(info.expectedRevision);
+      const revision = shellDefault?.startsWith('$')
+        ? source.match(new RegExp(`^\\s*${shellDefault.slice(1)}="([a-f0-9]{40})"`, 'm'))?.[1]
+        : shellDefault;
+      expect(revision).toBe(info.expectedRevision);
     });
 });
 

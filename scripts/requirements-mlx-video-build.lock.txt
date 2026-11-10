@@ -1,0 +1,52 @@
+# Build-only hash constraints for LTX-2/2.5 MLX and MLX-Gen on Apple Silicon.
+# Regenerate from the repository root with PortOS-private uv 0.13.6 and a UTC
+# cutoff at least seven days before regeneration (2026-11-03 for this lock):
+#   uv --no-config pip compile scripts/requirements-mlx-video-build.txt \
+#     --python-version 3.11 --python-platform aarch64-apple-darwin \
+#     --only-binary :all: --exclude-newer 2026-11-03 --generate-hashes \
+#     --no-header --annotation-style line -o /tmp/requirements-mlx-video-build.body
+# Preserve this header and replace the generated body below.
+editables==0.6 \
+    --hash=sha256:1163834902381c4613787951c5914800fdf155ae08848a373b8ea5006780977c \
+    --hash=sha256:d70e4698078a1d033e7786d9c64e5be070d058a67c21417024d38a58ac20aa43
+    # via -r scripts/requirements-mlx-video-build.txt
+hatchling==1.31.0 \
+    --hash=sha256:6b48ad4068a482ed7239b3a8215bc55b47aad3345d58dfc94e553c5d2d46211b \
+    --hash=sha256:aac80bec8b6fe35e8480f1c335be8910fa210a0e6f735a139be205dadcacb544
+    # via -r scripts/requirements-mlx-video-build.txt
+packaging==26.3 \
+    --hash=sha256:94edc256424af38762eb31306eed28beb9f0efc50a8837492c9d6fd6004aed79 \
+    --hash=sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c
+    # via hatchling
+pathspec==1.1.1 \
+    --hash=sha256:17db5ecd524104a120e173814c90367a96a98d07c45b2e10c2f3919fff91bf5a \
+    --hash=sha256:a00ce642f577bf7f473932318056212bc4f8bfdf53128c78bbd5af0b9b20b189
+    # via hatchling
+pluggy==1.7.0 \
+    --hash=sha256:7dd7b0d8832ba3cb632c306926ded123429211b83641b35dc5c41ad2d34f9bec \
+    --hash=sha256:d1eaa46ebb595891b860ab086b4d09c8588af65ebd4361b8e8f4bb8920b90ba8
+    # via hatchling
+trove-classifiers==2026.9.21.13 \
+    --hash=sha256:0a9ebc8d4e2f3e8a22848c5258033035bec17a3012ac3fea16dbaa764489eb71 \
+    --hash=sha256:8b1ff4f9c191b1040b71c37f1e445ab99732911e3cd91de52838453a854d7a17
+    # via hatchling
+uv-build==0.7.22 \
+    --hash=sha256:17e6514a82434c9efe135573325855013bf69c3d6a76dc49429f634ca0d95e40 \
+    --hash=sha256:35c873e5e4a03d65b65ae445c5f402f977334b7b2b3c012cd9381f96e969c310 \
+    --hash=sha256:3f97d2791773783f42592d99725a1bf4e7a3292468a7d7877a6cfdaf91af96e3 \
+    --hash=sha256:5a70fa88aab9ca05d86b024bb4f9238093458fa045385f492ddfd93c761869a4 \
+    --hash=sha256:5d19699413d8795635660b057118cf6a75529cab3c3572bc413d09b41a1dbbb7 \
+    --hash=sha256:5f8be6bd6e867b43d29fbed2a07f8b38f4c6fb4b93ceffbfc9ed1a191eefdbd9 \
+    --hash=sha256:67120c72525eabbe0f3b644f02733e89d639b47dae488db72baf2eadca8b3400 \
+    --hash=sha256:78c16ea11d8872d658d03d718f6f9ec26f9b55648b9027a54f47d21ee1c6798a \
+    --hash=sha256:959babcc64d9213742fcb0958f76b3c87019b2a2068bc34434789eaa49038480 \
+    --hash=sha256:aadb606111e1c2643dbe6c0a9fa760dc3a74cf669beb0153c7298436420f6ec9 \
+    --hash=sha256:b5c16d34967be4e7c6c3f76680547e5cd87bb4221d0174172e612ad4600da880 \
+    --hash=sha256:b7ef017f03b5ca23ec5c645b66153d82d26cb9b0cade1a627119059bcb3d1f62 \
+    --hash=sha256:d5ab8559a718673c998f93299348cb4165ad64aa41d4c370b2dd581ebf061bec \
+    --hash=sha256:d6cf71c38c10ddf52e893ebb6e902873503eada64ec02a4319c8354526db8b6f \
+    --hash=sha256:e38807a7dd40cfa25dc3342a49df50419ee8ef50eb4769787de9b89c5d42f1ee \
+    --hash=sha256:e7575036f987080a25a473971c0e6795c79e0b7bd04b95e5a35d5d51e19f3a6c \
+    --hash=sha256:eede5ed6b1dcfae99093087520297bcacfd7ffc468d9226dc4487c59912de879 \
+    --hash=sha256:fe7c32dc82e6a83503513d1d0c9558c2ab4aa1770252738e53182635d1a6bdfb
+    # via -r scripts/requirements-mlx-video-build.txt
