@@ -297,6 +297,98 @@ export function colorMatchSvgParts(correction) {
   };
 }
 
+/** The SVG filter element markup for one correction's parts (test hook). */
+export function _colorMatchFilterMarkup(parts, id = 'portos-color-match') {
+  if (!parts) return '';
+  return `<filter id="${id}" color-interpolation-filters="sRGB">`
+    + `<feColorMatrix type="matrix" values="${parts.balance}"/>`
+    + `<feComponentTransfer>`
+    + `<feFuncR type="gamma" amplitude="1" exponent="${parts.gamma}" offset="0"/>`
+    + `<feFuncG type="gamma" amplitude="1" exponent="${parts.gamma}" offset="0"/>`
+    + `<feFuncB type="gamma" amplitude="1" exponent="${parts.gamma}" offset="0"/>`
+    + `</feComponentTransfer>`
+    + `<feColorMatrix type="matrix" values="${parts.saturate}"/>`
+    + `</filter>`;
+}
+
+/** True when at least one shot in the project has an active color match correction. */
+export function hasMusicVideoColorMatch(project) {
+  return (project?.scenes || []).some((scene) => activeShotColorMatch(project, scene) != null);
+}
+
+/** Active color-match entries for scenes in the project (test hook). */
+export function _projectColorMatchEntries(project) {
+  const scenes = Array.isArray(project?.scenes) ? project.scenes : [];
+  const entries = [];
+  for (const scene of scenes) {
+    if (!scene?.sceneId) continue;
+    const correction = activeShotColorMatch(project, scene);
+    if (!correction) continue;
+    const parts = colorMatchSvgParts(correction);
+    const filterId = `portos-color-match-${String(scene.sceneId).replace(/[^A-Za-z0-9_-]/g, '')}`;
+    entries.push({ sceneId: scene.sceneId, filterId, correction, parts });
+  }
+  return entries;
+}
+
+/**
+ * Page runtime source for document preview and render: creates SVG filter definitions
+ * for matched shots and exposes globalThis.__portosColorMatch.
+ * Matching off inserts no filter.
+ */
+export function documentShotColorMatchRuntime(project) {
+  const entries = _projectColorMatchEntries(project);
+  if (!entries.length) return '';
+  const json = (val) => JSON.stringify(val).replace(/</g, '\\u003c');
+  return `(() => {
+  const entries = ${json(entries.map(({ sceneId, filterId, parts }) => ({ sceneId, filterId, parts })))};
+  const byId = new Map(entries.map((e) => [e.sceneId, e]));
+  const buildFilter = (filterId, parts) => {
+    return '<filter id="' + filterId + '" color-interpolation-filters="sRGB">'
+      + '<feColorMatrix type="matrix" values="' + parts.balance + '"/>'
+      + '<feComponentTransfer>'
+      + '<feFuncR type="gamma" amplitude="1" exponent="' + parts.gamma + '" offset="0"/>'
+      + '<feFuncG type="gamma" amplitude="1" exponent="' + parts.gamma + '" offset="0"/>'
+      + '<feFuncB type="gamma" amplitude="1" exponent="' + parts.gamma + '" offset="0"/>'
+      + '</feComponentTransfer>'
+      + '<feColorMatrix type="matrix" values="' + parts.saturate + '"/>'
+      + '</filter>';
+  };
+  let host = null;
+  const mount = () => {
+    const root = document.body || document.documentElement;
+    if (!root) return;
+    if (!host) {
+      host = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      host.setAttribute('width', '0');
+      host.setAttribute('height', '0');
+      host.setAttribute('aria-hidden', 'true');
+      host.style.cssText = 'position:absolute;width:0;height:0;overflow:hidden;pointer-events:none';
+      host.dataset.portosColorMatch = '1';
+    }
+    if (!host.isConnected) root.appendChild(host);
+    host.innerHTML = '<defs>' + entries.map((e) => buildFilter(e.filterId, e.parts)).join('') + '</defs>';
+  };
+  const api = {
+    filterId(sceneId) {
+      const e = byId.get(sceneId);
+      return e ? e.filterId : null;
+    },
+    filterCss(sceneId) {
+      const e = byId.get(sceneId);
+      return e ? 'url(#' + e.filterId + ')' : null;
+    },
+    parts(sceneId) {
+      const e = byId.get(sceneId);
+      return e ? e.parts : null;
+    },
+  };
+  Object.defineProperty(globalThis, '__portosColorMatch', { value: api, configurable: true, writable: true });
+  if (document.readyState === 'loading') addEventListener('DOMContentLoaded', mount, { once: true });
+  else mount();
+})();`;
+}
+
 function statsOf(take, measurements) {
   if (!take?.takeId) return null;
   return measurements?.[take.takeId] || take.colorMatch?.stats || null;

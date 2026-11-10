@@ -1,4 +1,5 @@
 import { filmLookRuntimeSource, isFilmLookNeutral, normalizeFilmLook } from './filmLook.js';
+export { documentShotColorMatchRuntime, hasMusicVideoColorMatch } from './shotColorMatch.js';
 
 /** A pinned shot look (including None), otherwise the video's look. */
 export function shotFilmLook(project, scene) {

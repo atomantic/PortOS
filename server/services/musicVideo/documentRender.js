@@ -6,6 +6,7 @@ import { musicVideoWipeRuntime } from '../../lib/musicVideoWipes.js';
 import { plannedTransitions } from '../../lib/musicVideoCutEffects.js';
 import { musicVideoGradeFilter } from '../../lib/musicVideoGrade.js';
 import { documentFilmLookRuntime, hasMusicVideoFilmLook } from '../../lib/musicVideoFilmLook.js';
+import { activeShotColorMatch, colorMatchSvgParts, documentShotColorMatchRuntime, hasMusicVideoColorMatch } from '../../lib/shotColorMatch.js';
 import { titleCardVisible, titleCardWindows } from '../../lib/musicVideoTitleCard.js';
 import { titleCardRuntime } from './titleCardFonts.js';
 import { documentSceneCameo, documentCameos } from '../../lib/musicVideoCameos.js';
@@ -87,6 +88,7 @@ export function documentRenderInitScripts(project) {
   return [
     ...(hasSelectedGlitches(project) ? [musicVideoGlitchRuntime()] : []),
     ...(hasSelectedWipes(project) ? [musicVideoWipeRuntime()] : []),
+    ...(hasMusicVideoColorMatch(project) ? [documentShotColorMatchRuntime(project)] : []),
     ...(!hasMusicVideoFilmLook(project) ? [] : [documentFilmLookRuntime(project)]),
     ...(titleCardVisible(project?.titleCard) ? [titleCardRuntime(project.titleCard)] : []),
   ];
@@ -245,6 +247,7 @@ export function buildDocumentData(project, { media = new Map(), frame, clock, so
       const m = media.get(scene.sceneId) || null;
       const start = finite(scene.startSec);
       const end = finite(scene.endSec);
+      const colorMatch = activeShotColorMatch(project, scene);
       return {
         sceneId: scene.sceneId,
         label: typeof scene.label === 'string' ? scene.label : '',
@@ -254,6 +257,13 @@ export function buildDocumentData(project, { media = new Map(), frame, clock, so
         shotMode: scene.shotMode === 'performance' ? 'performance' : 'cutaway',
         visualLayer: documentSceneVisualLayer(project, scene, { generated }),
         imageEffect: documentImageEffect(scene, m),
+        ...(colorMatch ? {
+          colorMatch: {
+            ...colorMatch,
+            filterId: `portos-color-match-${String(scene.sceneId).replace(/[^A-Za-z0-9_-]/g, '')}`,
+            parts: colorMatchSvgParts(colorMatch),
+          },
+        } : {}),
         ...(m?.photos ? { photoSequence: scenePhotoSequence(scene, { fps: clock.fps, beats: analysis.beats || [] }) } : {}),
         stillMove: typeof scene.stillMove === 'string' ? scene.stillMove : null,
         // #10589: the planned camera move the template's camera rig follows (only when planned).

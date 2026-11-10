@@ -518,6 +518,61 @@ it('installs the project film look in the render page before the document runs, 
   expect(await scratchEntries()).toEqual([]);
 });
 
+// Uniquely catches the document render page opening without shot color match filters.
+it('installs shot color match in the render page before the document runs, and nothing when matching is off', async () => {
+  const { project, plan } = await fixture();
+  const matchedProject = {
+    ...project,
+    cameras: [{ id: 'cam1', name: 'Main' }],
+    scenes: [
+      {
+        sceneId: 'sc1',
+        startSec: 0,
+        endSec: 4,
+        shotSheet: { cameraId: 'cam1', location: 'Studio', timeOfDay: 'Day' },
+        referenceImageId: 'still-b.png',
+        takes: [{
+          kind: 'image',
+          assetId: 'still-b.png',
+          colorMatch: {
+            enabled: true,
+            strength: 1,
+            correction: { black: 0.02, white: 1.15, gamma: 0.95, balanceR: 1.05, balanceB: 0.95, saturation: 1 },
+          },
+        }],
+      },
+    ],
+  };
+  await expect(encode(matchedProject, plan, 'job-match')).rejects.toThrow('stop after staging');
+  expect(browser.seen.initScripts).toHaveLength(1);
+  expect(browser.seen.initScripts[0]).toContain('__portosColorMatch');
+  expect(browser.seen.initScripts[0]).toContain('portos-color-match-sc1');
+  expect(browser.seen.data.scenes[0].colorMatch).toMatchObject({
+    filterId: 'portos-color-match-sc1',
+    white: 1.15,
+  });
+
+  const matchingOff = {
+    ...matchedProject,
+    scenes: [
+      {
+        ...matchedProject.scenes[0],
+        takes: [{
+          ...matchedProject.scenes[0].takes[0],
+          colorMatch: {
+            ...matchedProject.scenes[0].takes[0].colorMatch,
+            enabled: false,
+          },
+        }],
+      },
+    ],
+  };
+  await expect(encode(matchingOff, plan, 'job-match-off')).rejects.toThrow('stop after staging');
+  expect(browser.seen.initScripts).toEqual([]);
+  expect(browser.seen.data.scenes[0].colorMatch).toBeUndefined();
+  expect(await scratchEntries()).toEqual([]);
+});
+
 // Uniquely catches the final render dropping the opening title card the live preview shows.
 it('installs the opening title card in the render page only while it is on and has text', async () => {
   const { project, plan } = await fixture();

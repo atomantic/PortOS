@@ -547,6 +547,35 @@
 
   let imageEffects = null;
 
+  function ensureColorMatchFilter(scene) {
+    const cm = scene?.colorMatch;
+    if (!cm?.parts || !cm.filterId) return null;
+    if (document.getElementById(cm.filterId)) return `url(#${cm.filterId})`;
+    let host = document.getElementById('portos-color-match-svg');
+    if (!host) {
+      host = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      host.id = 'portos-color-match-svg';
+      host.setAttribute('width', '0');
+      host.setAttribute('height', '0');
+      host.setAttribute('aria-hidden', 'true');
+      host.style.cssText = 'position:absolute;width:0;height:0;overflow:hidden;pointer-events:none';
+      (document.body || document.documentElement).appendChild(host);
+    }
+    const filter = document.createElementNS('http://www.w3.org/2000/svg', 'filter');
+    filter.id = cm.filterId;
+    filter.setAttribute('color-interpolation-filters', 'sRGB');
+    const { balance, gamma, saturate } = cm.parts;
+    filter.innerHTML = `<feColorMatrix type="matrix" values="${balance}"/>`
+      + `<feComponentTransfer>`
+      + `<feFuncR type="gamma" amplitude="1" exponent="${gamma}" offset="0"/>`
+      + `<feFuncG type="gamma" amplitude="1" exponent="${gamma}" offset="0"/>`
+      + `<feFuncB type="gamma" amplitude="1" exponent="${gamma}" offset="0"/>`
+      + `</feComponentTransfer>`
+      + `<feColorMatrix type="matrix" values="${saturate}"/>`;
+    host.appendChild(filter);
+    return `url(#${cm.filterId})`;
+  }
+
   // The scene's picture (its take or card, camera move, image effect and beat glitch), under every overlay.
   function drawSceneLayer(t, scene, source, state, authored) {
     ctx.fillStyle = C.ink; ctx.fillRect(0, 0, W, H);
@@ -560,7 +589,12 @@
         const energetic = isHighEnergy(t) || scene.shotMode === 'performance';
         const punch = 1 + 0.018 * pulse(t, energetic ? beats : downs, 8) * state.reactiveGain;
         ctx.save();
-        if (effect) ctx.filter = `contrast(${effect.contrast}) saturate(${effect.saturation})`;
+        const filters = [];
+        const matchFilter = globalThis.__portosColorMatch?.filterCss?.(scene.sceneId)
+          || ensureColorMatchFilter(scene);
+        if (matchFilter) filters.push(matchFilter);
+        if (effect) filters.push(`contrast(${effect.contrast}) saturate(${effect.saturation})`);
+        if (filters.length) ctx.filter = filters.join(' ');
         const view = cameraView(scene, seg(t, scene.startSec, scene.endSec));
         drawCover(source, view, punch);
         const end = effect?.end > 0 && scene.media.end?.src ? images.get(scene.media.end.src)?.el : null;
