@@ -118,6 +118,12 @@ describe('shot-card clip body validation', () => {
 });
 
 describe('shot-card frame references (#15583)', () => {
+  it('uses an explicitly supplied start-frame source as the leading conditioning reference without requiring fromFrame', async () => {
+    const project = { id: 'mv-card', scenes: [{ sceneId: 's1', framePrompt: 'A rider at dawn', referenceImageId: 'selected.png' }] };
+    const body = await buildSceneFrameGenerateBody(project, project.scenes[0], { referenceImageId: 'source-take.png' });
+    expect(body.referenceImageFiles[0]).toBe('source-take.png');
+    expect(body.musicVideo).toMatchObject({ leadImageId: 'source-take.png', fromFrame: true });
+  });
   it('sends the same files and prompt for a linked portrait, a set plate and a greybox plate', async () => {
     const { PATHS } = await import('../../lib/paths.js');
     mkdirSync(PATHS.images, { recursive: true });
