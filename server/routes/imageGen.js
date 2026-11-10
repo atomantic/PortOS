@@ -558,8 +558,8 @@ router.post('/prompt-preview', asyncHandler(async (req, res) => {
 }));
 
 // Shared by POST /generate and the music-video shot frame route (#15583).
-// `data` is already validated. Uploaded temp paths are returned so the HTTP
-// route can delete them when the response closes; a caller with no uploads
+// `data` is already validated. Uploaded temp paths are returned for callers that own cleanup;
+// the HTTP route cleans every upload after dispatch settles. A caller with no uploads
 // gets an empty list.
 export async function executeImageGenerate(req, data, files = {}) {
   const finish = (responseBody) => ({ body: responseBody, uploadedTempPaths, params });
@@ -782,23 +782,17 @@ export async function executeImageGenerate(req, data, files = {}) {
 }
 
 router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
-  if (typeof req.body?.fableLoom === 'string' && Object.keys(req.files || {}).length) {
-    await Promise.allSettled(Object.values(req.files).map(file => unlinkGuarded(file.path)));
-    throw fableLoomMultipartUnsupported();
+  const uploadedTempPaths = Object.values(req.files || {}).map(file => file.path).filter(Boolean);
+  try {
+    if (typeof req.body?.fableLoom === 'string' && uploadedTempPaths.length) throw fableLoomMultipartUnsupported();
+    const data = validateRequest(generateSchema, coerceFormFields(req.body));
+    const rendered = await executeImageGenerate(req, data, req.files);
+    res.json(rendered.body);
+  } finally {
+    // Keep uploads alive until preparation/dispatch settles, even if the client
+    // disconnects; validation and generation failures must clean them up too.
+    await Promise.allSettled(uploadedTempPaths.map(path => unlinkGuarded(path)));
   }
-  const data = validateRequest(generateSchema, coerceFormFields(req.body));
-  const rendered = await executeImageGenerate(req, data, req.files);
-  // Multer's tmp upload is no longer needed once we've copied it into
-  // PATHS.images. Use res.on('close') so the temp files are cleaned up whether
-  // generateImage resolves, throws (handled by errorHandler middleware), or
-  // the client drops the connection mid-flight.
-  if (rendered.uploadedTempPaths.length) {
-    res.on('close', () => {
-      for (const p of rendered.uploadedTempPaths) unlinkGuarded(p).catch(() => {});
-    });
-  }
-
-  res.json(rendered.body);
 }));
 
 router.post('/avatar', asyncHandler(async (req, res) => {
