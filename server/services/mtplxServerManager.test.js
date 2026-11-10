@@ -31,6 +31,18 @@ import * as streamingSpawn from '../lib/streamingSpawn.js';
 const originalTools = PATHS.tools;
 const BINARY = '/opt/homebrew/bin/mtplx';
 const cachedModel = (repoId, extra = {}) => ({ repo_id: repoId, validation: { ok: true }, ...extra });
+const createManagedEntry = async () => {
+  const binary = mtplxRuntime.mtplxManagedBinary();
+  await mkdir(join(mtplxRuntime.mtplxVenvDir(), 'bin'), { recursive: true });
+  await writeFile(binary, '#!/bin/sh\necho mtplx\n');
+  await chmod(binary, 0o755);
+};
+const successfulInstallStep = async (_cmd, args, emit) => {
+  emit(`Completed ${args[0]}`);
+  if (args[0] === 'pip') await createManagedEntry();
+  return { success: true };
+};
+
 
 /**
  * A Homebrew `mtplx` shim on disk: the few-line wrapper that lazily bootstraps a
@@ -685,7 +697,7 @@ describe('mtplxServerManager', () => {
 
   describe('installMtplx', () => {
     beforeEach(() => {
-      vi.spyOn(streamingSpawn, 'runStreamingCommand').mockResolvedValue({ success: true });
+      vi.spyOn(streamingSpawn, 'runStreamingCommand').mockImplementation(successfulInstallStep);
     });
 
     it('installs the complete hash lock into a native private venv without brew or ambient pip', async () => {
@@ -695,7 +707,7 @@ describe('mtplxServerManager', () => {
       const calls = streamingSpawn.runStreamingCommand.mock.calls;
       expect(calls.map(([cmd]) => cmd)).toEqual(['/private/uv', '/private/uv']);
       expect(calls[0][1]).toEqual(['venv', '--python', 'cpython-3.11-macos-aarch64-none', '--managed-python', '--allow-existing', join(testLogDir, 'tools', 'mtplx')]);
-      expect(calls[1][1]).toEqual(['pip', 'sync', '--python', join(testLogDir, 'tools', 'mtplx', 'bin', 'python3'), '--require-hashes', '--only-binary', ':all:', LOCK_PROFILES['mtplx-mlx'].lockFile]);
+      expect(calls[1][1]).toEqual(['pip', 'sync', '--python', join(testLogDir, 'tools', 'mtplx', 'bin', 'python3'), '--require-hashes', '--only-binary', ':all:', '--reinstall-package', 'mtplx', LOCK_PROFILES['mtplx-mlx'].lockFile]);
       expect(calls[1][3].timeoutMs).toBeGreaterThanOrEqual(20 * 60 * 1000);
       expect(emitted.join(' ')).toContain('hash-pinned');
       expect(calls.flatMap(([, args]) => args)).not.toContain('max');
@@ -703,20 +715,16 @@ describe('mtplxServerManager', () => {
 
     it('discovers and starts the private installation without a global PATH entry', async () => {
       vi.stubEnv('PATH', '');
-      streamingSpawn.runStreamingCommand.mockImplementation(async (_cmd, args) => {
-        if (args[0] === 'pip') {
-          const binary = mtplxRuntime.mtplxManagedBinary();
-          await mkdir(join(mtplxRuntime.mtplxVenvDir(), 'bin'), { recursive: true });
-          await writeFile(binary, '#!/bin/sh\necho mtplx\n');
-          await chmod(binary, 0o755);
-        }
-        return { success: true };
-      });
       await installMtplx();
       expect(await getMtplxServerStatus()).toMatchObject({ installed: true, runtimeReady: true });
       await startMtplxServer();
       const start = execPm2Calls.find((args) => args[0] === 'start');
       expect(start[1]).toBe(mtplxRuntime.mtplxManagedBinary());
+    });
+
+    it('does not report success when the installer leaves no executable', async () => {
+      streamingSpawn.runStreamingCommand.mockResolvedValue({ success: true });
+      await expect(installMtplx()).rejects.toMatchObject({ code: 'MTPLX_INSTALL_FAILED', message: expect.stringContaining('executable') });
     });
 
     it('refuses before install when the private patched tool is unavailable', async () => {
@@ -726,11 +734,18 @@ describe('mtplxServerManager', () => {
     });
 
     it('shares overlapping installs instead of mutating the same virtualenv twice', async () => {
-      const first = installMtplx();
-      const second = installMtplx();
-      expect(first).toBe(second);
+      const firstProgress = [];
+      const secondProgress = [];
+      const first = installMtplx({ onProgress: ({ message }) => firstProgress.push(message) });
+      const second = installMtplx({ onProgress: ({ message }) => secondProgress.push(message) });
       await Promise.all([first, second]);
       expect(streamingSpawn.runStreamingCommand).toHaveBeenCalledTimes(2);
+      expect(secondProgress).toEqual(firstProgress);
+      expect(secondProgress.join(' ')).toContain('Completed pip');
+      const count = firstProgress.length;
+      await installMtplx();
+      expect(firstProgress).toHaveLength(count);
+      expect(secondProgress).toHaveLength(count);
     });
 
     it('refuses an older macOS before creating the runtime or installing packages', async () => {
@@ -751,7 +766,8 @@ describe('mtplxServerManager', () => {
    * The Homebrew `mtplx` is a shell wrapper that downloads MTPLX itself — a
    * several-hundred-megabyte pip install — on its first invocation, and
    * `brew upgrade` re-arms it (the venv path carries the version). These pin
-   * the two hot paths OFF that download and the install flow ON to it.
+   * the status/start paths off that download, including when a private locked
+   * install replaces the wrapper.
    *
    * Real files on disk rather than a mocked probe: what is being mirrored is
    * the wrapper's own `[ ! -x "$VENV/bin/mtplx" ]` guard, and only the
@@ -835,7 +851,7 @@ describe('mtplxServerManager', () => {
 
     it('replaces an unbootstrapped wrapper through the locked installer without executing it', async () => {
       const binary = await wrapperOnPath(join(runtimeDir, 'venv-2.10.1'));
-      const run = vi.spyOn(streamingSpawn, 'runStreamingCommand').mockResolvedValue({ success: true });
+      const run = vi.spyOn(streamingSpawn, 'runStreamingCommand').mockImplementation(successfulInstallStep);
       await installMtplx();
       expect(run.mock.calls.map(([cmd]) => cmd)).toEqual(['/private/uv', '/private/uv']);
       expect(run.mock.calls.some(([cmd]) => cmd === binary)).toBe(false);
@@ -851,7 +867,7 @@ describe('mtplxServerManager', () => {
       });
       await expect(installMtplx()).rejects.toMatchObject({ code: 'MTPLX_INSTALL_FAILED' });
       await expect(readFile(entry)).rejects.toMatchObject({ code: 'ENOENT' });
-      run.mockResolvedValue({ success: true });
+      run.mockImplementation(successfulInstallStep);
       await expect(installMtplx()).resolves.toMatchObject({ success: true });
     });
 

@@ -42,6 +42,7 @@ import { persistDaemonLaunchConfig } from './localDaemonLaunchConfig.js';
 // `localModelHealing`.
 
 import { isAppleSilicon, isPortInUse } from '../lib/platform.js';
+import { findCommandOnPath } from '../lib/processEnv.js';
 import { runStreamingCommand } from '../lib/streamingSpawn.js';
 import { execPm2, getAppStatusStrict, clearJlistCache, getSavedProcessNames } from './pm2.js';
 
@@ -390,12 +391,17 @@ export async function getMtplxServerStatus() {
  * Ready external installs remain usable through resolveMtplxBinary().
  */
 let mtplxInstallation = null;
+const mtplxProgressListeners = new Set();
 export function installMtplx({ onProgress = () => {} } = {}) {
   if (!supportsMtplxInstall()) {
     return Promise.reject(new ServerError(MTPLX_UNSUPPORTED_REASON, { status: 400, code: 'MTPLX_UNSUPPORTED_PLATFORM' }));
   }
-  mtplxInstallation ??= installLockedMtplx(onProgress).finally(() => { mtplxInstallation = null; });
-  return mtplxInstallation;
+  const listener = (event) => onProgress(event);
+  mtplxProgressListeners.add(listener);
+  mtplxInstallation ??= installLockedMtplx((event) => {
+    for (const progress of mtplxProgressListeners) progress(event);
+  }).finally(() => { mtplxInstallation = null; });
+  return mtplxInstallation.finally(() => { mtplxProgressListeners.delete(listener); });
 }
 
 async function installLockedMtplx(onProgress) {
@@ -410,8 +416,9 @@ async function installLockedMtplx(onProgress) {
     // selecting a different dependency marker set from the arm64 lock.
     ['venv', '--python', 'cpython-3.11-macos-aarch64-none', '--managed-python', '--allow-existing', mtplxVenvDir()],
     // sync consumes the complete set without dependency resolution, and removes
-    // packages left over from an older runtime. Builders never run.
-    ['pip', 'sync', '--python', python, '--require-hashes', '--only-binary', ':all:', LOCK_PROFILES['mtplx-mlx'].lockFile],
+    // packages left over from an older runtime. Reinstall MTPLX so retries also
+    // restore an entry point removed after a failed sync. Builders never run.
+    ['pip', 'sync', '--python', python, '--require-hashes', '--only-binary', ':all:', '--reinstall-package', 'mtplx', LOCK_PROFILES['mtplx-mlx'].lockFile],
   ];
   for (const args of steps) {
     const result = await runStreamingCommand(resolved.uv, args, emit, { timeoutMs: INSTALL_TIMEOUT_MS });
@@ -421,6 +428,9 @@ async function installLockedMtplx(onProgress) {
       if (args[0] === 'pip') await unlink(mtplxManagedBinary()).catch((error) => { if (error.code !== 'ENOENT') throw error; });
       throw new ServerError(`MTPLX install failed: ${result.error}`, { status: 500, code: 'MTPLX_INSTALL_FAILED' });
     }
+  }
+  if (!findCommandOnPath(mtplxManagedBinary())) {
+    throw new ServerError('MTPLX installation did not create an executable. Retry the runtime installation.', { status: 500, code: 'MTPLX_INSTALL_FAILED' });
   }
   return { success: true, message: 'MTPLX installed' };
 }

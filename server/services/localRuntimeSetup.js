@@ -272,8 +272,8 @@ const SETUP_ROWS = Object.freeze({
     unsupportedReason: MTPLX_UNSUPPORTED_REASON,
     async install({ emit }) {
       // Same install `mtplxServerManager` runs from the Models → Runtimes card:
-      // upstream's Homebrew tap, with pip as the documented fallback for a host
-      // without Homebrew. Neither runs the optional privileged fan-control helper.
+      // the private hash-locked native Python runtime. It never runs the
+      // optional privileged fan-control helper.
       const result = await installMtplx({ onProgress: (p) => { if (p?.message) emit(p.message); } })
         .catch((err) => ({ success: false, error: err.message }));
       return result;
