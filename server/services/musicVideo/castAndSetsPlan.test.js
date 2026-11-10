@@ -69,11 +69,17 @@ describe('Cast & Sets neutral people sheets', () => {
       expect(plan[key].prompt).not.toMatch(/photorealistic|oil painting|sepia|warm amber|Kodak/);
     }
     expect(plan['set:street'].prompt).toContain(direction.look);
+    expect(plan['set:street'].prompt).toContain(`Rendering medium: ${medium}.`);
+    expect(plan['set:street'].prompt).not.toContain('Photorealistic');
     expect(plan['test:1'].prompt).toContain('Look: oil painting, sepia grade');
+    expect(plan['test:1'].prompt).toContain(`Rendering medium: ${medium}, wide`);
+    expect(plan['test:1'].prompt).not.toContain('Photorealistic');
     const overridden = buildCastAndSetsImagePlan({}, { ...explicit,
       protagonist: { ...explicit.protagonist, forms: [{ ...explicit.protagonist.forms[0], renderingMedium: '  cyanotype  ' }] } });
     expect(overridden['form:age-7'].prompt).toContain('Rendering medium:   cyanotype  .');
     expect(overridden['form:age-7'].prompt).not.toContain('scratchboard');
+    expect(overridden['test:1'].prompt).toContain('Rendering medium:   cyanotype  , wide');
+    expect(overridden['test:1'].prompt).not.toContain('scratchboard');
     expect(overridden.character.prompt).toContain(medium);
     const legacy = buildCastAndSetsImagePlan({}, { ...direction, look: 'scratchboard, warm amber light' });
     expect(legacy.character.prompt).toContain('photorealistic, editorial photography');
