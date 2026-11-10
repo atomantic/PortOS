@@ -55,21 +55,27 @@ let inFlight = null;
 // `basePython` (a Python with the venv module and pip, 3.8+) when absent or the
 // wrong version. Never falls back to PATH: `{ ok: false, reason }` lets the
 // caller choose its own refusal or pip fallback. Concurrent callers share one
-// bootstrap so two installs cannot clear the venv under each other.
+// bootstrap so two installs cannot clear the venv under each other. The reason
+// is a fixed string: pip stderr can carry index URLs or local paths and is
+// discarded.
 export function ensurePrivateUv({ basePython, onLog = () => {} } = {}) {
   inFlight ??= (async () => {
     if (await privateUvIsCurrent()) return { ok: true, uv: privateUvPath() };
     if (!basePython) return { ok: false, reason: `No Python found to bootstrap uv ${PRIVATE_UV_VERSION}. Install Python 3.11+ and retry.` };
     onLog({ type: 'log', message: `Bootstrapping PortOS-private uv ${PRIVATE_UV_VERSION}...` });
-    await run(basePython, ['-m', 'venv', '--clear', privateUvDir()], 120_000);
-    // The bootstrap installer is itself hash-verified: every uv wheel/sdist digest
-    // is pinned in the lock, so a substituted package fails before it can run.
-    await run(venvPythonPath(), ['-m', 'pip', 'install', '--disable-pip-version-check', '--require-hashes', '--no-deps', '--only-binary', ':all:',
-      '-r', LOCK_PROFILES['uv-bootstrap'].lockFile], 300_000);
+    let step = 'virtualenv creation';
+    try {
+      await run(basePython, ['-m', 'venv', '--clear', privateUvDir()], 120_000);
+      step = 'hash-verified package install';
+      // The bootstrap installer is itself hash-verified: every uv wheel/sdist digest
+      // is pinned in the lock, so a substituted package fails before it can run.
+      await run(venvPythonPath(), ['-m', 'pip', 'install', '--disable-pip-version-check', '--require-hashes', '--no-deps', '--only-binary', ':all:',
+        '-r', LOCK_PROFILES['uv-bootstrap'].lockFile], 300_000);
+    } catch {
+      return { ok: false, reason: `Could not bootstrap uv ${PRIVATE_UV_VERSION}: the ${step} step failed.` };
+    }
     if (!await privateUvIsCurrent()) return { ok: false, reason: `Bootstrapped uv did not report version ${PRIVATE_UV_VERSION}.` };
     return { ok: true, uv: privateUvPath() };
-  })()
-    .catch((err) => ({ ok: false, reason: `Could not bootstrap uv ${PRIVATE_UV_VERSION}: ${String(err.stderr || err.message).trim().split(/\r?\n/).pop()}` }))
-    .finally(() => { inFlight = null; });
+  })().finally(() => { inFlight = null; });
   return inFlight;
 }

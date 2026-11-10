@@ -613,9 +613,13 @@ if [[ "$INSTALL_VIDEO" == "1" ]]; then
     # heavy tree is untouched), then install the rest of the lock.
     VIDEO_SELF_REQ="$(mktemp)"
     awk '/^[^ #]/ { keep = /^mlx-video-with-audio==/ } keep' "$VIDEO_LOCK" > "$VIDEO_SELF_REQ"
-    "$PYTHON_BIN" -m pip install --user --require-hashes --no-deps --force-reinstall -r "$VIDEO_SELF_REQ" \
-      && "$PYTHON_BIN" -m pip install --user --require-hashes --no-deps -r "$VIDEO_LOCK"
+    VIDEO_STATUS=0
+    "$PYTHON_BIN" -m pip install --user --require-hashes --no-deps --force-reinstall -r "$VIDEO_SELF_REQ" || VIDEO_STATUS=$?
+    if [[ "$VIDEO_STATUS" == "0" ]]; then
+      "$PYTHON_BIN" -m pip install --user --require-hashes --no-deps -r "$VIDEO_LOCK" || VIDEO_STATUS=$?
+    fi
     rm -f "$VIDEO_SELF_REQ"
+    [[ "$VIDEO_STATUS" == "0" ]] || exit "$VIDEO_STATUS"
   elif is_macos; then
     # mlx ships arm64-only wheels and the lock covers only arm64 macOS.
     echo "❌ INSTALL_VIDEO=1 needs Apple Silicon: mlx ships arm64-only wheels and this Mac has no hash-pinned lock." >&2

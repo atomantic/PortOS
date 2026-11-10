@@ -642,7 +642,9 @@ describe('legacy INSTALL_VIDEO installs only hash-pinned locks', () => {
     expect(block).toContain('VIDEO_LOCK="$SCRIPT_DIR/requirements-mflux-video-mlx.lock.txt"');
     expect(block).toContain('pip install --user --require-hashes --no-deps -r "$VIDEO_LOCK"');
     // Removing the wrong `mlx_video` namesake must be followed by a force-reinstall of the real package's own files.
-    expect(block).toMatch(/--require-hashes --no-deps --force-reinstall -r "\$VIDEO_SELF_REQ"[\s\S]*-r "\$VIDEO_LOCK"/);
+    expect(block).toMatch(/--require-hashes --no-deps --force-reinstall -r "\$VIDEO_SELF_REQ" \|\| VIDEO_STATUS=\$\?[\s\S]*-r "\$VIDEO_LOCK" \|\| VIDEO_STATUS=\$\?/);
+    // A failed install must stop setup, not be masked by the temp-file cleanup.
+    expect(block).toContain('[[ "$VIDEO_STATUS" == "0" ]] || exit "$VIDEO_STATUS"');
     expect(existsSync(join(REPO_ROOT, 'scripts', 'requirements-mflux-video-mlx.lock.txt'))).toBe(true);
     expect(block).not.toMatch(/pip install --upgrade/);
     expect(block).not.toMatch(/^\s+(torch|diffusers|accelerate|mlx_vlm|mlx) *\\?$/m);

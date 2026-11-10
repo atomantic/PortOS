@@ -83,7 +83,7 @@ describe('installPackages generic repair', () => {
     const calls = spawned();
     expect(calls[0]).toBe('/image/python -m pip uninstall --yes mlx_video');
     // Uninstalling the namesake can delete files the real package shares; only that entry is force-reinstalled.
-    expect(calls[1]).toMatch(/^\/image\/python -m pip install --force-reinstall --require-hashes --no-deps -r .*requirements\.txt$/);
+    expect(calls[1]).toMatch(/^\/image\/python -m pip install (--user )?--force-reinstall --require-hashes --no-deps -r .*requirements\.txt$/);
     expect(forced).toHaveLength(1);
     expect(forced[0]).toMatch(/^mlx-video-with-audio==[\d.]+ ;/);
     expect(forced[0]).toMatch(/--hash=sha256:[0-9a-f]{64}/);

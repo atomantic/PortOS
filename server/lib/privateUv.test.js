@@ -48,6 +48,8 @@ describe('private patched uv', () => {
     mock.execFile.mockReset().mockImplementation(answer('uv 0.8.14'));
     await expect(ensurePrivateUv({})).resolves.toMatchObject({ ok: false, reason: expect.stringContaining('No Python found') });
     mock.execFile.mockReset().mockImplementation((bin, args, _opts, done) => done(Object.assign(new Error('boom'), { stderr: 'pip: no network\n' })));
-    await expect(ensurePrivateUv({ basePython: '/py/python3' })).resolves.toMatchObject({ ok: false, reason: expect.stringContaining('pip: no network') });
+    const failed = await ensurePrivateUv({ basePython: '/py/python3' });
+    expect(failed.reason).not.toContain('no network');
+    expect(failed).toMatchObject({ ok: false, reason: expect.stringMatching(/^Could not bootstrap uv 0\.13\.6: the virtualenv creation step failed\.$/) });
   });
 });

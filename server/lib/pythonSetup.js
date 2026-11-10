@@ -953,6 +953,8 @@ export function installPackages(pythonPath, importNames, onLog, { preferUv = fal
   }
   const conflicts = plan.profile.id === 'mflux-video' ? MFLUX_VIDEO_PRE_UNINSTALL : [];
   return launchInstall(pythonPath, onLog, { preferUv }, async (ctx) => {
+    // --user matches the setup script's shared layout; a venv or uv target rejects it.
+    const user = !ctx.usingUv && !await pythonIsVenv(pythonPath);
     if (conflicts.length) {
       onLog({ type: 'log', message: `${ctx.tool} uninstall -y ${conflicts.join(' ')} (resolving package-name conflict)` });
       // Uninstall isn't allowed to fail the run — when the conflicting
@@ -963,22 +965,20 @@ export function installPackages(pythonPath, importNames, onLog, { preferUv = fal
       // The wrong namesake shares module files with the real package, so removing
       // it can leave the real one "installed" but broken, and the lock install
       // would then skip it. Force-reinstall only that entry (--no-deps) first.
-      const selfCode = await reinstallLockEntry(ctx, plan.profile, MLX_VIDEO_DISTRIBUTION, onLog);
+      const selfCode = await reinstallLockEntry(ctx, plan.profile, MLX_VIDEO_DISTRIBUTION, onLog, { user });
       if (selfCode !== 0) return ctx.isKilled() ? { ok: false, code: -1 } : { ok: false, code: selfCode };
     }
-    // --user matches the setup script's shared layout; a venv or uv target rejects it.
-    const user = !ctx.usingUv && !await pythonIsVenv(pythonPath);
     return runLockInstall(ctx, plan.profile, onLog, { user });
   });
 }
 
-async function reinstallLockEntry({ runPip, tool }, profile, name, onLog) {
+async function reinstallLockEntry({ runPip, tool }, profile, name, onLog, { user }) {
   const dir = await mkdtemp(join(tmpdir(), 'portos-lock-entry-'));
   try {
     const file = join(dir, 'requirements.txt');
     await writeFile(file, lockEntryText(profile, name));
     onLog({ type: 'log', message: `${tool} install --force-reinstall --no-deps ${name} (hash-pinned ${profile.label} lock)` });
-    const code = await runPip(['install', '--force-reinstall', '--require-hashes', '--no-deps', '-r', file]);
+    const code = await runPip(['install', ...(user ? ['--user'] : []), '--force-reinstall', '--require-hashes', '--no-deps', '-r', file]);
     if (code !== 0) onLog({ type: 'error', message: `${tool} exited with code ${code}` });
     return code;
   } finally {
