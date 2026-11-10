@@ -184,6 +184,8 @@ The `supercollider-live` job in [`ci.yml`](../.github/workflows/ci.yml) (gated b
 
 Both first setup runs built the image and passed the stock-synth probe. Both second runs skipped the build and probe with byte-identical readiness evidence. All six live cases passed on each host: audible stereo 48 kHz rendering, host/environment/filesystem/network/startup isolation with a non-root uid, syntax rejection, timeout cleanup, cancellation cleanup, and overlapping renders. The suite also runs a parser regression for the real `sclang` error delimiter exposed by the initial runs. No recipe, wrapper, or policy change was needed. These results cover the listed Linux Docker hosts; Docker Desktop on macOS and Windows remains unverified.
 
+These are functional results, not a security audit. The image's SBOM and vulnerability scan (OS packages and libraries, both architectures) come from the separate `runtime-image-security` workflow; see [GITHUB_ACTIONS.md](GITHUB_ACTIONS.md#runtime-image-security-runtime-image-securityyml).
+
 ## Troubleshooting
 
 On an image build failure, setup retains and prints the trailing build lines (such as compiler or package download errors) directly in the CLI and CI failure log so the failure is diagnosable without re-running. If needed, re-run with `--verbose` for the full build log from the start.
