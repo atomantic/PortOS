@@ -1,0 +1,13 @@
+# Known-bad fixture: the shape PR #15657 shipped. GitHub rejects the `runner`
+# context in job-level `env`, so the real workflow never ran. CI proves
+# actionlint still rejects this file; it is not a workflow and is never run.
+name: fixture-runner-context-in-job-env
+on:
+  pull_request:
+jobs:
+  fixture:
+    runs-on: ubuntu-latest
+    env:
+      EVIDENCE_DIR: ${{ runner.temp }}/evidence
+    steps:
+      - run: echo "${EVIDENCE_DIR}"
