@@ -267,7 +267,7 @@ describe('scene framing scale', () => {
   it.each([
     ['extreme close-up', 'close'], ['medium close up', 'close'],
     ['wide establishing shot', 'wide'], ['medium shot', 'medium'],
-    ['from behind', null], [undefined, null],
+    ['from behind', null], ['from a closed doorway', null], ['enclosed hallway', null], [undefined, null],
   ])('classifies %s as %s', (value, expected) => {
     expect(framingScale(value)).toBe(expected);
   });
@@ -276,6 +276,7 @@ describe('scene framing scale', () => {
     expect(sceneFramingScale({ shotSheet: { view: 'wide' }, direction: { framing: 'close' } }, { shotSize: 'medium' })).toBe('wide');
     expect(sceneFramingScale({ shotSheet: { view: 'from above' }, direction: { framing: 'medium' } }, { shotSize: 'close' })).toBe('medium');
     expect(sceneFramingScale({}, { shotSize: 'close-up' })).toBe('close');
+    expect(sceneFramingScale({ shotSheet: { view: 'from a closed doorway' }, direction: { framing: 'wide' } })).toBe('wide');
     expect(sceneFramingScale(null)).toBeNull();
   });
 });

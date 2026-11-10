@@ -339,7 +339,7 @@ function shotSheetMedium(project, scene) {
 /** close, medium, or wide when the wording names a scale. Close is matched before medium and wide. */
 export function framingScale(value) {
   if (typeof value !== 'string' || !value.trim()) return null;
-  if (/(?:extreme[\s-]*)?close(?:[\s-]*up)?|\bclose\b/i.test(value)) return 'close';
+  if (/\b(?:extreme[\s-]*)?close(?:[\s-]*up)?\b/i.test(value)) return 'close';
   if (/\b(?:wide|establishing)\b/i.test(value)) return 'wide';
   if (/\bmedium\b/i.test(value)) return 'medium';
   return null;
