@@ -235,6 +235,13 @@ describe('StoryboardAnimatic lyrics', () => {
     await waitFor(() => expect(screen.queryByTestId('animatic-lyrics')).toBeNull());
   });
 
+  // Uniquely catches an instrumental video losing its enabled title card.
+  it('shows a title card without requiring timed lyrics', async () => {
+    render(<StoryboardAnimatic project={{ ...lyricProject, lyricCues: [], titleCard: { enabled: true, title: 'Instrumental', startSec: 0, endSec: 4 } }} audioUrl="/song.mp3" />);
+    expect(await screen.findByTestId('animatic-lyrics')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Lyrics' })).toBeNull();
+  });
+
   // Uniquely catches the animatic's lyric layer dropping the opening title card or its live edits.
   it('hands the opening title card to the lyric layer and again when it is edited', async () => {
     const card = { enabled: true, title: 'Example Song', startSec: 2, endSec: 8 };

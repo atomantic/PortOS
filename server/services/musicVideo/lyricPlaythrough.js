@@ -18,6 +18,7 @@
 
 import { ServerError } from '../../lib/errorHandler.js';
 import { isNonBlankStr } from '../../lib/textUtils.js';
+import { normalizeTitleCard, titleCardVisible } from '../../lib/musicVideoTitleCard.js';
 import { sceneVisualLayer } from '../../lib/musicVideoLayers.js';
 import { buildDocumentPreview } from './documentPreview.js';
 import { readLyricOverlayDocumentFiles, readTemplateDocumentFiles } from './compositionDocument.js';
@@ -69,7 +70,7 @@ function lyricScenes(cues, markers, durationSec) {
 
 /**
  * The preview page for the playthrough, in the shape `buildDocumentPreview`
- * returns. 409 until the song is analyzed and at least one line is timed.
+ * returns. The song must be analyzed; a timed line, template text or visible title card supplies the overlay.
  * `overlay` swaps the template for the transparent words-only page.
  */
 export async function buildLyricPlaythroughPreview(project, { overlay = false } = {}) {
@@ -78,7 +79,8 @@ export async function buildLyricPlaythroughPreview(project, { overlay = false } 
   const cues = project.lyricCues || [];
   const templateCues = overlay && project.composition?.mode === 'document' && (project.composition.textCues || [])
     .some(cue => finite(cue?.startSec) && finite(cue?.endSec) && cue.endSec > cue.startSec && isNonBlankStr(cue.text));
-  if (!templateCues && !cues.some((cue) => finite(cue?.startSec) && isNonBlankStr(cue?.text))) {
+  const titleOnly = overlay && titleCardVisible(normalizeTitleCard(project.titleCard));
+  if (!titleOnly && !templateCues && !cues.some((cue) => finite(cue?.startSec) && isNonBlankStr(cue?.text))) {
     throw new ServerError('Align the words before playing the lyrics through', { status: 409, code: 'NO_TIMED_LYRICS' });
   }
   return buildDocumentPreview(playthroughProject(project, durationSec, !overlay), { files: overlay ? await readLyricOverlayDocumentFiles() : await readTemplateDocumentFiles('layered') });

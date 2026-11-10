@@ -50,7 +50,7 @@ export function shotAt(scenes, t) {
 // How long a seek may wait for its `portos-mv:seeked` reply before the next one goes anyway.
 const SEEK_REPLY_MS = 1000;
 
-// The overlay page needs the song's analysis and at least one timed line (else the server answers 409).
+// Words need song analysis and at least one timed line; a title card can draw without words.
 const hasTimedLyrics = (project) => Number(project.audioAnalysis?.durationSec) > 0
   && (project.lyricCues || []).some((cue) => Number.isFinite(cue?.startSec) && String(cue?.text || '').trim());
 
@@ -655,7 +655,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
   const lyricsAvailable = project.lyricOverlayEnabled !== false && hasTimedLyrics(project);
   // The opening title card rides on the lyric layer, so a video with its words switched off still
   // needs that layer for the card; the page itself keeps the words hidden.
-  const cardOnly = project.lyricOverlayEnabled === false && hasTimedLyrics(project) && titleCardVisible(normalizeTitleCard(project.titleCard));
+  const cardOnly = !lyricsAvailable && titleCardVisible(normalizeTitleCard(project.titleCard));
   const templateCues = documentVariant && (project.composition?.textCues || []).some(cue => cue.text && Number.isFinite(cue.startSec) && cue.endSec > cue.startSec);
   const { overlay, failed, capture: captureLyrics } = useLyricOverlay({ project, enabled: ((lyricsAvailable || templateCues) && lyricsOn) || cardOnly, audioRef, time });
   // The ending (cutting room floor, then credits): it plays when the song ends, and Ending plays it straight away; playing or seeking the song leaves it.
