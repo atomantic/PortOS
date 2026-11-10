@@ -659,7 +659,7 @@ jobs:
 
       # GitHub silently skips a workflow it rejects, so a bad file never fails a
       # check; actionlint is the only pre-merge proof. Pinned like the scanner
-      # tools in runtime-image-security.yml. Mirrors scripts/lib/actionlint.js:
+      # binaries in the image scan workflow. Mirrors scripts/lib/actionlint.js:
       # the parity test in scripts/run-actionlint.test.js fails if they drift.
       - name: Install pinned actionlint
         env:
