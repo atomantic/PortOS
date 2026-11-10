@@ -42,6 +42,15 @@ const ANSWER = {
 };
 
 describe('Cast & Sets direction', () => {
+  it('matches a revised cast member by id before a duplicate name', () => {
+    const previous = mergeCastAndSetsDirection(null, parseCastAndSetsResponse(JSON.stringify({ ...ANSWER,
+      cast: [{ id: 'one', name: 'Twin', description: 'first', stillness: 'stands left' },
+        { id: 'two', name: 'Twin', description: 'second', stillness: 'stands right' }],
+    })), { sections }).direction;
+    const parsed = parseCastAndSetsResponse(JSON.stringify({ cast: [{ id: 'two', name: 'Twin', description: 'second' }] }));
+    expect(mergeCastAndSetsDirection(previous, parsed, { sections }).direction.cast[0].stillness).toBe('stands right');
+  });
+
   it('carries physical behavior through partial revisions and prompts for sourced depth', () => {
     const first = mergeCastAndSetsDirection(null, parseCastAndSetsResponse(JSON.stringify({ ...ANSWER,
       protagonist: { ...ANSWER.protagonist, stillness: 'weight on one hip', movement: 'quick steps' },
@@ -58,6 +67,7 @@ describe('Cast & Sets direction', () => {
     expect(prompt).toContain('foreground, midground and background');
     expect(prompt).toContain('physical in-world source');
     expect(prompt).toContain('softbox');
+    expect(prompt).toContain('story-appropriate in-world fixtures');
     expect(prompt).toContain('Preserve atmosphere explicitly requested by the director');
     expect(prompt).toContain('"stillness"');
     expect(prompt).toContain('"movement"');
