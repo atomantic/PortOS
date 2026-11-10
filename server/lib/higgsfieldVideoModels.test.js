@@ -48,4 +48,5 @@ it('covers short shots with the family minimum duration', () => {
   expect(higgsfieldShotRequestFields({}, 9.2).higgsfieldDuration).toBe(10);
   expect(() => higgsfieldShotRequestFields({}, 31)).toThrow(/at most 30 seconds/);
   expect(() => buildHiggsfieldVideoRequest({ prompt: '  \n ' })).toThrow(/Prompt is required/);
+  expect(() => buildHiggsfieldVideoRequest({ prompt: '', negativePrompt: '   ' })).toThrow(/Prompt is required/);
 });

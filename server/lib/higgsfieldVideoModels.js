@@ -135,7 +135,7 @@ export function buildHiggsfieldVideoRequest({
   const route = refs.length || audioUrls.length ? 'reference' : imageUrl ? 'image' : 'text';
   const text = higgsfieldVideoPromptText(prompt, negativePrompt);
   // The image route is the one where the start frame can carry the whole instruction.
-  if (!text.trim() && route !== 'image') throw refuse('Prompt is required');
+  if (!String(prompt ?? '').trim() && !String(negativePrompt ?? '').trim() && route !== 'image') throw refuse('Prompt is required');
   if (model.promptMax && text.length > model.promptMax) {
     throw refuse(`${model.label} prompt is ${text.length}/${model.promptMax} characters. Shorten it; nothing was submitted or truncated.`);
   }
