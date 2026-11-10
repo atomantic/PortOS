@@ -66,6 +66,8 @@ import { quoteTopaz } from '../services/videoGen/topazQuote.js';
 import { assertNoPendingTopaz, enqueueTopazUpscale, reconcileTopazStatus, recoverTopazResult } from '../services/videoGen/topazJob.js';
 import { enqueueStitch } from '../services/videoGen/stitchJob.js';
 import { trimHistoryItem } from '../services/videoGen/trim.js';
+import { handheldHistoryItem } from '../services/videoGen/handheld.js';
+import { HANDHELD_SEED_MAX } from '../lib/handheldCamera.js';
 import { cleanupMultipartTemp } from '../services/videoGen/prepareParams.js';
 import { submitVideoGenJob } from '../services/videoGen/submitJob.js';
 import { PREVIEW_UPLOAD_FIELDS, previewVideoPrompt } from '../services/videoGen/promptPreview.js';
@@ -1597,6 +1599,21 @@ router.post('/history/:id/trim', asyncHandler(async (req, res) => {
   if (!parsed.success) failValidation(parsed);
   const body = validateRequest(trimBodySchema, req.body ?? {});
   res.json({ ok: true, video: await trimHistoryItem(parsed.data, body) });
+}));
+
+// Re-shoot a clip as if handheld (lib/handheldCamera.js): zoomed in a little,
+// with the margin swaying, rolling and bobbing with footsteps. Like a trim, it
+// writes a NEW gallery row and leaves the source clip untouched.
+const handheldBodySchema = z.object({
+  shake: z.number().finite().min(0).max(1),
+  steps: z.number().finite().min(0).max(1),
+  seed: z.number().int().min(1).max(HANDHELD_SEED_MAX).optional(),
+}).strict();
+router.post('/history/:id/handheld', asyncHandler(async (req, res) => {
+  const parsed = historyIdSchema.safeParse(req.params.id);
+  if (!parsed.success) failValidation(parsed);
+  const body = validateRequest(handheldBodySchema, req.body ?? {});
+  res.json({ ok: true, video: await handheldHistoryItem(parsed.data, body) });
 }));
 
 const stitchBodySchema = z.object({

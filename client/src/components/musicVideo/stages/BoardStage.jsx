@@ -351,6 +351,7 @@ export default function BoardStage({ board }) {
               onImportClipTake={(target) => board.setPickerTarget({ type: 'clip', sceneId: target.sceneId })}
               onPlacePoolItem={takes.placePoolItem}
               onTrimClip={takes.trimClipTake}
+              onHandheldClip={takes.handheldClipTake}
               projectId={project.id}
               aspect={musicVideoAspect(project)}
               shotNumbers={numbers}

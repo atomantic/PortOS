@@ -1,10 +1,11 @@
 import { Maximize2 } from 'lucide-react';
 import VideoTrimControl from '../media/VideoTrimControl.jsx';
+import HandheldCameraControl from '../media/HandheldCameraControl.jsx';
 import { clipReversed } from '../../lib/musicVideoLayers.js';
 import { sceneFrameFit } from './SceneFrameFit.jsx';
 
 /** Native playback and source trim; metadata lifetime belongs to the card's hook. */
-export default function SceneClipPreview({ scene, index, performance, playback, onOpenPreview, onTrimClip, takeBusy, generatingVideo }) {
+export default function SceneClipPreview({ scene, index, performance, playback, onOpenPreview, onTrimClip, onHandheldClip = null, takeBusy, generatingVideo }) {
   const { clipPlayerRef, clipSrc, onLoadedMetadata, clipId: playbackClipId } = playback;
   // A source-take return plays the owner's clip. Trim stays on this shot's own file.
   const clipId = playbackClipId || scene.videoHistoryId;
@@ -47,6 +48,12 @@ export default function SceneClipPreview({ scene, index, performance, playback, 
         <VideoTrimControl videoRef={clipPlayerRef} sourceKey={scene.videoHistoryId}
           disabled={takeBusy || !!generatingVideo}
           onTrim={(range) => onTrimClip(scene, range)} />
+      )}
+      {/* Re-shoot the clip as if a person were holding the camera, as a new take of this shot. */}
+      {scene.videoHistoryId && scene.videoHistoryId === clipId && !performance && onHandheldClip && (
+        <HandheldCameraControl key={scene.videoHistoryId} clipId={scene.videoHistoryId}
+          disabled={takeBusy || !!generatingVideo}
+          onApply={(settings) => onHandheldClip(scene, settings)} />
       )}
     </>
   );
