@@ -13,6 +13,6 @@
   "overrides": {
     "path-to-regexp": "8.4.2",
     "body-parser": "2.4.0",
-    "qs": "6.16.1"
+    "qs": "6.17.1"
   }
 }
