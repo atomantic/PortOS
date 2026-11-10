@@ -38,7 +38,7 @@ async function frameStats(ffmpeg, file, atSec) {
       timeoutMs: FFMPEG_FRAME_TIMEOUT_MS,
     });
     if (!result.ok || !existsSync(png)) return null;
-    return readImageStats(png);
+    return await readImageStats(png);
   } finally {
     await rm(png, { force: true }).catch(() => {});
   }
