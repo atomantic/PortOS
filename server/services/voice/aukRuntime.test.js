@@ -163,12 +163,8 @@ describe('AuK explicit setup', () => {
     // No command installs packages outside the lock: only git, the venv, weight download and conversion run.
     expect(commands().some(command => /\bpip\b|\binstall\b/.test(command))).toBe(false);
   });
-  it('rebuilds an existing virtualenv older than the lock\'s CPython floor', async () => {
+  it('rebuilds an existing virtualenv instead of installing the lock over unverified leftovers', async () => {
     venvCreated = true;
-    setupMocks.exec.mockImplementation(async (command, args) => {
-      if (args[0] === '-c' && args[1].includes('version_info')) throw new Error('exit 1');
-      return { stdout: '', stderr: '' };
-    });
     startAukSetup();
     await settled();
     expect(commands().some(command => /^\/private\/tools\/uv venv --clear --python 3\.11 /.test(command))).toBe(true);

@@ -16,8 +16,7 @@ import { isAppleSilicon } from '../../lib/platform.js';
 
 const run = promisify(execFile);
 const AUK_REVISION = '6943a1e967409e8c73139a7a345f2a611cfb3dd6';
-// scripts/requirements-auk-mlx.lock.txt is resolved for CPython 3.11+ (3.10 would
-// need a different filelock); an older existing venv is rebuilt.
+// scripts/requirements-auk-mlx.lock.txt is resolved for CPython 3.11+ (3.10 would need a different filelock).
 const AUK_PYTHON = '3.11';
 const INSTALL_TIMEOUT_MS = 30 * 60_000;
 const root = join(homedir(), '.portos', 'auk');
@@ -61,9 +60,9 @@ export function startAukSetup(notify = () => {}) {
     }
     await stage('Pinning compatible AuK backend', 'git', ['fetch', '--depth', '1', 'origin', AUK_REVISION]);
     await stage('Checking out compatible backend', 'git', ['checkout', '--detach', AUK_REVISION]);
-    const venvCurrent = await present(python)
-      && await run(python, ['-c', 'import sys; sys.exit(sys.version_info < (3, 11))'], safeChildProcessOptions({ timeout: 30_000 })).then(() => true, () => false);
-    if (!venvCurrent) await stage('Creating Python environment', uv, ['venv', '--clear', '--python', AUK_PYTHON, join(root, '.venv')]);
+    // Always rebuilt: the lock is the whole environment, so a reused venv could keep
+    // stale or unverified packages (including one older than the lock's CPython floor).
+    await stage('Creating Python environment', uv, ['venv', '--clear', '--python', AUK_PYTHON, join(root, '.venv')]);
     setup = { ...setup, stage: 'Installing MLX dependencies' };
     notify();
     // Hash-pinned closure first, then the pinned checkout itself editable with no
