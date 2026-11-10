@@ -454,7 +454,7 @@
       ctx.translate(W / 2, H / 2 + px * 0.36); ctx.scale(lerp(1.2, 1, k), lerp(1.2, 1, k));
       text(str, 0, 0, F.stencil(px), C.paper, 'center');
       ctx.restore();
-      glitch(t, pulse(t, downs, 9) * state.reactiveGain);
+      glitch(t, pulse(t, downs, 9) * state.reactiveGain * templateEffects(scene).beatReaction);
     },
   };
   const cardFor = (scene) => (scene?.visualLayer === 'card' ? CARDS.title : null);

@@ -15,7 +15,7 @@ import { buildDocumentData, documentRenderClock, documentRenderInitScripts, docu
 import { buildLyricPlaythroughPreview } from './lyricPlaythrough.js';
 
 // Bundled StoryboardAnimatic.jsx, DocumentTemplateCanvas.jsx, documentTemplateDrawing.js,
-// DocumentTemplateLayers.jsx and the unmodified documentTemplates/layered/engine.js
+// DocumentTemplateLayers.jsx and documentTemplates/layered/engine.js
 // are the fixture's CI dependency edges (the generated entrypoint has no static import).
 const root = resolve(import.meta.dirname, '../../..');
 const client = join(root, 'client');
@@ -160,6 +160,19 @@ function App(){const[value,setValue]=useState(null);window.show=(project,data,t)
   it('matches the card painter including its intro and exit fades', async () => {
     const value = base({ ...still, visualLayer: 'card', cardText: 'Example card', cardColor: '#243b71' });
     for (const t of [1 / 24, 1.25, 3 + 23 / 24]) await compare(value, t);
+  });
+  // Pins both painters at downbeats so native-only or engine-only control regressions fail.
+  it.each(['Verse', 'Chorus'])('matches card beat-reaction inheritance in %s', async label => {
+    const value = base({ ...still, visualLayer: 'card', cardText: 'Example card', cardColor: '#243b71' });
+    value.audioAnalysis.sections[0].label = label;
+    value.audioAnalysis.features = { envelopes: { fps: 24, rms: Array(96).fill(1) } };
+    value.templateEffects = { beatReaction: 0 };
+    await compare(value, 1);
+    value.scenes[0].templateEffects = { beatReaction: 1 };
+    await compare(value, 1);
+    value.templateEffects.beatReaction = 1;
+    value.scenes[0].templateEffects.beatReaction = 0;
+    await compare(value, 3);
   });
   it('matches HUD marks, title lines, REC, meter, ticker and timecode', async () => {
     const value = base(); value.composition.overlay = { enabled: true, titleLines: ['EXAMPLE', 'Native parity'], meter: { label: 'LEVEL', keyframes: [[0, 10], [4, 90]] }, ticker: ['Example ticker'], timecodeStartSec: 3600 };

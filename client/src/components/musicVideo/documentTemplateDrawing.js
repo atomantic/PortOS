@@ -5,7 +5,7 @@ import { formatPercent } from '../../utils/formatters.js';
 import { templateEffects } from '../../../../server/lib/musicVideoTemplateEffects.js';
 
 // The template's inline canvas painters have no importable module. Keep their
-// drawing order and pixels pinned against the unchanged shipped engine in
+// drawing order and pixels pinned against the shipped engine in
 // documentTemplateParity.browser.test.js. Paths, timing and effect curves use
 // the engine's shared modules rather than a second implementation.
 export function createDocumentTemplateDrawing(canvas, data, rig) {
@@ -157,7 +157,7 @@ export function createDocumentTemplateDrawing(canvas, data, rig) {
       ctx.translate(W / 2, H / 2 + px * 0.36); ctx.scale(lerp(1.2, 1, k), lerp(1.2, 1, k));
       text(str, 0, 0, F.stencil(px), C.paper, 'center');
       ctx.restore();
-      glitch(t, pulse(t, downs, 9) * state.reactiveGain);
+      glitch(t, pulse(t, downs, 9) * state.reactiveGain * templateEffects(data.project, scene).beatReaction);
     },
   };
   const cardFor = (scene) => (scene?.visualLayer === 'card' ? CARDS.title : null);
