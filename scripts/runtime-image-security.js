@@ -19,6 +19,7 @@
  * a bare runner checkout with no `npm ci`.
  */
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { appendFileSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -103,6 +104,8 @@ export function deriveTargets({ compose, supercolliderDockerfile, eidoverseDocke
       kind: 'npm-pin',
       architectures: ['any'],
       recipe: EIDOVERSE_RECIPE_PATH,
+      // The pin is the identity, but a Dockerfile edit around it (e.g. the lock context) still stales the evidence.
+      recipeHash: createHash('sha256').update(eidoverseDockerfile.replace(/\r\n?/g, '\n')).digest('hex'),
       package: rapierName,
       packageVersion: rapierVersion,
       declaredParent: parent,

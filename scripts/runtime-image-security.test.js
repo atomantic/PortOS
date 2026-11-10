@@ -38,6 +38,7 @@ describe('target derivation from the recipes', () => {
     expect(targets.supercollider.baseImage).toMatch(/^debian:trixie-\S+@sha256:[0-9a-f]{64}$/);
     expect(targets.supercollider.recipeHash).toMatch(/^[0-9a-f]{64}$/);
     expect(targets.supercollider.architectures).toEqual(['amd64', 'arm64']);
+    expect(targets['eidoverse-rapier'].recipeHash).toMatch(/^[0-9a-f]{64}$/);
     expect(targets['eidoverse-rapier']).toMatchObject({ package: '@dimforge/rapier3d-compat', packageVersion: '0.14.0', declaredParent: 'eidoverse:render' });
   });
 
