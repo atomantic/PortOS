@@ -242,13 +242,82 @@ describe('recognized staged composition playback capability', () => {
     }
     await api.dispose();
   });
+
+  // Uniquely catches one wiped shot dropping the whole document to exact seek, or the
+  // live wipe painting a different held/incoming frame than the exact seek (#15611).
+  it('keeps a wiped document live and paints each wipe frame exactly as the exact seek does', async () => {
+    const root = await staged();
+    const wipe = { style: 'iris', frames: 6, cutFrame: 24, fromSceneId: 'out', color: null };
+    const scenes = [
+      { sceneId: 'out', startSec: 0, endSec: 1, visualLayer: 'still', media: { kind: 'image', src: 'out.png' } },
+      { sceneId: 'in', startSec: 1, endSec: 2, visualLayer: 'still', wipe, media: { kind: 'image', src: 'in.png' } },
+    ];
+    expect(await adaptStagedDocumentPreview(root, { scenes })).toMatchObject({ adapted: true });
+    let clock = 0, animation = null;
+    // Each context tracks what its pixels last came from, through canvas copies,
+    // including the drawn geometry so a camera difference cannot pass.
+    const makeCanvas = () => {
+      const target = { calls: [], content: null };
+      const context = new Proxy(target, { get(_target, key) {
+        if (key in target) return target[key];
+        if (key === 'createImageData' || key === 'getImageData') return (_x, _y, w, h) => ({ data: new Uint8ClampedArray((w || _x) * (h || _y) * 4) });
+        if (key === 'measureText') return text => ({ width: String(text).length * 10 });
+        if (key === 'createRadialGradient' || key === 'createLinearGradient') return () => ({ addColorStop() {} });
+        if (key === 'createPattern') return () => ({});
+        return (...args) => {
+          target.calls.push([key, ...args]);
+          if (key !== 'drawImage') return;
+          if (args[0] instanceof TestImage) target.content = [args[0].url, ...args.slice(1)].join(',');
+          else if (args[0]?.context) target.content = args[0].context.content;
+        };
+      } });
+      return { width: 1920, height: 1080, context, getContext: () => context };
+    };
+    function TestImage() { this.naturalWidth = 1920; this.naturalHeight = 1080; }
+    Object.defineProperty(TestImage.prototype, 'src', { set(value) { this.url = value; queueMicrotask(() => this.onload()); } });
+    const front = makeCanvas(), events = [], published = [];
+    let wiped = [];
+    const sandbox = { setTimeout, clearTimeout, queueMicrotask, Image: TestImage, performance: { now: () => clock },
+      requestAnimationFrame: callback => { animation = callback; return 1; }, cancelAnimationFrame: () => { animation = null; },
+      document: { getElementById: () => front, createElement: () => makeCanvas(), fonts: { load: () => Promise.resolve() } },
+      PORTOS_MV: { render: { width: 1920, height: 1080, fps: 24, durationSec: 2 }, song: { sections: [] }, composition: {}, scenes },
+      // Frame-quantized time, so both paths draw each frame at the same t.
+      PORTOS_MV_EVENT_STATE: (_song, t) => ({ t: Math.floor(t * 24 + 1e-6) / 24, hold: false, activeEvents: [], reactiveGain: 0 }),
+      __portosMusicVideoWipe: (_ctx, paint) => wiped.push({ index: paint.index, outgoing: paint.outgoing.context.content,
+        incoming: paint.incoming.context.content, held: paint.outgoing }),
+      __portosFilmLook: { frame: frame => published.push(frame), playback() {} },
+      PORTOS_LYRIC_TYPE: { createLyricType: () => ({ ready: Promise.resolve(), draw() {} }) }, postMessage: message => events.push(message) };
+    sandbox.window = sandbox;
+    runInNewContext(await readFile(join(root, 'engine.js'), 'utf8'), sandbox);
+    const composition = sandbox.portosComposition, api = composition.previewPlayback;
+    for (let frame = 20; frame < 34; frame++) await composition.seek(frame / 24);
+    const exact = wiped.map(({ held: _held, ...paint }) => paint);
+    expect(exact.map(paint => paint.index)).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(exact[0].outgoing).toMatch(/^out\.png,/);
+    expect(exact[0].incoming).toMatch(/^in\.png,/);
+    wiped = [];
+    await api.prepare({ epoch: 1, t: 20 / 24 });
+    await api.play({ epoch: 1, sequence: 1, t: 20 / 24, workerTime: 0 });
+    for (let step = 1; step < 14; step++) {
+      clock = step * 1000 / 24;
+      animation();
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+    expect(events).toEqual([]);
+    expect(wiped.map(({ held: _held, ...paint }) => paint)).toEqual(exact);
+    // The held frame is prepared once for the wipe, not redrawn per frame.
+    expect(new Set(wiped.map(paint => paint.held)).size).toBe(1);
+    // Every song frame across the cut publishes once, in order.
+    expect(published).toEqual(Array.from({ length: 14 }, (_, k) => 20 + k));
+    await api.dispose();
+  });
 });
 
-function player({ hold = false, quantized = false, inSec = 0, outSec = 5, cutAt = null, fps = 30, autoFirst = true } = {}) {
+function player({ hold = false, quantized = false, inSec = 0, outSec = 5, cutAt = null, fps = 30, autoFirst = true, wipe = null } = {}) {
   let clock = 0, frame = null, time = 0, writes = 0, readyResolve, playResolve, autoFrame = false, frameId = 0, presented = 0, drawMs = 0;
   const callbacks = new Map();
   const frameWaiters = [];
-  const events = [], paints = [], modes = [], sourceTimes = [], scenes = [{ startSec: 0, endSec: cutAt ?? 5, media: { kind: 'video', inSec, outSec, fps } },
+  const events = [], paints = [], modes = [], sourceTimes = [], heldFor = [], scenes = [{ startSec: 0, endSec: cutAt ?? 5, media: { kind: 'video', inSec, outSec, fps } },
     { startSec: cutAt, endSec: 5, media: { kind: 'video', inSec: 0, outSec: 5, fps } }];
   const present = (metadata = {}, callback = callbacks.values().next().value) => callback?.(clock,
     { mediaTime: Math.floor(time * fps + 1e-6) / fps, presentedFrames: ++presented, ...metadata });
@@ -274,12 +343,18 @@ function player({ hold = false, quantized = false, inSec = 0, outSec = 5, cutAt 
       video.currentTime = Math.min(Math.max(scene.media.inSec + t - scene.startSec, scene.media.inSec), scene.media.outSec - 0.5 / 30);
       return video;
     },
-    publish(songTime, t, _scene, _source, _state, valid) { if (drawMs) elapse(clock + drawMs); if (!valid()) return false; paints.push({ songTime, t }); return true; }, dispose() { video.pause(); } };
+    publish(songTime, t, _scene, _source, _state, valid, layers) { if (drawMs) elapse(clock + drawMs); if (!valid()) return false; paints.push({ songTime, t, ...(wipe ? { layers } : {}) }); return true; }, dispose() { video.pause(); } };
+  // A wipe window [from, to) on the first scene needs its held layer.
+  const wiping = t => wipe && t >= wipe[0] && t < wipe[1];
+  if (wipe) Object.assign(bridge, {
+    async layers(scene, t) { if (!wiping(t)) return null; heldFor.push(t); return { scene }; },
+    layersReady: (scene, t, layers) => !wiping(t) || layers?.scene === scene,
+  });
   const sandbox = { setTimeout, clearTimeout, __bridge: bridge, performance: { now: () => clock }, requestAnimationFrame: callback => { frame = callback; return 1; }, cancelAnimationFrame: () => { frame = null; },
     window: { postMessage: message => events.push(message) }, portosComposition: {} };
   runInNewContext(`(${installLayeredPreviewPlayback.toString()})(__bridge)`, sandbox);
   const elapse = (ms) => { const elapsed = (ms - clock) / 1000; if (!video.paused) time += elapsed * video.playbackRate; clock = ms; };
-  return { api: sandbox.portosComposition.previewPlayback, video, events, paints, modes, sourceTimes, present,
+  return { api: sandbox.portosComposition.previewPlayback, video, events, paints, modes, sourceTimes, heldFor, present,
     pendingCallback: () => callbacks.values().next().value,
     waitForFrame: () => callbacks.size ? Promise.resolve() : new Promise(resolve => frameWaiters.push(resolve)),
     get pendingCallbacks() { return callbacks.size; },
@@ -347,6 +422,23 @@ describe('cooperative preview public runtime lifecycle', () => {
     expect(p.pendingCallbacks).toBe(1);
     await p.api.pause({ epoch: 2 });
     expect(p.pendingCallbacks).toBe(0);
+  });
+
+  // Uniquely catches a live video frame painting a wipe without its held layer (#15611).
+  it('reloads once when a wipe needs its held layer, then publishes every video frame with it', async () => {
+    const p = player({ wipe: [0.1, 0.2] });
+    await p.api.prepare({ epoch: 1, t: 0 });
+    await p.api.play({ epoch: 1, sequence: 1, t: 0, workerTime: 0 });
+    for (let time = 33; time <= 330; time += 33) { await p.step(time); await new Promise(resolve => setTimeout(resolve, 0)); }
+    expect(p.events).toEqual([]);
+    expect(p.heldFor).toHaveLength(1);
+    const during = p.paints.filter(paint => paint.t >= 0.1 && paint.t < 0.2);
+    expect(during.length).toBeGreaterThan(1);
+    expect(during.every(paint => paint.layers)).toBe(true);
+    expect(p.paints.filter(paint => paint.t < 0.1).every(paint => !paint.layers)).toBe(true);
+    expect(p.paints.some(paint => paint.t >= 0.2)).toBe(true);
+    expect(p.paints.map(paint => paint.songTime)).toEqual(p.paints.map(paint => paint.songTime).sort((a, b) => a - b));
+    await p.api.dispose();
   });
 
   it('caps a faster source by source-time bins while preserving native 24 fps and holds', async () => {

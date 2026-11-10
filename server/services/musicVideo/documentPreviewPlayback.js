@@ -11,7 +11,8 @@ const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const read = (directory, name) => readFile(join(directory, name));
 
 const BRIDGE = `
-  let previewBack = null;
+  let previewBack = null, previewHeld = null;
+  const heldFits = (scene, held) => held?.scene === scene && held.canvas.width === W && held.canvas.height === H;
   (${installLayeredPreviewPlayback.toString()})({
     ready, duration: DURATION, fps: FPS,
     state: eventState, scene: sceneAt,
@@ -31,10 +32,31 @@ const BRIDGE = `
         ? imageEffects.photoSequenceLayers(sequence, t, { fps: FPS }).map(layer => layer.step).join(',')
         : String(imageEffects.photoSequenceIndex(sequence, t, { fps: FPS }));
     },
+    // A wipe's held outgoing frame: the exact seek's outgoingLayer, drawn off
+    // screen once per wipe instead of on the visible canvas every frame.
+    async layers(scene, t) {
+      const wipe = wipeAt(scene, t);
+      if (!wipe) return null;
+      if (heldFits(scene, previewHeld)) return previewHeld;
+      const fromSource = cardFor(wipe.from) ? null : await sourceFor(wipe.from, wipe.fromT);
+      const held = document.createElement('canvas');
+      held.width = W; held.height = H;
+      const front = canvas, frontContext = ctx;
+      try {
+        canvas = held; ctx = held.getContext('2d');
+        drawSceneLayer(wipe.fromT, wipe.from, fromSource, eventState(wipe.fromT), sectionFunction(wipe.fromT));
+      } finally { canvas = front; ctx = frontContext; }
+      previewHeld = { scene, canvas: held };
+      return previewHeld;
+    },
+    layersReady: (scene, t, layers) => !wipeAt(scene, t) || heldFits(scene, layers),
     playback: on => globalThis.__portosFilmLook?.playback(on),
     needsSource: scene => !cardFor(scene),
     videos: () => [...videos.values()].map(entry => entry.el),
-    publish(songTime, t, scene, source, state, valid) {
+    publish(songTime, t, scene, source, state, valid, layers) {
+      const wipe = wipeAt(scene, t);
+      // layersReady reloads such an item first; never paint the cut unwiped.
+      if (wipe && !heldFits(scene, layers)) throw new Error('Preview wipe has no held frame');
       if (!previewBack) previewBack = document.createElement('canvas');
       if (previewBack.width !== W) previewBack.width = W;
       if (previewBack.height !== H) previewBack.height = H;
@@ -42,7 +64,7 @@ const BRIDGE = `
       const backContext = previewBack.getContext('2d');
       // Reset clip, transform and save stack even after a failed authored draw.
       backContext.reset();
-      try { canvas = previewBack; ctx = backContext; render(t, scene, source, state); }
+      try { canvas = previewBack; ctx = backContext; render(t, scene, source, state, false, wipe ? { ...wipe, held: layers.canvas } : null); }
       finally { canvas = front; ctx = frontContext; }
       if (!valid()) return false;
       // Fonts and sources are already prepared. Every visible update is in this
@@ -61,6 +83,7 @@ const BRIDGE = `
       for (const entry of videos.values()) { entry.el.pause(); entry.el.removeAttribute('src'); entry.el.load(); }
       videos.clear(); images.clear();
       if (previewBack) { previewBack.width = 0; previewBack.height = 0; previewBack = null; }
+      previewHeld = null;
     },
   });
 `;
@@ -77,8 +100,6 @@ export async function adaptStagedDocumentPreview(directory, { scenes = [] } = {}
     const { isUpgradableLayeredEngine } = await import('./compositionDocument.js');
     return { ...declined('unrecognized-engine'), ...(isUpgradableLayeredEngine(original) ? { upgradable: true } : {}) };
   }
-  // A wipe paints the outgoing shot's held frame, which only the exact seek resolves.
-  if (scenes.some(scene => scene.wipe)) return declined('wipe-exact-seek');
   const marker = '<script src="engine.js"></script>';
   const generatedIndex = template.toString().replace(marker, '<script src="generated.js"></script>\n' + marker);
   if (!index.equals(template) && index.toString() !== generatedIndex) return declined('custom-entrypoint');
