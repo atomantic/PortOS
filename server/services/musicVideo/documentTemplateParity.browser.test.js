@@ -88,13 +88,13 @@ function App(){const[value,setValue]=useState(null);window.show=(project,data,t)
     });
   }), 30000);
 
-  async function compare(project, t, { words = false, reuse = false, clockJump = false } = {}) {
+  async function compare(project, t, { words = false, reuse = false, clockJump = false, lyricsOff = false } = {}) {
     // Media elements store microseconds; use a frame's centre so rounding a
     // fractional 24fps boundary cannot move the native clock back one frame.
     t = (Math.floor(t * 24 + 1e-6) + 0.5) / 24;
     current = project;
     const media = new Map(project.scenes.filter(s => s.visualLayer !== 'card').map(s => [s.sceneId, { kind: s.videoHistoryId ? 'video' : 'image', ext: s.videoHistoryId ? 'webm' : 'png', fps: 24, ...(s.endImageId ? { end: { kind: 'image', ext: 'png' } } : {}) }]));
-    engineData = dataFor(project, media);
+    engineData = dataFor(lyricsOff ? { ...project, lyricOverlayEnabled: false } : project, media);
     await engine.setViewportSize({ width: 640, height: Math.round(640 * engineData.render.height / engineData.render.width) });
     await engine.goto(`http://127.0.0.1:${server.address().port}/engine/index.html`);
     await engine.waitForFunction(() => !!window.portosComposition);
@@ -112,6 +112,10 @@ function App(){const[value,setValue]=useState(null);window.show=(project,data,t)
     if (currentScene?.visualLayer === 'footage' && currentScene.videoHistoryId) await native.waitForFunction(() => document.querySelector('video[data-ready="true"]')?.readyState >= 2);
     if (words) {
       await native.waitForSelector('[data-testid="animatic-lyrics"]');
+      if (lyricsOff) {
+        await native.getByRole('button', { name: 'Lyrics', exact: true }).click();
+        await native.frameLocator('[data-testid="animatic-lyrics"]').locator('#stage').waitFor({ state: 'hidden' });
+      }
       // Use the public seek bridge's response to know its exact lyric frame landed.
       await native.waitForFunction(t => window.lyricFrames.includes(t), Math.floor(t * 24 + 1e-6) / 24);
     }
@@ -221,6 +225,11 @@ function App(){const[value,setValue]=useState(null);window.show=(project,data,t)
       value.composition.overlay = { enabled: true, titleLines: ['EXAMPLE'] };
       await compare(value, 1.25);
     }
+  });
+  it('keeps the title pixels while the local Lyrics toggle hides sung words', async () => {
+    const value = base(still, { titleCard: { enabled: true, title: 'EXAMPLE TITLE', startSec: 0, endSec: 4 } });
+    value.lyricCues = [{ text: 'Example sung words', startSec: 0.25, endSec: 3.5 }];
+    await compare(value, 1.25, { words: true, lyricsOff: true });
   });
   it('matches hook priority over sung lyrics, subtitle replacement, and hooks without sung lyrics', async () => {
     const value = base(); value.composition.textCues = [{ text: 'EXAMPLE HOOK', startSec: 1, endSec: 2, emphasis: 'hero', placement: 'center' }];

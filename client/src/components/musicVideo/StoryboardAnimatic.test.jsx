@@ -235,6 +235,18 @@ describe('StoryboardAnimatic lyrics', () => {
     await waitFor(() => expect(screen.queryByTestId('animatic-lyrics')).toBeNull());
   });
 
+  it('keeps the title card while the local Lyrics toggle hides only the lyric canvas', async () => {
+    render(<StoryboardAnimatic project={{ ...lyricProject, titleCard: { enabled: true, title: 'Example Song' } }} audioUrl="/song.mp3" />);
+    const overlay = await screen.findByTestId('animatic-lyrics');
+    await act(async () => {});
+    const post = vi.spyOn(overlay.contentWindow, 'postMessage');
+    await act(async () => window.dispatchEvent(new MessageEvent('message', { source: overlay.contentWindow, data: { type: 'portos-mv:loaded' } })));
+    fireEvent.click(screen.getByRole('button', { name: 'Lyrics' }));
+    expect(screen.getByTestId('animatic-lyrics')).toBe(overlay);
+    expect(post).toHaveBeenCalledWith({ type: 'portos-mv:lyrics-visible', visible: false }, '*');
+    expect(post).toHaveBeenCalledWith({ type: 'portos-mv:title-card', card: expect.objectContaining({ title: 'Example Song' }) }, '*');
+  });
+
   // Uniquely catches an instrumental video losing its enabled title card.
   it('shows a title card without requiring timed lyrics', async () => {
     render(<StoryboardAnimatic project={{ ...lyricProject, lyricCues: [], titleCard: { enabled: true, title: 'Instrumental', startSec: 0, endSec: 4 } }} audioUrl="/song.mp3" />);
