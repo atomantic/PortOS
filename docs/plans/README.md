@@ -40,3 +40,8 @@ and the topic docs elsewhere under `docs/`.
   a 3D layout reference (Three.js spec or Blender GLB) as a facet of the Place
   primitive, with landmarks, figure anchors and camera shots whose captures feed
   music-video shot references.
+
+- [2026-11-09 — native composition preview](./2026-11-09-native-composition-preview.md):
+  why a shipped-template composition document can play in the browser with the
+  existing native player, with the isolated worker kept for exact frames and
+  authored documents, and the drawing gaps to close first.
