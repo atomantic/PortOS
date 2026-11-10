@@ -337,12 +337,19 @@ function shotSheetMedium(project, scene) {
 }
 
 /** close, medium, or wide when the wording names a scale. Close is matched before medium and wide. */
-function framingScale(value) {
+export function framingScale(value) {
   if (typeof value !== 'string' || !value.trim()) return null;
   if (/(?:extreme[\s-]*)?close(?:[\s-]*up)?|\bclose\b/i.test(value)) return 'close';
   if (/\b(?:wide|establishing)\b/i.test(value)) return 'wide';
   if (/\bmedium\b/i.test(value)) return 'medium';
   return null;
+}
+
+/** The sheet leads, then treatment direction, then a live storyboard panel. */
+export function sceneFramingScale(scene, panel = null) {
+  return framingScale(scene?.shotSheet?.view)
+    ?? framingScale(scene?.direction?.framing)
+    ?? framingScale(panel?.shotSize);
 }
 
 /** True when the sheet's view and a direction framing name different scales. */

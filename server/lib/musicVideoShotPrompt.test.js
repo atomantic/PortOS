@@ -352,3 +352,42 @@ describe('local clip prompts', () => {
     expect(ids(musicVideoShotModelInput(project, shot, { hears: true, backend: 'fal' }))).toContain('creative-context');
   });
 });
+
+// #15639: exercise the actual frame/clip input and visible additions rather
+// than just a classifier, including precedence and authored-text preservation.
+describe('framing-aware production bible additions', () => {
+  const cast = { concept: { subjects: [{ id: 'lead', kind: 'character', name: 'Example Lead',
+    description: 'face: freckles and detailed irises; hair: black braid; wardrobe: yellow coat' }] } };
+  const authored = 'face: keep my exact freckles; wardrobe: my own words';
+  const bible = (input) => input.promptAdditions.find((item) => item.id === 'creative-context')?.text;
+
+  it('uses the sheet before direction for stills, end frames and audio-conditioned clips', () => {
+    const shot = { framePrompt: authored, endFramePrompt: authored, prompt: authored,
+      shotSheet: { view: 'Establishing wide shot' }, direction: { framing: 'close-up' } };
+    const inputs = [musicVideoFrameModelInput(cast, shot), musicVideoFrameModelInput(cast, shot, { slot: 'end' }),
+      musicVideoShotModelInput(cast, shot, { hears: true, backend: 'fal' })];
+    for (const input of inputs) {
+      expect(bible(input)).not.toContain('freckles');
+      expect(bible(input)).toContain('hair: black braid; wardrobe: yellow coat');
+      expect(bible(input)).toContain('Wide framing:');
+      expect(input.prompt).toContain(authored);
+      expect(input.prompt).toContain(bible(input));
+    }
+    expect(bible(musicVideoShotModelInput(cast, shot, { asTyped: true, hears: true }))).toBeUndefined();
+    expect(bible(musicVideoShotModelInput(cast, shot, { hears: false }))).toBeUndefined();
+    expect(bible(musicVideoShotModelInput(cast, shot, { hears: true, backend: 'local' }))).toBeUndefined();
+  });
+
+  it('falls back through direction and live panel shot size while preserving close and unknown framing', () => {
+    const shot = { framePrompt: authored, shotSheet: { view: 'from behind' } };
+    expect(bible(musicVideoFrameModelInput(cast, { ...shot, direction: { framing: 'wide' } }))).not.toContain('freckles');
+    expect(bible(musicVideoFrameModelInput(cast, shot, { panel: { shotSize: 'wide' } }))).not.toContain('freckles');
+    for (const framing of ['close-up', 'medium', 'unspecified']) {
+      const input = musicVideoFrameModelInput(cast, { ...shot, direction: { framing } }, { panel: { shotSize: 'medium' } });
+      expect(bible(input)).toContain('face: freckles and detailed irises');
+      expect(bible(input)).not.toContain('Wide framing:');
+    }
+    expect(bible(musicVideoFrameModelInput(cast, shot, { panel: { shotSize: 'wide' }, fromFrame: true }))).toContain('freckles');
+    expect(bible(musicVideoFrameModelInput(cast, shot))).toContain('freckles');
+  });
+});
