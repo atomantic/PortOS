@@ -71,7 +71,7 @@ describe('source takes', () => {
 });
 
 describe('shared-take offers', () => {
-  it('offers sequence coverage for an adjacent run and a source take for a later return', () => {
+  it('offers sequence coverage without sending a later return past the first member\'s cut clip', () => {
     const scenes = [
       shot('a', 0, 0.8, { shotSheet: { cameraId: 'cam-a', location: 'room' }, label: 'Hold' }),
       shot('b', 0.8, 1.6, { shotSheet: { cameraId: 'cam-a', location: 'room' } }),
@@ -81,16 +81,21 @@ describe('shared-take offers', () => {
     const offers = sharedTakeOffers(scenes);
     expect(offers).toEqual([
       { kind: 'sequence', sceneIds: ['a', 'b'] },
-      { kind: 'sourceTake', sceneId: 'c', sourceId: 'a', offsetSec: 3 },
-    ]);
-    expect(sharedTakePatches(scenes, offers[1])).toEqual([
-      { sceneId: 'c', patch: { sourceTake: { sceneId: 'a', offsetSec: 3 } } },
-      { sceneId: 'a', patch: { clipLengthSec: 3.8 } },
     ]);
     expect(sharedTakePatches(scenes, offers[0])).toEqual([
       { sceneId: 'a', patch: { coverage: 'sequence' } },
       { sceneId: 'b', patch: { coverage: 'sequence' } },
     ]);
+    scenes[1].startSec = 1;
+    scenes[1].framePrompt = 'a different shot';
+    const returnOffer = sharedTakeOffers(scenes).find((offer) => offer.kind === 'sourceTake');
+    expect(sharedTakePatches(scenes, returnOffer)).toEqual([
+      { sceneId: 'c', patch: { sourceTake: { sceneId: 'a', offsetSec: 3 } } },
+      { sceneId: 'a', patch: { clipLengthSec: 3.8 } },
+    ]);
+    scenes[0].coverage = 'sequence';
+    expect(sharedTakePatches(scenes, returnOffer)).toEqual([]);
+    expect(sharedTakeOffers(scenes)).toEqual([]);
   });
 
   it('does not offer a link that is already set, a blank frame, or a different camera', () => {

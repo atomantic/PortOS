@@ -182,6 +182,9 @@ export function sharedTakeOffers(scenes) {
     }
     flush();
     const sourceId = sceneKey(group[0]);
+    // Sequence completion stores only each member's cut, not the uncut run.
+    // That clip cannot serve a later return's offset.
+    if (inRun.has(sourceId) || group[0].coverage === 'sequence') continue;
     for (const scene of group.slice(1)) {
       const id = sceneKey(scene);
       if (inRun.has(id) || sourceTakeOf(scene)?.sceneId === sourceId) continue;
@@ -205,7 +208,7 @@ export function sharedTakePatches(scenes, offer) {
   if (offer.kind !== 'sourceTake') return [];
   const byId = indexScenes(scenes);
   const source = byId.get(offer.sourceId);
-  if (!source || !byId.has(offer.sceneId)) return [];
+  if (!source || source.coverage === 'sequence' || !byId.has(offer.sceneId)) return [];
   const link = { sceneId: offer.sourceId, offsetSec: offer.offsetSec };
   const patches = [{ sceneId: offer.sceneId, patch: { sourceTake: link } }];
   const withLink = scenes.map((scene) => (sceneKey(scene) === offer.sceneId ? { ...scene, sourceTake: link } : scene));
