@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { createRef } from 'react';
 import { MemoryRouter } from 'react-router';
 
 const playback = vi.hoisted(() => vi.fn());
@@ -18,6 +19,7 @@ vi.mock('../../services/socket', () => ({ default: socket }));
 vi.mock('../../services/apiMusicVideo.js', async (original) => ({ ...(await original()), getMusicVideoCompositionPlayback: playback }));
 
 import PreviewDock from './PreviewDock.jsx';
+import ExactDocumentFrame from './ExactDocumentFrame.jsx';
 import { listPreviewSources } from '../../lib/musicVideoStages.js';
 
 const project = {
@@ -136,4 +138,29 @@ it('keeps active beat reactions on the worker for older playback responses witho
   rerender(draw({ ...disabled, scenes: disabled.scenes.map(scene => ({ ...scene, templateEffects: { beatReaction: 0.2 } })) }));
   await waitFor(() => expect(screen.queryByLabelText('Song for the composition preview')).toBeNull());
   expect(opens()).toHaveLength(2);
+});
+
+// Uniquely catches the old same-time worker frame surviving look/card edits as capturable.
+it('waits for a new exact frame after paused controls change at the same song time', async () => {
+  const ref = createRef();
+  const initial = { ...project, filmLook: { preset: 'vhs' } };
+  const draw = (value) => <ExactDocumentFrame ref={ref} project={value} time={1} active lookOn />;
+  const { rerender } = render(draw(initial));
+  await waitFor(() => expect(opens()).toHaveLength(1));
+  const session = { requestId: opens()[0][1].requestId, sessionId: '00000000-0000-4000-8000-000000000002' };
+  await act(async () => socket.send('generated-preview:opened', { ...session, playback: { version: 1 }, durationSec: 4, fps: 24 }));
+  const seekGeneration = () => socket.emit.mock.calls.filter(([event]) => event === 'generated-preview:seek').at(-1)[1].generation;
+  await act(async () => socket.send('generated-preview:frame', { ...session, generation: seekGeneration(), data: btoa('original look') }));
+  expect(ref.current.shownTime()).toBe(1);
+  const edited = { ...initial, filmLook: { preset: 'polaroid' } };
+  rerender(draw(edited));
+  expect(screen.getByTestId('exact-document-frame')).toHaveAttribute('data-shown', 'false');
+  expect(await ref.current.capture(1)).toBeNull();
+  await act(async () => socket.send('generated-preview:frame', { ...session, generation: seekGeneration(), data: btoa('new look') }));
+  expect(ref.current.shownTime()).toBe(1);
+  rerender(draw({ ...edited, titleCard: { enabled: true, title: 'New card' } }));
+  expect(ref.current.shownTime()).toBeNull();
+  expect(await ref.current.capture(1)).toBeNull();
+  await act(async () => socket.send('generated-preview:frame', { ...session, generation: seekGeneration(), data: btoa('new card') }));
+  expect(ref.current.shownTime()).toBe(1);
 });
