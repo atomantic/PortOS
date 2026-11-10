@@ -29,8 +29,8 @@ vi.mock('../loras.js', async (original) => ({ ...(await original()), getLoraKeyL
 const model = { ...profile.model, name: 'Example H3 CUDA', supportedModes: ['text', 'image', 'fflf'],
   steps: 8, guidance: 0, samplerLocked: true, speedProfiles: [profile],
   defaultWidth: 1344, defaultHeight: 768, repoFiles: ['modular_model_index.json'],
-  defaultFrames: 124, frameOptions: [124], fpsOptions: [24], termsGate: { id: 'example-h3-terms' } };
-const settings = { videoGen: { acceptedModelTerms: ['example-h3-terms'] } };
+  defaultFrames: 124, frameOptions: [124], fpsOptions: [24] };
+const settings = { videoGen: {} };
 const request = { backend: 'local', modelId: model.id, prompt: 'An invented paper boat crosses a pond.',
   width: 1344, height: 768, numFrames: 124, fps: 24, mode: 'text', speedProfileId: profile.id };
 const prepare = (overrides = {}) => prepareVideoGenParams({ body: { ...request, ...overrides }, uploads: {}, localOnlyParamKeys: ['speedProfileId'] });
@@ -103,7 +103,7 @@ print(json.dumps({'id':args.speed_profile,'steps':args.steps,'adapter':args.spee
     // FFLF has its own missing-keyframe error; use the public profile admission
     // boundary directly for that mode to pin the profile's independent guard.
     if (overrides.mode === 'fflf') {
-      await expect(prepareMiniMaxH3SpeedProfile({ model, profileId: profile.id, ...overrides }, settings)).rejects.toMatchObject({ code });
+      await expect(prepareMiniMaxH3SpeedProfile({ model, profileId: profile.id, ...overrides })).rejects.toMatchObject({ code });
     } else await expect(prepare(overrides)).rejects.toMatchObject({ code });
     expect(findCachedRepoFile).not.toHaveBeenCalled();
   });
@@ -121,13 +121,6 @@ print(json.dumps({'id':args.speed_profile,'steps':args.steps,'adapter':args.spee
     findCachedRepoFile.mockResolvedValue('/example/cache/adapter.safetensors');
     sha256File.mockResolvedValue('bad-digest');
     await expect(prepare()).rejects.toMatchObject({ code: 'MINIMAX_H3_SPEED_WEIGHTS_NOT_CACHED' });
-  });
-
-  it('requires persisted model terms before checking runtime or cached weights', async () => {
-    getSettings.mockResolvedValue({ videoGen: { acceptedModelTerms: [] } });
-    await expect(prepare()).rejects.toMatchObject({ code: 'VIDEO_MODEL_TERMS_ACCEPTANCE_REQUIRED' });
-    expect(resolveByovRuntimeLoraCapable).not.toHaveBeenCalled();
-    expect(findCachedRepoFile).not.toHaveBeenCalled();
   });
 
   it('admits a compatible style adapter with the speed profile and rejects a copied speed adapter', async () => {

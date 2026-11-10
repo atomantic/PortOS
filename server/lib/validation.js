@@ -2313,11 +2313,6 @@ export const videoGenSettingsSchema = z.object({
   // sleep the display for the duration of a render; also settable per-render
   // (see the `displaySleep` field on POST /api/video-gen).
   displaySleep: z.boolean().optional(),
-  // Install-wide acknowledgement of restricted-model license gates, stored as
-  // the exact reviewed-license ids (`termsGate.id`). Written through
-  // POST /api/video-gen/model-terms; typed here so a Settings save can't put
-  // junk where the render gate reads authorization from.
-  acceptedModelTerms: z.array(z.string().trim().min(1).max(128)).max(50).optional(),
   grok: z.object({
     parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
   }).optional(),
@@ -2341,14 +2336,6 @@ export const videoGenSettingsSchema = z.object({
     apiKey: z.preprocess((v) => (v === '' ? undefined : v), z.string().trim().max(200).optional()),
     parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
   }).optional(),
-});
-
-// POST /api/video-gen/model-terms — record (or withdraw) the acknowledgement of
-// one restricted model's reviewed license. `termsId` is the exact versioned
-// gate id; the route rejects ids no shipped model declares.
-export const videoModelTermsSchema = z.object({
-  termsId: z.string().trim().min(1).max(128),
-  accepted: z.boolean(),
 });
 
 // Runway images share the private video credential; only render settings live here.

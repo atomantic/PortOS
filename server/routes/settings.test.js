@@ -938,42 +938,6 @@ describe('Settings routes — videoGen slice (#3231 Phase 4)', () => {
       .send({ videoGen: { mode: 'codex' } });
     expect(res.status).toBe(400);
   });
-
-  // Restricted-model license acknowledgements are owned by
-  // /api/video-gen/model-terms. Losing them to an unrelated Settings save would
-  // silently start 403ing every gated render again.
-  it('preserves acceptedModelTerms when a settings save replaces the videoGen slice without it', async () => {
-    store = { videoGen: { mode: null, acceptedModelTerms: ['minimax-h3-community-license-2026-08-02'] } };
-    const res = await request(buildApp())
-      .put('/api/settings')
-      .send({ videoGen: { mode: 'grok' } });
-    expect(res.status).toBe(200);
-    expect(res.body.videoGen).toEqual({
-      mode: 'grok',
-      acceptedModelTerms: ['minimax-h3-community-license-2026-08-02'],
-    });
-  });
-
-  // /api/video-gen/model-terms is where an id is checked against a model that
-  // actually declares it, so this route can't be a second write path — it would
-  // let arbitrary strings accumulate in the list that authorizes renders.
-  it('ignores an acceptedModelTerms written through the settings patch', async () => {
-    store = { videoGen: { acceptedModelTerms: ['recorded-license'] } };
-    const res = await request(buildApp())
-      .put('/api/settings')
-      .send({ videoGen: { acceptedModelTerms: ['smuggled-license'] } });
-    expect(res.status).toBe(200);
-    expect(res.body.videoGen.acceptedModelTerms).toEqual(['recorded-license']);
-  });
-
-  it('does not let a settings patch mint the list on an install that has accepted nothing', async () => {
-    store = { videoGen: { mode: null } };
-    const res = await request(buildApp())
-      .put('/api/settings')
-      .send({ videoGen: { mode: 'local', acceptedModelTerms: ['smuggled-license'] } });
-    expect(res.status).toBe(200);
-    expect(res.body.videoGen).toEqual({ mode: 'local' });
-  });
 });
 
 describe('Settings routes — beeper slice (#30)', () => {
@@ -1645,7 +1609,6 @@ describe('Settings routes — atomic partial saves (#11045)', () => {
       ['imageGen.codex', { parallelLimitBounds: { min: 1, max: 1 } }],
       ['imageGen.grok', { aspectRatio: 'wide' }],
       ['renderDefaults', { 'universe-bible': { imageMode: 'not-a-backend' } }],
-      ['videoGen', { acceptedModelTerms: [] }],
       ['videoGen', { mode: 'not-a-backend' }],
       ['localLlm.mtplx', { idleMinutes: -1 }],
       ['localLlm.mtplx', { launch: { model: [] } }],

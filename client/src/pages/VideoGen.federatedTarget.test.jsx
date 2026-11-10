@@ -10,11 +10,9 @@ import {
   videoGenModel,
   videoGenModelContext,
   videoGenStatus,
-  videoGenTermsGate,
 } from '../test/videoGenPageMocks.jsx';
 
-const TERMS_ID = 'minimax-h3-license-v1';
-const MODEL = videoGenModel('h3-one', { termsGate: videoGenTermsGate(TERMS_ID) });
+const MODEL = videoGenModel('h3-one');
 
 // A peer opted in as a video provider, advertising one allowlisted model with a
 // verifiable freshness window — the shape `GET /api/instances` returns.

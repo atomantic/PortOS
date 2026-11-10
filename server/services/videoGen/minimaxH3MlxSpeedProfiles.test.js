@@ -30,8 +30,8 @@ vi.mock('../loras.js', async (original) => ({ ...(await original()), getLoraKeyL
 const model = { ...profile.model, name: 'Example H3 MLX', supportedModes: ['text', 'image', 'fflf'],
   steps: 8, guidance: 0, samplerLocked: true, speedProfiles: [profile],
   defaultWidth: 1344, defaultHeight: 768, repoFiles: ['config.json'], requiredWeights: [profile.checkpoint],
-  defaultFrames: 124, frameOptions: [124], fpsOptions: [24], termsGate: { id: 'example-h3-terms' } };
-const settings = { videoGen: { acceptedModelTerms: ['example-h3-terms'] } };
+  defaultFrames: 124, frameOptions: [124], fpsOptions: [24] };
+const settings = { videoGen: {} };
 const request = { backend: 'local', modelId: model.id, prompt: 'An invented paper boat crosses a pond.',
   width: 1344, height: 768, numFrames: 124, fps: 24, mode: 'text', speedProfileId: profile.id };
 const prepare = (overrides = {}) => prepareVideoGenParams({ body: { ...request, ...overrides }, uploads: {}, localOnlyParamKeys: ['speedProfileId'] });
@@ -123,12 +123,6 @@ print(json.dumps({'id':args.speed_profile,'steps':args.steps,'adapter':args.spee
     expect(readSafetensorsHeader).not.toHaveBeenCalled();
   });
 
-  it('checks persisted terms before runtime or adapter access', async () => {
-    getSettings.mockResolvedValue({ videoGen: { acceptedModelTerms: [] } });
-    await expect(prepare()).rejects.toMatchObject({ code: 'VIDEO_MODEL_TERMS_ACCEPTANCE_REQUIRED' });
-    expect(resolveMiniMaxH3MlxSpeedCapable).not.toHaveBeenCalled();
-    expect(findCachedRepoFile).not.toHaveBeenCalled();
-  });
 });
 
 

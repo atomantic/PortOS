@@ -13,9 +13,8 @@
 //     place (server/lib/videoDisclosure.js) and can't drift here.
 //
 // It is deliberately NOT part of `ModelSelect` — that component selects models
-// and must stay a plain picker. Territory exclusions (when a model declares
-// them) render here as facts next to the weights license, not as a blocking
-// acknowledgement.
+// and must stay a plain picker. License terms are informational links only;
+// PortOS never gates download or generation on accepting them.
 import { Server, Cloud } from 'lucide-react';
 import FactLink from './FactLink.jsx';
 import { formatDownloadGb } from '../../utils/formatters';
@@ -164,11 +163,6 @@ export default function ModelDisclosure({
               </Fact>
               <LicenseFact label="Weights license" license={disclosure?.weightsLicense} />
               <LicenseFact label="Runtime license" license={disclosure?.runtimeLicense} />
-              {Array.isArray(model?.termsGate?.excludedTerritories) && model.termsGate.excludedTerritories.length > 0 && (
-                <Fact label="License territory">
-                  Excludes {model.termsGate.excludedTerritories.join(', ')}
-                </Fact>
-              )}
               <Fact label="Estimated download">{formatDownloadGb(disclosure?.estimatedDownloadGb)}</Fact>
               <MemoryFact model={model} systemMemoryGb={systemMemoryGb} />
               <MemoryProfileFact model={model} systemMemoryGb={systemMemoryGb} />

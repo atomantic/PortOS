@@ -97,7 +97,6 @@ const prepare = (body, uploads = {}) => prepareVideoGenParams({
   localOnlyParamKeys: LOCAL_ONLY_KEYS,
 });
 
-const H3_TERMS = 'minimax-h3-community-license-2026-08-02';
 const H3_MODEL = {
   id: 'minimax_h3_8bit',
   name: 'MiniMax H3 MLX 8-bit',
@@ -106,7 +105,6 @@ const H3_MODEL = {
   defaultFrames: 124,
   frameOptions: [107, 124, 141, 158],
   fpsOptions: [24],
-  termsGate: { id: H3_TERMS },
 };
 
 // Paths unlinked under PATHS.uploads — i.e. the durable copies the service
@@ -654,21 +652,18 @@ describe('validateVideoRetryParams', () => {
 });
 
 describe('prepareVideoGenParams — MiniMax H3 contract', () => {
-  // H3 is license-gated, and the only authorization is the acknowledgement
-  // recorded in settings — so every test below that is about H3's *mode*
-  // contract runs on an install that has already accepted its terms.
-  const settingsWith = (acceptedModelTerms) => ({
+  const settings = () => ({
     imageGen: {
       local: { pythonPath: '/usr/bin/python3' },
       grok: { enabled: true, grokPath: '/usr/bin/grok', aspectRatio: '16:9' },
     },
-    videoGen: { acceptedModelTerms },
+    videoGen: {},
   });
   beforeEach(() => {
     vi.clearAllMocks();
     listVideoModels.mockReturnValue([H3_MODEL]);
     loadHistory.mockResolvedValue([]);
-    getSettings.mockResolvedValue(settingsWith([H3_TERMS]));
+    getSettings.mockResolvedValue(settings());
   });
 
   it.each(['minimax_h3', 'minimax_h3_cuda'])('refuses unverified temporal admission and replay for %s while preserving legacy frame hops', async (runtime) => {
@@ -686,8 +681,7 @@ describe('prepareVideoGenParams — MiniMax H3 contract', () => {
     expect(optedOut.continuation).toMatchObject({ requestedStrategy: 'frame', effectiveStrategy: 'frame', contextFrames: 0 });
   });
 
-  it('prepares an H3 text render without a recorded license acknowledgement', async () => {
-    getSettings.mockResolvedValueOnce(settingsWith(undefined));
+  it('prepares an H3 text render', async () => {
     const prepared = await prepare({ modelId: H3_MODEL.id, mode: 'text' });
     expect(prepared.effectiveModelId).toBe(H3_MODEL.id);
     expect(prepared.effectiveChunks).toBe(1);
@@ -697,7 +691,7 @@ describe('prepareVideoGenParams — MiniMax H3 contract', () => {
     await expect(prepare({ backend: 'grok', continuityStrategy: 'window' })).rejects.toMatchObject({ status: 400, code: 'VIDEO_CONTINUITY_UNSUPPORTED' });
   });
 
-  it('does not apply the local MiniMax gate to an explicit Grok render', async () => {
+  it('routes an explicit Grok render past the local MiniMax contract', async () => {
     defaultVideoModelId.mockReturnValueOnce(H3_MODEL.id);
     const prepared = await prepare({ backend: 'grok' });
     expect(prepared.backend).toBe('grok');

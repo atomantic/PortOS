@@ -1584,34 +1584,6 @@ describe('MusicVideo project video renderer', () => {
   });
 });
 
-// A model that used to carry a blocking license checkbox still generates
-// from this board with no acknowledgement UI — the license lives on the
-// Video Gen disclosure, not as a per-render gate.
-describe('MusicVideo restricted-model license gate', () => {
-  const GATE = {
-    id: 'example-community-license-2026-01-01',
-    title: 'Example model eligibility and terms',
-    summary: 'This model is licensed only in its applicable territory.',
-    acknowledgement: 'I am eligible and accept the Example Community License.',
-    licenseUrl: 'https://example.com/license',
-  };
-
-  it('does not ask for an eligibility acknowledgement before generating', async () => {
-    getVideoGenStatus.mockResolvedValueOnce({
-      connected: true,
-      defaultModel: 'gated_model',
-      models: [{ id: 'gated_model', name: 'Gated Model', runtime: 'ltx2', termsGate: GATE }],
-    });
-    generateVideo.mockResolvedValue({ jobId: 'gated-job' });
-    await openProject(PROJECT_NO_CLIP, 'produce');
-
-    const generate = await findEnabledByRole('button', { name: /^Render$/ });
-    expect(screen.queryByRole('checkbox', { name: /I am eligible/ })).toBeNull();
-    fireEvent.click(generate);
-    await waitFor(() => expect(generateVideo).toHaveBeenCalled());
-  });
-});
-
 describe('MusicVideo project versions', () => {
   it('forks for video generation without rendering or modifying the source', async () => {
     cloneMusicVideoProject.mockResolvedValue({ ...PROJECT_WITH_CLIP, id: 'mv-footage', name: 'Footage Variant', version: 2, composition: { mode: 'composed' } });

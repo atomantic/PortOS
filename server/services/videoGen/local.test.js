@@ -97,13 +97,8 @@ vi.mock('../../lib/fileUtils.js', () => ({
   UUID_RE: /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
 }));
 
-// The restricted-model license gate resolves authorization from the install's
-// recorded acknowledgements at render time, so these tests declare whether this
-// "install" has accepted MiniMax H3's license.
-const H3_TERMS = 'minimax-h3-community-license-2026-08-02';
-const settingsState = vi.hoisted(() => ({ acceptedModelTerms: [] }));
 vi.mock('../settings.js', () => ({
-  getSettings: vi.fn(async () => ({ videoGen: { acceptedModelTerms: [...settingsState.acceptedModelTerms] } })),
+  getSettings: vi.fn(async () => ({ videoGen: {} })),
 }));
 
 // The SHIPPED speed-profile decorator runs over this fixture rather than the
@@ -137,7 +132,6 @@ vi.mock('../../lib/mediaModels.js', async () => {
       frameOptions: [107, 124, 141, 158], fpsOptions: [24],
       defaultWidth: 1344, defaultHeight: 768, resolutionStep: 32,
       steps: 8, guidance: 0, samplerLocked: true,
-      termsGate: { id: 'minimax-h3-community-license-2026-08-02' },
       requiredWeights: [{
         repo: 'MiniMaxAI/MiniMax-H3',
         revision: '6818f6c32d12b210915e44ad56a4228c2608f160',
@@ -158,7 +152,6 @@ vi.mock('../../lib/mediaModels.js', async () => {
       frameOptions: [124, 141, 158], fpsOptions: [24],
       defaultWidth: 1344, defaultHeight: 768, resolutionStep: 32,
       steps: 8, guidance: 0, samplerLocked: true,
-      termsGate: { id: 'minimax-h3-community-license-2026-08-02' },
       memoryProfiles: [{ id: 'int8-lean', name: 'int8, leaf-level', minMemoryGb: 1, minVramGb: 12, unified: false }],
     },
     {
@@ -544,7 +537,6 @@ afterEach(async () => {
   vi.mocked(probeVideoDuration).mockImplementation(probeMockImpl.probeVideoDuration);
   byovRevisionState.current = null;
   byovRevisionState.expectedRevision = null;
-  settingsState.acceptedModelTerms = [];
   fsState.missOnce = [];
   fsState.candidateCount = null;
   fsState.mtimeMs = null;
@@ -1155,7 +1147,6 @@ describe('generateChainedVideo — model-aware ETA geometry', () => {
       renderMs: 10_000,
       createdAt: '2026-01-01T00:00:00.000Z',
     }]);
-    settingsState.acceptedModelTerms = [H3_TERMS];
     const outerJobId = randomUUID();
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     let onCompleted;
@@ -3826,7 +3817,6 @@ describe.skipIf(process.platform === 'win32')('MiniMax H3 user LoRAs', () => {
     loras: [{ filename: 'fox.safetensors', scale: 0.8 }],
   });
 
-  beforeEach(() => { settingsState.acceptedModelTerms = [H3_TERMS]; });
   afterEach(() => { h3LoraState.capable = false; h3LoraState.cached = null; });
 
   // The model is decorated from the sync cache read, so on a capable install the
@@ -5111,7 +5101,6 @@ describe('resolveVideoLoras — adapter-effect gate (#4872)', () => {
 describe('generateVideo — MiniMax H3 CUDA contract', () => {
   // Same license gate as the MLX entry: it is the same weights under the same
   // terms, so acceptance is recorded once and honored by both runtimes.
-  beforeEach(() => { settingsState.acceptedModelTerms = [H3_TERMS]; });
 
   const cudaCall = (spawnMock) => spawnMock.mock.calls.find(([, args]) => (
     Array.isArray(args) && args.some((arg) => basename(String(arg)) === 'generate_minimax_h3_cuda.py')
@@ -6682,7 +6671,6 @@ describe('resident video batches', () => {
     const failed = vi.fn();
     videoGenEvents.on('completed', completed);
     videoGenEvents.on('failed', failed);
-    settingsState.acceptedModelTerms = [H3_TERMS];
     await generateVideo({
       jobId, prompt: 'Example shot', batchSize: 2, seed: 0,
       modelId: 'minimax_h3_8bit', width: 1344, height: 768,
@@ -6746,7 +6734,6 @@ describe('generateVideo — post-completion native teardown abort', () => {
     // recovers" on Windows CI. Pinned in the hook, never at module scope.
     const { pinPlatform } = await import('../../lib/testHelper.js');
     restorePlatform = pinPlatform('darwin');
-    settingsState.acceptedModelTerms = [H3_TERMS];
     probeState.frames = NUM_FRAMES;
     probeState.durationSeconds = NUM_FRAMES / FPS;
     completed = vi.fn();

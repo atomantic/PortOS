@@ -117,7 +117,7 @@ export function referenceImageUploadsError({ backend, body, uploads = {} }) {
   return null;
 }
 
-async function validateMiniMaxH3SpeedParams(model, params, settings) {
+async function validateMiniMaxH3SpeedParams(model, params) {
   const hasProfile = isMiniMaxH3SpeedProfileRequest(params.speedProfileId);
   if (!hasProfile && ['minimax_h3', 'minimax_h3_cuda'].includes(model?.runtime) && params.speedProfileId && params.speedProfileId !== 'quality') {
     throw new ServerError('This H3 model does not offer the requested speed profile. Select Quality or its listed LightX2V profile.', { status: 400, code: 'VIDEO_SPEED_PROFILE_UNSUPPORTED' });
@@ -129,7 +129,7 @@ async function validateMiniMaxH3SpeedParams(model, params, settings) {
     mode: params.mode || (params.sourceImagePath ? 'image' : 'text'),
     width: params.width ?? model.defaultWidth,
     height: params.height ?? model.defaultHeight,
-  }, settings || await getSettings()) : null;
+  }) : null;
   if (params.loras?.length) {
     const { resolveVideoLoras } = await import('./renderArgs.js');
     const validate = model.runtime === 'minimax_h3' ? validateMiniMaxH3MlxLoras : validateMiniMaxH3CudaLoras;
@@ -266,7 +266,7 @@ export async function validateVideoRetryParams(params = {}) {
   }
   const frameCountError = wan22FrameCountError(model, numFrames);
   if (frameCountError) throw frameCountError;
-  await validateMiniMaxH3SpeedParams(model, params, settings);
+  await validateMiniMaxH3SpeedParams(model, params);
   return model;
 }
 
@@ -1467,7 +1467,7 @@ async function resolvePreparedParams({
   await validateMiniMaxH3SpeedParams(effectiveModel, {
     ...body, loras, sourceImagePath, lastImagePath, keyframes: resolvedKeyframes,
     extendFromVideoPath, audioFilePath,
-  }, settings).catch(async (error) => { await cleanupStaged(); throw error; });
+  }).catch(async (error) => { await cleanupStaged(); throw error; });
 
   const { effectiveChunkPrompts, effectiveContextFrames, continuation } = resolveChainSettings({
     body, effectiveChunks, effectiveModel,

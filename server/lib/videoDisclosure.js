@@ -23,8 +23,6 @@
  * are deliberately NOT duplicated here.
  */
 
-import { ServerError } from './errorHandler.js';
-
 // Every shipped disclosure was checked against its upstream source on this
 // date. Bump it (and re-check) whenever an entry below changes.
 export const VIDEO_DISCLOSURE_REVIEWED_AT = '2026-09-02';
@@ -89,28 +87,6 @@ const RUNTIME_LICENSE = {
   },
 };
 
-// Informational territory facts for ModelDisclosure — not an execution gate.
-// The license is use-as-acceptance; PortOS surfaces the exclusions and the
-// license link rather than blocking download or generate.
-//
-// Shared verbatim by every MiniMax H3 entry — the MLX port and the CUDA path
-// load the same weights under the same license. Sharing the OBJECT (rather
-// than repeating its fields) keeps the `id` identical if an older client
-// still writes `acceptedModelTerms`.
-const MINIMAX_H3_TERMS_GATE = Object.freeze({
-  id: 'minimax-h3-community-license-2026-08-02',
-  title: 'MiniMax H3 eligibility and terms',
-  summary: 'MiniMax grants use only in its Applicable Territory. The license excludes the European Union, United Kingdom, Republic of Korea, and United States of America.',
-  acknowledgement: 'I confirm I am in the Applicable Territory and agree to the MiniMax H3 Community License and its Acceptable Use Policy.',
-  licenseUrl: MINIMAX_H3_LICENSE_URL,
-  excludedTerritories: Object.freeze([
-    'European Union',
-    'United Kingdom',
-    'Republic of Korea',
-    'United States of America',
-  ]),
-});
-
 const LTX_2X_WEIGHTS = {
   name: 'LTX-2.x Community License',
   url: 'https://github.com/Lightricks/LTX-2/blob/main/LICENSE.md',
@@ -150,7 +126,6 @@ export const VIDEO_MODEL_DISCLOSURES = Object.freeze({
       estimatedDownloadGb: 147.9,
       reviewedAt: '2026-09-19',
     },
-    termsGate: MINIMAX_H3_TERMS_GATE,
   }])),
   ...Object.fromEntries([4, 6].map((bits) => [`minimax_h3_${bits}bit`, {
     shippedRepo: `pipenetwork/MiniMax-H3-MLX-${bits}bit`,
@@ -160,7 +135,6 @@ export const VIDEO_MODEL_DISCLOSURES = Object.freeze({
       runtimeLicense: RUNTIME_LICENSE.minimax_h3,
       reviewedAt: '2026-09-19',
     },
-    termsGate: MINIMAX_H3_TERMS_GATE,
   }])),
   minimax_h3_ref2va_8bit: {
     shippedRepo: 'Sawfwair/MiniMax-H3-Ref2VA-MLX-8bit',
@@ -171,7 +145,6 @@ export const VIDEO_MODEL_DISCLOSURES = Object.freeze({
       estimatedDownloadGb: 70.9,
       reviewedAt: VIDEO_DISCLOSURE_REVIEWED_AT,
     },
-    termsGate: MINIMAX_H3_TERMS_GATE,
   },
   minimax_h3_8bit: {
     shippedRepo: 'pipenetwork/MiniMax-H3-MLX-8bit',
@@ -185,7 +158,6 @@ export const VIDEO_MODEL_DISCLOSURES = Object.freeze({
       estimatedDownloadGb: 103.3,
       reviewedAt: VIDEO_DISCLOSURE_REVIEWED_AT,
     },
-    termsGate: MINIMAX_H3_TERMS_GATE,
   },
   minimax_h3_cuda: {
     shippedRepo: 'MiniMaxAI/MiniMax-H3',
@@ -202,7 +174,6 @@ export const VIDEO_MODEL_DISCLOSURES = Object.freeze({
       estimatedDownloadGb: 144.1,
       reviewedAt: VIDEO_DISCLOSURE_REVIEWED_AT,
     },
-    termsGate: MINIMAX_H3_TERMS_GATE,
   },
   ltx23_unified: {
     shippedRepo: 'notapalindrome/ltx23-mlx-av',
@@ -374,8 +345,7 @@ export const VIDEO_MODEL_DISCLOSURES = Object.freeze({
     },
   },
   // FastVideo's own FastH3 Dense / Data-Free snapshot — the checkpoint the
-  // repack below is converted FROM, so same weights, same license, same
-  // territory gate. The three rows share one 144 GB download: the format in the
+  // repack below is converted FROM, so same weights, same license. The three rows share one 144 GB download: the format in the
   // id names a LOCAL conversion of the snapshot's transformer/, not a separate
   // repo, which is why they all quote the same figure.
   ...Object.fromEntries(['int8', 'int6', 'int4'].map((format) => [`fasth3_dense_datafree_${format}`, {
@@ -387,12 +357,11 @@ export const VIDEO_MODEL_DISCLOSURES = Object.freeze({
       estimatedDownloadGb: 144.0,
       reviewedAt: VIDEO_DISCLOSURE_REVIEWED_AT,
     },
-    termsGate: MINIMAX_H3_TERMS_GATE,
   }])),
   // FastH3 Preview v1 Dense / Data-Free, packed for MLX. Same MiniMax H3
   // weights lineage as the entries above — its `conversion_manifest.json`
   // names FastVideo/…-Dense-DataFree @ f624f08c as the source — so it carries
-  // the same license and the same territory gate. The repo is self-contained:
+  // the same license. The repo is self-contained:
   // the quantized DiT ships beside the vae / audio_vae / text_encoder /
   // tokenizer the MLX pipeline loads, which is why the whole snapshot is the
   // download figure.
@@ -405,7 +374,6 @@ export const VIDEO_MODEL_DISCLOSURES = Object.freeze({
       estimatedDownloadGb: 89.3,
       reviewedAt: VIDEO_DISCLOSURE_REVIEWED_AT,
     },
-    termsGate: MINIMAX_H3_TERMS_GATE,
   },
   // Legacy CUDA entry. It carries no `repo` because its diffusers helper
   // resolves LTX-Video 0.9.5 directly, so its weights license stays Unknown.
@@ -426,10 +394,6 @@ for (const spec of Object.values(VIDEO_MODEL_DISCLOSURES)) {
     if (value && typeof value === 'object') Object.freeze(value);
   }
   Object.freeze(spec.disclosure);
-  if (spec.termsGate) {
-    Object.freeze(spec.termsGate.excludedTerritories);
-    Object.freeze(spec.termsGate);
-  }
   Object.freeze(spec);
 }
 
@@ -450,70 +414,9 @@ export const applyVideoDisclosures = (list) => {
     const spec = VIDEO_MODEL_DISCLOSURES[entry.id];
     if (!spec) return entry;
     if (spec.shippedRepo !== null && entry.repo !== spec.shippedRepo) return entry;
-    return {
-      ...entry,
-      ...(!('disclosure' in entry) ? { disclosure: spec.disclosure } : {}),
-      // A shipped restricted model cannot silently lose its required gate
-      // through an old/user-edited registry entry. Forked repos are excluded by
-      // the guard above because PortOS has not established their terms.
-      ...(spec.termsGate ? { termsGate: spec.termsGate } : {}),
-    };
+    return 'disclosure' in entry ? entry : { ...entry, disclosure: spec.disclosure };
   });
 };
-
-// The exact reviewed-license id a model requires, or null when it is ungated.
-export const videoModelTermsGateId = (model) => {
-  const required = model?.termsGate?.id;
-  return typeof required === 'string' && required.length > 0 ? required : null;
-};
-
-/**
- * The install's persisted acknowledgements (`settings.videoGen.acceptedModelTerms`).
- *
- * Acceptance is an install-wide fact about the operator, not a property of one
- * request or one browser: the same person drives the Video Gen page, the music
- * video director board, and every scheduled/agent render. Persisting it here is
- * what lets a single acknowledgement authorize all of them — see the
- * `POST /api/video-gen/model-terms` route.
- *
- * Returns a de-duplicated array of non-empty strings; anything else on disk is
- * ignored rather than trusted.
- */
-export const acceptedVideoModelTerms = (settings) => {
-  const stored = settings?.videoGen?.acceptedModelTerms;
-  if (!Array.isArray(stored)) return [];
-  return [...new Set(stored.filter((id) => typeof id === 'string' && id.length > 0))];
-};
-
-// Exact-id comparison keeps acceptance scoped to one reviewed license version:
-// acknowledging one license must never authorize a later revision of it, or an
-// unrelated restricted model. The install's recorded acknowledgements
-// (`acceptedVideoModelTerms`) are the ONLY authorization — there is no
-// per-request "I accept" a caller can assert, so every authorized render traces
-// back to a recorded acknowledgement and withdrawing one takes effect
-// everywhere, including work already sitting in the queue.
-export const isVideoModelTermsAccepted = (model, acceptedKeys) => {
-  const required = videoModelTermsGateId(model);
-  if (required === null) return true;
-  return Array.isArray(acceptedKeys) && acceptedKeys.includes(required);
-};
-
-/**
- * The rejection every gated code path throws, so the wording (and the way out
- * of it) can't drift between the download route, request preparation, and the
- * render itself.
- *
- * A render can be started from surfaces that have no acknowledgement UI of
- * their own — and from producers with no UI at all, whose only channel to the
- * user is this message on a failed job. So the message must name where the
- * acknowledgement lives, not just state that one is missing.
- */
-export const videoModelTermsError = (model, action = 'generation') => new ServerError(
-  `${model?.name || 'This model'} requires acknowledgement of its territory restrictions, `
-  + `Community License, and Acceptable Use Policy before ${action}. `
-  + 'Accept it on the Video Gen page (Media → Video) — one acknowledgement authorizes every render on this install.',
-  { status: 403, code: 'VIDEO_MODEL_TERMS_ACCEPTANCE_REQUIRED' },
-);
 
 /**
  * Execution + policy scope for each Video Gen render backend. Server-owned so

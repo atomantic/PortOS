@@ -19,16 +19,13 @@ import {
   videoGenModel,
   videoGenModelContext,
   videoGenStatus,
-  videoGenTermsGate,
 } from '../test/videoGenPageMocks.jsx';
 
-const TERMS_ID = 'minimax-h3-license-v1';
 const MODEL = videoGenModel('h3-one', {
   textEncoderOptions: [
     { id: 'stock', label: 'Stock', description: 'Ships with the model.', builtIn: true },
     { id: 'huihui-abliterated', label: 'Huihui abliterated', description: 'Abliterated.', builtIn: false, repo: 'example-org/abliterated', sizeBytes: 56962931632 },
   ],
-  termsGate: videoGenTermsGate(TERMS_ID),
 });
 
 await loadVideoGenPage();
