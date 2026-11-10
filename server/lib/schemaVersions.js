@@ -900,7 +900,10 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // plus `colorMatch.references` (the shot a group matches to). A v57 strict camera
   // schema rejects `doNotMatch` and a v57 project schema rejects `colorMatch`.
   // Optional, no backfill: absent matching leaves the picture unchanged.
-  musicVideoProjects: 58,
+  // v59 = a camera's film look, frame (aspect and matte), cut defaults and on-screen display,
+  // and the video's overscan. A v58 strict camera or project schema rejects them. Optional, no backfill:
+  // absent follows the video look, the video frame, and no crop.
+  musicVideoProjects: 59,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).

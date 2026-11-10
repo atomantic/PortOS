@@ -34,7 +34,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { AAC_ENCODE_ARGS, BT709_CONTAINER_ARGS, H264_ENCODE_ARGS, runFfmpegProcess, supportsSetparamsFilter } from '../../lib/ffmpeg.js';
 import { filterGraphViaFile } from '../../lib/ffmpegFilterGraph.js';
 import { isFilmLookNeutral, normalizeFilmLook } from '../../lib/filmLook.js';
-import { shotFilmLook } from '../../lib/musicVideoFilmLook.js';
+import { shotCamera, shotFilmLook } from '../../lib/musicVideoFilmLook.js';
 import { activeShotColorMatch, colorMatchVideoFilter, segmentCacheName, segmentLookHashPayload } from '../../lib/shotColorMatch.js';
 import { endingParts } from '../../lib/musicVideoEnding.js';
 import { AUDIO_NORM, buildAudioBedMix } from '../videoTimeline/audioBedMix.js';
@@ -99,7 +99,11 @@ function finishSegment(fields, { project, scene, fps, dir, prefix = '' }) {
   };
 }
 
-const hasOwnLook = scene => !!(scene?.filmLook && typeof scene.filmLook === 'object');
+// A present shot or camera look, including an explicit Clean, does not follow the video-wide look cache.
+const hasOwnLook = (project, scene) => {
+  const cameraLook = shotCamera(project, scene)?.filmLook;
+  return !!((scene?.filmLook && typeof scene.filmLook === 'object') || (cameraLook && typeof cameraLook === 'object'));
+};
 
 /**
  * `value` with every timed entry (an object carrying a finite `startSec`) that
@@ -174,7 +178,7 @@ export async function planShotSegments(project, options) {
     const look = shotFilmLook(project, scene);
     segments.push(finishSegment({
       index, sceneId: built.shotId, layer: built.layer, startSec: built.startSec, endSec: built.endSec,
-      startFrame, frames: built.frames, window, segment, look, baseKey, ownLook: hasOwnLook(scene),
+      startFrame, frames: built.frames, window, segment, look, baseKey, ownLook: hasOwnLook(project, scene),
       basePath: join(dir, `${baseKey}.mp4`),
     }, { project, scene, fps, dir }));
   }
@@ -215,7 +219,7 @@ async function planColdOpenSegments(project, coldOpen, { dir, width, height, fps
     const startSec = built.startSec - leadSec;
     segments.push(finishSegment({
       index, coldOpen: true, sceneId: built.shotId, layer: built.layer, startSec, endSec: built.endSec - leadSec,
-      startFrame: Math.round(startSec * fps), frames: built.frames, segment, look, baseKey, ownLook: hasOwnLook(scene),
+      startFrame: Math.round(startSec * fps), frames: built.frames, segment, look, baseKey, ownLook: hasOwnLook(project, scene),
       basePath: join(dir, `${baseKey}.mp4`),
     }, { project, scene, fps, dir }));
   }

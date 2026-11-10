@@ -317,6 +317,25 @@ const glitchLook = (g) => ({
 });
 
 /**
+ * A shot that never set a cut field takes that field from its camera.
+ * `null` on the shot is an explicit Off and stays off; only an absent field inherits.
+ * A null camera field is not a default.
+ */
+export function applyCameraCutDefaults(scene, cameras) {
+  const id = scene?.shotSheet?.cameraId;
+  const cuts = id && Array.isArray(cameras) ? cameras.find((camera) => camera?.id === id)?.cuts : null;
+  if (!scene || !cuts || typeof cuts !== 'object') return scene;
+  let next = scene;
+  for (const field of ['transitionIn', 'transitionOut', 'glitches']) {
+    if (next[field] === undefined && cuts[field] != null) {
+      if (next === scene) next = { ...scene };
+      next[field] = cuts[field];
+    }
+  }
+  return next;
+}
+
+/**
  * A scene's chosen cut effects, only the ones that are set:
  * `{ transitionIn?, transitionOut?, wipeIn?, wipeOut?, shotGlitches? }`
  * (`shotGlitches` on the song's clock, wipes as `sceneWipe` returns them). A
@@ -388,12 +407,13 @@ export function transitionFrameAt(glitches, frame) {
  * The storyboard's cut timeline on `fps`: each timed shot runs from its start
  * to the next shot's start (the last to `endSec`, else its own end).
  */
-export function sceneTransitionSections(scenes, fps, { endSec = null } = {}) {
+export function sceneTransitionSections(scenes, fps, { endSec = null, cameras = null } = {}) {
   const timed = (Array.isArray(scenes) ? scenes : []).filter((s) => Number.isFinite(s?.startSec)).sort((a, b) => a.startSec - b.startSec);
   return timed.map((scene, i) => {
     const next = timed[i + 1];
     const stop = next ? next.startSec : (Number.isFinite(endSec) ? endSec : scene.endSec);
-    return { sceneId: scene.sceneId, startFrame: Math.round(scene.startSec * fps), endFrame: Math.round((stop ?? scene.startSec) * fps), ...sceneTransitions(scene) };
+    const shot = applyCameraCutDefaults(scene, cameras);
+    return { sceneId: scene.sceneId, startFrame: Math.round(scene.startSec * fps), endFrame: Math.round((stop ?? scene.startSec) * fps), ...sceneTransitions(shot) };
   });
 }
 
@@ -403,9 +423,9 @@ export function sceneTransitionSections(scenes, fps, { endSec = null } = {}) {
  * each running from its cut for `frames` frames. `planned` maps a scene id to
  * its storyboard row's transition, whose dissolve or fade owns the cut.
  */
-export function sceneWipeCuts(scenes, fps, { endSec = null, planned = null } = {}) {
+export function sceneWipeCuts(scenes, fps, { endSec = null, planned = null, cameras = null } = {}) {
   const byId = new Map((Array.isArray(scenes) ? scenes : []).map((scene) => [scene?.sceneId, scene]));
-  const sections = sceneTransitionSections(scenes, fps, { endSec })
+  const sections = sceneTransitionSections(scenes, fps, { endSec, cameras })
     .map((section) => ({ ...section, cutEffect: sceneCutEffect(byId.get(section.sceneId), planned?.get?.(section.sceneId)) }));
   return wipeCuts(sections, { fps }).map((cut) => ({
     style: cut.style,
@@ -577,9 +597,9 @@ export function imageEffectGlitchFrames(pieces, fps) {
 }
 
 /** The storyboard's end-frame glitch frames on `fps` (the animatic's counterpart of the render's pieces). */
-export function sceneImageEffectGlitchFrames(scenes, fps, { layered = false, endSec = null } = {}) {
+export function sceneImageEffectGlitchFrames(scenes, fps, { layered = false, endSec = null, cameras = null } = {}) {
   const byId = new Map((Array.isArray(scenes) ? scenes : []).map((scene) => [scene?.sceneId, scene]));
-  return imageEffectGlitchFrames(sceneTransitionSections(scenes, fps, { endSec })
+  return imageEffectGlitchFrames(sceneTransitionSections(scenes, fps, { endSec, cameras })
     .map((section) => ({ ...section, effect: sceneImageEffect(byId.get(section.sceneId), { layered }) })), fps);
 }
 
@@ -624,8 +644,8 @@ export function shotGlitchFrames(pieces, fps) {
 }
 
 /** The storyboard's in-shot glitch frames on `fps` (the animatic's counterpart of the render's pieces). */
-export function sceneShotGlitchFrames(scenes, fps, { endSec = null } = {}) {
-  return shotGlitchFrames(sceneTransitionSections(scenes, fps, { endSec }), fps);
+export function sceneShotGlitchFrames(scenes, fps, { endSec = null, cameras = null } = {}) {
+  return shotGlitchFrames(sceneTransitionSections(scenes, fps, { endSec, cameras }), fps);
 }
 
 /** Glitch frame lists as one, sorted by frame: an earlier list keeps a frame two of them reach. */

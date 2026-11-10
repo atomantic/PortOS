@@ -5,7 +5,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Isolate the module's I/O boundaries so the pure builders + resolvers can be
 // unit-tested without ffmpeg, the DB, or the filesystem.
-vi.mock('fs', () => ({ existsSync: vi.fn(() => true) }));
+// existsSync stays stubbed so clip resolution does not touch real media files.
+// The rest of fs stays real: a render admits through the maintenance journal,
+// which mkdir's its lock with node:fs, and a mock of only existsSync makes that
+// admission look like a broken journal.
+vi.mock('fs', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, existsSync: vi.fn(() => true) };
+});
 vi.mock('../../lib/ffmpeg.js', () => ({
   findFfmpeg: vi.fn(async () => '/usr/bin/ffmpeg'),
   safeUnder: (root, name) => (name ? `${root}/${name}` : null),

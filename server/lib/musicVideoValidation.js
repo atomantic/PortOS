@@ -7,6 +7,7 @@ import { festivalPacketSchema } from './musicVideoFestivalPacket.js';
 import { MUSIC_VIDEO_MEDIA_MODES } from './musicVideoMediaPolicy.js';
 import { MUSIC_VIDEO_GRADE_PRESETS, MUSIC_VIDEO_GRADE_MAX_GRAIN } from './musicVideoGrade.js';
 import { filmLookSchema } from './filmLookValidation.js';
+import { MUSIC_VIDEO_CAMERA_FRAME_ASPECTS } from './musicVideoFilmLook.js';
 import { PRODUCTION_MEDIUMS } from './musicVideoProductionMedium.js';
 import { TITLE_CARD_FONTS, TITLE_CARD_LIMITS, TITLE_CARD_POSITIONS, TITLE_CARD_STYLES } from './musicVideoTitleCard.js';
 import { STATS_OUTRO_LIMITS, STATS_OUTRO_LINES } from './musicVideoStatsOutro.js';
@@ -276,6 +277,18 @@ export const musicVideoPacingSchema = z.object({
   hookSec: z.number().min(0.5).max(60).optional(),
 }).strict();
 
+// One glitch inside a shot, or a camera's default glitch (musicVideoTransitions.js).
+const musicVideoShotGlitchSchema = z.object({
+  atSec: z.number().min(0).max(3600),
+  style: z.enum(MUSIC_VIDEO_TRANSITIONS),
+  lengthSec: z.number().positive().max(4).nullable().optional(),
+  strength: z.number().min(0).max(1).nullable().optional(),
+  count: z.number().int().min(1).max(MUSIC_VIDEO_GLITCH_REPEAT_LIMIT).nullable().optional(),
+  everySec: z.number().min(MUSIC_VIDEO_GLITCH_REPEAT_SEC.min).max(MUSIC_VIDEO_GLITCH_REPEAT_SEC.max).nullable().optional(),
+  color: z.string().regex(/^#[0-9a-f]{6}$/i, 'color is #rrggbb').nullable().optional(),
+  edge: z.enum(MUSIC_VIDEO_GLITCH_EDGES).nullable().optional(),
+});
+
 // The cameras that exist in this video, and each shot's plan (lib/musicVideoShotSheet.js).
 export const musicVideoCameraSchema = z.object({
   id: z.string().min(1).max(64),
@@ -287,6 +300,24 @@ export const musicVideoCameraSchema = z.object({
   rule: z.string().trim().max(1000).optional(),
   // How the camera moves in the greybox previz while it is a cut's camera (lib/musicVideoPreviz.js).
   previzStyle: z.enum(PREVIZ_CAMERA_STYLES).optional(),
+  // This camera's finishing look. A shot with no look of its own uses it; null follows the video.
+  filmLook: filmLookSchema.nullable().optional(),
+  // The frame this camera plays inside the video: 4:3 pillarboxes in 16:9. Null is the video's own frame.
+  frame: z.object({
+    aspect: z.enum(MUSIC_VIDEO_CAMERA_FRAME_ASPECTS),
+    matte: z.string().regex(/^#[0-9a-f]{6}$/i, 'matte is #rrggbb').optional(),
+  }).strict().nullable().optional(),
+  // Cut defaults for shots on this camera that have not set their own. Null on a shot stays off.
+  cuts: z.object({
+    transitionIn: z.enum(MUSIC_VIDEO_TRANSITIONS).nullable().optional(),
+    transitionOut: z.enum(MUSIC_VIDEO_TRANSITIONS).nullable().optional(),
+    glitches: z.array(musicVideoShotGlitchSchema).max(MUSIC_VIDEO_SHOT_GLITCH_LIMIT).nullable().optional(),
+  }).strict().nullable().optional(),
+  // Camcorder date and record mark, drawn on the picture. Absent is off.
+  osd: z.object({
+    record: z.boolean().optional(),
+    date: z.string().trim().max(24).optional(),
+  }).strict().nullable().optional(),
   // Leave this camera's shots out of color matching (lib/shotColorMatch.js).
   doNotMatch: z.boolean().optional(),
 }).strict();
@@ -953,7 +984,7 @@ const sceneLayerFields = {
   reverse: z.boolean().nullable().optional(),
   // A clip shorter than its shot holds its last frame for the rest of the shot; null clears it.
   holdLastFrame: z.boolean().nullable().optional(),
-  // The shot's own film look (lib/filmLook.js), kept when the video's look changes; null follows the video's.
+  // The shot's own film look (lib/filmLook.js), kept when the video's look changes; null follows the camera, then the video.
   filmLook: filmLookSchema.nullable().optional(),
   // A VHS glitch over the cut into / out of this shot (musicVideoTransitions.js); null clears it.
   transitionIn: z.enum(MUSIC_VIDEO_TRANSITIONS).nullable().optional(),
@@ -964,16 +995,7 @@ const sceneLayerFields = {
   wipeOut: musicVideoWipeSchema.nullable().optional(),
   // Glitches at moments inside the shot: `atSec` from the shot's start, `lengthSec` stretching the style,
   // `strength` (0 = off), `count` repeats `everySec` apart, and a light leak's `color`/`edge`; null clears them.
-  glitches: z.array(z.object({
-    atSec: z.number().min(0).max(3600),
-    style: z.enum(MUSIC_VIDEO_TRANSITIONS),
-    lengthSec: z.number().positive().max(4).nullable().optional(),
-    strength: z.number().min(0).max(1).nullable().optional(),
-    count: z.number().int().min(1).max(MUSIC_VIDEO_GLITCH_REPEAT_LIMIT).nullable().optional(),
-    everySec: z.number().min(MUSIC_VIDEO_GLITCH_REPEAT_SEC.min).max(MUSIC_VIDEO_GLITCH_REPEAT_SEC.max).nullable().optional(),
-    color: z.string().regex(/^#[0-9a-f]{6}$/i, 'color is #rrggbb').nullable().optional(),
-    edge: z.enum(MUSIC_VIDEO_GLITCH_EDGES).nullable().optional(),
-  })).max(MUSIC_VIDEO_SHOT_GLITCH_LIMIT).nullable().optional(),
+  glitches: z.array(musicVideoShotGlitchSchema).max(MUSIC_VIDEO_SHOT_GLITCH_LIMIT).nullable().optional(),
   // An effect across the cut out of this shot (musicVideoCutEffects.js), kept with its settings while switched off; null clears it.
   cutEffect: z.object({
     style: z.enum(MUSIC_VIDEO_CUT_EFFECTS),
@@ -1929,6 +1951,8 @@ export const musicVideoProjectCreateSchema = z.object({
   soundBed: musicVideoSoundBedSchema.nullable().optional(),
   // The finishing film look (lib/filmLook.js); null = none.
   filmLook: filmLookSchema.nullable().optional(),
+  // Percent cropped from each edge of the picture before the matte and the look (0–8). Null crops nothing.
+  overscan: z.number().min(0).max(8).nullable().optional(),
   // The handmade production medium (lib/musicVideoProductionMedium.js); null = none.
   productionMedium: z.enum(PRODUCTION_MEDIUMS).nullable().optional(),
   // The opening title card (lib/musicVideoTitleCard.js); null = none.
@@ -1980,6 +2004,8 @@ export const musicVideoProjectUpdateSchema = z.object({
   soundBed: musicVideoSoundBedSchema.nullable().optional(),
   // The finishing film look (lib/filmLook.js); null = none.
   filmLook: filmLookSchema.nullable().optional(),
+  // Percent cropped from each edge of the picture before the matte and the look (0–8). Null crops nothing.
+  overscan: z.number().min(0).max(8).nullable().optional(),
   // The handmade production medium (lib/musicVideoProductionMedium.js); null = none.
   productionMedium: z.enum(PRODUCTION_MEDIUMS).nullable().optional(),
   // The opening title card (lib/musicVideoTitleCard.js); null = none.

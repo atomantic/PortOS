@@ -388,6 +388,7 @@ export default function SceneCard({
   // A shot before the song has a length of its own instead of a span of the song.
   const preMusic = isPreMusicShot(scene);
   const planned = plannedTransitions(project?.productionReview?.draft?.storyboard);
+  const sheetCamera = (project?.cameras || []).find((entry) => entry?.id && entry.id === scene.shotSheet?.cameraId) || null;
   // Each group's header says what is set, so a closed group still reads at a glance.
   const timingSummary = [
     preMusic ? `before the song · ${normalizePreMusic(scene.preMusic).durationSec.toFixed(2)}s` : null,
@@ -400,7 +401,7 @@ export default function SceneCard({
     layer === 'footage' ? SHOT_MODE_LABELS[shotModeValue] : LAYER_LABELS[layer],
     layer !== 'footage' && scene.camera?.move ? `camera ${scene.camera.move}` : null,
   ].filter(Boolean).join(' · ');
-  const effectLabels = [...new Set(Object.values(shotEffects(scene, { layered, planned })).flat().map(shotEffectLabel))];
+  const effectLabels = [...new Set(Object.values(shotEffects(scene, { layered, planned, cameras: project?.cameras })).flat().map(shotEffectLabel))];
   const effectsSummary = effectLabels.join(', ') || 'none';
   const lyricType = !preMusic && (documentComposition || (layer !== 'card' && composedDrawsLyrics(project)));
   // A storyboard-linked shot's prompt is its panel's direction, read live so it stays in
@@ -530,7 +531,7 @@ export default function SceneCard({
       )}
       <ShotEditorGroup title="Transitions & effects" summary={effectsSummary} testId="shot-group-effects">
         {/* A glitch or a wipe on the cut into or out of this shot; never moves the cut. */}
-        <SceneTransitions fieldId={fieldId} scene={scene} onChange={applyPatch} isLast={!!isLast}
+        <SceneTransitions fieldId={fieldId} scene={scene} defaults={sheetCamera?.cuts || null} onChange={applyPatch} isLast={!!isLast}
           onVaryWipes={onVaryWipes ? (count) => onVaryWipes(scene.sceneId, count) : null} />
         {/* How this shot hands over to the next: a cut, beat toggle, dissolve or fade, as its storyboard row plans until one is picked. */}
         <SceneCutEffect fieldId={fieldId} scene={scene} isLast={!!isLast} onChange={applyPatch} planned={planned.get(scene.sceneId)} />

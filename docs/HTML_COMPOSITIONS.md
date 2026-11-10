@@ -347,8 +347,11 @@ what the preview shows and what the render bakes:
   frames from `buildMusicVideoFfmpegArgs`' `segment` mode, which draws the same
   chain the whole-film graph draws there, cut effects borrowing the next shot,
   fades, grade, glitches and the typography over it) and the look (the base
-  through the shot's film look on song time). A shot may keep its own look
-  (`scene.filmLook`; `null` follows the video's). A look change redoes only the
+  through the shot's film look on song time). A shot uses its own look, then
+  its camera's (`cameras[].filmLook`), then the video's (`null` follows the
+  camera, then the video). A camera may also play in its own frame (4:3 or 3:2
+  inside the video) and the video may crop a few percent from each edge
+  (overscan) before that matte and the look. A look change redoes only the
   look stage of the shots it reaches, a shot change only that shot (and a
   neighbor whose cut effect reads it). The shot card's **Final render** row
   renders one shot now and plays it silent; **Render final** renders whatever

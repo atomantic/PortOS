@@ -13,6 +13,9 @@ import { SHOT_SHEET_ANCHOR } from '../../lib/musicVideoStages.js';
 import {
   SHOT_CAMERA_MAX, SHOT_CAMERA_SET_DOWN, SHOT_SHEET_MAP_BARS, normalizeShotSheet, shotSheetBulkEdits, shotSheetCast, shotSheetMapRows, shotSheetMarkDoneEdits, shotSheetMediaEdits, shotSheetOptions, shotSheetProblems, shotSheetRows, shotSheetStretches,
 } from '../../../../server/lib/musicVideoShotSheet.js';
+import { MUSIC_VIDEO_CAMERA_FRAME_ASPECTS } from '../../../../server/lib/musicVideoFilmLook.js';
+import { FILM_LOOK_PRESETS, filmLookPreset } from '../../lib/filmLook.js';
+import { MUSIC_VIDEO_TRANSITIONS, MUSIC_VIDEO_TRANSITION_LABELS } from '../../lib/musicVideoTransitions.js';
 
 const inputCls = 'w-full min-w-0 rounded border border-port-border bg-port-bg px-1.5 py-1 text-xs min-h-[44px] pointer-fine:sm:min-h-0';
 
@@ -120,6 +123,87 @@ function BulkFill({ rows, disabled, onApply }) {
   );
 }
 
+function nextCuts(camera, change) {
+  const transitionIn = 'transitionIn' in change ? change.transitionIn : camera.cuts?.transitionIn;
+  const transitionOut = 'transitionOut' in change ? change.transitionOut : camera.cuts?.transitionOut;
+  const glitches = 'glitches' in change ? change.glitches : camera.cuts?.glitches;
+  const cuts = {
+    ...(MUSIC_VIDEO_TRANSITIONS.includes(transitionIn) ? { transitionIn } : {}),
+    ...(MUSIC_VIDEO_TRANSITIONS.includes(transitionOut) ? { transitionOut } : {}),
+    ...(Array.isArray(glitches) && glitches.length ? { glitches } : {}),
+  };
+  return Object.keys(cuts).length ? cuts : null;
+}
+
+function nextOsd(camera, change) {
+  const record = 'record' in change ? change.record === true : camera.osd?.record === true;
+  const date = 'date' in change ? String(change.date || '').trim().slice(0, 24) : (camera.osd?.date || '');
+  const osd = { ...(record ? { record: true } : {}), ...(date ? { date } : {}) };
+  return Object.keys(osd).length ? osd : null;
+}
+
+/** Look, frame, cut defaults and the camcorder display for one camera. Absent follows the video. */
+function CameraFinish({ camera, onPatch }) {
+  const preset = FILM_LOOK_PRESETS.some((entry) => entry.id === camera.filmLook?.preset)
+    ? camera.filmLook.preset
+    : (camera.filmLook ? 'custom' : '');
+  const aspect = MUSIC_VIDEO_CAMERA_FRAME_ASPECTS.includes(camera.frame?.aspect) ? camera.frame.aspect : '';
+  const glitch = MUSIC_VIDEO_TRANSITIONS.includes(camera.cuts?.glitches?.[0]?.style) ? camera.cuts.glitches[0].style : '';
+  const matte = /^#[0-9a-f]{6}$/i.test(camera.frame?.matte || '') ? camera.frame.matte : '#000000';
+  return (
+    <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+      <select aria-label={`${camera.name} film look`} value={preset} className={`${inputCls} max-w-[10rem]`}
+        onChange={(event) => {
+          const value = event.target.value;
+          if (value === 'custom') return;
+          onPatch({ filmLook: value ? filmLookPreset(value) : null });
+        }}>
+        <option value="">Video&apos;s look</option>
+        {preset === 'custom' && <option value="custom">Custom</option>}
+        {FILM_LOOK_PRESETS.map((entry) => <option key={entry.id} value={entry.id}>{entry.label}</option>)}
+      </select>
+      <select aria-label={`${camera.name} frame`} value={aspect} className={`${inputCls} max-w-[7rem]`}
+        onChange={(event) => {
+          const next = event.target.value;
+          onPatch({ frame: next ? { aspect: next, ...(camera.frame?.matte ? { matte: camera.frame.matte } : {}) } : null });
+        }}>
+        <option value="">Video frame</option>
+        {MUSIC_VIDEO_CAMERA_FRAME_ASPECTS.map((entry) => <option key={entry} value={entry}>{entry}</option>)}
+      </select>
+      {aspect && (
+        <input aria-label={`${camera.name} matte`} type="color" value={matte}
+          onChange={(event) => onPatch({ frame: { aspect, matte: event.target.value } })}
+          className="h-8 w-8 rounded border border-port-border bg-port-bg" />
+      )}
+      <select aria-label={`${camera.name} effect in`} value={MUSIC_VIDEO_TRANSITIONS.includes(camera.cuts?.transitionIn) ? camera.cuts.transitionIn : ''} className={`${inputCls} max-w-[9rem]`}
+        onChange={(event) => onPatch({ cuts: nextCuts(camera, { transitionIn: event.target.value || null }) })}>
+        <option value="">No default in</option>
+        {MUSIC_VIDEO_TRANSITIONS.map((style) => <option key={style} value={style}>{MUSIC_VIDEO_TRANSITION_LABELS[style]}</option>)}
+      </select>
+      <select aria-label={`${camera.name} effect out`} value={MUSIC_VIDEO_TRANSITIONS.includes(camera.cuts?.transitionOut) ? camera.cuts.transitionOut : ''} className={`${inputCls} max-w-[9rem]`}
+        onChange={(event) => onPatch({ cuts: nextCuts(camera, { transitionOut: event.target.value || null }) })}>
+        <option value="">No default out</option>
+        {MUSIC_VIDEO_TRANSITIONS.map((style) => <option key={style} value={style}>{MUSIC_VIDEO_TRANSITION_LABELS[style]}</option>)}
+      </select>
+      <select aria-label={`${camera.name} default glitch`} value={glitch} className={`${inputCls} max-w-[9rem]`}
+        onChange={(event) => onPatch({ cuts: nextCuts(camera, { glitches: event.target.value ? [{ atSec: 0, style: event.target.value }] : null }) })}>
+        <option value="">No default glitch</option>
+        {MUSIC_VIDEO_TRANSITIONS.map((style) => <option key={style} value={style}>{MUSIC_VIDEO_TRANSITION_LABELS[style]}</option>)}
+      </select>
+      <label className="inline-flex min-h-[44px] items-center gap-1 pointer-fine:sm:min-h-0">
+        <input type="checkbox" aria-label={`${camera.name} record mark`} checked={camera.osd?.record === true}
+          onChange={(event) => onPatch({ osd: nextOsd(camera, { record: event.target.checked }) })} />
+        REC
+      </label>
+      <input key={`d-${camera.osd?.date || ''}`} aria-label={`${camera.name} on-screen date`} placeholder="On-screen date" defaultValue={camera.osd?.date || ''} maxLength={24} className={`${inputCls} max-w-[9rem]`}
+        onBlur={(event) => {
+          const date = event.target.value.trim();
+          if (date !== (camera.osd?.date || '')) onPatch({ osd: nextOsd(camera, { date }) });
+        }} />
+    </div>
+  );
+}
+
 /** The cameras that exist in this video: each shot on the sheet picks one. */
 function CameraList({ project, disabled, onChange }) {
   const cameras = project.cameras || [];
@@ -129,33 +213,36 @@ function CameraList({ project, disabled, onChange }) {
     <fieldset disabled={disabled} className="min-w-0 space-y-1.5">
       <legend className="text-xs font-medium">Cameras in this video</legend>
       {cameras.map((camera) => (
-        <div key={camera.id} className="grid min-w-0 gap-1.5 sm:grid-cols-[10rem_7.5rem_7rem_8rem_minmax(0,1fr)_2.75rem]">
-          <div className="min-w-0">
-            <input key={`n-${camera.name}`} aria-label="Camera name" defaultValue={camera.name} maxLength={120} className={inputCls}
-              onBlur={(event) => { const name = event.target.value.trim(); if (name && name !== camera.name) patch(camera.id, { name }); }} />
-            <label className="mt-1 flex min-h-[44px] items-center gap-1 text-xs pointer-fine:sm:min-h-0">
-              <input type="checkbox" aria-label={`${camera.name}: do not match`} checked={!!camera.doNotMatch}
-                onChange={(event) => patch(camera.id, { doNotMatch: event.target.checked })} />
-              Do not match
-            </label>
+        <div key={camera.id} className="space-y-1">
+          <div className="grid min-w-0 gap-1.5 sm:grid-cols-[10rem_7.5rem_7rem_8rem_minmax(0,1fr)_2.75rem]">
+            <div className="min-w-0">
+              <input key={`n-${camera.name}`} aria-label="Camera name" defaultValue={camera.name} maxLength={120} className={inputCls}
+                onBlur={(event) => { const name = event.target.value.trim(); if (name && name !== camera.name) patch(camera.id, { name }); }} />
+              <label className="mt-1 flex min-h-[44px] items-center gap-1 text-xs pointer-fine:sm:min-h-0">
+                <input type="checkbox" aria-label={`${camera.name}: do not match`} checked={!!camera.doNotMatch}
+                  onChange={(event) => patch(camera.id, { doNotMatch: event.target.checked })} />
+                Do not match
+              </label>
+            </div>
+            <select aria-label={`${camera.name} kind`} value={camera.kind} className={inputCls} onChange={(event) => patch(camera.id, { kind: event.target.value })}>
+              <option value="in-world">In world</option>
+              <option value="observer">Observer</option>
+            </select>
+            <select aria-label={`${camera.name} shoots`} value={camera.output || ''} className={inputCls} onChange={(event) => patch(camera.id, { output: event.target.value || null })}>
+              <option value="">Photo/Video</option>
+              <option value="video">Video</option>
+              <option value="image">Photo</option>
+            </select>
+            <input key={`o-${camera.owner || ''}`} aria-label={`${camera.name} owner`} placeholder="Owner" defaultValue={camera.owner || ''} maxLength={120} className={inputCls}
+              onBlur={(event) => { if (event.target.value.trim() !== (camera.owner || '')) patch(camera.id, { owner: event.target.value.trim() }); }} />
+            <input key={`r-${camera.rule || ''}`} aria-label={`${camera.name} rule`} placeholder="How it behaves in the story" defaultValue={camera.rule || ''} maxLength={1000} className={inputCls}
+              onBlur={(event) => { if (event.target.value.trim() !== (camera.rule || '')) patch(camera.id, { rule: event.target.value.trim() }); }} />
+            <button type="button" aria-label={`Remove ${camera.name}`} onClick={() => onChange(cameras.filter((entry) => entry.id !== camera.id))}
+              className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded border border-port-border text-port-text-muted">
+              <Trash2 size={14} aria-hidden="true" />
+            </button>
           </div>
-          <select aria-label={`${camera.name} kind`} value={camera.kind} className={inputCls} onChange={(event) => patch(camera.id, { kind: event.target.value })}>
-            <option value="in-world">In world</option>
-            <option value="observer">Observer</option>
-          </select>
-          <select aria-label={`${camera.name} shoots`} value={camera.output || ''} className={inputCls} onChange={(event) => patch(camera.id, { output: event.target.value || null })}>
-            <option value="">Photo/Video</option>
-            <option value="video">Video</option>
-            <option value="image">Photo</option>
-          </select>
-          <input key={`o-${camera.owner || ''}`} aria-label={`${camera.name} owner`} placeholder="Owner" defaultValue={camera.owner || ''} maxLength={120} className={inputCls}
-            onBlur={(event) => { if (event.target.value.trim() !== (camera.owner || '')) patch(camera.id, { owner: event.target.value.trim() }); }} />
-          <input key={`r-${camera.rule || ''}`} aria-label={`${camera.name} rule`} placeholder="How it behaves in the story" defaultValue={camera.rule || ''} maxLength={1000} className={inputCls}
-            onBlur={(event) => { if (event.target.value.trim() !== (camera.rule || '')) patch(camera.id, { rule: event.target.value.trim() }); }} />
-          <button type="button" aria-label={`Remove ${camera.name}`} onClick={() => onChange(cameras.filter((entry) => entry.id !== camera.id))}
-            className="flex min-h-[44px] min-w-[44px] items-center justify-center rounded border border-port-border text-port-text-muted">
-            <Trash2 size={14} aria-hidden="true" />
-          </button>
+          <CameraFinish camera={camera} onPatch={(change) => patch(camera.id, change)} />
         </div>
       ))}
       {cameras.length < SHOT_CAMERA_MAX && (

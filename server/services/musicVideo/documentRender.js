@@ -1,7 +1,7 @@
 import { assertMusicVideoMediaSelections, musicVideoMediaMode } from '../../lib/musicVideoMediaPolicy.js';
 import { isEndFrameImageEffect, MUSIC_VIDEO_IMAGE_EFFECTS, sceneImageEffect, scenePhotoSequence } from '../../lib/musicVideoImageEffects.js';
 import { musicVideoGlitchRuntime } from '../../lib/musicVideoGlitchCanvas.js';
-import { glitchFrameParams, mergeGlitchFrames, sceneImageEffectGlitchFrames, sceneShotGlitchFrames, sceneTransitionSections, sceneWipeCuts, transitionGlitchFrames } from '../../lib/musicVideoTransitions.js';
+import { applyCameraCutDefaults, glitchFrameParams, mergeGlitchFrames, sceneImageEffectGlitchFrames, sceneShotGlitchFrames, sceneTransitionSections, sceneWipeCuts, transitionGlitchFrames } from '../../lib/musicVideoTransitions.js';
 import { musicVideoWipeRuntime } from '../../lib/musicVideoWipes.js';
 import { plannedTransitions } from '../../lib/musicVideoCutEffects.js';
 import { musicVideoGradeFilter } from '../../lib/musicVideoGrade.js';
@@ -71,8 +71,10 @@ const documentImageEffect = (scene, media) => {
   return effect && (!isEndFrameImageEffect(effect.effect) || media?.end) ? effect : null;
 };
 
-const hasSelectedGlitches = (project) => (project?.scenes || []).some(scene =>
-  scene?.transitionIn || scene?.transitionOut || scene?.glitches?.length || scene?.imageEffect === 'end-glitch');
+const hasSelectedGlitches = (project) => (project?.scenes || []).some((scene) => {
+  const shot = applyCameraCutDefaults(scene, project?.cameras);
+  return shot?.transitionIn || shot?.transitionOut || shot?.glitches?.length || scene?.imageEffect === 'end-glitch';
+});
 const hasSelectedWipes = (project) => (project?.scenes || []).some(scene => scene?.wipeIn || scene?.wipeOut);
 
 /** The project's aspect ratio (brief), defaulting to 16:9 (lib/musicVideoAspect.js). */
@@ -80,7 +82,7 @@ export const documentAspect = musicVideoAspect;
 
 /**
  * The browser init scripts a document render opens its page with: the film
- * look runtime when the project or a shot has a non-neutral look, and
+ * look runtime when the project, a camera or a shot has a non-neutral look, and
  * the opening title card (lib/musicVideoTitleCard.js) when it has one to show,
  * so every captured frame, probe sample and worker browser draws what the live
  * preview shows. Pure.
@@ -300,10 +302,11 @@ export function buildDocumentData(project, { media = new Map(), frame, clock, so
   const songDocument = buildSongDocument(project);
   const effectScenes = (project.scenes || []).map(scene => isEndFrameImageEffect(scene?.imageEffect) && !media.get(scene.sceneId)?.end
     ? { ...scene, imageEffect: null } : scene);
-  const sections = sceneTransitionSections(effectScenes, clock.fps, { endSec: songDurationSec });
+  const cameras = project?.cameras;
+  const sections = sceneTransitionSections(effectScenes, clock.fps, { endSec: songDurationSec, cameras });
   const effectFrames = mergeGlitchFrames(transitionGlitchFrames(sections, { totalFrames: clock.frames }),
-    sceneImageEffectGlitchFrames(effectScenes, clock.fps, { layered: true, endSec: songDurationSec }),
-    sceneShotGlitchFrames(effectScenes, clock.fps, { endSec: songDurationSec }))
+    sceneImageEffectGlitchFrames(effectScenes, clock.fps, { layered: true, endSec: songDurationSec, cameras }),
+    sceneShotGlitchFrames(effectScenes, clock.fps, { endSec: songDurationSec, cameras }))
     .map(effect => ({ frame: effect.frame, params: glitchFrameParams(effect) }));
   const lyrics = songDocument.lyrics;
   const narrative = resolveNarrativeEvents(project, songDocument.sections, clock.fps);

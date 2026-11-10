@@ -40,6 +40,8 @@ const lyricAt = (cues, t) => {
 // makes an end-frame effect eligible (its still's media and medium). A change
 // reopens it, so a new effect draws (or is named as unsupported) and a removed one clears.
 const shotEffectsKey = (project) => JSON.stringify([project.audioAnalysis?.durationSec ?? null, project.productionPolicy?.strategy ?? null,
+  project.overscan ?? null,
+  (project.cameras || []).map((camera) => [camera.id, camera.filmLook, camera.frame, camera.cuts, camera.osd]),
   (project.treatment?.shotDirections || []).map((d) => [d.sceneId, d.medium]),
   (project.scenes || []).map((s) => [s.sceneId, s.startSec, s.endSec,
     s.transitionIn, s.transitionOut, s.glitches, s.imageEffect, s.endImageId, s.visualLayer,
@@ -129,7 +131,8 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
   const [lookOn, toggleLook] = usePreviewFilmLook();
   useEffect(() => { reportedAudioError.current = false; setAudioError(''); }, [audioUrl]);
   const appliedSeek = useRef(null);
-  const shotLookAvailable = (project.scenes || []).some(scene => !isFilmLookNeutral(scene.filmLook));
+  const shotLookAvailable = (project.scenes || []).some(scene => !isFilmLookNeutral(scene.filmLook))
+    || (project.cameras || []).some(camera => !isFilmLookNeutral(camera.filmLook));
   const filmLook = !lyrics && lookOn ? (project.filmLook ?? (shotLookAvailable ? { preset: 'none' } : null)) : null;
   const lookAvailable = !lyrics && (!isFilmLookNeutral(project.filmLook) || shotLookAvailable);
   const titleCard = useMemo(() => normalizeTitleCard(project.titleCard), [project.titleCard]);

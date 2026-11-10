@@ -119,7 +119,7 @@ export default function BoardStage({ board }) {
   }
   // Each shot's start, mid-shot and end effects, and the option the board is narrowed to (`?effect=`).
   const planned = plannedTransitions(project.productionReview?.draft?.storyboard);
-  const effectsById = new Map(scenes.map((scene) => [scene.sceneId, shotEffects(scene, { layered, planned })]));
+  const effectsById = new Map(scenes.map((scene) => [scene.sceneId, shotEffects(scene, { layered, planned, cameras: project.cameras })]));
   const effectFilter = SHOT_EFFECT_OPTIONS.some((option) => option.id === searchParams.get('effect')) ? searchParams.get('effect') : null;
   const setEffectFilter = (next) => setSearchParams((prev) => {
     const params = new URLSearchParams(prev);

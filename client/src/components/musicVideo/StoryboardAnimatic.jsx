@@ -7,6 +7,7 @@ import { Captions, Clapperboard, Scissors } from 'lucide-react';
 import { formatDurationSec } from '../../utils/formatters.js';
 import { getMusicVideoLyricOverlayPreview, mixMusicVideoColdOpenAudio, musicVideoColdOpenAudioUrl } from '../../services/apiMusicVideo.js';
 import { coldOpenPlan, songScenes } from '../../../../server/lib/musicVideoColdOpen.js';
+import { cameraFrameCss, musicVideoOverscan, shotCamera, shotFilmLook } from '../../../../server/lib/musicVideoFilmLook.js';
 import toast from '../ui/Toast';
 import useMusicVideoStatsOutro from '../../hooks/useMusicVideoStatsOutro.js';
 import { playthroughVersion } from './CompositionPreviewPlayer.jsx';
@@ -25,7 +26,7 @@ import { sceneFrameFit } from './SceneFrameFit.jsx';
 import TransitionGlitch from './TransitionGlitch.jsx';
 import WipeOverlay from './WipeOverlay.jsx';
 import ImageEffectStill from './ImageEffectStill.jsx';
-import { clipOffsetSec, clipReversed, clipSpeedRate, isLayeredComposition, sceneVisualLayer, stillFrameTransform } from '../../lib/musicVideoLayers.js';
+import { clipOffsetSec, clipReversed, clipSpeedRate, isLayeredComposition, isSelfDrawnLayer, sceneVisualLayer, stillFrameTransform } from '../../lib/musicVideoLayers.js';
 import { resolveSourceTake, scenePlayableClipId } from '../../../../server/lib/musicVideoSourceTake.js';
 import { sceneImageEffect, scenePhotoSequence } from '../../lib/musicVideoImageEffects.js';
 import { plannedTransitions, sceneCutEffects } from '../../lib/musicVideoCutEffects.js';
@@ -754,45 +755,78 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
   const vhsEdges = !!picture?.videoHistoryId && sceneFrameFit(picture) === 'vhs';
   // The render cover-fits the still behind a still-edged clip; the preview matches it.
   const stillEdges = !!picture?.videoHistoryId && sceneFrameFit(picture) === 'still';
+  // Outro and title cards stay full frame. A shot uses its own look, then its camera's, then the video's.
+  const pictureShot = outro.active ? null : picture;
+  const resolvedLook = lookOn ? shotFilmLook(project, pictureShot) : null;
+  // Cards and code shots stay full frame, matching the render (a code shot is drawn as a card).
+  const inset = !!(pictureShot && !isSelfDrawnLayer(pictureShot.visualLayer));
+  const windowCamera = inset ? shotCamera(project, pictureShot) : null;
+  const frameCss = windowCamera?.frame?.aspect ? cameraFrameCss(windowCamera.frame.aspect) : null;
+  const overscan = inset ? musicVideoOverscan(project) : 0;
+  const osdDate = typeof windowCamera?.osd?.date === 'string' ? windowCamera.osd.date : '';
+  const osdRecord = windowCamera?.osd?.record === true;
+  const showWindow = inset && !!(frameCss || overscan > 0 || osdRecord || osdDate);
+  const matte = /^#[0-9a-f]{6}$/i.test(windowCamera?.frame?.matte || '') ? windowCamera.frame.matte : '#000000';
+  const pictureZoom = overscan > 0 ? 100 / (100 - 2 * Math.min(8, overscan)) : 1;
+  const animaticPictures = (
+    <>
+      {(picture?.referenceImageId || scenePhotoSequence(picture)?.imageIds.length) && stillShot ? (
+        <ShotColorMatchFrame key={picture.sceneId} project={project} scene={picture}>
+          <StillShot scene={picture} audioRef={clock.ref} time={clock.time} fps={stillFps} beats={beats} effect={shotEffect} />
+        </ShotColorMatchFrame>
+      ) : picture?.referenceImageId ? (
+        // Behind a VHS-edged clip the still stands in, blurred and faded, for the render's blur of the clip.
+        <ShotColorMatchFrame project={project} scene={picture}>
+          <img src={`/data/images/${picture.referenceImageId}`} alt=""
+            className={`h-full w-full ${vhsEdges ? 'object-cover blur-md saturate-50 brightness-75' : stillEdges ? 'object-cover' : 'object-contain'}`} />
+        </ShotColorMatchFrame>
+      ) : cardInFrame && !picture?.videoHistoryId ? (
+        <div className="flex h-full w-full flex-col items-center justify-center gap-1 p-4 text-center">
+          <span className="text-sm font-medium text-port-text">{label}</span>
+          {shot?.visualIntent && <span className="line-clamp-3 text-xs text-port-text-muted">{shot.visualIntent}</span>}
+        </div>
+      ) : null}
+      {clipShots.map(({ scene, offset }) => (
+        <ShotColorMatchFrame key={`${cold.active ? 'cold:' : ''}${scene.sceneId}:${scene.videoHistoryId}`} project={project} scene={scene} className="pointer-events-none absolute inset-0 h-full w-full">
+          <ShotClip scene={scene} audioRef={clock.ref} time={clock.time} current={scene.sceneId === shot?.sceneId}
+            preload={offset <= 1 ? 'auto' : 'metadata'} />
+        </ShotColorMatchFrame>
+      ))}
+      {nearToggles.map((toggle) => {
+        const incoming = playedScene(scenes.find((scene) => scene.sceneId === toggle.toSceneId), allScenes);
+        return incoming ? (
+          <ShotColorMatchFrame key={`toggle:${toggle.toSceneId}:${incoming.videoHistoryId || ''}`} project={project} scene={incoming} className="pointer-events-none absolute inset-0 h-full w-full">
+            <ToggleClip scene={incoming} toggle={toggle} audioRef={audioRef} time={time} layered={layered} fps={stillFps} beats={beats} />
+          </ShotColorMatchFrame>
+        ) : null;
+      })}
+      {nearFades.map((fade) => <FadeBlack key={`fade:${fade.fromSceneId}`} fade={fade} audioRef={audioRef} time={time} />)}
+    </>
+  );
   return (
     <div className={`space-y-2 ${collapsed ? 'max-xl:hidden' : ''}`}>
       <figure ref={figureRef} aria-label="Storyboard animatic" className="relative aspect-video w-full overflow-hidden rounded border border-port-border bg-black">
-        {/* The project's film look, as the final render applies it over the whole picture, lyrics included. */}
-        <FilmLookFrame look={lookOn ? project.filmLook : null} frame={Math.round((outro.active ? songEndSec + outro.t : cold.active ? cold.time - cold.seconds : time) * ANIMATIC_FPS)}
+        {/* The shot's resolved film look over the whole picture, lyrics included. */}
+        <FilmLookFrame look={resolvedLook} frame={Math.round((outro.active ? songEndSec + outro.t : cold.active ? cold.time - cold.seconds : time) * ANIMATIC_FPS)}
           playing={playing || cold.active || (outro.active && !outro.paused && outro.t < outro.seconds)} className="h-full w-full">
-        {(picture?.referenceImageId || scenePhotoSequence(picture)?.imageIds.length) && stillShot ? (
-          <ShotColorMatchFrame key={picture.sceneId} project={project} scene={picture}>
-            <StillShot scene={picture} audioRef={clock.ref} time={clock.time} fps={stillFps} beats={beats} effect={shotEffect} />
-          </ShotColorMatchFrame>
-        ) : picture?.referenceImageId ? (
-          // Behind a VHS-edged clip the still stands in, blurred and faded, for the render's blur of the clip.
-          <ShotColorMatchFrame project={project} scene={picture}>
-            <img src={`/data/images/${picture.referenceImageId}`} alt=""
-              className={`h-full w-full ${vhsEdges ? 'object-cover blur-md saturate-50 brightness-75' : stillEdges ? 'object-cover' : 'object-contain'}`} />
-          </ShotColorMatchFrame>
-        ) : cardInFrame && !picture?.videoHistoryId ? (
-          <div className="flex h-full w-full flex-col items-center justify-center gap-1 p-4 text-center">
-            <span className="text-sm font-medium text-port-text">{label}</span>
-            {shot?.visualIntent && <span className="line-clamp-3 text-xs text-port-text-muted">{shot.visualIntent}</span>}
+        {showWindow ? (
+          <div className="flex h-full w-full items-center justify-center" style={frameCss ? { background: matte } : undefined}>
+            <div className="relative overflow-hidden" style={frameCss || { width: '100%', height: '100%' }} data-testid="animatic-camera-frame">
+              <div className="relative h-full w-full" style={pictureZoom > 1 ? { transform: `scale(${pictureZoom})` } : undefined}>
+                {animaticPictures}
+              </div>
+              {(osdRecord || osdDate) && (
+                <div className="pointer-events-none absolute left-2 top-2 flex items-center gap-1 text-[10px] text-red-500" data-testid="animatic-osd">
+                  {osdRecord && <span className="inline-block h-2 w-2 bg-red-600" aria-hidden="true" />}
+                  {osdRecord && <span>REC</span>}
+                  {osdDate && <span>{osdDate}</span>}
+                </div>
+              )}
+            </div>
           </div>
-        ) : null}
-        {clipShots.map(({ scene, offset }) => (
-          <ShotColorMatchFrame key={`${cold.active ? 'cold:' : ''}${scene.sceneId}:${scene.videoHistoryId}`} project={project} scene={scene} className="pointer-events-none absolute inset-0 h-full w-full">
-            <ShotClip scene={scene} audioRef={clock.ref} time={clock.time} current={scene.sceneId === shot?.sceneId}
-              preload={offset <= 1 ? 'auto' : 'metadata'} />
-          </ShotColorMatchFrame>
-        ))}
-        {nearToggles.map((toggle) => {
-          const incoming = playedScene(scenes.find((scene) => scene.sceneId === toggle.toSceneId), allScenes);
-          return incoming ? (
-            <ShotColorMatchFrame key={`toggle:${toggle.toSceneId}:${incoming.videoHistoryId || ''}`} project={project} scene={incoming} className="pointer-events-none absolute inset-0 h-full w-full">
-              <ToggleClip scene={incoming} toggle={toggle} audioRef={audioRef} time={time} layered={layered} fps={stillFps} beats={beats} />
-            </ShotColorMatchFrame>
-          ) : null;
-        })}
-        {nearFades.map((fade) => <FadeBlack key={`fade:${fade.fromSceneId}`} fade={fade} audioRef={audioRef} time={time} />)}
+        ) : animaticPictures}
         {/* The shots' VHS glitches on their cuts, on the frames the final render repaints. */}
-        <TransitionGlitch scenes={clock.scenes} figureRef={figureRef} audioRef={clock.ref} time={clock.time} layered={layered}
+        <TransitionGlitch scenes={clock.scenes} cameras={project.cameras} figureRef={figureRef} audioRef={clock.ref} time={clock.time} layered={layered}
           endSec={cold.active ? cold.seconds : Number(project.audioAnalysis?.durationSec) || null} fps={ANIMATIC_FPS} />
         {/* The shots' wipes on their cuts, on the frames the final render paints them. */}
         <WipeOverlay scenes={clock.scenes} figureRef={figureRef} audioRef={clock.ref} time={clock.time} planned={planned}

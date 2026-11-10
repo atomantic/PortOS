@@ -24,6 +24,7 @@ import { musicVideoReferenceSubjectIds } from './musicVideoCastSelection.js';
 import { musicVideoConditioningReferences } from './musicVideoConditioning.js';
 import { routeMapShotText } from './musicVideoRouteMaps.js';
 import { lyricOverlayOff, shotCameraRuleText, shotSheetDrivesPrompt, shotSheetFocalSubject, shotSheetFramingConflicts, shotSheetPromptLines } from './musicVideoShotSheet.js';
+import { shotFilmLook } from './musicVideoFilmLook.js';
 
 /**
  * The project-wide visual direction: palette and camera rules from the visual
@@ -70,6 +71,22 @@ const addition = (id, label, text) => {
   const trimmed = typeof text === 'string' ? text.trim() : '';
   return trimmed ? { id, label, text: trimmed } : null;
 };
+
+// Words the project style uses for texture the finishing look adds itself.
+// Stripped from that added style block only, never from the director's own prompt.
+const BAKED_FINISH_WORDS = /\b(?:grainy|grains?|vhs-c|vhs|tracking noise|tracking bands|scan ?lines|tape noise|tape artifacts)\b/gi;
+const CLEAN_FRAME_LINE = 'Deliver a clean full-bleed photograph with no border, no rounded corners, no scan lines, no added grain, no light leaks and no tape artifacts. Finishing adds those afterwards.';
+
+function finishingStyleText(style) {
+  if (typeof style !== 'string') return '';
+  return style
+    .replace(BAKED_FINISH_WORDS, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/\s+([,.;:])/g, '$1')
+    .replace(/([,.;:])(?:\s*[,.;:])+/g, '$1')
+    .replace(/^[\s,.;:]+|[\s,.;:]+$/g, '')
+    .trim();
+}
 
 const REGION_CLAUSE = /^keep the (upper third|center|lower third) of the frame/i;
 
@@ -292,9 +309,12 @@ function composeFrameModelInput(project, scene, {
     panelReference > 0 ? addition('storyboard-sketch', 'Storyboard sketch', storyboardSketchNote(panelReference)) : null,
   ].filter(Boolean) : [];
   const concept = project?.concept ? { ...project.concept, subjects: shotSubjects(project, scene, { panel: board, references: subjectReferences ?? references }) } : project?.concept;
+  // A finishing look adds grain, gates and tape afterwards, so the still is asked for clean.
+  const finishing = shotFilmLook(project, scene);
   const look = [
     addition('reference-map', 'Reference images', musicVideoReferenceMapText(references)),
-    addition('project-style', 'Project style', project?.concept?.style),
+    addition('project-style', 'Project style', finishing ? finishingStyleText(project?.concept?.style) : project?.concept?.style),
+    finishing ? addition('clean-frame', 'Clean frame', CLEAN_FRAME_LINE) : null,
     addition('creative-context', 'Production bible', musicVideoCreativeContext(concept, { look: musicVideoDirectorLook(project) })),
     addition('real-world-scale', 'Real-world scale', musicVideoSubjectScaleText(concept, sizes)),
     addition('route-map', 'Route', routeMapShotText(project, scene)),
