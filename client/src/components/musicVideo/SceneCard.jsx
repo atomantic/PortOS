@@ -185,7 +185,7 @@ export default function SceneCard({
   settingsSaving, videoBlockedReason, videoBlockedReasonFor = null, canContinueShot,
   onMove, onDelete, onEditLocal, onSave,
   project = null, castMedia = null, onReloadCastMedia = null, greyboxPlaces = {}, onGenerateFrame, onGenerateVideo, onContinueVideo, onGenerateEndFrame, generatingEndFrame = false, onContinueFromPrevious, previousHasClip = false,
-  onOpenPreview, onSelectTake, onReviewTake, onRejectUnusedTakes = null, onSwapFrames = null, onMarkTake = null, onCheckTake = null, checkingTakes = null, onPoolMarked = null, onImportTake, onImportClipTake, onPlacePoolItem, onTrimClip, projectId = null, aspect = '16:9', videoModels = [], defaultVideoModel = '', shotNumbers = undefined, takeBusy = false, layered = false, documentComposition = false, manifestOwnsShots = false,
+  onOpenPreview, onSelectTake, onReviewTake, onRejectUnusedTakes = null, onSwapFrames = null, onMarkTake = null, onCheckTake = null, checkingTakes = null, onPoolMarked = null, onImportTake, onImportClipTake, onPlacePoolItem, onTrimClip, onHandheldClip = null, projectId = null, aspect = '16:9', videoModels = [], defaultVideoModel = '', shotNumbers = undefined, takeBusy = false, layered = false, documentComposition = false, manifestOwnsShots = false,
   lipSyncBackend = '', songDurationSec = null, onSplit, onMergeNext, onMergePrevious = null, prevStartSec = null, onMoveStart = null, onMoveEnd = null, nextEndSec = null, falVideoSettings = null, performanceReview = null, onRepairPerformance, repairBusy = false,
   onClose = null, locked = false, stepShot = null, footageOptional = false, failedScenes = null, songReview = null,
   storyboardId = null, storyboardShot = null, onStoryboardBoard = null, onApplyCameos = null, onVaryWipes = null,
@@ -746,7 +746,7 @@ export default function SceneCard({
               }) : null} />
           )}
           <SceneClipPreview scene={scene} index={index} performance={performance} playback={clipPlayback}
-            onOpenPreview={onOpenPreview} onTrimClip={onTrimClip}
+            onOpenPreview={onOpenPreview} onTrimClip={onTrimClip} onHandheldClip={onHandheldClip}
             takeBusy={takeBusy} generatingVideo={generatingVideo} />
           {/* One take cut across shots needs a source clip longer than this shot's span, and may need another model. */}
           {layer === 'footage' && !performance && (

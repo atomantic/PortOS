@@ -144,6 +144,24 @@
     const cover = Math.max(sx * c + sy * s * (H / W), sy * c + sx * s * (W / H));
     return { scale: Math.max((move.base * view.zoom) / lowest, cover), x: view.x, y: view.y, rotation: view.rotation };
   }
+  // A person holding the camera: PortOS writes a scene's handheld motion (the template
+  // additions Handheld shake / footsteps, lib/handheldCamera.js) as `handheld: { zoom, terms }`,
+  // each term [axis, amp, freq, phase, bob] on shot seconds. The picture moves against the
+  // window's sway, rolls, and zooms enough that no edge shows.
+  function handheldView(scene, view, lt) {
+    const motion = scene.handheld;
+    if (!motion?.terms?.length) return view;
+    let x = 0; let y = 0; let r = 0;
+    for (const [axis, amp, freq, phase, bob] of motion.terms) {
+      const v = bob ? amp * (Math.abs(Math.sin(Math.PI * freq * lt + phase)) - 2 / Math.PI) : amp * Math.sin(2 * Math.PI * freq * lt + phase);
+      if (axis === 'x') x += v; else if (axis === 'y') y += v; else r += v;
+    }
+    const nx = view.x - x; const ny = view.y - y; const rotation = view.rotation + r * Math.PI / 180;
+    const c = Math.abs(Math.cos(rotation)); const s = Math.abs(Math.sin(rotation));
+    const sx = 1 + 2 * Math.abs(nx); const sy = 1 + 2 * Math.abs(ny);
+    const cover = Math.max(sx * c + sy * s * (H / W), sy * c + sx * s * (W / H));
+    return { scale: Math.max(view.scale * motion.zoom, cover), x: nx, y: ny, rotation };
+  }
   // The rig's camera state for a code-drawn shot with a planned move (authored code may follow it).
   function cameraSample(scene, t) {
     const id = scene?.camera?.move;
@@ -609,7 +627,7 @@
         if (matchFilter) filters.push(matchFilter);
         if (effect) filters.push(`contrast(${effect.contrast}) saturate(${effect.saturation})`);
         if (filters.length) ctx.filter = filters.join(' ');
-        const view = cameraView(scene, seg(t, scene.startSec, scene.endSec));
+        const view = handheldView(scene, cameraView(scene, seg(t, scene.startSec, scene.endSec)), lt);
         drawCover(source, view, punch);
         const end = effect?.end > 0 && scene.media.end?.src ? images.get(scene.media.end.src)?.el : null;
         if (end) { ctx.globalAlpha = effect.end; drawCover(end, view, punch); }

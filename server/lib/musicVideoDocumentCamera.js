@@ -1,4 +1,5 @@
 import { templateEffects } from './musicVideoTemplateEffects.js';
+import { applyDocumentHandheld, documentHandheld } from './handheldCamera.js';
 
 /**
  * The layered document template's camera for one scene, computed outside the
@@ -56,8 +57,10 @@ export function documentCameraView(rig, scene, t, { footage = false, index = 0, 
   const span = scene.endSec - scene.startSec;
   const k = span > 0 ? Math.max(0, Math.min(1, (t - scene.startSec) / span)) : (t >= scene.endSec ? 1 : 0);
   const effects = templateEffects({ templateEffects: videoEffects }, scene);
+  // A handheld operator (template additions handheld/handheldSteps) moves on top of the camera move, on shot time.
+  const handheld = (view) => applyDocumentHandheld(view, documentHandheld(effects, scene.sceneId, aspect), t - scene.startSec, aspect);
   const strength = footage ? effects.footagePush : effects.stillMotion;
-  if (strength === 0) return { scale: 1, x: 0, y: 0, rotation: 0 };
+  if (strength === 0) return handheld({ scale: 1, x: 0, y: 0, rotation: 0 });
   const original = moveFor(rig, scene, { footage, index });
   const move = strength === 1 ? original : { ...original, amount: original.amount * strength, base: 1 + (original.base - 1) * strength };
   const options = { amount: move.amount, speed: move.speed, onBeat: move.onBeat, beat: beatIn(scene, beats, downbeats), aspect };
@@ -69,7 +72,7 @@ export function documentCameraView(rig, scene, t, { footage = false, index = 0, 
   const sx = 1 + 2 * Math.abs(view.x);
   const sy = 1 + 2 * Math.abs(view.y);
   const cover = Math.max(sx * c + sy * s / aspect, sy * c + sx * s * aspect);
-  return { scale: Math.max((move.base * view.zoom) / lowest, cover), x: view.x, y: view.y, rotation: view.rotation };
+  return handheld({ scale: Math.max((move.base * view.zoom) / lowest, cover), x: view.x, y: view.y, rotation: view.rotation });
 }
 
 /** A view as the CSS transform of an element that already cover-fits the frame. */

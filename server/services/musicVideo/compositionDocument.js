@@ -451,6 +451,8 @@ export async function stageGeneratedDocument(projectId, generatedFiles, { verify
 // Known compatible shipped layered engines. Recognition only;
 // customized engines belong to the author and are never silently replaced.
 const UPGRADABLE_LAYERED_ENGINES = new Set([
+  // Shipped before the handheld camera template additions.
+  'a20bb2cf128153aada5c963baf8af22ca4a5ca72bda56d801b2d41a693cb606e',
   // Shipped before card painters honored beat-reaction controls (#15629).
   '4ee3ae7c78bce6d9dde36a1f2336c7bfd899918f359b6a9906b619c07a0bfb1b',
   // Shipped before per-video and per-shot template controls (#15622).

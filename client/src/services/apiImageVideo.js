@@ -360,6 +360,12 @@ export const trimVideo = (id, { startSec, endSec } = {}, options = {}) => reques
   body: JSON.stringify({ startSec, endSec }),
   ...options,
 });
+// Re-shoot a clip with handheld camera motion `{ shake, steps, seed }` as a NEW gallery entry.
+export const handheldVideo = (id, { shake, steps, seed } = {}, options = {}) => request(`/video-gen/history/${encodeURIComponent(id)}/handheld`, {
+  method: 'POST',
+  body: JSON.stringify({ shake, steps, seed }),
+  ...options,
+});
 export const stitchVideos = (videoIds, options = {}) => request('/video-gen/stitch', {
   method: 'POST',
   body: JSON.stringify({ videoIds }),

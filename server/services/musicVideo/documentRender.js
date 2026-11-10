@@ -9,7 +9,8 @@ import { documentFilmLookRuntime, hasMusicVideoFilmLook } from '../../lib/musicV
 import { activeShotColorMatch, colorMatchSvgParts, documentShotColorMatchRuntime, hasMusicVideoColorMatch } from '../../lib/shotColorMatch.js';
 import { titleCardVisible, titleCardWindows } from '../../lib/musicVideoTitleCard.js';
 import { titleCardRuntime } from './titleCardFonts.js';
-import { normalizeTemplateEffects } from '../../lib/musicVideoTemplateEffects.js';
+import { normalizeTemplateEffects, templateEffects } from '../../lib/musicVideoTemplateEffects.js';
+import { documentHandheld } from '../../lib/handheldCamera.js';
 import { documentSceneCameo, documentCameos } from '../../lib/musicVideoCameos.js';
 /**
  * Music Video — render a project's composition document over the song.
@@ -274,6 +275,11 @@ export function buildDocumentData(project, { media = new Map(), frame, clock, so
         } : {}),
         ...(m?.photos ? { photoSequence: scenePhotoSequence(scene, { fps: clock.fps, beats: analysis.beats || [] }) } : {}),
         templateEffects: normalizeTemplateEffects(scene.templateEffects),
+        // A person holding the camera (the shot's or video's Handheld additions), as the engine's handheldView reads it.
+        ...(() => {
+          const handheld = documentHandheld(templateEffects(project, scene), scene.sceneId, frame?.width && frame?.height ? frame.width / frame.height : 16 / 9);
+          return handheld ? { handheld } : {};
+        })(),
         stillMove: typeof scene.stillMove === 'string' ? scene.stillMove : null,
         // #10589: the planned camera move the template's camera rig follows (only when planned).
         ...(typeof scene.camera?.move === 'string' ? { camera: structuredClone(scene.camera) } : {}),
