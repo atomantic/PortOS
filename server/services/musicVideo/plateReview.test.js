@@ -117,7 +117,12 @@ describe('plate evidence admission', () => {
     runner.resolveProviderAndModel.mockResolvedValue({ provider: localCodex, selectedModel: 'local-model' });
     await expect(resolvePlateReviewer({ providerId: 'codex-ollama' })).rejects.toThrow(/No enabled vision reviewer/);
     runner.resolveProviderAndModel.mockResolvedValue({ provider: { id: 'claude', type: 'cli', command: 'claude', enabled: true }, selectedModel: 'm' });
-    await expect(resolvePlateReviewer({ providerId: 'claude' })).rejects.toThrow(/No enabled vision reviewer/);
+    // Claude Code and Grok open the staged image with their one read tool (#15576).
+    expect(await resolvePlateReviewer({ providerId: 'claude' })).toMatchObject({ provider: { id: 'claude' }, model: 'm' });
+    runner.resolveProviderAndModel.mockResolvedValue({ provider: { id: 'grok-cli', type: 'cli', command: 'grok', enabled: true }, selectedModel: 'grok-4.7' });
+    expect(await resolvePlateReviewer({ providerId: 'grok-cli' })).toMatchObject({ provider: { id: 'grok-cli' } });
+    runner.resolveProviderAndModel.mockResolvedValue({ provider: { id: 'agy', type: 'cli', command: 'agy', enabled: true }, selectedModel: 'm' });
+    await expect(resolvePlateReviewer({ providerId: 'agy' })).rejects.toThrow(/No enabled vision reviewer/);
   });
 
   it('uses a verified local vision model for an unpinned text-only default and refuses a pinned text-only reviewer', async () => {

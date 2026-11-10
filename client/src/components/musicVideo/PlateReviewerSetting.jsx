@@ -1,18 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
 import ProviderModelSelector from '../ProviderModelSelector.jsx';
 import useProviderModels from '../../hooks/useProviderModels.js';
-import { supportsToolFreeOneShot } from '../../utils/providerSelection.js';
+import { supportsImageReview } from '../../utils/providerSelection.js';
 import { updateMusicVideoProject } from '../../services/apiMusicVideo.js';
 
 /**
  * The vision model a frame take's Check uses (`project.plateReviewer`). Blank is
- * the default: Codex when it is ready, else an API provider. Saves on change.
+ * the default: Codex when it is ready, else an API provider. Any provider that
+ * can see an image with no host-writing tool is offered (Claude Code and Grok
+ * included, #15576). Saves on change.
  */
 export default function PlateReviewerSetting({ project, onProjectUpdated }) {
   const saved = project.plateReviewer || null;
   const {
     providers, selectedProviderId, selectedModel, availableModels, setSelectedProviderId, setSelectedModel, loading,
-  } = useProviderModels({ allowDefault: true, silent: true, filter: supportsToolFreeOneShot });
+  } = useProviderModels({ allowDefault: true, silent: true, filter: supportsImageReview });
   const [saving, setSaving] = useState(false);
   // Show the stored pick; a save's answer re-renders through the project, not a second write.
   const shown = useRef(null);
