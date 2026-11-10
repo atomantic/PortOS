@@ -22,7 +22,9 @@ const PRESENCE_MANIFESTS = new Set([
   'pom.xml', 'build.gradle', 'build.gradle.kts', 'Gemfile', 'composer.json', 'pubspec.yaml',
   'Package.swift', 'mix.exs', 'Podfile', 'Pipfile', 'environment.yml', 'deno.json', 'deno.jsonc',
   'setup.py', 'setup.cfg', 'pyproject.toml', 'Cargo.toml', 'go.mod',
-  'renovate.json', 'renovate.json5', '.renovaterc', '.renovaterc.json', 'Cartfile'
+  'renovate.json', 'renovate.json5', '.renovaterc', '.renovaterc.json', 'Cartfile',
+  'vcpkg.json', 'conanfile.py', 'conanfile.txt', 'CMakeLists.txt', 'meson.build',
+  'MODULE.bazel', 'WORKSPACE', 'WORKSPACE.bazel'
 ]);
 
 // `.github/` is a dot-dir the walk skips, but it declares two things the
@@ -30,7 +32,27 @@ const PRESENCE_MANIFESTS = new Set([
 // Phase 1 lands) and workflow `uses:` pins on third-party actions (the
 // github-actions ecosystem). A repo with only those still has work to do.
 const GITHUB_BOT_CONFIGS = ['dependabot.yml', 'dependabot.yaml', 'renovate.json', 'renovate.json5'];
-const EXTERNAL_ACTION_USE = /^\s*(?:-\s*)?uses:\s*['"]?(?!\.\/)[^\s'"#]+@/m;
+const EXTERNAL_ACTION_USE = /^\s*(?:-\s*)?uses:\s*['"]?(?!\.\/)[^\s'"#]+/m;
+const LOCAL_ACTION_USE = /^\s*(?:-\s*)?uses:\s*['"]?(\.\/[^\s'"#]+)/gm;
+
+async function localActionsDeclareDependencies(repoPath, workflow) {
+  for (const [, actionPath] of workflow.matchAll(LOCAL_ACTION_USE)) {
+    if (actionPath.split('/').includes('..')) return true;
+    let definition = null;
+    for (const filename of ['action.yml', 'action.yaml']) {
+      definition = await readFile(join(repoPath, actionPath, filename), 'utf8')
+        .catch(error => error.code === 'ENOENT' ? null : undefined);
+      if (definition === undefined) return true;
+      if (definition !== null) break;
+    }
+    // Missing definitions and nested local actions have not been inspected.
+    // Non-composite actions can declare packages in their own skipped tree.
+    if (definition === null || EXTERNAL_ACTION_USE.test(definition)
+      || [...definition.matchAll(LOCAL_ACTION_USE)].length
+      || !/^\s*using:\s*['"]?composite\b/m.test(definition)) return true;
+  }
+  return false;
+}
 
 async function githubDeclaresDependencies(repoPath) {
   const githubDir = join(repoPath, '.github');
@@ -44,7 +66,7 @@ async function githubDeclaresDependencies(repoPath) {
   for (const name of workflows) {
     // An unreadable workflow fails open, like an unparsable manifest.
     const text = await readFile(join(workflowsDir, name), 'utf8').catch(() => null);
-    if (text === null || EXTERNAL_ACTION_USE.test(text)) return true;
+    if (text === null || EXTERNAL_ACTION_USE.test(text) || await localActionsDeclareDependencies(repoPath, text)) return true;
   }
   return false;
 }
