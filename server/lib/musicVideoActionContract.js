@@ -1,3 +1,5 @@
+import { phoneticLipSyncSummary } from './musicVideoLyricAnchors.js';
+
 /** Versioned dramatic intent shared by treatment, generation and shot inspection. */
 export const SHOT_ACTION_TEXT_LIMITS = Object.freeze({
   purpose: 1000, startEmotion: 500, endEmotion: 500, activeSpeaker: 120,
@@ -54,32 +56,48 @@ export function assertShotActionContract(scene) {
  * no lyric, word or onset timings: it has nothing to time them against.
  */
 export function shotActionPrompt(project, scene, { frame = false, offsetSec = 0, heard = true } = {}) {
+  const vocalClip = heard && !frame && scene?.shotMode === 'performance' && scene.performanceStyle !== 'music';
   const contract = scene?.direction?.actionContract;
-  if (contract == null) return '';
+  if (contract == null && !vocalClip) return '';
   assertShotActionContract(scene);
+  const intent = contract ?? {};
   const time = (sec) => `${(sec + offsetSec).toFixed(3)}s`;
   const lines = [
-    `Purpose: ${contract.purpose}`,
-    contract.startEmotion ? `Starting emotion: ${contract.startEmotion}` : '',
-    !frame && contract.endEmotion ? `Ending emotion: ${contract.endEmotion}` : '',
-    contract.activeSpeaker ? `Active speaker: ${contract.activeSpeaker}` : '',
+    intent.purpose ? `Purpose: ${intent.purpose}` : '',
+    intent.startEmotion ? `Starting emotion: ${intent.startEmotion}` : '',
+    !frame && intent.endEmotion ? `Ending emotion: ${intent.endEmotion}` : '',
+    intent.activeSpeaker ? `Active speaker: ${intent.activeSpeaker}` : '',
   ];
   for (const kind of ['actions', 'reactions']) {
-    for (const event of contract[kind] || []) lines.push(`${kind === 'actions' ? 'Action' : 'Reaction'} ${time(event.startSec)}–${time(event.endSec)}: ${event.subject} — ${event.description}`);
+    for (const event of intent[kind] || []) lines.push(`${kind === 'actions' ? 'Action' : 'Reaction'} ${time(event.startSec)}–${time(event.endSec)}: ${event.subject} — ${event.description}`);
   }
   for (const [key, label] of [['cameraConstraints', 'Camera'], ['continuityRequirements', 'Must preserve'], ['acceptanceCriteria', 'Acceptance']]) {
-    for (const item of contract[key] || []) lines.push(`${label}: ${item}`);
+    for (const item of intent[key] || []) lines.push(`${label}: ${item}`);
   }
   if (!frame && heard) {
-    const window = (item) => Number.isFinite(item.startSec) && Number.isFinite(item.endSec) && item.endSec > scene.startSec && item.startSec < scene.endSec;
-    for (const cue of (project.lyricCues || []).filter(window).slice(0, 32)) {
+    const window = (item) => Number.isFinite(item?.startSec) && Number.isFinite(item?.endSec) && item.endSec > item.startSec && item.endSec > scene.startSec && item.startSec < scene.endSec;
+    const cues = (project.lyricCues || []).filter(window).slice(0, 32);
+    const selected = cues.map((cue) => ({ cue, words: (Array.isArray(cue.words) ? cue.words : []).filter(window).slice(0, 64) }));
+    if (vocalClip && cues.length) {
+      lines.push('Sing in sync with the audio track.');
+      const phonetics = phoneticLipSyncSummary(cues, scene.startSec, scene.endSec, { words: selected.flatMap((item) => item.words) });
+      if (phonetics) lines.push(phonetics);
+      lines.push("Mouth Visibility Guard: Keep the active singer's mouth clearly visible and unobstructed toward the camera in every frame — no hands, hair, microphone head, or other bodies crossing the lips; keep any strobe or hard flash soft on the singer's face so lip closures stay readable.");
+      const otherSubjects = [...(intent.actions || []), ...(intent.reactions || [])]
+        .some((event) => event.subject.trim().toLowerCase() !== intent.activeSpeaker?.trim().toLowerCase());
+      if ((scene.shotSheet?.characters?.length || 0) > 1 || (intent.activeSpeaker && otherSubjects)) {
+        lines.push('Single-Mouth Exclusivity Lock: Only the active singer forms words; every other person in frame keeps their mouth closed or naturally parted for breathing, never mouthing along or shadowing syllables.');
+      }
+    }
+    for (const { cue, words } of selected) {
       lines.push(`Lyric ${time(Math.max(0, cue.startSec - scene.startSec))}–${time(Math.min(scene.endSec, cue.endSec) - scene.startSec)}: ${cue.text}`);
-      for (const word of (cue.words || []).filter(window).slice(0, 64)) lines.push(`Word ${time(Math.max(0, word.startSec - scene.startSec))}–${time(Math.min(scene.endSec, word.endSec) - scene.startSec)}: ${word.w}`);
+      for (const word of words) lines.push(`Word ${time(Math.max(0, word.startSec - scene.startSec))}–${time(Math.min(scene.endSec, word.endSec) - scene.startSec)}: ${word.w}`);
     }
     const onsets = [...new Set(Object.values(project.audioAnalysis?.features?.onsets || {}).flat())]
       .filter((sec) => Number.isFinite(sec) && sec >= scene.startSec && sec < scene.endSec).sort((a, b) => a - b).slice(0, 64);
     if (onsets.length) lines.push(`Musical onsets: ${onsets.map((sec) => time(sec - scene.startSec)).join(', ')}`);
   }
+  if (!lines.some(Boolean)) return '';
   return `${frame ? 'Plate requirements (prepare the starting state for these actions)' : 'Shot intent (clip-relative seconds)'}:\n${lines.filter(Boolean).join('\n')}\nEnd shot intent.`;
 }
 

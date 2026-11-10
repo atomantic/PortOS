@@ -88,3 +88,30 @@ export function lyricAnchorOnset(cues, anchor) {
   if (!Number.isInteger(anchor?.wordIndex) || picked.length !== count || !finite(picked[0]?.startSec)) return null;
   return { startSec: picked[0].startSec, text: picked.map((w) => w.w).join(' ') };
 }
+
+/**
+ * Deterministic spelling-based mouth cues, not a pronunciation dictionary.
+ * `words` reuses a caller's selected lyric tokens. Word timings do not locate
+ * individual phonemes, so vowel holds must leave room for consonant closures.
+ * Unsupported scripts and tokens without increasing finite times are skipped.
+ */
+export function phoneticLipSyncSummary(cues, startSec, endSec, { words } = {}) {
+  const timed = (words ?? (Array.isArray(cues) ? cues : []).flatMap((cue) => Array.isArray(cue?.words) ? cue.words : []))
+    .filter((word) => finite(word?.startSec) && finite(word?.endSec) && word.endSec > word.startSec
+      && word.startSec < endSec && word.endSec > startSec && typeof word.w === 'string')
+    .map((word) => ({ ...word, spelling: word.w.normalize('NFD').replace(/\p{M}/gu, '')
+      .replace(/^[\p{P}\p{S}\s]+|[\p{P}\p{S}\s]+$/gu, '').toLowerCase() }))
+    .filter((word) => /^[a-z]+(?:['’-][a-z]+)*$/.test(word.spelling));
+  if (!timed.length) return null;
+  const distinct = (selected) => [...new Set(selected.map((word) => word.w))].map((word) => JSON.stringify(word)).join(', ');
+  // Exclude common silent consonants and treat PH as F; pronunciation still wins.
+  const seals = timed.filter((word) => /[bpm]/.test(word.spelling.replace(/ph/g, 'f').replace(/b(?=t)/g, '').replace(/^p(?=[snt])/, '')));
+  const contacts = timed.filter((word) => /[fv]|ph/.test(word.spelling));
+  const holds = timed.filter((word) => word.endSec - word.startSec >= 0.45 - 1e-6 && /[aeiouy]/.test(word.spelling));
+  const lines = [
+    seals.length ? `Lip-seal closures (P/B/M — when pronounced, press both lips fully shut before releasing) on: ${distinct(seals)}.` : '',
+    contacts.length ? `Teeth-on-lip contacts (F/V — when pronounced, upper teeth touch the lower lip) on: ${distinct(contacts)}.` : '',
+    holds.length ? `Sustained vowel holds (within each timed word, preserve consonant closures and sustain the vowel between them without chattering or dropping half-shut) on: ${distinct(holds)}.` : '',
+  ];
+  return lines.filter(Boolean).join('\n') || null;
+}
