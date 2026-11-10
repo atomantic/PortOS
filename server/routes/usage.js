@@ -3,10 +3,11 @@ import * as usage from '../services/usage.js';
 import { getClaudeCodeUsage } from '../services/claudeCodeUsage.js';
 import { refreshLocalTranscriptUsage } from '../services/claudeCodeTranscriptUsage.js';
 import { describeNativeUsageSources, refreshNativeUsageHistory } from '../services/nativeUsageHistory.js';
+import { dismissUsageRetentionTip, getUsageRetentionTips } from '../services/usageRetentionTips.js';
 import { getProviderQuotas } from '../services/providerUsage.js';
 import { getAllProviders } from '../services/providers.js';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { validateRequest, usageQuerySchema, usageMessagesSchema, usageTokensSchema, usageSessionSchema, providerUsageQuerySchema, subscriptionsUpdateSchema, subscriptionEnabledSchema, usageFleetBillingSchema, usageRollingCostQuerySchema } from '../lib/validation.js';
+import { validateRequest, usageQuerySchema, usageMessagesSchema, usageTokensSchema, usageSessionSchema, providerUsageQuerySchema, subscriptionsUpdateSchema, subscriptionEnabledSchema, usageFleetBillingSchema, usageRollingCostQuerySchema, usageTipParamsSchema } from '../lib/validation.js';
 import { saveSubscriptionCosts, getSubscriptionSavings } from '../services/subscriptionCosts.js';
 import { getSubscriptionOverview, savePlanTiers, setSubscriptionEnabled } from '../services/subscriptions.js';
 import { getFleetUsage, getFleetClaudeCodeModels, getFleetRollingCost } from '../services/peerUsage.js';
@@ -92,6 +93,18 @@ router.get('/rolling-cost', asyncHandler(async (req, res) => {
 // per manageable plan (enabled state, plan tier, monthly price, the provider
 // records the toggle fans out to). The savings/spend figures for those rows
 // come from GET /api/usage; the quota meters from GET /api/usage/providers.
+// GET /api/usage/tips - Retention settings this machine's CLIs still need so
+// their session history stays readable. Reads the CLI config; never writes it.
+router.get('/tips', asyncHandler(async (req, res) => {
+  res.json({ tips: await getUsageRetentionTips() });
+}));
+
+// POST /api/usage/tips/:id/dismiss - The user says it's handled; hide it here.
+router.post('/tips/:id/dismiss', asyncHandler(async (req, res) => {
+  const { id } = validateRequest(usageTipParamsSchema, req.params);
+  res.json({ tips: await dismissUsageRetentionTip(id) });
+}));
+
 router.get('/subscriptions', asyncHandler(async (req, res) => {
   res.json(await getSubscriptionOverview());
 }));
