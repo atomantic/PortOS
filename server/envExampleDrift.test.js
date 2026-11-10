@@ -118,6 +118,7 @@ const INHERITED_ENV = {
   NODE_DISABLE_COMPILE_CACHE: 'Node-provided switch, set to "1" by vitest.config.js so no child process (isolated TMPDIR or not) writes Node\'s module compile cache into the run-scoped temp root (#9051)',
   VITEST_FAST: 'opt-in fast-suite selector, CI/local test runs only',
   CI_EXPECT_SLASHDO_SUBMODULE: 'CI flag that turns a skipped slashdo adapter contract into a failure',
+  CI_EXPECT_NUMPY_PYTHON: 'CI flag that turns a skipped CTC Viterbi (numpy) suite into a failure',
   TEST_DB_OK: 'test-harness flag for the DB-backed suites',
   PGTESTDATABASE: 'test-harness override naming portos_test',
   PORTOS_REQUIRE_DB: 'CI flag that turns a skipped DB suite into a failure',

@@ -395,6 +395,19 @@ jobs:
         if: needs.impact.outputs.slashdo == 'true'
         run: git submodule update --init lib/slashdo
 
+      # scripts/align_lyrics_ctc_test.py skips its Viterbi cases without numpy
+      # and still exits 0 (issue #15676). When the plan runs that suite, build a
+      # throwaway venv with the repo's numpy pin and make the suite fail rather
+      # than skip if no numpy interpreter resolves. Never touches system Python.
+      - name: Provide numpy for the CTC Viterbi tests
+        if: needs.impact.outputs.server_mode == 'full' || (needs.impact.outputs.server_mode == 'files' && contains(needs.impact.outputs.server_files, 'scripts/align_lyrics_ctc.test.js'))
+        run: |
+          pin="$(grep -m1 -E '^numpy==' scripts/requirements-acestep-mlx.txt)"
+          python3 -m venv "$RUNNER_TEMP/ctc-venv"
+          "$RUNNER_TEMP/ctc-venv/bin/python" -m pip install --quiet "$pin"
+          echo "PORTOS_TEST_PYTHON=$RUNNER_TEMP/ctc-venv/bin/python" >> "$GITHUB_ENV"
+          echo "CI_EXPECT_NUMPY_PYTHON=true" >> "$GITHUB_ENV"
+
       # The test memo (docs/GITHUB_ACTIONS.md "Test memo"): the runner skips a
       # selected test file whose every input — loaded modules, fixtures,
       # package versions, Node/platform, gating env — is byte-identical to one
