@@ -7,6 +7,7 @@ import { useSocket } from '../hooks/useSocket';
 import { formatClockTime, formatDateFull, formatTimeOfDay } from '../utils/formatters';
 import DeathClockCountdown from '../components/DeathClockCountdown';
 import { shouldIgnoreGlobalKey } from '../lib/a11yKeyboard';
+import { allDayCalendarDate } from '../components/calendar/calendarUtils';
 
 const CALENDAR_EVENTS = ['calendar:sync:completed', 'calendar:changed'];
 const DEATH_CLOCK_EVENTS = ['meatspace:death-clock:changed'];
@@ -58,9 +59,14 @@ export default function Ambient() {
   const { data: calendarEvents, error: calendarError, refetch: refreshCalendar } = useSocketResource(async () => {
     const now = new Date();
     reconciledDays.current.calendar = now.toDateString();
+    const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const nextMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+    // The events query treats its end as inclusive. The next local midnight is
+    // the exclusive end of today, and an all-day event for tomorrow starts at
+    // that exact instant — asking for it would put tomorrow's all-day on today.
     const params = {
-      startDate: new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString(),
-      endDate: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString(),
+      startDate: dayStart.toISOString(),
+      endDate: new Date(nextMidnight.getTime() - 1).toISOString(),
       limit: 200
     };
     const events = [];
@@ -124,7 +130,11 @@ export default function Ambient() {
   const upcomingEvents = useMemo(() => {
     const events = Array.isArray(calendarEvents) ? calendarEvents : [];
     return events
-      .filter(e => new Date(e.endTime || e.end || e.startTime || e.start) >= time)
+      .filter(e => {
+        const raw = e.endTime || e.end || e.startTime || e.start;
+        const at = (e.isAllDay ?? e.allDay) ? allDayCalendarDate(raw) : new Date(raw);
+        return at >= time;
+      })
       .slice(0, 6);
   }, [calendarEvents, time]);
 

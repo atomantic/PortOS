@@ -35,6 +35,17 @@ describe('eventOccursOnDay', () => {
     expect(eventOccursOnDay({ ...overnight, endTime: day(24).toISOString() }, day(24))).toBe(false);
   });
 
+  it('reads a Z-stamped all-day midnight as that calendar date', () => {
+    const outlook = {
+      startTime: '2026-07-04T00:00:00.000Z',
+      endTime: '2026-07-05T00:00:00.000Z',
+      isAllDay: true,
+    };
+    expect(eventOccursOnDay(outlook, new Date(2026, 6, 3))).toBe(false);
+    expect(eventOccursOnDay(outlook, new Date(2026, 6, 4))).toBe(true);
+    expect(eventOccursOnDay(outlook, new Date(2026, 6, 5))).toBe(false);
+  });
+
   it('uses local midnight across daylight-saving transitions', () => {
     const spring = {
       startTime: new Date(2026, 2, 7).toISOString(),

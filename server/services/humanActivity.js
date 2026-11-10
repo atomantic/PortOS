@@ -25,7 +25,7 @@ import { MESSAGE_ACCOUNT_TYPES } from '../lib/messageTransport.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { ensureSchema, query, withTransaction } from '../lib/db.js';
 import { normalizeIdentifier } from '../lib/tribeMatch.js';
-import { getLocalParts, localDayRangeUtc, todayInTimezone, anchorLocalMidnightUtc } from '../lib/timezone.js';
+import { getLocalParts, localDayRangeUtc, todayInTimezone, resolveEventInstant, resolveCalendarInstant } from '../lib/timezone.js';
 import { getUserTimezone } from './userTimezone.js';
 import { toPgJson } from '../lib/pgJson.js';
 import { cleanMessageId } from '../lib/emailMessageId.js';
@@ -229,26 +229,9 @@ export function newlyLearnedAliases(previous, next) {
   return normalizeEmailList(next).filter((e) => !before.has(e));
 }
 
-// Resolve a calendar time value to a UTC instant, interpreting OFFSET-LESS
-// values in the given timezone instead of the Node process's OS timezone.
-// Google all-day events are normalized to "YYYY-MM-DDT00:00:00" (no offset) —
-// `new Date()` would parse that as server-OS-local, so for a user west of UTC
-// an all-day July 4 event could land inside July 3's local-day window. Values
-// with an explicit offset (Z / ±hh:mm) pass straight through.
-export function resolveEventInstant(value, timezone) {
-  if (!value) return null;
-  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
-  const s = String(value).trim();
-  const m = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?)?$/.exec(s);
-  if (m && timezone) {
-    const [, y, mo, d, hh, mm, ss] = m;
-    const midnightMs = anchorLocalMidnightUtc(`${y}-${mo}-${d}`, timezone);
-    const dayMs = ((Number(hh) || 0) * 3600 + (Number(mm) || 0) * 60 + (Number(ss) || 0)) * 1000;
-    return new Date(midnightMs + dayMs);
-  }
-  const parsed = new Date(s);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
-}
+// Re-exported so calendar and message importers keep their existing import.
+// The implementation lives in lib/timezone.js (the agenda read path uses it too).
+export { resolveEventInstant };
 
 // Map calendar events to activity candidates. Only events that have already
 // happened (end/start <= now) and weren't declined/cancelled count as activity,
@@ -260,14 +243,16 @@ export function calendarActivityCandidates(account, events = [], now = Date.now(
   const out = [];
   for (const event of events || []) {
     if (event?.isCancelled || event?.myStatus === 'declined') continue;
-    const startedAt = resolveEventInstant(event.startTime, timezone) || resolveEventInstant(event.endTime, timezone);
+    // All-day midnights are floating dates, including Outlook's `Z`-stamped ones.
+    const at = (value) => resolveCalendarInstant(value, timezone, event?.isAllDay === true);
+    const startedAt = at(event.startTime) || at(event.endTime);
     if (!startedAt) continue;
-    const completedAt = resolveEventInstant(event.endTime, timezone) || startedAt;
+    const completedAt = at(event.endTime) || startedAt;
     if (completedAt.getTime() > now) continue; // not finished yet
     const eventKey = event.externalId || event.id;
     if (!eventKey) continue;
-    const start = resolveEventInstant(event.startTime, timezone)?.getTime();
-    const end = resolveEventInstant(event.endTime, timezone)?.getTime();
+    const start = at(event.startTime)?.getTime();
+    const end = at(event.endTime)?.getTime();
     const durationS = Number.isFinite(start) && Number.isFinite(end) && end > start
       ? Math.round((end - start) / 1000)
       : null;
