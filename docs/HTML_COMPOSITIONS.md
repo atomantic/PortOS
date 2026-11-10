@@ -306,6 +306,24 @@ Saving the selection gates rendering until the server has accepted it.
 
 See the [synthetic visual validation and remaining acceptance](validation/9302-music-video-grade.md).
 
+## Layered-template additions
+
+In **Compose → Film look → Template additions**, set the beat reaction (pulse
+and automatic chorus glitch), still zoom/pan, footage push, grain and vignette
+from zero (off) to full strength. The default motion strengths are 100%, grain
+is 9%, and vignette is 50%, preserving existing frames. These are separate from
+chosen shot glitches, cut transitions, and the finishing Film look. A note warns
+when template texture stacks with Film look texture.
+
+Each shot's Film look editor can override individual additions or **Follow video**.
+Sparse `templateEffects` records on the video and shot carry these choices into
+both preview and final render; zero is explicit, while null/absent inherits.
+Use **Update layered engine** for older documents to adopt the controls in a new
+version. Existing documents remain unchanged until that explicit upgrade;
+custom and 3D engines retain their own behavior. When beat reaction can draw,
+the preview uses the composition renderer for the same pulse and chorus glitch
+as export; with beat reaction off, the lightweight native player remains available.
+
 ## Music-video film look
 
 A finishing filter for the analog, imperfect feel image and video models rarely

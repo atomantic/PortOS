@@ -75,10 +75,11 @@ describe('camera rig paths', () => {
 const engine = readFileSync(new URL('./engine.js', import.meta.url), 'utf8');
 const engineSlice = (from, to) => engine.slice(engine.indexOf(from), engine.indexOf(to));
 const mathBlock = engineSlice('  // ---------- math ----------', '  // ---------- song ----------');
+const settingsBlock = engineSlice('  function templateEffects(scene) {', '  // ---------- scenes ----------');
 const cameraBlock = engineSlice('  const RIG = globalThis.PORTOS_CAMERA_RIG', '  // ---------- media');
 const W = 1920; const H = 1080;
-const engineCamera = (portosRig) => new Function('W', 'H', 'downs', 'beats', 'globalThis',
-  `${mathBlock}\n${cameraBlock}\nreturn { cameraView, cameraSample, moveFor };`)(W, H, [2, 6], [1, 2, 3, 4, 5, 6], { PORTOS_CAMERA_RIG: portosRig });
+const engineCamera = (portosRig) => new Function('W', 'H', 'downs', 'beats', 'globalThis', 'MV',
+  `${mathBlock}\n${settingsBlock}\n${cameraBlock}\nreturn { cameraView, cameraSample, moveFor };`)(W, H, [2, 6], [1, 2, 3, 4, 5, 6], { PORTOS_CAMERA_RIG: portosRig }, { project: {} });
 
 // Every canvas corner must land inside the rotated, scaled, offset frame (a same-aspect source is the tightest case).
 function coversCanvas(view) {

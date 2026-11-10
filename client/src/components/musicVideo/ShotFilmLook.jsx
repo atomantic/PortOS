@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { SlidersHorizontal } from 'lucide-react';
 import FilmLookControls from '../media/FilmLookControls.jsx';
 import FilmLookPreview from '../media/FilmLookPreview.jsx';
+import TemplateEffectsControls from './TemplateEffectsControls.jsx';
 import useFilmLookPresets from '../../hooks/useFilmLookPresets.js';
 import { FILM_LOOK_PRESETS, filmLookPreset, isFilmLookNeutral, normalizeFilmLook, sameFilmLook } from '../../lib/filmLook.js';
 import { shotCamera } from '../../../../server/lib/musicVideoFilmLook.js';
@@ -54,6 +55,7 @@ export default function ShotFilmLook({ project, scene, onChange, fieldId }) {
           <SlidersHorizontal size={12} aria-hidden="true" /> {tuning ? 'Done' : 'Tune'}
         </button>
       </div>
+      {project.composition?.mode === 'document' && <TemplateEffectsControls project={project} scene={scene} onCommit={onChange} />}
       {tuning && (
         // This shot's own look, slider by slider, on its still: subtle fixes
         // (a little haze on one clean shot) without a whole preset.

@@ -1,3 +1,5 @@
+import { templateEffects } from './musicVideoTemplateEffects.js';
+
 /**
  * The layered document template's camera for one scene, computed outside the
  * engine so the in-browser composition player can move a clip or still the way
@@ -49,11 +51,15 @@ function beatIn(scene, beats, downbeats) {
  * `footage` is whether the document plays a clip for the scene; `index` is its
  * place from `documentSceneIndexes`. Null without a rig.
  */
-export function documentCameraView(rig, scene, t, { footage = false, index = 0, aspect = 16 / 9, beats = [], downbeats = [] } = {}) {
+export function documentCameraView(rig, scene, t, { footage = false, index = 0, aspect = 16 / 9, beats = [], downbeats = [], templateEffects: videoEffects = null } = {}) {
   if (!rig || !scene) return null;
   const span = scene.endSec - scene.startSec;
   const k = span > 0 ? Math.max(0, Math.min(1, (t - scene.startSec) / span)) : (t >= scene.endSec ? 1 : 0);
-  const move = moveFor(rig, scene, { footage, index });
+  const effects = templateEffects({ templateEffects: videoEffects }, scene);
+  const strength = footage ? effects.footagePush : effects.stillMotion;
+  if (strength === 0) return { scale: 1, x: 0, y: 0, rotation: 0 };
+  const original = moveFor(rig, scene, { footage, index });
+  const move = strength === 1 ? original : { ...original, amount: original.amount * strength, base: 1 + (original.base - 1) * strength };
   const options = { amount: move.amount, speed: move.speed, onBeat: move.onBeat, beat: beatIn(scene, beats, downbeats), aspect };
   const view = rig.flatView(move.move, k, options);
   const lowest = Math.min(1, rig.flatView(move.move, 0, options).zoom, rig.flatView(move.move, 1, options).zoom);

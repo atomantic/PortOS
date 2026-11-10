@@ -2,6 +2,7 @@ import { useId, useState } from 'react';
 import { Aperture } from 'lucide-react';
 import FilmLookControls from '../media/FilmLookControls.jsx';
 import FilmLookPreview from '../media/FilmLookPreview.jsx';
+import TemplateEffectsControls from './TemplateEffectsControls.jsx';
 import useFilmLookPresets from '../../hooks/useFilmLookPresets.js';
 import { isFilmLookNeutral } from '../../lib/filmLook.js';
 
@@ -72,6 +73,7 @@ export default function FilmLookPanel({ project, activeSceneId = null, onEditLoc
           className="w-20 min-h-[44px] rounded border border-port-border bg-port-bg px-2 py-1 pointer-fine:sm:min-h-0" />
         <span className="text-port-text-muted">% of each edge, cropped before the matte and the look</span>
       </div>
+      {documentMode && <TemplateEffectsControls project={project} onChange={onEditLocal} onCommit={(patch) => { onEditLocal(patch); onSave(patch); }} />}
       <ShotSample project={project} activeSceneId={activeSceneId} />
       <FilmLookControls look={project.filmLook} compact saved={saved}
         onChange={(look) => onEditLocal({ filmLook: look })}

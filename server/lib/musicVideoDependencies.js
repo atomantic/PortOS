@@ -30,6 +30,7 @@ const layerRef = (scene) => ({ role: 'layer', sceneId: scene.sceneId, assetId: s
     .concat(scene.glitches?.length ? [['glitches', scene.glitches]] : [])
     // A shot's own film look changes the render; a shot following the video's keeps its evidence.
     .concat(scene.filmLook ? [['filmLook', scene.filmLook]] : [])
+    .concat(scene.templateEffects ? [['templateEffects', scene.templateEffects]] : [])
     .concat(scene.cutEffect && scene.cutEffect.enabled !== false ? [['cutEffect', scene.cutEffect]] : [])
     // An image effect over a still changes the render; a still without one keeps its evidence.
     .concat(scene.imageEffect ? [['imageEffect', scene.imageEffect], ['imageEffectSec', scene.imageEffectSec ?? null]] : [])
@@ -195,7 +196,7 @@ const compositionRef = (project, startSec, endSec) => {
     cues: (composition.cues || []).filter((cue) => intersects(cue, startSec, endSec)),
   } : null;
   return { role: 'composition', assetId: 'composition', // A chosen production medium changes the render; a project without one keeps its evidence.
-  revision: checksum({ mediaMode: project.mediaMode || null, composition: value, ...(project.productionMedium ? { productionMedium: project.productionMedium } : {}) }), startSec, endSec };
+  revision: checksum({ mediaMode: project.mediaMode || null, composition: value, ...(project.templateEffects ? { templateEffects: project.templateEffects } : {}), ...(project.productionMedium ? { productionMedium: project.productionMedium } : {}) }), startSec, endSec };
 };
 
 const songRef = (project) => ({ role: 'song', assetId: 'master', revision: checksum({

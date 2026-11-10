@@ -1,3 +1,4 @@
+import { hasTemplateBeatReaction } from '../../../../server/lib/musicVideoTemplateEffects.js';
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { ChevronDown, ChevronUp, Maximize2, Minimize2, MonitorPlay } from 'lucide-react';
@@ -106,7 +107,7 @@ function useDocumentPlayback(project) {
  */
 function DocumentPreview({ project, playback, audioUrl, seekRequest, collapsed, onEditShot, onProject }) {
   if (!playback) return <p className={`text-xs text-port-text-muted ${collapsed ? 'max-xl:hidden' : ''}`}>Loading the composition…</p>;
-  return playback.native
+  return playback.native && !hasTemplateBeatReaction(project)
     ? <StoryboardAnimatic project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} onEditShot={onEditShot} variant="document" />
     : <div className={collapsed ? 'max-xl:hidden' : ''}><CompositionPreviewPlayer project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} shotNav onEditShot={onEditShot} onProject={onProject} /></div>;
 }

@@ -874,7 +874,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
             </div>
           </div>
         ) : animaticPictures}
-        {documentVariant && !outro.active && <DocumentTemplateFinish audioRef={clock.ref} time={clock.time} fps={ANIMATIC_FPS} />}
+        {documentVariant && !outro.active && <DocumentTemplateFinish project={project} audioRef={clock.ref} time={clock.time} fps={ANIMATIC_FPS} />}
         {/* The shots' VHS glitches on their cuts, on the frames the final render repaints. */}
         <TransitionGlitch scenes={clock.scenes} cameras={project.cameras} figureRef={figureRef} audioRef={clock.ref} time={clock.time} layered={layered}
           endSec={cold.active ? cold.seconds : Number(project.audioAnalysis?.durationSec) || null} fps={ANIMATIC_FPS} />
