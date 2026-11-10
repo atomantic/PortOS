@@ -48,3 +48,18 @@ describe('HandheldCameraControl', () => {
     expect(screen.getByRole('button', { name: 'Make handheld take' })).toBeDisabled();
   });
 });
+
+// Uniquely catches a portrait or 4:3 clip previewed in a 16:9 box with the widescreen zoom.
+it('frames and zooms the preview to the clip\'s own shape', async () => {
+  getVideoHistoryItem.mockResolvedValue({ id: 'clip-1', filename: 'clip-1.mp4' });
+  const { container } = render(<HandheldCameraControl clipId="clip-1" onApply={vi.fn()} />);
+  fireEvent.click(screen.getByRole('button', { name: /Handheld camera/ }));
+  await waitFor(() => expect(container.querySelector('video')).not.toBeNull());
+  const video = container.querySelector('video');
+  const wide = screen.getByText(/Zooms in \d+%/).textContent;
+  Object.defineProperty(video, 'videoWidth', { value: 720 });
+  Object.defineProperty(video, 'videoHeight', { value: 1280 });
+  fireEvent.loadedMetadata(video);
+  await waitFor(() => expect(video.parentElement.style.aspectRatio).toMatch(/^0\.5625/));
+  expect(screen.getByText(/Zooms in \d+%/).textContent).not.toBe(wide);
+});

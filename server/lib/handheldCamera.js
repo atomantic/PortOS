@@ -128,7 +128,7 @@ export function handheldZoom(terms, aspect = 16 / 9) {
 }
 
 /** Offset (fractions of the frame) and roll (degrees) at clip time `t` seconds. */
-export function handheldOffset(terms, t) {
+function handheldOffset(terms, t) {
   const out = { x: 0, y: 0, r: 0 };
   for (const term of terms) out[term.axis] += termValue(term, t);
   return out;
@@ -185,7 +185,7 @@ export function handheldFfmpegFilter(input, { width, height } = {}) {
 }
 
 /** A stable seed for an id (a shot's sceneId), so every shot shakes its own way and the same way every time. */
-export function handheldSeedFor(id) {
+function handheldSeedFor(id) {
   let h = 0x811c9dc5;
   for (const ch of String(id || '')) h = Math.imul(h ^ ch.codePointAt(0), 0x01000193) >>> 0;
   return 1 + (h % HANDHELD_SEED_MAX);

@@ -39,8 +39,10 @@ export default function HandheldCameraControl({ clipId, onApply, disabled = fals
     return () => { live = false; };
   }, [open, clipId]);
 
+  // The clip's own shape, so the preview frames and zooms it as handheldFfmpegFilter will.
+  const [aspect, setAspect] = useState(16 / 9);
   const terms = useMemo(() => handheldTerms(settings), [settings]);
-  const zoom = useMemo(() => handheldZoom(terms, 16 / 9), [terms]);
+  const zoom = useMemo(() => handheldZoom(terms, aspect), [terms, aspect]);
 
   // Drive the preview from the clip's own clock, so a pause or a scrub holds the matching frame.
   useEffect(() => {
@@ -78,9 +80,10 @@ export default function HandheldCameraControl({ clipId, onApply, disabled = fals
   }
   return (
     <div className="w-full space-y-2 rounded border border-port-border p-2">
-      <div className="relative w-full overflow-hidden rounded bg-black aspect-video">
+      <div className="relative mx-auto w-full overflow-hidden rounded bg-black max-h-[60vh]" style={{ aspectRatio: aspect }}>
         {source
-          ? <video ref={videoRef} src={source} className="block w-full h-full object-cover" muted playsInline loop autoPlay controls={false} />
+          ? <video ref={videoRef} src={source} className="block w-full h-full object-cover" muted playsInline loop autoPlay controls={false}
+            onLoadedMetadata={(e) => { const { videoWidth: w, videoHeight: h } = e.currentTarget; if (w > 0 && h > 0) setAspect(w / h); }} />
           : <p className="p-2 text-xs text-port-text-muted">Loading the clip…</p>}
       </div>
       {HANDHELD_CONTROLS.map((control) => (

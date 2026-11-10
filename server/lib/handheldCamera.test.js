@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
-  HANDHELD_SEED_MAX, applyDocumentHandheld, documentHandheld, handheldSeedFor, handheldCssTransform, handheldFfmpegFilter, handheldOffset, handheldTerms, handheldZoom, isHandheldStill, normalizeHandheld,
+  HANDHELD_SEED_MAX, applyDocumentHandheld, documentHandheld, handheldCssTransform, handheldFfmpegFilter, handheldTerms, handheldZoom, isHandheldStill, normalizeHandheld,
 } from './handheldCamera.js';
+
+// The offset the terms describe at clip time t, written out independently of the module.
+const offsetAt = (terms, t) => terms.reduce((out, term) => {
+  out[term.axis] += term.kind === 'bob'
+    ? term.amp * (Math.abs(Math.sin(Math.PI * term.freq * t + term.phase)) - 2 / Math.PI)
+    : term.amp * Math.sin(2 * Math.PI * term.freq * t + term.phase);
+  return out;
+}, { x: 0, y: 0, r: 0 });
 
 describe('normalizeHandheld', () => {
   it('clamps and rounds every control, and keeps the seed in range', () => {
@@ -46,7 +54,7 @@ describe('handheldZoom', () => {
         const halfW = 0.5 * zoom;
         const halfH = (0.5 / aspect) * zoom;
         for (let t = 0; t < 12; t += 1 / 24) {
-          const { x, y, r } = handheldOffset(terms, t);
+          const { x, y, r } = offsetAt(terms, t);
           const theta = (r * Math.PI) / 180;
           for (const [cx, cy] of [[-0.5, -0.5 / aspect], [0.5, -0.5 / aspect], [-0.5, 0.5 / aspect], [0.5, 0.5 / aspect]]) {
             // The window corner in picture space: offset, then turned back by the roll.
@@ -86,7 +94,7 @@ describe('handheldFfmpegFilter', () => {
 describe('handheldCssTransform', () => {
   it('moves the picture opposite the window offset, rolls and zooms', () => {
     const terms = handheldTerms({ shake: 0.5, steps: 0.5, seed: 5 });
-    const { x, y } = handheldOffset(terms, 1.25);
+    const { x, y } = offsetAt(terms, 1.25);
     const css = handheldCssTransform(terms, 1.25, 1.08);
     expect(css).toContain(`translate(${Number((-x * 100).toFixed(4))}%, ${Number((-y * 100).toFixed(4))}%)`);
     expect(css).toMatch(/rotate\(-?[\d.]+deg\) scale\(1\.08\)$/);
@@ -96,8 +104,9 @@ describe('handheldCssTransform', () => {
 
 describe('document handheld', () => {
   it('seeds each shot from its id, stably, and is off without shake or footsteps', () => {
-    expect(handheldSeedFor('shot-a')).toBe(handheldSeedFor('shot-a'));
-    expect(handheldSeedFor('shot-a')).not.toBe(handheldSeedFor('shot-b'));
+    const effects = { handheld: 0.5, handheldSteps: 0.5 };
+    expect(documentHandheld(effects, 'shot-a')).toEqual(documentHandheld(effects, 'shot-a'));
+    expect(documentHandheld(effects, 'shot-a')).not.toEqual(documentHandheld(effects, 'shot-b'));
     expect(documentHandheld({ handheld: 0, handheldSteps: 0 }, 'shot-a')).toBeNull();
     const motion = documentHandheld({ handheld: 0.5, handheldSteps: 0.5 }, 'shot-a');
     expect(motion.zoom).toBeGreaterThan(1);
