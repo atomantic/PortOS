@@ -38,6 +38,27 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('PreviewDock composition document', () => {
+  it('uses the native drawing data and refreshes it when a card or beat input changes', async ({ onTestFinished }) => {
+    // This test owns routing/data refresh; the browser suite owns canvas pixels.
+    const getContext = HTMLCanvasElement.prototype.getContext;
+    const context = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(function (...args) {
+      return this.dataset.testid === 'document-template-canvas' ? null : getContext.apply(this, args);
+    });
+    onTestFinished(() => context.mockRestore());
+    playback.mockResolvedValue({ native: true, data: { render: { width: 1920, height: 1080, fps: 24 }, scenes: [], song: {} } });
+    const view = dock();
+    expect(await screen.findByTestId('document-template-canvas')).toBeTruthy();
+    expect(screen.queryByTestId('document-template-finish')).toBeNull();
+    expect(screen.getByText(/camera moves, beat reactions, cards, HUD and words/)).toBeTruthy();
+    const audio = screen.getByLabelText('Song for the composition preview');
+    const changed = { ...project, composition: { ...project.composition, overlay: { enabled: true, titleLines: ['Changed'] } } };
+    view.rerender(<MemoryRouter><PreviewDock project={changed} sources={listPreviewSources(changed, { leadWith: 'storyboard' })} audioUrl="/song.mp3" /></MemoryRouter>);
+    await waitFor(() => expect(playback).toHaveBeenCalledTimes(2));
+    expect(await screen.findByTestId('document-template-canvas')).toBeTruthy();
+    expect(screen.getByLabelText('Song for the composition preview')).toBe(audio);
+    expect(opens()).toHaveLength(0);
+  });
+
   // Uniquely catches a stock-template video starting the isolated renderer just to play, or a paused frame that is not the document's own.
   it('plays the shipped template in the page and asks the worker only for the paused frame', async () => {
     playback.mockResolvedValue({ native: true });

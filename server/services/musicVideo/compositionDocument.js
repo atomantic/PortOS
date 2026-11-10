@@ -614,7 +614,13 @@ export async function documentNativePlayback(project) {
   if (project?.composition?.mode !== 'document' || !(await documentAvailable(project))) return { native: false, reason: 'no-document' };
   const { shippedLayeredDocument } = await import('./documentPreviewPlayback.js');
   const result = await shippedLayeredDocument(resolveDocumentDirectory(project.composition.document));
-  return result.shipped ? { native: true } : { native: false, reason: result.reason };
+  if (!result.shipped) return { native: false, reason: result.reason };
+  const { buildDocumentData, documentRenderClock, documentSongDuration, documentAspect, DOCUMENT_FRAME_SIZES } = await import('./documentRender.js');
+  const durationSec = documentSongDuration(project);
+  const data = buildDocumentData(project, {
+    frame: DOCUMENT_FRAME_SIZES[documentAspect(project)], clock: documentRenderClock(durationSec, 24), songDurationSec: durationSec,
+  });
+  return { native: true, data };
 }
 
 /** The document's file list: `{ document, files: [{ path, bytes }], totalBytes }`. */

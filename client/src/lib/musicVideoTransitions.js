@@ -17,6 +17,7 @@ export {
   mergeGlitchFrames,
   blockBox,
   edgeGlows,
+  glitchFrameParams,
   sceneImageEffectGlitchFrames,
   sceneShotGlitchFrames,
   sceneTransitions,

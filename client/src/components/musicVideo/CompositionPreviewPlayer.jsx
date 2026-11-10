@@ -24,6 +24,7 @@ const playthroughKey = (project) => JSON.stringify([
   (project.scenes || []).map((s) => [s.startSec, s.endSec, s.textZone, s.lyricRole, s.lyricSize]),
   // The lyrics step off the title card's corner while it shows.
   titleCardVisible(project.titleCard) ? [project.titleCard.position, titleCardWindows(project.titleCard)] : null,
+  project.composition?.mode === 'document' ? [project.composition.textCues, project.composition.style] : null,
 ]);
 export const playthroughVersion = (project) => {
   const key = playthroughKey(project);

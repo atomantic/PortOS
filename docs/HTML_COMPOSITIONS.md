@@ -488,7 +488,7 @@ symlinks, special files, traversal names and the reserved names below
 `/api/music-video/:id/composition/document`: `GET` (manifest), `POST /zip`
 (multipart `file`), `POST /directory` (`{ directory }`), `POST /template`
 (`{ template: "layered" }`), `GET /export` (zip), `GET /preview`,
-`GET /playback` (`{ native, reason? }`: whether the document is the unmodified
+`GET /playback` (`{ native, reason?, data? }`: whether the document is the unmodified
 shipped template),
 `GET /file?path=` (one document file, served inert), `DELETE` (detach).
 
@@ -668,11 +668,24 @@ by matching its engine, entrypoint, helpers and fonts byte for byte
 the page with the storyboard animatic's player and opens the worker only for
 the exact frame of a paused, scrubbed, stepped or saved moment. The page still
 never loads the document. The playing picture repeats the template's own
-drawing with shared code: its camera move for each clip and still
-(`server/lib/musicVideoDocumentCamera.js`, checked against the engine by its
-test), its vignette and its grain. Beat reactions, card scenes and the HUD are
-not repeated yet and appear only on the paused frame. Every other document
+drawing with shared camera paths, image effects, beat timing, selected glitches,
+wipes and lyric type. A native canvas draws the template's vignette, grain,
+beat punch, high-energy downbeat glitch, card scenes and HUD over the browser's
+playing media. The words-only page merges hook cues with sung lyrics (or the
+director's subtitle cues), using the template's palette and frame clock.
+`GET /playback` supplies the same structured song, scene and composition drawing
+data as the renderer, without document code or media files. The dock refreshes
+that data when its drawing inputs change. Every other document
 keeps the worker for playback too. Design record: [native composition preview](plans/2026-11-09-native-composition-preview.md).
+
+`documentTemplateParity.browser.test.js` compares the native player's visible
+picture with the unchanged shipped engine at fixed song frames: finish, footage
+and still camera moves, beat reactions, cards, HUD and hook/sung/subtitle type.
+Both render at 1920×1080 and display at 640×360; the tolerance is mean RGB error
+below 0.3 out of 255 and fewer than 0.4% of channel samples differing by more
+than 12. Frame centres avoid media-element microsecond rounding at 24fps
+boundaries. These are synthetic headless Chromium comparisons; they do not
+claim physical-phone playback measurements. Final document renders are unchanged.
 
 Seek, film look, and the title card go over the private render protocol.
 Project media stays on the server (`streamMedia`); the client never fetches it

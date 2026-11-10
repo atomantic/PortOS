@@ -16,6 +16,7 @@ export const BROWSER_SUITES = [
   'server/services/musicVideo/animaticCapture.browser.test.js',
   'server/services/musicVideo/compositionRender.test.js',
   'server/services/musicVideo/documentRender.browser.test.js',
+  'server/services/musicVideo/documentTemplateParity.browser.test.js',
   'server/services/musicVideo/documentFilmLook.browser.test.js',
   'server/services/musicVideo/documentTemplates/layered/engine.controls.browser.test.js',
   'server/services/musicVideo/documentTemplates/layered/engine.overlay.browser.test.js',

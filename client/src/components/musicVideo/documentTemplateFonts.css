@@ -1,0 +1,15 @@
+@font-face {
+  font-family: "MV Stencil";
+  src: url("../../../../server/services/musicVideo/documentTemplates/layered/fonts/big-shoulders-stencil-display-900.woff2") format("woff2");
+  font-weight: 900;
+}
+@font-face {
+  font-family: "MV Mono";
+  src: url("../../../../server/services/musicVideo/documentTemplates/layered/fonts/ibm-plex-mono-400.woff2") format("woff2");
+  font-weight: 400;
+}
+@font-face {
+  font-family: "MV Mono";
+  src: url("../../../../server/services/musicVideo/documentTemplates/layered/fonts/ibm-plex-mono-600.woff2") format("woff2");
+  font-weight: 600;
+}

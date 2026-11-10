@@ -8,6 +8,7 @@ import ShotStepper, { shotSteps } from './ShotStepper.jsx';
 import FrameStepper, { captureMediaFrame } from './FrameStepper.jsx';
 import { sceneShotName } from '../../lib/musicVideoStages.js';
 import { getMusicVideoCompositionPlayback } from '../../services/apiMusicVideo.js';
+import { hashString } from '../../utils/hashString.js';
 
 // Three.js loads only when the greybox previz is the source being watched.
 const PrevizPlayer = lazy(() => import('./PrevizPlayer.jsx'));
@@ -82,20 +83,24 @@ function VideoPreview({ source, scenes, projectName, seekRequest, collapsed, onE
   );
 }
 
-// Asked once per document version by the dock itself, so switching sources does not ask again.
+// Rebuild the drawing data when its inputs change; switching sources alone does not ask again.
 function useDocumentPlayback(project) {
   const directory = (project.composition?.mode === 'document' && project.composition?.document?.directory) || '';
+  const target = `${project.id}|${directory}`;
+  const revision = hashString(JSON.stringify([directory, project.composition, project.scenes, project.audioAnalysis,
+    project.lyricCues, project.lyricMarkers, project.titleCard, project.lyricOverlayEnabled, project.productionReview, project.cameras, project.colorMatch, project.treatment]));
   const [playback, setPlayback] = useState(null);
   useEffect(() => {
     if (!directory) { setPlayback(null); return undefined; }
     let active = true;
-    setPlayback(null);
+    // A drawing edit keeps the audio/player mounted while its new data arrives.
+    setPlayback(previous => previous?.target === target ? previous : null);
     getMusicVideoCompositionPlayback(project.id, { silent: true })
-      .then((result) => { if (active) setPlayback({ directory, native: result?.native === true }); })
-      .catch(() => { if (active) setPlayback({ directory, native: false }); });
+      .then((result) => { if (active) setPlayback({ target, native: result?.native === true, data: result?.data }); })
+      .catch(() => { if (active) setPlayback({ target, native: false }); });
     return () => { active = false; };
-  }, [project.id, directory]);
-  return playback?.directory === directory ? playback : null;
+  }, [project.id, directory, target, revision]);
+  return playback?.target === target ? playback : null;
 }
 
 /**
@@ -107,8 +112,8 @@ function useDocumentPlayback(project) {
  */
 function DocumentPreview({ project, playback, audioUrl, seekRequest, collapsed, onEditShot, onProject }) {
   if (!playback) return <p className={`text-xs text-port-text-muted ${collapsed ? 'max-xl:hidden' : ''}`}>Loading the composition…</p>;
-  return playback.native && !hasTemplateBeatReaction(project)
-    ? <StoryboardAnimatic project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} onEditShot={onEditShot} variant="document" />
+  return playback.native && (playback.data || !hasTemplateBeatReaction(project))
+    ? <StoryboardAnimatic project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} onEditShot={onEditShot} variant="document" nativeData={playback.data} />
     : <div className={collapsed ? 'max-xl:hidden' : ''}><CompositionPreviewPlayer project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} shotNav onEditShot={onEditShot} onProject={onProject} /></div>;
 }
 
