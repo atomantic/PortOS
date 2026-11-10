@@ -38,7 +38,12 @@ describe('locked runtime profiles', () => {
     const locks = Object.fromEntries(['auk-mlx', 'laya-mlx'].map((id) => [id, readFileSync(LOCK_PROFILES[id].lockFile, 'utf8')]));
     // Installed with --no-build-isolation: an absent backend would silently fall back to nothing, not to PyPI.
     expect(locks['auk-mlx']).toMatch(/^setuptools==/m);
-    expect(locks['auk-mlx']).toMatch(/^torch==2\.7\./m);
+    // Every torch < 2.13 / transformers < 5.10 release carries OSV advisories (#15670).
+    const aukPin = (name) => locks['auk-mlx'].match(new RegExp(`^${name}==(\\d+)\\.(\\d+)\\.`, 'm'))?.slice(1).map(Number);
+    expect(aukPin('torch')).toEqual([2, expect.any(Number)]);
+    expect(aukPin('torch')[1]).toBeGreaterThanOrEqual(13);
+    expect(aukPin('transformers')).toEqual([5, expect.any(Number)]);
+    expect(aukPin('transformers')[1]).toBeGreaterThanOrEqual(10);
     expect(locks['laya-mlx']).toMatch(/^hatchling==/m);
     expect(locks['laya-mlx']).toMatch(/^mlx==0\.32\./m);
     for (const profile of [LOCK_PROFILES['auk-mlx'], LOCK_PROFILES['laya-mlx']]) {
