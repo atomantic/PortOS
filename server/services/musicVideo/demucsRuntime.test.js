@@ -36,6 +36,7 @@ describe('Demucs locked provisioning boundary', () => {
     const run = vi.fn(async () => ({ success: false }));
     await expect(ensureDemucsRuntime({ dir, plan: nativePlan(), run, resolveBasePython: async () => '/python3.12' }))
       .rejects.toMatchObject({ code: 'DEMUCS_PYTHON_MISSING' });
+    expect(run.mock.calls[0][1][1]).toContain("assert sys.implementation.name == 'cpython'");
     expect(await readFile(pythonAt(dir), 'utf8')).toBe('legacy');
     expect(run.mock.calls.some(([, args]) => args.includes('venv'))).toBe(false);
   });

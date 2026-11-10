@@ -34,7 +34,7 @@ export function _demucsRuntimePlan({ platform = process.platform, arch = process
     unsupported: null,
     arch: nativeArch,
     lockId: createHash('sha256').update(lock).update(buildLock).digest('hex'),
-    versionProbe: `import sys, platform; assert sys.version_info[:2] == (3, 11); assert platform.machine().lower() in ${JSON.stringify(nativeArch === 'x64' ? ['x86_64', 'amd64'] : ['arm64'])}`,
+    versionProbe: `import sys, platform; assert sys.implementation.name == 'cpython'; assert sys.version_info[:2] == (3, 11); assert platform.machine().lower() in ${JSON.stringify(nativeArch === 'x64' ? ['x86_64', 'amd64'] : ['arm64'])}`,
     probe: `import demucs.separate, soundfile, torch, torchaudio; import importlib.metadata as m; assert all(m.version(n).split('+')[0] == v for n, v in ${JSON.stringify(versions)}.items())`,
     installs: [
       ['-m', 'pip', 'install', '--disable-pip-version-check', '--require-hashes', '--no-deps', '--only-binary', ':all:', '-r', BUILD_LOCK],
