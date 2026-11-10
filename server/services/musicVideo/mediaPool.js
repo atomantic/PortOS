@@ -13,6 +13,7 @@
  */
 
 import { TAKE_SLOT } from './takes.js';
+import { ServerError } from '../../lib/errorHandler.js';
 
 const KIND_OF_SLOT = { image: 'image', endImage: 'image', video: 'video' };
 
@@ -71,6 +72,9 @@ export function droppedTakeAssets(before, after) {
  * Resolves `{ project, scenes, changes }`.
  */
 export function markPoolAssets(project, keys, mark, options = {}) {
+  if (Object.hasOwn(options, 'expectedMark') && keys.some((key) => (project.assetMarks?.[key] || null) !== options.expectedMark)) {
+    throw new ServerError('This asset has a newer mark; Undo kept it.', { status: 409, code: 'MUSIC_VIDEO_UNDO_CONFLICT' });
+  }
   const assetMarks = { ...(project.assetMarks || {}) };
   for (const key of keys) {
     if (mark) assetMarks[key] = mark;

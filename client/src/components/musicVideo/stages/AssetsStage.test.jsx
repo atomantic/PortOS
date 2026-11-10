@@ -13,7 +13,7 @@ const pool = [
 vi.mock('../../../services/apiMusicVideo.js', () => ({
   getMusicVideoMediaPool: vi.fn(async () => ({ items: pool })),
   markMusicVideoPoolAssets: vi.fn(async () => ({ assetMarks: { 'image:early.png': 'bad' } })),
-  selectMusicVideoSceneTake: vi.fn(async () => ({ scene: { sceneId: 's1' } })),
+  selectMusicVideoSceneTake: vi.fn(async () => ({ sceneId: 's1' })),
   deleteMusicVideoPoolAssets: vi.fn(async () => ({ deleted: 1 })),
   searchMusicVideoMediaPool: vi.fn(async () => ({ items: [] })),
   listMusicVideoProjectSummaries: vi.fn(async () => ({ items: [{ id: 'mv-1', name: 'This video' }, { id: 'mv-draft', name: 'Early draft' }] })),
@@ -99,8 +99,8 @@ describe('Music video Assets page', () => {
 
     api.markMusicVideoPoolAssets.mockResolvedValueOnce({ assetMarks: {} });
     fireEvent.click(screen.getByRole('button', { name: /Undo/i }));
-    await waitFor(() => expect(api.markMusicVideoPoolAssets).toHaveBeenCalledWith('mv-1', [{ kind: 'image', assetId: 'early.png' }], null, { silent: true }));
-    await waitFor(() => expect(api.selectMusicVideoSceneTake).toHaveBeenCalledWith('mv-1', 's1', 'take-early', { silent: true }));
+    await waitFor(() => expect(api.markMusicVideoPoolAssets).toHaveBeenCalledWith('mv-1', [{ kind: 'image', assetId: 'early.png' }], null, { expectedMark: 'bad', silent: true }));
+    await waitFor(() => expect(api.selectMusicVideoSceneTake).toHaveBeenCalledWith('mv-1', 's1', 'take-early', { expectedSelectedAssetId: 'floor.png', silent: true }));
   });
 
   // Uniquely catches Undo losing the ingredient mark that preceded a bad decision.
@@ -111,8 +111,25 @@ describe('Music video Assets page', () => {
     fireEvent.click(await screen.findByRole('button', { name: /still from shot 1: Splicer close-up/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Bad' }));
     fireEvent.click(await screen.findByRole('button', { name: /Undo/i }));
-    await waitFor(() => expect(api.markMusicVideoPoolAssets).toHaveBeenCalledWith('mv-1', [{ kind: 'image', assetId: 'early.png' }], 'ingredient', { silent: true }));
+    await waitFor(() => expect(api.markMusicVideoPoolAssets).toHaveBeenCalledWith('mv-1', [{ kind: 'image', assetId: 'early.png' }], 'ingredient', { expectedMark: 'bad', silent: true }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Ingredient' })).toHaveAttribute('aria-pressed', 'true'));
+  });
+
+  it('keeps newer mark and take decisions when guarded Undo conflicts', async () => {
+    api.markMusicVideoPoolAssets.mockResolvedValueOnce({ changes: [{ sceneId: 's1', action: 'moved', previousTakeId: 'take-early', toAssetId: 'floor.png' }] });
+    const applyPoolMarks = vi.fn(), applyScene = vi.fn();
+    renderPage({ takes: { applyPoolMarks, applyScene } });
+    fireEvent.click(await screen.findByRole('button', { name: /still from shot 1: Splicer close-up/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Bad' }));
+    const undo = await screen.findByRole('button', { name: /Undo/i });
+    const conflict = Object.assign(new Error('A newer decision was saved'), { code: 'MUSIC_VIDEO_UNDO_CONFLICT' });
+    api.markMusicVideoPoolAssets.mockRejectedValueOnce(conflict);
+    api.selectMusicVideoSceneTake.mockRejectedValueOnce(conflict);
+    applyPoolMarks.mockClear(); applyScene.mockClear();
+    fireEvent.click(undo);
+    expect(await screen.findByText(/Kept newer decisions for asset mark, shot 1/)).toBeTruthy();
+    expect(applyPoolMarks).not.toHaveBeenCalled();
+    expect(applyScene).not.toHaveBeenCalled();
   });
 
   // Uniquely catches an in-use file missing the keep-in-use override or the option not being sent.

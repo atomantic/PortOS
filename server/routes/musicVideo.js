@@ -2007,8 +2007,8 @@ router.get('/:id/credits-prefill', asyncHandler(async (req, res) => {
 
 // The asset manager: mark unused stills and clips ★ ingredient / ✕ bad, or delete them from the library.
 router.patch('/:id/media-pool/marks', asyncHandler(async (req, res) => {
-  const { items, mark, keepInUse } = validateRequest(musicVideoPoolMarkSchema, req.body);
-  res.json(await markMediaPoolAssets(req.params.id, items.map((item) => `${item.kind}:${item.assetId}`), mark, { keepInUse }));
+  const { items, mark, ...options } = validateRequest(musicVideoPoolMarkSchema, req.body);
+  res.json(await markMediaPoolAssets(req.params.id, items.map((item) => `${item.kind}:${item.assetId}`), mark, options));
 }));
 
 // Bring an earlier draft's stills and clips into this video's assets (references; the draft is untouched).
@@ -2057,7 +2057,9 @@ router.post('/:id/scenes/:sceneId/takes/use', asyncHandler(async (req, res) => {
 }));
 
 router.post('/:id/scenes/:sceneId/takes/:takeId/select', asyncHandler(async (req, res) => {
-  res.json(await selectSceneTake(req.params.id, req.params.sceneId, req.params.takeId));
+  const { musicVideoTakeSelectSchema } = await import('../lib/musicVideoValidation.js');
+  const options = validateRequest(musicVideoTakeSelectSchema, req.body ?? {});
+  res.json(await selectSceneTake(req.params.id, req.params.sceneId, req.params.takeId, options));
 }));
 
 // No body: marks the shot's unselected takes rejected, keeping their files.

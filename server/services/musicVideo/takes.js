@@ -284,8 +284,11 @@ export function recordTakePlateEvidence(project, sceneId, takeId, evidence) {
 }
 
 /** Explicitly select a take for its slot. Selecting a rejected take restores it. */
-export function selectSceneTake(project, sceneId, takeId) {
+export function selectSceneTake(project, sceneId, takeId, options = {}) {
   const { idx, scene, takes, take } = locateTake(project, sceneId, takeId);
+  if (Object.hasOwn(options, 'expectedSelectedAssetId') && (scene[TAKE_SLOT[take.kind]] || null) !== options.expectedSelectedAssetId) {
+    throw new ServerError('This shot has a newer take selection; Undo kept it.', { status: 409, code: 'MUSIC_VIDEO_UNDO_CONFLICT' });
+  }
   assertMusicVideoMedia(project, take.kind, 'take selection');
   const nextTakes = takes.map((t) => (t.takeId === takeId && t.status === 'rejected' ? { ...t, status: 'candidate' } : t));
   const next = { ...scene, takes: nextTakes, [TAKE_SLOT[take.kind]]: take.assetId };
