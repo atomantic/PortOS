@@ -14,6 +14,7 @@ vi.mock('../lib/mediaModels.js', () => ({
   isEditOnly: vi.fn(() => false),
   repoForModel: vi.fn((m) => `org/${m.id}`),
   requiredReposForModel: vi.fn((m) => [`org/${m.id}`]),
+  imageModelDownloadTargets: vi.fn(() => null),
 }));
 
 // Keep the real pure helpers (summarizeVerify/aggregateVerifies); only stub the

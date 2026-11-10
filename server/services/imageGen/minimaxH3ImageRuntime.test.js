@@ -14,13 +14,14 @@ vi.mock('../../lib/platform.js', () => ({ isAppleSilicon: () => true }));
 import { getImageModels, imageModelDownloadTargets } from '../../lib/mediaModels.js';
 import { MINIMAX_H3_IMAGE_MODEL_ID } from '../../lib/imageRuntimeRemedies.js';
 import {
-  diagnoseMinimaxH3ImageRuntime, minimaxH3ImageEnv, minimaxH3ImageRenderArgs, minimaxH3ImageWeightsCached,
+  diagnoseMinimaxH3ImageRuntime, loadMinimaxH3Runtime, minimaxH3ImageEnv, minimaxH3ImageRenderArgs, minimaxH3ImageWeightsCached,
 } from './minimaxH3ImageRuntime.js';
 
 const model = getImageModels({ includeDisabled: true }).find(entry => entry.id === MINIMAX_H3_IMAGE_MODEL_ID);
+const minimaxRuntime = await loadMinimaxH3Runtime();
 const request = (over = {}) => ({
   model, prompt: 'a lake at dawn', negativePrompt: '', width: 3840, height: 2160, steps: 6, seed: 7,
-  outputPath: '/out/image.png', referenceImagePaths: [], referenceImageStrengths: [], loraPaths: [], ...over,
+  outputPath: '/out/image.png', referenceImagePaths: [], referenceImageStrengths: [], loraPaths: [], minimaxRuntime, ...over,
 });
 const flagValues = (args, flag) => args.flatMap((arg, i) => (arg === flag ? [args[i + 1]] : []));
 

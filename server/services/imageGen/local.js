@@ -48,7 +48,7 @@ import { getImageModels, isFlux2, isErnie, isHiDream, isQwen } from '../../lib/m
 import { hardwareUnavailableReason, isHardwareCompatible } from '../../lib/systemCapabilities.js';
 import { flux3RenderArgs, assertFlux3Inputs, flux3Env } from './flux3Runtime.js';
 import {
-  minimaxH3ImageRenderArgs, assertMinimaxH3ImageInputs, minimaxH3ImageEnv, minimaxH3ImageWeightsCached,
+  minimaxH3ImageRenderArgs, assertMinimaxH3ImageInputs, minimaxH3ImageEnv, minimaxH3ImageWeightsCached, loadMinimaxH3Runtime,
 } from './minimaxH3ImageRuntime.js';
 import { usesDiffusersRunner, flux2Bf16BaseRepo } from '../../lib/runners.js';
 import { weaveLoraTriggers } from '../../lib/loraTriggers.js';
@@ -657,6 +657,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     const runtime = await diagnoseLocalRuntime({ modelId });
     if (runtime.readiness !== 'ready') throw new ServerError(runtime.reason, { status: 400, code: 'FLUX3_NOT_READY' });
   }
+  let minimaxRuntime = null;
   if (usesMinimaxH3Image(model)) {
     assertMinimaxH3ImageInputs({ negativePrompt, width: Number(width), height: Number(height), steps: steps || null, hasInitImage: Boolean(initImagePath),
       referenceCount: referenceImagePaths.length, referenceImageStrengths, loraCount: loraPaths.length + loraFilenames.length });
@@ -667,6 +668,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
       throw new ServerError('MiniMax H3-Image weights are not downloaded. Use Download beside the model in Image Gen, then retry.',
         { status: 400, code: 'MINIMAX_H3_IMAGE_WEIGHTS_NOT_CACHED' });
     }
+    minimaxRuntime = await loadMinimaxH3Runtime();
   }
   assertFlux2InputsCompatible(model, {
     hasInitImage: Boolean(initImagePath), referenceCount: referenceImagePaths.length,
@@ -835,7 +837,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
   try {
     // `renderPrompt` — the user's prompt plus any LoRA activation tokens it was
     // missing (#4665). Identical to `prompt` when nothing was woven.
-    ({ bin, args, providerInputs } = buildArgs({ pythonPath, model, prompt: renderPrompt, negativePrompt, width: Number(width), height: Number(height), steps: actualSteps, guidance: actualGuidance, seed: actualSeed, quantize, outputPath, loraPaths: validLoras, loraScales, stepwiseDir, initImagePath: validInitImagePath, initImageStrength: validInitImageStrength, referenceImagePaths: validReferenceImagePaths, referenceImageStrengths: validReferenceImageStrengths }));
+    ({ bin, args, providerInputs } = buildArgs({ pythonPath, model, prompt: renderPrompt, negativePrompt, width: Number(width), height: Number(height), steps: actualSteps, guidance: actualGuidance, seed: actualSeed, quantize, outputPath, loraPaths: validLoras, loraScales, stepwiseDir, initImagePath: validInitImagePath, initImageStrength: validInitImageStrength, referenceImagePaths: validReferenceImagePaths, referenceImageStrengths: validReferenceImageStrengths, minimaxRuntime }));
     // Record only inputs the selected runner actually receives. Unsupported
     // references and Windows mflux init images remain explicit request evidence.
     const requestedInputs = [

@@ -20,9 +20,16 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { verifyCachedRepoFiles } from '../../lib/hfCache.js';
 import { imageModelDownloadTargets } from '../../lib/mediaModels.js';
 import { IMAGE_RUNTIME_REMEDY } from '../../lib/imageRuntimeRemedies.js';
-import {
-  MINIMAX_H3_VENV_PYTHON, MINIMAX_H3_REPO_DIR, MINIMAX_H3_EXPECTED_REVISION, isByovRuntimeReady,
-} from '../videoGen/runtimes.js';
+
+// videoGen/runtimes.js is heavy and resolves paths at load, so it is imported
+// only on the paths that need it, never by the modules that merely list models.
+const videoRuntimes = () => import('../videoGen/runtimes.js');
+
+/** The shared H3 MLX runtime's interpreter, checkout and pinned revision. */
+export async function loadMinimaxH3Runtime() {
+  const { MINIMAX_H3_VENV_PYTHON, MINIMAX_H3_REPO_DIR, MINIMAX_H3_EXPECTED_REVISION } = await videoRuntimes();
+  return { python: MINIMAX_H3_VENV_PYTHON, repoDir: MINIMAX_H3_REPO_DIR, revision: MINIMAX_H3_EXPECTED_REVISION };
+}
 
 export const MINIMAX_H3_IMAGE_SCRIPT = () => join(PATHS.root, 'scripts', 'generate_minimax_h3_image.py');
 export const MINIMAX_H3_IMAGE_MAX_REFERENCES = 16;
@@ -48,6 +55,7 @@ export async function minimaxH3ImageWeightsCached(model) {
 export async function diagnoseMinimaxH3ImageRuntime(host) {
   const problem = hostProblem(host);
   if (problem) return { readiness: 'unavailable', reason: problem, remedy: { kind: IMAGE_RUNTIME_REMEDY.CHOOSE_MODEL, label: 'Choose a compatible model' } };
+  const { isByovRuntimeReady } = await videoRuntimes();
   if (await isByovRuntimeReady('minimax_h3').catch(() => false)) return { readiness: 'ready' };
   return {
     readiness: 'unavailable',
@@ -72,22 +80,22 @@ export function assertMinimaxH3ImageInputs({ negativePrompt, width, height, step
 
 export function minimaxH3ImageRenderArgs(inputs) {
   const { model, prompt, negativePrompt, width, height, steps, seed, outputPath, initImagePath,
-    referenceImagePaths = [], referenceImageStrengths = [], loraPaths = [] } = inputs;
+    referenceImagePaths = [], referenceImageStrengths = [], loraPaths = [], minimaxRuntime } = inputs;
   assertMinimaxH3ImageInputs({ negativePrompt, width, height, steps, hasInitImage: Boolean(initImagePath),
     referenceCount: referenceImagePaths.length, loraCount: loraPaths.length, referenceImageStrengths });
   const [main, encoder] = imageModelDownloadTargets(model) || [];
-  if (!main?.revision || !encoder?.revision || !encoder.only.length) {
-    throw new ServerError('MiniMax H3-Image is missing its pinned weight manifest.', { status: 500, code: 'MINIMAX_H3_IMAGE_MISCONFIGURED' });
+  if (!main?.revision || !encoder?.revision || !encoder.only.length || !minimaxRuntime?.python) {
+    throw new ServerError('MiniMax H3-Image is missing its pinned weight manifest or runtime.', { status: 500, code: 'MINIMAX_H3_IMAGE_MISCONFIGURED' });
   }
   const args = [MINIMAX_H3_IMAGE_SCRIPT(),
-    '--runtime-dir', MINIMAX_H3_REPO_DIR, '--runtime-revision', MINIMAX_H3_EXPECTED_REVISION,
+    '--runtime-dir', minimaxRuntime.repoDir, '--runtime-revision', minimaxRuntime.revision,
     '--model-repo', main.repo, '--model-revision', main.revision,
     '--text-encoder-repo', encoder.repo, '--text-encoder-revision', encoder.revision,
     ...encoder.only.flatMap(file => ['--text-encoder-file', file]),
     '--prompt', prompt, '--width', String(width), '--height', String(height),
     '--steps', String(steps), '--seed', String(seed), '--output', outputPath,
     ...referenceImagePaths.flatMap(path => ['--reference-image', path])];
-  return { bin: MINIMAX_H3_VENV_PYTHON, args, providerInputs: { initImagePath: null, referenceImagePaths } };
+  return { bin: minimaxRuntime.python, args, providerInputs: { initImagePath: null, referenceImagePaths } };
 }
 
 // Cache-only runner: never hand it an HF credential it must not use.
