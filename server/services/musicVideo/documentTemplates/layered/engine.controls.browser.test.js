@@ -16,7 +16,7 @@ const ffmpeg = await findFfmpeg();
 const canRun = browserSuiteCanRun('layered template controls', { Chrome: chrome, ffmpeg });
 const defaults = { beatReaction: 1, stillMotion: 1, footagePush: 1, grain: 0.09, vignette: 0.5 };
 const off = Object.fromEntries(Object.keys(defaults).map(key => [key, 0]));
-const digest = pixels => createHash('sha256').update(Buffer.from(pixels)).digest('hex');
+const digest = pixels => createHash('sha256').update(Buffer.from(pixels, 'base64')).digest('hex');
 
 describe.skipIf(!canRun)('layered template additions at fixed song frames', () => {
   let fixture, clip;
@@ -31,6 +31,14 @@ describe.skipIf(!canRun)('layered template additions at fixed song frames', () =
     try {
       await page.setContent('<canvas id="stage"></canvas>');
       const raw = await page.evaluate(({ video, shot, selected, clip, card, section, reactiveGain }) => {
+        // Transport exact RGBA bytes as base64: serializing 230,400 individual
+        // numbers per frame made the eight-render card cases exceed CI's 30s.
+        globalThis.__pixelBytes = canvas => {
+          const pixels = canvas.getContext('2d').getImageData(0, 0, 320, 180).data;
+          let binary = '';
+          for (let i = 0; i < pixels.length; i += 8192) binary += String.fromCharCode(...pixels.subarray(i, i + 8192));
+          return btoa(binary);
+        };
         const source = document.createElement('canvas'); source.width = 320; source.height = 180;
         const ctx = source.getContext('2d');
         for (let y = 0; y < 180; y += 4) for (let x = 0; x < 320; x += 4) {
@@ -47,7 +55,7 @@ describe.skipIf(!canRun)('layered template additions at fixed song frames', () =
         globalThis.__portosMusicVideoGlitch = (canvas) => {
           const c = canvas.getContext('2d'); c.fillStyle = '#ff0000'; c.fillRect(0, 0, 20, 20);
         };
-        return Array.from(ctx.getImageData(0, 0, 320, 180).data);
+        return globalThis.__pixelBytes(source);
       }, { video, shot, selected, clip: footage ? clip : null, card, section, reactiveGain });
       await page.addScriptTag({ content: rig });
       await page.addScriptTag({ content: engineSource });
@@ -55,7 +63,7 @@ describe.skipIf(!canRun)('layered template additions at fixed song frames', () =
       for (const t of [0, 0.25, 2, 3.75]) {
         pixels.push(await page.evaluate(async t => {
           await globalThis.portosComposition.seek(t);
-          return Array.from(document.getElementById('stage').getContext('2d').getImageData(0, 0, 320, 180).data);
+          return globalThis.__pixelBytes(document.getElementById('stage'));
         }, t));
       }
       return { raw: digest(raw), hashes: pixels.map(digest) };
