@@ -42,6 +42,45 @@ const ANSWER = {
 };
 
 describe('Cast & Sets direction', () => {
+  it('matches a revised cast member by id before a duplicate name', () => {
+    const previous = mergeCastAndSetsDirection(null, parseCastAndSetsResponse(JSON.stringify({ ...ANSWER,
+      cast: [{ id: 'one', name: 'Twin', description: 'first', stillness: 'stands left' },
+        { id: 'two', name: 'Twin', description: 'second', stillness: 'stands right' }],
+    })), { sections }).direction;
+    const parsed = parseCastAndSetsResponse(JSON.stringify({ cast: [{ id: 'two', name: 'Twin', description: 'second' }] }));
+    expect(mergeCastAndSetsDirection(previous, parsed, { sections }).direction.cast[0].stillness).toBe('stands right');
+  });
+
+  it('carries physical behavior through partial revisions and prompts for sourced depth', () => {
+    const first = mergeCastAndSetsDirection(null, parseCastAndSetsResponse(JSON.stringify({ ...ANSWER,
+      protagonist: { ...ANSWER.protagonist, stillness: 'weight on one hip', movement: 'quick steps' },
+      cast: [{ id: 'helper', name: 'Helper', description: 'a friend', stillness: 'hands folded', movement: 'slow gait' }],
+    })), { sections }).direction;
+    const revision = parseCastAndSetsResponse(JSON.stringify({ protagonist: { movement: '' },
+      cast: [{ id: 'helper', name: 'Helper', description: 'a friend', movement: '' }] }));
+    const revised = mergeCastAndSetsDirection(first, revision, { sections }).direction;
+    expect(revised.protagonist.stillness).toBe('weight on one hip');
+    expect(revised.protagonist.movement).toBeUndefined();
+    expect(revised.cast[0].stillness).toBe('hands folded');
+    expect(revised.cast[0].movement).toBeUndefined();
+    const prompt = buildCastAndSetsPrompt(project);
+    expect(prompt).toContain('foreground, midground and background');
+    expect(prompt).toContain('physical in-world source');
+    expect(prompt).toContain('softbox');
+    expect(prompt).toContain('story-appropriate in-world fixtures');
+    expect(prompt).toContain('Preserve atmosphere explicitly requested by the director');
+    expect(prompt).toContain('"stillness"');
+    expect(prompt).toContain('"movement"');
+    const procedural = buildCastAndSetsPrompt({ ...project, productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 } });
+    expect(procedural).toContain('"stillness"');
+    expect(procedural).toContain('"cast"');
+    const proceduralDirection = mergeCastAndSetsDirection(null, parseCastAndSetsResponse(JSON.stringify({ ...PROCEDURAL_ANSWER,
+      cast: [{ name: 'Companion', description: 'a paper bird', stillness: 'wings folded', movement: 'glides' }],
+    })), { sections, medium: 'procedural' }).direction;
+    expect(proceduralDirection.cast[0].stillness).toBe('wings folded');
+    expect(proceduralDirection.cast[0].movement).toBe('glides');
+  });
+
   it('builds a prompt that reads the song and keeps the mood board to look only', () => {
     const prompt = buildCastAndSetsPrompt(project, { moodImages: [{ caption: 'a kitchen', analysis: 'steam and brass' }], board: { style: { prompt: 'green flash' } } });
     expect(prompt).toContain('[Verse 1]\nline one\n[Whispered]\nline two');
