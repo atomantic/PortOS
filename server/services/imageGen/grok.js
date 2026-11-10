@@ -101,6 +101,7 @@ export const getActiveJob = () => {
   const entries = [...activeJobs.values()];
   return entries.length ? entries[entries.length - 1] : null;
 };
+export const getActiveJobs = () => [...activeJobs.values()];
 
 export const attachSseClient = (jobId, res) => attachSse(jobs, jobId, res);
 

@@ -250,6 +250,7 @@ vi.mock('../services/mediaJobQueue/index.js', () => ({
   attachSseClient: vi.fn(() => false),
   cancelJob: vi.fn(async () => ({ ok: true, status: 'canceling' })),
   listJobs: vi.fn(() => []),
+  laneConcurrencyFor: vi.fn(() => 1),
 }));
 
 const recordUserAction = vi.hoisted(() => vi.fn(async () => ({ id: 'evt' })));
@@ -3176,6 +3177,21 @@ describe('videoGen routes', () => {
       const r = await request(app).get('/api/video-gen/active');
       expect(r.status).toBe(200);
       expect(r.body).toEqual({ activeJob: null });
+    });
+
+    it('returns all running activeJobs with limit and memory-governed indicator for local', async () => {
+      mediaJobQueue.listJobs.mockImplementation(listJobsByFilter([
+        { id: 'running-1', kind: 'video', status: 'running', position: 1, params: { prompt: 'P1', mode: 'text' } },
+        { id: 'running-2', kind: 'video', status: 'running', position: 2, params: { prompt: 'P2', mode: 'text' } },
+      ]));
+      const r = await request(app).get('/api/video-gen/active');
+      expect(r.status).toBe(200);
+      expect(r.body.activeJobs).toHaveLength(2);
+      expect(r.body.activeJobs[0].jobId).toBe('running-1');
+      expect(r.body.activeJobs[1].jobId).toBe('running-2');
+      expect(r.body.limit).toBe(1);
+      expect(r.body.memoryGoverned).toBe(true);
+      expect(r.body.limitReason).toBe('memory-governed');
     });
 
     it('prefers the running job over queued jobs', async () => {

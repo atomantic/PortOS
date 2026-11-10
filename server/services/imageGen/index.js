@@ -260,6 +260,19 @@ export async function getActiveJob() {
   })[0];
 }
 
+export async function getActiveJobs() {
+  const jobs = [
+    local.getActiveJob(),
+    external.getActiveJob(),
+    ...(codex.getActiveJobs ? codex.getActiveJobs() : [codex.getActiveJob()]),
+    ...(grok.getActiveJobs ? grok.getActiveJobs() : [grok.getActiveJob()]),
+    agy.getActiveJob(),
+    fal.getActiveJob(),
+    runway.getActiveJob(),
+  ].filter(Boolean);
+  return jobs;
+}
+
 // Try-each-provider SSE attach + cancel — the route only knows the jobId,
 // not which backend produced it, so we ask each provider in turn and let
 // the first one that owns the job handle the attach.

@@ -82,6 +82,8 @@ vi.mock('../services/imageGen/index.js', () => ({
   attachSseClient: vi.fn(() => false),
   cancel: vi.fn(() => false),
   cancelJob: vi.fn(() => false),
+  getActiveJob: vi.fn(async () => null),
+  getActiveJobs: vi.fn(async () => []),
   IMAGE_GEN_MODE: { EXTERNAL: 'external', LOCAL: 'local', CODEX: 'codex', GROK: 'grok', AGY: 'agy', FAL: 'fal' },
   IMAGE_GEN_MODES: ['external', 'local', 'codex', 'grok', 'agy', 'fal'],
   CLOUD_IMAGE_GEN_MODES: ['codex', 'grok', 'agy'],
@@ -137,6 +139,7 @@ vi.mock('../services/mediaJobQueue/index.js', () => ({
   attachSseClient: vi.fn(() => false),
   cancelJob: vi.fn(async () => ({ ok: true, status: 'canceling' })),
   listJobs: vi.fn(() => []),
+  laneConcurrencyFor: vi.fn(() => 1),
 }));
 
 const recordUserAction = vi.hoisted(() => vi.fn(async () => ({ id: 'evt' })));
@@ -470,6 +473,23 @@ describe('Image Gen Routes', () => {
       const response = await request(app).get('/api/image-gen/gallery?' + query);
       expect(response.status).toBe(400);
       expect(imageGen.local.listGallery).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('GET /api/image-gen/active', () => {
+    it('returns activeJobs, limit and memory-governed info', async () => {
+      mediaJobQueue.listJobs.mockReturnValueOnce([
+        { id: 'img-1', kind: 'image', status: 'running', position: 1, params: { mode: 'local', prompt: 'test 1' } },
+        { id: 'img-2', kind: 'image', status: 'running', position: 2, params: { mode: 'local', prompt: 'test 2' } },
+      ]);
+      const res = await request(app).get('/api/image-gen/active');
+      expect(res.status).toBe(200);
+      expect(res.body.activeJobs).toHaveLength(2);
+      expect(res.body.activeJobs[0].jobId).toBe('img-1');
+      expect(res.body.activeJobs[1].jobId).toBe('img-2');
+      expect(res.body.limit).toBe(1);
+      expect(res.body.memoryGoverned).toBe(true);
+      expect(res.body.limitReason).toBe('memory-governed');
     });
   });
 
