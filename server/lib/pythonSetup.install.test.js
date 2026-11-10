@@ -46,6 +46,37 @@ describe('installLockedRuntime', () => {
     expect(onLog).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining('Using pip instead') }));
   });
 
+  it('installs the lock, then a runtime\'s commit-pinned source with no dependency resolution, in the caller\'s environment', async () => {
+    const source = ['install', '--no-deps', '--no-build-isolation', '-e', '/example/auk'];
+    const env = { PATH: '/usr/bin' };
+    await expect(installLockedRuntime('/auk/python', 'auk-mlx', vi.fn(), { preferUv: true, sourceInstalls: [source], env, platform: 'darwin', arch: 'arm64' }).promise)
+      .resolves.toEqual({ ok: true, code: 0 });
+    expect(spawned()).toEqual([
+      `/private/tools/uv pip install --python /auk/python --require-hashes --no-deps -r ${LOCK_PROFILES['auk-mlx'].lockFile}`,
+      `/private/tools/uv pip install --python /auk/python ${source.slice(1).join(' ')}`,
+    ]);
+    expect(mock.spawn.mock.calls.every(([, , options]) => options.env.PATH === '/usr/bin' && !('HOME' in options.env))).toBe(true);
+  });
+
+  it('does not build the runtime source when the hash-pinned lock install failed', async () => {
+    mock.spawn.mockImplementationOnce(() => {
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => child.emit('close', 1));
+      return child;
+    });
+    await expect(installLockedRuntime('/laya/python', 'laya-mlx', vi.fn(), { sourceInstalls: [['install', '--no-deps', '--no-build-isolation', 'https://example.com/laya.zip']], platform: 'darwin', arch: 'arm64' }).promise)
+      .resolves.toEqual({ ok: false, code: 1 });
+    expect(mock.spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['auk-mlx', 'laya-mlx'])('refuses %s on a host its Apple Silicon lock does not cover before running anything', async (profile) => {
+    const result = await installLockedRuntime('/x/python', profile, vi.fn(), { preferUv: true, platform: 'linux', arch: 'x64' }).promise;
+    expect(result).toMatchObject({ ok: false, unsupported: true });
+    expect(mock.spawn).not.toHaveBeenCalled();
+  });
+
   it('reports an unsupported host before running anything', async () => {
     const onLog = vi.fn();
     const result = await installLockedRuntime('/guard/python', 'guard-runtime', onLog, { preferUv: true, platform: 'darwin', arch: 'x64' }).promise;

@@ -832,9 +832,9 @@ export async function checkPackages(pythonPath) {
 // Spawn a child, stream its stdout+stderr line-by-line via `onLog`, resolve
 // with the exit code (or -1 on spawn error). `onProc` is invoked with the
 // live child handle so the caller's outer closure can track it for SIGTERM.
-function streamSpawn(bin, args, onLog, onProc) {
+function streamSpawn(bin, args, onLog, onProc, env) {
   return new Promise((resolve) => {
-    const proc = spawn(bin, args, safeChildProcessOptions({ stdio: ['ignore', 'pipe', 'pipe'] }));
+    const proc = spawn(bin, args, safeChildProcessOptions({ stdio: ['ignore', 'pipe', 'pipe'], ...(env && { env }) }));
     onProc(proc);
     // `splitRe: /[\r\n]+/` so a torch/tqdm progress bar that redraws with a
     // bare `\r` surfaces each redraw as its own log line; the carry buffer
@@ -881,7 +881,7 @@ async function resolveUvOrPip(onLog) {
 // returns the final `{ ok, code }`. Returns `{ promise, kill }` so the route can
 // SIGTERM the pip child if the SSE client disconnects mid-install — a 10-minute
 // torch install would otherwise keep running invisibly.
-function launchInstall(pythonPath, onLog, { preferUv }, work) {
+function launchInstall(pythonPath, onLog, { preferUv, env }, work) {
   let currentProc = null;
   let killed = false;
   const trackProc = (p) => { currentProc = p; };
@@ -891,11 +891,11 @@ function launchInstall(pythonPath, onLog, { preferUv }, work) {
     // install must not start its package subprocess once the bootstrap settles.
     if (killed) return { ok: false, code: -1 };
     const runPip = (args) => {
-      if (!uv) return streamSpawn(pythonPath, ['-m', 'pip', ...args], onLog, trackProc);
+      if (!uv) return streamSpawn(pythonPath, ['-m', 'pip', ...args], onLog, trackProc, env);
       // uv does not accept pip's progress-bar/yes options. Keep the same
       // exact target interpreter and package specifications in both paths.
       const uvArgs = args.filter((arg, index) => arg !== '--yes' && arg !== '--progress-bar' && args[index - 1] !== '--progress-bar');
-      return streamSpawn(uv, ['pip', uvArgs[0], '--python', pythonPath, ...uvArgs.slice(1)], onLog, trackProc);
+      return streamSpawn(uv, ['pip', uvArgs[0], '--python', pythonPath, ...uvArgs.slice(1)], onLog, trackProc, env);
     };
     return work({ runPip, tool: uv ? 'uv pip' : 'pip', usingUv: !!uv, isKilled: () => killed });
   })();
@@ -917,27 +917,39 @@ function refuseInstall(onLog, message, extra) {
 
 const lockInstallArgs = (lockFile, { user }) => ['install', ...(user ? ['--user'] : []), '--require-hashes', '--no-deps', '-r', lockFile];
 
-async function runLockInstall({ runPip, tool, isKilled }, profile, onLog, { user }) {
-  const args = lockInstallArgs(profile.lockFile, { user });
-  onLog({ type: 'log', message: `${tool} ${args.join(' ')} (hash-pinned ${profile.label} lock)` });
-  const code = await runPip(args);
-  if (isKilled()) return { ok: false, code: -1 };
-  if (code === 0) {
-    onLog({ type: 'complete', message: 'All packages installed successfully.' });
-    return { ok: true, code: 0 };
+// `sourceInstalls` are pip argument lists run after the lock for a runtime's own
+// commit-pinned source (an editable checkout or archive, no PyPI distribution to
+// hash). They must carry `--no-deps` and `--no-build-isolation`: the lock already
+// holds the dependency closure and the build backend, so nothing is resolved or
+// fetched unpinned.
+async function runLockInstall({ runPip, tool, isKilled }, profile, onLog, { user, sourceInstalls = [] }) {
+  const lockArgs = lockInstallArgs(profile.lockFile, { user });
+  const steps = [
+    { args: lockArgs, label: `(hash-pinned ${profile.label} lock)` },
+    ...sourceInstalls.map((args) => ({ args, label: '(commit-pinned source)' })),
+  ];
+  for (const { args, label } of steps) {
+    onLog({ type: 'log', message: `${tool} ${args.join(' ')} ${label}` });
+    const code = await runPip(args);
+    if (isKilled()) return { ok: false, code: -1 };
+    if (code !== 0) {
+      onLog({ type: 'error', message: `${tool} exited with code ${code}` });
+      return { ok: false, code };
+    }
   }
-  onLog({ type: 'error', message: `${tool} exited with code ${code}` });
-  return { ok: false, code };
+  onLog({ type: 'complete', message: 'All packages installed successfully.' });
+  return { ok: true, code: 0 };
 }
 
 // Install a profile's complete hash-pinned closure into a dedicated venv (the
-// Prompt Guard / jev runtimes). No resolution happens at install time.
-export function installLockedRuntime(pythonPath, profileId, onLog, { preferUv = false, platform: hostPlatform = platform(), arch: hostArch = arch() } = {}) {
+// Prompt Guard / jev / AuK / Laya runtimes). No resolution happens at install
+// time. `env` replaces the installer's inherited environment.
+export function installLockedRuntime(pythonPath, profileId, onLog, { preferUv = false, sourceInstalls, env, platform: hostPlatform = platform(), arch: hostArch = arch() } = {}) {
   const profile = LOCK_PROFILES[profileId];
   if (!profile) return refuseInstall(onLog, `Unknown Python lock profile "${profileId}".`, { unsupported: true });
   const reason = lockProfileUnsupportedReason(profile, { platform: hostPlatform, arch: hostArch });
   if (reason) return refuseInstall(onLog, `${reason} PortOS does not resolve unlocked packages at install time.`, { unsupported: true });
-  return launchInstall(pythonPath, onLog, { preferUv }, (ctx) => runLockInstall(ctx, profile, onLog, { user: false }));
+  return launchInstall(pythonPath, onLog, { preferUv, env }, (ctx) => runLockInstall(ctx, profile, onLog, { user: false, sourceInstalls }));
 }
 
 // Generic setup-page repair. On Apple Silicon it dispatches to the smallest

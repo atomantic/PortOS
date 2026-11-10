@@ -40,7 +40,7 @@ export async function getLayaStatus() {
 }
 
 async function performInstall() {
-  const { detectVenvBasePythonSync } = await import('../lib/pythonSetup.js');
+  const { detectVenvBasePythonSync, installLockedRuntime } = await import('../lib/pythonSetup.js');
   stage = 'python';
   notifyLayaStatus();
   const base = detectVenvBasePythonSync();
@@ -51,10 +51,15 @@ async function performInstall() {
   await unlink(marker()).catch(error => { if (error.code !== 'ENOENT') throw error; });
   stage = 'runtime';
   notifyLayaStatus();
-  await execFileAsync(base, ['-m', 'venv', join(root(), 'venv')], { env: environment(), timeout: 120000, maxBuffer: 4096 });
-  await execFileAsync(python(), ['-m', 'pip', 'install', '--force-reinstall', '--disable-pip-version-check',
-    `https://github.com/mizorewww/laya-mlx/archive/${LAYA_MLX.runtimeRevision}.zip`],
-  { env: environment(false), timeout: 600000, maxBuffer: 1024 * 1024, killSignal: 'SIGKILL' });
+  await execFileAsync(base, ['-m', 'venv', '--clear', join(root(), 'venv')], { env: environment(), timeout: 120000, maxBuffer: 4096 });
+  // Hash-pinned dependency closure, then the commit-pinned runtime archive with no
+  // resolution and its (locked) build backend: nothing unpinned is fetched.
+  const locked = installLockedRuntime(python(), 'laya-mlx', () => {}, { preferUv: true, env: environment(false),
+    sourceInstalls: [['install', '--force-reinstall', '--no-deps', '--no-build-isolation',
+      `https://github.com/mizorewww/laya-mlx/archive/${LAYA_MLX.runtimeRevision}.zip`]] });
+  const timer = setTimeout(locked.kill, 600000);
+  const installed = await locked.promise.finally(() => clearTimeout(timer));
+  if (!installed.ok) throw new Error('runtime');
   stage = 'model';
   notifyLayaStatus();
   await execFileAsync(python(), [script(), 'download', model(), LAYA_MLX.repository, LAYA_MLX.revision],

@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter, once } from 'node:events';
 import { PassThrough } from 'node:stream';
+import { promisify } from 'node:util';
 import { pinPlatform, pinArch } from '../../lib/testHelper.js';
+const setupMocks = vi.hoisted(() => ({ exec: vi.fn(), installLocked: vi.fn(), resolveUv: vi.fn() }));
 const children = [];
 const requests = new EventEmitter();
 const renders = [];
@@ -10,7 +12,7 @@ const access = vi.fn();
 let failWrite = false;
 vi.mock('node:fs/promises', () => ({ access: (...args) => access(...args), mkdir: vi.fn(),
   readFile: vi.fn().mockResolvedValue(Buffer.from('test wav')), rm: vi.fn().mockResolvedValue() }));
-vi.mock('../../lib/childProcess.js', () => ({ execFile: vi.fn(), spawn: vi.fn(() => {
+vi.mock('../../lib/childProcess.js', () => ({ execFile: Object.assign(vi.fn(), { [promisify.custom]: setupMocks.exec }), spawn: vi.fn(() => {
   const child = new EventEmitter();
   child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
   child.kill = vi.fn(() => { child.emit('close', null); return true; });
@@ -25,10 +27,11 @@ vi.mock('../../lib/childProcess.js', () => ({ execFile: vi.fn(), spawn: vi.fn(()
   };
   children.push(child); return child;
 }) }));
-vi.mock('../../lib/processEnv.js', () => ({ safeChildProcessOptions: value => value, whichFirst: vi.fn() }));
+vi.mock('../../lib/processEnv.js', () => ({ safeChildProcessOptions: value => value }));
+vi.mock('../../lib/pythonSetup.js', () => ({ installLockedRuntime: setupMocks.installLocked, resolvePatchedUv: setupMocks.resolveUv }));
 vi.mock('../../lib/spawnCwd.js', () => ({ withSpawnCwdEnv: (env, cwd) => ({ ...env, PWD: cwd }) }));
 vi.mock('../../lib/paths.js', () => ({ PATHS: { root: '/example' } }));
-const { synthesizeAuk, getAukStatus, unloadAuk } = await import('./aukRuntime.js');
+const { synthesizeAuk, getAukStatus, startAukSetup, unloadAuk } = await import('./aukRuntime.js');
 let restorePlatform;
 let restoreArch;
 beforeEach(() => {
@@ -126,5 +129,59 @@ describe('AuK resident inference lifecycle', () => {
     expect(await getAukStatus()).toMatchObject({ ready: false, loaded: false });
     await expect(render('Hello.')).rejects.toMatchObject({ status: 503 });
     expect(children).toHaveLength(0);
+  });
+});
+
+describe('AuK explicit setup', () => {
+  let venvCreated;
+  const commands = () => setupMocks.exec.mock.calls.map(([command, args]) => [command, ...args].join(' '));
+  const settled = () => vi.waitFor(async () => expect((await getAukStatus()).state).not.toBe('running'));
+  beforeEach(() => {
+    venvCreated = false;
+    setupMocks.exec.mockReset().mockImplementation(async (_command, args) => {
+      if (args[0] === 'venv') venvCreated = true;
+      return { stdout: '', stderr: '' };
+    });
+    setupMocks.resolveUv.mockReset().mockResolvedValue({ ok: true, uv: '/private/tools/uv' });
+    setupMocks.installLocked.mockReset().mockReturnValue({ promise: Promise.resolve({ ok: true, code: 0 }), kill: vi.fn() });
+    // Nothing is installed yet: no checkout, no venv until created; everything exists afterwards.
+    access.mockImplementation(async path => {
+      if (path.endsWith('/.git') || (path.endsWith('.venv/bin/python') && !venvCreated)) throw new Error('missing');
+    });
+  });
+  it('installs only the hash-pinned closure and the commit-pinned checkout through the private uv', async () => {
+    startAukSetup();
+    await settled();
+    expect(await getAukStatus()).toMatchObject({ state: 'complete', ready: true });
+    expect(commands().filter(command => command.split(' ')[0] === 'uv')).toEqual([]);
+    expect(commands().some(command => /^\/private\/tools\/uv venv --clear --python 3\.11 \S+\.venv$/.test(command))).toBe(true);
+    const [python, profile, , options] = setupMocks.installLocked.mock.calls[0];
+    expect(python).toMatch(/\.venv\/bin\/python$/);
+    expect(profile).toBe('auk-mlx');
+    expect(options.preferUv).toBe(true);
+    expect(options.sourceInstalls).toEqual([['install', '--no-deps', '--no-build-isolation', '-e', expect.stringMatching(/\.portos\/auk$/)]]);
+    // No command installs packages outside the lock: only git, the venv, weight download and conversion run.
+    expect(commands().some(command => /\bpip\b|\binstall\b/.test(command))).toBe(false);
+  });
+  it('rebuilds an existing virtualenv instead of installing the lock over unverified leftovers', async () => {
+    venvCreated = true;
+    startAukSetup();
+    await settled();
+    expect(commands().some(command => /^\/private\/tools\/uv venv --clear --python 3\.11 /.test(command))).toBe(true);
+  });
+  it('fails before downloading weights when the locked install fails', async () => {
+    setupMocks.installLocked.mockReturnValue({ promise: Promise.resolve({ ok: false, code: 1 }), kill: vi.fn() });
+    startAukSetup();
+    await settled();
+    expect(await getAukStatus()).toMatchObject({ state: 'failed', stage: 'Installing MLX dependencies', error: expect.stringContaining('AuK setup failed') });
+    expect(commands().some(command => command.includes('snapshot_download'))).toBe(false);
+  });
+  it('refuses to run any command when no patched private uv can be had', async () => {
+    setupMocks.resolveUv.mockResolvedValue({ ok: false, reason: 'Could not bootstrap uv 0.13.6: the hash-verified package install step failed.' });
+    startAukSetup();
+    await settled();
+    expect(await getAukStatus()).toMatchObject({ state: 'failed', error: expect.stringContaining('Could not bootstrap uv') });
+    expect(setupMocks.exec).not.toHaveBeenCalled();
+    expect(setupMocks.installLocked).not.toHaveBeenCalled();
   });
 });

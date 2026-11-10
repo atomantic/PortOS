@@ -1,0 +1,25 @@
+# AuK-Flash (Apple Silicon MLX) runtime: the dependencies of the pinned AuK
+# checkout (AUK_REVISION in server/services/voice/aukRuntime.js) — its base
+# `dependencies` plus the `[mlx]` extra — and huggingface_hub for the weight
+# download. Installed only from requirements-auk-mlx.lock.txt, then AuK itself
+# is installed editable with `--no-deps --no-build-isolation`. After editing this
+# file, regenerate the lock with the command in the lock header. When bumping
+# AUK_REVISION, re-copy the ranges from that revision's pyproject.toml.
+mlx>=0.29
+soundfile
+soxr
+# torch / transformers stay inside upstream AuK's ranges; OSV advisories on the
+# resolved pins are tracked in #15670.
+torch>=2.7,<2.8
+torchaudio>=2.7,<2.8
+torchvision>=0.22,<0.23
+transformers>=4.52.0,<5
+qwen-omni-utils>=0.0.9
+omegaconf>=2.3.0
+torchdiffeq
+x_transformers>=1.31.14
+safetensors
+huggingface_hub
+# Build backend of the editable AuK install (its pyproject: setuptools >= 61.0),
+# pinned here so `--no-build-isolation` never fetches an unlocked builder.
+setuptools>=61.0

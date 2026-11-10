@@ -34,6 +34,19 @@ describe('locked runtime profiles', () => {
     for (const pin of mflux) expect(video).toContain(pin);
   });
 
+  it('locks the AuK and Laya runtimes with the build backend their commit-pinned source installs use', () => {
+    const locks = Object.fromEntries(['auk-mlx', 'laya-mlx'].map((id) => [id, readFileSync(LOCK_PROFILES[id].lockFile, 'utf8')]));
+    // Installed with --no-build-isolation: an absent backend would silently fall back to nothing, not to PyPI.
+    expect(locks['auk-mlx']).toMatch(/^setuptools==/m);
+    expect(locks['auk-mlx']).toMatch(/^torch==2\.7\./m);
+    expect(locks['laya-mlx']).toMatch(/^hatchling==/m);
+    expect(locks['laya-mlx']).toMatch(/^mlx==0\.32\./m);
+    for (const profile of [LOCK_PROFILES['auk-mlx'], LOCK_PROFILES['laya-mlx']]) {
+      expect(lockProfileUnsupportedReason(profile, { platform: 'darwin', arch: 'arm64' })).toBeNull();
+      expect(lockProfileUnsupportedReason(profile, { platform: 'linux', arch: 'x64' })).toMatch(/no hash-pinned lock/);
+    }
+  });
+
   it('pins the private uv bootstrap to the version PortOS runs, with a digest for every distribution', () => {
     const { lockFile } = LOCK_PROFILES['uv-bootstrap'];
     expect(directPins(lockFile)).toEqual([`uv==${PRIVATE_UV_VERSION}`]);
