@@ -681,8 +681,9 @@ keeps the worker for playback too. Design record: [native composition preview](p
 `documentTemplateParity.browser.test.js` compares the native player's visible
 picture with the unchanged shipped engine at fixed song frames: finish, footage
 and still camera moves, beat reactions, cards, HUD and hook/sung/subtitle type.
-Both render at 1920×1080 and display at 640×360; the tolerance is mean RGB error
-below 0.3 out of 255 and fewer than 0.4% of channel samples differing by more
+Landscape cases render at 1920×1080 and display at 640×360; square and portrait
+cases use their render aspect at the same display width. The tolerance is mean
+RGB error below 0.3 out of 255 and fewer than 0.4% of channel samples differing by more
 than 12. Frame centres avoid media-element microsecond rounding at 24fps
 boundaries. These are synthetic headless Chromium comparisons; they do not
 claim physical-phone playback measurements. Final document renders are unchanged.

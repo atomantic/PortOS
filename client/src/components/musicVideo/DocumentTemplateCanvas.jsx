@@ -57,7 +57,7 @@ export default function DocumentTemplateCanvas({ project, data, figureRef, audio
       const selected = resolveSourceTake(original, project.scenes || []);
       const shot = selected ? { ...original, videoHistoryId: selected.videoHistoryId, referenceImageId: selected.referenceImageId || original?.referenceImageId } : original;
       const footage = sceneVisualLayer(shot, { layered: true }) === 'footage' && !!shot?.videoHistoryId;
-      const video = [...(figureRef.current?.querySelectorAll('video[data-ready="true"]') || [])].find(v => v.dataset.documentScene === scene.sceneId && v.readyState >= 2);
+      const video = [...(figureRef.current?.querySelectorAll('video[data-document-scene]') || [])].find(v => v.dataset.documentScene === scene.sceneId && v.readyState >= 2 && !v.seeking);
       const sequence = !footage ? scenePhotoSequence(shot, options) : null;
       let source = footage && video ? video : image(shot?.referenceImageId);
       if (sequence?.stacked) {
@@ -111,7 +111,9 @@ export default function DocumentTemplateCanvas({ project, data, figureRef, audio
       } else {
         const fx = drawScene(scene, t);
         const nextWipe = wipeAfter.get(scene?.sceneId);
-        if (nextWipe && frame === nextWipe.cutFrame - 1) {
+        // Keep the latest displayed outgoing picture even when playback drops
+        // the last frame before the cut. Only scenes feeding a wipe need a copy.
+        if (nextWipe && frame < nextWipe.cutFrame) {
           held.getContext('2d').drawImage(canvas, 0, 0); heldScene = `${scene.sceneId}:${nextWipe.cutFrame}`;
         }
         drawing.finish(t, fx);

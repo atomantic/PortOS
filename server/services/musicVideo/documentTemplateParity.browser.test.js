@@ -45,7 +45,7 @@ describe.skipIf(!canRun)('native composition versus the shipped layered engine',
       await symlink(join(client, 'node_modules'), join(dir, 'node_modules'), 'dir');
       await writeFile(join(dir, 'entry.jsx'), `import React,{useState}from'react';import{createRoot}from'react-dom/client';import Animatic from ${JSON.stringify(join(client, 'src/components/musicVideo/StoryboardAnimatic.jsx'))};import ${JSON.stringify(join(client, 'src/index.css'))};
 window.lyricFrames=[];window.addEventListener('message',event=>{if(event.data?.type==='portos-mv:seeked')window.lyricFrames.push(event.data.t)});
-function App(){const[value,setValue]=useState(null);window.show=(project,data,t)=>{window.lyricFrames=[];setValue({project,data,seek:{t,n:(window.seq=(window.seq||0)+1)}})};window.update=(project,data,t)=>{window.lyricFrames=[];setValue(previous=>({...previous,project,data,seek:{t,n:(window.seekSeq=(window.seekSeq||1000)+1)}}))};return <main style={{width:640}}>{value&&<Animatic key={window.seq} project={value.project} nativeData={value.data} variant='document' audioUrl='/song.wav' seekRequest={value.seek}/>}</main>};createRoot(document.getElementById('root')).render(<App/>);`);
+function App(){const[value,setValue]=useState(null);window.show=(project,data,t)=>{window.lyricFrames=[];setValue({project,data,seek:{t,n:(window.seq=(window.seq||0)+1)}})};window.update=(project,data,t)=>{window.lyricFrames=[];setValue(previous=>({...previous,project:JSON.stringify(previous.project)===JSON.stringify(project)?previous.project:project,data:JSON.stringify(previous.data)===JSON.stringify(data)?previous.data:data,seek:{t,n:(window.seekSeq=(window.seekSeq||1000)+1)}}))};return <main style={{width:640}}>{value&&<Animatic key={window.seq} project={value.project} nativeData={value.data} variant='document' audioUrl='/song.wav' seekRequest={value.seek}/>}</main>};createRoot(document.getElementById('root')).render(<App/>);`);
       await writeFile(join(dir, 'index.html'), '<html><head><style>figure{border:0!important;border-radius:0!important}</style></head><body style="margin:0"><div id="root"></div><script type="module" src="/entry.jsx"></script></body></html>');
     });
     await phase('bundle', async () => {
@@ -57,6 +57,7 @@ function App(){const[value,setValue]=useState(null);window.show=(project,data,t)
       await sharp(Buffer.from(svg)).png().toFile(join(dir, 'grid.png'));
       await sharp({ create: { width: 200, height: 400, channels: 3, background: '#f215cd' } }).png().toFile(join(dir, 'end.png'));
       execFileSync(ffmpeg, ['-v', 'error', '-y', '-loop', '1', '-i', join(dir, 'grid.png'), '-vf', 'crop=540:540,scale=240:240,format=yuv420p', '-t', '4', '-r', '24', '-c:v', 'libvpx', '-threads', '1', join(dir, 'clip.webm')], { timeout, killSignal: 'SIGKILL' });
+      execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=cyan:s=240x240:r=24:d=4', '-c:v', 'libvpx', '-threads', '1', join(dir, 'uniform.webm')], { timeout, killSignal: 'SIGKILL' });
       execFileSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=4', join(dir, 'song.wav')], { timeout, killSignal: 'SIGKILL' });
     });
     await phase('server', async () => {
@@ -64,14 +65,15 @@ function App(){const[value,setValue]=useState(null);window.show=(project,data,t)
       app.get('/engine/portos-mv.js', (_req, res) => res.type('js').send(`window.PORTOS_MV=${JSON.stringify(engineData)};window.PORTOS_MV_EVENT_STATE=${narrativeFrameState.toString()};${documentRenderInitScripts(current).join('\n')}`));
       app.get('/engine/media/:file', (req, res) => {
         const scene = engineData.scenes.find(s => s.media?.src === `media/${req.params.file}`);
-        const name = req.params.file.endsWith('.webm') ? 'clip.webm' : req.params.file.includes('-end.') ? 'end.png' : current.scenes.find(s => s.sceneId === scene?.sceneId)?.referenceImageId || 'grid.png';
+        const selected = current.scenes.find(s => s.sceneId === scene?.sceneId);
+        const name = req.params.file.endsWith('.webm') ? selected?.videoHistoryId === 'uniform' ? 'uniform.webm' : 'clip.webm' : req.params.file.includes('-end.') ? 'end.png' : selected?.referenceImageId || 'grid.png';
         res.sendFile(join(dir, name));
       });
       app.use('/engine', express.static(join(templates, 'layered')), express.static(join(templates, 'shared')), express.static(join(root, 'server/lib')));
-      app.get('/api/video-gen/history/:id', (req, res) => res.json({ id: req.params.id, filename: 'clip.webm', fps: 24, width: 240, height: 240, numFrames: 96 }));
+      app.get('/api/video-gen/history/:id', (req, res) => res.json({ id: req.params.id, filename: req.params.id === 'uniform' ? 'uniform.webm' : 'clip.webm', fps: 24, width: 240, height: 240, numFrames: 96 }));
       app.get('/api/music-video/:id/lyrics/overlay/preview', async (_req, res, next) => { await buildLyricPlaythroughPreview(current, { overlay: true }).then(value => res.json(value)).catch(next); });
       app.get('/data/images/:file', (req, res) => res.sendFile(join(dir, req.params.file)));
-      app.get('/data/videos/:file', (_req, res) => res.sendFile(join(dir, 'clip.webm')));
+      app.get('/data/videos/:file', (req, res) => res.sendFile(join(dir, req.params.file === 'uniform.webm' ? 'uniform.webm' : 'clip.webm')));
       app.get('/song.wav', (_req, res) => res.sendFile(join(dir, 'song.wav')));
       app.use(express.static(join(dir, 'dist')));
       await new Promise((done, reject) => { server = app.listen(0, '127.0.0.1', done); server.once('error', reject); });
@@ -100,7 +102,8 @@ function App(){const[value,setValue]=useState(null);window.show=(project,data,t)
     await native.evaluate(({ project, data, t, reuse }) => (reuse ? window.update : window.show)(project, data, t), { project, data: dataFor(project), t, reuse });
     await native.waitForFunction(frame => document.querySelector('[data-testid="document-template-canvas"]')?.dataset.songFrame === String(frame), Math.floor(t * 24 + 1e-6));
     await native.evaluate(() => document.fonts.ready);
-    if (project.scenes.some(s => s.videoHistoryId)) await native.waitForFunction(() => document.querySelector('video[data-ready="true"]')?.readyState >= 2);
+    const currentScene = project.scenes.filter(s => s.startSec <= t && t < s.endSec).at(-1);
+    if (currentScene?.visualLayer === 'footage' && currentScene.videoHistoryId) await native.waitForFunction(() => document.querySelector('video[data-ready="true"]')?.readyState >= 2);
     if (words) {
       await native.waitForSelector('[data-testid="animatic-lyrics"]');
       // Use the public seek bridge's response to know its exact lyric frame landed.
@@ -168,6 +171,12 @@ function App(){const[value,setValue]=useState(null);window.show=(project,data,t)
     await compare(value, 35 / 24);
     await compare(value, 3.125, { reuse: true });
     await compare(value, 1.625, { reuse: true });
+  });
+  it('retains outgoing footage when playback skips the last frame before a wipe', async () => {
+    const value = base({ ...still, visualLayer: 'footage', videoHistoryId: 'uniform', endSec: 2, wipeOut: { style: 'push-left', lengthSec: 0.5 } });
+    value.scenes.push({ ...still, sceneId: 'second', order: 1, startSec: 2, endSec: 4, referenceImageId: 'end.png' });
+    await compare(value, 0.5);
+    await compare(value, 2.125, { reuse: true });
   });
   it('uses the render aspect for square and portrait camera moves and HUD', async () => {
     for (const aspectRatio of ['1:1', '9:16']) {
