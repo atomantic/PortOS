@@ -58,7 +58,6 @@ jobs:
       GRYPE_CHECK_FOR_APP_UPDATE: 'false'
       TARGET: ${{ matrix.target }}
       ARCH: ${{ matrix.arch }}
-      EVIDENCE_DIR: ${{ runner.temp }}/evidence
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -75,6 +74,9 @@ jobs:
           actual=$(docker version --format '{{.Server.Arch}}')
           test "$actual" = "$expected" || { echo "::error::Docker server is $actual, expected $expected"; exit 1; }
           echo "TOOL_ARCH=$expected" >> "$GITHUB_ENV"
+          # The runner context is unavailable in job-level env, so derive it here.
+          EVIDENCE_DIR="$RUNNER_TEMP/evidence"
+          echo "EVIDENCE_DIR=$EVIDENCE_DIR" >> "$GITHUB_ENV"
           mkdir -p "$EVIDENCE_DIR"
           node scripts/runtime-image-security.js describe "$TARGET" | tee -a "$GITHUB_ENV"
 
