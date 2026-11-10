@@ -8,11 +8,13 @@ vi.mock('./bufferedSpawn.js', async (importOriginal) => ({ ...(await importOrigi
 const pathLookup = vi.hoisted(() => ({ findCommandOnPath: vi.fn(() => '/opt/homebrew/bin/mtplx') }));
 vi.mock('./processEnv.js', () => pathLookup);
 
+import * as mtplxRuntime from './mtplxRuntime.js';
 import { describeMtplxCache, listMtplxCachedModels, pickMtplxCachedModel } from './mtplxModels.js';
 
 const ok = (stdout) => ({ success: true, code: 0, signal: null, stdout, stderr: '', timedOut: false });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.clearAllMocks();
   pathLookup.findCommandOnPath.mockReturnValue('/opt/homebrew/bin/mtplx');
 });
@@ -28,6 +30,14 @@ describe('listMtplxCachedModels', () => {
 
     expect(spawned.bufferedSpawn).toHaveBeenCalledWith('/opt/homebrew/bin/mtplx', ['models', '--json'], expect.objectContaining({ shell: false }));
     expect(result).toEqual({ models: [{ repo_id: 'Example/Model-A', validation: { ok: true } }], error: null });
+  });
+
+  it('reads models from a private install that is absent from the global PATH', async () => {
+    pathLookup.findCommandOnPath.mockReturnValue(null);
+    vi.spyOn(mtplxRuntime, 'resolveMtplxBinary').mockReturnValue('/private/mtplx/bin/mtplx');
+    spawned.bufferedSpawn.mockResolvedValue(ok(JSON.stringify({ models: [{ repo_id: 'Example/Private' }] })));
+    expect(await listMtplxCachedModels()).toEqual({ models: [{ repo_id: 'Example/Private' }], error: null });
+    expect(spawned.bufferedSpawn).toHaveBeenCalledWith('/private/mtplx/bin/mtplx', ['models', '--json'], expect.any(Object));
   });
 
   it('reports an EMPTY cache as [], not as a failure', async () => {

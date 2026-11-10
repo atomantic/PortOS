@@ -14,7 +14,7 @@ vi.mock('./mtplxServerManager.js', () => {
   throw new Error('MTPLX cache discovery must not import the process manager');
 });
 vi.mock('../lib/processEnv.js', () => ({ findCommandOnPath: mocks.findCommand }));
-vi.mock('../lib/mtplxRuntime.js', () => ({ describeMtplxRuntime: mocks.runtime }));
+vi.mock('../lib/mtplxRuntime.js', () => ({ describeMtplxRuntime: mocks.runtime, resolveMtplxBinary: () => mocks.findCommand('mtplx') }));
 vi.mock('../lib/mtplxModels.js', async (importOriginal) => ({
   ...await importOriginal(),
   listMtplxCachedModels: mocks.cache,

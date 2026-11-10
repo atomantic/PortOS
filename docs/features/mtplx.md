@@ -56,27 +56,21 @@ you are already on.
 **From Models → Runtimes** (full control over the checkpoint and the port):
 
 1. Install MTPLX from **Local Runtime Servers**. PortOS installs the package
-   from upstream's Homebrew tap (`brew install youssofal/mtplx/mtplx`), falling
-   back to `python3 -m pip install mtplx` on a host without Homebrew.
+   into a PortOS-private virtualenv under `data/tools/mtplx` (Apple Silicon,
+   macOS 14 or newer). PortOS uses its
+   private, version-verified uv and a native managed CPython 3.11, then applies
+   `scripts/requirements-mtplx-mlx.lock.txt` with hash verification and wheel-only
+   `uv pip sync`. No package graph or build dependency is resolved during install,
+   and no user-wide Python or Homebrew package is changed. Progress streams on
+   the card; the default model remains a separate download.
 
-   The Homebrew formula does **not** install MTPLX itself. It installs a small
-   shell wrapper that builds a version-keyed Python venv — several hundred
-   megabytes of pip downloads (fastapi, huggingface_hub, numpy/scipy, the MLX
-   stack) — the first time anything runs `mtplx`, and `brew upgrade mtplx`
-   re-arms it, because the venv path carries the version.
-
-   PortOS runs that bootstrap **here**, as part of the install: after `brew
-   install` returns it invokes `mtplx --version` once, streaming the pip output
-   into the install progress under the same 20-minute budget, and fails the
-   install if the bootstrap fails. Nothing else invokes the wrapper before then
-   — a status poll skips its `mtplx models --json` cache read and a start
-   refuses with `MTPLX_RUNTIME_NOT_BOOTSTRAPPED`, because neither can survive a
-   package download inside its timeout, and a start never performs a large
-   silent download. Readiness is decided by READING the wrapper (the venv it
-   names, and whether `<venv>/bin/mtplx` is executable — its own guard), never
-   by running it; a pip install or any other layout is treated as ready. The
-   card reports it as **Installed — runtime not yet downloaded**, with a
-   **Download MTPLX runtime** button that re-runs the install flow.
+   Existing external MTPLX installs still work. Homebrew may install a shell
+   wrapper that downloads its Python runtime on first invocation. PortOS reads
+   that wrapper without executing it during status/cache checks, and refuses a
+   start until its runtime exists. **Download MTPLX runtime** installs the private
+   locked runtime instead of executing that deferred unpinned bootstrap. Private
+   runtime discovery is shared by status, readiness, models, downloads and start,
+   so restarting PortOS or changing the global PATH is unnecessary.
 2. **Download a checkpoint** from the MTPLX card's **Cached checkpoints** /
    **Find a checkpoint** panel. Search runs `mtplx forge discover` — upstream's
    index of MTPLX-branded MTP models, which is exactly the set `mtplx serve` can

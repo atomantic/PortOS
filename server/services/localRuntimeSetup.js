@@ -57,7 +57,7 @@
 import { LOCAL_RUNTIMES, localEndpointPort } from '../lib/localProviderRuntime.js';
 import { expandPageToken } from '../lib/navManifest.js';
 import { describeMtplxCache, listMtplxCachedModels } from '../lib/mtplxModels.js';
-import { describeMtplxRuntime } from '../lib/mtplxRuntime.js';
+import { describeMtplxRuntime, resolveMtplxBinary } from '../lib/mtplxRuntime.js';
 import { listSlotstreamCachedModels } from '../lib/slotstreamModels.js';
 import { probeOpenAiModels } from '../lib/openAiModelsProbe.js';
 import { inspectSglangQwenProject, sglangStartBlockedReason } from '../lib/sglangQwenProject.js';
@@ -136,7 +136,7 @@ const mtplxPartialCacheError = (count) =>
  * download step rather than the checkpoint one.
  */
 async function readMtplxCacheState() {
-  const runtime = await describeMtplxRuntime(findCommandOnPath('mtplx'));
+  const runtime = await describeMtplxRuntime(resolveMtplxBinary());
   if (!runtime.ready) {
     return { state: 'unknown', model: null, count: 0, error: 'MTPLX\'s Python runtime has not been downloaded yet' };
   }
@@ -234,8 +234,8 @@ const rowProvisionAction = (row) => row?.provision?.action || null;
  * `pull-start` action, which the user clicks by its full name.
  */
 async function pullMtplxDefaultCheckpoint({ emit, isCancelled }) {
-  const binary = findCommandOnPath('mtplx');
-  if (!binary) return { success: false, error: '`mtplx` was not found on PortOS\'s PATH. Restart PortOS so it picks up the new bin directory, then try again.' };
+  const binary = resolveMtplxBinary();
+  if (!binary) return { success: false, error: 'MTPLX was not found. Install it from the Local Runtime Servers card, then try again.' };
   // Same disk-space guard the Models → Runtimes MTPLX card runs before its own
   // pull — this readiness-checklist button reaches the same `mtplx pull`
   // with no repo id, so it shares previewMtplxPull's cache path and its
@@ -272,8 +272,8 @@ const SETUP_ROWS = Object.freeze({
     unsupportedReason: MTPLX_UNSUPPORTED_REASON,
     async install({ emit }) {
       // Same install `mtplxServerManager` runs from the Models → Runtimes card:
-      // upstream's Homebrew tap, with pip as the documented fallback for a host
-      // without Homebrew. Neither runs the optional privileged fan-control helper.
+      // the private hash-locked native Python runtime. It never runs the
+      // optional privileged fan-control helper.
       const result = await installMtplx({ onProgress: (p) => { if (p?.message) emit(p.message); } })
         .catch((err) => ({ success: false, error: err.message }));
       return result;
@@ -622,7 +622,7 @@ export async function runLocalRuntimeSetup(kind, { endpoint, emit = () => {}, is
 
   // Same two signals `providerReadiness.js` uses: the binary on PATH, plus LM
   // Studio's macOS app bundle, which serves without ever putting `lms` there.
-  const installed = Boolean(runtime.command && findCommandOnPath(runtime.command)) ||
+  const installed = Boolean(runtime.command && (kind === 'mtplx' ? resolveMtplxBinary() : findCommandOnPath(runtime.command))) ||
     (kind === 'lmstudio' && isLmStudioAppInstalled());
 
   // A request that names NO action came from a client built before `pull-start`

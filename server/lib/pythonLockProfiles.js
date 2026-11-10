@@ -32,6 +32,12 @@ export const LOCK_PROFILES = Object.freeze({
     lockFile: join(SCRIPTS_DIR, 'requirements-auk-mlx.lock.txt'),
     environments: [APPLE_SILICON],
   },
+  'mtplx-mlx': {
+    id: 'mtplx-mlx',
+    label: 'MTPLX server MLX runtime',
+    lockFile: join(SCRIPTS_DIR, 'requirements-mtplx-mlx.lock.txt'),
+    environments: [APPLE_SILICON],
+  },
   'laya-mlx': {
     id: 'laya-mlx',
     label: 'Laya-MLX runtime',
