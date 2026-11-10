@@ -140,11 +140,12 @@ export function vertexImageSentPrompt({ family, prompt = '', negativePrompt, inp
 }
 
 async function encodeInputImage(filePath, reviewedBytes = null) {
-  const input = reviewedBytes || filePath;
+  // sharp reports `size` only for Buffer input, so read the bytes before checking the cap.
+  const input = reviewedBytes || await readFile(filePath);
   const metadata = await sharp(input).metadata();
   const longSide = Math.max(metadata.width || 0, metadata.height || 0);
-  if (longSide <= INPUT_MAX_LONG_SIDE && (metadata.size ?? 0) <= INPUT_MAX_BYTES && ['png', 'jpeg', 'webp'].includes(metadata.format)) {
-    return vertexInlineImage(reviewedBytes || await readFile(filePath));
+  if (longSide <= INPUT_MAX_LONG_SIDE && input.length <= INPUT_MAX_BYTES && ['png', 'jpeg', 'webp'].includes(metadata.format)) {
+    return vertexInlineImage(input);
   }
   const resized = sharp(input).rotate()
     .resize({ width: INPUT_MAX_LONG_SIDE, height: INPUT_MAX_LONG_SIDE, fit: 'inside', withoutEnlargement: true });
