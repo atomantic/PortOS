@@ -64,6 +64,13 @@ describe('CredentialsTab', () => {
     expect(JSON.stringify(PAYLOAD)).not.toMatch(/hf_this/);
   });
 
+  it('orders the service cards alphabetically by name', async () => {
+    mock.getCredentialInventory.mockResolvedValue({ ...PAYLOAD, credentials: [...PAYLOAD.credentials].reverse() });
+    render(<MemoryRouter><CredentialsTab /></MemoryRouter>);
+    await screen.findByText('JIRA');
+    expect(screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent)).toEqual(['Hugging Face', 'JIRA']);
+  });
+
   it('lays credential cards out in a responsive two-column grid without a width clamp', async () => {
     const { container } = render(
       <MemoryRouter>
