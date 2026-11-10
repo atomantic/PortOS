@@ -320,6 +320,7 @@ const PROCEDURAL_OUTPUT_SHAPE = `{
     "rules": ["<continuity rule>"]
   },
   "looks": [{ "name": "<SHORT NAME>", "description": "<a palette or costume variant>", "chapters": "<which parts of the song>" }],
+  "cast": [{ "id": "<short-slug>", "name": "<a name>", "role": "<role in the story>", "description": "<who or what they are>", "stillness": "<how they hold their shape at rest>", "movement": "<motion rules and physical habits>" }],
   "world": {
     "layout": "<how the environments are composed>",
     "depth": "<the layers and parallax planes>",
@@ -431,6 +432,7 @@ export function buildCastAndSetsPrompt(project, { moodImages = [], board = null,
 
   const proceduralRules = [
     `- ${CAST_SETS_LIMITS.sets.min}–${CAST_SETS_LIMITS.sets.max} sets; looks are optional palette or costume variants (at most ${CAST_SETS_LIMITS.looks.max}).`,
+    '- Describe stillness and movement for the protagonist and recurring supporting cast; keep cast consistent with their code definitions.',
     '- Never describe photographic people: no skin, pores, realistic hair, wardrobe photography or singing close-ups. A human or photo cutout is allowed ONLY as a set whose imageRole is "cutout", and only when the director guidance asks for one.',
     '- imageRole says what each planned image is FOR: "background" (a full-bleed environment layer), "texture" (a seamless surface), "decoration" (an isolated ornament) or "cutout" (an isolated subject to composite). Default to "background".',
     '- Give every set ONE dominant light color or quality so a cut tells the viewer where we are.',
@@ -890,8 +892,9 @@ export function mergeCastAndSetsDirection(previous, parsed, { sections = [], med
       ? { renderingMedium: pick('renderingMedium', '') } : {}),
     protagonist,
     looks,
-    // Photographic only: a procedural cast lives in `definitions`.
-    ...(procedural ? {} : { cast: normalizeCast(cast, protagonist, { fixed: fixedCast, forms }) }),
+    // Procedural directions created before cast prose existed keep their shape.
+    ...(!procedural || hasOwn(parsed, 'cast') || hasOwn(base, 'cast')
+      ? { cast: normalizeCast(cast, protagonist, { fixed: fixedCast, forms }) } : {}),
     // Photographic only; a direction saved before props existed keeps its shape.
     ...(!procedural && (hasOwn(parsed, 'props') || base.props || fixedPropList.length)
       ? { props: normalizeProps(pick('props', []), { fixed: fixedPropList }) } : {}),

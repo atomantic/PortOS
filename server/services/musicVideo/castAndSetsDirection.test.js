@@ -73,6 +73,12 @@ describe('Cast & Sets direction', () => {
     expect(prompt).toContain('"movement"');
     const procedural = buildCastAndSetsPrompt({ ...project, productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 } });
     expect(procedural).toContain('"stillness"');
+    expect(procedural).toContain('"cast"');
+    const proceduralDirection = mergeCastAndSetsDirection(null, parseCastAndSetsResponse(JSON.stringify({ ...PROCEDURAL_ANSWER,
+      cast: [{ name: 'Companion', description: 'a paper bird', stillness: 'wings folded', movement: 'glides' }],
+    })), { sections, medium: 'procedural' }).direction;
+    expect(proceduralDirection.cast[0].stillness).toBe('wings folded');
+    expect(proceduralDirection.cast[0].movement).toBe('glides');
   });
 
   it('builds a prompt that reads the song and keeps the mood board to look only', () => {
