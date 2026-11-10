@@ -89,3 +89,18 @@ describe('document camera outside the engine', () => {
     expect(documentCameraView(null, scene, 2)).toBeNull();
   });
 });
+
+// The smooth native preview must honor video controls and a shot's override of them.
+it('turns footage push and still motion off in the native player, and resolves shot overrides', async () => {
+  const { rig } = await engineViews([], { sections: [] }, []);
+  const scene = { sceneId: 'clip', startSec: 0, endSec: 4, stillMove: 'pan' };
+  for (const footage of [true, false]) {
+    for (const t of [0, 1, 3.9]) {
+      const view = documentCameraView(rig, scene, t, { footage, templateEffects: { footagePush: 0, stillMotion: 0 } });
+      for (const key of ['x', 'y', 'rotation']) expect(view[key]).toBeCloseTo(0, 8);
+      expect(view.scale).toBe(1);
+    }
+  }
+  const own = { ...scene, templateEffects: { footagePush: 0.5 } };
+  expect(documentCameraView(rig, own, 3, { footage: true, templateEffects: { footagePush: 0 } }).scale).toBeGreaterThan(1);
+});

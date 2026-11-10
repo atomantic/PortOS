@@ -80,3 +80,35 @@ describe('PreviewDock composition document', () => {
       expect(screen.queryByLabelText('Song for the composition preview')).toBeNull();
     });
 });
+
+// The live native picture must not keep the texture layers after the director turns them off.
+it('updates the native template finish and camera when video or shot controls change', async () => {
+  playback.mockResolvedValue({ native: true });
+  const props = { ...project, templateEffects: { grain: 0, vignette: 0, stillMotion: 0 } };
+  const draw = p => <MemoryRouter><PreviewDock project={p} sources={listPreviewSources(p, { leadWith: 'storyboard' })} audioUrl="/song.mp3" /></MemoryRouter>;
+  const { rerender } = render(draw(props));
+  await screen.findByLabelText('Composition preview');
+  await waitFor(() => expect(screen.getByTestId('animatic-still').style.transform).toBe('translate(0%, 0%) scale(1)'));
+  const finish = screen.getByTestId('document-template-finish');
+  expect(finish.children[0].style.background).toContain('rgba(0,0,0,0)');
+  expect(finish.children[1].style.opacity).toBe('0');
+  rerender(draw({ ...props, scenes: props.scenes.map(scene => ({ ...scene, templateEffects: { grain: 0.2, vignette: 0.7 } })) }));
+  await waitFor(() => expect(finish.children[1].style.opacity).toBe('0.2'));
+  expect(finish.children[0].style.background).toContain('0.7');
+});
+
+// Uniquely catches a beat control changing export while the playing preview omits its pulse/glitch.
+it('uses the document renderer for active beat reaction, including shot overrides, and native playback when disabled', async () => {
+  playback.mockResolvedValue({ native: true });
+  const active = { ...project, audioAnalysis: { beats: [0], features: { envelopes: { fps: 1, rms: [0.5] } } } };
+  const draw = p => <MemoryRouter><PreviewDock project={p} sources={listPreviewSources(p, { leadWith: 'storyboard' })} audioUrl="/song.mp3" /></MemoryRouter>;
+  const { rerender } = render(draw(active));
+  await waitFor(() => expect(opens()).toHaveLength(1));
+  expect(screen.queryByLabelText('Song for the composition preview')).toBeNull();
+  const disabled = { ...active, templateEffects: { beatReaction: 0 } };
+  rerender(draw(disabled));
+  expect(await screen.findByLabelText('Song for the composition preview')).toBeTruthy();
+  rerender(draw({ ...disabled, scenes: disabled.scenes.map(scene => ({ ...scene, templateEffects: { beatReaction: 0.2 } })) }));
+  await waitFor(() => expect(screen.queryByLabelText('Song for the composition preview')).toBeNull());
+  expect(opens()).toHaveLength(2);
+});

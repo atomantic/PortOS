@@ -322,11 +322,12 @@ export function productionReviewBasis(project) {
     scenes: (project.scenes || []).map(({ sceneId, lyricText }) => ({ sceneId, lyricText })) });
   const window = project.productionReview?.proof;
   const proof = hash({ storyboard, composition: project.composition,
+    ...(project.templateEffects ? { templateEffects: project.templateEffects } : {}),
     ...(project.lyricOverlayEnabled === false ? { lyricOverlayEnabled: false } : {}),
     window: window && { startSec: window.startSec, endSec: window.endSec },
     scenes: (project.scenes || []).filter(s => !window || s.startSec < window.endSec && s.endSec > window.startSec)
-      .map(({ sceneId, referenceImageId, videoHistoryId, performanceEdit, direction, visualLayer, preMusic, photoSequence }) =>
-        ({ sceneId, referenceImageId, videoHistoryId, performanceEdit, direction, visualLayer, ...(preMusic ? { preMusic } : {}),
+      .map(({ sceneId, referenceImageId, videoHistoryId, performanceEdit, direction, visualLayer, preMusic, photoSequence, templateEffects }) =>
+        ({ sceneId, referenceImageId, videoHistoryId, performanceEdit, direction, visualLayer, ...(templateEffects ? { templateEffects } : {}), ...(preMusic ? { preMusic } : {}),
           ...(photoSequence && photoSequence.enabled !== false ? { photoSequence } : {}) })),
     soundBed: project.soundBed, videoSettings: project.videoSettings });
   return { art, storyboard, storyboardShots, proof };

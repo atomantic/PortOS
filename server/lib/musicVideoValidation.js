@@ -7,6 +7,8 @@ import { festivalPacketSchema } from './musicVideoFestivalPacket.js';
 import { MUSIC_VIDEO_MEDIA_MODES } from './musicVideoMediaPolicy.js';
 import { MUSIC_VIDEO_GRADE_PRESETS, MUSIC_VIDEO_GRADE_MAX_GRAIN } from './musicVideoGrade.js';
 import { filmLookSchema } from './filmLookValidation.js';
+import { TEMPLATE_EFFECT_CONTROLS } from './musicVideoTemplateEffects.js';
+
 import { MUSIC_VIDEO_CAMERA_FRAME_ASPECTS } from './musicVideoFilmLook.js';
 import { PRODUCTION_MEDIUMS } from './musicVideoProductionMedium.js';
 import { TITLE_CARD_FONTS, TITLE_CARD_LIMITS, TITLE_CARD_POSITIONS, TITLE_CARD_STYLES } from './musicVideoTitleCard.js';
@@ -28,6 +30,8 @@ import { executionOptionsSchema } from './aiToolkit/internal/executionOptionsVal
  */
 
 import { z } from 'zod';
+
+const musicVideoTemplateEffectsSchema = z.object(Object.fromEntries(TEMPLATE_EFFECT_CONTROLS.map(({ id }) => [id, z.number().min(0).max(1).nullable().optional()]))).strict();
 import { TIMELINE_BEAT_KINDS, TIMELINE_BEATS_MAX, TIMELINE_LENGTH_MAX_MIN, TIMELINE_PACES, PREVIZ_CAMERA_STYLES, PREVIZ_CUTS_MAX, PREVIZ_KEYS_MAX, PREVIZ_PAWN_COLOR_IDS, PREVIZ_POSES, PREVIZ_TRACKS_MAX, PREVIZ_VEHICLES_MAX, PREVIZ_VISIBLE_MAX, VEHICLE_SPEED_MAX_METERS_PER_MIN } from './musicVideoPrevizLimits.js';
 import { MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX } from './musicVideoSubjectLimits.js';
 export const musicVideoDcpRequestSchema = z.object({ grade: z.enum(['rec709', 'rec1886']), renderHistoryId: z.string().min(1), sourceSha256: z.string().regex(/^[a-f0-9]{64}$/) }).strict();
@@ -986,6 +990,7 @@ const sceneLayerFields = {
   holdLastFrame: z.boolean().nullable().optional(),
   // The shot's own film look (lib/filmLook.js), kept when the video's look changes; null follows the camera, then the video.
   filmLook: filmLookSchema.nullable().optional(),
+  templateEffects: musicVideoTemplateEffectsSchema.nullable().optional(),
   // A VHS glitch over the cut into / out of this shot (musicVideoTransitions.js); null clears it.
   transitionIn: z.enum(MUSIC_VIDEO_TRANSITIONS).nullable().optional(),
   transitionOut: z.enum(MUSIC_VIDEO_TRANSITIONS).nullable().optional(),
@@ -1951,6 +1956,7 @@ export const musicVideoProjectCreateSchema = z.object({
   soundBed: musicVideoSoundBedSchema.nullable().optional(),
   // The finishing film look (lib/filmLook.js); null = none.
   filmLook: filmLookSchema.nullable().optional(),
+  templateEffects: musicVideoTemplateEffectsSchema.nullable().optional(),
   // Percent cropped from each edge of the picture before the matte and the look (0–8). Null crops nothing.
   overscan: z.number().min(0).max(8).nullable().optional(),
   // The handmade production medium (lib/musicVideoProductionMedium.js); null = none.
@@ -2004,6 +2010,7 @@ export const musicVideoProjectUpdateSchema = z.object({
   soundBed: musicVideoSoundBedSchema.nullable().optional(),
   // The finishing film look (lib/filmLook.js); null = none.
   filmLook: filmLookSchema.nullable().optional(),
+  templateEffects: musicVideoTemplateEffectsSchema.nullable().optional(),
   // Percent cropped from each edge of the picture before the matte and the look (0–8). Null crops nothing.
   overscan: z.number().min(0).max(8).nullable().optional(),
   // The handmade production medium (lib/musicVideoProductionMedium.js); null = none.

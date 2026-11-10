@@ -635,3 +635,18 @@ it('carries the lyric layout to the document: social by default, cinematic from 
   await expect(encode(cinematic, plan, 'job-layout-cinematic')).rejects.toThrow();
   expect(browser.seen.data.project.lyricLayout).toBe('cinematic');
 });
+
+// The preview and encoder must stage the same sparse choices, without coupling them to selected glitches or film look.
+it('carries video and shot template controls unchanged through preview and final staging', async () => {
+  const { project, plan } = await canonicalPreview();
+  project.templateEffects = { beatReaction: 0, footagePush: 0, grain: 0, vignette: 0 };
+  project.scenes[0].templateEffects = { grain: 0.1 };
+  project.filmLook = { preset: 'super8' };
+  project.scenes[0].glitches = [{ atSec: 1, style: 'vhs-glitch' }];
+  const preview = await buildDocumentPreview(project);
+  await expect(encode(project, plan, 'template-controls')).rejects.toThrow('stop after staging');
+  expect(browser.seen.data.project.templateEffects).toEqual(project.templateEffects);
+  expect(browser.seen.data.scenes[0].templateEffects).toEqual({ grain: 0.1 });
+  expect(preview.html).toContain(`window.PORTOS_MV = ${JSON.stringify(browser.seen.data).replace(/</g, '\\u003c')}`);
+  expect(browser.seen.data.effectFrames.length).toBeGreaterThan(0);
+});

@@ -1192,6 +1192,7 @@ describe('create-schema parity', () => {
     reverse: true,
     holdLastFrame: true,
     filmLook: { preset: 'vhs' },
+    templateEffects: { grain: 0 },
     transitionIn: 'vhs-glitch',
     transitionOut: 'vhs-glitch',
     wipeIn: { style: 'iris', lengthSec: 0.5, color: '#ff00aa' },
@@ -1288,5 +1289,30 @@ describe('applyProjectPatch lyric marker remap', () => {
     expect(next.lyricMarkers.map((m) => [m.label, m.line])).toEqual([['Verse 1', 0], ['Chorus', 1], ['Shouts', 2], ['Outro', 3]]);
     const sent = [{ type: 'section', label: 'Bridge', kind: 'bridge', line: 1 }];
     expect(applyProjectPatch(project, { lyricCues: ['b'].map(cue), lyricMarkers: sent }).lyricMarkers).toEqual(sent);
+  });
+});
+
+// Pins zero/inheritance across validated record writes, cloning and proof invalidation.
+describe('layered template controls', () => {
+  it('stores video and shot choices, keeps them in clones, and invalidates proof while preserving the film look', () => {
+    expect(baseProject()).not.toHaveProperty('templateEffects');
+    const settings = { beatReaction: 0, footagePush: 0, grain: 0, vignette: 0, stillMotion: 0 };
+    const input = musicVideoProjectCreateSchema.parse({ name: 'Example', templateEffects: settings });
+    let project = buildProjectRecord(input, { id: 'mv-example', now: 'n' });
+    project = { ...project, filmLook: { preset: 'super8' }, scenes: [{ sceneId: 's', startSec: 0, endSec: 4 }] };
+    expect(project.templateEffects).toEqual(settings);
+    expect(cloneProjectRecord(project, {}, { id: 'mv-copy', now: 'n' }).templateEffects).toEqual(settings);
+    const proof = productionReviewBasis(project).proof;
+    const changed = applySceneUpdate(project, 's', { templateEffects: { beatReaction: 0.5, grain: null } }).project;
+    expect(changed.scenes[0].templateEffects).toEqual({ beatReaction: 0.5 });
+    expect(productionReviewBasis(changed).proof).not.toBe(proof);
+    expect(changed.filmLook).toEqual(project.filmLook);
+    const inherited = applySceneUpdate(changed, 's', { templateEffects: null }).project;
+    expect(productionReviewBasis(inherited).proof).toBe(proof);
+    const reset = applyProjectPatch(inherited, { templateEffects: null });
+    expect(reset.templateEffects).toBeNull();
+    expect(productionReviewBasis(reset).proof).not.toBe(proof);
+    expect(musicVideoProjectUpdateSchema.safeParse({ templateEffects: { grain: 1.1 } }).success).toBe(false);
+    expect(musicVideoSceneCreateSchema.safeParse({ templateEffects: { typo: 0 } }).success).toBe(false);
   });
 });

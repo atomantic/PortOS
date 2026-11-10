@@ -42,6 +42,7 @@ import { ensureSceneTakes, keepCodeClipWithItsClip, TAKE_SLOT } from './takes.js
 import { normalizeComposition, invalidateCompositionTiming, withStoredCompositionDocument } from './composition.js';
 import { normalizeSoundBed } from './soundBed.js';
 import { normalizeFilmLook } from '../../lib/filmLook.js';
+import { normalizeTemplateEffects } from '../../lib/musicVideoTemplateEffects.js';
 import { normalizeOverscan } from '../../lib/musicVideoFilmLook.js';
 import { normalizeProductionMedium } from '../../lib/musicVideoProductionMedium.js';
 import { stillMoveForCamera } from '../../lib/cameraMovements.js';
@@ -196,6 +197,7 @@ export function buildProjectRecord(input, { id, now }) {
     soundBed: input.soundBed ? normalizeSoundBed(input.soundBed) : null,
     // The finishing film look every preview, render and baked still is viewed through; null = none.
     filmLook: input.filmLook ? normalizeFilmLook(input.filmLook) : null,
+    ...(input.templateEffects ? { templateEffects: normalizeTemplateEffects(input.templateEffects) } : {}),
     ...(overscan != null ? { overscan } : {}),
     // The handmade medium (stepped holds, compositor-only lettering); null = none.
     ...(normalizeProductionMedium(input.productionMedium) ? { productionMedium: normalizeProductionMedium(input.productionMedium) } : {}),
@@ -420,6 +422,7 @@ export function applyProjectPatch(project, patch) {
     ...('soundBed' in patch ? { soundBed: normalizeSoundBed(patch.soundBed) } : {}),
     // The film look is replaced whole (one bounded record); null clears it.
     ...('filmLook' in patch ? { filmLook: normalizeFilmLook(patch.filmLook) } : {}),
+    ...('templateEffects' in patch ? { templateEffects: normalizeTemplateEffects(patch.templateEffects) } : {}),
     ...('overscan' in patch ? { overscan: normalizeOverscan(patch.overscan) } : {}),
     ...(Array.isArray(patch.cameras) ? { cameras: patch.cameras.map((camera) => (
       camera && typeof camera === 'object' && 'filmLook' in camera
@@ -604,6 +607,7 @@ function buildScene(input, { order }) {
     ...(input.reverse ? { reverse: true } : {}),
     ...(input.holdLastFrame ? { holdLastFrame: true } : {}),
     ...(input.filmLook ? { filmLook: normalizeFilmLook(input.filmLook) } : {}),
+    ...(input.templateEffects ? { templateEffects: normalizeTemplateEffects(input.templateEffects) } : {}),
     ...(input.transitionIn ? { transitionIn: input.transitionIn } : {}),
     ...(input.transitionOut ? { transitionOut: input.transitionOut } : {}),
     ...(input.wipeIn ? { wipeIn: input.wipeIn } : {}),
@@ -721,6 +725,7 @@ function carryOver(prior, fresh) {
     ...(prior.reverse ? { reverse: true } : {}),
     ...(prior.holdLastFrame ? { holdLastFrame: true } : {}),
     ...(prior.filmLook ? { filmLook: prior.filmLook } : {}),
+    ...(prior.templateEffects ? { templateEffects: prior.templateEffects } : {}),
     ...(prior.transitionIn ? { transitionIn: prior.transitionIn } : {}),
     ...(prior.transitionOut ? { transitionOut: prior.transitionOut } : {}),
     ...(prior.wipeIn ? { wipeIn: prior.wipeIn } : {}),
@@ -831,7 +836,7 @@ export function applyStoryboardShotSync(project, plan) {
 // takes, and whether it plays as a clip or its still with an image effect) without
 // adding a shot or lyric the storyboard approval did not cover.
 const SCENE_SHOT_EDIT_FIELDS = ['startSec', 'endSec', 'beatAligned', 'beatNeedsReview', 'pacingCut', 'label', 'prompt', 'framePrompt', 'visualIntent',
-  'referenceImageId', 'videoHistoryId', 'endImageId', 'endFrameOff', 'codeClip', 'frameFit', 'speedFps', 'offsetFrames', 'clipLengthSec', 'clipModelId', 'reverse', 'holdLastFrame', 'filmLook', 'transitionIn', 'transitionOut', 'wipeIn', 'wipeOut', 'glitches', 'cutEffect',
+  'referenceImageId', 'videoHistoryId', 'endImageId', 'endFrameOff', 'codeClip', 'frameFit', 'speedFps', 'offsetFrames', 'clipLengthSec', 'clipModelId', 'reverse', 'holdLastFrame', 'filmLook', 'templateEffects', 'transitionIn', 'transitionOut', 'wipeIn', 'wipeOut', 'glitches', 'cutEffect',
   'visualLayer', 'stillMove', 'imageEffect', 'imageEffectSec', 'photoSequence', 'frameReferenceIds', 'clipReferenceIds', 'researchReferences', 'setReference', 'characterVariant', 'panelId', 'panelRev', 'panelArt', 'preMusic', 'coverage', 'sourceTake', 'lyricAnchor',
   'cameoId', 'cameoVariantId', 'cameoLabel', 'shotSheet'];
 
@@ -863,7 +868,8 @@ export function applySceneUpdate(project, sceneId, patch) {
   // A shot's own look is stored complete; null returns it to the video's look.
   const planned = 'shotSheet' in parsed ? { ...parsed, shotSheet: normalizeShotSheet(parsed.shotSheet) } : parsed;
   const looked = 'filmLook' in planned ? { ...planned, filmLook: planned.filmLook ? normalizeFilmLook(planned.filmLook) : null } : planned;
-  const data = 'preMusic' in looked ? { ...looked, preMusic: normalizePreMusic(looked.preMusic) } : looked;
+  const finished = 'templateEffects' in looked ? { ...looked, templateEffects: normalizeTemplateEffects(looked.templateEffects) } : looked;
+  const data = 'preMusic' in finished ? { ...finished, preMusic: normalizePreMusic(finished.preMusic) } : finished;
   const scenes = project.scenes || [];
   const idx = scenes.findIndex((s) => s.sceneId === sceneId);
   if (idx < 0) throw new ServerError('Scene not found', { status: 404, code: 'NOT_FOUND' });
