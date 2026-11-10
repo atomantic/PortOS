@@ -112,8 +112,8 @@ describe.skipIf(process.platform === 'win32')('CI DB tool installation', () => {
   it('recovers from a stalled runner mirror through the official archive, keeping signing', () => {
     const result = run('slowRunner');
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain('switching to http://archive.ubuntu.com/ubuntu/');
-    expect(result.sources).toBe(RUNNER_SOURCES.replace('azure.archive.ubuntu.com', 'archive.ubuntu.com'));
+    expect(result.stdout).toContain('switching to https://archive.ubuntu.com/ubuntu/');
+    expect(result.sources).toBe(RUNNER_SOURCES.replace('http://azure.archive.ubuntu.com/ubuntu/', 'https://archive.ubuntu.com/ubuntu/'));
     expect(result.calls).toEqual([
       'apt-get update',
       'apt-get update',
