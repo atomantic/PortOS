@@ -377,7 +377,9 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
   const title = lyrics ? 'Lyric timing playthrough' : draft ? 'Composition candidate preview' : 'Composition document preview';
   const aspect = preview.width && preview.height ? `${preview.width} / ${preview.height}` : '16 / 9';
   const lyric = lyricAt(project.lyricCues, t);
-  const shotStep = shotNav ? shotSteps(project.scenes, t) : null;
+  // Fallback frames trail the audio clock; while playing, name the shot pictured.
+  const shownT = playing && !preview.playback && preview.frameTime != null ? preview.frameTime : t;
+  const shotStep = shotNav ? shotSteps(project.scenes, shownT) : null;
   const shotIndex = shotStep?.index || 0;
   const activeShot = shotStep?.scene || null;
   const failed = preview.status === 'error' || preview.status === 'unavailable' || !!audioError;
@@ -430,7 +432,7 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
         <span className="text-xs text-port-text-muted tabular-nums">{timeLabel}</span>
         {lookAvailable && <PreviewFilmLook enabled={lookOn} onToggle={toggleLook} />}
       </div>
-      {shotNav && <ShotStepper scenes={project.scenes} time={t} onSeek={seek} onEditShot={onEditShot ? (sceneId) => { stopPlayback(); onEditShot(sceneId); } : null} disabled={!preview.ready || failed} keys />}
+      {shotNav && <ShotStepper scenes={project.scenes} time={shownT} onSeek={seek} onEditShot={onEditShot ? (sceneId) => { stopPlayback(); onEditShot(sceneId); } : null} disabled={!preview.ready || failed} keys />}
       {shotNav && (
         <FrameStepper
           time={t}
