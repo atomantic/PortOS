@@ -118,6 +118,7 @@ export function wordTimedScenes(project, scenes = project?.scenes) {
  * still needs its reference frame and a span, and a card or code shot needs only a span.
  */
 export function sceneRenderReady(scene, { layered = false, scenes = null } = {}) {
+  if (scene?.selectedTakeMarkedBad) return false;
   const layer = sceneVisualLayer(scene, { layered });
   if (layer === 'footage') {
     if (isContinuingScene(scene)) return Boolean(scenePlayableClipId(scene, scenes));

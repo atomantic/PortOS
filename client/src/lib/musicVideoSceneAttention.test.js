@@ -69,6 +69,13 @@ describe('sceneAttention', () => {
     expect(sceneAttention(back, { scenes })).toEqual(['missing-clip']);
     expect(sceneMediaKind(back, { scenes })).toBe('image');
   });
+
+  it('flags a shot whose selected take is marked bad', () => {
+    expect(sceneAttention({ ...ready, selectedTakeMarkedBad: true })).toContain('bad-take');
+    expect(sceneAttention(ready, { assetMarks: { 'image:f.png': 'bad' } })).toContain('bad-take');
+    expect(sceneAttention(ready, { assetMarks: { 'video:v1': 'bad' } })).toContain('bad-take');
+    expect(sceneAttention(ready, { assetMarks: { 'image:other.png': 'bad' } })).not.toContain('bad-take');
+  });
 });
 
 describe('scene filters', () => {
@@ -89,6 +96,11 @@ describe('scene filters', () => {
     expect(sceneMatchesFilter(['last-failure'], 'attention')).toBe(true);
     expect(sceneMatchesFilter(['last-failure'], 'missing')).toBe(false);
     expect(sceneMatchesFilter(['missing-clip'], 'missing')).toBe(true);
+    expect(sceneMatchesFilter(['bad-take'], 'bad-take')).toBe(true);
+    expect(sceneMatchesFilter(['bad-take'], 'attention')).toBe(true);
+    expect(sceneMatchesFilter(['bad-take'], 'missing')).toBe(false);
+    expect(selectedFrameReadiness({ ...ready, selectedTakeMarkedBad: true })).toEqual({ text: 'selected take marked bad', reasons: ['Selected take marked bad'] });
+    expect(selectedFrameReadiness(ready, { assetMarks: { 'image:f.png': 'bad' } })).toEqual({ text: 'selected take marked bad', reasons: ['Selected take marked bad'] });
     expect(sceneMatchesFilter([], 'attention')).toBe(false);
     expect(sceneMatchesFilter([], 'all')).toBe(true);
   });

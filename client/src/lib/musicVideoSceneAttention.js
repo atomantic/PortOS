@@ -31,6 +31,7 @@ export const SCENE_ATTENTION_LABELS = Object.freeze({
   'song-new': 'New lyrics',
   'song-cut': 'Lyrics cut',
   'frame-stale': 'Frame out of date',
+  'bad-take': 'Selected take marked bad',
 });
 
 // A revised song's verdict on a shot (server songRevision.js sceneReview) as its attention code.
@@ -39,14 +40,19 @@ const SONG_REVIEW_CODES = Object.freeze({ changed: 'song-changed', new: 'song-ne
 /** Codes that mean the shot still lacks material a render needs (the `missing` filter). */
 export const SCENE_MISSING_CODES = Object.freeze(['missing-frame', 'missing-clip', 'no-span']);
 
-export const SCENE_FILTERS = Object.freeze(['all', 'attention', 'missing', 'stale-frame']);
+export const SCENE_FILTERS = Object.freeze(['all', 'attention', 'missing', 'stale-frame', 'bad-take']);
 
 const slotDependencyState = (scene, kind, assetId) => (
   assetId ? (scene?.takes || []).find((take) => take?.kind === kind && take.assetId === assetId)?.dependencyState || null : null
 );
 
 /** Header label for the selected frame. A stale end frame is named on its own; unknown is not ready. */
-export function selectedFrameReadiness(scene) {
+export function selectedFrameReadiness(scene, marksOrOpts = {}) {
+  const assetMarks = marksOrOpts?.assetMarks || marksOrOpts || {};
+  const isStartBad = scene?.selectedTakeMarkedBad ||
+    (scene?.referenceImageId && assetMarks[`image:${scene.referenceImageId}`] === 'bad') ||
+    (scene?.endImageId && assetMarks[`image:${scene.endImageId}`] === 'bad');
+  if (isStartBad) return { text: 'selected take marked bad', reasons: ['Selected take marked bad'] };
   const start = slotDependencyState(scene, 'image', scene?.referenceImageId);
   const end = slotDependencyState(scene, 'endImage', scene?.endImageId);
   if (start?.status === 'stale') return { text: 'frame out of date', reasons: start.reasons || [] };
@@ -123,6 +129,12 @@ export function sceneAttention(scene, ctx = {}) {
     if (currentPlateEvidence(scene, selected)?.verdict !== 'pass') codes.push('plate-unverified');
   }
   if (failed.frame?.[scene.sceneId] || failed.video?.[scene.sceneId]) codes.push('last-failure');
+  const badSelected = scene.selectedTakeMarkedBad || (ctx.assetMarks && (
+    (scene.referenceImageId && ctx.assetMarks[`image:${scene.referenceImageId}`] === 'bad') ||
+    (scene.endImageId && ctx.assetMarks[`image:${scene.endImageId}`] === 'bad') ||
+    (scene.videoHistoryId && ctx.assetMarks[`video:${scene.videoHistoryId}`] === 'bad')
+  ));
+  if (badSelected) codes.push('bad-take');
   return codes;
 }
 
@@ -131,6 +143,7 @@ export function sceneMatchesFilter(codes, filter) {
   if (filter === 'attention') return codes.length > 0;
   if (filter === 'missing') return codes.some((code) => SCENE_MISSING_CODES.includes(code));
   if (filter === 'stale-frame') return codes.includes('frame-stale');
+  if (filter === 'bad-take') return codes.includes('bad-take');
   return true;
 }
 

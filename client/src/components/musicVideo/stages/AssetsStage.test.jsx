@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
+import { Toaster } from '../../ui/Toast.jsx';
 
 const pool = [
   { kind: 'image', assetId: 'late.png', sceneId: 's2', prompt: 'Reel on the bench', clipIds: [], inUseBy: ['s2'] },
@@ -12,6 +13,7 @@ const pool = [
 vi.mock('../../../services/apiMusicVideo.js', () => ({
   getMusicVideoMediaPool: vi.fn(async () => ({ items: pool })),
   markMusicVideoPoolAssets: vi.fn(async () => ({ assetMarks: { 'image:early.png': 'bad' } })),
+  selectMusicVideoSceneTake: vi.fn(async () => ({ scene: { sceneId: 's1' } })),
   deleteMusicVideoPoolAssets: vi.fn(async () => ({ deleted: 1 })),
   searchMusicVideoMediaPool: vi.fn(async () => ({ items: [] })),
   listMusicVideoProjectSummaries: vi.fn(async () => ({ items: [{ id: 'mv-1', name: 'This video' }, { id: 'mv-draft', name: 'Early draft' }] })),
@@ -25,7 +27,8 @@ const api = await import('../../../services/apiMusicVideo.js');
 const project = { id: 'mv-1', scenes: [{ sceneId: 's2', startSec: 4 }, { sceneId: 's1', startSec: 0 }] };
 const renderPage = (board = {}) => render(
   <MemoryRouter initialEntries={['/music-video/mv-1/assets']}>
-    <AssetsStage board={{ project, takes: { applyPoolMarks: vi.fn() }, onEditShot: vi.fn(), ...board }} />
+    <AssetsStage board={{ project, takes: { applyPoolMarks: vi.fn(), applyScene: vi.fn() }, onEditShot: vi.fn(), ...board }} />
+    <Toaster />
   </MemoryRouter>,
 );
 const tiles = () => within(screen.getByRole('list', { name: 'Stills' })).getAllByRole('button').map((b) => b.getAttribute('aria-label').split(':')[0]);
@@ -77,5 +80,41 @@ describe('Music video Assets page', () => {
     await waitFor(() => expect(api.addMusicVideoLibraryMedia).toHaveBeenCalledWith('mv-1', [{ kind: 'image', assetId: 'sheet.png' }], { silent: true }));
     expect(await screen.findByText('Added 1 from the media library.')).toBeTruthy();
     await waitFor(() => expect(tiles()).toHaveLength(5));
+  });
+
+  // Uniquely catches a fallback not notifying the director or Undo failing to revert the take and mark.
+  it('shows a toast with Undo when marking bad moves a shot, and clicking Undo restores it', async () => {
+    api.markMusicVideoPoolAssets.mockResolvedValueOnce({
+      assetMarks: { 'image:early.png': 'bad' },
+      changes: [{ sceneId: 's1', shotNumber: 1, role: 'startFrame', action: 'moved', fromAssetId: 'early.png', toAssetId: 'floor.png', previousTakeId: 'take-early' }],
+    });
+    const applyPoolMarks = vi.fn();
+    const applyScene = vi.fn();
+    renderPage({ takes: { applyPoolMarks, applyScene } });
+    fireEvent.click(await screen.findByRole('button', { name: /still from shot 1: Splicer close-up/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Bad' }));
+
+    const toastEl = await screen.findByText(/Shot 1 moved to next take/);
+    expect(toastEl).toBeTruthy();
+
+    api.markMusicVideoPoolAssets.mockResolvedValueOnce({ assetMarks: {} });
+    fireEvent.click(screen.getByRole('button', { name: /Undo/i }));
+    await waitFor(() => expect(api.markMusicVideoPoolAssets).toHaveBeenCalledWith('mv-1', [{ kind: 'image', assetId: 'early.png' }], null, { silent: true }));
+    await waitFor(() => expect(api.selectMusicVideoSceneTake).toHaveBeenCalledWith('mv-1', 's1', 'take-early', { silent: true }));
+  });
+
+  // Uniquely catches an in-use file missing the keep-in-use override or the option not being sent.
+  it('offers Mark bad, keep in use for a file currently in use', async () => {
+    renderPage();
+    fireEvent.click(await screen.findByRole('button', { name: /still from shot 2, used on #2/ }));
+    const keepInUseBtn = screen.getByRole('button', { name: 'Mark bad, keep in use' });
+    expect(keepInUseBtn).toBeTruthy();
+    fireEvent.click(keepInUseBtn);
+    await waitFor(() => expect(api.markMusicVideoPoolAssets).toHaveBeenCalledWith(
+      'mv-1',
+      [{ kind: 'image', assetId: 'late.png' }],
+      'bad',
+      { keepInUse: true, silent: true },
+    ));
   });
 });

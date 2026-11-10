@@ -282,9 +282,14 @@ export const getMusicVideoCreditsPrefill = (id, options = {}) => request(`/music
 /** The cutting room floor outro's tally for a video: `{ stats }`. */
 export const getMusicVideoOutroStats = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/stats-outro`, options);
 // Asset manager: mark unused pool items ★ 'ingredient' / ✕ 'bad' (null clears) → { assetMarks }.
-export const markMusicVideoPoolAssets = (id, items, mark, options = {}) => request(`/music-video/${encodeURIComponent(id)}/media-pool/marks`, {
-  method: 'PATCH', body: JSON.stringify({ items, mark }), ...options,
-});
+export const markMusicVideoPoolAssets = (id, items, mark, options = {}) => {
+  const { keepInUse, ...rest } = options;
+  return request(`/music-video/${encodeURIComponent(id)}/media-pool/marks`, {
+    method: 'PATCH',
+    body: JSON.stringify({ items, mark, ...(keepInUse !== undefined ? { keepInUse } : {}) }),
+    ...rest,
+  });
+};
 // Asset manager: delete unused pool items from the media library → { deleted }.
 export const deleteMusicVideoPoolAssets = (id, items, options = {}) => request(`/music-video/${encodeURIComponent(id)}/media-pool/delete`, {
   method: 'POST', body: JSON.stringify({ items }), ...options,
