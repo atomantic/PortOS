@@ -47,7 +47,7 @@ import { diagnosePythonRuntimeText } from '../lib/pythonRuntimeDiagnosis.js';
 import { localRuntimeForProvider } from '../lib/localProviderRuntime.js';
 import { publicReviewProviderBlock, PUBLIC_REVIEW_NO_TOOL_POSTURE } from '../lib/providerVendors.js';
 import { withSpawnCwdEnv } from '../lib/spawnCwd.js';
-import { detectVenvBasePythonSync, createVenv, installPackages } from '../lib/pythonSetup.js';
+import { detectVenvBasePythonSync, createVenv, installLockedRuntime } from '../lib/pythonSetup.js';
 import { safeChildProcessOptions } from '../lib/processEnv.js';
 // Declared in lib/ so `classifyWorktreeDirt` can subtract this scratch without
 // importing this module's provider/runtime graph — see agentScratchPaths.js.
@@ -349,7 +349,7 @@ function probeScript() {
 
 async function isBasePythonSupported(pythonPath) {
   if (!pythonPath) return false;
-  return execFileAsync(pythonPath, ['-c', 'import sys; print("supported" if sys.version_info >= (3, 10) else "unsupported")'],
+  return execFileAsync(pythonPath, ['-c', 'import sys; print("supported" if sys.version_info >= (3, 11) else "unsupported")'],
     safeChildProcessOptions({ env: buildModelAbuseGuardEnv(), timeout: 5_000, maxBuffer: 1000 }))
     .then(({ stdout }) => stdout.trim() === 'supported').catch(() => false);
 }
@@ -466,7 +466,7 @@ export function installModelAbuseGuard({ onEvent } = {}) {
     activeStage = 'packages';
     let packageIssue = null;
     emitInstall(onEvent, 'stage', 'Installing the fixed classifier runtime packages…', 'packages');
-    const packageRun = installPackages(pythonPath, [...MODEL_ABUSE_GUARD_PYTHON_PACKAGES], ({ type, message }) => {
+    const packageRun = installLockedRuntime(pythonPath, 'guard-runtime', ({ type, message }) => {
       const issue = setupIssue(message);
       if (issue.code !== 'runtime-check-failed' && !packageIssue) {
         packageIssue = issue;

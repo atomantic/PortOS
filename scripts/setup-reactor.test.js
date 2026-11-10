@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { readFile, mkdir } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 
 const mocks = vi.hoisted(() => ({ spawn: vi.fn(), fetch: vi.fn() }));
 vi.mock('node:child_process', () => ({ spawnSync: mocks.spawn }));
 vi.mock('node:fs/promises', () => ({ mkdir: vi.fn(), readFile: vi.fn(async () => Buffer.from('archive')), writeFile: vi.fn() }));
-vi.mock('node:crypto', () => ({ createHash: () => ({ update: () => ({ digest: () => '173d95a0c32d18c896c46ba6fafbf3cf9c14ab74b033f81b76c883ef492a976b' }) }) }));
+vi.mock('node:crypto', () => ({ createHash: () => ({ update: () => ({ digest: () => 'f29c3e94ffabd7e6f3ba521dba169a9b7ec12100bf3257087f0f24f6123f3645' }) }) }));
 
 let previousExitCode;
 beforeEach(() => {
@@ -64,4 +65,24 @@ it('redacts unexpected filesystem errors from command-line setup', async () => {
   await vi.waitFor(() => expect(process.exitCode).toBe(1));
   expect(console.error.mock.calls.flat().join(' ')).not.toContain('private');
   expect(mocks.spawn).not.toHaveBeenCalled();
+});
+
+it('installs only from the hash-pinned lock, never by resolving the direct pin', async () => {
+  await import('./setup-reactor.js');
+  await vi.waitFor(() => expect(mocks.spawn).toHaveBeenCalledTimes(4));
+  const install = mocks.spawn.mock.calls[2][1];
+  expect(install).toEqual(expect.arrayContaining(['--require-hashes', '--no-deps', '--only-binary', ':all:']));
+  expect(install.at(-1)).toMatch(/requirements-reactor\.lock\.txt$/);
+  expect(install).not.toContain(expect.stringMatching(/requirements-reactor\.txt$/));
+});
+
+it('locks the direct reactor-sdk pin with a hash and bootstraps a patched uv', () => {
+  const read = (name) => readFileSync(new URL(name, import.meta.url), 'utf8');
+  const pin = read('./requirements-reactor.txt').match(/^reactor-sdk==([0-9.]+)/m)[1];
+  const lock = read('./requirements-reactor.lock.txt');
+  expect(lock).toContain(`reactor-sdk==${pin} ;`);
+  expect(lock).toMatch(/--hash=sha256:[0-9a-f]{64}/);
+  // GHSA-hq85-5cpj-mr62 (compromised CA, wheel extraction) is fixed in uv 0.13.4.
+  const [major, minor, patch] = read('./setup-reactor.js').match(/const version = '(\d+\.\d+\.\d+)'/)[1].split('.').map(Number);
+  expect(major > 0 || minor > 13 || (minor === 13 && patch >= 4)).toBe(true);
 });

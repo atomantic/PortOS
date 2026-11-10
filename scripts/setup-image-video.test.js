@@ -632,6 +632,25 @@ exit 0
   });
 });
 
+// The legacy INSTALL_VIDEO path used to resolve unpinned mlx_vlm / torch /
+// diffusers at install time (#15654). It now installs only the hash-pinned
+// lock on Apple Silicon and refuses every other host with a precise report.
+describe('legacy INSTALL_VIDEO installs only hash-pinned locks', () => {
+  const block = source.slice(source.indexOf('if [[ "$INSTALL_VIDEO" == "1" ]]; then'), source.indexOf('INSTALL_LTX2="${INSTALL_LTX2:-0}"'));
+
+  it('installs the mflux-video lock with --require-hashes --no-deps and never by bare package name', () => {
+    expect(block).toMatch(/pip install --user --require-hashes --no-deps \\\n\s+-r "\$SCRIPT_DIR\/requirements-mflux-video-mlx\.lock\.txt"/);
+    expect(existsSync(join(REPO_ROOT, 'scripts', 'requirements-mflux-video-mlx.lock.txt'))).toBe(true);
+    expect(block).not.toMatch(/pip install --upgrade/);
+    expect(block).not.toMatch(/^\s+(torch|diffusers|accelerate|mlx_vlm|mlx) *\\?$/m);
+  });
+
+  it('refuses hosts without a lock instead of falling back to an unpinned install', () => {
+    expect(block).toContain('has no hash-pinned lock for this platform');
+    expect(block).toContain('exit 1');
+  });
+});
+
 // `uv pip install` picks its target interpreter from VIRTUAL_ENV, then
 // CONDA_PREFIX, and only then the cwd's .venv. On a machine whose login shell
 // activates conda, PortOS inherits CONDA_PREFIX through PM2 and hands it to the

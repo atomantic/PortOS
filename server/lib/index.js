@@ -516,6 +516,8 @@ export * from './openFolder.js';
 export * from './processEnv.js';
 export * from './primaryCheckoutGuard.js';
 export * from './ptySpawnDiagnostics.js';
+export * from './privateUv.js';
+export * from './pythonLockProfiles.js';
 export * from './pythonSetup.js';
 export * from './vttTranscript.js';
 export * as youtubeIngestFormat from './youtubeIngestFormat.js';

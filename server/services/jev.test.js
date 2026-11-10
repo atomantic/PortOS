@@ -26,7 +26,7 @@ vi.mock('./hfDownload.js', () => ({ downloadHfRepo: vi.fn() }));
 vi.mock('../lib/pythonSetup.js', () => ({
   createVenv: vi.fn(),
   detectVenvBasePythonSync: vi.fn(() => null),
-  installPackages: vi.fn(),
+  installLockedRuntime: vi.fn(),
 }));
 
 const MODEL_FILE = '/hf/snapshots/abc/qwen3.5-4b-nli/config.json';

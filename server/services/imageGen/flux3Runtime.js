@@ -5,6 +5,7 @@ import { promisify } from 'node:util';
 import { execFile } from '../../lib/childProcess.js';
 import { PATHS } from '../../lib/fileUtils.js';
 import { isAppleSilicon } from '../../lib/platform.js';
+import { resolvePatchedUv } from '../../lib/pythonSetup.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { runStreamingCommand } from '../../lib/streamingSpawn.js';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -66,19 +67,24 @@ export function installFlux3Runtime(emit) {
   if (problem) throw new ServerError(problem, { status: 400, code: 'MODEL_HARDWARE_UNAVAILABLE' });
   installing = true;
   let cancelled = false;
+  let uv = null;
   const command = async args => {
     if (cancelled) throw new Error('FLUX.3 installation cancelled.');
     // uv supplies a native standalone Python, including when Node runs under Rosetta.
     const native = process.arch !== 'arm64';
-    const result = await runStreamingCommand(native ? '/usr/bin/arch' : 'uv', native ? ['-arm64', 'uv', ...args] : args,
+    const result = await runStreamingCommand(native ? '/usr/bin/arch' : uv, native ? ['-arm64', uv, ...args] : args,
       line => emit({ type: 'log', message: line }), {
         timeoutMs: 30 * 60_000, env: flux3Env(), isCancelled: () => cancelled, processGroup: true,
       });
-    if (!result.success) throw new Error(`FLUX.3 install failed: ${result.error}. Install uv and retry the runtime repair.`);
+    if (!result.success) throw new Error(`FLUX.3 install failed: ${result.error}. Retry the runtime repair.`);
     if (cancelled) throw new Error('FLUX.3 installation cancelled.');
   };
   const promise = (async () => {
     try {
+      // PortOS-private patched uv, never whatever `uv` is on PATH.
+      const resolved = await resolvePatchedUv(event => emit({ type: 'log', message: event.message }));
+      if (!resolved.ok) throw new Error(`FLUX.3 install needs a patched uv: ${resolved.reason}`);
+      uv = resolved.uv;
       emit({ type: 'stage', stage: 'venv', message: 'Creating isolated Python 3.12 environment. No model weights are downloaded.' });
       await command(['venv', '--python', '3.12', '--python-preference', 'only-managed', '--allow-existing', flux3Venv()]);
       const mflux = flux3LockedPins().find(([name]) => name === 'mflux')?.[1];

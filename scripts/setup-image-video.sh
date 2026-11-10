@@ -582,28 +582,43 @@ if [[ "$INSTALL_MFLUX" == "1" ]]; then
 fi
 
 if [[ "$INSTALL_VIDEO" == "1" ]]; then
-  if is_macos; then
+  if is_apple_silicon; then
     echo "📦 Installing video generation packages (mlx-video-with-audio + mlx_vlm)..."
     # NOTE: the package on PyPI named just 'mlx_video' is unrelated (video
     # loading utilities). The LTX-2 generation backend lives at
     # mlx-video-with-audio (provides the `mlx_video.generate_av` module).
-    # Pin >=0.1.35 — earlier versions silently broke I2V on split-format /
+    # Pinned >=0.1.35 — earlier versions silently broke I2V on split-format /
     # quantized models like LTX-2.3 distilled-Q4 by failing to load the VAE
     # encoder, causing the conditioned frame to render as gray fog.
     # Both packages provide an `import mlx_video` module, so a prior install
     # of the wrong one shadows the right one. Uninstall first to remove the
     # ambiguity for users upgrading from earlier setup-image-video.sh runs.
     "$PYTHON_BIN" -m pip uninstall --yes mlx_video >/dev/null 2>&1 || true
-    "$PYTHON_BIN" -m pip install --upgrade --user \
-      mlx \
-      mlx_vlm \
-      "mlx-video-with-audio>=0.1.35"
+    # Installed only from the hash-pinned lock (a superset of the mflux lock,
+    # CPython 3.11+): no install-time resolution, so a new or compromised
+    # transitive release cannot land on the next Repair.
+    VIDEO_PYVER="$("$PYTHON_BIN" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>&1 || true)"
+    case "$VIDEO_PYVER" in
+      3.1[1-9]|3.[2-9][0-9]) ;;
+      *)
+        echo "❌ INSTALL_VIDEO=1 needs Python 3.11+ for its hash-pinned lock; $PYTHON_BIN reports: ${VIDEO_PYVER:-no version}." >&2
+        echo "   Point PYTHON_BIN at a Python 3.11+ and re-run." >&2
+        exit 1
+        ;;
+    esac
+    "$PYTHON_BIN" -m pip install --user --require-hashes --no-deps \
+      -r "$SCRIPT_DIR/requirements-mflux-video-mlx.lock.txt"
+  elif is_macos; then
+    # mlx ships arm64-only wheels and the lock covers only arm64 macOS.
+    echo "⚠️  mlx_video needs Apple Silicon; this Mac has no hash-pinned lock. Skipping the video packages." >&2
   else
-    echo "📦 Installing video generation packages (diffusers + torch)..."
-    "$PYTHON_BIN" -m pip install --upgrade --user \
-      torch \
-      diffusers \
-      accelerate
+    # No hash-pinned lock covers a bare-interpreter torch + diffusers install.
+    # The CUDA video runtimes each own a locked venv instead (INSTALL_LTX25_CUDA,
+    # INSTALL_WAN22_CUDA, INSTALL_MINIMAX_H3_CUDA); this legacy path no longer
+    # resolves unpinned packages.
+    echo "❌ INSTALL_VIDEO=1 has no hash-pinned lock for this platform; unpinned torch/diffusers installs are no longer supported." >&2
+    echo "   Use a locked runtime instead: INSTALL_LTX25_CUDA=1, INSTALL_WAN22_CUDA=1 or INSTALL_MINIMAX_H3_CUDA=1." >&2
+    exit 1
   fi
 fi
 

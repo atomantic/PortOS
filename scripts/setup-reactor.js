@@ -12,14 +12,15 @@ const data = process.env.PORTOS_REACTOR_DATA || join(root, 'data');
 const venv = join(data, 'venvs', 'reactor');
 const windows = process.platform === 'win32';
 const python = join(venv, windows ? 'Scripts/python.exe' : 'bin/python');
-const version = '0.12.10';
+// 0.13.4 is the floor for the compromised-CA and wheel-extraction advisories.
+const version = '0.13.6';
 // Official uv release digests; verify the archive before executing its binary.
 const targets = {
-  'darwin-arm64': ['aarch64-apple-darwin', '51c6170e8e3a01cef9f33b94f582b7b81ac65046f55d40afb35f9cff5a68c179'],
-  'darwin-x64': ['x86_64-apple-darwin', '5296d5aa2b9143360405eea866f8ef4d5dc8986b164eb0dc35e8f876a9304d30'],
-  'linux-arm64': ['aarch64-unknown-linux-gnu', '9ff6b9d4665edcdd3a88dcc73cd1eb641754deb927f14e8c62ebfde6bf4f5f5e'],
-  'linux-x64': ['x86_64-unknown-linux-gnu', '173d95a0c32d18c896c46ba6fafbf3cf9c14ab74b033f81b76c883ef492a976b'],
-  'win32-x64': ['x86_64-pc-windows-msvc', 'f65744f94072152b1f86ba2aace4d01f1124d9a8ecb235805039e3718c36cac2'],
+  'darwin-arm64': ['aarch64-apple-darwin', '60fbd5c8a1ed681845eea28d9d622fcde03c51e91a43465b64a1e17db1ed3472'],
+  'darwin-x64': ['x86_64-apple-darwin', '63ba17fdda55ad1a230d4b37fc6017ffa10c23688c83818bd3bfdf914c652a02'],
+  'linux-arm64': ['aarch64-unknown-linux-gnu', '229e194255c7958d86d56e8790d969a6f74736592133f0dfd0076f754c642c1d'],
+  'linux-x64': ['x86_64-unknown-linux-gnu', 'f29c3e94ffabd7e6f3ba521dba169a9b7ec12100bf3257087f0f24f6123f3645'],
+  'win32-x64': ['x86_64-pc-windows-msvc', 'a2a8820d5eea32f08ef467ef3b7f66883a9b076d5737a2fc2fbb5f458d1bb50f'],
 };
 const env = { ...process.env, UV_PYTHON_INSTALL_DIR: join(data, 'venvs', 'reactor-python'), UV_NO_PROGRESS: '1' };
 function setupError(code) {
@@ -49,7 +50,8 @@ async function setup() {
   const uv = join(directory, ...(windows ? ['uv.exe'] : [`uv-${triple}`, 'uv']));
   // An interrupted installation is repaired in place; no system Python or pip changes.
   run(23, uv, ['venv', '--python', '3.12', '--managed-python', '--allow-existing', venv]);
-  run(24, uv, ['pip', 'install', '--reinstall-package', 'reactor-sdk', '--python', python, '--only-binary', ':all:', '-r', join(root, 'scripts', 'requirements-reactor.txt')]);
+  // The lock is the complete closure: no install-time resolution, every file hash-checked.
+  run(24, uv, ['pip', 'install', '--reinstall-package', 'reactor-sdk', '--python', python, '--only-binary', ':all:', '--require-hashes', '--no-deps', '-r', join(root, 'scripts', 'requirements-reactor.lock.txt')]);
   run(25, python, ['-c', 'from reactor_sdk import Reactor; Reactor("reactor/fast-h3")'], 15_000);
   console.log('✅ Reactor runtime ready');
 }
