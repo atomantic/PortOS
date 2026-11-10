@@ -6,6 +6,7 @@
 // Aliased: `spawnCli`'s promise executor already binds `resolve` in its own scope.
 import { dirname, isAbsolute, resolve as resolvePath } from 'path';
 import { realpath } from 'fs/promises';
+import { createHash } from 'crypto';
 import { spawn } from '../lib/childProcess.js';
 import { execGitSafe } from '../lib/execGit.js';
 import { parseGitRemote, detectForgeCli, pickGhAccountForOwner } from '../lib/gitForge.js';
@@ -310,3 +311,52 @@ export async function resolveForgeTokenEnv(dir, { timeoutMs = 10000, forgeAccoun
     } : {}),
   };
 }
+
+// Scope probe results, keyed by a digest of the token so the secret itself is
+// never a map key or logged. A token's scopes only change on re-auth, which
+// mints a different token, so a process-lifetime cache is safe.
+const scopeStatusCache = new Map();
+const WORKFLOW_SCOPE_REMEDY = 'gh auth refresh -h github.com -s workflow';
+
+/**
+ * Parse the `X-OAuth-Scopes` header out of `gh api -i` output.
+ * Returns an array of scopes, or `null` when the header is absent (fine-grained
+ * and app tokens carry none, so absence means "unknown", never "granted").
+ */
+export function parseOAuthScopes(output) {
+  const match = /^x-oauth-scopes:[ \t]*(.*)$/im.exec(output || '');
+  if (!match) return null;
+  return match[1].split(',').map((s) => s.trim()).filter(Boolean);
+}
+
+/**
+ * Whether the forge token an agent would receive can merge changes to
+ * `.github/workflows/**`. GitHub refuses those merges for an OAuth token
+ * without the `workflow` scope, surfacing only as a generic "base branch
+ * policy" error at merge time.
+ *
+ * @returns {Promise<{ status: 'granted'|'missing'|'unknown', remedy?: string }>}
+ */
+export async function getWorkflowScopeStatus(dir, { timeoutMs = DEFAULT_SPAWN_CLI_TIMEOUT_MS } = {}) {
+  const forge = await resolveForgeForRepo(dir, { timeoutMs }).catch(() => null);
+  const key = forge?.host ? tokenKeyForHost(forge.host) : null;
+  const token = key && forge.env !== process.env ? forge.env?.[key] : null;
+  if (!token) return { status: 'unknown' };
+  const digest = createHash('sha256').update(token).digest('hex');
+  const cached = scopeStatusCache.get(digest);
+  if (cached) return cached;
+
+  const { code, stdout } = await spawnCli('gh', ['api', '-i', 'user', '--hostname', forge.host], timeoutMs, undefined, ghHostEnv(forge.host, token));
+  const scopes = code === 0 ? parseOAuthScopes(stdout) : null;
+  const result = !scopes ? { status: 'unknown' }
+    : scopes.includes('workflow') ? { status: 'granted' }
+    : { status: 'missing', remedy: WORKFLOW_SCOPE_REMEDY };
+  // Unknown is a transient or unreadable answer: do not pin it for the process.
+  if (result.status !== 'unknown') scopeStatusCache.set(digest, result);
+  if (result.status === 'missing') {
+    console.log(`⚠️ Forge token for ${forge.host} lacks the workflow scope; PRs touching .github/workflows cannot be merged by agents. Fix: ${WORKFLOW_SCOPE_REMEDY}`);
+  }
+  return result;
+}
+
+export function __resetWorkflowScopeCache() { scopeStatusCache.clear(); }

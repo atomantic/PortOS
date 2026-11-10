@@ -17,7 +17,7 @@ vi.mock('../lib/windowsGitProcess.js', async importOriginal => ({
   ...await importOriginal(), startGit: (args, options, wire) => wire(spawn('git', args, options)),
 }));
 import { listForgePinnedApps } from './agentAppWorkspace.js';
-import { resolveForgeForRepo, resolveForgeTokenEnv } from './forgeAuth.js';
+import { resolveForgeForRepo, resolveForgeTokenEnv, getWorkflowScopeStatus, __resetWorkflowScopeCache } from './forgeAuth.js';
 import { resolveForgeExecOptions } from './forgeExecOptions.js';
 import { getAccount, resolveGitHubAccountEnv } from './githubAccounts.js';
 import { execGh } from './github.js';
@@ -450,4 +450,30 @@ it('refuses an unresolved pin lookup and never starts late probes after its budg
   finishRegistryRead([]);
   await vi.advanceTimersByTimeAsync(0);
   expect(spawn).not.toHaveBeenCalled();
+});
+
+describe('workflow scope probe', () => {
+  const probe = async (headers, code = 0) => {
+    __resetWorkflowScopeCache();
+    githubAccount();
+    respond({ stdout: headers, code });
+    return getWorkflowScopeStatus('/example/repo');
+  };
+
+  it('reports granted when the header lists workflow', async () => {
+    await expect(probe('HTTP/2.0 200 OK\nX-Oauth-Scopes: repo, workflow\n\n{}')).resolves.toEqual({ status: 'granted' });
+  });
+
+  it('reports missing with the remedy and never logs the token', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const result = await probe('HTTP/2.0 200 OK\nX-Oauth-Scopes: repo, read:org, gist\n\n{}');
+    expect(result).toEqual({ status: 'missing', remedy: 'gh auth refresh -h github.com -s workflow' });
+    expect(log.mock.calls.map((c) => c.join(' ')).join('\n')).not.toContain('test-owner-token');
+    log.mockRestore();
+  });
+
+  it('reports unknown, never granted, for an absent header or failed call', async () => {
+    await expect(probe('HTTP/2.0 200 OK\n\n{}')).resolves.toEqual({ status: 'unknown' });
+    await expect(probe('', 1)).resolves.toEqual({ status: 'unknown' });
+  });
 });

@@ -689,7 +689,7 @@ function buildMergeAdmissionBody(agentId, { review }) {
   ].join('\n');
 }
 
-export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = null, reviewersCsv = '', prStaysOpen = false, rawPrCompletion = null, claimResume = null, agentId = null, autoMerge = false } = {}) {
+export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = null, reviewersCsv = '', prStaysOpen = false, rawPrCompletion = null, claimResume = null, agentId = null, autoMerge = false, workflowScope = null } = {}) {
   const isMergeOnGreen = rawPrCompletion === PR_COMPLETIONS.MERGE_ON_GREEN;
   const pin = isMergeOnGreen ? '' : buildReviewerPinNote(reviewersCsv);
   const resumeOverride = buildClaimResumeOverride(claimResume || {});
@@ -698,6 +698,11 @@ export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = 
     ...(pin ? [pin, ''] : []),
     ...(!isMergeOnGreen ? [`**One-time local review lifecycle (overrides claim/delegated head-invalidation guidance):** Before Phase 5 or any local reviewer, read \`${LOCAL_REVIEW_LIFECYCLE_GUIDE}\` and apply its resume gate in the actual claim worktree. Use \`${LOCAL_REVIEW_LIFECYCLE_SCRIPT}\` to check/complete/publish the durable receipt for the resolved base and exact PR/MR. Keep each successful reviewer's private outcome through interrupted/blocked phases. Once this delivery's local phase completes, GitHub/GitLab feedback or CI pushes do not restart it. Preserve original reviewed-head and model evidence; required current-head hosted approvals/CI remain mandatory.`, ''] : []),
     buildClaimOwnershipSection(agentId), '',
+    ...(workflowScope?.status === 'missing' ? [
+      '## Forge token lacks the `workflow` scope',
+      `The GitHub token PortOS gave this run has no \`workflow\` scope, so GitHub refuses to merge (or auto-merge) a PR that changes \`.github/workflows/**\`, reporting only a generic "base branch policy" error. If your PR touches \`.github/workflows/**\`, skip every merge and auto-merge attempt: publish it, wait for required CI, then leave it OPEN as an explicit human-merge handoff that names the missing scope and the fix (\`${workflowScope.remedy}\`). Keep the issue, claim markers and checkout. PRs that do not touch workflow files merge normally.`,
+      '',
+    ] : []),
     ...(!prStaysOpen ? [buildAutoMergeHandoffInstructions('"<PR_URL>"', { review: !isMergeOnGreen }), '', buildMergeAdmissionSection(agentId, { review: !isMergeOnGreen, autoMerge }), ''] : []),
     '## Claim Workflow Handoff',
     ...(prStaysOpen ? [

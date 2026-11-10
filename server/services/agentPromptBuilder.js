@@ -396,6 +396,15 @@ async function pinAutoMergeChoice(task) {
   return { ...task, metadata: { ...task.metadata, useAutoMerge } };
 }
 
+// A claim that merges its own PR needs to know up front whether the forge token
+// can merge workflow-file changes (#15680). Probe only for claim flows.
+async function attachWorkflowScope(task, workspaceDir) {
+  if (!isClaimFlowTask(task) || task.metadata?.forgeWorkflowScope) return task;
+  const { getWorkflowScopeStatus } = await import('./forgeAuth.js');
+  const forgeWorkflowScope = await getWorkflowScopeStatus(workspaceDir).catch(() => ({ status: 'unknown' }));
+  return { ...task, metadata: { ...task.metadata, forgeWorkflowScope } };
+}
+
 export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo = null, options = {}) {
   // Undo the queue-path description/context split so a round-tripped generated
   // prompt (swarm, scheduled claim-work, other system tasks) renders once
@@ -410,6 +419,7 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   task = fillReconcileAgentId(task, options.agentId);
 
   task = await pinAutoMergeChoice(task);
+  task = await attachWorkflowScope(task, workspaceDir);
 
   // Feature-agent tasks carry only a compact queue description. Expand the
   // persisted persona briefing at spawn time so scheduled and manually
@@ -638,6 +648,7 @@ ${buildResumeSection(task, worktreeInfo)}` : '';
       claimResume: claimResumeContext(task, worktreeInfo),
       agentId,
       autoMerge: usesAutoMerge(task),
+      workflowScope: task.metadata?.forgeWorkflowScope || null,
     }),
     [COMPLETION_MODES.AUDIT_FLOW]: () => buildAuditFlowCompletionSection({ isTui, sentinelPath }),
     [COMPLETION_MODES.RECONCILE_FLOW]: () => buildReconcileFlowCompletionSection({ sentinelPath }),
@@ -1216,6 +1227,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = t
       claimResume: claimResumeContext(task, worktreeInfo),
       agentId,
       autoMerge: usesAutoMerge(task),
+      workflowScope: task.metadata?.forgeWorkflowScope || null,
     })),
     [COMPLETION_MODES.READ_ONLY]: () => contractSections.push(buildReadOnlyCompletionSection({ isTui, sentinelPath: lightSentinelPath() })),
     [COMPLETION_MODES.REVIEW_LOOP_FOLLOW_UP]: () => {

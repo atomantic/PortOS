@@ -220,3 +220,14 @@ describe('claim flow Use auto-merge', () => {
     expect(buildClaimFlowCompletionSection({ agentId: 'example-claim', autoMerge: true, prStaysOpen: true })).not.toContain('## Use auto-merge');
   });
 });
+
+describe('claim flow workflow-scope handoff', () => {
+  it('names the missing scope only when the probe reports it missing', () => {
+    const missing = buildClaimFlowCompletionSection({ rawPrCompletion: 'merge-on-green', workflowScope: { status: 'missing', remedy: 'gh auth refresh -h github.com -s workflow' } });
+    expect(missing).toContain('lacks the `workflow` scope');
+    expect(missing).toContain('gh auth refresh -h github.com -s workflow');
+    for (const status of ['granted', 'unknown']) {
+      expect(buildClaimFlowCompletionSection({ rawPrCompletion: 'merge-on-green', workflowScope: { status } })).not.toContain('lacks the `workflow` scope');
+    }
+  });
+});
