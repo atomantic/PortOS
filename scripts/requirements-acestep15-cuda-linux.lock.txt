@@ -2666,9 +2666,9 @@ tqdm==4.70.1 \
     --hash=sha256:c293e525e6fef9c20e8728fd4612df02a0aa31bb5fe91ecd93e123b1b7bffa73 \
     --hash=sha256:cefd0eca11b2a37a3aee776544d4f4ae913f02688135b5556b8788dfa474afc4
     # via huggingface-hub, lightning, lycoris-lora, modelscope, modelscope-hub, peft, pytorch-lightning, transformers
-transformers==5.22.1 \
-    --hash=sha256:bed9fd76d6f43b4a1a9fc5d0c565ace7c77edbd029784f8cbcdf772cb5e924d8 \
-    --hash=sha256:c940b4bf98de4f568723895f330ba1460a398bd83061b93b70238c3fe32e4389
+transformers==5.10.1 \
+    --hash=sha256:31112d1dcdfcf9934242acbba891f44e2279ff74b9b8ba4595640e0e04195a3a \
+    --hash=sha256:ccb919ea1b77338b44d0d45d23f7472081906b1bb6ed8e5f5cf4d692d1da03d4
     # via peft, -r scripts/requirements-acestep15-cuda.txt
 triton==3.8.0 \
     --hash=sha256:07a88b13e4f7e8b1769094238ab75109a5db2a8160a24ddc49c24d2efa44cb58 \

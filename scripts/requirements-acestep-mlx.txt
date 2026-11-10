@@ -13,7 +13,7 @@ torchvision==0.29.2
 torchaudio==2.11.1
 accelerate==1.15.0
 diffusers==0.42.1
-transformers==5.22.1
+transformers==5.10.1
 huggingface-hub[hf_xet]==2.4.0
 sentencepiece==0.2.2
 peft==0.21.2

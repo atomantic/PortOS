@@ -4,7 +4,7 @@
 torch==2.14.1+cu126
 torchvision==0.29.1+cu126
 diffusers==0.42.0
-transformers==5.22.1
+transformers==5.10.1
 accelerate==1.15.0
 huggingface-hub==1.33.0
 hf-xet==1.8.0

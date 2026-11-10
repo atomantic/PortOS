@@ -13,7 +13,7 @@ soxr
 torch>=2.7,<2.8
 torchaudio>=2.7,<2.8
 torchvision>=0.22,<0.23
-transformers>=4.52.0,<5
+transformers>=5.10.1,<6
 qwen-omni-utils>=0.0.9
 omegaconf>=2.3.0
 torchdiffeq

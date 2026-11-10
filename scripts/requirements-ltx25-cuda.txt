@@ -6,7 +6,7 @@ torchaudio==2.11.1+cu132
 torchvision==0.29.1+cu132
 ltx-core @ https://github.com/Lightricks/LTX-2/archive/d151147788a9284cca791edc6ce898007e727fe6.tar.gz#subdirectory=packages/ltx-core
 ltx-pipelines @ https://github.com/Lightricks/LTX-2/archive/d151147788a9284cca791edc6ce898007e727fe6.tar.gz#subdirectory=packages/ltx-pipelines
-transformers==5.14.1
+transformers==5.10.1
 accelerate==1.15.0
 huggingface-hub==1.33.0
 pillow==13.0.0

@@ -1704,9 +1704,9 @@ tqdm==4.70.1 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:c293e525e6fef9c20e8728fd4612df02a0aa31bb5fe91ecd93e123b1b7bffa73 \
     --hash=sha256:cefd0eca11b2a37a3aee776544d4f4ae913f02688135b5556b8788dfa474afc4
     # via huggingface-hub, transformers
-transformers==4.57.6 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
-    --hash=sha256:4c9e9de11333ddfe5114bc872c9f370509198acf0b87a832a0ab9458e2bd0550 \
-    --hash=sha256:55e44126ece9dc0a291521b7e5492b572e6ef2766338a610b9ab5afbb70689d3
+transformers==5.10.1 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
+    --hash=sha256:31112d1dcdfcf9934242acbba891f44e2279ff74b9b8ba4595640e0e04195a3a \
+    --hash=sha256:ccb919ea1b77338b44d0d45d23f7472081906b1bb6ed8e5f5cf4d692d1da03d4
     # via -r requirements-auk-mlx.txt
 typing-extensions==4.16.0 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8 \

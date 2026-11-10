@@ -2879,9 +2879,9 @@ tqdm==4.70.1 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:c293e525e6fef9c20e8728fd4612df02a0aa31bb5fe91ecd93e123b1b7bffa73 \
     --hash=sha256:cefd0eca11b2a37a3aee776544d4f4ae913f02688135b5556b8788dfa474afc4
     # via datasets, huggingface-hub, peft, transformers, -r requirements-fastvideo-mlx.txt
-transformers==5.15.1 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
-    --hash=sha256:27c996bd9075ddc82d40f8590dfdc81ea45f611bfca477e0db5d7fd257a482f7 \
-    --hash=sha256:b7cdf238ff583e3a58dbc7fa34da1aaf091ce063141f65a30538160bd5afe93f
+transformers==5.10.1 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
+    --hash=sha256:31112d1dcdfcf9934242acbba891f44e2279ff74b9b8ba4595640e0e04195a3a \
+    --hash=sha256:ccb919ea1b77338b44d0d45d23f7472081906b1bb6ed8e5f5cf4d692d1da03d4
     # via peft, -r requirements-fastvideo-mlx.txt
 typer==0.27.3 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:d0396f770a560ab1b0a8504e13b5f254b728cedb05c61cf0359e944e50ce8901 \

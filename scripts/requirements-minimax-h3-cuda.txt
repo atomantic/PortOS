@@ -6,7 +6,7 @@ torchvision==0.29.1+cu126
 diffusers==0.42.0
 # Int8WeightOnlyConfig(version=2) supports pinnable streamed-offload tensors.
 torchao==0.18.0
-transformers==5.22.1
+transformers==5.10.1
 # OSV's GHSA-4j2p-28q2-5m79 range ends at 1.14.0. Keep the checkpoint index
 # guard: absence of an OSV match does not establish upstream path validation.
 accelerate==1.15.0

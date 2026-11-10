@@ -824,9 +824,9 @@ tqdm==4.70.1 ; (platform_machine == 'arm64' and sys_platform == 'darwin') or (pl
     --hash=sha256:c293e525e6fef9c20e8728fd4612df02a0aa31bb5fe91ecd93e123b1b7bffa73 \
     --hash=sha256:cefd0eca11b2a37a3aee776544d4f4ae913f02688135b5556b8788dfa474afc4
     # via huggingface-hub, transformers
-transformers==5.16.1 ; (platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') \
-    --hash=sha256:17b0eac726ddc55e84ac58946063e0c6d37fd000c456b581f050ea0f4e822869 \
-    --hash=sha256:2f2d5b98a5ad3718713653734298fa620754ed683702a635ebb587df3ed29c7e
+transformers==5.10.1 ; (platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') \
+    --hash=sha256:31112d1dcdfcf9934242acbba891f44e2279ff74b9b8ba4595640e0e04195a3a \
+    --hash=sha256:ccb919ea1b77338b44d0d45d23f7472081906b1bb6ed8e5f5cf4d692d1da03d4
     # via -r requirements-guard-runtime.txt
 triton==3.8.0 ; (python_full_version < '3.15' and platform_machine == 'aarch64' and sys_platform == 'linux') or (python_full_version < '3.15' and platform_machine == 'x86_64' and sys_platform == 'linux') \
     --hash=sha256:1b84e7d512490ba529111260fa6f7cad8b254a6bb5fbdf41d5ef9a5e57f52d0a \
