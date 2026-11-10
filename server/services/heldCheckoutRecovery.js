@@ -562,10 +562,34 @@ async function preservePublishedSourceReview(repoPath, tree, forge, content, adm
     recoveryHeads: [...roots].sort(), omitted: 'clean-index-and-checkout-pointers-reconstructible; recognized-module-cache-disposable' };
 }
 
+/** Exact merged delivery makes checkout bytes disposable, including initialized
+ * submodules and their private Git objects. Bind the physical generation instead
+ * of applying source-preservation budgets to files we will never preserve. */
+async function snapshotDeliveredCheckout(path, work) {
+  const identity = await previewCheckoutIdentity(path);
+  if (!identity) throw new Error('retirement-checkout-identity-unavailable');
+  const symlinks = [];
+  const links = new Set();
+  // Keep Git's complete link listing: --directory hides junctions beneath an
+  // untracked parent. Inspect targets without reading bytes or following links.
+  const others = await git(['ls-files', '--others', '-z'], path);
+  for (const listed of zLines(others)) {
+    const { rel, info } = await listedContentEntry(path, listed, work);
+    if (!info.isSymbolicLink() || links.has(rel)) continue;
+    const link = { path: rel, target: archiveText(await readlink(join(path, rel), { encoding: 'buffer' })) };
+    work.add(link);
+    links.add(rel);
+    symlinks.push(link);
+  }
+  return [{ fingerprint: evidenceHash('exact-merged-delivery-disposable'), symlinks },
+    { fingerprint: evidenceHash(identity) }];
+}
+
 async function buildCurrentCheckoutReview({ repoPath, release, prUrl, kind }, { tree, forge, policy }, opts, captureContent) {
   const { buildCheckoutRetirementReview } = await import('./heldCheckoutReview.js');
   const work = archiveWork(opts.signal);
-  return archiveSnapshots(tree, work, !kind)
+  const exactDelivery = !kind && forge.prHead === release.head && forge.scopeProof === 'exact-delivered-head';
+  return (exactDelivery ? snapshotDeliveredCheckout(tree.path, work) : archiveSnapshots(tree, work, !kind))
     .then(async ([content, administration]) => {
       const preservedSource = kind === 'preserved-supersession'
         ? await preservePublishedSourceReview(repoPath, tree, forge, content, administration, opts.signal, opts.retainMissingSource === true) : null;
@@ -1353,7 +1377,7 @@ export async function fetchRetirementProofObjects(repoPath, release, prUrl, expe
 /** Finish only the checkout named by a trusted pending-merge receipt. Unlike an
  * operator release, this never unlocks a checkout or accepts supersession. Fresh
  * forge evidence must independently prove the exact handed-off head merged and
- * remains integrated. Initialized submodules stay held for explicit recovery.
+ * remains integrated. Exact merged deliveries also discard initialized submodules.
  */
 export async function retirePendingMergeCheckout({ repoPath, release, prUrl, expectedHeadSha }, opts = {}) {
   if (!release || release.locked !== false || release.lockReason !== null) return { ok: false, reason: 'receipt-checkout-locked' };
