@@ -211,11 +211,13 @@ describe.skipIf(process.platform === 'win32')('CI DB tool installation', () => {
       expect(identify).toContain(`PG_MAJOR: '${serviceMajor}'`);
       expect(install).toContain(`PG_MAJOR: '${serviceMajor}'`);
       expect(identify).toContain('. /etc/os-release');
-      expect(identify).toContain('apt-debs-v1-${ID}-${VERSION_ID}-$(dpkg --print-architecture)-pg${PG_MAJOR}-${{ hashFiles(\'scripts/ci-install-db-tools.sh\') }}');
+      expect(identify).toContain('prefix="apt-debs-v1-${ID}-${VERSION_ID}-$(dpkg --print-architecture)-pg${PG_MAJOR}-${{ hashFiles(\'scripts/ci-install-db-tools.sh\') }}-"');
+      expect(identify).toContain('echo "prefix=$prefix" >> "$GITHUB_OUTPUT"');
+      expect(identify).toContain('echo "key=${prefix}$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"');
       expect(cache).toContain('uses: actions/cache@');
       expect(cache).toContain('path: ${{ runner.temp }}/portos-apt-packages/*.deb');
       expect(cache).toContain('key: ${{ steps.apt-cache.outputs.key }}');
-      expect(cache).not.toContain('restore-keys:');
+      expect(cache).toContain('restore-keys: ${{ steps.apt-cache.outputs.prefix }}');
       expect(install).toContain('APT_PACKAGE_CACHE: ${{ runner.temp }}/portos-apt-packages');
       expect(install).toContain('run: bash scripts/ci-install-db-tools.sh');
       expect(install).not.toContain('if:');

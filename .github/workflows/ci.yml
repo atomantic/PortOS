@@ -792,13 +792,17 @@ jobs:
           PG_MAJOR: '17'
         run: |
           . /etc/os-release
-          echo "key=apt-debs-v1-${ID}-${VERSION_ID}-$(dpkg --print-architecture)-pg${PG_MAJOR}-${{ hashFiles('scripts/ci-install-db-tools.sh') }}" >> "$GITHUB_OUTPUT"
+          prefix="apt-debs-v1-${ID}-${VERSION_ID}-$(dpkg --print-architecture)-pg${PG_MAJOR}-${{ hashFiles('scripts/ci-install-db-tools.sh') }}-"
+          echo "prefix=$prefix" >> "$GITHUB_OUTPUT"
+          # Refresh immutable entries daily as signed package indexes evolve.
+          echo "key=${prefix}$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
 
       - name: Cache APT package downloads
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/portos-apt-packages/*.deb
           key: ${{ steps.apt-cache.outputs.key }}
+          restore-keys: ${{ steps.apt-cache.outputs.prefix }}
 
       # pg_dump must match the service major. Preserve bounded mirror fallback
       # on a miss; this timeout backs up the helper's 390-second download budget.
@@ -983,13 +987,17 @@ jobs:
           PG_MAJOR: '17'
         run: |
           . /etc/os-release
-          echo "key=apt-debs-v1-${ID}-${VERSION_ID}-$(dpkg --print-architecture)-pg${PG_MAJOR}-${{ hashFiles('scripts/ci-install-db-tools.sh') }}" >> "$GITHUB_OUTPUT"
+          prefix="apt-debs-v1-${ID}-${VERSION_ID}-$(dpkg --print-architecture)-pg${PG_MAJOR}-${{ hashFiles('scripts/ci-install-db-tools.sh') }}-"
+          echo "prefix=$prefix" >> "$GITHUB_OUTPUT"
+          # Refresh immutable entries daily as signed package indexes evolve.
+          echo "key=${prefix}$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
 
       - name: Cache APT package downloads
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/portos-apt-packages/*.deb
           key: ${{ steps.apt-cache.outputs.key }}
+          restore-keys: ${{ steps.apt-cache.outputs.prefix }}
 
       # pg_dump must match the service major. Preserve bounded mirror fallback
       # on a miss; this timeout backs up the helper's 390-second download budget.
