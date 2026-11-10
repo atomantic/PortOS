@@ -470,6 +470,8 @@ symlinks, special files, traversal names and the reserved names below
 `/api/music-video/:id/composition/document`: `GET` (manifest), `POST /zip`
 (multipart `file`), `POST /directory` (`{ directory }`), `POST /template`
 (`{ template: "layered" }`), `GET /export` (zip), `GET /preview`,
+`GET /playback` (`{ native, reason? }`: whether the document is the unmodified
+shipped template),
 `GET /file?path=` (one document file, served inert), `DELETE` (detach).
 
 Every render of the project — the final render, a draft excerpt, its contact
@@ -640,6 +642,15 @@ WebSocket collector, including a nested srcdoc, and treats a silent negative
 control (no jail) as an invalid proof. DNS is not proven by binding port 53.
 On macOS the same profile must make `getaddrinfo` fail for a name that resolves
 outside the jail, because the system resolver would send that query itself.
+
+One document is exempt from running in the worker while it plays: the unmodified
+shipped layered template. It carries no authored code, which the server proves
+by matching its engine, entrypoint, helpers and fonts byte for byte
+(`shippedLayeredDocument`). The dock plays such a project's selected takes in
+the page with the storyboard animatic's player and opens the worker only for
+the exact frame of a paused, scrubbed, stepped or saved moment. The page still
+never loads the document. Every other document keeps the worker for playback
+too. Design record: [native composition preview](plans/2026-11-09-native-composition-preview.md).
 
 Seek, film look, and the title card go over the private render protocol.
 Project media stays on the server (`streamMedia`); the client never fetches it

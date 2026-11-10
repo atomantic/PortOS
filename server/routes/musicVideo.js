@@ -208,6 +208,7 @@ import {
   detachDocument,
   discardGeneratedDocument,
   documentMimeType,
+  documentNativePlayback,
   exportDocumentZip,
   importDocumentDirectory,
   importDocumentTemplate,
@@ -1146,6 +1147,11 @@ router.get('/:id/composition/document/export', asyncHandler(async (req, res) => 
   res.set('Content-Type', 'application/zip');
   res.set('Content-Disposition', `attachment; filename="${filename}"`);
   res.send(zip);
+}));
+
+// Whether the document is the unmodified shipped template, whose scenes may play in the page itself.
+router.get('/:id/composition/document/playback', asyncHandler(async (req, res) => {
+  res.json(await documentNativePlayback(await requireProject(req.params.id)));
 }));
 
 router.get('/:id/composition/document/preview', asyncHandler(async (req, res) => {

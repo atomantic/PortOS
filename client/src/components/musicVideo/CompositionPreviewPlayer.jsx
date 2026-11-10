@@ -51,6 +51,18 @@ const shotEffectsVersion = (project) => {
   return `fx-${key.length.toString(36)}-${hashString(key).toString(36)}`;
 };
 
+/** The reopen key of a project's live document preview, or null without a document. */
+export const documentPreviewRevision = (project, { draft = false } = {}) => {
+  const doc = draft ? project.composition?.documentDraft : project.composition?.document;
+  return doc ? `${doc.directory}|${doc.updatedAt || ''}${project.lyricOverlayEnabled === false ? '|lyrics-off' : ''}|${shotEffectsVersion(project)}` : null;
+};
+
+const shotLooksAvailable = (project) => (project.scenes || []).some(scene => !isFilmLookNeutral(scene.filmLook))
+  || (project.cameras || []).some(camera => !isFilmLookNeutral(camera.filmLook));
+
+/** The film look a document preview sends its worker: the video's, a neutral base under per-shot looks, or none. */
+export const documentPreviewLook = (project, lookOn) => (lookOn ? (project.filmLook ?? (shotLooksAvailable(project) ? { preset: 'none' } : null)) : null);
+
 // Why the server plays this document by exact per-frame seeks instead of smooth native playback.
 const FALLBACK_REASONS = {
   'unrecognized-engine': 'its engine was customized',
@@ -129,12 +141,11 @@ export default function CompositionPreviewPlayer({ project, audioUrl, seekReques
   const [lookOn, toggleLook] = usePreviewFilmLook();
   useEffect(() => { reportedAudioError.current = false; setAudioError(''); }, [audioUrl]);
   const appliedSeek = useRef(null);
-  const shotLookAvailable = (project.scenes || []).some(scene => !isFilmLookNeutral(scene.filmLook))
-    || (project.cameras || []).some(camera => !isFilmLookNeutral(camera.filmLook));
-  const filmLook = !lyrics && lookOn ? (project.filmLook ?? (shotLookAvailable ? { preset: 'none' } : null)) : null;
+  const shotLookAvailable = shotLooksAvailable(project);
+  const filmLook = lyrics ? null : documentPreviewLook(project, lookOn);
   const lookAvailable = !lyrics && (!isFilmLookNeutral(project.filmLook) || shotLookAvailable);
   const titleCard = useMemo(() => normalizeTitleCard(project.titleCard), [project.titleCard]);
-  const revision = lyrics ? playthroughVersion(project) : doc ? `${doc.directory}|${doc.updatedAt || ''}${project.lyricOverlayEnabled === false ? '|lyrics-off' : ''}|${shotEffectsVersion(project)}` : null;
+  const revision = lyrics ? playthroughVersion(project) : documentPreviewRevision(project, { draft });
   const request = useMemo(() => {
     if (!wanted || !revision || !doc) return null;
     return {

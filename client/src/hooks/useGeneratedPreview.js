@@ -72,7 +72,8 @@ export default function useGeneratedPreview({ active, request, controls = null }
     }
   }, []);
 
-  const commitFrame = useCallback((entry) => {
+  // `shown` is state that must land with the picture, such as its song time.
+  const commitFrame = useCallback((entry, shown = null) => {
     const previous = frameUrls.current.get(frameUrl.current);
     if (previous && previous !== entry) previous.retired = true;
     entry.retired = false;
@@ -80,7 +81,7 @@ export default function useGeneratedPreview({ active, request, controls = null }
     retireUrls();
     const show = () => {
       entry.loader = null;
-      if (mounted.current && frameUrl.current === entry.url) setState((prev) => ({ ...prev, frameUrl: entry.url }));
+      if (mounted.current && frameUrl.current === entry.url) setState((prev) => ({ ...prev, ...shown, frameUrl: entry.url }));
     };
     // WebKit paints an <img> empty between a src change and the new picture's
     // decode, so every frame flashed the container through (#15616). Decode
@@ -476,8 +477,8 @@ export default function useGeneratedPreview({ active, request, controls = null }
       if (!mounted.current) { entry.retired = true; retireUrls(); return; }
       const opened = !!current.sessionId;
       if (opened) { stoppedStatus = null; current.hasError = false; }
-      commitFrame(entry);
-      setState((prev) => ({ ...prev, frameTime, ...(opened ? { status: 'ready', ready: true } : {}) }));
+      commitFrame(entry, { frameTime });
+      if (opened) setState((prev) => ({ ...prev, status: 'ready', ready: true }));
     };
     const onUnavailable = (payload) => {
       if (!mine(payload) || !mounted.current) return;

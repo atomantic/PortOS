@@ -602,6 +602,19 @@ async function requireDocument(project) {
   return dir;
 }
 
+/**
+ * Whether the project's composition document can play in the viewer's browser:
+ * `{ native: true }` for the unmodified shipped layered template, else
+ * `{ native: false, reason }`. Authored or customized documents stay in the
+ * isolated preview worker.
+ */
+export async function documentNativePlayback(project) {
+  if (project?.composition?.mode !== 'document' || !(await documentAvailable(project))) return { native: false, reason: 'no-document' };
+  const { shippedLayeredDocument } = await import('./documentPreviewPlayback.js');
+  const result = await shippedLayeredDocument(resolveDocumentDirectory(project.composition.document));
+  return result.shipped ? { native: true } : { native: false, reason: result.reason };
+}
+
 /** The document's file list: `{ document, files: [{ path, bytes }], totalBytes }`. */
 export async function readDocumentManifest(project) {
   const document = project?.composition?.document || null;

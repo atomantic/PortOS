@@ -249,6 +249,16 @@ describe('music-video composition documents', () => {
     expect((await projects.getProject(project.id)).composition.document.directory).toBe(directory);
   });
 
+  // Uniquely catches an imported or customized document being cleared to play in the viewer's own browser.
+  it('allows native playback only for the unmodified shipped template', async () => {
+    const playback = `/api/music-video/${project.id}/composition/document/playback`;
+    expect((await request(app).get(playback)).body).toEqual({ native: false, reason: 'no-document' });
+    expect((await uploadZip(project.id, createZip(Object.entries(FILES).map(([name, data]) => ({ name, data }))))).status).toBe(201);
+    expect((await request(app).get(playback)).body).toEqual({ native: false, reason: 'unrecognized-entrypoint' });
+    expect((await request(app).post(`/api/music-video/${project.id}/composition/document/template`).send({})).status).toBe(201);
+    expect((await request(app).get(playback)).body).toEqual({ native: true });
+  });
+
   it('reports selected effects as unsupported until the recognized engine is explicitly updated', async () => {
     const legacy = await readFile(new URL('./fixtures/musicVideoLayeredEngineBeforeEffects.js', import.meta.url));
     const index = '<!doctype html><script src="portos-mv.js"></script><script src="engine.js"></script>';

@@ -57,6 +57,8 @@ vi.mock('../hooks/useMusicVideoProductionReview.js', () => ({ default: ({ projec
 }) }));
 
 vi.mock('../services/apiMusicVideo.js', () => ({
+  // The dock asks before it plays a document; these projects stay in the isolated worker.
+  getMusicVideoCompositionPlayback: vi.fn(async () => ({ native: false })),
   // Never settles: the create drawer's character-style list is covered in TrackSelectors.test.jsx.
   listMusicVideoCharacterStyles: vi.fn(() => new Promise(() => {})),
   getMusicVideoMakingOfCatalog: vi.fn(async id => ({ project: { id, name: 'Example making-of project', version: 1 }, snapshot: 'a'.repeat(64), assets: [] })),
