@@ -155,7 +155,7 @@ export const TARGET_ADAPTERS = Object.freeze({
     // avoids anonymous rate limits during its first explicit render.
     resolveEnv: hfChildEnv,
     async install({ onEvent = () => {}, env } = {}) {
-      // The fork's setup script refuses to start unless `xcrun metal` is available.
+      // The native setup requires a working `xcrun metal` toolchain.
       // Reuse the existing toolchain preflight so a full-Xcode host can fetch the
       // optional component before the native packages compile, while a Command-Line-
       // Tools-only host receives the same actionable Xcode guidance as TRELLIS.2.

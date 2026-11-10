@@ -20,6 +20,7 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 | [ACESTEP_CUDA.md](./ACESTEP_CUDA.md) | ACE-Step Windows/Linux hash locks, pinned-checkout install, regeneration, advisory scans and NVIDIA readiness evidence |
 | [FLUX2_CUDA.md](./FLUX2_CUDA.md) | FLUX.2 / Qwen-Image 2.1 Windows/Linux hash locks, Install/Repair, regeneration, advisory scans and NVIDIA readiness evidence |
 | [ACESTEP15_CUDA.md](./ACESTEP15_CUDA.md) | ACE-Step 1.5 Windows/Linux hash locks, pinned-checkout install, regeneration, advisory scans and NVIDIA readiness evidence |
+| [PIXAL3D_MPS.md](./PIXAL3D_MPS.md) | Pixal3D Metal patched Torch environment, hash locks, native Install/Repair and synthetic-image mesh validation |
 | [MOSS_IMAGE.md](./MOSS_IMAGE.md) | Optional pinned MOSS Swift/MLX image runtime, explicit installation, resource needs and Apple Silicon validation |
 | [HTML_COMPOSITIONS.md](./HTML_COMPOSITIONS.md) | Seekable HTML scenes rendered offline to MP4 through hidden managed-browser targets |
 | [CONTAINMENT.md](./CONTAINMENT.md) | Every containment profile (bubblewrap, Seatbelt, Docker) and which consumer uses which; the opt-in Docker containment profile for untrusted installs/tests, its engine policy, two-phase network and `contained-run.js` |
