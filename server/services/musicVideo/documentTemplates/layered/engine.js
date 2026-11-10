@@ -369,14 +369,18 @@
   const SUBTITLE_CUES = CUES.filter((c) => c.emphasis !== 'hero')
     .map((c) => ({ text: c.text, startSec: c.startSec, endSec: c.endSec, role: 'line' }));
   let lyricType = null;
-  // lyricType.js is a module, so it runs after this classic script; it publishes
-  // itself on globalThis before DOMContentLoaded.
-  const documentModule = (key, filename) => new Promise((resolve, reject) => {
-    const check = () => (globalThis[key] ? resolve(globalThis[key])
-      : reject(new Error(`${filename} did not load — the layered template needs it beside index.html`)));
-    if (globalThis[key] || document.readyState !== 'loading') check();
-    else document.addEventListener('DOMContentLoaded', check, { once: true });
+  // The parser runs this classic script before the template modules. Capture
+  // DOMContentLoaded here, since later font or asset work can reach the
+  // module lookup while the page is interactive but modules are still loading.
+  const documentModulesReady = new Promise(resolve => {
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', resolve, { once: true });
+    else resolve();
   });
+  const documentModule = async (key, filename) => {
+    if (!globalThis[key]) await documentModulesReady;
+    if (!globalThis[key]) throw new Error(`${filename} did not load — the layered template needs it beside index.html`);
+    return globalThis[key];
+  };
   async function buildLyricType() {
     const { createLyricType } = await documentModule('PORTOS_LYRIC_TYPE', 'lyricType.js');
     const words = { palette: { fill: C.paper, ink: C.ink, accent: C.accent, strike: C.alert } };

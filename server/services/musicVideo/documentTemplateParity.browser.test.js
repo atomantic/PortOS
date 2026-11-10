@@ -188,6 +188,36 @@ function App(){const[value,setValue]=useState(null);window.show=(project,data,t)
     const value = base(); value.composition.overlay = { enabled: true, titleLines: ['EXAMPLE', 'Native parity'], meter: { label: 'LEVEL', keyframes: [[0, 10], [4, 90]] }, ticker: ['Example ticker'], timecodeStartSec: 3600 };
     await compare(value, 1.25); await compare(value, 3.25);
   });
+  it('waits for image effects while the page is interactive and the module is pending', async () => {
+    current = base({ ...still, imageEffect: 'flash-develop', imageEffectSec: 1 });
+    engineData = dataFor(current);
+    const imageEffects = '**/engine/musicVideoImageEffects.js';
+    const release = Promise.withResolvers();
+    const holdModule = async route => {
+      await release.promise;
+      await route.continue();
+    };
+    await engine.route(imageEffects, holdModule);
+    try {
+      await engine.goto(`http://127.0.0.1:${server.address().port}/engine/index.html`, { waitUntil: 'commit' });
+      await engine.waitForFunction(() => document.readyState === 'interactive' && window.PORTOS_LYRIC_TYPE && window.portosComposition);
+      const beforeModule = await engine.evaluate(async () => {
+        await document.fonts.ready;
+        window.imageEffectSeek = window.portosComposition.seek(0.1).then(() => 'rendered', error => error.message);
+        return Promise.race([
+          window.imageEffectSeek,
+          new Promise(resolve => requestAnimationFrame(() => resolve('waiting'))),
+        ]);
+      });
+      expect(beforeModule).toBe('waiting');
+      release.resolve();
+      expect(await engine.evaluate(() => window.imageEffectSeek)).toBe('rendered');
+    } finally {
+      release.resolve();
+      await engine.unrouteAll({ behavior: 'wait' });
+    }
+  });
+
   it('preserves image-effect and selected-glitch drawing order', async () => {
     await compare(base({ ...still, imageEffect: 'flash-develop', imageEffectSec: 1 }), 2 / 24);
     await compare(base({ ...still, imageEffect: 'end-fade', imageEffectSec: 1, endImageId: 'end.png' }), 3.5);
