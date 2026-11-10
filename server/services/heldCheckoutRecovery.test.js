@@ -44,6 +44,41 @@ const { withClaimOwnershipLock, checkReconcileOwnership } = await import('./cosC
 
 describeHeldCheckoutRecovery(() => {
 
+  it.each([false, true])('retires an exact merged delivery with an initialized submodule (unlocked: %s)', async unlocked => {
+    const c = await reviewedCheckout('initialized-delivery', { gitlink: true, normalMerge: true, unlocked });
+    c.forge.scopeProof = 'exact-delivered-head';
+    mergedPrHeads.add(`${c.release.branch}@${c.release.head}`);
+    await writeFile(join(c.path, '.gitmodules'), '[submodule "vendor"]\n\tpath = vendor\n\turl = ./fixture-vendor\n');
+    await execGit(['clone', '--no-hardlinks', repo, join(c.path, 'vendor')], repo);
+    await execGit(['checkout', '--detach', c.forge.changeBase], join(c.path, 'vendor'));
+    await execGit(['submodule', 'absorbgitdirs', 'vendor'], c.path);
+    expect((await stat(join(c.admin, 'modules', 'vendor'))).isDirectory()).toBe(true);
+    const prepared = await c.prepare();
+    expect(prepared.ok, prepared.reason).toBe(true);
+    expect(prepared.review.comparison).toMatchObject({ exactMergedDelivery: true, disposition: 'integrated' });
+    expect(await c.confirm(prepared.review)).toMatchObject({ ok: true, branchDeleted: true });
+    expect(existsSync(c.path)).toBe(false);
+    expect(await registered(c.path)).toBe(false);
+    const outcome = await getBranchReconcileOutcome('app-1');
+    expect(outcome.retired).toContainEqual(expect.objectContaining({ path: c.path, branch: c.release.branch,
+      head: c.release.head, branchDeleted: true, archiveDir: null, checkoutIdentity: expect.any(String) }));
+  });
+
+  it.each(['pointer', 'administration'])('refuses a replaced exact-delivery %s generation after preview', async component => {
+    const c = await reviewedCheckout('replaced-exact-generation', { normalMerge: true });
+    c.forge.scopeProof = 'exact-delivered-head';
+    const prepared = await c.prepare();
+    expect(prepared.ok).toBe(true);
+    const source = component === 'pointer' ? join(c.path, '.git') : c.admin;
+    const retained = join(scratch, `original-${component}`);
+    await rename(source, retained);
+    await cp(retained, source, { recursive: true });
+    expect(await c.confirm(prepared.review)).toMatchObject({ ok: false, reason: 'retirement-review-changed' });
+    expect(await registered(c.path)).toBe(true);
+    expect(await lockText(c.path)).toBe(c.release.lockReason);
+    expect((await getBranchReconcileOutcome('app-1')).retired || []).toEqual([]);
+  });
+
   // Both automatic retirement entry points used to omit their receipt, so the
   // next persisted scan manufactured a missing-source obligation after archival.
   it.each(['cleanupMerged', 'early reaper'])('settles a normally merged checkout before the next scan through %s', entryPoint => {
@@ -680,8 +715,10 @@ describeHeldCheckoutRecovery(() => {
     return { wanted, before, link };
   }
 
-  it.each(['native', 'traversed', 'directory'])('never follows a cache directory link or removes the outside content: %s listing', async listing => {
+  it.each(['native', 'traversed', 'directory'].flatMap(listing => [false, true].map(exact => ({ listing, exact }))))
+  ('never follows a cache directory link or removes the outside content: $listing listing, exact: $exact', async ({ listing, exact }) => {
     const c = await reviewedCheckout('linked-cache');
+    if (exact) c.forge.scopeProof = 'exact-delivered-head';
     const { wanted, before, link } = await cacheDirectoryLink(c);
     if (listing !== 'native') {
       // Git for Windows can enumerate junction descendants as ordinary files.
