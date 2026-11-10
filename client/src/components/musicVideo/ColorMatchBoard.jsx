@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { mergeTakeColorMatch } from '../../lib/musicVideoTakes.js';
 import { colorMatchGroups } from '../../../../server/lib/shotColorMatch.js';
 import { measureMusicVideoColorMatch, setMusicVideoColorMatchReference } from '../../services/apiMusicVideo.js';
 
@@ -22,7 +23,7 @@ export default function ColorMatchBoard({ project, disabled, onProject }) {
       colorMatch: result?.colorMatch || null,
       scenes: (current.scenes || []).map((scene) => {
         const next = (result?.scenes || []).find((entry) => entry.sceneId === scene.sceneId);
-        return next?.takes ? { ...scene, takes: next.takes } : scene;
+        return next?.takes ? { ...scene, takes: mergeTakeColorMatch(scene, next.takes) } : scene;
       }),
     }));
   };
