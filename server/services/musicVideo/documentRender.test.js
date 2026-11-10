@@ -426,6 +426,18 @@ describe('composition document staging', () => {
     expect(browser.seen.initScripts.some(script => script.includes('__portosMusicVideoGlitch'))).toBe(true);
   });
 
+  // Uniquely catches a switched-off sequence still reaching the stager, which reads any photoSequence as one.
+  it('stages a disabled photo sequence as the plain still', async () => {
+    const { project, plan } = await canonicalPreview();
+    await writeFile(join(PATHS.images, 'photo-two.png'), 'photo-two');
+    project.scenes[1].photoSequence = { enabled: false, imageIds: ['still-b.png', 'photo-two.png'], intervalFrames: 6 };
+    await expect(encode(project, plan, 'job-disabled-sequence')).rejects.toThrow('stop after staging');
+    const scene = browser.seen.data.scenes.find(item => item.sceneId === 'b');
+    expect(scene).not.toHaveProperty('photoSequence');
+    expect(scene.media).toMatchObject({ kind: 'image', src: 'media/scene-b.png' });
+    expect(scene.media).not.toHaveProperty('photos');
+  });
+
   it('keeps the start still when Use end frame is off', async () => {
     const { project, plan } = await fixture();
     await writeFile(join(PATHS.images, 'end.png'), 'end-image');

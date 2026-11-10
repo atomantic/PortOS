@@ -12,6 +12,9 @@ const EMPTY = {
   width: 0,
   height: 0,
   frameUrl: '',
+  // Song time of the exact/fallback frame on screen (null when unknown). A
+  // playing fallback frame trails the audio clock by a server round trip.
+  frameTime: null,
   ready: false,
   audioStatus: 'none',
   lastEvent: null,
@@ -236,7 +239,8 @@ export default function useGeneratedPreview({ active, request, controls = null }
         current.completedGeneration = current.generation - 1;
       }
       current.mode = 'legacy-playing';
-    }
+    } else current.seekTimes.clear();
+    current.seekTimes.set(current.generation, t);
     socket.emit('generated-preview:seek', {
       requestId: current.requestId,
       sessionId: current.sessionId,
@@ -364,7 +368,7 @@ export default function useGeneratedPreview({ active, request, controls = null }
       stoppedStatus = null;
       requestId = newRequestId();
       const openControls = { look: controlsRef.current?.look ?? null, card: controlsRef.current?.card ?? null };
-      pending.current = { requestId, sessionId: null, generation: 0, generationFloor: 0, completedGeneration: -1, controls: openControls, epoch: 0, sequence: 0, probeId: 0, receivedSequence: -1, presentedSequence: -1, mode: 'exact', offset: null, playback: false, responses: new Map() };
+      pending.current = { requestId, sessionId: null, generation: 0, generationFloor: 0, completedGeneration: -1, controls: openControls, epoch: 0, sequence: 0, probeId: 0, receivedSequence: -1, presentedSequence: -1, mode: 'exact', offset: null, playback: false, responses: new Map(), seekTimes: new Map() };
       if (mounted.current) setState((prev) => ({ ...prev, status: 'opening', sessionId: null, ready: false, reason: '', lastEvent: null, playback: false, playbackReason: '' }));
       socket.emit('generated-preview:open', {
         requestId,
@@ -416,6 +420,7 @@ export default function useGeneratedPreview({ active, request, controls = null }
       if (pending.current.sessionId && payload.sessionId && payload.sessionId !== pending.current.sessionId) return;
       const current = pending.current;
       if (current.terminalError) return;
+      let frameTime = null;
       if (payload.playbackEpoch !== undefined) {
         if (presentation.current.blocked || current.mode !== 'playing' || payload.playbackEpoch !== current.epoch || !Number.isInteger(payload.sequence) || payload.sequence <= current.receivedSequence) return;
         current.receivedSequence = payload.sequence;
@@ -426,6 +431,8 @@ export default function useGeneratedPreview({ active, request, controls = null }
           if (!Number.isInteger(payload.generation) || payload.generation < current.generationFloor || payload.generation > current.generation || payload.generation <= current.completedGeneration) return;
           current.completedGeneration = payload.generation;
         } else if (current.mode !== 'exact' || payload.generation !== current.generation) return;
+        frameTime = current.seekTimes.get(payload.generation) ?? null;
+        for (const generation of current.seekTimes.keys()) if (generation < payload.generation) current.seekTimes.delete(generation);
       }
       let url = '';
       try {
@@ -454,7 +461,7 @@ export default function useGeneratedPreview({ active, request, controls = null }
       const opened = !!current.sessionId;
       if (opened) { stoppedStatus = null; current.hasError = false; }
       commitFrame(entry);
-      setState((prev) => ({ ...prev, ...(opened ? { status: 'ready', ready: true } : {}) }));
+      setState((prev) => ({ ...prev, frameTime, ...(opened ? { status: 'ready', ready: true } : {}) }));
     };
     const onUnavailable = (payload) => {
       if (!mine(payload) || !mounted.current) return;
