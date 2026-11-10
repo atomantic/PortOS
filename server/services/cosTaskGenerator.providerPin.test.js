@@ -310,8 +310,9 @@ describe('claim dispatch reviewer identity preflight (#13522)', () => {
     expect(prepared.skip.reason).toContain('Settings → Code Reviewers (usernames)');
     expect(recordPreflightOutcome).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'failed', reason: 'REVIEWER_IDENTITY_NOT_FOUND', note: prepared.skip.reason }));
     await prepare();
-    expect(identityLookup).toHaveBeenCalledTimes(1);
-    expect(identityLookup).toHaveBeenCalledWith(['api', '--hostname', 'github.example.test', 'users/missing-reviewer'], 8000);
+    expect(identityLookup).toHaveBeenCalledTimes(2);
+    expect(identityLookup).toHaveBeenNthCalledWith(1, ['api', '--hostname', 'github.example.test', 'users/missing-reviewer'], 8000);
+    expect(identityLookup).toHaveBeenNthCalledWith(2, ['api', '--hostname', 'github.example.test', `users/${encodeURIComponent('missing-reviewer[bot]')}`], 8000);
     const emitted = vi.fn();
     cosEvents.on('schedule:on-demand-empty', emitted);
     try {
@@ -327,7 +328,7 @@ describe('claim dispatch reviewer identity preflight (#13522)', () => {
     getTaskIntervalMock.mockResolvedValue({ type: 'weekly', taskMetadata: { usernames: ['missing-reviewer'] } });
     await expect(buildClaimWorkTask(APP)).rejects.toMatchObject({ code: 'REVIEWER_IDENTITY_NOT_FOUND', message: expect.stringContaining('Tasks → Schedule → claim-work → Reviewers (taskMetadata.usernames)') });
     await expect(buildJiraTicketTask(APP, 'TEST-123')).rejects.toMatchObject({ code: 'REVIEWER_IDENTITY_NOT_FOUND' });
-    expect(identityLookup).toHaveBeenCalledTimes(1);
+    expect(identityLookup).toHaveBeenCalledTimes(2);
   });
 
   it('names the per-app settings entry when an app override supplied the missing reviewer', async () => {

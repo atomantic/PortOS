@@ -358,7 +358,7 @@ describe('GET /api/code-review/reviewer-identities (#13115)', () => {
     configure({ usernames: ['real-user', 'ghost-user', 'flaky-user', 'acme/core-team'], optionalReviewers: ['@ghost-user'] })
     execGhMock.mockImplementation(async (args) => {
       const path = args.at(-1)
-      if (path === 'users/ghost-user') throw notFound()
+      if (path === 'users/ghost-user' || path === `users/${encodeURIComponent('ghost-user[bot]')}`) throw notFound()
       if (path === 'users/flaky-user') throw new Error('gh command timed out after 8000ms')
       return '{}'
     })

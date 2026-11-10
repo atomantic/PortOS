@@ -51,8 +51,12 @@ async function resolveToken(ghApi, host, token) {
   if (!team) {
     const r = await lookup(ghApi, host, `users/${encodeURIComponent(owner)}`);
     if (r === 'found') return { status: IDENTITY_STATUS.VERIFIED };
-    if (r === 'not-found') return { status: IDENTITY_STATUS.MISSING, reason: `GitHub user "${owner}" does not exist on ${host}` };
-    return { status: IDENTITY_STATUS.UNAVAILABLE, reason: r.error };
+    if (r !== 'not-found') return { status: IDENTITY_STATUS.UNAVAILABLE, reason: r.error };
+    // GitHub Apps have their bot accounts at users/<owner>[bot] with type: "Bot".
+    const b = await lookup(ghApi, host, `users/${encodeURIComponent(`${owner}[bot]`)}`);
+    if (b === 'found') return { status: IDENTITY_STATUS.VERIFIED };
+    if (b === 'not-found') return { status: IDENTITY_STATUS.MISSING, reason: `GitHub user "${owner}" does not exist on ${host}` };
+    return { status: IDENTITY_STATUS.UNAVAILABLE, reason: b.error };
   }
   const t = await lookup(ghApi, host, `orgs/${encodeURIComponent(owner)}/teams/${encodeURIComponent(team)}`);
   if (t === 'found') return { status: IDENTITY_STATUS.VERIFIED };
