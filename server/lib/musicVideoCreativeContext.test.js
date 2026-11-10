@@ -40,6 +40,13 @@ describe('musicVideoCodeDirectionContext', () => {
 });
 
 describe('musicVideoDirectionContext', () => {
+  it('includes physical behavior for the lead and supporting cast', () => {
+    const text = musicVideoDirectionContext({ protagonist: { name: 'Lead', stillness: 'leans left', movement: 'quick steps' },
+      cast: [{ name: 'Helper', stillness: 'hands folded', movement: 'slow gait' }] });
+    expect(text).toContain('stillness: leans left; movement: quick steps');
+    expect(text).toContain('stillness: hands folded; movement: slow gait');
+  });
+
   // #14069: the planner names a cast member for a shot to condition on their sheet.
   it('names every cast member even when the rest of the direction fills the bound', () => {
     const long = 'x'.repeat(300);

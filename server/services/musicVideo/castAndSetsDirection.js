@@ -60,7 +60,8 @@ const MOOD_BOARD_TEXT_ONLY = 'The image generator never sees the mood board: car
 const LOOK_AND_SET_RULES = [
   '- look: palette, light quality, film stock, grain, texture and any explicitly requested rendering medium only. Never a person, place, object or pose: the scene look is appended to set plates and in-set frames; people reference sheets retain only the rendering medium on a neutral field.',
   '- renderingMedium: the explicit visual medium (for example scratchboard, watercolor or photography), separate from scene look and the execution-policy medium. Preserve a director-specified medium verbatim, without adding lighting, film stock or grading. Populate it for new photographic directions. An age form may override it; empty or absent inherits the direction medium. On revisions preserve existing renderingMedium values unless the director requests a change.',
-  '- sets: describe the EMPTY place. No people, characters, figures or actions; the protagonist appears only in tests.',
+  '- sets: describe the EMPTY place. No people, characters, figures or actions; the protagonist appears only in tests. In description, name concrete foreground, midground and background planes with environmental or architectural geometry and surface wear.',
+  '- sets.lighting: name a physical in-world source and its direction, quality and color temperature. Never name studio or film fixtures such as softbox, C-stand, beauty dish or key light rig. No fog, mist, haze, smoke plumes or volumetric light shafts unless physically produced by a named source in the set.',
   '- sets: preserve the director\'s requested story details, including deliberate unusual or stylized arrangements. Otherwise, choose details consistent with each other, the described place and its era; avoid unexplained contradictions such as a pristine parked car at a place described as deserted or an unintended second post on a single-pole hoop. Name each fixture once.',
 ].join('\n');
 
@@ -284,14 +285,16 @@ const OUTPUT_SHAPE = `{
     "hair": "<hair that reads in silhouette>",
     "signature": "<one signature prop or detail present in every look>",
     "gesture": "<a recurring gesture tied to a lyric hook, quoting the hook>",
+    "stillness": "<weight, posture, hands and default expression at rest>",
+    "movement": "<gait, gesture quality and physical habits>",
     "rules": ["<continuity or safety rule>"],
     "expressions": ["<a mood from the story: what the face, eyes and head do>"],
     "forms": [{ "id": "<short-slug>", "label": "<e.g. Age 7>", "age": "<age>", "description": "<how they look at that age>", "hair": "<hair at that age>", "wardrobe": "<their outfit at that age>", "height": "<their height at that age, e.g. 4 ft (122 cm) at 7>", "era": "<the year or period this age is seen in, e.g. 1965>", "look": "<the film stock, format and color of that memory when it differs from the main look, e.g. black-and-white 8mm home movie, heavy grain; or empty>", "renderingMedium": "<visual medium override for this age, or empty to inherit>", "subjectId": "<the FIXED CASTING subject id of the protagonist at this age, or empty>" }]
   },
   "looks": [{ "name": "<SHORT NAME>", "description": "<the complete outfit>", "chapters": "<which parts of the song>" }],
-  "cast": [{ "id": "<short-slug>", "name": "<a name>", "role": "<what they are in the video: drummer, shopkeeper, ...>", "description": "<who they are: age, vibe, attitude>", "height": "<their height, e.g. 5 ft 10 in (178 cm)>", "face": "<face: skin, eyes, brows, distinguishing features>", "hair": "<hair>", "wardrobe": "<their one outfit>" }],
+  "cast": [{ "id": "<short-slug>", "name": "<a name>", "role": "<what they are in the video: drummer, shopkeeper, ...>", "description": "<who they are: age, vibe, attitude>", "height": "<their height, e.g. 5 ft 10 in (178 cm)>", "face": "<face: skin, eyes, brows, distinguishing features>", "hair": "<hair>", "wardrobe": "<their one outfit>", "stillness": "<weight, posture, hands and default expression at rest>", "movement": "<gait, gesture quality and physical habits>" }],
   "props": [{ "id": "<short-slug>", "name": "<what it is and whose, e.g. Ada's camera>", "owner": "<who carries, uses or rides it, or empty>", "description": "<exactly how it looks: type, era, shape, size, colors, materials and distinguishing marks; no brand names or text>" }],
-  "sets": [{ "id": "<short-slug>", "name": "<set name>", "description": "<the empty location, concrete and visual, with nobody in it; furniture and objects standing upright and apart, never stacked, interlocked or piled>", "lighting": "<its one dominant light>", "era": "<the year or period it is seen in when that is not the present story, or empty>", "look": "<the film stock, format and color of that era when it differs from the main look, or empty>", "sections": ["<section label it serves>"] }],
+  "sets": [{ "id": "<short-slug>", "name": "<set name>", "description": "<the empty location with concrete foreground, midground and background geometry and wear; furniture and objects upright and apart>", "lighting": "<physical in-world source, direction, quality and color temperature>", "era": "<the year or period it is seen in when that is not the present story, or empty>", "look": "<the film stock, format and color of that era when it differs from the main look, or empty>", "sections": ["<section label it serves>"] }],
   "songMap": [{ "section": 0, "setId": "<short-slug>" }],
   "tests": [{ "setId": "<short-slug>", "look": "<SHORT NAME>", "action": "<what the protagonist does in this frame>", "caption": "<the lyric or beat it serves>", "formId": "<the protagonist.forms id when this frame shows them at that other age, or empty>" }],
   "overlayConcept": { "summary": "<one persistent graphic layer that ties every shot together>", "elements": [{ "name": "<element>", "description": "<what it shows and when it changes>" }] },
@@ -310,6 +313,7 @@ const PROCEDURAL_OUTPUT_SHAPE = `{
     "materials": "<fills, gradients, outlines, glow, texture>",
     "palette": "<the exact colors, as hex values>",
     "expressions": ["<expression name: how the face or shape changes>"],
+    "stillness": "<how the character holds its shape at rest>",
     "movement": "<motion rules: easing, idle loop, how it reacts to the beat>",
     "signature": "<one detail present in every pose>",
     "gesture": "<a recurring gesture tied to a lyric hook, quoting the hook>",
@@ -441,6 +445,7 @@ export function buildCastAndSetsPrompt(project, { moodImages = [], board = null,
     LOOK_AND_SET_RULES,
     '- songMap: one entry per song section index listed above, naming the set that section plays in.',
     '- looks: each is a different complete outfit the protagonist wears at their present-story age. An outfit from another age goes in that age\'s protagonist.forms wardrobe, never in looks.',
+    '- For protagonist and each cast member, stillness describes weight, posture, hands and default expression at rest; movement describes gait, gesture quality and physical habits.',
     '- People and wardrobe sheets show empty, relaxed hands. In protagonist/cast/form appearance descriptions, looks and wardrobe, describe the person, worn clothing and worn accessories only. Put carried or held objects in props, never in these descriptions; signature may describe a story prop, but it is not drawn on a person or wardrobe sheet.',
     '- sets in another era: a place the story shows in a memory or another period gets that era and, when the story gives the era its own film stock or color, that look; the same place in two eras is two sets. Present-story sets leave both empty.',
     '- tests: in-set frames of the protagonist that prove the cast works in the world; each names a set id and a look name, and shows a moment from the story. A test showing the protagonist at one of their other ages names that form\'s id in formId; otherwise formId is empty.',
@@ -543,6 +548,7 @@ const protagonistSchema = z.preprocess(withoutNulls, z.object({
   hair: prose(TEXT).optional(),
   signature: prose(TEXT).optional(),
   gesture: prose(TEXT).optional(),
+  stillness: prose(TEXT).optional(),
   rules: proseList(300).optional(),
   // Procedural medium: how the character is built and moves in code.
   construction: prose(TEXT).optional(),
@@ -591,6 +597,8 @@ const castSchema = z.preprocess(withoutNulls, z.object({
   face: prose(TEXT).optional(),
   hair: prose(TEXT).optional(),
   wardrobe: prose(TEXT).optional(),
+  stillness: prose(TEXT).optional(),
+  movement: prose(TEXT).optional(),
 }).passthrough());
 const propSchema = z.preprocess(withoutNulls, z.object({
   id: z.string().optional(),
@@ -739,7 +747,8 @@ function normalizeCast(cast, protagonist, { fixed = [], forms = [] } = {}) {
     while (seen.has(id)) id = `${id}-${i + 1}`;
     seen.add(id);
     return { id, name: c.name, role: c.role || '', description: c.description || '', face: c.face || '', hair: c.hair || '', wardrobe: c.wardrobe || '',
-      ...(c.height ? { height: c.height } : {}) };
+      ...(c.height ? { height: c.height } : {}),
+      ...(c.stillness ? { stillness: c.stillness } : {}), ...(c.movement ? { movement: c.movement } : {}) };
   });
 }
 
@@ -831,6 +840,8 @@ export function mergeCastAndSetsDirection(previous, parsed, { sections = [], med
   };
   // Optional so a protagonist without one keeps its legacy shape.
   if (!procedural && pField('height')) protagonist.height = pField('height');
+  if (pField('stillness')) protagonist.stillness = pField('stillness');
+  if (!procedural && pField('movement')) protagonist.movement = pField('movement');
   const expressions = (hasOwn(p1, 'expressions') ? p1.expressions : (p0.expressions || [])).filter(Boolean).slice(0, CAST_SETS_LIMITS.expressions);
   const forms = procedural ? [] : normalizeForms(hasOwn(p1, 'forms') ? p1.forms : p0.forms, p0.forms || []);
   // A photographic protagonist without moods or other ages keeps its legacy shape
@@ -865,6 +876,10 @@ export function mergeCastAndSetsDirection(previous, parsed, { sections = [], med
       .map((e) => ({ name: e.name, description: e.description })),
   };
   const definitions = hasOwn(parsed, 'definitions') ? parsed.definitions : (base.definitions || { characters: [] });
+  const cast = pick('cast', []).map((person) => {
+    const prior = (base.cast || []).find((c) => (person.id && c.id === person.id) || castKey(c.name) === castKey(person.name));
+    return { ...person, ...Object.fromEntries(['stillness', 'movement'].filter((key) => !hasOwn(person, key) && prior?.[key]).map((key) => [key, prior[key]])) };
+  });
   const direction = {
     ...(procedural ? { medium: 'procedural', world, definitions } : {}),
     logline: pick('logline', ''),
@@ -875,7 +890,7 @@ export function mergeCastAndSetsDirection(previous, parsed, { sections = [], med
     protagonist,
     looks,
     // Photographic only: a procedural cast lives in `definitions`.
-    ...(procedural ? {} : { cast: normalizeCast(pick('cast', []), protagonist, { fixed: fixedCast, forms }) }),
+    ...(procedural ? {} : { cast: normalizeCast(cast, protagonist, { fixed: fixedCast, forms }) }),
     // Photographic only; a direction saved before props existed keeps its shape.
     ...(!procedural && (hasOwn(parsed, 'props') || base.props || fixedPropList.length)
       ? { props: normalizeProps(pick('props', []), { fixed: fixedPropList }) } : {}),

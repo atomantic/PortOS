@@ -212,6 +212,16 @@ describe('Cast & Sets face sheets', () => {
   });
 });
 
+it('carries character physical behavior into approved subjects', () => {
+  const stage = { direction: { protagonist: { name: 'Lead', stillness: 'leans left', movement: 'quick steps' },
+    cast: [{ id: 'helper', name: 'Helper', stillness: 'hands folded', movement: 'slow gait' }] } };
+  const subjects = castAndSetsSubjects({}, stage);
+  expect(subjects[0].description).toContain('stillness: leans left');
+  expect(subjects[0].description).toContain('movement: quick steps');
+  expect(subjects[1].description).toContain('stillness: hands folded');
+  expect(subjects[1].description).toContain('movement: slow gait');
+});
+
 describe('Cast & Sets set plates', () => {
   it('keeps a set description that uses "their" for objects, and asks for separate, upright furniture', () => {
     const sets = [{ id: 'food-court', name: 'Food court', lighting: 'hard flash',
@@ -220,6 +230,9 @@ describe('Cast & Sets set plates', () => {
     expect(prompt).toContain('shuttered counters with their menu boards blank');
     expect(prompt).toMatch(/furniture stands upright on its own legs, nothing stacked, interlocked or piled/);
     expect(prompt).toContain('Keep new details consistent with the described place and its era');
+    expect(prompt).toContain('foreground, midground and background');
+    expect(prompt).toContain('physical in-world source');
+    expect(prompt).toContain('No fog, mist, haze');
   });
 
   it('preserves an intentionally unusual set while asking for coherent additions', () => {

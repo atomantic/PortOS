@@ -85,7 +85,7 @@ const explicitSheetMedium = (medium) => `Rendering medium: ${medium}. Retain thi
 const EMPTY_HANDS = 'Hands empty and relaxed, holding no device or carried object. Carried props are drawn on the prop sheet. Use wardrobe descriptions for worn clothing and accessories only, drawn as worn (a watch on the wrist, a camera hanging from its wrist strap), never gripped in a hand; never put a carried object from the description or reference images in their hands';
 // Stacked, interlocked or piled look-alike objects are where image models fuse
 // geometry (chairs molded into a table), and every shot on the set copies it.
-const PLAUSIBLE_SET = 'Unless the set description or revision deliberately calls for another arrangement, keep every object solid, separate and physically supported: furniture stands upright on its own legs, nothing stacked, interlocked or piled on like objects. Keep new details consistent with the described place and its era; preserve explicitly requested or intentionally unusual details';
+const PLAUSIBLE_SET = 'Compose continuous concrete foreground, midground and background depth planes. Light comes from a physical in-world source with direction, quality and color temperature; never name studio fixtures such as softboxes, C-stands or beauty dishes. No fog, mist, haze, smoke plumes or volumetric shafts unless physically produced by a source named in the set description. Unless the set description or revision deliberately calls for another arrangement, keep every object solid, separate and physically supported: furniture stands upright on its own legs, nothing stacked, interlocked or piled on like objects. Keep new details consistent with the described place and its era; preserve explicitly requested or intentionally unusual details';
 const sentence = (s) => {
   const t = String(s || '').trim();
   return t && !/[.!?]$/.test(t) ? `${t}.` : t;
@@ -682,7 +682,7 @@ export function castAndSetsSubjects(project, stage) {
       id: `${CAST_SETS_SUBJECT_PREFIX}protagonist`,
       kind: 'character',
       name: trimTo(p.name, 120),
-      description: trimTo([p.description, p.construction, p.shapeLanguage, p.materials, p.palette, p.face, p.hair, p.signature,
+      description: trimTo([p.description, p.construction, p.shapeLanguage, p.materials, p.palette, p.face, p.hair, p.signature, p.stillness && `stillness: ${p.stillness}`, p.movement && `movement: ${p.movement}`,
         (p.forms || []).length && `Also seen at: ${p.forms.map((f) => `${f.label} (${f.description})`).join('; ')}`].filter(Boolean).join('; '), 1000),
       role: 'protagonist',
     });
@@ -692,7 +692,7 @@ export function castAndSetsSubjects(project, stage) {
       id: `${CAST_SETS_SUBJECT_PREFIX}cast-${c.id}`.slice(0, 64),
       kind: 'character',
       name: trimTo(c.name, 120),
-      description: trimTo([c.role, c.description, c.face, c.hair, c.wardrobe].filter(Boolean).join('; '), 1000),
+      description: trimTo([c.role, c.description, c.face, c.hair, c.wardrobe, c.stillness && `stillness: ${c.stillness}`, c.movement && `movement: ${c.movement}`].filter(Boolean).join('; '), 1000),
       role: 'supporting',
     });
   }

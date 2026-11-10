@@ -42,6 +42,28 @@ const ANSWER = {
 };
 
 describe('Cast & Sets direction', () => {
+  it('carries physical behavior through partial revisions and prompts for sourced depth', () => {
+    const first = mergeCastAndSetsDirection(null, parseCastAndSetsResponse(JSON.stringify({ ...ANSWER,
+      protagonist: { ...ANSWER.protagonist, stillness: 'weight on one hip', movement: 'quick steps' },
+      cast: [{ id: 'helper', name: 'Helper', description: 'a friend', stillness: 'hands folded', movement: 'slow gait' }],
+    })), { sections }).direction;
+    const revision = parseCastAndSetsResponse(JSON.stringify({ protagonist: { movement: '' },
+      cast: [{ id: 'helper', name: 'Helper', description: 'a friend', movement: '' }] }));
+    const revised = mergeCastAndSetsDirection(first, revision, { sections }).direction;
+    expect(revised.protagonist.stillness).toBe('weight on one hip');
+    expect(revised.protagonist.movement).toBeUndefined();
+    expect(revised.cast[0].stillness).toBe('hands folded');
+    expect(revised.cast[0].movement).toBeUndefined();
+    const prompt = buildCastAndSetsPrompt(project);
+    expect(prompt).toContain('foreground, midground and background');
+    expect(prompt).toContain('physical in-world source');
+    expect(prompt).toContain('softbox');
+    expect(prompt).toContain('"stillness"');
+    expect(prompt).toContain('"movement"');
+    const procedural = buildCastAndSetsPrompt({ ...project, productionPolicy: { strategy: 'code-first', maxGeneratedVideoPercent: 0 } });
+    expect(procedural).toContain('"stillness"');
+  });
+
   it('builds a prompt that reads the song and keeps the mood board to look only', () => {
     const prompt = buildCastAndSetsPrompt(project, { moodImages: [{ caption: 'a kitchen', analysis: 'steam and brass' }], board: { style: { prompt: 'green flash' } } });
     expect(prompt).toContain('[Verse 1]\nline one\n[Whispered]\nline two');

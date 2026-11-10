@@ -142,7 +142,7 @@ function directionCastLines(cast) {
   const share = cast.length > 4 ? Math.floor(CAST_CONTEXT_MAX / cast.length) : null;
   return cast.map((c) => {
     const head = `Cast ${trimTo(c.name, 80)}${c.role ? ` (${trimTo(c.role, 60)})` : ''}`;
-    const body = [c.description, c.face, c.hair, c.wardrobe].filter(Boolean).map((v) => trimTo(v, 200)).join('; ');
+    const body = [c.description, c.face, c.hair, c.wardrobe, c.stillness && `stillness: ${c.stillness}`, c.movement && `movement: ${c.movement}`].filter(Boolean).map((v) => trimTo(v, 200)).join('; ');
     const text = share == null ? body : trimTo(body, Math.max(0, share - head.length - 2));
     return text ? `${head}: ${text}` : head;
   });
@@ -168,9 +168,10 @@ export function musicVideoDirectionContext(direction) {
     'The mood board is LOOK-ONLY: borrow palette, lighting and texture, never its literal locations, objects or narrative. Use the assigned set for each shot.',
     `Story: ${trimTo(direction.logline, 400)} ${trimTo(direction.interpretation, 600)}`,
     `Protagonist: ${[p.name, p.description, p.face, p.hair, p.signature, p.gesture, ...(p.rules || [])].filter(Boolean).map((s) => trimTo(s, 300)).join('; ')}`,
+    ...lines('Physical behavior:', [['stillness', p.stillness], ['movement', p.movement]]),
     ...(procedural ? lines('Character build:', [
       ['construction', p.construction], ['shape language', p.shapeLanguage], ['materials', p.materials], ['palette', p.palette],
-      ['expressions', (p.expressions || []).join(' | ')], ['movement', p.movement],
+      ['expressions', (p.expressions || []).join(' | ')],
     ]) : []),
     ...(procedural ? lines('World rules:', [
       ['layout', w.layout], ['depth', w.depth], ['lighting', w.lighting], ['camera', w.camera], ['transitions', w.transitions],
