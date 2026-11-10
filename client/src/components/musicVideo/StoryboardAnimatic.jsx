@@ -25,6 +25,7 @@ import PreviewVideo from './PreviewVideo.jsx';
 import { sceneFrameFit } from './SceneFrameFit.jsx';
 import TransitionGlitch from './TransitionGlitch.jsx';
 import WipeOverlay from './WipeOverlay.jsx';
+import ExactDocumentFrame from './ExactDocumentFrame.jsx';
 import ImageEffectStill from './ImageEffectStill.jsx';
 import { clipOffsetSec, clipReversed, clipSpeedRate, isLayeredComposition, isSelfDrawnLayer, sceneVisualLayer, stillFrameTransform } from '../../lib/musicVideoLayers.js';
 import { resolveSourceTake, scenePlayableClipId } from '../../../../server/lib/musicVideoSourceTake.js';
@@ -624,6 +625,11 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
   const [lookOn, toggleLook] = usePreviewFilmLook();
   // While the song plays the look is the light playback version; paused, the exact render filter.
   const [playing, setPlaying] = useState(false);
+  // A composition document plays here natively; once the viewer has played or
+  // moved the song, a paused frame shows the document's own exact frame.
+  const documentVariant = variant === 'document';
+  const [touched, setTouched] = useState(false);
+  const exactRef = useRef(null);
   const captureBasis = useRef(null);
   const lookAvailable = !isFilmLookNeutral(project.filmLook);
   // The song's shots; shots before the song play on the cold open's clock (useColdOpen).
@@ -673,6 +679,25 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
     const at = audio?.currentTime || 0;
     setTime(at);
     setPlaying(false);
+    if (documentVariant) {
+      setTouched(true);
+      // The saved frame is the document's own. Fall back to the native picture
+      // only when no isolated worker answers.
+      const exact = await new Promise((resolve) => {
+        const deadline = performance.now() + 5000;
+        const wait = () => {
+          if (exactRef.current?.shownTime() === at) { resolve(exactRef.current.capture(at)); return; }
+          if (performance.now() > deadline || !audio?.paused || audio.currentTime !== at) { resolve(null); return; }
+          requestAnimationFrame(wait);
+        };
+        requestAnimationFrame(wait);
+      });
+      if (exact) {
+        const selected = shotAt(scenes, at);
+        const number = selected ? timedShots(scenes).indexOf(selected) + 1 : 0;
+        return { blob: exact, time: at, fps: ANIMATIC_FPS, label: [project.name, selected ? sceneShotName(selected, number ? { number } : {}) : null].filter(Boolean).join(' · ') };
+      }
+    }
     // Pause swaps the live film look for its exact filter and catches the shot up
     // to the audio clock. Effects/clip seeks then get a paint before freezing.
     await new Promise((resolve, reject) => {
@@ -804,12 +829,16 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
     </>
   );
   const composite = variant === 'composite';
-  const pictureLabel = composite ? 'Composition preview' : 'Storyboard animatic';
-  const songLabel = composite ? 'Song for the composition preview' : 'Song for the storyboard animatic';
+  const pictureLabel = composite || documentVariant ? 'Composition preview' : 'Storyboard animatic';
+  const songLabel = composite || documentVariant ? 'Song for the composition preview' : 'Song for the storyboard animatic';
+  const exactActive = documentVariant && touched && !playing && !cold.active && !outro.active;
   return (
     <div className={`space-y-2 ${collapsed ? 'max-xl:hidden' : ''}`}>
       {composite && (
         <p className="text-xs text-port-text-muted">Selected takes cut on the song with the video look, per-shot looks, transitions and glitches. Final-quality shot renders are not required.</p>
+      )}
+      {documentVariant && (
+        <p className="text-xs text-port-text-muted">Plays the selected takes in this browser. Paused, it shows the composition's exact frame; the template's grain, vignette, camera moves and beat reactions appear only there for now.</p>
       )}
       <figure ref={figureRef} aria-label={pictureLabel} className="relative aspect-video w-full overflow-hidden rounded border border-port-border bg-black">
         {/* The shot's resolved film look over the whole picture, lyrics included. */}
@@ -840,6 +869,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
         {!cold.active && overlay}
         {outro.active && <EndingCanvas parts={endingPlan} stats={outro.stats} t={outro.t} />}
         </FilmLookFrame>
+        {documentVariant && <ExactDocumentFrame ref={exactRef} project={project} time={time} active={exactActive} lookOn={lookOn} />}
       </figure>
       <div className="flex min-w-0 flex-wrap items-center gap-2">
         <div className="min-w-0 basis-full text-[11px] text-port-text-muted @min-[32rem]/mv-preview:flex-1 @min-[32rem]/mv-preview:basis-auto">
@@ -919,9 +949,10 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
         preload="metadata"
         aria-label={songLabel}
         onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)}
-        onSeeked={(e) => { outro.stop(); setTime(e.currentTarget.currentTime); }}
+        onSeeked={(e) => { outro.stop(); setTouched(true); setTime(e.currentTarget.currentTime); }}
         onPlay={(e) => {
           outro.stop();
+          setTouched(true);
           if (cold.claimsPlay(e.currentTarget)) return;
           cold.stop();
           setPlaying(true);

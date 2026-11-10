@@ -88,44 +88,72 @@ const BRIDGE = `
   });
 `;
 
-/** `directory` is the caller's already-owned staged composition copy. */
-export async function adaptStagedDocumentPreview(directory, { scenes = [] } = {}) {
-  const declined = (reason) => ({ adapted: false, reason });
+// The shipped engine and entrypoint, or why `directory` does not hold them.
+async function shippedEntrypoint(directory) {
   let original, index, template;
   try {
     [original, index, template] = await Promise.all([read(directory, 'engine.js'), read(directory, 'index.html'), read(join(ROOT, 'layered'), 'index.html')]);
-  } catch { return declined('unrecognized-entrypoint'); }
+  } catch { return { reason: 'unrecognized-entrypoint' }; }
   if (digest(original) !== ENGINE_SHA256) {
     // An older shipped engine plays only by exact per-frame seeks; the player offers its one-tap update.
     const { isUpgradableLayeredEngine } = await import('./compositionDocument.js');
-    return { ...declined('unrecognized-engine'), ...(isUpgradableLayeredEngine(original) ? { upgradable: true } : {}) };
+    return { reason: 'unrecognized-engine', ...(isUpgradableLayeredEngine(original) ? { upgradable: true } : {}) };
   }
   const marker = '<script src="engine.js"></script>';
   const generatedIndex = template.toString().replace(marker, '<script src="generated.js"></script>\n' + marker);
-  if (!index.equals(template) && index.toString() !== generatedIndex) return declined('custom-entrypoint');
+  if (!index.equals(template) && index.toString() !== generatedIndex) return { reason: 'custom-entrypoint' };
   // General authored JavaScript is not a complete-frame publication contract.
   // Generated/custom/older engines keep deterministic exact seek unchanged.
-  if (!index.equals(template)) return declined('generated-contract-not-admitted');
-  // Only the host's already-staged metadata is authority for source cadence.
-  // A source period >=100 ms cannot satisfy the live frame freshness bound.
-  if (scenes.some(scene => scene.media?.kind === 'video'
-    && (!Number.isFinite(scene.media.fps) || scene.media.fps <= 10))) return declined('unsupported-video-fps');
-  // The complete executable/style helper graph must match, not only engine.js.
+  if (!index.equals(template)) return { reason: 'generated-contract-not-admitted' };
+  return { original, template };
+}
+
+// Why the executable/style helper graph differs from the shipped one, or null.
+// The whole graph must match, not only engine.js.
+async function shippedHelpersMismatch(directory, template) {
   const helpers = [
     ['cameraRig.js', join(ROOT, 'layered')],
     ['lyricType.js', join(ROOT, 'shared')], ['lyricType.css', join(ROOT, 'shared')],
     ['musicVideoImageEffects.js', fileURLToPath(new URL('../../lib/', import.meta.url))],
   ];
   try {
-    for (const [name, root] of helpers) if (!(await read(directory, name)).equals(await read(root, name))) return declined('custom-helper');
+    for (const [name, root] of helpers) if (!(await read(directory, name)).equals(await read(root, name))) return 'custom-helper';
     // Font bytes affect exact parity too; only canonical entrypoint/CSS names apply.
     const css = `${template}\n${await read(join(ROOT, 'shared'), 'lyricType.css')}`;
     for (const match of css.matchAll(/url\(['"]?([^)'"\s]+)['"]?\)/g)) {
       const name = match[1];
       const root = name.includes('archivo') || name.includes('ibm-plex-mono-500') ? join(ROOT, 'shared') : join(ROOT, 'layered');
-      if (!(await read(directory, name)).equals(await read(root, name))) return declined('custom-font');
+      if (!(await read(directory, name)).equals(await read(root, name))) return 'custom-font';
     }
-  } catch { return declined('missing-helper'); }
+  } catch { return 'missing-helper'; }
+  return null;
+}
+
+/**
+ * Whether `directory` holds the unmodified shipped layered template: current
+ * engine, entrypoint, helpers and fonts, with no authored code. Such a document
+ * adds nothing a page may not run, so its scenes can play in the viewer's own
+ * browser. Reads only. `{ shipped: true }` or `{ shipped: false, reason, upgradable? }`.
+ */
+export async function shippedLayeredDocument(directory) {
+  const entry = await shippedEntrypoint(directory);
+  if (entry.reason) return { shipped: false, reason: entry.reason, ...(entry.upgradable ? { upgradable: true } : {}) };
+  const reason = await shippedHelpersMismatch(directory, entry.template);
+  return reason ? { shipped: false, reason } : { shipped: true };
+}
+
+/** `directory` is the caller's already-owned staged composition copy. */
+export async function adaptStagedDocumentPreview(directory, { scenes = [] } = {}) {
+  const declined = (reason) => ({ adapted: false, reason });
+  const entry = await shippedEntrypoint(directory);
+  if (entry.reason) return { ...declined(entry.reason), ...(entry.upgradable ? { upgradable: true } : {}) };
+  const { original, template } = entry;
+  // Only the host's already-staged metadata is authority for source cadence.
+  // A source period >=100 ms cannot satisfy the live frame freshness bound.
+  if (scenes.some(scene => scene.media?.kind === 'video'
+    && (!Number.isFinite(scene.media.fps) || scene.media.fps <= 10))) return declined('unsupported-video-fps');
+  const mismatch = await shippedHelpersMismatch(directory, template);
+  if (mismatch) return declined(mismatch);
   let source = original.toString();
   for (const [from, to] of [
     ["  const canvas = document.getElementById('stage');", "  let canvas = document.getElementById('stage');"],

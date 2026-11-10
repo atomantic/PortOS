@@ -750,6 +750,8 @@ export const importMusicVideoCompositionDirectory = (id, directory, options = {}
   request(`${compositionDocumentPath(id)}/directory`, { method: 'POST', body: JSON.stringify({ directory }), ...options });
 export const startMusicVideoCompositionTemplate = (id, template = 'layered', options = {}) =>
   request(`${compositionDocumentPath(id)}/template`, { method: 'POST', body: JSON.stringify({ template }), ...options });
+/** `{ native, reason? }`: whether the document is the unmodified shipped template, whose scenes may play in the page. */
+export const getMusicVideoCompositionPlayback = (id, options = {}) => request(`${compositionDocumentPath(id)}/playback`, options);
 export const upgradeMusicVideoCompositionEngine = (id, directory, options = {}) =>
   request(`${compositionDocumentPath(id)}/engine/upgrade`, { method: 'POST', body: JSON.stringify({ directory }), ...options });
 export const getMusicVideoCompositionExport = (id, options = {}) =>

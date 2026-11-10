@@ -6,6 +6,7 @@ import StoryboardAnimatic from './StoryboardAnimatic.jsx';
 import ShotStepper, { shotSteps } from './ShotStepper.jsx';
 import FrameStepper, { captureMediaFrame } from './FrameStepper.jsx';
 import { sceneShotName } from '../../lib/musicVideoStages.js';
+import { getMusicVideoCompositionPlayback } from '../../services/apiMusicVideo.js';
 
 // Three.js loads only when the greybox previz is the source being watched.
 const PrevizPlayer = lazy(() => import('./PrevizPlayer.jsx'));
@@ -80,6 +81,36 @@ function VideoPreview({ source, scenes, projectName, seekRequest, collapsed, onE
   );
 }
 
+// Asked once per document version by the dock itself, so switching sources does not ask again.
+function useDocumentPlayback(project) {
+  const directory = (project.composition?.mode === 'document' && project.composition?.document?.directory) || '';
+  const [playback, setPlayback] = useState(null);
+  useEffect(() => {
+    if (!directory) { setPlayback(null); return undefined; }
+    let active = true;
+    setPlayback(null);
+    getMusicVideoCompositionPlayback(project.id, { silent: true })
+      .then((result) => { if (active) setPlayback({ directory, native: result?.native === true }); })
+      .catch(() => { if (active) setPlayback({ directory, native: false }); });
+    return () => { active = false; };
+  }, [project.id, directory]);
+  return playback?.directory === directory ? playback : null;
+}
+
+/**
+ * The live composition document. The unmodified shipped template has no
+ * authored code, so its scenes play in this browser (smooth on a phone) and
+ * the isolated worker only draws paused frames. Any other document, and any
+ * the server cannot vouch for, plays in the worker as before. Nothing mounts
+ * until the server has answered, so the worker is not started just to be dropped.
+ */
+function DocumentPreview({ project, playback, audioUrl, seekRequest, collapsed, onEditShot, onProject }) {
+  if (!playback) return <p className={`text-xs text-port-text-muted ${collapsed ? 'max-xl:hidden' : ''}`}>Loading the composition…</p>;
+  return playback.native
+    ? <StoryboardAnimatic project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} onEditShot={onEditShot} variant="document" />
+    : <div className={collapsed ? 'max-xl:hidden' : ''}><CompositionPreviewPlayer project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} shotNav onEditShot={onEditShot} onProject={onProject} /></div>;
+}
+
 /**
  * The docked preview card, on every watched step (not Story, Plan or Assets). `MusicVideoLayout` places it: a
  * right-hand column from `xl` up; below it, a folded row above the step that
@@ -108,6 +139,7 @@ export default function PreviewDock({ project, sources, audioUrl, seekRequest, c
   const Chevron = collapsed ? ChevronDown : ChevronUp;
   const SizeIcon = expanded ? Minimize2 : Maximize2;
   const pickerId = `mv-preview-source-${project.id}`;
+  const documentPlayback = useDocumentPlayback(project);
   return (
     // A flex gap, not space-y: space-y puts a margin under the header row even
     // when everything after it is hidden, so the folded dock sat off-center.
@@ -167,7 +199,7 @@ export default function PreviewDock({ project, sources, audioUrl, seekRequest, c
         </p>
       )}
       {/* Folded below xl, the dock is one row: the player and its controls wait for the expand. */}
-      {source?.kind === 'document' && <div className={collapsed ? 'max-xl:hidden' : ''}><CompositionPreviewPlayer project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} shotNav onEditShot={onEditShot} onProject={onProject} /></div>}
+      {source?.kind === 'document' && <DocumentPreview project={project} playback={documentPlayback} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} onEditShot={onEditShot} onProject={onProject} />}
       {source?.kind === 'composite' && <StoryboardAnimatic project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} onEditShot={onEditShot} variant="composite" />}
       {source?.kind === 'lyrics' && <div className={collapsed ? 'max-xl:hidden' : ''}><CompositionPreviewPlayer project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} lyrics shotNav onEditShot={onEditShot} /></div>}
       {source?.kind === 'animatic' && <StoryboardAnimatic project={project} audioUrl={audioUrl} seekRequest={seekRequest} collapsed={collapsed} onEditShot={onEditShot} />}

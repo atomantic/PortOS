@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runInNewContext } from 'node:vm';
 vi.mock('./compositionDocument.js', () => ({ isUpgradableLayeredEngine: bytes => bytes.toString().startsWith('// older shipped engine') }));
-import { adaptStagedDocumentPreview } from './documentPreviewPlayback.js';
+import { adaptStagedDocumentPreview, shippedLayeredDocument } from './documentPreviewPlayback.js';
 import { installLayeredPreviewPlayback } from './previewPlaybackRuntime.js';
 import { imageEffectState, IMAGE_EFFECT_FOG_COLOR, photoSequenceIndex, photoSequenceLayers, scenePhotoSequence } from '../../lib/musicVideoImageEffects.js';
 
@@ -50,6 +50,24 @@ describe('recognized staged composition playback capability', () => {
     await writeFile(join(generated, 'index.html'), index.replace('<script src="engine.js"></script>', '<script src="generated.js"></script>\n<script src="engine.js"></script>'));
     await writeFile(join(generated, 'generated.js'), 'window.PORTOS_MV_GENERATED = { sections: {} };');
     expect(await adaptStagedDocumentPreview(generated)).toMatchObject({ adapted: false, reason: 'generated-contract-not-admitted' });
+  });
+
+  // Uniquely catches authored or customized document code being cleared to play in the viewer's own browser.
+  it('reports only the unmodified shipped template as shipped, without touching the document', async () => {
+    const root = await staged();
+    const before = await readFile(join(root, 'engine.js'));
+    expect(await shippedLayeredDocument(root)).toEqual({ shipped: true });
+    expect(await readFile(join(root, 'engine.js'))).toEqual(before);
+    const custom = await staged();
+    await writeFile(join(custom, 'cameraRig.js'), 'globalThis.custom = true;');
+    expect(await shippedLayeredDocument(custom)).toEqual({ shipped: false, reason: 'custom-helper' });
+    const generated = await staged();
+    const index = await readFile(join(generated, 'index.html'), 'utf8');
+    await writeFile(join(generated, 'index.html'), index.replace('<script src="engine.js"></script>', '<script src="generated.js"></script>\n<script src="engine.js"></script>'));
+    expect(await shippedLayeredDocument(generated)).toEqual({ shipped: false, reason: 'generated-contract-not-admitted' });
+    const older = await staged();
+    await writeFile(join(older, 'engine.js'), '// older shipped engine\n');
+    expect(await shippedLayeredDocument(older)).toEqual({ shipped: false, reason: 'unrecognized-engine', upgradable: true });
   });
 
   // Uniquely catches the player losing its one-tap way back to smooth playback for an older shipped engine.
