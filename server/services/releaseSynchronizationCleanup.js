@@ -78,6 +78,9 @@ export async function settleInlineReleaseCheckouts(entry, deps = {}) {
       if (tree) await record(app.id, { status: 'incomplete', reason: 'retirement-review-pending',
         retirementObligations: [{ ...release, reason: 'retirement-review-pending' }],
         nextAction: 'Retain the exact checkout until its reviewed retirement receipt is verified.' });
+      if (tree && !await retainReview({ ...release, repoPath })) {
+        hold('release-sync-local-review-unretained'); continue;
+      }
       const prepared = await prepare({ appId: app.id, release, prUrl });
       if (!prepared.ok) { hold(prepared.reason); continue; }
       const review = prepared.review;
@@ -85,8 +88,7 @@ export async function settleInlineReleaseCheckouts(entry, deps = {}) {
         || review.comparison.difference !== '' || typeof review.digest !== 'string') {
         hold('release-retirement-review-unverified'); continue;
       }
-      if (tree?.locked && (!await retainReview({ ...release, repoPath })
-        || !await (publisher ? validateLocked : validateLockedSync)({ ...release, repoPath }))) {
+      if (tree?.locked && !await (publisher ? validateLocked : validateLockedSync)({ ...release, repoPath })) {
         hold('release-locked-owner-unverified'); continue;
       }
       const result = await retire({ appId: app.id, release, review: { prUrl, digest: review.digest, acceptSuperseded: false } },
