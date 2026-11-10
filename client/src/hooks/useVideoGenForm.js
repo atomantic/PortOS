@@ -26,6 +26,7 @@ import {
 import { videoStreamingModeFromRecord } from '../lib/videoStreamingMode.js';
 import { RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, getRunwayVideoModel, runwayModelTakesText } from '../lib/runwayVideoModels.js';
 import { HIGGSFIELD_DEFAULT_VIDEO_MODEL, getHiggsfieldVideoModel } from '../lib/higgsfieldVideoModels.js';
+import { VERTEX_DEFAULT_VIDEO_MODEL, getVertexVideoModel } from '../lib/vertexVideoModels.js';
 import { RUNWAY_SPECIAL_VIDEO_MODELS, getRunwaySpecialVideoModel, RUNWAY_SPECIAL_VIDEO_MODES } from '../../../server/lib/runwaySpecialVideoModels.js';
 import { useVideoGenFieldState } from './useVideoGenFieldState.js';
 import { useVideoGenSubmitFlow } from './useVideoGenSubmitFlow.js';
@@ -81,7 +82,7 @@ const editableRemixModel = (models, defaultModelId) => {
  *     only to decide whether to show the control at all.
  */
 export function useVideoGenForm({
-  models, modelContext, availableLoras, grokEnabled, falEnabled = false, reactorEnabled = false, runwayEnabled = false, geminiEnabled = false, higgsfieldEnabled = false,
+  models, modelContext, availableLoras, grokEnabled, falEnabled = false, reactorEnabled = false, runwayEnabled = false, geminiEnabled = false, higgsfieldEnabled = false, vertexEnabled = false,
   remoteSubmissionFields = null, displaySleepEnabled = false,
 }) {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -118,6 +119,10 @@ export function useVideoGenForm({
     higgsfieldDuration, setHiggsfieldDuration,
     higgsfieldResolution, setHiggsfieldResolution,
     higgsfieldGenerateAudio, setHiggsfieldGenerateAudio,
+    vertexModelId, setVertexModelId,
+    vertexDuration, setVertexDuration,
+    vertexResolution, setVertexResolution,
+    vertexGenerateAudio, setVertexGenerateAudio,
     reactorClipId, setReactorClipId,
     reactorSeconds, setReactorSeconds,
     reactorSeed, setReactorSeed,
@@ -194,6 +199,15 @@ export function useVideoGenForm({
     setHiggsfieldDuration('');
     setHiggsfieldResolution('');
   }, [higgsfieldModelId]);
+
+  // Each Veo model has its own lengths and inputs.
+  const vertexModelPickRef = useRef(vertexModelId);
+  useEffect(() => {
+    if (vertexModelPickRef.current === vertexModelId) return;
+    vertexModelPickRef.current = vertexModelId;
+    setVertexDuration('');
+    setVertexResolution('');
+  }, [vertexModelId]);
 
   // Music renders live in the shared library rather than in the browser's
   // local file picker. Turn a render's deep-link filename into the same File
@@ -674,7 +688,7 @@ export function useVideoGenForm({
   // always anchors and the promise has to collapse to the default there.
   // Each hosted lane stays gated on its own *Enabled flag, so a persisted
   // backend that is no longer configured resolves to null (the local lane).
-  const hostedLane = ({ grok: grokEnabled, fal: falEnabled, reactor: reactorEnabled, runway: runwayEnabled, gemini: geminiEnabled, higgsfield: higgsfieldEnabled })[backend]
+  const hostedLane = ({ grok: grokEnabled, fal: falEnabled, reactor: reactorEnabled, runway: runwayEnabled, gemini: geminiEnabled, higgsfield: higgsfieldEnabled, vertex: vertexEnabled })[backend]
     ? backend : null;
   const isGrok = hostedLane === 'grok';
   // fal.ai's queue REST API is usability-gated on a configured API key
@@ -692,6 +706,8 @@ export function useVideoGenForm({
   const isGemini = hostedLane === 'gemini';
   const isHiggsfield = hostedLane === 'higgsfield';
   const higgsfieldModel = getHiggsfieldVideoModel(higgsfieldModelId) || getHiggsfieldVideoModel(HIGGSFIELD_DEFAULT_VIDEO_MODEL);
+  const isVertex = hostedLane === 'vertex';
+  const vertexModel = getVertexVideoModel(vertexModelId) || getVertexVideoModel(VERTEX_DEFAULT_VIDEO_MODEL);
   // A model that needs a start frame cannot stay picked in Text mode: fall back to the catalog default (which renders from text).
   const runwayTextBlocked = isRunway && mode === 'text' && !runwayModelTakesText(getRunwayVideoModel(runwayModelId || RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL));
   useEffect(() => {
@@ -893,7 +909,7 @@ export function useVideoGenForm({
   // Extra reference rows for a reference-to-video model. The model's
   // `maxReferenceImages` counts the first-frame input, so rows cap one lower.
   // A Higgsfield reference render has no start frame, so every row is a reference.
-  const maxExtraReferenceImages = isHiggsfield ? higgsfieldModel.maxReferenceImages : Math.max(0, (Number(isRunway
+  const maxExtraReferenceImages = isHiggsfield ? higgsfieldModel.maxReferenceImages : isVertex ? vertexModel.maxReferenceImages : Math.max(0, (Number(isRunway
     ? getRunwayVideoModel(runwayModelId || RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL)?.referenceImages?.max
     : currentModel?.maxReferenceImages) || 0) - 1);
   const addReferenceImage = () => setReferenceImageFiles((prev) => (
@@ -1024,7 +1040,7 @@ export function useVideoGenForm({
   const handleBackendChange = (id) => {
     setBackend(id);
     if (id !== 'runway' && RUNWAY_SPECIAL_VIDEO_MODES.includes(mode)) handleModeChange('text');
-    if ((id === 'grok' || id === 'fal' || id === 'reactor' || id === 'runway' || id === 'gemini' || id === 'higgsfield') && mode !== 'text' && mode !== 'image') {
+    if ((id === 'grok' || id === 'fal' || id === 'reactor' || id === 'runway' || id === 'gemini' || id === 'higgsfield' || id === 'vertex') && mode !== 'text' && mode !== 'image') {
       handleModeChange((sourceImageFile || sourceImageUpload) ? 'image' : 'text');
     }
   };
@@ -1349,6 +1365,17 @@ export function useVideoGenForm({
       if (p.duration) setHiggsfieldDuration(String(p.duration));
       if (p.resolution) setHiggsfieldResolution(p.resolution);
       setHiggsfieldGenerateAudio(p.generateAudio === true);
+    } else if (p.mode === 'vertex') {
+      setBackend('vertex');
+      setMode(p.videoMode === 'image' ? 'image' : 'text');
+      const veo = getVertexVideoModel(p.modelId);
+      if (veo) {
+        vertexModelPickRef.current = veo.id;
+        setVertexModelId(veo.id);
+      }
+      if (p.duration) setVertexDuration(String(p.duration));
+      if (p.resolution) setVertexResolution(p.resolution);
+      setVertexGenerateAudio(p.generateAudio === true);
     } else if (p.mode === 'gemini') {
       setBackend('gemini');
       setMode(p.videoMode === 'image' ? 'image' : 'text');
@@ -1453,6 +1480,7 @@ export function useVideoGenForm({
     isReactor, reactorClipId, reactorSeconds, reactorSeed, reactorAspect, remoteSubmissionFields,
     isRunway, runwayModelId, runwayDuration, runwayResolution, runwayInputs,
     higgsfieldModelId, higgsfieldDuration, higgsfieldResolution, higgsfieldGenerateAudio,
+    vertexModelId, vertexDuration, vertexResolution, vertexGenerateAudio,
     displaySleepEnabled,
     prompt, negativePrompt, stylePreset, selectedUniverse,
     width, height, mode, sourceImageFile, sourceImageUpload,
@@ -1469,11 +1497,15 @@ export function useVideoGenForm({
 
   return {
     // Backend + mode
-    backend, hostedLane, isGrok, isFal, isReactor, isRunway, isGemini, isHiggsfield, handleBackendChange,
+    backend, hostedLane, isGrok, isFal, isReactor, isRunway, isGemini, isHiggsfield, isVertex, handleBackendChange,
     higgsfieldModel, higgsfieldModelId, setHiggsfieldModelId,
     higgsfieldDuration, setHiggsfieldDuration,
     higgsfieldResolution, setHiggsfieldResolution,
     higgsfieldGenerateAudio, setHiggsfieldGenerateAudio,
+    vertexModel, vertexModelId, setVertexModelId,
+    vertexDuration, setVertexDuration,
+    vertexResolution, setVertexResolution,
+    vertexGenerateAudio, setVertexGenerateAudio,
     grokDuration, setGrokDuration,
     falDuration, setFalDuration,
     falModelId, setFalModelId,

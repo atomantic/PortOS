@@ -141,6 +141,16 @@ export async function previewVideoPrompt({ previewUploads = [], ...body }) {
       referenceCount: (body.referenceImageFiles || []).length,
     }).record };
   }
+  if (backend === VIDEO_GEN_MODE.VERTEX) {
+    const { vertexVideoSentPrompt } = await import('./vertex.js');
+    return { backend, ...vertexVideoSentPrompt({
+      modelId: body.vertexModelId, prompt: body.prompt, negativePrompt: body.negativePrompt,
+      seconds: body.vertexDuration, width: body.width, height: body.height, resolution: body.vertexResolution,
+      generateAudio: body.vertexGenerateAudio === true, promptAdditions,
+      hasImage: hasSourceImage, hasEndImage: !!uploads.lastImage || !!body.lastImageFile,
+      referenceCount: (body.referenceImageFiles || []).length,
+    }).record };
+  }
   // Gemini's composer takes the prompt exactly as written (videoGen/geminiWeb.js).
   if (backend === VIDEO_GEN_MODE.GEMINI) return asWritten(body, { backend });
   if (backend === VIDEO_GEN_MODE.LOCAL) {

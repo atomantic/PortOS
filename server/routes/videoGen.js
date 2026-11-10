@@ -109,6 +109,7 @@ import { assertMediaDeletable } from '../services/mediaUsage.js';
 import { VIDEO_TILING_MODES } from '../lib/videoTiling.js';
 import { RUNWAY_SPECIAL_VIDEO_MODES, RUNWAY_ACT_TWO_RATIOS, RUNWAY_ALEPH_ASPECTS } from '../lib/runwaySpecialVideoModels.js';
 import { HIGGSFIELD_VIDEO_MODEL_IDS } from '../lib/higgsfieldVideoModels.js';
+import { VERTEX_VIDEO_MODEL_IDS } from '../lib/vertexVideoModels.js';
 
 const router = Router();
 
@@ -332,7 +333,7 @@ export const generateBodySchema = z.object({
   // ignore the local-only knobs below; they read prompt/negativePrompt,
   // width/height (mapped to an aspect ratio), sourceImageFile/sourceImage,
   // and their own duration field.
-  backend: z.enum(['local', 'grok', 'fal', 'reactor', 'runway', 'gemini', 'higgsfield']).optional(),
+  backend: z.enum(['local', 'grok', 'fal', 'reactor', 'runway', 'gemini', 'higgsfield', 'vertex']).optional(),
   // Grok image_to_video clip length in seconds — the shared schema (see
   // lib/grokVideoClip.js for which lengths grok actually delivers). Multipart
   // bodies arrive as strings, so coerce first.
@@ -388,6 +389,19 @@ export const generateBodySchema = z.object({
     z.boolean().optional(),
   ),
   higgsfieldSeed: optionalNum(0, 2147483647, 'higgsfieldSeed'),
+  // Vertex AI Veo model (lib/vertexVideoModels.js), length, tier, audio and
+  // seed. The provider refuses an uncatalogued model and snaps the length.
+  vertexModelId: z.enum(VERTEX_VIDEO_MODEL_IDS).optional(),
+  vertexDuration: z.preprocess(
+    (v) => (v == null || v === '' ? undefined : Number(v)),
+    optionalNum(1, 60, 'vertexDuration'),
+  ),
+  vertexResolution: z.preprocess((v) => (v === '' ? undefined : v), z.enum(['720p', '1080p']).optional()),
+  vertexGenerateAudio: z.preprocess(
+    (v) => (v === 'true' ? true : v === 'false' || v === '' ? undefined : v),
+    z.boolean().optional(),
+  ),
+  vertexSeed: optionalNum(0, 4294967295, 'vertexSeed'),
   // reactor.inc fast-h3 (#6214): the clip id to chain from
   // (continue_from_clip_id — frame-accurate continuation, unlike fal/grok
   // which start a fresh render each time) and clip length in seconds. The
@@ -691,6 +705,7 @@ router.get('/status', asyncHandler(async (_req, res) => {
     runwayEnabled: isVideoModeUsable(s, VIDEO_GEN_MODE.RUNWAY),
     geminiEnabled: isVideoModeUsable(s, VIDEO_GEN_MODE.GEMINI),
     higgsfieldEnabled: isVideoModeUsable(s, VIDEO_GEN_MODE.HIGGSFIELD),
+    vertexEnabled: isVideoModeUsable(s, VIDEO_GEN_MODE.VERTEX),
   });
 }));
 

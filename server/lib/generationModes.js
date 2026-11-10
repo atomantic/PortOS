@@ -18,6 +18,8 @@ export const IMAGE_GEN_MODE = Object.freeze({
   RUNWAY: 'runway',
   // Higgsfield's developer API (services/imageGen/higgsfield.js); the same id as VIDEO_GEN_MODE.HIGGSFIELD.
   HIGGSFIELD: 'higgsfield',
+  // Google Cloud Vertex AI (services/imageGen/vertex.js); the same id as VIDEO_GEN_MODE.VERTEX.
+  VERTEX: 'vertex',
 });
 
 export const IMAGE_GEN_MODES = Object.freeze(Object.values(IMAGE_GEN_MODE));
@@ -32,6 +34,7 @@ export const CLOUD_IMAGE_GEN_MODES = Object.freeze([
   IMAGE_GEN_MODE.FAL,
   IMAGE_GEN_MODE.RUNWAY,
   IMAGE_GEN_MODE.HIGGSFIELD,
+  IMAGE_GEN_MODE.VERTEX,
 ]);
 
 // The external SD-API backend remains synchronous; every other image backend
@@ -55,11 +58,13 @@ export const VIDEO_GEN_MODE = Object.freeze({
   GEMINI: 'gemini',
   // Higgsfield's developer API (services/videoGen/higgsfield.js).
   HIGGSFIELD: IMAGE_GEN_MODE.HIGGSFIELD,
+  // Google Cloud Vertex AI Veo (services/videoGen/vertex.js).
+  VERTEX: IMAGE_GEN_MODE.VERTEX,
 });
 
 export const VIDEO_GEN_MODES = Object.freeze(Object.values(VIDEO_GEN_MODE));
 export const CLOUD_VIDEO_GEN_MODES = Object.freeze([
-  VIDEO_GEN_MODE.GROK, VIDEO_GEN_MODE.FAL, VIDEO_GEN_MODE.REACTOR, VIDEO_GEN_MODE.RUNWAY, VIDEO_GEN_MODE.GEMINI, VIDEO_GEN_MODE.HIGGSFIELD,
+  VIDEO_GEN_MODE.GROK, VIDEO_GEN_MODE.FAL, VIDEO_GEN_MODE.REACTOR, VIDEO_GEN_MODE.RUNWAY, VIDEO_GEN_MODE.GEMINI, VIDEO_GEN_MODE.HIGGSFIELD, VIDEO_GEN_MODE.VERTEX,
 ]);
 
 /**

@@ -28,7 +28,7 @@ import { storableAutoUpdateConfig } from '../lib/sharedSchemas.js';
 import { DEFAULT_UNTRUSTED_CONTENT_POLICY, untrustedContentSettingsSchema } from '../lib/untrustedContent.js';
 import { agentContextSettingsSchema } from '../lib/agentContextValidation.js';
 import { EFFORT_LEVELS } from '../lib/providerModels.js';
-import { settingsSlicePatchSchema, privateCredentialParamsSchema, privateCredentialInputSchema, backupConfigSchema, autoUpdateSettingsSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, autofixerSettingsSchema, codeReviewSettingsSchema, locationSettingsSchema, hideFirstRunCardSchema, networkSetupPreferenceSchema, settingsEmbeddingsSchema, localLlmSettingsSchema, imessageConfigSchema, signalConfigSchema, beeperSettingsSchema, beeperSavedScopesSchema, spotifyConfigSchema, youtubeConfigSchema, apiAccessSettingsSchema, instanceFeatureSettingsSchema, instanceFeatureIdSchema, instanceFeatureUpdateSchema, instanceFeatureGroupSettingsSchema, instanceFeatureGroupIdSchema, instanceFeatureGroupUpdateSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, musicSettingsSchema, federationSettingsSchema, privacySettingsSchema, seriesAutopilotSettingsSchema, layeredIntelligenceSettingsSchema, imageGenGrokSettingsSchema, imageGenAgySettingsSchema, imageGenFalSettingsSchema, imageGenRunwaySettingsSchema, imageGenHiggsfieldSettingsSchema, imageGenGeminiSettingsSchema, renderDefaultsSettingsSchema, videoGenSettingsSchema, subscriptionCostsMapSchema, subscriptionPlanTiersMapSchema, usageApiBilledInstanceIdsSchema, namedOrchestrationProfileSchema, orchestrationProfilesSettingsSchema, harnessSettingsSchema, credentialBootstrapsSettingsSchema, validateRequest } from '../lib/validation.js';
+import { settingsSlicePatchSchema, privateCredentialParamsSchema, privateCredentialInputSchema, backupConfigSchema, autoUpdateSettingsSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, autofixerSettingsSchema, codeReviewSettingsSchema, locationSettingsSchema, hideFirstRunCardSchema, networkSetupPreferenceSchema, settingsEmbeddingsSchema, localLlmSettingsSchema, imessageConfigSchema, signalConfigSchema, beeperSettingsSchema, beeperSavedScopesSchema, spotifyConfigSchema, youtubeConfigSchema, apiAccessSettingsSchema, instanceFeatureSettingsSchema, instanceFeatureIdSchema, instanceFeatureUpdateSchema, instanceFeatureGroupSettingsSchema, instanceFeatureGroupIdSchema, instanceFeatureGroupUpdateSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, musicSettingsSchema, federationSettingsSchema, privacySettingsSchema, seriesAutopilotSettingsSchema, layeredIntelligenceSettingsSchema, imageGenGrokSettingsSchema, imageGenAgySettingsSchema, imageGenFalSettingsSchema, imageGenRunwaySettingsSchema, imageGenHiggsfieldSettingsSchema, imageGenVertexSettingsSchema, imageGenGeminiSettingsSchema, renderDefaultsSettingsSchema, videoGenSettingsSchema, subscriptionCostsMapSchema, subscriptionPlanTiersMapSchema, usageApiBilledInstanceIdsSchema, namedOrchestrationProfileSchema, orchestrationProfilesSettingsSchema, harnessSettingsSchema, credentialBootstrapsSettingsSchema, validateRequest } from '../lib/validation.js';
 import { filmLookSavedPresetsSchema } from '../lib/filmLookValidation.js';
 import { dockerContainmentSettingsSchema } from '../lib/dockerContainmentValidation.js';
 
@@ -76,6 +76,7 @@ const decorateBounds = (settings) => ({
     ...(settings.imageGen?.fal ? { fal: { ...settings.imageGen.fal, parallelLimitBounds: PARALLEL_BOUNDS } } : {}),
     ...(settings.imageGen?.runway ? { runway: { ...settings.imageGen.runway, parallelLimitBounds: PARALLEL_BOUNDS } } : {}),
     ...(settings.imageGen?.higgsfield ? { higgsfield: { ...settings.imageGen.higgsfield, parallelLimitBounds: PARALLEL_BOUNDS } } : {}),
+    ...(settings.imageGen?.vertex ? { vertex: { ...settings.imageGen.vertex, parallelLimitBounds: PARALLEL_BOUNDS } } : {}),
     ...(settings.imageGen?.gemini ? { gemini: { ...settings.imageGen.gemini, parallelLimitBounds: PARALLEL_BOUNDS } } : {}),
     ...(settings.imageGen?.local ? { local: { ...settings.imageGen.local, parallelLimitBounds: LOCAL_PARALLEL_BOUNDS } } : {}),
   },
@@ -87,6 +88,7 @@ const decorateBounds = (settings) => ({
       ...(settings.videoGen.fal ? { fal: { ...settings.videoGen.fal, parallelLimitBounds: PARALLEL_BOUNDS } } : {}),
       ...(settings.videoGen.runway ? { runway: { ...settings.videoGen.runway, parallelLimitBounds: PARALLEL_BOUNDS } } : {}),
       ...(settings.videoGen.higgsfield ? { higgsfield: { ...settings.videoGen.higgsfield, parallelLimitBounds: PARALLEL_BOUNDS } } : {}),
+      ...(settings.videoGen.vertex ? { vertex: { ...settings.videoGen.vertex, parallelLimitBounds: PARALLEL_BOUNDS } } : {}),
       ...(settings.videoGen.reactor ? { reactor: { ...settings.videoGen.reactor, parallelLimitBounds: PARALLEL_BOUNDS } } : {}),
       ...(settings.videoGen.local ? { local: { ...settings.videoGen.local, parallelLimitBounds: LOCAL_PARALLEL_BOUNDS } } : {}),
     },
@@ -143,6 +145,10 @@ const redactExternalTokens = (settings) => {
       const { apiKey, ...rest } = videoGen.higgsfield;
       videoGen.higgsfield = rest;
     }
+    if (isPlainObject(videoGen.vertex)) {
+      const { apiKey, ...rest } = videoGen.vertex;
+      videoGen.vertex = rest;
+    }
     if (isPlainObject(videoGen.topaz)) {
       const { apiKey, ...rest } = videoGen.topaz;
       videoGen.topaz = rest;
@@ -188,6 +194,7 @@ const preserveExternallyOwnedKeys = (next, current) => {
   carryOverNested('videoGen', 'reactor', 'apiKey');
   carryOverNested('videoGen', 'runway', 'apiKey');
   carryOverNested('videoGen', 'higgsfield', 'apiKey');
+  carryOverNested('videoGen', 'vertex', 'apiKey');
   carryOverNested('videoGen', 'topaz', 'apiKey');
   // beeperSettingsSchema is `.strict()` with no `token`/`tokenExpiresAt`
   // field, so a valid `beeper` PUT through this route can never carry either
@@ -643,6 +650,9 @@ const validateSettingsPatch = async (body) => {
   }
   if (body?.imageGen?.higgsfield !== undefined) {
     validateRequest(imageGenHiggsfieldSettingsSchema.partial(), body.imageGen.higgsfield);
+  }
+  if (body?.imageGen?.vertex !== undefined) {
+    validateRequest(imageGenVertexSettingsSchema.partial(), body.imageGen.vertex);
   }
   if (body?.imageGen?.gemini !== undefined) {
     validateRequest(imageGenGeminiSettingsSchema.partial(), body.imageGen.gemini);

@@ -22,12 +22,14 @@ import LocalSetupPanel from './LocalSetupPanel';
 import LocalRuntimeStatus from '../imageGen/LocalRuntimeStatus';
 import FalModelSelect from '../imageGen/FalModelSelect';
 import HiggsfieldModelSelect from '../imageGen/HiggsfieldModelSelect';
+import VertexModelSelect from '../imageGen/VertexModelSelect';
 import useLocalImageModels from '../../hooks/useLocalImageModels';
 import { useAgyModels } from '../../hooks/useAgyModels';
 import { getNavPageForPath } from '../../../../server/lib/navManifest.js';
 import { getVideoGenModelContext, getProviders } from '../../services/api';
 import {
   isLocalImageConfigured, IMAGE_GEN_MODE, FAL_IMAGE_DEFAULT_MODEL, falImageFamily, HIGGSFIELD_IMAGE_DEFAULT_MODEL, higgsfieldImageFamily,
+  VERTEX_IMAGE_DEFAULT_MODEL, vertexImageFamily,
   AGY_IMAGEGEN_DEFAULT_MODEL, AGY_IMAGEGEN_IMAGE_MODEL, CODEX_IMAGEGEN_DEFAULT_EFFORT, CODEX_IMAGEGEN_DEFAULT_MODEL,
   GROK_ASPECT_RATIOS, localModelSelectOptions, getRunwayImageModel, RUNWAY_IMAGE_DISCLOSURE,
 } from '../../lib/imageGenBackends';
@@ -57,7 +59,7 @@ const INPUT_CLASS = 'w-full bg-port-bg border border-port-border rounded-lg px-3
 const SECTION_CLASS = 'bg-port-card border border-port-border rounded-xl p-6 space-y-4';
 const FIELD_LABEL_CLASS = 'block text-xs font-medium text-gray-400 mb-1';
 
-export default function ImageGenProviderSections({ mediaTab, setMediaTab, form, parallelBounds, falCredential, higgsfieldCredential, runwayCredential, localRuntime, onStatusRecheck }) {
+export default function ImageGenProviderSections({ mediaTab, setMediaTab, form, parallelBounds, falCredential, higgsfieldCredential, vertexCredential, runwayCredential, localRuntime, onStatusRecheck }) {
   const runwayCatalog = useRunwayCatalog(mediaTab === 'runway');
   const { values, set } = form;
   const {
@@ -68,6 +70,7 @@ export default function ImageGenProviderSections({ mediaTab, setMediaTab, form, 
     runwayImageParallelLimit, runwayVideoParallelLimit,
     falEnabled, falModel, falImageParallelLimit, falVideoParallelLimit,
     higgsfieldEnabled, higgsfieldModel, higgsfieldImageParallelLimit, higgsfieldVideoParallelLimit,
+    vertexEnabled, vertexModel, vertexProjectId, vertexLocation, vertexImageParallelLimit, vertexVideoParallelLimit,
   } = values;
   const localConfigured = isLocalImageConfigured({ pythonPath, modelId: localModelId });
   // Disabling a provider while it is the active backend would leave the saved
@@ -183,6 +186,11 @@ export default function ImageGenProviderSections({ mediaTab, setMediaTab, form, 
   const higgsfieldModelId = useId();
   const higgsfieldImageParallelId = useId();
   const higgsfieldVideoParallelId = useId();
+  const vertexModelId = useId();
+  const vertexProjectFieldId = useId();
+  const vertexLocationFieldId = useId();
+  const vertexImageParallelId = useId();
+  const vertexVideoParallelId = useId();
 
   return (
     <>
@@ -756,6 +764,100 @@ export default function ImageGenProviderSections({ mediaTab, setMediaTab, form, 
           </div>
         )}
         <DeleteAfterDownloadToggle label="Delete from Higgsfield after download" detail="Once a render is saved here, delete its request data and outputs from Higgsfield (image and video renders). Irreversible: the output can't be re-fetched from Higgsfield afterward. A failed delete is logged and never fails the render." checked={values.higgsfieldDeleteAfterDownload} onChange={(v) => set('higgsfieldDeleteAfterDownload', v)} />
+      </div>
+      )}
+
+      {mediaTab === 'vertex' && (
+      <div className={SECTION_CLASS}>
+        <div className="flex items-center gap-2 text-white">
+          <Sparkles size={18} />
+          <h2 className="text-lg font-semibold">Vertex AI Imagegen</h2>
+        </div>
+        <p className="text-xs text-gray-500">
+          Render through Google Cloud Vertex AI: the Gemini image models (Nano Banana) take reference images,
+          Imagen 4 is text-to-image. Imagen&rsquo;s prompt rewrite is sent off. Prices shown are Vertex AI list
+          prices; your Google Cloud billing console shows the real charge.
+        </p>
+        {vertexCredential == null ? (
+          <div className="text-xs text-gray-500"><BrailleSpinner text="Checking Vertex AI credential" /></div>
+        ) : vertexCredential.configured ? (
+          <div className="flex items-center gap-2 text-xs text-port-success">
+            <Check size={14} />
+            <span>Vertex AI credential configured (shared with the Vertex AI video backend)</span>
+          </div>
+        ) : (
+          <div className="flex flex-wrap items-center gap-2 text-xs text-port-warning">
+            <AlertTriangle size={14} />
+            <span>No Vertex AI credential — paste an API key or service account JSON under the Defaults tab first.</span>
+            <button type="button" onClick={() => setMediaTab('defaults')} className="text-port-accent hover:underline">
+              Open Defaults
+            </button>
+          </div>
+        )}
+        <div className="grid gap-3 grid-cols-[repeat(auto-fit,minmax(min(100%,14rem),20rem))]">
+          <FormField label="Google Cloud project" labelClassName={FIELD_LABEL_CLASS}>
+            <input
+              id={vertexProjectFieldId}
+              type="text"
+              value={vertexProjectId}
+              onChange={(e) => set('vertexProjectId', e.target.value)}
+              placeholder="From the service account key"
+              autoComplete="off"
+              className={INPUT_CLASS}
+            />
+          </FormField>
+          <FormField label="Region" labelClassName={FIELD_LABEL_CLASS}>
+            <input
+              id={vertexLocationFieldId}
+              type="text"
+              value={vertexLocation}
+              onChange={(e) => set('vertexLocation', e.target.value)}
+              placeholder="us-central1"
+              autoComplete="off"
+              className={INPUT_CLASS}
+            />
+          </FormField>
+        </div>
+        <p className="text-xs text-gray-500">
+          Leave the project blank to use the service account&rsquo;s own project, or, with an API key, Vertex AI
+          express mode. The region applies to Imagen and Veo; the Gemini image models always run on the global endpoint.
+        </p>
+        <label className="flex items-center gap-3 cursor-pointer">
+          <input type="checkbox" checked={vertexEnabled} onChange={toggleProvider('vertexEnabled', IMAGE_GEN_MODE.VERTEX)} className="rounded" />
+          <span className="text-sm text-gray-300">Enable Vertex AI Imagegen</span>
+        </label>
+        {vertexEnabled && (
+          <div className="space-y-3 pl-6 border-l-2 border-port-border">
+            <FormField label="Default model" labelClassName={FIELD_LABEL_CLASS}>
+              <VertexModelSelect
+                id={vertexModelId}
+                value={vertexModel}
+                onChange={(v) => set('vertexModel', v || '')}
+                defaultLabel={`${vertexImageFamily(VERTEX_IMAGE_DEFAULT_MODEL)?.label} (default)`}
+                className={INPUT_CLASS}
+              />
+            </FormField>
+            <ParallelLimitField
+              id={vertexImageParallelId}
+              label="Parallel image render limit"
+              value={vertexImageParallelLimit}
+              onChange={(v) => set('vertexImageParallelLimit', v)}
+              bounds={parallelBounds}
+              helpText="How many image renders Vertex AI runs at once. Default 1."
+              warningText={`${formatCount(vertexImageParallelLimit)} concurrent renders can spend Google Cloud credit quickly.`}
+            />
+            <CleanersToggles mode={IMAGE_GEN_MODE.VERTEX} form={form} />
+          </div>
+        )}
+        <ParallelLimitField
+          id={vertexVideoParallelId}
+          label="Parallel video render limit"
+          value={vertexVideoParallelLimit}
+          onChange={(v) => set('vertexVideoParallelLimit', v)}
+          bounds={parallelBounds}
+          helpText="How many Veo renders run at once. Default 1."
+          warningText={`${formatCount(vertexVideoParallelLimit)} concurrent Veo renders can spend Google Cloud credit quickly.`}
+        />
       </div>
       )}
     </>

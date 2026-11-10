@@ -583,7 +583,8 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // inbound edits preserve them under the same same-render rule as v12.
   // v14 lets `renderSettings.videoMode` name the Gemini web video backend.
   // v15 lets `renderSettings.imageMode`/`videoMode` name the Higgsfield backends.
-  fableLoom: 15,
+  // v16 lets `renderSettings.imageMode`/`videoMode` name the Vertex AI backends.
+  fableLoom: 16,
   // v1 = Creative Director projects (PostgreSQL `creative_director_projects`)
   // federated via the per-record peer-sync push pipeline (record kind
   // `creativeDirectorProject`, sync category `creativeDirectorProjects`, #1564).
@@ -953,7 +954,8 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // v6 adds Runway image backend pins; older peers would coerce them to auto.
   // v7 lets `generation.videoMode` pin the Gemini web video backend.
   // v8 lets `generation.imageMode`/`videoMode` pin the Higgsfield backends.
-  creativeCommissions: 8,
+  // v9 lets `generation.imageMode`/`videoMode` pin the Vertex AI backends.
+  creativeCommissions: 9,
   // v1 = standalone media-library federation (#1566). NOT a record kind — it's
   // the wire contract for the library-level asset manifest a full-sync peer
   // advertises at GET /api/peer-sync/library-manifest. The receiver-pull sweep

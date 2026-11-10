@@ -57,6 +57,12 @@ export const CREDENTIALS = Object.freeze([
     settingsPath: 'videoGen.higgsfield.apiKey', configurePath: '/settings/credentials',
   }),
   Object.freeze({
+    id: 'vertex', label: 'Google Vertex AI', privateStore: true,
+    unlocks: 'Image (Nano Banana, Imagen) and video (Veo) generation through Google Cloud Vertex AI. Paste a Vertex AI API key or a service account JSON key.', tier: 'metered',
+    getUrl: 'https://console.cloud.google.com/vertex-ai', envVars: Object.freeze(['VERTEX_API_KEY']),
+    settingsPath: 'videoGen.vertex.apiKey', configurePath: '/settings/credentials',
+  }),
+  Object.freeze({
     id: 'github',
     label: 'GitHub',
     unlocks: 'CoS agent PRs, `gh` on spawned CLIs, and the GitHub Dev Tools page.',

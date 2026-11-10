@@ -71,19 +71,19 @@ describe('PORTOS_SCHEMA_VERSIONS', () => {
     // adds the shared finite/renewable series-design brief.
     // Older peers stay behind the full render contract until they advertise
     // support for the additive fields.
-    expect(PORTOS_SCHEMA_VERSIONS.fableLoom).toBe(15);
-    const olderPeer = { ...PORTOS_SCHEMA_VERSIONS, fableLoom: 14 };
+    expect(PORTOS_SCHEMA_VERSIONS.fableLoom).toBe(16);
+    const olderPeer = { ...PORTOS_SCHEMA_VERSIONS, fableLoom: 15 };
     const diff = compareSchemaVersions(PORTOS_SCHEMA_VERSIONS, olderPeer);
     expect(scopeVersionDiff(diff, RECORD_KIND_SCHEMA_CATEGORIES.fableLoom)).toEqual({
       compatible: false,
-      ahead: [{ category: 'fableLoom', senderV: 15, receiverV: 14 }],
+      ahead: [{ category: 'fableLoom', senderV: 16, receiverV: 15 }],
       behind: [],
     });
     expect(scopeVersionDiff(diff, RECORD_KIND_SCHEMA_CATEGORIES.artist).compatible).toBe(true);
   });
 
   it('version-gates the additive Creative Commission taste brief shape', () => {
-    expect(PORTOS_SCHEMA_VERSIONS.creativeCommissions).toBe(8);
+    expect(PORTOS_SCHEMA_VERSIONS.creativeCommissions).toBe(9);
   });
 
   it('moves the render-backend alphabets and their sync versions together', () => {
@@ -96,10 +96,10 @@ describe('PORTOS_SCHEMA_VERSIONS', () => {
       creativeCommissions: PORTOS_SCHEMA_VERSIONS.creativeCommissions,
       fableLoom: PORTOS_SCHEMA_VERSIONS.fableLoom,
     }).toEqual({
-      image: ['external', 'local', 'codex', 'grok', 'agy', 'fal', 'runway', 'higgsfield'],
-      video: ['local', 'grok', 'fal', 'reactor', 'runway', 'gemini', 'higgsfield'],
-      creativeCommissions: 8,
-      fableLoom: 15,
+      image: ['external', 'local', 'codex', 'grok', 'agy', 'fal', 'runway', 'higgsfield', 'vertex'],
+      video: ['local', 'grok', 'fal', 'reactor', 'runway', 'gemini', 'higgsfield', 'vertex'],
+      creativeCommissions: 9,
+      fableLoom: 16,
     });
   });
 });

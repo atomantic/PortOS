@@ -12,6 +12,7 @@ import BrailleSpinner from '../BrailleSpinner';
 import RunwayModelSelect from '../imageGen/RunwayModelSelect';
 import FalModelSelect from '../imageGen/FalModelSelect';
 import HiggsfieldModelSelect from '../imageGen/HiggsfieldModelSelect';
+import VertexModelSelect from '../imageGen/VertexModelSelect';
 import {
   IMAGE_GEN_MODE, IMAGE_PIN_MODES, RENDER_TARGET_BACKEND_AUTO, RENDER_TARGET_OPTIONS, VIDEO_RENDER_MODES, modeLabel,
   normalizeRenderPinValue, supportsCloudModelOverride,
@@ -29,6 +30,7 @@ const BACKEND_TILES = [
   { mode: IMAGE_GEN_MODE.RUNWAY, icon: Cloud, label: 'Runway', blurb: 'Hosted Gen-4 stills with up to three tagged references. Billed per image.', enabledKey: 'runwayEnabled' },
   { mode: IMAGE_GEN_MODE.FAL, icon: Sparkles, label: 'fal.ai', blurb: "Hosted image and reference-edit models through fal.ai's API. Billed per image to your fal.ai account.", enabledKey: 'falEnabled' },
   { mode: IMAGE_GEN_MODE.HIGGSFIELD, icon: Cloud, label: 'Higgsfield', blurb: "Hosted Soul, Qwen Image, Ideogram and Z-Image models through Higgsfield's API. Billed to your Higgsfield account.", enabledKey: 'higgsfieldEnabled' },
+  { mode: IMAGE_GEN_MODE.VERTEX, icon: Cloud, label: 'Vertex AI', blurb: 'Nano Banana (Gemini image) and Imagen 4 through your Google Cloud project. Billed to your Google Cloud account.', enabledKey: 'vertexEnabled' },
 ];
 
 // fal.ai / reactor.inc video keys (#6213/#6214) — write-only since #8997:
@@ -55,6 +57,11 @@ const VIDEO_KEY_ROWS = [
     id: 'higgsfield', label: 'Higgsfield API key', placeholder: 'KEY_ID:KEY_SECRET', envLabel: 'HIGGSFIELD_API_KEY',
     hint: 'Enables the Higgsfield video backend (Seedance, Kling, Wan) on the Video Gen page and the Higgsfield image backend (Higgsfield tab). Create a key at console.higgsfield.ai and paste it as KEY_ID:KEY_SECRET, or set the HIGGSFIELD_API_KEY environment variable instead.',
     missing: 'No Higgsfield key configured — the Higgsfield video and image backends will be unavailable.',
+  },
+  {
+    id: 'vertex', label: 'Google Vertex AI credential', placeholder: 'API key, or paste the service account JSON', envLabel: 'VERTEX_API_KEY',
+    hint: 'Enables the Vertex AI video backend (Veo) on the Video Gen page and the Vertex AI image backend (Vertex AI tab). Paste a Vertex AI API key, or the whole JSON key of a service account with the Vertex AI User role. Set the project and region on the Vertex AI tab. Or set the VERTEX_API_KEY environment variable instead.',
+    missing: 'No Vertex AI credential configured — the Vertex AI video and image backends will be unavailable.',
   },
 ];
 
@@ -276,6 +283,16 @@ export default function ImageGenBackendSections({ mediaTab, form, credentials })
                       value={entry.imageModel || ''}
                       onChange={(v) => setPin('imageModel', v)}
                       defaultLabel="Model: Higgsfield default"
+                      className={`${SELECT_CLASS} sm:w-52`}
+                    />
+                  </FormField>
+                ) : pinnedMode === IMAGE_GEN_MODE.VERTEX ? (
+                  <FormField label={`${label} model`} labelClassName="sr-only" className="contents">
+                    <VertexModelSelect
+                      id={modelInputId}
+                      value={entry.imageModel || ''}
+                      onChange={(v) => setPin('imageModel', v)}
+                      defaultLabel="Model: Vertex AI default"
                       className={`${SELECT_CLASS} sm:w-52`}
                     />
                   </FormField>
