@@ -18,6 +18,7 @@ import {
   selectedContextFramesForModel,
 } from './videoGenParams.js';
 import { isDefaultVideoStreamingMode } from './videoStreamingMode.js';
+import { HIGGSFIELD_DEFAULT_VIDEO_MODEL, getHiggsfieldVideoModel } from './higgsfieldVideoModels.js';
 
 // The form owns state transitions and validation. This module owns the three
 // request contracts the video route accepts: Grok, federated, and local.
@@ -134,7 +135,9 @@ function higgsfieldVideoSubmission({
   composed, higgsfieldModelId, higgsfieldDuration, higgsfieldResolution, higgsfieldGenerateAudio,
   referenceImageFiles = [], width, height, mode, sourceImageFile, sourceImageUpload,
 }) {
-  const referenceFiles = mode === 'image' ? [] : referenceImageFiles.filter(Boolean);
+  // A family without a reference route never gets the rows a previous pick left behind (its panel is hidden).
+  const family = getHiggsfieldVideoModel(higgsfieldModelId) || getHiggsfieldVideoModel(HIGGSFIELD_DEFAULT_VIDEO_MODEL);
+  const referenceFiles = mode === 'image' || !family.maxReferenceImages ? [] : referenceImageFiles.filter(Boolean);
   return {
     backend: 'higgsfield',
     prompt: composed.prompt,
