@@ -483,18 +483,46 @@ sync_locked_mlx_video() (
     echo "📦 Creating ${label} venv with Python 3.11..."
     portos_uv --no-config venv --clear --python 3.11 "$UV_PROJECT_ENVIRONMENT"
   fi
-  if [[ -n "$lock" ]]; then
-    echo "📦 Syncing ${label} wheels from ${lock##*/}..."
-    portos_uv --no-config --no-cache pip sync --require-hashes --only-binary :all: --python "$python" "$lock"
-  else
-    echo "📦 Syncing ${label} wheels from the pinned upstream lock..."
-    portos_uv --no-config --no-cache sync --locked --no-build --no-install-workspace --python "$python"
+  echo "📦 Syncing ${label} wheels from ${lock##*/}..."
+  portos_uv --no-config --no-cache pip sync --require-hashes --only-binary :all: --python "$python" "$lock"
+  if [[ "$1" == --wan22-source ]]; then
+    # Bash 3.2 drops function locals before the subshell's EXIT trap on error.
+    build_dir="$(mktemp -d "${TMPDIR:-/tmp}/portos-wan22.XXXXXX")"
+    trap 'rm -rf -- "$build_dir"' EXIT
+    stage_wan22_source "$python" "$pin" "$build_dir"
+    set -- "$build_dir"
   fi
   echo "📦 Building pinned ${label} source with hash-locked build tools..."
   portos_uv --no-config --no-cache pip install --no-deps --only-binary :all: --preview-features build-dependency-hashes --require-build-hashes --build-constraints "$SCRIPT_DIR/requirements-mlx-video-build.lock.txt" --python "$python" --reinstall "$@"
   portos_uv --no-config pip check --python "$python"
   pin_venv_arm64 "$UV_PROJECT_ENVIRONMENT"
 )
+
+stage_wan22_source() {
+  local python="$1" revision="$2" build_dir="$3"
+  git archive "$revision" -- pyproject.toml README.md LICENSE src | tar -xf - -C "$build_dir"
+  # Pillow 13's private typing module fails to import on CPython 3.11.
+  # MLX-Gen only uses the alias in an annotation. Build from the archive with
+  # the equivalent stdlib type, keeping the upstream checkout pristine.
+  "$python" -I -S - "$build_dir/src/mflux/utils/image_util.py" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+source = path.read_text(encoding="utf-8")
+old_import = "from PIL._typing import StrOrBytesPath\n"
+if source.count(old_import) != 1:
+    raise SystemExit("Unexpected MLX-Gen image typing import")
+source = source.replace(old_import, "")
+source = source.replace("from pathlib import Path\n", "from os import PathLike\nfrom pathlib import Path\n", 1)
+source = source.replace(
+    "log = logging.getLogger(__name__)",
+    "StrOrBytesPath = str | bytes | PathLike[str] | PathLike[bytes]\n\nlog = logging.getLogger(__name__)",
+    1,
+)
+path.write_text(source, encoding="utf-8")
+PY
+}
 
 if python_required && ! have "$PYTHON_BIN"; then
   echo "❌ $PYTHON_BIN not found. Install Python 3.10+ first." >&2
@@ -857,7 +885,7 @@ if [[ "$INSTALL_WAN22" == "1" ]]; then
     (cd "${WAN22_DIR}" && git fetch --progress origin)
   fi
   git_checkout_pin "${WAN22_DIR}" "${WAN22_PIN}"
-  sync_locked_mlx_video "Wan 2.2 MLX" "$WAN22_DIR" "$WAN22_PY" "$WAN22_PIN" "" -e .
+  sync_locked_mlx_video "Wan 2.2 MLX" "$WAN22_DIR" "$WAN22_PY" "$WAN22_PIN" "$SCRIPT_DIR/requirements-wan22-mlx.lock.txt" --wan22-source
   probe_or_fail \
     "MLX-Gen synced but the Wan runtime import failed." \
     "Use Repair / Upgrade from the Video Gen runtime panel to retry." \
