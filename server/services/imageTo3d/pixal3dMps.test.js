@@ -31,6 +31,7 @@ const BASE = join('/tmp', 'portos-test-home');
 const ROOT = join(BASE, 'pixal3d-mps');
 const VENV = join(ROOT, '.venv', 'bin', 'python');
 const SCRIPT = join(ROOT, 'generate_mps.py');
+const PINNED_SCRIPT = join(ROOT, '.venv', 'portos-source', 'generate_mps.py');
 const existsFor = (...paths) => (path) => paths.includes(path);
 
 const makeChild = () => {
@@ -226,7 +227,7 @@ describe('runPixal3dMpsGenerate', () => {
     expect(spawnImpl).not.toHaveBeenCalled();
   });
 
-  it('spawns from the fork checkout and resolves the produced GLB', async () => {
+  it('prefers the pinned entrypoint over a legacy checkout and resolves the produced GLB', async () => {
     const child = makeChild();
     const spawnImpl = vi.fn(() => child);
     const postprocessGlb = vi.fn();
@@ -236,15 +237,16 @@ describe('runPixal3dMpsGenerate', () => {
       outputPath: '/tmp/model.glb',
       steps: 12,
       seed: 42,
-      exists: existsFor(VENV, SCRIPT),
+      exists: existsFor(VENV, SCRIPT, PINNED_SCRIPT),
       spawnImpl,
       postprocessGlb,
     });
     expect(spawnImpl).toHaveBeenCalledWith(
       VENV,
-      expect.arrayContaining(['--device', 'mps', '--pipeline-type', '1024_cascade']),
+      [PINNED_SCRIPT, '/tmp/source.png', '--device', 'mps', '--pipeline-type', '1024_cascade',
+        '--output', '/tmp/model.glb', '--seed', '42', '--steps', '12'],
       expect.objectContaining({
-        cwd: ROOT,
+        cwd: join(ROOT, '.venv', 'portos-source'),
         env: expect.objectContaining({ PYTHONUNBUFFERED: '1' }),
       }),
     );

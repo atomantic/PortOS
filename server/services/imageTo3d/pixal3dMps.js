@@ -15,7 +15,7 @@
 
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile, spawn } from '../../lib/childProcess.js';
 import { appendMissingModules, describeDegradedInstall } from './degradedInstall.js';
@@ -61,14 +61,16 @@ export function pixal3dMpsVenvPython(base) {
   return join(pixal3dMpsRoot(base), '.venv', 'bin', 'python');
 }
 
-/** The port's Apple-native inference entrypoint. */
-export function pixal3dMpsGenerateScript(base) {
-  return join(pixal3dMpsRoot(base), 'generate_mps.py');
+/** Prefer the pinned source snapshot; legacy installs can render until Repair. */
+export function pixal3dMpsGenerateScript(base, exists = existsSync) {
+  const root = pixal3dMpsRoot(base);
+  const pinned = join(root, '.venv', 'portos-source', 'generate_mps.py');
+  return exists(pinned) ? pinned : join(root, 'generate_mps.py');
 }
 
 /** Installed ⇔ the private venv and the port's entrypoint both exist. */
 export function isPixal3dMpsInstalled({ base, exists = existsSync } = {}) {
-  return exists(pixal3dMpsVenvPython(base)) && exists(pixal3dMpsGenerateScript(base));
+  return exists(pixal3dMpsVenvPython(base)) && exists(pixal3dMpsGenerateScript(base, exists));
 }
 
 /**
@@ -257,6 +259,7 @@ export function buildPixal3dMpsGenerateArgs({
   pipelineType = PIXAL3D_MPS_DEFAULT_PIPELINE_TYPE,
   steps = null,
   seed = null,
+  exists = existsSync,
 } = {}) {
   if (!imagePath) throw new Error('buildPixal3dMpsGenerateArgs: imagePath is required');
   if (!PIXAL3D_MPS_PIPELINE_TYPES.includes(pipelineType)) {
@@ -266,7 +269,7 @@ export function buildPixal3dMpsGenerateArgs({
   }
   validateRenderOptions('buildPixal3dMpsGenerateArgs', { steps, seed });
   const args = [
-    pixal3dMpsGenerateScript(base),
+    pixal3dMpsGenerateScript(base, exists),
     imagePath,
     '--device', 'mps',
     '--pipeline-type', pipelineType,
@@ -347,7 +350,7 @@ export function runPixal3dMpsGenerate({
   postprocessGlb = rewriteGlbMaterialsOpaque,
 } = {}) {
   const python = pixal3dMpsVenvPython(base);
-  if (!exists(python) || !exists(pixal3dMpsGenerateScript(base))) {
+  if (!isPixal3dMpsInstalled({ base, exists })) {
     const error = new Error(`${LABEL} is not installed — install it before generating.`);
     error.code = `${CODE_PREFIX}_NOT_INSTALLED`;
     return { promise: Promise.reject(error), kill: () => {} };
@@ -360,6 +363,7 @@ export function runPixal3dMpsGenerate({
     pipelineType,
     steps,
     seed,
+    exists,
   });
   // `generate_mps.py` uses tqdm and plain prints; without this flag a pipe buffers
   // the first several minutes of progress, leaving the shared render card looking
@@ -371,7 +375,7 @@ export function runPixal3dMpsGenerate({
   return runGenerateSubprocess({
     command,
     args,
-    cwd: pixal3dMpsRoot(base),
+    cwd: dirname(args[0]),
     env: renderEnv,
     label: LABEL,
     codePrefix: CODE_PREFIX,

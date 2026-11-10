@@ -25,14 +25,14 @@ VPY=.venv/bin/python
 "$VPY" -m pip install --disable-pip-version-check --require-hashes --no-deps --only-binary :all: -r "$SCRIPTS_DIR/requirements-pixal3d-mps.lock.txt"
 "$VPY" -m pip install --disable-pip-version-check --require-hashes --no-deps --no-build-isolation -r "$SCRIPTS_DIR/requirements-pixal3d-mps-sources.lock.txt"
 
-# Archive Git objects, not the working directory: Repair must not reuse local
-# source changes, compiled extensions or shaders left by an earlier install.
-NATIVE_SOURCE=.venv/portos-native
-mkdir -p "$NATIVE_SOURCE"
-git archive --format=tar "$REVISION" extern | tar -xf - -C "$NATIVE_SOURCE"
+# Archive Git objects, not the working directory: builds and renders use the
+# same pinned source, even if an earlier checkout has local changes/artifacts.
+PORTOS_SOURCE=.venv/portos-source
+mkdir -p "$PORTOS_SOURCE"
+git archive --format=tar "$REVISION" | tar -xf - -C "$PORTOS_SOURCE"
 
 # Torch 2.15 headers require C++20. Patch only the private build sources.
-"$VPY" - "$NATIVE_SOURCE" <<'PY'
+"$VPY" - "$PORTOS_SOURCE" <<'PY'
 from pathlib import Path
 import sys
 for package in ('mtlmesh', 'mtlgemm', 'mtlbvh', 'mtldiffrast', 'o_voxel'):
@@ -43,7 +43,7 @@ for package in ('mtlmesh', 'mtlgemm', 'mtlbvh', 'mtldiffrast', 'o_voxel'):
 PY
 
 for package in mtlmesh mtlgemm mtlbvh mtldiffrast o_voxel natten-mps; do
-  "$VPY" -m pip install --disable-pip-version-check --no-deps --no-build-isolation --no-cache-dir -e "$NATIVE_SOURCE/extern/$package"
+  "$VPY" -m pip install --disable-pip-version-check --no-deps --no-build-isolation --no-cache-dir -e "$PORTOS_SOURCE/extern/$package"
 done
 
 "$VPY" - <<'PY'

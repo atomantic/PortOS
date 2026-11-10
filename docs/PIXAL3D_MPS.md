@@ -12,10 +12,10 @@ Install and **Repair install** both select the immutable fork revision and run
 including when it contains Python 3.10. Model assets are retained. Setup installs
 the complete hashed wheel closure, then four hashed source packages with
 `--no-deps --no-build-isolation`, then the six vendored native packages against
-that Torch ABI. Git archives the vendored source into the rebuilt environment,
-so Repair never uses stale files from the working checkout. The private build
-sources use C++20, as required by Torch 2.15 headers. Native import and MPS
-checks finish setup.
+that Torch ABI. Git archives the pinned source into the rebuilt environment,
+so neither Repair's native builds nor subsequent renders use stale files from
+the working checkout. The private build sources use C++20, as required by Torch
+2.15 headers. Native import and MPS checks finish setup.
 
 PortOS does **not** run upstream `scripts/setup_mac.sh`: that script restores
 Torch 2.12.0/torchvision 0.27.0 and upgrades build tools outside the lock.
@@ -76,7 +76,7 @@ Use a synthetic or licensed PNG and the lane's model assets, then run:
 ```sh
 portos_root="$PWD"  # Start in the PortOS checkout.
 cd ~/.portos/pixal3d-mps
-.venv/bin/python generate_mps.py /tmp/synthetic.png --device mps \
+.venv/bin/python .venv/portos-source/generate_mps.py /tmp/synthetic.png --device mps \
   --pipeline-type 1024_cascade --steps 4 --seed 7 --output /tmp/pixal3d-smoke.glb
 .venv/bin/python "$portos_root/scripts/verify-pixal3d-mps.py" /tmp/pixal3d-smoke.glb
 ```

@@ -55,7 +55,7 @@ describe.skipIf(process.platform === 'win32')('Pixal3D Metal install/Repair boun
     expect(installs[1].at(-1)).toMatch(/requirements-pixal3d-mps-sources\.lock\.txt$/);
     expect(installs.slice(2).map(args => args.at(-1))).toEqual(
       ['mtlmesh', 'mtlgemm', 'mtlbvh', 'mtldiffrast', 'o_voxel', 'natten-mps']
-        .map(name => `.venv/portos-native/extern/${name}`),
+        .map(name => `.venv/portos-source/extern/${name}`),
     );
     for (const args of installs.slice(2)) expect(args).toEqual(expect.arrayContaining(['--no-deps', '--no-build-isolation', '--no-cache-dir']));
     expect(existsSync(join(f.root, '.venv', 'old-python-3.10'))).toBe(false);
