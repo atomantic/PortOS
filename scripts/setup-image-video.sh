@@ -451,6 +451,47 @@ git_checkout_pin() {
   fi
 }
 
+require_mlx_video_profile() {
+  local label="$1" pin="$2" audited_revision="$3"
+  if ! is_apple_silicon; then
+    echo "❌ ${label} requires an Apple-Silicon Mac." >&2
+    return 1
+  fi
+  if [[ "$pin" != "$audited_revision" ]]; then
+    echo "❌ ${label} has no audited install profile for revision '${pin}'. Use the shipped revision ${audited_revision}." >&2
+    return 1
+  fi
+}
+
+sync_locked_mlx_video() (
+  local label="$1" dir="$2" python="$3" pin="$4" base_python checkout_status
+  shift 4
+  cd "$dir"
+  checkout_status="$(git status --porcelain=v1 --untracked-files=all)"
+  if [[ "$(git rev-parse HEAD)" != "$pin" || ! -f uv.lock || -n "$checkout_status" ]]; then
+    echo "❌ ${label} requires the clean pinned source and uv.lock at ${pin}. Preserve any local changes separately, then retry Repair." >&2
+    return 1
+  fi
+
+  # Keep both steps in this checkout and prevent inherited uv settings from
+  # bypassing isolation or redirecting the verified dependency install.
+  unset UV_PROJECT UV_WORKING_DIR UV_NO_BUILD_ISOLATION UV_NO_VERIFY_HASHES
+  export UV_PROJECT_ENVIRONMENT="$PWD/.venv"
+  base_python="$(portos_uv --no-config python find 3.11 2>/dev/null || true)"
+  reset_universal_venv "$UV_PROJECT_ENVIRONMENT" "$base_python"
+  if [[ ! -x "$python" ]]; then
+    echo "📦 Creating ${label} venv with Python 3.11..."
+    portos_uv --no-config venv --python 3.11 "$UV_PROJECT_ENVIRONMENT"
+  fi
+  # Upstream uv.lock supplies the runtime hashes. Build workspace packages in
+  # a second step because uv.lock doesn't pin their isolated PEP 517 backends.
+  echo "📦 Syncing ${label} wheels from the pinned upstream lock..."
+  portos_uv --no-config --no-cache sync --locked --no-build --no-install-workspace --python "$python"
+  echo "📦 Building pinned ${label} source with hash-locked build tools..."
+  portos_uv --no-config --no-cache pip install --no-deps --only-binary :all: --preview-features build-dependency-hashes --require-build-hashes --build-constraints "$SCRIPT_DIR/requirements-mlx-video-build.lock.txt" --python "$python" --reinstall "$@"
+  pin_venv_arm64 "$UV_PROJECT_ENVIRONMENT"
+)
+
 if python_required && ! have "$PYTHON_BIN"; then
   echo "❌ $PYTHON_BIN not found. Install Python 3.10+ first." >&2
   exit 1
@@ -631,7 +672,7 @@ if [[ "$INSTALL_LTX2" == "1" ]]; then
   #
   # The runtime is pinned to a known-good commit in PortOS releases for
   # reproducibility — upstream changes cannot break installs without a
-  # PortOS release. Set LTX2_PIN=main to track HEAD for development.
+  # PortOS release. Source build inputs are documented in docs/MLX_VIDEO_LOCKS.md.
   #
   # The notapalindrome `mlx-video-with-audio` install above is unaffected
   # — both pipelines coexist; dispatch is per-model via media-models.json's
@@ -641,14 +682,15 @@ if [[ "$INSTALL_LTX2" == "1" ]]; then
     exit 1
   fi
   # Pinned to v0.14.19 (2026-07-19). To upgrade: bump this SHA and verify with
-  # PortOS's video gen smoke tests (text/image/fflf/extend/a2v). Set
-  # LTX2_PIN=main to bypass the pin and track upstream HEAD for development.
+  # PortOS's video gen smoke tests (text/image/fflf/extend/a2v).
   # NOTE: v0.14.x renamed every public pipeline class (TextToVideoPipeline →
   # TI2VidOneStagePipeline, ExtendPipeline → RetakePipeline, etc.) and switched
   # the output-rate kwarg from `fps` to `frame_rate`. generate_ltx2.py resolves
   # pipeline classes and the rate kwarg defensively so it works against this pin
   # AND older pre-rename pins an install may still have checked out.
-  LTX2_PIN="${LTX2_PIN:-1192051fd380e0501adb5f3c0e9a216e679cb123}"
+  LTX2_AUDITED_REVISION="1192051fd380e0501adb5f3c0e9a216e679cb123"
+  LTX2_PIN="${LTX2_PIN:-$LTX2_AUDITED_REVISION}"
+  require_mlx_video_profile "LTX-2 MLX" "$LTX2_PIN" "$LTX2_AUDITED_REVISION"
   LTX2_DIR="${HOME}/.portos/ltx-2-mlx"
   LTX2_PY="${LTX2_DIR}/.venv/bin/python3"
   mkdir -p "${HOME}/.portos"
@@ -661,25 +703,8 @@ if [[ "$INSTALL_LTX2" == "1" ]]; then
   fi
   echo "📦 Checking out pinned commit ${LTX2_PIN:0:12}..."
   git_checkout_pin "${LTX2_DIR}" "${LTX2_PIN}"
-  # Force Python 3.11 — ltx-core-mlx pins requires-python>=3.11 and the
-  # macOS bundled python3 is sometimes 3.10. uv resolves this for us when
-  # the env doesn't already exist.
-  LTX2_BASE_PY="$(portos_uv python find 3.11 2>/dev/null || true)"
-  reset_universal_venv "${LTX2_DIR}/.venv" "$LTX2_BASE_PY"
-  if [[ ! -x "${LTX2_PY}" ]]; then
-    echo "📦 Creating ltx-2-mlx venv with Python 3.11..."
-    (cd "${LTX2_DIR}" && portos_uv venv --python 3.11)
-  fi
-  # --locked refuses a missing or stale upstream lock instead of regenerating
-  # it. Already-installed packages are no-ops. The
-  # repo's uv.lock pins mlx==0.31.1, which is the safe version (mlx 0.31.2
-  # silently regressed audio peaks by ~22 dB; phosphene hit this and ships
-  # the same pin). Skip --all-extras — we don't need the trainer or dev
-  # extras for inference, and the trainer extra pulls another package we
-  # have no use for.
-  echo "📦 Syncing ltx-2-mlx packages (uv sync --locked, no extras)..."
-  (cd "${LTX2_DIR}" && portos_uv sync --locked)
-  pin_venv_arm64 "${LTX2_DIR}/.venv"
+  sync_locked_mlx_video "LTX-2 MLX" "$LTX2_DIR" "$LTX2_PY" "$LTX2_PIN" \
+    -e packages/ltx-core-mlx -e packages/ltx-pipelines-mlx
   probe_or_fail \
     "ltx-2-mlx synced but 'import ltx_pipelines_mlx' failed." \
     "Re-run with: rm -rf ${LTX2_DIR}/.venv && bash $0" \
@@ -707,7 +732,9 @@ if [[ "$INSTALL_LTX25" == "1" ]]; then
   # `i2vAnchorVerifiedRevision` in server/services/videoGen/runtimes.js with it
   # (runtimes.test.js fails until both agree); scripts/generate_ltx2.py also
   # checks the LIVE checkout at render time and refuses rather than drifting.
-  LTX25_PIN="${LTX25_PIN:-57952288076766abe27dda3a774b2c24f7346977}"
+  LTX25_AUDITED_REVISION="57952288076766abe27dda3a774b2c24f7346977"
+  LTX25_PIN="${LTX25_PIN:-$LTX25_AUDITED_REVISION}"
+  require_mlx_video_profile "LTX-2.5 MLX" "$LTX25_PIN" "$LTX25_AUDITED_REVISION"
   LTX25_DIR="${HOME}/.portos/ltx-2.5-mlx"
   LTX25_PY="${LTX25_DIR}/.venv/bin/python3"
   mkdir -p "${HOME}/.portos"
@@ -720,15 +747,8 @@ if [[ "$INSTALL_LTX25" == "1" ]]; then
   fi
   echo "📦 Checking out pinned commit ${LTX25_PIN:0:12}..."
   git_checkout_pin "${LTX25_DIR}" "${LTX25_PIN}"
-  LTX25_BASE_PY="$(portos_uv python find 3.11 2>/dev/null || true)"
-  reset_universal_venv "${LTX25_DIR}/.venv" "$LTX25_BASE_PY"
-  if [[ ! -x "${LTX25_PY}" ]]; then
-    echo "📦 Creating ltx-2.5-mlx venv with Python 3.11..."
-    (cd "${LTX25_DIR}" && portos_uv venv --python 3.11)
-  fi
-  echo "📦 Syncing ltx-2.5-mlx packages (uv sync --locked, no extras)..."
-  (cd "${LTX25_DIR}" && portos_uv sync --locked)
-  pin_venv_arm64 "${LTX25_DIR}/.venv"
+  sync_locked_mlx_video "LTX-2.5 MLX" "$LTX25_DIR" "$LTX25_PY" "$LTX25_PIN" \
+    -e packages/ltx-core-mlx -e packages/ltx-pipelines-mlx
   probe_or_fail \
     "ltx-2.5-mlx synced but 'import ltx_pipelines_mlx' failed." \
     "Re-run with: rm -rf ${LTX25_DIR}/.venv && bash $0" \
@@ -819,7 +839,9 @@ if [[ "$INSTALL_WAN22" == "1" ]]; then
   fi
   # v0.25.0 exact commit, statically audited before integration. Keep the full
   # SHA so existing installs get an explicit, reproducible UI-driven upgrade.
-  WAN22_PIN="${WAN22_PIN:-2452f0c12edcc8886eebf15772205ce9c417a618}"
+  WAN22_AUDITED_REVISION="2452f0c12edcc8886eebf15772205ce9c417a618"
+  WAN22_PIN="${WAN22_PIN:-$WAN22_AUDITED_REVISION}"
+  require_mlx_video_profile "Wan 2.2 MLX" "$WAN22_PIN" "$WAN22_AUDITED_REVISION"
   WAN22_DIR="${HOME}/.portos/mlx-gen"
   WAN22_PY="${WAN22_DIR}/.venv/bin/python3"
   mkdir -p "${HOME}/.portos"
@@ -831,15 +853,7 @@ if [[ "$INSTALL_WAN22" == "1" ]]; then
     (cd "${WAN22_DIR}" && git fetch --progress origin)
   fi
   git_checkout_pin "${WAN22_DIR}" "${WAN22_PIN}"
-  WAN22_BASE_PY="$(portos_uv python find 3.11 2>/dev/null || true)"
-  reset_universal_venv "${WAN22_DIR}/.venv" "$WAN22_BASE_PY"
-  if [[ ! -x "${WAN22_PY}" ]]; then
-    echo "📦 Creating MLX-Gen venv with Python 3.11..."
-    (cd "${WAN22_DIR}" && portos_uv venv --python 3.11)
-  fi
-  echo "📦 Syncing pinned MLX-Gen packages..."
-  (cd "${WAN22_DIR}" && portos_uv sync --locked)
-  pin_venv_arm64 "${WAN22_DIR}/.venv"
+  sync_locked_mlx_video "Wan 2.2 MLX" "$WAN22_DIR" "$WAN22_PY" "$WAN22_PIN" -e .
   probe_or_fail \
     "MLX-Gen synced but the Wan runtime import failed." \
     "Use Repair / Upgrade from the Video Gen runtime panel to retry." \
