@@ -80,7 +80,8 @@ export default function HandheldCameraControl({ clipId, onApply, disabled = fals
   }
   return (
     <div className="w-full space-y-2 rounded border border-port-border p-2">
-      <div className="relative mx-auto w-full overflow-hidden rounded bg-black max-h-[60vh]" style={{ aspectRatio: aspect }}>
+      {/* The width follows a 60vh height cap, so a tall clip keeps its own shape instead of being cropped. */}
+      <div className="relative mx-auto max-w-full overflow-hidden rounded bg-black" style={{ aspectRatio: aspect, width: `min(100%, calc(60vh * ${aspect}))` }}>
         {source
           ? <video ref={videoRef} src={source} className="block w-full h-full object-cover" muted playsInline loop autoPlay controls={false}
             onLoadedMetadata={(e) => { const { videoWidth: w, videoHeight: h } = e.currentTarget; if (w > 0 && h > 0) setAspect(w / h); }} />
