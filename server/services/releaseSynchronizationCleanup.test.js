@@ -57,7 +57,7 @@ describe('inline release cleanup', () => {
     expect(deps.prepare.mock.calls.map(([arg]) => arg.prUrl)).toEqual([
       'https://github.com/example/repo/pull/12', 'https://github.com/example/repo/pull/42',
     ]);
-    expect(deps.retainReview).toHaveBeenCalledOnce();
+    expect(deps.retainReview).toHaveBeenCalledTimes(2);
     expect(deps.validateLocked).toHaveBeenCalledOnce();
     expect(deps.retire).toHaveBeenCalledTimes(2);
     expect(deps.allowed).toHaveBeenCalledTimes(4);
@@ -109,6 +109,20 @@ describe('inline release cleanup', () => {
       comparison: { disposition: 'integrated', difference: '' } } });
     const result = await settleInlineReleaseCheckouts(entry, deps);
     expect(result.held.map(row => row.reason)).toEqual(['release-checkout-generation-changed', 'release-retirement-review-unverified']);
+    expect(deps.retire).not.toHaveBeenCalled();
+  });
+
+  it('retains private release evidence before preparing either checkout and refuses failed retention', async () => {
+    deps.prepare.mockImplementation(async ({ release }) => {
+      expect(deps.retainReview).toHaveBeenCalledWith(expect.objectContaining({ path: release.path }));
+      return { ok: false, reason: 'retirement-forge-unavailable' };
+    });
+    expect((await settleInlineReleaseCheckouts(entry, deps)).held).toHaveLength(2);
+    deps.prepare.mockClear();
+    deps.retainReview.mockResolvedValue(false);
+    expect((await settleInlineReleaseCheckouts(entry, deps)).held.map(row => row.reason))
+      .toEqual(['release-sync-local-review-unretained', 'release-sync-local-review-unretained']);
+    expect(deps.prepare).not.toHaveBeenCalled();
     expect(deps.retire).not.toHaveBeenCalled();
   });
 
