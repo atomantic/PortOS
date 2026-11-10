@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildHiggsfieldVideoRequest, higgsfieldVideoLengths, getHiggsfieldVideoModel } from './higgsfieldVideoModels.js';
+import { buildHiggsfieldVideoRequest, higgsfieldVideoLengths, getHiggsfieldVideoModel, higgsfieldShotRequestFields } from './higgsfieldVideoModels.js';
 
 describe('buildHiggsfieldVideoRequest', () => {
   it('routes by the inputs present: text, start frame, or references', () => {
@@ -30,7 +30,23 @@ describe('buildHiggsfieldVideoRequest', () => {
     expect(buildHiggsfieldVideoRequest({ prompt: '', imageUrl: 'u' }).route).toBe('image');
   });
 
+  it('sends Seedance reference audio and user words unchanged, and refuses other families', () => {
+    const prompt = '  dance\nwith the beat  ';
+    const request = buildHiggsfieldVideoRequest({ prompt, audioUrls: ['song.wav'], referenceImageUrls: ['cast.png'] });
+    expect(request.endpointId).toBe('bytedance/seedance-2.5/reference-to-video');
+    expect(request.body).toMatchObject({ prompt, audio_urls: ['song.wav'], image_urls: ['cast.png'] });
+    expect(() => buildHiggsfieldVideoRequest({ modelId: 'alibaba/wan-3.0', prompt, audioUrls: ['song.wav'] })).toThrow(/at most 0 audio references/);
+  });
+
   it('lists every whole-second length a family accepts', () => {
     expect(higgsfieldVideoLengths(getHiggsfieldVideoModel('kling-video/v3.0/pro'))).toEqual([3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
   });
+});
+
+it('covers short shots with the family minimum duration', () => {
+  expect(higgsfieldShotRequestFields({}, 2).higgsfieldDuration).toBe(4);
+  expect(higgsfieldShotRequestFields({}, 9.2).higgsfieldDuration).toBe(10);
+  expect(() => higgsfieldShotRequestFields({}, 31)).toThrow(/at most 30 seconds/);
+  expect(() => buildHiggsfieldVideoRequest({ prompt: '  \n ' })).toThrow(/Prompt is required/);
+  expect(() => buildHiggsfieldVideoRequest({ prompt: '', negativePrompt: '   ' })).toThrow(/Prompt is required/);
 });

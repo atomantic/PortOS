@@ -59,6 +59,7 @@ import {
   getFalVideoModel,
   resolveFalVideoResolution,
 } from './falVideoModels.js';
+import { HIGGSFIELD_DEFAULT_VIDEO_MODEL, getHiggsfieldVideoModel, higgsfieldVideoLengths } from './higgsfieldVideoModels.js';
 import {
   RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL,
   coerceRunwayVideoSeconds,
@@ -239,8 +240,8 @@ export function performanceCapability(backend, { scene = null, videoSettings = n
  */
 export function performanceBlockedReason(backend) {
   if (performanceCapability(backend)) return null;
-  if (backend === 'grok' || backend === 'runway' || backend === 'gemini') {
-    return `${{ grok: 'Grok', runway: 'Runway', gemini: 'Gemini' }[backend]} video is cutaway-only: it cannot synchronize a singer to the song. Pin fal.ai for performance shots, or switch this scene to Cutaway.`;
+  if (backend === 'grok' || backend === 'runway' || backend === 'gemini' || backend === 'higgsfield') {
+    return `${{ grok: 'Grok', runway: 'Runway', gemini: 'Gemini', higgsfield: 'Higgsfield' }[backend]} video is cutaway-only: it cannot synchronize a singer to the song. Pin fal.ai for performance shots, or switch this scene to Cutaway.`;
   }
   return 'Performance shots need a source-audio lip-sync provider — pin fal.ai as this project\'s video backend.';
 }
@@ -570,6 +571,7 @@ export function shotRequestSpanSec(scene, scenes = null) {
  * picker and the refusal message. Empty when the lane has no length control (local, an uncurated model).
  */
 export function clipLengthChoices(backend, modelId = null) {
+  if (backend === 'higgsfield') return higgsfieldVideoLengths(getHiggsfieldVideoModel(modelId || HIGGSFIELD_DEFAULT_VIDEO_MODEL));
   if (backend === 'grok') return [...GROK_VIDEO_DURATIONS];
   if (backend === 'runway') {
     return runwayVideoLengths(getRunwayVideoModel(modelId || RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL));
@@ -587,7 +589,7 @@ export function clipLengthChoices(backend, modelId = null) {
  * (the lane then renders its default). Lengths are the lane's own request field.
  */
 function requestedClipSec(backend, body = {}) {
-  const sec = backend === 'grok' ? body.grokDuration : backend === 'fal' ? body.falDuration : backend === 'runway' ? body.runwayDuration : null;
+  const sec = backend === 'grok' ? body.grokDuration : backend === 'fal' ? body.falDuration : backend === 'runway' ? body.runwayDuration : backend === 'higgsfield' ? body.higgsfieldDuration : null;
   const n = Number(sec);
   return Number.isFinite(n) && n > 0 ? n : null;
 }

@@ -141,13 +141,13 @@ async function stageHiggsfieldInputs(ctx) {
     await cleanupStaged();
     throw new ServerError(message, { status: 400, code: 'VALIDATION_ERROR' });
   };
-  if (uploads.audioFile) await refuse('Higgsfield renders cutaways only here; it takes no source audio.');
+  if (uploads.audioFile) await refuse('Use the shot’s Song audio control for a Higgsfield song reference.');
   const hasEndFrame = !!uploads.lastImage || !!body.lastImageFile;
-  const pickedReferences = body.musicVideo ? [] : body.referenceImageFiles || [];
+  const pickedReferences = body.referenceImageFiles || [];
   try {
     buildHiggsfieldVideoRequest({
       modelId: body.higgsfieldModelId || HIGGSFIELD_DEFAULT_VIDEO_MODEL, prompt: body.prompt, negativePrompt: body.negativePrompt,
-      imageUrl: sourceImagePath ? 'pending:image' : null, endImageUrl: hasEndFrame ? 'pending:end-image' : null,
+      imageUrl: sourceImagePath && !pickedReferences.length && !body.musicVideo?.songAudio ? 'pending:image' : null, endImageUrl: hasEndFrame ? 'pending:end-image' : null,
       referenceImageUrls: pickedReferences.map((_, i) => `pending:reference-${i + 1}`),
     });
   } catch (err) {

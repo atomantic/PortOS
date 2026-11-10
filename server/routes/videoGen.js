@@ -226,7 +226,7 @@ const optionalInt = (min, max, label) => z.preprocess(
 // still enforced against the mode's own spec (assertIcReferenceCount).
 const MAX_IC_REFERENCES = Math.max(...listIcLoraRemixModes().map((s) => s.maxReferences));
 
-const MAX_REFERENCE_IMAGE_FILES = 16;
+const MAX_REFERENCE_IMAGE_FILES = 64;
 const MAX_REFERENCE_CLIP_IDS = 8;
 
 // Chain ceiling — 8 × ~5min ≈ 40min on an M3 Max keeps the worst-case wall time

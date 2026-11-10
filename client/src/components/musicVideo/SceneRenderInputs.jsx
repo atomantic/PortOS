@@ -1,3 +1,4 @@
+import { getHiggsfieldVideoModel, HIGGSFIELD_DEFAULT_VIDEO_MODEL } from '../../../../server/lib/higgsfieldVideoModels.js';
 import { falHearsAudioReference, falPromptExpansionAddition, falPromptExpansionMode, getFalVideoModel } from '../../lib/falVideoModels.js';
 import { falSceneTake, runwaySceneTake } from '../../lib/musicVideoShotTiming.js';
 import { sceneActiveEndImageId } from '../../../../server/lib/musicVideoEndFrame.js';
@@ -47,7 +48,7 @@ export function shotCardRenderRequest({
 
   let songAudio;
   if (performance) songAudio = { state: 'required', note: `Song ${span}` };
-  else if (localModel && localModelTakesSongAudio(localModel)) {
+  else if ((localModel && localModelTakesSongAudio(localModel)) || (settings.backend === 'higgsfield' && getHiggsfieldVideoModel(settings.higgsfieldModelId || HIGGSFIELD_DEFAULT_VIDEO_MODEL)?.maxReferenceAudio)) {
     const on = inputs.songAudio ?? settings.generationMode === 'suppliedAudio';
     songAudio = { state: on ? 'on' : 'off', note: `Song ${span}` };
   } else songAudio = { state: 'unavailable', note: 'This model hears no audio' };

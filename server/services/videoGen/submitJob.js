@@ -17,6 +17,7 @@ import { isDefaultI2vReferenceMode } from '../../lib/videoReferenceModes.js';
 import { isDefaultSpeedProfile } from '../../lib/videoSpeedProfiles.js';
 import { isStockTextEncoder } from '../../lib/videoTextEncoders.js';
 import { FAL_DEFAULT_IMAGE_VIDEO_MODEL, getFalVideoModel } from '../../lib/falVideoModels.js';
+import { HIGGSFIELD_DEFAULT_VIDEO_MODEL, getHiggsfieldVideoModel, buildHiggsfieldVideoRequest } from '../../lib/higgsfieldVideoModels.js';
 import { RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, getRunwayVideoModel } from '../../lib/runwayVideoModels.js';
 import { musicVideoClipReferenceCapacity } from '../../lib/musicVideoConditioning.js';
 import { collectRemoteInputAssets } from '../federatedMedia/inputAssets.js';
@@ -148,7 +149,7 @@ async function prepareVideoSubmissionInputs(body, uploads, inputs) {
     }
     prepared = { backend: 'remote', sourceImagePath, remoteMedia: selected.remoteMedia, audio };
   } else {
-    if (body._suppliedAudio) {
+    if (body._suppliedAudio && body.backend !== VIDEO_GEN_MODE.HIGGSFIELD) {
       const [{ getProject }, { resolveVideoModelSelection }, { sourceAudioVideoRequest, supportsSourceAudioWindow }, { isPerformanceScene }] = await Promise.all([
         import('../musicVideo/projects.js'), import('./modelSelection.js'), import('../federatedMedia/sourceAudio.js'),
         import('../../lib/musicVideoShotTiming.js'),
@@ -171,16 +172,19 @@ async function prepareVideoSubmissionInputs(body, uploads, inputs) {
     prepared = await prepareVideoGenParams({ body, uploads, localOnlyParamKeys: VIDEO_GEN_LOCAL_ONLY_FIELD_NAMES });
     inputs.own(prepared.cleanupStaged);
   }
-  if (body._suppliedAudio && prepared.backend === 'local') {
+  if (body._suppliedAudio && ['local', VIDEO_GEN_MODE.HIGGSFIELD].includes(prepared.backend)) {
     const [{ getProject }, { prepareSourceAudioWindow, supportsSourceAudioWindow }] = await Promise.all([
       import('../musicVideo/projects.js'), import('../federatedMedia/sourceAudio.js'),
     ]);
-    if (!supportsSourceAudioWindow(prepared.effectiveModel)) {
+    if (prepared.backend === 'local' && !supportsSourceAudioWindow(prepared.effectiveModel)) {
       throw new ServerError('Supplied song windows currently require an LTX MLX model with audio conditioning', { status: 400, code: 'MUSIC_VIDEO_AUDIO_UNSUPPORTED' });
     }
     const project = await getProject(body.musicVideo.projectId);
     const scene = project?.scenes?.find((entry) => entry.sceneId === body.musicVideo.sceneId);
-    const audio = await prepareSourceAudioWindow({ project, scene, numFrames: prepared.effectiveNumFrames, fps: body.fps || 24 });
+    const seconds = body.higgsfieldDuration || Math.ceil(scene.endSec - scene.startSec);
+    if (prepared.backend === VIDEO_GEN_MODE.HIGGSFIELD && seconds > 30) throw new ServerError('Higgsfield song references support at most 30 seconds; shorten this shot.', { status: 400, code: 'VALIDATION_ERROR' });
+    const fps = body.fps || 24;
+    const audio = await prepareSourceAudioWindow({ project, scene, numFrames: prepared.backend === VIDEO_GEN_MODE.HIGGSFIELD ? 1 + seconds * fps : prepared.effectiveNumFrames, fps });
     inputs.own(() => discardSourceAudioWindow(audio.audioFilePath));
     prepared.audio = audio;
     prepared.audioFilePath = audio.audioFilePath;
@@ -405,12 +409,20 @@ const submitHostedLane = async ({ body, prepared, backend, hosted, performancePa
     ? getFalVideoModel(performanceParams?.modelId || body.falModelId || FAL_DEFAULT_IMAGE_VIDEO_MODEL) : null;
   const runwayModel = backend === VIDEO_GEN_MODE.RUNWAY
     ? getRunwayVideoModel(body.runwayModelId || RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL) : null;
-  const clipReferenceModel = falModel || runwayModel;
-  const useClipReferences = Boolean(clipReferenceModel?.referenceImages && body.musicVideo && sourceImagePath && !prepared.guidanceImagePath);
+  const higgsfieldModel = backend === VIDEO_GEN_MODE.HIGGSFIELD ? getHiggsfieldVideoModel(body.higgsfieldModelId || HIGGSFIELD_DEFAULT_VIDEO_MODEL) : null;
+  const clipReferenceModel = falModel || runwayModel || higgsfieldModel;
+  const useClipReferences = Boolean((clipReferenceModel?.referenceImages || higgsfieldModel?.maxReferenceImages) && !(higgsfieldModel && body.referenceImageFiles?.length) && body.musicVideo && sourceImagePath && !prepared.guidanceImagePath);
   const clipReferences = useClipReferences
     ? await (await import('../musicVideo/clipCastReferences.js')).musicVideoClipReferences(body.musicVideo,
-      musicVideoClipReferenceCapacity(backend, clipReferenceModel, { endFrame: backend === VIDEO_GEN_MODE.RUNWAY && !!prepared.lastImagePath }), { excludePath: sourceImagePath })
+      (higgsfieldModel ? Infinity : musicVideoClipReferenceCapacity(backend, clipReferenceModel, { endFrame: backend === VIDEO_GEN_MODE.RUNWAY && !!prepared.lastImagePath })), { excludePath: sourceImagePath })
     : [];
+  if (higgsfieldModel) buildHiggsfieldVideoRequest({
+    modelId: higgsfieldModel.id, prompt: body.prompt, negativePrompt: body.negativePrompt,
+    imageUrl: !clipReferences.length && !(prepared.referenceImagePaths?.length) && !prepared.audioFilePath && sourceImagePath ? 'pending:image' : null,
+    endImageUrl: prepared.lastImagePath ? 'pending:end-image' : null,
+    audioUrls: prepared.audioFilePath ? ['pending:audio'] : [],
+    referenceImageUrls: (useClipReferences ? clipReferences : prepared.referenceImagePaths || []).map((_, i) => `pending:reference-${i}`),
+  });
   const { jobId, position, status } = await enqueue({
     // Hosted jobs use mode for queue dispatch and videoMode for text/image.
     mode: backend,
@@ -421,6 +433,7 @@ const submitHostedLane = async ({ body, prepared, backend, hosted, performancePa
     uploadedTempPath,
     ...submissionTagParams(body),
     ...hosted.buildParams(body, prepared),
+    ...(higgsfieldModel && (clipReferences.length || prepared.referenceImagePaths?.length || prepared.audioFilePath) ? { sourceImagePath: null } : {}),
     ...(castReferences.length ? { castReferences, ...(startFrameLayout ? { startFrameLayout } : {}) } : {}),
     ...(useClipReferences ? {
       referenceImagePaths: clipReferences.map((ref) => ref.path),

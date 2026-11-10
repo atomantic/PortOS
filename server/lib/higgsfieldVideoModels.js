@@ -43,7 +43,7 @@ export const HIGGSFIELD_VIDEO_MODELS = Object.freeze([
     duration: Object.freeze({ min: 4, max: 30, defaultSec: 5 }),
     resolutions: TIERS, defaultResolution: '720p',
     textRatios: SEEDANCE_RATIOS, referenceRatios: SEEDANCE_RATIOS,
-    endFrameField: 'end_image_url', maxReferenceImages: 30,
+    endFrameField: 'end_image_url', maxReferenceImages: 30, maxReferenceAudio: 10,
     audio: 'generate_audio', seed: null, promptMax: null, fixed: Object.freeze({}),
   }),
   Object.freeze({
@@ -107,8 +107,8 @@ function nearestRatio(width, height, ratios) {
 
 /** The prompt text the model receives: the user's words plus a folded "Avoid:" clause. */
 export const higgsfieldVideoPromptText = (prompt = '', negativePrompt = '') => {
-  const negative = typeof negativePrompt === 'string' ? negativePrompt.trim() : '';
-  const base = String(prompt ?? '').trim();
+  const negative = typeof negativePrompt === 'string' ? negativePrompt : '';
+  const base = String(prompt ?? '');
   return negative ? `${base}\nAvoid: ${negative}` : base;
 };
 
@@ -121,7 +121,7 @@ export const higgsfieldVideoPromptText = (prompt = '', negativePrompt = '') => {
  */
 export function buildHiggsfieldVideoRequest({
   modelId = HIGGSFIELD_DEFAULT_VIDEO_MODEL, prompt = '', negativePrompt = '', seconds, resolution, width, height,
-  aspectRatio, imageUrl = null, endImageUrl = null, referenceImageUrls = [], generateAudio = false, seed,
+  aspectRatio, imageUrl = null, endImageUrl = null, referenceImageUrls = [], audioUrls = [], generateAudio = false, seed,
 }) {
   const model = getHiggsfieldVideoModel(modelId);
   if (!model) throw refuse(`"${modelId}" is not a Higgsfield video model PortOS offers`);
@@ -131,10 +131,11 @@ export function buildHiggsfieldVideoRequest({
   if (refs.length > model.maxReferenceImages) throw refuse(`${model.label} takes at most ${model.maxReferenceImages} reference images (received ${refs.length})`);
   if (endImageUrl && !imageUrl) throw refuse('An end frame needs a start frame');
   if (endImageUrl && !model.endFrameField) throw refuse(`${model.label} takes no end frame`);
-  const route = refs.length ? 'reference' : imageUrl ? 'image' : 'text';
+  if (audioUrls.length > (model.maxReferenceAudio || 0)) throw refuse(`${model.label} takes at most ${model.maxReferenceAudio || 0} audio references (received ${audioUrls.length})`);
+  const route = refs.length || audioUrls.length ? 'reference' : imageUrl ? 'image' : 'text';
   const text = higgsfieldVideoPromptText(prompt, negativePrompt);
   // The image route is the one where the start frame can carry the whole instruction.
-  if (!text && route !== 'image') throw refuse('Prompt is required');
+  if (!String(prompt ?? '').trim() && !String(negativePrompt ?? '').trim() && route !== 'image') throw refuse('Prompt is required');
   if (model.promptMax && text.length > model.promptMax) {
     throw refuse(`${model.label} prompt is ${text.length}/${model.promptMax} characters. Shorten it; nothing was submitted or truncated.`);
   }
@@ -155,7 +156,8 @@ export function buildHiggsfieldVideoRequest({
     body.image_url = imageUrl;
     if (endImageUrl) body[model.endFrameField] = endImageUrl;
   }
-  if (route === 'reference') body.image_urls = refs;
+  if (route === 'reference' && refs.length) body.image_urls = refs;
+  if (audioUrls.length) body.audio_urls = audioUrls;
   const audio = generateAudio === true;
   if (model.audio === 'generate_audio') body.generate_audio = audio;
   if (model.audio === 'sound') body.sound = audio ? 'on' : 'off';
@@ -163,5 +165,17 @@ export function buildHiggsfieldVideoRequest({
   if (model.seed && Number.isInteger(seedNum) && seedNum >= model.seed.min && seedNum <= model.seed.max) body.seed = seedNum;
   return {
     model, route, endpointId: model.endpoints[route], body, seconds: sec, resolution: tier, generateAudio: audio, estimatedCostUsd: null,
+  };
+}
+
+/** Shot settings shared by the board and server card endpoint. */
+export function higgsfieldShotRequestFields(settings, spanSec = null) {
+  const model = getHiggsfieldVideoModel(settings.higgsfieldModelId || HIGGSFIELD_DEFAULT_VIDEO_MODEL);
+  const duration = settings.higgsfieldDuration ?? Math.max(model?.duration.min || 1, spanSec != null ? Math.ceil(spanSec) : model?.duration.defaultSec || 5);
+  if (model && duration > model.duration.max) throw refuse(`${model.label} takes at most ${model.duration.max} seconds; shorten the shot or choose another model`);
+  return {
+    higgsfieldModelId: settings.higgsfieldModelId || HIGGSFIELD_DEFAULT_VIDEO_MODEL,
+    ...(settings.higgsfieldResolution ? { higgsfieldResolution: settings.higgsfieldResolution } : {}),
+    higgsfieldDuration: duration,
   };
 }

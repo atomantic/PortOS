@@ -1,3 +1,4 @@
+import { higgsfieldShotRequestFields } from '../../lib/higgsfieldVideoModels.js';
 // Shot-card frame and clip submission (#15583). The board, autopilot and API
 // callers share one resolver, so a request that names only the project, shot
 // and slot still sends the references the card would.
@@ -124,9 +125,10 @@ async function buildShortClipBody(project, scene, input) {
   const songAudio = useLtx || hostedPerformance ? false : typeof card.songAudio === 'boolean' ? card.songAudio : settings.generationMode === 'suppliedAudio';
   const mode = useLtx ? LTX_IC_MODE : audioReactive || songAudio ? 'a2v' : 'image';
   const falFields = settings.backend === 'fal' ? falTakeRequestFields(falSceneTake({ scene, scenes: project.scenes, videoSettings: settings, songDurationSec: project?.audioAnalysis?.durationSec ?? null })) : null;
+  const higgsfieldFields = settings.backend === 'higgsfield' ? higgsfieldShotRequestFields(settings, shotRequestSpanSec(scene, project.scenes)) : null;
   const runwayFields = settings.backend === 'runway' ? runwayTakeRequestFields(runwaySceneTake({ scene, scenes: project.scenes, videoSettings: settings })) : null;
   const providerFields = settings.backend === 'grok' ? { grokDuration: grokSceneRequestDuration(scene, settings, input.target, project.scenes) }
-    : falFields || runwayFields ? falFields || runwayFields
+    : falFields || runwayFields || higgsfieldFields ? falFields || runwayFields || higgsfieldFields
       : settings.backend === 'gemini' ? {}
         : settings.backend === 'local' ? {
           modelId: settings.modelId || undefined,

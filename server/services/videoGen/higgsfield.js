@@ -14,7 +14,7 @@
 
 import { createMediaJobPreparation } from '../../lib/mediaJobPreparation.js';
 import { randomUUID } from 'crypto';
-import { writeFile, unlink } from 'fs/promises';
+import { readFile, writeFile, unlink } from 'fs/promises';
 import { basename, join, relative, resolve, isAbsolute } from 'path';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -83,13 +83,14 @@ export const cancelAll = () => {
  * (#11317); the Video Gen preview calls it with the same inputs.
  */
 export function higgsfieldVideoSentPrompt({
-  hasImage = false, hasEndImage = false, referenceCount = 0, promptAdditions = [], ...spec
+  hasImage = false, hasEndImage = false, referenceCount = 0, hasAudio = false, promptAdditions = [], ...spec
 }) {
   let planned;
   try {
     planned = buildHiggsfieldVideoRequest({
       ...spec,
       modelId: spec.modelId || HIGGSFIELD_DEFAULT_VIDEO_MODEL,
+      audioUrls: hasAudio ? ['pending:audio'] : [],
       imageUrl: hasImage ? 'pending:image' : null,
       endImageUrl: hasEndImage ? 'pending:end-image' : null,
       referenceImageUrls: Array.from({ length: referenceCount }, (_, i) => `pending:reference-${i + 1}`),
@@ -110,7 +111,7 @@ export const generateVideo = (params) => preparations.run(params, generateVideoP
 async function generateVideoPrepared({
   apiKey: providedApiKey, settings, modelId: requestedModelId,
   prompt = '', negativePrompt, duration, aspectRatio, width, height, resolution = null, generateAudio = false, seed = null,
-  sourceImagePath = null, lastImagePath = null, referenceImagePaths = [], jobId: providedJobId = null,
+  sourceImagePath = null, lastImagePath = null, referenceImagePaths = [], audioFilePath = null, jobId: providedJobId = null,
   uploadedTempPath = null, uploadedTempPaths = [], frameAspect = null, promptAdditions = [],
 }) {
   await ensureDir(PATHS.videos);
@@ -129,7 +130,7 @@ async function generateVideoPrepared({
     generateAudio: generateAudio === true, seed,
   };
   const { planned, record: sentRecord } = higgsfieldVideoSentPrompt({
-    ...spec, promptAdditions, hasImage: !!sourceImagePath, hasEndImage: !!lastImagePath, referenceCount: referenceImagePaths.length,
+    ...spec, promptAdditions, hasAudio: !!audioFilePath, hasImage: !!sourceImagePath, hasEndImage: !!lastImagePath, referenceCount: referenceImagePaths.length,
   });
 
   const jobId = providedJobId || randomUUID();
@@ -161,7 +162,7 @@ async function generateVideoPrepared({
   emitCloudRenderStatus(job, jobId, CLOUD_RENDER_PHASE.SUBMIT, 'Submitting to Higgsfield…');
 
   runHiggsfieldVideo(job, jobId, {
-    apiKey, spec, sourceImagePath, lastImagePath, referenceImagePaths, outputPath, filename, meta,
+    apiKey, spec, sourceImagePath, lastImagePath, referenceImagePaths, audioFilePath, outputPath, filename, meta,
     uploadedTempPath, uploadedTempPaths, frameAspect,
   }).catch((err) => {
     console.error(`❌ Higgsfield video run failed [${jobId.slice(0, 8)}]: ${err?.message}`);
@@ -187,7 +188,7 @@ async function uploadFrame({ apiKey, path, aspect, signal }) {
 }
 
 async function runHiggsfieldVideo(job, jobId, {
-  apiKey, spec, sourceImagePath, lastImagePath, referenceImagePaths, outputPath, filename, meta,
+  apiKey, spec, sourceImagePath, lastImagePath, referenceImagePaths, audioFilePath, outputPath, filename, meta,
   uploadedTempPath = null, uploadedTempPaths = [], frameAspect = null,
 }) {
   const entry = createHiggsfieldRequestEntry(apiKey);
@@ -224,7 +225,10 @@ async function runHiggsfieldVideo(job, jobId, {
     const referenceImageUrls = [];
     for (const path of referenceImagePaths) referenceImageUrls.push((await uploadFrame({ apiKey, path, aspect: null, signal })).url);
     if (entry.aborted) return finishFailure('Canceled');
-    const request = buildHiggsfieldVideoRequest({ ...spec, imageUrl: start?.url ?? null, endImageUrl: end?.url ?? null, referenceImageUrls });
+    const audioUrls = audioFilePath ? [await uploadHiggsfieldFile({ apiKey, bytes: await readFile(audioFilePath), contentType: 'audio/wav', signal })] : [];
+    const request = buildHiggsfieldVideoRequest({ ...spec, imageUrl: start?.url ?? null, endImageUrl: end?.url ?? null, referenceImageUrls, audioUrls });
+    meta.sentRequest = { endpoint: request.endpointId, body: structuredClone(request.body) };
+    Object.assign(job, { sentRequest: meta.sentRequest });
     const submitted = await submitHiggsfieldRequest({ apiKey, endpoint: request.endpointId, body: request.body, signal });
     entry.requestId = submitted.requestId;
     entry.cancelUrl = submitted.cancelUrl;
