@@ -310,7 +310,7 @@ function drawTitleCard(ctx, card, t, { width, height }) {
  */
 // A background page can defer document.fonts.load until Chrome's resource
 // timeout (minutes). After this, the frame draws with the fallback and later
-// frames do not wait again; a face that arrives is used from then on.
+// frames do not wait again. A timed-out face stays on the fallback for this page.
 const TITLE_CARD_FONT_WAIT_MS = 2000;
 
 export function titleCardRuntimeSource(card = null, { fonts = {} } = {}) {
@@ -328,6 +328,7 @@ export function titleCardRuntimeSource(card = null, { fonts = {} } = {}) {
   let t = 0;
   let canvas = null;
   const fonts = new Map();
+  const fallbackFonts = new Set();
   const frame = () => {
     const r = globalThis.PORTOS_MV && globalThis.PORTOS_MV.render;
     return { width: (r && r.width) || innerWidth || 1920, height: (r && r.height) || innerHeight || 1080 };
@@ -337,6 +338,8 @@ export function titleCardRuntimeSource(card = null, { fonts = {} } = {}) {
   // (the seek stays synchronous).
   const ready = () => {
     if (!card || !card.enabled || !document.fonts || !document.fonts.load) return null;
+    if (fallbackFonts.has(card.font)) card = { ...card, font: 'sans' };
+    const fontChoice = card.font;
     const { width, height } = frame();
     const wanted = titleCardLayout(card, { width, height, measure: () => 0 }).map((line) => line.font);
     const pending = [];
@@ -344,9 +347,15 @@ export function titleCardRuntimeSource(card = null, { fonts = {} } = {}) {
       if (!fonts.has(font)) {
         const entry = { done: false };
         entry.promise = Promise.race([
-          document.fonts.load(font).catch(() => null),
-          new Promise((resolve) => setTimeout(resolve, ${TITLE_CARD_FONT_WAIT_MS})),
-        ]).then(() => { entry.done = true; });
+          document.fonts.load(font).then(() => true, () => false),
+          new Promise((resolve) => setTimeout(resolve, ${TITLE_CARD_FONT_WAIT_MS})).then(() => false),
+        ]).then((loaded) => {
+          entry.done = true;
+          if (!loaded) {
+            fallbackFonts.add(fontChoice);
+            if (card && card.font === fontChoice) card = { ...card, font: 'sans' };
+          }
+        });
         fonts.set(font, entry);
       }
       const entry = fonts.get(font);
