@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  HANDHELD_SEED_MAX, handheldCssTransform, handheldFfmpegFilter, handheldOffset, handheldTerms, handheldZoom, isHandheldStill, normalizeHandheld,
+  HANDHELD_SEED_MAX, applyDocumentHandheld, documentHandheld, handheldSeedFor, handheldCssTransform, handheldFfmpegFilter, handheldOffset, handheldTerms, handheldZoom, isHandheldStill, normalizeHandheld,
 } from './handheldCamera.js';
 
 describe('normalizeHandheld', () => {
@@ -91,5 +91,26 @@ describe('handheldCssTransform', () => {
     expect(css).toContain(`translate(${Number((-x * 100).toFixed(4))}%, ${Number((-y * 100).toFixed(4))}%)`);
     expect(css).toMatch(/rotate\(-?[\d.]+deg\) scale\(1\.08\)$/);
     expect(handheldCssTransform([], 1, 1)).toBeNull();
+  });
+});
+
+describe('document handheld', () => {
+  it('seeds each shot from its id, stably, and is off without shake or footsteps', () => {
+    expect(handheldSeedFor('shot-a')).toBe(handheldSeedFor('shot-a'));
+    expect(handheldSeedFor('shot-a')).not.toBe(handheldSeedFor('shot-b'));
+    expect(documentHandheld({ handheld: 0, handheldSteps: 0 }, 'shot-a')).toBeNull();
+    const motion = documentHandheld({ handheld: 0.5, handheldSteps: 0.5 }, 'shot-a');
+    expect(motion.zoom).toBeGreaterThan(1);
+    expect(motion.terms.every(([axis, , , , bob]) => ['x', 'y', 'r'].includes(axis) && (bob === 0 || bob === 1))).toBe(true);
+  });
+
+  // Uniquely catches the camera move and the shake together showing an edge of the picture.
+  it('covers the frame when the shake rides on a camera move that already offsets and turns it', () => {
+    const motion = documentHandheld({ handheld: 1, handheldSteps: 1 }, 'shot-a');
+    const view = applyDocumentHandheld({ scale: 1.02, x: 0.01, y: -0.01, rotation: 0.02 }, motion, 1.5);
+    const c = Math.abs(Math.cos(view.rotation)); const s = Math.abs(Math.sin(view.rotation));
+    const need = Math.max((1 + 2 * Math.abs(view.x)) * c + (1 + 2 * Math.abs(view.y)) * s * (9 / 16), (1 + 2 * Math.abs(view.y)) * c + (1 + 2 * Math.abs(view.x)) * s * (16 / 9));
+    expect(view.scale).toBeGreaterThanOrEqual(need - 1e-9);
+    expect(applyDocumentHandheld({ scale: 1, x: 0, y: 0, rotation: 0 }, null, 1)).toEqual({ scale: 1, x: 0, y: 0, rotation: 0 });
   });
 });

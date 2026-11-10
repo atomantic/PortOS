@@ -5,6 +5,9 @@ export const TEMPLATE_EFFECT_CONTROLS = Object.freeze([
   { id: 'footagePush', label: 'Footage push', default: 1 },
   { id: 'grain', label: 'Template grain', default: 0.09 },
   { id: 'vignette', label: 'Template vignette', default: 0.5 },
+  // A person holding the camera (lib/handheldCamera.js): unsteady hands, and walking. Off unless asked for.
+  { id: 'handheld', label: 'Handheld shake', default: 0 },
+  { id: 'handheldSteps', label: 'Handheld footsteps', default: 0 },
 ]);
 
 /** A sparse record: omitted/null fields inherit; a numeric zero explicitly turns an addition off. */

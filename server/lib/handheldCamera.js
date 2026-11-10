@@ -183,3 +183,49 @@ export function handheldFfmpegFilter(input, { width, height } = {}) {
     `crop=${w}:${h}:x='(iw-ow)/2+${w}*(${axisExpr(terms, 'x')})':y='(ih-oh)/2+${h}*(${axisExpr(terms, 'y')})'`,
   ].join(',');
 }
+
+/** A stable seed for an id (a shot's sceneId), so every shot shakes its own way and the same way every time. */
+export function handheldSeedFor(id) {
+  let h = 0x811c9dc5;
+  for (const ch of String(id || '')) h = Math.imul(h ^ ch.codePointAt(0), 0x01000193) >>> 0;
+  return 1 + (h % HANDHELD_SEED_MAX);
+}
+
+/**
+ * A shot's handheld motion as the layered document draws it: the template
+ * additions `handheld` (shake) and `handheldSteps` (footsteps), seeded by the
+ * shot's id. `{ zoom, terms }` with each term `[axis, amp, freq, phase, bob]`
+ * (bob 1 for a footfall), the compact form PortOS writes into the document
+ * data; null when nothing moves.
+ */
+export function documentHandheld(effects, sceneId, aspect = 16 / 9) {
+  const terms = handheldTerms({ shake: effects?.handheld ?? 0, steps: effects?.handheldSteps ?? 0, seed: handheldSeedFor(sceneId) });
+  if (!terms.length) return null;
+  const n = (value) => Number(value.toFixed(6));
+  return {
+    zoom: handheldZoom(terms, aspect),
+    terms: terms.map((term) => [term.axis, n(term.amp), n(term.freq), n(term.phase), term.kind === 'bob' ? 1 : 0]),
+  };
+}
+
+/**
+ * A document camera view (`{ scale, x, y, rotation }`, offsets in frame
+ * widths/heights, rotation in radians) with the handheld motion on top at shot
+ * time `lt` seconds: the window's offset moves the picture the other way, the
+ * roll adds, and the scale grows by the motion's zoom (or more, if the camera
+ * move and the shake together need it) so no edge shows. The layered engine
+ * repeats this as `handheldView`; musicVideoDocumentCamera.test.js pins the two.
+ */
+export function applyDocumentHandheld(view, motion, lt, aspect = 16 / 9) {
+  if (!view || !motion?.terms?.length) return view;
+  let x = 0; let y = 0; let r = 0;
+  for (const [axis, amp, freq, phase, bob] of motion.terms) {
+    const v = bob ? amp * (Math.abs(Math.sin(Math.PI * freq * lt + phase)) - 2 / Math.PI) : amp * Math.sin(2 * Math.PI * freq * lt + phase);
+    if (axis === 'x') x += v; else if (axis === 'y') y += v; else r += v;
+  }
+  const nx = view.x - x; const ny = view.y - y; const rotation = view.rotation + (r * Math.PI) / 180;
+  const c = Math.abs(Math.cos(rotation)); const s = Math.abs(Math.sin(rotation));
+  const sx = 1 + 2 * Math.abs(nx); const sy = 1 + 2 * Math.abs(ny);
+  const cover = Math.max(sx * c + (sy * s) / aspect, sy * c + sx * s * aspect);
+  return { scale: Math.max(view.scale * motion.zoom, cover), x: nx, y: ny, rotation };
+}

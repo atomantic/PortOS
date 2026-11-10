@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { readFile } from 'node:fs/promises';
 import { runInNewContext } from 'node:vm';
 import { documentCameraCss, documentCameraView, documentSceneIndexes } from './musicVideoDocumentCamera.js';
+import { documentHandheld } from './handheldCamera.js';
+import { templateEffects } from './musicVideoTemplateEffects.js';
 
 const layered = new URL('../services/musicVideo/documentTemplates/layered/', import.meta.url);
 const W = 1920, H = 1080;
@@ -103,4 +105,28 @@ it('turns footage push and still motion off in the native player, and resolves s
   }
   const own = { ...scene, templateEffects: { footagePush: 0.5 } };
   expect(documentCameraView(rig, own, 3, { footage: true, templateEffects: { footagePush: 0 } }).scale).toBeGreaterThan(1);
+});
+
+// Uniquely catches the handheld operator moving the live preview differently from the rendered document.
+it('matches the shipped engine for a handheld shot, on its own and over a planned move', async () => {
+  const still = (sceneId, startSec, extra = {}) => ({ sceneId, startSec, endSec: startSec + 4, visualLayer: 'still', media: { kind: 'image', src: `${sceneId}.png` }, ...extra });
+  const scenes = [
+    still('walk', 0, { stillMove: 'hold', templateEffects: { handheld: 0.7, handheldSteps: 0.8 } }),
+    still('steady-hands', 4, { templateEffects: { handheld: 0.3 } }),
+    still('rolling', 8, { camera: { move: 'dutch-roll', speed: 'fast' }, templateEffects: { handheld: 1, handheldSteps: 1, stillMotion: 0.5 } }),
+  ];
+  // What documentRender writes for each scene.
+  const engineScenes = scenes.map((scene) => ({ ...scene, handheld: documentHandheld(templateEffects({}, scene), scene.sceneId, W / H) }));
+  const song = { sections: [], beats: [], downbeats: [] };
+  const times = scenes.flatMap((scene) => [scene.startSec, scene.startSec + 0.7, scene.startSec + 2.35, scene.startSec + 3.9]);
+  const { views, rig } = await engineViews(engineScenes, song, times);
+  const indexes = documentSceneIndexes(scenes);
+  times.forEach((t, i) => {
+    const scene = scenes[Math.floor(i / 4)];
+    const view = documentCameraView(rig, scene, t, { index: indexes.get(scene.sceneId), aspect: W / H });
+    for (const key of ['scale', 'x', 'y', 'rotation']) expect(view[key], `${scene.sceneId} ${key} at ${t}`).toBeCloseTo(views[i][key], 6);
+  });
+  // The operator really moves the frame between samples of one shot.
+  expect(new Set(views.slice(0, 4).map((view) => view.x.toFixed(5))).size).toBe(4);
+  expect(views.slice(0, 4).every((view) => view.rotation !== 0)).toBe(true);
 });

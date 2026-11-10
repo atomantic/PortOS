@@ -162,9 +162,29 @@ describe('music-video composition documents', () => {
     expect(again.body).toMatchObject({ changed: false, document: selected.composition.document });
   });
 
+  // The shipped engine as it was before the handheld camera additions, rebuilt from the current one.
+  const withoutHandheld = (engine) => engine
+    .replace(/  \/\/ A person holding the camera: PortOS writes[\s\S]*?\n  }\n(?=  \/\/ The rig's camera state)/, '')
+    .replace('handheldView(scene, cameraView(scene, seg(t, scene.startSec, scene.endSec)), lt)', 'cameraView(scene, seg(t, scene.startSec, scene.endSec))');
+
+  it('explicitly upgrades the shipped engine from before the handheld camera additions', async () => {
+    const shipped = await readFile(new URL('../services/musicVideo/documentTemplates/layered/engine.js', import.meta.url), 'utf8');
+    const legacy = withoutHandheld(shipped);
+    expect(createHash('sha256').update(legacy).digest('hex')).toBe('a20bb2cf128153aada5c963baf8af22ca4a5ca72bda56d801b2d41a693cb606e');
+    const imported = await uploadZip(project.id, createZip([
+      { name: 'index.html', data: PAGE }, { name: 'engine.js', data: legacy },
+    ]));
+    expect(imported.status).toBe(201);
+    const result = await request(app).post(`/api/music-video/${project.id}/composition/document/engine/upgrade`)
+      .send({ directory: imported.body.document.directory });
+    expect([result.status, result.body.changed]).toEqual([200, true]);
+    const upgraded = await request(app).get(`/api/music-video/${project.id}/composition/document/file?path=engine.js`);
+    expect(upgraded.text).toBe(shipped);
+  });
+
   it('explicitly upgrades the shipped engine whose card glitch ignored beat-reaction controls', async () => {
     const shipped = await readFile(new URL('../services/musicVideo/documentTemplates/layered/engine.js', import.meta.url), 'utf8');
-    const legacy = shipped.replace('state.reactiveGain * templateEffects(scene).beatReaction);', 'state.reactiveGain);');
+    const legacy = withoutHandheld(shipped).replace('state.reactiveGain * templateEffects(scene).beatReaction);', 'state.reactiveGain);');
     // Pin the exact outgoing bytes, rather than accepting any synthesized engine.
     expect(createHash('sha256').update(legacy).digest('hex')).toBe('4ee3ae7c78bce6d9dde36a1f2336c7bfd899918f359b6a9906b619c07a0bfb1b');
     const imported = await uploadZip(project.id, createZip([

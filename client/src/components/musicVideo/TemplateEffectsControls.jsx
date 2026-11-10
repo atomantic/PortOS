@@ -19,7 +19,7 @@ export default function TemplateEffectsControls({ project, scene = null, onChang
   return (
     <fieldset aria-label={scene ? 'Shot template additions' : 'Template additions'} className="space-y-2 rounded border border-port-border p-2 text-xs">
       <legend className="px-1 font-medium">Template additions{scene ? ' · this shot' : ''}</legend>
-      <p className="text-port-text-muted">The layered composition applies these on top of your shots. Beat reaction adds a pulse and chorus glitch. Zero turns an addition off; chosen glitches, transitions and Film look still apply.</p>
+      <p className="text-port-text-muted">The layered composition applies these on top of your shots. Beat reaction adds a pulse and chorus glitch. Handheld shake and footsteps move the frame like a person holding the camera and walking. Zero turns an addition off; chosen glitches, transitions and Film look still apply.</p>
       <p className="text-port-text-muted">Existing documents need Update layered engine to use these controls. Custom and 3D engines keep their own behavior.</p>
       {TEMPLATE_EFFECT_CONTROLS.map(({ id, label }) => (
         <div key={id} className="flex flex-wrap items-center gap-2">

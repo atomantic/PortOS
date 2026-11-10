@@ -904,7 +904,9 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // and the video's overscan. A v58 strict camera or project schema rejects them. Optional, no backfill:
   // absent follows the video look, the video frame, and no crop.
   // v60 = per-video/shot layered-template effects; older strict schemas reject the optional record.
-  musicVideoProjects: 60,
+  // v61 = handheld camera template additions (`templateEffects.handheld`/`handheldSteps`), which a v60
+  // strict template-effects schema rejects. Optional, no backfill: absent is a steady camera.
+  musicVideoProjects: 61,
   // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
   // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
   // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).
