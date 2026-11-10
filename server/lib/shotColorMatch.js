@@ -266,9 +266,9 @@ const fmt = (n) => Number(n).toFixed(6);
 export function colorMatchVideoFilter(correction) {
   if (!correction) return null;
   const curve = (channel, balance) => `pow(clip(${channel}/255*${fmt(balance)}*${fmt(correction.white)}+${fmt(correction.black)}\\,0\\,1)\\,${fmt(correction.gamma)})`;
-  const red = curve('r', correction.balanceR);
-  const green = curve('g', 1);
-  const blue = curve('b', correction.balanceB);
+  const red = curve('r(X\\,Y)', correction.balanceR);
+  const green = curve('g(X\\,Y)', 1);
+  const blue = curve('b(X\\,Y)', correction.balanceB);
   const y = `(${LUMA_R}*(${red})+${LUMA_G}*(${green})+${LUMA_B}*(${blue}))`;
   const sat = fmt(correction.saturation);
   const chan = (curved) => `clip((${y}+((${curved})-${y})*${sat})*255\\,0\\,255)`;
