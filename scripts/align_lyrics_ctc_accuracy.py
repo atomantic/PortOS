@@ -82,9 +82,9 @@ def read_clip(path, torch, torchaudio):
     window = SAMPLE_RATE // 100
     usable = samples[:len(samples) // window * window]
     rms = usable.reshape(-1, window).pow(2).mean(dim=1).sqrt()
-    active = (rms >= rms.max() * ACTIVE_FRACTION).nonzero().flatten()
-    if len(active) == 0:
+    if len(rms) == 0 or rms.max() <= 0:
         raise SystemExit('TTS produced a silent clip.')
+    active = (rms >= rms.max() * ACTIVE_FRACTION).nonzero().flatten()
     return usable[int(active[0]) * window:(int(active[-1]) + 1) * window]
 
 
@@ -219,9 +219,9 @@ def main():
         drift = [abs(a[key] - b[key]) for a, b in zip(rows, previous_rows) for key in ('startSec', 'endSec')]
         comparison = {'startError': previous_start, 'endError': summarize(previous_rows, 'endErr'),
                       'maxWordTimeDifference': round(max(drift), 3) if drift and previous_rows else None}
-        # One 20 ms frame of slack: the owned emitter may round differently from the bundle's.
-        checks['noWorseThanPreviousPath'] = bool(previous_start and start) and all(
-            start[key] <= previous_start[key] + FRAME_SEC + 1e-9 for key in ('median', 'max'))
+        # Per word, with one 20 ms frame of slack: the owned emitter may round differently from the bundle's.
+        checks['noWorseThanPreviousPath'] = bool(rows) and len(previous_rows) == len(rows) and all(
+            abs(row['startErr']) <= abs(before['startErr']) + FRAME_SEC + 1e-9 for row, before in zip(rows, previous_rows))
     report = {
         'runtime': {'python': platform.python_version(), 'machine': platform.machine(), 'system': platform.system(),
                     'torch': torch.__version__, 'torchaudio': torchaudio.__version__, 'tts': engine},
