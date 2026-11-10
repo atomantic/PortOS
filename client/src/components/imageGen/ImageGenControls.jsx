@@ -218,7 +218,7 @@ export default function ImageGenControls({
         </div>
       )}
 
-      {!isCloudCli && (
+      {!isCloudCli && !(isLocal && currentModel?.samplerLocked) && (
         <FormField
           label={<>Steps {currentModel?.steps && `(default: ${currentModel.steps})`}</>}
           labelClassName="block text-xs font-medium text-gray-400 mb-1"
@@ -254,7 +254,7 @@ export default function ImageGenControls({
         </FormField>
       )}
 
-      {!isCloudCli && isLocal && showQuantize && !isFlux2 && !isFlux3 && currentModel?.runner !== 'moss-swift' && (
+      {!isCloudCli && isLocal && showQuantize && !isFlux2 && !isFlux3 && !currentModel?.quantization && currentModel?.runner !== 'moss-swift' && (
         <FormField label="Quantize (bits)" labelClassName="block text-xs font-medium text-gray-400 mb-1">
           <select
             value={quantize ?? '8'}

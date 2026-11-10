@@ -30,8 +30,10 @@ import { downloadMossWeights, mossModelCacheStatus, verifyMossWeights, repairMos
 import { enqueueJob, attachSseClient as attachQueueSseClient, cancelJob, listJobs, laneConcurrencyFor } from '../services/mediaJobQueue/index.js';
 import { mediaJobExecutionLane } from '../lib/generationModes.js';
 import { recordUserAction } from '../services/userActions.js';
-import { getImageModels, requiredReposForModel } from '../lib/mediaModels.js';
-import { inspectModelCache, verifyModelCache, repairModelCache, aggregateVerifies } from '../lib/hfCache.js';
+import { getImageModels, requiredReposForModel, imageModelDownloadTargets } from '../lib/mediaModels.js';
+import {
+  inspectModelCache, verifyModelCache, repairModelCache, aggregateVerifies, verifyCachedRepoFiles, repairCachedRepoFiles,
+} from '../lib/hfCache.js';
 import { startHfDownloadStream } from '../services/hfDownloadStream.js';
 import { PATHS, ensureDir, resolveGalleryImage, unlinkGuarded, copyFileGuarded } from '../lib/fileUtils.js';
 import { prepareGenerateParams, quickEditCompositionDigest, resolveLocalImageModel } from '../services/imageGen/prepareParams.js';
@@ -835,8 +837,26 @@ router.get('/models', (_req, res) => {
 // entries with `runner: 'mflux'` and a non-default name) report
 // `cached: null` so the UI can render "unknown" rather than a misleading
 // "not downloaded" state. Lazy generation still works regardless of badge.
+// A model pinned to exact files in aggregate repos is checked file by file at
+// its pinned revision; a whole-repo inspection would call a partial snapshot of
+// the repo's other layouts "cached".
+const verifyPinnedTargets = (targets, deep = false) =>
+  Promise.all(targets.map((t) => verifyCachedRepoFiles(t.repo, t.only, { deep, revision: t.revision })));
+
 const imageModelCacheStatus = async (m) => {
   if (usesMossSwift(m)) return mossModelCacheStatus(m.id);
+  const targets = imageModelDownloadTargets(m);
+  if (targets) {
+    const verifies = await verifyPinnedTargets(targets);
+    const requiredRepos = targets.map((t) => t.repo);
+    const cached = verifies.every((v) => v.status === 'ok');
+    return {
+      id: m.id, repo: requiredRepos[0], cached, requiredRepos,
+      sizeBytes: verifies.reduce((sum, v) => sum + (v.sizeBytes || 0), 0),
+      pendingRepos: requiredRepos.filter((_, i) => verifies[i].status !== 'ok'),
+      integrity: cached ? aggregateVerifies(verifies) : null,
+    };
+  }
   const required = requiredReposForModel(m);
   if (!required) return { id: m.id, repo: null, cached: null, sizeBytes: 0 };
   // Inspect every required repo (main + any aux text encoders). The badge
@@ -875,6 +895,8 @@ router.post('/models/verify', asyncHandler(async (req, res) => {
   }
   const results = await Promise.all(models.map(async (m) => {
     if (usesMossSwift(m)) return { id: m.id, ...aggregateVerifies([await verifyMossWeights({ deep })]) };
+    const targets = imageModelDownloadTargets(m);
+    if (targets) return { id: m.id, ...(aggregateVerifies(await verifyPinnedTargets(targets, deep)) || { status: 'missing', checkedDeep: deep, badFiles: [] }) };
     const required = requiredReposForModel(m) || [];
     const verifies = await Promise.all(required.map((r) => verifyModelCache(r, { deep })));
     return { id: m.id, ...(aggregateVerifies(verifies) || { status: 'missing', checkedDeep: deep, badFiles: [] }) };
@@ -893,6 +915,12 @@ router.post('/models/:modelId/repair', asyncHandler(async (req, res) => {
   if (!parsed.success) failValidation(parsed);
   const deep = parsed.data.deep || false;
   if (usesMossSwift(model)) return res.json(await repairMossWeights({ deep }));
+  const targets = imageModelDownloadTargets(model);
+  if (targets) {
+    const repaired = await Promise.all(targets.map((t) => repairCachedRepoFiles(t.repo, t.only, { deep, revision: t.revision })));
+    const deleted = repaired.flatMap((r, i) => (r.deleted || []).map((name) => ({ repo: targets[i].repo, name })));
+    return res.json({ deep, deleted, repos: targets.map((t) => t.repo) });
+  }
   const required = requiredReposForModel(model);
   if (!required) {
     throw new ServerError(`Model "${model.id}" has no HuggingFace repo on file.`, { status: 400, code: 'NO_REPO_FOR_MODEL' });
@@ -922,7 +950,7 @@ router.post('/models/:modelId/download', asyncHandler(async (req, res) => {
   const { force } = validateRequest(modelDownloadQuerySchema, req.query);
   const model = downloadableImageModel(req);
   if (usesMossSwift(model)) return streamMossAction(req, res, downloadMossWeights);
-  const repos = requiredReposForModel(model);
+  const repos = imageModelDownloadTargets(model) || requiredReposForModel(model);
   if (!repos) {
     throw new ServerError(`Model "${model.id}" has no HuggingFace repo on file — cannot pre-download.`, {
       status: 400,

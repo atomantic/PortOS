@@ -438,7 +438,7 @@ export async function compileFableLoomVisualRequest({
 
 export function fableLoomImageCapabilities({ mode, model = null, inputBudget = 4 }) {
   const localFlux2 = mode === 'local' && model?.runner === 'flux2';
-  const localReferences = localFlux2 || (mode === 'local' && model?.runner === 'flux3');
+  const localReferences = localFlux2 || (mode === 'local' && (model?.runner === 'flux3' || model?.maxReferenceImages > 0));
   const runwayCapability = mode === 'runway' ? IMAGE_GEN_PROVIDER_CAPABILITIES.runway : null;
   // Every cloud image backend accepts reference images (imageGenCapabilities.js).
   const cloudEdit = CLOUD_IMAGE_GEN_MODES.includes(mode);

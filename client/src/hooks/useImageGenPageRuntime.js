@@ -323,7 +323,9 @@ export function useImageGenPageRuntime() {
     } : {};
     const referenceFields = hasReferenceImages ? {
       ...Object.fromEntries(derived.populatedRefs.map((slot, index) => [`referenceImage${index + 1}`, slot.file])),
-      referenceStrengths: derived.populatedRefs.map((slot) => slot.strength),
+      // A strength set under a model that honors it stays on the slot; send it
+      // only while this model shows the slider, or a hidden value refuses the render.
+      referenceStrengths: derived.populatedRefs.map((slot) => (derived.showReferenceStrength ? slot.strength : 1)),
     } : {};
     return { payload, initFields, referenceFields, hasInputImages: hasInitImage || hasReferenceImages };
   };
