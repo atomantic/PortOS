@@ -464,8 +464,8 @@ require_mlx_video_profile() {
 }
 
 sync_locked_mlx_video() (
-  local label="$1" dir="$2" python="$3" pin="$4" base_python checkout_status
-  shift 4
+  local label="$1" dir="$2" python="$3" pin="$4" lock="$5" base_python checkout_status
+  shift 5
   cd "$dir"
   checkout_status="$(git status --porcelain=v1 --untracked-files=all)"
   if [[ "$(git rev-parse HEAD)" != "$pin" || ! -f uv.lock || -n "$checkout_status" ]]; then
@@ -479,16 +479,20 @@ sync_locked_mlx_video() (
   export UV_PROJECT_ENVIRONMENT="$PWD/.venv"
   base_python="$(portos_uv --no-config python find 3.11 2>/dev/null || true)"
   reset_universal_venv "$UV_PROJECT_ENVIRONMENT" "$base_python"
-  if [[ ! -x "$python" ]]; then
+  if [[ ! -x "$python" ]] || ! "$python" -I -S -c 'import sys; sys.exit(sys.version_info[:2] != (3, 11))'; then
     echo "📦 Creating ${label} venv with Python 3.11..."
-    portos_uv --no-config venv --python 3.11 "$UV_PROJECT_ENVIRONMENT"
+    portos_uv --no-config venv --clear --python 3.11 "$UV_PROJECT_ENVIRONMENT"
   fi
-  # Upstream uv.lock supplies the runtime hashes. Build workspace packages in
-  # a second step because uv.lock doesn't pin their isolated PEP 517 backends.
-  echo "📦 Syncing ${label} wheels from the pinned upstream lock..."
-  portos_uv --no-config --no-cache sync --locked --no-build --no-install-workspace --python "$python"
+  if [[ -n "$lock" ]]; then
+    echo "📦 Syncing ${label} wheels from ${lock##*/}..."
+    portos_uv --no-config --no-cache pip sync --require-hashes --only-binary :all: --python "$python" "$lock"
+  else
+    echo "📦 Syncing ${label} wheels from the pinned upstream lock..."
+    portos_uv --no-config --no-cache sync --locked --no-build --no-install-workspace --python "$python"
+  fi
   echo "📦 Building pinned ${label} source with hash-locked build tools..."
   portos_uv --no-config --no-cache pip install --no-deps --only-binary :all: --preview-features build-dependency-hashes --require-build-hashes --build-constraints "$SCRIPT_DIR/requirements-mlx-video-build.lock.txt" --python "$python" --reinstall "$@"
+  portos_uv --no-config pip check --python "$python"
   pin_venv_arm64 "$UV_PROJECT_ENVIRONMENT"
 )
 
@@ -703,7 +707,7 @@ if [[ "$INSTALL_LTX2" == "1" ]]; then
   fi
   echo "📦 Checking out pinned commit ${LTX2_PIN:0:12}..."
   git_checkout_pin "${LTX2_DIR}" "${LTX2_PIN}"
-  sync_locked_mlx_video "LTX-2 MLX" "$LTX2_DIR" "$LTX2_PY" "$LTX2_PIN" \
+  sync_locked_mlx_video "LTX-2 MLX" "$LTX2_DIR" "$LTX2_PY" "$LTX2_PIN" "$SCRIPT_DIR/requirements-ltx23-mlx.lock.txt" \
     -e packages/ltx-core-mlx -e packages/ltx-pipelines-mlx
   probe_or_fail \
     "ltx-2-mlx synced but 'import ltx_pipelines_mlx' failed." \
@@ -747,7 +751,7 @@ if [[ "$INSTALL_LTX25" == "1" ]]; then
   fi
   echo "📦 Checking out pinned commit ${LTX25_PIN:0:12}..."
   git_checkout_pin "${LTX25_DIR}" "${LTX25_PIN}"
-  sync_locked_mlx_video "LTX-2.5 MLX" "$LTX25_DIR" "$LTX25_PY" "$LTX25_PIN" \
+  sync_locked_mlx_video "LTX-2.5 MLX" "$LTX25_DIR" "$LTX25_PY" "$LTX25_PIN" "$SCRIPT_DIR/requirements-ltx25-mlx.lock.txt" \
     -e packages/ltx-core-mlx -e packages/ltx-pipelines-mlx
   probe_or_fail \
     "ltx-2.5-mlx synced but 'import ltx_pipelines_mlx' failed." \
@@ -853,7 +857,7 @@ if [[ "$INSTALL_WAN22" == "1" ]]; then
     (cd "${WAN22_DIR}" && git fetch --progress origin)
   fi
   git_checkout_pin "${WAN22_DIR}" "${WAN22_PIN}"
-  sync_locked_mlx_video "Wan 2.2 MLX" "$WAN22_DIR" "$WAN22_PY" "$WAN22_PIN" -e .
+  sync_locked_mlx_video "Wan 2.2 MLX" "$WAN22_DIR" "$WAN22_PY" "$WAN22_PIN" "" -e .
   probe_or_fail \
     "MLX-Gen synced but the Wan runtime import failed." \
     "Use Repair / Upgrade from the Video Gen runtime panel to retry." \

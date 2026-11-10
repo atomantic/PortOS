@@ -751,8 +751,18 @@ case "$1" in
     [[ -f uv.lock && "\${STALE_LOCK:-0}" == 0 ]] || exit 42
     ;;
   pip)
-    [[ "$cache" == 0 && "$*" == 'pip install --no-deps --only-binary :all: --preview-features build-dependency-hashes --require-build-hashes --build-constraints '*'/requirements-mlx-video-build.lock.txt --python '"$PWD/.venv/bin/python3"' --reinstall -e '* ]] || exit 97
-    [[ "\${FAIL_BUILD:-0}" == 0 ]] || exit 45
+    case "$2" in
+      sync)
+        [[ "$cache" == 0 && "$*" == 'pip sync --require-hashes --only-binary :all: --python '"$PWD/.venv/bin/python3 "* && -s "\${@: -1}" ]] || exit 91
+        [[ "\${STALE_LOCK:-0}" == 0 ]] || exit 42
+        ;;
+      install)
+        [[ "$cache" == 0 && "$*" == 'pip install --no-deps --only-binary :all: --preview-features build-dependency-hashes --require-build-hashes --build-constraints '*'/requirements-mlx-video-build.lock.txt --python '"$PWD/.venv/bin/python3"' --reinstall -e '* ]] || exit 97
+        [[ "\${FAIL_BUILD:-0}" == 0 ]] || exit 45
+        ;;
+      check) [[ "$*" == "pip check --python $PWD/.venv/bin/python3" ]] || exit 97 ;;
+      *) exit 92 ;;
+    esac
     ;;
   *) exit 92 ;;
 esac`);
@@ -823,19 +833,23 @@ source "$1"
     return { run, calls: () => readFileSync(log, 'utf8'), home };
   }
 
-  it.each(['INSTALL_LTX2', 'INSTALL_LTX25', 'INSTALL_WAN22'])('bootstraps private uv and preserves the upstream lock for %s', (flag) => {
+  it.each([
+    ['INSTALL_LTX2', /private pip sync .*requirements-ltx23-mlx\.lock\.txt/],
+    ['INSTALL_LTX25', /private pip sync .*requirements-ltx25-mlx\.lock\.txt/],
+    ['INSTALL_WAN22', /private sync --locked --no-build --no-install-workspace/],
+  ])('bootstraps private uv and syncs the dependency lock for %s', (flag, syncCall) => {
     const install = installer(flag);
     const fresh = install.run();
     expect(fresh.status, fresh.stderr).toBe(0);
     expect(install.calls()).toContain('bootstrap -m pip install --disable-pip-version-check --require-hashes --no-deps --only-binary :all:');
-    expect(install.calls()).toContain('private sync --locked --no-build --no-install-workspace');
+    expect(install.calls()).toMatch(syncCall);
     expect(install.calls()).toContain(flag === 'INSTALL_WAN22'
       ? '--reinstall -e .\n' : '--reinstall -e packages/ltx-core-mlx -e packages/ltx-pipelines-mlx\n');
     expect(install.calls()).not.toContain('foreign-env');
     const repair = install.run();
     expect(repair.status, repair.stderr).toBe(0);
     expect(install.calls()).not.toContain('bootstrap ');
-    expect(install.calls()).toContain('private sync --locked');
+    expect(install.calls()).toMatch(syncCall);
     const failedLock = install.run({ STALE_LOCK: '1' });
     expect(failedLock.status).toBe(42);
     expect(install.calls()).not.toContain('private pip install');
@@ -850,7 +864,7 @@ source "$1"
     const result = install.run({ NO_BOOTSTRAP_MODULES: '1', ALLOW_ALT: '1' });
     expect(result.status, result.stderr).toBe(0);
     expect(install.calls()).toContain('bootstrap -m pip install');
-    expect(install.calls()).toContain('private sync --locked');
+    expect(install.calls()).toContain('private pip sync --require-hashes');
   });
 
   it('reports a missing bootstrap prerequisite before mutating the private tool or runtime venv', () => {
@@ -886,7 +900,7 @@ source "$1"
     const result = install.run();
     expect(result.status, result.stderr).toBe(0);
     expect(install.calls()).toContain('bootstrap ');
-    expect(install.calls()).toContain('private sync --locked');
+    expect(install.calls()).toContain('private pip sync --require-hashes');
   });
 
   it.each([{ FAIL_VENV: '1' }, { FAIL_PIP: '1' }])('never executes stale uv after failed bootstrap in a command substitution (%j)', (failure) => {

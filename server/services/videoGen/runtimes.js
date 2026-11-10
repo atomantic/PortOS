@@ -26,6 +26,7 @@ import { LAST_FRAME_ANCHORED_RUNTIMES } from '../../lib/runners.js';
 // progress protocol (STAGE:/STATUS:/DOWNLOAD:) as the mlx_video CLI.
 export const LTX2_VENV_PYTHON = join(homedir(), '.portos', 'ltx-2-mlx', '.venv', 'bin', 'python3');
 export const LTX2_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'generate_ltx2.py');
+const LTX2_EXPECTED_REVISION = '1192051fd380e0501adb5f3c0e9a216e679cb123';
 
 // LTX-2.5 MLX runtime — MrMofer's ltx25 fork of dgrauet/ltx-2-mlx. Same
 // helper script as `ltx2`, separate checkout so the 2.3 pin stays frozen.
@@ -152,6 +153,23 @@ export const WAN22_CUDA_HELPER_SCRIPT = join(PATHS.root, 'scripts', 'generate_wa
 // package versions on GET /api/video-gen/status without running a render. Shares
 // its fingerprint definition with the inline render-time emit (_runner_common).
 const RUNTIME_FINGERPRINT_SCRIPT = join(PATHS.root, 'scripts', 'runtime_fingerprint.py');
+
+// These locks contain a flat set of pins for arm64 CPython 3.11. A checkout at
+// the expected revision can still have the old upstream dependency versions.
+const mlxVideoCurrencyProbe = (profile) => ['-I', '-c', String.raw`import importlib.metadata as metadata
+from pathlib import Path
+import platform, re, sys
+
+if sys.version_info[:2] != (3, 11) or platform.machine() != 'arm64':
+    sys.exit(78)
+pins = re.findall(r'^([a-z0-9-]+)==([^\s]+)', Path(sys.argv[1]).read_text(encoding='utf-8'), re.M)
+assert pins, 'empty runtime lock'
+try:
+    current = all(metadata.version(name) == version for name, version in pins)
+except metadata.PackageNotFoundError:
+    current = False
+sys.exit(0 if current else 78)
+`, join(PATHS.root, 'scripts', `requirements-${profile}-mlx.lock.txt`)];
 
 // Per-runtime metadata for "bring-your-own-venv" video runtimes — those that
 // resolve their own Python interpreter inside buildArgs (so the legacy
@@ -318,6 +336,9 @@ sys.exit(0 if current else 78)
     repoDir: join(homedir(), '.portos', 'ltx-2-mlx'),
     installEnvVar: 'INSTALL_LTX2',
     repoUrl: 'https://github.com/dgrauet/ltx-2-mlx',
+    expectedRevision: LTX2_EXPECTED_REVISION,
+    pinEnvVar: 'LTX2_PIN',
+    currencyProbeArgs: mlxVideoCurrencyProbe('ltx23'),
     // Matches the post-install check setup-image-video.sh runs after
     // `uv sync` (`import ltx_pipelines_mlx` is the canonical health signal
     // for this venv).
@@ -334,6 +355,7 @@ sys.exit(0 if current else 78)
     repoUrl: 'https://github.com/MrMoferFRAN/ltx-2-mlx',
     expectedRevision: LTX25_EXPECTED_REVISION,
     pinEnvVar: 'LTX25_PIN',
+    currencyProbeArgs: mlxVideoCurrencyProbe('ltx25'),
     importProbe: 'import ltx_pipelines_mlx',
     fingerprintPackages: ['ltx_pipelines_mlx', 'ltx_core_mlx', 'mlx', 'mlx_metal'],
     // The revision whose ancestral (SDE) Euler loop was READ and confirmed to
@@ -664,6 +686,7 @@ export function byovRuntimeExpectedRevision(runtimeId) {
 
 export async function isByovRuntimeCurrent(runtimeId) {
   const info = BYOV_RUNTIME_INFO[runtimeId];
+  if (info?.expectedRevision && !await isByovRuntimeSourceCurrent(info)) return false;
   if (info?.currencyProbeArgs) {
     if (!existsSync(info.venvPython)) return false;
     return runVenvProbe(info.venvPython, info.currencyProbeArgs, `${runtimeId} locked dependencies`, { staleExitCode: 78 });
@@ -684,7 +707,10 @@ export async function isByovRuntimeCurrent(runtimeId) {
       child.on('error', () => { clearTimeout(timer); resolve(false); });
     });
   }
-  if (!info?.expectedRevision) return true;
+  return true;
+}
+
+function isByovRuntimeSourceCurrent(info) {
   if (!existsSync(join(info.repoDir, '.git'))) return false;
   return new Promise((resolve) => {
     let stdout = '';
