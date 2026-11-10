@@ -7,23 +7,26 @@
  */
 const MAX_VERIFIED_TARGETS = 50;
 
-export function prWatcherTargetsMetadata(prs, repoFullName) {
+export function prWatcherTargetsMetadata(prs, repoFullName, repoHost) {
   const prNumbers = [...new Set((prs || []).map(pr => pr?.number)
     .filter(number => Number.isSafeInteger(number) && number > 0))];
   return prNumbers.length && typeof repoFullName === 'string' && repoFullName
-    ? { repoFullName, prNumbers } : null;
+    && typeof repoHost === 'string' && repoHost
+    ? { repoFullName, repoHost, prNumbers } : null;
 }
 
 export async function verifyPrWatcherTargetsSettled(task, workspacePath) {
   const meta = task?.metadata;
   const targets = meta?.prWatcherTargets;
   if ((meta?.analysisType || meta?.taskAnalysisType) !== 'pr-watcher' || !workspacePath
-    || typeof targets?.repoFullName !== 'string' || !Array.isArray(targets.prNumbers)
+    || typeof targets?.repoFullName !== 'string' || typeof targets.repoHost !== 'string' || !targets.repoHost
+    || !Array.isArray(targets.prNumbers)
     || targets.prNumbers.length === 0 || targets.prNumbers.length > MAX_VERIFIED_TARGETS
     || !targets.prNumbers.every(number => Number.isSafeInteger(number) && number > 0)) return null;
   const { getOriginInfo } = await import('../lib/gitRemote.js');
   const origin = await getOriginInfo(workspacePath);
-  if (origin?.fullName !== targets.repoFullName) return null;
+  const { githubApiHost } = await import('../lib/workTracker.js');
+  if (origin?.fullName !== targets.repoFullName || githubApiHost(origin?.host) !== targets.repoHost) return null;
   const { probeChangeRequestState } = await import('./prProbe.js');
   const states = {};
   for (const number of targets.prNumbers) {
@@ -31,5 +34,5 @@ export async function verifyPrWatcherTargetsSettled(task, workspacePath) {
     if (probe.readable !== true || !['MERGED', 'CLOSED'].includes(probe.prState)) return null;
     states[number] = probe.prState;
   }
-  return { status: 'verified', repoFullName: targets.repoFullName, states };
+  return { status: 'verified', repoFullName: targets.repoFullName, repoHost: targets.repoHost, states };
 }
