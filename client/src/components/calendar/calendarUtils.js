@@ -22,12 +22,25 @@ export function getEventDayMinutes(event, day) {
   };
 }
 
+// Google all-day values are `YYYY-MM-DDT00:00:00` and Outlook stamps that same
+// midnight with `Z`. Neither is an absolute instant: `new Date` of the Z form
+// is UTC midnight, so a July 4 all-day event starts on July 3 for anyone west
+// of UTC. Read the calendar date in the display's local timezone.
+const ALL_DAY_MIDNIGHT = /^(\d{4})-(\d{2})-(\d{2})T00:00:00(?:\.0+)?(?:Z|[+-]\d{2}:?\d{2})?$/;
+
+export function allDayCalendarDate(value) {
+  if (typeof value !== 'string') return new Date(value);
+  const match = ALL_DAY_MIDNIGHT.exec(value.trim());
+  if (!match) return new Date(value);
+  return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+}
+
 /** An event occupies a local calendar day when its half-open interval overlaps it. */
 export function eventOccursOnDay(event, day) {
   if (!event.isAllDay) return getEventDayMinutes(event, day) !== null;
 
-  const start = new Date(event.startTime);
-  const end = new Date(event.endTime);
+  const start = allDayCalendarDate(event.startTime);
+  const end = allDayCalendarDate(event.endTime);
   const dayStart = new Date(day);
   dayStart.setHours(0, 0, 0, 0);
   const dayEnd = new Date(dayStart);

@@ -7,6 +7,7 @@ import { useSocket } from '../hooks/useSocket';
 import { formatClockTime, formatDateFull, formatTimeOfDay } from '../utils/formatters';
 import DeathClockCountdown from '../components/DeathClockCountdown';
 import { shouldIgnoreGlobalKey } from '../lib/a11yKeyboard';
+import { allDayCalendarDate } from '../components/calendar/calendarUtils';
 
 const CALENDAR_EVENTS = ['calendar:sync:completed', 'calendar:changed'];
 const DEATH_CLOCK_EVENTS = ['meatspace:death-clock:changed'];
@@ -129,7 +130,11 @@ export default function Ambient() {
   const upcomingEvents = useMemo(() => {
     const events = Array.isArray(calendarEvents) ? calendarEvents : [];
     return events
-      .filter(e => new Date(e.endTime || e.end || e.startTime || e.start) >= time)
+      .filter(e => {
+        const raw = e.endTime || e.end || e.startTime || e.start;
+        const at = (e.isAllDay ?? e.allDay) ? allDayCalendarDate(raw) : new Date(raw);
+        return at >= time;
+      })
       .slice(0, 6);
   }, [calendarEvents, time]);
 

@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Ambient from './Ambient';
+import { allDayCalendarDate } from '../components/calendar/calendarUtils';
 import * as api from '../services/api';
 import socket from '../services/socket';
 import { formatClockTime, formatDateFull } from '../utils/formatters';
@@ -116,6 +117,28 @@ describe('Ambient resource updates', () => {
     await flush(() => vi.advanceTimersByTime(1000));
     expect(reads()).toEqual([2, 2, 2, 2]);
     expect(screen.getByText(formatDateFull(new Date()))).toBeTruthy();
+  });
+
+  it('keeps a Z-stamped all-day event until the local calendar date ends', async () => {
+    expect(allDayCalendarDate('2026-07-05T00:00:00.000Z').getTime()).toBe(new Date(2026, 6, 5).getTime());
+    const localEnd = new Date(2026, 6, 5).getTime();
+    const absoluteEnd = Date.parse('2026-07-05T00:00:00.000Z');
+    // West of UTC the absolute midnight is already past during the local evening.
+    // East of UTC it is still ahead after local midnight. Either gap is the bug.
+    const showAt = localEnd > absoluteEnd ? absoluteEnd + 1000 : localEnd - 60_000;
+    vi.setSystemTime(new Date(showAt));
+    api.getCalendarEvents.mockResolvedValue({
+      events: [{
+        id: 'jul4', title: 'July 4', isAllDay: true,
+        startTime: '2026-07-04T00:00:00.000Z', endTime: '2026-07-05T00:00:00.000Z',
+      }],
+      total: 1,
+    });
+    await mount();
+    expect(screen.getByText('July 4')).toBeTruthy();
+    vi.setSystemTime(new Date(localEnd + 1000));
+    await flush(() => vi.advanceTimersByTime(1000));
+    expect(screen.queryByText('July 4')).toBeNull();
   });
 
   it('reads all calendar pages and preserves the last snapshot when an event read fails', async () => {
