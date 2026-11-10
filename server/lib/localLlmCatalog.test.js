@@ -224,6 +224,8 @@ describe('localLlmCatalog', () => {
       expect(ollama.find((m) => m.key === 'gpt-oss-120b')?.id).toBe('gpt-oss:120b');
       expect(ollama.find((m) => m.key === 'lfm3-1.7b')?.id).toBe('lfm3:1.7b');
       expect(ollama.find((m) => m.key === 'lfm3-vl-2b')?.id).toBe('lfm3-vl:2b');
+      expect(ollama.find((m) => m.key === 'lfm3-audio-2b')?.id).toBe('lfm3-audio');
+      expect(ollama.find((m) => m.key === 'nemotron-3-super-120b')?.id).toBe('nemotron-3-super');
     });
   });
 
@@ -270,6 +272,10 @@ describe('localLlmCatalog', () => {
         .toEqual({ targetId: 'lmstudio-community/LFM3-1.7B-GGUF', exact: true });
       expect(mapModelToBackend('ollama', 'lfm3-vl:2b', 'lmstudio'))
         .toEqual({ targetId: 'lmstudio-community/LFM3-VL-2B-GGUF', exact: true });
+      expect(mapModelToBackend('ollama', 'lfm3-audio', 'lmstudio'))
+        .toEqual({ targetId: 'LiquidAI/LFM3-Audio-2B-GGUF', exact: true });
+      expect(mapModelToBackend('ollama', 'nemotron-3-super', 'lmstudio'))
+        .toEqual({ targetId: 'unsloth/NVIDIA-Nemotron-3-Super-120B-A12B-GGUF', exact: true });
     });
 
     it('still maps models retired from the suggested-install catalog', () => {

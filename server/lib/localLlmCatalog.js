@@ -368,6 +368,21 @@ export const LOCAL_LLM_CATALOG = [
     lmstudio: 'NousResearch/Hermes-3-Llama-3.1-8B-GGUF'
   },
   {
+    key: 'lfm3-audio-2b',
+    name: 'LFM3 Audio 2B',
+    category: 'chat',
+    recommendedFor: ['chat', 'multilingual'],
+    params: '2B',
+    size: '1.5 GB',
+    family: 'lfm3',
+    description: "Liquid AI's compact on-device audio model (2B params) with a 32K context window — text and streaming speech in 18 languages, audio reasoning, and tool calling via LiquidCodec.",
+    capabilities: ['chat', 'tools', 'multilingual'],
+    context: 32768,
+    ollama: 'lfm3-audio',
+    lmstudio: 'LiquidAI/LFM3-Audio-2B-GGUF',
+    lmstudioAliases: ['lmstudio-community/LFM3-Audio-2B-GGUF']
+  },
+  {
     key: 'granite4.2-8b',
     name: 'Granite 4.2 8B',
     category: 'general',
@@ -807,6 +822,22 @@ export const LOCAL_LLM_CATALOG = [
     context: 131072,
     ollama: 'gpt-oss:120b',
     lmstudio: 'lmstudio-community/gpt-oss-120b-GGUF'
+  },
+  {
+    key: 'nemotron-3-super-120b',
+    name: 'Nemotron 3 Super 120B-A12B',
+    category: 'reasoning',
+    recommendedFor: ['reasoning', 'coding'],
+    params: '120B / 12B active',
+    size: '68 GB',
+    family: 'nemotron',
+    description: "NVIDIA's flagship open hybrid Mamba-Transformer agentic MoE with a 1M-token context — deep chain-of-thought thinking, tools, and coding with 12B active parameters for high-memory workstations.",
+    repository: 'nvidia/Nemotron-3-Super-120B-A12B',
+    capabilities: ['chat', 'reasoning', 'code', 'tools'],
+    context: 1048576,
+    ollama: 'nemotron-3-super',
+    lmstudio: 'unsloth/NVIDIA-Nemotron-3-Super-120B-A12B-GGUF',
+    lmstudioAliases: ['ggml-org/Nemotron-3-Super-120B-GGUF']
   },
   {
     key: 'qwen3.5-122b-a10b',
