@@ -1,9 +1,5 @@
 # Caller-triggered vocal separation; complete closure and regeneration in the lock.
-# CPython 3.11. Keep the tested Torch/torchaudio pair together.
-demucs==4.0.1
+# CPython 3.11. Demucs 4.1 supplies wheels and native WAV output without TorchCodec.
+demucs==4.1.0
 soundfile==0.13.1
 torch==2.14.1
-torchaudio==2.11.1
-# Demucs uses setuptools.build_meta. Install these before the no-isolation build.
-setuptools==84.2.1
-wheel==0.48.0

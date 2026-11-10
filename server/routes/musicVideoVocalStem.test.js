@@ -187,11 +187,10 @@ describe.skipIf(!ffmpeg)('music-video vocal separation', () => {
     const kinds = calls.map((argv) => argv.slice(1, 3).join(' '));
     expect(kinds).toContain('-m venv');
     const installs = calls.filter((argv) => argv[2] === 'pip');
-    expect(installs).toHaveLength(2);
+    expect(installs).toHaveLength(1);
     for (const argv of installs) expect(argv).toEqual(expect.arrayContaining(['--require-hashes', '--no-deps']));
-    expect(installs[0].at(-1)).toMatch(/requirements-demucs-build.lock.txt$/);
-    expect(installs[1]).toEqual(expect.arrayContaining(['--no-build-isolation', '--only-binary', ':all:', '--no-binary', 'demucs']));
-    expect(installs[1].at(-1)).toMatch(/requirements-demucs.lock.txt$/);
+    expect(installs[0]).toEqual(expect.arrayContaining(['--only-binary', ':all:']));
+    expect(installs[0].at(-1)).toMatch(/requirements-demucs.lock.txt$/);
     const demucsRuns = calls.filter((argv) => argv[2] === 'demucs');
     expect(demucsRuns[0]).toEqual(expect.arrayContaining(['--two-stems=vocals', '-n', 'htdemucs_ft']));
     expect(demucsRuns.at(-1)[demucsRuns.at(-1).indexOf('-d') + 1]).toBe('cpu');

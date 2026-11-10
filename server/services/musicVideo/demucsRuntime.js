@@ -1,5 +1,5 @@
 // Caller-triggered Demucs provisioning. No package or build dependency is resolved
-// at install time: the source archive and its build backend are both hash-locked.
+// at install time: the complete dependency closure uses hash-verified wheels.
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
@@ -11,7 +11,6 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { runStreamingCommand } from '../../lib/streamingSpawn.js';
 
 const LOCK = fileURLToPath(new URL('../../../scripts/requirements-demucs.lock.txt', import.meta.url));
-const BUILD_LOCK = fileURLToPath(new URL('../../../scripts/requirements-demucs-build.lock.txt', import.meta.url));
 const TIMEOUT = 45 * 60_000;
 const fail = (message, code = 'DEMUCS_INSTALL_FAILED') => new ServerError(message, { status: 503, code });
 const lockVersion = (text, name) => new RegExp(`^${name}==([^\\s;\\\\]+)`, 'm').exec(text)?.[1];
@@ -27,19 +26,23 @@ export function _demucsRuntimePlan({ platform = process.platform, arch = process
     return { unsupported: 'Demucs has a hash-locked runtime for Apple Silicon macOS 14+, Linux x64 and Windows x64 only.' };
   }
   const lock = readFileSync(LOCK, 'utf8');
-  const buildLock = readFileSync(BUILD_LOCK, 'utf8');
-  const versions = Object.fromEntries(['demucs', 'soundfile', 'torch', 'torchaudio', 'setuptools', 'wheel', 'packaging']
+  const versions = Object.fromEntries(['demucs', 'soundfile', 'torch', 'sphn']
     .map((name) => [name, lockVersion(lock, name)]));
   return {
     unsupported: null,
     arch: nativeArch,
-    lockId: createHash('sha256').update(lock).update(buildLock).digest('hex'),
+    lockId: createHash('sha256').update(lock).digest('hex'),
     versionProbe: `import sys, platform; assert sys.implementation.name == 'cpython'; assert sys.version_info[:2] == (3, 11); assert platform.machine().lower() in ${JSON.stringify(nativeArch === 'x64' ? ['x86_64', 'amd64'] : ['arm64'])}`,
-    probe: `import demucs.separate, soundfile, torch, torchaudio; import importlib.metadata as m; assert all(m.version(n).split('+')[0] == v for n, v in ${JSON.stringify(versions)}.items())`,
-    installs: [
-      ['-m', 'pip', 'install', '--disable-pip-version-check', '--require-hashes', '--no-deps', '--only-binary', ':all:', '-r', BUILD_LOCK],
-      ['-m', 'pip', 'install', '--disable-pip-version-check', '--require-hashes', '--no-deps', '--no-build-isolation', '--only-binary', ':all:', '--no-binary', 'demucs', '-r', LOCK],
-    ],
+    probe: `import demucs.separate, soundfile, torch, sphn; import importlib.metadata as m; assert all(m.version(n).split('+')[0] == v for n, v in ${JSON.stringify(versions)}.items())
+import tempfile
+from pathlib import Path
+from demucs.audio import save_audio
+with tempfile.TemporaryDirectory(prefix='portos-demucs-probe-') as directory:
+    target = Path(directory) / 'vocals.wav'
+    save_audio(torch.zeros(2, 64), target, 44100)
+    audio, rate = soundfile.read(target)
+    assert audio.shape == (64, 2) and rate == 44100`,
+    install: ['-m', 'pip', 'install', '--disable-pip-version-check', '--require-hashes', '--no-deps', '--only-binary', ':all:', '-r', LOCK],
   };
 }
 
@@ -68,7 +71,7 @@ export async function ensureDemucsRuntime({
   const stamp = join(dir, 'portos-lock.sha256');
   const passes = async (code) => (await run(python, ['-c', code], null, { timeoutMs: 120_000 })).success;
   if (existsSync(python) && await readFile(stamp, 'utf8').catch(() => null) === plan.lockId
-    && await passes(`${plan.versionProbe}; ${plan.probe}`)) return python;
+    && await passes(`${plan.versionProbe}\n${plan.probe}`)) return python;
   if (!provisioning.has(dir)) {
     const install = (async () => {
       const base = await resolveBasePython(plan);
@@ -82,13 +85,11 @@ export async function ensureDemucsRuntime({
       const made = await run(base, ['-m', 'venv', '--clear', dir], null, { timeoutMs: 300_000 });
       if (!made.success) throw fail(`Could not create the Demucs environment: ${made.error}`);
       onProgress({ stage: 'installing', detail: 'Installing hash-locked Demucs dependencies (first run only)' });
-      for (const args of plan.installs) {
-        const installed = await run(python, args, (line) => {
-          if (/^(Collecting|Downloading|Building|Installing|Successfully)/.test(line)) onProgress({ stage: 'installing', detail: line.slice(0, 160) });
-        }, { timeoutMs: TIMEOUT });
-        if (!installed.success) throw fail(`Could not install hash-locked Demucs dependencies: ${installed.error}`);
-      }
-      if (!await passes(`${plan.versionProbe}; ${plan.probe}`)) throw fail('The hash-locked Demucs runtime failed its import/version probe.');
+      const installed = await run(python, plan.install, (line) => {
+        if (/^(Collecting|Downloading|Installing|Successfully)/.test(line)) onProgress({ stage: 'installing', detail: line.slice(0, 160) });
+      }, { timeoutMs: TIMEOUT });
+      if (!installed.success) throw fail(`Could not install hash-locked Demucs dependencies: ${installed.error}`);
+      if (!await passes(`${plan.versionProbe}\n${plan.probe}`)) throw fail('The hash-locked Demucs runtime failed its import/version probe.');
       await writeFile(stamp, plan.lockId);
       console.log('✅ Hash-locked Demucs runtime ready');
     })().finally(() => { provisioning.delete(dir); });
