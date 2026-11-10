@@ -71,6 +71,20 @@ describe('source takes', () => {
 });
 
 describe('shared-take offers', () => {
+  it('chooses an actual clip owner instead of offering a cycle through an earlier return', () => {
+    const scenes = [
+      shot('early', 0, 1, { sourceTake: { sceneId: 'owner', offsetSec: 0 } }),
+      shot('owner', 2, 3),
+      shot('later', 4, 5),
+    ];
+    expect(sharedTakeOffers(scenes)).toEqual([{ kind: 'sourceTake', sceneId: 'later', sourceId: 'owner', offsetSec: 2 }]);
+    expect(sharedTakePatches(scenes, { kind: 'sourceTake', sceneId: 'owner', sourceId: 'early', offsetSec: 0 })).toEqual([]);
+    expect(sharedTakePatches(scenes, { kind: 'sourceTake', sceneId: 'owner', sourceId: 'owner', offsetSec: 0 })).toEqual([]);
+    const offer = sharedTakeOffers(scenes)[0];
+    const patches = sharedTakePatches(scenes, offer);
+    const linked = scenes.map((scene) => ({ ...scene, ...patches.find((patch) => patch.sceneId === scene.sceneId)?.patch }));
+    expect(resolveSourceTake(linked[2], linked)?.source.sceneId).toBe('owner');
+  });
   it('offers sequence coverage without sending a later return past the first member\'s cut clip', () => {
     const scenes = [
       shot('a', 0, 0.8, { shotSheet: { cameraId: 'cam-a', location: 'room' }, label: 'Hold' }),

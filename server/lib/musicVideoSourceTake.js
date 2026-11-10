@@ -181,18 +181,20 @@ export function sharedTakeOffers(scenes) {
       run.push(scene);
     }
     flush();
-    const sourceId = sceneKey(group[0]);
+    const source = group.find((scene) => !sourceTakeOf(scene));
+    if (!source) continue;
+    const sourceId = sceneKey(source);
     // Sequence completion stores only each member's cut, not the uncut run.
     // That clip cannot serve a later return's offset.
-    if (inRun.has(sourceId) || group[0].coverage === 'sequence') continue;
-    for (const scene of group.slice(1)) {
+    if (inRun.has(sourceId) || source.coverage === 'sequence') continue;
+    for (const scene of group) {
       const id = sceneKey(scene);
-      if (inRun.has(id) || sourceTakeOf(scene)?.sceneId === sourceId) continue;
+      if (id === sourceId || inRun.has(id) || sourceTakeOf(scene)?.sceneId === sourceId) continue;
       offers.push({
         kind: 'sourceTake',
         sceneId: id,
         sourceId,
-        offsetSec: round3(Math.max(0, scene.startSec - group[0].startSec)),
+        offsetSec: round3(Math.max(0, scene.startSec - source.startSec)),
       });
     }
   }
@@ -210,8 +212,9 @@ export function sharedTakePatches(scenes, offer) {
   const source = byId.get(offer.sourceId);
   if (!source || source.coverage === 'sequence' || !byId.has(offer.sceneId)) return [];
   const link = { sceneId: offer.sourceId, offsetSec: offer.offsetSec };
-  const patches = [{ sceneId: offer.sceneId, patch: { sourceTake: link } }];
   const withLink = scenes.map((scene) => (sceneKey(scene) === offer.sceneId ? { ...scene, sourceTake: link } : scene));
+  if (!resolveSourceTake(withLink.find((scene) => sceneKey(scene) === offer.sceneId), withLink)) return [];
+  const patches = [{ sceneId: offer.sceneId, patch: { sourceTake: link } }];
   const need = sourceClipNeedSec(source, withLink);
   const current = finite(source.clipLengthSec) ?? 0;
   if (need != null && need >= CLIP_LENGTH_MIN && need <= CLIP_LENGTH_MAX && need > current + EPS) {
