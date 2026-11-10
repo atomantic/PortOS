@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CartesianGrid, LabelList, ResponsiveContainer, Scatter, ScatterChart, Tooltip, XAxis, YAxis } from 'recharts';
 import { getModelComparison } from '../../services/apiModelComparison';
 import { safeReadJsonStorage, safeWriteJsonStorage } from '../../lib/safeStorage';
@@ -107,6 +107,7 @@ export default function ModelComparison() {
   const [zoom, setZoom] = useState(true);
   const [researchOpen, setResearchOpen] = useState(false);
   const [researchScope, setResearchScope] = useState('all');
+  const researchPanelRef = useRef(null);
   const [showEstimates, setShowEstimates] = useState(true);
   const [evidenceLimit, setEvidenceLimit] = useState(100);
   const update = patch => setSettings(previous => ({ ...previous, ...patch }));
@@ -216,13 +217,13 @@ export default function ModelComparison() {
       </div>
     </div>
     {error && <p role="alert" className="text-port-error">{error}</p>}
-    {researchOpen && (
+    {researchOpen && <div ref={researchPanelRef}>
       <ComparisonResearch
         scope={researchScope}
         selectedModels={selectedModels}
         onScopeChange={setResearchScope}
       />
-    )}
+    </div>}
     <section className="min-w-0 rounded-xl border border-port-border bg-port-card p-4 space-y-3" aria-label="Comparison controls">
       <div className="flex flex-wrap items-end gap-3">
         {composites.length > 1 && <div className="min-w-0"><label htmlFor="comparison-anchor" className="block text-xs mb-1">Intelligence index</label><select className="max-w-full rounded-lg border border-port-border bg-port-bg p-2 text-sm" id="comparison-anchor" value={composite.anchor} onChange={event => update({ anchor: event.target.value })}>{composites.map(item => <option key={item.anchor} value={item.anchor}>{item.anchor}</option>)}</select></div>}
@@ -268,7 +269,10 @@ export default function ModelComparison() {
         : 'Token price is the rate per token, not cost per task. Higher effort can use more reasoning tokens at the same rate, so vertical effort curves do not mean equal task cost. Choose Cost per benchmark task to compare reasoning expense.'}</p>
     </section>
     <p className="text-xs text-port-text-muted">Local inference shows $0 API charges; hardware and electricity are excluded. Local quality references are estimates until measured on your build. Zero-cost points are hidden on the log cost scale.</p>
-    <ComparisonValueGuide rows={selected} />
+    <ComparisonValueGuide rows={selected} onConfigureResearch={() => {
+      setResearchScope('all'); setResearchOpen(true);
+      requestAnimationFrame(() => researchPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+    }} />
     <GenerationDelta rows={selected} priceId={price[0]} />
     <details className="rounded-xl border border-port-border bg-port-card p-4"><summary className="cursor-pointer font-medium">Methodology and confidence</summary><p className="mt-2 text-sm text-port-text-muted">PortOS index v1 uses {composite?.anchor || 'the versioned reference index'} as its scale. Exact results take priority. Other evaluations are calibrated using at least three shared model/effort configurations, then combined by their median. Uncalibrated benchmark scores are never mixed directly. Missing effort levels use interpolation or a low-confidence nearest-effort estimate for the same model. Unknown members of a recognized family receive a low-confidence median family baseline with source range. No improvement is assumed for a new generation without evidence. Each estimate retains its method and source dates below; missing models stay in the coverage list for research.</p></details>
     <details className="rounded-xl border border-port-border bg-port-card p-4"><summary className="cursor-pointer font-medium">Selected configurations and evidence ({formatCount(selected.length)})</summary><div className="mt-3 overflow-x-auto"><table className="w-full min-w-[800px] text-left text-sm"><thead><tr><th className="p-2">Model / provider</th><th className="p-2">Effort</th><th className="p-2">Intelligence</th><th className="p-2">Cost</th><th className="p-2">Performance evidence</th><th className="p-2">Cost evidence</th></tr></thead><tbody>{selected.slice(0, evidenceLimit).map(row => <tr key={row.id} className="border-t border-port-border"><td className="p-2">{row.model}<span className="block text-xs text-port-text-muted">{row.provider}{row.endpointModel !== row.model ? ` · ${row.endpointModel}` : ''}</span></td><td className="p-2">{row.effort}</td><td className="p-2">{valueText(row.quality)}</td><td className="p-2">{valueText(row[price[0]], true)}</td><td className="p-2">{row.incomparableReason ? <p className="max-w-sm whitespace-normal">{row.incomparableReason}</p> : <MetricEvidence metric={row.quality} />}</td><td className="p-2"><MetricEvidence metric={row[price[0]]} /></td></tr>)}</tbody></table></div>{selected.length > evidenceLimit && <button className={buttonClass} onClick={() => setEvidenceLimit(value => value + 100)}>Show 100 more configurations</button>}</details>

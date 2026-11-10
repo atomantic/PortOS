@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { formatCount, formatPercent, formatUsd } from '../../utils/formatters';
+import { triggerCosOnDemandTask } from '../../services/apiAgents';
 
 const number = value => formatCount(value, { maximumFractionDigits: 2 });
 const cost = value => formatUsd(value, { maximumFractionDigits: 4 });
@@ -7,9 +8,11 @@ const label = row => `${row.model} (${row.effort})`;
 const savings = (before, after) => before === after ? 'Same cost' : before > 0 ? `${formatPercent((before - after) / before * 100, { decimals: 1 })} less` : 'Same cost';
 
 /** Recommendations use one published workload, never a guessed effort multiplier. */
-export default function ComparisonValueGuide({ rows }) {
+export default function ComparisonValueGuide({ rows, onConfigureResearch }) {
   const [tolerance, setTolerance] = useState(1);
   const [limit, setLimit] = useState(20);
+  const [research, setResearch] = useState({});
+  const pendingResearch = useRef(new Set());
   const eligible = useMemo(() => [...new Map(rows.filter(row => row.quality && row.costPerTask && !row.quality.estimated && !row.costPerTask.estimated)
     .map(row => [`${row.model}:${row.effort}:${row.quality.value}:${row.costPerTask.value}`, row])).values()], [rows]);
   const models = [...new Set(rows.map(row => row.model))].sort();
@@ -21,13 +24,31 @@ export default function ComparisonValueGuide({ rows }) {
     const pick = best && points.find(row => row.quality.value >= best.quality.value - tolerance);
     return { model, points, best, pick, peer: pick && alternative(pick) };
   });
+  const researchModel = async model => {
+    if (pendingResearch.current.has(model)) return;
+    pendingResearch.current.add(model);
+    setResearch(previous => ({ ...previous, [model]: { status: 'queuing' } }));
+    const result = await triggerCosOnDemandTask('model-comparison-refresh', null, { targetModels: [model], silent: true })
+      .catch(error => ({ error: error.message }));
+    pendingResearch.current.delete(model);
+    const error = result?.error || (!result?.success || !result.request?.id ? 'CoS did not confirm the research request. Please try again.' : '');
+    setResearch(previous => ({ ...previous, [model]: error
+      ? { status: 'error', error }
+      : { status: 'queued' } }));
+  };
   return <section className="min-w-0 rounded-xl border border-port-border bg-port-card p-4 space-y-3" aria-label="Effort value guide">
     <div className="flex flex-wrap items-end justify-between gap-3"><div><h2 className="font-semibold">Which efforts are worth the cost?</h2><p className="text-sm text-port-text-muted">Cheapest effort within your tolerance of each model’s best selected score.</p></div>
       <div><label className="block text-xs mb-1" htmlFor="comparison-tolerance">Acceptable intelligence difference</label><select id="comparison-tolerance" className="max-w-full rounded-lg border border-port-border bg-port-bg p-2 text-sm" value={tolerance} onChange={event => setTolerance(Number(event.target.value))}>{[0, 0.5, 1, 2, 3, 5].map(value => <option key={value} value={value}>{number(value)} index points</option>)}</select></div></div>
     <p className="text-xs text-port-text-muted">Uses sourced Intelligence Index task costs across the selected models and efforts, regardless of the chart’s token-price axis. Estimates are excluded. A near match is a score tradeoff, not proof of equal ability; latency, coding, tools, context and reliability can still favor another choice. These API reference costs may differ from your endpoint or subscription.</p>
+    {guide.some(item => !item.pick) && <p className="text-xs text-port-text-muted">Research uses the saved research provider or the CoS default and may use its quota. The agent investigates all efforts, updates this instance, and proposes public evidence as shipped data in a PortOS PR. <button type="button" className="rounded border border-port-border px-2 py-1" onClick={onConfigureResearch}>Research settings</button></p>}
     <div className="grid grid-cols-1 gap-3 @3xl:grid-cols-2">{guide.slice(0, limit).map(({ model, points, best, pick, peer }) => <article key={model} className="min-w-0 rounded-lg border border-port-border p-3">
       <h3 className="font-medium break-all">{model}</h3>
-      {!pick ? <p className="mt-2 text-sm text-port-text-muted">Research needed: no selected effort has both a sourced score and task cost.</p> : <>
+      {!pick ? <>
+        <p className="mt-2 text-sm text-port-text-muted">Research needed: no selected effort has both a sourced score and task cost.</p>
+        <button type="button" className="mt-2 rounded-lg border border-port-border px-3 py-2 text-sm hover:bg-port-bg disabled:opacity-50" aria-label={`Research ${model}`} disabled={['queuing', 'queued'].includes(research[model]?.status)} onClick={() => researchModel(model)}>{research[model]?.status === 'queuing' ? 'Queuing…' : research[model]?.status === 'queued' ? 'Research requested' : 'Research this model'}</button>
+        {research[model]?.status === 'queued' && <p role="status" className="mt-2 text-xs text-port-text-muted">Research request queued in CoS. Follow its progress in CoS Schedule, then reload this page.</p>}
+        {research[model]?.status === 'error' && <p role="alert" className="mt-2 text-sm text-port-error">{research[model].error}</p>}
+      </> : <>
         <p className="mt-2 text-sm"><strong>{pick.effort}</strong> · {number(pick.quality.value)} points · {cost(pick.costPerTask.value)}/task</p>
         <p className="text-xs text-port-text-muted">{points.length === 1 ? 'Only one measured effort selected; no effort optimum established.' : `${number(best.quality.value - pick.quality.value)} points below best selected (${best.effort}); ${savings(best.costPerTask.value, pick.costPerTask.value)} compared with that effort.`}</p>
         {peer ? <p className="mt-2 text-sm break-words">Cheaper peer: <strong>{label(peer)}</strong> · {cost(peer.costPerTask.value)}/task · {savings(pick.costPerTask.value, peer.costPerTask.value)} · {number(peer.quality.value - pick.quality.value)} points difference.</p> : <p className="mt-2 text-xs text-port-text-muted">No cheaper measured peer within your tolerance among the selected configurations.</p>}

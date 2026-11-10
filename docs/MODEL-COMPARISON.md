@@ -18,6 +18,8 @@ The restored historical Artificial Analysis observations retain their original r
 
 **Research all gaps** and **Research selected** expose the CoS on-demand research task. **Research selected** scopes the investigation strictly to models currently enabled in the comparison selector, while **Research all gaps** checks all coverage gaps across your selectable providers.
 
+When the effort value guide says research is needed, **Research this model** queues a request for that model alone, including all of its supported efforts even when some are hidden by the chart filters. It uses the saved research provider and model, or the CoS default when none is saved; configure a browsing-capable agent with **Research settings**. The request may consume provider quota. Follow it in CoS Schedule: queuing a request does not mean the agent has finished, and a source may not publish every measurement.
+
 Choose and save a browsing-capable provider > model > effort > speed, then click **Run research now**. This spends that provider's quota/API budget only after the explicit action (or an operator-configured schedule). The investigating agent:
 1. Searches official model cards, pricing pages, and benchmark publishers (such as Artificial Analysis and Epoch AI).
 2. Updates this instance by posting observations to `POST /api/providers/comparison/import`.
