@@ -88,7 +88,7 @@ function App(){const[value,setValue]=useState(null);window.show=(project,data,t)
     });
   }), 30000);
 
-  async function compare(project, t, { words = false, reuse = false } = {}) {
+  async function compare(project, t, { words = false, reuse = false, clockJump = false } = {}) {
     // Media elements store microseconds; use a frame's centre so rounding a
     // fractional 24fps boundary cannot move the native clock back one frame.
     t = (Math.floor(t * 24 + 1e-6) + 0.5) / 24;
@@ -99,6 +99,12 @@ function App(){const[value,setValue]=useState(null);window.show=(project,data,t)
     await engine.goto(`http://127.0.0.1:${server.address().port}/engine/index.html`);
     await engine.waitForFunction(() => !!window.portosComposition);
     await engine.evaluate(t => window.portosComposition.seek(t), t);
+    if (clockJump) await native.evaluate(() => {
+      // Advance the playing clock without a seek event: this case owns a dropped
+      // playback frame, while the neighboring seek tests own scrub invalidation.
+      const audio = document.querySelector('audio'); let clock = audio.currentTime;
+      Object.defineProperty(audio, 'currentTime', { configurable: true, get: () => clock, set: value => { clock = value; } });
+    });
     await native.evaluate(({ project, data, t, reuse }) => (reuse ? window.update : window.show)(project, data, t), { project, data: dataFor(project), t, reuse });
     await native.waitForFunction(frame => document.querySelector('[data-testid="document-template-canvas"]')?.dataset.songFrame === String(frame), Math.floor(t * 24 + 1e-6));
     await native.evaluate(() => document.fonts.ready);
@@ -197,11 +203,17 @@ function App(){const[value,setValue]=useState(null);window.show=(project,data,t)
     await compare(value, 3.125, { reuse: true });
     await compare(value, 1.625, { reuse: true });
   });
+  it('rebuilds a same-cut wipe hold when seeking from an early outgoing frame', async () => {
+    const value = base({ ...still, stillMove: 'push', endSec: 2, wipeOut: { style: 'push-left', lengthSec: 0.5 } });
+    value.scenes.push({ ...still, sceneId: 'second', order: 1, startSec: 2, endSec: 4, referenceImageId: 'end.png' });
+    await compare(value, 0.5);
+    await compare(value, 2.125, { reuse: true });
+  });
   it('retains outgoing footage when playback skips the last frame before a wipe', async () => {
     const value = base({ ...still, visualLayer: 'footage', videoHistoryId: 'uniform', endSec: 2, wipeOut: { style: 'push-left', lengthSec: 0.5 } });
     value.scenes.push({ ...still, sceneId: 'second', order: 1, startSec: 2, endSec: 4, referenceImageId: 'end.png' });
     await compare(value, 0.5);
-    await compare(value, 2.125, { reuse: true });
+    await compare(value, 2.125, { reuse: true, clockJump: true });
   });
   it('uses the render aspect for square and portrait camera moves and HUD', async () => {
     for (const aspectRatio of ['1:1', '9:16']) {
