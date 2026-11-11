@@ -26,8 +26,8 @@ const headCls = 'pt-1.5 text-xs font-medium text-port-text-muted';
  * the media the design may use (code / images / video), the render style, the
  * image and video services, and, for an autopilot project, the tools the
  * autopilot may spend on and its Cast & Sets check-in. Every change saves to the
- * project through the same paths the Make step's controls use. A project made
- * elsewhere can be marked finished outside PortOS, so Song through Make stop
+ * project through the same paths the Shots step's controls use. A project made
+ * elsewhere can be marked finished outside PortOS, so Song through Shots stop
  * asking for approvals that were never given here (`onProjectUpdated` gets the
  * saved record).
  */
@@ -158,7 +158,7 @@ export default function ProjectOptionsPanel({
           {!outsideBlocker && <ToggleChip
             id="mv-setup-finished-outside"
             label={external ? 'Marked finished' : 'Mark finished'}
-            hint="Song, Look, Storyboard and Make count as done; Final render and Publish still need the real render and posts"
+            hint="Song, Look, Storyboard and Shots count as done; Final render and Publish still need the real render and posts"
             checked={!!external}
             onToggle={toggleFinishedOutside}
           />}
@@ -176,7 +176,7 @@ export default function ProjectOptionsPanel({
           <p className="w-full text-xs text-port-text-muted">
             {outsideBlocker || (external
               ? `Marked ${new Date(external.markedAt).toLocaleDateString()}${external.note ? `: ${external.note}` : ''}. No approval is recorded; unmark to bring the step checks back.`
-              : 'For a video made elsewhere: Song through Make count as done without recording approvals. Final render and Publish still need the real render and posts.')}
+              : 'For a video made elsewhere: Song through Shots count as done without recording approvals. Final render and Publish still need the real render and posts.')}
           </p>
         </div>
       </div>

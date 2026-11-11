@@ -836,7 +836,7 @@ export function feedbackRevisionScope(project, stage) {
   const mode = project.composition?.mode;
   if (mode === 'code') return { action: 'Regenerates the code composition with these requests. Render a new proof afterwards.' };
   if (mode === 'document') return ['generated', 'template', undefined].includes(project.composition?.document?.source?.kind)
-    ? { action: 'Authors a revised composition candidate with these requests. Accept it in Make, then render a new proof.' }
+    ? { action: 'Authors a revised composition candidate with these requests. Accept it in Shots, then render a new proof.' }
     : { unavailable: 'This composition was imported from its own source. Revise that source and reimport it, then resolve each request.' };
   return { unavailable: 'This proof is assembled from Board footage. Revise the affected storyboard shots or takes, then render a new proof.' };
 }
