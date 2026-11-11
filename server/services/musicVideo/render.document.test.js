@@ -7,9 +7,10 @@ vi.mock('./productionReview.js', async (load) => ({ ...await load(), assertProdu
  * attached, and the finished render is filed like any other.
  */
 
-import { describe, expect, it, vi, afterAll } from 'vitest';
+import { describe, expect, it, vi, afterAll, afterEach } from 'vitest';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { waitForMusicVideoRenderDrain } from '../../test/musicVideoRenderDrain.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
 vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await importOriginal(), {
@@ -37,7 +38,11 @@ const { encodeDocumentComposition } = await import('./documentRender.js');
 const { mutateVideoHistory } = await import('../videoGen/local.js');
 const { musicVideoEvents } = await import('./events.js');
 
-afterAll(() => cleanupTempDataRoots());
+afterEach(waitForMusicVideoRenderDrain);
+afterAll(async () => {
+  await waitForMusicVideoRenderDrain();
+  cleanupTempDataRoots();
+});
 
 async function documentProject() {
   await mkdir(PATHS.music, { recursive: true });

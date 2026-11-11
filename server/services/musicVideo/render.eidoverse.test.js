@@ -1,7 +1,8 @@
-import { expect, it, vi, afterAll } from 'vitest';
+import { expect, it, vi, afterAll, afterEach } from 'vitest';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { once } from 'node:events';
+import { waitForMusicVideoRenderDrain } from '../../test/musicVideoRenderDrain.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 vi.mock('../../lib/paths.js', async load => makePathsProxy(await load(), { dataRoot: () => lazyTempDataRoot('portos-mv-eidoverse-plan-') }));
 vi.mock('./productionReview.js', async load => ({ ...await load(), assertProductionApproval: vi.fn() }));
@@ -26,7 +27,11 @@ const { encodeEidoverseComposition } = await import('./eidoverseRender.js');
 const { mutateVideoHistory } = await import('../videoGen/local.js');
 const { appendStatsOutro } = await import('./statsOutro.js');
 const { musicVideoEvents } = await import('./events.js');
-afterAll(cleanupTempDataRoots);
+afterEach(waitForMusicVideoRenderDrain);
+afterAll(async () => {
+  await waitForMusicVideoRenderDrain();
+  cleanupTempDataRoots();
+});
 async function create(scene = { inlineScript: 'example source' }) {
   await mkdir(PATHS.music, { recursive: true });
   await writeFile(join(PATHS.music, 'song.wav'), Buffer.alloc(64));
