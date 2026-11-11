@@ -29,7 +29,7 @@ import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js'
  * persisted queue job params.
  */
 
-import { randomUUID } from 'crypto';
+import { randomUUID, createHash } from 'crypto';
 import { readFile } from 'fs/promises';
 import { basename, join } from 'path';
 import sharp from 'sharp';
@@ -38,6 +38,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { withAbortTimeout } from '../../lib/abortTimeout.js';
 import { anyAbortSignal } from '../../lib/requestAbort.js';
 import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
+import { createConcurrencyGate } from '../../lib/concurrencyGate.js';
 import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { renderTimingFields } from '../../lib/renderTiming.js';
 import {
@@ -50,7 +51,7 @@ import { imageGenEvents } from '../imageGenEvents.js';
 import { getSettings } from '../settings.js';
 import { autoDeleteHostedCopy } from '../hostedRenderRemoteDelete.js';
 import {
-  awaitFalCompletion, cancelFalRequest, createFalRequestEntry, readCompletedFalResult, resolveFalApiKey,
+  awaitFalCompletion, cancelFalRequest, createFalRequestEntry, hostFalDataUri, readCompletedFalResult, resolveFalApiKey,
   submitFalRequest,
 } from '../falQueue.js';
 import { IMAGE_GEN_MODE, describeFidelity, visualReferenceRole } from './modes.js';
@@ -76,13 +77,43 @@ const FAL_IMAGE_DOWNLOAD_TIMEOUT_MS = 5 * 60 * 1000;
 const FAL_PRICING_URL = 'https://api.fal.ai/v1/models/pricing';
 const FAL_PRICING_TIMEOUT_MS = 10_000;
 
-// Inputs travel inline as base64 data URIs (the pattern the video backend
-// uses — no separate upload step, nothing left behind on fal.ai's storage).
-// A mood board can hold full-resolution photos, and up to 14 of them ride in
-// one JSON body, so an input bigger than this is downscaled first. No model in
-// the catalog conditions on more detail than this anyway.
+// Inputs are downscaled if needed to stay within the size budget, and then
+// uploaded to fal.ai's storage CDN (with per-image deduplication and
+// bounded upload concurrency) rather than inlined as multi-megabyte data URIs.
+// No model in the catalog conditions on more detail than this anyway.
 const INPUT_MAX_LONG_SIDE = 2048;
 const INPUT_MAX_BYTES = 4 * 1024 * 1024;
+const FAL_UPLOAD_CONCURRENCY = Math.max(1, Number(process.env.FAL_UPLOAD_CONCURRENCY) || 2);
+const FAL_HOSTED_INPUT_TTL_MS = 60 * 60 * 1000;
+
+const uploadGate = createConcurrencyGate(FAL_UPLOAD_CONCURRENCY);
+const referenceUploadCache = new Map();
+
+async function uploadReferenceImage({ apiKey, dataUri, signal }) {
+  const hash = createHash('sha256').update(dataUri).digest('hex');
+  const cacheKey = `${apiKey}:${hash}`;
+  const now = Date.now();
+  const cached = referenceUploadCache.get(cacheKey);
+  if (cached && now < cached.expiresAt) {
+    return cached.promise;
+  }
+  const promise = uploadGate.run(async () => {
+    signal?.throwIfAborted();
+    return hostFalDataUri({
+      apiKey,
+      dataUri,
+      fileName: `ref-${hash.slice(0, 16)}`,
+      signal,
+    });
+  }).catch((err) => {
+    if (referenceUploadCache.get(cacheKey)?.promise === promise) {
+      referenceUploadCache.delete(cacheKey);
+    }
+    throw err;
+  });
+  referenceUploadCache.set(cacheKey, { promise, expiresAt: now + FAL_HOSTED_INPUT_TTL_MS });
+  return promise;
+}
 
 const jobs = new Map();
 // jobId → the fal.ai request entry (falQueue.createFalRequestEntry), so
@@ -318,6 +349,19 @@ async function generateImagePrepared({
   };
 }
 
+function formatStepFailure(step, errOrReason) {
+  const msg = typeof errOrReason === 'string' ? errOrReason : (errOrReason?.message || String(errOrReason));
+  const prefix = `fal.ai ${step} failed:`;
+  if (msg.startsWith(prefix)) return msg;
+  if (step === 'download' && /fal\.ai (image )?download failed:/i.test(msg)) {
+    return msg.replace(/fal\.ai (image )?download failed:/i, prefix);
+  }
+  if (step === 'reference upload' && /fal\.ai (reference )?upload (failed|could not start):/i.test(msg)) {
+    return msg.replace(/fal\.ai (reference )?upload (failed|could not start):/i, prefix);
+  }
+  return `${prefix} ${msg}`;
+}
+
 async function runFal(job, jobId, {
   apiKey, family, fullPrompt, negativePrompt, width, height, seed,
   inputPaths, reviewedReferenceBytes, outputPath, filename, meta, cleanC2PA = false, denoise = false,
@@ -327,10 +371,31 @@ async function runFal(job, jobId, {
   activeRequests.set(jobId, entry);
   const deadline = Date.now() + FAL_IMAGE_TIMEOUT_MS;
   let wroteOutput = false;
+  let currentStep = inputPaths.length ? 'reference upload' : 'submit';
   try {
     const encoded = [];
     // A reviewed edit's snapshot leads (no init image); later inputs are read from disk.
     for (const [index, path] of inputPaths.entries()) encoded.push(await encodeInputImage(path, index === 0 ? reviewedReferenceBytes : null));
+    if (entry.aborted) return finalizeCanceled(job, jobId);
+
+    let imageUrls = [];
+    if (encoded.length > 0) {
+      currentStep = 'reference upload';
+      broadcastSse(job, {
+        type: 'status',
+        message: encoded.length === 1 ? 'Uploading reference image…' : 'Uploading reference images…',
+      });
+      imageUrls = await Promise.all(
+        encoded.map((e) => uploadReferenceImage({
+          apiKey,
+          dataUri: e.dataUri,
+          signal: entry.controller.signal,
+        })),
+      );
+      if (entry.aborted) return finalizeCanceled(job, jobId);
+    }
+
+    currentStep = 'submit';
     const request = buildFalImageRequest({
       modelId: family.textEndpoint,
       prompt: fullPrompt,
@@ -338,16 +403,17 @@ async function runFal(job, jobId, {
       width,
       height,
       seed,
-      imageUrls: encoded.map((e) => e.dataUri),
+      imageUrls,
       inputMegapixels: encoded.reduce((sum, e) => sum + e.megapixels, 0),
     });
-    // Cancelled while the inputs were being encoded: nothing was submitted,
+    // Cancelled while the inputs were being encoded or uploaded: nothing was submitted,
     // so there is nothing to pay for or cancel remotely.
     if (entry.aborted) return finalizeCanceled(job, jobId);
 
     const submitted = await submitFalRequest({ apiKey, modelId: request.endpointId, body: request.body });
     entry.cancelUrl = submitted.cancel_url;
     meta.falRequestId = submitted.request_id;
+    currentStep = 'poll';
     broadcastSse(job, { type: 'status', message: 'Queued at fal.ai…' });
 
     const polled = await awaitFalCompletion({
@@ -358,8 +424,9 @@ async function runFal(job, jobId, {
       }),
     });
     if (polled.outcome === 'canceled') return finalizeCanceled(job, jobId);
-    if (polled.outcome === 'failed') return finalizeJobFailure(job, jobId, null, polled.reason);
+    if (polled.outcome === 'failed') return finalizeJobFailure(job, jobId, null, formatStepFailure('poll', polled.reason));
 
+    currentStep = 'download';
     const { result, bytes } = await withAbortTimeout(FAL_IMAGE_DOWNLOAD_TIMEOUT_MS, async (timeoutSignal) => {
       const signal = anyAbortSignal([timeoutSignal, entry.controller.signal]);
       const retrievalDeadline = Date.now() + FAL_IMAGE_DOWNLOAD_TIMEOUT_MS;
@@ -439,7 +506,7 @@ async function runFal(job, jobId, {
     // last awaits.
     await cancelFalRequest(entry);
     if (entry.aborted) return finalizeCanceled(job, jobId);
-    finalizeJobFailure(job, jobId, null, `fal.ai image generation failed: ${err?.message || err}`, { force: true });
+    finalizeJobFailure(job, jobId, null, formatStepFailure(currentStep, err), { force: true });
   }
 }
 
@@ -454,4 +521,11 @@ const finalizeJobFailure = createJobFailureFinalizer({
 const finalizeCanceled = finalizeJobFailure.canceled;
 
 // Test-only handles.
-export const _internals = { encodeInputImage, firstImageUrl };
+export const _internals = {
+  encodeInputImage,
+  firstImageUrl,
+  uploadReferenceImage,
+  referenceUploadCache,
+  uploadGate,
+  resetReferenceUploadCache: () => referenceUploadCache.clear(),
+};
