@@ -226,6 +226,9 @@ describe('claim flow workflow-scope handoff', () => {
     const missing = buildClaimFlowCompletionSection({ rawPrCompletion: 'merge-on-green', workflowScope: { status: 'missing', remedy: 'gh auth refresh -h github.com -s workflow' } });
     expect(missing).toContain('lacks the `workflow` scope');
     expect(missing).toContain('gh auth refresh -h github.com -s workflow');
+    expect(missing).toContain('status "blocked"');
+    expect(missing).toContain('"mode":"approval"');
+    expect(missing).toContain('Never refresh credentials or retry the denied merge yourself.');
     for (const status of ['granted', 'unknown']) {
       expect(buildClaimFlowCompletionSection({ rawPrCompletion: 'merge-on-green', workflowScope: { status } })).not.toContain('lacks the `workflow` scope');
     }

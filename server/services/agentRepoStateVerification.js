@@ -1519,8 +1519,16 @@ async function verifyAgentBranchState({ agentId, task, agentState, success, prEx
   if (owned === null) return blockWith('ownership-unreadable', { skipReason: REPO_STATE_SKIPS.GATE_UNREADABLE });
   if (owned) await record('pending', 'existing-completion-owner');
 
+  // Completion can hand delivery to a server-created review task before the
+  // parent records a PR URL. Reuse that exact target after its head changes.
+  const followUp = task?.metadata?.deliveryFollowUpTaskId
+    ? await (await import('./cosTaskStore.js')).getTaskById(task.metadata.deliveryFollowUpTaskId) : null;
+  const followUpPrUrl = isTruthyMeta(followUp?.metadata?.reviewLoopFollowUp)
+    && followUp.metadata.sourceTaskId === task.id && followUp.metadata.sourceAgentId === agentId
+    && followUp.metadata.reviewLoopPRBranch === branchName && followUp.metadata.app === task.metadata?.app
+    ? followUp.metadata.reviewLoopPRUrl : null;
   const originalPrUrl = [metadata.reviewLoopMergeTarget?.url, metadata.recoveryMergeTarget?.url,
-    task?.metadata?.reviewLoopPRUrl, task?.metadata?.recoveryMergeTarget?.url].find(value => parsePullRequestUrl(value));
+    task?.metadata?.reviewLoopPRUrl, task?.metadata?.recoveryMergeTarget?.url, followUpPrUrl].find(value => parsePullRequestUrl(value));
   const expectation = resolveRepoStateExpectation({ ...structural, prExpected: prExpected || !!originalPrUrl, enabled, followUpPending: owned });
   if (!expectation.verify) return skipped(expectation.skipReason);
 
@@ -1633,7 +1641,10 @@ async function settleAbsentCheckout({ agentId, agentState, metadata, app, source
   // A follow-up may rebase or advance its head after the original capture.
   // With the checkout and local ref already absent, there is nothing to remove
   // or preserve; a historical retirement receipt cannot add delivery evidence.
-  const integrated = !!forge;
+  // An inferred branch lookup has no original PR identity. In that case only
+  // exact/ancestor delivery links its capture to the PR we found.
+  const integrated = !!forge && (!!originalPrUrl || !capturedHead || forge.prHead === capturedHead
+    || (forge.scopeProof === 'ancestor-of-delivered-head' && forge.deliveredAncestorHead === capturedHead));
   // A run that never published (a no-change audit) has no PR to prove. When the
   // forge affirmatively reports none, no remote branch holds other work, and the
   // captured final head is already in the fetched default branch, the removed

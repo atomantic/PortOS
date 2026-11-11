@@ -1122,6 +1122,33 @@ describe('verifyAgentRepoState — clean runs', () => {
     expect(addTask).not.toHaveBeenCalled();
   });
 
+  it.each(['bound', 'wrong-source', 'wrong-branch', 'wrong-app'])('uses the server delivery follow-up target to settle a rebased parent: %s', async scenario => {
+    const captured = { version: 1, agentId: 'agent-1', startedAt: CREATED_AT, capturedAt: CREATED_AT,
+      repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: '4'.repeat(40),
+      incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } };
+    const state = { ...agentState({ completedCheckouts: [captured], repoStateVerification: { status: 'pending' } }),
+      id: 'agent-1', taskId: 'task-1', status: 'completed', completedAt: CREATED_AT, result: { success: false, cleanupPending: true } };
+    const source = { ...task({ deliveryFollowUpTaskId: 'follow-up', deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-1' }),
+      status: 'in_progress' };
+    const followUp = { id: 'follow-up', status: 'completed', metadata: { reviewLoopFollowUp: 'true', sourceTaskId: source.id,
+      sourceAgentId: scenario === 'wrong-source' ? 'another-agent' : state.id,
+      reviewLoopPRBranch: scenario === 'wrong-branch' ? 'another-branch' : BRANCH,
+      app: scenario === 'wrong-app' ? 'another-app' : source.metadata.app,
+      reviewLoopPRUrl: 'https://github.com/example/repo/pull/7' } };
+    getTaskById.mockImplementation(async id => id === 'follow-up' ? followUp : source);
+    findPullRequestForBranch.mockResolvedValue({ status: 'found', url: followUp.metadata.reviewLoopPRUrl, detail: 'MERGED' });
+    execGit.mockResolvedValue({ exitCode: 1, stdout: '' });
+    const result = await run({ task: source, success: false, agentState: state });
+    if (scenario === 'bound') expect(result).toMatchObject({ verified: true, skipReason: null });
+    else expect(result.verified).toBe(false);
+    if (scenario === 'bound') expect(updateTask).toHaveBeenCalledWith(source.id,
+      expect.objectContaining({ status: 'completed' }), 'user', expect.any(Object));
+    else expect(updateTask).not.toHaveBeenCalled();
+    expect(findMissingCheckoutPreservation).not.toHaveBeenCalled();
+    expect(retireInventoriedCheckout).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
   it.each(['contained', 'not-contained', 'lookup-unavailable', 'remote-branch'])('settles an unpublished no-change checkout only when its captured head is in the default branch: %s', async scenario => {
     const captured = { version: 1, agentId: 'agent-1', startedAt: CREATED_AT, capturedAt: CREATED_AT,
       repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: HEAD, incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } };
@@ -1147,9 +1174,10 @@ describe('verifyAgentRepoState — clean runs', () => {
     expect(addTask).not.toHaveBeenCalled();
   });
 
-  it.each(['foreign-repository', 'uncaptured', 'ambiguous', 'open', 'unavailable'])('retains an unrequested-PR handoff when captured delivery is %s', async failure => {
+  it.each(['wrong-head', 'foreign-repository', 'uncaptured', 'ambiguous', 'open', 'unavailable'])('retains an unrequested-PR handoff when captured delivery is %s', async failure => {
     const captured = { version: 1, agentId: 'agent-1', startedAt: CREATED_AT, capturedAt: CREATED_AT,
       repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: HEAD, incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } };
+    if (failure === 'wrong-head') captured.head = 'f'.repeat(40);
     if (failure === 'foreign-repository') captured.repoPath = '/other-instance';
     const completedCheckouts = failure === 'uncaptured' ? [] : failure === 'ambiguous' ? [captured, { ...captured }] : [captured];
     const state = { ...agentState({ completedCheckouts, repoStateVerification: { status: 'pending' } }),
