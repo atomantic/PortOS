@@ -9,6 +9,7 @@ import MediaJobThumb from '../pipeline/MediaJobThumb';
 import ModelInputPreview from '../media/ModelInputPreview';
 import CatalogMediaTile from './CatalogMediaTile';
 import CatalogSheetRecovery from './CatalogSheetRecovery';
+import CatalogReferenceReview from './CatalogReferenceReview';
 import IngredientPicker from '../IngredientPicker';
 import socket from '../../services/socket';
 import useMounted from '../../hooks/useMounted';
@@ -180,6 +181,7 @@ export default function CatalogSheetsPanel({
   const [jobs, setJobs] = useState([]); // [{ jobId, role, delegated, label }]
   const [armedDetach, setArmedDetach] = useState(null);
   const [armedPointer, setArmedPointer] = useState(null);
+  const [savingReview, setSavingReview] = useState(null); // mediaKey whose review is saving
   const { annotations } = useMediaAnnotations();
   const ratedBad = (key) => annotations?.[key]?.rating === 'bad';
 
@@ -236,6 +238,17 @@ export default function CatalogSheetsPanel({
     setArmedPointer(null);
     return onRemovePointerSheet?.(variant, filename);
   }, [onRemovePointerSheet]);
+
+  // A comparison sheet's review saves its editing guidance before it is refined.
+  const saveSheetReview = useCallback(async (m, patch) => {
+    setSavingReview(m.mediaKey);
+    const updated = await updateCatalogIngredientMediaLibrary(ingredientId, { mediaKey: m.mediaKey, kind: m.kind, ...patch }, { silent: true })
+      .catch((err) => { toast.error(err?.message || 'Could not save the review'); return null; });
+    if (!mountedRef.current) return updated;
+    setSavingReview(null);
+    if (updated) onMediaChanged?.();
+    return updated;
+  }, [ingredientId, mountedRef, onMediaChanged]);
 
   const dropJob = useCallback((jobId) => setJobs((cur) => cur.filter((j) => j.jobId !== jobId)), []);
   useEffect(() => {
@@ -451,17 +464,26 @@ export default function CatalogSheetsPanel({
                 const isComparisonSheet = sheetVariant?.id === COMPARISON_VARIANT_ID;
                 const sheetPartner = isComparisonSheet && comparedWith ? { id: comparedWith, name: partner?.id === comparedWith ? partner.name : 'the other character' } : null;
                 const canRegenerate = sheetVariant && (!isComparisonSheet || sheetPartner);
+                // The whole shared sheet (either record's copy) is edited in place; its halves are re-cut from the result.
+                const review = isComparisonSheet && onMediaChanged ? (
+                  <div className="border-t border-port-border p-2">
+                    <CatalogReferenceReview ingredientId={ingredientId} media={m} readOnly={!!m.readOnly || !onDetach}
+                      saving={savingReview === m.mediaKey} onSave={(patch) => saveSheetReview(m, patch)} onChanged={onMediaChanged}
+                      revision={savedStamp} blockedReason={blockedReason} />
+                  </div>
+                ) : null;
+                const note = inspectionNote ? <div className="space-y-1 border-t border-port-border p-2"><p className="text-xs text-port-warning break-words">{inspectionNote}</p>
+                  {canRegenerate && <button type="button" onClick={() => handleGenerate(sheetVariant, role.formId || '', sheetPartner)}
+                    disabled={starting || !!blockedReason || jobs.some((job) => job.role === m.role)
+                      || (sheetVariant.id === variantId && (role.formId || '') === activeFormId && !!preview.error)}
+                    className="min-h-11 rounded border border-port-border px-2 py-1 text-xs text-port-accent disabled:opacity-50">Regenerate sheet</button>}
+                </div> : null;
                 return (
                   <CatalogMediaTile key={`${m.mediaKey}:${m.kind}`} m={m} label={labelFor(m)} contain
                     missing={missingMedia?.has?.(m.mediaKey)} onDetach={onDetach}
                     armedDetach={armedDetach} onArmDetach={setArmedDetach}
                     badge={bad ? <BadFlag /> : null} pinActions={bad}
-                    extraContent={inspectionNote ? <div className="space-y-1 border-t border-port-border p-2"><p className="text-xs text-port-warning break-words">{inspectionNote}</p>
-                      {canRegenerate && <button type="button" onClick={() => handleGenerate(sheetVariant, role.formId || '', sheetPartner)}
-                        disabled={starting || !!blockedReason || jobs.some((job) => job.role === m.role)
-                          || (sheetVariant.id === variantId && (role.formId || '') === activeFormId && !!preview.error)}
-                        className="min-h-11 rounded border border-port-border px-2 py-1 text-xs text-port-accent disabled:opacity-50">Regenerate sheet</button>}
-                    </div> : null} />
+                    extraContent={note || review ? <>{note}{review}</> : null} />
                 );
               })}
             </div>

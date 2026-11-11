@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
 import CatalogLooksPanel from './CatalogLooksPanel';
 import CatalogSheetsPanel from './CatalogSheetsPanel';
-import { listCatalogSheetVariants, previewCatalogSheet, renderCatalogSheet } from '../../services/apiCatalog';
+import { listCatalogSheetVariants, previewCatalogSheet, refineCatalogMedia, renderCatalogSheet } from '../../services/apiCatalog';
 
 // The real ModelInputPreview renders here, so this pins what the user sees
 // before Generate: which image the look render edits, or why it does not.
@@ -11,6 +11,8 @@ vi.mock('../../services/apiCatalog', () => ({
   renderCatalogSheet: vi.fn(),
   listCatalogSheetVariants: vi.fn(),
   listCatalogSheetJobs: vi.fn(async () => ({ jobs: [], hasMore: false })),
+  refineCatalogMedia: vi.fn(),
+  updateCatalogIngredientMediaLibrary: vi.fn(),
 }));
 
 vi.mock('../pipeline/MediaJobThumb', () => ({ default: () => <span>Rendering sheet</span> }));
@@ -116,4 +118,20 @@ describe('CatalogLooksPanel Generate preview', () => {
     expect(screen.queryByRole('button', { name: 'Regenerate sheet' })).not.toBeInTheDocument();
   });
 
+  // The shared sheet is edited as a whole from either record's copy, starting
+  // from the inspection's critique; the server re-cuts the halves from the result.
+  it('refines a comparison sheet from the partner copy with its saved guidance', async () => {
+    listCatalogSheetVariants.mockResolvedValue({ variants: [{ id: 'comparison', label: 'Comparison (two characters)' }] });
+    refineCatalogMedia.mockImplementation(async (_id, body, options) => (options?.preview
+      ? { sentPrompt: `Editing guidance:\n\n${body.feedback}`, promptAdditions: [], referenceImages: [] } : { jobId: 'pair-edit' }));
+    const feedback = 'Rendering defect: The ruler marks are uneven.';
+    render(<CatalogSheetsPanel ingredientId="cat-chr-2" payload={{}} onDetach={vi.fn()} onMediaChanged={vi.fn()}
+      sheetMedia={[{ mediaKey: 'pair.png', kind: 'reference', role: 'sheet:comparison', library: { review: { status: 'bad', feedback } } }]} />);
+    fireEvent.click(await screen.findByText(/Review & refine/));
+    expect(screen.getByLabelText('Editing guidance')).toHaveValue(feedback);
+    const refine = screen.getByRole('button', { name: 'Refine as new version' });
+    await waitFor(() => expect(refine).toBeEnabled());
+    await act(async () => { fireEvent.click(refine); });
+    expect(refineCatalogMedia).toHaveBeenLastCalledWith('cat-chr-2', { mediaKey: 'pair.png', kind: 'reference', feedback }, { silent: true });
+  });
 });

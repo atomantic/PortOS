@@ -4,10 +4,10 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
-const state = vi.hoisted(() => ({ get: vi.fn(), media: vi.fn(), enqueue: vi.fn(), writable: vi.fn(), available: true,
+const state = vi.hoisted(() => ({ get: vi.fn(), media: vi.fn(), holders: vi.fn(), enqueue: vi.fn(), writable: vi.fn(), available: true,
   dimensions: { width: 1024, height: 1024 }, mode: 'codex' }));
 vi.mock('../services/catalogDB/ingredients.js', () => ({ getIngredient: state.get }));
-vi.mock('../services/catalogDB/media.js', () => ({ listMediaForIngredient: state.media }));
+vi.mock('../services/catalogDB/media.js', () => ({ listMediaForIngredient: state.media, listMediaHoldersByKey: state.holders }));
 vi.mock('../services/catalogDB/identityAccess.js', () => ({ assertCatalogIdentityWritable: state.writable }));
 vi.mock('../services/catalogPrimitives.js', () => ({
   getPrimitiveContext: async () => ({ owner: null }), setPrimitiveOwner: vi.fn(), forkPrimitive: vi.fn(),
@@ -20,7 +20,7 @@ vi.mock('../lib/mediaModels.js', async original => ({ ...await original(), getIm
 ] }));
 vi.mock('../services/universeBuilder/crud.js', () => ({ getUniverse: vi.fn(), getUniverseRenderPin: vi.fn() }));
 vi.mock('../services/imageGen/regen.js', () => ({ readImageDimensions: async () => state.dimensions }));
-vi.mock('../services/mediaJobQueue/index.js', () => ({ enqueueJob: state.enqueue, assertMediaQueueRoom: vi.fn() }));
+vi.mock('../services/mediaJobQueue/index.js', async original => ({ ...await original(), enqueueJob: state.enqueue, assertMediaQueueRoom: vi.fn() }));
 vi.mock('../lib/pathSafety.js', async original => ({
   ...await original(), resolveImageInputPath: path => state.available ? `/tmp/example-media/${basename(path)}` : null,
 }));
@@ -148,5 +148,48 @@ describe('reference image refinement boundary', () => {
     state.get.mockResolvedValue({ id: 'cast', payload: { locked: true } });
     expect((await request(app).post('/ingredients/cast/media/refine').send(input)).status).toBe(409);
     expect(state.enqueue).not.toHaveBeenCalled();
+  });
+  // Catches an edited shared sheet landing as a one-record 'refinement' (no
+  // partner copy, no new halves) or with the sides swapped when the edit starts
+  // from the partner's copy, and a single-character appearance block in a
+  // two-person edit.
+  it('refines a comparison sheet from either copy as a new sheet for the same pair and sides', async () => {
+    const records = { left: { id: 'left', name: 'Example Lead', type: 'character', payload: { physicalDescription: 'tall, red coat' } },
+      right: { id: 'right', name: 'Example Partner', type: 'character', payload: {} } };
+    state.get.mockImplementation(async id => records[id] ?? null);
+    state.dimensions = { width: 2048, height: 1024 };
+    const sheet = { mediaKey: 'pair.png', kind: 'reference', role: 'sheet:comparison' };
+    const edit = { mediaKey: 'pair.png', kind: 'reference', feedback: 'Lower both heads to their ruler marks.' };
+    const expected = { ingredientId: 'left', kind: 'reference', role: 'sheet:comparison', inspect: true, comparison: { partnerId: 'right' },
+      library: { comparedWith: 'right', derivedFrom: { mediaKey: 'pair.png', kind: 'reference' } } };
+
+    state.media.mockResolvedValue([{ ...sheet, library: { comparedWith: 'right' } }]);
+    const preview = await request(app).post('/ingredients/left/media/refine/compose').send(edit);
+    expect(preview.status, JSON.stringify(preview.body)).toBe(200);
+    expect(preview.body.sentPrompt).toContain(edit.feedback);
+    expect(preview.body.sentPrompt).toContain('Example Lead on the LEFT half, Example Partner on the RIGHT half');
+    expect(preview.body.sentPrompt).not.toContain('red coat');
+    expect((await request(app).post('/ingredients/left/media/refine').send(edit)).status).toBe(200);
+    let params = state.enqueue.mock.calls[0][0].params;
+    expect(params).toMatchObject({ width: 2048, height: 1024, catalogAttach: expected });
+    expect(params.referenceImagePaths ?? []).toEqual([]);
+    expect(params.initImagePath).toContain('pair.png');
+
+    // The partner's copy names no one; the left record is found by its link back.
+    state.media.mockResolvedValue([sheet]);
+    state.holders.mockResolvedValue([{ ingredientId: 'right', library: {} }, { ingredientId: 'left', library: { comparedWith: 'right' } }]);
+    expect((await request(app).post('/ingredients/right/media/refine').send(edit)).status).toBe(200);
+    params = state.enqueue.mock.calls[1][0].params;
+    expect(state.holders).toHaveBeenCalledWith('pair.png', 'sheet:comparison');
+    expect(params.catalogAttach).toEqual(expected);
+
+    expect(state.writable).toHaveBeenCalledWith('left');
+    records.left.payload.locked = true;
+    expect((await request(app).post('/ingredients/right/media/refine').send(edit)).status).toBe(409);
+    records.left.payload.locked = false;
+
+    state.holders.mockResolvedValue([{ ingredientId: 'right', library: {} }]);
+    expect((await request(app).post('/ingredients/right/media/refine').send(edit)).status).toBe(409);
+    expect(state.enqueue).toHaveBeenCalledTimes(2);
   });
 });

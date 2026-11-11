@@ -114,7 +114,7 @@ describe('catalogImageAttachHook', () => {
     await emit({ catalogAttach: { ingredientId: 'ing-a', kind: 'reference', role: 'sheet:face' } }, 'face.png');
     catalogEvents.off('primitive-changed', onChanged);
     expect(publishComparisonSheet).toHaveBeenCalledTimes(1);
-    expect(publishComparisonSheet).toHaveBeenCalledWith({ ingredientId: 'ing-a', partnerId: 'ing-b', filename: 'pair.png', metadata: {} });
+    expect(publishComparisonSheet).toHaveBeenCalledWith({ ingredientId: 'ing-a', partnerId: 'ing-b', filename: 'pair.png', metadata: {}, derivedFrom: null });
     expect(events).toContain('ing-b');
   });
 

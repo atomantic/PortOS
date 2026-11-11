@@ -496,6 +496,8 @@ describe('catalog sheet routes', () => {
     expect(sent).toContain('"Example Hero 180 cm" over Example Hero and "Example Rival 165 cm" over Example Rival');
     expect(sent).toContain('between the portrait column and the FRONT view, on the inner side of the portraits');
     expect(sent).toContain('The right half\'s ruler mirrors the left half\'s');
+    expect(sent).toContain('Each ruler runs from 0 at the floor line to 200 cm');
+    expect(sent).toContain('Example Rival\'s head top sits at 165 cm');
     expect(sent).toContain('Each half is a tight grid that uses the whole page with no unused margins');
     expect(sent).toContain('a portrait column that runs the full page height');
     expect(sent).toContain('nothing at all along the centre line');
