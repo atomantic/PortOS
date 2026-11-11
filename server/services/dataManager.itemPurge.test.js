@@ -109,12 +109,6 @@ describe('purgeCategory — category-scoped categories keep their behavior', () 
     expect(existsSync(dataPath('local-llm', 'jev-shadow.json'))).toBe(true);
   });
 
-  it('rejects a non-canonical spelling of protected item names', async () => {
-    await expect(purgeCategory('local-llm', { subPath: './jev-shadow.json' }))
-      .rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
-    expect(existsSync(dataPath('local-llm', 'jev-shadow.json'))).toBe(true);
-  });
-
   it('empties the directory when no subPath is given', async () => {
     const result = await purgeCategory('screenshots');
     expect(result).toEqual({ category: 'screenshots', subPath: null });

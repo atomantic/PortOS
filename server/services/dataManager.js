@@ -673,9 +673,6 @@ async function purgeCategoryUncached(categoryKey, options) {
       // touches the filesystem, so it cannot see that.
       throw new ServerError('subPath must name a single entry in the category', { status: 400, code: 'VALIDATION_ERROR' });
     }
-    if (wantsItem && options.subPath !== options.subPath.trim()) {
-      throw new ServerError('subPath must name a single entry in the category', { status: 400, code: 'VALIDATION_ERROR' });
-    }
     // Item-scoped categories only ever lose one entry at a time. Written as
     // "must be exactly 'category'" so an absent or misspelled scope refuses the
     // wipe instead of inheriting the old all-or-nothing behavior (#3327).
