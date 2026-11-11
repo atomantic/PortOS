@@ -115,6 +115,20 @@ describe('__analyzeBeatGridPcm', () => {
     }
   });
 
+  it('tracks a song-length fast pulse at full tempo with centred beat and downbeat timestamps', () => {
+    const bpm = 166;
+    const durationSec = 160;
+    const offsetSec = 0.2;
+    const result = __analyzeBeatGridPcm(clickTrack({ bpm, durationSec, offsetSec }), BEAT_GRID_SAMPLE_RATE);
+    expect(Math.abs(result.bpm - bpm)).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(result.beats.length - Math.ceil((durationSec - offsetSec) * bpm / 60))).toBeLessThanOrEqual(2);
+    for (let t = offsetSec + 3 * 60 / bpm; t < durationSec - 1; t += 60 / bpm) {
+      expect(Math.min(...result.beats.map((beat) => Math.abs(beat - t)))).toBeLessThanOrEqual(0.025);
+    }
+    for (const downbeat of result.downbeats) expect(result.beats).toContain(downbeat);
+    expect(result.beats.at(-1)).toBeLessThanOrEqual(result.durationSec);
+  });
+
   it('avoids the classic double-tempo octave error on a 90 BPM track', () => {
     // 180 BPM (exactly double) is the documented common failure mode for
     // autocorrelation-based tempo estimation without preference weighting.
