@@ -6,6 +6,10 @@ only on an explicit user request. It does not install or update anything at boot
 Existing environments remain usable through the unchanged real `import bpy`
 readiness probe. Setup refuses to replace an existing `rigging` environment;
 preserve custom work and explicitly remove that environment before reprovisioning.
+If installation, dependency checking or the import probe fails after this invocation
+creates the environment, setup removes its new environment so the command can be
+retried. A failed Conda creation or cleanup remains an explicit Conda error; inspect
+and preserve any partial prefix before removing it.
 
 The profile fixes **Blender bpy 5.2.3**, its **CPython 3.13 ABI**, and the exact
 **Conda CPython 3.13.18 build** per target. `scripts/rigging-profile.json` contains
@@ -61,7 +65,8 @@ uploaded after the cutoff. Never copy a fresh solver result without this check.
 Run `python3 scripts/audit-rigging.py` immediately before publishing updates.
 It queries every distinct PyPI identity in both locks, the Conda pip version,
 and each exact Conda artifact PURL through OSV, without filtering `MAL-` records.
-Any advisory or incomplete response requires investigation before publication.
+Pagination is followed per identity. Any advisory or incomplete response requires
+investigation before publication.
 OSV's Conda coverage is limited: an empty PURL result does not establish complete
 native-library advisory coverage.
 

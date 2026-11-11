@@ -11,7 +11,7 @@ const profile = JSON.parse(readFileSync(`${scripts}rigging-profile.json`, 'utf8'
 // Uniquely exercises the provisioning boundary: real file downloads/hash checks,
 // offline explicit Conda input, hash-only pip install, and the final real-import command.
 const fixture = String.raw`
-import hashlib, importlib.util, json, pathlib, sys, tempfile
+import hashlib, importlib.util, json, pathlib, subprocess, sys, tempfile
 from types import SimpleNamespace
 spec = importlib.util.spec_from_file_location('setup', sys.argv[1] + 'setup-rigging.py')
 s = importlib.util.module_from_spec(spec)
@@ -34,6 +34,8 @@ def run(args, **kwargs):
         assert explicit.startswith('@EXPLICIT\nfile:')
         assert '#0123456789abcdef0123456789abcdef' in explicit
         assert '--offline' in args
+    if case == 'install-failed' and 'install' in args:
+        raise subprocess.CalledProcessError(1, args)
     return SimpleNamespace(stdout='')
 s.run = run
 with tempfile.TemporaryDirectory() as temporary:
@@ -48,7 +50,7 @@ with tempfile.TemporaryDirectory() as temporary:
     try:
         s.install()
         result = {'ok': True}
-    except SystemExit as error:
+    except (SystemExit, subprocess.CalledProcessError) as error:
         result = {'ok': False, 'reason': str(error)}
     result['calls'] = calls
     print(json.dumps(result))
@@ -74,6 +76,12 @@ describe('reviewed rigging provisioning', () => {
     expect(result.ok).toBe(false);
     expect(result.reason).toMatch(/No reviewed|already exists|SHA-256 mismatch/);
     expect(result.calls.some((args) => args.includes('create') || args.includes('install'))).toBe(false);
+  });
+
+  it('removes only the environment this invocation created when package installation fails', () => {
+    const result = provision('install-failed');
+    expect(result.ok).toBe(false);
+    expect(result.calls.at(-1)).toEqual(['/fake/conda', 'env', 'remove', '--yes', '--name', 'rigging']);
   });
 
   it('keeps source, descriptor, ABI, interpreter artifacts and target locks in parity', () => {
@@ -103,9 +111,14 @@ import contextlib, importlib.util, io, json, sys
 spec = importlib.util.spec_from_file_location('audit', sys.argv[1] + 'audit-rigging.py')
 audit = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(audit)
-for mode in ['clean', 'malware', 'incomplete']:
+for mode in ['clean', 'malware', 'incomplete', 'paginated-malware', 'pagination-error']:
     def response(request, **kwargs):
-        queries = json.loads(request.data)['queries']
+        payload = json.loads(request.data)
+        if 'page_token' in payload:
+            assert payload['page_token'] == 'next-page'
+            page = {'error': 'unavailable'} if mode == 'pagination-error' else {'vulns': [{'id': 'MAL-2099-EXAMPLE'}]}
+            return io.BytesIO(json.dumps(page).encode())
+        queries = payload['queries']
         assert len(queries) == 49
         assert any(q.get('package', {}).get('purl', '').startswith('pkg:conda/') for q in queries)
         assert any(q.get('package', {}).get('name') == 'bpy' for q in queries)
@@ -114,17 +127,19 @@ for mode in ['clean', 'malware', 'incomplete']:
             results[0] = {'vulns': [{'id': 'MAL-2099-EXAMPLE'}]}
         if mode == 'incomplete':
             results.pop()
+        if mode in ['paginated-malware', 'pagination-error']:
+            results[0] = {'next_page_token': 'next-page'}
         return io.BytesIO(json.dumps({'results': results}).encode())
     audit.urlopen = response
     capture = io.StringIO()
     try:
         with contextlib.redirect_stdout(capture):
             code = audit.main()
-        assert code == (1 if mode == 'malware' else 0)
-        if mode == 'malware':
+        assert code == (1 if mode in ['malware', 'paginated-malware'] else 0)
+        if mode in ['malware', 'paginated-malware']:
             assert 'MAL-2099-EXAMPLE' in capture.getvalue()
     except SystemExit as error:
-        assert mode == 'incomplete' and 'unresolved' in str(error)
+        assert mode in ['incomplete', 'pagination-error'] and 'unresolved' in str(error)
 print('ok')
 `;
   expect(execFileSync(resolveTestPython(), ['-c', audit, scripts], { encoding: 'utf8', timeout: PY_SUBPROCESS_TIMEOUT_MS }).trim()).toBe('ok');

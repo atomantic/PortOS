@@ -31,8 +31,27 @@ def main():
         results = json.load(response)['results']
     if len(results) != len(queries) or any('error' in result for result in results):
         raise SystemExit('OSV returned incomplete/error results; audit remains unresolved.')
-    findings = [{'query': query, 'ids': [v['id'] for v in result.get('vulns', [])]}
-                for query, result in zip(queries, results) if result.get('vulns')]
+    findings = []
+    for query, result in zip(queries, results):
+        ids = set()
+        pages = set()
+        while True:
+            if not isinstance(result, dict) or 'error' in result:
+                raise SystemExit('OSV returned an error page; audit remains unresolved.')
+            ids.update(v['id'] for v in result.get('vulns', []))
+            token = result.get('next_page_token')
+            if not token:
+                break
+            if not isinstance(token, str) or token in pages:
+                raise SystemExit('OSV returned invalid/repeated pagination; audit remains unresolved.')
+            pages.add(token)
+            request = Request('https://api.osv.dev/v1/query',
+                              json.dumps({**query, 'page_token': token}).encode(),
+                              {'Content-Type': 'application/json'})
+            with urlopen(request, timeout=120) as response:
+                result = json.load(response)
+        if ids:
+            findings.append({'query': query, 'ids': sorted(ids)})
     print(json.dumps({'queries': len(queries), 'pypiIdentities': len(pins),
                       'condaArtifacts': len(profile['condaArtifacts']) + 1,
                       'sourceRevisions': len(profile['sources']), 'findings': findings}, indent=2))

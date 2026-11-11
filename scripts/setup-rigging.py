@@ -66,12 +66,17 @@ def install():
                                                     for a, path in artifacts) + '\n')
         run([conda, 'create', '--yes', '--offline', '--name', 'rigging', '--file', explicit], env=env)
         python = [conda, 'run', '--no-capture-output', '-n', 'rigging', 'python']
-        run(python + ['-m', 'pip', '--isolated', 'install', '--disable-pip-version-check',
-                      '--require-hashes', '--no-deps', '--only-binary', ':all:',
-                      '--index-url', 'https://pypi.org/simple', '-r', SCRIPTS / target['requirements']], env=env)
-        run(python + ['-m', 'pip', '--isolated', 'check'], env=env)
-        run(python + ['-c', "import bpy, sys; assert sys.version_info[:3] == " + repr(tuple(map(int, profile['python'].split('.'))))
-                      + "; assert bpy.app.version_string == '" + profile['bpy'] + "'; print('Blender import/version probe passed.')"], env=env)
+        try:
+            run(python + ['-m', 'pip', '--isolated', 'install', '--disable-pip-version-check',
+                          '--require-hashes', '--no-deps', '--only-binary', ':all:',
+                          '--index-url', 'https://pypi.org/simple', '-r', SCRIPTS / target['requirements']], env=env)
+            run(python + ['-m', 'pip', '--isolated', 'check'], env=env)
+            run(python + ['-c', "import bpy, sys; assert sys.version_info[:3] == " + repr(tuple(map(int, profile['python'].split('.'))))
+                          + "; assert bpy.app.version_string == '" + profile['bpy'] + "'; print('Blender import/version probe passed.')"], env=env)
+        except BaseException:
+            # Only this invocation's successfully created env may be removed.
+            run([conda, 'env', 'remove', '--yes', '--name', 'rigging'], env=env)
+            raise
     print('Reviewed rigging profile installed. Import success does not establish render or GPU correctness.')
 
 

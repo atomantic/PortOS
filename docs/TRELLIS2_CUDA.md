@@ -93,7 +93,8 @@ On 2026-11-11, OSV querybatch returned no matches for **133 queries**: 94 PyPI
 identities (including native sources and setuptools' bundled libraries), 28 Conda artifact PURLs
 including micromamba, and 11 source revisions. PyPI queries include OSV's `MAL-`
 malicious-package records. OSV's Conda advisory coverage is limited; a zero-match
-PURL response does not establish complete native advisory coverage. The old
+PURL response does not establish complete native advisory coverage. The audit follows
+each identity's `next_page_token`; failed pagination remains unresolved. The old
 FlashAttention name/version and revision queries found advisories and were
 replaced with the patched revision before building.
 
