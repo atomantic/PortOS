@@ -412,7 +412,10 @@ function trackBeats(onset, fps, periodFrames) {
   const scores = new Float64Array(onset.length);
   const previous = new Int32Array(onset.length).fill(-1);
   for (let frame = 0; frame < onset.length; frame++) {
-    let best = 0;
+    // Only the first period may start a path. A zero-score restart later
+    // would discard earlier beats after fractional-period penalties accumulate
+    // through silence; negative scores must retain their predecessors instead.
+    let best = frame < periodFrames ? 0 : -Infinity;
     for (let gap = minGap; gap <= Math.min(maxGap, frame); gap++) {
       const score = scores[frame - gap] - penalties[gap];
       if (score > best) { best = score; previous[frame] = frame - gap; }
@@ -490,9 +493,7 @@ export function pickDownbeats(beats, onset, fps) {
 // --- Beat-grid trust (#14240) -------------------------------------------------
 //
 // Tracking supplies a pulse sequence once a tempo is chosen. These measure
-// whether that grid describes the
-// song: do onsets actually land on it, are they steady, and did the mono mix
-// itself cancel. The thresholds ARE the decision; manual tempo skips the gate.
+// whether onsets land on the grid, stay steady, and survive the mono mix. The thresholds ARE the decision; manual tempo skips the gate.
 
 export const GRID_MIN_TEMPO_CONFIDENCE = 0.45;
 export const GRID_MIN_BEAT_CONTRAST = 1.2;
