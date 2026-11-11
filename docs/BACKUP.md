@@ -455,6 +455,16 @@ A backup run (`runBackup` in `server/services/backup.js`) writes to:
 - **Non-overridable** (`overridable: false`): browser CDP profile, agent worktrees, cached jev training embeddings — caches with no irreplaceable user data; never backed up.
 - **Overridable** (`overridable: true`): intermediate LoRA training checkpoints, cloned repos, reference repos, browser downloads, jev training corpora — re-downloadable or rebuildable; the user can disable these built-in exclusion rules from the Backup settings UI via `disabledDefaultExcludes`.
 
+A Music Video [Blender film](./features/music-video-blender.md) is split the same way: its scripts (`data/music-video/<projectId>/blender/src/`), synced shot list and `song.json` are backed up, while `/music-video/*/blender/renders/` (frames, shot videos, stills, cuts and logs, all re-rendered from those scripts) is excluded and overridable.
+
+Rendered frames are the bulk of `renders/` (a long film's final PNG frames run to many gigabytes), and PortOS does not read them again once a shot's video is encoded. They are kept on disk by this rule (`server/services/musicVideo/blender/usage.js`):
+
+- An unfinished render keeps its frames, so the next render of that shot resumes them.
+- A finished render keeps its frames until **Clear rendered frames** (the film panel's Settings tab, which also shows what the workspace takes) removes them, or until the shot is rendered again from changed scripts, settings or options, which replaces them.
+- A shot that leaves the film loses its frames at the next sync. Its videos and stills stay (the shot may come back) until frames are cleared.
+
+Clearing never removes a shot video, a poster, a still, a cut or a log. Turning the exclusion off backs up every frame still on disk: clear them first unless you mean to.
+
 Deployed LoRA weights in `data/loras/` and their metadata sidecars are included by default, whether trained locally or downloaded. Promoting an earlier checkpoint copies its selected bytes there, so a backup preserves that adapter independently of excluded torch and mflux intermediate checkpoint directories. This deliberately accepts the storage cost of deployed weights. Old `disabledDefaultExcludes` entries for `/loras/*.safetensors` remain harmless; the removed default no longer needs a toggle.
 
 #### jev project heads — excluded bulk, retained artifact

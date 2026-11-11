@@ -932,6 +932,30 @@ describe('mergeProjectRecord (#1770 LWW)', () => {
     expect(next.castAndSets).toEqual(castAndSets);
   });
 
+  it('keeps a Blender film install-local: settings, scene map and notes never cross the wire, and a clone starts a fresh workspace', async () => {
+    const { sanitizeRecordForWire } = await import('../../lib/syncWire.js');
+    const blender = {
+      settings: { engine: 'CYCLES', width: 1280, height: 720, fps: 30 },
+      sceneMap: { s010: 'mvs-example' }, notes: { s010: { text: 'Example note', status: 'wip', updatedAt: '2026-01-01T00:00:00Z' } },
+      syncedAt: '2026-01-01T00:00:00Z', manifestHash: 'example-hash',
+    };
+    const local = { id: 'mv-1', updatedAt: '2026-01-01T00:00:00Z', name: 'local', composition: { mode: 'blender' }, blender };
+    const wire = sanitizeRecordForWire('musicVideoProject', local);
+    expect(wire).not.toHaveProperty('blender');
+    // The render style itself is shared: a peer shows the project as a Blender film it has no workspace for.
+    expect(wire.composition).toEqual({ mode: 'blender' });
+
+    const foreign = { blender: { settings: { engine: 'BLENDER_EEVEE_NEXT' }, sceneMap: { s999: 'mvs-foreign' } } };
+    expect(mergeProjectRecord(null, { id: 'mv-2', updatedAt: '2026-01-02T00:00:00Z', ...foreign }).next).not.toHaveProperty('blender');
+    const { next } = mergeProjectRecord(local, { id: 'mv-1', updatedAt: '2026-01-05T00:00:00Z', name: 'remote edit', composition: { mode: 'blender' }, ...foreign });
+    expect(next.name).toBe('remote edit');
+    expect(next.blender).toEqual(blender);
+
+    const clone = cloneProjectRecord({ ...local, scenes: [] }, { id: 'mv-3', now: '2026-01-06T00:00:00.000Z' });
+    expect(clone.blender).toEqual({ settings: blender.settings });
+    expect(cloneProjectRecord({ id: 'mv-4', name: 'plain', scenes: [] }, { id: 'mv-5', now: '2026-01-06T00:00:00.000Z' })).not.toHaveProperty('blender');
+  });
+
   it('remote with a newer updatedAt wins', () => {
     const local = { id: 'mv-1', updatedAt: '2026-01-01T00:00:00Z', name: 'old' };
     const remote = { id: 'mv-1', updatedAt: '2026-01-05T00:00:00Z', name: 'new' };

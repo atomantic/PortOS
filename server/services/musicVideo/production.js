@@ -227,6 +227,9 @@ export function startProductionOnProject(project, {
     if (!project.scenes?.length || assets.conflicts.length) throw productionError(409, 'PRODUCTION_MEDIUM_CONFLICT', assets.conflicts.join(' ') || 'Approve a timed medium plan before starting production');
     if (!authoring?.providerId || !authoring?.model) throw productionError(422, 'PRODUCTION_AUTHORING_REQUIRED', 'Select a separate code-authoring provider and model');
   }
+  if (!codeFirst && project?.composition?.mode === 'blender') {
+    throw productionError(409, 'PRODUCTION_UNSUPPORTED', 'A Blender film is made from its own scripts: sync its shots, render them and assemble cuts from the Blender film panel. Asset autopilot requires document composition.');
+  }
   if (!codeFirst && ['code', 'eidoverse'].includes(project?.composition?.mode)) {
     throw productionError(409, 'PRODUCTION_UNSUPPORTED', 'Use Compose and Production review for a standalone scene project: approve the storyboard, author the animation, then approve its chorus proof before rendering. Asset autopilot requires document composition.');
   }

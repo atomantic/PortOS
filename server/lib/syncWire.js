@@ -62,6 +62,9 @@ export function stripMusicVideoLocalRenderPins(record, { stripVideoBackend = tru
     // Render diagnostics describe a job on this machine, never a peer job.
     renderError: _renderError,
     songRevision: _songRevision, songRevisionHistory: _songRevisionHistory,
+    // A Blender film's settings, shot-to-scene map and director notes describe a
+    // workspace on this install (services/musicVideo/blender/); the render mode still syncs.
+    blender: _blender,
     ...shared
   } = record;
   // Only the portable versioned packet crosses the existing opted-in project wire.

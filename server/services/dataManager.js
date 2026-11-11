@@ -101,7 +101,7 @@ export const CATEGORIES = {
   // version of a Cast & Sets sheet, animatic, treatment or storyboard, one
   // immutable file each, referenced by the project record. Not deletable from
   // here: a purge would strand those references (delete the artifact instead).
-  'music-video': { label: 'Music Video Development Files', description: 'Versioned development artifacts (check-in sheets, animatics, treatments) and composition documents referenced by Music Video projects', archivable: true, deletable: false },
+  'music-video': { label: 'Music Video Development Files', description: 'Versioned development artifacts (check-in sheets, animatics, treatments), composition documents and Blender film workspaces (scripts and their renders) referenced by Music Video projects', archivable: true, deletable: false },
   'music-video-compositions': { label: 'Music Video Overlay Scratch', description: 'Typography overlay frames for an in-flight composed music-video render — removed when the render ends and swept at boot', archivable: false, deletable: false },
   'music-video-film-look': { label: 'Music Video Film Look Scratch', description: 'A staged link to a finished render for its film look pass — removed when the pass ends', archivable: false, deletable: false },
   'music-video-stats-outro': { label: 'Music Video Outro Scratch', description: 'The cutting room floor outro page (fonts and floor stills) for an in-flight music-video render — removed when the render ends and swept at boot', archivable: false, deletable: false },

@@ -91,6 +91,14 @@ const settleExcerptRecord = (projectId, excerptId, patch) => withBackupAssetPubl
 // A code-rendered or composition-document project excerpts the same seekable
 // composition, windowed on song time, instead of the footage concat.
 const SEEKED_EXCERPTS = Object.freeze({
+  // A Blender film cuts the window out of its rendered shot videos. Its frame is the film's
+  // own, so it cannot be re-laid-out at another aspect; the film look is a finishing pass.
+  blender: {
+    label: 'Blender film', fixedFrame: true, filmLookFinish: true,
+    prepare: async (project) => (await import('./blender/finalRender.js')).prepareBlenderExcerpt(project),
+    assertWindow: async (input) => (await import('./blender/finalRender.js')).assertBlenderExcerptWindow(input),
+    encode: async (input) => (await import('./blender/finalRender.js')).encodeBlenderExcerpt(input),
+  },
   eidoverse: {
     label: 'Eidoverse Video',
     prepare: async (project) => {
@@ -136,6 +144,11 @@ const SEEKED_EXCERPTS = Object.freeze({
 async function launchSeekedExcerpt({ projectId, project: stored, startSec, endSec, revisionId, handOff, renderer, aspect = null, fade = false }) {
   // A social cut renders the same composition at another frame (#9280): the
   // re-framed view drives planning, staging and capture; the record keeps its own aspect.
+  if (renderer.fixedFrame && ((aspect && aspect !== musicVideoAspect(stored)) || fade)) {
+    throw new ServerError('Social cuts (another aspect, faded edges) need a composition-document or code-rendered project', {
+      status: 422, code: 'EXCERPT_ASPECT_UNSUPPORTED',
+    });
+  }
   const project = musicVideoAtAspect(stored, aspect);
   // A missing master throws before the excerpt is marked rendering.
   const audioPath = await resolveMasterAudioPath(project);
@@ -154,6 +167,8 @@ async function launchSeekedExcerpt({ projectId, project: stored, startSec, endSe
     );
   }
   const endClamped = Math.min(endSec, prepared.totalSec);
+  // A renderer that needs something of the window itself refuses here, before a record is made.
+  await renderer.assertWindow?.({ prepared, project: drawn, startSec, endSec: endClamped });
   await ensureDir(PATHS.videos);
   await ensureDir(PATHS.videoThumbnails);
   const filename = `music-video-excerpt-${projectId.slice(0, 8)}-${Date.now()}.mp4`;
@@ -192,10 +207,18 @@ async function launchSeekedExcerpt({ projectId, project: stored, startSec, endSe
     if (persisted) musicVideoEvents.emit('excerpt-render', { projectId, excerptId, status: patch.status });
     return persisted;
   };
+  // As a footage excerpt does: the film look re-encodes the finished window, on song time.
+  const finishing = Boolean(renderer.filmLookFinish) && filmLookFinishNeeded(project);
+  const encodeTop = finishing ? 0.5 : 1;
   Promise.resolve().then(() => renderer.encode({
     prepared, project: drawn, projectId, jobId, audioPath, soundBed, outputPath, signal, startSec, endSec: endClamped, fade,
-    onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: fraction }),
+    onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: encodeTop * fraction }),
   })).then(async (encoded) => {
+    if (!finishing) return encoded;
+    await applyFilmLookFinish({ project, path: outputPath, jobId, offsetSec: startSec, signal, label: 'Music-video excerpt film look',
+      onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: encodeTop + (1 - encodeTop) * fraction }) });
+    return encoded;
+  }).then(async (encoded) => {
     job.overlayAbort = null;
     job.status = 'complete';
     let contactSheetFilename = null;
@@ -240,7 +263,8 @@ async function launchSeekedExcerpt({ projectId, project: stored, startSec, endSe
  */
 export async function renderSeekedWindow(stored, { startSec, endSec, aspect, fade = false, outputPath, jobId, signal, onProgress }, { renderers = SEEKED_EXCERPTS, resolveAudio = resolveMasterAudioPath } = {}) {
   const renderer = renderers[stored?.composition?.mode];
-  if (!renderer) return null;
+  // A fixed-frame renderer (a Blender film) cannot draw itself at another aspect: the caller fits the master.
+  if (!renderer || renderer.fixedFrame) return null;
   const project = musicVideoAtAspect(stored, aspect);
   const prepared = await renderer.prepare(project);
   const audioPath = await resolveAudio(project);

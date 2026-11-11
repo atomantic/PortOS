@@ -731,7 +731,9 @@ export const musicVideoSongPrepareSchema = z.object({
 // `document` renders a project-owned HTML composition document (its own
 // folder under data/music-video/<projectId>/composition/) seeked over the
 // song; see services/musicVideo/compositionDocument.js and documentRender.js.
-export const MUSIC_VIDEO_COMPOSITION_MODES = ['concat', 'composed', 'code', 'document', 'eidoverse'];
+// `blender` assembles shots rendered by an operator-authored Blender film
+// (services/musicVideo/blender/); its settings live in the install-local `blender` field.
+export const MUSIC_VIDEO_COMPOSITION_MODES = ['concat', 'composed', 'code', 'document', 'eidoverse', 'blender'];
 // #9290: 'scene' cuts once per planned shot; 'intercut' re-cuts on section energy and sung words.
 export const MUSIC_VIDEO_CUTTING_MODES = ['scene', 'intercut'];
 // Shipped starting points a project can copy into its document folder.

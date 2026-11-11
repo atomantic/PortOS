@@ -227,8 +227,33 @@ export async function createProject(input) {
   return withCatalogDescriptions(project);
 }
 
+// A Blender film's scripts live in the source's workspace. A new version gets its own copy,
+// placed under the id it is about to take, so the record never exists without its film.
+// Resolves null when the source has no film to copy (the clone then keeps only its settings).
+async function forkBlenderFilm(backend, sourceId) {
+  const source = await backend.getProject(sourceId);
+  if (!source?.blender || source.deleted) return null;
+  const { copyBlenderFilm, removeBlenderFilmCopy } = await import('./blender/fork.js');
+  const id = `mv-${randomUUID()}`;
+  if (!(await copyBlenderFilm(sourceId, id))) return null;
+  return { id, discard: () => removeBlenderFilmCopy(id) };
+}
+
 export async function cloneProject(id, options = {}) {
-  const project = await (await selectBackend()).cloneProject(id, options);
+  const backend = await selectBackend();
+  // A footage adaptation leaves the film behind: its shots become footage.
+  const film = options.variant === 'video-generation' ? null : await forkBlenderFilm(backend, id);
+  const project = await backend.cloneProject(id, { ...options, ...(film ? { id: film.id, blenderFilm: true } : {}) })
+    .catch(async (error) => {
+      await film?.discard();
+      throw error;
+    });
+  if (film) {
+    // The copied song.json names the source project; the fork's own is written from its record.
+    const [{ writeBlenderSong }, { normalizeBlenderRecord }] = await Promise.all([import('./blender/song.js'), import('../../lib/musicVideoBlender.js')]);
+    await writeBlenderSong(project, normalizeBlenderRecord(project.blender).settings)
+      .catch((error) => console.error(`❌ Blender film fork ${project.id.slice(0, 11)}: song.json was not rewritten: ${error.message}`));
+  }
   announceNewProject(project.id);
   queueProjectCatalogLinkSync(project.id);
   return withCatalogDescriptions(project);

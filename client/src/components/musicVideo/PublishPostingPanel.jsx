@@ -87,6 +87,8 @@ const FIT_REASONS = {
   unavailable: 'the composition has no 9:16 layout, or its 9:16 render failed',
   footage: 'a footage edit has no 9:16 layout of its own',
 };
+// Styles that can lay themselves out at 9:16 for one window. A Blender film is not one: its
+// frame size is a render setting of the whole film, so a vertical cut means rendering it at that size.
 const SEEKED_MODES = ['document', 'code', 'eidoverse'];
 
 /**
@@ -115,6 +117,11 @@ function FittedCutNotice({ project, cut, excerpts }) {
         )
       )}
       {canRender && !excerpts.rendering && failed && <p className="text-port-error break-words">The last 9:16 render failed: {failed.error}</p>}
+      {project?.composition?.mode === 'blender' && (
+        <p className="text-port-text-muted">
+          A Blender film has one frame size, set under Settings in Blender film on Shots. A native vertical cut means rendering the film at 9:16 there.
+        </p>
+      )}
     </div>
   );
 }

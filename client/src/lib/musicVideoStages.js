@@ -19,6 +19,7 @@ import { coldOpenScenes, normalizePreMusic, songScenes } from '../../../server/l
 import { shotCameraLabel } from '../../../server/lib/cameraMovements.js';
 import { shotSheetDoneProgress } from '../../../server/lib/musicVideoShotSheet.js';
 import { projectPreviz, previzCoversShots } from '../../../server/lib/musicVideoPreviz.js';
+import { blenderShotsReady } from '../../../server/lib/musicVideoBlender.js';
 
 /**
  * The steps of a music video, in the order the director decides them: the
@@ -201,7 +202,9 @@ function liveCompositeSource(project) {
     ? 'Code-rendered video draws the song in code and has no take composite.'
     : mode === 'eidoverse'
       ? 'Eidoverse video renders a saved scene and has no take composite.'
-      : 'Footage cuts the clips as they are and has no live composite.';
+      : mode === 'blender'
+        ? 'A Blender film is rendered shot by shot: watch its shots and cuts in Blender film on Shots.'
+        : 'Footage cuts the clips as they are and has no live composite.';
   return { id: 'composite', kind: 'composite', label: 'Composition (live)', disabled: true, reason };
 }
 
@@ -433,7 +436,7 @@ export const resolveStageParam = (value) => (isStageId(value) || MUSIC_VIDEO_PAG
   ? value : LEGACY_STAGE_IDS[value] || null);
 
 // Footage-optional modes draw their own picture, so scene footage never gates Produce.
-export const FOOTAGE_OPTIONAL_MODES = new Set(['code', 'document', 'eidoverse']);
+export const FOOTAGE_OPTIONAL_MODES = new Set(['code', 'document', 'eidoverse', 'blender']);
 
 // A code video is composed once it was generated or the director holds sections to render.
 const codeComposed = (project) => {
@@ -441,11 +444,18 @@ const codeComposed = (project) => {
   return !!code?.generatedAt || (code?.sections || []).length > 0;
 };
 
+// A Blender film is composed once every shot of its manifest has a complete, current final render.
+// The renders are on the server's disk, so it attaches the count to every project read, list row
+// and summary as `project.blenderShots` (`{ total, finalReady, ready }`); the open project's page
+// recomputes it from the film state as renders land. Same rule as the server's summary.
+const blenderShotsDone = (project) => blenderShotsReady(project?.blenderShots);
+
 const composeDone = (project, mode) => {
   if (mode === 'composed') return (project.composition?.textCues || []).length > 0 || composedDrawsLyrics(project);
   if (mode === 'document') return !!project.composition?.document;
   if (mode === 'eidoverse') return !!project.composition?.eidoverseScene?.inlineScript;
   if (mode === 'code') return codeComposed(project);
+  if (mode === 'blender') return blenderShotsDone(project);
   // Footage has nothing to compose.
   return true;
 };
@@ -655,7 +665,10 @@ const boardNextAction = (args) => (args.project.automation && !(args.project.sce
   : { id: 'plan', kind: 'run', label: 'Plan the shots', shortLabel: 'Plan', ...analyzeFirst(args.project) });
 
 // The composition step's name by render mode; concat and the other footage-only modes add typography.
-const COMPOSE_LABELS = { document: ['Attach a composition', 'Attach'], eidoverse: ['Save the Eidoverse scene', 'Save'], code: ['Generate the code video', 'Generate'] };
+const COMPOSE_LABELS = {
+  document: ['Attach a composition', 'Attach'], eidoverse: ['Save the Eidoverse scene', 'Save'], code: ['Generate the code video', 'Generate'],
+  blender: ['Render the Blender shots', 'Render'],
+};
 
 function produceNextAction({ project, run }) {
   if (run?.status === 'needs-human') return { id: 'goto-review', kind: 'goto', stage: 'review', label: 'Review the draft', shortLabel: 'Review' };
@@ -838,6 +851,7 @@ export function feedbackRevisionScope(project, stage) {
   if (mode === 'document') return ['generated', 'template', undefined].includes(project.composition?.document?.source?.kind)
     ? { action: 'Authors a revised composition candidate with these requests. Accept it in Shots, then render a new proof.' }
     : { unavailable: 'This composition was imported from its own source. Revise that source and reimport it, then resolve each request.' };
+  if (mode === 'blender') return { unavailable: 'This proof is cut from the Blender shots. Revise the film scripts, render the affected shots again, then render a new proof.' };
   return { unavailable: 'This proof is assembled from Board footage. Revise the affected storyboard shots or takes, then render a new proof.' };
 }
 
@@ -1163,6 +1177,13 @@ const COMPOSITION_ITEMS = {
     const saved = !!composition.eidoverseScene?.inlineScript;
     return { id: 'composition', label: 'Save the Eidoverse scene', done: saved, action: saved ? null : { label: 'Save the scene', anchor: 'mv-eidoverse-scene' } };
   },
+  blender: (_composition, project) => {
+    const done = blenderShotsDone(project);
+    const film = project.blenderShots;
+    return { id: 'composition', label: film?.total ? `Final render for every Blender shot (${formatCount(film.finalReady)} of ${formatCount(film.total)})` : 'Final render for every Blender shot', done,
+      detail: done ? null : film && !film.total ? 'Sync the shots from the film scripts first.' : 'Render each shot at final quality in Blender film.',
+      action: done ? null : { label: 'Open Blender film', anchor: 'mv-blender-film' } };
+  },
   code: (composition, project) => {
     const done = codeComposed(project);
     return { id: 'composition', label: composition.codeVideo?.generatedAt ? 'Code video generated' : 'Code video sections ready', done,
@@ -1294,6 +1315,9 @@ export function stepNotes(project, readiness = project?.productionReadiness, pub
     ) && take.dependencyState?.status === 'stale')).length;
     make = `${formatCount(ready)} of ${formatCount(scenes.length)} shots have their picture`;
     if (staleFrames) make += ` · ${formatCount(staleFrames)} ${staleFrames === 1 ? 'frame' : 'frames'} out of date`;
+  } else if (mode === 'blender' && project.blenderShots?.total) {
+    const film = project.blenderShots;
+    make = `${formatCount(film.finalReady)} of ${formatCount(film.total)} finals done`;
   } else if (scenes.length) make = 'Picture drawn by the composition';
   // Once the picture is in, an unfinished Shots step names what is left instead.
   if (scenes.length && readiness && deriveStages(project, readiness, publish).stages.find((stage) => stage.id === 'produce')?.state !== 'done') {

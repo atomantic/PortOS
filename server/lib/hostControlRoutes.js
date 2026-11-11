@@ -775,6 +775,19 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'GET /api/music-video/dcp/:jobId/events',
   'GET /api/music-video/:id/dcp/:artifactId/report',
   'GET /api/music-video/:id/dcp/:artifactId/location',
+  // A Blender film is operator-authored Python that the checked Blender executable runs with
+  // host access. Gated: writing or deleting the source it will run (the starter scaffold and
+  // the file routes), the sync and shot renders that run it, the ffmpeg cut assembly,
+  // opening a saved scene in the Blender application, and clearing rendered frames (hours of
+  // GPU work deleted from the host). Settings, notes, cancels and reads stay open.
+  'POST /api/music-video/:id/blender/workspace',
+  'PUT /api/music-video/:id/blender/file',
+  'DELETE /api/music-video/:id/blender/file',
+  'POST /api/music-video/:id/blender/sync',
+  'POST /api/music-video/:id/blender/render',
+  'POST /api/music-video/:id/blender/cut',
+  'POST /api/music-video/:id/blender/frames/clear',
+  'POST /api/music-video/:id/blender/shots/:shotId/open',
   'POST /api/sprites/:id/reference/generate',
   // Fork creates a record and immediately queues reference generation too.
   'POST /api/sprites/:id/fork',

@@ -93,6 +93,7 @@ async function prepare(project, input) {
   });
   const blockers = affectedShots.filter((shot) => shot.status === 'ambiguous').map((shot) => `${shot.label || shot.sceneId}: ${shot.reason}`);
   if (['code', 'document'].includes(project.composition?.mode)) blockers.push('Authored code/document compositions need manual timing revision.');
+  if (project.composition?.mode === 'blender') blockers.push('A Blender film is timed in its scripts: retime the shots there, then sync shots from scripts.');
   if ((project.revisions || []).some((revision) => !['complete', 'completed', 'canceled', 'failed'].includes(revision.status))) blockers.push('Finish or cancel the active repair before changing audio timing.');
   if (project.status === 'rendering' || (project.productionRuns || []).some((run) => ['running', 'queued'].includes(run.status))) blockers.push('Wait for active production to finish.');
   if ((project.audioTimingRevisions || []).length >= 100) blockers.push('This project has reached 100 timing revisions; clone it to continue.');

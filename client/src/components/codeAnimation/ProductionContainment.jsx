@@ -4,7 +4,7 @@ import { useAsyncAction } from '../../hooks/useAsyncAction';
 import { findCodeAnimationBlender, getCodeAnimationExecution, probeCodeAnimationExecution, updateCodeAnimationExecutionTools } from '../../services/apiCodeAnimation';
 import { formatCount } from '../../utils/formatters';
 
-const buttonClass = 'rounded border border-port-border px-3 py-2 text-sm hover:border-port-accent disabled:opacity-50';
+const buttonClass = 'inline-flex min-h-[44px] items-center justify-center rounded border border-port-border px-3 py-2 text-sm hover:border-port-accent disabled:opacity-50';
 const actionClass = 'inline-flex min-h-[44px] items-center justify-center rounded-lg bg-port-accent px-4 py-2 text-sm font-medium text-port-on-accent hover:brightness-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-port-accent disabled:opacity-40';
 
 /** Machine-level contained-execution status: fail-closed readiness, operator tool path, on-demand check. */

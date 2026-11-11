@@ -622,6 +622,23 @@ leaves finished ones alone. Agents outside PortOS call these with `node scripts/
 | POST | `/music-video/:id/excerpt` | Start an excerpt encode (ffmpeg). Host-control gated as the final render |
 | POST | `/music-video/:id/publish-kit/build` | Build platform encodes and thumbnails (ffmpeg). Host-control gated as the final render |
 | POST | `/music-video/publish/cover-fonts` | Upload a cover lettering font. Host-control gated: the file is installed into a host-wide font folder (macOS `Library/Fonts/PortOS`), so a remote caller on a password-free install is refused; local connections, operator sessions and `PORTOS_API_TOKEN` agents are allowed. Listing and serving (`GET`) and delete stay open |
+| GET | `/music-video/:id/blender` | A [Blender film](./features/music-video-blender.md)'s state: `{ settings, tool, workspace, manifest, renders, cuts, jobs, notes }`. Also the answer to the settings, workspace, file and note changes below |
+| PUT | `/music-video/:id/blender/settings` | Save some render settings `{ engine?, width?, height?, fps?, previewScale?, previewSamples?, finalSamples?, concurrency?, saveBlend?, options? }`. `options` is `{ <key>: value \| null }` for the film options the synced film declares (only the keys sent change; `null` clears one back to its default): `400 MUSIC_VIDEO_BLENDER_OPTION_INVALID` (`context.errors`) for an undeclared key or a value its option does not accept, with nothing saved |
+| POST | `/music-video/:id/blender/workspace` | Copy the starter film into the workspace `{ template: 'starter' }`; `409 MUSIC_VIDEO_BLENDER_WORKSPACE_EXISTS` once `src/film.py` exists. Host-control gated: it sets what Blender will run |
+| GET | `/music-video/:id/blender/files` | List the film source → `{ files: [{ path, bytes, mtime, text }] }` |
+| GET | `/music-video/:id/blender/file` | Read one text source file (`?path=`) → `{ path, content }` |
+| PUT | `/music-video/:id/blender/file` | Write one text source file `{ path, content }` (up to 2 MiB). Host-control gated |
+| DELETE | `/music-video/:id/blender/file` | Delete one source file (`?path=`). Host-control gated |
+| POST | `/music-video/:id/blender/sync` | Start a sync `{ replaceScenes? }` → `202 { job }`: a background job runs the film's `describe`, saves the shot list and options and mirrors the shots to Board scenes. The job ends `done`, `canceled`, or `error` with `error`, `code` and, for a refused shot list, every problem in `problems`. Refused before it starts: `409 MUSIC_VIDEO_BLENDER_SCENES_CONFLICT` when the Board holds scenes the film did not make, `409 MUSIC_VIDEO_BLENDER_NEEDS_TRUSTED_LOCAL` when Blender is contained, `409 MUSIC_VIDEO_BLENDER_SYNC_IN_PROGRESS`. Host-control gated |
+| POST | `/music-video/:id/blender/render` | Queue shot renders `{ quality: 'still' \| 'preview' \| 'final', shotIds?, times?, force?, onlyStale? }` → `202 { jobs, skipped }`. Renders every shot that is not rendered or out of date; `force` also re-renders current ones; `onlyStale` takes only renders that exist and are out of date. `409 MUSIC_VIDEO_BLENDER_NOT_SYNCED` before the first sync or after the frame rate changed. Host-control gated |
+| GET | `/music-video/:id/blender/usage` | What the workspace takes on disk → `{ sourceBytes, rendersBytes, frameBytes, frameFiles, clearableBytes, removedShots }` |
+| POST | `/music-video/:id/blender/frames/clear` | Remove the frames of every finished render (their videos, stills and cuts stay) and everything rendered for shots the film no longer lists → `{ freedBytes, usage }`. `409 MUSIC_VIDEO_BLENDER_RENDERS_ACTIVE` while shots render. Host-control gated |
+| POST | `/music-video/:id/blender/jobs/:jobId/cancel` | Cancel one sync, render or cut job → `{ ok }` |
+| POST | `/music-video/:id/blender/cancel` | Cancel every Blender film job of the project → `{ ok }` |
+| POST | `/music-video/:id/blender/cut` | Assemble a work-in-progress cut with the song `{ quality: 'preview' \| 'final', animatic?, filmLook? }` → `202 { job }`. Shots without a video are black. Host-control gated (ffmpeg) |
+| PUT | `/music-video/:id/blender/shots/:shotId/note` | Save a director note `{ text?, status?: 'todo' \| 'wip' \| 'review' \| 'approved' }` |
+| POST | `/music-video/:id/blender/shots/:shotId/open` | Open the shot's saved `.blend` in Blender; `404` when there is none. Host-control gated |
+| GET | `/music-video/:id/blender/media` | Serve one file under the workspace's `renders/` (`?path=`): shot videos, frames, stills, cuts (Range supported) and job logs as text |
 
 ### Notifications
 

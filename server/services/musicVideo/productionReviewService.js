@@ -404,6 +404,9 @@ export async function reviseProductionFromFeedback(id, { stage, ...route }) {
     if (kind && !['generated', 'template'].includes(kind)) throw refuse('This composition was imported from its own source. Revise that source and reimport it, then resolve each request.');
     const { generateMixedMediaDocument } = await import('./documentGeneration.js');
     await generateMixedMediaDocument(id, route);
+  } else if (mode === 'blender') {
+    // The film is the operator's scripts: nothing here can rewrite them from review notes.
+    throw refuse('This proof is cut from the Blender film\'s shots. Revise the film scripts, render the affected shots again, then render a new proof.');
   } else {
     throw refuse('This proof is assembled from Board footage. Revise the affected storyboard shots or takes, then render a new proof.');
   }

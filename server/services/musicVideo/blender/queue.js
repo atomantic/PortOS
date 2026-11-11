@@ -1,0 +1,129 @@
+/**
+ * The Blender film render queue: each project's shot jobs run first in, first
+ * out, and at most `settings.concurrency` Blender processes render at once
+ * across this install. Jobs exist only in memory: nothing starts at boot, and
+ * a restart drops what was queued (the frames already rendered stay and the
+ * next render resumes them). Cancelling kills the Blender process group and
+ * drops queued jobs.
+ */
+import { maintenance } from '../../../lib/maintenanceAdmission.js';
+import { blenderRenderWanted, normalizeBlenderRecord } from '../../../lib/musicVideoBlender.js';
+import { requireProject } from '../requireProject.js';
+import { blenderRefusal } from './workspace.js';
+import { readBlenderManifest } from './manifest.js';
+import { readBlenderRenders } from './renderIndex.js';
+import { requireBlenderFilmTool } from './driver.js';
+import { requireFfmpeg } from './encode.js';
+import { activeBlenderJobs, blenderJobEntry, createBlenderJob, isBlenderJobActive, updateBlenderJob } from './jobs.js';
+import { announceBlenderState } from './record.js';
+import { blenderStillFrames, runBlenderShotRender } from './renderJob.js';
+
+// projectId → queued tasks, oldest first. A task is `{ entry, request, concurrency }`.
+const waiting = new Map();
+const running = new Set();
+
+function settle(task, error) {
+  const { entry, request } = task;
+  const canceled = error?.canceled === true || (error && entry.abort.signal.aborted);
+  if (!error) updateBlenderJob(entry, { status: 'done' });
+  else if (canceled) updateBlenderJob(entry, { status: 'canceled' });
+  else {
+    console.error(`❌ Blender film ${request.quality} render of shot ${request.shotId} failed: ${error.message}`);
+    updateBlenderJob(entry, { status: 'error', error: String(error.message || 'Render failed').slice(0, 2000) });
+  }
+  announceBlenderState(request.projectId);
+}
+
+function start(task) {
+  running.add(task);
+  // Admission can refuse (a maintenance hold); that fails this job like any other error.
+  Promise.resolve()
+    .then(() => maintenance.run('composition', 'Blender film shot render', () => runBlenderShotRender(task.entry, task.request), { continuation: true }))
+    .then(() => settle(task, null), (error) => settle(task, error))
+    .finally(() => {
+      running.delete(task);
+      pump();
+    })
+    .catch((error) => console.error(`❌ Blender film job ${task.entry.job.id} could not be settled: ${error.message}`));
+}
+
+function pump() {
+  for (const [projectId, tasks] of waiting) {
+    while (tasks.length && running.size < tasks[0].concurrency) start(tasks.shift());
+    if (!tasks.length) waiting.delete(projectId);
+  }
+}
+
+const unknownShots = (ids) => blenderRefusal(`Not in the synced film: ${ids.join(', ')}. Sync shots from scripts first.`, 'NOT_FOUND', 404, { shotIds: ids });
+
+/**
+ * Queue renders for a project. Preview and final take every shot that is not
+ * rendered or out of date, and `force` the current ones too; `onlyStale`
+ * narrows to renders that exist and are out of date (`blenderRenderWanted`,
+ * the rule the panel counts by). Stills always render. Resolves
+ * `{ jobs, skipped }`: the jobs now covering the request (a shot already
+ * queued or rendering keeps its job) and the shot ids left alone.
+ */
+export async function enqueueBlenderRenders(projectId, { shotIds = null, quality, times = null, force = false, onlyStale = false }) {
+  const project = await requireProject(projectId);
+  await requireBlenderFilmTool();
+  if (quality !== 'still') await requireFfmpeg();
+  const { settings } = normalizeBlenderRecord(project.blender);
+  const manifest = await readBlenderManifest(projectId);
+  if (!manifest?.shots.length) throw blenderRefusal('Sync shots from scripts before rendering', 'MUSIC_VIDEO_BLENDER_NOT_SYNCED', 409);
+  // The shots sit on the frame grid they were synced at; at another rate their edges would overlap or gap.
+  if (manifest.fps !== settings.fps) {
+    throw blenderRefusal(`The frame rate changed from ${manifest.fps} to ${settings.fps} since the last sync. Sync shots from scripts again before rendering.`, 'MUSIC_VIDEO_BLENDER_NOT_SYNCED', 409);
+  }
+  const known = new Map(manifest.shots.map((shot) => [shot.id, shot]));
+  const missing = (shotIds || []).filter((id) => !known.has(id));
+  if (missing.length) throw unknownShots(missing);
+  const shots = shotIds ? [...new Set(shotIds)].map((id) => known.get(id)) : manifest.shots;
+  const still = quality === 'still';
+  const renders = still ? null : await readBlenderRenders(projectId, manifest, { settings, shots });
+  const active = new Map(activeBlenderJobs(projectId).filter(({ job }) => job.kind === 'render' && job.quality !== 'still')
+    .map((entry) => [`${entry.job.shotId}:${entry.job.quality}`, entry]));
+  const jobs = [];
+  const skipped = [];
+  for (const shot of shots) {
+    if (still) {
+      if (!blenderStillFrames(shot, settings.fps, times).length) { skipped.push(shot.id); continue; }
+    } else {
+      const existing = active.get(`${shot.id}:${quality}`);
+      if (existing) { jobs.push({ ...existing.job }); continue; }
+      if (!blenderRenderWanted(renders[shot.id]?.[quality], { force, onlyStale })) { skipped.push(shot.id); continue; }
+    }
+    const entry = createBlenderJob(projectId, { kind: 'render', shotId: shot.id, quality });
+    const tasks = waiting.get(projectId) || [];
+    tasks.push({ entry, concurrency: settings.concurrency, request: { projectId, shotId: shot.id, quality, force, times } });
+    waiting.set(projectId, tasks);
+    jobs.push({ ...entry.job });
+  }
+  if (still && !jobs.length) throw blenderRefusal('None of the requested times fall inside the selected shots', 'VALIDATION_ERROR');
+  pump();
+  return { jobs, skipped };
+}
+
+function cancelEntry(projectId, entry) {
+  if (!isBlenderJobActive(entry)) return false;
+  const tasks = waiting.get(projectId) || [];
+  const queued = tasks.findIndex((task) => task.entry === entry);
+  entry.abort.abort();
+  if (queued >= 0) {
+    tasks.splice(queued, 1);
+    if (!tasks.length) waiting.delete(projectId);
+    updateBlenderJob(entry, { status: 'canceled' });
+  }
+  return true;
+}
+
+/** Cancel one job (queued, rendering, syncing or assembling). False when it is unknown or already finished. */
+export function cancelBlenderJob(projectId, jobId) {
+  const entry = blenderJobEntry(projectId, jobId);
+  return entry ? cancelEntry(projectId, entry) : false;
+}
+
+/** Cancel every active job of a project. */
+export function cancelBlenderProjectJobs(projectId) {
+  return activeBlenderJobs(projectId).map((entry) => cancelEntry(projectId, entry)).some(Boolean);
+}

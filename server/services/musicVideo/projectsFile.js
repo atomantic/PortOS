@@ -42,7 +42,8 @@ async function cloneProjectUnqueued(id, options = {}) {
   if (!source) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
   const clone = logic.cloneProjectRecord(source, {
     ...options,
-    id: `mv-${randomUUID()}`,
+    // The service names the id when it already placed files under it (a Blender film's scripts).
+    id: options.id || `mv-${randomUUID()}`,
     now: new Date().toISOString(),
   });
   all.push(clone);

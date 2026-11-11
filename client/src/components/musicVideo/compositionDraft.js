@@ -11,6 +11,7 @@ export const RENDER_STYLES = [
   ['code', 'Code-rendered'],
   ['document', 'Composition document'],
   ['eidoverse', 'Eidoverse Video'],
+  ['blender', 'Blender film'],
 ];
 
 // One line per render style: what it is made from, whether Compose previews it live,
@@ -21,6 +22,7 @@ export const RENDER_STYLE_HELP = {
   code: 'Draws the song in code with no footage: no generation needed, frame-by-frame preview in Shots, limited 720p Canvas output.',
   document: 'Renders your composition document (Three.js or Canvas): no footage required, live preview in Shots, 1080p at 24 fps by default.',
   eidoverse: 'Renders an Eidoverse scene from a saved script: no footage required, no live preview, needs a track analyzed first.',
+  blender: 'Renders every shot in Blender from Python film scripts you or a coding agent write: no footage generation, shots and cuts previewed in Shots, output at the size set there. Needs Blender set to Trusted local. Typography is authored in Blender; Film look still applies.',
 };
 
 export function compositionDraft(project, patch = {}) {

@@ -100,6 +100,21 @@ export const SOCKET_EVENT_CONTRACTS = Object.freeze({
     direction: 'server-to-client', summary: 'Derived render cleanup changed; refresh the project render inventory.',
     payloadSchema: { type: 'object', required: ['projectId'], properties: { projectId: { type: 'string' } }, additionalProperties: false },
   },
+  'music-video:blender': {
+    direction: 'server-to-client',
+    summary: 'A Blender film job (sync, shot render, cut) was queued, advanced or ended (`kind: job`, at most four a second per job), or the film changed outside a job (`kind: state`); re-read the film state on `state` and on a job that ended.',
+    payloadSchema: { type: 'object', required: ['projectId', 'kind'], additionalProperties: false, properties: {
+      projectId: { type: 'string' }, kind: { type: 'string', enum: ['job', 'state'] },
+      job: { type: 'object', required: ['id', 'kind', 'status'], properties: {
+        id: { type: 'string' }, kind: { type: 'string', enum: ['sync', 'render', 'cut'] },
+        status: { type: 'string', enum: ['queued', 'running', 'encoding', 'done', 'error', 'canceled'] },
+        shotId: { type: 'string' }, quality: { type: 'string', enum: ['still', 'preview', 'final'] },
+        frame: { type: 'integer' }, index: { type: 'integer' }, total: { type: 'integer' }, secPerFrame: { type: 'number' },
+        queuedAt: { type: 'string' }, startedAt: { type: 'string' }, finishedAt: { type: 'string' },
+        error: { type: 'string' }, code: { type: 'string' }, problems: { type: 'array', items: { type: 'string' } }, logFile: { type: 'string' },
+      } },
+    } },
+  },
   'music-video:research-seed': {
     direction: 'server-to-client', summary: 'Research and seed for a shot (sceneId) or cameo (cameoId) started, imported photos (with the saved project), or failed.',
     payloadSchema: { type: 'object', required: ['projectId', 'status'], properties: {

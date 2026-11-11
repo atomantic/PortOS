@@ -62,6 +62,7 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 | [MODEL-COMPARISON.md](./MODEL-COMPARISON.md) | Sourced provider/model/effort comparisons, cost estimates and CoS research refresh |
 | [THREEJS_MODELS.md](./THREEJS_MODELS.md) | Three.js procedural 3D model generation and trust boundary |
 | [features/music-video-autonomous.md](./features/music-video-autonomous.md) | One-prompt autonomous music videos: brief → lyrics → mood board → Suno song → production, optional checkpoints, and the `music-video-autopilot` scheduled task that turns Brain ideas into videos |
+| [features/music-video-blender.md](./features/music-video-blender.md) | Blender film render style: Python scripts that build every shot in Blender, the workspace and film contract, per-shot renders and staleness, cuts, the final render, and the Trusted local requirement |
 | [features/music-video-frame-capture.md](./features/music-video-frame-capture.md) | Shared paused-video/capture color interpretation, synthetic evidence and browser limits |
 | [features/music-video-photo-sequences.md](./features/music-video-photo-sequences.md) | Ordered existing photos within one still shot, frame/beat cadence, persistence and preview/export timing |
 | [features/music-video-temporal-evidence.md](./features/music-video-temporal-evidence.md) | Performance source provenance, synchronized playback and optional local temporal analyzer protocol |
