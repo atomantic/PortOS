@@ -58,7 +58,6 @@ describe('trellis2 path resolution', () => {
 
 describe('isTrellis2Installed', () => {
   const venv = trellis2VenvPython(BASE);
-  const script = trellis2GenerateScript(BASE);
 
   it('is installed only when BOTH the venv python and generate.py exist', () => {
     expect(isTrellis2Installed({ base: BASE, exists: () => true })).toBe(true);
@@ -69,7 +68,7 @@ describe('isTrellis2Installed', () => {
   });
 
   it('is not installed when generate.py is missing', () => {
-    expect(isTrellis2Installed({ base: BASE, exists: (p) => p !== script })).toBe(false);
+    expect(isTrellis2Installed({ base: BASE, exists: (p) => p === venv })).toBe(false);
   });
 
   it('is not installed on a clean host', () => {
@@ -354,6 +353,9 @@ describe('parseGenerateProgress', () => {
     ['Baking PBR textures via KDTree (1024x1024)...', 'texturing', 65],
     ['  UV unwrapping with xatlas...', 'texturing', 72],
     ['  Simplifying mesh: 1,604,201 -> ~200,000 faces', 'texturing', 72],
+    ['Simplifying [thres=1.00e-08]: 100%|██████████| 683/683', 'texturing', 72],
+    ['xatlas: Computing charts:  20%|██        | 20/100', 'texturing', 72],
+    ['Gathering results from xatlas: 100%|██████████| 892/892', 'texturing', 72],
   ])('maps the %o banner to a %s frame at %i%%', (line, stage, percent) => {
     expect(parseGenerateProgress(line)).toMatchObject({ stage, percent, message: line.trim() });
   });
@@ -395,7 +397,7 @@ describe('parseGenerateProgress', () => {
 });
 
 describe('runTrellis2Generate', () => {
-  const installed = () => true;
+  const installed = (path) => !path.includes('portos-source');
 
   const makeChild = () => {
     const child = new EventEmitter();
@@ -410,6 +412,17 @@ describe('runTrellis2Generate', () => {
     const { promise } = runTrellis2Generate({ imagePath: 'a.png', base: BASE, exists: () => false, spawnImpl });
     await expect(promise).rejects.toMatchObject({ code: 'TRELLIS2_NOT_INSTALLED' });
     expect(spawnImpl).not.toHaveBeenCalled();
+  });
+
+  it('renders from the verified snapshot after Install or Repair', async () => {
+    const child = makeChild();
+    const spawnImpl = vi.fn(() => child);
+    const { promise } = runTrellis2Generate({ imagePath: 'a.png', base: BASE, exists: () => true, spawnImpl });
+    const source = join(trellis2Root(BASE), '.venv', 'portos-source');
+    expect(spawnImpl.mock.calls[0][1]).toContain(join(source, 'generate.py'));
+    expect(spawnImpl.mock.calls[0][2]).toEqual({ cwd: source });
+    child.emit('close', null);
+    await expect(promise).rejects.toMatchObject({ code: 'TRELLIS2_GENERATE_FAILED' });
   });
 
   it('wires the generate command, streams progress, and resolves with the produced asset', async () => {
@@ -435,6 +448,7 @@ describe('runTrellis2Generate', () => {
       ],
       { cwd: trellis2Root(BASE) },
     );
+    child.stderr.emit('data', 'Loading weights: 100%|██████████| 42/42\n');
     child.stdout.emit('data', 'Generating 3D model (pipeline=512, seed=42)...\n');
     child.stdout.emit('data', 'Sampling:  50%|█████     | 6/12\n');
     child.stdout.emit('data', '  Saved: /out/a.glb\n');
@@ -442,6 +456,7 @@ describe('runTrellis2Generate', () => {
     await expect(promise).resolves.toEqual({ assetPath: '/out/a.glb' });
     expect(postprocessGlb).toHaveBeenCalledWith('/out/a.glb');
     expect(frames).toEqual([
+      { stage: 'loading', percent: 3, message: 'Loading weights: 100%|██████████| 42/42' },
       { stage: 'generating', percent: 10, message: 'Generating 3D model (pipeline=512, seed=42)...' },
       { stage: 'generating', percent: 30, message: 'Sampling:  50%|█████     | 6/12' },
       { stage: 'export', percent: 92, assetPath: '/out/a.glb', message: 'Saved: /out/a.glb' },

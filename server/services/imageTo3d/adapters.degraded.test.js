@@ -97,7 +97,7 @@ describe('trellis2 degraded-state projection', () => {
     probeTrellis2TextureBake.mockResolvedValueOnce(fallback(['o_voxel', 'mtlbvh']));
     const state = await describeTrellis2();
     expect(state.fields.degraded).toEqual({
-      label: 'degraded textures', help: 'fix it', repairable: false, detail: 'Missing: o_voxel, mtlbvh',
+      label: 'degraded textures', help: 'fix it', repairable: true, detail: 'Missing: o_voxel, mtlbvh',
     });
     expect(state.warnings).toEqual(['fix it Missing: o_voxel, mtlbvh.']);
   });

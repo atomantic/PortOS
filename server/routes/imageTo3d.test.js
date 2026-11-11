@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
+import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { writeFile, rm } from 'node:fs/promises';
@@ -172,7 +173,7 @@ describe('image-to-3d routes', () => {
     expect(res.body.targets[0].degraded).toEqual({
       label: 'degraded textures',
       help: 'fix it',
-      repairable: false,
+      repairable: true,
       // #4636: `help` names the remedy, `detail` names what is actually missing —
       // without it a Repair that keeps failing only ever reprints the same sentence.
       detail: 'Missing: mtldiffrast',
@@ -209,7 +210,6 @@ describe('image-to-3D install profile preflight', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it.each([
-    ['trellis2', trellis2.isTrellis2Installed, /TRELLIS.2 Metal.*Eigen/],
     ['trellis2Cuda', isTrellis2CudaInstalled, /TRELLIS.2 CUDA.*PyTorch CUDA wheels/],
     ['pixal3dCuda', isPixal3dCudaInstalled, /Pixal3D CUDA.*MoGe, NATTEN/],
   ])('reports the unresolved %s profile for fresh Install and Repair', async (id, installed, missing) => {
@@ -230,16 +230,31 @@ describe('image-to-3D install profile preflight', () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
-  it('applies the same preflight to the legacy TRELLIS.2 URL', async () => {
+  it.each([
+    ['/api/image-to-3d/trellis2/install', false],
+    ['/api/image-to-3d/targets/trellis2/install?repair=1', true],
+  ])('runs the locked TRELLIS.2 installer through %s', async (path, repair) => {
+    if (repair) trellis2.isTrellis2Installed.mockReturnValueOnce(true);
+    spawn.mockImplementationOnce(() => {
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      process.nextTick(() => {
+        child.stdout.emit('data', 'Native imports verified');
+        child.emit('close', 0);
+      });
+      return child;
+    });
     const app = makeApp();
-    const path = '/api/image-to-3d/trellis2/install';
-    const status = await request(app).get(path);
-    expect(status.body.target).toMatchObject({ id: 'trellis2', installed: false });
     const res = await request(app).post(path);
-    expect(sseFrames(res.text)).toEqual([
-      { type: 'error', stage: 'preflight', message: status.body.target.installBlockedReason },
-    ]);
-    expect(spawn).not.toHaveBeenCalled();
+    const frames = sseFrames(res.text);
+    expect(frames).toContainEqual({ type: 'log', stage: 'bootstrap', message: 'Native imports verified' });
+    expect(frames.at(-1)).toMatchObject({ type: 'complete' });
+    expect(spawn).toHaveBeenCalledWith('bash', [
+      expect.stringMatching(/setup-trellis2-mps\.sh$/), expect.stringMatching(/trellis2$/),
+    ], expect.any(Object));
+    expect(spawn.mock.calls[0][2].env).not.toHaveProperty('HF_TOKEN');
+    expect(spawn.mock.calls[0][2].env).not.toHaveProperty('HUGGINGFACE_HUB_TOKEN');
   });
 
   it('keeps the already-installed response and its degraded runtime warning', async () => {

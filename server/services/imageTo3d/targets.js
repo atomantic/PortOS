@@ -75,12 +75,12 @@ export const IMAGE_TO_3D_TARGETS = Object.freeze({
     executionLane: EXECUTION_LANE.LOCAL_MPS,
     outputKind: OUTPUT_KIND.GLB_MESH,
     // Floor for the shipped local-MPS lane (the `trellis-mac` port): Apple
-    // Silicon (M1+), 24 GB+ unified memory, ~15 GB weights on disk, Python 3.11+.
+    // Silicon (M1+), 24 GB+ unified memory, ~15 GB weights on disk, Python 3.13.
     requires: Object.freeze({
       appleSilicon: true,
       minUnifiedMemoryGb: 24,
       diskGb: 15,
-      python: '3.11',
+      python: '3.13',
     }),
     // Maps the shared abstract detail tiers onto this port's own `--pipeline-type`
     // values. `auto` is absent deliberately: it means "derive from unified memory"
@@ -99,9 +99,10 @@ export const IMAGE_TO_3D_TARGETS = Object.freeze({
     // Community MPS port that makes the CUDA-only upstream run on Apple Silicon.
     port: 'https://github.com/shivampkumar/trellis-mac',
     weightsRepo: 'microsoft/TRELLIS.2-4B',
-    installBlockedReason:
-      'Install and Repair require a locked TRELLIS.2 Metal profile for the Python packages, '
-      + 'Metal extension sources and Eigen submodule.',
+    installNotes:
+      'Requires macOS 26+, full Xcode 26+ with the Metal Toolchain, and Python 3.13. '
+      + 'Installs the verified Torch 2.15 / Metal profile; Repair rebuilds the private '
+      + 'environment and retains downloaded models.',
     // Optional user-actionable prerequisites. The target descriptor is the source
     // for both the API/UI notice and runner auth guidance, so new targets do not
     // need their gated Hugging Face dependencies duplicated in either consumer.

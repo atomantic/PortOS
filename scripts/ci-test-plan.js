@@ -552,6 +552,12 @@ export const FIXTURE_OWNERS = [
     fileRe: /^ltx25_cuda_currency\.py$/,
     tests: ['server/services/videoGen/runtimes.test.js'],
   },
+  {
+    re: /^scripts\/(?:setup-trellis2-mps\.sh|requirements-trellis2-mps(?:\.lock)?\.txt)$/,
+    dir: 'scripts',
+    fileRe: /^(?:setup-trellis2-mps\.sh|requirements-trellis2-mps(?:\.lock)?\.txt)$/,
+    tests: ['scripts/setup-trellis2-mps.test.js', 'server/routes/imageTo3d.test.js'],
+  },
   // Pip pins consumed only by an explicit Install/Repair (`setup-image-video.sh`,
   // and the FLUX.3 and lyric-alignment locks read by flux3Runtime.js and
   // lyricForcedAlign.js). The installer-contract tests exercise those installers.
