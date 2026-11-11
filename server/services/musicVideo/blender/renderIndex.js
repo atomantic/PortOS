@@ -57,16 +57,15 @@ function staleReasons(meta, range, { fps, shotHash, settingsHash, optionsHash })
   return reasons;
 }
 
-// A picture of the render for lists: the poster made with its video (else its middle frame,
-// while the frames are kept); for a render that never finished, the first frame it left.
-async function posterOf(projectId, shot, quality, range, complete) {
-  const frame = (number) => join(blenderFramesDir(projectId, shot.id, quality), blenderFrameName(number, quality));
-  const candidates = complete
-    ? [blenderShotPoster(projectId, shot.id, quality), frame(range.startFrame + Math.floor(range.frameCount / 2))]
-    : [frame(range.startFrame)];
-  for (const path of candidates) if (await isFile(path)) return blenderMediaPath(projectId, path);
-  return null;
+// Only small, completed-render posters belong in lists, never lossless frame PNGs.
+async function posterOf(projectId, shot, quality, complete) {
+  if (!complete) return null;
+  const poster = blenderShotPoster(projectId, shot.id, quality);
+  return await isFile(poster) ? blenderMediaPath(projectId, poster) : null;
 }
+
+/** The small JPEG beside a still; older stills may not have one. */
+export const blenderStillThumbnail = (file) => file.replace(/\.png$/, '.thumb.jpg');
 
 async function readQuality(projectId, shot, quality, current) {
   const meta = await readBlenderJson(blenderRenderFile(projectId, shot.id, quality));
@@ -76,7 +75,7 @@ async function readQuality(projectId, shot, quality, current) {
   const range = blenderShotFrameRange(shot, current.fps);
   const complete = meta.complete === true && hasVideo;
   const reasons = staleReasons(meta, range, current);
-  const poster = await posterOf(projectId, shot, quality, range, complete);
+  const poster = await posterOf(projectId, shot, quality, complete);
   return {
     file: hasVideo ? blenderMediaPath(projectId, video) : null,
     frames: Number.isInteger(meta.frameCount) ? meta.frameCount : range.frameCount,
@@ -101,7 +100,9 @@ async function readStills(projectId, shot, { shotHash, optionsHash }) {
     if (typeof still?.file !== 'string' || !/^t\d{9,}\.png$/.test(still.file)) continue;
     const absolute = join(blenderShotDir(projectId, shot.id, 'stills'), still.file);
     if (!(await isFile(absolute))) continue;
+    const thumbnail = blenderStillThumbnail(absolute);
     stills.push({
+      ...(await isFile(thumbnail) ? { thumbnail: blenderMediaPath(projectId, thumbnail) } : {}),
       file: blenderMediaPath(projectId, absolute), timeSec: still.timeSec, createdAt: still.createdAt || null,
       stale: still.srcHash !== shotHash || (still.optionsHash ?? BLENDER_NO_OPTIONS_HASH) !== optionsHash,
     });

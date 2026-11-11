@@ -439,6 +439,7 @@ describe('Blender film shot renders', () => {
     // The first frame of shot 1 was written before the cancel and survives it.
     const partial = (await state()).renders.s010.final;
     expect(partial).toMatchObject({ complete: false, stale: false, partialFrames: 1, file: null });
+    expect(partial.poster).toBeUndefined();
     blender.fake.control.hold = null;
     release();
     blender.fake.control.jobs.length = 0;
@@ -490,6 +491,14 @@ describe('Blender film shot renders', () => {
     expect(timed.skipped).toEqual(['s020']);
     const stills = (await state()).renders;
     expect(stills.s020.stills).toEqual([expect.objectContaining({ file: 's020/stills/t000003000.png', timeSec: 3, stale: false })]);
+    const thumbnail = stills.s020.stills[0].thumbnail;
+    expect(thumbnail).toBe('s020/stills/t000003000.thumb.jpg');
+    const picture = await request(app).get(api(`/media?path=${encodeURIComponent(thumbnail)}`));
+    expect(picture.status).toBe(200);
+    expect(picture.headers['content-type']).toMatch(/image\/jpeg/);
+    expect(Number(picture.headers['content-length'])).toBeLessThan(50_000);
+    const { default: sharp } = await import('sharp');
+    expect(await sharp(join(workspace(), 'renders', thumbnail)).metadata()).toMatchObject({ width: 320, height: 180 });
     expect(stills.s030.stills.map((still) => still.timeSec)).toEqual([4.25]);
     expect((await request(app).post(api('/render')).send({ quality: 'still', times: [99] })).status).toBe(400);
     expect((await request(app).post(api('/render')).send({ quality: 'preview', times: [1] })).status).toBe(400);
@@ -726,7 +735,7 @@ describe('Blender film disk use', () => {
     expect(readdirSync(shotDir('s020', 'final')).sort()).toEqual(['poster.jpg', 'render.json', 'shot.mp4']);
     const after = await state();
     expect(after.renders.s020.final).toMatchObject({ complete: true, stale: false, file: 's020/final/shot.mp4', poster: 's020/final/poster.jpg' });
-    expect(after.renders.s010.preview).toMatchObject({ complete: false, partialFrames: 1, poster: 's010/preview/frames/frame_000000.jpg' });
+    expect(after.renders.s010.preview).toMatchObject({ complete: false, partialFrames: 1 });
     blender.fake.control.jobs.length = 0;
     await renderAll('preview', { shotIds: ['s010'] });
     expect(blender.fake.control.jobs[0].resume).toBe(true);
