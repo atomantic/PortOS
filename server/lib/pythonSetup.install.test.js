@@ -3,8 +3,11 @@ import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { LOCK_PROFILES } from './pythonLockProfiles.js';
 
-const mock = vi.hoisted(() => ({ spawn: vi.fn(), ensureUv: vi.fn(), ambientUv: vi.fn(() => '/ambient/bin/uv') }));
-vi.mock('./childProcess.js', async (original) => ({ ...await original(), spawn: mock.spawn }));
+const mock = vi.hoisted(() => ({ spawn: vi.fn(), execFileAsync: vi.fn(), ensureUv: vi.fn(), ambientUv: vi.fn(() => '/ambient/bin/uv') }));
+vi.mock('./childProcess.js', async (original) => ({
+  ...await original(), spawn: mock.spawn,
+  execFile: Object.assign(vi.fn(), { [Symbol.for('nodejs.util.promisify.custom')]: (...args) => mock.execFileAsync(...args) }),
+}));
 vi.mock('./processEnv.js', async (original) => ({ ...await original(), whichFirstSync: mock.ambientUv }));
 vi.mock('./privateUv.js', async (original) => ({ ...await original(), ensurePrivateUv: mock.ensureUv }));
 const { installLockedRuntime, installPackages } = await import('./pythonSetup.js');
@@ -15,6 +18,7 @@ const spawned = () => mock.spawn.mock.calls.map(([bin, args]) => [bin, ...args].
 beforeEach(() => {
   mock.ambientUv.mockClear();
   mock.ensureUv.mockReset().mockResolvedValue({ ok: true, uv: '/private/tools/uv' });
+  mock.execFileAsync.mockReset().mockResolvedValue({ stdout: 'False' });
   forced.length = 0;
   mock.spawn.mockReset().mockImplementation((_bin, args) => {
     // The one-entry requirements file is removed once the install ends; capture it live.
@@ -137,6 +141,17 @@ describe('installPackages generic repair', () => {
     await installPackages('/image/python', ['mflux'], vi.fn(), { appleSilicon: true, preferUv: true }).promise;
     expect(spawned()).toEqual([`/private/tools/uv pip install --python /image/python --require-hashes --no-deps --only-binary :all: -r ${LOCK_PROFILES.mflux.lockFile}`]);
     expect(mock.ambientUv).not.toHaveBeenCalled();
+  });
+
+  it('does not uninstall or install packages after cancellation during the interpreter probe', async () => {
+    let finishProbe;
+    mock.execFileAsync.mockReturnValueOnce(new Promise((resolve) => { finishProbe = resolve; }));
+    const install = installPackages('/image/python', ['mlx-video-with-audio>=0.1.35', 'mlx_vlm', 'mflux'], vi.fn(), { appleSilicon: true });
+    expect(mock.execFileAsync).toHaveBeenCalledWith('/image/python', ['-c', 'import sys; print(sys.prefix != sys.base_prefix)'], expect.any(Object));
+    install.kill();
+    finishProbe({ stdout: 'False' });
+    await expect(install.promise).resolves.toEqual({ ok: false, code: -1 });
+    expect(mock.spawn).not.toHaveBeenCalled();
   });
 
   it.each([
