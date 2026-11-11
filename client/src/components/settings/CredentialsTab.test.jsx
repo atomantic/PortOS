@@ -125,3 +125,19 @@ it('saves and clears a write-only key with immediate feedback and no displayed s
   fireEvent.click(screen.getByRole('button', { name: 'Clear saved key' }));
   await waitFor(() => expect(mock.saveCredential).toHaveBeenCalledWith('huggingface', '', { silent: true }));
 });
+
+it('loads a downloaded key file into the write-only draft and saves its contents', async () => {
+  const row = { ...PAYLOAD.credentials[0], id: 'example-cloud', label: 'Example Cloud', editable: true, keyFile: '.json' };
+  mock.getCredentialInventory.mockResolvedValue({ ...PAYLOAD, credentials: [row] });
+  mock.saveCredential.mockResolvedValue(row);
+  render(<MemoryRouter><CredentialsTab /></MemoryRouter>);
+  const input = await screen.findByLabelText('New Example Cloud key');
+  const keyJson = '{"type":"service_account","project_id":"example-project"}';
+  const file = new File([`${keyJson}\n`], 'example-key.json', { type: 'application/json' });
+  fireEvent.change(document.getElementById('credential-example-cloud-file'), { target: { files: [file] } });
+  await waitFor(() => expect(input.value).toBe(keyJson));
+  expect(screen.getByRole('status').textContent).toMatch(/Loaded example-key\.json/);
+  expect(screen.queryByText(/example-project/)).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Save key' }));
+  await waitFor(() => expect(mock.saveCredential).toHaveBeenCalledWith('example-cloud', keyJson, { silent: true }));
+});

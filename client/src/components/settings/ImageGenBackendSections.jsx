@@ -13,6 +13,7 @@ import RunwayModelSelect from '../imageGen/RunwayModelSelect';
 import FalModelSelect from '../imageGen/FalModelSelect';
 import HiggsfieldModelSelect from '../imageGen/HiggsfieldModelSelect';
 import GoogleModelSelect from '../imageGen/GoogleModelSelect';
+import KeyFileButton from './KeyFileButton';
 import {
   IMAGE_GEN_MODE, IMAGE_PIN_MODES, RENDER_TARGET_BACKEND_AUTO, RENDER_TARGET_OPTIONS, VIDEO_RENDER_MODES, modeLabel,
   normalizeRenderPinValue, supportsCloudModelOverride,
@@ -59,15 +60,16 @@ const VIDEO_KEY_ROWS = [
     missing: 'No Higgsfield key configured — the Higgsfield video and image backends will be unavailable.',
   },
   {
-    id: 'google-cloud', label: 'Google Cloud (Agent Platform) credential', placeholder: 'API key, or paste the service account JSON', envLabel: 'GOOGLE_CLOUD_API_KEY',
-    hint: 'Enables the Google video backend (Veo) on the Video Gen page and the Google image backend (Google tab). Paste an Agent Platform API key, or the whole JSON key of a service account with the Agent Platform User (roles/aiplatform.user) role. Set the project and region on the Google tab. Or set the GOOGLE_CLOUD_API_KEY environment variable instead.',
+    id: 'google-cloud', label: 'Google Cloud (Agent Platform) credential', placeholder: 'API key, or paste the service account JSON', envLabel: 'GOOGLE_CLOUD_API_KEY', keyFile: '.json',
+    hint: 'Enables the Google video backend (Veo) on the Video Gen page and the Google image backend (Google tab). Paste an Agent Platform API key, or open (or paste) the JSON key file of a service account with the Agent Platform User (roles/aiplatform.user) role. Set the project and region on the Google tab. Or set the GOOGLE_CLOUD_API_KEY environment variable instead.',
     missing: 'No Google credential configured — the Google video and image backends will be unavailable.',
   },
 ];
 
 function VideoKeyRow({ row, spec, busy, onSave, onClear }) {
   const [input, setInput] = useState('');
-  const save = () => onSave(spec.id, input).then((ok) => { if (ok) setInput(''); });
+  const [loadedFile, setLoadedFile] = useState(null);
+  const save = () => onSave(spec.id, input).then((ok) => { if (ok) { setInput(''); setLoadedFile(null); } });
   return (
     <div className="space-y-2 border border-port-border rounded-lg p-3">
       <div className="text-sm text-gray-300">
@@ -97,7 +99,7 @@ function VideoKeyRow({ row, spec, busy, onSave, onClear }) {
             id={`${spec.id}-api-key`}
             type="password"
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(e) => { setInput(e.target.value); setLoadedFile(null); }}
             onKeyDown={(e) => { if (e.key === 'Enter') save(); }}
             disabled={busy !== null}
             placeholder={spec.placeholder}
@@ -105,6 +107,10 @@ function VideoKeyRow({ row, spec, busy, onSave, onClear }) {
             className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
           />
         </FormField>
+        {spec.keyFile && (
+          <KeyFileButton id={`${spec.id}-key-file`} accept={spec.keyFile} disabled={busy !== null}
+            onLoad={(text, name) => { setInput(text); setLoadedFile(name); }} />
+        )}
         <button
           type="button"
           onClick={save}
@@ -115,6 +121,7 @@ function VideoKeyRow({ row, spec, busy, onSave, onClear }) {
           Save key
         </button>
       </div>
+      {loadedFile && input && <p role="status" className="text-xs text-gray-400">Loaded {loadedFile}. Save key to store it.</p>}
       {row?.source === 'settings' && (
         <button
           type="button"
