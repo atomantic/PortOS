@@ -140,10 +140,10 @@ describe('image-to-3d generic target dispatch (#3080)', () => {
   });
 
   it.each([false, true])('offers a resume hint only for a transient failure (%s)', async (transient) => {
-    fakeInstall.mockReturnValueOnce({
+    fakeInstall.mockImplementationOnce(() => ({
       promise: Promise.reject(Object.assign(new Error('setup failed'), { stage: 'setup', transient })),
       kill: vi.fn(),
-    });
+    }));
     const res = await request(makeApp()).post('/api/image-to-3d/targets/fakegen/install');
     const frame = sseFrames(res.text).at(-1);
     expect(frame).toMatchObject({ type: 'error', stage: 'setup' });

@@ -208,7 +208,8 @@ in-flight run as interrupted and retryable; it never calls a provider.
 PortOS reports an unresolved profile before Install or Repair for TRELLIS.2 Metal,
 TRELLIS.2 CUDA and Pixal3D CUDA. An existing runtime remains available for
 generation on compatible hardware. Pixal3D Metal offers Install and Repair through
-its [locked profile](PIXAL3D_MPS.md).
+the [locked profile](PIXAL3D_MPS.md) shipped in
+[#15698](https://github.com/atomantic/PortOS/pull/15698).
 
 The table records the inputs inspected on 2026-11-10 for
 [dependency coverage issue #15654](https://github.com/atomantic/PortOS/issues/15654).
