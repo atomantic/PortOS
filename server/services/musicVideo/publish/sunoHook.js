@@ -42,7 +42,7 @@ async function selectSong(page, payload) {
   const readRows = () => page.evaluate(() => [...document.querySelectorAll('[role=dialog] button')]
     .filter((b) => (b.innerText || '').trim() === 'Use')
     .map((b) => {
-      let row = b;
+      let row = b.parentElement || b;
       for (let i = 0; i < 4 && row.parentElement && row.parentElement.querySelectorAll('button').length < 3; i += 1) row = row.parentElement;
       return { text: row.innerText || '', html: row.innerHTML };
     }));
