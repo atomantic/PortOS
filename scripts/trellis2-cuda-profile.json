@@ -397,5 +397,9 @@
     "FLASHATTENTION_DISABLE_ALIBI",
     "FLASHATTENTION_DISABLE_SOFTCAP",
     "FLASHATTENTION_DISABLE_LOCAL"
-  ]
+  ],
+  "transformers": "5.22.1",
+  "runtimePatches": {
+    "dinov3EncoderLayers": "self.model.model.layer"
+  }
 }

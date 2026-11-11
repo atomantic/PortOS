@@ -38,6 +38,11 @@ softcap and local-window kernels for this image inference profile. All forward
 head dimensions and both FP16/BF16 remain available. The exact defines are
 recorded in the profile; disabling unused kernels avoids compiling the training
 and attention variants this pipeline never calls.
+The pinned Transformers **5.22.1** moved DINOv3's layer list into its encoder.
+Setup updates TRELLIS.2's private feature extractor to that path while preserving
+its layer loop and unweighted feature normalization. Verification exercises a
+tiny randomly initialized DINOv3 model without downloading weights, so a future
+encoder API mismatch fails Install rather than the first user render.
 
 Repair recreates only `<runtime>/.conda`, including its private source snapshot.
 Downloaded weights elsewhere in the runtime or Hugging Face cache stay in place.

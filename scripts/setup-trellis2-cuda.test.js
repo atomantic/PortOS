@@ -35,14 +35,18 @@ with tempfile.TemporaryDirectory() as directory:
     # Upstream repeats the backward switch in its CUDA and ROCm build blocks.
     build_text = 'cuda_flags = ' + flags + 'rocm_flags = [\n# "-DFLASHATTENTION_DISABLE_BACKWARD",\n]\n'
     with tarfile.open(fileobj=data, mode='w:gz') as archive:
-        member = tarfile.TarInfo('fixture/setup.py')
+        member = tarfile.TarInfo('fixture/deps/flash-attention/setup.py')
         content = build_text.encode()
+        member.size = len(content)
+        archive.addfile(member, io.BytesIO(content))
+        member = tarfile.TarInfo('fixture/trellis2/modules/image_feature_extractor.py')
+        content = b'for layer in self.model.layer: pass\n'
         member.size = len(content)
         archive.addfile(member, io.BytesIO(content))
     source_archive = data.getvalue()
     profile = {**actual, 'condaArtifacts': [], 'sources': [],
                'micromamba': {'url': 'https://fixture.invalid/tool', 'sha256': hashlib.sha256(bootstrap).hexdigest()}}
-    profile['sources'] = [{'name': 'flash-attention', 'destination': 'deps/flash-attention',
+    profile['sources'] = [{'name': 'source', 'destination': '.',
                            'url': 'https://fixture.invalid/source', 'sha256': hashlib.sha256(source_archive).hexdigest()}]
     (m.SCRIPTS / 'trellis2-cuda-profile.json').write_text(json.dumps(profile))
     root = temporary / 'runtime'
@@ -76,6 +80,8 @@ with tempfile.TemporaryDirectory() as directory:
             built = (root / '.conda/portos-source/deps/flash-attention/setup.py').read_text()
             assert '-std=c++20' in built and '-std=c++17' not in built
             assert all('# "-D' + flag not in built for flag in actual['flashAttentionDefines'])
+            feature = (root / '.conda/portos-source/trellis2/modules/image_feature_extractor.py').read_text()
+            assert 'self.model.model.layer' in feature and 'self.model.layer' not in feature
         creates = [a for a, k in calls if 'create' in a]
         assert len(creates) == 2
         assert all('--offline' in a and '--file' in a for a in creates)

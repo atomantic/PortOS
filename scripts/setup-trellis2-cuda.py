@@ -100,17 +100,33 @@ def patch_build(directory, package, profile):
     setup.write_text(text)
 
 
+def patch_runtime(source_root, profile):
+    feature = source_root / 'trellis2/modules/image_feature_extractor.py'
+    text = feature.read_text()
+    if text.count('self.model.layer') != 1:
+        raise SystemExit('Unexpected TRELLIS.2 DINOv3 encoder interface.')
+    feature.write_text(text.replace('self.model.layer', profile['runtimePatches']['dinov3EncoderLayers']))
+
+
 VERIFY = """
 import importlib.metadata as metadata, json, torch, torchvision
 import flash_attn, flash_attn_2_cuda, _nvdiffrast_c
 import nvdiffrec_render.renderutils._C, cumesh._C, cumesh._cubvh
 import flex_gemm.kernels.cuda, o_voxel._C, o_voxel.postprocess
 from trellis2.pipelines import Trellis2ImageTo3DPipeline
+from trellis2.modules.image_feature_extractor import DinoV3FeatureExtractor
+from transformers import DINOv3ViTConfig, DINOv3ViTModel
 assert torch.__version__ == '2.14.1+cu126'
 assert torchvision.__version__ == '0.29.1+cu126'
 assert torch.version.cuda == '12.6'
 assert torch.cuda.is_available(), 'CUDA is unavailable'
 assert torch.cuda.get_device_capability(0) == (8, 6)
+assert metadata.version('transformers') == '5.22.1'
+extractor = DinoV3FeatureExtractor.__new__(DinoV3FeatureExtractor)
+extractor.model = DINOv3ViTModel(DINOv3ViTConfig(hidden_size=32, intermediate_size=64,
+    num_hidden_layers=1, num_attention_heads=4, image_size=32, patch_size=16, num_register_tokens=4)).eval()
+features = extractor.extract_features(torch.randn(1, 3, 32, 32))
+assert features.shape == (1, 9, 32) and torch.isfinite(features).all()
 q = torch.randn(1, 16, 2, 32, device='cuda', dtype=torch.float16)
 assert torch.isfinite(flash_attn.flash_attn_func(q, q, q)).all()
 print(json.dumps({d.metadata['Name']: d.version for d in metadata.distributions()}))
@@ -168,6 +184,7 @@ def install(root, cuda):
         destination = source_root / item['destination']
         destination.parent.mkdir(parents=True, exist_ok=True)
         unpack(archive, destination)
+    patch_runtime(source_root, profile)
     packages = ['utils3d', 'flash-attention', 'nvdiffrast', 'nvdiffrec', 'CuMesh', 'FlexGEMM', '../o-voxel']
     for package in packages:
         directory = source_root / 'deps' / package
