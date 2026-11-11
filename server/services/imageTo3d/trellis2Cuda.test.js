@@ -68,6 +68,16 @@ describe('trellis2Cuda path resolution', () => {
 });
 
 describe('isTrellis2CudaInstalled', () => {
+  it('uses only the completed private profile and never falls back after a failed Repair', () => {
+    const prefix = join(ROOT, '.conda');
+    const python = join(prefix, 'bin', 'python');
+    const complete = [prefix, python, join(prefix, 'portos-profile.json'), join(prefix, 'portos-source', 'trellis2')];
+    const options = { base: BASE, env: CONDA_ENV, exists: existsFor(...complete, CONDA_PY, join(ROOT, 'trellis2')) };
+    expect(isTrellis2CudaInstalled(options)).toBe(true);
+    expect(trellis2CudaPython(options)).toBe(python);
+    expect(isTrellis2CudaInstalled({ ...options, exists: existsFor(prefix, python, CONDA_PY, join(ROOT, 'trellis2')) })).toBe(false);
+    expect(isTrellis2CudaInstalled({ ...options, exists: existsFor(...complete, CONDA_PY, join(ROOT, 'portos-installing')) })).toBe(false);
+  });
   it('is true only when BOTH the conda python and the upstream package exist', () => {
     expect(isTrellis2CudaInstalled({ base: BASE, exists: INSTALLED, env: CONDA_ENV })).toBe(true);
   });

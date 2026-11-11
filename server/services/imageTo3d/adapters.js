@@ -66,6 +66,7 @@ import {
 import { installTrellis2 } from './trellis2Install.js';
 import {
   isTrellis2CudaInstalled,
+  installTrellis2Cuda,
   runTrellis2CudaGenerate,
 } from './trellis2Cuda.js';
 import {
@@ -123,6 +124,7 @@ export const TARGET_ADAPTERS = Object.freeze({
   }),
   trellis2Cuda: Object.freeze({
     isInstalled: isTrellis2CudaInstalled,
+    install: installTrellis2Cuda,
     // Upstream's 4B pipeline conditions on the gated DINOv3 repo, so this lane needs
     // the resolved Hugging Face token at render time.
     resolveEnv: hfChildEnv,

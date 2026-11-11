@@ -13,7 +13,7 @@ import {
   parseGenerateProgress,
   trellis2OutputStem,
 } from './trellis2.js';
-import { textMatcher, runGenerateSubprocess } from './laneRunner.js';
+import { textMatcher, runGenerateSubprocess, runInstallSteps } from './laneRunner.js';
 import { renderOptionArgs } from './renderOptions.js';
 
 const HOME = homedir();
@@ -30,21 +30,41 @@ export function trellis2CudaRoot(base = join(HOME, '.portos')) {
   return join(base, 'trellis2-cuda');
 }
 
-/** The upstream package directory inside the clone — the second half of "installed". */
-function trellis2CudaPackageDir(base) {
-  return join(trellis2CudaRoot(base), 'trellis2');
-}
-
 /**
- * The conda Python upstream's `setup.sh --new-env` built, or null when its env doesn't
- * exist. A one-line wrapper over the shared resolver (`lib/condaEnv.js`), which owns
- * the conda-root candidate list and the `CONDA_PREFIX` walk-up both CUDA lanes need.
+ * Prefer the completed private profile. Intact legacy named Conda environments
+ * remain usable until Repair; an incomplete private rebuild cannot fall back.
  * `exists` is injectable so the probe is deterministic in tests.
  * @param {{exists?: (p: string) => boolean, env?: object}} [opts]
  * @returns {string|null}
  */
-export function trellis2CudaPython({ exists = existsSync, env } = {}) {
+export function trellis2CudaPython({ base, exists = existsSync, env } = {}) {
+  const root = trellis2CudaRoot(base);
+  const prefix = join(root, '.conda');
+  if (exists(join(root, 'portos-installing'))) return null;
+  if (exists(prefix)) {
+    const python = join(prefix, 'bin', 'python');
+    return exists(python) && exists(join(prefix, 'portos-profile.json')) ? python : null;
+  }
   return resolveCondaEnvPython(TRELLIS2_CUDA_CONDA_ENV, { exists, env });
+}
+
+function cudaSourceRoot(base, exists = existsSync) {
+  const root = trellis2CudaRoot(base);
+  return exists(join(root, '.conda')) ? join(root, '.conda', 'portos-source') : root;
+}
+
+/** Both Install and Repair rebuild only the private environment, retaining model assets. */
+export function installTrellis2Cuda({ base, onEvent, env, spawnImpl = spawn } = {}) {
+  const script = fileURLToPath(new URL('../../../scripts/setup-trellis2-cuda.py', import.meta.url));
+  return runInstallSteps({
+    steps: [{ stage: 'bootstrap', command: 'python3', args: [script, trellis2CudaRoot(base)] }],
+    label: LABEL,
+    codePrefix: CODE_PREFIX,
+    isTransient: () => false,
+    onEvent,
+    env,
+    spawnImpl,
+  });
 }
 
 /** PortOS's own generate entrypoint (upstream ships only a hard-coded `example.py`). */
@@ -53,15 +73,14 @@ export function trellis2CudaGenerateRunnerScript() {
 }
 
 /**
- * Installed ⇔ the conda env's Python exists AND the upstream package is on disk.
- * Both halves matter: `setup.sh` can create the env and then fail while building the
- * CUDA extensions, which would otherwise read as a complete install.
+ * A new profile needs its completion record and source snapshot. Preserve the
+ * existing interpreter/package detection for untouched legacy environments.
  * @param {{base?: string, exists?: (p: string) => boolean, env?: object}} [opts]
  * @returns {boolean}
  */
 export function isTrellis2CudaInstalled({ base, exists = existsSync, env } = {}) {
-  if (!trellis2CudaPython({ exists, env })) return false;
-  return exists(trellis2CudaPackageDir(base));
+  if (!trellis2CudaPython({ base, exists, env })) return false;
+  return exists(join(cudaSourceRoot(base, exists), 'trellis2'));
 }
 
 /**
@@ -136,6 +155,7 @@ export function buildCudaGenerateArgs({
   outputPath,
   base,
   python,
+  repoRoot,
   textureSize = TRELLIS2_CUDA_DEFAULT_TEXTURE_SIZE,
   decimationTarget = TRELLIS2_CUDA_DEFAULT_DECIMATION,
   steps = null,
@@ -152,13 +172,13 @@ export function buildCudaGenerateArgs({
   const args = [
     trellis2CudaGenerateRunnerScript(),
     imagePath,
-    '--repo-root', trellis2CudaRoot(base),
+    '--repo-root', repoRoot || cudaSourceRoot(base),
     '--texture-size', String(textureSize),
     '--decimation-target', String(decimationTarget),
   ];
   if (outputPath) args.push('--output', trellis2OutputStem(outputPath));
   args.push(...optionArgs);
-  return { command: python || trellis2CudaPython({}) || 'python', args };
+  return { command: python || trellis2CudaPython({ base }) || 'python', args };
 }
 
 /**
@@ -214,8 +234,9 @@ export function runTrellis2CudaGenerate({
 } = {}) {
   // Resolve the interpreter once and reuse it as the "is the env there?" answer —
   // `isTrellis2CudaInstalled` would re-walk the same candidate list on the next line.
-  const python = trellis2CudaPython({ exists, env });
-  if (!python || !exists(trellis2CudaPackageDir(base))) {
+  const python = trellis2CudaPython({ base, exists, env });
+  const repoRoot = cudaSourceRoot(base, exists);
+  if (!python || !exists(join(repoRoot, 'trellis2'))) {
     const err = new Error(`${LABEL} is not installed — install it before generating.`);
     err.code = `${CODE_PREFIX}_NOT_INSTALLED`;
     return { promise: Promise.reject(err), kill: () => {} };
@@ -226,6 +247,7 @@ export function runTrellis2CudaGenerate({
     outputPath,
     base,
     python,
+    repoRoot,
     textureSize: textureSize ?? budget.textureSize,
     decimationTarget: decimationTarget ?? budget.decimationTarget,
     steps,
@@ -234,7 +256,7 @@ export function runTrellis2CudaGenerate({
   return runGenerateSubprocess({
     command,
     args,
-    cwd: trellis2CudaRoot(base),
+    cwd: repoRoot,
     env,
     label: LABEL,
     codePrefix: CODE_PREFIX,
