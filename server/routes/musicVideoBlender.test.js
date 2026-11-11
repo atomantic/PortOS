@@ -37,6 +37,12 @@ vi.mock('../lib/ffmpeg.js', async (importOriginal) => ({
 vi.mock('../lib/launchDetached.js', () => ({ launchDetached: vi.fn(async () => {}) }));
 // The film look pass drives a browser; here it only records that it was asked to run.
 vi.mock('../services/musicVideo/filmLookFinish.js', async (importOriginal) => ({ ...await importOriginal(), applyFilmLookFinish: vi.fn(async () => true) }));
+// So does the title card capture; here it answers one clip for the card's opening window.
+vi.mock('../services/musicVideo/compositionRender.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  removeCompositionScratch: vi.fn(async () => {}),
+  renderTypographyOverlays: vi.fn(async ({ jobId, cues }) => [{ path: `/captures/${jobId}.mov`, startSec: cues[0].startSec, durationSec: cues[0].endSec - cues[0].startSec }]),
+}));
 
 const { default: musicVideoRoutes } = await import('./musicVideo.js');
 const projects = await import('../services/musicVideo/projects.js');
@@ -44,6 +50,7 @@ const { musicVideoEvents } = await import('../services/musicVideo/events.js');
 const { __resetBlenderJobsForTests } = await import('../services/musicVideo/blender/jobs.js');
 const { launchDetached } = await import('../lib/launchDetached.js');
 const { applyFilmLookFinish } = await import('../services/musicVideo/filmLookFinish.js');
+const { renderTypographyOverlays } = await import('../services/musicVideo/compositionRender.js');
 
 const app = express();
 app.use(express.json({ limit: '5mb' }));
@@ -552,6 +559,24 @@ describe('Blender film cuts, notes and media', () => {
     expect(finished.filmLook).toBe(true);
     expect(applyFilmLookFinish).toHaveBeenCalledTimes(1);
     expect(applyFilmLookFinish.mock.calls[0][0].path).toBe(join(workspace(), 'renders', finished.file));
+  });
+
+  it('lays the project title card over a cut, captured at the cut\'s own frame size', async () => {
+    await scaffold();
+    await syncFilm();
+    await renderAll('preview');
+    await projects.updateProject(project.id, { titleCard: { title: 'Example Song', artist: 'Example Artist', style: 'mtv', startSec: 1, endSec: 3 } });
+    renderTypographyOverlays.mockClear();
+    blender.ffmpeg.length = 0;
+    events.length = 0;
+    await request(app).post(api('/cut')).send({ quality: 'preview' });
+    const [ended] = await settled(1);
+    expect(ended.job.status, ended.job.error).toBe('done');
+    expect(renderTypographyOverlays).toHaveBeenCalledTimes(1);
+    expect(renderTypographyOverlays.mock.calls[0][0]).toMatchObject({ width: 960, height: 540, fps: 24, durationSec: 6, cues: [{ id: 'title-card', startSec: 1, endSec: 3 }] });
+    const painted = blender.ffmpeg.find((args) => args.includes('-itsoffset'));
+    expect(painted).toEqual(expect.arrayContaining(['-itsoffset', '1', '-i', `/captures/blender-title-${ended.job.id}.mov`, '-crf', '21']));
+    expect(painted[painted.indexOf('-filter_complex') + 1]).toContain('[0:v][c0]overlay=eof_action=pass:format=yuv420[v]');
   });
 
   it('publishes a cut as a new version of one review-draft animatic', async () => {

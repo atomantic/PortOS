@@ -277,7 +277,7 @@ describe.skipIf(!canRun)('music-video typography overlay with real Chrome and ff
   it('draws the opening title card over a composed render, lower left', async () => {
     const [w, h] = [384, 216];
     const project = { composition: { mode: 'composed' }, titleCard: {
-      enabled: true, title: 'Example Song', artist: 'Example Artist', year: '2026', style: 'mtv',
+      enabled: true, title: 'Example Song', artist: 'Example Artist', year: '2026', style: 'mtv', font: 'mono',
       position: 'lower-left', startSec: 0, endSec: 2, fadeSec: 0.25 } };
     const { cues, style } = projectTypographyPlan(project, [], [], 2);
     const overlays = await renderTypographyOverlays({ jobId: 'job-title-card', cues, style, width: w, height: h, fps: 12, durationSec: 2 });
@@ -294,6 +294,8 @@ describe.skipIf(!canRun)('music-video typography overlay with real Chrome and ff
     }
     expect(lowerLeft).toBeGreaterThan(1000);
     expect(elsewhere).toBe(0);
+    // A Mono card is drawn in the face its picker shows, not the host's fallback: the page ships it.
+    expect(existsSync(join(PATHS.data, COMPOSITION_SCRATCH_DIR, 'job-title-card', 'doc', 'ibm-plex-mono-500.woff2'))).toBe(true);
     await removeCompositionScratch('job-title-card');
   }, 60000);
 

@@ -1,9 +1,10 @@
 /**
  * Work-in-progress cuts of a Blender film: every shot's video at one quality
  * in film order with the master song, so the director can watch the whole
- * thing while shots are still missing (black) or out of date. A cut can also
- * go through the project's film look, and be published as the project's
- * review draft: a new version of one "Blender cut" animatic artifact.
+ * thing while shots are still missing (black) or out of date. A cut carries
+ * the project's grade, timed shot effects and title card as the final render
+ * does; it can also go through the project's film look, and be published as
+ * the project's review draft: a new version of one "Blender cut" animatic artifact.
  *
  * Cuts are regenerable files under renders/cuts/, indexed by cuts.json; the
  * newest 8 per quality are kept.
@@ -18,6 +19,7 @@ import { blenderRefusal, blenderRendersDir, blenderScratchDir, readBlenderJson }
 import { blenderNotSynced, planBlenderCut, readBlenderFilm } from './film.js';
 import { blenderFinishFilter } from './finishFilter.js';
 import { assembleBlenderVideo } from './assemble.js';
+import { withBlenderTitleCard } from './titleCard.js';
 import { requireFfmpeg } from './encode.js';
 import { activeBlenderJobs, createBlenderJob, updateBlenderJob } from './jobs.js';
 import { openBlenderJobLog } from './logs.js';
@@ -72,11 +74,15 @@ async function runCut(entry, { projectId, quality, animatic, filmLook, audioPath
     log.write(`PortOS: ${quality} cut of ${film.shots.length} shots (${plan.missing.length} black, ${plan.stale.length} out of date)`);
     const progress = (from, to) => (fraction) => updateBlenderJob(entry, { index: Math.round((from + (to - from) * fraction) * 100), total: 100 });
     const { finishNeeded, lookPass } = await filmLookPass(project, filmLook);
-    const { durationSec } = await assembleBlenderVideo({
-      segments: plan.segments, width: plan.width, height: plan.height, fps: plan.fps, quality,
-      filter: blenderFinishFilter(project, { width: plan.width, height: plan.height, fps: plan.fps, startSec: 0, endSec: film.shots[film.shots.length - 1].end }),
-      audio: { path: audioPath, startSec: 0 }, output, scratch: blenderScratchDir(projectId, entry.job.id), signal,
-      onProgress: progress(0, finishNeeded ? 0.5 : 1),
+    const frame = { width: plan.width, height: plan.height, fps: plan.fps, startSec: 0, endSec: film.shots[film.shots.length - 1].end };
+    const { durationSec } = await withBlenderTitleCard({ project, jobId: entry.job.id, ...frame, signal }, (overlays) => {
+      if (overlays.length) log.write('PortOS: title card over the cut');
+      return assembleBlenderVideo({
+        segments: plan.segments, width: plan.width, height: plan.height, fps: plan.fps, quality, overlays,
+        filter: blenderFinishFilter(project, frame),
+        audio: { path: audioPath, startSec: 0 }, output, scratch: blenderScratchDir(projectId, entry.job.id), signal,
+        onProgress: progress(0, finishNeeded ? 0.5 : 1),
+      });
     });
     if (finishNeeded) {
       updateBlenderJob(entry, { status: 'encoding' });

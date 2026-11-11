@@ -3,13 +3,15 @@
  * (`POST /:id/render`) and song-window excerpts and proofs (`POST /:id/excerpt`).
  * render.js and excerptRender.js own the job, SSE, history and settling; these
  * are the `prepare` / `encode` steps they call for `composition.mode === 'blender'`.
- * Nothing renders here: the shot videos already exist and are joined with the song.
+ * Nothing renders here: the shot videos already exist and are joined with the song,
+ * with the project's grade, timed shot effects and title card painted over the join.
  */
 import { normalizeBlenderRecord } from '../../../lib/musicVideoBlender.js';
 import { blenderScratchDir } from './workspace.js';
 import { blenderNotSynced, planBlenderFinal, planBlenderWindow, readBlenderFilm } from './film.js';
 import { blenderFinishFilter } from './finishFilter.js';
 import { assembleBlenderVideo } from './assemble.js';
+import { withBlenderTitleCard } from './titleCard.js';
 import { announceBlenderState } from './record.js';
 
 /** The final render's plan; refuses (409) until every shot has a complete, current final render. */
@@ -20,11 +22,11 @@ export async function prepareBlenderFinal(project) {
 /** Join the final shot videos with the master song into `outputPath`. */
 export async function encodeBlenderFinal({ plan, project, projectId, jobId, audioPath, outputPath, signal, onProgress }) {
   const { width, height, fps, segments, durationSec, boundaryTimes, signature } = plan;
-  await assembleBlenderVideo({
-    segments, width, height, fps, quality: 'final',
+  await withBlenderTitleCard({ project, jobId, width, height, fps, startSec: 0, endSec: durationSec, signal }, (overlays) => assembleBlenderVideo({
+    segments, width, height, fps, quality: 'final', overlays,
     filter: blenderFinishFilter(project, { width, height, fps, startSec: 0, endSec: durationSec }),
     audio: { path: audioPath, startSec: 0 }, output: outputPath, scratch: blenderScratchDir(projectId, jobId), signal, onProgress,
-  });
+  }));
   return { width, height, fps, durationSec, boundaryTimes, signature };
 }
 
@@ -64,11 +66,12 @@ export const assertBlenderExcerptWindow = ({ prepared, startSec, endSec }) => { 
 export async function encodeBlenderExcerpt({ prepared, project, projectId, jobId, audioPath, outputPath, signal, startSec, endSec, onProgress }) {
   const window = planBlenderWindow(prepared.film, { startSec, endSec });
   const { width, height, fps } = window;
-  await assembleBlenderVideo({
-    segments: window.segments, width, height, fps, quality: 'final',
-    filter: blenderFinishFilter(project, { width, height, fps, startSec: window.startSec, endSec: window.startSec + window.durationSec }),
+  const span = { startSec: window.startSec, endSec: window.startSec + window.durationSec };
+  await withBlenderTitleCard({ project, jobId, width, height, fps, ...span, filmEndSec: prepared.totalSec, signal }, (overlays) => assembleBlenderVideo({
+    segments: window.segments, width, height, fps, quality: 'final', overlays,
+    filter: blenderFinishFilter(project, { width, height, fps, ...span }),
     audio: { path: audioPath, startSec: window.startSec }, output: outputPath, scratch: blenderScratchDir(projectId, jobId), signal, onProgress,
-  });
+  }));
   const boundaryTimes = prepared.film.shots.map((shot) => shot.start - window.startSec).filter((time) => time > 0 && time < window.durationSec);
   return { width, height, fps, boundaryTimes: [0, ...boundaryTimes] };
 }

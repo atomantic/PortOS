@@ -243,9 +243,11 @@ export function renderableCues(composition, durationSec) {
  * `titleCard` with the same runtime the live preview and document renders use.
  * Empty when the card is off or empty; a window past the video's end is dropped.
  */
-function titleCardCues(project, durationSec) {
-  if (project?.composition?.mode !== 'composed') return [];
-  const card = normalizeTitleCard(project.titleCard);
+const titleCardCues = (project, durationSec) => (project?.composition?.mode === 'composed' ? titleCardOverlayCues(project, durationSec) : []);
+
+/** The title card's capture cues whatever the render style (a Blender film overlays them on its joined shots). */
+export function titleCardOverlayCues(project, durationSec) {
+  const card = normalizeTitleCard(project?.titleCard);
   return titleCardWindows(card)
     .filter((w) => w.startSec < durationSec)
     .map((w, i) => ({ id: i ? 'title-card-end' : 'title-card', titleCard: card, startSec: w.startSec, endSec: Math.min(w.endSec, durationSec) }));
@@ -376,6 +378,8 @@ export const SAFE_INSET = 0.1;
 const OVERLAY_SEEK_PAINT_MS = 250;
 // The lyric type face, copied next to the overlay page by renderTypographyOverlays.
 export const LYRIC_FONT_FILE = 'archivo-variable.woff2';
+// The title card's Mono face ("MV Mono", the one its picker shows), copied next to the overlay page for a card set in it.
+export const TITLE_CARD_MONO_FONT_FILE = 'ibm-plex-mono-500.woff2';
 const FONT_STACKS = {
   sans: "'Helvetica Neue', Helvetica, Arial, sans-serif",
   serif: "Georgia, 'Times New Roman', serif",
@@ -403,7 +407,7 @@ export function buildTypographyDocument({ cues, style = {}, width, height, durat
   const titleCardScript = titleCard ? `<script>${titleCardRuntime(titleCard)}</script>` : '';
   return `<!doctype html><html><head><meta charset="utf-8">${titleCardScript}<style>
 @font-face { font-family: "MV Archivo"; src: url(${LYRIC_FONT_FILE}) format("woff2"); font-weight: 100 900; font-stretch: 62% 125%; }
-html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
+${titleCard?.font === 'mono' ? `@font-face { font-family: "MV Mono"; src: url(${TITLE_CARD_MONO_FONT_FILE}) format("woff2"); font-weight: 500; }\n` : ''}html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
 #safe { position: absolute; }
 .cue { position: absolute; left: 0; right: 0; box-sizing: border-box; padding: 0.25em; text-align: center; color: ${color}; font-family: ${fontStack};
   font-weight: 700; line-height: 1.15; overflow-wrap: break-word; overflow: hidden; visibility: hidden; will-change: transform, opacity;
