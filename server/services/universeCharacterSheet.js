@@ -549,7 +549,9 @@ function subscribeToSheetJob(jobId, handlers) {
  * `editBaseCandidate` is the record's canonical portrait. On a backend that
  * edits, the render starts from it (`initImagePath`) and the other references
  * follow as identity guides; `built` may then be a function of
- * `{ editFromPortrait }` so a template can pick a layout that suits an edit.
+ * `{ editFromPortrait, referenceImages }` so a template can pick a layout that
+ * suits an edit or name the images it was given. `identityGuide: false` drops
+ * the single-character likeness line for a template that maps its own images.
  * `form` ({ label }) is the age or look being rendered: its own image is the
  * edit base (never the canonical portrait), canonical images guide likeness
  * only, and with no image of its own the render generates fresh.
@@ -569,6 +571,7 @@ export async function buildSheetRenderParams({
   sharedIdentity = '',
   family = { additions: [], candidates: [] },
   selfName = '',
+  identityGuide = true,
 }) {
   const settings = await getSettings();
   // Text-template rendering works with any image-gen backend. Route through
@@ -607,7 +610,7 @@ export async function buildSheetRenderParams({
       status: 400, code: 'CHARACTER_SHEET_PORTRAIT_FRAMING_UNSUPPORTED',
     });
   }
-  const built = typeof buildOrBuilt === 'function' ? buildOrBuilt({ editFromPortrait }) : buildOrBuilt;
+  const built = typeof buildOrBuilt === 'function' ? buildOrBuilt({ editFromPortrait, referenceImages: references.images }) : buildOrBuilt;
 
   const hasPromptOverride = typeof options.overridePrompt === 'string' && !!options.overridePrompt.trim();
   // A blank prompt override means "use the template"; a negative override is
@@ -689,7 +692,7 @@ export async function buildSheetRenderParams({
       added.push(promptAddition('portrait-edit-base', 'Edit from the canonical portrait', `Edit the FIRST attached image, the character’s canonical portrait, into the image described above. Keep this exact person: the same facial structure, eyes, skin, hair color and distinctive marks. Apply the age, hairstyle, clothing, pose, framing, setting and layout the description asks for, and do not keep the portrait’s own clothing, crop or background unless the description asks for them.${guideLine}`));
     } else if (ownGuides && form) {
       added.push(promptAddition('character-identity', `Likeness for ${form.label}`, `Use the attached images of this character as the identity reference. Preserve the facial features, skin, hair color, markings and distinctive likeness across every view.${otherAgeLine || ` Render the age, build and wardrobe the description asks for.`}`));
-    } else if (ownGuides) {
+    } else if (ownGuides && identityGuide) {
       added.push(promptAddition('character-identity', 'Canonical character likeness', 'Use the attached canonical character images as the identity reference. Preserve the character’s facial features, proportions, skin, hair, markings and distinctive likeness across every view. Apply the requested age, wardrobe and visual direction while keeping the same character identity.'));
     }
     // Relatives' images come after the record's own, so its identity keeps priority.

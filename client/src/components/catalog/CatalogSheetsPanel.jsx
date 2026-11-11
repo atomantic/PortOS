@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
-import { ExternalLink, Image as ImageIcon, Loader2, Sparkles, ThumbsDown, Trash2 } from 'lucide-react';
+import { ExternalLink, Image as ImageIcon, Loader2, Search, Sparkles, ThumbsDown, Trash2 } from 'lucide-react';
 import toast from '../ui/Toast';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
 import CatalogImagePreview from './CatalogImagePreview';
@@ -9,6 +9,7 @@ import MediaJobThumb from '../pipeline/MediaJobThumb';
 import ModelInputPreview from '../media/ModelInputPreview';
 import CatalogMediaTile from './CatalogMediaTile';
 import CatalogSheetRecovery from './CatalogSheetRecovery';
+import IngredientPicker from '../IngredientPicker';
 import socket from '../../services/socket';
 import useMounted from '../../hooks/useMounted';
 import { useModelInputPreview } from '../../hooks/useModelInputPreview';
@@ -130,6 +131,8 @@ export function ReferenceSheetPanel({ payload, universeRef }) {
 }
 
 const SHEET_EVENT = 'reference-sheet:changed';
+// One shared sheet for this character and another the user picks (server: catalogComparisonSheet.js).
+const COMPARISON_VARIANT_ID = 'comparison';
 
 // One in-flight render. Binds the job's callbacks so several renders (one per
 // age/look or sheet kind) can run side by side.
@@ -171,6 +174,8 @@ export default function CatalogSheetsPanel({
   const [variantsError, setVariantsError] = useState(null);
   const [variantId, setVariantId] = useState('');
   const [formId, setFormId] = useState(''); // '' = canonical
+  const [partner, setPartner] = useState(null); // { id, name }: the other character on a comparison sheet
+  const [pickingPartner, setPickingPartner] = useState(false);
   const [starting, setStarting] = useState(false);
   const [jobs, setJobs] = useState([]); // [{ jobId, role, delegated, label }]
   const [armedDetach, setArmedDetach] = useState(null);
@@ -182,6 +187,7 @@ export default function CatalogSheetsPanel({
     let active = true;
     setVariants(null);
     setVariantsError(null);
+    setPartner(null);
     listCatalogSheetVariants(ingredientId, { silent: true })
       .then((r) => {
         if (!active) return;
@@ -202,10 +208,14 @@ export default function CatalogSheetsPanel({
   const fetchPreview = useCallback(({ savedStamp: _stamp, ...body }, options) =>
     previewCatalogSheet(ingredientId, body, options).then((r) => r?.preview ?? null), [ingredientId]);
   const forms = formsOf(payload);
-  const activeFormId = forms.some((f) => f.id === formId) ? formId : '';
+  const isComparison = variantId === COMPARISON_VARIANT_ID;
+  // A comparison shows both characters in their canonical form.
+  const activeFormId = !isComparison && forms.some((f) => f.id === formId) ? formId : '';
+  const partnerMissing = isComparison && !partner;
   const [likenessRevision, setLikenessRevision] = useState(0);
   const preview = useModelInputPreview(fetchPreview,
-    { variant: variantId, ...(activeFormId ? { formId: activeFormId } : {}), savedStamp }, { enabled: !!variantId, revision: likenessRevision });
+    { variant: variantId, ...(activeFormId ? { formId: activeFormId } : {}), ...(isComparison && partner ? { partnerId: partner.id } : {}), savedStamp },
+    { enabled: !!variantId && !partnerMissing, revision: likenessRevision });
 
   // Leaving an image out (e.g. a multi-age collage board) keeps it on the
   // record but out of every likeness pick; the server applies it to both the
@@ -259,17 +269,19 @@ export default function CatalogSheetsPanel({
   }, [dropJob]);
 
   const variant = (variants || []).find((v) => v.id === variantId) || null;
-  const renderBlocked = blockedReason || preview.error;
+  const renderBlocked = blockedReason || (partnerMissing ? 'Choose the character to compare with' : preview.error);
   const selectedRole = variant ? `${SHEET_ROLE_PREFIX}${variant.id}${activeFormId ? `@${activeFormId}` : ''}` : null;
   const selectedRendering = !!selectedRole && jobs.some((j) => j.role === selectedRole && !j.publicationError);
 
   const handleGenerate = async (renderVariant = variant, renderFormId = activeFormId) => {
     const renderRole = renderVariant && `${SHEET_ROLE_PREFIX}${renderVariant.id}${renderFormId ? `@${renderFormId}` : ''}`;
     const sameTarget = renderVariant?.id === variantId && renderFormId === activeFormId;
+    const comparing = renderVariant?.id === COMPARISON_VARIANT_ID;
+    if (comparing && !partner) return;
     if (!renderVariant || blockedReason || (sameTarget && preview.error) || starting || jobs.some((job) => job.role === renderRole && !job.publicationError)) return;
     setStarting(true);
     const form = forms.find((f) => f.id === renderFormId) || null;
-    const queued = await renderCatalogSheet(ingredientId, { variant: renderVariant.id, ...(renderFormId ? { formId: renderFormId } : {}) }, { silent: true })
+    const queued = await renderCatalogSheet(ingredientId, { variant: renderVariant.id, ...(renderFormId ? { formId: renderFormId } : {}), ...(comparing ? { partnerId: partner.id } : {}) }, { silent: true })
       .catch((err) => { toast.error(err?.message || 'Sheet render failed'); return null; });
     if (!mountedRef.current) return;
     setStarting(false);
@@ -277,7 +289,7 @@ export default function CatalogSheetsPanel({
       if (queued) toast.error('Sheet render returned no job');
       return;
     }
-    const what = form ? `${renderVariant.label} · ${form.label}` : renderVariant.label;
+    const what = comparing ? `Comparison with ${partner.name}` : form ? `${renderVariant.label} · ${form.label}` : renderVariant.label;
     setJobs((cur) => [...cur.filter((j) => j.jobId !== queued.jobId), {
       jobId: queued.jobId,
       role: queued.role || `${SHEET_ROLE_PREFIX}${queued.variant || renderVariant.id}${form ? `@${form.id}` : ''}`,
@@ -293,6 +305,8 @@ export default function CatalogSheetsPanel({
   const sheets = Array.isArray(sheetMedia) ? sheetMedia : [];
   const labelFor = (m) => {
     const { variant: id } = splitSheetRole(m.role, SHEET_ROLE_PREFIX);
+    // This record's own half of a comparison sheet, cut by the server.
+    if (id === `${COMPARISON_VARIANT_ID}-solo`) return 'Comparison · own half';
     return (variants || []).find((v) => v.id === id)?.label || id;
   };
   const sheetsByForm = new Map();
@@ -356,7 +370,7 @@ export default function CatalogSheetsPanel({
       ) : (
         <div className="space-y-2">
           <div className="flex items-end gap-2 flex-wrap">
-            {forms.length > 0 && (
+            {forms.length > 0 && !isComparison && (
               <div className="min-w-0 flex-1 max-w-sm">
                 <label htmlFor="catalog-sheet-form" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">Age or look</label>
                 <select id="catalog-sheet-form" value={activeFormId} onChange={(e) => setFormId(e.target.value)}
@@ -373,6 +387,16 @@ export default function CatalogSheetsPanel({
                 {variants.map((v) => <option key={v.id} value={v.id}>{v.label}</option>)}
               </select>
             </div>
+            {isComparison && (
+              <div className="min-w-0 flex-1 max-w-sm">
+                <span id="catalog-sheet-partner-label" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">Compare with</span>
+                <button type="button" id="catalog-sheet-partner" aria-labelledby="catalog-sheet-partner-label catalog-sheet-partner" onClick={() => setPickingPartner(true)}
+                  className="w-full min-h-[40px] inline-flex items-center gap-1.5 px-2 py-2 bg-port-bg border border-port-border rounded text-sm text-left text-white hover:border-port-accent focus:outline-none focus:border-port-accent">
+                  <Search size={14} aria-hidden="true" className="shrink-0 text-gray-500" />
+                  <span className={`truncate ${partner ? '' : 'text-gray-500'}`}>{partner ? partner.name : 'Search characters…'}</span>
+                </button>
+              </div>
+            )}
             <button type="button" onClick={() => handleGenerate()} disabled={starting || selectedRendering || !!renderBlocked || !variant}
               title={renderBlocked || (selectedRendering ? 'This sheet is already rendering' : undefined)}
               className="inline-flex items-center gap-1.5 min-h-[40px] px-3 py-2 rounded bg-port-accent hover:bg-port-accent/90 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium">
@@ -393,6 +417,9 @@ export default function CatalogSheetsPanel({
           <ModelInputPreview preview={preview} prompt="" onToggleLikeness={onMediaChanged ? toggleLikeness : undefined} />
         </div>
       )}
+
+      <IngredientPicker open={pickingPartner} type="character" excludeIds={[ingredientId]} onClose={() => setPickingPartner(false)}
+        onSelect={(record) => { setPickingPartner(false); setPartner({ id: record.id, name: record.name || 'Unnamed character' }); }} />
 
       <CatalogSheetRecovery key={ingredientId} ingredientId={ingredientId} sheetMedia={sheetMedia} onSheetFile={onSheetFile} blockedReason={blockedReason} />
 
@@ -425,7 +452,7 @@ export default function CatalogSheetsPanel({
                     badge={bad ? <BadFlag /> : null} pinActions={bad}
                     extraContent={inspectionNote ? <div className="space-y-1 border-t border-port-border p-2"><p className="text-xs text-port-warning break-words">{inspectionNote}</p>
                       {sheetVariant && <button type="button" onClick={() => handleGenerate(sheetVariant, role.formId || '')}
-                        disabled={starting || !!blockedReason || jobs.some((job) => job.role === m.role)
+                        disabled={starting || !!blockedReason || jobs.some((job) => job.role === m.role) || (sheetVariant.id === COMPARISON_VARIANT_ID && !partner)
                           || (sheetVariant.id === variantId && (role.formId || '') === activeFormId && !!preview.error)}
                         className="min-h-11 rounded border border-port-border px-2 py-1 text-xs text-port-accent disabled:opacity-50">Regenerate sheet</button>}
                     </div> : null} />

@@ -25,6 +25,8 @@ const updateMediaLibrary = vi.fn(async () => ({}));
 const getIngredient = vi.fn(async () => ({ id: 'ing', deleted: false }));
 vi.mock('./catalogDB.js', () => ({ attachGeneratedMedia, getIngredient, updateMediaLibrary }));
 vi.mock('./catalogMedia.js', () => ({ readImageGenerationMetadata: async () => ({}) }));
+const publishComparisonSheet = vi.hoisted(() => vi.fn(async () => null));
+vi.mock('./catalogComparisonSheet.js', () => ({ publishComparisonSheet }));
 
 const { mediaJobEvents } = await import('./mediaJobQueue/index.js');
 const { catalogEvents } = await import('./catalogEvents.js');
@@ -101,6 +103,21 @@ describe('catalogImageAttachHook', () => {
   });
 
   // Uniquely catches a reference sheet taking the portrait slot of a record
+  // A comparison render belongs to two records: without this hand-off the
+  // partner never gets the shared sheet and neither record gets its half.
+  it('hands a comparison sheet on to its partner, and only a comparison sheet', async () => {
+    const events = [];
+    const onChanged = (event) => events.push(event.ingredientId);
+    catalogEvents.on('primitive-changed', onChanged);
+    publishComparisonSheet.mockResolvedValueOnce({ partner: 'ing-b', left: 'half-1.png', right: 'half-2.png' });
+    await emit({ catalogAttach: { ingredientId: 'ing-a', kind: 'reference', role: 'sheet:comparison', comparison: { partnerId: 'ing-b' } } }, 'pair.png');
+    await emit({ catalogAttach: { ingredientId: 'ing-a', kind: 'reference', role: 'sheet:face' } }, 'face.png');
+    catalogEvents.off('primitive-changed', onChanged);
+    expect(publishComparisonSheet).toHaveBeenCalledTimes(1);
+    expect(publishComparisonSheet).toHaveBeenCalledWith({ ingredientId: 'ing-a', partnerId: 'ing-b', filename: 'pair.png', metadata: {} });
+    expect(events).toContain('ing-b');
+  });
+
   // with no media, or losing its `sheet:<variant>` role on the way to the row.
   it('files a role-tagged render as a reference with its role, never the portrait', async () => {
     await emit({ catalogAttach: { ingredientId: 'ing-sheet', kind: 'portrait', role: 'sheet:environment' } }, 'sheet.png');
