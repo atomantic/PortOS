@@ -385,6 +385,11 @@ describe('boardJobEstimate', () => {
     expect(boardJobEstimate({ scenes: [scene()] })).toMatchObject({ jobs: 0, suggestedMaxGenerations: 1 });
   });
 
+  it('does not budget frame or clip generations for mirrored Blender shots (#15785)', () => {
+    const scenes = [scene({ visualLayer: 'code', referenceImageId: null, videoHistoryId: null })];
+    expect(boardJobEstimate({ scenes, composition: { mode: 'blender' } })).toMatchObject({ jobs: 0, unpriced: 0, knownUsd: 0 });
+  });
+
   it('counts no generation for card or code shots in a layered composition (#10297)', () => {
     const scenes = [
       scene({ sceneId: 'a', visualLayer: 'code', referenceImageId: null, videoHistoryId: null }),
