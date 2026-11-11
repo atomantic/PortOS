@@ -3,6 +3,7 @@ import TrackPanel from '../TrackPanel.jsx';
 import AnalysisPanel from '../AnalysisPanel.jsx';
 import LyricsPanel from '../LyricsPanel.jsx';
 import LyricTimingCheck from '../LyricTimingCheck.jsx';
+import LyricSheetCheck from '../LyricSheetCheck.jsx';
 import LyricOverlaySetting from '../LyricOverlaySetting.jsx';
 import ReviseSongCard from '../ReviseSongCard.jsx';
 import { AnalyzeAction } from '../ProjectActionGroups.jsx';
@@ -135,6 +136,7 @@ export default function SetupStage({ board }) {
               onAlign={board.onAlignLyrics}
             />
           )}
+          {!lyrics.instrumental && <LyricSheetCheck key={project.id} project={project} audioFilename={audioFilename} aligning={aligningLyrics} onEditLocal={board.editProjectLocal} onSave={board.saveProjectFields} />}
           {board.productionReview && (
             <LyricTimingCheck project={project} review={board.productionReview} planning={board.planningDraft} disabled={locked}
               audioUrl={board.audioUrl} aligning={aligningLyrics} onAlign={board.onAlignLyrics} />

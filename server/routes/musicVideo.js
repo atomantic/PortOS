@@ -53,6 +53,7 @@ import {
   musicVideoLyricsImportSchema,
   musicVideoLyricsImportTrackSchema,
   musicVideoLyricsAlignSchema,
+  musicVideoLyricsVerifySchema,
   musicVideoSongPrepareSchema,
   musicVideoTakeInputSchema,
   musicVideoTakeReviewSchema,
@@ -227,6 +228,7 @@ import {
   getActiveLyricAlignJobId,
   startLyricAlign,
 } from '../services/musicVideo/lyricAlignJob.js';
+import { startLyricVerify, attachLyricVerifySseClient, cancelLyricVerify } from '../services/musicVideo/lyricVerifyJob.js';
 import { importTrackLyrics, MAX_LYRIC_CUES } from '../services/musicVideo/trackLyrics.js';
 import { offsetLyricMarkers } from '../lib/lyricMarkers.js';
 import {
@@ -669,6 +671,17 @@ router.post('/:id/lyrics/align', asyncHandler(async (req, res) => {
   const { cueId, separateVocals, retimeSong } = validateRequest(musicVideoLyricsAlignSchema, req.body || {});
   res.status(202).json(await startLyricAlign(req.params.id, { cueId, separateVocals, retimeSong }));
 }));
+
+router.post('/:id/lyrics/verify', asyncHandler(async (req, res) => {
+  validateRequest(musicVideoLyricsVerifySchema, req.body ?? {});
+  res.status(202).json(await startLyricVerify(req.params.id));
+}));
+router.get('/lyrics/verify/:jobId/events', (req, res) => {
+  if (!attachLyricVerifySseClient(req.params.jobId, res)) throw new ServerError('Verification job not found or expired', { status: 404, code: 'NOT_FOUND' });
+});
+router.post('/lyrics/verify/:jobId/cancel', (req, res) => {
+  res.json({ ok: cancelLyricVerify(req.params.jobId) });
+});
 
 // Re-read the song's Suno style (excluded styles included) from its song link,
 // for a song imported before they were captured. Updates the linked track too.

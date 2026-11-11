@@ -307,7 +307,7 @@ export default function LyricsPanel({ project, onEditLocal, onSave, onImport, im
           {cues.length === 0 && <p className="text-port-text-muted">No lyrics — instrumental tracks plan from sections and beats alone.</p>}
           <div className="max-h-64 overflow-y-auto space-y-1 pr-1">
             {cues.map((cue, i) => (
-              <div key={cue.id} className="space-y-1 border-b border-port-border/50 pb-1">
+              <div key={cue.id} id={`mv-lyric-cue-${cue.id}`} className="space-y-1 border-b border-port-border/50 pb-1">
                 <MarkerChips markers={markersAt(i)} />
                 <div className="flex flex-wrap items-center gap-1">
                   <input type="number" min={0} step={0.01} aria-label={`Line ${i + 1} start (s)`} placeholder="start"

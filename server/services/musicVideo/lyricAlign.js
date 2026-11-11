@@ -23,7 +23,7 @@ import {
 import { spreadVocableCues } from './lyricVocables.js';
 import { relabelAnalysisSections } from '../../lib/lyricMarkers.js';
 
-async function decodeSourceToWav(sourcePath) {
+export async function decodeSourceToWav(sourcePath) {
   const ffmpeg = await findFfmpeg();
   if (!ffmpeg) {
     throw new ServerError('ffmpeg is required to align lyrics to the vocal.', { status: 500, code: 'FFMPEG_MISSING' });

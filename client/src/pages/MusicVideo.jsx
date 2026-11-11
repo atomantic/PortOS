@@ -1205,7 +1205,7 @@ function ProjectWorkspace({
         // The server moves markers with their cues when lines are removed or merged.
         if (patch.lyricCues) patchProject(projectId, { lyricMarkers: saved.lyricMarkers, ...wordAnchoredShots(saved) });
       })
-      .catch((err) => toast.error(err?.message || 'Failed to save changes'))
+      .catch((err) => { toast.error(err?.message || 'Failed to save changes'); return false; })
       .finally(() => setCompositionSavePending((count) => count - 1));
     return timedTextSaveChain.current;
   };

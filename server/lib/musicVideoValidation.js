@@ -713,6 +713,8 @@ export const musicVideoLyricsAlignSchema = z.object({
   retimeSong: z.boolean().optional(),
 }).strict();
 
+export const musicVideoLyricsVerifySchema = z.object({}).strict();
+
 // Prepare the song after a track arrives; `refresh` redoes the analysis and lyric
 // timing that predate a replaced take (#14793).
 export const musicVideoSongPrepareSchema = z.object({
