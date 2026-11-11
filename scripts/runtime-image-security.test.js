@@ -22,6 +22,7 @@ const targets = loadTargets();
 
 const sbomFor = (types, extra = {}) => ({
   descriptor: { name: 'syft', version: '1.55.0' },
+  source: { type: 'image', metadata: { imageID: 'sha256:example' } },
   distro: { id: 'debian', versionID: '13' },
   artifacts: types.map((type, i) => ({ name: `pkg${i}`, version: '1.0', type })),
   ...extra,
@@ -30,7 +31,11 @@ const matchFor = (id, severity, name = 'libexample', version = '1.0') => ({
   vulnerability: { id, severity, fix: { state: 'fixed', versions: ['1.1'] } },
   artifact: { name, version, type: 'deb' },
 });
-const scanFor = (matches) => ({ descriptor: { name: 'grype', version: '0.121.0' }, matches });
+const scanFor = (matches) => ({
+  descriptor: { name: 'grype', version: '0.121.0', db: { valid: true, schemaVersion: '6.1.3', built: '2026-11-11T00:00:00Z' } },
+  source: { type: 'image', target: { imageID: 'sha256:example' } },
+  matches,
+});
 
 describe('target derivation from the recipes', () => {
   it('reads the pinned digests the product recipes already guard, not a second copy', () => {
@@ -139,6 +144,29 @@ describe('verifyRun', () => {
   it('rejects an unsupported architecture and invalid scanner output', () => {
     expect(() => run([], { arch: 'riscv64' })).toThrow('not scanned for architecture');
     expect(() => run([], { scanPath: write('bad.json', { matches: [] }) })).toThrow('not a grype JSON document');
+  });
+
+  it('refuses zero-match results without a usable database or the supplied SBOM source', () => {
+    const bare = { descriptor: { name: 'grype', version: '0.121.0' }, matches: [] };
+    expect(() => run([], { scanPath: write('bare.json', bare) })).toThrow('no usable vulnerability database');
+    const badDb = scanFor([]);
+    badDb.descriptor.db.valid = false;
+    expect(() => run([], { scanPath: write('db.json', badDb) })).toThrow('no usable vulnerability database');
+    const unrelated = scanFor([]);
+    unrelated.source.target.imageID = 'sha256:another-image';
+    expect(() => run([], { scanPath: write('unrelated.json', unrelated) })).toThrow('does not match the supplied SBOM');
+    expect(run([]).code).toBe(0);
+  });
+
+  it('binds an npm-pin scan to the SBOM directory source too', () => {
+    const source = '/scanner/rapier';
+    const sbom = sbomFor(['npm'], { source: { type: 'directory', metadata: { path: source } } });
+    const scan = { ...scanFor([]), source: { type: 'directory', target: source } };
+    expect(verifyRun({ target: 'eidoverse-rapier', arch: 'any', sbomPath: write('npm-sbom.json', sbom),
+      scanPath: write('npm-scan.json', scan), outDir: join(dir, 'out'), summarize: () => {} })).toBe(0);
+    scan.source.target = '/scanner/other';
+    expect(() => verifyRun({ target: 'eidoverse-rapier', arch: 'any', sbomPath: write('npm-sbom.json', sbom),
+      scanPath: write('npm-scan.json', scan), outDir: join(dir, 'out'), summarize: () => {} })).toThrow('does not match the supplied SBOM');
   });
 });
 

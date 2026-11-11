@@ -143,9 +143,27 @@ export function validateSbom(sbom, target) {
 }
 
 /** Throws unless the document is a grype JSON result; returns severity counts and de-duplicated findings. */
-export function validateScan(scan) {
+export function validateScan(scan, sbom = null) {
   if (scan?.descriptor?.name !== 'grype' || !Array.isArray(scan.matches)) {
     throw new Error('Scan result is not a grype JSON document (missing descriptor or matches)');
+  }
+  // Grype 0.121's ProviderStatus reports valid/schemaVersion/built, including
+  // when no vulnerability matches. A descriptor alone does not prove a DB ran.
+  const db = scan.descriptor.db;
+  if (db?.valid !== true || !db.schemaVersion || !Number.isFinite(Date.parse(db.built))) {
+    throw new Error('Scan result has no usable vulnerability database');
+  }
+  const source = scan.source;
+  if (!source?.type || !source.target) throw new Error('Scan result has no source identity');
+  if (sbom) {
+    // Grype preserves the Syft SBOM source (syft_sbom_provider.go), exposing
+    // image metadata as target and directory metadata as the path string.
+    const metadata = sbom.source?.metadata;
+    const matchesSource = source.type === sbom.source?.type && (
+      source.type === 'image' ? typeof metadata?.imageID === 'string' && metadata.imageID.length > 0 && source.target.imageID === metadata.imageID
+        : source.type === 'directory' && typeof metadata?.path === 'string' && metadata.path.length > 0 && source.target === metadata.path
+    );
+    if (!matchesSource) throw new Error('Scan result source does not match the supplied SBOM');
   }
   const counts = Object.fromEntries(SEVERITIES.map((severity) => [severity, 0]));
   const seen = new Set();
@@ -255,8 +273,9 @@ export function verifyRun({ target, arch, sbomPath, scanPath, outDir, strict = f
   const def = loadTargets(root)[target];
   if (!def) throw new Error(`Unknown target: ${target}`);
   if (!def.architectures.includes(arch)) throw new Error(`${target} is not scanned for architecture ${arch}`);
-  const sbom = validateSbom(readJson(sbomPath), def);
-  const scan = validateScan(readJson(scanPath));
+  const sbomDocument = readJson(sbomPath);
+  const sbom = validateSbom(sbomDocument, def);
+  const scan = validateScan(readJson(scanPath), sbomDocument);
   const reviews = validateReviews(reviewLedger ?? readJson(join(root, REVIEWS_PATH)));
   const { reviewed, unreviewed } = reconcileFindings(scan.findings, reviews, target, arch);
 
