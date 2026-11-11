@@ -24,8 +24,15 @@ export async function recoverInterruptedRuns({ owner = getRunOwner(), isDead = i
     if (!entry.isDirectory()) continue;
     try {
       const runDir = join(runsPath, entry.name);
-      const run = JSON.parse(await readFile(join(runDir, 'metadata.json'), 'utf8'));
-      if (!run || run.id !== entry.name || run.agentId || run.endTime != null || run.success != null) continue;
+      // A directory without metadata is the leftover of a process that died
+      // between creating it and writing the record: nothing to recover.
+      const raw = await readFile(join(runDir, 'metadata.json'), 'utf8').catch(error => {
+        if (error.code === 'ENOENT') return null;
+        throw error;
+      });
+      if (raw === null) continue;
+      const run = JSON.parse(raw);
+      if (!run ||run.id !== entry.name || run.agentId || run.endTime != null || run.success != null) continue;
       const previous = run.executionOwner;
       if (!validProcess(previous) || typeof previous.id !== 'string' || !previous.id
         || previous.id === owner.id || previous.pid === owner.pid || !isDead(previous.pid)) continue;

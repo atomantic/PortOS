@@ -67,7 +67,10 @@ describe('boot interrupted-run recovery', () => {
       if (pid === 201 || pid === 202) return true;
       throw Object.assign(new Error('probe'), { code: pid === 203 ? 'EPERM' : 'ESRCH' });
     });
+    await mkdir(join(directory, 'runs', 'never-recorded'));
+    const reported = vi.spyOn(console, 'error').mockImplementation(() => {});
     expect(await recoverInterruptedRuns({ now: () => END })).toEqual({ recovered: 0 });
+    expect(reported).not.toHaveBeenCalled();
     for (const [id, original] of Object.entries(originals)) expect(await readRun(id)).toEqual(JSON.parse(JSON.stringify(original)));
     expect(hooks.onRunCanceled).not.toHaveBeenCalled();
   });
