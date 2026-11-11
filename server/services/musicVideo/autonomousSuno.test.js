@@ -9,6 +9,7 @@ const { decode } = vi.hoisted(() => ({ decode: vi.fn(async () => ({ stdout: 'out
 vi.mock('../../lib/childProcess.js', () => ({ execFile: Object.assign(() => {}, { [Symbol.for('nodejs.util.promisify.custom')]: decode }) }));
 
 vi.mock('../../lib/ffmpeg.js', () => ({ findFfmpeg: vi.fn(async () => 'ffmpeg') }));
+import { markSunoSongMenu, sunoDownloadDialogSong } from '../../lib/sunoPage.js';
 import { __testing, generateSunoSong, submitSunoSongOnly } from './autonomousSuno.js';
 
 const { submitSunoSong, sunoRenderPhase, collectSunoRenderSnapshot, SUNO_RENDER_PROBE } = __testing;
@@ -258,24 +259,99 @@ describe('submitSunoSong', () => {
 
 // Synthetic container signature; ffmpeg is mocked at its process boundary.
 const m4a = Buffer.from([0, 0, 0, 24, 102, 116, 121, 112, 77, 52, 65, 32]);
-function workflow({ bytes = m4a, stalled, failure = null, ignoreSelection = false, readyAfterMs = 0, landsInDir = null, render = null } = {}) {
+// A fake export of one song: the signature, then the id Suno stamps in the container comment.
+const exportOf = (songId) => Buffer.concat([m4a, Buffer.from(`made with suno; id=${songId}`)]);
+// Stands in for ffprobe reading that comment: the id a file names, or null.
+const readAudioSongId = async (path) => /id=([0-9a-f-]{36})/.exec((await readFile(path)).toString('latin1'))?.[1] ?? null;
+const timedOut = () => Object.assign(new Error('Timeout exceeded'), { name: 'TimeoutError' });
+
+// A song page as markSunoSongMenu reads it: its title, song links and menu buttons in document
+// order. Selects by tag and one attribute test (present, =, ^=, *=), the shapes that reader uses.
+function songPageDocument(nodes) {
+  const els = nodes.map(([tagName, attrs = {}, textContent = '']) => {
+    const el = { tagName, textContent, attrs: { ...attrs } };
+    el.getAttribute = (name) => (Object.hasOwn(el.attrs, name) ? el.attrs[name] : null);
+    el.setAttribute = (name, value) => { el.attrs[name] = value; };
+    el.removeAttribute = (name) => { delete el.attrs[name]; };
+    return el;
+  });
+  const matches = (el, selector) => selector.split(',').some((part) => {
+    const parsed = /^\s*([a-z0-9]+)?(?:\[([\w-]+)(?:([*^]?=)'([^']*)')?\])?\s*$/i.exec(part);
+    if (!parsed) return false;
+    const [, tag, attr, test, value] = parsed;
+    if (tag && el.tagName !== tag.toUpperCase()) return false;
+    if (!attr) return true;
+    const actual = el.getAttribute(attr);
+    if (actual === null || !test) return actual !== null;
+    return test === '=' ? actual === value : test === '^=' ? actual.startsWith(value) : actual.includes(value);
+  });
+  return {
+    marked: () => els.filter((el) => matches(el, '[data-portos-song-menu]')),
+    querySelectorAll: (selector) => els.filter((el) => matches(el, selector)),
+  };
+}
+
+/**
+ * The export's browser. The file it produces is an export of `exportsSong`
+ * (default: the song whose menu was opened), delivered as a download event or,
+ * with `landsInDir`, saved to the download folder after any `alsoLands` files.
+ * `songPage` is a `songPageDocument` the real markSunoSongMenu runs against;
+ * without one the page song's own menu is found. The menu reports open on
+ * click number `menuOpensOnClick`.
+ */
+function workflow({
+  bytes = null, exportsSong = null, stalled, failure = null, ignoreSelection = false, readyAfterMs = 0, landsInDir = null,
+  alsoLands = [], render = null, songPage = null, menuOpensOnClick = 1, dialogSong = 'page',
+} = {}) {
   const page = fakePage({ render });
   const baseRole = page.getByRole;
+  const baseLocator = page.locator;
+  const baseEvaluate = page.evaluate;
   const selected = new Set(['MP3', 'WAV', 'MP4 video asset']);
   const actions = [];
+  const openedMenus = [];
+  const imported = [];
   let savedPath;
+  let exported;
   const dirFiles = [];
   const listDownloads = vi.fn(async () => ({ downloadDir: landsInDir, files: [...dirFiles] }));
+  const pageSong = () => page.goto.mock.calls.map(([url]) => /\/song\/([0-9a-f-]{36})/.exec(url)?.[1]).filter(Boolean).pop();
+  const land = async (name, content) => {
+    await writeFile(join(landsInDir, name), content);
+    dirFiles.push({ name, size: content.length, modified: '2026-01-01T00:00:00.000Z' });
+  };
   const download = {
     saveAs: vi.fn(async (path) => {
       savedPath = path;
-      await writeFile(path, bytes);
+      await writeFile(path, exported);
       if (stalled === 'save') return new Promise(() => {});
     }),
     failure: vi.fn(async () => failure),
     cancel: vi.fn(async () => {}),
     delete: vi.fn(async () => {}),
   };
+  page.waitForFunction = vi.fn(async (fn, songId) => {
+    if (!songPage) return true;
+    const previous = globalThis.document;
+    globalThis.document = songPage;
+    try {
+      if (!fn(songId)) throw timedOut();
+      return true;
+    } finally {
+      globalThis.document = previous;
+    }
+  });
+  page.locator = (selector) => {
+    if (selector === '[data-portos-song-menu]') return { click: async () => {
+      actions.push('menu');
+      openedMenus.push(songPage ? songPage.marked().map((el) => el.attrs['data-song']) : [pageSong()]);
+    } };
+    if (selector === '[data-portos-song-menu]:not([aria-expanded="false"])') return { waitFor: async () => {
+      if (openedMenus.length < menuOpensOnClick) throw timedOut();
+    } };
+    return baseLocator(selector);
+  };
+  page.evaluate = async (fn, arg) => (fn === sunoDownloadDialogSong ? dialogSong : baseEvaluate(fn, arg));
   page.getByRole = (role, options) => {
     const name = options.name;
     if (typeof name === 'string' && ['M4A', 'MP3', 'WAV', 'MP4 video asset'].includes(name)) return {
@@ -285,9 +361,10 @@ function workflow({ bytes = m4a, stalled, failure = null, ignoreSelection = fals
     if (role === 'button' && String(name) === '/^(Unlock & Download|Download)$/') return { click: async () => {
       actions.push('export');
       expect(page.listenerCount('download')).toBe(1);
+      exported = bytes ?? exportOf(exportsSong ?? openedMenus.at(-1)[0]);
       if (landsInDir) {
-        await writeFile(join(landsInDir, 'Example Song.m4a'), bytes);
-        dirFiles.push({ name: 'Example Song.m4a', size: bytes.length, modified: '2026-01-01T00:00:00.000Z' });
+        for (const other of alsoLands) await land(other.name, other.bytes);
+        await land('Example Song.m4a', exported);
       } else if (stalled !== 'event') page.emit('download', download);
     } };
     if (role === 'menuitem') return { click: async ({ timeout }) => {
@@ -304,10 +381,14 @@ function workflow({ bytes = m4a, stalled, failure = null, ignoreSelection = fals
   const connect = vi.fn(async () => ({ browser, context: { newPage: async () => page } }));
   const importAudio = vi.fn(async (path, name) => {
     expect(name).toBe('song.m4a');
-    expect(await readFile(path)).toEqual(m4a);
+    expect(await readFile(path)).toEqual(exported);
+    imported.push(await readAudioSongId(path));
     return { filename: 'music-example.m4a', sizeBytes: m4a.length };
   });
-  return { page, selected, actions, download, savedPath: () => savedPath, browser, connect, importAudio, listDownloads, downloadPollMs: 5 };
+  return {
+    page, selected, actions, download, savedPath: () => savedPath, browser, connect, importAudio, listDownloads, downloadPollMs: 5,
+    readAudioSongId, openedMenus, imported,
+  };
 }
 
 function h(tag, attrs = {}, content = '') {
@@ -583,6 +664,117 @@ describe('generateSunoSong M4A export', () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+
+  // Uniquely catches the export opening the first "More options" on the page. Suno gives other
+  // songs' cards that plain label and names the page song's own menu after its title.
+  it("opens the page song's own menu when another song's menu comes first on the page", async () => {
+    const songPage = songPageDocument([
+      ['A', { href: `/song/${OLD}` }, 'Another Song'],
+      ['BUTTON', { 'aria-label': 'More options', 'data-song': OLD }],
+      ['H1', {}, 'Example Song'],
+      ['BUTTON', { 'aria-label': 'More options for Example Song', 'data-song': NEW_A }],
+      // The second take of the same request shares the title.
+      ['A', { href: `/song/${NEW_B}` }, 'Example Song'],
+      ['BUTTON', { 'aria-label': 'More options', 'data-song': NEW_B }],
+    ]);
+    const w = workflow({ songPage });
+    await expect(generateSunoSong(fields, { ...w, songIds: [NEW_A] })).resolves.toMatchObject({ songId: NEW_A });
+    expect(w.page.waitForFunction).toHaveBeenCalledWith(markSunoSongMenu, NEW_A, expect.any(Object));
+    expect(w.openedMenus).toEqual([[NEW_A]]);
+    expect(w.imported).toEqual([NEW_A]);
+  });
+
+  // Uniquely catches "no menu could be tied to the song" falling back to whichever menu is there.
+  it('opens nothing and fails when only other songs have a menu on the page', async () => {
+    const songPage = songPageDocument([
+      ['H1', {}, 'Example Song'],
+      ['A', { href: `/song/${OLD}` }, 'Another Song'],
+      ['BUTTON', { 'aria-label': 'More options', 'data-song': OLD }],
+    ]);
+    const w = workflow({ songPage });
+    const error = await generateSunoSong(fields, { ...w, songIds: [NEW_A] }).catch((err) => err);
+    expect(error).toMatchObject({ code: 'SUNO_AUDIO_DOWNLOAD_FAILED', context: { stage: 'open-options', reason: 'song-menu-not-found' } });
+    expect(w.openedMenus).toEqual([]);
+    expect(w.actions).not.toContain('export');
+    expect(w.importAudio).not.toHaveBeenCalled();
+  });
+
+  // Uniquely catches a click that lands before the page listens for it stalling the export to its deadline.
+  it('clicks the song menu again while it still reports closed, and gives up when it never opens', async () => {
+    const w = workflow({ menuOpensOnClick: 2 });
+    await expect(generateSunoSong(fields, { ...w, songIds: [NEW_A] })).resolves.toMatchObject({ songId: NEW_A });
+    expect(w.actions.filter((action) => action === 'menu')).toHaveLength(2);
+    expect(w.actions.filter((action) => action === 'export')).toHaveLength(1);
+
+    const stuck = workflow({ menuOpensOnClick: Infinity });
+    await expect(generateSunoSong(fields, { ...stuck, songIds: [NEW_A] }))
+      .rejects.toMatchObject({ code: 'SUNO_AUDIO_DOWNLOAD_FAILED', context: { stage: 'open-options', reason: 'song-menu-did-not-open' } });
+    expect(stuck.actions).not.toContain('Download');
+    expect(stuck.importAudio).not.toHaveBeenCalled();
+  });
+
+  // Uniquely catches pressing Download in another song's dialog, which spends one of the account's downloads.
+  it('stops before the final Download click when the dialog names another song', async () => {
+    const w = workflow({ dialogSong: 'other' });
+    const error = await generateSunoSong(fields, { ...w, songIds: [NEW_A] }).catch((err) => err);
+    expect(error).toMatchObject({ code: 'SUNO_AUDIO_WRONG_SONG', context: { stage: 'verify-dialog', reason: 'dialog-names-another-song' } });
+    expect(w.actions).not.toContain('export');
+    expect(w.importAudio).not.toHaveBeenCalled();
+  });
+
+  // Uniquely catches the first new .m4a in the download folder being imported whatever song it is:
+  // a Track once got another song's audio that way.
+  it("never imports another song's export that the browser saved to its download directory", async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'portos-suno-test-'));
+    vi.useFakeTimers();
+    try {
+      const w = workflow({ landsInDir: dir, exportsSong: OLD });
+      const judged = vi.fn();
+      const settled = generateSunoSong(fields, {
+        ...w, songIds: [NEW_A], timeoutMs: 10_000,
+        readAudioSongId: async (path) => { const id = await readAudioSongId(path); judged(id); return id; },
+      }).catch((err) => err);
+      // The folder never shows the requested song: the wait ends at the deadline, on identity.
+      // The wait for the read stays well short of that deadline, so the two cannot race.
+      await vi.waitFor(() => expect(judged).toHaveBeenCalledWith(OLD), { timeout: 5000 });
+      await vi.advanceTimersByTimeAsync(10_000);
+      const error = await settled;
+      expect(error).toMatchObject({ code: 'SUNO_AUDIO_WRONG_SONG', context: { stage: 'wait-download', reason: 'song-id-mismatch' } });
+      expect(error.message).toBe('Suno: the export produced a different song than the one requested, so it was not imported');
+      expect(w.importAudio).not.toHaveBeenCalled();
+      expect(w.actions.filter((action) => action === 'export')).toHaveLength(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Uniquely catches an unrelated download that lands during the export being imported in the song's place.
+  it("leaves another song's download that lands first alone and imports the requested song's file", async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'portos-suno-test-'));
+    try {
+      const w = workflow({ landsInDir: dir, alsoLands: [{ name: 'Another Song.m4a', bytes: exportOf(OLD) }] });
+      await expect(generateSunoSong(fields, { ...w, songIds: [NEW_A] })).resolves.toMatchObject({ songId: NEW_A });
+      expect(w.imported).toEqual([NEW_A]);
+      expect(await readFile(join(dir, 'Another Song.m4a'))).toEqual(exportOf(OLD));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Uniquely catches a file that arrives as a browser download event skipping the identity gate.
+  it.each([
+    ["another song's id", { exportsSong: OLD }, 'SUNO_AUDIO_WRONG_SONG', 'song-id-mismatch'],
+    ['no song id', { bytes: m4a }, 'SUNO_AUDIO_UNVERIFIED', 'song-id-missing'],
+  ])('never imports a completed download that names %s', async (_label, options, code, reason) => {
+    const w = workflow(options);
+    const error = await generateSunoSong(fields, { ...w, songIds: [NEW_A] }).catch((err) => err);
+    expect(error).toMatchObject({ code, context: { stage: 'identify-audio', reason } });
+    expect(JSON.stringify({ message: error.message, context: error.context })).not.toMatch(/song\.m4a|portos-suno/);
+    expect(w.importAudio).not.toHaveBeenCalled();
+    await expect(stat(w.savedPath())).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('never presses Create or imports when stopped while the form is opening', async () => {

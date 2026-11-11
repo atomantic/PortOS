@@ -183,6 +183,18 @@ subtitles remain unchanged. Invalid content, missing ffmpeg, timeout, or
 cancellation prevents import. Temporary files are removed on success or failure;
 diagnostics contain fixed reasons rather than decoder output or private paths.
 
+A decodable file is accepted only when it is the requested song. The song page
+lists other songs, each with its own options menu, so the driver opens only the
+menu tied to the page's own song (its title, or a link to its id) and stops
+before the final Download click when the dialog names a different title. Suno
+stamps each M4A's container comment with its song id (`made with suno; …;
+id=<song id>`): the driver reads it with ffprobe, takes from the download folder
+only a file naming the requested id, and checks the staged file again before
+import. A file naming another song fails with `SUNO_AUDIO_WRONG_SONG`, one
+naming none with `SUNO_AUDIO_UNVERIFIED`, and a page with no menu that can be
+tied to the song with `SUNO_AUDIO_DOWNLOAD_FAILED` (`song-menu-not-found`);
+nothing is imported in any of these cases.
+
 [#9474](https://github.com/atomantic/PortOS/issues/9474) owns live acceptance of
 the new browser export driver. Deterministic browser fixtures and real synthetic
 decoder tests do not establish that live acceptance. Retry retains submitted IDs
@@ -196,7 +208,7 @@ and does not press Create or spend credits on a second generation.
 - A parked or failed delegated production run parks this run `needs-human`; Resume resumes the production run. A production run canceled on its own (not by canceling this run) also parks it `needs-human` (`PRODUCTION_CANCELED`).
 - **Resume after manual edits.** At the produce stage, Resume follows the newest production run started since the run began, so a run the director started by hand (for example with a different video model) is adopted: a live one is followed, a parked one is resumed, and a completed one goes straight to the final render. With no production run left to follow, Resume starts a new one from the brief. A run canceled while it waited on production can be resumed the same way. Resume may also carry `limits` (raised only once production has started, applied to the brief and to the resumed production run) and `models` (per-tool swaps, `null` clears a pin); a changed model cancels the current production run and starts a new one with the new pool.
 
-The Suno adapter fills the form through `placeholder` / role selectors and reads the new `/song/<id>` links. It opens the first take in the same signed-in PortOS Browser, selects only M4A, and presses Download (or Unlock & Download) once. It waits for the browser download to finish saving, checks the container and decodes the complete audio to reject damaged files, and imports the original M4A without conversion. The export has a ten-minute deadline; timeout, cancellation, or invalid audio removes staging files and never imports a partial/error response. Failures identify the export stage using bounded reason metadata. A retry reopens the existing song rather than pressing Create again.
+The Suno adapter fills the form through `placeholder` / role selectors and reads the new `/song/<id>` links. It opens the chosen take in the same signed-in PortOS Browser, selects only M4A, and presses Download (or Unlock & Download) once. It waits for the browser download to finish saving, checks the container and decodes the complete audio to reject damaged files, confirms the file names the requested song, and imports the original M4A without conversion. The export has a ten-minute deadline; timeout, cancellation, or invalid audio removes staging files and never imports a partial/error response. Failures identify the export stage using bounded reason metadata. A retry reopens the existing song rather than pressing Create again.
 
 ## API
 

@@ -75,6 +75,8 @@ const BROWSER_EXPORT_TIMEOUT_MS = 90_000;
 // (behind an autopilot song or a publish draft), which the export's own
 // budget doesn't count. Mutable for tests.
 const limits = { browserWaitMs: 2 * 60 * 1000, styleReadMs: 60 * 1000 };
+// The browser export's refusals of audio that is not the requested song's (autonomousSuno.js).
+const EXPORT_IDENTITY_CODES = new Set(['SUNO_AUDIO_WRONG_SONG', 'SUNO_AUDIO_UNVERIFIED']);
 
 // Export the song through the signed-in PortOS Browser, the same export the
 // autopilot uses, so a private or unpublished song in the user's own Suno
@@ -323,10 +325,14 @@ export async function startSunoImport(url) {
             if (abortIfCanceled()) return;
             if (!failure) break;
             console.warn(`⚠️ Suno import ${shortId(jobId)}: ${failure.message}`);
-            failures.push(failure.message);
+            failures.push(failure);
           }
           if (failures.length === routes.length) {
-            throw new Error(`Suno would not hand over this song's audio. For a private or unpublished song, sign in to Suno in the PortOS Browser and try again (${failures.join('; ')})`);
+            // Suno answered, just not with this song: say so rather than ask for a sign-in.
+            const identity = failures.find((failure) => EXPORT_IDENTITY_CODES.has(failure.code));
+            const others = failures.filter((failure) => failure !== identity).map((failure) => failure.message).join('; ');
+            if (identity) throw new Error(`${identity.message}${others ? ` (${others})` : ''}`);
+            throw new Error(`Suno would not hand over this song's audio. For a private or unpublished song, sign in to Suno in the PortOS Browser and try again (${others})`);
           }
         }
 

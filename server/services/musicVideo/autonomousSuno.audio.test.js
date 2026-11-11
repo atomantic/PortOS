@@ -5,17 +5,22 @@ import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
 import { describe, it, expect, vi } from 'vitest';
 import { execFile } from '../../lib/childProcess.js';
-import { findFfmpeg } from '../../lib/ffmpeg.js';
+import { findFfmpeg, findFfprobe } from '../../lib/ffmpeg.js';
 import { generateSunoSong, __testing } from './autonomousSuno.js';
 
 const { SUNO_RENDER_PROBE } = __testing;
 
 const ffmpeg = await findFfmpeg();
+const ffprobe = await findFfprobe();
 const execFileAsync = promisify(execFile);
 const SONG = '22222222-2222-2222-2222-222222222222';
+const OTHER = '33333333-3333-3333-3333-333333333333';
+// The container comment Suno stamps on an export of `songId`.
+const sunoComment = (songId) => `made with suno; created=2026-01-01T00:00:00Z; id=${songId}`;
 
-// Exercise the default decoder through the import boundary, with synthetic
-// bytes delivered by a completed browser export. No live Suno or provider calls.
+// Exercise the default decoder and the default song-id reader through the
+// import boundary, with synthetic bytes delivered by a completed browser
+// export. No live Suno or provider calls.
 function completedExport(bytes) {
   const page = new EventEmitter();
   let path;
@@ -27,6 +32,9 @@ function completedExport(bytes) {
   page.evaluate = async (_fn, arg) => (arg?.probe === SUNO_RENDER_PROBE
     ? { onSongPage: true, hasSongLink: true, clocks: ['0:02'], busyLabels: [], status: 'complete' }
     : undefined);
+  // The page song's own menu is found and opens on the first click.
+  page.waitForFunction = async () => true;
+  page.locator = () => ({ click: async () => {}, waitFor: async () => {} });
   const download = {
     saveAs: async (target) => { path = target; await writeFile(target, bytes); },
     failure: async () => null, cancel: async () => {}, delete: async () => {},
@@ -53,13 +61,21 @@ function completedExport(bytes) {
   };
 }
 
-describe.skipIf(!ffmpeg)('Suno real M4A decoder', () => {
+// The bytes of a two-second M4A, stamped with `comment` when one is given.
+async function m4aFixture(dir, codec, comment = null) {
+  const fixture = join(dir, 'example.m4a');
+  await execFileAsync(ffmpeg, [
+    '-nostdin', '-v', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=2', '-c:a', codec,
+    ...(comment ? ['-metadata', `comment=${comment}`] : []), '-movflags', '+faststart', '-f', 'mp4', fixture,
+  ], { timeout: 15_000 });
+  return readFile(fixture);
+}
+
+describe.skipIf(!ffmpeg || !ffprobe)('Suno real M4A decoder', () => {
   it.each(['aac', 'libopus'])('imports completed %s M4A unchanged and rejects a truncated faststart body', async (codec) => {
     const dir = await mkdtemp(join(tmpdir(), 'portos-suno-fixture-'));
     try {
-      const fixture = join(dir, 'example.m4a');
-      await execFileAsync(ffmpeg, ['-nostdin', '-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=2', '-c:a', codec, '-movflags', '+faststart', '-f', 'mp4', fixture], { timeout: 15_000 });
-      const bytes = await readFile(fixture);
+      const bytes = await m4aFixture(dir, codec, sunoComment(SONG));
       const good = completedExport(bytes);
       await expect(generateSunoSong({}, good)).resolves.toMatchObject({ filename: 'example.m4a' });
       expect(good.importAudio).toHaveBeenCalledOnce();
@@ -71,6 +87,26 @@ describe.skipIf(!ffmpeg)('Suno real M4A decoder', () => {
       expect(JSON.stringify({ message: error.message, context: error.context })).not.toMatch(/example\.m4a|portos-suno|Invalid|Error/);
       expect(bad.importAudio).not.toHaveBeenCalled();
       await expect(stat(bad.savedPath())).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Uniquely catches the real container comment being misread: a decodable
+  // export of another song, or one that names no song, reaching the library.
+  it("refuses a decodable M4A stamped with another song's id, or with none", async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'portos-suno-fixture-'));
+    try {
+      const other = completedExport(await m4aFixture(dir, 'aac', sunoComment(OTHER)));
+      const wrong = await generateSunoSong({}, other).catch(err => err);
+      expect(wrong).toMatchObject({ code: 'SUNO_AUDIO_WRONG_SONG', context: { stage: 'identify-audio', reason: 'song-id-mismatch' } });
+      expect(JSON.stringify({ message: wrong.message, context: wrong.context })).not.toMatch(/song\.m4a|portos-suno|3333/);
+      expect(other.importAudio).not.toHaveBeenCalled();
+      await expect(stat(other.savedPath())).rejects.toMatchObject({ code: 'ENOENT' });
+
+      const plain = completedExport(await m4aFixture(dir, 'aac'));
+      await expect(generateSunoSong({}, plain)).rejects.toMatchObject({ code: 'SUNO_AUDIO_UNVERIFIED', context: { reason: 'song-id-missing' } });
+      expect(plain.importAudio).not.toHaveBeenCalled();
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

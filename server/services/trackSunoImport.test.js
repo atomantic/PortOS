@@ -18,6 +18,7 @@ vi.mock('../lib/sseUtils.js', () => ({ broadcastSse: vi.fn(), attachSseClient: v
 vi.mock('./musicVideo/autonomousSuno.js', () => ({ generateSunoSong: vi.fn(), readSunoSongPage: vi.fn() }));
 vi.mock('../lib/safeUrlFetch.js', () => ({ fetchPublicText: vi.fn(), fetchPublicBinary: vi.fn(), resolvePublicUrl: vi.fn() }));
 
+const { ServerError } = await import('../lib/errorHandler.js');
 const { broadcastSse } = await import('../lib/sseUtils.js');
 const { probeVideoDuration, runFfmpegProcess } = await import('../lib/ffmpeg.js');
 const { fetchPublicText, fetchPublicBinary, resolvePublicUrl } = await import('../lib/safeUrlFetch.js');
@@ -258,6 +259,22 @@ describe('startSunoImport', () => {
     expect(await terminal()).toMatchObject({ type: 'complete' });
     expect(generateSunoSong).toHaveBeenCalled();
     expect(createTrack).toHaveBeenCalledWith(expect.objectContaining({ title: 'Airplane Mode', lyrics: 'words' }));
+  });
+
+  // Uniquely catches a wrong-song export being reported as a sign-in problem.
+  it('says the export was a different song, creating no track, when the browser export is refused as one', async () => {
+    fetchPublicText.mockResolvedValue(songPage({ id: ID, title: 'Airplane Mode', metadata: { prompt: 'words', tags: 'pop' } }));
+    fetchPublicBinary.mockResolvedValue(null); // mp3 and mp4 both refused
+    generateSunoSong.mockRejectedValue(new ServerError(
+      'Suno: the export produced a different song than the one requested, so it was not imported',
+      { status: 502, code: 'SUNO_AUDIO_WRONG_SONG' },
+    ));
+    await startSunoImport(`https://suno.com/song/${ID}`);
+    const frame = await terminal();
+    expect(frame).toMatchObject({ type: 'error', error: expect.stringMatching(/^Suno: the export produced a different song .* not imported \(its public video was refused too\)$/) });
+    expect(frame.error).not.toMatch(/sign in/i);
+    expect(importUploadedTrack).not.toHaveBeenCalled();
+    expect(createTrack).not.toHaveBeenCalled();
   });
 
   it('keeps progress moving forward when the browser export follows a failed extraction', async () => {
