@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 
 vi.mock('../../services/socket', () => ({ default: { connected: false, on: vi.fn(), off: vi.fn(), emit: vi.fn() } }));
@@ -18,6 +18,10 @@ const sources = [{ id: 'document', kind: 'document', label: 'Composition' }, { i
 const renderDock = async () => {
   const view = render(<MemoryRouter><PreviewDock project={project} sources={sources} audioUrl={null} /></MemoryRouter>);
   await screen.findByRole('button', { name: 'Film look' });
+  // The button mounts after the playback read resolves, outside act, so its
+  // storage subscription is still a pending passive effect. Flush it before a
+  // test dispatches a cross-tab `storage` event, or that event can be missed.
+  await act(async () => {});
   return view;
 };
 const pickSource = (value) => fireEvent.change(screen.getByLabelText('Preview source'), { target: { value } });

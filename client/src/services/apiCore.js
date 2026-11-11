@@ -22,6 +22,14 @@ export function maybeRedirectToLogin(response, error) {
   }
 }
 
+// PortOS answers every /api error with JSON, so a bodyless 502/503/504 came
+// from a proxy in front of it (the Vite dev proxy, `tailscale serve`) while the
+// server was down or restarting. Say that instead of a bare status code.
+const GATEWAY_STATUSES = new Set([502, 503, 504]);
+const bodylessError = (status) => (GATEWAY_STATUSES.has(status)
+  ? { error: `No response from the PortOS server (HTTP ${status}) — it may be restarting. Try again in a moment.`, code: 'SERVER_UNREACHABLE' }
+  : { error: `HTTP ${status}` });
+
 // Shared `!response.ok` envelope: parse the server's JSON error body, bounce to
 // /login on session expiry, and throw an Error carrying `.code`/`.status`/
 // `.context` from the response. Toasting is NOT done here — request() does its
@@ -33,7 +41,7 @@ export async function throwApiError(response) {
   // to the same HTTP-status shape used when the body isn't JSON at all.
   const parsedError = await response.json().catch(() => null);
   const error =
-    parsedError && typeof parsedError === 'object' ? parsedError : { error: `HTTP ${response.status}` };
+    parsedError && typeof parsedError === 'object' ? parsedError : bodylessError(response.status);
   // Auth gate (server: services/authGate.js) returns 401 with code AUTH_REQUIRED
   // for any /api request without a valid session. Bounce to /login so the
   // user can re-authenticate; skip if we're already there.
@@ -93,7 +101,12 @@ async function performRequest(endpoint, options = {}) {
     }
   };
 
-  const response = await fetch(url, config).catch(() => null);
+  const response = await fetch(url, config).catch((err) => {
+    // The caller cancelled its own read (unmount, superseded query): rethrow
+    // the abort untouched so it neither toasts nor looks like an outage.
+    if (config.signal?.aborted) throw err;
+    return null;
+  });
   if (!response) {
     const msg = 'Server unreachable — check your connection and try again';
     if (!silent) toast.error(msg);

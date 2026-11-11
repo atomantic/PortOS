@@ -60,8 +60,8 @@ describe('throwApiError', () => {
   });
 
   it('falls back to an HTTP-status message when the body is not JSON', async () => {
-    const response = makeResponse({ status: 502 }); // json:null → makeResponse's json() rejects
-    await expect(throwApiError(response)).rejects.toMatchObject({ message: 'HTTP 502' });
+    const response = makeResponse({ status: 500 }); // json:null → makeResponse's json() rejects
+    await expect(throwApiError(response)).rejects.toMatchObject({ message: 'HTTP 500' });
   });
 
   it('falls back to an HTTP-status message when the body is valid JSON but not an object', async () => {
@@ -115,6 +115,25 @@ describe('request() error path (now delegating to throwApiError)', () => {
     toast.error.mockClear();
     await expect(request('/x', { silent: true, hostControlOptional: true })).rejects.toMatchObject({ code: 'HOST_CONTROL_FORBIDDEN' });
     expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it('rethrows a caller-owned abort without toasting it as an outage', async () => {
+    global.fetch.mockImplementation((_url, { signal }) => new Promise((_resolve, reject) => {
+      signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+    }));
+    const controller = new AbortController();
+    const pending = request('/x', { signal: controller.signal }).catch((err) => err);
+    controller.abort();
+    const err = await pending;
+    expect(err.name).toBe('AbortError');
+    expect(err.code).not.toBe('SERVER_UNREACHABLE');
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it('explains a bodyless proxy 502 instead of toasting a bare status code', async () => {
+    global.fetch.mockResolvedValue(makeResponse({ status: 502 }));
+    await expect(request('/x')).rejects.toMatchObject({ status: 502, code: 'SERVER_UNREACHABLE' });
+    expect(toast.error).toHaveBeenCalledWith(expect.stringContaining('No response from the PortOS server (HTTP 502)'));
   });
 
   it('rejects with SERVER_UNREACHABLE code when fetch fails to connect', async () => {
@@ -196,7 +215,7 @@ describe('shell bootstrap reads are single-flight', () => {
       { status: 'fulfilled', value: { theme: 'classic-midnight' } },
       { status: 'fulfilled', value: { theme: 'classic-midnight' } },
     ]);
-    await expect(abandoned).resolves.toMatchObject({ code: 'SERVER_UNREACHABLE' });
+    await expect(abandoned).resolves.toMatchObject({ name: 'AbortError' });
     expect(global.fetch).toHaveBeenCalledTimes(2);
   });
 
