@@ -6,8 +6,9 @@
  * partner the RIGHT half. Each half carries one large face, a short teeth
  * strip, a headless front view and a back view; the two back views stand
  * nearest the centre line on one floor line, so the pair's relative height
- * reads across the cut. Height labels sit above the back views' heads and the
- * sheet has no ruler, so both halves share one layout.
+ * reads across the cut. Height labels sit above the back views' heads, and
+ * the same ruler stands on each outer edge, so the image model has a scale to
+ * draw against and both halves keep one layout and their own ruler.
  *
  * A finished render lands as three images:
  *   - the whole sheet, on BOTH records (`sheet:comparison`);
@@ -103,7 +104,8 @@ export function buildCharacterComparisonSheetPrompt(universe, leftCharacter, rig
     `Layout: the page is exactly twice as wide as it is tall and is split into two equal halves by an imaginary vertical line down the exact centre. The LEFT half belongs only to ${L} and the RIGHT half only to ${R}. The right half is the mirror image of the left half's layout. Nothing crosses or touches the centre line: leave an empty strip of plain backdrop along it, so the page can be cut in two and each half stands alone.`,
     `From the outer edge of each half toward the centre, in this order: (1) FACE, one large head-and-shoulders portrait that fills most of the half's height, showing the whole head with clear space above the hair, the chin, the full neck and the collar, relaxed natural expression, looking at the camera; (2) directly under the face, TEETH, a short wide close-up strip of the same person's mouth in a natural, unposed laugh with ordinary teeth; (3) FRONT, a full-body standing view from the front with the head absent, the figure ending cleanly at the neck inside the collar like a headless display mannequin, with no face and no hair; (4) BACK, a full-body standing view from behind, including the back of the head and hair. So the two BACK views stand nearest the centre line, one on each side of it.`,
     `All four standing figures are drawn to one scale, feet on one shared floor line, arms relaxed at the sides, whole body visible from the top of the hair to the soles. ${heightRelationLine(left, right)}`.trim(),
-    `Height marks: above the head of each BACK view, in the clear space over the hair, a short horizontal line at the level of the top of the head with a small caption over it, "${heightLabel(left)}" over ${L} and "${heightLabel(right)}" over ${R}. The line and caption never touch the hair. There is no ruler, measuring stick, scale bar or grid anywhere on the page.`,
+    `Height marks: above the head of each BACK view, in the clear space over the hair, a short horizontal line at the level of the top of the head with a small caption over it, "${heightLabel(left)}" over ${L} and "${heightLabel(right)}" over ${R}. The line and caption never touch the hair.`,
+    `Rulers: one thin vertical ruler stands at the far outer edge of each half, the left ruler at the page's left edge and an identical mirrored ruler at the page's right edge, each in clear backdrop beside the face and touching nothing. Both rise from the shared floor line, zero at the floor, with evenly spaced ticks and small numbers in the same units as the height captions, reaching a little above the taller person. Draw every standing figure against these rulers, so the top of each head sits at that person's stated height. There is no other ruler, scale bar or grid, and nothing at all along the centre line.`,
     `Captions, small plain sans-serif, never covering a person: "${L}" above the left face and "${R}" above the right face; under the feet of each standing view "${L} FRONT", "${L} BACK", "${R} BACK", "${R} FRONT".`,
     personBlock('LEFT', left),
     personBlock('RIGHT', right),

@@ -494,7 +494,8 @@ describe('catalog sheet routes', () => {
     expect(sent).toContain('The LEFT half belongs only to Example Hero and the RIGHT half only to Example Rival');
     expect(sent).toContain('Example Hero is 15 cm (about 6 in) taller than Example Rival');
     expect(sent).toContain('"Example Hero 180 cm" over Example Hero and "Example Rival 165 cm" over Example Rival');
-    expect(sent).toContain('There is no ruler');
+    expect(sent).toContain('an identical mirrored ruler at the page\'s right edge');
+    expect(sent).toContain('nothing at all along the centre line');
     expect(preview.body.preview.referenceImages.map((ref) => [ref.filename, ref.status])).toEqual([['hero.png', 'included'], ['rival.png', 'included']]);
     expect(preview.body.preview.promptAdditions.map((a) => a.id)).not.toContain('character-identity');
 
