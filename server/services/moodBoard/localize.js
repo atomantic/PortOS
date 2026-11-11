@@ -38,7 +38,7 @@ const IMAGE_HEADERS = { 'User-Agent': UA, Accept: 'image/*' };
 function publishBoardCopy(filename, buffer) {
   return withBackupAssetPublication(async () => {
     await writeFileGuarded(join(PATHS.images, filename), buffer);
-    await writeLocalImageSidecarIfMissing(filename);
+    await writeLocalImageSidecarIfMissing(filename, { replace: true, preserveMetadata: true });
   });
 }
 

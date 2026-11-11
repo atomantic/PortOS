@@ -166,6 +166,36 @@ describe('correcting a local claim on a late copy', () => {
   const claimed = (extra = {}) => saveHistory([{ ...videoRow, originInstanceId: 'me', ...extra }]);
   const created = Date.parse(videoRow.createdAt);
 
+  it('keeps a locally imported board image local after a peer copies it and the same source is imported again', async () => {
+    const { localizeImageUrl } = await import('./moodBoard/localize.js');
+    vi.useFakeTimers({ toFake: ['Date'] });
+    onTestFinished(() => vi.useRealTimers());
+    vi.setSystemTime(T);
+    const source = `data:image/png;base64,${Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0]).toString('base64')}`;
+    const url = await localizeImageUrl(source);
+    const filename = url.split('/').pop();
+    const sidecar = filename.replace(/\.png$/, '.metadata.json');
+    onTestFinished(() => { for (const name of [filename, sidecar]) rmSync(join(PATHS.images, name), { force: true }); });
+    touch(join(PATHS.images, filename), T);
+    await editImageSidecar(filename, (m) => { m.prompt = 'retained description'; return true; });
+    vi.setSystemTime(T + 2 * DAY);
+    expect(await localizeImageUrl(source)).toBe(url);
+    touch(join(PATHS.images, filename), T + 2 * DAY);
+    await recordPeerHoldings('a', 'image', 'imageLibrary', { mtimes: { [filename]: T + DAY }, checked: [filename] });
+    await recordPeerHoldings('b', 'image', 'imageLibrary', { mtimes: {}, checked: [filename] });
+    expect(await reconcileMediaOrigins('image')).toBe(0);
+    expect(JSON.parse(await readFile(join(PATHS.images, sidecar), 'utf8'))).toMatchObject({
+      originInstanceId: 'me', prompt: 'retained description', createdAt: new Date(T + 2 * DAY).toISOString(),
+    });
+    // A shared copy imported again still belongs to its recorded creator.
+    await editImageSidecar(filename, (m) => { m.originInstanceId = 'a'; return true; });
+    vi.setSystemTime(T + 3 * DAY);
+    await localizeImageUrl(source);
+    expect(JSON.parse(await readFile(join(PATHS.images, sidecar), 'utf8'))).toMatchObject({
+      originInstanceId: 'a', prompt: 'retained description', createdAt: new Date(T + 2 * DAY).toISOString(),
+    });
+  });
+
   it('hands the copy to the proven creator, so its deletes are accepted and a delete here goes to it', async () => {
     await claimed();
     touch(join(PATHS.videos, 'v1.mp4'), created + DAY); // pulled a day after it was made
