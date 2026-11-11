@@ -156,10 +156,17 @@ export async function forceAlignLyrics(wav, cues, {
     await writeFile(audio, sliceWav(wav, from, to));
     await writeFile(transcript, JSON.stringify(lines), { mode: 0o600 });
     let reason = null;
+    let unsupportedWord = null;
     const result = await run(python, [SCRIPT, '--audio', audio, '--lyrics', transcript, '--output', output,
       '--model-dir', modelDir], (line) => {
-      const reasonMatch = /^ERROR:([a-z0-9-]+)$/.exec(line);
-      if (reasonMatch) reason = reasonMatch[1];
+      const unsupported = /^ERROR:unsupported-word:(\d+):(\d+)$/.exec(line);
+      if (unsupported) {
+        unsupportedWord = { line: Number(unsupported[1]), word: Number(unsupported[2]) };
+        reason = 'unsupported-word';
+      } else {
+        const reasonMatch = /^ERROR:([a-z0-9-]+)$/.exec(line);
+        if (reasonMatch) reason = reasonMatch[1];
+      }
       const match = /^PROGRESS:(downloading-model|loading-model|aligning|emissions)(?::(\d+))?$/.exec(line);
       if (match) onProgress({ stage: match[1], ...(match[2] ? { percent: Number(match[2]) } : {}) });
     }, { timeoutMs: 60 * 60_000, isCancelled });
@@ -169,7 +176,17 @@ export async function forceAlignLyrics(wav, cues, {
         'LYRIC_ALIGN_CTC_MODEL_REJECTED');
     }
     if (!result.success) {
-      if (reason === 'audio-too-short') throw failure('MMS_FA could not fit these words into the audio window: the line has too little audio for its words.', 'LYRIC_ALIGN_CTC_WINDOW_TOO_SHORT');
+      const word = unsupportedWord ? lines[unsupportedWord.line]?.[unsupportedWord.word] : undefined;
+      if (typeof word === 'string' && word) {
+        throw new ServerError(
+          `MMS_FA cannot align "${word}" on lyric line ${unsupportedWord.line + 1}: spell numbers out and use Latin letters.`,
+          { status: 422, code: 'LYRIC_ALIGN_CTC_UNSUPPORTED_TEXT' },
+        );
+      }
+      if (reason === 'audio-too-short') {
+        throw failure('MMS_FA could not fit these words into the audio window: the line has too little audio for its words.',
+          'LYRIC_ALIGN_CTC_WINDOW_TOO_SHORT');
+      }
       const summary = /^(?:exit \d+|exited with code \d+|timed out after \d+s)/.exec(result.error || '')?.[0] || 'process failed';
       console.error(`❌ MMS_FA alignment failed: ${reason || summary}`);
       throw failure('MMS_FA could not align these lyrics. Check that lyrics match the vocal, spell numbers out, and allow the first-use model download.');
