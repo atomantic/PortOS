@@ -2446,8 +2446,8 @@ describe('path-gated single-purpose jobs', () => {
     expect(jobs['prompt-history']).toContain("if: needs.impact.outputs.prompt_history == 'true'");
     expect(jobs['linux-containment']).toContain("if: needs.impact.outputs.linux_containment == 'true'");
     // The gate walks LINUX_CONTAINMENT_TESTS, so the job must run exactly those.
-    const run = jobs['linux-containment'].match(/run: npm test --prefix server -- --run (.*)/)[1];
-    expect(run.split(' ').map((path) => posix.join('server', path))).toEqual(LINUX_CONTAINMENT_TESTS);
+    const run = jobs['linux-containment'].match(/run: bash scripts\/ci-install-containment-tools\.sh npm test --prefix server -- --run (.*)/)[1];
+    expect(run.split(' ').map((path) => posix.normalize(posix.join('server', path)))).toEqual(LINUX_CONTAINMENT_TESTS);
     // A skipped gated job still reports to CI Gate, which treats skipped as passing.
     expect(jobs.gate).toContain('CI_GATE_RESULT_PROMPT_HISTORY: ${{ needs.prompt-history.result }}');
     expect(jobs.gate).toContain('CI_GATE_RESULT_LINUX_CONTAINMENT: ${{ needs.linux-containment.result }}');

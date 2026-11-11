@@ -1393,18 +1393,14 @@ jobs:
           node-version: 26.x
           cache: npm
           cache-dependency-path: server/package-lock.json
-      - name: Install the containment prerequisite
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y bubblewrap
       - name: Install test dependencies
         run: npm ci --ignore-scripts --prefix server
-      - name: Exercise real namespaces, seccomp, limits and cancellation
+      - name: Install containment prerequisite and exercise real namespaces, seccomp, limits and cancellation
         env:
           PORTOS_REQUIRE_LINUX_CONTAINMENT: '1'
         # Keep this list equal to the impact planner's LINUX_CONTAINMENT_TESTS:
         # the job is gated on those files' import closure.
-        run: npm test --prefix server -- --run ../autofixer/sandbox.verify.test.js lib/codeAnimationContainment.test.js routes/codeAnimationExecution.test.js services/codeAnimation/containedWorker.test.js
+        run: bash scripts/ci-install-containment-tools.sh npm test --prefix server -- --run ../autofixer/sandbox.verify.test.js lib/codeAnimationContainment.test.js routes/codeAnimationExecution.test.js services/codeAnimation/containedWorker.test.js ../scripts/ci-install-containment-tools.test.js
 
   docker-containment-live:
     name: Docker containment live
