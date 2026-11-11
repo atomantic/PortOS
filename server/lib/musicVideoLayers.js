@@ -66,10 +66,11 @@ export function composedDrawsLyrics(project) {
  * stills and cards itself, and a composition document (mode `document`) is
  * handed each scene's layer in `window.PORTOS_MV` and draws still/card/code
  * scenes itself — neither needs a clip for them, and a card or code shot needs
- * no frame either.
+ * no frame either. Blender film shots are self-drawn code layers too; their
+ * final-render readiness is checked separately by the Blender render index.
  * Plain concat and code renders play footage only.
  */
-export const LAYERED_COMPOSITION_MODES = Object.freeze(['composed', 'document']);
+export const LAYERED_COMPOSITION_MODES = Object.freeze(['composed', 'document', 'blender']);
 export const isLayeredComposition = (project) => LAYERED_COMPOSITION_MODES.includes(project?.composition?.mode);
 
 /** The layer a scene contributes; `layered` is true only for a layered composition (see isLayeredComposition). */
