@@ -68,16 +68,6 @@ describe('trellis2Cuda path resolution', () => {
 });
 
 describe('isTrellis2CudaInstalled', () => {
-  it('uses only the completed private profile and never falls back after a failed Repair', () => {
-    const prefix = join(ROOT, '.conda');
-    const python = join(prefix, 'bin', 'python');
-    const complete = [prefix, python, join(prefix, 'portos-profile.json'), join(prefix, 'portos-source', 'trellis2')];
-    const options = { base: BASE, env: CONDA_ENV, exists: existsFor(...complete, CONDA_PY, join(ROOT, 'trellis2')) };
-    expect(isTrellis2CudaInstalled(options)).toBe(true);
-    expect(trellis2CudaPython(options)).toBe(python);
-    expect(isTrellis2CudaInstalled({ ...options, exists: existsFor(prefix, python, CONDA_PY, join(ROOT, 'trellis2')) })).toBe(false);
-    expect(isTrellis2CudaInstalled({ ...options, exists: existsFor(...complete, CONDA_PY, join(ROOT, 'portos-installing')) })).toBe(false);
-  });
   it('is true only when BOTH the conda python and the upstream package exist', () => {
     expect(isTrellis2CudaInstalled({ base: BASE, exists: INSTALLED, env: CONDA_ENV })).toBe(true);
   });
@@ -188,6 +178,24 @@ describe('runTrellis2CudaGenerate', () => {
     env: CONDA_ENV,
     postprocessGlb: vi.fn(),
     ...opts,
+  });
+
+  it('renders from the private snapshot and refuses legacy fallback after an incomplete Repair', async () => {
+    const prefix = join(ROOT, '.conda');
+    const python = join(prefix, 'bin', 'python');
+    const source = join(prefix, 'portos-source');
+    const complete = [prefix, python, join(prefix, 'portos-profile.json'), join(source, 'trellis2')];
+    const child = makeChild();
+    const spawnImpl = vi.fn(() => child);
+    const ready = run({ exists: existsFor(...complete, CONDA_PY, join(ROOT, 'trellis2')), spawnImpl });
+    child.emit('close', 0);
+    await expect(ready.promise).resolves.toEqual({ assetPath: '/out/model.glb' });
+    expect(spawnImpl).toHaveBeenCalledWith(python, expect.arrayContaining(['--repo-root', source]), expect.objectContaining({ cwd: source }));
+    for (const paths of [[prefix, python], [...complete, join(ROOT, 'portos-installing')]]) {
+      const failed = run({ exists: existsFor(...paths, CONDA_PY, join(ROOT, 'trellis2')), spawnImpl });
+      await expect(failed.promise).rejects.toMatchObject({ code: 'TRELLIS2_CUDA_NOT_INSTALLED' });
+    }
+    expect(spawnImpl).toHaveBeenCalledTimes(1);
   });
 
   it('refuses to run — and never spawns — when the environment is absent', async () => {

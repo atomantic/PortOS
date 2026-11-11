@@ -34,7 +34,7 @@ export function trellis2CudaRoot(base = join(HOME, '.portos')) {
  * Prefer the completed private profile. Intact legacy named Conda environments
  * remain usable until Repair; an incomplete private rebuild cannot fall back.
  * `exists` is injectable so the probe is deterministic in tests.
- * @param {{exists?: (p: string) => boolean, env?: object}} [opts]
+ * @param {{base?: string, exists?: (p: string) => boolean, env?: object}} [opts]
  * @returns {string|null}
  */
 export function trellis2CudaPython({ base, exists = existsSync, env } = {}) {
