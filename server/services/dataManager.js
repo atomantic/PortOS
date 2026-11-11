@@ -135,7 +135,9 @@ export const CATEGORIES = {
   'image-refs': { label: 'Image References', description: 'Reference images uploaded for multi-reference edits — still served to existing renders', archivable: true, deletable: false },
   'image-to-3d': { label: 'Image to 3D', description: 'Generated GLB meshes — the only copy; records live in Postgres', archivable: false, deletable: false },
   'images': { label: 'Images', description: 'Uploaded and generated images — delete individually; gallery, pipeline, and collection records point at these files', archivable: true, deletable: true, purgeScope: 'items' },
-  'insights': { label: 'Insights', description: 'Derived goal scorecards and insights — rebuilt on the next insights run', archivable: true, deletable: true, purgeScope: 'category' },
+  // Not only derived output: the goal scorecard's hand-authored rule overrides
+  // and its settings live here too, and nothing regenerates them.
+  'insights': { label: 'Insights', description: 'Goal scorecard rule overrides and settings, plus the derived scorecard, themes and narrative', archivable: true, deletable: false },
   // Project-specific jev heads plus the corpora and cached embeddings behind
   // them.
   //
@@ -207,7 +209,7 @@ export const CATEGORIES = {
   'storyboards': { label: 'Storyboards', description: 'Storyboard beats and panels (file mirror of the Postgres store)', archivable: true, deletable: false },
   'storyboard-recipes': { label: 'Storyboard recipes', description: 'Saved panel maker recipes (file mirror of the Postgres store)', archivable: true, deletable: false },
   'supercollider': { label: 'SuperCollider Runtime', description: 'Machine-local readiness evidence for the managed SuperCollider image, in-flight render scratch and 24-hour render previews — re-created by npm run setup:supercollider, safe to purge', archivable: false, deletable: true, purgeScope: 'category' },
-  'telegram': { label: 'Telegram', description: 'Telegram bot data', archivable: true, deletable: true, purgeScope: 'category' },
+  'telegram': { label: 'Telegram', description: 'Your answers to Telegram goal check-ins', archivable: true, deletable: false },
   'templates': { label: 'Visual Templates', description: 'Shipped layout assets used as render anchors', archivable: false, deletable: false },
   // Not execution logs: one JSON config per onboard tool, spliced into CoS
   // prompts. Image Gen settings are the only writer, so a purge would drop
