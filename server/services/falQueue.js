@@ -109,9 +109,17 @@ export async function hostFalDataUri({ apiKey, dataUri, fileName, signal, maxRet
         throw new ServerError(`fal.ai upload could not start: HTTP ${initiated.status}`, { status: 502, code: 'FAL_UPLOAD_FAILED' });
       }
 
-      const target = await initiated.json().catch(() => null);
-      if (!initiated.ok || typeof target?.upload_url !== 'string' || typeof target?.file_url !== 'string') {
-        throw new ServerError(`fal.ai upload could not start: HTTP ${initiated.status}`, { status: 502, code: 'FAL_UPLOAD_FAILED' });
+      let target;
+      try {
+        target = await initiated.json();
+      } catch (readErr) {
+        if (readErr instanceof SyntaxError) {
+          throw new ServerError(`fal.ai upload could not start: malformed JSON response (HTTP ${initiated.status})`, { status: 502, code: 'FAL_UPLOAD_FAILED' });
+        }
+        throw readErr;
+      }
+      if (typeof target?.upload_url !== 'string' || typeof target?.file_url !== 'string') {
+        throw new ServerError(`fal.ai upload could not start: invalid response (HTTP ${initiated.status})`, { status: 502, code: 'FAL_UPLOAD_FAILED' });
       }
 
       const put = await fetchWithTimeout(target.upload_url, {
