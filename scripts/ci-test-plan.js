@@ -404,6 +404,7 @@ export const ALWAYS_RUN_TESTS = [
   // walkers (#8723): the offending file is never imported by the guard, so
   // impact selection only reaches them when the guard itself changes.
   'server/lib/apiRouteGraph.test.js',
+  'server/lib/apiRouteParity.test.js',
   // Route inventories and write-back scans depend on independently changed files (#13224).
   'server/lib/hostControlRoutes.test.js',
   'server/jsonWritebackConventions.test.js',
@@ -867,7 +868,7 @@ export const structuralTestsFor = (changedFiles, trackedSet) => {
   // the parity guard a client wrapper stranded by a renamed mount, and the
   // prompt-stage drift test a stale manifest — which is what a scoped plan
   // let merge before this rule existed (#5898).
-  if (changedFiles.some((path) => /^server\/.*\.js$/.test(path) || /^server\/lib\/.*\.generated\.json$/.test(path))) {
+  if (changedFiles.some((path) => /^server\/.*\.js$/.test(path) || /^server\/lib\/.*\.generated\.json$/.test(path) || /^client\/src\/services\/api.*\.js$/.test(path))) {
     add('server/lib/apiRouteGraph.test.js');
     add('server/lib/apiRouteParity.test.js');
     add('scripts/generate-prompt-stage-call-sites.test.js');

@@ -1423,7 +1423,7 @@ describe('CI test impact planner', () => {
     });
   });
 
-  it('runs the tree-scanning route and prompt-stage guards whenever a server source changes', () => {
+  it('runs the tree-scanning route and prompt-stage guards whenever a server source or client API wrapper changes', () => {
     const treeGuards = [
       'server/lib/apiRouteGraph.test.js',
       'server/lib/apiRouteParity.test.js',
@@ -1441,6 +1441,10 @@ describe('CI test impact planner', () => {
     // A client-only change has nothing to scan.
     const client = buildCiTestPlan(['client/src/lib/catalogLinks.js'], { trackedFiles: tracked });
     expect(client.server.files).not.toEqual(expect.arrayContaining(treeGuards));
+    const apiWrapper = buildCiTestPlan(['client/src/services/apiNewRoute.js'], {
+      trackedFiles: [...tracked, 'client/src/services/apiNewRoute.js'],
+    });
+    expect(apiWrapper.server.files).toContain('server/lib/apiRouteParity.test.js');
   });
 
   it('fails closed to the full suite for a python script nothing pins', () => {
