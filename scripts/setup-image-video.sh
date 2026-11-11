@@ -1590,7 +1590,7 @@ if [[ "$INSTALL_FLUX2" == "1" ]]; then
       echo "   Re-run with PYTHON_BIN pointing at a 3.11+ interpreter (e.g. 'brew install python@3.12')." >&2
       exit 1
     fi
-    "$FLUX2_PY" -m pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-flux2-mlx.lock.txt"
+    "$FLUX2_PY" -m pip install --require-hashes --no-deps --only-binary :all: -r "$SCRIPT_DIR/requirements-flux2-mlx.lock.txt"
   else
     # Direct pins: scripts/requirements-flux2-cuda.txt.
     sync_cuda_lock_venv FLUX.2 "$FLUX2_VENV" requirements-flux2-cuda

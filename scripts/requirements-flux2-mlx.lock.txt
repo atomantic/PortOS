@@ -2,21 +2,25 @@
 # Apple Silicon (arm64 macOS). Do not edit by hand.
 #
 # scripts/setup-image-video.sh (INSTALL_FLUX2=1) installs this with
-# `pip install --require-hashes --no-deps -r`, so every transitive package is
-# version- and hash-pinned and a tampered or substituted distribution fails the install.
+# `pip install --require-hashes --no-deps --only-binary :all: -r`, so every
+# transitive package is version- and hash-pinned and substituted artifacts fail.
 # The lock is universal across CPython 3.11+ (per-Python versions carry
 # environment markers; 3.10 is excluded because filelock's security fix needs 3.11),
 # restricted to arm64 macOS wheels.
 #
 # Regenerate after editing requirements-flux2-mlx.txt, from the repo root,
 # with a cooldown so brand-new releases are not adopted the day they publish:
+#   CUTOFF=<UTC date at least 7 days ago>
 #   LOCK="$PWD/scripts/requirements-flux2-mlx.lock.txt"; TMP="$(mktemp -d)"
 #   cp scripts/requirements-flux2-mlx.txt "$TMP/"
+#   cp "$LOCK" "$TMP/requirements-flux2-mlx.lock.txt"
 #   printf '[project]\nname = "flux2-lock"\nversion = "0"\n[tool.uv]\nenvironments = ["sys_platform == '"'"'darwin'"'"' and platform_machine == '"'"'arm64'"'"'"]\n' > "$TMP/pyproject.toml"
 #   (cd "$TMP" && uv pip compile requirements-flux2-mlx.txt --universal --python-version 3.11 \
-#     --generate-hashes --no-header --annotation-style line \
-#     --exclude-newer <UTC date at least 7 days ago> -o "$LOCK")
-# then check the result against OSV (including MAL- malicious-package records).
+#     --generate-hashes --only-binary :all: --no-header --annotation-style line \
+#     --exclude-newer "$CUTOFF" --upgrade-package sdnq -o requirements-flux2-mlx.lock.txt)
+#   cp "$TMP/requirements-flux2-mlx.lock.txt" "$LOCK"
+# Restore this header, then check the complete result against OSV, including MAL-.
+# Last regenerated with hash-verified uv 0.13.7 and CUTOFF=2026-11-04T00:00:00Z.
 accelerate==1.15.0 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:5654f8c5eaa0d4fa68b33e287a97765da6849bf6d51dcac874e73fbbddfb6134 \
     --hash=sha256:97eacca0b73e45cb867dbf8c5d5d4dc32219544300e0c8992c7334dc2ef33cec
@@ -974,9 +978,9 @@ safetensors==0.8.0 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:fcdd41ec4628fee5799f807c73c353629130fbd942aa23d83c623dd6c9d52d78 \
     --hash=sha256:fd6f3f93c9a0a7cc2788ee63fb763353d4bd2e89b0751bc78fcf7dda00bea774
     # via accelerate, diffusers, optimum-quanto, peft, transformers, -r requirements-flux2-mlx.txt
-sdnq==0.2.8 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
-    --hash=sha256:0664a8c710d1a766e8b3f96a51b9841a8af1130256aa2ae602ce53f9a780656d \
-    --hash=sha256:e8b4e8af970dc5b514a0d6d6919fa0400fcbad48cc6a7896d6913a97719a951e
+sdnq==0.2.9 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
+    --hash=sha256:487b15d85d90fae0b768919f64a76fc4a14d213291e65c4df35dcc542f89157f \
+    --hash=sha256:c7854b91766fd7e048c8e3501c624c40ccdc4437da4a072f7a6929b44add128b
     # via -r requirements-flux2-mlx.txt
 sentencepiece==0.2.2 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:046b15ea22d8042e2e173561d464ec3b64a9c2081324df70ebce7bf7ebb3e497 \
