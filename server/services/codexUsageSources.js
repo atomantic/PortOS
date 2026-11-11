@@ -256,7 +256,8 @@ async function inspectFile(path, state, range, decompress) {
   } finally {
     await handle?.close();
   }
-  if (ids.size !== 1) issues.add(ids.size ? 'conflicting_identity' : 'missing_identity');
+  if (ids.size > 1) issues.add('conflicting_identity');
+  else if (!ids.size && records.length) issues.add('missing_identity');
   return { ids, records, cwd, issues: [...issues], valid: !issues.size, fingerprint: fingerprintRecords(records),
     byModel: issues.size || !range ? {} : parseCodexRollout(records, range).byModel, loadRecords: async () => records };
 }
@@ -293,6 +294,8 @@ async function decodeAndStore(path, revision, info, state, decompress) {
     sourceInventory.delete(path);
     return source;
   }
+  // A decoded non-session has no identity or accounting records to cache.
+  if (!source.ids.size) return source;
   const [id] = source.ids;
   const projection = { revision, id, cwd: source.cwd, fingerprint: source.fingerprint };
   if (await writeInventorySource(hash(path), { ...projection, records: source.records, sourceMtimeMs: info.mtimeMs })) {

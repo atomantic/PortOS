@@ -149,13 +149,14 @@ describe('read-only Codex preview command and source boundary', () => {
   it('logs incomplete reasons and counts only, keeping relative source names on the error for the private notice', async () => {
     await source('sessions/2026/bad.jsonl', '{"truncated":');
     const inventory = await readCodexAccountingSources({ home, cache: false });
+    expect(inventory.coverage.complete).toBe(false);
     let error;
     try { assertCodexInventoryComplete(inventory); } catch (caught) { error = caught; }
     expect(error).toMatchObject({ code: 'CODEX_SOURCES_INCOMPLETE', issues: { malformed: 1 } });
     expect(error.message).toContain('malformed=1');
     expect(error.message).not.toContain('bad.jsonl');
     expect(error.message).not.toContain(home);
-    expect(error.problemSources).toEqual([{ source: join('sessions', '2026', 'bad.jsonl'), issues: ['malformed', 'missing_identity'] }]);
+    expect(error.problemSources).toEqual([{ source: join('sessions', '2026', 'bad.jsonl'), issues: ['malformed'] }]);
   });
 
   it('reports malformed and truncated compressed files and invalidates their identifiable raw copies', async () => {

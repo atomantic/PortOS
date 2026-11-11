@@ -71,7 +71,7 @@ describe('Codex accounting inventory', () => {
     for (const privateValue of ['SYNTHETIC TRANSCRIPT TEXT', 'session-a', home]) expect(stored).not.toContain(privateValue);
 
     // A runtime without the decoder reports that rather than coasting on the store.
-    expect((await read({ decompress: null })).coverage.issues).toEqual({ unsupported_compression: 1, missing_identity: 1 });
+    expect((await read({ decompress: null })).coverage.issues).toEqual({ unsupported_compression: 1 });
   });
 
   it('keeps a Codex service tier and drops the rest of the thread settings', async () => {
