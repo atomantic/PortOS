@@ -91,6 +91,8 @@ def install(root):
         archives = [(s, fetch_source(s, Path(downloads))) for s in profile['sources']]
         venv = root / '.venv'
         run([sys.executable, '-m', 'venv', '--clear', venv])
+        installing = venv / 'portos-installing'
+        installing.write_text(profile['id'] + '\n')
         python = venv / 'bin' / 'python3'
         compiler_overrides = {'CFLAGS', 'CXXFLAGS', 'CPPFLAGS', 'LDFLAGS', 'ARCHFLAGS',
                               'CC', 'CXX', 'LDSHARED', 'SDKROOT', 'BUILD_TARGET'}
@@ -99,7 +101,7 @@ def install(root):
         env.update(PIP_CONFIG_FILE=os.devnull, PYTHONNOUSERSITE='1',
                    MACOSX_DEPLOYMENT_TARGET='26.0', MAX_JOBS='4')
         run([python, '-m', 'pip', '--isolated', 'install', '--disable-pip-version-check',
-             '--require-hashes', '--no-deps', '--only-binary', ':all:',
+             '--force-reinstall', '--require-hashes', '--no-deps', '--only-binary', ':all:',
              '--index-url', 'https://pypi.org/simple', '-r', lock], env=env)
         source = venv / 'portos-source'
         source.mkdir()
@@ -134,6 +136,7 @@ def install(root):
         record = {**profile, 'toolchain': toolchain, 'installed': inventory,
                   'wheelLockSha256': hashlib.sha256(lock.read_bytes()).hexdigest()}
         (venv / 'portos-profile.json').write_text(json.dumps(record, indent=2) + '\n')
+        installing.unlink()
         print('[setup] TRELLIS.2 Metal native imports and locked profile verified.', flush=True)
 
 

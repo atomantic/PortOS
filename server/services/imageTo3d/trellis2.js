@@ -59,7 +59,11 @@ export function trellis2GenerateRunnerScript() {
  * @returns {boolean}
  */
 export function isTrellis2Installed({ base, exists = existsSync } = {}) {
-  return exists(trellis2VenvPython(base)) && exists(trellis2GenerateScript(base, exists));
+  const root = trellis2Root(base);
+  if (!exists(trellis2VenvPython(base)) || exists(join(root, '.venv', 'portos-installing'))) return false;
+  const script = trellis2GenerateScript(base, exists);
+  const completed = script === join(root, 'generate.py') || exists(join(root, '.venv', 'portos-profile.json'));
+  return completed && exists(script);
 }
 
 /**

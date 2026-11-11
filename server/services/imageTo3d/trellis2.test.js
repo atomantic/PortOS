@@ -60,11 +60,11 @@ describe('isTrellis2Installed', () => {
   const venv = trellis2VenvPython(BASE);
 
   it('is installed only when BOTH the venv python and generate.py exist', () => {
-    expect(isTrellis2Installed({ base: BASE, exists: () => true })).toBe(true);
+    expect(isTrellis2Installed({ base: BASE, exists: (path) => !path.endsWith('portos-installing') })).toBe(true);
   });
 
   it('is not installed when the venv python is missing', () => {
-    expect(isTrellis2Installed({ base: BASE, exists: (p) => p !== venv })).toBe(false);
+    expect(isTrellis2Installed({ base: BASE, exists: (p) => p !== venv && !p.endsWith('portos-installing') })).toBe(false);
   });
 
   it('is not installed when generate.py is missing', () => {
@@ -397,7 +397,7 @@ describe('parseGenerateProgress', () => {
 });
 
 describe('runTrellis2Generate', () => {
-  const installed = (path) => !path.includes('portos-source');
+  const installed = (path) => !path.includes('portos-source') && !path.endsWith('portos-installing');
 
   const makeChild = () => {
     const child = new EventEmitter();
@@ -417,12 +417,26 @@ describe('runTrellis2Generate', () => {
   it('renders from the verified snapshot after Install or Repair', async () => {
     const child = makeChild();
     const spawnImpl = vi.fn(() => child);
-    const { promise } = runTrellis2Generate({ imagePath: 'a.png', base: BASE, exists: () => true, spawnImpl });
+    const { promise } = runTrellis2Generate({ imagePath: 'a.png', base: BASE, exists: (path) => !path.endsWith('portos-installing'), spawnImpl });
     const source = join(trellis2Root(BASE), '.venv', 'portos-source');
     expect(spawnImpl.mock.calls[0][1]).toContain(join(source, 'generate.py'));
     expect(spawnImpl.mock.calls[0][2]).toEqual({ cwd: source });
     child.emit('close', null);
     await expect(promise).rejects.toMatchObject({ code: 'TRELLIS2_GENERATE_FAILED' });
+  });
+
+  it.each([
+    ['failed Repair before source extraction', ['generate.py', '.venv/portos-installing']],
+    ['failed native build', ['.venv/portos-source/generate.py', '.venv/portos-installing']],
+    ['missing completion record', ['.venv/portos-source/generate.py']],
+  ])('refuses to render an incomplete profile after %s', async (_state, files) => {
+    const paths = [trellis2VenvPython(BASE), ...files.map(file => join(trellis2Root(BASE), ...file.split('/')))];
+    const spawnImpl = vi.fn();
+    const { promise } = runTrellis2Generate({
+      imagePath: 'synthetic.png', base: BASE, exists: (path) => paths.includes(path), spawnImpl,
+    });
+    await expect(promise).rejects.toMatchObject({ code: 'TRELLIS2_NOT_INSTALLED' });
+    expect(spawnImpl).not.toHaveBeenCalled();
   });
 
   it('wires the generate command, streams progress, and resolves with the produced asset', async () => {
@@ -756,7 +770,7 @@ describe('resolveTrellis2PipelineType', () => {
 });
 
 describe('runTrellis2Generate render-option wiring', () => {
-  const installed = () => true;
+  const installed = (path) => !path.endsWith('portos-installing');
   const makeChild = () => {
     const child = new EventEmitter();
     child.stdout = new EventEmitter();
@@ -834,7 +848,7 @@ describe('runTrellis2Generate render-option wiring', () => {
 
 describe('isMpsWatchdogError', () => {
   // Local copies: the equivalents in the runTrellis2Generate block are scoped to it.
-  const installed = () => true;
+  const installed = (path) => !path.endsWith('portos-installing');
   const makeChild = () => {
     const child = new EventEmitter();
     child.stdout = new EventEmitter();

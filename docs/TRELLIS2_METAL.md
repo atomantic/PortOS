@@ -8,6 +8,9 @@ and at least **24 GB** unified memory. Install Python with
 Metal component can be installed with `xcodebuild -downloadComponent MetalToolchain`.
 The script checks the actual interpreter, architecture, OS and toolchain before
 changing the runtime. There is no ambient uv/pip resolver or degraded native build.
+An interrupted or failed rebuild is reported as incomplete and cannot render;
+rerun Install or Repair to finish it. Locked profiles require the successful
+completion record, while intact legacy environments remain usable.
 
 The existing runtime directory and downloaded weights remain in place. Repair
 rebuilds only `.venv`, so incompatible native modules and unlocked extras cannot
@@ -40,7 +43,8 @@ need mtlmesh's CUDA-only cubvh submodule. Its xatlas C++ sources are already
 vendored in the pinned archive.
 
 The 56-wheel hash lock includes pip, setuptools, wheel, pybind11 and Ninja.
-Every wheel is installed with `--require-hashes --no-deps --only-binary :all:`.
+Every wheel is installed with `--force-reinstall --require-hashes --no-deps --only-binary :all:`;
+this also verifies the pinned pip wheel instead of reusing venv's bundled pip.
 Then utils3d and the five native packages build from verified local sources with
 `--no-index --no-deps --no-build-isolation --no-cache-dir`. No dependency fetch
 or source-distribution fallback is permitted during a build. Torch 2.15 headers
