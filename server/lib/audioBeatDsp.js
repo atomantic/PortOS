@@ -4,7 +4,7 @@
  * The ffmpeg-decode + pure-JS spectral-flux pipeline that both the Music Video
  * analyzer (`services/musicVideo/audioAnalysis.js`) and the launch-video beat
  * grid (`lib/beatGrid.js`) build on: Hann/FFT helpers, `decodeAudioToPcm`,
- * `onsetEnvelope`, windowed-fallback `estimateTempo`, `fitBeats` and
+ * `onsetEnvelope`, windowed-fallback `estimateTempo`, `trackBeatGrid` and
  * `pickDownbeats`. It lives in `server/lib/` so both callers import one copy
  * instead of forking it (a fork had already drifted — only one side had the
  * windowed tempo fallback). Callers keep their own concerns: sections,
@@ -276,14 +276,8 @@ export function onsetEnvelope(samples, sampleRate, hop = ONSET_HOP) {
   return { onset, energy, fps: sampleRate / hop, frameCount };
 }
 
-// Fractional-lag step (frames) for the tempo autocorrelation scan. Scanning the
-// period continuously instead of at integer lags is what makes the estimate
-// robust: a true beat period of, say, 18.46 frames lands between integer lags,
-// so integer-lag autocorrelation smears its peak across lags 18 and 19 (each
-// weakened) while the sharper half-tempo lag wins — the classic half-tempo
-// octave error. Interpolating at 0.25-frame resolution recovers the full
-// fundamental peak, so both the significance gate and the octave fold judge it
-// fairly.
+// Sub-frame scan resolution for the tempo seed. Linear interpolation retains
+// whole-frame bias; onset tracking below corrects timing and rejected octaves.
 const TEMPO_LAG_STEP = 0.25;
 
 /**
@@ -332,16 +326,8 @@ function estimateTempoCandidate(onset, fps) {
   }
   if (bestLag < 0 || bestScore <= 0) return null;
 
-  // NOTE — octave (half/double-tempo) ambiguity is intentionally NOT resolved
-  // here. Autocorrelation peaks at every multiple of the true period, so the
-  // estimate is only reliable UP TO an octave: a 140 BPM track may report 70,
-  // and a phase-aligned-comb tie-break (tried) cannot separate the two for many
-  // signals (a half-period grid captures comparable onset energy), while the
-  // tempo-preference weight alone mis-picks other octaves. Robust octave
-  // selection is a deliberate open question for a later phase (see #1760
-  // "beat-snap semantics") — beat snapping still works off this grid, just at a
-  // possibly-doubled/halved density. The detected period is the
-  // highest-weighted autocorrelation peak in [MIN_BPM, MAX_BPM].
+  // Autocorrelation is only an octave-ambiguous seed. trackBeatGrid may rescue
+  // a rejected half-time grid using beat/midpoint contrast, never comb energy.
   const bpm = (60 * fps) / bestLag;
   return { bpm, lag: bestLag, confidence: bestAc / variance };
 }
@@ -408,29 +394,74 @@ export function estimateTempo(onset, fps) {
   };
 }
 
+const BEAT_TRACK_TIGHTNESS = 100;
+
 /**
- * Fit the beat phase: slide a pulse train of the given period across the onset
- * envelope and pick the offset whose pulses sum the most onset strength.
- * Returns the beat times (seconds) for the whole track.
+ * Track onset peaks with a tempo-seeded dynamic program. The log-interval
+ * penalty follows gradual tempo changes without accumulating seed error, and
+ * carries the pulse through stretches with no useful onsets. Times stay in
+ * envelope-frame coordinates until the caller emits window-centred timestamps.
  */
-export function fitBeats(onset, fps, bpm, durationSec) {
-  const periodFrames = (60 * fps) / bpm;
-  let bestOffset = 0;
-  let bestSum = -Infinity;
-  const maxOffset = Math.ceil(periodFrames);
-  for (let off = 0; off < maxOffset; off++) {
-    let sum = 0;
-    for (let pos = off; pos < onset.length; pos += periodFrames) {
-      sum += onset[Math.round(pos)] || 0;
+function trackBeats(onset, fps, periodFrames) {
+  if (!onset.length || !(periodFrames > 0)) return [];
+  const rms = Math.sqrt(onset.reduce((sum, value) => sum + value * value, 0) / onset.length);
+  if (!rms) return [];
+  const minGap = Math.max(1, Math.floor(periodFrames / 2));
+  const maxGap = Math.ceil(periodFrames * 2);
+  const penalties = Array.from({ length: maxGap + 1 }, (_, gap) => BEAT_TRACK_TIGHTNESS * Math.log(gap / periodFrames) ** 2);
+  const scores = new Float64Array(onset.length);
+  const previous = new Int32Array(onset.length).fill(-1);
+  for (let frame = 0; frame < onset.length; frame++) {
+    let best = 0;
+    for (let gap = minGap; gap <= Math.min(maxGap, frame); gap++) {
+      const score = scores[frame - gap] - penalties[gap];
+      if (score > best) { best = score; previous[frame] = frame - gap; }
     }
-    if (sum > bestSum) { bestSum = sum; bestOffset = off; }
+    scores[frame] = onset[frame] / rms + best;
+  }
+  let last = onset.length - 1;
+  for (let frame = Math.max(0, onset.length - Math.ceil(periodFrames)); frame < onset.length; frame++) {
+    if (scores[frame] > scores[last]) last = frame;
   }
   const beats = [];
-  for (let pos = bestOffset; pos < onset.length; pos += periodFrames) {
-    const t = pos / fps;
-    if (t <= durationSec) beats.push(Number(t.toFixed(3)));
+  for (let frame = last; frame >= 0; frame = previous[frame]) beats.push(frame / fps);
+  return beats.reverse();
+}
+
+/**
+ * Shared automatic grid: track the seed, rescue only rejected half-time grids,
+ * and report the median 16-beat tempo inside the seed's rhythmic window.
+ * Seed confidence/source/window retain their original meaning at both callers.
+ * @returns {{ bpm: number|null, beats: number[], beatContrast: number|null, beatSpread: number|null }}
+ */
+export function trackBeatGrid(onset, fps, tempo) {
+  if (tempo.bpm == null) return { bpm: null, beats: [], beatContrast: null, beatSpread: null };
+  const inWindow = (beats) => tempo.window
+    ? beats.filter((t) => t >= tempo.window.startSec && t <= tempo.window.endSec)
+    : beats;
+  let beats = trackBeats(onset, fps, 60 * fps / tempo.bpm);
+  let quality = measureBeatGrid(onset, fps, inWindow(beats));
+  if (tempo.confidence >= GRID_MIN_TEMPO_CONFIDENCE
+    && quality.beatContrast != null && quality.beatContrast < GRID_MIN_BEAT_CONTRAST
+    && tempo.bpm * 2 <= MAX_BPM) {
+    const doubled = trackBeats(onset, fps, 30 * fps / tempo.bpm);
+    const candidate = measureBeatGrid(onset, fps, inWindow(doubled));
+    if (candidate.beatContrast >= GRID_MIN_BEAT_CONTRAST
+      && candidate.beatSpread != null && candidate.beatSpread <= GRID_MAX_BEAT_SPREAD) {
+      beats = doubled;
+      quality = candidate;
+    }
   }
-  return beats;
+  const measured = inWindow(beats);
+  const span = Math.min(16, measured.length - 1);
+  const intervals = span > 0
+    ? measured.slice(span).map((beat, i) => (beat - measured[i]) / span).sort((a, b) => a - b)
+    : [];
+  const middle = Math.floor(intervals.length / 2);
+  const interval = intervals.length
+    ? (intervals[middle] + intervals[Math.floor((intervals.length - 1) / 2)]) / 2
+    : null;
+  return { bpm: interval > 0 ? 60 / interval : tempo.bpm, beats, ...quality };
 }
 
 /**
@@ -458,8 +489,8 @@ export function pickDownbeats(beats, onset, fps) {
 
 // --- Beat-grid trust (#14240) -------------------------------------------------
 //
-// `fitBeats` lays an exactly even pulse train over the track, so a grid always
-// "exists" once a tempo is chosen. These measure whether that grid describes the
+// Tracking supplies a pulse sequence once a tempo is chosen. These measure
+// whether that grid describes the
 // song: do onsets actually land on it, are they steady, and did the mono mix
 // itself cancel. The thresholds ARE the decision; manual tempo skips the gate.
 
@@ -484,7 +515,7 @@ const onsetAround = (onset, frame, radius) => {
 };
 
 /**
- * Measure how well an even beat grid sits on the onset envelope.
+ * Measure how well a tracked beat grid sits on the onset envelope.
  * `beatContrast`: mean onset strength at beat frames over the mean halfway
  * between them (low = the grid is not on accents). `beatSpread`: std/mean of
  * the gaps between each beat's strongest nearby onset (high = not steady).
