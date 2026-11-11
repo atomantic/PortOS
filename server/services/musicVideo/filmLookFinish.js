@@ -10,6 +10,8 @@
  * like a document render), and the render's own audio is copied back
  * untouched. Paid clips are never regenerated to change the feel, and the
  * grain, weave and flicker land on the same song frames the preview shows.
+ * The pass changes only what the look changes: the render plays with its
+ * levels as encoded (stageRender) over a black base (BLACK_BASE).
  * Chrome draws that filter on the CPU (seconds a frame), so the pass first
  * checks a frame of the WebGL2 port (lib/filmLookGpu.js) against it and uses
  * the GPU only when the two match and the GPU is faster.
@@ -140,6 +142,44 @@ async function framePsnr(a, b) {
   return sum === 0 ? 99 : 10 * Math.log10((255 * 255 * x.length) / sum);
 }
 
+// The look is a filter on the page's root element, and a root filter's output
+// lies over the browser's base color (white), not over the page's own
+// background. The vignette's fall-off is partly transparent, so over white it
+// washes the corners out instead of darkening them. A projected frame falls
+// off to black: so does this page.
+const BLACK_BASE = Object.freeze({ color: Object.freeze({ r: 0, g: 0, b: 0, a: 1 }) });
+
+// Chrome color-manages a BT.709 video to the sRGB screen, which lifts its
+// midtones, and the capture would bake that lift into the render (a look that
+// changes no tone still measured +12/255 at middle gray). Labelled sRGB, the
+// same code values are shown, filtered and captured as they are. Only the label
+// changes: the stream is copied, never re-encoded.
+const SRGB_LABEL = 'h264_metadata=colour_primaries=1:transfer_characteristics=13:matrix_coefficients=1';
+// The label names BT.709 primaries and matrix, so it goes only on a stream that already carries them:
+// the H.264 every PortOS encoder writes. An untagged clip keeps the matrix its decoder picks for it.
+const BT709_H264 = Object.freeze(['codec_name=h264', 'color_space=bt709', 'color_transfer=bt709']);
+
+/**
+ * Stage the finished render at `source` for the page to play: a BT.709 H.264
+ * render labelled sRGB, any other stream as it is (it keeps the browser's own
+ * conversion).
+ */
+async function stageRender({ ffmpeg, runFfmpegProcess, probeVideoCodecSignature, path, source, signal, label }) {
+  const tags = String(await probeVideoCodecSignature(path) || '').split('|');
+  if (BT709_H264.every((tag) => tags.includes(tag))) {
+    const labelled = await runFfmpegProcess({
+      bin: ffmpeg, signal,
+      args: ['-hide_banner', '-loglevel', 'error', '-i', path, '-map', '0:v:0', '-c', 'copy', '-an', '-bsf:v', SRGB_LABEL, '-movflags', '+faststart', '-y', source],
+    });
+    if (labelled.ok) return;
+    signal?.throwIfAborted();
+    console.warn(`⚠️ ${label}: the render could not be labelled sRGB for the pass (${labelled.reason}); its levels follow the browser's conversion`);
+    await rm(source, { force: true });
+  }
+  // A hard link stages it without a copy on the same volume (the browser refuses symlinks); a copy stands in elsewhere.
+  await link(path, source).catch(() => copyFile(path, source));
+}
+
 // The GPU must draw the picture the SVG filter draws before a render trusts it.
 const FILM_LOOK_GPU_MIN_PSNR = 40;
 const CHECK_SCREENSHOT = Object.freeze({ format: 'png', optimizeForSpeed: true, fromSurface: true, captureBeyondViewport: false });
@@ -200,7 +240,7 @@ export async function applyFilmLookFinish({ project, look: lookInput, path, jobI
   const look = normalizeFilmLook(lookInput === undefined ? project?.filmLook : lookInput);
   if (!look || isFilmLookNeutral(look)) return false;
   if (typeof jobId !== 'string' || !/^[A-Za-z0-9_-]+$/.test(jobId)) throw new Error('Invalid film look job id');
-  const { findFfmpeg, runFfmpegProcess, probeVideoGeometry } = await import('../../lib/ffmpeg.js');
+  const { findFfmpeg, runFfmpegProcess, probeVideoCodecSignature, probeVideoGeometry } = await import('../../lib/ffmpeg.js');
   const { openComposition } = await import('../htmlComposition/browser.js');
   const { encodeComposition, encodeCompositionSegments } = await import('../htmlComposition/encode.js');
   const ffmpeg = await findFfmpeg();
@@ -218,15 +258,19 @@ export async function applyFilmLookFinish({ project, look: lookInput, path, jobI
   try {
     await rm(scratch, { recursive: true, force: true });
     await mkdir(join(scratch, 'media'), { recursive: true });
-    // The finished render is large: a hard link stages it without a copy on
-    // the same volume (the browser refuses symlinks); a copy stands in elsewhere.
-    const source = join(scratch, 'media', 'source.mp4');
-    await link(path, source).catch(() => copyFile(path, source));
+    await stageRender({ ffmpeg, runFfmpegProcess, probeVideoCodecSignature, path, source: join(scratch, 'media', 'source.mp4'), signal, label: `${label} [${jobId.slice(0, 8)}]` });
     for (const [name, body] of Object.entries(filmLookFinishPage({ width, height, fps, durationSec, offsetSec, look }))) {
       await writeFile(join(scratch, name), body);
     }
     signal?.throwIfAborted();
-    const openSvgPage = (pageSignal) => openComposition(directory, { signal: pageSignal, streamMedia: true, ownedBrowser: true, initScripts: [filmLookRuntimeSource(look)] });
+    const openSvgPage = async (pageSignal) => {
+      const opened = await openComposition(directory, { signal: pageSignal, streamMedia: true, ownedBrowser: true, initScripts: [filmLookRuntimeSource(look)] });
+      await opened.send('Emulation.setDefaultBackgroundColorOverride', BLACK_BASE).catch(async (error) => {
+        await opened.close().catch(() => {});
+        throw error;
+      });
+      return opened;
+    };
     page = await openSvgPage(signal);
     const h264 = await page.evaluate(`document.createElement('video').canPlayType('video/mp4; codecs="avc1.640028"')`);
     if (!h264) {

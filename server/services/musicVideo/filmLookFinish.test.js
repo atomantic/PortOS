@@ -14,15 +14,19 @@ import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../li
 vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await importOriginal(), {
   dataRoot: () => lazyTempDataRoot('portos-mv-film-look-finish-'),
 }));
-const { seen } = vi.hoisted(() => ({ seen: { opened: [], contract: null, options: null, progress: [], ffmpeg: [], encodeFail: null, page: null } }));
+const { seen } = vi.hoisted(() => ({ seen: { opened: [], contract: null, options: null, progress: [], ffmpeg: [], encodeFail: null, labelFail: false, signature: null, page: null } }));
 vi.mock('../../lib/ffmpeg.js', () => ({
   findFfmpeg: async () => 'ffmpeg',
   // 48 frames at 24 fps: the container reports a hair more than the frames hold.
   probeVideoGeometry: async () => ({ width: 1280, height: 720, fps: 24, numFrames: 48, durationSec: 2.04 }),
+  probeVideoCodecSignature: async () => seen.signature,
   runFfmpegProcess: async ({ args }) => {
     const { writeFile: write } = await import('node:fs/promises');
     seen.ffmpeg.push(args);
-    await write(args.at(-1), 'finished-video');
+    // The staging step relabels the render's stream; the mux writes the finished file.
+    const staging = args.includes('-bsf:v');
+    if (staging && seen.labelFail) return { ok: false, reason: 'this stream takes no label' };
+    await write(args.at(-1), staging ? 'labelled-render' : 'finished-video');
     return { ok: true };
   },
 }));
@@ -69,6 +73,9 @@ beforeEach(async () => {
   seen.contract = null;
   seen.options = null;
   seen.encodeFail = null;
+  seen.labelFail = false;
+  // What every PortOS encoder writes.
+  seen.signature = 'codec_name=h264|color_primaries=bt709|color_range=tv|color_space=bt709|color_transfer=bt709|pix_fmt=yuv420p';
   seen.page = null;
   await mkdir(PATHS.videos, { recursive: true });
   path = join(PATHS.videos, 'music-video-example.mp4');
@@ -116,7 +123,7 @@ describe('film look finishing pass', () => {
     expect(result).toBe(true);
     expect(log).toHaveBeenLastCalledWith(expect.stringContaining('workers 1; GPU/SVG frames 0/48; ms/frame seek 10.0, GPU draw submission 0.0, capture (includes SVG draw/GPU wait) 20.0, encode write/drain 2.0'));
     log.mockRestore();
-    // The staged page: the render itself (linked, not re-encoded), full frame, seeking on song time.
+    // The staged page: the render itself (its stream copied and labelled sRGB, never re-encoded), full frame, seeking on song time.
     expect(seen.opened).toHaveLength(1);
     const [opened] = seen.opened;
     expect(opened.directory).toBe(`${FILM_LOOK_FINISH_SCRATCH_DIR}/job-look`);
@@ -124,7 +131,10 @@ describe('film look finishing pass', () => {
     expect(opened.options.initScripts).toHaveLength(1);
     expect(opened.options.initScripts[0]).toContain('__portosFilmLook');
     expect(opened.options.initScripts[0]).toContain('"grain":0.5');
-    expect(opened.source).toBe('composed-render');
+    expect(opened.source).toBe('labelled-render');
+    const [staged, mux] = seen.ffmpeg;
+    expect(staged.slice(staged.indexOf('-i'))).toEqual(['-i', path, '-map', '0:v:0', '-c', 'copy', '-an',
+      '-bsf:v', 'h264_metadata=colour_primaries=1:transfer_characteristics=13:matrix_coefficients=1', '-movflags', '+faststart', '-y', join(PATHS.data, FILM_LOOK_FINISH_SCRATCH_DIR, 'job-look', 'media', 'source.mp4')]);
     expect(opened.index).toContain('<video id="source" src="media/source.mp4"');
     expect(opened.app).toContain('OFFSET = 3');
     expect(opened.app).toContain('FPS = 24');
@@ -134,8 +144,7 @@ describe('film look finishing pass', () => {
     expect(seen.options).toMatchObject({ offsetSec: 3 });
     expect(seen.progress).toEqual([0.475, 1]);
     // Pixels from the pass, audio copied from the render, then swapped in.
-    expect(seen.ffmpeg).toHaveLength(1);
-    const mux = seen.ffmpeg[0];
+    expect(seen.ffmpeg).toHaveLength(2);
     expect(mux.slice(mux.indexOf('-i'))).toEqual(['-i', `${path}.look.silent.mp4`, '-i', path, '-map', '0:v:0', '-map', '1:a?', '-c', 'copy', '-movflags', '+faststart', '-y', `${path}.look.mp4`]);
     expect(await readFile(path, 'utf8')).toBe('finished-video');
     expect(existsSync(join(PATHS.data, FILM_LOOK_FINISH_SCRATCH_DIR, 'job-look'))).toBe(false);
@@ -147,8 +156,27 @@ describe('film look finishing pass', () => {
     seen.encodeFail = new Error('browser died');
     await expect(applyFilmLookFinish({ project: { filmLook: look }, path, jobId: 'job-fail' })).rejects.toThrow('browser died');
     expect(await readFile(path, 'utf8')).toBe('composed-render');
-    expect(seen.ffmpeg).toEqual([]);
+    // Staged, never muxed.
+    expect(seen.ffmpeg.map((args) => args.includes('-bsf:v'))).toEqual([true]);
     expect(existsSync(join(PATHS.data, FILM_LOOK_FINISH_SCRATCH_DIR, 'job-fail'))).toBe(false);
+  });
+
+  it('plays a stream that is not tagged BT.709 H.264 as it is, and a render the label fails on likewise', async () => {
+    const warned = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // An untagged clip: the label would name a matrix its decoder may not be using.
+    seen.signature = 'codec_name=h264|color_space=unknown|color_transfer=unknown|pix_fmt=yuv420p';
+    expect(await applyFilmLookFinish({ project: { filmLook: look }, path, jobId: 'job-untagged' })).toBe(true);
+    expect(seen.opened[0].source).toBe('composed-render');
+    expect(seen.ffmpeg.some((args) => args.includes('-bsf:v'))).toBe(false);
+    expect(warned).not.toHaveBeenCalled();
+
+    await writeFile(path, 'composed-render');
+    seen.signature = 'codec_name=h264|color_primaries=bt709|color_space=bt709|color_transfer=bt709';
+    seen.labelFail = true;
+    expect(await applyFilmLookFinish({ project: { filmLook: look }, path, jobId: 'job-unlabelled' })).toBe(true);
+    expect(seen.opened[1].source).toBe('composed-render');
+    expect(warned).toHaveBeenCalledWith(expect.stringContaining('could not be labelled sRGB'));
+    expect(await readFile(path, 'utf8')).toBe('finished-video');
   });
 
   it('draws the look on the GPU only when its check frame matches the SVG filter and is faster', async () => {

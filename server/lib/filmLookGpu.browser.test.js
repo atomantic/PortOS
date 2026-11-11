@@ -52,6 +52,14 @@ const looks = [
   ['vignette 1.00', normalizeFilmLook({ version: 2, vignette: 1 })],
 ];
 
+// A root filter's output lies over the browser's base color, not the page's background. The finishing
+// pass plays a render over black (filmLookFinish.js BLACK_BASE), so the SVG reference pages do too.
+const blackBase = async (target) => {
+  const session = await target.context().newCDPSession(target);
+  await session.send('Emulation.setDefaultBackgroundColorOverride', { color: { r: 0, g: 0, b: 0, a: 1 } });
+  return target;
+};
+
 const psnr = (a, b) => {
   let sum = 0;
   for (let i = 0; i < a.length; i++) { const d = a[i] - b[i]; sum += d * d; }
@@ -67,7 +75,7 @@ describe.skipIf(!canRun).each([
   let fixture, svgPage, gpuPage, available;
   beforeAll(async () => {
     fixture = await startOwnedBrowserFixture({ chromium, launchOptions: { executablePath: chrome, headless: true, args } });
-    svgPage = await fixture.browser.newPage({ viewport: { width, height } });
+    svgPage = await blackBase(await fixture.browser.newPage({ viewport: { width, height } }));
     gpuPage = await fixture.browser.newPage({ viewport: { width, height } });
     await svgPage.setContent(page(`${picture}<svg id="fx" width="0" height="0" style="position:absolute"></svg>`));
     await gpuPage.setContent(page(`${picture}<canvas id="out" width="${width}" height="${height}"></canvas><script>${filmLookGpuRuntimeSource()}</script>`));
@@ -146,7 +154,7 @@ describe.skipIf(!canRun).each([
       rawSamples.forEach((rgb, i) => rgb.forEach((c, j) => expect(Math.abs(c - expectedRaw[i][j])).toBeLessThanOrEqual(2)));
       const origin = 'http://film-look-primary.test';
       const open = async gpu => {
-        const p = await fixture.browser.newPage({ viewport: { width: w, height: h } });
+        const p = await blackBase(await fixture.browser.newPage({ viewport: { width: w, height: h } }));
         pages.push(p);
         await p.route(`${origin}/**`, route => route.fulfill(route.request().url().endsWith('.mp4')
           ? { body: clip, contentType: 'video/mp4' }
@@ -213,7 +221,7 @@ describe.skipIf(!canRun).each([
     const origin = 'http://film-look.test';
     const body = (extra) => `<video id="v" src="${origin}/clip.webm" muted style="display:block;width:${width}px;height:${height}px;object-fit:fill"></video>${extra}`;
     const open = async (extra) => {
-      const p = await fixture.browser.newPage({ viewport: { width, height } });
+      const p = await blackBase(await fixture.browser.newPage({ viewport: { width, height } }));
       await p.route(`${origin}/**`, (route) => route.fulfill(route.request().url().endsWith('.webm')
         ? { body: clip, contentType: 'video/webm' } : { body: page(body(extra)), contentType: 'text/html' }));
       await p.goto(`${origin}/`);
