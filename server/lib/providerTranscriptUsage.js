@@ -375,6 +375,61 @@ function codexSnapshotCovered(usage, messages, billed) {
   return constrained;
 }
 
+const CODEX_USAGE_FIELDS = ['tokensIn', 'tokensOut', 'cacheReadTokens', 'cacheWriteTokens'];
+
+/**
+ * Split cumulative increments at a billed ceiling. A numeric ceiling clips
+ * that field, including when the ceiling falls between two snapshots. A
+ * missing field does not clip: increments through the last fully covered
+ * snapshot stay covered, and later increments stay pending. Returns null
+ * when a cumulative reset makes the split ambiguous; the caller then uses
+ * the endpoint fallback.
+ */
+function splitCodexSpeed(snapshots, billed, frontierIndex) {
+  const covered = emptySpeed();
+  const pending = emptySpeed();
+  const coveredDays = new Map();
+  let previous = null;
+  const seen = Object.fromEntries(CODEX_USAGE_FIELDS.map((field) => [field, 0]));
+  for (let index = 0; index < snapshots.length; index += 1) {
+    const snap = snapshots[index];
+    if (codexWentBackwards(snap.total, previous)) return null;
+    const delta = codexDelta(snap.total, previous);
+    const under = {};
+    const over = {};
+    for (const field of CODEX_USAGE_FIELDS) {
+      const amount = delta[field] || 0;
+      const start = seen[field];
+      const end = start + amount;
+      seen[field] = end;
+      if (typeof billed?.[field] === 'number') {
+        const cap = billed[field];
+        const underAmount = Math.max(0, Math.min(end, cap) - Math.min(start, cap));
+        under[field] = underAmount;
+        over[field] = amount - underAmount;
+      } else if (frontierIndex >= 0 && index <= frontierIndex) {
+        under[field] = amount;
+        over[field] = 0;
+      } else {
+        under[field] = 0;
+        over[field] = amount;
+      }
+    }
+    addSpeed(covered, snap.tier, under);
+    addSpeed(pending, snap.tier, over);
+    const day = typeof snap.timestamp === 'string' ? snap.timestamp.slice(0, 10) : '';
+    if ((snap.tier === 'fast' || snap.tier === 'ultrafast')
+      && /^\d{4}-\d{2}-\d{2}$/.test(day)
+      && CODEX_USAGE_FIELDS.some((field) => under[field])) {
+      const bucket = coveredDays.get(day) || emptySpeed();
+      addSpeed(bucket, snap.tier, under);
+      coveredDays.set(day, bucket);
+    }
+    previous = snap.total;
+  }
+  return { covered, pending, coveredDays };
+}
+
 function speedAfterCodexFrontier(snapshots, frontierIndex, billed) {
   if (frontierIndex >= 0) return attributeCodexSpeed(snapshots.slice(frontierIndex + 1), snapshots[frontierIndex].total);
   if (!billed) return attributeCodexSpeed(snapshots, null);
@@ -435,9 +490,10 @@ function isGrok47FastModel(model) {
  * to counts after it; a count that straddles a switch is attributed to the
  * tier at the count's timestamp, not split. `billedBaseline` (ignored when
  * `from` is set) makes the returned speed only the growth past that token
- * frontier, so a high-water reconcile does not re-bill speed already inside
- * the base it subtracts. `includeCoveredSpeed` reports the speed through the
- * frontier for a historical repair; it is not part of the billable delta.
+ * ceiling, including when the ceiling falls between two snapshots, so a
+ * high-water reconcile does not re-bill speed already inside the base it
+ * subtracts. `includeCoveredSpeed` reports that already-billed speed, by UTC
+ * day, for a historical repair; it is not part of the billable delta.
  *
  * `input_tokens` is the *total* input including the cached portion, so the
  * uncached input we bill at the standard rate is `input - cached`, with
@@ -542,9 +598,12 @@ export function parseCodexRollout(jsonlText, { from = null, to = null, billedBas
       if (codexSnapshotCovered(codexUsageFromTotal(snap.total), snap.messages, billedBaseline)) frontierIndex = index;
     });
   }
-  const speed = useFrontier
-    ? speedAfterCodexFrontier(snapshots, frontierIndex, billedBaseline)
-    : attributeCodexSpeed(snapshots, baseline);
+  const split = useFrontier ? splitCodexSpeed(snapshots, billedBaseline, frontierIndex) : null;
+  const speed = split
+    ? split.pending
+    : (useFrontier
+      ? speedAfterCodexFrontier(snapshots, frontierIndex, billedBaseline)
+      : attributeCodexSpeed(snapshots, baseline));
 
   const endpoint = codexDelta(latest, baseline);
   const bounded = from != null || to != null;
@@ -582,9 +641,14 @@ export function parseCodexRollout(jsonlText, { from = null, to = null, billedBas
   };
   if (includeCoveredSpeed) {
     const coveredIndex = useFrontier ? frontierIndex : snapshots.length - 1;
-    result.coveredSpeed = coveredIndex >= 0
-      ? attributeCodexSpeed(snapshots.slice(0, coveredIndex + 1), null)
-      : emptySpeed();
+    result.coveredSpeed = split
+      ? split.covered
+      : (coveredIndex >= 0
+        ? attributeCodexSpeed(snapshots.slice(0, coveredIndex + 1), null)
+        : emptySpeed());
+    result.coveredSpeedDays = split
+      ? [...split.coveredDays.entries()].map(([day, bucket]) => ({ day, ...bucket }))
+      : [];
     result.frontierTs = coveredIndex >= 0 ? snapshots[coveredIndex].timestamp : null;
   }
   return result;

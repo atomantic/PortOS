@@ -460,7 +460,8 @@ const toRates = (rateModel) => withCacheRates({
  * @param {string|null|undefined} model
  * @returns {{ rateModel: string|null, inputPer1M: number, outputPer1M: number,
  *   cacheReadPer1M: number, cacheWritePer1M: number,
- *   matched: 'exact'|'family'|'providerDefault'|'fallback' }}
+ *   matched: 'exact'|'family'|'providerDefault'|'fallback',
+ *   pricedBy: 'published'|'fallback' }}
  */
 export function resolveModelRates(providerId, model) {
   const id = typeof model === 'string' ? model.trim() : '';
@@ -476,6 +477,7 @@ export function resolveModelRates(providerId, model) {
       cacheReadPer1M: 0,
       cacheWritePer1M: 0,
       matched: id.toLowerCase() === imagine.id ? 'exact' : 'family',
+      pricedBy: 'fallback',
     };
   }
   const imagen = agyImagenRate(id);
@@ -487,30 +489,33 @@ export function resolveModelRates(providerId, model) {
       cacheReadPer1M: 0,
       cacheWritePer1M: 0,
       matched: id.toLowerCase() === imagen.id ? 'exact' : 'family',
+      pricedBy: 'fallback',
     };
   }
   if (id && EXACT_RATES[id]) {
-    return { ...toRates(id), matched: 'exact' };
+    return { ...toRates(id), matched: 'exact', pricedBy: 'published' };
   }
   if (id) {
     const lower = id.toLowerCase();
     const embedded = EXACT_KEYS_BY_LENGTH.find((key) => lower.includes(key));
     if (embedded) {
-      return { ...toRates(embedded), matched: 'family' };
+      // The id contains a published model, so that model's schedule applies.
+      // A regex family fallback below does not: it only prices the base.
+      return { ...toRates(embedded), matched: 'family', pricedBy: 'published' };
     }
     for (const rule of FAMILY_RULES) {
       if (rule.test.test(id)) {
-        return { ...toRates(rule.rateModel), matched: 'family' };
+        return { ...toRates(rule.rateModel), matched: 'family', pricedBy: 'fallback' };
       }
     }
   }
   const pid = typeof providerId === 'string' ? providerId : '';
   for (const rule of PROVIDER_DEFAULT_RULES) {
     if (rule.test.test(pid)) {
-      return { ...toRates(rule.rateModel), matched: 'providerDefault' };
+      return { ...toRates(rule.rateModel), matched: 'providerDefault', pricedBy: 'fallback' };
     }
   }
-  return { ...withCacheRates(FALLBACK_RATES), matched: 'fallback' };
+  return { ...withCacheRates(FALLBACK_RATES), matched: 'fallback', pricedBy: 'fallback' };
 }
 
 const FREE_ID = /ollama|lmstudio|lm-studio/i;

@@ -1811,6 +1811,10 @@ describe('Grok long-context and Imagine pricing', () => {
     expect(cost('gpt-6.1-terra', { tokensIn: 1_000_000, ultrafastTokensIn: 1_000_000 })).toBeCloseTo(1);
     expect(cost('gpt-5.4-nano', { tokensIn: 1_000_000, fastTokensIn: 1_000_000 })).toBeCloseTo(0.2);
     expect(cost('grok-4.6', { tokensIn: 1_000_000, fastTokensIn: 1_000_000 })).toBeCloseTo(2);
+    // gpt-4o has no published Fast row. The gpt family fallback prices the base only.
+    expect(cost('gpt-4o', { tokensIn: 1_000_000, fastTokensIn: 1_000_000 })).toBeCloseTo(2.5);
+    // An id that contains a published model keeps that model's Fast schedule.
+    expect(cost('vendor/gpt-5.3-codex', { tokensIn: 1_000_000, fastTokensIn: 1_000_000 })).toBeCloseTo(3.5);
   });
 });
 

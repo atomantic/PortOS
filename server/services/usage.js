@@ -1117,6 +1117,12 @@ function subsetCost(counts, rates, prefix, factor) {
   });
 }
 
+/** Fast/Ultrafast extras apply only when the rate model is a published id, not a family fallback. */
+function publishedTierFactor(rates, tier) {
+  if (rates?.pricedBy !== 'published') return 0;
+  return serviceTierExtra(rates.rateModel, tier);
+}
+
 /**
  * Base token cost, plus one extra base-rate charge for the long-context
  * subset, plus the published Fast/Ultrafast increment on those subsets, plus
@@ -1126,8 +1132,8 @@ function usageRowCost(modelId, counts, rates, free) {
   if (free) return 0;
   const tokens = rates ? estimateCostUsd(counts?.tokensIn, counts?.tokensOut, rates, counts) : 0;
   const premium = subsetCost(counts, rates, 'long', 1);
-  const fast = subsetCost(counts, rates, 'fast', serviceTierExtra(rates?.rateModel, 'fast'));
-  const ultrafast = subsetCost(counts, rates, 'ultrafast', serviceTierExtra(rates?.rateModel, 'ultrafast'));
+  const fast = subsetCost(counts, rates, 'fast', publishedTierFactor(rates, 'fast'));
+  const ultrafast = subsetCost(counts, rates, 'ultrafast', publishedTierFactor(rates, 'ultrafast'));
   return tokens + premium + fast + ultrafast + estimateGrokImagineCost(modelId, counts) + estimateAgyImageCost(modelId, counts);
 }
 

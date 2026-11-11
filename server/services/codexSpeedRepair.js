@@ -3,11 +3,12 @@
  * in the ledger. The native usage store is what the Usage page prices; this
  * repair covers pre-coverage days, estimates, and raw-ledger readers.
  *
- * The plan never rewrites base token counts. Owed speed is the covered subset
- * through the token high-water minus speed that boundary already accounts.
- * A session with no high-water is skipped: its base was never billed, and a
- * premium alone would invent a charge. The repair id is the same one a first
- * full bill records, so the two paths cannot both add the premium.
+ * The plan never rewrites base token counts. Owed speed is the subset inside
+ * the token high-water, dated on the UTC day of each snapshot. Speed a later
+ * reconcile bills past that high-water is not part of it. A session with no
+ * high-water is skipped: its base was never billed, and a premium alone would
+ * invent a charge. A first full bill records one session id; each repaired
+ * day records its own, so the two paths cannot both add the same premium.
  */
 
 import { copyFile, mkdir } from 'node:fs/promises';
@@ -67,16 +68,25 @@ function boundaryForSession(session, highWater) {
   return billed;
 }
 
-function owedSpeed(covered, billed) {
+function owedSpeed(covered) {
   const owed = {};
   let any = false;
   for (const field of SPEED_LEDGER_FIELDS) {
-    const amount = Math.max(0, (covered?.[field] || 0) - (billed?.[field] || 0));
+    const amount = covered?.[field] || 0;
     if (!amount) continue;
     owed[field] = amount;
     any = true;
   }
   return any ? owed : null;
+}
+
+function coveredDays(parsed) {
+  const dated = (parsed.coveredSpeedDays || [])
+    .filter((slice) => typeof slice?.day === 'string' && owedSpeed(slice));
+  if (dated.length) return dated;
+  const ms = Date.parse(parsed.frontierTs || '');
+  if (!Number.isFinite(ms) || !owedSpeed(parsed.coveredSpeed)) return [];
+  return [{ day: new Date(ms).toISOString().slice(0, 10), ...parsed.coveredSpeed }];
 }
 
 /**
@@ -102,8 +112,8 @@ async function planCodexSpeedRepair({
     notes.push('Codex speed repair read only part of the session archive. Unread sessions were left for the next reconcile.');
   }
   for (const session of inventory?.sessions || []) {
-    const repairId = `codex-speed:v1:${session.id}`;
-    if (known.has(repairId)) continue;
+    // A first full bill records this id once it has priced the whole session.
+    if (known.has(`codex-speed:v1:${session.id}`)) continue;
     const billed = boundaryForSession(session, highWater);
     // No high-water means the base tokens are not in the ledger.
     if (!billed) continue;
@@ -114,28 +124,32 @@ async function planCodexSpeedRepair({
       continue;
     }
     const parsed = parseCodexRollout(records, { billedBaseline: billed, includeCoveredSpeed: true });
-    const owed = owedSpeed(parsed.coveredSpeed, billed);
-    if (!owed) continue;
-    const ms = Date.parse(parsed.frontierTs || '');
-    if (!Number.isFinite(ms)) continue;
-    known.add(repairId);
-    additions.push({
-      repairId,
-      day: new Date(ms).toISOString().slice(0, 10),
-      record: {
-        providerId,
-        model: parsed.model || null,
-        messages: 0,
-        ...owed,
-        source: 'measured',
-      },
-    });
+    for (const slice of coveredDays(parsed)) {
+      const repairId = `codex-speed:v1:${session.id}:${slice.day}`;
+      if (known.has(repairId)) continue;
+      const owed = owedSpeed(slice);
+      if (!owed) continue;
+      known.add(repairId);
+      additions.push({
+        repairId,
+        day: slice.day,
+        record: {
+          providerId,
+          model: parsed.model || null,
+          messages: 0,
+          ...owed,
+          source: 'measured',
+        },
+      });
+    }
   }
   return { additions, notes };
 }
 
 function summarizeCodexSpeedRepair(additions = []) {
-  return { added: additions.length, sessions: additions.length };
+  const sessions = new Set(additions.map((item) => String(item.repairId || '').replace(/:\d{4}-\d{2}-\d{2}$/, '')));
+  sessions.delete('');
+  return { added: additions.length, sessions: sessions.size };
 }
 
 async function backupLedger(dataDir) {

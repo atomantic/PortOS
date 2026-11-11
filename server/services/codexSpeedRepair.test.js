@@ -63,7 +63,7 @@ describe('applyCodexSpeedRepair', () => {
     expect(result).toMatchObject({ added: 1, sessions: 1, backedUp: true, note: null });
     expect(addDatedUsageBatch).toHaveBeenCalledTimes(1);
     const [addition] = addDatedUsageBatch.mock.calls[0][0];
-    expect(addition.repairId).toBe(`codex-speed:v1:${sessionId}`);
+    expect(addition.repairId).toBe(`codex-speed:v1:${sessionId}:2026-07-01`);
     expect(addition.day).toBe('2026-07-01');
     expect(addition.record).toMatchObject({
       providerId: 'codex', messages: 0, fastTokensIn: 1000, fastTokensOut: 100, source: 'measured', model: 'gpt-5.3-codex',
@@ -80,6 +80,34 @@ describe('applyCodexSpeedRepair', () => {
     const again = await applyCodexSpeedRepair();
     expect(again).toMatchObject({ added: 0, sessions: 0, backedUp: false });
     expect(addDatedUsageBatch).not.toHaveBeenCalled();
+  });
+
+  it('dates a covered premium on each snapshot day', async () => {
+    const rollout = [
+      { type: 'session_meta', payload: { id: 'raw-session', cwd: '/example/workspace', model: 'gpt-5.3-codex' } },
+      { timestamp: '2026-07-01T23:00:00.000Z', payload: { type: 'thread_settings_applied', service_tier: 'priority' } },
+      { timestamp: '2026-07-01T23:30:00.000Z', payload: { type: 'token_count', info: { total_token_usage: {
+        input_tokens: 100, cached_input_tokens: 0, output_tokens: 10, total_tokens: 110,
+      } } } },
+      { timestamp: '2026-07-02T01:00:00.000Z', payload: { type: 'token_count', info: { total_token_usage: {
+        input_tokens: 300, cached_input_tokens: 0, output_tokens: 40, total_tokens: 340,
+      } } } },
+    ];
+    readCodexAccountingSources.mockResolvedValue(inventory([{
+      id: sessionId, paths: [], loadRecords: async () => rollout,
+    }]));
+    usage.reconciledRuns = {
+      run: { codexHighWater: [[codexSessionClaimKey(sessionId), {
+        messages: 1, tokensIn: 300, tokensOut: 40, cacheReadTokens: 0, cacheWriteTokens: 0,
+      }]] },
+    };
+    const result = await applyCodexSpeedRepair();
+    expect(result).toMatchObject({ added: 2, sessions: 1, backedUp: true });
+    const rows = addDatedUsageBatch.mock.calls[0][0];
+    expect(rows.map((row) => [row.day, row.repairId, row.record.fastTokensIn, row.record.fastTokensOut])).toEqual([
+      ['2026-07-01', `codex-speed:v1:${sessionId}:2026-07-01`, 100, 10],
+      ['2026-07-02', `codex-speed:v1:${sessionId}:2026-07-02`, 200, 30],
+    ]);
   });
 
   it('skips a session whose base tokens are not in the ledger', async () => {

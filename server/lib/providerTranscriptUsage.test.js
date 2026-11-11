@@ -371,12 +371,33 @@ describe('parseCodexRollout', () => {
     const parsed = parseCodexRollout(text, { billedBaseline: billed, includeCoveredSpeed: true });
     expect(parsed).toMatchObject({ tokensIn: 160, tokensOut: 30, fastTokensIn: 80, fastTokensOut: 20 });
     expect(parsed.coveredSpeed).toMatchObject({ fastTokensIn: 80, fastTokensOut: 10 });
+    expect(parsed.coveredSpeedDays).toEqual([
+      expect.objectContaining({ day: '2026-07-01', fastTokensIn: 80, fastTokensOut: 10 }),
+    ]);
     expect(parsed.frontierTs).toBe('2026-07-01T09:00:01.000Z');
     expect(parsed.byModel['gpt-5.3-codex']).not.toHaveProperty('coveredSpeed');
     // A timestamp window owns the delta; the frontier does not apply.
     const windowed = parseCodexRollout(text, { from: Date.parse('2026-07-01T11:00:00.000Z'), billedBaseline: billed });
     expect(windowed).toMatchObject({ tokensOut: 20, fastTokensOut: 20 });
     expect(windowed).not.toHaveProperty('coveredSpeed');
+  });
+
+  it('clips a billed ceiling that falls between snapshots and dates the covered part', () => {
+    const text = [
+      codexMeta(),
+      settings('2026-07-01T23:00:00.000Z', 'priority'),
+      codexTokenCount({ timestamp: '2026-07-01T23:30:00.000Z', input: 100, cached: 0, output: 10 }),
+      codexTokenCount({ timestamp: '2026-07-02T01:00:00.000Z', input: 200, cached: 0, output: 30 }),
+    ].join('\n');
+    // 150 input / 20 output sits between the 100/10 and 200/30 snapshots.
+    const billed = { messages: 1, tokensIn: 150, tokensOut: 20, cacheReadTokens: 0, cacheWriteTokens: 0 };
+    const parsed = parseCodexRollout(text, { billedBaseline: billed, includeCoveredSpeed: true });
+    expect(parsed).toMatchObject({ tokensIn: 200, tokensOut: 30, fastTokensIn: 50, fastTokensOut: 10 });
+    expect(parsed.coveredSpeed).toMatchObject({ fastTokensIn: 150, fastTokensOut: 20 });
+    expect(parsed.coveredSpeedDays).toEqual([
+      expect.objectContaining({ day: '2026-07-01', fastTokensIn: 100, fastTokensOut: 10 }),
+      expect.objectContaining({ day: '2026-07-02', fastTokensIn: 50, fastTokensOut: 10 }),
+    ]);
   });
 });
 
