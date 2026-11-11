@@ -1,6 +1,6 @@
 // Engine mechanics are isolated from the review contract, covered in route/orchestration suites.
 vi.mock('./productionReview.js', async (load) => ({ ...await load(), assertProductionApproval: vi.fn() }));
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // #2386 — exactly-once terminal handling for the music-video renderer that
 // distinguishes a pre-spawn failure (finalize immediately) from a post-spawn
@@ -62,6 +62,7 @@ vi.mock('../videoGen/local.js', () => ({
 }));
 vi.mock('../tracks/index.js', () => ({ getTrack: vi.fn() }));
 vi.mock('./statsOutro.js', () => ({ appendStatsOutro: vi.fn(async () => 0), sweepStatsOutroScratch: vi.fn(async () => {}) }));
+vi.mock('./documentRender.js', async (load) => ({ ...await load(), sweepDocumentScratch: vi.fn(async () => {}) }));
 vi.mock('./compositionRender.js', () => ({
   removeCompositionScratch: vi.fn(async () => {}),
   sweepCompositionScratch: vi.fn(async () => {}),
@@ -90,7 +91,7 @@ vi.mock('./shotSegments.js', () => ({
 }));
 
 import { buildTypographyDocument } from './composition.js';
-import { renderMusicVideo, getRenderJobStatus, cancelRender } from './render.js';
+import { renderMusicVideo, getRenderJobStatus, getActiveRenderJobId, cancelRender } from './render.js';
 import { removeCompositionScratch } from './compositionRender.js';
 import { findFfmpeg, generateThumbnail } from '../../lib/ffmpeg.js';
 import { loadHistory } from '../videoGen/local.js';
@@ -104,6 +105,28 @@ import { maintenance } from '../../lib/maintenanceAdmission.js';
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
 const lastProc = () => h.procs[h.procs.length - 1];
+// Retry/argument assertions still own a fake child; settle it via normal events.
+const finishFakeRender = async (pid) => {
+  lastProc().emit('spawn');
+  lastProc().emit('close', 1, null);
+  await expect.poll(() => maintenance.status().blockers.filter(({ resource }) => resource === pid), { timeout: 2000 }).toEqual([]);
+};
+const finishFakeSegments = async () => {
+  await expect.poll(() => Boolean(seg.render), { timeout: 2000 }).toBe(true);
+  seg.render.resolve(0);
+};
+let retainedBlockers = [];
+afterEach(async () => {
+  // A failed drain reports blocker kinds/resources; never clear admission state.
+  await expect.poll(() => maintenance.status().blockers.map(({ kind, resource, unsettled }) => ({
+    kind, resource, ...(unsettled ? { unsettled } : {}),
+  })), { timeout: 2000 }).toEqual(retainedBlockers);
+  for (const job of new Set(broadcastSse.mock.calls.map(([job]) => job))) {
+    expect(getRenderJobStatus(job.id).status).not.toBe('running');
+    expect(cancelRender(job.id)).toBe(false);
+    expect(getActiveRenderJobId(job.projectId)).toBeNull();
+  }
+});
 // A terminal project write: the status plus the cleared in-flight mark (#9010).
 const settled = (status, extra = {}) => ({ status, renderError: null, ...extra, renderingOn: null, renderPartialFilename: null, renderResume: null });
 // Terminal writes settle on the freshest row inside the project mutation
@@ -132,6 +155,7 @@ const prime = (projectId) => {
 };
 
 beforeEach(() => {
+  retainedBlockers = [];
   vi.clearAllMocks();
   h.procs.length = 0;
   seg.render = null;
@@ -166,6 +190,7 @@ describe('renderMusicVideo terminal handling (#2386)', () => {
     const again = await renderMusicVideo(pid);
     expect(again.jobId).toBeTruthy();
     expect(again.jobId).not.toBe(jobId);
+    await finishFakeRender(pid);
   });
 
   it('retains the slot on a POST-spawn error until close (no overlapping render)', async () => {
@@ -194,6 +219,7 @@ describe('renderMusicVideo terminal handling (#2386)', () => {
     // Slot now released.
     const again = await renderMusicVideo(pid);
     expect(again.jobId).not.toBe(jobId);
+    await finishFakeRender(pid);
   });
 
   it('handles terminal state exactly once (a stray close after a pre-spawn error is a no-op)', async () => {
@@ -280,23 +306,7 @@ describe('renderMusicVideo terminal handling (#2386)', () => {
     expect(getRenderJobStatus(jobId).error).toBeUndefined();
   });
 
-  it('persists a bounded finalization error while releasing the render slot', async () => {
-    const pid = 'finalize-failure';
-    prime(pid);
-    const failure = `poster write failed ${'x'.repeat(3000)}`;
-    generateThumbnail.mockRejectedValueOnce(new Error(failure));
-    const { jobId } = await renderMusicVideo(pid);
-    lastProc().emit('spawn');
-    lastProc().emit('close', 0, null);
-    await tick();
-
-    expect(getRenderJobStatus(jobId).status).toBe('error');
-    expectSettled(pid, 'failed', { renderError: `Finalize failed: ${failure}`.slice(0, 2000) });
-    const again = await renderMusicVideo(pid);
-    expect(again.jobId).not.toBe(jobId);
-  });
 });
-
 
 describe('status write failures are logged, not swallowed (#8430)', () => {
   it('logs a failed status→complete write and still finishes the job', async () => {
@@ -317,9 +327,11 @@ describe('status write failures are logged, not swallowed (#8430)', () => {
     expect(getRenderJobStatus(jobId).status).toBe('complete');
     expect(errorSpy.mock.calls.some(([line]) => line.includes(jobId.slice(0, 8))
       && line.includes(pid) && line.includes('status→complete'))).toBe(true);
+    expect(cancelRender(jobId)).toBe(false);
     errorSpy.mockRestore();
   });
 });
+
 
 // Recovery re-checks each record under the store's write lock (#9010): back
 // both the list and the transform with one in-memory store.
@@ -354,6 +366,7 @@ describe('recoverStuckMusicVideoRenders (#8430)', () => {
     expect(store.get('fresh-1')).toMatchObject({ renderingOn: null, renderPartialFilename: null });
     expect(logSpy.mock.calls.some(([line]) => line.includes('demoted 2/2'))).toBe(true);
     logSpy.mockRestore();
+    await finishFakeRender('live-1');
   });
 
   it('stamps the in-flight mark with this instance and the output file it is writing (#9010)', async () => {
@@ -362,6 +375,7 @@ describe('recoverStuckMusicVideoRenders (#8430)', () => {
     expect(updateProject).toHaveBeenCalledWith('stamp-1', {
       status: 'rendering', renderingOn: 'inst-self', renderAudioRevision: 0, renderError: null, renderPartialFilename: expect.stringMatching(/^music-video-stamp-1-\d+\.mp4$/),
     });
+    await finishFakeRender('stamp-1');
   });
 
   it('leaves a peer-owned render alone, and deletes only its own partial output (#9010)', async () => {
@@ -470,6 +484,7 @@ describe('recoverStuckMusicVideoRenders (#8430)', () => {
     expect(seg.plans.map((plan) => plan.project.id)).toEqual(['resume-1']);
     expect(updateProject).toHaveBeenCalledWith('resume-1', expect.objectContaining({ status: 'rendering', renderResume: { attempt: 1 } }));
     logSpy.mockRestore();
+    await finishFakeSegments();
   });
 
   it('leaves no error when the render was started again before the resume ran', async () => {
@@ -492,6 +507,7 @@ describe('recoverStuckMusicVideoRenders (#8430)', () => {
     expect(seg.plans).toHaveLength(1);
     expect(updateProject.mock.calls.some(([, patch]) => /could not restart/.test(patch?.renderError || ''))).toBe(false);
     logSpy.mockRestore();
+    await finishFakeSegments();
   });
 });
 
@@ -530,6 +546,7 @@ describe('renderMusicVideo clip coverage (#8964)', () => {
     const { args } = lastProc();
     expect(args.slice(0, 3)).toEqual(['-stream_loop', '-1', '-i']);
     expect(filterGraph(args)).toContain('trim=start=0:end=20');
+    await finishFakeRender('legacy-1');
   });
 
   it('refuses a non-looping shot its clip cannot cover, naming the fix, without spawning', async () => {
@@ -556,6 +573,7 @@ describe('renderMusicVideo clip coverage (#8964)', () => {
     const { args } = lastProc();
     expect(args).not.toContain('-stream_loop');
     expect(filterGraph(args)).toContain('tpad=stop_mode=clone:stop_duration=0.2,trim=start=0:end=2.2');
+    await finishFakeRender('fit-1');
   });
 
   // Uniquely catches the director's held last frame still blocking, or repeating footage.
@@ -565,6 +583,7 @@ describe('renderMusicVideo clip coverage (#8964)', () => {
     const { args } = lastProc();
     expect(args).not.toContain('-stream_loop');
     expect(filterGraph(args)).toContain('tpad=stop_mode=clone:stop_duration=18,trim=start=0:end=20');
+    await finishFakeRender('hold-1');
   });
 
   it('repeats a shot the director explicitly set to loop', async () => {
@@ -573,6 +592,7 @@ describe('renderMusicVideo clip coverage (#8964)', () => {
     const { args } = lastProc();
     expect(args).toContain('-stream_loop');
     expect(filterGraph(args)).not.toContain('tpad');
+    await finishFakeRender('loop-1');
   });
 });
 
@@ -594,6 +614,7 @@ describe('composed render lifecycle (#8984)', () => {
     primeComposed('plain-1', { mode: 'concat', textCues: [cue] });
     await renderMusicVideo('plain-1');
     expect(lastProc().args).not.toContain('-itsoffset');
+    await finishFakeRender('plain-1');
   });
 
   it('marks a render the user started as resumable after a restart', async () => {
@@ -601,6 +622,7 @@ describe('composed render lifecycle (#8984)', () => {
     await renderMusicVideo('mark-1', { resumable: true });
     await tick();
     expect(updateProject).toHaveBeenCalledWith('mark-1', expect.objectContaining({ status: 'rendering', renderResume: { attempt: 0 } }));
+    await finishFakeSegments();
   });
 
   it('cancels while shots render: no stitch, prior status restored, slot released', async () => {
@@ -618,6 +640,7 @@ describe('composed render lifecycle (#8984)', () => {
     expect(cancelRender(jobId)).toBe(false);
     const again = await renderMusicVideo('cancel-1');
     expect(again.jobId).not.toBe(jobId);
+    await finishFakeSegments();
   });
 
   it('renders the missing shots, stitches them into the published file and honors the chosen poster frame', async () => {
@@ -679,6 +702,7 @@ describe('layered sections (#8985)', () => {
     expect(args).not.toContain('/data/images/frame.png');
     expect(filterGraph(args)).not.toContain('color=');
     expect(filterGraph(args)).toContain('concat=n=2:v=1:a=0[outv]');
+    await finishFakeRender('plain-layers');
   });
 
   it('refuses a still with no reference frame and an untimed card, without spawning', async () => {
@@ -757,6 +781,7 @@ describe('film look finishing pass on a footage render', () => {
     expect(broadcastSse).toHaveBeenCalledWith(expect.anything(), { type: 'canceled', error: 'Render cancelled' });
     // Slot released: a new render starts.
     expect((await renderMusicVideo(pid)).jobId).not.toBe(jobId);
+    await finishFakeRender(pid);
   });
 
   it('a failed pass settles the render as failed, naming the pass', async () => {
@@ -822,5 +847,29 @@ describe('a song change during a footage render (#15154)', () => {
     // The written file stays in the history, marked as abandoned.
     const [, markAbandoned] = mutateVideoHistory.mock.calls.map(([fn]) => fn);
     expect(markAbandoned([{ id: jobId }, { id: 'other' }])).toEqual([{ id: jobId, abandonedReason: 'audio-changed' }, { id: 'other' }]);
+  });
+});
+
+// Keep the intentional recovery blocker after all ordinary fixtures have drained.
+describe('unsettled finalization recovery', () => {
+  it('persists a bounded finalization error while releasing the render slot', async () => {
+    const pid = 'finalize-failure';
+    retainedBlockers = [{ kind: 'music-video', resource: pid, unsettled: true }];
+    prime(pid);
+    const failure = `poster write failed ${'x'.repeat(3000)}`;
+    generateThumbnail.mockRejectedValueOnce(new Error(failure));
+    const { jobId } = await renderMusicVideo(pid);
+    lastProc().emit('spawn');
+    lastProc().emit('close', 0, null);
+    await tick();
+
+    expect(getRenderJobStatus(jobId).status).toBe('error');
+    expectSettled(pid, 'failed', { renderError: `Finalize failed: ${failure}`.slice(0, 2000) });
+    const again = await renderMusicVideo(pid);
+    expect(again.jobId).not.toBe(jobId);
+    lastProc().emit('spawn');
+    lastProc().emit('close', 1, null);
+    await tick();
+    expect(maintenance.status().blockers).toEqual([expect.objectContaining(retainedBlockers[0])]);
   });
 });
