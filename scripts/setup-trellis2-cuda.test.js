@@ -174,7 +174,12 @@ spec = importlib.util.spec_from_file_location('audit', sys.argv[1])
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
 def respond(request, **kwargs):
-    queries = json.loads(request.data)['queries']
+    payload = json.loads(request.data)
+    if 'page_token' in payload:
+        assert payload['page_token'] == 'next-page'
+        page = {'error': 'unavailable'} if mode == 'pagination-error' else {'vulns': [{'id': 'MAL-test-fixture'}]}
+        return io.BytesIO(json.dumps(page).encode())
+    queries = payload['queries']
     assert {'package': {'ecosystem': 'PyPI', 'name': 'torch'}, 'version': '2.14.1'} in queries
     # Both installed and setuptools-vendored versions need advisory coverage.
     assert {'package': {'ecosystem': 'PyPI', 'name': 'wheel'}, 'version': '0.48.0'} in queries
@@ -184,10 +189,11 @@ def respond(request, **kwargs):
     results = [{} for q in queries]
     if mode == 'findings': results[0] = {'vulns': [{'id': 'MAL-test-fixture'}]}
     if mode == 'incomplete': results.pop()
+    if mode in ['paginated-findings', 'pagination-error']: results[0] = {'next_page_token': 'next-page'}
     return io.BytesIO(json.dumps({'results': results}).encode())
-for mode in ['clean', 'findings', 'incomplete']:
+for mode in ['clean', 'findings', 'incomplete', 'paginated-findings', 'pagination-error']:
     with patch.object(m, 'urlopen', side_effect=respond), contextlib.redirect_stdout(io.StringIO()):
-        if mode == 'incomplete':
+        if mode in ['incomplete', 'pagination-error']:
             try:
                 m.main()
                 raise AssertionError('incomplete audit accepted')

@@ -21,6 +21,8 @@
  */
 
 import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { execFile } from '../../lib/childProcess.js';
 import { resolveCondaEnvPython } from '../../lib/condaEnv.js';
 import { isAppleSilicon } from '../../lib/platform.js';
@@ -45,9 +47,7 @@ export const RIGGING_MODULE_REQUIREMENT = `${RIGGING_RUNTIME.module}==${RIGGING_
  * The one command that provisions the env. Surfaced verbatim in the Settings card so
  * the remedy the UI prints and the remedy this module resolves against cannot drift.
  */
-export const RIGGING_INSTALL_COMMAND = `conda create -y -n ${RIGGING_RUNTIME.condaEnv} `
-  + `python=${RIGGING_RUNTIME.pythonVersion} && `
-  + `conda run -n ${RIGGING_RUNTIME.condaEnv} pip install "${RIGGING_MODULE_REQUIREMENT}"`;
+export const RIGGING_INSTALL_COMMAND = 'python3 scripts/setup-rigging.py';
 
 /**
  * Can this host run the rigging runtime at all? macOS on Apple Silicon and Linux are
@@ -64,14 +64,16 @@ export function isRiggingPlatformSupported({ platform = process.platform, arch, 
 }
 
 /**
- * The rigging env's interpreter, or `null` when the env has not been created.
+ * Prefer the reviewed private prefix; retain named Conda discovery for existing installs.
  * `exists`/`env` are injectable exactly as `resolveCondaEnvPython` makes them, so this
  * resolves deterministically in tests with no conda on the machine.
  *
- * @param {{exists?: (p: string) => boolean, env?: NodeJS.ProcessEnv}} [opts]
+ * @param {{exists?: (p: string) => boolean, env?: NodeJS.ProcessEnv, home?: string}} [opts]
  * @returns {string|null}
  */
-export function resolveRiggingPython({ exists = existsSync, env } = {}) {
+export function resolveRiggingPython({ exists = existsSync, env, home = homedir() } = {}) {
+  const reviewed = join(home, '.portos', 'envs', RIGGING_RUNTIME.condaEnv, 'bin', 'python');
+  if (exists(reviewed)) return reviewed;
   return resolveCondaEnvPython(RIGGING_RUNTIME.condaEnv, { exists, env });
 }
 
