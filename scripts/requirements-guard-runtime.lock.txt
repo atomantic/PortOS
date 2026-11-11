@@ -2,7 +2,7 @@
 # dedicated model-abuse-guard and jev virtualenvs (CPython 3.11+). Do not edit by hand.
 #
 # server/lib/pythonSetup.js `installLockedRuntime` installs this with
-# `--require-hashes --no-deps`, so every transitive package is version- and
+# `--require-hashes --no-deps --only-binary :all:`, so every transitive package is version- and
 # hash-pinned and a tampered or substituted distribution fails the install.
 # There is no install-time resolution: a missing lock entry for the host is
 # reported as an unsupported platform before anything is installed.

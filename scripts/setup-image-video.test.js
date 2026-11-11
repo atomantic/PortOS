@@ -658,9 +658,9 @@ describe('legacy INSTALL_VIDEO installs only hash-pinned locks', () => {
 
   it('installs the mflux-video lock with --require-hashes --no-deps and never by bare package name', () => {
     expect(block).toContain('VIDEO_LOCK="$SCRIPT_DIR/requirements-mflux-video-mlx.lock.txt"');
-    expect(block).toContain('pip install --user --require-hashes --no-deps -r "$VIDEO_LOCK"');
+    expect(block).toContain('pip install --user --require-hashes --no-deps --only-binary :all: -r "$VIDEO_LOCK"');
     // Removing the wrong `mlx_video` namesake must be followed by a force-reinstall of the real package's own files.
-    expect(block).toMatch(/--require-hashes --no-deps --force-reinstall -r "\$VIDEO_SELF_REQ" \|\| VIDEO_STATUS=\$\?[\s\S]*-r "\$VIDEO_LOCK" \|\| VIDEO_STATUS=\$\?/);
+    expect(block).toMatch(/--require-hashes --no-deps --only-binary :all: --force-reinstall -r "\$VIDEO_SELF_REQ" \|\| VIDEO_STATUS=\$\?[\s\S]*-r "\$VIDEO_LOCK" \|\| VIDEO_STATUS=\$\?/);
     // A failed install must stop setup, not be masked by the temp-file cleanup.
     expect(block).toContain('[[ "$VIDEO_STATUS" == "0" ]] || exit "$VIDEO_STATUS"');
     expect(existsSync(join(REPO_ROOT, 'scripts', 'requirements-mflux-video-mlx.lock.txt'))).toBe(true);
@@ -1563,8 +1563,8 @@ ${block}`;
 
   it('a 3.11+ PYTHON_BIN installs to the user site from the lock and probes both CLIs', () => {
     const { calls, selfReq } = runBlock({ oldPython: false });
-    expect(calls).toContain(`-m pip install --user --require-hashes --no-deps --force-reinstall -r`);
-    expect(calls).toContain(`-m pip install --user --require-hashes --no-deps -r ${lockPath}`);
+    expect(calls).toContain(`-m pip install --user --require-hashes --no-deps --only-binary :all: --force-reinstall -r`);
+    expect(calls).toContain(`-m pip install --user --require-hashes --no-deps --only-binary :all: -r ${lockPath}`);
     expect(calls).not.toMatch(/pip install --upgrade|pip install --user mflux/);
     expect(calls).toContain('from mflux.models.flux.cli.flux_generate import main; from mflux.models.common.cli.train import main');
     expect(calls).not.toMatch(/^uv /m);
@@ -1576,7 +1576,7 @@ ${block}`;
   it('an older PYTHON_BIN syncs the dedicated venv to the lock instead', () => {
     const { calls } = runBlock({ oldPython: true });
     expect(calls).not.toMatch(/pip install --user/);
-    expect(calls).toMatch(new RegExp(`^uv pip sync --python \\S+/\\.portos/venv-mflux/bin/python3 --require-hashes ${lockPath.replace(/[.]/g, '\\.')}$`, 'm'));
+    expect(calls).toMatch(new RegExp(`^uv pip sync --python \\S+/\\.portos/venv-mflux/bin/python3 --require-hashes --only-binary :all: ${lockPath.replace(/[.]/g, '\\.')}$`, 'm'));
     expect(calls).not.toMatch(/^uv pip install/m);
     expect(calls).toMatch(/^probe \S+venv-mflux\/bin\/python3 -c from mflux\.models\.flux\.cli\.flux_generate import main/m);
   });

@@ -8,64 +8,43 @@ import { errorMiddleware } from '../lib/errorHandler.js';
 
 // Mock the services so the route test is deterministic regardless of the test
 // host's real arch/memory and never touches a real subprocess.
-const TRELLIS2_TARGET = {
-  id: 'trellis2',
-  label: 'TRELLIS.2',
-  executionLane: 'local-mps',
-  outputKind: 'glb-mesh',
-  unavailableReason: null,
-  gatedRepos: [
-    {
-      label: 'facebook/dinov3-vitl16-pretrain-lvd1689m',
-      url: 'https://huggingface.co/facebook/dinov3-vitl16-pretrain-lvd1689m',
-    },
-    { label: 'briaai/RMBG-2.0', url: 'https://huggingface.co/briaai/RMBG-2.0' },
-  ],
-};
-
-// Partial mock: the resolver/probe functions are stubbed so the route tests stay
-// hardware-independent, but the reason→label map + `unavailableReasonLabel` come
-// from the real module, so the refusal message asserted below is the exact string
-// a user would see.
 vi.mock('../services/imageTo3d/targets.js', async (importOriginal) => ({
   ...(await importOriginal()),
-  detectHostCapabilities: vi.fn(() => ({ appleSilicon: true, unifiedMemoryGb: 128, cuda: false })),
-  getTarget: vi.fn((id) => (id === 'trellis2' ? TRELLIS2_TARGET : null)),
-  listTargets: vi.fn((caps) => [
-    { ...TRELLIS2_TARGET, available: caps.appleSilicon && caps.unifiedMemoryGb >= 24 },
-  ]),
-  unavailableReason: vi.fn(() => null),
-  IMAGE_TO_3D_TARGET_IDS: ['trellis2'],
+  detectHostCapabilities: vi.fn(() => ({
+    appleSilicon: true, unifiedMemoryGb: 128, cuda: true, cudaVramGb: 24, linuxHost: true,
+  })),
+}));
+
+vi.mock('../lib/childProcess.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  spawn: vi.fn(() => { throw new Error('Unexpected installer subprocess'); }),
+}));
+
+vi.mock('../services/imageTo3d/trellis2Cuda.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  isTrellis2CudaInstalled: vi.fn(() => false),
+}));
+
+vi.mock('../services/imageTo3d/pixal3dCuda.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  isPixal3dCudaInstalled: vi.fn(() => false),
+}));
+
+vi.mock('../services/imageTo3d/pixal3dMps.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  isPixal3dMpsInstalled: vi.fn(() => false),
 }));
 
 vi.mock('../services/imageTo3d/trellis2.js', async (importOriginal) => ({
-  // The pure half (`resolveDegradedBakeRemedy`, the `TRELLIS2_*` constants) comes through
-  // REAL — the adapter's `degraded` projection is asserted below, so stubbing it would
-  // test the stub.
   ...(await importOriginal()),
   isTrellis2Installed: vi.fn(() => false),
-  trellis2Root: vi.fn(() => '/tmp/trellis2'),
-  installTrellis2: vi.fn(({ onEvent }) => {
-    onEvent({ type: 'stage', stage: 'clone', message: 'git clone …' });
-    onEvent({ type: 'complete', message: 'TRELLIS.2 installed.' });
-    return { promise: Promise.resolve({ ok: true }), kill: vi.fn() };
-  }),
-  // Not exercised by these route-level tests (render dispatch is covered in
-  // models.test.js), but the adapter registry imports it — an incomplete mock
-  // here would 'no export defined' at import time.
   runTrellis2Generate: vi.fn(),
-  // Both probes shell out (venv python / `xcrun metal`). Mocked to the healthy
-  // result so the suite never touches the host toolchain; individual tests below
-  // override them to drive the degraded-install branches (#2952).
   probeTrellis2TextureBake: vi.fn(async () => ({
     quality: 'metal', modules: {}, missing: [], degradedQuality: [],
   })),
-  probeMetalToolchain: vi.fn(async () => ({ available: true })),
 }));
 
-// The install route resolves the central HF child env (#3032).
-// Mock it so the suite never reads the host's real settings.json or
-// ~/.cache/huggingface/token, and so the resolution-failure branch is drivable.
+// Unresolved installers must refuse before resolving the Hugging Face credentials.
 vi.mock('../services/hfToken.js', () => ({
   hfChildEnv: vi.fn(async () => ({ HF_TOKEN: 'hf_test', HUGGINGFACE_HUB_TOKEN: 'hf_test' })),
 }));
@@ -86,6 +65,9 @@ vi.mock('../services/imageTo3d/models.js', () => ({
 import * as targets from '../services/imageTo3d/targets.js';
 import * as trellis2 from '../services/imageTo3d/trellis2.js';
 import * as models from '../services/imageTo3d/models.js';
+import { spawn } from '../lib/childProcess.js';
+import { isTrellis2CudaInstalled } from '../services/imageTo3d/trellis2Cuda.js';
+import { isPixal3dCudaInstalled } from '../services/imageTo3d/pixal3dCuda.js';
 import { hfChildEnv } from '../services/hfToken.js';
 import routes from './imageTo3d.js';
 
@@ -133,43 +115,6 @@ describe('image-to-3d routes', () => {
     });
     const res = await request(makeApp()).get('/api/image-to-3d/targets');
     expect(res.body.targets[0].textureBake).toMatchObject({ quality: 'fallback', help: 'fix it' });
-  });
-
-  // #3041: the card must offer the right remedy — Repair install fetches the
-  // toolchain, but on a Command-Line-Tools-only host nothing PortOS runs can fix it.
-  it('GET /targets marks a degraded bake repairable when the toolchain is merely missing', async () => {
-    trellis2.isTrellis2Installed.mockReturnValueOnce(true);
-    trellis2.probeTrellis2TextureBake.mockResolvedValueOnce({
-      quality: 'fallback', missing: ['mtldiffrast'], degradedQuality: [], modules: {}, help: 'fix it',
-    });
-    trellis2.probeMetalToolchain.mockResolvedValueOnce({ available: false, installable: true });
-    const res = await request(makeApp()).get('/api/image-to-3d/targets');
-    expect(res.body.targets[0].textureBake).toMatchObject({ repairable: true, help: 'fix it' });
-  });
-
-  it('GET /targets marks a degraded bake NOT repairable when only Command Line Tools are active', async () => {
-    trellis2.isTrellis2Installed.mockReturnValueOnce(true);
-    trellis2.probeTrellis2TextureBake.mockResolvedValueOnce({
-      quality: 'fallback', missing: ['mtldiffrast'], degradedQuality: [], modules: {}, help: 'fix it',
-    });
-    trellis2.probeMetalToolchain.mockResolvedValueOnce({
-      available: false, installable: false, blocker: 'requires-xcode', hint: 'install Xcode',
-    });
-    const res = await request(makeApp()).get('/api/image-to-3d/targets');
-    expect(res.body.targets[0].textureBake).toMatchObject({
-      repairable: false, blocker: 'requires-xcode', help: 'install Xcode',
-    });
-  });
-
-  it('GET /targets does not probe the toolchain for a healthy bake', async () => {
-    trellis2.probeMetalToolchain.mockClear();
-    trellis2.isTrellis2Installed.mockReturnValueOnce(true);
-    const res = await request(makeApp()).get('/api/image-to-3d/targets');
-    expect(res.body.targets[0].textureBake).toMatchObject({ quality: 'metal' });
-    expect(res.body.targets[0].textureBake.repairable).toBeUndefined();
-    // A healthy bake names no modules — and reports no degradation at all.
-    expect(res.body.targets[0].degraded).toBeUndefined();
-    expect(trellis2.probeMetalToolchain).not.toHaveBeenCalled();
   });
 
   // FINDING: the render-option projection had no route coverage at all, and the client
@@ -227,25 +172,11 @@ describe('image-to-3d routes', () => {
     expect(res.body.targets[0].degraded).toEqual({
       label: 'degraded textures',
       help: 'fix it',
-      repairable: true,
+      repairable: false,
       // #4636: `help` names the remedy, `detail` names what is actually missing —
       // without it a Repair that keeps failing only ever reprints the same sentence.
       detail: 'Missing: mtldiffrast',
     });
-  });
-
-  it('GET /targets carries repairable:false into `degraded` when nothing PortOS runs can fix it', async () => {
-    trellis2.isTrellis2Installed.mockReturnValueOnce(true);
-    trellis2.probeTrellis2TextureBake.mockResolvedValueOnce({
-      quality: 'fallback', missing: ['mtldiffrast'], degradedQuality: [], modules: {}, help: 'fix it',
-    });
-    trellis2.probeMetalToolchain.mockResolvedValueOnce({
-      available: false, installable: false, blocker: 'requires-xcode', hint: 'install Xcode',
-    });
-    const res = await request(makeApp()).get('/api/image-to-3d/targets');
-    // The inversion here (`repairable !== false`) is easy to get backwards, and getting
-    // it backwards offers a Repair button that cannot work.
-    expect(res.body.targets[0].degraded).toMatchObject({ repairable: false, help: 'install Xcode' });
   });
 
   it('GET /targets omits `degraded` when the bake probe could not determine anything', async () => {
@@ -274,179 +205,55 @@ describe('image-to-3d routes', () => {
   });
 });
 
-describe('POST /trellis2/install (SSE)', () => {
-  it('keeps both GET install URLs read-only and returns target status', async () => {
-    trellis2.installTrellis2.mockClear();
-    trellis2.isTrellis2Installed.mockReturnValue(false);
-    const canonical = await request(makeApp()).get('/api/image-to-3d/targets/trellis2/install');
-    const legacy = await request(makeApp()).get('/api/image-to-3d/trellis2/install');
-    expect(canonical.status).toBe(200);
-    expect(canonical.body.target).toMatchObject({ id: 'trellis2', installed: false });
-    expect(legacy.body.target).toMatchObject({ id: 'trellis2', installed: false });
-    expect(trellis2.installTrellis2).not.toHaveBeenCalled();
-  });
+describe('image-to-3D install profile preflight', () => {
+  beforeEach(() => vi.clearAllMocks());
 
-  it('streams the canonical POST target install route', async () => {
-    trellis2.isTrellis2Installed.mockReturnValueOnce(false);
-    const res = await request(makeApp()).post('/api/image-to-3d/targets/trellis2/install');
-    expect(sseFrames(res.text).at(-1)).toMatchObject({ type: 'complete' });
-  });
-
-  it('streams stage → complete on the happy path', async () => {
-    trellis2.isTrellis2Installed.mockReturnValueOnce(false);
-    const res = await request(makeApp()).post('/api/image-to-3d/trellis2/install');
-    const frames = sseFrames(res.text);
-    expect(frames).toContainEqual({ type: 'stage', stage: 'clone', message: 'git clone …' });
-    expect(frames.at(-1)).toMatchObject({ type: 'complete' });
-    expect(trellis2.installTrellis2).toHaveBeenCalled();
-  });
-
-  // #3041: a missing-but-fetchable toolchain becomes a step of the install itself,
-  // rather than a command printed for the user to run.
-  it('tells the install to download the Metal Toolchain when it is missing but fetchable', async () => {
-    trellis2.installTrellis2.mockClear();
-    trellis2.isTrellis2Installed.mockReturnValueOnce(false);
-    trellis2.probeMetalToolchain.mockResolvedValueOnce({
-      available: false, installable: true, hint: 'it will be downloaded',
+  it.each([
+    ['trellis2', trellis2.isTrellis2Installed, /TRELLIS.2 Metal.*Eigen/],
+    ['trellis2Cuda', isTrellis2CudaInstalled, /TRELLIS.2 CUDA.*PyTorch CUDA wheels/],
+    ['pixal3dCuda', isPixal3dCudaInstalled, /Pixal3D CUDA.*MoGe, NATTEN/],
+  ])('reports the unresolved %s profile for fresh Install and Repair', async (id, installed, missing) => {
+    const app = makeApp();
+    const path = `/api/image-to-3d/targets/${id}/install`;
+    const status = await request(app).get(path);
+    expect(status.status).toBe(200);
+    expect(status.body.target).toMatchObject({
+      id, available: true, installed: false, installBlockedReason: expect.stringMatching(missing),
     });
-    const res = await request(makeApp()).post('/api/image-to-3d/trellis2/install');
-    expect(trellis2.installTrellis2).toHaveBeenCalledWith(
-      expect.objectContaining({ installMetalToolchain: true }),
-    );
-    expect(sseFrames(res.text).find((f) => f.stage === 'preflight')?.message).toContain('it will be downloaded');
+    const error = { type: 'error', stage: 'preflight', message: status.body.target.installBlockedReason };
+    const fresh = await request(app).post(path);
+    expect(sseFrames(fresh.text)).toEqual([error]);
+    installed.mockReturnValueOnce(true);
+    const repair = await request(app).post(`${path}?repair=1`);
+    expect(sseFrames(repair.text)).toEqual([error]);
+    expect(hfChildEnv).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
   });
 
-  // Without this the user waits out a ~15 GB install and an hour-long render before
-  // discovering the Metal backends could never have built on this host (#2952).
-  it('warns but still installs when the toolchain cannot be fetched (Command Line Tools only)', async () => {
-    trellis2.installTrellis2.mockClear();
-    trellis2.isTrellis2Installed.mockReturnValueOnce(false);
-    trellis2.probeMetalToolchain.mockResolvedValueOnce({
-      available: false, installable: false, blocker: 'requires-xcode', hint: 'install Xcode',
-    });
-    const res = await request(makeApp()).post('/api/image-to-3d/trellis2/install');
-    expect(sseFrames(res.text).find((f) => f.stage === 'preflight')?.message).toContain('install Xcode');
-    // A warning, not a refusal — geometry is unaffected — and no step that would fail.
-    expect(trellis2.installTrellis2).toHaveBeenCalledWith(
-      expect.objectContaining({ installMetalToolchain: false }),
-    );
+  it('applies the same preflight to the legacy TRELLIS.2 URL', async () => {
+    const app = makeApp();
+    const path = '/api/image-to-3d/trellis2/install';
+    const status = await request(app).get(path);
+    expect(status.body.target).toMatchObject({ id: 'trellis2', installed: false });
+    const res = await request(app).post(path);
+    expect(sseFrames(res.text)).toEqual([
+      { type: 'error', stage: 'preflight', message: status.body.target.installBlockedReason },
+    ]);
+    expect(spawn).not.toHaveBeenCalled();
   });
 
-  it('adds no toolchain step or warning when it is already present', async () => {
-    trellis2.installTrellis2.mockClear();
-    trellis2.isTrellis2Installed.mockReturnValueOnce(false);
-    const res = await request(makeApp()).post('/api/image-to-3d/trellis2/install');
-    expect(sseFrames(res.text).find((f) => f.stage === 'preflight')).toBeUndefined();
-    expect(trellis2.installTrellis2).toHaveBeenCalledWith(
-      expect.objectContaining({ installMetalToolchain: false }),
-    );
-  });
-
-  it('re-runs setup.sh on ?repair=1 instead of short-circuiting on "already installed"', async () => {
-    // The Repair install button's whole purpose: rebuild the Metal backends over an
-    // existing install once the Metal Toolchain is present (#2952).
-    trellis2.installTrellis2.mockClear();
-    trellis2.isTrellis2Installed.mockReturnValueOnce(true);
-    const res = await request(makeApp()).post('/api/image-to-3d/trellis2/install?repair=1');
-    expect(trellis2.installTrellis2).toHaveBeenCalled();
-    expect(sseFrames(res.text).at(-1)).toMatchObject({ type: 'complete' });
-  });
-
-  it('reports a degraded bake on an already-installed host instead of a bare "nothing to do"', async () => {
+  it('keeps the already-installed response and its degraded runtime warning', async () => {
     trellis2.isTrellis2Installed.mockReturnValueOnce(true);
     trellis2.probeTrellis2TextureBake.mockResolvedValueOnce({
-      quality: 'fallback', missing: ['mtldiffrast'], degradedQuality: [], modules: {}, help: 'repair me',
+      quality: 'fallback', missing: ['mtldiffrast'], degradedQuality: [], modules: {}, help: 'Degraded textures.',
     });
     const res = await request(makeApp()).post('/api/image-to-3d/trellis2/install');
     const frames = sseFrames(res.text);
-    const warning = frames.find((f) => f.stage === 'verify' && f.type === 'log')?.message;
-    expect(warning).toContain('repair me');
-    // #4636: this lane writes the SAME `verify` stage the install's own hook does, so it
-    // has to name the culprit too — otherwise one condition emits two different frames
-    // depending on whether the caller hit the short-circuit or ran the install.
-    expect(warning).toContain('Missing: mtldiffrast.');
-    expect(frames.at(-1)).toMatchObject({ type: 'complete' });
-  });
-
-  it('hands the resolved HF token env to the install child', async () => {
-    // #3032: the install must carry the CENTRAL token (settings-stored included),
-    // not just whatever the server process happened to be launched with.
-    trellis2.installTrellis2.mockClear();
-    trellis2.isTrellis2Installed.mockReturnValueOnce(false);
-    await request(makeApp()).post('/api/image-to-3d/trellis2/install');
-    expect(trellis2.installTrellis2).toHaveBeenCalledWith(expect.objectContaining({
-      env: expect.objectContaining({ HF_TOKEN: 'hf_test', HUGGINGFACE_HUB_TOKEN: 'hf_test' }),
-    }));
-  });
-
-  it('emits a terminal error frame — not a half-open stream — when the env cannot be resolved', async () => {
-    // The SSE headers are already flushed by this point, so a throw here can't
-    // reach the error middleware as JSON; it has to surface as an error frame.
-    trellis2.installTrellis2.mockClear();
-    trellis2.isTrellis2Installed.mockReturnValueOnce(false);
-    hfChildEnv.mockRejectedValueOnce(new Error('settings.json is not valid JSON'));
-    const res = await request(makeApp()).post('/api/image-to-3d/trellis2/install');
-    const frames = sseFrames(res.text);
-    expect(frames.at(-1)).toMatchObject({
-      type: 'error',
-      message: expect.stringMatching(/could not prepare.*install environment.*settings\.json is not valid JSON/i),
+    expect(frames).toContainEqual({
+      type: 'log', stage: 'verify', message: '⚠️ Degraded textures. Missing: mtldiffrast.',
     });
-    // And no multi-GB install is started on a failed resolve.
-    expect(trellis2.installTrellis2).not.toHaveBeenCalled();
-  });
-
-  it('short-circuits with complete when already installed (no install spawned)', async () => {
-    trellis2.installTrellis2.mockClear();
-    trellis2.isTrellis2Installed.mockReturnValueOnce(true);
-    const res = await request(makeApp()).post('/api/image-to-3d/trellis2/install');
-    const frames = sseFrames(res.text);
     expect(frames.at(-1)).toMatchObject({ type: 'complete', message: expect.stringMatching(/already/i) });
-    expect(trellis2.installTrellis2).not.toHaveBeenCalled();
-  });
-
-  it('appends a resume hint when the install fails with a transient network error', async () => {
-    trellis2.isTrellis2Installed.mockReturnValueOnce(false);
-    trellis2.installTrellis2.mockImplementationOnce(() => ({
-      promise: Promise.reject(Object.assign(
-        new Error("TRELLIS.2 install step 'setup' exited 128"),
-        { code: 'TRELLIS2_INSTALL_FAILED', stage: 'setup', transient: true },
-      )),
-      kill: vi.fn(),
-    }));
-    const res = await request(makeApp()).post('/api/image-to-3d/trellis2/install');
-    const frames = sseFrames(res.text);
-    expect(frames.at(-1)).toMatchObject({
-      type: 'error',
-      stage: 'setup',
-      message: expect.stringMatching(/exited 128.*network hiccup — click Install again to resume/is),
-    });
-  });
-
-  it('does NOT append the resume hint for a non-transient failure', async () => {
-    trellis2.isTrellis2Installed.mockReturnValueOnce(false);
-    trellis2.installTrellis2.mockImplementationOnce(() => ({
-      promise: Promise.reject(Object.assign(
-        new Error('TRELLIS.2 install step \'setup\' exited 1'),
-        { code: 'TRELLIS2_INSTALL_FAILED', stage: 'setup', transient: false },
-      )),
-      kill: vi.fn(),
-    }));
-    const res = await request(makeApp()).post('/api/image-to-3d/trellis2/install');
-    const frames = sseFrames(res.text);
-    expect(frames.at(-1)).toMatchObject({ type: 'error', message: expect.stringMatching(/exited 1$/) });
-    expect(frames.at(-1).message).not.toMatch(/network hiccup/i);
-  });
-
-  it('refuses on unsupported hardware', async () => {
-    trellis2.installTrellis2.mockClear();
-    trellis2.isTrellis2Installed.mockReturnValueOnce(false);
-    targets.unavailableReason.mockReturnValueOnce('requires-apple-silicon');
-    const res = await request(makeApp()).post('/api/image-to-3d/trellis2/install');
-    const frames = sseFrames(res.text);
-    // The human label, not the raw kebab-case reason code (#3579).
-    expect(frames.at(-1)).toMatchObject({ type: 'error', message: expect.stringMatching(/Requires an Apple Silicon Mac/) });
-    expect(frames.at(-1).message).not.toMatch(/requires-apple-silicon/);
-    expect(trellis2.installTrellis2).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
   });
 });
 

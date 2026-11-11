@@ -1,69 +1,19 @@
-/**
- * Pixal3D (local NVIDIA / CUDA) target — install detection, pure command builders,
- * and a guarded generate runner.
- *
- * `TencentARC/Pixal3D` (SIGGRAPH 2026, MIT) is a pixel-aligned image→3D model built
- * on the TRELLIS.2 backbone: it back-projects pixel features into 3D instead of
- * injecting them through attention, which is what buys it near-reconstruction-level
- * geometry and PBR texture at 1536³. This lane is the CUDA sibling of
- * `trellis2Cuda.js` and deliberately mirrors its shape — the subprocess machinery
- * (install sequencing with transient retry, cancel, the generate child driver) is
- * shared through `laneRunner.js`, so this file is only what is Pixal3D-specific.
- * Everything is either pure or exercised through injectable `exists`/`spawnImpl`, so
- * the wiring is unit-testable WITHOUT an NVIDIA box, a ~40 GB install, or a live
- * render. `runPixal3dCudaGenerate` is the one real subprocess boundary and NEVER
- * auto-runs (AGENTS.md no-cold-bootstrap policy).
- *
- * **Four things differ from the TRELLIS.2 CUDA lane, and each drives the design:**
- *
- * 1. **Upstream SHIPS a CLI.** Unlike `microsoft/TRELLIS.2` (whose `example.py` has
- *    hard-coded paths, forcing PortOS to ship `trellis2CudaGenerateRunner.py`),
- *    Pixal3D's `inference.py` is a real image→GLB entrypoint. So there is no PortOS
- *    Python runner here — re-implementing it would mean re-deriving its MoGe-2 camera
- *    estimation and FOV/distance solve, which is exactly the domain code most likely
- *    to be got subtly wrong.
- *
- * 2. **`--output` is a full path, NOT a stem.** TRELLIS.2's runners take a stem and
- *    append `.glb`; `inference.py` writes precisely the path it is given. So this lane
- *    must NOT route `outputPath` through `trellis2OutputStem` — doing so would silently
- *    produce `model` with no extension.
- *
- * 3. **Its own conda env, and its own TRELLIS.2 checkout.** Pixal3D's install is
- *    "set up TRELLIS.2's environment, then add our deps", and those deps pin
- *    `transformers`/`diffusers`/`pillow` versions. Installing them into the existing
- *    `trellis2` env would mutate a working target's dependency set — a change that
- *    degrades a *different* lane is the worst kind, so this lane pays ~15 GB of extra
- *    disk for isolation. Upstream's `setup.sh --new-env` hard-codes
- *    `conda create -n trellis2`, so the env is created here (named `pixal3d`) and
- *    `setup.sh` is sourced WITHOUT `--new-env` so it installs into the active env.
- *
- * 4. **No gated Hugging Face repos.** `trellis2Cuda` needs `facebook/dinov3` accepted;
- *    Pixal3D loads DINOv3 from the `camenduru/...` mirror and MoGe from
- *    `Ruicheng/moge-2-vitl`, both ungated. Its descriptor therefore declares no
- *    `gatedRepos` — a token still helps with rate limits, but nothing needs accepting.
- *
- * Clone layout: `~/.portos/pixal3d/{TRELLIS.2,Pixal3D}`, conda env `pixal3d`. The env's
- * interpreter is resolved by the shared `resolveCondaEnvPython` (`lib/condaEnv.js`),
- * which both CUDA lanes use — the `CONDA_PREFIX` walk-up it encodes is subtle enough
- * that a second copy would be a liability.
- */
+/** Pixal3D CUDA runtime detection, diagnostics and generation. */
 
 import { existsSync } from 'node:fs';
-import { cpus, homedir } from 'node:os';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from '../../lib/childProcess.js';
 import { resolveCondaEnvPython } from '../../lib/condaEnv.js';
-import { appendMissingModules } from './degradedInstall.js';
 import { rewriteGlbMaterialsOpaque } from './glbMaterials.js';
 import {
   hfGatedRepoHelp,
   isHfAuthError,
-  isTransientInstallError,
   parseGenerateProgress,
 } from './trellis2.js';
-import { isCudaOomError, TRELLIS2_CUDA_REPO } from './trellis2Cuda.js';
+import { isCudaOomError } from './trellis2Cuda.js';
 import {
-  textMatcher, runInstallSteps, runGenerateSubprocess, probePythonModules,
+  textMatcher, runGenerateSubprocess, probePythonModules,
 } from './laneRunner.js';
 import { validateRenderOptions } from './renderOptions.js';
 
@@ -73,37 +23,12 @@ const HOME = homedir();
 const CODE_PREFIX = 'PIXAL3D_CUDA';
 const LABEL = 'Pixal3D (CUDA)';
 
-/**
- * Upstream TencentARC/Pixal3D.
- *
- * **Cloned at its DEFAULT branch (`master`), deliberately not `main`.** Upstream's
- * README carries a "Branches" table naming `main` as the TRELLIS.2-backbone version
- * and `paper` as the Direct3D-S2 original — but there is no `main` branch on the
- * remote (only `master`, `paper`, `pr-12`), and `master` is the TRELLIS.2-backbone
- * code. Pinning `-b main` from the README would make the clone step fail outright.
- */
-export const PIXAL3D_REPO = 'https://github.com/TencentARC/Pixal3D.git';
-
 /** The conda environment this lane builds. Named to avoid colliding with `trellis2`. */
 export const PIXAL3D_CONDA_ENV = 'pixal3d';
-
-/** Python the env is created with — matches what TRELLIS.2's `setup.sh` uses. */
-export const PIXAL3D_PYTHON_VERSION = '3.10';
-
-/** NATTEN pin from upstream's install guide (neighborhood attention for the NAF upsampler). */
-export const PIXAL3D_NATTEN_VERSION = '0.21.0';
-
-/** The upstream release wheel and its SHA-256 digest (see docs/THREEJS_MODELS.md). */
-export const PIXAL3D_UTILS3D_WHEEL = 'https://github.com/LDYang694/Storages/releases/download/20260430/utils3d-0.0.2-py3-none-any.whl#sha256=ff63440827d6933807dd06c8a5a2db7e51fd5f33c7f3dddcc766a80e0f419252';
 
 /** Clone/install root. `base` overridable for tests. */
 export function pixal3dRoot(base = join(HOME, '.portos')) {
   return join(base, 'pixal3d');
-}
-
-/** Where TRELLIS.2 is cloned — sourced only for its `setup.sh` + extension submodules. */
-export function pixal3dTrellisDir(base) {
-  return join(pixal3dRoot(base), 'TRELLIS.2');
 }
 
 /** Where Pixal3D itself is cloned — the code this lane actually runs. */
@@ -128,115 +53,14 @@ export function pixal3dPython({ exists = existsSync, env } = {}) {
 
 /**
  * Installed ⇔ the conda env's Python exists AND upstream's entrypoint is on disk.
- * Both halves matter: the env can be created and then the dependency build can fail,
- * which would otherwise read as a complete install (the lesson `trellis2Cuda`'s verify
- * step encodes).
+ * Both halves matter: a legacy setup may have created the environment or cloned
+ * the source before failing.
  * @param {{base?: string, exists?: (p: string) => boolean, env?: object}} [opts]
  * @returns {boolean}
  */
 export function isPixal3dCudaInstalled({ base, exists = existsSync, env } = {}) {
   if (!pixal3dPython({ exists, env })) return false;
   return exists(pixal3dInferenceScript(base));
-}
-
-/**
- * TRELLIS.2 `setup.sh` flags for this lane — the same extension set the
- * `trellis2Cuda` lane builds, MINUS `--new-env` (see the file header: the env is
- * created separately so it can be named `pixal3d`).
- *
- * Pixal3D imports `o_voxel` (the GLB exporter) and `flex_gemm` directly, and defaults
- * `ATTN_BACKEND` to `flash_attn`, so `--o-voxel`, `--flexgemm` and `--flash-attn` are
- * load-bearing rather than optional; `--nvdiffrast`/`--nvdiffrec`/`--cumesh` back the
- * texture bake and mesh ops the exporter calls.
- */
-export const PIXAL3D_SETUP_FLAGS = Object.freeze([
-  '--basic', '--flash-attn', '--nvdiffrast', '--nvdiffrec',
-  '--cumesh', '--o-voxel', '--flexgemm',
-]);
-
-/** Build workers for the NATTEN compile — bounded so it can't monopolize the box. */
-export function nattenWorkerCount(cpuCount = cpus().length) {
-  const n = Number.isFinite(cpuCount) && cpuCount > 0 ? cpuCount : 4;
-  return Math.max(1, Math.min(8, Math.floor(n / 2)));
-}
-
-/**
- * The install as an ordered list of `{stage, command, args, cwd?, optional?}` steps.
- *
- * Every step is skippable/idempotent so a run that died partway re-reaches the rest
- * rather than aborting on "already exists" — the resume property both TRELLIS.2 lanes
- * rely on. `conda create` is skipped when the env's Python is already present, and
- * each clone is skipped when its `.git` is there.
- *
- * Same sourcing mechanics as `buildCudaInstallSteps` (`. ./setup.sh` inside `bash -lc`,
- * so `conda activate` has the hooks `conda init` wrote); the one difference is that our
- * env is activated FIRST, because `--new-env` is omitted — see the file header.
- *
- * **The NATTEN step is `optional`.** It compiles CUDA kernels for a specific arch, and
- * a failure there is survivable: without NATTEN the pipeline takes upstream's
- * documented NAF fallback path — slower and lower quality, but it renders. Failing the
- * whole ~40 GB install over it would be a worse outcome than a degraded one the
- * install-state probe then reports. `computeCap` comes from
- * `detectCudaComputeCapability()`; when it could not be determined the env var is
- * omitted entirely rather than guessed, letting NATTEN pick its own default.
- *
- * `env` is threaded through so the "does the conda env already exist?" question gets
- * the SAME answer here as in the install's `verify` hook — reading `process.env` here
- * while `verify` reads an injected env would let this prepend a redundant `conda create`
- * that `verify` then disagrees with.
- *
- * @param {string} [base]
- * @param {{exists?: (p: string) => boolean, env?: object, computeCap?: string|null}} [opts]
- * @returns {Array<{stage: string, command: string, args: string[], cwd?: string, optional?: boolean}>}
- */
-export function buildPixal3dInstallSteps(base, { exists = existsSync, env, computeCap = null } = {}) {
-  const trellisDir = pixal3dTrellisDir(base);
-  const repoDir = pixal3dRepoDir(base);
-  const steps = [];
-
-  if (!pixal3dPython({ exists, env })) {
-    steps.push({
-      stage: 'env',
-      command: 'conda',
-      args: ['create', '-n', PIXAL3D_CONDA_ENV, `python=${PIXAL3D_PYTHON_VERSION}`, '-y'],
-    });
-  }
-  // Recursive: TRELLIS.2 vendors its CUDA extensions as submodules, and a shallow
-  // clone yields empty extension dirs and a setup that fails deep in a compile.
-  if (!exists(join(trellisDir, '.git'))) {
-    steps.push({
-      stage: 'clone-trellis',
-      command: 'git',
-      args: ['clone', '--recursive', TRELLIS2_CUDA_REPO, trellisDir],
-    });
-  }
-  if (!exists(join(repoDir, '.git'))) {
-    steps.push({ stage: 'clone', command: 'git', args: ['clone', PIXAL3D_REPO, repoDir] });
-  }
-  // Every remaining step is "activate our env, then run one command", so only the
-  // command, the cwd and the optional-ness are worth reading per step.
-  const condaStep = (stage, script, extra = {}) => ({
-    stage,
-    command: 'bash',
-    args: ['-lc', `conda activate ${PIXAL3D_CONDA_ENV} && ${script}`],
-    cwd: repoDir,
-    ...extra,
-  });
-  const nattenEnv = [
-    ...(computeCap ? [`NATTEN_CUDA_ARCH=${computeCap}`] : []),
-    `NATTEN_N_WORKERS=${nattenWorkerCount()}`,
-  ].join(' ');
-  steps.push(
-    condaStep('setup', `. ./setup.sh ${PIXAL3D_SETUP_FLAGS.join(' ')}`, { cwd: trellisDir }),
-    condaStep('deps', 'pip install -r requirements.txt'),
-    condaStep(
-      'natten',
-      `${nattenEnv} pip install natten==${PIXAL3D_NATTEN_VERSION} --no-build-isolation`,
-      { optional: true },
-    ),
-    condaStep('utils3d', `pip install "${PIXAL3D_UTILS3D_WHEEL}"`),
-  );
-  return steps;
 }
 
 export const PIXAL3D_STANDARD_MODE_MIN_VRAM_GB = 36;
@@ -384,19 +208,15 @@ export const PIXAL3D_REQUIRED_MODULES = ['o_voxel', 'flex_gemm'];
 export const PIXAL3D_NAF_MODULES = ['natten'];
 
 /**
- * The remedy for a REQUIRED extension that did not build — and only the remedy: which
- * extensions failed rides the `degraded.detail` line the adapter builds (#4741). Lives
- * next to its NAF sibling rather than inlined at the registry so both readings of a
- * half-built install come from one place.
+ * Explain the effect of a missing required extension. The adapter names the
+ * specific modules separately.
  */
 export const PIXAL3D_INCOMPLETE_INSTALL_HELP = 'Pixal3D is installed but not every required '
-  + 'CUDA extension built, so renders will fail in the mesh exporter. Repair install '
-  + 'rebuilds the CUDA extensions; your downloaded models are kept.';
+  + 'CUDA extension built, so renders will fail in the mesh exporter.';
 
 export const PIXAL3D_NAF_FALLBACK_HELP = 'Pixal3D is installed, but NATTEN is missing, '
   + 'so its NAF refinement step falls back to DINO projection features — slower, and '
-  + 'geometry/texture detail is a notch lower than upstream. Repair install rebuilds '
-  + 'NATTEN for this GPU; your downloaded models are kept.';
+  + 'geometry and texture detail are lower.';
 
 /**
  * Probe which of the env's modules resolve, for the install-state card. The spawn and
@@ -437,14 +257,14 @@ export async function probePixal3dModules({
 
 /**
  * A NATTEN / NAF-upsampler failure. Distinct from a generic crash because it is
- * user-actionable: repair the install to rebuild NATTEN for this card.
+ * identifies a problem with the existing NATTEN build.
  */
 export const isPixal3dNafError = textMatcher([
   'libnatten', 'HAS_LIBNATTEN', "No module named 'natten'", 'NATTEN was not compiled',
 ]);
 
 const NAF_ERROR_HELP = 'This render failed inside Pixal3D\'s NAF upsampler, which needs '
-  + 'NATTEN built with CUDA kernels for this GPU. Run Repair install to rebuild it.';
+  + 'NATTEN built with CUDA kernels for this GPU.';
 
 /**
  * The WSL2 NAF crash. Upstream issue #31 reports a reproducible
@@ -464,87 +284,6 @@ const WSL_NAF_HELP = 'The GPU driver reported "device not ready" inside Pixal3D\
 const CUDA_OOM_HELP = 'The GPU ran out of memory during this render. Close other GPU '
   + 'workloads and try again, or render at a lower resolution — Pixal3D needs ~12 GB at '
   + '1024 and up to ~36 GB for full-quality 1536.';
-
-/**
- * Run the install as a killable, event-emitting job: conda env → TRELLIS.2 clone +
- * `setup.sh` → Pixal3D clone → deps → NATTEN → utils3d (~40 GB and a long CUDA
- * extension build). Real subprocesses — user-triggered only. Retry/cancel/backoff
- * semantics come from the shared `runInstallSteps`.
- *
- * `computeCap` is resolved by the caller (the adapter, via
- * `detectCudaComputeCapability`) rather than probed here, keeping this function's
- * inputs explicit and its steps deterministic in tests.
- *
- * **Post-install verification.** `setup.sh` is SOURCED and exits 0 even when a CUDA
- * extension failed to compile, so the env and the checkout can both be on disk while
- * `o_voxel` never built. After the presence check the install therefore runs the same
- * module probe the card uses (`probeModules`, injectable so the suite never spawns a
- * Python against the developer machine) and reports a half-built install BEFORE the
- * terminal `complete` frame — otherwise a user watching the install finish sees a clean
- * success and only learns it is incomplete on a later visit to the card (#4741).
- *
- * @param {{base?: string, onEvent?: (ev: object) => void, spawnImpl?: Function,
- *          maxRetries?: number, sleep?: (ms: number) => Promise<void>,
- *          exists?: (p: string) => boolean, env?: NodeJS.ProcessEnv,
- *          computeCap?: string|null, probeModules?: Function}} [opts]
- * @returns {{promise: Promise<{ok: true}>, kill: () => void}}
- */
-export function installPixal3dCuda({
-  base,
-  onEvent = () => {},
-  spawnImpl = spawn,
-  maxRetries = 3,
-  sleep,
-  exists = existsSync,
-  env,
-  computeCap = null,
-  probeModules = probePixal3dModules,
-} = {}) {
-  return runInstallSteps({
-    steps: buildPixal3dInstallSteps(base, { exists, env, computeCap }),
-    label: LABEL,
-    codePrefix: CODE_PREFIX,
-    isTransient: isTransientInstallError,
-    onEvent,
-    spawnImpl,
-    maxRetries,
-    sleep,
-    env,
-    // Steps can leave a usable env behind while a build failed, so confirm what
-    // actually landed rather than trusting exit 0 (#2952's lesson).
-    verify: async (emit) => {
-      if (!isPixal3dCudaInstalled({ base, exists, env })) {
-        const err = new Error(
-          `${LABEL} setup finished but its conda environment or the Pixal3D checkout is `
-          + 'missing — check the setup log above for a failed extension build.',
-        );
-        err.code = `${CODE_PREFIX}_INSTALL_INCOMPLETE`;
-        err.stage = 'verify';
-        throw err;
-      }
-      // Present ≠ complete. A missing REQUIRED extension is a `⚠️`, not a throw: the
-      // install genuinely produced a usable env for everything but the mesh exporter,
-      // and the card's Repair action is the remedy — failing the whole ~40 GB run would
-      // discard work the user can keep. Same reading, and the same precedence
-      // (incomplete outranks the NAF fallback), as the card's `describeInstallState`.
-      // A probe that could not RUN (`naf: 'unknown'`, nothing missing) still reports the
-      // clean line: "failed to determine" must never render as "determined to be bad".
-      const probe = await probeModules({ exists, env });
-      if (probe.missing?.length) {
-        emit({
-          type: 'log',
-          stage: 'verify',
-          message: `⚠️ ${appendMissingModules(PIXAL3D_INCOMPLETE_INSTALL_HELP, probe.missing)}`,
-        });
-      } else if (probe.naf === 'unavailable') {
-        // Nothing to name — NATTEN is absent as a whole, not half-built.
-        emit({ type: 'log', stage: 'verify', message: `⚠️ ${PIXAL3D_NAF_FALLBACK_HELP}` });
-      } else {
-        emit({ type: 'log', stage: 'verify', message: '✅ Pixal3D CUDA environment is present.' });
-      }
-    },
-  });
-}
 
 /**
  * Run a single image→GLB generation. Same contract as `runTrellis2CudaGenerate`: the one

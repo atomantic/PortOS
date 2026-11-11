@@ -1,38 +1,4 @@
-/**
- * TRELLIS.2 (local NVIDIA / CUDA) target — install detection, pure command
- * builders, and a guarded generate runner.
- *
- * The CUDA sibling of `trellis2.js` (which drives the Apple-Silicon MPS port). Both
- * lanes are thin: the subprocess machinery they share — install-step sequencing with
- * transient retry, cancel, and the generate child driver — lives in `laneRunner.js`,
- * so this file is only what is genuinely CUDA-specific (paths, steps, args, error
- * classification). Everything here is either pure or exercised through injectable
- * `exists`/`spawnImpl`, so the wiring is unit-testable WITHOUT a 24 GB NVIDIA box, a
- * ~15 GB weight download, or a live render. `runTrellis2CudaGenerate` is the one real
- * subprocess boundary and NEVER auto-runs: it rejects unless the model is installed,
- * and is only reached from an explicit user action (AGENTS.md no-cold-bootstrap policy).
- *
- * **Two things differ from the MPS lane, and both drive the design here:**
- *
- * 1. **Conda, not a venv.** Upstream's `setup.sh` creates and activates a conda
- *    environment named `trellis2` (PyTorch 2.6 / CUDA 12.4) rather than a `.venv`
- *    inside the clone. So "installed" is resolved by probing the usual conda roots
- *    for `envs/trellis2/bin/python` instead of a fixed path under the repo — via the
- *    shared `resolveCondaEnvPython` (`lib/condaEnv.js`), which the Pixal3D CUDA
- *    lane uses too. (Distinct from that file's venv resolvers like
- *    `resolveFlux2Python`, which probe a different layout entirely.)
- *
- * 2. **Upstream ships no CLI.** `microsoft/TRELLIS.2` has only `example.py`, a demo
- *    with hard-coded paths — there is no `generate.py` to shell into the way the mac
- *    port provides one. PortOS therefore ships its own entrypoint,
- *    `trellis2CudaGenerateRunner.py`, which drives the documented public API
- *    (`Trellis2ImageTo3DPipeline.from_pretrained` → `.run(image)` →
- *    `o_voxel.postprocess.to_glb` → `.export`) and prints the SAME stage banners the
- *    MPS lane emits, so `parseGenerateProgress` parses both lanes with no second
- *    vocabulary to maintain.
- *
- * Clone layout mirrors the MPS lane: the upstream repo lands at `~/.portos/trellis2-cuda`.
- */
+/** TRELLIS.2 CUDA runtime detection and generation. */
 
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -44,11 +10,10 @@ import { rewriteGlbMaterialsOpaque } from './glbMaterials.js';
 import {
   hfGatedRepoHelp,
   isHfAuthError,
-  isTransientInstallError,
   parseGenerateProgress,
   trellis2OutputStem,
 } from './trellis2.js';
-import { textMatcher, runInstallSteps, runGenerateSubprocess } from './laneRunner.js';
+import { textMatcher, runGenerateSubprocess } from './laneRunner.js';
 import { renderOptionArgs } from './renderOptions.js';
 
 const HOME = homedir();
@@ -56,9 +21,6 @@ const HOME = homedir();
 /** Error-code namespace and user-facing name for this lane's subprocess failures. */
 const CODE_PREFIX = 'TRELLIS2_CUDA';
 const LABEL = 'TRELLIS.2 (CUDA)';
-
-/** Upstream Microsoft TRELLIS.2 (CUDA). */
-export const TRELLIS2_CUDA_REPO = 'https://github.com/microsoft/TRELLIS.2.git';
 
 /** The conda environment name upstream's `setup.sh --new-env` creates. */
 export const TRELLIS2_CUDA_CONDA_ENV = 'trellis2';
@@ -100,62 +62,6 @@ export function trellis2CudaGenerateRunnerScript() {
 export function isTrellis2CudaInstalled({ base, exists = existsSync, env } = {}) {
   if (!trellis2CudaPython({ exists, env })) return false;
   return exists(trellis2CudaPackageDir(base));
-}
-
-/**
- * The upstream setup flags, verbatim from TRELLIS.2's README:
- * `. ./setup.sh --new-env --basic --flash-attn --nvdiffrast --nvdiffrec --cumesh --o-voxel --flexgemm`
- *
- * Every extension is load-bearing for the image→GLB path this target exposes:
- * `--o-voxel` provides `o_voxel.postprocess.to_glb` (the exporter the runner calls),
- * `--nvdiffrast`/`--nvdiffrec` the texture baking, `--cumesh` the mesh ops, and
- * `--flash-attn`/`--flexgemm` the attention/GEMM kernels the 4B model samples with.
- * Trimming the list produces an install that imports and then fails mid-render.
- */
-export const TRELLIS2_CUDA_SETUP_FLAGS = Object.freeze([
-  '--new-env', '--basic', '--flash-attn', '--nvdiffrast', '--nvdiffrec',
-  '--cumesh', '--o-voxel', '--flexgemm',
-]);
-
-/**
- * The install as an ordered list of `{stage, command, args, cwd?}` steps: recursive
- * clone (upstream vendors its extensions as submodules — a non-recursive clone
- * silently yields empty extension dirs and a setup that fails deep in a compile),
- * then its `setup.sh`.
- *
- * **The clone step is skipped when the repo is already present** (`<root>/.git`),
- * the same resume property the MPS lane relies on: a run that cloned but died
- * inside `setup.sh` must re-reach the idempotent setup rather than abort on
- * "destination path already exists".
- *
- * **`setup.sh` is SOURCED inside a login shell**, not executed. Upstream documents
- * `. ./setup.sh` because the script calls `conda activate` and then installs into the
- * activated env; running it as `bash setup.sh` gives `conda activate` no shell hooks
- * and the packages land in the wrong interpreter (or the script aborts). `bash -lc`
- * loads the profile that `conda init` wrote, which is what makes `conda activate`
- * work in a non-interactive child.
- *
- * @param {string} [base]
- * @param {{exists?: (p: string) => boolean}} [opts]
- * @returns {Array<{stage: string, command: string, args: string[], cwd?: string}>}
- */
-export function buildCudaInstallSteps(base, { exists = existsSync } = {}) {
-  const root = trellis2CudaRoot(base);
-  const steps = [];
-  if (!exists(join(root, '.git'))) {
-    steps.push({
-      stage: 'clone',
-      command: 'git',
-      args: ['clone', '-b', 'main', '--recursive', TRELLIS2_CUDA_REPO, root],
-    });
-  }
-  steps.push({
-    stage: 'setup',
-    command: 'bash',
-    args: ['-lc', `. ./setup.sh ${TRELLIS2_CUDA_SETUP_FLAGS.join(' ')}`],
-    cwd: root,
-  });
-  return steps;
 }
 
 /**
@@ -265,54 +171,6 @@ export const isCudaOomError = textMatcher([
 
 const CUDA_OOM_HELP = 'The GPU ran out of memory during this render. Close other '
   + 'GPU workloads and try again — TRELLIS.2 needs most of a 24 GB card to itself.';
-
-/**
- * Run the install as a killable, event-emitting job: recursive clone → upstream
- * `setup.sh` (~15 GB plus a long CUDA extension build). Real subprocesses —
- * user-triggered only. Retry/cancel/backoff semantics come from the shared
- * `runInstallSteps`, so both lanes stay in lockstep by construction.
- *
- * @param {{base?: string, onEvent?: (ev: object) => void, spawnImpl?: Function,
- *          maxRetries?: number, sleep?: (ms: number) => Promise<void>,
- *          exists?: (p: string) => boolean, env?: NodeJS.ProcessEnv}} [opts]
- * @returns {{promise: Promise<{ok: true}>, kill: () => void}}
- */
-export function installTrellis2Cuda({
-  base,
-  onEvent = () => {},
-  spawnImpl = spawn,
-  maxRetries = 3,
-  sleep,
-  exists = existsSync,
-  env,
-} = {}) {
-  return runInstallSteps({
-    steps: buildCudaInstallSteps(base, { exists }),
-    label: LABEL,
-    codePrefix: CODE_PREFIX,
-    isTransient: isTransientInstallError,
-    onEvent,
-    spawnImpl,
-    maxRetries,
-    sleep,
-    env,
-    // `setup.sh` can leave a usable conda env behind while an extension build failed,
-    // so confirm what actually landed rather than trusting exit 0 — the same lesson
-    // the MPS lane's verify step encodes (#2952).
-    verify: (emit) => {
-      if (!isTrellis2CudaInstalled({ base, exists, env })) {
-        const err = new Error(
-          `${LABEL} setup finished but its conda environment or upstream package is `
-          + 'missing — check the setup log above for a failed extension build.',
-        );
-        err.code = `${CODE_PREFIX}_INSTALL_INCOMPLETE`;
-        err.stage = 'verify';
-        throw err;
-      }
-      emit({ type: 'log', stage: 'verify', message: '✅ TRELLIS.2 CUDA environment is present.' });
-    },
-  });
-}
 
 /**
  * Run a single image→GLB generation on CUDA. The one real-subprocess boundary —

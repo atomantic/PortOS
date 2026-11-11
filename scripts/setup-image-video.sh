@@ -597,8 +597,8 @@ if [[ "$INSTALL_MFLUX" == "1" ]]; then
     # because the lock is already the complete closure.
     MFLUX_SELF_REQ="$(mktemp)"
     awk '/^[^ #]/ { keep = /^mflux==/ } keep' "$MFLUX_LOCK" > "$MFLUX_SELF_REQ"
-    "$PYTHON_BIN" -m pip install --user --require-hashes --no-deps --force-reinstall -r "$MFLUX_SELF_REQ" \
-      && "$PYTHON_BIN" -m pip install --user --require-hashes --no-deps -r "$MFLUX_LOCK" \
+    "$PYTHON_BIN" -m pip install --user --require-hashes --no-deps --only-binary :all: --force-reinstall -r "$MFLUX_SELF_REQ" \
+      && "$PYTHON_BIN" -m pip install --user --require-hashes --no-deps --only-binary :all: -r "$MFLUX_LOCK" \
       || MFLUX_USE_VENV=1
     rm -f "$MFLUX_SELF_REQ"
     # A satisfied-looking pip run can still leave an unimportable stack on an odd
@@ -628,7 +628,7 @@ if [[ "$INSTALL_MFLUX" == "1" ]]; then
     fi
     # The venv is mflux's alone, so sync it to exactly the lock.
     echo "📦 Installing the hash-pinned mflux lock into ${MFLUX_VENV}..."
-    portos_uv pip sync --python "$MFLUX_VENV_PY" --require-hashes "$MFLUX_LOCK"
+    portos_uv pip sync --python "$MFLUX_VENV_PY" --require-hashes --only-binary :all: "$MFLUX_LOCK"
     pin_venv_arm64 "$MFLUX_VENV"
     probe_or_fail \
       "mflux venv built but its CLIs failed to import." \
@@ -650,7 +650,6 @@ if [[ "$INSTALL_VIDEO" == "1" ]]; then
     # Both packages provide an `import mlx_video` module, so a prior install
     # of the wrong one shadows the right one. Uninstall first to remove the
     # ambiguity for users upgrading from earlier setup-image-video.sh runs.
-    "$PYTHON_BIN" -m pip uninstall --yes mlx_video >/dev/null 2>&1 || true
     # Installed only from the hash-pinned lock (a superset of the mflux lock,
     # CPython 3.11+): no install-time resolution, so a new or compromised
     # transitive release cannot land on the next Repair.
@@ -664,6 +663,7 @@ if [[ "$INSTALL_VIDEO" == "1" ]]; then
         ;;
     esac
     VIDEO_LOCK="$SCRIPT_DIR/requirements-mflux-video-mlx.lock.txt"
+    "$PYTHON_BIN" -m pip uninstall --yes mlx_video >/dev/null 2>&1 || true
     # Uninstalling the wrong-namesake `mlx_video` can delete files the real
     # package shares, and a satisfied-looking lock install would not restore
     # them. Force-reinstall mlx-video-with-audio's OWN files (--no-deps, so the
@@ -671,9 +671,9 @@ if [[ "$INSTALL_VIDEO" == "1" ]]; then
     VIDEO_SELF_REQ="$(mktemp)"
     awk '/^[^ #]/ { keep = /^mlx-video-with-audio==/ } keep' "$VIDEO_LOCK" > "$VIDEO_SELF_REQ"
     VIDEO_STATUS=0
-    "$PYTHON_BIN" -m pip install --user --require-hashes --no-deps --force-reinstall -r "$VIDEO_SELF_REQ" || VIDEO_STATUS=$?
+    "$PYTHON_BIN" -m pip install --user --require-hashes --no-deps --only-binary :all: --force-reinstall -r "$VIDEO_SELF_REQ" || VIDEO_STATUS=$?
     if [[ "$VIDEO_STATUS" == "0" ]]; then
-      "$PYTHON_BIN" -m pip install --user --require-hashes --no-deps -r "$VIDEO_LOCK" || VIDEO_STATUS=$?
+      "$PYTHON_BIN" -m pip install --user --require-hashes --no-deps --only-binary :all: -r "$VIDEO_LOCK" || VIDEO_STATUS=$?
     fi
     rm -f "$VIDEO_SELF_REQ"
     [[ "$VIDEO_STATUS" == "0" ]] || exit "$VIDEO_STATUS"

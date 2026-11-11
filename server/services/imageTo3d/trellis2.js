@@ -1,22 +1,4 @@
-/**
- * TRELLIS.2 (local Apple Silicon / MPS) target — install detection, pure command
- * builders, a robust progress parser, and a guarded generate runner.
- *
- * Phase 2a of #2951/#2952: the *scaffolding* the install SSE route and the 3D page
- * will drive. Everything here is either pure (path/arg/step builders, the progress
- * parser) or exercised only through injectable dependencies (`exists`, `spawnImpl`)
- * so the wiring is unit-testable **without** downloading the ~15 GB model or running
- * a live GPU render. `runTrellis2Generate` is the one real-subprocess boundary and
- * NEVER auto-runs — it throws unless the model is installed and is only reached from
- * an explicit user action (AGENTS.md no-cold-bootstrap policy). The exact wording of
- * `generate.py`'s progress output is refined during hands-on validation, so the
- * parser keys on format-agnostic signals (a percentage, a `.glb` path) rather than
- * guessing internal stage names.
- *
- * Install layout mirrors the FLUX.2 venv convention in `pythonSetup.js`
- * (`~/.portos/...`): the `trellis-mac` repo is cloned to `~/.portos/trellis2` and its
- * `setup.sh` builds a `.venv` inside it.
- */
+/** TRELLIS.2 Metal runtime detection, diagnostics and generation. */
 
 import { existsSync } from 'node:fs';
 import { homedir, platform, totalmem } from 'node:os';
@@ -27,12 +9,10 @@ import { rewriteGlbMaterialsOpaque } from './glbMaterials.js';
 import { getTarget } from './targets.js';
 import {
   textMatcher,
-  runInstallSteps,
   runGenerateSubprocess,
   probePythonModules,
 } from './laneRunner.js';
 import { renderOptionArgs } from './renderOptions.js';
-import { appendMissingModules } from './degradedInstall.js';
 import {
   selectTrellis2DecimationTarget,
   trellis2MeshQualityArgs,
@@ -47,29 +27,9 @@ const IS_WIN = platform() === 'win32';
 const CODE_PREFIX = 'TRELLIS2';
 const LABEL = 'TRELLIS.2';
 
-/** The Apple Silicon MPS port of Microsoft TRELLIS.2. */
-export const TRELLIS2_REPO = 'https://github.com/shivampkumar/trellis-mac';
-
-/**
- * The one upstream dep PortOS clones itself — not because it is the only one with a
- * submodule (`deps/mtlmesh` has two), but because it is the only one whose submodule is
- * load-bearing on Apple Silicon: `mtlmesh`'s `cubvh`/`mtlbvh` feed only its CUDA
- * extensions, so they stay empty here harmlessly. See `trellis2AppleDepsStep`.
- */
-export const TRELLIS2_APPLE_REPO = 'https://github.com/pedronaugusto/trellis2-apple.git';
-
 /** Clone/install root. `base` overridable for tests. */
 export function trellis2Root(base = join(HOME, '.portos')) {
   return join(base, 'trellis2');
-}
-
-/**
- * Where `setup.sh` expects the `trellis2-apple` dep checkout. Its `deps/` is
- * gitignored in the port, so this is never a submodule of `TRELLIS2_REPO` — it is a
- * plain directory that upstream clones into, and that PortOS can therefore pre-fill.
- */
-export function trellis2AppleDepDir(base) {
-  return join(trellis2Root(base), 'deps', 'trellis2-apple');
 }
 
 /** The venv Python the `setup.sh` script builds inside the clone. */
@@ -133,9 +93,7 @@ export const TRELLIS2_BAKE_QUALITY_MODULES = ['flex_gemm'];
  */
 export const TRELLIS2_FALLBACK_BAKE_HELP = 'TRELLIS.2 is installed, but its Metal '
   + 'texture-baking backend is missing, so renders fall back to a low-resolution '
-  + 'baker that produces correct geometry with a scrambled, speckled surface. Repair '
-  + 'install fetches the missing build dependencies and rebuilds the Metal backends — '
-  + 'your downloaded models are kept.';
+  + 'baker that produces correct geometry with a scrambled, speckled surface.';
 
 /**
  * Probe whether the venv can take `generate.py`'s Metal texture-baking path.
@@ -190,31 +148,6 @@ export async function probeTrellis2TextureBake({
 }
 
 /**
- * Which remedy a degraded texture bake actually has, given the host's toolchain state.
- *
- * A `quality: 'fallback'` bake has two very different fixes and only one of them applies
- * on a given host: when the Xcode Metal Toolchain is merely missing, Repair install
- * fetches it and rebuilds (#3041); when only the Command Line Tools are active there is
- * nothing PortOS can run, so the remedy is to install Xcode and no Repair button is
- * offered at all. Both server lanes that report a degraded bake resolve it HERE — the
- * card/short-circuit projection in `adapters.js`, and the install's own `verify` frame —
- * so the two cannot promise different fixes for the same host state (#4742). Same
- * one-place-only reasoning as `degradedInstall.js`, which fixed the module-name half
- * of that parity.
- *
- * @param {{quality?: string, help?: string}} bake a result from `probeTrellis2TextureBake`
- * @param {{blocker?: string, hint?: string}|null} [toolchain] a result from `probeMetalToolchain`
- * @returns {{help?: string, repairable: boolean, blocker?: string}|null} `null` when the
- *          bake is not degraded, i.e. there is no remedy to name
- */
-export function resolveDegradedBakeRemedy(bake, toolchain) {
-  if (bake?.quality !== 'fallback') return null;
-  return toolchain?.blocker
-    ? { help: toolchain.hint, repairable: false, blocker: toolchain.blocker }
-    : { help: bake.help, repairable: true };
-}
-
-/**
  * Whether the Xcode Metal Toolchain is present — the prerequisite `setup.sh`
  * documents for building `mtldiffrast`/`mtlbvh`/`mtlgemm`. Checked BEFORE a ~15 GB
  * install so the user can fix it first, instead of discovering an hour later that
@@ -261,10 +194,8 @@ export async function probeMetalToolchain({
 }
 
 /** A missing-but-fetchable toolchain: the install can download it unattended. */
-export const TRELLIS2_METAL_TOOLCHAIN_HINT = 'The Xcode Metal Toolchain is not '
-  + 'installed, so TRELLIS.2\'s Metal texture-baking backends cannot build and renders '
-  + 'would produce a scrambled surface. The install will download it automatically '
-  + '(a one-time ~2 GB download, no password required).';
+export const TRELLIS2_METAL_TOOLCHAIN_HINT = 'The Xcode Metal Toolchain is required '
+  + 'to compile the Metal extensions. Setup will download it automatically.';
 
 /**
  * A missing toolchain on a host with only the Command Line Tools. Nothing PortOS
@@ -274,8 +205,7 @@ export const TRELLIS2_METAL_TOOLCHAIN_HINT = 'The Xcode Metal Toolchain is not '
 export const TRELLIS2_REQUIRES_XCODE_HINT = 'The Xcode Metal Toolchain is not '
   + 'installed and cannot be downloaded, because only the Command Line Tools are '
   + 'active on this host. Install Xcode from the App Store and run `sudo xcode-select '
-  + '--switch /Applications/Xcode.app`, then repair the TRELLIS.2 install. Until then '
-  + 'renders will produce correct geometry with a scrambled surface.';
+  + '--switch /Applications/Xcode.app`, then retry setup.';
 
 /**
  * The step that fetches the Metal Toolchain. Verified on-device during #3041: it
@@ -293,120 +223,6 @@ export const TRELLIS2_METAL_TOOLCHAIN_STEP = Object.freeze({
   args: ['-downloadComponent', 'MetalToolchain'],
   optional: true,
 });
-
-/**
- * Pre-fetch `deps/trellis2-apple` **with its submodules**, which upstream's `setup.sh`
- * cannot do for itself.
- *
- * `o_voxel` — one of the three modules `TRELLIS2_METAL_BAKE_MODULES` gates the Metal
- * bake on — compiles against Eigen, which `trellis2-apple` carries as a git submodule
- * (`o-voxel/third_party/eigen`). Upstream's `clone_dep` runs a bare
- * `git clone --depth 1` with no `--recurse-submodules`, so `third_party/eigen` lands as
- * an EMPTY directory and the build dies on `fatal error: 'Eigen/Dense' file not found`.
- * `setup.sh` swallows that (`|| echo`) and still exits 0 — so the install "succeeds"
- * while permanently stuck on the confetti fallback baker of
- * `TRELLIS2_FALLBACK_BAKE_HELP`, and installing Xcode or the Metal Toolchain (what the
- * warning used to tell users to do) could never fix it.
- *
- * PortOS fixes it from outside upstream: `clone_dep`'s guard is a bare
- * `if [ ! -d "$DEPS_DIR/$dir" ]`, so a directory we cloned ourselves makes upstream skip
- * its own clone, and its unconditional `o-voxel` install then succeeds on the first
- * pass — no need to duplicate upstream's uv / `--no-build-isolation` flags here.
- *
- * Two shapes, because a repair has to fix an install that is already on disk:
- *  - **absent** → clone it, submodules and all.
- *  - **already cloned** by an older `setup.sh`, so Eigen is missing → initialize the
- *    submodules in place. `setup.sh` re-runs the `o-voxel` install unconditionally, so
- *    the rebuild follows in the same pass.
- *
- * **"Already cloned" needs `o-voxel/` present, not just `.git`.** A clone killed
- * partway (SIGKILL, power loss) can leave `.git` behind with no worktree. Keying only
- * on `.git` would then pick the update branch, whose `git submodule update` cannot
- * restore a missing superproject worktree — it would succeed as a no-op, upstream's
- * `! -d` guard would skip its own clone, and `pip install deps/trellis2-apple/o-voxel`
- * would fail on a path that does not exist: silent, permanent degradation, the exact
- * failure this step exists to remove. Requiring the directory upstream actually
- * installs from routes that state to the clone branch instead, which fails loudly on
- * the non-empty target and names the real problem in the log. It does not self-heal
- * (that needs a re-clone, so it is deliberately left to the operator) but it never
- * again reports success while leaving `o_voxel` unbuildable.
- *
- * `optional` for the same reason the toolchain step is: a host that cannot reach
- * gitlab.com for Eigen must still be able to install and render, degraded, rather than
- * fail the whole install.
- *
- * @param {string|undefined} base
- * @param {(p: string) => boolean} exists
- * @returns {{stage: string, command: string, args: string[], cwd?: string, optional: boolean}}
- */
-function trellis2AppleDepsStep(base, exists) {
-  const dir = trellis2AppleDepDir(base);
-  // Both halves required — see "Already cloned" above. `o-voxel` is the subdirectory
-  // upstream's `setup.sh` pip-installs, so its absence means the checkout is unusable
-  // no matter what `.git` says.
-  const cloned = exists(join(dir, '.git')) && exists(join(dir, 'o-voxel'));
-  return {
-    stage: 'apple-deps',
-    command: 'git',
-    args: cloned
-      ? ['submodule', 'update', '--init', '--recursive', '--depth', '1']
-      : ['clone', '--depth', '1', '--recurse-submodules', '--shallow-submodules',
-        TRELLIS2_APPLE_REPO, dir],
-    // Only the in-place update needs a cwd; the clone creates `dir` itself.
-    ...(cloned ? { cwd: dir } : {}),
-    optional: true,
-  };
-}
-
-/**
- * The install as an ordered list of `{stage, command, args, cwd?}` steps: shallow-
- * clone the port, then run its `setup.sh` (which builds the venv + fetches weights).
- * Keeping the plan a data structure makes it assertable without running it.
- *
- * **The clone step is skipped when the repo is already present** (`<root>/.git`
- * exists). This is load-bearing for resume: if a prior install cloned the top-level
- * repo but failed inside `setup.sh` (the common #2952 case — a dep clone dropped),
- * re-running with an unconditional `git clone … <root>` would abort ("destination
- * path already exists and is not an empty directory") and never reach the idempotent
- * `setup.sh`. `exists` is injectable so the skip is deterministic in tests.
- *
- * **The Metal Toolchain step leads when `installMetalToolchain` is set.** Order is
- * load-bearing: `setup.sh` compiles the Metal texture-baking packages from `.metal`
- * sources, so the toolchain has to be on disk BEFORE it runs or those builds fail
- * (silently — `setup.sh` swallows them and still exits 0) and the install completes
- * with a bake that renders scrambled surfaces (#2952). The caller passes the flag
- * from `probeMetalToolchain()`; a host that already has it, can't have it (Command
- * Line Tools only), or isn't macOS gets no step.
- *
- * **The `apple-deps` step sits between the clone and `setup.sh`.** Both sides of that
- * are load-bearing: AFTER the root clone, for the non-empty-target reason above (this
- * step creates `<root>/deps/…`); and BEFORE `setup.sh`, because that is what makes
- * upstream's `clone_dep` skip its own submodule-less clone. See
- * `trellis2AppleDepsStep`.
- *
- * @param {string} [base]
- * @param {{exists?: (p: string) => boolean, installMetalToolchain?: boolean}} [opts]
- * @returns {Array<{stage: string, command: string, args: string[], cwd?: string, optional?: boolean}>}
- */
-export function buildInstallSteps(base, { exists = existsSync, installMetalToolchain = false } = {}) {
-  const root = trellis2Root(base);
-  const steps = [];
-  // Copy `args` too — a spread alone would share the frozen template's array across
-  // every call, so one caller mutating it would corrupt every later install plan.
-  if (installMetalToolchain) {
-    steps.push({ ...TRELLIS2_METAL_TOOLCHAIN_STEP, args: [...TRELLIS2_METAL_TOOLCHAIN_STEP.args] });
-  }
-  if (!exists(join(root, '.git'))) {
-    steps.push({ stage: 'clone', command: 'git', args: ['clone', '--depth', '1', TRELLIS2_REPO, root] });
-  }
-  steps.push(trellis2AppleDepsStep(base, exists));
-  steps.push({ stage: 'setup', command: 'bash', args: ['setup.sh'], cwd: root });
-  // AFTER setup, necessarily: `setup.sh` runs `patches/mps_compat.py`, which is
-  // what writes the `fill_holes` stub this step converts into an env gate. Run
-  // earlier and it would assert on an unstubbed file and fail every fresh install.
-  steps.push(trellis2FillHolesStep(trellis2VenvPython(base), root));
-  return steps;
-}
 
 /**
  * The port's `--output` is a filename **stem**, NOT a full path — `generate.py`
@@ -684,108 +500,6 @@ export const isTransientInstallError = textMatcher([
 ]);
 
 /**
- * Run the install as a killable, event-emitting job: execute `buildInstallSteps()`
- * sequentially (clone the MPS port → run its `setup.sh`, ~15 GB), emitting a
- * `{ type:'stage' }` per step, `{ type:'log' }` for subprocess output, and a
- * terminal `{ type:'complete' }` on success (it throws on a failed/canceled step so
- * the SSE route can emit `{ type:'error' }`). Real subprocesses — user-triggered
- * only. `spawnImpl` injectable so the step sequencing / cancel / failure paths are
- * unit-testable without a real 15 GB install.
- *
- * **Transient-failure retry.** A multi-GB install over `setup.sh`'s ~half-dozen git
- * clones routinely eats a mid-transfer `Connection reset` / `early EOF` (#2952) that
- * exits git 128. Both steps are *idempotent* — git removes a failed clone's target
- * dir, our top-level clone re-clones cleanly, and `setup.sh`'s `if [ ! -d ]` guards
- * skip already-cloned deps and resume from the one that dropped — so a step whose
- * output matches a transient-network signature is retried in place up to `maxRetries`
- * times with a short backoff, rather than aborting the whole install on one blip.
- * A non-transient failure (bad config, unsupported host, real setup error) is NOT
- * retried — it fails fast. `sleep` is injectable so tests don't wait on real backoff.
- *
- * **`env`** (optional) is the child environment to spawn under — the caller resolves
- * it (PortOS passes `await hfChildEnv()` so a token stored in
- * settings reaches the child, not just one exported into the server's own env).
- * Omitted → the child inherits `process.env` as before.
- *
- * **Metal Toolchain step.** `setup.sh` compiles the Metal texture-baking packages
- * from `.metal` sources, so when `installMetalToolchain` is set the install downloads
- * the toolchain FIRST (#3041). Verified on-device: that download runs unattended (no
- * sudo, no prompt), which is what makes auto-install viable instead of printing a
- * command for the user to run. The step is `optional` — see
- * `TRELLIS2_METAL_TOOLCHAIN_STEP`. The caller resolves the flag from
- * `probeMetalToolchain()` (the route does, so this stays synchronous).
- *
- * **Post-install verification.** After the last step the install probes whether the
- * Metal texture-baking backends actually built (`probeBake`, injectable) and emits a
- * `verify` log frame before the terminal `complete`. This is load-bearing, not
- * cosmetic: `setup.sh` installs those packages with `|| echo "… continuing without …"`
- * and still exits 0, so without it a host lacking the Xcode Metal Toolchain gets a
- * clean "installed" and every later render bakes a scrambled surface (#2952).
- *
- * @param {{base?: string, onEvent?: (ev: object) => void, spawnImpl?: Function,
- *          maxRetries?: number, sleep?: (ms: number) => Promise<void>,
- *          env?: NodeJS.ProcessEnv, probeBake?: Function, probeToolchain?: Function,
- *          installMetalToolchain?: boolean}} [opts]
- * @returns {{promise: Promise<{ok: true}>, kill: () => void}}
- */
-export function installTrellis2({
-  base,
-  onEvent = () => {},
-  spawnImpl = spawn,
-  maxRetries = 3,
-  sleep,
-  exists = existsSync,
-  env,
-  probeBake = probeTrellis2TextureBake,
-  probeToolchain = probeMetalToolchain,
-  installMetalToolchain = false,
-} = {}) {
-  // `exists` lets the clone step self-skip when the repo is already on disk (resume
-  // after a setup-stage failure); `installMetalToolchain` is resolved by the CALLER
-  // from `probeMetalToolchain()` and passed in as a plain boolean, so this function
-  // keeps returning `{ promise, kill }` synchronously — see buildInstallSteps.
-  return runInstallSteps({
-    steps: buildInstallSteps(base, { exists, installMetalToolchain }),
-    label: LABEL,
-    codePrefix: CODE_PREFIX,
-    isTransient: isTransientInstallError,
-    onEvent,
-    spawnImpl,
-    maxRetries,
-    sleep,
-    env,
-    // `setup.sh` exits 0 even when its Metal texture-baking backends failed to
-    // build, so a bare success would report an install that silently renders
-    // scrambled surfaces (#2952). Report what actually landed.
-    verify: async (emit) => {
-      const bake = await probeBake({ base });
-      if (bake.quality === 'fallback') {
-        // WHICH remedy applies depends on the host, and the card already resolves that
-        // the same way: a toolchain `blocker` host gets no Repair button, so promising
-        // "Repair install fetches the missing build dependencies" here would name a fix
-        // the UI has deliberately withheld (#4742). One shared resolver, probed only on
-        // the degraded path so a healthy install still spawns nothing extra. Probing now
-        // rather than reusing the caller's preflight result matters: the Metal Toolchain
-        // step may have installed it in between.
-        const remedy = resolveDegradedBakeRemedy(bake, await probeToolchain());
-        // Name the culprits. The help text says which remedy to run, but not what is
-        // actually missing — and `apple-deps` (the install's only gitlab.com fetch, and
-        // an `optional` step) fails with one line that scrolls past inside a ~15 GB log.
-        // Without the module names a user whose Repair keeps failing has nothing to go
-        // on and reruns the same generic remedy forever (#4636).
-        emit({
-          type: 'log',
-          stage: 'verify',
-          message: `⚠️ ${appendMissingModules(remedy.help, bake.missing)}`,
-        });
-      } else if (bake.quality === 'metal') {
-        emit({ type: 'log', stage: 'verify', message: '✅ Metal texture baking is available.' });
-      }
-    },
-  });
-}
-
-/**
  * Signatures of a Hugging Face **auth / gated-repo** failure during a render. The
  * TRELLIS.2 pipeline pulls a gated dependency model (`facebook/dinov3-…`) at load
  * time; on a host with no `HF_TOKEN` (or one whose account hasn't accepted that
@@ -941,7 +655,7 @@ export function resolveGlbPostprocess(alphaMode, override) {
  * from a cold boot. `spawnImpl`/`exists` are injectable so the wiring (right command,
  * progress streaming, resolve-with-asset) is unit-testable without a real render.
  *
- * Returns `{ promise, kill }` (mirroring `installTrellis2`) so a caller can
+ * Returns `{ promise, kill }` so a caller can
  * terminate the render mid-flight — e.g. when the user deletes the record while
  * its GLB is still rendering. `kill` routes through the shared
  * `killWithEscalation` (SIGTERM, then SIGKILL after a grace window if the child

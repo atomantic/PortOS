@@ -58,13 +58,14 @@ function StatusBadge({ target }) {
 function TargetCard({ target, onInstall }) {
   // Install only applies to targets with a local install concept (installed is a
   // boolean); hosted targets report installed:null and are Ready when available.
-  const canInstall = target.available && target.installed === false;
+  const installBlock = target.installBlockedReason;
+  const canInstall = !installBlock && target.available && target.installed === false;
   const degraded = target.degraded;
   // Repair install re-runs setup — but only offer it when the server says it can
   // actually fix this. On a Command-Line-Tools-only host `repairable` is false and the
   // remedy is installing Xcode, so a Repair button would just fail the same way and
   // read as broken.
-  const canRepair = !!degraded && degraded.repairable !== false;
+  const canRepair = !installBlock && !!degraded && degraded.repairable !== false;
 
   return (
     <div className="rounded-lg border border-port-border bg-port-card p-4">
@@ -110,6 +111,9 @@ function TargetCard({ target, onInstall }) {
           )}
         </div>
       </div>
+      {target.available && installBlock && (
+        <p className="mt-3 text-xs text-port-warning">{installBlock}</p>
+      )}
       {/* `help` names the remedy, `detail` names what is actually missing — without the
           second, a Repair that keeps failing just reprints the same sentence with nothing
           to act on (#4636). The panel opens for EITHER, since the adapter contract makes

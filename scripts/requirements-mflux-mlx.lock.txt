@@ -3,7 +3,7 @@
 # (arm64 macOS). Do not edit by hand.
 #
 # scripts/setup-image-video.sh (INSTALL_MFLUX=1, the default for a bare run)
-# installs this with `pip install --user --require-hashes --no-deps -r` against a
+# installs this with `pip install --user --require-hashes --no-deps --only-binary :all: -r` against a
 # CPython 3.11+ PYTHON_BIN, or `uv pip sync --require-hashes` into the venv
 # fallback, so every transitive package is version- and hash-pinned and a
 # tampered or substituted distribution fails the install.

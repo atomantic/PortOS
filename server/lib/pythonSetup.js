@@ -868,8 +868,7 @@ export async function resolvePatchedUv(onLog) {
 }
 
 // `preferUv` installs fall back to pip when the private uv cannot be had; every
-// install here is `--require-hashes --no-deps`, so the installer choice does not
-// change what lands.
+// registry install here is hash-verified and wheel-only under either tool.
 async function resolveUvOrPip(onLog) {
   const result = await resolvePatchedUv(onLog);
   if (result.ok) return result.uv;
@@ -915,7 +914,11 @@ function refuseInstall(onLog, message, extra) {
   return { promise: Promise.resolve({ ok: false, code: -1, ...extra }), kill: () => {} };
 }
 
-const lockInstallArgs = (lockFile, { user }) => ['install', ...(user ? ['--user'] : []), '--require-hashes', '--no-deps', '-r', lockFile];
+// Hashes for source distributions do not cover their isolated build dependencies.
+const lockInstallArgs = (lockFile, { user, reinstall }) => [
+  'install', ...(user ? ['--user'] : []), ...(reinstall ? ['--force-reinstall'] : []),
+  '--require-hashes', '--no-deps', '--only-binary', ':all:', '-r', lockFile,
+];
 
 // `sourceInstalls` are pip argument lists run after the lock for a runtime's own
 // commit-pinned source (an editable checkout or archive, no PyPI distribution to
@@ -990,7 +993,7 @@ async function reinstallLockEntry({ runPip, tool }, profile, name, onLog, { user
     const file = join(dir, 'requirements.txt');
     await writeFile(file, lockEntryText(profile, name));
     onLog({ type: 'log', message: `${tool} install --force-reinstall --no-deps ${name} (hash-pinned ${profile.label} lock)` });
-    const code = await runPip(['install', ...(user ? ['--user'] : []), '--force-reinstall', '--require-hashes', '--no-deps', '-r', file]);
+    const code = await runPip(lockInstallArgs(file, { user, reinstall: true }));
     if (code !== 0) onLog({ type: 'error', message: `${tool} exited with code ${code}` });
     return code;
   } finally {

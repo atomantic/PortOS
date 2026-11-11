@@ -42,6 +42,7 @@ describe('image-to-3D registry invariants', () => {
         // own, so a target with an installer MUST bring its own prose or the modal
         // silently falls back to a generic description.
         if (adapter.install) expect(typeof target.installNotes).toBe('string');
+        if (target.installBlockedReason) expect(adapter.install).toBeUndefined();
       });
 
       it('declares only boolean render-option support, when it declares any', () => {

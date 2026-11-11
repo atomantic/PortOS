@@ -64,6 +64,19 @@ describe('Image3dRuntimes', () => {
     expect(screen.queryByRole('button', { name: /install/i })).toBeNull();
   });
 
+  it.each([false, true])('shows the profile blocker without Install or Repair (installed: %s)', async (installed) => {
+    const reason = 'Install and Repair require a locked TRELLIS.2 Metal profile.';
+    getImageTo3dTargets.mockResolvedValue({ targets: [target({
+      installed,
+      installBlockedReason: reason,
+      ...(installed ? { degraded: { label: 'degraded textures', repairable: true } } : {}),
+    })] });
+    renderPanel();
+    expect(await screen.findByText(reason)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /install/i })).toBeNull();
+    if (installed) expect(screen.getByText(/ready · degraded textures/i)).toBeInTheDocument();
+  });
+
   // #2952: `setup.sh` exits 0 even when its Metal texture-baking backends failed to
   // build, and such an install renders correct geometry with a scrambled surface —
   // so a flat "Ready" would be a lie, and re-running Install is the repair.
