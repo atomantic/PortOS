@@ -16,9 +16,11 @@
  * edges when presented directly); feComposite arithmetic without clamping
  * color to alpha; Skia's feTurbulence (the spec's lattice and
  * gradients, permuted and stored as 16-bit, sampled half a pixel past the
- * pixel centre); and the result over the page's white base, where the filter
- * leaves alpha. `filmLookFinish.js` still compares a frame against the SVG
- * filter before trusting it.
+ * pixel centre). Where the filter leaves alpha (the vignette's fall-off) the
+ * result lies over black, the base `filmLookFinish.js` gives the page it plays
+ * a render in: a browser's own base is white, which washes those pixels out.
+ * `filmLookFinish.js` still compares a frame against the SVG filter before
+ * trusting it.
  *
  * `filmLookGpuRuntimeSource()` is the browser source: it defines
  * `globalThis.__portosFilmLookGpu.create(canvas)`. Everything it inlines by
@@ -440,12 +442,11 @@ void main() {
   sum = clamp(sum, 0.0, 1.0);
   color = vec4(sum.rgb * sum.a, sum.a);
 }`,
-    // Onto the canvas: the filtered page over the black page background, flipped.
+    // Onto the canvas: the filtered page (premultiplied) over the black base, flipped.
     present: `uniform sampler2D a;
 void main() {
   ivec2 p = ivec2(int(gl_FragCoord.x), int(size.y) - 1 - int(gl_FragCoord.y));
-  vec4 c = texelFetch(a, p, 0);
-  color = vec4(c.rgb + (1.0 - c.a), 1.0);
+  color = vec4(texelFetch(a, p, 0).rgb, 1.0);
 }`,
   };
 

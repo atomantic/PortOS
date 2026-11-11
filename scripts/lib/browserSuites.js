@@ -18,6 +18,7 @@ export const BROWSER_SUITES = [
   'server/services/musicVideo/documentRender.browser.test.js',
   'server/services/musicVideo/documentTemplateParity.browser.test.js',
   'server/services/musicVideo/documentFilmLook.browser.test.js',
+  'server/services/musicVideo/filmLookFinish.browser.test.js',
   'server/services/musicVideo/documentTemplates/layered/engine.controls.browser.test.js',
   'server/services/musicVideo/documentTemplates/layered/engine.overlay.browser.test.js',
   'server/services/musicVideo/documentTemplates/shared/lyricType.browser.test.js',
