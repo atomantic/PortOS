@@ -88,6 +88,21 @@ describe('tracks logic', () => {
       expect(sanitizeTrack(merged).renders[0]).toEqual(merged.renders[0]);
     });
 
+    it('keeps a Suno song id when an older peer edits the take without that field', () => {
+      const id = '11111111-2222-4333-8444-555555555555';
+      const local = buildTrackRecord({ title: 'Local', renders: [
+        { id: 'r-kept', audioFilename: 'kept.mp3', source: 'suno', sunoSongId: id },
+        { id: 'r-gone', audioFilename: 'gone.mp3', source: 'suno', sunoSongId: id },
+      ] }, { id: 'track-1', now: '2026-06-01T00:00:00.000Z' });
+      const remote = {
+        ...local, title: 'Remote edit', updatedAt: '2099-01-01T00:00:00.000Z',
+        renders: [{ id: 'r-kept', audioFilename: 'kept.mp3', source: 'suno' }],
+      };
+      const merged = mergeTrackRecord(local, remote).next;
+      expect(merged.renders).toHaveLength(1);
+      expect(merged.renders[0].sunoSongId).toBe(id);
+    });
+
     it('preserves a local concept when an older peer omits the additive field', () => {
       const authored = buildTrackRecord({ title: 'Local', concept: 'A dusk-time pulse' }, { id: 'track-1', now: '2026-06-01T00:00:00.000Z' });
       const remote = { ...authored, title: 'Remote', updatedAt: '2099-01-01T00:00:00.000Z' };
@@ -145,6 +160,18 @@ describe('tracks logic', () => {
       expect(sanitizeRender({ audioFilename: 'a.mp3', source: 'suno' }).source).toBe('suno');
       expect(sanitizeRender({ audioFilename: 'a.mp3', source: 'Suno API!' }).source).toBe('');
       expect(sanitizeRender({ audioFilename: 'a.mp3', source: 42 }).source).toBe('');
+    });
+
+    it('sanitizeRender keeps a valid Suno song id, lower-cases it, and drops a malformed one', () => {
+      const id = '11111111-2222-4333-8444-555555555555';
+      expect(sanitizeRender({ audioFilename: 'a.mp3', sunoSongId: id.toUpperCase() }).sunoSongId).toBe(id);
+      expect(sanitizeRender({ audioFilename: 'a.mp3', sunoSongId: `  ${id}  ` }).sunoSongId).toBe(id);
+      for (const bad of ['song-a', `https://suno.com/song/${id}`, '', '   ', 42, null]) {
+        expect('sunoSongId' in sanitizeRender({ audioFilename: 'a.mp3', sunoSongId: bad })).toBe(false);
+      }
+      const plain = sanitizeRender({ audioFilename: 'a.mp3', source: 'suno' });
+      expect(plain.source).toBe('suno');
+      expect('sunoSongId' in plain).toBe(false);
     });
 
     it('makeRender stamps the caller-supplied id + now', () => {

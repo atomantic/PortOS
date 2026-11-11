@@ -14,7 +14,7 @@ import { Maximize2, Sparkles, Download, Trash2, CheckCircle2, Music2, Upload, Fi
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import { formatTimecode, timeAgo } from '../../utils/formatters';
 import { trackAudioUrl } from '../../services/api';
-import { renderSourceLabel } from '../../lib/trackProvenance';
+import { renderSourceLabel, sunoRenderHref } from '../../lib/trackProvenance';
 
 export default function TrackRenderCard({
   render,
@@ -32,6 +32,7 @@ export default function TrackRenderCard({
   const isUpload = !engine;
   // Where imported audio came from (e.g. a Suno export) — '' for a plain upload.
   const sourceLabel = renderSourceLabel(render.source);
+  const songHref = sunoRenderHref(render);
 
   return (
     <div className={`bg-port-card border rounded-xl p-2.5 space-y-2 ${active ? 'border-port-accent' : 'border-port-border'}`}>
@@ -62,7 +63,11 @@ export default function TrackRenderCard({
       )}
 
       <div className="flex flex-wrap gap-1 text-[9px]">
-        {sourceLabel ? <span className="px-1.5 py-0.5 bg-port-border text-gray-300 rounded">{sourceLabel}</span> : null}
+        {sourceLabel ? (
+          songHref
+            ? <a href={songHref} target="_blank" rel="noreferrer" className="px-1.5 py-0.5 bg-port-border text-gray-300 rounded hover:underline">{sourceLabel}</a>
+            : <span className="px-1.5 py-0.5 bg-port-border text-gray-300 rounded">{sourceLabel}</span>
+        ) : null}
         {engine ? <span className="px-1.5 py-0.5 bg-port-accent/20 text-port-accent rounded">{engine}</span> : null}
         {modelId ? <span className="px-1.5 py-0.5 bg-port-border text-gray-400 rounded truncate max-w-[140px]" title={modelId}>{modelId}</span> : null}
         {durationSec ? <span className="px-1.5 py-0.5 bg-port-border text-gray-400 rounded">{formatTimecode(durationSec)}</span> : null}

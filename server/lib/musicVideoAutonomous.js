@@ -345,7 +345,8 @@ export function sunoSongIdsFromHrefs(hrefs) {
   return ids;
 }
 
-export const sunoSongUrl = (songId) => `https://suno.com/song/${encodeURIComponent(songId)}`;
+// One URL builder, shared with the track cards. Re-exported so this module's callers keep the same import.
+export { sunoSongUrl } from './sunoSong.js';
 
 /**
  * Choose the next brain idea to turn into a video: the OLDEST active idea no

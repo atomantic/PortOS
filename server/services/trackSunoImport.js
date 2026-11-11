@@ -6,7 +6,7 @@
  *
  * Same job contract as the YouTube import so the client drives both through one
  * slot: kickoff returns a jobId at once, the work runs detached, and progress
- * streams over SSE. Terminal frames: `{ type: 'complete', trackId, track, source }`,
+ * streams over SSE. Terminal frames: `{ type: 'complete', trackId, track, source, reused? }`,
  * `{ type: 'error', error }`, or `{ type: 'canceled' }`.
  */
 
@@ -20,11 +20,11 @@ import { findFfmpeg, probeVideoDuration, runFfmpegProcess } from '../lib/ffmpeg.
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../lib/sseUtils.js';
 import { fetchPublicBinary, fetchPublicText } from '../lib/safeUrlFetch.js';
 import {
-  isSunoSongUrl, sunoCdnAudioUrl, sunoCdnVideoUrl, parseSunoSongPage, SUNO_URL_INVALID_MESSAGE,
+  isSunoSongUrl, normalizeSunoSongId, sunoCdnAudioUrl, sunoCdnVideoUrl, parseSunoSongPage, SUNO_URL_INVALID_MESSAGE,
 } from '../lib/sunoSong.js';
 import { resolveSunoSongId, SUNO_FETCH_HEADERS as HEADERS } from './sunoShareLink.js';
 import { importUploadedTrack, MUSIC_UPLOAD_MAX_BYTES } from './pipeline/musicLibrary.js';
-import { createTrack } from './tracks/index.js';
+import { createTrack, listTracks } from './tracks/index.js';
 import { RENDER_SOURCES } from './tracks/logic.js';
 
 const PAGE_TIMEOUT_MS = 20_000;
@@ -183,6 +183,18 @@ async function audioFromPublicVideo(songId, dir, outPath, signal, onExtracting) 
   await extractAudio(videoPath, outPath, signal);
 }
 
+// A live track whose render history still names this Suno song, or null.
+function liveTrackForSunoSong(tracks, songId) {
+  const id = normalizeSunoSongId(songId);
+  if (!id) return null;
+  for (const track of Array.isArray(tracks) ? tracks : []) {
+    if (!track || track.deleted === true) continue;
+    const renders = Array.isArray(track.renders) ? track.renders : [];
+    if (renders.some((render) => normalizeSunoSongId(render?.sunoSongId) === id)) return track;
+  }
+  return null;
+}
+
 // jobId -> { clients, lastPayload, status, canceled }
 const importJobs = new Map();
 
@@ -222,6 +234,15 @@ export async function startSunoImport(url) {
     try {
       broadcastSse(job, { type: 'progress', percent: 5, stage: 'reading' });
       const songId = await resolveSunoSongId(url.trim());
+      if (abortIfCanceled()) return;
+      // Match before any download. Takes imported before the id was recorded carry none.
+      const existing = liveTrackForSunoSong(await listTracks(), songId);
+      if (abortIfCanceled()) return;
+      if (existing) {
+        console.log(`⏭️ Suno import ${shortId(jobId)} already in the library — track=${shortId(existing.id)}`);
+        broadcastSse(job, { type: 'complete', trackId: existing.id, track: existing, source: 'suno', reused: true });
+        return;
+      }
       // The page only adds metadata; a page Suno won't serve still imports the audio.
       const html = await fetchSongPage(songId);
       if (abortIfCanceled()) return;
@@ -285,6 +306,7 @@ export async function startSunoImport(url) {
         renders: [{
           audioFilename: filename, durationSec, source: RENDER_SOURCES.SUNO,
           prompt: song.style, authoredPrompt: song.style, lyrics: song.lyrics,
+          sunoSongId: songId,
         }],
       });
 

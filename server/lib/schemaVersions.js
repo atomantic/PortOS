@@ -398,7 +398,12 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // on takes. A <=v11 peer would strip sentLyrics/lyricAdditions, including
   // on newly received takes where the sender-behind merge cannot restore them.
   // Optional on older takes; no stored records need rewriting.
-  tracks: 12,
+  // tracks v13 = render-history entries record the Suno song they came from
+  // (`sunoSongId`). A <=v12 peer would strip it and LWW the unlinked take
+  // back, so a v13 sender must not deliver the record. A sender-behind edit
+  // keeps the id on a take that peer still has. Optional on older takes;
+  // no stored records need rewriting.
+  tracks: 13,
   // v1 = creative ingredients catalog (Postgres tables: catalog_scraps,
   // catalog_ingredients, catalog_ingredient_sources, catalog_ingredient_refs).
   // v2 = `catalog_ingredients.search_tsv` expanded to also index the

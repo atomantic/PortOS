@@ -118,14 +118,14 @@ describe('buildPortosMeta', () => {
       .toMatchObject({ compatible: false, ahead: [{ category: 'musicVideoProjects', senderV: 61, receiverV: 24 }] });
   });
 
-  it('advertises lyric provenance to pause track transfers to caption-only peers', async () => {
+  it('advertises the Suno song id so an older peer does not strip it from a take', async () => {
     const meta = await buildPortosMeta();
-    expect(meta.schemaVersions.tracks).toBe(12);
-    const olderPeer = { ...meta.schemaVersions, tracks: 11 };
+    expect(meta.schemaVersions.tracks).toBe(13);
+    const olderPeer = { ...meta.schemaVersions, tracks: 12 };
     const diff = compareSchemaVersions(meta.schemaVersions, olderPeer);
     expect(scopeVersionDiff(diff, RECORD_KIND_SCHEMA_CATEGORIES.track)).toEqual({
       compatible: false,
-      ahead: [{ category: 'tracks', senderV: 12, receiverV: 11 }],
+      ahead: [{ category: 'tracks', senderV: 13, receiverV: 12 }],
       behind: [],
     });
     // This upgrade pauses only tracks; unrelated artist/album sync still works.
