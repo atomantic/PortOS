@@ -6,10 +6,12 @@ only on an explicit user request. It does not install or update anything at boot
 Existing environments remain usable through the unchanged real `import bpy`
 readiness probe. Setup refuses to replace an existing `rigging` environment;
 preserve custom work and explicitly remove that environment before reprovisioning.
-If installation, dependency checking or the import probe fails after this invocation
-creates the environment, setup removes its new environment so the command can be
-retried. A failed Conda creation or cleanup remains an explicit Conda error; inspect
-and preserve any partial prefix before removing it.
+Setup asks Conda for its environment directories and atomically reserves the
+`rigging` prefix in the first reported directory. Existing, unregistered, partial
+or concurrently reserved prefixes are refused before creation or downloads.
+Failure after reservation removes only that invocation's owned prefix, allowing
+a retry. Cleanup failure remains an explicit error; preserve any custom work
+before manually removing a remaining prefix.
 
 The profile fixes **Blender bpy 5.2.3**, its **CPython 3.13 ABI**, and the exact
 **Conda CPython 3.13.18 build** per target. `scripts/rigging-profile.json` contains
@@ -80,7 +82,8 @@ pip, and 36 Conda PURLs. Hashes establish artifact integrity, not permanent
 absence of vulnerabilities.
 
 Fake-process provisioning tests exercise supported targets, Rosetta, refusal of
-unresolved targets, existing-environment preservation and actual hash-mismatch
+unresolved targets, registered/unregistered environment preservation, owned-prefix
+cleanup, invalid Conda paths and actual hash-mismatch
 refusal before Conda creation. They check the offline explicit artifact input,
 hash-only wheel installation and final import probe command. No native environment
 was installed, and no Blender import, rigging export, render, Metal or CUDA

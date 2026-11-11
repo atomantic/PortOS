@@ -54,29 +54,40 @@ def install():
     environments = json.loads(run([conda, 'env', 'list', '--json'], capture_output=True).stdout)['envs']
     if any(Path(prefix).name == 'rigging' for prefix in environments):
         raise SystemExit('The rigging environment already exists. Preserve any custom work, then explicitly remove it with conda env remove -n rigging before reprovisioning.')
-    # Isolated pip ignores ambient indexes, constraints and user configuration.
+    info = json.loads(run([conda, 'info', '--json'], capture_output=True).stdout)
+    directories = info.get('envs_dirs')
+    if not isinstance(directories, list) or not directories or not isinstance(directories[0], str):
+        raise SystemExit('Conda did not report an environment directory; setup refused.')
+    directory = Path(directories[0])
+    if not directory.is_absolute():
+        raise SystemExit('Conda reported a relative environment directory; setup refused.')
+    directory.mkdir(parents=True, exist_ok=True)
+    prefix = directory / 'rigging'
+    # mkdir is the ownership boundary, including unregistered and partial prefixes.
+    # A second invocation cannot reserve the same path, even before Conda registers it.
+    prefix.mkdir()
     env = {key: value for key, value in os.environ.items() if key not in {'PYTHONPATH', 'PYTHONHOME'}}
     env['PYTHONNOUSERSITE'] = '1'
-    with tempfile.TemporaryDirectory(prefix='portos-rigging-') as temporary:
-        downloads = Path(temporary)
-        artifacts = [(a, fetch(a, downloads / a['url'].rsplit('/', 1)[-1]))
-                     for a in target['condaArtifacts']]
-        explicit = downloads / 'explicit.txt'
-        explicit.write_text('@EXPLICIT\n' + '\n'.join(path.as_uri() + '#' + a['md5']
-                                                    for a, path in artifacts) + '\n')
-        run([conda, 'create', '--yes', '--offline', '--name', 'rigging', '--file', explicit], env=env)
-        python = [conda, 'run', '--no-capture-output', '-n', 'rigging', 'python']
-        try:
+    try:
+        with tempfile.TemporaryDirectory(prefix='portos-rigging-') as temporary:
+            downloads = Path(temporary)
+            artifacts = [(a, fetch(a, downloads / a['url'].rsplit('/', 1)[-1]))
+                         for a in target['condaArtifacts']]
+            explicit = downloads / 'explicit.txt'
+            explicit.write_text('@EXPLICIT\n' + '\n'.join(path.as_uri() + '#' + a['md5']
+                                                        for a, path in artifacts) + '\n')
+            run([conda, 'create', '--yes', '--offline', '--prefix', prefix, '--file', explicit], env=env)
+            python = [prefix / 'bin/python']
             run(python + ['-m', 'pip', '--isolated', 'install', '--disable-pip-version-check',
                           '--require-hashes', '--no-deps', '--only-binary', ':all:',
                           '--index-url', 'https://pypi.org/simple', '-r', SCRIPTS / target['requirements']], env=env)
             run(python + ['-m', 'pip', '--isolated', 'check'], env=env)
             run(python + ['-c', "import bpy, sys; assert sys.version_info[:3] == " + repr(tuple(map(int, profile['python'].split('.'))))
                           + "; assert bpy.app.version_string == '" + profile['bpy'] + "'; print('Blender import/version probe passed.')"], env=env)
-        except BaseException:
-            # Only this invocation's successfully created env may be removed.
-            run([conda, 'env', 'remove', '--yes', '--name', 'rigging'], env=env)
-            raise
+    except BaseException:
+        # Only the path atomically reserved by this invocation may be removed.
+        shutil.rmtree(prefix)
+        raise
     print('Reviewed rigging profile installed. Import success does not establish render or GPU correctness.')
 
 

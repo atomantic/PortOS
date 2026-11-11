@@ -29,7 +29,9 @@ def run(args, **kwargs):
         return SimpleNamespace(stdout='0' if case == 'intel' else '1')
     if args[1:3] == ['env', 'list']:
         return SimpleNamespace(stdout=json.dumps({'envs': ['/fake/envs/rigging'] if case == 'existing' else []}))
-    if args[1] == 'create':
+    if args[1:3] == ['info', '--json']:
+        return SimpleNamespace(stdout=json.dumps({'envs_dirs': ['relative'] if case == 'relative' else [str(root / 'envs')]}))
+    if len(args) > 1 and args[1] == 'create':
         explicit = pathlib.Path(args[-1]).read_text()
         assert explicit.startswith('@EXPLICIT\nfile:')
         assert '#0123456789abcdef0123456789abcdef' in explicit
@@ -42,6 +44,9 @@ with tempfile.TemporaryDirectory() as temporary:
     root = pathlib.Path(temporary)
     s.SCRIPTS = root
     p = json.loads(pathlib.Path(sys.argv[1] + 'rigging-profile.json').read_text())
+    if case == 'unregistered':
+        (root / 'envs/rigging').mkdir(parents=True)
+        (root / 'envs/rigging/custom.txt').write_text('preserve custom work')
     artifact = root / 'python.conda'
     artifact.write_bytes(b'reviewed artifact')
     for target in p['profiles'].values():
@@ -50,8 +55,10 @@ with tempfile.TemporaryDirectory() as temporary:
     try:
         s.install()
         result = {'ok': True}
-    except (SystemExit, subprocess.CalledProcessError) as error:
+    except (SystemExit, OSError, subprocess.CalledProcessError) as error:
         result = {'ok': False, 'reason': str(error)}
+    result['prefixExists'] = (root / 'envs/rigging').exists()
+    result['preserved'] = (root / 'envs/rigging/custom.txt').is_file()
     result['calls'] = calls
     print(json.dumps(result))
 `;
@@ -71,17 +78,19 @@ describe('reviewed rigging provisioning', () => {
     expect(result.calls.at(-1).at(-1)).toContain('(3, 13, 18)');
   });
 
-  it.each(['unsupported', 'musl', 'intel', 'existing', 'tamper'])('refuses %s before creating or installing an environment', (target) => {
+  it.each(['unsupported', 'musl', 'intel', 'existing', 'tamper', 'unregistered', 'relative'])('refuses %s before creating or installing an environment', (target) => {
     const result = provision(target);
     expect(result.ok).toBe(false);
-    expect(result.reason).toMatch(/No reviewed|already exists|SHA-256 mismatch/);
+    expect(result.reason).toMatch(/No reviewed|already exists|File exists|SHA-256 mismatch|relative environment/);
     expect(result.calls.some((args) => args.includes('create') || args.includes('install'))).toBe(false);
+    if (target === 'unregistered') expect(result.preserved).toBe(true);
   });
 
   it('removes only the environment this invocation created when package installation fails', () => {
     const result = provision('install-failed');
     expect(result.ok).toBe(false);
-    expect(result.calls.at(-1)).toEqual(['/fake/conda', 'env', 'remove', '--yes', '--name', 'rigging']);
+    expect(result.prefixExists).toBe(false);
+    expect(result.calls.some((args) => args.includes('remove'))).toBe(false);
   });
 
   it('keeps source, descriptor, ABI, interpreter artifacts and target locks in parity', () => {
