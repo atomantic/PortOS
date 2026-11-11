@@ -89,7 +89,13 @@ export async function startLyricAlign(projectId, { cueId = null, separateVocals 
         console.log(`🛑 Lyric alignment ${shortId(jobId)} cancelled`);
         broadcastSse(job, { type: 'canceled' });
       } else {
-        console.error(`❌ Lyric alignment ${shortId(jobId)} failed: ${err?.message || err}`);
+        if (err?.code === 'LYRIC_ALIGN_CTC_UNSUPPORTED_TEXT') {
+          // The director's message names the word. The log keeps only the line.
+          const lineNo = / on lyric line (\d+):/.exec(String(err?.message || ''))?.[1];
+          console.log(`🚫 Lyric alignment ${shortId(jobId)} refused unsupported text${lineNo ? ` on line ${lineNo}` : ''}`);
+        } else {
+          console.error(`❌ Lyric alignment ${shortId(jobId)} failed: ${err?.message || err}`);
+        }
         broadcastSse(job, { type: 'error', error: err?.message || String(err), ...(err?.code ? { code: err.code } : {}) });
       }
     } finally {

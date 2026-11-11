@@ -65,16 +65,45 @@ class CheckpointRejected(Exception):
     """The weights file does not match the pinned digest; it was not deserialized."""
 
 
+class UnsupportedWord(ValueError):
+    """A word still has a digit or a letter outside the MMS_FA alphabet.
+
+    The message never includes the word. Callers that may print it report
+    line_index and word_index instead.
+    """
+
+    def __init__(self, line_index, word_index):
+        super().__init__('Spell lyric numbers out and use MMS_FA supported letters.')
+        self.line_index = line_index
+        self.word_index = word_index
+
+
+# MMS_FA was trained on romanised text. These Latin letters have no NFKD
+# decomposition, so they never reach a-z without an explicit table. Only the
+# CTC targets change; the slot keeps the sheet's original word.
+MMS_ROMAN = str.maketrans({
+    'ı': 'i',
+    'ß': 'ss',
+    'ø': 'o',
+    'æ': 'ae',
+    'œ': 'oe',
+    'đ': 'd',
+    'ł': 'l',
+    'þ': 'th',
+    'ð': 'd',
+})
+
+
 def targets_for_lines(lines, dictionary):
     tokens = [dictionary['*']]
     slots = []
-    for line in lines:
-        for word in line:
+    for line_index, line in enumerate(lines):
+        for word_index, word in enumerate(line):
             normalized = ''.join(c for c in unicodedata.normalize('NFKD', word.lower())
                                  if not unicodedata.combining(c))
-            chars = [c for c in normalized if c.isalpha() or c.isdigit()]
+            chars = [c for c in normalized.translate(MMS_ROMAN) if c.isalpha() or c.isdigit()]
             if not chars or any(c not in dictionary for c in chars):
-                raise ValueError('Spell lyric numbers out and use MMS_FA supported letters.')
+                raise UnsupportedWord(line_index, word_index)
             start = len(tokens)
             tokens.extend(dictionary[c] for c in chars)
             slots.append((start, len(tokens), word))
@@ -263,15 +292,18 @@ def mms_fa_emitter(model, torch):
 
 
 def align(audio, lines, model_dir):
-    import torch
-    import torchaudio
-
+    # Alphabet check before torch: an unsupported word must be reportable on a
+    # host that has not installed the alignment runtime yet.
     with wave.open(audio, 'rb') as source:
         if source.getframerate() != SAMPLE_RATE or source.getnchannels() != 1 or source.getsampwidth() != 2:
             raise ValueError('Expected 16 kHz mono PCM16 WAV.')
-        waveform = torch.frombuffer(bytearray(source.readframes(source.getnframes())), dtype=torch.int16)
-        waveform = waveform.to(torch.float32).unsqueeze(0) / 32768
+        frames = bytearray(source.readframes(source.getnframes()))
     tokens, slots = targets_for_lines(lines, DICTIONARY)
+    import torch
+    import torchaudio
+
+    waveform = torch.frombuffer(frames, dtype=torch.int16)
+    waveform = waveform.to(torch.float32).unsqueeze(0) / 32768
     # CPU is the portable default; CUDA when present. The Viterbi pass runs on
     # CPU after bounded inference.
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -308,6 +340,11 @@ if __name__ == '__main__':
     except CheckpointRejected:
         print('ERROR:checkpoint-rejected', flush=True)
         print('MMS_FA checkpoint failed its integrity check and was not loaded.', file=sys.stderr)
+        sys.exit(1)
+    except UnsupportedWord as error:
+        # Indices into the JSON the caller supplied. Never the word itself.
+        print(f'ERROR:unsupported-word:{error.line_index}:{error.word_index}', flush=True)
+        print('MMS_FA alignment failed; check runtime, lyric alphabet and audio.', file=sys.stderr)
         sys.exit(1)
     except Exception:
         # Never print the transcript, project paths, or a private traceback.

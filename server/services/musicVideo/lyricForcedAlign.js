@@ -156,9 +156,12 @@ export async function forceAlignLyrics(wav, cues, {
     await writeFile(audio, sliceWav(wav, from, to));
     await writeFile(transcript, JSON.stringify(lines), { mode: 0o600 });
     let rejectedModel = false;
+    let unsupportedWord = null;
     const result = await run(python, [SCRIPT, '--audio', audio, '--lyrics', transcript, '--output', output,
       '--model-dir', modelDir], (line) => {
       if (line === 'ERROR:checkpoint-rejected') rejectedModel = true;
+      const unsupported = /^ERROR:unsupported-word:(\d+):(\d+)$/.exec(line);
+      if (unsupported) unsupportedWord = { line: Number(unsupported[1]), word: Number(unsupported[2]) };
       const match = /^PROGRESS:(downloading-model|loading-model|aligning|emissions)(?::(\d+))?$/.exec(line);
       if (match) onProgress({ stage: match[1], ...(match[2] ? { percent: Number(match[2]) } : {}) });
     }, { timeoutMs: 60 * 60_000, isCancelled });
@@ -167,7 +170,16 @@ export async function forceAlignLyrics(wav, cues, {
       throw failure('The downloaded MMS_FA model did not match its pinned checksum and was not loaded. Retry, or check the network path.',
         'LYRIC_ALIGN_CTC_MODEL_REJECTED');
     }
-    if (!result.success) throw failure('MMS_FA could not align these lyrics. Check that lyrics match the vocal, spell numbers out, and allow the first-use model download.');
+    if (!result.success) {
+      const word = unsupportedWord ? lines[unsupportedWord.line]?.[unsupportedWord.word] : undefined;
+      if (typeof word === 'string' && word) {
+        throw new ServerError(
+          `MMS_FA cannot align "${word}" on lyric line ${unsupportedWord.line + 1}: spell numbers out and use Latin letters.`,
+          { status: 422, code: 'LYRIC_ALIGN_CTC_UNSUPPORTED_TEXT' },
+        );
+      }
+      throw failure('MMS_FA could not align these lyrics. Check that lyrics match the vocal, spell numbers out, and allow the first-use model download.');
+    }
     const raw = await readFile(output, 'utf8').catch(() => null);
     const parsed = raw ? (() => { try { return JSON.parse(raw); } catch { return null; } })() : null;
     let previousEnd = 0;

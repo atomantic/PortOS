@@ -7,15 +7,19 @@ numpy-capable interpreter when one exists.
 import hashlib
 import io
 import itertools
+import json
 import math
 import os
 import random
+import subprocess
+import sys
 import tempfile
 import unittest
+import wave
 from types import SimpleNamespace
 from align_lyrics_ctc import (targets_for_lines, word_times, emissions_for_audio, forced_align, merge_tokens,
-                              open_verified_checkpoint, load_mms_fa, CheckpointRejected, DICTIONARY, HOP,
-                              RECEPTIVE_FIELD, AUX_ROWS_REMOVED)
+                              open_verified_checkpoint, load_mms_fa, CheckpointRejected, UnsupportedWord,
+                              DICTIONARY, HOP, RECEPTIVE_FIELD, AUX_ROWS_REMOVED)
 
 try:
     import numpy
@@ -53,6 +57,22 @@ class CtcContract(unittest.TestCase):
         self.assertEqual(result[2], [])
         with self.assertRaises(ValueError):
             targets_for_lines([['123']], dictionary)
+
+    def test_romanises_latin_letters_that_do_not_decompose_and_keeps_the_sheet_word(self):
+        words = ['ışık', 'Straße', 'ø', 'æ', 'œ', 'đ', 'ł', 'þ', 'ð']
+        targets, slots = targets_for_lines([words], DICTIONARY)
+        inverse = {index: label for label, index in DICTIONARY.items()}
+        spellings = [''.join(inverse[token] for token in targets[start:end]) for start, end, _word in slots]
+        self.assertEqual(spellings, ['isik', 'strasse', 'o', 'ae', 'oe', 'd', 'l', 'th', 'd'])
+        self.assertEqual([word for _start, _end, word in slots], words)
+        with self.assertRaises(UnsupportedWord) as digits:
+            targets_for_lines([['one', '2']], DICTIONARY)
+        self.assertEqual((digits.exception.line_index, digits.exception.word_index), (0, 1))
+        self.assertNotIn('2', str(digits.exception))
+        with self.assertRaises(UnsupportedWord) as foreign:
+            targets_for_lines([['alpha', 'привет']], DICTIONARY)
+        self.assertEqual((foreign.exception.line_index, foreign.exception.word_index), (0, 1))
+        self.assertNotIn('привет', str(foreign.exception))
 
     def test_emission_chunks_keep_every_global_frame_once_across_context_seams(self):
         frames = 2055
@@ -193,6 +213,35 @@ class CheckpointGate(unittest.TestCase):
         kept = [row for i, row in enumerate(rows) if i not in AUX_ROWS_REMOVED]
         self.assertEqual(loads[1], ('state', {'aux.weight': kept, 'aux.bias': kept}))
         self.assertEqual(len(kept), 28)
+
+
+class UnsupportedWordReport(unittest.TestCase):
+    def test_cli_prints_indices_and_no_lyric_text(self):
+        # None of these spellings occur inside the fixed refusal sentence.
+        words = [['north', 'river'], ['quiet', 'привет']]
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'align_lyrics_ctc.py')
+        with tempfile.TemporaryDirectory() as directory:
+            audio = os.path.join(directory, 'vocal.wav')
+            lyrics = os.path.join(directory, 'lyrics.json')
+            output = os.path.join(directory, 'words.json')
+            with wave.open(audio, 'wb') as handle:
+                handle.setnchannels(1)
+                handle.setsampwidth(2)
+                handle.setframerate(16000)
+                handle.writeframes(b'\x00\x00' * 1600)
+            with open(lyrics, 'w', encoding='utf-8') as handle:
+                json.dump(words, handle, ensure_ascii=False)
+            proc = subprocess.run(
+                [sys.executable, script, '--audio', audio, '--lyrics', lyrics, '--output', output,
+                 '--model-dir', os.path.join(directory, 'models')],
+                capture_output=True, text=True, encoding='utf-8', check=False,
+                env={**os.environ, 'PYTHONDONTWRITEBYTECODE': '1'})
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(proc.stdout.splitlines(), ['ERROR:unsupported-word:1:1'])
+        leaked = proc.stdout + proc.stderr
+        for word in ('north', 'river', 'quiet', 'привет'):
+            self.assertNotIn(word, leaked)
+        self.assertNotIn('Traceback', proc.stderr)
 
 
 if __name__ == '__main__':

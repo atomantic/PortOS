@@ -13,7 +13,11 @@ const LINUX = _lyricAlignRuntimePlan({ platform: 'linux' });
 const roots = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((dir) => rm(dir, { recursive: true, force: true }))); });
 
-async function harness(transform = (words) => words, { scriptLines = ['PROGRESS:emissions:50'], scriptSuccess = true } = {}) {
+async function harness(transform = (words) => words, {
+  scriptLines = ['PROGRESS:emissions:50'], scriptSuccess = true,
+  cues = [{ text: 'Hello, café!' }, { text: 'Hello,' }],
+  lines = [['Hello,', 'café!'], ['Hello,']],
+} = {}) {
   const root = await mkdtemp(join(tmpdir(), 'ctc-contract-'));
   roots.push(root);
   let runDir;
@@ -25,7 +29,7 @@ async function harness(transform = (words) => words, { scriptLines = ['PROGRESS:
       scriptArgs = args;
       runDir = args[args.indexOf('--output') + 1];
       expect(wavDurationSec(await readFile(args[args.indexOf('--audio') + 1]))).toBe(2);
-      expect(JSON.parse(await readFile(args[args.indexOf('--lyrics') + 1], 'utf8'))).toEqual([['Hello,', 'café!'], ['Hello,']]);
+      expect(JSON.parse(await readFile(args[args.indexOf('--lyrics') + 1], 'utf8'))).toEqual(lines);
       expect(options.isCancelled).toEqual(expect.any(Function));
       for (const line of [...scriptLines, 'unstructured output is ignored']) onLine(line);
       if (!scriptSuccess) return { success: false };
@@ -46,7 +50,7 @@ async function harness(transform = (words) => words, { scriptLines = ['PROGRESS:
   return {
     root, dir, run, findPython, makeVenv, runDir: () => runDir, scriptArgs: () => scriptArgs,
     align: (options = {}) => forceAlignLyrics(encodePcm16Wav(16000 * 8),
-      [{ text: 'Hello, café!' }, { text: 'Hello,' }], { startSec: 4, endSec: 6, dir, plan: LINUX, findPython, run, ...options }),
+      cues, { startSec: 4, endSec: 6, dir, plan: LINUX, findPython, run, ...options }),
   };
 }
 
@@ -129,6 +133,32 @@ describe('MMS_FA process contract', () => {
     });
     expect(h.findPython).toHaveBeenCalledWith(plan);
     expect(calls(h, (args) => args[1] === 'pip' || args[1] === 'venv')).toHaveLength(0);
+  });
+
+  it('names the unsupported word from the aligner index and keeps a bare failure generic', async () => {
+    const named = await harness(undefined, { scriptLines: ['ERROR:unsupported-word:0:1'], scriptSuccess: false });
+    await expect(named.align()).rejects.toMatchObject({
+      status: 422,
+      code: 'LYRIC_ALIGN_CTC_UNSUPPORTED_TEXT',
+      message: 'MMS_FA cannot align "café!" on lyric line 1: spell numbers out and use Latin letters.',
+    });
+    const bare = await harness(undefined, { scriptLines: ['PROGRESS:aligning'], scriptSuccess: false });
+    await expect(bare.align()).rejects.toMatchObject({
+      status: 503,
+      code: 'LYRIC_ALIGN_CTC_FAILED',
+      message: 'MMS_FA could not align these lyrics. Check that lyrics match the vocal, spell numbers out, and allow the first-use model download.',
+    });
+  });
+
+  it('keeps a romanised letter\'s original spelling when the aligner returns the sheet word', async () => {
+    const h = await harness(
+      () => [[{ w: 'Example', startSec: 0.1, endSec: 0.5 }, { w: 'ışık', startSec: 0.5, endSec: 1.2 }]],
+      { cues: [{ text: 'Example ışık' }], lines: [['Example', 'ışık']] },
+    );
+    await expect(h.align()).resolves.toEqual([[
+      { w: 'Example', startSec: 4.1, endSec: 4.5, conf: 'matched' },
+      { w: 'ışık', startSec: 4.5, endSec: 5.2, conf: 'matched' },
+    ]]);
   });
 
   it('reports a rejected checkpoint distinctly and forwards download progress', async () => {
