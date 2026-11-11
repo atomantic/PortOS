@@ -1,14 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
 import socket from '../services/socket.js';
-import { getMusicVideoCastAndSets } from '../services/apiMusicVideo.js';
+import { getMusicVideoCastAndSets, repairMusicVideoShotReference } from '../services/apiMusicVideo.js';
 import { useVisibilityEvent } from './useVisibilityEvent.js';
 
 /** An approval always describes the currently resolved catalog, never a cached sheet. */
-export default function useCatalogCastSetsCheckin(project, onResolved) {
+export default function useCatalogCastSetsCheckin(project, onResolved, onRepair) {
   const resolvedRef = useRef(onResolved);
   resolvedRef.current = onResolved;
   const [refresh, setRefresh] = useState(0);
   const [result, setResult] = useState(null);
+  const [repairing, setRepairing] = useState(false);
+  const [repairError, setRepairError] = useState(null);
+  const repairPending = useRef(false);
   const enabled = project.castAndSets?.source === 'catalog';
   const ids = JSON.stringify([...new Set((project.concept?.subjects || []).map((s) => s.ingredientId).filter(Boolean))].sort());
   const key = JSON.stringify([project.id, project.updatedAt, project.castAndSets?.revision, project.castAndSets?.status, project.concept?.subjects, refresh]);
@@ -48,5 +51,23 @@ export default function useCatalogCastSetsCheckin(project, onResolved) {
     } });
     return () => { active = false; };
   }, [enabled, key, project.id]);
-  return { checkin: result?.key === key ? result.checkin : null, error: result?.key === key ? result.error : null, retry: () => setRefresh((n) => n + 1) };
+  const retry = () => setRefresh((n) => n + 1);
+  const repair = (problemId) => {
+    if (repairPending.current) return;
+    repairPending.current = true;
+    setRepairing(true);
+    setRepairError(null);
+    return repairMusicVideoShotReference(project.id, problemId, { silent: true })
+      .then((saved) => onRepair?.(saved))
+      .catch((error) => setRepairError({ projectId: project.id, message: error.message || 'Could not fix the shot reference.' }))
+      .finally(() => {
+        repairPending.current = false;
+        setRepairing(false);
+        retry();
+      });
+  };
+  return {
+    checkin: result?.key === key ? result.checkin : null, error: result?.key === key ? result.error : null, retry,
+    repair, repairing, repairError: repairError?.projectId === project.id ? repairError.message : null,
+  };
 }

@@ -870,6 +870,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['POST /api/music-video/:id/cast-and-sets/feedback/remove-image-note', REMOVES_RECORD],
   ['POST /api/music-video/:id/cast-and-sets/catalog', 'Switches the project check-in to catalog links, reads catalog media and moves saved shot picks to the same catalog images; preserves historical records, refuses active work when switching, and starts no provider, queue or host process.'],
   ['POST /api/music-video/:id/cast-and-sets/catalog/guide', 'Writes a new guide artifact version from catalog records and project shots; reads only catalog media and starts no provider, queue or host process.'],
+  ['POST /api/music-video/:id/cast-and-sets/catalog/repair-shot-reference', 'Rechecks stored shot and catalog data, then edits one reference list. Starts no provider, queue or host process.'],
   ['PATCH /api/music-video/:id/cast-and-sets/direction-text', 'Saves text-only edits to the stored direction of a catalog check-in; refuses a legacy check-in and starts no render, provider, queue or host process.'],
   ['POST /api/music-video/:id/cast-and-sets/reconfirm', RECORDS],
   ['POST /api/music-video/:id/cast-and-sets/edit-image-preview', READ_OVER_POST],

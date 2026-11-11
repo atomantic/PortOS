@@ -1726,7 +1726,15 @@ function ProjectWorkspace({
     saveCreativeSetup: (patch) => updateMusicVideoProject(selected.id, patch, { silent: true }).then((project) => {
       patchProject(project.id, { concept: project.concept, visualSpec: project.visualSpec, productionPolicy: project.productionPolicy });
     }),
-    applyCatalogCheckin: (catalogCheckin) => patchProject(selected.id, { castAndSets: { ...selected.castAndSets, catalogCheckin } }),
+    applyCatalogCheckin: (catalogCheckin) => patchProject(selected.id, (project) => ({
+      castAndSets: { ...project.castAndSets, catalogCheckin },
+    })),
+    applyShotReferenceRepair: ({ sceneId, patch, updatedAt }) => patchProject(selected.id, (project) => {
+      if (project.updatedAt > updatedAt) return {};
+      const unsaved = unsavedSceneFields.current.get(sceneId);
+      const saved = Object.fromEntries(Object.entries(patch).filter(([field]) => !unsaved?.has(field)));
+      return { scenes: project.scenes?.map(scene => scene.sceneId === sceneId ? { ...scene, ...saved } : scene), updatedAt };
+    }),
     applyCastLinks: ({ concept, updatedAt }) => patchProject(selected.id, { concept, ...(updatedAt ? { updatedAt } : {}) }),
     // A roster edit answers the shots it may have refilled; only their cameo fields and still change here.
     applyCameos: ({ cameos, scenes, updatedAt }) => patchProject(selected.id, (p) => ({

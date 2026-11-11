@@ -5,6 +5,8 @@ import Drawer from '../../Drawer';
 import ContactSheetButton from '../ContactSheetButton.jsx';
 import PacingRecutPanel from '../PacingRecutPanel.jsx';
 import SceneCard from '../SceneCard.jsx';
+import CatalogShotReferenceProblems from '../CatalogShotReferenceProblems.jsx';
+import useCatalogCastSetsCheckin from '../../../hooks/useCatalogCastSetsCheckin.js';
 import useShotSheetMapFilter from '../../../hooks/useShotSheetMapFilter.js';
 import { SHOT_SHEET_MAP_BARS, shotSheetMapRows, shotSheetRows } from '../../../../../server/lib/musicVideoShotSheet.js';
 import EndingCard, { EndingThumbnail } from '../EndingCard.jsx';
@@ -69,6 +71,7 @@ function useLinkedStoryboard(storyboardId) {
 export default function BoardStage({ board }) {
   const { project, locked, sceneMedia, videoSettings, takes, activeSceneId, onToggleSceneExpand } = board;
   const scenes = project.scenes || [];
+  const catalog = useCatalogCastSetsCheckin(project, board.applyCatalogCheckin, board.applyShotReferenceRepair);
   const [storyboard, setStoryboard] = useLinkedStoryboard(project.storyboardId);
   // Until the board is read, a fitted shot shows no panel state rather than a false "deleted".
   const panelOf = (scene) => (storyboard ? storyboardShotPanel(storyboard, scene) : null);
@@ -202,6 +205,11 @@ export default function BoardStage({ board }) {
         </div>
       </div>
 
+      {catalog.error && <p role="alert" className="text-xs text-port-error">{catalog.error}{' '}
+        <button type="button" className="min-h-11 rounded border border-port-border px-2" onClick={catalog.retry}>Retry catalog check-in</button>
+      </p>}
+      <CatalogShotReferenceProblems checkin={catalog.checkin} disabled={locked || board.castSets?.busy || catalog.repairing} repairError={catalog.repairError}
+        onRepair={catalog.repair} onRemap={board.castSets?.remapCatalogReferences} onOpenShot={sceneId => onToggleSceneExpand?.(sceneId, true)} />
       {scenes.length === 0 && <p className="text-sm text-port-text-muted">No scenes yet — add one to start the board.</p>}
       {scenes.length > 0 && (
         <div role="group" aria-label="Filter scenes" className="flex flex-wrap items-center gap-1.5 text-xs">

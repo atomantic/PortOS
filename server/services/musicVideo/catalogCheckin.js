@@ -8,6 +8,7 @@ import { listPickableImages, pickGuideMedia } from '../../lib/catalogMediaLibrar
 import { resolveGalleryImage, resolveImageRef } from '../../lib/pathSafety.js';
 import { musicVideoCatalogPickPlans, musicVideoCatalogReferenceId } from '../../lib/musicVideoConditioning.js';
 import { shotNumbers } from '../../lib/musicVideoColdOpen.js';
+import { musicVideoShotReferenceChecks } from './shotReferenceCheck.js';
 
 export const isCatalogCheckin = project => project?.castAndSets?.source === 'catalog';
 const TYPES = new Set(['character', 'place', 'object']);
@@ -78,12 +79,15 @@ export function dropStaleCatalogPicks(current, next) {
   return changed ? { ...next, scenes } : next;
 }
 
-export async function resolveCatalogCheckin(project, { catalog, exists = existsOnDisk, client } = {}) {
+export async function resolveCatalogCheckin(project, {
+  catalog, exists = existsOnDisk, client, includeShotChecks = true, includeRepairPatches = false,
+} = {}) {
   const allowsImages = musicVideoAllowsMedia(project, 'image');
   const subjects = (project?.concept?.subjects || []).filter(subject => TYPES.has(subject?.kind));
   const items = [];
   const problems = [];
   const records = new Map();
+  const shotMedia = Object.create(null);
   const db = catalog || (subjects.some(subject => subject.ingredientId) ? await import('../catalogDB.js') : null);
   for (const subject of subjects) {
     const item = { subjectId: subject.id, ingredientId: subject.ingredientId || null, formId: subject.castForm?.id || null, formLabel: null,
@@ -107,6 +111,8 @@ export async function resolveCatalogCheckin(project, { catalog, exists = existsO
     item.formLabel = form?.label || null;
     item.description = String(form ? form.description || '' : payload[subject.kind === 'character' ? 'physicalDescription' : 'description'] || payload.description || '');
     const rows = (media || []).filter(row => !row.deleted && exists(row.mediaKey));
+    shotMedia[subject.ingredientId] = rows;
+    shotMedia[item.ingredientId] = rows;
     // Scope before guide precedence: an unrelated canonical guide must not hide
     // a valid image belonging to the explicitly selected age or look.
     const scopedRows = item.formId ? rows.filter(row => row.library?.variant?.formId === item.formId) : rows;
@@ -127,14 +133,20 @@ export async function resolveCatalogCheckin(project, { catalog, exists = existsO
   // shot picks without changing the Auto set, so adding an image never stales an approval.
   const basis = createHash('sha256').update(JSON.stringify({ items: items.map(({ retiredImages: _retired, pickableImages: _pickable, ...item }) => item), problems, concept: project?.concept?.prompt || '',
     song: [project?.trackId || null, project?.uploadedAudioFilename || null] })).digest('hex');
+  const report = shotReferenceReport(project, items, problems);
+  if (includeShotChecks && isCatalogCheckin(project) && allowsImages) {
+    const resolved = { ...project, castAndSets: { ...project.castAndSets, catalogCheckin: { items, problems } } };
+    const checks = await musicVideoShotReferenceChecks(resolved, shotMedia);
+    report.shotReferenceProblems.push(...(includeRepairPatches ? checks : checks.map(({ patch: _patch, ...row }) => row)));
+  }
   return { items, problems, basis, approved: isCatalogCheckin(project) && project.castAndSets.status === 'approved'
-    && !problems.length && project.castAndSets.catalogApprovedBasis === basis, ...shotReferenceReport(project, items, problems) };
+    && !problems.length && project.castAndSets.catalogApprovedBasis === basis, ...report };
 }
 
 /** Read-time only. Never persist the resolved media or presentation fields. */
 export async function withCatalogCheckin(project, options) {
   if (!isCatalogCheckin(project)) return project;
-  return { ...project, castAndSets: { ...project.castAndSets, catalogCheckin: await resolveCatalogCheckin(project, options) } };
+  return { ...project, castAndSets: { ...project.castAndSets, catalogCheckin: await resolveCatalogCheckin(project, { includeShotChecks: false, ...options }) } };
 }
 
 export function assertCatalogCheckinReady(checkin) {

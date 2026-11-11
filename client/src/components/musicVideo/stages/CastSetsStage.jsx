@@ -45,7 +45,7 @@ export const directionSummary = (project) => {
 export default function CastSetsStage({ board }) {
   const { project, locked, castSets, kickoff } = board;
   const catalogMode = project.castAndSets?.source === 'catalog';
-  const catalog = useCatalogCastSetsCheckin(project, board.applyCatalogCheckin);
+  const catalog = useCatalogCastSetsCheckin(project, board.applyCatalogCheckin, board.applyShotReferenceRepair);
   const catalogBusy = locked || castSets.busy || kickoff.running;
   const canApproveCatalog = !!catalog.checkin && !catalog.checkin.problems.length && !catalog.checkin.approved;
 
@@ -63,7 +63,8 @@ export default function CastSetsStage({ board }) {
           {catalog.error ? <p role="alert" className="text-xs text-port-error">{catalog.error} <button type="button" className="min-h-11 rounded border border-port-border px-2" onClick={catalog.retry}>Retry catalog check-in</button></p>
             : !catalog.checkin ? <p className="text-xs">Loading current catalog check-in…</p> : null}
           {catalog.checkin?.problems.length > 0 && <ul className="list-disc pl-5 text-xs text-port-warning">{catalog.checkin.problems.map((problem, index) => <li key={`${problem.subjectId}:${problem.code}:${index}`}>{problem.message}</li>)}</ul>}
-          <CatalogShotReferenceProblems checkin={catalog.checkin} disabled={catalogBusy} onRemap={castSets.remapCatalogReferences} onOpenShot={board.onEditShot} />
+          <CatalogShotReferenceProblems checkin={catalog.checkin} disabled={catalogBusy || catalog.repairing} repairError={catalog.repairError}
+            onRepair={catalog.repair} onRemap={castSets.remapCatalogReferences} onOpenShot={board.onEditShot} />
           <div className="flex flex-wrap gap-2">
             <button type="button" className="min-h-11 rounded border border-port-border px-3 text-sm disabled:opacity-50" disabled={catalogBusy || !canApproveCatalog}
               onClick={() => (project.castAndSets.status === 'approved' ? castSets.reconfirm : board.approveCastAndSets)(catalog.checkin.basis)}>Approve catalog Cast &amp; Sets</button>
