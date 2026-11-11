@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter } from 'react-router';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { MemoryRouter, useLocation } from 'react-router';
 
 const api = vi.hoisted(() => ({
   getMusicVideoCodeDocument: vi.fn(),
@@ -77,9 +77,15 @@ beforeEach(() => {
 
 const APPROVED = { storyboard: { approved: true } };
 
+function LocationProbe() {
+  const location = useLocation();
+  return <output aria-label="Current URL">{location.search}</output>;
+}
+
 function renderPanel(testProject = project, readiness = APPROVED) {
   return render(
     <MemoryRouter initialEntries={['/music-video/mv-1']}>
+      <LocationProbe />
       <CodeVideoPanel project={testProject} audioUrl={null} onProject={vi.fn()} productionReadiness={readiness} />
     </MemoryRouter>,
   );
@@ -98,6 +104,40 @@ describe('CodeVideoPanel (#9076)', () => {
       { providerId: 'stub-provider', model: 'fixture-model' },
       { silent: true },
     ));
+  });
+
+  it('keeps rapid section requests, URL and playhead aligned and resyncs after selection', async () => {
+    api.getMusicVideoCodeDocument.mockResolvedValue({
+      ...DOC,
+      durationSec: 4,
+      song: { sections: ['a', 'b', 'c', 'd'].map((id, index) => ({
+        id, label: id, startSec: index, endSec: index + 1,
+      })) },
+    });
+    renderPanel();
+    const select = await screen.findByLabelText('Section to regenerate');
+    await waitFor(() => expect(select.value).toBe('a'));
+    const burst = (key, count = 3) => act(() => {
+      for (let i = 0; i < count; i += 1) window.dispatchEvent(new KeyboardEvent('keydown', { key }));
+    });
+    const expectPosition = async (id, time) => waitFor(() => {
+      expect(select.value).toBe(id);
+      expect(screen.getByLabelText('Current URL').textContent).toBe(`?section=${id}`);
+      expect(Number(screen.getByLabelText('Scrub preview').value)).toBe(time);
+    });
+    burst(']');
+    await expectPosition('d', 3);
+    burst('[');
+    await expectPosition('a', 0);
+    burst('[');
+    await expectPosition('b', 1);
+    fireEvent.change(select, { target: { value: 'c' } });
+    await waitFor(() => expect(select.value).toBe('c'));
+    burst(']', 1);
+    await expectPosition('d', 3);
+    // A longer held-key burst also preserves every request through wrapping.
+    burst(']', 101);
+    await expectPosition('a', 0);
   });
 
   it('steps a frame and selects the next section from the keyboard', async () => {
