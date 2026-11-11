@@ -39,6 +39,8 @@ def preflight(profile, cuda):
     nvcc = output([cuda / 'bin/nvcc', '--version'])
     if not re.search(r'\bV' + re.escape(profile['cudaToolkit']) + r'\b', nvcc):
         raise SystemExit('TRELLIS.2 CUDA requires CUDA toolkit ' + profile['cudaToolkit'] + '.')
+    if not all((cuda / name).is_file() for name in ['include/cuda.h', 'lib64/stubs/libcuda.so']):
+        raise SystemExit('Install the CUDA 12.6 development headers and driver stub library before setup.')
     compiler = output(['/usr/bin/g++-11', '-dumpfullversion'])
     if compiler != profile['gcc']:
         raise SystemExit('TRELLIS.2 CUDA requires GCC/G++ ' + profile['gcc'] + '.')
@@ -97,6 +99,13 @@ def patch_build(directory, package, profile):
     if package == 'FlexGEMM':
         # Metadata/build hooks must not overwrite the operator's autotune cache.
         text = text.replace('os.path.expanduser("~/.flex_gemm', 'os.path.join(ROOT, ".portos-autotune')
+    if package == 'nvdiffrec':
+        before = "ld_flags = ['-lcuda', '-lnvrtc']"
+        if text.count(before) != 1:
+            raise SystemExit('Unexpected nvdiffrec CUDA link flags.')
+        # These sources use no NVRTC API. Link the toolkit's driver stub; the real
+        # driver supplies libcuda.so.1 at runtime. No stub path enters the runtime search path.
+        text = text.replace(before, "ld_flags = ['-L' + os.path.join(os.environ['CUDA_HOME'], 'lib64', 'stubs'), '-lcuda']")
     setup.write_text(text)
 
 

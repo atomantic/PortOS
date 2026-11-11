@@ -5,6 +5,7 @@ Install and **Repair install** use the PortOS-owned
 The initial profile covers **Linux x86_64** (including WSL2), glibc **2.28+**,
 CUDA toolkit **12.6.85**, GCC/G++ **11.3.0**, NVIDIA compute capability **8.6**
 and at least **24 GiB VRAM**. Install the toolkit and compiler before setup.
+The toolkit must include its development headers and `lib64/stubs/libcuda.so`.
 The bootstrap interpreter needs the security-patched `tarfile.data_filter`.
 Other profiles are refused before downloads or changes to an existing runtime.
 Intact legacy CUDA environments remain usable for generation.
@@ -43,6 +44,10 @@ Setup updates TRELLIS.2's private feature extractor to that path while preservin
 its layer loop and unweighted feature normalization. Verification exercises a
 tiny randomly initialized DINOv3 model without downloading weights, so a future
 encoder API mismatch fails Install rather than the first user render.
+nvdiffrec links against the toolkit's CUDA driver stub, which is replaced by the
+real NVIDIA driver at runtime. Its unused NVRTC link flag is removed: none of the
+pinned renderutils sources use NVRTC. A host's ambient NVRTC development library
+is therefore not an extra build dependency.
 
 Repair recreates only `<runtime>/.conda`, including its private source snapshot.
 Downloaded weights elsewhere in the runtime or Hugging Face cache stay in place.

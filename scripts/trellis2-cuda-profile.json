@@ -401,5 +401,9 @@
   "transformers": "5.22.1",
   "runtimePatches": {
     "dinov3EncoderLayers": "self.model.model.layer"
-  }
+  },
+  "nvdiffrecLinkFlags": [
+    "-L<cuda-home>/lib64/stubs",
+    "-lcuda"
+  ]
 }

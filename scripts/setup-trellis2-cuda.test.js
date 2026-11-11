@@ -39,6 +39,10 @@ with tempfile.TemporaryDirectory() as directory:
         content = build_text.encode()
         member.size = len(content)
         archive.addfile(member, io.BytesIO(content))
+        member = tarfile.TarInfo('fixture/deps/nvdiffrec/setup.py')
+        content = b"ld_flags = ['-lcuda', '-lnvrtc']\n"
+        member.size = len(content)
+        archive.addfile(member, io.BytesIO(content))
         member = tarfile.TarInfo('fixture/trellis2/modules/image_feature_extractor.py')
         content = b'for layer in self.model.layer: pass\n'
         member.size = len(content)
@@ -82,6 +86,8 @@ with tempfile.TemporaryDirectory() as directory:
             assert all('# "-D' + flag not in built for flag in actual['flashAttentionDefines'])
             feature = (root / '.conda/portos-source/trellis2/modules/image_feature_extractor.py').read_text()
             assert 'self.model.model.layer' in feature and 'self.model.layer' not in feature
+            link = (root / '.conda/portos-source/deps/nvdiffrec/setup.py').read_text()
+            assert 'stubs' in link and "'-lcuda'" in link and '-lnvrtc' not in link
         creates = [a for a, k in calls if 'create' in a]
         assert len(creates) == 2
         assert all('--offline' in a and '--file' in a for a in creates)
@@ -128,7 +134,12 @@ with tempfile.TemporaryDirectory() as directory:
         network.assert_not_called()
 
     # The native profile preflight, unlike render compatibility, is deliberately narrow.
-    for gpu in ['8.9, 24576, 610.88', '8.6, 12288, 610.88']:
+    cuda = temporary / 'cuda'
+    (cuda / 'include').mkdir(parents=True)
+    (cuda / 'include/cuda.h').write_text('fixture header')
+    (cuda / 'lib64/stubs').mkdir(parents=True)
+    (cuda / 'lib64/stubs/libcuda.so').write_bytes(b'fixture library')
+    for gpu in ['8.9, 24576, fixture-driver', '8.6, 12288, fixture-driver']:
         with patch.object(m.sys, 'platform', 'linux'), \
              patch.object(m.platform, 'machine', return_value='x86_64'), \
              patch.object(m.platform, 'libc_ver', return_value=('glibc', '2.35')), \
