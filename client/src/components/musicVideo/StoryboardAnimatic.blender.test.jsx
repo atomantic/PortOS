@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { StrictMode } from 'react';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 vi.mock('../../services/apiMusicVideo.js', async (importOriginal) => ({
@@ -328,5 +329,17 @@ describe('StoryboardAnimatic Blender film effects', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Film look' }));
     expect(container.querySelector('figure [data-film-look]')).toBeNull();
     expect(mounted()).toBe(true);
+  });
+
+  // Uniquely catches a film clip losing its source to the effect replay React runs on mount in
+  // development (StrictMode): a render's URL is known at mount, so nothing ever sets it again.
+  it('keeps a shot\'s clip loaded through the StrictMode effect replay, and releases it when it leaves', async () => {
+    const { unmount } = render(<StrictMode>{player(film(), blenderFilmState())}</StrictMode>);
+    await act(async () => {});
+    const clip = screen.getByLabelText('Clip for Cold open');
+    expect(clip.getAttribute('src')).toBe(mediaUrl('s010/final/shot.mp4'));
+    expect(screen.getByLabelText('Clip for First verse').getAttribute('src')).toBe(mediaUrl('s020/preview/shot.mp4'));
+    unmount();
+    expect(clip.getAttribute('src')).toBeNull();
   });
 });

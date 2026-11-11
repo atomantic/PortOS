@@ -220,9 +220,13 @@ const CLIP_STALL_RELOAD_MS = 5000;
  * Lets the browser drop a video's download and decoder. Removing the element
  * alone does not: iOS Safari keeps both until the element is collected, and
  * after a few dozen cuts it stops loading new clips at all.
+ *
+ * Only an element that has left the page lets go. In development React replays
+ * each effect's cleanup once on a mounted element (StrictMode), and a clip whose
+ * source is known at mount (a film shot's render) would lose it and never load.
  */
 function releaseVideo(video) {
-  if (!video) return;
+  if (!video || video.isConnected) return;
   video.pause?.();
   video.removeAttribute('src');
   video.load?.();
