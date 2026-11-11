@@ -212,7 +212,8 @@ async function dispatchClip({ project, scene, route, tag }) {
     ...(ltxReferences?.body || {}),
     // A style-break end frame (#11173), when this fal or local model takes one.
     ...(tag.songAudio === true || ltxReferences ? {} : sceneEndFrameRequestFields(scene, {
-      backend: route.mode, falModelId: byBackend.fal?.falModelId, runwayModelId: byBackend.runway?.runwayModelId, mode: byBackend[route.mode]?.mode || 'image', localRuntime,
+      backend: route.mode, falModelId: byBackend.fal?.falModelId, runwayModelId: byBackend.runway?.runwayModelId,
+      googleModelId: byBackend.google?.googleModelId, higgsfieldModelId: byBackend.higgsfield?.higgsfieldModelId, mode: byBackend[route.mode]?.mode || 'image', localRuntime,
     })),
     musicVideo: { ...tag, compose: true, ...(ltxReferences ? { expectedClipReferenceFiles: ltxReferences.files } : {}) },
     ...(fixes ? { _clipFixes: fixes } : {}),

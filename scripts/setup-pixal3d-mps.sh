@@ -14,12 +14,15 @@ if [[ -z "$PY" ]]; then
   for cand in /opt/homebrew/opt/python@3.13/bin/python3.13 "$(command -v python3.13 2>/dev/null || true)"; do
     if [[ -n "$cand" && -x "$cand" ]]; then PY="$cand"; break; fi
   done
+else
+  PY="$(command -v "$PY" 2>/dev/null || true)"
 fi
 [[ -n "$PY" && -x "$PY" ]] || { echo 'Install python@3.13 or set PYTHON_BIN to Python 3.13.' >&2; exit 1; }
 "$PY" -c 'import sys; assert sys.version_info[:2] == (3, 13), "Pixal3D requires Python 3.13"'
 
 # A repaired 3.10 venv can retain incompatible native modules and unlocked extras.
 # Only this private interpreter is rebuilt; source and model assets are retained.
+[[ ! -L .venv ]] || { echo 'Refusing to rebuild a symlinked Pixal3D environment.' >&2; exit 1; }
 "$PY" -m venv --clear .venv
 VPY=.venv/bin/python
 "$VPY" -m pip install --disable-pip-version-check --require-hashes --no-deps --only-binary :all: -r "$SCRIPTS_DIR/requirements-pixal3d-mps.lock.txt"

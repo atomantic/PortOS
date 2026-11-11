@@ -29,6 +29,7 @@ describe('buildGoogleImageRequest', () => {
     expect(() => buildGoogleImageRequest({ modelId: 'gemini-2.5-flash-image', prompt: 'p', images: [img, img, img, img] })).toThrow(/at most 3/);
     expect(() => buildGoogleImageRequest({ modelId: 'imagen-9', prompt: 'p' })).toThrow(/Unknown Google image model/);
     expect(() => buildGoogleImageRequest({ prompt: '  ' })).toThrow(/Prompt is required/);
+    expect(() => buildGoogleImageRequest({ prompt: '  ', negativePrompt: 'text' })).toThrow(/Prompt is required/);
   });
 
   it('labels prices without inventing one', () => {

@@ -16,5 +16,6 @@ export function sceneEndFramePlanFor(scene, settings = {}, { models = [], defaul
   const localRuntime = settings.backend === 'local'
     ? models.find((model) => model.id === (settings.modelId || defaultModel))?.runtime ?? null
     : null;
-  return sceneEndFramePlan(scene, { backend: settings.backend || null, falModelId, runwayModelId, mode, localRuntime });
+  return sceneEndFramePlan(scene, { backend: settings.backend || null, falModelId, runwayModelId, googleModelId: settings.googleModelId,
+    higgsfieldModelId: settings.higgsfieldModelId, mode, localRuntime });
 }

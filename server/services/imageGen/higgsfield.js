@@ -221,12 +221,18 @@ async function runHiggsfield(job, jobId, {
   let wroteOutput = false;
   try {
     const signal = entry.controller.signal;
+    if (entry.aborted) {
+      entry.controller.abort();
+      return finalizeCanceled(job, jobId);
+    }
     // A reviewed edit's snapshot replaces the first input's bytes (assertSnapshotForAdapter).
     const imageUrls = [];
     for (const [index, path] of inputImages.paths.entries()) {
+      if (entry.aborted) return finalizeCanceled(job, jobId);
       imageUrls.push(await uploadHiggsfieldImage({ apiKey, path, bytes: index === 0 ? reviewedReferenceBytes : null, signal }));
     }
     if (entry.aborted) return finalizeCanceled(job, jobId);
+    if (Date.now() >= deadline) throw new Error('Higgsfield image render deadline elapsed before submission');
     const request = buildHiggsfieldImageRequest({ modelId: family.textEndpoint, prompt: fullPrompt, negativePrompt, width, height, imageUrls, seed });
     const submitted = await submitHiggsfieldRequest({ apiKey, endpoint: request.endpointId, body: request.body, signal });
     entry.requestId = submitted.requestId;

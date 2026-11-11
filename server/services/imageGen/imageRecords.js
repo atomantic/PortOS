@@ -107,15 +107,24 @@ export async function withLocalImageOrigin(meta) {
  * is: origin is set once, unless `replace` says the bytes were just rewritten
  * under a reused name, when any sidecar left from the earlier image is stale and
  * a fresh creation stamp makes the time-aware tombstone check treat it as new.
+ * A rewritten mood-board import can preserve its metadata while refreshing a
+ * known local creation; an existing nonlocal or unknown origin is never taken over.
  * Call inside the writer's backup lease.
  */
-export async function writeLocalImageSidecarIfMissing(filename, { replace = false } = {}) {
+export async function writeLocalImageSidecarIfMissing(filename, { replace = false, preserveMetadata = false } = {}) {
   if (!isSafeFilename(filename, ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.avif'])) return false;
   const stem = filename.replace(/\.[^.]+$/, '');
   const paths = [join(PATHS.images, `${stem}.metadata.json`), join(PATHS.images, `${filename}.metadata.json`)];
   const existing = paths.filter((path) => existsSync(path));
   if (existing.length && !replace) return false;
-  await atomicWrite(existing[0] || paths[0], await withLocalImageOrigin({}));
+  const metadata = preserveMetadata && existing.length ? await readJSONFile(existing[0], {}, { strict: true }) : {};
+  let next;
+  if (preserveMetadata && existing.length) {
+    const id = await localInstanceId();
+    if (!id || metadata.originInstanceId !== id) return false;
+    next = { ...metadata, originInstanceId: id, createdAt: new Date().toISOString() };
+  } else next = await withLocalImageOrigin({});
+  await atomicWrite(existing[0] || paths[0], next);
   return true;
 }
 

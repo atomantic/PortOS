@@ -890,6 +890,7 @@ function launchInstall(pythonPath, onLog, { preferUv, env }, work) {
     // install must not start its package subprocess once the bootstrap settles.
     if (killed) return { ok: false, code: -1 };
     const runPip = (args) => {
+      if (killed) return Promise.resolve(-1);
       if (!uv) return streamSpawn(pythonPath, ['-m', 'pip', ...args], onLog, trackProc, env);
       // uv does not accept pip's progress-bar/yes options. Keep the same
       // exact target interpreter and package specifications in both paths.

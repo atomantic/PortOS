@@ -288,8 +288,9 @@ export default function CatalogSheetsPanel({
 
   const handleGenerate = async (renderVariant = variant, renderFormId = activeFormId, renderPartner = partner) => {
     const renderRole = renderVariant && `${SHEET_ROLE_PREFIX}${renderVariant.id}${renderFormId ? `@${renderFormId}` : ''}`;
-    const sameTarget = renderVariant?.id === variantId && renderFormId === activeFormId;
     const comparing = renderVariant?.id === COMPARISON_VARIANT_ID;
+    const sameTarget = renderVariant?.id === variantId && renderFormId === activeFormId
+      && (!comparing || renderPartner?.id === partner?.id);
     if (comparing && !renderPartner) return;
     if (!renderVariant || blockedReason || (sameTarget && preview.error) || starting || jobs.some((job) => job.role === renderRole && !job.publicationError)) return;
     setStarting(true);
@@ -475,7 +476,8 @@ export default function CatalogSheetsPanel({
                 const note = inspectionNote ? <div className="space-y-1 border-t border-port-border p-2"><p className="text-xs text-port-warning break-words">{inspectionNote}</p>
                   {canRegenerate && <button type="button" onClick={() => handleGenerate(sheetVariant, role.formId || '', sheetPartner)}
                     disabled={starting || !!blockedReason || jobs.some((job) => job.role === m.role)
-                      || (sheetVariant.id === variantId && (role.formId || '') === activeFormId && !!preview.error)}
+                      || (sheetVariant.id === variantId && (role.formId || '') === activeFormId
+                        && (!isComparisonSheet || comparedWith === partner?.id) && !!preview.error)}
                     className="min-h-11 rounded border border-port-border px-2 py-1 text-xs text-port-accent disabled:opacity-50">Regenerate sheet</button>}
                 </div> : null;
                 return (

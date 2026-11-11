@@ -145,7 +145,8 @@ async function buildShortClipBody(project, scene, input) {
     mode,
     sourceImageFile: scene.referenceImageId,
     ...(useLtx || card.endFrame === false || songAudio ? {} : sceneEndFrameRequestFields(scene, {
-      backend: settings.backend, falModelId: falFields?.falModelId, runwayModelId: runwayFields?.runwayModelId, googleModelId: googleFields?.googleModelId, mode,
+      backend: settings.backend, falModelId: falFields?.falModelId, runwayModelId: runwayFields?.runwayModelId, googleModelId: googleFields?.googleModelId,
+      higgsfieldModelId: settings.higgsfieldModelId, mode,
       localRuntime: model?.runtime ?? null,
     })),
     ...(audioReactive ? { audioStartSec: scene.startSec || 0, loraFilenames: [settings.detectedLora.filename], loraScales: [settings.audioReactiveScale] } : {}),

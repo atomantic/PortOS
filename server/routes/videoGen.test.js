@@ -852,15 +852,13 @@ describe('videoGen routes', () => {
     });
   });
 
-  describe('Higgsfield Music Video references', () => {
+  describe('Higgsfield references', () => {
     it('refuses the complete over-cap shot reference set before enqueueing', async () => {
       const { getSettings } = await import('../services/settings.js');
       getSettings.mockResolvedValueOnce({ videoGen: { higgsfield: { apiKey: 'example-key' } } });
-      getMusicVideoProject.mockResolvedValueOnce({ id: 'mv-hf', videoSettings: {}, scenes: [{ sceneId: 'shot-hf' }] });
-      clipCastReferences.mockResolvedValueOnce(Array.from({ length: 31 }, (_, i) => ({ path: `/mock/images/ref-${i}.png`, label: `Ref ${i}` })));
       const response = await request(app).post('/api/video-gen/').send({
-        backend: 'higgsfield', mode: 'image', prompt: '  A dancer turns  ', sourceImageFile: 'frame.png',
-        musicVideo: { projectId: 'mv-hf', sceneId: 'shot-hf' },
+        backend: 'higgsfield', mode: 'text', prompt: '  A dancer turns  ',
+        referenceImageFiles: Array.from({ length: 31 }, (_, i) => `ref-${i}.png`),
       });
       expect(response.status).toBe(400);
       expect(response.body.error).toMatch(/at most 30 reference images.*received 31/);

@@ -12,6 +12,7 @@
 import { FAL_DEFAULT_IMAGE_VIDEO_MODEL, getFalVideoModel } from './falVideoModels.js';
 import { RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL, getRunwayVideoModel } from './runwayVideoModels.js';
 import { GOOGLE_DEFAULT_VIDEO_MODEL, getGoogleVideoModel } from './googleVideoModels.js';
+import { HIGGSFIELD_DEFAULT_VIDEO_MODEL, getHiggsfieldVideoModel } from './higgsfieldVideoModels.js';
 import { isPerformanceScene } from './musicVideoShotTiming.js';
 import { isLastFrameAnchoredRuntime } from './runners.js';
 import { VIDEO_RUNTIME_MODES } from './videoModeProfiles.js';
@@ -37,7 +38,7 @@ export const sceneActiveEndImageId = (scene) => (scene?.endFrameOff !== true && 
  * `{ endImageId, used, reason }`: `reason` names why a selected end frame is
  * ignored, and is null when it is used or absent.
  */
-export function sceneEndFramePlan(scene, { backend = null, falModelId = null, runwayModelId = null, googleModelId = null, mode = 'image', localRuntime = null } = {}) {
+export function sceneEndFramePlan(scene, { backend = null, falModelId = null, runwayModelId = null, googleModelId = null, higgsfieldModelId = null, mode = 'image', localRuntime = null } = {}) {
   const endImageId = sceneActiveEndImageId(scene);
   if (!endImageId) return { endImageId: null, used: false, reason: null };
   const ignored = (reason) => ({ endImageId, used: false, reason });
@@ -60,7 +61,13 @@ export function sceneEndFramePlan(scene, { backend = null, falModelId = null, ru
       ? { endImageId, used: true, reason: null }
       : ignored(`${model?.label || 'This Google model'} takes no end frame; use Veo 3.1`);
   }
-  if (backend !== 'fal') return ignored('Only fal.ai and Runway models that take an end frame and local LTX use it; this renderer ignores it');
+  if (backend === 'higgsfield') {
+    const model = getHiggsfieldVideoModel(higgsfieldModelId || HIGGSFIELD_DEFAULT_VIDEO_MODEL);
+    return model?.endFrameField
+      ? { endImageId, used: true, reason: null }
+      : ignored(`${model?.label || 'This Higgsfield model'} takes no end frame; choose one that does`);
+  }
+  if (backend !== 'fal') return ignored('This renderer takes no end frame; choose a model that does');
   const model = getFalVideoModel(falModelId || FAL_DEFAULT_IMAGE_VIDEO_MODEL);
   if (!model?.endImage) return ignored(`${model?.label || 'This fal.ai model'} takes no end frame; choose one that does`);
   return { endImageId, used: true, reason: null };

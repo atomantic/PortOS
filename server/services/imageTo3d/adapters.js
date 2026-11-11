@@ -62,6 +62,7 @@ import {
   isTrellis2Installed,
   runTrellis2Generate,
   probeTrellis2TextureBake,
+  probeMetalToolchain,
 } from './trellis2.js';
 import { installTrellis2 } from './trellis2Install.js';
 import {
@@ -93,11 +94,14 @@ export const TARGET_ADAPTERS = Object.freeze({
     async describeInstallState() {
       const bake = await probeTrellis2TextureBake();
       if (bake.quality !== 'fallback') return { fields: { textureBake: bake } };
-      const textureBake = { ...bake, repairable: true };
+      const toolchain = await probeMetalToolchain();
+      const repairable = toolchain.blocker !== 'requires-xcode';
+      const help = repairable ? bake.help : `${bake.help} ${toolchain.hint}`;
+      const textureBake = { ...bake, help, repairable };
       const { degraded, warnings } = describeDegradedInstall({
         label: 'degraded textures',
-        help: bake.help,
-        repairable: true,
+        help,
+        repairable,
         missing: bake.missing,
       });
       return { fields: { textureBake, degraded }, warnings };

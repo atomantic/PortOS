@@ -114,4 +114,18 @@ describe.skipIf(!hasNumpy)('generate_minimax_h3_image.py geometry', () => {
     expect(out.small).toEqual([1536, 1024]);
     expect(out.large).toEqual([3072, 2048]);
   });
+
+  it('refuses conditioning canvases above the pixel limit before allocating a resized image', () => {
+    const out = runPython([
+      'def check(w, h):',
+      '    try:',
+      '        runner.bounded_reference_size(w, h, (1024, 1024))',
+      '        return "ok"',
+      '    except SystemExit as error:',
+      '        return str(error)',
+      'print(json.dumps([check(1, 1000), check(1024, 1000000), check(1024, 1536)]))',
+    ].join('\n'));
+    expect(out.slice(0, 2)).toEqual([expect.stringContaining('20,000,000 pixels'), expect.stringContaining('20,000,000 pixels')]);
+    expect(out[2]).toBe('ok');
+  });
 });

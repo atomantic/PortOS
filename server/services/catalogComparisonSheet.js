@@ -30,6 +30,7 @@ import { characterHeightStat } from '../lib/catalogAppearance.js';
 import { resolveHeight } from '../lib/characterHeight.js';
 import { resolveImageInputPath } from '../lib/pathSafety.js';
 import { CATALOG_COMPARISON_VARIANT_ID } from '../lib/catalogValidation.js';
+import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
 import { DEFAULT_PHOTOGRAPHIC_SHEET_STYLE, extractCharacterPromptCommon } from './universeCharacterSheet.js';
 
 export const COMPARISON_SHEET_VARIANT_ID = CATALOG_COMPARISON_VARIANT_ID;
@@ -41,6 +42,7 @@ export const COMPARISON_IMAGES_PER_CHARACTER = 2;
 // Twice as wide as tall, with an even width so the centre falls between two pixel columns.
 const COMPARISON_WIDTH = 2048;
 const COMPARISON_HEIGHT = 1024;
+const publicationQueue = createKeyCachedQueue();
 
 export const COMPARISON_SHEET_VARIANT = Object.freeze({
   id: COMPARISON_SHEET_VARIANT_ID,
@@ -160,40 +162,61 @@ export function buildCharacterComparisonSheetPrompt(universe, leftCharacter, rig
  * half to the gallery. Returns `{ left, right }` gallery filenames. An odd
  * width gives the extra column to the right half.
  */
-async function splitComparisonSheet(filename, { saveImage } = {}) {
+async function splitComparisonSheet(filename, { saveImage, existing = {}, attachHalf } = {}) {
   const source = resolveImageInputPath(join(PATHS.images, filename)) || resolveImageInputPath(join(PATHS.imageRefs, filename));
   if (!source) throw new ServerError(`Comparison sheet "${filename}" is not in the image library`, { status: 404, code: 'NOT_FOUND' });
   const { width, height } = await sharp(source).metadata();
   if (!width || !height || width < 2) throw new ServerError('Comparison sheet has no readable size', { status: 422, code: 'UNSUPPORTED_IMAGE' });
   const centre = Math.floor(width / 2);
   const save = saveImage || (await import('./imageGen/local.js')).saveUploadedGalleryImage;
-  const half = async (left, w) => {
+  const half = async (side, left, w) => {
+    if (existing[side]) return existing[side];
     const buffer = await sharp(source).extract({ left, top: 0, width: w, height }).png().toBuffer();
-    return (await save(buffer.toString('base64'))).filename;
+    const { filename: saved } = await save(buffer.toString('base64'));
+    await attachHalf(side, saved);
+    return saved;
   };
-  return { left: await half(0, centre), right: await half(centre, width - centre) };
+  return { left: await half('left', 0, centre), right: await half('right', centre, width - centre) };
 }
 
 /**
  * File a finished comparison sheet beyond its starting record: the whole sheet
  * on the partner, the left half on the starting record and the right half on
- * the partner. The partner's attach decides: when the sheet is already on the
- * partner the halves were cut before, so a repeated completion adds nothing.
+ * the partner. Existing halves are found by their source lineage, so a retry
+ * after a failed split or attach finishes the missing pieces without duplicates.
  * Returns `{ partner, left, right }` or null when there was nothing to do.
  */
 export async function publishComparisonSheet({ ingredientId, partnerId, filename, metadata = {}, derivedFrom = null }, deps = {}) {
-  const db = deps.db || await import('./catalogDB.js');
-  if (!partnerId || partnerId === ingredientId || !(await db.getIngredient(partnerId))) return null;
-  const withMetadata = Object.keys(metadata).length > 0 ? { metadata } : {};
-  // An edited sheet keeps its lineage on the partner's copy too.
-  const withLineage = derivedFrom?.mediaKey ? { library: { derivedFrom } } : {};
-  const shared = await db.attachGeneratedMedia(partnerId, filename, { kind: 'reference', role: COMPARISON_SHEET_ROLE, ...withMetadata, ...withLineage });
-  if (!shared.attached) return null;
-  const halves = await splitComparisonSheet(filename, deps);
-  const library = { derivedFrom: { mediaKey: filename, kind: 'reference' } };
-  await db.attachGeneratedMedia(ingredientId, halves.left, { kind: 'reference', role: COMPARISON_HALF_ROLE, library });
-  await db.attachGeneratedMedia(partnerId, halves.right, { kind: 'reference', role: COMPARISON_HALF_ROLE, library });
-  return { partner: partnerId, ...halves };
+  return publicationQueue(`${ingredientId}:${partnerId}:${filename}`, async () => {
+    const db = deps.db || await import('./catalogDB.js');
+    if (!partnerId || partnerId === ingredientId || !(await db.getIngredient(partnerId))) return null;
+    const withMetadata = Object.keys(metadata).length > 0 ? { metadata } : {};
+    // An edited sheet keeps its lineage on the partner's copy too.
+    const withLineage = derivedFrom?.mediaKey ? { library: { derivedFrom } } : {};
+    const shared = await db.attachGeneratedMedia(partnerId, filename, { kind: 'reference', role: COMPARISON_SHEET_ROLE, ...withMetadata, ...withLineage });
+    const [leftMedia, rightMedia] = await Promise.all([db.listMediaForIngredient(ingredientId), db.listMediaForIngredient(partnerId)]);
+    const existingHalf = (rows) => rows.find((row) => row.role === COMPARISON_HALF_ROLE && row.library?.derivedFrom?.mediaKey === filename)?.mediaKey;
+    const existing = { left: existingHalf(leftMedia), right: existingHalf(rightMedia) };
+    if (!shared.attached && existing.left && existing.right) return null;
+    const library = { derivedFrom: { mediaKey: filename, kind: 'reference' } };
+    const attachHalf = async (side, saved) => {
+      const owner = side === 'left' ? ingredientId : partnerId;
+      try {
+        await db.attachGeneratedMedia(owner, saved, { kind: 'reference', role: COMPARISON_HALF_ROLE, library });
+      } catch (error) {
+        // A failure may follow a committed attach. Only discard a new half
+        // after the catalog confirms it was never attached to its owner.
+        const rows = await db.listMediaForIngredient(owner);
+        if (!rows.some((row) => row.mediaKey === saved)) {
+          const remove = deps.deleteImage || (await import('./imageGen/local.js')).deleteImage;
+          await remove(saved);
+        }
+        throw error;
+      }
+    };
+    const halves = existing.left && existing.right ? existing : await splitComparisonSheet(filename, { ...deps, existing, attachHalf });
+    return { partner: partnerId, ...halves };
+  });
 }
 
 /**

@@ -97,6 +97,9 @@ const writeFile = fs.writeFile;
 fs.writeFile = async (path, content, ...args) => {
   if (String(path).includes('places.json')) {
     await writeFile(path, content.slice(0, 1), ...args);
+    // An unresolved promise does not keep Node alive. Hold the owned IPC
+    // channel until the parent kills this interrupted writer.
+    process.channel.ref();
     process.send('partial-write');
     await new Promise(() => {});
   }
@@ -113,15 +116,17 @@ await runMigrations({ rootDir: ${JSON.stringify(rootDir)}, migrationsDir: ${JSON
         execArgv: [], stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
         env: { ...process.env, NODE_ENV: 'test', PORTOS_DATA_ROOT: join(rootDir, 'data'), MEMORY_BACKEND: 'file', PGDATABASE: 'portos_test' },
       });
-      child.once('error', (error) => { clearTimeout(timer); reject(error); });
-      child.once('message', (message) => {
-        interrupted = message === 'partial-write';
+      child.stderr.resume();
+      child.once('error', () => { clearTimeout(timer); reject(new Error('Runner child failed to start')); });
+      child.on('message', (message) => {
+        if (message !== 'partial-write') return;
+        interrupted = true;
         child.kill('SIGKILL');
       });
-      child.once('exit', (_code, signal) => {
+      child.once('exit', (code, signal) => {
         clearTimeout(timer);
         if (interrupted && signal === 'SIGKILL') resolve();
-        else reject(new Error('Runner exited before the interrupted write'));
+        else reject(new Error('Runner exited before the interrupted write: ' + JSON.stringify({ code, signal })));
       });
     });
 

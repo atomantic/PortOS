@@ -68,6 +68,14 @@ function installCardCatalog({ portrait = true } = {}) {
 }
 
 describe('shot-card clip body validation', () => {
+  it('passes a selected end frame to a Higgsfield image shot', async () => {
+    clipQueue.submit.mockClear();
+    const project = { id: 'mv-card', videoSettings: { backend: 'higgsfield', higgsfieldModelId: 'kling-video/v3.0/pro' }, scenes: [
+      { sceneId: 'source', startSec: 0, endSec: 5, referenceImageId: 'start.png', endImageId: 'end.png', prompt: 'The rider turns' },
+    ] };
+    await renderSceneClips(project, { sceneId: 'source' });
+    expect(clipQueue.submit.mock.calls[0][0]).toMatchObject({ backend: 'higgsfield', sourceImageFile: 'start.png', lastImageFile: 'end.png' });
+  });
   it('covers shared source windows in an LTX reference clip and refuses an explicitly shorter or oversized window', async () => {
     const mediaModels = await import('../../lib/mediaModels.js');
     const models = vi.spyOn(mediaModels, 'getVideoModels').mockReturnValue([{ id: 'example-ltx', runtime: 'ltx25' }]);

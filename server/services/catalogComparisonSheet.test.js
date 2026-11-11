@@ -13,7 +13,7 @@ vi.mock('../lib/pathSafety.js', async (importOriginal) => ({
 const { COMPARISON_HALF_ROLE, COMPARISON_SHEET_ROLE, publishComparisonSheet, buildCharacterComparisonSheetPrompt } = await import('./catalogComparisonSheet.js');
 
 // A catalog that accepts every attach, for the cases that only watch the cut.
-const openDb = { getIngredient: async (id) => ({ id }), attachGeneratedMedia: async () => ({ attached: true }) };
+const openDb = { getIngredient: async (id) => ({ id }), listMediaForIngredient: async () => [], attachGeneratedMedia: async () => ({ attached: true }) };
 
 // Left half red, right half blue, so a cut one column off shows in the pixels.
 async function writeSheet(name, width, height = 8) {
@@ -59,6 +59,8 @@ describe('comparison sheet', () => {
     const rows = [];
     const db = {
       getIngredient: async (id) => (id === 'gone' ? null : { id }),
+      listMediaForIngredient: async (id) => rows.filter((row) => row.ingredientId === id)
+        .map((row) => ({ ...row, library: { derivedFrom: { mediaKey: row.derivedFrom } } })),
       attachGeneratedMedia: async (ingredientId, mediaKey, options) => {
         if (rows.some((row) => row.ingredientId === ingredientId && row.mediaKey === mediaKey)) return { attached: false };
         rows.push({ ingredientId, mediaKey, role: options.role, kind: options.kind, derivedFrom: options.library?.derivedFrom?.mediaKey ?? null, comparedWith: options.library?.comparedWith ?? null });
@@ -85,6 +87,46 @@ describe('comparison sheet', () => {
     expect(rows.slice(3).map((row) => [row.ingredientId, row.mediaKey, row.derivedFrom])).toEqual([
       ['b', 'sheet-edit.png', 'sheet-pair.png'], ['a', 'half-3.png', 'sheet-edit.png'], ['b', 'half-4.png', 'sheet-edit.png'],
     ]);
+  });
+
+  it.each(['split', 'right-save', 'right-attach', 'right-attach-committed'])('finishes missing halves after a failed %s without duplicating the completed half', async (failure) => {
+    await writeSheet('sheet-retry.png', 20);
+    const rows = [];
+    let fail = true;
+    const db = {
+      getIngredient: async (id) => ({ id }),
+      listMediaForIngredient: async (id) => rows.filter((row) => row.ingredientId === id),
+      attachGeneratedMedia: async (ingredientId, mediaKey, options) => {
+        if (fail && failure === 'right-attach' && ingredientId === 'b' && options.role === COMPARISON_HALF_ROLE) throw new Error('attach failed');
+        if (rows.some((row) => row.ingredientId === ingredientId && row.mediaKey === mediaKey)) return { attached: false };
+        rows.push({ ingredientId, mediaKey, ...options });
+        if (fail && failure === 'right-attach-committed' && ingredientId === 'b' && options.role === COMPARISON_HALF_ROLE) throw new Error('attach acknowledgement failed');
+        return { attached: true };
+      },
+    };
+    let n = 0;
+    const gallery = new Set();
+    const saveImage = async () => {
+      if (fail && (failure === 'split' || (failure === 'right-save' && n === 1))) throw new Error('split failed');
+      const filename = `retry-half-${++n}.png`;
+      gallery.add(filename);
+      return { filename };
+    };
+    const deleteImage = async (filename) => { gallery.delete(filename); };
+    const input = { ingredientId: 'a', partnerId: 'b', filename: 'sheet-retry.png' };
+    await expect(publishComparisonSheet(input, { db, saveImage, deleteImage })).rejects.toThrow('failed');
+    const completedLeft = rows.find((row) => row.ingredientId === 'a');
+    if (failure !== 'split') expect(completedLeft?.mediaKey).toBe('retry-half-1.png');
+    expect([...gallery].sort()).toEqual(rows.filter((row) => row.role === COMPARISON_HALF_ROLE).map((row) => row.mediaKey).sort());
+    fail = false;
+    await publishComparisonSheet(input, { db, saveImage, deleteImage });
+    expect(rows).toHaveLength(3);
+    expect(rows.filter((row) => row.role === COMPARISON_HALF_ROLE).map((row) => row.ingredientId).sort()).toEqual(['a', 'b']);
+    if (completedLeft) expect(rows.find((row) => row.ingredientId === 'a')).toBe(completedLeft);
+    expect([...gallery].sort()).toEqual(rows.filter((row) => row.role === COMPARISON_HALF_ROLE).map((row) => row.mediaKey).sort());
+    const saved = n;
+    expect(await publishComparisonSheet(input, { db, saveImage, deleteImage })).toBeNull();
+    expect(n).toBe(saved);
   });
 
   // An image model told only "even ticks, a little above the taller person"

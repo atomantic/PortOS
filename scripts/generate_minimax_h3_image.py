@@ -118,12 +118,16 @@ def generation_canvas(width: int, height: int, min_area: int) -> tuple[int, int]
 
 def bounded_reference_size(width: int, height: int, bounds: tuple[int, int]) -> tuple[int, int] | None:
     """Rescale a reference whose short edge is outside ``bounds``; None keeps it."""
+    if width <= 0 or height <= 0:
+        raise SystemExit('MiniMax H3-Image references need a positive width and height.')
     low, high = bounds
     short = min(width, height)
-    if low <= short <= high:
-        return None
-    scale = (low if short < low else high) / short
-    return nearest_multiple(width * scale, PIXEL_GRID), nearest_multiple(height * scale, PIXEL_GRID)
+    resize = not low <= short <= high
+    scale = (low if short < low else high) / short if resize else 1.0
+    size = (nearest_multiple(width * scale, PIXEL_GRID), nearest_multiple(height * scale, PIXEL_GRID)) if resize else (width, height)
+    if size[0] * size[1] > MAX_PIXELS:
+        raise SystemExit(f'MiniMax H3-Image reference conditioning exceeds {MAX_PIXELS:,} pixels after resizing; use a less extreme aspect ratio.')
+    return size if resize else None
 
 
 def bound_reference(image, bounds):

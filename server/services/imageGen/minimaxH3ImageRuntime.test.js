@@ -44,6 +44,12 @@ describe('MiniMax H3-Image runtime', () => {
   });
 
   it.each([
+    undefined, null,
+  ])('uses the distilled step count when a request leaves steps at %s', (steps) => {
+    expect(flagValues(minimaxH3ImageRenderArgs(request({ steps })).args, '--steps')).toEqual(['6']);
+  });
+
+  it.each([
     ['a negative prompt', { negativePrompt: 'blur' }, /no negative prompt/],
     ['an init image', { initImagePath: '/in.png' }, /reference slot/],
     ['a LoRA', { loraPaths: ['/l.safetensors'] }, /LoRAs/],

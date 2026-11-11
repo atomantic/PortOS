@@ -238,6 +238,13 @@ describe('timezone', () => {
   })
 
   describe('resolveEventInstant', () => {
+    it('preserves fractional seconds when resolving a floating calendar timestamp', () => {
+      expect(resolveEventInstant('2026-03-08T23:59:59.987654', 'America/Los_Angeles').toISOString())
+        .toBe('2026-03-09T06:59:59.987Z')
+      expect(resolveEventInstant('2026-03-08T23:59:59.9', 'America/Los_Angeles').toISOString())
+        .toBe('2026-03-09T06:59:59.900Z')
+    })
+
     it('reads an offset-less end bound at the offset in force then, including both DST edges', () => {
       // Spring-forward 2026-03-08: 23:59 is PDT (UTC-7), not the PST midnight offset.
       expect(resolveEventInstant('2026-03-08T23:59:59', 'America/Los_Angeles').toISOString())
