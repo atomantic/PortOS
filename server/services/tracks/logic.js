@@ -26,8 +26,10 @@
  *                     the studio can show each render as a card and re-select an
  *                     earlier one. Each entry is `{ id, audioFilename, prompt,
  *                     authoredPrompt, lyrics, instrumentalOnly, engine,
- *                     modelId, executionProfile, source, durationSec,
- *                     createdAt, codeProvenance? }`. `codeProvenance` (#9414) is
+ *                     modelId, executionProfile, source, sunoSongId?, durationSec,
+ *                     createdAt, codeProvenance? }`. `sunoSongId` is the Suno
+ *                     song a take came from (a lower-cased UUID); the page link
+ *                     is derived from it and never stored. `codeProvenance` (#9414) is
  *                     present only on a server-rendered code take: `{ language,
  *                     source, sourceHash, seed, runtimeVersion, policyVersion,
  *                     settings }`. `source` is the take's provenance when it
@@ -55,6 +57,7 @@
 import { compareNewerWins } from '../../lib/lwwTimestamp.js';
 import { sanitizeChiptuneScore } from '../../lib/chiptuneScore.js';
 import { normalizeWaveSketch } from '../../lib/waveSketch.js';
+import { normalizeSunoSongId } from '../../lib/sunoSong.js';
 import { isStr, trimTo } from '../../lib/textUtils.js';
 import { promptAdditionsSchema } from '../../lib/modelInput.js';
 import { TITLE_MAX, ALBUM_ID_MAX, ARTIST_ID_MAX, ARTIST_NAME_MAX, CONCEPT_MAX, LYRICS_MAX, PROMPT_MAX, ENGINE_MAX, MODEL_ID_MAX, EXECUTION_PROFILE_MAX, AUDIO_FILENAME_MAX, RENDER_ID_MAX, RENDER_SOURCE_MAX, RENDERS_MAX } from '../../lib/trackLimits.js';
@@ -148,6 +151,7 @@ export function sanitizeRender(raw) {
   const sent = typeof raw.sentPrompt === 'string' && raw.sentPrompt.length <= 20000
     ? { sentPrompt: raw.sentPrompt, ...(additions.success && additions.data ? { promptAdditions: additions.data } : {}) }
     : {};
+  const sunoSongId = normalizeSunoSongId(raw.sunoSongId);
   return {
     id,
     audioFilename,
@@ -161,6 +165,7 @@ export function sanitizeRender(raw) {
     modelId: trimTo(raw.modelId, MODEL_ID_MAX),
     executionProfile: trimTo(raw.executionProfile, EXECUTION_PROFILE_MAX),
     source: isStr(raw.source) && RENDER_SOURCE_RE.test(raw.source) ? raw.source : '',
+    ...(sunoSongId ? { sunoSongId } : {}),
     durationSec: sanitizeDuration(raw.durationSec),
     createdAt: isStr(raw.createdAt) && raw.createdAt ? raw.createdAt : new Date().toISOString(),
     ...(codeProvenance ? { codeProvenance } : {}),
@@ -389,6 +394,8 @@ export function mergeTrackRecord(local, remoteRaw) {
           ? { sentPrompt: previous.sentPrompt, ...(previous.promptAdditions ? { promptAdditions: previous.promptAdditions } : {}) } : {}),
         ...(!('sentLyrics' in take) && typeof previous?.sentLyrics === 'string'
           ? { sentLyrics: previous.sentLyrics, ...(previous.lyricAdditions ? { lyricAdditions: previous.lyricAdditions } : {}) } : {}),
+        // An older peer's render has no Suno song id. Keep the local one on a take it still has.
+        ...(!('sunoSongId' in take) && previous?.sunoSongId ? { sunoSongId: previous.sunoSongId } : {}),
       };
     });
     next = { ...remote, ...carry };

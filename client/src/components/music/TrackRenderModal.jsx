@@ -13,7 +13,7 @@ import Modal from '../ui/Modal';
 import SentPromptPanel from '../media/SentPromptPanel';
 import { formatTimecode, timeAgo } from '../../utils/formatters';
 import { trackAudioUrl } from '../../services/api';
-import { renderSourceLabel } from '../../lib/trackProvenance';
+import { renderSourceLabel, sunoRenderHref } from '../../lib/trackProvenance';
 
 function MetaRow({ label, children }) {
   return (
@@ -29,6 +29,7 @@ export default function TrackRenderModal({ render, active = false, onClose, onSe
   const { prompt, lyrics, engine, modelId, durationSec, audioFilename, createdAt } = render;
   const isUpload = !engine;
   const sourceLabel = renderSourceLabel(render.source);
+  const songHref = sunoRenderHref(render);
 
   return (
     <Modal
@@ -59,7 +60,13 @@ export default function TrackRenderModal({ render, active = false, onClose, onSe
         </audio>
 
         <div className="space-y-1.5">
-          {sourceLabel ? <MetaRow label="Source">{`Imported from ${sourceLabel}`}</MetaRow> : null}
+          {sourceLabel ? (
+            <MetaRow label="Source">
+              {songHref
+                ? <a href={songHref} target="_blank" rel="noreferrer" className="text-port-accent hover:underline">{`Imported from ${sourceLabel}`}</a>
+                : `Imported from ${sourceLabel}`}
+            </MetaRow>
+          ) : null}
           {engine ? <MetaRow label="Engine">{engine}</MetaRow> : null}
           {modelId ? <MetaRow label="Model">{modelId}</MetaRow> : null}
           {durationSec ? <MetaRow label="Duration">{formatTimecode(durationSec)} ({durationSec}s)</MetaRow> : null}

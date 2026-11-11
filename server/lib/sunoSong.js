@@ -27,6 +27,18 @@ export function sunoSongIdFromUrl(url) {
   return typeof url === 'string' ? SONG_ID_RE.exec(url)?.[1]?.toLowerCase() ?? null : null;
 }
 
+const SUNO_SONG_ID_RE = new RegExp(`^${UUID}$`, 'i');
+
+/** A Suno song id as a lower-cased UUID, or null when `value` is not one. */
+export function normalizeSunoSongId(value) {
+  if (typeof value !== 'string') return null;
+  const id = value.trim().toLowerCase();
+  return SUNO_SONG_ID_RE.test(id) ? id : null;
+}
+
+/** The public song page for a Suno song id. Store the id; build this when showing a link. */
+export const sunoSongUrl = (songId) => `https://suno.com/song/${encodeURIComponent(songId)}`;
+
 /** Suno's own hosts — the only places the import follows a share link or downloads from. */
 export function isSunoHost(hostname) {
   const host = String(hostname || '').toLowerCase();

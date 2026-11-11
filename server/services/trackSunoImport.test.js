@@ -9,7 +9,11 @@ vi.mock('./pipeline/musicLibrary.js', () => ({
   importUploadedTrack: vi.fn(async () => ({ filename: 'music-suno.mp3', sizeBytes: 10 })),
   MUSIC_UPLOAD_MAX_BYTES: 50 * 1024 * 1024,
 }));
-vi.mock('./tracks/index.js', () => ({ createTrack: vi.fn(async (input) => ({ id: 'track-new', ...input })) }));
+vi.mock('./tracks/index.js', () => ({
+  createTrack: vi.fn(async (input) => ({ id: 'track-new', ...input })),
+  listTracks: vi.fn(async () => []),
+  updateTrack: vi.fn(async (id, patch) => ({ id, ...patch })),
+}));
 vi.mock('../lib/sseUtils.js', () => ({ broadcastSse: vi.fn(), attachSseClient: vi.fn(() => true), closeJobAfterDelay: vi.fn() }));
 vi.mock('./musicVideo/autonomousSuno.js', () => ({ generateSunoSong: vi.fn(), readSunoSongPage: vi.fn() }));
 vi.mock('../lib/safeUrlFetch.js', () => ({ fetchPublicText: vi.fn(), fetchPublicBinary: vi.fn(), resolvePublicUrl: vi.fn() }));
@@ -19,7 +23,7 @@ const { probeVideoDuration, runFfmpegProcess } = await import('../lib/ffmpeg.js'
 const { fetchPublicText, fetchPublicBinary, resolvePublicUrl } = await import('../lib/safeUrlFetch.js');
 const { importUploadedTrack } = await import('./pipeline/musicLibrary.js');
 const { generateSunoSong, readSunoSongPage } = await import('./musicVideo/autonomousSuno.js');
-const { createTrack } = await import('./tracks/index.js');
+const { createTrack, listTracks, updateTrack } = await import('./tracks/index.js');
 const { startSunoImport, cancelSunoImport, readSunoSongStyle, __testing } = await import('./trackSunoImport.js');
 
 const ID = '11111111-2222-4333-8444-555555555555';
@@ -49,6 +53,7 @@ beforeEach(() => {
   generateSunoSong.mockRejectedValue(new Error('Sign in to Suno in the PortOS Browser'));
   readSunoSongPage.mockRejectedValue(new Error('Sign in to Suno in the PortOS Browser'));
   fetchPublicBinary.mockResolvedValue({ buffer: Buffer.from('ID3audio'), contentType: 'audio/mpeg' });
+  listTracks.mockResolvedValue([]);
 });
 
 describe('startSunoImport', () => {
@@ -63,7 +68,7 @@ describe('startSunoImport', () => {
     expect(importUploadedTrack).toHaveBeenCalledWith(expect.stringMatching(/song\.mp3$/), 'Airplane Mode.mp3');
     expect(createTrack).toHaveBeenCalledWith(expect.objectContaining({
       title: 'Airplane Mode', lyrics: '[Verse]\nno signal', prompt: 'dream pop', durationSec: 200,
-      renders: [expect.objectContaining({ source: 'suno', lyrics: '[Verse]\nno signal', prompt: 'dream pop' })],
+      renders: [expect.objectContaining({ source: 'suno', sunoSongId: ID, lyrics: '[Verse]\nno signal', prompt: 'dream pop' })],
     }));
   });
 
@@ -105,6 +110,91 @@ describe('startSunoImport', () => {
     expect(allowUrl(new URL('https://suno.com/song/x'))).toBe(true);
     expect(allowUrl(new URL('https://example.com/song/x'))).toBe(false);
     expect(fetchPublicText).toHaveBeenCalledWith(`https://suno.com/song/${ID}`, expect.any(Object));
+    expect(createTrack).toHaveBeenCalledWith(expect.objectContaining({
+      renders: [expect.objectContaining({ sunoSongId: ID })],
+    }));
+  });
+
+  it('reuses a live track that already holds the song and downloads nothing', async () => {
+    const existing = {
+      id: 'track-kept', title: 'Airplane Mode', deleted: false, audioFilename: 'music-suno.mp3',
+      renders: [{ id: 'r-suno', sunoSongId: ID.toUpperCase(), audioFilename: 'music-suno.mp3', source: 'suno' }],
+    };
+    listTracks.mockResolvedValue([existing]);
+    await startSunoImport(`https://suno.com/song/${ID}`);
+    expect(await terminal()).toMatchObject({
+      type: 'complete', trackId: 'track-kept', track: existing, source: 'suno', reused: true,
+    });
+    expect(fetchPublicBinary).not.toHaveBeenCalled();
+    expect(fetchPublicText).not.toHaveBeenCalled();
+    expect(importUploadedTrack).not.toHaveBeenCalled();
+    expect(createTrack).not.toHaveBeenCalled();
+    expect(updateTrack).not.toHaveBeenCalled();
+  });
+
+  it('selects the matching take when the track is playing a different one', async () => {
+    const existing = {
+      id: 'track-kept', title: 'Later song', audioFilename: 'other.mp3',
+      renders: [
+        { id: 'r-suno', sunoSongId: ID, audioFilename: 'music-suno.mp3', source: 'suno' },
+        { id: 'r-other', audioFilename: 'other.mp3', source: '' },
+      ],
+    };
+    listTracks.mockResolvedValue([existing]);
+    updateTrack.mockImplementation(async (id, patch) => ({ ...existing, id, ...patch }));
+    await startSunoImport(`https://suno.com/song/${ID}`);
+    expect(await terminal()).toMatchObject({
+      type: 'complete', trackId: 'track-kept', reused: true, source: 'suno',
+      track: { audioFilename: 'music-suno.mp3' },
+    });
+    expect(updateTrack).toHaveBeenCalledWith('track-kept', expect.objectContaining({ audioFilename: 'music-suno.mp3' }));
+    expect(fetchPublicBinary).not.toHaveBeenCalled();
+    expect(createTrack).not.toHaveBeenCalled();
+  });
+
+  it('lets a second import of the same song wait and reuse the track the first one creates', async () => {
+    let releaseDownload;
+    fetchPublicBinary.mockImplementation(() => new Promise((resolve) => {
+      releaseDownload = () => resolve({ buffer: Buffer.from('ID3audio'), contentType: 'audio/mpeg' });
+    }));
+    fetchPublicText.mockResolvedValue(null);
+    const created = {
+      id: 'track-new', audioFilename: 'music-suno.mp3',
+      renders: [{ id: 'r-suno', sunoSongId: ID, audioFilename: 'music-suno.mp3', source: 'suno' }],
+    };
+    let listed = 0;
+    listTracks.mockImplementation(async () => (listed++ === 0 ? [] : [created]));
+    createTrack.mockResolvedValue(created);
+    const first = startSunoImport(`https://suno.com/song/${ID}`);
+    const second = startSunoImport(`https://suno.com/song/${ID}`);
+    await vi.waitFor(() => expect(fetchPublicBinary).toHaveBeenCalledTimes(1));
+    expect(listTracks).toHaveBeenCalledTimes(1);
+    releaseDownload();
+    await Promise.all([first, second]);
+    const frames = await vi.waitFor(() => {
+      const done = broadcastSse.mock.calls.map(([, frame]) => frame).filter((frame) => frame.type === 'complete');
+      expect(done).toHaveLength(2);
+      return done;
+    });
+    expect(createTrack).toHaveBeenCalledTimes(1);
+    expect(frames.filter((frame) => frame.reused)).toHaveLength(1);
+    expect(fetchPublicBinary).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not reuse a deleted track or one whose matching render was removed', async () => {
+    listTracks.mockResolvedValue([
+      { id: 'track-gone', deleted: true, renders: [{ sunoSongId: ID, audioFilename: 'old.mp3' }] },
+      { id: 'track-stripped', deleted: false, renders: [{ audioFilename: 'a.mp3', source: 'suno' }] },
+    ]);
+    fetchPublicText.mockResolvedValue(null);
+    await startSunoImport(`https://suno.com/song/${ID}`);
+    const frame = await terminal();
+    expect(frame).toMatchObject({ type: 'complete', trackId: 'track-new', source: 'suno' });
+    expect(frame.reused).toBeUndefined();
+    expect(fetchPublicBinary).toHaveBeenCalled();
+    expect(createTrack).toHaveBeenCalledWith(expect.objectContaining({
+      renders: [expect.objectContaining({ sunoSongId: ID })],
+    }));
   });
 
   it('reports an error when the audio cannot be downloaded, creating no track', async () => {

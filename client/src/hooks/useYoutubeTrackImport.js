@@ -24,7 +24,9 @@ export default function useYoutubeTrackImport({ onComplete } = {}) {
     cancelRequest: cancelTrackImport,
     trimStartArg: true,
     onComplete: (frame, context) => onComplete?.(frame.track, context),
-    successToast: (frame) => `Imported "${frame.track.title}" from ${frame.source === 'suno' ? 'Suno' : 'YouTube'}`,
+    successToast: (frame) => (frame.reused
+      ? 'Already in your library'
+      : `Imported "${frame.track.title}" from ${frame.source === 'suno' ? 'Suno' : 'YouTube'}`),
     errorFallback: 'Audio import failed',
     canceledMessage: 'Audio import cancelled',
     lostConnectionMessage: 'Lost connection to the audio import — check the music library',
