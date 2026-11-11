@@ -158,14 +158,17 @@ describe('dataManager purge scope (#3327)', () => {
   });
 
   // Issue #10912: these directories hold user-authored state with no other copy
-  // (drafts and the send-attempt audit, todos and assessment reports). Each entry
-  // records why it is protected; the table is the audit trail, not an inference.
+  // (drafts and the send-attempt audit, todos and assessment reports, scorecard
+  // rules and check-in answers). Each entry records why it is protected; the
+  // table is the audit trail, not an inference.
   const USER_STATE_CATEGORIES = {
     models: 'authored GLB layouts referenced by catalog places',
     messages: 'drafts, the delivery_unknown send audit, triage rules and account config',
     review: 'Review Hub todos, pending CoS action requests and security assessment reports',
     'image-render-usage': 'historical image accounting and deduplication identities',
     'image-render-usage-backfills': 'import plans, preservation fingerprints and recovery journals',
+    insights: 'hand-authored goal scorecard rule overrides and scorecard settings',
+    telegram: 'the answers the user gave to Telegram goal check-ins',
   };
   it.each(Object.entries(USER_STATE_CATEGORIES))(
     'never offers a purge for %s, which holds %s',
