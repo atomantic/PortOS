@@ -379,8 +379,8 @@ const MV_ROUTES = (
     <Route path="/music-video/:projectId/:stage/dev/:artifactId" element={<MusicVideo />} />
   </Routes>
 );
-const renderMV = () => render(
-  <MemoryRouter initialEntries={['/music-video']}>{MV_ROUTES}</MemoryRouter>,
+const renderMV = (path = '/music-video') => render(
+  <MemoryRouter initialEntries={[path]}>{MV_ROUTES}</MemoryRouter>,
 );
 
 // Flush pending pre-resolved mock promises inside act so their .then setState
@@ -2662,7 +2662,11 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     ] } });
     let respond;
     repairMusicVideoShotReference.mockImplementationOnce(() => new Promise(resolve => { respond = resolve; }));
-    await openProject(project, 'produce');
+    listMusicVideoProjects.mockResolvedValue([project]);
+    renderMV(`/music-video/${project.id}/produce?scenes=bad-take`);
+    const open = await screen.findByRole('button', { name: 'Open shot 1' });
+    expect(screen.getByText('No scenes match this filter.')).toBeTruthy();
+    fireEvent.click(open);
     await showFrames();
     const refs = () => within(screen.getByRole('group', { name: 'References selected for the frames' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Fix shot reference' }));
