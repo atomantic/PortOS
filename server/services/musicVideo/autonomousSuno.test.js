@@ -51,7 +51,7 @@ function fakePage({ url = 'https://suno.com/create', hasForm = true, modern = tr
           const btn = {
             // The current page marks the choice with data-selected; older builds with the button variant class.
             getAttribute: async (attr) => (options.attrUi
-              ? (attr === 'data-selected' ? String(selected()) : attr === 'class' ? 'hxc-btn-base hxc-btn-variant-tertiary-legacy' : null)
+              ? (attr === (typeof options.attrUi === 'string' ? options.attrUi : 'data-selected') ? String(selected()) : attr === 'class' ? 'hxc-btn-base hxc-btn-variant-standard-legacy' : null)
               : attr === 'class' ? (selected() ? 'hxc-btn-base hxc-btn-variant-standard-legacy' : 'hxc-btn-base hxc-btn-variant-tertiary-legacy') : null),
             click: async () => { if (label === 'Vocal Gender') options.gender = choice; else options.maxMode = choice; actions.push(`${label === 'Vocal Gender' ? 'gender' : 'max'}:${choice}`); },
           };
@@ -212,6 +212,12 @@ describe('submitSunoSong', () => {
     expect(chosen.actions).toEqual(['create']);
   });
 
+  it('uses aria-pressed before contradictory option styling and leaves selected choices alone', async () => {
+    const page = fakePage({ options: { version: 'v6', expanded: true, gender: null, maxMode: 'on', attrUi: 'aria-pressed' } });
+    await submitSunoSong(page, { ...fields, vocalGender: 'female', maxMode: true }, { sleep: noSleep });
+    expect(page.actions).toEqual(['gender:female', 'create']);
+  });
+
   it('touches none of the options when the brief sets none, and clears exclusions only when asked', async () => {
     const page = fakePage({ options: { version: 'v5', menuItems: ['v5 Pro', 'v6 Pro'], expanded: false, gender: null, maxMode: 'off' } });
     await submitSunoSong(page, { ...fields, excludeStyles: null, vocalGender: null, model: null, maxMode: null }, { sleep: noSleep });
@@ -301,7 +307,7 @@ function songPageDocument(nodes) {
  */
 function workflow({
   bytes = null, exportsSong = null, stalled, failure = null, ignoreSelection = false, readyAfterMs = 0, landsInDir = null,
-  alsoLands = [], render = null, songPage = null, menuOpensOnClick = 1, dialogSong = 'page',
+  alsoLands = [], render = null, songPage = null, menuOpensOnClick = 1, dialogSong = 'page', formatState = 'aria-pressed', staleFormatClasses = false,
 } = {}) {
   const page = fakePage({ render });
   const baseRole = page.getByRole;
@@ -355,7 +361,12 @@ function workflow({
   page.getByRole = (role, options) => {
     const name = options.name;
     if (typeof name === 'string' && ['M4A', 'MP3', 'WAV', 'MP4 video asset'].includes(name)) return {
-      evaluate: async (fn) => fn({ classList: { contains: () => selected.has(name) } }),
+      getAttribute: async (attr) => {
+        if (formatState === 'legacy' && attr === 'class') return selected.has(name) ? 'bg-foreground-primary text-background-primary' : 'other-colors';
+        if (attr === formatState) return formatState === 'data-state' ? (selected.has(name) ? 'on' : 'off') : String(selected.has(name));
+        // Stale classes must never override explicit semantic false.
+        return attr === 'class' ? (staleFormatClasses ? 'bg-foreground-primary text-background-primary' : formatState === 'unreadable' ? 'restyled' : null) : null;
+      },
       click: async () => { actions.push(name); if (ignoreSelection) return; selected.has(name) ? selected.delete(name) : selected.add(name); },
     };
     if (role === 'button' && String(name) === '/^(Unlock & Download|Download)$/') return { click: async () => {
@@ -875,6 +886,28 @@ describe('generateSunoSong M4A export', () => {
     expect(w.importAudio).not.toHaveBeenCalled();
     expect(w.page.listenerCount('download')).toBe(0);
     await expect(stat(w.savedPath())).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  // Each fixture exercises export, confirmation, and import with a distinct
+  // external selection contract, including semantic state without color classes.
+  it.each(['aria-pressed', 'aria-checked', 'aria-selected', 'data-state', 'data-selected', 'legacy'])('exports only M4A using %s selection state', async (formatState) => {
+    const w = workflow({ formatState });
+    await expect(generateSunoSong(fields, { ...w, songIds: [NEW_A] })).resolves.toMatchObject({ filename: 'music-example.m4a' });
+    expect(w.selected).toEqual(new Set(['M4A']));
+    expect(w.importAudio).toHaveBeenCalledOnce();
+  });
+
+  it('honors semantic false over stale selected-format colors', async () => {
+    const w = workflow({ staleFormatClasses: true });
+    await generateSunoSong(fields, { ...w, songIds: [NEW_A] });
+    expect(w.selected).toEqual(new Set(['M4A']));
+  });
+
+  it('refuses unreadable restyled formats before toggling or downloading', async () => {
+    const w = workflow({ formatState: 'unreadable' });
+    await expect(generateSunoSong(fields, { ...w, songIds: [NEW_A] })).rejects.toMatchObject({ context: { reason: 'format-selection-unreadable' } });
+    expect(w.actions).toEqual(['menu', 'Download']);
+    expect(w.importAudio).not.toHaveBeenCalled();
   });
 
   it('fails closed before unlock when the format selection no longer works', async () => {
