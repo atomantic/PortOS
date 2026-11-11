@@ -76,7 +76,7 @@ describe('pickSongRow', () => {
 // window pill, a window that opens at Suno's own suggestion, and a waveform where 22.2 px of drag
 // moves the window one second (dragging right moves it earlier). `stuckAt` stops the window there.
 const fmt = (sec) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
-function hookPage({ windowAt = 158, pxPerSec = 22.2, stuckAt = null, restored = false, delayedSongResults = false, ambiguousReadout = false, waveformKind = 'identified', ambiguousWaveform = false } = {}) {
+function hookPage({ windowAt = 158, pxPerSec = 22.2, stuckAt = null, restored = false, delayedSongResults = false, ambiguousReadout = false, noWindowReadout = false, waveformKind = 'identified', ambiguousWaveform = false } = {}) {
   const state = { windowAt, clicked: [], drags: 0, lyrics: true, songRows: [{ text: 'Night Drive 3:42', html: '' }], songPolls: 0 };
   const rect = (bottom) => ({ left: 100, right: 200, bottom });
   const leaf = (text, bottom, parentText = text) => ({ children: [], textContent: text,
@@ -88,7 +88,7 @@ function hookPage({ windowAt = 158, pxPerSec = 22.2, stuckAt = null, restored = 
   const dom = {
     'body *': () => [
       leaf('0:00', 399, '0:00 / 0:26'),
-      leaf(fmt(state.windowAt), 390),
+      ...(noWindowReadout ? [] : [leaf(fmt(state.windowAt), 390)]),
       leaf('3:42', ambiguousReadout ? 390 : 250), leaf('3:42', 500),
     ],
     '[data-testid*="waveform" i]': () => waveformKind === 'identified' ? [waveform] : [],
@@ -200,6 +200,13 @@ describe('Suno Hook fill (#10860)', () => {
   it.each(['slider', 'canvas', 'legacy'])('finds the window through the %s compatibility path', async (waveformKind) => {
     const page = hookPage({ windowAt: 20, waveformKind });
     expect(await sunoHookAdapter.prepare(page, hookPayload())).toMatchObject({ windowStart: 20 });
+  });
+
+  it('refuses a missing window readout even when another timestamp matches the requested start', async () => {
+    const page = hookPage({ noWindowReadout: true });
+    await expect(sunoHookAdapter.prepare(page, hookPayload({ startSec: 222 }))).rejects.toThrow('no window label to read');
+    expect(page.state.drags).toBe(0);
+    expect(page.state.clicked).not.toContain('Next');
   });
 
   it('refuses ambiguous readouts and canvas strips before opening the Post dialog', async () => {

@@ -31,7 +31,7 @@ function fixtureHtml(kind, initiallyOn) {
     </div>
     <canvas width="20" height="20"></canvas>
     <span style="position:absolute;top:40px">3:07</span>
-    <span id="pill">2:38</span>${waveform}
+    ${kind === 'missing-window' ? '' : '<span id="pill">2:38</span>'}${waveform}
     <div style="position:absolute;top:130px"><span><span>0:00</span></span> / <span>0:26</span></div>
     <span style="position:absolute;top:250px">3:07</span>
     <button id="next">Next</button>
@@ -94,7 +94,8 @@ describe.skipIf(!canRun)('Suno Hook synthetic draft UI in Chrome', () => {
     { kind: 'fallback', initial: true, wanted: false },
     { kind: 'ambiguous', initial: true, wanted: false, problem: /multiple Show Lyrics controls/ },
     { kind: 'missing', initial: true, wanted: false, problem: /no unambiguous Show Lyrics label/ },
-  ])('drags the visible strip and verifies $kind lyrics without posting', async ({ kind, initial, wanted, problem }) => {
+    { kind: 'missing-window', initial: true, wanted: false, problem: /no window label to read/, windowProblem: true },
+  ])('drags the visible strip and verifies $kind lyrics without posting', async ({ kind, initial, wanted, problem, windowProblem }) => {
     const context = await fixture.browser.newContext({ viewport: { width: 1000, height: 700 }, serviceWorkers: 'block' });
     const page = await context.newPage();
     const errors = [], unexpected = [];
@@ -112,7 +113,7 @@ describe.skipIf(!canRun)('Suno Hook synthetic draft UI in Chrome', () => {
     });
     try {
       const prepare = sunoHookAdapter.prepare(page, { video: { path: video }, songId: ID, title: 'Synthetic song',
-        durationSec: 258, startSec: 20, caption: 'Synthetic caption', showLyrics: wanted });
+        durationSec: 258, startSec: windowProblem ? 187 : 20, caption: 'Synthetic caption', showLyrics: wanted });
       if (problem) await expect(prepare).rejects.toThrow(problem);
       else {
         expect(await prepare).toMatchObject({ showLyrics: wanted, caption: 'Synthetic caption' });
@@ -122,8 +123,14 @@ describe.skipIf(!canRun)('Suno Hook synthetic draft UI in Chrome', () => {
       const state = await page.evaluate(() => ({ at: window.windowAt, points: window.points, drags: window.dragCount, posts: window.publishClicks,
         usedAfterSearch: window.usedAfterSearch }));
       expect(state.usedAfterSearch).toBe(true);
-      expect(Math.abs(state.at - 20)).toBeLessThanOrEqual(1);
-      expect(state.drags).toBeGreaterThan(1);
+      if (windowProblem) {
+        expect(state.at).toBe(158);
+        expect(state.drags).toBe(0);
+        expect(await page.locator('#post').isVisible()).toBe(false);
+      } else {
+        expect(Math.abs(state.at - 20)).toBeLessThanOrEqual(1);
+        expect(state.drags).toBeGreaterThan(1);
+      }
       expect(state.points.every(([x, y]) => x >= 0 && x < 1000 && y >= 150 && y <= 230)).toBe(true);
       expect(state.posts).toBe(0);
       expect(await page.locator('input[type=file]').evaluate(input => input.files[0].name)).toBe('synthetic.mp4');

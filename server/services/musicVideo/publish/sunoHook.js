@@ -24,6 +24,8 @@ const READBACK_TOLERANCE_SEC = 1;
 // One drag stays on the waveform, so a window far from the target takes several.
 const MAX_DRAGS = 20;
 const WAVEFORM = '[data-portos-hook-waveform]';
+// The readout belongs immediately above the window, not elsewhere on the page.
+const WINDOW_READOUT_GAP_PX = 48;
 const SONG_RESULTS_WAIT_MS = 10_000;
 const SONG_RESULTS_POLL_MS = 250;
 const SONG_RESULTS_STABLE_POLLS = 3;
@@ -88,7 +90,7 @@ async function selectSong(page, payload) {
   if (index < 0) throw new Error(`${rows.length} rows match "${payload.title}" and none could be told apart by id or length`);
   await page.locator('[role=dialog] button').filter({ hasText: /^Use$/ }).nth(index).click({ timeout: T });
   await search.locator('xpath=ancestor::*[@role="dialog"][1]').waitFor({ state: 'hidden', timeout: T });
-  await page.waitForFunction(markHookWaveform, { legacyWaveformSelector: SUNO_LEGACY_CLASSES.waveformSelector }, { timeout: T });
+  await page.waitForFunction(markHookWaveform, { legacyWaveformSelector: SUNO_LEGACY_CLASSES.waveformSelector, maxReadoutGap: WINDOW_READOUT_GAP_PX }, { timeout: T });
 }
 
 /**
@@ -97,7 +99,7 @@ async function selectSong(page, payload) {
  * visible strip with a time label just above it. Multiple strips are ambiguous.
  * Runs in the page without module scope.
  */
-function markHookWaveform({ legacyWaveformSelector }) {
+function markHookWaveform({ legacyWaveformSelector, maxReadoutGap }) {
   const visible = (el) => el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden';
   const clocks = [...document.querySelectorAll('body *')].filter((el) => el.children.length === 0
     && /^\d+:\d{2}$/.test(el.textContent.trim()) && visible(el)
@@ -112,7 +114,7 @@ function markHookWaveform({ legacyWaveformSelector }) {
     const box = el.getBoundingClientRect();
     return box.width >= 160 && box.height >= 24 && clocks.some((clock) => {
       const label = clock.getBoundingClientRect();
-      return label.bottom <= box.top && box.top - label.bottom <= 120 && label.right >= box.left && label.left <= box.right;
+      return label.bottom <= box.top && box.top - label.bottom <= maxReadoutGap && label.right >= box.left && label.left <= box.right;
     });
   });
   const candidates = identified.length ? identified : sliders.length ? sliders : legacy.length ? legacy : canvases;
@@ -127,7 +129,7 @@ function markHookWaveform({ legacyWaveformSelector }) {
 function pickWindowStart(labels, box) {
   const candidates = labels.filter((entry) => /^\d+:\d{2}$/.test(entry.text)
     && !entry.playerClock
-    && entry.bottom <= box.y && entry.right >= box.x && entry.left <= box.x + box.width)
+    && entry.bottom <= box.y && box.y - entry.bottom <= WINDOW_READOUT_GAP_PX && entry.right >= box.x && entry.left <= box.x + box.width)
     .sort((a, b) => b.bottom - a.bottom);
   if (!candidates.length || candidates[1]?.bottom === candidates[0].bottom) return null;
   return parseClock(candidates[0].text);
