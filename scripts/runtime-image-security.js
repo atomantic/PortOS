@@ -147,9 +147,9 @@ export function validateScan(scan, sbom = null) {
   if (scan?.descriptor?.name !== 'grype' || !Array.isArray(scan.matches)) {
     throw new Error('Scan result is not a grype JSON document (missing descriptor or matches)');
   }
-  // Grype 0.121's ProviderStatus reports valid/schemaVersion/built, including
-  // when no vulnerability matches. A descriptor alone does not prove a DB ran.
-  const db = scan.descriptor.db;
+  // Grype 0.121 wraps ProviderStatus in db.status; older reports expose it
+  // directly. A descriptor alone does not prove a usable DB ran.
+  const db = scan.descriptor.db?.status ?? scan.descriptor.db;
   if (db?.valid !== true || !db.schemaVersion || !Number.isFinite(Date.parse(db.built))) {
     throw new Error('Scan result has no usable vulnerability database');
   }

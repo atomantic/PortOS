@@ -32,7 +32,7 @@ const matchFor = (id, severity, name = 'libexample', version = '1.0') => ({
   artifact: { name, version, type: 'deb' },
 });
 const scanFor = (matches) => ({
-  descriptor: { name: 'grype', version: '0.121.0', db: { valid: true, schemaVersion: '6.1.3', built: '2026-11-11T00:00:00Z' } },
+  descriptor: { name: 'grype', version: '0.121.0', db: { status: { valid: true, schemaVersion: 'v6.1.10', built: '2026-11-11T00:00:00Z' }, providers: {} } },
   source: { type: 'image', target: { imageID: 'sha256:example' } },
   matches,
 });
@@ -150,8 +150,11 @@ describe('verifyRun', () => {
     const bare = { descriptor: { name: 'grype', version: '0.121.0' }, matches: [] };
     expect(() => run([], { scanPath: write('bare.json', bare) })).toThrow('no usable vulnerability database');
     const badDb = scanFor([]);
-    badDb.descriptor.db.valid = false;
+    badDb.descriptor.db.status.valid = false;
     expect(() => run([], { scanPath: write('db.json', badDb) })).toThrow('no usable vulnerability database');
+    const olderScan = scanFor([]);
+    olderScan.descriptor.db = olderScan.descriptor.db.status;
+    expect(run([], { scanPath: write('older-db.json', olderScan) }).code).toBe(0);
     const unrelated = scanFor([]);
     unrelated.source.target.imageID = 'sha256:another-image';
     expect(() => run([], { scanPath: write('unrelated.json', unrelated) })).toThrow('does not match the supplied SBOM');
