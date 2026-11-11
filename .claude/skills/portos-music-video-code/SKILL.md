@@ -1,6 +1,6 @@
 ---
 name: portos-music-video-code
-description: Author and review a treatment-driven mixed-media music-video composition in PortOS.
+description: Author and review a treatment-driven mixed-media music-video composition in PortOS. Invoke when generating or revising a code, Canvas or Three.js composition document, its choreography plan, or its proof review.
 ---
 
 # Mixed-media composition authoring
@@ -18,7 +18,7 @@ Manual ZIP/folder documents and native Code videos have separate controls. Code-
 
 ## Timed choreography and playback review
 
-Before authoring, save **Production review → Edit visual guide and storyboard → Timed choreography and energy plan** in the existing motion-language field. Start with a chosen energy target (for example, restrained verse into driving chorus, or explosive throughout), justified by the song and director's intent. Do not assume subtle motion is good direction. The implementation/feasibility field explains how the selected renderer will execute the plan; it does not replace the choreography.
+Before authoring, save **Production review → Edit art direction and visual guide → Timed choreography and energy plan** in the existing motion-language field. Start with a chosen energy target (for example, restrained verse into driving chorus, or explosive throughout), justified by the song and director's intent. Do not assume subtle motion is good direction. The implementation/feasibility field explains how the selected renderer will execute the plan; it does not replace the choreography.
 
 For each section or shot, record time ranges and music anchors (downbeats, beat counts, lyric words or section entries), then specify subject/prop actions, pose changes and travel, camera path, typography timing, and the entry/exit handoff. Keep intentional still holds distinct from missing motion. On repeated choruses, preserve visual identity while deliberately escalating or transforming action, staging, camera depth, pose range or transition scale. Save corresponding action, staging, camera and transition details in the storyboard and bind lyric anchors. UI authoring and autopilot receive these saved fields as the human-reviewed choreography; changing them invalidates the associated review basis.
 
@@ -30,7 +30,7 @@ Respect renderer capabilities while pursuing this direction: native Code uses it
 
 ## Revisions and footage variants
 
-Use **Fork vN** before revising a finished code video when the original must stay independently editable. For manual composition documents, **Export ZIP**, edit the HTML/JS locally, then import the revised ZIP/folder into the fork. Imports write immutable versions; unreferenced versions may be pruned, so fork before replacing a document you want to keep. Code-only sections also remain editable through the composition API and the section regeneration action.
+Use **Fork vN** before revising a finished code video when the original must stay independently editable. For manual composition documents, **Export zip**, edit the HTML/JS locally, then import the revised ZIP/folder into the fork. Imports write immutable versions; unreferenced versions may be pruned, so fork before replacing a document you want to keep. Code-only sections also remain editable through the composition API and the section regeneration action.
 
 Use **Fork for video generation** to adapt a code or document video into footage. It preserves song, analysis, timed lyrics, storyboard, parent/root lineage and immutable document/development artifact references. It starts in Composed mode with footage scenes, a fresh Cast & Sets stage and no selected mood board, reference images or video takes. Source publishing outputs and active runs are not carried into the fork. The source project is unchanged and forking calls no providers.
 
