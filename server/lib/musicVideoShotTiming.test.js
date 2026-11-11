@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  clipLengthShortfall, falSceneTake, falTakeRequestFields, runwaySceneTake, performanceCapability, planPerformanceWindow, planShotSplit, shotSplitLimit,
+  clipLengthChoices, clipLengthShortfall, falSceneTake, falTakeRequestFields, runwaySceneTake, performanceBlockedReason, performanceCapability, planPerformanceWindow, planShotSplit, shotSplitLimit,
   SOURCE_AUDIO_LIPSYNC, PERFORMANCE_WINDOW_MARGIN_SEC,
 } from './musicVideoShotTiming.js';
 
@@ -250,6 +250,14 @@ describe('per-shot source clip length', () => {
     expect(clipLengthShortfall(shot, 'grok', { grokDuration: 10 })).toBeNull();
     expect(clipLengthShortfall({ startSec: 0, endSec: 2 }, 'grok', { grokDuration: 6 })).toBeNull();
     expect(clipLengthShortfall(shot, 'local', {})).toBeNull();
+    expect(clipLengthChoices('google')).toEqual([4, 6, 8]);
+    expect(clipLengthShortfall(shot, 'google', { googleDuration: 4 })).toEqual({ requestedSec: 10, supported: [4, 6, 8] });
+    expect(clipLengthShortfall(shot, 'google', { googleDuration: 8 })).toEqual({ requestedSec: 10, supported: [4, 6, 8] });
+    expect(clipLengthShortfall({ startSec: 0, endSec: 5 }, 'google', { googleDuration: 6 })).toBeNull();
+  });
+
+  it('refuses performance shots on cutaway-only Google backend with the cutaway message', () => {
+    expect(performanceBlockedReason('google')).toMatch(/Google video is cutaway-only: it cannot synchronize a singer to the song/);
   });
 
   it('covers shared returns even when a hosted backend pins a shorter default duration', () => {

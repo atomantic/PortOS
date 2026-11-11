@@ -101,6 +101,17 @@ describe('shot-card clip body validation', () => {
       expect(clipQueue.submit.mock.calls[0][0][field]).toBe(seconds);
     }
   });
+
+  it('snaps Google duration to the shortest covering Veo length when rendering a shot card', async () => {
+    clipQueue.submit.mockClear();
+    const project = { id: 'mv-card', videoSettings: { backend: 'google', googleModelId: 'veo-3.1-generate-001' }, scenes: [
+      { sceneId: 'source', startSec: 0, endSec: 5, referenceImageId: 'start.png', prompt: 'The rider turns' },
+    ] };
+    const result = await renderSceneClips(project, { sceneId: 'source' });
+    expect(result.jobId).toBe('synthetic-clip-job');
+    expect(clipQueue.submit.mock.calls[0][0].googleDuration).toBe(6);
+    expect(clipQueue.submit.mock.calls[0][0].googleModelId).toBe('veo-3.1-generate-001');
+  });
   const videoBody = {
     mode: 'image', sourceImageFile: 'start.png', prompt: 'a rider turns', backend: 'grok',
     musicVideo: JSON.stringify({ projectId: 'mv-card', sceneId: 's1', compose: true }),

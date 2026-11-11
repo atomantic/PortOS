@@ -31,6 +31,7 @@ export function musicVideoClipReferenceCapacity(backend, model = null, { endFram
   if (backend === 'grok') return MUSIC_VIDEO_GROK_CLIP_REFERENCE_LIMIT - (startFrameLayout ? 1 : 0);
   if (backend === 'gemini') return GEMINI_WEB_CLIP_REFERENCE_LIMIT;
   if (backend === 'higgsfield') return model?.maxReferenceImages || 0;
+  if (backend === 'google') return 0;
   if (backend === 'fal') {
     const max = Number(model?.referenceImages?.max) || 0;
     return Math.max(0, Math.min(MUSIC_VIDEO_MAX_REFERENCE_CHOICES, max - (model?.image ? 0 : 1)));

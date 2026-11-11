@@ -1,4 +1,5 @@
 import { higgsfieldShotRequestFields } from '../../../server/lib/higgsfieldVideoModels.js';
+import { googleShotRequestFields } from '../../../server/lib/googleVideoModels.js';
 import { shotActionContractProblem } from '../../../server/lib/musicVideoActionContract.js';
 import { isOutsideMusicVideoReference, musicVideoClipConditioningReferences, musicVideoConditioningReferences, musicVideoLinkedCastIds, musicVideoSceneCastIds } from '../../../server/lib/musicVideoConditioning.js';
 import { preMusicClipSound } from '../../../server/lib/musicVideoColdOpen.js';
@@ -433,6 +434,7 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       : null;
     // Runway — image-to-video cutaways, the take the scene card prices (runwaySceneTake).
     const higgsfieldFields = settings.backend === 'higgsfield' ? higgsfieldShotRequestFields(settings, shotRequestSpanSec(scene, project.scenes)) : null;
+    const googleFields = settings.backend === 'google' ? googleShotRequestFields(settings, shotRequestSpanSec(scene, project.scenes)) : null;
     const runwayFields = settings.backend === 'runway'
       ? runwayTakeRequestFields(runwaySceneTake({ scene, scenes: project?.scenes, videoSettings: settings }))
       : null;
@@ -453,8 +455,8 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
         // pinned length) and its resolution; a performance clip's length
         // follows its song slice (server-side), so it sends only the lip-sync
         // resolution.
-        : falFields || runwayFields || higgsfieldFields
-          ? falFields || runwayFields || higgsfieldFields
+        : falFields || runwayFields || higgsfieldFields || googleFields
+          ? falFields || runwayFields || higgsfieldFields || googleFields
           : settings.backend === 'gemini'
             // Gemini's composer has no length or audio control.
             ? {}

@@ -250,4 +250,74 @@ describe('Music Video cast references at video submission', () => {
     expect(m.enqueue.mock.calls[0][0].params.referenceAudioPaths).toHaveLength(1);
     expect(m.enqueue.mock.calls[0][0].params).not.toHaveProperty('referenceImagePaths');
   });
+
+  describe('Google Video Gen for Music Video shots', () => {
+    beforeEach(() => {
+      m.settings.videoGen.google = { apiKey: 'test-key', projectId: 'test-project' };
+    });
+
+    it('queues a Music Video shot pinned to Google with start frame and default duration', async () => {
+      await submitVideoGenJob(body({ backend: 'google', googleModelId: 'veo-3.1-generate-001', googleDuration: 8, googleResolution: '720p' }), {});
+      expect(m.hostedReferences).not.toHaveBeenCalled();
+      expect(m.enqueue.mock.calls[0][0].params).toMatchObject({
+        mode: 'google',
+        modelId: 'veo-3.1-generate-001',
+        duration: 8,
+        resolution: '720p',
+        sourceImagePath: '/mock/images/still.png',
+      });
+      expect(m.enqueue.mock.calls[0][0].params).not.toHaveProperty('referenceImagePaths');
+    });
+
+    it('honors shot duration and resolution overrides', async () => {
+      await submitVideoGenJob(body({
+        backend: 'google',
+        googleModelId: 'veo-3.1-fast-generate-001',
+        googleDuration: 6,
+        googleResolution: '1080p',
+      }), {});
+      expect(m.enqueue.mock.calls[0][0].params).toMatchObject({
+        mode: 'google',
+        modelId: 'veo-3.1-fast-generate-001',
+        duration: 6,
+        resolution: '1080p',
+        sourceImagePath: '/mock/images/still.png',
+      });
+    });
+
+    it('passes start and end frames to Veo 3.1', async () => {
+      await submitVideoGenJob(body({
+        backend: 'google',
+        googleModelId: 'veo-3.1-generate-001',
+        lastImageFile: 'end.png',
+      }), {});
+      expect(m.enqueue.mock.calls[0][0].params).toMatchObject({
+        mode: 'google',
+        modelId: 'veo-3.1-generate-001',
+        sourceImagePath: '/mock/images/still.png',
+        lastImagePath: '/mock/images/end.png',
+      });
+    });
+
+    it('refuses an end frame on Veo 3 before submit', async () => {
+      await expect(submitVideoGenJob(body({
+        backend: 'google',
+        googleModelId: 'veo-3.0-generate-001',
+        lastImageFile: 'end.png',
+      }), {})).rejects.toMatchObject({
+        message: expect.stringMatching(/Veo 3 takes no end frame; use Veo 3\.1/),
+      });
+      expect(m.enqueue).not.toHaveBeenCalled();
+    });
+
+    it('refuses express mode (Google API key with no project) before enqueueing with GOOGLE_PROJECT_REQUIRED', async () => {
+      m.settings.videoGen.google = { apiKey: 'test-key', projectId: '' };
+      await expect(submitVideoGenJob(body({ backend: 'google' }), {}))
+        .rejects.toMatchObject({
+          code: 'GOOGLE_PROJECT_REQUIRED',
+          message: expect.stringMatching(/is not available in Agent Platform express mode/),
+        });
+      expect(m.enqueue).not.toHaveBeenCalled();
+    });
+  });
 });

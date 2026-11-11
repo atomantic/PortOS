@@ -10,4 +10,7 @@ export {
   GOOGLE_VIDEO_MODELS,
   GOOGLE_VIDEO_MODEL_IDS,
   getGoogleVideoModel,
+  coerceGoogleVideoSeconds,
+  googleVideoLengths,
+  googleShotRequestFields,
 } from '../../../server/lib/googleVideoModels.js';

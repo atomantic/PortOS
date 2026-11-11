@@ -12,6 +12,7 @@ const render = () => renderHook(() => useMusicVideoModelSettings({ project: { id
 const FAL = { backend: 'fal' };
 const RUNWAY = { backend: 'runway' };
 const HIGGSFIELD = { backend: 'higgsfield' };
+const GOOGLE = { backend: 'google' };
 const REACTIVE = { backend: 'local', generationMode: 'audioReactive' };
 
 describe('useMusicVideoModelSettings catalog status', () => {
@@ -65,4 +66,15 @@ it('gates Higgsfield shot renders on the live credential status', async () => {
   act(() => result.current.retryCatalog());
   await waitFor(() => expect(result.current.higgsfieldEnabled).toBe(true));
   expect(result.current.blockedReasonFor(HIGGSFIELD)).toBeNull();
+});
+
+it('gates Google shot renders on the live credential status', async () => {
+  api.getVideoGenStatus.mockResolvedValue({ models: [], googleEnabled: false });
+  const { result } = render();
+  await waitFor(() => expect(result.current.catalogStatus).toBe('ready'));
+  expect(result.current.blockedReasonFor(GOOGLE)).toMatch(/No Google credential/);
+  api.getVideoGenStatus.mockResolvedValue({ models: [], googleEnabled: true });
+  act(() => result.current.retryCatalog());
+  await waitFor(() => expect(result.current.googleEnabled).toBe(true));
+  expect(result.current.blockedReasonFor(GOOGLE)).toBeNull();
 });

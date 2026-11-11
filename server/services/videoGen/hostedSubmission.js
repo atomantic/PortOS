@@ -17,7 +17,9 @@ import { storyboardGuidanceJobParams } from './storyboardGuidance.js';
 import { videoReferenceImageSlots } from './requestFields.js';
 import { GEMINI_OMNI_WEB_MODEL } from '../../lib/geminiWebVideo.js';
 import { HIGGSFIELD_DEFAULT_VIDEO_MODEL, buildHiggsfieldVideoRequest } from '../../lib/higgsfieldVideoModels.js';
-import { GOOGLE_DEFAULT_VIDEO_MODEL, buildGoogleVideoRequest } from '../../lib/googleVideoModels.js';
+import { GOOGLE_DEFAULT_VIDEO_MODEL, getGoogleVideoModel, buildGoogleVideoRequest } from '../../lib/googleVideoModels.js';
+import { resolveGoogleConfig, googleExpressModeRefusal } from '../googleCloudApi.js';
+import { getSettings } from '../settings.js';
 
 // Every hosted backend anchors a reference image as frame one, so a loose
 // reference mode is a local-runtime promise it can never keep. Submission
@@ -152,7 +154,7 @@ async function stageHiggsfieldInputs(ctx) {
       referenceImageUrls: pickedReferences.map((_, i) => `pending:reference-${i + 1}`),
     });
   } catch (err) {
-    await refuse(err.message);
+    await refuse(err.message, err.code || 'VALIDATION_ERROR');
   }
   const referenceImagePaths = [];
   for (const file of pickedReferences) {
@@ -171,10 +173,16 @@ async function stageHiggsfieldInputs(ctx) {
 // combination the chosen model cannot take before anything is staged.
 async function stageGoogleInputs(ctx) {
   const { body, uploads, sourceImagePath, cleanupStaged } = ctx;
-  const refuse = async (message) => {
+  const refuse = async (message, code = 'VALIDATION_ERROR') => {
     await cleanupStaged();
-    throw new ServerError(message, { status: 400, code: 'VALIDATION_ERROR' });
+    throw new ServerError(message, { status: 400, code });
   };
+  const config = resolveGoogleConfig(ctx.settings || await getSettings().catch(() => null));
+  const model = getGoogleVideoModel(body.googleModelId || GOOGLE_DEFAULT_VIDEO_MODEL);
+  if (model) {
+    const expressRefusal = googleExpressModeRefusal(config, model);
+    if (expressRefusal) await refuse(expressRefusal, 'GOOGLE_PROJECT_REQUIRED');
+  }
   if (uploads.audioFile) await refuse('Google Veo takes no source audio; turn on Provider audio instead.');
   const hasEndFrame = !!uploads.lastImage || !!body.lastImageFile;
   const pickedReferences = body.musicVideo ? [] : body.referenceImageFiles || [];
@@ -187,7 +195,7 @@ async function stageGoogleInputs(ctx) {
       referenceImages: pickedReferences.map(() => placeholder),
     });
   } catch (err) {
-    await refuse(err.message);
+    await refuse(err.message, err.code || 'VALIDATION_ERROR');
   }
   const referenceImagePaths = [];
   for (const file of pickedReferences) {

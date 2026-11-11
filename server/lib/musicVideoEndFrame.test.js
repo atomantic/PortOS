@@ -34,6 +34,14 @@ describe('sceneEndFramePlan (#11173)', () => {
     expect(sceneEndFramePlan(scene, { backend: 'fal' })).toEqual({ endImageId: 'end.png', used: true, reason: null });
   });
 
+  it('sends it to Veo 3.1 and ignores it on Veo 3 with a clear reason', () => {
+    expect(sceneEndFramePlan(scene, { backend: 'google', googleModelId: 'veo-3.1-generate-001' })).toEqual({ endImageId: 'end.png', used: true, reason: null });
+    expect(sceneEndFrameRequestFields(scene, { backend: 'google', googleModelId: 'veo-3.1-generate-001' })).toEqual({ lastImageFile: 'end.png' });
+    const ignored = sceneEndFramePlan(scene, { backend: 'google', googleModelId: 'veo-3.0-generate-001' });
+    expect(ignored).toEqual({ endImageId: 'end.png', used: false, reason: expect.stringMatching(/Veo 3 takes no end frame; use Veo 3\.1/) });
+    expect(sceneEndFrameRequestFields(scene, { backend: 'google', googleModelId: 'veo-3.0-generate-001' })).toEqual({});
+  });
+
   // #11258: a local render anchors the last frame only in first+last-frame mode.
   it('sends it to a local model whose runtime anchors the last frame, in first+last-frame mode', () => {
     for (const localRuntime of ['ltx25', 'ltx2', 'minimax_h3']) {

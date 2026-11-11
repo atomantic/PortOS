@@ -1,7 +1,50 @@
 import { describe, expect, it } from 'vitest';
-import { buildGoogleVideoRequest } from './googleVideoModels.js';
+import {
+  buildGoogleVideoRequest,
+  coerceGoogleVideoSeconds,
+  googleVideoLengths,
+  googleShotRequestFields,
+  getGoogleVideoModel,
+} from './googleVideoModels.js';
 
 const img = { mimeType: 'image/png', data: 'AAAA' };
+
+describe('coerceGoogleVideoSeconds', () => {
+  const model = getGoogleVideoModel('veo-3.1-generate-001');
+
+  it('snaps a shot span to the shortest covering Veo length', () => {
+    expect(coerceGoogleVideoSeconds(model, 3)).toBe(4);
+    expect(coerceGoogleVideoSeconds(model, 4)).toBe(4);
+    expect(coerceGoogleVideoSeconds(model, 4.5)).toBe(6);
+    expect(coerceGoogleVideoSeconds(model, 6)).toBe(6);
+    expect(coerceGoogleVideoSeconds(model, 7)).toBe(8);
+    expect(coerceGoogleVideoSeconds(model, 8)).toBe(8);
+    expect(coerceGoogleVideoSeconds(model, 10)).toBe(8);
+    expect(coerceGoogleVideoSeconds(model, null)).toBe(8);
+    expect(coerceGoogleVideoSeconds(model, '')).toBe(8);
+  });
+});
+
+describe('googleVideoLengths', () => {
+  it('lists the whole-second lengths Veo accepts', () => {
+    const model = getGoogleVideoModel('veo-3.1-generate-001');
+    expect(googleVideoLengths(model)).toEqual([4, 6, 8]);
+  });
+});
+
+describe('googleShotRequestFields', () => {
+  it('snaps the shot span to a Veo duration and carries resolution', () => {
+    expect(googleShotRequestFields({}, 5)).toEqual({
+      googleModelId: 'veo-3.1-generate-001',
+      googleDuration: 6,
+    });
+    expect(googleShotRequestFields({ googleDuration: 4, googleResolution: '1080p' }, 7)).toEqual({
+      googleModelId: 'veo-3.1-generate-001',
+      googleDuration: 4,
+      googleResolution: '1080p',
+    });
+  });
+});
 
 describe('buildGoogleVideoRequest', () => {
   it('builds an image-to-video request with an end frame, native negative prompt and snapped length', () => {
