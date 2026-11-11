@@ -30,8 +30,18 @@ with tempfile.TemporaryDirectory() as directory:
         member.size = 4
         archive.addfile(member, io.BytesIO(b'fake'))
     bootstrap = data.getvalue()
+    data = io.BytesIO()
+    build_text = 'flags = ["-std=c++17",\n' + ''.join('# "-D' + flag + '",\n' for flag in actual['flashAttentionDefines']) + ']\n'
+    with tarfile.open(fileobj=data, mode='w:gz') as archive:
+        member = tarfile.TarInfo('fixture/setup.py')
+        content = build_text.encode()
+        member.size = len(content)
+        archive.addfile(member, io.BytesIO(content))
+    source_archive = data.getvalue()
     profile = {**actual, 'condaArtifacts': [], 'sources': [],
                'micromamba': {'url': 'https://fixture.invalid/tool', 'sha256': hashlib.sha256(bootstrap).hexdigest()}}
+    profile['sources'] = [{'name': 'flash-attention', 'destination': 'deps/flash-attention',
+                           'url': 'https://fixture.invalid/source', 'sha256': hashlib.sha256(source_archive).hexdigest()}]
     (m.SCRIPTS / 'trellis2-cuda-profile.json').write_text(json.dumps(profile))
     root = temporary / 'runtime'
     root.mkdir()
@@ -51,7 +61,7 @@ with tempfile.TemporaryDirectory() as directory:
         return subprocess.CompletedProcess(args, 0, stdout='{}\n')
 
     with patch.object(m, 'preflight', return_value={'cuda': 'fixture'}), \
-         patch.object(m, 'urlopen', side_effect=lambda *a, **k: io.BytesIO(bootstrap)), \
+         patch.object(m, 'urlopen', side_effect=lambda url, **k: io.BytesIO(bootstrap if url.endswith('/tool') else source_archive)), \
          patch.object(m, 'run', side_effect=fake_run):
         for repair in [False, True]:
             if repair:
@@ -61,6 +71,9 @@ with tempfile.TemporaryDirectory() as directory:
             assert (root / '.conda/portos-profile.json').is_file()
             assert not (root / '.conda/stale-module.so').exists()
             assert not (root / 'portos-installing').exists()
+            built = (root / '.conda/portos-source/deps/flash-attention/setup.py').read_text()
+            assert '-std=c++20' in built and '-std=c++17' not in built
+            assert all('# "-D' + flag not in built for flag in actual['flashAttentionDefines'])
         creates = [a for a, k in calls if 'create' in a]
         assert len(creates) == 2
         assert all('--offline' in a and '--file' in a for a in creates)

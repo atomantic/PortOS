@@ -79,13 +79,21 @@ def unpack(archive, destination):
         shutil.copytree(entries[0], destination, dirs_exist_ok=True)
 
 
-def patch_build(directory, package, standard):
+def patch_build(directory, package, profile):
     setup = directory / 'setup.py'
     if not setup.exists():
         return
     text = setup.read_text()
     # Patched Torch headers require C++20. GCC 11.3 and nvcc 12.6 support it.
-    text = text.replace('-std=c++17', '-std=' + standard)
+    text = text.replace('-std=c++17', '-std=' + profile['buildFlags']['CXX_STANDARD'])
+    if package == 'flash-attention':
+        # This image inference profile does not use training, dropout or windowed attention.
+        # Use upstream's compile switches rather than instantiating those large kernel matrices.
+        for define in profile['flashAttentionDefines']:
+            before = '# "-D' + define + '",'
+            if text.count(before) != 1:
+                raise SystemExit('Unexpected FlashAttention compile switches: ' + define)
+            text = text.replace(before, '"-D' + define + '",')
     if package == 'FlexGEMM':
         # Metadata/build hooks must not overwrite the operator's autotune cache.
         text = text.replace('os.path.expanduser("~/.flex_gemm', 'os.path.join(ROOT, ".portos-autotune')
@@ -163,7 +171,7 @@ def install(root, cuda):
     packages = ['utils3d', 'flash-attention', 'nvdiffrast', 'nvdiffrec', 'CuMesh', 'FlexGEMM', '../o-voxel']
     for package in packages:
         directory = source_root / 'deps' / package
-        patch_build(directory, package, profile['buildFlags']['CXX_STANDARD'])
+        patch_build(directory, package, profile)
         print('[setup] Building ' + package, flush=True)
         run([python, '-m', 'pip', '--isolated', 'install', '--disable-pip-version-check',
              '--no-index', '--no-deps', '--no-build-isolation', '--no-cache-dir', directory],

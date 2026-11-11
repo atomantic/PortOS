@@ -17,6 +17,8 @@ def main():
     pins.update({('torch', profile['torch'].split('+')[0]), ('torchvision', profile['torchvision'].split('+')[0]),
                  ('flash-attn', profile['flashAttention']), ('utils3d', '0.0.2'), ('nvdiffrast', '0.4.0'),
                  ('nvdiffrec-render', '0.0.0'), ('cumesh', '0.0.1'), ('flex-gemm', '1.0.0'), ('o-voxel', '0.0.1')})
+    pins.update((item['name'], item['version']) for item in profile['condaArtifacts']
+                if item['name'] in {'pip', 'setuptools', 'packaging', 'wheel'})
     queries = [{'package': {'ecosystem': 'PyPI', 'name': name}, 'version': version} for name, version in sorted(pins)]
     for item in profile['condaArtifacts']:
         queries.append({'package': {'purl': 'pkg:conda/conda-forge/' + item['name'] + '@' + item['version']

@@ -384,11 +384,18 @@
     "TORCH_CUDA_ARCH_LIST": "8.6",
     "FLASH_ATTN_CUDA_ARCHS": "80",
     "FLASH_ATTENTION_FORCE_BUILD": "TRUE",
-    "MAX_JOBS": "1",
+    "MAX_JOBS": "2",
     "NVCC_THREADS": "1"
   },
   "torchWheelLastModified": {
     "torch-2.14.1%2Bcu126-cp311-cp311-manylinux_2_28_x86_64.whl": "Wed, 30 Sep 2026 15:13:45 GMT",
     "torchvision-0.29.1%2Bcu126-cp311-cp311-manylinux_2_28_x86_64.whl": "Wed, 30 Sep 2026 15:47:53 GMT"
-  }
+  },
+  "flashAttentionDefines": [
+    "FLASHATTENTION_DISABLE_BACKWARD",
+    "FLASHATTENTION_DISABLE_DROPOUT",
+    "FLASHATTENTION_DISABLE_ALIBI",
+    "FLASHATTENTION_DISABLE_SOFTCAP",
+    "FLASHATTENTION_DISABLE_LOCAL"
+  ]
 }

@@ -27,11 +27,16 @@ Eigen, and o-voxel's Eigen gitlinks. ROCm's composable_kernel is unused by this
 CUDA profile. No native build backend may select or fetch dependencies.
 
 Builds use C++20 for the patched Torch headers, `TORCH_CUDA_ARCH_LIST=8.6`,
-`FLASH_ATTN_CUDA_ARCHS=80` (the Ampere binary also runs on 8.6), `MAX_JOBS=1`
+`FLASH_ATTN_CUDA_ARCHS=80` (the Ampere binary also runs on 8.6), `MAX_JOBS=2`
 and `NVCC_THREADS=1`. `FLASH_ATTENTION_FORCE_BUILD=TRUE` disables its wheel
 download shortcut. FlexGEMM's metadata hooks keep their cache in the private
 source directory. Build subprocesses receive a private home and no model,
 provider or PortOS credentials.
+FlashAttention's upstream compile switches disable backward, dropout, ALiBi,
+softcap and local-window kernels for this image inference profile. All forward
+head dimensions and both FP16/BF16 remain available. The exact defines are
+recorded in the profile; disabling unused kernels avoids compiling the training
+and attention variants this pipeline never calls.
 
 Repair recreates only `<runtime>/.conda`, including its private source snapshot.
 Downloaded weights elsewhere in the runtime or Hugging Face cache stay in place.
@@ -69,7 +74,7 @@ updating revisions, re-hash the archives, and verify recursive gitlinks.
 For Conda changes, solve only during maintenance, inspect the complete result,
 verify each artifact's upload date and replace the explicit manifest together.
 
-On 2026-11-11, OSV querybatch returned no matches for **121 queries**: 82 PyPI
+On 2026-11-11, OSV querybatch returned no matches for **122 queries**: 83 PyPI
 identities (including the source package identities), 28 Conda artifact PURLs
 including micromamba, and 11 source revisions. PyPI queries include OSV's `MAL-`
 malicious-package records. OSV's Conda advisory coverage is limited; a zero-match
