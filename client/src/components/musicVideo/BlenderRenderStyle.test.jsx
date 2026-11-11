@@ -1,5 +1,7 @@
+// @vitest-environment happy-dom
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
+import '@testing-library/jest-dom/vitest';
 
 vi.mock('../../services/apiMusicVideo.js', () => ({ getMusicVideoShotRenders: vi.fn(), updateMusicVideoProject: vi.fn() }));
 // The panels themselves have their own suites; this one pins which of them a render style mounts.
@@ -37,7 +39,7 @@ describe('Blender film render style', () => {
     // The finishing pass still runs over a Blender film's final render, and the panel links here.
     expect(document.getElementById('mv-film-look')).toContainElement(screen.getByTestId('film-look'));
     expect(screen.queryByTestId('typography')).toBeNull();
-    expect(screen.queryByRole('region', { name: 'Render grade' })).toBeNull();
+    expect(screen.getByRole('region', { name: 'Render grade' })).toBeInTheDocument();
     expect(screen.queryByText(/No live preview for this style/)).toBeNull();
     expect(screen.getByText('Blender film')).toBeInTheDocument();
 
