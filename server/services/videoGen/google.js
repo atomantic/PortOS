@@ -240,8 +240,12 @@ async function runGoogleVideo(job, jobId, {
       return finishFailure('Canceled');
     }
     const measured = (await probeVideoGeometry(outputPath)) || {};
-    activeRequests.delete(jobId);
     await settleInputs();
+    if (entry.aborted) {
+      await unlink(outputPath);
+      return finishFailure('Canceled');
+    }
+    activeRequests.delete(jobId);
     activeJobs.delete(jobId);
     await finalizeGeneratedVideo({ job, jobId, outputPath, filename, meta: { ...meta, ...measured }, actualSeed: request.seed ?? null, mutateHistory: mutateVideoHistory, publication });
     closeJobAfterDelay(jobs, jobId);
