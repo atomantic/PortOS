@@ -113,3 +113,15 @@ configured Hugging Face token through the existing credential resolver without
 printing it. Access to the DINOv3 and RMBG-2.0 gated weights is required.
 Inspect the resulting GLB for finite nonempty triangles and embedded PBR textures.
 Package locks do not freeze model downloads or grant gated-weight access.
+
+On 2026-11-11, native builds and a synthetic cube render were exercised on
+Ubuntu 22.04 under WSL2, an RTX 3090 (24 GiB, capability 8.6), NVIDIA driver
+610.88, CUDA 12.6 Update 3 and GCC 11.3.0. The guest had 24 GiB RAM and 16 GiB
+swap; model offloading caused substantial paging, so more host RAM improves
+render latency. The existing runner used seed 7, four sampler steps, its default
+1024-cascade pipeline, a 2048-pixel atlas and a 200,000-face export target.
+It produced a 7,312,300-byte GLB with 139,196 vertices, 186,556 indexed triangles
+and two embedded 2048×2048 WebP textures. Validation checked finite positions,
+index bounds, the base-color material binding and decoding of both textures.
+Its SHA-256 was
+`b1237295245d0471db3b1207ab337082679af626bc02058a8ec7d1cf82fb277d`.
