@@ -1,9 +1,5 @@
 # AGENTS.md
 
-Guidance for every AI coding agent working in this repository — Claude Code, Codex, Antigravity (`agy`), grok, cursor-agent, OpenCode, and the local-model providers that front them.
-
-`AGENTS.md` is the canonical file. The `CLAUDE.md` beside it is a one-line `@AGENTS.md` import (Claude Code hardcodes that filename) — an import rather than a symlink so it survives a Windows checkout and a CLI that reads both names doesn't ingest the body twice. Both files exist at the root and at each nested location below. **Edit `AGENTS.md`; never put content in a `CLAUDE.md`.**
-
 ## Don't leave trash on the floor
 
 Every agent must leave discovered problems either fixed and verified or captured in the owning project's issue tracker before finishing. This includes product bugs, broken expectations or assumptions, workflow/process defects, flaky tests, and concrete inefficiencies encountered during the task. “Pre-existing,” “unrelated,” and “out of scope” are reasons to file a follow-up, not reasons to lose the finding. Stay alert while doing the requested work; this does not require an unrelated full-repository audit.
@@ -186,7 +182,7 @@ In that source, `!read lib/<name>.md` means read `lib/slashdo/lib/<name>.md` whe
 
 ## Module Organization
 
-PortOS is large enough that re-implementing a helper is cheaper to *start* than finding what exists. Every directory holding reusable code carries a catalog `README.md` and an enumerable `index.js` barrel. **Before writing a helper, search the catalog.**
+PortOS is large enough that re-implementing a helper is cheaper to _start_ than finding what exists. Every directory holding reusable code carries a catalog `README.md` and an enumerable `index.js` barrel. **Before writing a helper, search the catalog.**
 
 ### Where new code lives
 
@@ -196,7 +192,7 @@ PortOS is large enough that re-implementing a helper is cheaper to *start* than 
 - **HTTP / Socket / browser clients** → `client/src/services/`. API wrappers start with `api*`.
 - **Express handlers** → `server/routes/`. Use `validateRequest` + `lib/validation.js` schemas.
 - **Domain orchestration (multi-step business logic over models + services)** → `server/services/`
-- **Persisted data (PostgreSQL vs a `data/` file)** → decide via `docs/STORAGE.md` *before* defaulting to a new `data/*.json`. App-native relational records are `db-primary`; that doc's "Adding a new data store?" checklist is required in PR review.
+- **Persisted data (PostgreSQL vs a `data/` file)** → decide via `docs/STORAGE.md` _before_ defaulting to a new `data/*.json`. App-native relational records are `db-primary`; that doc's "Adding a new data store?" checklist is required in PR review.
 
 One concern per file. Tests live next to their source as `<name>.test.js`. Naming is camelCase with a domain prefix (`brainValidation.js`, `creativeDirectorPrompts.js`).
 
@@ -214,11 +210,11 @@ Any new file in `server/lib/`, `client/src/lib/`, `client/src/hooks/`, `client/s
 
 **Name collisions.** When two modules in one directory export the same identifier (e.g. `settingsUpdateInputSchema` in both `brainValidation.js` and `digitalTwinValidation.js`), the barrel uses `export * as <name>` namespace exports so callers reach for `brainValidation.settingsUpdateInputSchema` explicitly. Catch-all modules like `validation.js` stay flat. The collision-detector test fails if two flat-`export *` modules share an identifier.
 
-Existing deep imports (`import { x } from '../lib/foo.js'`) keep working — the barrel exists for *discovery*. The worked example for "barrel + documented exports" is `server/lib/aiToolkit/index.js`.
+Existing deep imports (`import { x } from '../lib/foo.js'`) keep working — the barrel exists for _discovery_. The worked example for "barrel + documented exports" is `server/lib/aiToolkit/index.js`.
 
 ### Generated manifests are addressed by content, never by position
 
-First ask whether the manifest needs to exist: a derivation that is deterministic, cheap, and reads only inputs every install ships belongs **in memory, derived on first use and cached for the process** (`server/lib/apiRouteGraph.js`, `server/lib/socketEventInventory.js`). A checked-in `*.generated.json` must change when — and *only* when — the thing it describes changes, so key each record by the declaring file plus the semantic identity of what it declares (stage key plus file paths in `scripts/generate-prompt-stage-call-sites.js`), never by line/column: a `foo.js:412` record makes every unrelated edit above it churn the file and every rebase conflict on it.
+First ask whether the manifest needs to exist: a derivation that is deterministic, cheap, and reads only inputs every install ships belongs **in memory, derived on first use and cached for the process** (`server/lib/apiRouteGraph.js`, `server/lib/socketEventInventory.js`). A checked-in `*.generated.json` must change when — and _only_ when — the thing it describes changes, so key each record by the declaring file plus the semantic identity of what it declares (stage key plus file paths in `scripts/generate-prompt-stage-call-sites.js`), never by line/column: a `foo.js:412` record makes every unrelated edit above it churn the file and every rebase conflict on it.
 
 **A new generator proves this with `shiftSourceText` (`scripts/lib/positionInvariance.js`)** — shift every line in its inputs, regenerate, assert byte-identical output. `server/lib/generatedManifests.test.js` is the tree-wide backstop and **fails when a `scripts/generate-*.js` has no sibling test importing `positionInvariance.js`**. This rule lives in root because the generators are in `scripts/`, which carries no nested file; the mechanism and the coverage-without-positions pattern are under "Generated manifests" in `server/AGENTS.md`.
 
@@ -245,7 +241,7 @@ When CoS agents or AI tools work on managed apps outside PortOS, all research, p
 - **Scrub before you ship.** Before `git add`/commit and before opening or commenting on a PR/issue, scan your own diff and prose for the categories above. If real data was already committed, amend/rewrite the branch before pushing rather than layering a "redaction" commit on top.
 - **Absolute paths.** Prefer repo-relative paths in committed text; when an absolute path is unavoidable, strip the user segment (`~/…` or `<repo-root>/…`).
 
-This complements the Security Model (the deployed product) — this section governs what agents may *write down* while working against real data.
+This complements the Security Model (the deployed product) — this section governs what agents may _write down_ while working against real data.
 
 ## Code comments
 
@@ -261,7 +257,7 @@ This policy governs code comments, not user-facing guides or product copy.
 ## Code Conventions
 
 - **Live Node inspector cleanup** — do not schedule dynamic `import()` from an inspector-evaluated callback; it can reject with `ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING` outside the evaluation's promise. Use `process.getBuiltinModule('node:inspector')` for builtin access, inspect the protocol response before disconnecting, and verify the listener closed. See [safe inspector cleanup](docs/TROUBLESHOOTING.md#dynamic-import-callback-missing-after-profiling).
-- **Error handling** — in Express request handlers, let errors bubble to centralized middleware instead of wrapping each handler in try/catch. Client code uses the shared error/save boundaries in `client/src/AGENTS.md`. **Process-boundary exception:** PTY/child-process/`setTimeout`/`setInterval` callbacks and any code running *outside* the Express request lifecycle, where an uncaught throw crashes the Node process. At those boundaries, wrap hook invocation in try/catch and log via the emoji-prefixed `console.error` style. Async event handlers that mutate shared module-level state (e.g. the TUI spawner's `handleData`) must also be serialized — chain them onto a per-session/per-actor `Promise.resolve()` queue rather than firing concurrently.
+- **Error handling** — in Express request handlers, let errors bubble to centralized middleware instead of wrapping each handler in try/catch. Client code uses the shared error/save boundaries in `client/src/AGENTS.md`. **Process-boundary exception:** PTY/child-process/`setTimeout`/`setInterval` callbacks and any code running _outside_ the Express request lifecycle, where an uncaught throw crashes the Node process. At those boundaries, wrap hook invocation in try/catch and log via the emoji-prefixed `console.error` style. Async event handlers that mutate shared module-level state (e.g. the TUI spawner's `handleData`) must also be serialized — chain them onto a per-session/per-actor `Promise.resolve()` queue rather than firing concurrently.
 - **Functional programming** — no classes; use hooks in React.
 - **Lint is Biome, not ESLint** (`server/biome.jsonc`, `client/biome.jsonc`). An `eslint-disable` comment suppresses nothing; state the reason as a plain comment, or suppress an enabled Biome rule with `// biome-ignore lint/<group>/<rule>: <reason>`.
 - **Zod validation** — all route inputs validated via `lib/validation.js`.
@@ -278,7 +274,7 @@ This policy governs code comments, not user-facing guides or product copy.
   ```
   **stderr means "investigate".** `console.error` and `console.warn` are reserved for something actually wrong — a code/workflow bug, a broken invariant, an unexpected failure — that warrants an investigation agent or a GitHub issue. A failure line (`❌`/`⛔`) goes to `console.error`; `console.warn` is for a recoverable anomaly that is still a defect worth tracing. Everything a working system does on purpose stays on `console.log` with a non-failure marker: a guard's refusal or a 4xx answer (`🚫`), a deliberate skip or dedupe (`⏭️`), an expected degraded state it handles (iCloud eviction, a peer on another schema version, a provider quota, a reconnect/retry), slow-path telemetry (`🐢`), and advice re-announced on a schedule. If a line fires on a normal day, it does not belong on stderr. For a mixed status line, choose the sink first (`const log = ok ? console.log : console.error;`) rather than branching the emoji alone. `server/logLevelConventions.test.js` scans the whole server tree so a failure marker never lands on stdout and carries no allowlist; the reverse (a routine line on stderr) is judgment the scan cannot make.
 - **LLM response merging — distinguish absent vs intentionally empty.** "Key absent" preserves the original; "key present with empty value" applies the clear. Don't use `.length` truthiness as the signal. Strings: `null`/`undefined` = absent, `""` = a clear (server helpers like `universeBuilderExpand.trimField` return `null` for non-strings). Arrays/objects: gate on `Array.isArray(parsed?.field)` / `parsed?.field !== null && typeof parsed?.field === 'object' && !Array.isArray(parsed.field)` before falling back. Keep server-side merges and the client's `pick` helpers mirrored.
-- **Sentinel + validate to distinguish "not set / failed" from "present-but-empty / valid".** Never let *absent*, *failed-to-fetch*, or *invalid* collapse into the same value as *fetched-and-legitimately-empty* or *valid*; use an explicit sentinel and validate before falling through, not `x.length` or `x || fallback`. Canonical examples in the local-LLM backends: model-list caches use `null = not fetched` vs `[] = cached-empty` (`ollamaManager.js` `installedModels`, `lmStudioManager.js` `availableModels`); `getBackend()` validates the `.env` marker before falling back to `process.env` (`server/services/localLlm.js`); a reachable-but-list-failed backend surfaces an explicit `modelsError` rather than `0 models` (`lmStudioManager.js` `getLastListError`).
+- **Sentinel + validate to distinguish "not set / failed" from "present-but-empty / valid".** Never let _absent_, _failed-to-fetch_, or _invalid_ collapse into the same value as _fetched-and-legitimately-empty_ or _valid_; use an explicit sentinel and validate before falling through, not `x.length` or `x || fallback`. Canonical examples in the local-LLM backends: model-list caches use `null = not fetched` vs `[] = cached-empty` (`ollamaManager.js` `installedModels`, `lmStudioManager.js` `availableModels`); `getBackend()` validates the `.env` marker before falling back to `process.env` (`server/services/localLlm.js`); a reachable-but-list-failed backend surfaces an explicit `modelsError` rather than `0 models` (`lmStudioManager.js` `getLastListError`).
 
 ## Git Workflow
 
