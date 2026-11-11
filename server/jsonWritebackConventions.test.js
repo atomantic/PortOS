@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
-import { scanJsonWriteback, reconcileJsonWriteback, mayReadJsonFile } from './test/jsonWritebackScan.js';
+import { scanJsonWriteback, reconcileJsonWriteback, mayReadJsonFile, buildJsonReadWrapperRegistry } from './test/jsonWritebackScan.js';
 import { JSON_WRITEBACK_EXCEPTIONS } from './test/jsonWritebackExceptions.js';
 
 function sourceFiles(directory, prefix = '') {
@@ -16,11 +16,12 @@ function sourceFiles(directory, prefix = '') {
 // Regression: a newly introduced fallback cannot silently become a write-back
 // base. Existing exceptions must disappear when their source pair disappears.
 it('classifies every same-path non-strict service read/write pair with no stale exceptions', () => {
-  const root = fileURLToPath(new URL('./services/', import.meta.url));
-  const candidates = sourceFiles(root).flatMap(file => {
-    const source = readFileSync(join(root, file), 'utf8');
-    if (!mayReadJsonFile(source)) return [];
-    return scanJsonWriteback(source).candidates.map(path => `${file} :: ${path}`);
+  const root = fileURLToPath(new URL('./', import.meta.url));
+  const modules = new Map(sourceFiles(root).map(file => [file, readFileSync(join(root, file), 'utf8')]));
+  const registry = buildJsonReadWrapperRegistry(modules);
+  const candidates = [...modules].flatMap(([file, source]) => {
+    if (!file.startsWith('services/') || !mayReadJsonFile(source, registry)) return [];
+    return scanJsonWriteback(source, { module: file, registry }).candidates.map(path => `${file.slice('services/'.length)} :: ${path}`);
   });
   const result = reconcileJsonWriteback(candidates, JSON_WRITEBACK_EXCEPTIONS);
   expect(result, 'Use strict reads or document the actual lifecycle in test/jsonWritebackExceptions.js; remove stale entries.').toEqual({ unclassified: [], stale: [] });
@@ -45,6 +46,43 @@ describe('syntax scanner regression contracts', () => {
     // invalid syntax; the optimization belongs solely at the tree caller.
     expect(() => scanJsonWriteback('const =')).toThrow();
   });
+  it('resolves one imported direct-read wrapper hop, aliases and module constants without admitting strict or unrelated returns', () => {
+    const registry = buildJsonReadWrapperRegistry(new Map([
+      ['stores/a.js', `
+        import { readJSONFile as read } from '../lib/fileUtils.js';
+        const STORE = join(root, 'store.json');
+        export { STORE as STORE_PATH };
+        export async function load(unused, path) { return await read(path, {}); }
+        export const loadFixed = async () => { const value = await read(STORE, {}); return value; };
+        export const strictOptions = path => read(path, {}, { strict: true });
+        export const strictHelper = path => readJSONFileStrict(path, {});
+        export const unrelated = path => { read(path, {}); return {}; };
+        export const raw = async path => { const bytes = await tryReadFile(path); return safeJSONParse(bytes ?? '{}', {}); };
+      `],
+      ['stores/raw.js', `export default async path => tryReadFile(path);`],
+      ['stores/b.js', `import { load } from './a.js'; export const twoHops = path => load(null, path);`],
+    ]));
+    const source = `
+      import { load as fetchStore, loadFixed, STORE_PATH as FIXED, strictOptions, strictHelper, unrelated, raw } from '../stores/a.js';
+      import { twoHops } from '../stores/b.js';
+      import loadBytes from '../stores/raw.js';
+      fetchStore(null, PATH); atomicWrite(PATH, {});
+      loadFixed(); atomicWrite(FIXED, {});
+      raw(RAW); atomicWrite(RAW, {});
+      loadBytes(BYTES); atomicWrite(BYTES, {});
+      strictOptions(STRICT); atomicWrite(STRICT, {});
+      strictHelper(STRICT_HELPER); atomicWrite(STRICT_HELPER, {});
+      unrelated(OTHER); atomicWrite(OTHER, {});
+      twoHops(DEEP); atomicWrite(DEEP, {});
+    `;
+    expect(mayReadJsonFile(source, registry)).toBe(true);
+    expect(mayReadJsonFile(source)).toBe(false);
+    expect(mayReadJsonFile("import load from '../stores/raw.js'; load(P); atomicWrite(P, {});", registry)).toBe(true);
+    expect(scanJsonWriteback(source, { module: 'services/writer.js', registry })).toEqual({
+      candidates: ['BYTES', 'PATH', 'RAW', 'stores/a.js#STORE'], strict: [],
+    });
+  });
+
   it('finds new pairs with nested arguments, comments and quote/whitespace differences', () => {
     const source = `
       import { readJSONFile as read, atomicWrite as write } from './fileUtils.js';
