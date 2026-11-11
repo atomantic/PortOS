@@ -176,12 +176,32 @@ describe('imageGen/fal — generateImage', () => {
   });
 
   it('defaults to Nano Banana Pro and switches to its /edit endpoint when an init image is attached', async () => {
-    await writeFile(join(FAKE_IMAGES_DIR, 'source.png'), await noiseImage(16, 16));
+    const source = await noiseImage(16, 16);
+    await writeFile(join(FAKE_IMAGES_DIR, 'source.png'), source);
     const { submits } = fakeFal({ endpoint: 'fal-ai/nano-banana-pro/edit', output: await noiseImage(16, 16) });
     const job = await fal.generateImage({ prompt: 'make it dusk', initImagePath: 'source.png', initImageStrength: 0.1 });
     expect((await waitForTerminal(job.jobId)).type).toBe('completed');
-    expect(submits()[0].body.image_urls).toHaveLength(1);
+    expect(submits()[0].body.image_urls).toEqual([`data:image/png;base64,${source.toString('base64')}`]);
     expect(submits()[0].body.prompt).toContain('The first attached image is the source image to edit');
+  });
+
+  it('re-encodes a gallery reference over 4 MiB even when its dimensions fit', async () => {
+    const source = await sharp({
+      create: { width: 1200, height: 1200, channels: 3, background: '#274160' },
+    }).png({ compressionLevel: 0 }).toBuffer();
+    expect(source.length).toBeGreaterThan(4 * 1024 * 1024);
+    await writeFile(join(FAKE_IMAGES_DIR, 'large-reference.png'), source);
+    const { submits } = fakeFal({ endpoint: 'fal-ai/nano-banana-pro/edit', output: await noiseImage(16, 16) });
+
+    const job = await fal.generateImage({ prompt: 'match the reference', referenceImagePaths: ['large-reference.png'] });
+    expect((await waitForTerminal(job.jobId)).type).toBe('completed');
+
+    const [uri] = submits()[0].body.image_urls;
+    const [header, base64] = uri.split(',');
+    expect(header).toBe('data:image/jpeg;base64');
+    const sent = Buffer.from(base64, 'base64');
+    expect(sent.length).toBeLessThan(4 * 1024 * 1024);
+    expect(await sharp(sent).metadata()).toMatchObject({ width: 1200, height: 1200 });
   });
 
   it('refuses before any paid call when the model is outside the catalog or no key is configured', async () => {
