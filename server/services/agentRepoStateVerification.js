@@ -1519,8 +1519,16 @@ async function verifyAgentBranchState({ agentId, task, agentState, success, prEx
   if (owned === null) return blockWith('ownership-unreadable', { skipReason: REPO_STATE_SKIPS.GATE_UNREADABLE });
   if (owned) await record('pending', 'existing-completion-owner');
 
+  // Completion can hand delivery to a server-created review task before the
+  // parent records a PR URL. Reuse that exact target after its head changes.
+  const followUp = task?.metadata?.deliveryFollowUpTaskId
+    ? await (await import('./cosTaskStore.js')).getTaskById(task.metadata.deliveryFollowUpTaskId) : null;
+  const followUpPrUrl = isTruthyMeta(followUp?.metadata?.reviewLoopFollowUp)
+    && followUp.metadata.sourceTaskId === task.id && followUp.metadata.sourceAgentId === agentId
+    && followUp.metadata.reviewLoopPRBranch === branchName && followUp.metadata.app === task.metadata?.app
+    ? followUp.metadata.reviewLoopPRUrl : null;
   const originalPrUrl = [metadata.reviewLoopMergeTarget?.url, metadata.recoveryMergeTarget?.url,
-    task?.metadata?.reviewLoopPRUrl, task?.metadata?.recoveryMergeTarget?.url].find(value => parsePullRequestUrl(value));
+    task?.metadata?.reviewLoopPRUrl, task?.metadata?.recoveryMergeTarget?.url, followUpPrUrl].find(value => parsePullRequestUrl(value));
   const expectation = resolveRepoStateExpectation({ ...structural, prExpected: prExpected || !!originalPrUrl, enabled, followUpPending: owned });
   if (!expectation.verify) return skipped(expectation.skipReason);
 
@@ -1627,30 +1635,16 @@ async function settleAbsentCheckout({ agentId, agentState, metadata, app, source
   const delivery = capturedHead && !originalPrUrl && !observed.prState
     ? await probePrForBranch(sourceWorkspace, branchName).catch(() => null) : observed;
   const proofUrl = originalPrUrl || delivery?.prUrl;
-  let forge = proofUrl && delivery?.prState === 'MERGED' ? await readRetirementForgeEvidence(sourceWorkspace, branchName, proofUrl,
+  const forge = proofUrl && delivery?.prState === 'MERGED' ? await readRetirementForgeEvidence(sourceWorkspace, branchName, proofUrl,
     { forgeAccount: app?.forgeAccount ?? null, ...(capturedHead && { exactDeliveredHead: capturedHead }) }).catch(() => null) : null;
-  if (capturedHead && proofUrl && delivery?.prState === 'MERGED' && forge?.prHead !== capturedHead) {
-    forge = await readRetirementForgeEvidence(sourceWorkspace, branchName, proofUrl,
-      { forgeAccount: app?.forgeAccount ?? null }).catch(() => null);
-  }
-  let preservation = null;
-  let capturedCovered = !capturedHead || forge?.prHead === capturedHead;
-  if (forge && capturedHead && !capturedCovered) {
-    // A later head may have been delivered and safely retired from this exact
-    // generation. Require the durable removal receipt, not ancestry alone.
-    const capture = captures[0];
-    const { findMissingCheckoutPreservation } = await import('./heldCheckoutRecovery.js');
-    preservation = await findMissingCheckoutPreservation({ repoPath: sourceWorkspace, release: {
-      path: worktreePath, branch: branchName, head: forge.prHead, createdAt: capture.capturedAt,
-      checkoutIdentity: retirementCheckoutIdentityFromPointer(capture.incarnation.pointer),
-    } }).catch(() => null);
-    capturedCovered = preservation?.kind === 'service-retirement-receipt'
-      && (await execGit(['merge-base', '--is-ancestor', capturedHead, forge.prHead], sourceWorkspace,
-      { ignoreExitCode: true, env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1', GIT_OPTIONAL_LOCKS: '0', GIT_NO_LAZY_FETCH: '1' } }).catch(() => null))?.exitCode === 0;
-  }
-  // The forge owns merged delivery. Completion often precedes the next fetch,
-  // so merge/target objects can be absent locally even after successful cleanup.
-  const integrated = !!forge && capturedCovered;
+  // The forge binds merged delivery to this repository and named PR branch.
+  // A follow-up may rebase or advance its head after the original capture.
+  // With the checkout and local ref already absent, there is nothing to remove
+  // or preserve; a historical retirement receipt cannot add delivery evidence.
+  // An inferred branch lookup has no original PR identity. In that case only
+  // exact/ancestor delivery links its capture to the PR we found.
+  const integrated = !!forge && (!!originalPrUrl || !capturedHead || forge.prHead === capturedHead
+    || (forge.scopeProof === 'ancestor-of-delivered-head' && forge.deliveredAncestorHead === capturedHead));
   // A run that never published (a no-change audit) has no PR to prove. When the
   // forge affirmatively reports none, no remote branch holds other work, and the
   // captured final head is already in the fetched default branch, the removed
@@ -1666,8 +1660,7 @@ async function settleAbsentCheckout({ agentId, agentState, metadata, app, source
     const { withClaimOwnershipLock } = await import('./cosClaimOwnership.js');
     const verified = await withClaimOwnershipLock(async () => {
       await recheckCleanup?.();
-      if ((preservation && !await preservation.recheck())
-        || await resolveCheckoutIncarnation({ agentId, metadata, sourceWorkspace, branchName, worktreePath })
+      if (await resolveCheckoutIncarnation({ agentId, metadata, sourceWorkspace, branchName, worktreePath })
         || (worktreePath && await readCheckoutPathPresence(worktreePath) !== false)
         || await readLocalBranchPresence(sourceWorkspace, branchName) !== false) return false;
       return await (integrated

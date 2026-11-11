@@ -909,8 +909,8 @@ describe('verifyAgentRepoState — clean runs', () => {
       } finally { unbind(); recordSuccessorCheckoutRetirement.mockReset().mockResolvedValue(true); }
     });
 
-  it.each(['verified', 'missing-receipt', 'changed-generation', 'unrelated-head', 'receipt-raced'])(
-    'settles an older successful capture only through the same-generation retirement receipt: %s', async scenario => {
+  it.each(['verified', 'changed-generation', 'forge-unavailable'])(
+    'settles an older successful capture on a matching wake with verified merged delivery: %s', async scenario => {
       const pointer = { dev: '1', ino: '2', birthtimeNs: '3' };
       const completed = { version: 1, agentId: 'agent-1', repoPath: '/repo', branch: BRANCH, path: WORKTREE,
         head: '4'.repeat(40), startedAt: CREATED_AT, capturedAt: CREATED_AT, incarnation: { pointer } };
@@ -921,10 +921,7 @@ describe('verifyAgentRepoState — clean runs', () => {
       getAgentRecord.mockResolvedValue(state);
       readBranchCompletionPolicies.mockResolvedValue([state]);
       execGh.mockResolvedValue(openView({ state: 'MERGED' }));
-      findMissingCheckoutPreservation.mockResolvedValue(scenario === 'missing-receipt' ? null
-        : { kind: 'service-retirement-receipt', archiveDir: null, evidenceDigest: 'a'.repeat(64), recheck: async () => scenario !== 'receipt-raced' });
-      execGit.mockImplementation(async args => ({ exitCode: args[0] === 'merge-base'
-        ? (scenario === 'unrelated-head' && args[2] === completed.head ? 1 : 0) : 1, stdout: '' }));
+      if (scenario === 'forge-unavailable') readRetirementForgeEvidence.mockRejectedValue(new Error('forge unavailable'));
       const events = new EventEmitter();
       const unbind = bindCompletionRetirementEvents(events);
       try {
@@ -936,6 +933,7 @@ describe('verifyAgentRepoState — clean runs', () => {
       } else {
         expect(recordRepoStateVerification.mock.calls.some(([, row]) => row.status === 'completed')).toBe(false);
       }
+      expect(findMissingCheckoutPreservation).not.toHaveBeenCalled();
       expect(addTask).not.toHaveBeenCalled();
       expect(retireInventoriedCheckout).not.toHaveBeenCalled();
       expect(state.result).toEqual({ success: true, executionSuccess: true });
@@ -1104,35 +1102,52 @@ describe('verifyAgentRepoState — clean runs', () => {
     expect(recordCleanupOutcome).not.toHaveBeenCalledWith('agent-1', expect.objectContaining({ status: 'verified' }));
   });
 
-  it.each(['receipt', 'archive', 'missing', 'receipt-raced', 'unrelated-head'])(
-    'settles a moved captured head only with its same-generation retirement receipt: %s', async scenario => {
-      const captured = { version: 1, agentId: 'agent-1', startedAt: CREATED_AT, capturedAt: CREATED_AT,
-        repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: '4'.repeat(40),
-        incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } };
-      const state = { ...agentState({ completedCheckouts: [captured], repoStateVerification: { status: 'pending' },
-        reviewLoopMergeTarget: { url: 'https://github.com/example/repo/pull/7' } }),
-      id: 'agent-1', taskId: 'task-1', status: 'completed', completedAt: CREATED_AT,
-      result: { success: false, cleanupPending: true } };
-      const recheck = vi.fn(async () => scenario !== 'receipt-raced');
-      findMissingCheckoutPreservation.mockResolvedValue(scenario === 'missing' ? null : {
-        kind: scenario === 'archive' ? 'archive' : 'service-retirement-receipt', recheck,
-      });
-      if (scenario === 'unrelated-head') execGit.mockImplementation(async args => ({
-        exitCode: args[0] === 'merge-base' && args[2] === captured.head ? 1 : 0, stdout: '',
-      }));
-      const result = await run({ success: false, agentState: state });
-      if (scenario === 'receipt') {
-        expect(result).toMatchObject({ verified: true });
-        expect(recheck).toHaveBeenCalledOnce();
-        expect(updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'completed' }), 'user', expect.any(Object));
-      } else {
-        expect(result).toMatchObject({ verified: false, skipReason: scenario === 'receipt-raced'
-          ? 'absent-checkout-settlement-unverified' : 'absent-checkout-integration-unverified' });
-        expect(updateTask).not.toHaveBeenCalled();
-        expect(recordCleanupOutcome).not.toHaveBeenCalledWith('agent-1', expect.objectContaining({ status: 'verified' }));
-      }
-      expect(retireInventoriedCheckout).not.toHaveBeenCalled();
-    });
+  it.each(['advanced', 'rebased'])('settles absent merged delivery after a follow-up %s the captured head without a retirement receipt', async scenario => {
+    const captured = { version: 1, agentId: 'agent-1', startedAt: CREATED_AT, capturedAt: CREATED_AT,
+      repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: '4'.repeat(40),
+      incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } };
+    const state = { ...agentState({ completedCheckouts: [captured], repoStateVerification: { status: 'pending' },
+      reviewLoopMergeTarget: { url: 'https://github.com/example/repo/pull/7' } }),
+    id: 'agent-1', taskId: 'task-1', status: 'completed', completedAt: CREATED_AT,
+    result: { success: false, cleanupPending: true } };
+    // Neither local ancestry (rebases rewrite it) nor a removal receipt is
+    // needed to settle a merged PR whose checkout and refs are already gone.
+    execGit.mockImplementation(async () => ({ exitCode: scenario === 'rebased' ? 1 : 0, stdout: '' }));
+    expect(await run({ success: false, agentState: state })).toMatchObject({ verified: true });
+    expect(readRetirementForgeEvidence).toHaveBeenCalledExactlyOnceWith('/repo', BRANCH,
+      'https://github.com/example/repo/pull/7', expect.objectContaining({ exactDeliveredHead: captured.head }));
+    expect(updateTask).toHaveBeenCalledWith('task-1', expect.objectContaining({ status: 'completed' }), 'user', expect.any(Object));
+    expect(findMissingCheckoutPreservation).not.toHaveBeenCalled();
+    expect(retireInventoriedCheckout).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
+  it.each(['bound', 'wrong-source', 'wrong-branch', 'wrong-app'])('uses the server delivery follow-up target to settle a rebased parent: %s', async scenario => {
+    const captured = { version: 1, agentId: 'agent-1', startedAt: CREATED_AT, capturedAt: CREATED_AT,
+      repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: '4'.repeat(40),
+      incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } };
+    const state = { ...agentState({ completedCheckouts: [captured], repoStateVerification: { status: 'pending' } }),
+      id: 'agent-1', taskId: 'task-1', status: 'completed', completedAt: CREATED_AT, result: { success: false, cleanupPending: true } };
+    const source = { ...task({ deliveryFollowUpTaskId: 'follow-up', deliveryRecovery: 'cleanup', deliveryRecoveryAgentId: 'agent-1' }),
+      status: 'in_progress' };
+    const followUp = { id: 'follow-up', status: 'completed', metadata: { reviewLoopFollowUp: 'true', sourceTaskId: source.id,
+      sourceAgentId: scenario === 'wrong-source' ? 'another-agent' : state.id,
+      reviewLoopPRBranch: scenario === 'wrong-branch' ? 'another-branch' : BRANCH,
+      app: scenario === 'wrong-app' ? 'another-app' : source.metadata.app,
+      reviewLoopPRUrl: 'https://github.com/example/repo/pull/7' } };
+    getTaskById.mockImplementation(async id => id === 'follow-up' ? followUp : source);
+    findPullRequestForBranch.mockResolvedValue({ status: 'found', url: followUp.metadata.reviewLoopPRUrl, detail: 'MERGED' });
+    execGit.mockResolvedValue({ exitCode: 1, stdout: '' });
+    const result = await run({ task: source, success: false, agentState: state });
+    if (scenario === 'bound') expect(result).toMatchObject({ verified: true, skipReason: null });
+    else expect(result.verified).toBe(false);
+    if (scenario === 'bound') expect(updateTask).toHaveBeenCalledWith(source.id,
+      expect.objectContaining({ status: 'completed' }), 'user', expect.any(Object));
+    else expect(updateTask).not.toHaveBeenCalled();
+    expect(findMissingCheckoutPreservation).not.toHaveBeenCalled();
+    expect(retireInventoriedCheckout).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
+  });
 
   it.each(['contained', 'not-contained', 'lookup-unavailable', 'remote-branch'])('settles an unpublished no-change checkout only when its captured head is in the default branch: %s', async scenario => {
     const captured = { version: 1, agentId: 'agent-1', startedAt: CREATED_AT, capturedAt: CREATED_AT,
@@ -1162,8 +1177,8 @@ describe('verifyAgentRepoState — clean runs', () => {
   it.each(['wrong-head', 'foreign-repository', 'uncaptured', 'ambiguous', 'open', 'unavailable'])('retains an unrequested-PR handoff when captured delivery is %s', async failure => {
     const captured = { version: 1, agentId: 'agent-1', startedAt: CREATED_AT, capturedAt: CREATED_AT,
       repoPath: '/repo', branch: BRANCH, path: WORKTREE, head: HEAD, incarnation: { pointer: { dev: '1', ino: '2', birthtimeNs: '3' } } };
-    if (failure === 'foreign-repository') captured.repoPath = '/other-instance';
     if (failure === 'wrong-head') captured.head = 'f'.repeat(40);
+    if (failure === 'foreign-repository') captured.repoPath = '/other-instance';
     const completedCheckouts = failure === 'uncaptured' ? [] : failure === 'ambiguous' ? [captured, { ...captured }] : [captured];
     const state = { ...agentState({ completedCheckouts, repoStateVerification: { status: 'pending' } }),
       id: 'agent-1', taskId: 'task-1', status: 'completed', completedAt: CREATED_AT, result: { success: false, cleanupPending: true } };

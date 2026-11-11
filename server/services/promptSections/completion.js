@@ -701,6 +701,7 @@ export function buildClaimFlowCompletionSection({ isTui = false, sentinelPath = 
     ...(workflowScope?.status === 'missing' ? [
       '## Forge token lacks the `workflow` scope',
       `The GitHub token PortOS gave this run has no \`workflow\` scope, so GitHub refuses to merge (or auto-merge) a PR that changes \`.github/workflows/**\`, reporting only a generic "base branch policy" error. If your PR touches \`.github/workflows/**\`, skip every merge and auto-merge attempt: publish it, wait for required CI, then leave it OPEN as an explicit human-merge handoff that names the missing scope and the fix (\`${workflowScope.remedy}\`). Keep the issue, claim markers and checkout. PRs that do not touch workflow files merge normally.`,
+      'For that workflow-scope handoff, write taskOutcome with status "blocked" and recovery {"mode":"approval","options":["Merge the existing verified PR using already authorized workflow authority","Grant workflow scope through the supported GitHub authorization flow before delivery resumes"]}. Name the PR and missing scope in reason. A generic blocked/incomplete outcome without this recovery mode is treated as machine-recoverable and wastes automatic retry/spawn budget on the same permission boundary. Never refresh credentials or retry the denied merge yourself.',
       '',
     ] : []),
     ...(!prStaysOpen ? [buildAutoMergeHandoffInstructions('"<PR_URL>"', { review: !isMergeOnGreen }), '', buildMergeAdmissionSection(agentId, { review: !isMergeOnGreen, autoMerge }), ''] : []),
