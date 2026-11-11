@@ -27,7 +27,8 @@ Eigen, and o-voxel's Eigen gitlinks. ROCm's composable_kernel is unused by this
 CUDA profile. No native build backend may select or fetch dependencies.
 
 Builds use C++20 for the patched Torch headers, `TORCH_CUDA_ARCH_LIST=8.6`,
-`FLASH_ATTN_CUDA_ARCHS=80` (the Ampere binary also runs on 8.6), `MAX_JOBS=2`
+`FLASH_ATTN_CUDA_ARCHS=80` (compatible with 8.6 under
+[NVIDIA's cubin compatibility rule](https://docs.nvidia.com/cuda/ampere-compatibility-guide/index.html)), `MAX_JOBS=2`
 and `NVCC_THREADS=1`. `FLASH_ATTENTION_FORCE_BUILD=TRUE` disables its wheel
 download shortcut. FlexGEMM's metadata hooks keep their cache in the private
 source directory. Build subprocesses receive a private home and no model,

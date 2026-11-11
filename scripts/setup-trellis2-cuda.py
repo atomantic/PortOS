@@ -91,7 +91,7 @@ def patch_build(directory, package, profile):
         # Use upstream's compile switches rather than instantiating those large kernel matrices.
         for define in profile['flashAttentionDefines']:
             before = '# "-D' + define + '",'
-            if text.count(before) != 1:
+            if before not in text:
                 raise SystemExit('Unexpected FlashAttention compile switches: ' + define)
             text = text.replace(before, '"-D' + define + '",')
     if package == 'FlexGEMM':

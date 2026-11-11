@@ -31,7 +31,9 @@ with tempfile.TemporaryDirectory() as directory:
         archive.addfile(member, io.BytesIO(b'fake'))
     bootstrap = data.getvalue()
     data = io.BytesIO()
-    build_text = 'flags = ["-std=c++17",\n' + ''.join('# "-D' + flag + '",\n' for flag in actual['flashAttentionDefines']) + ']\n'
+    flags = '["-std=c++17",\n' + ''.join('# "-D' + flag + '",\n' for flag in actual['flashAttentionDefines']) + ']\n'
+    # Upstream repeats the backward switch in its CUDA and ROCm build blocks.
+    build_text = 'cuda_flags = ' + flags + 'rocm_flags = [\n# "-DFLASHATTENTION_DISABLE_BACKWARD",\n]\n'
     with tarfile.open(fileobj=data, mode='w:gz') as archive:
         member = tarfile.TarInfo('fixture/setup.py')
         content = build_text.encode()
