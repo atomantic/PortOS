@@ -179,7 +179,7 @@ export const IMAGE_TO_3D_TARGETS = Object.freeze({
     supportsRenderOptions: Object.freeze({ detail: false, alphaMode: false, normalMap: false }),
     upstream: 'https://github.com/microsoft/TRELLIS.2',
     weightsRepo: 'microsoft/TRELLIS.2-4B',
-    installNotes: 'The locked Linux x86_64 profile requires CUDA toolkit 12.6.85, GCC 11.3, '
+    installNotes: 'The locked Linux x86_64 profile requires CUDA toolkit 12.6.3 (nvcc 12.6.85), GCC 11.3, '
       + 'compute capability 8.6 and 24 GiB VRAM. Other existing CUDA environments can still render.',
     // Same two gated repos as the MPS port, because this lane loads the same weights:
     // `microsoft/TRELLIS.2-4B`'s `pipeline.json` names `briaai/RMBG-2.0` as its

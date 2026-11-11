@@ -3,7 +3,8 @@
 Install and **Repair install** use the PortOS-owned
 `scripts/setup-trellis2-cuda.py`, without running upstream `setup.sh`.
 The initial profile covers **Linux x86_64** (including WSL2), glibc **2.28+**,
-CUDA toolkit **12.6.85**, GCC/G++ **11.3.0**, NVIDIA compute capability **8.6**
+[CUDA toolkit **12.6 Update 3 (12.6.3)**](https://docs.nvidia.com/cuda/archive/12.6.3/cuda-toolkit-release-notes/index.html)
+with nvcc **12.6.85**, GCC/G++ **11.3.0**, NVIDIA compute capability **8.6**
 and at least **24 GiB VRAM**. Install the toolkit and compiler before setup.
 The toolkit must include its compiler's core headers and `lib64/stubs/libcuda.so`.
 cuSPARSE, cuBLAS and other library headers come from the hash-pinned NVIDIA
@@ -88,8 +89,8 @@ updating revisions, re-hash the archives, and verify recursive gitlinks.
 For Conda changes, solve only during maintenance, inspect the complete result,
 verify each artifact's upload date and replace the explicit manifest together.
 
-On 2026-11-11, OSV querybatch returned no matches for **122 queries**: 83 PyPI
-identities (including the source package identities), 28 Conda artifact PURLs
+On 2026-11-11, OSV querybatch returned no matches for **133 queries**: 94 PyPI
+identities (including native sources and setuptools' bundled libraries), 28 Conda artifact PURLs
 including micromamba, and 11 source revisions. PyPI queries include OSV's `MAL-`
 malicious-package records. OSV's Conda advisory coverage is limited; a zero-match
 PURL response does not establish complete native advisory coverage. The old

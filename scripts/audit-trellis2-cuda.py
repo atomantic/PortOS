@@ -19,6 +19,7 @@ def main():
                  ('nvdiffrec-render', '0.0.0'), ('cumesh', '0.0.1'), ('flex-gemm', '1.0.0'), ('o-voxel', '0.0.1')})
     pins.update((item['name'], item['version']) for item in profile['condaArtifacts']
                 if item['name'] in {'pip', 'setuptools', 'packaging', 'wheel'})
+    pins.update(profile['setuptoolsVendoredIdentities'].items())
     queries = [{'package': {'ecosystem': 'PyPI', 'name': name}, 'version': version} for name, version in sorted(pins)]
     for item in profile['condaArtifacts']:
         queries.append({'package': {'purl': 'pkg:conda/conda-forge/' + item['name'] + '@' + item['version']

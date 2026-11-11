@@ -176,6 +176,9 @@ spec.loader.exec_module(m)
 def respond(request, **kwargs):
     queries = json.loads(request.data)['queries']
     assert {'package': {'ecosystem': 'PyPI', 'name': 'torch'}, 'version': '2.14.1'} in queries
+    # Both installed and setuptools-vendored versions need advisory coverage.
+    assert {'package': {'ecosystem': 'PyPI', 'name': 'wheel'}, 'version': '0.48.0'} in queries
+    assert {'package': {'ecosystem': 'PyPI', 'name': 'wheel'}, 'version': '0.46.3'} in queries
     assert any('pkg:conda/conda-forge/python@3.11.16?' in q.get('package', {}).get('purl', '') for q in queries)
     assert {'commit': '49774b31c8d1172a5b28f72e9aed0f322bf4ccba'} in queries
     results = [{} for q in queries]

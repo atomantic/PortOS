@@ -3,7 +3,7 @@
   "python": "3.11.16",
   "torch": "2.14.1+cu126",
   "torchvision": "0.29.1+cu126",
-  "cudaToolkit": "12.6.85",
+  "cudaToolkit": "12.6.3",
   "gcc": "11.3.0",
   "computeCapabilities": [
     "8.6"
@@ -405,5 +405,20 @@
   "nvdiffrecLinkFlags": [
     "-L<cuda-home>/lib64/stubs",
     "-lcuda"
-  ]
+  ],
+  "nvcc": "12.6.85",
+  "setuptoolsVendoredIdentities": {
+    "autocommand": "2.2.2",
+    "backports-tarfile": "1.2.0",
+    "importlib-metadata": "8.7.1",
+    "jaraco-context": "6.1.0",
+    "jaraco-functools": "4.4.0",
+    "jaraco-text": "4.0.0",
+    "more-itertools": "10.8.0",
+    "packaging": "26.3",
+    "platformdirs": "4.4.0",
+    "tomli": "2.4.0",
+    "wheel": "0.46.3",
+    "zipp": "3.23.0"
+  }
 }

@@ -37,8 +37,8 @@ def preflight(profile, cuda):
     if libc != 'glibc' or tuple(map(int, version.split('.'))) < (2, 28):
         raise SystemExit('TRELLIS.2 CUDA requires glibc 2.28 or later.')
     nvcc = output([cuda / 'bin/nvcc', '--version'])
-    if not re.search(r'\bV' + re.escape(profile['cudaToolkit']) + r'\b', nvcc):
-        raise SystemExit('TRELLIS.2 CUDA requires CUDA toolkit ' + profile['cudaToolkit'] + '.')
+    if not re.search(r'\bV' + re.escape(profile['nvcc']) + r'\b', nvcc):
+        raise SystemExit('TRELLIS.2 CUDA requires CUDA toolkit ' + profile['cudaToolkit'] + ' (nvcc ' + profile['nvcc'] + ').')
     if not all((cuda / name).is_file() for name in ['include/cuda.h', 'lib64/stubs/libcuda.so']):
         raise SystemExit('Install the CUDA 12.6 development headers and driver stub library before setup.')
     compiler = output(['/usr/bin/g++-11', '-dumpfullversion'])
@@ -118,7 +118,7 @@ def patch_runtime(source_root, profile):
 
 
 VERIFY = """
-import importlib.metadata as metadata, json, torch, torchvision
+import importlib.metadata as metadata, json, site, torch, torchvision
 import flash_attn, flash_attn_2_cuda, _nvdiffrast_c
 import nvdiffrec_render.renderutils._C, cumesh._C, cumesh._cubvh, cumesh._cumesh_xatlas
 import flex_gemm.kernels.cuda, o_voxel._C, o_voxel.postprocess
@@ -138,7 +138,9 @@ features = extractor.extract_features(torch.randn(1, 3, 32, 32))
 assert features.shape == (1, 9, 32) and torch.isfinite(features).all()
 q = torch.randn(1, 16, 2, 32, device='cuda', dtype=torch.bfloat16)
 assert torch.isfinite(flash_attn.flash_attn_func(q, q, q)).all()
-print(json.dumps({d.metadata['Name']: d.version for d in metadata.distributions()}))
+# Imported setuptools adds its vendored distributions to sys.path. They must not
+# overwrite the installed wheel version in this environment's inventory.
+print(json.dumps({d.metadata['Name']: d.version for d in metadata.distributions(path=site.getsitepackages())}))
 """
 
 
