@@ -22,7 +22,7 @@ import { connectToPeer, disconnectFromPeer } from './peerSocketRelay.js';
 import { DEFAULT_PEER_PORT } from '../lib/ports.js';
 import { peerBaseUrl } from '../lib/peerUrl.js';
 import { isPeerApiRequestAllowed } from '../lib/apiAccessPolicy.js';
-import { peerFetch, peerAuthHeaders, PEER_AUTH_HEADER } from '../lib/peerHttpClient.js';
+import { peerFetch, readPeerBody, peerAuthHeaders, PEER_AUTH_HEADER } from '../lib/peerHttpClient.js';
 import { isPairedPeer, PAIR_SECRET_MIN_LENGTH } from '../lib/peerPairing.js';
 import { withAbortTimeout } from '../lib/abortTimeout.js';
 import { ServerError } from '../lib/errorHandler.js';
@@ -721,7 +721,7 @@ async function pairPeerSyncSecretNow(id) {
           : `The peer could not pair the sync secret (HTTP ${response.status}).`;
     throw new ServerError(message, { status: 502, code: 'PEER_PAIR_REJECTED' });
   }
-  const body = await response.json().catch(() => null);
+  const body = await readPeerBody(response, 'json', { maxBytes: 64 * 1024, idleTimeoutMs: PROBE_TIMEOUT_MS }).catch(() => null);
   if (body?.paired !== true) {
     throw new ServerError('The peer did not confirm sync-secret pairing.', { status: 502, code: 'PEER_PAIR_UNCONFIRMED' });
   }

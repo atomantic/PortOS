@@ -2223,6 +2223,41 @@ describe('peerSync', () => {
   });
 
   describe('pushRecordToPeer', () => {
+    it('accepts a large missing-asset acknowledgement and keeps delivery pending', async () => {
+      const sub = await subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' }, { adoptedFromReverse: true });
+      vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Example' });
+      const missingAssets = Array.from({ length: 1500 }, (_, i) => ({ kind: 'image', filename: `${i}-${'a'.repeat(80)}.png` }));
+      const response = new Response(JSON.stringify({ missingAssets }));
+      vi.mocked(peerFetch).mockResolvedValue(response);
+      expect(await pushRecordToPeer(sub)).toMatchObject({ pushed: true, missingAssets });
+      expect((await findPeerSubscription('peer-a', 'universe', 'u1')).lastPushedHash).toBeFalsy();
+    });
+
+    it.each([200, 400, 409])('ends a stalled HTTP %s body without confirming delivery and permits retry', async (status) => {
+      const sub = await subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' }, { adoptedFromReverse: true });
+      vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Example' });
+      let stream;
+      const cancel = vi.fn();
+      const response = new Response(new ReadableStream({ start(controller) { stream = controller; }, cancel }), { status });
+      vi.mocked(peerFetch).mockResolvedValueOnce(response);
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      let outcome;
+      const pending = pushRecordToPeer(sub).then(result => { outcome = result; });
+      try {
+        await vi.waitFor(() => expect(peerFetch).toHaveBeenCalledOnce());
+        await vi.advanceTimersByTimeAsync(5000);
+        expect(outcome).toMatchObject({ pushed: false, reason: 'network' });
+        expect(cancel).toHaveBeenCalledOnce();
+        expect((await findPeerSubscription('peer-a', 'universe', 'u1')).lastPushedAt).toBeFalsy();
+        vi.mocked(peerFetch).mockResolvedValue(acceptsPush());
+        expect(await pushRecordToPeer(sub)).toMatchObject({ pushed: true });
+      } finally {
+        stream.error(new Error('Synthetic stream cleanup'));
+        await pending;
+        vi.useRealTimers();
+      }
+    });
+
     it('refuses to push when our instance id is unknown', async () => {
       vi.mocked(getInstanceId).mockResolvedValue('unknown');
       const result = await pushRecordToPeer({

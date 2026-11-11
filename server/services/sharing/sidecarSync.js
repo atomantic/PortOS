@@ -23,7 +23,7 @@ import { imageSidecarName, sanitizeAssetFilename } from './buckets.js';
 import { sidecarGenParamsHash, stripImageSidecarLocalFields, IMAGE_SIDECAR_LOCAL_FIELDS } from '../../lib/assetHash.js';
 import { isStr } from '../../lib/textUtils.js';
 import { isPlainObject } from '../../lib/objects.js';
-import { peerFetch } from '../../lib/peerHttpClient.js';
+import { peerFetch, readPeerBody } from '../../lib/peerHttpClient.js';
 import { withAbortTimeout } from '../../lib/abortTimeout.js';
 import { getPeers } from '../instances.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
@@ -33,41 +33,6 @@ import { SIDECAR_MAX_BYTES } from './assetLimits.js';
 // Mirror the image-pull timeout (peerSync.js ASSET_PULL_TIMEOUT_MS) so a hung
 // peer connection aborts instead of holding the pull open indefinitely.
 const SIDECAR_PULL_TIMEOUT_MS = 60000;
-
-/**
- * Read a fetch Response body into a Buffer, aborting once `maxBytes` is
- * exceeded. peerFetch's HTTPS shim already enforces maxBytes mid-stream, but the
- * plain-HTTP path falls back to native fetch, which does NOT — a peer that lies
- * about Content-Length (or uses chunked transfer) could otherwise buffer an
- * unbounded body via `res.arrayBuffer()` before any post-read size check runs.
- * When a ReadableStream reader is available (native fetch) we cap mid-stream;
- * otherwise we fall back to arrayBuffer (the shim already bounded it, or it's a
- * test mock). Returns null on over-cap or any read error (best-effort, runs
- * outside the Express request lifecycle so a throw must not escape).
- */
-async function readBodyCapped(res, maxBytes) {
-  const reader = res.body?.getReader?.();
-  if (!reader) {
-    return res.arrayBuffer().then((ab) => Buffer.from(ab)).catch(() => null);
-  }
-  const chunks = [];
-  let total = 0;
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      total += value.length;
-      if (total > maxBytes) {
-        await reader.cancel().catch(() => {});
-        return null;
-      }
-      chunks.push(Buffer.from(value));
-    }
-  } catch {
-    return null;
-  }
-  return Buffer.concat(chunks);
-}
 
 /**
  * True when a held image with no origin takes the origin `peer`'s sidecar names:
@@ -136,7 +101,8 @@ export async function pullSidecarForImage(peer, base, imageFilename) {
   if (!Number.isFinite(contentLength) || contentLength <= 0 || contentLength > SIDECAR_MAX_BYTES) return false;
   // Stream with a hard cap so a peer lying about Content-Length can't blow
   // memory on the native-fetch (plain-HTTP) path before the size checks below.
-  const buf = await readBodyCapped(res, SIDECAR_MAX_BYTES);
+  const bytes = await readPeerBody(res, 'arrayBuffer', { maxBytes: SIDECAR_MAX_BYTES, idleTimeoutMs: SIDECAR_PULL_TIMEOUT_MS }).catch(() => null);
+  const buf = bytes === null ? null : Buffer.from(bytes);
   if (!buf || buf.length === 0 || buf.length > SIDECAR_MAX_BYTES || buf.length !== contentLength) return false;
   // JSON-parse gate: a peer (or an intermediary) could serve an HTML error
   // page with a 200, which we'd otherwise write as `<base>.metadata.json` and

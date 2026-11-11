@@ -2587,6 +2587,30 @@ describe('instances.js', () => {
       expect(peer).not.toHaveProperty('syncSecret');
     });
 
+    it('ends a stalled pairing body, preserves the local secret and releases the pairing queue', async () => {
+      const peer = makePeer({ enabled: false });
+      readJSONFile.mockResolvedValue({ self: { instanceId: selfId }, peers: [peer] });
+      let stream;
+      const cancel = vi.fn();
+      const response = new Response(new ReadableStream({ start(controller) { stream = controller; }, cancel }));
+      fetch.mockResolvedValueOnce(response);
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      let outcome;
+      const pending = pairPeerSyncSecret(peer.id).catch(error => { outcome = error; });
+      try {
+        await vi.waitFor(() => expect(response.body.locked).toBe(true));
+        await vi.advanceTimersByTimeAsync(5000);
+        expect(outcome).toMatchObject({ code: 'PEER_PAIR_UNCONFIRMED' });
+        expect(cancel).toHaveBeenCalledOnce();
+        expect(peer).not.toHaveProperty('syncSecret');
+        expect(await pairPeerSyncSecret(peer.id)).toHaveProperty('syncSecret');
+      } finally {
+        stream.error(new Error('Synthetic stream cleanup'));
+        await pending;
+        vi.useRealTimers();
+      }
+    });
+
     it('accepts a generated secret only for one registered peer and preserves sync consent', async () => {
       const peer = makePeer({ syncEnabled: false, syncCategories: { universe: false } });
       readJSONFile.mockResolvedValue({ self: { instanceId: selfId }, peers: [peer] });

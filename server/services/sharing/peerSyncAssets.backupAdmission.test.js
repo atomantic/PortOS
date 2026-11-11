@@ -25,7 +25,7 @@ vi.mock('../../lib/databaseMaintenanceJournal.js', async (importOriginal) => ({
 vi.mock('../instances.js', () => ({
   getPeers: vi.fn(async () => [{ instanceId: 'peer-a', name: 'peer-a', address: '192.0.2.10', port: 5555 }]),
 }));
-vi.mock('../../lib/peerHttpClient.js', () => ({ peerFetch: vi.fn() }));
+vi.mock('../../lib/peerHttpClient.js', async (importOriginal) => ({ ...(await importOriginal()), peerFetch: vi.fn() }));
 vi.mock('../tracks/index.js', () => ({ getTrack: vi.fn(), trackAudioFilename: vi.fn() }));
 
 const { peerFetch } = await import('../../lib/peerHttpClient.js');

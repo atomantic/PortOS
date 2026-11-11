@@ -9,7 +9,7 @@ const root = createTempDataRoot('wr-bible-sync-');
 vi.mock('../../lib/fileUtils.js', async (original) => makePathsProxy(await original(), { dataRoot: () => root }));
 vi.mock('../instances.js', () => ({ getPeers: vi.fn(async () => [{ instanceId: 'peer-a', address: '192.0.2.10', port: 5555 }]) }));
 vi.mock('../sharing/peerSync.js', () => mockNoPeerSync());
-vi.mock('../../lib/peerHttpClient.js', () => ({ peerFetch: vi.fn() }));
+vi.mock('../../lib/peerHttpClient.js', async (importOriginal) => ({ ...(await importOriginal()), peerFetch: vi.fn() }));
 const { peerFetch } = await import('../../lib/peerHttpClient.js');
 const { pullMissingWorkBibles } = await import('../sharing/peerSyncAssets.js');
 const { buildWorkBibleManifest, diffWorkBibleManifest, workBiblePath } = await import('./bibleSync.js');
