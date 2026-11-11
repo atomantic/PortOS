@@ -1,5 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { join } from 'node:path';
+import { waitForMusicVideoRenderDrain } from '../../test/musicVideoRenderDrain.js';
 
 const h = vi.hoisted(() => {
   const emitter = () => {
@@ -91,6 +92,8 @@ beforeEach(() => {
   h.store.clear();
   look.calls.length = 0;
 });
+
+afterEach(waitForMusicVideoRenderDrain);
 
 describe('excerpt render cancellation', () => {
   it('keeps deferred update admission blocked through the final record write', async () => {
@@ -352,5 +355,7 @@ describe('excerpt setup failure after the rendering mark (#11777)', () => {
     const retry = await startExcerptRender(id, { startSec: 0, endSec: 2 }, { revisionId: 'rev-1' });
     expect(retry.jobId).toBeTruthy();
     expect(h.store.get(id).revisions[0].status).toBe('rendering');
+    lastProc().emit('close', 1, null);
+    await vi.waitFor(() => expect(terminalFrames(retry.jobId)).toHaveLength(1));
   });
 });
