@@ -37,7 +37,8 @@ export async function startLyricVerify(projectId) {
         if (fingerprint(fresh) !== fingerprint(project) || await verifyPrerequisites(fresh) !== stem) {
           throw new ServerError('The song or lyrics changed during the check. Run it again.', { status: 409, code: 'LYRIC_VERIFY_CHANGED' });
         }
-        broadcastSse(job, { type: 'complete', result });
+        if (job.controller.signal.aborted) broadcastSse(job, { type: 'canceled' });
+        else broadcastSse(job, { type: 'complete', result });
       }
     } catch (err) {
       if (job.controller.signal.aborted || err?.canceled) broadcastSse(job, { type: 'canceled' });

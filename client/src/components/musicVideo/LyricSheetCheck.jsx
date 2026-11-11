@@ -6,6 +6,8 @@ import { formatTimecode } from '../../utils/formatters.js';
 export default function LyricSheetCheck({ project, audioFilename, aligning, onEditLocal, onSave }) {
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
+  const [inserting, setInserting] = useState(false);
+  const insertionPending = useRef(false);
   const cues = project.lyricCues || [];
   const signature = JSON.stringify([project.trackId, project.uploadedAudioFilename, project.vocalStemFilename, project.vocalStemMasterFilename, cues]);
   const current = useRef(signature);
@@ -23,6 +25,9 @@ export default function LyricSheetCheck({ project, audioFilename, aligning, onEd
     onKickoffError: err => { setError(err.message); return true; },
   });
   const insert = async (phrase, index) => {
+    if (insertionPending.current) return;
+    insertionPending.current = true;
+    setInserting(true);
     const report = result;
     const originalMarkers = project.lyricMarkers || [];
     const cue = { id: `cue-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`, text: phrase.text, startSec: phrase.startSec, endSec: phrase.endSec };
@@ -45,6 +50,9 @@ export default function LyricSheetCheck({ project, audioFilename, aligning, onEd
         onEditLocal({ lyricCues: cues, lyricMarkers: originalMarkers });
       }
       setError(err.message || 'Could not save the line.');
+    } finally {
+      insertionPending.current = false;
+      setInserting(false);
     }
   };
   return <div className="space-y-2 text-sm">
@@ -57,7 +65,7 @@ export default function LyricSheetCheck({ project, audioFilename, aligning, onEd
       {result.extraPhrases.length > 0 && <div><h4>Sung but not on the sheet</h4>{result.extraPhrases.map((phrase, index) => <div key={`${phrase.startSec}-${phrase.endSec}`}>
         <span>{formatTimecode(phrase.startSec)}–{formatTimecode(phrase.endSec)} · {phrase.text || 'vocal, no words recognised'}</span>{' '}
         <button type="button" className="min-h-[44px] text-port-accent" onClick={() => { const audio = document.querySelector('audio[aria-label="Preview track audio"]'); if (audio) { audio.currentTime = phrase.startSec; void audio.play().catch(() => {}); } }}>Play</button>{' '}
-        <button type="button" className="min-h-[44px] text-port-accent" onClick={() => void insert(phrase, index)}>Insert line here</button>
+        <button type="button" className="min-h-[44px] text-port-accent disabled:opacity-50" disabled={inserting} onClick={() => void insert(phrase, index)}>Insert line here</button>
       </div>)}</div>}
       {result.unsungCues.length > 0 && <div><h4>On the sheet but not sung</h4>{result.unsungCues.map(cue => <div key={cue.cueId}>{cue.text} <button type="button" className="min-h-[44px] text-port-accent" onClick={() => document.getElementById(`mv-lyric-cue-${cue.cueId}`)?.scrollIntoView({ block: 'center' })}>Show in Lyrics</button></div>)}</div>}
     </div>}

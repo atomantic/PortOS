@@ -24,6 +24,19 @@ describe('lyric sheet check', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('Could not save the line.');
     expect(screen.getByText(/extra words/)).toBeTruthy();
   });
+  it('prevents a second insertion while the first save is pending', async () => {
+    let finish;
+    const save = vi.fn(() => new Promise(resolve => { finish = resolve; }));
+    render(<LyricSheetCheck project={{ id: 'p', vocalStemFilename: 'stem.wav', vocalStemMasterFilename: 'song.wav', lyricCues: [cue] }} audioFilename="song.wav" onEditLocal={vi.fn()} onSave={save} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Check sheet against vocal' }));
+    act(() => options.onComplete({ result: { extraPhrases: [{ startSec: 3, endSec: 4, text: 'extra' }, { startSec: 5, endSec: 6, text: 'more' }], unsungCues: [] } }));
+    const buttons = screen.getAllByRole('button', { name: 'Insert line here' });
+    fireEvent.click(buttons[0]);
+    expect(buttons[1]).toBeDisabled();
+    fireEvent.click(buttons[1]);
+    expect(save).toHaveBeenCalledOnce();
+    await act(async () => finish(true));
+  });
   it('inserts a reported phrase into the saved sheet in time order', async () => {
     const edit = vi.fn();
     const save = vi.fn(async () => true);
