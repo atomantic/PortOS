@@ -64,7 +64,10 @@ describe('pickSongRow', () => {
   it('requires an exact title and uses length to disambiguate exact-title rows', () => {
     expect(pickSongRow([row('Another Song 3:07')], { title: 'Night Drive', durationSec: 187 })).toBe(-1);
     expect(pickSongRow([row('Night Drive (Remix) 3:07')], { title: 'Night Drive', durationSec: 187 })).toBe(-1);
+    expect(pickSongRow([row('Night Drive 13:07')], { title: 'Night Drive', durationSec: 187 })).toBe(-1);
+    expect(pickSongRow([row('Night Drive 3:07 • synthwave')], { title: 'Night Drive', durationSec: 187 })).toBe(0);
     expect(pickSongRow([row('  NIGHT   DRIVE... 3:07')], { title: 'Night Drive', durationSec: 187 })).toBe(0);
+    expect(pickSongRow([row('Use Me 3:07')], { title: 'Use Me', durationSec: 187 })).toBe(0);
     expect(pickSongRow([row('Night Drive 2:10'), row('Night Drive 3:07')], { title: 'Night Drive', durationSec: 187 })).toBe(1);
   });
 });
@@ -75,7 +78,7 @@ describe('pickSongRow', () => {
 const fmt = (sec) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
 const PILL = 'pointer-events-none rounded-full border-2 px-2 pt-1 pb-1.5 font-mono text-xs';
 function hookPage({ windowAt = 158, pxPerSec = 22.2, stuckAt = null, restored = false, delayedSongResults = false } = {}) {
-  const state = { windowAt, clicked: [], drags: 0, lyrics: true, songRows: [{ text: 'Night Drive 3:42', html: '' }], songPolls: 0 };
+  const state = { windowAt, clicked: [], drags: 0, lyrics: true, songRows: [{ text: 'Night Drive 3:42', html: '' }], songPolls: 0, searchMutationCount: 0 };
   const leaf = (text, cls, parentText = text) => ({ children: [], textContent: text, className: cls, offsetParent: {}, parentElement: { textContent: parentText } });
   const dom = {
     'span,div': () => [
@@ -92,7 +95,7 @@ function hookPage({ windowAt = 158, pxPerSec = 22.2, stuckAt = null, restored = 
     first: () => locator(sel, hasText, 0),
     nth: (nextIndex) => locator(sel, hasText, nextIndex),
     filter: (o) => locator(sel, o.hasText, index),
-    count: async () => 1,
+    count: async () => sel.includes('aria-busy') || sel.includes('progressbar') ? 0 : 1,
     waitFor: async () => {},
     fill: async () => {},
     inputValue: async () => 'Night Drive',
@@ -112,8 +115,10 @@ function hookPage({ windowAt = 158, pxPerSec = 22.2, stuckAt = null, restored = 
     waitForTimeout: async (ms) => {
       if (delayedSongResults && ms === 250) {
         state.songPolls += 1;
-        if (state.songPolls === 1) state.songRows = [{ text: 'Other Song 3:07', html: '' }];
-        if (state.songPolls === 2) state.songRows = [{ text: 'Night Drive 3:42', html: '' }, { text: 'Night Drive 3:07', html: '' }];
+        if (state.songPolls === 1) { state.songRows = [{ text: 'Other Song 3:07', html: '' }]; state.searchMutationCount += 1; }
+        if (state.songPolls === 2) { state.songRows = [{ text: 'Night Drive 3:42', html: '' }, { text: 'Night Drive 3:07', html: '' }]; state.searchMutationCount += 1; }
+      } else if (!delayedSongResults && ms === 250 && state.searchMutationCount === 0) {
+        state.searchMutationCount += 1;
       }
     },
     locator: (sel) => locator(sel),
@@ -126,7 +131,11 @@ function hookPage({ windowAt = 158, pxPerSec = 22.2, stuckAt = null, restored = 
     }) }),
     waitForFunction: async (fn, arg) => { if (!fn(arg)) throw new Error('state did not change'); },
     evaluate: async (fn, arg) => {
-      globalThis.document = { querySelectorAll: (sel) => dom[sel]?.() ?? [] };
+      const source = fn.toString();
+      globalThis.document = { querySelectorAll: (sel) => dom[sel]?.() ?? [], querySelector: () => null };
+      globalThis.window = { __portosHookSearchMutationCount: state.searchMutationCount, __portosHookSearchMutationObserver: { disconnect: () => {} } };
+      if (source.includes('MutationObserver')) state.searchMutationCount = 0;
+      if (source.includes('__portosHookSearchMutationCount || 0')) return state.searchMutationCount;
       return fn(arg);
     },
     mouse: {

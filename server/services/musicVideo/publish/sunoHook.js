@@ -25,6 +25,7 @@ const MAX_DRAGS = 20;
 const WAVEFORM = '[class*=waveform], [data-testid*=waveform], canvas';
 const SONG_RESULTS_WAIT_MS = 10_000;
 const SONG_RESULTS_POLL_MS = 250;
+const SONG_RESULTS_STABLE_POLLS = 3;
 
 const fmtClock = (sec) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
 const parseClock = (text) => {
@@ -38,7 +39,6 @@ async function selectSong(page, payload) {
   await page.locator('button:visible').filter({ hasText: /Replace Song|Select Song/ }).first().click({ timeout: T });
   await page.locator('[role=dialog]').first().waitFor({ timeout: T });
   const search = page.locator('textarea[placeholder*="Search by song name"]').first();
-  await search.fill(payload.title, { timeout: T });
   const readRows = () => page.evaluate(() => [...document.querySelectorAll('[role=dialog] button')]
     .filter((b) => (b.innerText || '').trim() === 'Use')
     .map((b) => {
@@ -46,20 +46,35 @@ async function selectSong(page, payload) {
       for (let i = 0; i < 4 && row.parentElement && row.parentElement.querySelectorAll('button').length < 3; i += 1) row = row.parentElement;
       return { text: row.innerText || '', html: row.innerHTML };
     }));
+  const beforeSearch = JSON.stringify((await readRows()).map(({ text, html }) => [text, html]));
+  await page.evaluate(() => {
+    const dialog = document.querySelector('[role=dialog]');
+    window.__portosHookSearchMutationCount = 0;
+    window.__portosHookSearchMutationObserver?.disconnect();
+    if (!dialog) return;
+    window.__portosHookSearchMutationObserver = new MutationObserver(() => { window.__portosHookSearchMutationCount += 1; });
+    window.__portosHookSearchMutationObserver.observe(dialog, { subtree: true, childList: true, characterData: true, attributes: true });
+  });
+  await search.fill(payload.title, { timeout: T });
   const deadline = Date.now() + SONG_RESULTS_WAIT_MS;
-  let previous = null;
+  let previous = beforeSearch;
+  let sawUpdatedRows = false;
   let stablePolls = 0;
   let rows = [];
   while (Date.now() < deadline) {
     const searchValue = await search.inputValue();
     rows = await readRows();
     const snapshot = JSON.stringify(rows.map(({ text, html }) => [text, html]));
-    stablePolls = searchValue === payload.title && snapshot === previous ? stablePolls + 1 : 0;
-    if (stablePolls >= 2) break;
+    const mutationCount = await page.evaluate(() => window.__portosHookSearchMutationCount || 0);
+    if (snapshot !== beforeSearch || mutationCount > 0) sawUpdatedRows = true;
+    const loading = await page.locator('[role=dialog] [aria-busy="true"], [role=dialog] [role=progressbar]').count();
+    stablePolls = searchValue === payload.title && sawUpdatedRows && loading === 0 && snapshot === previous ? stablePolls + 1 : 0;
+    if (stablePolls >= SONG_RESULTS_STABLE_POLLS) break;
     previous = snapshot;
     await page.waitForTimeout(SONG_RESULTS_POLL_MS);
   }
-  if (stablePolls < 2) throw new Error(`song search results did not settle within ${SONG_RESULTS_WAIT_MS} ms`);
+  await page.evaluate(() => window.__portosHookSearchMutationObserver?.disconnect());
+  if (stablePolls < SONG_RESULTS_STABLE_POLLS) throw new Error(`${rows.length} rows match "${payload.title}" and song search results did not refresh and settle within ${SONG_RESULTS_WAIT_MS} ms`);
   const index = pickSongRow(rows, payload);
   if (index < 0) throw new Error(`${rows.length} rows match "${payload.title}" and none could be told apart by id or length`);
   await page.locator('[role=dialog] button').filter({ hasText: /^Use$/ }).nth(index).click({ timeout: T });
