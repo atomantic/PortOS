@@ -11,7 +11,7 @@
 //   1. add a descriptor here;
 //   2. tag its pages in navManifest.js (`feature: '<id>'`, or a SECTION_FEATURE
 //      entry when a whole sidebar section belongs to it) — a sidebar row also
-//      needs its own NAV_PRESENTATION entry in client/src/components/Layout.jsx
+//      needs its own NAV_PRESENTATION entry in client/src/lib/navPresentation.js
 //      (path → icon): feature, section and label are inherited from
 //      NAV_COMMANDS, so the path is the one thing declared twice — the icon
 //      lives only in NAV_PRESENTATION;
