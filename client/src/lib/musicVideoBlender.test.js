@@ -76,8 +76,9 @@ describe('blenderShotThumbPath', () => {
     // Stills arrive newest first.
     state.renders.s010.stills.unshift({ file: 's010/stills/t000004000.png', thumbnail: 's010/stills/t000004000.thumb.jpg', timeSec: 4, createdAt: '2026-10-01T10:40:00.000Z', stale: false });
     expect(blenderShotThumbPath(state, state.manifest.shots[0])).toBe('s010/stills/t000004000.thumb.jpg');
+    // Existing installs keep their older still visible until it is rendered again.
     delete state.renders.s010.stills[0].thumbnail;
-    expect(blenderShotThumbPath(state, state.manifest.shots[0])).toBe('s010/final/poster.jpg');
+    expect(blenderShotThumbPath(state, state.manifest.shots[0])).toBe('s010/stills/t000004000.png');
     state.renders.s010.stills = [];
     expect(blenderShotThumbPath(state, state.manifest.shots[0])).toBe('s010/final/poster.jpg');
     // A render with no picture yet (interrupted before its first frame) has none to show.

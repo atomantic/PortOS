@@ -283,7 +283,7 @@ export function blenderShotThumbPath(state, shot) {
   const renders = state?.renders?.[shot?.id];
   if (!renders) return null;
   // Stills arrive newest first.
-  return renders.preview?.poster || renders.stills?.[0]?.thumbnail || renders.final?.poster || null;
+  return renders.preview?.poster || renders.stills?.[0]?.thumbnail || renders.stills?.[0]?.file || renders.final?.poster || null;
 }
 
 /**
