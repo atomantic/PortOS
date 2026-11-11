@@ -16,7 +16,7 @@ import {
 // resolver composes it with `join()`, which emits backslashes on Windows (the same trap
 // `condaEnv.test.js` documents).
 const ENV = { CONDA_ROOT: '/opt/conda' };
-const FAKE_PYTHON = resolveRiggingPython({ exists: () => true, env: ENV });
+const FAKE_PYTHON = resolveRiggingPython({ exists: (p) => posixPath(p).startsWith('/opt/conda/'), env: ENV });
 
 describe('rigging runtime — install descriptor', () => {
   it('routes provisioning through the reviewed profile instead of an install-time solver', () => {

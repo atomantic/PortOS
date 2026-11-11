@@ -21,6 +21,8 @@
  */
 
 import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { execFile } from '../../lib/childProcess.js';
 import { resolveCondaEnvPython } from '../../lib/condaEnv.js';
 import { isAppleSilicon } from '../../lib/platform.js';
@@ -62,14 +64,16 @@ export function isRiggingPlatformSupported({ platform = process.platform, arch, 
 }
 
 /**
- * The rigging env's interpreter, or `null` when the env has not been created.
+ * Prefer the reviewed private prefix; retain named Conda discovery for existing installs.
  * `exists`/`env` are injectable exactly as `resolveCondaEnvPython` makes them, so this
  * resolves deterministically in tests with no conda on the machine.
  *
- * @param {{exists?: (p: string) => boolean, env?: NodeJS.ProcessEnv}} [opts]
+ * @param {{exists?: (p: string) => boolean, env?: NodeJS.ProcessEnv, home?: string}} [opts]
  * @returns {string|null}
  */
-export function resolveRiggingPython({ exists = existsSync, env } = {}) {
+export function resolveRiggingPython({ exists = existsSync, env, home = homedir() } = {}) {
+  const reviewed = join(home, '.portos', 'envs', RIGGING_RUNTIME.condaEnv, 'bin', 'python');
+  if (exists(reviewed)) return reviewed;
   return resolveCondaEnvPython(RIGGING_RUNTIME.condaEnv, { exists, env });
 }
 

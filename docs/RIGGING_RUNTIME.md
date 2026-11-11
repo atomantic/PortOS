@@ -6,9 +6,11 @@ only on an explicit user request. It does not install or update anything at boot
 Existing environments remain usable through the unchanged real `import bpy`
 readiness probe. Setup refuses to replace an existing `rigging` environment;
 preserve custom work and explicitly remove that environment before reprovisioning.
-Setup asks Conda for its environment directories and atomically reserves the
-`rigging` prefix in the first reported directory. Existing, unregistered, partial
-or concurrently reserved prefixes are refused before creation or downloads.
+Setup installs into the fixed private Conda prefix `~/.portos/envs/rigging`,
+which runtime discovery checks before legacy named Conda environments. Custom
+Conda environment directories do not change that path. Setup atomically reserves
+the prefix; existing, unregistered, partial or concurrently reserved prefixes are
+refused before creation or downloads.
 Failure after reservation removes only that invocation's owned prefix, allowing
 a retry. Cleanup failure remains an explicit error; preserve any custom work
 before manually removing a remaining prefix.
@@ -26,7 +28,7 @@ Reviewed provisioning targets are Apple Silicon macOS and Linux x86_64 with
 glibc 2.28+. Rosetta selects the native Apple Silicon artifacts. Windows and
 Intel macOS remain unsupported; Linux arm64, other architectures and musl are
 explicitly refused because this Blender release supplies no matching reviewed
-wheel/profile. Existing runtime discovery is unchanged. No alternative Blender
+wheel/profile. Legacy named Conda environments remain discoverable. No alternative Blender
 version, source build or floating dependency fallback is attempted.
 
 ## Regeneration and advisory audit
@@ -83,7 +85,7 @@ absence of vulnerabilities.
 
 Fake-process provisioning tests exercise supported targets, Rosetta, refusal of
 unresolved targets, registered/unregistered environment preservation, owned-prefix
-cleanup, invalid Conda paths and actual hash-mismatch
+cleanup, setup-to-runtime path parity with custom Conda directories and actual hash-mismatch
 refusal before Conda creation. They check the offline explicit artifact input,
 hash-only wheel installation and final import probe command. No native environment
 was installed, and no Blender import, rigging export, render, Metal or CUDA

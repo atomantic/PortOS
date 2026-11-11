@@ -54,15 +54,8 @@ def install():
     environments = json.loads(run([conda, 'env', 'list', '--json'], capture_output=True).stdout)['envs']
     if any(Path(prefix).name == 'rigging' for prefix in environments):
         raise SystemExit('The rigging environment already exists. Preserve any custom work, then explicitly remove it with conda env remove -n rigging before reprovisioning.')
-    info = json.loads(run([conda, 'info', '--json'], capture_output=True).stdout)
-    directories = info.get('envs_dirs')
-    if not isinstance(directories, list) or not directories or not isinstance(directories[0], str):
-        raise SystemExit('Conda did not report an environment directory; setup refused.')
-    directory = Path(directories[0])
-    if not directory.is_absolute():
-        raise SystemExit('Conda reported a relative environment directory; setup refused.')
-    directory.mkdir(parents=True, exist_ok=True)
-    prefix = directory / 'rigging'
+    prefix = Path.home() / '.portos/envs/rigging'
+    prefix.parent.mkdir(parents=True, exist_ok=True)
     # mkdir is the ownership boundary, including unregistered and partial prefixes.
     # A second invocation cannot reserve the same path, even before Conda registers it.
     prefix.mkdir()
