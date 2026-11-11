@@ -31,6 +31,7 @@ import { EFFORT_LEVELS } from '../lib/providerModels.js';
 import { settingsSlicePatchSchema, privateCredentialParamsSchema, privateCredentialInputSchema, backupConfigSchema, autoUpdateSettingsSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, autofixerSettingsSchema, codeReviewSettingsSchema, locationSettingsSchema, hideFirstRunCardSchema, networkSetupPreferenceSchema, settingsEmbeddingsSchema, localLlmSettingsSchema, imessageConfigSchema, signalConfigSchema, beeperSettingsSchema, beeperSavedScopesSchema, spotifyConfigSchema, youtubeConfigSchema, apiAccessSettingsSchema, instanceFeatureSettingsSchema, instanceFeatureIdSchema, instanceFeatureUpdateSchema, instanceFeatureGroupSettingsSchema, instanceFeatureGroupIdSchema, instanceFeatureGroupUpdateSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, musicSettingsSchema, federationSettingsSchema, privacySettingsSchema, seriesAutopilotSettingsSchema, layeredIntelligenceSettingsSchema, imageGenGrokSettingsSchema, imageGenAgySettingsSchema, imageGenFalSettingsSchema, imageGenRunwaySettingsSchema, imageGenHiggsfieldSettingsSchema, imageGenGoogleSettingsSchema, imageGenGeminiSettingsSchema, renderDefaultsSettingsSchema, videoGenSettingsSchema, subscriptionCostsMapSchema, subscriptionPlanTiersMapSchema, usageApiBilledInstanceIdsSchema, namedOrchestrationProfileSchema, orchestrationProfilesSettingsSchema, harnessSettingsSchema, credentialBootstrapsSettingsSchema, validateRequest } from '../lib/validation.js';
 import { filmLookSavedPresetsSchema } from '../lib/filmLookValidation.js';
 import { dockerContainmentSettingsSchema } from '../lib/dockerContainmentValidation.js';
+import { codeAnimationExecutionArmedSchema } from '../lib/codeAnimationContainment.js';
 
 const router = Router();
 
@@ -599,6 +600,11 @@ const validateSettingsPatch = async (body) => {
   }
   if (body?.dockerContainment !== undefined) {
     validateRequest(dockerContainmentSettingsSchema, body.dockerContainment);
+  }
+  // Normally written only by a passing Code Animation execution check. A direct
+  // save must be that exact record, or null to require an explicit check again.
+  if (body?.codeAnimationExecutionArmed !== undefined) {
+    validateRequest(codeAnimationExecutionArmedSchema.nullable(), body.codeAnimationExecutionArmed);
   }
   if (body?.instanceFeatures !== undefined) {
     validateRequest(instanceFeatureSettingsSchema, body.instanceFeatures);

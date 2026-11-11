@@ -103,6 +103,15 @@ unless asked. Publishing stays manual.
 
 ## If Blender is not ready
 
-`tool.ready: false` in the state carries the reason. A `409 MUSIC_VIDEO_BLENDER_NEEDS_TRUSTED_LOCAL` means Blender
-is in contained mode. Do not change the execution mode or run the execution check yourself: it grants host
-access, so tell the operator and stop.
+`tool.ready: false` in the state carries the reason (`tool.reason`). Two different things can be behind it:
+
+- **The execution mode is the operator's choice.** Never change it. A `409 MUSIC_VIDEO_BLENDER_NEEDS_TRUSTED_LOCAL`
+  (or `tool.executionMode: "contained"`) means Blender is in contained mode, where a film cannot render: tell the
+  operator and stop.
+- **The execution check is only a self-test of the saved configuration.** It runs PortOS's own probe scripts and a
+  fixed test scene, never the film, and changes no setting. PortOS re-runs it by itself after a restart, so a ready
+  film normally stays ready. When `tool.ready` is false for a check reason (the check has not run in this server
+  process, the Blender app or engine changed since the last check, or the test render failed), an authenticated
+  session may run it: `POST /api/code-animation/execution/probe`, then read `lanes.blender` in the answer (or
+  `tool` in the film state). If it still is not ready, report `lanes.blender.reason` to the operator and stop:
+  do not edit the Blender path, mode or engine to get past it.

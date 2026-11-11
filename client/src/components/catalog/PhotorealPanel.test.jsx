@@ -61,7 +61,7 @@ describe('PhotorealPanel', () => {
     expect(screen.getByLabelText('Blender executable')).toHaveValue(blenderPath);
     fireEvent.click(screen.getByRole('button', { name: 'Save Blender' }));
     await waitFor(() => expect(updateCodeAnimationExecutionTools).toHaveBeenCalledWith({ blender: {
-      executable: blenderPath, executionMode: 'contained', engine: 'CYCLES', acknowledgeHostAccess: false,
+      executable: blenderPath, executionMode: 'contained', engine: 'CYCLES',
     } }, { silent: true }));
     fireEvent.click(await screen.findByRole('button', { name: 'Check Blender' }));
     await waitFor(() => expect(probeCodeAnimationExecution).toHaveBeenCalled());

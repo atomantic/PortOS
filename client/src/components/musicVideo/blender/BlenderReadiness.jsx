@@ -31,9 +31,8 @@ export default function BlenderReadiness({ blender }) {
       {contained ? (
         <div role="status" className="space-y-1.5 rounded border border-port-warning/40 bg-port-warning/10 p-2 text-xs">
           <p>
-            Blender is set to contained execution, and a Blender film cannot render there: its scripts are trusted operator code that
-            drives the GPU and writes into this project&apos;s workspace. In Blender setup choose Trusted local, acknowledge host
-            access, save, then Check Blender. Only run film scripts you trust.
+            Blender is set to contained execution, and a Blender film cannot render there: its scripts drive the GPU and write
+            into this project&apos;s workspace. In Blender setup choose Trusted local, save, then Check Blender.
           </p>
           <button type="button" className={buttonCls} onClick={() => setOpenRequest((count) => count + 1)}>Open Blender setup</button>
         </div>
@@ -44,7 +43,7 @@ export default function BlenderReadiness({ blender }) {
         </p>
       ) : (
         <p className="text-xs text-port-text-muted">
-          Blender{tool.version ? ` ${tool.version}` : ''} is ready in Trusted local mode. Film scripts run with host access: only run source you trust.
+          Blender{tool.version ? ` ${tool.version}` : ''} is ready in Trusted local mode.
         </p>
       )}
       <ProductionContainment inline rendererKind="blender" onExecutionChange={onExecutionChange} openRequest={openRequest} locked={starting} />

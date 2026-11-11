@@ -12,7 +12,12 @@ Pick it as the project's render style (`composition.mode: "blender"`, shown as "
   panel's Settings tab).
 - **Trusted local mode.** A film renders on the GPU and writes frames into the project workspace, which the
   contained sandbox cannot do. In contained mode every run answers `409 MUSIC_VIDEO_BLENDER_NEEDS_TRUSTED_LOCAL`.
-  PortOS never changes that setting for you.
+  PortOS never changes that setting for you. Choosing the mode and saving it is all it takes: there is nothing to
+  acknowledge.
+- **A passed check.** Check Blender runs PortOS's own test of the saved Blender, mode and engine. You run it once.
+  After a PortOS restart the same check runs again by itself while those three are unchanged, so the film is ready
+  without another click (the first read after a restart can take a few seconds). Change the Blender, the mode or the
+  engine, or replace the Blender app, and the next check is yours to run.
 - **ffmpeg**, to turn frames into video.
 - The song analyzed (the shot list is checked against its length).
 

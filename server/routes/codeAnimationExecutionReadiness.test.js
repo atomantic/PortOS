@@ -43,6 +43,7 @@ afterAll(async () => {
 
 describe.skipIf(!['darwin', 'linux'].includes(process.platform))('Blender execution check result', () => {
   it('distinguishes successful supervision from an absent or failed Blender test render', async () => {
+    // As an older release stored and sent it: the retired acknowledgement is still read and accepted.
     const settings = { executable: null, executionMode: 'trusted-local', engine: 'BLENDER_EEVEE_NEXT', acknowledgeHostAccess: true };
     state.settings = { codeAnimationExecution: { blender: settings } };
     const missing = await request(app).post('/execution/probe');
@@ -70,6 +71,8 @@ describe.skipIf(!['darwin', 'linux'].includes(process.platform))('Blender execut
     expect(failed.body.probe).toMatchObject({ passed: true, tools: { blender: { passed: false, detail: expect.stringContaining('Blender render check failed') } } });
     expect(failed.body.lanes.blender).toEqual({ ready: false, reason: 'Blender did not render the supported test scene in trusted-local mode. Blender exited with code 1.' });
     expect(state.renderCalls).toBe(1);
+    // Only a check whose test render passed may be re-run unasked after a restart.
+    expect(state.settings.codeAnimationExecutionArmed).toBeNull();
     expect(JSON.stringify(failed.body)).not.toContain('private worker output');
   });
 });

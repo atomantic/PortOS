@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
 
@@ -191,19 +191,35 @@ describe('Production project rendered interactions', () => {
     expect(api.getCodeAnimationProject).toHaveBeenCalledWith(project.id, expect.objectContaining({ silent: true }));
   });
 
-  it('requires host-access acknowledgement and saving before a trusted-local check', async () => {
+  // Regression: Trusted local could not be saved or checked until a box under a host-access warning was ticked.
+  it('saves and checks Trusted local on the mode alone, still only after saving', async () => {
     const user = userEvent.setup();
-    api.getCodeAnimationExecution.mockResolvedValue(execution({ mechanism: { supported: false, reason: 'Unavailable' } }));
+    const path = '/Applications/Example.app/Contents/MacOS/Blender';
+    const saved = (executionMode, blender) => execution({
+      executionMode, mechanism: { supported: false, reason: 'Unavailable' }, tools: { blender: { executable: path, problem: null, engine: 'CYCLES' } },
+      lanes: { browser: { mechanism: 'chromium-cdp-sandbox' }, blender },
+    });
+    api.getCodeAnimationExecution.mockResolvedValue(saved('contained', { ready: false, reason: 'Unavailable' }));
     renderPage('/code-animation/production');
     await screen.findByLabelText('Execution mode');
-    expect(screen.getByRole('button', { name: 'Run execution check' })).toBeDisabled();
+    const check = () => screen.getByRole('button', { name: 'Run execution check' });
+    expect(check()).toBeDisabled();
     await user.selectOptions(screen.getByLabelText('Execution mode'), 'trusted-local');
-    expect(screen.getByRole('button', { name: 'Save tool' })).toBeDisabled();
-    expect(screen.getByText(/Environment scrubbing and process supervision are not containment/)).toBeInTheDocument();
-    await user.click(screen.getByLabelText(/I understand the host access/));
-    expect(screen.getByRole('button', { name: 'Save tool' })).toBeEnabled();
-    expect(screen.getByRole('button', { name: 'Run execution check' })).toBeDisabled();
+    expect(within(executionPanel()).queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(executionPanel()).not.toHaveTextContent(/not containment|trust the source/);
+    expect(check()).toBeDisabled();
+    const trusted = saved('trusted-local', { ready: false, reason: 'Run the execution check.' });
+    api.updateCodeAnimationExecutionTools.mockResolvedValue(trusted);
+    await user.click(screen.getByRole('button', { name: 'Save tool' }));
+    expect(api.updateCodeAnimationExecutionTools).toHaveBeenCalledWith({ blender: { executable: path, executionMode: 'trusted-local', engine: 'CYCLES' } }, { silent: true });
+    await waitFor(() => expect(check()).toBeEnabled());
     expect(api.probeCodeAnimationExecution).not.toHaveBeenCalled();
+    api.probeCodeAnimationExecution.mockResolvedValue({ ...trusted,
+      probe: { passed: true, contained: false, refused: null, checks: [], tools: { blender: { passed: true, detail: 'Cycles / CPU test scene rendered.' } } },
+      lanes: { ...trusted.lanes, blender: { ready: true, reason: null } } });
+    await user.click(check());
+    expect(await screen.findByText(/Ready for production rendering/)).toBeInTheDocument();
+    expect(api.probeCodeAnimationExecution).toHaveBeenCalledTimes(1);
   });
 
   it('says contained mode has no GPU, and warns when EEVEE is selected', async () => {
@@ -265,7 +281,7 @@ describe('Production project rendered interactions', () => {
     api.updateCodeAnimationExecutionTools.mockResolvedValue(saved);
     await user.click(screen.getByRole('button', { name: 'Save tool' }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Run execution check' })).toBeEnabled());
-    expect(api.updateCodeAnimationExecutionTools).toHaveBeenCalledWith({ blender: { executable: path, executionMode: 'contained', engine: 'CYCLES', acknowledgeHostAccess: false } }, { silent: true });
+    expect(api.updateCodeAnimationExecutionTools).toHaveBeenCalledWith({ blender: { executable: path, executionMode: 'contained', engine: 'CYCLES' } }, { silent: true });
     api.probeCodeAnimationExecution.mockResolvedValue({ ...saved,
       probe: { passed: true, refused: null, checks: [{ id: 'network', passed: true, detail: 'Outbound network was refused by the sandbox.' }],
         tools: { blender: { passed: false, detail: 'Blender did not start under containment (failed: exit).' } } },

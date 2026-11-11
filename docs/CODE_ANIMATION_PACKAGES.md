@@ -99,9 +99,10 @@ A job directory is not a boundary. Production package code defaults to the conta
 `server/services/codeAnimation/containedWorker.js`, under an enforced OS
 mechanism. Where no mechanism is available the worker refuses with 503
 `CODE_ANIMATION_CONTAINMENT_UNAVAILABLE`; there is no automatic fallback.
-An operator may instead explicitly select **Trusted local**, acknowledge host
-access, save the setting, and pass a new execution check. This opt-in mode is
-available on macOS and Linux. It runs trusted scene code with the account's
+An operator may instead select **Trusted local**, save the setting, and pass a
+new execution check. Saving the mode is the operator's grant; there is no
+separate acknowledgement step. This opt-in mode is available on macOS and
+Linux. It runs trusted scene code with the account's
 host filesystem, network and process access: environment scrubbing and process
 supervision are **not containment**. Source can escape the supervised group or
 write outside its workspace. Only run source you trust in that mode. Packages,
@@ -173,12 +174,24 @@ of those may contain PortOS data or the home directory.
   and engine, and its fixed test scene has rendered successfully. Every save
   revokes the check. Stage evidence binds its executable fingerprint, version,
   engine, mode and check timestamp; changing readiness prevents reuse.
+- **A restart does not need a manual re-check.** An explicit check that passes
+  with a passing Blender test render records the checked configuration
+  (`codeAnimationExecutionArmed` in `data/settings.json`: the executable's
+  realpath and file fingerprint, the mode and the engine). A new server process
+  re-runs the same check itself while the inspected configuration still equals
+  that record: once at boot, or on the first readiness read or render, which
+  waits for the result. It is tried at most once per process; a failed run
+  leaves the lane refused until an explicit check. Saving the tools clears the
+  record and a replaced executable no longer matches it, so a changed
+  configuration always needs an explicit check. The record is machine-local
+  and, like the tools slice, a direct `PUT /api/settings` of it needs host
+  control.
 - `PUT /api/code-animation/execution/tools` sets `{ blender: { executable,
-  executionMode, engine, acknowledgeHostAccess } }`. Defaults preserve
-  `contained` / `CYCLES`; `trusted-local` requires acknowledgement. `null`
-  clears the executable. This remains an operator-only host-control route.
+  executionMode, engine } }`. Defaults preserve `contained` / `CYCLES`. The
+  `acknowledgeHostAccess` field older clients send is accepted and ignored.
+  `null` clears the executable. This remains an operator-only host-control route.
 - `POST /api/code-animation/execution/probe` runs the containment check on
-  demand (host control; never at boot; no provider call). PortOS's own Node
+  demand (host control; no provider call). PortOS's own Node
   interpreter runs synthetic hostile scripts through the same staging, profile,
   environment and limits, and each check must observe the sandbox refusing:
   reading a file outside the workspace, listing PortOS data or the home

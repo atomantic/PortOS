@@ -1415,7 +1415,7 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
 
 /**
  * `PUT /api/settings` slices that set what runs or the guardrails around it:
- * Autofixer repair policy, Docker containment images/egress, harness enablement and wrapper CLIs, the Code Animation worker tools, the
+ * Autofixer repair policy, Docker containment images/egress, harness enablement and wrapper CLIs, the Code Animation worker tools and the record of their last passing check, the
  * code-review chain, the untrusted content screen in front of agent work,
  * scheduled self-update, scheduled series autopilots, and backup destination/
  * recovery policy, and whole-root voice policy replacement. The store is
@@ -1433,6 +1433,9 @@ export const HOST_CONTROL_SETTINGS_SLICES = Object.freeze([
   // and recovery durability, including writes consumed later by the scheduler.
   'backup',
   'codeAnimationExecution',
+  // The checked configuration PortOS re-runs its execution check for after a
+  // restart; written by that check, so a direct save needs the same authority.
+  'codeAnimationExecutionArmed',
   'codeReview',
   'credentialBootstraps',
   // Image overrides pick what untrusted code runs in; extra hosts widen install egress.
