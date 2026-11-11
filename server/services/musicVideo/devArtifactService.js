@@ -22,6 +22,7 @@ import { musicVideoEvents } from './events.js';
 import {
   addDevArtifactNote,
   addDevArtifactVersion,
+  canonicalDevArtifactExt,
   deleteDevArtifact,
   devArtifactTypeFor,
   devArtifactVersion,
@@ -58,7 +59,8 @@ export async function getDevArtifact(projectId, artifactId) {
 async function storeVersion(projectId, {
   artifactId = null, kind, title, ext, buffer = null, tempPath = null, source, status = null, notes = [],
 }) {
-  const mimeType = devArtifactTypeFor(ext);
+  const canonicalExt = canonicalDevArtifactExt(ext);
+  const mimeType = devArtifactTypeFor(canonicalExt);
   if (!mimeType) throw new ServerError('Unsupported file type — accepted: HTML, Markdown, MP4, PNG, JPG', { status: 400, code: 'VALIDATION_ERROR' });
   const project = await requireProject(projectId);
   // Code-only projects refuse images and clips as *document* assets, and the art guide must be
@@ -66,14 +68,14 @@ async function storeVersion(projectId, {
   // animatics are review evidence — frames and clips rendered FROM the code — so they are
   // exempt here; a planning guide (cast-sets, treatment, other) is still held to the policy.
   if (!DEV_ARTIFACT_EVIDENCE_KINDS.has(kind)) {
-    await assertDocumentMediaPolicy(project, [{ rel: `guide.${ext}`, data: buffer, abs: tempPath }]);
+    await assertDocumentMediaPolicy(project, [{ rel: `guide.${canonicalExt}`, data: buffer, abs: tempPath }]);
   }
   if (artifactId) findDevArtifact(project, artifactId);
   const id = artifactId || newDevArtifactId();
   const version = nextDevArtifactVersion(project, artifactId);
   const out = await withBackupAssetPublication(async () => {
     const { file, bytes } = await writeDevArtifactFile({
-      projectId, artifactId: id, version, ext: ext === 'jpeg' ? 'jpg' : ext, buffer, tempPath,
+      projectId, artifactId: id, version, ext: canonicalExt, buffer, tempPath,
     });
     return mutateProjectRecord(projectId, (current) => {
       if (musicVideoMediaMode(current) !== musicVideoMediaMode(project)) {
