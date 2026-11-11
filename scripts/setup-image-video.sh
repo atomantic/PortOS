@@ -935,7 +935,7 @@ if [[ "$INSTALL_MINIMAX_H3" == "1" ]]; then
     portos_uv venv --python 3.11 "${MINIMAX_H3_DIR}/.venv"
   fi
   echo "📦 Syncing pinned MiniMax H3 MLX packages..."
-  portos_uv pip sync --require-hashes --python "$MINIMAX_H3_PY" "$MINIMAX_H3_LOCK"
+  portos_uv pip sync --require-hashes --only-binary :all: --python "$MINIMAX_H3_PY" "$MINIMAX_H3_LOCK"
   pin_venv_arm64 "${MINIMAX_H3_DIR}/.venv"
   # --verify-seams is Install/Repair-only strictness: it also asserts the encoder
   # seams generate_minimax_h3.py patches, which the readiness probe deliberately

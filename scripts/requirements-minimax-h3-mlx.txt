@@ -1,8 +1,8 @@
 # MiniMax H3 MLX runtime — the validated, fully-pinned input set for ~/.portos/minimax-h3-mlx/.venv.
 # This file is the INPUT; requirements-minimax-h3-mlx.lock.txt is its hash-pinned compile
 # (installed with `uv pip sync --require-hashes`). Bump versions here, then regenerate:
-#   uv pip compile scripts/requirements-minimax-h3-mlx.txt --generate-hashes --python-version 3.11 \
-#     --exclude-newer <timestamp ≥7 days ago> --no-header -o scripts/requirements-minimax-h3-mlx.lock.txt
+#   uv --no-config pip compile scripts/requirements-minimax-h3-mlx.txt --generate-hashes --python-version 3.11 \
+#     --only-binary :all: --exclude-newer <timestamp ≥7 days ago> --no-header -o scripts/requirements-minimax-h3-mlx.lock.txt
 # Run it on an Apple Silicon Mac (mlx ships macOS-only wheels for this resolve).
 #
 # `torch` and `torchvision` are deliberately absent: the port is MLX-native and
@@ -35,10 +35,10 @@ markdown-it-py==4.2.0
 markupsafe==3.0.3
 mdurl==0.1.2
 miniaudio==1.71
-mlx==0.32.0
+mlx==0.32.4
 mlx-audio==0.4.7
 mlx-lm==0.31.3
-mlx-metal==0.32.0
+mlx-metal==0.32.4
 mlx-vlm==0.6.10
 numpy==2.4.6
 opencv-python==5.0.0.93
