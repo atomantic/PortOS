@@ -17,6 +17,7 @@ describe('credentialRegistry', () => {
       expect(Array.isArray(entry.envVars)).toBe(true);
       expect(entry.configurePath).toMatch(/^\//);
       if (entry.getUrl != null) expect(entry.getUrl).toMatch(/^https:\/\//);
+      if (entry.keyFile != null) expect(entry.keyFile).toMatch(/^\.[a-z]+$/);
       if (entry.feature) expect(INSTANCE_FEATURE_IDS).toContain(entry.feature);
     }
   });
