@@ -419,7 +419,7 @@ const submitHostedLane = async ({ body, prepared, backend, hosted, performancePa
     : [];
   if (higgsfieldModel) buildHiggsfieldVideoRequest({
     modelId: higgsfieldModel.id, prompt: body.prompt, negativePrompt: body.negativePrompt,
-    imageUrl: !clipReferences.length && !(prepared.referenceImagePaths?.length) && !prepared.audioFilePath && sourceImagePath ? 'pending:image' : null,
+    imageUrl: sourceImagePath ? 'pending:image' : null,
     endImageUrl: prepared.lastImagePath ? 'pending:end-image' : null,
     audioUrls: prepared.audioFilePath ? ['pending:audio'] : [],
     referenceImageUrls: (useClipReferences ? clipReferences : prepared.referenceImagePaths || []).map((_, i) => `pending:reference-${i}`),
@@ -434,7 +434,6 @@ const submitHostedLane = async ({ body, prepared, backend, hosted, performancePa
     uploadedTempPath,
     ...submissionTagParams(body),
     ...hosted.buildParams(body, prepared),
-    ...(higgsfieldModel && (clipReferences.length || prepared.referenceImagePaths?.length || prepared.audioFilePath) ? { sourceImagePath: null } : {}),
     ...(castReferences.length ? { castReferences, ...(startFrameLayout ? { startFrameLayout } : {}) } : {}),
     ...(useClipReferences ? {
       referenceImagePaths: clipReferences.map((ref) => ref.path),

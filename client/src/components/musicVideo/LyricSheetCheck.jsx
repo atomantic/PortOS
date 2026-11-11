@@ -25,7 +25,7 @@ export default function LyricSheetCheck({ project, audioFilename, aligning, onEd
     onKickoffError: err => { setError(err.message); return true; },
   });
   const insert = async (phrase, index) => {
-    if (insertionPending.current) return;
+    if (insertionPending.current || !phrase.text?.trim()) return;
     insertionPending.current = true;
     setInserting(true);
     const report = result;
@@ -56,7 +56,7 @@ export default function LyricSheetCheck({ project, audioFilename, aligning, onEd
     }
   };
   return <div className="space-y-2 text-sm">
-    <button type="button" disabled={Boolean(reason) || aligning || slot.active} onClick={() => { setError(''); setResult(null); checked.current = current.current; slot.start(); }} className="min-h-[44px] rounded border border-port-border px-2 text-port-accent disabled:opacity-50">Check sheet against vocal</button>
+    <button type="button" disabled={Boolean(reason) || aligning || slot.active || inserting} onClick={() => { if (insertionPending.current) return; setError(''); setResult(null); checked.current = current.current; slot.start(); }} className="min-h-[44px] rounded border border-port-border px-2 text-port-accent disabled:opacity-50">Check sheet against vocal</button>
     {reason && <p className="text-xs text-port-text-muted">{reason}</p>}
     {slot.active && <p role="status" className="text-xs">{slot.stage || 'Preparing'} {slot.percent > 0 ? `${slot.percent}%` : ''} <button type="button" onClick={slot.cancel} className="min-h-[44px] text-port-error">Cancel</button></p>}
     {error && <p role="alert" className="text-port-error">{error}</p>}
@@ -65,7 +65,7 @@ export default function LyricSheetCheck({ project, audioFilename, aligning, onEd
       {result.extraPhrases.length > 0 && <div><h4>Sung but not on the sheet</h4>{result.extraPhrases.map((phrase, index) => <div key={`${phrase.startSec}-${phrase.endSec}`}>
         <span>{formatTimecode(phrase.startSec)}–{formatTimecode(phrase.endSec)} · {phrase.text || 'vocal, no words recognised'}</span>{' '}
         <button type="button" className="min-h-[44px] text-port-accent" onClick={() => { const audio = document.querySelector('audio[aria-label="Preview track audio"]'); if (audio) { audio.currentTime = phrase.startSec; void audio.play().catch(() => {}); } }}>Play</button>{' '}
-        <button type="button" className="min-h-[44px] text-port-accent disabled:opacity-50" disabled={inserting} onClick={() => void insert(phrase, index)}>Insert line here</button>
+        <button type="button" className="min-h-[44px] text-port-accent disabled:opacity-50" disabled={inserting || !phrase.text?.trim()} onClick={() => void insert(phrase, index)}>Insert line here</button>
       </div>)}</div>}
       {result.unsungCues.length > 0 && <div><h4>On the sheet but not sung</h4>{result.unsungCues.map(cue => <div key={cue.cueId}>{cue.text} <button type="button" className="min-h-[44px] text-port-accent" onClick={() => document.getElementById(`mv-lyric-cue-${cue.cueId}`)?.scrollIntoView({ block: 'center' })}>Show in Lyrics</button></div>)}</div>}
     </div>}

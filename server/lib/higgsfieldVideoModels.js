@@ -132,6 +132,7 @@ export function buildHiggsfieldVideoRequest({
   if (endImageUrl && !imageUrl) throw refuse('An end frame needs a start frame');
   if (endImageUrl && !model.endFrameField) throw refuse(`${model.label} takes no end frame`);
   if (audioUrls.length > (model.maxReferenceAudio || 0)) throw refuse(`${model.label} takes at most ${model.maxReferenceAudio || 0} audio references (received ${audioUrls.length})`);
+  if (imageUrl && audioUrls.length) throw refuse(`${model.label} cannot combine anchored start or end frames with reference audio; remove the frames or song audio`);
   const route = refs.length || audioUrls.length ? 'reference' : imageUrl ? 'image' : 'text';
   const text = higgsfieldVideoPromptText(prompt, negativePrompt);
   // The image route is the one where the start frame can carry the whole instruction.

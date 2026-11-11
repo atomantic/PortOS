@@ -20,5 +20,6 @@ describe('buildHiggsfieldImageRequest', () => {
     expect(() => buildHiggsfieldImageRequest({ modelId: 'alibaba/qwen-image-3/edit', prompt: 'a', imageUrls: ['1', '2', '3', '4'] })).toThrow(/at most 3/);
     expect(() => buildHiggsfieldImageRequest({ modelId: 'z-image/turbo', prompt: 'x'.repeat(801) })).toThrow(/Nothing was submitted or truncated/);
     expect(() => buildHiggsfieldImageRequest({ modelId: 'unknown', prompt: 'a' })).toThrow(/Unknown Higgsfield image model/);
+    expect(() => buildHiggsfieldImageRequest({ prompt: '  ', negativePrompt: 'text' })).toThrow(/Prompt is required/);
   });
 });

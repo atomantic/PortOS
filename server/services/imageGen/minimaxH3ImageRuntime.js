@@ -93,7 +93,7 @@ export function minimaxH3ImageRenderArgs(inputs) {
     '--text-encoder-repo', encoder.repo, '--text-encoder-revision', encoder.revision,
     ...encoder.only.flatMap(file => ['--text-encoder-file', file]),
     '--prompt', prompt, '--width', String(width), '--height', String(height),
-    '--steps', String(steps), '--seed', String(seed), '--output', outputPath,
+    '--steps', String(steps ?? MINIMAX_H3_IMAGE_STEPS), '--seed', String(seed), '--output', outputPath,
     ...referenceImagePaths.flatMap(path => ['--reference-image', path])];
   return { bin: minimaxRuntime.python, args, providerInputs: { initImagePath: null, referenceImagePaths } };
 }

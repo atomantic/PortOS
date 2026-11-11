@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -42,6 +42,24 @@ if (process.env.FAIL_LOCK === '1' && args.some(a => a.endsWith('requirements-pix
 }
 
 describe.skipIf(process.platform === 'win32')('Pixal3D Metal install/Repair boundary', () => {
+  it('accepts an explicit interpreter command from PATH', () => {
+    const f = fixture();
+    f.run({ PYTHON_BIN: 'python' });
+    expect(f.calls().some(args => args[1] === 'venv')).toBe(true);
+  });
+
+  it('refuses a linked environment before clearing its shared target', () => {
+    const f = fixture();
+    const shared = join(f.root, 'shared');
+    mkdirSync(shared);
+    writeFileSync(join(shared, 'keep.txt'), 'shared environment');
+    rmSync(join(f.root, '.venv'), { recursive: true });
+    symlinkSync(shared, join(f.root, '.venv'), 'dir');
+    expect(() => f.run()).toThrow(/symlinked Pixal3D environment/);
+    expect(f.calls().some(args => args[1] === 'venv')).toBe(false);
+    expect(readFileSync(join(shared, 'keep.txt'), 'utf8')).toBe('shared environment');
+  });
+
   it('replaces an old interpreter, locks before native builds and keeps model assets', () => {
     const f = fixture();
     f.run();

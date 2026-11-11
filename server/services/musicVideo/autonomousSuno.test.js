@@ -364,7 +364,7 @@ function workflow({
       exported = bytes ?? exportOf(exportsSong ?? openedMenus.at(-1)[0]);
       if (landsInDir) {
         for (const other of alsoLands) await land(other.name, other.bytes);
-        await land('Example Song.m4a', exported);
+        if (stalled !== 'event') await land('Example Song.m4a', exported);
       } else if (stalled !== 'event') page.emit('download', download);
     } };
     if (role === 'menuitem') return { click: async ({ timeout }) => {
@@ -723,25 +723,24 @@ describe('generateSunoSong M4A export', () => {
     expect(w.importAudio).not.toHaveBeenCalled();
   });
 
-  // Uniquely catches the first new .m4a in the download folder being imported whatever song it is:
-  // a Track once got another song's audio that way.
-  it("never imports another song's export that the browser saved to its download directory", async () => {
+  // An unrelated download is neither an export result nor evidence of its failure cause.
+  it('times out without blaming an unrelated download when the requested export never arrives', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'portos-suno-test-'));
     vi.useFakeTimers();
     try {
-      const w = workflow({ landsInDir: dir, exportsSong: OLD });
+      const w = workflow({ landsInDir: dir, stalled: 'event', alsoLands: [{ name: 'Unrelated.m4a', bytes: exportOf(OLD) }] });
       const judged = vi.fn();
       const settled = generateSunoSong(fields, {
         ...w, songIds: [NEW_A], timeoutMs: 10_000,
         readAudioSongId: async (path) => { const id = await readAudioSongId(path); judged(id); return id; },
       }).catch((err) => err);
-      // The folder never shows the requested song: the wait ends at the deadline, on identity.
+      // The folder never shows the requested song: the wait ends at the deadline.
       // The wait for the read stays well short of that deadline, so the two cannot race.
       await vi.waitFor(() => expect(judged).toHaveBeenCalledWith(OLD), { timeout: 5000 });
       await vi.advanceTimersByTimeAsync(10_000);
       const error = await settled;
-      expect(error).toMatchObject({ code: 'SUNO_AUDIO_WRONG_SONG', context: { stage: 'wait-download', reason: 'song-id-mismatch' } });
-      expect(error.message).toBe('Suno: the export produced a different song than the one requested, so it was not imported');
+      expect(error).toMatchObject({ code: 'SUNO_AUDIO_TIMEOUT', context: { stage: 'wait-download', reason: 'deadline-exceeded' } });
+      expect(await readFile(join(dir, 'Unrelated.m4a'))).toEqual(exportOf(OLD));
       expect(w.importAudio).not.toHaveBeenCalled();
       expect(w.actions.filter((action) => action === 'export')).toHaveLength(1);
       expect(vi.getTimerCount()).toBe(0);

@@ -130,6 +130,7 @@ export function buildHiggsfieldImageRequest({
       ? `${family.label} takes at most ${family.maxInputImages} input image${family.maxInputImages === 1 ? '' : 's'} (received ${refs.length})`
       : `${family.label} is text-to-image only; remove the input images or pick a model that edits`);
   }
+  if (!String(prompt ?? '').trim()) throw refuse('Prompt is required');
   const text = higgsfieldImagePromptText(family, prompt, negativePrompt);
   if (text.length < family.promptMin || (family.promptMax && text.length > family.promptMax)) {
     throw refuse(`${family.label} prompt must be ${family.promptMin}–${family.promptMax ?? '∞'} characters (sent text is ${text.length}). Nothing was submitted or truncated.`);

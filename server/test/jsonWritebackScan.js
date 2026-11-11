@@ -11,12 +11,14 @@ export function mayReadJsonFile(source) {
 // Test-only syntax scan, never imports a service or reads runtime data.
 // Matches direct helper names (including imported aliases), not arbitrary
 // wrappers, namespace calls, variable aliases, or cross-module dataflow.
+const AST_METADATA = new Set(['loc', 'extra', 'tokens', 'comments']);
+
 function walk(node, visit) {
   if (!node || typeof node !== 'object') return;
   if (Array.isArray(node)) { node.forEach(child => walk(child, visit)); return; }
   if (node.type) visit(node);
-  for (const [key, child] of Object.entries(node)) {
-    if (!['loc', 'extra', 'tokens', 'comments'].includes(key)) walk(child, visit);
+  for (const key of Object.keys(node)) {
+    if (!AST_METADATA.has(key)) walk(node[key], visit);
   }
 }
 
@@ -42,8 +44,8 @@ function walkScoped(node, enter, leave) {
   if (!node || typeof node !== 'object') return;
   if (Array.isArray(node)) { node.forEach(child => walkScoped(child, enter, leave)); return; }
   if (node.type) enter(node);
-  for (const [key, child] of Object.entries(node)) {
-    if (!['loc', 'extra', 'tokens', 'comments'].includes(key)) walkScoped(child, enter, leave);
+  for (const key of Object.keys(node)) {
+    if (!AST_METADATA.has(key)) walkScoped(node[key], enter, leave);
   }
   if (node.type) leave(node);
 }
@@ -58,18 +60,30 @@ function referencedNames(node, names = []) {
     if (node.computed) referencedNames(node.property, names);
   } else if (node.type === 'ObjectProperty' && !node.computed) referencedNames(node.value, names);
   else {
-    for (const [key, child] of Object.entries(node)) {
-      if (!['loc', 'extra', 'tokens', 'comments'].includes(key)) referencedNames(child, names);
+    for (const key of Object.keys(node)) {
+      if (!AST_METADATA.has(key)) referencedNames(node[key], names);
     }
   }
   return names;
 }
 
 function expressionKey(node, tokens, source) {
-  return tokens.filter(token => token.start >= node.start && token.end <= node.end
-    && token.type.label && token.type.label !== 'eof')
-    .map(token => token.type.label === 'string' ? JSON.stringify(token.value)
-      : source.slice(token.start, token.end)).join(' ');
+  // Babel's tokens are ordered by source position. An argument needs only its
+  // own span, not a full-module token scan for every read and write.
+  let low = 0;
+  let high = tokens.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (tokens[middle].start < node.start) low = middle + 1;
+    else high = middle;
+  }
+  const parts = [];
+  for (let index = low; index < tokens.length && tokens[index].start <= node.end; index++) {
+    const token = tokens[index];
+    if (token.end > node.end || !token.type.label || token.type.label === 'eof') continue;
+    parts.push(token.type.label === 'string' ? JSON.stringify(token.value) : source.slice(token.start, token.end));
+  }
+  return parts.join(' ');
 }
 
 /** Same-module first-argument syntax equality; no control-flow proof implied. */
@@ -110,11 +124,14 @@ export function scanJsonWriteback(source) {
   walkScoped(ast.program, node => {
     if (FUNCTION_NODES.has(node.type) || node.type === 'BlockStatement') {
       const scope = new Map();
-      if (FUNCTION_NODES.has(node.type)) walk(node.params, param => { if (param.type === 'Identifier') scope.set(param.name, []); });
+      if (FUNCTION_NODES.has(node.type)) walk(node.params, param => { if (param.type === 'Identifier') scope.set(param.name, null); });
       scopes.push(scope);
     }
     if (node.type === 'VariableDeclarator' && node.id.type === 'Identifier') {
-      scopes.at(-1).set(node.id.name, node.init ? rawReadsIn(node.init) : []);
+      // Keep the binding even when it shadows an outer raw read, but do not
+      // traverse every initializer: only a value used by safeJSONParse can
+      // contribute a raw JSON read.
+      scopes.at(-1).set(node.id.name, node.init);
     }
     const name = calleeName(node);
     if (!name || !node.arguments[0]) return;
@@ -133,7 +150,8 @@ export function scanJsonWriteback(source) {
   });
   for (const { names: referenced, chain } of pending) {
     for (const identifier of referenced) {
-      chain.findLast(scope => scope.has(identifier))?.get(identifier).forEach(key => reads.add(key));
+      const initializer = chain.findLast(scope => scope.has(identifier))?.get(identifier);
+      if (initializer) rawReadsIn(initializer).forEach(key => reads.add(key));
     }
   }
   return {

@@ -125,8 +125,8 @@ export function buildGoogleImageRequest({
       ? `${family.label} takes at most ${family.maxInputImages} input image${family.maxInputImages === 1 ? '' : 's'} (received ${inputs.length})`
       : `${family.label} is text-to-image only; remove the input images or pick a Gemini image model`);
   }
+  if (!String(prompt ?? '').trim()) throw refuse('Prompt is required');
   const text = googleImagePromptText(prompt, negativePrompt);
-  if (!text) throw refuse('Prompt is required');
   const w = Number(width);
   const h = Number(height);
   const aspectRatio = w > 0 && h > 0 ? nearestRatio(w, h, family.aspectRatios) : null;
