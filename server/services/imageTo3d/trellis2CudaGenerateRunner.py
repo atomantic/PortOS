@@ -84,7 +84,7 @@ def main():
     if not torch.cuda.is_available():
         raise SystemExit(
             "CUDA is not available inside the TRELLIS.2 environment -- "
-            "check the NVIDIA driver and the installed Torch CUDA profile."
+            "check the NVIDIA driver and the torch build installed by setup.sh."
         )
     log(f"Device: cuda ({torch.cuda.get_device_name(0)})")
 
