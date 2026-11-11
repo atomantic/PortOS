@@ -137,3 +137,50 @@ install/Repair, and
 independent Apple Silicon acceleration/CUDA execution validation. No production
 model download, provider session or paid generation was started. Pixal3D CUDA
 remains unresolved under #15710.
+
+## Third-slice FastVideo timm patch (2026-11-11)
+
+The Apple Silicon FastVideo profile updates **timm 1.0.29 → 1.0.31**. Its
+immutable FastVideo revision remains
+`fa2d1324c60050cd65209c6aaeac470e7fb412f5`; Torch, TorchVision, MLX/MLX-Metal,
+build dependencies and all other runtime versions remain unchanged. This is a
+single-package compatibility slice, not a refresh of the other older pins.
+
+The pinned [FastVideo requirements](https://github.com/hao-ai-lab/FastVideo/blob/fa2d1324c60050cd65209c6aaeac470e7fb412f5/pyproject.toml)
+accept `timm>=1.0.11`. Its Synchformer consumers import `timm.layers.to_2tuple`
+and `trunc_normal_`; the VBench human-action adapter uses
+`timm.models.create_model`, with FastVideo's existing shim for the upstream
+model factory's unsupported `cache_dir` argument. The
+[timm 1.0.31 wheel metadata and changelog](https://pypi.org/pypi/timm/1.0.31/json)
+retain these APIs and the same five runtime dependency names. Its Python floor
+rises from 3.8 to 3.10, within this profile's existing 3.11+ floor. The wheel was
+published on 2026-11-03 at 19:24:54 UTC and its downloaded SHA-256 matched PyPI.
+No change to the pinned native source or compatibility shims is required by
+these inspected API contracts; pretrained-model behavior remains unverified.
+
+The complete **85-entry** lock was regenerated online with hash-verified
+**uv 0.13.7** and `--exclude-newer 2026-11-04T00:00:00Z`. The header command
+reuses the existing lock and upgrades only timm. All other 84 entries, environment
+markers and artifact hashes are identical. Every one of the resulting **2,305
+hashes** matches a non-yanked PyPI artifact published before the cutoff. OSV
+querybatch, including malicious-package (`MAL-`) records, returned zero findings
+for all 85 distinct package/version identities. This does not separately audit
+bundled native libraries.
+
+Fresh scratch Apple Silicon environments on CPython **3.11.17** and **3.12.11**
+installed the complete lock with `uv pip sync --require-hashes --only-binary
+:all:` and passed `uv pip check`. Native CPU tests on 3.11 imported timm with the
+locked Torch **2.15.0** / TorchVision **0.29.2**, exercised the used layer helpers,
+and ran a small random-weight ViT forward pass with finite three-class output.
+On 3.12, the exact pinned FastVideo source, MLX and its real Synchformer
+`vit_helper` consumer also imported successfully with the refreshed timm.
+These checks download no pretrained weights and establish no model accuracy.
+Three focused files passed **167 tests**, covering installer/Repair hash and
+source-revision enforcement, unsupported-host refusal, locked package repair
+and the FastVideo runner's dispatch/progress contracts.
+
+Remaining under #15769: production FastVideo/VBench model execution and Metal
+inference, all other native-profile compatibility work, isolated major
+migrations, newer CPU minor updates and the previously recorded independent
+platform/acceleration checks. This slice changes an Apple Silicon-only profile;
+it neither adds CUDA/Windows/Linux support nor resolves Pixal3D CUDA #15710.
