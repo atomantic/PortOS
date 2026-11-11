@@ -98,19 +98,19 @@ describe('isolated fixture using real collection routes and storage', () => {
     const beforeRoots = await roots();
     const moduleUrl = new URL('./collectionFixture.js', import.meta.url).href;
     const source = 'import { startCollectionFixture } from ' + JSON.stringify(moduleUrl)
-      + '; const f = await startCollectionFixture({ clientDist: ' + JSON.stringify(clientDist)
-      + ' }); console.log(JSON.stringify({ url: f.url }));';
+      + '; try { await startCollectionFixture({ clientDist: ' + JSON.stringify(clientDist)
+      + ' }); process.send({ type: "ready" }); } catch (error) {'
+      + ' process.send({ type: "failed", fixtureFailure: error.fixtureFailure, fixtureStartup: error.fixtureStartup }); process.exitCode = 1; }';
     const child = spawn(process.execPath, ['--input-type=module', '-e', source], {
-      env: process.env, stdio: ['ignore', 'pipe', 'pipe'],
+      env: process.env, stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
     });
     const exited = once(child, 'exit');
     child.stderr.resume();
     try {
       await new Promise((resolveReady, rejectReady) => {
-        let output = '';
-        child.stdout.on('data', chunk => {
-          output += chunk;
-          if (output.includes('\n')) resolveReady();
+        child.on('message', message => {
+          if (message?.type === 'ready') resolveReady();
+          if (message?.type === 'failed') rejectReady(new Error('Fixture startup failed: ' + JSON.stringify({ fixtureFailure: message.fixtureFailure, fixtureStartup: message.fixtureStartup })));
         });
         child.once('error', rejectReady);
         child.once('exit', code => rejectReady(new Error('Fixture exited early: ' + code)));
