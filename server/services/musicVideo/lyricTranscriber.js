@@ -131,14 +131,14 @@ function regionOf(wav, { startSec, endSec } = {}) {
 function createCliTranscriber({ bin, modelPath, language = 'en', run = runStreamingCommand }) {
   return {
     kind: 'whisper-cli',
-    async transcribe(wav, { startSec, endSec, prompt = '' } = {}) {
+    async transcribe(wav, { startSec, endSec, prompt = '', isCancelled, signal } = {}) {
       const region = regionOf(wav, { startSec, endSec });
       const dir = await mkdtemp(join(tmpdir(), 'lyric-align-cli-'));
       try {
         const wavPath = join(dir, 'audio.wav');
         const outBase = join(dir, 'words');
         await writeFile(wavPath, region.whole ? wav : sliceWav(wav, region.startSec, region.endSec));
-        const result = await run(bin, whisperCliArgs({ modelPath, wavPath, outBase, language, prompt }), null, { timeoutMs: CLI_TIMEOUT_MS });
+        const result = await run(bin, whisperCliArgs({ modelPath, wavPath, outBase, language, prompt }), null, { timeoutMs: CLI_TIMEOUT_MS, isCancelled: isCancelled || signal ? () => Boolean(isCancelled?.() || signal?.aborted) : undefined });
         if (!result?.success) {
           console.error(`❌ whisper-cli failed: ${result?.error || 'unknown error'}`);
           throw new ServerError(`whisper-cli could not transcribe the song: ${result?.error || 'unknown error'}`, { status: 502, code: 'LYRIC_ALIGN_WHISPER_FAILED' });
@@ -168,7 +168,7 @@ function createCliTranscriber({ bin, modelPath, language = 'en', run = runStream
 function createEndpointTranscriber({ endpoint = null, kind = 'stt-endpoint', transcribe = sttTranscribe, release = async () => {} }) {
   return {
     kind,
-    async transcribe(wav, { startSec, endSec, prompt = '' } = {}) {
+    async transcribe(wav, { startSec, endSec, prompt = '', isCancelled, signal } = {}) {
       const region = regionOf(wav, { startSec, endSec });
       const chunks = planAudioChunks(region.endSec - region.startSec, { chunkSec: lyricAlignChunkSec() }).map((chunk) => ({
         startSec: region.startSec + chunk.startSec,
@@ -177,6 +177,7 @@ function createEndpointTranscriber({ endpoint = null, kind = 'stt-endpoint', tra
       console.log(`🎤 Aligning lyric words (${chunks.length} whisper ${chunks.length === 1 ? 'chunk' : 'chunks'} via ${kind})`);
       const results = [];
       for (const chunk of chunks) {
+        if (isCancelled?.() || signal?.aborted) throw Object.assign(new Error('cancelled'), { canceled: true });
         let result;
         try {
           result = await transcribe(sliceWav(wav, chunk.startSec, chunk.endSec), {
@@ -184,6 +185,7 @@ function createEndpointTranscriber({ endpoint = null, kind = 'stt-endpoint', tra
             mimeType: 'audio/wav',
             filename: 'lyric-align.wav',
             prompt,
+            signal,
             ...(endpoint ? { endpoint } : {}),
           });
         } catch (err) {

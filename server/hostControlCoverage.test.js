@@ -976,6 +976,7 @@ const REVIEWED_OPEN_MUTATIONS = [
   ['DELETE /api/music-video/:id/vocal-stem', REMOVES_RECORD],
   ['POST /api/music-video/excerpt/:jobId/cancel', REDUCES_EXECUTION],
   ['POST /api/music-video/lyrics/align/:jobId/cancel', REDUCES_EXECUTION],
+  ['POST /api/music-video/lyrics/verify/:jobId/cancel', REDUCES_EXECUTION],
   ['POST /api/music-video/making-of/export', READ_OVER_POST],
   ['POST /api/music-video/making-of/preview', READ_OVER_POST],
   ['POST /api/music-video/publish-kit/:jobId/cancel', REDUCES_EXECUTION],

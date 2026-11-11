@@ -12,6 +12,7 @@ const effects = vi.hoisted(() => ({
   startMidiTranscription: vi.fn(async () => ({ jobId: 'midi-1', model: 'medium' })),
   startVocalSeparation: vi.fn(async () => ({ jobId: 'vocal-1' })),
   startLyricAlign: vi.fn(async () => ({ jobId: 'align-1' })),
+  startLyricVerify: vi.fn(async () => ({ jobId: 'verify-1' })),
   probeLoraEffect: vi.fn(async () => ({ status: 'active' })),
   renderTimelineProject: vi.fn(async () => ({ jobId: 'render-1' })),
   addCoverFont: vi.fn(async () => ({ id: 'font-1' })),
@@ -108,6 +109,12 @@ vi.mock('../services/musicVideo/lyricAlignJob.js', () => ({
   getActiveLyricAlignJobId: vi.fn(() => null),
 }));
 
+vi.mock('../services/musicVideo/lyricVerifyJob.js', () => ({
+  startLyricVerify: effects.startLyricVerify,
+  cancelLyricVerify: vi.fn(() => true),
+  attachLyricVerifySseClient: vi.fn(() => true),
+}));
+
 vi.mock('../services/loraEffectProbe.js', () => ({
   probeLoraEffect: effects.probeLoraEffect,
 }));
@@ -145,6 +152,7 @@ const routes = [
   ['/api/music-video/proj-1/transcribe-midi', {}, effects.startMidiTranscription],
   ['/api/music-video/proj-1/vocal-stem/separate', {}, effects.startVocalSeparation],
   ['/api/music-video/proj-1/lyrics/align', {}, effects.startLyricAlign],
+  ['/api/music-video/proj-1/lyrics/verify', {}, effects.startLyricVerify],
   ['/api/loras/test-lora.safetensors/effect', {}, effects.probeLoraEffect],
   ['/api/video-timeline/projects/proj-1/render', {}, effects.renderTimelineProject],
 ];

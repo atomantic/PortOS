@@ -98,6 +98,11 @@ vi.mock('../services/musicVideo/lyricAlign.js', () => ({
   alignProjectLyrics: vi.fn(async (id, opts) => ({ id, lyricCues: [], cueId: opts?.cueId || null })),
 }));
 
+vi.mock('../services/musicVideo/lyricVerify.js', () => ({
+  verifyPrerequisites: vi.fn(async () => 'stem.wav'),
+  verifyLyricSheet: vi.fn(async () => ({ extraPhrases: [], unsungCues: [] })),
+}));
+
 vi.mock('../services/musicVideo/planner.js', () => ({
   planProject: vi.fn(async (id) => ({
     project: { id, scenes: [{ sceneId: 'mvs-1' }] },
@@ -116,6 +121,7 @@ import * as excerptSvc from '../services/musicVideo/excerptService.js';
 import * as midiSvc from '../services/audioMidiTranscription.js';
 import { planProject } from '../services/musicVideo/planner.js';
 import { alignProjectLyrics } from '../services/musicVideo/lyricAlign.js';
+import { verifyPrerequisites, verifyLyricSheet } from '../services/musicVideo/lyricVerify.js';
 import musicVideoRoutes from './musicVideo.js';
 
 describe('musicVideo routes', () => {
@@ -589,6 +595,38 @@ describe('musicVideo routes', () => {
       expect(explicit.status).toBe(422);
       expect(explicit.body.code).toBe('NO_TRACK_LYRICS');
       expect(svc.updateProject).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('lyric verification jobs', () => {
+    it('reuses a running job, excludes alignment and accepts cancellation', async () => {
+      svc.getProject.mockResolvedValue({ id: 'mv-1', lyricCues: [{ id: 'c', text: 'line' }] });
+      let finish;
+      verifyLyricSheet.mockImplementationOnce((_project, _stem, options) => new Promise(resolve => {
+        finish = () => resolve({ extraPhrases: [], unsungCues: [] });
+        options.signal.addEventListener('abort', finish);
+      }));
+      const first = await request(app).post('/api/music-video/mv-1/lyrics/verify').send({});
+      expect(first.status).toBe(202);
+      const second = await request(app).post('/api/music-video/mv-1/lyrics/verify').send({});
+      expect(second.body).toEqual({ jobId: first.body.jobId, reused: true });
+      const align = await request(app).post('/api/music-video/mv-1/lyrics/align').send({});
+      expect(align.status).toBe(409);
+      expect(align.body.code).toBe('LYRIC_ALIGN_BUSY');
+      expect((await request(app).post(`/api/music-video/lyrics/verify/${first.body.jobId}/cancel`)).body).toEqual({ ok: true });
+      await vi.waitFor(() => expect(verifyLyricSheet).toHaveBeenCalledOnce());
+      finish();
+    });
+    it('returns precondition failures before creating a job and validates the body', async () => {
+      svc.getProject.mockResolvedValue({ id: 'mv-1' });
+      for (const code of ['LYRIC_VERIFY_NEEDS_STEM', 'LYRIC_VERIFY_NEEDS_TIMING']) {
+        verifyPrerequisites.mockRejectedValueOnce(new ServerError('missing', { status: 409, code }));
+        const response = await request(app).post('/api/music-video/mv-1/lyrics/verify').send({});
+        expect(response.status).toBe(409);
+        expect(response.body.code).toBe(code);
+      }
+      expect((await request(app).post('/api/music-video/mv-1/lyrics/verify').send({ extra: true })).status).toBe(400);
+      expect(verifyLyricSheet).not.toHaveBeenCalled();
     });
   });
 
