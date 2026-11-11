@@ -80,6 +80,15 @@ import { updateSettingsWith } from './settings.js'
 
 // Preserve the real transport for the explicitly requested local-model evaluation.
 const nativeFetch = global.fetch
+// Public #15770: the retry window omitted the earlier dependency-update commits.
+const dependencyContinuationCase = JSON.parse(readFileSync(new URL('../test/fixtures/goal-fidelity-dependency-continuation.json', import.meta.url), 'utf8'))
+const dependencyContinuationEvidence = [
+  '# Commit messages of the merged change', dependencyContinuationCase.commitMessages.slice(0, 2000),
+  dependencyContinuationCase.priorDiff,
+  '# Earlier attempt execution report (agent-original, captured earlier head)',
+  '# Agent-authored claims; command execution is not independently established. Earlier delivery status is historical.',
+  dependencyContinuationCase.report.slice(0, 6000),
+].join('\n')
 // Public #15627 and its unchanged shipped reference rows, not live instance data.
 const comparisonCase = JSON.parse(readFileSync(new URL('../test/fixtures/goal-fidelity-comparison-chart.json', import.meta.url), 'utf8'))
 const comparisonReference = JSON.stringify(comparisonCase.observations.map(({ id, provider, model, effort, benchmark, quality, costPerTask }) =>
@@ -1412,6 +1421,22 @@ describe('codeReview helpers', () => {
 
     // Actual-model calibration is opt-in: source assertions cannot prove a model
     // understood the supplied evidence. The ordinary tests never call a provider.
+    it.runIf(Boolean(process.env.GOAL_FIDELITY_EVAL_MODEL)).each([
+      ['recovery window alone reproduces the missing delivery', null, dependencyContinuationCase.objective, 'rethink'],
+      ['continued PR includes earlier bumps and audit report', dependencyContinuationEvidence, dependencyContinuationCase.objective, 'ship'],
+      ['reported updates cannot substitute for absent source changes', `# Earlier attempt execution report\n${dependencyContinuationCase.report}`, `${dependencyContinuationCase.objective}\nUpdate Lucide to 1.72.0, Vite to 8.3.8, nanoid to 3.3.20 and minimatch to 11.0.8 in the package manifests.`, 'rethink'],
+      ['unrelated earlier merge earns no credit', 'diff --git a/title.js b/title.js\n--- a/title.js\n+++ b/title.js\n@@ -1 +1 @@\n-export const title = "Old";\n+export const title = "New";', dependencyContinuationCase.objective, 'rethink'],
+    ])('judges the retained dependency PR with a local model: %s', async (_name, priorDeliveryDiff, objective, expected) => {
+      global.fetch = nativeFetch
+      const result = await runLocalGoalFidelityReview({
+        backend: 'ollama', model: process.env.GOAL_FIDELITY_EVAL_MODEL,
+        objective, diff: dependencyContinuationCase.diff, priorDeliveryDiff, timeoutMs: 180_000,
+      })
+      expect(result.ok, result.error).toBe(true)
+      expect(result.verdict, JSON.stringify(result)).toBe(expected)
+      if (expected === 'ship') expect(result).toMatchObject({ missing: [], unrequested: [] })
+    }, 200_000)
+
     it.runIf(Boolean(process.env.GOAL_FIDELITY_EVAL_MODEL)).each([
       ['shipped data exposed by the route and chart', comparisonCase.diff, comparisonReference, 'ship'],
       ['chart ignores the current composite', brokenComparisonDiff, null, 'rethink'],
