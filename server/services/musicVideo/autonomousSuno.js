@@ -334,9 +334,8 @@ async function defaultListDownloads() {
 // there instead — a new .m4a (Chrome lists a file only after its .crdownload
 // rename) whose size held steady across two polls and which `songOf` says is
 // the requested song. Any other new .m4a (an unrelated download landing
-// meanwhile, or another song's export) is left where it is and reported to
-// `onStray`, never returned.
-async function watchDownloadsDir({ listDownloads, baseline, signal, pollMs, songOf, onStray }) {
+// meanwhile, or another song's export) is left where it is, never returned.
+async function watchDownloadsDir({ listDownloads, baseline, signal, pollMs, songOf }) {
   const sizes = new Map();
   const strays = new Set();
   while (!signal.aborted) {
@@ -351,7 +350,6 @@ async function watchDownloadsDir({ listDownloads, baseline, signal, pollMs, song
       const song = await songOf(landed);
       if (song === 'wanted') return landed;
       strays.add(key);
-      onStray(song);
     }
     await new Promise((resolve) => {
       const timer = setTimeout(resolve, pollMs);
@@ -401,9 +399,6 @@ async function downloadSunoAudio(page, songId, path, {
   const wanted = String(songId).toLowerCase();
   let download;
   let stage = 'open-song';
-  // What else the download folder showed while waiting: another song's export
-  // ('other') or only files that name no song ('unknown').
-  let stray = null;
   let stopped;
   let rejectStop;
   const stopPromise = new Promise((_, reject) => { rejectStop = reject; });
@@ -423,12 +418,6 @@ async function downloadSunoAudio(page, songId, path, {
     if (!id) return 'unknown';
     return String(id).toLowerCase() === wanted ? 'wanted' : 'other';
   };
-  // A wait that ends with only other files in the folder failed on identity, not on time.
-  const deadlineError = () => {
-    if (stage === 'wait-download' && stray === 'other') return wrongSong();
-    if (stage === 'wait-download' && stray === 'unknown') return unverified();
-    return error('SUNO_AUDIO_TIMEOUT', 'deadline-exceeded', 504);
-  };
   const stop = (err) => {
     if (stopped) return;
     stopped = err;
@@ -438,7 +427,9 @@ async function downloadSunoAudio(page, songId, path, {
     download?.cancel().catch(() => {});
   };
   const abort = () => stop(error('SUNO_AUDIO_CANCELLED', 'cancelled', 499));
-  const timer = setTimeout(() => stop(deadlineError()), timeoutMs);
+  // A stray file cannot establish what this export downloaded. Identity errors
+  // below apply only to the file associated with this browser export.
+  const timer = setTimeout(() => stop(error('SUNO_AUDIO_TIMEOUT', 'deadline-exceeded', 504)), timeoutMs);
   signal?.addEventListener('abort', abort, { once: true });
   if (signal?.aborted) abort();
   const bounded = async (name, fn) => {
@@ -496,7 +487,6 @@ async function downloadSunoAudio(page, songId, path, {
       started.then(() => null),
       watchDownloadsDir({
         listDownloads, baseline, signal: watch.signal, pollMs: downloadPollMs, songOf,
-        onStray: (song) => { if (stray !== 'other') stray = song; },
       }),
     ]));
     if (landed) {
