@@ -8,6 +8,7 @@ vi.mock('../services/apiCatalog.js', async (importOriginal) => ({ ...await impor
 vi.mock('../hooks/usePrevizJobs.js', () => ({ default: () => ({ running: [], finished: null, drafted: 0, setCount: 0, step: null }) }));
 vi.mock('../services/apiRunwayCatalog.js', async (importOriginal) => ({ ...await importOriginal(), loadRunwayCatalog: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('../services/apiMediaJobs.js', async (importOriginal) => ({ ...await importOriginal(), listQueueMediaJobs: vi.fn(async () => []) }));
+import { MUSIC_VIDEO_STAGES } from '../lib/musicVideoStages.js';
 import { listQueueMediaJobs } from '../services/apiMediaJobs.js';
 import { render, screen, waitFor, fireEvent, within, act } from '@testing-library/react';
 import { findEnabledByRole } from '../test/enabledBarrier.js';
@@ -413,7 +414,7 @@ const selectProject = async (projectId) => {
 // control is only on screen while its step is open, so tests say which one.
 // Compose is part of Shots now; Plan holds the planning tools. The phone's step bar is the tablist.
 const STAGE_TABS = {
-  setup: /^Song/, story: /^Story(?!board)/, 'cast-sets': /^Look/, board: /^Storyboard/, produce: /^Shots/, compose: /^Shots/, review: /^Final render/, publish: /^Publish/,
+  setup: /^Song/, story: /^Story(?!board)/, 'cast-sets': /^Look/, board: /^Storyboard/, previz: /^Previz/, produce: /^Shots/, compose: /^Shots/, review: /^Final render/, publish: /^Publish/,
 };
 // Project settings (render style, audio tools, autopilot, files) is a drawer over the step.
 const openSettings = async (tab = 'Project') => {
@@ -3698,6 +3699,13 @@ describe('direct production review navigation', () => {
 });
 
 describe('stage checklist and project options', () => {
+  it('shows the Previz doneWhen line under the step title instead of hiding it behind an empty checklist', async () => {
+    const previzStage = MUSIC_VIDEO_STAGES.find((stage) => stage.id === 'previz');
+    expect(previzStage?.doneWhen).toBeTruthy();
+    await openProject(PROJECT_NO_CLIP, 'previz');
+    expect(screen.getByText(previzStage.doneWhen)).toBeInTheDocument();
+  });
+
   it('keeps Cast & Sets on the art approval after the unwanted sheet is gone, and says an approved sheet file is not that approval', async () => {
     // The guide pick itself is covered by stageChecklist's unit test; selecting
     // one here would make the open approvals panel fetch the sheet's file.

@@ -1234,6 +1234,11 @@ const STAGE_CHECKLISTS = {
   produce: produceChecklist, review: reviewChecklist, publish: publishChecklist,
 };
 
+/** True when this stage tab defines a checklist builder. */
+export function stageHasChecklist(stageId) {
+  return Boolean(STAGE_CHECKLISTS[stageId]);
+}
+
 /**
  * What one stage tab needs before it counts as done, as a short checklist the
  * tab shows above its panels: `[{ id, label, done, detail?, action? }]`. The
