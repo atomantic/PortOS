@@ -4049,3 +4049,38 @@ describe('queued look reference saves', () => {
     expect(look.getAllByLabelText('Condition frames').map((box) => box.checked)).toEqual([false, false]);
   });
 });
+
+describe('Code video storyboard approval gating on Produce stage (#15723)', () => {
+  it('enables Generate code video with default approved readiness', async () => {
+    const codeProject = {
+      ...PROJECT_WITH_CLIP,
+      composition: { mode: 'code' },
+    };
+
+    // Default readiness (storyboard: { approved: true })
+    await openProject(codeProject, 'produce');
+    const generateBtn = await screen.findByRole('button', { name: /Generate code video/ });
+    await waitFor(() => expect(generateBtn).toBeEnabled());
+    expect(screen.queryByText('Approve the storyboard first')).toBeNull();
+  });
+
+  it('disables Generate code video with reason when storyboard is not approved', async () => {
+    const unapprovedProject = {
+      ...PROJECT_WITH_CLIP,
+      id: 'mv-code-unapproved',
+      name: 'Unapproved Code Video Project',
+      composition: { mode: 'code' },
+      productionReadiness: {
+        readyForProduction: false,
+        basis: {},
+        art: { approved: true, problems: [] },
+        storyboard: { approved: false, problems: ['Storyboard not approved'] },
+        proof: { approved: false, problems: [] },
+      },
+    };
+    await openProject(unapprovedProject, 'produce');
+    const unapprovedBtn = await screen.findByRole('button', { name: /Generate code video/ });
+    await waitFor(() => expect(unapprovedBtn).toBeDisabled());
+    expect(await screen.findByText('Approve the storyboard first')).toBeTruthy();
+  });
+});
