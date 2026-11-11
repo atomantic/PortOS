@@ -1136,6 +1136,18 @@ jobs:
             ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/animatic-capture/case-*/displayed.png
             ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/animatic-capture/case-*/frame.json
 
+      - name: Retain synthetic template parity pixels and media state
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: template-parity-diagnostics-${{ matrix.shard }}of${{ strategy.job-total }}
+          retention-days: 7
+          if-no-files-found: ignore
+          path: |
+            ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/template-parity/case-*/native.png
+            ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/template-parity/case-*/engine.png
+            ${{ runner.temp }}/portos-ci-diagnostics/portos-vitest-*/template-parity/case-*/parity.json
+
       - name: Retain frozen candidate invocation evidence
         if: always() && env.PORTOS_CI_TEST_POLICY == 'release-candidate'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
