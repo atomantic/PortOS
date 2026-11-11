@@ -23,6 +23,8 @@ const READBACK_TOLERANCE_SEC = 1;
 // One drag stays on the waveform, so a window far from the target takes several.
 const MAX_DRAGS = 20;
 const WAVEFORM = '[class*=waveform], [data-testid*=waveform], canvas';
+const SONG_RESULTS_WAIT_MS = 10_000;
+const SONG_RESULTS_POLL_MS = 250;
 
 const fmtClock = (sec) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
 const parseClock = (text) => {
@@ -37,14 +39,27 @@ async function selectSong(page, payload) {
   await page.locator('[role=dialog]').first().waitFor({ timeout: T });
   const search = page.locator('textarea[placeholder*="Search by song name"]').first();
   await search.fill(payload.title, { timeout: T });
-  await page.waitForTimeout(2500);
-  const rows = await page.evaluate(() => [...document.querySelectorAll('[role=dialog] button')]
+  const readRows = () => page.evaluate(() => [...document.querySelectorAll('[role=dialog] button')]
     .filter((b) => (b.innerText || '').trim() === 'Use')
     .map((b) => {
       let row = b;
       for (let i = 0; i < 4 && row.parentElement && row.parentElement.querySelectorAll('button').length < 3; i += 1) row = row.parentElement;
       return { text: row.innerText || '', html: row.innerHTML };
     }));
+  const deadline = Date.now() + SONG_RESULTS_WAIT_MS;
+  let previous = null;
+  let stablePolls = 0;
+  let rows = [];
+  while (Date.now() < deadline) {
+    const searchValue = await search.inputValue();
+    rows = await readRows();
+    const snapshot = JSON.stringify(rows.map(({ text, html }) => [text, html]));
+    stablePolls = searchValue === payload.title && snapshot === previous ? stablePolls + 1 : 0;
+    if (stablePolls >= 2) break;
+    previous = snapshot;
+    await page.waitForTimeout(SONG_RESULTS_POLL_MS);
+  }
+  if (stablePolls < 2) throw new Error(`song search results did not settle within ${SONG_RESULTS_WAIT_MS} ms`);
   const index = pickSongRow(rows, payload);
   if (index < 0) throw new Error(`${rows.length} rows match "${payload.title}" and none could be told apart by id or length`);
   await page.locator('[role=dialog] button').filter({ hasText: /^Use$/ }).nth(index).click({ timeout: T });
