@@ -5,6 +5,7 @@ import { homedir } from 'node:os';
 import { join, relative } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import * as zlib from 'node:zlib';
+import { SPEED_LEDGER_FIELDS } from '../lib/modelPricing.js';
 import { parseCodexRollout } from '../lib/providerTranscriptUsage.js';
 import { fingerprintRecords, readInventorySource, trimInventoryCache, writeInventorySource } from './codexInventoryCache.js';
 
@@ -51,7 +52,10 @@ const PROBLEM_SOURCE_SAMPLE = 5;
 // `cache_write_input_tokens` (a few 0.145-era CLIs only) is a separate part of
 // `input_tokens`, disjoint from the cached read; `total_tokens` stays input + output.
 const COUNTERS = ['input_tokens', 'cached_input_tokens', 'cache_write_input_tokens', 'output_tokens', 'reasoning_output_tokens', 'total_tokens'];
-const emptyTotals = () => ({ messages: 0, tokensIn: 0, tokensOut: 0, cacheReadTokens: 0, cacheWriteTokens: 0 });
+const emptyTotals = () => ({
+  messages: 0, tokensIn: 0, tokensOut: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
+  ...Object.fromEntries(SPEED_LEDGER_FIELDS.map((field) => [field, 0])),
+});
 const problem = code => Object.assign(new Error(code), { code });
 const hash = value => createHash('sha256').update(value).digest('hex');
 const isObject = value => value != null && typeof value === 'object' && !Array.isArray(value);
@@ -422,7 +426,11 @@ async function scanCodexSources({ from, to, home = homedir(), limits: overrides 
     coverage.resolvedSessions++;
     for (const [model, counts] of Object.entries(session.byModel)) {
       byModel[model] ??= emptyTotals();
-      for (const key of Object.keys(totals)) { byModel[model][key] += counts[key]; totals[key] += counts[key]; }
+      for (const key of Object.keys(totals)) {
+        const amount = counts[key] || 0;
+        byModel[model][key] += amount;
+        totals[key] += amount;
+      }
     }
   }
   const overflow = Object.values(totals).some(value => !Number.isSafeInteger(value));
