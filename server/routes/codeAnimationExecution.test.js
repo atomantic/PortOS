@@ -98,12 +98,12 @@ describe('Code Animation execution capability', () => {
     const tool = await executableAt(join(dir, 'Blender.app', 'Contents', 'MacOS'));
     const { status, body } = await put(tool);
     expect(status).toBe(200);
-    expect(settings.current.codeAnimationExecution).toEqual({ blender: { executable: await realpath(tool), executionMode: 'contained', engine: 'CYCLES', acknowledgeHostAccess: false } });
+    expect(settings.current.codeAnimationExecution).toEqual({ blender: { executable: await realpath(tool), executionMode: 'contained', engine: 'CYCLES' } });
     expect(body.tools.blender).toMatchObject({ executable: await realpath(tool), problem: null });
     expect(body.lanes.blender.ready).toBe(false);
 
     await put(null);
-    expect(settings.current.codeAnimationExecution).toEqual({ blender: { executable: null, executionMode: 'contained', engine: 'CYCLES', acknowledgeHostAccess: false } });
+    expect(settings.current.codeAnimationExecution).toEqual({ blender: { executable: null, executionMode: 'contained', engine: 'CYCLES' } });
   });
 
   it.skipIf(supported)('refuses the containment check where no enforced mechanism exists', async () => {

@@ -480,6 +480,15 @@ const startBackgroundServices = ({ spawnerReady, io, httpsEnabled, port }) => {
     })
     .catch(err => logBootstrapFailure('⚠️ Docker containment boot reconcile deferred', err));
 
+  // Blender execution: re-run the saved configuration's own check when it last
+  // passed and has not changed, so the lane is ready without a manual check
+  // after every restart. PortOS's synthetic probe scripts and fixed test scene
+  // only (no project code, no provider call); an install that never passed a
+  // check starts no process here.
+  import('./codeAnimation/execution.js')
+    .then(({ rearmCodeAnimationExecution }) => rearmCodeAnimationExecution())
+    .catch(err => logBootstrapFailure('❌ Blender execution re-check failed', err));
+
   // Initialize agent automation scheduler and action executor
   automationScheduler.init().catch(err => logBootstrapFailure('❌ Agent scheduler init failed', err));
   // agentActionExecutor.init() is synchronous — guard with try/catch so a thrown

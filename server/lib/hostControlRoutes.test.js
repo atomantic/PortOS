@@ -186,6 +186,8 @@ describe('HOST_CONTROL_ROUTES (#8716)', () => {
     expect(isHostControlRoute('POST', '/api/apps/example-app/archive')).toBe(false);
     // The policy-store body gate matches the same spellings (#8721).
     expect(hostControlBodyKeys('put', '/API/Settings/', { harnesses: {}, location: {} })).toEqual(['harnesses']);
+    // The record that lets a restart re-run the Blender execution check unasked is written by an operator's passing check only.
+    expect(hostControlBodyKeys('PUT', '/api/settings', { codeAnimationExecutionArmed: null, location: {} })).toEqual(['codeAnimationExecutionArmed']);
     expect(hostControlBodyKeys('PUT', '/api/COS/config', { avatarStyle: 'svg', mcpServers: [] })).toEqual(['mcpServers']);
     expect(hostControlBodyKeys('PUT', '/api/settings/credentials/example', { harnesses: {} })).toEqual([]);
   });

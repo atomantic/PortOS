@@ -22,7 +22,6 @@ export default function ProductionContainment({ rendererKind = null, inline = fa
   const [savedPath, setSavedPath] = useState('');
   const [mode, setMode] = useState('contained');
   const [engine, setEngine] = useState('CYCLES');
-  const [acknowledged, setAcknowledged] = useState(false);
   const [setupError, setSetupError] = useState('');
   const [candidates, setCandidates] = useState(null);
   const [finding, setFinding] = useState(false);
@@ -60,7 +59,6 @@ export default function ProductionContainment({ rendererKind = null, inline = fa
     setBlenderPath(path);
     setMode(next.executionMode || 'contained');
     setEngine(next.tools.blender.engine || 'CYCLES');
-    setAcknowledged(next.executionMode === 'trusted-local');
     setLoadError('');
   };
   useEffect(() => {
@@ -93,7 +91,7 @@ export default function ProductionContainment({ rendererKind = null, inline = fa
   }, [canFind, findAgain]);
   const [save, saving] = useAsyncAction(async () => {
     setSetupError('');
-    const next = await updateCodeAnimationExecutionTools({ blender: { executable: blenderPath.trim() || null, executionMode: mode, engine, acknowledgeHostAccess: acknowledged } }, { silent: true })
+    const next = await updateCodeAnimationExecutionTools({ blender: { executable: blenderPath.trim() || null, executionMode: mode, engine } }, { silent: true })
       .catch(error => { setSetupError(error?.message || 'Could not save the Blender executable.'); return null; });
     if (next) apply(next);
   });
@@ -103,7 +101,7 @@ export default function ProductionContainment({ rendererKind = null, inline = fa
       .catch(error => { setSetupError(error?.message || 'Could not check Blender.'); return null; });
     if (next) apply(next);
   });
-  const dirty = Boolean(execution) && (blenderPath.trim() !== savedPath || mode !== (execution.executionMode || 'contained') || engine !== (execution.tools.blender.engine || 'CYCLES') || acknowledged !== (execution.executionMode === 'trusted-local'));
+  const dirty = Boolean(execution) && (blenderPath.trim() !== savedPath || mode !== (execution.executionMode || 'contained') || engine !== (execution.tools.blender.engine || 'CYCLES'));
   useLayoutEffect(() => {
     onExecutionChangeRef.current?.(execution && !dirty && !saving && !probing ? execution : null);
   }, [execution, dirty, saving, probing]);
@@ -152,7 +150,7 @@ export default function ProductionContainment({ rendererKind = null, inline = fa
     </div>}
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
       <div><label htmlFor="cap-blender-mode" className="mb-1 block text-sm">Execution mode</label>
-        <select id="cap-blender-mode" value={mode} disabled={busy} onChange={event => { setMode(event.target.value); setAcknowledged(false); }} className="w-full rounded border border-port-border bg-port-bg p-2 text-sm">
+        <select id="cap-blender-mode" value={mode} disabled={busy} onChange={event => setMode(event.target.value)} className="w-full rounded border border-port-border bg-port-bg p-2 text-sm">
           <option value="contained">Contained (default)</option><option value="trusted-local">Trusted local (host access)</option>
         </select></div>
       <div><label htmlFor="cap-blender-engine" className="mb-1 block text-sm">Render engine</label>
@@ -160,19 +158,15 @@ export default function ProductionContainment({ rendererKind = null, inline = fa
           <option value="CYCLES">Cycles CPU</option><option value="BLENDER_EEVEE_NEXT">EEVEE GPU</option>
         </select></div>
     </div>
-    {mode === 'trusted-local' && <div className="space-y-2 rounded border border-port-warning p-3 text-sm">
-      <p>{execution.trustedLocalWarning || 'Trusted-local Blender can access this account’s host filesystem, network and processes. Environment scrubbing and process supervision are not containment.'}</p>
-      <label htmlFor="cap-blender-ack" className="flex items-start gap-2"><input id="cap-blender-ack" type="checkbox" checked={acknowledged} disabled={busy} onChange={event => setAcknowledged(event.target.checked)} />I understand the host access and trust the source I will run.</label>
-    </div>}
     {mode === 'contained' && execution.containedGpuNotice && <p className={engine === 'CYCLES' ? 'text-xs text-gray-400' : 'text-sm text-port-warning'}>{execution.containedGpuNotice}</p>}
     <p className="text-xs text-gray-400">Cycles CPU can take substantial time for a full sequence.</p>
     <details className="text-xs text-gray-400">
       <summary className="cursor-pointer">Execution notes</summary>
-      <p className="mt-1">Trusted-local mode requires your explicit acknowledgement and runs only source you trust. No automatic fallback occurs.</p>
+      <p className="mt-1">The execution mode is the one saved here: PortOS never switches it or falls back to another mode. After a restart PortOS re-runs the check itself while the saved Blender, mode and engine are unchanged.</p>
       <p className="mt-1">EEVEE needs a successful GPU check and disables motion blur to preserve stepped holds. Project version and engine must match the checked runtime.</p>
     </details>
     <div className="flex flex-wrap gap-2">
-      <button type="button" className={actionClass} disabled={!dirty || busy || (mode === 'trusted-local' && !acknowledged)} onClick={save}>{saving ? 'Saving…' : inline ? 'Save Blender' : 'Save tool'}</button>
+      <button type="button" className={actionClass} disabled={!dirty || busy} onClick={save}>{saving ? 'Saving…' : inline ? 'Save Blender' : 'Save tool'}</button>
       <button type="button" className={actionClass} disabled={!savedPath || dirty || busy || (mode === 'contained' && !mechanism.supported)} onClick={probe}>{probing ? 'Checking execution…' : inline ? 'Check Blender' : 'Run execution check'}</button>
     </div>
     {!savedPath && <p className="text-sm text-port-warning">{execution.tools.blender.problem ? `${execution.tools.blender.problem} ` : ''}Enter a Blender executable path and select {inline ? 'Save Blender' : 'Save tool'} before running the execution check.</p>}

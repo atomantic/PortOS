@@ -2,8 +2,9 @@
  * The whole state of a project's Blender film, as `GET /:id/blender` and every
  * mutating answer return it: settings, tool readiness, the workspace, the
  * synced manifest, each shot's renders, cuts, jobs and notes. Reads the
- * project record, the workspace and in-memory jobs; starts nothing. The tool
- * section repeats the Code Animation execution report and never runs its check.
+ * project record, the workspace and in-memory jobs; starts no film job. The
+ * tool section repeats the Code Animation execution report, whose first read
+ * after a restart may re-run an unchanged configuration's own check.
  */
 import { lstat } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -15,7 +16,7 @@ import { blenderFilmProblems, readBlenderManifest } from './manifest.js';
 import { blenderFinalStale, readBlenderRenders } from './renderIndex.js';
 import { listBlenderJobs } from './jobs.js';
 
-export const BLENDER_NEEDS_TRUSTED_LOCAL = 'A Blender film renders on the GPU and writes into the project workspace, so it needs Blender in Trusted local mode. Switch the execution mode under Blender execution (Code Animation > Production, or this panel\'s Settings), acknowledge host access, and run the execution check.';
+export const BLENDER_NEEDS_TRUSTED_LOCAL = 'A Blender film renders on the GPU and writes into the project workspace, so it needs Blender in Trusted local mode. Switch the execution mode under Blender execution (Code Animation > Production, or this panel\'s Settings) and run the execution check.';
 
 export const blenderCutsFile = (projectId) => join(blenderRendersDir(projectId), 'cuts', 'cuts.json');
 

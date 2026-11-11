@@ -239,7 +239,9 @@ describe('BlenderFilmPanel: getting started', () => {
     getMusicVideoBlender.mockResolvedValue(blenderFilmState({ tool: { ready: true, reason: '', executionMode: 'contained', engine: 'CYCLES', version: '5.2.3' } }));
     await renderPanel();
     expect(screen.getByText('Blender not ready')).toBeInTheDocument();
-    expect(screen.getByRole('region', { name: 'Blender readiness' })).toHaveTextContent(/contained execution.*choose Trusted local/);
+    const readiness = screen.getByRole('region', { name: 'Blender readiness' });
+    expect(readiness).toHaveTextContent(/contained execution.*choose Trusted local, save, then Check Blender/);
+    expect(readiness).not.toHaveTextContent(/acknowledge|you trust/i);
     expect(screen.getByTestId('blender-setup')).toBeInTheDocument();
     expect(within(detail('s010')).getByRole('button', { name: 'Re-render preview' })).toBeDisabled();
     expect(within(detail('s010')).getByText(/Blender film renders need Trusted local execution/)).toBeInTheDocument();
@@ -250,6 +252,14 @@ describe('BlenderFilmPanel: getting started', () => {
 });
 
 describe('BlenderFilmPanel: settings', () => {
+  // The saved mode is the operator's choice: readiness states it with no acknowledgement step or trust warning.
+  it('reports a ready Blender in Trusted local mode in plain words', async () => {
+    await renderPanel('?btab=settings');
+    const readiness = screen.getByRole('region', { name: 'Blender readiness' });
+    expect(readiness).toHaveTextContent('Blender 5.2.3 is ready in Trusted local mode.');
+    expect(readiness).not.toHaveTextContent(/acknowledge|you trust|host access/i);
+  });
+
   it('saves only the changed settings and holds renders until the save lands', async () => {
     await renderPanel();
     openTab(/Settings/);

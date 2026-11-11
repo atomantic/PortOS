@@ -1,7 +1,9 @@
 /**
  * Code Animation production execution capability (#9388).
  *
- *   GET  /api/code-animation/execution         platform mechanism, tools, lane readiness, last check
+ *   GET  /api/code-animation/execution         platform mechanism, tools, lane readiness, last check;
+ *                                              after a restart the first read waits while an unchanged,
+ *                                              previously checked configuration re-runs its own check
  *   GET  /api/code-animation/execution/blender-candidates   installed Blender apps (host control)
  *   PUT  /api/code-animation/execution/tools   operator-owned installed-tool paths (host control)
  *   POST /api/code-animation/execution/probe   run the adversarial containment check (host control)

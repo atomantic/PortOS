@@ -1,8 +1,9 @@
 /**
  * Code Animation production execution capability (#9388): operator-owned tool
- * configuration, an on-demand adversarial containment probe, and the
- * fail-closed readiness report later render stages gate on. Nothing here runs
- * at boot or calls a provider.
+ * configuration, an adversarial containment probe, and the fail-closed
+ * readiness report later render stages gate on. Nothing here calls a provider.
+ * The probe runs on demand, plus once per server process on its own for a
+ * configuration that already passed an explicit check and has not changed.
  */
 import { createServer } from 'node:net';
 import { createHash } from 'node:crypto';
@@ -14,7 +15,8 @@ import { PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { validateRequest } from '../../lib/validation.js';
 import {
-  CONTAINED_BLENDER_GPU_NOTICE, codeAnimationExecutionToolsSchema, codeAnimationToolRoots, codeAnimationWorkerEnv, codeAnimationWorkerLimitsSchema,
+  CONTAINED_BLENDER_GPU_NOTICE, codeAnimationExecutionArmedSchema, codeAnimationExecutionToolsSchema, codeAnimationToolRoots,
+  codeAnimationWorkerEnv, codeAnimationWorkerLimitsSchema,
 } from '../../lib/codeAnimationContainment.js';
 import { getSettings, updateSettings } from '../settings.js';
 import { cdpRequest } from '../browserService.js';
@@ -23,6 +25,9 @@ import { probeBlenderRender } from './blenderProbe.js';
 import { blenderSeries } from '../../lib/blenderVersion.js';
 
 const SETTINGS_KEY = 'codeAnimationExecution';
+const ARMED_KEY = 'codeAnimationExecutionArmed';
+// What a check binds to: evidence, the armed record and the inspected tool all carry these.
+const CHECKED_FIELDS = ['executable', 'fingerprint', 'executionMode', 'engine'];
 const WORKSPACE_DIR = 'code-animation-workspaces';
 // Characters that could break out of a Seatbelt string literal. Backslash is
 // the Windows separator; Windows has no worker mechanism, so it only matters on POSIX.
@@ -44,8 +49,11 @@ const BROWSER_LANE = {
 };
 
 let lastProbe = null;
+// The run in flight, as { run, generation }.
 let probing = null;
 let configurationGeneration = 0;
+// The one automatic re-check this process makes; readers arriving while it runs wait on it.
+let recheck = null;
 
 const inside = (root, path) => {
   const rel = relative(root, path);
@@ -79,6 +87,18 @@ async function configuredTools() {
   return parsed.success ? parsed.data : codeAnimationExecutionToolsSchema.parse({ blender: { executable: null } });
 }
 
+const sameCheckedConfiguration = (left, right) => Boolean(left && right) && CHECKED_FIELDS.every((field) => left[field] === right[field]);
+
+async function inspectConfiguredBlender() {
+  const configuration = (await configuredTools()).blender;
+  return { ...await inspectExecutable(configuration.executable), executionMode: configuration.executionMode, engine: configuration.engine };
+}
+
+async function armedConfiguration() {
+  const parsed = codeAnimationExecutionArmedSchema.safeParse((await getSettings())?.[ARMED_KEY]);
+  return parsed.success ? parsed.data : null;
+}
+
 function blenderLane(mechanism, blender) {
   if (blender.executionMode === 'contained' && !mechanism.supported) return { ready: false, reason: mechanism.reason };
   if (blender.executionMode === 'trusted-local' && !['darwin', 'linux'].includes(process.platform)) {
@@ -87,27 +107,53 @@ function blenderLane(mechanism, blender) {
   if (!blender.executable) return { ready: false, reason: `Blender: ${blender.problem}` };
   const evidence = lastProbe?.tools?.blender;
   if (!lastProbe?.passed) return { ready: false, reason: 'Run the execution check; execution stays refused until it passes on this server process.' };
-  if (!evidence || evidence.executable !== blender.executable || evidence.fingerprint !== blender.fingerprint
-    || evidence.executionMode !== blender.executionMode || evidence.engine !== blender.engine) {
+  if (!sameCheckedConfiguration(evidence, blender)) {
     return { ready: false, reason: 'The Blender executable, engine or execution mode changed since the last check.' };
   }
   if (!evidence.passed) return { ready: false, reason: `Blender did not render the supported test scene in ${blender.executionMode} mode. ${evidence.failure}` };
   return { ready: true, reason: null };
 }
 
-export async function getCodeAnimationExecution() {
+async function readExecution() {
   const mechanism = await currentContainmentMechanism();
-  const configuration = (await configuredTools()).blender;
-  const blender = { ...await inspectExecutable(configuration.executable), executionMode: configuration.executionMode, engine: configuration.engine };
+  const blender = await inspectConfiguredBlender();
   return {
     platform: process.platform, mechanism, probe: lastProbe, executionMode: blender.executionMode,
     contained: blender.executionMode === 'contained',
-    trustedLocalWarning: 'Trusted-local Blender runs with this account’s host filesystem, network and process access. Only run source you trust. Environment scrubbing and process/resource supervision are not containment; code can act outside the supervised workspace or escape its process group.',
     containedGpuNotice: CONTAINED_BLENDER_GPU_NOTICE,
     tools: { blender },
     lanes: { browser: BROWSER_LANE, blender: blenderLane(mechanism, blender) },
     defaultLimits: codeAnimationWorkerLimitsSchema.parse({}),
   };
+}
+
+/**
+ * A restart forgets the check, not the operator's saved choice. While the
+ * inspected configuration still equals the one whose explicit check last
+ * passed, run that check again without waiting for someone to ask. It runs
+ * PortOS's own synthetic scripts and fixed scene, never project code. At most
+ * one attempt per process: a failed one leaves the lane refused until an
+ * explicit check. Also the boot hook, so the lane is usually ready before
+ * anything reads it.
+ */
+export async function rearmCodeAnimationExecution() {
+  if (lastProbe !== null) return undefined;
+  const armed = await armedConfiguration();
+  if (!armed || !sameCheckedConfiguration(armed, await inspectConfiguredBlender())) return undefined;
+  // Read again after the awaits: an explicit check may have landed meanwhile.
+  if (lastProbe !== null) return undefined;
+  if (!recheck) {
+    console.log(`🛡️ Blender configuration unchanged since its last passing check: running the ${armed.executionMode} execution check for this server process`);
+    recheck = sharedProbe().then(() => undefined, (error) => {
+      console.error(`❌ Automatic Code Animation execution check failed: ${error.message}`);
+    });
+  }
+  return recheck;
+}
+
+export async function getCodeAnimationExecution() {
+  await rearmCodeAnimationExecution();
+  return readExecution();
 }
 
 export async function setCodeAnimationExecutionTools(input) {
@@ -118,10 +164,10 @@ export async function setCodeAnimationExecutionTools(input) {
     if (inspected.problem) throw new ServerError(inspected.problem, { status: 400, code: 'CODE_ANIMATION_TOOL_INVALID' });
     executable = inspected.executable;
   }
-  await updateSettings({ [SETTINGS_KEY]: { blender: { ...tools.blender, executable } } });
+  await updateSettings({ [SETTINGS_KEY]: { blender: { ...tools.blender, executable } }, [ARMED_KEY]: null });
   configurationGeneration += 1;
   lastProbe = null;
-  return getCodeAnimationExecution();
+  return readExecution();
 }
 
 // Synthetic adversarial package. It reports only allowed/denied codes, never
@@ -268,11 +314,33 @@ export function lastCheckedBlenderVersion() {
   return evidence?.passed ? evidence.version : null;
 }
 
+// A passing explicit check is what lets a later process re-run it unasked.
+async function armCheckedConfiguration(probe) {
+  const evidence = probe?.tools?.blender;
+  if (!probe?.passed || !evidence?.passed) return;
+  const armed = Object.fromEntries(CHECKED_FIELDS.map((field) => [field, evidence[field]]));
+  if (!sameCheckedConfiguration(await armedConfiguration(), armed)) await updateSettings({ [ARMED_KEY]: armed });
+}
+
+/**
+ * The run for the current configuration. A run that began before a save answers
+ * only for what that save replaced (it ends revoked), so a later caller gets its own.
+ */
+function sharedProbe() {
+  if (probing?.generation === configurationGeneration) return probing.run;
+  const entry = { generation: configurationGeneration };
+  entry.run = runProbe().finally(() => { if (probing === entry) probing = null; });
+  probing = entry;
+  return entry.run;
+}
+
 /** Run the adversarial self-test on demand; concurrent requests share one run. */
 export async function probeCodeAnimationExecution() {
-  probing ??= runProbe().finally(() => { probing = null; });
-  await probing;
-  return getCodeAnimationExecution();
+  const probe = await sharedProbe();
+  // The check's result stands either way; without the record the next restart only needs an explicit check again.
+  await armCheckedConfiguration(probe)
+    .catch((error) => console.error(`❌ Could not save the checked Blender configuration: ${error.message}`));
+  return readExecution();
 }
 
 /**
