@@ -50,7 +50,7 @@ describe.skipIf(!canRun)('saved storyboard pixels in a real browser', () => {
     await phase('workspace', async () => {
       dir = await mkdtemp(join(tmpdir(), 'portos-animatic-capture-'));
       await symlink(join(client, 'node_modules'), join(dir, 'node_modules'), 'dir');
-      const entry = `import React,{useState} from 'react';import{createRoot}from'react-dom/client';import Animatic from ${JSON.stringify(join(client, 'src/components/musicVideo/StoryboardAnimatic.jsx'))};import toast,{Toaster}from ${JSON.stringify(join(client, 'src/components/ui/Toast.jsx'))};
+      const entry = `import React,{useState} from 'react';import{createRoot}from'react-dom/client';import Animatic from ${JSON.stringify(join(client, 'src/components/musicVideo/StoryboardAnimatic.jsx'))};import toast,{Toaster}from ${JSON.stringify(join(client, 'src/components/ui/Toast.jsx'))};import{capturePreviewFrame}from ${JSON.stringify(join(client, 'src/lib/musicVideoFrameCapture.js'))};window.capturePreviewFrame=capturePreviewFrame;
 window.uploads=[];window.captureErrors=[];const report=toast.error;toast.error=(message,...args)=>{window.captureErrors.push(message);return report(message,...args)};const realFetch=window.fetch;window.fetch=async(url,options)=>{if(url==='/api/image-gen/upload'){window.uploads.push(Array.from(new Uint8Array(await options.body.get('file').arrayBuffer())));return Response.json({filename:'synthetic.png'});}return realFetch(url,options)};
 const filterRevision=root=>{const filter=root?.querySelector('filter');return filter?[filter,...filter.querySelectorAll('*')].map(el=>[el.localName,[...el.attributes].filter(a=>a.name!=='style'&&!a.name.startsWith('xmlns')).map(a=>[a.name,a.value]).sort()]):null};
 const surfaceRevision=canvas=>{if(!canvas?.width||!canvas.height)return null;const bytes=canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height).data;let hash=2166136261;for(const byte of bytes)hash=Math.imul(hash^byte,16777619);return hash>>>0};
@@ -355,6 +355,55 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
     await capture();
     await page.evaluate(async () => { await document.querySelector('audio').play(); });
     await page.waitForFunction(() => !document.querySelector('video').paused && !document.querySelector('video').dataset.pausedFrame);
+    await page.evaluate(() => document.querySelector('audio').pause());
+    await capture();
+  });
+
+  it('keeps a video-only picture visible on every animation frame through pause and three frame steps', async () => {
+    await show(project([{ ...still, referenceImageId: null, visualLayer: 'footage', videoHistoryId: 'bt709', frameFit: 'black' }]), 0.02);
+    await capture();
+    await page.evaluate(async () => { await document.querySelector('audio').play(); });
+    await page.waitForFunction(() => {
+      const video = document.querySelector('video');
+      return !video.paused && video.currentTime > 0.3 && getComputedStyle(video).visibility === 'visible';
+    });
+    for (const action of ['pause', 'step', 'step', 'step']) {
+      const samples = await page.evaluate(async action => {
+        const video = document.querySelector('video');
+        const canvas = video.nextElementSibling;
+        const samples = [];
+        let settledFrames = 0;
+        if (action === 'pause') document.querySelector('audio').pause();
+        else document.querySelector('button[aria-label="Forward 1 frame"]').click();
+        // Observe the whole handover, including the two compositor frames before
+        // the paused canvas is repainted. No still sits underneath this clip.
+        for (let frame = 0; frame < 120 && settledFrames < 4; frame++) {
+          await new Promise(requestAnimationFrame);
+          const current = !video.seeking && video.dataset.pausedFrame === String(video.currentTime);
+          samples.push({ video: getComputedStyle(video).visibility, canvas: getComputedStyle(canvas).visibility,
+            opacity: getComputedStyle(video.parentElement).opacity, current, time: video.currentTime,
+            captureError: current ? null : await window.capturePreviewFrame(document.querySelector('figure').firstElementChild)
+              .then(() => 'Unexpected capture success', error => error.message) });
+          settledFrames = current ? settledFrames + 1 : 0;
+        }
+        return samples;
+      }, action);
+      expect(samples.length, action).toBeGreaterThanOrEqual(4);
+      expect(samples.at(-1).current, action).toBe(true);
+      expect(samples.every(sample => Number(sample.opacity) > 0), action).toBe(true);
+      expect(samples.filter(sample => sample.video === 'hidden' && sample.canvas === 'hidden'), action).toEqual([]);
+      expect(samples.at(-1), action).toMatchObject({ video: 'hidden', canvas: 'visible' });
+      const pending = samples.filter(sample => !sample.current);
+      expect(pending.length, action).toBeGreaterThan(0);
+      expect(pending.every(sample => sample.captureError === 'Video frame is still loading'), action).toBe(true);
+    }
+    await capture();
+    await page.evaluate(async () => { await document.querySelector('audio').play(); });
+    await page.waitForFunction(() => {
+      const video = document.querySelector('video');
+      return !video.paused && !video.dataset.pausedFrame && getComputedStyle(video).visibility === 'visible'
+        && getComputedStyle(video.nextElementSibling).visibility === 'hidden';
+    });
     await page.evaluate(() => document.querySelector('audio').pause());
     await capture();
   });

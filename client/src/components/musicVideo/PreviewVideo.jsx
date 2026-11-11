@@ -12,8 +12,13 @@ export default function PreviewVideo({ videoRef, audioRef, active = true, classN
     const invalidate = () => {
       cancelAnimationFrame(handle);
       delete video.dataset.pausedFrame;
+      // Keep the last picture during a paused seek. Capture requires the new
+      // frame identity, independently of which surface is still on screen.
+    };
+    const playback = () => {
+      invalidate();
       canvas.style.visibility = 'hidden';
-      video.style.visibility = audio.paused ? 'hidden' : '';
+      video.style.visibility = '';
     };
     const paint = () => {
       if (!active || !audio.paused || video.seeking || video.readyState < 2) return;
@@ -43,15 +48,16 @@ export default function PreviewVideo({ videoRef, audioRef, active = true, classN
     for (const event of events) video.addEventListener(event, schedule);
     video.addEventListener('seeking', invalidate);
     video.addEventListener('emptied', invalidate);
-    audio.addEventListener('play', invalidate);
+    audio.addEventListener('play', playback);
     audio.addEventListener('pause', schedule);
-    schedule();
+    if (audio.paused) schedule();
+    else playback();
     return () => {
       invalidate();
       for (const event of events) video.removeEventListener(event, schedule);
       video.removeEventListener('seeking', invalidate);
       video.removeEventListener('emptied', invalidate);
-      audio.removeEventListener('play', invalidate);
+      audio.removeEventListener('play', playback);
       audio.removeEventListener('pause', schedule);
     };
   }, [videoRef, audioRef, active, props.src]);
