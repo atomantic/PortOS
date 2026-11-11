@@ -205,9 +205,10 @@ in-flight run as interrupted and retryable; it never calls a provider.
 
 ## Native 3D installer dependency inventory
 
-PortOS reports an unresolved profile before Install or Repair for TRELLIS.2 CUDA
-and Pixal3D CUDA. TRELLIS.2 Metal uses the [locked native profile](TRELLIS2_METAL.md).
-An existing runtime remains available for generation on compatible hardware.
+PortOS reports an unresolved profile before Install or Repair for Pixal3D CUDA.
+TRELLIS.2 Metal uses the [locked Metal profile](TRELLIS2_METAL.md), and TRELLIS.2
+CUDA uses the [locked Linux profile](TRELLIS2_CUDA.md). Existing runtimes remain
+available for generation on compatible hardware.
 Pixal3D Metal offers Install and Repair through
 the [locked profile](PIXAL3D_MPS.md) shipped in
 [#15698](https://github.com/atomantic/PortOS/pull/15698).
@@ -219,7 +220,7 @@ setup with a reproducible profile and a hardware-verified textured GLB export.
 
 | Runtime | Source inspected | Python and native dependencies |
 | --- | --- | --- |
-| [TRELLIS.2 CUDA](https://github.com/atomantic/PortOS/issues/15709) | [TRELLIS.2 setup](https://github.com/microsoft/TRELLIS.2/blob/75fbf0183001ed9876c8dbb35de6b68552ee08bd/setup.sh), [o-voxel build metadata](https://github.com/microsoft/TRELLIS.2/blob/75fbf0183001ed9876c8dbb35de6b68552ee08bd/o-voxel/pyproject.toml) | Conda Python 3.10 and Torch 2.6.0 / TorchVision 0.21.0 from the cu124 index. The base PyPI stack and its transitive dependencies float, aside from Gradio 6.0.1. The setup installs FlashAttention 2.7.3 and builds nvdiffrast (tag v0.4.0), nvdiffrec (branch `renderutils`), CuMesh, FlexGEMM and o-voxel against the active Torch/CUDA toolchain. o-voxel carries an Eigen submodule and declares direct Git dependencies on CuMesh and FlexGEMM. The script also installs system `libjpeg-dev` before building Pillow-SIMD. |
+| [TRELLIS.2 CUDA](TRELLIS2_CUDA.md) | `scripts/trellis2-cuda-profile.json`, separate runtime and build wheel locks | Conda CPython 3.11.16, Torch 2.14.1+cu126, TorchVision 0.29.1+cu126 and FlashAttention 2.8.3.post2. The Linux x86_64 profile fixes CUDA toolkit 12.6.3 (nvcc 12.6.85), GCC 11.3 and compute capability 8.6. Twenty-seven Conda artifacts plus micromamba, 70 runtime wheels, seven build wheels and 11 immutable source/submodule archives are hash-pinned. Native builds use local sources with dependency resolution disabled; Repair retains weights. |
 | [Pixal3D CUDA](https://github.com/atomantic/PortOS/issues/15710) | [Pixal3D requirements](https://github.com/TencentARC/Pixal3D/blob/f7cf38429b0bd264f1995f0f8743a88b1c728b94/requirements.txt), [TRELLIS.2 setup](https://github.com/microsoft/TRELLIS.2/blob/75fbf0183001ed9876c8dbb35de6b68552ee08bd/setup.sh), [utils3d wheel release](https://github.com/LDYang694/Storages/releases/tag/20260430) | The former installer created a separate Conda Python 3.10 environment and runs the same native extension steps without `--new-env`. That skipped upstream's explicit cu124 Torch/TorchVision install, leaving Torch selection to the rest of setup. Pixal3D's requirements include a floating MoGe Git dependency and unpinned Gradio. NATTEN 0.21.0 optionally builds against the active Torch and detected compute capability. The final utils3d 0.0.2 wheel is verified against the release SHA-256. Its metadata declares four dependencies (ModernGL, NumPy, plyfile and SciPy), which still use normal resolution. |
 | [TRELLIS.2 Metal](TRELLIS2_METAL.md) | `scripts/trellis2-mps-profile.json`, `scripts/requirements-trellis2-mps.lock.txt` | PortOS-owned Install/Repair on CPython 3.13, Torch 2.15.0 and TorchVision 0.29.2. The 56-wheel closure includes hash-locked build backends. Nine immutable source archives pin trellis-mac, TRELLIS.2, the four Metal packages, trellis2-apple, utils3d and the exact o-voxel Eigen submodule. Setup verifies native imports and the Metal baker, retains weights, and records the compiler and source inventory. Requires macOS 26+ and full Xcode 26+ with its Metal Toolchain. |
 | Pixal3D Metal | [Pinned Apple Silicon source](https://github.com/pawel-mazurkiewicz/Pixal3D-mac/tree/0be9e69a729432323dfb60a418801e5e9e7a1437) | PortOS builds in a private Python 3.13 venv with hash-pinned wheel and source requirements. Vendored Metal extensions build from the pinned snapshot with the locked build tools and no dependency resolution. See [the Pixal3D Metal runtime guide](PIXAL3D_MPS.md) for the Torch ABI and hardware verification. |

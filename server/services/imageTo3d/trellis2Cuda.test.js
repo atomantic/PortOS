@@ -180,6 +180,24 @@ describe('runTrellis2CudaGenerate', () => {
     ...opts,
   });
 
+  it('renders from the private snapshot and refuses legacy fallback after an incomplete Repair', async () => {
+    const prefix = join(ROOT, '.conda');
+    const python = join(prefix, 'bin', 'python');
+    const source = join(prefix, 'portos-source');
+    const complete = [prefix, python, join(prefix, 'portos-profile.json'), join(source, 'trellis2')];
+    const child = makeChild();
+    const spawnImpl = vi.fn(() => child);
+    const ready = run({ exists: existsFor(...complete, CONDA_PY, join(ROOT, 'trellis2')), spawnImpl });
+    child.emit('close', 0);
+    await expect(ready.promise).resolves.toEqual({ assetPath: '/out/model.glb' });
+    expect(spawnImpl).toHaveBeenCalledWith(python, expect.arrayContaining(['--repo-root', source]), expect.objectContaining({ cwd: source }));
+    for (const paths of [[prefix, python], [...complete, join(ROOT, 'portos-installing')]]) {
+      const failed = run({ exists: existsFor(...paths, CONDA_PY, join(ROOT, 'trellis2')), spawnImpl });
+      await expect(failed.promise).rejects.toMatchObject({ code: 'TRELLIS2_CUDA_NOT_INSTALLED' });
+    }
+    expect(spawnImpl).toHaveBeenCalledTimes(1);
+  });
+
   it('refuses to run — and never spawns — when the environment is absent', async () => {
     // The no-cold-bootstrap guard: this must be impossible to reach on a fresh host.
     const spawnImpl = vi.fn();

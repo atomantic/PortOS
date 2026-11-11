@@ -171,7 +171,7 @@ export const IMAGE_TO_3D_TARGETS = Object.freeze({
       minVramGb: 24,
       linuxHost: true,
       diskGb: 15,
-      python: '3.10',
+      python: '3.11',
     }),
     // Upstream's CUDA entrypoint takes no pipeline-type override and PortOS's
     // runner for it emits no alpha-mode flag, so both controls are declared
@@ -179,9 +179,8 @@ export const IMAGE_TO_3D_TARGETS = Object.freeze({
     supportsRenderOptions: Object.freeze({ detail: false, alphaMode: false, normalMap: false }),
     upstream: 'https://github.com/microsoft/TRELLIS.2',
     weightsRepo: 'microsoft/TRELLIS.2-4B',
-    installBlockedReason:
-      'Install and Repair require a locked TRELLIS.2 CUDA profile for the Conda environment, '
-      + 'PyTorch CUDA wheels and native extension sources.',
+    installNotes: 'The locked Linux x86_64 profile requires CUDA toolkit 12.6.3 (nvcc 12.6.85), GCC 11.3, '
+      + 'compute capability 8.6 and 24 GiB VRAM. Other existing CUDA environments can still render.',
     // Same two gated repos as the MPS port, because this lane loads the same weights:
     // `microsoft/TRELLIS.2-4B`'s `pipeline.json` names `briaai/RMBG-2.0` as its
     // `rembg_model`, and `Trellis2ImageTo3DPipeline.run` defaults `preprocess_image=True`

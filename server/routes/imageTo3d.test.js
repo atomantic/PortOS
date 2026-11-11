@@ -210,7 +210,6 @@ describe('image-to-3D install profile preflight', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it.each([
-    ['trellis2Cuda', isTrellis2CudaInstalled, /TRELLIS.2 CUDA.*PyTorch CUDA wheels/],
     ['pixal3dCuda', isPixal3dCudaInstalled, /Pixal3D CUDA.*MoGe, NATTEN/],
   ])('reports the unresolved %s profile for fresh Install and Repair', async (id, installed, missing) => {
     const app = makeApp();
@@ -227,6 +226,37 @@ describe('image-to-3D install profile preflight', () => {
     const repair = await request(app).post(`${path}?repair=1`);
     expect(sseFrames(repair.text)).toEqual([error]);
     expect(hfChildEnv).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('runs the owned CUDA setup for Install and Repair and refuses a non-Linux host', async () => {
+    const path = '/api/image-to-3d/targets/trellis2Cuda/install';
+    spawn.mockImplementation(() => {
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.kill = vi.fn();
+      process.nextTick(() => child.emit('close', 0));
+      return child;
+    });
+    const status = await request(makeApp()).get(path);
+    expect(status.body.target.installBlockedReason).toBeUndefined();
+    expect(status.body.target.installNotes).toContain('12.6.85');
+    const fresh = await request(makeApp()).post(path);
+    expect(sseFrames(fresh.text).at(-1).type).toBe('complete');
+    isTrellis2CudaInstalled.mockReturnValueOnce(true);
+    const repair = await request(makeApp()).post(`${path}?repair=1`);
+    expect(sseFrames(repair.text).at(-1).type).toBe('complete');
+    expect(spawn).toHaveBeenCalledTimes(2);
+    for (const [command, args] of spawn.mock.calls) {
+      expect(command).toBe('python3');
+      expect(args[0]).toMatch(/setup-trellis2-cuda\.py$/);
+      expect(args[1]).toMatch(/trellis2-cuda$/);
+    }
+    spawn.mockClear();
+    targets.detectHostCapabilities.mockReturnValueOnce({ cuda: true, cudaVramGb: 24, linuxHost: false });
+    const refused = await request(makeApp()).post(path);
+    expect(sseFrames(refused.text)).toEqual([expect.objectContaining({ type: 'error', message: expect.stringContaining('Install skipped') })]);
     expect(spawn).not.toHaveBeenCalled();
   });
 

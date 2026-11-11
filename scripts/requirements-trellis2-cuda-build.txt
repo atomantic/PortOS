@@ -1,0 +1,8 @@
+# Native build tools; runtime and Torch ABI are constrained by the runtime lock.
+pip
+setuptools
+wheel
+ninja
+packaging
+psutil
+pybind11
