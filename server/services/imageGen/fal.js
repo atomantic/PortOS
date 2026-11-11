@@ -173,9 +173,15 @@ function awaitReferenceUploadSubscriber({ entry, cacheKey, signal, deadline }) {
 }
 
 async function uploadReferenceImage({ apiKey, dataUri, signal, deadline }) {
+  if (signal?.aborted) signal.throwIfAborted();
+  const now = Date.now();
+  const remainingMs = deadline ? deadline - now : FAL_IMAGE_TIMEOUT_MS;
+  if (remainingMs <= 0) {
+    throw new ServerError(`deadline exceeded (${FAL_IMAGE_TIMEOUT_MS}ms budget)`, { status: 504, code: 'FAL_IMAGE_TIMEOUT' });
+  }
+
   const dataHash = createHash('sha256').update(dataUri).digest('hex');
   const cacheKey = `${hashReferenceKey(apiKey)}:${dataHash}`;
-  const now = Date.now();
 
   const cached = referenceUploadCache.get(cacheKey);
   if (cached) {
@@ -209,6 +215,10 @@ async function uploadReferenceImage({ apiKey, dataUri, signal, deadline }) {
       signal: uploadController.signal,
     });
   }).then((url) => {
+    if (referenceUploadCache.get(cacheKey) !== inflightEntry) {
+      return url;
+    }
+    evictOldestReferenceCacheEntry();
     const expiresAt = Date.now() + FAL_HOSTED_INPUT_TTL_MS;
     const completedEntry = {
       inflight: false,
@@ -509,14 +519,25 @@ async function runFal(job, jobId, {
         type: 'status',
         message: encoded.length === 1 ? 'Uploading reference image…' : 'Uploading reference images…',
       });
-      imageUrls = await Promise.all(
-        encoded.map((e) => uploadReferenceImage({
-          apiKey,
-          dataUri: e.dataUri,
-          signal: entry.controller.signal,
-          deadline,
-        })),
-      );
+      const uploadStepController = new AbortController();
+      const onJobAbort = () => uploadStepController.abort(entry.controller.signal.reason);
+      if (entry.controller.signal.aborted) onJobAbort();
+      else entry.controller.signal.addEventListener('abort', onJobAbort, { once: true });
+      try {
+        imageUrls = await Promise.all(
+          encoded.map((e) => uploadReferenceImage({
+            apiKey,
+            dataUri: e.dataUri,
+            signal: uploadStepController.signal,
+            deadline,
+          })),
+        );
+      } catch (uploadErr) {
+        uploadStepController.abort(uploadErr);
+        throw uploadErr;
+      } finally {
+        entry.controller.signal.removeEventListener('abort', onJobAbort);
+      }
       if (entry.aborted) return finalizeCanceled(job, jobId);
     }
 

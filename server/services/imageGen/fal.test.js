@@ -463,6 +463,12 @@ describe('imageGen/fal — generateImage', () => {
     const job2 = await fal.generateImage({ prompt: 'job to keep', referenceImagePaths: ['shared-cancel-test.png'] });
 
     await uploadStarted;
+    // Wait until job2 has joined the shared upload subscriber set before canceling job1
+    await vi.waitFor(() => {
+      const entries = [...fal._internals.referenceUploadCache.values()];
+      expect(entries.some((e) => e.subscribers?.size === 2)).toBe(true);
+    });
+
     expect(fal.cancel(job1.jobId)).toBe(true);
     unblockUpload();
 
@@ -519,6 +525,52 @@ describe('imageGen/fal — generateImage', () => {
         deadline: Date.now() - 100,
       }),
     ).rejects.toThrow(/deadline exceeded/);
+  });
+
+  it('rejects cached URL lookup when caller signal is already aborted', async () => {
+    const ac = new AbortController();
+    ac.abort();
+    await expect(
+      fal._internals.uploadReferenceImage({
+        apiKey: 'fal-test-key',
+        dataUri: 'data:image/png;base64,aGVsbG8=',
+        signal: ac.signal,
+      }),
+    ).rejects.toThrow(/aborted/i);
+  });
+
+  it('unsubscribes other reference uploads when one upload fails in a multi-reference job', async () => {
+    await writeFile(join(FAKE_IMAGES_DIR, 'failing-ref-1.png'), await noiseImage(16, 16));
+    await writeFile(join(FAKE_IMAGES_DIR, 'pending-ref-2.png'), await noiseImage(20, 20));
+
+    let pendingUploadAborted = false;
+    let storagePostCount = 0;
+    fakeFal({
+      endpoint: 'fal-ai/nano-banana-pro/edit',
+      customFetch: async (url, opts) => {
+        if (url === FAL_STORAGE && opts.method === 'POST') {
+          storagePostCount += 1;
+          if (storagePostCount === 1) {
+            return jsonResponse({ detail: 'bad reference' }, false, 400);
+          }
+          opts.signal?.addEventListener('abort', () => { pendingUploadAborted = true; });
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+        return undefined;
+      },
+    });
+
+    const job = await fal.generateImage({
+      prompt: 'multi ref fail test',
+      referenceImagePaths: ['failing-ref-1.png', 'pending-ref-2.png'],
+    });
+
+    const event = await waitForTerminal(job.jobId);
+    expect(event).toMatchObject({
+      type: 'failed',
+      error: expect.stringMatching(/^fal\.ai reference upload failed:/),
+    });
+    expect(pendingUploadAborted).toBe(true);
   });
 });
 
