@@ -29,6 +29,11 @@ function fixtureHtml(kind, initiallyOn) {
     <button id="next">Next</button>
     <section id="post" hidden><textarea placeholder="Add a caption..."></textarea><div id="lyrics"></div><button id="publish">Post</button></section>
     <script>
+      document.querySelector('input[type=file]').onchange = () => {
+        const video = document.createElement('video');
+        Object.defineProperties(video, { readyState: { value: 2 }, videoWidth: { value: 100 }, currentSrc: { value: 'blob:uploaded' } });
+        document.body.append(video);
+      };
       window.windowAt = 158; window.publishClicks = 0; window.points = []; window.dragCount = 0;
       window.searchSettled = false; window.usedAfterSearch = false;
       const strip = document.querySelector('.waveform');

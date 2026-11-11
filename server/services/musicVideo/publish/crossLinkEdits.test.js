@@ -14,7 +14,7 @@ function fakePage({ url = 'https://example.com', text = '', count = 1 } = {}) {
     innerText: vi.fn(async () => text), count: vi.fn(async () => count), isVisible: vi.fn(async () => false),
   };
   return {
-    typed, goto: vi.fn(async (u) => { url = u; }), url: () => url, waitForTimeout: vi.fn(async () => {}),
+    waitForFunction: async () => ({ jsonValue: async () => 'ready' }), typed, goto: vi.fn(async (u) => { url = u; }), url: () => url, waitForTimeout: vi.fn(async () => {}),
     locator: () => locator, evaluate: vi.fn(async () => true),
     keyboard: { press: vi.fn(async () => {}), insertText: vi.fn(async (t) => typed.push(t)) },
   };
@@ -48,7 +48,7 @@ describe('cross-link edits', () => {
     const url = 'https://suno.com/song/12345678-abcd-4abc-8abc-123456789abc';
     const filled = [];
     const field = { waitFor: async () => {}, inputValue: async () => 'x'.repeat(480), fill: async (t) => filled.push(t) };
-    const item = { isVisible: async () => true, click: async () => {}, hover: async () => {} };
+    const item = { waitFor: async () => {}, isVisible: async () => true, click: async () => {}, hover: async () => {} };
     const page = fakePage({ url });
     page.locator = (sel) => (String(sel).includes('textarea') ? { first: () => field } : { first: () => item, filter: () => ({ first: () => item }), click: async () => {}, count: async () => 1 });
     const summary = await CROSS_LINK_ADAPTERS.suno.prepare(page, row('suno', url));

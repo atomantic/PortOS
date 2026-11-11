@@ -680,7 +680,7 @@ describe('generateSunoSong M4A export', () => {
     ]);
     const w = workflow({ songPage });
     await expect(generateSunoSong(fields, { ...w, songIds: [NEW_A] })).resolves.toMatchObject({ songId: NEW_A });
-    expect(w.page.waitForFunction).toHaveBeenCalledWith(markSunoSongMenu, NEW_A, expect.any(Object));
+    expect(w.page.waitForFunction).toHaveBeenCalledWith(markSunoSongMenu, { songId: NEW_A, menuSelector: "button[aria-label^='More options']" }, expect.any(Object));
     expect(w.openedMenus).toEqual([[NEW_A]]);
     expect(w.imported).toEqual([NEW_A]);
   });

@@ -1,8 +1,10 @@
 // The Suno recipe's in-page steps (server/lib/sunoPage.js) run in the browser
 // through page.evaluate, so they are tested here against fixtures of the song
 // page, in the client's DOM environment.
-import { describe, it, expect } from 'vitest';
-import { markSunoSongMenu, sunoDownloadDialogSong } from '../../../server/lib/sunoPage.js';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { SUNO_SONG_MENU_SELECTOR, waitForSunoSongPage, markSunoSongMenu as markMenu, sunoDownloadDialogSong } from '../../../server/lib/sunoPage.js';
+
+const markSunoSongMenu = (songId) => markMenu({ songId, menuSelector: SUNO_SONG_MENU_SELECTOR });
 
 const OWN = '11111111-1111-4111-8111-111111111111';
 const PARENT = '22222222-2222-4222-8222-222222222222';
@@ -138,5 +140,47 @@ describe('sunoDownloadDialogSong', () => {
 
     document.body.innerHTML = dialog(naming('Page song'));
     expect(sunoDownloadDialogSong()).toBe('unknown');
+  });
+});
+
+
+describe('Suno song readiness', () => {
+  afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+  // Exercise the actual browser predicate against fixture DOM, with a Playwright-like bounded poll.
+  const page = () => ({ waitForFunction: (predicate, argument, { timeout }) => new Promise((resolve, reject) => {
+    const start = Date.now();
+    const poll = () => {
+      const value = predicate(argument);
+      if (value) return resolve({ jsonValue: async () => value });
+      if (Date.now() - start >= timeout) return reject(new Error('song menu timed out'));
+      setTimeout(poll, 100);
+    };
+    poll();
+  }) });
+
+  it('waits for a renamed menu arriving after eight seconds instead of reporting logout', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('location', { href: `https://suno.com/song/${OWN}` });
+    document.body.innerHTML = title;
+    const readiness = waitForSunoSongPage(page(), { timeoutMs: 10_000 });
+    setTimeout(() => { document.body.innerHTML += titledMenu('Page song', 'header'); }, 8000);
+    await vi.advanceTimersByTimeAsync(8100);
+    await expect(readiness).resolves.toBe('ready');
+    expect(markSunoSongMenu(OWN)).toBe(true);
+  });
+
+  it('recognizes a sign-in redirect without any menu', async () => {
+    document.body.innerHTML = '';
+    vi.stubGlobal('location', { href: 'https://suno.com/sign-in' });
+    await expect(waitForSunoSongPage(page(), { timeoutMs: 1000 })).resolves.toBe('signed-out');
+  });
+
+  it('times out an indeterminate page rather than claiming it is signed out', async () => {
+    vi.useFakeTimers();
+    document.body.innerHTML = title;
+    vi.stubGlobal('location', { href: `https://suno.com/song/${OWN}` });
+    const assertion = expect(waitForSunoSongPage(page(), { timeoutMs: 1000 })).rejects.toThrow('song menu timed out');
+    await vi.advanceTimersByTimeAsync(1000);
+    await assertion;
   });
 });

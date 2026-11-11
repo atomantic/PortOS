@@ -9,7 +9,7 @@
  * `text` being the `Label: url` lines to add.
  */
 import { PUBLISH_STEP_TIMEOUT_MS as T, loginRequired, pasteText, step } from './browser.js';
-import { markSunoSongMenu } from '../../../lib/sunoPage.js';
+import { SUNO_SONG_MENU_SELECTOR, waitForSunoSongPage, markSunoSongMenu } from '../../../lib/sunoPage.js';
 import { facebookSignedOut, typeFacebookComment } from './facebook.js';
 
 // Suno's caption limit; the new-draft builder enforces the same one.
@@ -49,18 +49,18 @@ const suno = {
   label: 'Suno',
   async prepare(page, row) {
     await step(this.label, 'open the song', () => page.goto(row.url, { waitUntil: 'domcontentloaded', timeout: T }));
-    await page.waitForTimeout(5000);
-    if (!(await page.locator("button[aria-label='More options']").count())) throw loginRequired(this.label, row.url);
+    const readiness = await step(this.label, 'wait for the song menu or sign-in page', () => waitForSunoSongPage(page, { timeoutMs: T }));
+    if (readiness === 'signed-out') throw loginRequired(this.label, row.url);
     // Suno moves its menus around: a miss leaves the lines for the director to paste, never fails the card.
     const caption = await (async () => {
       const songId = sunoSongIdOf(page.url()) || sunoSongIdOf(row.url);
-      if (!songId || !(await page.evaluate(markSunoSongMenu, songId))) return null;
+      if (!songId || !(await page.evaluate(markSunoSongMenu, { songId, menuSelector: SUNO_SONG_MENU_SELECTOR }))) return null;
       await page.locator('[data-portos-song-menu]').click({ timeout: 15_000 });
-      await page.waitForTimeout(600);
+      await page.locator('[role=menuitem]').first().waitFor({ state: 'visible', timeout: 15_000 });
       const item = (re) => page.locator('[role=menuitem]').filter({ hasText: re }).first();
       if (await item(/^Edit$/).isVisible().catch(() => false)) {
         await item(/^Edit$/).hover();
-        await page.waitForTimeout(600);
+        await item(/Song Details|Edit Details|Details/).waitFor({ state: 'visible', timeout: 15_000 });
       }
       const details = item(/Song Details|Edit Details|Details/);
       if (!(await details.isVisible().catch(() => false))) return null;
@@ -111,7 +111,8 @@ const stackerNews = {
   label: 'Stacker News',
   async prepare(page, row) {
     await step(this.label, 'open the post', () => page.goto(row.url, { waitUntil: 'domcontentloaded', timeout: T }));
-    await page.waitForTimeout(3000);
+    await page.waitForFunction(() => [...document.querySelectorAll('[role=dialog] img')]
+          .some(img => img.complete && img.naturalWidth > 0 && /^(blob:|data:)/.test(img.currentSrc || img.src)), null, { timeout: T });
     const editor = 'div[contenteditable=true]';
     if (!(await page.locator(editor).count())) throw loginRequired(this.label, 'https://stacker.news/login');
     await step(this.label, 'write the comment', async () => {

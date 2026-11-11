@@ -12,7 +12,7 @@ import { execFile } from '../../lib/childProcess.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { sunoSongIdsFromHrefs, sunoSongUrl } from '../../lib/musicVideoAutonomous.js';
-import { markSunoSongMenu, sunoDownloadDialogSong } from '../../lib/sunoPage.js';
+import { SUNO_SONG_MENU_SELECTOR, markSunoSongMenu, sunoDownloadDialogSong } from '../../lib/sunoPage.js';
 import { escapeRegExp } from '../../lib/textUtils.js';
 import { sleep as defaultSleep } from '../../lib/fileCore.js';
 import { PUBLISH_STEP_TIMEOUT_MS as T, connectPortosBrowser, loginRequired, serializeBrowserOperation as serialize, step } from './publish/browser.js';
@@ -367,7 +367,7 @@ async function watchDownloadsDir({ listDownloads, baseline, signal, pollMs, song
  * no menu could be tied to the song, or `not-opened`.
  */
 async function openSunoSongMenu(page, songId, { remaining, signal }) {
-  const marked = await page.waitForFunction(markSunoSongMenu, songId, {
+  const marked = await page.waitForFunction(markSunoSongMenu, { songId, menuSelector: SUNO_SONG_MENU_SELECTOR }, {
     timeout: Math.min(remaining(), T), polling: SUNO_SONG_MENU_POLL_MS,
   }).then(() => true, (err) => {
     if (err?.name === 'TimeoutError') return false;

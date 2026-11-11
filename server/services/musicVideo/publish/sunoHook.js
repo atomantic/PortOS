@@ -86,7 +86,8 @@ async function selectSong(page, payload) {
   const index = pickSongRow(rows, payload);
   if (index < 0) throw new Error(`${rows.length} rows match "${payload.title}" and none could be told apart by id or length`);
   await page.locator('[role=dialog] button').filter({ hasText: /^Use$/ }).nth(index).click({ timeout: T });
-  await page.waitForTimeout(1500);
+  await search.locator('xpath=ancestor::*[@role="dialog"][1]').waitFor({ state: 'hidden', timeout: T });
+  await page.locator(WAVEFORM).first().waitFor({ state: 'visible', timeout: T });
 }
 
 /**
@@ -137,8 +138,13 @@ async function setWindowStart(page, startSec) {
     await page.mouse.down();
     await page.mouse.move(x + dx, y, { steps: 20 });
     await page.mouse.up();
-    await page.waitForTimeout(500);
-    const now = await readWindowStart(page);
+    // Poll the readout after a drag; an unchanged value at the edge is handled below.
+    const deadline = Date.now() + 2000;
+    let now = await readWindowStart(page);
+    while (now === at && Date.now() < deadline) {
+      await page.waitForTimeout(100); // bounded readout polling, not a readiness delay
+      now = await readWindowStart(page);
+    }
     if (now == null) throw new Error(`the window label went missing (it read ${fmtClock(at)}, wanted ${fmtClock(target)})`);
     const moved = at - now; // seconds earlier
     // A drag that moved the window the other way flips the direction; the rate comes from what it moved.
@@ -193,11 +199,16 @@ export const sunoHookAdapter = {
   label,
   async prepare(page, payload) {
     await step(label, 'open Create Hook', () => page.goto(CREATE_URL, { waitUntil: 'domcontentloaded', timeout: T }));
-    await page.waitForTimeout(4000);
-    if (/\/(login|sign-?in)/.test(page.url()) || !(await page.locator('input[type=file][accept*=mp4]').count())) throw loginRequired(label, CREATE_URL);
+    const readiness = await step(label, 'wait for the video upload control or sign-in page', () => page.waitForFunction(() => {
+      if (/sign-?in|login|accounts\./i.test(location.href)) return 'signed-out';
+      return document.querySelector('input[type=file][accept*=mp4]') ? 'ready' : false;
+    }, null, { timeout: T }).then(result => result.jsonValue()));
+    if (readiness === 'signed-out') throw loginRequired(label, CREATE_URL);
     await step(label, 'upload the vertical cut', async () => {
+      const previous = await page.locator('video').evaluateAll(videos => videos.map(video => video.currentSrc || video.src));
       await page.locator('input[type=file][accept*=mp4]').first().setInputFiles(payload.video.path, { timeout: T });
-      await page.waitForTimeout(4000);
+      await page.waitForFunction(before => [...document.querySelectorAll('video')]
+        .some(video => video.readyState >= 2 && video.videoWidth > 0 && (video.currentSrc || video.src) && !before.includes(video.currentSrc || video.src)), previous, { timeout: T });
     });
     await step(label, 'select the song', () => selectSong(page, payload));
     const windowStart = await step(label, 'set the audio window', () => setWindowStart(page, payload.startSec));
