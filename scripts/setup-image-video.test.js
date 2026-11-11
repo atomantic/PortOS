@@ -1622,7 +1622,56 @@ describe('FLUX.2 install is hash-pinned on every platform', () => {
 
 describe('FastVideo MLX Apple Silicon install is hash-pinned', () => {
   const lock = readFileSync(join(REPO_ROOT, 'scripts', 'requirements-fastvideo-mlx.lock.txt'), 'utf8');
-  const section = source.slice(source.indexOf('INSTALL_FASTVIDEO" == "1"'), source.indexOf('FastVideo MLX runtime ready'));
+  const section = source.slice(source.indexOf('INSTALL_FASTVIDEO="${INSTALL_FASTVIDEO:-0}"'), source.indexOf('INSTALL_WAN22="${INSTALL_WAN22:-0}"'));
+  const requireMlxHelper = source.match(/^require_mlx_video_profile\(\) \{\n(?:.*\n)*?^\}\n/m)?.[0];
+
+  const runBlock = ({ oldPython = false, appleSilicon = true, pin, preExistingGit = false } = {}) => {
+    const dir = mkdtempSync(join(tmpdir(), 'portos-fastvideo-test-'));
+    tempVenvs.push(dir);
+    const log = join(dir, 'calls.log');
+    const fakePython = join(dir, 'python3');
+    writeFileSync(fakePython, `#!/bin/bash
+echo "py $*" >> "${log}"
+case "$*" in
+  *version_info*) exit ${oldPython ? 1 : 0} ;;
+esac
+exit 0
+`);
+    chmodSync(fakePython, 0o755);
+    if (preExistingGit) {
+      mkdirSync(join(dir, '.portos', 'fastvideo', '.git'), { recursive: true });
+      mkdirSync(join(dir, '.portos', 'fastvideo', '.venv', 'bin'), { recursive: true });
+      writeFileSync(join(dir, '.portos', 'fastvideo', '.venv', 'bin', 'python3'), '#!/bin/bash\nexit 0\n');
+      chmodSync(join(dir, '.portos', 'fastvideo', '.venv', 'bin', 'python3'), 0o755);
+    }
+    const script = `set -euo pipefail
+INSTALL_FASTVIDEO=1; PYTHON_BIN="${fakePython}"; SCRIPT_DIR="${join(REPO_ROOT, 'scripts')}"; HOME="${dir}"
+${pin ? `FASTVIDEO_PIN="${pin}"` : ''}
+${requireMlxHelper}
+is_apple_silicon() { return ${appleSilicon ? 0 : 1}; }
+have() { return 0; }
+git() {
+  echo "git $*" >> "${log}"
+  if [[ "$1" == "clone" ]]; then
+    mkdir -p "\${@: -1}/.git"
+  fi
+}
+git_checkout_pin() { echo "git checkout $2" >> "${log}"; }
+portos_uv() {
+  echo "uv $*" >> "${log}"
+  if [[ "$1" == "venv" ]]; then
+    mkdir -p "${dir}/.portos/fastvideo/.venv/bin"
+    cp "${fakePython}" "${dir}/.portos/fastvideo/.venv/bin/python3"
+  fi
+}
+reset_universal_venv() { :; }
+pin_venv_arm64() { :; }
+probe_or_fail() { shift 2; echo "probe $*" >> "${log}"; }
+${section}`;
+    const result = spawnSync(resolveBashBinary(), ['-c', script], { encoding: 'utf8' });
+    const calls = existsSync(log) ? readFileSync(log, 'utf8') : '';
+    return { ...result, calls };
+  };
 
   it('every locked package carries a sha256 hash, none comes from a VCS or URL source, and all are arm64-macOS scoped', () => {
     const blocks = lock.split(/\n(?=[a-z][^\n]*==)/i).filter((b) => /^[a-z][^\n]*==/i.test(b));
@@ -1636,14 +1685,50 @@ describe('FastVideo MLX Apple Silicon install is hash-pinned', () => {
     expect(lock).not.toMatch(/^[a-z][^\n]* @ /im);
   });
 
-  it('installs the lock with uv pip sync --require-hashes and editable package with --no-deps', () => {
-    expect(section).toContain('portos_uv pip sync --require-hashes --python "${FASTVIDEO_PY}" "$FASTVIDEO_LOCK"');
-    expect(section).toContain('portos_uv pip install --no-deps --python "${FASTVIDEO_PY}" -e "${FASTVIDEO_DIR}"');
+  it('installs the lock with uv pip sync --require-hashes --only-binary :all: and editable package with --no-deps --no-build-isolation', () => {
+    expect(section).toContain('portos_uv pip sync --require-hashes --only-binary :all: --python "${FASTVIDEO_PY}" "$FASTVIDEO_LOCK"');
+    expect(section).toContain('portos_uv pip install --no-deps --no-build-isolation --python "${FASTVIDEO_PY}" -e "${FASTVIDEO_DIR}"');
     expect(section).not.toContain("pip install --python \"${FASTVIDEO_PY}\" -e '.[mlx]'");
+  });
+
+  it('refuses an unsupported host or revision before any clone or installer subprocess', () => {
+    const nonApple = runBlock({ appleSilicon: false });
+    expect(nonApple.status).toBe(1);
+    expect(nonApple.stderr).toContain('FastVideo MLX requires an Apple-Silicon Mac');
+    expect(nonApple.calls).toBe('');
+
+    const badPin = runBlock({ pin: 'bad-revision' });
+    expect(badPin.status).toBe(1);
+    expect(badPin.stderr).toContain("FastVideo MLX has no audited install profile for revision 'bad-revision'. Use the shipped revision fa2d1324c60050cd65209c6aaeac470e7fb412f5.");
+    expect(badPin.calls).toBe('');
+  });
+
+  it('fresh install and Repair use the same hash-verified runtime and build flags, rejecting unconstrained fallback', () => {
+    const fresh = runBlock();
+    expect(fresh.status, fresh.stderr).toBe(0);
+    expect(fresh.calls).toContain('git clone --progress https://github.com/hao-ai-lab/FastVideo.git');
+    expect(fresh.calls).toContain('git checkout fa2d1324c60050cd65209c6aaeac470e7fb412f5');
+    expect(fresh.calls).toContain('uv pip sync --require-hashes --only-binary :all: --python');
+    expect(fresh.calls).toContain('uv pip install --no-deps --no-build-isolation --python');
+    expect(fresh.calls).toContain('probe');
+    expect(fresh.calls).not.toContain('--no-build-isolation --no-deps');
+
+    const repair = runBlock({ preExistingGit: true });
+    expect(repair.status, repair.stderr).toBe(0);
+    expect(repair.calls).not.toContain('git clone');
+    expect(repair.calls).toContain('git fetch --progress origin');
+    expect(repair.calls).toContain('git checkout fa2d1324c60050cd65209c6aaeac470e7fb412f5');
+    expect(repair.calls).toContain('uv pip sync --require-hashes --only-binary :all: --python');
+    expect(repair.calls).toContain('uv pip install --no-deps --no-build-isolation --python');
+    expect(repair.calls).toContain('probe');
   });
 
   it('refuses a Python older than the 3.11 floor the lock was compiled for', () => {
     expect(section).toContain('sys.version_info[:2] >= (3, 11)');
+    const oldPy = runBlock({ oldPython: true });
+    expect(oldPy.status).toBe(1);
+    expect(oldPy.stderr).toContain('FastVideo on Apple Silicon needs Python 3.11+');
+    expect(oldPy.calls).not.toContain('uv pip sync');
   });
 });
 
