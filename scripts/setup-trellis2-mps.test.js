@@ -56,6 +56,7 @@ def fake_run(args, **kwargs):
     if args[1:3] == ['-m', 'venv']:
         import shutil
         shutil.rmtree(runtime / '.venv'); (runtime / '.venv').mkdir()
+        if mode == 'failed-venv': raise subprocess.CalledProcessError(1, args)
     if '-r' in args and mode == 'failed-lock': raise subprocess.CalledProcessError(1, args)
     if '-e' in args and mode == 'failed-native': raise subprocess.CalledProcessError(1, args)
     return SimpleNamespace(stdout='{}\n')
@@ -69,7 +70,7 @@ print(json.dumps({'error': error, 'calls': calls,
     'weights': (runtime / 'weights.bin').read_text(),
     'pinned': (source / 'generate.py').read_text() if (source / 'generate.py').exists() else None,
     'record': (runtime / '.venv' / 'portos-profile.json').exists(),
-    'installing': (runtime / '.venv' / 'portos-installing').exists(),
+    'installing': (runtime / 'portos-installing').exists(),
     'eigen': (source / 'deps/trellis2-apple/o-voxel/third_party/eigen/placeholder').exists()}))
 `;
 
@@ -108,13 +109,13 @@ describe.skipIf(!python)('TRELLIS.2 Metal Install/Repair boundary', () => {
     }, PY_TEST_TIMEOUT_MS,
   );
 
-  it.each(['failed-lock', 'failed-native'])('never falls back after %s', mode => {
+  it.each(['failed-venv', 'failed-lock', 'failed-native'])('never falls back after %s', mode => {
     const result = run(mode);
     expect(result.error).toBeTruthy();
     expect(result.record).toBe(false);
     expect(result.installing).toBe(true);
     const installs = result.calls.filter(args => args.includes('install'));
-    expect(installs).toHaveLength(mode === 'failed-lock' ? 1 : 2);
+    expect(installs).toHaveLength({ 'failed-venv': 0, 'failed-lock': 1, 'failed-native': 2 }[mode]);
     expect(result.weights).toBe('retained weights');
   }, PY_TEST_TIMEOUT_MS);
 });

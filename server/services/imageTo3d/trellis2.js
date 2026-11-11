@@ -40,11 +40,12 @@ export function trellis2VenvPython(base) {
     : join(root, '.venv', 'bin', 'python3');
 }
 
-/** The port's single-image entrypoint (`python generate.py <image>`). */
+/** A known locked profile always uses its pinned entrypoint; intact legacy installs keep theirs. */
 export function trellis2GenerateScript(base, exists = existsSync) {
   const root = trellis2Root(base);
   const pinned = join(root, '.venv', 'portos-source', 'generate.py');
-  return exists(pinned) ? pinned : join(root, 'generate.py');
+  const locked = exists(join(root, '.venv', 'portos-profile.json')) || exists(join(root, 'portos-installing'));
+  return locked || exists(pinned) ? pinned : join(root, 'generate.py');
 }
 
 /** PortOS adapter that exposes the upstream exporter's supported 4K atlas size. */
@@ -53,14 +54,14 @@ export function trellis2GenerateRunnerScript() {
 }
 
 /**
- * Installed ⇔ the venv Python AND the generate script both exist. `exists` is
- * injectable so the check is deterministic in tests.
+ * Locked installs need Python, the pinned entrypoint and completed verification.
+ * Legacy installs remain usable until a rebuild starts. `exists` is injectable.
  * @param {{base?: string, exists?: (p: string) => boolean}} [opts]
  * @returns {boolean}
  */
 export function isTrellis2Installed({ base, exists = existsSync } = {}) {
   const root = trellis2Root(base);
-  if (!exists(trellis2VenvPython(base)) || exists(join(root, '.venv', 'portos-installing'))) return false;
+  if (!exists(trellis2VenvPython(base)) || exists(join(root, 'portos-installing'))) return false;
   const script = trellis2GenerateScript(base, exists);
   const completed = script === join(root, 'generate.py') || exists(join(root, '.venv', 'portos-profile.json'));
   return completed && exists(script);

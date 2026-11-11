@@ -90,9 +90,9 @@ def install(root):
     with tempfile.TemporaryDirectory(prefix='portos-trellis-', dir=root) as downloads:
         archives = [(s, fetch_source(s, Path(downloads))) for s in profile['sources']]
         venv = root / '.venv'
-        run([sys.executable, '-m', 'venv', '--clear', venv])
-        installing = venv / 'portos-installing'
+        installing = root / 'portos-installing'
         installing.write_text(profile['id'] + '\n')
+        run([sys.executable, '-m', 'venv', '--clear', venv])
         python = venv / 'bin' / 'python3'
         compiler_overrides = {'CFLAGS', 'CXXFLAGS', 'CPPFLAGS', 'LDFLAGS', 'ARCHFLAGS',
                               'CC', 'CXX', 'LDSHARED', 'SDKROOT', 'BUILD_TARGET'}

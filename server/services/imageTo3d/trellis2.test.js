@@ -397,7 +397,8 @@ describe('parseGenerateProgress', () => {
 });
 
 describe('runTrellis2Generate', () => {
-  const installed = (path) => !path.includes('portos-source') && !path.endsWith('portos-installing');
+  const legacyFiles = [trellis2VenvPython(BASE), join(trellis2Root(BASE), 'generate.py')];
+  const installed = (path) => legacyFiles.includes(path);
 
   const makeChild = () => {
     const child = new EventEmitter();
@@ -426,9 +427,10 @@ describe('runTrellis2Generate', () => {
   });
 
   it.each([
-    ['failed Repair before source extraction', ['generate.py', '.venv/portos-installing']],
-    ['failed native build', ['.venv/portos-source/generate.py', '.venv/portos-installing']],
+    ['failed Repair before source extraction', ['generate.py', 'portos-installing']],
+    ['failed native build', ['.venv/portos-source/generate.py', 'portos-installing']],
     ['missing completion record', ['.venv/portos-source/generate.py']],
+    ['missing pinned entrypoint', ['generate.py', '.venv/portos-profile.json']],
   ])('refuses to render an incomplete profile after %s', async (_state, files) => {
     const paths = [trellis2VenvPython(BASE), ...files.map(file => join(trellis2Root(BASE), ...file.split('/')))];
     const spawnImpl = vi.fn();
