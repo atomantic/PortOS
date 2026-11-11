@@ -647,6 +647,7 @@ export const LINUX_CONTAINMENT_TESTS = [
   'server/lib/codeAnimationContainment.test.js',
   'server/routes/codeAnimationExecution.test.js',
   'server/services/codeAnimation/containedWorker.test.js',
+  'scripts/ci-install-containment-tools.test.js',
 ];
 // The server Vitest config and its setup files load around every one of those
 // tests; vitestTempRootSetup.js is named by URL, not by an import edge.
@@ -657,7 +658,7 @@ const LINUX_CONTAINMENT_ENTRIES = [
   'scripts/vitestTempRootSetup.js',
 ];
 // The job installs server dependencies from these before running anything.
-export const LINUX_CONTAINMENT_PATH_RE = /^(?:server\/package(?:-lock)?\.json|\.github\/workflows\/ci\.yml)$/;
+export const LINUX_CONTAINMENT_PATH_RE = /^(?:server\/package(?:-lock)?\.json|scripts\/ci-install-containment-tools\.sh|\.github\/workflows\/ci\.yml)$/;
 // The `supercollider-live` job builds docker/supercollider/ through the setup
 // script and runs the opt-in live suite on native amd64 and arm64 runners. The
 // setup script and the live test reach the runtime, render service and the
