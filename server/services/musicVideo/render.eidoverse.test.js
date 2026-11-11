@@ -9,6 +9,8 @@ vi.mock('./productionReview.js', async load => ({ ...await load(), assertProduct
 vi.mock('../../lib/ffmpeg.js', async load => ({ ...await load(), generateThumbnail: vi.fn(async () => 'thumb.jpg') }));
 vi.mock('../instanceIdentity.js', () => ({ ensureInstanceId: vi.fn(async () => 'test-instance') }));
 vi.mock('../videoGen/local.js', () => ({ loadHistory: vi.fn(async () => []), mutateVideoHistory: vi.fn(async () => {}) }));
+// History is synthetic here; media-retirement ownership is covered by renderCleanup.test.js.
+vi.mock('./renderCleanup.js', () => ({ cleanupSupersededFinals: vi.fn(async () => ({})) }));
 vi.mock('./statsOutro.js', () => ({ appendStatsOutro: vi.fn(async () => 0), sweepStatsOutroScratch: vi.fn(async () => {}) }));
 vi.mock('./codeRender.js', async load => ({ ...await load(), writeCodeProofSheet: vi.fn(async () => null) }));
 vi.mock('./eidoverseRender.js', async load => ({
