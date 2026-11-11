@@ -10,11 +10,12 @@ vi.mock('./pixal3dCuda.js', async (importOriginal) => ({
 vi.mock('./trellis2.js', async (importOriginal) => ({
   ...(await importOriginal()),
   probeTrellis2TextureBake: vi.fn(),
+  probeMetalToolchain: vi.fn(async () => ({ available: true })),
 }));
 
 import { TARGET_ADAPTERS } from './adapters.js';
 import { probePixal3dModules, PIXAL3D_NAF_FALLBACK_HELP } from './pixal3dCuda.js';
-import { probeTrellis2TextureBake } from './trellis2.js';
+import { probeTrellis2TextureBake, probeMetalToolchain } from './trellis2.js';
 
 const describeState = () => TARGET_ADAPTERS.pixal3dCuda.describeInstallState();
 
@@ -109,6 +110,16 @@ describe('trellis2 degraded-state projection', () => {
     const state = await describeTrellis2();
     expect(state.fields.degraded).toBeUndefined();
     expect(state.warnings ?? []).toEqual([]);
+  });
+  it('names Xcode instead of offering Repair when Command Line Tools cannot supply Metal', async () => {
+    probeTrellis2TextureBake.mockResolvedValueOnce(fallback(['o_voxel']));
+    probeMetalToolchain.mockResolvedValueOnce({
+      available: false, installable: false, blocker: 'requires-xcode', hint: 'Install and select Xcode, then retry setup.',
+    });
+    const state = await describeTrellis2();
+    expect(state.fields.degraded).toMatchObject({ repairable: false, help: expect.stringContaining('Install and select Xcode') });
+    expect(state.fields.textureBake.repairable).toBe(false);
+    expect(state.warnings[0]).toContain('Install and select Xcode');
   });
 
   // A probe that could not run must not render a module list (could-not-determine ≠
