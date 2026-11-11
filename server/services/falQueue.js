@@ -15,6 +15,7 @@
  */
 
 import { readFile } from 'fs/promises';
+import { setTimeout as delay } from 'node:timers/promises';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { describeFetchError } from '../lib/fetchErrorChain.js';
@@ -102,7 +103,7 @@ export async function hostFalDataUri({ apiKey, dataUri, fileName, signal, maxRet
       if (!initiated.ok) {
         const transient = isTransientUploadError(null, initiated.status);
         if (transient && attempt < maxRetries && !signal?.aborted) {
-          await new Promise((r) => setTimeout(r, 500 * (2 ** attempt)));
+          await delay(500 * (2 ** attempt), undefined, signal ? { signal } : undefined);
           continue;
         }
         throw new ServerError(`fal.ai upload could not start: HTTP ${initiated.status}`, { status: 502, code: 'FAL_UPLOAD_FAILED' });
@@ -123,7 +124,7 @@ export async function hostFalDataUri({ apiKey, dataUri, fileName, signal, maxRet
       if (!put.ok) {
         const transient = isTransientUploadError(null, put.status);
         if (transient && attempt < maxRetries && !signal?.aborted) {
-          await new Promise((r) => setTimeout(r, 500 * (2 ** attempt)));
+          await delay(500 * (2 ** attempt), undefined, signal ? { signal } : undefined);
           continue;
         }
         throw new ServerError(`fal.ai upload failed: HTTP ${put.status}`, { status: 502, code: 'FAL_UPLOAD_FAILED' });
@@ -134,7 +135,7 @@ export async function hostFalDataUri({ apiKey, dataUri, fileName, signal, maxRet
       if (signal?.aborted) throw err;
       const transient = isTransientUploadError(err);
       if (transient && attempt < maxRetries) {
-        await new Promise((r) => setTimeout(r, 500 * (2 ** attempt)));
+        await delay(500 * (2 ** attempt), undefined, signal ? { signal } : undefined);
         continue;
       }
       throw err;

@@ -504,7 +504,7 @@ async function runFal(job, jobId, {
   activeRequests.set(jobId, entry);
   const deadline = Date.now() + FAL_IMAGE_TIMEOUT_MS;
   let wroteOutput = false;
-  let currentStep = inputPaths.length ? 'reference upload' : 'submit';
+  let currentStep = inputPaths.length ? 'input encoding' : 'submit';
   try {
     const encoded = [];
     // A reviewed edit's snapshot leads (no init image); later inputs are read from disk.

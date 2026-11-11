@@ -173,6 +173,23 @@ describe('hostFalDataUri', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('aborts retry backoff sleep when signal aborts during delay', async () => {
+    const controller = new AbortController();
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      setTimeout(() => controller.abort(), 10);
+      return { ok: false, status: 502, json: async () => ({}) };
+    }));
+
+    const start = Date.now();
+    await expect(hostFalDataUri({
+      apiKey: 'test-key',
+      dataUri: dummyDataUri,
+      fileName: 'test-img',
+      signal: controller.signal,
+    })).rejects.toThrow();
+    expect(Date.now() - start).toBeLessThan(350);
+  });
+
   it('throws without retry on permanent error like 400', async () => {
     let callCount = 0;
     vi.stubGlobal('fetch', vi.fn(async () => {
