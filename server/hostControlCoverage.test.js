@@ -1501,7 +1501,6 @@ const VERSION_PROBE = 'Runs an installed tool or interpreter only to check it (`
 const ICLOUD_HEAL = 'Asks iCloud (`brctl download`) to download the evicted file PortOS is already reading; the caller names no path and nothing else runs.';
 const GIT_PROBE = 'Runs a fixed read-only git or gh query (`rev-parse`, `remote get-url`, `status`, `gh api user` or `rate_limit`) and changes no repository or remote state.';
 const KILLS_OWN_CHILD = 'Signals a child process PortOS itself started (its timeout or cancel path); starts nothing.';
-const PM2_LIST = 'Reads `pm2 jlist` through a short-lived cache; starts, stops or changes no process.';
 const STATIC_JSON = 'Loads the checked-in prompt-integrity JSON snapshot with `require`; the path is a constant, not a computed module.';
 const CDP_VERSION = "Reads the managed browser's DevTools `/json/version` endpoint; opens, lists or steers no page.";
 
@@ -1552,7 +1551,6 @@ const REVIEWED_PROCESS_SITES = [
   ['server/services/mediaService.js#listDevices', HOST_QUERY],
   ['server/services/modelAbuseGuard.js#isBasePythonSupported', VERSION_PROBE],
   ['server/services/pipeline/musicGen.js#isEngineHealthy', VERSION_PROBE],
-  ['server/services/pm2.js#fetchJlist', PM2_LIST],
   ['server/services/rigging/runtime.js#probeBlenderModule', VERSION_PROBE],
   ['server/services/taskPromptDefaults/integrityHash.js#readPromptIntegritySnapshot', STATIC_JSON],
   ['server/services/videoGen/runtimes.js#isByovRuntimeCurrent', VERSION_PROBE],
