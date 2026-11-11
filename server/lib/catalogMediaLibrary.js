@@ -80,6 +80,9 @@ export function normalizeLibrary(value) {
     const mediaKey = cleanStr(value.derivedFrom.mediaKey, 512);
     if (mediaKey) out.derivedFrom = { mediaKey, kind: value.derivedFrom.kind };
   }
+  // The other character on a comparison sheet, so a regenerate keeps the pair.
+  const comparedWith = cleanStr(value.comparedWith, 64);
+  if (comparedWith) out.comparedWith = comparedWith;
   return out;
 }
 

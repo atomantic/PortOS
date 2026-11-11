@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, act } from '@testing-library/react';
+import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
 import CatalogLooksPanel from './CatalogLooksPanel';
 import CatalogSheetsPanel from './CatalogSheetsPanel';
 import { listCatalogSheetVariants, previewCatalogSheet, renderCatalogSheet } from '../../services/apiCatalog';
@@ -93,6 +93,27 @@ describe('CatalogLooksPanel Generate preview', () => {
     expect(screen.getByRole('button', { name: 'Regenerate sheet' })).toBeEnabled();
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Regenerate sheet' })); });
     expect(renderCatalogSheet).toHaveBeenCalledWith('cat-obj-example', { variant: 'product', formId: 'old' }, { silent: true });
+  });
+
+  // A comparison sheet regenerates with the pair it was made with, even though no partner is picked now.
+  it('regenerates a comparison sheet with its own partner', async () => {
+    listCatalogSheetVariants.mockResolvedValue({ variants: [{ id: 'comparison', label: 'Comparison (two characters)' }] });
+    renderCatalogSheet.mockResolvedValue({ jobId: 'pair-again', variant: 'comparison', role: 'sheet:comparison' });
+    render(<CatalogSheetsPanel ingredientId="cat-chr-1" payload={{}}
+      sheetMedia={[{ mediaKey: 'pair.png', kind: 'reference', role: 'sheet:comparison', library: { comparedWith: 'cat-chr-2', review: { status: 'bad', feedback: 'Rendering defect: Heights are swapped.' } } }]} />);
+    expect(await screen.findByText('Rendering defect: Heights are swapped.')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Regenerate sheet' })).toBeEnabled());
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Regenerate sheet' })); });
+    expect(renderCatalogSheet).toHaveBeenCalledWith('cat-chr-1', { variant: 'comparison', partnerId: 'cat-chr-2' }, { silent: true });
+  });
+
+  // The partner's copy would render with the sides swapped, so it offers no Regenerate.
+  it('offers no regenerate on the partner copy of a comparison sheet', async () => {
+    listCatalogSheetVariants.mockResolvedValue({ variants: [{ id: 'comparison', label: 'Comparison (two characters)' }] });
+    render(<CatalogSheetsPanel ingredientId="cat-chr-2" payload={{}}
+      sheetMedia={[{ mediaKey: 'pair.png', kind: 'reference', role: 'sheet:comparison', library: { review: { status: 'bad', feedback: 'Rendering defect: Heights are swapped.' } } }]} />);
+    expect(await screen.findByText('Rendering defect: Heights are swapped.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Regenerate sheet' })).not.toBeInTheDocument();
   });
 
 });

@@ -519,11 +519,14 @@ export const catalogGeneratedImageAttachSchema = z.object({
 // `formId` renders the sheet for one of the record's alternate forms (another
 // age, era or look/style); absent renders the canonical present-story form.
 export const CATALOG_LOOK_VARIANT_ID = 'look';
+export const CATALOG_COMPARISON_VARIANT_ID = 'comparison';
 export const catalogSheetRenderSchema = z.object({
   visualProfileOverride: universeVisualProfileSchema.nullable().optional(),
   variant: z.string().trim().min(1).max(48).optional(),
   wardrobeId: z.string().trim().min(1).max(59).optional(),
   formId: z.string().trim().regex(FORM_ID_PATTERN).optional(),
+  // The other character on a `comparison` sheet (a catalog ingredient id).
+  partnerId: z.string().trim().min(1).max(128).optional(),
   overridePrompt: z.string().max(8000).optional(),
   overrideNegativePrompt: z.string().max(2000).optional(),
   modelId: z.string().trim().max(64).optional(),
@@ -542,6 +545,15 @@ export const catalogSheetRenderSchema = z.object({
     ctx.addIssue({ code: 'custom', path: ['wardrobeId'], message: 'wardrobeId is required for a look render' });
   } else if (!isLook && body.wardrobeId) {
     ctx.addIssue({ code: 'custom', path: ['wardrobeId'], message: 'wardrobeId is only accepted for a look render' });
+  }
+  const isComparison = body.variant === CATALOG_COMPARISON_VARIANT_ID;
+  if (isComparison && !body.partnerId) {
+    ctx.addIssue({ code: 'custom', path: ['partnerId'], message: 'Choose the other character for a comparison sheet' });
+  } else if (!isComparison && body.partnerId) {
+    ctx.addIssue({ code: 'custom', path: ['partnerId'], message: 'partnerId is only accepted for a comparison sheet' });
+  }
+  if (isComparison && body.formId) {
+    ctx.addIssue({ code: 'custom', path: ['formId'], message: 'A comparison sheet shows each character in their canonical form' });
   }
   if (isLook && body.formId) {
     ctx.addIssue({ code: 'custom', path: ['formId'], message: 'formId is not accepted for a look render' });

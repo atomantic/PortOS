@@ -17,6 +17,10 @@ import { assertCatalogIdentityWritable } from './catalogDB/identityAccess.js';
  * catalog path — even for a universe-linked character — tagged
  * `role: 'look:<wardrobeId>'`.
  *
+ * A `comparison` render (variant `comparison` + `partnerId`) puts this
+ * character and another on one mirrored sheet (catalogComparisonSheet.js). It
+ * always renders through the catalog path and lands on both records.
+ *
  * A `formId` render draws one of the record's `payload.forms` (another age,
  * era or look/style) instead of its canonical present-story form: the form's
  * age and description stand in for the record's own age/era and appearance
@@ -55,6 +59,11 @@ import {
   buildCharacterLookPrompt,
 } from './catalogSheetPrompts.js';
 import { CATALOG_LOOK_VARIANT_ID } from '../lib/catalogValidation.js';
+import {
+  COMPARISON_IMAGES_PER_CHARACTER, COMPARISON_SHEET_VARIANT, COMPARISON_SHEET_VARIANT_ID,
+  buildCharacterComparisonSheetPrompt,
+} from './catalogComparisonSheet.js';
+import { DEFAULT_PHOTOGRAPHIC_SHEET_STYLE } from './universeCharacterSheet.js';
 import { catalogAppearance } from '../lib/catalogAppearance.js';
 import { catalogFamilyRenderContext } from './catalogFamily.js';
 
@@ -78,12 +87,25 @@ const CATALOG_SHEET_VARIANTS = Object.freeze({
 });
 
 function characterVariants(options) {
-  return listSheetVariants(options).map((v) => ({
+  return [...listSheetVariants(options).map((v) => ({
     ...v,
     build: getSheetVariantBuilder(v.id),
     defaultStyle: getSheetVariantDefaultStyle(v.id),
     negativesLabel: 'Character sheet negatives',
-  }));
+  })), { ...COMPARISON_SHEET_VARIANT, defaultStyle: DEFAULT_PHOTOGRAPHIC_SHEET_STYLE, negativesLabel: 'Comparison sheet negatives' }];
+}
+
+// The other character on a comparison sheet, or a 400 naming what is wrong.
+async function comparisonPartnerFor(ingredient, partnerId) {
+  if (ingredient.type !== 'character') {
+    throw new ServerError(`A comparison sheet is only available for a character, not a ${ingredient.type}`, { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  if (!partnerId) throw new ServerError('Choose the other character for a comparison sheet', { status: 400, code: 'COMPARISON_PARTNER_REQUIRED' });
+  if (partnerId === ingredient.id) throw new ServerError('Choose a different character to compare with', { status: 400, code: 'VALIDATION_ERROR' });
+  const partner = await getIngredient(partnerId);
+  if (!partner) throw new ServerError('The character to compare with was not found', { status: 404, code: 'NOT_FOUND' });
+  if (partner.type !== 'character') throw new ServerError(`"${partner.name}" is a ${partner.type}; a comparison sheet needs another character`, { status: 400, code: 'VALIDATION_ERROR' });
+  return partner;
 }
 
 // `photographic` (a photoreal universe) lists the photographic character sheet first.
@@ -196,6 +218,10 @@ async function resolveSheetTarget(id, options) {
       { status: 400, code: 'VALIDATION_ERROR' },
     );
   }
+  if (variant.id === COMPARISON_SHEET_VARIANT_ID) {
+    const partner = await comparisonPartnerFor(ingredient, options.partnerId);
+    return { ingredient, payload: catalogAppearance(ingredient.type, payload, null), variant, partner, universe: universes[0] ?? null };
+  }
   const form = formFor(ingredient, payload, options.formId);
   if (form) {
     const role = `sheet:${variant.id}@${form.id}`;
@@ -257,7 +283,36 @@ async function lookDirection(universe, options) {
   };
 }
 
+// Two canonical images per character, the starting record's first, so the
+// prompt can say which attached images show whom.
+async function buildComparisonSheet(target, options) {
+  const { ingredient, payload, partner, variant } = target;
+  const universe = target.universe ? { ...target.universe, visualProfile: options.visualProfileOverride === undefined ? target.universe.visualProfile : options.visualProfileOverride } : null;
+  const partnerPayload = catalogAppearance('character', partner.payload && typeof partner.payload === 'object' ? partner.payload : {}, null);
+  const pick = async (record, recordPayload) => characterSheetReferenceCandidates(recordPayload, await listMediaForIngredient(record.id), {})
+    .filter((candidate) => !candidate.leftOut).slice(0, COMPARISON_IMAGES_PER_CHARACTER)
+    .map((candidate) => ({ ...candidate, source: `${record.name} · ${candidate.source}` }));
+  const own = await pick(ingredient, payload);
+  const theirs = (await pick(partner, partnerPayload)).filter((candidate) => !own.some((mine) => mine.filename === candidate.filename));
+  const sent = (images, candidates) => candidates.filter((candidate) => images.some((image) => image.filename === candidate.filename && image.status === 'included')).length;
+  const universeStyle = universe ? universeAestheticLine(universe) : '';
+  return buildSheetRenderParams({
+    built: ({ referenceImages }) => buildCharacterComparisonSheetPrompt(universe || {}, { ...payload, name: ingredient.name }, { ...partnerPayload, name: partner.name },
+      { leftCount: sent(referenceImages, own), rightCount: sent(referenceImages, theirs) }),
+    options,
+    visualProfile: universe?.visualProfile,
+    styleLine: universeStyle || variant.defaultStyle,
+    styleChip: universeStyle ? { id: 'universe-style', label: 'Universe style' } : { id: 'sheet-default-style', label: 'Default sheet style' },
+    negativesLabel: variant.negativesLabel,
+    renderPin: universe ? recordRenderPin(universe) : {},
+    referenceCandidates: [...own, ...theirs],
+    selfName: ingredient.name,
+    identityGuide: false,
+  });
+}
+
 async function buildCatalogSheet(target, options) {
+  if (target.partner) return buildComparisonSheet(target, options);
   const { ingredient, payload, variant } = target;
   const universe = target.universe ? { ...target.universe, visualProfile: options.visualProfileOverride === undefined ? target.universe.visualProfile : options.visualProfileOverride } : null;
   const entry = { ...payload, name: ingredient.name };
@@ -332,7 +387,7 @@ export async function renderCatalogSheet(id, options = {}) {
     throw new ServerError(`Define the look’s visual direction before rendering: ${visualDirection.missing.join(', ')}`, { status: 400, code: 'LOOK_VISUAL_DIRECTION_REQUIRED' });
   }
   const role = target.variant.role || `sheet:${target.variant.id}`;
-  params.catalogAttach = { ingredientId: id, kind: 'reference', role, inspect: true };
+  params.catalogAttach = { ingredientId: id, kind: 'reference', role, inspect: true, ...(target.partner ? { comparison: { partnerId: target.partner.id }, library: { comparedWith: target.partner.id } } : {}) };
   const queued = await enqueueJob({ kind: 'image', params });
   const base = editBase?.status === 'included' ? 'portrait-edit' : editBase?.status === 'fallback' ? 'portrait-reference-fallback' : 'generate';
   console.log(`🎨 Catalog ${target.variant.label} render — ingredient=${shortId(id)} job=${shortId(queued.jobId)} mode=${activeMode} model=${modelId} source=${base}`);
