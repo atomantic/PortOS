@@ -159,7 +159,7 @@ export const CATEGORIES = {
   // re-running the assessment, and a stale one (taken before a RAM upgrade or a
   // backend update) actively misleads the picker.
   'local-llm': { label: 'Local Model Assessments', description: 'Measured fit and performance results for installed local models — re-runnable, and stale after a hardware or backend change', archivable: true, deletable: true, purgeScope: 'category' },
-  'loras': { label: 'LoRAs', description: 'Trained LoRA adapters — excluded from backups and not regenerable without hours of GPU retraining', archivable: false, deletable: false },
+  'loras': { label: 'LoRAs', description: 'Trained and downloaded LoRA adapters — included in backups by default; a trained one is not regenerable without hours of GPU retraining', archivable: false, deletable: false },
   'meatspace': { label: 'MeatSpace', description: 'Body metrics, blood tests, eyes', archivable: true, deletable: false },
   'media-collections': { label: 'Media Collections', description: 'Media collection records', archivable: true, deletable: false },
   'media-sketches': { label: 'Media Sketches', description: 'Saved sketch canvases used as render inputs', archivable: true, deletable: false },
