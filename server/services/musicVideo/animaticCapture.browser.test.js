@@ -378,6 +378,11 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
     await page.reload();
     await page.waitForFunction(() => typeof window.show === 'function');
     await page.evaluate(() => {
+      // The pending probe counts frames, but the settle deadline is 2 s of wall
+      // clock; a slow runner under the VHS look spends that on 8 frames (#15755).
+      // Stretch only that deadline here: the deadline test below still covers it.
+      const realSetTimeout = window.setTimeout;
+      window.setTimeout = (callback, delay, ...args) => realSetTimeout(callback, delay === 2000 ? 60000 : delay, ...args);
       const descriptor = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'readyState');
       Object.defineProperty(HTMLMediaElement.prototype, 'readyState', {
         ...descriptor,
