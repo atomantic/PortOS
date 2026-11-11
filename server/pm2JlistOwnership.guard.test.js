@@ -1,5 +1,5 @@
 /**
- * Tree-wide guard: only the two designated readers may execute raw
+ * Tree-wide guard: only the designated autofixer reader may execute raw
  * `pm2 jlist` (issue #8164, consolidating #968, #2991, #5732).
  *
  * ## The bug class
@@ -17,15 +17,12 @@
  *
  * ## The rule
  *
- * Exactly two non-test modules may spawn PM2 with a literal `['jlist']` (or
- * `["jlist"]`) argument array: `server/services/pm2.js` (`fetchJlist` →
- * `listProcessesStrict`/`listProcesses`, the mapped-shape reader every other
- * server-side caller should use) and `autofixer/shared.js`
- * (`listProcessesStrict`, package-local because the autofixer deliberately
- * avoids the server dependency graph — see the comment at the top of that
- * file). Both compose the shared, dependency-free parser at
- * `server/lib/pm2Jlist.js#parsePm2JlistStdout`. A new caller must import one of
- * those readers, not re-run `pm2 jlist` itself.
+ * Only `autofixer/shared.js` may spawn PM2 with a literal `['jlist']`
+ * argument array. It uses the shared parser at
+ * `server/lib/pm2Jlist.js#parsePm2JlistStdout`. Server-side callers use
+ * `server/services/pm2.js#listProcessesStrict` / `listProcesses`, which read
+ * an existing daemon over native RPC without spawning the CLI (#15781).
+ * A new caller must import its owning reader rather than re-run `pm2 jlist`.
  *
  * This is a narrow, call-shape-specific scan (`(['jlist'` / `(["jlist"`), not a
  * substring match on the word "jlist" — that word appears legitimately in
@@ -42,10 +39,9 @@ const SERVER_ROOT = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = dirname(SERVER_ROOT);
 const PROCESS_ROOTS = ['server/', 'autofixer/'];
 
-// The only two files permitted to spawn PM2 with a literal `['jlist']`/`["jlist"]`
+// The only file permitted to spawn PM2 with a literal `['jlist']`/`["jlist"]`
 // argument array.
 const ALLOWED_OWNERS = new Set([
-  'server/services/pm2.js',
   'autofixer/shared.js',
 ]);
 
@@ -62,7 +58,7 @@ describe('pm2 jlist ownership guard (#8164)', () => {
     expect(PROCESS_ROOTS.every((root) => sources.some((file) => file.startsWith(root)))).toBe(true);
   });
 
-  it('recognizes the two allowed owners actually spawn a literal jlist call', () => {
+  it('recognizes the allowed owner actually spawns a literal jlist call', () => {
     // Proves the regex still matches real call sites — without this the scan
     // below could go vacuously green if the call shape ever changed.
     for (const owner of ALLOWED_OWNERS) {
@@ -71,7 +67,7 @@ describe('pm2 jlist ownership guard (#8164)', () => {
     }
   });
 
-  it('finds no raw `pm2 jlist` execution outside the two designated readers', () => {
+  it('finds no raw `pm2 jlist` execution outside the designated reader', () => {
     const offenders = [];
     for (const file of trackedSources()) {
       if (ALLOWED_OWNERS.has(file)) continue;
