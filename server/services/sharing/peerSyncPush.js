@@ -11,7 +11,7 @@
  */
 import { isPlainObject } from '../../lib/objects.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
-import { peerFetch, readPeerBody } from '../../lib/peerHttpClient.js';
+import { peerFetch, readPeerBody, PEER_BODY_DEFAULT_MAX_BYTES } from '../../lib/peerHttpClient.js';
 import { withAbortTimeout } from '../../lib/abortTimeout.js';
 import { sanitizeRecordForWire } from '../../lib/syncWire.js';
 import { setSyncBaseHash, contentHashForRecord, flushBaseHashes } from '../../lib/conflictJournal.js';
@@ -400,6 +400,7 @@ export async function pushRecordToPeer(sub, options = {}) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
       signal,
+      maxBytes: PEER_BODY_DEFAULT_MAX_BYTES,
     }, peer)).catch((err) => {
       networkError = err;
       return null;

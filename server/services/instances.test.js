@@ -2558,6 +2558,7 @@ describe('instances.js', () => {
       expect(updated.syncSecret).toBe(generatedSecret);
       expect(peer.syncSecret).toBe(generatedSecret);
       expect(options.redirect).toBe('error');
+      expect(options.maxBytes).toBe(64 * 1024);
       expect(headers).toMatchObject({
         authorization: expect.stringMatching(/^Basic /),
         'x-portos-instance-id': expect.any(String),

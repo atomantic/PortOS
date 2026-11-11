@@ -219,8 +219,8 @@ vi.mock('../decks.js', () => ({
 }));
 
 vi.mock('../../lib/peerHttpClient.js', async (importOriginal) => ({
+  ...(await importOriginal()),
   peerFetch: vi.fn(),
-  readPeerBody: (await importOriginal()).readPeerBody,
   peerSocketOptions: {},
 }));
 
@@ -2230,6 +2230,7 @@ describe('peerSync', () => {
       const response = new Response(JSON.stringify({ missingAssets }));
       vi.mocked(peerFetch).mockResolvedValue(response);
       expect(await pushRecordToPeer(sub)).toMatchObject({ pushed: true, missingAssets });
+      expect(peerFetch).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ maxBytes: 256 * 1024 * 1024 }), expect.any(Object));
       expect((await findPeerSubscription('peer-a', 'universe', 'u1')).lastPushedHash).toBeFalsy();
     });
 

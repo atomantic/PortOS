@@ -702,6 +702,7 @@ async function pairPeerSyncSecretNow(id) {
         body: JSON.stringify({ syncSecret }),
         redirect: 'error',
         signal,
+        maxBytes: 64 * 1024,
       },
       peer,
     ));
