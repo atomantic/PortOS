@@ -406,6 +406,14 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
     });
     await page.evaluate(() => document.querySelector('audio').pause());
     await capture();
+    // A released source has no replacement picture coming: do not retain its
+    // paused canvas after the browser empties the media element.
+    await page.locator('video').evaluate(video => { video.removeAttribute('src'); video.load(); });
+    await page.waitForFunction(() => {
+      const video = document.querySelector('video');
+      return video.readyState === 0 && !video.dataset.pausedFrame
+        && getComputedStyle(video.nextElementSibling).visibility === 'hidden';
+    });
   });
 
   it('shares both footage surfaces through an incoming dissolve and the selected exact film look', async () => {
