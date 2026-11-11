@@ -89,7 +89,7 @@ describe('comparison sheet', () => {
     ]);
   });
 
-  it.each(['split', 'right-attach'])('finishes missing halves after a failed %s without duplicating the completed half', async (failure) => {
+  it.each(['split', 'right-save', 'right-attach', 'right-attach-committed'])('finishes missing halves after a failed %s without duplicating the completed half', async (failure) => {
     await writeSheet('sheet-retry.png', 20);
     const rows = [];
     let fail = true;
@@ -100,24 +100,32 @@ describe('comparison sheet', () => {
         if (fail && failure === 'right-attach' && ingredientId === 'b' && options.role === COMPARISON_HALF_ROLE) throw new Error('attach failed');
         if (rows.some((row) => row.ingredientId === ingredientId && row.mediaKey === mediaKey)) return { attached: false };
         rows.push({ ingredientId, mediaKey, ...options });
+        if (fail && failure === 'right-attach-committed' && ingredientId === 'b' && options.role === COMPARISON_HALF_ROLE) throw new Error('attach acknowledgement failed');
         return { attached: true };
       },
     };
     let n = 0;
+    const gallery = new Set();
     const saveImage = async () => {
-      if (fail && failure === 'split') throw new Error('split failed');
-      return { filename: `retry-half-${++n}.png` };
+      if (fail && (failure === 'split' || (failure === 'right-save' && n === 1))) throw new Error('split failed');
+      const filename = `retry-half-${++n}.png`;
+      gallery.add(filename);
+      return { filename };
     };
+    const deleteImage = async (filename) => { gallery.delete(filename); };
     const input = { ingredientId: 'a', partnerId: 'b', filename: 'sheet-retry.png' };
-    await expect(publishComparisonSheet(input, { db, saveImage })).rejects.toThrow('failed');
+    await expect(publishComparisonSheet(input, { db, saveImage, deleteImage })).rejects.toThrow('failed');
     const completedLeft = rows.find((row) => row.ingredientId === 'a');
+    if (failure !== 'split') expect(completedLeft?.mediaKey).toBe('retry-half-1.png');
+    expect([...gallery].sort()).toEqual(rows.filter((row) => row.role === COMPARISON_HALF_ROLE).map((row) => row.mediaKey).sort());
     fail = false;
-    await publishComparisonSheet(input, { db, saveImage });
+    await publishComparisonSheet(input, { db, saveImage, deleteImage });
     expect(rows).toHaveLength(3);
     expect(rows.filter((row) => row.role === COMPARISON_HALF_ROLE).map((row) => row.ingredientId).sort()).toEqual(['a', 'b']);
     if (completedLeft) expect(rows.find((row) => row.ingredientId === 'a')).toBe(completedLeft);
+    expect([...gallery].sort()).toEqual(rows.filter((row) => row.role === COMPARISON_HALF_ROLE).map((row) => row.mediaKey).sort());
     const saved = n;
-    expect(await publishComparisonSheet(input, { db, saveImage })).toBeNull();
+    expect(await publishComparisonSheet(input, { db, saveImage, deleteImage })).toBeNull();
     expect(n).toBe(saved);
   });
 
