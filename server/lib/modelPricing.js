@@ -11,8 +11,13 @@
  * per model, except Grok rows whose cached-input price is not that ratio).
  * Batch discounts are still ignored. Grok's ≥200k doubling is NOT a second
  * rate in this table: it is a per-request subset the usage report prices once
- * more at these base rates (see GROK_LONG_CONTEXT_PROMPT_TOKENS). The UI
- * discloses the approximation.
+ * more at these base rates (see GROK_LONG_CONTEXT_PROMPT_TOKENS). Transcript-
+ * confirmed Fast and Ultrafast are the same kind of subset (`serviceTierExtra`):
+ * the extra factor is applied only to tokens the transcript marked, and only
+ * for a rate model with a published schedule. Subscription credit multipliers
+ * (Codex Fast 2.5× included usage, Ultrafast 8×) are not the API estimate.
+ * Verified 2026-11-11 against the OpenAI pricing page and the Grok 4.7 Fast
+ * card. The UI discloses the approximation.
  *
  * Cache tiers are NOT a rounding detail: for agentic CLI use, cache reads are
  * >90% of input volume, so pricing them at the standard input rate (or, as
@@ -72,6 +77,57 @@ const MODEL_RATE_AS_OF = Object.freeze({
  * tier and the usage report adds one extra base-rate charge for the subset.
  */
 export const GROK_LONG_CONTEXT_PROMPT_TOKENS = 200_000;
+
+/**
+ * Extra factor on top of the standard rate for one service tier. 1 prices the
+ * subset once more (2×). 1.5 is gpt-5.5 Fast (2.5×). 5 is Ultrafast (6×) on
+ * the two models that publish it. 0 means the tier was recorded and no Fast
+ * schedule exists for that rate model — the subset stays on the row and is
+ * not given an invented price. Unpublished models (gpt-5.4-nano, gpt-5.5-pro,
+ * grok-4.6 and older, grok-build-0.1) are absent on purpose.
+ * https://developers.openai.com/api/docs/pricing (2026-11-11).
+ */
+const FAST_EXTRA_BY_RATE_MODEL = Object.freeze({
+  'gpt-6-astra': 1,
+  'gpt-6.1-sol': 1,
+  'gpt-6.1-terra': 1,
+  'gpt-6-sol': 1,
+  'gpt-6-luna': 1,
+  'gpt-5.6-sol': 1,
+  'gpt-5.6-terra': 1,
+  'gpt-5.6-luna': 1,
+  'gpt-5.5': 1.5,
+  'gpt-5.4': 1,
+  'gpt-5.4-mini': 1,
+  'gpt-5.3-codex': 1,
+  'grok-4.7': 1,
+});
+const ULTRAFAST_EXTRA_BY_RATE_MODEL = Object.freeze({
+  'gpt-6-astra': 5,
+  'gpt-6.1-sol': 5,
+});
+
+/**
+ * Increment over the standard rate for `tier` ('fast' or 'ultrafast') on a
+ * resolved rate model. 0 for standard, unknown, or a model with no published
+ * schedule. The usage report multiplies `estimateCostUsd` of the subset by
+ * this factor; the subset is already inside the base token counts.
+ * @param {string|null|undefined} rateModel
+ * @param {'fast'|'ultrafast'|string|null|undefined} tier
+ * @returns {number}
+ */
+export function serviceTierExtra(rateModel, tier) {
+  const id = typeof rateModel === 'string' ? rateModel : '';
+  if (tier === 'fast') return FAST_EXTRA_BY_RATE_MODEL[id] || 0;
+  if (tier === 'ultrafast') return ULTRAFAST_EXTRA_BY_RATE_MODEL[id] || 0;
+  return 0;
+}
+
+/** Ledger names for the Fast and Ultrafast subsets. Absent means zero. */
+export const SPEED_LEDGER_FIELDS = Object.freeze([
+  'fastTokensIn', 'fastTokensOut', 'fastCacheReadTokens', 'fastCacheWriteTokens',
+  'ultrafastTokensIn', 'ultrafastTokensOut', 'ultrafastCacheReadTokens', 'ultrafastCacheWriteTokens',
+]);
 
 /** Docs' recommended Imagine models, and what the Grok CLI bills when it names none. */
 export const GROK_IMAGINE_IMAGE_MODEL = 'grok-imagine-image-2.0';

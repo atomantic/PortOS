@@ -1,7 +1,7 @@
 import { join } from 'path';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { atomicWrite, ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
-import { resolveModelRates, isFreeProvider, isFreeModelId, estimateCostUsd, estimateGrokImagineCost, estimateAgyImageCost, PRICING_AS_OF } from '../lib/modelPricing.js';
+import { resolveModelRates, isFreeProvider, isFreeModelId, estimateCostUsd, estimateGrokImagineCost, estimateAgyImageCost, serviceTierExtra, SPEED_LEDGER_FIELDS, PRICING_AS_OF } from '../lib/modelPricing.js';
 import { familyForProvider, familyForProviderId } from '../lib/providerFamilies.js';
 import { roundCents } from '../lib/subscriptionSavings.js';
 import { POLLUTING_KEYS } from '../lib/objects.js';
@@ -328,6 +328,7 @@ function modelDayBucket(providerDay, model) {
 const countFields = [
   'messages', 'tokensIn', 'tokensOut', 'cacheReadTokens', 'cacheWriteTokens',
   'longTokensIn', 'longTokensOut', 'longCacheReadTokens', 'longCacheWriteTokens',
+  ...SPEED_LEDGER_FIELDS,
   'images', 'videoSeconds', 'inputImages',
 ];
 
@@ -788,6 +789,7 @@ function applyMessageUsage(providerId, rawModel, messageCount, outputTokens = 0,
   const longTokensOut = Math.max(0, extra?.longTokensOut || 0);
   const longCacheReadTokens = Math.max(0, extra?.longCacheReadTokens || 0);
   const longCacheWriteTokens = Math.max(0, extra?.longCacheWriteTokens || 0);
+  const speed = Object.fromEntries(SPEED_LEDGER_FIELDS.map((field) => [field, Math.max(0, extra?.[field] || 0)]));
   const source = extra?.source === 'measured' ? 'measured' : 'estimate';
 
   usageData.totalMessages += messageCount;
@@ -833,10 +835,14 @@ function applyMessageUsage(providerId, rawModel, messageCount, outputTokens = 0,
     if (longTokensOut || bucket.longTokensOut != null) bucket.longTokensOut = (bucket.longTokensOut ?? 0) + longTokensOut;
     if (longCacheReadTokens || bucket.longCacheReadTokens != null) bucket.longCacheReadTokens = (bucket.longCacheReadTokens ?? 0) + longCacheReadTokens;
     if (longCacheWriteTokens || bucket.longCacheWriteTokens != null) bucket.longCacheWriteTokens = (bucket.longCacheWriteTokens ?? 0) + longCacheWriteTokens;
+    for (const field of SPEED_LEDGER_FIELDS) {
+      if (speed[field] || bucket[field] != null) bucket[field] = (bucket[field] ?? 0) + speed[field];
+    }
     if (source === 'estimate') {
       adjustEstimated(bucket, {
         messages: messageCount, tokensIn: inputTokens, tokensOut: outputTokens, cacheReadTokens, cacheWriteTokens,
         longTokensIn, longTokensOut, longCacheReadTokens, longCacheWriteTokens,
+        ...speed,
       }, 1);
     }
     bucket.source = mergeSource(bucket.source, source);
@@ -904,6 +910,7 @@ async function recordRunUsageDraft(record, { reconciledRunId = null, siblings = 
       repairIds = null,
     } = entry || {};
     if (Array.isArray(repairIds)) rememberRepairIds(repairIds);
+    const speedCounts = Object.fromEntries(SPEED_LEDGER_FIELDS.map((field) => [field, entry?.[field] || 0]));
     applyMessageUsage(providerId, model, messages, tokensOut, tokensIn, {
       cacheReadTokens,
       cacheWriteTokens,
@@ -911,6 +918,7 @@ async function recordRunUsageDraft(record, { reconciledRunId = null, siblings = 
       longTokensOut,
       longCacheReadTokens,
       longCacheWriteTokens,
+      ...speedCounts,
       source
     });
   }
@@ -1100,19 +1108,27 @@ export function providerVolumeSinceBlock(dailyActivity, monthlyActivity, provide
  * per-1M tiers) and a `source` of `measured` | `estimate` | `mixed` — buckets
  * written before #3124 report `estimate`, since that is what their counts are.
  */
+/** Cost of one already-included subset. `factor` is the increment (1 = one extra base charge). */
+function subsetCost(counts, rates, prefix, factor) {
+  if (!rates || !factor) return 0;
+  return factor * estimateCostUsd(counts?.[`${prefix}TokensIn`], counts?.[`${prefix}TokensOut`], rates, {
+    cacheReadTokens: counts?.[`${prefix}CacheReadTokens`],
+    cacheWriteTokens: counts?.[`${prefix}CacheWriteTokens`],
+  });
+}
+
 /**
  * Base token cost, plus one extra base-rate charge for the long-context
- * subset, plus Imagine unit cost. The subset is already inside the base
- * counts, so this is 2× for those tokens and 1× for everything else.
+ * subset, plus the published Fast/Ultrafast increment on those subsets, plus
+ * Imagine unit cost. Every subset is already inside the base counts.
  */
 function usageRowCost(modelId, counts, rates, free) {
   if (free) return 0;
   const tokens = rates ? estimateCostUsd(counts?.tokensIn, counts?.tokensOut, rates, counts) : 0;
-  const premium = rates ? estimateCostUsd(counts?.longTokensIn, counts?.longTokensOut, rates, {
-    cacheReadTokens: counts?.longCacheReadTokens,
-    cacheWriteTokens: counts?.longCacheWriteTokens,
-  }) : 0;
-  return tokens + premium + estimateGrokImagineCost(modelId, counts) + estimateAgyImageCost(modelId, counts);
+  const premium = subsetCost(counts, rates, 'long', 1);
+  const fast = subsetCost(counts, rates, 'fast', serviceTierExtra(rates?.rateModel, 'fast'));
+  const ultrafast = subsetCost(counts, rates, 'ultrafast', serviceTierExtra(rates?.rateModel, 'ultrafast'));
+  return tokens + premium + fast + ultrafast + estimateGrokImagineCost(modelId, counts) + estimateAgyImageCost(modelId, counts);
 }
 
 export function buildUsageReport(dailyActivity, { from = null, to = null, providers = [], monthlyActivity = null, totalTokens = null, totalSessions = null, totalMessages = null, providerClasses = undefined, additionalSources = [], includeObservations = false } = {}) {
@@ -1308,22 +1324,30 @@ export function buildUsageReport(dailyActivity, { from = null, to = null, provid
     const unattributedOut = Math.max(0, p.tokensOut - modelTokensOut);
     const unattributedCacheRead = Math.max(0, p.cacheReadTokens - modelCacheRead);
     const unattributedCacheWrite = Math.max(0, p.cacheWriteTokens - modelCacheWrite);
-    const modelLongIn = models.reduce((s, row) => s + row.longTokensIn, 0);
-    const modelLongOut = models.reduce((s, row) => s + row.longTokensOut, 0);
-    const modelLongCacheRead = models.reduce((s, row) => s + row.longCacheReadTokens, 0);
-    const modelLongCacheWrite = models.reduce((s, row) => s + row.longCacheWriteTokens, 0);
+    const unattributedSubset = (prefix) => {
+      const names = ['TokensIn', 'TokensOut', 'CacheReadTokens', 'CacheWriteTokens'].map((suffix) => `${prefix}${suffix}`);
+      const gap = {};
+      let pending = false;
+      for (const name of names) {
+        const modelSum = models.reduce((sum, row) => sum + (row[name] || 0), 0);
+        gap[name] = Math.max(0, (p[name] || 0) - modelSum);
+        if ((p[name] || 0) > modelSum) pending = true;
+      }
+      return { gap, pending };
+    };
+    const longGap = unattributedSubset('long');
+    const fastGap = unattributedSubset('fast');
+    const ultrafastGap = unattributedSubset('ultrafast');
     if (known && !free && (unattributedIn > 0 || unattributedOut > 0 || unattributedCacheRead > 0 || unattributedCacheWrite > 0
-      || p.longTokensIn > modelLongIn || p.longTokensOut > modelLongOut
-      || p.longCacheReadTokens > modelLongCacheRead || p.longCacheWriteTokens > modelLongCacheWrite)) {
+      || longGap.pending || fastGap.pending || ultrafastGap.pending)) {
       providerCost += usageRowCost(null, {
         tokensIn: unattributedIn,
         tokensOut: unattributedOut,
         cacheReadTokens: unattributedCacheRead,
         cacheWriteTokens: unattributedCacheWrite,
-        longTokensIn: Math.max(0, p.longTokensIn - modelLongIn),
-        longTokensOut: Math.max(0, p.longTokensOut - modelLongOut),
-        longCacheReadTokens: Math.max(0, p.longCacheReadTokens - modelLongCacheRead),
-        longCacheWriteTokens: Math.max(0, p.longCacheWriteTokens - modelLongCacheWrite),
+        ...longGap.gap,
+        ...fastGap.gap,
+        ...ultrafastGap.gap,
       }, providerRates, false);
     }
 

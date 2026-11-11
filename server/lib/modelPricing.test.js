@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   resolveModelRates, isFreeProvider, isFreeModelId, estimateCostUsd, estimateGrokImagineCost,
-  estimateAgyImageCost, AGY_IMAGEN_IMAGE_MODEL,
+  estimateAgyImageCost, AGY_IMAGEN_IMAGE_MODEL, serviceTierExtra,
   pricingAsOfForModel, PRICING_AS_OF, GROK_IMAGINE_IMAGE_MODEL, GROK_IMAGINE_VIDEO_MODEL,
 } from './modelPricing.js';
 
@@ -201,6 +201,36 @@ describe('resolveModelRates', () => {
 
   it('exposes the verification date', () => {
     expect(PRICING_AS_OF).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+});
+
+describe('serviceTierExtra', () => {
+  const publishedFast = [
+    'gpt-6-astra', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-sol', 'gpt-6-luna',
+    'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.4', 'gpt-5.4-mini',
+    'gpt-5.3-codex', 'grok-4.7',
+  ];
+
+  it('adds one extra base charge for a published Fast schedule, and 1.5 for gpt-5.5', () => {
+    for (const id of publishedFast) expect(serviceTierExtra(id, 'fast')).toBe(1);
+    expect(serviceTierExtra('gpt-5.5', 'fast')).toBe(1.5);
+  });
+
+  it('adds five extra base charges for Ultrafast only on the two models that publish it', () => {
+    expect(serviceTierExtra('gpt-6-astra', 'ultrafast')).toBe(5);
+    expect(serviceTierExtra('gpt-6.1-sol', 'ultrafast')).toBe(5);
+    expect(serviceTierExtra('gpt-6.1-terra', 'ultrafast')).toBe(0);
+    expect(serviceTierExtra('gpt-5.3-codex', 'ultrafast')).toBe(0);
+    expect(serviceTierExtra('grok-4.7', 'ultrafast')).toBe(0);
+  });
+
+  it('leaves an unpublished model and a standard tier at extra zero', () => {
+    for (const id of ['gpt-5.4-nano', 'gpt-5.5-pro', 'grok-4.6', 'grok-build-0.1', 'gpt-4o']) {
+      expect(serviceTierExtra(id, 'fast')).toBe(0);
+      expect(serviceTierExtra(id, 'ultrafast')).toBe(0);
+    }
+    expect(serviceTierExtra('gpt-6-astra', 'standard')).toBe(0);
+    expect(serviceTierExtra(null, 'fast')).toBe(0);
   });
 });
 

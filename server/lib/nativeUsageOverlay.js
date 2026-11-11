@@ -31,13 +31,21 @@ import { familyForProvider, familyLabel } from './providerFamilies.js';
  */
 
 const TOKEN_FIELDS = ['messages', 'tokensIn', 'tokensOut', 'cacheReadTokens', 'cacheWriteTokens',
-  'longTokensIn', 'longTokensOut', 'longCacheReadTokens', 'longCacheWriteTokens'];
+  'longTokensIn', 'longTokensOut', 'longCacheReadTokens', 'longCacheWriteTokens',
+  'fastTokensIn', 'fastTokensOut', 'fastCacheReadTokens', 'fastCacheWriteTokens',
+  'ultrafastTokensIn', 'ultrafastTokensOut', 'ultrafastCacheReadTokens', 'ultrafastCacheWriteTokens'];
 const BILLED_FIELDS = ['tokensIn', 'tokensOut', 'cacheReadTokens', 'cacheWriteTokens'];
+const SPEED_FIELDS = ['fastTokensIn', 'fastTokensOut', 'fastCacheReadTokens', 'fastCacheWriteTokens',
+  'ultrafastTokensIn', 'ultrafastTokensOut', 'ultrafastCacheReadTokens', 'ultrafastCacheWriteTokens'];
 const STORE_FIELDS = { messages: 'messages', tokensIn: 'input', tokensOut: 'output', cacheReadTokens: 'cacheRead',
   cacheWriteTokens: 'cacheWrite', longTokensIn: 'longInput', longTokensOut: 'longOutput',
-  longCacheReadTokens: 'longCacheRead', longCacheWriteTokens: 'longCacheWrite' };
+  longCacheReadTokens: 'longCacheRead', longCacheWriteTokens: 'longCacheWrite',
+  fastTokensIn: 'fastInput', fastTokensOut: 'fastOutput', fastCacheReadTokens: 'fastCacheRead', fastCacheWriteTokens: 'fastCacheWrite',
+  ultrafastTokensIn: 'ultrafastInput', ultrafastTokensOut: 'ultrafastOutput',
+  ultrafastCacheReadTokens: 'ultrafastCacheRead', ultrafastCacheWriteTokens: 'ultrafastCacheWrite' };
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0);
 const billed = (counts) => BILLED_FIELDS.reduce((sum, field) => sum + num(counts?.[field]), 0);
+const speedOf = (counts) => SPEED_FIELDS.reduce((sum, field) => sum + num(counts?.[field]), 0);
 const SESSION_TYPES = new Set(['cli', 'tui']);
 
 /** Ledger field counts for one native store row. */
@@ -91,7 +99,17 @@ function applyFamilyDay(day, nativeModels, { ids, target }, mode) {
     const ledgerTotal = buckets.reduce((sum, [, bucket]) => sum + billed(bucket), 0);
     const estimatedTotal = buckets.reduce((sum, [, bucket]) => sum + billed(keptShare(bucket)), 0);
     const nativeTotal = native.reduce((sum, [, counts]) => sum + billed(counts), 0);
-    if (nativeTotal + estimatedTotal <= ledgerTotal) return false;
+    const combined = nativeTotal + estimatedTotal;
+    // A partial native day (pruned files) must not replace a larger ledger.
+    // Equal bases still replace when the native row carries a speed premium
+    // the ledger does not: the premium is inside the base, so the base compare
+    // alone would keep the ledger and drop it.
+    if (combined < ledgerTotal) return false;
+    if (combined === ledgerTotal) {
+      const nativeSpeed = native.reduce((sum, [, counts]) => sum + speedOf(counts), 0);
+      const ledgerSpeed = buckets.reduce((sum, [, bucket]) => sum + speedOf(bucket), 0);
+      if (nativeSpeed <= ledgerSpeed) return false;
+    }
   }
   if (!native.length && !buckets.length) return false;
   day.byProvider ??= {};

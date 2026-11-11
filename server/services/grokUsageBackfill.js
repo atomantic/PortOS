@@ -97,6 +97,7 @@ async function fileMtime(path) {
 async function collectSessions(home) {
   const root = join(home, '.grok', 'sessions');
   const turns = [];
+  const fastTurns = [];
   const media = [];
   for (const dirName of await listNames(root, { directories: true })) {
     let cwd = dirName;
@@ -110,6 +111,7 @@ async function collectSessions(home) {
         if (updatesText) {
           const parsed = parseGrokTurns(updatesText);
           for (const turn of parsed.longTurns || []) turns.push(turn);
+          for (const turn of parsed.fastTurns || []) fastTurns.push(turn);
         }
         const summary = await readJson(join(sessionDir, 'summary.json'), null, {
           label: `summary.json for session ${oneLine(sessionId)}`,
@@ -131,7 +133,7 @@ async function collectSessions(home) {
       await yieldToEventLoop();
     }
   }
-  return { turns, media };
+  return { turns, fastTurns, media };
 }
 
 async function collectGallery(dataDir) {
@@ -194,6 +196,7 @@ export async function planGrokUsageRepairFromDisk({
   const sessions = await collectSessions(home);
   return planGrokUsageRepair({
     turns: sessions.turns,
+    fastTurns: sessions.fastTurns,
     media: [
       ...sessions.media,
       ...await collectGallery(dataDir),

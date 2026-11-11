@@ -6,6 +6,7 @@ import {
   parseAgyTranscript,
   parseClaudeTranscript,
   parseCodexRollout,
+  codexServiceTier,
   parseGrokChatHistory,
   parseGrokTurns,
   parseKimiSessionIndex,
@@ -294,6 +295,89 @@ describe('parseCodexRollout', () => {
     expect(result.tokensOut).toBe(0);
     expect(result.cacheReadTokens).toBe(0);
   });
+
+  const settings = (timestamp, tier, nested = true) => JSON.stringify({
+    timestamp,
+    type: 'event_msg',
+    payload: nested
+      ? { type: 'thread_settings_applied', thread_settings: { service_tier: tier, cwd: '/secret/not-billed' } }
+      : { type: 'thread_settings_applied', service_tier: tier },
+  });
+
+  it('maps priority and fast to Fast, and ultra to Ultrafast', () => {
+    expect(codexServiceTier('priority')).toBe('fast');
+    expect(codexServiceTier('FAST')).toBe('fast');
+    expect(codexServiceTier('ultra')).toBe('ultrafast');
+    expect(codexServiceTier('ultrafast')).toBe('ultrafast');
+    for (const tier of ['default', 'flex', 'standard', 'auto', 'batch', 'scale', '', null]) {
+      expect(codexServiceTier(tier)).toBe('standard');
+    }
+    const fast = parseCodexRollout([
+      codexMeta(),
+      settings('2026-07-01T10:00:00.000Z', 'fast', false),
+      codexTokenCount({ timestamp: '2026-07-01T10:00:01.000Z', input: 1000, cached: 200, output: 50 }),
+    ].join('\n'));
+    expect(fast).toMatchObject({ tokensIn: 800, tokensOut: 50, fastTokensIn: 800, fastTokensOut: 50, ultrafastTokensOut: 0 });
+    const ultra = parseCodexRollout([
+      codexMeta(),
+      settings('2026-07-01T10:00:00.000Z', 'ultrafast', false),
+      codexTokenCount({ timestamp: '2026-07-01T10:00:01.000Z', input: 1000, cached: 0, output: 50 }),
+    ].join('\n'));
+    expect(ultra).toMatchObject({ ultrafastTokensIn: 1000, ultrafastTokensOut: 50, fastTokensOut: 0 });
+  });
+
+  it('prices only the tokens after a default-to-priority switch, once', () => {
+    const text = [
+      codexMeta(),
+      settings('2026-07-01T09:59:00.000Z', 'default'),
+      codexTokenCount({ timestamp: '2026-07-01T10:00:00.000Z', input: 100, cached: 20, output: 10 }),
+      settings('2026-07-01T10:00:30.000Z', 'priority'),
+      settings('2026-07-01T10:00:31.000Z', 'priority'),
+      codexTokenCount({ timestamp: '2026-07-01T10:01:00.000Z', input: 200, cached: 40, output: 30 }),
+    ].join('\n');
+    const result = parseCodexRollout(text);
+    expect(result).toMatchObject({
+      tokensIn: 160, cacheReadTokens: 40, tokensOut: 30,
+      fastTokensIn: 80, fastCacheReadTokens: 20, fastTokensOut: 20, fastCacheWriteTokens: 0,
+    });
+    // A settings event after the count does not reclassify that count.
+    const late = parseCodexRollout([
+      codexMeta(),
+      codexTokenCount({ timestamp: '2026-07-01T10:00:00.000Z', input: 100, cached: 0, output: 10 }),
+      settings('2026-07-01T10:00:00.000Z', 'priority'),
+    ].join('\n'));
+    expect(late.fastTokensOut).toBe(0);
+  });
+
+  it('charges a non-monotonic reset to the last snapshot tier, not the sum', () => {
+    const text = [
+      codexMeta(),
+      settings('2026-07-01T09:00:00.000Z', 'priority'),
+      codexTokenCount({ timestamp: '2026-07-01T09:00:01.000Z', input: 5000, cached: 4000, output: 500 }),
+      codexTokenCount({ timestamp: '2026-07-01T12:00:00.000Z', input: 1000, cached: 800, output: 100 }),
+    ].join('\n');
+    const result = parseCodexRollout(text);
+    expect(result).toMatchObject({ tokensIn: 200, cacheReadTokens: 800, tokensOut: 100, fastTokensIn: 200, fastTokensOut: 100 });
+  });
+
+  it('returns speed only past a billed token frontier, and nests the covered part', () => {
+    const text = [
+      codexMeta(),
+      settings('2026-07-01T09:00:00.000Z', 'priority'),
+      codexTokenCount({ timestamp: '2026-07-01T09:00:01.000Z', input: 100, cached: 20, output: 10 }),
+      codexTokenCount({ timestamp: '2026-07-01T12:00:00.000Z', input: 200, cached: 40, output: 30 }),
+    ].join('\n');
+    const billed = { messages: 0, tokensIn: 80, tokensOut: 10, cacheReadTokens: 20, cacheWriteTokens: 0 };
+    const parsed = parseCodexRollout(text, { billedBaseline: billed, includeCoveredSpeed: true });
+    expect(parsed).toMatchObject({ tokensIn: 160, tokensOut: 30, fastTokensIn: 80, fastTokensOut: 20 });
+    expect(parsed.coveredSpeed).toMatchObject({ fastTokensIn: 80, fastTokensOut: 10 });
+    expect(parsed.frontierTs).toBe('2026-07-01T09:00:01.000Z');
+    expect(parsed.byModel['gpt-5.3-codex']).not.toHaveProperty('coveredSpeed');
+    // A timestamp window owns the delta; the frontier does not apply.
+    const windowed = parseCodexRollout(text, { from: Date.parse('2026-07-01T11:00:00.000Z'), billedBaseline: billed });
+    expect(windowed).toMatchObject({ tokensOut: 20, fastTokensOut: 20 });
+    expect(windowed).not.toHaveProperty('coveredSpeed');
+  });
 });
 
 describe('totalTranscriptTokens', () => {
@@ -562,8 +646,39 @@ describe('parseGrokTurns', () => {
     expect(parsed.longTurns).toEqual([expect.objectContaining({
       key: 'long', promptTokens: 250_000, tokensIn: 200_000, cacheReadTokens: 50_000,
     })]);
+    expect(parsed.fastTokensIn).toBe(0);
+    expect(parsed.fastTurns).toEqual([]);
     // Reasoning stays inside output. 500 of the 2,000 are not added again.
     expect(parsed.tokensOut).toBe(2_100);
+  });
+
+  it('rebuckets a Grok 4.7 fast id onto grok-4.7 and leaves other fast-named models standard', () => {
+    for (const model of ['grok-4.7[fast=true]', 'grok-4.7-build-fast', 'grok-4.7-high-fast']) {
+      const parsed = parseGrokTurns(grokTurn({ model, input: 1_000, cachedRead: 0, output: 10 }));
+      expect(parsed.model).toBe('grok-4.7');
+      expect(parsed.fastTokensIn).toBe(1_000);
+      expect(parsed.fastTokensOut).toBe(10);
+      expect(parsed.fastTurns).toEqual([expect.objectContaining({ model: 'grok-4.7', tokensIn: 1_000 })]);
+    }
+    for (const model of ['grok-4.7[fast=false]', 'grok-4.7-build', 'grok-code-fast-1', 'grok-build-0.1']) {
+      const parsed = parseGrokTurns(grokTurn({ model, input: 1_000, cachedRead: 0, output: 10 }));
+      expect(parsed.fastTokensIn).toBe(0);
+      expect(parsed.fastTurns).toEqual([]);
+      expect(parsed.model).toBe(model);
+    }
+  });
+
+  it('sets both subsets when a Grok 4.7 fast prompt reaches 200k', () => {
+    const parsed = parseGrokTurns(grokTurn({
+      model: 'grok-4.7[fast=true]', promptId: 'both', input: 250_000, cachedRead: 50_000, output: 2_000,
+    }));
+    expect(parsed.tokensIn).toBe(200_000);
+    expect(parsed.longTokensIn).toBe(200_000);
+    expect(parsed.fastTokensIn).toBe(200_000);
+    expect(parsed.fastCacheReadTokens).toBe(50_000);
+    expect(parsed.longTurns).toHaveLength(1);
+    expect(parsed.fastTurns).toHaveLength(1);
+    expect(parsed.model).toBe('grok-4.7');
   });
 
   it('sums per-prompt turns without treating them as cumulative', () => {

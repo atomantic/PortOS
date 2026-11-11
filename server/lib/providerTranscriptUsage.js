@@ -265,6 +265,160 @@ export function parseClaudeTranscript(jsonlText, { from = null, to = null, exclu
   };
 }
 
+const SPEED_TOKEN_FIELDS = ['messages', 'tokensIn', 'tokensOut', 'cacheReadTokens', 'cacheWriteTokens'];
+
+/**
+ * Codex `service_tier` as a billing class. `priority` was renamed Fast on
+ * 2026-07-30; both are Fast. `ultra` / `ultrafast` are Ultrafast. Anything
+ * else (default, flex, missing, unknown) stays standard — an unknown tier
+ * must not grow a premium.
+ * @param {unknown} value
+ * @returns {'fast'|'ultrafast'|'standard'}
+ */
+export function codexServiceTier(value) {
+  const tier = String(value || '').trim().toLowerCase();
+  if (tier === 'priority' || tier === 'fast') return 'fast';
+  if (tier === 'ultrafast' || tier === 'ultra') return 'ultrafast';
+  return 'standard';
+}
+
+function emptySpeed() {
+  return {
+    fastTokensIn: 0,
+    fastTokensOut: 0,
+    fastCacheReadTokens: 0,
+    fastCacheWriteTokens: 0,
+    ultrafastTokensIn: 0,
+    ultrafastTokensOut: 0,
+    ultrafastCacheReadTokens: 0,
+    ultrafastCacheWriteTokens: 0,
+  };
+}
+
+/** Billable buckets of one cumulative Codex total, cache tiers split out. */
+function codexUsageFromTotal(total) {
+  const cachedIn = num(total?.cached_input_tokens);
+  const cacheWrite = num(total?.cache_write_input_tokens);
+  const totalIn = num(total?.input_tokens);
+  return {
+    tokensIn: Math.max(0, totalIn - cachedIn - cacheWrite),
+    tokensOut: num(total?.output_tokens),
+    cacheReadTokens: cachedIn,
+    cacheWriteTokens: cacheWrite,
+  };
+}
+
+/**
+ * Incremental buckets between two cumulative totals. Each counter is clamped
+ * at zero on its own, matching the endpoint delta this parser has always used,
+ * so a backwards counter cannot mint tokens.
+ */
+function codexDelta(later, earlier) {
+  const delta = (key) => Math.max(0, num(later?.[key]) - num(earlier?.[key]));
+  const cachedIn = delta('cached_input_tokens');
+  const cacheWrite = delta('cache_write_input_tokens');
+  const totalIn = delta('input_tokens');
+  return {
+    tokensIn: Math.max(0, totalIn - cachedIn - cacheWrite),
+    tokensOut: delta('output_tokens'),
+    cacheReadTokens: cachedIn,
+    cacheWriteTokens: cacheWrite,
+  };
+}
+
+function addSpeed(target, tier, delta) {
+  if (tier !== 'fast' && tier !== 'ultrafast') return;
+  target[`${tier}TokensIn`] += delta.tokensIn || 0;
+  target[`${tier}TokensOut`] += delta.tokensOut || 0;
+  target[`${tier}CacheReadTokens`] += delta.cacheReadTokens || 0;
+  target[`${tier}CacheWriteTokens`] += delta.cacheWriteTokens || 0;
+}
+
+function codexWentBackwards(later, earlier) {
+  if (!earlier) return false;
+  return ['input_tokens', 'cached_input_tokens', 'cache_write_input_tokens', 'output_tokens']
+    .some((key) => num(later?.[key]) < num(earlier?.[key]));
+}
+
+/**
+ * Attribute each monotonic increment to the tier in effect at that snapshot.
+ * A cumulative reset (a fork's total dropping) cannot be split that way, so
+ * the whole endpoint delta is charged to the last snapshot's tier instead.
+ */
+function attributeCodexSpeed(snapshots, baselineTotal) {
+  const speed = emptySpeed();
+  if (!snapshots.length) return speed;
+  let previous = baselineTotal;
+  let monotonic = true;
+  for (const snap of snapshots) {
+    if (codexWentBackwards(snap.total, previous)) monotonic = false;
+    addSpeed(speed, snap.tier, codexDelta(snap.total, previous));
+    previous = snap.total;
+  }
+  if (!monotonic) {
+    const cleared = emptySpeed();
+    addSpeed(cleared, snapshots.at(-1).tier, codexDelta(snapshots.at(-1).total, baselineTotal));
+    return cleared;
+  }
+  return speed;
+}
+
+function codexSnapshotCovered(usage, messages, billed) {
+  if (!billed || typeof billed !== 'object') return false;
+  const values = { messages, ...usage };
+  let constrained = false;
+  for (const field of SPEED_TOKEN_FIELDS) {
+    if (typeof billed[field] !== 'number') continue;
+    constrained = true;
+    if ((values[field] || 0) > billed[field]) return false;
+  }
+  return constrained;
+}
+
+function speedAfterCodexFrontier(snapshots, frontierIndex, billed) {
+  if (frontierIndex >= 0) return attributeCodexSpeed(snapshots.slice(frontierIndex + 1), snapshots[frontierIndex].total);
+  if (!billed) return attributeCodexSpeed(snapshots, null);
+  const speed = emptySpeed();
+  if (!snapshots.length) return speed;
+  const first = snapshots[0];
+  const floor = {
+    tokensIn: billed.tokensIn || 0,
+    tokensOut: billed.tokensOut || 0,
+    cacheReadTokens: billed.cacheReadTokens || 0,
+    cacheWriteTokens: billed.cacheWriteTokens || 0,
+  };
+  const uncovered = codexDelta(first.total, null);
+  addSpeed(speed, first.tier, {
+    tokensIn: Math.max(0, uncovered.tokensIn - floor.tokensIn),
+    tokensOut: Math.max(0, uncovered.tokensOut - floor.tokensOut),
+    cacheReadTokens: Math.max(0, uncovered.cacheReadTokens - floor.cacheReadTokens),
+    cacheWriteTokens: Math.max(0, uncovered.cacheWriteTokens - floor.cacheWriteTokens),
+  });
+  const rest = attributeCodexSpeed(snapshots.slice(1), first.total);
+  for (const field of Object.keys(speed)) speed[field] += rest[field] || 0;
+  return speed;
+}
+
+/**
+ * Grok 4.7 Fast, the only Grok text model with a published 2× schedule.
+ * `[fast=true]` (not false), `-build-fast` on a grok-4.7 base, and
+ * `grok-4.7-high-fast` / `grok-4.7-fast`. `grok-code-fast-1` and
+ * `grok-build-0.1` are different products and stay standard.
+ */
+function isGrok47FastModel(model) {
+  const id = String(model || '').trim();
+  const setting = /^(.*)\[fast=(true|false)\]$/.exec(id);
+  if (setting) {
+    const base = setting[1];
+    return setting[2] === 'true' && (base === 'grok-4.7' || base.startsWith('grok-4.7-'));
+  }
+  if (id.endsWith('-build-fast')) {
+    const base = id.slice(0, -'-build-fast'.length);
+    return base === 'grok-4.7' || base.startsWith('grok-4.7-');
+  }
+  return /^(?:grok-4\.7)(?:-.+)?-fast$/.test(id);
+}
+
 /**
  * Parse a Codex rollout transcript.
  *
@@ -275,6 +429,15 @@ export function parseClaudeTranscript(jsonlText, { from = null, to = null, exclu
  * event count) nor summing `last_token_usage` (which double-counts, because a
  * repeated event repeats its `last` block too) is correct. We take the LAST
  * total in range — the cumulative figure already is the session sum.
+ *
+ * Fast and Ultrafast are subsets of that delta. `thread_settings_applied`
+ * (`service_tier`, or `thread_settings.service_tier` on a raw line) applies
+ * to counts after it; a count that straddles a switch is attributed to the
+ * tier at the count's timestamp, not split. `billedBaseline` (ignored when
+ * `from` is set) makes the returned speed only the growth past that token
+ * frontier, so a high-water reconcile does not re-bill speed already inside
+ * the base it subtracts. `includeCoveredSpeed` reports the speed through the
+ * frontier for a historical repair; it is not part of the billable delta.
  *
  * `input_tokens` is the *total* input including the cached portion, so the
  * uncached input we bill at the standard rate is `input - cached`, with
@@ -288,24 +451,25 @@ export function parseClaudeTranscript(jsonlText, { from = null, to = null, exclu
  * the delta from the last pre-window total is used, so a rollout spanning two
  * PortOS runs attributes each run only its own increment.
  *
- * @param {string} jsonlText raw file contents (may end mid-line)
- * @param {{ from?: number|null, to?: number|null }} [window] epoch-ms bounds
+ * @param {string|object[]} jsonlText raw file contents (may end mid-line), or already-parsed records
+ * @param {{ from?: number|null, to?: number|null, billedBaseline?: object|null, includeCoveredSpeed?: boolean }} [window]
  * @returns {{ sessionId: string|null, cwd: string|null, model: string|null,
  *   models: string[], messages: number, tokensIn: number, tokensOut: number,
  *   cacheReadTokens: number, cacheWriteTokens: number,
  *   firstTs: string|null, lastTs: string|null }}
  */
-export function parseCodexRollout(jsonlText, { from = null, to = null } = {}) {
+export function parseCodexRollout(jsonlText, { from = null, to = null, billedBaseline = null, includeCoveredSpeed = false } = {}) {
   let sessionId = null;
   let cwd = null;
   let model = null;
   let messages = 0;
   let firstTs = null;
   let lastTs = null;
-  // Cumulative snapshots: the last one before the window start is the
-  // baseline; the last one inside the window is the end state.
+  let tier = 'standard';
+  // The last cumulative total before the window. Speed increments inside the
+  // window are measured from it; the endpoint token delta is too.
   let baseline = null;
-  let latest = null;
+  const snapshots = [];
 
   for (const entry of parseJsonLines(jsonlText)) {
     const payload = entry.payload;
@@ -318,6 +482,12 @@ export function parseCodexRollout(jsonlText, { from = null, to = null } = {}) {
     // The model can also arrive on a per-turn context record.
     if (entry.type === 'turn_context' && typeof payload?.model === 'string') {
       model ??= payload.model;
+    }
+    if (payload?.type === 'thread_settings_applied') {
+      // Applies to subsequent counts. A settings event after a count does not
+      // reclassify that count, including when they share a timestamp.
+      tier = codexServiceTier(payload.service_tier ?? payload.thread_settings?.service_tier);
+      continue;
     }
     // Count assistant messages only inside the window, the same way the token
     // totals below are windowed. A rollout can span several PortOS runs, so
@@ -342,7 +512,7 @@ export function parseCodexRollout(jsonlText, { from = null, to = null } = {}) {
     // run's cumulative-usage delta.
     if (ts == null) {
       if (from != null || to != null) continue;
-      latest = total;
+      snapshots.push({ total, ts: null, timestamp: null, tier, messages });
       continue;
     }
     if (from != null && ts < from) {
@@ -351,23 +521,32 @@ export function parseCodexRollout(jsonlText, { from = null, to = null } = {}) {
     }
     if (to != null && ts > to) continue;
 
-    latest = total;
+    snapshots.push({ total, ts, timestamp: typeof entry.timestamp === 'string' ? entry.timestamp : null, tier, messages });
     if (typeof entry.timestamp === 'string' && entry.timestamp) {
       if (!firstTs || entry.timestamp < firstTs) firstTs = entry.timestamp;
       if (!lastTs || entry.timestamp > lastTs) lastTs = entry.timestamp;
     }
   }
 
+  const latest = snapshots.at(-1)?.total ?? null;
   if (!latest) {
-    return { sessionId, cwd, model, models: model ? [model] : [], byModel: {}, ...emptyTotals(), firstTs, lastTs };
+    return { sessionId, cwd, model, models: model ? [model] : [], byModel: {}, ...emptyTotals(), ...emptySpeed(), firstTs, lastTs };
   }
 
-  // Cumulative delta against the pre-window baseline (0 when unwindowed).
-  const delta = (key) => Math.max(0, num(latest[key]) - num(baseline?.[key]));
-  const cachedIn = delta('cached_input_tokens');
-  const cacheWrite = delta('cache_write_input_tokens');
-  const totalIn = delta('input_tokens');
+  // A timestamp window owns the delta. The high-water frontier applies only
+  // to an absolute read, where the caller subtracts base tokens itself.
+  const useFrontier = from == null && billedBaseline && typeof billedBaseline === 'object';
+  let frontierIndex = -1;
+  if (useFrontier) {
+    snapshots.forEach((snap, index) => {
+      if (codexSnapshotCovered(codexUsageFromTotal(snap.total), snap.messages, billedBaseline)) frontierIndex = index;
+    });
+  }
+  const speed = useFrontier
+    ? speedAfterCodexFrontier(snapshots, frontierIndex, billedBaseline)
+    : attributeCodexSpeed(snapshots, baseline);
 
+  const endpoint = codexDelta(latest, baseline);
   const bounded = from != null || to != null;
   const totals = {
     // Codex reports no per-message split, so an UNBOUNDED read of a rollout that
@@ -378,13 +557,11 @@ export function parseCodexRollout(jsonlText, { from = null, to = null } = {}) {
     messages: bounded ? messages : (messages || 1),
     // `input_tokens` INCLUDES the cached portion — split it so each tier is
     // priced at its own rate instead of billing cache reads as fresh input.
-    tokensIn: Math.max(0, totalIn - cachedIn - cacheWrite),
-    tokensOut: delta('output_tokens'),
-    cacheReadTokens: cachedIn,
-    cacheWriteTokens: cacheWrite
+    ...endpoint,
+    ...speed,
   };
 
-  return {
+  const result = {
     sessionId,
     cwd,
     model,
@@ -401,8 +578,16 @@ export function parseCodexRollout(jsonlText, { from = null, to = null } = {}) {
     byModel: { [model || UNKNOWN_MODEL]: { ...totals } },
     ...totals,
     firstTs,
-    lastTs
+    lastTs,
   };
+  if (includeCoveredSpeed) {
+    const coveredIndex = useFrontier ? frontierIndex : snapshots.length - 1;
+    result.coveredSpeed = coveredIndex >= 0
+      ? attributeCodexSpeed(snapshots.slice(0, coveredIndex + 1), null)
+      : emptySpeed();
+    result.frontierTs = coveredIndex >= 0 ? snapshots[coveredIndex].timestamp : null;
+  }
+  return result;
 }
 
 /**
@@ -485,15 +670,17 @@ const grokTotals = () => ({
   longTokensOut: 0,
   longCacheReadTokens: 0,
   longCacheWriteTokens: 0,
+  ...emptySpeed(),
 });
 
 /**
  * The billable buckets of one grok `usage` block, cache tiers split out.
  * `long*` is a subset of those buckets, set only when this request's own
  * prompt (`inputTokens`, which already includes the cache read) reaches
- * xAI's 200k doubling threshold. It is not a second copy of the tokens.
+ * xAI's 200k doubling threshold. `fast*` is the same subset again when the
+ * turn's model is Grok 4.7 Fast. Neither is a second copy of the tokens.
  */
-const grokBuckets = (usage) => {
+const grokBuckets = (usage, fast = false) => {
   const buckets = {
     messages: 1,
     // `inputTokens` includes the cached read — split so each tier prices at its
@@ -507,12 +694,19 @@ const grokBuckets = (usage) => {
     longTokensOut: 0,
     longCacheReadTokens: 0,
     longCacheWriteTokens: 0,
+    ...emptySpeed(),
   };
   if (num(usage?.inputTokens) >= GROK_LONG_CONTEXT_PROMPT_TOKENS) {
     buckets.longTokensIn = buckets.tokensIn;
     buckets.longTokensOut = buckets.tokensOut;
     buckets.longCacheReadTokens = buckets.cacheReadTokens;
     buckets.longCacheWriteTokens = buckets.cacheWriteTokens;
+  }
+  if (fast) {
+    buckets.fastTokensIn = buckets.tokensIn;
+    buckets.fastTokensOut = buckets.tokensOut;
+    buckets.fastCacheReadTokens = buckets.cacheReadTokens;
+    buckets.fastCacheWriteTokens = buckets.cacheWriteTokens;
   }
   return buckets;
 };
@@ -554,6 +748,7 @@ export function parseGrokTurns(jsonlText, { from = null, to = null, exclude = nu
   const byModel = new Map();
   const counted = [];
   const longTurns = [];
+  const fastTurns = [];
   let sessionId = null;
 
   // Every turn_completed in file order — the whole sequence is needed before
@@ -596,17 +791,20 @@ export function parseGrokTurns(jsonlText, { from = null, to = null, exclude = nu
     if (!inWindow(turn.ms, from, to)) continue;
     if (exclude?.has(turn.key)) continue;
 
-    const buckets = grokBuckets(usage);
-    if (totalTranscriptTokens(buckets) === 0) continue;
-    counted.push(turn.key);
-
     // `modelUsage` names the model(s) the turn actually called. In cumulative
     // mode its per-model figures are cumulative too, so bucket the DELTA'd
     // aggregate under the named model rather than re-reading the raw block.
     // A turn that called several models is attributed to the first: grok bills
     // one turn as a unit, and splitting the delta across models would need
     // per-model deltas the cumulative shape doesn't reliably provide.
-    const bucketKey = Object.keys(turn.usage.modelUsage || {})[0] ?? UNKNOWN_MODEL;
+    // A Grok 4.7 Fast id is folded onto `grok-4.7` so the published card prices
+    // it; an unmarked `grok-4.7-build` stays its own key.
+    const rawModel = Object.keys(turn.usage.modelUsage || {})[0] ?? UNKNOWN_MODEL;
+    const fast = isGrok47FastModel(rawModel);
+    const bucketKey = fast ? 'grok-4.7' : rawModel;
+    const buckets = grokBuckets(usage, fast);
+    if (totalTranscriptTokens(buckets) === 0) continue;
+    counted.push(turn.key);
     if (!byModel.has(bucketKey)) byModel.set(bucketKey, grokTotals());
     const bucket = byModel.get(bucketKey);
     for (const field of Object.keys(bucket)) bucket[field] += buckets[field] || 0;
@@ -624,6 +822,18 @@ export function parseGrokTurns(jsonlText, { from = null, to = null, exclude = nu
         cacheWriteTokens: buckets.cacheWriteTokens,
       });
     }
+    if (buckets.fastTokensIn || buckets.fastTokensOut || buckets.fastCacheReadTokens || buckets.fastCacheWriteTokens) {
+      fastTurns.push({
+        key: turn.key,
+        ms: turn.ms,
+        sessionId,
+        model: bucketKey,
+        tokensIn: buckets.fastTokensIn,
+        tokensOut: buckets.fastTokensOut,
+        cacheReadTokens: buckets.fastCacheReadTokens,
+        cacheWriteTokens: buckets.fastCacheWriteTokens,
+      });
+    }
   }
 
   const models = [...byModel.keys()].filter((model) => model !== UNKNOWN_MODEL);
@@ -636,6 +846,7 @@ export function parseGrokTurns(jsonlText, { from = null, to = null, exclude = nu
     countedKeys: counted,
     turns: turns.length,
     longTurns,
+    fastTurns,
   };
 }
 

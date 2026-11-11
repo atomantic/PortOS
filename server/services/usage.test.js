@@ -504,6 +504,8 @@ describe('usage.js — summary', () => {
       const fields = [
         'sessions', 'messages', 'tokensIn', 'tokensOut', 'cacheReadTokens', 'cacheWriteTokens',
         'longTokensIn', 'longTokensOut', 'longCacheReadTokens', 'longCacheWriteTokens',
+        'fastTokensIn', 'fastTokensOut', 'fastCacheReadTokens', 'fastCacheWriteTokens',
+        'ultrafastTokensIn', 'ultrafastTokensOut', 'ultrafastCacheReadTokens', 'ultrafastCacheWriteTokens',
         'images', 'videoSeconds', 'inputImages',
       ];
       // Distinct value per field and per model so a dropped or swapped field cannot read the same.
@@ -1760,6 +1762,55 @@ describe('Grok long-context and Imagine pricing', () => {
     expect(models['grok-imagine-image-2.0'].tokensIn).toBe(0);
     expect(report.totals.tokensIn).toBe(300_000);
     expect(report.totals.estimatedCost).toBeCloseTo(1.11);
+  });
+
+  it('adds the published fast increment on top of the long-context extra', () => {
+    const report = buildUsageReport({
+      '2026-10-01': {
+        byProvider: {
+          'grok-cli': {
+            name: 'Grok',
+            tokensIn: 300_000,
+            tokensOut: 10_000,
+            longTokensIn: 200_000,
+            longTokensOut: 1_000,
+            fastTokensIn: 200_000,
+            fastTokensOut: 1_000,
+            byModel: {
+              'grok-4.7': {
+                tokensIn: 300_000,
+                tokensOut: 10_000,
+                longTokensIn: 200_000,
+                longTokensOut: 1_000,
+                fastTokensIn: 200_000,
+                fastTokensOut: 1_000,
+                source: 'measured',
+              },
+            },
+          },
+        },
+      },
+    });
+    // Base $0.66 + long $0.406 + fast $0.406.
+    expect(report.providers[0].models[0].estimatedCost).toBeCloseTo(1.472);
+  });
+
+  it('prices published Codex Fast and Ultrafast extras and leaves an unpublished fast subset at the base rate', () => {
+    const day = (model, counts) => ({
+      byProvider: { codex: { name: 'Codex', ...counts, byModel: { [model]: { ...counts, source: 'measured' } } } },
+    });
+    const cost = (model, counts) => buildUsageReport({ '2026-10-01': day(model, counts) }).providers[0].models[0].estimatedCost;
+    // gpt-5.3-codex $1.75/1M in. Fast is one extra base charge: $3.50.
+    expect(cost('gpt-5.3-codex', { tokensIn: 1_000_000, fastTokensIn: 1_000_000 })).toBeCloseTo(3.5);
+    // Cached input is $0.175/1M. The extra applies to that tier too.
+    expect(cost('gpt-5.3-codex', { cacheReadTokens: 1_000_000, fastCacheReadTokens: 1_000_000 })).toBeCloseTo(0.35);
+    // gpt-5.5 Fast is 2.5× ($5 + 1.5×$5).
+    expect(cost('gpt-5.5', { tokensIn: 1_000_000, fastTokensIn: 1_000_000 })).toBeCloseTo(12.5);
+    // Ultrafast is 6× on gpt-6-astra ($10 + 5×$10) and not on gpt-6.1-terra.
+    expect(cost('gpt-6-astra', { tokensIn: 1_000_000, ultrafastTokensIn: 1_000_000 })).toBeCloseTo(60);
+    expect(cost('gpt-6.1-terra', { tokensIn: 1_000_000, ultrafastTokensIn: 1_000_000 })).toBeCloseTo(1);
+    expect(cost('gpt-5.4-nano', { tokensIn: 1_000_000, fastTokensIn: 1_000_000 })).toBeCloseTo(0.2);
+    expect(cost('grok-4.6', { tokensIn: 1_000_000, fastTokensIn: 1_000_000 })).toBeCloseTo(2);
   });
 });
 

@@ -44,7 +44,7 @@ const BUDGET_STOPS = ['decoded_byte_limit', 'record_limit'];
 // Envelopes that accountingRecord always drops, recognized from the serialized
 // prefix so tool output and images are neither parsed nor held in memory. Any
 // other shape falls through to the strict parse, so unknown lines still fail closed.
-const NON_ACCOUNTING_LINE = /^\{(?:"[a-z_]{1,32}":(?:"[^"]{0,64}"|\d{1,20}),){0,4}"type":"(?:compacted"|(?:response_item|event_msg)","payload":\{"type":"(?!token_count"|agent_message")[^"]{1,64}")/;
+const NON_ACCOUNTING_LINE = /^\{(?:"[a-z_]{1,32}":(?:"[^"]{0,64}"|\d{1,20}),){0,4}"type":"(?:compacted"|(?:response_item|event_msg)","payload":\{"type":"(?!token_count"|agent_message"|thread_settings_applied")[^"]{1,64}")/;
 const LINE_PREFIX_BYTES = 256;
 const isNonAccountingLine = bytes => NON_ACCOUNTING_LINE.test(bytes.latin1Slice(0, Math.min(bytes.length, LINE_PREFIX_BYTES)));
 const PROBLEM_SOURCE_SAMPLE = 5;
@@ -91,6 +91,15 @@ function accountingRecord(entry, ids, lineage) {
   if (entry.type === 'turn_context') {
     const model = projectModel(payload?.model);
     return model ? { type: 'turn_context', payload: { model } } : null;
+  }
+  if (payload?.type === 'thread_settings_applied') {
+    // The tier is the only setting accounting may keep. cwd, account ids and
+    // the rest of thread_settings stay in the source file.
+    const tier = payload.service_tier ?? payload.thread_settings?.service_tier;
+    if (typeof tier !== 'string' || !/^[a-z0-9_-]{1,32}$/.test(tier)) return null;
+    const timestamp = entry.timestamp;
+    if (typeof timestamp !== 'string' || !Number.isFinite(Date.parse(timestamp))) return null;
+    return { timestamp, payload: { type: 'thread_settings_applied', service_tier: tier } };
   }
   if (payload?.type !== 'token_count' && payload?.type !== 'agent_message') return null;
   const timestamp = entry.timestamp;

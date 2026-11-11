@@ -73,6 +73,23 @@ describe('Codex accounting inventory', () => {
     expect((await read({ decompress: null })).coverage.issues).toEqual({ unsupported_compression: 1, missing_identity: 1 });
   });
 
+  it('keeps a Codex service tier and drops the rest of the thread settings', async () => {
+    const secret = 'SECRET-CWD-NOT-FOR-STORE';
+    await source('sessions/tier.jsonl', [
+      line({ type: 'session_meta', payload: { id: 'tier-session', cwd: CWD, model: 'example-model' } }),
+      line({ timestamp: '2026-07-01T00:00:00Z', type: 'event_msg', payload: { type: 'thread_settings_applied', thread_settings: { service_tier: 'priority', cwd: secret, approval_policy: 'never' } } }),
+      line({ timestamp: '2026-07-01T00:00:01Z', type: 'event_msg', payload: { type: 'agent_message', message: secret } }),
+      line({ timestamp: '2026-07-01T00:00:02Z', type: 'event_msg', payload: { type: 'token_count', info: { total_token_usage: { input_tokens: 100, output_tokens: 10, total_tokens: 110 } } } }),
+    ].join('\n'));
+    const inventory = await read();
+    const records = (await Promise.all(inventory.sessions.map((session) => session.loadRecords()))).flat();
+    expect(records).toContainEqual({ timestamp: '2026-07-01T00:00:00Z', payload: { type: 'thread_settings_applied', service_tier: 'priority' } });
+    const stored = (await Promise.all((await readdir(STORE)).map(async (name) => zlib.gunzipSync(await readFile(join(STORE, name))).toString()))).join('\n');
+    expect(stored).toContain('priority');
+    expect(stored).not.toContain(secret);
+    expect(stored).not.toContain('approval_policy');
+  });
+
   it('still invalidates a changed, deleted or conflicting source after a restart', async () => {
     const changed = await source('sessions/changed.jsonl', rollout('changed'));
     const moved = await source('sessions/moved.jsonl', rollout('moved'));
