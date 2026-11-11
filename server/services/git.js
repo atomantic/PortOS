@@ -1529,7 +1529,8 @@ export async function getRemoteBranches(dir, { force = false } = {}) {
         hasLocal: localSet.has(name),
         lastCommitDate: date?.trim() || null,
         author: author?.trim() || null,
-        isDefault: name === defaultBranch
+        isDefault: name === defaultBranch,
+        isProtected: name === defaultBranch || PROTECTED_BRANCHES.includes(name)
       };
     })
     .filter(Boolean);

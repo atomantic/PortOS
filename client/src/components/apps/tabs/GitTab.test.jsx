@@ -255,6 +255,39 @@ describe('GitTab merged-branch cleanup scoping', () => {
     // and it must not render its own confirm block at the same time.
     expect(screen.queryByText('Clean 2 merged')).toBeNull();
   });
+
+  it('hides remote cleanup and row deletion when only protected branches are merged', async () => {
+    api.getBranches.mockResolvedValue({ branches: [] });
+    api.getRemoteBranches.mockResolvedValue({
+      branches: [
+        { name: 'trunk', fullRef: 'origin/trunk', merged: true, hasLocal: true, isDefault: true, isProtected: true },
+        { name: 'release', fullRef: 'origin/release', merged: true, hasLocal: false, isDefault: false, isProtected: true },
+      ],
+      defaultBranch: 'trunk',
+    });
+    render(<GitTab appId="x" appName="App" repoPath="/repo" />);
+
+    expect(await screen.findByText('release')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Clean \d+ merged$/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Delete branch' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Checkout locally' })).toBeInTheDocument();
+  });
+
+  it('counts only eligible merged remote branches while keeping their delete action available', async () => {
+    api.getBranches.mockResolvedValue({ branches: [] });
+    api.getRemoteBranches.mockResolvedValue({
+      branches: [
+        { name: 'release', fullRef: 'origin/release', merged: true, hasLocal: false, isDefault: false, isProtected: true },
+        { name: 'feature/done', fullRef: 'origin/feature/done', merged: true, hasLocal: false, isDefault: false, isProtected: false },
+      ],
+      defaultBranch: 'main',
+    });
+    render(<GitTab appId="x" appName="App" repoPath="/repo" />);
+
+    expect(await screen.findByRole('button', { name: 'Clean 1 merged' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Clean 2 merged' })).toBeNull();
+    expect(screen.getAllByRole('button', { name: 'Delete branch' })).toHaveLength(1);
+  });
 });
 
 describe('GitTab merged branches checked out in worktrees', () => {

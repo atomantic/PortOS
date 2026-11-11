@@ -478,7 +478,7 @@ export default function GitTab({ appId, appName, repoPath }) {
     }
   };
 
-  const mergedBranchCount = remoteBranches.filter(rb => rb.merged && !rb.isDefault).length;
+  const mergedBranchCount = remoteBranches.filter(rb => rb.merged && !rb.isDefault && !rb.isProtected).length;
   // Keep the action visible for every merged local branch so a worktree-held
   // branch does not make the cleanup affordance disappear. Cleanup now tears the
   // worktree down too, so a merged branch sitting in one is an ordinary target
@@ -1130,7 +1130,7 @@ export default function GitTab({ appId, appName, repoPath }) {
                             )}
                           </button>
                         )}
-                        {!rb.isDefault && deleteConfirm !== rb.name && (
+                        {!rb.isDefault && !rb.isProtected && deleteConfirm !== rb.name && (
                           <button
                             onClick={() => setDeleteConfirm(rb.name)}
                             className={`pointer-coarse:min-h-11 pointer-coarse:min-w-11 ${iconBtnCls} text-gray-500 hover:text-port-error hover:bg-port-bg rounded`}
@@ -1141,7 +1141,7 @@ export default function GitTab({ appId, appName, repoPath }) {
                         )}
                       </div>
                     </div>
-                    {!rb.isDefault && deleteConfirm === rb.name && (
+                    {!rb.isDefault && !rb.isProtected && deleteConfirm === rb.name && (
                       <div className="flex flex-wrap items-center gap-1 mt-2 pl-6">
                         <button
                           onClick={() => handleDeleteBranch(rb.name, { local: rb.hasLocal, remote: true })}
