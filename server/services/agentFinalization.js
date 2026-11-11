@@ -994,12 +994,13 @@ async function evaluateGoalFidelity({ task, workspacePath, startedAt }) {
   }
 
   // Only a retry can have earlier attempts. A claim's objective is the issue it
-  // selected this time, which an earlier attempt's merge need not concern.
+  // selected this time, which an earlier attempt's work need not concern.
   const priorDelivery = !claimFlow && Number(task.metadata?.totalSpawnCount) > 1
     ? await import('./goalFidelityPriorDelivery.js')
       .then(({ priorTaskDelivery }) => priorTaskDelivery({
-        taskId: task.id, workspacePath, head, startedAt,
+        taskId: task.id, workspacePath, head, base, startedAt,
         maxChars: MAX_FIDELITY_DIFF_CHARS - diff.trim().length,
+        includeExecutionReport: resolveTaskHookType(task) === 'dependency-updates',
       }))
       .catch(() => null)
     : null;
