@@ -175,16 +175,15 @@ function buildFalPrompt({ prompt, hasInitImage = false, initImageStrength, refer
 // web format within the size budget, else a downscaled re-encode — and report
 // its size in megapixels (FLUX.2 bills input megapixels).
 async function encodeInputImage(filePath, reviewedBytes = null) {
-  const input = reviewedBytes || filePath;
+  const input = reviewedBytes ?? await readFile(filePath);
   const metadata = await sharp(input).metadata();
   const longSide = Math.max(metadata.width || 0, metadata.height || 0);
   const passThrough = longSide <= INPUT_MAX_LONG_SIDE
-    && (metadata.size ?? 0) <= INPUT_MAX_BYTES
+    && input.length <= INPUT_MAX_BYTES
     && ['png', 'jpeg', 'webp'].includes(metadata.format);
   if (passThrough) {
-    const buffer = reviewedBytes || await readFile(filePath);
-    const mime = detectImageFormat(buffer)?.mime || `image/${metadata.format}`;
-    return { dataUri: `data:${mime};base64,${buffer.toString('base64')}`, megapixels: ((metadata.width || 0) * (metadata.height || 0)) / FAL_MEGAPIXEL };
+    const mime = detectImageFormat(input)?.mime || `image/${metadata.format}`;
+    return { dataUri: `data:${mime};base64,${input.toString('base64')}`, megapixels: ((metadata.width || 0) * (metadata.height || 0)) / FAL_MEGAPIXEL };
   }
   const resized = sharp(input)
     .rotate()
