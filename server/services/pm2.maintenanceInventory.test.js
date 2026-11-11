@@ -1,12 +1,12 @@
 import { afterEach, expect, it, vi } from 'vitest';
-const mocks = vi.hoisted(() => ({ connect: vi.fn(), list: vi.fn(), disconnect: vi.fn(cb => cb(null)) }));
-vi.mock('pm2', () => ({ default: { custom: function () { return mocks; } } }));
+const mocks = vi.hoisted(() => ({ launchRPC: vi.fn(), list: vi.fn(), disconnect: vi.fn(cb => cb(null)) }));
+vi.mock('pm2', () => ({ default: { custom: function () { return { ...mocks, connect: vi.fn(), Client: { launchRPC: mocks.launchRPC, client: { call: (_method, _data, cb) => mocks.list(cb) } } }; } } }));
 import { clearJlistCache, listMaintenanceProcesses, listProcessesStrict } from './pm2.js';
 
 afterEach(() => { vi.clearAllMocks(); clearJlistCache(); });
 
 it('reads fresh maintenance identities even while the display inventory remains cached', async () => {
-  mocks.connect.mockImplementation(cb => setImmediate(() => cb(null)));
+  mocks.launchRPC.mockImplementation(cb => setImmediate(() => cb(null)));
   const original = { name: 'portos-server', pm_id: 13, pid: 1013,
     pm2_env: { status: 'online', pm_cwd: '/tmp/example-install', pm_exec_path: '/tmp/example-install/server/start.js', secret: 'not-projected' } };
   mocks.list.mockImplementation(cb => setImmediate(() => cb(null, [original])));
@@ -18,7 +18,7 @@ it('reads fresh maintenance identities even while the display inventory remains 
 });
 
 it('rejects malformed or failed daemon reads instead of declaring an empty producer set', async () => {
-  mocks.connect.mockImplementation(cb => setImmediate(() => cb(null)));
+  mocks.launchRPC.mockImplementation(cb => setImmediate(() => cb(null)));
   mocks.list.mockImplementation(cb => setImmediate(() => cb(null, null)));
   await expect(listMaintenanceProcesses()).rejects.toThrow('unavailable');
   mocks.list.mockImplementation(cb => setImmediate(() => cb(new Error('failed'))));

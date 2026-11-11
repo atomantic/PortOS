@@ -1,17 +1,15 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { EventEmitter } from 'events';
 
 const mocks = vi.hoisted(() => ({ spawn: vi.fn(), clients: [] }));
 vi.mock('pm2', () => ({ default: { custom: function () { return mocks.clients.shift(); } } }));
 vi.mock('../lib/childProcess.js', async original => ({ ...(await original()), spawn: mocks.spawn }));
 import { clearJlistCache, listProcessesStrict, stopApp } from './pm2.js';
 
-const client = () => ({ connect: vi.fn(cb => cb(null)), list: vi.fn(), stop: vi.fn(), disconnect: vi.fn(cb => cb(null)) });
-const child = () => Object.assign(new EventEmitter(), {
-  stdout: Object.assign(new EventEmitter(), { destroy: vi.fn() }),
-  stderr: Object.assign(new EventEmitter(), { destroy: vi.fn() }),
-  kill: vi.fn(), unref: vi.fn(),
-});
+const client = () => {
+  const list = vi.fn();
+  return { connect: vi.fn(cb => cb(null)), list, stop: vi.fn(), disconnect: vi.fn(cb => cb(null)),
+    Client: { launchRPC: vi.fn(cb => cb(null)), client: { call: (_method, _data, cb) => list(cb) } } };
+};
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -50,13 +48,13 @@ it('expires a shared native list, starts a fresh read and ignores its predecesso
 
 it('closes a native connection that arrives after timeout without issuing its delayed RPC', async () => {
   const delayed = client();
-  delayed.connect.mockImplementation(() => {});
+  delayed.Client.launchRPC.mockImplementation(() => {});
   mocks.clients.push(delayed);
   const pending = listProcessesStrict();
   await vi.advanceTimersByTimeAsync(15_000);
   expect(await pending).toBeNull();
   delayed.disconnect.mockImplementation(cb => cb(new Error('late socket cleanup failed')));
-  delayed.connect.mock.calls[0][0](null);
+  delayed.Client.launchRPC.mock.calls[0][0](null);
   await vi.advanceTimersByTimeAsync(0);
   expect(console.error).toHaveBeenCalledWith(expect.stringContaining('late socket cleanup failed'));
   expect(delayed.list).not.toHaveBeenCalled();
@@ -99,27 +97,21 @@ it('bounds native teardown when disconnect never calls back', async () => {
   expect(vi.getTimerCount()).toBe(0);
 });
 
-it('waits for a timed-out custom-home CLI to close before releasing its shared read', async () => {
-  const stalled = child();
-  mocks.spawn.mockReturnValueOnce(stalled);
+
+it('bounds a custom-home native read and releases its shared slot for a fresh read', async () => {
+  const stalled = client();
+  mocks.clients.push(stalled);
   const pending = listProcessesStrict('/tmp/example-pm2');
   await vi.advanceTimersByTimeAsync(15_000);
-  expect(stalled.kill).toHaveBeenCalledWith('SIGTERM');
-  stalled.kill.mockImplementation(signal => stalled.emit('close', null, signal));
-  await vi.advanceTimersByTimeAsync(1_000);
-  expect(stalled.kill).toHaveBeenLastCalledWith('SIGKILL');
   expect(await pending).toBeNull();
-  expect(stalled.listenerCount('close')).toBe(0);
-  expect(stalled.stdout.listenerCount('data')).toBe(0);
+  expect(stalled.disconnect).toHaveBeenCalledOnce();
 
-  const fresh = child();
-  mocks.spawn.mockReturnValueOnce(fresh);
-  const next = listProcessesStrict('/tmp/example-pm2');
-  await vi.advanceTimersByTimeAsync(0);
-  fresh.stdout.emit('data', '[]');
-  fresh.emit('close', 0);
-  expect(await next).toEqual([]);
-  expect(mocks.spawn).toHaveBeenCalledTimes(2);
-  expect(mocks.spawn.mock.calls[0][2].env.PM2_HOME).toBe('/tmp/example-pm2');
+  const fresh = client();
+  fresh.list.mockImplementation(cb => cb(null, []));
+  mocks.clients.push(fresh);
+  expect(await listProcessesStrict('/tmp/example-pm2')).toEqual([]);
+  expect(fresh.Client.launchRPC).toHaveBeenCalledOnce();
+  expect(fresh.connect).not.toHaveBeenCalled();
+  expect(mocks.spawn).not.toHaveBeenCalled();
   expect(vi.getTimerCount()).toBe(0);
 });
