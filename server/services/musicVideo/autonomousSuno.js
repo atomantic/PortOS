@@ -16,6 +16,7 @@ import { SUNO_SONG_MENU_SELECTOR, markSunoSongMenu, sunoDownloadDialogSong } fro
 import { escapeRegExp } from '../../lib/textUtils.js';
 import { sleep as defaultSleep } from '../../lib/fileCore.js';
 import { PUBLISH_STEP_TIMEOUT_MS as T, connectPortosBrowser, loginRequired, serializeBrowserOperation as serialize, step } from './publish/browser.js';
+import { readChosenState, readLegacyChosenState, readFormatSelection } from './sunoControls.js';
 
 const LABEL = 'Suno';
 const SUNO_CREATE_URL = 'https://suno.com/create';
@@ -114,10 +115,7 @@ const skipped = (control) => console.log(`⏭️ ${LABEL}: ${control} not found 
 // `aria-pressed` (older builds: the `standard` button variant). Clicking the
 // chosen button again may toggle it off, so only click when it is not selected.
 const optionRow = (page, label) => page.locator(`div:has(> div > span:text-is("${label}"))`).filter({ visible: true }).last();
-const isSelected = async (button) => {
-  const [selected, pressed, cls] = await Promise.all(['data-selected', 'aria-pressed', 'class'].map((name) => button.getAttribute(name)));
-  return selected === 'true' || pressed === 'true' || /hxc-btn-variant-standard/.test(cls || '');
-};
+const isSelected = async (button) => (await readChosenState(button)) ?? readLegacyChosenState(button, 'option');
 async function chooseInRow(page, label, name) {
   const row = optionRow(page, label);
   if (!await row.count()) return skipped(`the ${label} row`);
@@ -458,17 +456,17 @@ async function downloadSunoAudio(page, songId, path, {
         "this song's options menu did not open, so nothing was exported");
     }
     await bounded('open-download', () => page.getByRole('menuitem', { name: 'Download', exact: true }).click({ timeout: remaining() }));
-    for (const name of ['M4A', 'MP3', 'WAV', 'MP4 video asset']) {
-      const button = page.getByRole('button', { name, exact: true });
-      const selected = await bounded('select-m4a', () => button.evaluate((el) => el.classList.contains('bg-foreground-primary') && el.classList.contains('text-background-primary')));
-      if (selected !== (name === 'M4A')) await bounded('select-m4a', () => button.click({ timeout: remaining() }));
+    const formats = ['M4A', 'MP3', 'WAV', 'MP4 video asset'].map((name) => page.getByRole('button', { name, exact: true }));
+    const selected = await bounded('select-m4a', () => readFormatSelection(formats));
+    if (selected === null) throw error('SUNO_AUDIO_DOWNLOAD_FAILED', 'format-selection-unreadable');
+    for (let index = 0; index < formats.length; index += 1) {
+      if (selected[index] !== (index === 0)) await bounded('select-m4a', () => formats[index].click({ timeout: remaining() }));
     }
     // Fail closed if Suno changes selection behavior: never unlock an export
     // while another format remains selected or M4A failed to become selected.
-    for (const name of ['M4A', 'MP3', 'WAV', 'MP4 video asset']) {
-      const selected = await bounded('verify-m4a', () => page.getByRole('button', { name, exact: true }).evaluate((el) => el.classList.contains('bg-foreground-primary') && el.classList.contains('text-background-primary')));
-      if (selected !== (name === 'M4A')) throw error('SUNO_AUDIO_DOWNLOAD_FAILED', 'format-selection-failed');
-    }
+    const verified = await bounded('verify-m4a', () => readFormatSelection(formats));
+    if (verified === null) throw error('SUNO_AUDIO_DOWNLOAD_FAILED', 'format-selection-unreadable');
+    if (verified.some((state, index) => state !== (index === 0))) throw error('SUNO_AUDIO_DOWNLOAD_FAILED', 'format-selection-failed');
     // The dialog quotes its song's title: never spend a download on another song's.
     if (await bounded('verify-dialog', () => page.evaluate(sunoDownloadDialogSong)) === 'other') {
       throw error('SUNO_AUDIO_WRONG_SONG', 'dialog-names-another-song', 502,

@@ -13,6 +13,9 @@ const ID = '12345678-abcd-4abc-8abc-123456789abc';
 // Every request is intercepted. This synthetic page deliberately gives the
 // waveform an offscreen midpoint, as a translated long song strip would have.
 function fixtureHtml(kind, initiallyOn) {
+  const waveform = kind === 'fallback' ? '<canvas class="waveform"></canvas>'
+    : kind === 'shadow' ? '<div class="waveform" role="slider" aria-label="Audio window"></div>'
+    : '<div class="waveform" data-testid="hook-waveform"></div>';
   return String.raw`<!doctype html><html><head><style>
     body { margin: 0; overflow: hidden; }
     [hidden] { display: none !important; }
@@ -25,7 +28,11 @@ function fixtureHtml(kind, initiallyOn) {
     <div id="songs" role="dialog" hidden><textarea placeholder="Search by song name"></textarea>
       <div><a href="/song/${ID}">Synthetic song</a><button id="use">Use</button><button>A</button><button>B</button></div>
     </div>
-    <span id="pill" class="rounded-full font-mono">2:38</span><div class="waveform"></div>
+    <canvas width="20" height="20"></canvas>
+    <span style="position:absolute;top:40px">3:07</span>
+    <span id="pill">2:38</span>${waveform}
+    <div style="position:absolute;top:130px"><span><span>0:00</span></span> / <span>0:26</span></div>
+    <span style="position:absolute;top:250px">3:07</span>
     <button id="next">Next</button>
     <section id="post" hidden><textarea placeholder="Add a caption..."></textarea><div id="lyrics"></div><button id="publish">Post</button></section>
     <script>

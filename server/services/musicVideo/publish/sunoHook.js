@@ -22,7 +22,7 @@ const WAVEFORM_PX_PER_SEC = 22.2;
 const READBACK_TOLERANCE_SEC = 1;
 // One drag stays on the waveform, so a window far from the target takes several.
 const MAX_DRAGS = 20;
-const WAVEFORM = '[class*=waveform], [data-testid*=waveform], canvas';
+const WAVEFORM = '[data-portos-hook-waveform]';
 const SONG_RESULTS_WAIT_MS = 10_000;
 const SONG_RESULTS_POLL_MS = 250;
 const SONG_RESULTS_STABLE_POLLS = 3;
@@ -87,27 +87,72 @@ async function selectSong(page, payload) {
   if (index < 0) throw new Error(`${rows.length} rows match "${payload.title}" and none could be told apart by id or length`);
   await page.locator('[role=dialog] button').filter({ hasText: /^Use$/ }).nth(index).click({ timeout: T });
   await search.locator('xpath=ancestor::*[@role="dialog"][1]').waitFor({ state: 'hidden', timeout: T });
-  await page.locator(WAVEFORM).first().waitFor({ state: 'visible', timeout: T });
+  await page.waitForFunction(markHookWaveform, null, { timeout: T });
 }
 
 /**
- * The window's start among the page's visible m:ss labels (`{ text, cls, parentText }`), in
- * seconds: the rounded-full font-mono pill above the box, never the player clock ("0:00 / 0:26").
- * Without a pill, a lone label that isn't the clock; null when it can't be told.
+ * Prefer an identified waveform, then a named window/audio slider. A canvas is
+ * a last resort only when it is a wide visible strip with a time label just
+ * above it; multiple such canvases are ambiguous, so no drag target is marked.
+ * Runs in the page without module scope.
  */
-function pickWindowStart(labels) {
-  const isClock = (l) => /\d+:\d{2}\s*\/\s*\d+:\d{2}/.test(l.parentText || '');
-  const candidates = labels.filter((l) => !isClock(l));
-  const pills = candidates.filter((l) => /(^|\s)rounded-full(\s|$)/.test(l.cls || '') && /(^|\s)font-mono(\s|$)/.test(l.cls || ''));
-  const pick = pills.length ? pills : candidates;
-  return pick.length === 1 ? parseClock(pick[0].text) : null;
+function markHookWaveform() {
+  const visible = (el) => el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden';
+  const clocks = [...document.querySelectorAll('body *')].filter((el) => el.children.length === 0
+    && /^\d+:\d{2}$/.test(el.textContent.trim()) && visible(el)
+    && !/^\s*\d+:\d{2}\s*\/\s*\d+:\d{2}\s*$/.test(el.parentElement?.textContent || ''));
+  for (const old of document.querySelectorAll('[data-portos-hook-waveform]')) old.removeAttribute('data-portos-hook-waveform');
+  const identified = [...document.querySelectorAll('[data-testid*="waveform" i]')].filter(visible);
+  const sliders = [...document.querySelectorAll('[role="slider"]')].filter((el) => visible(el)
+    && /waveform|audio window|song window|clip window/i.test(el.getAttribute('aria-label') || document.getElementById(el.getAttribute('aria-labelledby'))?.textContent || ''));
+  const canvases = [...document.querySelectorAll('canvas')].filter((el) => {
+    if (!visible(el)) return false;
+    const box = el.getBoundingClientRect();
+    return box.width >= 160 && box.height >= 24 && clocks.some((clock) => {
+      const label = clock.getBoundingClientRect();
+      return label.bottom <= box.top && box.top - label.bottom <= 120 && label.right >= box.left && label.left <= box.right;
+    });
+  });
+  const candidates = identified.length ? identified : sliders.length ? sliders : canvases;
+  // A nested marker describes the same waveform; separate strips are ambiguous.
+  const outer = candidates.filter((el) => !candidates.some((other) => other !== el && other.contains(el)));
+  if (outer.length !== 1) return false;
+  outer[0].setAttribute('data-portos-hook-waveform', '');
+  return true;
 }
 
-/** The window's start as the page reports it, in seconds (null when no readout is found). */
-const readWindowStart = (page) => page.evaluate(() => [...document.querySelectorAll('span,div')]
-  .filter((e) => e.children.length === 0 && /^\d+:\d{2}$/.test(e.textContent.trim()) && e.offsetParent)
-  .map((e) => ({ text: e.textContent.trim(), cls: String(e.className || ''), parentText: (e.parentElement?.textContent || '').trim() })))
-  .then(pickWindowStart);
+/** The closest visible m:ss readout above this waveform, excluding player clocks. */
+function pickWindowStart(labels, box) {
+  const candidates = labels.filter((entry) => /^\d+:\d{2}$/.test(entry.text)
+    && !entry.playerClock
+    && entry.bottom <= box.y && entry.right >= box.x && entry.left <= box.x + box.width)
+    .sort((a, b) => b.bottom - a.bottom);
+  if (!candidates.length || candidates[1]?.bottom === candidates[0].bottom) return null;
+  return parseClock(candidates[0].text);
+}
+
+/** The window's start as the page reports it, in seconds (null when ambiguous). */
+async function readWindowStart(page) {
+  const box = await page.locator(WAVEFORM).boundingBox();
+  if (!box) return null;
+  const labels = await page.evaluate(() => [...document.querySelectorAll('body *')]
+    .filter((el) => el.children.length === 0 && /^\d+:\d{2}$/.test(el.textContent.trim())
+      && el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden')
+    .map((el) => {
+      let parent = el.parentElement;
+      let playerClock = false;
+      // A clock may split its two times over nested spans. Stop before reaching
+      // a container that also holds the waveform/window readout.
+      while (parent && !parent.querySelector('[data-portos-hook-waveform]')) {
+        if (/^\s*\d+:\d{2}\s*\/\s*\d+:\d{2}\s*$/.test(parent.textContent)) { playerClock = true; break; }
+        parent = parent.parentElement;
+      }
+      const rect = el.getBoundingClientRect();
+      return { text: el.textContent.trim(), playerClock,
+        left: rect.left, right: rect.right, bottom: rect.bottom };
+    }));
+  return pickWindowStart(labels, box);
+}
 
 /**
  * Move the window to `startSec` from wherever Suno opened it: read the pill, drag the waveform
