@@ -24,6 +24,20 @@ describe('lyric sheet check', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('Could not save the line.');
     expect(screen.getByText(/extra words/)).toBeTruthy();
   });
+  it('keeps an unrecognised vocal phrase playable without inserting an empty lyric', () => {
+    const save = vi.fn();
+    const edit = vi.fn();
+    render(<LyricSheetCheck project={{ id: 'p', vocalStemFilename: 'stem.wav', vocalStemMasterFilename: 'song.wav', lyricCues: [cue] }} audioFilename="song.wav" onEditLocal={edit} onSave={save} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Check sheet against vocal' }));
+    act(() => options.onComplete({ result: { extraPhrases: [{ startSec: 3, endSec: 4, text: '' }], unsungCues: [] } }));
+    expect(screen.getByText(/vocal, no words recognised/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Play' })).toBeEnabled();
+    const insert = screen.getByRole('button', { name: 'Insert line here' });
+    expect(insert).toBeDisabled();
+    fireEvent.click(insert);
+    expect(edit).not.toHaveBeenCalled();
+    expect(save).not.toHaveBeenCalled();
+  });
   it('prevents a second insertion while the first save is pending', async () => {
     let finish;
     const save = vi.fn(() => new Promise(resolve => { finish = resolve; }));
@@ -33,9 +47,13 @@ describe('lyric sheet check', () => {
     const buttons = screen.getAllByRole('button', { name: 'Insert line here' });
     fireEvent.click(buttons[0]);
     expect(buttons[1]).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Check sheet against vocal' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Check sheet against vocal' }));
+    expect(screen.getByText(/extra/)).toBeTruthy();
     fireEvent.click(buttons[1]);
     expect(save).toHaveBeenCalledOnce();
     await act(async () => finish(true));
+    expect(screen.getByRole('button', { name: 'Check sheet against vocal' })).toBeEnabled();
   });
   it('inserts a reported phrase into the saved sheet in time order', async () => {
     const edit = vi.fn();
