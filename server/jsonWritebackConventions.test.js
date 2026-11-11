@@ -77,6 +77,9 @@ describe('syntax scanner regression contracts', () => {
     `;
     expect(mayReadJsonFile(source, registry)).toBe(true);
     expect(mayReadJsonFile(source)).toBe(false);
+    const defaultImport = "import { default as load } from '../stores/raw.js'; load(P); atomicWrite(P, {});";
+    expect(mayReadJsonFile(defaultImport, registry)).toBe(true);
+    expect(scanJsonWriteback(defaultImport, { module: 'services/writer.js', registry }).candidates).toEqual(['P']);
     expect(mayReadJsonFile("import load from '../stores/raw.js'; load(P); atomicWrite(P, {});", registry)).toBe(true);
     expect(scanJsonWriteback(source, { module: 'services/writer.js', registry })).toEqual({
       candidates: ['BYTES', 'PATH', 'RAW', 'stores/a.js#STORE'], strict: [],

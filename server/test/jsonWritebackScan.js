@@ -8,7 +8,7 @@ import { posix } from 'node:path';
 export function mayReadJsonFile(source, registry = new Map()) {
   return source.includes('readJSONFile') || source.includes('safeJSONParse') || source.includes('\\u')
     || [...registry.values()].some(({ wrappers }) => [...wrappers.keys()].some(name => name === 'default'
-      ? /\bimport\s+[^\s{*]/.test(source) : source.includes(name)));
+      ? source.includes('default') || /\bimport\s+[^\s{*]/.test(source) : source.includes(name)));
 }
 
 // Test-only syntax scan, never imports a service or reads runtime data.
