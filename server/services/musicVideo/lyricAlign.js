@@ -23,7 +23,7 @@ import {
 import { spreadVocableCues } from './lyricVocables.js';
 import { relabelAnalysisSections } from '../../lib/lyricMarkers.js';
 
-async function decodeSourceToWav(sourcePath) {
+export async function decodeSourceToWav(sourcePath) {
   const ffmpeg = await findFfmpeg();
   if (!ffmpeg) {
     throw new ServerError('ffmpeg is required to align lyrics to the vocal.', { status: 500, code: 'FFMPEG_MISSING' });
@@ -154,22 +154,52 @@ export async function alignProjectLyrics(projectId, options = {}) {
     if (!cueId) {
       const wholeSongWords = forcedWords;
       forcedWords = [...wholeSongWords];
-      for (let index = 0; index < cues.length; index++) {
-        const original = wholeSongWords[index];
-        const compressed = compressedWords(original);
-        const silent = silentCount(original);
-        if (!compressed && silent === 0) continue;
+      const quality = wholeSongWords.map((words) => ({ compressed: compressedWords(words), silent: silentCount(words) }));
+      for (let first = 0; first < cues.length;) {
+        if (!quality[first].compressed && quality[first].silent === 0) { first++; continue; }
+        let end = first + 1;
+        while (end < cues.length && (quality[end].compressed || quality[end].silent > 0)) end++;
         checkCancel();
-        const startSec = cues[index - 1]?.endSec ?? wholeSongWords[index - 1]?.at(-1)?.endSec ?? 0;
-        const endSec = cues[index + 1]?.startSec ?? wholeSongWords[index + 1]?.[0]?.startSec ?? wavDurationSec(wav);
-        // Inconsistent authored neighbors cannot supply a useful repair window.
-        if (!(endSec > startSec)) continue;
-        const [retry] = await alignStemCues([cues[index]], { startSec, endSec });
-        checkCancel();
-        if (retry.length !== original.length || compressedWords(retry)) continue;
-        const retrySilent = silentCount(retry);
-        // Keep the retry only when it fixes something without landing more words in silence.
-        if (retrySilent < silent || (compressed && retrySilent <= silent)) forcedWords[index] = retry;
+        const startSec = cues[first - 1]?.endSec ?? wholeSongWords[first - 1]?.at(-1)?.endSec ?? 0;
+        const endSec = cues[end]?.startSec ?? wholeSongWords[end]?.[0]?.startSec ?? wavDurationSec(wav);
+        if (endSec > startSec) {
+          const retries = await alignStemCues(cues.slice(first, end), { startSec, endSec }).catch((err) => {
+            if (err.canceled || !['LYRIC_ALIGN_CTC_FAILED', 'LYRIC_ALIGN_CTC_WINDOW_TOO_SHORT'].includes(err.code)) throw err;
+            console.log(`⏭️ Skipped lyric repair for lines ${first + 1}-${end}: ${err.code}`);
+            return null;
+          });
+          checkCancel();
+          if (retries) {
+            const accepted = new Set();
+            for (let index = first; index < end; index++) {
+              const retry = retries[index - first];
+              const original = wholeSongWords[index];
+              const { compressed, silent } = quality[index];
+              if (!retry || retry.length !== original.length || compressedWords(retry)) continue;
+              const retrySilent = silentCount(retry);
+              if (retrySilent < silent || (compressed && retrySilent <= silent)) {
+                forcedWords[index] = retry;
+                accepted.add(index);
+              }
+            }
+            // Evaluate the combined result: reverting a conflicting line can expose
+            // another conflict, so keep checking until all accepted lines fit.
+            let changed;
+            do {
+              changed = false;
+              for (const index of accepted) {
+                const retry = forcedWords[index];
+                if (retry[0]?.startSec < forcedWords[index - 1]?.at(-1)?.endSec
+                  || retry.at(-1)?.endSec > forcedWords[index + 1]?.[0]?.startSec) {
+                  forcedWords[index] = wholeSongWords[index];
+                  accepted.delete(index);
+                  changed = true;
+                }
+              }
+            } while (changed);
+          }
+        }
+        first = end;
       }
     }
     kind = 'MMS_FA';

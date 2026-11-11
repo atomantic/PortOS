@@ -6,7 +6,7 @@
  * against the music instead of landing on it. This decodes a track with
  * ffmpeg (already a hard dependency for rendering) and runs a pure-Node DSP
  * pipeline: spectral-flux onset strength, autocorrelation tempo estimation,
- * phase-aligned beat placement, 4/4 downbeat picking, and onset "hit"
+ * onset-tracked beat placement, 4/4 downbeat picking, and onset "hit"
  * peak-picking for one-off transients (fills, hi-hats) a quantized beat grid
  * doesn't capture. No Python, no ML model download — this runs anywhere the
  * rest of the media stack already does.
@@ -28,7 +28,8 @@ import {
   decodeAudioToPcm,
   onsetEnvelope,
   estimateTempo,
-  fitBeats,
+  trackBeatGrid,
+  FFT_SIZE,
   pickDownbeats,
 } from './audioBeatDsp.js';
 
@@ -102,10 +103,13 @@ export function __analyzeBeatGridPcm(samples, sampleRate, { hop = ONSET_HOP } = 
     return { bpm: null, beats: [], downbeats: [], hits: [], durationSec, tempoConfidence: null };
   }
   const { onset, fps } = onsetEnvelope(samples, sampleRate, hop);
-  const { bpm, confidence } = estimateTempo(onset, fps);
+  const tempo = estimateTempo(onset, fps);
+  const { bpm, beats: frameBeats } = trackBeatGrid(onset, fps, tempo);
+  const { confidence } = tempo;
   const roundedBpm = bpm == null ? null : Number(bpm.toFixed(2));
-  const beats = roundedBpm == null ? [] : fitBeats(onset, fps, bpm, durationSec);
-  const downbeats = roundedBpm == null ? [] : pickDownbeats(beats, onset, fps);
+  const emit = (t) => Number(Math.min(durationSec, t + FFT_SIZE / 2 / sampleRate).toFixed(3));
+  const beats = frameBeats.map(emit);
+  const downbeats = pickDownbeats(frameBeats, onset, fps).map(emit);
   const hits = pickHits(onset, fps, durationSec);
   return {
     bpm: roundedBpm,

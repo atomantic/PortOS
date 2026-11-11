@@ -53,6 +53,7 @@ import {
   musicVideoLyricsImportSchema,
   musicVideoLyricsImportTrackSchema,
   musicVideoLyricsAlignSchema,
+  musicVideoLyricsVerifySchema,
   musicVideoSongPrepareSchema,
   musicVideoTakeInputSchema,
   musicVideoTakeReviewSchema,
@@ -163,6 +164,7 @@ import {
   refreshSongStyleFromSuno,
 } from '../services/musicVideo/projects.js';
 import { requireProject } from '../services/musicVideo/requireProject.js';
+import { resolveRenderVideoFile } from '../services/musicVideo/finalRenderFile.js';
 import { renderSceneClips, renderSceneFrames } from '../services/musicVideo/sceneCardRender.js';
 import { labelProjectReferences } from '../services/musicVideo/referenceLabels.js';
 import { buildHandoffManifest, buildHandoffBundle, matchSceneByFileTag } from '../services/musicVideo/handoff.js';
@@ -227,6 +229,7 @@ import {
   getActiveLyricAlignJobId,
   startLyricAlign,
 } from '../services/musicVideo/lyricAlignJob.js';
+import { startLyricVerify, attachLyricVerifySseClient, cancelLyricVerify } from '../services/musicVideo/lyricVerifyJob.js';
 import { importTrackLyrics, MAX_LYRIC_CUES } from '../services/musicVideo/trackLyrics.js';
 import { offsetLyricMarkers } from '../lib/lyricMarkers.js';
 import {
@@ -430,6 +433,18 @@ router.post('/:id/clone', asyncHandler(async (req, res) => {
 
 router.patch('/:id', asyncHandler(async (req, res) => {
   const data = validateRequest(projectUpdateSchema, req.body);
+  if (data.renderHistoryId !== undefined && data.renderHistoryId !== null) {
+    const current = await requireProject(req.params.id);
+    if (data.renderHistoryId !== current.renderHistoryId) {
+      const resolved = await resolveRenderVideoFile(data.renderHistoryId);
+      if (!resolved) {
+        throw new ServerError("That render is not in this machine's video history.", {
+          status: 422,
+          code: 'MUSIC_VIDEO_RENDER_NOT_FOUND',
+        });
+      }
+    }
+  }
   const updated = await updateProject(req.params.id, data);
   res.json(updated);
 }));
@@ -669,6 +684,17 @@ router.post('/:id/lyrics/align', asyncHandler(async (req, res) => {
   const { cueId, separateVocals, retimeSong } = validateRequest(musicVideoLyricsAlignSchema, req.body || {});
   res.status(202).json(await startLyricAlign(req.params.id, { cueId, separateVocals, retimeSong }));
 }));
+
+router.post('/:id/lyrics/verify', asyncHandler(async (req, res) => {
+  validateRequest(musicVideoLyricsVerifySchema, req.body ?? {});
+  res.status(202).json(await startLyricVerify(req.params.id));
+}));
+router.get('/lyrics/verify/:jobId/events', (req, res) => {
+  if (!attachLyricVerifySseClient(req.params.jobId, res)) throw new ServerError('Verification job not found or expired', { status: 404, code: 'NOT_FOUND' });
+});
+router.post('/lyrics/verify/:jobId/cancel', (req, res) => {
+  res.json({ ok: cancelLyricVerify(req.params.jobId) });
+});
 
 // Re-read the song's Suno style (excluded styles included) from its song link,
 // for a song imported before they were captured. Updates the linked track too.

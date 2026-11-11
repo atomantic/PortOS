@@ -170,6 +170,14 @@ describe('MMS_FA process contract', () => {
     expect(onProgress).toHaveBeenCalledWith({ stage: 'downloading-model', percent: 40 });
   });
 
+  it.each([
+    [['ERROR:audio-too-short'], 'LYRIC_ALIGN_CTC_WINDOW_TOO_SHORT'],
+    [[], 'LYRIC_ALIGN_CTC_FAILED'],
+  ])('reports safe process failure reasons', async (scriptLines, code) => {
+    const h = await harness(undefined, { scriptLines, scriptSuccess: false });
+    await expect(h.align()).rejects.toMatchObject({ code });
+  });
+
   it('rejects missing, foreign, overlapping and out-of-window results instead of publishing invented words', async () => {
     for (const mutate of [() => null, (w) => w.slice(1), (w) => { w[1][0].w = 'foreign'; return w; },
       (w) => { w[1][0].startSec = 0.5; return w; }, (w) => { w[1][0].endSec = 3; return w; }]) {

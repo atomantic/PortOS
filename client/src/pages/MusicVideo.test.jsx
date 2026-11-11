@@ -93,6 +93,9 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   importMusicVideoLyrics: vi.fn(),
   importMusicVideoTrackLyrics: vi.fn(),
   alignMusicVideoLyrics: vi.fn(),
+  verifyMusicVideoLyrics: vi.fn(async () => ({ jobId: 'verify' })),
+  musicVideoLyricVerifyEventsUrl: (jobId) => `/api/music-video/lyrics/verify/${jobId}/events`,
+  cancelMusicVideoLyricVerify: vi.fn(async () => ({ ok: true })),
   musicVideoLyricAlignEventsUrl: (jobId) => `/api/music-video/lyrics/align/${jobId}/events`,
   cancelMusicVideoLyricAlign: vi.fn(async () => ({ ok: true })),
   getMusicVideoActiveJobs: vi.fn(async () => ({ alignment: null, separation: null, midi: null })),
@@ -1999,6 +2002,16 @@ describe('MusicVideo section layers (#8985)', () => {
     expect(await screen.findByText(/Title card sections render in composed or document mode/)).toBeTruthy();
     await openStage('review');
     expect(screen.getByRole('button', { name: /^Render final$/ })).toBeDisabled();
+  });
+
+  it('shows no-live-preview note for concat, and hides it for composed', async () => {
+    await openProject({ ...PROJECT_WITH_CLIP, composition: composition('concat') }, 'produce');
+    expect(screen.getByText(/No live preview for this style — render a draft excerpt to check changes\./)).toBeInTheDocument();
+  });
+
+  it('hides no-live-preview note for composed', async () => {
+    await openProject({ ...PROJECT_WITH_CLIP, composition: composition('composed') }, 'produce');
+    expect(screen.queryByText(/No live preview for this style — render a draft excerpt to check changes\./)).not.toBeInTheDocument();
   });
 });
 

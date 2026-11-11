@@ -21,7 +21,7 @@ import { stereoPhaseCancellation } from '../../lib/audioBeatDsp.js';
  * the Phase 0 spike (#1760) is proven against — a known tempo with sharp
  * onsets that the envelope/autocorrelation pipeline must recover.
  */
-function clickTrack({ bpm, durationSec, sampleRate = ANALYSIS_SAMPLE_RATE, offsetSec = 0 }) {
+function clickTrack({ bpm, durationSec, sampleRate = ANALYSIS_SAMPLE_RATE, offsetSec = 0, beatTimes = null, offbeatGain = 0 }) {
   const n = Math.round(durationSec * sampleRate);
   const out = new Float32Array(n);
   // Tiny deterministic noise floor so onset detection isn't fed perfect silence
@@ -33,11 +33,13 @@ function clickTrack({ bpm, durationSec, sampleRate = ANALYSIS_SAMPLE_RATE, offse
   const periodSec = 60 / bpm;
   const burstSec = 0.04;
   const burstLen = Math.round(burstSec * sampleRate);
-  for (let t = offsetSec; t < durationSec; t += periodSec) {
+  const times = beatTimes ?? Array.from({ length: Math.ceil((durationSec - offsetSec) / periodSec) }, (_, i) => offsetSec + i * periodSec);
+  const pulses = times.flatMap((t) => [{ t, gain: 1 }, ...(offbeatGain ? [{ t: t + periodSec / 2, gain: offbeatGain }] : [])]);
+  for (const { t, gain } of pulses) {
     const start = Math.round(t * sampleRate);
     for (let k = 0; k < burstLen && start + k < n; k++) {
       const env = Math.exp(-k / (burstLen / 4)); // exponential decay
-      out[start + k] += env * Math.sin((2 * Math.PI * 1000 * k) / sampleRate);
+      out[start + k] += gain * env * Math.sin((2 * Math.PI * 1000 * k) / sampleRate);
     }
   }
   return out;
@@ -89,6 +91,39 @@ function encodeWav(samples, sampleRate) {
   }
   return buf;
 }
+
+describe('song-length beat tracking', () => {
+  // Short-track tempo assertions cannot detect accumulated phase drift.
+  it.each([
+    { name: 'steady 120 BPM', bpm: 120, durationSec: 180 },
+    { name: '166 BPM half-time trap', bpm: 166, durationSec: 160 },
+    { name: '165 to 167 BPM step', bpm: 165, durationSec: 160, stepped: true },
+    { name: '120 to 126 BPM ramp', bpm: 120, durationSec: 180, ramped: true },
+  ])('keeps every beat aligned through $name', ({ bpm, durationSec, stepped, ramped }) => {
+    const beatTimes = [];
+    for (let t = 0.2; t < durationSec;) {
+      beatTimes.push(t);
+      const tempo = stepped && t >= 90 ? 167 : ramped ? bpm + 6 * t / durationSec : bpm;
+      t += 60 / tempo;
+    }
+    const result = analyzePcm(clickTrack({ bpm, durationSec, beatTimes }), ANALYSIS_SAMPLE_RATE);
+    const errors = beatTimes.filter((t) => t > 1 && t < durationSec - 1).map((t) => {
+      const nearest = result.beats.reduce((best, beat) => Math.abs(beat - t) < Math.abs(best - t) ? beat : best, Infinity);
+      return nearest - t;
+    });
+    expect(result.gridDecision).toBe('use');
+    expect(Math.max(...errors.map(Math.abs))).toBeLessThanOrEqual(0.025);
+    expect(Math.abs(errors.reduce((sum, error) => sum + error, 0) / errors.length)).toBeLessThanOrEqual(0.012);
+    expect(Math.abs(result.beats.length - beatTimes.length)).toBeLessThanOrEqual(2);
+    if (!stepped && !ramped) expect(Math.abs(result.bpm - bpm)).toBeLessThanOrEqual(0.5);
+  });
+
+  it('keeps a passing 88 BPM pulse with quieter offbeats at its original density', () => {
+    const result = analyzePcm(clickTrack({ bpm: 88, durationSec: 60, offsetSec: 0.2, offbeatGain: 0.6 }), ANALYSIS_SAMPLE_RATE);
+    expect(result.gridDecision).toBe('use');
+    expect(Math.abs(result.bpm - 88)).toBeLessThanOrEqual(1);
+  });
+});
 
 describe('analyzePcm', () => {
   it('recovers a 120 BPM click track within tolerance', () => {

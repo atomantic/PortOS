@@ -12,6 +12,11 @@ import { startLoopbackServer, closeLoopbackServer } from '../lib/testHelper.js';
 vi.mock('../services/musicVideo/sharingCopy.js', () => ({ getSharingCopy: vi.fn(), prepareSharingCopy: vi.fn(), sharingCopyDownload: vi.fn() }));
 import { sharingCopyDownload } from '../services/musicVideo/sharingCopy.js';
 
+vi.mock('../services/musicVideo/finalRenderFile.js', () => ({
+  resolveRenderVideoFile: vi.fn(),
+}));
+import { resolveRenderVideoFile } from '../services/musicVideo/finalRenderFile.js';
+
 vi.mock('../services/musicVideo/projects.js', () => ({
   listProjects: vi.fn(async () => [{ id: 'mv-1', name: 'A' }]),
   listProjectNames: vi.fn(async () => [{ id: 'mv-1', name: 'A' }]),
@@ -93,6 +98,11 @@ vi.mock('../services/musicVideo/lyricAlign.js', () => ({
   alignProjectLyrics: vi.fn(async (id, opts) => ({ id, lyricCues: [], cueId: opts?.cueId || null })),
 }));
 
+vi.mock('../services/musicVideo/lyricVerify.js', () => ({
+  verifyPrerequisites: vi.fn(async () => 'stem.wav'),
+  verifyLyricSheet: vi.fn(async () => ({ extraPhrases: [], unsungCues: [] })),
+}));
+
 vi.mock('../services/musicVideo/planner.js', () => ({
   planProject: vi.fn(async (id) => ({
     project: { id, scenes: [{ sceneId: 'mvs-1' }] },
@@ -111,6 +121,7 @@ import * as excerptSvc from '../services/musicVideo/excerptService.js';
 import * as midiSvc from '../services/audioMidiTranscription.js';
 import { planProject } from '../services/musicVideo/planner.js';
 import { alignProjectLyrics } from '../services/musicVideo/lyricAlign.js';
+import { verifyPrerequisites, verifyLyricSheet } from '../services/musicVideo/lyricVerify.js';
 import musicVideoRoutes from './musicVideo.js';
 
 describe('musicVideo routes', () => {
@@ -351,6 +362,75 @@ describe('musicVideo routes', () => {
     expect(r.body.name).toBe('Renamed');
   });
 
+  describe('PATCH /:id renderHistoryId validation (#15734)', () => {
+    it('refuses an unknown renderHistoryId with 422 MUSIC_VIDEO_RENDER_NOT_FOUND and leaves stored project unchanged', async () => {
+      svc.getProject.mockResolvedValue({ id: 'mv-1', name: 'A', renderHistoryId: null });
+      resolveRenderVideoFile.mockResolvedValueOnce(null);
+
+      const r = await request(app).patch('/api/music-video/mv-1').send({ renderHistoryId: 'not-a-render' });
+      expect(r.status).toBe(422);
+      expect(r.body.error).toBe("That render is not in this machine's video history.");
+      expect(r.body.code).toBe('MUSIC_VIDEO_RENDER_NOT_FOUND');
+      expect(svc.updateProject).not.toHaveBeenCalled();
+    });
+
+    it('refuses a renderHistoryId whose history entry has a missing file with 422 and leaves stored project unchanged', async () => {
+      svc.getProject.mockResolvedValue({ id: 'mv-1', name: 'A', renderHistoryId: null });
+      resolveRenderVideoFile.mockResolvedValueOnce(null);
+
+      const r = await request(app).patch('/api/music-video/mv-1').send({ renderHistoryId: 'missing-file-id' });
+      expect(r.status).toBe(422);
+      expect(r.body.error).toBe("That render is not in this machine's video history.");
+      expect(r.body.code).toBe('MUSIC_VIDEO_RENDER_NOT_FOUND');
+      expect(svc.updateProject).not.toHaveBeenCalled();
+    });
+
+    it('accepts a renderHistoryId whose file exists and updates the project', async () => {
+      svc.getProject.mockResolvedValue({ id: 'mv-1', name: 'A', renderHistoryId: null });
+      resolveRenderVideoFile.mockResolvedValueOnce({ entry: { id: 'valid-id', filename: 'valid.mp4' }, path: '/videos/valid.mp4' });
+
+      const r = await request(app).patch('/api/music-video/mv-1').send({ renderHistoryId: 'valid-id' });
+      expect(r.status).toBe(200);
+      expect(svc.updateProject).toHaveBeenCalledWith('mv-1', { renderHistoryId: 'valid-id' });
+    });
+
+    it('accepts renderHistoryId: null and clears the field', async () => {
+      svc.getProject.mockResolvedValue({ id: 'mv-1', name: 'A', renderHistoryId: 'old-id' });
+
+      const r = await request(app).patch('/api/music-video/mv-1').send({ renderHistoryId: null });
+      expect(r.status).toBe(200);
+      expect(resolveRenderVideoFile).not.toHaveBeenCalled();
+      expect(svc.updateProject).toHaveBeenCalledWith('mv-1', { renderHistoryId: null });
+    });
+
+    it('accepts a patch that repeats the stored renderHistoryId even if its file is now missing', async () => {
+      svc.getProject.mockResolvedValue({ id: 'mv-1', name: 'A', renderHistoryId: 'existing-id' });
+
+      const r = await request(app).patch('/api/music-video/mv-1').send({ renderHistoryId: 'existing-id', name: 'New Name' });
+      expect(r.status).toBe(200);
+      expect(resolveRenderVideoFile).not.toHaveBeenCalled();
+      expect(svc.updateProject).toHaveBeenCalledWith('mv-1', { renderHistoryId: 'existing-id', name: 'New Name' });
+    });
+
+    it('after a refused PATCH, PUT /:id/finished-outside with finished: true still answers 409 MUSIC_VIDEO_NO_FINAL_RENDER', async () => {
+      // Simulate stored project never receiving the invalid renderHistoryId
+      let currentProject = { id: 'mv-1', name: 'A', renderHistoryId: null };
+      svc.getProject.mockImplementation(async () => currentProject);
+      resolveRenderVideoFile.mockResolvedValue(null);
+
+      // 1. Refused PATCH
+      const patchRes = await request(app).patch('/api/music-video/mv-1').send({ renderHistoryId: 'bogus' });
+      expect(patchRes.status).toBe(422);
+      expect(patchRes.body.code).toBe('MUSIC_VIDEO_RENDER_NOT_FOUND');
+      expect(svc.updateProject).not.toHaveBeenCalled();
+
+      // 2. finished-outside attempt
+      const putRes = await request(app).put('/api/music-video/mv-1/finished-outside').send({ finished: true });
+      expect(putRes.status).toBe(409);
+      expect(putRes.body.code).toBe('MUSIC_VIDEO_NO_FINAL_RENDER');
+    });
+  });
+
   it('PATCH /:id accepts bounded project video-renderer settings', async () => {
     const videoSettings = {
       backend: 'local',
@@ -515,6 +595,38 @@ describe('musicVideo routes', () => {
       expect(explicit.status).toBe(422);
       expect(explicit.body.code).toBe('NO_TRACK_LYRICS');
       expect(svc.updateProject).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('lyric verification jobs', () => {
+    it('reuses a running job, excludes alignment and accepts cancellation', async () => {
+      svc.getProject.mockResolvedValue({ id: 'mv-1', lyricCues: [{ id: 'c', text: 'line' }] });
+      let finish;
+      verifyLyricSheet.mockImplementationOnce((_project, _stem, options) => new Promise(resolve => {
+        finish = () => resolve({ extraPhrases: [], unsungCues: [] });
+        options.signal.addEventListener('abort', finish);
+      }));
+      const first = await request(app).post('/api/music-video/mv-1/lyrics/verify').send({});
+      expect(first.status).toBe(202);
+      const second = await request(app).post('/api/music-video/mv-1/lyrics/verify').send({});
+      expect(second.body).toEqual({ jobId: first.body.jobId, reused: true });
+      const align = await request(app).post('/api/music-video/mv-1/lyrics/align').send({});
+      expect(align.status).toBe(409);
+      expect(align.body.code).toBe('LYRIC_ALIGN_BUSY');
+      expect((await request(app).post(`/api/music-video/lyrics/verify/${first.body.jobId}/cancel`)).body).toEqual({ ok: true });
+      await vi.waitFor(() => expect(verifyLyricSheet).toHaveBeenCalledOnce());
+      finish();
+    });
+    it('returns precondition failures before creating a job and validates the body', async () => {
+      svc.getProject.mockResolvedValue({ id: 'mv-1' });
+      for (const code of ['LYRIC_VERIFY_NEEDS_STEM', 'LYRIC_VERIFY_NEEDS_TIMING']) {
+        verifyPrerequisites.mockRejectedValueOnce(new ServerError('missing', { status: 409, code }));
+        const response = await request(app).post('/api/music-video/mv-1/lyrics/verify').send({});
+        expect(response.status).toBe(409);
+        expect(response.body.code).toBe(code);
+      }
+      expect((await request(app).post('/api/music-video/mv-1/lyrics/verify').send({ extra: true })).status).toBe(400);
+      expect(verifyLyricSheet).not.toHaveBeenCalled();
     });
   });
 
