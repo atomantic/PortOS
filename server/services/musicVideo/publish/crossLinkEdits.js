@@ -49,8 +49,13 @@ const suno = {
   label: 'Suno',
   async prepare(page, row) {
     await step(this.label, 'open the song', () => page.goto(row.url, { waitUntil: 'domcontentloaded', timeout: T }));
-    const readiness = await step(this.label, 'wait for the song menu or sign-in page', () => waitForSunoSongPage(page, { timeoutMs: T }));
+    const manualCaption = () => ({ added: [], leftForYou: [`Open the song's details and add to its caption:\n${row.text}`, 'Save'] });
+    const readiness = await step(this.label, 'wait for the song menu or sign-in page', () => waitForSunoSongPage(page, { timeoutMs: T }).catch(err => {
+      if (err?.name === 'TimeoutError') return null; // Suno UI changes retain the manual-paste fallback.
+      throw err;
+    }));
     if (readiness === 'signed-out') throw loginRequired(this.label, row.url);
+    if (!readiness) return manualCaption();
     // Suno moves its menus around: a miss leaves the lines for the director to paste, never fails the card.
     const caption = await (async () => {
       const songId = sunoSongIdOf(page.url()) || sunoSongIdOf(row.url);
@@ -69,7 +74,7 @@ const suno = {
       await field.waitFor({ timeout: 15_000 });
       return field;
     })().catch(() => null);
-    if (!caption) return { added: [], leftForYou: [`Open the song's details and add to its caption:\n${row.text}`, 'Save'] };
+    if (!caption) return manualCaption();
     const current = await caption.inputValue();
     const pending = linesNotIn(row.text, current);
     // Whole lines only, while the caption fits: an overflow link stays for the director.

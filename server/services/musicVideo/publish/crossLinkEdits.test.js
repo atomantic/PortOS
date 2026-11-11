@@ -21,6 +21,20 @@ function fakePage({ url = 'https://example.com', text = '', count = 1 } = {}) {
 }
 
 describe('cross-link edits', () => {
+  it('keeps the Suno manual-paste fallback when its owned menu never becomes ready', async () => {
+    const page = fakePage();
+    page.waitForFunction = async () => { throw Object.assign(new Error('menu missing'), { name: 'TimeoutError' }); };
+    const summary = await CROSS_LINK_ADAPTERS.suno.prepare(page, row('suno', 'https://suno.com/song/12345678-abcd-4abc-8abc-123456789abc'));
+    expect(summary.added).toEqual([]);
+    expect(summary.leftForYou).toEqual([expect.stringContaining('Stacker News:'), 'Save']);
+  });
+
+  it('keeps explicit Suno sign-in detection separate from the manual-paste fallback', async () => {
+    const page = fakePage();
+    page.waitForFunction = async () => ({ jsonValue: async () => 'signed-out' });
+    await expect(CROSS_LINK_ADAPTERS.suno.prepare(page, row('suno', 'https://suno.com/song/12345678-abcd-4abc-8abc-123456789abc'))).rejects.toMatchObject({ code: 'PUBLISH_LOGIN_REQUIRED' });
+  });
+
   it('adds only the description lines YouTube does not show yet, and never saves', async () => {
     const page = fakePage({ text: 'Story\nMusic video: https://youtu.be/abc' });
     const summary = await CROSS_LINK_ADAPTERS.youtube.prepare(page, row('youtube', 'https://youtu.be/vid123'));
