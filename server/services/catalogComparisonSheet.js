@@ -151,7 +151,7 @@ export async function publishComparisonSheet({ ingredientId, partnerId, filename
   const db = deps.db || await import('./catalogDB.js');
   if (!partnerId || partnerId === ingredientId || !(await db.getIngredient(partnerId))) return null;
   const withMetadata = Object.keys(metadata).length > 0 ? { metadata } : {};
-  const shared = await db.attachGeneratedMedia(partnerId, filename, { kind: 'reference', role: COMPARISON_SHEET_ROLE, library: { comparedWith: ingredientId }, ...withMetadata });
+  const shared = await db.attachGeneratedMedia(partnerId, filename, { kind: 'reference', role: COMPARISON_SHEET_ROLE, ...withMetadata });
   if (!shared.attached) return null;
   const halves = await splitComparisonSheet(filename, deps);
   const library = { derivedFrom: { mediaKey: filename, kind: 'reference' } };

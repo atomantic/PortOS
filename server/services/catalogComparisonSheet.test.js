@@ -70,7 +70,7 @@ describe('comparison sheet', () => {
     const input = { ingredientId: 'a', partnerId: 'b', filename: 'sheet-pair.png' };
     expect(await publishComparisonSheet(input, { db, saveImage })).toEqual({ partner: 'b', left: 'half-1.png', right: 'half-2.png' });
     expect(rows).toEqual([
-      { ingredientId: 'b', mediaKey: 'sheet-pair.png', role: COMPARISON_SHEET_ROLE, kind: 'reference', derivedFrom: null, comparedWith: 'a' },
+      { ingredientId: 'b', mediaKey: 'sheet-pair.png', role: COMPARISON_SHEET_ROLE, kind: 'reference', derivedFrom: null, comparedWith: null },
       { ingredientId: 'a', mediaKey: 'half-1.png', role: COMPARISON_HALF_ROLE, kind: 'reference', derivedFrom: 'sheet-pair.png', comparedWith: null },
       { ingredientId: 'b', mediaKey: 'half-2.png', role: COMPARISON_HALF_ROLE, kind: 'reference', derivedFrom: 'sheet-pair.png', comparedWith: null },
     ]);

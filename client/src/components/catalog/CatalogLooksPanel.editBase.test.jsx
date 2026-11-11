@@ -107,4 +107,13 @@ describe('CatalogLooksPanel Generate preview', () => {
     expect(renderCatalogSheet).toHaveBeenCalledWith('cat-chr-1', { variant: 'comparison', partnerId: 'cat-chr-2' }, { silent: true });
   });
 
+  // The partner's copy would render with the sides swapped, so it offers no Regenerate.
+  it('offers no regenerate on the partner copy of a comparison sheet', async () => {
+    listCatalogSheetVariants.mockResolvedValue({ variants: [{ id: 'comparison', label: 'Comparison (two characters)' }] });
+    render(<CatalogSheetsPanel ingredientId="cat-chr-2" payload={{}}
+      sheetMedia={[{ mediaKey: 'pair.png', kind: 'reference', role: 'sheet:comparison', library: { review: { status: 'bad', feedback: 'Rendering defect: Heights are swapped.' } } }]} />);
+    expect(await screen.findByText('Rendering defect: Heights are swapped.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Regenerate sheet' })).not.toBeInTheDocument();
+  });
+
 });

@@ -445,18 +445,20 @@ export default function CatalogSheetsPanel({
                 const inspectionNote = m.library?.review?.feedback;
                 const role = splitSheetRole(m.role, SHEET_ROLE_PREFIX);
                 const sheetVariant = variants?.find((v) => v.id === role.variant);
-                // A comparison sheet regenerates with its own pair, not whoever is picked now.
+                // A comparison sheet regenerates with its own pair and sides, so only the
+                // starting record's copy (the left side, which records the partner) offers it.
                 const comparedWith = m.library?.comparedWith;
-                const sheetPartner = sheetVariant?.id !== COMPARISON_VARIANT_ID ? null
-                  : comparedWith ? { id: comparedWith, name: partner?.id === comparedWith ? partner.name : 'the other character' } : partner;
+                const isComparisonSheet = sheetVariant?.id === COMPARISON_VARIANT_ID;
+                const sheetPartner = isComparisonSheet && comparedWith ? { id: comparedWith, name: partner?.id === comparedWith ? partner.name : 'the other character' } : null;
+                const canRegenerate = sheetVariant && (!isComparisonSheet || sheetPartner);
                 return (
                   <CatalogMediaTile key={`${m.mediaKey}:${m.kind}`} m={m} label={labelFor(m)} contain
                     missing={missingMedia?.has?.(m.mediaKey)} onDetach={onDetach}
                     armedDetach={armedDetach} onArmDetach={setArmedDetach}
                     badge={bad ? <BadFlag /> : null} pinActions={bad}
                     extraContent={inspectionNote ? <div className="space-y-1 border-t border-port-border p-2"><p className="text-xs text-port-warning break-words">{inspectionNote}</p>
-                      {sheetVariant && <button type="button" onClick={() => handleGenerate(sheetVariant, role.formId || '', sheetPartner)}
-                        disabled={starting || !!blockedReason || jobs.some((job) => job.role === m.role) || (sheetVariant.id === COMPARISON_VARIANT_ID && !sheetPartner)
+                      {canRegenerate && <button type="button" onClick={() => handleGenerate(sheetVariant, role.formId || '', sheetPartner)}
+                        disabled={starting || !!blockedReason || jobs.some((job) => job.role === m.role)
                           || (sheetVariant.id === variantId && (role.formId || '') === activeFormId && !!preview.error)}
                         className="min-h-11 rounded border border-port-border px-2 py-1 text-xs text-port-accent disabled:opacity-50">Regenerate sheet</button>}
                     </div> : null} />
