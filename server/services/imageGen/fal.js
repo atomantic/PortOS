@@ -88,19 +88,20 @@ const FAL_HOSTED_INPUT_TTL_MS = 60 * 60 * 1000;
 const MAX_REFERENCE_CACHE_ENTRIES = 200;
 
 const uploadGate = createConcurrencyGate(FAL_UPLOAD_CONCURRENCY);
-const referenceUploadCache = new Map();
+const inflightUploads = new Map();
+const completedUploadCache = new Map();
 
 function hashReferenceKey(str) {
   return createHash('sha256').update(str).digest('hex').slice(0, 16);
 }
 
-function evictOldestReferenceCacheEntry() {
-  if (referenceUploadCache.size >= MAX_REFERENCE_CACHE_ENTRIES) {
-    const oldestKey = referenceUploadCache.keys().next().value;
+function evictOldestCompletedCacheEntry() {
+  if (completedUploadCache.size >= MAX_REFERENCE_CACHE_ENTRIES) {
+    const oldestKey = completedUploadCache.keys().next().value;
     if (oldestKey) {
-      const entry = referenceUploadCache.get(oldestKey);
+      const entry = completedUploadCache.get(oldestKey);
       if (entry?.timer) clearTimeout(entry.timer);
-      referenceUploadCache.delete(oldestKey);
+      completedUploadCache.delete(oldestKey);
     }
   }
 }
@@ -128,10 +129,10 @@ function awaitReferenceUploadSubscriber({ entry, cacheKey, signal, deadline }) {
 
     const unsubscribeAndAbortIfEmpty = () => {
       cleanup();
-      if (entry.subscribers.size === 0 && entry.inflight) {
+      if (entry.subscribers.size === 0) {
         entry.controller.abort();
-        if (referenceUploadCache.get(cacheKey) === entry) {
-          referenceUploadCache.delete(cacheKey);
+        if (inflightUploads.get(cacheKey) === entry) {
+          inflightUploads.delete(cacheKey);
         }
       }
     };
@@ -183,24 +184,23 @@ async function uploadReferenceImage({ apiKey, dataUri, signal, deadline }) {
   const dataHash = createHash('sha256').update(dataUri).digest('hex');
   const cacheKey = `${hashReferenceKey(apiKey)}:${dataHash}`;
 
-  const cached = referenceUploadCache.get(cacheKey);
+  const inflight = inflightUploads.get(cacheKey);
+  if (inflight) {
+    return awaitReferenceUploadSubscriber({ entry: inflight, cacheKey, signal, deadline });
+  }
+
+  const cached = completedUploadCache.get(cacheKey);
   if (cached) {
-    if (cached.inflight) {
-      return awaitReferenceUploadSubscriber({ entry: cached, cacheKey, signal, deadline });
-    }
-    if (cached.url && now < cached.expiresAt) {
+    if (now < cached.expiresAt) {
       return cached.url;
     }
     if (cached.timer) clearTimeout(cached.timer);
-    referenceUploadCache.delete(cacheKey);
+    completedUploadCache.delete(cacheKey);
   }
-
-  evictOldestReferenceCacheEntry();
 
   const uploadController = new AbortController();
   const subscribers = new Set();
   const inflightEntry = {
-    inflight: true,
     controller: uploadController,
     subscribers,
     promise: null,
@@ -215,37 +215,36 @@ async function uploadReferenceImage({ apiKey, dataUri, signal, deadline }) {
       signal: uploadController.signal,
     });
   }).then((url) => {
-    if (referenceUploadCache.get(cacheKey) !== inflightEntry) {
-      return url;
+    if (inflightUploads.get(cacheKey) === inflightEntry) {
+      inflightUploads.delete(cacheKey);
     }
-    evictOldestReferenceCacheEntry();
+    evictOldestCompletedCacheEntry();
     const expiresAt = Date.now() + FAL_HOSTED_INPUT_TTL_MS;
     const completedEntry = {
-      inflight: false,
       url,
       expiresAt,
       timer: null,
     };
     const timer = setTimeout(() => {
-      if (referenceUploadCache.get(cacheKey) === completedEntry) {
-        referenceUploadCache.delete(cacheKey);
+      if (completedUploadCache.get(cacheKey) === completedEntry) {
+        completedUploadCache.delete(cacheKey);
       }
     }, FAL_HOSTED_INPUT_TTL_MS);
     timer.unref?.();
     completedEntry.timer = timer;
 
-    referenceUploadCache.set(cacheKey, completedEntry);
+    completedUploadCache.set(cacheKey, completedEntry);
     return url;
   }).catch((err) => {
-    if (referenceUploadCache.get(cacheKey) === inflightEntry) {
-      referenceUploadCache.delete(cacheKey);
+    if (inflightUploads.get(cacheKey) === inflightEntry) {
+      inflightUploads.delete(cacheKey);
     }
     throw err;
   });
   // Prevent unhandled rejection if all subscribers abandon or cancel before the upload settles.
   inflightEntry.promise.catch(() => {});
 
-  referenceUploadCache.set(cacheKey, inflightEntry);
+  inflightUploads.set(cacheKey, inflightEntry);
   return awaitReferenceUploadSubscriber({ entry: inflightEntry, cacheKey, signal, deadline });
 }
 
@@ -671,13 +670,18 @@ export const _internals = {
   encodeInputImage,
   firstImageUrl,
   uploadReferenceImage,
-  referenceUploadCache,
+  inflightUploads,
+  completedUploadCache,
+  referenceUploadCache: completedUploadCache,
   uploadGate,
   resetReferenceUploadCache: () => {
-    for (const entry of referenceUploadCache.values()) {
-      if (entry?.timer) clearTimeout(entry.timer);
-      if (entry?.inflight) entry.controller?.abort();
+    for (const entry of inflightUploads.values()) {
+      entry.controller?.abort();
     }
-    referenceUploadCache.clear();
+    inflightUploads.clear();
+    for (const entry of completedUploadCache.values()) {
+      if (entry?.timer) clearTimeout(entry.timer);
+    }
+    completedUploadCache.clear();
   },
 };

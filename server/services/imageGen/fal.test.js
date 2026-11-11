@@ -465,7 +465,7 @@ describe('imageGen/fal — generateImage', () => {
     await uploadStarted;
     // Wait until job2 has joined the shared upload subscriber set before canceling job1
     await vi.waitFor(() => {
-      const entries = [...fal._internals.referenceUploadCache.values()];
+      const entries = [...fal._internals.inflightUploads.values()];
       expect(entries.some((e) => e.subscribers?.size === 2)).toBe(true);
     });
 
