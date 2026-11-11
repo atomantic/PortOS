@@ -1,16 +1,20 @@
 import { parse } from '@babel/parser';
+import { posix } from 'node:path';
 
 // A cheap, conservative caller gate: aliases retain the imported helper name.
 // Unicode escapes may spell an identifier without its literal name, so those
 // sources still get parsed. Comments/strings are harmless false positives.
 // `safeJSONParse` admits the lenient raw-read shape (#12440).
-export function mayReadJsonFile(source) {
-  return source.includes('readJSONFile') || source.includes('safeJSONParse') || source.includes('\\u');
+export function mayReadJsonFile(source, registry = new Map()) {
+  return source.includes('readJSONFile') || source.includes('safeJSONParse') || source.includes('\\u')
+    || [...registry.values()].some(({ wrappers }) => [...wrappers.keys()].some(name => name === 'default'
+      ? source.includes('default') || /\bimport\s+[^\s{*]/.test(source) : source.includes(name)));
 }
 
 // Test-only syntax scan, never imports a service or reads runtime data.
 // Matches direct helper names (including imported aliases), not arbitrary
-// wrappers, namespace calls, variable aliases, or cross-module dataflow.
+// namespace calls, variable aliases, or general cross-module dataflow.
+// Exported direct-return wrappers resolve exactly one import hop below.
 const AST_METADATA = new Set(['loc', 'extra', 'tokens', 'comments']);
 
 function walk(node, visit) {
@@ -86,18 +90,122 @@ function expressionKey(node, tokens, source) {
   return parts.join(' ');
 }
 
-/** Same-module first-argument syntax equality; no control-flow proof implied. */
-export function scanJsonWriteback(source) {
-  const ast = parse(source, { sourceType: 'module', tokens: true });
-  const names = new Map(['readJSONFile', 'readJSONFileStrict', 'atomicWrite', 'tryReadFile', 'readFile', 'safeJSONParse'].map(name => [name, name]));
+const HELPER_NAMES = ['readJSONFile', 'readJSONFileStrict', 'atomicWrite', 'tryReadFile', 'readFile', 'safeJSONParse'];
+
+function helperNames(ast) {
+  const names = new Map(HELPER_NAMES.map(name => [name, name]));
   for (const statement of ast.program.body) {
     if (statement.type !== 'ImportDeclaration') continue;
     for (const specifier of statement.specifiers) {
-      if (specifier.type === 'ImportSpecifier' && names.has(specifier.imported.name)) {
+      if (specifier.type === 'ImportSpecifier' && HELPER_NAMES.includes(specifier.imported.name)) {
         names.set(specifier.local.name, specifier.imported.name);
       }
     }
   }
+  return names;
+}
+
+const importedModule = (module, specifier) => posix.normalize(posix.join(posix.dirname(module), specifier));
+const unawait = node => node?.type === 'AwaitExpression' ? unawait(node.argument) : node;
+
+/** Derive direct returned reads, never follow another wrapper. */
+export function buildJsonReadWrapperRegistry(modules) {
+  const registry = new Map();
+  for (const [module, source] of modules) {
+    if (!mayReadJsonFile(source) && !source.includes('tryReadFile')) continue;
+    const ast = parse(source, { sourceType: 'module' });
+    const names = helperNames(ast);
+    const functions = new Map();
+    const constants = new Set();
+    const exports = new Map();
+    for (const statement of ast.program.body) {
+      const declaration = statement.declaration ?? statement;
+      if (declaration.type === 'FunctionDeclaration') functions.set(declaration.id?.name, declaration);
+      if (declaration.type === 'VariableDeclaration') {
+        for (const binding of declaration.declarations) {
+          if (binding.id.type !== 'Identifier') continue;
+          if (FUNCTION_NODES.has(binding.init?.type)) functions.set(binding.id.name, binding.init);
+          else if (declaration.kind === 'const') constants.add(binding.id.name);
+        }
+      }
+      if (statement.type === 'ExportNamedDeclaration') {
+        if (declaration.type === 'FunctionDeclaration') exports.set(declaration.id.name, declaration.id.name);
+        if (declaration.type === 'VariableDeclaration') {
+          for (const binding of declaration.declarations) if (binding.id.type === 'Identifier') exports.set(binding.id.name, binding.id.name);
+        }
+        if (!statement.source) for (const specifier of statement.specifiers) exports.set(specifier.exported.name, specifier.local.name);
+      }
+      if (statement.type === 'ExportDefaultDeclaration') {
+        if (FUNCTION_NODES.has(declaration.type)) functions.set('default', declaration);
+        exports.set('default', declaration.type === 'Identifier' ? declaration.name : 'default');
+      }
+    }
+    const wrappers = new Map();
+    for (const [exportName, local] of exports) {
+      const fn = functions.get(local);
+      if (!fn) continue;
+      // Nested callback returns do not return the containing wrapper's value.
+      const bindings = new Map();
+      const returns = fn.body.type === 'BlockStatement'
+        ? fn.body.body.filter(node => node.type === 'ReturnStatement').map(node => node.argument) : [fn.body];
+      if (fn.body.type === 'BlockStatement') {
+        for (const statement of fn.body.body) {
+          if (statement.type !== 'VariableDeclaration') continue;
+          for (const binding of statement.declarations) if (binding.id.type === 'Identifier') bindings.set(binding.id.name, binding.init);
+        }
+      }
+      const readPaths = (expression, seen = new Set(), raw = false) => {
+        const node = unawait(expression);
+        if (!node) return [];
+        if (node.type === 'Identifier' && bindings.has(node.name) && !seen.has(node.name)) {
+          return readPaths(bindings.get(node.name), new Set([...seen, node.name]), raw);
+        }
+        if (raw && node.type === 'LogicalExpression') return [...readPaths(node.left, seen, raw), ...readPaths(node.right, seen, raw)];
+        if (node.type !== 'CallExpression' || node.callee.type !== 'Identifier') return [];
+        const name = names.get(node.callee.name);
+        if (name === 'safeJSONParse') return readPaths(node.arguments[0], seen, true);
+        if (name === 'readJSONFile' && !isStrict(node.arguments[2])
+          || name === 'tryReadFile' || raw && name === 'readFile') return [node.arguments[0]];
+        return [];
+      };
+      const descriptors = returns.flatMap(expression => readPaths(expression)).flatMap(path => {
+        if (path?.type !== 'Identifier') return [];
+        const pathParamIndex = fn.params.findIndex(param => (param.type === 'AssignmentPattern' ? param.left : param).name === path.name);
+        if (pathParamIndex >= 0) return [{ pathParamIndex }];
+        return constants.has(path.name) && !bindings.has(path.name) ? [{ pathKey: `${module}#${path.name}` }] : [];
+      });
+      if (descriptors.length) wrappers.set(exportName, descriptors);
+    }
+    if (wrappers.size) {
+      registry.set(module, { wrappers, pathExports: new Map([...exports].filter(([, local]) => constants.has(local))) });
+    }
+  }
+  return registry;
+}
+
+/** Same-path syntax equality plus one imported wrapper hop; no control-flow proof. */
+export function scanJsonWriteback(source, { module = '', registry = new Map() } = {}) {
+  const ast = parse(source, { sourceType: 'module', tokens: true });
+  const names = helperNames(ast);
+  const wrappers = new Map();
+  const importedPaths = new Map();
+  for (const statement of ast.program.body) {
+    if (statement.type !== 'ImportDeclaration' || !statement.source.value.startsWith('.')) continue;
+    const target = importedModule(module, statement.source.value);
+    for (const specifier of statement.specifiers) {
+      const exported = specifier.type === 'ImportDefaultSpecifier' ? 'default' : specifier.imported?.name;
+      const descriptors = registry.get(target)?.wrappers.get(exported);
+      if (descriptors) wrappers.set(specifier.local.name, descriptors);
+      // Preserve established direct-read exception keys; canonicalize only
+      // constants which actually identify registered wrapper reads.
+      const constant = registry.get(target)?.pathExports.get(exported);
+      if (constant && [...registry.get(target).wrappers.values()].flat().some(entry => entry.pathKey === `${target}#${constant}`)) {
+        importedPaths.set(specifier.local.name, `${target}#${constant}`);
+      }
+    }
+  }
+  const pathKey = node => node.type === 'Identifier' && importedPaths.has(node.name)
+    ? importedPaths.get(node.name) : expressionKey(node, ast.tokens, source);
   const reads = new Set();
   const strictReads = new Set();
   const writes = new Set();
@@ -108,7 +216,7 @@ export function scanJsonWriteback(source) {
     walk(expression, node => {
       const name = calleeName(node);
       if ((name === 'tryReadFile' || name === 'readFile') && node.arguments[0]) {
-        keys.push(expressionKey(node.arguments[0], ast.tokens, source));
+        keys.push(pathKey(node.arguments[0]));
       }
     });
     return keys;
@@ -133,6 +241,14 @@ export function scanJsonWriteback(source) {
       // contribute a raw JSON read.
       scopes.at(-1).set(node.id.name, node.init);
     }
+    if (node.type === 'CallExpression' && node.callee.type === 'Identifier' && wrappers.has(node.callee.name)) {
+      for (const descriptor of wrappers.get(node.callee.name)) {
+        const argument = node.arguments[descriptor.pathParamIndex];
+        if (descriptor.pathKey) reads.add(descriptor.pathKey);
+        else if (argument) reads.add(pathKey(argument));
+      }
+      return;
+    }
     const name = calleeName(node);
     if (!name || !node.arguments[0]) return;
     if (name === 'safeJSONParse') {
@@ -141,7 +257,7 @@ export function scanJsonWriteback(source) {
       return;
     }
     if (name === 'tryReadFile' || name === 'readFile') return;
-    const key = expressionKey(node.arguments[0], ast.tokens, source);
+    const key = pathKey(node.arguments[0]);
     if (name === 'atomicWrite') writes.add(key);
     else if (name === 'readJSONFileStrict' || isStrict(node.arguments[2])) strictReads.add(key);
     else reads.add(key);
