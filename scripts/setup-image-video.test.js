@@ -1600,8 +1600,12 @@ describe('FLUX.2 install is hash-pinned on every platform', () => {
   });
 
   it('Apple Silicon installs from the lock with --require-hashes and resolves nothing', () => {
+    const direct = readFileSync(join(REPO_ROOT, 'scripts/requirements-flux2-mlx.txt'), 'utf8')
+      .split(/\r?\n/).filter((line) => /^[\w.-]+(\[[\w,-]+\])?==/.test(line))
+      .map((line) => line.replace(/\[[\w,-]+\]/, ''));
+    for (const pin of direct) expect(lock).toContain(`${pin} ;`);
     expect(appleBranch).toContain('if is_apple_silicon; then');
-    expect(appleBranch).toContain('pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-flux2-mlx.lock.txt"');
+    expect(appleBranch).toContain('pip install --require-hashes --no-deps --only-binary :all: -r "$SCRIPT_DIR/requirements-flux2-mlx.lock.txt"');
     expect(appleBranch).not.toMatch(/pip install --upgrade/);
     expect(appleBranch).not.toContain('git+https');
   });

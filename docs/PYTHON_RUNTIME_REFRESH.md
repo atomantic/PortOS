@@ -241,3 +241,61 @@ isolated major migration and previously recorded platform-specific check.
 This Apple Silicon-only slice changes no CUDA profile and does not enable
 Windows/Linux H3 MLX support or resolve Pixal3D CUDA #15710. No production
 weights, provider session or paid generation was started.
+
+## Fifth-slice FLUX.2 Apple Silicon SDNQ patch (2026-11-11)
+
+The FLUX.2 Apple Silicon profile updates **SDNQ 0.2.8 → 0.2.9**. Its other
+52 lock entries, Python/platform markers and artifact hashes remain unchanged,
+including Torch **2.15.0**, TorchVision **0.29.2**, Diffusers **0.42.1** and
+Transformers **5.22.1**. Older untouched pins remain pending investigation under
+#15769. No immutable native source or CUDA profile changes in this slice.
+
+[SDNQ 0.2.9's published metadata](https://pypi.org/pypi/sdnq/0.2.9/json)
+retains the Python 3.10 floor and the same four unversioned dependencies (Torch,
+Diffusers, Transformers and Accelerate), within the profile's Python 3.11+
+contract. Its universal wheel was published on 2026-11-03 at 19:57:57 UTC and
+its downloaded SHA-256 matched PyPI. The
+[patch release notes](https://github.com/Disty0/sdnq/releases/tag/v0.2.9) describe
+attention fixes and changed dynamic-quantization loss behavior. The shipped
+`flux2_macos.py` loader imports SDNQ for quantizer registration before calling
+Diffusers `from_pretrained`; the new wheel preserves that registration for both
+Diffusers and Transformers. No runner API adaptation is needed by these checks.
+Production prequantized-model loading and output quality remain unverified.
+
+The complete **53-entry** lock (51 package names, including Python-dependent
+NumPy and NetworkX versions) was regenerated online with SHA-256-verified
+**uv 0.13.7**, `--only-binary :all:` and freshly computed seven-day cutoff
+`--exclude-newer 2026-11-04T00:00:00Z`. The header records the command, reusing
+the existing lock and upgrading only SDNQ. All **1,016 hashes** match non-yanked
+PyPI artifacts older than the cutoff. OSV querybatch, including malicious-package
+(`MAL-`) records, returned zero findings across all 53 package/version identities.
+This does not separately audit bundled native libraries. Apple Silicon
+Install/Repair now requires wheels as well as hashes and `--no-deps`, preventing
+hashed source archives from fetching unlocked build dependencies.
+
+Verification used fresh scratch Apple Silicon environments on CPython
+**3.11.17** and **3.12.11**:
+
+- Both environments installed the complete lock with `uv pip sync --require-hashes --only-binary
+  :all:` and passed `uv pip check`.
+- Native CPU checks imported the actual FLUX.2/Qwen-Image pipeline classes and
+  verified SDNQ's Diffusers/Transformers config/quantizer registration. A tiny
+  random-weight two-layer network became `SDNQLinear` layers and produced finite
+  `(2, 128)` output. These are synthetic quantization/API checks, not production
+  FLUX.2 inference or an evaluation of image quality or acceleration.
+- Installer/profile/runtime tests retain hash-only installation, unsupported-host
+  refusal, failed-install/probe readiness gating and CUDA fresh/Repair coverage;
+  the Apple Silicon contract also checks every source pin against the lock and
+  wheel-only installation.
+
+Remaining under #15769: production FLUX.2 SDNQ model loading/render quality,
+Apple Silicon MPS execution, and independent Windows/Linux CUDA validation.
+The CUDA SDNQ pins remain **0.2.8**: the existing multi-index regeneration command
+refuses the cooldown because `https://download.pytorch.org/whl/cu126` exposes
+Pillow 13.0.0 artifacts without upload timestamps. This is resolver metadata
+availability, not evidence that SDNQ 0.2.9 is incompatible. The next CUDA slice
+must scope the CUDA index to Torch or supply a complete hash-verified index with
+verified publication dates before regenerating both target locks; do not remove
+the cooldown or guess artifact ages. All earlier profile, isolated-major and
+target-specific checks remain pending. No production weights, provider session
+or paid generation was started; Pixal3D CUDA remains unresolved under #15710.
