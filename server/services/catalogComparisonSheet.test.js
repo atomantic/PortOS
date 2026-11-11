@@ -10,7 +10,7 @@ vi.mock('../lib/pathSafety.js', async (importOriginal) => ({
   resolveImageInputPath: (path) => (basename(path).startsWith('sheet-') ? join(files.dir, basename(path)) : null),
 }));
 
-const { COMPARISON_HALF_ROLE, COMPARISON_SHEET_ROLE, publishComparisonSheet } = await import('./catalogComparisonSheet.js');
+const { COMPARISON_HALF_ROLE, COMPARISON_SHEET_ROLE, publishComparisonSheet, buildCharacterComparisonSheetPrompt } = await import('./catalogComparisonSheet.js');
 
 // A catalog that accepts every attach, for the cases that only watch the cut.
 const openDb = { getIngredient: async (id) => ({ id }), attachGeneratedMedia: async () => ({ attached: true }) };
@@ -78,5 +78,29 @@ describe('comparison sheet', () => {
     expect(await publishComparisonSheet({ ...input, partnerId: 'gone' }, { db, saveImage })).toBeNull();
     expect(await publishComparisonSheet({ ...input, partnerId: 'a' }, { db, saveImage })).toBeNull();
     expect(rows).toHaveLength(3);
+
+    // An edited sheet keeps its lineage on the partner's copy, and its halves come from the edit.
+    await writeSheet('sheet-edit.png', 20);
+    await publishComparisonSheet({ ...input, filename: 'sheet-edit.png', derivedFrom: { mediaKey: 'sheet-pair.png', kind: 'reference' } }, { db, saveImage });
+    expect(rows.slice(3).map((row) => [row.ingredientId, row.mediaKey, row.derivedFrom])).toEqual([
+      ['b', 'sheet-edit.png', 'sheet-pair.png'], ['a', 'half-3.png', 'sheet-edit.png'], ['b', 'half-4.png', 'sheet-edit.png'],
+    ]);
+  });
+
+  // An image model told only "even ticks, a little above the taller person"
+  // drew uneven marks and heads above their stated heights; the rulers' range
+  // and each head's place on them are stated outright, in the captions' units.
+  it('states each ruler as whole equal intervals reaching past the taller person', () => {
+    const person = (name, height) => ({ name, ...(height ? { stats: [{ label: 'Height', value: height }] } : {}) });
+    const sheet = (a, b) => buildCharacterComparisonSheetPrompt(null, a, b).prompt;
+    const feet = sheet(person('Example Lead', '5 ft 6 in'), person('Example Partner', '6 ft'));
+    expect(feet).toContain('from 0 at the floor line to 7 ft');
+    expect(feet).toContain('7 one-foot intervals of exactly equal length, the first (0 to 1 ft) the same as every other');
+    expect(feet).toContain("Example Lead's head top sits at 5 ft 6 in, 5.5 of the 7 intervals");
+    expect(feet).toContain("Example Partner's head top sits at 6 ft, 6 of the 7 intervals");
+    const metric = sheet(person('Example Lead', '180 cm'), person('Example Partner', '165 cm'));
+    expect(metric).toContain('to 200 cm');
+    expect(metric).toContain("Example Lead's head top sits at 180 cm, 3.6 of the 4 intervals");
+    expect(sheet(person('Example Lead'), person('Example Partner'))).toContain('Every ruler interval is the same length');
   });
 });

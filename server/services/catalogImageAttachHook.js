@@ -119,7 +119,8 @@ const hook = createMediaJobImageHook({
     const partnerId = typeof tag.comparison?.partnerId === 'string' ? tag.comparison.partnerId : null;
     if (partnerId && status !== 'gone') {
       const { publishComparisonSheet } = await import('./catalogComparisonSheet.js');
-      const published = await publishComparisonSheet({ ingredientId, partnerId, filename, metadata: await readImageGenerationMetadata(filename) });
+      const published = await publishComparisonSheet({ ingredientId, partnerId, filename,
+        metadata: await readImageGenerationMetadata(filename), derivedFrom: tag.library?.derivedFrom ?? null });
       if (published) {
         console.log(`🏷️ comparison sheet ${filename} → partner ${partnerId.slice(0, 8)}, halves ${published.left} / ${published.right}`);
         catalogEvents.emit('primitive-changed', { ingredientId: partnerId });
