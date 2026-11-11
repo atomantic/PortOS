@@ -146,7 +146,7 @@ export default function BlenderCutTab({ blender, onGoToFinalRender }) {
           </ul>
         </div>
       ) : (
-        <p className="text-xs text-port-text-muted">No cut yet. Assemble a preview cut to watch the film against the song.</p>
+        <p className="text-xs text-port-text-muted">No cut yet. Film (live) in the preview already plays the shots against the song; assemble a cut for a file to review or publish as the review draft.</p>
       )}
 
       <div className="flex min-w-0 flex-wrap items-center gap-2 border-t border-port-border pt-2 text-xs text-port-text-muted">

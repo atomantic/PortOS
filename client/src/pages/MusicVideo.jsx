@@ -1881,9 +1881,7 @@ function ProjectWorkspace({
     seekToScene,
   } : null;
   const StageView = STAGE_VIEWS[activeStage];
-  // A Blender film is watched in its own panel on Shots (shot player, cuts), so that panel leads the step and no dock sits above it.
-  const blenderOwnsStage = blenderMode && activeStage === 'produce';
-  const playerFirst = PLAYER_FIRST_STAGES.has(activeStage) && !blenderOwnsStage;
+  const playerFirst = PLAYER_FIRST_STAGES.has(activeStage);
   const projectStatus = !selected ? null : statusKnown && productionReview.readiness
     ? describeProjectStatus(stageProject, { progress, nextAction: productionNextAction, reviewingDraft, reviewDraftState })
     : statusKnown
@@ -1894,7 +1892,8 @@ function ProjectWorkspace({
   // proof approval (including an already-approved or stale registered proof).
   const proofRequested = activeStage === 'produce' && ['#mv-review-proof', '#mv-review-render'].includes(location.hash);
   const reviewStage = selected ? (proofRequested ? 'proof' : approvalStageFor(activeStage, selected, productionReview.readiness, productionReview.proof.active)) : null;
-  const previewSources = selected ? listPreviewSources(selected, { finalVideoSrc: finalVideo.src, leadWith: activeStage === 'review' ? 'drafts' : activeStage === 'produce' ? 'storyboard' : activeStage === 'setup' ? 'lyrics' : activeStage === 'previz' ? 'previz' : 'final' }) : [];
+  // `stageProject`: a Blender film's live composite is offered once the film state lists synced shots.
+  const previewSources = selected ? listPreviewSources(stageProject, { finalVideoSrc: finalVideo.src, leadWith: activeStage === 'review' ? 'drafts' : activeStage === 'produce' ? 'storyboard' : activeStage === 'setup' ? 'lyrics' : activeStage === 'previz' ? 'previz' : 'final' }) : [];
 
   return (
     <>
@@ -2021,7 +2020,7 @@ function ProjectWorkspace({
               />
               </>
             )}
-            dock={NO_DOCK_STAGES.has(activeStage) || blenderOwnsStage ? null : withTitleCard(
+            dock={NO_DOCK_STAGES.has(activeStage) ? null : withTitleCard(
               <PreviewDock
                 project={selected}
                 sources={previewSources}
@@ -2033,6 +2032,7 @@ function ProjectWorkspace({
                 onToggleExpanded={!playerFirst ? () => setDockExpanded((expanded) => !expanded) : undefined}
                 onEditShot={editShot}
                 onProject={replaceProject}
+                blender={blenderMode ? blender : null}
               />,
             )}
           >

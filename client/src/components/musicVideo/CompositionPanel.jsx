@@ -15,9 +15,9 @@ import { MUSIC_VIDEO_MEDIA_MODE_LABELS, musicVideoMediaMode } from '../../../../
  * code-rendered, composition-document or Blender film panel. The preview of
  * what this produces is docked beside the step.
  *
- * A Blender film leads with its own panel (its shots and cuts are the
- * preview) and keeps the Film look: that finishing pass runs over its final
- * render like any other. It has no typography panel (lettering is authored in
+ * A Blender film leads with its own panel (the docked preview plays its
+ * shots' renders live) and keeps the Film look: that finishing pass runs over
+ * its final render like any other. It has no typography panel (lettering is authored in
  * Blender, and the automatic lyric overlay is not applied). Its grade is
  * available alongside the Film look as part of the finishing controls.
  */

@@ -184,11 +184,14 @@ export function boardJobEstimate(project) {
   return { jobs, knownUsd, unpriced, suggestedMaxGenerations: Math.min(500, Math.max(1, Math.ceil(jobs * 1.25))) };
 }
 
+const FILM_LIVE_LABEL = 'Film (live)';
+
 /**
  * The dock's live composite. Layered styles can play it without final-quality
- * shot segments: a composition document plays its document, and a composed
- * video cuts the selected takes. Every other style keeps the same row disabled
- * and says why, so the picker does not drop it silently.
+ * shot segments: a composition document plays its document, a composed
+ * video cuts the selected takes, and a Blender film cuts its shots' renders
+ * once it has synced shots (`project.blenderShots`). Every other style keeps
+ * the same row disabled and says why, so the picker does not drop it silently.
  */
 function liveCompositeSource(project) {
   const mode = project?.composition?.mode || 'concat';
@@ -198,20 +201,24 @@ function liveCompositeSource(project) {
       : { id: 'document', kind: 'document', label: 'Composition (live)', disabled: true, reason: 'Attach a composition document to play the live composite.' };
   }
   if (mode === 'composed') return { id: 'composite', kind: 'composite', label: 'Composition (live)' };
+  if (mode === 'blender') {
+    const film = { id: 'composite', kind: 'composite', label: FILM_LIVE_LABEL };
+    return project.blenderShots?.total > 0
+      ? film
+      : { ...film, disabled: true, reason: 'Sync shots from scripts in Blender film on Shots to watch the film live.' };
+  }
   const reason = mode === 'code'
     ? 'Code-rendered video draws the song in code and has no take composite.'
     : mode === 'eidoverse'
       ? 'Eidoverse video renders a saved scene and has no take composite.'
-      : mode === 'blender'
-        ? 'A Blender film is rendered shot by shot: watch its shots and cuts in Blender film on Shots.'
-        : 'Footage cuts the clips as they are and has no live composite.';
+      : 'Footage cuts the clips as they are and has no live composite.';
   return { id: 'composite', kind: 'composite', label: 'Composition (live)', disabled: true, reason };
 }
 
 const previewChangeName = (source) => (source.id === 'document'
   ? 'Composition (live) from the composition document'
   : source.id === 'composite'
-    ? 'Composition (live) from the selected takes'
+    ? (source.label === FILM_LIVE_LABEL ? 'Film (live) from the Blender shot renders' : 'Composition (live) from the selected takes')
     : source.label);
 
 /**
@@ -223,8 +230,10 @@ export function describePreviewSourceChange(before, after) {
   const playable = (list) => (list || []).filter((source) => !source.disabled);
   const beforePlayable = playable(before);
   const afterPlayable = playable(after);
-  const dropped = beforePlayable.filter((source) => !afterPlayable.some((next) => next.id === source.id));
-  const added = afterPlayable.filter((source) => !beforePlayable.some((prev) => prev.id === source.id));
+  // The live composite keeps one id across styles, so what it plays from tells two of them apart.
+  const same = (a, b) => a.id === b.id && previewChangeName(a) === previewChangeName(b);
+  const dropped = beforePlayable.filter((source) => !afterPlayable.some((next) => same(next, source)));
+  const added = afterPlayable.filter((source) => !beforePlayable.some((prev) => same(prev, source)));
   if (!dropped.length && !added.length) return '';
   const parts = [];
   if (dropped.length) parts.push(`drops ${dropped.map(previewChangeName).join(', ')}`);
@@ -244,7 +253,8 @@ export function describePreviewSourceChange(before, after) {
  * the song under each shot's frame or card — so a project with a track and
  * shots always has something to watch — and after it the lyric timing
  * playthrough once the words are aligned. The live composite is always
- * listed: a style that cannot play it is disabled and carries `reason`.
+ * listed ("Film (live)" for a Blender film): a style that cannot play it is
+ * disabled and carries `reason`.
  * Each entry has a stable `id` (the `?play=` value) and a `label` for the source picker.
  */
 export function listPreviewSources(project, { finalVideoSrc = null, leadWith = 'final' } = {}) {

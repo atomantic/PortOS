@@ -172,11 +172,42 @@ MUSIC_VIDEO_BLENDER_NOT_SYNCED`) until the shots are synced again.
    run and can cancel it, and it gives up by itself after five minutes.
 2. **Render stills** to check a look: one frame per shot (its midpoint, or the song times you ask for) at full size.
 3. **Render previews**: scaled JPEG frames and a shot video, fast enough to iterate on.
-4. **Assemble a preview cut** to watch the whole film with the song. Shots without a video are black for their own
+4. **Watch the film live** in the preview at the top of the Shots step: the whole film against the song, straight
+   from the shot renders, with nothing to assemble (see [Watching the film](#watching-the-film)).
+5. **Assemble a preview cut** when you want the film as a file. Shots without a video are black for their own
    length. **Also publish as review draft** makes the cut the project's review draft.
-5. Leave a **note** and a status (`todo`, `wip`, `review`, `approved`) on each shot.
-6. **Render finals**: full-size PNG frames and a shot video.
-7. **Final render** (the project's Final render step) joins the final shot videos and the song.
+6. Leave a **note** and a status (`todo`, `wip`, `review`, `approved`) on each shot.
+7. **Render finals**: full-size PNG frames and a shot video.
+8. **Final render** (the project's Final render step) joins the final shot videos and the song.
+
+### Watching the film
+
+There are three ways to watch, from the quickest to the most exact.
+
+- **One shot.** The film panel's Shots tab plays the selected shot's render on a loop, with the song under it.
+- **The whole film, live.** The preview docked at the top of the Shots step plays **Film (live)** once the shots
+  are synced; the other steps offer it in the preview's source picker. It needs no job and makes no file. Each
+  shot's clip is the best render it has, played from its first frame at normal speed and cut on the song: a
+  current final, else a current preview, else an out-of-date final, else an out-of-date preview. The line under
+  the picture says which one is playing. A shot with no finished render is black, labelled **Not rendered yet**,
+  for exactly its length, so the film keeps its timing. A render that finishes while the page is open takes its
+  place without a reload.
+
+  Over the shots, the browser draws what a cut paints: the project's film look (turn on **Film look** under the
+  picture; it is off by default because it is heavy on a phone), the effects set on each mirrored Board scene, on
+  its cuts and at moments inside it (glitches, gate jumps, shutter blinks, light leaks), and the title card. A
+  change to the film look, a scene's Effects or the title card shows in the player at once. As in a cut, wipes
+  are not drawn and no lyrics are laid over the film. The color grade is not previewed live; an assembled cut
+  shows it. Seeking, the shot buttons and frame stepping work as they do for footage, and a frame step is one
+  frame at the film's own frame rate.
+
+  The live preview and the panel's shot player both play the song, so they take turns: starting one pauses the
+  other, and the shot player does not start by itself (a newly selected shot, a render that just landed) while
+  the film is playing.
+- **An assembled cut** (the film panel's Cut tab) is a video file: the shot videos at one quality joined with the
+  song, with the grade, effects and title card painted in and, when ticked, the film look pass. Assemble one to
+  see exactly what will be encoded, to share it, or to publish it as the review draft. A cut holds the renders as
+  they were when it was assembled; the live preview always plays the current ones.
 
 A render is **stale** (out of date) when the files in its shot's `deps`, the shot's times, the settings it used
 (engine, size, frame rate, scale, samples) or a film option have changed since; the panel says which

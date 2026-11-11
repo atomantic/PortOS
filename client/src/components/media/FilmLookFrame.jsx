@@ -37,22 +37,20 @@ export default function FilmLookFrame({ look, frame = 0, playing = false, classN
     observer.observe(box);
     return () => observer.disconnect();
   }, [active]);
-  if (!active) return <div ref={ref} className={`relative ${className}`}>{children}</div>;
-  if (!playing) {
-    const built = filmLookFilterMarkup(settings, { frame, width: size.width, height: size.height, id: filterId });
-    return (
-      <div ref={ref} className={`relative ${className}`} style={built.active ? { filter: built.css } : undefined} data-film-look={built.active ? 'exact' : undefined}
-        data-film-look-frame={frame} data-film-look-width={size.width} data-film-look-height={size.height}>
-        {built.active && <div aria-hidden="true" dangerouslySetInnerHTML={{ __html: built.svg }} />}
-        {children}
-      </div>
-    );
-  }
-  const motion = filmLookMotionLayers(settings, { frame, width: size.width, height: size.height });
+  const exact = active && !playing ? filmLookFilterMarkup(settings, { frame, width: size.width, height: size.height, id: filterId }) : null;
+  const motion = active && playing ? filmLookMotionLayers(settings, { frame, width: size.width, height: size.height }) : null;
+  // Off, paused or playing, the children sit in one wrapper at one place in the tree, so a
+  // switch between the renderings (play, pause, the look going on or off) keeps them mounted:
+  // a video remounted there loads again, and its picture is gone until it has. Outside the
+  // playing rendering the wrapper makes no box, so the children lay out as this box's own.
   return (
-    <div ref={ref} className={`relative overflow-hidden ${className}`} data-film-look="motion">
-      <div className="absolute inset-0" style={{ filter: motion.filter || undefined, transform: motion.transform || undefined }} data-film-look-layer="picture">{children}</div>
-      {motion.overlays.map((layer) => (
+    <div ref={ref} className={`relative ${motion ? 'overflow-hidden ' : ''}${className}`} style={exact?.active ? { filter: exact.css } : undefined}
+      data-film-look={motion ? 'motion' : exact?.active ? 'exact' : undefined}
+      data-film-look-frame={exact ? frame : undefined} data-film-look-width={exact ? size.width : undefined} data-film-look-height={exact ? size.height : undefined}>
+      {exact?.active && <div aria-hidden="true" dangerouslySetInnerHTML={{ __html: exact.svg }} />}
+      <div className={motion ? 'absolute inset-0' : 'contents'} style={motion ? { filter: motion.filter || undefined, transform: motion.transform || undefined } : undefined}
+        data-film-look-layer={motion ? 'picture' : undefined}>{children}</div>
+      {motion?.overlays.map((layer) => (
         <div
           key={layer.key}
           aria-hidden="true"

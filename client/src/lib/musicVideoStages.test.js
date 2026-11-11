@@ -455,7 +455,15 @@ describe('listPreviewSources', () => {
     expect(documentMissing[0]).toMatchObject({ id: 'document', disabled: true, reason: expect.stringMatching(/Attach a composition document/) });
     expect(listPreviewSources({ composition: { mode: 'code' } })[0].reason).toMatch(/code/);
     expect(listPreviewSources({ composition: { mode: 'eidoverse' } })[0].reason).toMatch(/Eidoverse/);
-    expect(listPreviewSources({ composition: { mode: 'blender' } })[0]).toMatchObject({ id: 'composite', disabled: true, reason: expect.stringMatching(/Blender film/) });
+    // A Blender film plays its shots' renders live once it has synced shots; before that the row says what it waits for.
+    const film = { composition: { mode: 'blender' }, trackId: 't1', scenes: [scene()] };
+    expect(listPreviewSources(film)[0]).toMatchObject({ id: 'composite', disabled: true, reason: expect.stringMatching(/Sync shots from scripts/) });
+    expect(listPreviewSources({ ...film, blenderShots: { total: 0, finalReady: 0, ready: false } })[0]).toMatchObject({ id: 'composite', disabled: true });
+    const synced = listPreviewSources({ ...film, blenderShots: { total: 3, finalReady: 0, ready: false } }, { leadWith: 'storyboard' });
+    expect(synced[0]).toEqual({ id: 'composite', kind: 'composite', label: 'Film (live)' });
+    expect(synced.map((source) => source.id)).toEqual(['composite', 'animatic']);
+    expect(describePreviewSourceChange(synced, listPreviewSources({ ...film, composition: { mode: 'composed' } })))
+      .toBe('Preview drops Film (live) from the Blender shot renders and adds Composition (live) from the selected takes.');
     const fromDocument = listPreviewSources({ composition: { mode: 'document', document: { directory: 'd' } }, trackId: 't1', scenes: [scene()] });
     const toComposed = listPreviewSources({ ...composed });
     expect(describePreviewSourceChange(fromDocument, toComposed)).toBe('Preview drops Composition (live) from the composition document and adds Composition (live) from the selected takes.');

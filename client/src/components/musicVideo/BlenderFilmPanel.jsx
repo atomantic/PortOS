@@ -29,7 +29,8 @@ const TABS = [
  * shot list; this panel drives and reviews them — Shots (timeline, list,
  * player, renders, notes), Cut (work-in-progress cuts), Settings (render
  * settings, sync, workspace, Blender setup), Files (the source) and Jobs.
- * The open tab is `?btab=`. Its state is `board.blender`
+ * The whole film plays in the docked preview above it ("Film (live)"), from
+ * the same state. The open tab is `?btab=`. Its state is `board.blender`
  * (`useMusicVideoBlender`), read once and pushed over the socket.
  */
 export default function BlenderFilmPanel({ board }) {
@@ -92,7 +93,7 @@ export default function BlenderFilmPanel({ board }) {
             {tab === 'jobs' && <BlenderJobsTab blender={blender} />}
           </div>
           <p className="flex min-w-0 flex-wrap items-center gap-x-2 border-t border-port-border pt-2 text-xs text-port-text-muted">
-            <span className="min-w-0">Grain, gate weave, halation and tape effects are applied when the final renders — set them in Film look.</span>
+            <span className="min-w-0">Grain, gate weave, halation and tape effects are applied when the final renders. To see them over the shots now, turn on Film look in the Film (live) preview — set them in Film look.</span>
             <button type="button" className={buttonCls} onClick={() => board.goToStage('produce', FILM_LOOK_ANCHOR)}>Open Film look</button>
           </p>
         </>
