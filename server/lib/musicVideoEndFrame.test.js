@@ -42,6 +42,11 @@ describe('sceneEndFramePlan (#11173)', () => {
     expect(sceneEndFrameRequestFields(scene, { backend: 'google', googleModelId: 'veo-3.0-generate-001' })).toEqual({});
   });
 
+  it('sends the selected end frame to Higgsfield image models', () => {
+    expect(sceneEndFrameRequestFields(scene, { backend: 'higgsfield', higgsfieldModelId: 'kling-video/v3.0/pro' })).toEqual({ lastImageFile: 'end.png' });
+    expect(sceneEndFramePlan(scene, { backend: 'higgsfield' })).toEqual({ endImageId: 'end.png', used: true, reason: null });
+  });
+
   // #11258: a local render anchors the last frame only in first+last-frame mode.
   it('sends it to a local model whose runtime anchors the last frame, in first+last-frame mode', () => {
     for (const localRuntime of ['ltx25', 'ltx2', 'minimax_h3']) {

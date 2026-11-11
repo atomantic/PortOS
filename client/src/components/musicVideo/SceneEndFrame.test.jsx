@@ -8,6 +8,10 @@ const models = [{ id: 'ltx25_example', runtime: 'ltx25' }, { id: 'fast_example',
 // ignores the end frame it now renders to (#11258), or promising it on a
 // one-frame model, for both a card pick and the install default.
 describe('sceneEndFramePlanFor on the local renderer', () => {
+  it('uses the selected hosted model when describing the end frame', () => {
+    expect(sceneEndFramePlanFor(scene, { backend: 'higgsfield', higgsfieldModelId: 'kling-video/v3.0/pro' }).used).toBe(true);
+    expect(sceneEndFramePlanFor(scene, { backend: 'google', googleModelId: 'veo-3.0-generate-001' }).used).toBe(false);
+  });
   it('uses the end frame on a local LTX pick', () => {
     expect(sceneEndFramePlanFor(scene, { backend: 'local', modelId: 'ltx25_example' }, { models }).used).toBe(true);
   });
