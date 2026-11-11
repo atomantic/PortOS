@@ -2,9 +2,7 @@ import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
-  TRELLIS2_CUDA_REPO,
   TRELLIS2_CUDA_CONDA_ENV,
-  TRELLIS2_CUDA_SETUP_FLAGS,
   TRELLIS2_CUDA_TEXTURE_SIZES,
   TRELLIS2_CUDA_DEFAULT_TEXTURE_SIZE,
   TRELLIS2_CUDA_HIGH_QUALITY_TEXTURE_SIZE,
@@ -15,10 +13,8 @@ import {
   trellis2CudaPython,
   trellis2CudaGenerateRunnerScript,
   isTrellis2CudaInstalled,
-  buildCudaInstallSteps,
   buildCudaGenerateArgs,
   selectTrellis2CudaExportBudget,
-  installTrellis2Cuda,
   runTrellis2CudaGenerate,
 } from './trellis2Cuda.js';
 
@@ -86,41 +82,6 @@ describe('isTrellis2CudaInstalled', () => {
     expect(isTrellis2CudaInstalled({
       base: BASE, exists: existsFor(join(ROOT, 'trellis2')), env: CONDA_ENV,
     })).toBe(false);
-  });
-});
-
-describe('buildCudaInstallSteps', () => {
-  it('clones recursively — upstream vendors its CUDA extensions as submodules', () => {
-    const steps = buildCudaInstallSteps(BASE, { exists: () => false });
-    expect(steps.map((s) => s.stage)).toEqual(['clone', 'setup']);
-    expect(steps[0]).toMatchObject({
-      command: 'git',
-      args: ['clone', '-b', 'main', '--recursive', TRELLIS2_CUDA_REPO, ROOT],
-    });
-  });
-
-  it('SOURCES setup.sh in a login shell so `conda activate` has its hooks', () => {
-    // `bash setup.sh` would run conda activate in a shell with no profile loaded and
-    // install into the wrong interpreter — upstream documents `. ./setup.sh`.
-    const [, setup] = buildCudaInstallSteps(BASE, { exists: () => false });
-    expect(setup).toMatchObject({ stage: 'setup', command: 'bash', cwd: ROOT });
-    expect(setup.args[0]).toBe('-lc');
-    expect(setup.args[1]).toMatch(/^\. \.\/setup\.sh /);
-  });
-
-  it('passes upstream’s documented extension flags verbatim', () => {
-    const [, setup] = buildCudaInstallSteps(BASE, { exists: () => false });
-    for (const flag of TRELLIS2_CUDA_SETUP_FLAGS) expect(setup.args[1]).toContain(flag);
-    // --o-voxel provides the to_glb exporter the runner calls; dropping it yields an
-    // install that imports and then fails mid-render.
-    expect(setup.args[1]).toContain('--o-voxel');
-  });
-
-  it('skips the clone and resumes at setup when the repo is already on disk', () => {
-    // Load-bearing for resume: an unconditional clone would abort on "destination
-    // path already exists" and never reach the idempotent setup.
-    const steps = buildCudaInstallSteps(BASE, { exists: existsFor(join(ROOT, '.git')) });
-    expect(steps.map((s) => s.stage)).toEqual(['setup']);
   });
 });
 
@@ -205,92 +166,6 @@ describe('buildCudaGenerateArgs', () => {
   it('rejects out-of-range steps and seed here rather than in the child’s argparse', () => {
     expect(() => args({ steps: 0 })).toThrow(/steps must be an integer/);
     expect(() => args({ seed: -1 })).toThrow(/seed must be an integer/);
-  });
-});
-
-describe('installTrellis2Cuda', () => {
-  it('runs the steps in order and completes once the install verifies', async () => {
-    const children = [];
-    const spawnImpl = vi.fn(() => { const c = makeChild(); children.push(c); return c; });
-    const events = [];
-    // Not installed at plan time (so the clone step is included), installed at verify.
-    let installed = false;
-    const exists = (p) => (installed ? INSTALLED(p) : false);
-
-    const { promise } = installTrellis2Cuda({
-      base: BASE, spawnImpl, exists, env: CONDA_ENV, onEvent: (e) => events.push(e),
-    });
-    await flush();
-    children[0].emit('close', 0); // clone
-    await flush();
-    installed = true;
-    children[1].emit('close', 0); // setup
-    await expect(promise).resolves.toEqual({ ok: true });
-
-    expect(spawnImpl.mock.calls.map((c) => c[0])).toEqual(['git', 'bash']);
-    expect(events.at(-1)).toMatchObject({ type: 'complete' });
-  });
-
-  it('fails loudly when setup.sh exits 0 without producing a usable environment', async () => {
-    // setup.sh can leave a conda env behind while an extension build failed; a bare
-    // exit-0 success would report an install that cannot render (the #2952 lesson).
-    const children = [];
-    const spawnImpl = vi.fn(() => { const c = makeChild(); children.push(c); return c; });
-    const { promise } = installTrellis2Cuda({
-      base: BASE, spawnImpl, exists: existsFor(join(ROOT, '.git')), env: CONDA_ENV,
-    });
-    await flush();
-    children[0].emit('close', 0);
-    await expect(promise).rejects.toMatchObject({ code: 'TRELLIS2_CUDA_INSTALL_INCOMPLETE' });
-  });
-
-  it('retries a transient network failure in place, then succeeds', async () => {
-    const children = [];
-    const spawnImpl = vi.fn(() => { const c = makeChild(); children.push(c); return c; });
-    let installed = false;
-    const { promise } = installTrellis2Cuda({
-      base: BASE,
-      spawnImpl,
-      exists: (p) => (installed ? INSTALLED(p) : existsFor(join(ROOT, '.git'))(p)),
-      env: CONDA_ENV,
-      sleep: () => Promise.resolve(),
-    });
-    await flush();
-    children[0].stderr.emit('data', 'fatal: early EOF\nfetch-pack: invalid index-pack output');
-    children[0].emit('close', 128);
-    await flush();
-    expect(spawnImpl).toHaveBeenCalledTimes(2); // retried the same idempotent step
-    installed = true;
-    children[1].emit('close', 0);
-    await expect(promise).resolves.toEqual({ ok: true });
-  });
-
-  it('does NOT retry a real (non-transient) failure', async () => {
-    const children = [];
-    const spawnImpl = vi.fn(() => { const c = makeChild(); children.push(c); return c; });
-    const { promise } = installTrellis2Cuda({
-      base: BASE, spawnImpl, exists: existsFor(join(ROOT, '.git')), env: CONDA_ENV,
-      sleep: () => Promise.resolve(),
-    });
-    await flush();
-    children[0].stderr.emit('data', 'error: no CUDA toolkit found; aborting');
-    children[0].emit('close', 1);
-    await expect(promise).rejects.toMatchObject({ code: 'TRELLIS2_CUDA_INSTALL_FAILED', stage: 'setup' });
-    expect(spawnImpl).toHaveBeenCalledTimes(1);
-  });
-
-  it('cancels in flight and stops before the next step', async () => {
-    const children = [];
-    const spawnImpl = vi.fn(() => { const c = makeChild(); children.push(c); return c; });
-    const { promise, kill } = installTrellis2Cuda({
-      base: BASE, spawnImpl, exists: () => false, env: CONDA_ENV,
-    });
-    await flush();
-    kill();
-    expect(children[0].kill).toHaveBeenCalledWith('SIGTERM');
-    children[0].emit('close', 0);
-    await expect(promise).rejects.toMatchObject({ code: 'TRELLIS2_CUDA_INSTALL_CANCELED' });
-    expect(spawnImpl).toHaveBeenCalledTimes(1); // never started `setup`
   });
 });
 

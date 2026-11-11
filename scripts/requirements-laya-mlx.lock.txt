@@ -2,7 +2,7 @@
 # Apple Silicon (arm64 macOS) laya-mlx virtualenv. Do not edit by hand.
 #
 # server/services/layaMlx.js (explicit install) installs this with
-# `--require-hashes --no-deps`, so every transitive package is version- and
+# `--require-hashes --no-deps --only-binary :all:`, so every transitive package is version- and
 # hash-pinned and a tampered or substituted distribution fails the install.
 # There is no install-time resolution: a host this lock does not cover is
 # reported as unsupported before anything is installed.

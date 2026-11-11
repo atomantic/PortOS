@@ -149,7 +149,7 @@ function assertTargetReady(targetId, caps) {
   }
   if (!adapter.isInstalled()) {
     throw new ServerError(
-      `${target.label} is not installed. Install it before generating.`,
+      `${target.label} is not installed. ${target.installBlockedReason || 'Install it before generating.'}`,
       { status: 409, code: 'TARGET_NOT_INSTALLED' },
     );
   }

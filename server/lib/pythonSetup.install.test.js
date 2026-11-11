@@ -33,7 +33,7 @@ describe('installLockedRuntime', () => {
     const onLog = vi.fn();
     await expect(installLockedRuntime('/guard/python', 'guard-runtime', onLog, { preferUv: true, platform: 'linux', arch: 'x64' }).promise)
       .resolves.toEqual({ ok: true, code: 0 });
-    expect(spawned()).toEqual([`/private/tools/uv pip install --python /guard/python --require-hashes --no-deps -r ${LOCK_PROFILES['guard-runtime'].lockFile}`]);
+    expect(spawned()).toEqual([`/private/tools/uv pip install --python /guard/python --require-hashes --no-deps --only-binary :all: -r ${LOCK_PROFILES['guard-runtime'].lockFile}`]);
     expect(mock.ambientUv).not.toHaveBeenCalled();
     expect(onLog).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'complete' }));
   });
@@ -42,7 +42,7 @@ describe('installLockedRuntime', () => {
     mock.ensureUv.mockResolvedValue({ ok: false, reason: 'No Python found to bootstrap uv 0.13.6.' });
     const onLog = vi.fn();
     await installLockedRuntime('/guard/python', 'guard-runtime', onLog, { preferUv: true, platform: 'darwin', arch: 'arm64' }).promise;
-    expect(spawned()).toEqual([`/guard/python -m pip install --require-hashes --no-deps -r ${LOCK_PROFILES['guard-runtime'].lockFile}`]);
+    expect(spawned()).toEqual([`/guard/python -m pip install --require-hashes --no-deps --only-binary :all: -r ${LOCK_PROFILES['guard-runtime'].lockFile}`]);
     expect(onLog).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining('Using pip instead') }));
   });
 
@@ -52,7 +52,7 @@ describe('installLockedRuntime', () => {
     await expect(installLockedRuntime('/auk/python', 'auk-mlx', vi.fn(), { preferUv: true, sourceInstalls: [source], env, platform: 'darwin', arch: 'arm64' }).promise)
       .resolves.toEqual({ ok: true, code: 0 });
     expect(spawned()).toEqual([
-      `/private/tools/uv pip install --python /auk/python --require-hashes --no-deps -r ${LOCK_PROFILES['auk-mlx'].lockFile}`,
+      `/private/tools/uv pip install --python /auk/python --require-hashes --no-deps --only-binary :all: -r ${LOCK_PROFILES['auk-mlx'].lockFile}`,
       `/private/tools/uv pip install --python /auk/python ${source.slice(1).join(' ')}`,
     ]);
     expect(mock.spawn.mock.calls.every(([, , options]) => options.env.PATH === '/usr/bin' && !('HOME' in options.env))).toBe(true);
@@ -105,7 +105,7 @@ describe('installPackages generic repair', () => {
     await installPackages('/image/python', ['mflux', 'transformers', 'opencv-python'], vi.fn(), { appleSilicon: true }).promise;
     const calls = spawned();
     expect(calls).toHaveLength(1);
-    expect(calls[0]).toMatch(new RegExp(`^/image/python -m pip install (--user )?--require-hashes --no-deps -r .*requirements-mflux-mlx\\.lock\\.txt$`));
+    expect(calls[0]).toMatch(new RegExp(`^/image/python -m pip install (--user )?--require-hashes --no-deps --only-binary :all: -r .*requirements-mflux-mlx\\.lock\\.txt$`));
     expect(calls[0]).not.toContain('--upgrade');
   });
 
@@ -114,12 +114,12 @@ describe('installPackages generic repair', () => {
     const calls = spawned();
     expect(calls[0]).toBe('/image/python -m pip uninstall --yes mlx_video');
     // Uninstalling the namesake can delete files the real package shares; only that entry is force-reinstalled.
-    expect(calls[1]).toMatch(/^\/image\/python -m pip install (--user )?--force-reinstall --require-hashes --no-deps -r .*requirements\.txt$/);
+    expect(calls[1]).toMatch(/^\/image\/python -m pip install (--user )?--force-reinstall --require-hashes --no-deps --only-binary :all: -r .*requirements\.txt$/);
     expect(forced).toHaveLength(1);
     expect(forced[0]).toMatch(/^mlx-video-with-audio==[\d.]+ ;/);
     expect(forced[0]).toMatch(/--hash=sha256:[0-9a-f]{64}/);
     expect(forced[0].match(/^[A-Za-z0-9][\w.-]*==/gm)).toHaveLength(1);
-    expect(calls[2]).toMatch(/--require-hashes --no-deps -r .*requirements-mflux-video-mlx\.lock\.txt$/);
+    expect(calls[2]).toMatch(/--require-hashes --no-deps --only-binary :all: -r .*requirements-mflux-video-mlx\.lock\.txt$/);
     expect(calls).toHaveLength(3);
   });
 
@@ -135,7 +135,7 @@ describe('installPackages generic repair', () => {
 
   it('uses the private uv for preferUv repairs', async () => {
     await installPackages('/image/python', ['mflux'], vi.fn(), { appleSilicon: true, preferUv: true }).promise;
-    expect(spawned()).toEqual([`/private/tools/uv pip install --python /image/python --require-hashes --no-deps -r ${LOCK_PROFILES.mflux.lockFile}`]);
+    expect(spawned()).toEqual([`/private/tools/uv pip install --python /image/python --require-hashes --no-deps --only-binary :all: -r ${LOCK_PROFILES.mflux.lockFile}`]);
     expect(mock.ambientUv).not.toHaveBeenCalled();
   });
 

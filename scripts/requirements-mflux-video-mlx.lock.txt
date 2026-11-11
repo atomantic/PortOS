@@ -4,7 +4,7 @@
 #
 # server/lib/pythonSetup.js `installPackages` (setup-page package repair) and
 # `INSTALL_VIDEO=1 scripts/setup-image-video.sh` install this with
-# `--require-hashes --no-deps`, so no resolution happens at install time and a
+# `--require-hashes --no-deps --only-binary :all:`, so no resolution happens at install time and a
 # tampered or substituted distribution fails the install. Universal across
 # CPython 3.11+ (filelock's security fix needs 3.11), arm64 macOS wheels only.
 #

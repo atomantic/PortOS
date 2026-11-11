@@ -35,14 +35,15 @@ const fakeInstall = vi.fn(({ onEvent }) => {
   return { promise: Promise.resolve({ ok: true }), kill: vi.fn() };
 });
 const fakeDescribeInstallState = vi.fn(async () => ({ fields: { fakeDiag: 'ok' }, warnings: [] }));
+const fakeAdapter = {
+  isInstalled: fakeIsInstalled,
+  install: fakeInstall,
+  run: vi.fn(),
+  describeInstallState: fakeDescribeInstallState,
+};
 
 vi.mock('../services/imageTo3d/adapters.js', () => ({
-  getTargetAdapter: vi.fn((id) => (id === 'fakegen' ? {
-    isInstalled: fakeIsInstalled,
-    install: fakeInstall,
-    run: vi.fn(),
-    describeInstallState: fakeDescribeInstallState,
-  } : null)),
+  getTargetAdapter: vi.fn((id) => (id === 'fakegen' ? fakeAdapter : null)),
 }));
 
 vi.mock('../services/hfToken.js', () => ({ hfChildEnv: vi.fn(async () => ({})) }));
@@ -60,6 +61,8 @@ vi.mock('../services/imageTo3d/models.js', () => ({
 }));
 
 import { hfChildEnv } from '../services/hfToken.js';
+import { getTargetAdapter } from '../services/imageTo3d/adapters.js';
+import { unavailableReason } from '../services/imageTo3d/targets.js';
 import routes from './imageTo3d.js';
 
 const makeApp = () => {
@@ -104,6 +107,47 @@ describe('image-to-3d generic target dispatch (#3080)', () => {
     await request(makeApp()).post('/api/image-to-3d/targets/fakegen/install');
     expect(hfChildEnv).not.toHaveBeenCalled();
     expect(fakeInstall).toHaveBeenCalledWith(expect.objectContaining({ env: undefined }));
+  });
+
+  it('streams Repair for an installed runtime and passes the adapter environment', async () => {
+    const env = { HF_TOKEN: 'hf_test' };
+    fakeIsInstalled.mockReturnValueOnce(true);
+    getTargetAdapter.mockReturnValueOnce({ ...fakeAdapter, resolveEnv: async () => env });
+    const res = await request(makeApp()).post('/api/image-to-3d/targets/fakegen/install?repair=1');
+    expect(sseFrames(res.text).at(-1)).toMatchObject({ type: 'complete' });
+    expect(fakeInstall).toHaveBeenLastCalledWith(expect.objectContaining({ env }));
+  });
+
+  it('ends the stream when the install environment cannot be prepared', async () => {
+    fakeInstall.mockClear();
+    const resolveEnv = vi.fn().mockRejectedValue(new Error('bad settings'));
+    getTargetAdapter.mockReturnValueOnce({ ...fakeAdapter, resolveEnv });
+    const res = await request(makeApp()).post('/api/image-to-3d/targets/fakegen/install');
+    expect(sseFrames(res.text).at(-1)).toMatchObject({
+      type: 'error', message: expect.stringMatching(/Could not prepare.*bad settings/),
+    });
+    expect(fakeInstall).not.toHaveBeenCalled();
+  });
+
+  it('refuses installation on an unsupported host before dispatch', async () => {
+    fakeInstall.mockClear();
+    unavailableReason.mockReturnValueOnce('requires-apple-silicon');
+    const res = await request(makeApp()).post('/api/image-to-3d/targets/fakegen/install');
+    expect(sseFrames(res.text).at(-1)).toMatchObject({
+      type: 'error', message: expect.stringContaining('Requires an Apple Silicon Mac'),
+    });
+    expect(fakeInstall).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('offers a resume hint only for a transient failure (%s)', async (transient) => {
+    fakeInstall.mockReturnValueOnce({
+      promise: Promise.reject(Object.assign(new Error('setup failed'), { stage: 'setup', transient })),
+      kill: vi.fn(),
+    });
+    const res = await request(makeApp()).post('/api/image-to-3d/targets/fakegen/install');
+    const frame = sseFrames(res.text).at(-1);
+    expect(frame).toMatchObject({ type: 'error', stage: 'setup' });
+    expect(frame.message.includes('click Install again to resume')).toBe(transient);
   });
 
   it('errors on install for a target id with no registered adapter', async () => {
