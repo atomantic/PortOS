@@ -492,7 +492,9 @@ const renderMVWithNav = (to) => render(
 
 afterEach(() => vi.restoreAllMocks());
 
-beforeEach(() => {
+beforeEach(async () => {
+  const socket = (await import('../services/socket.js')).default;
+  delete socket.id;
   // Keep the real artifact iframe and src assertions without navigating to its API URL.
   window.happyDOM.settings.navigation.disableChildFrameNavigation = true;
   vi.clearAllMocks();
@@ -667,6 +669,107 @@ describe('MusicVideo bounded summary index and project isolation (#10169)', () =
     await screen.findByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name });
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name })).toBeInTheDocument();
+  });
+});
+
+describe('MusicVideo index follows projects changed elsewhere (#15724)', () => {
+  const summary = (id, name) => ({
+    id, name, version: 1, rootProjectId: id, versionRoot: id, stage: 'board', status: 'ready',
+    runStatus: null, poster: null, preview: { kind: 'none', label: 'No render yet' },
+    spend: { spentUsd: 0, capUsd: null }, updatedAt: '2026-10-04T00:00:00Z', createdAt: '2026-10-04T00:00:00Z',
+    sceneCount: 1, shotSummary: '1 scene',
+  });
+
+  const renderIndex = async (items) => {
+    listMusicVideoProjectSummaries.mockResolvedValue({ items, total: items.length, nextCursor: null });
+    render(<MemoryRouter initialEntries={['/music-video']}>{MV_ROUTES}</MemoryRouter>);
+    expect(await screen.findByTestId('mv-project-grid')).toHaveTextContent(items[0].name);
+  };
+
+  it('shows a project created elsewhere without reloading the page', async () => {
+    const existing = summary('mv-listed', 'Already Listed');
+    const created = summary('mv-new', 'Arrived Elsewhere');
+    let reads = 0;
+    listMusicVideoProjectSummaries.mockImplementation(async () => {
+      reads += 1;
+      const items = reads === 1 ? [existing] : [created, existing];
+      return { items, total: items.length, nextCursor: null };
+    });
+    render(<MemoryRouter initialEntries={['/music-video']}>{MV_ROUTES}</MemoryRouter>);
+    expect(await screen.findByTestId('mv-project-grid')).toHaveTextContent('Already Listed');
+    expect(screen.getByTestId('mv-project-grid')).not.toHaveTextContent('Arrived Elsewhere');
+    await pushSocket('music-video:project:changed', { id: 'mv-new' });
+    await waitFor(() => expect(screen.getByTestId('mv-project-grid')).toHaveTextContent('Arrived Elsewhere'));
+    expect(getMusicVideoProject).not.toHaveBeenCalledWith('mv-new', expect.anything());
+  });
+
+  it('renames a listed card from that one record and does not reread the summary page', async () => {
+    const listed = summary('mv-listed', 'Old Name');
+    await renderIndex([listed]);
+    const summaryCalls = listMusicVideoProjectSummaries.mock.calls.length;
+    getMusicVideoProject.mockResolvedValueOnce({ ...listed, name: 'New Name' });
+    await pushSocket('music-video:project:changed', { id: 'mv-listed' });
+    await waitFor(() => expect(screen.getByTestId('mv-project-grid')).toHaveTextContent('New Name'));
+    expect(screen.getByTestId('mv-project-grid')).not.toHaveTextContent('Old Name');
+    expect(getMusicVideoProject).toHaveBeenCalledWith('mv-listed', { silent: true });
+    expect(listMusicVideoProjectSummaries).toHaveBeenCalledTimes(summaryCalls);
+  });
+
+  it('removes a listed card when the record read is a 404', async () => {
+    const listed = summary('mv-listed', 'Going Away');
+    const kept = summary('mv-kept', 'Stays');
+    let reads = 0;
+    listMusicVideoProjectSummaries.mockImplementation(async () => {
+      reads += 1;
+      const items = reads === 1 ? [listed, kept] : [kept];
+      return { items, total: items.length, nextCursor: null };
+    });
+    render(<MemoryRouter initialEntries={['/music-video']}>{MV_ROUTES}</MemoryRouter>);
+    expect(await screen.findByTestId('mv-project-grid')).toHaveTextContent('Going Away');
+    getMusicVideoProject.mockRejectedValueOnce(Object.assign(new Error('Not found'), { status: 404 }));
+    await pushSocket('music-video:project:changed', { id: 'mv-listed' });
+    await waitFor(() => expect(screen.getByTestId('mv-project-grid')).not.toHaveTextContent('Going Away'));
+    expect(screen.getByTestId('mv-project-grid')).toHaveTextContent('Stays');
+  });
+
+  it('ignores an event this tab originated', async () => {
+    const socket = (await import('../services/socket.js')).default;
+    socket.id = 'tab-socket';
+    const listed = summary('mv-listed', 'Untouched');
+    await renderIndex([listed]);
+    const summaryCalls = listMusicVideoProjectSummaries.mock.calls.length;
+    getMusicVideoProject.mockClear();
+    await pushSocket('music-video:project:changed', { id: 'mv-new', origin: 'tab-socket' });
+    await pushSocket('music-video:project:changed', { id: 'mv-listed', origin: 'tab-socket' });
+    expect(listMusicVideoProjectSummaries).toHaveBeenCalledTimes(summaryCalls);
+    expect(getMusicVideoProject).not.toHaveBeenCalled();
+    expect(screen.getByTestId('mv-project-grid')).toHaveTextContent('Untouched');
+    expect(screen.getByTestId('mv-project-grid')).not.toHaveTextContent('mv-new');
+  });
+
+  it('updates a different project in the header picker while one project is open', async () => {
+    const other = summary('mv-other', 'Other Project');
+    getMusicVideoProject.mockImplementation(async (id) => {
+      if (id === PROJECT_WITH_CLIP.id) return PROJECT_WITH_CLIP;
+      if (id === other.id) return { ...other, name: 'Renamed Other' };
+      return null;
+    });
+    listMusicVideoProjectSummaries.mockResolvedValue({
+      items: [summary(PROJECT_WITH_CLIP.id, PROJECT_WITH_CLIP.name), other],
+      total: 2,
+      nextCursor: null,
+    });
+    render(<MemoryRouter initialEntries={['/music-video/mv-1/board']}>{MV_ROUTES}</MemoryRouter>);
+    await screen.findByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name });
+    expect(listMusicVideoProjectSummaries).not.toHaveBeenCalled();
+    fireEvent.focus(screen.getByLabelText('Project'));
+    await waitFor(() => expect(screen.getByRole('option', { name: 'Other Project' })).toBeInTheDocument());
+    const summaryCalls = listMusicVideoProjectSummaries.mock.calls.length;
+    await pushSocket('music-video:project:changed', { id: 'mv-other' });
+    await waitFor(() => expect(screen.getByRole('option', { name: 'Renamed Other' })).toBeInTheDocument());
+    expect(screen.queryByRole('option', { name: 'Other Project' })).not.toBeInTheDocument();
+    expect(getMusicVideoProject).toHaveBeenCalledWith('mv-other', { silent: true });
+    expect(listMusicVideoProjectSummaries).toHaveBeenCalledTimes(summaryCalls);
   });
 });
 

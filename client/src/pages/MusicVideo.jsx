@@ -482,6 +482,52 @@ export default function MusicVideo() {
     return () => { active = false; socket.off('music-video:project:changed', onChanged); };
   }, [selectedId]);
 
+  // The index and the header picker share `summaries`. The open-project listener
+  // above ignores every other id, and the first page is newest-created-first, so
+  // a blanket refresh cannot update an older card or drop a deleted one.
+  const summarySyncRef = useRef(null);
+  summarySyncRef.current = {
+    selectedId,
+    items: summaries.items,
+    refreshFirst: summaries.refreshFirst,
+    removeItem: summaries.removeItem,
+    setItems: summaries.setItems,
+  };
+  useEffect(() => {
+    if (!summariesWanted) return undefined;
+    let active = true;
+    const inflight = new Map();
+    const readListed = (id) => {
+      const slot = inflight.get(id);
+      if (slot) { slot.queued = true; return; }
+      inflight.set(id, { queued: false });
+      getMusicVideoProject(id, { silent: true })
+        .then((fresh) => {
+          if (!active || !fresh) return;
+          summarySyncRef.current.setItems((prev) => prev.map((p) => (p.id === id ? fresh : p)));
+        })
+        .catch((err) => {
+          if (active && err?.status === 404) summarySyncRef.current.removeItem(id);
+        })
+        .finally(() => {
+          const current = inflight.get(id);
+          inflight.delete(id);
+          if (active && current?.queued) readListed(id);
+        });
+    };
+    const onChanged = (data) => {
+      const id = data?.id;
+      if (!id) return;
+      if (data.origin && data.origin === socket.id) return;
+      if (id === summarySyncRef.current.selectedId) return;
+      const listed = summarySyncRef.current.items.some((project) => project.id === id);
+      if (!listed) summarySyncRef.current.refreshFirst();
+      else readListed(id);
+    };
+    socket.on('music-video:project:changed', onChanged);
+    return () => { active = false; socket.off('music-video:project:changed', onChanged); };
+  }, [summariesWanted]);
+
   // `youtube.editJob` is one shared job slot for the whole detail view (not
   // per-project) — switching the selected project while it has an import in
   // flight would silently orphan that job's SSE subscription (the finished
