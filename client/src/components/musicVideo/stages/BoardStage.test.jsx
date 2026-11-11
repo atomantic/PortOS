@@ -11,6 +11,8 @@ vi.mock('../ContactSheetButton.jsx', () => ({ default: () => null }));
 vi.mock('../TreatmentPanel.jsx', () => ({ default: () => null, treatmentSummary: () => '' }));
 vi.mock('../ProjectActionGroups.jsx', () => ({ PlanActions: () => null }));
 vi.mock('../../../services/apiMusicVideo.js', async (load) => ({ ...await load(),
+  getMusicVideoCastAndSets: vi.fn(),
+  repairMusicVideoShotReference: vi.fn(),
   getMusicVideoOutroStats: vi.fn(async () => ({ stats: { stills: { made: 30, kept: 12 }, clips: { made: 9, kept: 4 }, rejected: 5, shots: 3, transitions: 0, imageEffects: 0, cameraMoves: 0, lipSyncs: 0, floorImages: [] } })),
   getMusicVideoCreditsPrefill: vi.fn(async () => ({ credits: { enabled: true, durationSec: 10, title: 'Example Song', artist: 'Example Artist', lines: [{ role: 'Directed by', name: 'Example Artist' }], footer: '' } })) }));
 
@@ -22,6 +24,25 @@ const board = (scenes, over = {}) => ({
 });
 const Search = () => <output data-testid="search">{useLocation().search}</output>;
 const renderBoard = (b, url = '/') => render(<MemoryRouter initialEntries={[url]}><BoardStage board={b} /><Search /></MemoryRouter>);
+
+it('fixes a shot reference from the board and refreshes the check-in', async () => {
+  const { getMusicVideoCastAndSets, repairMusicVideoShotReference } = await import('../../../services/apiMusicVideo.js');
+  const shots = [scene(1)];
+  const checkin = { items: [], problems: [], shotReferenceProblems: [] };
+  getMusicVideoCastAndSets.mockResolvedValueOnce({ catalogCheckin: { ...checkin, shotReferenceProblems: [
+    { id: 'problem-1', sceneId: 's1', shot: 1, message: 'Shot 1 needs an Ada reference.', fix: 'Add Ada' },
+  ] } }).mockResolvedValue({ catalogCheckin: checkin });
+  const saved = { sceneId: 's1', patch: { frameReferenceIds: ['ada'] }, updatedAt: '2026-01-01T00:00:00Z' };
+  repairMusicVideoShotReference.mockResolvedValueOnce(saved);
+  const b = board(shots, { applyShotReferenceRepair: vi.fn() });
+  b.project.castAndSets = { source: 'catalog' };
+  renderBoard(b);
+  fireEvent.click(await screen.findByRole('button', { name: 'Add Ada' }));
+  await waitFor(() => expect(b.applyShotReferenceRepair).toHaveBeenCalledWith(saved));
+  expect(repairMusicVideoShotReference).toHaveBeenCalledWith('p', 'problem-1', { silent: true });
+  await waitFor(() => expect(screen.queryByRole('group', { name: 'Shot references' })).toBeNull());
+  expect(getMusicVideoCastAndSets).toHaveBeenCalledTimes(2);
+});
 
 describe('BoardStage scene filter', () => {
   const scenes = [scene(1), scene(2, { videoHistoryId: null }), scene(3)];

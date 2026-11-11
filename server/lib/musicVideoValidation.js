@@ -30,6 +30,8 @@ import { executionOptionsSchema } from './aiToolkit/internal/executionOptionsVal
 
 import { z } from 'zod';
 
+export const musicVideoShotReferenceRepairSchema = z.object({ problemId: z.string().regex(/^[a-f0-9]{64}$/) });
+
 const musicVideoTemplateEffectsSchema = z.object(Object.fromEntries(TEMPLATE_EFFECT_CONTROLS.map(({ id }) => [id, z.number().min(0).max(1).nullable().optional()]))).strict();
 import { TIMELINE_BEAT_KINDS, TIMELINE_BEATS_MAX, TIMELINE_LENGTH_MAX_MIN, TIMELINE_PACES, PREVIZ_CAMERA_STYLES, PREVIZ_CUTS_MAX, PREVIZ_KEYS_MAX, PREVIZ_PAWN_COLOR_IDS, PREVIZ_POSES, PREVIZ_TRACKS_MAX, PREVIZ_VEHICLES_MAX, PREVIZ_VISIBLE_MAX, VEHICLE_SPEED_MAX_METERS_PER_MIN } from './musicVideoPrevizLimits.js';
 import { MUSIC_VIDEO_SUBJECT_DESCRIPTION_MAX } from './musicVideoSubjectLimits.js';

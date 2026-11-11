@@ -71,10 +71,11 @@ export function musicVideoReferenceCapacity(mode, { modelId = null, localModel =
 export const isOutsideMusicVideoReference = (ref) => String(ref?.id || '').startsWith('mvr-board-')
   || String(ref?.imageId || '').startsWith('pinterest-');
 
-const namesIn = (text, phrase, { role = false } = {}) => {
+export const musicVideoNameInText = (text, phrase, { role = false } = {}) => {
   const p = String(phrase || '').trim();
   return !!p && (!role || p.length >= 3) && new RegExp(`\\b${escapeRegExp(p)}\\b`, p.length < 3 ? '' : 'i').test(text);
 };
+const namesIn = musicVideoNameInText;
 
 /** The supporting cast members a scene's frame or shot prompt names, by name or role. */
 function featuredCast(direction, scene) {

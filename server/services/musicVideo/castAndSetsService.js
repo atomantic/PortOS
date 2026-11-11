@@ -1409,6 +1409,21 @@ export async function getCastAndSets(projectId) {
   return { stage: presentStage(project), catalogCheckin: await resolveCatalogCheckin(project, { catalog: deps.catalog }) };
 }
 
+/** Recompute the offered repair under the project's serialized write. */
+export async function repairShotReference(projectId, problemId) {
+  const { project, sceneId, patch } = await mutateProjectRecord(projectId, async (current, { client } = {}) => {
+    const checkin = await resolveCatalogCheckin(current, { catalog: deps.catalog, client, includeRepairPatches: true });
+    const problem = checkin.shotReferenceProblems.find(row => row.id === problemId && row.patch);
+    if (!problem) throw new ServerError('This shot reference suggestion changed. Review the current check-in and try again.', {
+      status: 409, code: 'MUSIC_VIDEO_SHOT_REFERENCE_STALE',
+    });
+    const { sceneId, patch } = problem;
+    const scenes = current.scenes.map(scene => scene.sceneId === sceneId ? { ...scene, ...patch } : scene);
+    return { project: { ...current, scenes, updatedAt: new Date().toISOString() }, sceneId, patch };
+  }, { sceneOnly: true });
+  return { sceneId, patch, updatedAt: project.updatedAt };
+}
+
 // ---- completion hook entry points ----------------------------------------------------------
 
 /**

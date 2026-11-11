@@ -1,5 +1,5 @@
 import { musicVideoCastSetsUseImageSchema, musicVideoCastSetsImageEditSchema, musicVideoCastSetsImageEditDecisionSchema, musicVideoColorMatchMeasureSchema, musicVideoColorMatchReferenceUpdateSchema, musicVideoColorMatchTakePatchSchema } from '../lib/musicVideoValidation.js';
-import { musicVideoDcpRequestSchema } from '../lib/musicVideoValidation.js';
+import { musicVideoDcpRequestSchema, musicVideoShotReferenceRepairSchema } from '../lib/musicVideoValidation.js';
 import { inspectDcpReadiness } from '../services/musicVideo/dcpPreflight.js';
 import { activeDcp, startDcp, attachDcp, cancelDcp, dcpArtifactPaths } from '../services/musicVideo/dcp.js';
 /**
@@ -276,6 +276,7 @@ import {
   presentProjectCastAndSets,
   useCatalogCheckin,
   rebuildCatalogGuide,
+  repairShotReference,
 } from '../services/musicVideo/castAndSetsService.js';
 import {
   summarizeMusicVideoProject,
@@ -1702,6 +1703,11 @@ router.post('/:id/cast-and-sets/catalog', asyncHandler(async (req, res) => {
 
 router.post('/:id/cast-and-sets/catalog/guide', asyncHandler(async (req, res) => {
   res.json(await rebuildCatalogGuide(req.params.id));
+}));
+
+router.post('/:id/cast-and-sets/catalog/repair-shot-reference', asyncHandler(async (req, res) => {
+  const { problemId } = validateRequest(musicVideoShotReferenceRepairSchema, req.body);
+  res.json(await repairShotReference(req.params.id, problemId));
 }));
 
 router.get('/:id/cast-and-sets', asyncHandler(async (req, res) => {
