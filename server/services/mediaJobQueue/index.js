@@ -2398,7 +2398,21 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
   // called twice racing with the SIGKILL escalation is messy. Track an
   // inFlight flag so only one tick is ever past the await at a time.
   let watchdogInFlight = false;
+  const watchdogTickMs = Math.min(30_000, Math.max(25, Math.floor(idleTimeoutMs / 4)));
+  // Timers run on a monotonic clock that stops while the host sleeps, but
+  // Date.now() keeps going — a laptop that slept mid-render woke to a kill for
+  // "no runner output" the runner never had a chance to produce. A tick that
+  // lands far later than scheduled means the process was suspended, so that
+  // gap is not counted as runner idleness.
+  let lastWatchdogTickAt = Date.now();
   watchdogTimer = setInterval(async () => {
+    const tickAt = Date.now();
+    const tickGap = tickAt - lastWatchdogTickAt;
+    lastWatchdogTickAt = tickAt;
+    if (tickGap > Math.max(watchdogTickMs * 3, 60_000)) {
+      lastActivityAt = Math.min(tickAt, lastActivityAt + tickGap - watchdogTickMs);
+      console.log(`💤 media-job [${job.id.slice(0, 8)}] host was suspended ~${Math.round(tickGap / 1000)}s — not counted as runner idle time`);
+    }
     if (watchdogInFlight) return;
     // job.terminating closes the window terminate() opens: it now awaits a
     // disk drain before flipping job.status, so a tick that only checked
@@ -2432,7 +2446,7 @@ async function runJobLifecycle(job, markDispatched, permit, finalizeLane) {
     } finally {
       watchdogInFlight = false;
     }
-  }, Math.min(30_000, Math.max(25, Math.floor(idleTimeoutMs / 4))));
+  }, watchdogTickMs);
   watchdogTimer.unref?.();
 
   let abandonForTests;
