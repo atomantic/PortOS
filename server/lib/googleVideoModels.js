@@ -1,6 +1,6 @@
 /**
- * Google Cloud Vertex AI video model catalog — the curated Veo models the
- * `vertex` video backend (services/videoGen/vertex.js) may call, and the one
+ * Google Cloud Agent Platform video model catalog — the curated Veo models the
+ * `google` video backend (services/videoGen/google.js) may call, and the one
  * request builder. Dependency-free: the Video Gen picker re-exports it, so the
  * browser offers exactly the lengths, sizes and inputs the server sends.
  *
@@ -13,7 +13,7 @@
  * `negativePrompt`, so nothing is folded into the prompt. `enhancePrompt` is not
  * sent because the Veo 3 models refuse it being turned off.
  *
- * `priceNote` is a hint from Vertex AI's list prices; the per-clip estimate
+ * `priceNote` is a hint from Google's list prices; the per-clip estimate
  * stays unknown (never zero) — the Cloud billing console has the real charge.
  */
 
@@ -30,7 +30,7 @@ const REFERENCE_LENGTH = 8;
  *  - `endFrame` — whether a start frame may be paired with a last frame.
  *  - `maxReferenceImages` — asset reference images (0 = none), never with a start frame.
  */
-export const VERTEX_VIDEO_MODELS = Object.freeze([
+export const GOOGLE_VIDEO_MODELS = Object.freeze([
   Object.freeze({
     id: 'veo-3.1-generate-001', label: 'Veo 3.1', priceNote: '~$0.40/s with audio',
     lengths: VEO_LENGTHS, defaultSec: 8, resolutions: VEO_TIERS, defaultResolution: '720p',
@@ -53,11 +53,11 @@ export const VERTEX_VIDEO_MODELS = Object.freeze([
   }),
 ]);
 
-export const VERTEX_DEFAULT_VIDEO_MODEL = VERTEX_VIDEO_MODELS[0].id;
-export const VERTEX_VIDEO_MODEL_IDS = Object.freeze(VERTEX_VIDEO_MODELS.map((m) => m.id));
-export const getVertexVideoModel = (id) => VERTEX_VIDEO_MODELS.find((m) => m.id === id) || null;
+export const GOOGLE_DEFAULT_VIDEO_MODEL = GOOGLE_VIDEO_MODELS[0].id;
+export const GOOGLE_VIDEO_MODEL_IDS = Object.freeze(GOOGLE_VIDEO_MODELS.map((m) => m.id));
+export const getGoogleVideoModel = (id) => GOOGLE_VIDEO_MODELS.find((m) => m.id === id) || null;
 
-const refuse = (message) => Object.assign(new Error(message), { status: 400, code: 'VERTEX_VIDEO_INPUT_INVALID' });
+const refuse = (message) => Object.assign(new Error(message), { status: 400, code: 'GOOGLE_VIDEO_INPUT_INVALID' });
 
 function nearestRatio(width, height, ratios) {
   const w = Number(width);
@@ -85,12 +85,12 @@ const inlineImage = (img) => ({ bytesBase64Encoded: img.data, mimeType: img.mime
  *
  * @returns {{ model, route, body, seconds, resolution, aspectRatio, generateAudio, seed, estimatedCostUsd: null }}
  */
-export function buildVertexVideoRequest({
-  modelId = VERTEX_DEFAULT_VIDEO_MODEL, prompt = '', negativePrompt = '', seconds, resolution, width, height,
+export function buildGoogleVideoRequest({
+  modelId = GOOGLE_DEFAULT_VIDEO_MODEL, prompt = '', negativePrompt = '', seconds, resolution, width, height,
   aspectRatio, image = null, lastImage = null, referenceImages = [], generateAudio = false, seed,
 }) {
-  const model = getVertexVideoModel(modelId);
-  if (!model) throw refuse(`"${modelId}" is not a Vertex AI video model PortOS offers`);
+  const model = getGoogleVideoModel(modelId);
+  if (!model) throw refuse(`"${modelId}" is not a Google video model PortOS offers`);
   const refs = (Array.isArray(referenceImages) ? referenceImages : []).filter(Boolean);
   if (refs.length && image) throw refuse(`${model.label} takes either a start frame or reference images, not both`);
   if (refs.length && !model.maxReferenceImages) throw refuse(`${model.label} takes no reference images; use a start frame or Veo 3.1`);

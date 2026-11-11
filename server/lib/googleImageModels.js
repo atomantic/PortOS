@@ -1,6 +1,6 @@
 /**
- * Google Cloud Vertex AI image model catalog — the curated publisher models the
- * `vertex` image backend (services/imageGen/vertex.js) may call, with one
+ * Google Cloud Agent Platform image model catalog — the curated publisher models the
+ * `google` image backend (services/imageGen/google.js) may call, with one
  * request builder. Dependency-free so the Settings picker, the Image Gen page
  * and the server validate against the same ids; a `cloudModel` naming anything
  * else is refused because every model is billed differently.
@@ -17,7 +17,7 @@
  * these models, one rides as a visible "Avoid:" clause (listed as a chip in the
  * sent-prompt view), the same fallback the fal.ai and Higgsfield backends use.
  *
- * `usdPerImage` is Vertex AI's list price per output image where it is stable
+ * `usdPerImage` is Google's list price per output image where it is stable
  * enough to estimate (null = unknown, never zero); the Cloud billing console has
  * the real charge.
  */
@@ -30,60 +30,61 @@ const SIZE_SLACK = 1.25;
 
 /**
  * Per family:
- *  - `id` — the Vertex publisher model id (`publishers/google/models/{id}`).
+ *  - `id` — the Google publisher model id (`publishers/google/models/{id}`).
  *  - `kind` — 'gemini' (generateContent) or 'imagen' (predict).
  *  - `location` — 'global' to always use the global endpoint, or null for the configured region.
+ *  - `expressMode` — on Google's express-mode model list (an API key with no project).
  *  - `maxInputImages` — inline image cap (0 = text-to-image only).
  *  - `aspectRatios`, `imageSizes` (null when the model has one fixed size).
  *  - `usdPerImage` — `{ [size]: usd }` or a flat number, null when unknown.
  */
-export const VERTEX_IMAGE_FAMILIES = Object.freeze([
+export const GOOGLE_IMAGE_FAMILIES = Object.freeze([
   Object.freeze({
-    id: 'gemini-3-pro-image', label: 'Nano Banana Pro (Gemini 3 Pro Image)', kind: 'gemini', location: 'global',
+    id: 'gemini-3-pro-image', label: 'Nano Banana Pro (Gemini 3 Pro Image)', kind: 'gemini', location: 'global', expressMode: true,
     maxInputImages: 14, aspectRatios: GEMINI_RATIOS, imageSizes: Object.freeze(['1K', '2K', '4K']),
     usdPerImage: Object.freeze({ '1K': 0.134, '2K': 0.134, '4K': 0.24 }),
   }),
   Object.freeze({
-    id: 'gemini-3.1-flash-image', label: 'Nano Banana 2 (Gemini 3.1 Flash Image)', kind: 'gemini', location: 'global',
+    id: 'gemini-3.1-flash-image', label: 'Nano Banana 2 (Gemini 3.1 Flash Image)', kind: 'gemini', location: 'global', expressMode: true,
     maxInputImages: 14, aspectRatios: GEMINI_RATIOS, imageSizes: Object.freeze(['1K', '2K', '4K']),
     usdPerImage: null,
   }),
   Object.freeze({
-    id: 'gemini-2.5-flash-image', label: 'Nano Banana (Gemini 2.5 Flash Image)', kind: 'gemini', location: 'global',
+    id: 'gemini-2.5-flash-image', label: 'Nano Banana (Gemini 2.5 Flash Image)', kind: 'gemini', location: 'global', expressMode: true,
     maxInputImages: 3, aspectRatios: GEMINI_RATIOS, imageSizes: null,
     usdPerImage: 0.039,
   }),
   Object.freeze({
-    id: 'imagen-4.0-ultra-generate-001', label: 'Imagen 4 Ultra', kind: 'imagen', location: null,
+    id: 'imagen-4.0-ultra-generate-001', label: 'Imagen 4 Ultra', kind: 'imagen', location: null, expressMode: false,
     maxInputImages: 0, aspectRatios: IMAGEN_RATIOS, imageSizes: Object.freeze(['1K', '2K']),
     usdPerImage: 0.06,
   }),
   Object.freeze({
-    id: 'imagen-4.0-generate-001', label: 'Imagen 4', kind: 'imagen', location: null,
+    id: 'imagen-4.0-generate-001', label: 'Imagen 4', kind: 'imagen', location: null, expressMode: false,
     maxInputImages: 0, aspectRatios: IMAGEN_RATIOS, imageSizes: Object.freeze(['1K', '2K']),
     usdPerImage: 0.04,
   }),
   Object.freeze({
-    id: 'imagen-4.0-fast-generate-001', label: 'Imagen 4 Fast', kind: 'imagen', location: null,
+    id: 'imagen-4.0-fast-generate-001', label: 'Imagen 4 Fast', kind: 'imagen', location: null, expressMode: false,
     maxInputImages: 0, aspectRatios: IMAGEN_RATIOS, imageSizes: null,
     usdPerImage: 0.02,
   }),
 ]);
 
-export const VERTEX_IMAGE_DEFAULT_MODEL = VERTEX_IMAGE_FAMILIES[0].id;
+export const GOOGLE_IMAGE_DEFAULT_MODEL = GOOGLE_IMAGE_FAMILIES[0].id;
 
-/** Every id a `cloudModel` / `imageGen.vertex.model` may name. */
-export const VERTEX_IMAGE_MODEL_IDS = Object.freeze(VERTEX_IMAGE_FAMILIES.map((f) => f.id));
+/** Every id a `cloudModel` / `imageGen.google.model` may name. */
+export const GOOGLE_IMAGE_MODEL_IDS = Object.freeze(GOOGLE_IMAGE_FAMILIES.map((f) => f.id));
 
 /** The largest reference cap across the catalog, for a caller that does not know the model. */
-export const VERTEX_IMAGE_MAX_INPUT_IMAGES = Math.max(...VERTEX_IMAGE_FAMILIES.map((f) => f.maxInputImages));
+export const GOOGLE_IMAGE_MAX_INPUT_IMAGES = Math.max(...GOOGLE_IMAGE_FAMILIES.map((f) => f.maxInputImages));
 
-export const vertexImageFamily = (modelId) => (typeof modelId === 'string'
-  ? VERTEX_IMAGE_FAMILIES.find((f) => f.id === modelId.trim()) || null
+export const googleImageFamily = (modelId) => (typeof modelId === 'string'
+  ? GOOGLE_IMAGE_FAMILIES.find((f) => f.id === modelId.trim()) || null
   : null);
 
 /** "~$0.04/image" style hint for a picker, or '' when the price is unknown. */
-export function vertexImagePriceLabel(family) {
+export function googleImagePriceLabel(family) {
   const price = family?.usdPerImage;
   if (price == null) return '';
   const values = typeof price === 'number' ? [price] : Object.values(price);
@@ -91,7 +92,7 @@ export function vertexImagePriceLabel(family) {
   return `${values.length > 1 && Math.max(...values) !== low ? 'from ' : ''}~$${low}/image`;
 }
 
-const refuse = (message) => Object.assign(new Error(message), { status: 400, code: 'VERTEX_IMAGE_INPUT_INVALID' });
+const refuse = (message) => Object.assign(new Error(message), { status: 400, code: 'GOOGLE_IMAGE_INPUT_INVALID' });
 
 function nearestRatio(w, h, ratios) {
   const target = Math.log(w / h);
@@ -100,7 +101,7 @@ function nearestRatio(w, h, ratios) {
 }
 
 /** The prompt text the model receives: the user's words plus a folded "Avoid:" clause. */
-function vertexImagePromptText(prompt = '', negativePrompt = '') {
+function googleImagePromptText(prompt = '', negativePrompt = '') {
   const negative = typeof negativePrompt === 'string' ? negativePrompt.trim() : '';
   const base = String(prompt ?? '').trim();
   return negative ? `${base}\nAvoid: ${negative}` : base;
@@ -113,18 +114,18 @@ function vertexImagePromptText(prompt = '', negativePrompt = '') {
  *
  * @returns {{ family, method, body, location, imageSize, aspectRatio, estimatedCostUsd }}
  */
-export function buildVertexImageRequest({
-  modelId = VERTEX_IMAGE_DEFAULT_MODEL, prompt = '', negativePrompt = '', width, height, images = [], seed,
+export function buildGoogleImageRequest({
+  modelId = GOOGLE_IMAGE_DEFAULT_MODEL, prompt = '', negativePrompt = '', width, height, images = [], seed,
 }) {
-  const family = vertexImageFamily(modelId);
-  if (!family) throw refuse(`Unknown Vertex AI image model: ${modelId}`);
+  const family = googleImageFamily(modelId);
+  if (!family) throw refuse(`Unknown Google image model: ${modelId}`);
   const inputs = (Array.isArray(images) ? images : []).filter(Boolean);
   if (inputs.length > family.maxInputImages) {
     throw refuse(family.maxInputImages
       ? `${family.label} takes at most ${family.maxInputImages} input image${family.maxInputImages === 1 ? '' : 's'} (received ${inputs.length})`
       : `${family.label} is text-to-image only; remove the input images or pick a Gemini image model`);
   }
-  const text = vertexImagePromptText(prompt, negativePrompt);
+  const text = googleImagePromptText(prompt, negativePrompt);
   if (!text) throw refuse('Prompt is required');
   const w = Number(width);
   const h = Number(height);

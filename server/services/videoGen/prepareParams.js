@@ -85,15 +85,15 @@ import { RUNWAY_SPECIAL_VIDEO_MODES } from '../../lib/runwaySpecialVideoModels.j
 import { isMiniMaxH3SpeedProfileRequest } from '../../lib/minimaxH3SpeedProfiles.js';
 
 // A hosted renderer is picked with `backend`, not `modelId`; say so to an API caller who sends its name.
-const HOSTED_VIDEO_BACKENDS = ['grok', 'fal', 'reactor', 'runway', 'gemini', 'higgsfield', 'vertex'];
+const HOSTED_VIDEO_BACKENDS = ['grok', 'fal', 'reactor', 'runway', 'gemini', 'higgsfield', 'google'];
 export const unknownVideoModelMessage = (modelId) => (HOSTED_VIDEO_BACKENDS.includes(modelId)
   ? `Unknown modelId: ${modelId}. ${modelId} is a renderer: send backend: "${modelId}" instead of modelId`
   : `Unknown modelId: ${modelId}`);
 
-/** Hosted lanes cannot consume the generic reference inputs used by local models, except Runway's, Higgsfield's and Vertex AI's own image picks (hostedSubmission.js). */
+/** Hosted lanes cannot consume the generic reference inputs used by local models, except Runway's, Higgsfield's and Google's own image picks (hostedSubmission.js). */
 export function hostedReferenceInputsError({ backend, body, uploads = {} }) {
   if (backend === VIDEO_GEN_MODE.LOCAL
-    || !((body.referenceImageFiles?.length && !body.guidanceImageFile && backend !== VIDEO_GEN_MODE.RUNWAY && backend !== VIDEO_GEN_MODE.HIGGSFIELD && backend !== VIDEO_GEN_MODE.VERTEX) || body.referenceVideoIds?.length
+    || !((body.referenceImageFiles?.length && !body.guidanceImageFile && backend !== VIDEO_GEN_MODE.RUNWAY && backend !== VIDEO_GEN_MODE.HIGGSFIELD && backend !== VIDEO_GEN_MODE.GOOGLE) || body.referenceVideoIds?.length
       || REFERENCE_AUDIO_FIELDS.some((field) => uploads[field]))) return null;
   return new ServerError('Reference images, clips and voice clips are only used by local reference-to-video models and, for images, Runway, Higgsfield and Veo models that take them.',
     { status: 400, code: 'VIDEO_REFERENCE_INPUTS_LOCAL_ONLY' });

@@ -77,12 +77,12 @@ import {
   higgsfieldImageFamily,
 } from '../../../server/lib/higgsfieldImageModels.js';
 import {
-  VERTEX_IMAGE_DEFAULT_MODEL,
-  VERTEX_IMAGE_FAMILIES,
-  VERTEX_IMAGE_MODEL_IDS,
-  vertexImageFamily,
-  vertexImagePriceLabel,
-} from '../../../server/lib/vertexImageModels.js';
+  GOOGLE_IMAGE_DEFAULT_MODEL,
+  GOOGLE_IMAGE_FAMILIES,
+  GOOGLE_IMAGE_MODEL_IDS,
+  googleImageFamily,
+  googleImagePriceLabel,
+} from '../../../server/lib/googleImageModels.js';
 
 export {
   // Shipped per-backend defaults, so a UI that displays "the model/effort a job
@@ -110,12 +110,12 @@ export {
   HIGGSFIELD_IMAGE_FAMILIES,
   HIGGSFIELD_IMAGE_MODEL_IDS,
   higgsfieldImageFamily,
-  // The curated Vertex AI image catalog (Gemini image and Imagen 4), keyed by model id.
-  VERTEX_IMAGE_DEFAULT_MODEL,
-  VERTEX_IMAGE_FAMILIES,
-  VERTEX_IMAGE_MODEL_IDS,
-  vertexImageFamily,
-  vertexImagePriceLabel,
+  // The curated Google image catalog (Gemini image and Imagen 4), keyed by model id.
+  GOOGLE_IMAGE_DEFAULT_MODEL,
+  GOOGLE_IMAGE_FAMILIES,
+  GOOGLE_IMAGE_MODEL_IDS,
+  googleImageFamily,
+  googleImagePriceLabel,
   // The ratios grok's image tools accept — the Settings default-ratio picker.
   GROK_ASPECT_RATIOS,
   // Backends that support image-to-image, ordered best-first: what the i2i-only
@@ -207,7 +207,7 @@ export const MODE_LABELS = Object.freeze({
   [VIDEO_GEN_MODE.RUNWAY]: 'Runway',
   [VIDEO_GEN_MODE.GEMINI]: 'Gemini',
   [VIDEO_GEN_MODE.HIGGSFIELD]: 'Higgsfield',
-  [VIDEO_GEN_MODE.VERTEX]: 'Vertex AI',
+  [VIDEO_GEN_MODE.GOOGLE]: 'Google',
 });
 
 // Backends a record pin or a one-shot frame render can name. External is an
@@ -220,7 +220,7 @@ export const IMAGE_PIN_MODES = Object.freeze([
   IMAGE_GEN_MODE.FAL,
   IMAGE_GEN_MODE.RUNWAY,
   IMAGE_GEN_MODE.HIGGSFIELD,
-  IMAGE_GEN_MODE.VERTEX,
+  IMAGE_GEN_MODE.GOOGLE,
 ]);
 
 export { RUNWAY_IMAGE_DISCLOSURE, RUNWAY_IMAGE_MODELS, RUNWAY_IMAGE_DEFAULT_MODEL, RUNWAY_IMAGE_MODEL_IDS, getRunwayImageModel } from '../../../server/lib/runwayImageModels.js';
@@ -241,9 +241,9 @@ export const HIGGSFIELD_IMAGE_MODEL_OPTIONS = Object.freeze(HIGGSFIELD_IMAGE_FAM
   label: `${family.label} (${family.maxInputImages ? `up to ${family.maxInputImages} ref${family.maxInputImages === 1 ? '' : 's'}` : 'text only'})`,
 })));
 
-// The Vertex AI picker rows — one per model, labeled with price and reference cap.
-export const VERTEX_IMAGE_MODEL_OPTIONS = Object.freeze(VERTEX_IMAGE_FAMILIES.map((family) => {
-  const price = vertexImagePriceLabel(family);
+// The Google picker rows — one per model, labeled with price and reference cap.
+export const GOOGLE_IMAGE_MODEL_OPTIONS = Object.freeze(GOOGLE_IMAGE_FAMILIES.map((family) => {
+  const price = googleImagePriceLabel(family);
   const refs = family.maxInputImages ? `up to ${family.maxInputImages} refs` : 'text only';
   return Object.freeze({ id: family.id, label: `${family.label} (${price ? `${price}, ` : ''}${refs})` });
 }));

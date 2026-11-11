@@ -1,15 +1,15 @@
 /**
- * Image Gen — Google Cloud Vertex AI provider (Gemini image models and Imagen 4).
+ * Image Gen — Google Cloud Agent Platform provider (Gemini image models and Imagen 4).
  *
  * Same job/SSE/event contract as `fal.js` and `higgsfield.js`, so the media
- * queue runs it on the parallel cloud lane. Vertex answers synchronously: one
+ * queue runs it on the parallel cloud lane. Google answers synchronously: one
  * generateContent (Gemini) or predict (Imagen) call returns the image inline,
  * so there is no queue to poll and nothing to delete remotely afterwards. Input
  * images travel inline as base64. The catalog and request builder live in
- * `lib/vertexImageModels.js`; auth and endpoints in `services/vertexApi.js`.
+ * `lib/googleImageModels.js`; auth and endpoints in `services/googleCloudApi.js`.
  *
  * Money: every call is billed. The dispatcher refuses unless
- * `imageGen.vertex.enabled` is on, `checkConnection` only makes a free model
+ * `imageGen.google.enabled` is on, `checkConnection` only makes a free model
  * read, and the model is validated against the catalog. The credential is
  * shared with the video backend and re-resolved at dispatch, never persisted in
  * queue params.
@@ -25,13 +25,15 @@ import { atomicWrite, detectImageFormat, ensureDir, PATHS, unlinkGuarded } from 
 import { ServerError } from '../../lib/errorHandler.js';
 import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { renderTimingFields } from '../../lib/renderTiming.js';
-import { VERTEX_IMAGE_DEFAULT_MODEL, buildVertexImageRequest, vertexImageFamily } from '../../lib/vertexImageModels.js';
+import { GOOGLE_IMAGE_DEFAULT_MODEL, buildGoogleImageRequest, googleImageFamily } from '../../lib/googleImageModels.js';
 import {
   broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, createJobFailureFinalizer, dispatchTerminalEvent,
 } from '../../lib/sseUtils.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { getSettings } from '../settings.js';
-import { checkVertexModel, resolveVertexConfig, vertexInlineImage, vertexModelUrl, vertexPost } from '../vertexApi.js';
+import {
+  checkGoogleModel, googleExpressModeRefusal, googleInlineImage, googleModelUrl, googlePost, resolveGoogleConfig,
+} from '../googleCloudApi.js';
 import { IMAGE_GEN_MODE, describeFidelity, visualReferenceRole } from './modes.js';
 import { resolveInputImages } from './inputImages.js';
 import { assertSnapshotForAdapter } from './reviewedReference.js';
@@ -39,9 +41,9 @@ import { cloudPromptRequired } from './cloudProviderConfig.js';
 import { rejectDegenerateFrame } from './frameGuard.js';
 import { carriedPromptAdditions, promptAddition, sentPromptRecord } from '../../lib/modelInput.js';
 
-const MODE = IMAGE_GEN_MODE.VERTEX;
-const VERTEX_IMAGE_TIMEOUT_MS = (() => {
-  const n = Number(process.env.VERTEX_IMAGE_TIMEOUT_MS);
+const MODE = IMAGE_GEN_MODE.GOOGLE;
+const GOOGLE_IMAGE_TIMEOUT_MS = (() => {
+  const n = Number(process.env.GOOGLE_IMAGE_TIMEOUT_MS);
   return Number.isFinite(n) && n > 0 ? n : 5 * 60 * 1000;
 })();
 // Up to 14 inputs ride in one JSON body, so a large photo is downscaled first.
@@ -64,7 +66,7 @@ const preparations = createMediaJobPreparation();
 // wait and discards the result (still billed, so the run is unsettled).
 export const cancel = (jobId) => {
   if (!jobId) {
-    throw new Error('imageGen/vertex.cancel requires a jobId — use cancelAll() to terminate every in-flight render');
+    throw new Error('imageGen/google.cancel requires a jobId — use cancelAll() to terminate every in-flight render');
   }
   const pending = preparations.cancel(jobId);
   if (pending) return pending;
@@ -82,20 +84,22 @@ export const cancelAll = () => {
   return true;
 };
 
-const noKeyReason = 'No Vertex AI credential configured — add an API key or service account JSON in Settings → Credentials (Google Vertex AI) or set VERTEX_API_KEY';
+const noKeyReason = 'No Google credential configured — add an API key or service account JSON in Settings → Credentials (Google Cloud (Agent Platform)) or set GOOGLE_CLOUD_API_KEY';
 
 /** Free probe: the credential authenticates and reaches the chosen model. Never renders. */
-export async function checkConnection({ model = VERTEX_IMAGE_DEFAULT_MODEL } = {}) {
-  const family = vertexImageFamily(model) || vertexImageFamily(VERTEX_IMAGE_DEFAULT_MODEL);
+export async function checkConnection({ model = GOOGLE_IMAGE_DEFAULT_MODEL } = {}) {
+  const family = googleImageFamily(model) || googleImageFamily(GOOGLE_IMAGE_DEFAULT_MODEL);
   const base = { mode: MODE, model: family.label, modelId: family.id };
   let config;
   try {
-    config = resolveVertexConfig(await getSettings().catch(() => null));
+    config = resolveGoogleConfig(await getSettings().catch(() => null));
   } catch (err) {
     return { ...base, connected: false, reason: err.message };
   }
   if (!config) return { ...base, connected: false, reason: noKeyReason };
-  const probe = await checkVertexModel(config, family.id, { location: family.location });
+  const expressRefusal = googleExpressModeRefusal(config, family);
+  if (expressRefusal) return { ...base, connected: false, reason: expressRefusal };
+  const probe = await checkGoogleModel(config, family.id, { location: family.location });
   return { ...base, connected: probe.ok, ...(probe.ok ? {} : { reason: probe.reason }) };
 }
 
@@ -108,23 +112,23 @@ function imageRoleLines({ hasInitImage, initImageStrength, referenceCount }) {
 }
 
 /**
- * The exact text Vertex receives and the record of what PortOS added (#11317).
+ * The exact text Google receives and the record of what PortOS added (#11317).
  * Shared by the render and the compose preview; it also runs the request
  * builder, so an unsupported input refuses before anything is queued.
  */
-export function vertexImageSentPrompt({ family, prompt = '', negativePrompt, inputImages, initImageStrength, promptAdditions = [], width, height }) {
+export function googleImageSentPrompt({ family, prompt = '', negativePrompt, inputImages, initImageStrength, promptAdditions = [], width, height }) {
   const roles = imageRoleLines({
     hasInitImage: Boolean(inputImages.initPath), initImageStrength, referenceCount: inputImages.referencePaths.length,
   });
   const fullPrompt = [String(prompt ?? '').trim(), roles].filter(Boolean).join('\n\n');
   let request;
   try {
-    request = buildVertexImageRequest({
+    request = buildGoogleImageRequest({
       modelId: family.id, prompt: fullPrompt, negativePrompt, width, height,
       images: inputImages.paths.map(() => ({ mimeType: 'image/png', data: '' })),
     });
   } catch (err) {
-    throw new ServerError(err.message, { status: 400, code: err.code || 'VERTEX_IMAGE_INPUT_INVALID' });
+    throw new ServerError(err.message, { status: 400, code: err.code || 'GOOGLE_IMAGE_INPUT_INVALID' });
   }
   const sentPrompt = family.kind === 'gemini' ? request.body.contents[0].parts[0].text : request.body.instances[0].prompt;
   return {
@@ -145,11 +149,11 @@ async function encodeInputImage(filePath, reviewedBytes = null) {
   const metadata = await sharp(input).metadata();
   const longSide = Math.max(metadata.width || 0, metadata.height || 0);
   if (longSide <= INPUT_MAX_LONG_SIDE && input.length <= INPUT_MAX_BYTES && ['png', 'jpeg', 'webp'].includes(metadata.format)) {
-    return vertexInlineImage(input);
+    return googleInlineImage(input);
   }
   const resized = sharp(input).rotate()
     .resize({ width: INPUT_MAX_LONG_SIDE, height: INPUT_MAX_LONG_SIDE, fit: 'inside', withoutEnlargement: true });
-  return vertexInlineImage(await (metadata.hasAlpha ? resized.png() : resized.jpeg({ quality: 90 })).toBuffer());
+  return googleInlineImage(await (metadata.hasAlpha ? resized.png() : resized.jpeg({ quality: 90 })).toBuffer());
 }
 
 /** The first image a response carries, or `{ reason }` explaining why there is none. */
@@ -158,7 +162,7 @@ function responseImage(family, payload) {
     const prediction = Array.isArray(payload?.predictions) ? payload.predictions.find((p) => typeof p?.bytesBase64Encoded === 'string') : null;
     if (prediction) return { bytes: Buffer.from(prediction.bytesBase64Encoded, 'base64') };
     const filtered = payload?.predictions?.find?.((p) => typeof p?.raiFilteredReason === 'string')?.raiFilteredReason;
-    return { reason: `Vertex AI returned no image${filtered ? `: ${filtered.slice(0, 300)}` : ' (blocked by its safety filter)'}` };
+    return { reason: `Google returned no image${filtered ? `: ${filtered.slice(0, 300)}` : ' (blocked by its safety filter)'}` };
   }
   const candidate = Array.isArray(payload?.candidates) ? payload.candidates[0] : null;
   const part = candidate?.content?.parts?.find?.((p) => typeof p?.inlineData?.data === 'string');
@@ -167,7 +171,7 @@ function responseImage(family, payload) {
   const finish = candidate?.finishReason;
   const said = candidate?.content?.parts?.find?.((p) => typeof p?.text === 'string')?.text;
   const why = blocked ? `prompt blocked (${blocked})` : finish && finish !== 'STOP' ? `finish reason ${finish}` : said ? `the model answered "${said.replace(/\s+/g, ' ').slice(0, 200)}"` : 'no image part';
-  return { reason: `Vertex AI returned no image: ${why}` };
+  return { reason: `Google returned no image: ${why}` };
 }
 
 export const generateImage = (params) => preparations.run(params, generateImagePrepared);
@@ -184,26 +188,28 @@ async function generateImagePrepared({
 }) {
   const renderStartedAtMs = Date.now();
   await ensureDir(PATHS.images);
-  const family = vertexImageFamily(model || VERTEX_IMAGE_DEFAULT_MODEL);
+  const family = googleImageFamily(model || GOOGLE_IMAGE_DEFAULT_MODEL);
   if (!family) {
-    throw new ServerError(`Vertex AI Imagegen has no model "${model}"`, { status: 400, code: 'VERTEX_IMAGE_MODEL_UNKNOWN' });
+    throw new ServerError(`Google Imagegen has no model "${model}"`, { status: 400, code: 'GOOGLE_IMAGE_MODEL_UNKNOWN' });
   }
   const inputImages = resolveInputImages({ mode: MODE, initImagePath, referenceImagePaths, modelId: family.id });
   if (inputImages.paths.length !== (initImagePath ? 1 : 0) + referenceImagePaths.length) {
     throw new ServerError(family.maxInputImages
       ? `${family.label} takes at most ${family.maxInputImages} input image${family.maxInputImages === 1 ? '' : 's'}`
-      : `${family.label} is text-to-image only; pick a Gemini image model to use input images`, { status: 400, code: 'VERTEX_IMAGE_INPUT_INVALID' });
+      : `${family.label} is text-to-image only; pick a Gemini image model to use input images`, { status: 400, code: 'GOOGLE_IMAGE_INPUT_INVALID' });
   }
   if (cloudPromptRequired(MODE, inputImages.paths.length > 0) && !prompt?.trim()) {
     throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
   }
-  const config = resolveVertexConfig(settings || await getSettings().catch(() => null));
-  if (!config) throw new ServerError(noKeyReason, { status: 400, code: 'VERTEX_NOT_CONFIGURED' });
+  const config = resolveGoogleConfig(settings || await getSettings().catch(() => null));
+  if (!config) throw new ServerError(noKeyReason, { status: 400, code: 'GOOGLE_NOT_CONFIGURED' });
+  const expressRefusal = googleExpressModeRefusal(config, family);
+  if (expressRefusal) throw new ServerError(expressRefusal, { status: 400, code: 'GOOGLE_PROJECT_REQUIRED' });
 
   const jobId = providedJobId || randomUUID();
   const filename = `${jobId}.png`;
   const outputPath = join(PATHS.images, filename);
-  const { fullPrompt, request: planned, record: sentRecord } = vertexImageSentPrompt({
+  const { fullPrompt, request: planned, record: sentRecord } = googleImageSentPrompt({
     family, prompt, negativePrompt, inputImages, initImageStrength, promptAdditions, width, height,
   });
 
@@ -226,21 +232,21 @@ async function generateImagePrepared({
   const job = { ...meta, clients: [], status: 'running', renderStartedAtMs };
   jobs.set(jobId, job);
 
-  console.log(`🎨 Generating image [${jobId.slice(0, 8)}] Vertex AI (${family.id})`);
+  console.log(`🎨 Generating image [${jobId.slice(0, 8)}] Google (${family.id})`);
   imageGenEvents.emit('started', { generationId: jobId, totalSteps: 1 });
   activeJobs.set(jobId, { ...meta, generationId: jobId, totalSteps: 1, step: 0, progress: 0, currentImage: null });
-  broadcastSse(job, { type: 'status', message: 'Rendering on Vertex AI…' });
-  runVertex(job, jobId, {
+  broadcastSse(job, { type: 'status', message: 'Rendering on Google…' });
+  runGoogle(job, jobId, {
     config, family, fullPrompt, negativePrompt, width, height, seed, inputImages, reviewedReferenceBytes,
     outputPath, filename, meta, cleanC2PA, denoise,
   }).catch((err) => {
-    console.error(`❌ Vertex AI image run failed [${jobId.slice(0, 8)}]: ${err?.message}`);
+    console.error(`❌ Google image run failed [${jobId.slice(0, 8)}]: ${err?.message}`);
   });
 
   return { jobId, filename, path: `/data/images/${filename}`, generationId: jobId, mode: MODE, status: 'running' };
 }
 
-async function runVertex(job, jobId, {
+async function runGoogle(job, jobId, {
   config, family, fullPrompt, negativePrompt, width, height, seed, inputImages, reviewedReferenceBytes,
   outputPath, filename, meta, cleanC2PA = false, denoise = false,
 }) {
@@ -257,9 +263,9 @@ async function runVertex(job, jobId, {
       images.push(await encodeInputImage(path, index === 0 ? reviewedReferenceBytes : null));
     }
     if (entry.aborted) return finalizeCanceled(job, jobId);
-    const request = buildVertexImageRequest({ modelId: family.id, prompt: fullPrompt, negativePrompt, width, height, images, seed });
-    const url = vertexModelUrl(config, family.id, request.method, { location: request.location });
-    const payload = await vertexPost(config, url, request.body, { signal, timeoutMs: VERTEX_IMAGE_TIMEOUT_MS });
+    const request = buildGoogleImageRequest({ modelId: family.id, prompt: fullPrompt, negativePrompt, width, height, images, seed });
+    const url = googleModelUrl(config, family.id, request.method, { location: request.location });
+    const payload = await googlePost(config, url, request.body, { signal, timeoutMs: GOOGLE_IMAGE_TIMEOUT_MS });
     if (entry.aborted) return finalizeCanceled(job, jobId);
     const image = responseImage(family, payload);
     if (!image.bytes) return finalizeJobFailure(job, jobId, null, image.reason);
@@ -269,7 +275,7 @@ async function runVertex(job, jobId, {
       if (entry.aborted) return finalizeCanceled(job, jobId);
       try {
         const format = detectImageFormat(bytes)?.format;
-        if (!format) return finalizeJobFailure(job, jobId, null, 'Vertex AI returned a file that is not an image');
+        if (!format) return finalizeJobFailure(job, jobId, null, 'Google returned a file that is not an image');
         await atomicWrite(outputPath, format === 'png' ? bytes : await sharp(bytes).png().toBuffer());
         wroteOutput = true;
         if (entry.aborted) {
@@ -296,7 +302,7 @@ async function runVertex(job, jobId, {
         job.status = 'complete';
         if (activeRequests.get(jobId) === entry) activeRequests.delete(jobId);
         activeJobs.delete(jobId);
-        console.log(`✅ Image generated [${jobId.slice(0, 8)}]: ${filename} (Vertex AI ${family.id})`);
+        console.log(`✅ Image generated [${jobId.slice(0, 8)}]: ${filename} (Google ${family.id})`);
         const done = { filename, path: `/data/images/${filename}` };
         dispatchTerminalEvent(
           jobId,
@@ -313,7 +319,7 @@ async function runVertex(job, jobId, {
     });
   } catch (err) {
     if (entry.aborted) return finalizeCanceled(job, jobId);
-    finalizeJobFailure(job, jobId, null, `Vertex AI image generation failed: ${err?.message || err}`, { force: true });
+    finalizeJobFailure(job, jobId, null, `Google image generation failed: ${err?.message || err}`, { force: true });
   } finally {
     clearInterval(heartbeat);
   }
@@ -323,7 +329,7 @@ const finalizeJobFailure = createJobFailureFinalizer({
   jobs,
   activeJobs,
   activeSlots: activeRequests,
-  label: 'Vertex AI image generation',
+  label: 'Google image generation',
   events: imageGenEvents,
   failedPayload: (jobId, reason) => ({ mode: MODE, generationId: jobId, error: reason }),
 });

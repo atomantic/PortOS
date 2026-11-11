@@ -17,7 +17,7 @@ import { storyboardGuidanceJobParams } from './storyboardGuidance.js';
 import { videoReferenceImageSlots } from './requestFields.js';
 import { GEMINI_OMNI_WEB_MODEL } from '../../lib/geminiWebVideo.js';
 import { HIGGSFIELD_DEFAULT_VIDEO_MODEL, buildHiggsfieldVideoRequest } from '../../lib/higgsfieldVideoModels.js';
-import { VERTEX_DEFAULT_VIDEO_MODEL, buildVertexVideoRequest } from '../../lib/vertexVideoModels.js';
+import { GOOGLE_DEFAULT_VIDEO_MODEL, buildGoogleVideoRequest } from '../../lib/googleVideoModels.js';
 
 // Every hosted backend anchors a reference image as frame one, so a loose
 // reference mode is a local-runtime promise it can never keep. Submission
@@ -169,20 +169,20 @@ async function stageHiggsfieldInputs(ctx) {
 // Veo renders from a prompt, a start frame (optionally with an end frame) or,
 // on Veo 3.1, gallery asset reference images. The catalog dry run refuses a
 // combination the chosen model cannot take before anything is staged.
-async function stageVertexInputs(ctx) {
+async function stageGoogleInputs(ctx) {
   const { body, uploads, sourceImagePath, cleanupStaged } = ctx;
   const refuse = async (message) => {
     await cleanupStaged();
     throw new ServerError(message, { status: 400, code: 'VALIDATION_ERROR' });
   };
-  if (uploads.audioFile) await refuse('Vertex AI Veo takes no source audio; turn on Provider audio instead.');
+  if (uploads.audioFile) await refuse('Google Veo takes no source audio; turn on Provider audio instead.');
   const hasEndFrame = !!uploads.lastImage || !!body.lastImageFile;
   const pickedReferences = body.musicVideo ? [] : body.referenceImageFiles || [];
   const placeholder = { mimeType: 'image/png', data: '' };
   try {
-    buildVertexVideoRequest({
-      modelId: body.vertexModelId || VERTEX_DEFAULT_VIDEO_MODEL, prompt: body.prompt, negativePrompt: body.negativePrompt,
-      seconds: body.vertexDuration,
+    buildGoogleVideoRequest({
+      modelId: body.googleModelId || GOOGLE_DEFAULT_VIDEO_MODEL, prompt: body.prompt, negativePrompt: body.negativePrompt,
+      seconds: body.googleDuration,
       image: sourceImagePath ? placeholder : null, lastImage: hasEndFrame ? placeholder : null,
       referenceImages: pickedReferences.map(() => placeholder),
     });
@@ -336,25 +336,25 @@ export const HOSTED_VIDEO_SUBMISSIONS = {
       ...(body.higgsfieldSeed != null ? { seed: body.higgsfieldSeed } : {}),
     }),
   },
-  [VIDEO_GEN_MODE.VERTEX]: {
-    prepare: (settings) => ({ usable: isVideoModeUsable(settings, VIDEO_GEN_MODE.VERTEX), extras: {} }),
-    stageInputs: stageVertexInputs,
-    validateRetry: (params) => assertAnchoredReference(VIDEO_GEN_MODE.VERTEX, params),
-    errorCode: 'VERTEX_NOT_CONFIGURED',
-    errorMessage: 'No Vertex AI credential configured — add it in Settings → Credentials (Google Vertex AI) or the VERTEX_API_KEY env var first',
-    // The model, length, size and audio flag are resolved against the catalog by videoGen/vertex.js.
+  [VIDEO_GEN_MODE.GOOGLE]: {
+    prepare: (settings) => ({ usable: isVideoModeUsable(settings, VIDEO_GEN_MODE.GOOGLE), extras: {} }),
+    stageInputs: stageGoogleInputs,
+    validateRetry: (params) => assertAnchoredReference(VIDEO_GEN_MODE.GOOGLE, params),
+    errorCode: 'GOOGLE_NOT_CONFIGURED',
+    errorMessage: 'No Google credential configured — add it in Settings → Credentials (Google Cloud (Agent Platform)) or the GOOGLE_CLOUD_API_KEY env var first',
+    // The model, length, size and audio flag are resolved against the catalog by videoGen/google.js.
     buildParams: (body, prepared) => ({
-      modelId: body.vertexModelId,
+      modelId: body.googleModelId,
       ...(prepared.lastImagePath ? { lastImagePath: prepared.lastImagePath } : {}),
       ...(prepared.referenceImagePaths?.length ? { referenceImagePaths: prepared.referenceImagePaths } : {}),
       ...(prepared.uploadedTempPaths?.length ? { uploadedTempPaths: prepared.uploadedTempPaths } : {}),
       aspectRatio: body.visualConditioning?.render?.parameters?.aspectRatio,
       width: body.width,
       height: body.height,
-      duration: body.vertexDuration,
-      ...(body.vertexResolution ? { resolution: body.vertexResolution } : {}),
-      ...(body.vertexGenerateAudio === true ? { generateAudio: true } : {}),
-      ...(body.vertexSeed != null ? { seed: body.vertexSeed } : {}),
+      duration: body.googleDuration,
+      ...(body.googleResolution ? { resolution: body.googleResolution } : {}),
+      ...(body.googleGenerateAudio === true ? { generateAudio: true } : {}),
+      ...(body.googleSeed != null ? { seed: body.googleSeed } : {}),
     }),
   },
   [VIDEO_GEN_MODE.GEMINI]: {

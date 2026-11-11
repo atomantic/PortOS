@@ -1,13 +1,13 @@
 /**
- * Video Gen — Google Cloud Vertex AI Veo provider.
+ * Video Gen — Google Cloud Agent Platform Veo provider.
  *
  * Same job-map/SSE contract as `videoGen/higgsfield.js` (cloud lane, no local
- * child process). `lib/vertexVideoModels.js` builds the one predictLongRunning
+ * child process). `lib/googleVideoModels.js` builds the one predictLongRunning
  * instance from the inputs (prompt, start frame, end frame or asset reference
- * images, all inline base64); `services/vertexApi.js` submits and polls it.
+ * images, all inline base64); `services/googleCloudApi.js` submits and polls it.
  * The MP4 comes back inline and goes through the shared `finalizeGeneratedVideo`.
  *
- * Money: every submit is billed and Vertex cannot cancel a Veo operation, so a
+ * Money: every submit is billed and Google cannot cancel a Veo operation, so a
  * canceled render is marked unsettled. The credential is resolved from live
  * settings at dispatch and never rides in persisted queue params.
  */
@@ -18,7 +18,7 @@ import { writeFile, unlink } from 'fs/promises';
 import { basename, join, relative, resolve, isAbsolute } from 'path';
 import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { VERTEX_DEFAULT_VIDEO_MODEL, buildVertexVideoRequest, getVertexVideoModel } from '../../lib/vertexVideoModels.js';
+import { GOOGLE_DEFAULT_VIDEO_MODEL, buildGoogleVideoRequest, getGoogleVideoModel } from '../../lib/googleVideoModels.js';
 import { probeVideoGeometry } from '../../lib/ffmpeg.js';
 import { attachSseClient as attachSse, closeJobAfterDelay, createJobFailureFinalizer } from '../../lib/sseUtils.js';
 import { videoGenEvents } from './events.js';
@@ -28,13 +28,13 @@ import { mutateVideoHistory } from './history.js';
 import { getSettings } from '../settings.js';
 import { frameDataUriAtAspect } from './falFrameAspect.js';
 import {
-  abandonVertexOperation, awaitVertexOperation, createVertexOperationEntry, resolveVertexConfig, submitVertexOperation,
-  vertexFilteredReason, vertexInlineImage,
-} from '../vertexApi.js';
+  abandonGoogleOperation, awaitGoogleOperation, createGoogleOperationEntry, resolveGoogleConfig, submitGoogleOperation, googleExpressModeRefusal,
+  googleFilteredReason, googleInlineImage,
+} from '../googleCloudApi.js';
 import { carriedPromptAdditions, sentPromptRecord } from '../../lib/modelInput.js';
 
-const VERTEX_RENDER_TIMEOUT_MS = (() => {
-  const n = Number(process.env.VERTEX_VIDEO_TIMEOUT_MS);
+const GOOGLE_RENDER_TIMEOUT_MS = (() => {
+  const n = Number(process.env.GOOGLE_VIDEO_TIMEOUT_MS);
   return Number.isFinite(n) && n > 0 ? n : 30 * 60 * 1000;
 })();
 const PLACEHOLDER_IMAGE = Object.freeze({ mimeType: 'image/png', data: '' });
@@ -53,7 +53,7 @@ const preparations = createMediaJobPreparation();
 
 export const cancel = (jobId) => {
   if (!jobId) {
-    throw new Error('videoGen/vertex.cancel requires a jobId — use cancelAll() to terminate every in-flight render');
+    throw new Error('videoGen/google.cancel requires a jobId — use cancelAll() to terminate every in-flight render');
   }
   const pending = preparations.cancel(jobId);
   if (pending) return pending;
@@ -77,14 +77,14 @@ export const cancelAll = () => {
  * and the record of the text Veo receives (#11317); the Video Gen preview calls
  * it with the same inputs.
  */
-export function vertexVideoSentPrompt({
+export function googleVideoSentPrompt({
   hasImage = false, hasEndImage = false, referenceCount = 0, promptAdditions = [], ...spec
 }) {
   let planned;
   try {
-    planned = buildVertexVideoRequest({
+    planned = buildGoogleVideoRequest({
       ...spec,
-      modelId: spec.modelId || VERTEX_DEFAULT_VIDEO_MODEL,
+      modelId: spec.modelId || GOOGLE_DEFAULT_VIDEO_MODEL,
       image: hasImage ? PLACEHOLDER_IMAGE : null,
       lastImage: hasEndImage ? PLACEHOLDER_IMAGE : null,
       referenceImages: Array.from({ length: referenceCount }, () => PLACEHOLDER_IMAGE),
@@ -111,19 +111,22 @@ async function generateVideoPrepared({
 }) {
   await ensureDir(PATHS.videos);
   const renderStartedAtMs = Date.now();
-  const modelId = requestedModelId || VERTEX_DEFAULT_VIDEO_MODEL;
-  if (!getVertexVideoModel(modelId)) {
-    throw new ServerError(`"${modelId}" is not a Vertex AI video model PortOS offers`, { status: 400, code: 'VALIDATION_ERROR' });
+  const modelId = requestedModelId || GOOGLE_DEFAULT_VIDEO_MODEL;
+  if (!getGoogleVideoModel(modelId)) {
+    throw new ServerError(`"${modelId}" is not a Google video model PortOS offers`, { status: 400, code: 'VALIDATION_ERROR' });
   }
-  const config = resolveVertexConfig(settings || await getSettings().catch(() => null));
+  const config = resolveGoogleConfig(settings || await getSettings().catch(() => null));
   if (!config) {
-    throw new ServerError('No Vertex AI credential configured — add it in Settings → Credentials (Google Vertex AI) or set VERTEX_API_KEY', { status: 400, code: 'VERTEX_NOT_CONFIGURED' });
+    throw new ServerError('No Google credential configured — add it in Settings → Credentials (Google Cloud (Agent Platform)) or set GOOGLE_CLOUD_API_KEY', { status: 400, code: 'GOOGLE_NOT_CONFIGURED' });
   }
+  // No Veo model is on the express-mode list.
+  const expressRefusal = googleExpressModeRefusal(config, getGoogleVideoModel(modelId));
+  if (expressRefusal) throw new ServerError(expressRefusal, { status: 400, code: 'GOOGLE_PROJECT_REQUIRED' });
   const spec = {
     modelId, prompt, negativePrompt, seconds: duration, resolution, width, height, aspectRatio: aspectRatio || frameAspect,
     generateAudio: generateAudio === true, seed,
   };
-  const { planned, record: sentRecord } = vertexVideoSentPrompt({
+  const { planned, record: sentRecord } = googleVideoSentPrompt({
     ...spec, promptAdditions, hasImage: !!sourceImagePath, hasEndImage: !!lastImagePath, referenceCount: referenceImagePaths.length,
   });
 
@@ -134,7 +137,7 @@ async function generateVideoPrepared({
     id: jobId,
     prompt: (prompt || '').trim(),
     negativePrompt: negativePrompt || '',
-    modelId: `vertex:${modelId}`,
+    modelId: `google:${modelId}`,
     duration: planned.seconds,
     ...(planned.aspectRatio ? { aspectRatio: planned.aspectRatio } : {}),
     resolution: planned.resolution,
@@ -150,19 +153,19 @@ async function generateVideoPrepared({
   const job = { ...meta, clients: [], status: 'running', renderStartedAtMs };
   jobs.set(jobId, job);
 
-  console.log(`🎬 Generating video [${jobId.slice(0, 8)}] Vertex AI (${modelId} ${planned.resolution} ${planned.seconds}s)`);
+  console.log(`🎬 Generating video [${jobId.slice(0, 8)}] Google (${modelId} ${planned.resolution} ${planned.seconds}s)`);
   videoGenEvents.emit('started', { generationId: jobId, totalSteps: 1, ...meta });
   activeJobs.set(jobId, { ...meta, generationId: jobId, totalSteps: 1, step: 0, progress: 0 });
-  emitCloudRenderStatus(job, jobId, CLOUD_RENDER_PHASE.SUBMIT, 'Submitting to Vertex AI…');
+  emitCloudRenderStatus(job, jobId, CLOUD_RENDER_PHASE.SUBMIT, 'Submitting to Google…');
 
-  runVertexVideo(job, jobId, {
+  runGoogleVideo(job, jobId, {
     config, spec, sourceImagePath, lastImagePath, referenceImagePaths, outputPath, filename, meta,
     uploadedTempPath, uploadedTempPaths, frameAspect,
   }).catch((err) => {
-    console.error(`❌ Vertex AI video run failed [${jobId.slice(0, 8)}]: ${err?.message}`);
+    console.error(`❌ Google video run failed [${jobId.slice(0, 8)}]: ${err?.message}`);
   });
 
-  return { jobId, filename, path: `/data/videos/${filename}`, generationId: jobId, mode: 'vertex', status: 'running' };
+  return { jobId, filename, path: `/data/videos/${filename}`, generationId: jobId, mode: 'google', status: 'running' };
 }
 
 const isStagedUpload = (path) => {
@@ -174,15 +177,15 @@ const isStagedUpload = (path) => {
 async function inlineFrame(path, aspect) {
   const { dataUri, conformed } = await frameDataUriAtAspect(path, aspect);
   const match = /^data:[^;,]+;base64,(.*)$/s.exec(dataUri);
-  if (!match) throw new ServerError('Vertex AI accepts PNG, JPEG or WebP frames', { status: 400, code: 'VERTEX_INPUT_INVALID' });
-  return { image: vertexInlineImage(Buffer.from(match[1], 'base64')), conformed };
+  if (!match) throw new ServerError('Google accepts PNG, JPEG or WebP frames', { status: 400, code: 'GOOGLE_INPUT_INVALID' });
+  return { image: googleInlineImage(Buffer.from(match[1], 'base64')), conformed };
 }
 
-async function runVertexVideo(job, jobId, {
+async function runGoogleVideo(job, jobId, {
   config, spec, sourceImagePath, lastImagePath, referenceImagePaths, outputPath, filename, meta,
   uploadedTempPath = null, uploadedTempPaths = [], frameAspect = null,
 }) {
-  const entry = createVertexOperationEntry();
+  const entry = createGoogleOperationEntry();
   entry.aborted = preparations.take(jobId);
   const publication = {};
   let inputCleanup;
@@ -194,7 +197,7 @@ async function runVertexVideo(job, jobId, {
         if (error.code === 'ENOENT') return;
         maintenance.markCurrentUnsettled();
         maintenance.markResourceUnsettled('media', jobId);
-        console.error(`❌ Vertex AI staged-input cleanup failed [${jobId.slice(0, 8)}]: ${error.message}`);
+        console.error(`❌ Google staged-input cleanup failed [${jobId.slice(0, 8)}]: ${error.message}`);
       });
     }
   })());
@@ -204,7 +207,7 @@ async function runVertexVideo(job, jobId, {
     return finalizeJobFailure(job, jobId, null, reason, { force: true });
   };
   activeRequests.set(jobId, entry);
-  const deadline = Date.now() + VERTEX_RENDER_TIMEOUT_MS;
+  const deadline = Date.now() + GOOGLE_RENDER_TIMEOUT_MS;
   try {
     const signal = entry.controller.signal;
     const start = sourceImagePath ? await inlineFrame(sourceImagePath, frameAspect) : null;
@@ -216,13 +219,13 @@ async function runVertexVideo(job, jobId, {
     const referenceImages = [];
     for (const path of referenceImagePaths) referenceImages.push((await inlineFrame(path, null)).image);
     if (entry.aborted) return finishFailure('Canceled');
-    const request = buildVertexVideoRequest({ ...spec, image: start?.image ?? null, lastImage: end?.image ?? null, referenceImages });
-    entry.operationName = await submitVertexOperation(config, spec.modelId, request.body, { signal });
-    meta.vertexOperationName = entry.operationName;
+    const request = buildGoogleVideoRequest({ ...spec, image: start?.image ?? null, lastImage: end?.image ?? null, referenceImages });
+    entry.operationName = await submitGoogleOperation(config, spec.modelId, request.body, { signal });
+    meta.googleOperationName = entry.operationName;
 
-    emitCloudRenderStatus(job, jobId, CLOUD_RENDER_PHASE.RENDER, 'Rendering on Vertex AI…');
-    const polled = await awaitVertexOperation({
-      entry, config, modelId: spec.modelId, deadline, timeoutMs: VERTEX_RENDER_TIMEOUT_MS,
+    emitCloudRenderStatus(job, jobId, CLOUD_RENDER_PHASE.RENDER, 'Rendering on Google…');
+    const polled = await awaitGoogleOperation({
+      entry, config, modelId: spec.modelId, deadline, timeoutMs: GOOGLE_RENDER_TIMEOUT_MS,
       onPoll: () => videoGenEvents.emit('activity', { generationId: jobId }),
     });
     if (polled.outcome === 'canceled') return finishFailure('Canceled');
@@ -230,7 +233,7 @@ async function runVertexVideo(job, jobId, {
 
     emitCloudRenderStatus(job, jobId, CLOUD_RENDER_PHASE.FETCH, 'Saving video…');
     const video = Array.isArray(polled.response?.videos) ? polled.response.videos.find((v) => typeof v?.bytesBase64Encoded === 'string') : null;
-    if (!video) return finishFailure(vertexFilteredReason(polled.response, 'video'));
+    if (!video) return finishFailure(googleFilteredReason(polled.response, 'video'));
     await writeFile(outputPath, Buffer.from(video.bytesBase64Encoded, 'base64'));
     if (entry.aborted) {
       await unlink(outputPath);
@@ -246,10 +249,10 @@ async function runVertexVideo(job, jobId, {
     if (!publication.committed) await discardUnpublishedVideo({ jobId, outputPath }).catch(error => {
       maintenance.markCurrentUnsettled();
       maintenance.markResourceUnsettled('media', jobId);
-      console.error(`❌ Vertex AI video publication cleanup failed [${jobId.slice(0, 8)}]: ${error.message}`);
+      console.error(`❌ Google video publication cleanup failed [${jobId.slice(0, 8)}]: ${error.message}`);
     });
-    abandonVertexOperation(entry);
-    return finishFailure(`Vertex AI video generation failed: ${err?.message || err}`);
+    abandonGoogleOperation(entry);
+    return finishFailure(`Google video generation failed: ${err?.message || err}`);
   }
 }
 
@@ -257,7 +260,7 @@ const finalizeJobFailure = createJobFailureFinalizer({
   jobs,
   activeJobs,
   activeSlots: activeRequests,
-  label: 'Vertex AI video generation',
+  label: 'Google video generation',
   events: videoGenEvents,
 });
 const finalizeCanceled = finalizeJobFailure.canceled;

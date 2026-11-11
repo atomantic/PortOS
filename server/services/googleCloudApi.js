@@ -1,24 +1,26 @@
 /**
- * Google Cloud Vertex AI — the shared transport for the `vertex` image and video
- * backends (services/imageGen/vertex.js, services/videoGen/vertex.js).
+ * Google Cloud Agent Platform (formerly Vertex AI; still the `aiplatform.googleapis.com`
+ * API) — the shared transport for the `google` image and video
+ * backends (services/imageGen/google.js, services/videoGen/google.js).
  *
- * One credential (Settings > Credentials "Google Vertex AI", or the
- * VERTEX_API_KEY env var) is either:
- *  - a Vertex AI API key — sent as `x-goog-api-key`. With no project set it
+ * One credential (Settings > Credentials "Google Cloud (Agent Platform)", or the
+ * GOOGLE_CLOUD_API_KEY env var) is either:
+ *  - an Agent Platform API key — sent as `x-goog-api-key`. With no project set it
  *    calls the express-mode global endpoint (`aiplatform.googleapis.com/v1/
  *    publishers/google/models/...`); with a project it calls that project's
- *    regional endpoint (an API key bound to a service account), or
+ *    regional endpoint (an API key bound to a service account). Express mode
+ *    serves only the Gemini models Google lists for it, so Imagen and Veo need a project, or
  *  - a service account JSON key (`"type": "service_account"`) — exchanged for an
  *    OAuth access token with a self-signed JWT (RFC 7523), cached until shortly
  *    before it expires. Its `project_id` is the project unless one is set.
  *
- * The region (`videoGen.vertex.location`, default us-central1) applies to
+ * The region (`videoGen.google.location`, default us-central1) applies to
  * Imagen and Veo; the Gemini image models are always called on `global`.
  *
  * Money: a predict / generateContent / predictLongRunning call is billed.
- * Vertex offers no cancel for a Veo operation, so abandoning one after submit
+ * Google offers no cancel for a Veo operation, so abandoning one after submit
  * marks the run unsettled (it may still bill). A lost submit response is
- * unsettled too. Model probes (`checkVertexModel`) are free reads.
+ * unsettled too. Model probes (`checkGoogleModel`) are free reads.
  */
 
 import { createSign } from 'crypto';
@@ -27,12 +29,12 @@ import { ServerError } from '../lib/errorHandler.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 import { safeJSONParse } from '../lib/jsonIo.js';
 import { detectImageFormat } from '../lib/mimeTypes.js';
-import { VERTEX_DEFAULT_LOCATION, isValidVertexLocation, isValidVertexProjectId } from '../lib/vertexConfig.js';
+import { GOOGLE_DEFAULT_LOCATION, isValidGoogleLocation, isValidGoogleProjectId } from '../lib/googleCloudConfig.js';
 
-export const VERTEX_REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
-export const VERTEX_POLL_TIMEOUT_MS = 30_000;
-export const VERTEX_POLL_INTERVAL_MS = 5000;
-export const VERTEX_MAX_STATUS_RETRIES = 2;
+export const GOOGLE_REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
+export const GOOGLE_POLL_TIMEOUT_MS = 30_000;
+export const GOOGLE_POLL_INTERVAL_MS = 5000;
+export const GOOGLE_MAX_STATUS_RETRIES = 2;
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 const TOKEN_SCOPE = 'https://www.googleapis.com/auth/cloud-platform';
 const TOKEN_TIMEOUT_MS = 30_000;
@@ -44,13 +46,13 @@ const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000;
  * when nothing usable is stored. A JSON value that is not a service account key
  * is refused rather than sent as an API key.
  */
-function parseVertexCredential(raw) {
+function parseGoogleCredential(raw) {
   const value = typeof raw === 'string' ? raw.trim() : '';
   if (!value) return null;
   if (value.startsWith('{')) {
     const json = safeJSONParse(value, null);
     if (json?.type !== 'service_account' || typeof json.client_email !== 'string' || typeof json.private_key !== 'string') {
-      throw new ServerError('The Vertex AI credential is JSON but not a service account key (it needs type, client_email and private_key)', { status: 400, code: 'VERTEX_CREDENTIAL_INVALID' });
+      throw new ServerError('The Google credential is JSON but not a service account key (it needs type, client_email and private_key)', { status: 400, code: 'GOOGLE_CREDENTIAL_INVALID' });
     }
     return {
       kind: 'serviceAccount',
@@ -63,11 +65,11 @@ function parseVertexCredential(raw) {
   return { kind: 'apiKey', apiKey: value };
 }
 
-/** The raw stored credential (API key or service account JSON): settings first, then VERTEX_API_KEY. */
-function resolveVertexCredentialValue(settings) {
-  const fromSettings = (settings?.videoGen?.vertex?.apiKey || '').trim();
+/** The raw stored credential (API key or service account JSON): settings first, then GOOGLE_CLOUD_API_KEY. */
+function resolveGoogleCredentialValue(settings) {
+  const fromSettings = (settings?.videoGen?.google?.apiKey || '').trim();
   if (fromSettings) return fromSettings;
-  return (process.env.VERTEX_API_KEY || '').trim() || null;
+  return (process.env.GOOGLE_CLOUD_API_KEY || '').trim() || null;
 }
 
 /**
@@ -76,29 +78,38 @@ function resolveVertexCredentialValue(settings) {
  * The credential is re-resolved from live settings at dispatch and never rides
  * in persisted queue params.
  */
-export function resolveVertexConfig(settings) {
-  const credential = parseVertexCredential(resolveVertexCredentialValue(settings));
+export function resolveGoogleConfig(settings) {
+  const credential = parseGoogleCredential(resolveGoogleCredentialValue(settings));
   if (!credential) return null;
-  const vg = settings?.videoGen?.vertex || {};
+  const vg = settings?.videoGen?.google || {};
   const projectId = (typeof vg.projectId === 'string' && vg.projectId.trim()) || (credential.kind === 'serviceAccount' ? credential.projectId : null)
     || (process.env.GOOGLE_CLOUD_PROJECT || '').trim() || null;
-  const location = isValidVertexLocation(vg.location) ? vg.location : VERTEX_DEFAULT_LOCATION;
+  const location = isValidGoogleLocation(vg.location) ? vg.location : GOOGLE_DEFAULT_LOCATION;
   if (credential.kind === 'serviceAccount' && !projectId) {
-    throw new ServerError('The Vertex AI service account key has no project_id; set the project in Settings > Media > Vertex AI', { status: 400, code: 'VERTEX_CREDENTIAL_INVALID' });
+    throw new ServerError('The Google service account key has no project_id; set the project in Settings > Media > Google', { status: 400, code: 'GOOGLE_CREDENTIAL_INVALID' });
   }
-  if (projectId && !isValidVertexProjectId(projectId)) {
-    throw new ServerError('The Vertex AI project id is not a valid Google Cloud project id', { status: 400, code: 'VERTEX_CREDENTIAL_INVALID' });
+  if (projectId && !isValidGoogleProjectId(projectId)) {
+    throw new ServerError('The Google project id is not a valid Google Cloud project id', { status: 400, code: 'GOOGLE_CREDENTIAL_INVALID' });
   }
   return { credential, projectId, location };
 }
 
-export const isVertexConfigured = (settings) => Boolean(resolveVertexCredentialValue(settings));
+/**
+ * Express mode (an API key with no project) serves only Google's short list of
+ * Gemini models. Returns the refusal for a model outside it, or null.
+ */
+export function googleExpressModeRefusal(config, { label, expressMode = false }) {
+  if (!config || config.projectId || expressMode) return null;
+  return `${label} is not available in Agent Platform express mode (an API key with no project). Set your Google Cloud project in Settings > Media > Google, or use a service account key.`;
+}
+
+export const isGoogleConfigured = (settings) => Boolean(resolveGoogleCredentialValue(settings));
 
 const base64url = (input) => Buffer.from(input).toString('base64url');
 const tokenCache = new Map();
 
 /** Exchange a service account key for an access token (cached per account). */
-async function getVertexAccessToken(credential, { now = Date.now } = {}) {
+async function getGoogleAccessToken(credential, { now = Date.now } = {}) {
   const cached = tokenCache.get(credential.clientEmail);
   if (cached && cached.privateKey === credential.privateKey && cached.expiresAt - TOKEN_REFRESH_MARGIN_MS > now()) return cached.token;
   const iat = Math.floor(now() / 1000);
@@ -111,7 +122,7 @@ async function getVertexAccessToken(credential, { now = Date.now } = {}) {
     signature = createSign('RSA-SHA256').update(`${header}.${claims}`).sign(credential.privateKey, 'base64url');
   } catch {
     // Never echo the key material.
-    throw new ServerError('The Vertex AI service account private key could not be read', { status: 400, code: 'VERTEX_CREDENTIAL_INVALID' });
+    throw new ServerError('The Google service account private key could not be read', { status: 400, code: 'GOOGLE_CREDENTIAL_INVALID' });
   }
   const res = await fetchWithTimeout(credential.tokenUri, {
     method: 'POST',
@@ -121,18 +132,18 @@ async function getVertexAccessToken(credential, { now = Date.now } = {}) {
   const payload = await res.json().catch(() => null);
   if (!res.ok || typeof payload?.access_token !== 'string') {
     const reason = typeof payload?.error_description === 'string' ? ` — ${payload.error_description.slice(0, 200)}` : '';
-    throw new ServerError(`Google refused the Vertex AI service account: HTTP ${res.status}${reason}`, { status: 502, code: 'VERTEX_AUTH_FAILED' });
+    throw new ServerError(`Google refused the Google service account: HTTP ${res.status}${reason}`, { status: 502, code: 'GOOGLE_AUTH_FAILED' });
   }
   const expiresIn = Number(payload.expires_in) > 0 ? Number(payload.expires_in) : 3600;
   tokenCache.set(credential.clientEmail, { token: payload.access_token, privateKey: credential.privateKey, expiresAt: now() + expiresIn * 1000 });
   return payload.access_token;
 }
 
-export const __resetVertexTokenCache = () => tokenCache.clear();
+export const __resetGoogleTokenCache = () => tokenCache.clear();
 
 async function authHeaders(config) {
   if (config.credential.kind === 'apiKey') return { 'x-goog-api-key': config.credential.apiKey };
-  return { Authorization: `Bearer ${await getVertexAccessToken(config.credential)}` };
+  return { Authorization: `Bearer ${await getGoogleAccessToken(config.credential)}` };
 }
 
 /**
@@ -140,7 +151,7 @@ async function authHeaders(config) {
  * `predictLongRunning`, `fetchPredictOperation`). `location` overrides the
  * configured region (the Gemini image models pass 'global').
  */
-export function vertexModelUrl(config, modelId, method, { location = null } = {}) {
+export function googleModelUrl(config, modelId, method, { location = null } = {}) {
   const loc = location || config.location;
   if (!config.projectId) {
     // Express mode: an API key with no project calls the global endpoint without a project path.
@@ -151,7 +162,7 @@ export function vertexModelUrl(config, modelId, method, { location = null } = {}
 }
 
 /** A short, single-line reason from a Google error body, or ''. */
-function vertexErrorDetail(payload) {
+function googleErrorDetail(payload) {
   const err = payload?.error;
   const text = typeof err?.message === 'string' ? err.message : typeof err === 'string' ? err : '';
   return text.replace(/\s+/g, ' ').trim().slice(0, 300);
@@ -161,7 +172,7 @@ function vertexErrorDetail(payload) {
  * POST one JSON request. A lost response to a billed call marks the run
  * unsettled; a 4xx refusal does not.
  */
-export async function vertexPost(config, url, body, { signal, timeoutMs = VERTEX_REQUEST_TIMEOUT_MS, billed = true } = {}) {
+export async function googlePost(config, url, body, { signal, timeoutMs = GOOGLE_REQUEST_TIMEOUT_MS, billed = true } = {}) {
   signal?.throwIfAborted();
   const headers = { ...(await authHeaders(config)), 'Content-Type': 'application/json' };
   const res = await fetchWithTimeout(url, { method: 'POST', headers, body: JSON.stringify(body), signal }, timeoutMs).catch((err) => {
@@ -171,12 +182,12 @@ export async function vertexPost(config, url, body, { signal, timeoutMs = VERTEX
   const payload = await res.json().catch(() => null);
   if (!res.ok) {
     if (billed && res.status >= 500) maintenance.markCurrentUnsettled();
-    const detail = vertexErrorDetail(payload);
-    throw new ServerError(`Vertex AI rejected the request: HTTP ${res.status}${detail ? ` — ${detail}` : ''}`, { status: 502, code: 'VERTEX_REQUEST_FAILED' });
+    const detail = googleErrorDetail(payload);
+    throw new ServerError(`Google rejected the request: HTTP ${res.status}${detail ? ` — ${detail}` : ''}`, { status: 502, code: 'GOOGLE_REQUEST_FAILED' });
   }
   if (!payload) {
     if (billed) maintenance.markCurrentUnsettled();
-    throw new ServerError('Vertex AI returned an unreadable response', { status: 502, code: 'VERTEX_REQUEST_FAILED' });
+    throw new ServerError('Google returned an unreadable response', { status: 502, code: 'GOOGLE_REQUEST_FAILED' });
   }
   return payload;
 }
@@ -185,41 +196,41 @@ export async function vertexPost(config, url, body, { signal, timeoutMs = VERTEX
  * Free read: confirm the configured credential reaches `modelId`. Resolves to
  * `{ ok: true }` or `{ ok: false, reason }` and never throws.
  */
-export async function checkVertexModel(config, modelId, { location = null } = {}) {
+export async function checkGoogleModel(config, modelId, { location = null } = {}) {
   try {
     const loc = location || config.location;
     const host = !config.projectId || loc === 'global' ? 'aiplatform.googleapis.com' : `${loc}-aiplatform.googleapis.com`;
     const res = await fetchWithTimeout(`https://${host}/v1beta1/publishers/google/models/${encodeURIComponent(modelId)}`, {
       headers: await authHeaders(config),
-    }, VERTEX_POLL_TIMEOUT_MS);
+    }, GOOGLE_POLL_TIMEOUT_MS);
     const payload = await res.json().catch(() => null);
     if (res.ok) return { ok: true };
-    const detail = vertexErrorDetail(payload);
-    return { ok: false, reason: `Vertex AI answered HTTP ${res.status}${detail ? ` — ${detail}` : ''}` };
+    const detail = googleErrorDetail(payload);
+    return { ok: false, reason: `Google answered HTTP ${res.status}${detail ? ` — ${detail}` : ''}` };
   } catch (err) {
     return { ok: false, reason: err?.message || String(err) };
   }
 }
 
 /** Per-request bookkeeping for a long-running Veo operation. */
-export const createVertexOperationEntry = () => ({
+export const createGoogleOperationEntry = () => ({
   controller: new AbortController(), aborted: false, operationName: null, remoteTerminal: false,
 });
 
 /**
- * Vertex has no cancel for a Veo operation. Abandoning a submitted one means
+ * Google has no cancel for a Veo operation. Abandoning a submitted one means
  * it may still bill, so the run is marked unsettled.
  */
-export function abandonVertexOperation(entry) {
+export function abandonGoogleOperation(entry) {
   if (entry?.operationName && !entry.remoteTerminal) maintenance.markCurrentUnsettled();
 }
 
 /** Submit a long-running prediction; resolves to the operation name. */
-export async function submitVertexOperation(config, modelId, body, { signal } = {}) {
-  const payload = await vertexPost(config, vertexModelUrl(config, modelId, 'predictLongRunning'), body, { signal, timeoutMs: VERTEX_REQUEST_TIMEOUT_MS });
+export async function submitGoogleOperation(config, modelId, body, { signal } = {}) {
+  const payload = await googlePost(config, googleModelUrl(config, modelId, 'predictLongRunning'), body, { signal, timeoutMs: GOOGLE_REQUEST_TIMEOUT_MS });
   if (typeof payload.name !== 'string' || !payload.name) {
     maintenance.markCurrentUnsettled();
-    throw new ServerError('Vertex AI accepted the request but returned no operation name', { status: 502, code: 'VERTEX_REQUEST_FAILED' });
+    throw new ServerError('Google accepted the request but returned no operation name', { status: 502, code: 'GOOGLE_REQUEST_FAILED' });
   }
   return payload.name;
 }
@@ -229,10 +240,10 @@ export async function submitVertexOperation(config, modelId, body, { signal } = 
  * `deadline` passes. Resolves to `{ outcome: 'completed', response }` or
  * `{ outcome: 'canceled' | 'failed', reason? }` and never throws.
  */
-export async function awaitVertexOperation({
-  entry, config, modelId, deadline, timeoutMs, onPoll = () => {}, pollIntervalMs = VERTEX_POLL_INTERVAL_MS,
+export async function awaitGoogleOperation({
+  entry, config, modelId, deadline, timeoutMs, onPoll = () => {}, pollIntervalMs = GOOGLE_POLL_INTERVAL_MS,
 }) {
-  const url = vertexModelUrl(config, modelId, 'fetchPredictOperation');
+  const url = googleModelUrl(config, modelId, 'fetchPredictOperation');
   let statusFailures = 0;
   const wait = () => new Promise((resolve) => {
     const signal = entry.controller.signal;
@@ -243,18 +254,18 @@ export async function awaitVertexOperation({
   });
   while (Date.now() < deadline) {
     if (entry.aborted) {
-      abandonVertexOperation(entry);
+      abandonGoogleOperation(entry);
       return { outcome: 'canceled' };
     }
     onPoll();
     let op;
     try {
-      op = await vertexPost(config, url, { operationName: entry.operationName }, { timeoutMs: VERTEX_POLL_TIMEOUT_MS, billed: false });
+      op = await googlePost(config, url, { operationName: entry.operationName }, { timeoutMs: GOOGLE_POLL_TIMEOUT_MS, billed: false });
     } catch (err) {
       statusFailures += 1;
-      if (statusFailures > VERTEX_MAX_STATUS_RETRIES) {
-        abandonVertexOperation(entry);
-        return { outcome: 'failed', reason: `Vertex AI status checks failed ${statusFailures} times in a row: ${err?.message || err}` };
+      if (statusFailures > GOOGLE_MAX_STATUS_RETRIES) {
+        abandonGoogleOperation(entry);
+        return { outcome: 'failed', reason: `Google status checks failed ${statusFailures} times in a row: ${err?.message || err}` };
       }
       await wait();
       continue;
@@ -265,21 +276,21 @@ export async function awaitVertexOperation({
       if (entry.aborted) return { outcome: 'canceled' };
       if (op.error) {
         const message = typeof op.error.message === 'string' ? op.error.message.replace(/\s+/g, ' ').trim().slice(0, 300) : 'unknown error';
-        return { outcome: 'failed', reason: `Vertex AI render failed: ${message}` };
+        return { outcome: 'failed', reason: `Google render failed: ${message}` };
       }
       return { outcome: 'completed', response: op.response || {} };
     }
     await wait();
   }
-  abandonVertexOperation(entry);
+  abandonGoogleOperation(entry);
   if (entry.aborted) return { outcome: 'canceled' };
-  return { outcome: 'failed', reason: `Vertex AI did not finish within ${Math.round(timeoutMs / 1000)}s` };
+  return { outcome: 'failed', reason: `Google did not finish within ${Math.round(timeoutMs / 1000)}s` };
 }
 
 /** Why a finished response carried no media, from its safety-filter fields. */
-export function vertexFilteredReason(response, kind) {
+export function googleFilteredReason(response, kind) {
   const reasons = Array.isArray(response?.raiMediaFilteredReasons) ? response.raiMediaFilteredReasons.filter((r) => typeof r === 'string') : [];
-  const prefix = `Vertex AI returned no ${kind}`;
+  const prefix = `Google returned no ${kind}`;
   if (reasons.length) return `${prefix}: ${reasons.join('; ').replace(/\s+/g, ' ').slice(0, 300)}`;
   if (Number(response?.raiMediaFilteredCount) > 0) return `${prefix}: blocked by its safety filter`;
   return prefix;
@@ -287,11 +298,11 @@ export function vertexFilteredReason(response, kind) {
 
 const INLINE_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
 
-/** Image bytes as the inline `{ mimeType, data }` Vertex reads (PNG, JPEG or WebP). */
-export function vertexInlineImage(bytes) {
+/** Image bytes as the inline `{ mimeType, data }` Google reads (PNG, JPEG or WebP). */
+export function googleInlineImage(bytes) {
   const mime = detectImageFormat(bytes)?.mime;
   if (!INLINE_IMAGE_TYPES.has(mime)) {
-    throw new ServerError('Vertex AI accepts PNG, JPEG or WebP input images', { status: 400, code: 'VERTEX_INPUT_INVALID' });
+    throw new ServerError('Google accepts PNG, JPEG or WebP input images', { status: 400, code: 'GOOGLE_INPUT_INVALID' });
   }
   return { mimeType: mime, data: bytes.toString('base64') };
 }

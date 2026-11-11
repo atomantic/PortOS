@@ -96,8 +96,8 @@ describe('PORTOS_SCHEMA_VERSIONS', () => {
       creativeCommissions: PORTOS_SCHEMA_VERSIONS.creativeCommissions,
       fableLoom: PORTOS_SCHEMA_VERSIONS.fableLoom,
     }).toEqual({
-      image: ['external', 'local', 'codex', 'grok', 'agy', 'fal', 'runway', 'higgsfield', 'vertex'],
-      video: ['local', 'grok', 'fal', 'reactor', 'runway', 'gemini', 'higgsfield', 'vertex'],
+      image: ['external', 'local', 'codex', 'grok', 'agy', 'fal', 'runway', 'higgsfield', 'google'],
+      video: ['local', 'grok', 'fal', 'reactor', 'runway', 'gemini', 'higgsfield', 'google'],
       creativeCommissions: 9,
       fableLoom: 16,
     });

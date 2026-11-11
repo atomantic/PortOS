@@ -2,7 +2,7 @@ import RunwayModelSelect from './RunwayModelSelect';
 import ModelSelect from '../ModelSelect';
 import FalModelSelect from './FalModelSelect';
 import HiggsfieldModelSelect from './HiggsfieldModelSelect';
-import VertexModelSelect from './VertexModelSelect';
+import GoogleModelSelect from './GoogleModelSelect';
 import useFieldDraft from '../../hooks/useFieldDraft';
 import useLocalImageModels from '../../hooks/useLocalImageModels';
 import {
@@ -13,7 +13,7 @@ import {
 export function imageModeHasModel(mode, { showLocal = true } = {}) {
   if (!mode) return false;
   if (showLocal && mode === IMAGE_GEN_MODE.LOCAL) return true;
-  if (mode === IMAGE_GEN_MODE.RUNWAY || mode === IMAGE_GEN_MODE.FAL || mode === IMAGE_GEN_MODE.HIGGSFIELD || mode === IMAGE_GEN_MODE.VERTEX) return true;
+  if (mode === IMAGE_GEN_MODE.RUNWAY || mode === IMAGE_GEN_MODE.FAL || mode === IMAGE_GEN_MODE.HIGGSFIELD || mode === IMAGE_GEN_MODE.GOOGLE) return true;
   return supportsCloudModelOverride(mode);
 }
 
@@ -52,9 +52,9 @@ export default function ImageModelField({
       <HiggsfieldModelSelect id={id} ariaLabel={named} value={value || ''} disabled={disabled}
         defaultLabel={falDefaultLabel} onChange={onChange} className={controlClass} />
     );
-  } else if (mode === IMAGE_GEN_MODE.VERTEX) {
+  } else if (mode === IMAGE_GEN_MODE.GOOGLE) {
     control = (
-      <VertexModelSelect id={id} ariaLabel={named} value={value || ''} disabled={disabled}
+      <GoogleModelSelect id={id} ariaLabel={named} value={value || ''} disabled={disabled}
         defaultLabel={falDefaultLabel} onChange={onChange} className={controlClass} />
     );
   } else if (supportsCloudModelOverride(mode)) {

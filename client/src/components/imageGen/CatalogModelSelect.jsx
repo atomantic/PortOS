@@ -1,4 +1,4 @@
-// A select over a curated provider model catalog (fal.ai, Higgsfield, Vertex AI) rather
+// A select over a curated provider model catalog (fal.ai, Higgsfield, Google) rather
 // than a text box: every id is a different price and the server refuses an id
 // the catalog does not list. Either endpoint id of a family selects its row; a
 // saved id outside the catalog stays visible so the select never paints a pin

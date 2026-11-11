@@ -24,7 +24,7 @@ import { getRunwayImageModel } from './runwayImageModels.js';
 import { CLOUD_IMAGE_GEN_MODES, IMAGE_GEN_MODE, IMAGE_GEN_MODES } from './generationModes.js';
 import { FAL_IMAGE_MIN_INPUT_IMAGES, falImageFamily } from './falImageModels.js';
 import { HIGGSFIELD_IMAGE_MAX_INPUT_IMAGES, higgsfieldImageFamily } from './higgsfieldImageModels.js';
-import { VERTEX_IMAGE_MAX_INPUT_IMAGES, vertexImageFamily } from './vertexImageModels.js';
+import { GOOGLE_IMAGE_MAX_INPUT_IMAGES, googleImageFamily } from './googleImageModels.js';
 
 // Defined in the dependency-free leaf so schema-only callers skip this module.
 export { IMAGE_REFERENCE_REQUEST_LIMIT } from './referenceLimits.js';
@@ -218,10 +218,10 @@ export const IMAGE_GEN_PROVIDER_CAPABILITIES = Object.freeze({
     maxInputImages: HIGGSFIELD_IMAGE_MAX_INPUT_IMAGES,
     promptRequiredWithInputImage: true,
   }),
-  [IMAGE_GEN_MODE.VERTEX]: Object.freeze({
+  [IMAGE_GEN_MODE.GOOGLE]: Object.freeze({
     supportsModelOverride: true,
     // Per model (0 for Imagen); `maxInputImages(mode, modelId)` reads the catalog.
-    maxInputImages: VERTEX_IMAGE_MAX_INPUT_IMAGES,
+    maxInputImages: GOOGLE_IMAGE_MAX_INPUT_IMAGES,
     promptRequiredWithInputImage: true,
   }),
 });
@@ -255,8 +255,8 @@ export const maxInputImages = (mode, modelId = null) => {
     const family = higgsfieldImageFamily(modelId);
     if (family) return family.maxInputImages;
   }
-  if (mode === IMAGE_GEN_MODE.VERTEX) {
-    const family = vertexImageFamily(modelId);
+  if (mode === IMAGE_GEN_MODE.GOOGLE) {
+    const family = googleImageFamily(modelId);
     if (family) return family.maxInputImages;
   }
   return IMAGE_GEN_PROVIDER_CAPABILITIES[mode]?.maxInputImages ?? null;

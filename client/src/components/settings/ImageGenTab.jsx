@@ -29,7 +29,7 @@ import {
   getCredentialInventory, saveCredential,
 } from '../../services/api';
 import {
-  isLocalImageConfigured, imageGenReadiness, IMAGE_GEN_MODE, falImageFamily, higgsfieldImageFamily, vertexImageFamily, LOCAL_IMAGEGEN_DEFAULT_MODEL,
+  isLocalImageConfigured, imageGenReadiness, IMAGE_GEN_MODE, falImageFamily, higgsfieldImageFamily, googleImageFamily, LOCAL_IMAGEGEN_DEFAULT_MODEL,
   RENDER_TARGET_BACKEND_AUTO, RENDER_TARGET_OPTIONS, normalizeRenderPinValue,
 } from '../../lib/imageGenBackends';
 import useLocalImageRuntime from '../../hooks/useLocalImageRuntime';
@@ -69,7 +69,7 @@ export const MEDIA_TABS = [
   { id: 'runway', label: 'Runway', icon: Sparkles, probeMode: IMAGE_GEN_MODE.RUNWAY },
   { id: 'fal', label: 'fal.ai', icon: Sparkles, probeMode: IMAGE_GEN_MODE.FAL },
   { id: 'higgsfield', label: 'Higgsfield', icon: Clapperboard, probeMode: IMAGE_GEN_MODE.HIGGSFIELD },
-  { id: 'vertex', label: 'Vertex AI', icon: CloudCog, probeMode: IMAGE_GEN_MODE.VERTEX },
+  { id: 'google', label: 'Google', icon: CloudCog, probeMode: IMAGE_GEN_MODE.GOOGLE },
   { id: 'tokens', label: 'Tokens', icon: Key },
   { id: 'expose', label: 'Expose', icon: Globe },
   { id: 'test', label: 'Test', icon: FlaskConical },
@@ -129,20 +129,20 @@ const EMPTY_MEDIA_FORM = Object.freeze({
   higgsfieldDeleteAfterDownload: false,
   higgsfieldImageParallelLimit: 1,
   higgsfieldVideoParallelLimit: 1,
-  // Vertex AI image backend; its credential is the Defaults tab's Vertex AI row,
-  // shared with the Vertex AI video backend, which also reads project and region.
-  vertexEnabled: false,
-  // '' = no pin → VERTEX_IMAGE_DEFAULT_MODEL server-side.
-  vertexModel: '',
-  vertexProjectId: '',
-  vertexLocation: '',
-  vertexImageParallelLimit: 1,
-  vertexVideoParallelLimit: 1,
+  // Google image backend; its credential is the Defaults tab's Google row,
+  // shared with the Google video backend, which also reads project and region.
+  googleEnabled: false,
+  // '' = no pin → GOOGLE_IMAGE_DEFAULT_MODEL server-side.
+  googleModel: '',
+  googleProjectId: '',
+  googleLocation: '',
+  googleImageParallelLimit: 1,
+  googleVideoParallelLimit: 1,
   geminiImageParallelLimit: 1,
   geminiVideoParallelLimit: 1,
   // Per-provider cleaner toggles (see CleanersToggles in the provider sections).
-  cleanC2PAByMode: { external: true, local: true, codex: true, grok: false, agy: false, fal: false, runway: false, higgsfield: false, vertex: false },
-  denoiseByMode: { external: false, local: false, codex: false, grok: false, agy: false, fal: false, runway: false, higgsfield: false, vertex: false },
+  cleanC2PAByMode: { external: true, local: true, codex: true, grok: false, agy: false, fal: false, runway: false, higgsfield: false, google: false },
+  denoiseByMode: { external: false, local: false, codex: false, grok: false, agy: false, fal: false, runway: false, higgsfield: false, google: false },
   // Per-surface render defaults (#3231) — `{ [target]: { imageMode, imageModel, videoMode } }`.
   renderDefaults: {},
   // Install-wide video backend pin (`settings.videoGen.mode`, #3231 Phase 4). '' = no pin (local).
@@ -160,7 +160,7 @@ const mediaFormFromSettings = (s) => {
   const ay = ig.agy || {};
   const fl = ig.fal || {};
   const hf = ig.higgsfield || {};
-  const vx = ig.vertex || {};
+  const vx = ig.google || {};
   const vg = (s?.videoGen && typeof s.videoGen === 'object') ? s.videoGen : {};
   const bounds = cx.parallelLimitBounds && Number.isFinite(cx.parallelLimitBounds.max)
     ? cx.parallelLimitBounds
@@ -169,7 +169,7 @@ const mediaFormFromSettings = (s) => {
   const cleaners = Object.fromEntries([
     [IMAGE_GEN_MODE.EXTERNAL, ig.external], [IMAGE_GEN_MODE.LOCAL, ig.local], [IMAGE_GEN_MODE.CODEX, cx],
     [IMAGE_GEN_MODE.GROK, gk], [IMAGE_GEN_MODE.AGY, ay], [IMAGE_GEN_MODE.FAL, fl], [IMAGE_GEN_MODE.RUNWAY, ig.runway],
-    [IMAGE_GEN_MODE.HIGGSFIELD, hf], [IMAGE_GEN_MODE.VERTEX, vx],
+    [IMAGE_GEN_MODE.HIGGSFIELD, hf], [IMAGE_GEN_MODE.GOOGLE, vx],
   ].map(([m, config]) => [m, resolveCleanersFromConfig(config, m)]));
   const values = {
     mode: ig.mode || IMAGE_GEN_MODE.EXTERNAL,
@@ -207,12 +207,12 @@ const mediaFormFromSettings = (s) => {
     higgsfieldDeleteAfterDownload: hf.deleteAfterDownload === true,
     higgsfieldImageParallelLimit: clampParallel(hf.parallelLimit, hf.parallelLimitBounds || bounds),
     higgsfieldVideoParallelLimit: clampParallel(vg.higgsfield?.parallelLimit, vg.higgsfield?.parallelLimitBounds || bounds),
-    vertexEnabled: vx.enabled === true,
-    vertexModel: vx.model || '',
-    vertexProjectId: vg.vertex?.projectId || '',
-    vertexLocation: vg.vertex?.location || '',
-    vertexImageParallelLimit: clampParallel(vx.parallelLimit, vx.parallelLimitBounds || bounds),
-    vertexVideoParallelLimit: clampParallel(vg.vertex?.parallelLimit, vg.vertex?.parallelLimitBounds || bounds),
+    googleEnabled: vx.enabled === true,
+    googleModel: vx.model || '',
+    googleProjectId: vg.google?.projectId || '',
+    googleLocation: vg.google?.location || '',
+    googleImageParallelLimit: clampParallel(vx.parallelLimit, vx.parallelLimitBounds || bounds),
+    googleVideoParallelLimit: clampParallel(vg.google?.parallelLimit, vg.google?.parallelLimitBounds || bounds),
     geminiImageParallelLimit: clampParallel(ig.gemini?.parallelLimit, ig.gemini?.parallelLimitBounds || bounds),
     geminiVideoParallelLimit: clampParallel(vg.gemini?.parallelLimit, vg.gemini?.parallelLimitBounds || bounds),
     cleanC2PAByMode: Object.fromEntries(Object.entries(cleaners).map(([m, c]) => [m, c.cleanC2PA])),
@@ -260,10 +260,10 @@ const normalizeMediaForm = (f, parallelBounds) => ({
   falVideoParallelLimit: clampParallel(f.falVideoParallelLimit, parallelBounds),
   higgsfieldImageParallelLimit: clampParallel(f.higgsfieldImageParallelLimit, parallelBounds),
   higgsfieldVideoParallelLimit: clampParallel(f.higgsfieldVideoParallelLimit, parallelBounds),
-  vertexImageParallelLimit: clampParallel(f.vertexImageParallelLimit, parallelBounds),
-  vertexVideoParallelLimit: clampParallel(f.vertexVideoParallelLimit, parallelBounds),
-  vertexProjectId: f.vertexProjectId.trim(),
-  vertexLocation: f.vertexLocation.trim(),
+  googleImageParallelLimit: clampParallel(f.googleImageParallelLimit, parallelBounds),
+  googleVideoParallelLimit: clampParallel(f.googleVideoParallelLimit, parallelBounds),
+  googleProjectId: f.googleProjectId.trim(),
+  googleLocation: f.googleLocation.trim(),
   geminiImageParallelLimit: clampParallel(f.geminiImageParallelLimit, parallelBounds),
   geminiVideoParallelLimit: clampParallel(f.geminiVideoParallelLimit, parallelBounds),
   renderDefaults: pruneRenderDefaults(f.renderDefaults),
@@ -317,10 +317,10 @@ const sliceFieldsOf = (f) => ({
     deleteAfterDownload: f.higgsfieldDeleteAfterDownload, parallelLimit: f.higgsfieldImageParallelLimit,
     cleanC2PA: f.cleanC2PAByMode.higgsfield, denoise: f.denoiseByMode.higgsfield,
   },
-  'imageGen.vertex': {
-    enabled: f.vertexEnabled, model: vertexImageFamily(f.vertexModel) ? f.vertexModel : '',
-    parallelLimit: f.vertexImageParallelLimit,
-    cleanC2PA: f.cleanC2PAByMode.vertex, denoise: f.denoiseByMode.vertex,
+  'imageGen.google': {
+    enabled: f.googleEnabled, model: googleImageFamily(f.googleModel) ? f.googleModel : '',
+    parallelLimit: f.googleImageParallelLimit,
+    cleanC2PA: f.cleanC2PAByMode.google, denoise: f.denoiseByMode.google,
   },
   'imageGen.gemini': {
     parallelLimit: f.geminiImageParallelLimit,
@@ -337,8 +337,8 @@ const sliceFieldsOf = (f) => ({
   'videoGen.higgsfield': {
     parallelLimit: f.higgsfieldVideoParallelLimit,
   },
-  'videoGen.vertex': {
-    projectId: f.vertexProjectId, location: f.vertexLocation, parallelLimit: f.vertexVideoParallelLimit,
+  'videoGen.google': {
+    projectId: f.googleProjectId, location: f.googleLocation, parallelLimit: f.googleVideoParallelLimit,
   },
   'videoGen.runway': {
     parallelLimit: f.runwayVideoParallelLimit,
@@ -391,7 +391,7 @@ export function ImageGenTab() {
   // (GET /api/settings/credentials, same one CredentialsTab renders) and
   // saves/clears through the write-only PUT /api/settings/credentials/:id
   // setter — never through the slice PATCHes this tab otherwise uses.
-  const [credentialRows, setCredentialRows] = useState({ fal: null, reactor: null, runway: null, higgsfield: null, vertex: null });
+  const [credentialRows, setCredentialRows] = useState({ fal: null, reactor: null, runway: null, higgsfield: null, 'google-cloud': null });
   // One busy flag for both keys since only one save/clear can be in flight
   // from this panel at a time; the value names which button is spinning.
   const [videoCredentialBusy, setVideoCredentialBusy] = useState(null);
@@ -405,7 +405,7 @@ export function ImageGenTab() {
           reactor: rows.find((row) => row.id === 'reactor') || null,
           runway: rows.find((row) => row.id === 'runway') || null,
           higgsfield: rows.find((row) => row.id === 'higgsfield') || null,
-          vertex: rows.find((row) => row.id === 'vertex') || null,
+          'google-cloud': rows.find((row) => row.id === 'google-cloud') || null,
         });
       })
       .catch(() => {});
@@ -619,7 +619,7 @@ export function ImageGenTab() {
           runwayCredential={credentialRows.runway}
           falCredential={credentialRows.fal}
           higgsfieldCredential={credentialRows.higgsfield}
-          vertexCredential={credentialRows.vertex}
+          googleCredential={credentialRows['google-cloud']}
           localRuntime={localRuntime}
           onStatusRecheck={checkStatus}
         />

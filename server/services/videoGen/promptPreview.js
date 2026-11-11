@@ -141,12 +141,12 @@ export async function previewVideoPrompt({ previewUploads = [], ...body }) {
       referenceCount: (body.referenceImageFiles || []).length,
     }).record };
   }
-  if (backend === VIDEO_GEN_MODE.VERTEX) {
-    const { vertexVideoSentPrompt } = await import('./vertex.js');
-    return { backend, ...vertexVideoSentPrompt({
-      modelId: body.vertexModelId, prompt: body.prompt, negativePrompt: body.negativePrompt,
-      seconds: body.vertexDuration, width: body.width, height: body.height, resolution: body.vertexResolution,
-      generateAudio: body.vertexGenerateAudio === true, promptAdditions,
+  if (backend === VIDEO_GEN_MODE.GOOGLE) {
+    const { googleVideoSentPrompt } = await import('./google.js');
+    return { backend, ...googleVideoSentPrompt({
+      modelId: body.googleModelId, prompt: body.prompt, negativePrompt: body.negativePrompt,
+      seconds: body.googleDuration, width: body.width, height: body.height, resolution: body.googleResolution,
+      generateAudio: body.googleGenerateAudio === true, promptAdditions,
       hasImage: hasSourceImage, hasEndImage: !!uploads.lastImage || !!body.lastImageFile,
       referenceCount: (body.referenceImageFiles || []).length,
     }).record };

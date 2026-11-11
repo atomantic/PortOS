@@ -55,7 +55,7 @@ const HOSTED_JOB_PARAMS = {
   gemini: { prompt: 'a fox', mode: 'gemini', videoMode: 'image', sourceImagePath: '/data/images/frame.png', modelId: 'gemini-omni-1.2-flash', width: 1280, height: 720 },
   runway: { prompt: 'a fox', mode: 'runway', videoMode: 'image', sourceImagePath: '/data/images/frame.png', modelId: 'gen4.5', width: 1280, height: 720, duration: 5 },
   higgsfield: { prompt: 'a fox', mode: 'higgsfield', videoMode: 'text', modelId: 'bytedance/seedance-2.5', width: 1280, height: 720, duration: 5 },
-  vertex: { prompt: 'a fox', mode: 'vertex', videoMode: 'text', modelId: 'veo-3.1-generate-001', width: 1280, height: 720, duration: 8 },
+  google: { prompt: 'a fox', mode: 'google', videoMode: 'text', modelId: 'veo-3.1-generate-001', width: 1280, height: 720, duration: 8 },
 };
 const seedJob = (id, params) => jobStore.set(id, { id, kind: 'video', owner: null, status: 'failed', params });
 const retry = (id, body = {}) => request(makeApp()).post(`/api/media-jobs/${id}/retry`).send(body);

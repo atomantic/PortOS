@@ -56,7 +56,7 @@ export * from './glbFailure.js';
 export * from './grokVideoClip.js';
 export * from './reactorVideoClip.js';
 export * from './higgsfieldVideoModels.js';
-export * from './vertexVideoModels.js';
+export * from './googleVideoModels.js';
 export * from './runwayVideoModels.js';
 export * from './imageThumbnailSrc.js';
 export * from './imageCleaners.js';

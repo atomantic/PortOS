@@ -32,7 +32,7 @@ import {
 import { RUNWAY_IMAGE_DEFAULT_MODEL, RUNWAY_IMAGE_MODEL_IDS, getRunwayImageModel } from '../../lib/runwayImageModels.js';
 import { FAL_IMAGE_DEFAULT_MODEL, FAL_IMAGE_MODEL_IDS, isFalImageModel } from '../../lib/falImageModels.js';
 import { HIGGSFIELD_IMAGE_DEFAULT_MODEL, HIGGSFIELD_IMAGE_MODEL_IDS, higgsfieldImageFamily } from '../../lib/higgsfieldImageModels.js';
-import { VERTEX_IMAGE_DEFAULT_MODEL, VERTEX_IMAGE_MODEL_IDS, vertexImageFamily } from '../../lib/vertexImageModels.js';
+import { GOOGLE_IMAGE_DEFAULT_MODEL, GOOGLE_IMAGE_MODEL_IDS, googleImageFamily } from '../../lib/googleImageModels.js';
 import {
   AGY_IMAGEGEN_DEFAULT_MODEL,
   CODEX_IMAGEGEN_DEFAULT_MODEL,
@@ -47,8 +47,8 @@ const falModelFrom = (c, override) => override
   || (isFalImageModel(c.model) ? c.model.trim() : FAL_IMAGE_DEFAULT_MODEL);
 const higgsfieldModelFrom = (c, override) => override
   || (higgsfieldImageFamily(c.model) ? c.model.trim() : HIGGSFIELD_IMAGE_DEFAULT_MODEL);
-const vertexModelFrom = (c, override) => override
-  || (vertexImageFamily(c.model) ? c.model.trim() : VERTEX_IMAGE_DEFAULT_MODEL);
+const googleModelFrom = (c, override) => override
+  || (googleImageFamily(c.model) ? c.model.trim() : GOOGLE_IMAGE_DEFAULT_MODEL);
 
 // The pure capability half of the specs below, plus the two predicates that
 // read it, live in the dependency-free `lib/imageGenCapabilities.js` leaf so
@@ -166,15 +166,15 @@ export const CLOUD_PROVIDER_SPECS = Object.freeze({
     // No key: queue params persist in plaintext, so the provider re-resolves it at dispatch.
     params: (c, override) => ({ model: higgsfieldModelFrom(c, override) }),
   }),
-  [IMAGE_GEN_MODE.VERTEX]: Object.freeze({
-    ...IMAGE_GEN_PROVIDER_CAPABILITIES[IMAGE_GEN_MODE.VERTEX],
-    label: 'Vertex AI Imagegen',
-    errorCode: 'VERTEX_IMAGEGEN_DISABLED',
-    knownModels: VERTEX_IMAGE_MODEL_IDS,
-    unknownModelCode: 'VERTEX_IMAGE_MODEL_UNKNOWN',
-    modelId: vertexModelFrom,
+  [IMAGE_GEN_MODE.GOOGLE]: Object.freeze({
+    ...IMAGE_GEN_PROVIDER_CAPABILITIES[IMAGE_GEN_MODE.GOOGLE],
+    label: 'Google Imagegen',
+    errorCode: 'GOOGLE_IMAGEGEN_DISABLED',
+    knownModels: GOOGLE_IMAGE_MODEL_IDS,
+    unknownModelCode: 'GOOGLE_IMAGE_MODEL_UNKNOWN',
+    modelId: googleModelFrom,
     // No credential: queue params persist in plaintext, so the provider re-resolves it at dispatch.
-    params: (c, override) => ({ model: vertexModelFrom(c, override) }),
+    params: (c, override) => ({ model: googleModelFrom(c, override) }),
   }),
 });
 

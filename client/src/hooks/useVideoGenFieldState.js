@@ -37,11 +37,11 @@ export function useVideoGenFieldState({
   const [higgsfieldDuration, setHiggsfieldDuration] = useState('');
   const [higgsfieldResolution, setHiggsfieldResolution] = useState('');
   const [higgsfieldGenerateAudio, setHiggsfieldGenerateAudio] = useState(false);
-  // Vertex AI Veo: '' = the catalog default model / the model's default length and tier.
-  const [vertexModelId, setVertexModelId] = useState('');
-  const [vertexDuration, setVertexDuration] = useState('');
-  const [vertexResolution, setVertexResolution] = useState('');
-  const [vertexGenerateAudio, setVertexGenerateAudio] = useState(false);
+  // Google Veo: '' = the catalog default model / the model's default length and tier.
+  const [googleModelId, setGoogleModelId] = useState('');
+  const [googleDuration, setGoogleDuration] = useState('');
+  const [googleResolution, setGoogleResolution] = useState('');
+  const [googleGenerateAudio, setGoogleGenerateAudio] = useState(false);
   const [reactorClipId, setReactorClipId] = useState('');
   const [reactorSeconds, setReactorSeconds] = useState(REACTOR_DEFAULT_CLIP_LENGTH);
   const [reactorSeed, setReactorSeed] = useState('');
@@ -127,10 +127,10 @@ export function useVideoGenFieldState({
     higgsfieldDuration, setHiggsfieldDuration,
     higgsfieldResolution, setHiggsfieldResolution,
     higgsfieldGenerateAudio, setHiggsfieldGenerateAudio,
-    vertexModelId, setVertexModelId,
-    vertexDuration, setVertexDuration,
-    vertexResolution, setVertexResolution,
-    vertexGenerateAudio, setVertexGenerateAudio,
+    googleModelId, setGoogleModelId,
+    googleDuration, setGoogleDuration,
+    googleResolution, setGoogleResolution,
+    googleGenerateAudio, setGoogleGenerateAudio,
     reactorClipId, setReactorClipId,
     reactorSeconds, setReactorSeconds,
     reactorSeed, setReactorSeed,

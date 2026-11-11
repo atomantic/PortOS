@@ -103,7 +103,7 @@ const MODE_LABELS = Object.freeze({
   [IMAGE_GEN_MODE.FAL]: 'fal.ai',
   [IMAGE_GEN_MODE.RUNWAY]: 'Runway',
   [IMAGE_GEN_MODE.HIGGSFIELD]: 'Higgsfield',
-  [IMAGE_GEN_MODE.VERTEX]: 'Vertex AI',
+  [IMAGE_GEN_MODE.GOOGLE]: 'Google',
   [IMAGE_GEN_MODE.EXTERNAL]: 'External',
 });
 
