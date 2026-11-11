@@ -231,6 +231,37 @@ export function blenderShotPlayable(state, shotId, preferred = null) {
   return { quality, render: renders[quality], qualities: finished };
 }
 
+/**
+ * The video a shot shows in the live film preview, from its renders
+ * (`state.renders[shotId]`): its current final, else its current preview, else
+ * a final that went out of date, else such a preview. `{ quality, stale,
+ * render }`, or null when no render of it has finished.
+ */
+export function blenderShotClip(renders) {
+  const finished = (quality) => (renders?.[quality]?.complete && renders[quality].file ? renders[quality] : null);
+  const final = finished('final');
+  const preview = finished('preview');
+  const render = [final, preview].find((candidate) => candidate && !candidate.stale) || final || preview;
+  return render ? { quality: render === final ? 'final' : 'preview', stale: render.stale === true, render } : null;
+}
+
+/**
+ * The live film preview's clip for each Board scene, keyed by scene id:
+ * `{ shotId, quality, stale, file, version }`. `version` changes when the shot
+ * is rendered again into the same file. A scene whose shot has no finished
+ * render has no entry. `sceneMap` is the project's `blender.sceneMap`
+ * (`{ shotId: sceneId }`); the synced shots carry the same mapping as `sceneId`.
+ */
+export function blenderSceneClips({ shots, renders, sceneMap = null }) {
+  const clips = new Map();
+  for (const shot of Array.isArray(shots) ? shots : []) {
+    const sceneId = sceneMap?.[shot.id] || shot.sceneId;
+    const clip = sceneId ? blenderShotClip(renders?.[shot.id]) : null;
+    if (clip) clips.set(sceneId, { shotId: shot.id, quality: clip.quality, stale: clip.stale, file: clip.render.file, version: clip.render.finishedAt || '' });
+  }
+  return clips;
+}
+
 export const BLENDER_SHOT_STAGES = [
   ['final', 'Final done'],
   ['preview', 'Preview done'],

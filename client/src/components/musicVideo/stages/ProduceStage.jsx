@@ -22,7 +22,8 @@ import { FOOTAGE_OPTIONAL_MODES } from '../../../lib/musicVideoStages.js';
  * settings › Autopilot.
  *
  * A Blender film is made in its own panel, so the composition leads the step
- * there and the scene board (its shots mirrored from the film scripts) follows.
+ * there, under the live preview of the film, and the scene board (its shots
+ * mirrored from the film scripts) follows.
  */
 export default function ProduceStage({ board }) {
   const { project, locked, videoSettings, sceneMedia } = board;

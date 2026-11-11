@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   blenderAgentBrief, blenderBulkPlan, blenderFilmSummary, blenderJobPercent, blenderOptionChanges, blenderOptionFields, blenderRenderBlocker,
-  blenderSettingsProblems, blenderShotPlayable, blenderShotRenderBlocker, blenderShotRenderStatus, blenderShotStage, blenderShotThumbPath,
+  blenderSceneClips, blenderSettingsProblems, blenderShotClip, blenderShotPlayable, blenderShotRenderBlocker, blenderShotRenderStatus, blenderShotStage, blenderShotThumbPath,
   blenderStaleReason, blenderStillPreviewItems, blenderSyncJob, changedBlenderSettings, mergeBlenderJob, sortBlenderJobs,
 } from './musicVideoBlender.js';
 import { blenderFilmState } from '../test/blenderFilmFixture.js';
@@ -65,6 +65,42 @@ describe('blenderShotPlayable', () => {
     expect(blenderShotPlayable(state, 's030')).toBeNull();
     state.renders.s010.preview.finishedAt = '2026-10-01T10:40:00.000Z';
     expect(blenderShotPlayable(state, 's010').quality).toBe('preview');
+  });
+});
+
+describe('blenderShotClip', () => {
+  const render = (quality, extra = {}) => ({ file: `s010/${quality}/shot.mp4`, complete: true, stale: false, finishedAt: '2026-10-01T10:05:00.000Z', ...extra });
+  const stale = { stale: true };
+  const unfinished = { complete: false, file: null };
+  // One row per rung of the order: the live film must never play a lesser render while a better one exists,
+  // and an out-of-date one still beats black.
+  it.each([
+    ['a current final over a current preview', { final: render('final'), preview: render('preview') }, { quality: 'final', stale: false }],
+    ['a current preview over a stale final', { final: render('final', stale), preview: render('preview') }, { quality: 'preview', stale: false }],
+    ['a stale final over a stale preview', { final: render('final', stale), preview: render('preview', stale) }, { quality: 'final', stale: true }],
+    ['a stale preview when it is all there is', { preview: render('preview', stale) }, { quality: 'preview', stale: true }],
+    ['a preview while the final is still rendering', { final: render('final', unfinished), preview: render('preview') }, { quality: 'preview', stale: false }],
+  ])('plays %s', (_name, renders, expected) => {
+    expect(blenderShotClip(renders)).toMatchObject({ ...expected, render: renders[expected.quality] });
+  });
+
+  it('plays nothing for a shot with no finished render', () => {
+    expect(blenderShotClip(undefined)).toBeNull();
+    expect(blenderShotClip({ stills: [] })).toBeNull();
+    expect(blenderShotClip({ final: render('final', unfinished), preview: render('preview', unfinished) })).toBeNull();
+  });
+});
+
+describe('blenderSceneClips', () => {
+  it('keys each rendered shot\'s clip by its Board scene, through the project\'s scene map or the shots\' own', () => {
+    const { manifest: { shots }, renders } = blenderFilmState();
+    const own = blenderSceneClips({ shots, renders });
+    expect([...own.keys()]).toEqual(['scene-s010', 'scene-s020']);
+    expect(own.get('scene-s010')).toEqual({ shotId: 's010', quality: 'final', stale: false, file: 's010/final/shot.mp4', version: '2026-10-01T10:20:00.000Z' });
+    expect(own.get('scene-s020')).toMatchObject({ shotId: 's020', quality: 'preview', stale: true });
+    const mapped = blenderSceneClips({ shots, renders, sceneMap: { s010: 'board-1', s020: 'board-2', s030: 'board-3' } });
+    expect([...mapped.keys()]).toEqual(['board-1', 'board-2']);
+    expect(blenderSceneClips({ shots: undefined, renders: undefined }).size).toBe(0);
   });
 });
 

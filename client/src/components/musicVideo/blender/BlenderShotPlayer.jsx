@@ -1,5 +1,7 @@
 import { Music, VolumeX } from 'lucide-react';
+import { useEffect } from 'react';
 import useShotSongSync from '../../../hooks/useShotSongSync.js';
+import useSoloPlayback from '../../../hooks/useSoloPlayback.js';
 import { useLocalStorageBool } from '../../../hooks/useLocalStorageBool.js';
 import { musicVideoBlenderMediaUrl } from '../../../services/apiMusicVideo.js';
 import { buttonCls } from './blenderStyles.js';
@@ -13,12 +15,19 @@ const QUALITY_LABELS = { preview: 'Preview', final: 'Final' };
  * `blenderShotPlayable(…)` reading; with both a preview and a final rendered
  * the director picks which plays. `videoHandle` receives the `<video>` so the
  * shot actions can read the paused frame.
+ *
+ * The preview docked above the panel plays the same song, so the two take
+ * turns: whichever starts pauses the other, and this one does not start by
+ * itself (a new shot, a render that just landed) while the preview is playing.
  */
 export default function BlenderShotPlayer({ projectId, shot, playable, audioUrl, aspect = null, onQuality, onTime, videoHandle }) {
   const [withSong, , toggleSong] = useLocalStorageBool(WITH_SONG_KEY, true);
   // A re-render writes the same file again: the finish time makes the element load the new one.
   const sourceKey = playable ? `${playable.render.file}:${playable.render.finishedAt || ''}` : null;
   const { videoRef, audioRef } = useShotSongSync({ startSec: shot.start || 0, enabled: withSong && !!audioUrl, sourceKey, onTime });
+  const solo = useSoloPlayback(() => videoRef.current?.pause());
+  // A video that is replaced or removed while playing fires no pause.
+  useEffect(() => solo.stopped, [solo, sourceKey]);
 
   // The film's frame shape holds the player's place before the video loads, so the page does not jump.
   const frame = { aspectRatio: aspect || '16 / 9' };
@@ -39,7 +48,8 @@ export default function BlenderShotPlayer({ projectId, shot, playable, audioUrl,
         aria-label={`${QUALITY_LABELS[playable.quality]} render of ${shot.label || shot.id}`}
         style={frame}
         className="max-h-[42dvh] w-full rounded bg-black object-contain"
-        controls loop autoPlay muted playsInline preload="auto"
+        controls loop autoPlay={!solo.busy()} muted playsInline preload="auto"
+        onPlay={solo.started} onPause={solo.stopped}
       />
       <div className="flex flex-wrap items-center gap-1.5 text-xs">
         {playable.qualities.length > 1 && (
