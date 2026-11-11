@@ -108,7 +108,7 @@ import { deriveAttentionItems } from '../lib/musicVideoAttention.js';
 import { latestMusicVideoReviewDraft } from '../../../server/lib/musicVideoReviewDraft.js';
 import { useMusicVideoReviewDraft } from '../hooks/useMusicVideoReviewDraft.js';
 import {
-  deriveNextAction, deriveStages, describeProjectStatus, listPreviewSources, projectSpend, resolveStageParam, stageChecklist, stepNotes, autopilotStatus, compareMusicVideoProjectsNewestFirst, proofReviewInUse,
+  deriveNextAction, deriveStages, describeProjectStatus, listPreviewSources, projectSpend, resolveStageParam, stageChecklist, stageHasChecklist, stepNotes, autopilotStatus, compareMusicVideoProjectsNewestFirst, proofReviewInUse,
 } from '../lib/musicVideoStages.js';
 import { groupMusicVideoProjects } from '../lib/musicVideoProjectList.js';
 import { mergeCameoScenes } from '../lib/musicVideoCameos.js';
@@ -1902,7 +1902,7 @@ function ProjectWorkspace({
             onRename={onRename}
             renameForm={renameForm}
             cancelRender={renderTargetsSelected && !renderJob.pending ? { onCancel: renderJob.cancel, cancelling: renderJob.cancelling } : null}
-            lead={activeStage === 'story' ? null : (
+            lead={stageHasChecklist(activeStage) ? (
               <StageChecklist
                 items={stageChecklist(activeStage, selected, productionReview.readiness, publish)}
                 onAction={runChecklistAction}
@@ -1910,7 +1910,7 @@ function ProjectWorkspace({
                 onRevert={productionReview.revert}
                 headerAnchor={nextAction?.kind === 'goto' ? nextAction.anchor : null}
               />
-            )}
+            ) : null}
             review={reviewStage ? (
               <ProductionReviewPanel
                 key={`${selected.id}-${activeStage}`}
