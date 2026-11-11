@@ -280,6 +280,16 @@ describe('Media3D — generation workspace', () => {
     expect(screen.getByText(/Install TRELLIS\.2 from Models → 3D before generating/i)).toBeInTheDocument();
   });
 
+  it('shows the unresolved profile beside Generate for an uninstalled target', async () => {
+    const reason = 'Install and Repair require a locked TRELLIS.2 Metal profile.';
+    getImageTo3dTargets.mockResolvedValue({
+      targets: [target({ installed: false, installBlockedReason: reason })],
+    });
+    renderAt('/3d?image=example-robot.png');
+    expect(await screen.findByText(reason)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Generate 3D/i })).toBeDisabled();
+  });
+
   it('writes a picked image into the shareable URL', async () => {
     renderAt('/3d', <LocationProbe />);
     fireEvent.click(await screen.findByRole('button', { name: /Pick source image/i }));

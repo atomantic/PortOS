@@ -4,9 +4,9 @@
 # with the command in the lock header.
 #
 # FastVideo is checked out from hao-ai-lab/FastVideo at FASTVIDEO_PIN and
-# installed with `uv pip install --no-deps -e ~/.portos/fastvideo` after the lock
-# sync. Dependencies match the MLX video generation runtime stack with OSV-clean
-# pins (Pillow 13.0.0, torch 2.15.0, accelerate 1.15.0, diffusers 0.42.1,
+# installed with `uv pip install --no-deps --no-build-isolation -e ~/.portos/fastvideo`
+# after the lock sync. Dependencies match the MLX video generation runtime stack
+# with OSV-clean pins (Pillow 13.0.0, torch 2.15.0, accelerate 1.15.0, diffusers 0.42.1,
 # filelock 4.2.1, mlx 0.32.4).
 torch==2.15.0
 torchvision==0.29.2
@@ -37,26 +37,14 @@ aiohttp
 aiofiles
 cloudpickle
 omegaconf
-gpustat
+# Build backend of the editable FastVideo install (its pyproject: setuptools >= 61.0),
+# pinned here so `--no-build-isolation` never fetches an unlocked builder.
 wheel
-torchdata
-pyarrow
-datasets>=4.0.0
+setuptools>=61.0
 av
-torchcodec
 ray>=2.49.1
 ftfy>=6.3.1
-fastapi>=0.141.1
-orjson>=3.9.0
-python-multipart>=0.0.18
-uvicorn>=0.41.0
 remote-pdb
-watch
-wandb>=0.21.0
-test-tube>=0.7.5
-pytest
-flask
-flask-restful
 six>=1.16.0
 h5py>=3.12.1
 requests>=2.32.2

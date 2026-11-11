@@ -1152,7 +1152,9 @@ const STAGES = {
     const durationSec = await deps.probeDuration(song.filename);
     // The imported M4A is already durable; the track row that first names it
     // commits under a backup lease (#9982).
-    await withBackupAssetPublication(() => deps.attachAudio(track.id, song.filename, { source: 'suno', prompt: fields.style, lyrics: fields.lyrics, durationSec }));
+    await withBackupAssetPublication(() => deps.attachAudio(track.id, song.filename, {
+      source: 'suno', prompt: fields.style, lyrics: fields.lyrics, durationSec, sunoSongId: song.songId,
+    }));
     // Linking the track seeds the project's timed lyric cues from the track lyrics.
     await deps.updateProject(project.id, { trackId: track.id });
     return { output: { trackId: track.id, sunoSongIds: song.songIds } };

@@ -1,3 +1,5 @@
+import { HIGGSFIELD_VIDEO_MODELS, HIGGSFIELD_DEFAULT_VIDEO_MODEL, getHiggsfieldVideoModel } from '../../../../server/lib/higgsfieldVideoModels.js';
+import { GOOGLE_VIDEO_MODELS, GOOGLE_DEFAULT_VIDEO_MODEL, getGoogleVideoModel } from '../../../../server/lib/googleVideoModels.js';
 import { useRunwayCatalog } from '../../hooks/useRunwayCatalog.js';
 import { GEMINI_OMNI_WEB_MODEL } from '../../../../server/lib/geminiWebVideo.js';
 import {
@@ -36,7 +38,7 @@ import { RenderOnSelect, RenderOptionSelect } from '../media/RenderOnSelect.jsx'
  * A card opens on the last pick made on this device (lastRenderTarget), with
  * its local model or fal size; lengths stay sized to each shot.
  */
-const BACKEND_LABELS = { local: 'Local LTX', grok: 'Grok', fal: 'fal.ai', runway: 'Runway', gemini: GEMINI_OMNI_WEB_MODEL.label };
+const BACKEND_LABELS = { local: 'Local LTX', grok: 'Grok', fal: 'fal.ai', runway: 'Runway', gemini: GEMINI_OMNI_WEB_MODEL.label, higgsfield: 'Higgsfield', google: 'Google' };
 // The local render's frame rate when the request names none (generateVideo's default).
 const LOCAL_FPS = 24;
 
@@ -54,6 +56,8 @@ function savedLabel(saved, performance, scene) {
   if (saved.backend === 'runway' && !performance) {
     return `Runway · ${getRunwayVideoModel(saved.runwayModelId || RUNWAY_DEFAULT_IMAGE_VIDEO_MODEL)?.label || 'video'}`;
   }
+  if (saved.backend === 'higgsfield') return `Higgsfield · ${getHiggsfieldVideoModel(saved.higgsfieldModelId || HIGGSFIELD_DEFAULT_VIDEO_MODEL)?.label || 'video'}`;
+  if (saved.backend === 'google') return `Google · ${getGoogleVideoModel(saved.googleModelId || GOOGLE_DEFAULT_VIDEO_MODEL)?.label || 'video'}`;
   return BACKEND_LABELS[saved.backend] || 'install default';
 }
 
@@ -76,6 +80,8 @@ export function renderTargetOptions({ performance, saved, endFrame = false, scen
         const rate = describeFalVideoRate(model.id);
         return { value: `fal:${model.id}`, label: `fal.ai · ${model.label}${rate ? ` · ${rate}` : ''}${endFrame && model.endImage ? ' · ends on end frame' : ''}` };
       })),
+    ...HIGGSFIELD_VIDEO_MODELS.map((model) => ({ value: `higgsfield:${model.id}`, label: `Higgsfield · ${model.label}${performance ? ' (cutaways only)' : ''}`, disabled: performance })),
+    ...GOOGLE_VIDEO_MODELS.map((model) => ({ value: `google:${model.id}`, label: `Google · ${model.label}${performance ? ' (cutaways only)' : ''}`, disabled: performance })),
     // Runway takes no song audio, so a performance shot cannot render there.
     ...(performance
       ? [{ value: 'runway', label: 'Runway (cutaways only)', disabled: true }]
@@ -184,6 +190,8 @@ export function renderTargetOverrides(value, saved, options = {}, context = {}) 
       ...(options.runwayResolution ? { runwayResolution: options.runwayResolution } : {}),
     };
   }
+  if (value.startsWith('higgsfield:')) return { backend: 'higgsfield', higgsfieldModelId: value.slice(11), higgsfieldDuration: null, higgsfieldResolution: null };
+  if (value.startsWith('google:')) return { backend: 'google', googleModelId: value.slice(7), googleDuration: null, googleResolution: null };
   const falModelId = value.slice(4) || null;
   if (!falModelId) return { backend: 'fal' };
   // A music-driven shot's pick is its music model, at that model's own default size.

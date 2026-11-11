@@ -31,6 +31,8 @@ import {
 } from '../../lib/renderModeLadder.js';
 import { RUNWAY_IMAGE_DEFAULT_MODEL, RUNWAY_IMAGE_MODEL_IDS, getRunwayImageModel } from '../../lib/runwayImageModels.js';
 import { FAL_IMAGE_DEFAULT_MODEL, FAL_IMAGE_MODEL_IDS, isFalImageModel } from '../../lib/falImageModels.js';
+import { HIGGSFIELD_IMAGE_DEFAULT_MODEL, HIGGSFIELD_IMAGE_MODEL_IDS, higgsfieldImageFamily } from '../../lib/higgsfieldImageModels.js';
+import { GOOGLE_IMAGE_DEFAULT_MODEL, GOOGLE_IMAGE_MODEL_IDS, googleImageFamily } from '../../lib/googleImageModels.js';
 import {
   AGY_IMAGEGEN_DEFAULT_MODEL,
   CODEX_IMAGEGEN_DEFAULT_MODEL,
@@ -43,6 +45,10 @@ import {
 // instead — see `knownModels` below.
 const falModelFrom = (c, override) => override
   || (isFalImageModel(c.model) ? c.model.trim() : FAL_IMAGE_DEFAULT_MODEL);
+const higgsfieldModelFrom = (c, override) => override
+  || (higgsfieldImageFamily(c.model) ? c.model.trim() : HIGGSFIELD_IMAGE_DEFAULT_MODEL);
+const googleModelFrom = (c, override) => override
+  || (googleImageFamily(c.model) ? c.model.trim() : GOOGLE_IMAGE_DEFAULT_MODEL);
 
 // The pure capability half of the specs below, plus the two predicates that
 // read it, live in the dependency-free `lib/imageGenCapabilities.js` leaf so
@@ -149,6 +155,26 @@ export const CLOUD_PROVIDER_SPECS = Object.freeze({
     // provider re-resolves the fal.ai key from live settings at dispatch —
     // the same rule videoGen/fal.js follows.
     params: (c, override) => ({ model: falModelFrom(c, override) }),
+  }),
+  [IMAGE_GEN_MODE.HIGGSFIELD]: Object.freeze({
+    ...IMAGE_GEN_PROVIDER_CAPABILITIES[IMAGE_GEN_MODE.HIGGSFIELD],
+    label: 'Higgsfield Imagegen',
+    errorCode: 'HIGGSFIELD_IMAGEGEN_DISABLED',
+    knownModels: HIGGSFIELD_IMAGE_MODEL_IDS,
+    unknownModelCode: 'HIGGSFIELD_IMAGE_MODEL_UNKNOWN',
+    modelId: higgsfieldModelFrom,
+    // No key: queue params persist in plaintext, so the provider re-resolves it at dispatch.
+    params: (c, override) => ({ model: higgsfieldModelFrom(c, override) }),
+  }),
+  [IMAGE_GEN_MODE.GOOGLE]: Object.freeze({
+    ...IMAGE_GEN_PROVIDER_CAPABILITIES[IMAGE_GEN_MODE.GOOGLE],
+    label: 'Google Imagegen',
+    errorCode: 'GOOGLE_IMAGEGEN_DISABLED',
+    knownModels: GOOGLE_IMAGE_MODEL_IDS,
+    unknownModelCode: 'GOOGLE_IMAGE_MODEL_UNKNOWN',
+    modelId: googleModelFrom,
+    // No credential: queue params persist in plaintext, so the provider re-resolves it at dispatch.
+    params: (c, override) => ({ model: googleModelFrom(c, override) }),
   }),
 });
 

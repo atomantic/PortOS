@@ -48,15 +48,20 @@ export const PYTHON_MODULE_PROBE_SOURCE = 'import importlib.util as u,json,sys;'
  * @param {{python: string, modules: string[], execFileImpl?: Function, timeoutMs?: number}} opts
  * @returns {Promise<Record<string, boolean>|null>}
  */
-export async function probePythonModules({
+export function probePythonModules({ python, modules, ...opts } = {}) {
+  if (!python || !Array.isArray(modules) || !modules.length) return Promise.resolve(null);
+  return probePythonJson({ python, args: ['-c', PYTHON_MODULE_PROBE_SOURCE, ...modules], ...opts });
+}
+
+/** Run a lightweight Python probe and return its JSON object, or null on failure. */
+export async function probePythonJson({
   python,
-  modules,
+  args,
   execFileImpl = execFile,
   timeoutMs = 15000,
 } = {}) {
-  if (!python || !Array.isArray(modules) || !modules.length) return null;
   const stdout = await new Promise((resolve) => {
-    execFileImpl(python, ['-c', PYTHON_MODULE_PROBE_SOURCE, ...modules], { timeout: timeoutMs },
+    execFileImpl(python, args, { timeout: timeoutMs },
       (err, out) => resolve(err ? null : String(out ?? '')));
   }).catch(() => null);
   if (stdout === null) return null;

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { cancelFalRequest, submitFalRequest, awaitFalCompletion, createFalRequestEntry } from './falQueue.js';
+import { cancelFalRequest, submitFalRequest, awaitFalCompletion, createFalRequestEntry, hostFalDataUri } from './falQueue.js';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -117,5 +117,155 @@ describe('awaitFalCompletion', () => {
     await expect(pending).resolves.toEqual({ outcome: 'completed' });
     expect(entry.remoteTerminal).toBe(true);
     expect(entry.canceledRemote).toBeFalsy();
+  });
+});
+
+describe('hostFalDataUri', () => {
+  const dummyDataUri = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+
+  it('retries on transient failure and returns uploaded file url on retry', async () => {
+    let callCount = 0;
+    vi.stubGlobal('fetch', vi.fn(async (url, opts) => {
+      callCount += 1;
+      if (url.includes('/storage/upload/initiate')) {
+        if (callCount === 1) {
+          return { ok: false, status: 502, json: async () => ({}) };
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            upload_url: 'https://fal.media/upload/target',
+            file_url: 'https://fal.media/files/uploaded.png',
+          }),
+        };
+      }
+      if (url === 'https://fal.media/upload/target' && opts.method === 'PUT') {
+        return { ok: true, status: 200 };
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    const result = await hostFalDataUri({
+      apiKey: 'test-key',
+      dataUri: dummyDataUri,
+      fileName: 'test-img',
+      maxRetries: 2,
+    });
+
+    expect(result).toBe('https://fal.media/files/uploaded.png');
+    expect(callCount).toBe(3); // 1st initiate (failed) + 2nd initiate (ok) + PUT (ok)
+  });
+
+  it('aborts immediately and does not retry when signal is aborted', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(hostFalDataUri({
+      apiKey: 'test-key',
+      dataUri: dummyDataUri,
+      fileName: 'test-img',
+      signal: controller.signal,
+    })).rejects.toThrow();
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('aborts retry backoff sleep when signal aborts during delay', async () => {
+    const controller = new AbortController();
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      setTimeout(() => controller.abort(), 10);
+      return { ok: false, status: 502, json: async () => ({}) };
+    }));
+
+    const start = Date.now();
+    await expect(hostFalDataUri({
+      apiKey: 'test-key',
+      dataUri: dummyDataUri,
+      fileName: 'test-img',
+      signal: controller.signal,
+    })).rejects.toThrow();
+    expect(Date.now() - start).toBeLessThan(350);
+  });
+
+  it('retries when reading initiate response body suffers a transient network failure', async () => {
+    let callCount = 0;
+    vi.stubGlobal('fetch', vi.fn(async (url, opts) => {
+      callCount += 1;
+      if (url.includes('/storage/upload/initiate')) {
+        if (callCount === 1) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => {
+              const err = new Error('fetch failed');
+              err.cause = new Error('UND_ERR_SOCKET');
+              throw err;
+            },
+          };
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            upload_url: 'https://fal.media/upload/target',
+            file_url: 'https://fal.media/files/uploaded.png',
+          }),
+        };
+      }
+      if (url === 'https://fal.media/upload/target' && opts.method === 'PUT') {
+        return { ok: true, status: 200 };
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    const result = await hostFalDataUri({
+      apiKey: 'test-key',
+      dataUri: dummyDataUri,
+      fileName: 'test-img',
+      maxRetries: 2,
+    });
+    expect(result).toBe('https://fal.media/files/uploaded.png');
+    expect(callCount).toBe(3);
+  });
+
+  it('throws without retry on malformed JSON response body', async () => {
+    let callCount = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      callCount += 1;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => {
+          throw new SyntaxError('Unexpected token in JSON');
+        },
+      };
+    }));
+
+    await expect(hostFalDataUri({
+      apiKey: 'test-key',
+      dataUri: dummyDataUri,
+      fileName: 'test-img',
+    })).rejects.toThrow(/malformed JSON response/);
+
+    expect(callCount).toBe(1);
+  });
+
+  it('throws without retry on permanent error like 400', async () => {
+    let callCount = 0;
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      callCount += 1;
+      return { ok: false, status: 400, json: async () => ({ detail: 'invalid' }) };
+    }));
+
+    await expect(hostFalDataUri({
+      apiKey: 'test-key',
+      dataUri: dummyDataUri,
+      fileName: 'test-img',
+    })).rejects.toThrow(/HTTP 400/);
+
+    expect(callCount).toBe(1);
   });
 });

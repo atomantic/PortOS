@@ -1,0 +1,8 @@
+# Build requirements for the pinned LTX-2/2.5 MLX workspaces and MLX-Gen.
+# LTX-2's core and pipeline metadata reads the workspace README. Hatchling
+# 1.32+ rejects that path; re-evaluate the cap when updating the source pin.
+hatchling<1.32
+# Hatchling's get_requires_for_build_editable adds this dependency.
+editables~=0.3
+# MLX-Gen's pinned pyproject.toml build-system.requires.
+uv-build>=0.7.19,<0.8.0

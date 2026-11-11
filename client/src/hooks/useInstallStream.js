@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { safeParseJSON } from '../lib/genUtils';
-import { maybeRedirectToLogin } from '../services/apiCore';
+import { throwApiError } from '../services/apiCore';
 
 /**
  * Shared streaming lifecycle for the BYO runtime install modals
@@ -172,11 +172,8 @@ export function useInstallStream(url, {
           let reader = null;
           try {
             const response = await fetch(url, { method: 'POST', signal: controller.signal });
-            if (!response.ok || !response.body?.getReader) {
-              const err = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
-              maybeRedirectToLogin(response, err);
-              throw new Error(err.error || `HTTP ${response.status}`);
-            }
+            if (!response.ok) await throwApiError(response);
+            if (!response.body?.getReader) throw new Error('This browser cannot read a streamed response');
 
             reader = response.body.getReader();
             const decoder = new TextDecoder();

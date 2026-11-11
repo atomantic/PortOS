@@ -1054,7 +1054,7 @@ router.post('/mtplx/stop', asyncHandler(async (_req, res) => {
   res.json(result)
 }))
 
-// POST /api/local-llm/mtplx/install — install MTPLX (Homebrew tap, pip fallback)
+// POST /api/local-llm/mtplx/install — install the private hash-locked MTPLX runtime
 router.post('/mtplx/install', asyncHandler(async (req, res) => {
   const emit = emitter(req)
   const result = await installMtplx({ onProgress: ({ event, message }) => emit(event, message) })

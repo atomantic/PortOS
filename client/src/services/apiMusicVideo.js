@@ -678,6 +678,10 @@ export const getMusicVideoCastAndSets = (id, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets`, options);
 export const linkMusicVideoCastAndSetsToCatalog = (id, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/catalog`, { method: 'POST', body: '{}', ...options });
+export const repairMusicVideoShotReference = (id, problemId, options = {}) =>
+  request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/catalog/repair-shot-reference`, {
+    method: 'POST', body: JSON.stringify({ problemId }), ...options,
+  });
 // Saves a new version of a catalog stage's visual guide: `{ project, stage, artifact, catalogCheckin }`.
 export const rebuildMusicVideoCatalogGuide = (id, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cast-and-sets/catalog/guide`, { method: 'POST', body: '{}', ...options });
@@ -873,3 +877,7 @@ export const setMusicVideoCameoStillFromShot = (id, cameoId, { sceneId, variantI
   request(`/music-video/${encodeURIComponent(id)}/cameos/${encodeURIComponent(cameoId)}/still-from-shot`, cameoJson('POST', { sceneId, variantId }, options));
 export const unlinkMusicVideoCameoShots = (id, sceneIds, options = {}) =>
   request(`/music-video/${encodeURIComponent(id)}/cameo-links/clear`, cameoJson('POST', { sceneIds }, options));
+
+export const verifyMusicVideoLyrics = (id, options = {}) => request(`/music-video/${encodeURIComponent(id)}/lyrics/verify`, { method: 'POST', body: '{}', ...options });
+export const musicVideoLyricVerifyEventsUrl = jobId => `/api/music-video/lyrics/verify/${encodeURIComponent(jobId)}/events`;
+export const cancelMusicVideoLyricVerify = (jobId, options = {}) => request(`/music-video/lyrics/verify/${encodeURIComponent(jobId)}/cancel`, { method: 'POST', ...options });

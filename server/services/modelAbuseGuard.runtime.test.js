@@ -3,14 +3,14 @@ import { EventEmitter } from 'node:events';
 import { MODEL_ABUSE_GUARD_PYTHON_PACKAGES } from '../lib/modelAbuseGuard.js';
 
 const mock = vi.hoisted(() => ({
-  spawn: vi.fn(), execFile: vi.fn(), createVenv: vi.fn(), installPackages: vi.fn(),
+  spawn: vi.fn(), execFile: vi.fn(), createVenv: vi.fn(), installLockedRuntime: vi.fn(),
   downloadHfRepo: vi.fn(), verdict: null, cached: true, token: 'example-read-token',
 }));
 vi.mock('../lib/childProcess.js', () => ({ spawn: mock.spawn, execFile: mock.execFile }));
 vi.mock('node:fs', async (original) => ({ ...await original(), existsSync: () => true }));
 vi.mock('../lib/fileUtils.js', async (original) => ({ ...await original(), ensureDir: vi.fn() }));
 vi.mock('../lib/pythonSetup.js', () => ({
-  detectVenvBasePythonSync: () => '/example/python3', createVenv: mock.createVenv, installPackages: mock.installPackages,
+  detectVenvBasePythonSync: () => '/example/python3', createVenv: mock.createVenv, installLockedRuntime: mock.installLockedRuntime,
 }));
 vi.mock('../lib/hfCache.js', () => ({
   findCachedRepoFiles: async () => mock.cached ? ['/example/model/config.json'] : null, getHfCacheRoot: () => '/example/cache',
@@ -28,7 +28,7 @@ beforeEach(() => {
   mock.verdict = { schemaVersion: 1, complete: true, tokenCount: 700, chunks: [{ index: 0, label: 'BENIGN', score: 0.99, tokenStart: 0, tokenEnd: 510 }, { index: 1, label: 'BENIGN', score: 0.99, tokenStart: 446, tokenEnd: 700 }] };
   mock.execFile.mockImplementation((...args) => args.at(-1)(null, { stdout: args[1][1].startsWith('import sys;') ? 'supported' : '{"ready":true}', stderr: '' }));
   mock.createVenv.mockResolvedValue('/example/venv/bin/python3');
-  mock.installPackages.mockReturnValue({ promise: Promise.resolve({ ok: true }), kill: vi.fn() });
+  mock.installLockedRuntime.mockReturnValue({ promise: Promise.resolve({ ok: true }), kill: vi.fn() });
   mock.downloadHfRepo.mockReturnValue({ promise: Promise.resolve({ ok: true }), kill: vi.fn() });
   mock.spawn.mockImplementation(() => {
     const child = new EventEmitter();
@@ -48,7 +48,7 @@ describe('Prompt Guard runtime lifecycle', () => {
     await expect(getModelAbuseGuardStatus()).resolves.toMatchObject({ ready: true, setupState: 'ready', classifierMode: 'required' });
     expect(mock.execFile).toHaveBeenCalledTimes(2);
     expect(mock.spawn).not.toHaveBeenCalled();
-    expect(mock.installPackages).not.toHaveBeenCalled();
+    expect(mock.installLockedRuntime).not.toHaveBeenCalled();
     expect(mock.downloadHfRepo).not.toHaveBeenCalled();
   });
 
@@ -60,7 +60,7 @@ describe('Prompt Guard runtime lifecycle', () => {
     });
     const { installModelAbuseGuard } = await import('./modelAbuseGuard.js');
     await expect(installModelAbuseGuard()).resolves.toMatchObject({ ok: true, ready: true });
-    expect(mock.installPackages).toHaveBeenCalledWith('/example/venv/bin/python3', [...MODEL_ABUSE_GUARD_PYTHON_PACKAGES], expect.any(Function), { preferUv: true });
+    expect(mock.installLockedRuntime).toHaveBeenCalledWith('/example/venv/bin/python3', 'guard-runtime', expect.any(Function), { preferUv: true });
     expect(mock.downloadHfRepo).toHaveBeenCalledWith(expect.objectContaining({ revision: expect.stringMatching(/^[a-f0-9]{40}$/), only: expect.not.arrayContaining(['modeling.py']) }));
     expect(mock.spawn).toHaveBeenCalledOnce();
   });
@@ -70,7 +70,7 @@ describe('Prompt Guard runtime lifecycle', () => {
     const { installModelAbuseGuard } = await import('./modelAbuseGuard.js');
     await expect(installModelAbuseGuard()).resolves.toMatchObject({ ok: true, ready: true });
     expect(mock.downloadHfRepo).not.toHaveBeenCalled();
-    expect(mock.installPackages).toHaveBeenCalledOnce();
+    expect(mock.installLockedRuntime).toHaveBeenCalledOnce();
   });
 
   it('refuses a fresh install without model access before changing the runtime', async () => {
@@ -132,11 +132,11 @@ describe('Prompt Guard setup diagnostics', () => {
     const status = await getModelAbuseGuardStatus();
     expect(status).toMatchObject({ ready: false, runtimeIssue: { code: 'package-missing', action: expect.stringContaining('Repair') }, expectedPackages: MODEL_ABUSE_GUARD_PYTHON_PACKAGES });
     expect(JSON.stringify(status)).not.toMatch(/private runtime path|hf_private_token/);
-    expect(mock.installPackages).not.toHaveBeenCalled();
+    expect(mock.installLockedRuntime).not.toHaveBeenCalled();
   });
 
   it('retains the first package failure cause and exit code across status refreshes, then clears it on repair', async () => {
-    mock.installPackages.mockImplementationOnce((_python, _packages, onLog) => {
+    mock.installLockedRuntime.mockImplementationOnce((_python, _packages, onLog) => {
       onLog({ type: 'log', message: 'ReadTimeout https://user:password@private.example hf_private_token' });
       onLog({ type: 'error', message: 'No matching distribution found' });
       return { promise: Promise.resolve({ ok: false, code: 1 }), kill: vi.fn() };

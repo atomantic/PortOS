@@ -1081,6 +1081,7 @@ describe('Media process execution policy', () => {
     'POST /api/rounds/reference-audio/transcribe-midi',
     'POST /api/music-video/:id/vocal-stem/separate',
     'POST /api/music-video/:id/lyrics/align',
+    'POST /api/music-video/:id/lyrics/verify',
     'POST /api/loras/:filename/effect',
   ];
 

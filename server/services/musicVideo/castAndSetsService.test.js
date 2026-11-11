@@ -14,7 +14,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { request } from '../../lib/testHelper.js';
 import { errorMiddleware } from '../../lib/errorHandler.js';
-import { musicVideoConditioningReferences } from '../../lib/musicVideoConditioning.js';
+import { musicVideoCatalogReferenceId, musicVideoConditioningReferences, musicVideoLinkedReferenceId } from '../../lib/musicVideoConditioning.js';
 import { makePathsProxy, lazyTempDataRoot, cleanupTempDataRoots } from '../../lib/mockPathsDataRoot.js';
 
 const ROOT = () => lazyTempDataRoot('mv-cast-sets-test-');
@@ -3263,6 +3263,84 @@ describe('saved shot references across the switch to catalog links', () => {
     expect(moved.body.stage.revision).toBe(STAGE.revision);
     expect(sentFiles(moved.body.project, 'shot-a')).toEqual(['lead-sheet.png', 'lead-face.png', 'street-plate.png']);
   });
+});
+
+it('reports resolvable picks that disagree with the shot sheet and repairs only the selected reference list', async () => {
+  const subjects = [
+    { id: 'ada', ingredientId: 'chr-ada', name: 'Ada', kind: 'character' },
+    { id: 'mina', ingredientId: 'chr-mina', name: 'Mina', kind: 'character' },
+    { id: 'bike', ingredientId: 'obj-bike', name: 'Bike', kind: 'object' },
+    { id: 'street', ingredientId: 'plc-street', name: 'Street', kind: 'place' },
+  ];
+  const media = {
+    'chr-ada': [{ kind: 'portrait', mediaKey: 'ada.png' }],
+    'chr-mina': [{ kind: 'portrait', mediaKey: 'mina.png' }],
+    'obj-bike': [{ kind: 'portrait', mediaKey: 'bike.png' }],
+    'plc-street': [
+      { kind: 'portrait', mediaKey: 'old-street.png', createdAt: '2026-01-01T00:00:00Z' },
+      { kind: 'reference', mediaKey: 'edited-shot.png', createdAt: '2026-01-03T00:00:00Z' },
+      { kind: 'reference', mediaKey: 'new-street.png', createdAt: '2026-01-02T00:00:00Z' },
+    ],
+  };
+  const db = {
+    getIngredient: async id => {
+      const subject = subjects.find(subject => subject.ingredientId === id);
+      return { id, type: subject.kind, name: subject.name, payload: {} };
+    },
+    listMediaForIngredient: async id => media[id] || [],
+  };
+  service.__setCastAndSetsDepsForTests(testDeps({ catalog: db }));
+  onDisk(...Object.values(media).flat().map(row => row.mediaKey), 'selected-start.png', 'selected-end.png');
+  writeFileSync(join(IMAGES(), 'edited-shot.metadata.json'), JSON.stringify({ initImageFilename: 'selected-start.png' }));
+  const ada = musicVideoCatalogReferenceId('ada', 'ada.png');
+  const mina = musicVideoLinkedReferenceId('mina.png');
+  const bike = musicVideoCatalogReferenceId('bike', 'bike.png');
+  const plate = file => musicVideoCatalogReferenceId('street', file);
+  const shot = (id, picks, extra = {}) => ({
+    sceneId: id, takes: [], frameReferenceIds: picks, shotSheet: { characters: ['Ada'], location: 'Street' }, ...extra,
+  });
+  const project = await seed({ concept: { subjects } });
+  await projects.mutateProjectRecord(project.id, current => ({ project: {
+    ...current, castAndSets: { source: 'catalog', status: 'review' },
+    scenes: [
+      shot('wrong', [mina]),
+      shot('end', [ada], { endFramePrompt: 'Mina waits by the curb.', referenceImageId: 'selected-start.png', endImageId: 'selected-end.png' }),
+      shot('prop', [ada], { framePrompt: 'Ada steps around the dropped bikes.', clipReferenceIds: [bike] }),
+      shot('reverse-prop', [ada, bike], { shotSheet: { characters: ['Ada'], action: 'Ada drops the bike.' }, clipReferenceIds: [] }),
+      shot('old', [ada, plate('old-street.png')]),
+      shot('edited', [ada, plate('edited-shot.png')]),
+      shot('correct', [ada, mina, bike, plate('new-street.png')], { endFramePrompt: 'Mina is beside the dropped bikes.', framePrompt: 'Ada looks at the bike.', clipReferenceIds: [bike] }),
+    ],
+  } }));
+  const base = `/api/music-video/${project.id}/cast-and-sets`;
+  const read = async () => (await request(app).get(base)).body.catalogCheckin;
+  const initial = await read();
+  expect(initial.problems).toEqual([]);
+  expect(initial.shotReferenceProblems.map(({ sceneId, code }) => [sceneId, code])).toEqual([
+    ['wrong', 'missing-character'], ['wrong', 'extra-character'], ['end', 'missing-character'], ['prop', 'missing-prop'],
+    ['reverse-prop', 'missing-prop'], ['old', 'different-plate'], ['edited', 'shot-derived-plate'],
+  ]);
+  expect(initial.shotReferenceProblems.find(row => row.sceneId === 'end').message).toContain('end frame');
+  expect(initial.shotReferenceProblems.find(row => row.sceneId === 'old').message).toContain('Newest plate: new-street.png');
+  expect(initial.shotReferenceProblems.every(row => row.id && row.fix && !row.patch)).toBe(true);
+  const repair = problemId => request(app).post(`${base}/catalog/repair-shot-reference`).send({ problemId });
+  const before = await projects.getStoredProject(project.id);
+  const end = initial.shotReferenceProblems.find(row => row.sceneId === 'end');
+  const saved = await repair(end.id);
+  expect(saved.status).toBe(200);
+  expect(saved.body).toMatchObject({ sceneId: 'end', patch: { frameReferenceIds: [ada, musicVideoCatalogReferenceId('mina', 'mina.png')] } });
+  const after = await projects.getStoredProject(project.id);
+  expect(after.scenes).toEqual(before.scenes.map(scene => scene.sceneId === 'end' ? { ...scene, ...saved.body.patch } : scene));
+  expect((await repair(end.id)).status).toBe(409);
+  const edited = (await read()).shotReferenceProblems.find(row => row.sceneId === 'edited');
+  expect((await repair(edited.id)).body.patch).toEqual({ frameReferenceIds: [ada, plate('new-street.png')] });
+  const wrong = (await read()).shotReferenceProblems.find(row => row.sceneId === 'wrong');
+  expect((await repair(wrong.id)).body.patch).toEqual({ frameReferenceIds: [ada] });
+  const reverseProp = (await read()).shotReferenceProblems.find(row => row.sceneId === 'reverse-prop');
+  expect((await repair(reverseProp.id)).body.patch).toEqual({ clipReferenceIds: [bike] });
+  expect((await read()).shotReferenceProblems.map(row => row.sceneId)).toEqual(['prop', 'old']);
+  expect(runPrompt).not.toHaveBeenCalled();
+  expect(enqueue).not.toHaveBeenCalled();
 });
 
 it('blocks catalog approval until every subject is linked and refuses conversion while old jobs are active', async () => {

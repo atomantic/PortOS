@@ -160,7 +160,7 @@ describe('startAutonomousVideo', () => {
     }));
     // The song title renames the project; the track carries the prompt/lyrics Suno was given.
     expect(store.get('mv-auto').name).toBe('Neon Rain');
-    expect(doubles.attachAudio).toHaveBeenCalledWith('track-1', 'music-song-a.mp3', expect.objectContaining({ source: 'suno', durationSec: 187 }));
+    expect(doubles.attachAudio).toHaveBeenCalledWith('track-1', 'music-song-a.mp3', expect.objectContaining({ source: 'suno', durationSec: 187, sunoSongId: 'song-a' }));
   });
 
   it('names the imported Suno song on its track only after a backup cut is released (#9982)', async () => {

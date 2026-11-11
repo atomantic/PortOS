@@ -23,7 +23,7 @@ import { createVideoHistoryItemRead, historyRecordIdSchema } from './videoHistor
 import { uploadFields, optionalUpload, optionalUploadFields } from '../lib/multipart.js';
 import {
   validateRequest, hostedProviderParamSchema, mediaDeleteQuerySchema, modelDownloadQuerySchema, modelDownloadParamsSchema,
-  icLoraDownloadParamsSchema, textEncoderDownloadParamsSchema, videoCancelBodySchema, videoModelTermsSchema,
+  icLoraDownloadParamsSchema, textEncoderDownloadParamsSchema, videoCancelBodySchema,
 } from '../lib/validation.js';
 import { grokVideoDurationSchema } from '../lib/sharedSchemas.js';
 import {
@@ -32,11 +32,8 @@ import {
 } from '../lib/reactorVideoClip.js';
 import { MIN_CONTEXT_FRAMES, MAX_CONTEXT_FRAMES } from '../lib/videoContinuity.js';
 import { I2V_REFERENCE_MODES } from '../lib/videoReferenceModes.js';
-import {
-  VIDEO_BACKEND_DISCLOSURES, acceptedVideoModelTerms,
-  videoModelTermsGateId, isVideoModelTermsAccepted, videoModelTermsError,
-} from '../lib/videoDisclosure.js';
-import { getSettings, updateSettingsWith } from '../services/settings.js';
+import { VIDEO_BACKEND_DISCLOSURES } from '../lib/videoDisclosure.js';
+import { getSettings } from '../services/settings.js';
 import { deleteVideoHostedCopy } from '../services/hostedRenderRemoteDelete.js';
 import { recordUserAction } from '../services/userActions.js';
 import { checkPackages, isAllowedPython } from '../lib/pythonSetup.js';
@@ -111,6 +108,8 @@ import { deleteMediaAnywhere, cancelPendingDelete } from '../services/mediaRemot
 import { assertMediaDeletable } from '../services/mediaUsage.js';
 import { VIDEO_TILING_MODES } from '../lib/videoTiling.js';
 import { RUNWAY_SPECIAL_VIDEO_MODES, RUNWAY_ACT_TWO_RATIOS, RUNWAY_ALEPH_ASPECTS } from '../lib/runwaySpecialVideoModels.js';
+import { HIGGSFIELD_VIDEO_MODEL_IDS } from '../lib/higgsfieldVideoModels.js';
+import { GOOGLE_VIDEO_MODEL_IDS } from '../lib/googleVideoModels.js';
 
 const router = Router();
 
@@ -228,7 +227,7 @@ const optionalInt = (min, max, label) => z.preprocess(
 // still enforced against the mode's own spec (assertIcReferenceCount).
 const MAX_IC_REFERENCES = Math.max(...listIcLoraRemixModes().map((s) => s.maxReferences));
 
-const MAX_REFERENCE_IMAGE_FILES = 16;
+const MAX_REFERENCE_IMAGE_FILES = 64;
 const MAX_REFERENCE_CLIP_IDS = 8;
 
 // Chain ceiling — 8 × ~5min ≈ 40min on an M3 Max keeps the worst-case wall time
@@ -334,7 +333,7 @@ export const generateBodySchema = z.object({
   // ignore the local-only knobs below; they read prompt/negativePrompt,
   // width/height (mapped to an aspect ratio), sourceImageFile/sourceImage,
   // and their own duration field.
-  backend: z.enum(['local', 'grok', 'fal', 'reactor', 'runway', 'gemini']).optional(),
+  backend: z.enum(['local', 'grok', 'fal', 'reactor', 'runway', 'gemini', 'higgsfield', 'google']).optional(),
   // Grok image_to_video clip length in seconds — the shared schema (see
   // lib/grokVideoClip.js for which lengths grok actually delivers). Multipart
   // bodies arrive as strings, so coerce first.
@@ -377,6 +376,32 @@ export const generateBodySchema = z.object({
   ),
   // Output size ('720p', '1080p'); resolved per model, falling back to its default.
   runwayResolution: z.preprocess((v) => (v === '' ? undefined : v), z.string().min(1).max(16).optional()),
+  // Higgsfield family (lib/higgsfieldVideoModels.js), length, tier, audio and
+  // seed. The provider refuses an uncatalogued family and clamps the length.
+  higgsfieldModelId: z.enum(HIGGSFIELD_VIDEO_MODEL_IDS).optional(),
+  higgsfieldDuration: z.preprocess(
+    (v) => (v == null || v === '' ? undefined : Number(v)),
+    optionalNum(1, 60, 'higgsfieldDuration'),
+  ),
+  higgsfieldResolution: z.preprocess((v) => (v === '' ? undefined : v), z.enum(['480p', '720p', '1080p']).optional()),
+  higgsfieldGenerateAudio: z.preprocess(
+    (v) => (v === 'true' ? true : v === 'false' || v === '' ? undefined : v),
+    z.boolean().optional(),
+  ),
+  higgsfieldSeed: optionalNum(0, 2147483647, 'higgsfieldSeed'),
+  // Google Veo model (lib/googleVideoModels.js), length, tier, audio and
+  // seed. The provider refuses an uncatalogued model and snaps the length.
+  googleModelId: z.enum(GOOGLE_VIDEO_MODEL_IDS).optional(),
+  googleDuration: z.preprocess(
+    (v) => (v == null || v === '' ? undefined : Number(v)),
+    optionalNum(1, 60, 'googleDuration'),
+  ),
+  googleResolution: z.preprocess((v) => (v === '' ? undefined : v), z.enum(['720p', '1080p']).optional()),
+  googleGenerateAudio: z.preprocess(
+    (v) => (v === 'true' ? true : v === 'false' || v === '' ? undefined : v),
+    z.boolean().optional(),
+  ),
+  googleSeed: optionalNum(0, 4294967295, 'googleSeed'),
   // reactor.inc fast-h3 (#6214): the clip id to chain from
   // (continue_from_clip_id — frame-accurate continuation, unlike fal/grok
   // which start a fresh render each time) and clip length in seconds. The
@@ -679,44 +704,13 @@ router.get('/status', asyncHandler(async (_req, res) => {
     reactorEnabled: isVideoModeUsable(s, VIDEO_GEN_MODE.REACTOR),
     runwayEnabled: isVideoModeUsable(s, VIDEO_GEN_MODE.RUNWAY),
     geminiEnabled: isVideoModeUsable(s, VIDEO_GEN_MODE.GEMINI),
+    higgsfieldEnabled: isVideoModeUsable(s, VIDEO_GEN_MODE.HIGGSFIELD),
+    googleEnabled: isVideoModeUsable(s, VIDEO_GEN_MODE.GOOGLE),
   });
-}));
-
-// Restricted-model license acknowledgement (#3674 follow-up). Acceptance is a
-// fact about the operator of this install, not about one browser or one
-// request, so it lives in settings and every render surface reads it: the
-// Video Gen page, the music video director board, and producers with no UI to
-// prompt through (queued jobs, pipeline stages, agent runs).
-router.get('/model-terms', asyncHandler(async (_req, res) => {
-  res.json({ accepted: acceptedVideoModelTerms(await getSettings()) });
 }));
 
 router.post('/metal-buffer-profiles/clear', asyncHandler(async (_req, res) => {
   res.json(await clearMetalBufferProfiles());
-}));
-
-router.post('/model-terms', asyncHandler(async (req, res) => {
-  const parsed = videoModelTermsSchema.safeParse(req.body || {});
-  if (!parsed.success) failValidation(parsed);
-  const { termsId, accepted } = parsed.data;
-  // Only ids a shipped model actually declares are storable — otherwise a
-  // typo'd or stale id accumulates in settings and silently authorizes
-  // nothing, which reads to the user as "I accepted and it still fails".
-  const known = listVideoModels().some((model) => videoModelTermsGateId(model) === termsId);
-  if (!known) {
-    throw new ServerError(
-      `Unknown model terms id: ${termsId}`,
-      { status: 400, code: 'VIDEO_MODEL_TERMS_UNKNOWN_ID' },
-    );
-  }
-  const next = await updateSettingsWith((current) => {
-    const existing = acceptedVideoModelTerms(current);
-    const updated = accepted
-      ? [...new Set([...existing, termsId])]
-      : existing.filter((id) => id !== termsId);
-    return { ...current, videoGen: { ...(current.videoGen || {}), acceptedModelTerms: updated } };
-  });
-  res.json({ accepted: acceptedVideoModelTerms(next) });
 }));
 
 // Mints a short-lived reactor.inc session JWT scoped to `reactor/fast-h3`
@@ -928,9 +922,6 @@ router.post('/models/:modelId/download', asyncHandler(async (req, res) => {
   const { modelId } = validateRequest(modelDownloadParamsSchema, req.params);
   const model = listVideoModels().find((m) => m.id === modelId);
   if (!model) throw new ServerError(`Unknown video model: ${modelId}`, { status: 404, code: 'UNKNOWN_MODEL' });
-  if (speedProfileId && !isVideoModelTermsAccepted(model, acceptedVideoModelTerms(await getSettings()))) {
-    throw videoModelTermsError(model, 'adapter download');
-  }
   const repos = modelDownloadTargets(model, { speedProfileId });
   if (repos.length === 0) throw new ServerError(`Model "${model.id}" has no HuggingFace repo on file.`, { status: 400, code: 'NO_REPO_FOR_MODEL' });
   const runtimeInfo = BYOV_RUNTIME_INFO[model.runtime];

@@ -399,11 +399,13 @@ export const PY_SUBPROCESS_TIMEOUT_MS = 90_000;
  * searched before concluding there is no interpreter — otherwise these suites
  * silently skip on exactly the machines that exercise the scripts they cover.
  *
- * `PORTOS_TEST_PYTHON` overrides the whole search.
+ * `PORTOS_TEST_PYTHON` overrides the whole search. `modules` keeps only
+ * interpreters that can import each named module (e.g. `['numpy']`).
  *
+ * @param {{ modules?: string[] }} [options]
  * @returns {string|null} a runnable interpreter path/name, or null
  */
-export function resolveTestPython() {
+export function resolveTestPython({ modules = [] } = {}) {
   const isWin = process.platform === 'win32';
   const venvBin = isWin ? ['Scripts', 'python.exe'] : ['bin', 'python3'];
   const portosPythons = ['venv-flux2', 'venv-mflux', 'venv-video', 'voice']
@@ -421,7 +423,8 @@ export function resolveTestPython() {
 
   return candidates.find((candidate) => {
     try {
-      execFileSync(candidate, ['-c', 'pass'], { stdio: 'ignore', timeout: PY_SUBPROCESS_TIMEOUT_MS });
+      execFileSync(candidate, ['-c', modules.length ? `import ${modules.join(', ')}` : 'pass'],
+        { stdio: 'ignore', timeout: PY_SUBPROCESS_TIMEOUT_MS });
       return true;
     } catch {
       return false;

@@ -300,6 +300,11 @@ export const updateUsageFleetBilling = ({ instanceId, usesSubscriptions }, optio
     body: JSON.stringify({ instanceId, usesSubscriptions }),
     ...options,
   });
+// Retention settings this machine's CLIs still need so their session history
+// stays readable. Dismissing is the user's word that it's handled.
+export const getUsageTips = (options = {}) => request('/usage/tips', options);
+export const dismissUsageTip = (id, options = {}) =>
+  request(`/usage/tips/${encodeURIComponent(id)}/dismiss`, { method: 'POST', ...options });
 export const startUsageBackfill = (options = {}) => request('/usage/backfill', { method: 'POST', ...options });
 
 // Subscription-quota status for every enabled provider family (claude, codex,

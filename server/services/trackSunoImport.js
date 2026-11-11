@@ -6,7 +6,7 @@
  *
  * Same job contract as the YouTube import so the client drives both through one
  * slot: kickoff returns a jobId at once, the work runs detached, and progress
- * streams over SSE. Terminal frames: `{ type: 'complete', trackId, track, source }`,
+ * streams over SSE. Terminal frames: `{ type: 'complete', trackId, track, source, reused? }`,
  * `{ type: 'error', error }`, or `{ type: 'canceled' }`.
  */
 
@@ -20,12 +20,12 @@ import { findFfmpeg, probeVideoDuration, runFfmpegProcess } from '../lib/ffmpeg.
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../lib/sseUtils.js';
 import { fetchPublicBinary, fetchPublicText } from '../lib/safeUrlFetch.js';
 import {
-  isSunoSongUrl, sunoCdnAudioUrl, sunoCdnVideoUrl, parseSunoSongPage, SUNO_URL_INVALID_MESSAGE,
+  isSunoSongUrl, normalizeSunoSongId, sunoCdnAudioUrl, sunoCdnVideoUrl, parseSunoSongPage, SUNO_URL_INVALID_MESSAGE,
 } from '../lib/sunoSong.js';
 import { resolveSunoSongId, SUNO_FETCH_HEADERS as HEADERS } from './sunoShareLink.js';
 import { importUploadedTrack, MUSIC_UPLOAD_MAX_BYTES } from './pipeline/musicLibrary.js';
-import { createTrack } from './tracks/index.js';
-import { RENDER_SOURCES } from './tracks/logic.js';
+import { createTrack, listTracks, updateTrack } from './tracks/index.js';
+import { RENDER_SOURCES, selectRenderPatch } from './tracks/logic.js';
 
 const PAGE_TIMEOUT_MS = 20_000;
 const PAGE_MAX_BYTES = 5 * 1024 * 1024;
@@ -75,6 +75,8 @@ const BROWSER_EXPORT_TIMEOUT_MS = 90_000;
 // (behind an autopilot song or a publish draft), which the export's own
 // budget doesn't count. Mutable for tests.
 const limits = { browserWaitMs: 2 * 60 * 1000, styleReadMs: 60 * 1000 };
+// The browser export's refusals of audio that is not the requested song's (autonomousSuno.js).
+const EXPORT_IDENTITY_CODES = new Set(['SUNO_AUDIO_WRONG_SONG', 'SUNO_AUDIO_UNVERIFIED']);
 
 // Export the song through the signed-in PortOS Browser, the same export the
 // autopilot uses, so a private or unpublished song in the user's own Suno
@@ -183,6 +185,52 @@ async function audioFromPublicVideo(songId, dir, outPath, signal, onExtracting) 
   await extractAudio(videoPath, outPath, signal);
 }
 
+// The take on this track that still holds the song's audio, preferring the one
+// already playing. A render without an id or a file cannot be selected.
+function matchingSunoRender(track, songId) {
+  const id = normalizeSunoSongId(songId);
+  if (!id || !track) return null;
+  const renders = Array.isArray(track.renders) ? track.renders : [];
+  const matches = renders.filter((render) => render?.id && render.audioFilename && normalizeSunoSongId(render.sunoSongId) === id);
+  if (matches.length === 0) return null;
+  return matches.find((render) => render.audioFilename === track.audioFilename) || matches[matches.length - 1];
+}
+
+// A live track whose render history still names this Suno song, or null.
+function liveTrackForSunoSong(tracks, songId) {
+  if (!normalizeSunoSongId(songId)) return null;
+  for (const track of Array.isArray(tracks) ? tracks : []) {
+    if (!track || track.deleted === true) continue;
+    if (matchingSunoRender(track, songId)) return track;
+  }
+  return null;
+}
+
+// One import of a song at a time. Two links resolving together would otherwise
+// both miss the library and each create a track.
+const songImportTails = new Map();
+
+function acquireSunoSongImport(songId) {
+  const previous = songImportTails.get(songId) || Promise.resolve();
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  songImportTails.set(songId, gate);
+  return previous.then(() => () => {
+    release();
+    if (songImportTails.get(songId) === gate) songImportTails.delete(songId);
+  });
+}
+
+// Hand back the track with the matching take playing. Selecting it is a write
+// only when the track is currently on a different file.
+async function trackReadyForSunoSong(track, songId) {
+  const render = matchingSunoRender(track, songId);
+  if (!render || render.audioFilename === track.audioFilename) return track;
+  const patch = selectRenderPatch(track, render.id);
+  if (!patch) return track;
+  return updateTrack(track.id, patch);
+}
+
 // jobId -> { clients, lastPayload, status, canceled }
 const importJobs = new Map();
 
@@ -222,74 +270,96 @@ export async function startSunoImport(url) {
     try {
       broadcastSse(job, { type: 'progress', percent: 5, stage: 'reading' });
       const songId = await resolveSunoSongId(url.trim());
-      // The page only adds metadata; a page Suno won't serve still imports the audio.
-      const html = await fetchSongPage(songId);
       if (abortIfCanceled()) return;
-
-      broadcastSse(job, { type: 'progress', percent: 20, stage: 'downloading' });
-      let song = parseSunoSongPage(html || '', songId);
-      const audio = await fetchSongAudio([song.audioUrl, sunoCdnAudioUrl(songId)]);
-      if (abortIfCanceled()) return;
-      dir = await mkdtemp(join(tmpdir(), 'portos-sunoimport-'));
-      let tempPath;
-      if (audio) {
-        tempPath = join(dir, `song.${/mp4|m4a|aac/i.test(audio.contentType) ? 'm4a' : 'mp3'}`);
-        await writeFile(tempPath, audio.buffer);
-      } else {
-        // Suno withholds the audio file from anonymous requests. A public song
-        // (its anonymous page names it) takes the fast public-video route first;
-        // a private or unpublished one shows nothing anonymously, so the
-        // signed-in browser export comes first.
-        tempPath = join(dir, 'song.m4a');
-        // Progress only moves forward, even when the browser leg follows a failed extraction.
-        let percent = 20;
-        const viaVideo = () => audioFromPublicVideo(songId, dir, tempPath, job.abort.signal, () => {
-          percent = 70;
-          broadcastSse(job, { type: 'progress', percent, stage: 'extracting' });
-        });
-        const viaBrowser = async () => {
-          percent = Math.max(percent, 30);
-          broadcastSse(job, { type: 'progress', percent, stage: 'exporting' });
-          const signedIn = parseSunoSongPage(await exportThroughBrowser(songId, tempPath, job.abort.signal), songId);
-          // Fill only what the anonymous page lacked.
-          // The signed-in page is the owner's full view: nothing more to read after it.
-          song = { ...song, title: song.title || signedIn.title, lyrics: song.lyrics || signedIn.lyrics,
-            style: mergeStyle(song, signedIn), excludedStylesKnown: song.excludedStylesKnown || Boolean(signedIn.title || signedIn.style) };
-        };
-        const routes = song.title ? [viaVideo, viaBrowser] : [viaBrowser, viaVideo];
-        const failures = [];
-        for (const route of routes) {
-          const failure = await route().then(() => null, (err) => err);
+      const releaseSong = await acquireSunoSongImport(songId);
+      try {
+        if (abortIfCanceled()) return;
+        // Match before any download. Takes imported before the id was recorded carry none.
+        const existing = liveTrackForSunoSong(await listTracks(), songId);
+        if (abortIfCanceled()) return;
+        if (existing) {
+          const track = await trackReadyForSunoSong(existing, songId);
           if (abortIfCanceled()) return;
-          if (!failure) break;
-          console.warn(`⚠️ Suno import ${shortId(jobId)}: ${failure.message}`);
-          failures.push(failure.message);
+          console.log(`⏭️ Suno import ${shortId(jobId)} already in the library — track=${shortId(track.id)}`);
+          broadcastSse(job, { type: 'complete', trackId: track.id, track, source: 'suno', reused: true });
+          return;
         }
-        if (failures.length === routes.length) {
-          throw new Error(`Suno would not hand over this song's audio. For a private or unpublished song, sign in to Suno in the PortOS Browser and try again (${failures.join('; ')})`);
+        // The page only adds metadata; a page Suno won't serve still imports the audio.
+        const html = await fetchSongPage(songId);
+        if (abortIfCanceled()) return;
+
+        broadcastSse(job, { type: 'progress', percent: 20, stage: 'downloading' });
+        let song = parseSunoSongPage(html || '', songId);
+        const audio = await fetchSongAudio([song.audioUrl, sunoCdnAudioUrl(songId)]);
+        if (abortIfCanceled()) return;
+        dir = await mkdtemp(join(tmpdir(), 'portos-sunoimport-'));
+        let tempPath;
+        if (audio) {
+          tempPath = join(dir, `song.${/mp4|m4a|aac/i.test(audio.contentType) ? 'm4a' : 'mp3'}`);
+          await writeFile(tempPath, audio.buffer);
+        } else {
+          // Suno withholds the audio file from anonymous requests. A public song
+          // (its anonymous page names it) takes the fast public-video route first;
+          // a private or unpublished one shows nothing anonymously, so the
+          // signed-in browser export comes first.
+          tempPath = join(dir, 'song.m4a');
+          // Progress only moves forward, even when the browser leg follows a failed extraction.
+          let percent = 20;
+          const viaVideo = () => audioFromPublicVideo(songId, dir, tempPath, job.abort.signal, () => {
+            percent = 70;
+            broadcastSse(job, { type: 'progress', percent, stage: 'extracting' });
+          });
+          const viaBrowser = async () => {
+            percent = Math.max(percent, 30);
+            broadcastSse(job, { type: 'progress', percent, stage: 'exporting' });
+            const signedIn = parseSunoSongPage(await exportThroughBrowser(songId, tempPath, job.abort.signal), songId);
+            // Fill only what the anonymous page lacked.
+            // The signed-in page is the owner's full view: nothing more to read after it.
+            song = { ...song, title: song.title || signedIn.title, lyrics: song.lyrics || signedIn.lyrics,
+              style: mergeStyle(song, signedIn), excludedStylesKnown: song.excludedStylesKnown || Boolean(signedIn.title || signedIn.style) };
+          };
+          const routes = song.title ? [viaVideo, viaBrowser] : [viaBrowser, viaVideo];
+          const failures = [];
+          for (const route of routes) {
+            const failure = await route().then(() => null, (err) => err);
+            if (abortIfCanceled()) return;
+            if (!failure) break;
+            console.warn(`⚠️ Suno import ${shortId(jobId)}: ${failure.message}`);
+            failures.push(failure);
+          }
+          if (failures.length === routes.length) {
+            // Suno answered, just not with this song: say so rather than ask for a sign-in.
+            const identity = failures.find((failure) => EXPORT_IDENTITY_CODES.has(failure.code));
+            const others = failures.filter((failure) => failure !== identity).map((failure) => failure.message).join('; ');
+            if (identity) throw new Error(`${identity.message}${others ? ` (${others})` : ''}`);
+            throw new Error(`Suno would not hand over this song's audio. For a private or unpublished song, sign in to Suno in the PortOS Browser and try again (${others})`);
+          }
         }
+
+        // The audio came without the signed-in page: read it for the excluded styles.
+        song = await withSignedInStyle(song, songId, job.abort.signal);
+        if (abortIfCanceled()) return;
+        broadcastSse(job, { type: 'progress', percent: 90, stage: 'importing' });
+        const title = song.title || 'Suno song';
+        const ext = tempPath.endsWith('.m4a') ? 'm4a' : 'mp3';
+        // Probe before the library import so a file ffprobe can't read never lands there.
+        const durationSec = await probeVideoDuration(tempPath).catch(() => null);
+        if (!durationSec) throw new Error('The file Suno sent back is not playable audio');
+        const { filename } = await importUploadedTrack(tempPath, `${title}.${ext}`);
+        const track = await createTrack({
+          title, lyrics: song.lyrics, prompt: song.style, audioFilename: filename, durationSec,
+          renders: [{
+            audioFilename: filename, durationSec, source: RENDER_SOURCES.SUNO,
+            prompt: song.style, authoredPrompt: song.style, lyrics: song.lyrics,
+            sunoSongId: songId,
+          }],
+        });
+
+        console.log(`🎶 Suno import ${shortId(jobId)} complete — track=${shortId(track.id)} "${track.title}"`);
+        broadcastSse(job, { type: 'complete', trackId: track.id, track, source: 'suno' });
+      } finally {
+        releaseSong();
       }
-
-      // The audio came without the signed-in page: read it for the excluded styles.
-      song = await withSignedInStyle(song, songId, job.abort.signal);
-      if (abortIfCanceled()) return;
-      broadcastSse(job, { type: 'progress', percent: 90, stage: 'importing' });
-      const title = song.title || 'Suno song';
-      const ext = tempPath.endsWith('.m4a') ? 'm4a' : 'mp3';
-      // Probe before the library import so a file ffprobe can't read never lands there.
-      const durationSec = await probeVideoDuration(tempPath).catch(() => null);
-      if (!durationSec) throw new Error('The file Suno sent back is not playable audio');
-      const { filename } = await importUploadedTrack(tempPath, `${title}.${ext}`);
-      const track = await createTrack({
-        title, lyrics: song.lyrics, prompt: song.style, audioFilename: filename, durationSec,
-        renders: [{
-          audioFilename: filename, durationSec, source: RENDER_SOURCES.SUNO,
-          prompt: song.style, authoredPrompt: song.style, lyrics: song.lyrics,
-        }],
-      });
-
-      console.log(`🎶 Suno import ${shortId(jobId)} complete — track=${shortId(track.id)} "${track.title}"`);
-      broadcastSse(job, { type: 'complete', trackId: track.id, track, source: 'suno' });
     } catch (err) {
       console.error(`❌ Suno import ${shortId(jobId)} failed: ${err?.message || err}`);
       broadcastSse(job, { type: 'error', error: err?.message || String(err) });

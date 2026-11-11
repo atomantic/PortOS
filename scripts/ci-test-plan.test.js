@@ -999,6 +999,13 @@ describe('CI test impact planner', () => {
     }
   });
 
+  it('runs the full lint job, with actionlint over every workflow, for any workflow change', () => {
+    // `.github/workflows/` escalates to the full plan, so the lint job lints every workflow file.
+    const plan = buildCiTestPlan(['.github/workflows/release.yml'], { trackedFiles: [...TRACKED, '.github/workflows/release.yml'] });
+    expect(plan.full).toBe(true);
+    expect(plan.lint).toEqual({ mode: 'full', files: [] });
+  });
+
   it('does not treat a source .grit or a mistyped biome.json as lint configuration', () => {
     // Guards the trigger regex against over-matching: only the client's top-level
     // config and its sibling .grit plugins should force a full run.
@@ -1304,6 +1311,20 @@ describe('CI test impact planner', () => {
       expect(missingOwner.reason).toMatch(/fixture owner not tracked/);
     });
 
+    it('selects installer and route contracts for the TRELLIS.2 shell and wheel locks', () => {
+      const inputs = [
+        'scripts/setup-trellis2-mps.sh',
+        'scripts/requirements-trellis2-mps.txt',
+        'scripts/requirements-trellis2-mps.lock.txt',
+      ];
+      const owners = ['scripts/setup-trellis2-mps.test.js', 'server/routes/imageTo3d.test.js'];
+      for (const input of inputs) {
+        const plan = buildCiTestPlan([input], { trackedFiles: [...TRACKED, ...inputs, ...owners] });
+        expect(plan.full, input).toBe(false);
+        expect(plan.server.files, input).toEqual(expect.arrayContaining(owners));
+      }
+    });
+
     it('scopes a requirements-pin change to the installer contract', () => {
       const requirements = [
         'scripts/requirements-ltx25-cuda.txt',
@@ -1343,12 +1364,15 @@ describe('CI test impact planner', () => {
         'scripts/requirements-muscriptor-cuda-linux.lock.txt',
         'scripts/requirements-mflux-mlx.lock.txt',
         'scripts/requirements-wan22-cuda.txt',
+        'scripts/requirements-lyric-align.txt',
+        'scripts/requirements-lyric-align.lock.txt',
       ];
       const owners = [
         'scripts/setup-image-video.test.js',
         'server/lib/pythonSetup.install.test.js',
         'server/lib/pythonSetup.test.js',
         'server/services/imageGen/flux3Runtime.test.js',
+        'server/services/musicVideo/lyricForcedAlign.test.js',
         'server/services/videoGen/runtimes.test.js',
       ];
       const plan = buildCiTestPlan(requirements, { trackedFiles: [...TRACKED, ...requirements, ...owners] });

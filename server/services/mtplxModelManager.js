@@ -29,7 +29,7 @@ import { getHfCacheRoot, repoToDirName } from '../lib/hfCache.js';
 import { hfInventoryRow } from '../lib/modelInventory.js';
 import { listMtplxCachedModels } from '../lib/mtplxModels.js';
 import { recordModelInstall, recordModelUninstall } from './modelManifest.js';
-import { findCommandOnPath } from '../lib/processEnv.js';
+import { resolveMtplxBinary } from '../lib/mtplxRuntime.js';
 import { fetchRepoPublishedDates } from './huggingFaceMetadata.js';
 import { runStreamingCommand } from '../lib/streamingSpawn.js';
 
@@ -91,7 +91,7 @@ export async function previewMtplxPull({ model = null } = {}) {
 
 /** Resolve `mtplx`, or say why the operation cannot run at all. */
 function requireBinary() {
-  const binary = findCommandOnPath('mtplx');
+  const binary = resolveMtplxBinary();
   if (!binary) {
     throw new ServerError(
       'The `mtplx` binary was not found on PATH. Install MTPLX from the Local Runtime Servers card first.',

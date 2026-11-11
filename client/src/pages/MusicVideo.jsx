@@ -108,7 +108,7 @@ import { deriveAttentionItems } from '../lib/musicVideoAttention.js';
 import { latestMusicVideoReviewDraft } from '../../../server/lib/musicVideoReviewDraft.js';
 import { useMusicVideoReviewDraft } from '../hooks/useMusicVideoReviewDraft.js';
 import {
-  deriveNextAction, deriveStages, describeProjectStatus, listPreviewSources, projectSpend, resolveStageParam, stageChecklist, stepNotes, autopilotStatus, compareMusicVideoProjectsNewestFirst, proofReviewInUse,
+  deriveNextAction, deriveStages, describeProjectStatus, listPreviewSources, projectSpend, resolveStageParam, stageChecklist, stageHasChecklist, stepNotes, autopilotStatus, compareMusicVideoProjectsNewestFirst, proofReviewInUse,
 } from '../lib/musicVideoStages.js';
 import { groupMusicVideoProjects } from '../lib/musicVideoProjectList.js';
 import { mergeCameoScenes } from '../lib/musicVideoCameos.js';
@@ -481,6 +481,52 @@ export default function MusicVideo() {
     socket.on('music-video:project:changed', onChanged);
     return () => { active = false; socket.off('music-video:project:changed', onChanged); };
   }, [selectedId]);
+
+  // The index and the header picker share `summaries`. The open-project listener
+  // above ignores every other id, and the first page is newest-created-first, so
+  // a blanket refresh cannot update an older card or drop a deleted one.
+  const summarySyncRef = useRef(null);
+  summarySyncRef.current = {
+    selectedId,
+    items: summaries.items,
+    refreshFirst: summaries.refreshFirst,
+    removeItem: summaries.removeItem,
+    setItems: summaries.setItems,
+  };
+  useEffect(() => {
+    if (!summariesWanted) return undefined;
+    let active = true;
+    const inflight = new Map();
+    const readListed = (id) => {
+      const slot = inflight.get(id);
+      if (slot) { slot.queued = true; return; }
+      inflight.set(id, { queued: false });
+      getMusicVideoProject(id, { silent: true })
+        .then((fresh) => {
+          if (!active || !fresh) return;
+          summarySyncRef.current.setItems((prev) => prev.map((p) => (p.id === id ? fresh : p)));
+        })
+        .catch((err) => {
+          if (active && err?.status === 404) summarySyncRef.current.removeItem(id);
+        })
+        .finally(() => {
+          const current = inflight.get(id);
+          inflight.delete(id);
+          if (active && current?.queued) readListed(id);
+        });
+    };
+    const onChanged = (data) => {
+      const id = data?.id;
+      if (!id) return;
+      if (data.origin && data.origin === socket.id) return;
+      if (id === summarySyncRef.current.selectedId) return;
+      const listed = summarySyncRef.current.items.some((project) => project.id === id);
+      if (!listed) summarySyncRef.current.refreshFirst();
+      else readListed(id);
+    };
+    socket.on('music-video:project:changed', onChanged);
+    return () => { active = false; socket.off('music-video:project:changed', onChanged); };
+  }, [summariesWanted]);
 
   // `youtube.editJob` is one shared job slot for the whole detail view (not
   // per-project) — switching the selected project while it has an import in
@@ -1205,7 +1251,7 @@ function ProjectWorkspace({
         // The server moves markers with their cues when lines are removed or merged.
         if (patch.lyricCues) patchProject(projectId, { lyricMarkers: saved.lyricMarkers, ...wordAnchoredShots(saved) });
       })
-      .catch((err) => toast.error(err?.message || 'Failed to save changes'))
+      .catch((err) => { toast.error(err?.message || 'Failed to save changes'); return false; })
       .finally(() => setCompositionSavePending((count) => count - 1));
     return timedTextSaveChain.current;
   };
@@ -1726,7 +1772,15 @@ function ProjectWorkspace({
     saveCreativeSetup: (patch) => updateMusicVideoProject(selected.id, patch, { silent: true }).then((project) => {
       patchProject(project.id, { concept: project.concept, visualSpec: project.visualSpec, productionPolicy: project.productionPolicy });
     }),
-    applyCatalogCheckin: (catalogCheckin) => patchProject(selected.id, { castAndSets: { ...selected.castAndSets, catalogCheckin } }),
+    applyCatalogCheckin: (catalogCheckin) => patchProject(selected.id, (project) => ({
+      castAndSets: { ...project.castAndSets, catalogCheckin },
+    })),
+    applyShotReferenceRepair: ({ sceneId, patch, updatedAt }) => patchProject(selected.id, (project) => {
+      if (project.updatedAt > updatedAt) return {};
+      const unsaved = unsavedSceneFields.current.get(sceneId);
+      const saved = Object.fromEntries(Object.entries(patch).filter(([field]) => !unsaved?.has(field)));
+      return { scenes: project.scenes?.map(scene => scene.sceneId === sceneId ? { ...scene, ...saved } : scene), updatedAt };
+    }),
     applyCastLinks: ({ concept, updatedAt }) => patchProject(selected.id, { concept, ...(updatedAt ? { updatedAt } : {}) }),
     // A roster edit answers the shots it may have refilled; only their cameo fields and still change here.
     applyCameos: ({ cameos, scenes, updatedAt }) => patchProject(selected.id, (p) => ({
@@ -1894,7 +1948,7 @@ function ProjectWorkspace({
             onRename={onRename}
             renameForm={renameForm}
             cancelRender={renderTargetsSelected && !renderJob.pending ? { onCancel: renderJob.cancel, cancelling: renderJob.cancelling } : null}
-            lead={activeStage === 'story' ? null : (
+            lead={stageHasChecklist(activeStage) ? (
               <StageChecklist
                 items={stageChecklist(activeStage, selected, productionReview.readiness, publish)}
                 onAction={runChecklistAction}
@@ -1902,7 +1956,7 @@ function ProjectWorkspace({
                 onRevert={productionReview.revert}
                 headerAnchor={nextAction?.kind === 'goto' ? nextAction.anchor : null}
               />
-            )}
+            ) : null}
             review={reviewStage ? (
               <ProductionReviewPanel
                 key={`${selected.id}-${activeStage}`}

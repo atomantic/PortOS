@@ -79,6 +79,8 @@ describe('credentialInventory', () => {
     expect(byId(credentials, 'huggingface')).toMatchObject({ configured: true, source: 'settings' });
     expect(byId(credentials, 'civitai')).toMatchObject({ configured: true, source: 'settings' });
     expect(byId(credentials, 'topaz')).toMatchObject({ configured: true, source: 'settings', editable: true });
+    expect(byId(credentials, 'google-cloud')).toMatchObject({ editable: true, keyFile: '.json' });
+    expect(byId(credentials, 'topaz')).not.toHaveProperty('keyFile');
     expect(JSON.stringify({ credentials })).not.toMatch(secretShaped);
     expect(JSON.stringify({ credentials })).not.toContain('hf_thisMustNeverLeaveTheServer');
     expect(JSON.stringify({ credentials })).not.toContain('secret-civitai-key');

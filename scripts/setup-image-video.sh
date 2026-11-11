@@ -321,14 +321,43 @@ venv_python() {
 # shared with venv_python so the two probes can't drift apart.
 venv_exists() { [[ -x "$1/bin/python3" || -x "$1/Scripts/python.exe" ]]; }
 
+# Use the same private, hash-verified uv as server/lib/privateUv.js. Never
+# execute or upgrade a user-wide PATH copy. This stays lazy for installs that
+# only need pip (and for the Python-free mere.run lane).
+portos_uv() {
+  local tool_dir="${HOME}/.portos/tools/uv-0.13.6" bin banner candidate bootstrap_python=""
+  if is_windows; then bin="$tool_dir/Scripts/uv.exe"; else bin="$tool_dir/bin/uv"; fi
+  banner="$("$bin" --version 2>/dev/null || true)"
+  if [[ ! "$banner" =~ ^uv\ 0\.13\.6($|[[:space:]]) ]]; then
+    # A runtime may need recovery precisely because PYTHON_BIN is an old or
+    # minimal system Python. Select a complete interpreter for this tool only;
+    # runtime interpreter selection stays with its lane below.
+    for candidate in "$PYTHON_BIN" python3.14 python3.13 python3.12 python3.11 python3.10 python3.9 python3.8 python3; do
+      if have "$candidate" && "$candidate" -c 'import ensurepip, sys, venv; sys.exit(sys.version_info[:2] < (3, 8))' >/dev/null 2>&1; then
+        bootstrap_python="$candidate"
+        break
+      fi
+    done
+    if [[ -z "$bootstrap_python" ]]; then
+      echo "❌ PortOS-private uv needs Python 3.8+ with venv and ensurepip. Install Python with venv support or set PYTHON_BIN to a complete Python installation, then retry Repair." >&2
+      return 1
+    fi
+    echo "📦 Bootstrapping PortOS-private uv 0.13.6..." >&2
+    "$bootstrap_python" -m venv --clear "$tool_dir" >&2 || return
+    "$(venv_python "$tool_dir")" -m pip install --disable-pip-version-check --require-hashes --no-deps --only-binary :all: -r "$SCRIPT_DIR/requirements-uv-bootstrap.lock.txt" >&2 || return
+    banner="$("$bin" --version 2>/dev/null || true)"
+    if [[ ! "$banner" =~ ^uv\ 0\.13\.6($|[[:space:]]) ]]; then
+      echo "❌ PortOS-private uv did not report the locked version 0.13.6. Retry Repair." >&2
+      exit 1
+    fi
+  fi
+  "$bin" "$@"
+}
+
 # Runtimes installed from x86_64 Windows/Linux cu126 hash locks
 # (scripts/requirements-<name>-cuda-{windows,linux}.lock.txt) share this flow.
 # $1 = label for messages, $2 = doc that explains regenerating the locks.
 require_cuda_lock_host() {
-  if ! have uv; then
-    echo "❌ $1 CUDA needs uv to provision its locked Python 3.11 runtime. Install uv and retry Repair." >&2
-    exit 1
-  fi
   case "$(uname -m)" in
     x86_64|amd64|AMD64) ;;
     *) echo "❌ $1 CUDA hash locks support x86_64 Windows/Linux only." >&2; exit 1 ;;
@@ -352,16 +381,16 @@ sync_cuda_lock_venv() {
     py="$(venv_python "$venv")"
     if ! "$py" -c "import sys; from pathlib import Path; sys.exit(sys.version_info[:2] != (3, 11) or (Path(sys.base_prefix) / 'conda-meta').is_dir())"; then
       echo "♻️ Rebuilding ${label} CUDA with its locked Python 3.11..."
-      uv venv --clear --managed-python --python 3.11 "$venv"
+      portos_uv venv --clear --managed-python --python 3.11 "$venv"
     fi
   fi
   if ! venv_exists "$venv"; then
     echo "📦 Creating ${label} CUDA venv (Python 3.11) at ${venv}..."
-    uv venv --managed-python --python 3.11 "$venv"
+    portos_uv venv --managed-python --python 3.11 "$venv"
   fi
   py="$(venv_python "$venv")"
   echo "📦 Syncing the hash-pinned ${label} CUDA runtime into ${venv}..."
-  uv pip sync --require-hashes --only-binary :all: ${sync_args[@]+"${sync_args[@]}"} --index-strategy unsafe-best-match --python "$py" "$lock"
+  portos_uv pip sync --require-hashes --only-binary :all: ${sync_args[@]+"${sync_args[@]}"} --index-strategy unsafe-best-match --python "$py" "$lock"
 }
 
 # True when $1 is a Python 3.10+ interpreter. Mirrors MIN_VENV_PYTHON in
@@ -422,6 +451,79 @@ git_checkout_pin() {
   fi
 }
 
+require_mlx_video_profile() {
+  local label="$1" pin="$2" audited_revision="$3"
+  if ! is_apple_silicon; then
+    echo "❌ ${label} requires an Apple-Silicon Mac." >&2
+    return 1
+  fi
+  if [[ "$pin" != "$audited_revision" ]]; then
+    echo "❌ ${label} has no audited install profile for revision '${pin}'. Use the shipped revision ${audited_revision}." >&2
+    return 1
+  fi
+}
+
+sync_locked_mlx_video() (
+  local label="$1" dir="$2" python="$3" pin="$4" lock="$5" base_python checkout_status
+  shift 5
+  cd "$dir"
+  checkout_status="$(git status --porcelain=v1 --untracked-files=all)"
+  if [[ "$(git rev-parse HEAD)" != "$pin" || ! -f uv.lock || -n "$checkout_status" ]]; then
+    echo "❌ ${label} requires the clean pinned source and uv.lock at ${pin}. Preserve any local changes separately, then retry Repair." >&2
+    return 1
+  fi
+
+  # Keep both steps in this checkout and prevent inherited uv settings from
+  # bypassing isolation or redirecting the verified dependency install.
+  unset UV_PROJECT UV_WORKING_DIR UV_NO_BUILD_ISOLATION UV_NO_VERIFY_HASHES
+  export UV_PROJECT_ENVIRONMENT="$PWD/.venv"
+  base_python="$(portos_uv --no-config python find 3.11 2>/dev/null || true)"
+  reset_universal_venv "$UV_PROJECT_ENVIRONMENT" "$base_python"
+  if [[ ! -x "$python" ]] || ! "$python" -I -S -c 'import sys; sys.exit(sys.version_info[:2] != (3, 11))'; then
+    echo "📦 Creating ${label} venv with Python 3.11..."
+    portos_uv --no-config venv --clear --python 3.11 "$UV_PROJECT_ENVIRONMENT"
+  fi
+  echo "📦 Syncing ${label} wheels from ${lock##*/}..."
+  portos_uv --no-config --no-cache pip sync --require-hashes --only-binary :all: --python "$python" "$lock"
+  if [[ "$1" == --wan22-source ]]; then
+    # Bash 3.2 drops function locals before the subshell's EXIT trap on error.
+    build_dir="$(mktemp -d "${TMPDIR:-/tmp}/portos-wan22.XXXXXX")"
+    trap 'rm -rf -- "$build_dir"' EXIT
+    stage_wan22_source "$python" "$pin" "$build_dir"
+    set -- --no-binary mlx-gen "$build_dir"
+  fi
+  echo "📦 Building pinned ${label} source with hash-locked build tools..."
+  portos_uv --no-config --no-cache pip install --no-deps --only-binary :all: --preview-features build-dependency-hashes --require-build-hashes --build-constraints "$SCRIPT_DIR/requirements-mlx-video-build.lock.txt" --python "$python" --reinstall "$@"
+  portos_uv --no-config pip check --python "$python"
+  pin_venv_arm64 "$UV_PROJECT_ENVIRONMENT"
+)
+
+stage_wan22_source() {
+  local python="$1" revision="$2" build_dir="$3"
+  git archive "$revision" -- pyproject.toml README.md LICENSE src | tar -xf - -C "$build_dir"
+  # Pillow 13's private typing module fails to import on CPython 3.11.
+  # MLX-Gen only uses the alias in an annotation. Build from the archive with
+  # the equivalent stdlib type, keeping the upstream checkout pristine.
+  "$python" -I -S - "$build_dir/src/mflux/utils/image_util.py" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+source = path.read_text(encoding="utf-8")
+old_import = "from PIL._typing import StrOrBytesPath\n"
+if source.count(old_import) != 1:
+    raise SystemExit("Unexpected MLX-Gen image typing import")
+source = source.replace(old_import, "")
+source = source.replace("from pathlib import Path\n", "from os import PathLike\nfrom pathlib import Path\n", 1)
+source = source.replace(
+    "log = logging.getLogger(__name__)",
+    "StrOrBytesPath = str | bytes | PathLike[str] | PathLike[bytes]\n\nlog = logging.getLogger(__name__)",
+    1,
+)
+path.write_text(source, encoding="utf-8")
+PY
+}
+
 if python_required && ! have "$PYTHON_BIN"; then
   echo "❌ $PYTHON_BIN not found. Install Python 3.10+ first." >&2
   exit 1
@@ -469,40 +571,15 @@ if [[ "$INSTALL_MFLUX" == "1" ]]; then
   # mflux comes with the mflux-generate CLI which the local image backend
   # spawns directly. The shared inference runtime remains supported.
   echo "📦 Installing image generation packages (mflux + deps)..."
-  # PINNED TRIO — pin the MLX/Metal backend, do NOT leave it a floor, so a
-  # reinstall can't drift onto a different build. mflux 0.24 · mlx 0.32.4 ·
-  # mlx-metal 0.32.4 · Pillow 13 (#15479): mflux 0.17.5 imported the private
-  # PIL._typing that Pillow 13 broke, and 0.24 is the first release that
-  # supports Pillow 13 (the 12.x crafted-image advisories are fixed only there)
-  # and requires mlx>=0.32. The same mflux 0.24 · mlx 0.32.4 pair already runs
-  # FLUX.3 (requirements-flux3-mlx.txt). The earlier 0.17.5 · 0.31.2 trio was
-  # bisected for the M5 Max GPU-watchdog panics, which came from sustained LoRA
-  # TRAINING (docs/research/2026-06-13-mflux-training-watchdog-panic.md); LoRA
-  # training is retired (#13536), so this runtime serves inference only and
-  # needs no training run to bump. The runtime fingerprint (#1406) still records
-  # the stack for any future panic report.
-  # Apple Silicon installs the trio from the hash-pinned lock, whose direct pins
-  # (scripts/requirements-mflux-mlx.txt) must match these.
-  MFLUX_PIN='mflux==0.24.0'
-  MLX_PIN='mlx==0.32.4'
-  MLX_METAL_PIN='mlx-metal==0.32.4'
-  if is_apple_silicon; then
-    # Apple Silicon installs only from the hash-pinned lock
-    # (scripts/requirements-mflux-mlx.lock.txt): no install-time resolution, so
-    # a new or compromised transitive release can't land on the next Repair.
-    # Unpinned resolution had already broken it: Pillow 13 made mflux-generate
-    # and mflux-train fail at import while `import mflux` still succeeded, so
-    # the probe imports both CLIs. The lock needs CPython 3.11+: its filelock fix
-    # for advisory GHSA-2g95-wg33-c5x2 (4.2.1) dropped 3.10.
-    MFLUX_LOCK="$SCRIPT_DIR/requirements-mflux-mlx.lock.txt"
-    MFLUX_MIN_MINOR=11
-    MFLUX_PROBE='from mflux.models.flux.cli.flux_generate import main; from mflux.models.common.cli.train import main'
-  else
-    # mflux is MLX-only, so off Apple Silicon the resolving install is left as it was.
-    MFLUX_LOCK=""
-    MFLUX_MIN_MINOR=10
-    MFLUX_PROBE='import mflux'
+  # Direct pins and the complete closure live in requirements-mflux-mlx{,.lock}.txt.
+  if ! is_apple_silicon; then
+    echo "❌ mflux requires Apple Silicon; no locked mflux profile exists for this host. Use INSTALL_MFLUX=0 and select a supported CUDA runtime instead." >&2
+    exit 1
   fi
+  # Complete Apple Silicon closure; never resolve a fallback on other hosts.
+  MFLUX_LOCK="$SCRIPT_DIR/requirements-mflux-mlx.lock.txt"
+  MFLUX_MIN_MINOR=11
+  MFLUX_PROBE='from mflux.models.flux.cli.flux_generate import main; from mflux.models.common.cli.train import main'
   # The historical layout installs mflux with `pip install --user` against
   # $PYTHON_BIN, and PortOS discovers the shared console scripts beside that
   # interpreter. But when $PYTHON_BIN is too old (e.g. a system python3.8) or
@@ -516,24 +593,14 @@ if [[ "$INSTALL_MFLUX" == "1" ]]; then
     # file layout left by a partial reinstall (we hit this on 0.12.1, where
     # `mflux/models/flux/cli/` went missing, breaking the entry-point shim)
     # WITHOUT re-downloading the heavy torch/mlx tree.
-    if [[ -n "$MFLUX_LOCK" ]]; then
-      # Step 2: every other package at its locked version and hash. --no-deps
-      # because the lock is already the complete closure.
-      MFLUX_SELF_REQ="$(mktemp)"
-      awk '/^[^ #]/ { keep = /^mflux==/ } keep' "$MFLUX_LOCK" > "$MFLUX_SELF_REQ"
-      "$PYTHON_BIN" -m pip install --user --require-hashes --no-deps --force-reinstall -r "$MFLUX_SELF_REQ" \
-        && "$PYTHON_BIN" -m pip install --user --require-hashes --no-deps -r "$MFLUX_LOCK" \
-        || MFLUX_USE_VENV=1
-      rm -f "$MFLUX_SELF_REQ"
-    else
-      # Step 2: let pip install mflux's DECLARED runtime deps. No --upgrade, so
-      # an already-satisfied heavyweight like torch isn't re-resolved on repeat
-      # runs. The explicit mlx/mlx-metal pins ride alongside mflux so pip
-      # resolves the proven backend rather than the latest in-range build.
-      "$PYTHON_BIN" -m pip install --upgrade --user --force-reinstall --no-deps "$MFLUX_PIN" \
-        && "$PYTHON_BIN" -m pip install --user "$MFLUX_PIN" "$MLX_PIN" "$MLX_METAL_PIN" \
-        || MFLUX_USE_VENV=1
-    fi
+    # Step 2: every other package at its locked version and hash. --no-deps
+    # because the lock is already the complete closure.
+    MFLUX_SELF_REQ="$(mktemp)"
+    awk '/^[^ #]/ { keep = /^mflux==/ } keep' "$MFLUX_LOCK" > "$MFLUX_SELF_REQ"
+    "$PYTHON_BIN" -m pip install --user --require-hashes --no-deps --only-binary :all: --force-reinstall -r "$MFLUX_SELF_REQ" \
+      && "$PYTHON_BIN" -m pip install --user --require-hashes --no-deps --only-binary :all: -r "$MFLUX_LOCK" \
+      || MFLUX_USE_VENV=1
+    rm -f "$MFLUX_SELF_REQ"
     # A satisfied-looking pip run can still leave an unimportable stack on an odd
     # system Python — verify mflux actually imports before trusting the --user path.
     if [[ "$MFLUX_USE_VENV" == "0" ]] && ! "$PYTHON_BIN" -c "$MFLUX_PROBE" 2>/dev/null; then
@@ -550,28 +617,18 @@ if [[ "$INSTALL_MFLUX" == "1" ]]; then
     # Dedicated mflux venv (Python 3.11) built with uv, mirroring the flux2/ltx/
     # wan runtimes. uv provisions a managed 3.11 even when the system Python is
     # unusable, which is exactly the case we're recovering from.
-    if ! have uv; then
-      echo "❌ Need 'uv' to build the mflux venv (system Python can't host mflux)." >&2
-      echo "   Install uv (https://docs.astral.sh/uv/) or point PYTHON_BIN at a Python 3.${MFLUX_MIN_MINOR}+, then re-run." >&2
-      exit 1
-    fi
     MFLUX_VENV="${HOME}/.portos/venv-mflux"
     MFLUX_VENV_PY="${MFLUX_VENV}/bin/python3"
-    MFLUX_BASE_PY="$(uv python find 3.11 2>/dev/null || true)"
+    MFLUX_BASE_PY="$(portos_uv python find 3.11 2>/dev/null || true)"
     reset_universal_venv "$MFLUX_VENV" "$MFLUX_BASE_PY"
     if [[ ! -x "$MFLUX_VENV_PY" ]]; then
       echo "📦 Creating mflux venv at ${MFLUX_VENV} (Python 3.11)..."
       mkdir -p "${HOME}/.portos"
-      uv venv --python 3.11 "$MFLUX_VENV"
+      portos_uv venv --python 3.11 "$MFLUX_VENV"
     fi
-    if [[ -n "$MFLUX_LOCK" ]]; then
-      # The venv is mflux's alone, so sync it to exactly the lock.
-      echo "📦 Installing the hash-pinned mflux lock into ${MFLUX_VENV}..."
-      uv pip sync --python "$MFLUX_VENV_PY" --require-hashes "$MFLUX_LOCK"
-    else
-      echo "📦 Installing ${MFLUX_PIN} · ${MLX_PIN} · ${MLX_METAL_PIN} into ${MFLUX_VENV}..."
-      uv pip install --python "$MFLUX_VENV_PY" "$MFLUX_PIN" "$MLX_PIN" "$MLX_METAL_PIN"
-    fi
+    # The venv is mflux's alone, so sync it to exactly the lock.
+    echo "📦 Installing the hash-pinned mflux lock into ${MFLUX_VENV}..."
+    portos_uv pip sync --python "$MFLUX_VENV_PY" --require-hashes --only-binary :all: "$MFLUX_LOCK"
     pin_venv_arm64 "$MFLUX_VENV"
     probe_or_fail \
       "mflux venv built but its CLIs failed to import." \
@@ -582,28 +639,56 @@ if [[ "$INSTALL_MFLUX" == "1" ]]; then
 fi
 
 if [[ "$INSTALL_VIDEO" == "1" ]]; then
-  if is_macos; then
+  if is_apple_silicon; then
     echo "📦 Installing video generation packages (mlx-video-with-audio + mlx_vlm)..."
     # NOTE: the package on PyPI named just 'mlx_video' is unrelated (video
     # loading utilities). The LTX-2 generation backend lives at
     # mlx-video-with-audio (provides the `mlx_video.generate_av` module).
-    # Pin >=0.1.35 — earlier versions silently broke I2V on split-format /
+    # Pinned >=0.1.35 — earlier versions silently broke I2V on split-format /
     # quantized models like LTX-2.3 distilled-Q4 by failing to load the VAE
     # encoder, causing the conditioned frame to render as gray fog.
     # Both packages provide an `import mlx_video` module, so a prior install
     # of the wrong one shadows the right one. Uninstall first to remove the
     # ambiguity for users upgrading from earlier setup-image-video.sh runs.
+    # Installed only from the hash-pinned lock (a superset of the mflux lock,
+    # CPython 3.11+): no install-time resolution, so a new or compromised
+    # transitive release cannot land on the next Repair.
+    VIDEO_PYVER="$("$PYTHON_BIN" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>&1 || true)"
+    case "$VIDEO_PYVER" in
+      3.1[1-9]|3.[2-9][0-9]) ;;
+      *)
+        echo "❌ INSTALL_VIDEO=1 needs Python 3.11+ for its hash-pinned lock; $PYTHON_BIN reports: ${VIDEO_PYVER:-no version}." >&2
+        echo "   Point PYTHON_BIN at a Python 3.11+ and re-run." >&2
+        exit 1
+        ;;
+    esac
+    VIDEO_LOCK="$SCRIPT_DIR/requirements-mflux-video-mlx.lock.txt"
     "$PYTHON_BIN" -m pip uninstall --yes mlx_video >/dev/null 2>&1 || true
-    "$PYTHON_BIN" -m pip install --upgrade --user \
-      mlx \
-      mlx_vlm \
-      "mlx-video-with-audio>=0.1.35"
+    # Uninstalling the wrong-namesake `mlx_video` can delete files the real
+    # package shares, and a satisfied-looking lock install would not restore
+    # them. Force-reinstall mlx-video-with-audio's OWN files (--no-deps, so the
+    # heavy tree is untouched), then install the rest of the lock.
+    VIDEO_SELF_REQ="$(mktemp)"
+    awk '/^[^ #]/ { keep = /^mlx-video-with-audio==/ } keep' "$VIDEO_LOCK" > "$VIDEO_SELF_REQ"
+    VIDEO_STATUS=0
+    "$PYTHON_BIN" -m pip install --user --require-hashes --no-deps --only-binary :all: --force-reinstall -r "$VIDEO_SELF_REQ" || VIDEO_STATUS=$?
+    if [[ "$VIDEO_STATUS" == "0" ]]; then
+      "$PYTHON_BIN" -m pip install --user --require-hashes --no-deps --only-binary :all: -r "$VIDEO_LOCK" || VIDEO_STATUS=$?
+    fi
+    rm -f "$VIDEO_SELF_REQ"
+    [[ "$VIDEO_STATUS" == "0" ]] || exit "$VIDEO_STATUS"
+  elif is_macos; then
+    # mlx ships arm64-only wheels and the lock covers only arm64 macOS.
+    echo "❌ INSTALL_VIDEO=1 needs Apple Silicon: mlx ships arm64-only wheels and this Mac has no hash-pinned lock." >&2
+    exit 1
   else
-    echo "📦 Installing video generation packages (diffusers + torch)..."
-    "$PYTHON_BIN" -m pip install --upgrade --user \
-      torch \
-      diffusers \
-      accelerate
+    # No hash-pinned lock covers a bare-interpreter torch + diffusers install.
+    # The CUDA video runtimes each own a locked venv instead (INSTALL_LTX25_CUDA,
+    # INSTALL_WAN22_CUDA, INSTALL_MINIMAX_H3_CUDA); this legacy path no longer
+    # resolves unpinned packages.
+    echo "❌ INSTALL_VIDEO=1 has no hash-pinned lock for this platform; unpinned torch/diffusers installs are no longer supported." >&2
+    echo "   Use a locked runtime instead: INSTALL_LTX25_CUDA=1, INSTALL_WAN22_CUDA=1 or INSTALL_MINIMAX_H3_CUDA=1." >&2
+    exit 1
   fi
 fi
 
@@ -614,34 +699,30 @@ if [[ "$INSTALL_LTX2" == "1" ]]; then
   # proper KeyframeInterpolationPipeline (true FFLF), video Extend (not
   # last-frame conditioning), retake, ic-lora, audio-to-video.
   # Requires Python 3.11+ and ships as a multi-package monorepo we sync
-  # via `uv sync --all-extras` from a local clone. Lives at
+  # via `uv sync --locked` from a local clone. Lives at
   # ~/.portos/ltx-2-mlx/ (sibling to the FLUX.2 venv pattern).
   #
   # The runtime is pinned to a known-good commit in PortOS releases for
   # reproducibility — upstream changes cannot break installs without a
-  # PortOS release. Set LTX2_PIN=main to track HEAD for development.
+  # PortOS release. Source build inputs are documented in docs/MLX_VIDEO_LOCKS.md.
   #
   # The notapalindrome `mlx-video-with-audio` install above is unaffected
   # — both pipelines coexist; dispatch is per-model via media-models.json's
   # `runtime` field (`mlx_video` vs `ltx2`).
-  if ! have uv; then
-    echo "❌ INSTALL_LTX2=1 requires the 'uv' Python installer. Install with:" >&2
-    echo "   curl -LsSf https://astral.sh/uv/install.sh | sh" >&2
-    exit 1
-  fi
   if ! have git; then
     echo "❌ INSTALL_LTX2=1 requires git." >&2
     exit 1
   fi
   # Pinned to v0.14.19 (2026-07-19). To upgrade: bump this SHA and verify with
-  # PortOS's video gen smoke tests (text/image/fflf/extend/a2v). Set
-  # LTX2_PIN=main to bypass the pin and track upstream HEAD for development.
+  # PortOS's video gen smoke tests (text/image/fflf/extend/a2v).
   # NOTE: v0.14.x renamed every public pipeline class (TextToVideoPipeline →
   # TI2VidOneStagePipeline, ExtendPipeline → RetakePipeline, etc.) and switched
   # the output-rate kwarg from `fps` to `frame_rate`. generate_ltx2.py resolves
   # pipeline classes and the rate kwarg defensively so it works against this pin
   # AND older pre-rename pins an install may still have checked out.
-  LTX2_PIN="${LTX2_PIN:-1192051fd380e0501adb5f3c0e9a216e679cb123}"
+  LTX2_AUDITED_REVISION="1192051fd380e0501adb5f3c0e9a216e679cb123"
+  LTX2_PIN="${LTX2_PIN:-$LTX2_AUDITED_REVISION}"
+  require_mlx_video_profile "LTX-2 MLX" "$LTX2_PIN" "$LTX2_AUDITED_REVISION"
   LTX2_DIR="${HOME}/.portos/ltx-2-mlx"
   LTX2_PY="${LTX2_DIR}/.venv/bin/python3"
   mkdir -p "${HOME}/.portos"
@@ -654,24 +735,8 @@ if [[ "$INSTALL_LTX2" == "1" ]]; then
   fi
   echo "📦 Checking out pinned commit ${LTX2_PIN:0:12}..."
   git_checkout_pin "${LTX2_DIR}" "${LTX2_PIN}"
-  # Force Python 3.11 — ltx-core-mlx pins requires-python>=3.11 and the
-  # macOS bundled python3 is sometimes 3.10. uv resolves this for us when
-  # the env doesn't already exist.
-  LTX2_BASE_PY="$(uv python find 3.11 2>/dev/null || true)"
-  reset_universal_venv "${LTX2_DIR}/.venv" "$LTX2_BASE_PY"
-  if [[ ! -x "${LTX2_PY}" ]]; then
-    echo "📦 Creating ltx-2-mlx venv with Python 3.11..."
-    (cd "${LTX2_DIR}" && uv venv --python 3.11)
-  fi
-  # `uv sync` is idempotent — already-installed packages are no-ops. The
-  # repo's uv.lock pins mlx==0.31.1, which is the safe version (mlx 0.31.2
-  # silently regressed audio peaks by ~22 dB; phosphene hit this and ships
-  # the same pin). Skip --all-extras — we don't need the trainer or dev
-  # extras for inference, and the trainer extra pulls another package we
-  # have no use for.
-  echo "📦 Syncing ltx-2-mlx packages (uv sync, no extras)..."
-  (cd "${LTX2_DIR}" && uv sync)
-  pin_venv_arm64 "${LTX2_DIR}/.venv"
+  sync_locked_mlx_video "LTX-2 MLX" "$LTX2_DIR" "$LTX2_PY" "$LTX2_PIN" "$SCRIPT_DIR/requirements-ltx23-mlx.lock.txt" \
+    -e packages/ltx-core-mlx -e packages/ltx-pipelines-mlx
   probe_or_fail \
     "ltx-2-mlx synced but 'import ltx_pipelines_mlx' failed." \
     "Re-run with: rm -rf ${LTX2_DIR}/.venv && bash $0" \
@@ -684,11 +749,6 @@ if [[ "$INSTALL_LTX25" == "1" ]]; then
   # MrMofer's ltx25 fork of dgrauet/ltx-2-mlx. Same pipeline API as the 2.3
   # runtime (generate_ltx2.py), different checkout — LTX-2.5 weights do not
   # load on the frozen 2.3 pin.
-  if ! have uv; then
-    echo "❌ INSTALL_LTX25=1 requires the 'uv' Python installer. Install with:" >&2
-    echo "   curl -LsSf https://astral.sh/uv/install.sh | sh" >&2
-    exit 1
-  fi
   if ! have git; then
     echo "❌ INSTALL_LTX25=1 requires git." >&2
     exit 1
@@ -704,7 +764,9 @@ if [[ "$INSTALL_LTX25" == "1" ]]; then
   # `i2vAnchorVerifiedRevision` in server/services/videoGen/runtimes.js with it
   # (runtimes.test.js fails until both agree); scripts/generate_ltx2.py also
   # checks the LIVE checkout at render time and refuses rather than drifting.
-  LTX25_PIN="${LTX25_PIN:-57952288076766abe27dda3a774b2c24f7346977}"
+  LTX25_AUDITED_REVISION="57952288076766abe27dda3a774b2c24f7346977"
+  LTX25_PIN="${LTX25_PIN:-$LTX25_AUDITED_REVISION}"
+  require_mlx_video_profile "LTX-2.5 MLX" "$LTX25_PIN" "$LTX25_AUDITED_REVISION"
   LTX25_DIR="${HOME}/.portos/ltx-2.5-mlx"
   LTX25_PY="${LTX25_DIR}/.venv/bin/python3"
   mkdir -p "${HOME}/.portos"
@@ -717,15 +779,8 @@ if [[ "$INSTALL_LTX25" == "1" ]]; then
   fi
   echo "📦 Checking out pinned commit ${LTX25_PIN:0:12}..."
   git_checkout_pin "${LTX25_DIR}" "${LTX25_PIN}"
-  LTX25_BASE_PY="$(uv python find 3.11 2>/dev/null || true)"
-  reset_universal_venv "${LTX25_DIR}/.venv" "$LTX25_BASE_PY"
-  if [[ ! -x "${LTX25_PY}" ]]; then
-    echo "📦 Creating ltx-2.5-mlx venv with Python 3.11..."
-    (cd "${LTX25_DIR}" && uv venv --python 3.11)
-  fi
-  echo "📦 Syncing ltx-2.5-mlx packages (uv sync, no extras)..."
-  (cd "${LTX25_DIR}" && uv sync)
-  pin_venv_arm64 "${LTX25_DIR}/.venv"
+  sync_locked_mlx_video "LTX-2.5 MLX" "$LTX25_DIR" "$LTX25_PY" "$LTX25_PIN" "$SCRIPT_DIR/requirements-ltx25-mlx.lock.txt" \
+    -e packages/ltx-core-mlx -e packages/ltx-pipelines-mlx
   probe_or_fail \
     "ltx-2.5-mlx synced but 'import ltx_pipelines_mlx' failed." \
     "Re-run with: rm -rf ${LTX25_DIR}/.venv && bash $0" \
@@ -737,24 +792,14 @@ INSTALL_FASTVIDEO="${INSTALL_FASTVIDEO:-0}"
 if [[ "$INSTALL_FASTVIDEO" == "1" ]]; then
   # FastVideo provides native Apple Silicon inference for Wan and FastMetal models
   # via MLX/Metal. Reached only when the user chooses Install/Repair in Video Gen.
-  if ! is_apple_silicon; then
-    echo "❌ FastVideo MLX requires an Apple-Silicon Mac." >&2
-    exit 1
-  fi
+  FASTVIDEO_AUDITED_REVISION="fa2d1324c60050cd65209c6aaeac470e7fb412f5"
+  FASTVIDEO_PIN="${FASTVIDEO_PIN:-$FASTVIDEO_AUDITED_REVISION}"
+  require_mlx_video_profile "FastVideo MLX" "$FASTVIDEO_PIN" "$FASTVIDEO_AUDITED_REVISION"
   if ! have git; then
     echo "❌ INSTALL_FASTVIDEO=1 requires git." >&2
     exit 1
   fi
 
-  FASTVIDEO_UV_TOOL_DIR="${HOME}/.portos/tools/uv-0.8.14"
-  FASTVIDEO_UV="${FASTVIDEO_UV_TOOL_DIR}/bin/uv"
-  if [[ ! -x "$FASTVIDEO_UV" ]] || [[ "$("$FASTVIDEO_UV" --version 2>/dev/null || true)" != "uv 0.8.14" ]]; then
-    echo "📦 Bootstrapping pinned uv 0.8.14 for FastVideo..."
-    "$PYTHON_BIN" -m venv --clear "$FASTVIDEO_UV_TOOL_DIR"
-    "${FASTVIDEO_UV_TOOL_DIR}/bin/python3" -m pip install --disable-pip-version-check "uv==0.8.14"
-  fi
-
-  FASTVIDEO_PIN="${FASTVIDEO_PIN:-fa2d1324c60050cd65209c6aaeac470e7fb412f5}"
   FASTVIDEO_DIR="${HOME}/.portos/fastvideo"
   FASTVIDEO_PY="${FASTVIDEO_DIR}/.venv/bin/python3"
   FASTVIDEO_LOCK="${SCRIPT_DIR}/requirements-fastvideo-mlx.lock.txt"
@@ -767,11 +812,11 @@ if [[ "$INSTALL_FASTVIDEO" == "1" ]]; then
     (cd "${FASTVIDEO_DIR}" && git fetch --progress origin)
   fi
   git_checkout_pin "${FASTVIDEO_DIR}" "${FASTVIDEO_PIN}"
-  FASTVIDEO_BASE_PY="$("$FASTVIDEO_UV" python find 3.11 2>/dev/null || true)"
+  FASTVIDEO_BASE_PY="$(portos_uv python find 3.11 2>/dev/null || true)"
   reset_universal_venv "${FASTVIDEO_DIR}/.venv" "$FASTVIDEO_BASE_PY"
   if [[ ! -x "${FASTVIDEO_PY}" ]]; then
     echo "📦 Creating FastVideo venv with Python 3.11..."
-    (cd "${FASTVIDEO_DIR}" && "$FASTVIDEO_UV" venv --python 3.11)
+    (cd "${FASTVIDEO_DIR}" && portos_uv venv --python 3.11)
   fi
   if ! "$FASTVIDEO_PY" -c 'import sys; sys.exit(0 if sys.version_info[:2] >= (3, 11) else 1)'; then
     echo "❌ FastVideo on Apple Silicon needs Python 3.11+; ${FASTVIDEO_PY} is older." >&2
@@ -782,12 +827,13 @@ if [[ "$INSTALL_FASTVIDEO" == "1" ]]; then
   # (scripts/requirements-fastvideo-mlx.lock.txt): no install-time resolution,
   # so a new or compromised transitive release can't land on the next Repair.
   # Direct pins: scripts/requirements-fastvideo-mlx.txt. The checkout itself
-  # is installed with --no-deps so no unpinned dependencies resolve.
+  # is installed with --no-deps and --no-build-isolation so no unpinned dependencies
+  # resolve from PyPI during the editable build.
   # --python is mandatory: `uv pip sync` and `uv pip install` resolve their
   # target interpreter from VIRTUAL_ENV/CONDA_PREFIX if --python is omitted.
   echo "📦 Installing FastVideo MLX packages from hash-pinned lock into ${FASTVIDEO_DIR}/.venv..."
-  "$FASTVIDEO_UV" pip sync --require-hashes --python "${FASTVIDEO_PY}" "$FASTVIDEO_LOCK"
-  "$FASTVIDEO_UV" pip install --no-deps --python "${FASTVIDEO_PY}" -e "${FASTVIDEO_DIR}"
+  portos_uv pip sync --require-hashes --only-binary :all: --python "${FASTVIDEO_PY}" "$FASTVIDEO_LOCK"
+  portos_uv pip install --no-deps --no-build-isolation --python "${FASTVIDEO_PY}" -e "${FASTVIDEO_DIR}"
   pin_venv_arm64 "${FASTVIDEO_DIR}/.venv"
   probe_or_fail \
     "FastVideo synced but the runtime import failed in ${FASTVIDEO_PY}." \
@@ -822,24 +868,11 @@ if [[ "$INSTALL_WAN22" == "1" ]]; then
     echo "❌ INSTALL_WAN22=1 requires git." >&2
     exit 1
   fi
-  # Keep uv itself on-demand too. A machine that updated PortOS but never used
-  # a BYOV model should gain no global package or tool. If uv is not already
-  # available, bootstrap a pinned copy inside ~/.portos using the Python that
-  # PortOS already validated above; all output streams back to the install UI.
-  WAN22_UV_TOOL_DIR="${HOME}/.portos/tools/uv-0.8.14"
-  WAN22_UV="${WAN22_UV_TOOL_DIR}/bin/uv"
-  # Always use the PortOS-owned exact uv version. A random PATH copy can be too
-  # old for this lockfile or a future release with different sync semantics,
-  # which would defeat the reproducible runtime pin even though MLX-Gen itself
-  # is checked out at an immutable commit.
-  if [[ ! -x "$WAN22_UV" ]] || [[ "$("$WAN22_UV" --version 2>/dev/null || true)" != "uv 0.8.14" ]]; then
-    echo "📦 Bootstrapping pinned uv 0.8.14 for MLX-Gen..."
-    "$PYTHON_BIN" -m venv --clear "$WAN22_UV_TOOL_DIR"
-    "${WAN22_UV_TOOL_DIR}/bin/python3" -m pip install --disable-pip-version-check "uv==0.8.14"
-  fi
   # v0.25.0 exact commit, statically audited before integration. Keep the full
   # SHA so existing installs get an explicit, reproducible UI-driven upgrade.
-  WAN22_PIN="${WAN22_PIN:-2452f0c12edcc8886eebf15772205ce9c417a618}"
+  WAN22_AUDITED_REVISION="2452f0c12edcc8886eebf15772205ce9c417a618"
+  WAN22_PIN="${WAN22_PIN:-$WAN22_AUDITED_REVISION}"
+  require_mlx_video_profile "Wan 2.2 MLX" "$WAN22_PIN" "$WAN22_AUDITED_REVISION"
   WAN22_DIR="${HOME}/.portos/mlx-gen"
   WAN22_PY="${WAN22_DIR}/.venv/bin/python3"
   mkdir -p "${HOME}/.portos"
@@ -851,15 +884,7 @@ if [[ "$INSTALL_WAN22" == "1" ]]; then
     (cd "${WAN22_DIR}" && git fetch --progress origin)
   fi
   git_checkout_pin "${WAN22_DIR}" "${WAN22_PIN}"
-  WAN22_BASE_PY="$("$WAN22_UV" python find 3.11 2>/dev/null || true)"
-  reset_universal_venv "${WAN22_DIR}/.venv" "$WAN22_BASE_PY"
-  if [[ ! -x "${WAN22_PY}" ]]; then
-    echo "📦 Creating MLX-Gen venv with Python 3.11..."
-    (cd "${WAN22_DIR}" && "$WAN22_UV" venv --python 3.11)
-  fi
-  echo "📦 Syncing pinned MLX-Gen packages..."
-  (cd "${WAN22_DIR}" && "$WAN22_UV" sync --locked)
-  pin_venv_arm64 "${WAN22_DIR}/.venv"
+  sync_locked_mlx_video "Wan 2.2 MLX" "$WAN22_DIR" "$WAN22_PY" "$WAN22_PIN" "$SCRIPT_DIR/requirements-wan22-mlx.lock.txt" --wan22-source
   probe_or_fail \
     "MLX-Gen synced but the Wan runtime import failed." \
     "Use Repair / Upgrade from the Video Gen runtime panel to retry." \
@@ -883,14 +908,6 @@ if [[ "$INSTALL_MINIMAX_H3" == "1" ]]; then
     exit 1
   fi
 
-  MINIMAX_H3_UV_TOOL_DIR="${HOME}/.portos/tools/uv-0.8.14"
-  MINIMAX_H3_UV="${MINIMAX_H3_UV_TOOL_DIR}/bin/uv"
-  if [[ ! -x "$MINIMAX_H3_UV" ]] || [[ "$("$MINIMAX_H3_UV" --version 2>/dev/null || true)" != "uv 0.8.14" ]]; then
-    echo "📦 Bootstrapping pinned uv 0.8.14 for MiniMax H3 MLX..."
-    "$PYTHON_BIN" -m venv --clear "$MINIMAX_H3_UV_TOOL_DIR"
-    "${MINIMAX_H3_UV_TOOL_DIR}/bin/python3" -m pip install --disable-pip-version-check "uv==0.8.14"
-  fi
-
   MINIMAX_H3_PIN="${MINIMAX_H3_PIN:-fcd9e9b79a1d6018d91ac477c0968de1fa067e49}"
   MINIMAX_H3_DIR="${HOME}/.portos/minimax-h3-mlx"
   MINIMAX_H3_PY="${MINIMAX_H3_DIR}/.venv/bin/python3"
@@ -911,14 +928,14 @@ if [[ "$INSTALL_MINIMAX_H3" == "1" ]]; then
   # (never the whole checkout, where large model/output folders may live).
   git -C "$MINIMAX_H3_DIR" restore --source=HEAD --staged --worktree -- minimax_h3_mlx
   git -C "$MINIMAX_H3_DIR" clean -fd -- minimax_h3_mlx
-  MINIMAX_H3_BASE_PY="$("$MINIMAX_H3_UV" python find 3.11 2>/dev/null || true)"
+  MINIMAX_H3_BASE_PY="$(portos_uv python find 3.11 2>/dev/null || true)"
   reset_universal_venv "${MINIMAX_H3_DIR}/.venv" "$MINIMAX_H3_BASE_PY"
   if [[ ! -x "$MINIMAX_H3_PY" ]]; then
     echo "📦 Creating MiniMax H3 MLX venv with Python 3.11..."
-    "$MINIMAX_H3_UV" venv --python 3.11 "${MINIMAX_H3_DIR}/.venv"
+    portos_uv venv --python 3.11 "${MINIMAX_H3_DIR}/.venv"
   fi
   echo "📦 Syncing pinned MiniMax H3 MLX packages..."
-  "$MINIMAX_H3_UV" pip sync --require-hashes --python "$MINIMAX_H3_PY" "$MINIMAX_H3_LOCK"
+  portos_uv pip sync --require-hashes --python "$MINIMAX_H3_PY" "$MINIMAX_H3_LOCK"
   pin_venv_arm64 "${MINIMAX_H3_DIR}/.venv"
   # --verify-seams is Install/Repair-only strictness: it also asserts the encoder
   # seams generate_minimax_h3.py patches, which the readiness probe deliberately
@@ -985,10 +1002,6 @@ if [[ "$INSTALL_MINIMAX_H3_CUDA" == "1" ]]; then
     echo "❌ MiniMax H3 CUDA needs an NVIDIA GPU. On Apple Silicon use INSTALL_MINIMAX_H3=1 (the MLX port) instead." >&2
     exit 1
   fi
-  if ! have uv; then
-    echo "❌ MiniMax H3 CUDA needs uv to provision its locked Python 3.11 runtime. Install uv and retry Repair." >&2
-    exit 1
-  fi
   case "$(uname -m)" in
     x86_64|amd64|AMD64) ;;
     *) echo "❌ MiniMax H3 CUDA hash locks support x86_64 Windows/Linux only." >&2; exit 1 ;;
@@ -1012,16 +1025,16 @@ if [[ "$INSTALL_MINIMAX_H3_CUDA" == "1" ]]; then
     MINIMAX_H3_CUDA_PY="$(venv_python "$MINIMAX_H3_CUDA_VENV")"
     if ! "$MINIMAX_H3_CUDA_PY" -c "import sys; from pathlib import Path; sys.exit(sys.version_info[:2] != (3, 11) or (Path(sys.base_prefix) / 'conda-meta').is_dir())"; then
       echo "♻️ Rebuilding MiniMax H3 CUDA with its locked Python 3.11..."
-      uv venv --clear --managed-python --python 3.11 "$MINIMAX_H3_CUDA_VENV"
+      portos_uv venv --clear --managed-python --python 3.11 "$MINIMAX_H3_CUDA_VENV"
     fi
   fi
   if ! venv_exists "$MINIMAX_H3_CUDA_VENV"; then
     echo "📦 Creating MiniMax H3 CUDA venv (Python 3.11)..."
-    uv venv --managed-python --python 3.11 "$MINIMAX_H3_CUDA_VENV"
+    portos_uv venv --managed-python --python 3.11 "$MINIMAX_H3_CUDA_VENV"
   fi
   MINIMAX_H3_CUDA_PY="$(venv_python "$MINIMAX_H3_CUDA_VENV")"
   echo "📦 Syncing the hash-pinned MiniMax H3 CUDA runtime..."
-  uv pip sync --require-hashes --only-binary :all: --index-strategy unsafe-best-match --python "$MINIMAX_H3_CUDA_PY" "$MINIMAX_H3_CUDA_LOCK"
+  portos_uv pip sync --require-hashes --only-binary :all: --index-strategy unsafe-best-match --python "$MINIMAX_H3_CUDA_PY" "$MINIMAX_H3_CUDA_LOCK"
   pin_venv_arm64 "$MINIMAX_H3_CUDA_VENV"
 
   # Three separate ways this install can look complete and not be: a CPU-only
@@ -1045,10 +1058,6 @@ if [[ "$INSTALL_LTX25_CUDA" == "1" ]]; then
   # Reached only from explicit Install / Repair, never from PortOS boot.
   if is_macos; then
     echo "❌ LTX-2.5 CUDA needs an NVIDIA GPU. On Apple Silicon use INSTALL_LTX25=1 (the MLX port) instead." >&2
-    exit 1
-  fi
-  if ! have uv; then
-    echo "❌ LTX-2.5 CUDA needs uv to provision its locked Python 3.11 runtime. Install uv and retry Repair." >&2
     exit 1
   fi
   case "$(uname -m)" in
@@ -1075,19 +1084,19 @@ if [[ "$INSTALL_LTX25_CUDA" == "1" ]]; then
     LTX25_CUDA_PY="$(venv_python "$LTX25_CUDA_VENV")"
     if ! "$LTX25_CUDA_PY" -c "import sys; from pathlib import Path; sys.exit(sys.version_info[:2] != (3, 11) or (Path(sys.base_prefix) / 'conda-meta').is_dir())"; then
       echo "♻️ Rebuilding LTX-2.5 CUDA with its locked Python 3.11..."
-      uv venv --clear --managed-python --python 3.11 "$LTX25_CUDA_VENV"
+      portos_uv venv --clear --managed-python --python 3.11 "$LTX25_CUDA_VENV"
     fi
   fi
   if ! venv_exists "$LTX25_CUDA_VENV"; then
     echo "📦 Creating LTX-2.5 CUDA venv (Python 3.11)..."
-    uv venv --managed-python --python 3.11 "$LTX25_CUDA_VENV"
+    portos_uv venv --managed-python --python 3.11 "$LTX25_CUDA_VENV"
   fi
   LTX25_CUDA_PY="$(venv_python "$LTX25_CUDA_VENV")"
   echo "📦 Syncing the hash-pinned LTX-2.5 CUDA runtime..."
   # Only the two hash-verified LTX archives may build. Bootstrap their sole
   # backend from its own hash lock, then disable isolated build resolution.
-  uv pip install --require-hashes --only-binary :all: --no-deps --python "$LTX25_CUDA_PY" -r "${SCRIPT_DIR}/requirements-ltx25-cuda-build.lock.txt"
-  uv pip sync --require-hashes --only-binary :all: --no-binary ltx-core,ltx-pipelines --no-build-isolation --index-strategy unsafe-best-match --python "$LTX25_CUDA_PY" "$LTX25_CUDA_LOCK"
+  portos_uv pip install --require-hashes --only-binary :all: --no-deps --python "$LTX25_CUDA_PY" -r "${SCRIPT_DIR}/requirements-ltx25-cuda-build.lock.txt"
+  portos_uv pip sync --require-hashes --only-binary :all: --no-binary ltx-core,ltx-pipelines --no-build-isolation --index-strategy unsafe-best-match --python "$LTX25_CUDA_PY" "$LTX25_CUDA_LOCK"
   pin_venv_arm64 "$LTX25_CUDA_VENV"
 
   probe_or_fail \
@@ -1102,10 +1111,6 @@ INSTALL_WAN22_CUDA="${INSTALL_WAN22_CUDA:-0}"
 if [[ "$INSTALL_WAN22_CUDA" == "1" ]]; then
   if is_macos; then
     echo "❌ Wan 2.2 CUDA needs an NVIDIA GPU. Use the Wan 2.2 MLX runtime on Apple Silicon." >&2
-    exit 1
-  fi
-  if ! have uv; then
-    echo "❌ Wan 2.2 CUDA needs uv to provision its locked Python 3.11 runtime. Install uv and retry Repair." >&2
     exit 1
   fi
   case "$(uname -m)" in
@@ -1131,16 +1136,16 @@ if [[ "$INSTALL_WAN22_CUDA" == "1" ]]; then
     WAN22_CUDA_PY="$(venv_python "$WAN22_CUDA_VENV")"
     if ! "$WAN22_CUDA_PY" -c "import sys; from pathlib import Path; sys.exit(sys.version_info[:2] != (3, 11) or (Path(sys.base_prefix) / 'conda-meta').is_dir())"; then
       echo "♻️ Rebuilding Wan 2.2 CUDA with its locked Python 3.11..."
-      uv venv --clear --managed-python --python 3.11 "$WAN22_CUDA_VENV"
+      portos_uv venv --clear --managed-python --python 3.11 "$WAN22_CUDA_VENV"
     fi
   fi
   if ! venv_exists "$WAN22_CUDA_VENV"; then
     echo "📦 Creating Wan 2.2 CUDA venv (Python 3.11)..."
-    uv venv --managed-python --python 3.11 "$WAN22_CUDA_VENV"
+    portos_uv venv --managed-python --python 3.11 "$WAN22_CUDA_VENV"
   fi
   WAN22_CUDA_PY="$(venv_python "$WAN22_CUDA_VENV")"
   echo "📦 Syncing the hash-pinned Wan 2.2 CUDA runtime..."
-  uv pip sync --require-hashes --only-binary :all: --index-strategy unsafe-best-match --python "$WAN22_CUDA_PY" "$WAN22_CUDA_LOCK"
+  portos_uv pip sync --require-hashes --only-binary :all: --index-strategy unsafe-best-match --python "$WAN22_CUDA_PY" "$WAN22_CUDA_LOCK"
   pin_venv_arm64 "$WAN22_CUDA_VENV"
   probe_or_fail \
     "Wan 2.2 CUDA installed but its runtime probe failed." \
@@ -1333,7 +1338,7 @@ if [[ "$INSTALL_ACESTEP" == "1" ]]; then
       git clone --progress https://github.com/ace-step/ACE-Step.git "${ACESTEP_DIR}"
     fi
     git_checkout_pin "${ACESTEP_DIR}" "${ACESTEP_PIN}"
-    uv pip install --no-deps --no-build-isolation --python "$ACESTEP_PY" "${ACESTEP_DIR}"
+    portos_uv pip install --no-deps --no-build-isolation --python "$ACESTEP_PY" "${ACESTEP_DIR}"
   fi
   pin_venv_arm64 "$ACESTEP_VENV"
   # Verify the pipeline class imports — a clean import means generation only
@@ -1403,7 +1408,7 @@ if [[ "$INSTALL_ACESTEP15" == "1" ]]; then
       git clone --progress https://github.com/ace-step/ACE-Step-1.5.git "${ACESTEP15_DIR}"
     fi
     git_checkout_pin "${ACESTEP15_DIR}" "${ACESTEP15_PIN}"
-    uv pip install --no-deps --no-build-isolation --ignore-requires-python --python "$ACESTEP15_PY" "${ACESTEP15_DIR}"
+    portos_uv pip install --no-deps --no-build-isolation --ignore-requires-python --python "$ACESTEP15_PY" "${ACESTEP15_DIR}"
   fi
   pin_venv_arm64 "$ACESTEP15_VENV"
   probe_or_fail \

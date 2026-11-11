@@ -16,6 +16,7 @@
 import { isFlux2, usesDiffusersRunner } from './runners.js';
 
 export const MOSS_IMAGE_MODEL_ID = 'moss-image-sft-bf16';
+export const MINIMAX_H3_IMAGE_MODEL_ID = 'minimax-h3-image-bf16';
 
 export const IMAGE_RUNTIME_READINESS = Object.freeze({
   READY: 'ready',
@@ -33,6 +34,7 @@ export const IMAGE_RUNTIME = Object.freeze({
   MFLUX_PYTHON: 'mflux-python',
   MOSS_SWIFT: 'moss-swift',
   FLUX3: 'flux3',
+  MINIMAX_H3_IMAGE: 'minimax-h3-image',
 });
 
 export const IMAGE_RUNTIME_LABELS = Object.freeze({
@@ -40,6 +42,7 @@ export const IMAGE_RUNTIME_LABELS = Object.freeze({
   [IMAGE_RUNTIME.MFLUX_PYTHON]: 'mflux Python interpreter',
   [IMAGE_RUNTIME.FLUX3]: 'FLUX.3 Klein / MLX (isolated mflux 0.23.0)',
   [IMAGE_RUNTIME.MOSS_SWIFT]: 'MOSS Swift / MLX (SFT bf16, text-to-image)',
+  [IMAGE_RUNTIME.MINIMAX_H3_IMAGE]: 'MiniMax H3 MLX (shared with H3 video)',
 });
 
 // Which runtime a model needs. Shipping the vocabulary without the CLASSIFIER
@@ -49,10 +52,13 @@ export const IMAGE_RUNTIME_LABELS = Object.freeze({
 // `modelUsesFluxVenv` for its existing callers.
 export const imageRuntimeFor = (model) =>
   model?.runner === IMAGE_RUNTIME.FLUX3 ? IMAGE_RUNTIME.FLUX3
+    : model?.runner === IMAGE_RUNTIME.MINIMAX_H3_IMAGE ? IMAGE_RUNTIME.MINIMAX_H3_IMAGE
     : model?.runner === IMAGE_RUNTIME.MOSS_SWIFT ? IMAGE_RUNTIME.MOSS_SWIFT
     : (isFlux2(model) || usesDiffusersRunner(model)) ? IMAGE_RUNTIME.TORCH_VENV : IMAGE_RUNTIME.MFLUX_PYTHON;
 
 export const usesFlux3 = (model) => imageRuntimeFor(model) === IMAGE_RUNTIME.FLUX3;
+
+export const usesMinimaxH3Image = (model) => imageRuntimeFor(model) === IMAGE_RUNTIME.MINIMAX_H3_IMAGE;
 
 export const usesMossSwift = (model) => imageRuntimeFor(model) === IMAGE_RUNTIME.MOSS_SWIFT;
 
@@ -63,6 +69,7 @@ export const usesTorchVenv = (model) => imageRuntimeFor(model) === IMAGE_RUNTIME
 export const IMAGE_RUNTIME_REMEDY = Object.freeze({
   INSTALL_TORCH_VENV: 'install-torch-venv',
   INSTALL_FLUX3: 'install-flux3',
+  INSTALL_MINIMAX_H3: 'install-minimax-h3',
   INSTALL_MOSS_SWIFT: 'install-moss-swift',
   DOWNLOAD_MOSS_WEIGHTS: 'download-moss-weights',
   INSTALL_PACKAGES: 'install-packages',

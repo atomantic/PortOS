@@ -5,7 +5,7 @@
 
 import { getEvents as getCalendarEvents } from '../../calendarSync.js';
 import { fetchWithTimeout } from '../../../lib/fetchWithTimeout.js';
-import { localDayWindowUtc, getLocalParts } from '../../../lib/timezone.js';
+import { localDayWindowUtc, getLocalParts, resolveCalendarInstant } from '../../../lib/timezone.js';
 import { getUserTimezone } from '../../userTimezone.js';
 import { getSettings } from '../../settings.js';
 import { clampLimit } from './shared.js';
@@ -24,14 +24,14 @@ export const WEATHER_INTENT_RE = /\b(weather|forecast|temperature|raining|snowin
 // calendarGoogleSync.js / calendarApiSync.js; the tool's own output uses
 // `allDay`). We format times in the user's TZ so a spoken "10 AM" matches the
 // wall clock, not the server's UTC.
-const formatEventTime = (iso, tz) => {
-  if (typeof iso !== 'string' || !iso) return null;
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return null;
+const eventInstant = (value, tz, allDay) => resolveCalendarInstant(value, tz, allDay);
+const formatEventTime = (iso, tz, allDay = false) => {
+  const d = eventInstant(iso, tz, allDay);
+  if (!d) return null;
   return new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit' }).format(d);
 };
 const summarizeEvent = (e, tz) => {
-  const start = formatEventTime(e?.startTime, tz);
+  const start = formatEventTime(e?.startTime, tz, e?.isAllDay === true);
   const when = e?.isAllDay ? 'all day' : (start || 'time TBD');
   const loc = e?.location ? ` at ${e.location}` : '';
   return `${e?.title || 'Untitled event'} (${when})${loc}`;
@@ -104,7 +104,7 @@ export const AMBIENT_TOOLS = [
       const items = events.map((e) => ({
         title: e.title,
         startTime: e.startTime,
-        time: e.isAllDay ? 'all day' : formatEventTime(e.startTime, tz),
+        time: e.isAllDay ? 'all day' : formatEventTime(e.startTime, tz, false),
         location: e.location || null,
         allDay: !!e.isAllDay,
       }));
@@ -137,20 +137,20 @@ export const AMBIENT_TOOLS = [
         endDate: horizon,
         limit: 50,
       });
-      // Match calendarSync.getEvents' range semantics (it keeps events whose
-      // endTime >= startDate), so an in-progress meeting and an all-day event
-      // that began at local midnight today both still count as "next" — a
-      // strict startTime >= now would drop them. Use endTime when present,
-      // falling back to startTime for events that carry only a start.
+      // Match calendarSync.getEvents' range semantics (an event whose end is
+      // still ahead counts), so an in-progress meeting and today's all-day
+      // event both still count as "next". All-day midnights are floating
+      // calendar dates — `new Date()` on the UTC server would name the
+      // previous local day.
       const nowMs = Date.now();
       const next = events.find((e) => {
-        const ref = new Date(e?.endTime || e?.startTime);
-        return !Number.isNaN(ref.getTime()) && ref.getTime() >= nowMs;
+        const ref = eventInstant(e?.endTime || e?.startTime, tz, e?.isAllDay === true);
+        return ref && ref.getTime() >= nowMs;
       });
       if (!next) {
         return { ok: true, found: false, summary: 'Nothing coming up on your calendar in the next 30 days.' };
       }
-      const startDate = new Date(next.startTime);
+      const startDate = eventInstant(next.startTime, tz, next.isAllDay === true) || new Date(next.startTime);
       const dayLabel = new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'long', month: 'long', day: 'numeric' }).format(startDate);
       const timeLabel = next.isAllDay ? 'all day' : (formatEventTime(next.startTime, tz) || 'time TBD');
       const loc = next.location ? ` at ${next.location}` : '';

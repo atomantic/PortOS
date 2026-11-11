@@ -15,7 +15,8 @@
 
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { execFile, spawn } from '../../lib/childProcess.js';
 import { appendMissingModules, describeDegradedInstall } from './degradedInstall.js';
 import { rewriteGlbMaterialsOpaque } from './glbMaterials.js';
@@ -30,7 +31,7 @@ import {
   probeMetalToolchain,
 } from './trellis2.js';
 import {
-  probePythonModules, runGenerateSubprocess, runInstallSteps, textMatcher,
+  probePythonJson, runGenerateSubprocess, runInstallSteps, textMatcher,
 } from './laneRunner.js';
 import { renderOptionArgs, validateRenderOptions } from './renderOptions.js';
 
@@ -40,13 +41,14 @@ const LABEL = 'Pixal3D (Apple Silicon)';
 
 /** The complete Apple Silicon / Metal port used by this target. */
 export const PIXAL3D_MPS_REPO = 'https://github.com/pawel-mazurkiewicz/Pixal3D-mac.git';
+export const PIXAL3D_MPS_REVISION = '0be9e69a729432323dfb60a418801e5e9e7a1437';
 
-/** Python version required by the port's pinned Mac dependency set. */
-export const PIXAL3D_MPS_PYTHON_VERSION = '3.10';
+/** Interpreter and ABI validated with PortOS's locked Mac dependency set. */
+export const PIXAL3D_MPS_PYTHON_VERSION = '3.13';
 
-/** Torch versions the fork pins; bootstrapped before pip resolves natten. */
-export const PIXAL3D_MPS_TORCH_VERSION = '2.12.0';
-export const PIXAL3D_MPS_TORCHVISION_VERSION = '0.27.0';
+/** The wheel lock is installed before natten's build metadata imports torch. */
+export const PIXAL3D_MPS_TORCH_VERSION = '2.15.0';
+export const PIXAL3D_MPS_TORCHVISION_VERSION = '0.29.2';
 export const PIXAL3D_MPS_NATTEN_VERSION = '0.21.0';
 
 /** Clone/install root. `base` is overridable so the entire lane is unit-testable. */
@@ -59,14 +61,16 @@ export function pixal3dMpsVenvPython(base) {
   return join(pixal3dMpsRoot(base), '.venv', 'bin', 'python');
 }
 
-/** The port's Apple-native inference entrypoint. */
-export function pixal3dMpsGenerateScript(base) {
-  return join(pixal3dMpsRoot(base), 'generate_mps.py');
+/** Prefer the pinned source snapshot; legacy installs can render until Repair. */
+export function pixal3dMpsGenerateScript(base, exists = existsSync) {
+  const root = pixal3dMpsRoot(base);
+  const pinned = join(root, '.venv', 'portos-source', 'generate_mps.py');
+  return exists(pinned) ? pinned : join(root, 'generate_mps.py');
 }
 
 /** Installed ⇔ the private venv and the port's entrypoint both exist. */
 export function isPixal3dMpsInstalled({ base, exists = existsSync } = {}) {
-  return exists(pixal3dMpsVenvPython(base)) && exists(pixal3dMpsGenerateScript(base));
+  return exists(pixal3dMpsVenvPython(base)) && exists(pixal3dMpsGenerateScript(base, exists));
 }
 
 /**
@@ -89,37 +93,33 @@ export const PIXAL3D_MPS_INCOMPLETE_INSTALL_HELP = 'Pixal3D is installed but its
   + 'Apple-native Python or Metal packages are incomplete. Repair install reruns the '
   + 'pinned setup and rebuilds the native packages; downloaded models are kept.';
 
+const RUNTIME_UPDATE_HELP = `Pixal3D needs a runtime update. Install Python ${PIXAL3D_MPS_PYTHON_VERSION}, `
+  + 'then choose Repair install to apply the patched runtime. Downloaded models are kept.';
+
+const RUNTIME_PROBE_SOURCE = `
+import importlib.metadata as metadata, importlib.util as util, json, sys
+def version(name):
+    try: return metadata.version(name)
+    except metadata.PackageNotFoundError: return None
+print(json.dumps({
+    'modules': {name: util.find_spec(name) is not None for name in sys.argv[1:]},
+    'python': f'{sys.version_info.major}.{sys.version_info.minor}',
+    'torch': version('torch'),
+    'torchvision': version('torchvision'),
+}))`;
+
 /**
- * The fork's requirements list contains `natten`, whose build metadata imports torch.
- * Pip resolves all requirements before installing them, so a one-shot requirements
- * install fails on a fresh venv: the isolated natten build cannot see torch yet. Create
- * the venv and install the torch pair first, then install natten without build
- * isolation; the fork's setup script can subsequently resolve the remaining pins.
+ * PortOS owns setup: upstream setup_mac.sh reinstalls the vulnerable torch pair.
+ * The script applies the wheel lock before the hashed source packages (natten's
+ * metadata imports torch), then rebuilds the vendored extensions against that ABI.
  */
-export function buildPixal3dMpsBootstrapScript() {
-  return [
-    'set -euo pipefail',
-    'PY="${PYTHON_BIN:-}"',
-    'if [[ -z "$PY" ]]; then',
-    '  for cand in /opt/homebrew/opt/python@3.10/bin/python3.10 "$(command -v python3.10 2>/dev/null || true)"; do',
-    '    if [[ -n "$cand" && -x "$cand" ]]; then PY="$cand"; break; fi',
-    '  done',
-    'fi',
-    '[[ -n "$PY" && -x "$PY" ]] || { echo "Python 3.10 not found; install python@3.10 or set PYTHON_BIN." >&2; exit 1; }',
-    'if [[ ! -x .venv/bin/python ]]; then "$PY" -m venv .venv; fi',
-    'VPY=.venv/bin/python',
-    `"$VPY" -m pip install "torch==${PIXAL3D_MPS_TORCH_VERSION}" "torchvision==${PIXAL3D_MPS_TORCHVISION_VERSION}"`,
-    `"$VPY" -m pip install --no-build-isolation "natten==${PIXAL3D_MPS_NATTEN_VERSION}"`,
-  ].join('\n');
-}
+const SETUP_SCRIPT = fileURLToPath(new URL('../../../scripts/setup-pixal3d-mps.sh', import.meta.url));
 
 /**
  * Build the idempotent install plan for the Apple port.
  *
- * The upstream fork owns its setup script because it pins the Python dependency graph
- * and compiles six vendored Metal packages. Keeping that script intact is safer than
- * re-spelling its package order here. The optional toolchain step is placed before it,
- * because `setup_mac.sh` checks for `xcrun metal` before starting any build.
+ * Fresh install and Repair use the same immutable source and locked environment.
+ * The optional toolchain download precedes compilation of the Metal packages.
  *
  * @param {string} [base]
  * @param {{exists?: (path: string) => boolean, installMetalToolchain?: boolean}} [opts]
@@ -145,15 +145,17 @@ export function buildPixal3dMpsInstallSteps(
     });
   }
   steps.push({
-    stage: 'bootstrap',
-    command: 'bash',
-    args: ['-c', buildPixal3dMpsBootstrapScript()],
-    cwd: root,
+    stage: 'pin-source', command: 'git',
+    args: ['fetch', '--depth', '1', 'origin', PIXAL3D_MPS_REVISION], cwd: root,
   });
   steps.push({
-    stage: 'setup',
+    stage: 'checkout-source', command: 'git',
+    args: ['checkout', '--detach', PIXAL3D_MPS_REVISION], cwd: root,
+  });
+  steps.push({
+    stage: 'bootstrap',
     command: 'bash',
-    args: ['scripts/setup_mac.sh'],
+    args: [SETUP_SCRIPT],
     cwd: root,
   });
   return steps;
@@ -171,15 +173,18 @@ export async function probePixal3dMpsModules({
 } = {}) {
   const python = pixal3dMpsVenvPython(base);
   if (!exists(python)) return { unknown: true, missing: [] };
-  const modules = await probePythonModules({
+  const runtime = await probePythonJson({
     python,
-    modules: [...PIXAL3D_MPS_REQUIRED_MODULES],
+    args: ['-c', RUNTIME_PROBE_SOURCE, ...PIXAL3D_MPS_REQUIRED_MODULES],
     execFileImpl,
   });
-  if (!modules) return { unknown: true, missing: [] };
+  if (!runtime?.modules || typeof runtime.python !== 'string') return { unknown: true, missing: [] };
   return {
     unknown: false,
-    missing: PIXAL3D_MPS_REQUIRED_MODULES.filter((module) => !modules[module]),
+    missing: PIXAL3D_MPS_REQUIRED_MODULES.filter((module) => !runtime.modules[module]),
+    needsUpdate: runtime.python !== PIXAL3D_MPS_PYTHON_VERSION
+      || runtime.torch !== PIXAL3D_MPS_TORCH_VERSION
+      || runtime.torchvision !== PIXAL3D_MPS_TORCHVISION_VERSION,
   };
 }
 
@@ -199,9 +204,6 @@ export function installPixal3dMps({
   installMetalToolchain = false,
   probeModules = probePixal3dMpsModules,
 } = {}) {
-  // The setup script's requirements command must inherit no-build-isolation as well:
-  // if a future pin makes natten look unsatisfied, it should reuse the bootstrapped
-  // torch rather than re-enter the same fresh-venv failure.
   const installEnv = {
     ...(env ?? process.env),
     PIP_NO_BUILD_ISOLATION: '1',
@@ -226,6 +228,12 @@ export function installPixal3dMps({
         throw error;
       }
       const probe = await probeModules({ base, exists });
+      if (probe.needsUpdate) {
+        const error = new Error(RUNTIME_UPDATE_HELP);
+        error.code = `${CODE_PREFIX}_INSTALL_INCOMPLETE`;
+        error.stage = 'verify';
+        throw error;
+      }
       if (probe.missing?.length) {
         emit({
           type: 'log',
@@ -251,6 +259,7 @@ export function buildPixal3dMpsGenerateArgs({
   pipelineType = PIXAL3D_MPS_DEFAULT_PIPELINE_TYPE,
   steps = null,
   seed = null,
+  exists = existsSync,
 } = {}) {
   if (!imagePath) throw new Error('buildPixal3dMpsGenerateArgs: imagePath is required');
   if (!PIXAL3D_MPS_PIPELINE_TYPES.includes(pipelineType)) {
@@ -260,7 +269,7 @@ export function buildPixal3dMpsGenerateArgs({
   }
   validateRenderOptions('buildPixal3dMpsGenerateArgs', { steps, seed });
   const args = [
-    pixal3dMpsGenerateScript(base),
+    pixal3dMpsGenerateScript(base, exists),
     imagePath,
     '--device', 'mps',
     '--pipeline-type', pipelineType,
@@ -341,7 +350,7 @@ export function runPixal3dMpsGenerate({
   postprocessGlb = rewriteGlbMaterialsOpaque,
 } = {}) {
   const python = pixal3dMpsVenvPython(base);
-  if (!exists(python) || !exists(pixal3dMpsGenerateScript(base))) {
+  if (!isPixal3dMpsInstalled({ base, exists })) {
     const error = new Error(`${LABEL} is not installed — install it before generating.`);
     error.code = `${CODE_PREFIX}_NOT_INSTALLED`;
     return { promise: Promise.reject(error), kill: () => {} };
@@ -354,6 +363,7 @@ export function runPixal3dMpsGenerate({
     pipelineType,
     steps,
     seed,
+    exists,
   });
   // `generate_mps.py` uses tqdm and plain prints; without this flag a pipe buffers
   // the first several minutes of progress, leaving the shared render card looking
@@ -365,7 +375,7 @@ export function runPixal3dMpsGenerate({
   return runGenerateSubprocess({
     command,
     args,
-    cwd: pixal3dMpsRoot(base),
+    cwd: dirname(args[0]),
     env: renderEnv,
     label: LABEL,
     codePrefix: CODE_PREFIX,
@@ -393,10 +403,10 @@ export async function describePixal3dMpsInstallState({
   execFileImpl = execFile,
 } = {}) {
   const probe = await probePixal3dMpsModules({ base, exists, execFileImpl });
-  const projection = probe.missing?.length
+  const projection = probe.needsUpdate || probe.missing?.length
     ? describeDegradedInstall({
-      label: 'incomplete install',
-      help: PIXAL3D_MPS_INCOMPLETE_INSTALL_HELP,
+      label: probe.needsUpdate ? 'runtime update needed' : 'incomplete install',
+      help: probe.needsUpdate ? RUNTIME_UPDATE_HELP : PIXAL3D_MPS_INCOMPLETE_INSTALL_HELP,
       missing: probe.missing,
     })
     : null;

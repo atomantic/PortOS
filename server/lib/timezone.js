@@ -217,6 +217,92 @@ export function anchorLocalMidnightUtc(dayStr, tz) {
     : NaN
 }
 
+// A calendar all-day value is midnight on a calendar date. Google leaves the
+// zone off (`YYYY-MM-DDT00:00:00`); Outlook stores that same midnight with a
+// `Z`. Neither is an absolute instant — reading it with `new Date()` on the
+// UTC server puts the date on the previous local day for anyone west of UTC.
+const FLOATING_ALL_DAY = /^\d{4}-\d{2}-\d{2}T00:00:00(?:\.0+)?(?:Z|[+-]\d{2}:?\d{2})?$/
+const ZONE_SUFFIX = /(?:Z|[+-]\d{2}:?\d{2})$/i
+
+/**
+ * Resolve a calendar time to a UTC instant, interpreting OFFSET-LESS values
+ * in `timezone` instead of the Node process's OS timezone. Values with an
+ * explicit offset (`Z` / `±hh:mm`) pass through. Returns null when `value`
+ * does not name an instant.
+ * @param {string|Date|null|undefined} value
+ * @param {string} [timezone] IANA zone for offset-less values
+ * @returns {Date|null}
+ */
+// Offset at the wall-clock instant, not at local midnight. Adding the hours to
+// midnight uses the pre-transition offset for the whole day, so on a US
+// spring-forward day 23:59 lands an hour into the next date and on a fall-back
+// day the last hour is dropped.
+function resolveLocalWallTime(y, mo, d, hh, mm, ss, timezone) {
+  const year = Number(y)
+  const month = Number(mo)
+  const day = Number(d)
+  const hour = Number(hh) || 0
+  const minute = Number(mm) || 0
+  const second = Number(ss) || 0
+  if (month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59 || second > 59) return null
+  const asUtc = Date.UTC(year, month - 1, day, hour, minute, second)
+  const stamped = new Date(asUtc)
+  if (
+    stamped.getUTCFullYear() !== year
+    || stamped.getUTCMonth() !== month - 1
+    || stamped.getUTCDate() !== day
+  ) return null
+  const offsetAt = (ms) => getUtcOffsetMs(new Date(ms), timezone)
+  const first = asUtc - offsetAt(asUtc)
+  const resolved = asUtc - offsetAt(first)
+  const matches = (ms) => {
+    const parts = getLocalParts(new Date(ms), timezone)
+    return parts.year === year && parts.month === month && parts.day === day
+      && parts.hour === hour && parts.minute === minute
+  }
+  if (matches(resolved)) return new Date(resolved)
+  if (matches(first)) return new Date(first)
+  // A spring-forward gap has no such wall time. Keep the later instant that
+  // still falls on the requested local date — the clock after the jump.
+  const onDate = (ms) => {
+    const parts = getLocalParts(new Date(ms), timezone)
+    return parts.year === year && parts.month === month && parts.day === day
+  }
+  const options = [first, resolved].filter(onDate)
+  if (options.length === 0) return null
+  return new Date(Math.max(...options))
+}
+
+export function resolveEventInstant(value, timezone) {
+  if (!value) return null
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value
+  const s = String(value).trim()
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2}))?(?:\.(\d+))?)?$/.exec(s)
+  if (m && timezone) {
+    const resolved = resolveLocalWallTime(m[1], m[2], m[3], m[4], m[5], m[6], timezone)
+    const milliseconds = Number((m[7] || '').padEnd(3, '0').slice(0, 3))
+    return resolved && new Date(resolved.getTime() + milliseconds)
+  }
+  const parsed = new Date(s)
+  return Number.isNaN(parsed.getTime()) ? null : parsed
+}
+
+/**
+ * Instant of a calendar event field. All-day midnights are floating calendar
+ * dates in `timezone` even when a producer stamped `Z` on them; a timed value
+ * keeps its offset.
+ * @param {string|Date|null|undefined} value
+ * @param {string} [timezone]
+ * @param {boolean} [allDay]
+ * @returns {Date|null}
+ */
+export function resolveCalendarInstant(value, timezone, allDay = false) {
+  if (allDay && typeof value === 'string' && FLOATING_ALL_DAY.test(value.trim())) {
+    return resolveEventInstant(value.trim().replace(ZONE_SUFFIX, ''), timezone)
+  }
+  return resolveEventInstant(value, timezone)
+}
+
 /**
  * The user's current local calendar day expressed as UTC ISO bounds — the
  * shared "today's events" query window (calendar agenda route, voice

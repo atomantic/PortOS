@@ -2,25 +2,14 @@ import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
-  PIXAL3D_REPO,
   PIXAL3D_CONDA_ENV,
-  PIXAL3D_SETUP_FLAGS,
-  PIXAL3D_NATTEN_VERSION,
-  PIXAL3D_UTILS3D_WHEEL,
   PIXAL3D_RESOLUTIONS,
   PIXAL3D_STANDARD_MODE_MIN_VRAM_GB,
   PIXAL3D_HIGH_RES_MIN_VRAM_GB,
   PIXAL3D_NAF_FALLBACK_HELP,
-  PIXAL3D_INCOMPLETE_INSTALL_HELP,
   pixal3dRoot,
-  pixal3dRepoDir,
-  pixal3dTrellisDir,
-  pixal3dInferenceScript,
   pixal3dPython,
   isPixal3dCudaInstalled,
-  nattenWorkerCount,
-  buildPixal3dInstallSteps,
-  installPixal3dCuda,
   buildPixal3dGenerateArgs,
   selectPixal3dRenderBudget,
   parsePixal3dProgress,
@@ -38,7 +27,6 @@ const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 const BASE = join('/tmp', 'portos-test-home');
 const ROOT = join(BASE, 'pixal3d');
 const REPO = join(ROOT, 'Pixal3D');
-const TRELLIS = join(ROOT, 'TRELLIS.2');
 const INFERENCE = join(REPO, 'inference.py');
 const CONDA = join('/opt', 'conda');
 const CONDA_PY = join(CONDA, 'envs', 'pixal3d', 'bin', 'python');
@@ -57,8 +45,6 @@ const makeChild = () => {
   return child;
 };
 
-const stageOf = (steps, stage) => steps.find((s) => s.stage === stage);
-
 describe('pixal3dCuda path resolution', () => {
   it('roots its install apart from BOTH TRELLIS.2 lanes', () => {
     expect(pixal3dRoot(BASE)).toBe(ROOT);
@@ -66,11 +52,6 @@ describe('pixal3dCuda path resolution', () => {
     // whose dependency set Pixal3D's pinned requirements would otherwise mutate.
     expect(pixal3dRoot(BASE)).not.toBe(trellis2CudaRoot(BASE));
     expect(pixal3dRoot(BASE)).not.toBe(join(BASE, 'trellis2'));
-  });
-
-  it('keeps its own TRELLIS.2 checkout inside its own root', () => {
-    expect(pixal3dTrellisDir(BASE)).toBe(TRELLIS);
-    expect(pixal3dTrellisDir(BASE).startsWith(ROOT)).toBe(true);
   });
 
   // The candidate-list shape and the CONDA_PREFIX walk-up are covered once, with the
@@ -96,91 +77,6 @@ describe('isPixal3dCudaInstalled', () => {
     expect(isPixal3dCudaInstalled({ base: BASE, exists: existsFor(CONDA_PY), env: CONDA_ENV })).toBe(false);
     // Clone present but no env.
     expect(isPixal3dCudaInstalled({ base: BASE, exists: existsFor(INFERENCE), env: CONDA_ENV })).toBe(false);
-  });
-});
-
-describe('buildPixal3dInstallSteps', () => {
-  const fresh = () => buildPixal3dInstallSteps(BASE, { exists: () => false, computeCap: '8.6' });
-
-  it('creates its own conda env rather than relying on setup.sh --new-env', () => {
-    const env = stageOf(fresh(), 'env');
-    expect(env.command).toBe('conda');
-    expect(env.args).toEqual(['create', '-n', 'pixal3d', 'python=3.10', '-y']);
-  });
-
-  it('sources setup.sh WITHOUT --new-env, inside the activated pixal3d env', () => {
-    const setup = stageOf(fresh(), 'setup');
-    expect(setup.cwd).toBe(TRELLIS);
-    const script = setup.args[1];
-    // `--new-env` would hard-code `conda create -n trellis2` and install into the
-    // wrong env — the single most important property of this step.
-    expect(script).not.toContain('--new-env');
-    expect(script).toContain('conda activate pixal3d');
-    expect(script).toContain('. ./setup.sh');
-    for (const flag of PIXAL3D_SETUP_FLAGS) expect(script).toContain(flag);
-  });
-
-  it('clones TRELLIS.2 recursively and Pixal3D at its default branch', () => {
-    const steps = fresh();
-    const trellisClone = stageOf(steps, 'clone-trellis');
-    // TRELLIS.2 vendors its CUDA extensions as submodules.
-    expect(trellisClone.args).toContain('--recursive');
-    expect(trellisClone.args).toContain(TRELLIS);
-
-    const clone = stageOf(steps, 'clone');
-    expect(clone.args).toEqual(['clone', PIXAL3D_REPO, REPO]);
-    // Upstream's README names a `main` branch that does not exist on the remote;
-    // pinning it would make the clone fail outright.
-    expect(clone.args).not.toContain('-b');
-    expect(clone.args).not.toContain('main');
-  });
-
-  it('builds NATTEN for the probed arch and tolerates its failure', () => {
-    const natten = stageOf(fresh(), 'natten');
-    expect(natten.args[1]).toContain('NATTEN_CUDA_ARCH=8.6');
-    expect(natten.args[1]).toContain(`NATTEN_N_WORKERS=${nattenWorkerCount()}`);
-    expect(natten.args[1]).toContain(`natten==${PIXAL3D_NATTEN_VERSION}`);
-    expect(natten.args[1]).toContain('--no-build-isolation');
-    // Without NATTEN the pipeline takes upstream's NAF fallback path — degraded, but
-    // it renders. Failing a ~40 GB install over it would be the worse outcome.
-    expect(natten.optional).toBe(true);
-  });
-
-  it('omits NATTEN_CUDA_ARCH entirely when the arch could not be determined', () => {
-    const steps = buildPixal3dInstallSteps(BASE, { exists: () => false, computeCap: null });
-    const natten = stageOf(steps, 'natten');
-    // Never guess an arch — let NATTEN pick its own default (sentinel rule).
-    expect(natten.args[1]).not.toContain('NATTEN_CUDA_ARCH');
-    expect(natten.args[1]).toContain('NATTEN_N_WORKERS=');
-  });
-
-  it('installs the pinned utils3d wheel', () => {
-    expect(stageOf(fresh(), 'utils3d').args[1]).toContain(PIXAL3D_UTILS3D_WHEEL);
-  });
-
-  it('is resumable — skips the env and clones that already exist', () => {
-    const steps = buildPixal3dInstallSteps(BASE, {
-      exists: existsFor(CONDA_PY, join(TRELLIS, '.git'), join(REPO, '.git')),
-      computeCap: '8.6',
-    });
-    expect(stageOf(steps, 'env')).toBeUndefined();
-    expect(stageOf(steps, 'clone-trellis')).toBeUndefined();
-    expect(stageOf(steps, 'clone')).toBeUndefined();
-    // The idempotent build steps must still run — that is the point of resuming.
-    expect(stageOf(steps, 'setup')).toBeDefined();
-    expect(stageOf(steps, 'deps')).toBeDefined();
-    expect(stageOf(steps, 'utils3d')).toBeDefined();
-  });
-});
-
-describe('nattenWorkerCount', () => {
-  it('uses half the cores, bounded, and never returns zero', () => {
-    expect(nattenWorkerCount(16)).toBe(8);
-    expect(nattenWorkerCount(64)).toBe(8); // capped
-    expect(nattenWorkerCount(2)).toBe(1);
-    expect(nattenWorkerCount(1)).toBe(1); // floor(0.5) === 0 must not escape
-    expect(nattenWorkerCount(0)).toBeGreaterThan(0);
-    expect(nattenWorkerCount(NaN)).toBeGreaterThan(0);
   });
 });
 
@@ -448,102 +344,5 @@ describe('runPixal3dCudaGenerate', () => {
     await flush();
     kill();
     expect(child.kill).toHaveBeenCalled();
-  });
-});
-
-describe('installPixal3dCuda verify hook', () => {
-  // Derived rather than hard-coded: with `INSTALLED` the conda env python is already
-  // there, so `conda create` self-skips — and a step added later must not break every
-  // test in this block.
-  const STEPS = buildPixal3dInstallSteps(BASE, { exists: INSTALLED, env: CONDA_ENV });
-
-  /** Advance the install by closing each step's child 0, in order. */
-  const closeEachStep = async (children) => {
-    for (const child of children) {
-      await flush();
-      child.emit('close', 0);
-    }
-  };
-
-  // `setup.sh` is SOURCED and exits 0 with a failed extension build, so the presence
-  // of the env and the checkout is not evidence the extensions compiled (#4761).
-  // `probeModules` is injected on EVERY call so the suite never spawns a Python.
-  const runToCompletion = async (probeModules) => {
-    const children = STEPS.map(() => makeChild());
-    let i = 0;
-    const events = [];
-    const { promise } = installPixal3dCuda({
-      base: BASE,
-      exists: INSTALLED,
-      env: CONDA_ENV,
-      spawnImpl: () => children[i++],
-      onEvent: (e) => events.push(e),
-      probeModules,
-    });
-    await closeEachStep(children);
-    await expect(promise).resolves.toEqual({ ok: true });
-    return events;
-  };
-
-  const verifyMessage = (events) => events.find((e) => e.stage === 'verify')?.message;
-
-  it('warns and names the culprit when a required CUDA extension never built', async () => {
-    const events = await runToCompletion(async () => ({ naf: 'available', missing: ['o_voxel'] }));
-    const message = verifyMessage(events);
-    expect(message).toContain('⚠️');
-    expect(message).toContain(PIXAL3D_INCOMPLETE_INSTALL_HELP);
-    expect(message).toContain('Missing: o_voxel.');
-    // A half-built install is repairable, not fatal — the ~40 GB of downloaded models
-    // stay usable, so the run must still finish green rather than throw.
-    expect(events.at(-1)).toMatchObject({ type: 'complete' });
-    expect(message).not.toContain('✅');
-  });
-
-  it('reports the milder NAF fallback when only NATTEN is absent', async () => {
-    const events = await runToCompletion(async () => ({
-      naf: 'unavailable', missing: [], help: PIXAL3D_NAF_FALLBACK_HELP,
-    }));
-    const message = verifyMessage(events);
-    expect(message).toBe(`⚠️ ${PIXAL3D_NAF_FALLBACK_HELP}`);
-    // Nothing is half-built here, so there is no module list to append.
-    expect(message).not.toContain('Missing:');
-  });
-
-  it('prefers the incomplete-install warning over the NAF fallback', async () => {
-    // Same precedence the card applies: one Repair fixes both, so report the worse one.
-    const events = await runToCompletion(async () => ({
-      naf: 'unavailable', missing: ['flex_gemm'], help: PIXAL3D_NAF_FALLBACK_HELP,
-    }));
-    expect(verifyMessage(events)).toContain(PIXAL3D_INCOMPLETE_INSTALL_HELP);
-    expect(verifyMessage(events)).not.toContain(PIXAL3D_NAF_FALLBACK_HELP);
-  });
-
-  it('keeps the clean line for a complete install', async () => {
-    const events = await runToCompletion(async () => ({ naf: 'available', missing: [] }));
-    expect(verifyMessage(events)).toBe('✅ Pixal3D CUDA environment is present.');
-  });
-
-  it('keeps the clean line when the probe itself could not run', async () => {
-    // "Failed to determine" must never render as "determined to be bad".
-    const events = await runToCompletion(async () => ({ naf: 'unknown', missing: [] }));
-    expect(verifyMessage(events)).toBe('✅ Pixal3D CUDA environment is present.');
-  });
-
-  it('never probes when the env or the checkout is missing outright', async () => {
-    const children = STEPS.map(() => makeChild());
-    let i = 0;
-    const probeModules = vi.fn();
-    // Conda python present (so the steps and the spawn count match the happy path) but
-    // no `inference.py` — the install is broken, not degraded, and must throw.
-    const { promise } = installPixal3dCuda({
-      base: BASE,
-      exists: existsFor(CONDA_PY),
-      env: CONDA_ENV,
-      spawnImpl: () => children[i++],
-      probeModules,
-    });
-    await closeEachStep(children);
-    await expect(promise).rejects.toMatchObject({ code: 'PIXAL3D_CUDA_INSTALL_INCOMPLETE' });
-    expect(probeModules).not.toHaveBeenCalled();
   });
 });

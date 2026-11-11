@@ -395,6 +395,19 @@ jobs:
         if: needs.impact.outputs.slashdo == 'true'
         run: git submodule update --init lib/slashdo
 
+      # scripts/align_lyrics_ctc_test.py skips its Viterbi cases without numpy
+      # and still exits 0 (issue #15676). When the plan runs that suite, build a
+      # throwaway venv with the repo's numpy pin and make the suite fail rather
+      # than skip if no numpy interpreter resolves. Never touches system Python.
+      - name: Provide numpy for the CTC Viterbi tests
+        if: needs.impact.outputs.server_mode == 'full' || (needs.impact.outputs.server_mode == 'files' && contains(needs.impact.outputs.server_files, 'scripts/align_lyrics_ctc.test.js'))
+        run: |
+          pin="$(grep -m1 -E '^numpy==' scripts/requirements-acestep-mlx.txt)"
+          python3 -m venv "$RUNNER_TEMP/ctc-venv"
+          "$RUNNER_TEMP/ctc-venv/bin/python" -m pip install --quiet "$pin"
+          echo "PORTOS_TEST_PYTHON=$RUNNER_TEMP/ctc-venv/bin/python" >> "$GITHUB_ENV"
+          echo "CI_EXPECT_NUMPY_PYTHON=true" >> "$GITHUB_ENV"
+
       # The test memo (docs/GITHUB_ACTIONS.md "Test memo"): the runner skips a
       # selected test file whose every input — loaded modules, fixtures,
       # package versions, Node/platform, gating env — is byte-identical to one
@@ -657,6 +670,39 @@ jobs:
           CI_LINT_FILES: ${{ needs.impact.outputs.lint_files }}
         run: node scripts/run-ci-lint.js
 
+      # GitHub silently skips a workflow it rejects, so a bad file never fails a
+      # check; actionlint is the only pre-merge proof. Pinned like the scanner
+      # binaries in the image scan workflow. Mirrors scripts/lib/actionlint.js:
+      # the parity test in scripts/run-actionlint.test.js fails if they drift.
+      - name: Install pinned actionlint
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256_LINUX_AMD64: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          bin="$RUNNER_TEMP/actionlint-bin"
+          mkdir -p "$bin"
+          archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -fsSL --retry 5 -o "$RUNNER_TEMP/$archive" "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${archive}"
+          echo "${ACTIONLINT_SHA256_LINUX_AMD64}  $RUNNER_TEMP/$archive" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$bin" actionlint
+          echo "$bin" >> "$GITHUB_PATH"
+
+      - name: Lint workflows with actionlint
+        env:
+          CI_LINT_MODE: ${{ needs.impact.outputs.lint_mode }}
+          CI_LINT_FILES: ${{ needs.impact.outputs.lint_files }}
+        run: node scripts/run-actionlint.js
+
+      # Proves the check still bites: the #15657 shape must be rejected with the
+      # runner-context diagnostic. A nonzero exit alone also means a missing
+      # shellcheck or a broken launch, which would be a silent no-op.
+      - name: Prove actionlint rejects the known-bad fixture
+        run: |
+          fixture=scripts/fixtures/actionlint/runner-context-in-job-env.yml
+          out=$(node scripts/run-actionlint.js "$fixture" 2>&1) && { echo "$out"; echo "::error::actionlint accepted the known-bad fixture"; exit 1; }
+          echo "$out"
+          grep -F 'context "runner" is not allowed here' <<< "$out" || { echo "::error::expected runner-context diagnostic missing"; exit 1; }
+
   database:
     # The serial Postgres suite. The browser suites used to run after it on
     # this job; they are now the `browser` job beside it, because together they
@@ -670,7 +716,7 @@ jobs:
       contents: read
     services:
       postgres:
-        image: pgvector/pgvector:pg17@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d
+        image: pgvector/pgvector:pg17@sha256:7d0a41464797aeb9862dfdc0bbf1526b82cfd324cdd8036df19e3545f4a9ccb8
         env:
           POSTGRES_USER: portos
           POSTGRES_PASSWORD: portos

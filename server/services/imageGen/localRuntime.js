@@ -20,10 +20,11 @@ import { getSetupCheck } from './setup.js';
 import { isFlux2VenvHealthy, FLUX2_VENV_DEFAULT } from '../../lib/pythonSetup.js';
 import { LOCAL_IMAGEGEN_DEFAULT_MODEL } from './modes.js';
 import {
-  IMAGE_RUNTIME_LABELS, IMAGE_RUNTIME_READINESS, IMAGE_RUNTIME_REMEDY, imageRuntimeFor, usesTorchVenv, usesMossSwift, usesFlux3,
+  IMAGE_RUNTIME_LABELS, IMAGE_RUNTIME_READINESS, IMAGE_RUNTIME_REMEDY, imageRuntimeFor, usesTorchVenv, usesMossSwift, usesFlux3, usesMinimaxH3Image,
 } from '../../lib/imageRuntimeRemedies.js';
 import { diagnoseMossRuntime, MOSS_MANIFEST } from './mossRuntime.js';
 import { diagnoseFlux3Runtime } from './flux3Runtime.js';
+import { diagnoseMinimaxH3ImageRuntime } from './minimaxH3ImageRuntime.js';
 import { verifyMossWeights } from './mossWeights.js';
 
 const { READY, UNAVAILABLE, UNKNOWN } = IMAGE_RUNTIME_READINESS;
@@ -84,6 +85,7 @@ export async function diagnoseLocalRuntime({ modelId: requestedModelId, settings
   }
 
   if (usesFlux3(model)) return verdict(await diagnoseFlux3Runtime());
+  if (usesMinimaxH3Image(model)) return verdict(await diagnoseMinimaxH3ImageRuntime());
 
   if (usesMossSwift(model)) {
     if (model.repo !== MOSS_MANIFEST.repo || model.revision !== MOSS_MANIFEST.revision) {

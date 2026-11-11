@@ -92,10 +92,10 @@ router.get('/targets', asyncHandler(async (_req, res) => {
   res.json({ capabilities, targets });
 }));
 
-const requireInstallableTarget = (targetId) => {
+const requireInstallTarget = (targetId) => {
   const target = getTarget(targetId);
   const adapter = getTargetAdapter(targetId);
-  if (!target || !adapter?.install) {
+  if (!target || !adapter || (!adapter.install && !target.installBlockedReason)) {
     throw new ServerError(`Unknown or non-installable image-to-3D target: ${targetId}`, {
       status: 400,
       code: 'IMAGE_TO_3D_TARGET_NOT_INSTALLABLE',
@@ -105,7 +105,7 @@ const requireInstallableTarget = (targetId) => {
 };
 
 const sendTargetInstallStatus = async (targetId, res) => {
-  requireInstallableTarget(targetId);
+  requireInstallTarget(targetId);
   const capabilities = await detectHostCapabilities();
   const target = listTargets(capabilities).find((candidate) => candidate.id === targetId) || getTarget(targetId);
   res.json({ capabilities, target: await annotateTargetStatus(target) });
@@ -124,10 +124,7 @@ const installQuerySchema = z.object({ repair: z.enum(['0', '1']).optional() });
 async function handleTargetInstall(targetId, target, adapter, repair, req, res) {
   const { send, safeEnd } = openSseStream(res);
 
-  // `repair=1` re-runs setup over an existing install. That is the documented fix
-  // for a degraded install (e.g. TRELLIS.2's Metal texture bake — #2952): without
-  // it, "Repair install" would hit the already-installed short-circuit below and
-  // do nothing.
+  // `repair=1` requests setup again even when a runtime is already on disk.
   if (adapter.isInstalled() && !repair) {
     send({ type: 'stage', stage: 'verify', message: `${target.label} already installed.` });
     // "Installed" is not the same as "installed well" — surface any adapter
@@ -136,6 +133,11 @@ async function handleTargetInstall(targetId, target, adapter, repair, req, res) 
     const state = adapter.describeInstallState ? await adapter.describeInstallState() : null;
     (state?.warnings || []).forEach((message) => send({ type: 'log', stage: 'verify', message: `⚠️ ${message}` }));
     send({ type: 'complete', message: 'Already installed — nothing to do.' });
+    return safeEnd();
+  }
+
+  if (target.installBlockedReason) {
+    send({ type: 'error', stage: 'preflight', message: target.installBlockedReason });
     return safeEnd();
   }
 
@@ -268,7 +270,7 @@ router.get('/targets/:targetId/install', asyncHandler(async (req, res) => {
 }));
 
 router.post('/targets/:targetId/install', asyncHandler(async (req, res) => {
-  const { target, adapter } = requireInstallableTarget(req.params.targetId);
+  const { target, adapter } = requireInstallTarget(req.params.targetId);
   const { repair } = validateRequest(installQuerySchema, req.query);
   await handleTargetInstall(req.params.targetId, target, adapter, repair === '1', req, res);
 }));
@@ -279,7 +281,7 @@ router.get('/trellis2/install', asyncHandler(async (_req, res) => {
   await sendTargetInstallStatus('trellis2', res);
 }));
 router.post('/trellis2/install', asyncHandler(async (req, res) => {
-  const { target, adapter } = requireInstallableTarget('trellis2');
+  const { target, adapter } = requireInstallTarget('trellis2');
   const { repair } = validateRequest(installQuerySchema, req.query);
   await handleTargetInstall('trellis2', target, adapter, repair === '1', req, res);
 }));

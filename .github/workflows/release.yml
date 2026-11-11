@@ -89,7 +89,7 @@ jobs:
 
       - name: Get version from package.json
         id: package-version
-        run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
 
       # full-ci is skipped exactly when verify-ci found a green gate for this
       # tree, so 'skipped' is a pass here and only a run that actually executed
@@ -116,9 +116,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if gh release view "v${{ steps.package-version.outputs.version }}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "exists=true" >> "$GITHUB_OUTPUT"
           else
-            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
       # A tag that already exists is never retargeted by the release action, so
@@ -136,7 +136,7 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           VERSION="${{ steps.package-version.outputs.version }}"
-          MAJOR_MINOR=$(echo $VERSION | cut -d. -f1-2)
+          MAJOR_MINOR=$(echo "$VERSION" | cut -d. -f1-2)
 
           # Try exact version first (e.g., v0.10.5.md), then minor.x pattern (e.g., v0.10.x.md)
           CHANGELOG_FILE_EXACT=".changelog/v${VERSION}.md"
@@ -157,7 +157,7 @@ jobs:
           else
             # Fallback: Generate changelog from commits (exclude [skip ci] commits)
             PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || git rev-list --max-parents=0 HEAD)
-            COMMIT_LOG=$(git log $PREV_TAG..HEAD --pretty=format:"- %s" --no-merges | grep -v "\[skip ci\]" | head -50)
+            COMMIT_LOG=$(git log "$PREV_TAG..HEAD" --pretty='format:- %s' --no-merges | grep -v "\[skip ci\]" | head -50)
 
             # Create a basic changelog structure
             CHANGELOG="# Release v${VERSION}
@@ -205,8 +205,8 @@ jobs:
             printf '\n---\n\n> **This changelog was truncated to fit GitHub'"'"'s release-note size limit.** Read the complete v%s changelog here: [%s](%s)\n' \
               "$VERSION" "$SRC_FILE" "$FULL_URL" >> "$BODY_FILE"
           fi
-          echo "body_path=$BODY_FILE" >> $GITHUB_OUTPUT
-          echo "release_title=$RELEASE_TITLE" >> $GITHUB_OUTPUT
+          echo "body_path=$BODY_FILE" >> "$GITHUB_OUTPUT"
+          echo "release_title=$RELEASE_TITLE" >> "$GITHUB_OUTPUT"
 
       - name: Create Release
         if: steps.release-check.outputs.exists == 'false'

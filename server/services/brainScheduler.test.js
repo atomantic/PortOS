@@ -94,6 +94,59 @@ describe('brainScheduler opt-in', () => {
     expect(runWeeklyReview).toHaveBeenCalledTimes(1);
   });
 
+  it('catches up a weekly review missed during its minute on the same local day', async () => {
+    getUserTimezone.mockResolvedValue('America/Los_Angeles');
+    // Sunday 09:01 PST; the 09:00 slot was missed (the process was down or restarting).
+    vi.setSystemTime(new Date('2026-11-08T17:01:00Z'));
+    loadMeta.mockResolvedValue(meta({
+      scheduledReviewsEnabled: true, dailyDigestTime: '23:59', weeklyReviewTime: '09:00',
+      weeklyReviewDay: 'sunday', lastWeeklyReview: '2026-11-01T17:00:00Z'
+    }));
+    startBrainScheduler();
+    await flush();
+    expect(runWeeklyReview).toHaveBeenCalledTimes(1);
+    expect(console.log).toHaveBeenCalledWith('🧠 Scheduler: Running missed weekly review (catch-up)...');
+  });
+
+  it('does not catch up a weekly review before its slot on the configured local day', async () => {
+    getUserTimezone.mockResolvedValue('America/Los_Angeles');
+    // Sunday 08:59 PST, one minute before the slot.
+    vi.setSystemTime(new Date('2026-11-08T16:59:00Z'));
+    loadMeta.mockResolvedValue(meta({
+      scheduledReviewsEnabled: true, dailyDigestTime: '23:59', weeklyReviewTime: '09:00',
+      weeklyReviewDay: 'sunday', lastWeeklyReview: '2026-11-01T17:00:00Z'
+    }));
+    startBrainScheduler();
+    await flush();
+    expect(runWeeklyReview).not.toHaveBeenCalled();
+  });
+
+  it('does not run a weekly catch-up again when the last review already covered this local day', async () => {
+    getUserTimezone.mockResolvedValue('America/Los_Angeles');
+    vi.setSystemTime(new Date('2026-11-08T17:01:00Z'));
+    loadMeta.mockResolvedValue(meta({
+      scheduledReviewsEnabled: true, dailyDigestTime: '23:59', weeklyReviewTime: '09:00',
+      weeklyReviewDay: 'sunday', lastWeeklyReview: '2026-11-08T17:00:30Z'
+    }));
+    startBrainScheduler();
+    await flush();
+    expect(runWeeklyReview).not.toHaveBeenCalled();
+  });
+
+  it('catches up a missed weekly review across the spring-forward week', async () => {
+    getUserTimezone.mockResolvedValue('America/Los_Angeles');
+    // Sunday 2026-03-08 09:01 PDT. The previous run was 09:00 PST a week earlier,
+    // so only 6 whole 24h periods of UTC time have elapsed.
+    vi.setSystemTime(new Date('2026-03-08T16:01:00Z'));
+    loadMeta.mockResolvedValue(meta({
+      scheduledReviewsEnabled: true, dailyDigestTime: '23:59', weeklyReviewTime: '09:00',
+      weeklyReviewDay: 'sunday', lastWeeklyReview: '2026-03-01T17:00:00Z'
+    }));
+    startBrainScheduler();
+    await flush();
+    expect(runWeeklyReview).toHaveBeenCalledTimes(1);
+  });
+
   it('treats a digest from earlier on the same local day as already run even when the UTC date differs', async () => {
     getUserTimezone.mockResolvedValue('Asia/Tokyo');
     // 02:00 UTC is 11:00 JST on 2026-10-18; the last digest was 01:00 JST that day (UTC date 10-17).

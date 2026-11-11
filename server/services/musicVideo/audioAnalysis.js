@@ -37,9 +37,8 @@ import {
   decodeAudioToPcm,
   onsetEnvelope,
   estimateTempo,
-  fitBeats,
+  trackBeatGrid,
   pickDownbeats,
-  measureBeatGrid,
   stereoPhaseCancellation,
   decideBeatGrid,
   PHASE_PROBE_SEC,
@@ -196,7 +195,8 @@ function deriveSections(samples, sampleRate, hop) {
 // Persisted audioAnalysis shape version. A cached analysis without `version`
 // predates the feature track (implicitly 1) and reads as "features not analyzed".
 // 3 adds the beat-grid trust fields (beatContrast, beatSpread, phaseCancellation, gridDecision, gridReason).
-export const ANALYSIS_VERSION = 3;
+// 4 tracks onsets through tempo drift and centres emitted beat timestamps.
+export const ANALYSIS_VERSION = 4;
 
 export const FEATURE_ENVELOPE_FPS = 30;
 export const FEATURE_BANDS = Object.freeze({
@@ -395,15 +395,14 @@ export function analyzePcm(samples, sampleRate, { hop = ONSET_HOP, truncatedAtSe
     };
   }
 
-  const { bpm, source, confidence, window } = estimateTempo(onset, fps);
+  const tempo = estimateTempo(onset, fps);
+  const { source, confidence, window } = tempo;
+  const { bpm, beats: frameBeats, ...quality } = trackBeatGrid(onset, fps, tempo);
   const roundedBpm = bpm == null ? null : Number(bpm.toFixed(2));
-  const beats = roundedBpm == null ? [] : fitBeats(onset, fps, bpm, durationSec);
-  const downbeats = roundedBpm == null ? [] : pickDownbeats(beats, onset, fps);
+  const emit = (t) => Number(Math.min(durationSec, t + FFT_SIZE / 2 / sampleRate).toFixed(3));
+  const beats = frameBeats.map(emit);
+  const downbeats = pickDownbeats(frameBeats, onset, fps).map(emit);
   const tempoConfidence = confidence == null ? null : Number(Math.max(0, Math.min(1, confidence)).toFixed(3));
-  // A windowed tempo only describes its window; beats elsewhere (an ambient
-  // intro) carry no accents and would drag the measurements down.
-  const measured = window ? beats.filter((t) => t >= window.startSec && t <= window.endSec) : beats;
-  const quality = measureBeatGrid(onset, fps, measured);
   const trust = {
     ...quality,
     phaseCancellation: !!phaseCancellation,

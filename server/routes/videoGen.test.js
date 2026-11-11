@@ -755,7 +755,7 @@ describe('videoGen routes', () => {
     });
   });
 
-  describe('POST /models/:modelId/download — restricted terms', () => {
+  describe('POST /models/:modelId/download — MiniMax H3 snapshots', () => {
     const h3CheckpointFiles = ['LICENSE', 'FL2VA/model_index.json', 'FL2VA/video_vae/source/model.safetensors'];
     const h3 = {
       id: 'minimax_h3_8bit',
@@ -763,7 +763,6 @@ describe('videoGen routes', () => {
       runtime: 'minimax_h3',
       repo: 'pipenetwork/MiniMax-H3-MLX-8bit',
       revision: '3ac52081470b0488921c3ec3ba84a39097bf2361',
-      termsGate: { id: 'minimax-h3-community-license-2026-08-02' },
       supportedModes: ['text'],
       defaultFrames: 124,
       frameOptions: [107, 124, 141, 158],
@@ -781,7 +780,7 @@ describe('videoGen routes', () => {
       }],
     };
 
-    it('downloads both exact snapshots without a recorded acknowledgement', async () => {
+    it('downloads both exact snapshots', async () => {
       videoGenService.listVideoModels.mockReturnValueOnce([h3]);
       const accepted = await request(app).post('/api/video-gen/models/minimax_h3_8bit/download');
       expect(accepted.status).toBe(200);
@@ -849,54 +848,21 @@ describe('videoGen routes', () => {
           height: 672,
         }),
       }));
-      expect(mediaJobQueue.enqueueJob.mock.calls.at(-1)[0].params)
-        .not.toHaveProperty('termsAcceptance');
       videoGenService.listVideoModels.mockReset();
     });
   });
 
-  describe('POST /model-terms — install-wide acknowledgement', () => {
-    const h3 = {
-      id: 'minimax_h3_8bit',
-      name: 'MiniMax H3 MLX 8-bit',
-      termsGate: { id: 'minimax-h3-community-license-2026-08-02' },
-    };
-
-    it('records and withdraws the acknowledgement for a known gate id', async () => {
-      const { updateSettingsWith } = await import('../services/settings.js');
-      videoGenService.listVideoModels.mockReturnValueOnce([h3]);
-      updateSettingsWith.mockImplementationOnce(async (mutate) => mutate({}));
-      const accept = await request(app)
-        .post('/api/video-gen/model-terms')
-        .send({ termsId: h3.termsGate.id, accepted: true });
-      expect(accept.status).toBe(200);
-      expect(accept.body.accepted).toEqual([h3.termsGate.id]);
-
-      videoGenService.listVideoModels.mockReturnValueOnce([h3]);
-      updateSettingsWith.mockImplementationOnce(async (mutate) =>
-        mutate({ videoGen: { acceptedModelTerms: [h3.termsGate.id] } }));
-      const withdraw = await request(app)
-        .post('/api/video-gen/model-terms')
-        .send({ termsId: h3.termsGate.id, accepted: false });
-      expect(withdraw.status).toBe(200);
-      expect(withdraw.body.accepted).toEqual([]);
-    });
-
-    it('rejects an id no shipped model declares rather than storing a no-op acceptance', async () => {
-      videoGenService.listVideoModels.mockReturnValueOnce([h3]);
-      const bogus = await request(app)
-        .post('/api/video-gen/model-terms')
-        .send({ termsId: 'not-a-real-license', accepted: true });
-      expect(bogus.status).toBe(400);
-      expect(bogus.body.code).toBe('VIDEO_MODEL_TERMS_UNKNOWN_ID');
-    });
-
-    it('reports the persisted acknowledgements', async () => {
+  describe('Higgsfield references', () => {
+    it('refuses the complete over-cap shot reference set before enqueueing', async () => {
       const { getSettings } = await import('../services/settings.js');
-      getSettings.mockResolvedValueOnce({ videoGen: { acceptedModelTerms: [h3.termsGate.id, ''] } });
-      const listed = await request(app).get('/api/video-gen/model-terms');
-      expect(listed.status).toBe(200);
-      expect(listed.body.accepted).toEqual([h3.termsGate.id]);
+      getSettings.mockResolvedValueOnce({ videoGen: { higgsfield: { apiKey: 'example-key' } } });
+      const response = await request(app).post('/api/video-gen/').send({
+        backend: 'higgsfield', mode: 'text', prompt: '  A dancer turns  ',
+        referenceImageFiles: Array.from({ length: 31 }, (_, i) => `ref-${i}.png`),
+      });
+      expect(response.status).toBe(400);
+      expect(response.body.error).toMatch(/at most 30 reference images.*received 31/);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
     });
   });
 

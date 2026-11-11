@@ -143,6 +143,28 @@ ${BYOV_RUNTIME_INFO.wan22_cuda.currencyProbeArgs[1]}`, lock, root, version, base
   });
 });
 
+describe('MLX video runtime currency', () => {
+  it('requires both the verified LTX-2.5 source revision and the current dependency lock', async () => {
+    const info = BYOV_RUNTIME_INFO.ltx25;
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      runtimeMocks.spawn.mockImplementationOnce(() => statusChild('older-revision\n'));
+      await expect(isByovRuntimeReady('ltx25')).resolves.toBe(false);
+      expect(runtimeMocks.spawn).toHaveBeenCalledTimes(1);
+
+      runtimeMocks.spawn.mockImplementationOnce(() => statusChild(`${info.expectedRevision}\n`))
+        .mockImplementationOnce(() => exitChild(78));
+      await expect(isByovRuntimeReady('ltx25')).resolves.toBe(false);
+      expect(runtimeMocks.spawn.mock.lastCall[1].at(-1)).toMatch(/requirements-ltx25-mlx\.lock\.txt$/);
+
+      runtimeMocks.spawn.mockImplementationOnce(() => statusChild(`${info.expectedRevision}\n`))
+        .mockImplementationOnce(() => exitChild(0))
+        .mockImplementationOnce(() => exitChild(0));
+      await expect(isByovRuntimeReady('ltx25')).resolves.toBe(true);
+    } finally { log.mockRestore(); }
+  });
+});
+
 describe('MiniMax H3 Ref2VA runtime', () => {
   it('uses the signed user-local mere.run install and PortOS HF downloader', () => {
     expect(BYOV_RUNTIME_INFO.minimax_h3_ref2va).toMatchObject({

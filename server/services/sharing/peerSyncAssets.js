@@ -16,7 +16,7 @@ import { createHash } from 'crypto';
 import { PATHS, atomicWrite, readJSONFile, ensureDir, sha256File } from '../../lib/fileUtils.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
-import { peerFetch } from '../../lib/peerHttpClient.js';
+import { peerFetch, readPeerBody } from '../../lib/peerHttpClient.js';
 import { RESPONSE_TOO_LARGE } from '../../lib/httpClient.js';
 import { withAbortTimeout } from '../../lib/abortTimeout.js';
 import { getOrComputeImageSha256, sidecarGenParamsHash, sidecarMatchesGenParamsHash, imageLiveStamp } from '../../lib/assetHash.js';
@@ -1078,7 +1078,9 @@ export async function fetchCappedAssetBuffer(peer, url, label, maxBytes, { allow
     console.log(`⚠️ peerSync: asset ${label} too large (${contentLength}) — refusing pull`);
     return null;
   }
-  const buffer = Buffer.from(await res.arrayBuffer());
+  const bytes = await readPeerBody(res, 'arrayBuffer', { maxBytes, idleTimeoutMs: ASSET_PULL_TIMEOUT_MS }).catch(() => null);
+  if (bytes === null) return null;
+  const buffer = Buffer.from(bytes);
   // Defense in depth: the server claimed length X but actually sent more.
   if (buffer.length > maxBytes || buffer.length !== contentLength) {
     console.log(`⚠️ peerSync: asset ${label} length mismatch (header=${contentLength}, body=${buffer.length}) — refusing pull`);

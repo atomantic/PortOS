@@ -11,7 +11,7 @@ vi.mock('./hfToken.js', () => ({ getHfToken }));
 // No cached Prompt Guard weights → the classifier layer is "not installed".
 vi.mock('../lib/hfCache.js', () => ({ findCachedRepoFiles: vi.fn().mockResolvedValue(null), getHfCacheRoot: () => '/nonexistent/example-hf-cache' }));
 vi.mock('node:fs', async (importOriginal) => ({ ...await importOriginal(), existsSync: vi.fn().mockReturnValue(false) }));
-vi.mock('../lib/pythonSetup.js', () => ({ detectVenvBasePythonSync: vi.fn().mockReturnValue(null), createVenv: vi.fn(), installPackages: vi.fn() }));
+vi.mock('../lib/pythonSetup.js', () => ({ detectVenvBasePythonSync: vi.fn().mockReturnValue(null), createVenv: vi.fn(), installLockedRuntime: vi.fn() }));
 
 const {
   DETERMINISTIC_ONLY_GUARD_MODEL,

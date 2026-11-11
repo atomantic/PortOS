@@ -23,6 +23,8 @@ import { getRunwayImageModel } from './runwayImageModels.js';
 
 import { CLOUD_IMAGE_GEN_MODES, IMAGE_GEN_MODE, IMAGE_GEN_MODES } from './generationModes.js';
 import { FAL_IMAGE_MIN_INPUT_IMAGES, falImageFamily } from './falImageModels.js';
+import { HIGGSFIELD_IMAGE_MAX_INPUT_IMAGES, higgsfieldImageFamily } from './higgsfieldImageModels.js';
+import { GOOGLE_IMAGE_MAX_INPUT_IMAGES, googleImageFamily } from './googleImageModels.js';
 
 // Defined in the dependency-free leaf so schema-only callers skip this module.
 export { IMAGE_REFERENCE_REQUEST_LIMIT } from './referenceLimits.js';
@@ -210,6 +212,18 @@ export const IMAGE_GEN_PROVIDER_CAPABILITIES = Object.freeze({
     // Every catalog edit endpoint lists `prompt` as required.
     promptRequiredWithInputImage: true,
   }),
+  [IMAGE_GEN_MODE.HIGGSFIELD]: Object.freeze({
+    supportsModelOverride: true,
+    // Per model (0 for the text-only families); `maxInputImages(mode, modelId)` reads the catalog.
+    maxInputImages: HIGGSFIELD_IMAGE_MAX_INPUT_IMAGES,
+    promptRequiredWithInputImage: true,
+  }),
+  [IMAGE_GEN_MODE.GOOGLE]: Object.freeze({
+    supportsModelOverride: true,
+    // Per model (0 for Imagen); `maxInputImages(mode, modelId)` reads the catalog.
+    maxInputImages: GOOGLE_IMAGE_MAX_INPUT_IMAGES,
+    promptRequiredWithInputImage: true,
+  }),
 });
 
 // Cloud CLIs that accept a per-render `cloudModel` override. Kept as data so a
@@ -235,6 +249,14 @@ export const maxInputImages = (mode, modelId = null) => {
   if (mode === IMAGE_GEN_MODE.RUNWAY) return getRunwayImageModel(modelId)?.maxReferences ?? 3;
   if (mode === IMAGE_GEN_MODE.FAL) {
     const family = falImageFamily(modelId);
+    if (family) return family.maxInputImages;
+  }
+  if (mode === IMAGE_GEN_MODE.HIGGSFIELD) {
+    const family = higgsfieldImageFamily(modelId);
+    if (family) return family.maxInputImages;
+  }
+  if (mode === IMAGE_GEN_MODE.GOOGLE) {
+    const family = googleImageFamily(modelId);
     if (family) return family.maxInputImages;
   }
   return IMAGE_GEN_PROVIDER_CAPABILITIES[mode]?.maxInputImages ?? null;

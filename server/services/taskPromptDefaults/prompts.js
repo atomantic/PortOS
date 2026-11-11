@@ -697,6 +697,21 @@ repo (a globally-configured \`gh\` will silently target an unrelated GitHub repo
    ecosystem) or pip-audit; OSV also carries \`MAL-\` malicious-package records.
    An install that resolves unpinned packages at install time has no auditable
    set: list it as a coverage gap rather than a pass.
+   Container image recipes (Dockerfile bases, compose \`image:\` pins) need image-level
+   evidence the package audits cannot give: OS packages and library inventories. If
+   the repo has a scanner workflow for them (PortOS:
+   \`.github/workflows/runtime-image-security.yml\`, see docs/GITHUB_ACTIONS.md), take the
+   newest default-branch run
+   (\`gh run list --workflow runtime-image-security.yml --branch <default> --limit 5 --json databaseId,conclusion,headSha,createdAt\`)
+   and read its \`provenance.json\`, \`findings.json\` and any \`*.unavailable.json\`
+   artifacts (\`gh run download <id>\`). Use a target's result only when its scan
+   completed (a run red solely over unreviewed findings still carries valid evidence),
+   the run is at most 14 days old (scheduled scans run weekly; older evidence has a
+   stale vulnerability database) and its recorded image digests and recipe hashes match the current tree; a missing
+   or cancelled run, a scanner/evidence failure, a stale recipe, or a target reported
+   unavailable is a coverage gap you name with its owner, never zero findings.
+   Reconcile unreviewed findings under item 4. A repo with image recipes and no such
+   scanner has uncovered images: list each recipe as a gap.
 2. Check for outdated packages — skip any package that still has an open bot PR; that PR
    owns the bump. Phase 1's list is the first filter, and when Phase 1 had forge access,
    confirm per package before you bump one it didn't mention

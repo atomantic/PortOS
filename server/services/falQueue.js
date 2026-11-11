@@ -15,6 +15,7 @@
  */
 
 import { readFile } from 'fs/promises';
+import { setTimeout as delay } from 'node:timers/promises';
 import { maintenance } from '../lib/maintenanceAdmission.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { describeFetchError } from '../lib/fetchErrorChain.js';
@@ -60,7 +61,16 @@ export const FAL_STORAGE_INITIATE_URL = 'https://rest.fal.ai/storage/upload/init
 // A hosted input only has to outlive the render that reads it.
 const FAL_HOSTED_INPUT_TTL_SEC = 24 * 60 * 60;
 const FAL_UPLOAD_TIMEOUT_MS = 60_000;
+export const FAL_MAX_UPLOAD_RETRIES = 2;
 const FILE_EXTENSIONS = { 'audio/mpeg': 'mp3', 'audio/mp4': 'm4a', 'image/jpeg': 'jpg' };
+
+function isTransientUploadError(err, status = 0) {
+  if (status === 408 || status === 429 || (status >= 500 && status <= 599)) return true;
+  if (!err) return false;
+  if (err.name === 'AbortError' || err.name === 'TimeoutError') return true;
+  const desc = describeFetchError(err);
+  return /ECONNRESET|ECONNREFUSED|EPIPE|ETIMEDOUT|EAI_AGAIN|UND_ERR_(SOCKET|CONNECT_TIMEOUT|HEADERS_TIMEOUT|BODY_TIMEOUT)|fetch failed|network error|socket hang up/i.test(desc);
+}
 
 /**
  * Host a `data:` URI on fal.ai's CDN and return its https URL, for the models
@@ -69,30 +79,76 @@ const FILE_EXTENSIONS = { 'audio/mpeg': 'mp3', 'audio/mp4': 'm4a', 'image/jpeg':
  * steps as fal's own client: initiate (names the upload and file URLs), then
  * PUT the bytes. The file expires after a day.
  */
-export async function hostFalDataUri({ apiKey, dataUri, fileName }) {
+export async function hostFalDataUri({ apiKey, dataUri, fileName, signal, maxRetries = FAL_MAX_UPLOAD_RETRIES }) {
   const match = /^data:([^;,]+);base64,(.*)$/s.exec(typeof dataUri === 'string' ? dataUri : '');
   if (!match) throw new ServerError('fal.ai input is not a base64 data URI', { status: 500, code: 'FAL_UPLOAD_INPUT' });
   const [, contentType, base64] = match;
-  const initiated = await fetchWithTimeout(FAL_STORAGE_INITIATE_URL, {
-    method: 'POST',
-    headers: {
-      Authorization: `Key ${apiKey}`,
-      'Content-Type': 'application/json',
-      'X-Fal-Object-Lifecycle': JSON.stringify({ expiration_duration_seconds: FAL_HOSTED_INPUT_TTL_SEC }),
-    },
-    body: JSON.stringify({ content_type: contentType, file_name: `${fileName}.${FILE_EXTENSIONS[contentType] || contentType.split('/')[1] || 'bin'}` }),
-  }, FAL_SUBMIT_TIMEOUT_MS);
-  const target = await initiated.json().catch(() => null);
-  if (!initiated.ok || typeof target?.upload_url !== 'string' || typeof target?.file_url !== 'string') {
-    throw new ServerError(`fal.ai upload could not start: HTTP ${initiated.status}`, { status: 502, code: 'FAL_UPLOAD_FAILED' });
+  const ext = FILE_EXTENSIONS[contentType] || contentType.split('/')[1] || 'bin';
+  const resolvedFileName = `${fileName}.${ext}`;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    if (signal?.aborted) signal.throwIfAborted();
+    try {
+      const initiated = await fetchWithTimeout(FAL_STORAGE_INITIATE_URL, {
+        method: 'POST',
+        headers: {
+          Authorization: `Key ${apiKey}`,
+          'Content-Type': 'application/json',
+          'X-Fal-Object-Lifecycle': JSON.stringify({ expiration_duration_seconds: FAL_HOSTED_INPUT_TTL_SEC }),
+        },
+        body: JSON.stringify({ content_type: contentType, file_name: resolvedFileName }),
+        ...(signal ? { signal } : {}),
+      }, FAL_SUBMIT_TIMEOUT_MS);
+
+      if (!initiated.ok) {
+        const transient = isTransientUploadError(null, initiated.status);
+        if (transient && attempt < maxRetries && !signal?.aborted) {
+          await delay(500 * (2 ** attempt), undefined, signal ? { signal } : undefined);
+          continue;
+        }
+        throw new ServerError(`fal.ai upload could not start: HTTP ${initiated.status}`, { status: 502, code: 'FAL_UPLOAD_FAILED' });
+      }
+
+      let target;
+      try {
+        target = await initiated.json();
+      } catch (readErr) {
+        if (readErr instanceof SyntaxError) {
+          throw new ServerError(`fal.ai upload could not start: malformed JSON response (HTTP ${initiated.status})`, { status: 502, code: 'FAL_UPLOAD_FAILED' });
+        }
+        throw readErr;
+      }
+      if (typeof target?.upload_url !== 'string' || typeof target?.file_url !== 'string') {
+        throw new ServerError(`fal.ai upload could not start: invalid response (HTTP ${initiated.status})`, { status: 502, code: 'FAL_UPLOAD_FAILED' });
+      }
+
+      const put = await fetchWithTimeout(target.upload_url, {
+        method: 'PUT',
+        headers: { 'Content-Type': contentType },
+        body: Buffer.from(base64, 'base64'),
+        ...(signal ? { signal } : {}),
+      }, FAL_UPLOAD_TIMEOUT_MS);
+
+      if (!put.ok) {
+        const transient = isTransientUploadError(null, put.status);
+        if (transient && attempt < maxRetries && !signal?.aborted) {
+          await delay(500 * (2 ** attempt), undefined, signal ? { signal } : undefined);
+          continue;
+        }
+        throw new ServerError(`fal.ai upload failed: HTTP ${put.status}`, { status: 502, code: 'FAL_UPLOAD_FAILED' });
+      }
+
+      return target.file_url;
+    } catch (err) {
+      if (signal?.aborted) throw err;
+      const transient = isTransientUploadError(err);
+      if (transient && attempt < maxRetries) {
+        await delay(500 * (2 ** attempt), undefined, signal ? { signal } : undefined);
+        continue;
+      }
+      throw err;
+    }
   }
-  const put = await fetchWithTimeout(target.upload_url, {
-    method: 'PUT',
-    headers: { 'Content-Type': contentType },
-    body: Buffer.from(base64, 'base64'),
-  }, FAL_UPLOAD_TIMEOUT_MS);
-  if (!put.ok) throw new ServerError(`fal.ai upload failed: HTTP ${put.status}`, { status: 502, code: 'FAL_UPLOAD_FAILED' });
-  return target.file_url;
 }
 
 /**

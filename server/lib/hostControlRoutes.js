@@ -669,6 +669,7 @@ export const HOST_CONTROL_ROUTES = Object.freeze([
   'POST /api/music-video/:id/vocal-stem/separate',
   // Lyric alignment downloads models and spawns whisper or neural CTC on the host.
   'POST /api/music-video/:id/lyrics/align',
+  'POST /api/music-video/:id/lyrics/verify',
 
   // LoRA effect probe spawns Python on the host to analyze adapter tensors.
   'POST /api/loras/:filename/effect',

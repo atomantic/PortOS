@@ -11,7 +11,7 @@
  */
 import { isPlainObject } from '../../lib/objects.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
-import { peerFetch, readPeerBody } from '../../lib/peerHttpClient.js';
+import { peerFetch, readPeerBody, PEER_BODY_DEFAULT_MAX_BYTES } from '../../lib/peerHttpClient.js';
 import { withAbortTimeout } from '../../lib/abortTimeout.js';
 import { sanitizeRecordForWire } from '../../lib/syncWire.js';
 import { setSyncBaseHash, contentHashForRecord, flushBaseHashes } from '../../lib/conflictJournal.js';
@@ -235,9 +235,8 @@ async function isSchemaBlockCooling(sub, options) {
 // next response either clears the block (success) or refreshes the gap info
 // (still behind). Returns the push result for a schema refusal, else null; a
 // 409 carrying any other code falls through to the caller's http-409 report.
-async function recordSchemaVersionRefusal(res, sub, peer) {
+async function recordSchemaVersionRefusal(res, body, sub, peer) {
   if (res?.status !== 409) return null;
-  const body = await res.json().catch(() => null);
   if (body?.code !== ERR_SCHEMA_VERSION_AHEAD) return null;
   // The global error handler nests our `err.details` under `context.details`
   // (see server/routes/peerSync.js `mapAndRethrow`), so reach in two levels
@@ -396,21 +395,33 @@ export async function pushRecordToPeer(sub, options = {}) {
   // calls global fetch with no custom-client hook for the insecure agent.)
   let networkError = null;
   const postPayload = async (body) => {
-    return withAbortTimeout(PUSH_TIMEOUT_MS, (signal) => peerFetch(url, {
+    const res = await withAbortTimeout(PUSH_TIMEOUT_MS, (signal) => peerFetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
       signal,
+      maxBytes: PEER_BODY_DEFAULT_MAX_BYTES,
     }, peer)).catch((err) => {
       networkError = err;
       return null;
     });
+    if (!res) return { res: null, body: null };
+    // Successful acknowledgements may list a large manifest of missing assets;
+    // keep the shared default cap for them and the smaller error-response cap.
+    const maxBytes = res.ok ? undefined : 64 * 1024;
+    return readPeerBody(res, 'json', { maxBytes, idleTimeoutMs: 5000 })
+      .then(body => ({ res, body }))
+      .catch(err => {
+        if (err instanceof SyntaxError) return { res, body: null };
+        networkError = err;
+        return { res: null, body: null };
+      });
   };
-  let res = await postPayload(payload);
+  let { res, body } = await postPayload(payload);
   // A 400 is Zod rejecting the envelope before the receiver's version gate
   // (the 409 path below) runs — `classifyEnvelopeRejection` separates the two
   // mixed-version cases it can mean.
-  const { stripped, unknownKind } = await classifyEnvelopeRejection(res, payload);
+  const { stripped, unknownKind } = classifyEnvelopeRejection(res, body, payload);
   if (stripped.length > 0) {
     // (1) UNKNOWN ENVELOPE KEY — retry once without exactly the keys the
     // receiver named, so the record/issues still land; the stripped feature
@@ -420,7 +431,7 @@ export async function pushRecordToPeer(sub, options = {}) {
     console.log(
       `ℹ️ peerSync: ${peerLabel(peer)} rejected newer envelope key(s) ${stripped.map((e) => e.key).join(', ')} — retrying push without them`,
     );
-    res = await postPayload(legacyPayload);
+    ({ res, body } = await postPayload(legacyPayload));
   } else if (unknownKind) {
     // (2) UNKNOWN RECORD KIND → schema-version block, NOT a bare http-400:
     // persist an empty-gap `peer-pre-feature` block so the SchemaGapBadge
@@ -436,7 +447,7 @@ export async function pushRecordToPeer(sub, options = {}) {
     );
     return { pushed: false, reason: 'peer-schema-behind', blockedBySchema: true };
   }
-  const schemaRefusal = await recordSchemaVersionRefusal(res, sub, peer);
+  const schemaRefusal = await recordSchemaVersionRefusal(res, body, sub, peer);
   if (schemaRefusal) return schemaRefusal;
   if (!res) {
     reportPushFailure(sub, peer, 'network', networkError?.message);
@@ -444,18 +455,11 @@ export async function pushRecordToPeer(sub, options = {}) {
   }
   if (!res.ok) {
     const reason = `http-${res.status}`;
-    // Native fetch resolved at the headers, so PUSH_TIMEOUT_MS no longer covers
-    // this read: cap it so a stalled or oversized error body cannot hang the
-    // push (or the sequential peer:online retry walk). A body already consumed
-    // (the 409 probe above), stalled, or not JSON just leaves the line without
-    // the receiver's code.
-    const errBody = await readPeerBody(res, 'json', { maxBytes: 64 * 1024, idleTimeoutMs: 5000 }).catch(() => null);
-    const detail = [errBody?.code, errBody?.error].filter(isNonBlankStr).join(': ');
+    const detail = [body?.code, body?.error].filter(isNonBlankStr).join(': ');
     reportPushFailure(sub, peer, reason, detail);
     return { pushed: false, reason };
   }
   reportPushRecovered(sub, peer);
-  const body = await res.json().catch(() => null);
 
   // Push succeeded — clear any prior schema-version block so the sub goes
   // back to normal. Either the peer upgraded or the gap was transient.
@@ -558,9 +562,8 @@ const NO_REJECTION = Object.freeze({ stripped: Object.freeze([]), unknownKind: f
  * VALIDATION_ERROR, or one naming fields we can't strip — is NO_REJECTION and
  * the caller reports the status as it stands.
  */
-async function classifyEnvelopeRejection(res, payload) {
+function classifyEnvelopeRejection(res, errBody, payload) {
   if (res?.status !== 400) return NO_REJECTION;
-  const errBody = await res.clone().json().catch(() => null);
   if (errBody?.code !== 'VALIDATION_ERROR') return NO_REJECTION;
   const details = Array.isArray(errBody.context?.details) ? errBody.context.details : [];
   const mentions = (key) => details.some((d) => new RegExp(key).test(`${d?.path || ''} ${d?.message || ''}`));

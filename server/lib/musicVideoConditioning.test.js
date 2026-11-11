@@ -442,3 +442,12 @@ it('drops inactive generated cast sheets and catalog-image aliases from new rend
   p.concept.subjects = p.concept.subjects.map(subject => ({ ...subject, active: !subject.active }));
   expect(ids(musicVideoConditioningReferences(p, { prompt: 'Q walks' }))).toEqual(['old.png']);
 });
+
+// Uniquely catches the still renderer's 16-image budget silently cutting a 30-reference video selection.
+it('preserves all explicit clip selections for Higgsfield cap validation', () => {
+  const references = Array.from({ length: 31 }, (_, i) => ({ id: `ref-${i}`, imageId: `ref-${i}.png`, role: 'prop', condition: true }));
+  const p = project(references);
+  const choices = musicVideoReferenceChoices(p);
+  const scene = { clipReferenceIds: choices.map((ref) => ref.id) };
+  expect(musicVideoClipConditioningReferences(p, scene)).toHaveLength(31);
+});

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 
 import { readFile, writeFile, rm } from 'fs/promises';
 import { join } from 'path';
@@ -44,6 +44,9 @@ vi.mock('./userTimezone.js', () => ({ getUserTimezone: vi.fn(async () => 'UTC') 
 import { readJSONFile, atomicWrite, ensureDir } from '../lib/fileUtils.js';
 import { syncOutlookCalendarApi } from './calendarApiSync.js';
 import { syncAccount, logCalendarTouchpoints, loadCache, getEvents, CACHE_DIR } from './calendarSync.js';
+import { getUserTimezone } from './userTimezone.js';
+import { localDayWindowUtc } from '../lib/timezone.js';
+import { toUserDayKey } from '../lib/activeDays.js';
 import { autoLogTouchpoints } from './tribe.js';
 import { mcpSyncAccount, mcpDiscoverCalendars, pushSyncEvents } from './calendarGoogleSync.js';
 import { apiSyncAccount, apiDiscoverCalendars } from './calendarGoogleApiSync.js';
@@ -135,7 +138,7 @@ describe('logCalendarTouchpoints — candidate building (#2033)', () => {
       source: 'calendar',
       dedupeKey: `cal:${ACCOUNT_ID}:evt-1`,
       calendarEventId: 'evt-1',
-      happenedAt: PAST,
+      happenedAt: new Date(PAST).toISOString(),
       summary: 'Coffee with Ada',
     });
     expect(candidates[0].identities).toHaveLength(2);
@@ -211,6 +214,129 @@ describe('Outlook windowed prune (#12961)', () => {
     });
     expect(await syncAccount(ACCOUNT_ID)).toMatchObject({ pruned: 1 });
     expect(atomicWrite.mock.calls.at(-1)[1].events.map(e => e.id).sort()).toEqual(['far', 'kept', 'old']);
+  });
+});
+
+describe('getEvents places all-day events on the user\'s local day', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const actual = await vi.importActual('../lib/fileUtils.js');
+    ensureDir.mockImplementation(actual.ensureDir);
+    readJSONFile.mockImplementation(actual.readJSONFile);
+    atomicWrite.mockImplementation(actual.atomicWrite);
+    await rm(CACHE_DIR, { recursive: true, force: true });
+    getAccount.mockResolvedValue({ id: ACCOUNT_ID, type: 'google-calendar' });
+    listAccounts.mockResolvedValue([{ id: ACCOUNT_ID, type: 'google-calendar' }]);
+    getUserTimezone.mockResolvedValue('America/Los_Angeles');
+    await ensureDir(CACHE_DIR);
+    await writeFile(join(CACHE_DIR, `${ACCOUNT_ID}.json`), JSON.stringify({
+      events: [
+        { id: 'jul3', title: 'July 3', isAllDay: true, startTime: '2026-07-03T00:00:00', endTime: '2026-07-04T00:00:00' },
+        { id: 'jul4', title: 'July 4', isAllDay: true, startTime: '2026-07-04T00:00:00', endTime: '2026-07-05T00:00:00' },
+        { id: 'jul5', title: 'July 5', isAllDay: true, startTime: '2026-07-05T00:00:00.000Z', endTime: '2026-07-06T00:00:00.000Z' },
+        { id: 'dinner', title: 'Dinner', startTime: '2026-07-05T03:00:00Z', endTime: '2026-07-05T04:00:00Z' },
+        { id: 'eve', title: 'Previous evening', startTime: '2026-07-04T02:00:00Z', endTime: '2026-07-04T03:00:00Z' },
+      ],
+    }));
+  });
+
+  afterEach(() => {
+    getUserTimezone.mockReset();
+    getUserTimezone.mockResolvedValue('UTC');
+  });
+
+  it('includes that local date\'s all-day and timed events and not the neighbors', async () => {
+    const july4 = localDayWindowUtc('America/Los_Angeles', new Date('2026-07-04T20:00:00Z'));
+    const agenda = await getEvents({
+      accountId: ACCOUNT_ID, startDate: july4.startDate, endDate: july4.endDate, limit: 20,
+    });
+    expect(agenda.events.map(event => event.title)).toEqual(['July 4', 'Dinner']);
+
+    // Daily review asks with zoneless wall-clock bounds, not UTC instants.
+    const review = await getEvents({
+      accountId: ACCOUNT_ID,
+      startDate: '2026-07-04T00:00:00',
+      endDate: '2026-07-04T23:59:59',
+      limit: 20,
+    });
+    expect(review.events.map(event => event.title)).toEqual(['July 4', 'Dinner']);
+  });
+
+  it('returns nothing when a requested bound cannot be read', async () => {
+    const agenda = await getEvents({
+      accountId: ACCOUNT_ID,
+      startDate: '2026-07-04T00:00:00',
+      endDate: 'not-a-date',
+      limit: 20,
+    });
+    expect(agenda).toEqual({ events: [], total: 0 });
+  });
+
+  it('keeps each daylight-saving transition day inside that local day', async () => {
+    await writeFile(join(CACHE_DIR, `${ACCOUNT_ID}.json`), JSON.stringify({
+      events: [
+        { id: 'spring-late', title: 'Spring late', startTime: '2026-03-08T23:30:00', endTime: '2026-03-09T00:00:00' },
+        { id: 'spring-next', title: 'Spring next', startTime: '2026-03-09T00:30:00', endTime: '2026-03-09T01:00:00' },
+        { id: 'fall-late', title: 'Fall late', startTime: '2026-11-01T23:30:00', endTime: '2026-11-02T00:00:00' },
+        { id: 'fall-next', title: 'Fall next', startTime: '2026-11-02T00:30:00', endTime: '2026-11-02T01:00:00' },
+      ],
+    }));
+    const spring = await getEvents({
+      accountId: ACCOUNT_ID,
+      startDate: '2026-03-08T00:00:00',
+      endDate: '2026-03-08T23:59:59',
+      limit: 20,
+    });
+    expect(spring.events.map(event => event.title)).toEqual(['Spring late']);
+    const fall = await getEvents({
+      accountId: ACCOUNT_ID,
+      startDate: '2026-11-01T00:00:00',
+      endDate: '2026-11-01T23:59:59',
+      limit: 20,
+    });
+    expect(fall.events.map(event => event.title)).toEqual(['Fall late']);
+  });
+});
+
+describe('logCalendarTouchpoints waits for an all-day event\'s local end', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    getUserTimezone.mockReset();
+    getUserTimezone.mockResolvedValue('UTC');
+  });
+
+  it('does not log a July 4 all-day event while it is still July 4 locally', async () => {
+    getUserTimezone.mockResolvedValue('America/Los_Angeles');
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-05T01:00:00Z'));
+    await logCalendarTouchpoints(ACCOUNT_ID, [{
+      externalId: 'jul4',
+      title: 'July 4',
+      isAllDay: true,
+      startTime: '2026-07-04T00:00:00',
+      endTime: '2026-07-05T00:00:00',
+      attendees: [{ email: 'ada@work.com' }],
+    }]);
+    expect(autoLogTouchpoints).not.toHaveBeenCalled();
+  });
+
+  it('dates an all-day touchpoint on the local calendar day', async () => {
+    getUserTimezone.mockResolvedValue('America/Los_Angeles');
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-05T08:00:00Z'));
+    autoLogTouchpoints.mockClear();
+    autoLogTouchpoints.mockResolvedValue({ created: 1, matched: 1 });
+    await logCalendarTouchpoints(ACCOUNT_ID, [{
+      externalId: 'jul4',
+      title: 'July 4',
+      isAllDay: true,
+      startTime: '2026-07-04T00:00:00.000Z',
+      endTime: '2026-07-05T00:00:00.000Z',
+      attendees: [{ email: 'ada@work.com' }],
+    }]);
+    expect(autoLogTouchpoints).toHaveBeenCalledTimes(1);
+    const [candidates] = autoLogTouchpoints.mock.calls[0];
+    expect(toUserDayKey(candidates[0].happenedAt, 'America/Los_Angeles')).toBe('2026-07-04');
   });
 });
 

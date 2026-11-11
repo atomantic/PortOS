@@ -1,11 +1,13 @@
 import { execFile, spawn } from './childProcess.js';
 import { existsSync, readdirSync } from 'node:fs';
-import { arch, homedir, platform } from 'node:os';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { arch, homedir, platform, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { PATHS } from './fileUtils.js';
 import { isAppleSilicon } from './platform.js';
+import { LOCK_PROFILES, lockEntryText, lockProfileUnsupportedReason, planLockedRepair } from './pythonLockProfiles.js';
+import { ensurePrivateUv } from './privateUv.js';
 import { safeChildProcessOptions, whichFirst, whichFirstSync } from './processEnv.js';
 import { createLineReader } from './streamLines.js';
 
@@ -34,14 +36,14 @@ export const REQUIRED_PACKAGES = IS_DARWIN
 // package `mlx_video` is unrelated (video classification) and lacks the
 // `generate_av` CLI the LTX renderer shells into. We want the wrong package
 // to FAIL the check so the UI's "Install missing" button reappears and the
-// `installPackages` pre-uninstall path (PIP_PRE_UNINSTALL) can swap it out.
+// `installPackages` pre-uninstall path (MFLUX_VIDEO_PRE_UNINSTALL) can swap it out.
 const IMPORT_PROBE_PATHS = IS_DARWIN ? { mlx_video: 'mlx_video.generate_av' } : {};
 const importProbePathFor = (importName) => IMPORT_PROBE_PATHS[importName] || importName;
 
 // The PyPI package literally named `mlx_video` is unrelated (a video
 // classification lib); the one shipping `mlx_video.generate_av` is
 // `mlx-video-with-audio`. Both expose `import mlx_video`, so the conflict
-// hides at namespace-probe time — `IMPORT_PROBE_PATHS` + `PIP_PRE_UNINSTALL`
+// hides at namespace-probe time — `IMPORT_PROBE_PATHS` + `MFLUX_VIDEO_PRE_UNINSTALL`
 // below force a deeper probe and uninstall the wrong package first.
 const MLX_VIDEO_PIP = 'mlx-video-with-audio>=0.1.35';
 
@@ -53,17 +55,10 @@ const PIP_NAMES = {
   ...(IS_DARWIN ? { mlx_video: MLX_VIDEO_PIP } : {}),
 };
 
-// Keys are pipNameFor-output specs; values are the conflicting package names
-// to remove before install. Mirrors `scripts/setup-image-video.sh`.
-const PIP_PRE_UNINSTALL = {
-  [MLX_VIDEO_PIP]: ['mlx_video'],
-};
-
-// Import names whose distributions scripts/requirements-mflux-mlx.lock.txt owns
-// on Apple Silicon. Repairing any of them installs the whole hash-pinned lock
-// (as scripts/setup-image-video.sh does) instead of resolving fresh.
-const MFLUX_LOCK_PACKAGES = new Set(['mflux', 'mlx', 'transformers', 'safetensors', 'huggingface_hub', 'numpy', 'cv2', 'tqdm']);
-export const MFLUX_LOCK_FILE = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'scripts', 'requirements-mflux-mlx.lock.txt');
+// Packages whose wrong namesake must be removed before the mflux-video lock
+// installs the real one (see MLX_VIDEO_PIP). Mirrors `scripts/setup-image-video.sh`.
+const MFLUX_VIDEO_PRE_UNINSTALL = ['mlx_video'];
+const MLX_VIDEO_DISTRIBUTION = 'mlx-video-with-audio';
 
 export const pipNameFor = (importName) => PIP_NAMES[importName] || importName;
 
@@ -837,9 +832,9 @@ export async function checkPackages(pythonPath) {
 // Spawn a child, stream its stdout+stderr line-by-line via `onLog`, resolve
 // with the exit code (or -1 on spawn error). `onProc` is invoked with the
 // live child handle so the caller's outer closure can track it for SIGTERM.
-function streamSpawn(bin, args, onLog, onProc) {
+function streamSpawn(bin, args, onLog, onProc, env) {
   return new Promise((resolve) => {
-    const proc = spawn(bin, args, safeChildProcessOptions({ stdio: ['ignore', 'pipe', 'pipe'] }));
+    const proc = spawn(bin, args, safeChildProcessOptions({ stdio: ['ignore', 'pipe', 'pipe'], ...(env && { env }) }));
     onProc(proc);
     // `splitRe: /[\r\n]+/` so a torch/tqdm progress bar that redraws with a
     // bare `\r` surfaces each redraw as its own log line; the carry buffer
@@ -863,56 +858,47 @@ async function pythonIsVenv(pythonPath) {
   return stdout.trim() === 'True';
 }
 
-// Returns `{ promise, kill }` so the route can SIGTERM the pip child if the
-// SSE client disconnects mid-install — a 10-minute torch upgrade would
-// otherwise keep running invisibly.
-export function installPackages(pythonPath, importNames, onLog, { preferUv = false, appleSilicon = hostIsAppleSilicon() } = {}) {
-  const uv = preferUv ? whichFirstSync('uv') : null;
-  const useLock = appleSilicon && importNames.some((n) => MFLUX_LOCK_PACKAGES.has(n));
-  const pipSpecs = importNames.filter((n) => !(useLock && MFLUX_LOCK_PACKAGES.has(n))).map(pipNameFor);
-  const conflicts = [...new Set(pipSpecs.flatMap((s) => PIP_PRE_UNINSTALL[s] || []))];
+// PortOS-private patched uv (never ambient PATH uv, whose version PortOS cannot
+// vouch for): `{ ok: true, uv }` or `{ ok: false, reason }`. Prefers an arm64
+// interpreter on Apple Silicon so the bootstrapped uv is a native binary even
+// when Node runs under Rosetta.
+export async function resolvePatchedUv(onLog) {
+  const basePython = (await detectArm64Python()) || detectVenvBasePythonSync();
+  return ensurePrivateUv({ basePython, onLog });
+}
 
+// `preferUv` installs fall back to pip when the private uv cannot be had; every
+// registry install here is hash-verified and wheel-only under either tool.
+async function resolveUvOrPip(onLog) {
+  const result = await resolvePatchedUv(onLog);
+  if (result.ok) return result.uv;
+  onLog({ type: 'log', message: `${result.reason} Using pip instead.` });
+  return null;
+}
+
+// Shared lifecycle for the lock installers: `work({ runPip, tool, isKilled })`
+// returns the final `{ ok, code }`. Returns `{ promise, kill }` so the route can
+// SIGTERM the pip child if the SSE client disconnects mid-install — a 10-minute
+// torch install would otherwise keep running invisibly.
+function launchInstall(pythonPath, onLog, { preferUv, env }, work) {
   let currentProc = null;
   let killed = false;
   const trackProc = (p) => { currentProc = p; };
-  const runPip = (args) => {
-    if (!uv) return streamSpawn(pythonPath, ['-m', 'pip', ...args], onLog, trackProc);
-    // uv does not accept pip's progress-bar/yes options. Keep the same
-    // exact target interpreter and package specifications in both paths.
-    const uvArgs = args.filter((arg, index) => arg !== '--yes' && arg !== '--progress-bar' && args[index - 1] !== '--progress-bar');
-    return streamSpawn(uv, ['pip', uvArgs[0], '--python', pythonPath, ...uvArgs.slice(1)], onLog, trackProc);
-  };
-
   const promise = (async () => {
-    if (conflicts.length) {
-      onLog({ type: 'log', message: `pip uninstall -y ${conflicts.join(' ')} (resolving package-name conflict)` });
-      // Uninstall isn't allowed to fail the run — when the conflicting
-      // package isn't installed pip exits non-zero with a "not installed"
-      // message that's noise, not an error.
-      await runPip(['uninstall', '--yes', ...conflicts]);
-      if (killed) return { ok: false, code: -1 };
-    }
-    let code = 0;
-    if (useLock) {
-      // --user matches the setup script's shared layout; a venv rejects it.
-      const inVenv = await pythonIsVenv(pythonPath);
-      const lockArgs = ['install', ...(uv || inVenv ? [] : ['--user']), '--require-hashes', '--no-deps', '-r', MFLUX_LOCK_FILE];
-      onLog({ type: 'log', message: `${uv ? 'uv pip' : 'pip'} ${lockArgs.join(' ')} (hash-pinned mflux lock)` });
-      code = await runPip(lockArgs);
-      if (killed) return { ok: false, code: -1 };
-    }
-    if (code === 0 && pipSpecs.length) {
-      onLog({ type: 'log', message: `${uv ? 'uv pip' : 'pip'} install ${pipSpecs.join(' ')}` });
-      code = await runPip(['install', '--upgrade', '--progress-bar', 'on', ...pipSpecs]);
-    }
-    if (code === 0) {
-      onLog({ type: 'complete', message: 'All packages installed successfully.' });
-      return { ok: true, code: 0 };
-    }
-    onLog({ type: 'error', message: `${uv ? 'uv pip' : 'pip'} exited with code ${code}` });
-    return { ok: false, code };
+    const uv = preferUv ? await resolveUvOrPip(onLog) : null;
+    // kill() cannot stop a bootstrap shared with other callers, but a cancelled
+    // install must not start its package subprocess once the bootstrap settles.
+    if (killed) return { ok: false, code: -1 };
+    const runPip = (args) => {
+      if (killed) return Promise.resolve(-1);
+      if (!uv) return streamSpawn(pythonPath, ['-m', 'pip', ...args], onLog, trackProc, env);
+      // uv does not accept pip's progress-bar/yes options. Keep the same
+      // exact target interpreter and package specifications in both paths.
+      const uvArgs = args.filter((arg, index) => arg !== '--yes' && arg !== '--progress-bar' && args[index - 1] !== '--progress-bar');
+      return streamSpawn(uv, ['pip', uvArgs[0], '--python', pythonPath, ...uvArgs.slice(1)], onLog, trackProc, env);
+    };
+    return work({ runPip, tool: uv ? 'uv pip' : 'pip', usingUv: !!uv, isKilled: () => killed });
   })();
-
   return {
     promise,
     kill: () => {
@@ -920,6 +906,100 @@ export function installPackages(pythonPath, importNames, onLog, { preferUv = fal
       if (currentProc && !currentProc.killed) currentProc.kill('SIGTERM');
     },
   };
+}
+
+// Refuse before any subprocess runs: a profile or package request no lock
+// covers is reported, never solved. Same `{ promise, kill }` shape as an install.
+function refuseInstall(onLog, message, extra) {
+  onLog({ type: 'error', message });
+  return { promise: Promise.resolve({ ok: false, code: -1, ...extra }), kill: () => {} };
+}
+
+// Hashes for source distributions do not cover their isolated build dependencies.
+const lockInstallArgs = (lockFile, { user, reinstall }) => [
+  'install', ...(user ? ['--user'] : []), ...(reinstall ? ['--force-reinstall'] : []),
+  '--require-hashes', '--no-deps', '--only-binary', ':all:', '-r', lockFile,
+];
+
+// `sourceInstalls` are pip argument lists run after the lock for a runtime's own
+// commit-pinned source (an editable checkout or archive, no PyPI distribution to
+// hash). They must carry `--no-deps` and `--no-build-isolation`: the lock already
+// holds the dependency closure and the build backend, so nothing is resolved or
+// fetched unpinned.
+async function runLockInstall({ runPip, tool, isKilled }, profile, onLog, { user, sourceInstalls = [] }) {
+  const lockArgs = lockInstallArgs(profile.lockFile, { user });
+  const steps = [
+    { args: lockArgs, label: `(hash-pinned ${profile.label} lock)` },
+    ...sourceInstalls.map((args) => ({ args, label: '(commit-pinned source)' })),
+  ];
+  for (const { args, label } of steps) {
+    onLog({ type: 'log', message: `${tool} ${args.join(' ')} ${label}` });
+    const code = await runPip(args);
+    if (isKilled()) return { ok: false, code: -1 };
+    if (code !== 0) {
+      onLog({ type: 'error', message: `${tool} exited with code ${code}` });
+      return { ok: false, code };
+    }
+  }
+  onLog({ type: 'complete', message: 'All packages installed successfully.' });
+  return { ok: true, code: 0 };
+}
+
+// Install a profile's complete hash-pinned closure into a dedicated venv (the
+// Prompt Guard / jev / AuK / Laya runtimes). No resolution happens at install
+// time. `env` replaces the installer's inherited environment.
+export function installLockedRuntime(pythonPath, profileId, onLog, { preferUv = false, sourceInstalls, env, platform: hostPlatform = platform(), arch: hostArch = arch() } = {}) {
+  const profile = LOCK_PROFILES[profileId];
+  if (!profile) return refuseInstall(onLog, `Unknown Python lock profile "${profileId}".`, { unsupported: true });
+  const reason = lockProfileUnsupportedReason(profile, { platform: hostPlatform, arch: hostArch });
+  if (reason) return refuseInstall(onLog, `${reason} PortOS does not resolve unlocked packages at install time.`, { unsupported: true });
+  return launchInstall(pythonPath, onLog, { preferUv, env }, (ctx) => runLockInstall(ctx, profile, onLog, { user: false, sourceInstalls }));
+}
+
+// Generic setup-page repair. On Apple Silicon it dispatches to the smallest
+// hash-pinned lock owning every requested package; anything else is reported as
+// an unresolved profile instead of resolving a fresh dependency graph.
+export function installPackages(pythonPath, importNames, onLog, { preferUv = false, appleSilicon = hostIsAppleSilicon() } = {}) {
+  const plan = planLockedRepair(importNames.map(pipNameFor), { appleSilicon });
+  if (!plan.profile) {
+    const detail = plan.unresolved.map(({ name, reason }) => `${name} (${reason})`).join(', ');
+    return refuseInstall(onLog,
+      `Unsupported repair profile: ${detail}. PortOS installs only hash-pinned runtime locks and does not resolve unpinned packages; use a supported runtime installer (scripts/setup-image-video.sh).`,
+      { unresolved: plan.unresolved });
+  }
+  const conflicts = plan.profile.id === 'mflux-video' ? MFLUX_VIDEO_PRE_UNINSTALL : [];
+  return launchInstall(pythonPath, onLog, { preferUv }, async (ctx) => {
+    // --user matches the setup script's shared layout; a venv or uv target rejects it.
+    const user = !ctx.usingUv && !await pythonIsVenv(pythonPath);
+    if (conflicts.length) {
+      onLog({ type: 'log', message: `${ctx.tool} uninstall -y ${conflicts.join(' ')} (resolving package-name conflict)` });
+      // Uninstall isn't allowed to fail the run — when the conflicting
+      // package isn't installed pip exits non-zero with a "not installed"
+      // message that's noise, not an error.
+      await ctx.runPip(['uninstall', '--yes', ...conflicts]);
+      if (ctx.isKilled()) return { ok: false, code: -1 };
+      // The wrong namesake shares module files with the real package, so removing
+      // it can leave the real one "installed" but broken, and the lock install
+      // would then skip it. Force-reinstall only that entry (--no-deps) first.
+      const selfCode = await reinstallLockEntry(ctx, plan.profile, MLX_VIDEO_DISTRIBUTION, onLog, { user });
+      if (selfCode !== 0) return ctx.isKilled() ? { ok: false, code: -1 } : { ok: false, code: selfCode };
+    }
+    return runLockInstall(ctx, plan.profile, onLog, { user });
+  });
+}
+
+async function reinstallLockEntry({ runPip, tool }, profile, name, onLog, { user }) {
+  const dir = await mkdtemp(join(tmpdir(), 'portos-lock-entry-'));
+  try {
+    const file = join(dir, 'requirements.txt');
+    await writeFile(file, lockEntryText(profile, name));
+    onLog({ type: 'log', message: `${tool} install --force-reinstall --no-deps ${name} (hash-pinned ${profile.label} lock)` });
+    const code = await runPip(lockInstallArgs(file, { user, reinstall: true }));
+    if (code !== 0) onLog({ type: 'error', message: `${tool} exited with code ${code}` });
+    return code;
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 }
 
 // FLUX.2 installs run the hash-pinned lock (Apple Silicon MLX or CUDA) through

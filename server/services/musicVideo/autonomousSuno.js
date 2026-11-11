@@ -1,8 +1,8 @@
 /**
  * Generate a Suno song in the signed-in PortOS Browser, wait until that render
  * has finished, export only M4A through its Download UI, validate the completed
- * file, and import it directly. Retries reuse submitted song ids so a failed
- * export never repeats Create.
+ * file, check that it is the requested song, and import it directly. Retries
+ * reuse submitted song ids so a failed export never repeats Create.
  */
 import { copyFile, mkdtemp, open, rm } from 'fs/promises';
 import { join } from 'path';
@@ -12,6 +12,7 @@ import { execFile } from '../../lib/childProcess.js';
 import { safeChildProcessOptions } from '../../lib/processEnv.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { sunoSongIdsFromHrefs, sunoSongUrl } from '../../lib/musicVideoAutonomous.js';
+import { markSunoSongMenu, sunoDownloadDialogSong } from '../../lib/sunoPage.js';
 import { escapeRegExp } from '../../lib/textUtils.js';
 import { sleep as defaultSleep } from '../../lib/fileCore.js';
 import { PUBLISH_STEP_TIMEOUT_MS as T, connectPortosBrowser, loginRequired, serializeBrowserOperation as serialize, step } from './publish/browser.js';
@@ -26,6 +27,12 @@ const SUNO_GENERATION_TIMEOUT_MS = 10 * 60 * 1000;
 const SUNO_RENDER_POLL_MS = 3000;
 // How long an opened version menu may take to list its items.
 const SUNO_MENU_WAIT_MS = 5000;
+// How often the song page is asked whether this song's own options menu has rendered.
+const SUNO_SONG_MENU_POLL_MS = 250;
+// A click on that menu can land before the page listens for it and do nothing:
+// how long each click gets to show the menu, and how many are tried.
+const SUNO_SONG_MENU_OPEN_MS = 2000;
+const SUNO_SONG_MENU_CLICKS = 15;
 // Second argument to the render-readiness probe. Tests key off it; the page never sees it as DOM.
 const SUNO_RENDER_PROBE = 'portos-suno-render';
 
@@ -290,6 +297,29 @@ async function validateSunoAudio(path, { signal, timeoutMs }) {
   }
 }
 
+// Suno stamps the container comment of every M4A export with the song it holds:
+// "made with suno; created=<iso time>; id=<song id>", the id of its /song/<id> page.
+const SUNO_COMMENT_SONG_ID = /(?:^|[;\n])\s*id=([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\s*(?:[;\n]|$)/i;
+
+/** The song id an exported M4A names in its container comment (lower-cased), or null when it names none. */
+async function readSunoAudioSongId(path, { signal, timeoutMs }) {
+  const { findFfprobe } = await import('../../lib/ffmpeg.js');
+  const bin = await findFfprobe();
+  if (!bin) throw new ServerError('Suno: audio validation requires ffprobe', {
+    status: 503, code: 'SUNO_AUDIO_VALIDATION_UNAVAILABLE', context: { platform: LABEL },
+  });
+  signal.throwIfAborted();
+  // The decoder's limits: file-only access and the MOV/M4A demuxer. A file it
+  // cannot read names no song; its stderr holds local paths and is dropped.
+  const { stdout } = await promisify(execFile)(bin, [
+    '-v', 'error', '-protocol_whitelist', 'file', '-format_whitelist', 'mov',
+    '-show_entries', 'format_tags=comment', '-of', 'default=nokey=1:noprint_wrappers=1', path,
+  ], safeChildProcessOptions({ signal, timeout: Math.min(timeoutMs, 15_000), killSignal: 'SIGKILL', maxBuffer: 64 * 1024 }))
+    .catch(() => ({ stdout: '' }));
+  if (signal.aborted) throw signal.reason;
+  return SUNO_COMMENT_SONG_ID.exec(String(stdout || ''))?.[1].toLowerCase() ?? null;
+}
+
 const DOWNLOAD_POLL_MS = 1000;
 const downloadKey = (file) => `${file.name}\0${file.modified}`;
 
@@ -302,16 +332,25 @@ async function defaultListDownloads() {
 // browser/server.js), so a CDP-attached Playwright never sees a `download`
 // event: the M4A just lands in the profile's download directory. Detect it
 // there instead — a new .m4a (Chrome lists a file only after its .crdownload
-// rename) whose size held steady across two polls.
-async function watchDownloadsDir(listDownloads, baseline, signal, pollMs) {
-  let lastSize = null;
-  let lastName = null;
+// rename) whose size held steady across two polls and which `songOf` says is
+// the requested song. Any other new .m4a (an unrelated download landing
+// meanwhile, or another song's export) is left where it is, never returned.
+async function watchDownloadsDir({ listDownloads, baseline, signal, pollMs, songOf }) {
+  const sizes = new Map();
+  const strays = new Set();
   while (!signal.aborted) {
     const { downloadDir, files } = await listDownloads().catch(() => ({ files: [] }));
-    const fresh = files.find((f) => /\.m4a$/i.test(f.name) && !baseline.has(downloadKey(f)));
-    if (fresh && fresh.name === lastName && fresh.size === lastSize && fresh.size > 0) return join(downloadDir, fresh.name);
-    lastName = fresh?.name ?? null;
-    lastSize = fresh?.size ?? null;
+    for (const file of files) {
+      const key = downloadKey(file);
+      if (!/\.m4a$/i.test(file.name) || baseline.has(key) || strays.has(key)) continue;
+      const steady = file.size > 0 && sizes.get(file.name) === file.size;
+      sizes.set(file.name, file.size);
+      if (!steady) continue;
+      const landed = join(downloadDir, file.name);
+      const song = await songOf(landed);
+      if (song === 'wanted') return landed;
+      strays.add(key);
+    }
     await new Promise((resolve) => {
       const timer = setTimeout(resolve, pollMs);
       signal.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
@@ -320,14 +359,44 @@ async function watchDownloadsDir(listDownloads, baseline, signal, pollMs) {
   return null;
 }
 
+/**
+ * Open the requested song's own options menu on its page. The page lists other
+ * songs too (More by this creator, Similar, the playbar), each with its own
+ * menu, and the first one on the page belongs to another song: mark the one
+ * tied to this song and click only that. Resolves `opened`, `not-found` when
+ * no menu could be tied to the song, or `not-opened`.
+ */
+async function openSunoSongMenu(page, songId, { remaining, signal }) {
+  const marked = await page.waitForFunction(markSunoSongMenu, songId, {
+    timeout: Math.min(remaining(), T), polling: SUNO_SONG_MENU_POLL_MS,
+  }).then(() => true, (err) => {
+    if (err?.name === 'TimeoutError') return false;
+    throw err;
+  });
+  if (!marked) return 'not-found';
+  const menu = page.locator('[data-portos-song-menu]');
+  // The button ships in the server-rendered page, so a click can land before
+  // the app listens for it and do nothing; the button then still reports its
+  // menu closed. Click again until it stops saying so.
+  const reportsOpen = page.locator('[data-portos-song-menu]:not([aria-expanded="false"])');
+  for (let click = 0; click < SUNO_SONG_MENU_CLICKS && !signal.aborted; click += 1) {
+    await menu.click({ timeout: remaining() });
+    const opened = await reportsOpen.waitFor({ state: 'attached', timeout: Math.min(remaining(), SUNO_SONG_MENU_OPEN_MS) })
+      .then(() => true, () => false);
+    if (opened) return 'opened';
+  }
+  return 'not-opened';
+}
+
 /** One bounded export, including waiting for the browser to finish saving. */
 async function downloadSunoAudio(page, songId, path, {
-  timeoutMs = SUNO_AUDIO_TIMEOUT_MS, signal, validateAudio = validateSunoAudio,
+  timeoutMs = SUNO_AUDIO_TIMEOUT_MS, signal, validateAudio = validateSunoAudio, readAudioSongId = readSunoAudioSongId,
   listDownloads = defaultListDownloads, downloadPollMs = DOWNLOAD_POLL_MS, onProgress, onSongPage,
 } = {}) {
   const controller = new AbortController();
   const deadline = Date.now() + timeoutMs;
   const remaining = () => Math.max(1, deadline - Date.now());
+  const wanted = String(songId).toLowerCase();
   let download;
   let stage = 'open-song';
   let stopped;
@@ -335,9 +404,20 @@ async function downloadSunoAudio(page, songId, path, {
   const stopPromise = new Promise((_, reject) => { rejectStop = reject; });
   // The operation may already be cancelled before its first await.
   stopPromise.catch(() => {});
-  const error = (code, reason, status = 502) => new ServerError(`Suno: M4A export ${reason}`, {
+  const error = (code, reason, status = 502, detail = `M4A export ${reason}`) => new ServerError(`Suno: ${detail}`, {
     status, code, context: { platform: LABEL, stage, reason },
   });
+  const wrongSong = () => error('SUNO_AUDIO_WRONG_SONG', 'song-id-mismatch', 502,
+    'the export produced a different song than the one requested, so it was not imported');
+  // Importing a file that named no song is how another song's audio once reached a Track.
+  const unverified = () => error('SUNO_AUDIO_UNVERIFIED', 'song-id-missing', 502,
+    'the exported file does not name the song it holds, so it was not imported');
+  // Which song a saved file says it is: 'wanted', 'other', or 'unknown' when it names none.
+  const songOf = async (file) => {
+    const id = await readAudioSongId(file, { signal: controller.signal, timeoutMs: remaining() });
+    if (!id) return 'unknown';
+    return String(id).toLowerCase() === wanted ? 'wanted' : 'other';
+  };
   const stop = (err) => {
     if (stopped) return;
     stopped = err;
@@ -347,6 +427,8 @@ async function downloadSunoAudio(page, songId, path, {
     download?.cancel().catch(() => {});
   };
   const abort = () => stop(error('SUNO_AUDIO_CANCELLED', 'cancelled', 499));
+  // A stray file cannot establish what this export downloaded. Identity errors
+  // below apply only to the file associated with this browser export.
   const timer = setTimeout(() => stop(error('SUNO_AUDIO_TIMEOUT', 'deadline-exceeded', 504)), timeoutMs);
   signal?.addEventListener('abort', abort, { once: true });
   if (signal?.aborted) abort();
@@ -366,7 +448,15 @@ async function downloadSunoAudio(page, songId, path, {
       const html = await bounded('read-page', () => page.content()).catch(() => null);
       if (html) { try { onSongPage(html); } catch { /* advisory */ } }
     }
-    await bounded('open-options', () => page.getByRole('button', { name: 'More options', exact: true }).first().click({ timeout: remaining() }));
+    const menu = await bounded('open-options', () => openSunoSongMenu(page, songId, { remaining, signal: controller.signal }));
+    if (menu === 'not-found') {
+      throw error('SUNO_AUDIO_DOWNLOAD_FAILED', 'song-menu-not-found', 502,
+        "this song's own options menu was not found on its page, so nothing was exported");
+    }
+    if (menu !== 'opened') {
+      throw error('SUNO_AUDIO_DOWNLOAD_FAILED', 'song-menu-did-not-open', 502,
+        "this song's options menu did not open, so nothing was exported");
+    }
     await bounded('open-download', () => page.getByRole('menuitem', { name: 'Download', exact: true }).click({ timeout: remaining() }));
     for (const name of ['M4A', 'MP3', 'WAV', 'MP4 video asset']) {
       const button = page.getByRole('button', { name, exact: true });
@@ -379,6 +469,11 @@ async function downloadSunoAudio(page, songId, path, {
       const selected = await bounded('verify-m4a', () => page.getByRole('button', { name, exact: true }).evaluate((el) => el.classList.contains('bg-foreground-primary') && el.classList.contains('text-background-primary')));
       if (selected !== (name === 'M4A')) throw error('SUNO_AUDIO_DOWNLOAD_FAILED', 'format-selection-failed');
     }
+    // The dialog quotes its song's title: never spend a download on another song's.
+    if (await bounded('verify-dialog', () => page.evaluate(sunoDownloadDialogSong)) === 'other') {
+      throw error('SUNO_AUDIO_WRONG_SONG', 'dialog-names-another-song', 502,
+        'the Download dialog opened for a different song, so nothing was exported');
+    }
     // Register before clicking; a completed export can emit immediately. Own
     // the listener so timeout/cancellation can remove it without waiting for a
     // second Playwright timeout. Never repeat an Unlock & Download click.
@@ -390,7 +485,9 @@ async function downloadSunoAudio(page, songId, path, {
     await bounded('start-download', () => page.getByRole('button', { name: /^(Unlock & Download|Download)$/ }).click({ timeout: remaining() }));
     const landed = await bounded('wait-download', () => Promise.race([
       started.then(() => null),
-      watchDownloadsDir(listDownloads, baseline, watch.signal, downloadPollMs),
+      watchDownloadsDir({
+        listDownloads, baseline, signal: watch.signal, pollMs: downloadPollMs, songOf,
+      }),
     ]));
     if (landed) {
       await bounded('save-download', () => copyFile(landed, path));
@@ -400,6 +497,10 @@ async function downloadSunoAudio(page, songId, path, {
     }
     onProgress?.('validating');
     if (!await bounded('validate-audio', () => validateAudio(path, { signal: controller.signal, timeoutMs: remaining() }))) throw error('SUNO_AUDIO_INVALID', 'invalid-audio');
+    // The one gate every saved file passes, however it arrived: only this song's id is accepted.
+    const exported = await bounded('identify-audio', () => songOf(path));
+    if (exported === 'other') throw wrongSong();
+    if (exported === 'unknown') throw unverified();
   } catch (err) {
     if (err instanceof ServerError) throw err;
     // Playwright and ffprobe errors may contain user paths, URLs or page text.

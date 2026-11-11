@@ -1,0 +1,14 @@
+# Laya-MLX (Apple Silicon) runtime: the dependencies of the pinned laya-mlx
+# checkout (LAYA_MLX.runtimeRevision in server/lib/layaMlx.js), copied from that
+# revision's pyproject.toml. Installed only from requirements-laya-mlx.lock.txt,
+# then laya-mlx itself is installed from its commit-pinned archive with
+# `--no-deps --no-build-isolation`. After editing this file, regenerate the lock
+# with the command in the lock header. When bumping the runtime revision,
+# re-copy the ranges from that revision's pyproject.toml.
+mlx>=0.32.2,<0.33
+numpy>=1.26
+huggingface-hub>=0.34,<2
+tokenizers>=0.21,<1
+# Build backend of the laya-mlx install (hatchling), pinned here so
+# `--no-build-isolation` never fetches an unlocked builder.
+hatchling

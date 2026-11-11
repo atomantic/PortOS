@@ -85,17 +85,17 @@ import { RUNWAY_SPECIAL_VIDEO_MODES } from '../../lib/runwaySpecialVideoModels.j
 import { isMiniMaxH3SpeedProfileRequest } from '../../lib/minimaxH3SpeedProfiles.js';
 
 // A hosted renderer is picked with `backend`, not `modelId`; say so to an API caller who sends its name.
-const HOSTED_VIDEO_BACKENDS = ['grok', 'fal', 'reactor', 'runway', 'gemini'];
+const HOSTED_VIDEO_BACKENDS = ['grok', 'fal', 'reactor', 'runway', 'gemini', 'higgsfield', 'google'];
 export const unknownVideoModelMessage = (modelId) => (HOSTED_VIDEO_BACKENDS.includes(modelId)
   ? `Unknown modelId: ${modelId}. ${modelId} is a renderer: send backend: "${modelId}" instead of modelId`
   : `Unknown modelId: ${modelId}`);
 
-/** Hosted lanes cannot consume the generic reference inputs used by local models, except Runway's own image picks (hostedSubmission.js). */
+/** Hosted lanes cannot consume the generic reference inputs used by local models, except Runway's, Higgsfield's and Google's own image picks (hostedSubmission.js). */
 export function hostedReferenceInputsError({ backend, body, uploads = {} }) {
   if (backend === VIDEO_GEN_MODE.LOCAL
-    || !((body.referenceImageFiles?.length && !body.guidanceImageFile && backend !== VIDEO_GEN_MODE.RUNWAY) || body.referenceVideoIds?.length
+    || !((body.referenceImageFiles?.length && !body.guidanceImageFile && backend !== VIDEO_GEN_MODE.RUNWAY && backend !== VIDEO_GEN_MODE.HIGGSFIELD && backend !== VIDEO_GEN_MODE.GOOGLE) || body.referenceVideoIds?.length
       || REFERENCE_AUDIO_FIELDS.some((field) => uploads[field]))) return null;
-  return new ServerError('Reference images, clips and voice clips are only used by local reference-to-video models and, for images, Runway models that take them.',
+  return new ServerError('Reference images, clips and voice clips are only used by local reference-to-video models and, for images, Runway, Higgsfield and Veo models that take them.',
     { status: 400, code: 'VIDEO_REFERENCE_INPUTS_LOCAL_ONLY' });
 }
 
@@ -117,7 +117,7 @@ export function referenceImageUploadsError({ backend, body, uploads = {} }) {
   return null;
 }
 
-async function validateMiniMaxH3SpeedParams(model, params, settings) {
+async function validateMiniMaxH3SpeedParams(model, params) {
   const hasProfile = isMiniMaxH3SpeedProfileRequest(params.speedProfileId);
   if (!hasProfile && ['minimax_h3', 'minimax_h3_cuda'].includes(model?.runtime) && params.speedProfileId && params.speedProfileId !== 'quality') {
     throw new ServerError('This H3 model does not offer the requested speed profile. Select Quality or its listed LightX2V profile.', { status: 400, code: 'VIDEO_SPEED_PROFILE_UNSUPPORTED' });
@@ -129,7 +129,7 @@ async function validateMiniMaxH3SpeedParams(model, params, settings) {
     mode: params.mode || (params.sourceImagePath ? 'image' : 'text'),
     width: params.width ?? model.defaultWidth,
     height: params.height ?? model.defaultHeight,
-  }, settings || await getSettings()) : null;
+  }) : null;
   if (params.loras?.length) {
     const { resolveVideoLoras } = await import('./renderArgs.js');
     const validate = model.runtime === 'minimax_h3' ? validateMiniMaxH3MlxLoras : validateMiniMaxH3CudaLoras;
@@ -266,7 +266,7 @@ export async function validateVideoRetryParams(params = {}) {
   }
   const frameCountError = wan22FrameCountError(model, numFrames);
   if (frameCountError) throw frameCountError;
-  await validateMiniMaxH3SpeedParams(model, params, settings);
+  await validateMiniMaxH3SpeedParams(model, params);
   return model;
 }
 
@@ -1330,7 +1330,7 @@ async function resolvePreparedParams({
       throw new ServerError(hosted.errorMessage, { status: 400, code: hosted.errorCode });
     }
     const staged = await hosted.stageInputs({
-      body, uploads, sourceImagePath, falSourceAudio, stageUploadDurable, cleanupStaged,
+      body, uploads, sourceImagePath, falSourceAudio, stageUploadDurable, cleanupStaged, settings,
     });
     return {
       backend,
@@ -1467,7 +1467,7 @@ async function resolvePreparedParams({
   await validateMiniMaxH3SpeedParams(effectiveModel, {
     ...body, loras, sourceImagePath, lastImagePath, keyframes: resolvedKeyframes,
     extendFromVideoPath, audioFilePath,
-  }, settings).catch(async (error) => { await cleanupStaged(); throw error; });
+  }).catch(async (error) => { await cleanupStaged(); throw error; });
 
   const { effectiveChunkPrompts, effectiveContextFrames, continuation } = resolveChainSettings({
     body, effectiveChunks, effectiveModel,

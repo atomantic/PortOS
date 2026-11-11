@@ -8,6 +8,7 @@ vi.mock('../services/apiCatalog.js', async (importOriginal) => ({ ...await impor
 vi.mock('../hooks/usePrevizJobs.js', () => ({ default: () => ({ running: [], finished: null, drafted: 0, setCount: 0, step: null }) }));
 vi.mock('../services/apiRunwayCatalog.js', async (importOriginal) => ({ ...await importOriginal(), loadRunwayCatalog: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('../services/apiMediaJobs.js', async (importOriginal) => ({ ...await importOriginal(), listQueueMediaJobs: vi.fn(async () => []) }));
+import { MUSIC_VIDEO_STAGES } from '../lib/musicVideoStages.js';
 import { listQueueMediaJobs } from '../services/apiMediaJobs.js';
 import { render, screen, waitFor, fireEvent, within, act } from '@testing-library/react';
 import { findEnabledByRole } from '../test/enabledBarrier.js';
@@ -92,6 +93,9 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   importMusicVideoLyrics: vi.fn(),
   importMusicVideoTrackLyrics: vi.fn(),
   alignMusicVideoLyrics: vi.fn(),
+  verifyMusicVideoLyrics: vi.fn(async () => ({ jobId: 'verify' })),
+  musicVideoLyricVerifyEventsUrl: (jobId) => `/api/music-video/lyrics/verify/${jobId}/events`,
+  cancelMusicVideoLyricVerify: vi.fn(async () => ({ ok: true })),
   musicVideoLyricAlignEventsUrl: (jobId) => `/api/music-video/lyrics/align/${jobId}/events`,
   cancelMusicVideoLyricAlign: vi.fn(async () => ({ ok: true })),
   getMusicVideoActiveJobs: vi.fn(async () => ({ alignment: null, separation: null, midi: null })),
@@ -179,6 +183,8 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   getMusicVideoCodeDocument: vi.fn(async () => ({ html: '<!doctype html><html><body></body></html>', durationSec: 2, fps: 24, width: 1280, height: 720, song: { sections: [] }, timeline: { sections: [] } })),
   generateMusicVideoCode: vi.fn(),
   regenerateMusicVideoCodeSection: vi.fn(),
+  getMusicVideoCastAndSets: vi.fn(async () => ({ catalogCheckin: { items: [], problems: [] } })),
+  repairMusicVideoShotReference: vi.fn(),
   linkMusicVideoCastAndSetsToCatalog: vi.fn(),
   regenerateMusicVideoCastAndSets: vi.fn(),
   resumeMusicVideoCastAndSets: vi.fn(),
@@ -377,8 +383,8 @@ const MV_ROUTES = (
     <Route path="/music-video/:projectId/:stage/dev/:artifactId" element={<MusicVideo />} />
   </Routes>
 );
-const renderMV = () => render(
-  <MemoryRouter initialEntries={['/music-video']}>{MV_ROUTES}</MemoryRouter>,
+const renderMV = (path = '/music-video') => render(
+  <MemoryRouter initialEntries={[path]}>{MV_ROUTES}</MemoryRouter>,
 );
 
 // Flush pending pre-resolved mock promises inside act so their .then setState
@@ -411,7 +417,7 @@ const selectProject = async (projectId) => {
 // control is only on screen while its step is open, so tests say which one.
 // Compose is part of Shots now; Plan holds the planning tools. The phone's step bar is the tablist.
 const STAGE_TABS = {
-  setup: /^Song/, story: /^Story(?!board)/, 'cast-sets': /^Look/, board: /^Storyboard/, produce: /^Shots/, compose: /^Shots/, review: /^Final render/, publish: /^Publish/,
+  setup: /^Song/, story: /^Story(?!board)/, 'cast-sets': /^Look/, board: /^Storyboard/, previz: /^Previz/, produce: /^Shots/, compose: /^Shots/, review: /^Final render/, publish: /^Publish/,
 };
 // Project settings (render style, audio tools, autopilot, files) is a drawer over the step.
 const openSettings = async (tab = 'Project') => {
@@ -486,7 +492,9 @@ const renderMVWithNav = (to) => render(
 
 afterEach(() => vi.restoreAllMocks());
 
-beforeEach(() => {
+beforeEach(async () => {
+  const socket = (await import('../services/socket.js')).default;
+  delete socket.id;
   // Keep the real artifact iframe and src assertions without navigating to its API URL.
   window.happyDOM.settings.navigation.disableChildFrameNavigation = true;
   vi.clearAllMocks();
@@ -661,6 +669,107 @@ describe('MusicVideo bounded summary index and project isolation (#10169)', () =
     await screen.findByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name });
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name })).toBeInTheDocument();
+  });
+});
+
+describe('MusicVideo index follows projects changed elsewhere (#15724)', () => {
+  const summary = (id, name) => ({
+    id, name, version: 1, rootProjectId: id, versionRoot: id, stage: 'board', status: 'ready',
+    runStatus: null, poster: null, preview: { kind: 'none', label: 'No render yet' },
+    spend: { spentUsd: 0, capUsd: null }, updatedAt: '2026-10-04T00:00:00Z', createdAt: '2026-10-04T00:00:00Z',
+    sceneCount: 1, shotSummary: '1 scene',
+  });
+
+  const renderIndex = async (items) => {
+    listMusicVideoProjectSummaries.mockResolvedValue({ items, total: items.length, nextCursor: null });
+    render(<MemoryRouter initialEntries={['/music-video']}>{MV_ROUTES}</MemoryRouter>);
+    expect(await screen.findByTestId('mv-project-grid')).toHaveTextContent(items[0].name);
+  };
+
+  it('shows a project created elsewhere without reloading the page', async () => {
+    const existing = summary('mv-listed', 'Already Listed');
+    const created = summary('mv-new', 'Arrived Elsewhere');
+    let reads = 0;
+    listMusicVideoProjectSummaries.mockImplementation(async () => {
+      reads += 1;
+      const items = reads === 1 ? [existing] : [created, existing];
+      return { items, total: items.length, nextCursor: null };
+    });
+    render(<MemoryRouter initialEntries={['/music-video']}>{MV_ROUTES}</MemoryRouter>);
+    expect(await screen.findByTestId('mv-project-grid')).toHaveTextContent('Already Listed');
+    expect(screen.getByTestId('mv-project-grid')).not.toHaveTextContent('Arrived Elsewhere');
+    await pushSocket('music-video:project:changed', { id: 'mv-new' });
+    await waitFor(() => expect(screen.getByTestId('mv-project-grid')).toHaveTextContent('Arrived Elsewhere'));
+    expect(getMusicVideoProject).not.toHaveBeenCalledWith('mv-new', expect.anything());
+  });
+
+  it('renames a listed card from that one record and does not reread the summary page', async () => {
+    const listed = summary('mv-listed', 'Old Name');
+    await renderIndex([listed]);
+    const summaryCalls = listMusicVideoProjectSummaries.mock.calls.length;
+    getMusicVideoProject.mockResolvedValueOnce({ ...listed, name: 'New Name' });
+    await pushSocket('music-video:project:changed', { id: 'mv-listed' });
+    await waitFor(() => expect(screen.getByTestId('mv-project-grid')).toHaveTextContent('New Name'));
+    expect(screen.getByTestId('mv-project-grid')).not.toHaveTextContent('Old Name');
+    expect(getMusicVideoProject).toHaveBeenCalledWith('mv-listed', { silent: true });
+    expect(listMusicVideoProjectSummaries).toHaveBeenCalledTimes(summaryCalls);
+  });
+
+  it('removes a listed card when the record read is a 404', async () => {
+    const listed = summary('mv-listed', 'Going Away');
+    const kept = summary('mv-kept', 'Stays');
+    let reads = 0;
+    listMusicVideoProjectSummaries.mockImplementation(async () => {
+      reads += 1;
+      const items = reads === 1 ? [listed, kept] : [kept];
+      return { items, total: items.length, nextCursor: null };
+    });
+    render(<MemoryRouter initialEntries={['/music-video']}>{MV_ROUTES}</MemoryRouter>);
+    expect(await screen.findByTestId('mv-project-grid')).toHaveTextContent('Going Away');
+    getMusicVideoProject.mockRejectedValueOnce(Object.assign(new Error('Not found'), { status: 404 }));
+    await pushSocket('music-video:project:changed', { id: 'mv-listed' });
+    await waitFor(() => expect(screen.getByTestId('mv-project-grid')).not.toHaveTextContent('Going Away'));
+    expect(screen.getByTestId('mv-project-grid')).toHaveTextContent('Stays');
+  });
+
+  it('ignores an event this tab originated', async () => {
+    const socket = (await import('../services/socket.js')).default;
+    socket.id = 'tab-socket';
+    const listed = summary('mv-listed', 'Untouched');
+    await renderIndex([listed]);
+    const summaryCalls = listMusicVideoProjectSummaries.mock.calls.length;
+    getMusicVideoProject.mockClear();
+    await pushSocket('music-video:project:changed', { id: 'mv-new', origin: 'tab-socket' });
+    await pushSocket('music-video:project:changed', { id: 'mv-listed', origin: 'tab-socket' });
+    expect(listMusicVideoProjectSummaries).toHaveBeenCalledTimes(summaryCalls);
+    expect(getMusicVideoProject).not.toHaveBeenCalled();
+    expect(screen.getByTestId('mv-project-grid')).toHaveTextContent('Untouched');
+    expect(screen.getByTestId('mv-project-grid')).not.toHaveTextContent('mv-new');
+  });
+
+  it('updates a different project in the header picker while one project is open', async () => {
+    const other = summary('mv-other', 'Other Project');
+    getMusicVideoProject.mockImplementation(async (id) => {
+      if (id === PROJECT_WITH_CLIP.id) return PROJECT_WITH_CLIP;
+      if (id === other.id) return { ...other, name: 'Renamed Other' };
+      return null;
+    });
+    listMusicVideoProjectSummaries.mockResolvedValue({
+      items: [summary(PROJECT_WITH_CLIP.id, PROJECT_WITH_CLIP.name), other],
+      total: 2,
+      nextCursor: null,
+    });
+    render(<MemoryRouter initialEntries={['/music-video/mv-1/board']}>{MV_ROUTES}</MemoryRouter>);
+    await screen.findByRole('heading', { level: 2, name: PROJECT_WITH_CLIP.name });
+    expect(listMusicVideoProjectSummaries).not.toHaveBeenCalled();
+    fireEvent.focus(screen.getByLabelText('Project'));
+    await waitFor(() => expect(screen.getByRole('option', { name: 'Other Project' })).toBeInTheDocument());
+    const summaryCalls = listMusicVideoProjectSummaries.mock.calls.length;
+    await pushSocket('music-video:project:changed', { id: 'mv-other' });
+    await waitFor(() => expect(screen.getByRole('option', { name: 'Renamed Other' })).toBeInTheDocument());
+    expect(screen.queryByRole('option', { name: 'Other Project' })).not.toBeInTheDocument();
+    expect(getMusicVideoProject).toHaveBeenCalledWith('mv-other', { silent: true });
+    expect(listMusicVideoProjectSummaries).toHaveBeenCalledTimes(summaryCalls);
   });
 });
 
@@ -1584,34 +1693,6 @@ describe('MusicVideo project video renderer', () => {
   });
 });
 
-// A model that used to carry a blocking license checkbox still generates
-// from this board with no acknowledgement UI — the license lives on the
-// Video Gen disclosure, not as a per-render gate.
-describe('MusicVideo restricted-model license gate', () => {
-  const GATE = {
-    id: 'example-community-license-2026-01-01',
-    title: 'Example model eligibility and terms',
-    summary: 'This model is licensed only in its applicable territory.',
-    acknowledgement: 'I am eligible and accept the Example Community License.',
-    licenseUrl: 'https://example.com/license',
-  };
-
-  it('does not ask for an eligibility acknowledgement before generating', async () => {
-    getVideoGenStatus.mockResolvedValueOnce({
-      connected: true,
-      defaultModel: 'gated_model',
-      models: [{ id: 'gated_model', name: 'Gated Model', runtime: 'ltx2', termsGate: GATE }],
-    });
-    generateVideo.mockResolvedValue({ jobId: 'gated-job' });
-    await openProject(PROJECT_NO_CLIP, 'produce');
-
-    const generate = await findEnabledByRole('button', { name: /^Render$/ });
-    expect(screen.queryByRole('checkbox', { name: /I am eligible/ })).toBeNull();
-    fireEvent.click(generate);
-    await waitFor(() => expect(generateVideo).toHaveBeenCalled());
-  });
-});
-
 describe('MusicVideo project versions', () => {
   it('forks for video generation without rendering or modifying the source', async () => {
     cloneMusicVideoProject.mockResolvedValue({ ...PROJECT_WITH_CLIP, id: 'mv-footage', name: 'Footage Variant', version: 2, composition: { mode: 'composed' } });
@@ -2024,6 +2105,16 @@ describe('MusicVideo section layers (#8985)', () => {
     expect(await screen.findByText(/Title card sections render in composed or document mode/)).toBeTruthy();
     await openStage('review');
     expect(screen.getByRole('button', { name: /^Render final$/ })).toBeDisabled();
+  });
+
+  it('shows no-live-preview note for concat, and hides it for composed', async () => {
+    await openProject({ ...PROJECT_WITH_CLIP, composition: composition('concat') }, 'produce');
+    expect(screen.getByText(/No live preview for this style — render a draft excerpt to check changes\./)).toBeInTheDocument();
+  });
+
+  it('hides no-live-preview note for composed', async () => {
+    await openProject({ ...PROJECT_WITH_CLIP, composition: composition('composed') }, 'produce');
+    expect(screen.queryByText(/No live preview for this style — render a draft excerpt to check changes\./)).not.toBeInTheDocument();
   });
 });
 
@@ -2678,6 +2769,32 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     },
     scenes: [{ sceneId: 's1', order: 0, prompt: 'waves', framePrompt: 'harbor at dawn', referenceImageId: null, videoHistoryId: null, takes: [] }],
   };
+
+  it('keeps the newer shot picks when a reference repair reply arrives after a project update', async () => {
+    const { getMusicVideoCastAndSets, repairMusicVideoShotReference } = await import('../services/apiMusicVideo.js');
+    const project = { ...SPEC_PROJECT, castAndSets: { source: 'catalog', status: 'approved' }, updatedAt: '2026-01-01T00:00:00Z',
+      scenes: [{ ...SPEC_PROJECT.scenes[0], frameReferenceIds: ['r1'] }] };
+    getMusicVideoCastAndSets.mockResolvedValueOnce({ catalogCheckin: { items: [], problems: [], shotReferenceProblems: [
+      { id: 'problem-1', sceneId: 's1', shot: 1, message: 'Shot 1 needs a set reference.', fix: 'Fix shot reference' },
+    ] } });
+    let respond;
+    repairMusicVideoShotReference.mockImplementationOnce(() => new Promise(resolve => { respond = resolve; }));
+    listMusicVideoProjects.mockResolvedValue([project]);
+    renderMV(`/music-video/${project.id}/produce?scenes=bad-take`);
+    const open = await screen.findByRole('button', { name: 'Open shot 1' });
+    expect(screen.getByText('No scenes match this filter.')).toBeTruthy();
+    fireEvent.click(open);
+    await showFrames();
+    const refs = () => within(screen.getByRole('group', { name: 'References selected for the frames' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Fix shot reference' }));
+    getMusicVideoProject.mockResolvedValueOnce({ ...project, updatedAt: '2026-01-03T00:00:00Z',
+      scenes: [{ ...project.scenes[0], frameReferenceIds: ['r2'] }] });
+    await pushSocket('music-video:project:changed', { id: project.id });
+    await waitFor(() => expect(refs().getByRole('button', { name: "Don't send Pier" })).toBeTruthy());
+    await act(async () => respond({ sceneId: 's1', patch: { frameReferenceIds: ['r1', 'r2'] }, updatedAt: '2026-01-02T00:00:00Z' }));
+    expect(refs().queryByRole('button', { name: "Don't send Lead" })).toBeNull();
+    expect(refs().getByRole('button', { name: "Don't send Pier" })).toBeTruthy();
+  });
 
   it('asks the server for the shot frame and names the capability gap when that render is refused', async () => {
     renderMusicVideoSceneFrame.mockRejectedValueOnce(Object.assign(
@@ -3698,6 +3815,13 @@ describe('direct production review navigation', () => {
 });
 
 describe('stage checklist and project options', () => {
+  it('shows the Previz doneWhen line under the step title instead of hiding it behind an empty checklist', async () => {
+    const previzStage = MUSIC_VIDEO_STAGES.find((stage) => stage.id === 'previz');
+    expect(previzStage?.doneWhen).toBeTruthy();
+    await openProject(PROJECT_NO_CLIP, 'previz');
+    expect(screen.getByText(previzStage.doneWhen)).toBeInTheDocument();
+  });
+
   it('keeps Cast & Sets on the art approval after the unwanted sheet is gone, and says an approved sheet file is not that approval', async () => {
     // The guide pick itself is covered by stageChecklist's unit test; selecting
     // one here would make the open approvals panel fetch the sheet's file.
@@ -4039,5 +4163,40 @@ describe('queued look reference saves', () => {
     expect(look.getAllByLabelText('Condition frames')[1]).toBeChecked();
     await act(async () => failures[1]());
     expect(look.getAllByLabelText('Condition frames').map((box) => box.checked)).toEqual([false, false]);
+  });
+});
+
+describe('Code video storyboard approval gating on Produce stage (#15723)', () => {
+  it('enables Generate code video with default approved readiness', async () => {
+    const codeProject = {
+      ...PROJECT_WITH_CLIP,
+      composition: { mode: 'code' },
+    };
+
+    // Default readiness (storyboard: { approved: true })
+    await openProject(codeProject, 'produce');
+    const generateBtn = await screen.findByRole('button', { name: /Generate code video/ });
+    await waitFor(() => expect(generateBtn).toBeEnabled());
+    expect(screen.queryByText('Approve the storyboard first')).toBeNull();
+  });
+
+  it('disables Generate code video with reason when storyboard is not approved', async () => {
+    const unapprovedProject = {
+      ...PROJECT_WITH_CLIP,
+      id: 'mv-code-unapproved',
+      name: 'Unapproved Code Video Project',
+      composition: { mode: 'code' },
+      productionReadiness: {
+        readyForProduction: false,
+        basis: {},
+        art: { approved: true, problems: [] },
+        storyboard: { approved: false, problems: ['Storyboard not approved'] },
+        proof: { approved: false, problems: [] },
+      },
+    };
+    await openProject(unapprovedProject, 'produce');
+    const unapprovedBtn = await screen.findByRole('button', { name: /Generate code video/ });
+    await waitFor(() => expect(unapprovedBtn).toBeDisabled());
+    expect(await screen.findByText('Approve the storyboard first')).toBeTruthy();
   });
 });

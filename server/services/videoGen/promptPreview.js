@@ -131,6 +131,26 @@ export async function previewVideoPrompt({ previewUploads = [], ...body }) {
       clipReferenceLabels: (body.referenceImageFiles || []).map(() => ({ label: RUNWAY_FORM_REFERENCE_LABEL })),
     }).record };
   }
+  if (backend === VIDEO_GEN_MODE.HIGGSFIELD) {
+    const { higgsfieldVideoSentPrompt } = await import('./higgsfield.js');
+    return { backend, ...higgsfieldVideoSentPrompt({
+      modelId: body.higgsfieldModelId, prompt: body.prompt, negativePrompt: body.negativePrompt,
+      seconds: body.higgsfieldDuration, width: body.width, height: body.height, resolution: body.higgsfieldResolution,
+      generateAudio: body.higgsfieldGenerateAudio === true, promptAdditions,
+      hasImage: hasSourceImage, hasEndImage: !!uploads.lastImage || !!body.lastImageFile,
+      referenceCount: (body.referenceImageFiles || []).length,
+    }).record };
+  }
+  if (backend === VIDEO_GEN_MODE.GOOGLE) {
+    const { googleVideoSentPrompt } = await import('./google.js');
+    return { backend, ...googleVideoSentPrompt({
+      modelId: body.googleModelId, prompt: body.prompt, negativePrompt: body.negativePrompt,
+      seconds: body.googleDuration, width: body.width, height: body.height, resolution: body.googleResolution,
+      generateAudio: body.googleGenerateAudio === true, promptAdditions,
+      hasImage: hasSourceImage, hasEndImage: !!uploads.lastImage || !!body.lastImageFile,
+      referenceCount: (body.referenceImageFiles || []).length,
+    }).record };
+  }
   // Gemini's composer takes the prompt exactly as written (videoGen/geminiWeb.js).
   if (backend === VIDEO_GEN_MODE.GEMINI) return asWritten(body, { backend });
   if (backend === VIDEO_GEN_MODE.LOCAL) {

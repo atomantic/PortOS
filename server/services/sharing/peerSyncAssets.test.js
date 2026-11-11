@@ -21,7 +21,7 @@ vi.mock('../instances.js', () => ({
   getPeers: vi.fn(async () => peers),
 }));
 
-vi.mock('../../lib/peerHttpClient.js', () => ({ peerFetch: vi.fn() }));
+vi.mock('../../lib/peerHttpClient.js', async (importOriginal) => ({ ...(await importOriginal()), peerFetch: vi.fn() }));
 
 // Tracks are db-primary; stub the dispatcher so the manifest builder never
 // touches Postgres. trackAudioFilename mirrors the real basename sanitizer.
@@ -507,6 +507,35 @@ describe('pullMissingAssetsFromPeer — unsafe and incomplete downloads (#5230)'
 
   // Character avatars ride this path (#14077): a deleted image must stay
   // deleted, and a pulled one keeps its sidecar and records its supplier.
+  it('releases a stalled asset pull and lets the next cycle fetch the same destination', async () => {
+    const body = Buffer.from('complete audio');
+    const entry = { filename: 'retry.mp3', kind: 'audio', sha256: sha(body) };
+    let stream;
+    const cancel = vi.fn();
+    const response = new Response(new ReadableStream({ start(controller) { stream = controller; }, cancel }), {
+      headers: { 'Content-Length': String(body.length) },
+    });
+    vi.mocked(peerFetch).mockResolvedValueOnce(response);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    let settled = false;
+    const pending = pullMissingAssetsFromPeer('peer-a', [entry]).then(() => { settled = true; });
+    try {
+      await vi.waitFor(() => expect(response.body.locked).toBe(true));
+      await vi.advanceTimersByTimeAsync(60000);
+      expect(settled).toBe(true);
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(inflightPulls.size).toBe(0);
+      expect(listAssetFiles('audio')).toEqual([]);
+      vi.mocked(peerFetch).mockResolvedValue(mkAssetResponse(body));
+      await pullMissingAssetsFromPeer('peer-a', [entry]);
+      expect(readFileSync(join(tempRoot, 'audio', entry.filename))).toEqual(body);
+    } finally {
+      stream.error(new Error('Synthetic stream cleanup'));
+      await pending;
+      vi.useRealTimers();
+    }
+  });
+
   it('does not fetch an image whose filename is tombstoned here', async () => {
     imageTombstones.set('avatar.png', Date.now());
     try {

@@ -1,6 +1,8 @@
 import RunwayModelSelect from './RunwayModelSelect';
 import ModelSelect from '../ModelSelect';
 import FalModelSelect from './FalModelSelect';
+import HiggsfieldModelSelect from './HiggsfieldModelSelect';
+import GoogleModelSelect from './GoogleModelSelect';
 import useFieldDraft from '../../hooks/useFieldDraft';
 import useLocalImageModels from '../../hooks/useLocalImageModels';
 import {
@@ -11,7 +13,7 @@ import {
 export function imageModeHasModel(mode, { showLocal = true } = {}) {
   if (!mode) return false;
   if (showLocal && mode === IMAGE_GEN_MODE.LOCAL) return true;
-  if (mode === IMAGE_GEN_MODE.RUNWAY || mode === IMAGE_GEN_MODE.FAL) return true;
+  if (mode === IMAGE_GEN_MODE.RUNWAY || mode === IMAGE_GEN_MODE.FAL || mode === IMAGE_GEN_MODE.HIGGSFIELD || mode === IMAGE_GEN_MODE.GOOGLE) return true;
   return supportsCloudModelOverride(mode);
 }
 
@@ -43,6 +45,16 @@ export default function ImageModelField({
   } else if (mode === IMAGE_GEN_MODE.FAL) {
     control = (
       <FalModelSelect id={id} ariaLabel={named} value={value || ''} disabled={disabled}
+        defaultLabel={falDefaultLabel} onChange={onChange} className={controlClass} />
+    );
+  } else if (mode === IMAGE_GEN_MODE.HIGGSFIELD) {
+    control = (
+      <HiggsfieldModelSelect id={id} ariaLabel={named} value={value || ''} disabled={disabled}
+        defaultLabel={falDefaultLabel} onChange={onChange} className={controlClass} />
+    );
+  } else if (mode === IMAGE_GEN_MODE.GOOGLE) {
+    control = (
+      <GoogleModelSelect id={id} ariaLabel={named} value={value || ''} disabled={disabled}
         defaultLabel={falDefaultLabel} onChange={onChange} className={controlClass} />
     );
   } else if (supportsCloudModelOverride(mode)) {

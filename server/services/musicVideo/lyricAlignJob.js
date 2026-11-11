@@ -17,13 +17,13 @@ import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '
 import { ServerError } from '../../lib/errorHandler.js';
 import { alignProjectLyrics } from './lyricAlign.js';
 import { requireProject } from './requireProject.js';
+import { activeLyricAlign as activeByProject, getActiveLyricVerifyJobId } from './lyricJobRegistry.js';
 
 const reviewableRevision = (project) => project.songRevision?.status === 'selected' && Boolean(project.songRevision.baseline);
 const retimeRevisedSongLazy = async (...args) => (await import('./songRevision.js')).retimeRevisedSong(...args);
 
 // jobId -> job; projectId -> running jobId
 const alignJobs = new Map();
-const activeByProject = new Map();
 
 export const attachLyricAlignSseClient = (jobId, res) => attachSse(alignJobs, jobId, res);
 
@@ -48,6 +48,7 @@ export function cancelLyricAlign(jobId) {
  * queueing a second whisper run over the same song.
  */
 export async function startLyricAlign(projectId, { cueId = null, separateVocals = false, retimeSong = false, align = alignProjectLyrics, retime = null } = {}) {
+  if (getActiveLyricVerifyJobId(projectId)) throw new ServerError('Lyric verification is running.', { status: 409, code: 'LYRIC_ALIGN_BUSY' });
   const running = getActiveLyricAlignJobId(projectId);
   if (running) return { jobId: running, reused: true };
   // Fail with a real status before a job exists, as the blocking route did.
@@ -62,6 +63,7 @@ export async function startLyricAlign(projectId, { cueId = null, separateVocals 
     throw new ServerError('That lyric line is no longer on the project.', { status: 404, code: 'NOT_FOUND' });
   }
   // Another request may have started a job while the project was read.
+  if (getActiveLyricVerifyJobId(projectId)) throw new ServerError('Lyric verification is running.', { status: 409, code: 'LYRIC_ALIGN_BUSY' });
   const raced = getActiveLyricAlignJobId(projectId);
   if (raced) return { jobId: raced, reused: true };
   const jobId = randomUUID();
@@ -89,7 +91,13 @@ export async function startLyricAlign(projectId, { cueId = null, separateVocals 
         console.log(`🛑 Lyric alignment ${shortId(jobId)} cancelled`);
         broadcastSse(job, { type: 'canceled' });
       } else {
-        console.error(`❌ Lyric alignment ${shortId(jobId)} failed: ${err?.message || err}`);
+        if (err?.code === 'LYRIC_ALIGN_CTC_UNSUPPORTED_TEXT') {
+          // The director's message names the word. The log keeps only the line.
+          const lineNo = / on lyric line (\d+):/.exec(String(err?.message || ''))?.[1];
+          console.log(`🚫 Lyric alignment ${shortId(jobId)} refused unsupported text${lineNo ? ` on line ${lineNo}` : ''}`);
+        } else {
+          console.error(`❌ Lyric alignment ${shortId(jobId)} failed: ${err?.message || err}`);
+        }
         broadcastSse(job, { type: 'error', error: err?.message || String(err), ...(err?.code ? { code: err.code } : {}) });
       }
     } finally {

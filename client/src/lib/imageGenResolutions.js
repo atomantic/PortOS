@@ -11,6 +11,10 @@ export { MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS } from '../../../server/lib/imageLimit
 import { RUNNER_FAMILIES } from './runnerFamilies';
 import { IMAGE_GEN_MODE } from './imageGenBackends';
 
+// MiniMax H3-Image renders on a canvas of at least 2048² whatever size is
+// asked for, so it takes the high-resolution presets local runners cannot.
+const MINIMAX_H3_IMAGE = 'minimax-h3-image';
+
 // `flux1` and `external` aren't members of RUNNER_FAMILIES — they're synthetic
 // compatibility-only keys ('flux1' = mflux/diffusers fallback when no `runner`
 // field is set; 'external' = Codex/API providers). Keep them as bare strings.
@@ -26,9 +30,9 @@ export const RESOLUTIONS = [
   { label: '576×1024 (9:16)', w: 576, h: 1024 },
   { label: '1024×768 (4:3)', w: 1024, h: 768 },
   { label: '512×384 (4:3)', w: 512, h: 384 },
-  { label: '1536×1536 (hi-res square)', w: 1536, h: 1536, compatible: ['codex', RUNNER_FAMILIES.FLUX2, RUNNER_FAMILIES.QWEN, RUNNER_FAMILIES.HIDREAM] },
-  { label: '1024×1536 (hi-res portrait)', w: 1024, h: 1536, compatible: ['codex', RUNNER_FAMILIES.FLUX2, RUNNER_FAMILIES.QWEN, RUNNER_FAMILIES.HIDREAM] },
-  { label: '1536×1024 (hi-res landscape)', w: 1536, h: 1024, compatible: ['codex', RUNNER_FAMILIES.FLUX2, RUNNER_FAMILIES.QWEN, RUNNER_FAMILIES.HIDREAM] },
+  { label: '1536×1536 (hi-res square)', w: 1536, h: 1536, compatible: ['codex', RUNNER_FAMILIES.FLUX2, RUNNER_FAMILIES.QWEN, RUNNER_FAMILIES.HIDREAM, MINIMAX_H3_IMAGE] },
+  { label: '1024×1536 (hi-res portrait)', w: 1024, h: 1536, compatible: ['codex', RUNNER_FAMILIES.FLUX2, RUNNER_FAMILIES.QWEN, RUNNER_FAMILIES.HIDREAM, MINIMAX_H3_IMAGE] },
+  { label: '1536×1024 (hi-res landscape)', w: 1536, h: 1024, compatible: ['codex', RUNNER_FAMILIES.FLUX2, RUNNER_FAMILIES.QWEN, RUNNER_FAMILIES.HIDREAM, MINIMAX_H3_IMAGE] },
   // Past Qwen's documented ~1664 long-edge support window — renders coherently
   // in practice but is out-of-distribution; keep flagged "experimental."
   { label: '1328×2048 (Qwen comic draft — experimental)', w: 1328, h: 2048, compatible: [RUNNER_FAMILIES.QWEN] },
@@ -51,13 +55,16 @@ export const RESOLUTIONS = [
   { label: '1500×2100 (poker card, 2.5:3.5 hi-res)', w: 1500, h: 2100, compatible: ['codex'] },
   { label: '825×1425 (tarot card, 2.75:4.75)', w: 825, h: 1425, compatible: ['codex'] },
   { label: '1650×2850 (tarot card, 2.75:4.75 hi-res)', w: 1650, h: 2850, compatible: ['codex'] },
+  { label: '2048×2048 (2K square)', w: 2048, h: 2048, compatible: [MINIMAX_H3_IMAGE] },
+  { label: '2560×1440 (QHD landscape)', w: 2560, h: 1440, compatible: [MINIMAX_H3_IMAGE] },
+  { label: '1440×2560 (QHD portrait)', w: 1440, h: 2560, compatible: [MINIMAX_H3_IMAGE] },
   // gpt-image-2 final-render presets: hard ceiling is each edge ≤ 3840 and
   // total ≤ 8,294,400 pixels. All three below sit exactly at the pixel cap
-  // — pick aspect by shape. Codex-only because mflux/diffusers are too slow
-  // at this resolution to be practical (and the smaller models degrade).
-  { label: '3840×2160 (4K landscape)', w: 3840, h: 2160, compatible: ['codex'] },
-  { label: '2160×3840 (4K portrait)', w: 2160, h: 3840, compatible: ['codex'] },
-  { label: '2880×2880 (4K square)', w: 2880, h: 2880, compatible: ['codex'] },
+  // — pick aspect by shape. Codex and MiniMax H3-Image only: mflux/diffusers
+  // are too slow at this resolution to be practical (and the smaller models degrade).
+  { label: '3840×2160 (4K landscape)', w: 3840, h: 2160, compatible: ['codex', MINIMAX_H3_IMAGE] },
+  { label: '2160×3840 (4K portrait)', w: 2160, h: 3840, compatible: ['codex', MINIMAX_H3_IMAGE] },
+  { label: '2880×2880 (4K square)', w: 2880, h: 2880, compatible: ['codex', MINIMAX_H3_IMAGE] },
 ];
 
 // Clamp arbitrary source dimensions (e.g. an uploaded photo) down to the
@@ -110,6 +117,7 @@ const NATIVE_RUNNER_KEYS = new Set([
   RUNNER_FAMILIES.ERNIE,
   RUNNER_FAMILIES.QWEN,
   RUNNER_FAMILIES.HIDREAM,
+  MINIMAX_H3_IMAGE,
 ]);
 
 export const compatibilityKey = (mode, runner) => {

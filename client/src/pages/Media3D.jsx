@@ -170,7 +170,10 @@ export default function Media3D() {
     if (!selectedImage) return 'Pick a source image to continue.';
     if (!selectedTarget) return 'No image-to-3D model is registered.';
     if (!selectedTarget.available) return unavailableReasonLabel(selectedTarget.unavailableReason, 'This model can’t run on this host.');
-    if (selectedTarget.installed === false) return `Install ${selectedTarget.label} from ${getNavPageForPath('/models/3d')?.breadcrumb || 'its management page'} before generating.`;
+    if (selectedTarget.installed === false) {
+      return selectedTarget.installBlockedReason
+        || `Install ${selectedTarget.label} from ${getNavPageForPath('/models/3d')?.breadcrumb || 'its management page'} before generating.`;
+    }
     return null;
   })();
 

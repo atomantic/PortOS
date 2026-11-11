@@ -579,7 +579,7 @@ export default function App() {
               convention. */}
           <Route path="music-video" element={<MusicVideo />} />
           <Route path="music-video/:projectId" element={<MusicVideo />} />
-          {/* Stage tab (setup | cast-sets | board | produce | compose | review); an unknown stage opens the project's default. */}
+          {/* Stage tab (story | setup | board | cast-sets | previz | produce | review | publish; legacy aliases such as compose still resolve); an unknown stage opens the project's default. */}
           <Route path="music-video/:projectId/:stage" element={<MusicVideo />} />
           <Route path="music-video/:projectId/:stage/scene/:sceneId" element={<MusicVideo />} />
           {/* The Storyboard step's open panel. */}

@@ -1,3 +1,5 @@
+import { higgsfieldShotRequestFields } from '../../../server/lib/higgsfieldVideoModels.js';
+import { googleShotRequestFields } from '../../../server/lib/googleVideoModels.js';
 import { shotActionContractProblem } from '../../../server/lib/musicVideoActionContract.js';
 import { isOutsideMusicVideoReference, musicVideoClipConditioningReferences, musicVideoConditioningReferences, musicVideoLinkedCastIds, musicVideoSceneCastIds } from '../../../server/lib/musicVideoConditioning.js';
 import { preMusicClipSound } from '../../../server/lib/musicVideoColdOpen.js';
@@ -14,7 +16,7 @@ import useSceneBatch from './useSceneBatch.js';
 import useSceneRenderLifecycle from './useSceneRenderLifecycle.js';
 import { useVisibilityEvent } from './useVisibilityEvent.js';
 import { isLtx2FamilyRuntime } from '../lib/runnerFamilies';
-import { ltxReferenceFrames as ltxReferenceFramesFor } from '../../../server/lib/musicVideoShotTiming.js';
+import { shotRequestSpanSec, ltxReferenceFrames as ltxReferenceFramesFor } from '../../../server/lib/musicVideoShotTiming.js';
 import { sourceClipNeedSec } from '../../../server/lib/musicVideoSourceTake.js';
 import { LTX_REFERENCES_GENERATION_MODE, LTX_REFERENCES_IC_MODE, LTX_REFERENCES_MAX_REFERENCES, isLtx25Model } from '../lib/musicVideoLtxReferences.js';
 import { isLayeredComposition, isSelfDrawnLayer, sceneVisualLayer } from '../lib/musicVideoLayers.js';
@@ -431,6 +433,8 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       ? falTakeRequestFields(falSceneTake({ scene, scenes: project?.scenes, videoSettings: settings, songDurationSec: project?.audioAnalysis?.durationSec ?? null }))
       : null;
     // Runway — image-to-video cutaways, the take the scene card prices (runwaySceneTake).
+    const higgsfieldFields = settings.backend === 'higgsfield' ? higgsfieldShotRequestFields(settings, shotRequestSpanSec(scene, project.scenes)) : null;
+    const googleFields = settings.backend === 'google' ? googleShotRequestFields(settings, shotRequestSpanSec(scene, project.scenes)) : null;
     const runwayFields = settings.backend === 'runway'
       ? runwayTakeRequestFields(runwaySceneTake({ scene, scenes: project?.scenes, videoSettings: settings }))
       : null;
@@ -451,8 +455,8 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
         // pinned length) and its resolution; a performance clip's length
         // follows its song slice (server-side), so it sends only the lip-sync
         // resolution.
-        : falFields || runwayFields
-          ? falFields || runwayFields
+        : falFields || runwayFields || higgsfieldFields || googleFields
+          ? falFields || runwayFields || higgsfieldFields || googleFields
           : settings.backend === 'gemini'
             // Gemini's composer has no length or audio control.
             ? {}
@@ -470,7 +474,8 @@ export default function useMusicVideoSceneMedia({ project, videoSettings, applyS
       // A style-break end frame (#11173), when this fal or local model takes one
       // (a local LTX clip then renders first+last frame, #11258).
       ...(useLtxReferences || (card && (card.endFrame === false || songAudio)) ? {} : sceneEndFrameRequestFields(scene, {
-        backend: settings.backend, falModelId: falFields?.falModelId, runwayModelId: runwayFields?.runwayModelId, mode, // A card's local pick names its own model; else the active one.
+        backend: settings.backend, falModelId: falFields?.falModelId, runwayModelId: runwayFields?.runwayModelId,
+        googleModelId: settings.googleModelId, higgsfieldModelId: settings.higgsfieldModelId, mode, // A card's local pick names its own model; else the active one.
         localRuntime: (target?.modelId ? (videoSettings.models || []).find((m) => m.id === target.modelId)?.runtime : videoSettings.activeModel?.runtime) ?? null,
       })),
       ...(audioReactiveSelected ? {

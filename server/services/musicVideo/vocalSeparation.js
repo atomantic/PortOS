@@ -5,7 +5,7 @@
  *
  * Runs only when the director clicks "Separate vocals" or starts an autopilot
  * run — never at boot. The first run provisions a private venv at
- * `~/.portos/venvs/demucs` (`python -m venv` + `pip install demucs soundfile`),
+ * `~/.portos/venvs/demucs` from hash-locked runtime and build dependencies,
  * and demucs fetches its own weights on first use. Separation picks the best
  * device (Apple Silicon → mps, NVIDIA → cuda, otherwise cpu) and retries on the
  * CPU when the accelerator run fails. The result goes through the same
@@ -19,30 +19,21 @@
  */
 
 import { randomUUID } from 'crypto';
-import { existsSync } from 'fs';
-import { mkdir, mkdtemp, readdir, rm } from 'fs/promises';
-import { homedir, tmpdir } from 'os';
-import { dirname, join } from 'path';
+import { mkdtemp, readdir, rm } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { isAppleSilicon } from '../../lib/platform.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { shortId } from '../../lib/fileUtils.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { runStreamingCommand } from '../../lib/streamingSpawn.js';
-import { whichFirst } from '../../lib/processEnv.js';
+import { ensureDemucsRuntime } from './demucsRuntime.js';
 import { getProject } from './projects.js';
 
-const IS_WIN = process.platform === 'win32';
-const VENV_TIMEOUT_MS = 5 * 60 * 1000;
-const PIP_TIMEOUT_MS = 45 * 60 * 1000;
-const PROBE_TIMEOUT_MS = 2 * 60 * 1000;
 const SEPARATE_TIMEOUT_MS = 60 * 60 * 1000;
 // htdemucs_ft is a bag of four models; demucs draws one progress bar per model.
 const DEMUCS_MODEL = 'htdemucs_ft';
 const DEMUCS_PASSES = 4;
-
-/** Where the demucs venv lives. `PORTOS_DEMUCS_VENV_DIR` overrides it. */
-export const demucsVenvDir = () => process.env.PORTOS_DEMUCS_VENV_DIR || join(homedir(), '.portos', 'venvs', 'demucs');
-export const venvPython = (dir) => (IS_WIN ? join(dir, 'Scripts', 'python.exe') : join(dir, 'bin', 'python'));
 
 /** Best demucs device for this host. MPS is Apple Silicon hardware, including Rosetta.
  * Leading underscore: the device-selection test is the only out-of-file caller. */
@@ -59,67 +50,10 @@ function demucsArgs({ audioPath, outDir, device }) {
   return ['-m', 'demucs', '--two-stems=vocals', '-n', DEMUCS_MODEL, '-d', device, '-o', outDir, audioPath];
 }
 
-async function defaultBasePython() {
-  const { classifyVenvBases } = await import('../../lib/pythonSetup.js');
-  const { supported } = await classifyVenvBases().catch(() => ({ supported: [] }));
-  return supported[0] || whichFirst(IS_WIN ? 'python' : 'python3');
-}
-
 async function defaultCudaAvailable() {
   if (process.platform === 'darwin') return false;
   const { getCudaCapability } = await import('../../lib/cudaCapability.js');
   return (await getCudaCapability().catch(() => null))?.status === 'available';
-}
-
-let provisioning = null;
-
-async function provisionDemucs({ dir, python, onProgress, run, resolveBasePython }) {
-  if (!existsSync(python)) {
-    const base = await resolveBasePython();
-    if (!base) {
-      throw new ServerError('Separating vocals needs Python 3.10 or newer to install demucs. Install Python, then try again.', { status: 503, code: 'DEMUCS_PYTHON_MISSING' });
-    }
-    onProgress({ stage: 'provision', detail: 'Creating the demucs environment (first run only)' });
-    console.log(`🐍 Creating demucs venv at ${dir}`);
-    await mkdir(dirname(dir), { recursive: true });
-    const made = await run(base, ['-m', 'venv', dir], null, { timeoutMs: VENV_TIMEOUT_MS });
-    if (!made.success) {
-      throw new ServerError(`Could not create the demucs environment: ${made.error}`, { status: 502, code: 'DEMUCS_INSTALL_FAILED' });
-    }
-  }
-  onProgress({ stage: 'installing', detail: 'Installing demucs (first run only, a few minutes)' });
-  console.log('📦 Installing demucs + soundfile into the demucs venv');
-  let lines = 0;
-  const installed = await run(python, ['-m', 'pip', 'install', 'demucs', 'soundfile'], (line) => {
-    lines += 1;
-    // One frame per new package line, not per progress redraw.
-    if (/^(Collecting|Downloading|Installing|Successfully)/.test(line)) {
-      onProgress({ stage: 'installing', detail: line.slice(0, 160) });
-      if (lines % 10 === 0 || /^Successfully/.test(line)) console.log(`📦 demucs install: ${line.slice(0, 160)}`);
-    }
-  }, { timeoutMs: PIP_TIMEOUT_MS });
-  if (!installed.success) {
-    throw new ServerError(`Could not install demucs: ${installed.error}`, { status: 502, code: 'DEMUCS_INSTALL_FAILED' });
-  }
-}
-
-/**
- * Interpreter of a working demucs venv, creating or repairing it when needed.
- * Concurrent callers share one install.
- */
-async function ensureDemucsRuntime({ onProgress = () => {}, run = runStreamingCommand, resolveBasePython = defaultBasePython } = {}) {
-  const dir = demucsVenvDir();
-  const python = venvPython(dir);
-  if (existsSync(python)) {
-    const probe = await run(python, ['-c', 'import demucs, soundfile'], null, { timeoutMs: PROBE_TIMEOUT_MS });
-    if (probe.success) return python;
-    console.warn(`⚠️ demucs venv at ${dir} cannot import demucs — reinstalling its packages`);
-  }
-  if (!provisioning) {
-    provisioning = provisionDemucs({ dir, python, onProgress, run, resolveBasePython }).finally(() => { provisioning = null; });
-  }
-  await provisioning;
-  return python;
 }
 
 async function findVocals(dir) {
@@ -177,7 +111,6 @@ export async function startVocalSeparation(projectId, { deps = {}, onProgress = 
     attachVocalStem: async (...args) => (await import('./vocalStem.js')).attachVocalStem(...args),
     resolveMaster: async (project) => (await import('./render.js')).resolveMasterAudioPath(project),
     run: runStreamingCommand,
-    resolveBasePython: defaultBasePython,
     cudaAvailable: defaultCudaAvailable,
     ...deps,
   };

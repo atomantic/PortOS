@@ -16,7 +16,7 @@ import { CREDITS_OUTRO_LAYOUTS, CREDITS_OUTRO_LIMITS } from './musicVideoCredits
 import { COVER_DESIGN_OPTIONS } from './musicVideoCoverOverlay.js';
 import { DISTROKID_REMEMBERED_OPTIONS } from './distrokidGenres.js';
 import { CROSS_LINK_EDIT_TARGETS } from './musicVideoCrossLinks.js';
-import { IMAGE_REFERENCE_REQUEST_LIMIT, MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT } from './referenceLimits.js';
+import { IMAGE_REFERENCE_REQUEST_LIMIT, MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT, MUSIC_VIDEO_CLIP_REFERENCE_REQUEST_LIMIT } from './referenceLimits.js';
 import { executionOptionsSchema } from './aiToolkit/internal/executionOptionsValidation.js';
 /**
  * Music Video production mode — Zod schemas + shared enums (issue #1760, Phase 1).
@@ -29,6 +29,8 @@ import { executionOptionsSchema } from './aiToolkit/internal/executionOptionsVal
  */
 
 import { z } from 'zod';
+
+export const musicVideoShotReferenceRepairSchema = z.object({ problemId: z.string().regex(/^[a-f0-9]{64}$/) });
 
 const musicVideoTemplateEffectsSchema = z.object(Object.fromEntries(TEMPLATE_EFFECT_CONTROLS.map(({ id }) => [id, z.number().min(0).max(1).nullable().optional()]))).strict();
 import { TIMELINE_BEAT_KINDS, TIMELINE_BEATS_MAX, TIMELINE_LENGTH_MAX_MIN, TIMELINE_PACES, PREVIZ_CAMERA_STYLES, PREVIZ_CUTS_MAX, PREVIZ_KEYS_MAX, PREVIZ_PAWN_COLOR_IDS, PREVIZ_POSES, PREVIZ_TRACKS_MAX, PREVIZ_VEHICLES_MAX, PREVIZ_VISIBLE_MAX, VEHICLE_SPEED_MAX_METERS_PER_MIN } from './musicVideoPrevizLimits.js';
@@ -189,7 +191,7 @@ export const musicVideoVideoSettingsSchema = z.object({
   // #8968) — image-to-video only here; the audio-reactive lane stays local-only
   // (see generationMode below). 'runway' is Runway's developer API
   // (services/videoGen/runway.js), cutaways only.
-  backend: z.enum(['local', 'grok', 'fal', 'runway', 'gemini']).nullable().optional(),
+  backend: z.enum(['local', 'grok', 'fal', 'runway', 'gemini', 'higgsfield', 'google']).nullable().optional(),
   modelId: z.string().max(64).nullable().optional(),
   grokDuration: z.union(GROK_VIDEO_DURATIONS.map((d) => z.literal(d))).optional(),
   // fal.ai clip length in seconds. Loosely bounded (not a closed enum) for the
@@ -223,6 +225,12 @@ export const musicVideoVideoSettingsSchema = z.object({
   // Runway cutaway model (lib/runwayVideoModels.js), clip length and output
   // size. Loosely validated like falModelId; null/omitted = the default model,
   // the length covering each shot, that model's default size.
+  higgsfieldModelId: z.string().min(1).max(100).nullable().optional(),
+  higgsfieldDuration: z.number().int().min(2).max(30).nullable().optional(),
+  higgsfieldResolution: z.enum(['480p', '720p', '1080p']).nullable().optional(),
+  googleModelId: z.string().min(1).max(100).nullable().optional(),
+  googleDuration: z.number().int().min(1).max(60).nullable().optional(),
+  googleResolution: z.enum(['720p', '1080p']).nullable().optional(),
   runwayModelId: z.string().min(1).max(64).nullable().optional(),
   runwayDuration: z.number().min(1).max(60).nullable().optional(),
   runwayResolution: z.string().min(1).max(16).nullable().optional(),
@@ -705,6 +713,8 @@ export const musicVideoLyricsAlignSchema = z.object({
   retimeSong: z.boolean().optional(),
 }).strict();
 
+export const musicVideoLyricsVerifySchema = z.object({}).strict();
+
 // Prepare the song after a track arrives; `refresh` redoes the analysis and lyric
 // timing that predate a replaced take (#14793).
 export const musicVideoSongPrepareSchema = z.object({
@@ -973,7 +983,7 @@ const sceneLayerFields = {
   // Priority-ordered; each render sends as many as its renderer takes (musicVideoReferenceCapacity).
   frameReferenceIds: z.array(z.string().min(1).max(128)).max(IMAGE_REFERENCE_REQUEST_LIMIT).nullable().optional(),
   // Independent clip picks; null/absent retains the legacy automatic cast set.
-  clipReferenceIds: z.array(z.string().min(1).max(128)).max(IMAGE_REFERENCE_REQUEST_LIMIT).nullable().optional(),
+  clipReferenceIds: z.array(z.string().min(1).max(128)).max(MUSIC_VIDEO_CLIP_REFERENCE_REQUEST_LIMIT).nullable().optional(),
   // #14822: researched photos of the shot's subject, offered first among its frame references.
   researchReferences: z.array(musicVideoResearchReferenceSchema).max(MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT).nullable().optional(),
   setReference: musicVideoSceneSetReferenceSchema.nullable().optional(),
@@ -2311,7 +2321,7 @@ export const musicVideoSceneReorderSchema = z.object({
 // Split an over-long shot on lyric/phrase boundaries (#8977). `backend` is
 // the lane the director will render with; omitted/null = the project's pin.
 export const musicVideoSceneSplitSchema = z.object({
-  backend: z.enum(['local', 'grok', 'fal', 'runway', 'gemini']).nullable().optional(),
+  backend: z.enum(['local', 'grok', 'fal', 'runway', 'gemini', 'higgsfield', 'google']).nullable().optional(),
   // Split the shot in two at this song time instead of by the backend's longest take.
   atSec: z.number().finite().nonnegative().optional(),
 }).strict();
@@ -2381,9 +2391,15 @@ const musicVideoClipCardSchema = z.object({
 }).strict();
 
 const musicVideoClipTargetSchema = z.object({
-  backend: z.enum(['local', 'grok', 'fal', 'runway', 'gemini']).optional(),
+  backend: z.enum(['local', 'grok', 'fal', 'runway', 'gemini', 'higgsfield', 'google']).optional(),
   modelId: z.string().max(300).optional(),
   generationMode: z.string().max(80).optional(),
+  higgsfieldModelId: z.string().min(1).max(100).nullable().optional(),
+  higgsfieldDuration: z.number().int().min(2).max(30).nullable().optional(),
+  higgsfieldResolution: z.enum(['480p', '720p', '1080p']).nullable().optional(),
+  googleModelId: z.string().min(1).max(100).nullable().optional(),
+  googleDuration: z.number().int().min(1).max(60).nullable().optional(),
+  googleResolution: z.enum(['720p', '1080p']).nullable().optional(),
   grokDuration: z.number().positive().max(60).optional(),
   numFrames: z.number().int().positive().max(1000).optional(),
   audioReactiveScale: z.number().min(0).max(4).optional(),

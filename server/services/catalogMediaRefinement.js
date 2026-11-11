@@ -19,6 +19,9 @@ import { prepareGenerateParams, resolveLocalImageModel, selectLocalImageModelFro
 import { previewImagePrompt } from './imageGen/promptPreview.js';
 import { readImageDimensions } from './imageGen/regen.js';
 import { enqueueJob } from './mediaJobQueue/index.js';
+import { CATALOG_COMPARISON_VARIANT_ID } from '../lib/catalogValidation.js';
+
+const COMPARISON_SHEET_ROLE = `sheet:${CATALOG_COMPARISON_VARIANT_ID}`;
 
 export async function refineCatalogMedia(id, input, { preview = false } = {}) {
   await assertCatalogIdentityWritable(id);
@@ -29,6 +32,11 @@ export async function refineCatalogMedia(id, input, { preview = false } = {}) {
   const source = media.find(m => !m.deleted && !m.readOnly && !m.retained
     && (!m.ingredientId || m.ingredientId === item.id) && m.mediaKey === input.mediaKey && m.kind === input.kind);
   if (!source) throw new ServerError('Editable reference not found', { status: 404 });
+  // A shared two-character sheet is edited as a whole and re-cut into halves.
+  if (source.role === COMPARISON_SHEET_ROLE) {
+    const { refineComparisonSheet } = await import('./catalogComparisonSheet.js');
+    return refineComparisonSheet(item, source, input, { preview });
+  }
   const variant = source.library?.variant || {};
   const forms = Array.isArray(item.payload?.forms) ? item.payload.forms : [];
   const byAge = Number.isInteger(variant.age) ? forms.filter(f => String(f.age).trim() === String(variant.age)) : [];

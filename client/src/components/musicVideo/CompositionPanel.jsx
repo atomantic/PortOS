@@ -28,7 +28,7 @@ export default function CompositionPanel({ board }) {
             Change
           </button>
         </div>
-        {mode !== 'document' && (
+        {(!mode || mode === 'concat' || mode === 'eidoverse') && (
           <p className="text-xs text-port-text-muted" role="status">
             No live preview for this style — render a draft excerpt to check changes.{' '}
             <button type="button" onClick={() => board.goToStage('review', 'mv-draft-excerpts')} className="min-h-[44px] px-1 text-port-accent pointer-fine:sm:min-h-0">Render a draft excerpt</button>
@@ -37,9 +37,9 @@ export default function CompositionPanel({ board }) {
         <GradePanel project={project} onSave={board.saveCompositionGrade} />
         <FilmLookPanel project={project} activeSceneId={board.activeSceneId} onEditLocal={board.editProjectLocal} onSave={board.saveProjectFields} />
         {mode !== 'eidoverse' && <TypographyPanel project={project} onEditLocal={board.editProjectLocal} onSave={board.saveProjectFields} />}
-        {mode === 'eidoverse' && <EidoverseVideoPanel key={project.id} project={project} onProject={board.replaceProject} productionReadiness={board.productionReadiness} />}
+        {mode === 'eidoverse' && <EidoverseVideoPanel key={project.id} project={project} onProject={board.replaceProject} />}
         {mode === 'code' && (
-          <CodeVideoPanel project={project} audioUrl={audioUrl} onProject={board.replaceProject} />
+          <CodeVideoPanel project={project} audioUrl={audioUrl} onProject={board.replaceProject} productionReadiness={board.productionReadiness} />
         )}
         {mode === 'document' && (
           <DocumentCompositionPanel

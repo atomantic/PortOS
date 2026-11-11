@@ -54,7 +54,7 @@ import { getProject as getMusicVideoProject } from '../musicVideo/projects.js';
 import { getUniverseRenderPin } from '../universeBuilder/crud.js';
 import { getImageModels, isFlux2, isEditOnly } from '../../lib/mediaModels.js';
 import { hardwareUnavailableReason, isHardwareCompatible } from '../../lib/systemCapabilities.js';
-import { usesFlux3, usesMossSwift } from '../../lib/imageRuntimeRemedies.js';
+import { usesFlux3, usesMossSwift, usesMinimaxH3Image } from '../../lib/imageRuntimeRemedies.js';
 import { usesDiffusersRunner } from '../../lib/runners.js';
 import { promptAddition } from '../../lib/modelInput.js';
 import { IMAGE_REFERENCE_REQUEST_LIMIT } from '../../lib/imageGenCapabilities.js';
@@ -313,8 +313,9 @@ async function applyMusicVideoSceneInputs(data, { project, mode, localModel, clo
 // Reference images one request may carry. A peer-routed render is bounded by the
 // request limit alone; a FableLoom cloud render takes its provider's own limit
 // within that bound; everything else not named here takes 4.
-function referenceImageCap({ peerRouted, mode, isQwen21, isFlux3, fableLoom, cloudModel }) {
+function referenceImageCap({ peerRouted, mode, isQwen21, isFlux3, localMaxReferences, fableLoom, cloudModel }) {
   if (peerRouted) return IMAGE_REFERENCE_REQUEST_LIMIT;
+  if (mode === IMAGE_GEN_MODE.LOCAL && Number.isInteger(localMaxReferences)) return Math.min(localMaxReferences, IMAGE_REFERENCE_REQUEST_LIMIT);
   if (mode === IMAGE_GEN_MODE.RUNWAY) return maxInputImages(mode, cloudModel);
   if (isQwen21 || isFlux3) return 10;
   // A cloud image CLI takes its own provider's (or model's) limit, not a fixed 4.
@@ -448,7 +449,7 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
   // per gate and having to keep the spellings in sync.
   const localModel = !data.mediaProviderPeerId && mode === IMAGE_GEN_MODE.LOCAL ? selectLocalImageModelFromSettings(settings, data.modelId, getImageModels(), localModelCandidates) : null;
   const initInputCount = initUpload || data.initImageFile ? 1 : 0;
-  const selectedCloudModel = [IMAGE_GEN_MODE.RUNWAY, IMAGE_GEN_MODE.FAL].includes(mode)
+  const selectedCloudModel = [IMAGE_GEN_MODE.RUNWAY, IMAGE_GEN_MODE.FAL, IMAGE_GEN_MODE.HIGGSFIELD, IMAGE_GEN_MODE.GOOGLE].includes(mode)
     ? data.cloudModel || resolveCloudProviderConfig(settings, mode)?.modelId : data.cloudModel || null;
   if (data.musicVideo?.sceneId) {
     const { requireCatalogRenderReady, assertCatalogReferenceFiles, assertCatalogInputBasis } = await import('../musicVideo/clipCastReferences.js');
@@ -478,6 +479,14 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
         loraCount: (data.loraFilenames?.length || 0) + (data.loraPaths?.length || 0) });
     } catch (error) { cleanupReqFilesTemp(); throw error; }
   }
+  if (usesMinimaxH3Image(localModel)) {
+    const { assertMinimaxH3ImageInputs } = await import('./minimaxH3ImageRuntime.js');
+    try {
+      assertMinimaxH3ImageInputs({ negativePrompt: data.negativePrompt, width: Number(data.width ?? 2048), height: Number(data.height ?? 2048), steps: data.steps || null,
+        hasInitImage: Boolean(initInputCount), referenceCount: referenceImageCount, referenceImageStrengths: data.referenceStrengths || [],
+        loraCount: (data.loraFilenames?.length || 0) + (data.loraPaths?.length || 0) });
+    } catch (error) { cleanupReqFilesTemp(); throw error; }
+  }
   if (localModel) {
     // Preserve the existing temporary-upload cleanup on every pre-stage refusal.
     await Promise.resolve().then(() => assertFlux2InputsCompatible(localModel, {
@@ -493,7 +502,8 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
   if (!data.modelId && localModel?.id) data.modelId = localModel.id;
   const isQwen21 = localModel?.pipelineClass === QWEN_IMAGE_21_PIPELINE;
   const isFlux3 = localModel?.runner === 'flux3';
-  const referenceCap = referenceImageCap({ peerRouted: Boolean(data.mediaProviderPeerId), mode, isQwen21, isFlux3, fableLoom: data.fableLoom, cloudModel: selectedCloudModel });
+  const referenceCap = referenceImageCap({ peerRouted: Boolean(data.mediaProviderPeerId), mode, isQwen21, isFlux3,
+    localMaxReferences: localModel?.maxReferenceImages, fableLoom: data.fableLoom, cloudModel: selectedCloudModel });
   if (referenceImageCount > referenceCap) {
     cleanupReqFilesTemp();
     throw new ServerError(
@@ -549,10 +559,10 @@ export async function prepareGenerateParams({ data, files, referenceImageFields,
   // downstream — that would orphan files on disk and produce metadata sidecars
   // that lie about how the render was conditioned.
   if (!data.mediaProviderPeerId && referenceImageCount && mode === IMAGE_GEN_MODE.LOCAL) {
-    if (!isFlux2(localModel) && !isQwen21 && !isFlux3) {
+    if (!isFlux2(localModel) && !isQwen21 && !isFlux3 && !(localModel?.maxReferenceImages > 0)) {
       cleanupReqFilesTemp();
       throw new ServerError(
-        'Reference images require a FLUX.2, FLUX.3 or Qwen Image 2.1 model on the local backend',
+        'Reference images require a FLUX.2, FLUX.3, MiniMax H3-Image or Qwen Image 2.1 model on the local backend',
         { status: 400, code: 'REFERENCE_IMAGES_FLUX2_ONLY' },
       );
     }
@@ -724,7 +734,7 @@ export function resolveLocalImageModel(settings, params) {
       { status: 400, code: 'IMAGE_GEN_EDIT_IMAGE_REQUIRED' },
     );
   }
-  if (selectedModel && !usesFlux3(selectedModel) && !usesMossSwift(selectedModel) && !isFlux2(selectedModel) && !usesDiffusersRunner(selectedModel) && !pythonPath) {
+  if (selectedModel && !usesFlux3(selectedModel) && !usesMinimaxH3Image(selectedModel) && !usesMossSwift(selectedModel) && !isFlux2(selectedModel) && !usesDiffusersRunner(selectedModel) && !pythonPath) {
     throw new ServerError(
       'Local image generation is not configured (settings.imageGen.local.pythonPath is missing).',
       { status: 400, code: 'IMAGE_GEN_NOT_CONFIGURED' },

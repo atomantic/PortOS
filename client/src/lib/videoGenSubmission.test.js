@@ -289,6 +289,21 @@ describe('buildVideoGenSubmission — prompt additions (#11317)', () => {
     expect(buildVideoGenSubmission(baseArgs({ ...args, mode: 'text' }))).not.toHaveProperty('referenceImageFiles');
   });
 
+  it('sends Higgsfield reference images only in Text mode on a family with a reference route', () => {
+    const args = { hostedLane: 'higgsfield', mode: 'text', referenceImageFiles: ['one.png', ''] };
+    expect(buildVideoGenSubmission(baseArgs({ ...args, higgsfieldModelId: 'bytedance/seedance-2.5' })).referenceImageFiles).toEqual(['one.png']);
+    expect(buildVideoGenSubmission(baseArgs({ ...args, higgsfieldModelId: 'kling-video/v3.0/pro' }))).not.toHaveProperty('referenceImageFiles');
+    expect(buildVideoGenSubmission(baseArgs({ ...args, mode: 'image', sourceImageFile: 'start.png' }))).not.toHaveProperty('referenceImageFiles');
+  });
+
+  it('sends Google Veo fields, and reference images only in Text mode on a model that takes them', () => {
+    const args = { hostedLane: 'google', mode: 'text', referenceImageFiles: ['one.png', ''] };
+    const payload = buildVideoGenSubmission(baseArgs({ ...args, googleModelId: 'veo-3.1-generate-001', googleDuration: '8', googleGenerateAudio: true }));
+    expect(payload).toMatchObject({ backend: 'google', googleModelId: 'veo-3.1-generate-001', googleDuration: 8, googleGenerateAudio: true, referenceImageFiles: ['one.png'] });
+    expect(buildVideoGenSubmission(baseArgs({ ...args, googleModelId: 'veo-3.0-generate-001' }))).not.toHaveProperty('referenceImageFiles');
+    expect(buildVideoGenSubmission(baseArgs({ ...args, mode: 'image', sourceImageFile: 'start.png' }))).not.toHaveProperty('referenceImageFiles');
+  });
+
   it('drops carried style metadata when switching to Runway character performance', () => {
     const payload = buildVideoGenSubmission(baseArgs({
       hostedLane: 'runway', mode: 'character-performance', runwayModelId: 'act_two',

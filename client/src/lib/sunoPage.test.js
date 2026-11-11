@@ -2,12 +2,14 @@
 // through page.evaluate, so they are tested here against fixtures of the song
 // page, in the client's DOM environment.
 import { describe, it, expect } from 'vitest';
-import { markSunoSongMenu } from '../../../server/lib/sunoPage.js';
+import { markSunoSongMenu, sunoDownloadDialogSong } from '../../../server/lib/sunoPage.js';
 
 const OWN = '11111111-1111-4111-8111-111111111111';
 const PARENT = '22222222-2222-4222-8222-222222222222';
 const OTHER = '33333333-3333-4333-8333-333333333333';
 const menu = (tag) => `<button aria-label="More options" data-tag="${tag}"></button>`;
+// The label Suno now gives the menu of the song a page or playbar is showing.
+const titledMenu = (name, tag) => `<button aria-label="More options for ${name}" data-tag="${tag}"></button>`;
 const card = (id, tag) => `<div><div><a href="/song/${id}">Song</a></div><div>${menu(tag)}</div></div>`;
 const marked = () => document.querySelector('[data-portos-song-menu]')?.dataset.tag;
 
@@ -73,5 +75,68 @@ describe('markSunoSongMenu', () => {
     markSunoSongMenu(OWN);
     expect(document.querySelectorAll('[data-portos-song-menu]')).toHaveLength(1);
     expect(marked()).toBe('b');
+  });
+
+  it("picks the header menu named after the page title, not the plainly labelled cards below it", () => {
+    // Shaped like the live page (2026-11): only the page song's menu is named
+    // after a title, every "More by" / "Similar" card keeps the plain label,
+    // and the playbar repeats the page song's link and titled menu.
+    document.body.innerHTML = `
+      <main><header>${title}<button aria-label="Play"></button>${titledMenu('Page song', 'header')}</header>
+        <section><div role="group" aria-label="Other song">${link(OTHER)}${menu('more-by')}</div></section>
+        <section><div role="group" aria-label="Parent song">${link(PARENT)}${menu('similar')}</div></section></main>
+      <div>${link(OWN)}${titledMenu('Page song', 'playbar')}</div>`;
+    expect(markSunoSongMenu(OWN)).toBe(true);
+    expect(marked()).toBe('header');
+  });
+
+  it("does not take a menu after the title that is named after another song", () => {
+    document.body.innerHTML = `<header>${title}${titledMenu('Parent song', 'parent')}</header>`;
+    expect(markSunoSongMenu(OWN)).toBe(false);
+    expect(marked()).toBeUndefined();
+
+    document.body.innerHTML = `<header>${title}${titledMenu('Parent song', 'parent')}${titledMenu('Page song', 'header')}</header>`;
+    expect(markSunoSongMenu(OWN)).toBe(true);
+    expect(marked()).toBe('header');
+  });
+});
+
+describe('sunoDownloadDialogSong', () => {
+  // The live dialog: its heading is "Download" followed by the quoted title.
+  const dialog = (heading) => `<div role="dialog" aria-labelledby="download-heading"><button aria-label="Close"></button>
+    <h2 id="download-heading">${heading}</h2><button>M4A</button><button>Download</button></div>`;
+  const naming = (name) => `<span>Download</span><span>'${name}'</span>`;
+
+  it("tells the page song's dialog from another song's by the title it quotes", () => {
+    document.body.innerHTML = `${title}${dialog(naming('Page song'))}`;
+    expect(sunoDownloadDialogSong()).toBe('page');
+
+    document.body.innerHTML = `${title}${dialog(naming('Other song'))}`;
+    expect(sunoDownloadDialogSong()).toBe('other');
+  });
+
+  it('reads a title that carries its own quotes, and one cut short with an ellipsis', () => {
+    document.body.innerHTML = `<h1>She's 'Here'</h1>${dialog(naming("She's 'Here'"))}`;
+    expect(sunoDownloadDialogSong()).toBe('page');
+
+    document.body.innerHTML = `<h1>A very long page song title</h1>${dialog(naming('A very long page…'))}`;
+    expect(sunoDownloadDialogSong()).toBe('page');
+
+    document.body.innerHTML = `<h1>A very long page song title</h1>${dialog(naming('Another long…'))}`;
+    expect(sunoDownloadDialogSong()).toBe('other');
+  });
+
+  it('is unknown without a Download dialog, a quoted title, or a page title to compare', () => {
+    document.body.innerHTML = title;
+    expect(sunoDownloadDialogSong()).toBe('unknown');
+
+    document.body.innerHTML = `${title}<div role="dialog"><h2>Publish</h2></div>`;
+    expect(sunoDownloadDialogSong()).toBe('unknown');
+
+    document.body.innerHTML = `${title}${dialog('<span>Download</span>')}`;
+    expect(sunoDownloadDialogSong()).toBe('unknown');
+
+    document.body.innerHTML = dialog(naming('Page song'));
+    expect(sunoDownloadDialogSong()).toBe('unknown');
   });
 });

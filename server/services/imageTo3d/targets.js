@@ -55,6 +55,8 @@ export const OUTPUT_KINDS = Object.freeze(Object.values(OUTPUT_KIND));
  *  - `installNotes` — prose for the shared install modal. **Required for a target with
  *    an install step**, because that modal is shared by every target and has no
  *    per-target copy of its own; `registry.test.js` enforces it.
+ *  - `installBlockedReason` — why Install and Repair are unavailable. Existing
+ *    runtimes can still render if they meet the host requirements.
  *  - `gatedRepos` — Hugging Face repos whose terms the user must accept. Omit when the
  *    target pulls only ungated weights; the auth-failure help reads it.
  *  - `supportsRenderOptions` — per-run knobs the target's runner does NOT honor, e.g.
@@ -73,12 +75,12 @@ export const IMAGE_TO_3D_TARGETS = Object.freeze({
     executionLane: EXECUTION_LANE.LOCAL_MPS,
     outputKind: OUTPUT_KIND.GLB_MESH,
     // Floor for the shipped local-MPS lane (the `trellis-mac` port): Apple
-    // Silicon (M1+), 24 GB+ unified memory, ~15 GB weights on disk, Python 3.11+.
+    // Silicon (M1+), 24 GB+ unified memory, ~15 GB weights on disk, Python 3.13.
     requires: Object.freeze({
       appleSilicon: true,
       minUnifiedMemoryGb: 24,
       diskGb: 15,
-      python: '3.11',
+      python: '3.13',
     }),
     // Maps the shared abstract detail tiers onto this port's own `--pipeline-type`
     // values. `auto` is absent deliberately: it means "derive from unified memory"
@@ -97,14 +99,10 @@ export const IMAGE_TO_3D_TARGETS = Object.freeze({
     // Community MPS port that makes the CUDA-only upstream run on Apple Silicon.
     port: 'https://github.com/shivampkumar/trellis-mac',
     weightsRepo: 'microsoft/TRELLIS.2-4B',
-    // Fresh-install copy for the shared install modal. Lives on the descriptor, not
-    // in the page, so registering a target does not mean editing UI prose — the page
-    // would otherwise show TRELLIS.2's text for every target.
     installNotes:
-      'Cloning the TRELLIS.2 (Apple Silicon) port and installing its Python '
-      + 'environment (~15 GB on first run). Missing build dependencies (the Xcode '
-      + "Metal Toolchain, the mesh baker's Eigen submodule) are fetched first, so "
-      + 'textures bake at full quality.',
+      'Requires macOS 26+, full Xcode 26+ with the Metal Toolchain, and Python 3.13. '
+      + 'Installs the verified Torch 2.15 / Metal profile; Repair rebuilds the private '
+      + 'environment and retains downloaded models.',
     // Optional user-actionable prerequisites. The target descriptor is the source
     // for both the API/UI notice and runner auth guidance, so new targets do not
     // need their gated Hugging Face dependencies duplicated in either consumer.
@@ -134,7 +132,7 @@ export const IMAGE_TO_3D_TARGETS = Object.freeze({
       appleSilicon: true,
       minUnifiedMemoryGb: 24,
       diskGb: 40,
-      python: '3.10',
+      python: '3.13',
     }),
     // PortOS starts the fork at its 1024 cascade. The 1536 cascade is intentionally
     // not exposed through the shared detail control yet: the community port documents
@@ -145,7 +143,7 @@ export const IMAGE_TO_3D_TARGETS = Object.freeze({
     port: 'https://github.com/pawel-mazurkiewicz/Pixal3D-mac',
     weightsRepo: 'TencentARC/Pixal3D',
     installNotes:
-      'Cloning the Apple Silicon Pixal3D port and creating its isolated Python 3.10 '
+      'Cloning the Apple Silicon Pixal3D port and creating its isolated Python 3.13 '
       + 'environment, then compiling the vendored Metal mesh, sparse-GEMM, rasterizer, '
       + 'BVH and neighborhood-attention packages. The first render downloads the model '
       + 'weights from Hugging Face; budget roughly 40 GB of disk and several minutes per '
@@ -173,7 +171,7 @@ export const IMAGE_TO_3D_TARGETS = Object.freeze({
       minVramGb: 24,
       linuxHost: true,
       diskGb: 15,
-      python: '3.10',
+      python: '3.11',
     }),
     // Upstream's CUDA entrypoint takes no pipeline-type override and PortOS's
     // runner for it emits no alpha-mode flag, so both controls are declared
@@ -181,11 +179,8 @@ export const IMAGE_TO_3D_TARGETS = Object.freeze({
     supportsRenderOptions: Object.freeze({ detail: false, alphaMode: false, normalMap: false }),
     upstream: 'https://github.com/microsoft/TRELLIS.2',
     weightsRepo: 'microsoft/TRELLIS.2-4B',
-    installNotes:
-      'Cloning microsoft/TRELLIS.2 with its CUDA extension submodules and running '
-      + 'upstream setup.sh, which builds flash-attn, nvdiffrast, nvdiffrec and cumesh '
-      + 'from source into a new `trellis2` conda environment (~15 GB, and the compile '
-      + 'takes a while).',
+    installNotes: 'The locked Linux x86_64 profile requires CUDA toolkit 12.6.3 (nvcc 12.6.85), GCC 11.3, '
+      + 'compute capability 8.6 and 24 GiB VRAM. Other existing CUDA environments can still render.',
     // Same two gated repos as the MPS port, because this lane loads the same weights:
     // `microsoft/TRELLIS.2-4B`'s `pipeline.json` names `briaai/RMBG-2.0` as its
     // `rembg_model`, and `Trellis2ImageTo3DPipeline.run` defaults `preprocess_image=True`
@@ -242,11 +237,9 @@ export const IMAGE_TO_3D_TARGETS = Object.freeze({
     // then the honest answer is that the runner does not honor a caller's choice.
     // `alphaMode: false` because its runner emits no such flag.
     supportsRenderOptions: Object.freeze({ steps: false, detail: false, alphaMode: false, normalMap: false }),
-    installNotes:
-      'Creating a dedicated `pixal3d` conda environment (kept separate so Pixal3D\u2019s '
-      + 'pinned dependencies cannot disturb the TRELLIS.2 target), cloning both repos, '
-      + 'building the CUDA extensions and NATTEN for this GPU, then fetching ~24 GB of '
-      + 'weights. Budget ~40 GB of disk and a long first build.',
+    installBlockedReason:
+      'Install and Repair require a locked Pixal3D CUDA profile for the Conda environment, '
+      + 'TRELLIS.2 extensions, MoGe, NATTEN and the remaining Python dependencies.',
     // No `gatedRepos`, and that is verified rather than assumed: `inference.py` loads
     // DINOv3 from the ungated `camenduru/dinov3-vitl16-pretrain-lvd1689m` mirror and
     // MoGe from `Ruicheng/moge-2-vitl`, so unlike `trellis2Cuda` nothing here needs

@@ -14,7 +14,7 @@
 import * as storage from './brainStorage.js';
 import { runDailyDigest, runWeeklyReview, TOOL_FREE_REQUIRED } from './brain.js';
 import { getUserTimezone } from './userTimezone.js';
-import { getLocalParts, isLocalDay, todayInTimezone } from '../lib/timezone.js';
+import { addLocalDays, getLocalParts, isLocalDay, todayInTimezone } from '../lib/timezone.js';
 
 let schedulerInterval = null;
 let lastCheckTime = null;
@@ -103,9 +103,12 @@ function isDailyDigestMissed(settings, now, parts, timezone) {
 }
 
 /**
- * Check if weekly review was missed
+ * Check if weekly review was missed: the most recent configured local weekday
+ * slot has passed and the last run predates that slot's local day. Local
+ * weekday/minute math, not elapsed 24h periods, so DST weeks and the configured
+ * weekday are honored.
  */
-function isWeeklyReviewMissed(settings, now) {
+function isWeeklyReviewMissed(settings, now, parts, timezone) {
   // Don't re-trigger while already running
   if (weeklyRunning || weeklyCatchUpAttempted) return false;
   // Respect cooldown after failure
@@ -114,11 +117,15 @@ function isWeeklyReviewMissed(settings, now) {
   // Never run before — catch up now
   if (!settings.lastWeeklyReview) return true;
 
-  const lastRun = new Date(settings.lastWeeklyReview);
-  const daysSinceLastRun = Math.floor((now - lastRun) / (24 * 60 * 60 * 1000));
+  const { hours, minutes } = parseTime(settings.weeklyReviewTime);
+  const slotPassedToday = parts.hour * 60 + parts.minute > hours * 60 + minutes;
+  let daysBack = (parts.dayOfWeek - DAY_MAP[settings.weeklyReviewDay] + 7) % 7;
+  // Today's slot has not passed yet, so the most recent occurrence is last week's.
+  if (daysBack === 0 && !slotPassedToday) daysBack = 7;
+  const occurrenceDate = todayInTimezone(timezone, addLocalDays(now.getTime(), -daysBack, timezone));
 
-  // If more than 7 days since last run, we missed one
-  return daysSinceLastRun > 7;
+  // A run on or after the occurrence's local day already covers it.
+  return todayInTimezone(timezone, new Date(settings.lastWeeklyReview)) < occurrenceDate;
 }
 
 /**
@@ -161,7 +168,7 @@ async function checkSchedule() {
   }
 
   // Check for weekly review
-  if (!weeklyRunning && (isWeeklyReviewTime(settings, parts) || isWeeklyReviewMissed(settings, now))) {
+  if (!weeklyRunning && (isWeeklyReviewTime(settings, parts) || isWeeklyReviewMissed(settings, now, parts, timezone))) {
     const isCatchUp = !isWeeklyReviewTime(settings, parts);
     console.log(`🧠 Scheduler: Running ${isCatchUp ? 'missed ' : ''}weekly review${isCatchUp ? ' (catch-up)' : ''}...`);
     weeklyRunning = true;

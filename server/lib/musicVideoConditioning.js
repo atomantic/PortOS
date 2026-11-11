@@ -1,7 +1,7 @@
 import { activeMusicVideoSubjects, isActiveMusicVideoReference } from './musicVideoCastSelection.js';
 import { isGoodReference, pickGuideMedia, rejectedReferenceKeys, matchesReferenceVariant } from './catalogMediaLibrary.js';
 import { isEditCapableMode, maxInputImages } from './imageGenCapabilities.js';
-import { IMAGE_REFERENCE_REQUEST_LIMIT, MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT } from './referenceLimits.js';
+import { IMAGE_REFERENCE_REQUEST_LIMIT, MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT, MUSIC_VIDEO_CLIP_REFERENCE_REQUEST_LIMIT } from './referenceLimits.js';
 import { musicVideoAllowsMedia } from './musicVideoMediaPolicy.js';
 import { RUNNER_FAMILIES } from './runners.js';
 import { escapeRegExp } from './textUtils.js';
@@ -17,7 +17,7 @@ import { musicVideoGreyboxReferences } from './musicVideoGreybox.js';
  * Flagging a reference adds a candidate, never a separate fixed render quota.
  */
 export const MUSIC_VIDEO_MAX_REFERENCE_CHOICES = IMAGE_REFERENCE_REQUEST_LIMIT;
-export { MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT };
+export { MUSIC_VIDEO_RESEARCH_REFERENCE_LIMIT, MUSIC_VIDEO_CLIP_REFERENCE_REQUEST_LIMIT };
 
 // The Grok CLI does not expose its underlying video-model id. Seven references
 // is supported by both the older Imagine model and the newer 1.5 model.
@@ -30,6 +30,8 @@ export const MUSIC_VIDEO_GROK_CLIP_REFERENCE_LIMIT = 7;
 export function musicVideoClipReferenceCapacity(backend, model = null, { endFrame = false, startFrameLayout = false } = {}) {
   if (backend === 'grok') return MUSIC_VIDEO_GROK_CLIP_REFERENCE_LIMIT - (startFrameLayout ? 1 : 0);
   if (backend === 'gemini') return GEMINI_WEB_CLIP_REFERENCE_LIMIT;
+  if (backend === 'higgsfield') return model?.maxReferenceImages || 0;
+  if (backend === 'google') return 0;
   if (backend === 'fal') {
     const max = Number(model?.referenceImages?.max) || 0;
     return Math.max(0, Math.min(MUSIC_VIDEO_MAX_REFERENCE_CHOICES, max - (model?.image ? 0 : 1)));
@@ -55,6 +57,7 @@ export function musicVideoClipReferenceCapacity(backend, model = null, { endFram
 export function musicVideoReferenceCapacity(mode, { modelId = null, localModel = null } = {}) {
   if (!isEditCapableMode(mode)) return 0;
   if (mode === 'local') {
+    if (Number.isInteger(localModel?.maxReferenceImages)) return localModel.maxReferenceImages;
     if (localModel?.pipelineClass === 'QwenImage21Pipeline' || localModel?.runner === 'flux3') return 10;
     return localModel?.runner === RUNNER_FAMILIES.FLUX2 ? 4 : 0;
   }
@@ -69,10 +72,11 @@ export function musicVideoReferenceCapacity(mode, { modelId = null, localModel =
 export const isOutsideMusicVideoReference = (ref) => String(ref?.id || '').startsWith('mvr-board-')
   || String(ref?.imageId || '').startsWith('pinterest-');
 
-const namesIn = (text, phrase, { role = false } = {}) => {
+export const musicVideoNameInText = (text, phrase, { role = false } = {}) => {
   const p = String(phrase || '').trim();
   return !!p && (!role || p.length >= 3) && new RegExp(`\\b${escapeRegExp(p)}\\b`, p.length < 3 ? '' : 'i').test(text);
 };
+const namesIn = musicVideoNameInText;
 
 /** The supporting cast members a scene's frame or shot prompt names, by name or role. */
 function featuredCast(direction, scene) {
@@ -584,7 +588,7 @@ export function musicVideoStyleImages(project, identityImages, capacity) {
 
 /** An explicitly selected greybox keeps a slot ahead of all other set plates. */
 export function musicVideoConditioningReferences(project, scene, castMedia = null, greybox = null, { limit = MUSIC_VIDEO_MAX_REFERENCE_CHOICES } = {}) {
-  const references = baseConditioningReferences(project, scene, castMedia);
+  const references = baseConditioningReferences(project, scene, castMedia, limit);
   // The chosen camera replaces the section's generic set plate, which shows the place from another side.
   const leading = musicVideoGreyboxReferences(greybox);
   const leadingIds = new Set(leading.map((r) => r.imageId));
@@ -605,10 +609,10 @@ export function musicVideoConditioningReferences(project, scene, castMedia = nul
  * references previously derived from the frame selection; an explicit empty
  * list means no extra images. The selected source frame is not repeated.
  */
-export function musicVideoClipConditioningReferences(project, scene, castMedia = null, { limit = MUSIC_VIDEO_MAX_REFERENCE_CHOICES } = {}) {
+export function musicVideoClipConditioningReferences(project, scene, castMedia = null, { limit = MUSIC_VIDEO_CLIP_REFERENCE_REQUEST_LIMIT } = {}) {
   const explicit = Array.isArray(scene?.clipReferenceIds);
   const source = explicit ? { ...scene, frameReferenceIds: scene.clipReferenceIds } : scene;
-  return musicVideoConditioningReferences(project, source, castMedia)
+  return musicVideoConditioningReferences(project, source, castMedia, null, { limit: MUSIC_VIDEO_CLIP_REFERENCE_REQUEST_LIMIT })
     .filter((ref) => !ref.panelArt && !ref.greybox && ref.imageId !== scene?.referenceImageId
       && (explicit || ref.role === 'character' || ref.role === 'subject'))
     .filter((ref, index, refs) => refs.findIndex((other) => other.imageId === ref.imageId) === index)

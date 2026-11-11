@@ -43,7 +43,6 @@ describe('migration 268 — MiniMax H3 CUDA model', () => {
       repo: 'MiniMaxAI/MiniMax-H3',
       revision: '42ed227ee7df40d41602854ae760620d6eb651fe',
       runtime: 'minimax_h3_cuda',
-      termsGate: { id: 'minimax-h3-community-license-2026-08-02' },
     });
     expect(cuda.repoFiles.length).toBeGreaterThan(0);
     expect(got._shippedDefaults.video.windows).toContain(CUDA_ID);

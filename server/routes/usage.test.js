@@ -13,6 +13,11 @@ vi.mock('../services/usage.js', () => ({
   resetUsage: vi.fn()
 }));
 
+vi.mock('../services/usageRetentionTips.js', () => ({
+  getUsageRetentionTips: vi.fn(async () => [{ id: 'example-tip' }]),
+  dismissUsageRetentionTip: vi.fn(async () => []),
+}));
+
 vi.mock('../services/peerUsage.js', () => ({
   getFleetUsage: vi.fn(),
   getFleetRollingCost: vi.fn(async () => ({ windowDays: 30, instanceCount: 1, points: [] }))
@@ -580,4 +585,15 @@ it('serves no native diagnostics, peer report or Codex preview endpoints', async
     expect((await request(app).post(path).send({})).status).toBe(404);
   }
   expect(startHistoricalUsageBackfill).not.toHaveBeenCalled();
+});
+
+it('lists retention tips and dismisses one by a validated id', async () => {
+  const { dismissUsageRetentionTip } = await import('../services/usageRetentionTips.js');
+  const app = buildApp();
+  expect((await request(app).get('/api/usage/tips')).body).toEqual({ tips: [{ id: 'example-tip' }] });
+  const res = await request(app).post('/api/usage/tips/example-tip/dismiss').send({});
+  expect(res.status).toBe(200);
+  expect(res.body).toEqual({ tips: [] });
+  expect(dismissUsageRetentionTip).toHaveBeenCalledWith('example-tip');
+  expect((await request(app).post('/api/usage/tips/Bad%20Id/dismiss').send({})).status).toBe(400);
 });

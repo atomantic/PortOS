@@ -298,6 +298,21 @@ export async function updateMediaLibrary(ingredientId, mediaKey, kind, patch = {
   });
 }
 
+// The live records holding one image under one role, with each row's library,
+// so a record can find the other side of a shared image (a comparison sheet
+// filed on both of its characters). Merged records answer as their canonical id.
+export async function listMediaHoldersByKey(mediaKey, role) {
+  const { rows } = await query(
+    `SELECT DISTINCT ON (i.id) i.id, m.library
+       FROM catalog_ingredient_media m
+       JOIN catalog_ingredients i ON i.id = catalog_canonical_ingredient_id(m.ingredient_id) AND i.deleted = false
+      WHERE m.media_key = $1 AND m.role = $2 AND m.deleted = false
+      ORDER BY i.id, m.created_at DESC`,
+    [mediaKey, role],
+  );
+  return rows.map((row) => ({ ingredientId: row.id, library: normalizeLibrary(row.library) }));
+}
+
 // Which catalog record owns each image, for naming a reference picked from the
 // gallery. One live row per key: a record in `preferIds` (the caller's linked
 // cast) wins, then a portrait, then the newest attach. Merged records answer

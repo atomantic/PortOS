@@ -39,7 +39,7 @@ describe('localizeImageUrl', () => {
     expect(result).toMatch(/^\/data\/images\/board-[0-9a-f]{16}\.webp$/);
     expect(writeFileGuarded).toHaveBeenCalledTimes(1);
     expect(writeFileGuarded.mock.calls[0][1]).toEqual(webp);
-    expect(writeSidecar).toHaveBeenCalledWith(result.split('/').pop());
+    expect(writeSidecar).toHaveBeenCalledWith(result.split('/').pop(), { replace: true, preserveMetadata: true });
     expect(net.fetchPublicBinary).not.toHaveBeenCalled();
   });
 

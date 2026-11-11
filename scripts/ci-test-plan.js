@@ -266,7 +266,8 @@ const FULL_TRIGGER_RULES = [
   // jobs only, so a Windows run would observe nothing they change.
   { re: /^scripts\/(?:lib\/githubOutput|ci-base-sha|run-ci-tests)(?:\.test)?\.js$/, reason: 'CI pipeline script changed', windowsRelevant: true },
   { re: /^scripts\/ci-test-plan(?:\.test)?\.js$/, reason: 'CI pipeline script changed', windowsRelevant: true },
-  { re: /^scripts\/(?:run-ci-lint|scan-diff-hidden-content|verify-ci-status)(?:\.test)?\.js$/, reason: 'CI pipeline script changed', windowsRelevant: false },
+  { re: /^scripts\/(?:run-ci-lint|run-actionlint|scan-diff-hidden-content|verify-ci-status)(?:\.test)?\.js$/, reason: 'CI pipeline script changed', windowsRelevant: false },
+  { re: /^scripts\/(?:lib\/actionlint|fixtures\/actionlint\/.+)(?:\.test)?\.(?:js|yml)$/, reason: 'CI pipeline script changed', windowsRelevant: false },
 ];
 
 // Native Windows coverage is intentionally limited to CLI/TUI execution,
@@ -551,9 +552,15 @@ export const FIXTURE_OWNERS = [
     fileRe: /^ltx25_cuda_currency\.py$/,
     tests: ['server/services/videoGen/runtimes.test.js'],
   },
+  {
+    re: /^scripts\/(?:setup-trellis2-mps\.sh|requirements-trellis2-mps(?:\.lock)?\.txt)$/,
+    dir: 'scripts',
+    fileRe: /^(?:setup-trellis2-mps\.sh|requirements-trellis2-mps(?:\.lock)?\.txt)$/,
+    tests: ['scripts/setup-trellis2-mps.test.js', 'server/routes/imageTo3d.test.js'],
+  },
   // Pip pins consumed only by an explicit Install/Repair (`setup-image-video.sh`,
-  // and the FLUX.3 runtime lock read by services/imageGen/flux3Runtime.js). The
-  // installer-contract tests are the suites that exercise those installers.
+  // and the FLUX.3 and lyric-alignment locks read by flux3Runtime.js and
+  // lyricForcedAlign.js). The installer-contract tests exercise those installers.
   {
     re: /^scripts\/requirements-[^/]+\.txt$/,
     dir: 'scripts',
@@ -563,6 +570,7 @@ export const FIXTURE_OWNERS = [
       'server/lib/pythonSetup.install.test.js',
       'server/lib/pythonSetup.test.js',
       'server/services/imageGen/flux3Runtime.test.js',
+      'server/services/musicVideo/lyricForcedAlign.test.js',
       'server/services/videoGen/runtimes.test.js',
     ],
   },

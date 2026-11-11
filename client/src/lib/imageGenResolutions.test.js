@@ -3,11 +3,13 @@ import { describe, it, expect } from 'vitest';
 import {
   clampImageDimensions,
   clampImageEdge,
+  filterResolutions,
   MAX_IMAGE_EDGE,
   MAX_IMAGE_PIXELS,
   RESOLUTIONS,
   resolveResolutionLabel,
 } from './imageGenResolutions';
+import { IMAGE_GEN_MODE } from './imageGenBackends';
 
 describe('clampImageEdge', () => {
   it('uses the caps enforced by server validation', () => {
@@ -116,3 +118,15 @@ describe('4:3 image presets', () => {
   });
 });
 // @vitest-environment node
+
+describe('MiniMax H3-Image presets', () => {
+  it('offers 2K through 4K sizes to MiniMax H3-Image without adding them to other local runners', () => {
+    const labels = (runner) => filterResolutions(IMAGE_GEN_MODE.LOCAL, runner).map(r => `${r.w}x${r.h}`);
+    const h3 = labels('minimax-h3-image');
+    expect(h3).toEqual(expect.arrayContaining(['2048x2048', '2560x1440', '3840x2160', '2160x3840', '2880x2880']));
+    expect(filterResolutions(IMAGE_GEN_MODE.LOCAL, 'minimax-h3-image')
+      .every(r => r.w <= MAX_IMAGE_EDGE && r.h <= MAX_IMAGE_EDGE && r.w * r.h <= MAX_IMAGE_PIXELS)).toBe(true);
+    expect(labels(undefined)).not.toContain('3840x2160');
+    expect(labels(undefined)).not.toContain('2048x2048');
+  });
+});

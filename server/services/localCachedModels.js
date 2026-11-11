@@ -120,10 +120,9 @@ export async function mtplxCachedModelIds(provider) {
   // port is generic, and this must not offer MTPLX's checkpoints as the
   // catalog of someone else's local API.
   if (localRuntimeKind(provider) !== 'mtplx') return null;
-  const { findCommandOnPath } = await import('../lib/processEnv.js');
-  const binaryPath = findCommandOnPath('mtplx');
+  const { resolveMtplxBinary, describeMtplxRuntime } = await import('../lib/mtplxRuntime.js');
+  const binaryPath = resolveMtplxBinary();
   if (!binaryPath) return null;
-  const { describeMtplxRuntime } = await import('../lib/mtplxRuntime.js');
   if (!(await describeMtplxRuntime(binaryPath)).ready) return null;
   const { listMtplxCachedModels, servableMtplxCachedModels } = await import('../lib/mtplxModels.js');
   const { models } = await listMtplxCachedModels();

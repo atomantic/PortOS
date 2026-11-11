@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { summarizeMusicVideoProject } from '../../../server/lib/musicVideoSummary.js';
 import {
   changedFieldsText,
-  MUSIC_VIDEO_STAGES, currentProductionRun, deriveNextAction, deriveStages, projectSpend, projectFalSpend, boardJobEstimate, listPreviewSources, describePreviewSourceChange, describeProjectStatus, resolveStageParam, stageChecklist, stepNotes, autopilotStatus, compareMusicVideoProjectsNewestFirst,
+  MUSIC_VIDEO_STAGES, currentProductionRun, deriveNextAction, deriveStages, projectSpend, projectFalSpend, boardJobEstimate, listPreviewSources, describePreviewSourceChange, describeProjectStatus, resolveStageParam, stageChecklist, stageHasChecklist, stepNotes, autopilotStatus, compareMusicVideoProjectsNewestFirst,
 } from './musicVideoStages.js';
 
 const APPROVED = { art: { approved: true }, storyboard: { approved: true }, proof: { approved: true }, readyForProduction: true };
@@ -503,6 +503,14 @@ it('links active draft and proof jobs to their own evidence controls before offe
 });
 
 describe('stageChecklist', () => {
+  it('every entry of MUSIC_VIDEO_STAGES either has a checklist builder or a non-empty doneWhen line', () => {
+    for (const stage of MUSIC_VIDEO_STAGES) {
+      const hasChecklist = stageHasChecklist(stage.id);
+      const hasDoneWhen = typeof stage.doneWhen === 'string' && stage.doneWhen.trim().length > 0;
+      expect(hasChecklist || hasDoneWhen).toBe(true);
+    }
+  });
+
   const NOT_APPROVED = {
     art: { approved: false, problems: [] }, storyboard: { approved: false, problems: ['Review and approve the current art direction first.'] },
     proof: { approved: false, problems: [] }, readyForProduction: false,
@@ -807,7 +815,7 @@ describe('finished outside PortOS', () => {
     expect(deriveNextAction(external, { readiness: unapproved })).toMatchObject({ id: 'finish-plan' });
   });
 
-  it('counts Song through Make as done, and reads Published once the render and posts are real', () => {
+  it('counts Song through Shots as done, and reads Published once the render and posts are real', () => {
     const progress = deriveStages(marked, unapproved);
     expect(progress.stages.map((s) => [s.id, s.state, s.stale])).toEqual(
       MUSIC_VIDEO_STAGES.map((s) => [s.id, 'done', false]),
@@ -836,7 +844,7 @@ describe('finished outside PortOS', () => {
   it('says a stale render can only be redone here with the approvals', () => {
     const stale = { ...marked, renderDependencyState: { status: 'stale' } };
     expect(deriveStages(stale, unapproved).current).toBe('review');
-    expect(stageChecklist('review', stale, unapproved)[0].detail).toMatch(/needs the Song through Make approvals; unmark Finished outside PortOS/);
+    expect(stageChecklist('review', stale, unapproved)[0].detail).toMatch(/needs the Song through Shots approvals; unmark Finished outside PortOS/);
   });
 });
 

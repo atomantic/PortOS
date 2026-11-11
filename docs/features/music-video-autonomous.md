@@ -2,6 +2,39 @@
 
 One prompt in, a finished music video out. The Music Video page's **Autonomous** entry point (and the `music-video-autopilot` scheduled task) starts a server-owned run that does everything the hand-driven flow asks you to set up first: it writes the creative brief, the lyrics and a mood board, makes the song (in Suno, or on this machine), and produces the video with the tools you allowed. Song-writing checkpoints are optional. Production requires revision-bound approval of the visual guide and lyric-timed storyboard. An animated proof is an optional check; it never holds the final render. Authenticated sessions may grant automatic planning approvals.
 
+## Local lyric alignment platforms
+
+**MMS_FA CTC alignment is unsupported on Intel macOS and on macOS older than 14.**
+The platform is the machine running PortOS, independent of the browser used to open
+Music Video. Apple Silicon requires macOS 14+ and an arm64 Python 3.11–3.14.
+The existing hash-locked PyTorch profile also covers Linux x86_64/aarch64 and
+Windows x86_64. It installs on demand, never at server boot.
+
+In **Song → Lyrics & phrases**, import LRC, SRT or WebVTT timings, edit each line's
+start/end, and adjust existing word timings with **Exact word times**. Existing
+saved timings remain usable when alignment is refused. Master-only API callers
+retain their existing Whisper path; it is not an MMS_FA replacement or an ONNX
+profile. Asking to separate vocals and align requires CTC support before Demucs
+starts, so unsupported hosts do not download or install models for a doomed run.
+
+The maintained-wheel check for [#15665](https://github.com/atomantic/PortOS/issues/15665)
+on 2026-11-10 found no qualifying non-PyTorch profile:
+
+- [ONNX Runtime 1.24.1 release notes](https://github.com/microsoft/onnxruntime/releases/tag/v1.24.1)
+  explicitly retire macOS x86_64 binaries. [1.31.1 files](https://pypi.org/project/onnxruntime/1.31.1/#files)
+  provide macOS arm64 wheels only; [1.23.2](https://pypi.org/project/onnxruntime/1.23.2/#files)
+  is the last release with Intel macOS Python wheels.
+- [OpenVINO 2026.4.1 files](https://pypi.org/project/openvino/2026.4.1/#files)
+  likewise provide only arm64 macOS wheels. Building a runtime from source or
+  pinning an obsolete Intel wheel does not meet this profile's current-wheel contract.
+
+PortOS therefore keeps its pre-install refusal and ships no ONNX model artifact
+or alternate dependency lock. Restoring Intel support requires a maintained runtime
+with current Intel macOS wheels, a reproducible digest-pinned MMS_FA export, and
+emission/word-clock parity with the existing numpy Viterbi path. Real Intel hardware
+validation remains pending; fake-process and workflow tests verify refusal and
+preservation of saved timings, not Intel inference.
+
 ## Automatic lyric overlays
 
 In **Setup → Time and verify**, turn off **Show automatic lyric overlays** for a cinematic video that uses lyrics as timing and story inputs without displaying them. The per-project `lyricOverlayEnabled` boolean is accepted by project creation and update; omitted means legacy behavior. A scoped update containing only `{ "lyricOverlayEnabled": false }` preserves the renderer, aligned cues, shot decisions, selected assets and history. Timing verification still shows the words deliberately. This preference does not prohibit lip-sync or change existing shots.
@@ -80,11 +113,11 @@ All three live under Suno's **More Options** section (expanded on demand) or its
 
 The **Production review** panel is shared by the manual and autopilot paths. Prepare or import an unapproved planning draft, attach an actual visual sheet, and edit cast, environment, visual and motion direction. The implementation field records scene layers, geometry, rig/pose limits, materials, typography, camera/transition mechanics and performance constraints for the selected renderer. Static concept references communicate intent; they are never animated proof.
 
-Imported storyboard shots may remain unbound. Bind each to an existing Board scene or explicitly create its scene; an import never invents approval or verifies provisional timings. Vocal songs require bounded positive-duration word timings checked against the current master. An instrumental exception requires a rationale and cannot mask existing lyric cues.
+Imported storyboard shots may remain unbound. Bind each to an existing Board scene or explicitly create its scene; an import never invents approval or verifies provisional timings. Vocal songs require bounded positive-duration word timings checked against the current master. Marking a song instrumental needs no rationale (notes are optional), and it is refused while any lyric line has text.
 
 Art, storyboard and proof decisions bind to exact content. Changes invalidate affected downstream approvals. Targeted comments and requests for changes retain the original reviewed draft and scene snapshot; unresolved requests block the affected stage. Accepting structure records organizational agreement only. Regeneration receives unresolved feedback; an authenticated reviewer must resolve it and approve the revised content.
 
-After art and storyboard approval you may render a 10–45 second chorus proof, watch it with audio and approve that revision; the composition preview usually makes this unnecessary. A footage production run still pauses on its pilot proof before paid bulk generation. Queued provider work and final renders recheck the storyboard approval before dispatch. A still for a planned shot needs only the art direction approval, because stills are how the storyboard is reviewed; clips and production-run work still wait for the storyboard.
+After art and storyboard approval you may render a 10–45 second chorus proof, watch it with audio and approve that revision; the composition preview usually makes this unnecessary. A footage production run still pauses on its pilot proof before paid bulk generation. A director's own shot still or clip is never gated on an approval; art direction and a flagged rendering defect are advice shown in Production review and on the take. Work queued by a production run rechecks the storyboard approval before dispatch, and its bulk work also waits for the animated proof, except the stills of a run that stops before clips and the run's pilot scenes. A run's clip is refused while its still has an unacknowledged rendering defect. Final renders recheck the storyboard approval.
 
 Approval and feedback resolution use an existing authenticated PortOS session: browser cookies and agent bearer sessions have the same creative-review authority, without password re-entry. Missing, invalid, expired or revoked sessions cannot approve; auth-off and peer/Basic access do not confer creative-review authority. The server records the verified session ID and label, never the credential, along with revision-bound decision history. A shared agent session identifies the credential, not an individual agent or a human. Older clients may send a password, but it is discarded rather than used as approval authority.
 
@@ -150,6 +183,18 @@ subtitles remain unchanged. Invalid content, missing ffmpeg, timeout, or
 cancellation prevents import. Temporary files are removed on success or failure;
 diagnostics contain fixed reasons rather than decoder output or private paths.
 
+A decodable file is accepted only when it is the requested song. The song page
+lists other songs, each with its own options menu, so the driver opens only the
+menu tied to the page's own song (its title, or a link to its id) and stops
+before the final Download click when the dialog names a different title. Suno
+stamps each M4A's container comment with its song id (`made with suno; …;
+id=<song id>`): the driver reads it with ffprobe, takes from the download folder
+only a file naming the requested id, and checks the staged file again before
+import. A file naming another song fails with `SUNO_AUDIO_WRONG_SONG`, one
+naming none with `SUNO_AUDIO_UNVERIFIED`, and a page with no menu that can be
+tied to the song with `SUNO_AUDIO_DOWNLOAD_FAILED` (`song-menu-not-found`);
+nothing is imported in any of these cases.
+
 [#9474](https://github.com/atomantic/PortOS/issues/9474) owns live acceptance of
 the new browser export driver. Deterministic browser fixtures and real synthetic
 decoder tests do not establish that live acceptance. Retry retains submitted IDs
@@ -163,7 +208,7 @@ and does not press Create or spend credits on a second generation.
 - A parked or failed delegated production run parks this run `needs-human`; Resume resumes the production run. A production run canceled on its own (not by canceling this run) also parks it `needs-human` (`PRODUCTION_CANCELED`).
 - **Resume after manual edits.** At the produce stage, Resume follows the newest production run started since the run began, so a run the director started by hand (for example with a different video model) is adopted: a live one is followed, a parked one is resumed, and a completed one goes straight to the final render. With no production run left to follow, Resume starts a new one from the brief. A run canceled while it waited on production can be resumed the same way. Resume may also carry `limits` (raised only once production has started, applied to the brief and to the resumed production run) and `models` (per-tool swaps, `null` clears a pin); a changed model cancels the current production run and starts a new one with the new pool.
 
-The Suno adapter fills the form through `placeholder` / role selectors and reads the new `/song/<id>` links. It opens the first take in the same signed-in PortOS Browser, selects only M4A, and presses Download (or Unlock & Download) once. It waits for the browser download to finish saving, checks the container and decodes the complete audio to reject damaged files, and imports the original M4A without conversion. The export has a ten-minute deadline; timeout, cancellation, or invalid audio removes staging files and never imports a partial/error response. Failures identify the export stage using bounded reason metadata. A retry reopens the existing song rather than pressing Create again.
+The Suno adapter fills the form through `placeholder` / role selectors and reads the new `/song/<id>` links. It opens the chosen take in the same signed-in PortOS Browser, selects only M4A, and presses Download (or Unlock & Download) once. It waits for the browser download to finish saving, checks the container and decodes the complete audio to reject damaged files, confirms the file names the requested song, and imports the original M4A without conversion. The export has a ten-minute deadline; timeout, cancellation, or invalid audio removes staging files and never imports a partial/error response. Failures identify the export stage using bounded reason metadata. A retry reopens the existing song rather than pressing Create again.
 
 ## API
 

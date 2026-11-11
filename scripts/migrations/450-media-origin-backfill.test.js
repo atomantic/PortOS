@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -65,6 +65,54 @@ describe('media origin backfill migration', () => {
     await m.put('images/held.png');
     expect(await migration.up({ rootDir: m.rootDir })).toEqual({ videos: 0, images: 0, reason: 'federated' });
     expect(existsSync(join(m.data, 'images', 'held.metadata.json'))).toBe(false);
+  });
+
+  // A removed peer leaves its reports and releases behind (#15664).
+  it.each([
+    ['holdings', 'media-holders.json', { version: 1, holdings: { 'inst-gone': { video: { 'v.mp4': '2026-06-01T00:00:00.000Z' } } }, releases: [] }],
+    ['file times', 'media-holders.json', { version: 1, holdings: {}, releases: [], reports: { 'inst-gone': { image: {} } } }],
+    ['a queued release', 'media-holders.json', { version: 1, holdings: {}, releases: [{ peerId: 'inst-gone', kind: 'video', filename: 'v.mp4' }] }],
+    ['the pre-451 holdings file', 'peer-media-holdings.json', { version: 1, peers: { 'inst-gone': { video: {} } } }],
+    ['an unreadable holders record', 'media-holders.json', '{not json'],
+    ['a malformed holdings field', 'media-holders.json', { version: 1, holdings: [{ 'inst-gone': {} }], releases: [] }],
+  ])('claims nothing when the holders record names another machine by %s', async (_label, file, body) => {
+    const m = await install({ history: [{ id: 'v', filename: 'v.mp4' }] });
+    await m.put('videos/v.mp4');
+    await m.put('images/held.png');
+    await m.put(file, body);
+    expect(await migration.up({ rootDir: m.rootDir })).toEqual({ videos: 0, images: 0, reason: 'federated' });
+    expect((await m.json('video-history.json'))[0].originInstanceId).toBeUndefined();
+    expect(existsSync(join(m.data, 'images', 'held.metadata.json'))).toBe(false);
+  });
+
+  it('still claims on an install whose holders record names only itself or nobody', async () => {
+    const m = await install({ history: [{ id: 'v', filename: 'v.mp4' }] });
+    await m.put('videos/v.mp4');
+    await m.put('media-holders.json', { version: 1, holdings: { [LOCAL]: {} }, releases: [] });
+    expect(await migration.up({ rootDir: m.rootDir })).toEqual({ videos: 1, images: 0 });
+  });
+
+  it('leaves a file written well after its record was created origin-less, and claims one written with it', async () => {
+    const created = Date.parse('2026-05-01T00:00:00.000Z');
+    const at = (ms) => new Date(ms);
+    const m = await install({ history: [
+      { id: 'copy', filename: 'copy.mp4', createdAt: new Date(created).toISOString() },
+      { id: 'made', filename: 'made.mp4', createdAt: new Date(created).toISOString() },
+    ] });
+    await m.put('videos/copy.mp4');
+    await m.put('videos/made.mp4');
+    await m.put('images/copy.png');
+    await m.put('images/copy.metadata.json', { prompt: 'p', createdAt: new Date(created).toISOString() });
+    await m.put('images/made.png');
+    await m.put('images/made.metadata.json', { prompt: 'p', createdAt: new Date(created).toISOString() });
+    // Pulled a day later vs written within the five-minute skew.
+    for (const path of ['videos/copy.mp4', 'images/copy.png']) await utimes(join(m.data, path), at(created + 86_400_000), at(created + 86_400_000));
+    for (const path of ['videos/made.mp4', 'images/made.png']) await utimes(join(m.data, path), at(created + 60_000), at(created + 60_000));
+
+    expect(await migration.up({ rootDir: m.rootDir })).toEqual({ videos: 1, images: 1 });
+    expect((await m.json('video-history.json')).map((row) => row.originInstanceId)).toEqual([undefined, LOCAL]);
+    expect((await m.json('images/copy.metadata.json')).originInstanceId).toBeUndefined();
+    expect((await m.json('images/made.metadata.json')).originInstanceId).toBe(LOCAL);
   });
 
   it('claims nothing when an image sidecar names another machine', async () => {

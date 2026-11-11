@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { ExternalLink } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
+import KeyFileButton from './KeyFileButton';
 import { getCredentialInventory, saveCredential } from '../../services/api';
 
 const SOURCE_LABEL = {
@@ -68,7 +69,8 @@ export function CredentialsTab() {
 
   if (payload == null) return <BrailleSpinner text="Loading credentials" />;
 
-  const credentials = payload.credentials || [];
+  // Cards read alphabetically by service name, whatever order the inventory arrives in.
+  const credentials = [...(payload.credentials || [])].sort((a, b) => String(a.label ?? a.id).localeCompare(String(b.label ?? b.id), 'en', { sensitivity: 'base' }));
 
   return (
     <div className="space-y-6">
@@ -133,6 +135,13 @@ export function CredentialsTab() {
                     value={drafts[credential.id] || ''} disabled={saving !== null}
                     onChange={event => setDrafts(previous => ({ ...previous, [credential.id]: event.target.value }))}
                     className="w-full bg-port-bg border border-port-border rounded p-2" />
+                  {credential.keyFile && (
+                    <KeyFileButton id={`credential-${credential.id}-file`} accept={credential.keyFile} disabled={saving !== null}
+                      onLoad={(text, name) => {
+                        setDrafts(previous => ({ ...previous, [credential.id]: text }));
+                        setReceipt({ id: credential.id, message: `Loaded ${name}. Save key to store it.` });
+                      }} />
+                  )}
                   <div className="flex flex-wrap gap-2">
                     <button type="button" disabled={saving !== null || !drafts[credential.id]?.trim()}
                       onClick={() => saveKey(credential.id, drafts[credential.id])} className="px-3 py-2 rounded bg-port-border disabled:opacity-50">Save key</button>

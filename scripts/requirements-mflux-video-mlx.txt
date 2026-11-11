@@ -1,0 +1,16 @@
+# Legacy mlx_video + mlx_vlm (Apple Silicon) runtime: the shared mflux direct pins
+# (requirements-mflux-mlx.txt) plus the LTX-2 `mlx_video.generate_av` backend and
+# mlx_vlm, resolved together so one lock is a consistent superset of the mflux
+# lock. Installed only from requirements-mflux-video-mlx.lock.txt by the setup
+# page's package repair and `INSTALL_VIDEO=1 scripts/setup-image-video.sh`.
+# After editing this file, regenerate the lock with the command in the lock
+# header. Keep the mflux/mlx/pillow pins identical to requirements-mflux-mlx.txt.
+#
+# The PyPI package named just `mlx_video` is unrelated; `mlx-video-with-audio`
+# (>=0.1.35 for LTX-2.3 I2V VAE-encoder fixes) provides `mlx_video.generate_av`.
+mflux==0.24.0
+mlx==0.32.4
+mlx-metal==0.32.4
+pillow==13.0.0
+mlx-video-with-audio==0.1.37
+mlx-vlm==0.7.11

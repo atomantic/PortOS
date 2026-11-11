@@ -1,7 +1,33 @@
-"""Dependency-free checks of the production CTC transcript/timebase boundary."""
+"""Checks of the production CTC transcript, timebase, Viterbi and checkpoint gate.
+
+Nothing here downloads a model or imports torch. The Viterbi cases need numpy
+and are skipped without it; scripts/align_lyrics_ctc.test.js runs them with a
+numpy-capable interpreter when one exists.
+"""
+import hashlib
+import io
+import itertools
+import json
+import math
+import os
+import random
+import subprocess
+import sys
+import tempfile
 import unittest
+import wave
+from contextlib import redirect_stdout
 from types import SimpleNamespace
-from align_lyrics_ctc import targets_for_lines, word_times, emissions_for_audio, HOP, RECEPTIVE_FIELD
+from unittest.mock import patch
+import align_lyrics_ctc
+from align_lyrics_ctc import (targets_for_lines, word_times, emissions_for_audio, forced_align, merge_tokens,
+                              open_verified_checkpoint, load_mms_fa, CheckpointRejected, UnsupportedWord,
+                              DICTIONARY, HOP, RECEPTIVE_FIELD, AUX_ROWS_REMOVED)
+
+try:
+    import numpy
+except ImportError:
+    numpy = None
 
 
 class Tensor:
@@ -35,6 +61,22 @@ class CtcContract(unittest.TestCase):
         with self.assertRaises(ValueError):
             targets_for_lines([['123']], dictionary)
 
+    def test_romanises_latin_letters_that_do_not_decompose_and_keeps_the_sheet_word(self):
+        words = ['ışık', 'Straße', 'ø', 'æ', 'œ', 'đ', 'ł', 'þ', 'ð']
+        targets, slots = targets_for_lines([words], DICTIONARY)
+        inverse = {index: label for label, index in DICTIONARY.items()}
+        spellings = [''.join(inverse[token] for token in targets[start:end]) for start, end, _word in slots]
+        self.assertEqual(spellings, ['isik', 'strasse', 'o', 'ae', 'oe', 'd', 'l', 'th', 'd'])
+        self.assertEqual([word for _start, _end, word in slots], words)
+        with self.assertRaises(UnsupportedWord) as digits:
+            targets_for_lines([['one', '2']], DICTIONARY)
+        self.assertEqual((digits.exception.line_index, digits.exception.word_index), (0, 1))
+        self.assertNotIn('2', str(digits.exception))
+        with self.assertRaises(UnsupportedWord) as foreign:
+            targets_for_lines([['alpha', 'привет']], DICTIONARY)
+        self.assertEqual((foreign.exception.line_index, foreign.exception.word_index), (0, 1))
+        self.assertNotIn('привет', str(foreign.exception))
+
     def test_emission_chunks_keep_every_global_frame_once_across_context_seams(self):
         frames = 2055
         waveform = Tensor(0, (frames - 1) * HOP + RECEPTIVE_FIELD)
@@ -46,6 +88,177 @@ class CtcContract(unittest.TestCase):
             def cat(chunks, dim):
                 return [chunk.start + i for chunk in chunks for i in range(chunk.frames)]
         self.assertEqual(emissions_for_audio(model, waveform, Torch, 'cpu'), list(range(frames)))
+
+
+def collapse(path, blank=0):
+    return [token for i, token in enumerate(path) if token != blank and (i == 0 or path[i - 1] != token)]
+
+
+@unittest.skipIf(numpy is None, 'numpy is required by the production Viterbi')
+class Viterbi(unittest.TestCase):
+    def test_matches_an_exhaustive_search_over_every_ctc_path(self):
+        rng = random.Random(7)
+        for targets in ([1, 2, 2], [3, 1, 3], [2], [1, 1, 1]):
+            frames = 2 * len(targets) + 2
+            for _ in range(4):
+                emissions = [[math.log(rng.random() + 1e-3) for _ in range(4)] for _ in range(frames)]
+                score = lambda path: sum(emissions[t][token] for t, token in enumerate(path))
+                best = max(score(path) for path in itertools.product(range(4), repeat=frames)
+                           if collapse(path) == targets)
+                path = [int(token) for token in forced_align(emissions, targets)]
+                self.assertEqual(collapse(path), targets)
+                self.assertAlmostEqual(score(path), best, places=9)
+
+    def test_refuses_a_transcript_longer_than_the_audio(self):
+        # A repeated label needs a blank between its two frames.
+        with self.assertRaises(ValueError):
+            forced_align([[0.0, 0.0]] * 2, [1, 1])
+        with self.assertRaises(ValueError):
+            forced_align([[0.0, 0.0]] * 4, [0, 1])
+
+    def test_backtraces_a_song_length_transcript(self):
+        # Over 127 CTC states: the int8 back-pointers must not narrow the state index.
+        lines = [['bright', 'morning', 'river']] * 8
+        tokens, _ = targets_for_lines(lines, DICTIONARY)
+        self.assertGreater(2 * len(tokens) + 1, 127)
+        owners = [token for token in tokens for _ in range(2)]
+        emissions = [[0.0 if c == owner else -20.0 for c in range(len(DICTIONARY))] for owner in owners]
+        spans = merge_tokens(forced_align(emissions, tokens))
+        self.assertEqual([(span.token, span.start, span.end) for span in spans],
+                         [(token, 2 * i, 2 * i + 2) for i, token in enumerate(tokens)])
+
+    @unittest.skipIf(numpy is None, 'numpy required')
+    def test_cli_reports_audio_too_short_without_lyrics(self):
+        lyric = 'private lyric words'
+        targets, _ = targets_for_lines([lyric.split()], DICTIONARY)
+        def align_short_audio():
+            forced_align([[0.0] * len(DICTIONARY)] * 2, targets)
+        output = io.StringIO()
+        with patch.object(align_lyrics_ctc, 'main', align_short_audio), redirect_stdout(output):
+            with self.assertRaises(SystemExit) as result:
+                align_lyrics_ctc.cli()
+        self.assertEqual(result.exception.code, 1)
+        self.assertEqual(output.getvalue(), 'ERROR:audio-too-short\n')
+        self.assertNotIn(lyric, output.getvalue())
+
+    def test_word_slots_keep_frame_exact_song_clock(self):
+        lines = [['oh'], ['no', 'no']]
+        tokens, slots = targets_for_lines(lines, DICTIONARY)
+        # Frame owners: * o o h * * n - o - n o * *  (- is blank).
+        owners = [DICTIONARY['*'], DICTIONARY['o'], DICTIONARY['o'], DICTIONARY['h'], DICTIONARY['*'], DICTIONARY['*'],
+                  DICTIONARY['n'], 0, DICTIONARY['o'], 0, DICTIONARY['n'], DICTIONARY['o'], DICTIONARY['*'],
+                  DICTIONARY['*']]
+        emissions = [[0.0 if c == owner else -20.0 for c in range(len(DICTIONARY))] for owner in owners]
+        spans = merge_tokens(forced_align(emissions, tokens))
+        self.assertEqual([span.token for span in spans], tokens)
+        self.assertEqual(word_times(lines, slots, spans, 0.02), [
+            [{'w': 'oh', 'startSec': 0.02, 'endSec': 0.08}],
+            [{'w': 'no', 'startSec': 0.12, 'endSec': 0.18}, {'w': 'no', 'startSec': 0.2, 'endSec': 0.24}],
+        ])
+
+
+class Response(io.BytesIO):
+    def __exit__(self, *args):
+        self.close()
+
+
+class CheckpointGate(unittest.TestCase):
+    genuine = b'genuine checkpoint bytes'
+    pin = {'sha256': hashlib.sha256(genuine).hexdigest(), 'size': len(genuine), 'url': 'https://example.com/m.pt'}
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.models = os.path.join(self.dir.name, 'models')
+        self.target = os.path.join(self.models, f"mms_fa-{self.pin['sha256'][:16]}.pt")
+        self.fetches = []
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def fetch(self, body):
+        def fetch(url, timeout):
+            self.fetches.append(url)
+            return Response(body)
+        return fetch
+
+    def write(self, path, body):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, 'wb') as output:
+            output.write(body)
+
+    def test_substituted_cache_and_download_are_rejected_before_any_load(self):
+        legacy = os.path.join(self.dir.name, 'hub', 'model.pt')
+        self.write(self.target, b'tampered checkpoint bytes')
+        self.write(legacy, b'some other model.pt bytes')
+        for body in (b'substituted payload here', self.genuine + b'!', self.genuine[:-1]):
+            with self.assertRaises(CheckpointRejected):
+                open_verified_checkpoint(self.models, (legacy,), fetch=self.fetch(body), **self.pin)
+        self.assertEqual(sorted(os.listdir(self.models)), [os.path.basename(self.target)])
+        with open(self.target, 'rb') as source:
+            self.assertEqual(source.read(), b'tampered checkpoint bytes')
+
+    def test_genuine_bytes_replace_a_corrupt_cache_and_are_then_reused(self):
+        self.write(self.target, b'truncated')
+        with open_verified_checkpoint(self.models, fetch=self.fetch(self.genuine), **self.pin) as handle:
+            self.assertEqual(handle.read(), self.genuine)
+        with open_verified_checkpoint(self.models, fetch=self.fetch(b'unused'), **self.pin) as handle:
+            self.assertEqual(handle.read(), self.genuine)
+        self.assertEqual(len(self.fetches), 1)
+
+    def test_a_genuine_shared_legacy_cache_is_copied_in_without_downloading(self):
+        legacy = os.path.join(self.dir.name, 'hub', 'model.pt')
+        self.write(legacy, self.genuine)
+        with open_verified_checkpoint(self.models, (legacy,), fetch=self.fetch(b''), **self.pin) as handle:
+            self.assertEqual(handle.name, self.target)
+            self.assertEqual(handle.read(), self.genuine)
+        self.assertEqual(self.fetches, [])
+        self.assertEqual(os.listdir(self.models), [os.path.basename(self.target)])
+
+    def test_only_the_verified_handle_is_deserialized_with_weights_only(self):
+        self.write(self.target, self.genuine)
+        loads = []
+        rows = [f'row{i}' for i in range(31)]
+        model = SimpleNamespace(load_state_dict=lambda state: loads.append(('state', state)), eval=lambda: 'model')
+        torch = SimpleNamespace(
+            load=lambda handle, **options: loads.append((handle.read(), options)) or {'aux.weight': rows, 'aux.bias': rows},
+            stack=list)
+        torchaudio = SimpleNamespace(models=SimpleNamespace(wav2vec2_model=lambda **params: model))
+        handle = open_verified_checkpoint(self.models, fetch=self.fetch(b''), **self.pin)
+        self.assertEqual(load_mms_fa(handle, torch, torchaudio), 'model')
+        self.assertTrue(handle.closed)
+        self.assertEqual(loads[0], (self.genuine, {'map_location': 'cpu', 'weights_only': True}))
+        kept = [row for i, row in enumerate(rows) if i not in AUX_ROWS_REMOVED]
+        self.assertEqual(loads[1], ('state', {'aux.weight': kept, 'aux.bias': kept}))
+        self.assertEqual(len(kept), 28)
+
+
+class UnsupportedWordReport(unittest.TestCase):
+    def test_cli_prints_indices_and_no_lyric_text(self):
+        # None of these spellings occur inside the fixed refusal sentence.
+        words = [['north', 'river'], ['quiet', 'привет']]
+        script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'align_lyrics_ctc.py')
+        with tempfile.TemporaryDirectory() as directory:
+            audio = os.path.join(directory, 'vocal.wav')
+            lyrics = os.path.join(directory, 'lyrics.json')
+            output = os.path.join(directory, 'words.json')
+            with wave.open(audio, 'wb') as handle:
+                handle.setnchannels(1)
+                handle.setsampwidth(2)
+                handle.setframerate(16000)
+                handle.writeframes(b'\x00\x00' * 1600)
+            with open(lyrics, 'w', encoding='utf-8') as handle:
+                json.dump(words, handle, ensure_ascii=False)
+            proc = subprocess.run(
+                [sys.executable, script, '--audio', audio, '--lyrics', lyrics, '--output', output,
+                 '--model-dir', os.path.join(directory, 'models')],
+                capture_output=True, text=True, encoding='utf-8', check=False,
+                env={**os.environ, 'PYTHONDONTWRITEBYTECODE': '1'})
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(proc.stdout.splitlines(), ['ERROR:unsupported-word:1:1'])
+        leaked = proc.stdout + proc.stderr
+        for word in ('north', 'river', 'quiet', 'привет'):
+            self.assertNotIn(word, leaked)
+        self.assertNotIn('Traceback', proc.stderr)
 
 
 if __name__ == '__main__':

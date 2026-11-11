@@ -158,7 +158,12 @@ vi.mock('../services/apiImageVideo', () => ({
     promptAdditions: body.promptAdditions || [],
   })),
 }));
-vi.mock('../components/IngredientPicker', () => ({ default: () => null }));
+// Closed it renders nothing; open it offers one record so a pick can be driven.
+vi.mock('../components/IngredientPicker', () => ({
+  default: ({ open, type, excludeIds = [], onSelect }) => (open
+    ? <button type="button" data-exclude={excludeIds.join(',')} onClick={() => onSelect({ id: 'cat-chr-rival', name: 'Example Rival', type })}>Pick stub {type}</button>
+    : null),
+}));
 vi.mock('../components/catalog/PhotorealPanel', () => ({
   default: ({ record, onSaved }) => (
     <button type="button" onClick={() => onSaved({ ...record, payload: { ...record.payload, photoreal: { version: 1, lights: [{ id: 'key' }] } } })}>Apply stub look</button>
@@ -1556,6 +1561,63 @@ describe('CatalogIngredient — tabbed library record pages', () => {
     await waitFor(() => expect(api.attachCatalogIngredientMedia).toHaveBeenCalledWith(
       'cat-chr-hero', { mediaKey: 'sheet-job.png', kind: 'reference', role: 'sheet:expressions' }, { silent: true },
     ));
+  });
+
+  // A comparison needs a second character: nothing previews or renders until
+  // one is picked, and the pick rides in both requests.
+  it('asks for the other character before previewing or rendering a comparison sheet', async () => {
+    const api = await import('../services/apiCatalog');
+    api.listCatalogSheetVariants.mockImplementation(async () => ({ variants: [...SHEET_VARIANTS,
+      { id: 'comparison', label: 'Comparison (two characters)', description: 'One shared sheet.' }] }));
+    api.renderCatalogSheet.mockResolvedValue({ jobId: 'pair-job', variant: 'comparison', role: 'sheet:comparison', delegatedTo: null });
+    api.attachCatalogIngredientMedia.mockResolvedValue({});
+    await renderPage('/casting/cat-chr-hero/sheets');
+
+    fireEvent.change(await screen.findByLabelText('Sheet kind'), { target: { value: 'comparison' } });
+    const generate = screen.getByRole('button', { name: /Generate sheet/ });
+    expect(generate).toBeDisabled();
+    expect(generate).toHaveAttribute('title', 'Choose the character to compare with');
+    expect(api.previewCatalogSheet.mock.calls.some(([, body]) => body.variant === 'comparison')).toBe(false);
+
+    fireEvent.click(screen.getByRole('button', { name: /Compare with/ }));
+    const pick = screen.getByRole('button', { name: 'Pick stub character' });
+    expect(pick).toHaveAttribute('data-exclude', 'cat-chr-hero');
+    fireEvent.click(pick);
+    expect(screen.getByRole('button', { name: /Compare with/ })).toHaveTextContent('Example Rival');
+    const body = { variant: 'comparison', partnerId: 'cat-chr-rival' };
+    await waitFor(() => expect(api.previewCatalogSheet).toHaveBeenLastCalledWith('cat-chr-hero', body, { silent: true }));
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /Generate sheet/ })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: /Generate sheet/ }));
+    await waitFor(() => expect(api.renderCatalogSheet).toHaveBeenCalledWith('cat-chr-hero', body, { silent: true }));
+    expect(toast.success).toHaveBeenCalledWith('Rendering Comparison with Example Rival…');
+  });
+
+  it('regenerates a saved comparison despite a different selected partner preview failing', async () => {
+    const api = await import('../services/apiCatalog');
+    api.listCatalogSheetVariants.mockResolvedValue({ variants: [...SHEET_VARIANTS,
+      { id: 'comparison', label: 'Comparison (two characters)', description: 'One shared sheet.' }] });
+    getCatalogIngredientDetails.mockResolvedValue({ ...detailsOf(HERO), media: [...MEDIA, {
+      mediaKey: 'pair.png', kind: 'reference', role: 'sheet:comparison',
+      library: { comparedWith: 'cat-chr-original', review: { status: 'bad', feedback: 'Keep their intended heights.' } },
+    }] });
+    api.previewCatalogSheet.mockImplementation(async (_id, body) => {
+      if (body.partnerId === 'cat-chr-rival') throw new Error('Selected partner is missing a portrait');
+      return { preview: null };
+    });
+    api.renderCatalogSheet.mockResolvedValue({ jobId: 'saved-pair-job', variant: 'comparison', role: 'sheet:comparison', delegatedTo: null });
+    api.attachCatalogIngredientMedia.mockResolvedValue({});
+    await renderPage('/casting/cat-chr-hero/sheets');
+    fireEvent.change(await screen.findByLabelText('Sheet kind'), { target: { value: 'comparison' } });
+    fireEvent.click(screen.getByRole('button', { name: /Compare with/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Pick stub character' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /Generate sheet/ })).toHaveAttribute('title', 'Selected partner is missing a portrait'));
+    expect(screen.getByRole('button', { name: /Generate sheet/ })).toBeDisabled();
+    const regenerate = screen.getByRole('button', { name: 'Regenerate sheet' });
+    expect(regenerate).toBeEnabled();
+    fireEvent.click(regenerate);
+    await waitFor(() => expect(api.renderCatalogSheet).toHaveBeenCalledWith('cat-chr-hero',
+      { variant: 'comparison', partnerId: 'cat-chr-original' }, { silent: true }));
   });
 
   it('keeps the sheet form usable while a render runs so another sheet can start', async () => {

@@ -129,6 +129,29 @@ describe('music-video development artifacts', () => {
     // the HTML guide path is unchanged
     const html = await upload(codeOnly.id, { fields: { kind: 'cast-sets', title: 'Code-authored sheet' } });
     expect(html.status).toBe(201);
+    // .htm planning sheet is accepted as HTML under the media policy
+    const htm = await upload(codeOnly.id, { name: 'sheet.htm', fields: { kind: 'cast-sets', title: 'Code-authored sheet htm' } });
+    expect(htm.status).toBe(201);
+    expect(htm.body.artifact.mimeType).toBe('text/html');
+    expect(htm.body.artifact.file).toMatch(/\.html$/);
+  });
+
+  it('imports .htm as an HTML sheet, normalising file extension and serving under HTML CSP', async () => {
+    const res = await upload(project.id, {
+      name: 'sheet.htm',
+      body: '<!doctype html><title>Htm Sheet</title><h1>HTM</h1>',
+      type: 'text/html',
+      fields: { kind: 'cast-sets', title: 'Planning Sheet' },
+    });
+    expect(res.status).toBe(201);
+    expect(res.body.artifact.mimeType).toBe('text/html');
+    expect(res.body.artifact.file).toMatch(/\.html$/);
+    expect(existsSync(join(ROOT(), res.body.artifact.file))).toBe(true);
+
+    const served = await request(app).get(`/api/music-video/${project.id}/dev-artifacts/${res.body.artifact.id}/file`);
+    expect(served.status).toBe(200);
+    expect(served.headers['content-type']).toMatch(/^text\/html/);
+    expect(served.headers['content-security-policy']).toMatch(/^sandbox allow-scripts;/);
   });
 
   it('refuses an unsupported file type and a new artifact without a kind, storing nothing', async () => {

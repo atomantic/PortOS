@@ -1,0 +1,2 @@
+# The model-only CLI is tested with Pillow 13; the unused Gradio UI pins <13.
+pillow==13.0.0

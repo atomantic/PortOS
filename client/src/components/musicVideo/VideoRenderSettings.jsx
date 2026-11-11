@@ -1,3 +1,5 @@
+import { HIGGSFIELD_VIDEO_MODELS, HIGGSFIELD_DEFAULT_VIDEO_MODEL } from '../../../../server/lib/higgsfieldVideoModels.js';
+import { GOOGLE_VIDEO_MODELS, GOOGLE_DEFAULT_VIDEO_MODEL } from '../../../../server/lib/googleVideoModels.js';
 import { useRunwayCatalog } from '../../hooks/useRunwayCatalog.js';
 import { GEMINI_OMNI_WEB_MODEL } from '../../../../server/lib/geminiWebVideo.js';
 import RenderPoolPicker from './RenderPoolPicker.jsx';
@@ -107,6 +109,8 @@ export default function VideoRenderSettings({ videoSettings, generating, project
         <option value="fal">fal.ai video</option>
         {/* Runway is image-to-video only, so like Grok it renders cutaways. */}
         <option value="runway">Runway video (cutaway only)</option>
+        <option value="higgsfield">Higgsfield video (cutaway only)</option>
+        <option value="google">Google video (cutaway only)</option>
         {/* Drives the Gemini web app in the PortOS Browser; no audio, so cutaways only. */}
         <option value="gemini">{GEMINI_OMNI_WEB_MODEL.label} (cutaway only, PortOS Browser)</option>
       </select>
@@ -368,6 +372,26 @@ export default function VideoRenderSettings({ videoSettings, generating, project
             {music.resolutions.map((res) => (
               <option key={res} value={res}>{`Music-driven ${res} · ${describeFalVideoRate(music.modelId, res)}`}</option>
             ))}
+          </select>
+        </>
+      )}
+      {settings.backend === 'higgsfield' && (
+        <>
+          <label htmlFor="mv-higgsfield-model">Higgsfield family</label>
+          <select id="mv-higgsfield-model" value={settings.higgsfieldModelId || HIGGSFIELD_DEFAULT_VIDEO_MODEL}
+            disabled={locked} onChange={(e) => change({ higgsfieldModelId: e.target.value, higgsfieldDuration: null, higgsfieldResolution: null })}
+            className="bg-port-bg border border-port-border rounded px-2 py-1.5 min-h-[44px]">
+            {HIGGSFIELD_VIDEO_MODELS.map((model) => <option key={model.id} value={model.id}>{model.label}</option>)}
+          </select>
+        </>
+      )}
+      {settings.backend === 'google' && (
+        <>
+          <label htmlFor="mv-google-model">Google Veo model</label>
+          <select id="mv-google-model" value={settings.googleModelId || GOOGLE_DEFAULT_VIDEO_MODEL}
+            disabled={locked} onChange={(e) => change({ googleModelId: e.target.value, googleDuration: null, googleResolution: null })}
+            className="bg-port-bg border border-port-border rounded px-2 py-1.5 min-h-[44px]">
+            {GOOGLE_VIDEO_MODELS.map((model) => <option key={model.id} value={model.id}>{`${model.label} · ${model.priceNote}`}</option>)}
           </select>
         </>
       )}

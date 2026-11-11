@@ -1,0 +1,26 @@
+# Reactor SDK runtime — hash-pinned lock for <data>/venvs/reactor (CPython 3.12).
+# Do not edit by hand.
+#
+# scripts/setup-reactor.js installs this with
+# `uv pip install --require-hashes --no-deps --only-binary :all:`, so the SDK
+# (which has no runtime dependencies without its optional `audio` extra) and any
+# future transitive package must match a pinned version and hash.
+# Universal across the platforms setup-reactor.js ships a uv bootstrap for:
+# arm64/x86_64 macOS, x86_64/aarch64 Linux and AMD64 Windows wheels.
+#
+# Regenerate after editing requirements-reactor.txt, from the repo root, with
+# uv >= 0.13.4 and a cooldown so brand-new releases are not adopted the day they
+# publish:
+#   TMP="$(mktemp -d)"; cp scripts/requirements-reactor.txt "$TMP/"
+#   printf '[project]\nname = "reactor-lock"\nversion = "0"\n[tool.uv]\nenvironments = ["sys_platform == '"'"'darwin'"'"' and platform_machine == '"'"'arm64'"'"'", "sys_platform == '"'"'darwin'"'"' and platform_machine == '"'"'x86_64'"'"'", "sys_platform == '"'"'linux'"'"' and platform_machine == '"'"'x86_64'"'"'", "sys_platform == '"'"'linux'"'"' and platform_machine == '"'"'aarch64'"'"'", "sys_platform == '"'"'win32'"'"' and platform_machine == '"'"'AMD64'"'"'"]\n' > "$TMP/pyproject.toml"
+#   (cd "$TMP" && uv pip compile requirements-reactor.txt --universal --python-version 3.12 \
+#     --only-binary :all: --generate-hashes --no-header --annotation-style line \
+#     --exclude-newer <UTC date at least 7 days ago> -o "$OLDPWD/scripts/requirements-reactor.lock.txt")
+# then check the result against OSV (including MAL- malicious-package records).
+reactor-sdk==1.0.1 ; (platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') \
+    --hash=sha256:6ea666d49b25ec8e1b0c6fbb0cd2069a22b30eb6624dcb01c9bf1c35699ab417 \
+    --hash=sha256:815320e81722e660ccc02d8d282a729ea302b91cab32f27e38d574777ef72b37 \
+    --hash=sha256:96910f34beccc361ed47d36da00168f2b7dafbf98913b983ab6cc51d7566e430 \
+    --hash=sha256:be8b4692ae19e38881c7cfa83fd021619b9511b2d9bf818d656278fc1f25e65b \
+    --hash=sha256:e3b7f8278f6f7bcf3cd36120664cb83218ff0023cc99ad9f049e4ef09db046f3
+    # via requirements-reactor.txt

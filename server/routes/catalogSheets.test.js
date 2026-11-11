@@ -473,6 +473,55 @@ describe('catalog sheet routes', () => {
     expect(queuedParams().catalogAttach.role).toBe('sheet:face');
   });
 
+  // Catches a shared sheet that maps images to the wrong person, loses the
+  // mirrored layout the centre cut depends on, or never reaches the partner.
+  it('previews and queues a comparison sheet for two characters, tagged for both records', async () => {
+    const partner = { id: 'cat-chr-2', type: 'character', name: 'Example Rival',
+      payload: { physicalDescription: 'short, green scarf', stats: [{ label: 'Height', value: '165 cm' }] } };
+    const hero = { ...character, payload: { ...character.payload, stats: [{ label: 'Height', value: '180 cm' }] } };
+    mocks.getIngredient.mockImplementation(async (id) => ({ [hero.id]: hero, [partner.id]: partner, [place.id]: place })[id] ?? null);
+    mocks.listMediaForIngredient.mockImplementation(async (id) => (id === hero.id
+      ? [{ kind: 'portrait', mediaKey: 'hero.png' }, { kind: 'reference', mediaKey: 'hero-old-sheet.png', role: 'sheet:standard' }]
+      : [{ kind: 'portrait', mediaKey: 'rival.png' }]));
+    ['hero.png', 'rival.png'].forEach((name) => mocks.imageFiles.add(name));
+    const url = '/api/catalog/ingredients/cat-chr-1/sheets';
+    const body = { variant: 'comparison', partnerId: partner.id };
+
+    const preview = await request(app).post(`${url}/preview`).send(body);
+    expect(preview.status).toBe(200);
+    const sent = preview.body.preview.sentPrompt;
+    expect(sent).toContain('the first 1 attached image shows Example Hero; the next 1 attached image shows Example Rival');
+    expect(sent).toContain('The LEFT half belongs only to Example Hero and the RIGHT half only to Example Rival');
+    expect(sent).toContain('Example Hero is 15 cm (about 6 in) taller than Example Rival');
+    expect(sent).toContain('"Example Hero 180 cm" over Example Hero and "Example Rival 165 cm" over Example Rival');
+    expect(sent).toContain('between the portrait column and the FRONT view, on the inner side of the portraits');
+    expect(sent).toContain('The right half\'s ruler mirrors the left half\'s');
+    expect(sent).toContain('Each ruler runs from 0 at the floor line to 200 cm');
+    expect(sent).toContain('Example Rival\'s head top sits at 165 cm');
+    expect(sent).toContain('Each half is a tight grid that uses the whole page with no unused margins');
+    expect(sent).toContain('a portrait column that runs the full page height');
+    expect(sent).toContain('nothing at all along the centre line');
+    expect(preview.body.preview.referenceImages.map((ref) => [ref.filename, ref.status])).toEqual([['hero.png', 'included'], ['rival.png', 'included']]);
+    expect(preview.body.preview.promptAdditions.map((a) => a.id)).not.toContain('character-identity');
+
+    const render = await request(app).post(url).send(body);
+    expect(render.status).toBe(200);
+    expect(render.body).toMatchObject({ variant: 'comparison', role: 'sheet:comparison', delegatedTo: null });
+    const params = queuedParams();
+    expect(params.prompt).toBe(sent);
+    expect(params.width).toBe(params.height * 2);
+    expect(params.referenceImagePaths.map((path) => basename(path))).toEqual(['hero.png', 'rival.png']);
+    expect(params.catalogAttach).toEqual({ ingredientId: hero.id, kind: 'reference', role: 'sheet:comparison', inspect: true, comparison: { partnerId: partner.id }, library: { comparedWith: partner.id } });
+
+    // A partner is required, must be another character, and belongs to this kind only.
+    for (const bad of [{ variant: 'comparison' }, { variant: 'face', partnerId: partner.id }, { variant: 'comparison', partnerId: hero.id },
+      { variant: 'comparison', partnerId: place.id }]) {
+      expect((await request(app).post(url).send(bad)).status).toBe(400);
+    }
+    expect((await request(app).post(url).send({ variant: 'comparison', partnerId: 'cat-chr-missing' })).status).toBe(404);
+    expect(mocks.enqueueJob).toHaveBeenCalledTimes(1);
+  });
+
   // Catches a photoreal universe starting its cast on the illustrated sheet.
   it('lists and defaults to the photographic sheet for a character in a photoreal universe', async () => {
     mocks.getIngredient.mockResolvedValue({ ...character, name: 'Ada' });
@@ -483,7 +532,7 @@ describe('catalog sheet routes', () => {
       characters: [{ id: 'char-entry-1', name: 'Ada', ingredientId: 'cat-chr-1' }],
     });
     const listed = await request(app).get('/api/catalog/ingredients/cat-chr-1/sheets/variants');
-    expect(listed.body.variants.map((v) => v.id)).toEqual(['photographic', 'standard', 'face', 'blueprint']);
+    expect(listed.body.variants.map((v) => v.id)).toEqual(['photographic', 'standard', 'face', 'blueprint', 'comparison']);
     const preview = await request(app).post('/api/catalog/ingredients/cat-chr-1/sheets/preview').send({});
     expect(preview.body.preview.sentPrompt).toContain('PHOTOGRAPHIC CHARACTER REFERENCE SHEET');
     expect(preview.body.preview.sentPrompt).toContain('Soft window light');
@@ -494,7 +543,7 @@ describe('catalog sheet routes', () => {
 
     mocks.getUniverse.mockResolvedValue({ id: 'universe-1', name: 'Example Universe', characters: [] });
     const plain = await request(app).get('/api/catalog/ingredients/cat-chr-1/sheets/variants');
-    expect(plain.body.variants.map((v) => v.id)).toEqual(['standard', 'photographic', 'face', 'blueprint']);
+    expect(plain.body.variants.map((v) => v.id)).toEqual(['standard', 'photographic', 'face', 'blueprint', 'comparison']);
   });
 
   describe('look renders', () => {

@@ -67,10 +67,21 @@ export function findDevArtifact(project, artifactId) {
   return artifact;
 }
 
+/**
+ * Normalise an extension to its canonical, dot-free lower-case form
+ * (jpeg → jpg, htm → html). Returns '' for an empty input.
+ */
+export function canonicalDevArtifactExt(ext) {
+  const key = String(ext || '').toLowerCase().replace(/^\./, '');
+  if (key === 'jpeg') return 'jpg';
+  if (key === 'htm') return 'html';
+  return key;
+}
+
 /** The media type for a filename extension, or null when the format is not accepted. */
 export function devArtifactTypeFor(ext) {
-  const key = String(ext || '').toLowerCase().replace(/^\./, '');
-  return DEV_ARTIFACT_TYPES[key === 'jpeg' ? 'jpg' : key] || null;
+  const canonical = canonicalDevArtifactExt(ext);
+  return DEV_ARTIFACT_TYPES[canonical] || null;
 }
 
 /** A fresh artifact id (also the per-artifact folder name on disk). */

@@ -121,3 +121,9 @@ describe('project render-pool submission policy', () => {
     expect(await applyProjectRenderPool(silent)).toEqual(silent);
   });
 });
+
+it('preserves a Seedance shot backend when explicitly supplying song audio', async () => {
+  m.project.videoSettings = { backend: 'higgsfield' };
+  expect(await applyProjectRenderPool({ ...body(), backend: 'higgsfield', musicVideo: { ...body().musicVideo, songAudio: true } }))
+    .toMatchObject({ backend: 'higgsfield', mode: 'image', _suppliedAudio: true });
+});

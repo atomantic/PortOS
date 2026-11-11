@@ -8,7 +8,6 @@ MLX-Gen returns a typed download-required failure if anything is absent.
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -16,7 +15,7 @@ from pathlib import Path
 # Same-dir sibling import (mirrors generate_ltx2.py). _runner_common is
 # stdlib-only at import time, so this is safe from the wan2.2-mlx venv.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _runner_common import emit_runtime_fingerprint  # noqa: E402
+from _runner_common import emit_runtime_fingerprint, establish_process_group  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -85,8 +84,7 @@ def main() -> int:
     # PortOS cancels this wrapper by process group so the MLX-Gen subprocess
     # cannot survive as an orphan while holding unified memory. Establish the
     # group before spawning it; the detached launcher records this wrapper PID.
-    if hasattr(os, "setpgid"):
-        os.setpgid(0, 0)
+    establish_process_group()
 
     # Human diagnostics remain on inherited stderr. JSONL progress on stdout
     # is translated into PortOS's existing STAGE:/STATUS: protocol below.

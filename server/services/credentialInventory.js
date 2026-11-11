@@ -160,6 +160,7 @@ const publicRow = (entry, resolution, featuresById) => {
     getUrl: entry.getUrl,
     configurePath: entry.configurePath,
     feature: entry.feature ?? null,
+    ...(entry.keyFile ? { keyFile: entry.keyFile } : {}),
     configured: resolution.configured,
     source: resolution.source,
     ...(resolution.verification ? { verification: resolution.verification } : {}),

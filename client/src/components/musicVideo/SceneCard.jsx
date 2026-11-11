@@ -1,3 +1,5 @@
+import { getHiggsfieldVideoModel, HIGGSFIELD_DEFAULT_VIDEO_MODEL } from '../../../../server/lib/higgsfieldVideoModels.js';
+import { getGoogleVideoModel, GOOGLE_DEFAULT_VIDEO_MODEL } from '../../../../server/lib/googleVideoModels.js';
 import { musicVideoGreyboxReference } from '../../../../server/lib/musicVideoGreybox.js';
 import PlateComparison from './PlateComparison.jsx';
 import ShotActionInspector from './ShotActionInspector.jsx';
@@ -277,6 +279,8 @@ export default function SceneCard({
   const referenceModel = referenceBackend === 'fal'
     ? getFalVideoModel(falSceneTake({ scene, videoSettings: renderSettings || {} }).modelId)
     : referenceBackend === 'runway' ? getRunwayVideoModel(runwaySceneTake({ scene, videoSettings: renderSettings || {} }).modelId)
+      : referenceBackend === 'higgsfield' ? getHiggsfieldVideoModel(renderSettings?.higgsfieldModelId || HIGGSFIELD_DEFAULT_VIDEO_MODEL)
+      : referenceBackend === 'google' ? getGoogleVideoModel(renderSettings?.googleModelId || GOOGLE_DEFAULT_VIDEO_MODEL)
       : referenceBackend === 'local' ? videoModels.find((model) => model.id === (renderSettings?.modelId || defaultVideoModel)) : null;
   // Storyboard-to-clip chaining cannot yet pass LTX reference inputs. Offer
   // them after the storyboard's first frame has landed instead.
@@ -805,7 +809,7 @@ export default function SceneCard({
             </label>
           )}
           {layer === 'footage' && <SceneClipReferences project={project} scene={scene} castMedia={castMedia} startFrameLayout={startFrameLayout}
-            backend={referenceBackend} model={referenceModel} capacityOverride={useLtxReferences ? 8 : runwayEndFrameOn ? referenceCapacity : undefined} endFrameBlocksReferences={endFrameBlocksReferences} ltxReferencesOff={canUseLtxReferences && !useLtxReferences} onEditLocal={onEditLocal} onSave={onSave}
+            backend={referenceBackend} model={referenceModel} songAudio={cardRequest.songAudio.state === 'on'} capacityOverride={useLtxReferences ? 8 : runwayEndFrameOn ? referenceCapacity : undefined} endFrameBlocksReferences={endFrameBlocksReferences} ltxReferencesOff={canUseLtxReferences && !useLtxReferences} onEditLocal={onEditLocal} onSave={onSave}
             saveState={clipReferenceSaveState} onSaveState={setClipReferenceSaveState} />}
           {/* The clip prompt sits under the clip's references, like each frame's prompt under its frame. */}
           {layer === 'footage' && promptField}

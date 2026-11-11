@@ -9,7 +9,9 @@
 //   2. point `configurePath` at the integration tab; `privateStore: true` enables
 //      write-only management here for keys resolved through settings.js;
 //   3. tag `feature` when an instance-feature id from instanceFeatureRegistry
-//      stays dark without it.
+//      stays dark without it;
+//   4. set `keyFile` to the accepted extension (e.g. '.json') when the provider
+//      hands out the key as a downloaded file, so the card offers a file picker.
 // Presence and source only. Never the value, and not a masked prefix either.
 
 export const CREDENTIAL_TIERS = Object.freeze(['free', 'metered', 'none']);
@@ -49,6 +51,18 @@ export const CREDENTIALS = Object.freeze([
     unlocks: 'Image and video generation through Runway\'s developer API.', tier: 'metered',
     getUrl: 'https://dev.runwayml.com/', envVars: Object.freeze(['RUNWAYML_API_SECRET']),
     settingsPath: 'videoGen.runway.apiKey', configurePath: '/settings/credentials',
+  }),
+  Object.freeze({
+    id: 'higgsfield', label: 'Higgsfield', privateStore: true,
+    unlocks: 'Image and video generation through Higgsfield\'s developer API. Paste KEY_ID:KEY_SECRET.', tier: 'metered',
+    getUrl: 'https://console.higgsfield.ai', envVars: Object.freeze(['HIGGSFIELD_API_KEY']),
+    settingsPath: 'videoGen.higgsfield.apiKey', configurePath: '/settings/credentials',
+  }),
+  Object.freeze({
+    id: 'google-cloud', label: 'Google Cloud (Agent Platform)', privateStore: true,
+    unlocks: 'Image (Nano Banana, Imagen) and video (Veo) generation through Google Cloud Agent Platform. Paste an Agent Platform API key or a service account JSON key.', tier: 'metered',
+    getUrl: 'https://console.cloud.google.com/agent-platform/api-keys', envVars: Object.freeze(['GOOGLE_CLOUD_API_KEY']),
+    settingsPath: 'videoGen.google.apiKey', configurePath: '/settings/credentials', keyFile: '.json',
   }),
   Object.freeze({
     id: 'github',

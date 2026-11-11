@@ -27,6 +27,9 @@ describe.skipIf(!canRun)('document shot film looks in Chrome', () => {
   afterAll(async () => { await fixture?.close(); });
 
   it('uses pinned, inherited and clean shots with identical pixels on reverse seeks and preview commands', async () => {
+    // Match the renderer's navigated document: the untouched initial page can
+    // capture a stale viewport surface before Chrome commits its first navigation.
+    await page.goto('about:blank');
     await page.setContent(`<html><head><style>html,body{margin:0;background:#808080}</style>${documentRenderInitScripts(project).map(source => `<script>${source}</script>`).join('')}</head><body>
       <script>globalThis.portosComposition={fps:30,seek(t){return t;}};</script></body></html>`);
     const inherited = await seek(1);

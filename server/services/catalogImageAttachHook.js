@@ -111,9 +111,24 @@ const hook = createMediaJobImageHook({
   // database lock in attachGeneratedMedia also covers the client's attach.
   serializeKey: ({ ingredientId }) => ingredientId,
   describe: ({ ingredientId }) => ingredientId,
-  attach: ({ ingredientId, tag, filename, queuedAt, job }) => attachGeneratedImage({
-    ingredientId, kind: tag.kind, role: tag.role, library: tag.library, filename, queuedAt, job, inspect: tag.inspect,
-  }),
+  attach: async ({ ingredientId, tag, filename, queuedAt, job }) => {
+    const status = await attachGeneratedImage({
+      ingredientId, kind: tag.kind, role: tag.role, library: tag.library, filename, queuedAt, job, inspect: tag.inspect,
+    });
+    // A comparison sheet also lands on the partner, and each record gets its own half.
+    const partnerId = typeof tag.comparison?.partnerId === 'string' ? tag.comparison.partnerId : null;
+    if (partnerId && status !== 'gone') {
+      const { publishComparisonSheet } = await import('./catalogComparisonSheet.js');
+      const published = await publishComparisonSheet({ ingredientId, partnerId, filename,
+        metadata: await readImageGenerationMetadata(filename), derivedFrom: tag.library?.derivedFrom ?? null });
+      if (published) {
+        console.log(`🏷️ comparison sheet ${filename} → partner ${partnerId.slice(0, 8)}, halves ${published.left} / ${published.right}`);
+        catalogEvents.emit('primitive-changed', { ingredientId: partnerId });
+        catalogEvents.emit('primitive-changed', { ingredientId });
+      }
+    }
+    return status;
+  },
   onAttached: ({ ingredientId, filename }, status) => {
     if (status === 'portrait' || status === 'reference' || status === 'metadata-updated') {
       console.log(`🏷️ catalog ingredient ${ingredientId.slice(0, 8)} ← ${status} ${filename}`);

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { maybeRedirectToLogin } from '../services/apiCore';
+import { throwApiError } from '../services/apiCore';
 
 // Both cancel spellings are terminal. Every emitter normalizes on `canceled`
 // (single l); `cancelled` stays tolerated defensively so a stream from an
@@ -102,11 +102,8 @@ export function useSseProgress(url, { enabled = true, method = 'GET', maxFrames 
         try {
           const response = await fetch(url, { method: 'POST', signal: controller.signal });
           if (!isCurrent()) return;
-          if (!response.ok || !response.body?.getReader) {
-            const error = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
-            maybeRedirectToLogin(response, error);
-            throw new Error(error.error || `HTTP ${response.status}`);
-          }
+          if (!response.ok) await throwApiError(response);
+          if (!response.body?.getReader) throw new Error('This browser cannot read a streamed response');
           setIsOpen(true);
           reader = response.body.getReader();
           const decoder = new TextDecoder();

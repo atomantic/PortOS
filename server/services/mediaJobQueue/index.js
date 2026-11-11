@@ -235,6 +235,8 @@ const MEDIA_JOB_RUNTIME = Object.freeze({
       [VIDEO_GEN_MODE.REACTOR]: () => import('../videoGen/reactor.js'),
       [VIDEO_GEN_MODE.RUNWAY]: () => import('../videoGen/runway.js'),
       [VIDEO_GEN_MODE.GEMINI]: () => import('../videoGen/geminiWeb.js'),
+      [VIDEO_GEN_MODE.HIGGSFIELD]: () => import('../videoGen/higgsfield.js'),
+      [VIDEO_GEN_MODE.GOOGLE]: () => import('../videoGen/google.js'),
       default: () => import('../videoGen/local.js'),
     },
     invoke: (mod, request, { chunks }) => (chunks > 1 ? mod.generateChainedVideo(request) : mod.generateVideo(request)),
@@ -283,6 +285,8 @@ const MEDIA_JOB_RUNTIME = Object.freeze({
       [IMAGE_GEN_MODE.AGY]: () => import('../imageGen/agy.js'),
       [IMAGE_GEN_MODE.FAL]: () => import('../imageGen/fal.js'),
       [IMAGE_GEN_MODE.RUNWAY]: () => import('../imageGen/runway.js'),
+      [IMAGE_GEN_MODE.HIGGSFIELD]: () => import('../imageGen/higgsfield.js'),
+      [IMAGE_GEN_MODE.GOOGLE]: () => import('../imageGen/google.js'),
       default: () => import('../imageGen/local.js'),
     },
     invoke: (mod, request) => mod.generateImage(request),
@@ -469,6 +473,10 @@ export function syncParallelLimits(s) {
   if (vg.fal?.parallelLimit !== undefined) setParallelLimit({ kind: 'video', mode: 'fal' }, vg.fal.parallelLimit);
   if (ig.runway?.parallelLimit !== undefined) setParallelLimit({ kind: 'image', mode: 'runway' }, ig.runway.parallelLimit);
   if (vg.runway?.parallelLimit !== undefined) setParallelLimit({ kind: 'video', mode: 'runway' }, vg.runway.parallelLimit);
+  if (ig.higgsfield?.parallelLimit !== undefined) setParallelLimit({ kind: 'image', mode: 'higgsfield' }, ig.higgsfield.parallelLimit);
+  if (vg.higgsfield?.parallelLimit !== undefined) setParallelLimit({ kind: 'video', mode: 'higgsfield' }, vg.higgsfield.parallelLimit);
+  if (ig.google?.parallelLimit !== undefined) setParallelLimit({ kind: 'image', mode: 'google' }, ig.google.parallelLimit);
+  if (vg.google?.parallelLimit !== undefined) setParallelLimit({ kind: 'video', mode: 'google' }, vg.google.parallelLimit);
   if (ig.agy?.parallelLimit !== undefined) setParallelLimit({ kind: 'image', mode: 'agy' }, ig.agy.parallelLimit);
   if (vg.reactor?.parallelLimit !== undefined) setParallelLimit({ kind: 'video', mode: 'reactor' }, vg.reactor.parallelLimit);
 }
@@ -2819,7 +2827,7 @@ export async function cancelJob(jobId) {
       if (isRemoteMediaJob(runningJob)) await persist();
       return { ok: false, code: 'ALREADY_TERMINAL', status: runningJob.status, error: 'Job is already finishing' };
     }
-    if (runningJob.params?.videoProduction && ['reactor', 'fal', 'grok', 'runway'].includes(runningJob.params.mode)) {
+    if (runningJob.params?.videoProduction && ['reactor', 'fal', 'grok', 'runway', 'higgsfield', 'google'].includes(runningJob.params.mode)) {
       runningJob.params.videoProduction = { ...runningJob.params.videoProduction, submissionUncertain: true };
       await persist();
     }
