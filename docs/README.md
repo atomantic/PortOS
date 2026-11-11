@@ -79,6 +79,7 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 | [UX_DESIGN_AUDIT.md](./UX_DESIGN_AUDIT.md) | Representative UX audit and Jev/Performance pilot content maps |
 | [PAGE_LAYOUT_AUDIT.md](./PAGE_LAYOUT_AUDIT.md) | Routed header/navigation layout inventory, fixes, intentional exceptions, and browser regression coverage |
 | [GITHUB_ACTIONS.md](./GITHUB_ACTIONS.md) | CI and release workflows |
+| [RUNTIME_ADVISORY_TRIAGE.md](./RUNTIME_ADVISORY_TRIAGE.md) | November 2026 runtime advisory paths, evidence and upstream blockers |
 | [VERSIONING.md](./VERSIONING.md) | SemVer + release process (`/do:release`) |
 | [SELF_UPDATE.md](./SELF_UPDATE.md) | Fork-aware self-update flow — release polling, `FORK_SYNC_REQUIRED`, fork sync, running a customized fork, and the unattended idle-gated automatic update |
 | [MANAGED_APP_UPDATES.md](./MANAGED_APP_UPDATES.md) | Safe managed-app update default and the opt-in app lifecycle contract |
