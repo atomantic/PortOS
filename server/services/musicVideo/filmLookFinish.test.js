@@ -53,7 +53,7 @@ vi.mock('../htmlComposition/encode.js', () => ({
     if (seen.page) await options.openPage();
     options.onProgress?.(0.5);
     await write(outputPath, 'silent-video');
-    return {};
+    return { workers: 1, timing: { frames: 48, seekMs: 480, drawMs: 0, captureMs: 960, encodeMs: 96, gpuFrames: 0, svgFrames: 48 } };
   },
 }));
 
@@ -111,8 +111,11 @@ describe('film look finishing pass', () => {
   });
 
   it('plays the finished cut through the look on song time, copies its audio back and replaces it in place', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
     const result = await applyFilmLookFinish({ project: { filmLook: look }, path, jobId: 'job-look', offsetSec: 3, onProgress: (f) => seen.progress.push(f) });
     expect(result).toBe(true);
+    expect(log).toHaveBeenLastCalledWith(expect.stringContaining('workers 1; GPU/SVG frames 0/48; ms/frame seek 10.0, GPU draw submission 0.0, capture (includes SVG draw/GPU wait) 20.0, encode write/drain 2.0'));
+    log.mockRestore();
     // The staged page: the render itself (linked, not re-encoded), full frame, seeking on song time.
     expect(seen.opened).toHaveLength(1);
     const [opened] = seen.opened;

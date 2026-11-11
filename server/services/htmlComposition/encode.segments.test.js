@@ -24,19 +24,21 @@ describe('encodeCompositionSegments', () => {
     const dir = mkdtempSync(join(tmpdir(), 'encode-segments-'));
     const output = join(dir, 'out.mp4');
     try {
-      await encodeCompositionSegments(first, contract, output, {
+      const result = await encodeCompositionSegments(first, contract, output, {
         workers: 3, offsetSec: 30,
         openPage: async () => { const p = page(`extra${opened.length}`); opened.push(p); return p; },
         videoFilterAt: (offsetSec) => `grade@${offsetSec}`,
         encode: async (p, c, path, options) => {
           calls.push({ page: p.name, frames: Math.round(c.durationSec * c.fps), path, offsetSec: options.offsetSec, continuous: options.continuous, followed: options.followed, filter: options.videoFilter });
           options.onProgress(1, { frame: Math.round(c.durationSec * c.fps) });
-          return {};
+          return { timing: { frames: 480, seekMs: 960, drawMs: 0, captureMs: 1920, encodeMs: 240, gpuFrames: 0, svgFrames: 480 } };
         },
         locateFfmpeg: async () => 'ffmpeg',
         runFfmpeg: async ({ args }) => { joins.push(args); return { ok: true }; },
         onProgress: (fraction) => progress.push(fraction),
       });
+      // Every worker contributes to the summary, not just the first/last one.
+      expect(result).toEqual({ workers: 3, timing: { frames: 1440, seekMs: 2880, drawMs: 0, captureMs: 5760, encodeMs: 720, gpuFrames: 0, svgFrames: 1440 } });
       calls.sort((a, b) => a.offsetSec - b.offsetSec);
       expect(calls.map(({ frames, offsetSec, continuous, followed, filter }) => ({ frames, offsetSec, continuous, followed, filter }))).toEqual([
         { frames: 480, offsetSec: 30, continuous: false, followed: true, filter: 'grade@30' },
@@ -130,7 +132,7 @@ describe('encodeCompositionSegments when a worker browser stalls', () => {
     const state = { name, closed: 0, captures: 0, failure: null, seekAt: null };
     return Object.assign(state, {
       check() { if (state.failure) throw state.failure; },
-      async evaluate(expression) { const match = /seek\(([^)]+)\)/.exec(expression); if (match) state.seekAt = Number(match[1]); },
+      async evaluate(expression) { const match = /seek\(([^)]+)\)/.exec(expression); if (match) state.seekAt = Number(match[1]); return { path: 'svg', drawMs: 0 }; },
       async send(method) {
         if (state.failure) throw state.failure;
         if (method !== 'Page.captureScreenshot') return {};
@@ -177,7 +179,9 @@ describe('encodeCompositionSegments when a worker browser stalls', () => {
     };
     const first = capturePage('first');
     const { result, written } = run(first, openPage, { onRetry: detail => retries.push(detail) });
-    expect(await result).toEqual({});
+    expect(await result).toEqual({ workers: 2, timing: {
+      frames: 480, seekMs: expect.any(Number), drawMs: 0, captureMs: expect.any(Number), encodeMs: expect.any(Number), gpuFrames: 0, svgFrames: 480,
+    } });
     expect(written.filter(path => path.endsWith('.part0.mp4'))).toHaveLength(240);
     expect(written.filter(path => path.endsWith('.part1.mp4'))).toHaveLength(240);
     expect(retries.map(({ frame, attempt, segment }) => ({ frame, attempt, segment }))).toEqual([{ frame: 300, attempt: 1, segment: 1 }]);
@@ -191,7 +195,9 @@ describe('encodeCompositionSegments when a worker browser stalls', () => {
   it('replaces the caller\'s page when the first worker stalls and says so', async () => {
     const first = capturePage('first', frame => frame === 10);
     const { result } = run(first, async () => capturePage('extra'));
-    expect(await result).toEqual({ pageReplaced: true });
+    expect(await result).toEqual({ workers: 2, pageReplaced: true, timing: {
+      frames: 480, seekMs: expect.any(Number), drawMs: 0, captureMs: expect.any(Number), encodeMs: expect.any(Number), gpuFrames: 0, svgFrames: 480,
+    } });
     expect(first.closed).toBe(1);
   });
 
