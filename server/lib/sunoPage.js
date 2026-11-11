@@ -9,10 +9,9 @@ export const SUNO_SONG_MENU_SELECTOR = "button[aria-label^='More options']";
 
 /** Wait for an authenticated song UI or an explicit sign-in redirect. A slow UI is a timeout, not proof of logout. */
 export async function waitForSunoSongPage(page, { timeoutMs = 60_000 } = {}) {
-  const result = await page.waitForFunction((selector) => {
-    if (/sign-?in|login|accounts\./i.test(location.href)) return 'signed-out';
-    return document.querySelector(selector) ? 'ready' : false;
-  }, SUNO_SONG_MENU_SELECTOR, { timeout: timeoutMs });
+  const result = await page.waitForFunction(markSunoSongMenu, {
+    menuSelector: SUNO_SONG_MENU_SELECTOR, readiness: true,
+  }, { timeout: timeoutMs });
   return result.jsonValue();
 }
 
@@ -31,7 +30,13 @@ export async function waitForSunoSongPage(page, { timeoutMs = 60_000 } = {}) {
  * Two menus owned by the title is ambiguous, so it fails rather than guess.
  */
 // Pass the selector explicitly: Playwright serializes this function without module scope.
-export function markSunoSongMenu({ songId, menuSelector }) {
+export function markSunoSongMenu({ songId, menuSelector, readiness = false }) {
+  if (readiness) {
+    if (/sign-?in|login|accounts\./i.test(location.href)) return 'signed-out';
+    songId = location.pathname?.match(/\/song\/([0-9a-f-]{36})/i)?.[1]
+      || location.href.match(/\/song\/([0-9a-f-]{36})/i)?.[1];
+  }
+  if (!songId) return false;
   for (const old of document.querySelectorAll('[data-portos-song-menu]')) old.removeAttribute('data-portos-song-menu');
   const wanted = songId.toLowerCase();
   const squash = (value) => String(value || '').replace(/\s+/g, ' ').trim();
@@ -59,7 +64,7 @@ export function markSunoSongMenu({ songId, menuSelector }) {
   const own = byTitle[0] || byOwnLink[0];
   if (!own) return false;
   own.setAttribute('data-portos-song-menu', '');
-  return true;
+  return readiness ? 'ready' : true;
 }
 
 /**

@@ -161,7 +161,7 @@ describe('Suno song readiness', () => {
   it('waits for a renamed menu arriving after eight seconds instead of reporting logout', async () => {
     vi.useFakeTimers();
     vi.stubGlobal('location', { href: `https://suno.com/song/${OWN}` });
-    document.body.innerHTML = title;
+    document.body.innerHTML = `${card(OTHER, 'similar')}${title}`;
     const readiness = waitForSunoSongPage(page(), { timeoutMs: 10_000 });
     setTimeout(() => { document.body.innerHTML += titledMenu('Page song', 'header'); }, 8000);
     await vi.advanceTimersByTimeAsync(8100);

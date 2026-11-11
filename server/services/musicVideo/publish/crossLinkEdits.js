@@ -111,8 +111,7 @@ const stackerNews = {
   label: 'Stacker News',
   async prepare(page, row) {
     await step(this.label, 'open the post', () => page.goto(row.url, { waitUntil: 'domcontentloaded', timeout: T }));
-    await page.waitForFunction(() => [...document.querySelectorAll('[role=dialog] img')]
-          .some(img => img.complete && img.naturalWidth > 0 && /^(blob:|data:)/.test(img.currentSrc || img.src)), null, { timeout: T });
+    await page.waitForTimeout(3000);
     const editor = 'div[contenteditable=true]';
     if (!(await page.locator(editor).count())) throw loginRequired(this.label, 'https://stacker.news/login');
     await step(this.label, 'write the comment', async () => {
