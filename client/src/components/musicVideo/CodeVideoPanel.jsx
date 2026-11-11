@@ -47,6 +47,11 @@ export default function CodeVideoPanel({ project, audioUrl, onProject, productio
   const requested = searchParams.get('section');
   const section = sections.find((item) => item.id === requested) || sections[0] || null;
 
+  const requestedSectionRef = useRef(section?.id);
+  useEffect(() => {
+    requestedSectionRef.current = section?.id;
+  }, [section?.id]);
+
   useEffect(() => {
     if (!section || requested === section.id) return undefined;
     setSearchParams((prev) => {
@@ -76,8 +81,9 @@ export default function CodeVideoPanel({ project, audioUrl, onProject, productio
     const step = (dir) => seek(tRef.current + dir / fps);
     const jump = (dir) => {
       if (!sections.length) return;
-      const index = Math.max(0, sections.findIndex((item) => item.id === (section?.id)));
+      const index = Math.max(0, sections.findIndex((item) => item.id === requestedSectionRef.current));
       const next = sections[(index + dir + sections.length) % sections.length];
+      requestedSectionRef.current = next.id;
       setSearchParams((prev) => {
         const params = new URLSearchParams(prev);
         params.set('section', next.id);
@@ -102,7 +108,7 @@ export default function CodeVideoPanel({ project, audioUrl, onProject, productio
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [seek, fps, sections, section, setSearchParams]);
+  }, [seek, fps, sections, setSearchParams]);
 
   useEffect(() => {
     if (!playing) return undefined;
