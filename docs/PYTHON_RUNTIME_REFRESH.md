@@ -184,3 +184,58 @@ inference, all other native-profile compatibility work, isolated major
 migrations, newer CPU minor updates and the previously recorded independent
 platform/acceleration checks. This slice changes an Apple Silicon-only profile;
 it neither adds CUDA/Windows/Linux support nor resolves Pixal3D CUDA #15710.
+
+## Fourth-slice MiniMax H3 MLX patch (2026-11-11)
+
+The MiniMax H3 Apple Silicon profile updates the coupled **MLX / MLX-Metal
+0.32.0 → 0.32.4** pair. The immutable H3 source remains
+`fcd9e9b79a1d6018d91ac477c0968de1fa067e49`, and all other 53 package versions,
+markers and hashes remain unchanged. The installer consumes the lock directly;
+there is no separate adapter version literal to update. Older untouched pins
+remain pending investigation under #15769, rather than compatibility exceptions.
+
+The pinned [H3 requirements](https://github.com/PipeNetwork/minimax-h3-mlx/blob/fcd9e9b79a1d6018d91ac477c0968de1fa067e49/requirements.txt)
+accept `mlx>=0.32.0`. [MLX 0.32.4 metadata](https://pypi.org/pypi/mlx/0.32.4/json)
+requires the matching `mlx-metal==0.32.4` on Darwin and Python 3.10+, within
+this installer's Python 3.11 contract. Both MLX-project distributions retain
+Apple Silicon wheels for macOS 14/15/26 and were published on 2026-10-14.
+The [patch release notes](https://github.com/ml-explore/mlx/releases/tag/v0.32.4)
+include attention, array-view and Metal evaluation fixes. The pinned port's
+`mlx.core`, `mlx.nn`, attention, scheduler and modulation-cache callers were
+inspected; no source/API migration is required by the checks below.
+
+The complete **55-package** lock was regenerated online with SHA-256-verified
+**uv 0.13.7**, `--only-binary :all:` and a freshly computed seven-day cutoff,
+`--exclude-newer 2026-11-04T00:00:00Z`. Its header records the command and the
+source header uses the same wheel-only policy. All **1,125 hashes** match
+non-yanked PyPI artifacts older than the cutoff. OSV querybatch returned zero
+findings for all 55 package/version identities, including malicious-package
+(`MAL-`) records. This does not separately audit bundled native libraries or
+claim new support targets from additional artifact hashes.
+
+Verification used a fresh scratch Apple Silicon CPython **3.11.17** environment
+on macOS **26.6.2** (arm64):
+
+- The complete lock installed with `uv pip sync --require-hashes --only-binary
+  :all:` and passed `uv pip check`. MLX and MLX-Metal both reported 0.32.4.
+- The shipped `minimax_h3_runtime_probe.py --verify-seams` passed against the
+  exact pinned source, including the actual H3 pipeline, Qwen3-VL imports,
+  encoder-source digest and all borrowed processor seams. Torch and TorchVision
+  remain absent as required by this MLX-native profile.
+- The pinned upstream tiny random-weight DiT smoke ran on Metal: finite video
+  `(1, 9, 16)` and audio `(1, 3, 8)` outputs, exact live-versus-cached AdaLN
+  output parity and unchanged output after dropping cached projection weights.
+  Its sigma/timestep schedule check passed. This is synthetic tensor execution,
+  not production H3 model inference or an image/audio quality evaluation.
+- Executing the shipped installer block with fake external processes passed
+  fresh/reuse paths, unsupported-host refusal before installation, hash-sync
+  rejection before the probe, and failed-probe refusal to report readiness.
+  Three focused installer/probe/runner test files passed **223 tests** with four
+  existing conditional skips.
+
+Remaining under #15769: production MiniMax H3 model loading, text/keyframe
+rendering and output quality on Apple Silicon; every other pending profile,
+isolated major migration and previously recorded platform-specific check.
+This Apple Silicon-only slice changes no CUDA profile and does not enable
+Windows/Linux H3 MLX support or resolve Pixal3D CUDA #15710. No production
+weights, provider session or paid generation was started.
