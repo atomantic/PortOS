@@ -13,6 +13,17 @@ describe('lyric sheet check', () => {
     expect(screen.getByRole('button', { name: 'Check sheet against vocal' })).toBeDisabled();
     expect(screen.getByText('Align words with a separated vocal first.')).toBeTruthy();
   });
+  it('restores the local sheet if insertion cannot be saved', async () => {
+    const edit = vi.fn();
+    const save = vi.fn(async () => false);
+    render(<LyricSheetCheck project={{ id: 'p', vocalStemFilename: 'stem.wav', vocalStemMasterFilename: 'song.wav', lyricCues: [cue] }} audioFilename="song.wav" onEditLocal={edit} onSave={save} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Check sheet against vocal' }));
+    act(() => options.onComplete({ result: { extraPhrases: [{ startSec: 3, endSec: 4, text: 'extra words' }], unsungCues: [] } }));
+    fireEvent.click(screen.getByRole('button', { name: 'Insert line here' }));
+    await waitFor(() => expect(edit).toHaveBeenLastCalledWith({ lyricCues: [cue], lyricMarkers: [] }));
+    expect(screen.getByRole('alert')).toHaveTextContent('Could not save the line.');
+    expect(screen.getByText(/extra words/)).toBeTruthy();
+  });
   it('inserts a reported phrase into the saved sheet in time order', async () => {
     const edit = vi.fn();
     const save = vi.fn(async () => true);

@@ -23,19 +23,29 @@ export default function LyricSheetCheck({ project, audioFilename, aligning, onEd
     onKickoffError: err => { setError(err.message); return true; },
   });
   const insert = async (phrase, index) => {
+    const report = result;
+    const originalMarkers = project.lyricMarkers || [];
     const cue = { id: `cue-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`, text: phrase.text, startSec: phrase.startSec, endSec: phrase.endSec };
     const insertion = cues.findIndex(entry => entry.startSec != null && entry.startSec > phrase.startSec);
     const at = insertion < 0 ? cues.length : insertion;
     const next = [...cues.slice(0, at), cue, ...cues.slice(at)];
     const lyricMarkers = (project.lyricMarkers || []).map(marker => marker.line >= at ? { ...marker, line: marker.line + 1 } : marker);
     const patch = { lyricCues: next, lyricMarkers };
-    checked.current = JSON.stringify([project.trackId, project.uploadedAudioFilename, project.vocalStemFilename, project.vocalStemMasterFilename, next]);
+    const insertedSignature = JSON.stringify([project.trackId, project.uploadedAudioFilename, project.vocalStemFilename, project.vocalStemMasterFilename, next]);
+    checked.current = insertedSignature;
     onEditLocal(patch);
     try {
       const saved = await onSave(patch);
-      if (saved === false) { setError('Could not save the line.'); return; }
-      setResult(current => ({ ...current, extraPhrases: current.extraPhrases.filter((_, i) => i !== index) }));
-    } catch (err) { setError(err.message || 'Could not save the line.'); }
+      if (saved === false) throw new Error('Could not save the line.');
+      setResult(currentResult => currentResult === report && checked.current === insertedSignature
+        ? { ...currentResult, extraPhrases: currentResult.extraPhrases.filter((_, i) => i !== index) } : currentResult);
+    } catch (err) {
+      if (current.current === insertedSignature || current.current === signature) {
+        checked.current = signature;
+        onEditLocal({ lyricCues: cues, lyricMarkers: originalMarkers });
+      }
+      setError(err.message || 'Could not save the line.');
+    }
   };
   return <div className="space-y-2 text-sm">
     <button type="button" disabled={Boolean(reason) || aligning || slot.active} onClick={() => { setError(''); setResult(null); checked.current = current.current; slot.start(); }} className="min-h-[44px] rounded border border-port-border px-2 text-port-accent disabled:opacity-50">Check sheet against vocal</button>
