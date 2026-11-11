@@ -177,7 +177,7 @@ describe('AuK explicit setup', () => {
     expect(commands().some(command => command.includes('snapshot_download'))).toBe(false);
   });
   it('refuses to run any command when no patched private uv can be had', async () => {
-    setupMocks.resolveUv.mockResolvedValue({ ok: false, reason: 'Could not bootstrap uv 0.13.6: the hash-verified package install step failed.' });
+    setupMocks.resolveUv.mockResolvedValue({ ok: false, reason: 'Could not bootstrap uv 0.13.7: the hash-verified package install step failed.' });
     startAukSetup();
     await settled();
     expect(await getAukStatus()).toMatchObject({ state: 'failed', error: expect.stringContaining('Could not bootstrap uv') });

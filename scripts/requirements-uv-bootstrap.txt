@@ -3,4 +3,4 @@
 # wheel-extraction advisories. Installed only from requirements-uv-bootstrap.lock.txt;
 # keep the version here equal to the `uv-<version>` tool directory and PRIVATE_UV_VERSION
 # (server/lib/privateUv.js). A test enforces it.
-uv==0.13.6
+uv==0.13.7

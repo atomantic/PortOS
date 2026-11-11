@@ -35,7 +35,7 @@ describe('private patched uv', () => {
     const [a, b] = await Promise.all([ensurePrivateUv({ basePython: '/py/python3' }), ensurePrivateUv({ basePython: '/py/python3' })]);
     expect(a).toEqual({ ok: true, uv: privateUvPath() });
     expect(b).toEqual(a);
-    expect(calls().filter((c) => c.includes('-m venv'))).toEqual(['/py/python3 -m venv --clear /home/example/.portos/tools/uv-0.13.6']);
+    expect(calls().filter((c) => c.includes('-m venv'))).toEqual(['/py/python3 -m venv --clear /home/example/.portos/tools/uv-0.13.7']);
     expect(calls().some((c) => /-m pip install --disable-pip-version-check --require-hashes --no-deps --only-binary :all: -r .*requirements-uv-bootstrap\.lock\.txt$/.test(c))).toBe(true);
   });
 
@@ -50,6 +50,6 @@ describe('private patched uv', () => {
     mock.execFile.mockReset().mockImplementation((bin, args, _opts, done) => done(Object.assign(new Error('boom'), { stderr: 'pip: no network\n' })));
     const failed = await ensurePrivateUv({ basePython: '/py/python3' });
     expect(failed.reason).not.toContain('no network');
-    expect(failed).toMatchObject({ ok: false, reason: expect.stringMatching(/^Could not bootstrap uv 0\.13\.6: the virtualenv creation step failed\.$/) });
+    expect(failed).toMatchObject({ ok: false, reason: expect.stringMatching(/^Could not bootstrap uv 0\.13\.7: the virtualenv creation step failed\.$/) });
   });
 });

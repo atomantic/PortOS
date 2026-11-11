@@ -39,7 +39,7 @@ describe('installLockedRuntime', () => {
   });
 
   it('falls back to hash-checked pip, still without resolution, when no patched private uv can be had', async () => {
-    mock.ensureUv.mockResolvedValue({ ok: false, reason: 'No Python found to bootstrap uv 0.13.6.' });
+    mock.ensureUv.mockResolvedValue({ ok: false, reason: 'No Python found to bootstrap uv 0.13.7.' });
     const onLog = vi.fn();
     await installLockedRuntime('/guard/python', 'guard-runtime', onLog, { preferUv: true, platform: 'darwin', arch: 'arm64' }).promise;
     expect(spawned()).toEqual([`/guard/python -m pip install --require-hashes --no-deps --only-binary :all: -r ${LOCK_PROFILES['guard-runtime'].lockFile}`]);

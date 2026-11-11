@@ -13,7 +13,7 @@ const venv = join(data, 'venvs', 'reactor');
 const windows = process.platform === 'win32';
 const python = join(venv, windows ? 'Scripts/python.exe' : 'bin/python');
 // 0.13.4 is the floor for the compromised-CA and wheel-extraction advisories.
-const version = '0.13.6';
+const version = '0.13.7';
 // Official uv release digests; verify the archive before executing its binary.
 const targets = {
   'darwin-arm64': ['aarch64-apple-darwin', '60fbd5c8a1ed681845eea28d9d622fcde03c51e91a43465b64a1e17db1ed3472'],
