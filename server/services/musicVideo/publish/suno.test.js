@@ -14,9 +14,9 @@ const fakePage = ({ url = SONG_URL, marks = true } = {}) => {
     calls,
     goto: async () => {},
     url: () => url,
-    waitForTimeout: async () => {},
+    waitForFunction: async () => ({ jsonValue: async () => /login|sign-?in/.test(url) ? 'signed-out' : 'ready' }),
     evaluate: async (fn, arg) => {
-      if (fn === markSunoSongMenu) { calls.marked.push(arg); return marks; }
+      if (fn === markSunoSongMenu) { calls.marked.push(arg.songId); return marks; }
       return true;
     },
     locator: (sel) => {
@@ -33,6 +33,12 @@ const fakePage = ({ url = SONG_URL, marks = true } = {}) => {
 };
 
 describe('Suno prepare', () => {
+  it('requests login only when the readiness helper identifies a sign-in page', async () => {
+    const page = fakePage({ url: 'https://suno.com/sign-in' });
+    await expect(sunoAdapter.prepare(page, { songUrl: SONG_URL })).rejects.toMatchObject({ code: 'PUBLISH_LOGIN_REQUIRED' });
+    expect(page.calls.clicked).toEqual([]);
+  });
+
   it("opens the menu marked as the page song's own", async () => {
     const page = fakePage();
     await expect(sunoAdapter.prepare(page, { songUrl: `https://suno.com/song/${SONG}` })).rejects.toThrow(/stop here/);

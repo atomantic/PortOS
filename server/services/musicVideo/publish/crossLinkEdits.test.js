@@ -14,13 +14,27 @@ function fakePage({ url = 'https://example.com', text = '', count = 1 } = {}) {
     innerText: vi.fn(async () => text), count: vi.fn(async () => count), isVisible: vi.fn(async () => false),
   };
   return {
-    typed, goto: vi.fn(async (u) => { url = u; }), url: () => url, waitForTimeout: vi.fn(async () => {}),
+    waitForFunction: async () => ({ jsonValue: async () => 'ready' }), typed, goto: vi.fn(async (u) => { url = u; }), url: () => url, waitForTimeout: vi.fn(async () => {}),
     locator: () => locator, evaluate: vi.fn(async () => true),
     keyboard: { press: vi.fn(async () => {}), insertText: vi.fn(async (t) => typed.push(t)) },
   };
 }
 
 describe('cross-link edits', () => {
+  it('keeps the Suno manual-paste fallback when its owned menu never becomes ready', async () => {
+    const page = fakePage();
+    page.waitForFunction = async () => { throw Object.assign(new Error('menu missing'), { name: 'TimeoutError' }); };
+    const summary = await CROSS_LINK_ADAPTERS.suno.prepare(page, row('suno', 'https://suno.com/song/12345678-abcd-4abc-8abc-123456789abc'));
+    expect(summary.added).toEqual([]);
+    expect(summary.leftForYou).toEqual([expect.stringContaining('Stacker News:'), 'Save']);
+  });
+
+  it('keeps explicit Suno sign-in detection separate from the manual-paste fallback', async () => {
+    const page = fakePage();
+    page.waitForFunction = async () => ({ jsonValue: async () => 'signed-out' });
+    await expect(CROSS_LINK_ADAPTERS.suno.prepare(page, row('suno', 'https://suno.com/song/12345678-abcd-4abc-8abc-123456789abc'))).rejects.toMatchObject({ code: 'PUBLISH_LOGIN_REQUIRED' });
+  });
+
   it('adds only the description lines YouTube does not show yet, and never saves', async () => {
     const page = fakePage({ text: 'Story\nMusic video: https://youtu.be/abc' });
     const summary = await CROSS_LINK_ADAPTERS.youtube.prepare(page, row('youtube', 'https://youtu.be/vid123'));
@@ -48,7 +62,7 @@ describe('cross-link edits', () => {
     const url = 'https://suno.com/song/12345678-abcd-4abc-8abc-123456789abc';
     const filled = [];
     const field = { waitFor: async () => {}, inputValue: async () => 'x'.repeat(480), fill: async (t) => filled.push(t) };
-    const item = { isVisible: async () => true, click: async () => {}, hover: async () => {} };
+    const item = { waitFor: async () => {}, isVisible: async () => true, click: async () => {}, hover: async () => {} };
     const page = fakePage({ url });
     page.locator = (sel) => (String(sel).includes('textarea') ? { first: () => field } : { first: () => item, filter: () => ({ first: () => item }), click: async () => {}, count: async () => 1 });
     const summary = await CROSS_LINK_ADAPTERS.suno.prepare(page, row('suno', url));

@@ -95,6 +95,7 @@ function hookPage({ windowAt = 158, pxPerSec = 22.2, stuckAt = null, restored = 
   const emitPageEvent = (name, value) => (pageEvents.get(name) || []).forEach((handler) => handler(value));
   const locator = (sel, hasText, index = 0) => ({
     first: () => locator(sel, hasText, 0),
+    locator: (next) => locator(next),
     nth: (nextIndex) => locator(sel, hasText, nextIndex),
     filter: (o) => locator(sel, o.hasText, index),
     count: async () => sel.includes('aria-busy') || sel.includes('progressbar') ? 0 : 1,
@@ -102,6 +103,7 @@ function hookPage({ windowAt = 158, pxPerSec = 22.2, stuckAt = null, restored = 
     fill: async () => {},
     inputValue: async () => 'Night Drive',
     setInputFiles: async () => {},
+    evaluateAll: async () => [],
     boundingBox: async () => ({ x: 100, y: 400, width: 600, height: 80 }),
     click: async () => {
       if (sel === 'text=Select Song' && restored) throw new Error('element is not visible');
@@ -143,7 +145,13 @@ function hookPage({ windowAt = 158, pxPerSec = 22.2, stuckAt = null, restored = 
       elementHandle: async () => ({ getAttribute: () => String(state.lyrics) }),
       click: async () => { state.lyrics = !state.lyrics; state.clicked.push('Show Lyrics'); },
     }) }),
-    waitForFunction: async (fn, arg) => { if (!fn(arg)) throw new Error('state did not change'); },
+    waitForFunction: async (fn, arg) => {
+      globalThis.location = { href: 'https://suno.com/hooks/create' };
+      globalThis.document = { querySelector: () => ({}), querySelectorAll: (sel) => sel === 'video' ? [{ readyState: 2, videoWidth: 100, currentSrc: "blob:uploaded" }] : dom[sel]?.() ?? [] };
+      const value = fn(arg);
+      if (!value) throw new Error('state did not change');
+      return { jsonValue: async () => value };
+    },
     evaluate: async (fn, arg) => {
       globalThis.document = { querySelectorAll: (sel) => dom[sel]?.() ?? [] };
       return fn(arg);
@@ -167,7 +175,7 @@ function hookPage({ windowAt = 158, pxPerSec = 22.2, stuckAt = null, restored = 
 const hookPayload = (over = {}) => ({ video: { path: '/tmp/cut.mp4' }, songId: ID, title: 'Night Drive', durationSec: 222, startSec: 20, caption: 'Hook caption', showLyrics: false, cutLayout: 'native', ...over });
 
 describe('Suno Hook fill (#10860)', () => {
-  afterEach(() => { delete globalThis.document; });
+  afterEach(() => { delete globalThis.document; delete globalThis.location; });
 
   it('moves a window Suno opened at 2:38 to 0:20, reading the pill rather than the player clock', async () => {
     const page = hookPage({ windowAt: 158 });

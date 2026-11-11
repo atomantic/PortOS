@@ -1,9 +1,19 @@
 /**
  * Suno song page (suno.com/song/<id>): in-page steps for the publish recipe
- * and the M4A export. Each function runs INSIDE the page through Playwright's
+ * and the M4A export. Marker/inspection functions run INSIDE the page through Playwright's
  * `page.evaluate(fn, arg)`, so it reads only `document` and its argument. The
  * same functions run against fixture documents in the client's DOM tests.
  */
+
+export const SUNO_SONG_MENU_SELECTOR = "button[aria-label^='More options']";
+
+/** Wait for an authenticated song UI or an explicit sign-in redirect. A slow UI is a timeout, not proof of logout. */
+export async function waitForSunoSongPage(page, { timeoutMs = 60_000 } = {}) {
+  const result = await page.waitForFunction(markSunoSongMenu, {
+    menuSelector: SUNO_SONG_MENU_SELECTOR, readiness: true,
+  }, { timeout: timeoutMs });
+  return result.jsonValue();
+}
 
 /**
  * Mark the page song's own "More options" button with `data-portos-song-menu`
@@ -19,7 +29,14 @@
  * title whose label names a song must name the page's title.
  * Two menus owned by the title is ambiguous, so it fails rather than guess.
  */
-export function markSunoSongMenu(songId) {
+// Pass the selector explicitly: Playwright serializes this function without module scope.
+export function markSunoSongMenu({ songId, menuSelector, readiness = false }) {
+  if (readiness) {
+    if (/sign-?in|login|accounts\./i.test(location.href)) return 'signed-out';
+    songId = location.pathname?.match(/\/song\/([0-9a-f-]{36})/i)?.[1]
+      || location.href.match(/\/song\/([0-9a-f-]{36})/i)?.[1];
+  }
+  if (!songId) return false;
   for (const old of document.querySelectorAll('[data-portos-song-menu]')) old.removeAttribute('data-portos-song-menu');
   const wanted = songId.toLowerCase();
   const squash = (value) => String(value || '').replace(/\s+/g, ' ').trim();
@@ -28,7 +45,7 @@ export function markSunoSongMenu(songId) {
   const byOwnLink = [];
   let owner = null;
   let title = '';
-  for (const el of document.querySelectorAll("h1, a[href*='/song/'], button[aria-label^='More options']")) {
+  for (const el of document.querySelectorAll(`h1, a[href*='/song/'], ${menuSelector}`)) {
     if (el.tagName === 'BUTTON') {
       const label = squash(el.getAttribute('aria-label'));
       if (label !== 'More options' && !label.startsWith(titled)) continue;
@@ -47,7 +64,7 @@ export function markSunoSongMenu(songId) {
   const own = byTitle[0] || byOwnLink[0];
   if (!own) return false;
   own.setAttribute('data-portos-song-menu', '');
-  return true;
+  return readiness ? 'ready' : true;
 }
 
 /**
