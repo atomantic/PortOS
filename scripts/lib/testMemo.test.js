@@ -109,6 +109,22 @@ describe('floor key', () => {
     expect(keyOf({ ...TREE, [never]: "import { it } from 'vitest';\nit('x', () => {});\n" }, never).floor).toMatchObject({ memoizable: false, reason: TEST_MEMO_NEVER[never] });
   });
 
+  it('keeps tree scanners out of the memo', () => {
+    const treeScanners = [
+      'server/lib/apiRouteParity.test.js',
+      'server/lib/apiAccessPolicy.test.js',
+      'server/lib/creativeLatitude.sources.test.js',
+      'server/lib/dispatchLabels.audit.test.js',
+      'server/lib/dynamicImportGlobGuard.test.js',
+      'server/lib/promptSystemStages.test.js',
+    ];
+    for (const test of treeScanners) {
+      const info = keyOf({ ...TREE, [test]: "import { it } from 'vitest';\nit('tree guard', () => {});\n" }, test);
+      expect(info.floor.memoizable, test).toBe(false);
+      expect(info.floor.key, test).toBeNull();
+    }
+  });
+
   it('fails closed on a directory input past the limit and accepts one under it', () => {
     const fixtures = {};
     for (let i = 0; i <= DIRECTORY_INPUT_LIMIT; i += 1) fixtures[`server/lib/fixtures/f${i}.json`] = '{}';
