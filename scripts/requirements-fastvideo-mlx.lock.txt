@@ -10,13 +10,15 @@
 # restricted to arm64 macOS wheels.
 #
 # Regenerate after editing requirements-fastvideo-mlx.txt, from the repo root,
-# with a cooldown so brand-new releases are not adopted the day they publish:
+# with a cooldown so brand-new releases are not adopted the day they publish.
+# Set CUTOFF to a UTC date at least seven days before each regeneration.
+# Last regenerated with uv 0.13.7 and CUTOFF=2026-11-04T00:00:00Z:
 #   LOCK="$PWD/scripts/requirements-fastvideo-mlx.lock.txt"; TMP="$(mktemp -d)"
 #   cp scripts/requirements-fastvideo-mlx.txt "$LOCK" "$TMP/"
 #   printf '[project]\nname = "fastvideo-lock"\nversion = "0"\n[tool.uv]\nenvironments = ["sys_platform == '"'"'darwin'"'"' and platform_machine == '"'"'arm64'"'"'"]\n' > "$TMP/pyproject.toml"
 #   (cd "$TMP" && uv pip compile requirements-fastvideo-mlx.txt --universal --python-version 3.11 \
 #     --generate-hashes --no-header --annotation-style line \
-#     --exclude-newer 2026-11-04T00:00:00Z --upgrade-package timm -o requirements-fastvideo-mlx.lock.txt)
+#     --exclude-newer "$CUTOFF" --upgrade-package timm -o requirements-fastvideo-mlx.lock.txt)
 #   cp "$TMP/requirements-fastvideo-mlx.lock.txt" "$LOCK"
 # then check the result against OSV (including MAL- malicious-package records).
 # OSV querybatch (including MAL records), 2026-11-11: all 85 distributions, 0 matches.
