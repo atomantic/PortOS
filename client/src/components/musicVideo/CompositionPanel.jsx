@@ -28,7 +28,7 @@ export default function CompositionPanel({ board }) {
             Change
           </button>
         </div>
-        {mode !== 'document' && (
+        {(!mode || mode === 'concat' || mode === 'eidoverse') && (
           <p className="text-xs text-port-text-muted" role="status">
             No live preview for this style — render a draft excerpt to check changes.{' '}
             <button type="button" onClick={() => board.goToStage('review', 'mv-draft-excerpts')} className="min-h-[44px] px-1 text-port-accent pointer-fine:sm:min-h-0">Render a draft excerpt</button>

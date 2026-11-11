@@ -1999,6 +1999,16 @@ describe('MusicVideo section layers (#8985)', () => {
     await openStage('review');
     expect(screen.getByRole('button', { name: /^Render final$/ })).toBeDisabled();
   });
+
+  it('shows no-live-preview note for concat, and hides it for composed', async () => {
+    await openProject({ ...PROJECT_WITH_CLIP, composition: composition('concat') }, 'produce');
+    expect(screen.getByText(/No live preview for this style — render a draft excerpt to check changes\./)).toBeInTheDocument();
+  });
+
+  it('hides no-live-preview note for composed', async () => {
+    await openProject({ ...PROJECT_WITH_CLIP, composition: composition('composed') }, 'produce');
+    expect(screen.queryByText(/No live preview for this style — render a draft excerpt to check changes\./)).not.toBeInTheDocument();
+  });
 });
 
 describe('MusicVideo concept & style editor (#3168)', () => {

@@ -807,7 +807,7 @@ describe('finished outside PortOS', () => {
     expect(deriveNextAction(external, { readiness: unapproved })).toMatchObject({ id: 'finish-plan' });
   });
 
-  it('counts Song through Make as done, and reads Published once the render and posts are real', () => {
+  it('counts Song through Shots as done, and reads Published once the render and posts are real', () => {
     const progress = deriveStages(marked, unapproved);
     expect(progress.stages.map((s) => [s.id, s.state, s.stale])).toEqual(
       MUSIC_VIDEO_STAGES.map((s) => [s.id, 'done', false]),
@@ -836,7 +836,7 @@ describe('finished outside PortOS', () => {
   it('says a stale render can only be redone here with the approvals', () => {
     const stale = { ...marked, renderDependencyState: { status: 'stale' } };
     expect(deriveStages(stale, unapproved).current).toBe('review');
-    expect(stageChecklist('review', stale, unapproved)[0].detail).toMatch(/needs the Song through Make approvals; unmark Finished outside PortOS/);
+    expect(stageChecklist('review', stale, unapproved)[0].detail).toMatch(/needs the Song through Shots approvals; unmark Finished outside PortOS/);
   });
 });
 

@@ -26,7 +26,7 @@ export const finishedOutsideBlocker = (project) => (project?.renderHistoryId
   ? null : 'Bring the finished video in as the final render first; rendering here needs the step approvals.');
 
 /** The Final render note for a marked project whose render went out of date: re-rendering here needs the approvals. */
-export const FINISHED_OUTSIDE_RERENDER_NOTE = 'Re-rendering here needs the Song through Make approvals; unmark Finished outside PortOS in Project settings to bring them back.';
+export const FINISHED_OUTSIDE_RERENDER_NOTE = 'Re-rendering here needs the Song through Shots approvals; unmark Finished outside PortOS in Project settings to bring them back.';
 
 /** Whether the marker covers `stageId`. */
 export const finishedOutsideCovers = (project, stageId) => !!finishedOutside(project) && FINISHED_OUTSIDE_STAGE_IDS.includes(stageId);
