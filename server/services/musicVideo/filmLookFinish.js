@@ -120,7 +120,9 @@ function filmLookFinishPage({ width, height, fps, durationSec, offsetSec = 0, lo
       const local = Math.max(0, t - OFFSET);
       const target = Math.min((Math.floor(local * FPS + 1e-6) + 0.5) / FPS, Math.max(0, video.duration - 1e-3));
       await seekVideo(target);
+      const drawStarted = performance.now();
       if (gpu) gpu.render(video, LOOK, { frame: Math.max(0, Math.round((Number(t) || 0) * FPS)), width: WIDTH, height: HEIGHT });
+      return { path: gpu ? 'gpu' : 'svg', drawMs: gpu ? performance.now() - drawStarted : 0 };
     },
   };
 })();
@@ -194,6 +196,7 @@ async function chooseFilmLookPath(page, { width, height, fps, frames, offsetSec 
  * Rejects on failure or when `signal` aborts, leaving `path` as it was.
  */
 export async function applyFilmLookFinish({ project, look: lookInput, path, jobId, signal, onProgress, offsetSec = 0, workers, useGpu, label = 'Music-video film look' }) {
+  const started = performance.now();
   const look = normalizeFilmLook(lookInput === undefined ? project?.filmLook : lookInput);
   if (!look || isFilmLookNeutral(look)) return false;
   if (typeof jobId !== 'string' || !/^[A-Za-z0-9_-]+$/.test(jobId)) throw new Error('Invalid film look job id');
@@ -272,7 +275,9 @@ export async function applyFilmLookFinish({ project, look: lookInput, path, jobI
     }
     await rename(finished, path);
     onProgress?.(1);
-    console.log(`🎞️ ${label} [${jobId.slice(0, 8)}]: ${look.preset} over ${frames} frames at ${width}×${height}`);
+    const timing = encoded?.timing;
+    const perFrame = key => timing?.frames ? (timing[key] / timing.frames).toFixed(1) : 'unavailable';
+    console.log(`🎞️ ${label} [${jobId.slice(0, 8)}]: ${look.preset} over ${frames} frames at ${width}×${height}; wall ${((performance.now() - started) / 1000).toFixed(1)}s; workers ${encoded?.workers ?? 1}; GPU/SVG frames ${timing?.gpuFrames ?? 0}/${timing?.svgFrames ?? 0}; ms/frame seek ${perFrame('seekMs')}, GPU draw submission ${perFrame('drawMs')}, capture (includes SVG draw/GPU wait) ${perFrame('captureMs')}, encode write/drain ${perFrame('encodeMs')}`);
     return true;
   } finally {
     if (page) await page.close().catch(() => {});
