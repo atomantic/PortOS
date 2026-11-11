@@ -792,16 +792,14 @@ INSTALL_FASTVIDEO="${INSTALL_FASTVIDEO:-0}"
 if [[ "$INSTALL_FASTVIDEO" == "1" ]]; then
   # FastVideo provides native Apple Silicon inference for Wan and FastMetal models
   # via MLX/Metal. Reached only when the user chooses Install/Repair in Video Gen.
-  if ! is_apple_silicon; then
-    echo "❌ FastVideo MLX requires an Apple-Silicon Mac." >&2
-    exit 1
-  fi
+  FASTVIDEO_AUDITED_REVISION="fa2d1324c60050cd65209c6aaeac470e7fb412f5"
+  FASTVIDEO_PIN="${FASTVIDEO_PIN:-$FASTVIDEO_AUDITED_REVISION}"
+  require_mlx_video_profile "FastVideo MLX" "$FASTVIDEO_PIN" "$FASTVIDEO_AUDITED_REVISION"
   if ! have git; then
     echo "❌ INSTALL_FASTVIDEO=1 requires git." >&2
     exit 1
   fi
 
-  FASTVIDEO_PIN="${FASTVIDEO_PIN:-fa2d1324c60050cd65209c6aaeac470e7fb412f5}"
   FASTVIDEO_DIR="${HOME}/.portos/fastvideo"
   FASTVIDEO_PY="${FASTVIDEO_DIR}/.venv/bin/python3"
   FASTVIDEO_LOCK="${SCRIPT_DIR}/requirements-fastvideo-mlx.lock.txt"
@@ -829,12 +827,13 @@ if [[ "$INSTALL_FASTVIDEO" == "1" ]]; then
   # (scripts/requirements-fastvideo-mlx.lock.txt): no install-time resolution,
   # so a new or compromised transitive release can't land on the next Repair.
   # Direct pins: scripts/requirements-fastvideo-mlx.txt. The checkout itself
-  # is installed with --no-deps so no unpinned dependencies resolve.
+  # is installed with --no-deps and --no-build-isolation so no unpinned dependencies
+  # resolve from PyPI during the editable build.
   # --python is mandatory: `uv pip sync` and `uv pip install` resolve their
   # target interpreter from VIRTUAL_ENV/CONDA_PREFIX if --python is omitted.
   echo "📦 Installing FastVideo MLX packages from hash-pinned lock into ${FASTVIDEO_DIR}/.venv..."
-  portos_uv pip sync --require-hashes --python "${FASTVIDEO_PY}" "$FASTVIDEO_LOCK"
-  portos_uv pip install --no-deps --python "${FASTVIDEO_PY}" -e "${FASTVIDEO_DIR}"
+  portos_uv pip sync --require-hashes --only-binary :all: --python "${FASTVIDEO_PY}" "$FASTVIDEO_LOCK"
+  portos_uv pip install --no-deps --no-build-isolation --python "${FASTVIDEO_PY}" -e "${FASTVIDEO_DIR}"
   pin_venv_arm64 "${FASTVIDEO_DIR}/.venv"
   probe_or_fail \
     "FastVideo synced but the runtime import failed in ${FASTVIDEO_PY}." \
