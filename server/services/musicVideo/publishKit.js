@@ -32,6 +32,8 @@ import { canonicalizeSunoUrl, isSunoShareLink } from '../sunoShareLink.js';
 import { admittedRenderMap } from '../renderActivity.js';
 import { pickThumbnailFrames, scoreThumbnailFrame, thumbnailCandidates } from './thumbnailFrames.js';
 
+import { resolveRenderVideoFile } from './finalRenderFile.js';
+
 const jobs = new Map();
 const projectBuilds = admittedRenderMap('music-video-publish-kit', { noun: 'publishing kit build', link: (projectId) => `/music-video/${encodeURIComponent(projectId)}` });
 // X caps a Premium upload's bitrate well under a 1080p master's; ~12 Mbps
@@ -61,11 +63,9 @@ export const getActivePublishKitBuild = (projectId) => {
 /** The final render's file (the YouTube master), or a 409 naming what's missing. */
 async function finalRenderFile(project) {
   if (!project.renderHistoryId) throw kitError(409, 'NO_FINAL_RENDER', 'Render the final video before building the publishing kit');
-  const { getHistoryItem } = await import('../videoGen/history.js');
-  const entry = await getHistoryItem(project.renderHistoryId);
-  const path = entry?.filename ? safeUnder(PATHS.videos, entry.filename) : null;
-  if (!path || !existsSync(path)) throw kitError(409, 'NO_FINAL_RENDER', 'The final render file is missing — render the final video again');
-  return { entry, path };
+  const resolved = await resolveRenderVideoFile(project.renderHistoryId);
+  if (!resolved) throw kitError(409, 'NO_FINAL_RENDER', 'The final render file is missing — render the final video again');
+  return resolved;
 }
 
 /** A file an older build left behind, deleted only once no project's kit still names it (a clone shares the record). */

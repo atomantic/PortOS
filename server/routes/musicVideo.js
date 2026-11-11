@@ -163,6 +163,7 @@ import {
   refreshSongStyleFromSuno,
 } from '../services/musicVideo/projects.js';
 import { requireProject } from '../services/musicVideo/requireProject.js';
+import { resolveRenderVideoFile } from '../services/musicVideo/finalRenderFile.js';
 import { renderSceneClips, renderSceneFrames } from '../services/musicVideo/sceneCardRender.js';
 import { labelProjectReferences } from '../services/musicVideo/referenceLabels.js';
 import { buildHandoffManifest, buildHandoffBundle, matchSceneByFileTag } from '../services/musicVideo/handoff.js';
@@ -430,6 +431,18 @@ router.post('/:id/clone', asyncHandler(async (req, res) => {
 
 router.patch('/:id', asyncHandler(async (req, res) => {
   const data = validateRequest(projectUpdateSchema, req.body);
+  if (data.renderHistoryId !== undefined && data.renderHistoryId !== null) {
+    const current = await requireProject(req.params.id);
+    if (data.renderHistoryId !== current.renderHistoryId) {
+      const resolved = await resolveRenderVideoFile(data.renderHistoryId);
+      if (!resolved) {
+        throw new ServerError("That render is not in this machine's video history.", {
+          status: 422,
+          code: 'MUSIC_VIDEO_RENDER_NOT_FOUND',
+        });
+      }
+    }
+  }
   const updated = await updateProject(req.params.id, data);
   res.json(updated);
 }));
