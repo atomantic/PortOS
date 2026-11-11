@@ -18,8 +18,8 @@ import { MUSIC_VIDEO_MEDIA_MODE_LABELS, musicVideoMediaMode } from '../../../../
  * A Blender film leads with its own panel (its shots and cuts are the
  * preview) and keeps the Film look: that finishing pass runs over its final
  * render like any other. It has no typography panel (lettering is authored in
- * Blender, and the automatic lyric overlay is not applied) and no grade (the
- * grade belongs to the composed and document renders).
+ * Blender, and the automatic lyric overlay is not applied). Its grade is
+ * available alongside the Film look as part of the finishing controls.
  */
 export default function CompositionPanel({ board }) {
   const { project, locked, audioUrl } = board;
