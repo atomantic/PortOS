@@ -1593,6 +1593,33 @@ describe('CatalogIngredient — tabbed library record pages', () => {
     expect(toast.success).toHaveBeenCalledWith('Rendering Comparison with Example Rival…');
   });
 
+  it('regenerates a saved comparison despite a different selected partner preview failing', async () => {
+    const api = await import('../services/apiCatalog');
+    api.listCatalogSheetVariants.mockResolvedValue({ variants: [...SHEET_VARIANTS,
+      { id: 'comparison', label: 'Comparison (two characters)', description: 'One shared sheet.' }] });
+    getCatalogIngredientDetails.mockResolvedValue({ ...detailsOf(HERO), media: [...MEDIA, {
+      mediaKey: 'pair.png', kind: 'reference', role: 'sheet:comparison',
+      library: { comparedWith: 'cat-chr-original', review: { status: 'bad', feedback: 'Keep their intended heights.' } },
+    }] });
+    api.previewCatalogSheet.mockImplementation(async (_id, body) => {
+      if (body.partnerId === 'cat-chr-rival') throw new Error('Selected partner is missing a portrait');
+      return { preview: null };
+    });
+    api.renderCatalogSheet.mockResolvedValue({ jobId: 'saved-pair-job', variant: 'comparison', role: 'sheet:comparison', delegatedTo: null });
+    api.attachCatalogIngredientMedia.mockResolvedValue({});
+    await renderPage('/casting/cat-chr-hero/sheets');
+    fireEvent.change(await screen.findByLabelText('Sheet kind'), { target: { value: 'comparison' } });
+    fireEvent.click(screen.getByRole('button', { name: /Compare with/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Pick stub character' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /Generate sheet/ })).toHaveAttribute('title', 'Selected partner is missing a portrait'));
+    expect(screen.getByRole('button', { name: /Generate sheet/ })).toBeDisabled();
+    const regenerate = screen.getByRole('button', { name: 'Regenerate sheet' });
+    expect(regenerate).toBeEnabled();
+    fireEvent.click(regenerate);
+    await waitFor(() => expect(api.renderCatalogSheet).toHaveBeenCalledWith('cat-chr-hero',
+      { variant: 'comparison', partnerId: 'cat-chr-original' }, { silent: true }));
+  });
+
   it('keeps the sheet form usable while a render runs so another sheet can start', async () => {
     const api = await import('../services/apiCatalog');
     api.renderCatalogSheet
