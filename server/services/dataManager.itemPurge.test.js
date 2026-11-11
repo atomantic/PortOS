@@ -107,6 +107,9 @@ describe('purgeCategory — category-scoped categories keep their behavior', () 
     await expect(purgeCategory('local-llm', { subPath: 'jev-shadow.json' }))
       .rejects.toMatchObject({ status: 409, code: 'CATEGORY_ITEM_PROTECTED' });
     expect(existsSync(dataPath('local-llm', 'jev-shadow.json'))).toBe(true);
+    await expect(purgeCategory('local-llm', { subPath: 'JEV-SHADOW.JSON' }))
+      .rejects.toMatchObject({ status: 409, code: 'CATEGORY_ITEM_PROTECTED' });
+    expect(existsSync(dataPath('local-llm', 'jev-shadow.json'))).toBe(true);
   });
 
   it('empties the directory when no subPath is given', async () => {
