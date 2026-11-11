@@ -13,14 +13,14 @@ const venv = join(data, 'venvs', 'reactor');
 const windows = process.platform === 'win32';
 const python = join(venv, windows ? 'Scripts/python.exe' : 'bin/python');
 // 0.13.4 is the floor for the compromised-CA and wheel-extraction advisories.
-const version = '0.13.6';
+const version = '0.13.7';
 // Official uv release digests; verify the archive before executing its binary.
 const targets = {
-  'darwin-arm64': ['aarch64-apple-darwin', '60fbd5c8a1ed681845eea28d9d622fcde03c51e91a43465b64a1e17db1ed3472'],
-  'darwin-x64': ['x86_64-apple-darwin', '63ba17fdda55ad1a230d4b37fc6017ffa10c23688c83818bd3bfdf914c652a02'],
-  'linux-arm64': ['aarch64-unknown-linux-gnu', '229e194255c7958d86d56e8790d969a6f74736592133f0dfd0076f754c642c1d'],
-  'linux-x64': ['x86_64-unknown-linux-gnu', 'f29c3e94ffabd7e6f3ba521dba169a9b7ec12100bf3257087f0f24f6123f3645'],
-  'win32-x64': ['x86_64-pc-windows-msvc', 'a2a8820d5eea32f08ef467ef3b7f66883a9b076d5737a2fc2fbb5f458d1bb50f'],
+  'darwin-arm64': ['aarch64-apple-darwin', '81b811b57e4624df7ed3aac148e0359100d9962f3d9dce00aec533dc2e086731'],
+  'darwin-x64': ['x86_64-apple-darwin', '20c47e4c1f630b8abaff8c291fa9b9aa300fef92c4fbff95adf198b55287cda7'],
+  'linux-arm64': ['aarch64-unknown-linux-gnu', '71279f8d3c67241e807b9d8db872d1bf541579fb9f08b7d1eb1682196d1e57dc'],
+  'linux-x64': ['x86_64-unknown-linux-gnu', 'c5221ff41b7892bfc223543883600125f6a47fe845093e0f5bdff4f359196d83'],
+  'win32-x64': ['x86_64-pc-windows-msvc', '0cdc5b38fe5a8168ed6a25814f5ba43c21d313dd3187314fccb37b7cec46e021'],
 };
 const env = { ...process.env, UV_PYTHON_INSTALL_DIR: join(data, 'venvs', 'reactor-python'), UV_NO_PROGRESS: '1' };
 function setupError(code) {

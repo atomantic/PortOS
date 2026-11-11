@@ -15,7 +15,7 @@ import { safeChildProcessOptions } from './processEnv.js';
 
 const execFileAsync = promisify(execFile);
 
-export const PRIVATE_UV_VERSION = '0.13.6';
+export const PRIVATE_UV_VERSION = '0.13.7';
 // First release with the CA and wheel-extraction fixes. Lock headers document
 // the same floor for regeneration.
 export const MIN_PATCHED_UV = Object.freeze([0, 13, 4]);
@@ -26,7 +26,7 @@ export const privateUvPath = () =>
 const venvPythonPath = () =>
   join(privateUvDir(), platform() === 'win32' ? join('Scripts', 'python.exe') : join('bin', 'python3'));
 
-// `uv 0.13.6 (329bf9448 2026-10-26 aarch64-apple-darwin)` -> [0, 13, 6]; null for anything else.
+// `uv 0.13.7 (316c827e0 2026-11-03 aarch64-apple-darwin)` -> [0, 13, 7]; null for anything else.
 function parseUvVersion(banner) {
   const match = /^uv (\d+)\.(\d+)\.(\d+)/.exec(String(banner || '').trim());
   return match ? match.slice(1).map(Number) : null;

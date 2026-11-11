@@ -28,11 +28,11 @@ const installFlags = [
 // path for both POSIX and native Windows venv layouts.
 const seedPrivateUv = `
 for layout in bin/uv Scripts/uv.exe; do
-  tool="$HOME/.portos/tools/uv-0.13.6/$layout"
+  tool="$HOME/.portos/tools/uv-0.13.7/$layout"
   mkdir -p "$(dirname "$tool")"
   {
     printf '#!/usr/bin/env bash\\n'
-    printf 'if [[ "$1" == --version ]]; then echo "uv 0.13.6"; exit 0; fi\\n'
+    printf 'if [[ "$1" == --version ]]; then echo "uv 0.13.7"; exit 0; fi\\n'
     declare -f uv
     printf 'uv "$@"\\n'
   } > "$tool"
@@ -696,7 +696,7 @@ describe('uv installs target their own venv, not an inherited one', () => {
     // The tool directory and version probe must track the locked release.
     const version = pin.slice(1).join('.');
     expect(source.match(new RegExp(`uv-${version.replaceAll('.', '\\.')}`, 'g'))).toHaveLength(1);
-    expect(source).toContain('^uv\\ 0\\.13\\.6($|[[:space:]])');
+    expect(source).toContain('^uv\\ 0\\.13\\.7($|[[:space:]])');
   });
 
   it('passes --python to every uv pip install', () => {
@@ -729,7 +729,7 @@ describe('private uv and MLX video lock installation boundary', () => {
       chmodSync(path, 0o755);
     };
     executable(uv, `
-if [[ "$1" == --version ]]; then echo 'uv 0.13.6 (fixture)'; exit 0; fi
+if [[ "$1" == --version ]]; then echo 'uv 0.13.7 (fixture)'; exit 0; fi
 [[ -z "\${UV_PROJECT+x}\${UV_WORKING_DIR+x}\${UV_NO_BUILD_ISOLATION+x}\${UV_NO_VERIFY_HASHES+x}" ]] || exit 98
 [[ "$1" == --no-config ]] || exit 90
 shift
@@ -782,7 +782,7 @@ cp "$PIP_FIXTURE" "\${@: -1}/bin/python3"`);
     const alternatePython = join(home, 'alternate-python');
     writeFileSync(alternatePython, readFileSync(python));
     chmodSync(alternatePython, 0o755);
-    if (privateVersion) executable(join(home, '.portos/tools/uv-0.13.6/bin/uv'), `[[ \"$1\" == --version ]] || echo 'stale execute' >> \"$LOG\"; echo 'uv ${privateVersion}'`);
+    if (privateVersion) executable(join(home, '.portos/tools/uv-0.13.7/bin/uv'), `[[ \"$1\" == --version ]] || echo 'stale execute' >> \"$LOG\"; echo 'uv ${privateVersion}'`);
     const run = (extra = {}) => {
       writeFileSync(log, '');
       return spawnSync(resolveBashBinary(), ['-c', `
@@ -898,7 +898,7 @@ source "$1"
     expect(install.calls()).toBe('');
   });
 
-  it.each(['0.13.3', '0.13.60'])('replaces a private uv reporting %s before using it', (privateVersion) => {
+  it.each(['0.13.3', '0.13.70'])('replaces a private uv reporting %s before using it', (privateVersion) => {
     const install = installer('INSTALL_LTX2', { privateVersion });
     const result = install.run();
     expect(result.status, result.stderr).toBe(0);
@@ -1131,7 +1131,7 @@ describe('MiniMax H3 CUDA hash-pinned installation', () => {
     executable('python3', 'exit 0');
     executable('ffmpeg', 'exit 0');
     executable('ffprobe', 'exit 0');
-    executable('uv', `if [[ \"$1\" == --version ]]; then echo 'uv 0.13.6'; exit 0; fi\nprintf '%s\\n' "$*" >> "$CALL_LOG"
+    executable('uv', `if [[ \"$1\" == --version ]]; then echo 'uv 0.13.7'; exit 0; fi\nprintf '%s\\n' "$*" >> "$CALL_LOG"
 if [[ "$1" == venv ]]; then
   root="\${@: -1}"
   mkdir -p "$root/$PY_LAYOUT"
@@ -1144,7 +1144,7 @@ else
   exit 42
 fi`);
     for (const layout of ['bin/uv', 'Scripts/uv.exe']) {
-      const tool = join(dir, '.portos/tools/uv-0.13.6', layout);
+      const tool = join(dir, '.portos/tools/uv-0.13.7', layout);
       mkdirSync(dirname(tool), { recursive: true });
       writeFileSync(tool, readFileSync(join(bin, 'uv')));
       chmodSync(tool, 0o755);

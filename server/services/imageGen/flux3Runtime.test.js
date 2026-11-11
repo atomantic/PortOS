@@ -71,7 +71,7 @@ describe('isolated FLUX.3 runtime lifecycle', () => {
   });
 
   it('never falls back to an ambient uv: an unpatched or missing private uv stops the install before any command', async () => {
-    patchedUv.mockResolvedValueOnce({ ok: false, reason: 'No Python found to bootstrap uv 0.13.6.' });
+    patchedUv.mockResolvedValueOnce({ ok: false, reason: 'No Python found to bootstrap uv 0.13.7.' });
     await expect(installFlux3Runtime(vi.fn()).promise).rejects.toThrow('needs a patched uv');
     expect(command).not.toHaveBeenCalled();
   });
