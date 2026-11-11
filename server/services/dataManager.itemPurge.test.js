@@ -39,6 +39,11 @@ beforeEach(() => {
   // `screenshots` stays category-scoped (and deletable: messages/review are not).
   mkdirSync(dataPath('screenshots', 'account'), { recursive: true });
   writeFileSync(dataPath('screenshots', 'index.json'), '{}');
+  mkdirSync(dataPath('local-llm', 'assessments'), { recursive: true });
+  mkdirSync(dataPath('local-llm', 'capability-tests'), { recursive: true });
+  writeFileSync(dataPath('local-llm', 'assessments', 'model.json'), '{}');
+  writeFileSync(dataPath('local-llm', 'capability-tests', 'model.json'), '{}');
+  writeFileSync(dataPath('local-llm', 'jev-shadow.json'), '{"agreements":3}');
 });
 
 describe('purgeCategory — item-scoped categories (#3327)', () => {
@@ -91,6 +96,19 @@ describe('purgeCategory — item-scoped categories (#3327)', () => {
 });
 
 describe('purgeCategory — category-scoped categories keep their behavior', () => {
+  it('purges local model assessments and keeps jev decision history', async () => {
+    await purgeCategory('local-llm');
+    expect(existsSync(dataPath('local-llm', 'assessments'))).toBe(false);
+    expect(existsSync(dataPath('local-llm', 'capability-tests'))).toBe(false);
+    expect(existsSync(dataPath('local-llm', 'jev-shadow.json'))).toBe(true);
+  });
+
+  it('refuses an item purge of jev decision history', async () => {
+    await expect(purgeCategory('local-llm', { subPath: 'jev-shadow.json' }))
+      .rejects.toMatchObject({ status: 409, code: 'CATEGORY_ITEM_PROTECTED' });
+    expect(existsSync(dataPath('local-llm', 'jev-shadow.json'))).toBe(true);
+  });
+
   it('empties the directory when no subPath is given', async () => {
     const result = await purgeCategory('screenshots');
     expect(result).toEqual({ category: 'screenshots', subPath: null });

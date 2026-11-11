@@ -157,10 +157,9 @@ export const CATEGORIES = {
   'jira-reports': { label: 'Jira Reports', description: 'Generated Jira reports — regenerable from Jira', archivable: true, deletable: true, purgeScope: 'category' },
   'loops': { label: 'Loops', description: 'Output history from scheduled loop runs', archivable: true, deletable: false },
   'lora-datasets': { label: 'LoRA Datasets', description: 'Training images and captions for LoRA runs — uploaded source material, not regenerable', archivable: false, deletable: false },
-  // Measured local-model assessments. Deletable: every record is reproducible by
-  // re-running the assessment, and a stale one (taken before a RAM upgrade or a
-  // backend update) actively misleads the picker.
-  'local-llm': { label: 'Local Model Assessments', description: 'Measured fit and performance results for installed local models — re-runnable, and stale after a hardware or backend change', archivable: true, deletable: true, purgeScope: 'category' },
+  // Measured local-model assessments are reproducible. Preserve jev's shadow
+  // counters, which share this directory but record scheduled observations.
+  'local-llm': { label: 'Local Model Assessments', description: 'Measured fit and performance results for installed local models — re-runnable and stale after a hardware or backend change; jev agreement counters are kept', archivable: true, deletable: true, purgeScope: 'category', purgeFilter: name => name !== 'jev-shadow.json' },
   'loras': { label: 'LoRAs', description: 'Trained and downloaded LoRA adapters — included in backups by default; a trained one is not regenerable without hours of GPU retraining', archivable: false, deletable: false },
   'meatspace': { label: 'MeatSpace', description: 'Body metrics, blood tests, eyes', archivable: true, deletable: false },
   'media-collections': { label: 'Media Collections', description: 'Media collection records', archivable: true, deletable: false },
@@ -696,9 +695,14 @@ async function purgeCategoryUncached(categoryKey, options) {
     const protectedPaths = categoryKey === 'repos' ? await protectedRepoPaths() : [];
 
     if (wantsItem) {
-      if (categoryKey === 'screenshots' && isPersistentMindScreenshotEntry(options.subPath)) {
-        throw new ServerError('Persistent Mind owns this attachment or upload recovery marker; manage it through Mind', {
-          status: 409, code: 'SCREENSHOT_OWNED_BY_MIND',
+      if (meta.purgeFilter && !meta.purgeFilter(options.subPath)) {
+        if (categoryKey === 'screenshots' && isPersistentMindScreenshotEntry(options.subPath)) {
+          throw new ServerError('Persistent Mind owns this attachment or upload recovery marker; manage it through Mind', {
+            status: 409, code: 'SCREENSHOT_OWNED_BY_MIND',
+          });
+        }
+        throw new ServerError(`"${options.subPath}" is kept by the ${categoryKey} category`, {
+          status: 409, code: 'CATEGORY_ITEM_PROTECTED',
         });
       }
       const resolvedRoot = resolve(dirPath);
