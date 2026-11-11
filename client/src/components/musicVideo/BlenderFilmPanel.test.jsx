@@ -123,9 +123,24 @@ describe('BlenderFilmPanel: shots', () => {
     finished.renders.s030 = { preview: { file: 's030/preview/shot.mp4', frames: 72, complete: true, stale: false, finishedAt: '2026-10-01T11:01:00.000Z' }, stills: [] };
     getMusicVideoBlender.mockResolvedValueOnce(finished);
     await push('music-video:blender', { projectId: 'mv-test', kind: 'job', job: { ...frame, status: 'done' } });
+    expect(getMusicVideoBlender).toHaveBeenCalledTimes(1);
+    await push('music-video:blender', { projectId: 'mv-test', kind: 'state' });
     expect(getMusicVideoBlender).toHaveBeenCalledTimes(2);
     expect(row('s030')).toHaveTextContent('Preview done');
     expect(screen.queryByText('1 job at work')).toBeNull();
+  });
+
+  it('reserves the Cancel control in the action row before a job starts', async () => {
+    await renderPanel('?bshot=s030');
+    const actions = within(detail('s030')).getByRole('group', { name: 'Render this shot' });
+    const cancel = [...actions.querySelectorAll('button')].find((button) => button.textContent.includes('Cancel'));
+    expect(cancel).toBeDisabled();
+    expect(cancel).toHaveClass('invisible');
+    const count = actions.children.length;
+    await push('music-video:blender', { projectId: 'mv-test', kind: 'job', job: { id: 'j1', kind: 'render', shotId: 's030', quality: 'preview', status: 'running' } });
+    expect(actions.children).toHaveLength(count);
+    expect(cancel).not.toHaveClass('invisible');
+    expect(cancel).toBeEnabled();
   });
 
   it('keeps the selected shot in the URL, restores it from a link, and steps shots from the timeline with the arrow keys', async () => {

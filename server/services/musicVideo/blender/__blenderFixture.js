@@ -49,7 +49,10 @@ export const createFakeBlender = () => {
         const skipped = Boolean(job.resume) && existsSync(path) && statSync(path).size > 0;
         if (!skipped) {
           mkdirSync(dirname(path), { recursive: true });
-          writeFileSync(path, `frame ${frame}`);
+          if (job.quality === 'still') {
+            const { default: sharp } = await import('sharp');
+            await sharp({ create: { width: 1920, height: 1080, channels: 3, background: '#346789' } }).png().toFile(path);
+          } else writeFileSync(path, `frame ${frame}`);
         }
         onStdoutLine(line({ event: 'frame', shot: shot.id, frame, index: index + 1, total: frames.length, sec: skipped ? 0 : 0.25, skipped }));
       }

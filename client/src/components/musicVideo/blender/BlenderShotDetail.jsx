@@ -85,11 +85,9 @@ function BlenderShotDetail({ blender, shot, audioUrl, blocker, onTime, onOpenPre
           onClick={() => renderShot('final', final)}>
           <Film size={14} aria-hidden="true" /> {pending[`render:${shot.id}:final`] ? 'Queuing…' : renderLabel('Final', final)}
         </button>
-        {activeJobs.length > 0 && (
-          <button type="button" className={buttonCls} disabled={canceling} onClick={cancel}>
-            <Square size={14} aria-hidden="true" /> {canceling ? 'Canceling…' : 'Cancel'}
-          </button>
-        )}
+        <button type="button" className={`${buttonCls} ${activeJobs.length ? '' : 'invisible'}`} disabled={!activeJobs.length || canceling} onClick={cancel}>
+          <Square size={14} aria-hidden="true" /> {canceling ? 'Canceling…' : 'Cancel'}
+        </button>
         {renders.blend && (
           <button type="button" className={buttonCls} disabled={!state.tool?.ready || !!pending[`open:${shot.id}`]} onClick={() => blender.openShot(shot.id)}
             title={state.tool?.ready ? 'Opens the scene saved with this shot’s last render' : 'Set up Blender first'}>
@@ -138,7 +136,7 @@ function BlenderShotDetail({ blender, shot, audioUrl, blocker, onTime, onOpenPre
               <li key={still.file}>
                 <button type="button" onClick={() => onOpenPreview(blenderStillPreviewKey(shot.id, still.file))}
                   className="block w-full overflow-hidden rounded border border-port-border focus:outline-none focus-visible:ring-2 focus-visible:ring-port-accent">
-                  <img src={musicVideoBlenderMediaUrl(projectId, still.file)} alt={`Still at ${formatTimecode(still.timeSec ?? shot.start)}`} loading="lazy" decoding="async"
+                  <img src={musicVideoBlenderMediaUrl(projectId, still.thumbnail || still.file)} alt={`Still at ${formatTimecode(still.timeSec ?? shot.start)}`} loading="lazy" decoding="async"
                     className="aspect-video w-full bg-black object-cover" />
                   {/* Made from scripts or options that have changed since: the shot no longer looks like this. */}
                   {still.stale && <span className="block px-1 py-0.5 text-left text-[11px] text-port-warning">Out of date</span>}

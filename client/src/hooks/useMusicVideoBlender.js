@@ -8,7 +8,7 @@ import {
   saveMusicVideoBlenderFile, saveMusicVideoBlenderSettings, saveMusicVideoBlenderShotNote, syncMusicVideoBlender,
 } from '../services/apiMusicVideo.js';
 import {
-  blenderOptionChanges, blenderOptionFields, blenderRenderBlocker, blenderShotRenderBlocker, changedBlenderSettings, isBlenderJobTerminal, mergeBlenderJob,
+  blenderOptionChanges, blenderOptionFields, blenderRenderBlocker, blenderShotRenderBlocker, changedBlenderSettings, mergeBlenderJob,
 } from '../lib/musicVideoBlender.js';
 
 const EMPTY_DRAFTS = Object.freeze({ settings: {}, options: {}, notes: {}, files: {} });
@@ -30,7 +30,7 @@ const without = (map, key) => {
  * A project's Blender film: the server's state, live job progress and every
  * action on it. The state is read once, then kept current by the
  * `music-video:blender` socket channel — a `job` message folds into the job
- * list at once, and a finished job, a `state` message, a reconnect or the tab
+ * list at once, and a `state` message, a reconnect or the tab
  * coming back re-reads it. Never polled.
  *
  * One read runs at a time (a request for another while it is in flight runs
@@ -138,11 +138,7 @@ export default function useMusicVideoBlender(projectId, { enabled = true } = {})
       if (message.kind === 'job' && message.job?.id) {
         liveJobs.current.set(message.job.id, { job: message.job, at: ++clock.current });
         setState((current) => (current ? { ...current, jobs: mergeBlenderJob(current.jobs, message.job) } : current));
-        // A finished job changed the renders, cuts or manifest it wrote.
-        if (isBlenderJobTerminal(message.job)) {
-          setUsageRevision((revision) => revision + 1);
-          read.current();
-        }
+        // The server follows terminal jobs with a state message; that message owns refreshes.
         return;
       }
       if (message.kind === 'state') {

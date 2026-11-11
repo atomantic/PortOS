@@ -277,13 +277,13 @@ export function blenderStillPreviewItems(state, mediaUrl) {
 /**
  * The media path of a shot's picture for the list, or null when nothing was
  * rendered: the preview's poster (a small JPEG the server makes with the shot
- * video), else its newest still, else the final's poster.
+ * video), else its newest still thumbnail, else the final's poster.
  */
 export function blenderShotThumbPath(state, shot) {
   const renders = state?.renders?.[shot?.id];
   if (!renders) return null;
   // Stills arrive newest first.
-  return renders.preview?.poster || renders.stills?.[0]?.file || renders.final?.poster || null;
+  return renders.preview?.poster || renders.stills?.[0]?.thumbnail || renders.final?.poster || null;
 }
 
 /**

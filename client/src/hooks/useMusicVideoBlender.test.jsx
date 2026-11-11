@@ -84,19 +84,32 @@ describe('useMusicVideoBlender', () => {
     expect(getMusicVideoBlender).toHaveBeenCalledTimes(3);
   });
 
-  it('runs one read at a time: a burst of finished jobs costs one more read, not one each', async () => {
+  it('runs one read at a time: a burst of state messages costs one more read, not one each', async () => {
     const { result } = renderHook(() => useMusicVideoBlender('mv-test'));
     await waitFor(() => expect(result.current.status).toBe('ready'));
     const slow = deferred();
     getMusicVideoBlender.mockReturnValueOnce(slow.promise);
-    await push('music-video:blender', frame({ id: 'a', status: 'canceled' }));
-    await push('music-video:blender', frame({ id: 'b', status: 'canceled' }));
-    await push('music-video:blender', frame({ id: 'c', status: 'canceled' }));
+    await push('music-video:blender', { projectId: 'mv-test', kind: 'state' });
+    await push('music-video:blender', { projectId: 'mv-test', kind: 'state' });
+    await push('music-video:blender', { projectId: 'mv-test', kind: 'state' });
     expect(getMusicVideoBlender).toHaveBeenCalledTimes(2);
     await act(async () => { slow.resolve(blenderFilmState()); });
     await waitFor(() => expect(getMusicVideoBlender).toHaveBeenCalledTimes(3));
     await act(async () => {});
     expect(getMusicVideoBlender).toHaveBeenCalledTimes(3);
+  });
+
+  it('merges terminal progress immediately and refreshes state and usage only on the follow-up state event', async () => {
+    const { result } = renderHook(() => useMusicVideoBlender('mv-test'));
+    await waitFor(() => expect(result.current.status).toBe('ready'));
+    getMusicVideoBlender.mockClear();
+    await push('music-video:blender', frame({ status: 'done' }));
+    expect(jobOf(result).status).toBe('done');
+    expect(getMusicVideoBlender).not.toHaveBeenCalled();
+    expect(result.current.usageRevision).toBe(0);
+    await push('music-video:blender', { projectId: 'mv-test', kind: 'state' });
+    expect(getMusicVideoBlender).toHaveBeenCalledTimes(1);
+    expect(result.current.usageRevision).toBe(1);
   });
 
   it('drops an answer for the project that was open before', async () => {

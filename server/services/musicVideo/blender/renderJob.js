@@ -23,7 +23,7 @@ import { updateBlenderJob } from './jobs.js';
 import { openBlenderJobLog } from './logs.js';
 import {
   blenderFilmOptions, blenderFrameName, blenderFramePattern, blenderFramesDir, blenderRenderFile, blenderShotPoster, blenderShotVideo,
-  blenderStillsFile, countBlenderFrames,
+  blenderStillThumbnail, blenderStillsFile, countBlenderFrames,
 } from './renderIndex.js';
 
 const STILLS_KEPT = 24;
@@ -48,9 +48,17 @@ async function recordStills(projectId, shot, frames, { fps, srcHash, optionsHash
   const listed = await readBlenderJson(file, []);
   const createdAt = new Date().toISOString();
   const fresh = frames.map((frame) => ({ file: blenderStillName(frame, fps), timeSec: Number((frame / fps).toFixed(6)), frame, srcHash, optionsHash, createdAt }));
+  const { default: sharp } = await import('sharp');
+  for (const still of fresh) {
+    const source = join(directory, still.file);
+    await sharp(source).resize({ width: 320, height: 320, fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 70 }).toFile(blenderStillThumbnail(source));
+  }
   const names = new Set(fresh.map((still) => still.file));
   const kept = [...fresh, ...(Array.isArray(listed) ? listed : []).filter((still) => typeof still?.file === 'string' && !names.has(still.file))];
-  for (const dropped of kept.slice(STILLS_KEPT)) await rm(join(directory, dropped.file), { force: true });
+  for (const dropped of kept.slice(STILLS_KEPT)) {
+    await rm(join(directory, dropped.file), { force: true });
+    await rm(join(directory, blenderStillThumbnail(dropped.file)), { force: true });
+  }
   await atomicWrite(file, kept.slice(0, STILLS_KEPT));
 }
 
