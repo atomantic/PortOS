@@ -10,7 +10,7 @@
 import { normalizeTitleCard, titleCardWindows } from '../../../lib/musicVideoTitleCard.js';
 
 /** The card's windows that reach into `[startSec, endSec)` of the film (song seconds). Pure. */
-export function blenderTitleCardWindows(project, { startSec = 0, endSec }) {
+function blenderTitleCardWindows(project, { startSec = 0, endSec }) {
   return titleCardWindows(normalizeTitleCard(project?.titleCard)).filter((window) => window.startSec < endSec && window.endSec > startSec);
 }
 
