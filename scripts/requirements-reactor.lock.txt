@@ -16,11 +16,14 @@
 #   (cd "$TMP" && uv pip compile requirements-reactor.txt --universal --python-version 3.12 \
 #     --only-binary :all: --generate-hashes --no-header --annotation-style line \
 #     --exclude-newer <UTC date at least 7 days ago> -o "$OLDPWD/scripts/requirements-reactor.lock.txt")
+# Generated with uv 0.13.7; --exclude-newer 2026-11-04T00:00:00Z.
 # then check the result against OSV (including MAL- malicious-package records).
-reactor-sdk==1.0.1 ; (platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') \
-    --hash=sha256:6ea666d49b25ec8e1b0c6fbb0cd2069a22b30eb6624dcb01c9bf1c35699ab417 \
-    --hash=sha256:815320e81722e660ccc02d8d282a729ea302b91cab32f27e38d574777ef72b37 \
-    --hash=sha256:96910f34beccc361ed47d36da00168f2b7dafbf98913b983ab6cc51d7566e430 \
-    --hash=sha256:be8b4692ae19e38881c7cfa83fd021619b9511b2d9bf818d656278fc1f25e65b \
-    --hash=sha256:e3b7f8278f6f7bcf3cd36120664cb83218ff0023cc99ad9f049e4ef09db046f3
+reactor-sdk==1.13.0 ; (platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux') or (platform_machine == 'AMD64' and sys_platform == 'win32') \
+    --hash=sha256:2f58379a99f3e592f50f9780eeeb874a91ed604d0d58d46e2ffdd6f65d1b21b3 \
+    --hash=sha256:3f60a3b3a2e5a825cbb344cdd189592b19c0a0a5a8bd94a911ae21434074533e \
+    --hash=sha256:73c44462fca3f3eab24792c73cace7d5828784a3f2a4ad6463423b197b6aa077 \
+    --hash=sha256:a0c31d60a7727c958ffc595fff532338f68fc6e664021bbe12facad018e3a78d \
+    --hash=sha256:a52a607de5238f41daf198102ba78205137e5efd1305dee659f474b0684b327a \
+    --hash=sha256:abcaad57c1c3b02931bc9444fe99e1ac00586222f8509acceec9411bc2091610 \
+    --hash=sha256:bc06bda2d699a8c401aba0da7fc19435389ece9476064a988e86454305727bad
     # via requirements-reactor.txt
