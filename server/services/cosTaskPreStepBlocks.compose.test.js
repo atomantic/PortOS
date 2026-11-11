@@ -323,6 +323,24 @@ describe('prepareManagedAppImprovementTask composes the extracted pre-step layer
     ]) }));
   });
 
+  it('persists each retained branch with its delivery failures even when review ownership blocks recovery', async () => {
+    const branch = 'fix/retained';
+    const path = '/example/checkouts/retained';
+    const prUrl = 'https://github.com/example/repo/pull/9';
+    reconcileMock.mockResolvedValue(scan({ inFlight: [{ branch, worktreePath: path, state: 'IN_REVIEW', openPr: { url: prUrl, isDraft: false } }],
+      worktreeInventory: [{ branch, path, head: 'a'.repeat(40), locked: false, managed: true }] }));
+    inspectOpenDeliveryRepair.mockResolvedValue({ headSha: 'a'.repeat(40), evidence: {
+      conflicts: true, checks: [{ name: 'CI Gate', conclusion: 'FAILURE' }],
+    } });
+    inspectOrQueueCompletedReview.mockResolvedValue({ disposition: 'held', reason: 'review-task-missing' });
+    expect(await generate()).toBeNull();
+    const row = recordBranchReconcileOutcome.mock.calls.at(-1)[1].remaining.find(entry => entry.branch === branch);
+    expect(row).toMatchObject({ branch, path, prUrl, reason: 'review-task-missing' });
+    expect(row.nextAction).toContain('original owner task is missing');
+    expect(row.nextAction).toContain('conflicts with the default branch');
+    expect(row.nextAction).toContain('CI Gate (FAILURE)');
+  });
+
   it.each(['completion-policy', 'merged-claim'])('a normal user reconcile drains %s retirement without generating an agent', async kind => {
     const release = { branch: 'claim/issue-1', path: '/example/checkouts/1', head: 'a'.repeat(40), managed: true, locked: false };
     const branch = { branch: release.branch, worktreePath: release.path, tip: release.head,

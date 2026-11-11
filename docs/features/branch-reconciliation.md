@@ -28,6 +28,23 @@ list is not permission to remove them.
 `no coordinator task eligible; unresolved holds retained` means the inventory
 still contains work, but none can currently be dispatched. Inspect the per-app
 outcome rather than treating the absence of a generated task as successful cleanup.
+Every retained branch is also named with its reason in the run log. Open delivery
+rows link their PR and retain observed conflicts, requested changes and failed
+check names alongside any review-recovery hold, so an ownership hold cannot hide
+the delivery failure. Serial retries with the same task, instance, budget epoch
+and consecutive dispatch ordinals share one review owner; unrelated or overlapping
+executions remain ambiguous. Historical policies and current task budgets still apply.
+
+- `review-task-missing` means the completed owner's task record is unavailable.
+  Restore trusted task history before resuming its configured review; PR text is
+  not a replacement policy and a missing record does not replenish any budget.
+- `retirement-pr-ambiguous` means no unique merged PR could be selected, including
+  branches whose PR was closed without merging. Finish wanted work, or inspect
+  the replacement and use the explicit supersession retirement described below.
+- `retirement-policy-not-legacy-completed` means historical completion evidence
+  does not establish retirement for the current head, for example after rebasing.
+  Verify its current merged delivery and use the scoped checkout release below;
+  that endpoint still enforces live ownership and manual policy holds.
 
 - `retirement-forge-unavailable` means PR evidence could not be read. Restore
   the managed app's forge access and rerun. A missing local commit on the forge

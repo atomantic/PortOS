@@ -648,6 +648,11 @@ export async function parkPerpetual(taskType, appId = null, { reason = null, act
   const causes = formatSkipCauses(skipCauses);
   const causeSummary = causes ? ` — ${causes}` : '';
   emitLog('info', `Perpetual ${taskType} parked until ${parkedUntil} (${reason || 'idle'}${causeSummary})`, { taskType, appId, parkedUntil }, '📅 TaskSchedule');
+  if (taskType === 'branch-reconcile') {
+    for (const row of record.branchReconcileOutcome?.remaining || []) {
+      emitLog('info', `🔀 branch-reconcile retained ${row.branch || row.path || 'repository scan'}: ${row.reason}${row.nextAction ? ` — ${row.nextAction}` : ''}`, { appId });
+    }
+  }
   cosEvents.emit('schedule:perpetual-parked', { taskType, appId, parkedUntil, reason, actionableCount, counts, skipCauses });
   return record;
 }

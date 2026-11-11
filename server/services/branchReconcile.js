@@ -1074,6 +1074,14 @@ export async function gatherBranchState(repoPath, { defaultBranch, activeAgentId
   return inputs;
 }
 
+const HOLD_NEXT_ACTIONS = {
+  'retirement-pr-ambiguous': 'No unique merged pull request was found for this branch. Finish its delivery, or compare a closed obsolete branch with its replacement and use scoped supersession retirement.',
+  'retirement-policy-not-legacy-completed': 'The historical completion record does not establish retirement for this checkout’s current head. Verify its current merged delivery and use scoped checkout retirement; live owners and manual handoffs still apply.',
+  'review-owner-ambiguous': 'Resolve competing or unverified execution owners before resuming the original review workflow.',
+  'review-task-missing': 'The original owner task is missing. Restore its trusted task record before resuming review; do not recreate its budgets or infer its policy from PR text.',
+  'review-task-unavailable': 'The original owner task could not be read. Restore task-store availability and rerun reconciliation; an unavailable read does not establish that history is missing.',
+};
+
 /**
  * Summarize every surviving hold when reconciliation has nothing dispatchable.
  * Persist counts and typed causes, with the earliest known hold expiry as the
@@ -1146,6 +1154,9 @@ export function describeIdleReconcilePark(skipped = [], heldLive = [], { wip = [
       ...(entry.detached && { detached: true }),
       ...(entry.managed !== undefined && { managed: entry.managed }),
       ...(entry.archiveLimit && { archiveLimit: entry.archiveLimit }),
+      ...(entry.prUrl && { prUrl: entry.prUrl }),
+      ...(entry.taskId && { taskId: entry.taskId }),
+      ...((entry.nextAction || HOLD_NEXT_ACTIONS[entry.cause]) && { nextAction: entry.nextAction || HOLD_NEXT_ACTIONS[entry.cause] }),
       reason: entry.cause,
     })),
     notLaterThan: lifts.length ? new Date(Math.min(...lifts)).toISOString() : null

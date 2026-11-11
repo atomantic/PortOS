@@ -7,7 +7,7 @@ vi.mock('./branchCompletionPolicy.js', () => ({
   readBranchCompletionPolicies: async () => f.agents,
   readBranchCompletionHold: async () => f.hold,
 }));
-vi.mock('./cosTaskStore.js', () => ({ getTaskById: async id => f.tasks[id], getTaskView: async () => ({ user: { tasks: [] }, cos: { tasks: f.queue } }) }));
+vi.mock('./cosTaskStore.js', () => ({ getTaskById: async id => f.tasks[id] ?? null, getTaskView: async () => ({ user: { tasks: [] }, cos: { tasks: f.queue } }) }));
 vi.mock('./cosClaimOwnership.js', () => ({ readClaimOwnershipAgents: async () => f.live }));
 vi.mock('./mergeHandoffOwner.js', () => ({ repositoryKey: origin => origin ? `${origin.host}/${origin.fullName}`.toLowerCase() : null }));
 vi.mock('../lib/gitRemote.js', () => ({ getOriginInfo: async () => ({ host: 'github.com', fullName: 'example/repo' }) }));
@@ -61,6 +61,49 @@ describe('completed owner required review inspection', () => {
     expect(await inspect()).toMatchObject({ disposition: 'review-required', agentId: 'owner' });
     f.agents[0].metadata.claimBranches = ['another-branch'];
     expect((await inspect()).reason).toBe('review-owner-ambiguous');
+  });
+  it('recovers the latest serial attempt of one persisted task budget without treating retries as competing owners', async () => {
+    const first = f.agents[0];
+    first.metadata.instanceId = 'instance';
+    first.metadata.completionTaskDispatch = { taskId: 'task', spawnBudgetEpoch: 'epoch', expected: [['totalSpawnCount', 1]] };
+    const retry = structuredClone(first);
+    retry.id = 'retry'; retry.startedAt = '2026-01-01T02:00:00Z'; retry.completedAt = '2026-01-01T03:00:00Z';
+    retry.metadata.completionTaskDispatch.expected = [['totalSpawnCount', 2]];
+    f.agents.push(retry);
+    expect(await inspect()).toMatchObject({ disposition: 'review-required', agentId: 'retry', reviewTarget: { ownerId: 'retry' } });
+    first.metadata.repoCleanupRecoveries = { feature: { phase: 'reserved', attempts: 1, taskId: null } };
+    expect(await inspect()).toMatchObject({ disposition: 'held', reason: 'review-owner-ambiguous' });
+    delete first.metadata.repoCleanupRecoveries;
+    // Selection is for inspection, not permission to drop historical policy.
+    f.hold = 'pr-completion-human-handoff';
+    expect(await inspect()).toMatchObject({ disposition: 'held', reason: 'review-policy-unproven' });
+    f.hold = 'pr-completion-review-required';
+    delete f.tasks.task;
+    expect(await inspect()).toMatchObject({ disposition: 'held', reason: 'review-task-missing' });
+    expect(f.pending).toEqual([]);
+  });
+  it('distinguishes a missing task from an unreadable task store', async () => {
+    delete f.tasks.task;
+    expect(await inspect()).toMatchObject({ disposition: 'held', reason: 'review-task-missing' });
+    Object.defineProperty(f.tasks, 'task', { get() { throw new Error('task store offline'); } });
+    expect(await inspect()).toMatchObject({ disposition: 'held', reason: 'review-task-unavailable' });
+  });
+  it.each(['epoch', 'instance', 'task', 'overlap', 'ordinal', 'malformed'])('does not collapse distinct or unverified retry history: %s', async change => {
+    const first = f.agents[0];
+    first.metadata.instanceId = 'instance';
+    first.metadata.completionTaskDispatch = { taskId: 'task', spawnBudgetEpoch: 'epoch', expected: [['totalSpawnCount', 1]] };
+    const retry = structuredClone(first);
+    retry.id = 'retry'; retry.startedAt = '2026-01-01T02:00:00Z'; retry.completedAt = '2026-01-01T03:00:00Z';
+    retry.metadata.completionTaskDispatch.expected = [['totalSpawnCount', 2]];
+    if (change === 'epoch') retry.metadata.completionTaskDispatch.spawnBudgetEpoch = 'other';
+    if (change === 'instance') retry.metadata.instanceId = 'other';
+    if (change === 'task') retry.taskId = 'other';
+    if (change === 'overlap') retry.startedAt = first.startedAt;
+    if (change === 'ordinal') retry.metadata.completionTaskDispatch.expected = [['totalSpawnCount', 4]];
+    if (change === 'malformed') retry.metadata.completionTaskDispatch.expected = {};
+    f.agents.push(retry);
+    expect(await inspect()).toMatchObject({ disposition: 'held', reason: 'review-owner-ambiguous' });
+    expect(f.pending).toEqual([]);
   });
   it('does not turn optional or disabled reviews into a new code review', async () => {
     f.roster.optionalReviewers = ['codex'];

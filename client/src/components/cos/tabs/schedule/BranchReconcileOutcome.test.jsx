@@ -24,6 +24,17 @@ function open() {
 describe('BranchReconcileOutcome checkout retirement', () => {
   beforeEach(() => { retire.mockReset(); prepare.mockReset(); refresh.mockReset(); });
 
+  it('shows the retained branch reason, delivery blockers and pull request together', () => {
+    const nextAction = 'The original owner task is missing. Failed checks: CI Gate (FAILURE).';
+    render(<BranchReconcileOutcome outcomes={{ 'app-1': { status: 'incomplete', remaining: [{
+      branch: 'fix/retained', reason: 'review-task-missing', nextAction, prUrl: 'https://github.com/example/repo/pull/9',
+    }] } }} apps={[]} />);
+    expect(screen.getByText('fix/retained: review-task-missing')).toBeInTheDocument();
+    expect(screen.getByText(nextAction)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Pull request' })).toHaveAttribute('href', 'https://github.com/example/repo/pull/9');
+    expect(retire).not.toHaveBeenCalled();
+  });
+
   it('presents checkout retirement as a visible action before asking for confirmation', () => {
     render(<BranchReconcileOutcome outcomes={outcomes} apps={[{ id: 'app-1', name: 'Example App' }]} />);
     fireEvent.click(screen.getByText(/Example App · Incomplete · 2 remaining/));
