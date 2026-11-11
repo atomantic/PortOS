@@ -10,7 +10,8 @@ vi.mock('../mediaAssetIndex/index.js', () => ({
 }));
 
 // Mock peerFetch for network isolation.
-vi.mock('../../lib/peerHttpClient.js', async () => ({
+vi.mock('../../lib/peerHttpClient.js', async (importOriginal) => ({
+  ...(await importOriginal()),
   peerFetch: vi.fn(),
   peerSocketOptions: {},
 }));
@@ -60,6 +61,32 @@ const fakePeer = { instanceId: 'peer-x', name: 'Peer X' };
 const fakeBase = 'http://peer-x.test:5555';
 
 describe('pullSidecarForImage', () => {
+  it('ends a stalled sidecar body without writing it and permits a later pull', async () => {
+    const body = JSON.stringify({ prompt: 'a cat' });
+    let stream;
+    const cancel = vi.fn();
+    const response = new Response(new ReadableStream({ start(controller) { stream = controller; }, cancel }), {
+      headers: { 'Content-Length': String(Buffer.byteLength(body)) },
+    });
+    vi.mocked(peerFetch).mockResolvedValueOnce(response);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    let outcome;
+    const pending = pullSidecarForImage(fakePeer, fakeBase, 'retry.png').then(result => { outcome = result; });
+    try {
+      await vi.waitFor(() => expect(response.body.locked).toBe(true));
+      await vi.advanceTimersByTimeAsync(60000);
+      expect(outcome).toBe(false);
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(existsSync(join(PATHS.images, 'retry.metadata.json'))).toBe(false);
+      vi.mocked(peerFetch).mockResolvedValue(new Response(body, { headers: { 'Content-Length': String(Buffer.byteLength(body)) } }));
+      expect(await pullSidecarForImage(fakePeer, fakeBase, 'retry.png')).toBe(true);
+    } finally {
+      stream.error(new Error('Synthetic stream cleanup'));
+      await pending;
+      vi.useRealTimers();
+    }
+  });
+
   it('fetches and writes sidecar when peer returns ok', async () => {
     const sidecarBody = JSON.stringify({ prompt: 'a cat', model: 'flux' });
     const buf = Buffer.from(sidecarBody);
@@ -145,23 +172,16 @@ describe('pullSidecarForImage', () => {
     expect(existsSync(join(PATHS.images, 'scalar.metadata.json'))).toBe(false);
   });
 
-  // Build a fetch-style Response whose body streams `chunks` via getReader(),
-  // and whose arrayBuffer() throws (so the test proves the streaming path is used).
   const streamingRes = (contentLength, ...chunks) => {
     let i = 0;
-    return {
-      ok: true,
-      headers: new Headers({ 'content-length': String(contentLength) }),
-      body: {
-        getReader: () => ({
-          read: async () => (i < chunks.length
-            ? { done: false, value: chunks[i++] }
-            : { done: true, value: undefined }),
-          cancel: async () => {},
-        }),
+    const response = new Response(new ReadableStream({
+      pull(controller) {
+        if (i < chunks.length) controller.enqueue(chunks[i++]);
+        else controller.close();
       },
-      arrayBuffer: async () => { throw new Error('should stream via getReader, not arrayBuffer'); },
-    };
+    }), { headers: { 'content-length': String(contentLength) } });
+    response.arrayBuffer = async () => { throw new Error('should stream via getReader, not arrayBuffer'); };
+    return response;
   };
 
   it('streams the body via getReader (native-fetch path) and writes a valid sidecar', async () => {

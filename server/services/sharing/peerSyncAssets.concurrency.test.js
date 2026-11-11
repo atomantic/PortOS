@@ -25,7 +25,7 @@ vi.mock('../instances.js', () => ({
   getPeers: vi.fn(async () => peers),
 }));
 
-vi.mock('../../lib/peerHttpClient.js', () => ({ peerFetch: vi.fn() }));
+vi.mock('../../lib/peerHttpClient.js', async (importOriginal) => ({ ...(await importOriginal()), peerFetch: vi.fn() }));
 
 const { peerFetch } = await import('../../lib/peerHttpClient.js');
 const { pullMissingAssetsFromPeer, assetWriteQueue } = await import('./peerSyncAssets.js');

@@ -31,7 +31,7 @@ vi.mock('../instances.js', () => ({
   getPeers: vi.fn(async () => peers),
 }));
 
-vi.mock('../../lib/peerHttpClient.js', () => ({ peerFetch: vi.fn() }));
+vi.mock('../../lib/peerHttpClient.js', async (importOriginal) => ({ ...(await importOriginal()), peerFetch: vi.fn() }));
 
 // Stub only the thumbnail generator — the rest of ffmpeg.js stays real so any
 // other consumer in the import graph behaves normally. The real one shells out
