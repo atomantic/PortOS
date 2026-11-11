@@ -12,8 +12,13 @@ export default function PreviewVideo({ videoRef, audioRef, active = true, classN
     const invalidate = () => {
       cancelAnimationFrame(handle);
       delete video.dataset.pausedFrame;
+      // Keep the last picture during a paused seek. Capture requires the new
+      // frame identity, independently of which surface is still on screen.
+    };
+    const showNative = () => {
+      invalidate();
       canvas.style.visibility = 'hidden';
-      video.style.visibility = audio.paused ? 'hidden' : '';
+      video.style.visibility = '';
     };
     const paint = () => {
       if (!active || !audio.paused || video.seeking || video.readyState < 2) return;
@@ -23,7 +28,7 @@ export default function PreviewVideo({ videoRef, audioRef, active = true, classN
       if (!video.videoWidth || !video.videoHeight) return;
       canvas.width = width; canvas.height = height;
       const ctx = canvas.getContext('2d', { colorSpace: 'srgb' });
-      if (!ctx) { video.dataset.previewError = 'Frame capture unavailable'; return; }
+      if (!ctx) { video.style.visibility = 'hidden'; video.dataset.previewError = 'Frame capture unavailable'; return; }
       try {
         ctx.drawImage(video, 0, 0, width, height);
         delete video.dataset.previewError;
@@ -42,16 +47,17 @@ export default function PreviewVideo({ videoRef, audioRef, active = true, classN
     const events = ['loadeddata', 'seeked', 'pause'];
     for (const event of events) video.addEventListener(event, schedule);
     video.addEventListener('seeking', invalidate);
-    video.addEventListener('emptied', invalidate);
-    audio.addEventListener('play', invalidate);
+    video.addEventListener('emptied', showNative);
+    audio.addEventListener('play', showNative);
     audio.addEventListener('pause', schedule);
-    schedule();
+    if (audio.paused) schedule();
+    else showNative();
     return () => {
       invalidate();
       for (const event of events) video.removeEventListener(event, schedule);
       video.removeEventListener('seeking', invalidate);
-      video.removeEventListener('emptied', invalidate);
-      audio.removeEventListener('play', invalidate);
+      video.removeEventListener('emptied', showNative);
+      audio.removeEventListener('play', showNative);
       audio.removeEventListener('pause', schedule);
     };
   }, [videoRef, audioRef, active, props.src]);
