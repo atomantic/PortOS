@@ -85,11 +85,13 @@ def install(root):
     toolchain = preflight(profile)  # No runtime mutation before compatibility is known.
     root = Path(root).resolve()
     root.mkdir(parents=True, exist_ok=True)
+    venv = root / '.venv'
+    if venv.is_symlink():
+        raise SystemExit('Refusing to rebuild a symlinked TRELLIS.2 environment.')
     lock = SCRIPTS / 'requirements-trellis2-mps.lock.txt'
     # Fetch and verify every source before replacing an existing interpreter.
     with tempfile.TemporaryDirectory(prefix='portos-trellis-', dir=root) as downloads:
         archives = [(s, fetch_source(s, Path(downloads))) for s in profile['sources']]
-        venv = root / '.venv'
         installing = root / 'portos-installing'
         installing.write_text(profile['id'] + '\n')
         run([sys.executable, '-m', 'venv', '--clear', venv])

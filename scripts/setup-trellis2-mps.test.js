@@ -1,13 +1,14 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { PY_SUBPROCESS_TIMEOUT_MS, PY_TEST_TIMEOUT_MS, resolveTestPython } from '../server/lib/testHelper.js';
 
 const python = resolveTestPython();
 const script = fileURLToPath(new URL('./setup-trellis2-mps.py', import.meta.url));
+const wrapper = fileURLToPath(new URL('./setup-trellis2-mps.sh', import.meta.url));
 const roots = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
@@ -28,6 +29,9 @@ runtime = root / 'runtime'; runtime.mkdir()
 (runtime / 'weights.bin').write_text('retained weights')
 (runtime / '.venv').mkdir()
 (runtime / '.venv' / 'legacy-python').write_text('old ABI')
+if mode == 'symlink-venv':
+    (runtime / '.venv').rename(root / 'shared-venv')
+    (runtime / '.venv').symlink_to(root / 'shared-venv', target_is_directory=True)
 original = json.loads((pathlib.Path(sys.argv[1]).parent / 'trellis2-mps-profile.json').read_text())
 archives = {}
 for source in original['sources']:
@@ -99,7 +103,7 @@ describe.skipIf(!python)('TRELLIS.2 Metal Install/Repair boundary', () => {
     expect(result.calls.some(args => args.some(arg => arg.endsWith('setup.sh')))).toBe(false);
   }, PY_TEST_TIMEOUT_MS);
 
-  it.each(['old-python', 'wrong-arch', 'old-macos', 'old-xcode', 'missing-metal', 'bad-hash'])(
+  it.each(['old-python', 'wrong-arch', 'old-macos', 'old-xcode', 'missing-metal', 'bad-hash', 'symlink-venv'])(
     'rejects %s before changing the existing runtime', mode => {
       const result = run(mode);
       expect(result.error).toBeTruthy();
@@ -118,4 +122,17 @@ describe.skipIf(!python)('TRELLIS.2 Metal Install/Repair boundary', () => {
     expect(installs).toHaveLength({ 'failed-venv': 0, 'failed-lock': 1, 'failed-native': 2 }[mode]);
     expect(result.weights).toBe('retained weights');
   }, PY_TEST_TIMEOUT_MS);
+});
+
+describe.skipIf(process.platform === 'win32')('TRELLIS.2 Metal interpreter wrapper', () => {
+  it('resolves an explicit interpreter command on PATH', () => {
+    const root = mkdtempSync(join(tmpdir(), 'trellis wrapper '));
+    roots.push(root);
+    const record = join(root, 'argv.json');
+    writeFileSync(join(root, 'python3.13'), `#!${process.execPath}\nrequire('node:fs').writeFileSync(process.env.RECORD, JSON.stringify(process.argv.slice(2)));\n`, { mode: 0o755 });
+    execFileSync('bash', [wrapper, 'runtime'], {
+      env: { ...process.env, PATH: `${root}${delimiter}${process.env.PATH}`, PYTHON_BIN: 'python3.13', RECORD: record },
+    });
+    expect(JSON.parse(readFileSync(record, 'utf8'))).toEqual([script, 'runtime']);
+  });
 });
