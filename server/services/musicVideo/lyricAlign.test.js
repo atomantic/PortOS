@@ -429,6 +429,22 @@ describe('alignProjectLyrics', () => {
     expect(saved.lyricCues[2].suspect).toBe(true);
   });
 
+  it('does not accept an expanded repair overlapping a retained neighboring line', async () => {
+    const record = { ...project, vocalStemFilename: 'stem.wav', lyricCues: [
+      { id: 'a', text: 'one two three', startSec: null, endSec: null },
+      { id: 'b', text: 'four five six', startSec: null, endSec: null },
+    ] };
+    const words = (text, start, step) => text.split(' ').map((w, i) => ({
+      w, startSec: round3(start + i * step), endSec: round3(start + (i + 1) * step), conf: 'matched',
+    }));
+    const whole = [words('one two three', 1, 0.1), words('four five six', 1.5, 0.1)];
+    const retries = [words('one two three', 1, 0.3), whole[1]];
+    const forceAlign = vi.fn().mockResolvedValueOnce(whole).mockResolvedValueOnce(retries);
+    const h = harness(vi.fn(), record, { resolveAudio: async () => ({ path: 'stem.wav', source: 'vocal-stem' }) });
+    const saved = await h.run({ deps: { forceAlign } });
+    expect(saved.lyricCues.map((cue) => cue.words)).toEqual(whole);
+  });
+
   it.each(['cancel', 'text', 'audio'])('saves nothing when an automatic repair is interrupted by %s', async (outcome) => {
     const record = { ...project, vocalStemFilename: 'stem.wav', lyricCues: [
       { id: 'a', text: 'under blue skies', startSec: null, endSec: null },

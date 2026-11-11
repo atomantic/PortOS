@@ -174,6 +174,9 @@ export async function alignProjectLyrics(projectId, options = {}) {
             const original = wholeSongWords[index];
             const { compressed, silent } = quality[index];
             if (!retry || retry.length !== original.length || compressedWords(retry)) continue;
+            // A retained neighbor still occupies its whole-song span.
+            if (retry[0]?.startSec < forcedWords[index - 1]?.at(-1)?.endSec
+              || retry.at(-1)?.endSec > forcedWords[index + 1]?.[0]?.startSec) continue;
             const retrySilent = silentCount(retry);
             if (retrySilent < silent || (compressed && retrySilent <= silent)) forcedWords[index] = retry;
           }
