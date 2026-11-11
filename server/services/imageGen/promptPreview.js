@@ -14,6 +14,7 @@ import { CLI_IMAGE_INPUT_PROVENANCE } from '../../lib/imageInputProvenance.js';
 import { carriedPromptAdditions, sentPromptRecord } from '../../lib/modelInput.js';
 import { FAL_IMAGE_DEFAULT_MODEL, falImageFamily } from '../../lib/falImageModels.js';
 import { HIGGSFIELD_IMAGE_DEFAULT_MODEL, higgsfieldImageFamily } from '../../lib/higgsfieldImageModels.js';
+import { GOOGLE_IMAGE_DEFAULT_MODEL, googleImageFamily } from '../../lib/googleImageModels.js';
 import { maxInputImages, resolveCloudProviderConfig } from './cloudProviderConfig.js';
 import { resolveInputImages } from './inputImages.js';
 import { reviewedReferencePreview } from './reviewedReference.js';
@@ -25,6 +26,7 @@ import { agySentPrompt } from './agy.js';
 import { falImageSentPrompt } from './fal.js';
 import { runwayImageSentPrompt } from './runway.js';
 import { higgsfieldImageSentPrompt } from './higgsfield.js';
+import { googleImageSentPrompt } from './google.js';
 import { localSentPrompt } from './local.js';
 
 const isUploadLabel = (path) => typeof path === 'string' && path.startsWith('(uploaded image ');
@@ -129,6 +131,10 @@ export async function previewPreparedImagePrompt({ params, mode = params.mode, s
   if (mode === IMAGE_GEN_MODE.HIGGSFIELD) {
     const family = higgsfieldImageFamily(cloud?.providerParams.model || HIGGSFIELD_IMAGE_DEFAULT_MODEL) || higgsfieldImageFamily(HIGGSFIELD_IMAGE_DEFAULT_MODEL);
     return { ...envelope, ...higgsfieldImageSentPrompt({ ...common, family, inputImages: previewInputImages(mode, params, family.textEndpoint) }).record };
+  }
+  if (mode === IMAGE_GEN_MODE.GOOGLE) {
+    const family = googleImageFamily(cloud?.providerParams.model || GOOGLE_IMAGE_DEFAULT_MODEL) || googleImageFamily(GOOGLE_IMAGE_DEFAULT_MODEL);
+    return { ...envelope, ...googleImageSentPrompt({ ...common, family, inputImages: previewInputImages(mode, params, family.id) }).record };
   }
   if (mode === IMAGE_GEN_MODE.LOCAL && !params.mediaProviderPeerId) {
     const { selectedModel } = resolveLocalImageModel(settings, params);

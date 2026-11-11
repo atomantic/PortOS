@@ -141,6 +141,16 @@ export async function previewVideoPrompt({ previewUploads = [], ...body }) {
       referenceCount: (body.referenceImageFiles || []).length,
     }).record };
   }
+  if (backend === VIDEO_GEN_MODE.GOOGLE) {
+    const { googleVideoSentPrompt } = await import('./google.js');
+    return { backend, ...googleVideoSentPrompt({
+      modelId: body.googleModelId, prompt: body.prompt, negativePrompt: body.negativePrompt,
+      seconds: body.googleDuration, width: body.width, height: body.height, resolution: body.googleResolution,
+      generateAudio: body.googleGenerateAudio === true, promptAdditions,
+      hasImage: hasSourceImage, hasEndImage: !!uploads.lastImage || !!body.lastImageFile,
+      referenceCount: (body.referenceImageFiles || []).length,
+    }).record };
+  }
   // Gemini's composer takes the prompt exactly as written (videoGen/geminiWeb.js).
   if (backend === VIDEO_GEN_MODE.GEMINI) return asWritten(body, { backend });
   if (backend === VIDEO_GEN_MODE.LOCAL) {

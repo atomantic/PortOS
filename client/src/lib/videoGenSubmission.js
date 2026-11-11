@@ -19,6 +19,7 @@ import {
 } from './videoGenParams.js';
 import { isDefaultVideoStreamingMode } from './videoStreamingMode.js';
 import { HIGGSFIELD_DEFAULT_VIDEO_MODEL, getHiggsfieldVideoModel } from './higgsfieldVideoModels.js';
+import { GOOGLE_DEFAULT_VIDEO_MODEL, getGoogleVideoModel } from './googleVideoModels.js';
 
 // The form owns state transitions and validation. This module owns the three
 // request contracts the video route accepts: Grok, federated, and local.
@@ -66,7 +67,7 @@ export function videoPromptAdditions({ prompt, negativePrompt, stylePreset, sele
   ];
 }
 
-// Hosted lanes (Grok, fal, reactor, Runway, Gemini, Higgsfield) take only text or image mode, and the
+// Hosted lanes (Grok, fal, reactor, Runway, Gemini, Higgsfield, Google) take only text or image mode, and the
 // source pair is meaningful only in image mode. '' is the wire value otherwise.
 const hostedImageFields = (mode, sourceImageFile, sourceImageUpload) => {
   const isImage = mode === 'image';
@@ -146,6 +147,30 @@ function higgsfieldVideoSubmission({
     ...(higgsfieldDuration ? { higgsfieldDuration: Number(higgsfieldDuration) } : {}),
     ...(higgsfieldResolution ? { higgsfieldResolution } : {}),
     ...(higgsfieldGenerateAudio ? { higgsfieldGenerateAudio: true } : {}),
+    ...(referenceFiles.length ? { referenceImageFiles: referenceFiles } : {}),
+    ...clampedSize(width, height),
+    ...hostedImageFields(mode, sourceImageFile, sourceImageUpload),
+  };
+}
+
+// Veo renders from a start frame (Image mode), asset reference images (Text mode
+// on a model that takes them) or the prompt alone. The negative prompt is sent
+// natively.
+function googleVideoSubmission({
+  composed, googleModelId, googleDuration, googleResolution, googleGenerateAudio,
+  referenceImageFiles = [], width, height, mode, sourceImageFile, sourceImageUpload,
+}) {
+  // A model without reference images never gets the rows a previous pick left behind (its panel is hidden).
+  const model = getGoogleVideoModel(googleModelId) || getGoogleVideoModel(GOOGLE_DEFAULT_VIDEO_MODEL);
+  const referenceFiles = mode === 'image' || !model.maxReferenceImages ? [] : referenceImageFiles.filter(Boolean);
+  return {
+    backend: 'google',
+    prompt: composed.prompt,
+    negativePrompt: composed.negativePrompt,
+    googleModelId: googleModelId || undefined,
+    ...(googleDuration ? { googleDuration: Number(googleDuration) } : {}),
+    ...(googleResolution ? { googleResolution } : {}),
+    ...(googleGenerateAudio ? { googleGenerateAudio: true } : {}),
     ...(referenceFiles.length ? { referenceImageFiles: referenceFiles } : {}),
     ...clampedSize(width, height),
     ...hostedImageFields(mode, sourceImageFile, sourceImageUpload),
@@ -403,6 +428,7 @@ const HOSTED_VIDEO_SUBMISSIONS = {
   runway: runwayVideoSubmission,
   gemini: geminiVideoSubmission,
   higgsfield: higgsfieldVideoSubmission,
+  google: googleVideoSubmission,
 };
 
 export function buildVideoGenSubmission(args) {

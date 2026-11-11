@@ -57,6 +57,12 @@ export const CREDENTIALS = Object.freeze([
     settingsPath: 'videoGen.higgsfield.apiKey', configurePath: '/settings/credentials',
   }),
   Object.freeze({
+    id: 'google-cloud', label: 'Google Cloud (Agent Platform)', privateStore: true,
+    unlocks: 'Image (Nano Banana, Imagen) and video (Veo) generation through Google Cloud Agent Platform. Paste an Agent Platform API key or a service account JSON key.', tier: 'metered',
+    getUrl: 'https://console.cloud.google.com/agent-platform/api-keys', envVars: Object.freeze(['GOOGLE_CLOUD_API_KEY']),
+    settingsPath: 'videoGen.google.apiKey', configurePath: '/settings/credentials',
+  }),
+  Object.freeze({
     id: 'github',
     label: 'GitHub',
     unlocks: 'CoS agent PRs, `gh` on spawned CLIs, and the GitHub Dev Tools page.',

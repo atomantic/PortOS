@@ -1,4 +1,4 @@
-// A select over a curated provider model catalog (fal.ai, Higgsfield) rather
+// A select over a curated provider model catalog (fal.ai, Higgsfield, Google) rather
 // than a text box: every id is a different price and the server refuses an id
 // the catalog does not list. Either endpoint id of a family selects its row; a
 // saved id outside the catalog stays visible so the select never paints a pin
@@ -7,7 +7,8 @@ export default function CatalogModelSelect({
   id, value = '', onChange, options, familyOf, providerLabel, defaultLabel = 'Settings default', ariaLabel, className = '', disabled = false,
 }) {
   const family = familyOf(value);
-  const selected = family ? family.textEndpoint : (value || '');
+  // fal.ai and Higgsfield key a family by its text endpoint; a catalog of plain model ids by `id`.
+  const selected = family ? (family.textEndpoint ?? family.id) : (value || '');
   const orphaned = selected && !family;
   return (
     <select

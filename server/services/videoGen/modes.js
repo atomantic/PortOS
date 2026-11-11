@@ -59,6 +59,9 @@ export function isVideoModeUsable(settings, mode) {
   if (mode === VIDEO_GEN_MODE.HIGGSFIELD) {
     return Boolean((settings?.videoGen?.higgsfield?.apiKey || '').trim() || (process.env.HIGGSFIELD_API_KEY || '').trim());
   }
+  if (mode === VIDEO_GEN_MODE.GOOGLE) {
+    return Boolean((settings?.videoGen?.google?.apiKey || '').trim() || (process.env.GOOGLE_CLOUD_API_KEY || '').trim());
+  }
   // Gemini has no key to check: it renders in the PortOS Browser, whose sign-in only
   // the render itself can read. A render asks the user to sign in when it needs that.
   if (mode === VIDEO_GEN_MODE.GEMINI) return true;

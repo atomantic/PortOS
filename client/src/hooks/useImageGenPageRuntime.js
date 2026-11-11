@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router';
 import { composeStyledPrompt, stylePromptAdditions } from '../lib/composeStyledPrompt';
 import {
-  FAL_IMAGE_MODEL_IDS, HIGGSFIELD_IMAGE_MODEL_IDS, RUNWAY_IMAGE_MODEL_IDS,
+  FAL_IMAGE_MODEL_IDS, HIGGSFIELD_IMAGE_MODEL_IDS, RUNWAY_IMAGE_MODEL_IDS, GOOGLE_IMAGE_MODEL_IDS,
   IMAGE_GEN_MODE,
   isCloudCliMode,
   modeLabel,
@@ -72,6 +72,7 @@ function useImageGenBackendRuntime() {
   const isRunwayMode = effectiveMode === IMAGE_GEN_MODE.RUNWAY;
   const isFalMode = effectiveMode === IMAGE_GEN_MODE.FAL;
   const isHiggsfieldMode = effectiveMode === IMAGE_GEN_MODE.HIGGSFIELD;
+  const isGoogleMode = effectiveMode === IMAGE_GEN_MODE.GOOGLE;
   const remoteTarget = useFederatedMediaTarget('image');
   const remoteTargetActive = effectiveMode !== IMAGE_GEN_MODE.GROK && remoteTarget.isRemote;
   const localBackendPending = statusLoading && !remoteTargetActive;
@@ -117,6 +118,7 @@ function useImageGenBackendRuntime() {
     isRunwayMode,
     isFalMode,
     isHiggsfieldMode,
+    isGoogleMode,
     remoteTarget,
     remoteTargetActive,
     localBackendPending,
@@ -173,8 +175,9 @@ export function useImageGenPageRuntime() {
   // Only a catalog id is ever sent — the server refuses anything else.
   const effectiveFalModel = FAL_IMAGE_MODEL_IDS.includes(fields.falModel) ? fields.falModel : '';
   const effectiveHiggsfieldModel = HIGGSFIELD_IMAGE_MODEL_IDS.includes(fields.higgsfieldModel) ? fields.higgsfieldModel : '';
+  const effectiveGoogleModel = GOOGLE_IMAGE_MODEL_IDS.includes(fields.googleModel) ? fields.googleModel : '';
   const effectiveRunwayModel = RUNWAY_IMAGE_MODEL_IDS.includes(fields.runwayModel) ? fields.runwayModel : '';
-  const effectiveCloudModel = backend.isAgyMode ? effectiveAgyModel : backend.isFalMode ? effectiveFalModel : backend.isHiggsfieldMode ? effectiveHiggsfieldModel : backend.isRunwayMode ? effectiveRunwayModel : '';
+  const effectiveCloudModel = backend.isAgyMode ? effectiveAgyModel : backend.isFalMode ? effectiveFalModel : backend.isHiggsfieldMode ? effectiveHiggsfieldModel : backend.isGoogleMode ? effectiveGoogleModel : backend.isRunwayMode ? effectiveRunwayModel : '';
 
   useEffect(() => {
     if (!effectiveMode) return;
@@ -554,7 +557,7 @@ export function useImageGenPageRuntime() {
 
   return {
     form,
-    backend: { ...backend, effectiveAgyModel, effectiveFalModel, effectiveHiggsfieldModel, effectiveRunwayModel, openRuntimeInstall },
+    backend: { ...backend, effectiveAgyModel, effectiveFalModel, effectiveHiggsfieldModel, effectiveGoogleModel, effectiveRunwayModel, openRuntimeInstall },
     generation: {
       handleGenerate,
       handleCancel,

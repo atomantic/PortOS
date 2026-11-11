@@ -25,6 +25,8 @@ import { IMAGE_GEN_MODES, QUEUEABLE_IMAGE_MODES, VIDEO_GEN_MODES } from './gener
 import { RUNWAY_IMAGE_MODEL_IDS, RUNWAY_IMAGE_RESOLUTIONS } from './runwayImageModels.js';
 import { FAL_IMAGE_MODEL_IDS } from './falImageModels.js';
 import { HIGGSFIELD_IMAGE_MODEL_IDS } from './higgsfieldImageModels.js';
+import { GOOGLE_IMAGE_MODEL_IDS } from './googleImageModels.js';
+import { GOOGLE_LOCATION_PATTERN, GOOGLE_PROJECT_ID_PATTERN } from './googleCloudConfig.js';
 import { RENDER_TARGETS, RENDER_TARGET_BACKEND_AUTO } from './renderTargets.js';
 import {
   grokVideoDurationSchema, cloudModelIdString, recordRenderPinFields, isSafeSnapshotSource, isSafeSubdirFilter, csvIdsParam,
@@ -2310,6 +2312,15 @@ export const renderDefaultsSettingsSchema = z.object(
 // `defaultModelId` is the install-wide local video model choice used by the
 // Video Gen form and pipeline video stages — typed here so a Settings save
 // can't write junk to it.
+// A service account JSON key is ~2.4 KB; leave room for a long one.
+const GOOGLE_CREDENTIAL_MAX_LENGTH = 16_000;
+// '' is stored, not dropped, so a cleared field falls back (the service account's
+// project or express mode; the default region) instead of keeping the old value.
+const googlePlacementFields = {
+  projectId: z.union([z.literal(''), z.string().trim().regex(GOOGLE_PROJECT_ID_PATTERN, 'Not a Google Cloud project id')]).optional(),
+  location: z.union([z.literal(''), z.string().trim().regex(GOOGLE_LOCATION_PATTERN, 'Not a Google Cloud region')]).optional(),
+};
+
 export const videoGenSettingsSchema = z.object({
   mode: videoModePinSchema,
   defaultModelId: z.preprocess(emptyToNull, z.string().trim().max(64).nullable().optional()),
@@ -2345,6 +2356,13 @@ export const videoGenSettingsSchema = z.object({
   // Higgsfield developer API — KEY_ID:KEY_SECRET; settings win over HIGGSFIELD_API_KEY.
   higgsfield: z.object({
     apiKey: z.preprocess((v) => (v === '' ? undefined : v), z.string().trim().max(400).optional()),
+    parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
+  }).optional(),
+  // Google Cloud Agent Platform: the credential is an API key or a service account
+  // JSON key (settings win over GOOGLE_CLOUD_API_KEY). Project and region are plain settings.
+  google: z.object({
+    apiKey: z.preprocess((v) => (v === '' ? undefined : v), z.string().trim().max(GOOGLE_CREDENTIAL_MAX_LENGTH).optional()),
+    ...googlePlacementFields,
     parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
   }).optional(),
 });
@@ -2387,6 +2405,16 @@ export const imageGenHiggsfieldSettingsSchema = z.object({
   cleanC2PA: z.boolean().optional(),
   denoise: z.boolean().optional(),
   deleteAfterDownload: z.boolean().optional(),
+});
+
+// Google Imagegen slice (`imageGen.google`). The credential, project and
+// region are the shared `videoGen.google` ones; `model` must name a catalog id.
+export const imageGenGoogleSettingsSchema = z.object({
+  enabled: z.boolean().optional(),
+  model: z.preprocess((v) => (v === '' ? undefined : v), z.enum(GOOGLE_IMAGE_MODEL_IDS).optional()),
+  parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(),
+  cleanC2PA: z.boolean().optional(),
+  denoise: z.boolean().optional(),
 });
 
 export const imageGenAgySettingsSchema = z.object({
@@ -2514,18 +2542,21 @@ export const settingsSlicePartialSchemas = Object.freeze({
   'imageGen.fal': imageGenFalSettingsSchema.strict(),
   'imageGen.runway': imageGenRunwaySettingsSchema.strict(),
   'imageGen.higgsfield': imageGenHiggsfieldSettingsSchema.strict(),
+  'imageGen.google': imageGenGoogleSettingsSchema.strict(),
   'imageGen.gemini': imageGenGeminiSettingsSchema.strict(),
   'imageGen.expose': z.object({ a1111: z.boolean().optional() }).strict(),
   renderDefaults: renderDefaultsSettingsSchema,
   videoGen: videoGenSettingsSchema.pick({
     mode: true, defaultModelId: true, displaySleep: true,
-    grok: true, gemini: true, fal: true, runway: true, reactor: true, higgsfield: true,
+    grok: true, gemini: true, fal: true, runway: true, reactor: true, higgsfield: true, google: true,
   }).partial().strict(),
   'videoGen.grok': z.object({ parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional() }).strict(),
   'videoGen.gemini': z.object({ parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional() }).strict(),
   'videoGen.fal': z.object({ parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional() }).strict(),
   'videoGen.runway': z.object({ parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional() }).strict(),
   'videoGen.higgsfield': z.object({ parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional() }).strict(),
+  // The credential is write-only through PUT /api/settings/credentials/google, never this slice.
+  'videoGen.google': z.object({ ...googlePlacementFields, parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional() }).strict(),
   'videoGen.reactor': z.object({ parallelLimit: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional() }).strict(),
   pipeline: z.object({ imageGen: renderFormSettingsSchema.nullable().optional() }).strict(),
   writersRoom: z.object({ imageGen: renderFormSettingsSchema.nullable().optional() }).strict(),
@@ -2779,7 +2810,8 @@ export const modelComparisonImportSchema = modelComparisonCatalogBaseSchema.refi
 
 export const modelComparisonDiscoverySchema = z.object({ providerId: z.string().min(1).max(200) }).strict();
 export const privateCredentialParamsSchema = z.object({ id: z.enum(CREDENTIALS.filter(entry => entry.privateStore).map(entry => entry.id)) });
-export const privateCredentialInputSchema = z.object({ value: z.string().trim().max(2000) }).strict();
+// Large enough for a Google Cloud service account JSON key (the Google credential).
+export const privateCredentialInputSchema = z.object({ value: z.string().trim().max(GOOGLE_CREDENTIAL_MAX_LENGTH) }).strict();
 
 export const modelComparisonBenchmarkRunSchema = z.object({
   providerId: z.string().min(1).max(200),
