@@ -40,16 +40,18 @@ export async function verifyLyricSheet(project, stemPath, { onProgress = () => {
     if (last && span.startSec <= last.endSec) last.endSec = Math.max(last.endSec, span.endSec);
     else union.push({ ...span });
   }
-  const regions = detectVocalPhrases(pcm).filter(phrase => {
-    const length = phrase.endSec - phrase.startSec;
-    const overlap = union.reduce((sum, span) => sum + Math.max(0, Math.min(span.endSec, phrase.endSec) - Math.max(span.startSec, phrase.startSec)), 0);
-    return length >= 0.6 && overlap / length < 0.25;
-  }).reduce((out, phrase) => {
+  const regions = detectVocalPhrases(pcm).reduce((out, phrase) => {
     const last = out.at(-1);
     if (last && phrase.startSec - last.endSec < 0.3) last.endSec = phrase.endSec;
     else out.push({ ...phrase });
     return out;
-  }, []);
+  }, []).flatMap(phrase => union.reduce((parts, span) => parts.flatMap(part => {
+    if (span.endSec <= part.startSec || span.startSec >= part.endSec) return [part];
+    return [
+      ...(span.startSec > part.startSec ? [{ startSec: part.startSec, endSec: span.startSec }] : []),
+      ...(span.endSec < part.endSec ? [{ startSec: span.endSec, endSec: part.endSec }] : []),
+    ];
+  }), [phrase])).filter(phrase => phrase.endSec - phrase.startSec >= 0.6);
   const silent = findSilentWords(cues, pcm);
   const unsungCues = cues.filter(cue => validWords(cue).length === (cue.words || []).length && cue.words.every((_, index) => silent.some(word => word.cueId === cue.id && word.wordIndex === index))).map(cue => ({ cueId: cue.id, text: cue.text }));
   const extraPhrases = [];

@@ -40,4 +40,16 @@ describe('lyric sheet verification', () => {
     await expect(verifyLyricSheet(project, 'stem', { isCancelled: () => canceled, deps: { decode: async () => vocal(), resolveTranscriber: async () => ({ transcribe: async () => { canceled = true; return []; }, release }) } })).rejects.toMatchObject({ canceled: true });
     expect(release).toHaveBeenCalledOnce();
   });
+  it('checks uncovered singing on both sides of a timed line within one vocal phrase', async () => {
+    const wav = encodePcm16Wav(16000 * 5);
+    for (let i = 16000; i < 16000 * 4; i++) wav.writeInt16LE(8000, 44 + i * 2);
+    const transcribe = vi.fn(async () => [{ text: 'extra' }]);
+    const result = await verifyLyricSheet({ ...project, lyricCues: [
+      { id: 'timed', text: 'known', words: [{ w: 'known', startSec: 2, endSec: 3 }] },
+    ] }, 'stem', { deps: { decode: async () => wav, resolveTranscriber: async () => ({ transcribe }) } });
+    expect(result.extraPhrases).toHaveLength(2);
+    expect(result.extraPhrases[0]).toMatchObject({ startSec: expect.closeTo(1, 1), endSec: 2 });
+    expect(result.extraPhrases[1]).toMatchObject({ startSec: 3, endSec: expect.closeTo(4, 1) });
+    expect(transcribe).toHaveBeenCalledTimes(2);
+  });
 });
