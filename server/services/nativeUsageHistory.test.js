@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -264,5 +264,31 @@ describe('native usage history', () => {
     const result = await history.NATIVE_USAGE_STORES.codex.refresh({ home, force: true, now: NOW });
     expect(result).toMatchObject({ refreshed: false, coverageStart: null });
     expect(result.incomplete).toBeTruthy();
+  });
+
+  it('publishes Codex coverage beside a decoded non-session file without inventing a cached session', async () => {
+    await write(join(home, '.codex', 'sessions', 'rollout-a.jsonl'), codexRollout('session-a'));
+    await write(join(home, '.codex', 'sessions', 'leftover.jsonl'), jsonl([{ type: 'unrelated', value: 'SYNTHETIC' }]));
+    const { readCodexAccountingSources } = await import('./codexUsageSources.js');
+    const inventory = () => readCodexAccountingSources({ home });
+    expect((await inventory()).coverage).toMatchObject({ complete: true, logicalSessions: 1, issues: {} });
+    const store = history.NATIVE_USAGE_STORES.codex;
+    const result = await store.refresh({ home, force: true, now: NOW });
+    expect(result).toMatchObject({ refreshed: true, coverageStart: '2026-07-18' });
+    expect(JSON.parse(await readFile(store.file, 'utf8'))).toMatchObject({ coverageStart: '2026-07-18', days: result.days });
+    expect((await inventory()).coverage).toMatchObject({ complete: true, logicalSessions: 1, filesCached: 1, issues: {} });
+    expect((await store.refresh({ home, force: true, now: NOW + 60_000 })).days).toEqual(result.days);
+  });
+
+  it('holds Codex coverage when an accounting source has no session identity', async () => {
+    await write(join(home, '.codex', 'sessions', 'rollout-a.jsonl'), codexRollout('session-a'));
+    await write(join(home, '.codex', 'sessions', 'unidentified.jsonl'), jsonl([
+      { timestamp: '2026-07-19T01:00:01.000Z', type: 'event_msg', payload: { type: 'token_count', info: { total_token_usage: codexTotal(100, 40, 10) } } },
+    ]));
+    const { readCodexAccountingSources } = await import('./codexUsageSources.js');
+    expect((await readCodexAccountingSources({ home })).coverage).toMatchObject({ complete: false, issues: { missing_identity: 1 } });
+    const store = history.NATIVE_USAGE_STORES.codex;
+    expect(await store.refresh({ home, force: true, now: NOW })).toMatchObject({ refreshed: false, coverageStart: null, incomplete: 'missing_identity' });
+    await expect(readFile(store.file)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });
