@@ -61,11 +61,14 @@ with tempfile.TemporaryDirectory() as directory:
 
     def fake_run(args, **kwargs):
         args = [str(a) for a in args]
-        calls.append((args, kwargs))
+        calls.append((args, {**kwargs, 'env': dict(kwargs['env'])}))
         if 'create' in args:
             prefix = pathlib.Path(args[args.index('--prefix') + 1])
             (prefix / 'bin').mkdir(parents=True)
             (prefix / 'bin/python').write_text('fake interpreter')
+            headers = prefix / 'lib/python3.11/site-packages/nvidia/cusparse/include'
+            headers.mkdir(parents=True)
+            (headers / 'cusparse.h').write_text('fixture CUDA library header')
         if fail_build and '--no-index' in args:
             raise subprocess.CalledProcessError(1, args)
         return subprocess.CompletedProcess(args, 0, stdout='{}\n')
@@ -97,6 +100,7 @@ with tempfile.TemporaryDirectory() as directory:
         assert len(locked) == 4 and len(native) == 14
         assert all('--no-deps' in a and '--only-binary' in a for a in locked)
         assert all('--no-deps' in a and '--no-build-isolation' in a for a in native)
+        assert all('nvidia' in k['env']['CPATH'] and 'cusparse' in k['env']['CPATH'] for a, k in calls if '--no-index' in a)
         assert all(k['env']['FLASH_ATTENTION_FORCE_BUILD'] == 'TRUE' for a, k in calls)
         assert all('PORTOS_API_TOKEN' not in k['env'] and 'HF_TOKEN' not in k['env'] for a, k in calls)
         fail_build = True

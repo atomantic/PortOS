@@ -120,7 +120,7 @@ def patch_runtime(source_root, profile):
 VERIFY = """
 import importlib.metadata as metadata, json, torch, torchvision
 import flash_attn, flash_attn_2_cuda, _nvdiffrast_c
-import nvdiffrec_render.renderutils._C, cumesh._C, cumesh._cubvh
+import nvdiffrec_render.renderutils._C, cumesh._C, cumesh._cubvh, cumesh._cumesh_xatlas
 import flex_gemm.kernels.cuda, o_voxel._C, o_voxel.postprocess
 from trellis2.pipelines import Trellis2ImageTo3DPipeline
 from trellis2.modules.image_feature_extractor import DinoV3FeatureExtractor
@@ -136,7 +136,7 @@ extractor.model = DINOv3ViTModel(DINOv3ViTConfig(hidden_size=32, intermediate_si
     num_hidden_layers=1, num_attention_heads=4, image_size=32, patch_size=16, num_register_tokens=4)).eval()
 features = extractor.extract_features(torch.randn(1, 3, 32, 32))
 assert features.shape == (1, 9, 32) and torch.isfinite(features).all()
-q = torch.randn(1, 16, 2, 32, device='cuda', dtype=torch.float16)
+q = torch.randn(1, 16, 2, 32, device='cuda', dtype=torch.bfloat16)
 assert torch.isfinite(flash_attn.flash_attn_func(q, q, q)).all()
 print(json.dumps({d.metadata['Name']: d.version for d in metadata.distributions()}))
 """
@@ -144,6 +144,7 @@ print(json.dumps({d.metadata['Name']: d.version for d in metadata.distributions(
 
 def install(root, cuda):
     profile = json.loads((SCRIPTS / 'trellis2-cuda-profile.json').read_text())
+    cuda = Path(cuda).resolve()
     toolchain = preflight(profile, cuda)
     root = Path(root).resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -187,6 +188,11 @@ def install(root, cuda):
         run([python, '-m', 'pip', '--isolated', 'install', '--disable-pip-version-check',
              '--force-reinstall', '--require-hashes', '--no-deps', '--only-binary', ':all:',
              '--index-url', 'https://pypi.org/simple', '-r', SCRIPTS / name], env=env)
+    # CUDAContext.h also needs cuSPARSE/cuBLAS headers. Use the locked NVIDIA
+    # wheel headers rather than requiring an ambient copy of those SDK libraries.
+    site = prefix / 'lib' / ('python' + '.'.join(profile['python'].split('.')[:2])) / 'site-packages'
+    headers = sorted((site / 'nvidia').glob('*/include'))
+    env['CPATH'] = os.pathsep.join(str(path) for path in headers)
     source_root = prefix / 'portos-source'
     source_root.mkdir()
     for item, archive in sources:
@@ -206,6 +212,7 @@ def install(root, cuda):
     inventory = json.loads(run([python, '-c', VERIFY], env=env, capture_output=True).stdout.splitlines()[-1])
     run([python, '-m', 'pip', '--isolated', 'check'], env=env)
     record = {**profile, 'toolchain': toolchain, 'installed': inventory,
+              'wheelHeaderDirectories': [path.relative_to(prefix).as_posix() for path in headers],
               'lockSha256': {name: digest(SCRIPTS / name) for name in locks}}
     (prefix / 'portos-profile.json').write_text(json.dumps(record, indent=2) + '\n')
     installing.unlink()

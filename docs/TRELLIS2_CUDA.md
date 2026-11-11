@@ -5,7 +5,10 @@ Install and **Repair install** use the PortOS-owned
 The initial profile covers **Linux x86_64** (including WSL2), glibc **2.28+**,
 CUDA toolkit **12.6.85**, GCC/G++ **11.3.0**, NVIDIA compute capability **8.6**
 and at least **24 GiB VRAM**. Install the toolkit and compiler before setup.
-The toolkit must include its development headers and `lib64/stubs/libcuda.so`.
+The toolkit must include its compiler's core headers and `lib64/stubs/libcuda.so`.
+cuSPARSE, cuBLAS and other library headers come from the hash-pinned NVIDIA
+wheels through a private `CPATH`; no ambient copy of those development packages
+is needed. The completion inventory records the selected header directories.
 The bootstrap interpreter needs the security-patched `tarfile.data_filter`.
 Other profiles are refused before downloads or changes to an existing runtime.
 Intact legacy CUDA environments remain usable for generation.
