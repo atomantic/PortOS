@@ -35,6 +35,12 @@ vi.mock('./agyUsageBackfill.js', () => ({
   })),
 }));
 
+vi.mock('./codexSpeedRepair.js', () => ({
+  applyCodexSpeedRepair: vi.fn(async () => ({
+    added: 0, sessions: 0, backedUp: false, note: null, backupDir: '/tmp/codex-speed-backup',
+  })),
+}));
+
 const {
   __resetHistoricalUsageBackfillForTests,
   getHistoricalUsageBackfillStatus,
@@ -42,6 +48,7 @@ const {
 } = await import('./usageBackfill.js');
 const { applyGrokUsageRepair } = await import('./grokUsageBackfill.js');
 const { applyAgyUsageRepair } = await import('./agyUsageBackfill.js');
+const { applyCodexSpeedRepair } = await import('./codexSpeedRepair.js');
 
 class FakeWorker extends EventEmitter {
   static instances = [];
@@ -64,6 +71,10 @@ beforeEach(() => {
   applyGrokUsageRepair.mockReset();
   applyGrokUsageRepair.mockResolvedValue({
     added: 0, turns: 0, images: 0, videos: 0, backedUp: false, note: null, backupDir: null,
+  });
+  applyCodexSpeedRepair.mockReset();
+  applyCodexSpeedRepair.mockResolvedValue({
+    added: 0, sessions: 0, backedUp: false, note: null, backupDir: '/tmp/codex-speed-backup',
   });
 });
 
@@ -139,6 +150,7 @@ it('notifies clients when the worker fails', async () => {
   }));
   expect(updated).toHaveBeenCalledWith({});
   expect(applyGrokUsageRepair).toHaveBeenCalledTimes(1);
+  expect(applyCodexSpeedRepair).toHaveBeenCalledTimes(1);
   expect(applyAgyUsageRepair).toHaveBeenCalledTimes(1);
 });
 
@@ -170,7 +182,11 @@ it('puts the Grok repair on the reconcile result and runs it once', async () => 
     },
   }));
   expect(getHistoricalUsageBackfillStatus().grok.backupDir).toBeUndefined();
+  expect(getHistoricalUsageBackfillStatus().grok.fast).toBe(0);
+  expect(getHistoricalUsageBackfillStatus().codex).toMatchObject({ added: 0, sessions: 0, backedUp: false });
+  expect(getHistoricalUsageBackfillStatus().codex.backupDir).toBeUndefined();
   expect(applyGrokUsageRepair).toHaveBeenCalledTimes(1);
+  expect(applyCodexSpeedRepair).toHaveBeenCalledTimes(1);
   expect(applyAgyUsageRepair).toHaveBeenCalledTimes(1);
 });
 

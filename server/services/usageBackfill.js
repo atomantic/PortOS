@@ -5,6 +5,7 @@ import { homedir } from 'os';
 import { atomicWrite, PATHS, readJSONFile } from '../lib/fileUtils.js';
 import { applyGrokUsageRepair } from './grokUsageBackfill.js';
 import { applyAgyUsageRepair } from './agyUsageBackfill.js';
+import { applyCodexSpeedRepair } from './codexSpeedRepair.js';
 import {
   applyHistoricalUsageCorrections,
   getReconciledUsageRunIds,
@@ -20,6 +21,7 @@ const idleJob = () => ({
   found: 0,
   corrected: 0,
   grok: null,
+  codex: null,
   agy: null,
   error: null,
   startedAt: null,
@@ -111,6 +113,7 @@ export async function startHistoricalUsageBackfill({
         grok: {
           added: result.added || 0,
           turns: result.turns || 0,
+          fast: result.fast || 0,
           images: result.images || 0,
           videos: result.videos || 0,
           backedUp: Boolean(result.backedUp),
@@ -120,6 +123,22 @@ export async function startHistoricalUsageBackfill({
       }))
       .catch((error) => ({ grok: null, grokError: error.message }));
     return grokOnce;
+  };
+
+  let codexOnce = null;
+  const repairCodex = () => {
+    codexOnce ??= applyCodexSpeedRepair({ home, providers: providerList })
+      .then((result) => ({
+        codex: {
+          added: result.added || 0,
+          sessions: result.sessions || 0,
+          backedUp: Boolean(result.backedUp),
+          note: result.note || null,
+        },
+        codexError: null,
+      }))
+      .catch((error) => ({ codex: null, codexError: error.message }));
+    return codexOnce;
   };
 
   let agyOnce = null;
@@ -139,13 +158,20 @@ export async function startHistoricalUsageBackfill({
   };
 
   const repairMedia = async () => {
-    const [repairedGrok, repairedAgy] = await Promise.all([repairGrok(), repairAgy()]);
+    // Sequential: each repair loads and saves the same ledger. The write queue
+    // keeps one save from dropping another, and finishing one plan before the
+    // next starts keeps a repair id written by the first visible to the second.
+    const repairedGrok = await repairGrok();
+    const repairedCodex = await repairCodex();
+    const repairedAgy = await repairAgy();
     const errors = [
       repairedGrok.grokError && `Grok usage repair failed: ${repairedGrok.grokError}`,
+      repairedCodex.codexError && `Codex speed repair failed: ${repairedCodex.codexError}`,
       repairedAgy.agyError && `Antigravity usage repair failed: ${repairedAgy.agyError}`,
     ].filter(Boolean);
     return {
       grok: repairedGrok.grok,
+      codex: repairedCodex.codex,
       agy: repairedAgy.agy,
       error: errors.length ? errors.join('. ') : null,
     };
@@ -162,7 +188,7 @@ export async function startHistoricalUsageBackfill({
     messageTail = messageTail.then(async () => {
       if (job.id !== id || job.status !== 'running') return;
       if (message?.type === 'progress') {
-        job = { ...job, ...message.progress, grok: job.grok ?? null, agy: job.agy ?? null };
+        job = { ...job, ...message.progress, grok: job.grok ?? null, codex: job.codex ?? null, agy: job.agy ?? null };
         notifyUsageBackfillUpdated();
         return;
       }
@@ -170,7 +196,7 @@ export async function startHistoricalUsageBackfill({
         const repaired = await repairMedia();
         const error = [message.error || 'Backfill failed', repaired.error]
           .filter(Boolean).join('. ');
-        job = { ...job, status: 'error', error, grok: repaired.grok, agy: repaired.agy, completedAt: new Date().toISOString() };
+        job = { ...job, status: 'error', error, grok: repaired.grok, codex: repaired.codex, agy: repaired.agy, completedAt: new Date().toISOString() };
         notifyUsageBackfillUpdated();
         return;
       }
@@ -189,6 +215,7 @@ export async function startHistoricalUsageBackfill({
           error: repaired.error,
           corrected: applied.corrected,
           grok: repaired.grok,
+          codex: repaired.codex,
           agy: repaired.agy,
           completedAt: new Date().toISOString()
         };
@@ -203,6 +230,7 @@ export async function startHistoricalUsageBackfill({
         found: result.corrections?.length || 0,
         corrected: applied.corrected,
         grok: repaired.grok,
+        codex: repaired.codex,
         agy: repaired.agy,
         completedAt: new Date().toISOString()
       };
@@ -217,7 +245,7 @@ export async function startHistoricalUsageBackfill({
       const repaired = await repairMedia();
       const message = [error.message, repaired.error]
         .filter(Boolean).join('. ');
-      job = { ...job, status: 'error', error: message, grok: repaired.grok, agy: repaired.agy, completedAt: new Date().toISOString() };
+      job = { ...job, status: 'error', error: message, grok: repaired.grok, codex: repaired.codex, agy: repaired.agy, completedAt: new Date().toISOString() };
       notifyUsageBackfillUpdated();
     }).catch((err) => fail(err.message));
   });

@@ -27,6 +27,7 @@ const {
   transcriptFamily,
   isOpencodeRun,
   readMeasuredUsage,
+  recordsFromMeasured,
   reconcileRunUsage,
   recordCompletedRunUsage,
   resolveFamilyProvider,
@@ -1746,6 +1747,51 @@ describe('Codex source inventory accounting', () => {
     await writeCodexRollout(['archive'], 'moved.jsonl', text);
     mergeUsageClaims({ codexHighWater: [[`/old/sessions/rollout-2026-07-01-${id}.jsonl`, { tokensIn: 80, cacheReadTokens: 20, tokensOut: 50 }]] });
     expect(await readMeasuredUsage({ home, workspacePath: WORKSPACE, family: 'codex', startTime: '2026-07-01T10:00:00Z', endTime: '2026-07-01T10:02:00Z' })).toBeNull();
+    expect(snapshotUsageClaims().codexHighWater[0][1]).not.toHaveProperty('fastTokensOut');
+  });
+
+  it('bills Codex speed only after the tier switch, and a legacy frontier does not take the all-done id', async () => {
+    const { mergeUsageClaims } = await import('./usageReconciler.js');
+    const settings = (timestamp, tier) => JSON.stringify({
+      timestamp, type: 'event_msg',
+      payload: { type: 'thread_settings_applied', thread_settings: { service_tier: tier, cwd: '/secret/not-stored' } },
+    });
+    const count = (timestamp, input, cached, output) => JSON.stringify({
+      timestamp, type: 'event_msg',
+      payload: { type: 'token_count', info: { total_token_usage: {
+        input_tokens: input, cached_input_tokens: cached, output_tokens: output, total_tokens: input + output,
+      } } },
+    });
+    const text = [
+      JSON.stringify({ timestamp: '2026-07-01T10:00:00Z', type: 'session_meta', payload: { id: 'rollout-fast', cwd: WORKSPACE, model: 'gpt-5.3-codex' } }),
+      settings('2026-07-01T10:00:10Z', 'default'),
+      count('2026-07-01T10:01:00Z', 100, 20, 10),
+      settings('2026-07-01T10:01:30Z', 'priority'),
+      count('2026-07-01T10:03:00Z', 200, 40, 30),
+    ].join('\n');
+    await writeCodexRollout(['2026', '07', '01'], 'rollout-fast.jsonl', text);
+    const firstArgs = { home, workspacePath: WORKSPACE, family: 'codex', startTime: '2026-07-01T10:00:00Z', endTime: '2026-07-01T10:03:30Z' };
+    const first = await readMeasuredUsage(firstArgs);
+    expect(first).toMatchObject({ tokensIn: 160, tokensOut: 30, cacheReadTokens: 40, fastTokensIn: 80, fastTokensOut: 20, fastCacheReadTokens: 20 });
+    expect(first.speedRepairIds).toEqual([expect.stringMatching(/^codex-speed:v1:/)]);
+    const records = recordsFromMeasured('codex', 'gpt-5.3-codex', first, 'parent');
+    expect(records[0].repairIds).toEqual(first.speedRepairIds);
+    expect(records[0].fastTokensOut).toBe(20);
+    expect(await readMeasuredUsage(firstArgs)).toBeNull();
+
+    const claimKey = snapshotUsageClaims().codexHighWater[0][0];
+    __resetUsageClaims();
+    mergeUsageClaims({ codexHighWater: [[claimKey, { tokensIn: 80, tokensOut: 10, cacheReadTokens: 20, cacheWriteTokens: 0 }]] });
+    const partial = await readMeasuredUsage(firstArgs);
+    expect(partial).toMatchObject({ tokensIn: 80, tokensOut: 20, fastTokensIn: 80, fastTokensOut: 20 });
+    expect(partial.speedRepairIds).toBeUndefined();
+    expect(snapshotUsageClaims().codexHighWater[0][1]).toMatchObject({ fastTokensOut: 20, tokensOut: 30 });
+
+    await writeCodexRollout(['2026', '07', '01'], 'rollout-fast.jsonl', `${text}\n${count('2026-07-01T10:05:00Z', 300, 40, 50)}`);
+    const grown = await readMeasuredUsage({ home, workspacePath: WORKSPACE, family: 'codex', startTime: '2026-07-01T10:04:30Z', endTime: '2026-07-01T10:06:00Z' });
+    expect(grown).toMatchObject({ tokensIn: 100, tokensOut: 20, fastTokensIn: 100, fastTokensOut: 20 });
+    expect(grown.speedRepairIds).toBeUndefined();
+    expect(snapshotUsageClaims().codexHighWater[0][1]).toMatchObject({ fastTokensIn: 180, fastTokensOut: 40, tokensOut: 50 });
   });
 
   it('invalidates compressed metadata on growth and refuses conflicting or partial copies without advancing claims', async () => {

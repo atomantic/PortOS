@@ -410,6 +410,17 @@ describe('UsagePage historical reconciliation', () => {
     expect(await screen.findByText('Added 1 long-context turn and 2 images. Long-context premiums were not added because no Grok usage scan has run yet.')).toBeInTheDocument();
   });
 
+  it('shows the Codex speed rows reconcile added', async () => {
+    api.startUsageBackfill.mockResolvedValue({
+      status: 'complete',
+      corrected: 0,
+      codex: { added: 2, sessions: 2, backedUp: true, note: null },
+    });
+    render(<MemoryRouter><UsagePage /></MemoryRouter>);
+    fireEvent.click(await screen.findByRole('button', { name: 'Reconcile now' }));
+    expect(await screen.findByText('Added fast-mode premiums for 2 Codex sessions.')).toBeInTheDocument();
+  });
+
   it('says when reconcile found the Grok ledger already repaired', async () => {
     api.startUsageBackfill.mockResolvedValue({
       status: 'complete',

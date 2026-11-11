@@ -29,6 +29,11 @@ export function grokTurnRepairId(sessionId, key) {
   return `turn:${sessionId || 'unknown'}:${key}`;
 }
 
+/** Distinct from `turn:` so a long-context repair does not block the fast premium. */
+export function grokFastRepairId(sessionId, key) {
+  return `fast:${sessionId || 'unknown'}:${key}`;
+}
+
 function isPortosGrokScratch(cwd) {
   return String(cwd || '').includes('portos-grok-');
 }
@@ -212,7 +217,7 @@ export function videoHistoryUsageEvents(entry) {
  * @returns {{ additions: object[], notes: string[] }}
  */
 export function planGrokUsageRepair({
-  turns = [], media = [], repairIds = [], watermarkMs = null, providerId = 'grok',
+  turns = [], fastTurns = [], media = [], repairIds = [], watermarkMs = null, providerId = 'grok',
 } = {}) {
   const known = new Set(repairIds.filter((id) => typeof id === 'string' && id));
   const additions = [];
@@ -244,6 +249,30 @@ export function planGrokUsageRepair({
       },
     });
   }
+  for (const turn of fastTurns) {
+    const id = grokFastRepairId(turn.sessionId, turn.key);
+    if (known.has(id)) continue;
+    // Same watermark as the long-context premium: a turn the scan has not
+    // billed yet must not gain a fast subset whose base is still absent.
+    if (watermarkMs == null || turn.ms == null || turn.ms > watermarkMs) continue;
+    const day = dayFromMs(turn.ms);
+    if (!day) continue;
+    known.add(id);
+    additions.push({
+      repairId: id,
+      day,
+      record: {
+        providerId,
+        model: turn.model || null,
+        messages: 0,
+        fastTokensIn: turn.tokensIn || 0,
+        fastTokensOut: turn.tokensOut || 0,
+        fastCacheReadTokens: turn.cacheReadTokens || 0,
+        fastCacheWriteTokens: turn.cacheWriteTokens || 0,
+        source: 'measured',
+      },
+    });
+  }
   for (const item of media) {
     if (!item?.id || !item.day || known.has(item.id)) continue;
     known.add(item.id);
@@ -266,10 +295,12 @@ export function planGrokUsageRepair({
 
 /** Counts for the reconcile status line. A text-to-video base still counts as an image. */
 export function summarizeGrokRepairAdditions(additions = []) {
-  const summary = { added: 0, turns: 0, images: 0, videos: 0 };
+  const summary = { added: 0, turns: 0, fast: 0, images: 0, videos: 0 };
   for (const item of additions) {
     summary.added += 1;
-    if (String(item?.repairId || '').startsWith('turn:')) summary.turns += 1;
+    const id = String(item?.repairId || '');
+    if (id.startsWith('turn:')) summary.turns += 1;
+    else if (id.startsWith('fast:')) summary.fast += 1;
     else if (item?.record?.videoSeconds) summary.videos += 1;
     else summary.images += 1;
   }

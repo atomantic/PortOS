@@ -76,12 +76,15 @@ const MONTH_KEY_RE = /^\d{4}-\d{2}$/;
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
 const str = (v, max) => (isNonBlankStr(v) ? v.slice(0, max) : null);
 
-// The media units and long-context subsets are priced at read time (usage.js
-// countFields), so a peer's digest has to carry them or its Grok/Antigravity
-// images, video seconds and 200k-context premium vanish from the fleet report.
+// The media units, long-context subsets and speed subsets are priced at read
+// time (usage.js countFields), so a peer's digest has to carry them or its
+// Grok/Antigravity images, video seconds, 200k-context premium and Fast
+// premium vanish from the fleet report. Older peers ignore unknown keys.
 const COUNT_FIELDS = [
   'sessions', 'messages', 'tokens', 'tokensIn', 'tokensOut', 'cacheReadTokens', 'cacheWriteTokens',
   'longTokensIn', 'longTokensOut', 'longCacheReadTokens', 'longCacheWriteTokens',
+  'fastTokensIn', 'fastTokensOut', 'fastCacheReadTokens', 'fastCacheWriteTokens',
+  'ultrafastTokensIn', 'ultrafastTokensOut', 'ultrafastCacheReadTokens', 'ultrafastCacheWriteTokens',
   'images', 'videoSeconds', 'inputImages'
 ];
 

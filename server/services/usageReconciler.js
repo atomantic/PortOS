@@ -45,7 +45,7 @@ import { join } from 'path';
 import { readdir } from 'fs/promises';
 import { atomicWrite, PATHS, readJSONFile, tryReadFile } from '../lib/fileUtils.js';
 import { estimateTokens, estimateTokensFromChars } from '../lib/contextBudget.js';
-import { isFreeModelId, resolveModelRates } from '../lib/modelPricing.js';
+import { isFreeModelId, resolveModelRates, SPEED_LEDGER_FIELDS } from '../lib/modelPricing.js';
 import {
   UNKNOWN_MODEL,
   claudeProjectSlug,
@@ -64,7 +64,7 @@ import { familyForProvider } from '../lib/providerFamilies.js';
 import { commandBasename } from '../lib/providerModels.js';
 import { summarizeOpenCodeEvents } from '../lib/opencodeStream.js';
 import { getRecentCodexUsageClaims, recordRunUsage } from './usage.js';
-import { grokTurnRepairId } from './grokUsageRepair.js';
+import { grokFastRepairId, grokTurnRepairId } from './grokUsageRepair.js';
 
 // Widen the correlation window past the recorded run bounds: the CLI writes its
 // first line slightly before PortOS stamps startTime, and flushes its last
@@ -178,13 +178,7 @@ export function mergeUsageClaims({ claimedMessages: claimed = [], codexHighWater
   for (const [fileKey, messageKey, stampMs] of claimed) addClaim(fileKey, messageKey, stampMs);
   for (const [path, value] of highWater) {
     const existing = codexHighWater.get(path);
-    codexHighWater.set(path, existing ? {
-      messages: Math.max(existing.messages || 0, value.messages || 0),
-      tokensIn: Math.max(existing.tokensIn || 0, value.tokensIn || 0),
-      tokensOut: Math.max(existing.tokensOut || 0, value.tokensOut || 0),
-      cacheReadTokens: Math.max(existing.cacheReadTokens || 0, value.cacheReadTokens || 0),
-      cacheWriteTokens: Math.max(existing.cacheWriteTokens || 0, value.cacheWriteTokens || 0)
-    } : value);
+    codexHighWater.set(path, existing ? mergeCodexBoundary(existing, value) : value);
   }
 }
 
@@ -388,19 +382,40 @@ const LONG_USAGE_FIELDS = ['longTokensIn', 'longTokensOut', 'longCacheReadTokens
 function addBuckets(target, source) {
   for (const field of TOKEN_FIELDS) target[field] = (target[field] || 0) + (source[field] || 0);
   // Copied only when the source has some, so a Codex high-water object that
-  // spreads addBuckets does not grow long-context keys it never had.
-  for (const field of LONG_USAGE_FIELDS) {
+  // spreads addBuckets does not grow long-context or speed keys it never had.
+  for (const field of [...LONG_USAGE_FIELDS, ...SPEED_LEDGER_FIELDS]) {
     if (source?.[field]) target[field] = (target[field] || 0) + source[field];
   }
   return target;
 }
 
-function longUsageFrom(bucket) {
+function subsetFrom(bucket, fields) {
   const extra = {};
-  for (const field of LONG_USAGE_FIELDS) {
+  for (const field of fields) {
     if (bucket?.[field]) extra[field] = bucket[field];
   }
   return extra;
+}
+
+function longUsageFrom(bucket) {
+  return subsetFrom(bucket, LONG_USAGE_FIELDS);
+}
+
+function speedUsageFrom(bucket) {
+  return subsetFrom(bucket, SPEED_LEDGER_FIELDS);
+}
+
+function mergeCodexBoundary(existing, value) {
+  const merged = maxBuckets(existing, value);
+  for (const field of SPEED_LEDGER_FIELDS) {
+    const amount = Math.max(existing?.[field] || 0, value?.[field] || 0);
+    if (amount) merged[field] = amount;
+  }
+  return merged;
+}
+
+function hasSpeed(bucket) {
+  return SPEED_LEDGER_FIELDS.some((field) => (bucket?.[field] || 0) > 0);
 }
 
 function subtractBuckets(absolute, billed) {
@@ -564,9 +579,9 @@ async function readCodexSessions({ home, workspacePath, from, to, fold, codexRes
     // Require the run's own window to overlap this rollout at all, so a
     // rollout from an unrelated period isn't attributed to this run.
     if (totalTranscriptTokens(parseCodexRollout(records, { from, to })) === 0) continue;
-    overlapping.push({ session, absolute: parseCodexRollout(records, { to }) });
+    overlapping.push({ session, records });
   }
-  for (const { session, absolute } of overlapping) {
+  for (const { session, records } of overlapping) {
     // A Codex rollout bills as a cumulative DELTA, so a timestamp claim is
     // not enough: a rollout that GROWS between two overlapping runs presents
     // a later snapshot under a different key, and its delta (measured from a
@@ -593,17 +608,31 @@ async function readCodexSessions({ home, workspacePath, from, to, fold, codexRes
     let billed = previous;
     for (const [key, counts] of codexHighWater) {
       const legacyId = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl(?:\.zst)?$/i.exec(key)?.[1];
-      if (session.paths.includes(key) || legacyId && codexIdentityHash(legacyId) === session.id) billed = maxBuckets(billed, counts);
+      if (session.paths.includes(key) || legacyId && codexIdentityHash(legacyId) === session.id) billed = mergeCodexBoundary(billed, counts);
     }
+    // Speed on this absolute read is only the growth past `billed`. Base
+    // tokens stay cumulative so subtractBuckets still nets them. A missing
+    // billed field does not constrain the frontier.
+    const absolute = parseCodexRollout(records, { to, billedBaseline: billed || null });
     const net = { ...absolute, ...subtractBuckets(absolute, billed) };
     if (totalTranscriptTokens(net) === 0) continue;
+    // A first bill includes the whole cumulative speed, so the historical
+    // repair must not add it again. A legacy boundary that only bills the
+    // growth does not take that id — the repair still owes the covered part.
+    if (billed == null && hasSpeed(net)) net.codexSpeedRepairIds = [`codex-speed:v1:${session.id}`];
 
     // Advance the mark to the absolute position just read, before the next
     // `await` — for the same reason the Claude claim reserves per file: two
     // overlapping runs must not both act on the pre-update value. `Math.max`
     // guards a rollout that was truncated/rewritten smaller, so the mark
     // never moves backwards and re-bills what it already charged.
+    // Speed stored here is the accounted total (previous + this net), not the
+    // absolute cumulative, and only when it is non-zero.
     const boundary = maxBuckets(billed, absolute);
+    for (const field of SPEED_LEDGER_FIELDS) {
+      const accounted = (billed?.[field] || 0) + (net[field] || 0);
+      if (accounted) boundary[field] = accounted;
+    }
     codexHighWater.set(path, boundary);
     codexReserved.push([path, previous, boundary]);
     // Mirror the net into `byModel` — callers bill from the per-model records,
@@ -684,6 +713,14 @@ export async function readMeasuredUsage({ workspacePath, startTime, endTime, fam
     if (parsed.longTurns?.length) {
       totals.longTurns ??= [];
       totals.longTurns.push(...parsed.longTurns);
+    }
+    if (parsed.fastTurns?.length) {
+      totals.fastTurns ??= [];
+      totals.fastTurns.push(...parsed.fastTurns);
+    }
+    if (parsed.codexSpeedRepairIds?.length) {
+      totals.speedRepairIds ??= [];
+      totals.speedRepairIds.push(...parsed.codexSpeedRepairIds);
     }
     for (const model of parsed.models?.length ? parsed.models : [parsed.model]) {
       if (model) modelCounts.set(model, (modelCounts.get(model) || 0) + 1);
@@ -777,7 +814,11 @@ export function recordsFromMeasured(providerId, recordedModel, measured, role) {
   // `mixed` on every record it produced: the two shapes fold into the same
   // per-model buckets, so no record can honestly claim to be purely measured.
   const source = measured.source || 'measured';
-  const repairIds = (measured.longTurns || []).map((turn) => grokTurnRepairId(turn.sessionId, turn.key));
+  const repairIds = [
+    ...(measured.longTurns || []).map((turn) => grokTurnRepairId(turn.sessionId, turn.key)),
+    ...(measured.fastTurns || []).map((turn) => grokFastRepairId(turn.sessionId, turn.key)),
+    ...(measured.speedRepairIds || []),
+  ];
   const perModel = Object.entries(measured.byModel || {});
   const records = perModel.length > 0
     ? perModel.map(([model, bucket]) => ({
@@ -790,6 +831,7 @@ export function recordsFromMeasured(providerId, recordedModel, measured, role) {
       cacheReadTokens: bucket.cacheReadTokens,
       cacheWriteTokens: bucket.cacheWriteTokens,
       ...longUsageFrom(bucket),
+      ...speedUsageFrom(bucket),
       source
     }))
     : [{
@@ -805,6 +847,7 @@ export function recordsFromMeasured(providerId, recordedModel, measured, role) {
       cacheReadTokens: measured.cacheReadTokens,
       cacheWriteTokens: measured.cacheWriteTokens,
       ...longUsageFrom(measured),
+      ...speedUsageFrom(measured),
       source
     }];
   // One id list on the first record. recordRunUsage persists it in the same

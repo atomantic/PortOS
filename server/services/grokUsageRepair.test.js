@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   galleryImageUsageEvent,
   grokTurnRepairId,
+  grokFastRepairId,
   imagineEventsFromGrokSession,
   planGrokUsageRepair,
   summarizeGrokRepairAdditions,
@@ -47,7 +48,30 @@ describe('planGrokUsageRepair', () => {
     });
     expect(plan.additions.map((item) => item.repairId)).toEqual(['gallery:job-1']);
     expect(plan.notes[0]).toMatch(/no Grok usage scan has run yet/);
-    expect(summarizeGrokRepairAdditions(plan.additions)).toEqual({ added: 1, turns: 0, images: 1, videos: 0 });
+    expect(summarizeGrokRepairAdditions(plan.additions)).toEqual({ added: 1, turns: 0, fast: 0, images: 1, videos: 0 });
+  });
+
+  it('adds a fast premium the long-context repair id does not block', () => {
+    const fast = {
+      sessionId: 'sess-1', key: 'prompt-fast', ms: LONG_TURN.ms, model: 'grok-4.7',
+      tokensIn: 1_000, tokensOut: 50, cacheReadTokens: 0, cacheWriteTokens: 0,
+    };
+    const plan = planGrokUsageRepair({
+      turns: [LONG_TURN],
+      fastTurns: [fast],
+      watermarkMs: LONG_TURN.ms,
+      repairIds: [grokTurnRepairId('sess-1', 'prompt-long')],
+    });
+    expect(plan.additions.map((item) => item.repairId)).toEqual([grokFastRepairId('sess-1', 'prompt-fast')]);
+    expect(plan.additions[0].record.tokensIn).toBeUndefined();
+    expect(plan.additions[0].record.longTokensIn).toBeUndefined();
+    expect(plan.additions[0].record.fastTokensIn).toBe(1_000);
+    const again = planGrokUsageRepair({
+      fastTurns: [fast],
+      watermarkMs: LONG_TURN.ms,
+      repairIds: plan.additions.map((item) => item.repairId),
+    });
+    expect(again.additions).toEqual([]);
   });
 
   it('skips a turn with no timestamp', () => {
