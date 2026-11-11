@@ -85,34 +85,158 @@ const INPUT_MAX_LONG_SIDE = 2048;
 const INPUT_MAX_BYTES = 4 * 1024 * 1024;
 const FAL_UPLOAD_CONCURRENCY = Math.max(1, Number(process.env.FAL_UPLOAD_CONCURRENCY) || 2);
 const FAL_HOSTED_INPUT_TTL_MS = 60 * 60 * 1000;
+const MAX_REFERENCE_CACHE_ENTRIES = 200;
 
 const uploadGate = createConcurrencyGate(FAL_UPLOAD_CONCURRENCY);
 const referenceUploadCache = new Map();
 
-async function uploadReferenceImage({ apiKey, dataUri, signal }) {
-  const hash = createHash('sha256').update(dataUri).digest('hex');
-  const cacheKey = `${apiKey}:${hash}`;
-  const now = Date.now();
-  const cached = referenceUploadCache.get(cacheKey);
-  if (cached && now < cached.expiresAt) {
-    return cached.promise;
+function hashReferenceKey(str) {
+  return createHash('sha256').update(str).digest('hex').slice(0, 16);
+}
+
+function evictOldestReferenceCacheEntry() {
+  if (referenceUploadCache.size >= MAX_REFERENCE_CACHE_ENTRIES) {
+    const oldestKey = referenceUploadCache.keys().next().value;
+    if (oldestKey) {
+      const entry = referenceUploadCache.get(oldestKey);
+      if (entry?.timer) clearTimeout(entry.timer);
+      referenceUploadCache.delete(oldestKey);
+    }
   }
-  const promise = uploadGate.run(async () => {
-    signal?.throwIfAborted();
+}
+
+function awaitReferenceUploadSubscriber({ entry, cacheKey, signal, deadline }) {
+  if (signal?.aborted) signal.throwIfAborted();
+  const now = Date.now();
+  const remainingMs = deadline ? deadline - now : FAL_IMAGE_TIMEOUT_MS;
+  if (remainingMs <= 0) {
+    throw new ServerError(`deadline exceeded (${FAL_IMAGE_TIMEOUT_MS}ms budget)`, { status: 504, code: 'FAL_IMAGE_TIMEOUT' });
+  }
+
+  return new Promise((resolve, reject) => {
+    const subId = Symbol();
+    entry.subscribers.add(subId);
+
+    let deadlineTimer = null;
+    let settled = false;
+
+    const cleanup = () => {
+      entry.subscribers.delete(subId);
+      if (deadlineTimer) clearTimeout(deadlineTimer);
+      if (signal) signal.removeEventListener('abort', onAbort);
+    };
+
+    const unsubscribeAndAbortIfEmpty = () => {
+      cleanup();
+      if (entry.subscribers.size === 0 && entry.inflight) {
+        entry.controller.abort();
+        if (referenceUploadCache.get(cacheKey) === entry) {
+          referenceUploadCache.delete(cacheKey);
+        }
+      }
+    };
+
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      unsubscribeAndAbortIfEmpty();
+      reject(signal.reason || new DOMException('Operation aborted', 'AbortError'));
+    };
+
+    if (signal) {
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+
+    deadlineTimer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      unsubscribeAndAbortIfEmpty();
+      reject(new ServerError(`timed out after ${remainingMs}ms waiting for reference upload`, { status: 504, code: 'FAL_IMAGE_TIMEOUT' }));
+    }, remainingMs);
+    deadlineTimer.unref?.();
+
+    entry.promise.then(
+      (url) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(url);
+      },
+      (err) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(err);
+      },
+    );
+  });
+}
+
+async function uploadReferenceImage({ apiKey, dataUri, signal, deadline }) {
+  const dataHash = createHash('sha256').update(dataUri).digest('hex');
+  const cacheKey = `${hashReferenceKey(apiKey)}:${dataHash}`;
+  const now = Date.now();
+
+  const cached = referenceUploadCache.get(cacheKey);
+  if (cached) {
+    if (cached.inflight) {
+      return awaitReferenceUploadSubscriber({ entry: cached, cacheKey, signal, deadline });
+    }
+    if (cached.url && now < cached.expiresAt) {
+      return cached.url;
+    }
+    if (cached.timer) clearTimeout(cached.timer);
+    referenceUploadCache.delete(cacheKey);
+  }
+
+  evictOldestReferenceCacheEntry();
+
+  const uploadController = new AbortController();
+  const subscribers = new Set();
+  const inflightEntry = {
+    inflight: true,
+    controller: uploadController,
+    subscribers,
+    promise: null,
+  };
+
+  inflightEntry.promise = uploadGate.run(async () => {
+    uploadController.signal.throwIfAborted();
     return hostFalDataUri({
       apiKey,
       dataUri,
-      fileName: `ref-${hash.slice(0, 16)}`,
-      signal,
+      fileName: `ref-${dataHash.slice(0, 16)}`,
+      signal: uploadController.signal,
     });
+  }).then((url) => {
+    const expiresAt = Date.now() + FAL_HOSTED_INPUT_TTL_MS;
+    const completedEntry = {
+      inflight: false,
+      url,
+      expiresAt,
+      timer: null,
+    };
+    const timer = setTimeout(() => {
+      if (referenceUploadCache.get(cacheKey) === completedEntry) {
+        referenceUploadCache.delete(cacheKey);
+      }
+    }, FAL_HOSTED_INPUT_TTL_MS);
+    timer.unref?.();
+    completedEntry.timer = timer;
+
+    referenceUploadCache.set(cacheKey, completedEntry);
+    return url;
   }).catch((err) => {
-    if (referenceUploadCache.get(cacheKey)?.promise === promise) {
+    if (referenceUploadCache.get(cacheKey) === inflightEntry) {
       referenceUploadCache.delete(cacheKey);
     }
     throw err;
   });
-  referenceUploadCache.set(cacheKey, { promise, expiresAt: now + FAL_HOSTED_INPUT_TTL_MS });
-  return promise;
+  // Prevent unhandled rejection if all subscribers abandon or cancel before the upload settles.
+  inflightEntry.promise.catch(() => {});
+
+  referenceUploadCache.set(cacheKey, inflightEntry);
+  return awaitReferenceUploadSubscriber({ entry: inflightEntry, cacheKey, signal, deadline });
 }
 
 const jobs = new Map();
@@ -356,8 +480,8 @@ function formatStepFailure(step, errOrReason) {
   if (step === 'download' && /fal\.ai (image )?download failed:/i.test(msg)) {
     return msg.replace(/fal\.ai (image )?download failed:/i, prefix);
   }
-  if (step === 'reference upload' && /fal\.ai (reference )?upload (failed|could not start):/i.test(msg)) {
-    return msg.replace(/fal\.ai (reference )?upload (failed|could not start):/i, prefix);
+  if (step === 'reference upload' && /fal\.ai (reference )?upload (failed|could not start|timed out):/i.test(msg)) {
+    return msg.replace(/fal\.ai (reference )?upload (failed|could not start|timed out):/i, prefix);
   }
   return `${prefix} ${msg}`;
 }
@@ -390,6 +514,7 @@ async function runFal(job, jobId, {
           apiKey,
           dataUri: e.dataUri,
           signal: entry.controller.signal,
+          deadline,
         })),
       );
       if (entry.aborted) return finalizeCanceled(job, jobId);
@@ -527,5 +652,11 @@ export const _internals = {
   uploadReferenceImage,
   referenceUploadCache,
   uploadGate,
-  resetReferenceUploadCache: () => referenceUploadCache.clear(),
+  resetReferenceUploadCache: () => {
+    for (const entry of referenceUploadCache.values()) {
+      if (entry?.timer) clearTimeout(entry.timer);
+      if (entry?.inflight) entry.controller?.abort();
+    }
+    referenceUploadCache.clear();
+  },
 };

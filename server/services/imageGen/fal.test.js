@@ -439,6 +439,87 @@ describe('imageGen/fal — generateImage', () => {
     expect(storagePosts).toHaveLength(4);
     expect(submits()).toHaveLength(8);
   });
+
+  it('canceling one job does not cancel a shared reference upload for another concurrent job', async () => {
+    await writeFile(join(FAKE_IMAGES_DIR, 'shared-cancel-test.png'), await noiseImage(24, 24));
+    let uploadStartedResolve;
+    const uploadStarted = new Promise((r) => { uploadStartedResolve = r; });
+    let unblockUpload;
+    const uploadBlocked = new Promise((r) => { unblockUpload = r; });
+
+    const { calls } = fakeFal({
+      endpoint: 'fal-ai/nano-banana-pro/edit',
+      output: await noiseImage(16, 16),
+      customFetch: async (url, opts) => {
+        if (url === FAL_STORAGE && opts.method === 'POST') {
+          uploadStartedResolve();
+          await uploadBlocked;
+        }
+        return undefined;
+      },
+    });
+
+    const job1 = await fal.generateImage({ prompt: 'job to cancel', referenceImagePaths: ['shared-cancel-test.png'] });
+    const job2 = await fal.generateImage({ prompt: 'job to keep', referenceImagePaths: ['shared-cancel-test.png'] });
+
+    await uploadStarted;
+    expect(fal.cancel(job1.jobId)).toBe(true);
+    unblockUpload();
+
+    const [event1, event2] = await Promise.all([
+      waitForTerminal(job1.jobId),
+      waitForTerminal(job2.jobId),
+    ]);
+
+    expect(event1).toMatchObject({ type: 'failed', error: 'Canceled' });
+    expect(event2).toMatchObject({ type: 'completed' });
+    const storagePosts = calls.filter((c) => c.url === FAL_STORAGE && c.method === 'POST');
+    expect(storagePosts).toHaveLength(1);
+  });
+
+  it('aborts the underlying upload when all waiting jobs cancel', async () => {
+    await writeFile(join(FAKE_IMAGES_DIR, 'abort-all-test.png'), await noiseImage(28, 28));
+    let abortObserved = false;
+    let uploadStartedResolve;
+    const uploadStarted = new Promise((r) => { uploadStartedResolve = r; });
+
+    fakeFal({
+      endpoint: 'fal-ai/nano-banana-pro/edit',
+      customFetch: async (url, opts) => {
+        if (url === FAL_STORAGE && opts.method === 'POST') {
+          opts.signal?.addEventListener('abort', () => { abortObserved = true; });
+          uploadStartedResolve();
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+        return undefined;
+      },
+    });
+
+    const job1 = await fal.generateImage({ prompt: 'job 1', referenceImagePaths: ['abort-all-test.png'] });
+    const job2 = await fal.generateImage({ prompt: 'job 2', referenceImagePaths: ['abort-all-test.png'] });
+
+    await uploadStarted;
+    expect(fal.cancel(job1.jobId)).toBe(true);
+    expect(fal.cancel(job2.jobId)).toBe(true);
+
+    const [event1, event2] = await Promise.all([
+      waitForTerminal(job1.jobId),
+      waitForTerminal(job2.jobId),
+    ]);
+    expect(event1).toMatchObject({ type: 'failed', error: 'Canceled' });
+    expect(event2).toMatchObject({ type: 'failed', error: 'Canceled' });
+    expect(abortObserved).toBe(true);
+  });
+
+  it('enforces deadline when waiting for reference upload', async () => {
+    await expect(
+      fal._internals.uploadReferenceImage({
+        apiKey: 'fal-test-key',
+        dataUri: 'data:image/png;base64,aGVsbG8=',
+        deadline: Date.now() - 100,
+      }),
+    ).rejects.toThrow(/deadline exceeded/);
+  });
 });
 
 describe('imageGen/fal — checkConnection', () => {
