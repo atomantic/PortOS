@@ -25,6 +25,7 @@ const fal = await import('./fal.js');
 const { imageGenEvents } = await import('../imageGenEvents.js');
 
 const QUEUE = 'https://queue.fal.run';
+const FAL_STORAGE = 'https://rest.fal.ai/storage/upload/initiate?storage_type=fal-cdn-v3';
 const CDN_URL = 'https://cdn.example.com/out';
 
 // A frame with real content — the degenerate-frame guard rejects flat canvases.
@@ -45,30 +46,54 @@ const binaryResponse = (buf) => ({
  * the status poll from `statuses` (last one repeats), the response URL with an
  * images[] result, and the CDN with `output` bytes.
  */
-const fakeFal = ({ endpoint, statuses = ['COMPLETED'], output, result = {}, onStatus } = {}) => {
+const fakeFal = ({ endpoint, statuses = ['COMPLETED'], output, result = {}, onStatus, customFetch } = {}) => {
   const calls = [];
   const requestBase = `${QUEUE}/${endpoint}/requests/req-1`;
   let statusIndex = 0;
   const fetchMock = vi.fn(async (url, opts = {}) => {
-    calls.push({ url, method: opts.method || 'GET', body: opts.body ? JSON.parse(opts.body) : null, headers: opts.headers });
-    if (url === `${QUEUE}/${endpoint}` && opts.method === 'POST') {
+    let parsedBody = null;
+    if (typeof opts.body === 'string') {
+      try { parsedBody = JSON.parse(opts.body); } catch { parsedBody = opts.body; }
+    } else if (opts.body) {
+      parsedBody = opts.body;
+    }
+    calls.push({ url, method: opts.method || 'GET', body: parsedBody, headers: opts.headers });
+    if (customFetch) {
+      const custom = await customFetch(url, opts, calls);
+      if (custom !== undefined) return custom;
+    }
+    if (url === FAL_STORAGE && opts.method === 'POST') {
+      const uploadId = `upload-${calls.length}`;
       return jsonResponse({
-        request_id: 'req-1', status_url: `${requestBase}/status`, response_url: requestBase, cancel_url: `${requestBase}/cancel`,
+        upload_url: `https://fal.media/upload/${uploadId}`,
+        file_url: `https://fal.media/files/${uploadId}.png`,
       });
     }
-    if (url === `${requestBase}/status`) {
+    if (url.startsWith('https://fal.media/upload/') && opts.method === 'PUT') {
+      return jsonResponse({});
+    }
+    if (url === `${QUEUE}/${endpoint}` && opts.method === 'POST') {
+      const reqId = `req-${calls.length}`;
+      const base = `${QUEUE}/${endpoint}/requests/${reqId}`;
+      return jsonResponse({
+        request_id: reqId, status_url: `${base}/status`, response_url: base, cancel_url: `${base}/cancel`,
+      });
+    }
+    if (url.endsWith('/status')) {
       const status = statuses[Math.min(statusIndex, statuses.length - 1)];
       statusIndex += 1;
       await onStatus?.(status);
       return jsonResponse(typeof status === 'string' ? { status } : status);
     }
-    if (url === `${requestBase}/cancel`) return jsonResponse({});
-    if (url === requestBase) return jsonResponse({ images: [{ url: CDN_URL }], ...result });
+    if (url.endsWith('/cancel')) return jsonResponse({});
+    if (url === requestBase || (url.startsWith(`${QUEUE}/${endpoint}/requests/`) && !url.includes('/status') && !url.includes('/cancel'))) {
+      return jsonResponse({ images: [{ url: CDN_URL }], ...result });
+    }
     if (url === CDN_URL) return binaryResponse(output);
     throw new Error(`unexpected fetch: ${opts.method || 'GET'} ${url}`);
   });
   vi.stubGlobal('fetch', fetchMock);
-  return { calls, submits: () => calls.filter((c) => c.method === 'POST') };
+  return { calls, submits: () => calls.filter((c) => c.method === 'POST' && c.url === `${QUEUE}/${endpoint}`) };
 };
 
 const terminal = new Map();
@@ -78,6 +103,7 @@ const waitForTerminal = async (jobId) => {
 };
 
 beforeEach(async () => {
+  fal._internals.resetReferenceUploadCache();
   imageGenEvents.removeAllListeners();
   terminal.clear();
   for (const type of ['completed', 'failed']) {
@@ -146,14 +172,14 @@ describe('imageGen/fal — generateImage', () => {
     expect(sidecar.renderMs).toEqual(expect.any(Number));
   });
 
-  it('routes a render with references to the /edit endpoint as data URIs, capped at the model\'s reference limit', async () => {
+  it('routes a render with references to the /edit endpoint as uploaded URLs, capped at the model\'s reference limit', async () => {
     const refs = [];
     for (let i = 0; i < 11; i += 1) {
       const name = `ref-${i}.png`;
-      await writeFile(join(FAKE_IMAGES_DIR, name), await noiseImage(16, 16));
+      await writeFile(join(FAKE_IMAGES_DIR, name), await noiseImage(16, 16 + i));
       refs.push(name);
     }
-    const { submits } = fakeFal({ endpoint: 'fal-ai/flux-2-pro/edit', output: await noiseImage(32, 48) });
+    const { calls, submits } = fakeFal({ endpoint: 'fal-ai/flux-2-pro/edit', output: await noiseImage(32, 48) });
 
     const job = await fal.generateImage({
       model: 'fal-ai/flux-2-pro', prompt: 'character sheet', width: 1000, height: 1500, referenceImagePaths: refs,
@@ -164,7 +190,9 @@ describe('imageGen/fal — generateImage', () => {
     // FLUX.2 [pro] edit takes at most 9 references; the surplus is dropped
     // before anything is encoded or billed.
     expect(body.image_urls).toHaveLength(9);
-    expect(body.image_urls.every((u) => u.startsWith('data:image/png;base64,'))).toBe(true);
+    expect(body.image_urls.every((u) => u.startsWith('https://fal.media/files/'))).toBe(true);
+    const uploads = calls.filter((c) => c.url === FAL_STORAGE);
+    expect(uploads).toHaveLength(9);
     expect(body.image_size).toEqual({ width: 1008, height: 1504 });
     expect(body.prompt).toContain('character sheet');
     expect(body.prompt).toContain('visual references for style, characters, and subject matter');
@@ -181,7 +209,7 @@ describe('imageGen/fal — generateImage', () => {
     const { submits } = fakeFal({ endpoint: 'fal-ai/nano-banana-pro/edit', output: await noiseImage(16, 16) });
     const job = await fal.generateImage({ prompt: 'make it dusk', initImagePath: 'source.png', initImageStrength: 0.1 });
     expect((await waitForTerminal(job.jobId)).type).toBe('completed');
-    expect(submits()[0].body.image_urls).toEqual([`data:image/png;base64,${source.toString('base64')}`]);
+    expect(submits()[0].body.image_urls).toEqual([expect.stringMatching(/^https:\/\/fal\.media\/files\//)]);
     expect(submits()[0].body.prompt).toContain('The first attached image is the source image to edit');
   });
 
@@ -191,15 +219,16 @@ describe('imageGen/fal — generateImage', () => {
     }).png({ compressionLevel: 0 }).toBuffer();
     expect(source.length).toBeGreaterThan(4 * 1024 * 1024);
     await writeFile(join(FAKE_IMAGES_DIR, 'large-reference.png'), source);
-    const { submits } = fakeFal({ endpoint: 'fal-ai/nano-banana-pro/edit', output: await noiseImage(16, 16) });
+    const { calls, submits } = fakeFal({ endpoint: 'fal-ai/nano-banana-pro/edit', output: await noiseImage(16, 16) });
 
     const job = await fal.generateImage({ prompt: 'match the reference', referenceImagePaths: ['large-reference.png'] });
     expect((await waitForTerminal(job.jobId)).type).toBe('completed');
 
     const [uri] = submits()[0].body.image_urls;
-    const [header, base64] = uri.split(',');
-    expect(header).toBe('data:image/jpeg;base64');
-    const sent = Buffer.from(base64, 'base64');
+    expect(uri).toMatch(/^https:\/\/fal\.media\/files\//);
+    const putCall = calls.find((c) => c.method === 'PUT' && c.url.startsWith('https://fal.media/upload/'));
+    expect(putCall.headers['Content-Type']).toBe('image/jpeg');
+    const sent = Buffer.isBuffer(putCall.body) ? putCall.body : Buffer.from(putCall.body);
     expect(sent.length).toBeLessThan(4 * 1024 * 1024);
     expect(await sharp(sent).metadata()).toMatchObject({ width: 1200, height: 1200 });
   });
@@ -252,6 +281,296 @@ describe('imageGen/fal — generateImage', () => {
     expect(calls.some((c) => c.url === CDN_URL)).toBe(false);
     expect(existsSync(join(FAKE_IMAGES_DIR, `${job.jobId}.png`))).toBe(false);
     expect(fal.cancel(job.jobId)).toBe(false);
+  });
+
+  it('retries a reference upload that fails once and then succeeds', async () => {
+    await writeFile(join(FAKE_IMAGES_DIR, 'flaky-ref.png'), await noiseImage(16, 16));
+    let uploadAttempts = 0;
+    const { calls } = fakeFal({
+      endpoint: 'fal-ai/nano-banana-pro/edit',
+      output: await noiseImage(16, 16),
+      customFetch: async (url, opts) => {
+        if (url === FAL_STORAGE && opts.method === 'POST') {
+          uploadAttempts += 1;
+          if (uploadAttempts === 1) {
+            return jsonResponse({ detail: 'transient gateway error' }, false, 502);
+          }
+        }
+        return undefined;
+      },
+    });
+
+    const job = await fal.generateImage({
+      prompt: 'edit with flaky upload',
+      referenceImagePaths: ['flaky-ref.png'],
+    });
+    const event = await waitForTerminal(job.jobId);
+    expect(event).toMatchObject({ type: 'completed' });
+    expect(uploadAttempts).toBe(2);
+    expect(calls.filter((c) => c.url === FAL_STORAGE)).toHaveLength(2);
+  });
+
+  it('reports the failing step by name when reference upload fails', async () => {
+    await writeFile(join(FAKE_IMAGES_DIR, 'bad-ref.png'), await noiseImage(16, 16));
+    fakeFal({
+      endpoint: 'fal-ai/nano-banana-pro/edit',
+      customFetch: async (url, opts) => {
+        if (url === FAL_STORAGE && opts.method === 'POST') {
+          return jsonResponse({ detail: 'storage quota exceeded' }, false, 400);
+        }
+        return undefined;
+      },
+    });
+
+    const job = await fal.generateImage({
+      prompt: 'edit with failing upload',
+      referenceImagePaths: ['bad-ref.png'],
+    });
+    const event = await waitForTerminal(job.jobId);
+    expect(event).toMatchObject({
+      type: 'failed',
+      mode: 'fal',
+      error: expect.stringMatching(/^fal\.ai reference upload failed:/),
+    });
+  });
+
+  it('reports the failing step by name when submit fails', async () => {
+    fakeFal({
+      endpoint: 'fal-ai/nano-banana-pro',
+      customFetch: async (url, opts) => {
+        if (url === `${QUEUE}/fal-ai/nano-banana-pro` && opts.method === 'POST') {
+          return jsonResponse({ detail: 'rate limit' }, false, 429);
+        }
+        return undefined;
+      },
+    });
+
+    const job = await fal.generateImage({ prompt: 'submit failure test' });
+    const event = await waitForTerminal(job.jobId);
+    expect(event).toMatchObject({
+      type: 'failed',
+      mode: 'fal',
+      error: expect.stringMatching(/^fal\.ai submit failed:/),
+    });
+  });
+
+  it('reports the failing step by name when poll fails', async () => {
+    fakeFal({
+      endpoint: 'fal-ai/nano-banana-pro',
+      statuses: [{ status: 'ERROR', error: 'safety filter triggered' }],
+    });
+
+    const job = await fal.generateImage({ prompt: 'poll failure test' });
+    const event = await waitForTerminal(job.jobId);
+    expect(event).toMatchObject({
+      type: 'failed',
+      mode: 'fal',
+      error: expect.stringMatching(/^fal\.ai poll failed:.*safety filter triggered/),
+    });
+  });
+
+  it('reports the failing step by name when download fails', async () => {
+    fakeFal({
+      endpoint: 'fal-ai/nano-banana-pro',
+      customFetch: async (url) => {
+        if (url === CDN_URL) {
+          return jsonResponse({ detail: 'not found' }, false, 404);
+        }
+        return undefined;
+      },
+    });
+
+    const job = await fal.generateImage({ prompt: 'download failure test' });
+    const event = await waitForTerminal(job.jobId);
+    expect(event).toMatchObject({
+      type: 'failed',
+      mode: 'fal',
+      error: expect.stringMatching(/^fal\.ai download failed:/),
+    });
+  });
+
+  it('de-duplicates concurrent reference uploads of the same file across parallel jobs', async () => {
+    await writeFile(join(FAKE_IMAGES_DIR, 'shared-sheet.png'), await noiseImage(32, 32));
+    const { calls } = fakeFal({
+      endpoint: 'fal-ai/nano-banana-pro/edit',
+      output: await noiseImage(16, 16),
+    });
+
+    const [job1, job2] = await Promise.all([
+      fal.generateImage({ prompt: 'character angle 1', referenceImagePaths: ['shared-sheet.png'] }),
+      fal.generateImage({ prompt: 'character angle 2', referenceImagePaths: ['shared-sheet.png'] }),
+    ]);
+
+    const [event1, event2] = await Promise.all([
+      waitForTerminal(job1.jobId),
+      waitForTerminal(job2.jobId),
+    ]);
+    expect(event1.type).toBe('completed');
+    expect(event2.type).toBe('completed');
+
+    const storagePosts = calls.filter((c) => c.url === FAL_STORAGE && c.method === 'POST');
+    expect(storagePosts).toHaveLength(1);
+  });
+
+  it('completes 8 jobs with 4 reference images each running concurrently', async () => {
+    const refNames = [];
+    for (let i = 0; i < 4; i += 1) {
+      const name = `batch-ref-${i}.png`;
+      await writeFile(join(FAKE_IMAGES_DIR, name), await noiseImage(16, 16 + i));
+      refNames.push(name);
+    }
+
+    const { calls, submits } = fakeFal({
+      endpoint: 'fal-ai/nano-banana-pro/edit',
+      output: await noiseImage(16, 16),
+    });
+
+    const jobs = await Promise.all(
+      Array.from({ length: 8 }, (_, i) => fal.generateImage({
+        prompt: `job ${i + 1}`,
+        referenceImagePaths: refNames,
+      })),
+    );
+
+    const events = await Promise.all(jobs.map((j) => waitForTerminal(j.jobId)));
+    expect(events.every((e) => e.type === 'completed')).toBe(true);
+
+    const storagePosts = calls.filter((c) => c.url === FAL_STORAGE && c.method === 'POST');
+    expect(storagePosts).toHaveLength(4);
+    expect(submits()).toHaveLength(8);
+  });
+
+  it('canceling one job does not cancel a shared reference upload for another concurrent job', async () => {
+    await writeFile(join(FAKE_IMAGES_DIR, 'shared-cancel-test.png'), await noiseImage(24, 24));
+    let uploadStartedResolve;
+    const uploadStarted = new Promise((r) => { uploadStartedResolve = r; });
+    let unblockUpload;
+    const uploadBlocked = new Promise((r) => { unblockUpload = r; });
+
+    const { calls } = fakeFal({
+      endpoint: 'fal-ai/nano-banana-pro/edit',
+      output: await noiseImage(16, 16),
+      customFetch: async (url, opts) => {
+        if (url === FAL_STORAGE && opts.method === 'POST') {
+          uploadStartedResolve();
+          await uploadBlocked;
+        }
+        return undefined;
+      },
+    });
+
+    const job1 = await fal.generateImage({ prompt: 'job to cancel', referenceImagePaths: ['shared-cancel-test.png'] });
+    const job2 = await fal.generateImage({ prompt: 'job to keep', referenceImagePaths: ['shared-cancel-test.png'] });
+
+    await uploadStarted;
+    // Wait until job2 has joined the shared upload subscriber set before canceling job1
+    await vi.waitFor(() => {
+      const entries = [...fal._internals.inflightUploads.values()];
+      expect(entries.some((e) => e.subscribers?.size === 2)).toBe(true);
+    });
+
+    expect(fal.cancel(job1.jobId)).toBe(true);
+    unblockUpload();
+
+    const [event1, event2] = await Promise.all([
+      waitForTerminal(job1.jobId),
+      waitForTerminal(job2.jobId),
+    ]);
+
+    expect(event1).toMatchObject({ type: 'failed', error: 'Canceled' });
+    expect(event2).toMatchObject({ type: 'completed' });
+    const storagePosts = calls.filter((c) => c.url === FAL_STORAGE && c.method === 'POST');
+    expect(storagePosts).toHaveLength(1);
+  });
+
+  it('aborts the underlying upload when all waiting jobs cancel', async () => {
+    await writeFile(join(FAKE_IMAGES_DIR, 'abort-all-test.png'), await noiseImage(28, 28));
+    let abortObserved = false;
+    let uploadStartedResolve;
+    const uploadStarted = new Promise((r) => { uploadStartedResolve = r; });
+
+    fakeFal({
+      endpoint: 'fal-ai/nano-banana-pro/edit',
+      customFetch: async (url, opts) => {
+        if (url === FAL_STORAGE && opts.method === 'POST') {
+          opts.signal?.addEventListener('abort', () => { abortObserved = true; });
+          uploadStartedResolve();
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+        return undefined;
+      },
+    });
+
+    const job1 = await fal.generateImage({ prompt: 'job 1', referenceImagePaths: ['abort-all-test.png'] });
+    const job2 = await fal.generateImage({ prompt: 'job 2', referenceImagePaths: ['abort-all-test.png'] });
+
+    await uploadStarted;
+    expect(fal.cancel(job1.jobId)).toBe(true);
+    expect(fal.cancel(job2.jobId)).toBe(true);
+
+    const [event1, event2] = await Promise.all([
+      waitForTerminal(job1.jobId),
+      waitForTerminal(job2.jobId),
+    ]);
+    expect(event1).toMatchObject({ type: 'failed', error: 'Canceled' });
+    expect(event2).toMatchObject({ type: 'failed', error: 'Canceled' });
+    expect(abortObserved).toBe(true);
+  });
+
+  it('enforces deadline when waiting for reference upload', async () => {
+    await expect(
+      fal._internals.uploadReferenceImage({
+        apiKey: 'fal-test-key',
+        dataUri: 'data:image/png;base64,aGVsbG8=',
+        deadline: Date.now() - 100,
+      }),
+    ).rejects.toThrow(/deadline exceeded/);
+  });
+
+  it('rejects cached URL lookup when caller signal is already aborted', async () => {
+    const ac = new AbortController();
+    ac.abort();
+    await expect(
+      fal._internals.uploadReferenceImage({
+        apiKey: 'fal-test-key',
+        dataUri: 'data:image/png;base64,aGVsbG8=',
+        signal: ac.signal,
+      }),
+    ).rejects.toThrow(/aborted/i);
+  });
+
+  it('unsubscribes other reference uploads when one upload fails in a multi-reference job', async () => {
+    await writeFile(join(FAKE_IMAGES_DIR, 'failing-ref-1.png'), await noiseImage(16, 16));
+    await writeFile(join(FAKE_IMAGES_DIR, 'pending-ref-2.png'), await noiseImage(20, 20));
+
+    let pendingUploadAborted = false;
+    let storagePostCount = 0;
+    fakeFal({
+      endpoint: 'fal-ai/nano-banana-pro/edit',
+      customFetch: async (url, opts) => {
+        if (url === FAL_STORAGE && opts.method === 'POST') {
+          storagePostCount += 1;
+          if (storagePostCount === 1) {
+            return jsonResponse({ detail: 'bad reference' }, false, 400);
+          }
+          opts.signal?.addEventListener('abort', () => { pendingUploadAborted = true; });
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+        return undefined;
+      },
+    });
+
+    const job = await fal.generateImage({
+      prompt: 'multi ref fail test',
+      referenceImagePaths: ['failing-ref-1.png', 'pending-ref-2.png'],
+    });
+
+    const event = await waitForTerminal(job.jobId);
+    expect(event).toMatchObject({
+      type: 'failed',
+      error: expect.stringMatching(/^fal\.ai reference upload failed:/),
+    });
+    expect(pendingUploadAborted).toBe(true);
   });
 });
 

@@ -29,7 +29,7 @@ import { withBackupAssetPublication } from '../../lib/backupSnapshotBoundary.js'
  * persisted queue job params.
  */
 
-import { randomUUID } from 'crypto';
+import { randomUUID, createHash } from 'crypto';
 import { readFile } from 'fs/promises';
 import { basename, join } from 'path';
 import sharp from 'sharp';
@@ -38,6 +38,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { withAbortTimeout } from '../../lib/abortTimeout.js';
 import { anyAbortSignal } from '../../lib/requestAbort.js';
 import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
+import { createConcurrencyGate } from '../../lib/concurrencyGate.js';
 import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { renderTimingFields } from '../../lib/renderTiming.js';
 import {
@@ -50,7 +51,7 @@ import { imageGenEvents } from '../imageGenEvents.js';
 import { getSettings } from '../settings.js';
 import { autoDeleteHostedCopy } from '../hostedRenderRemoteDelete.js';
 import {
-  awaitFalCompletion, cancelFalRequest, createFalRequestEntry, readCompletedFalResult, resolveFalApiKey,
+  awaitFalCompletion, cancelFalRequest, createFalRequestEntry, hostFalDataUri, readCompletedFalResult, resolveFalApiKey,
   submitFalRequest,
 } from '../falQueue.js';
 import { IMAGE_GEN_MODE, describeFidelity, visualReferenceRole } from './modes.js';
@@ -76,13 +77,176 @@ const FAL_IMAGE_DOWNLOAD_TIMEOUT_MS = 5 * 60 * 1000;
 const FAL_PRICING_URL = 'https://api.fal.ai/v1/models/pricing';
 const FAL_PRICING_TIMEOUT_MS = 10_000;
 
-// Inputs travel inline as base64 data URIs (the pattern the video backend
-// uses — no separate upload step, nothing left behind on fal.ai's storage).
-// A mood board can hold full-resolution photos, and up to 14 of them ride in
-// one JSON body, so an input bigger than this is downscaled first. No model in
-// the catalog conditions on more detail than this anyway.
+// Inputs are downscaled if needed to stay within the size budget, and then
+// uploaded to fal.ai's storage CDN (with per-image deduplication and
+// bounded upload concurrency) rather than inlined as multi-megabyte data URIs.
+// No model in the catalog conditions on more detail than this anyway.
 const INPUT_MAX_LONG_SIDE = 2048;
 const INPUT_MAX_BYTES = 4 * 1024 * 1024;
+const FAL_UPLOAD_CONCURRENCY = Math.max(1, Number(process.env.FAL_UPLOAD_CONCURRENCY) || 2);
+const FAL_HOSTED_INPUT_TTL_MS = 60 * 60 * 1000;
+const MAX_REFERENCE_CACHE_ENTRIES = 200;
+
+const uploadGate = createConcurrencyGate(FAL_UPLOAD_CONCURRENCY);
+const inflightUploads = new Map();
+const completedUploadCache = new Map();
+
+function hashReferenceKey(str) {
+  return createHash('sha256').update(str).digest('hex').slice(0, 16);
+}
+
+function evictOldestCompletedCacheEntry() {
+  if (completedUploadCache.size >= MAX_REFERENCE_CACHE_ENTRIES) {
+    const oldestKey = completedUploadCache.keys().next().value;
+    if (oldestKey) {
+      const entry = completedUploadCache.get(oldestKey);
+      if (entry?.timer) clearTimeout(entry.timer);
+      completedUploadCache.delete(oldestKey);
+    }
+  }
+}
+
+function awaitReferenceUploadSubscriber({ entry, cacheKey, signal, deadline }) {
+  if (signal?.aborted) signal.throwIfAborted();
+  const now = Date.now();
+  const remainingMs = deadline ? deadline - now : FAL_IMAGE_TIMEOUT_MS;
+  if (remainingMs <= 0) {
+    throw new ServerError(`deadline exceeded (${FAL_IMAGE_TIMEOUT_MS}ms budget)`, { status: 504, code: 'FAL_IMAGE_TIMEOUT' });
+  }
+
+  return new Promise((resolve, reject) => {
+    const subId = Symbol();
+    entry.subscribers.add(subId);
+
+    let deadlineTimer = null;
+    let settled = false;
+
+    const cleanup = () => {
+      entry.subscribers.delete(subId);
+      if (deadlineTimer) clearTimeout(deadlineTimer);
+      if (signal) signal.removeEventListener('abort', onAbort);
+    };
+
+    const unsubscribeAndAbortIfEmpty = () => {
+      cleanup();
+      if (entry.subscribers.size === 0) {
+        entry.controller.abort();
+        if (inflightUploads.get(cacheKey) === entry) {
+          inflightUploads.delete(cacheKey);
+        }
+      }
+    };
+
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      unsubscribeAndAbortIfEmpty();
+      reject(signal.reason || new DOMException('Operation aborted', 'AbortError'));
+    };
+
+    if (signal) {
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+
+    deadlineTimer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      unsubscribeAndAbortIfEmpty();
+      reject(new ServerError(`timed out after ${remainingMs}ms waiting for reference upload`, { status: 504, code: 'FAL_IMAGE_TIMEOUT' }));
+    }, remainingMs);
+    deadlineTimer.unref?.();
+
+    entry.promise.then(
+      (url) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(url);
+      },
+      (err) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(err);
+      },
+    );
+  });
+}
+
+async function uploadReferenceImage({ apiKey, dataUri, signal, deadline }) {
+  if (signal?.aborted) signal.throwIfAborted();
+  const now = Date.now();
+  const remainingMs = deadline ? deadline - now : FAL_IMAGE_TIMEOUT_MS;
+  if (remainingMs <= 0) {
+    throw new ServerError(`deadline exceeded (${FAL_IMAGE_TIMEOUT_MS}ms budget)`, { status: 504, code: 'FAL_IMAGE_TIMEOUT' });
+  }
+
+  const dataHash = createHash('sha256').update(dataUri).digest('hex');
+  const cacheKey = `${hashReferenceKey(apiKey)}:${dataHash}`;
+
+  const inflight = inflightUploads.get(cacheKey);
+  if (inflight) {
+    return awaitReferenceUploadSubscriber({ entry: inflight, cacheKey, signal, deadline });
+  }
+
+  const cached = completedUploadCache.get(cacheKey);
+  if (cached) {
+    if (now < cached.expiresAt) {
+      return cached.url;
+    }
+    if (cached.timer) clearTimeout(cached.timer);
+    completedUploadCache.delete(cacheKey);
+  }
+
+  const uploadController = new AbortController();
+  const subscribers = new Set();
+  const inflightEntry = {
+    controller: uploadController,
+    subscribers,
+    promise: null,
+  };
+
+  inflightEntry.promise = uploadGate.run(async () => {
+    uploadController.signal.throwIfAborted();
+    return hostFalDataUri({
+      apiKey,
+      dataUri,
+      fileName: `ref-${dataHash.slice(0, 16)}`,
+      signal: uploadController.signal,
+    });
+  }).then((url) => {
+    if (inflightUploads.get(cacheKey) === inflightEntry) {
+      inflightUploads.delete(cacheKey);
+    }
+    evictOldestCompletedCacheEntry();
+    const expiresAt = Date.now() + FAL_HOSTED_INPUT_TTL_MS;
+    const completedEntry = {
+      url,
+      expiresAt,
+      timer: null,
+    };
+    const timer = setTimeout(() => {
+      if (completedUploadCache.get(cacheKey) === completedEntry) {
+        completedUploadCache.delete(cacheKey);
+      }
+    }, FAL_HOSTED_INPUT_TTL_MS);
+    timer.unref?.();
+    completedEntry.timer = timer;
+
+    completedUploadCache.set(cacheKey, completedEntry);
+    return url;
+  }).catch((err) => {
+    if (inflightUploads.get(cacheKey) === inflightEntry) {
+      inflightUploads.delete(cacheKey);
+    }
+    throw err;
+  });
+  // Prevent unhandled rejection if all subscribers abandon or cancel before the upload settles.
+  inflightEntry.promise.catch(() => {});
+
+  inflightUploads.set(cacheKey, inflightEntry);
+  return awaitReferenceUploadSubscriber({ entry: inflightEntry, cacheKey, signal, deadline });
+}
 
 const jobs = new Map();
 // jobId → the fal.ai request entry (falQueue.createFalRequestEntry), so
@@ -318,6 +482,19 @@ async function generateImagePrepared({
   };
 }
 
+function formatStepFailure(step, errOrReason) {
+  const msg = typeof errOrReason === 'string' ? errOrReason : (errOrReason?.message || String(errOrReason));
+  const prefix = `fal.ai ${step} failed:`;
+  if (msg.startsWith(prefix)) return msg;
+  if (step === 'download' && /fal\.ai (image )?download failed:/i.test(msg)) {
+    return msg.replace(/fal\.ai (image )?download failed:/i, prefix);
+  }
+  if (step === 'reference upload' && /fal\.ai (reference )?upload (failed|could not start|timed out):/i.test(msg)) {
+    return msg.replace(/fal\.ai (reference )?upload (failed|could not start|timed out):/i, prefix);
+  }
+  return `${prefix} ${msg}`;
+}
+
 async function runFal(job, jobId, {
   apiKey, family, fullPrompt, negativePrompt, width, height, seed,
   inputPaths, reviewedReferenceBytes, outputPath, filename, meta, cleanC2PA = false, denoise = false,
@@ -327,10 +504,43 @@ async function runFal(job, jobId, {
   activeRequests.set(jobId, entry);
   const deadline = Date.now() + FAL_IMAGE_TIMEOUT_MS;
   let wroteOutput = false;
+  let currentStep = inputPaths.length ? 'input encoding' : 'submit';
   try {
     const encoded = [];
     // A reviewed edit's snapshot leads (no init image); later inputs are read from disk.
     for (const [index, path] of inputPaths.entries()) encoded.push(await encodeInputImage(path, index === 0 ? reviewedReferenceBytes : null));
+    if (entry.aborted) return finalizeCanceled(job, jobId);
+
+    let imageUrls = [];
+    if (encoded.length > 0) {
+      currentStep = 'reference upload';
+      broadcastSse(job, {
+        type: 'status',
+        message: encoded.length === 1 ? 'Uploading reference image…' : 'Uploading reference images…',
+      });
+      const uploadStepController = new AbortController();
+      const onJobAbort = () => uploadStepController.abort(entry.controller.signal.reason);
+      if (entry.controller.signal.aborted) onJobAbort();
+      else entry.controller.signal.addEventListener('abort', onJobAbort, { once: true });
+      try {
+        imageUrls = await Promise.all(
+          encoded.map((e) => uploadReferenceImage({
+            apiKey,
+            dataUri: e.dataUri,
+            signal: uploadStepController.signal,
+            deadline,
+          })),
+        );
+      } catch (uploadErr) {
+        uploadStepController.abort(uploadErr);
+        throw uploadErr;
+      } finally {
+        entry.controller.signal.removeEventListener('abort', onJobAbort);
+      }
+      if (entry.aborted) return finalizeCanceled(job, jobId);
+    }
+
+    currentStep = 'submit';
     const request = buildFalImageRequest({
       modelId: family.textEndpoint,
       prompt: fullPrompt,
@@ -338,16 +548,17 @@ async function runFal(job, jobId, {
       width,
       height,
       seed,
-      imageUrls: encoded.map((e) => e.dataUri),
+      imageUrls,
       inputMegapixels: encoded.reduce((sum, e) => sum + e.megapixels, 0),
     });
-    // Cancelled while the inputs were being encoded: nothing was submitted,
+    // Cancelled while the inputs were being encoded or uploaded: nothing was submitted,
     // so there is nothing to pay for or cancel remotely.
     if (entry.aborted) return finalizeCanceled(job, jobId);
 
     const submitted = await submitFalRequest({ apiKey, modelId: request.endpointId, body: request.body });
     entry.cancelUrl = submitted.cancel_url;
     meta.falRequestId = submitted.request_id;
+    currentStep = 'poll';
     broadcastSse(job, { type: 'status', message: 'Queued at fal.ai…' });
 
     const polled = await awaitFalCompletion({
@@ -358,8 +569,9 @@ async function runFal(job, jobId, {
       }),
     });
     if (polled.outcome === 'canceled') return finalizeCanceled(job, jobId);
-    if (polled.outcome === 'failed') return finalizeJobFailure(job, jobId, null, polled.reason);
+    if (polled.outcome === 'failed') return finalizeJobFailure(job, jobId, null, formatStepFailure('poll', polled.reason));
 
+    currentStep = 'download';
     const { result, bytes } = await withAbortTimeout(FAL_IMAGE_DOWNLOAD_TIMEOUT_MS, async (timeoutSignal) => {
       const signal = anyAbortSignal([timeoutSignal, entry.controller.signal]);
       const retrievalDeadline = Date.now() + FAL_IMAGE_DOWNLOAD_TIMEOUT_MS;
@@ -439,7 +651,7 @@ async function runFal(job, jobId, {
     // last awaits.
     await cancelFalRequest(entry);
     if (entry.aborted) return finalizeCanceled(job, jobId);
-    finalizeJobFailure(job, jobId, null, `fal.ai image generation failed: ${err?.message || err}`, { force: true });
+    finalizeJobFailure(job, jobId, null, formatStepFailure(currentStep, err), { force: true });
   }
 }
 
@@ -454,4 +666,22 @@ const finalizeJobFailure = createJobFailureFinalizer({
 const finalizeCanceled = finalizeJobFailure.canceled;
 
 // Test-only handles.
-export const _internals = { encodeInputImage, firstImageUrl };
+export const _internals = {
+  encodeInputImage,
+  firstImageUrl,
+  uploadReferenceImage,
+  inflightUploads,
+  completedUploadCache,
+  referenceUploadCache: completedUploadCache,
+  uploadGate,
+  resetReferenceUploadCache: () => {
+    for (const entry of inflightUploads.values()) {
+      entry.controller?.abort();
+    }
+    inflightUploads.clear();
+    for (const entry of completedUploadCache.values()) {
+      if (entry?.timer) clearTimeout(entry.timer);
+    }
+    completedUploadCache.clear();
+  },
+};
