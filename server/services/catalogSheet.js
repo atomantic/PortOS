@@ -287,7 +287,7 @@ async function lookDirection(universe, options) {
 // prompt can say which attached images show whom.
 async function buildComparisonSheet(target, options) {
   const { ingredient, payload, partner, variant } = target;
-  const universe = target.universe || null;
+  const universe = target.universe ? { ...target.universe, visualProfile: options.visualProfileOverride === undefined ? target.universe.visualProfile : options.visualProfileOverride } : null;
   const partnerPayload = catalogAppearance('character', partner.payload && typeof partner.payload === 'object' ? partner.payload : {}, null);
   const pick = async (record, recordPayload) => characterSheetReferenceCandidates(recordPayload, await listMediaForIngredient(record.id), {})
     .filter((candidate) => !candidate.leftOut).slice(0, COMPARISON_IMAGES_PER_CHARACTER)
@@ -387,7 +387,7 @@ export async function renderCatalogSheet(id, options = {}) {
     throw new ServerError(`Define the look’s visual direction before rendering: ${visualDirection.missing.join(', ')}`, { status: 400, code: 'LOOK_VISUAL_DIRECTION_REQUIRED' });
   }
   const role = target.variant.role || `sheet:${target.variant.id}`;
-  params.catalogAttach = { ingredientId: id, kind: 'reference', role, inspect: true, ...(target.partner ? { comparison: { partnerId: target.partner.id } } : {}) };
+  params.catalogAttach = { ingredientId: id, kind: 'reference', role, inspect: true, ...(target.partner ? { comparison: { partnerId: target.partner.id }, library: { comparedWith: target.partner.id } } : {}) };
   const queued = await enqueueJob({ kind: 'image', params });
   const base = editBase?.status === 'included' ? 'portrait-edit' : editBase?.status === 'fallback' ? 'portrait-reference-fallback' : 'generate';
   console.log(`🎨 Catalog ${target.variant.label} render — ingredient=${shortId(id)} job=${shortId(queued.jobId)} mode=${activeMode} model=${modelId} source=${base}`);

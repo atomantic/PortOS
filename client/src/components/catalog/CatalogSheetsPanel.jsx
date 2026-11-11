@@ -273,15 +273,15 @@ export default function CatalogSheetsPanel({
   const selectedRole = variant ? `${SHEET_ROLE_PREFIX}${variant.id}${activeFormId ? `@${activeFormId}` : ''}` : null;
   const selectedRendering = !!selectedRole && jobs.some((j) => j.role === selectedRole && !j.publicationError);
 
-  const handleGenerate = async (renderVariant = variant, renderFormId = activeFormId) => {
+  const handleGenerate = async (renderVariant = variant, renderFormId = activeFormId, renderPartner = partner) => {
     const renderRole = renderVariant && `${SHEET_ROLE_PREFIX}${renderVariant.id}${renderFormId ? `@${renderFormId}` : ''}`;
     const sameTarget = renderVariant?.id === variantId && renderFormId === activeFormId;
     const comparing = renderVariant?.id === COMPARISON_VARIANT_ID;
-    if (comparing && !partner) return;
+    if (comparing && !renderPartner) return;
     if (!renderVariant || blockedReason || (sameTarget && preview.error) || starting || jobs.some((job) => job.role === renderRole && !job.publicationError)) return;
     setStarting(true);
     const form = forms.find((f) => f.id === renderFormId) || null;
-    const queued = await renderCatalogSheet(ingredientId, { variant: renderVariant.id, ...(renderFormId ? { formId: renderFormId } : {}), ...(comparing ? { partnerId: partner.id } : {}) }, { silent: true })
+    const queued = await renderCatalogSheet(ingredientId, { variant: renderVariant.id, ...(renderFormId ? { formId: renderFormId } : {}), ...(comparing ? { partnerId: renderPartner.id } : {}) }, { silent: true })
       .catch((err) => { toast.error(err?.message || 'Sheet render failed'); return null; });
     if (!mountedRef.current) return;
     setStarting(false);
@@ -289,7 +289,7 @@ export default function CatalogSheetsPanel({
       if (queued) toast.error('Sheet render returned no job');
       return;
     }
-    const what = comparing ? `Comparison with ${partner.name}` : form ? `${renderVariant.label} · ${form.label}` : renderVariant.label;
+    const what = comparing ? `Comparison with ${renderPartner.name}` : form ? `${renderVariant.label} · ${form.label}` : renderVariant.label;
     setJobs((cur) => [...cur.filter((j) => j.jobId !== queued.jobId), {
       jobId: queued.jobId,
       role: queued.role || `${SHEET_ROLE_PREFIX}${queued.variant || renderVariant.id}${form ? `@${form.id}` : ''}`,
@@ -445,14 +445,18 @@ export default function CatalogSheetsPanel({
                 const inspectionNote = m.library?.review?.feedback;
                 const role = splitSheetRole(m.role, SHEET_ROLE_PREFIX);
                 const sheetVariant = variants?.find((v) => v.id === role.variant);
+                // A comparison sheet regenerates with its own pair, not whoever is picked now.
+                const comparedWith = m.library?.comparedWith;
+                const sheetPartner = sheetVariant?.id !== COMPARISON_VARIANT_ID ? null
+                  : comparedWith ? { id: comparedWith, name: partner?.id === comparedWith ? partner.name : 'the other character' } : partner;
                 return (
                   <CatalogMediaTile key={`${m.mediaKey}:${m.kind}`} m={m} label={labelFor(m)} contain
                     missing={missingMedia?.has?.(m.mediaKey)} onDetach={onDetach}
                     armedDetach={armedDetach} onArmDetach={setArmedDetach}
                     badge={bad ? <BadFlag /> : null} pinActions={bad}
                     extraContent={inspectionNote ? <div className="space-y-1 border-t border-port-border p-2"><p className="text-xs text-port-warning break-words">{inspectionNote}</p>
-                      {sheetVariant && <button type="button" onClick={() => handleGenerate(sheetVariant, role.formId || '')}
-                        disabled={starting || !!blockedReason || jobs.some((job) => job.role === m.role) || (sheetVariant.id === COMPARISON_VARIANT_ID && !partner)
+                      {sheetVariant && <button type="button" onClick={() => handleGenerate(sheetVariant, role.formId || '', sheetPartner)}
+                        disabled={starting || !!blockedReason || jobs.some((job) => job.role === m.role) || (sheetVariant.id === COMPARISON_VARIANT_ID && !sheetPartner)
                           || (sheetVariant.id === variantId && (role.formId || '') === activeFormId && !!preview.error)}
                         className="min-h-11 rounded border border-port-border px-2 py-1 text-xs text-port-accent disabled:opacity-50">Regenerate sheet</button>}
                     </div> : null} />

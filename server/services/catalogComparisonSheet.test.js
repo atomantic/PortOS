@@ -61,7 +61,7 @@ describe('comparison sheet', () => {
       getIngredient: async (id) => (id === 'gone' ? null : { id }),
       attachGeneratedMedia: async (ingredientId, mediaKey, options) => {
         if (rows.some((row) => row.ingredientId === ingredientId && row.mediaKey === mediaKey)) return { attached: false };
-        rows.push({ ingredientId, mediaKey, role: options.role, kind: options.kind, derivedFrom: options.library?.derivedFrom?.mediaKey ?? null });
+        rows.push({ ingredientId, mediaKey, role: options.role, kind: options.kind, derivedFrom: options.library?.derivedFrom?.mediaKey ?? null, comparedWith: options.library?.comparedWith ?? null });
         return { attached: true };
       },
     };
@@ -70,9 +70,9 @@ describe('comparison sheet', () => {
     const input = { ingredientId: 'a', partnerId: 'b', filename: 'sheet-pair.png' };
     expect(await publishComparisonSheet(input, { db, saveImage })).toEqual({ partner: 'b', left: 'half-1.png', right: 'half-2.png' });
     expect(rows).toEqual([
-      { ingredientId: 'b', mediaKey: 'sheet-pair.png', role: COMPARISON_SHEET_ROLE, kind: 'reference', derivedFrom: null },
-      { ingredientId: 'a', mediaKey: 'half-1.png', role: COMPARISON_HALF_ROLE, kind: 'reference', derivedFrom: 'sheet-pair.png' },
-      { ingredientId: 'b', mediaKey: 'half-2.png', role: COMPARISON_HALF_ROLE, kind: 'reference', derivedFrom: 'sheet-pair.png' },
+      { ingredientId: 'b', mediaKey: 'sheet-pair.png', role: COMPARISON_SHEET_ROLE, kind: 'reference', derivedFrom: null, comparedWith: 'a' },
+      { ingredientId: 'a', mediaKey: 'half-1.png', role: COMPARISON_HALF_ROLE, kind: 'reference', derivedFrom: 'sheet-pair.png', comparedWith: null },
+      { ingredientId: 'b', mediaKey: 'half-2.png', role: COMPARISON_HALF_ROLE, kind: 'reference', derivedFrom: 'sheet-pair.png', comparedWith: null },
     ]);
     expect(await publishComparisonSheet(input, { db, saveImage })).toBeNull();
     expect(await publishComparisonSheet({ ...input, partnerId: 'gone' }, { db, saveImage })).toBeNull();

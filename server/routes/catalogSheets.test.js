@@ -509,7 +509,7 @@ describe('catalog sheet routes', () => {
     expect(params.prompt).toBe(sent);
     expect(params.width).toBe(params.height * 2);
     expect(params.referenceImagePaths.map((path) => basename(path))).toEqual(['hero.png', 'rival.png']);
-    expect(params.catalogAttach).toEqual({ ingredientId: hero.id, kind: 'reference', role: 'sheet:comparison', inspect: true, comparison: { partnerId: partner.id } });
+    expect(params.catalogAttach).toEqual({ ingredientId: hero.id, kind: 'reference', role: 'sheet:comparison', inspect: true, comparison: { partnerId: partner.id }, library: { comparedWith: partner.id } });
 
     // A partner is required, must be another character, and belongs to this kind only.
     for (const bad of [{ variant: 'comparison' }, { variant: 'face', partnerId: partner.id }, { variant: 'comparison', partnerId: hero.id },
