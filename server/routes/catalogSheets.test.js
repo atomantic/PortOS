@@ -494,8 +494,10 @@ describe('catalog sheet routes', () => {
     expect(sent).toContain('The LEFT half belongs only to Example Hero and the RIGHT half only to Example Rival');
     expect(sent).toContain('Example Hero is 15 cm (about 6 in) taller than Example Rival');
     expect(sent).toContain('"Example Hero 180 cm" over Example Hero and "Example Rival 165 cm" over Example Rival');
-    expect(sent).toContain('between the FACE and TEETH column and the FRONT view, on the inner side of the portraits');
+    expect(sent).toContain('between the portrait column and the FRONT view, on the inner side of the portraits');
     expect(sent).toContain('The right half\'s ruler mirrors the left half\'s');
+    expect(sent).toContain('Each half is a tight grid that uses the whole page with no unused margins');
+    expect(sent).toContain('a portrait column that runs the full page height');
     expect(sent).toContain('nothing at all along the centre line');
     expect(preview.body.preview.referenceImages.map((ref) => [ref.filename, ref.status])).toEqual([['hero.png', 'included'], ['rival.png', 'included']]);
     expect(preview.body.preview.promptAdditions.map((a) => a.id)).not.toContain('character-identity');
