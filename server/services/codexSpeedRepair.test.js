@@ -110,6 +110,45 @@ describe('applyCodexSpeedRepair', () => {
     ]);
   });
 
+  it('does not bill fast usage a reconcile already stored on the high-water', async () => {
+    const rollout = [
+      { type: 'session_meta', payload: { id: 'raw-session', cwd: '/example/workspace', model: 'gpt-5.3-codex' } },
+      { timestamp: '2026-07-01T23:00:00.000Z', payload: { type: 'thread_settings_applied', service_tier: 'priority' } },
+      { timestamp: '2026-07-01T23:30:00.000Z', payload: { type: 'token_count', info: { total_token_usage: {
+        input_tokens: 100, cached_input_tokens: 0, output_tokens: 10, total_tokens: 110,
+      } } } },
+      { timestamp: '2026-07-02T01:00:00.000Z', payload: { type: 'token_count', info: { total_token_usage: {
+        input_tokens: 300, cached_input_tokens: 0, output_tokens: 40, total_tokens: 340,
+      } } } },
+    ];
+    readCodexAccountingSources.mockResolvedValue(inventory([{
+      id: sessionId, paths: [], loadRecords: async () => rollout,
+    }]));
+    usage.reconciledRuns = {
+      run: { codexHighWater: [[codexSessionClaimKey(sessionId), {
+        messages: 1, tokensIn: 300, tokensOut: 40, cacheReadTokens: 0, cacheWriteTokens: 0,
+        fastTokensIn: 200, fastTokensOut: 30,
+      }]] },
+    };
+    const partial = await applyCodexSpeedRepair();
+    expect(partial).toMatchObject({ added: 1, sessions: 1 });
+    expect(addDatedUsageBatch.mock.calls[0][0].map((row) => [row.day, row.record.fastTokensIn, row.record.fastTokensOut])).toEqual([
+      ['2026-07-01', 100, 10],
+    ]);
+
+    usage.grokRepairIds = [];
+    usage.reconciledRuns = {
+      run: { codexHighWater: [[codexSessionClaimKey(sessionId), {
+        messages: 1, tokensIn: 300, tokensOut: 40, cacheReadTokens: 0, cacheWriteTokens: 0,
+        fastTokensIn: 300, fastTokensOut: 40,
+      }]] },
+    };
+    addDatedUsageBatch.mockClear();
+    const paid = await applyCodexSpeedRepair();
+    expect(paid).toMatchObject({ added: 0, sessions: 0, backedUp: false });
+    expect(addDatedUsageBatch).not.toHaveBeenCalled();
+  });
+
   it('skips a session whose base tokens are not in the ledger', async () => {
     readCodexAccountingSources.mockResolvedValue(inventory([{
       id: sessionId, paths: [], loadRecords: async () => priorityRollout,

@@ -94,11 +94,16 @@ function accountingRecord(entry, ids, lineage) {
   }
   if (payload?.type === 'thread_settings_applied') {
     // The tier is the only setting accounting may keep. cwd, account ids and
-    // the rest of thread_settings stay in the source file.
+    // the rest of thread_settings stay in the source file. A missing tier is
+    // a reset to standard: dropping the event would leave an earlier Fast
+    // tier in effect for every later count.
     const tier = payload.service_tier ?? payload.thread_settings?.service_tier;
-    if (typeof tier !== 'string' || !/^[a-z0-9_-]{1,32}$/.test(tier)) return null;
     const timestamp = entry.timestamp;
     if (typeof timestamp !== 'string' || !Number.isFinite(Date.parse(timestamp))) return null;
+    if (tier == null || tier === '') {
+      return { timestamp, payload: { type: 'thread_settings_applied', service_tier: 'standard' } };
+    }
+    if (typeof tier !== 'string' || !/^[a-z0-9_-]{1,32}$/.test(tier)) return null;
     return { timestamp, payload: { type: 'thread_settings_applied', service_tier: tier } };
   }
   if (payload?.type !== 'token_count' && payload?.type !== 'agent_message') return null;

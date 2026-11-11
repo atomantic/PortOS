@@ -4,11 +4,15 @@
  * repair covers pre-coverage days, estimates, and raw-ledger readers.
  *
  * The plan never rewrites base token counts. Owed speed is the subset inside
- * the token high-water, dated on the UTC day of each snapshot. Speed a later
- * reconcile bills past that high-water is not part of it. A session with no
- * high-water is skipped: its base was never billed, and a premium alone would
- * invent a charge. A first full bill records one session id; each repaired
- * day records its own, so the two paths cannot both add the same premium.
+ * the token high-water, dated on the UTC day of each snapshot, minus speed
+ * the boundary already accounts. A reconcile bills the growth past the
+ * previous mark and then advances that mark, so the speed it stored is the
+ * tail of what the next repair covers. The credit comes off the latest days;
+ * taking it from the earliest day would drop the historical premium a legacy
+ * mark never stored. A session with no high-water is skipped: its base was
+ * never billed, and a premium alone would invent a charge. A first full bill
+ * records one session id; each repaired day records its own, so the two paths
+ * cannot both add the same premium.
  */
 
 import { copyFile, mkdir } from 'node:fs/promises';
@@ -89,6 +93,23 @@ function coveredDays(parsed) {
   return [{ day: new Date(ms).toISOString().slice(0, 10), ...parsed.coveredSpeed }];
 }
 
+/** Boundary speed is a suffix of the covered premium. Leave the unpaid prefix. */
+function unpaidCoveredDays(slices, billed) {
+  const remaining = Object.fromEntries(SPEED_LEDGER_FIELDS.map((field) => [field, billed?.[field] || 0]));
+  const rows = slices.map((slice) => ({ ...slice }));
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    for (const field of SPEED_LEDGER_FIELDS) {
+      const have = rows[index][field] || 0;
+      const credit = remaining[field] || 0;
+      if (!have || !credit) continue;
+      const take = Math.min(have, credit);
+      rows[index][field] = have - take;
+      remaining[field] = credit - take;
+    }
+  }
+  return rows.filter((slice) => owedSpeed(slice));
+}
+
 /**
  * @param {{ home?: string, repairIds?: string[], reconciledRuns?: object, providerId?: string }} input
  * @returns {Promise<{ additions: object[], notes: string[] }>}
@@ -124,7 +145,7 @@ async function planCodexSpeedRepair({
       continue;
     }
     const parsed = parseCodexRollout(records, { billedBaseline: billed, includeCoveredSpeed: true });
-    for (const slice of coveredDays(parsed)) {
+    for (const slice of unpaidCoveredDays(coveredDays(parsed), billed)) {
       const repairId = `codex-speed:v1:${session.id}:${slice.day}`;
       if (known.has(repairId)) continue;
       const owed = owedSpeed(slice);
