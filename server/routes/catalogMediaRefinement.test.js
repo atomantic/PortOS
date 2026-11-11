@@ -183,6 +183,11 @@ describe('reference image refinement boundary', () => {
     expect(state.holders).toHaveBeenCalledWith('pair.png', 'sheet:comparison');
     expect(params.catalogAttach).toEqual(expected);
 
+    expect(state.writable).toHaveBeenCalledWith('left');
+    records.left.payload.locked = true;
+    expect((await request(app).post('/ingredients/right/media/refine').send(edit)).status).toBe(409);
+    records.left.payload.locked = false;
+
     state.holders.mockResolvedValue([{ ingredientId: 'right', library: {} }]);
     expect((await request(app).post('/ingredients/right/media/refine').send(edit)).status).toBe(409);
     expect(state.enqueue).toHaveBeenCalledTimes(2);

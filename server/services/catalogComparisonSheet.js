@@ -214,6 +214,12 @@ export async function refineComparisonSheet(item, source, input, { preview = fal
   if (!left || !right || left.id === right.id) {
     throw new ServerError('The other character on this comparison sheet is no longer in the catalog', { status: 409, code: 'COMPARISON_PARTNER_MISSING' });
   }
+  // From the partner's copy, the edit lands first on the left record, which the caller has not checked.
+  if (left.id !== item.id) {
+    const { assertCatalogIdentityWritable } = await import('./catalogDB/identityAccess.js');
+    await assertCatalogIdentityWritable(left.id);
+    if (left.payload?.locked === true) throw new ServerError(`"${left.name}" is locked: unlock it before refining this comparison sheet`, { status: 409 });
+  }
   const dimensions = await refine.readEditSourceDimensions(source.mediaKey);
   const target = await refine.resolveCatalogImageTarget(left.id);
   const { promptAddition } = await import('../lib/modelInput.js');
