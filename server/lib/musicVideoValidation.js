@@ -191,7 +191,7 @@ export const musicVideoVideoSettingsSchema = z.object({
   // #8968) — image-to-video only here; the audio-reactive lane stays local-only
   // (see generationMode below). 'runway' is Runway's developer API
   // (services/videoGen/runway.js), cutaways only.
-  backend: z.enum(['local', 'grok', 'fal', 'runway', 'gemini', 'higgsfield']).nullable().optional(),
+  backend: z.enum(['local', 'grok', 'fal', 'runway', 'gemini', 'higgsfield', 'google']).nullable().optional(),
   modelId: z.string().max(64).nullable().optional(),
   grokDuration: z.union(GROK_VIDEO_DURATIONS.map((d) => z.literal(d))).optional(),
   // fal.ai clip length in seconds. Loosely bounded (not a closed enum) for the
@@ -228,6 +228,9 @@ export const musicVideoVideoSettingsSchema = z.object({
   higgsfieldModelId: z.string().min(1).max(100).nullable().optional(),
   higgsfieldDuration: z.number().int().min(2).max(30).nullable().optional(),
   higgsfieldResolution: z.enum(['480p', '720p', '1080p']).nullable().optional(),
+  googleModelId: z.string().min(1).max(100).nullable().optional(),
+  googleDuration: z.number().int().min(1).max(60).nullable().optional(),
+  googleResolution: z.enum(['720p', '1080p']).nullable().optional(),
   runwayModelId: z.string().min(1).max(64).nullable().optional(),
   runwayDuration: z.number().min(1).max(60).nullable().optional(),
   runwayResolution: z.string().min(1).max(16).nullable().optional(),
@@ -2316,7 +2319,7 @@ export const musicVideoSceneReorderSchema = z.object({
 // Split an over-long shot on lyric/phrase boundaries (#8977). `backend` is
 // the lane the director will render with; omitted/null = the project's pin.
 export const musicVideoSceneSplitSchema = z.object({
-  backend: z.enum(['local', 'grok', 'fal', 'runway', 'gemini', 'higgsfield']).nullable().optional(),
+  backend: z.enum(['local', 'grok', 'fal', 'runway', 'gemini', 'higgsfield', 'google']).nullable().optional(),
   // Split the shot in two at this song time instead of by the backend's longest take.
   atSec: z.number().finite().nonnegative().optional(),
 }).strict();
@@ -2386,12 +2389,15 @@ const musicVideoClipCardSchema = z.object({
 }).strict();
 
 const musicVideoClipTargetSchema = z.object({
-  backend: z.enum(['local', 'grok', 'fal', 'runway', 'gemini', 'higgsfield']).optional(),
+  backend: z.enum(['local', 'grok', 'fal', 'runway', 'gemini', 'higgsfield', 'google']).optional(),
   modelId: z.string().max(300).optional(),
   generationMode: z.string().max(80).optional(),
   higgsfieldModelId: z.string().min(1).max(100).nullable().optional(),
   higgsfieldDuration: z.number().int().min(2).max(30).nullable().optional(),
   higgsfieldResolution: z.enum(['480p', '720p', '1080p']).nullable().optional(),
+  googleModelId: z.string().min(1).max(100).nullable().optional(),
+  googleDuration: z.number().int().min(1).max(60).nullable().optional(),
+  googleResolution: z.enum(['720p', '1080p']).nullable().optional(),
   grokDuration: z.number().positive().max(60).optional(),
   numFrames: z.number().int().positive().max(1000).optional(),
   audioReactiveScale: z.number().min(0).max(4).optional(),

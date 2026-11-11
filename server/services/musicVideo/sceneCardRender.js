@@ -1,4 +1,5 @@
 import { higgsfieldShotRequestFields } from '../../lib/higgsfieldVideoModels.js';
+import { googleShotRequestFields } from '../../lib/googleVideoModels.js';
 // Shot-card frame and clip submission (#15583). The board, autopilot and API
 // callers share one resolver, so a request that names only the project, shot
 // and slot still sends the references the card would.
@@ -126,9 +127,10 @@ async function buildShortClipBody(project, scene, input) {
   const mode = useLtx ? LTX_IC_MODE : audioReactive || songAudio ? 'a2v' : 'image';
   const falFields = settings.backend === 'fal' ? falTakeRequestFields(falSceneTake({ scene, scenes: project.scenes, videoSettings: settings, songDurationSec: project?.audioAnalysis?.durationSec ?? null })) : null;
   const higgsfieldFields = settings.backend === 'higgsfield' ? higgsfieldShotRequestFields(settings, shotRequestSpanSec(scene, project.scenes)) : null;
+  const googleFields = settings.backend === 'google' ? googleShotRequestFields(settings, shotRequestSpanSec(scene, project.scenes)) : null;
   const runwayFields = settings.backend === 'runway' ? runwayTakeRequestFields(runwaySceneTake({ scene, scenes: project.scenes, videoSettings: settings })) : null;
   const providerFields = settings.backend === 'grok' ? { grokDuration: grokSceneRequestDuration(scene, settings, input.target, project.scenes) }
-    : falFields || runwayFields || higgsfieldFields ? falFields || runwayFields || higgsfieldFields
+    : falFields || runwayFields || higgsfieldFields || googleFields ? falFields || runwayFields || higgsfieldFields || googleFields
       : settings.backend === 'gemini' ? {}
         : settings.backend === 'local' ? {
           modelId: settings.modelId || undefined,
@@ -143,7 +145,7 @@ async function buildShortClipBody(project, scene, input) {
     mode,
     sourceImageFile: scene.referenceImageId,
     ...(useLtx || card.endFrame === false || songAudio ? {} : sceneEndFrameRequestFields(scene, {
-      backend: settings.backend, falModelId: falFields?.falModelId, runwayModelId: runwayFields?.runwayModelId, mode,
+      backend: settings.backend, falModelId: falFields?.falModelId, runwayModelId: runwayFields?.runwayModelId, googleModelId: googleFields?.googleModelId, mode,
       localRuntime: model?.runtime ?? null,
     })),
     ...(audioReactive ? { audioStartSec: scene.startSec || 0, loraFilenames: [settings.detectedLora.filename], loraScales: [settings.audioReactiveScale] } : {}),

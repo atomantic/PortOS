@@ -24,7 +24,7 @@ export default function SceneClipReferences({ project, scene, castMedia, backend
   const others = choices.filter((ref) => !chosenIds.includes(ref.id));
   const auto = !Array.isArray(scene.clipReferenceIds);
   const capacity = capacityOverride ?? musicVideoClipReferenceCapacity(backend, model, { startFrameLayout });
-  const unknownModel = !backend || (['local', 'fal', 'runway', 'higgsfield'].includes(backend) && !model);
+  const unknownModel = !backend || (['local', 'fal', 'runway', 'higgsfield', 'google'].includes(backend) && !model);
   const locked = saveState === 'saving' || Boolean(castMedia && musicVideoSceneCastIds(project, scene).some((id) => castMedia[id] === undefined));
   // Most Runway models pin the start frame unless references go with it: their keyframe and reference modes cannot mix.
   const runwayUnpinsStart = backend === 'runway' && capacity > 0 && !!model?.referenceImages && !model.referenceImages.keepsFrames;

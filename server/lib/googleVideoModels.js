@@ -57,6 +57,32 @@ export const GOOGLE_DEFAULT_VIDEO_MODEL = GOOGLE_VIDEO_MODELS[0].id;
 export const GOOGLE_VIDEO_MODEL_IDS = Object.freeze(GOOGLE_VIDEO_MODELS.map((m) => m.id));
 export const getGoogleVideoModel = (id) => GOOGLE_VIDEO_MODELS.find((m) => m.id === id) || null;
 
+/**
+ * The clip length (seconds) `model` will render for a request of `seconds`: the
+ * shortest supported length that still COVERS it, else the longest — a Music
+ * Video shot must not be under-covered and nothing loops or stretches footage.
+ * An absent or invalid request gets the model's default.
+ */
+export function coerceGoogleVideoSeconds(model, seconds) {
+  const lengths = Array.isArray(model?.lengths) ? model.lengths : VEO_LENGTHS;
+  const n = Number(seconds);
+  if (seconds == null || seconds === '' || !Number.isFinite(n) || n <= 0) return model?.defaultSec ?? 8;
+  return lengths.find((v) => v >= n - 1e-6) ?? lengths[lengths.length - 1];
+}
+
+export const googleVideoLengths = (model) => (Array.isArray(model?.lengths) ? [...model.lengths] : [...VEO_LENGTHS]);
+
+/** Shot settings shared by the board and server card endpoint. */
+export function googleShotRequestFields(settings, spanSec = null) {
+  const model = getGoogleVideoModel(settings?.googleModelId || GOOGLE_DEFAULT_VIDEO_MODEL);
+  const duration = settings?.googleDuration ?? (spanSec != null ? coerceGoogleVideoSeconds(model, spanSec) : (model?.defaultSec ?? 8));
+  return {
+    googleModelId: settings?.googleModelId || GOOGLE_DEFAULT_VIDEO_MODEL,
+    ...(settings?.googleResolution ? { googleResolution: settings.googleResolution } : {}),
+    googleDuration: duration,
+  };
+}
+
 const refuse = (message) => Object.assign(new Error(message), { status: 400, code: 'GOOGLE_VIDEO_INPUT_INVALID' });
 
 function nearestRatio(width, height, ratios) {

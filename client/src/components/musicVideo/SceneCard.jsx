@@ -1,4 +1,5 @@
 import { getHiggsfieldVideoModel, HIGGSFIELD_DEFAULT_VIDEO_MODEL } from '../../../../server/lib/higgsfieldVideoModels.js';
+import { getGoogleVideoModel, GOOGLE_DEFAULT_VIDEO_MODEL } from '../../../../server/lib/googleVideoModels.js';
 import { musicVideoGreyboxReference } from '../../../../server/lib/musicVideoGreybox.js';
 import PlateComparison from './PlateComparison.jsx';
 import ShotActionInspector from './ShotActionInspector.jsx';
@@ -279,6 +280,7 @@ export default function SceneCard({
     ? getFalVideoModel(falSceneTake({ scene, videoSettings: renderSettings || {} }).modelId)
     : referenceBackend === 'runway' ? getRunwayVideoModel(runwaySceneTake({ scene, videoSettings: renderSettings || {} }).modelId)
       : referenceBackend === 'higgsfield' ? getHiggsfieldVideoModel(renderSettings?.higgsfieldModelId || HIGGSFIELD_DEFAULT_VIDEO_MODEL)
+      : referenceBackend === 'google' ? getGoogleVideoModel(renderSettings?.googleModelId || GOOGLE_DEFAULT_VIDEO_MODEL)
       : referenceBackend === 'local' ? videoModels.find((model) => model.id === (renderSettings?.modelId || defaultVideoModel)) : null;
   // Storyboard-to-clip chaining cannot yet pass LTX reference inputs. Offer
   // them after the storyboard's first frame has landed instead.

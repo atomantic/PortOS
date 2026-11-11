@@ -1330,7 +1330,7 @@ async function resolvePreparedParams({
       throw new ServerError(hosted.errorMessage, { status: 400, code: hosted.errorCode });
     }
     const staged = await hosted.stageInputs({
-      body, uploads, sourceImagePath, falSourceAudio, stageUploadDurable, cleanupStaged,
+      body, uploads, sourceImagePath, falSourceAudio, stageUploadDurable, cleanupStaged, settings,
     });
     return {
       backend,
