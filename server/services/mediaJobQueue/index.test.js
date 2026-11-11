@@ -5454,6 +5454,42 @@ describe('mediaJobQueue per-kind runtime wiring', () => {
     });
   });
 
+  it('does not count a host sleep as runner idle time', async () => {
+    vi.useFakeTimers();
+    process.env.MEDIA_JOB_WATCHDOG_IMAGE_MS = String(WINDOWS.IMAGE);
+    await importFresh();
+    let signalEntered;
+    const entered = new Promise(resolve => { signalEntered = resolve; });
+    stubs.generateImage.mockImplementationOnce(async () => {
+      signalEntered();
+      return { jobId: 'whatever' };
+    });
+    let jobId;
+    try {
+      ({ jobId } = await mediaJobQueue.enqueueJob({ kind: 'image', params: { prompt: 'hang' } }));
+      await entered;
+      await vi.advanceTimersByTimeAsync(WINDOWS.IMAGE / 2);
+      // Wall clock jumps 15 minutes with no timer firing — what a laptop sleep
+      // looks like to Node — then the first post-wake tick runs.
+      vi.setSystemTime(Date.now() + 15 * 60 * 1000);
+      await vi.advanceTimersByTimeAsync(Math.floor(WINDOWS.IMAGE / 4));
+      await flush();
+      expect(mediaJobQueue.getJob(jobId).status).toBe('running');
+      // A genuinely silent runner still trips the watchdog after waking.
+      await vi.advanceTimersByTimeAsync(WINDOWS.IMAGE + Math.floor(WINDOWS.IMAGE / 4));
+      await flush();
+      await vi.waitFor(() => expect(mediaJobQueue.getJob(jobId)).toMatchObject({
+        status: 'failed', error: expect.stringMatching(/watchdog timeout/),
+      }));
+    } finally {
+      delete process.env.MEDIA_JOB_WATCHDOG_IMAGE_MS;
+      if (jobId) imageGenEvents.emit('failed', { generationId: jobId, error: 'Fixture teardown' });
+      await flush();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
   it('scales the video watchdog by chunk count and gives a chained render its own entry point', async () => {
     vi.useFakeTimers();
     process.env.MEDIA_JOB_WATCHDOG_VIDEO_MS = '4000';
