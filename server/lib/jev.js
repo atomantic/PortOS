@@ -82,7 +82,7 @@ export const JEV_PYTHON_IMPORTS = Object.freeze([
 // requires the explicit install canary, and a bump here that is driven by a
 // transformers requirement must bump `modelAbuseGuard.js` in the same change.
 export const JEV_PYTHON_PACKAGES = Object.freeze([
-  'torch==2.14.0',
+  'torch==2.14.1',
   'transformers==5.16.1',
   'safetensors==0.8.0',
   'huggingface_hub==1.30.0',

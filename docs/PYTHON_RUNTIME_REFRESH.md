@@ -9,8 +9,9 @@ evidence that its API or ABI is compatible.
 
 1. Refresh small runtime profiles independently. The first slice updates Reactor
    SDK **1.0.1 → 1.13.0** and Demucs's SoundFile **0.13.1 → 0.14.0**. The other
-   53 Demucs identities stay unchanged. Lyric alignment and Prompt Guard/jev
-   remain for a later slice; their existing pins have not been revalidated here.
+   53 Demucs identities stay unchanged. The second slice updates Prompt
+   Guard/jev PyTorch **2.14.0 → 2.14.1**, and re-resolves the unchanged lyric
+   alignment profile; its evidence and remaining upgrades are recorded below.
 2. Resolve compatible patches/minors per native profile against its immutable
    source descriptor. Preserve its declared Python/platform targets, native
    source revisions, build constraints and intentional overrides. Read the
@@ -73,3 +74,66 @@ Metal/CUDA execution and pretrained-model separation remain unverified. Existing
 [Demucs validation limits](./DEMUCS_RUNTIME.md) still apply. Remaining profiles
 and these target-specific validation items stay open in #15769; this slice does
 not close that issue or assert a repository-wide refresh.
+
+## Second-slice CPU patch and revalidation (2026-11-11)
+
+Prompt Guard and jev now use PyTorch **2.14.1** in both adapter package lists
+and the shared source requirements. Its [published requirements](https://pypi.org/pypi/torch/2.14.1/json)
+match 2.14.0, including the Linux CUDA 13 dependency versions. The complete
+56-identity guard lock was regenerated with hash-verified **uv 0.13.7** and
+`--exclude-newer 2026-11-04T00:00:00Z`, reusing the existing lock. Only PyTorch
+and its 24 artifact hashes changed; all other identities and platform markers
+remain identical. The header command preserves that reuse, restricts compilation
+to wheels and records the actual cutoff. Separate guard and jev environments,
+exact-version readiness probes and install-time canary gates remain in place.
+
+The lyric alignment source already pins cooled TorchAudio **2.11.1** and the
+newest compatible NumPy releases: **2.4.6** on Python 3.11, **2.5.4** on 3.12+.
+[NumPy 2.5.4 requires Python 3.12+](https://pypi.org/pypi/numpy/2.5.4/json).
+[TorchAudio 2.11.1 requires torch >=2.11](https://pypi.org/pypi/torchaudio/2.11.1/json),
+so its existing 2.14.1 torch pin remains compatible with the declared dependency.
+Re-resolving its complete 33-identity lock with the same uv/cutoff produced the
+same versions, markers and hashes; only scratch-relative annotations differed.
+The shipped lyric source and lock are therefore unchanged.
+
+Two older transitive/direct pins have concrete upstream constraints:
+[Transformers 5.16.1](https://pypi.org/pypi/transformers/5.16.1/json) requires
+`huggingface-hub>=1.5,<2`, so Hub 2 cannot enter this frozen classifier baseline;
+[SymPy 1.14.0](https://pypi.org/pypi/sympy/1.14.0/json) requires
+`mpmath>=1.1,<1.4`, excluding the cooled mpmath 1.4 releases in both CPU locks.
+These are compatibility constraints, not security exceptions. PyTorch 2.15's
+changed CUDA/Triton closure and newer Transformers/Hub combinations remain
+pending compatibility work under #15769; retaining this patch baseline does
+not certify that those newer releases are incompatible.
+
+Verification for this slice:
+
+- All hashes in both complete locks match non-yanked PyPI artifacts published
+  before the cutoff. OSV querybatch, including `MAL-` records, returned **zero
+  findings across 57 distinct package/version identities**.
+- Fresh scratch Apple Silicon CPython **3.11.17** and **3.12.11** environments
+  installed the complete guard lock with
+  `--require-hashes --no-deps --only-binary :all:` and passed `uv pip check`.
+  Native imports on 3.12 matched all four direct adapter pins.
+- Offline random-weight fixtures exercised the shipped Prompt Guard Python
+  runner with a DeBERTa classifier (1,200 tokens, three complete overlapping
+  windows, finite scores), and jev's real Qwen3.5 loader, pair scorer and hidden
+  state pooling (two pairs, normalized scores, finite pooled vectors) on CPU.
+  These prove native tensor/API execution with synthetic weights and establish
+  no classifier accuracy or security effectiveness.
+- The exact cached production Prompt Guard snapshot
+  `a8ded8e697ce7c355e395a0df51f94adb4a2fd27` passed the real offline CPU install
+  canary on the fresh Python 3.12 runtime: the shipped runner classified the
+  installer's repeated benign sentence in three windows, and the server's
+  `normalizeModelAbuseGuardResult` accepted it as complete and safe. This is
+  one benign-canary contract, not an adversarial accuracy evaluation.
+- Eight focused installer/profile/service/Python-runner files passed **94
+  tests**, covering hash-only installs, unsupported-host refusal, readiness and
+  failed-canary gating, sidecar lifecycle and complete-window contracts.
+
+Remaining under #15769: the other native profiles and isolated major migrations
+listed above, newer CPU minor releases, production jev scoring, Windows/Linux native
+install/Repair, and
+independent Apple Silicon acceleration/CUDA execution validation. No production
+model download, provider session or paid generation was started. Pixal3D CUDA
+remains unresolved under #15710.

@@ -72,7 +72,7 @@ export const MODEL_ABUSE_GUARD_PYTHON_IMPORTS = Object.freeze([
 // Transformers 5.16's Hub >=1.5,<2 / safetensors >=0.8 requirements. The runner
 // slices the complete token stream into the pinned DeBERTa window format. Updating these pins requires the explicit install canary.
 export const MODEL_ABUSE_GUARD_PYTHON_PACKAGES = Object.freeze([
-  'torch==2.14.0',
+  'torch==2.14.1',
   'transformers==5.16.1',
   'safetensors==0.8.0',
   'huggingface_hub==1.30.0',
