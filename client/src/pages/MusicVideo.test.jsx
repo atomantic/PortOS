@@ -223,7 +223,6 @@ vi.mock('../services/socket', () => ({
       for (const fn of socketHandlers.get('generated-preview:opened') || []) fn(opened);
       for (const fn of socketHandlers.get('generated-preview:frame') || []) fn({ ...opened, generation: 0, mime: 'image/jpeg', data: btoa('frame') });
     },
-    id: 'tab-socket',
     connected: true,
   },
 }));
@@ -490,7 +489,9 @@ const renderMVWithNav = (to) => render(
 
 afterEach(() => vi.restoreAllMocks());
 
-beforeEach(() => {
+beforeEach(async () => {
+  const socket = (await import('../services/socket.js')).default;
+  delete socket.id;
   // Keep the real artifact iframe and src assertions without navigating to its API URL.
   window.happyDOM.settings.navigation.disableChildFrameNavigation = true;
   vi.clearAllMocks();
@@ -729,6 +730,8 @@ describe('MusicVideo index follows projects changed elsewhere (#15724)', () => {
   });
 
   it('ignores an event this tab originated', async () => {
+    const socket = (await import('../services/socket.js')).default;
+    socket.id = 'tab-socket';
     const listed = summary('mv-listed', 'Untouched');
     await renderIndex([listed]);
     const summaryCalls = listMusicVideoProjectSummaries.mock.calls.length;
