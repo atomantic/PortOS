@@ -179,6 +179,8 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   getMusicVideoCodeDocument: vi.fn(async () => ({ html: '<!doctype html><html><body></body></html>', durationSec: 2, fps: 24, width: 1280, height: 720, song: { sections: [] }, timeline: { sections: [] } })),
   generateMusicVideoCode: vi.fn(),
   regenerateMusicVideoCodeSection: vi.fn(),
+  getMusicVideoCastAndSets: vi.fn(async () => ({ catalogCheckin: { items: [], problems: [] } })),
+  repairMusicVideoShotReference: vi.fn(),
   linkMusicVideoCastAndSetsToCatalog: vi.fn(),
   regenerateMusicVideoCastAndSets: vi.fn(),
   resumeMusicVideoCastAndSets: vi.fn(),
@@ -2650,6 +2652,28 @@ describe('MusicVideo visual spec, takes and handoff (#8965)', () => {
     },
     scenes: [{ sceneId: 's1', order: 0, prompt: 'waves', framePrompt: 'harbor at dawn', referenceImageId: null, videoHistoryId: null, takes: [] }],
   };
+
+  it('keeps the newer shot picks when a reference repair reply arrives after a project update', async () => {
+    const { getMusicVideoCastAndSets, repairMusicVideoShotReference } = await import('../services/apiMusicVideo.js');
+    const project = { ...SPEC_PROJECT, castAndSets: { source: 'catalog', status: 'approved' }, updatedAt: '2026-01-01T00:00:00Z',
+      scenes: [{ ...SPEC_PROJECT.scenes[0], frameReferenceIds: ['r1'] }] };
+    getMusicVideoCastAndSets.mockResolvedValueOnce({ catalogCheckin: { items: [], problems: [], shotReferenceProblems: [
+      { id: 'problem-1', sceneId: 's1', shot: 1, message: 'Shot 1 needs a set reference.', fix: 'Fix shot reference' },
+    ] } });
+    let respond;
+    repairMusicVideoShotReference.mockImplementationOnce(() => new Promise(resolve => { respond = resolve; }));
+    await openProject(project, 'produce');
+    await showFrames();
+    const refs = () => within(screen.getByRole('group', { name: 'References selected for the frames' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Fix shot reference' }));
+    getMusicVideoProject.mockResolvedValueOnce({ ...project, updatedAt: '2026-01-03T00:00:00Z',
+      scenes: [{ ...project.scenes[0], frameReferenceIds: ['r2'] }] });
+    await pushSocket('music-video:project:changed', { id: project.id });
+    await waitFor(() => expect(refs().getByRole('button', { name: "Don't send Pier" })).toBeTruthy());
+    await act(async () => respond({ sceneId: 's1', patch: { frameReferenceIds: ['r1', 'r2'] }, updatedAt: '2026-01-02T00:00:00Z' }));
+    expect(refs().queryByRole('button', { name: "Don't send Lead" })).toBeNull();
+    expect(refs().getByRole('button', { name: "Don't send Pier" })).toBeTruthy();
+  });
 
   it('asks the server for the shot frame and names the capability gap when that render is refused', async () => {
     renderMusicVideoSceneFrame.mockRejectedValueOnce(Object.assign(
