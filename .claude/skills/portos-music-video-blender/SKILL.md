@@ -65,6 +65,16 @@ Rules that keep a film renderable:
   `envelope(song, "low"|"mid"|"high"|"rms", t)`, `cue_words`, `words_between`) and `portos_film.timing` (`ease`,
   `clamp`, `remap`, `stepped` for on-twos holds). They read `song.json`; do not parse audio yourself.
 - Lyrics are not drawn for you. Typography is part of the film.
+- PortOS hands `build_shot` and `frame` the shot exactly as `describe` returned it. Do not rely on a key you
+  dropped from `describe`, and load anything a shot needs from `ctx` (the song above all) before any code path
+  that looks a shot up without one: a process-wide cache primed without `ctx.song` has no lyrics. A film that
+  renders in your own runner can still fail here, so render one still through PortOS before queueing a batch.
+- End the last shot on the last whole frame inside the song (`floor(durationSec * fps) / fps`), not on the
+  song's length rounded to the grid: a shot ending past the song fails the storyboard check.
+- The film carries no title. The project's title card (Look step) is laid over cuts, excerpts and the final
+  render in a corner the director picks: keep that corner clear of faces and type in the windows it shows.
+- Treat Blender's "Shadow buffer full" log line as a failed shot (shadows drop out though frames are written);
+  raise `scene.eevee.shadow_pool_size` in the film's look setup.
 
 ## The loop
 
