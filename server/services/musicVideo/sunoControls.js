@@ -1,5 +1,7 @@
 /** Styling retained only for older Suno builds without semantic selection state. */
 export const SUNO_LEGACY_CLASSES = {
+  // Older Hook editors identify their waveform only by a descriptive class.
+  waveformSelector: '[class*=waveform]',
   // Older Advanced option rows mark the chosen button with the standard variant.
   optionSelected: /hxc-btn-variant-standard/,
   // Older Download dialogs mark selected formats with this pair of color tokens.

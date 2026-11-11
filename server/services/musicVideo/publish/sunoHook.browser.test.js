@@ -13,13 +13,14 @@ const ID = '12345678-abcd-4abc-8abc-123456789abc';
 // Every request is intercepted. This synthetic page deliberately gives the
 // waveform an offscreen midpoint, as a translated long song strip would have.
 function fixtureHtml(kind, initiallyOn) {
-  const waveform = kind === 'fallback' ? '<canvas class="waveform"></canvas>'
+  const waveform = kind === 'fallback' ? '<canvas id="strip"></canvas>'
     : kind === 'shadow' ? '<div class="waveform" role="slider" aria-label="Audio window"></div>'
-    : '<div class="waveform" data-testid="hook-waveform"></div>';
+    : kind === 'missing' ? '<div class="waveform"></div>'
+    : '<div id="strip" data-testid="hook-waveform"></div>';
   return String.raw`<!doctype html><html><head><style>
     body { margin: 0; overflow: hidden; }
     [hidden] { display: none !important; }
-    .waveform { position: absolute; left: -3873px; top: 150px; width: 5550px; height: 80px; background: gray; }
+    .waveform, #strip { position: absolute; left: -3873px; top: 150px; width: 5550px; height: 80px; background: gray; }
     #pill { position: absolute; top: 100px; }
     #songs { position: absolute; top: 300px; }
     #post { position: absolute; top: 400px; }
@@ -43,7 +44,7 @@ function fixtureHtml(kind, initiallyOn) {
       };
       window.windowAt = 158; window.publishClicks = 0; window.points = []; window.dragCount = 0;
       window.searchSettled = false; window.usedAfterSearch = false;
-      const strip = document.querySelector('.waveform');
+      const strip = document.querySelector('.waveform, #strip');
       let down = null;
       strip.addEventListener('mousedown', event => { down = event.clientX; window.points.push([event.clientX, event.clientY]); });
       document.addEventListener('mouseup', event => {

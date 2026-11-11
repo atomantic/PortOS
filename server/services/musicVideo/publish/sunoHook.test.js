@@ -92,6 +92,7 @@ function hookPage({ windowAt = 158, pxPerSec = 22.2, stuckAt = null, restored = 
       leaf('3:42', ambiguousReadout ? 390 : 250), leaf('3:42', 500),
     ],
     '[data-testid*="waveform" i]': () => waveformKind === 'identified' ? [waveform] : [],
+    '[class*=waveform]': () => waveformKind === 'legacy' ? [waveform] : [],
     '[role="slider"]': () => waveformKind === 'slider' ? [waveform] : [],
     canvas: () => waveformKind === 'canvas' ? (ambiguousWaveform ? [waveform, { ...waveform }] : [waveform]) : [],
     '[role=dialog] button': () => state.songRows.map(({ text, html }) => ({ innerText: 'Use', innerHTML: html, parentElement: { innerText: `${text}\nUse`, innerHTML: html, querySelectorAll: () => [1] } })),
@@ -196,7 +197,7 @@ describe('Suno Hook fill (#10860)', () => {
     expect(summary).not.toHaveProperty('cut');
   });
 
-  it.each(['slider', 'canvas'])('finds the window through a %s without styling selectors', async (waveformKind) => {
+  it.each(['slider', 'canvas', 'legacy'])('finds the window through the %s compatibility path', async (waveformKind) => {
     const page = hookPage({ windowAt: 20, waveformKind });
     expect(await sunoHookAdapter.prepare(page, hookPayload())).toMatchObject({ windowStart: 20 });
   });

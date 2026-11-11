@@ -11,6 +11,7 @@
  * current px-per-second estimate, recalibrated from what the drag moved, and
  * the fill fails rather than post the wrong stretch (#10860).
  */
+import { SUNO_LEGACY_CLASSES } from '../sunoControls.js';
 import { pickSongRow } from '../../../lib/sunoSongPicker.js';
 import { PUBLISH_STEP_TIMEOUT_MS as T, clickVisibleText, loginRequired, step } from './browser.js';
 
@@ -87,16 +88,16 @@ async function selectSong(page, payload) {
   if (index < 0) throw new Error(`${rows.length} rows match "${payload.title}" and none could be told apart by id or length`);
   await page.locator('[role=dialog] button').filter({ hasText: /^Use$/ }).nth(index).click({ timeout: T });
   await search.locator('xpath=ancestor::*[@role="dialog"][1]').waitFor({ state: 'hidden', timeout: T });
-  await page.waitForFunction(markHookWaveform, null, { timeout: T });
+  await page.waitForFunction(markHookWaveform, { legacyWaveformSelector: SUNO_LEGACY_CLASSES.waveformSelector }, { timeout: T });
 }
 
 /**
  * Prefer an identified waveform, then a named window/audio slider. A canvas is
- * a last resort only when it is a wide visible strip with a time label just
- * above it; multiple such canvases are ambiguous, so no drag target is marked.
+ * a last resort after the centralized legacy class selector, bounded to a wide
+ * visible strip with a time label just above it. Multiple strips are ambiguous.
  * Runs in the page without module scope.
  */
-function markHookWaveform() {
+function markHookWaveform({ legacyWaveformSelector }) {
   const visible = (el) => el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden';
   const clocks = [...document.querySelectorAll('body *')].filter((el) => el.children.length === 0
     && /^\d+:\d{2}$/.test(el.textContent.trim()) && visible(el)
@@ -105,6 +106,7 @@ function markHookWaveform() {
   const identified = [...document.querySelectorAll('[data-testid*="waveform" i]')].filter(visible);
   const sliders = [...document.querySelectorAll('[role="slider"]')].filter((el) => visible(el)
     && /waveform|audio window|song window|clip window/i.test(el.getAttribute('aria-label') || document.getElementById(el.getAttribute('aria-labelledby'))?.textContent || ''));
+  const legacy = [...document.querySelectorAll(legacyWaveformSelector)].filter(visible);
   const canvases = [...document.querySelectorAll('canvas')].filter((el) => {
     if (!visible(el)) return false;
     const box = el.getBoundingClientRect();
@@ -113,7 +115,7 @@ function markHookWaveform() {
       return label.bottom <= box.top && box.top - label.bottom <= 120 && label.right >= box.left && label.left <= box.right;
     });
   });
-  const candidates = identified.length ? identified : sliders.length ? sliders : canvases;
+  const candidates = identified.length ? identified : sliders.length ? sliders : legacy.length ? legacy : canvases;
   // A nested marker describes the same waveform; separate strips are ambiguous.
   const outer = candidates.filter((el) => !candidates.some((other) => other !== el && other.contains(el)));
   if (outer.length !== 1) return false;
