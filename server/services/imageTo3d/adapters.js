@@ -63,6 +63,7 @@ import {
   runTrellis2Generate,
   probeTrellis2TextureBake,
 } from './trellis2.js';
+import { installTrellis2 } from './trellis2Install.js';
 import {
   isTrellis2CudaInstalled,
   runTrellis2CudaGenerate,
@@ -85,16 +86,17 @@ import { describeDegradedInstall } from './degradedInstall.js';
 export const TARGET_ADAPTERS = Object.freeze({
   trellis2: Object.freeze({
     isInstalled: isTrellis2Installed,
+    install: installTrellis2,
     resolveEnv: hfChildEnv,
     run: runTrellis2Generate,
     async describeInstallState() {
       const bake = await probeTrellis2TextureBake();
       if (bake.quality !== 'fallback') return { fields: { textureBake: bake } };
-      const textureBake = { ...bake, repairable: false };
+      const textureBake = { ...bake, repairable: true };
       const { degraded, warnings } = describeDegradedInstall({
         label: 'degraded textures',
         help: bake.help,
-        repairable: false,
+        repairable: true,
         missing: bake.missing,
       });
       return { fields: { textureBake, degraded }, warnings };

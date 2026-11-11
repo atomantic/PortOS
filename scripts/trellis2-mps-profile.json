@@ -1,0 +1,83 @@
+{
+  "id": "trellis2-metal-py313-torch215-v1",
+  "python": "3.13",
+  "torch": "2.15.0",
+  "torchvision": "0.29.2",
+  "minimumMacOS": 26,
+  "minimumXcode": 26,
+  "registryCutoff": "2026-11-04T00:00:00Z",
+  "sources": [
+    {
+      "name": "trellis-mac",
+      "repo": "shivampkumar/trellis-mac",
+      "revision": "d58628f4f5b9c3de8274cb110074154f4b31cef2",
+      "url": "https://codeload.github.com/shivampkumar/trellis-mac/tar.gz/d58628f4f5b9c3de8274cb110074154f4b31cef2",
+      "sha256": "ed3baba2b82ea574f7d79d67da2727ddce3791b0f1ae3ed9d0c875ed9e75e475",
+      "destination": "."
+    },
+    {
+      "name": "TRELLIS.2",
+      "repo": "microsoft/TRELLIS.2",
+      "revision": "75fbf0183001ed9876c8dbb35de6b68552ee08bd",
+      "url": "https://codeload.github.com/microsoft/TRELLIS.2/tar.gz/75fbf0183001ed9876c8dbb35de6b68552ee08bd",
+      "sha256": "65729b2e0d6a96b429379e4cf04c67be38880fcca57e4673e94f300854e75389",
+      "destination": "TRELLIS.2"
+    },
+    {
+      "name": "mtlbvh",
+      "repo": "pedronaugusto/mtlbvh",
+      "revision": "fe6660bdb7de5a12ea00bd96df2e21bdcbdd40b1",
+      "url": "https://codeload.github.com/pedronaugusto/mtlbvh/tar.gz/fe6660bdb7de5a12ea00bd96df2e21bdcbdd40b1",
+      "sha256": "569281b8a2a3ef324ca82c2877f3ab445ec0844db57abc2a97978434e2147a35",
+      "destination": "deps/mtlbvh"
+    },
+    {
+      "name": "mtldiffrast",
+      "repo": "pedronaugusto/mtldiffrast",
+      "revision": "c390a92aa296c5cf131f91253b8a11fe01ec11e4",
+      "url": "https://codeload.github.com/pedronaugusto/mtldiffrast/tar.gz/c390a92aa296c5cf131f91253b8a11fe01ec11e4",
+      "sha256": "8d80613e1295106f78431619b347fd3b5651ca618370ec2661893cd5d0b1f174",
+      "destination": "deps/mtldiffrast"
+    },
+    {
+      "name": "mtlmesh",
+      "repo": "pedronaugusto/mtlmesh",
+      "revision": "5e6749356ba39b15489c99487f55840d49923da7",
+      "url": "https://codeload.github.com/pedronaugusto/mtlmesh/tar.gz/5e6749356ba39b15489c99487f55840d49923da7",
+      "sha256": "9bb7a0a8427a56a22c272e595bd785d0d73cb770579495e275bec83828ed0e20",
+      "destination": "deps/mtlmesh"
+    },
+    {
+      "name": "mtlgemm",
+      "repo": "pedronaugusto/mtlgemm",
+      "revision": "c2e5d3fa15152bc4aef65773cab1ded5a1855d38",
+      "url": "https://codeload.github.com/pedronaugusto/mtlgemm/tar.gz/c2e5d3fa15152bc4aef65773cab1ded5a1855d38",
+      "sha256": "3d942aa33f50e3c690d3e45303adc07813bd6aee9f24ae1244fcddf761b54b8e",
+      "destination": "deps/mtlgemm"
+    },
+    {
+      "name": "trellis2-apple",
+      "repo": "pedronaugusto/trellis2-apple",
+      "revision": "c873bde81ebe1e56535c6caddb4b21267364a923",
+      "url": "https://codeload.github.com/pedronaugusto/trellis2-apple/tar.gz/c873bde81ebe1e56535c6caddb4b21267364a923",
+      "sha256": "3afa883918fda9bd52bb8a919e7a844d02482ce7195711258bf1989569e0af7d",
+      "destination": "deps/trellis2-apple"
+    },
+    {
+      "name": "utils3d",
+      "repo": "EasternJournalist/utils3d",
+      "revision": "9a4eb15e4021b67b12c460c7057d642626897ec8",
+      "url": "https://codeload.github.com/EasternJournalist/utils3d/tar.gz/9a4eb15e4021b67b12c460c7057d642626897ec8",
+      "sha256": "15a6f943e5b8b5e29988f91db028f3ee0dc7f0b3ae7817f9ce39f73cd7149cc7",
+      "destination": "deps/utils3d"
+    },
+    {
+      "name": "eigen",
+      "repo": "eigenteam/eigen-git-mirror",
+      "revision": "21e4582d1739107337a03460c81412981130373e",
+      "url": "https://codeload.github.com/eigenteam/eigen-git-mirror/tar.gz/21e4582d1739107337a03460c81412981130373e",
+      "sha256": "a7e88ddecefc3de169abbaca7582253640e3254d98d4d31998249221d429ba58",
+      "destination": "deps/trellis2-apple/o-voxel/third_party/eigen"
+    }
+  ]
+}

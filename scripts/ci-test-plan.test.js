@@ -1311,6 +1311,20 @@ describe('CI test impact planner', () => {
       expect(missingOwner.reason).toMatch(/fixture owner not tracked/);
     });
 
+    it('selects installer and route contracts for the TRELLIS.2 shell and wheel locks', () => {
+      const inputs = [
+        'scripts/setup-trellis2-mps.sh',
+        'scripts/requirements-trellis2-mps.txt',
+        'scripts/requirements-trellis2-mps.lock.txt',
+      ];
+      const owners = ['scripts/setup-trellis2-mps.test.js', 'server/routes/imageTo3d.test.js'];
+      for (const input of inputs) {
+        const plan = buildCiTestPlan([input], { trackedFiles: [...TRACKED, ...inputs, ...owners] });
+        expect(plan.full, input).toBe(false);
+        expect(plan.server.files, input).toEqual(expect.arrayContaining(owners));
+      }
+    });
+
     it('scopes a requirements-pin change to the installer contract', () => {
       const requirements = [
         'scripts/requirements-ltx25-cuda.txt',

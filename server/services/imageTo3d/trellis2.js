@@ -2,7 +2,7 @@
 
 import { existsSync } from 'node:fs';
 import { homedir, platform, totalmem } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn, execFile } from '../../lib/childProcess.js';
 import { rewriteGlbMaterialsOpaque } from './glbMaterials.js';
@@ -40,9 +40,12 @@ export function trellis2VenvPython(base) {
     : join(root, '.venv', 'bin', 'python3');
 }
 
-/** The port's single-image entrypoint (`python generate.py <image>`). */
-export function trellis2GenerateScript(base) {
-  return join(trellis2Root(base), 'generate.py');
+/** A known locked profile always uses its pinned entrypoint; intact legacy installs keep theirs. */
+export function trellis2GenerateScript(base, exists = existsSync) {
+  const root = trellis2Root(base);
+  const pinned = join(root, '.venv', 'portos-source', 'generate.py');
+  const locked = exists(join(root, '.venv', 'portos-profile.json')) || exists(join(root, 'portos-installing'));
+  return locked || exists(pinned) ? pinned : join(root, 'generate.py');
 }
 
 /** PortOS adapter that exposes the upstream exporter's supported 4K atlas size. */
@@ -51,13 +54,17 @@ export function trellis2GenerateRunnerScript() {
 }
 
 /**
- * Installed ⇔ the venv Python AND the generate script both exist. `exists` is
- * injectable so the check is deterministic in tests.
+ * Locked installs need Python, the pinned entrypoint and completed verification.
+ * Legacy installs remain usable until a rebuild starts. `exists` is injectable.
  * @param {{base?: string, exists?: (p: string) => boolean}} [opts]
  * @returns {boolean}
  */
 export function isTrellis2Installed({ base, exists = existsSync } = {}) {
-  return exists(trellis2VenvPython(base)) && exists(trellis2GenerateScript(base));
+  const root = trellis2Root(base);
+  if (!exists(trellis2VenvPython(base)) || exists(join(root, 'portos-installing'))) return false;
+  const script = trellis2GenerateScript(base, exists);
+  const completed = script === join(root, 'generate.py') || exists(join(root, '.venv', 'portos-profile.json'));
+  return completed && exists(script);
 }
 
 /**
@@ -373,6 +380,7 @@ export function buildGenerateArgs({
   steps = null,
   seed = null,
   meshQuality = {},
+  exists = existsSync,
 } = {}) {
   if (!imagePath) throw new Error('buildGenerateArgs: imagePath is required');
   if (!TRELLIS2_TEXTURE_SIZES.includes(textureSize)) {
@@ -388,7 +396,7 @@ export function buildGenerateArgs({
   // Validates steps/seed and emits their flags — shared with the CUDA lane so
   // neither the ranges nor the flag names can drift (renderOptions.js).
   const optionArgs = renderOptionArgs('buildGenerateArgs', { steps, seed });
-  const generateScript = trellis2GenerateScript(base);
+  const generateScript = trellis2GenerateScript(base, exists);
   // The runner adapter is now on EVERY invocation, not just the 4K one. It used
   // to be conditional because widening `--texture-size` was its only job; it now
   // also carries the mesh-quality overrides (decimation target, hole filling,
@@ -423,12 +431,13 @@ export function buildGenerateArgs({
 // guards it — keep these ordered if you retune the curve.
 const GENERATE_STAGE_SIGNATURES = [
   { re: /loading pipeline/i, stage: 'loading', percent: 3 },
+  { re: /^loading weights:/i, stage: 'loading', percent: 3 },
   { re: /^device:/i, stage: 'loading', percent: 5 },
   { re: /generating 3d model/i, stage: 'generating', percent: 10 },
   { re: /^mesh:\s/i, stage: 'meshing', percent: 55 },
   { re: /generation time/i, stage: 'meshing', percent: 58 },
   { re: /baking .*textures?/i, stage: 'texturing', percent: 65 },
-  { re: /(uv unwrap|simplifying mesh)/i, stage: 'texturing', percent: 72 },
+  { re: /uv unwrap|^simplifying(?:\s|:)|^(?:gathering results from )?xatlas:/i, stage: 'texturing', percent: 72 },
 ];
 
 /** A written `.glb` path — the terminal export signal (captures the asset path). */
@@ -734,6 +743,7 @@ export function runTrellis2Generate({
     pipelineType: resolvedPipelineType,
     steps,
     seed,
+    exists,
     meshQuality: {
       decimationTarget: resolvedDecimationTarget,
       fillHoles,
@@ -756,7 +766,7 @@ export function runTrellis2Generate({
   return runGenerateSubprocess({
     command,
     args,
-    cwd: trellis2Root(base),
+    cwd: dirname(trellis2GenerateScript(base, exists)),
     env,
     label: LABEL,
     codePrefix: CODE_PREFIX,
