@@ -23,6 +23,9 @@ const READBACK_TOLERANCE_SEC = 1;
 // One drag stays on the waveform, so a window far from the target takes several.
 const MAX_DRAGS = 20;
 const WAVEFORM = '[class*=waveform], [data-testid*=waveform], canvas';
+const SONG_RESULTS_WAIT_MS = 10_000;
+const SONG_RESULTS_POLL_MS = 250;
+const SONG_RESULTS_STABLE_POLLS = 3;
 
 const fmtClock = (sec) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
 const parseClock = (text) => {
@@ -36,15 +39,50 @@ async function selectSong(page, payload) {
   await page.locator('button:visible').filter({ hasText: /Replace Song|Select Song/ }).first().click({ timeout: T });
   await page.locator('[role=dialog]').first().waitFor({ timeout: T });
   const search = page.locator('textarea[placeholder*="Search by song name"]').first();
-  await search.fill(payload.title, { timeout: T });
-  await page.waitForTimeout(2500);
-  const rows = await page.evaluate(() => [...document.querySelectorAll('[role=dialog] button')]
+  const readRows = () => page.evaluate(() => [...document.querySelectorAll('[role=dialog] button')]
     .filter((b) => (b.innerText || '').trim() === 'Use')
     .map((b) => {
-      let row = b;
+      let row = b.parentElement || b;
       for (let i = 0; i < 4 && row.parentElement && row.parentElement.querySelectorAll('button').length < 3; i += 1) row = row.parentElement;
       return { text: row.innerText || '', html: row.innerHTML };
     }));
+  const beforeSearch = JSON.stringify((await readRows()).map(({ text, html }) => [text, html]));
+  const activeRequests = new Set();
+  let sawSearchRequest = false;
+  const normalizedTitle = String(payload.title || '').trim().replace(/\s+/g, ' ').toLowerCase();
+  const encodedTitle = encodeURIComponent(String(payload.title || '').trim()).toLowerCase();
+  const onRequest = (request) => {
+    if (!['fetch', 'xhr'].includes(request.resourceType())) return;
+    const requestText = `${request.url()} ${request.postData() || ''}`.replace(/\+/g, ' ').toLowerCase();
+    if (requestText.includes(normalizedTitle) || requestText.includes(encodedTitle)) sawSearchRequest = true;
+    activeRequests.add(request);
+  };
+  const onRequestDone = (request) => activeRequests.delete(request);
+  page.on('request', onRequest);
+  page.on('requestfinished', onRequestDone);
+  page.on('requestfailed', onRequestDone);
+  const deadline = Date.now() + SONG_RESULTS_WAIT_MS;
+  let previous = beforeSearch;
+  let stablePolls = 0;
+  let rows = [];
+  try {
+    await search.fill(payload.title, { timeout: T });
+    while (Date.now() < deadline) {
+      const searchValue = await search.inputValue();
+      rows = await readRows();
+      const snapshot = JSON.stringify(rows.map(({ text, html }) => [text, html]));
+      const loading = await page.locator('[role=dialog] [aria-busy="true"], [role=dialog] [role=progressbar]').count();
+      stablePolls = searchValue === payload.title && sawSearchRequest && activeRequests.size === 0 && loading === 0 && snapshot === previous ? stablePolls + 1 : 0;
+      if (stablePolls >= SONG_RESULTS_STABLE_POLLS) break;
+      previous = snapshot;
+      await page.waitForTimeout(SONG_RESULTS_POLL_MS);
+    }
+  } finally {
+    page.off('request', onRequest);
+    page.off('requestfinished', onRequestDone);
+    page.off('requestfailed', onRequestDone);
+  }
+  if (stablePolls < SONG_RESULTS_STABLE_POLLS) throw new Error(`${rows.length} rows match "${payload.title}" and Suno search did not complete and settle within ${SONG_RESULTS_WAIT_MS} ms`);
   const index = pickSongRow(rows, payload);
   if (index < 0) throw new Error(`${rows.length} rows match "${payload.title}" and none could be told apart by id or length`);
   await page.locator('[role=dialog] button').filter({ hasText: /^Use$/ }).nth(index).click({ timeout: T });

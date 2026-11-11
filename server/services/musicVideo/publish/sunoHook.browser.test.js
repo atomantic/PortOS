@@ -30,6 +30,7 @@ function fixtureHtml(kind, initiallyOn) {
     <section id="post" hidden><textarea placeholder="Add a caption..."></textarea><div id="lyrics"></div><button id="publish">Post</button></section>
     <script>
       window.windowAt = 158; window.publishClicks = 0; window.points = []; window.dragCount = 0;
+      window.searchSettled = false; window.usedAfterSearch = false;
       const strip = document.querySelector('.waveform');
       let down = null;
       strip.addEventListener('mousedown', event => { down = event.clientX; window.points.push([event.clientX, event.clientY]); });
@@ -41,7 +42,15 @@ function fixtureHtml(kind, initiallyOn) {
         down = null;
       });
       document.getElementById('select').onclick = () => document.getElementById('songs').hidden = false;
-      document.getElementById('use').onclick = () => document.getElementById('songs').hidden = true;
+      document.querySelector('#songs textarea').oninput = async event => {
+        const response = await fetch('/api/search?query=' + encodeURIComponent(event.target.value));
+        await response.json();
+        window.searchSettled = true;
+      };
+      document.getElementById('use').onclick = () => {
+        window.usedAfterSearch = window.searchSettled;
+        document.getElementById('songs').hidden = true;
+      };
       document.getElementById('next').onclick = () => document.getElementById('post').hidden = false;
       document.getElementById('publish').onclick = () => window.publishClicks++;
       const kind = '${kind}';
@@ -82,6 +91,9 @@ describe.skipIf(!canRun)('Suno Hook synthetic draft UI in Chrome', () => {
       if (route.request().url() === 'https://suno.com/hooks/create' && route.request().resourceType() === 'document') {
         return route.fulfill({ contentType: 'text/html', body: fixtureHtml(kind, initial) });
       }
+      if (route.request().url() === 'https://suno.com/api/search?query=Synthetic%20song' && route.request().resourceType() === 'fetch') {
+        return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ songId: ID }) });
+      }
       unexpected.push(route.request().resourceType());
       return route.abort();
     });
@@ -94,7 +106,9 @@ describe.skipIf(!canRun)('Suno Hook synthetic draft UI in Chrome', () => {
         const control = page.locator('[role=switch],input[type=checkbox]');
         expect(await control.evaluate(el => el.getAttribute('aria-checked') === 'true' || el.checked === true)).toBe(wanted);
       }
-      const state = await page.evaluate(() => ({ at: window.windowAt, points: window.points, drags: window.dragCount, posts: window.publishClicks }));
+      const state = await page.evaluate(() => ({ at: window.windowAt, points: window.points, drags: window.dragCount, posts: window.publishClicks,
+        usedAfterSearch: window.usedAfterSearch }));
+      expect(state.usedAfterSearch).toBe(true);
       expect(Math.abs(state.at - 20)).toBeLessThanOrEqual(1);
       expect(state.drags).toBeGreaterThan(1);
       expect(state.points.every(([x, y]) => x >= 0 && x < 1000 && y >= 150 && y <= 230)).toBe(true);
