@@ -389,6 +389,46 @@ describe('alignProjectLyrics', () => {
     expect(h.updateProject).toHaveBeenCalledOnce();
   });
 
+  it.each(['LYRIC_ALIGN_CTC_FAILED', 'LYRIC_ALIGN_CTC_WINDOW_TOO_SHORT', 'LYRIC_ALIGN_CTC_MODEL_REJECTED', 'cancel'])(
+    'preserves whole-song results only for recoverable repair failure %s', async (code) => {
+      const record = { ...project, vocalStemFilename: 'stem.wav', lyricCues: [
+        { id: 'a', text: 'under blue skies', startSec: null, endSec: null },
+      ] };
+      const whole = ['under', 'blue', 'skies'].map((w, i) => ({ w, startSec: i * 0.1, endSec: (i + 1) * 0.1, conf: 'matched' }));
+      const error = code === 'cancel' ? { canceled: true } : { code };
+      const forceAlign = vi.fn().mockResolvedValueOnce([whole]).mockRejectedValueOnce(error);
+      const h = harness(vi.fn(), record, { resolveAudio: async () => ({ path: 'stem.wav', source: 'vocal-stem' }) });
+      if (code === 'cancel' || code === 'LYRIC_ALIGN_CTC_MODEL_REJECTED') {
+        await expect(h.run({ deps: { forceAlign } })).rejects.toMatchObject(error);
+        expect(h.updateProject).not.toHaveBeenCalled();
+      } else {
+        const saved = await h.run({ deps: { forceAlign } });
+        expect(saved.lyricCues[0]).toMatchObject({ words: whole, suspect: true });
+        expect(h.updateProject).toHaveBeenCalledOnce();
+      }
+    });
+
+  it('repairs a consecutive run together and keeps only improved lines', async () => {
+    const record = { ...project, vocalStemFilename: 'stem.wav', lyricCues: Array.from({ length: 5 }, (_, i) => ({
+      id: String(i), text: 'one two three', startSec: null, endSec: null,
+    })) };
+    const words = (start, step) => ['one', 'two', 'three'].map((w, i) => ({
+      w, startSec: round3(start + i * step), endSec: round3(start + (i + 1) * step), conf: 'matched',
+    }));
+    const whole = [words(1, 0.3), words(2, 0.1), words(3, 0.1), words(4, 0.1), words(8, 0.3)];
+    const retries = [words(2, 0.3), whole[2], words(5, 0.3)];
+    const forceAlign = vi.fn().mockResolvedValueOnce(whole).mockResolvedValueOnce(retries);
+    const h = harness(vi.fn(), record, { resolveAudio: async () => ({ path: 'stem.wav', source: 'vocal-stem' }) });
+    const stem = encodePcm16Wav(16000 * 10);
+    for (let i = 0; i < 16000 * 10; i++) stem.writeInt16LE(5000, 44 + i * 2);
+    h.decodeAudio.mockResolvedValue(stem);
+    const saved = await h.run({ deps: { forceAlign } });
+    expect(forceAlign).toHaveBeenCalledTimes(2);
+    expect(forceAlign).toHaveBeenLastCalledWith(stem, record.lyricCues.slice(1, 4), expect.objectContaining({ startSec: 1.9, endSec: 8 }));
+    expect(saved.lyricCues.map((cue) => cue.words)).toEqual([whole[0], retries[0], whole[2], retries[2], whole[4]]);
+    expect(saved.lyricCues[2].suspect).toBe(true);
+  });
+
   it.each(['cancel', 'text', 'audio'])('saves nothing when an automatic repair is interrupted by %s', async (outcome) => {
     const record = { ...project, vocalStemFilename: 'stem.wav', lyricCues: [
       { id: 'a', text: 'under blue skies', startSec: null, endSec: null },

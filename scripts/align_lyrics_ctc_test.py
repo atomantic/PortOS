@@ -12,6 +12,9 @@ import os
 import random
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from unittest.mock import patch
+import align_lyrics_ctc
 from types import SimpleNamespace
 from align_lyrics_ctc import (targets_for_lines, word_times, emissions_for_audio, forced_align, merge_tokens,
                               open_verified_checkpoint, load_mms_fa, CheckpointRejected, DICTIONARY, HOP,
@@ -103,6 +106,20 @@ class Viterbi(unittest.TestCase):
         spans = merge_tokens(forced_align(emissions, tokens))
         self.assertEqual([(span.token, span.start, span.end) for span in spans],
                          [(token, 2 * i, 2 * i + 2) for i, token in enumerate(tokens)])
+
+    @unittest.skipIf(numpy is None, 'numpy required')
+    def test_cli_reports_audio_too_short_without_lyrics(self):
+        lyric = 'private lyric words'
+        targets, _ = targets_for_lines([lyric.split()], DICTIONARY)
+        def align_short_audio():
+            forced_align([[0.0] * len(DICTIONARY)] * 2, targets)
+        output = io.StringIO()
+        with patch.object(align_lyrics_ctc, 'main', align_short_audio), redirect_stdout(output):
+            with self.assertRaises(SystemExit) as result:
+                align_lyrics_ctc.cli()
+        self.assertEqual(result.exception.code, 1)
+        self.assertEqual(output.getvalue(), 'ERROR:audio-too-short\n')
+        self.assertNotIn(lyric, output.getvalue())
 
     def test_word_slots_keep_frame_exact_song_clock(self):
         lines = [['oh'], ['no', 'no']]

@@ -154,22 +154,31 @@ export async function alignProjectLyrics(projectId, options = {}) {
     if (!cueId) {
       const wholeSongWords = forcedWords;
       forcedWords = [...wholeSongWords];
-      for (let index = 0; index < cues.length; index++) {
-        const original = wholeSongWords[index];
-        const compressed = compressedWords(original);
-        const silent = silentCount(original);
-        if (!compressed && silent === 0) continue;
+      const quality = wholeSongWords.map((words) => ({ compressed: compressedWords(words), silent: silentCount(words) }));
+      for (let first = 0; first < cues.length;) {
+        if (!quality[first].compressed && quality[first].silent === 0) { first++; continue; }
+        let end = first + 1;
+        while (end < cues.length && (quality[end].compressed || quality[end].silent > 0)) end++;
         checkCancel();
-        const startSec = cues[index - 1]?.endSec ?? wholeSongWords[index - 1]?.at(-1)?.endSec ?? 0;
-        const endSec = cues[index + 1]?.startSec ?? wholeSongWords[index + 1]?.[0]?.startSec ?? wavDurationSec(wav);
-        // Inconsistent authored neighbors cannot supply a useful repair window.
-        if (!(endSec > startSec)) continue;
-        const [retry] = await alignStemCues([cues[index]], { startSec, endSec });
-        checkCancel();
-        if (retry.length !== original.length || compressedWords(retry)) continue;
-        const retrySilent = silentCount(retry);
-        // Keep the retry only when it fixes something without landing more words in silence.
-        if (retrySilent < silent || (compressed && retrySilent <= silent)) forcedWords[index] = retry;
+        const startSec = cues[first - 1]?.endSec ?? wholeSongWords[first - 1]?.at(-1)?.endSec ?? 0;
+        const endSec = cues[end]?.startSec ?? wholeSongWords[end]?.[0]?.startSec ?? wavDurationSec(wav);
+        if (endSec > startSec) {
+          const retries = await alignStemCues(cues.slice(first, end), { startSec, endSec }).catch((err) => {
+            if (err.canceled || !['LYRIC_ALIGN_CTC_FAILED', 'LYRIC_ALIGN_CTC_WINDOW_TOO_SHORT'].includes(err.code)) throw err;
+            console.log(`⏭️ Skipped lyric repair for lines ${first + 1}-${end}: ${err.code}`);
+            return null;
+          });
+          checkCancel();
+          if (retries) for (let index = first; index < end; index++) {
+            const retry = retries[index - first];
+            const original = wholeSongWords[index];
+            const { compressed, silent } = quality[index];
+            if (!retry || retry.length !== original.length || compressedWords(retry)) continue;
+            const retrySilent = silentCount(retry);
+            if (retrySilent < silent || (compressed && retrySilent <= silent)) forcedWords[index] = retry;
+          }
+        }
+        first = end;
       }
     }
     kind = 'MMS_FA';

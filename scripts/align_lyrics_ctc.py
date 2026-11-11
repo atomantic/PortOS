@@ -129,7 +129,7 @@ def forced_align(log_probs, targets, blank=BLANK):
         alpha = candidates[back[t], columns] + emissions[t, states]
     state = len(states) - 1 if alpha[-1] > alpha[-2] else len(states) - 2
     if not np.isfinite(alpha[state]):
-        raise ValueError('The lyrics need more audio frames than this vocal has.')
+        raise AudioTooShort()
     path = np.empty(frames, dtype=np.int64)
     for t in range(frames - 1, -1, -1):
         path[t] = states[state]
@@ -155,7 +155,7 @@ def emissions_for_audio(model, waveform, torch, device):
     # preserves the song clock; alignment itself is never split into windows.
     frame_count = (waveform.shape[-1] - RECEPTIVE_FIELD) // HOP + 1
     if frame_count <= 0:
-        raise ValueError('The vocal is too short to align.')
+        raise AudioTooShort()
     chunks = []
     for first in range(0, frame_count, CHUNK_FRAMES):
         last = min(frame_count, first + CHUNK_FRAMES)
@@ -288,6 +288,10 @@ def align(audio, lines, model_dir):
     return word_times(lines, slots, spans, HOP / SAMPLE_RATE)
 
 
+class AudioTooShort(ValueError):
+    """The audio window cannot contain the requested CTC alignment."""
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--audio', required=True)
@@ -302,14 +306,21 @@ def main():
         json.dump(result, output, ensure_ascii=False)
 
 
-if __name__ == '__main__':
+def cli():
     try:
         main()
     except CheckpointRejected:
         print('ERROR:checkpoint-rejected', flush=True)
         print('MMS_FA checkpoint failed its integrity check and was not loaded.', file=sys.stderr)
         sys.exit(1)
+    except AudioTooShort:
+        print('ERROR:audio-too-short', flush=True)
+        sys.exit(1)
     except Exception:
         # Never print the transcript, project paths, or a private traceback.
         print('MMS_FA alignment failed; check runtime, lyric alphabet and audio.', file=sys.stderr)
         sys.exit(1)
+
+
+if __name__ == '__main__':
+    cli()
