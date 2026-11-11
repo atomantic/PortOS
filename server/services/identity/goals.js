@@ -131,8 +131,9 @@ export function computeGoalVelocity(goal) {
     if (firstHalfDays > 0 && secondHalfDays > 0) {
       const firstVel = (midEntry.value - first.value) / firstHalfDays;
       const secondVel = (last.value - midEntry.value) / secondHalfDays;
-      if (secondVel > firstVel * 1.2) trend = 'increasing';
-      else if (secondVel < firstVel * 0.8) trend = 'decreasing';
+      const tolerance = Math.abs(firstVel) * 0.2;
+      if (secondVel - firstVel > tolerance) trend = 'increasing';
+      else if (firstVel - secondVel > tolerance) trend = 'decreasing';
     }
   }
 
@@ -653,7 +654,9 @@ export async function getGoalCalendarEvents(goalId, startDate, endDate) {
   if (!goal || !goal.linkedCalendars?.length) return [];
 
   const { getEvents } = await import('../calendarSync.js');
-  const { events } = await getEvents({ startDate, endDate, limit: 200 });
+  // The calendar reader already loads this window; filter all of it rather
+  // than letting unrelated calendars consume a page before matching the goal.
+  const { events } = await getEvents({ startDate, endDate, limit: Infinity });
 
   const linkedIds = new Set(goal.linkedCalendars.map(lc => lc.subcalendarId));
   const patternMap = {};
