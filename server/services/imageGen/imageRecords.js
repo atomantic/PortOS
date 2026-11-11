@@ -108,7 +108,7 @@ export async function withLocalImageOrigin(meta) {
  * under a reused name, when any sidecar left from the earlier image is stale and
  * a fresh creation stamp makes the time-aware tombstone check treat it as new.
  * A rewritten mood-board import can preserve its metadata while refreshing a
- * known local creation; an existing nonlocal origin is never taken over.
+ * known local creation; an existing nonlocal or unknown origin is never taken over.
  * Call inside the writer's backup lease.
  */
 export async function writeLocalImageSidecarIfMissing(filename, { replace = false, preserveMetadata = false } = {}) {
@@ -121,7 +121,7 @@ export async function writeLocalImageSidecarIfMissing(filename, { replace = fals
   let next;
   if (preserveMetadata && existing.length) {
     const id = await localInstanceId();
-    if (!id || (isNonBlankStr(metadata.originInstanceId) && metadata.originInstanceId !== id)) return false;
+    if (!id || metadata.originInstanceId !== id) return false;
     next = { ...metadata, originInstanceId: id, createdAt: new Date().toISOString() };
   } else next = await withLocalImageOrigin({});
   await atomicWrite(existing[0] || paths[0], next);
