@@ -47,34 +47,42 @@ async function selectSong(page, payload) {
       return { text: row.innerText || '', html: row.innerHTML };
     }));
   const beforeSearch = JSON.stringify((await readRows()).map(({ text, html }) => [text, html]));
-  await page.evaluate(() => {
-    const dialog = document.querySelector('[role=dialog]');
-    window.__portosHookSearchMutationCount = 0;
-    window.__portosHookSearchMutationObserver?.disconnect();
-    if (!dialog) return;
-    window.__portosHookSearchMutationObserver = new MutationObserver(() => { window.__portosHookSearchMutationCount += 1; });
-    window.__portosHookSearchMutationObserver.observe(dialog, { subtree: true, childList: true, characterData: true, attributes: true });
-  });
-  await search.fill(payload.title, { timeout: T });
+  const activeRequests = new Set();
+  let sawSearchRequest = false;
+  const normalizedTitle = String(payload.title || '').trim().replace(/\s+/g, ' ').toLowerCase();
+  const encodedTitle = encodeURIComponent(String(payload.title || '').trim()).toLowerCase();
+  const onRequest = (request) => {
+    if (!['fetch', 'xhr'].includes(request.resourceType())) return;
+    const requestText = `${request.url()} ${request.postData() || ''}`.replace(/\+/g, ' ').toLowerCase();
+    if (requestText.includes(normalizedTitle) || requestText.includes(encodedTitle)) sawSearchRequest = true;
+    activeRequests.add(request);
+  };
+  const onRequestDone = (request) => activeRequests.delete(request);
+  page.on('request', onRequest);
+  page.on('requestfinished', onRequestDone);
+  page.on('requestfailed', onRequestDone);
   const deadline = Date.now() + SONG_RESULTS_WAIT_MS;
   let previous = beforeSearch;
-  let sawUpdatedRows = false;
   let stablePolls = 0;
   let rows = [];
-  while (Date.now() < deadline) {
-    const searchValue = await search.inputValue();
-    rows = await readRows();
-    const snapshot = JSON.stringify(rows.map(({ text, html }) => [text, html]));
-    const mutationCount = await page.evaluate(() => window.__portosHookSearchMutationCount || 0);
-    if (snapshot !== beforeSearch || mutationCount > 0) sawUpdatedRows = true;
-    const loading = await page.locator('[role=dialog] [aria-busy="true"], [role=dialog] [role=progressbar]').count();
-    stablePolls = searchValue === payload.title && sawUpdatedRows && loading === 0 && snapshot === previous ? stablePolls + 1 : 0;
-    if (stablePolls >= SONG_RESULTS_STABLE_POLLS) break;
-    previous = snapshot;
-    await page.waitForTimeout(SONG_RESULTS_POLL_MS);
+  try {
+    await search.fill(payload.title, { timeout: T });
+    while (Date.now() < deadline) {
+      const searchValue = await search.inputValue();
+      rows = await readRows();
+      const snapshot = JSON.stringify(rows.map(({ text, html }) => [text, html]));
+      const loading = await page.locator('[role=dialog] [aria-busy="true"], [role=dialog] [role=progressbar]').count();
+      stablePolls = searchValue === payload.title && sawSearchRequest && activeRequests.size === 0 && loading === 0 && snapshot === previous ? stablePolls + 1 : 0;
+      if (stablePolls >= SONG_RESULTS_STABLE_POLLS) break;
+      previous = snapshot;
+      await page.waitForTimeout(SONG_RESULTS_POLL_MS);
+    }
+  } finally {
+    page.off('request', onRequest);
+    page.off('requestfinished', onRequestDone);
+    page.off('requestfailed', onRequestDone);
   }
-  await page.evaluate(() => window.__portosHookSearchMutationObserver?.disconnect());
-  if (stablePolls < SONG_RESULTS_STABLE_POLLS) throw new Error(`${rows.length} rows match "${payload.title}" and song search results did not refresh and settle within ${SONG_RESULTS_WAIT_MS} ms`);
+  if (stablePolls < SONG_RESULTS_STABLE_POLLS) throw new Error(`${rows.length} rows match "${payload.title}" and Suno search did not complete and settle within ${SONG_RESULTS_WAIT_MS} ms`);
   const index = pickSongRow(rows, payload);
   if (index < 0) throw new Error(`${rows.length} rows match "${payload.title}" and none could be told apart by id or length`);
   await page.locator('[role=dialog] button').filter({ hasText: /^Use$/ }).nth(index).click({ timeout: T });

@@ -78,7 +78,7 @@ describe('pickSongRow', () => {
 const fmt = (sec) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
 const PILL = 'pointer-events-none rounded-full border-2 px-2 pt-1 pb-1.5 font-mono text-xs';
 function hookPage({ windowAt = 158, pxPerSec = 22.2, stuckAt = null, restored = false, delayedSongResults = false } = {}) {
-  const state = { windowAt, clicked: [], drags: 0, lyrics: true, songRows: [{ text: 'Night Drive 3:42', html: '' }], songPolls: 0, searchMutationCount: 0 };
+  const state = { windowAt, clicked: [], drags: 0, lyrics: true, songRows: [{ text: 'Night Drive 3:42', html: '' }], songPolls: 0 };
   const leaf = (text, cls, parentText = text) => ({ children: [], textContent: text, className: cls, offsetParent: {}, parentElement: { textContent: parentText } });
   const dom = {
     'span,div': () => [
@@ -91,6 +91,8 @@ function hookPage({ windowAt = 158, pxPerSec = 22.2, stuckAt = null, restored = 
     'span,div,label': () => [{ children: [], textContent: 'Show Lyrics', parentElement: { querySelector: () => ({ getAttribute: () => 'true', click: () => state.clicked.push('Show Lyrics') }) } }],
   };
   const visibleSongButton = restored ? 'Replace Song' : 'Select Song';
+  const pageEvents = new Map();
+  const emitPageEvent = (name, value) => (pageEvents.get(name) || []).forEach((handler) => handler(value));
   const locator = (sel, hasText, index = 0) => ({
     first: () => locator(sel, hasText, 0),
     nth: (nextIndex) => locator(sel, hasText, nextIndex),
@@ -112,13 +114,25 @@ function hookPage({ windowAt = 158, pxPerSec = 22.2, stuckAt = null, restored = 
     state,
     goto: async () => {},
     url: () => 'https://suno.com/hooks/create',
+    on: (name, handler) => pageEvents.set(name, [...(pageEvents.get(name) || []), handler]),
+    off: (name, handler) => pageEvents.set(name, (pageEvents.get(name) || []).filter((candidate) => candidate !== handler)),
     waitForTimeout: async (ms) => {
       if (delayedSongResults && ms === 250) {
         state.songPolls += 1;
-        if (state.songPolls === 1) { state.songRows = [{ text: 'Other Song 3:07', html: '' }]; state.searchMutationCount += 1; }
-        if (state.songPolls === 2) { state.songRows = [{ text: 'Night Drive 3:42', html: '' }, { text: 'Night Drive 3:07', html: '' }]; state.searchMutationCount += 1; }
-      } else if (!delayedSongResults && ms === 250 && state.searchMutationCount === 0) {
-        state.searchMutationCount += 1;
+        if (state.songPolls === 1) {
+          state.songRowsRequest = { resourceType: () => 'fetch', url: () => '/api/search?q=Night%20Drive', postData: () => null };
+          emitPageEvent('request', state.songRowsRequest);
+          state.songRows = [{ text: 'Other Song 3:07', html: '' }];
+        }
+        if (state.songPolls === 2) {
+          emitPageEvent('requestfinished', state.songRowsRequest);
+          state.songRows = [{ text: 'Night Drive 3:42', html: '' }, { text: 'Night Drive 3:07', html: '' }];
+        }
+      } else if (!delayedSongResults && ms === 250 && state.songPolls === 0) {
+        state.songPolls += 1;
+        const request = { resourceType: () => 'fetch', url: () => '/api/search?q=Night%20Drive', postData: () => null };
+        emitPageEvent('request', request);
+        emitPageEvent('requestfinished', request);
       }
     },
     locator: (sel) => locator(sel),
@@ -131,11 +145,7 @@ function hookPage({ windowAt = 158, pxPerSec = 22.2, stuckAt = null, restored = 
     }) }),
     waitForFunction: async (fn, arg) => { if (!fn(arg)) throw new Error('state did not change'); },
     evaluate: async (fn, arg) => {
-      const source = fn.toString();
-      globalThis.document = { querySelectorAll: (sel) => dom[sel]?.() ?? [], querySelector: () => null };
-      globalThis.window = { __portosHookSearchMutationCount: state.searchMutationCount, __portosHookSearchMutationObserver: { disconnect: () => {} } };
-      if (source.includes('MutationObserver')) state.searchMutationCount = 0;
-      if (source.includes('__portosHookSearchMutationCount || 0')) return state.searchMutationCount;
+      globalThis.document = { querySelectorAll: (sel) => dom[sel]?.() ?? [] };
       return fn(arg);
     },
     mouse: {
