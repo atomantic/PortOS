@@ -45,9 +45,7 @@ export const RIGGING_MODULE_REQUIREMENT = `${RIGGING_RUNTIME.module}==${RIGGING_
  * The one command that provisions the env. Surfaced verbatim in the Settings card so
  * the remedy the UI prints and the remedy this module resolves against cannot drift.
  */
-export const RIGGING_INSTALL_COMMAND = `conda create -y -n ${RIGGING_RUNTIME.condaEnv} `
-  + `python=${RIGGING_RUNTIME.pythonVersion} && `
-  + `conda run -n ${RIGGING_RUNTIME.condaEnv} pip install "${RIGGING_MODULE_REQUIREMENT}"`;
+export const RIGGING_INSTALL_COMMAND = 'python3 scripts/setup-rigging.py';
 
 /**
  * Can this host run the rigging runtime at all? macOS on Apple Silicon and Linux are

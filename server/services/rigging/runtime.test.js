@@ -19,11 +19,9 @@ const ENV = { CONDA_ROOT: '/opt/conda' };
 const FAKE_PYTHON = resolveRiggingPython({ exists: () => true, env: ENV });
 
 describe('rigging runtime — install descriptor', () => {
-  it('pins the Blender module to an exact version in the install command', () => {
+  it('routes provisioning through the reviewed profile instead of an install-time solver', () => {
     expect(RIGGING_MODULE_REQUIREMENT).toBe(`${RIGGING_RUNTIME.module}==${RIGGING_RUNTIME.moduleVersion}`);
-    expect(RIGGING_INSTALL_COMMAND).toContain(`"${RIGGING_MODULE_REQUIREMENT}"`);
-    expect(RIGGING_INSTALL_COMMAND).toContain(`python=${RIGGING_RUNTIME.pythonVersion}`);
-    expect(RIGGING_INSTALL_COMMAND).toContain(`-n ${RIGGING_RUNTIME.condaEnv}`);
+    expect(RIGGING_INSTALL_COMMAND).toBe('python3 scripts/setup-rigging.py');
   });
 });
 
