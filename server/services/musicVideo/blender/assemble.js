@@ -6,8 +6,9 @@
  * video that has to be conformed first (another size or rate, or only part of
  * it), or black frames where a shot has no video yet. Conformed and black
  * segments are encoded with the shot recipe, so everything joins by stream
- * copy; the joined picture is re-encoded only when a finishing filter (the
- * grade or a scene's timed effects) has to be painted over it.
+ * copy; the joined picture is re-encoded only when something has to be painted
+ * over it: a finishing filter (the grade or a scene's timed effects) or overlay
+ * clips (the title card).
  */
 import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -45,18 +46,47 @@ function blenderSongMuxArgs({ video, audioPath, startSec, durationSec, output })
 }
 
 /**
+ * ffmpeg arguments that paint `filter` over `joined` and lay each of `overlays`
+ * (`{ path, startSec }` alpha clips, seconds from the first frame) on top, in
+ * the shot videos' own BT.709. Pure.
+ */
+function blenderFinishArgs({ joined, filter = null, overlays = [], fps, quality, tagFilter = null, output }) {
+  const steps = [];
+  // The grade works in RGB; return to the shot videos' own BT.709 before anything is laid over it.
+  if (filter) steps.push({ inputs: [], chain: `${filter},scale=out_color_matrix=bt709:out_range=tv,format=yuv420p` });
+  overlays.forEach((_, index) => steps.push({
+    // Converted with the picture's matrix, so the card's colors do not drift on the way in.
+    prepare: `[${index + 1}:v]scale=out_color_matrix=bt709:out_range=tv,format=yuva420p[c${index}]`,
+    inputs: [`c${index}`], chain: 'overlay=eof_action=pass:format=yuv420',
+  }));
+  const graph = [];
+  let picture = '0:v';
+  steps.forEach((step, index) => {
+    const last = index === steps.length - 1;
+    const out = last ? 'v' : `p${index}`;
+    if (step.prepare) graph.push(step.prepare);
+    graph.push(`${[picture, ...step.inputs].map((label) => `[${label}]`).join('')}${[step.chain, last ? tagFilter : null].filter(Boolean).join(',')}[${out}]`);
+    picture = out;
+  });
+  return [...QUIET, '-i', joined, ...overlays.flatMap((overlay) => ['-itsoffset', String(Number(overlay.startSec.toFixed(6))), '-i', overlay.path]),
+    '-filter_complex', graph.join(';'), '-map', '[v]', ...blenderVideoEncodeArgs({ fps, quality }), '-y', output];
+}
+
+/**
  * Assemble `segments` (`{ source, offsetFrames, frames, direct }`, in film
  * order; `source: null` is black) into `output` at `width`x`height`, `fps`,
- * with the song from `audio.startSec`. `scratch` is a folder this call owns
- * and removes. `onProgress(fraction)` reports coarse progress.
+ * with the song from `audio.startSec`. `filter` and `overlays` are painted
+ * over the joined picture (blenderFinishArgs). `scratch` is a folder this call
+ * owns and removes. `onProgress(fraction)` reports coarse progress.
  */
-export async function assembleBlenderVideo({ segments, width, height, fps, quality = 'final', filter = null, audio, output, scratch, signal, onProgress = () => {} }) {
+export async function assembleBlenderVideo({ segments, width, height, fps, quality = 'final', filter = null, overlays = [], audio, output, scratch, signal, onProgress = () => {} }) {
   const ffmpeg = await requireFfmpeg();
   const tagFilter = await bt709TagFilter();
   const totalFrames = segments.reduce((sum, segment) => sum + segment.frames, 0);
   const durationSec = totalFrames / fps;
   const prepared = segments.filter((segment) => !segment.direct).length;
-  const steps = prepared + 2 + (filter ? 1 : 0);
+  const painted = Boolean(filter) || overlays.length > 0;
+  const steps = prepared + 2 + (painted ? 1 : 0);
   let done = 0;
   const step = () => onProgress(Math.min(1, (done += 1) / steps));
   await rm(scratch, { recursive: true, force: true });
@@ -89,12 +119,9 @@ export async function assembleBlenderVideo({ segments, width, height, fps, quali
     await run([...QUIET, '-f', 'concat', '-safe', '0', '-i', list, '-c', 'copy', '-y', joined], 'Joining the shot videos');
     step();
     let picture = joined;
-    if (filter) {
+    if (painted) {
       picture = join(scratch, 'finished.mp4');
-      // The grade works in RGB; return to the shot videos' own BT.709 before encoding.
-      const chain = [filter, 'scale=out_color_matrix=bt709:out_range=tv', 'format=yuv420p', tagFilter].filter(Boolean).join(',');
-      await run([...QUIET, '-i', joined, '-filter_complex', `[0:v]${chain}[v]`, '-map', '[v]',
-        ...blenderVideoEncodeArgs({ fps, quality }), '-y', picture], 'Painting the grade and shot effects');
+      await run(blenderFinishArgs({ joined, filter, overlays, fps, quality, tagFilter, output: picture }), 'Painting the grade, shot effects and title card');
       step();
     }
     const partial = `${output}.part.mp4`;

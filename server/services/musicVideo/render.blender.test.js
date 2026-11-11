@@ -2,8 +2,8 @@
  * A Blender film at the render-dispatch boundary: the final render
  * (renderMusicVideo) and a song-window excerpt (startExcerptRender) for
  * `composition.mode === 'blender'`, through the real job, history and settling
- * path and the real Blender film engine over a temp data root. Blender, ffmpeg
- * and the film look's browser pass are doubled.
+ * path and the real Blender film engine over a temp data root. Blender, ffmpeg,
+ * the film look's browser pass and the title card's browser capture are doubled.
  */
 import { afterAll, beforeEach, expect, it, vi } from 'vitest';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -36,11 +36,22 @@ vi.mock('../codeAnimation/execution.js', () => ({
   resolveBlenderTool: (...args) => blender.fake.resolveBlenderTool(...args),
 }));
 vi.mock('./filmLookFinish.js', async (load) => ({ ...await load(), applyFilmLookFinish: vi.fn(async () => true) }));
+// The title card capture drives a browser; here it answers one clip per window it was asked to capture.
+vi.mock('./compositionRender.js', async (load) => {
+  const actual = await load();
+  return {
+    ...actual,
+    removeCompositionScratch: vi.fn(async () => {}),
+    renderTypographyOverlays: vi.fn(async ({ jobId, cues, fps, durationSec, window }) => actual.typographyOverlayWindows({ cues, fps, durationSec, window })
+      .flatMap(({ windows }) => windows.map((span, index) => ({ path: `/captures/${jobId}-${index}.mov`, startSec: span.startSec, durationSec: span.frames / fps })))),
+  };
+});
 
 const projects = await import('./projects.js');
 const { renderMusicVideo } = await import('./render.js');
 const { startExcerptRender } = await import('./excerptRender.js');
 const { applyFilmLookFinish } = await import('./filmLookFinish.js');
+const { removeCompositionScratch, renderTypographyOverlays } = await import('./compositionRender.js');
 const { mutateVideoHistory } = await import('../videoGen/local.js');
 const { musicVideoEvents } = await import('./events.js');
 const { startBlenderSync } = await import('./blender/sync.js');
@@ -154,6 +165,42 @@ it('runs the project film look as a finishing pass on a Blender final and its ex
   await excerptDone(excerptId);
   expect(applyFilmLookFinish).toHaveBeenCalledTimes(2);
   expect(applyFilmLookFinish.mock.calls[1][0]).toMatchObject({ offsetSec: 1, jobId: excerptId });
+});
+
+it('lays the project title card over a Blender final and over the part of it an excerpt holds', async () => {
+  await renderShots('final');
+  await projects.updateProject(id, { titleCard: { title: 'Example Song', artist: 'Example Artist', year: 'MMXXVI', style: 'mtv', startSec: 0.5, endSec: 2, outro: true, outroStartSec: 4, outroEndSec: 5.5 } });
+  const overlayInputs = (args) => args.flatMap((arg, index) => (arg === '-itsoffset' ? [[args[index + 1], args[index + 3]]] : []));
+  blender.ffmpeg.length = 0;
+  const { jobId } = await renderMusicVideo(id);
+  await finished(jobId);
+  expect(renderTypographyOverlays).toHaveBeenCalledTimes(1);
+  expect(renderTypographyOverlays.mock.calls[0][0]).toMatchObject({
+    jobId: `blender-title-${jobId}`, width: 1920, height: 1080, fps: 24, durationSec: 6, window: { startFrame: 0, endFrame: 144 },
+    cues: [{ id: 'title-card', startSec: 0.5, endSec: 2, titleCard: { style: 'mtv', title: 'Example Song' } }, { id: 'title-card-end', startSec: 4, endSec: 5.5 }],
+  });
+  // Both windows ride over the joined shots at their song times, in the shot videos' BT.709.
+  const painted = blender.ffmpeg.find((args) => args.includes('-itsoffset'));
+  expect(overlayInputs(painted)).toEqual([['0.5', `/captures/blender-title-${jobId}-0.mov`], ['4', `/captures/blender-title-${jobId}-1.mov`]]);
+  expect(painted[painted.indexOf('-filter_complex') + 1]).toBe([
+    '[1:v]scale=out_color_matrix=bt709:out_range=tv,format=yuva420p[c0]', '[0:v][c0]overlay=eof_action=pass:format=yuv420[p0]',
+    '[2:v]scale=out_color_matrix=bt709:out_range=tv,format=yuva420p[c1]', '[p0][c1]overlay=eof_action=pass:format=yuv420[v]',
+  ].join(';'));
+  expect(removeCompositionScratch).toHaveBeenCalledWith(`blender-title-${jobId}`);
+
+  // An excerpt takes only the window that reaches into it, counted from its own first frame.
+  blender.ffmpeg.length = 0;
+  const { excerptId } = await startExcerptRender(id, { startSec: 1, endSec: 3 });
+  await excerptDone(excerptId);
+  expect(renderTypographyOverlays).toHaveBeenCalledTimes(2);
+  expect(renderTypographyOverlays.mock.calls[1][0]).toMatchObject({ durationSec: 6, window: { startFrame: 24, endFrame: 72 } });
+  expect(overlayInputs(blender.ffmpeg.find((args) => args.includes('-itsoffset'))).map(([offset]) => offset)).toEqual(['0']);
+
+  // A window the card never shows in opens no browser and joins as before.
+  blender.ffmpeg.length = 0;
+  await excerptDone((await startExcerptRender(id, { startSec: 2, endSec: 4 })).excerptId);
+  expect(renderTypographyOverlays).toHaveBeenCalledTimes(2);
+  expect(blender.ffmpeg.some((args) => args.includes('-itsoffset'))).toBe(false);
 });
 
 it('cuts an excerpt window out of the best available shot videos and refuses one holding a shot with no video', async () => {

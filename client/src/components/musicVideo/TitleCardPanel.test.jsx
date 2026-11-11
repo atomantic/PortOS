@@ -92,6 +92,16 @@ describe('TitleCardPanel', () => {
     expect(onSave).toHaveBeenLastCalledWith({ titleCard: expect.objectContaining({ outroStartSec: 195, outroEndSec: 198 }) });
   });
 
+  it('says where a Blender film shows the card, and flags a render style that never draws it', () => {
+    const titleCard = { enabled: true, title: 'Example Song', startSec: 1, endSec: 5 };
+    const { unmount } = render(<Harness initial={{ ...base, composition: { mode: 'blender' }, titleCard }} onSave={vi.fn()} />);
+    expect(screen.getByLabelText(/In cuts and the final render · 0:01–0:05/)).toBeChecked();
+    expect(screen.queryByText(/does not draw the title card/)).toBeNull();
+    unmount();
+    render(<Harness initial={{ ...base, composition: { mode: 'concat' }, titleCard }} onSave={vi.fn()} />);
+    expect(screen.getByText(/does not draw the title card/)).toBeInTheDocument();
+  });
+
   it('picks a font from swatches drawn in each face', () => {
     const onSave = vi.fn().mockResolvedValue({});
     render(<Harness initial={{ ...base, titleCard: { enabled: true, title: 'Example Song', startSec: 1, endSec: 5 } }} onSave={onSave} />);

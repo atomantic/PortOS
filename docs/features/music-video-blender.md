@@ -205,6 +205,9 @@ window from the best video each shot has: a current final, else its preview fitt
 - **Grade and shot effects.** The project's color grade, and the timed effects set on each mirrored Board scene
   (glitches, gate jumps, shutter blinks, light leaks, on a cut or at a moment), are painted when shots are joined.
   Wipes between shots are not drawn.
+- **Title card.** The project's opening title card (the MTV-style credit block set on the Look step: artist, title,
+  year, and optionally again at the end) is laid over the joined shots in every cut, excerpt and final render, under
+  the film look. Leave room for it in the corner it sits in, and keep the film's own type out of its windows.
 - **Lyrics** are not drawn automatically. Typography is authored in Blender; `song.json` carries the timed words.
 
 ## Disk use and rendered frames

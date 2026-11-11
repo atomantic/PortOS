@@ -31,8 +31,11 @@ function addSwatchFaces() {
   }
 }
 const LOOKS = [['outline', 'Outlined, like the lyrics'], ['mtv', 'Classic MTV lower third']];
-// Render styles that draw the card: the composition document and a composed cut's typography layer.
-const DRAWN_BY = ['document', 'composed'];
+// Render styles that draw the card: the composition document, a composed cut's typography layer,
+// and a Blender film, which lays it over its cuts, excerpts and final render.
+const DRAWN_BY = ['document', 'composed', 'blender'];
+// A Blender film has no live composite: its card is seen in an assembled cut.
+const WHERE = { blender: 'In cuts and the final render' };
 const inputCls = 'w-full rounded border border-port-border bg-port-bg px-2 py-1 text-sm min-h-[44px] pointer-fine:sm:min-h-0';
 const labelCls = 'mb-0.5 block text-xs text-port-text-muted';
 const clock = (sec) => {
@@ -52,7 +55,8 @@ function lyricDuringCard(project, card) {
  * The MTV-style opening title card (lib/musicVideoTitleCard.js): song title,
  * artist and year in a corner, fading in and out over the opener, outlined like
  * the lyrics or as a classic lower third. Drawn in the docked live preview, the
- * storyboard animatic and the final render (composed or document styles).
+ * storyboard animatic and the final render (composed or document styles), and
+ * over a Blender film's cuts, excerpts and final render.
  * Turning it on fills the song title, the artist named for DistroKid under
  * Where you post, this year and a window that ends before the first sung line.
  * Edits reach the preview at once (`onEditLocal`); leaving a field saves.
@@ -103,13 +107,13 @@ export default function TitleCardPanel({ project, onEditLocal, onSave, onPreview
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="inline-flex items-center gap-1.5 text-sm font-medium"><Clapperboard size={14} className="text-port-accent" aria-hidden="true" /> Opening title card</h3>
         <label htmlFor="mv-title-card-on" className="inline-flex min-h-[44px] items-center gap-2 text-xs text-port-text-muted pointer-fine:sm:min-h-0">
-          {on ? `Live in the preview · ${clock(card.startSec)}–${clock(card.endSec)}` : 'Off'}
+          {on ? `${WHERE[project.composition?.mode] || 'Live in the preview'} · ${clock(card.startSec)}–${clock(card.endSec)}` : 'Off'}
           <input id="mv-title-card-on" type="checkbox" checked={on} disabled={starting}
             onChange={(e) => (e.target.checked ? turnOn() : commit({ enabled: false }))} className="h-4 w-4" />
         </label>
       </div>
       {!drawn && on && (
-        <p className="text-xs text-port-text-muted" role="status">This project's render style does not draw the title card; the composed and composition-document styles do.</p>
+        <p className="text-xs text-port-text-muted" role="status">This project's render style does not draw the title card; the composed, composition-document and Blender film styles do.</p>
       )}
       {on && (
         <>
