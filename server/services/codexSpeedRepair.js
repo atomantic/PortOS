@@ -34,7 +34,7 @@ function mergeBoundary(existing, value) {
 }
 
 /** CLI, then TUI, then any Codex family record, else the id `codex`. */
-export function codexUsageProviderIdFromList(providers) {
+function codexUsageProviderIdFromList(providers) {
   const codex = (providers || []).filter((provider) => (
     provider && provider.enabled !== false && familyForProvider(provider) === 'codex'
   ));
@@ -83,7 +83,7 @@ function owedSpeed(covered, billed) {
  * @param {{ home?: string, repairIds?: string[], reconciledRuns?: object, providerId?: string }} input
  * @returns {Promise<{ additions: object[], notes: string[] }>}
  */
-export async function planCodexSpeedRepair({
+async function planCodexSpeedRepair({
   home = homedir(),
   repairIds = [],
   reconciledRuns = {},
@@ -134,7 +134,7 @@ export async function planCodexSpeedRepair({
   return { additions, notes };
 }
 
-export function summarizeCodexSpeedRepair(additions = []) {
+function summarizeCodexSpeedRepair(additions = []) {
   return { added: additions.length, sessions: additions.length };
 }
 
