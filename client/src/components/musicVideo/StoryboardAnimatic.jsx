@@ -723,14 +723,18 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
     // to the audio clock. Effects/clip seeks then get a paint before freezing.
     await new Promise((resolve, reject) => {
       let handle;
-      const timer = setTimeout(() => { cancelAnimationFrame(handle); reject(new Error('Preview did not settle')); }, 2000);
+      let clips = [];
+      const timer = setTimeout(() => {
+        cancelAnimationFrame(handle);
+        reject(new Error(clips.some(video => video.readyState < 2) ? 'Video frame is still loading' : 'Preview did not settle'));
+      }, 2000);
       let paints = 0;
       const settle = () => {
-        const clips = [...(figureRef.current?.querySelectorAll('video[data-preview-video]') || [])]
-          // A decoded current clip can still be transparent until loadeddata
-          // reveals it. Its paused surface must settle before serialization.
+        clips = [...(figureRef.current?.querySelectorAll('video[data-preview-video]') || [])]
+          // The current clip stays transparent until decoded. Include it even
+          // at metadata readiness so it cannot appear after serialization.
           .filter((video) => Number(getComputedStyle(video.parentElement).opacity) > 0
-            || (video.matches('[data-ready]:not([aria-hidden="true"])') && video.readyState >= 2));
+            || video.matches('[data-ready]:not([aria-hidden="true"])'));
         const failedClip = clips.find((video) => video.dataset.previewError);
         if (failedClip) { clearTimeout(timer); reject(new Error(failedClip.dataset.previewError)); return; }
         if (++paints >= 2 && clips.every((video) => !video.seeking && video.dataset.pausedFrame === String(video.currentTime))) {

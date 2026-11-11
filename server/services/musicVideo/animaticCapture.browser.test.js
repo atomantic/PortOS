@@ -194,7 +194,7 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
     const look = page.getByRole('button', { name: 'Film look', exact: true });
     if (await look.getAttribute('aria-pressed') === 'false') await look.click();
   };
-  const capture = async (label = '') => {
+  const capture = async (label = '', whileSettling) => {
     await phase('capture-reset', () => page.evaluate(() => { window.uploads = []; window.captureErrors = []; }));
     await phase('capture-video-ready', () => page.waitForFunction(() => [...document.querySelectorAll('video[data-preview-video]')].every(video => Number(getComputedStyle(video.parentElement).opacity) === 0 || (!video.seeking && video.dataset.pausedFrame === String(video.currentTime)))));
     captureEvidence = { label, platform: process.platform, arch: process.arch, browser: fixture.browser.version(), ffmpegVersion };
@@ -202,6 +202,7 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
     // the mutation negative controls hold decode while changing the preview.
     await phase('capture-observe', () => page.evaluate(() => window.gateCaptureOnce(false)));
     await phase('capture-click', () => page.getByRole('button', { name: 'Save frame', exact: true }).click());
+    if (whileSettling) await phase('capture-settling', whileSettling);
     await phase('capture-upload-or-error', () => page.waitForFunction(() => window.uploads.length > 0 || window.captureErrors.length > 0));
     captureEvidence.frozen = await page.evaluate(() => window.captureFrozen);
     captureEvidence.serialized = await page.evaluate(() => window.captureSerialized);
@@ -366,6 +367,59 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
     await enableFilmLook();
     await capture();
     expect(await page.locator('canvas[data-paused-video]:visible').count()).toBe(2);
+    expect(await page.locator('[data-film-look="exact"]').count()).toBe(1);
+  });
+
+  it('waits for metadata-only active footage before freezing a dissolve, without waiting for hidden preloads', async () => {
+    onTestFinished(async () => {
+      await page.reload();
+      await page.waitForFunction(() => typeof window.show === 'function');
+    });
+    await page.reload();
+    await page.waitForFunction(() => typeof window.show === 'function');
+    await page.evaluate(() => {
+      const descriptor = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'readyState');
+      Object.defineProperty(HTMLMediaElement.prototype, 'readyState', {
+        ...descriptor,
+        get() {
+          if (this.dataset.documentScene === 'still' && !window.releaseActiveDecode) return Math.min(1, descriptor.get.call(this));
+          if (this.dataset.documentScene === 'preload') return 0;
+          return descriptor.get.call(this);
+        },
+      });
+      window.decodeActiveClip = () => {
+        window.releaseActiveDecode = true;
+        const video = document.querySelector('video[data-document-scene="still"]');
+        video.dispatchEvent(new Event('loadeddata'));
+        video.dispatchEvent(new Event('seeked'));
+      };
+    });
+    await show(project([
+      { ...still, visualLayer: 'footage', videoHistoryId: 'smpte170m', cutEffect: { style: 'dissolve', enabled: true, overlapSec: 1 } },
+      { ...still, sceneId: 'incoming', order: 1, startSec: 4, endSec: 8, visualLayer: 'footage', videoHistoryId: 'bt709' },
+      { ...still, sceneId: 'preload', order: 2, startSec: 8, endSec: 12, visualLayer: 'footage', videoHistoryId: 'preloaded' },
+    ], { filmLook: filmLookPreset('vhs') }), 3.5);
+    await enableFilmLook();
+    await page.waitForFunction(() => {
+      const active = document.querySelector('video[data-document-scene="still"]');
+      const incoming = document.querySelector('video[data-testid="beat-toggle-clip"]');
+      return active?.readyState === 1 && !active.seeking && active.currentTime === 3.5
+        && getComputedStyle(active.parentElement).opacity === '0' && !active.dataset.pausedFrame
+        && incoming?.dataset.pausedFrame === String(incoming?.currentTime);
+    });
+    await capture('delayed active decode', async () => {
+      const pending = await page.evaluate(async () => {
+        for (let frame = 0; frame < 8; frame++) await new Promise(requestAnimationFrame);
+        return { frozen: window.captureDecodePending, uploads: window.uploads.length, errors: window.captureErrors };
+      });
+      expect(pending).toEqual({ frozen: false, uploads: 0, errors: [] });
+      await page.evaluate(() => window.decodeActiveClip());
+    });
+    const visible = captureEvidence.frozen.videos.filter(video => Number(video.opacity) > 0);
+    expect(visible).toHaveLength(2);
+    expect(visible.map(video => video.source)).toEqual(['smpte170m.webm', 'bt709.webm']);
+    expect(visible.every(video => video.readyState >= 2 && video.pausedFrame === String(video.time))).toBe(true);
+    expect(captureEvidence.frozen.videos.find(video => video.readyState === 0)).toMatchObject({ opacity: '0', pausedFrame: undefined });
     expect(await page.locator('[data-film-look="exact"]').count()).toBe(1);
   });
 
