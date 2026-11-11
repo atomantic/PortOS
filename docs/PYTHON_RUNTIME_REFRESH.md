@@ -191,7 +191,9 @@ The MiniMax H3 Apple Silicon profile updates the coupled **MLX / MLX-Metal
 0.32.0 → 0.32.4** pair. The immutable H3 source remains
 `fcd9e9b79a1d6018d91ac477c0968de1fa067e49`, and all other 53 package versions,
 markers and hashes remain unchanged. The installer consumes the lock directly;
-there is no separate adapter version literal to update. Older untouched pins
+there is no separate adapter version literal to update. Its sync now also
+requires wheels, preventing hashed source distributions from triggering
+unlocked build-dependency resolution. Older untouched pins
 remain pending investigation under #15769, rather than compatibility exceptions.
 
 The pinned [H3 requirements](https://github.com/PipeNetwork/minimax-h3-mlx/blob/fcd9e9b79a1d6018d91ac477c0968de1fa067e49/requirements.txt)

@@ -980,8 +980,8 @@ describe('MiniMax H3 MLX hash-pinned lock', () => {
     for (const block of blocks) expect(block).toMatch(/--hash=sha256:[0-9a-f]{64}/);
   });
 
-  it('installs the lock with --require-hashes so nothing resolves at install time', () => {
-    expect(source).toMatch(/pip sync --require-hashes --python "\$MINIMAX_H3_PY" "\$MINIMAX_H3_LOCK"/);
+  it('installs only locked wheels so no source build can resolve floating build dependencies', () => {
+    expect(source).toMatch(/pip sync --require-hashes --only-binary :all: --python "\$MINIMAX_H3_PY" "\$MINIMAX_H3_LOCK"/);
   });
 });
 
