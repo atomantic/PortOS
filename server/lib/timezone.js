@@ -277,9 +277,11 @@ export function resolveEventInstant(value, timezone) {
   if (!value) return null
   if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value
   const s = String(value).trim()
-  const m = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?)?$/.exec(s)
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2}))?(?:\.(\d+))?)?$/.exec(s)
   if (m && timezone) {
-    return resolveLocalWallTime(m[1], m[2], m[3], m[4], m[5], m[6], timezone)
+    const resolved = resolveLocalWallTime(m[1], m[2], m[3], m[4], m[5], m[6], timezone)
+    const milliseconds = Number((m[7] || '').padEnd(3, '0').slice(0, 3))
+    return resolved && new Date(resolved.getTime() + milliseconds)
   }
   const parsed = new Date(s)
   return Number.isNaN(parsed.getTime()) ? null : parsed
