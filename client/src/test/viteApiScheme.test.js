@@ -1,8 +1,11 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
+import { resolve } from 'node:path';
 import { resolveApiScheme } from '../../vite.config.js';
 
-const configDir = '/checkout/client';
+const configDir = resolve('checkout', 'client');
+const checkoutCert = resolve(configDir, '..', 'data', 'certs', 'cert.pem');
+const primaryCert = resolve('primary', 'data', 'certs', 'cert.pem');
 
 describe('Vite API scheme resolution', () => {
   it.each(['http', 'https'])('honors the explicit %s override', override => {
@@ -12,16 +15,16 @@ describe('Vite API scheme resolution', () => {
   it('uses the current checkout certificate when present', () => {
     expect(resolveApiScheme({
       configDir,
-      exists: path => path === '/checkout/data/certs/cert.pem',
-      getPrimaryDir: () => '/primary',
+      exists: path => path === checkoutCert,
+      getPrimaryDir: () => resolve('primary'),
     })).toBe('https');
   });
 
   it('uses the primary checkout certificate from a linked worktree', () => {
     expect(resolveApiScheme({
       configDir,
-      exists: path => path === '/primary/data/certs/cert.pem',
-      getPrimaryDir: () => '/primary',
+      exists: path => path === primaryCert,
+      getPrimaryDir: () => resolve('primary'),
     })).toBe('https');
   });
 
