@@ -36,6 +36,8 @@ import { filterGraphViaFile } from '../../lib/ffmpegFilterGraph.js';
 import { isFilmLookNeutral, normalizeFilmLook } from '../../lib/filmLook.js';
 import { shotCamera, shotFilmLook } from '../../lib/musicVideoFilmLook.js';
 import { activeShotColorMatch, colorMatchVideoFilter, segmentCacheName, segmentLookHashPayload } from '../../lib/shotColorMatch.js';
+import { normalizeTitleCard, titleCardSteady } from '../../lib/musicVideoTitleCard.js';
+import { projectFrameHold } from './frameHold.js';
 import { endingParts } from '../../lib/musicVideoEnding.js';
 import { AUDIO_NORM, buildAudioBedMix } from '../videoTimeline/audioBedMix.js';
 import { buildMusicVideoFfmpegArgs, planMusicVideoRender } from './render.js';
@@ -80,8 +82,8 @@ const hash = (value) => createHash('sha256').update(JSON.stringify(value)).diges
 // and the (normalized) look, so any look's files can be found again from the plan.
 // A color match joins the key only while it is on, so turning it off finds the
 // file this segment had before matching existed.
-const segmentLookKey = ({ baseKey, startSec, matchKey }, look, fps) => hash(segmentLookHashPayload({
-  version: SHOT_SEGMENT_VERSION, baseKey, look, startSec, fps, matchKey,
+const segmentLookKey = ({ baseKey, startSec, matchKey, titleCard, titleCardUntilSec }, look, fps) => hash(segmentLookHashPayload({
+  version: SHOT_SEGMENT_VERSION, baseKey, look, startSec, fps, matchKey, titleCard, titleCardUntilSec,
 }));
 const segmentLookPath = (plan, segment, look) => join(plan.dir, `${segment.outro ? 'outro-' : ''}${segment.baseKey}-${segmentLookKey(segment, look, plan.fps)}.mp4`);
 
@@ -90,7 +92,7 @@ const segmentLookPath = (plan, segment, look) => join(plan.dir, `${segment.outro
 function finishSegment(fields, { project, scene, fps, dir, prefix = '' }) {
   const match = scene ? activeShotColorMatch(project, scene) : null;
   const matchKey = match ? hash(match) : null;
-  const lookKey = fields.look ? segmentLookKey({ baseKey: fields.baseKey, startSec: fields.startSec, matchKey }, fields.look, fps) : null;
+  const lookKey = fields.look ? segmentLookKey({ ...fields, matchKey }, fields.look, fps) : null;
   return {
     ...fields,
     lookKey,
@@ -149,6 +151,9 @@ export async function planShotSegments(project, options) {
   const full = buildMusicVideoFfmpegArgs(clips, audioPath, join(tmpdir(), 'portos-segment-plan.mp4'), common);
   const { sections, totalDuration, canonW: width, canonH: height, fps } = full;
   const { cues, style } = projectTypographyPlan(project, clips, sections, totalDuration);
+  const card = normalizeTitleCard(project.titleCard);
+  // Held pictures are finished before the card is drawn, even on neutral shots.
+  const deferredTitleCard = titleCardSteady(card) && projectFrameHold(project) ? card : null;
   const lyricWindows = composedLyricWindows(project, totalDuration);
   const lyricData = lyricWindows.length ? lyricOverlayDocumentData(project, { width, height, fps, durationSec: totalDuration }) : null;
   const tagFilter = await supportsSetparamsFilter() ? SEGMENT_TAG : null;
@@ -160,25 +165,29 @@ export async function planShotSegments(project, options) {
     const startFrame = Math.round(section.startSec * fps);
     if (startFrame >= lastFrame) break;
     const window = { startFrame, endFrame: Math.min(Math.round(section.endSec * fps), lastFrame) };
-    const overlayPages = typographyOverlayWindows({ cues, lyricWindows, fps, durationSec: totalDuration, window });
-    const placeholders = overlayPages.flatMap(({ name, windows }) => windows.map((w, k) => ({ path: `@overlay/${name}/${k}`, startSec: w.startSec })));
     const segment = { index, maxFrames: window.endFrame - startFrame, tagFilter };
-    const built = buildMusicVideoFfmpegArgs(clips, audioPath, '@out', { ...common, overlays: placeholders, segment });
+    const bare = buildMusicVideoFfmpegArgs(clips, audioPath, '@out', { ...common, segment });
+    const scene = scenes.get(bare.shotId);
+    const look = shotFilmLook(project, scene);
+    const liftCard = titleCardSteady(card) && (look || deferredTitleCard);
+    const segmentCues = liftCard ? cues.filter((cue) => !cue.titleCard) : cues;
+    const titleCard = liftCard && !deferredTitleCard && cues.some((cue) => cue.titleCard && cue.startSec < window.endFrame / fps && cue.endSec > startFrame / fps) ? card : null;
+    const overlayPages = typographyOverlayWindows({ cues: segmentCues, lyricWindows, fps, durationSec: totalDuration, window });
+    const placeholders = overlayPages.flatMap(({ name, windows }) => windows.map((w, k) => ({ path: `@overlay/${name}/${k}`, startSec: w.startSec })));
+    const built = placeholders.length ? buildMusicVideoFfmpegArgs(clips, audioPath, '@out', { ...common, overlays: placeholders, segment }) : bare;
     const lo = built.startSec - KEY_MARGIN_SEC;
     const hi = built.endSec + KEY_MARGIN_SEC;
     const nearEnd = hi >= totalDuration;
     const overlayKey = {
-      ...(overlayPages.some((p) => p.name === 'doc') ? { doc: { cues: windowedKeyData(cues, lo, hi), style, ...(nearEnd ? { totalDuration } : {}) } } : {}),
+      ...(overlayPages.some((p) => p.name === 'doc') ? { doc: { cues: windowedKeyData(segmentCues, lo, hi), style, ...(nearEnd ? { totalDuration } : {}) } } : {}),
       ...(overlayPages.some((p) => p.name === 'lyrics') ? { lyrics: windowedKeyData({ ...lyricData, render: nearEnd ? lyricData.render : null }, lo, hi) } : {}),
     };
     const baseKey = hash({ v: SHOT_SEGMENT_VERSION, args: await fingerprintArgs(built.args), overlays: overlayKey, width, height, fps });
     // Each segment belongs to the shot whose span it plays in, so a shot's
     // render, look and cached files cover exactly its own time on the song.
-    const scene = scenes.get(built.shotId);
-    const look = shotFilmLook(project, scene);
     segments.push(finishSegment({
       index, sceneId: built.shotId, layer: built.layer, startSec: built.startSec, endSec: built.endSec,
-      startFrame, frames: built.frames, window, segment, look, baseKey, ownLook: hasOwnLook(project, scene),
+      startFrame, frames: built.frames, window, segment, look, baseKey, cues: segmentCues, titleCard, titleCardUntilSec: totalDuration, ownLook: hasOwnLook(project, scene),
       basePath: join(dir, `${baseKey}.mp4`),
     }, { project, scene, fps, dir }));
   }
@@ -189,7 +198,7 @@ export async function planShotSegments(project, options) {
   const opening = coldOpen ? await planColdOpenSegments(project, coldOpen, { dir, width, height, fps, grade, aspect, tagFilter }) : null;
   return {
     project, ffmpeg, audioPath, soundBed, clips, common, cues, style, lyricWindows,
-    width, height, fps, totalDuration, songSec, outro, dir,
+    width, height, fps, totalDuration, songSec, outro, dir, deferredTitleCard,
     // The song's shot spans (sceneId = the clip's own shot, partners included), for the stepped hold.
     sections,
     // The cold open's shots lead the cut, on song time before 0.
@@ -367,6 +376,7 @@ async function renderSegmentFiles(plan, segment, { signal, onProgress }) {
     try {
       await copyFile(source, partial);
       await applyFilmLookFinish({ project: plan.project, look: segment.look, path: partial, jobId, signal, offsetSec: segment.startSec, workers: 1,
+        titleCard: segment.titleCard, titleCardUntilSec: segment.titleCardUntilSec,
         label: `Music-video film look ${segment.outro ? 'ending card' : `shot ${segment.sceneId.slice(0, 8)}`}`,
         onProgress: (f) => onProgress?.(baseShare + matchShare + f * lookShare) });
       await rename(partial, segment.path);
@@ -385,11 +395,11 @@ async function renderSegmentFiles(plan, segment, { signal, onProgress }) {
 
 async function renderShotBase(plan, segment, outputPath, { jobId, signal, onProgress }) {
   if (segment.coldOpen) return renderColdOpenBase(plan, segment, outputPath, { jobId, signal, onProgress });
-  const needsOverlay = typographyOverlayWindows({ cues: plan.cues, lyricWindows: plan.lyricWindows, fps: plan.fps, durationSec: plan.totalDuration, window: segment.window }).length > 0;
+  const needsOverlay = typographyOverlayWindows({ cues: segment.cues, lyricWindows: plan.lyricWindows, fps: plan.fps, durationSec: plan.totalDuration, window: segment.window }).length > 0;
   const graphPath = join(tmpdir(), `portos-music-video-segment-${jobId}.filtergraph`);
   try {
     const overlays = needsOverlay ? await renderTypographyOverlays({
-      jobId, cues: plan.cues, style: plan.style, width: plan.width, height: plan.height, fps: plan.fps, durationSec: plan.totalDuration,
+      jobId, cues: segment.cues, style: plan.style, width: plan.width, height: plan.height, fps: plan.fps, durationSec: plan.totalDuration,
       lyrics: plan.lyricWindows.length ? { project: plan.project, windows: plan.lyricWindows } : null, window: segment.window,
       sceneId: segment.sceneId, signal,
       onProgress: (f) => onProgress?.(f * 0.5),

@@ -1362,6 +1362,8 @@ async function renderFromShotSegments(projectId, project, handOff, options) {
     // The stepped medium (#14244) holds the stitched cut; shot looks are already in it.
     const hold = projectFrameHold(project);
     if (hold) await applyFrameHold({ path: outputPath, sections: plan.sections, leadSec, signal, ffmpeg: plan.ffmpeg, ...hold });
+    if (plan.deferredTitleCard) await (await import('./titleCardFinish.js')).applyTitleCardFinish({ project, path: outputPath, jobId, leadSec, songSec: plan.songSec,
+      width: plan.width, height: plan.height, fps: plan.fps, signal, ffmpeg: plan.ffmpeg });
     broadcastSse(job, { type: 'progress', progress: 1 });
     return durationSec;
   }).then(async (durationSec) => {

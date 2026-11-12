@@ -158,12 +158,8 @@ export function titleCardSteady(card) {
   return titleCardVisible(card) && (typeof card.steady === 'boolean' ? card.steady : card.style === 'mtv');
 }
 
-/**
- * Whether `project`'s render style can draw its card over the film look. A
- * composed cut cannot: its card is baked into the encode on a timebase the
- * cold open and frame holds shift, and its film look pass runs over the result.
- */
-export const titleCardSteadySupported = (project) => project?.composition?.mode !== 'composed';
+/** Every render style can draw the card over the film look. */
+export const titleCardSteadySupported = () => true;
 
 /**
  * The default window for a new card: in a couple of seconds after the song

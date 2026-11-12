@@ -72,6 +72,8 @@ vi.mock('./renderCleanup.js', () => ({ cleanupSupersededFinals: vi.fn(async () =
 vi.mock('../instanceIdentity.js', () => ({ ensureInstanceId: vi.fn(async () => 'inst-self') }));
 // A composed render goes shot by shot (shotSegments.js): the segment work is
 // held open until a test settles it, or rejects on the render's abort signal.
+vi.mock('./frameHold.js', async load => ({ ...await load(), applyFrameHold: vi.fn(async () => ({ held: true })) }));
+vi.mock('./titleCardFinish.js', () => ({ applyTitleCardFinish: vi.fn(async () => true) }));
 const seg = vi.hoisted(() => ({ plans: [], render: null, stitch: vi.fn(async () => ({ durationSec: 2, songSec: 2 })) }));
 vi.mock('./shotSegments.js', () => ({
   planShotSegments: vi.fn(async (project) => {
@@ -661,6 +663,23 @@ describe('composed render lifecycle (#8984)', () => {
     expectSettled('composed-1', 'complete', { renderHistoryId: jobId });
     // Nothing is left to cancel once the render has finished.
     expect(cancelRender(jobId)).toBe(false);
+  });
+
+  it('finishes a steady card after the hold and before publishing the composed cut', async () => {
+    const { applyFrameHold } = await import('./frameHold.js');
+    const { applyTitleCardFinish } = await import('./titleCardFinish.js');
+    primeComposed('composed-held-title', { mode: 'composed' });
+    const project = await getProject();
+    Object.assign(project, { productionMedium: 'stepped', titleCard: { enabled: true, title: 'Song', steady: true } });
+    const { jobId } = await renderMusicVideo(project.id);
+    await tick();
+    seg.plans.at(-1).deferredTitleCard = project.titleCard;
+    seg.stitch.mockResolvedValueOnce({ durationSec: 3, songSec: 2, leadSec: 1 });
+    await finishFakeSegments();
+    await expect.poll(() => getRenderJobStatus(jobId).status).toBe('complete');
+    expect(applyTitleCardFinish).toHaveBeenCalledWith(expect.objectContaining({ project, jobId, leadSec: 1, songSec: 2, fps: 24 }));
+    expect(applyFrameHold.mock.invocationCallOrder.at(-1)).toBeLessThan(applyTitleCardFinish.mock.invocationCallOrder.at(-1));
+    expect(applyTitleCardFinish.mock.invocationCallOrder.at(-1)).toBeLessThan(generateThumbnail.mock.invocationCallOrder.at(-1));
   });
 
   it('a failed shot settles the render as failed with the shot it names', async () => {

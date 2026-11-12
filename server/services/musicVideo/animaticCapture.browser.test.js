@@ -627,8 +627,7 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
       return count;
     };
     const shown = async (titleCard) => {
-      // Any render style but a composed cut can hold its card steady.
-      const extra = { composition: { mode: 'concat' }, audioAnalysis: { durationSec: 8 }, filmLook: filmLookPreset('vhs'), titleCard };
+      const extra = { composition: { mode: 'composed' }, audioAnalysis: { durationSec: 8 }, filmLook: filmLookPreset('vhs'), titleCard };
       lyricProject = project([{ ...still, referenceImageId: null }], extra);
       await show(project([still], extra), 2);
       await enableFilmLook();

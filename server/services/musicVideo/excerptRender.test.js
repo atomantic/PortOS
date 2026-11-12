@@ -283,6 +283,28 @@ describe('excerpt range', () => {
 });
 
 
+describe('composed steady title excerpts', () => {
+  it.each([true, false])('draws a card exactly once with steady=%s', async (steady) => {
+    const id = `excerpt-steady-${steady}`;
+    prime(id, { mode: 'composed' });
+    Object.assign(h.store.get(id), { filmLook: { preset: 'vhs' }, titleCard: { enabled: true, title: 'Song', style: 'mtv', steady, startSec: 0, endSec: 4 } });
+    const { jobId } = await startExcerptRender(id, { startSec: 1, endSec: 2 });
+    if (steady) expect(renderTypographyOverlays).not.toHaveBeenCalled();
+    else {
+      expect(renderTypographyOverlays.mock.calls[0][0].cues).toEqual([expect.objectContaining({ titleCard: expect.objectContaining({ title: 'Song' }) })]);
+      h.overlays.resolve([]);
+      await vi.waitFor(() => expect(h.procs).toHaveLength(1));
+    }
+    lastProc().emit('close', 0, null);
+    await vi.waitFor(() => expect(look.calls).toHaveLength(1));
+    expect(look.calls[0]).toMatchObject({ offsetSec: 1, titleCardUntilSec: 4 });
+    expect(look.calls[0].titleCard?.title ?? null).toBe(steady ? 'Song' : null);
+    look.resolve(true);
+    await vi.waitFor(() => expect(terminalFrames(jobId)).toHaveLength(1));
+    expect(terminalFrames(jobId)[0].type).toBe('complete');
+  });
+});
+
 describe('film look finishing pass on a footage excerpt', () => {
   const primeLook = (id) => h.store.set(id, { id, name: 'Test', scenes: [], excerpts: [], composition: null, filmLook: { preset: 'super8', grain: 0.5 } });
   const progressFrames = (jobId) => broadcastSse.mock.calls.filter(([job, frame]) => job.id === jobId && frame.type === 'progress').map(([, frame]) => frame.progress);
