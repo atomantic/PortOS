@@ -628,3 +628,63 @@ compatibility probe, not a CUDA install or model-quality result. No model weight
 provider calls or generation ran. Windows/Linux CUDA execution and production
 FLUX.2 inference remain unverified; other profile and major migrations remain
 under #15769.
+
+## Twelfth-slice ACE-Step CUDA lyric/cache parity (2026-11-12)
+
+Windows and Linux ACE-Step update **pypinyin 0.53.0 → 0.55.0** and
+**FileLock 4.2.6 → 4.2.7**, matching the versions validated in the eighth
+Apple Silicon slice. The other **134** Windows and **151** Linux entries retain
+their exact versions, markers and hash sets. Torch **2.14.1+cu126**, the Python
+**3.11** contract and immutable ACE-Step revision
+`1bee4c9f5b43e30995f8d4d33b3919197ce1bd68` are unchanged. The earlier pypinyin
+release/API analysis applies to this same pinned tokenizer; dictionary updates
+are intentional, not a promise of identical pronunciation for every phrase.
+
+The [CUDA regeneration recipe](./ACESTEP_CUDA.md#regenerating-locks) now uses
+SHA-256-verified **uv 0.13.7**, a Torch-only explicit resolution index and cutoff
+`2026-11-05T00:00:00Z`, preserving unrelated pins. Generated annotations are
+omitted to keep temporary paths out of the locks. Windows has **136 entries /
+3,655 hashes** and Linux **153 / 3,750**. Including the shared four-package build
+closure, the union has **156 package-version identities / 3,792 hashes**. All
+hashes match non-yanked, pre-cutoff PyPI or official PyTorch artifacts. The full
+OSV/MAL audit, also querying Torch's public base version, returned zero findings
+across **157** complete responses; errors and pagination were checked. Bundled
+native libraries were not separately audited.
+
+CUDA Install/Repair now enforces hashes for isolated build dependencies as well
+as runtime distributions. The existing universal ACE-Step build lock is shared
+with Apple Silicon despite its historical `mlx` filename. Only the already
+allowed **docopt** and **unidic-lite** source archives may build. Their isolated
+backends must match that complete lock; the pinned ACE-Step checkout still
+installs without dependency resolution or build isolation. No build closure was
+copied or floated. Fresh uncached builds of both source archives passed; repeating
+with an empty allowed-backend set failed because setuptools had no trusted hash.
+
+**169** focused installer/profile tests passed, including both target Install and
+Repair paths, shared build/runtime version parity, source-build hash flags,
+sync failure without false readiness and unsupported target/index refusal.
+Both actual target wheel/source sync plans passed with those exact flags.
+
+A fresh Apple Silicon CPython **3.11.18** scratch environment installed all
+**136** Windows package versions, substituting public native Torch **2.14.1**
+for the CUDA build. It passed dependency checks and the actual pinned
+`ACEStepPipeline` readiness import, lyric tokenizer tone/vocabulary fixtures,
+mixed-language segmentation, concurrent Hub fixture downloads and offline cache
+reuse. This CPU stand-in establishes dependency/caller compatibility, not native
+Windows/Linux CUDA installation or music generation. No model weights, provider
+calls or production inference ran.
+
+Three retained ACE-Step pins have specific constraints:
+
+- **py3langid 0.3:** the removed `from_pickled_model` API in 0.4 still requires
+  source/model-format adaptation, as demonstrated in the eighth slice.
+- **fsspec 2026.7:** [Datasets 5.1.0](https://pypi.org/pypi/datasets/5.1.0/json)
+  requires `fsspec[http]>=2023.1.0,<=2026.7.0`.
+- **Librosa 0.11:** [Librosa 1.0.0](https://pypi.org/pypi/librosa/1.0.0/json)
+  requires Python **3.12+**, so the fixed CUDA Python 3.11 profile needs a
+  coordinated interpreter/native-closure migration before that major update.
+
+The remaining profile/API migrations and their concrete constraints are
+[enumerated on #15769](https://github.com/atomantic/PortOS/issues/15769#issuecomment-6815367652).
+Unperformed native/model execution is a disclosed limit, not a claim of
+incompatibility or an independent blanket platform-validation task.

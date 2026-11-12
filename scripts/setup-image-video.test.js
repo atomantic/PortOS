@@ -2018,6 +2018,10 @@ describe.each(['windows', 'linux'])('ACE-Step %s Install/Repair', (target) => {
     expect(lock).not.toMatch(/git\+|^[\w.-]+\s*@/m);
     expect(lock).toMatch(/^setuptools==/m);
     expect(lock).toMatch(/^wheel==/m);
+    const build = readFileSync(join(REPO_ROOT, 'scripts/requirements-acestep-mlx-build.lock.txt'), 'utf8');
+    for (const [, name, version] of build.matchAll(/^([\w.-]+)==([^\s]+)/gm)) {
+      if (name !== 'cython') expect(pins).toContain(`${name}==${version}`);
+    }
   });
 
   it('syncs the lock, then installs only the pinned checkout without dependencies, on Install and Repair', () => {
@@ -2031,6 +2035,8 @@ describe.each(['windows', 'linux'])('ACE-Step %s Install/Repair', (target) => {
     for (const sync of syncs) {
       expect(sync).toContain('--require-hashes --only-binary :all: --no-binary docopt --no-binary unidic-lite');
       expect(sync).toContain(`requirements-acestep-cuda-${target}.lock.txt`);
+      expect(sync).toContain('--preview-features build-dependency-hashes --require-build-hashes --build-constraints');
+      expect(sync).toContain('requirements-acestep-mlx-build.lock.txt');
     }
     const checkouts = commands.filter((line) => /^git -C \S+ checkout /.test(line));
     expect(checkouts).toHaveLength(2);

@@ -1,4 +1,4 @@
-# ACE-Step Apple Silicon build tools, fully resolved and hash-pinned.
+# ACE-Step universal build tools shared by Apple Silicon and CUDA, hash-pinned.
 # Generated with uv 0.13.7; choose a fresh cutoff at least seven days old:
 #   uv --no-config pip compile scripts/requirements-acestep-mlx-build.txt \
 #     --universal --python-version 3.11 --generate-hashes --no-header \
