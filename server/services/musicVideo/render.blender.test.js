@@ -56,6 +56,8 @@ const { mutateVideoHistory } = await import('../videoGen/local.js');
 const { musicVideoEvents } = await import('./events.js');
 const { startBlenderSync } = await import('./blender/sync.js');
 const { enqueueBlenderRenders } = await import('./blender/queue.js');
+const { saveBlenderSettings } = await import('./blender/record.js');
+const { listBlenderJobs } = await import('./blender/jobs.js');
 const { blenderFilmReadState } = await import('./blender/renderIndex.js');
 const { writeBlenderFile } = await import('./blender/sources.js');
 const { __resetBlenderJobsForTests } = await import('./blender/jobs.js');
@@ -225,4 +227,39 @@ it('cuts an excerpt window out of the best available shot videos and refuses one
   expect((await projects.getProject(id)).excerpts).toHaveLength(before);
   await renderShots('preview', ['s030']);
   await excerptDone((await startExcerptRender(id, { startSec: 3, endSec: 5 })).excerptId);
+});
+
+it('starts waiting stills, previews, then finals in stable order without interrupting a running final', async () => {
+  await saveBlenderSettings(id, { concurrency: 1 });
+  let release;
+  blender.fake.control.hold = new Promise((resolve) => { release = resolve; });
+  try {
+    const finals = await enqueueBlenderRenders(id, { quality: 'final' });
+    await vi.waitFor(() => expect(blender.fake.control.jobs.filter((job) => job.mode !== 'describe')).toHaveLength(1), WAIT);
+    const firstFinal = finals.jobs[0];
+    expect(listBlenderJobs(id).find(({ id: jobId }) => jobId === firstFinal.id).status).toBe('running');
+
+    const previews = await enqueueBlenderRenders(id, { quality: 'preview', shotIds: ['s020', 's030'] });
+    const stills = await enqueueBlenderRenders(id, { quality: 'still', shotIds: ['s010', 's020'] });
+    // The visible job list remains in creation order even though dispatch priority differs.
+    expect(listBlenderJobs(id).map(({ id: jobId }) => jobId).slice(-finals.jobs.length - previews.jobs.length - stills.jobs.length))
+      .toEqual([...finals.jobs, ...previews.jobs, ...stills.jobs].map(({ id: jobId }) => jobId));
+    expect(blender.fake.control.jobs.filter((job) => job.mode !== 'describe')).toHaveLength(1);
+    expect(listBlenderJobs(id).find(({ id: jobId }) => jobId === firstFinal.id).status).toBe('running');
+
+    release();
+    const expectedJobs = [
+      ['final', 's010'],
+      ['still', 's010'], ['still', 's020'],
+      ['preview', 's020'], ['preview', 's030'],
+      ['final', 's020'], ['final', 's030'],
+    ];
+    await vi.waitFor(() => expect(blender.fake.control.jobs.filter((job) => job.mode !== 'describe').map(({ quality, shots }) => [quality, shots[0].id]))
+      .toEqual(expectedJobs), WAIT);
+    await vi.waitFor(() => expect(ended.filter((job) => job.kind === 'render' && ['done', 'error', 'canceled'].includes(job.status))).toHaveLength(7), WAIT);
+    expect(ended.filter((job) => job.kind === 'render' && job.error)).toEqual([]);
+  } finally {
+    release();
+    blender.fake.control.hold = null;
+  }
 });
