@@ -145,14 +145,18 @@ validation, which does not certify model inference or rendering.
 The packaging-tool refresh preserves native source revisions and other build
 pins, validating real isolated/offline hash installs and synthetic native
 source/editable builds.
-See [3D Metal packaging and installer tooling](PYTHON_RUNTIME_REFRESH.md#3d-metal-packaging-and-installer-tooling)
+See [3D Metal packaging and installer tooling](PYTHON_RUNTIME_REFRESH.md#thirtieth-slice-3d-metal-packaging-and-installer-maintenance-2026-11-12)
 for exact scope, full-lock audits and the limits of installer-only coverage.
 
 The standalone pybind11 3.1.0 refresh leaves Torch's already-vendored 3.1.0
 headers and native source revisions unchanged. See
-[TRELLIS retained pybind11 tooling](PYTHON_RUNTIME_REFRESH.md#trellis-metal-retained-pybind11-build-tooling)
+[TRELLIS retained pybind11 tooling](PYTHON_RUNTIME_REFRESH.md#thirty-fourth-slice-trellis-metal-retained-pybind11-maintenance-2026-11-12)
 for header ownership, native CPU build probes and their limits.
 
 The retained Kornia 0.9.0/Kornia-RS 0.2.0 refresh preserves OpenCV and native
-source pins. See [Kornia/native image helper evidence](PYTHON_RUNTIME_REFRESH.md#3d-metal-retained-kornia-and-native-image-helpers)
+source pins. See [Kornia/native image helper evidence](PYTHON_RUNTIME_REFRESH.md#thirty-fifth-slice-3d-metal-retained-kornia-and-image-helper-migration-2026-11-12)
 for synthetic CPU coverage and its application/runtime limits.
+
+The mesh-library refresh keeps native source/model pins fixed while updating
+Fast-Simplification, Trimesh and NetworkX. See [mesh/export compatibility evidence](PYTHON_RUNTIME_REFRESH.md#fortieth-slice-3d-metal-mesh-simplification-and-export-migration-2026-11-12)
+for actual synthetic caller tests and the excluded native baking/inference scope.

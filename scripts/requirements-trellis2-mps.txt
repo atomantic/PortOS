@@ -8,7 +8,7 @@ huggingface-hub==2.4.0
 safetensors==0.8.0
 pillow==13.0.0
 numpy==2.2.6
-trimesh==4.10.1
+trimesh==5.2.0
 scipy==1.15.3
 tqdm==4.67.3
 easydict==1.13
@@ -17,7 +17,7 @@ timm==1.0.31
 imageio==2.37.3
 opencv-python-headless==4.13.0.92
 xatlas==0.0.11
-fast-simplification==0.1.13
+fast-simplification==0.2.0
 plyfile==1.1.5
 zstandard==0.25.0
 moderngl==5.12.0
@@ -42,3 +42,4 @@ regex==2026.9.29
 tokenizers==0.23.3
 typer==0.27.3
 hf-xet==1.6.0
+networkx==3.7

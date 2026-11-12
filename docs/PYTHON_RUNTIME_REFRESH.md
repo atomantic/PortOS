@@ -2261,3 +2261,65 @@ Pandas/date/plot/source-metadata probes were rerun against the combined
 versions. This adds affected-boundary integration evidence, not a full
 native renderer claim; unchanged TRELLIS/native-Xet/TLS evidence remains
 applicable through exact package/source/artifact equality.
+
+## Fortieth-slice 3D Metal mesh simplification and export migration (2026-11-12)
+
+Both profiles advance **Fast-Simplification 0.1.13 → 0.2.0**, **Trimesh
+4.10.1 → 5.2.0** and **NetworkX 3.4.2 → 3.7**. Their Python floors
+(3.9, 3.10 and 3.12 respectively) fit CPython 3.13, and the existing NumPy
+2.2.6/SciPy 1.15.3 artifacts remain compatible. TRELLIS's already-present
+NetworkX dependency is now explicit in its source recipe to select this
+bounded upgrade. No additional package, native source change or application
+API adaptation is needed. Torch, model/source pins, Pillow override and
+OpenCV remain unchanged.
+
+Official release notes and hash-verified candidate source show that
+Fast-Simplification moves its native bindings from Cython to nanobind while
+preserving the positional reduction-ratio and keyword target-count APIs
+used here. Fresh immutable source inspection identifies actual Pixal mesh
+helpers, TRELLIS/o-voxel material construction and the PortOS
+`trellis2GenerateRunner.py` interception seam; these are not import-only or
+merely retained-library tests.
+
+Native CPython 3.13.18 baseline/candidate probes use six-package hashed CPU
+subclosures. They execute the exact immutable Pixal simplification, hole
+repair, Taubin/Laplacian/Humphrey smoothing and geometry-only export helpers
+with synthetic geometry. A 320-face sphere decimates to 160 faces with
+valid indices, bounded geometry, watertightness and Euler characteristic
+preserved; invalid targets are refused and under-target inputs remain
+unchanged. Missing-face repair restores closure. NetworkX-backed Trimesh
+connectivity identifies connected and disconnected components. An offset
+mesh's reflected export checks actual transformed bounds, positive volume
+and winding after GLB reload, rather than relying on symmetric geometry.
+
+The exact immutable o-voxel material/coordinate-conversion/construction
+statements receive synthetic pre-baked arrays. Real GLB export/reload
+preserves vertices, UVs, RGBA texture pixels, metallic/roughness channel
+packing, alpha mode and double-sided material state. This deliberately
+excludes rasterization, tensor extraction, UV unwrapping and texture baking.
+The actual PortOS runner wraps the real native simplifier: its requested
+face target overrides the incoming ratio, the below-target path is a no-op,
+and its exporter target forwarding is checked against a capturing baker
+stub. The stub is not Metal export coverage. No model weights, live data,
+network access, GPU work or production GLB-quality certification is claimed.
+
+Both profile variants pass: candidate probes are repeated after reinstalling
+TRELLIS's exact hash subset because its retained NumPy and SciPy artifact
+hashes differ from Pixal's. Complete profile installation dry plans pass.
+Six focused installer/profile/adapter/runner files pass (195 tests).
+Both complete locks are regenerated with verified uv 0.13.7, the documented
+CPython 3.13/macOS 26+ ARM64 target and **2026-11-05T00:00:00Z** cutoff.
+All 96 unrelated Pixal and 53 unrelated TRELLIS identities, markers and hash
+sets remain unchanged. Pixal has 99 entries/1301 hashes and TRELLIS 56/485;
+the union has 100 registry identities/1305 hashes. Every hash matches an
+official unyanked artifact predating the cutoff. Fresh OSV/MAL queries cover
+that union, 10 source-package identities and 13 source commits (123 queries),
+with no matches. These checks are bounded mesh/export compatibility evidence,
+not a full native renderer installation or inference run.
+
+The serial combined candidate preserves the preceding web, timezone, Pandas
+and model/Hub changes. Complete locks were regenerated against that base;
+only the three mesh-library identities differ. Both exact six-package native
+artifact variants reran the immutable mesh/material and PortOS wrapper probes
+successfully. The original baseline remains applicable; this is not a full
+model/runtime installation or a rerun of model inference.
