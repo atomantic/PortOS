@@ -2006,3 +2006,70 @@ artifact predating the cutoff. Fresh OSV/MAL checks cover those identities,
 10 source-package identities and 13 source commits (120 queries), with no
 matches. Both complete profile installation dry plans and the five focused
 installer/profile/adapter files (171 tests) passed.
+
+## Thirty-sixth-slice Pixal retained Gradio and web-stack migration (2026-11-12)
+
+Pixal's Apple Silicon CPython 3.13 wheel closure advances Gradio 6.16.0 to
+6.31.0 and its exact client 2.5.0 to 2.7.2, FastAPI 0.136.3 to 0.162.0,
+Starlette 1.3.1 to 1.10.0, Uvicorn 0.48.0 to 0.54.0, Pydantic 2.13.4 to
+2.14.2 with Core 2.50.2 and Typing Inspection 0.4.4, Multipart 0.0.31 to
+0.0.33, and Orjson 3.11.9 to 3.13.0. FastAPI's required OpenTelemetry API
+1.45.2 is the only added dependency. No telemetry SDK, exporter, service or
+configuration is added; its default span is non-recording.
+
+This does not force a Hub/model migration. Gradio 6.31.0 and client 2.7.2
+accept Hub >=1.16,<3, so Hub 1.16.4, Transformers 5.10.1, Diffusers 0.38.0
+and Typer 0.25.1 stay unchanged. Gradio explicitly caps SafeHTTPX below 0.2
+and Tomlkit below 0.15; retain 0.1.7 and 0.14.0 rather than override those
+constraints to adopt their newer major/minor lines. All native, model and
+immutable source pins remain unchanged, including the separate CUDA lane.
+
+The complete lock was regenerated with verified uv 0.13.7 and cutoff
+2026-11-05T00:00:00Z. All 97 identities and 1,166 artifact hashes match
+official unyanked PyPI releases older than the cutoff. All 86 surviving
+companion versions, markers and complete artifact sets are unchanged. The
+111-query OSV/MAL audit covers the registry closure, ten native/source
+package identities and four immutable source revisions with no findings.
+The documented recipe reproduces the complete lock body byte-for-byte, and
+the full macOS 26 arm64/Python 3.13 hash-constrained dry-sync plan passes.
+
+Native Python 3.13.18 baseline/candidate fixtures installed 50/51-package
+web subclosures whose versions and entire hash sets are copied exactly from
+the corresponding full locks. Both dependency checks report only the existing,
+intentional Gradio/Pillow metadata exception. These are not complete Pixal
+native installations. Tests execute real Gradio Server, Uvicorn, FastAPI,
+Starlette, Pydantic and Gradio Client on loopback, covering:
+
+- Typed JSON/Unicode serialization and malformed/invalid request refusal;
+  multipart upload, client file upload/download and queued API responses.
+- Generator results through the actual client queue, HTTP event streaming,
+  blocked-file refusal and retained SafeHTTPX loopback/SSRF rejection.
+- The immutable Pixal `app.py` configuration/progress handlers, including
+  missing/malformed progress files, and its unchanged `preprocess` body.
+  Only model initialization/inference and the external GPU decorator are
+  replaced in this fixture: a deterministic Pillow RGB/resize operation
+  stands in for neural preprocessing. Real FileData serialization and
+  image open/save run through the actual Gradio client/server boundary.
+- Pillow 13 synthetic RGBA-to-RGB image transport and output dimensions,
+  retained Tomlkit parsing, and the new API-only tracing default without
+  an installed SDK/exporter or recording span.
+
+Fixture analytics and Hub telemetry are disabled; a socket audit rejects
+all non-loopback connections. No model weights, user data, live provider
+calls or complete neural pipeline were used. This does not enable or endorse
+the fork's web demo: PortOS remains CLI-only, and the existing explicit
+Pillow 13 override of Gradio's `<13` metadata is unchanged. Broader Gradio UI
+or Pixal image-to-GLB compatibility is not established by these fixtures.
+
+The candidate was also prepared on the preceding reviewed packaging,
+pybind11 and Kornia/RS slices. All their companion pins and complete artifact
+sets remain intact, while every web-upgrade artifact block is identical to
+this slice's reviewed candidate. The affected 51-package web subclosure is
+unchanged byte-for-byte; a fresh hashed install reran its actual request,
+client, file, stream and refusal probes. This validates the combined web
+boundary, not a combined native Kornia/model renderer. The complete combined
+lock was regenerated and audited again, with its full supported-target plan.
+
+All 34 focused Pixal installer/Repair, service and lock-profile tests passed
+without skips. Independent review, final committed-tree pregate and exact-head
+hosted CI remain required before merging.
