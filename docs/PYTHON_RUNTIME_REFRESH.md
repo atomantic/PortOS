@@ -1759,3 +1759,70 @@ contour/debug-plot probes. All passed with the combined versions; complete
 profile plans and the 171 focused tests also passed. Earlier baseline
 results remain applicable. These checks still do not certify a full Metal
 extension rebuild or production inference.
+
+## Thirty-first-slice FastVideo MLX Hub and tokenizer migration (2026-11-12)
+
+FastVideo MLX advances Hub 1.33.0 to 2.4.0, Transformers 5.15.1 to 5.22.1
+and Tokenizers 0.22.2 to 0.23.3. Its immutable source revision
+`fa2d1324c60050cd65209c6aaeac470e7fb412f5`, Torch/MLX/AV/native versions,
+model choices and installation policy remain unchanged. HTTPX2/HTTPCore2
+2.16.0 and Truststore 0.10.5 are added. HTTPX 0.28.1 is now explicit because
+FastVideo's independent media-policy and streaming consumers still import
+it; its HTTPCore and Certifi dependencies remain. Requests and its companions
+also remain required by the immutable source.
+
+This deliberately overrides an upstream compatibility guard, not merely an
+old validation pin. FastVideo's immutable `pyproject.toml` caps Tokenizers
+below 0.23 because CLIP loading failed when `RobertaProcessing` renamed its
+keyword arguments. The verified official Transformers 5.22.1 wheel uses
+positional arguments in both its CLIP tokenizer and slow-tokenizer converters;
+it requires Tokenizers >=0.23.1,<0.24 and Hub >=1.31,<3. Actual native CLIP
+construction, load/save/reload, Unicode offsets, special tokens, padding and
+attention-mask probes validate that specific fix with identical results on
+the old and candidate stacks. The source metadata itself is not patched.
+PortOS continues its existing curated MLX dependency lock and `--no-deps`
+editable-source install, rather than claiming the broad upstream dependency
+set resolves unchanged.
+
+The complete universal Apple Silicon lock contains 88 package identities and
+2,311 hashes. Verified uv 0.13.7 regenerated it with the November 5 UTC
+cutoff; all artifacts match official unyanked PyPI releases older than that
+cutoff, and the complete OSV/MAL audit returned no findings. Every one of the
+82 surviving companion entries retains its version, platform marker and
+complete hash set. The documented recipe reproduces the full lock body
+byte-for-byte. Full Python 3.11/3.12 macOS 14 arm64 dry-sync plans passed.
+
+Three isolated native environments installed the complete old Python 3.11.18
+and candidate Python 3.11.18/3.12.11 locks with hash verification and passed
+dependency checks. They loaded identical small synthetic tokenizer assets
+and random UMT5 weights, then exercised the actual immutable source:
+
+- FastWan's `encode_prompt` on CPU and MPS, FP32 and BF16, including real
+  UMT5 loading, attention masks, zero padding and BF16-to-FP32 transport.
+  Baseline/candidate embedding values, CLIP offsets/masks/IDs and H3 Qwen
+  token IDs matched exactly. The real child-process encoding path and
+  all 13 unchanged upstream prompt-cache/asset-resolution tests passed in
+  each environment, including fingerprint mismatch and torn-cache refusal.
+- Seven unchanged upstream Qwen3-VL MLX tests: tiny vision forward/deepstack
+  parity, mixed image/video RoPE positions, image/video processor geometry,
+  visual-token splicing, frame ordering/padding and checkpoint selection.
+  Existing numerical tolerances were preserved; no model forward was mocked.
+- The actual shared Hub downloader and immutable FastWan asset resolver,
+  including selected-asset filtering, explicit-local no-download behavior,
+  Transformers cached-file reads, typed errors and exact Range resume.
+- Real Diffusers/ImageIO video export and bundled FFmpeg decode of synthetic
+  frames, preserving dimensions, frame count, timing and codec; invalid
+  executable overrides and invalid media remain refused.
+
+Both candidates additionally exercised HTTPX2's default Truststore TLS
+context: untrusted certificates and wrong CAs fail before HTTP, while an
+ephemeral fixture CA permits verified HTTPS/Hub access. No OS trust settings
+changed. Test caches and tokens were isolated and local Hub fixtures rejected
+Authorization headers. No production models, user prompts, live provider
+calls, generation-quality calibration or public-chain/proxy compatibility
+are claimed. Test-only pytest tooling is separate from runtime environments
+and the shipped lock.
+
+All 182 focused PortOS installer/profile/runner tests passed without skips.
+Independent review, final committed-tree pregate and exact-head hosted CI
+remain required before merge.
