@@ -11,7 +11,7 @@ vi.mock('../../services/socket', () => ({
 }));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 // The shared Blender setup reads its own API; here it only needs to be present.
-vi.mock('../codeAnimation/ProductionContainment', () => ({ default: () => <div data-testid="blender-setup">Blender setup</div> }));
+vi.mock('../codeAnimation/ProductionContainment', () => ({ default: ({ onExecutionChange }) => <div data-testid="blender-setup">Blender setup<button type="button" onClick={() => onExecutionChange({ executionMode: 'trusted-local', lanes: { blender: { ready: true } } })}>Report ready Blender</button></div> }));
 vi.mock('../../services/apiMusicVideo.js', () => ({
   getMusicVideoBlender: vi.fn(),
   saveMusicVideoBlenderSettings: vi.fn(),
@@ -287,6 +287,18 @@ describe('BlenderFilmPanel: settings', () => {
     const readiness = screen.getByRole('region', { name: 'Blender readiness' });
     expect(readiness).toHaveTextContent('Blender 5.2.3 is ready in Trusted local mode.');
     expect(readiness).not.toHaveTextContent(/acknowledge|you trust|host access/i);
+  });
+
+  it('refreshes when setup restores readiness after the film state changed independently', async () => {
+    await renderPanel('?btab=settings');
+    const blocked = blenderFilmState({ tool: { ready: false, executionMode: 'trusted-local', reason: 'Recheck required' } });
+    getMusicVideoBlender.mockResolvedValueOnce(blocked);
+    await push('music-video:blender', { projectId: 'mv-test', kind: 'state' });
+    expect(screen.getByText('Blender not ready')).toBeInTheDocument();
+    const before = getMusicVideoBlender.mock.calls.length;
+    fireEvent.click(screen.getByRole('button', { name: 'Report ready Blender' }));
+    await waitFor(() => expect(getMusicVideoBlender).toHaveBeenCalledTimes(before + 1));
+    expect(screen.getByText('Blender 5.2.3 ready')).toBeInTheDocument();
   });
 
   it('saves only the changed settings and holds renders until the save lands', async () => {
