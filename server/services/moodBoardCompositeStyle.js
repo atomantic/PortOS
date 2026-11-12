@@ -1,3 +1,4 @@
+import { isVisionCapableCodexTuiProvider } from '../lib/codex.js';
 /**
  * Mood board composite style prompt.
  *
@@ -85,7 +86,7 @@ async function resolveComposeProvider(providerId) {
   if (providerId) {
     const requested = await getProviderById(providerId).catch(() => null);
     if (requested && requested.enabled !== false
-      && (requested.type === 'api' || isVisionCapableCliProvider(requested))) {
+      && (requested.type === 'api' || isVisionCapableCliProvider(requested) || isVisionCapableCodexTuiProvider(requested))) {
       return requested;
     }
   }

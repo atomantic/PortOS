@@ -3,11 +3,11 @@ import Modal from '../ui/Modal';
 import ProviderModelSelector from '../ProviderModelSelector';
 import useProviderModels from '../../hooks/useProviderModels';
 import useVisionModelIds from '../../hooks/useVisionModelIds';
-import { isVisionCapableCliProvider, visionLocalModelFilter } from '../../utils/providers';
+import { isVisionCapableCodexTuiProvider, isVisionCapableCliProvider, visionLocalModelFilter } from '../../utils/providers';
 
 import { combineMoodBoards } from '../../services/apiMoodBoard';
 
-const visionProviderFilter = provider => provider.enabled && (provider.type === 'api' || isVisionCapableCliProvider(provider));
+const visionProviderFilter = provider => provider.enabled && (provider.type === 'api' || isVisionCapableCliProvider(provider) || isVisionCapableCodexTuiProvider(provider));
 
 export default function CombineMoodBoards({ boards, onClose, onCreated }) {
   const [firstId, setFirstId] = useState('');

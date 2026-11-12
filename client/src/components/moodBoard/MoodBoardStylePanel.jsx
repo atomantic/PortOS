@@ -21,7 +21,7 @@ import useVisionModelIds from '../../hooks/useVisionModelIds';
 import useImageRenderSettings from '../../hooks/useImageRenderSettings';
 import useSingleImageRender from '../../hooks/useSingleImageRender';
 import { getMoodBoard, getMoodBoardAnalyze, startMoodBoardAnalyze, updateMoodBoard, composeMoodBoardPrompt } from '../../services/api';
-import { isVisionCapableCliProvider, visionLocalModelFilter } from '../../utils/providers';
+import { isVisionCapableCodexTuiProvider, isVisionCapableCliProvider, visionLocalModelFilter } from '../../utils/providers';
 import { formatCount } from '../../utils/formatters';
 import { moodBoardPosterSrc } from '../../lib/moodBoardItemSrc';
 import {
@@ -32,7 +32,7 @@ import {
 import { modeLabel, IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
 import { QUEUEABLE_IMAGE_MODES } from '../../../../server/lib/generationModes.js';
 
-const visionProviderFilter = (p) => p.enabled && (p.type === 'api' || isVisionCapableCliProvider(p));
+const visionProviderFilter = (p) => p.enabled && (p.type === 'api' || isVisionCapableCliProvider(p) || isVisionCapableCodexTuiProvider(p));
 
 export default function MoodBoardStylePanel({ board, onBoardChange }) {
   const mountedRef = useMounted();
@@ -104,6 +104,16 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
   const styleDirty = prompt.trim() !== savedPrompt.trim()
     || negative.trim() !== savedNegative.trim();
   const canRender = Boolean(board?.id) && Boolean(savedPrompt.trim()) && !styleDirty && !busy;
+  // Existing composition metadata lets a newly added or re-analyzed pin make
+  // the shortcut available again without hiding the individual redo actions.
+  const composedAt = Date.parse(board?.style?.composedAt || '');
+  const hasNewerInput = items.some((item) =>
+    Date.parse(item.createdAt || '') > composedAt
+    || Date.parse(item.analysis?.analyzedAt || '') > composedAt);
+  const complete = Boolean(posterSrc && savedPrompt.trim()) && !styleDirty
+    && plan.pending.length === 0 && plan.skipped === 0 && plan.analyzed >= board?.style?.analyzedItemCount
+    && !hasNewerInput;
+  const showMakeComplete = !complete || (jobRunning && job.makeComplete);
 
   const onPosterComplete = async (filename) => {
     if (!board?.id || !filename) return;
@@ -328,7 +338,7 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
         </div>
       ) : null}
 
-      <div className="space-y-1">
+      {showMakeComplete ? <div className="space-y-1">
         <button type="button" onClick={() => analyzeBoard(true)}
           disabled={busy || Boolean(jobId) || styleDirty || !selectedProviderId || !canCompleteRender || !analyzable}
           className="min-h-[40px] px-3 py-1.5 text-sm rounded bg-port-success text-white hover:bg-port-success/80 disabled:opacity-50">
@@ -339,7 +349,7 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
         {styleDirty ? <p className="text-xs text-port-warning">Save your style edits before running Make complete.</p> : null}
         {job?.makeComplete && job.status === 'failed' ? <p role="alert" className="text-xs text-port-warning">{job.error} Saved analyses are kept. Make complete retries the workflow.</p> : null}
         {job?.makeComplete && job.status === 'done' ? <p role="status" className="text-xs text-port-success">Board complete: style prompt and main image saved.</p> : null}
-      </div>
+      </div> : null}
       <div className="flex flex-wrap items-center gap-2">
         {showAnalyze ? (
           <button

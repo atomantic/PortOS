@@ -119,3 +119,29 @@ describe('Make complete workflow', () => {
     expect(composeBoardPrompt).not.toHaveBeenCalled();
   });
 });
+
+
+it('Make complete analyzes gallery captions and original prompts without replacing them or repeating saved analysis', async () => {
+  const items = [
+    { id: 'captioned', type: 'image', mediaKey: 'image:captioned.png', caption: 'original caption' },
+    { id: 'prompted', type: 'image', mediaKey: 'image:prompted.png', prompt: 'original generation prompt' },
+    { id: 'saved', type: 'image', mediaKey: 'image:saved.png', analysis: { prompt: 'existing visual analysis' } },
+  ];
+  const board = { id: 'complete-gallery', items };
+  backfill.mockResolvedValue(board);
+  promptFromMedia.mockResolvedValue({ imagePrompt: 'visible hazy texture', imageNegativePrompt: 'crisp lines' });
+  getBoard.mockResolvedValue({ ...board, items: items.map(item => item.analysis ? item : { ...item, analysis: { prompt: 'visible hazy texture' } }) });
+  completePoster.mockResolvedValue(undefined);
+  startAnalyzeJob(board.id, { providerId: 'vision', render: { mode: 'local' } });
+  expect(await waitTerminal(board.id)).toMatchObject({ status: 'done', total: 2, done: 2 });
+  expect(promptFromMedia.mock.calls.map(([input]) => input.filename)).toEqual(['captioned.png', 'prompted.png']);
+  expect(updateBoardItem.mock.calls.map(([, id, patch]) => [id, patch])).toEqual([
+    ['captioned', { analysis: expect.objectContaining({ prompt: 'visible hazy texture', negativePrompt: 'crisp lines' }) }],
+    ['prompted', { analysis: expect.objectContaining({ prompt: 'visible hazy texture', negativePrompt: 'crisp lines' }) }],
+  ]);
+  expect(composeBoardPrompt).toHaveBeenCalledWith(expect.objectContaining({ board: expect.objectContaining({ items: expect.arrayContaining([
+    expect.objectContaining({ caption: 'original caption', analysis: { prompt: 'visible hazy texture' } }),
+    expect.objectContaining({ prompt: 'original generation prompt', analysis: { prompt: 'visible hazy texture' } }),
+  ]) }) }));
+  expect(completePoster).toHaveBeenCalled();
+});

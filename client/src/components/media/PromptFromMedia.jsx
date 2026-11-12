@@ -12,7 +12,7 @@ import GalleryVideoPicker from '../videoGen/GalleryVideoPicker';
 import Modal from '../ui/Modal';
 import { FormField } from '../ui/FormField';
 import { promptFromMedia, listMediaPromptExaminations, getMediaPromptExamination } from '../../services/apiMediaJobs';
-import { isVisionCapableCliProvider, visionLocalModelFilter } from '../../utils/providers';
+import { isVisionCapableCodexTuiProvider, isVisionCapableCliProvider, visionLocalModelFilter } from '../../utils/providers';
 import { copyToClipboard } from '../../lib/clipboard';
 import { safeReadStorage, safeRemoveStorage, safeWriteStorage } from '../../lib/safeStorage';
 import toast from '../ui/Toast';
@@ -24,7 +24,7 @@ const LS_KEY_PROVIDER = 'portos_prompt_from_media_provider';
 const LS_KEY_MODEL = 'portos_prompt_from_media_model';
 const LS_KEY_EFFORT = 'portos_prompt_from_media_effort';
 
-const visionProviderFilter = (p) => p.enabled && (p.type === 'api' || isVisionCapableCliProvider(p));
+const visionProviderFilter = (p) => p.enabled && (p.type === 'api' || isVisionCapableCliProvider(p) || isVisionCapableCodexTuiProvider(p));
 
 function sourceFromItem(item) {
   if (!item) return null;

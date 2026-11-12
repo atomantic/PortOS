@@ -55,8 +55,8 @@ describe('composeBoardPrompt', () => {
       .rejects.toMatchObject({ code: 'COMPOSITE_BAD_JSON', status: 502 });
   });
 
-  it('runs the picked vision CLI provider with its model and effort instead of swapping to an API provider', async () => {
-    const codex = { id: 'codex', type: 'cli', command: 'codex', enabled: true };
+  it.each(['cli', 'tui'])('runs the picked vision %s provider with its model and effort instead of swapping to an API provider', async (type) => {
+    const codex = { id: 'codex', type, command: 'codex', enabled: true };
     providers.getProviderById.mockResolvedValue(codex);
     promptRunner.runPromptThroughProvider.mockResolvedValue({ text: composedText, model: 'gpt-5.6-luna', provider: codex });
     const style = await composeBoardPrompt({
