@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import * as api from '../services/api';
-import { filterSelectableModels, selectableModelsForProvider, antigravityModelEffortLevels } from '../utils/providers';
+import { filterSelectableModels, selectableModelsForProvider, antigravityModelEffortLevels, effortLevelsForProvider } from '../utils/providers';
 // THE reviewer -> provider-record table, shared with the retired-pin audit
 // (#7339). Taken from the server leaf rather than mirrored: the picker offering
 // a tier the audit calls retired — or the audit flagging a pin the picker just
@@ -209,8 +209,8 @@ export default function useReviewerModelOptions() {
     // The effort ladder a reviewer offers ONCE ITS MODEL IS PINNED. `agy` validates
     // the pair, so a model with no `-medium` sibling must not offer `medium`
     // (#3733). `antigravityModelEffortLevels` returns null for "can't tell" —
-    // empty catalog, unset model, or the configured-default sentinel — and the full
-    // static ladder stands there, the same null-means-fall-back contract
+    // empty catalog, unset model, or the configured-default sentinel — and the legacy
+    // runtime ladder stands there, the same null-means-fall-back contract
     // `effortLevelsForProvider` uses. `[]` is a real answer: that model has no
     // effort tiers at all. For `codex`, the model gates `minimal` on gpt-6 family
     // models that reject it (model-gating is already handled by reviewerEffortLevels).
@@ -218,7 +218,7 @@ export default function useReviewerModelOptions() {
       const slug = normalizeReviewerSlug(reviewer);
       const ladder = reviewerEffortLevels(reviewer, model);
       if (!ladder || slug !== 'antigravity') return ladder;
-      return antigravityModelEffortLevels(model, antigravityCatalog) ?? ladder;
+      return antigravityModelEffortLevels(model, antigravityCatalog) ?? effortLevelsForProvider({ harnessId: 'antigravity' });
     };
 
     return {

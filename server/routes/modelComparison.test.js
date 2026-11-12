@@ -260,6 +260,8 @@ it('loads shipped Hydrogen effort scores and workload costs for an existing Anti
   hydrogenApp.use(errorMiddleware);
   const result = await request(hydrogenApp).get('/comparison');
   expect(result.status).toBe(200);
+  expect(result.body.inventory[0].models).toEqual([{ model: 'gemini-4-hydrogen', efforts: ['low', 'medium', 'high', 'xhigh'] }]);
+  expect(result.body.currentComposite.rows.map(row => row.effort)).toEqual(['low', 'medium', 'high', 'xhigh']);
   const expected = [
     ['low', 26.8936694361562, 0.2922227000200506],
     ['medium', 41.2329566992579, 0.7979866055252406],

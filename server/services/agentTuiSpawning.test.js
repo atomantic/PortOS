@@ -624,12 +624,20 @@ describe('agent TUI spawning', () => {
     expect(clamped.args).toEqual(expect.arrayContaining(['--effort', 'xhigh']));
   });
 
-  it('passes --effort through to the Antigravity TUI, clamped to its low|medium|high ladder', () => {
+  it('passes --effort through to the Antigravity TUI, clamped to its supported ladder', () => {
     const agy = buildTuiSpawnConfig({ id: 'antigravity-tui', command: 'agy', type: 'tui', args: [] }, null, { effort: 'high' });
     expect(agy.args).toEqual(['--dangerously-skip-permissions', '--effort', 'high']);
 
     const clamped = buildTuiSpawnConfig({ id: 'antigravity-tui', command: 'agy', type: 'tui', args: [] }, null, { effort: 'max' });
     expect(clamped.args).toEqual(['--dangerously-skip-permissions', '--effort', 'high']);
+  });
+
+  it('preserves a saved Hydrogen xhigh selection when spawning the Antigravity TUI', () => {
+    const agy = buildTuiSpawnConfig({
+      id: 'antigravity-tui', command: 'agy', type: 'tui', args: [],
+      models: ['low', 'medium', 'high', 'xhigh'].map(level => `gemini-4-hydrogen-${level}`),
+    }, 'gemini-4-hydrogen-xhigh');
+    expect(agy.args).toEqual(['--dangerously-skip-permissions', '--model', 'gemini-4-hydrogen', '--effort', 'xhigh']);
   });
 
   it('passes the per-task model through to the Antigravity TUI', () => {

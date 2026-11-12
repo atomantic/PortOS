@@ -61,7 +61,7 @@ import { PROVIDER_VENDORS } from './providerVendors.js';
 // pin survives the schema that persists it, so they need both modules.
 import { createCosTaskSchema, sanitizeTaskMetadata, codeReviewSettingsSchema, reviewerConfigMetadata } from './cosValidation.js';
 import { LOCAL_AGENT_REVIEWERS } from './slashdoInvocation.js';
-import { CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, ANTIGRAVITY_EFFORT_LEVELS, CURSOR_EFFORT_LEVELS, GROK_EFFORT_LEVELS } from './providerModels.js';
+import { CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, CURSOR_EFFORT_LEVELS, GROK_EFFORT_LEVELS } from './providerModels.js';
 
 describe('reviewerConfig reviewer CLI binaries', () => {
   // The bug this exists to prevent: `antigravity` is the stored, federated
@@ -201,9 +201,10 @@ describe('per-reviewer reasoning effort (reviewerEfforts)', () => {
   it('offers each reviewer only the ladder its own CLI accepts', () => {
     expect(reviewerEffortLevels('claude')).toEqual(CLAUDE_EFFORT_LEVELS);
     expect(reviewerEffortLevels('codex')).toEqual(CODEX_EFFORT_LEVELS);
-    expect(reviewerEffortLevels('antigravity')).toEqual(ANTIGRAVITY_EFFORT_LEVELS);
+    // A bare reviewer has no model/catalog to establish xhigh support.
+    expect(reviewerEffortLevels('antigravity')).toEqual(['low', 'medium', 'high']);
     // The `gemini` alias resolves to the same ladder as `antigravity`.
-    expect(reviewerEffortLevels('gemini')).toEqual(ANTIGRAVITY_EFFORT_LEVELS);
+    expect(reviewerEffortLevels('gemini')).toEqual(['low', 'medium', 'high']);
     expect(reviewerEffortLevels('ollama')).toEqual(LOCAL_LLM_EFFORT_LEVELS);
     expect(reviewerEffortLevels('lmstudio')).toEqual(LOCAL_LLM_EFFORT_LEVELS);
     // cursor has a ladder even though `cursor-agent` takes no `--effort` flag:
