@@ -15,7 +15,13 @@ export const MUSIC_VIDEO_BLENDER_MAX_SHOTS = 400;
 // A shot id names a folder under renders/; a source path names a file under src/.
 export const MUSIC_VIDEO_BLENDER_SHOT_ID = /^[a-z0-9][a-z0-9_-]{0,39}$/i;
 export const MUSIC_VIDEO_BLENDER_SOURCE_PATH = /^[A-Za-z0-9_][A-Za-z0-9_.-]*(\/[A-Za-z0-9_][A-Za-z0-9_.-]*){0,5}$/;
-export const MUSIC_VIDEO_BLENDER_TEXT_EXTENSIONS = Object.freeze(['py', 'json', 'txt', 'md']);
+export const MUSIC_VIDEO_BLENDER_TEXT_EXTENSIONS = Object.freeze(['py', 'js', 'mjs', 'json', 'txt', 'md']);
+// A shot draws in Blender unless it says `code`. A code module is an ES module under src/.
+export const MUSIC_VIDEO_BLENDER_RENDERERS = Object.freeze(['blender', 'code']);
+export const MUSIC_VIDEO_BLENDER_CODE_SPACES = Object.freeze(['canvas', 'three']);
+export const MUSIC_VIDEO_BLENDER_LAYER_PLACES = Object.freeze(['over', 'under']);
+export const MUSIC_VIDEO_BLENDER_LAYER_BLENDS = Object.freeze(['normal', 'screen', 'add', 'multiply']);
+export const MUSIC_VIDEO_BLENDER_MAX_LAYERS = 8;
 export const MUSIC_VIDEO_BLENDER_SOURCE_EXTENSIONS = Object.freeze([
   ...MUSIC_VIDEO_BLENDER_TEXT_EXTENSIONS, 'png', 'jpg', 'jpeg', 'webp', 'exr', 'hdr', 'ttf', 'otf', 'wav', 'mp4', 'glb', 'obj', 'blend',
 ]);

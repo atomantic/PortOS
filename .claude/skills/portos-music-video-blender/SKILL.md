@@ -50,6 +50,17 @@ handles for a dissolve or beat toggle block the final render (`409`).
 `ctx`: `song`, `options`, `fps`, `width`, `height`, `scale`, `samples`, `quality`, `engine`, `workspace`, `src`,
 `out_dir`, `shot`, `log()`, `seconds_to_frame()`, `frame_to_seconds()`.
 
+**Code shots and layers.** A shot may set `"renderer": "code"` and `"entry": "code/s020.js"` instead of drawing in
+Blender. A Blender shot may add up to eight `"layers": [{"entry", "place": "over"|"under", "blend": "normal"|"screen"|"add"|"multiply"}]`.
+The entry is an ES module under `src/` exporting `render(ctx, env)`. `env` is `{ t, localT, frame, song, width, height }`
+(`localT` is negative inside an in-handle). `ctx` is Canvas 2D, or `{ THREE, scene, camera, renderer }` when the shot
+sets `"space": "three"` (canvas is the default and is omitted). Layers are canvas only. Every frame is a pure function
+of song time. The module and its static imports join that shot's stale hash; bare `three` is host-provided and is not
+hashed. Preview plates are JPEG on black; finals and layers are PNG with the layer's alpha, composited at encode.
+A Blender plate is opaque, so an `under` layer stays hidden on it. A film that does not import `bpy`, `bmesh` or
+`mathutils` syncs with system Python and renders with no Blender; `describe` is still required, `build_shot` is not.
+Code runs in the browser sandbox with no host access. Full contract: the feature doc.
+
 **Film options.** To let the director choose something without editing code (a look, a palette, a debug overlay),
 declare it in `describe`'s `options` (at most 24): `{"key", "label", "type": "choice" | "boolean" | "number" |
 "text", "default", "help"?, "choices"?: [{"value", "label"}] (choice), "min"?, "max"?, "step"? (number)}`. Every
@@ -110,8 +121,8 @@ Rules that keep a film renderable:
 
 Jobs run in the background. Watch `jobs` in the state; a failed job's `logFile` (read it with
 `GET /api/music-video/:id/blender/media`) holds the Python traceback. Renders are **stale** when a shot's `deps`,
-times, the render settings or a film option changed (`staleReasons` says which); re-sync after changing the shot
-list, the options a film declares, or the frame rate (renders are refused until then).
+a code module it imports, times, the render settings or a film option changed (`staleReasons` says which); re-sync
+after changing the shot list, the options a film declares, or the frame rate (renders are refused until then).
 
 Rendered frames are large. `GET /api/music-video/:id/blender/usage` says what the workspace takes;
 `POST /api/music-video/:id/blender/frames/clear` removes the frames of finished renders (their videos stay). Clear

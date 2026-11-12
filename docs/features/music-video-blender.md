@@ -43,8 +43,10 @@ workspaces stay at `data/music-video/<projectId>/blender`; render metadata and
   After a PortOS restart the same check runs again by itself while those three are unchanged, so the film is ready
   without another click (the first read after a restart can take a few seconds). Change the Blender, the mode or the
   engine, or replace the Blender app, and the next check is yours to run.
-- **ffmpeg**, to turn frames into video.
+- **ffmpeg**, to turn frames into video. A still of a code shot does not need it.
 - The song analyzed (the shot list is checked against its length).
+
+A film whose scripts do not import `bpy`, `bmesh` or `mathutils` syncs with system Python and renders in the browser sandbox. It does not need Blender or Trusted local mode. A film that imports any of those — the starter does — stays on the Blender driver, and every Blender shot still needs the tool. A code layer on a Blender shot needs both.
 
 **A film is your own code running with your account's access to this machine.** It can read and write files, use
 the network and start programs. Only run source you trust. The routes that write the source, run it, assemble
@@ -61,6 +63,7 @@ data/music-video/<projectId>/blender/
   song.json       the song, rewritten before every job
   renders/        everything PortOS renders (safe to delete; re-rendered on demand)
     <shotId>/preview/frames/frame_000123.jpg, shot.mp4, poster.jpg, render.json
+    <shotId>/preview/layers/<n>/frame_000123.png   a code layer, PNG with alpha
     <shotId>/final/frames/frame_000123.png, shot.mp4, poster.jpg, render.json
     <shotId>/stills/t000012345.png, stills.json
     <shotId>/shot.blend          when "Save .blend" is on
@@ -71,7 +74,7 @@ data/music-video/<projectId>/blender/
 Frame files are named by their frame number on the song, stills by their song time in milliseconds.
 
 Edit `src/` with any editor, with a coding agent, or in the panel's Files tab. The API reads and writes text files
-(`.py .json .txt .md`, up to 2 MiB); images, HDRIs, fonts, audio, models and `.blend` files are placed in the folder
+(`.py .js .mjs .json .txt .md`, up to 2 MiB); images, HDRIs, fonts, audio, models and `.blend` files are placed in the folder
 and only listed. A file sits at most five folders below `src/`, and symbolic links are not followed.
 A workspace with more than 5,000 supported source files is refused explicitly; it is never partially hashed or copied.
 
@@ -80,7 +83,7 @@ the song's beats and loudness, in three shots. Use it as a template.
 
 ## The film contract
 
-`src/film.py` defines three functions. PortOS calls them inside Blender.
+`src/film.py` defines `describe`, and a Blender film also defines `build_shot` and `frame`. PortOS calls a Blender film inside Blender. A film that does not import Blender only needs `describe`, which runs in system Python.
 
 ```python
 def describe(ctx) -> dict:
@@ -125,11 +128,37 @@ Shot rules:
   until the shot re-renders or leaves the film.
 - `deps` lists the files and folders under `src/` the shot is built from. Without it, the shot depends on all of `src/`.
 
+### Code shots and code layers
+
+A shot can draw itself, or a layer of itself, in code instead of Blender. Omit `renderer` (or set `"blender"`) for today's shot. A code shot sets `"renderer": "code"` and `"entry"`. A Blender shot can carry up to eight `layers`. `"entry"` and `"space"` belong only on a code shot.
+
+```python
+{"id": "s010", "start": 0.0, "end": 4.5}                                          # Blender, the default
+{"id": "s020", "start": 4.5, "end": 9.0, "renderer": "code", "entry": "code/s020.js"}
+{"id": "s030", "start": 9.0, "end": 14.0,
+ "layers": [{"entry": "code/s030_fx.js", "place": "over", "blend": "screen"}]}   # a code layer on a Blender shot
+```
+
+`entry` is a `.js` or `.mjs` file under `src/`. It is an ES module exporting `render(ctx, env)`. `env.t` is absolute song time, `env.localT` is time since the shot began (negative inside an in-handle), `env.frame` is the song frame, `env.song` is `song.json`, and `env.width` and `env.height` are the frame size. Every frame is a pure function of song time, so a render can stop and resume on any frame.
+
+`ctx` is a Canvas 2D context. Set `"space": "three"` on the shot and `ctx` is `{ THREE, scene, camera, renderer }`: a fresh scene and camera each frame, one WebGL renderer for the shot. Canvas is the default and is omitted when stored. A layer is always canvas; it has no `space`. `place` is `over` (the default) or `under`. `blend` is `normal` (the default), `screen`, `add` or `multiply`.
+
+```javascript
+export function render(ctx, env) {
+  ctx.fillStyle = '#112233';
+  ctx.fillRect(0, 0, env.width, env.height);
+}
+```
+
+PortOS renders the module in the composition browser sandbox: no host access and no network. Bare `three` is supplied by PortOS and is not part of the shot hash. The module and the relative files it statically imports are. Editing one of those files marks only the shots that reach it stale. Preview frames are JPEG flattened on black; final frames and layers are PNG (layers keep alpha), under `renders/<shot>/<quality>/frames/` and `renders/<shot>/<quality>/layers/<n>/`. Layers are composited when the shot video is encoded, and onto stills. A Blender plate is opaque, so an `under` layer does not show through it; use `over`, or a code shot whose final frame has alpha.
+
+A film of only code shots never starts Blender. `describe(ctx)` still lives in `src/film.py`, and it does not have to define `build_shot`.
+
 `ctx` carries: `song` (the contents of `song.json`), `options` (the film's options, below), `fps`, `width` and `height` (already scaled), `scale`, `samples`,
 `quality` (`still`, `preview`, `final` or `describe`), `engine` (Blender's own engine id), `workspace`, `src`,
 `out_dir`, `shot`, `log(message)`, `seconds_to_frame(t)` and `frame_to_seconds(f)`.
 
-For each shot PortOS starts from an empty scene, sets the engine, size, frame rate and samples, calls
+For each Blender shot PortOS starts from an empty scene, sets the engine, size, frame rate and samples, calls
 `build_shot`, then for each frame sets the frame, calls `frame` and renders. The film is free to set the look,
 color management and compositor in `build_shot`. Every frame should depend only on song time, so a render can stop
 and resume anywhere.

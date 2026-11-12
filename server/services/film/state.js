@@ -45,6 +45,9 @@ function manifestState(manifest, { settings, sceneMap }, timeline, sources) {
     options: manifest.options,
     shots: manifest.shots.map((shot) => ({
       id: shot.id, label: shot.label, start: shot.start, end: shot.end,
+      ...(shot.renderer === 'code' ? { renderer: 'code', entry: shot.entry } : {}),
+      ...(shot.space ? { space: shot.space } : {}),
+      ...(shot.layers?.length ? { layers: shot.layers } : {}),
       ...(shot.handles ? { handles: shot.handles } : {}),
       set: shot.set || '', summary: shot.summary || '', action: shot.action || '', staging: shot.staging || '',
       camera: shot.camera || '', transition: shot.transition || '',

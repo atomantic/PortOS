@@ -24,6 +24,10 @@ export function blenderVideoEncodeArgs({ fps, quality }) {
   return ['-r', String(fps), '-g', String(fps), ...codec, ...BT709_CONTAINER_ARGS, '-an'];
 }
 
+const RANGE = 'scale=in_range=pc:out_range=tv:out_color_matrix=bt709';
+// ffmpeg's blend name for a film layer. `normal` is an overlay so the layer's alpha shows.
+const LAYER_BLEND = Object.freeze({ normal: null, screen: 'screen', add: 'addition', multiply: 'multiply' });
+
 /**
  * ffmpeg arguments that encode frames `[startFrame, startFrame + frameCount)`
  * of `pattern` (a `frame_%06d.jpg|png` path). Frames are full-range RGB (PNG)
@@ -34,7 +38,62 @@ function blenderShotEncodeArgs({ pattern, startFrame, frameCount, fps, quality, 
     '-hide_banner', '-loglevel', 'error',
     '-framerate', String(fps), '-start_number', String(startFrame), '-i', pattern,
     '-frames:v', String(frameCount),
-    '-vf', ['scale=in_range=pc:out_range=tv:out_color_matrix=bt709', tagFilter].filter(Boolean).join(','),
+    '-vf', [RANGE, tagFilter].filter(Boolean).join(','),
+    ...blenderVideoEncodeArgs({ fps, quality }),
+    '-movflags', '+faststart', '-y', output,
+  ];
+}
+
+const stackPair = (bottom, top, blend, out) => (
+  blend
+    ? `[${bottom}][${top}]blend=all_mode=${blend}:shortest=1[${out}]`
+    : `[${bottom}][${top}]overlay=format=auto:shortest=1[${out}]`
+);
+
+/**
+ * filter_complex that paints `layers` ({ place, blend }, in declaration order,
+ * inputs 1..n) onto the plate (input 0). Unders are the bottom plate, then the
+ * shot, then overs. A Blender plate is opaque, so an `under` layer stays hidden
+ * until the plate itself has alpha. Pure.
+ */
+function blenderLayerFilter(layers, tagFilter = null) {
+  const parts = ['[0:v]format=rgba[in0]'];
+  layers.forEach((_, index) => parts.push(`[${index + 1}:v]format=rgba[in${index + 1}]`));
+  const unders = [];
+  const overs = [];
+  layers.forEach((layer, index) => (layer.place === 'under' ? unders : overs).push({ blend: LAYER_BLEND[layer.blend] ?? null, input: index + 1 }));
+  let current = 'in0';
+  let serial = 0;
+  if (unders.length) {
+    current = `in${unders[0].input}`;
+    for (const layer of unders.slice(1)) {
+      const out = `u${serial}`;
+      serial += 1;
+      parts.push(stackPair(current, `in${layer.input}`, layer.blend, out));
+      current = out;
+    }
+    const plate = `plate${serial}`;
+    serial += 1;
+    parts.push(stackPair(current, 'in0', null, plate));
+    current = plate;
+  }
+  for (const layer of overs) {
+    const out = `o${serial}`;
+    serial += 1;
+    parts.push(stackPair(current, `in${layer.input}`, layer.blend, out));
+    current = out;
+  }
+  parts.push(`[${current}]${[RANGE, tagFilter].filter(Boolean).join(',')}[out]`);
+  return parts.join(';');
+}
+
+function blenderLayeredEncodeArgs({ pattern, layers, startFrame, frameCount, fps, quality, tagFilter = null, output }) {
+  const inputs = ['-framerate', String(fps), '-start_number', String(startFrame), '-i', pattern];
+  for (const layer of layers) inputs.push('-framerate', String(fps), '-start_number', String(startFrame), '-i', layer.pattern);
+  return [
+    '-hide_banner', '-loglevel', 'error', ...inputs,
+    '-filter_complex', blenderLayerFilter(layers, tagFilter),
+    '-map', '[out]', '-frames:v', String(frameCount),
     ...blenderVideoEncodeArgs({ fps, quality }),
     '-movflags', '+faststart', '-y', output,
   ];
@@ -61,10 +120,13 @@ export async function encodeBlenderPoster({ frame, output, signal }) {
 }
 
 /** Encode a shot's frames into `output`, replacing it only once the encode succeeded. */
-export async function encodeBlenderShot({ pattern, startFrame, frameCount, fps, quality, output, signal }) {
+export async function encodeBlenderShot({ pattern, startFrame, frameCount, fps, quality, output, signal, layers = null }) {
   const ffmpeg = await requireFfmpeg();
   const partial = `${output}.part.mp4`;
-  const args = blenderShotEncodeArgs({ pattern, startFrame, frameCount, fps, quality, tagFilter: await bt709TagFilter(), output: partial });
+  const tagFilter = await bt709TagFilter();
+  const args = layers?.length
+    ? blenderLayeredEncodeArgs({ pattern, layers, startFrame, frameCount, fps, quality, tagFilter, output: partial })
+    : blenderShotEncodeArgs({ pattern, startFrame, frameCount, fps, quality, tagFilter, output: partial });
   const encoded = await runBlenderFfmpeg(ffmpeg, args, { signal, what: 'Encoding the shot video' }).then(() => true, async (error) => {
     await rm(partial, { force: true });
     throw error;

@@ -15,6 +15,7 @@ import { blenderRefusal } from './workspace.js';
 import { readBlenderManifest } from './manifest.js';
 import { readBlenderRenders } from './renderIndex.js';
 import { requireBlenderFilmTool } from './driver.js';
+import { describeNeedsBlender } from './describeRun.js';
 import { requireFfmpeg } from './encode.js';
 import { activeBlenderJobs, blenderJobEntry, createBlenderJob, hasBlenderSync, isBlenderJobActive, updateBlenderJob } from './jobs.js';
 import { announceBlenderState } from './record.js';
@@ -93,15 +94,19 @@ export function enqueueBlenderRenders(owner, options) {
 async function enqueue(owner, { shotIds = null, quality, times = null, force = false, onlyStale = false }) {
   assertNotSyncing(owner);
 
-  await requireBlenderFilmTool();
-  if (quality !== 'still') await requireFfmpeg();
   const { settings } = normalizeBlenderRecord(await owner.readRecord());
   const manifest = await readBlenderManifest(owner);
-  if (!manifest?.shots.length) throw blenderRefusal('Sync shots from scripts before rendering', 'MUSIC_VIDEO_BLENDER_NOT_SYNCED', 409);
+  // Before the first sync the film's Python decides: a Blender film still refuses contained mode here,
+  // and a code film has nothing to render yet.
+  if (!manifest?.shots.length) {
+    if (await describeNeedsBlender(owner)) await requireBlenderFilmTool();
+    throw blenderRefusal('Sync shots from scripts before rendering', 'MUSIC_VIDEO_BLENDER_NOT_SYNCED', 409);
+  }
   // The shots sit on the frame grid they were synced at; at another rate their edges would overlap or gap.
   if (manifest.fps !== settings.fps) {
     throw blenderRefusal(`The frame rate changed from ${manifest.fps} to ${settings.fps} since the last sync. Sync shots from scripts again before rendering.`, 'MUSIC_VIDEO_BLENDER_NOT_SYNCED', 409);
   }
+  if (quality !== 'still') await requireFfmpeg();
   const known = new Map(manifest.shots.map((shot) => [shot.id, shot]));
   const missing = (shotIds || []).filter((id) => !known.has(id));
   if (missing.length) throw unknownShots(missing);
@@ -125,6 +130,8 @@ async function enqueue(owner, { shotIds = null, quality, times = null, force = f
     }
     selected.push(shot);
   }
+  // Only a Blender plate needs the tool. A batch of code shots renders with the browser and ffmpeg.
+  if (selected.some((shot) => shot.renderer !== 'code')) await requireBlenderFilmTool();
   // Persist before exposing jobs or allowing the pump to start them.
   if (!still) {
     const entries = await readPendingBlenderRenders(owner);
