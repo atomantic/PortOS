@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 
 vi.mock('../../services/apiMusicVideo.js', () => ({ getMusicVideoShotRenders: vi.fn(), updateMusicVideoProject: vi.fn() }));
@@ -70,6 +70,20 @@ describe('Blender film render style', () => {
     // The approvals gate still applies.
     view.rerender(<RenderFinalButton project={{ ...project, blenderShots: { total: 80, finalReady: 80, ready: true } }} renderJob={renderJob} readiness={{ readyForProduction: false }} />);
     expect(screen.getByRole('button', { name: 'Render final' })).toBeDisabled();
+  });
+
+  it('holds render-failure repairs during the project save lock', async () => {
+    const current = board(blenderFilmProject());
+    current.onPatchShots = vi.fn(async () => {});
+    current.renderJob.failure = { projectId: 'mv-test', message: 'The clip is too short.', code: 'INSUFFICIENT_CLIP_COVERAGE', context: { shortfalls: [{ sceneId: 'scene-s010' }] } };
+    const { rerender } = render(<CompositionPanel board={{ ...current, locked: true }} />);
+    expect(screen.getByRole('button', { name: 'Hold the last frame on it' })).toBeDisabled();
+    rerender(<CompositionPanel board={current} />);
+    const repair = screen.getByRole('button', { name: 'Hold the last frame on it' });
+    expect(repair).toBeEnabled();
+    fireEvent.click(repair);
+    expect(current.onPatchShots).toHaveBeenCalledWith(['scene-s010'], { holdLastFrame: true }, 'Holding the last frame on 1 shot');
+    await act(async () => {});
   });
 
   it('does not offer footage generation for mirrored Blender shots', () => {
