@@ -37,6 +37,12 @@ const parseClock = (text) => {
 };
 const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n));
 
+function searchResultContainsSong(value, songId) {
+  if (!value || typeof value !== 'object') return false;
+  if (!Array.isArray(value) && typeof value.id === 'string' && value.id.toLowerCase() === songId.toLowerCase()) return true;
+  return Object.values(value).some(entry => searchResultContainsSong(entry, songId));
+}
+
 async function selectSong(page, payload) {
   // A restored draft shows Replace Song and keeps a hidden Select Song; only a visible one can be clicked.
   await page.locator('button:visible').filter({ hasText: /Replace Song|Select Song/ }).first().click({ timeout: T });
@@ -55,6 +61,7 @@ async function selectSong(page, payload) {
   const successfulSearchRequests = new Set();
   let searchFailure = null;
   let sawLoading = false;
+  let responseContainsSong = false;
   const normalizedTitle = String(payload.title || '').trim().replace(/\s+/g, ' ').toLowerCase();
   const encodedTitle = encodeURIComponent(String(payload.title || '').trim()).toLowerCase();
   const onRequest = (request) => {
@@ -67,7 +74,12 @@ async function selectSong(page, payload) {
   const onResponse = (response) => {
     const request = response.request();
     if (!searchRequests.has(request)) return;
-    if (response.ok()) successfulSearchRequests.add(request);
+    if (response.ok()) {
+      successfulSearchRequests.add(request);
+      if (payload.songId) void response.json().then(result => {
+        if (searchResultContainsSong(result, payload.songId)) responseContainsSong = true;
+      }).catch(() => {});
+    }
     else searchFailure = `Suno search failed (HTTP ${response.status()})`;
   };
   const onRequestFailed = (request) => {
@@ -92,9 +104,11 @@ async function selectSong(page, payload) {
       if (searchFailure) throw new Error(searchFailure);
       if (loading && searchRequests.size) sawLoading = true;
       const searchSucceeded = searchRequests.size > 0 && successfulSearchRequests.size === searchRequests.size;
-      // A successful response can precede its results replacing the old matching rows.
-      const resultsApplied = snapshot !== beforeSearch || sawLoading;
-      stablePolls = searchValue === payload.title && searchSucceeded && resultsApplied && activeRequests.size === 0 && loading === 0 && snapshot === previous ? stablePolls + 1 : 0;
+      // Identical results need no DOM change: the response and the selected row
+      // must both identify this exact song. Title/length alone cannot prove that.
+      const confirmedSongRow = responseContainsSong && rows.some(row => row.html.toLowerCase().includes(payload.songId.toLowerCase()));
+      const resultsVerified = snapshot !== beforeSearch || sawLoading || confirmedSongRow;
+      stablePolls = searchValue === payload.title && searchSucceeded && resultsVerified && activeRequests.size === 0 && loading === 0 && snapshot === previous ? stablePolls + 1 : 0;
       if (stablePolls >= SONG_RESULTS_STABLE_POLLS) break;
       previous = snapshot;
       await page.waitForTimeout(SONG_RESULTS_POLL_MS);

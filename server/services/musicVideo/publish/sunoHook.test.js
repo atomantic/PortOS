@@ -136,7 +136,7 @@ function hookPage({ windowAt = 158, pxPerSec = 22.2, stuckAt = null, restored = 
           state.songRows = [{ text: 'Other Song 3:07', html: '' }];
         }
         if (state.songPolls === 2) {
-          emitPageEvent('response', { request: () => state.songRowsRequest, ok: () => true, status: () => 200 });
+          emitPageEvent('response', { request: () => state.songRowsRequest, ok: () => true, status: () => 200, json: async () => ({ clips: [{ id: ID }] }) });
           emitPageEvent('requestfinished', state.songRowsRequest);
           state.songRows = [{ text: 'Night Drive 3:42', html: '' }, { text: 'Night Drive 3:07', html: '' }];
         }
@@ -147,7 +147,7 @@ function hookPage({ windowAt = 158, pxPerSec = 22.2, stuckAt = null, restored = 
           emitPageEvent('request', request);
           if (failedSearch) emitPageEvent('requestfailed', request);
           else {
-            emitPageEvent('response', { request: () => request, ok: () => searchStatus === 200, status: () => searchStatus });
+            emitPageEvent('response', { request: () => request, ok: () => searchStatus === 200, status: () => searchStatus, json: async () => ({ clips: [{ id: ID }] }) });
             emitPageEvent('requestfinished', request);
           }
         }
