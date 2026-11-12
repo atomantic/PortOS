@@ -885,16 +885,16 @@ function buildPostPRMergeSteps(startStep, { prCompletion = PR_COMPLETIONS.REVIEW
  * independently.
  */
 function resolveReviewInvocation({ willOpenPR, runsReviewLoop, reviewPolicy }) {
-  const { reviewers, optionalReviewers, reviewerMaxRounds, reviewerModels, reviewerEfforts, reviewStopMode, reviewerApplies } = reviewPolicy;
+  const { reviewers, optionalReviewers, reviewerMaxRounds, reviewerModels, reviewerEfforts, reviewerCatalogs, reviewStopMode, reviewerApplies } = reviewPolicy;
   const reviewUsernames = normalizeReviewUsernames(reviewPolicy.forgeReviewerUsernames);
   const reviewArgs = willOpenPR
-    ? (runsReviewLoop ? buildReviewWithArgs(reviewers, { stopMode: reviewStopMode, reviewerApplies, usernames: reviewUsernames, optionalReviewers, reviewerMaxRounds, reviewerModels, reviewerEfforts }) : '--review-with none')
+    ? (runsReviewLoop ? buildReviewWithArgs(reviewers, { stopMode: reviewStopMode, reviewerApplies, usernames: reviewUsernames, optionalReviewers, reviewerMaxRounds, reviewerModels, reviewerEfforts, reviewerCatalogs }) : '--review-with none')
     : '';
   // Effort pins ride the emitted `--review-with` tokens as `~effort=<level>`, so
   // the prose note is suppressed whenever that suffix is present — it only speaks
   // for an invocation that pins no reviewer list (see buildReviewerEffortNote).
   const effortNote = willOpenPR && runsReviewLoop
-    ? buildReviewerEffortNote(reviewers, reviewerEfforts, { reviewWith: reviewArgs, reviewerModels })
+    ? buildReviewerEffortNote(reviewers, reviewerEfforts, { reviewWith: reviewArgs, reviewerModels, reviewerCatalogs })
     : '';
   return { reviewUsernames, reviewArgs, effortNote };
 }

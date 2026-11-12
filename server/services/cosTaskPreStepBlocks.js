@@ -1235,7 +1235,7 @@ export async function buildImprovementTaskDescription({ promptTemplate, app, pro
     // `/do:pr` step — appending here too would print the same instruction twice
     // and give it two owners to drift apart.
     + (rendersReviewers
-        ? appendReviewerEffortBlock(promptReviewers, promptReviewerEfforts, promptReviewerModels)
+        ? appendReviewerEffortBlock(promptReviewers, promptReviewerEfforts, promptReviewerModels, claimReviewers.reviewerCatalogs)
           + appendReviewerMaxRoundsBlock(promptReviewers, promptReviewerMaxRounds, claimReviewers.usernames)
           + buildLocalReviewerInstructions(promptReviewers, promptReviewerModels, promptReviewerEfforts, {
             claimCommentGate: promptTaskType === 'claim-issue',

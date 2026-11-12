@@ -1739,7 +1739,7 @@ export async function generateSelfImprovementTaskForType(taskType, state, option
     Object.assign(metadata, reviewerConfigMetadata(reviewers));
     description = description
       .replace(/\{reviewers\}/g, () => reviewers.csv)
-      + appendReviewerEffortBlock(reviewers.reviewers, reviewers.reviewerEfforts, reviewers.reviewerModels)
+      + appendReviewerEffortBlock(reviewers.reviewers, reviewers.reviewerEfforts, reviewers.reviewerModels, reviewers.reviewerCatalogs)
       + buildLocalReviewerInstructions(reviewers.reviewers, reviewers.reviewerModels, reviewers.reviewerEfforts);
   }
 

@@ -271,7 +271,7 @@ function resolveReviewRoster(metadata, { reviewerPositions = [] } = {}) {
         // the follow-up agent probing for a flag its reviewer does not document.
         flags.push(`${reviewerModelFlag(r)} ${reviewerModelArg(r, reviewerModelMap[r], reviewerEffortMap[r])}`);
       }
-      const effortArgs = reviewerEffortArgs(r, reviewerEffortMap[r]);
+      const effortArgs = reviewerEffortArgs(r, reviewerEffortMap[r], reviewerModelMap[r], metadata.reviewLoopReviewerCatalogs?.[r]);
       if (effortArgs.length) flags.push(effortArgs.join(' '));
       // Binary, not slug: this renders a literal command line, and the
       // `antigravity` slug names no executable.
@@ -1027,6 +1027,7 @@ export function reviewPolicyToLoopMetadata(reviewPolicy) {
     reviewLoopReviewerMaxRounds: reviewPolicy.reviewerMaxRounds,
     reviewLoopReviewerModels: reviewPolicy.reviewerModels,
     reviewLoopReviewerEfforts: reviewPolicy.reviewerEfforts,
+    reviewLoopReviewerCatalogs: reviewPolicy.reviewerCatalogs,
     reviewLoopStopMode: reviewPolicy.reviewStopMode,
     reviewLoopReviewerApplies: reviewPolicy.reviewerApplies,
   };

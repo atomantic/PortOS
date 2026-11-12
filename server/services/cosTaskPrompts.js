@@ -111,8 +111,8 @@ export const appendClaimOverrideContext = (overrideContext) => appendBlock(build
 export const appendTargetWorkItemBlock = (promptTaskType, ref, excludeLabelsBlock = '') =>
   appendBlock(buildTargetWorkItemBlock(promptTaskType, ref, excludeLabelsBlock));
 
-export const appendReviewerEffortBlock = (reviewers, reviewerEfforts, reviewerModels) =>
-  appendBlock(buildReviewerEffortNote(reviewers, reviewerEfforts, { reviewerModels }));
+export const appendReviewerEffortBlock = (reviewers, reviewerEfforts, reviewerModels, reviewerCatalogs) =>
+  appendBlock(buildReviewerEffortNote(reviewers, reviewerEfforts, { reviewerModels, reviewerCatalogs }));
 
 export const appendReviewerMaxRoundsBlock = (reviewers, reviewerMaxRounds, usernames) =>
   appendBlock(buildReviewerMaxRoundsNote(reviewers, reviewerMaxRounds, usernames));

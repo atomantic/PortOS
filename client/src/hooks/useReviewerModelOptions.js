@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import * as api from '../services/api';
-import { filterSelectableModels, selectableModelsForProvider, antigravityModelEffortLevels, effortLevelsForProvider } from '../utils/providers';
+import { filterSelectableModels, selectableModelsForProvider } from '../utils/providers';
 // THE reviewer -> provider-record table, shared with the retired-pin audit
 // (#7339). Taken from the server leaf rather than mirrored: the picker offering
 // a tier the audit calls retired — or the audit flagging a pin the picker just
 // handed the user — is exactly the drift a second copy would reintroduce.
 import { REVIEWER_PROVIDER_MATCHERS, providersForReviewer } from '../../../server/lib/reviewerProviderMatchers.js';
 import { MODEL_SELECTABLE_REVIEWERS } from '../components/cos/constants';
-import { reviewerEffortLevels, normalizeReviewerSlug, LOCAL_LLM_REVIEWERS } from '../lib/reviewerPins';
+import { reviewerEffortLevels, LOCAL_LLM_REVIEWERS } from '../lib/reviewerPins';
 import { LOCAL_LLM_BACKENDS } from '../lib/localLlmBackends';
 
 // Local backends whose installed-model list `/api/local-llm/status` actually
@@ -214,12 +214,7 @@ export default function useReviewerModelOptions() {
     // `effortLevelsForProvider` uses. `[]` is a real answer: that model has no
     // effort tiers at all. For `codex`, the model gates `minimal` on gpt-6 family
     // models that reject it (model-gating is already handled by reviewerEffortLevels).
-    const modelEffortLevels = (reviewer, model = null) => {
-      const slug = normalizeReviewerSlug(reviewer);
-      const ladder = reviewerEffortLevels(reviewer, model);
-      if (!ladder || slug !== 'antigravity') return ladder;
-      return antigravityModelEffortLevels(model, antigravityCatalog) ?? effortLevelsForProvider({ harnessId: 'antigravity' });
-    };
+    const modelEffortLevels = (reviewer, model = null) => reviewerEffortLevels(reviewer, model, antigravityCatalog);
 
     return {
       providers: providers || [],
