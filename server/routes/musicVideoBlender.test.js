@@ -7,14 +7,18 @@
  */
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { request } from '../lib/testHelper.js';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { promisify } from 'node:util';
+import { execFile } from '../lib/childProcess.js';
+import { PY_SUBPROCESS_TIMEOUT_MS, PY_TEST_TIMEOUT_MS, request, resolveTestPython } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/mockPathsDataRoot.js';
 import { createFakeBlender, exampleManifest } from '../services/musicVideo/blender/__blenderFixture.js';
 
 const ROOT = () => lazyTempDataRoot('mv-blender-route-test-');
+const python = resolveTestPython();
+const execFileAsync = promisify(execFile);
 const blender = vi.hoisted(() => ({ fake: null, ffmpeg: [], posterHold: null }));
 
 vi.mock('../lib/paths.js', async (importOriginal) => makePathsProxy(await importOriginal(), { dataRoot: ROOT }));
@@ -52,6 +56,7 @@ const projects = await import('../services/musicVideo/projects.js');
 const { musicVideoEvents } = await import('../services/musicVideo/events.js');
 const { __resetBlenderJobsForTests } = await import('../services/musicVideo/blender/jobs.js');
 const { resolveBlenderMedia } = await import('../services/musicVideo/blender/workspace.js');
+const { blenderSongHash } = await import('../services/musicVideo/blender/hashing.js');
 const { prepareBlenderFinal } = await import('../services/musicVideo/blender/finalRender.js');
 const { launchDetached } = await import('../lib/launchDetached.js');
 const { applyFilmLookFinish } = await import('../services/musicVideo/filmLookFinish.js');
@@ -646,6 +651,86 @@ describe('Blender film shot renders', () => {
     expect(blender.fake.control.jobs[0].resume).toBe(false);
     expect((await state()).renders.s010.final.stale).toBe(false);
   });
+
+  it.skipIf(!python)('renders concurrent shots from their own staged song even when the shared song changes before a driver starts', async () => {
+    await scaffold();
+    await writeSource('film.py', `import json, os
+
+def describe(ctx):
+    return {"shots": []}
+
+def build_shot(ctx, shot):
+    with open(os.path.join(ctx.out_dir, shot["id"], "consumed-song.json"), "w", encoding="utf-8") as handle:
+        json.dump(ctx.song, handle)
+`);
+    await syncFilm();
+    // Run the real staged Python driver, doubling only bpy's scene/render API.
+    // Holding shot 1 before driver startup lets shot 2 overwrite the author-facing song.json first.
+    const bootstrap = `import runpy, sys
+from types import SimpleNamespace
+scene = SimpleNamespace(render=SimpleNamespace(image_settings=SimpleNamespace()),
+                        eevee=SimpleNamespace(), frame_set=lambda frame: None)
+def render(**kwargs):
+    with open(scene.render.filepath, "wb") as handle:
+        handle.write(b"frame")
+sys.modules["bpy"] = SimpleNamespace(
+    app=SimpleNamespace(version=(5, 0, 0)), context=SimpleNamespace(scene=scene),
+    ops=SimpleNamespace(wm=SimpleNamespace(read_factory_settings=lambda **kwargs: None),
+                        render=SimpleNamespace(render=render)),
+)
+driver, job_path = sys.argv[1:]
+sys.argv = [driver, "--", job_path]
+runpy.run_path(driver, run_name="__main__")
+`;
+    let release;
+    const hold = new Promise((resolve) => { release = resolve; });
+    let staged;
+    const firstStaged = new Promise((resolve) => { staged = resolve; });
+    const resolveTool = blender.fake.resolveBlenderTool;
+    blender.fake.resolveBlenderTool = async () => ({ ...await resolveTool(), worker: async ({ files, entrypoint, onStdoutLine }) => {
+      const job = JSON.parse(String(files.find((file) => file.path === 'job.json').content));
+      const directory = mkdtempSync(join(ROOT(), 'blender-song-job-'));
+      try {
+        for (const file of files) {
+          const target = join(directory, file.path);
+          mkdirSync(dirname(target), { recursive: true });
+          writeFileSync(target, file.content);
+        }
+        if (job.shots[0].id === 's010') { staged(); await hold; }
+        const { stdout } = await execFileAsync(python, ['-c', bootstrap, join(directory, entrypoint), join(directory, 'job.json')], { timeout: PY_SUBPROCESS_TIMEOUT_MS });
+        for (const line of stdout.trim().split('\n')) onStdoutLine(line);
+        return { status: 'completed', exitCode: 0, signal: null, reason: null };
+      } finally { rmSync(directory, { recursive: true, force: true }); }
+    } });
+    events.length = 0;
+    let jobs = 1;
+    try {
+      const first = await request(app).post(api('/render')).send({ quality: 'preview', shotIds: ['s010'] });
+      expect(first.status).toBe(202);
+      await firstStaged;
+      await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current, name: 'Changed during render',
+        audioAnalysis: { ...current.audioAnalysis, beats: [0.25, 0.75] },
+      } }));
+      const second = await request(app).post(api('/render')).send({ quality: 'preview', shotIds: ['s020'] });
+      expect(second.status).toBe(202);
+      jobs = 2;
+      await vi.waitFor(() => expect(events.some((event) => event.job?.id === second.body.jobs[0].id && event.job.status === 'done')).toBe(true), WAIT);
+      expect(JSON.parse(readFileSync(join(workspace(), 'song.json'), 'utf8')).title).toBe('Changed during render');
+    } finally {
+      release();
+      await settled(jobs);
+    }
+    const consumed = (shotId) => JSON.parse(readFileSync(join(workspace(), 'renders', shotId, 'consumed-song.json'), 'utf8'));
+    expect(consumed('s010')).toMatchObject({ title: 'Example Film', analysis: { beats: [0.5, 1, 1.5] } });
+    expect(consumed('s020')).toMatchObject({ title: 'Changed during render', analysis: { beats: [0.25, 0.75] } });
+    for (const shotId of ['s010', 's020']) {
+      const meta = JSON.parse(readFileSync(join(workspace(), 'renders', shotId, 'preview/render.json'), 'utf8'));
+      expect(meta).toMatchObject({ complete: true, songHash: blenderSongHash(consumed(shotId)) });
+    }
+    const renders = (await state()).renders;
+    expect(renders.s010.preview.staleReasons).toEqual(['song']);
+    expect(renders.s020.preview.stale).toBe(false);
+  }, PY_TEST_TIMEOUT_MS);
 
   it('serializes concurrent still requests for a shot through their image and index writes', async () => {
     await scaffold();
