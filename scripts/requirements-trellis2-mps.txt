@@ -2,9 +2,9 @@
 # Sources are listed separately in trellis2-mps-profile.json.
 torch==2.15.0
 torchvision==0.29.2
-transformers==5.10.1
+transformers==5.22.1
 accelerate==1.15.0
-huggingface-hub==1.16.4
+huggingface-hub==2.4.0
 safetensors==0.8.0
 pillow==13.0.0
 numpy==2.2.6
@@ -32,8 +32,13 @@ fsspec==2026.9.0
 idna==3.20
 typing-extensions==4.16.0
 
-# CLI/text helper compatibility pins; Hub 1.16.4 retains Typer <0.26.
+# CLI/text helper compatibility pins for the coordinated Hub 2 runtime.
 click==8.5.0
 markupsafe==3.0.4
 pygments==2.21.0
 regex==2026.9.29
+
+# Coordinated model transport and tokenizer pins.
+tokenizers==0.23.3
+typer==0.27.3
+hf-xet==1.6.0
