@@ -1,7 +1,8 @@
 /**
- * The Blender film render queue: each project's shot jobs run first in, first
- * out, and at most `settings.concurrency` Blender processes render at once
- * across this install. Jobs exist only in memory: nothing starts at boot, and
+ * The Blender film render queue: each project's waiting shot jobs run by
+ * quality (stills, previews, finals), first in, first out within each class,
+ * and at most `settings.concurrency` Blender processes render at once across
+ * this install. Jobs exist only in memory: nothing starts at boot, and
  * a restart drops what was queued (the frames already rendered stay and the
  * next render resumes them). Cancelling kills the Blender process group and
  * drops queued jobs.
@@ -18,9 +19,11 @@ import { activeBlenderJobs, blenderJobEntry, createBlenderJob, isBlenderJobActiv
 import { announceBlenderState } from './record.js';
 import { blenderStillFrames, runBlenderShotRender } from './renderJob.js';
 
-// projectId → queued tasks, oldest first. A task is `{ entry, request, concurrency }`.
+// projectId → queued tasks, by quality then oldest first within that quality.
+// A task is `{ entry, request, concurrency }`.
 const waiting = new Map();
 const running = new Set();
+const QUALITY_PRIORITY = { still: 0, preview: 1, final: 2 };
 
 function settle(task, error) {
   const { entry, request } = task;
@@ -95,7 +98,10 @@ export async function enqueueBlenderRenders(projectId, { shotIds = null, quality
     }
     const entry = createBlenderJob(projectId, { kind: 'render', shotId: shot.id, quality });
     const tasks = waiting.get(projectId) || [];
-    tasks.push({ entry, concurrency: settings.concurrency, request: { projectId, shotId: shot.id, quality, force, times } });
+    const task = { entry, concurrency: settings.concurrency, request: { projectId, shotId: shot.id, quality, force, times } };
+    const priority = QUALITY_PRIORITY[quality];
+    const insertAt = tasks.findIndex((queued) => QUALITY_PRIORITY[queued.request.quality] > priority);
+    tasks.splice(insertAt === -1 ? tasks.length : insertAt, 0, task);
     waiting.set(projectId, tasks);
     jobs.push({ ...entry.job });
   }
