@@ -15,7 +15,7 @@ vi.mock('../mediaPromptFromMedia.js', () => ({ promptFromMedia }));
 vi.mock('../moodBoardCompositeStyle.js', () => ({ composeBoardPrompt }));
 vi.mock('../socket.js', () => ({ getIo: () => ({ emit }) }));
 
-import { startAnalyzeJob, getAnalyzeJob } from './analyzeJob.js';
+import { startAnalyzeJob, getAnalyzeJob, analyzeBoardForCombine } from './analyzeJob.js';
 
 const waitTerminal = async (id) => {
   for (let i = 0; i < 100; i += 1) {
@@ -44,13 +44,14 @@ describe('board analyze job', () => {
     // A second start while running joins the live job instead of double-running.
     expect(startAnalyzeJob('mb-run', { providerId: 'p1' }).startedAt).toBe(started.startedAt);
 
-    const job = await waitTerminal('mb-run');
+    expect(await analyzeBoardForCombine('mb-run', { providerId: 'p1', model: 'm' })).toEqual({ id: 'mb-run', items });
+    const job = getAnalyzeJob('mb-run');
     expect(job).toMatchObject({ status: 'done', total: 1, done: 1, failures: 0 });
     expect(promptFromMedia).toHaveBeenCalledTimes(1);
     expect(promptFromMedia).toHaveBeenCalledWith(expect.objectContaining({ filename: 'a.png', providerId: 'p1' }));
     expect(updateBoardItem).toHaveBeenCalledWith('mb-run', 'a', { analysis: expect.objectContaining({ prompt: 'ink' }) });
     expect(updateBoard).toHaveBeenCalledWith('mb-run', { style: { prompt: 'composed' } });
-    expect(emit).toHaveBeenCalledWith('mood-board:analyze', expect.objectContaining({ boardId: 'mb-run' }));
+    await vi.waitFor(() => expect(emit).toHaveBeenCalledWith('mood-board:analyze', expect.objectContaining({ boardId: 'mb-run' })));
   });
 
   it('fails without composing when no pin could be analyzed', async () => {

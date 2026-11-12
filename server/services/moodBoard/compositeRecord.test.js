@@ -11,37 +11,17 @@ const sources = () => [
   ] },
 ];
 
-describe('composite board snapshot', () => {
-  it('preserves both styles, media references and analyses without sharing identities or active jobs', () => {
-    const boards = sources();
-    const before = structuredClone(boards);
-    const composite = buildCompositeBoardRecord({ name: 'Ink + Neon' }, boards, { id: 'new' });
-    expect(composite.name).toBe('Ink + Neon');
-    expect(composite.style.prompt).toBe('Ink:\nInk washes\n\nNeon:\nNeon light');
-    expect(composite.style.negativePrompt).toBe('plastic\n\ndaylight');
-    expect(composite.items.map(item => item.type)).toEqual(['image', 'text', 'video']);
-    expect(new Set(composite.items.map(item => item.id)).size).toBe(3);
-    expect(composite.items[0]).toMatchObject({ mediaKey: 'image:ink.png', analysis: { prompt: 'Brush strokes' } });
-    expect(composite.items[1].render).toBeUndefined();
-    expect(composite.posterImageRef).toBeUndefined();
-    expect(composite.pinterest).toBeUndefined();
-    composite.items[0].analysis.prompt = 'Changed';
-    expect(boards).toEqual(before);
-  });
-
-  it('combines boards without saved styles for later analysis', () => {
-    const boards = sources().map(({ style: _style, ...board }) => board);
-    const composite = buildCompositeBoardRecord({ name: 'Unanalyzed' }, boards, { id: 'new' });
-    expect(composite.items).toHaveLength(3);
-    expect(composite.style).toBeUndefined();
-  });
-
-  it('refuses oversized pins or prompts instead of silently dropping source material', () => {
+describe('composite board record', () => {
+  it('starts empty with only the synthesized style, independently of source pins and jobs', () => {
     const boards = sources();
     boards[0].items = Array.from({ length: 500 }, () => boards[0].items[0]);
-    expect(() => buildCompositeBoardRecord({ name: 'Too many' }, boards, { id: 'new' })).toThrow('500 pins');
-    const styled = sources();
-    styled[0].style.prompt = 'a'.repeat(8000);
-    expect(() => buildCompositeBoardRecord({ name: 'Too long' }, styled, { id: 'new' })).toThrow('8,000 characters');
+    const before = structuredClone(boards);
+    const composite = buildCompositeBoardRecord({ name: 'Ink + Neon', style: { prompt: 'Luminous ink washes' } }, boards, { id: 'new' });
+    expect(composite.name).toBe('Ink + Neon');
+    expect(composite.style.prompt).toBe('Luminous ink washes');
+    expect(composite.items).toEqual([]);
+    expect(composite.posterImageRef).toBeUndefined();
+    expect(composite.pinterest).toBeUndefined();
+    expect(boards).toEqual(before);
   });
 });

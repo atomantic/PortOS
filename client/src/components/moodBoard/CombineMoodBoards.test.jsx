@@ -4,6 +4,13 @@ import userEvent from '@testing-library/user-event';
 import CombineMoodBoards from './CombineMoodBoards';
 import { combineMoodBoards } from '../../services/apiMoodBoard';
 
+vi.mock('../../hooks/useVisionModelIds', () => ({ default: () => ({ idsByProvider: {} }) }));
+vi.mock('../../hooks/useProviderModels', () => ({ default: () => ({
+  providers: [{ id: 'writer' }], selectedProviderId: 'writer', selectedModel: 'vision', availableModels: [], loading: false,
+  setSelectedProviderId: vi.fn(), setSelectedModel: vi.fn(),
+}) }));
+vi.mock('../ProviderModelSelector', () => ({ default: () => <div>Model picker</div> }));
+
 vi.mock('../../services/apiMoodBoard', () => ({ combineMoodBoards: vi.fn() }));
 
 describe('combining mood boards', () => {
@@ -19,11 +26,12 @@ describe('combining mood boards', () => {
     await userEvent.selectOptions(screen.getByLabelText('Second board'), 'b');
     await userEvent.clear(screen.getByLabelText('New board name'));
     await userEvent.type(screen.getByLabelText('New board name'), 'Ink neon');
+    expect(screen.getByText(/Missing styles:/)).toHaveTextContent('Ink, Neon');
     await userEvent.click(submit);
     expect(await screen.findByRole('alert')).toHaveTextContent('Source board was deleted');
     expect(onCreated).not.toHaveBeenCalled();
     await userEvent.click(submit);
     await waitFor(() => expect(onCreated).toHaveBeenCalledWith({ id: 'composite' }));
-    expect(combineMoodBoards).toHaveBeenLastCalledWith({ name: 'Ink neon', boardIds: ['a', 'b'] }, { silent: true });
+    expect(combineMoodBoards).toHaveBeenLastCalledWith({ name: 'Ink neon', boardIds: ['a', 'b'], providerId: 'writer', model: 'vision', effort: undefined, analyzeMissing: true }, { silent: true });
   });
 });

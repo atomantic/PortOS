@@ -66,12 +66,12 @@ describe('mood-board routes', () => {
   it('creates a composite from exactly two distinct boards with validated input', async () => {
     svc.combineBoards.mockResolvedValueOnce({ id: 'mb-composite', name: 'New style' });
     const res = await request(makeApp()).post('/api/mood-boards/combine')
-      .send({ name: 'New style', boardIds: ['mb-a', 'mb-b'] });
+      .send({ name: 'New style', providerId: 'writer', boardIds: ['mb-a', 'mb-b'] });
     expect(res.status).toBe(201);
     expect(res.body.id).toBe('mb-composite');
-    expect(svc.combineBoards).toHaveBeenCalledWith({ name: 'New style', boardIds: ['mb-a', 'mb-b'] });
+    expect(svc.combineBoards).toHaveBeenCalledWith({ name: 'New style', providerId: 'writer', boardIds: ['mb-a', 'mb-b'] });
     for (const boardIds of [['mb-a', 'mb-a'], ['mb-a'], ['mb-a', 'mb-b', 'mb-c'], [42, 'mb-b']]) {
-      const invalid = await request(makeApp()).post('/api/mood-boards/combine').send({ name: 'New style', boardIds });
+      const invalid = await request(makeApp()).post('/api/mood-boards/combine').send({ name: 'New style', providerId: 'writer', boardIds });
       expect(invalid.status).toBe(400);
     }
     expect(svc.combineBoards).toHaveBeenCalledTimes(1);

@@ -101,7 +101,25 @@ export async function combineBoards(input) {
   if (boards.some(board => !board)) {
     throw new ServerError('A source mood board no longer exists', { status: 404, code: 'NOT_FOUND' });
   }
-  const board = await store.createCompositeBoard(input, boards);
+  const missing = boards.filter(source => !source.style?.prompt?.trim());
+  if (missing.length && !input.analyzeMissing) {
+    throw new ServerError('Choose a model to analyze the source boards missing a style before combining.', {
+      status: 400, code: 'SOURCE_STYLE_REQUIRED',
+    });
+  }
+  if (missing.length) {
+    const { analyzeBoardForCombine } = await import('./analyzeJob.js');
+    for (const source of missing) {
+      const analyzed = await analyzeBoardForCombine(source.id, input);
+      if (!analyzed?.style?.prompt?.trim()) {
+        throw new ServerError('A source board still has no style', { status: 400, code: 'SOURCE_STYLE_REQUIRED' });
+      }
+      boards[boards.indexOf(source)] = analyzed;
+    }
+  }
+  const { composeBoardPrompt } = await import('../moodBoardCompositeStyle.js');
+  const style = await composeBoardPrompt({ ...input, sourceBoards: boards });
+  const board = await store.createCompositeBoard({ ...input, style }, boards);
   announceNewBoard(board.id);
   return board;
 }
