@@ -1,8 +1,9 @@
 /**
  * Blender film jobs in memory: a sync, one shot render, or a cut assembly.
  * A job is a disposable process; the frames, videos and logs it leaves in the
- * workspace are the durable result, so nothing here is persisted and a restart
- * forgets every job (a later render resumes from the frames already on disk).
+ * workspace are the durable result. Job identities are not persisted; the
+ * queue separately remembers preview/final batch intent and resumes unfinished
+ * shots after restart from the frames already on disk.
  *
  * Each change goes out on `musicVideoEvents` as `'blender'`
  * `{ projectId, kind: 'job', job }` (bridged to the `music-video:blender`

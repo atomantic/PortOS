@@ -6,7 +6,7 @@
  * the film look's browser pass and the title card's browser capture are doubled.
  */
 import { afterAll, beforeEach, expect, it, vi } from 'vitest';
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 import { createFakeBlender, exampleManifest } from './blender/__blenderFixture.js';
@@ -48,14 +48,14 @@ vi.mock('./compositionRender.js', async (load) => {
 });
 
 const projects = await import('./projects.js');
-const { renderMusicVideo } = await import('./render.js');
+const { renderMusicVideo, recoverStuckMusicVideoRenders } = await import('./render.js');
 const { startExcerptRender } = await import('./excerptRender.js');
 const { applyFilmLookFinish } = await import('./filmLookFinish.js');
 const { removeCompositionScratch, renderTypographyOverlays } = await import('./compositionRender.js');
 const { mutateVideoHistory } = await import('../videoGen/local.js');
 const { musicVideoEvents } = await import('./events.js');
 const { startBlenderSync } = await import('./blender/sync.js');
-const { enqueueBlenderRenders } = await import('./blender/queue.js');
+const { enqueueBlenderRenders, cancelBlenderProjectJobs, resumePendingBlenderRenders } = await import('./blender/queue.js');
 const { saveBlenderSettings } = await import('./blender/record.js');
 const { listBlenderJobs } = await import('./blender/jobs.js');
 const { blenderFilmReadState } = await import('./blender/renderIndex.js');
@@ -294,7 +294,190 @@ it('starts waiting stills, previews, then finals in stable order without interru
     await vi.waitFor(() => expect(ended.filter((job) => job.kind === 'render' && ['done', 'error', 'canceled'].includes(job.status))).toHaveLength(7), WAIT);
     expect(ended.filter((job) => job.kind === 'render' && job.error)).toEqual([]);
   } finally {
+    vi.useRealTimers();
     release();
     blender.fake.control.hold = null;
+  }
+});
+
+
+const pendingPath = () => join(ROOT(), 'music-video', id, 'blender', 'renders', 'pending.json');
+const pending = () => JSON.parse(readFileSync(pendingPath(), 'utf8'));
+
+it('recovers an interrupted final batch from disk, skips finished shots and removes settled intent', async () => {
+  await renderShots('final', ['s010']);
+  expect(existsSync(pendingPath())).toBe(false);
+  // A restart has forgotten jobs but retained both completed output and batch intent.
+  __resetBlenderJobsForTests();
+  writeFileSync(pendingPath(), JSON.stringify([{ quality: 'final', shotIds: ['s010', 's020', 's030'], attempt: 0 }]));
+  blender.fake.control.jobs.length = 0;
+  ended.length = 0;
+  let release;
+  blender.fake.control.hold = new Promise((resolve) => { release = resolve; });
+  try {
+    vi.useFakeTimers({ toFake: ['setTimeout'] });
+    await recoverStuckMusicVideoRenders();
+    expect(pending()[0].attempt).toBe(0);
+    await vi.advanceTimersByTimeAsync(15_000);
+    vi.useRealTimers();
+    await vi.waitFor(() => expect(pending()).toEqual([{ quality: 'final', shotIds: ['s020', 's030'], attempt: 1 }]), WAIT);
+    release();
+    await vi.waitFor(() => expect(ended.filter((job) => job.kind === 'render')).toHaveLength(2), WAIT);
+    expect(blender.fake.control.jobs.map((job) => [job.quality, job.shots[0].id]).sort()).toEqual([['final', 's020'], ['final', 's030']]);
+    expect(existsSync(pendingPath())).toBe(false);
+  } finally {
+    vi.useRealTimers();
+    release();
+    blender.fake.control.hold = null;
+  }
+});
+
+it('merges concurrent requests, persists both qualities but not stills, and cancel prevents restart resurrection', async () => {
+  await saveBlenderSettings(id, { concurrency: 1 });
+  let release;
+  blender.fake.control.hold = new Promise((resolve) => { release = resolve; });
+  try {
+    const [first, second] = await Promise.all([
+      enqueueBlenderRenders(id, { quality: 'final', shotIds: ['s010', 's020'] }),
+      enqueueBlenderRenders(id, { quality: 'final', shotIds: ['s020', 's030'] }),
+    ]);
+    expect(second.jobs[0].id).toBe(first.jobs[1].id);
+    await enqueueBlenderRenders(id, { quality: 'preview', shotIds: ['s020'] });
+    await enqueueBlenderRenders(id, { quality: 'still', shotIds: ['s010'] });
+    expect(pending()).toEqual([
+      { quality: 'final', shotIds: ['s010', 's020', 's030'], attempt: 0 },
+      { quality: 'preview', shotIds: ['s020'], attempt: 0 },
+    ]);
+    expect(await cancelBlenderProjectJobs(id)).toBe(true);
+    expect(existsSync(pendingPath())).toBe(false);
+    release();
+    await vi.waitFor(() => expect(listBlenderJobs(id).filter((job) => !['done', 'error', 'canceled'].includes(job.status))).toHaveLength(0), WAIT);
+    const runs = blender.fake.control.jobs.length;
+    await resumePendingBlenderRenders([id], 2);
+    expect(blender.fake.control.jobs).toHaveLength(runs);
+  } finally {
+    vi.useRealTimers();
+    release();
+    blender.fake.control.hold = null;
+  }
+});
+
+it('removes exhausted or unavailable batches with one diagnostic and allows cancellation during the boot delay', async () => {
+  mkdirSync(join(pendingPath(), '..'), { recursive: true });
+  const marker = (attempt) => writeFileSync(pendingPath(), JSON.stringify([{ quality: 'preview', shotIds: ['s010', 's020'], attempt }]));
+  const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+  try {
+    marker(2);
+    await resumePendingBlenderRenders([id], 2);
+    expect(existsSync(pendingPath())).toBe(false);
+    expect(log.mock.calls.filter(([message]) => message.includes('Blender boot recovery'))).toEqual([[expect.stringContaining('stopped 2 preview shot(s) at the restart limit')]]);
+    log.mockClear();
+    marker(0);
+    blender.fake.control.ready = false;
+    await resumePendingBlenderRenders([id], 2);
+    expect(existsSync(pendingPath())).toBe(false);
+    expect(log.mock.calls.filter(([message]) => message.includes('Blender boot recovery'))).toHaveLength(1);
+    marker(0);
+    expect(await cancelBlenderProjectJobs(id)).toBe(true);
+    await resumePendingBlenderRenders([id], 2);
+    expect(blender.fake.control.jobs).toHaveLength(1); // initial sync only
+  } finally {
+    log.mockRestore();
+  }
+});
+
+
+it('still settles jobs when a full disk prevents clearing pending intent, so retry is not deduplicated to a dead job', async () => {
+  await saveBlenderSettings(id, { concurrency: 1 });
+  let release;
+  blender.fake.control.hold = new Promise((resolve) => { release = resolve; });
+  const fileCore = await import('../../lib/fileCore.js');
+  const write = fileCore.atomicWrite;
+  const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+  let failed = false;
+  let writeSpy;
+  try {
+    const { jobs } = await enqueueBlenderRenders(id, { quality: 'final', shotIds: ['s010', 's020'] });
+    writeSpy = vi.spyOn(fileCore, 'atomicWrite').mockImplementation((path, ...args) => {
+      if (path === pendingPath() && !failed) {
+        failed = true;
+        return Promise.reject(Object.assign(new Error('disk full'), { code: 'ENOSPC' }));
+      }
+      return write(path, ...args);
+    });
+    release();
+    await vi.waitFor(() => expect(jobs.map((job) => listBlenderJobs(id).find((entry) => entry.id === job.id).status)).toEqual(['done', 'done']), WAIT);
+    expect(failed).toBe(true);
+    expect(errorLog).toHaveBeenCalledWith(expect.stringContaining('could not clear pending intent: disk full'));
+    writeSpy.mockRestore();
+    ended.length = 0;
+    const retry = await enqueueBlenderRenders(id, { quality: 'final', shotIds: ['s010'], force: true });
+    expect(retry.jobs[0].id).not.toBe(jobs[0].id);
+    await vi.waitFor(() => expect(ended.filter((job) => job.kind === 'render')).toHaveLength(1), WAIT);
+    expect(existsSync(pendingPath())).toBe(false);
+  } finally {
+    release();
+    blender.fake.control.hold = null;
+    writeSpy?.mockRestore();
+    errorLog.mockRestore();
+  }
+});
+
+
+it('retains unstarted batch intent after a transient project-store failure, then resumes it within the retry bound', async () => {
+  mkdirSync(join(pendingPath(), '..'), { recursive: true });
+  writeFileSync(pendingPath(), JSON.stringify([{ quality: 'preview', shotIds: ['s010'], attempt: 0 }]));
+  const read = vi.spyOn(projects, 'getProject').mockRejectedValueOnce(new Error('database temporarily unavailable'));
+  const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+  try {
+    await resumePendingBlenderRenders([id], 2);
+    expect(pending()).toEqual([{ quality: 'preview', shotIds: ['s010'], attempt: 1 }]);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('retained 1 preview shot(s) after an unexpected failure'));
+    expect(blender.fake.control.jobs).toHaveLength(1); // initial sync only
+    read.mockRestore();
+    ended.length = 0;
+    await resumePendingBlenderRenders([id], 2);
+    await vi.waitFor(() => expect(ended.filter((job) => job.kind === 'render')).toHaveLength(1), WAIT);
+    expect(ended[0].status).toBe('done');
+    expect(existsSync(pendingPath())).toBe(false);
+  } finally {
+    read.mockRestore();
+    log.mockRestore();
+  }
+});
+
+
+it('refuses a sync that wins admission during the pending write without leaving unaccepted render intent', async () => {
+  const fileCore = await import('../../lib/fileCore.js');
+  const write = fileCore.atomicWrite;
+  let releaseWrite;
+  let releaseSync;
+  let entered = false;
+  const heldWrite = new Promise((resolve) => { releaseWrite = resolve; });
+  blender.fake.control.describeHold = new Promise((resolve) => { releaseSync = resolve; });
+  const spy = vi.spyOn(fileCore, 'atomicWrite').mockImplementation(async (path, ...args) => {
+    if (path === pendingPath() && !entered) {
+      entered = true;
+      await heldWrite;
+    }
+    return write(path, ...args);
+  });
+  try {
+    const enqueue = enqueueBlenderRenders(id, { quality: 'final', shotIds: ['s010'] });
+    const refused = expect(enqueue).rejects.toMatchObject({ code: 'MUSIC_VIDEO_BLENDER_SYNC_IN_PROGRESS' });
+    await vi.waitFor(() => expect(entered).toBe(true), WAIT);
+    await startBlenderSync(id);
+    releaseWrite();
+    await refused;
+    expect(existsSync(pendingPath())).toBe(false);
+    expect(listBlenderJobs(id).filter((job) => job.kind === 'render')).toHaveLength(0);
+    await cancelBlenderProjectJobs(id);
+    releaseSync();
+    await vi.waitFor(() => expect(listBlenderJobs(id).filter((job) => !['done', 'error', 'canceled'].includes(job.status))).toHaveLength(0), WAIT);
+  } finally {
+    releaseWrite();
+    releaseSync();
+    blender.fake.control.describeHold = null;
+    spy.mockRestore();
   }
 });

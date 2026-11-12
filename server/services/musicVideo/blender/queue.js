@@ -2,11 +2,12 @@
  * The Blender film render queue: each project's waiting shot jobs run by
  * quality (stills, previews, finals), first in, first out within each class,
  * and at most `settings.concurrency` Blender processes render at once across
- * this install. Jobs exist only in memory: nothing starts at boot, and
- * a restart drops what was queued (the frames already rendered stay and the
- * next render resumes them). Cancelling kills the Blender process group and
- * drops queued jobs.
+ * this install. Preview/final batch intent stays on this machine and resumes
+ * after restart, bounded to two retries; completed frames are reused. Stills
+ * remain memory-only. Cancellation removes intent and kills the process group.
  */
+import { createKeyCachedQueue } from '../../../lib/createKeyCachedQueue.js';
+import { readPendingBlenderRenders, writePendingBlenderRenders, removePendingBlenderShots } from './pending.js';
 import { maintenance } from '../../../lib/maintenanceAdmission.js';
 import { blenderRenderWanted, normalizeBlenderRecord } from '../../../lib/musicVideoBlender.js';
 import { requireProject } from '../requireProject.js';
@@ -21,12 +22,16 @@ import { blenderStillFrames, runBlenderShotRender } from './renderJob.js';
 
 // projectId → queued tasks, by quality then oldest first within that quality.
 // A task is `{ entry, request, concurrency }`.
+const queueProject = createKeyCachedQueue();
 const waiting = new Map();
 const running = new Set();
 const QUALITY_PRIORITY = { still: 0, preview: 1, final: 2 };
 
-function settle(task, error) {
+async function settle(task, error) {
   const { entry, request } = task;
+  await removePendingBlenderShots(request.projectId, request.quality, [request.shotId]).catch((failure) => {
+    console.error(`❌ Blender film job ${entry.job.id} could not clear pending intent: ${failure.message}`);
+  });
   const canceled = error?.canceled === true || (error && entry.abort.signal.aborted);
   if (!error) updateBlenderJob(entry, { status: 'done' });
   else if (canceled) updateBlenderJob(entry, { status: 'canceled' });
@@ -42,7 +47,8 @@ function start(task) {
   // Admission can refuse (a maintenance hold); that fails this job like any other error.
   Promise.resolve()
     .then(() => maintenance.run('composition', 'Blender film shot render', () => runBlenderShotRender(task.entry, task.request), { continuation: true }))
-    .then(() => settle(task, null), (error) => settle(task, error))
+    .then(() => queueProject(task.request.projectId, () => settle(task, null)),
+      (error) => queueProject(task.request.projectId, () => settle(task, error)))
     .finally(() => {
       running.delete(task);
       pump();
@@ -78,7 +84,11 @@ const unknownShots = (ids) => blenderRefusal(`Not in the synced film: ${ids.join
  * `{ jobs, skipped }`: the jobs now covering the request (a shot already
  * queued or rendering keeps its job) and the shot ids left alone.
  */
-export async function enqueueBlenderRenders(projectId, { shotIds = null, quality, times = null, force = false, onlyStale = false }) {
+export function enqueueBlenderRenders(projectId, options) {
+  return queueProject(projectId, () => enqueue(projectId, options));
+}
+
+async function enqueue(projectId, { shotIds = null, quality, times = null, force = false, onlyStale = false }) {
   assertNotSyncing(projectId);
   const project = await requireProject(projectId);
   await requireBlenderFilmTool();
@@ -102,6 +112,7 @@ export async function enqueueBlenderRenders(projectId, { shotIds = null, quality
     .map((entry) => [`${entry.job.shotId}:${entry.job.quality}`, entry]));
   const jobs = [];
   const skipped = [];
+  const selected = [];
   for (const shot of shots) {
     if (still) {
       if (!blenderStillFrames(shot, settings.fps, times).length) { skipped.push(shot.id); continue; }
@@ -110,6 +121,25 @@ export async function enqueueBlenderRenders(projectId, { shotIds = null, quality
       if (existing) { jobs.push({ ...existing.job }); continue; }
       if (!blenderRenderWanted(renders[shot.id]?.[quality], { force, onlyStale })) { skipped.push(shot.id); continue; }
     }
+    selected.push(shot);
+  }
+  // Persist before exposing jobs or allowing the pump to start them.
+  if (!still) {
+    const entries = await readPendingBlenderRenders(projectId);
+    const prior = entries.find((entry) => entry.quality === quality);
+    const pendingIds = [...new Set([...(prior?.shotIds || []), ...selected.map((shot) => shot.id), ...jobs.map((job) => job.shotId)])]
+      .filter((id) => !skipped.includes(id));
+    await writePendingBlenderRenders(projectId, [...entries.filter((entry) => entry.quality !== quality),
+      { quality, shotIds: pendingIds, attempt: prior?.attempt || 0 }]);
+    // Sync admission is independent of our queue and may change during this write.
+    try {
+      assertNotSyncing(projectId);
+    } catch (error) {
+      await writePendingBlenderRenders(projectId, entries);
+      throw error;
+    }
+  }
+  for (const shot of selected) {
     const entry = createBlenderJob(projectId, { kind: 'render', shotId: shot.id, quality });
     const tasks = waiting.get(projectId) || [];
     const task = { entry, concurrency: settings.concurrency, request: { projectId, shotId: shot.id, quality, force, times } };
@@ -124,8 +154,10 @@ export async function enqueueBlenderRenders(projectId, { shotIds = null, quality
   return { jobs, skipped };
 }
 
-function cancelEntry(projectId, entry) {
+async function cancelEntry(projectId, entry) {
   if (!isBlenderJobActive(entry)) return false;
+  if (entry.job.kind === 'render') await removePendingBlenderShots(projectId, entry.job.quality, [entry.job.shotId]);
+  // The global pump may have started this task while the marker write awaited.
   const tasks = waiting.get(projectId) || [];
   const queued = tasks.findIndex((task) => task.entry === entry);
   entry.abort.abort();
@@ -139,11 +171,57 @@ function cancelEntry(projectId, entry) {
 
 /** Cancel one job (queued, rendering, syncing or assembling). False when it is unknown or already finished. */
 export function cancelBlenderJob(projectId, jobId) {
-  const entry = blenderJobEntry(projectId, jobId);
-  return entry ? cancelEntry(projectId, entry) : false;
+  return queueProject(projectId, () => {
+    const entry = blenderJobEntry(projectId, jobId);
+    return entry ? cancelEntry(projectId, entry) : false;
+  });
 }
 
 /** Cancel every active job of a project. */
 export function cancelBlenderProjectJobs(projectId) {
-  return activeBlenderJobs(projectId).map((entry) => cancelEntry(projectId, entry)).some(Boolean);
+  return queueProject(projectId, async () => {
+    const pending = await readPendingBlenderRenders(projectId);
+    await writePendingBlenderRenders(projectId, []);
+    let canceled = pending.length > 0;
+    for (const entry of activeBlenderJobs(projectId)) canceled = await cancelEntry(projectId, entry) || canceled;
+    return canceled;
+  });
+}
+
+
+/** Resume only this machine's previously requested batches, under the same mutation lock as cancel/enqueue. */
+export async function resumePendingBlenderRenders(projectIds, maxAttempts) {
+  for (const projectId of projectIds) {
+    await queueProject(projectId, async () => {
+      const batches = await readPendingBlenderRenders(projectId);
+      for (const batch of batches) {
+        // A director may have already started some of these during the boot delay.
+        const active = new Set(activeBlenderJobs(projectId).filter(({ job }) => job.quality === batch.quality).map(({ job }) => job.shotId));
+        const shotIds = batch.shotIds.filter((id) => !active.has(id));
+        if (!shotIds.length) continue;
+        if (batch.attempt >= maxAttempts) {
+          await removePendingBlenderShots(projectId, batch.quality, shotIds);
+          console.log(`⏭️ Blender boot recovery: ${projectId} stopped ${shotIds.length} ${batch.quality} shot(s) at the restart limit`);
+          continue;
+        }
+        const current = await readPendingBlenderRenders(projectId);
+        await writePendingBlenderRenders(projectId, current.map((entry) => entry.quality === batch.quality
+          ? { ...entry, attempt: entry.attempt + 1 } : entry));
+        try {
+          const { jobs } = await enqueue(projectId, { shotIds, quality: batch.quality });
+          console.log(`🎬 Blender boot recovery: ${projectId} resumed ${jobs.length} ${batch.quality} shot(s)`);
+        } catch (error) {
+          // A readiness/sync refusal needs operator action. An unexpected DB or
+          // filesystem failure must not erase the user's unstarted work.
+          const refused = (error.status >= 400 && error.status < 500) || error.code === 'FFMPEG_MISSING';
+          if (!refused) {
+            console.error(`❌ Blender boot recovery: ${projectId} retained ${shotIds.length} ${batch.quality} shot(s) after an unexpected failure: ${error.message}`);
+            continue;
+          }
+          await removePendingBlenderShots(projectId, batch.quality, shotIds);
+          console.log(`⏭️ Blender boot recovery: ${projectId} stopped ${shotIds.length} ${batch.quality} shot(s): ${error.message}`);
+        }
+      }
+    }).catch((error) => console.error(`❌ Blender boot recovery: ${projectId} could not recover pending renders: ${error.message}`));
+  }
 }

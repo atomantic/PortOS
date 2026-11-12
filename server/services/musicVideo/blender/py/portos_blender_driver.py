@@ -228,6 +228,8 @@ def render_frame(scene, path):
     partial = stem + ".part" + extension
     scene.render.filepath = partial
     bpy.ops.render.render(write_still=True)
+    if not os.path.isfile(partial):
+        raise KeyboardInterrupt("Render interrupted before the frame was written")
     os.replace(partial, path)
 
 
@@ -314,6 +316,9 @@ def main():
 
 try:
     main()
+except KeyboardInterrupt:
+    print("Render canceled", flush=True)
+    sys.exit(130)
 except BaseException as error:  # noqa: B902 - SystemExit from a film is reported too
     emit("error", message="%s: %s" % (type(error).__name__, error), traceback=traceback.format_exc())
     sys.stdout.flush()

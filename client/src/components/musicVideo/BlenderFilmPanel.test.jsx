@@ -298,7 +298,7 @@ describe('BlenderFilmPanel: settings', () => {
     const before = getMusicVideoBlender.mock.calls.length;
     fireEvent.click(screen.getByRole('button', { name: 'Report ready Blender' }));
     await waitFor(() => expect(getMusicVideoBlender).toHaveBeenCalledTimes(before + 1));
-    expect(screen.getByText('Blender 5.2.3 ready')).toBeInTheDocument();
+    expect(await screen.findByText('Blender 5.2.3 ready')).toBeInTheDocument();
   });
 
   it('saves only the changed settings and holds renders until the save lands', async () => {
