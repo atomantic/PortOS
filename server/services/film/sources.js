@@ -18,11 +18,11 @@ import { assertInsideWithoutSymlinks, blenderRefusal, blenderSrcDir, blenderWork
 
 const STARTER_DIR = fileURLToPath(new URL('./py/starter/', import.meta.url));
 const MAX_DEPTH = 6;
-// A film is scripts plus a handful of assets; a runaway tree stops being listed here.
+// Refuse oversized source trees whole: partial hashes or copies misrepresent the film.
 const MAX_FILES = 5000;
 
 async function walk(root, prefix, depth, found) {
-  if (depth > MAX_DEPTH || found.length >= MAX_FILES) return;
+  if (depth > MAX_DEPTH) return;
   const entries = await readdir(join(root, ...prefix.split('/').filter(Boolean)), { withFileTypes: true }).catch((error) => {
     if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return [];
     throw error;
@@ -39,8 +39,10 @@ async function walk(root, prefix, depth, found) {
     const absolute = join(root, ...path.split('/'));
     const info = await lstat(absolute).catch(() => null);
     if (!info?.isFile()) continue;
+    if (found.length >= MAX_FILES) {
+      throw blenderRefusal(`The Blender workspace has more than ${MAX_FILES} supported source files`, 'MUSIC_VIDEO_BLENDER_SOURCE_LIMIT', 413);
+    }
     found.push({ path, absolute, bytes: info.size, mtimeMs: info.mtimeMs, kind });
-    if (found.length >= MAX_FILES) return;
   }
 }
 

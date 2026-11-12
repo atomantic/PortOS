@@ -73,6 +73,7 @@ Frame files are named by their frame number on the song, stills by their song ti
 Edit `src/` with any editor, with a coding agent, or in the panel's Files tab. The API reads and writes text files
 (`.py .json .txt .md`, up to 2 MiB); images, HDRIs, fonts, audio, models and `.blend` files are placed in the folder
 and only listed. A file sits at most five folders below `src/`, and symbolic links are not followed.
+A workspace with more than 5,000 supported source files is refused explicitly; it is never partially hashed or copied.
 
 **Create starter workspace** copies a small complete film into `src/`: a stage, three figures and lights that follow
 the song's beats and loudness, in three shots. Use it as a template.

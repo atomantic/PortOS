@@ -5,11 +5,12 @@ import { join } from 'node:path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 import { normalizeBlenderRecord } from '../../lib/musicVideoBlender.js';
 import { createFakeBlender, exampleManifest } from '../musicVideo/blender/__blenderFixture.js';
-import { scaffoldBlenderWorkspace } from './sources.js';
+import { listBlenderFiles, scaffoldBlenderWorkspace } from './sources.js';
 import { startBlenderSync } from './sync.js';
 import { cancelBlenderJob, enqueueBlenderRenders, resumePendingBlenderRenders } from './queue.js';
 import { startBlenderCut } from './cuts.js';
 import { getBlenderState } from './state.js';
+import { copyBlenderFilm } from './fork.js';
 import { listBlenderJobs, __resetBlenderJobsForTests } from './jobs.js';
 import { clearBlenderFrames, dropBlenderFramesOutside } from './usage.js';
 
@@ -161,4 +162,19 @@ it('accepts cancellation after describe but before commit, and refuses it once c
   finally { releaseCommit(); }
   await settled(owner, [second.id]);
   expect((await getBlenderState(owner)).manifest.shots).toHaveLength(3);
+});
+
+// A capped listing must not become a successful partial fork or render-source hash.
+it('refuses an oversized supported source tree before listing or copying a partial film', async () => {
+  const { owner } = createOwner();
+  const src = join(owner.workspaceDir, 'src');
+  mkdirSync(src, { recursive: true });
+  for (let index = 0; index < 5000; index += 1) writeFileSync(join(src, `asset${index}.json`), '{}');
+  expect((await listBlenderFiles(owner)).files).toHaveLength(5000);
+  writeFileSync(join(src, 'overflow.json'), '{}');
+  const refusal = { code: 'MUSIC_VIDEO_BLENDER_SOURCE_LIMIT', status: 413 };
+  await expect(listBlenderFiles(owner)).rejects.toMatchObject(refusal);
+  const target = { ...owner, id: 'copy', workspaceDir: join(ROOT(), 'copy') };
+  await expect(copyBlenderFilm(owner, target)).rejects.toMatchObject(refusal);
+  expect(existsSync(target.workspaceDir)).toBe(false);
 });
