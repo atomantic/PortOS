@@ -266,20 +266,23 @@ vi.mock('../services/userActions.js', () => ({ recordUserAction }));
 const pendingUpload = { current: null };
 const setPendingUpload = (...files) => { pendingUpload.current = files.flat(); };
 
-vi.mock('../lib/multipart.js', () => ({
-  optionalUpload: () => (_req, _res, next) => next(),
-  optionalUploadFields: () => (_req, _res, next) => next(),
-  // Bypass the streaming parser. If a test set a pending upload via
-  // setPendingUpload(), inject it under req.files keyed by fieldname so the
-  // route exercises the upload-staging path; otherwise pass through.
-  uploadFields: () => (req, _res, next) => {
+vi.mock('../lib/multipart.js', () => {
+  const withPendingUpload = () => (req, _res, next) => {
     if (pendingUpload.current) {
       req.files = Object.fromEntries(pendingUpload.current.map((f) => [f.fieldname, f]));
       pendingUpload.current = null;
     }
     next();
-  },
-}));
+  };
+  return {
+    optionalUpload: () => (_req, _res, next) => next(),
+    // Bypass the streaming parser. If a test set a pending upload via
+    // setPendingUpload(), inject it under req.files keyed by fieldname so the
+    // route exercises the upload-staging path; otherwise pass through.
+    optionalUploadFields: withPendingUpload,
+    uploadFields: withPendingUpload,
+  };
+});
 
 const fsMock = vi.hoisted(() => ({
   unlink: vi.fn(async () => {}),
@@ -1694,6 +1697,44 @@ describe('videoGen routes', () => {
       const r = await request(app).post('/api/video-gen/').send({ prompt: 'a cat', tiling: 'wrong' });
       expect(r.status).toBe(400);
       expect(r.body.error).toMatch(/tiling/i);
+    });
+
+    it('queues a JSON request with a gallery sourceImageFile (#15963)', async () => {
+      const r = await request(app)
+        .post('/api/video-gen/')
+        .set('Content-Type', 'application/json')
+        .send({
+          backend: 'local',
+          mode: 'image',
+          sourceImageFile: 'gallery-frame.png',
+          prompt: 'a slow blink',
+          width: 1024,
+          height: 576,
+          numFrames: 49,
+          fps: 24,
+        });
+      expect(r.status).toBe(200);
+      expect(r.body).toEqual(expect.objectContaining({
+        jobId: 'mock-video-job',
+        status: 'queued',
+      }));
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'video',
+        params: expect.objectContaining({
+          prompt: 'a slow blink',
+          sourceImagePath: '/mock/images/gallery-frame.png',
+        }),
+      }));
+    });
+
+    it('returns 400 validation error rather than INVALID_CONTENT_TYPE for invalid JSON body (#15963)', async () => {
+      const r = await request(app)
+        .post('/api/video-gen/')
+        .set('Content-Type', 'application/json')
+        .send({ width: 99999 });
+      expect(r.status).toBe(400);
+      expect(r.body.code).not.toBe('INVALID_CONTENT_TYPE');
+      expect(r.body.error).toMatch(/prompt|width/i);
     });
 
     it('accepts empty-string numerics as undefined (multipart preprocess fix)', async () => {
