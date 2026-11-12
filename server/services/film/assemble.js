@@ -37,6 +37,59 @@ function blenderConformSegmentArgs({ source, offsetFrames, frames, width, height
   return [...QUIET, '-i', source, '-vf', chain, '-frames:v', String(frames), ...blenderVideoEncodeArgs({ fps, quality }), '-y', output];
 }
 
+/**
+ * ffmpeg arguments that render a `dissolve` or `beat-toggle` transition
+ * segment by blending outgoing and incoming shot/handle streams across the cut. Pure.
+ */
+function blenderTransitionSegmentArgs({ transition, width, height, fps, quality, tagFilter = null, output }) {
+  const inputs = [];
+  const graph = [];
+  let nextInput = 0;
+  const fit = [
+    `scale=${width}:${height}:force_original_aspect_ratio=decrease:flags=lanczos`,
+    `pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2`,
+    'setsar=1',
+    'scale=out_color_matrix=bt709:out_range=tv',
+    'format=yuv420p',
+  ].join(',');
+  const buildSide = (side, sideLabel, videoFirst) => {
+    const parts = [];
+    const addVideo = (tag) => {
+      if (!(side.videoFrames > 0)) return;
+      const idx = nextInput++;
+      inputs.push('-i', side.video);
+      graph.push(`[${idx}:v]fps=${fps},trim=start_frame=${side.videoOffset}:end_frame=${side.videoOffset + side.videoFrames},setpts=PTS-STARTPTS,${fit},tpad=stop_mode=clone:stop=${side.videoFrames}[${tag}]`);
+      parts.push(tag);
+    };
+    const addHandle = (tag) => {
+      if (!(side.handleFrames > 0)) return;
+      const idx = nextInput++;
+      inputs.push('-framerate', String(fps), '-start_number', String(side.handleStart), '-i', side.handlePattern);
+      graph.push(`[${idx}:v]trim=start_frame=0:end_frame=${side.handleFrames},setpts=PTS-STARTPTS,${fit},fps=${fps}[${tag}]`);
+      parts.push(tag);
+    };
+    if (videoFirst) { addVideo(`${sideLabel}0`); addHandle(`${sideLabel}1`); }
+    else { addHandle(`${sideLabel}0`); addVideo(`${sideLabel}1`); }
+    if (parts.length === 2) graph.push(`[${parts[0]}][${parts[1]}]concat=n=2:v=1:a=0[${sideLabel}]`);
+    else if (parts.length === 1) graph.push(`[${parts[0]}]null[${sideLabel}]`);
+  };
+  buildSide(transition.outgoing, 'a', true);
+  buildSide(transition.incoming, 'b', false);
+  const segFrames = transition.segEndFrame - transition.segStartFrame;
+  let expr;
+  if (transition.style === 'dissolve') {
+    const total = transition.windowEndFrame - transition.windowStartFrame;
+    const offset = transition.segStartFrame - transition.windowStartFrame;
+    expr = `A*(1-(N+1+${offset})/(${total}+1))+B*((N+1+${offset})/(${total}+1))`;
+  } else {
+    const cond = (transition.incomingSpans || []).map(([start, end]) => `between(N,${start},${end - 1})`).join('+') || '0';
+    expr = `if(${cond},B,A)`;
+  }
+  graph.push(`[a][b]blend=all_expr='${expr}'${tagFilter ? `,${tagFilter}` : ''}[v]`);
+  return [...QUIET, ...inputs, '-filter_complex', graph.join(';'), '-map', '[v]', '-frames:v', String(segFrames),
+    ...blenderVideoEncodeArgs({ fps, quality }), '-y', output];
+}
+
 /** ffmpeg arguments that lay `durationSec` of the song from `startSec` under `video`. Pure. */
 function blenderSongMuxArgs({ video, audioPath, startSec, durationSec, output }) {
   const song = `[1:a]atrim=start=${startSec}:end=${startSec + durationSec},asetpts=PTS-STARTPTS,aresample=48000,`
@@ -98,7 +151,11 @@ export async function assembleBlenderVideo({ segments, width, height, fps, quali
     for (const [index, segment] of segments.entries()) {
       if (segment.direct) { parts.push(segment.source); continue; }
       const target = { frames: segment.frames, width, height, fps, quality, tagFilter };
-      if (!segment.source) {
+      if (segment.transition) {
+        const path = join(scratch, `segment-${index}.mp4`);
+        await run(blenderTransitionSegmentArgs({ ...target, transition: segment.transition, output: path }), 'Blending a transition between shots');
+        parts.push(path);
+      } else if (!segment.source) {
         // Black is the same for every shot of one length: encode it once.
         if (!black.has(segment.frames)) {
           const path = join(scratch, `black-${segment.frames}.mp4`);

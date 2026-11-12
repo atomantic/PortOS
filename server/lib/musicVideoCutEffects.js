@@ -188,3 +188,82 @@ export function plannedCutEffect(transition) {
 export function plannedTransitions(rows) {
   return new Map((Array.isArray(rows) ? rows : []).filter((row) => row?.sceneId && typeof row.transition === 'string').map((row) => [row.sceneId, row.transition]));
 }
+
+/**
+ * Cut effects for a Blender film's adjacent shots `[{ id, startFrame, endFrame, cutEffect }]`.
+ * Unlike footage clips (whose incoming cut effects read before the in-point before the cut),
+ * a Blender dissolve is centred on `cutFrame` (blending `from`'s out-handle with `to`'s in-handle
+ * across `D`), `beat-toggle` flips on beats before `cutFrame` (needing `to`'s in-handle), and
+ * `fade-black` fades inside each shot's own frames (needing no handles).
+ */
+export function blenderCutEffects(shots, { fps, beats = [] }) {
+  const list = Array.isArray(shots) ? shots : [];
+  const out = [];
+  let minStart = 0;
+  for (let i = 0; i < list.length; i++) {
+    const from = list[i];
+    const to = list[i + 1];
+    const effect = from?.cutEffect;
+    const headStart = Math.max(from.startFrame, minStart);
+    minStart = from.endFrame;
+    if (!effect?.enabled) continue;
+    const cutFrame = from.endFrame;
+    const fromFrames = Math.max(0, cutFrame - headStart);
+    const lengthFrames = Math.max(1, Math.round(effect.overlapSec * fps));
+    const contiguousNext = !!to && to.startFrame === cutFrame;
+    if (effect.style === 'fade-black') {
+      const toFrames = contiguousNext ? Math.max(0, to.endFrame - to.startFrame) : 0;
+      const before = contiguousNext ? Math.ceil(lengthFrames / 2) : lengthFrames;
+      const outFrames = Math.min(before, cutFrame - from.startFrame);
+      const inFrames = contiguousNext ? Math.min(lengthFrames - before, toFrames) : 0;
+      if (outFrames + inFrames > 0) out.push({ style: 'fade-black', index: i, fromId: from.id, toId: contiguousNext ? to.id : null, cutFrame, outFrames, inFrames });
+      continue;
+    }
+    if (!contiguousNext) continue;
+    const toFrames = Math.max(0, to.endFrame - to.startFrame);
+    if (effect.style === 'dissolve') {
+      const before = Math.ceil(lengthFrames / 2);
+      const after = lengthFrames - before;
+      const beforeFrames = Math.min(before, Math.max(0, fromFrames - 1));
+      const afterFrames = Math.min(after, toFrames);
+      if (beforeFrames + afterFrames <= 0) continue;
+      minStart = cutFrame + afterFrames;
+      out.push({
+        style: 'dissolve',
+        index: i,
+        fromId: from.id,
+        toId: to.id,
+        cutFrame,
+        startFrame: cutFrame - beforeFrames,
+        endFrame: cutFrame + afterFrames,
+        beforeFrames,
+        afterFrames,
+        needOutFrames: afterFrames,
+        needInFrames: beforeFrames,
+      });
+      continue;
+    }
+    if (effect.style !== 'beat-toggle') continue;
+    const switches = beatToggleSwitches({ cutSec: cutFrame / fps, overlapSec: effect.overlapSec, rate: effect.rate, beats })
+      .map((sec) => Math.round(sec * fps))
+      .filter((f, k, all) => f > headStart && f < cutFrame && f !== all[k - 1]);
+    if (!switches.length) continue;
+    const incoming = [];
+    for (let k = 0; k < switches.length; k += 2) incoming.push([switches[k], k + 1 < switches.length ? switches[k + 1] : cutFrame]);
+    const windowFrames = cutFrame - switches[0];
+    out.push({
+      style: 'beat-toggle',
+      index: i,
+      fromId: from.id,
+      toId: to.id,
+      cutFrame,
+      startFrame: switches[0],
+      endFrame: cutFrame,
+      windowFrames,
+      incoming,
+      needOutFrames: 0,
+      needInFrames: windowFrames,
+    });
+  }
+  return out;
+}

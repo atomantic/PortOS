@@ -8,10 +8,10 @@
  * made from; the next job resumes them only when the shot's source and the
  * render settings and song context are unchanged, and starts clean otherwise.
  */
-import { mkdir, rm } from 'node:fs/promises';
+import { mkdir, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { atomicWrite } from '../../lib/fileCore.js';
-import { blenderRenderFrame, blenderShotFrameRange, normalizeBlenderRecord } from '../../lib/musicVideoBlender.js';
+import { blenderRenderFrame, blenderShotFrameRange, blenderShotHandleRanges, normalizeBlenderHandles, normalizeBlenderRecord } from '../../lib/musicVideoBlender.js';
 import { blenderShotDir, readBlenderJson } from './workspace.js';
 import { readBlenderManifest } from './manifest.js';
 import { BLENDER_NO_OPTIONS_HASH, blenderImportHashes, blenderImportsChanged, blenderOptionsHash, blenderSettingsHash, blenderShotHash, blenderSongHash, hashBlenderSources } from './hashing.js';
@@ -22,7 +22,7 @@ import { updateBlenderJob } from './jobs.js';
 import { openBlenderJobLog } from './logs.js';
 import {
   blenderFilmOptions, blenderFrameName, blenderFramePattern, blenderFramesDir, blenderRenderFile, blenderShotPoster, blenderShotVideo,
-  blenderStillThumbnail, blenderStillsFile, countBlenderFrames,
+  blenderStillThumbnail, blenderStillsFile, countBlenderFrames, countBlenderHandleFrames,
 } from './renderIndex.js';
 
 const STILLS_KEPT = 24;
@@ -89,6 +89,8 @@ export async function runBlenderShotRender(entry, { owner, shotId, quality, forc
     const still = quality === 'still';
     const frame = blenderRenderFrame(settings, quality);
     const range = blenderShotFrameRange(shot, settings.fps);
+    const handleRanges = blenderShotHandleRanges(shot, settings.fps);
+    const metaHandles = normalizeBlenderHandles(shot.handles);
     const settingsHash = still ? null : blenderSettingsHash(settings, quality);
     const stillFrames = still ? blenderStillFrames(shot, settings.fps, times) : null;
     if (still && !stillFrames.length) throw jobFailure('None of the requested times fall inside this shot');
@@ -97,18 +99,35 @@ export async function runBlenderShotRender(entry, { owner, shotId, quality, forc
     let resumedImports = null;
     if (!still) {
       const previous = await readBlenderJson(blenderRenderFile(owner, shotId, quality));
+      const prevHandles = normalizeBlenderHandles(previous?.handles);
+      const handlesChanged = previous != null && (Math.round(prevHandles.in * settings.fps) !== handleRanges.in.frameCount
+        || Math.round(prevHandles.out * settings.fps) !== handleRanges.out.frameCount);
       // Frames built from other source, settings, options or song context are another picture: start clean.
-      resume = !force && previous?.complete !== true && previous?.srcHash === srcHash && previous?.settingsHash === settingsHash
+      // When only handles changed on a completed render, resume the existing shot and overlapping handle frames.
+      const resumeBase = !force && previous?.srcHash === srcHash && previous?.settingsHash === settingsHash
         && !blenderImportsChanged(previous?.imports, files)
         && (previous?.optionsHash ?? BLENDER_NO_OPTIONS_HASH) === optionsHash && previous?.songHash === songHash;
+      resume = resumeBase && (previous?.complete !== true || handlesChanged);
       resumedImports = resume ? previous.imports : null;
       const framesDir = blenderFramesDir(owner, shotId, quality);
       if (!resume) await rm(framesDir, { recursive: true, force: true });
+      else if (handlesChanged) {
+        const names = await readdir(framesDir).catch(() => []);
+        for (const name of names) {
+          const match = /^handle_(in|out)_(\d{6,})\.(?:jpg|png)$/.exec(name);
+          if (!match) continue;
+          const f = Number(match[2]);
+          const span = match[1] === 'in' ? handleRanges.in : handleRanges.out;
+          if (f < span.startFrame || f >= span.endFrame) await rm(join(framesDir, name), { force: true });
+        }
+      }
       await mkdir(framesDir, { recursive: true });
       meta = {
         // Until done reports actual imports, partial frames conservatively depend on the snapshot.
         imports: Object.fromEntries(files),
-        shotId, quality, srcHash, settingsHash, optionsHash, songHash, options, ...range, width: frame.width, height: frame.height, fps: settings.fps,
+        shotId, quality, srcHash, settingsHash, optionsHash, songHash, options, ...range,
+        ...(metaHandles.in > 0 || metaHandles.out > 0 ? { handles: metaHandles } : {}),
+        width: frame.width, height: frame.height, fps: settings.fps,
         samples: frame.samples, engine: settings.engine, blenderVersion: tool.version, device: null,
         startedAt: new Date(started).toISOString(), finishedAt: null, durationMs: null, complete: false,
       };
@@ -150,7 +169,12 @@ export async function runBlenderShotRender(entry, { owner, shotId, quality, forc
       return;
     }
     const present = await countBlenderFrames(owner, shotId, quality, range);
-    if (present !== range.frameCount) throw jobFailure(`Blender finished, but ${range.frameCount - present} of ${range.frameCount} frames are missing`);
+    const presentHandles = await countBlenderHandleFrames(owner, shotId, quality, handleRanges);
+    const missing = (range.frameCount - present)
+      + (handleRanges.in.frameCount - presentHandles.inFrames)
+      + (handleRanges.out.frameCount - presentHandles.outFrames);
+    const expected = range.frameCount + handleRanges.in.frameCount + handleRanges.out.frameCount;
+    if (missing > 0) throw jobFailure(`Blender finished, but ${missing} of ${expected} frames are missing`);
     updateBlenderJob(entry, { status: 'encoding' });
     await encodeBlenderShot({
       pattern: join(blenderFramesDir(owner, shotId, quality), blenderFramePattern(quality)),

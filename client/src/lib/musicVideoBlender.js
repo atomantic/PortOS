@@ -167,7 +167,7 @@ export const BLENDER_JOB_STATUS_LABELS = {
 
 // The server's `staleReasons`, in the director's words.
 const STALE_REASON_TEXT = {
-  source: 'its scripts changed', timing: 'the shot moved on the song', settings: 'the render settings changed', options: 'a film option changed', song: 'the song context changed',
+  source: 'its scripts changed', timing: 'the shot moved on the song', handles: 'its handles changed', settings: 'the render settings changed', options: 'a film option changed', song: 'the song context changed',
 };
 
 /** Why a render is out of date: "its scripts changed and a film option changed". */
@@ -453,8 +453,9 @@ export function blenderAgentBrief({ projectId, state }) {
     '  renders/         PortOS output, regenerable: never edit it',
     '',
     'Film contract (Python inside Blender 5 or later), in src/film.py:',
-    '  describe(ctx) -> {"title": str, "shots": [{"id", "label", "start", "end", "set", "summary", "action", "staging", "camera", "transition", "deps"}], "options"?: [...]}',
+    '  describe(ctx) -> {"title": str, "shots": [{"id", "label", "start", "end", "handles"?: {"in", "out"}, "set", "summary", "action", "staging", "camera", "transition", "deps"}], "options"?: [...]}',
     '    Shots in time order, not overlapping, 0 <= start < end <= song duration, every boundary on the frame grid (k / fps), at most 400 shots.',
+    '    "handles" (optional, 0..4 s each on the frame grid) renders [start - in, start) and [end, end + out) for dissolves and beat toggles; shots with handles must stay valid over those times.',
     '    Shot ids match [a-z0-9][a-z0-9_-]{0,39}. "deps" lists the files or folders under src/ a shot reads; a change there marks its renders out of date.',
     '    "options" (at most 24) is what the director can set in PortOS: {"key", "label", "type": "choice"|"boolean"|"number"|"text", "default", "help"?, "choices"?: [{"value","label"}], "min"?, "max"?, "step"?}.',
     '  build_shot(ctx, shot) -> None       build the bpy scene for one shot: objects, lights, camera',

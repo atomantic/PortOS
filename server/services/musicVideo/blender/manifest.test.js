@@ -91,10 +91,25 @@ describe('validateBlenderManifest', () => {
     ['text longer than the film contract allows', () => check([shot('s010', 0, 1, { action: 'x'.repeat(4001) })]), '"action" must be text'],
     ['a dependency outside src/', () => check([shot('s010', 0, 1, { deps: ['../secrets'] })]), '"deps" must list'],
     ['an absolute dependency', () => check([shot('s010', 0, 1, { deps: ['/etc/passwd'] })]), '"deps" must list'],
+    ['negative handle seconds', () => check([shot('s010', 1, 2, { handles: { in: -0.25 } })]), '"handles.in" must be between 0 and 4'],
+    ['handles longer than 4 seconds', () => check([shot('s010', 1, 2, { handles: { out: 4.5 } })]), '"handles.out" must be between 0 and 4'],
+    ['handles off the frame grid', () => check([shot('s010', 1, 2, { handles: { out: 0.27 } })]), 'handles.out must fall on a frame boundary'],
+    ['an in handle that starts before 0 s', () => check([shot('s010', 0.25, 2, { handles: { in: 0.5 } })]), 'starts before 0 s'],
+    ['unknown handle keys', () => check([shot('s010', 1, 2, { handles: { left: 0.25 } })]), 'may only declare "in" and "out"'],
   ])('refuses %s', (_name, run, reason) => {
     const { manifest, errors } = run();
     expect(manifest).toBeNull();
     expect(errors.join(' ')).toContain(reason);
+  });
+
+  it('normalizes valid frame-grid handles and omits empty ones', () => {
+    const { manifest, errors } = check([
+      shot('s010', 0, 1, { handles: { in: 0, out: 0 } }),
+      shot('s020', 1, 2, { handles: { in: 0.25, out: 0.5 } }),
+    ]);
+    expect(errors).toEqual([]);
+    expect(manifest.shots[0].handles).toBeUndefined();
+    expect(manifest.shots[1].handles).toEqual({ in: 0.25, out: 0.5 });
   });
 
   it('reports every broken shot, not just the first, so one sync shows the whole list of fixes', () => {
@@ -126,5 +141,16 @@ describe('blenderFilmProblems', () => {
     const film = synced([shot('s010', 0, 10)]);
     expect(blenderFilmProblems(film, { ...song, fps: 30 })).toEqual(['The frame rate changed from 24 to 30 since the last sync. Sync shots from scripts again.']);
     expect(blenderFilmProblems(film, { fps: 24, durationSec: undefined })).toEqual(['Analyze the song: the film cannot be checked against it yet.']);
+  });
+
+  it('names missing in and out handles required by dissolves and accepts sufficient handles', () => {
+    const shots = [shot('s010', 0, 2), shot('s020', 2, 5), shot('s030', 5, 10)];
+    const cutEffects = [{ style: 'dissolve', index: 1, cutFrame: 120, needOutFrames: 6, needInFrames: 6 }];
+    expect(blenderFilmProblems(synced(shots), { ...song, cutEffects })).toEqual([
+      'Shot s020 needs 0.25 s of out handle for its dissolve',
+      'Shot s030 needs 0.25 s of in handle for its dissolve',
+    ]);
+    const withHandles = [shot('s010', 0, 2), shot('s020', 2, 5, { handles: { out: 0.25 } }), shot('s030', 5, 10, { handles: { in: 0.25 } })];
+    expect(blenderFilmProblems(synced(withHandles), { ...song, cutEffects })).toEqual([]);
   });
 });

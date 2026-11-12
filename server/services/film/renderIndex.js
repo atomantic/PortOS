@@ -9,7 +9,7 @@ import { createHash } from 'node:crypto';
 import { lstat, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
-  blenderEffectiveOptions, blenderShotFrameRange,
+  blenderEffectiveOptions, blenderShotFrameRange, blenderShotHandleRanges, normalizeBlenderHandles,
 } from '../../lib/musicVideoBlender.js';
 import { blenderMediaPath, blenderShotDir, readBlenderJson } from './workspace.js';
 import { BLENDER_NO_OPTIONS_HASH, blenderImportsChanged, blenderOptionsHash, blenderSettingsHash, blenderShotHash, blenderSongHash, hashBlenderSources } from './hashing.js';
@@ -17,6 +17,7 @@ import { getBlenderSong } from './song.js';
 
 export const BLENDER_RENDER_QUALITIES = Object.freeze(['preview', 'final']);
 const FRAME_NAME = /^frame_(\d{6,})\.(?:jpg|png)$/;
+const HANDLE_FRAME_NAME = /^handle_(in|out)_(\d{6,})\.(?:jpg|png)$/;
 const frameExtension = (quality) => (quality === 'preview' ? 'jpg' : 'png');
 
 const isFile = async (path) => (await lstat(path).catch(() => null))?.isFile() === true;
@@ -27,8 +28,10 @@ export const blenderShotVideo = (owner, shotId, quality) => join(blenderShotDir(
 export const blenderShotPoster = (owner, shotId, quality) => join(blenderShotDir(owner, shotId, quality), 'poster.jpg');
 export const blenderFramesDir = (owner, shotId, quality) => join(blenderShotDir(owner, shotId, quality), 'frames');
 export const blenderFrameName = (frame, quality) => `frame_${String(frame).padStart(6, '0')}.${frameExtension(quality)}`;
+export const blenderHandleFrameName = (side, frame, quality) => `handle_${side}_${String(frame).padStart(6, '0')}.${frameExtension(quality)}`;
 /** The frame sequence as ffmpeg reads it. */
 export const blenderFramePattern = (quality) => `frame_%06d.${frameExtension(quality)}`;
+export const blenderHandleFramePattern = (side, quality) => `handle_${side}_%06d.${frameExtension(quality)}`;
 export const blenderStillsFile = (owner, shotId) => join(blenderShotDir(owner, shotId, 'stills'), 'stills.json');
 
 /** How many of the frames `[startFrame, endFrame)` are on disk. */
@@ -40,19 +43,41 @@ export async function countBlenderFrames(owner, shotId, quality, { startFrame, e
   }).length;
 }
 
+/** How many in/out handle frames inside `handleRanges` are on disk. */
+export async function countBlenderHandleFrames(owner, shotId, quality, handleRanges) {
+  const names = await readdir(blenderFramesDir(owner, shotId, quality)).catch(() => []);
+  let inFrames = 0;
+  let outFrames = 0;
+  for (const name of names) {
+    const match = HANDLE_FRAME_NAME.exec(name);
+    if (!match) continue;
+    const frame = Number(match[2]);
+    if (!Number.isInteger(frame)) continue;
+    if (match[1] === 'in' && frame >= handleRanges.in.startFrame && frame < handleRanges.in.endFrame) inFrames += 1;
+    if (match[1] === 'out' && frame >= handleRanges.out.startFrame && frame < handleRanges.out.endFrame) outFrames += 1;
+  }
+  return { inFrames, outFrames };
+}
+
 /**
  * Why a render recorded as `meta` is out of date, in the order of
  * MUSIC_VIDEO_BLENDER_STALE_REASONS; empty when it is current. `source` is the
  * shot's dependency files; a shot that moved on the song is `timing` (its
  * source may have changed as well: the one hash covers both).
  */
-function staleReasons(meta, range, { fps, shotHash, settingsHash, optionsHash, songHash, files }) {
+function staleReasons(meta, range, handleRanges, { fps, shotHash, settingsHash, optionsHash, songHash, files }) {
   const reasons = [];
   if (meta.srcHash !== shotHash) {
     const moved = meta.fps === fps && Number.isInteger(meta.startFrame) && (meta.startFrame !== range.startFrame || meta.endFrame !== range.endFrame);
     reasons.push(moved ? 'timing' : 'source');
   }
   if (blenderImportsChanged(meta.imports, files) && !reasons.includes('source')) reasons.push('source');
+  const prevHandles = normalizeBlenderHandles(meta.handles);
+  const metaFps = meta.fps || fps;
+  if (Math.round(prevHandles.in * metaFps) !== handleRanges.in.frameCount
+    || Math.round(prevHandles.out * metaFps) !== handleRanges.out.frameCount) {
+    reasons.push('handles');
+  }
   if (meta.settingsHash !== settingsHash) reasons.push('settings');
   if ((meta.optionsHash ?? BLENDER_NO_OPTIONS_HASH) !== optionsHash) reasons.push('options');
   // Older renders have no song hash and retain their declared contract.
@@ -76,9 +101,12 @@ async function readQuality(owner, shot, quality, current) {
   const video = blenderShotVideo(owner, shot.id, quality);
   const hasVideo = await isFile(video);
   const range = blenderShotFrameRange(shot, current.fps);
+  const handleRanges = blenderShotHandleRanges(shot, current.fps);
   const complete = meta.complete === true && hasVideo;
-  const reasons = staleReasons(meta, range, current);
+  const reasons = staleReasons(meta, range, handleRanges, current);
   const poster = await posterOf(owner, shot, quality, complete);
+  const hasAnyHandles = handleRanges.in.frameCount > 0 || handleRanges.out.frameCount > 0;
+  const handleFrames = complete && hasAnyHandles ? await countBlenderHandleFrames(owner, shot.id, quality, handleRanges) : null;
   return {
     file: hasVideo ? blenderMediaPath(owner, video) : null,
     frames: Number.isInteger(meta.frameCount) ? meta.frameCount : range.frameCount,
@@ -91,6 +119,7 @@ async function readQuality(owner, shot, quality, current) {
     width: meta.width ?? null,
     height: meta.height ?? null,
     fps: meta.fps ?? null,
+    ...(handleFrames ? { handleFrames } : {}),
     ...(complete ? {} : { partialFrames: await countBlenderFrames(owner, shot.id, quality, range) }),
     ...(poster ? { poster } : {}),
   };
