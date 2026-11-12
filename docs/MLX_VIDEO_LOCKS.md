@@ -118,3 +118,58 @@ for Wan. Set the UTC cutoff at least seven days in the past and choose the
 packages to upgrade from the new audit. Review the updated native pins and
 build constraints, query OSV for every output pin, and repeat fresh Install,
 Repair and model smoke checks.
+
+### Bounded shared-helper refresh (2026-11-12)
+
+Keep the source revisions and upstream lock digests above unchanged. This refresh
+uses verified **uv 0.13.7** and cutoff `2026-11-05T00:00:00Z`. Start from each
+existing PortOS inference lock rather than reintroducing the upstream vulnerable
+pins. Preserve all other profile pins with constraints, including the native
+MLX/Metal, AV, Torch, model-library and Hub versions.
+
+Set `runtime` to `ltx23`, `ltx25` or `wan22`, `source` to its verified checkout,
+`lock` to its PortOS inference lock, and `inputs`/`constraints` to scratch files.
+This derives the real upstream dependency inputs and freezes companion versions:
+
+```bash
+python3.11 - "$runtime" "$source" "$lock" "$inputs" "$constraints" <<'PY'
+import re
+import sys
+import tomllib
+from pathlib import Path
+
+runtime, source, lock, inputs, constraints = sys.argv[1:]
+source = Path(source)
+projects = ([source / "pyproject.toml"] if runtime == "wan22" else [
+    source / "packages" / package / "pyproject.toml"
+    for package in ("ltx-core-mlx", "ltx-pipelines-mlx")
+])
+deps = [dependency for project in projects
+        for dependency in tomllib.loads(project.read_text())["project"]["dependencies"]
+        if dependency != "ltx-core-mlx"]
+pins = dict(re.findall(r"^([\w.-]+)==([^\s\\]+)", Path(lock).read_text(), re.M))
+pins.update({"anyio": "4.16.0", "markupsafe": "3.0.4",
+             "regex": "2026.9.29", "typing-extensions": "4.16.0"})
+if runtime != "wan22":
+    pins.update({"click": "8.5.0", "typer": "0.27.3"})
+    deps.append("click==8.5.0")  # Retain the existing explicit CLI companion.
+Path(inputs).write_text("\n".join(deps) + "\n")
+Path(constraints).write_text("\n".join(f"{name}=={version}"
+                                     for name, version in sorted(pins.items())) + "\n")
+PY
+MACOSX_DEPLOYMENT_TARGET=14.0 uv --no-config pip compile "$inputs" \
+  -c "$constraints" --python-version 3.11 \
+  --python-platform aarch64-apple-darwin --generate-hashes \
+  --only-binary :all: --no-header --no-annotate \
+  --exclude-newer 2026-11-05T00:00:00Z -o "$lock"
+```
+
+Restore the three-line PortOS header with the new uv/cutoff. Review exact
+package, marker and hash-set differences: only AnyIO, MarkupSafe, Regex and
+Typing-Extensions change in Wan; LTX additionally changes Click and Typer.
+AnyIO 4.16 requires Typing-Extensions 4.16 on Python below 3.15. Typer 0.27 no
+longer requires the separate Click distribution; LTX deliberately retains its
+existing explicit companion in this bounded update. All unchanged blocks must
+remain byte-identical. Audit every resulting artifact and OSV/MAL response,
+then repeat full hashed native installs and the actual helper-consumer checks
+documented in [the runtime refresh record](PYTHON_RUNTIME_REFRESH.md).

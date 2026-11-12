@@ -1297,3 +1297,59 @@ required before merging.
 No CUDA binaries, GPU inference, production weights, complete modular
 pipeline construction, production media quality or Windows/Linux native
 execution is claimed by these transport fixtures.
+
+## Twenty-third-slice LTX and Wan MLX shared-helper refresh (2026-11-12)
+
+LTX-2.3, LTX-2.5 and Wan 2.2 MLX update **AnyIO 4.14.2 → 4.16.0**,
+**MarkupSafe 3.0.3 → 3.0.4** and **Regex → 2026.9.29** (from 2026.2.28 in
+LTX and 2026.1.15 in Wan). AnyIO requires the companion **Typing-Extensions
+4.15.0 → 4.16.0** on Python below 3.15. Both LTX profiles also update
+**Click 8.3.1 → 8.5.0 / Typer 0.24.1 → 0.27.3**; Wan already has those pins.
+LTX retains its explicit Click companion even though the new Typer no longer
+requires that separate distribution.
+
+This is not a model-library, Hub, native backend or source-revision migration.
+The three immutable sources and upstream lock digests match
+[MLX_VIDEO_LOCKS.md](MLX_VIDEO_LOCKS.md). Real project dependency arrays were
+compiled with exact companion constraints, verified **uv 0.13.7**, wheels only
+and cutoff `2026-11-05T00:00:00Z`. The documented bounded regeneration recipe
+preserves the existing PortOS profiles rather than restoring upstream vulnerable
+pins. Unchanged package blocks, including markers and hash sets, are byte-identical.
+
+| Profile | Packages | Hashes | Changed identities | Unchanged companions |
+| --- | ---: | ---: | ---: | ---: |
+| LTX-2.3 MLX | 36 | 678 | 6 | 30 |
+| LTX-2.5 MLX | 36 | 686 | 6 | 30 |
+| Wan 2.2 MLX | 51 | 916 | 4 | 47 |
+
+Every hash matches an unyanked pre-cutoff PyPI artifact. Complete OSV/MAL queries
+for all **68 distinct package/version pairs** returned zero findings, with
+response-count, error and pagination checks. Bundled native libraries were not
+separately audited. All six complete baseline/candidate registry locks installed
+with hashes, `--no-deps` and wheels only on native Apple Silicon Python **3.11.18**;
+exact installed versions and dependency checks passed. Source/build locks were
+not changed or rebuilt by this slice.
+
+Meaningful old/new consumer checks passed for all three profiles:
+
+- Actual Hub CLI help and invalid-option refusal exercised its CLI dependency
+  stack. The immutable LTX source CLI additionally passed help/refusal and image
+  argument parsing without entering inference; its own parser is `argparse`.
+- Actual Transformers chat rendering covered Unicode, escaping, assistant masks,
+  JSON and sandbox refusal with synthetic vocabulary. Wan's real
+  `LanguageTokenizer` wrapper matched Transformers IDs/masks when loaded directly,
+  bypassing only its broad root re-export initializer. Transformers Regex-backed
+  JSON/XML parsing and a synthetic-vocabulary CTRL tokenizer passed; CTRL is
+  installed-package consumer coverage, not a production LTX/Wan tokenizer.
+- The actual Hub async client exercised HTTPX/HTTPCore's AnyIO socket transport:
+  partial streaming, cancellation of a stalled read, response/peer-socket closure,
+  subsequent client reuse and cleanup. The source model-download helpers are
+  synchronous, so this is dependency-boundary coverage, not generation coverage.
+
+**299** focused installer/profile/LTX/Wan runner tests passed without skips.
+Python source, project metadata and upstream locks remained byte-identical to
+all three immutable archives. Fixtures isolated Hub caches and disabled implicit
+tokens/telemetry. No production weights, model inference, live providers or
+camera/audio streams were used. This establishes helper/API compatibility, not
+video/audio quality or a fresh source-build smoke test. Remaining model-library,
+Hub and native compatibility constraints stay separate under #15769.
