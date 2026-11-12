@@ -2073,3 +2073,59 @@ lock was regenerated and audited again, with its full supported-target plan.
 All 34 focused Pixal installer/Repair, service and lock-profile tests passed
 without skips. Independent review, final committed-tree pregate and exact-head
 hosted CI remain required before merging.
+
+## Thirty-seventh-slice Pixal Metal timezone and date migration (2026-11-12)
+
+This bounded slice updates `python-dateutil` 2.9.0.post0 → 4.0.0 and
+`pytz`/`tzdata` 2026.2 → 2026.6. Pandas stays at 2.3.3; the interpreter remains
+Python 3.13 and NumPy stays at 2.2.6. Gradio 6.31.0 and its already-reviewed web
+closure, native libraries, models and immutable source revisions are unchanged.
+Pytz remains required by both Pandas and Gradio. Dateutil 4 requires TZData and
+no longer requires Six. Complete metadata resolution plus actual source scans
+of frozen Pixal, MoGe, pipeline, utils3d, Gradio/client, Pandas, Matplotlib and
+Trimesh found no remaining Six consumer, so that unused companion is removed.
+
+Regeneration uses verified uv 0.13.7, cutoff `2026-11-05T00:00:00Z`, and the
+existing macOS 26 / arm64 / Python 3.13 recipe in the lock header. Change only
+the three direct pins and remove Six. Compile the complete closure into a scratch
+lock, verify the full resulting package set, then replace only those three
+package blocks and remove Six from the original lock. Preserve all other
+artifact allowlists byte-for-byte. The existing Pillow 13 override is unchanged.
+
+The final wheel lock has 96 distributions and 1,168 hashes; 93 companion blocks
+are byte-identical. Every artifact matches official unyanked PyPI metadata and
+predates the cutoff. OSV including malicious-package records is clean across
+96 registry identities, ten retained source identities and four immutable Git
+commits (110 queries). A full dependency-aware hash-required target plan passes
+with the existing Pillow override supplied with its own lock hash.
+
+Four native Python 3.13 baseline/candidate environments install exact hashed
+plot/data or retained-web subclosures. Plot/data dependency checks pass; the web
+checks retain only the previously documented Gradio/Pillow 13 metadata conflict.
+Real Matplotlib/Pandas probes cover timezone resources, recurrence, formatting,
+DST folds/gaps, explicit ambiguous/nonexistent-time handling, parsing/refusal,
+UTC serialization and Agg rendering. Frozen Pixal metadata callables execute in
+explicit AST isolation on synthetic CSVs, covering Unicode, missing fields,
+indexed merge precedence and round-trip persistence, not model inference.
+
+The larger dateutil 2.9 → 4 transition has an observed correction: both versions
+read the identical slim TZif2 America/New_York resource fixture from TZData
+2026.6. Version 2.9 reports UTC for July 2026/2045, while version 4 correctly
+reports UTC−04:00. Host/default timezone paths are separately exercised; this
+is not claimed as blanket timezone parity. Malformed TZif and stricter ISO
+numeric-field refusals are also covered.
+
+Actual retained Gradio components exercise DateTime localization/normalization,
+finite-date dataframe CSV/JSON, queue grouping and missing-value summaries, and
+Matplotlib image serialization with no network connections. For missing dates,
+actual Gradio serving uses `model_dump()` followed by its `ORJSONResponse`
+renderer; both environments successfully serialize Pandas `NaT` as the string
+`"NaT"`. Direct `model_dump_json()` raises `PydanticSerializationError` in both,
+but that is not the serving path and does not establish a supported-use defect.
+Gradio does not explicitly promise NaT-to-null normalization. Pandas' own
+missing-value-to-null JSON also passes. PortOS does not launch the fork's Gradio
+UI; browser display and missing-date UI semantics were not tested.
+
+All 34 focused Pixal installer, runtime and lock-profile tests pass. No native
+geometry, model weights, generation quality, live instance data or external
+provider calls are involved. Pandas 3 remains a separate migration.
