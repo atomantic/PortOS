@@ -12,6 +12,7 @@ const mockGetMoodBoard = vi.fn();
 const mockUpdateMoodBoard = vi.fn();
 const mockAddMoodBoardItem = vi.fn();
 const mockUpdateMoodBoardItem = vi.fn();
+const mockRemoveMoodBoardItem = vi.fn();
 const mockSyncMoodBoardPinterest = vi.fn();
 const mockImportMoodBoardPinterest = vi.fn();
 const mockImportMoodBoardXPost = vi.fn();
@@ -32,7 +33,7 @@ vi.mock('../services/api', () => ({
   updateMoodBoard: (...args) => mockUpdateMoodBoard(...args),
   addMoodBoardItem: (...args) => mockAddMoodBoardItem(...args),
   updateMoodBoardItem: (...args) => mockUpdateMoodBoardItem(...args),
-  removeMoodBoardItem: vi.fn(),
+  removeMoodBoardItem: (...args) => mockRemoveMoodBoardItem(...args),
   linkMoodBoardPinterest: vi.fn(),
   unlinkMoodBoardPinterest: vi.fn(),
   syncMoodBoardPinterest: (...args) => mockSyncMoodBoardPinterest(...args),
@@ -137,6 +138,36 @@ beforeEach(() => {
   mockLocalizeMoodBoardMedia.mockResolvedValue({ board: null, localized: 0, failed: 0 });
   currentId = 'a';
   analysisDelay = null;
+});
+
+describe('MoodBoardDetail item removal', () => {
+  it('keeps confirmation beside the trash control, before a long prompt, and removes only after confirmation', async () => {
+    const prompt = 'Dreamy soft-focus reference. '.repeat(120);
+    mockGetMoodBoard.mockResolvedValueOnce({ id: 'a', name: 'Board A', items: [
+      { id: 'i1', type: 'image', imageUrl: '/data/images/one.png', caption: prompt },
+    ] });
+    mockRemoveMoodBoardItem.mockResolvedValue({ id: 'a', items: [] });
+    renderPage();
+    const trigger = await screen.findByRole('button', { name: 'Remove item' });
+    fireEvent.click(trigger);
+    const confirmation = screen.getByRole('group', { name: 'Remove this mood board item?' });
+    expect(trigger.parentElement.nextElementSibling).toBe(confirmation);
+    expect(confirmation.nextElementSibling.textContent).toContain(prompt.trim());
+    expect(document.activeElement).toBe(confirmation);
+    expect(mockRemoveMoodBoardItem).not.toHaveBeenCalled();
+    fireEvent.click(within(confirmation).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByText('Remove this item?')).toBeNull();
+    expect(mockRemoveMoodBoardItem).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(trigger);
+    fireEvent.click(trigger);
+    fireEvent.keyDown(screen.getByRole('group', { name: 'Remove this mood board item?' }), { key: 'Escape' });
+    expect(screen.queryByText('Remove this item?')).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole('button', { name: 'Remove', exact: true }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Remove item' })).toBeNull());
+    expect(mockRemoveMoodBoardItem).toHaveBeenCalledWith('a', 'i1', { silent: true });
+  });
 });
 
 describe('MoodBoardDetail image preview', () => {
