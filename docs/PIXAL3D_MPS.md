@@ -128,3 +128,7 @@ pins, validating real isolated/offline hash installs and synthetic native
 source/editable builds.
 See [3D Metal packaging and installer tooling](PYTHON_RUNTIME_REFRESH.md#3d-metal-packaging-and-installer-tooling)
 for exact scope, full-lock audits and the limits of installer-only coverage.
+
+The retained Kornia 0.9.0/Kornia-RS 0.2.0 refresh preserves OpenCV and native
+source pins. See [Kornia/native image helper evidence](PYTHON_RUNTIME_REFRESH.md#3d-metal-retained-kornia-and-native-image-helpers)
+for synthetic CPU coverage and its application/runtime limits.

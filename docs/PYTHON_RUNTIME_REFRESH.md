@@ -1959,3 +1959,50 @@ identities, 10 source-package identities and 13 source commits (120 queries),
 with no matches. Both complete profile installation dry plans and 171 focused
 installer/profile/adapter tests passed. No weights, live providers, GPU
 workload, complete runtime installation or production GLB claim is involved.
+
+## Thirty-fifth-slice 3D Metal retained Kornia and image-helper migration (2026-11-12)
+
+Both Metal profiles advance **Kornia 0.8.2 → 0.9.0** and its required
+**Kornia-RS 0.1.14 → 0.2.0** companion. Kornia's Python >=3.11,
+Torch >=2.5.1 and NumPy >=1.21 requirements fit retained CPython 3.13,
+Torch 2.15.0 and NumPy 2.2.6. RS provides a CPython 3.13/macOS 11 ARM64
+wheel, below the profiles' macOS 26 floor. OpenCV, all other registry pins,
+immutable native/model sources and the intentional Pixal Pillow override
+remain unchanged.
+
+A fresh inventory of the immutable Pixal, TRELLIS, MoGe and pinned helper
+Python sources found no direct Kornia imports. This is retained-library
+maintenance, not a newly claimed application rendering path. Kornia 0.9
+changes several numerical conventions and model defaults; RS 0.2 includes
+Rust API changes and corrected float-resize sampling. No Rust source API,
+model constructor, pretrained download or device path is exercised here.
+
+Native CPython 3.13.18 baseline/candidate CPU probes use exact-hash bounded
+subclosures (15 and 14 packages respectively; Kornia no longer needs the
+baseline's Packaging dependency in this subset). The profiles retain different
+NumPy wheel hashes; the candidate probe is rerun after a complete hash-locked
+reinstall using TRELLIS's exact 14-package artifact subset. Other candidate
+package blocks are identical between the profiles. Real Kornia identity and
+one-pixel-translation warps use explicit pixel coordinates/align-corners;
+resize gradients, constant-image Gaussian blur, grayscale and reversible
+point transformations satisfy semantic invariants. Bad tensor/channel
+shapes are rejected. Real native RS uint8 operations cover identity warp,
+resize, RGB/BGR conversion, constant-image interpolation and lossless PNG
+round-trip. Kornia's actual RS-backed image loader is exercised in RGB8
+and normalized RGB32 modes. Missing files, invalid interpolation and wrong
+dtypes are rejected. Legacy top-level RS resize still works but emits its
+existing deprecation warning on the invalid-dtype probe in both versions.
+These tests do not infer float-RS sampling parity, GPU/MPS performance,
+full native runtime installation or production geometry/rendering quality.
+Fixtures use synthetic local data and reject network connections.
+
+Both complete locks were regenerated with verified uv 0.13.7, the documented
+CPython 3.13/macOS 26+ ARM64 target and **2026-11-05T00:00:00Z** cutoff.
+All 94 unrelated Pixal and 54 unrelated TRELLIS identities, markers and hash
+sets remain unchanged. Complete generated artifact sets expand the locks to
+96 entries/958 hashes and 56 entries/413 hashes respectively; their union
+has 97 registry identities/962 hashes. Each hash matches an official unyanked
+artifact predating the cutoff. Fresh OSV/MAL checks cover those identities,
+10 source-package identities and 13 source commits (120 queries), with no
+matches. Both complete profile installation dry plans and the five focused
+installer/profile/adapter files (171 tests) passed.

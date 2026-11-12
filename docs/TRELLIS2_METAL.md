@@ -152,3 +152,7 @@ The standalone pybind11 3.1.0 refresh leaves Torch's already-vendored 3.1.0
 headers and native source revisions unchanged. See
 [TRELLIS retained pybind11 tooling](PYTHON_RUNTIME_REFRESH.md#trellis-metal-retained-pybind11-build-tooling)
 for header ownership, native CPU build probes and their limits.
+
+The retained Kornia 0.9.0/Kornia-RS 0.2.0 refresh preserves OpenCV and native
+source pins. See [Kornia/native image helper evidence](PYTHON_RUNTIME_REFRESH.md#3d-metal-retained-kornia-and-native-image-helpers)
+for synthetic CPU coverage and its application/runtime limits.
