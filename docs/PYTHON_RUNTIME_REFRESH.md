@@ -688,3 +688,78 @@ The remaining profile/API migrations and their concrete constraints are
 [enumerated on #15769](https://github.com/atomantic/PortOS/issues/15769#issuecomment-6815367652).
 Unperformed native/model execution is a disclosed limit, not a claim of
 incompatibility or an independent blanket platform-validation task.
+
+## Thirteenth-slice H3 coordinated web stack (2026-11-12)
+
+The Apple Silicon H3 profile updates **FastAPI 0.141.1 → 0.162.0**,
+**Starlette 1.6.0 → 1.10.0**, **Uvicorn 0.52.1 → 0.54.0**,
+**Pydantic 2.13.4 → 2.14.2 / Core 2.46.4 → 2.50.2**,
+**python-multipart 0.0.32 → 0.0.33**, **Typing-Inspection 0.4.2 → 0.4.4**,
+**Click 8.4.2 → 8.5.0** and **Typer 0.27.1 → 0.27.3** together.
+FastAPI additionally requires **OpenTelemetry API 1.45.2**; no SDK or exporter
+is added. The other **46** package versions, markers and hash sets remain
+unchanged. The immutable H3 source, MLX/model libraries, Hub/HTTPX stack,
+Python 3.11 floor and CUDA profiles are unchanged.
+
+H3's own source does not call these web APIs. They enter its required closure
+through **mlx-vlm 0.6.10**, whose actual `mlx_vlm/server/app.py`, request schemas,
+HTTP middleware and transcription parser were inspected and exercised. The
+separate optional `mlx_audio.server` requires `webrtcvad`, absent from this
+profile; it was neither installed nor stubbed to claim extra server coverage.
+
+Compatibility review covered the versioned release notes:
+
+- [FastAPI](https://github.com/fastapi/fastapi/blob/0.162.0/docs/en/docs/release-notes.md)
+  changes omitted/default/null handling, removes deprecated parameter extras
+  and adjusts form-model validation. The inspected callers use standard fields,
+  `extra="allow"` and explicit/manual boolean defaults. They need no adaptation
+  for the exercised requests; this is not a claim that all FastAPI inputs retain
+  their old behavior.
+- [Starlette](https://github.com/Kludex/starlette/blob/1.10.0/docs/release-notes.md)
+  changes form parsing, repeated-field comparison, CORS, streaming cancellation
+  and middleware cleanup. Its Python 3.11 floor matches this runtime.
+- [Pydantic](https://github.com/pydantic/pydantic/blob/v2.14.2/HISTORY.md) changes
+  JSON/alias/extra validation and requires Core 2.50.2 plus Typing-Inspection
+  0.4.4. Actual VLM request models, reasoning aliases and serialization passed.
+- [python-multipart](https://github.com/Kludex/python-multipart/blob/0.0.33/CHANGELOG.md)
+  now requires Python 3.11 and fixes parsing/decoding behavior. The actual VLM
+  parser accepted a tiny WAV and repeated timestamp fields with expected defaults.
+- [Uvicorn](https://github.com/Kludex/uvicorn/blob/0.54.0/docs/release-notes.md)
+  adds optional experimental HTTP/2 support; no new HTTP implementation is
+  installed or enabled. The existing HTTP/1.1 h11 path was exercised.
+
+The complete **56-package / 1,227-hash** lock was regenerated with SHA-256-verified
+**uv 0.13.7**, wheels only and cutoff `2026-11-05T00:00:00Z`. All hashes match
+non-yanked pre-cutoff PyPI artifacts. Complete OSV/MAL responses returned zero
+findings, with count, error and pagination checks. Bundled native libraries are
+not separately audited. The input remains an exact pin for every resolved package.
+
+Fresh Apple Silicon CPython **3.11.18** and **3.12.11** environments installed the
+complete lock and passed dependency checks plus the actual H3 runtime probe with
+`--verify-seams`. On both, a real loopback Uvicorn/h11 server hosted the pinned
+VLM app with an isolated empty model cache and no preload configuration. Checks
+passed for lifespan startup/shutdown, health/model-list/metrics responses,
+OpenAPI generation, authentication rejection/acceptance, CORS preflight and the
+real server-header middleware. Invalid typed requests were rejected before model
+execution. A test-only route used the real VLM Pydantic request type to verify
+valid serialization, unknown-field preservation and omitted/default handling.
+
+A test-only route also called the real transcription parser on a synthetic WAV:
+repeated fields, false defaults and explicit true flags passed. The actual audio
+endpoint rejected missing file/model, malformed multipart and invalid audio.
+Streaming fixtures through the real middleware completed background work and
+cancelled on disconnect. The same request/parser fixtures also passed against
+the previous complete lock on Python 3.11, providing a bounded baseline comparison.
+Actual Uvicorn and Hub CLI help paths passed on both updated interpreters.
+
+Telemetry automatic exporter setup is opt-in in the selected FastAPI release.
+The VLM app does not opt in; with a clean telemetry environment, the probe verified
+that no SDK is installed and API-created spans are non-recording. This adds no
+exporter or telemetry destination. **187** focused installer/profile/source-probe
+tests passed without weakening the existing source/lock parity checks.
+
+No model weights, provider calls, generation or native model-quality evaluation
+ran. Test-only parser/schema/streaming fixtures do not claim full model-serving
+behavior. Remaining H3 work includes its MLX audio/language-model libraries,
+Hub migration and untouched helper packages; the broader profile/major migration
+matrix remains under #15769.
