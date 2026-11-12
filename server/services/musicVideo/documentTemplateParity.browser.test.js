@@ -116,7 +116,7 @@ function App(){const[value,setValue]=useState(null);window.show=(project,data,t)
     });
   }), 30000);
 
-  async function compare(project, t, { words = false, reuse = false, clockJump = false, lyricsOff = false } = {}) {
+  async function compare(project, t, { words = false, reuse = false, clockJump = false, lyricsOff = false, beforeCapture } = {}) {
     // Media elements store microseconds; use a frame's centre so rounding a
     // fractional 24fps boundary cannot move the native clock back one frame.
     t = (Math.floor(t * 24 + 1e-6) + 0.5) / 24;
@@ -149,6 +149,7 @@ function App(){const[value,setValue]=useState(null);window.show=(project,data,t)
     }
     // A late image/video/font load repaints the native surface on its own event.
     await native.waitForFunction(() => [...document.querySelectorAll('figure img')].every(img => img.complete && img.naturalWidth));
+    await beforeCapture?.();
     const nativeBefore = await native.evaluate(() => window.templateParityState());
     const actual = await native.locator('figure > div').first().screenshot();
     const nativeAfter = await native.evaluate(() => window.templateParityState());
@@ -172,6 +173,53 @@ function App(){const[value,setValue]=useState(null);window.show=(project,data,t)
     for (const move of ['hold', 'push', 'pan']) await compare(base({ ...still, stillMove: move }), 1.25);
     await compare(base({ ...still, camera: { move: 'dutch-roll', speed: 'fast', onBeat: true } }), 1.25);
     await compare(base({ ...still, visualLayer: 'footage', videoHistoryId: 'clip' }), 1.25);
+  });
+  it('repaints paused footage when presentation follows the seeked paint', async () => {
+    // Pin the observed ordering without sleeps: seeked/readyState can precede
+    // the drawable frame. Release the real compositor callbacks only after the
+    // native canvas has painted that unavailable frame, with no new media event.
+    await native.evaluate(() => {
+      const drawImage = CanvasRenderingContext2D.prototype.drawImage;
+      const requestFrame = HTMLVideoElement.prototype.requestVideoFrameCallback;
+      const held = new Map();
+      window.latePresentation = { released: true, draws: 0, frames: 0 };
+      HTMLVideoElement.prototype.requestVideoFrameCallback = function (callback) {
+        return requestFrame.call(this, (now, metadata) => {
+          if (window.latePresentation.released) callback(now, metadata);
+          else { held.set(callback, () => callback(now, metadata)); window.latePresentation.frames++; }
+        });
+      };
+      CanvasRenderingContext2D.prototype.drawImage = function (source, ...args) {
+        if (source instanceof HTMLVideoElement && !window.latePresentation.released) {
+          if (this.canvas.dataset.testid === 'document-template-canvas') window.latePresentation.draws++;
+          return;
+        }
+        return drawImage.call(this, source, ...args);
+      };
+      window.releasePresentation = () => {
+        window.latePresentation.released = true;
+        for (const callback of held.values()) callback();
+        held.clear();
+      };
+      window.restorePresentation = () => {
+        window.releasePresentation();
+        CanvasRenderingContext2D.prototype.drawImage = drawImage;
+        HTMLVideoElement.prototype.requestVideoFrameCallback = requestFrame;
+      };
+    });
+    try {
+      const value = base({ ...still, visualLayer: 'footage', videoHistoryId: 'clip' });
+      await compare(value, 1.25);
+      await native.evaluate(() => { window.latePresentation.released = false; });
+      await compare(value, 2.25, {
+        reuse: true,
+        beforeCapture: async () => {
+          await native.waitForFunction(() => window.latePresentation.draws > 0 && window.latePresentation.frames > 0
+            && document.querySelector('video')?.dataset.pausedFrame === String(document.querySelector('video')?.currentTime));
+          await native.evaluate(() => window.releasePresentation());
+        },
+      });
+    } finally { await native.evaluate(() => window.restorePresentation()); }
   });
   it('matches the beat punch and the high-energy downbeat glitch under the finish', async () => {
     const value = base(); value.audioAnalysis.sections[0].label = 'Chorus';
