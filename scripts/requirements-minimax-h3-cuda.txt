@@ -10,7 +10,7 @@ transformers==5.22.1
 # OSV's GHSA-4j2p-28q2-5m79 range ends at 1.14.0. Keep the checkpoint index
 # guard: absence of an OSV match does not establish upstream path validation.
 accelerate==1.15.0
-huggingface-hub==1.33.0
+huggingface-hub==2.4.0
 av==18.1.0
 pillow==13.0.0
 numpy==2.4.6

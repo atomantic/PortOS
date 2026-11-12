@@ -16,7 +16,7 @@ libraries, has an exact version and SHA-256 hashes. Repair removes packages
 outside the lock. No pip/bootstrap upgrades or Git builds run on this path.
 
 The stack uses torch 2.14.1+cu126, diffusers 0.42.1, transformers 5.22.1,
-accelerate 1.15.0, huggingface-hub 1.33.0 and numpy 2.4.6 (the Python 3.11
+accelerate 1.15.0, huggingface-hub 2.4.0 and numpy 2.4.6 (the Python 3.11
 compatible line). The released Diffusers wheel contains MiniMax Music 3's
 modular pipeline, replacing the former Git commit install. A different
 `PORTOS_TORCH_CUDA_INDEX` is rejected for this runtime: changing CUDA requires
@@ -30,32 +30,69 @@ music. Renderer performance/listening requirements remain in
 
 ## Regenerating locks
 
-Edit `scripts/requirements-minimax-music3-cuda.txt` with exact direct pins. Using uv
-0.10.6, run from the repository root (Bash):
+Edit `scripts/requirements-minimax-music3-cuda.txt` with exact direct pins. Use the
+verified uv 0.13.7 bootstrap (`requirements-uv-bootstrap.lock.txt`), setting `UV`
+to that executable. The explicit named CUDA index avoids routing unrelated
+packages through PyTorch mirrors, which can lack timestamps required by the
+cooldown. All other packages resolve from PyPI.
 
 ```bash
+set -euo pipefail
+CUTOFF=2026-11-05T00:00:00Z  # advance to a UTC date at least seven days old
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
 for target in windows linux; do
   case "$target" in
     windows) platform=x86_64-pc-windows-msvc ;;
     linux) platform=x86_64-manylinux_2_28 ;;
   esac
-  uv pip compile scripts/requirements-minimax-music3-cuda.txt \
+  python3 - "$TMP/pyproject.toml" "$target" <<'PYPROJECT'
+import json
+import pathlib
+import sys
+
+lines = pathlib.Path("scripts/requirements-minimax-music3-cuda.txt").read_text().splitlines()
+deps = [line for line in lines if line and not line.startswith("#")]
+sources = 'torch={index="pytorch"}\n'
+
+pathlib.Path(sys.argv[1]).write_text(
+    '[project]\nname="portos-minimax-music3-cuda"\nversion="0.0.0"\n'
+    'requires-python=">=3.11"\ndependencies=' + json.dumps(deps) + '\n'
+    '[tool.uv.sources]\n' + sources +
+    '[[tool.uv.index]]\nname="pytorch"\n'
+    'url="https://download.pytorch.org/whl/cu126"\nexplicit=true\n'
+)
+PYPROJECT
+  out="scripts/requirements-minimax-music3-cuda-${target}.lock.txt"
+  cp "$out" "$TMP/$target.lock" # retain unrelated pins during resolution
+  "$UV" --no-config pip compile "$TMP/pyproject.toml" \
     --python-version 3.11 --python-platform "$platform" \
-    --generate-hashes --only-binary :all: \
-    --index-url https://pypi.org/simple \
-    --extra-index-url https://download.pytorch.org/whl/cu126 \
-    --index-strategy unsafe-best-match --emit-index-url \
-    --no-header --annotation-style line --exclude-newer 2026-11-01 \
-    -o "scripts/requirements-minimax-music3-cuda-${target}.lock.txt"
+    --generate-hashes --only-binary :all: --no-header --no-annotate \
+    --index-url https://pypi.org/simple --emit-index-url \
+    --exclude-newer "$CUTOFF" -o "$TMP/$target.lock"
+  {
+    printf '# MiniMax Music 3 CUDA: CPython 3.11, x86_64 %s, CUDA 12.6.\n' "$target"
+    printf '# uv 0.13.7; exclude-newer %s; regenerate: docs/MINIMAX_MUSIC3_CUDA.md.\n' "$CUTOFF"
+    printf '%s\n' '--extra-index-url https://download.pytorch.org/whl/cu126'
+    cat "$TMP/$target.lock"
+  } > "$out"
 done
 ```
 
-Advance the cutoff to a UTC date at least seven days before the update. The
-multi-index strategy permits current PyPI packages alongside CUDA wheels: the
-PyTorch index also mirrors older non-torch packages. Installation still requires
-the exact committed versions and SHA-256 hashes. See uv's
-[index resolution rules](https://docs.astral.sh/uv/pip/compatibility/#packages-that-exist-on-multiple-indexes).
-Keep each lock's target/cutoff header when regenerating.
+The temporary project derives its pins from the source requirements. Existing
+lock output preserves unrelated versions and hash sets; `--no-annotate` avoids
+temporary paths in the result. The pip-format lock retains the installation
+index, but every accepted artifact remains constrained by its SHA-256 hash.
+Verify official CUDA-index artifact hashes and upload dates, including retained
+Triton build hashes, and verify all other artifacts against PyPI. Never drop
+the cutoff or hand-edit generated hashes.
+
+This changes regeneration only. Install/Repair retains its existing
+`--index-strategy unsafe-best-match` with complete `--require-hashes` locks;
+that flag does not permit packages or artifacts outside the committed set.
+
+Only Torch resolves from the CUDA index; its existing native hashes and
+transitive CUDA/Triton baseline remain unchanged.
 
 Query OSV for **every resolved package**, including `MAL-` records, immediately
 before merge. This standard-library Python check normalizes CUDA local build
