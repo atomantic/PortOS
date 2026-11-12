@@ -1,4 +1,5 @@
 import { festivalPacketSchema } from '../../lib/musicVideoFestivalPacket.js';
+import { normalizeBlenderRecord } from '../../lib/musicVideoBlender.js';
 import { musicVideoMediaMode, assertMusicVideoMediaSelections } from '../../lib/musicVideoMediaPolicy.js';
 
 /**
@@ -120,7 +121,7 @@ function normalizeVisualSpec(patch, base = null) {
 }
 
 /** Build a fresh project record from validated create input. */
-export function buildProjectRecord(input, { id, now }) {
+export function buildProjectRecord(input, { id, now, blender, sourceFilm }) {
   const productionPolicy = normalizeMusicVideoProductionPolicy(input.productionPolicy || (input.mediaMode ? { strategy: 'code-first', maxGeneratedVideoPercent: input.mediaMode === 'code-images-video' ? 100 : 0 } : null));
   const {
     name, mode = 'director', trackId = null,
@@ -135,6 +136,9 @@ export function buildProjectRecord(input, { id, now }) {
     version: 1,
     parentProjectId: null,
     rootProjectId: null,
+    // Cross-domain lineage is distinct from Music Video's own version tree.
+    ...(sourceFilm ? { sourceFilm } : {}),
+    ...(blender ? { blender: normalizeBlenderRecord(blender) } : {}),
     status: 'draft',
     mode,
     createdAt: now,

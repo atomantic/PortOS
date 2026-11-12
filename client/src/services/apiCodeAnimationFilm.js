@@ -42,3 +42,4 @@ export const getMusicVideoBlenderLog = (id, path, options = {}) =>
 export const createFilm = (input, options) => request('/code-animation/films', { method: 'POST', body: JSON.stringify(input), ...options });
 export const patchFilm = (id, input, options) => request(`/code-animation/films/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(input), ...options });
 export const attachAudio = (id, input, options) => request(`/code-animation/films/${encodeURIComponent(id)}/audio`, { method: 'POST', body: JSON.stringify(input), ...options });
+export const promoteFilm = (id, input, options = {}) => request(`/code-animation/films/${encodeURIComponent(id)}/promote`, { method: 'POST', body: JSON.stringify(input), ...options });

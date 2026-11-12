@@ -97,7 +97,7 @@ async function enqueue(owner, { shotIds = null, quality, times = null, force = f
   if (quality !== 'still') await requireFfmpeg();
   const { settings } = normalizeBlenderRecord(await owner.readRecord());
   const manifest = await readBlenderManifest(owner);
-  if (!manifest?.shots.length) throw blenderRefusal('Sync shots from scripts before rendering', 'MUSIC_VIDEO_BLENDER_NOT_SYNCED', 409);
+  if (!manifest?.shots.length || manifest.syncedAt === null) throw blenderRefusal('Sync shots from scripts before rendering', 'MUSIC_VIDEO_BLENDER_NOT_SYNCED', 409);
   // The shots sit on the frame grid they were synced at; at another rate their edges would overlap or gap.
   if (manifest.fps !== settings.fps) {
     throw blenderRefusal(`The frame rate changed from ${manifest.fps} to ${settings.fps} since the last sync. Sync shots from scripts again before rendering.`, 'MUSIC_VIDEO_BLENDER_NOT_SYNCED', 409);
