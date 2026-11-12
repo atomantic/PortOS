@@ -169,6 +169,7 @@ it('runs the project film look as a finishing pass on a Blender final and its ex
   expect(applyFilmLookFinish.mock.calls[1][0]).toMatchObject({ offsetSec: 1, jobId: excerptId });
 });
 
+// The mtv card here is steady, but no film look pass follows a neutral look: the join is the only place to draw it.
 it('lays the project title card over a Blender final and over the part of it an excerpt holds', async () => {
   await renderShots('final');
   await projects.updateProject(id, { titleCard: { title: 'Example Song', artist: 'Example Artist', year: 'MMXXVI', style: 'mtv', startSec: 0.5, endSec: 2, outro: true, outroStartSec: 4, outroEndSec: 5.5 } });
@@ -203,6 +204,40 @@ it('lays the project title card over a Blender final and over the part of it an 
   await excerptDone((await startExcerptRender(id, { startSec: 2, endSec: 4 })).excerptId);
   expect(renderTypographyOverlays).toHaveBeenCalledTimes(2);
   expect(blender.ffmpeg.some((args) => args.includes('-itsoffset'))).toBe(false);
+});
+
+// Uniquely catches a steady card baked under the film look pass (it would weave and grain with the
+// film), one dropped from both the join and the pass, and a card that is not steady handed to the pass.
+it('leaves a steady title card out of the join for the film look pass to draw, and bakes a card that is not steady as before', async () => {
+  await renderShots('final');
+  const card = { title: 'Example Song', artist: 'Example Artist', style: 'mtv', startSec: 0.5, endSec: 2 };
+  await projects.updateProject(id, { filmLook: { version: 2, preset: 'custom', grain: 0.4 }, titleCard: card });
+  blender.ffmpeg.length = 0;
+  const { jobId } = await renderMusicVideo(id);
+  await finished(jobId);
+  // No capture browser, no overlay at the join: the shots still join by stream copy.
+  expect(renderTypographyOverlays).not.toHaveBeenCalled();
+  expect(blender.ffmpeg.some((args) => args.includes('-itsoffset'))).toBe(false);
+  expect(blender.ffmpeg).toHaveLength(2);
+  // The pass draws it instead, and stops it where the six-second film ends.
+  expect(applyFilmLookFinish).toHaveBeenCalledTimes(1);
+  expect(applyFilmLookFinish.mock.calls[0][0]).toMatchObject({ jobId, titleCard: { title: 'Example Song', style: 'mtv', steady: true, startSec: 0.5, endSec: 2 }, titleCardUntilSec: 6 });
+
+  // An excerpt's pass draws it on song time.
+  const { excerptId } = await startExcerptRender(id, { startSec: 1, endSec: 3 });
+  await excerptDone(excerptId);
+  expect(renderTypographyOverlays).not.toHaveBeenCalled();
+  expect(applyFilmLookFinish.mock.calls[1][0]).toMatchObject({ jobId: excerptId, offsetSec: 1, titleCard: { title: 'Example Song', steady: true }, titleCardUntilSec: 6 });
+
+  // Keep steady switched off: the card belongs in the film, so the join bakes it and the look runs over it.
+  await projects.updateProject(id, { titleCard: { ...card, steady: false } });
+  blender.ffmpeg.length = 0;
+  const film = await renderMusicVideo(id);
+  await finished(film.jobId);
+  expect(renderTypographyOverlays).toHaveBeenCalledTimes(1);
+  expect(blender.ffmpeg.some((args) => args.includes('-itsoffset'))).toBe(true);
+  expect(applyFilmLookFinish).toHaveBeenCalledTimes(3);
+  expect(applyFilmLookFinish.mock.calls[2][0]).not.toHaveProperty('titleCard');
 });
 
 it('cuts an excerpt window out of the best available shot videos and refuses one holding a shot with no video', async () => {

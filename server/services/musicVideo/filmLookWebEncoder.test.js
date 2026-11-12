@@ -62,6 +62,24 @@ describe('film look WebCodecs finishing adapter', () => {
     await expect(admitFilmLookWeb(page(), { ...contract, durationSec: 10 }, dir)).rejects.toThrow('incompatible stream');
   });
 
+  // Uniquely catches a frame the page encodes another way (a title card flattened onto the picture)
+  // going unsampled, or sampled in a slot the comparison never reads.
+  it('puts the song times it is asked to check on frames the comparison reads', async () => {
+    const dir = await directory(), target = page();
+    const long = { ...contract, durationSec: 10 };
+    expect(await admitFilmLookWeb(target, long, dir, { offsetSec: 2, checkTimes: [4.5, 7.26, 100] })).toBe(true);
+    const seeks = target.seeks.map((expression) => Number(/seek\(([\d.]+)\)/.exec(expression)[1]));
+    // Snapped to the render's frames and kept inside it; the ends stay on the render's first and last frame.
+    expect([seeks[3], seeks[5], seeks[8]]).toEqual([4.5, 7.25, 2 + 239 / 24]);
+    expect([seeks[0], seeks[23]]).toEqual([2, 2 + 239 / 24]);
+    expect(seeks[4]).toBeCloseTo(2 + Math.round(4 * 239 / 23) / 24, 9);
+    // Those slots are compared ones: a poor candidate frame there declines WebCodecs; one beside them does not.
+    for (const [badFrame, admitted] of [[3, false], [5, false], [8, false], [4, true]]) {
+      state.badFrame = badFrame;
+      expect(await admitFilmLookWeb(page(), long, dir, { offsetSec: 2, checkTimes: [4.5, 7.26, 100] }), `frame ${badFrame}`).toBe(admitted);
+    }
+  });
+
   it('removes the elementary stream on reorder or cancellation', async () => {
     const dir = await directory(), path = join(dir, 'segment.mp4');
     await expect(encodeFilmLookWeb(page({ failFrame: 2 }), contract, path)).rejects.toThrow('reordered frames');

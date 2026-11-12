@@ -21,5 +21,5 @@ function titleCardFontSources() {
   return cached;
 }
 
-/** titleCardRuntimeSource with the bundled faces registered. */
-export const titleCardRuntime = (card) => titleCardRuntimeSource(card, { fonts: titleCardFontSources() });
+/** titleCardRuntimeSource with the bundled faces registered; `options` are its own (`untilSec`). */
+export const titleCardRuntime = (card, options = {}) => titleCardRuntimeSource(card, { ...options, fonts: titleCardFontSources() });

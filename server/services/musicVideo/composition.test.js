@@ -145,6 +145,12 @@ describe('opening title card in composed renders', () => {
     const html = buildTypographyDocument({ cues: plan.cues, width: 1280, height: 720, durationSec: 10, fps: 24 });
     expect(html).toContain('__portosTitleCard');
     expect(html).not.toContain('"id":"title-card"');
+    // The capture is laid into a picture as an alpha clip: a steady card stays an ordinary layer of it.
+    const steady = projectTypographyPlan({ composition: { mode: 'composed' }, titleCard: { ...titleCard, style: 'mtv', steady: true } }, [], [], 10);
+    const captured = buildTypographyDocument({ cues: steady.cues, width: 1280, height: 720, durationSec: 10, fps: 24 });
+    expect(captured).toContain('"style":"mtv"');
+    expect(captured).toContain('"steady":false');
+    expect(captured).not.toContain('"steady":true');
   });
 
   it('is left out when the project is not composed or the card is off', () => {

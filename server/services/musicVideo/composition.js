@@ -404,7 +404,9 @@ export function buildTypographyDocument({ cues, style = {}, width, height, durat
   const color = /^#[0-9a-f]{6}$/i.test(style.color || '') ? style.color : '#ffffff';
   const fontStack = hud ? FONT_STACKS.mono : (FONT_STACKS[style.font] || FONT_STACKS.sans);
   const accent = /^#[0-9a-f]{6}$/i.test(style.accentColor || '') ? style.accentColor : '#ff5a1f';
-  const titleCardScript = titleCard ? `<script>${titleCardRuntime(titleCard)}</script>` : '';
+  // This page is captured as an alpha clip and laid into a picture: it has no film look for a
+  // steady card to rise above, so the card stays an ordinary layer of the capture.
+  const titleCardScript = titleCard ? `<script>${titleCardRuntime({ ...titleCard, steady: false })}</script>` : '';
   return `<!doctype html><html><head><meta charset="utf-8">${titleCardScript}<style>
 @font-face { font-family: "MV Archivo"; src: url(${LYRIC_FONT_FILE}) format("woff2"); font-weight: 100 900; font-stretch: 62% 125%; }
 ${titleCard?.font === 'mono' ? `@font-face { font-family: "MV Mono"; src: url(${TITLE_CARD_MONO_FONT_FILE}) format("woff2"); font-weight: 500; }\n` : ''}html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }

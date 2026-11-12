@@ -3,8 +3,10 @@
  * in film order with the master song, so the director can watch the whole
  * thing while shots are still missing (black) or out of date. A cut carries
  * the project's grade, timed shot effects and title card as the final render
- * does; it can also go through the project's film look, and be published as
- * the project's review draft: a new version of one "Blender cut" animatic artifact.
+ * does; it can also go through the project's film look (which then draws a
+ * steady title card over the look instead of the join baking it under), and be
+ * published as the project's review draft: a new version of one "Blender cut"
+ * animatic artifact.
  *
  * Cuts are regenerable files under renders/cuts/, indexed by cuts.json; the
  * newest 8 per quality are kept.
@@ -19,7 +21,7 @@ import { blenderRefusal, blenderRendersDir, blenderScratchDir, readBlenderJson }
 import { blenderNotSynced, planBlenderCut, readBlenderFilm } from './film.js';
 import { blenderFinishFilter } from './finishFilter.js';
 import { assembleBlenderVideo } from './assemble.js';
-import { withBlenderTitleCard } from './titleCard.js';
+import { blenderTitleCardPlan, withBlenderTitleCard } from './titleCard.js';
 import { requireFfmpeg } from './encode.js';
 import { activeBlenderJobs, createBlenderJob, updateBlenderJob } from './jobs.js';
 import { openBlenderJobLog } from './logs.js';
@@ -75,7 +77,8 @@ async function runCut(entry, { projectId, quality, animatic, filmLook, audioPath
     const progress = (from, to) => (fraction) => updateBlenderJob(entry, { index: Math.round((from + (to - from) * fraction) * 100), total: 100 });
     const { finishNeeded, lookPass } = await filmLookPass(project, filmLook);
     const frame = { width: plan.width, height: plan.height, fps: plan.fps, startSec: 0, endSec: film.shots[film.shots.length - 1].end };
-    const { durationSec } = await withBlenderTitleCard({ project, jobId: entry.job.id, ...frame, signal }, (overlays) => {
+    const card = blenderTitleCardPlan(project, { lookPass: finishNeeded, filmEndSec: frame.endSec });
+    const { durationSec } = await withBlenderTitleCard({ project, jobId: entry.job.id, ...frame, bake: card.bake, signal }, (overlays) => {
       if (overlays.length) log.write('PortOS: title card over the cut');
       return assembleBlenderVideo({
         segments: plan.segments, width: plan.width, height: plan.height, fps: plan.fps, quality, overlays,
@@ -86,8 +89,8 @@ async function runCut(entry, { projectId, quality, animatic, filmLook, audioPath
     });
     if (finishNeeded) {
       updateBlenderJob(entry, { status: 'encoding' });
-      log.write('PortOS: film look pass');
-      await lookPass({ project, path: output, jobId: entry.job.id, signal, label: 'Blender cut film look', onProgress: progress(0.5, 1) })
+      log.write(card.bake ? 'PortOS: film look pass' : 'PortOS: film look pass, with the steady title card over it');
+      await lookPass({ project, path: output, jobId: entry.job.id, signal, label: 'Blender cut film look', ...card.pass, onProgress: progress(0.5, 1) })
         .catch(async (error) => { await rm(output, { force: true }); throw error; });
     }
     await recordCut(projectId, {

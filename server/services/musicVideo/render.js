@@ -1243,14 +1243,15 @@ async function renderSeekedMode(projectId, project, handOff, renderer, options =
     await assertCurrentRenderApproval(projectId, project, options);
     if (signal.aborted) throw Object.assign(new Error('Render cancelled'), { code: 'CANCELED' });
     const encoded = await renderer.encode({
-      plan, project, projectId, jobId, audioPath, soundBed, outputPath, signal,
+      plan, project, projectId, jobId, audioPath, soundBed, outputPath, signal, lookPass: finishing,
       onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: encodeTop * fraction }),
     });
     // The ending (cutting room floor, credits; when on) joins after the song.
     const outroSec = await appendStatsOutro({ project, path: outputPath, jobId, signal, withFilmLook: !!renderer.filmLookInPage });
-    // After the ending, so the look grades it with the rest of the film.
+    // After the ending, so the look grades it with the rest of the film. `lookPassInputs` is
+    // what the encode left for the pass to draw over the look (a Blender film's steady title card).
     if (finishing) {
-      await applyFilmLookFinish({ project, path: outputPath, jobId, signal,
+      await applyFilmLookFinish({ project, path: outputPath, jobId, signal, ...encoded.lookPassInputs,
         onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: encodeTop + (1 - encodeTop) * fraction }) });
     }
     return outroSec > 0 ? { ...encoded, durationSec: encoded.durationSec + outroSec } : encoded;

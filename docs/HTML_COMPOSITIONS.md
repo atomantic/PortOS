@@ -434,15 +434,16 @@ still applies inside the ffmpeg encode; the film look follows it.
 ## Music-video opening title card
 
 The MTV-style credit block a video opens with: song title, artist, year and an
-optional extra line (album, director), fading in over the opener and out again.
+optional extra line (album, director), fading in over the opener (optionally
+sliding in from one side as it does) and out again in place.
 **Look → Opening title card** (under the docked preview) stores it on the project (`project.titleCard`,
 validated by `musicVideoTitleCardSchema`, normalized by `normalizeTitleCard` in
 `server/lib/musicVideoTitleCard.js`; `null` = none, `enabled: false` keeps the
 text). Turning it on fills the song title (the project name without its version
 suffix), the artist named for DistroKid under Where you post, this year, and a
 window that ends half a second before the first sung line. Timing (in, out,
-fade), position (four corners, bottom centre, centre), font, size, look and
-colors are all editable. Fonts are the lyric type's Archivo, Helvetica, serif,
+fade in, fade out), the slide, position (four corners, bottom centre, centre),
+font, size, look and colors are all editable. Fonts are the lyric type's Archivo, Helvetica, serif,
 Plex Mono, and six bundled OFL faces (`TITLE_CARD_FONT_FACES`: Oswald,
 Audiowide, Orbitron, Righteous, Pacifico, Playfair Display, files and licences
 in `server/services/musicVideo/titleCardFonts/`), picked from swatches drawn in
@@ -452,8 +453,8 @@ card before it. **Also at the end** (optional, off by default: `outro`) shows th
 same card again in its own window (`outroStartSec`–`outroEndSec`, song time);
 turning it on times that window from the song's length (`titleCardOutroWindow`:
 as long as the opening one, ending a second before the song does). The runtime's
-fade covers both windows, and a composed cut gets one capture cue per window
-(`titleCardWindows`). While the card shows, a lyric line in a default zone that
+fades and slide cover both windows, and a composed cut gets one capture cue per
+window (`titleCardWindows`). While the card shows, a lyric line in a default zone that
 would collide with the card's corner steps across the frame (a lower-left card
 sends it to the upper left); a Text zone set on the line's shot stays as set.
 
@@ -469,13 +470,52 @@ load. It has two looks (`style`). `outline` follows the lyric type: cream fill, 
 outline, no plate. `mtv` is the classic lower third: the artist over the title, on a dark translucent plate with a colored bar on its leading
 edge (`accentColor`, cyan by default) and the title in `titleColor` (yellow by
 default). Both sit inside the same title-safe insets, and a block wider than
-its zone shrinks rather than running off frame. Like the lyrics it sits under the film look. It also rides
+its zone shrinks rather than running off frame. It also rides
 on the lyric pages (the lyric-timing playthrough and the lyrics laid over the
 storyboard animatic, which carry no film look), so it can be checked against
 the timed words before the composition exists. A composed render (`composition.mode:
 'composed'`) and its draft excerpts draw it too: `projectTypographyPlan` adds a
 text-less `title-card` cue, and `buildTypographyDocument` installs the same
 runtime on the transparent overlay page captured over the cut.
+
+### Fades and slide
+
+`fadeSec` is the fade in and `fadeOutSec` the fade out (0–3 s each, each at
+most half the window it is in). A card saved before the two were separate has
+no `fadeOutSec` and fades out over `fadeSec`, as it always did.
+
+**Slide in** (`slideIn`: `none`, `left` or `right`, the side the card comes
+FROM; off by default) moves the whole block (plate, bar and text) in while it
+fades in: it starts `slidePct` percent of the frame width to that side
+(1–100, default 12) and eases out to its resting place over `slideSec`
+(0.1–3 s, default 0.8, at most half the window). Both windows slide in. The
+card never slides out: it fades out where it rests. `titleCardSlide(card, t)`
+is the offset and `drawTitleCard` applies it, so every surface that draws the
+card moves it the same way, and every frame is still a pure function of song
+time. `layout()` reports resting positions.
+
+### Keep steady
+
+A card can sit in the film or over it. **Keep steady** (`steady`) draws it over
+the film look and the shots' timed effects, like a broadcast graphic: gate
+weave does not move it, and flicker, grain and the rest of the look do not
+touch it. Off, the card is part of the picture and takes the look like the
+lyrics do. Picking the `mtv` look turns Keep steady on and picking `outline`
+turns it off; the director can change it afterwards. A stored card without the
+field follows the same rule, so an existing `mtv` card becomes steady and an
+existing `outline` card is unchanged.
+
+How each surface holds a steady card over the look:
+
+| Surface | Steady card |
+| --- | --- |
+| Composition document: final render, excerpts, docked live preview, the paused exact frame, generated previews | The film look is a filter (and, while a preview plays, a transform and overlay layers) on the page's root element, which no ordinary element inside the page escapes. The runtime puts a steady card's canvas in the browser's top layer (`popover="manual"`), which the root's filter and transform do not reach. These pages are captured by page screenshot or screencast, which include the top layer. |
+| Blender film: final render, excerpts, cuts | See [Blender films](./features/music-video-blender.md#finishing): the film look pass draws the card instead of the join baking it. |
+| Storyboard animatic, composition and film live previews (in this browser) | The card rides the lyric layer, an iframe inside the frame the look filters. A steady card's layer is placed outside that frame, over the same box: the lyric layer itself when it carries only the card (every Blender film preview, or a video with its words switched off), otherwise a second, card-only layer while the words stay in the film. A saved frame lays that layer over the finished picture. |
+| Composed cut (`composition.mode: 'composed'`) | Not available. The card is baked into the encode and the film look pass runs over it, so Keep steady is not offered on a composed project and its card stays under the look. |
+
+A browser without the Popover API (Chrome before 114) keeps the card an
+ordinary layer under the look.
 
 ## Music-video composition documents
 

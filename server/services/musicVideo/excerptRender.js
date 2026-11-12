@@ -211,11 +211,12 @@ async function launchSeekedExcerpt({ projectId, project: stored, startSec, endSe
   const finishing = Boolean(renderer.filmLookFinish) && filmLookFinishNeeded(project);
   const encodeTop = finishing ? 0.5 : 1;
   Promise.resolve().then(() => renderer.encode({
-    prepared, project: drawn, projectId, jobId, audioPath, soundBed, outputPath, signal, startSec, endSec: endClamped, fade,
+    prepared, project: drawn, projectId, jobId, audioPath, soundBed, outputPath, signal, startSec, endSec: endClamped, fade, lookPass: finishing,
     onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: encodeTop * fraction }),
   })).then(async (encoded) => {
     if (!finishing) return encoded;
-    await applyFilmLookFinish({ project, path: outputPath, jobId, offsetSec: startSec, signal, label: 'Music-video excerpt film look',
+    // `lookPassInputs`: what the encode left for the pass to draw over the look (a Blender film's steady title card).
+    await applyFilmLookFinish({ project, path: outputPath, jobId, offsetSec: startSec, signal, label: 'Music-video excerpt film look', ...encoded.lookPassInputs,
       onProgress: (fraction) => broadcastSse(job, { type: 'progress', progress: encodeTop + (1 - encodeTop) * fraction }) });
     return encoded;
   }).then(async (encoded) => {

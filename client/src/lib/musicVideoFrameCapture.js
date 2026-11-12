@@ -2,8 +2,10 @@
  * Freeze the actual preview tree, including CSS fitting/transforms and SVG filters.
  * Media becomes decoded pixels before async rasterization, so a later seek cannot
  * replace the selected frame. The resulting SVG is used only as an inert image.
+ * `over` are full-frame PNG data URLs laid over the finished picture, in order:
+ * layers the preview draws outside `root` (a steady title card, over the film look).
  */
-export async function capturePreviewFrame(root, { iframeImages = new Map() } = {}) {
+export async function capturePreviewFrame(root, { iframeImages = new Map(), over = [] } = {}) {
   if (!root) throw new Error('Preview unavailable');
   const box = root.getBoundingClientRect();
   const width = Math.ceil(box.width);
@@ -103,6 +105,12 @@ export async function capturePreviewFrame(root, { iframeImages = new Map() } = {
     // The figure's black ground sits outside the film-look filter.
     paint.fillStyle = '#000'; paint.fillRect(0, 0, width, height);
     paint.drawImage(canvas, 0, 0);
+    for (const png of over) {
+      const layer = new Image();
+      layer.src = png;
+      await layer.decode();
+      paint.drawImage(layer, 0, 0, width, height);
+    }
     const blob = await new Promise((resolve) => output.toBlob(resolve, 'image/png'));
     if (!blob) throw new Error('Frame capture failed');
     const currentBox = root.getBoundingClientRect();

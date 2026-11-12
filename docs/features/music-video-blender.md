@@ -242,8 +242,19 @@ window from the best video each shot has: a current final, else its preview fitt
   (glitches, gate jumps, shutter blinks, light leaks, on a cut or at a moment), are painted when shots are joined.
   Wipes between shots are not drawn.
 - **Title card.** The project's opening title card (the MTV-style credit block set on the Look step: artist, title,
-  year, and optionally again at the end) is laid over the joined shots in every cut, excerpt and final render, under
-  the film look. Leave room for it in the corner it sits in, and keep the film's own type out of its windows.
+  year, and optionally again at the end, with its fades and its slide in) is drawn over the film in every cut,
+  excerpt and final render. Leave room for it in the corner it sits in, and keep the film's own type out of its
+  windows. Where it is drawn depends on **Keep steady** (on by default for the lower-third look, off for the
+  outlined one):
+  - **Steady**, and a film look pass follows (a final render or excerpt of a project with a film look, or a cut
+    with the film look ticked): the join leaves the card out and the film look pass draws it over the look, so
+    the look's gate weave does not move it and its flicker and grain do not touch it.
+  - **Not steady**, or no film look pass follows (a neutral look, or a cut without the film look ticked): the join
+    lays the card over the shots, after the grade and the shots' timed effects, and a film look pass that follows
+    runs over it with the rest of the picture.
+
+  Either way the shots' own timed effects (gate jumps, glitches) never move the card. The live preview follows the
+  same rule: a steady card is drawn over the previewed film look, any other card under it.
 - **Lyrics** are not drawn automatically. Typography is authored in Blender; `song.json` carries the timed words.
 
 ## Disk use and rendered frames
