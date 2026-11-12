@@ -245,7 +245,7 @@ function glueContractions(words) {
       prev.endSec = Math.max(prev.endSec, endSec);
       continue;
     }
-    out.push({ text, startSec, endSec });
+    out.push({ text, startSec, endSec, ...(word._id ? { _id: word._id } : {}) });
   }
   return out;
 }
@@ -267,7 +267,7 @@ function recognizedTokens(words) {
     const tokens = lyricTokens(word.text);
     if (tokens.length === 0) continue;
     if (tokens.length === 1) {
-      out.push({ key: tokens[0].key, startSec: word.startSec, endSec: word.endSec });
+      out.push({ key: tokens[0].key, startSec: word.startSec, endSec: word.endSec, ...(word._id ? { _id: word._id } : {}) });
       continue;
     }
     const weights = tokens.map((token) => Math.max(1, token.key.length));
@@ -277,7 +277,7 @@ function recognizedTokens(words) {
     tokens.forEach((token, index) => {
       const dur = span * (weights[index] / total);
       const endSec = index === tokens.length - 1 ? word.endSec : cursor + dur;
-      out.push({ key: token.key, startSec: cursor, endSec });
+      out.push({ key: token.key, startSec: cursor, endSec, ...(word._id ? { _id: `${word._id}:${index}` } : {}) });
       cursor = endSec;
     });
   }
@@ -903,11 +903,10 @@ export function parseWhisperDtwWords(data) {
 }
 
 /** Compare independent recognition with the sheet, preserving repeated occurrences. */
-export function compareLyricPlacement(cues, recognized, { timeBound } = {}) {
-  const candidate = timeBound
-    ? (recognized || []).filter(w => Number.isFinite(w.startSec) && Number.isFinite(w.endSec) && w.endSec > w.startSec
-        && w.endSec >= timeBound.startSec - 1e-6 && w.startSec <= timeBound.endSec + 1e-6)
-    : (recognized || []);
+export function compareLyricPlacement(cues, recognized, { timeBound, usedOccurrences } = {}) {
+  const candidate = (recognized || []).filter(w => Number.isFinite(w.startSec) && Number.isFinite(w.endSec) && w.endSec > w.startSec
+    && (!timeBound || (w.endSec >= timeBound.startSec - 1e-6 && w.startSec <= timeBound.endSec + 1e-6))
+    && (!usedOccurrences || !w._id || !usedOccurrences.has(w._id)));
   const tokens = cues.flatMap(cue => lyricTokens(cue.text));
   const matches = dpAlignWords(tokens, candidate);
   const misplacedCues = [], uncheckedCues = [], checkedCues = [];
@@ -923,6 +922,7 @@ export function compareLyricPlacement(cues, recognized, { timeBound } = {}) {
       && Number.isFinite(word.startSec)
       && word.endSec > word.startSec
       && (!timeBound || (word.endSec >= timeBound.startSec - 1e-6 && word.startSec <= timeBound.endSec + 1e-6))
+      && (!usedOccurrences || !word._id || !usedOccurrences.has(word._id))
     );
 
     const matchedIndices = [];
@@ -952,6 +952,8 @@ export function compareLyricPlacement(cues, recognized, { timeBound } = {}) {
     const offsetSec = matchedOffsets.length % 2 ? matchedOffsets[middle] : (matchedOffsets[middle - 1] + matchedOffsets[middle]) / 2;
     const isMisplaced = Math.abs(offsetSec) > 0.3 + 1e-9;
 
+    const matchedWordIds = matchedIndices.map(i => heard[i]._id).filter(Boolean);
+
     const words = expected.map((tok, index) => {
       const word = heard[index];
       if (isMatch(tok, word)) {
@@ -974,6 +976,7 @@ export function compareLyricPlacement(cues, recognized, { timeBound } = {}) {
       expectedCount: expected.length,
       complete: hasAllWords,
       isMisplaced,
+      matchedWordIds,
       words,
     };
     checkedCues.push(checkedEntry);

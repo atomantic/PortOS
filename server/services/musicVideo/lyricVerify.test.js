@@ -200,4 +200,20 @@ describe('lyric placement matching tolerances', () => {
     expect(result.uncheckedCues).toEqual([{ cueId: 'cue1', text: 'red apple tree' }]);
     expect(result.checkedCues).toEqual([]);
   });
+
+  it('does not assign the same recognized word occurrence to multiple cues', () => {
+    const repeat1 = { id: 'r1', text: 'red apple tree', words: line.words };
+    const repeat2 = { id: 'r2', text: 'red apple tree', words: line.words };
+    const heard = [
+      { _id: 'w1', text: 'red', startSec: 1.0, endSec: 1.4 },
+      { _id: 'w2', text: 'apple', startSec: 1.5, endSec: 1.9 },
+      { _id: 'w3', text: 'tree', startSec: 2.0, endSec: 2.4 },
+    ];
+    const usedOccurrences = new Set();
+    const result1 = compareLyricPlacement([repeat1], heard, { usedOccurrences });
+    expect(result1.checkedCues).toHaveLength(1);
+    for (const id of result1.checkedCues[0].matchedWordIds) usedOccurrences.add(id);
+    const result2 = compareLyricPlacement([repeat2], heard, { usedOccurrences });
+    expect(result2.uncheckedCues).toEqual([{ cueId: 'r2', text: 'red apple tree' }]);
+  });
 });
