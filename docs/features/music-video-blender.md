@@ -6,6 +6,31 @@ cuts against the song, and joins the final video. The scripts are the source of 
 
 Pick it as the project's render style (`composition.mode: "blender"`, shown as "Blender film").
 
+## Shared engine and ownership
+
+`server/services/film/` owns the workspace, Python driver and starter kit, sync,
+render queue, resume, render index, stills, previews and cut joining. It imports
+no Music Video services. Every engine call receives a film owner with `kind`,
+`id`, `workspaceDir`, `timeline()`, `song()`, `readRecord()`, `writeRecord(change)`
+and `emit(event)`. Record changes are functional patches; the owner serializes
+them against its freshest record. `onSynced(manifest, { change, replaceScenes })`
+can commit that patch and the owner's shot mirror atomically; without a mirror,
+the engine writes the patch itself. Optional `beforeSync` checks owner conflicts
+before starting Blender, and `workspaceLabel` controls the displayed path.
+
+Music Video's `blender/owner.js` supplies the existing project record, song
+projection, Board mirroring and `music-video:blender` events. Its API adapters
+keep the routes, state and errors unchanged. `sceneMirror.js`, `titleCard.js`,
+`finishFilter.js` and `finalRender.js` remain in Music Video; its cut wrapper
+adds finishing and private review drafts around the shared join. No standalone
+film endpoint is exposed by this extraction.
+
+A no-song owner returns `null` from `song()`: `song.json` then has empty analysis,
+lyrics and audio paths, while coverage uses `timeline().durationSec`. The join
+can write a silent cut. Music Video still requires its song for a cut. Existing
+workspaces stay at `data/music-video/<projectId>/blender`; render metadata and
+`renders/pending.json` retain their format and resume without a migration.
+
 ## What you need
 
 - **Blender 4.2 or newer**, selected and checked under Blender execution (Code Animation › Production, or the film

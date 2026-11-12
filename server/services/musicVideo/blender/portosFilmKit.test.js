@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { execFileSync } from '../../../lib/childProcess.js';
 import { PY_SUBPROCESS_TIMEOUT_MS, PY_TEST_TIMEOUT_MS, resolveTestPython } from '../../../lib/testHelper.js';
 
-const PY_DIR = fileURLToPath(new URL('./py/', import.meta.url));
+const PY_DIR = fileURLToPath(new URL('../../film/py/', import.meta.url));
 const python = resolveTestPython();
 
 const song = {

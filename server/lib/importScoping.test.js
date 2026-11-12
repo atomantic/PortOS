@@ -25,7 +25,7 @@
  */
 
 import { beforeAll, describe, it, expect } from 'vitest';
-import { readFileSync } from 'fs';
+import { readFileSync, readdirSync } from 'fs';
 import { dirname, join, posix, relative, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { staticImportClosure } from './staticImportGraph.js';
@@ -43,6 +43,15 @@ const SERVER_DIR = dirname(dirname(fileURLToPath(import.meta.url)));
 // absolute path of whoever's checkout is running the suite.
 const abs = (relative) => join(SERVER_DIR, ...relative.split('/'));
 const reaches = (entry, target) => staticImportClosure(abs(entry)).files.has(abs(target));
+
+// The reusable engine cannot acquire Music Video persistence or finishing through an indirect import.
+it('keeps every shared film module outside the Music Video service graph', () => {
+  for (const name of readdirSync(abs('services/film')).filter((name) => name.endsWith('.js') && !name.endsWith('.test.js'))) {
+    const closure = staticImportClosure(abs(`services/film/${name}`)).files;
+    expect([...closure].filter((file) => file.startsWith(`${abs('services/musicVideo')}${sep}`)), name).toEqual([]);
+  }
+  expect(reaches('services/film/sync.js', 'lib/musicVideoBlender.js')).toBe(true);
+});
 
 // Each row: the entry that was narrowed, the module it must no longer
 const NARROWED = [
