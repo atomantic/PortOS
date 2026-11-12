@@ -3,6 +3,8 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import * as barrel from './api.js';
+import * as musicVideo from './apiMusicVideo.js';
+import * as film from './apiCodeAnimationFilm.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BARREL_SRC = readFileSync(join(HERE, 'api.js'), 'utf8');
@@ -17,6 +19,11 @@ const sourceFiles = readdirSync(HERE).filter(
 const apiFiles = sourceFiles.filter((f) => f.startsWith('api') && f.endsWith('.js'));
 
 describe('client/src/services/ catalog', () => {
+  it('exposes the standalone film adapter without shadowing the Music Video transport', () => {
+    expect(barrel.getMusicVideoBlender).toBe(musicVideo.getMusicVideoBlender);
+    expect(barrel.codeAnimationFilm.getMusicVideoBlender).toBe(film.getMusicVideoBlender);
+  });
+
   it('re-exports every apiX.js from api.js', () => {
     expect(Object.keys(barrel).length).toBeGreaterThan(0);
     for (const f of apiFiles) {

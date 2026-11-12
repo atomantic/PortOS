@@ -93,6 +93,8 @@ export * from './apiStoryboards.js';
 export * from './apiDecks.js';
 export * from './apiThreejsModels.js';
 export * from './apiCodeAnimation.js';
+// The injected film adapter shares Music Video method names; preserve both namespaces.
+export * as codeAnimationFilm from './apiCodeAnimationFilm.js';
 export * from './apiImporter.js';
 export * from './apiStoryBuilder.js';
 export * from './apiVoice.js';
