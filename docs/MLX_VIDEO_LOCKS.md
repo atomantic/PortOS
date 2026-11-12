@@ -201,3 +201,17 @@ verified uv 0.13.7 and November 5 cutoff, audit every artifact, and confirm all
 30 unchanged companion blocks per profile are byte-identical. Validation must
 exercise the frozen Gemma source/loaders and the native Xet transfer boundary;
 an HTTP-only fixture or import check does not prove Xet transfers.
+
+### Wan decoding and font helpers (2026-11-12)
+
+The later bounded Wan refresh changes only `charset-normalizer` to `3.5.2` and
+`fonttools` to `4.68.0`. Use the same immutable Wan source, verified uv 0.13.7,
+CPython 3.11 Apple Silicon target and November 5 cutoff as above. Derive inputs
+from its `project.dependencies`; constrain every existing package version,
+changing only these two constraints. Compile the complete closure into a scratch
+lock with the command above, then replace only the two target package blocks in
+the existing lock. Preserve every unrelated block byte-for-byte, including its
+existing artifact allowlist. A fresh resolver may add other-platform hashes to
+unchanged packages; that is not part of this update. Validate the complete final
+lock's artifact hashes, release cutoff and OSV/MAL results, plus a full target
+install plan and native hashed installs of the affected helper subclosures.
