@@ -167,3 +167,37 @@ describe('MoodBoardStylePanel', () => {
     expect(screen.queryByAltText('Board poster preview')).toBeNull();
   });
 });
+
+
+it('starts Make complete with the selected renderer and restores server-side image progress', async () => {
+  const { unmount } = render(<MoodBoardStylePanel board={analyzedBoard} onBoardChange={vi.fn()} />);
+  await userEvent.click(screen.getByRole('button', { name: 'Make complete' }));
+  expect(mockStart).toHaveBeenCalledWith('mb-1', { providerId: 'vision-1', model: 'vlm', render: { mode: IMAGE_GEN_MODE.GROK } }, { silent: true });
+  expect(mockRender).not.toHaveBeenCalled();
+  unmount();
+  mockGetJob.mockResolvedValue({ boardId: 'mb-1', makeComplete: true, status: 'running', phase: 'rendering', total: 1, done: 1 });
+  render(<MoodBoardStylePanel board={analyzedBoard} onBoardChange={vi.fn()} />);
+  expect(await screen.findByRole('button', { name: 'Creating main board image…' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Compose style prompt' })).toBeDisabled();
+});
+
+it('retains a failed completion reason on return and protects unsaved style edits', async () => {
+  mockGetJob.mockResolvedValue({ boardId: 'mb-1', makeComplete: true, status: 'failed', error: 'Renderer unavailable' });
+  render(<MoodBoardStylePanel board={analyzedBoard} onBoardChange={vi.fn()} />);
+  expect(await screen.findByRole('alert')).toHaveTextContent('Renderer unavailable');
+  fireEvent.change(screen.getByLabelText('Style prompt'), { target: { value: 'my unsaved look' } });
+  expect(screen.getByRole('button', { name: 'Make complete' })).toBeDisabled();
+});
+
+
+it('recovers a completion missed while disconnected', async () => {
+  mockGetJob.mockResolvedValue({ boardId: 'mb-1', makeComplete: true, status: 'running', phase: 'rendering', total: 1, done: 1 });
+  const onBoardChange = vi.fn();
+  render(<MoodBoardStylePanel board={analyzedBoard} onBoardChange={onBoardChange} />);
+  expect(await screen.findByRole('button', { name: 'Creating main board image…' })).toBeDisabled();
+  mockGetJob.mockResolvedValue({ boardId: 'mb-1', makeComplete: true, status: 'done', phase: null });
+  mockGetBoard.mockResolvedValue({ ...analyzedBoard, posterImageRef: 'complete.png' });
+  await act(async () => socketHandlers.get('connect')());
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Make complete' })).not.toBeDisabled());
+  expect(onBoardChange).toHaveBeenCalledWith(expect.objectContaining({ posterImageRef: 'complete.png' }));
+});

@@ -66,6 +66,18 @@ describe.skipIf(!runDb)('mood board DB round-trip', () => {
     // The pool is closed once, by the federation describe's afterAll (runs last).
   });
 
+  it('attaches a complete-board poster only to the style it rendered', async () => {
+    const board = await db.createBoard({ name: 'Poster test', description: 'Preserve direction' });
+    created.push(board.id);
+    const style = { prompt: 'soft ink', negativePrompt: 'sharp edges' };
+    await db.updateBoard(board.id, { style, posterImageRef: 'old.png' });
+    await db.attachBoardPoster(board.id, style, 'new.png');
+    expect(await db.getBoard(board.id)).toMatchObject({ description: 'Preserve direction', posterImageRef: 'new.png' });
+    await db.updateBoard(board.id, { style: { ...style, negativePrompt: 'neon' } });
+    await expect(db.attachBoardPoster(board.id, style, 'stale.png')).rejects.toThrow('Board style changed');
+    expect((await db.getBoard(board.id)).posterImageRef).toBe('new.png');
+  });
+
   it('lists live boards as id + name only', async () => {
     const board = await db.createBoard({ name: 'Named board' });
     created.push(board.id);

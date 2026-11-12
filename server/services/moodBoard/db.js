@@ -169,6 +169,17 @@ export async function updateBoard(id, patch) {
   return board;
 }
 
+// Compare and attach under the same row lock so an edited style keeps its poster.
+export async function attachBoardPoster(id, style, filename) {
+  const { board } = await withLockedBoard(id, (b) => {
+    if (b.style?.prompt !== style.prompt || (b.style?.negativePrompt || '') !== (style.negativePrompt || '')) {
+      throw new ServerError('Board style changed while the image rendered. Retry Make complete.', { status: 409, code: 'MOOD_BOARD_STYLE_CHANGED' });
+    }
+    return { board: applyBoardPatch(b, { posterImageRef: filename }) };
+  });
+  return board;
+}
+
 /**
  * Faithful conflict-restore (RESTORABLE_FIELDS.moodBoard = name/description/items/style/posterImageRef)
  * wired into conflictJournalResolver. Goes through the row lock + tombstone guard
