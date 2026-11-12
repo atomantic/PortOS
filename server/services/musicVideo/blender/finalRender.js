@@ -13,6 +13,8 @@ import { normalizeBlenderRecord } from '../../../lib/musicVideoBlender.js';
 import { blenderScratchDir } from './workspace.js';
 import { blenderNotSynced, planBlenderFinal, planBlenderWindow, readBlenderFilm } from './film.js';
 import { blenderFinishFilter } from './finishFilter.js';
+import { blenderLeadAudio } from './leadAudio.js';
+import { blenderLeadSec, blenderSongEndSec } from './manifest.js';
 import { assembleBlenderVideo } from './assemble.js';
 import { blenderTitleCardPlan, withBlenderTitleCard } from './titleCard.js';
 import { announceBlenderState } from './record.js';
@@ -25,13 +27,23 @@ export async function prepareBlenderFinal(project) {
 /** Join the final shot videos with the master song into `outputPath`. */
 export async function encodeBlenderFinal({ plan, project, projectId, jobId, audioPath, outputPath, signal, onProgress, lookPass = false }) {
   const { width, height, fps, segments, durationSec, boundaryTimes, signature } = plan;
-  const card = blenderTitleCardPlan(project, { lookPass, filmEndSec: durationSec });
-  await withBlenderTitleCard({ project, jobId, width, height, fps, startSec: 0, endSec: durationSec, bake: card.bake, signal }, (overlays) => assembleBlenderVideo({
+  const film = await readBlenderFilm(project);
+  const leadSec = blenderLeadSec(film.shots);
+  const songEnd = leadSec > 0 ? blenderSongEndSec(film.shots) : durationSec;
+  const { leadPath } = leadSec > 0 ? await blenderLeadAudio(project, film.shots, fps) : { leadPath: null };
+  const window = { startSec: leadSec > 0 ? -leadSec : 0, endSec: songEnd };
+  const card = blenderTitleCardPlan(project, { lookPass, filmEndSec: songEnd });
+  await withBlenderTitleCard({ project, jobId, width, height, fps, ...window, filmEndSec: songEnd, bake: card.bake, signal }, (overlays) => assembleBlenderVideo({
     segments, width, height, fps, quality: 'final', overlays,
-    filter: blenderFinishFilter(project, { width, height, fps, startSec: 0, endSec: durationSec }),
-    audio: { path: audioPath, startSec: 0 }, output: outputPath, scratch: blenderScratchDir(projectId, jobId), signal, onProgress,
+    filter: blenderFinishFilter(project, { width, height, fps, ...window }),
+    audio: { path: audioPath, startSec: 0, ...(leadSec > 0 ? { leadSec, leadPath } : {}) },
+    output: outputPath, scratch: blenderScratchDir(projectId, jobId), signal, onProgress,
   }));
-  return { width, height, fps, durationSec, boundaryTimes, signature, lookPassInputs: card.pass };
+  return {
+    width, height, fps, durationSec, signature, leadSec,
+    boundaryTimes: leadSec > 0 ? boundaryTimes.map((time) => time + leadSec) : boundaryTimes,
+    lookPassInputs: { ...card.pass, ...(leadSec > 0 ? { offsetSec: -leadSec } : {}) },
+  };
 }
 
 /**

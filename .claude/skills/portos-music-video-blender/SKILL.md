@@ -36,8 +36,19 @@ def frame(ctx, shot, t, frame):       # optional: pose everything for song time 
 ```
 
 Each shot: `id` (letters, digits, `_`, `-`; unique), `label`, `start`, `end` (seconds on the song, on the frame
-grid, in order, no overlap), optional `handles: {"in": sec, "out": sec}` (each 0–4 s on the frame grid, with
-`handles.in <= start`), and for the storyboard `summary`, `action`, `staging`, `camera`, `transition`.
+grid, in order, no overlap), optional `handles: {"in": sec, "out": sec}` (each 0–4 s on the frame grid; on a song
+shot `handles.in <= start`), and for the storyboard `summary`, `action`, `staging`, `camera`, `transition`.
+
+A lead-in is shots with `start < 0` that form one contiguous run ending exactly at 0, each 0.5–120 s and at most
+120 s together (`{"id": "s000", "start": -6.0, "end": 0.0}`). A gap, a shot that crosses 0, or a longer run is
+refused at sync and the message names the shot. `build_shot` and `frame` get that negative `t` and song frame.
+`ctx.seconds_to_frame` and `ctx.frame_to_seconds` accept them. Before 0, `portos_film.music` answers no beat
+(`nearest_beat` is `None`, ranges are empty, `pulse` is `0.0`, `bar_at` is `(0, 0.0)`); time 0 is unchanged.
+Frame files use an `m` prefix (`frame_m000144.png`, `handle_in_m000024.png`) and stills `tm` (`tm000006000.png`).
+Sync mirrors each lead-in shot to a Board scene marked before the song, of the shot's length. Edit its sound with
+the Board's cold-open controls; the film supplies the picture only. The cut, the live preview and the final play
+the lead-in first, then the song, so they run longer by the lead-in and the song starts at that offset. The title
+card and timed effects stay on the song clock.
 Imported source files are tracked automatically; use `deps` (files and folders under `src/`) to add data and assets.
 
 **Handles & cut effects.** Assembled cuts, excerpts and the final draw `fade-black` inside each shot's own frames,
@@ -65,10 +76,11 @@ Rules that keep a film renderable:
   the compositor are yours.
 - Make every frame a pure function of song time. Renders stop and resume on any frame, and shots render in
   parallel processes, so nothing may depend on an earlier frame or shot. Bake or avoid live simulation.
-- Frame numbers are song frames: frame `f` is `f / fps` seconds into the song. In `describe`, use
-  `ctx.frame_to_seconds(f)` for exact boundaries. The `start` and `end` passed to `build_shot` and `frame` are
-  exactly on that grid: the first frame's `t` equals `shot["start"]`, so `stepped(t - shot["start"], ctx.fps)`
-  starts on the first pose. The manifest keeps six-decimal times for display and stale comparisons.
+- Frame numbers are song frames: frame `f` is `f / fps` seconds into the song, and a lead-in frame is negative.
+  In `describe`, use `ctx.frame_to_seconds(f)` for exact boundaries. The `start` and `end` passed to `build_shot`
+  and `frame` are exactly on that grid: the first frame's `t` equals `shot["start"]`, so
+  `stepped(t - shot["start"], ctx.fps)` starts on the first pose. The manifest keeps six-decimal times for display
+  and stale comparisons.
 - Target Blender 5: the EEVEE engine id is `BLENDER_EEVEE` (use `ctx.engine`), `scene.node_tree` is gone (the
   compositor is `scene.compositing_node_group`), `Action.fcurves` is gone, and materials and worlds already have
   node trees. Build meshes with `bmesh` and `bpy.data`, not `bpy.ops`, where you can.

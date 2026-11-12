@@ -11,6 +11,7 @@ import {
   MUSIC_VIDEO_BLENDER_MAX_SHOTS, MUSIC_VIDEO_BLENDER_OPTION_KEY, MUSIC_VIDEO_BLENDER_OPTION_TYPES,
   MUSIC_VIDEO_BLENDER_SHOT_ID, MUSIC_VIDEO_BLENDER_SOURCE_PATH, blenderOptionValueProblem, blenderShotHandleRanges,
 } from '../../lib/musicVideoBlender.js';
+import { PRE_MUSIC_DURATION_RANGE } from '../../lib/musicVideoColdOpen.js';
 import { blenderManifestFile, readBlenderJson } from './workspace.js';
 
 // How far a boundary may sit from a frame boundary and still be snapped onto it.
@@ -128,8 +129,14 @@ export function validateBlenderManifest(raw, { durationSec, fps }) {
     if (offGrid.length) { fail(`${name}: ${offGrid.join(' and ')} must fall on a frame boundary (a multiple of 1/${fps} s)`); continue; }
     const start = Number(snap(entry.start).toFixed(6));
     const end = Number(snap(entry.end).toFixed(6));
-    if (start < 0 || end <= start) { fail(`${name}: needs 0 <= start < end (got ${seconds(start)} to ${seconds(end)})`); continue; }
-    if (end > songEnd + 1e-6) { fail(`${name}: ends at ${seconds(end)}, after the song ends (${seconds(durationSec)})`); continue; }
+    if (end <= start) { fail(`${name}: needs 0 <= start < end (got ${seconds(start)} to ${seconds(end)})`); continue; }
+    // A lead-in shot sits entirely before the song and ends on frame 0. One that
+    // crosses 0 would put song frames and pre-song frames in the same shot video.
+    if (start < 0 && end > 1e-9) {
+      fail(`${name}: overlaps frame 0 (${seconds(start)} to ${seconds(end)}); a lead-in ends at 0 s`);
+      continue;
+    }
+    if (start >= 0 && end > songEnd + 1e-6) { fail(`${name}: ends at ${seconds(end)}, after the song ends (${seconds(durationSec)})`); continue; }
     if (previous && start < previous.end - 1e-9) {
       fail(`${name}: starts at ${seconds(start)}, before shot ${previous.id} ends (${seconds(previous.end)}); shots are listed in time order and never overlap`);
       continue;
@@ -168,7 +175,8 @@ export function validateBlenderManifest(raw, { durationSec, fps }) {
         handles[side] = Number(snap(rawSec).toFixed(6));
       }
       if (invalidHandle) continue;
-      if (handles.in > start + 1e-9) {
+      // Song shots cannot reach before the song. A lead-in may; its handle just goes further negative.
+      if (start >= 0 && handles.in > start + 1e-9) {
         fail(`${name}: handles.in (${seconds(handles.in)}) starts before 0 s`);
         continue;
       }
@@ -177,8 +185,57 @@ export function validateBlenderManifest(raw, { durationSec, fps }) {
     shots.push(shot);
     previous = shot;
   }
+  // Lead checks need the accepted prefix. A shot that already failed must not be judged as part of it.
+  if (!errors.length) refuseLeadIn(blenderLeadShots(shots), fail);
   if (errors.length) return { manifest: null, errors };
   return { manifest: { title: typeof raw.title === 'string' ? raw.title.trim().slice(0, 200) : '', shots, options }, errors };
+}
+
+/** The opening run of shots that play before the song, in list order. */
+export function blenderLeadShots(shots) {
+  const lead = [];
+  for (const shot of shots || []) {
+    if (!(shot.start < 0)) break;
+    lead.push(shot);
+  }
+  return lead;
+}
+
+/** Seconds of picture before song time 0, or 0 when the film starts on the song. */
+export function blenderLeadSec(shots) {
+  const lead = blenderLeadShots(shots);
+  if (!lead.length) return 0;
+  return Number((-lead[0].start).toFixed(6));
+}
+
+/** Where the song's own shots end. A lead-in does not extend the song. */
+export function blenderSongEndSec(shots) {
+  let end = 0;
+  for (const shot of shots || []) if (shot.start >= 0) end = shot.end;
+  return end;
+}
+
+// The lead-in is one contiguous run ending at frame 0, each shot long enough to store as a
+// Board cold open and the whole run inside the cold-open limit. Every refusal names the shot.
+function refuseLeadIn(lead, fail) {
+  if (!lead.length) return;
+  const last = lead[lead.length - 1];
+  if (Math.abs(last.end) > 1e-9) fail(`Shot ${last.id}: ends at ${seconds(last.end)}; a lead-in must end exactly at 0 s`);
+  for (let index = 1; index < lead.length; index += 1) {
+    const gap = lead[index].start - lead[index - 1].end;
+    if (gap > 1e-9) fail(`Shot ${lead[index].id}: leaves a gap after shot ${lead[index - 1].id}; a lead-in is one contiguous run ending at 0 s`);
+  }
+  let covered = 0;
+  let over = null;
+  for (const shot of lead) {
+    const length = shot.end - shot.start;
+    if (length < PRE_MUSIC_DURATION_RANGE.min - 1e-9 || length > PRE_MUSIC_DURATION_RANGE.max + 1e-6) {
+      fail(`Shot ${shot.id}: a lead-in shot is ${seconds(length)}; it must be between ${PRE_MUSIC_DURATION_RANGE.min} s and ${PRE_MUSIC_DURATION_RANGE.max} s`);
+    }
+    covered += length;
+    if (!over && covered > PRE_MUSIC_DURATION_RANGE.max + 1e-6) over = shot;
+  }
+  if (over) fail(`Shot ${over.id}: the lead-in runs ${seconds(covered)}, past the ${PRE_MUSIC_DURATION_RANGE.max} s limit`);
 }
 
 // Where the shots leave song frames uncovered, or extend past the current song.

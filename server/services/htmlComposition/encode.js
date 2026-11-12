@@ -144,7 +144,9 @@ export async function encodeComposition(page, contract, outputPath, { musicPath,
   };
   const abort = () => stop('abort requested');
   signal?.addEventListener('abort', abort, { once: true });
-  if (!Number.isFinite(offsetSec) || offsetSec < 0) throw new Error('offsetSec must be a non-negative number');
+  // A film lead-in starts the picture before song time 0, so offsetSec may be negative.
+  // The film-look page seeks the video at max(0, t - offsetSec), which stays on a real file frame.
+  if (!Number.isFinite(offsetSec)) throw new Error('offsetSec must be a finite number');
   const captureOnce = async t => {
     signal?.throwIfAborted();
     report('seek', Math.round(t * fps));

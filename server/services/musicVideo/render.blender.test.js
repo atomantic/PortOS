@@ -481,3 +481,71 @@ it('refuses a sync that wins admission during the pending write without leaving 
     spy.mockRestore();
   }
 });
+
+it('plays a lead-in shot before the song and refuses a cold open that is not one', async () => {
+  const stray = (await projects.getProject(id)).scenes[0];
+  await projects.mutateProjectRecord(id, (current) => ({
+    project: {
+      ...current,
+      scenes: current.scenes.map((scene) => (scene.sceneId === stray.sceneId
+        ? { ...scene, preMusic: { durationSec: 2, clipVolume: null, layers: [] } }
+        : scene)),
+    },
+  }));
+  await expect(renderMusicVideo(id)).rejects.toMatchObject({ status: 422, code: 'PRE_MUSIC_NEEDS_FOOTAGE' });
+
+  const base = exampleManifest();
+  blender.fake.control.manifest = {
+    ...base,
+    shots: [
+      { id: 's000', label: 'Lead', start: -1, end: 0, summary: 'Before the downbeat.', action: 'A door opens.', staging: 'Close on the latch.', camera: 'Locked off.', transition: 'Cut', deps: ['film.py', 'shots/s000.py'] },
+      ...base.shots,
+    ],
+  };
+  await writeBlenderFile(id, 'shots/s000.py', '# shots/s000.py\n');
+  ended.length = 0;
+  await startBlenderSync(id);
+  await vi.waitFor(() => expect(ended.map((job) => [job.kind, job.status])).toEqual([['sync', 'done']]), WAIT);
+  const synced = await projects.getProject(id);
+  const cold = synced.scenes.filter((scene) => scene.preMusic);
+  expect(cold).toHaveLength(1);
+  expect(cold[0]).toMatchObject({ order: 0, startSec: null, endSec: null, preMusic: { durationSec: 1 } });
+  expect(synced.scenes[0].sceneId).toBe(cold[0].sceneId);
+
+  await renderShots('still', ['s000']);
+  const still = join(ROOT(), 'music-video', id, 'blender', 'renders', 's000', 'stills', 'tm000000500.png');
+  expect(existsSync(still)).toBe(true);
+
+  let release;
+  blender.fake.control.hold = new Promise((resolve) => { release = resolve; });
+  try {
+    ended.length = 0;
+    const { jobs } = await enqueueBlenderRenders(id, { quality: 'final', shotIds: ['s000'] });
+    await vi.waitFor(() => expect(listBlenderJobs(id).find((job) => job.id === jobs[0].id)?.index).toBeGreaterThanOrEqual(1), WAIT);
+    const firstFrame = join(ROOT(), 'music-video', id, 'blender', 'renders', 's000', 'final', 'frames', 'frame_m000024.png');
+    expect(existsSync(firstFrame)).toBe(true);
+    await cancelBlenderProjectJobs(id);
+    release();
+    await vi.waitFor(() => expect(ended).toContainEqual(expect.objectContaining({ id: jobs[0].id, status: 'canceled' })), WAIT);
+  } finally {
+    release();
+    blender.fake.control.hold = null;
+  }
+  await renderShots('final', ['s000']);
+  expect(blender.fake.control.jobs.at(-1)).toMatchObject({ resume: true, shots: [expect.objectContaining({ id: 's000' })] });
+  await renderShots('final');
+
+  await writeBlenderFile(id, 'shots/s000.py', '# reworked lead\n');
+  await expect(renderMusicVideo(id)).rejects.toMatchObject({ code: 'MUSIC_VIDEO_BLENDER_SHOTS_NOT_READY', context: { stale: ['s000'] } });
+  await renderShots('final', ['s000']);
+
+  blender.ffmpeg.length = 0;
+  const { jobId } = await renderMusicVideo(id);
+  await finished(jobId);
+  const mux = blender.ffmpeg.at(-1);
+  expect(mux.filter((arg) => arg === '-i')).toHaveLength(3);
+  expect(mux).toEqual(expect.arrayContaining(['-t', '7']));
+  expect(mutateVideoHistory.mock.calls.map(([mutate]) => mutate([])).flat())
+    .toContainEqual(expect.objectContaining({ id: jobId, numFrames: 168 }));
+  expect(applyFilmLookFinish).not.toHaveBeenCalled();
+});

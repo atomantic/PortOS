@@ -21,7 +21,7 @@ import { encodeBlenderPoster, encodeBlenderShot } from './encode.js';
 import { updateBlenderJob } from './jobs.js';
 import { openBlenderJobLog } from './logs.js';
 import {
-  blenderFilmOptions, blenderFrameName, blenderFramePattern, blenderFramesDir, blenderRenderFile, blenderShotPoster, blenderShotVideo,
+  blenderFilmOptions, blenderFrameName, blenderFramePattern, blenderFramesDir, blenderHandleFrameParts, blenderRenderFile, blenderShotPoster, blenderShotVideo,
   blenderStillThumbnail, blenderStillsFile, countBlenderFrames, countBlenderHandleFrames,
 } from './renderIndex.js';
 
@@ -30,8 +30,12 @@ const STILLS_KEPT = 24;
 /** A failure the job reports as its error; `canceled` marks an aborted run. */
 const jobFailure = (message, { canceled = false } = {}) => Object.assign(new Error(message), { canceled });
 
-/** The file name of the still at absolute song frame `frame` (song time in milliseconds). */
-export const blenderStillName = (frame, fps) => `t${String(Math.round((frame / fps) * 1000)).padStart(9, '0')}.png`;
+/** The file name of the still at absolute song frame `frame` (song time in milliseconds). A negative frame uses `tm`. */
+export const blenderStillName = (frame, fps) => {
+  const ms = Math.round((frame / fps) * 1000);
+  const body = String(Math.abs(ms)).padStart(9, '0');
+  return ms < 0 ? `tm${body}.png` : `t${body}.png`;
+};
 
 /** The absolute frames a still job renders for `shot`: the requested song times inside it, else its midpoint. */
 export function blenderStillFrames(shot, fps, times = null) {
@@ -114,11 +118,10 @@ export async function runBlenderShotRender(entry, { owner, shotId, quality, forc
       else if (handlesChanged) {
         const names = await readdir(framesDir).catch(() => []);
         for (const name of names) {
-          const match = /^handle_(in|out)_(\d{6,})\.(?:jpg|png)$/.exec(name);
-          if (!match) continue;
-          const f = Number(match[2]);
-          const span = match[1] === 'in' ? handleRanges.in : handleRanges.out;
-          if (f < span.startFrame || f >= span.endFrame) await rm(join(framesDir, name), { force: true });
+          const parsed = blenderHandleFrameParts(name);
+          if (!parsed) continue;
+          const span = parsed.side === 'in' ? handleRanges.in : handleRanges.out;
+          if (parsed.frame < span.startFrame || parsed.frame >= span.endFrame) await rm(join(framesDir, name), { force: true });
         }
       }
       await mkdir(framesDir, { recursive: true });
@@ -176,9 +179,10 @@ export async function runBlenderShotRender(entry, { owner, shotId, quality, forc
     const expected = range.frameCount + handleRanges.in.frameCount + handleRanges.out.frameCount;
     if (missing > 0) throw jobFailure(`Blender finished, but ${missing} of ${expected} frames are missing`);
     updateBlenderJob(entry, { status: 'encoding' });
+    const framesDir = blenderFramesDir(owner, shotId, quality);
     await encodeBlenderShot({
-      pattern: join(blenderFramesDir(owner, shotId, quality), blenderFramePattern(quality)),
-      startFrame: range.startFrame, frameCount: range.frameCount, fps: settings.fps, quality,
+      pattern: join(framesDir, blenderFramePattern(quality)),
+      framesDir, startFrame: range.startFrame, frameCount: range.frameCount, fps: settings.fps, quality,
       output: blenderShotVideo(owner, shotId, quality), signal,
     }).catch((error) => { throw jobFailure(signal.aborted ? 'Canceled' : error.message, { canceled: signal.aborted }); });
     // The list thumbnail: small, and still there after the frames are cleared. A render without one is still a render.

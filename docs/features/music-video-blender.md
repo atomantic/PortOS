@@ -69,6 +69,7 @@ data/music-video/<projectId>/blender/
 ```
 
 Frame files are named by their frame number on the song, stills by their song time in milliseconds.
+A frame before the song uses an `m` prefix (`frame_m000144.png`, `handle_in_m000024.png`, `tm000006000.png`) so the name still sorts and a resumed render finds the file. Frames at and after 0 keep `frame_000000.png` and `t000000000.png`.
 
 Edit `src/` with any editor, with a coding agent, or in the panel's Files tab. The API reads and writes text files
 (`.py .json .txt .md`, up to 2 MiB); images, HDRIs, fonts, audio, models and `.blend` files are placed in the folder
@@ -108,8 +109,16 @@ def frame(ctx, shot, t, frame) -> None:   # optional: pose everything for song t
 Shot rules:
 
 - `id`: 1 to 40 letters, digits, `_` or `-`, starting with a letter or digit. Unique, ignoring case.
-- Shots are listed in time order and never overlap. `0 <= start < end <=` the song's length. A song rarely ends on
-  a frame boundary, so the last shot may end on the boundary just after it (the picture then covers the whole song).
+- Shots are listed in time order and never overlap. A shot on the song has `0 <= start < end <=` the song's length.
+  A song rarely ends on a frame boundary, so the last shot may end on the boundary just after it (the picture then covers the whole song).
+- A lead-in is a contiguous run of shots that ends exactly at 0 (`{"id": "s000", "start": -6.0, "end": 0.0}`).
+  Each shot is 0.5–120 s, and the whole run is at most 120 s. A gap, a shot that crosses 0, or a longer run is
+  refused at sync and the message names the shot. `build_shot` and `frame` receive that negative `t` and song frame.
+  Sync mirrors each lead-in shot to a Board scene marked before the song, of the shot's length. Its sound is the
+  Board's cold-open sound (silence, an effect, or a library track); the film supplies the picture only. The cut,
+  the live preview and the final play the lead-in first, then the song, so a 6 s lead-in makes them 6 s longer and
+  the song starts at 6 s. The title card and timed effects stay on the song clock. A cold-open Board scene that is
+  not one of these shots still cannot render in a seeked style.
 - `start` and `end` fall on a frame boundary (within 0.001 s; they are snapped). At most 400 shots.
   In `describe`, use `ctx.frame_to_seconds(f)` to express exact boundaries. PortOS passes `build_shot` and `frame`
   a shot whose `start` and `end` are exactly `frame / fps`, using the same grid as `ctx.frame_to_seconds` and
@@ -117,7 +126,7 @@ Shot rules:
   `stepped(t - shot["start"], ctx.fps)` start on the first pose. `manifest.json` still stores six-decimal times
   for display and comparison; restoring exact times for the film does not mark existing renders stale.
 - `summary`, `action`, `staging`, `camera` and `transition` are optional text, up to 4,000 characters each.
-- `handles` (optional): `{"in": seconds, "out": seconds}` — each 0 to 4 s on the frame grid (`in <= start`). PortOS
+- `handles` (optional): `{"in": seconds, "out": seconds}` — each 0 to 4 s on the frame grid. On a song shot, `in <= start` (the handle cannot reach before 0). A lead-in handle may. PortOS
   renders `[start - in, start)` into `handle_in_<frame>.<ext>` and `[end, end + out)` into `handle_out_<frame>.<ext>`
   under `frames/` by calling `frame()` for those song times. A shot with handles must build a scene valid slightly
   outside its own `[start, end)` range. Handle frames are NOT part of `shot.mp4`, resume with the shot, mark only
@@ -144,7 +153,9 @@ Helpers a film may import (`portos_film`, standard library only):
   from the first downbeat; bar lookup and timing extrapolate using the median tracked bar length. Phrases span
   consecutive groups of bars through song end. Onsets are spaced peaks in positive envelope changes; `swell`
   averages the envelope around a time. Missing analysis returns empty lists, `(1, 0.0)` for `bar_at` and `0.0`
-  for scalar helpers.
+  for scalar helpers. Before song time 0 those helpers answer no beat: `nearest_beat` is `None`, ranges are empty,
+  `pulse`, `envelope` and `swell` are `0.0`, `section_at` is `None`, and `bar_at` is `(0, 0.0)`. Song time 0 is unchanged.
+  `ctx.seconds_to_frame` and `ctx.frame_to_seconds` accept a negative time or frame.
 - `portos_film.timing`: `clamp`, `remap`, `ease`, `stepped(t, fps, on=2)` (hold poses on twos).
 
 ### Film options

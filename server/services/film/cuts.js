@@ -5,6 +5,7 @@ import { atomicWrite } from '../../lib/fileCore.js';
 import { maintenance } from '../../lib/maintenanceAdmission.js';
 import { blenderRefusal, blenderRendersDir, blenderScratchDir, readBlenderJson } from './workspace.js';
 import { blenderNotSynced, planBlenderCut, readBlenderFilm } from './film.js';
+import { blenderLeadSec } from './manifest.js';
 import { assembleBlenderVideo } from './assemble.js';
 import { requireFfmpeg } from './encode.js';
 import { activeBlenderJobs, createBlenderJob, updateBlenderJob } from './jobs.js';
@@ -45,7 +46,7 @@ async function runCut(entry, { owner, quality, audioPath, finish, afterCut }) {
     const progress = (from, to) => (fraction) => updateBlenderJob(entry, { index: Math.round((from + (to - from) * fraction) * 100), total: 100 });
     const assemble = (extra = {}) => assembleBlenderVideo({
       segments: plan.segments, width: plan.width, height: plan.height, fps: plan.fps, quality,
-      audio: audioPath ? { path: audioPath, startSec: 0 } : null,
+      audio: audioPath ? { path: audioPath, startSec: 0, leadSec: blenderLeadSec(film.shots) } : null,
       output, scratch: blenderScratchDir(owner, entry.job.id), signal, onProgress: progress(0, 1), ...extra,
     });
     const { durationSec, filmLook = false } = finish

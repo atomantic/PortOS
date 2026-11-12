@@ -53,7 +53,9 @@ export async function withBlenderTitleCard({ project, jobId, width, height, fps,
   try {
     const captured = await renderTypographyOverlays({
       jobId: captureId, cues: titleCardOverlayCues(project, filmEndSec), style: {}, width, height, fps, durationSec: filmEndSec,
-      window: { startFrame: Math.round(startSec * fps), endFrame: Math.round(endSec * fps) }, signal, onProgress,
+      // A lead-in window starts below song frame 0. The card is captured on the song;
+      // placement below still subtracts the original start so the card lands after the lead-in.
+      window: { startFrame: Math.max(0, Math.round(startSec * fps)), endFrame: Math.round(endSec * fps) }, signal, onProgress,
     });
     return await work(captured.map((overlay) => ({ path: overlay.path, startSec: overlay.startSec - startSec, durationSec: overlay.durationSec })));
   } finally {

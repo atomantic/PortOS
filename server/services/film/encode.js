@@ -4,8 +4,10 @@
  * yuv420p, BT.709, constant frame rate with a keyframe at least every second
  * and no audio, so shot videos join by stream copy.
  */
-import { rename, rm } from 'node:fs/promises';
+import { rename, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { BT709_CONTAINER_ARGS, H264_ENCODE_ARGS, bt709TagFilter, findFfmpeg, runFfmpegProcess } from '../../lib/ffmpeg.js';
+import { blenderFrameName } from './renderIndex.js';
 import { blenderRefusal } from './workspace.js';
 
 const CRF = Object.freeze({ final: '18', preview: '21' });
@@ -60,14 +62,51 @@ export async function encodeBlenderPoster({ frame, output, signal }) {
   await rename(partial, output);
 }
 
+const quotedConcatPath = (file) => `file '${file.replaceAll("'", "'\\''")}'`;
+
+/**
+ * A lead-in body is entirely below frame 0. ffmpeg's image2 demuxer cannot read
+ * the `m` prefix, and the absolute frame numbers count down as time moves forward,
+ * so the frames are listed in play order instead of copied.
+ */
+async function leadShotEncodeArgs({ framesDir, startFrame, frameCount, fps, quality, tagFilter, list, output }) {
+  if (!framesDir) throw new Error('A lead-in shot encode needs its frames directory');
+  const duration = (1 / fps).toFixed(6);
+  const lines = ['ffconcat version 1.0'];
+  let last = null;
+  for (let frame = startFrame; frame < startFrame + frameCount; frame += 1) {
+    last = join(framesDir, blenderFrameName(frame, quality));
+    lines.push(quotedConcatPath(last), `duration ${duration}`);
+  }
+  if (!last) throw new Error('A lead-in shot encode needs at least one frame');
+  lines.push(quotedConcatPath(last));
+  await writeFile(list, `${lines.join('\n')}\n`);
+  return [
+    '-hide_banner', '-loglevel', 'error',
+    '-f', 'concat', '-safe', '0', '-i', list,
+    '-frames:v', String(frameCount),
+    '-vf', ['scale=in_range=pc:out_range=tv:out_color_matrix=bt709', tagFilter].filter(Boolean).join(','),
+    ...blenderVideoEncodeArgs({ fps, quality }),
+    '-movflags', '+faststart', '-y', output,
+  ];
+}
+
 /** Encode a shot's frames into `output`, replacing it only once the encode succeeded. */
-export async function encodeBlenderShot({ pattern, startFrame, frameCount, fps, quality, output, signal }) {
+export async function encodeBlenderShot({ pattern, startFrame, frameCount, fps, quality, output, signal, framesDir = null }) {
   const ffmpeg = await requireFfmpeg();
   const partial = `${output}.part.mp4`;
-  const args = blenderShotEncodeArgs({ pattern, startFrame, frameCount, fps, quality, tagFilter: await bt709TagFilter(), output: partial });
-  const encoded = await runBlenderFfmpeg(ffmpeg, args, { signal, what: 'Encoding the shot video' }).then(() => true, async (error) => {
+  const list = startFrame < 0 ? `${partial}.frames.txt` : null;
+  const tagFilter = await bt709TagFilter();
+  const args = startFrame < 0
+    ? await leadShotEncodeArgs({ framesDir, startFrame, frameCount, fps, quality, tagFilter, list, output: partial })
+    : blenderShotEncodeArgs({ pattern, startFrame, frameCount, fps, quality, tagFilter, output: partial });
+  try {
+    await runBlenderFfmpeg(ffmpeg, args, { signal, what: 'Encoding the shot video' });
+    await rename(partial, output);
+  } catch (error) {
     await rm(partial, { force: true });
     throw error;
-  });
-  if (encoded) await rename(partial, output);
+  } finally {
+    if (list) await rm(list, { force: true });
+  }
 }

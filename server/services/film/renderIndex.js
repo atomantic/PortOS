@@ -16,9 +16,33 @@ import { BLENDER_NO_OPTIONS_HASH, blenderImportsChanged, blenderOptionsHash, ble
 import { getBlenderSong } from './song.js';
 
 export const BLENDER_RENDER_QUALITIES = Object.freeze(['preview', 'final']);
-const FRAME_NAME = /^frame_(\d{6,})\.(?:jpg|png)$/;
-const HANDLE_FRAME_NAME = /^handle_(in|out)_(\d{6,})\.(?:jpg|png)$/;
+const FRAME_NAME = /^frame_(m)?(\d{6,})\.(?:jpg|png)$/;
+const HANDLE_FRAME_NAME = /^handle_(in|out)_(m)?(\d{6,})\.(?:jpg|png)$/;
 const frameExtension = (quality) => (quality === 'preview' ? 'jpg' : 'png');
+
+/** `frame_%06d` cannot name a negative frame (the sign eats a pad slot and resume misses the file). */
+export function blenderFrameToken(frame) {
+  const index = Math.trunc(frame);
+  return index < 0 ? `m${String(-index).padStart(6, '0')}` : String(index).padStart(6, '0');
+}
+
+function signedFrame(marker, digits) {
+  const index = Number(digits);
+  if (!Number.isInteger(index)) return null;
+  return marker ? -index : index;
+}
+
+export function blenderFrameNumber(name) {
+  const match = FRAME_NAME.exec(name);
+  return match ? signedFrame(match[1], match[2]) : null;
+}
+
+export function blenderHandleFrameParts(name) {
+  const match = HANDLE_FRAME_NAME.exec(name);
+  if (!match) return null;
+  const frame = signedFrame(match[2], match[3]);
+  return frame == null ? null : { side: match[1], frame };
+}
 
 const isFile = async (path) => (await lstat(path).catch(() => null))?.isFile() === true;
 
@@ -27,8 +51,8 @@ export const blenderShotVideo = (owner, shotId, quality) => join(blenderShotDir(
 /** A small JPEG of the shot's middle frame, made when its video is encoded: it outlives the frames. */
 export const blenderShotPoster = (owner, shotId, quality) => join(blenderShotDir(owner, shotId, quality), 'poster.jpg');
 export const blenderFramesDir = (owner, shotId, quality) => join(blenderShotDir(owner, shotId, quality), 'frames');
-export const blenderFrameName = (frame, quality) => `frame_${String(frame).padStart(6, '0')}.${frameExtension(quality)}`;
-export const blenderHandleFrameName = (side, frame, quality) => `handle_${side}_${String(frame).padStart(6, '0')}.${frameExtension(quality)}`;
+export const blenderFrameName = (frame, quality) => `frame_${blenderFrameToken(frame)}.${frameExtension(quality)}`;
+export const blenderHandleFrameName = (side, frame, quality) => `handle_${side}_${blenderFrameToken(frame)}.${frameExtension(quality)}`;
 /** The frame sequence as ffmpeg reads it. */
 export const blenderFramePattern = (quality) => `frame_%06d.${frameExtension(quality)}`;
 export const blenderHandleFramePattern = (side, quality) => `handle_${side}_%06d.${frameExtension(quality)}`;
@@ -38,8 +62,8 @@ export const blenderStillsFile = (owner, shotId) => join(blenderShotDir(owner, s
 export async function countBlenderFrames(owner, shotId, quality, { startFrame, endFrame }) {
   const names = await readdir(blenderFramesDir(owner, shotId, quality)).catch(() => []);
   return names.filter((name) => {
-    const frame = Number(FRAME_NAME.exec(name)?.[1]);
-    return Number.isInteger(frame) && frame >= startFrame && frame < endFrame;
+    const frame = blenderFrameNumber(name);
+    return frame != null && frame >= startFrame && frame < endFrame;
   }).length;
 }
 
@@ -49,12 +73,11 @@ export async function countBlenderHandleFrames(owner, shotId, quality, handleRan
   let inFrames = 0;
   let outFrames = 0;
   for (const name of names) {
-    const match = HANDLE_FRAME_NAME.exec(name);
-    if (!match) continue;
-    const frame = Number(match[2]);
-    if (!Number.isInteger(frame)) continue;
-    if (match[1] === 'in' && frame >= handleRanges.in.startFrame && frame < handleRanges.in.endFrame) inFrames += 1;
-    if (match[1] === 'out' && frame >= handleRanges.out.startFrame && frame < handleRanges.out.endFrame) outFrames += 1;
+    const parsed = blenderHandleFrameParts(name);
+    if (!parsed) continue;
+    const { side, frame } = parsed;
+    if (side === 'in' && frame >= handleRanges.in.startFrame && frame < handleRanges.in.endFrame) inFrames += 1;
+    if (side === 'out' && frame >= handleRanges.out.startFrame && frame < handleRanges.out.endFrame) outFrames += 1;
   }
   return { inFrames, outFrames };
 }
@@ -129,7 +152,7 @@ async function readStills(owner, shot, { shotHash, optionsHash, songHash, files 
   const listed = await readBlenderJson(blenderStillsFile(owner, shot.id), []);
   const stills = [];
   for (const still of Array.isArray(listed) ? listed : []) {
-    if (typeof still?.file !== 'string' || !/^t\d{9,}\.png$/.test(still.file)) continue;
+    if (typeof still?.file !== 'string' || !/^t(?:m\d{9,}|\d{9,})\.png$/.test(still.file)) continue;
     const absolute = join(blenderShotDir(owner, shot.id, 'stills'), still.file);
     if (!(await isFile(absolute))) continue;
     const thumbnail = blenderStillThumbnail(absolute);

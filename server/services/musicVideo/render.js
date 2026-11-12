@@ -1268,7 +1268,9 @@ async function renderSeekedMode(projectId, project, handOff, renderer, options =
     } catch (err) {
       console.warn(`⚠️ Music-video ${renderer.label} proof sheet failed [${jobId.slice(0, 8)}]: ${err.message}`);
     }
-    const atSec = typeof project.composition?.posterSec === 'number' ? project.composition.posterSec : (encoded.boundaryTimes[0] || 0);
+    const atSec = typeof project.composition?.posterSec === 'number'
+      ? project.composition.posterSec + (encoded.leadSec || 0)
+      : (encoded.boundaryTimes[0] || 0);
     const completed = { status: 'complete', extra: { renderHistoryId: jobId, renderDependencies: captureMusicVideoEvidence(project) } };
     // The encoder wrote the MP4 in place; the poster, the history entry naming
     // it and the project row naming that entry publish under one lease (#9982).
@@ -1448,9 +1450,23 @@ async function renderAdmittedMusicVideo(projectId, options, permit) {
   let handedOff = false;
   try {
     const seeked = seekedRendererFor(project);
-    if (seeked && coldOpenScenes(project).length) {
-      throw new ServerError(`${nameShots(project, coldOpenScenes(project).map((scene) => scene.sceneId))}: a cold open before the song plays in a footage render. Switch the render style to composed or footage, or move ${coldOpenScenes(project).length === 1 ? 'the shot' : 'the shots'} back onto the song`,
-        { status: 422, code: 'PRE_MUSIC_NEEDS_FOOTAGE' });
+    const cold = coldOpenScenes(project);
+    if (seeked && cold.length) {
+      let allowed = new Set();
+      if (project.composition?.mode === 'blender') {
+        const [{ readBlenderManifest }, { normalizeBlenderRecord }] = await Promise.all([
+          import('./blender/manifest.js'),
+          import('../../lib/musicVideoBlender.js'),
+        ]);
+        const manifest = await readBlenderManifest(project.id);
+        const sceneMap = normalizeBlenderRecord(project.blender).sceneMap || {};
+        allowed = new Set((manifest?.shots || []).filter((shot) => shot.start < 0).map((shot) => sceneMap[shot.id]).filter(Boolean));
+      }
+      const stray = cold.filter((scene) => !allowed.has(scene.sceneId));
+      if (stray.length) {
+        throw new ServerError(`${nameShots(project, stray.map((scene) => scene.sceneId))}: a cold open before the song plays in a footage render. Switch the render style to composed or footage, or move ${stray.length === 1 ? 'the shot' : 'the shots'} back onto the song`,
+          { status: 422, code: 'PRE_MUSIC_NEEDS_FOOTAGE' });
+      }
     }
     if (seeked) {
       return await renderSeekedMode(projectId, project, () => { handedOff = true; }, seeked, { ...options, maintenancePermit: permit });

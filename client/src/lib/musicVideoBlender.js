@@ -369,10 +369,18 @@ export function blenderSongDuration(project, state) {
   return Math.max(0, ...(state?.manifest?.shots || []).map((shot) => shot.end || 0));
 }
 
+/** A lead-in starts below 0. The shared formatter draws every negative as 0:00.00. */
+function signedTimecode(seconds) {
+  if (!Number.isFinite(seconds) || seconds >= 0) return formatTimecode(Number.isFinite(seconds) ? seconds : 0);
+  return `-${formatTimecode(-seconds)}`;
+}
+
 /** "0:04.50–0:09.00 · 4.5s · 108 frames" */
 export function blenderShotTiming(shot) {
-  const seconds = Math.max(0, (shot.end || 0) - (shot.start || 0));
-  const parts = [`${formatTimecode(shot.start || 0)}–${formatTimecode(shot.end || 0)}`, `${Number(seconds.toFixed(2))}s`];
+  const start = Number.isFinite(shot.start) ? shot.start : 0;
+  const end = Number.isFinite(shot.end) ? shot.end : 0;
+  const seconds = Math.max(0, end - start);
+  const parts = [`${signedTimecode(start)}–${signedTimecode(end)}`, `${Number(seconds.toFixed(2))}s`];
   if (Number.isFinite(shot.frames)) parts.push(`${formatCount(shot.frames)} ${shot.frames === 1 ? 'frame' : 'frames'}`);
   return parts.join(' · ');
 }
