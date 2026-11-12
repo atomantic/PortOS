@@ -533,6 +533,16 @@ it('plays a lead-in shot before the song and refuses a cold open that is not one
   }
   await renderShots('final', ['s000']);
   expect(blender.fake.control.jobs.at(-1)).toMatchObject({ resume: true, shots: [expect.objectContaining({ id: 's000' })] });
+  // The m-prefixed body is staged as a 0-based image2 sequence at the film frame rate.
+  // A concat list would timestamp stills on a 25 fps grid and drop frames at 30 and 60.
+  const leadEncode = blender.ffmpeg.find((args) => String(args.at(-1)).endsWith(join('s000', 'final', 'shot.mp4.part.mp4')));
+  expect(leadEncode.slice(0, 9)).toEqual([
+    '-hide_banner', '-loglevel', 'error', '-framerate', '24', '-start_number', '0', '-i',
+    expect.stringMatching(/shot\.mp4\.part\.mp4\.frames[/\\]frame_%06d\.png$/),
+  ]);
+  expect(leadEncode[leadEncode.indexOf('-frames:v') + 1]).toBe('24');
+  expect(leadEncode).not.toContain('concat');
+  expect(existsSync(join(ROOT(), 'music-video', id, 'blender', 'renders', 's000', 'final', 'shot.mp4.part.mp4.frames'))).toBe(false);
   await renderShots('final');
 
   await writeBlenderFile(id, 'shots/s000.py', '# reworked lead\n');
