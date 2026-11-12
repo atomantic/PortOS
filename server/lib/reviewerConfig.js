@@ -12,7 +12,8 @@
  */
 import { isPlainObject } from './objects.js';
 import { isTruthyMeta } from './metadataFlags.js';
-import { EFFORT_LEVELS, effortLevelsForProvider, buildEffortArgs, foldCursorEffortIntoModel, splitAntigravityModel } from './providerModels.js';
+import { EFFORT_LEVELS, effortLevelsForProvider, buildEffortArgs, foldCursorEffortIntoModel, splitAntigravityModel, antigravityModelEffortLevels } from './providerModels.js';
+import { providersForReviewer } from './reviewerProviderMatchers.js';
 import { ANTIGRAVITY_COMMAND } from './antigravity.js';
 import { CURSOR_COMMAND } from './cursor.js';
 import { PR_COMPLETIONS } from './prDisposition.js';
@@ -777,17 +778,18 @@ export const EFFORT_SELECTABLE_REVIEWERS = Object.freeze(Object.keys(REVIEWER_EF
  * the right tier set for that model; omit it to get the default static ladder.
  *
  * @param {string} reviewer - reviewer slug
- * @param {string|null|undefined} [model] - optional pinned model id (codex only)
+ * @param {string|null|undefined} [model] - optional pinned model id
  * @returns {readonly string[]|null}
  */
-export function reviewerEffortLevels(reviewer, model = null) {
+export function reviewerEffortLevels(reviewer, model = null, catalog = []) {
   if (typeof reviewer !== 'string') return null;
   const slug = reviewer.trim().toLowerCase();
   const normalized = REVIEWER_ALIASES[slug] ?? slug;
 
+  if (normalized === 'antigravity') return antigravityModelEffortLevels(model, catalog) ?? REVIEWER_EFFORT_LEVELS.antigravity;
   // For codex, derive the ladder from the model if provided
   if (normalized === 'codex' && model) {
-    return effortLevelsForProvider({ id: 'codex', command: 'codex' }, model);
+    return effortLevelsForProvider({ id: normalized, command: reviewerCliBinary(normalized), models: catalog }, model);
   }
 
   return REVIEWER_EFFORT_LEVELS[normalized] || null;
@@ -804,8 +806,8 @@ export function reviewerEffortLevels(reviewer, model = null) {
  * `antigravity: 'max'`, the exact values the drop-don't-clamp contract exists to
  * reject.
  *
- * For `codex` reviewers, pass the pinned model id to gate the ladder on gpt-6
- * family models that reject `minimal`.
+ * Pass the model and advertised catalog to validate Antigravity pairs, or the
+ * model alone to gate Codex models that reject `minimal`.
  *
  * Returns the level, or `undefined` when it isn't usable: a non-string, a level
  * outside that reviewer's own ladder (`agy` really does reject `--effort max`),
@@ -817,16 +819,16 @@ export function reviewerEffortLevels(reviewer, model = null) {
  *
  * @param {string} raw - raw effort value
  * @param {string} reviewer - reviewer slug
- * @param {string|null|undefined} [model] - optional pinned model id (codex only)
+ * @param {string|null|undefined} [model] - optional pinned model id
  * @returns {string|undefined}
  */
-export function normalizeReviewerEffort(raw, reviewer, model = null) {
+export function normalizeReviewerEffort(raw, reviewer, model = null, catalog = []) {
   if (typeof raw !== 'string') return undefined;
   const effort = raw.trim().toLowerCase();
   if (!effort) return undefined;
   // Provider identities are dynamic; their model-specific ladder is resolved from
   // the provider catalog at selection/execution, while storage accepts known tiers.
-  const levels = isProviderReviewer(reviewer) ? EFFORT_LEVELS : reviewerEffortLevels(reviewer, model);
+  const levels = isProviderReviewer(reviewer) ? EFFORT_LEVELS : reviewerEffortLevels(reviewer, model, catalog);
   return levels?.includes(effort) ? effort : undefined;
 }
 
@@ -847,7 +849,22 @@ export function normalizeReviewerEffort(raw, reviewer, model = null) {
  * persisted. Non-object input → undefined, so an omitted field isn't persisted as
  * an empty override.
  */
-export const normalizeReviewerEfforts = keyedReviewerPinNormalizer(normalizeReviewerEffort);
+export function normalizeReviewerEfforts(map, models = {}, catalogs = {}) {
+  const normalizedModels = normalizeReviewerModels(models) || {};
+  return keyedReviewerPinNormalizer((value, reviewer) => normalizeReviewerEffort(value, reviewer, normalizedModels[reviewer], catalogs[reviewer]))(map);
+}
+
+// Storage has no provider I/O. Retain the known agy tier until execution can
+// validate the model/catalog pair; the unknown/default runtime ladder stays narrow.
+export function normalizeStoredReviewerEffort(value, reviewer) {
+  if ((REVIEWER_ALIASES[reviewer] || reviewer) === 'antigravity' && typeof value === 'string' && value.trim().toLowerCase() === 'xhigh') return 'xhigh';
+  return normalizeReviewerEffort(value, reviewer);
+}
+export const normalizeStoredReviewerEfforts = keyedReviewerPinNormalizer(normalizeStoredReviewerEffort);
+
+export function reviewerCatalogsFromProviders(providers = []) {
+  return { antigravity: [...new Set(providersForReviewer('antigravity', providers).flatMap(provider => provider.models || []))] };
+}
 
 /**
  * Resolve per-reviewer effort pins with task-over-default precedence: a
@@ -877,6 +894,7 @@ export function resolveReviewerConfig(metadata, codeReviewDefaults, defaultRevie
     usernames: resolveReviewUsernames(metadata?.usernames, codeReviewDefaults?.usernames),
     optionalReviewers: resolveOptionalReviewers(metadata?.optionalReviewers, codeReviewDefaults?.optionalReviewers, { taskReviewers: taskPinnedReviewerTokens(metadata) }),
     reviewerMaxRounds: resolveReviewerMaxRounds(metadata?.reviewerMaxRounds, codeReviewDefaults?.reviewerMaxRounds),
+    reviewerCatalogs: codeReviewDefaults?.reviewerCatalogs || {},
     ...resolveReviewerPins(metadata, codeReviewDefaults)
   };
 }
@@ -968,12 +986,12 @@ export function resolveClaimReviewerConfig(metadata, codeReviewDefaults, default
       csv: ''
     };
   }
-  const config = resolveReviewerConfig(metadata, codeReviewDefaults, defaultReviewers);
+  const config = resolveReviewerConfig(metadata, { ...codeReviewDefaults, reviewerCatalogs: providers.length ? reviewerCatalogsFromProviders(providers) : codeReviewDefaults?.reviewerCatalogs }, defaultReviewers);
   const reviewers = claimSafeReviewers(config.reviewers, config.usernames);
   return {
     ...config,
     reviewers,
-    csv: buildReviewersCsv(reviewers, config.usernames, config.optionalReviewers, config.reviewerMaxRounds, config.reviewerModels, config.reviewerEfforts, providers)
+    csv: buildReviewersCsv(reviewers, config.usernames, config.optionalReviewers, config.reviewerMaxRounds, config.reviewerModels, config.reviewerEfforts, providers, config.reviewerCatalogs)
   };
 }
 
@@ -1009,7 +1027,8 @@ export function resolveClaimReviewerConfig(metadata, codeReviewDefaults, default
 export function resolveReviewerPins(pins, codeReviewDefaults) {
   return pairReviewerModelsAndEfforts(
     resolveReviewerModels(pins?.reviewerModels, reviewerModelsFromDefaults(codeReviewDefaults)),
-    resolveReviewerEfforts(pins?.reviewerEfforts, reviewerEffortsFromDefaults(codeReviewDefaults))
+    isPlainObject(pins?.reviewerEfforts) ? pins.reviewerEfforts : reviewerEffortsFromDefaults(codeReviewDefaults),
+    codeReviewDefaults?.reviewerCatalogs || {}
   );
 }
 
@@ -1034,15 +1053,15 @@ export function resolveReviewerPins(pins, codeReviewDefaults) {
  * @param {Object<string,string>} [reviewerEfforts]
  * @returns {{reviewerModels: Object<string,string>, reviewerEfforts: Object<string,string>}}
  */
-export function pairReviewerModelsAndEfforts(reviewerModels, reviewerEfforts) {
+export function pairReviewerModelsAndEfforts(reviewerModels, reviewerEfforts, catalogs = {}) {
   const models = { ...(reviewerModels || {}) };
   const efforts = { ...(reviewerEfforts || {}) };
   const { base, effort } = splitAntigravityModel(models.antigravity);
   if (effort && base) {
     models.antigravity = base;
-    if (!normalizeReviewerEffort(efforts.antigravity, 'antigravity')) efforts.antigravity = effort;
+    if (!normalizeReviewerEffort(efforts.antigravity, 'antigravity', base, catalogs.antigravity)) efforts.antigravity = effort;
   }
-  return { reviewerModels: models, reviewerEfforts: efforts };
+  return { reviewerModels: models, reviewerEfforts: normalizeReviewerEfforts(efforts, models, catalogs) || {} };
 }
 
 /**
@@ -1066,7 +1085,7 @@ export function pairReviewerModelsAndEfforts(reviewerModels, reviewerEfforts) {
 export const KEYED_REVIEWER_PINS = [
   ['reviewerMaxRounds', normalizeReviewerMaxRounds],
   ['reviewerModels', normalizeReviewerModels],
-  ['reviewerEfforts', normalizeReviewerEfforts]
+  ['reviewerEfforts', normalizeStoredReviewerEfforts]
 ];
 
 /**
@@ -1080,8 +1099,8 @@ export function reviewerEffortsFromDefaults(defaults) {
   const out = Object.fromEntries(Object.entries(normalizeReviewerEfforts(defaults?.providerEfforts) || {}).filter(([key]) => isProviderReviewer(key)));
   for (const r of EFFORT_SELECTABLE_REVIEWERS) {
     // Re-checked, not trusted: settings.json is hand-editable, and a stale level
-    // must not surface as a pin the invocation builders would then drop.
-    const effort = normalizeReviewerEffort(defaults?.[`${r}Effort`], r);
+    // is rejected; catalog-dependent tiers are checked at execution resolution.
+    const effort = normalizeStoredReviewerEffort(defaults?.[`${r}Effort`], r);
     if (effort) out[r] = effort;
   }
   return out;
@@ -1110,20 +1129,19 @@ export function reviewerEffortsFromDefaults(defaults) {
  * reached with raw task metadata (`reviewLoopReviewerEfforts`), which no
  * normalizer has necessarily touched.
  *
- * For `codex` reviewers, pass the pinned model id to reject `minimal` on gpt-6
- * family models that don't accept it.
+ * Pass the pinned model and catalog so validation and argv use the same ladder.
  *
  * @param {string} reviewer - reviewer slug
  * @param {string|null|undefined} effort
- * @param {string|null|undefined} [model] - optional pinned model id (codex only)
+ * @param {string|null|undefined} [model] - optional pinned model id
  * @returns {string[]}
  */
-export function reviewerEffortArgs(reviewer, effort, model = null) {
+export function reviewerEffortArgs(reviewer, effort, model = null, catalog = []) {
   const binary = reviewerCliBinary(reviewer);
   if (!binary) return [];
-  const level = normalizeReviewerEffort(effort, reviewer, model);
+  const level = normalizeReviewerEffort(effort, reviewer, model, catalog);
   if (!level) return [];
-  return buildEffortArgs(level, { id: reviewer, command: binary });
+  return buildEffortArgs(level, { id: reviewer, command: binary, models: catalog }, [], model);
 }
 
 /**
@@ -1188,12 +1206,13 @@ export function reviewerModelArg(reviewer, model, effort) {
  * @param {string} [options.reviewWith] - the `--review-with` text this prompt
  *   emits, if any. A `~effort=` in it means slashdo already carries the pin.
  * @param {Object<string, string>} [options.reviewerModels] - token-keyed model
- *   pins, needed only to render a cursor invocation (see above)
+ *   pins, used for model-specific effort validation and Cursor rendering
+ * @param {Object<string, string[]>} [options.reviewerCatalogs] - advertised model ids
  * @returns {string} a single sentence, or '' when nothing is left to say
  */
-export function buildReviewerEffortNote(reviewers, reviewerEfforts = {}, { reviewWith = '', reviewerModels = {} } = {}) {
+export function buildReviewerEffortNote(reviewers, reviewerEfforts = {}, { reviewWith = '', reviewerModels = {}, reviewerCatalogs = {} } = {}) {
   if (typeof reviewWith === 'string' && reviewWith.includes('~effort=')) return '';
-  const efforts = normalizeReviewerEfforts(reviewerEfforts) || {};
+  const efforts = normalizeReviewerEfforts(reviewerEfforts, reviewerModels, reviewerCatalogs) || {};
   const models = normalizeReviewerModels(reviewerModels) || {};
   const entries = (Array.isArray(reviewers) ? reviewers : [])
     .map((r) => {
@@ -1202,7 +1221,7 @@ export function buildReviewerEffortNote(reviewers, reviewerEfforts = {}, { revie
       // branch below can render a `null` command into a prompt.
       const binary = reviewerCliBinary(r);
       if (!binary) return null;
-      const args = reviewerEffortArgs(r, efforts[r]);
+      const args = reviewerEffortArgs(r, efforts[r], models[r], reviewerCatalogs[r]);
       if (args.length) return `\`${binary} ${args.join(' ')}\``;
       // No effort ARGV, but the reviewer may still carry the level inside
       // --model (cursor). Gated on the effort pin so this stays an effort note:
@@ -1440,8 +1459,8 @@ function reviewerModelLookup(reviewerModels) {
  * Build a lowercased-token → effort-level lookup for the builders. Tolerates the raw
  * (unnormalized) map. A `Map` for the same reasons as the cap and model lookups.
  */
-function reviewerEffortLookup(reviewerEfforts) {
-  const normalized = normalizeReviewerEfforts(reviewerEfforts) || {};
+function reviewerEffortLookup(reviewerEfforts, reviewerModels = {}, reviewerCatalogs = {}) {
+  const normalized = normalizeReviewerEfforts(reviewerEfforts, reviewerModels, reviewerCatalogs) || {};
   return new Map(Object.entries(normalized).map(([token, effort]) => [token.toLowerCase(), effort]));
 }
 
@@ -1591,13 +1610,13 @@ export function resolveKeyedReviewers(reviewers, hasUsernames) {
  * gets `~effort=<level>`.
  * The flag-string variant is `buildReviewWithArgs`.
  */
-export function buildReviewersCsv(reviewers, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewerModels = {}, reviewerEfforts = {}, providers = []) {
+export function buildReviewersCsv(reviewers, usernames = [], optionalReviewers = [], reviewerMaxRounds = {}, reviewerModels = {}, reviewerEfforts = {}, providers = [], reviewerCatalogs = reviewerCatalogsFromProviders(providers)) {
   const users = normalizeReviewUsernames(usernames);
   const keyed = Array.isArray(reviewers) && reviewers.length ? reviewers : (users.length ? [] : [...DEFAULT_REVIEWERS]);
   const optSet = optionalReviewerSet(optionalReviewers);
   const maxLookup = reviewerMaxRoundsLookup(reviewerMaxRounds);
   const modelLookup = reviewerModelLookup(reviewerModels);
-  const effortLookup = reviewerEffortLookup(reviewerEfforts);
+  const effortLookup = reviewerEffortLookup(reviewerEfforts, reviewerModels, reviewerCatalogs);
   const combined = [...keyed, ...users.map(u => `@${u}`)];
   return combined.map(t => markSuffixes(t, optSet, maxLookup, modelLookup, effortLookup, providers)).join(',');
 }
@@ -1656,6 +1675,7 @@ export function buildReviewWithArgs(reviewers, {
   reviewerModels = {},
   reviewerEfforts = {},
   providers = [],
+  reviewerCatalogs = reviewerCatalogsFromProviders(providers),
 } = {}) {
   const users = normalizeReviewUsernames(usernames);
   const keyed = resolveKeyedReviewers(reviewers, users.length > 0);
@@ -1667,7 +1687,7 @@ export function buildReviewWithArgs(reviewers, {
   const optSet = optionalReviewerSet(optionalReviewers);
   const maxLookup = reviewerMaxRoundsLookup(reviewerMaxRounds);
   const modelLookup = reviewerModelLookup(reviewerModels);
-  const effortLookup = reviewerEffortLookup(reviewerEfforts);
+  const effortLookup = reviewerEffortLookup(reviewerEfforts, reviewerModels, reviewerCatalogs);
   // The lone-default-copilot suppression only applies when copilot carries NO
   // per-entry suffix — a `copilot~opt` / `copilot~max=2` / `copilot~effort=high` list must still
   // emit the flag to carry that suffix.

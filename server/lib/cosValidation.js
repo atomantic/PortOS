@@ -49,8 +49,8 @@ import {
   REVIEW_STOP_MODES,
   normalizeOptionalReviewers,
   normalizeReviewUsernames,
-  normalizeReviewerEffort,
-  normalizeReviewerEfforts,
+  normalizeStoredReviewerEffort,
+  normalizeStoredReviewerEfforts,
   normalizeReviewerMaxRounds,
   normalizeReviewerModel,
   normalizeReviewerModels,
@@ -343,9 +343,10 @@ export const createCosTaskSchema = z.object({
   // token — how hard ONE reviewer thinks (`codex -c model_reasoning_effort=high`,
   // `claude --effort high`, or a local reviewer's `reasoning_effort` body field).
   // Normalized so a hand-crafted request can't pin an effort on a reviewer that
-  // takes none, or a level that reviewer's CLI rejects. Absent → undefined (not `{}`).
+  // takes none. Catalog-dependent tiers are preserved here and validated with
+  // their model at execution. Absent → undefined (not `{}`).
   reviewerEfforts: z.preprocess(
-    v => normalizeReviewerEfforts(v),
+    v => normalizeStoredReviewerEfforts(v),
     z.record(z.enum(EFFORT_LEVELS)).optional()
   ),
   // Bundled slashdo workflow this task runs (#3089) — the BARE command name,
@@ -744,7 +745,7 @@ export const codeReviewSettingsSchema = z.object({
     }).strict().optional(),
   })).optional(),
   providerModels: z.preprocess(normalizeReviewerModels, z.record(z.string()).optional()),
-  providerEfforts: z.preprocess(normalizeReviewerEfforts, z.record(z.string()).optional()),
+  providerEfforts: z.preprocess(normalizeStoredReviewerEfforts, z.record(z.string()).optional()),
   reviewers: z.preprocess(
     v => Array.isArray(v) ? v.map(r => (typeof r === 'string' ? (REVIEWER_ALIASES[r] ?? r) : r)) : v,
     z.array(reviewerSchema).optional()
@@ -797,7 +798,7 @@ export const codeReviewSettingsSchema = z.object({
   // Generated from the roster for the same reason as the model scalars above.
   ...Object.fromEntries(EFFORT_SELECTABLE_REVIEWERS.map(reviewer => [
     `${reviewer}Effort`,
-    z.preprocess(v => normalizeReviewerEffort(v, reviewer), z.string().optional()),
+    z.preprocess(v => normalizeStoredReviewerEffort(v, reviewer), z.string().optional()),
   ])),
   // Goal-fidelity gate (#5994) — the second, objective-aware review that runs at
   // agent completion and asks whether the diff delivers what the task asked for.

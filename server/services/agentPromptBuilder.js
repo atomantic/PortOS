@@ -753,8 +753,8 @@ function resolveTaskMetadataFlags(task, worktreeInfo) {
  * The follow-up's task metadata plus what only workspace prep knows: the PR head is
  * the default branch, so the checkout is detached and nothing may be pushed to it.
  */
-function reviewLoopPromptMetadata(task, worktreeInfo) {
-  const metadata = task.metadata || {};
+function reviewLoopPromptMetadata(task, worktreeInfo, reviewerCatalogs) {
+  const metadata = { ...task.metadata, reviewLoopReviewerCatalogs: reviewerCatalogs };
   return worktreeInfo?.headIsDefaultBranch === true ? { ...metadata, headIsDefaultBranch: true } : metadata;
 }
 
@@ -852,7 +852,7 @@ After your task completes, the system will spawn a follow-up agent that runs the
     // localAgentLoopBody (the CLI-reviewer recipe) was already preloaded at the
     // top of buildAgentPrompt under the same reviewLoopFollowUp guard — reuse it
     // rather than re-reading the lib a second time.
-    reviewLoopFollowUpSection = buildReviewLoopFollowUpSection(reviewLoopPromptMetadata(task, worktreeInfo), { verbose: true, rprBody, localAgentLoopBody });
+    reviewLoopFollowUpSection = buildReviewLoopFollowUpSection(reviewLoopPromptMetadata(task, worktreeInfo, reviewPolicy.reviewerCatalogs), { verbose: true, rprBody, localAgentLoopBody });
     if (!isTruthyMeta(task.metadata?.reviewLoopLeaveOpen)) reviewLoopFollowUpSection += '\n\n' + buildMergeAdmissionSection(agentId, { autoMerge: usesAutoMerge(task) });
     if (isTui) {
       const sentinelPath = resolveSentinelPath(worktreeInfo, workspaceDir, agentId);
@@ -1231,7 +1231,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, { isTui = t
     })),
     [COMPLETION_MODES.READ_ONLY]: () => contractSections.push(buildReadOnlyCompletionSection({ isTui, sentinelPath: lightSentinelPath() })),
     [COMPLETION_MODES.REVIEW_LOOP_FOLLOW_UP]: () => {
-      contractSections.push(buildReviewLoopFollowUpSection(reviewLoopPromptMetadata(task, worktreeInfo), { verbose: false, localAgentLoopBody, forgeCli: resolvedForgeCli }));
+      contractSections.push(buildReviewLoopFollowUpSection(reviewLoopPromptMetadata(task, worktreeInfo, reviewPolicy.reviewerCatalogs), { verbose: false, localAgentLoopBody, forgeCli: resolvedForgeCli }));
       if (!isTruthyMeta(task.metadata?.reviewLoopLeaveOpen)) contractSections.push(buildMergeAdmissionSection(agentId, { autoMerge: usesAutoMerge(task) }));
       if (!isTui) return;
       const branchName = worktreeInfo?.branchName || task.metadata?.reviewLoopPRBranch || null;

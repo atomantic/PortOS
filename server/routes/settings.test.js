@@ -63,6 +63,11 @@ vi.mock('../services/codeReview.js', async (importOriginal) => ({
   getReviewerCliInstalled: vi.fn(async () => ({})),
   getProviderReviewUnsupported: vi.fn(async () => ({})),
 }));
+const reviewerProviders = vi.hoisted(() => ({ current: [] }));
+vi.mock('../services/providers.js', async (importOriginal) => ({
+  ...await importOriginal(),
+  getAllProviders: vi.fn(async () => ({ providers: reviewerProviders.current })),
+}));
 // The settings route now refuses a standing render route naming a peer that
 // could never run it (see services/federatedMedia/routingPolicy.js), so this
 // suite owns a peer registry. Mocked rather than real: the routing policy loads
@@ -136,6 +141,9 @@ vi.mock('../services/itermBridge.js', () => ({
 }));
 
 import settingsRoutes from './settings.js';
+import { resolveReviewLoopOptions } from '../services/codeReview.js';
+import { buildReviewLoopFollowUpSection, reviewPolicyToLoopMetadata } from '../services/promptSections/reviewLifecycle.js';
+import { buildReviewWithArgs } from '../lib/reviewerConfig.js';
 import { authGate, hostControlBodyGate, hostControlRouteGate } from '../services/authGate.js';
 import * as auth from '../services/auth.js';
 import * as instanceIdentity from '../services/instanceIdentity.js';
@@ -160,6 +168,54 @@ const buildApp = () => {
 };
 
 describe('Settings routes — configured reviewer pins', () => {
+  // Uniquely catches a tier that the picker offers but storage or CLI rendering drops.
+  it('round-trips advertised legacy Hydrogen xhigh from settings to the review command', async () => {
+    store = {};
+    const app = buildApp();
+    const catalog = ['gemini-4-hydrogen-low', 'gemini-4-hydrogen-medium', 'gemini-4-hydrogen-high', 'gemini-4-hydrogen-xhigh'];
+    reviewerProviders.current = [{ id: 'antigravity', command: 'agy', models: catalog }];
+    try {
+      for (const antigravityModel of ['gemini-4-hydrogen', 'gemini-4-hydrogen-xhigh']) {
+        const codeReview = { reviewers: ['antigravity'], antigravityModel,
+          ...(antigravityModel.endsWith('-xhigh') ? {} : { antigravityEffort: 'xhigh' }) };
+        expect((await request(app).put('/api/settings').send({ codeReview })).status).toBe(200);
+        expect((await request(app).get('/api/settings')).body.codeReview).toMatchObject(codeReview);
+        const defaults = (await request(app).get('/api/code-review/defaults')).body;
+        expect(defaults).toMatchObject(codeReview);
+        const options = await resolveReviewLoopOptions({});
+        expect(options.reviewerModels).toEqual({ antigravity: 'gemini-4-hydrogen' });
+        expect(options.reviewerEfforts).toEqual({ antigravity: 'xhigh' });
+        const text = buildReviewLoopFollowUpSection(reviewPolicyToLoopMetadata({ ...options, forgeReviewerUsernames: [] }));
+        expect(text).toContain('agy --model gemini-4-hydrogen --effort xhigh');
+        expect(buildReviewWithArgs(options.reviewers, options)).toContain('antigravity[gemini-4-hydrogen]~effort=xhigh');
+      }
+      expect(buildReviewWithArgs(['gemini'], {
+        reviewerModels: { gemini: 'gemini-4-hydrogen' }, reviewerEfforts: { gemini: 'xhigh' }, providers: reviewerProviders.current,
+      })).toContain('antigravity[gemini-4-hydrogen]~effort=xhigh');
+      // A stale explicit tier must not erase a valid baked-in legacy selection.
+      reviewerProviders.current[0].models = ['gemini-4-hydrogen-low'];
+      const legacy = await resolveReviewLoopOptions({
+        reviewerModels: { antigravity: 'gemini-4-hydrogen-low' }, reviewerEfforts: { antigravity: 'xhigh' },
+      });
+      expect(legacy.reviewerEfforts).toEqual({ antigravity: 'low' });
+      expect(buildReviewLoopFollowUpSection(reviewPolicyToLoopMetadata({ ...legacy, forgeReviewerUsernames: [] })))
+        .toContain('agy --model gemini-4-hydrogen --effort low');
+      for (const [model, models, effort] of [
+        ['', catalog, 'xhigh'], // CLI owns the default: keep the conservative ladder.
+        ['unknown-model', [], 'xhigh'],
+        ['gemini-4-hydrogen', ['gemini-4-hydrogen-low', 'gemini-4-hydrogen-high'], 'medium'],
+        ['gemini-4-hydrogen', ['gemini-4-hydrogen-low', 'gemini-4-hydrogen-high'], 'xhigh'],
+      ]) {
+        reviewerProviders.current[0].models = models;
+        const options = await resolveReviewLoopOptions({ reviewerModels: { antigravity: model }, reviewerEfforts: { antigravity: effort } });
+        expect(options.reviewerEfforts).toEqual({});
+        expect(buildReviewLoopFollowUpSection(reviewPolicyToLoopMetadata({ ...options, forgeReviewerUsernames: [] }))).not.toContain(`--effort ${effort}`);
+      }
+    } finally {
+      reviewerProviders.current = [];
+    }
+  });
+
   it('persists and clears provider model/effort defaults through settings and defaults readback', async () => {
     store = {};
     const app = buildApp();

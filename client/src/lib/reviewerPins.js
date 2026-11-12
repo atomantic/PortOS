@@ -4,7 +4,7 @@ import {
   CURSOR_EFFORT_LEVELS,
   GROK_EFFORT_LEVELS
 } from '../utils/providers';
-import { codexEffortLevelsForModel, effortLevelsForProvider } from '../../../server/lib/providerModels.js';
+import { codexEffortLevelsForModel, effortLevelsForProvider, antigravityModelEffortLevels } from '../../../server/lib/providerModels.js';
 
 /**
  * Client mirrors of the reviewer vocabulary in `server/lib/reviewerConfig.js` —
@@ -111,7 +111,7 @@ export const normalizeReviewerSlug = (reviewer) => {
 // For `codex` reviewers, the ladder is gated on the pinned model. Pass the model
 // id to get the server-owned tier set for that model; omit it to get the default
 // static ladder.
-export const reviewerEffortLevels = (reviewer, model = null) => {
+export const reviewerEffortLevels = (reviewer, model = null, catalog = []) => {
   const slug = normalizeReviewerSlug(reviewer);
   if (!slug) return null;
 
@@ -119,6 +119,7 @@ export const reviewerEffortLevels = (reviewer, model = null) => {
 
   // For codex, use the server's model-gated ladder so the picker and CLI stay
   // aligned as supported model families change.
+  if (slug === 'antigravity') return antigravityModelEffortLevels(model, catalog) ?? base;
   if (slug === 'codex' && model && base) {
     return codexEffortLevelsForModel(model);
   }

@@ -46,6 +46,7 @@ import {
   reviewerEffortsFromDefaults,
   resolveReviewerGroup,
   resolveReviewerPins,
+  reviewerCatalogsFromProviders,
   normalizeReviewerEffort,
   normalizeReviewers,
   EFFORT_SELECTABLE_REVIEWERS,
@@ -64,6 +65,7 @@ import {
 import { MAX_SCREENSHOT_BYTES } from '../lib/uploadLimits.js'
 import { normalizeGoalFidelityFollowUpTrigger } from '../lib/goalFidelityFollowUp.js'
 import { activeReviewerGroupIndex, isReviewerConfigFault, reviewerCommandPermissionFailureCode, normalizeReviewFinishReason, reviewFailureDiagnostics } from '../lib/reviewerHealth.js'
+import { getAllProviders } from './providers.js'
 import { getSettings, updateSettingsWith, refreshSettingsIfChangedOnDisk, settingsEvents } from './settings.js'
 
 export const REVIEWER_PAUSE_MS = 24 * 60 * 60 * 1000
@@ -467,13 +469,15 @@ export function __resetCodeReviewDefaultsCache() { cachedSettings = null; cached
 export async function getCodeReviewDefaults() {
   await refreshSettingsIfChangedOnDisk()
   const now = Date.now()
-  if (cachedDefaults && now < cachedDefaultsExpiresAt) return cachedDefaults
-  if (!cachedSettings) cachedSettings = await getSettings()
-  cachedDefaults = pickCodeReviewDefaults(cachedSettings)
-  // Keep the I/O cache, but recompute health-dependent selection at expiry.
-  cachedDefaultsExpiresAt = Math.min(Infinity, ...Object.values(cachedDefaults.reviewerHealth || {})
-    .map(entry => Number(entry?.pausedUntil)).filter(expiry => expiry > now))
-  return cachedDefaults
+  if (!cachedDefaults || now >= cachedDefaultsExpiresAt) {
+    if (!cachedSettings) cachedSettings = await getSettings()
+    cachedDefaults = pickCodeReviewDefaults(cachedSettings)
+    // Keep the I/O cache, but recompute health-dependent selection at expiry.
+    cachedDefaultsExpiresAt = Math.min(Infinity, ...Object.values(cachedDefaults.reviewerHealth || {})
+      .map(entry => Number(entry?.pausedUntil)).filter(expiry => expiry > now))
+  }
+  const catalog = await getAllProviders().catch(() => ({ providers: [] }))
+  return { ...cachedDefaults, reviewerCatalogs: reviewerCatalogsFromProviders(catalog.providers) }
 }
 
 /**
@@ -536,6 +540,7 @@ export async function resolveReviewLoopOptions(metadata, { normalize = normalize
   // anything emits them — see `resolveReviewerPins`.
   return {
     reviewers, usernames, optionalReviewers, reviewerMaxRounds, reviewStopMode, reviewerApplies,
+    reviewerCatalogs: defaults?.reviewerCatalogs || {},
     ...resolveReviewerPins(metadata, defaults)
   }
 }
