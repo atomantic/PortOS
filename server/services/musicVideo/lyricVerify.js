@@ -114,6 +114,11 @@ export async function verifyLyricSheet(project, stemPath, { onProgress = () => {
       }
     }
     const usedWordIds = new Set();
+    const claimedSpans = [];
+    const overlapsClaimed = match => (match?.words || []).some(w => w.conf === 'matched'
+      && claimedSpans.some(([start, end]) => w.startSec < end - 0.05 && w.endSec > start + 0.05));
+    const isAvailableMatch = match => Boolean(match && !overlapsClaimed(match) && !match.matchedWordIds.some(id => usedWordIds.has(id)));
+
     for (const [windowIndex, window] of windows.entries()) {
       const ownBound = { startSec: Math.max(0, window.startSec - 1.5), endSec: Math.min(wavDurationSec(wav), window.endSec + 1.5) };
       const ownPlacement = compareLyricPlacement(window.cues, window.heard || [], { timeBound: ownBound, usedOccurrences: usedWordIds });
@@ -127,26 +132,31 @@ export async function verifyLyricSheet(project, stemPath, { onProgress = () => {
       for (const cue of window.cues) {
         const words = validWords(cue);
         const lineBound = { startSec: Math.max(0, words[0].startSec - 1.5), endSec: Math.min(wavDurationSec(wav), words.at(-1).endSec + 1.5) };
-        let bestMatch = ownPlacement.checkedCues?.find(c => c.cueId === cue.id && !c.matchedWordIds.some(id => usedWordIds.has(id))) || null;
+        const ownMatch = ownPlacement.checkedCues?.find(c => c.cueId === cue.id) || null;
+        let bestMatch = isAvailableMatch(ownMatch) ? ownMatch : null;
 
         if (cueRetries.has(cue.id)) {
           const retryPlacement = compareLyricPlacement([cue], cueRetries.get(cue.id), { timeBound: lineBound, usedOccurrences: usedWordIds });
           const retryMatch = retryPlacement.checkedCues?.[0] || null;
-          if (isBetterMatch(retryMatch, bestMatch) && !retryMatch?.matchedWordIds.some(id => usedWordIds.has(id))) bestMatch = retryMatch;
+          if (isAvailableMatch(retryMatch) && isBetterMatch(retryMatch, bestMatch)) bestMatch = retryMatch;
         }
 
         if (leftPlacement) {
-          const leftMatch = leftPlacement.checkedCues?.find(c => c.cueId === cue.id && !c.matchedWordIds.some(id => usedWordIds.has(id))) || null;
-          if (isBetterMatch(leftMatch, bestMatch)) bestMatch = leftMatch;
+          const leftMatch = leftPlacement.checkedCues?.find(c => c.cueId === cue.id) || null;
+          if (isAvailableMatch(leftMatch) && isBetterMatch(leftMatch, bestMatch)) bestMatch = leftMatch;
         }
 
         if (rightPlacement) {
-          const rightMatch = rightPlacement.checkedCues?.find(c => c.cueId === cue.id && !c.matchedWordIds.some(id => usedWordIds.has(id))) || null;
-          if (isBetterMatch(rightMatch, bestMatch)) bestMatch = rightMatch;
+          const rightMatch = rightPlacement.checkedCues?.find(c => c.cueId === cue.id) || null;
+          if (isAvailableMatch(rightMatch) && isBetterMatch(rightMatch, bestMatch)) bestMatch = rightMatch;
         }
 
         if (bestMatch) {
           for (const id of bestMatch.matchedWordIds || []) usedWordIds.add(id);
+          const matchedTimes = (bestMatch.words || []).filter(w => w.conf === 'matched');
+          if (matchedTimes.length) {
+            claimedSpans.push([matchedTimes[0].startSec, matchedTimes.at(-1).endSec]);
+          }
           if (bestMatch.isMisplaced) {
             const [voiced] = extendVoicedWordEnds([{ ...bestMatch, words: bestMatch.words }], pcm);
             misplacedCues.push({ cueId: cue.id, text: cue.text, offsetSec: bestMatch.offsetSec, words: voiced.words });

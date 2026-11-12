@@ -216,4 +216,30 @@ describe('lyric placement matching tolerances', () => {
     const result2 = compareLyricPlacement([repeat2], heard, { usedOccurrences });
     expect(result2.uncheckedCues).toEqual([{ cueId: 'r2', text: 'red apple tree' }]);
   });
+
+  it('does not let overlapping transcripts check multiple repeated lines for one sung occurrence', async () => {
+    const wav = encodePcm16Wav(16000 * 8);
+    for (const [start, end] of [[1, 2.5]]) {
+      for (let i = start * 16000; i < end * 16000; i++) wav.writeInt16LE(8000, 44 + i * 2);
+    }
+    const cues = [
+      { id: 'c1', text: 'red apple tree', words: line.words },
+      { id: 'c2', text: 'red apple tree', words: line.words.map(w => ({ ...w, startSec: w.startSec + 0.1, endSec: w.endSec + 0.1 })) },
+    ];
+    // Both cues are in Window 0. Window 0 collapses.
+    // Retry for c1 returns the words at 1.0-2.4s.
+    // Retry for c2 also returns the same words at 1.0-2.4s.
+    const transcribe = vi.fn(async (_wav, { prompt }) => {
+      if (prompt.includes('\n')) return [{ text: 'la', startSec: 1.0, endSec: 1.2 }];
+      return [
+        { text: 'red', startSec: 1.0, endSec: 1.4 },
+        { text: 'apple', startSec: 1.5, endSec: 1.9 },
+        { text: 'tree', startSec: 2.0, endSec: 2.4 },
+      ];
+    });
+    const deps = { decode: async () => wav, resolveTranscriber: async () => ({ transcribe }) };
+    const result = await verifyLyricSheet({ ...project, lyricCues: cues }, 'stem', { deps });
+    // c1 claims 1.0-2.4s, so c2 is prevented from claiming the same sung occurrence.
+    expect(result.uncheckedCues).toEqual([{ cueId: 'c2', text: 'red apple tree' }]);
+  });
 });
