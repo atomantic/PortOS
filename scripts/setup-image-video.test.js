@@ -985,6 +985,81 @@ describe('MiniMax H3 MLX hash-pinned lock', () => {
   });
 });
 
+describe('MiniMax H3 MLX Install/Repair', () => {
+  const section = source.slice(source.indexOf('INSTALL_MINIMAX_H3="${'), source.indexOf('INSTALL_MERERUN="${'));
+  const installer = () => {
+    const home = mkdtempSync(join(tmpdir(), 'portos-h3-mlx-'));
+    tempVenvs.push(home);
+    const log = join(home, 'calls');
+    const stub = join(home, 'python-stub');
+    writeFileSync(log, '');
+    writeFileSync(stub, `#!/bin/bash
+printf 'python %s\\n' "$*" >> "$CALL_LOG"
+exit "\${PROBE_EXIT:-0}"
+`);
+    chmodSync(stub, 0o755);
+    const body = `set -e
+is_apple_silicon() { [[ "$TARGET" == apple ]]; }
+have() { return 0; }
+reset_universal_venv() { :; }
+pin_venv_arm64() { :; }
+probe_or_fail() { shift 2; "$@" || return $?; }
+git_checkout_pin() { printf 'pin %s\\n' "$*" >> "$CALL_LOG"; }
+git() {
+  printf 'git %s\\n' "$*" >> "$CALL_LOG"
+  if [[ "$1" == clone ]]; then mkdir -p "\${@: -1}/.git"; fi
+}
+portos_uv() {
+  printf 'uv %s\\n' "$*" >> "$CALL_LOG"
+  if [[ "$1 $2" == 'python find' ]]; then
+    echo "$STUB"
+  elif [[ "$1" == venv ]]; then
+    mkdir -p "\${@: -1}/bin"
+    cp "$STUB" "\${@: -1}/bin/python3"
+  elif [[ "$1 $2" == 'pip sync' ]]; then
+    [[ "$*" == *'--require-hashes --only-binary :all:'* && "$*" == *requirements-minimax-h3-mlx.lock.txt ]] || return 92
+    return "\${SYNC_EXIT:-0}"
+  else
+    return 93
+  fi
+}
+${section}`;
+    return (extra = {}) => {
+      const result = spawnSync(resolveBashBinary(), ['-c', body], {
+        encoding: 'utf8', env: { ...process.env, HOME: home.replaceAll('\\', '/'), CALL_LOG: log.replaceAll('\\', '/'), STUB: stub.replaceAll('\\', '/'), SCRIPT_DIR: join(REPO_ROOT, 'scripts').replaceAll('\\', '/'), INSTALL_MINIMAX_H3: '1', TARGET: 'apple', ...extra },
+      });
+      return { ...result, calls: readFileSync(log, 'utf8') };
+    };
+  };
+
+  it('applies the complete wheel-only lock for fresh Install and Repair before checking pinned source seams', () => {
+    const run = installer();
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const result = run();
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain('MiniMax H3 MLX runtime ready');
+      expect(result.calls.match(/^uv venv /gm)).toHaveLength(1);
+      expect(result.calls.match(/^uv pip sync /gm)).toHaveLength(attempt + 1);
+      expect(result.calls.match(/minimax_h3_runtime_probe.py .* --verify-seams/g)).toHaveLength(attempt + 1);
+      expect(result.calls).not.toMatch(/pip install|--upgrade/);
+    }
+  });
+
+  it.each([{ SYNC_EXIT: '42' }, { PROBE_EXIT: '43' }])('never reports readiness after sync or source probe failure (%j)', (failure) => {
+    const result = installer()(failure);
+    expect(result.status).toBe(Number(failure.SYNC_EXIT ?? failure.PROBE_EXIT));
+    expect(result.stdout).not.toContain('runtime ready');
+    if (failure.SYNC_EXIT) expect(result.calls).not.toContain('minimax_h3_runtime_probe.py');
+  });
+
+  it('refuses unsupported hosts before any source or package operation', () => {
+    const result = installer()({ TARGET: 'linux' });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('requires an Apple-Silicon Mac');
+    expect(result.calls).toBe('');
+  });
+});
+
 describe('LTX-2.5 CUDA Install/Repair', () => {
   const shell = resolveBashBinary();
   const direct = readFileSync(join(REPO_ROOT, 'scripts/requirements-ltx25-cuda.txt'), 'utf8')

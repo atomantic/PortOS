@@ -521,3 +521,57 @@ image quality or model-level MPS behavior. No model weights, provider calls or
 paid generation were started. Other profiles, isolated majors and earlier
 unverified inference remain under #15769; CUDA profiles and Pixal3D #15710 are
 unchanged.
+
+## Tenth-slice MiniMax H3 HTTP/cache dependencies (2026-11-12)
+
+The Apple Silicon H3 profile updates six direct, fully pinned dependencies:
+**AnyIO 4.14.2 → 4.16.0**, **Certifi 2026.10.19 → 2026.10.23**,
+**Charset-Normalizer 3.4.9 → 3.5.2**, **FileLock 4.2.1 → 4.2.7**,
+**fsspec 2026.7.0 → 2026.9.0** and **IDNA 3.18 → 3.20**. The other
+**49** entries retain their versions, markers and hashes. The immutable H3
+revision remains `fcd9e9b79a1d6018d91ac477c0968de1fa067e49`; MLX, model
+libraries, source adapters and CUDA profiles are unchanged.
+
+The pinned Hub/HTTPX/HTTPcore stack uses FileLock context managers and AnyIO
+socket/timeout APIs; Hub's `HfFileSystem` subclasses fsspec's abstract and
+buffered-file interfaces. Requests consumes Charset-Normalizer's detection,
+IDNA encoding and Certifi's CA bundle. These interfaces remain available:
+
+- [AnyIO's release notes](https://github.com/agronholm/anyio/blob/4.16.0/docs/versionhistory.rst)
+  and [FileLock's patch history](https://github.com/tox-dev/filelock/blob/4.2.7/docs/changelog.rst)
+  describe cancellation, socket and lock recovery fixes.
+- [Charset-Normalizer 3.5.2](https://github.com/jawah/charset_normalizer/blob/3.5.2/CHANGELOG.md)
+  corrects UTF-8 Chinese detection and encoding alias handling. Its wheel-based
+  Cython transition introduces no source-build dependency here.
+- [IDNA 3.20](https://github.com/kjd/idna/blob/v3.20/HISTORY.md) updates Unicode
+  tables and enforces domain validity more strictly. Unicode URL preparation and
+  invalid-label rejection were checked; invalid names are not promised compatibility.
+- [Certifi's release diff](https://github.com/certifi/python-certifi/compare/2026.10.19...2026.10.23)
+  removes two emSign roots while preserving `where()`/`contents()`. Loading the
+  resulting store was checked; this is not certification of every remote TLS chain.
+- [fsspec's tagged history](https://github.com/fsspec/filesystem_spec/blob/2026.9.0/docs/source/changelog.rst)
+  records cache, filesystem and range-handling changes. The real pinned Hub
+  filesystem's read/seek path was exercised against a loopback fixture.
+
+The complete **55-package** lock was regenerated with SHA-256-verified
+**uv 0.13.7**, wheels only and cutoff `2026-11-05T00:00:00Z`. All **1,204 hashes**
+match non-yanked pre-cutoff PyPI artifacts. The complete OSV/MAL audit returned
+zero findings with response/error/pagination checks. Each selected wheel also
+matched live PyPI metadata. Bundled native libraries were not separately audited.
+
+Fresh Apple Silicon CPython **3.11.17** and **3.12.11** environments installed
+all locked wheels and passed dependency checks and the actual shipped
+`minimax_h3_runtime_probe.py --verify-seams` against the immutable source.
+Both passed complete version parity, concurrent Hub downloads/offline reuse,
+Hub/fsspec read/seek, async HTTP timeout/recovery, Requests Unicode response
+handling, IDNA URL preparation, CA-store loading and basic MLX evaluation.
+A Starlette request/background-task probe also passed. Its test-only HTTPX
+adapter emits an upstream deprecation recommending HTTPX2; this is not a
+production H3 import, and migrating the frozen Hub/HTTPX pair remains separate
+work under #15769 rather than adding a second transport for this test.
+
+Installer regression tests now execute the actual H3 block with fake external
+processes, covering fresh Install, Repair reuse, source-seam checks, unsupported
+host refusal and sync/probe failures without false readiness. No production
+weights, model generation or quality assessment ran. Production H3 inference
+and the remaining profile/major migrations stay unverified under #15769.
