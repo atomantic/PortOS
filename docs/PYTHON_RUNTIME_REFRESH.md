@@ -299,3 +299,63 @@ verified publication dates before regenerating both target locks; do not remove
 the cooldown or guess artifact ages. All earlier profile, isolated-major and
 target-specific checks remain pending. No production weights, provider session
 or paid generation was started; Pixal3D CUDA remains unresolved under #15710.
+
+## Sixth-slice MiniMax Music 3 MLX patch (2026-11-12)
+
+The MiniMax Music 3 Apple Silicon profile updates the coupled **MLX /
+MLX-Metal 0.32.1 → 0.32.4** pair. The other **33** package versions, markers
+and hashes remain unchanged, including mlx-audio **0.5.0**, Transformers
+**5.15.0** and Hugging Face Hub **1.28.0**. These untouched versions remain
+pending compatibility work, not certified exclusions of newer releases.
+
+[mlx-audio 0.5.0's published requirements](https://pypi.org/pypi/mlx-audio/0.5.0/json)
+accept `mlx>=0.31.1`; [MLX 0.32.4](https://pypi.org/pypi/mlx/0.32.4/json)
+requires the matching `mlx-metal==0.32.4` on Darwin and retains Apple Silicon
+wheels and the Python 3.10 floor. The
+[MLX patch release notes](https://github.com/ml-explore/mlx/releases/tag/v0.32.4)
+include attention, array-view and Metal evaluation fixes. The installed
+mlx-audio music loader, MiniMax Music 3 model and its MLX attention/tensor callers
+were inspected and exercised below. No source migration is required by those
+bounded checks. Transformers 5.15.0 explicitly requires
+[`huggingface-hub>=1.5,<2`](https://pypi.org/pypi/transformers/5.15.0/json), so
+Hub 2 is excluded from this frozen baseline; this does not assess a coordinated
+Transformers migration.
+
+The complete **35-package** lock was regenerated online with SHA-256-verified
+**uv 0.13.7**, `--only-binary :all:` and freshly computed seven-day cutoff
+`--exclude-newer 2026-11-05T00:00:00Z`. Its header records the actual cutoff and
+regeneration command, retaining the existing output to reuse unrelated pins.
+All **636 hashes** match non-yanked PyPI artifacts older than the cutoff. OSV
+querybatch, including malicious-package (`MAL-`) records, returned zero findings
+across the complete closure. This does not separately audit bundled libraries.
+
+Install/Repair now requires wheels as well as hashes and `--no-deps`, preventing
+hashed source archives from fetching unlocked build dependencies. The existing
+[NumPy 2.5.4](https://pypi.org/pypi/numpy/2.5.4/json) and
+[SciPy 1.18.1](https://pypi.org/pypi/scipy/1.18.1/json) pins already require
+Python **3.12+**. The installer now checks both the selected base and an existing
+venv before installing; older interpreters receive an explicit requirement or
+rebuild diagnostic. This clarifies the frozen baseline, without downgrading its
+closure or adding a Python 3.11 support target.
+
+Verification on Apple Silicon:
+
+- Fresh scratch CPython **3.12.11** and **3.13.18** environments installed the
+  entire lock with hashes and wheels only and passed `uv pip check`. Both
+  imported the actual music loader and evaluated MLX operations.
+- The real mlx-audio MiniMax Music 3 `ModelConfig.tiny()` generated finite
+  channels-last stereo audio at **44.1 kHz** on Metal, with two denoising steps
+  and synthetic random weights. The shipped sidecar's orientation and resampling
+  functions converted it to finite channels-first stereo at **32 kHz**.
+  This establishes native tensor/API compatibility, not production music quality.
+- Executing the installer section with fake external processes covers fresh
+  Install, Repair reuse, host/Python refusal before package installation, and
+  failed-install/probe refusal to report readiness. Source-to-lock parity and
+  the existing runtime profile/sidecar contracts remain covered.
+
+Remaining under #15769: production MiniMax Music 3 weight loading, full-song
+rendering and audio quality on Apple Silicon; every other pending profile,
+isolated major migration and previously recorded target-specific check. No
+production weights, provider session or paid generation was started. This
+Apple Silicon-only slice changes no CUDA profile or platform support and leaves
+Pixal3D CUDA unresolved under #15710.
