@@ -38,7 +38,7 @@ vi.mock('../htmlComposition/browser.js', () => ({
     const { PATHS: paths } = await import('../../lib/paths.js');
     const dir = joinPath(paths.data, directory);
     seen.opened.push({ directory, options, index: await read(joinPath(dir, 'index.html'), 'utf8'), app: await read(joinPath(dir, 'app.js'), 'utf8'), fonts: await readdir(joinPath(dir, 'fonts')), media: await readdir(joinPath(dir, 'media')) });
-    return { check() {}, async close() {} };
+    return { check() {}, async send() {}, async close() {} };
   },
 }));
 vi.mock('../htmlComposition/encode.js', () => ({

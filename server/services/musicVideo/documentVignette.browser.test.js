@@ -1,0 +1,81 @@
+/** Pixel contracts at the document encoder, ending encoder and preview shell. */
+import { afterAll, describe, expect, it, vi } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import sharp from 'sharp';
+import { browserSuiteCanRun, resolveTestChrome } from '../../lib/browserSuiteGate.js';
+import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
+// Native loading preserves browser-inlined function source (Vite rewrites imported identifiers).
+vi.mock('../../lib/musicVideoEnding.js', async original => ({ ...await original(), endingPageSource: options => execFileSync(process.execPath, ['--input-type=module', '-e', `import { endingPageSource } from ${JSON.stringify(new URL('../../lib/musicVideoEnding.js', import.meta.url).href)}; process.stdout.write(endingPageSource(JSON.parse(process.argv[1])));`, JSON.stringify(options)], { encoding: 'utf8' }) }));
+const chrome = resolveTestChrome();
+vi.mock('../browserService.js', () => ({ loadConfig: async () => ({ chromePath: chrome }) }));
+vi.mock('../../lib/paths.js', async original => makePathsProxy(await original(), { dataRoot: () => lazyTempDataRoot('portos-document-vignette-') }));
+// A white-base baseline exercises the same encoder with only this fix removed.
+const baseline = vi.hoisted(() => ({ white: false }));
+vi.mock('../htmlComposition/browser.js', async original => {
+  const actual = await original();
+  return { ...actual, openComposition: async (...args) => {
+    const page = await actual.openComposition(...args);
+    const send = page.send;
+    page.send = (method, params) => send(method, baseline.white && method === 'Emulation.setDefaultBackgroundColorOverride'
+      ? { color: { r: 255, g: 255, b: 255, a: 1 } } : params);
+    return page;
+  } };
+});
+const { PATHS } = await import('../../lib/paths.js');
+const { findFfmpeg } = await import('../../lib/ffmpeg.js');
+const { encodeDocumentComposition } = await import('./documentRender.js');
+const { renderStatsOutroClip } = await import('./statsOutro.js');
+const { buildDocumentPreview } = await import('./documentPreview.js');
+const { openComposition } = await import('../htmlComposition/browser.js');
+const ffmpeg = await findFfmpeg();
+const canRun = browserSuiteCanRun('document vignette', { Chrome: chrome, ffmpeg }, { onUnavailable: cleanupTempDataRoots });
+const W = 1280, H = 720;
+const frame = path => execFileSync(ffmpeg, ['-v', 'error', '-i', path, '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'gray', '-']);
+const corners = [[3, 3], [W - 4, 3], [3, H - 4], [W - 4, H - 4]];
+const pixel = (raw, x, y) => raw[y * W + x];
+
+describe.skipIf(!canRun)('opaque document film-look canvas with Chrome and ffmpeg', () => {
+  afterAll(cleanupTempDataRoots);
+  it('darkens document and ending corners, preserves a no-vignette look, and keeps the preview opaque', async () => {
+    const directory = 'vignette-document';
+    const dir = join(PATHS.data, directory);
+    await mkdir(dir, { recursive: true });
+    const html = `<!doctype html><html><head></head><body style="margin:0"><canvas id="stage" width="${W}" height="${H}"></canvas><script>window.portosComposition={width:${W},height:${H},fps:12,durationSec:1,seek:()=>{const c=document.getElementById('stage').getContext('2d');c.fillStyle='#808080';c.fillRect(0,0,${W},${H});}};</script></body></html>`;
+    await writeFile(join(dir, 'index.html'), html);
+    const audio = join(dir, 'audio.wav');
+    execFileSync(ffmpeg, ['-v', 'error', '-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo', '-t', '1', '-y', audio]);
+    const project = { id: 'vignette', scenes: [], audioAnalysis: { durationSec: 1, sections: [] }, composition: { mode: 'document', document: { directory } }, filmLook: { version: 2, vignette: 0.6 } };
+    const plan = { directory, songDurationSec: 1, frame: { width: W, height: H }, clock: { fps: 12, durationSec: 1, frames: 12 } };
+    const encode = async (name, look, white = false) => {
+      baseline.white = white;
+      const path = join(dir, `${name}.mp4`);
+      await encodeDocumentComposition({ project: { ...project, filmLook: look }, plan, jobId: name, audioPath: audio, outputPath: path, windowStart: 0, windowEnd: 1 / 12 });
+      return frame(path);
+    };
+    const dark = await encode('dark', project.filmLook);
+    const middle = pixel(dark, W / 2, H / 2);
+    for (const [x, y] of corners) expect(pixel(dark, x, y)).toBeLessThan(middle - 25);
+    const noVignette = { version: 2, contrast: 0.2 };
+    expect(await encode('opaque-black', noVignette)).toEqual(await encode('opaque-white', noVignette, true));
+    baseline.white = false;
+    const ending = join(dir, 'ending.mp4');
+    await renderStatsOutroClip({ project: { ...project, statsOutro: { enabled: true, durationSec: 1 } }, outputPath: ending, width: W, height: H, fps: 1, jobId: 'ending', withFilmLook: true, stats: { floorImages: [] } });
+    const outro = frame(ending);
+    // The unlit floor is already dark; a white browser base used to wash its corners above 100.
+    for (const [x, y] of corners) expect(pixel(outro, x, y)).toBeLessThan(25);
+    const preview = await buildDocumentPreview(project, { files: new Map([['index.html', { abs: join(dir, 'index.html'), size: Buffer.byteLength(html) }]]) });
+    // Exercise the actual shell from the staged document files.
+    expect(preview).not.toBeNull();
+    await writeFile(join(dir, 'index.html'), preview.html);
+    const page = await openComposition(directory, { ownedBrowser: true });
+    try {
+      await page.send('Emulation.setDeviceMetricsOverride', { width: W, height: H, deviceScaleFactor: 1, mobile: false });
+      await page.evaluate('portosComposition.seek(0)');
+      const { data } = await page.send('Page.captureScreenshot', { format: 'png' });
+      const raw = await sharp(Buffer.from(data, 'base64')).removeAlpha().raw().toBuffer();
+      for (const [x, y] of corners) expect(raw[(y * W + x) * 3]).toBeLessThan(raw[(H / 2 * W + W / 2) * 3] - 25);
+    } finally { await page.close(); }
+  }, 120000);
+});
