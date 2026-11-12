@@ -1238,3 +1238,62 @@ focused installer/profile/adapter test files (171 tests). Full native renderer
 builds, Metal inference, model-backed background removal and GLB rendering
 were not run or certified by this maintenance slice. Existing hardware and
 native validation requirements remain in force.
+
+## Twenty-second slice: H3, Music3 and Wan CUDA Hub 2 transport
+
+The three CUDA inputs and all six Python 3.11 target locks move
+`huggingface-hub` 1.33.0 → 2.4.0. Its required HTTPX2/HTTPCore2 2.16.0 and
+Truststore 0.10.5 replace HTTPX 0.28.1/HTTPCore 1.0.9, whose only locked
+consumer was Hub. Requests and Certifi remain for Diffusers. Transformers
+5.22.1, Tokenizers 0.23.3, Accelerate 1.15.0, Diffusers 0.42.0 (H3/Wan) and
+0.42.1 (Music3), all CUDA/native packages, and every companion version,
+marker and hash set are unchanged.
+
+Verified uv 0.13.7 regenerated the complete locks with the November 5 UTC
+cutoff. Linux/Windows closures contain respectively 66/48 H3, 63/45 Music3
+and 70/52 Wan packages. The union contains 74 identities and 1,094 hashes;
+all artifacts are unyanked and older than the cutoff. The complete 76-query
+OSV/MAL audit includes CUDA-local and public base versions and returned no
+findings. H3/Music3 regeneration now scopes official PyTorch indexes as Wan
+already does: Torch and applicable Torchvision, plus Linux H3 TorchAO
+0.18.0+cu126. Windows TorchAO retains PyPI 0.18.0 and its original two hashes.
+Preserved Triton build hashes were verified against official index metadata.
+All three documented recipes reproduced all six locks byte-for-byte.
+Install/Repair policy is unchanged: six dry-sync plans passed with the
+existing hash-constrained `unsafe-best-match` installation flag. That flag
+is not used by the new regeneration recipes.
+
+Six isolated native Apple Silicon Python 3.11.18 transport/config environments
+used 34-package old and 35-package candidate subclosures. Every subclosure
+version and complete artifact hash set is contained in its corresponding
+full CUDA lock; fresh hashed installs and dependency checks passed. These
+are not full CUDA installations. Both versions exercised:
+
+- The real `hf_download_repo.py` CLI against a synthetic loopback Hub:
+  revision-pinned nested downloads, single-file mode without enumeration,
+  ignore filtering, progress/completion byte markers, gated/not-found/401
+  errors, missing-file and conflicting-option refusal.
+- Diffusers' actual inherited `ConfigMixin.load_config` path for a synthetic
+  `modular_model_index.json`, revision resolution, component-file download,
+  cache-only reads and typed missing-component errors. Both Diffusers and
+  Transformers use Hub's exported transport alias, which becomes HTTPX2.
+  This does not construct a modular pipeline or load a model.
+- H3's actual cached-file resolver preserves nested snapshot paths and
+  refuses a missing file without network access. Wan's real entry point
+  refuses an uncached revision before importing Torch. An interrupted Hub
+  download resumes at the exact retained-byte Range offset.
+
+All three candidates also exercised HTTPX2's actual default Truststore TLS
+context: verification and hostname checks remain enabled; an untrusted
+certificate and wrong CA fail before HTTP; an ephemeral fixture CA permits
+HTTPS and actual Hub HEAD/GET. No OS trust settings were changed, and
+fixture private keys were removed. Caches and ambient tokens were isolated,
+telemetry disabled, and fixtures rejected Authorization headers. These
+synthetic tests do not establish live public-chain or proxy compatibility.
+
+All 221 focused installer/profile/downloader/runner tests passed without
+skips, and pregate passed. Independent review and exact-head hosted CI remain
+required before merging.
+No CUDA binaries, GPU inference, production weights, complete modular
+pipeline construction, production media quality or Windows/Linux native
+execution is claimed by these transport fixtures.
