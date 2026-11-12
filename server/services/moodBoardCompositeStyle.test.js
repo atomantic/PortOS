@@ -137,6 +137,9 @@ describe('composeBoardPrompt', () => {
     expect(sent).toContain('do not substitute one for another');
     expect(sent).toContain('Resolve conflicting per-item negatives against the positive visual evidence');
     expect(sent).toContain('Drop subject-specific exclusions');
+    expect(sent).toContain('Keep local or minority details subordinate');
+    expect(sent).toContain('must not become an all-over finish');
+    expect(sent).toContain('Optical diffusion is not faded color');
   });
 
   it('rejects an empty model prompt', async () => {
