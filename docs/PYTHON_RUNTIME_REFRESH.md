@@ -25,7 +25,8 @@ evidence that its API or ABI is compatible.
 4. Validate runtime changes separately on each actual target. Resolver output,
    artifact hashes and fake subprocess tests establish different contracts from
    model execution. Keep Apple Silicon and CUDA validation as independent work.
-   Pixal3D CUDA remains unresolved under #15710; a generic refresh cannot enable it.
+   Pixal3D CUDA was restored separately in [#15855](https://github.com/atomantic/PortOS/pull/15855);
+   a generic dependency refresh must preserve its declared target support.
 
 ## First-slice compatibility and reproducibility
 
@@ -575,3 +576,55 @@ processes, covering fresh Install, Repair reuse, source-seam checks, unsupported
 host refusal and sync/probe failures without false readiness. No production
 weights, model generation or quality assessment ran. Production H3 inference
 and the remaining profile/major migrations stay unverified under #15769.
+
+
+## Eleventh-slice FLUX.2 CUDA SDNQ refresh (2026-11-12)
+
+The Windows and Linux CUDA profiles update **SDNQ 0.2.8 → 0.2.9**, matching
+its already-refreshed MLX counterpart. The **51** other Windows entries and
+**69** other Linux entries retain their exact versions, markers and hash sets.
+Torch **2.14.1+cu126**, Torchvision **0.29.2**, Diffusers **0.42.1** and the
+native CUDA baseline are unchanged. No runtime adapter changes are needed.
+
+The [SDNQ release comparison](https://github.com/Disty0/sdnq/compare/v0.2.8...v0.2.9)
+includes quantized-layer compute-dtype reporting, attention alignment/stride
+fixes and configurable dynamic-quantization loss weights. Its existing
+Diffusers/Transformers registration, `SDNQConfig` and module-quantization APIs
+remain available. CUDA/Triton kernels are part of that upstream change; the
+checks below do not certify their execution or numerical quality on a GPU.
+
+This resolves the CUDA regeneration blocker recorded in the fifth slice.
+The documented recipe now derives a temporary uv project from the exact source
+requirements and scopes the official CUDA index explicitly to Torch. Unrelated
+packages resolve on PyPI with publication dates instead of failing the cooldown
+on undated PyTorch mirrors. Installation retains the existing CUDA index and
+`unsafe-best-match` strategy, constrained by the complete versions and hashes.
+No cooldown exemption or floating fallback was introduced. Generated annotations
+are omitted so temporary project paths cannot enter the committed locks.
+
+The tested recipe uses SHA-256-verified **uv 0.13.7**, wheels only and cutoff
+`2026-11-05T00:00:00Z`. The Windows lock has **52 entries / 944 hashes**; Linux
+has **70 / 1,041**. The union has **71 package-version identities / 1,042 hashes**.
+All hashes match non-yanked pre-cutoff artifacts: the **24** Torch hashes and
+**16** preserved Triton build hashes are verified against official PyTorch
+index upload metadata; all remaining hashes match PyPI. Complete OSV querybatch
+responses, including `MAL-` records, returned zero findings across the union plus
+Torch's public base version. Errors, pagination and result counts were checked.
+Bundled native libraries are not separately audited.
+
+Both target-specific hash-locked wheel sync plans passed using the installer's
+actual index strategy. **169** focused installer/profile tests passed, including
+fresh Install, Repair, failed sync/probe and unsupported-target refusal.
+These are resolution and fake-process contract checks, not native target installs.
+
+A fresh Apple Silicon CPython **3.11.17** scratch environment installed the same
+**52** Windows package versions, substituting the public native Torch **2.14.1**
+wheel for the CUDA build, and passed dependency checks. Both actual readiness
+pipeline imports, SDNQ registration in Diffusers and Transformers, configuration
+round-trip and two tiny CPU-quantized linear layers passed. The maximum absolute
+forward error against the unquantized fixture was **0.00374**. Expected missing
+optional compiler/OpenVINO backends selected the CPU eager fallback. This is a
+compatibility probe, not a CUDA install or model-quality result. No model weights,
+provider calls or generation ran. Windows/Linux CUDA execution and production
+FLUX.2 inference remain unverified; other profile and major migrations remain
+under #15769.
