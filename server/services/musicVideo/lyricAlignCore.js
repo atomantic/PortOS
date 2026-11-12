@@ -872,3 +872,84 @@ export {
   wavDurationSec,
   sliceWav,
 };
+
+/** DTW token transitions are word ends, in 10 ms units (not JSON offsets' ms). */
+export function parseWhisperDtwWords(data) {
+  const words = [];
+  let previousEnd = null;
+  for (const segment of data?.transcription || []) {
+    let current = null;
+    for (const token of segment.tokens || []) {
+      if (!token.text?.trim() || SPECIAL_TOKEN.test(token.text.trim())) continue;
+      if (!Number.isFinite(token.t_dtw) || token.t_dtw < 0) {
+        throw new ServerError('Whisper returned no DTW timestamps. Install a whisper.cpp build with DTW support.', { status: 503, code: 'LYRIC_VERIFY_DTW_UNAVAILABLE' });
+      }
+      const endSec = token.t_dtw / 100;
+      if (!current || /^\s/.test(token.text)) {
+        // A first word after a pause keeps its independently recognized onset;
+        // inside a phrase the preceding DTW transition is the word boundary.
+        const onset = Number.isFinite(token.offsets?.from) ? token.offsets.from / 1000 : null;
+        const startSec = previousEnd == null || (onset != null && onset - previousEnd > 0.3) ? onset : previousEnd;
+        current = { text: token.text.trim(), startSec, endSec };
+        words.push(current);
+      } else {
+        current.text += token.text.trim();
+        current.endSec = endSec;
+      }
+      previousEnd = endSec;
+    }
+  }
+  return dropNonLyricWords(words).filter(word => Number.isFinite(word.startSec) && word.endSec > word.startSec);
+}
+
+/** Compare independent recognition with the sheet, preserving repeated occurrences. */
+export function compareLyricPlacement(cues, recognized) {
+  const tokens = cues.flatMap(cue => lyricTokens(cue.text));
+  const matches = dpAlignWords(tokens, recognized);
+  const misplacedCues = [], uncheckedCues = [];
+  let cursor = 0;
+  for (const cue of cues) {
+    const expected = lyricTokens(cue.text);
+    const heard = matches.slice(cursor, cursor + expected.length);
+    cursor += expected.length;
+    // Never offer interpolated guesses as checked times. Letter similarity
+    // tolerates a spelling slip, but every word must have acoustic evidence.
+    const complete = expected.length > 0 && cue.words?.length === expected.length && heard.every((word, i) => word
+      && wordRatio(expected[i].key, word.key) >= 0.8 && Number.isFinite(word.startSec) && word.endSec > word.startSec);
+    if (!complete) {
+      uncheckedCues.push({ cueId: cue.id, text: cue.text });
+      continue;
+    }
+    const offsets = heard.map((word, i) => word.startSec - cue.words[i].startSec).sort((a, b) => a - b);
+    const middle = Math.floor(offsets.length / 2);
+    const offsetSec = offsets.length % 2 ? offsets[middle] : (offsets[middle - 1] + offsets[middle]) / 2;
+    if (Math.abs(offsetSec) <= 0.3 + 1e-9) continue;
+    misplacedCues.push({ cueId: cue.id, text: cue.text, offsetSec: round3(offsetSec),
+      words: heard.map((word, index) => ({ w: expected[index].w, startSec: round3(word.startSec), endSec: round3(word.endSec), conf: 'matched' })) });
+  }
+  return { misplacedCues, uncheckedCues };
+}
+
+/** Fill held-note tails only within a line and only across continuously voiced audio. */
+export function extendVoicedWordEnds(cues, pcm, sampleRate = LYRIC_ALIGN_SAMPLE_RATE) {
+  const hop = Math.max(1, Math.round(sampleRate * 0.01));
+  const voiced = (from, to) => {
+    const start = Math.floor(from * sampleRate), end = Math.ceil(to * sampleRate);
+    if (start < 0 || end > pcm.length || end <= start) return false;
+    // Short consonant closures are normal; a >= 50 ms quiet gap is not a held note.
+    let silent = 0;
+    for (let i = start; i < end; i += hop) {
+      const until = Math.min(end, i + hop);
+      let energy = 0;
+      for (let j = i; j < until; j++) energy += pcm[j] ** 2;
+      silent = Math.sqrt(energy / (until - i)) < SILENT_WORD_RMS ? silent + until - i : 0;
+      if (silent >= sampleRate * 0.05) return false;
+    }
+    return true;
+  };
+  return cues.map(cue => ({ ...cue, ...(cue.words ? { words: cue.words.map((word, i) => {
+    const next = cue.words[i + 1];
+    return next && next.startSec > word.endSec && voiced(word.endSec, next.startSec)
+      ? { ...word, endSec: next.startSec } : word;
+  }) } : {}) }));
+}

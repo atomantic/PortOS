@@ -201,7 +201,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix='portos-ctc-accuracy-') as scratch:
         audio, reference, duration = build_fixture(engine, binary, scratch, torch, torchaudio)
         lines = [[word['w'] for word in line] for line in reference]
-        aligned = align(audio, lines, args.model_dir)
+        aligned = align(audio, lines, args.model_dir)['lines']
         previous = previous_path(audio, lines, args.model_dir, torch, torchaudio)
     slots_ok, clock_ok, rows = score(reference, aligned, duration)
     start, end = summarize(rows, 'startErr'), summarize(rows, 'endErr')

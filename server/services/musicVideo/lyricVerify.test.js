@@ -22,7 +22,7 @@ describe('lyric sheet verification', () => {
     await expect(verifyPrerequisites({ ...project, vocalStemFilename: 'stem.wav', lyricCues: [] }, deps)).rejects.toMatchObject({ code: 'LYRIC_VERIFY_NEEDS_TIMING' });
     await expect(verifyPrerequisites({ ...project, vocalStemFilename: 'stem.wav' }, deps)).resolves.toBe('/music/stem.wav');
   });
-  it('transcribes only uncovered vocal phrases without sheet bias and finds silent lines', async () => {
+  it('transcribes uncovered vocal phrases without sheet bias and finds silent lines', async () => {
     const transcribe = vi.fn(async () => [{ text: 'extra', startSec: 5, endSec: 6 }]);
     const release = vi.fn();
     const result = await verifyLyricSheet(project, 'stem', { deps: { decode: async () => vocal(), resolveTranscriber: async () => ({ transcribe, release }) } });
@@ -30,8 +30,8 @@ describe('lyric sheet verification', () => {
     expect(result.extraPhrases[0]).toMatchObject({ text: 'extra' });
     expect(result.extraPhrases[0].startSec).toBeCloseTo(5, 1);
     expect(result.unsungCues).toEqual([{ cueId: 'c', text: 'unsung' }]);
-    expect(transcribe).toHaveBeenCalledOnce();
-    expect(transcribe.mock.calls[0][1]).toMatchObject({ prompt: '', startSec: expect.closeTo(4.8, 1), endSec: expect.closeTo(6.2, 1) });
+    expect(transcribe).toHaveBeenCalledTimes(3);
+    expect(transcribe.mock.calls[2][1]).toMatchObject({ prompt: '', startSec: expect.closeTo(4.8, 1), endSec: expect.closeTo(6.2, 1) });
     expect(release).toHaveBeenCalledOnce();
   });
   it('releases the transcriber after cancellation during transcription', async () => {
@@ -50,6 +50,40 @@ describe('lyric sheet verification', () => {
     expect(result.extraPhrases).toHaveLength(2);
     expect(result.extraPhrases[0]).toMatchObject({ startSec: expect.closeTo(1, 1), endSec: 2 });
     expect(result.extraPhrases[1]).toMatchObject({ startSec: 3, endSec: expect.closeTo(4, 1) });
-    expect(transcribe).toHaveBeenCalledTimes(2);
+    expect(transcribe).toHaveBeenCalledTimes(3);
   });
+});
+
+
+it('finds a shifted repeated chorus even on voiced audio, and passes accepted checked times', async () => {
+  const wav = encodePcm16Wav(16000 * 8);
+  for (let i = 16000; i < 16000 * 6; i++) wav.writeInt16LE(8000, 44 + i * 2);
+  const line = (id, start) => ({ id, text: 'bright morning river', words: ['bright', 'morning', 'river'].map((w, i) => ({ w, startSec: start + i * 0.5, endSec: start + i * 0.5 + 0.2, conf: 'matched' })) });
+  const correct = line('first', 1), shifted = line('repeat', 4);
+  correct.words.at(-1).endSec = 4.6;
+  shifted.words.at(-1).endSec = 6;
+  const actual = line('repeat', 4.6);
+  actual.words.at(-1).endSec = 6;
+  const heard = [...correct.words, ...actual.words].map(word => ({ ...word, text: word.w }));
+  const transcribe = vi.fn(async (_wav, { prompt }) => prompt ? heard : []);
+  const deps = { decode: async () => wav, resolveTranscriber: async () => ({ transcribe }) };
+  const checked = await verifyLyricSheet({ ...project, lyricCues: [correct, shifted] }, 'stem', { deps });
+  expect(checked.passed).toBe(false);
+  expect(checked.uncheckedCues).toEqual([]);
+  expect(checked.misplacedCues).toHaveLength(1);
+  expect(checked.misplacedCues[0]).toMatchObject({ cueId: 'repeat', offsetSec: 0.6 });
+  const words = checked.misplacedCues[0].words;
+  expect(words[0].endSec).toBe(words[1].startSec);
+  expect(words[1].endSec).toBe(words[2].startSec);
+  const next = await verifyLyricSheet({ ...project, lyricCues: [correct, { ...shifted, words }] }, 'stem', { deps });
+  expect(next.misplacedCues).toEqual([]);
+  expect(next.uncheckedCues).toEqual([]);
+  expect(next.passed).toBe(true);
+});
+
+it('never passes a line that recognition could not place', async () => {
+  const result = await verifyLyricSheet(project, 'stem', { deps: { decode: async () => vocal(), resolveTranscriber: async () => ({ transcribe: async () => [] }) } });
+  expect(result.passed).toBe(false);
+  expect(result.misplacedCues).toEqual([]);
+  expect(result.uncheckedCues.map(cue => cue.cueId)).toEqual(['a', 'b', 'c']);
 });
