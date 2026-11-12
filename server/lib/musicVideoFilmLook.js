@@ -74,7 +74,7 @@ export function cameraFrameCss(aspect) {
  * apply(null) disables the preview finish; a neutral object enables shot looks
  * even when the video itself has no look. This does not change stored settings.
  */
-export function documentFilmLookRuntime(project) {
+export function documentFilmLookRuntime(project, options) {
   const scenes = (project?.scenes || [])
     .filter(scene => Number.isFinite(scene.startSec) && Number.isFinite(scene.endSec) && scene.endSec > scene.startSec)
     .slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
@@ -84,7 +84,7 @@ export function documentFilmLookRuntime(project) {
       pinned: scene.filmLook != null || shotCamera(project, scene)?.filmLook != null,
       look: shotFilmLook(project, scene) }));
   const json = value => JSON.stringify(value).replace(/</g, '\\u003c');
-  return filmLookRuntimeSource(project?.filmLook) + `
+  return filmLookRuntimeSource(project?.filmLook, options) + `
 (() => {
   const api = globalThis.__portosFilmLook;
   const apply = api.apply.bind(api), frame = api.frame.bind(api);
