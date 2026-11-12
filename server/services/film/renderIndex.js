@@ -18,7 +18,7 @@ import { getBlenderSong } from './song.js';
 export const BLENDER_RENDER_QUALITIES = Object.freeze(['preview', 'final']);
 const FRAME_NAME = /^frame_(\d{6,})\.(?:jpg|png)$/;
 const HANDLE_FRAME_NAME = /^handle_(in|out)_(\d{6,})\.(?:jpg|png)$/;
-const frameExtension = (quality) => (quality === 'preview' ? 'jpg' : 'png');
+const frameExtension = (quality) => (quality === 'preview' || quality === 'sheet' ? 'jpg' : 'png');
 
 const isFile = async (path) => (await lstat(path).catch(() => null))?.isFile() === true;
 
@@ -33,6 +33,8 @@ export const blenderHandleFrameName = (side, frame, quality) => `handle_${side}_
 export const blenderFramePattern = (quality) => `frame_%06d.${frameExtension(quality)}`;
 export const blenderHandleFramePattern = (side, quality) => `handle_${side}_%06d.${frameExtension(quality)}`;
 export const blenderStillsFile = (owner, shotId) => join(blenderShotDir(owner, shotId, 'stills'), 'stills.json');
+export const blenderSheetsFile = (owner, shotId) => join(blenderShotDir(owner, shotId, 'sheets'), 'sheets.json');
+export const blenderSheetName = (firstFrame, lastFrame, every) => `sheet-${firstFrame}-${lastFrame}-e${every}.jpg`;
 
 /** How many of the frames `[startFrame, endFrame)` are on disk. */
 export async function countBlenderFrames(owner, shotId, quality, { startFrame, endFrame }) {
@@ -143,11 +145,51 @@ async function readStills(owner, shot, { shotHash, optionsHash, songHash, files 
   return stills.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
 }
 
+/** The `render.json` metadata when `quality` of `shot` is complete and current, or null. */
+export async function isBlenderRenderCurrent(owner, shot, quality, current) {
+  const meta = await readBlenderJson(blenderRenderFile(owner, shot.id, quality));
+  if (!meta || typeof meta !== 'object' || meta.complete !== true) return null;
+  if (!(await isFile(blenderShotVideo(owner, shot.id, quality)))) return null;
+  const range = blenderShotFrameRange(shot, current.fps);
+  const handleRanges = blenderShotHandleRanges(shot, current.fps);
+  return staleReasons(meta, range, handleRanges, current).length === 0 ? meta : null;
+}
+
+const SHEET_FILE = /^sheet-\d+-\d+-e\d+\.jpg$/;
+
+async function readSheets(owner, shot, { shotHash, optionsHash, songHash, files }) {
+  const listed = await readBlenderJson(blenderSheetsFile(owner, shot.id), []);
+  const sheets = [];
+  for (const sheet of Array.isArray(listed) ? listed : []) {
+    if (typeof sheet?.file !== 'string' || !SHEET_FILE.test(sheet.file)) continue;
+    const absolute = join(blenderShotDir(owner, shot.id, 'sheets'), sheet.file);
+    if (!(await isFile(absolute))) continue;
+    sheets.push({
+      file: blenderMediaPath(owner, absolute),
+      firstFrame: sheet.firstFrame,
+      lastFrame: sheet.lastFrame,
+      every: sheet.every,
+      columns: sheet.columns,
+      tiles: sheet.tiles,
+      startSec: sheet.startSec,
+      endSec: sheet.endSec,
+      fromPreview: Boolean(sheet.fromPreview),
+      createdAt: sheet.createdAt || null,
+      stale: (sheet.songHash != null && sheet.songHash !== songHash)
+        || sheet.srcHash !== shotHash
+        || blenderImportsChanged(sheet.imports, files)
+        || (sheet.optionsHash ?? BLENDER_NO_OPTIONS_HASH) !== optionsHash,
+    });
+  }
+  // Newest batch first, in frame order within a batch.
+  return sheets.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)) || (a.firstFrame - b.firstFrame));
+}
+
 /** The film options a render of `manifest` is built with now (`ctx.options`). */
 export const blenderFilmOptions = (manifest, settings) => blenderEffectiveOptions(manifest?.options, settings.options);
 
 /**
- * The renders of a film's shots: `{ [shotId]: { preview?, final?, stills, blend? } }`.
+ * The renders of a film's shots: `{ [shotId]: { preview?, final?, stills, sheets, blend? } }`.
  * `manifest` is the synced manifest (its stored shots carry the `deps` that
  * decide staleness); `shots` narrows to some of them. `sources` is
  * `hashBlenderSources()`'s result when the caller already has it. `finalsOnly`
@@ -162,7 +204,10 @@ export async function readBlenderRenders(owner, manifest, { settings, sources = 
   const renders = {};
   for (const shot of shots) {
     const shotHash = blenderShotHash(shot, files);
-    const entry = { stills: finalsOnly ? [] : await readStills(owner, shot, { shotHash, optionsHash, songHash, files }) };
+    const entry = {
+      stills: finalsOnly ? [] : await readStills(owner, shot, { shotHash, optionsHash, songHash, files }),
+      sheets: finalsOnly ? [] : await readSheets(owner, shot, { shotHash, optionsHash, songHash, files }),
+    };
     for (const quality of qualities) {
       const render = await readQuality(owner, shot, quality, { fps: settings.fps, shotHash, settingsHash: settingsHashes[quality], optionsHash, songHash, files });
       if (render) entry[quality] = render;
