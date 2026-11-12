@@ -93,6 +93,31 @@ describe('publish drafts (#9282)', () => {
     expect(hook.prepare).not.toHaveBeenCalled();
   });
 
+  it("looks a Hook's song up by the title Suno shows now, and by the project's name when Suno gives none", async () => {
+    const songId = '12345678-abcd-4abc-8abc-123456789abc';
+    const { id } = await projects.createProject({ name: 'Example Song' });
+    await mkdir(PATHS.videos, { recursive: true });
+    await writeFile(join(PATHS.videos, 'vertical.mp4'), 'x');
+    await projects.mutateProjectRecord(id, current => ({ project: { ...current,
+      audioAnalysis: { durationSec: 200 }, publishKit: {
+        links: { song: `https://suno.com/song/${songId}` },
+        master: { renderHistoryId: current.renderHistoryId },
+        exports: [{ kind: 'vertical-9x16', filename: 'vertical.mp4', startSec: 30, endSec: 55 }],
+      },
+    } }));
+    const { connect } = fakeBrowser();
+    const hook = adapter({ label: 'Suno Hook' });
+    const deps = { connect, adapters: { sunoHook: hook }, platforms: { sunoHook: { enabled: true, account: null } } };
+    // The song was renamed on Suno after the project was made.
+    const readSongTitle = vi.fn(async () => 'Example Song (Renamed)');
+    await preparePublishDraft(id, 'sunoHook', {}, { ...deps, readSongTitle });
+    expect(readSongTitle).toHaveBeenCalledWith(songId);
+    expect(hook.prepare.mock.calls[0][1]).toMatchObject({ songId, title: 'Example Song (Renamed)' });
+
+    await preparePublishDraft(id, 'sunoHook', {}, { ...deps, readSongTitle: async () => '' });
+    expect(hook.prepare.mock.calls[1][1].title).toBe('Example Song');
+  });
+
   it('fills a Substack post on the publication named under Where you post', async () => {
     const { id } = await projects.createProject({ name: 'Release' });
     await projects.mutateProjectRecord(id, (current) => ({ project: { ...current, publishKit: {
