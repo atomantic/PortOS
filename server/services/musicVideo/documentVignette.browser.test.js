@@ -40,7 +40,9 @@ describe.skipIf(!canRun)('opaque document film-look canvas with Chrome and ffmpe
     const directory = 'music-video/mv-vignette/composition/doc-vignette';
     const dir = join(PATHS.data, directory);
     await mkdir(dir, { recursive: true });
-    const html = `<!doctype html><html><head></head><body style="margin:0"><canvas id="stage" width="${W}" height="${H}"></canvas><script>window.portosComposition={width:${W},height:${H},fps:12,durationSec:1,seek:()=>{const c=document.getElementById('stage').getContext('2d');c.fillStyle='#808080';c.fillRect(0,0,${W},${H});}};</script></body></html>`;
+    // A frame fills the viewport without inline-canvas baseline overflow. Explicit classic
+    // scrollbar styling exposes accidental overflow even on macOS overlay-scrollbar hosts.
+    const html = `<!doctype html><html><head><style>html,body{margin:0;width:100%;height:100%;overflow:hidden}canvas{display:block}::-webkit-scrollbar{width:16px;height:16px;background:#fff}</style></head><body style="margin:0"><canvas id="stage" width="${W}" height="${H}"></canvas><script>window.portosComposition={width:${W},height:${H},fps:12,durationSec:1,seek:()=>{const c=document.getElementById('stage').getContext('2d');c.fillStyle='#808080';c.fillRect(0,0,${W},${H});}};</script></body></html>`;
     await writeFile(join(dir, 'index.html'), html);
     const audio = join(dir, 'audio.wav');
     execFileSync(ffmpeg, ['-v', 'error', '-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo', '-t', '1', '-y', audio]);
