@@ -436,4 +436,21 @@ describe('PublishPostingPanel (#9282)', () => {
       unmount();
     }
   });
+
+  it('skips a platform for this release and lets the director undo it', () => {
+    localStorage.clear();
+    const setTargetSkipped = vi.fn(async () => true);
+    render(
+      <PublishPostingPanel
+        project={project({ skippedTargets: ['linkedin'] })}
+        publishing={hook({ enabledTargets: ['x'], skippedTargets: ['linkedin'], setTargetSkipped })}
+      />
+    );
+    expandAll();
+    fireEvent.click(screen.getByRole('button', { name: 'Skip for this release' }));
+    expect(setTargetSkipped).toHaveBeenCalledWith('x', true);
+    expect(screen.getByText(/Skipped for this release:/)).toHaveTextContent(/LinkedIn/);
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+    expect(setTargetSkipped).toHaveBeenCalledWith('linkedin', false);
+  });
 });

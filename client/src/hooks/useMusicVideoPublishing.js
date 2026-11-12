@@ -168,8 +168,23 @@ export default function useMusicVideoPublishing({ project, replaceProject } = {}
   // Fill a posted platform's edit (or a reply under it) with the links it lacks; errors stay with the caller.
   const prepareCrossLinks = (target) => prepareMusicVideoCrossLinkEdit(projectId, target, { silent: true });
 
-  // null until the saved choice is known, so consumers never treat "unknown" as "none on".
-  const enabledTargets = platforms ? Object.entries(platforms).filter(([, p]) => p?.enabled).map(([t]) => t) : null;
+  const skippedTargets = Array.isArray(project?.publishKit?.skippedTargets) ? project.publishKit.skippedTargets : [];
+  const skippedSet = new Set(skippedTargets);
 
-  return { drafts, progress, draftsError: draftsError?.scope === scope ? draftsError.error : null, retryDrafts, busy, errors, prepare, preview, discard, platforms, platformsError, retryPlatforms: loadPlatforms, history, enabledTargets, setPlatform, savePostOptions, recordPost, removePost, setCrossLinks, prepareCrossLinks };
+  const setTargetSkipped = (target, skip) => {
+    if (!projectId) return Promise.resolve(false);
+    const next = skip
+      ? (skippedSet.has(target) ? skippedTargets : [...skippedTargets, target])
+      : skippedTargets.filter((t) => t !== target);
+    return updateMusicVideoPublishCopy(projectId, { skippedTargets: next })
+      .then((res) => { if (res?.project?.id && res.project.id === selection.current.projectId) replaceProject?.(res.project); return true; })
+      .catch(() => false);
+  };
+
+  // null until the saved choice is known, so consumers never treat "unknown" as "none on".
+  const enabledTargets = platforms
+    ? Object.entries(platforms).filter(([t, p]) => p?.enabled && !skippedSet.has(t)).map(([t]) => t)
+    : null;
+
+  return { drafts, progress, draftsError: draftsError?.scope === scope ? draftsError.error : null, retryDrafts, busy, errors, prepare, preview, discard, platforms, platformsError, retryPlatforms: loadPlatforms, history, enabledTargets, skippedTargets, setTargetSkipped, setPlatform, savePostOptions, recordPost, removePost, setCrossLinks, prepareCrossLinks };
 }

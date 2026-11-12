@@ -547,6 +547,30 @@ describe('publishing kit copy (#9281)', () => {
     expect((await kit.selectPublishKitThumbnail(id, 'b.jpg')).project.publishKit.thumbnail).toBe('b.jpg');
     await expect(kit.selectPublishKitThumbnail(id, 'elsewhere.jpg')).rejects.toMatchObject({ status: 422 });
   });
+
+  it('skips platforms per release in copy drafts while keeping their saved copy', async () => {
+    const { id } = await projects.createProject({ name: 'Example Song' });
+    await kit.updatePublishKitCopy(id, { linkedin: { post: 'Saved LinkedIn' }, skippedTargets: ['linkedin', 'linkedin'] });
+    const seen = [];
+    const customRunner = {
+      resolveProviderAndModel: async () => ({ provider: { id: 'p' }, selectedModel: 'm' }),
+      runPromptThroughProvider: async ({ prompt }) => {
+        seen.push(prompt);
+        return { text: JSON.stringify({ x: { hook: 'New X hook', story: '' } }) };
+      },
+    };
+    const { project } = await kit.draftPublishKitCopy(id, { replaceEdited: true }, {
+      platforms: { x: { enabled: true }, linkedin: { enabled: true } },
+      history: {},
+      runner: customRunner,
+    });
+    expect(project.publishKit.skippedTargets).toEqual(['linkedin']);
+    expect(project.publishKit.copy.linkedin.post).toBe('Saved LinkedIn');
+    expect(project.publishKit.copy.x.hook).toBe('New X hook');
+    expect(seen[0]).not.toMatch(/linkedin/i);
+    const cleared = await kit.updatePublishKitCopy(id, { skippedTargets: [] });
+    expect(cleared.project.publishKit.skippedTargets).toBeUndefined();
+  });
 });
 
 describe('thumbnail frames', () => {

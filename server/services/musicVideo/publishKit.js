@@ -340,6 +340,10 @@ export async function updatePublishKitCopy(projectId, patch, deps = {}) {
         ...(patch.draftOptions.length ? { length: patch.draftOptions.length } : {}),
       };
     }
+    if (Array.isArray(patch?.skippedTargets)) {
+      const unique = [...new Set(patch.skippedTargets)];
+      if (unique.length) next.skippedTargets = unique; else delete next.skippedTargets;
+    }
     return { project: { ...current, publishKit: next } };
   });
 }
@@ -376,8 +380,9 @@ export async function draftPublishKitCopy(projectId, { providerId = null, model 
   }
   const { getPublishPlatforms, publishHistory } = await import('./publish/platforms.js');
   const enabled = deps.platforms || await getPublishPlatforms();
-  // Only where the director posts (#9287); Suno's caption reuses the YouTube description.
-  const platforms = PUBLISH_PLATFORMS.filter((p) => enabled[p]?.enabled || (p === 'youtube' && enabled.suno?.enabled));
+  // Only where the director posts (#9287), minus any skipped for this release; Suno's caption reuses the YouTube description.
+  const skipped = new Set(projectPublishKit(project).skippedTargets || []);
+  const platforms = PUBLISH_PLATFORMS.filter((p) => !skipped.has(p) && (enabled[p]?.enabled || (p === 'youtube' && enabled.suno?.enabled && !skipped.has('suno'))));
   if (!platforms.length) throw kitError(409, 'PUBLISH_NO_PLATFORMS', 'Turn on at least one platform under "Where you post" before drafting copy');
   const history = deps.history || await publishHistory().catch(() => ({}));
   const lessons = Object.entries(history).flatMap(([platform, h]) => (h?.notes || []).map((n) => ({ platform, ...n })));

@@ -232,6 +232,9 @@ export async function preparePublishDraft(projectId, target, options = {}, deps 
   const platforms = deps.platforms || await getPublishPlatforms();
   assertPlatformEnabled(platforms, target);
   const project = await requireProject(projectId);
+  if (project.publishKit?.skippedTargets?.includes(target)) {
+    throw new ServerError(`${adapter.label} is skipped for this release — click Undo under "Skipped for this release" to post there`, { status: 409, code: 'PUBLISH_TARGET_SKIPPED', context: { target } });
+  }
   // A platform already posted to gets a second draft only when the director says so:
   // otherwise one stray click is one duplicate post.
   const existing = project.publishKit?.posts?.[target];
@@ -291,8 +294,12 @@ export async function preparePublishDraft(projectId, target, options = {}, deps 
  * would refuse with.
  */
 export async function previewPublishPost(projectId, target, options = {}, deps = {}) {
-  if (!(deps.adapters || PUBLISH_ADAPTERS)[target]) throw new ServerError(`Unknown publish target: ${target}`, { status: 400, code: 'VALIDATION_ERROR' });
+  const adapter = (deps.adapters || PUBLISH_ADAPTERS)[target];
+  if (!adapter) throw new ServerError(`Unknown publish target: ${target}`, { status: 400, code: 'VALIDATION_ERROR' });
   const project = await requireProject(projectId);
+  if (project.publishKit?.skippedTargets?.includes(target)) {
+    return { ready: false, problem: `${adapter.label} is skipped for this release — click Undo under "Skipped for this release" to post there` };
+  }
   const platforms = deps.platforms || await getPublishPlatforms();
   return withSongPage(target, project, withPlatformDefaults(target, options, platforms), deps)
     .then((resolved) => buildPublishPayload(target, project, resolved))
