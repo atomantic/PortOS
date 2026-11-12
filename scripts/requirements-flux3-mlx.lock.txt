@@ -1,24 +1,23 @@
 # FLUX.3 Klein MLX runtime — fully-resolved, hash-pinned lock for
-# <data>/python/venv-flux3 (Apple Silicon, CPython 3.12). Do not edit by hand.
+# <data>/python/venv-flux3 (Apple Silicon, CPython 3.12+). Do not edit by hand.
+# Install/Repair uses hash-enforced, wheel-only uv pip sync. Its readiness probe
+# checks every version below without fetching model weights.
 #
-# server/services/imageGen/flux3Runtime.js installs this with
-# `uv pip sync --require-hashes`, so every transitive package is version- and
-# hash-pinned and a tampered or substituted distribution fails the install.
-# Its readiness probe checks every version below.
-#
-# Regenerate after editing requirements-flux3-mlx.txt, on an Apple Silicon Mac,
-# with a cooldown so brand-new releases are not adopted the day they publish:
-#   uv pip compile scripts/requirements-flux3-mlx.txt --python <venv-flux3>/bin/python3 \
-#     --generate-hashes --no-header --annotation-style line \
-#     --exclude-newer <UTC date at least 7 days ago> -o scripts/requirements-flux3-mlx.lock.txt
-# then check the result against OSV (including MAL- malicious-package records).
+# Regenerated with uv 0.13.7 and cutoff 2026-11-05T00:00:00Z.
+# Preserve this output to reuse unrelated pins. On Apple Silicon with Python 3.12:
+#   uv --no-config pip compile scripts/requirements-flux3-mlx.txt --python <python3.12> \
+#     --generate-hashes --no-header --annotation-style line --only-binary :all: \
+#     --exclude-newer <UTC date at least 7 days ago> \
+#     --upgrade-package anyio==4.16.0 --upgrade-package filelock==4.2.7 \
+#     --upgrade-package platformdirs==4.14.3 -o scripts/requirements-flux3-mlx.lock.txt
+# Then audit the entire lock with OSV, including MAL- records.
 annotated-doc==0.0.5 \
     --hash=sha256:117bac03a25ede5df5440e855b32d556049ca169ead221505badf432fed4b101 \
     --hash=sha256:c7e58ce09192557605d8bbd92836d7e1d520ac9580096042c0bfd197efacf1bb
     # via typer
-anyio==4.15.1 \
-    --hash=sha256:6152fdbbf9a77fdec97731721bebf7c4c44f7c29b424b0065826173efc7ed101 \
-    --hash=sha256:9f28306018cbd6d329e64a36d58256edff76dd996fe423bc957326e578b82a94
+anyio==4.16.0 \
+    --hash=sha256:59bb03251907983d1603d27c3087ddb1e93299ea2163adcdba37899a4fb12ffb \
+    --hash=sha256:c66ae634e0b8228396b801741beb3294326d4b6102f7bba4041c0dfb58c29026
     # via httpx, mflux
 certifi==2026.10.23 \
     --hash=sha256:a9895e6e2758b371e0545e321a3a8fd1fcfd9829ada8824a936dfb16aaaf36cd \
@@ -278,9 +277,9 @@ cycler==0.12.1 \
     --hash=sha256:85cef7cff222d8644161529808465972e51340599459b8ac3ccbac5a854e0d30 \
     --hash=sha256:88bb128f02ba341da8ef447245a9e138fae777f6a23943da4540077d3601eb1c
     # via matplotlib
-filelock==4.2.6 \
-    --hash=sha256:ee7af8ede36dcaf12e1016d9f7c3a63ecd5497d46f85dab21b8c779b8f944e97 \
-    --hash=sha256:fd7d4fca497bf3e3d0945a13261f8e684f2aef12ce7cf76aef26e13bf7388b88
+filelock==4.2.7 \
+    --hash=sha256:31f6f7e3a8b6f0bd89114d30c5d5218ea1cfb63e5c4aa695b7559314a209bc7f \
+    --hash=sha256:d08972bbca2b8767ee552aff877b091dd111ffb1d22de7de885766ea7d719d5e
     # via huggingface-hub, mflux, torch
 fonttools==4.68.0 \
     --hash=sha256:039142b75a068c93f8596ef68787f82c74940b9153d24c224ab31e750eb083a2 \
@@ -1035,9 +1034,9 @@ pillow==13.0.0 \
     --hash=sha256:ff3fe9eb621fbb9db4c4be33ab946f6bac5f98ab50ca8d3260503653656c961b \
     --hash=sha256:ffea6b2986a797c84b6d1d27d4f43e0b83c73fc16281a930891cd237cf0d08fe
     # via matplotlib, mflux, -r scripts/requirements-flux3-mlx.txt
-platformdirs==4.14.2 \
-    --hash=sha256:6d13b4c1d66b7548dcec9e3db13c1ba9d9adb65041b5d07869313afc07e6e41b \
-    --hash=sha256:dc1f93390f2a9265e44e5afc8667ec7faf737739604e39bc538fec889720c36b
+platformdirs==4.14.3 \
+    --hash=sha256:021add1ab113483edbcd4694f5fbb2d688b893ea30d35e1155bb371cf4be0be8 \
+    --hash=sha256:cba2d05fe5e18b26b1fa6f376b8e6234c012abe1f8696c486fface7d0054e931
     # via mflux
 protobuf==7.36.2 \
     --hash=sha256:497d0463ff3316681da6c0b9e8d06cb465d61abce00b613ab42226175644d1bb \
