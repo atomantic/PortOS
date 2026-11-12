@@ -21,7 +21,7 @@ shared with AudioLDM2 and MiniMax Music 3 CUDA (`require_cuda_lock_host` and
 
 The direct pins (`scripts/requirements-muscriptor-cuda.txt`) are torch
 2.14.1+cu126 (the build the other cu126 runtimes share), muscriptor 0.4.0 and
-huggingface-hub 0.36.2 with hf-xet, matching the Apple Silicon lock's
+huggingface-hub 2.4.0 with hf-xet, matching the Apple Silicon lock's
 muscriptor and hub pins. The resolved torchaudio 2.11.1 (a `py3-none` wheel
 declaring `torch>=2.11`) is the version the Apple Silicon lock uses. TorchAudio
 2.11 is its final maintenance line, which upstream states works with torch 2.11
@@ -37,31 +37,69 @@ and repairing never download weights or transcribe audio.
 
 ## Regenerating locks
 
-Edit `scripts/requirements-muscriptor-cuda.txt` with exact direct pins. Using
-uv 0.13.1, run from the repository root (Bash):
+Edit `scripts/requirements-muscriptor-cuda.txt` with exact direct pins. Use the
+verified uv 0.13.7 bootstrap (`requirements-uv-bootstrap.lock.txt`), setting `UV`
+to that executable. The explicit named CUDA index avoids routing unrelated
+packages through PyTorch mirrors, which can lack timestamps required by the
+cooldown. All other packages resolve from PyPI.
 
 ```bash
+set -euo pipefail
+CUTOFF=2026-11-05T00:00:00Z  # advance to a UTC date at least seven days old
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
 for target in windows linux; do
   case "$target" in
     windows) platform=x86_64-pc-windows-msvc ;;
     linux) platform=x86_64-manylinux_2_28 ;;
   esac
+  python3 - "$TMP/pyproject.toml" "$target" <<'PYPROJECT'
+import json
+import pathlib
+import sys
+
+lines = pathlib.Path("scripts/requirements-muscriptor-cuda.txt").read_text().splitlines()
+deps = [line for line in lines if line and not line.startswith("#")]
+sources = 'torch={index="pytorch"}\n'
+
+pathlib.Path(sys.argv[1]).write_text(
+    '[project]\nname="portos-muscriptor-cuda"\nversion="0.0.0"\n'
+    'requires-python=">=3.11"\ndependencies=' + json.dumps(deps) + '\n'
+    '[tool.uv.sources]\n' + sources +
+    '[[tool.uv.index]]\nname="pytorch"\n'
+    'url="https://download.pytorch.org/whl/cu126"\nexplicit=true\n'
+)
+PYPROJECT
   out="scripts/requirements-muscriptor-cuda-${target}.lock.txt"
-  uv pip compile scripts/requirements-muscriptor-cuda.txt \
+  cp "$out" "$TMP/$target.lock" # retain unrelated pins during resolution
+  "$UV" --no-config pip compile "$TMP/pyproject.toml" \
     --python-version 3.11 --python-platform "$platform" \
-    --generate-hashes --only-binary :all: \
-    --index-url https://pypi.org/simple \
-    --extra-index-url https://download.pytorch.org/whl/cu126 \
-    --index-strategy unsafe-best-match --emit-index-url \
-    --no-header --annotation-style line --exclude-newer 2026-11-01 \
-    -o "$out"
+    --generate-hashes --only-binary :all: --no-header --no-annotate \
+    --index-url https://pypi.org/simple --emit-index-url \
+    --exclude-newer "$CUTOFF" -o "$TMP/$target.lock"
+  {
+    printf '# MuScriptor CUDA: CPython 3.11, x86_64 %s, CUDA 12.6.\n' "$target"
+    printf '# uv 0.13.7; exclude-newer %s; regenerate: docs/MUSCRIPTOR_CUDA.md.\n' "$CUTOFF"
+    printf '%s\n' '--extra-index-url https://download.pytorch.org/whl/cu126'
+    cat "$TMP/$target.lock"
+  } > "$out"
 done
 ```
 
-Advance the cutoff to a UTC date at least seven days before the update, and
-restore each lock's two-line target/cutoff header after regenerating. The
-multi-index strategy permits current PyPI packages alongside CUDA wheels; see
-[AudioLDM2](./AUDIOLDM2_CUDA.md#regenerating-locks) for why.
+The temporary project derives its pins from the source requirements. Existing
+lock output preserves unrelated versions and hash sets; `--no-annotate` avoids
+temporary paths in the result. The pip-format lock retains the installation
+index, but every accepted artifact remains constrained by its SHA-256 hash.
+Verify official CUDA-index artifact hashes and upload dates, including retained
+Triton build hashes, and verify all other artifacts against PyPI. Never drop
+the cutoff or hand-edit generated hashes.
+
+This changes regeneration only. Install/Repair retains its existing
+`--index-strategy unsafe-best-match` with complete `--require-hashes` locks;
+that flag does not permit packages or artifacts outside the committed set.
+
+Only Torch resolves from the CUDA index; its existing native hashes and
+transitive CUDA/Triton baseline remain unchanged.
 
 Query OSV for **every resolved package**, including `MAL-` records,
 immediately before merge, using the script in

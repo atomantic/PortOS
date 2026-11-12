@@ -1409,3 +1409,61 @@ roundtrips and Torch/Ninja compile/incremental/failure probes. Candidate
 metadata checks passed. Original immutable baseline evidence remains
 applicable; the combined candidate's tokenizer, normalization and template
 outputs match it exactly. This is still not a complete renderer install.
+
+## Twenty-fifth-slice MuScriptor published API and Hub 2 transport (2026-11-12)
+
+The pinned MuScriptor 0.4.0 runner called `transcribe_to_midi`, which does not
+exist in that release. Its published example and implementation use
+`transcribe_and_postprocess(audio)`, returning `(midi_bytes, beat_grid)`.
+The adapter now unpacks that tuple before the existing empty-output check,
+MIDI write and `RESULT` reporting. Model-size loading, stages and shared error
+translation are unchanged. Four public CLI regressions cover successful MIDI
+bytes rather than the tuple/grid, empty output, transcription failure and
+missing-input refusal. The old nonexistent-method call fails the success
+contract without loading any production weights.
+
+Both source inputs and all three complete locks move Hub 0.36.2 → 2.4.0,
+adding HTTPX2/HTTPCore2 2.16.0 and Truststore 0.10.5. MuScriptor still requires
+HTTPX 0.28.1, so its original HTTPCore/Certifi closure remains. Requests,
+charset-normalizer and urllib3 had only the old Hub as consumer and are
+removed. MuScriptor's immutable downloader uses Hub and stdlib urllib, not
+Requests; its model/download modules and Beat This/TorchAudio callers do not
+import Requests. All surviving companion versions, markers and hash sets,
+including Torch/audio/native dependencies, are unchanged.
+
+Verified uv 0.13.7 regenerated the universal Apple Silicon lock and both
+Python 3.11 CUDA target locks with the November 5 UTC cutoff. The MLX lock has
+60 version/marker entries; Linux/Windows have 77/58. The complete union has
+81 identities and 1,281 artifact hashes, all unyanked and pre-cutoff. The
+82-query OSV/MAL audit includes CUDA-local and public base versions and
+returned no findings. CUDA resolution scopes only Torch to its official
+index; preserved Triton build hashes were verified there too. Documented
+recipes reproduce the resolved locks exactly. Both CUDA target dry-sync
+plans passed with the unchanged hash-constrained installation policy.
+
+Fresh complete hashed native Apple Silicon environments passed installation
+and dependency checks for the old Python 3.11.18 baseline and new Python
+3.11.18/3.12.11 candidates. All three exercised the actual pinned
+`TranscriptionModel.transcribe_and_postprocess` and MIDI serialization methods
+through PortOS's real entry point, with a synthetic note-event iterator in
+place of neural inference and beat detection disabled only in the fixture.
+They produced identical 83-byte MIDI with a C4 note-on/note-off pair, matching
+stage, model-size and result-byte-count contracts. This validates the actual
+published tuple API and MIDI writer, not transcription accuracy.
+
+The immutable MuScriptor downloader ran against a synthetic loopback Hub in
+all three environments: required model-file and optional companion downloads,
+local paths, cache/offline hits and misses, exact interrupted-download Range
+resume, gated/not-found/401 errors through `ModelDownloadError` and PortOS's
+shared error translator. Real Hub snapshot symlinks and a sparse synthetic
+50 MiB blob exercised the cache heuristic without allocating or downloading
+model weights. Both candidates passed default Truststore TLS checks:
+untrusted/wrong-CA refusals before HTTP and verified HTTPS/Hub access with an
+ephemeral fixture CA. No OS trust changes or private keys remain. Caches and
+tokens were isolated and fixtures rejected Authorization headers.
+
+All 186 focused CLI/service/installer/profile tests passed without skips.
+Independent review, final committed-tree pregate and hosted CI remain merge
+requirements. No production weights, neural transcription, beat-detector
+inference, GPU/CUDA execution or live public-chain/proxy compatibility is
+claimed. The optional beat detector remains unchanged by this migration.
