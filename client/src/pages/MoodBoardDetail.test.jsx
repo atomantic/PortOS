@@ -994,3 +994,24 @@ it('accepts a >2048-char data:image URL without input truncation and surfaces se
   expect(screen.getByRole('button', { name: 'Preview image' })).toBeInTheDocument();
   expect(input).toHaveValue('');
 });
+
+
+it('offers source navigation for web URLs while leaving non-web provenance as text', async () => {
+  const sources = ['https://x.com/example/status/123', 'https://www.pinterest.com/pin/123/', 'https://www.youtube.com/watch?v=123'];
+  mockGetMoodBoard.mockResolvedValueOnce({
+    id: 'a', name: 'Board A',
+    items: [...sources, null, 'frame:clip.mp4', 'javascript:alert(1)'].map((source, index) => ({
+      id: `source-${index}`, type: 'text', text: 'Reference', source,
+    })),
+  });
+  renderPage();
+  await waitFor(() => expect(boardNameValue()).toBe('Board A'));
+  const links = screen.getAllByRole('link', { name: 'Visit source' });
+  expect(links.map(link => link.getAttribute('href'))).toEqual(sources);
+  for (const link of links) {
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+  }
+  expect(screen.getByText('frame:clip.mp4')).toBeInTheDocument();
+  expect(screen.getByText('javascript:alert(1)')).toBeInTheDocument();
+});

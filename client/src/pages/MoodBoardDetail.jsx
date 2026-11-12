@@ -11,7 +11,7 @@
 
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate, useSearchParams, useLocation, Link } from 'react-router';
-import { ArrowLeft, ImageIcon, FileText, Trash2, Plus, Save, Link2, Unlink, RefreshCw, Images, Film, Play, ScanEye, Copy, AtSign, Download, Sparkles, Clapperboard, Paintbrush, Wand2, GalleryHorizontal, Palette, LayoutGrid, X } from 'lucide-react';
+import { ArrowLeft, ImageIcon, FileText, Trash2, Plus, Save, Link2, Unlink, RefreshCw, Images, Film, Play, ScanEye, Copy, AtSign, Download, Sparkles, Clapperboard, Paintbrush, Wand2, GalleryHorizontal, Palette, LayoutGrid, ExternalLink, X } from 'lucide-react';
 import AutoSizeTextarea from '../components/ui/AutoSizeTextarea';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import LoadFailedState from '../components/ui/LoadFailedState';
@@ -60,6 +60,7 @@ import {
   moodBoardItemHasPrompt,
   moodBoardItemSendLinks,
 } from '../lib/moodBoardAnalysis';
+import { isHttpUrl } from '../utils/urlNormalize';
 import { formatCount, timeAgo } from '../utils/formatters';
 import useMounted from '../hooks/useMounted';
 
@@ -1142,6 +1143,18 @@ function MoodBoardEditor({ id }) {
                         </span>
                       ) : null}
                       <div className="flex flex-wrap items-center justify-end gap-1">
+                        {isHttpUrl(item.source) ? (
+                          <a
+                            href={item.source}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title={item.source}
+                            className="min-h-[44px] inline-flex items-center justify-center gap-1 rounded border border-port-border px-2 py-1 text-xs text-gray-400 hover:text-white hover:border-port-accent focus-visible:outline-2 focus-visible:outline-port-accent transition-colors"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5" aria-hidden="true" />
+                            Visit source
+                          </a>
+                        ) : null}
                         {/* Keep the frame count with its extraction action when wrapping. */}
                         {videoSrc ? (
                           <span className="inline-flex shrink-0 items-center gap-1 mr-auto">
