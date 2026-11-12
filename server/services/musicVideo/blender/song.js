@@ -4,8 +4,6 @@
  * sections, loudness envelopes and timed lyrics without ever calling PortOS.
  */
 import { existsSync } from 'node:fs';
-import { atomicWrite } from '../../../lib/fileCore.js';
-import { blenderSongFile } from './workspace.js';
 
 const numbers = (list) => (Array.isArray(list) ? list.filter((value) => Number.isFinite(value)) : []);
 const timeOrNull = (value) => (Number.isFinite(value) ? value : null);
@@ -63,9 +61,11 @@ async function songAudioPaths(project) {
 /** The exact song context a job receives, without writing the workspace. */
 export const getBlenderSong = async (project, settings) => buildBlenderSong(project, { fps: settings.fps, audio: await songAudioPaths(project) });
 
-/** Build song.json for `project` and write it to the workspace. Returns the song. */
+
+/** Compatibility entry for workspace creation, which already holds the project. */
 export async function writeBlenderSong(project, settings) {
-  const song = await getBlenderSong(project, settings);
-  await atomicWrite(blenderSongFile(project.id), song);
-  return song;
+  const [{ writeBlenderSong: writeSong }, { musicVideoFilmOwner }] = await Promise.all([
+    import('../../film/song.js'), import('./owner.js'),
+  ]);
+  return writeSong(musicVideoFilmOwner(project.id), settings);
 }

@@ -2,6 +2,18 @@
 
 PortOS is a monorepo application with a React frontend and Express.js backend, managed by PM2.
 
+## Shared Blender film engine
+
+`server/services/film/` renders authored Blender films through an owner adapter:
+identity and workspace, timeline, optional song context, atomic record changes,
+sync integration and events. Music Video provides that adapter in
+`server/services/musicVideo/blender/owner.js`; its routes and workspace layout
+stay unchanged. The shared engine owns Python execution, shot queues, resume,
+stills, previews and joins. Board mirroring, title cards, grading, timed effects,
+film look and final project publication remain Music Video responsibilities.
+The import-scoping guard prevents the engine from reaching Music Video services.
+See [Blender film ownership](features/music-video-blender.md#shared-engine-and-ownership).
+
 ## System Diagram
 
 ```

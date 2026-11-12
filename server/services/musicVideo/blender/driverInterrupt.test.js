@@ -4,7 +4,7 @@ import { execFileSync } from '../../../lib/childProcess.js';
 import { PY_SUBPROCESS_TIMEOUT_MS, PY_TEST_TIMEOUT_MS, resolveTestPython } from '../../../lib/testHelper.js';
 
 const python = resolveTestPython();
-const driver = fileURLToPath(new URL('./py/portos_blender_driver.py', import.meta.url));
+const driver = fileURLToPath(new URL('../../film/py/portos_blender_driver.py', import.meta.url));
 
 it.skipIf(!python)('a canceled Blender frame emits no traceback, and a resumed frame can finish atomically', () => {
   const script = `

@@ -14,7 +14,7 @@ import { sungLyricTextWithin } from '../../../lib/musicVideoLyricAnchors.js';
 import { normalizeBlenderRecord } from '../../../lib/musicVideoBlender.js';
 import { addScenes, applySceneUpdate, removeScene } from '../projectsLogic.js';
 import { carryShotLocks } from '../productionReview.js';
-import { blenderRefusal } from './workspace.js';
+import { blenderRefusal } from '../../film/workspace.js';
 
 const clip = (text, max) => (typeof text === 'string' && text.trim() ? text.trim().slice(0, max) : null);
 
