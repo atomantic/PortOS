@@ -1871,3 +1871,52 @@ All 170 focused installer, lock-profile and Wan sidecar tests pass. Full heavy
 Torch/native environments, production model weights, audio/video generation and
 quality were not exercised in this bounded helper update. No provider calls,
 ambient credentials or live instance data were used.
+
+## Thirty-third-slice ACE-Step 1.5 and FLUX.3 Dateutil migration (2026-11-12)
+
+This bounded slice changes `python-dateutil` 3.0.0 → 4.0.0 in the ACE-Step 1.5
+and FLUX.3 MLX profiles. Matplotlib 3.11.2 permits dateutil >=2.7; version 4
+requires Python >=3.11, within both profiles' interpreter bounds. It retains
+`tzdata` and no longer requires `six`. Complete resolution removes Six only
+from FLUX.3; ACE retains it for PyTorch-Wavelets and corrects its provenance.
+All native/model/build/source versions and Python-marker branches stay fixed.
+
+Regenerate with verified uv 0.13.7 and cutoff `2026-11-05T00:00:00Z`. Derive
+constraints from every existing lock requirement including markers, changing
+only dateutil to 4.0.0. Compile each complete direct input into a scratch lock:
+use ACE's universal arm64 macOS configuration and Python 3.11 from its header;
+use FLUX's wheel-only Apple Silicon Python 3.12 target. Pass the constraints
+with `-c`. Compare the complete resolved version/marker set, replace only the
+dateutil block in the existing lock, and retain unrelated hash allowlists.
+Remove FLUX Six only after confirming the complete resolver output omits it;
+update ACE Six's comment to identify its remaining consumer.
+
+The resulting ACE lock has 112 package/version entries and 2,854 hashes; FLUX
+has 56 entries and 1,326 hashes. ACE's 110 other blocks are byte-identical and
+Six's pins/hashes are unchanged; FLUX's 55 companion blocks are byte-identical.
+All 4,180 hash occurrences match official, unyanked artifacts predating the
+cutoff. OSV including malicious-package records is clean across 121 unique
+package/version identities. Complete dependency-aware hash-required wheel
+plans pass for ACE Python 3.11/3.12/3.13 and FLUX Python 3.12/3.13.
+
+Dateutil 4 removes obsolete Python compatibility internals, uses modern
+resource/fold handling and rejects malformed ISO numeric fields more strictly.
+Matplotlib's real date consumers use parser, timezone, recurrence and relative
+delta APIs; its categorical converter also calls the parser. Neither frozen ACE
+nor mflux directly imports dateutil. ACE's source plots numeric training loss;
+mflux's concept-attention utility applies the plasma colormap.
+
+Four native baseline/candidate environments install hash-required complete
+plotting subclosures: ACE Python 3.11 and FLUX Python 3.12, with their actual
+NumPy/ContourPy selections. Dependency checks pass. Real Matplotlib/dateutil
+probes cover timezone resources, DST folds/gaps, recurrence ticks and formatting,
+valid date parsing, malformed ISO refusal and Agg rendering. Dateutil 4's
+stricter refusal of signed/space-containing ISO numeric fields is intentional;
+valid-date behavior remains compatible in the tested cases.
+
+The frozen ACE numeric-loss function and mflux plasma-heatmap function also run
+via explicitly isolated AST callables. The latter uses NumPy input rather than
+MLX; these checks validate the actual plotting statements, not full module
+imports, model inference or native device execution. No production weights,
+providers, live instance data or audio/image generation quality are involved.
+All 176 focused installer, lock-profile and FLUX runtime tests pass.
