@@ -358,6 +358,17 @@ describe('publishing kit copy (#9281)', () => {
     runPromptThroughProvider: vi.fn(async () => ({ text })),
   });
 
+  it('drafts Hook copy only when the Hook is enabled', async () => {
+    const reply = JSON.stringify({ sunoHook: { caption: 'Hook draft' }, x: { hook: 'Post' } });
+    const enabled = await projects.createProject({ name: 'Hook' });
+    const on = await kit.draftPublishKitCopy(enabled.id, {}, { platforms: { sunoHook: { enabled: true } }, history: {}, runner: runner(reply) });
+    expect(on.project.publishKit.copy.sunoHook.caption).toBe('Hook draft');
+    const disabled = await projects.createProject({ name: 'No Hook' });
+    const off = await kit.draftPublishKitCopy(disabled.id, {}, { platforms: { x: { enabled: true } }, history: {}, runner: runner(reply) });
+    expect(off.project.publishKit.copy.sunoHook).toBeUndefined();
+    expect(validation.musicVideoPublishCopyPatchSchema.safeParse({ sunoHook: { caption: 'x'.repeat(301) } }).success).toBe(false);
+  });
+
   it('drafts every platform from one call and keeps each field editable', async () => {
     const { id } = await projects.createProject({ name: 'Example Song' });
     const deps = { platforms: ALL_ON, history: {}, runner: runner(JSON.stringify({ youtube: { title: 'A title', description: 'desc', tags: ['music'] }, x: { hook: 'a hook', story: 'story' } })) };

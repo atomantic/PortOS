@@ -19,6 +19,16 @@ describe('Suno Hook payload', () => {
     const p = buildPublishPayload('sunoHook', project());
     expect(p).toMatchObject({ songId: ID, title: 'Night Drive', durationSec: 187, startSec: 42, caption: 'Hook caption', showLyrics: false, video: { dir: 'videos', name: 'cut.mp4' } });
   });
+  it('prefers Hook copy while retaining legacy caption fallbacks', () => {
+    const p = project();
+    p.publishKit.copy.sunoHook = { caption: 'Own caption' };
+    p.publishKit.copy.shorts = { description: 'Shorts caption' };
+    expect(buildPublishPayload('sunoHook', p).caption).toBe('Own caption');
+    delete p.publishKit.copy.sunoHook;
+    expect(buildPublishPayload('sunoHook', p).caption).toBe('Hook caption');
+    delete p.publishKit.copy.tiktok;
+    expect(buildPublishPayload('sunoHook', p).caption).toBe('Shorts caption');
+  });
   it('says whether the cut it posts is native 9:16 or the fitted master', () => {
     expect(buildPublishPayload('sunoHook', project()).cutLayout).toBe('native');
     const fitted = project({ excerpts: [], renderHistoryId: 'r1', publishKit: {

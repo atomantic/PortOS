@@ -1240,6 +1240,7 @@ export const musicVideoPublishCopyPatchSchema = z.object({
   linkedin: z.object({ post: kitText(3000) }).partial().strict().optional(),
   facebook: z.object({ post: kitText(63206) }).partial().strict().optional(),
   tiktok: z.object({ caption: kitText(2200) }).partial().strict().optional(),
+  sunoHook: z.object({ caption: kitText(300) }).partial().strict().optional(),
   instagram: z.object({ caption: kitText(2200) }).partial().strict().optional(),
   reddit: z.object({ title: kitText(300), body: kitText(40000) }).partial().strict().optional(),
   stackerNews: z.object({ title: kitText(80), body: kitText(40000) }).partial().strict().optional(),
