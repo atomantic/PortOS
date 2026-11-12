@@ -58,7 +58,7 @@ describe.skipIf(!canRun)('opaque document film-look canvas with Chrome and ffmpe
       const originalColors = await colors();
       const html = build({ version: 2, vignette: 0.6 });
       await load(html);
-      await page.evaluate(() => portosComposition.seek(0));
+      await page.evaluate(() => globalThis.portosComposition.seek(0));
       const raw = await screenshot();
       for (const [x, y] of corners) expect(raw[(y * W + x) * 3]).toBeLessThan(raw[(H / 2 * W + W / 2) * 3] - 25);
       expect(await colors()).toEqual(originalColors);
@@ -73,7 +73,7 @@ describe.skipIf(!canRun)('opaque document film-look canvas with Chrome and ffmpe
       // No-look overlays remain transparent and retain the direct globals used by capture scripts.
       await writeFile(path, authored.replace('background:#808080', 'background:transparent'));
       await load(build(null));
-      expect(await page.evaluate(() => ({ filter: document.documentElement.style.filter, background: getComputedStyle(document.body).backgroundColor, seek: typeof portosComposition.seek })))
+      expect(await page.evaluate(() => ({ filter: document.documentElement.style.filter, background: getComputedStyle(document.body).backgroundColor, seek: typeof globalThis.portosComposition.seek })))
         .toEqual({ filter: '', background: 'rgba(0, 0, 0, 0)', seek: 'function' });
       const transparent = await sharp(await page.screenshot({ omitBackground: true })).ensureAlpha().raw().toBuffer();
       expect(transparent[((H - 4) * W + W - 4) * 4 + 3]).toBe(0);
