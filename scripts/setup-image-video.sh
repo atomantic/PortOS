@@ -1453,16 +1453,25 @@ if [[ "$INSTALL_MINIMAX_MUSIC3_MLX" == "1" ]]; then
     mkdir -p "${HOME}/.portos"
     reset_universal_venv "$MINIMAX_MUSIC3_MLX_VENV" "$PYTHON_BIN"
     if ! venv_exists "$MINIMAX_MUSIC3_MLX_VENV"; then
+      # Only a fresh/rebuilt venv uses the selected base interpreter.
+      if ! "$PYTHON_BIN" -c "import sys; sys.exit(0 if sys.version_info[:2] >= (3, 12) else 1)"; then
+        echo "❌ MiniMax Music 3 MLX requires Python 3.12+. Re-run with PYTHON_BIN pointing at a supported interpreter." >&2
+        exit 1
+      fi
       echo "📦 Creating MiniMax Music 3 MLX venv at ${MINIMAX_MUSIC3_MLX_VENV}..."
       "$PYTHON_BIN" -m venv "$MINIMAX_MUSIC3_MLX_VENV"
     fi
     MINIMAX_MUSIC3_MLX_PY="$(venv_python "$MINIMAX_MUSIC3_MLX_VENV")"
+    if ! "$MINIMAX_MUSIC3_MLX_PY" -c "import sys; sys.exit(0 if sys.version_info[:2] >= (3, 12) else 1)"; then
+      echo "❌ MiniMax Music 3 MLX's existing venv requires a Python 3.12+ rebuild before Repair." >&2
+      exit 1
+    fi
     echo "📦 Installing MiniMax Music 3 MLX packages into ${MINIMAX_MUSIC3_MLX_VENV}..."
     # Install only from the hash-pinned lock (scripts/requirements-minimax-music3-mlx.lock.txt):
     # no install-time resolution, so a new or compromised transitive release can't
     # land on the next Repair. Direct pins: scripts/requirements-minimax-music3-mlx.txt
     # (mlx-audio 0.5.0, the first release with the MiniMax Music 3 merge).
-    "$MINIMAX_MUSIC3_MLX_PY" -m pip install --require-hashes --no-deps -r "$SCRIPT_DIR/requirements-minimax-music3-mlx.lock.txt"
+    "$MINIMAX_MUSIC3_MLX_PY" -m pip install --require-hashes --no-deps --only-binary :all: -r "$SCRIPT_DIR/requirements-minimax-music3-mlx.lock.txt"
     pin_venv_arm64 "$MINIMAX_MUSIC3_MLX_VENV"
     probe_or_fail \
       "MiniMax Music 3 MLX venv built but 'import mlx; from mlx_audio.music import load' failed." \
