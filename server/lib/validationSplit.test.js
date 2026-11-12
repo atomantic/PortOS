@@ -1,6 +1,8 @@
-import { describe, it, expect } from 'vitest';
-import { trackedFiles as workingTreeFiles } from '../../scripts/lib/trackedFiles.js';
-import { readdirSync, readFileSync } from 'node:fs';
+import { afterEach, describe, it, expect } from 'vitest';
+import { trackedFiles, workingTreeFiles } from '../../scripts/lib/trackedFiles.js';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as validation from './validation.js';
@@ -262,6 +264,57 @@ describe('exported validation schemas are wired (#5730)', () => {
       'testOneValidation.js:unreferencedSchema',
       'testOneValidation.js:barrelOnlySchema',
     ]);
+  });
+
+  // Regression: the public guard must see the same consumer before git add,
+  // after staging, and after commit, without accepting ignored/deleted consumers.
+  const scratchRepos = [];
+  afterEach(() => {
+    for (const repo of scratchRepos.splice(0)) rmSync(repo, { recursive: true, force: true });
+  });
+
+  it('keeps schema wiring identical across untracked, staged and committed consumers', () => {
+    const repo = mkdtempSync(path.join(tmpdir(), 'validation-wiring-'));
+    scratchRepos.push(repo);
+    const git = (...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', stdio: 'pipe' });
+    const write = (file, source) => writeFileSync(path.join(repo, file), source);
+    mkdirSync(path.join(repo, 'server/lib'), { recursive: true });
+    mkdirSync(path.join(repo, 'server/routes'), { recursive: true });
+    git('init');
+    git('config', 'user.name', 'Example Agent');
+    git('config', 'user.email', 'agent@example.com');
+    git('config', 'commit.gpgsign', 'false');
+    write('.gitignore', 'server/routes/ignored.js\n');
+    write('server/lib/exampleValidation.js', `
+      export const activeSchema = z.object({});
+      export const ignoredOnlySchema = z.object({});
+      export const deletedOnlySchema = z.object({});
+      export const unusedSchema = z.object({});
+    `);
+    write('server/routes/deleted.js', 'deletedOnlySchema.parse({});');
+    git('add', '.');
+    git('commit', '-m', 'fixture');
+    rmSync(path.join(repo, 'server/routes/deleted.js'));
+    write('server/routes/ignored.js', 'ignoredOnlySchema.parse({});');
+    const consumer = 'server/routes/new consumer.js';
+    write(consumer, `import { activeSchema } from '../lib/exampleValidation.js'; activeSchema.parse({});`);
+    write('server/routes/excluded.txt', 'unusedSchema.parse({});');
+    const scan = () => findUnwiredSchemas({
+      repoRoot: repo,
+      moduleFiles: ['exampleValidation.js'],
+      intentionallyUnwired: new Set(),
+    });
+    const expected = [
+      'exampleValidation.js:ignoredOnlySchema',
+      'exampleValidation.js:deletedOnlySchema',
+      'exampleValidation.js:unusedSchema',
+    ];
+    expect(trackedFiles(repo, ['*.js'])).not.toContain(consumer);
+    expect(scan()).toEqual(expected);
+    git('add', consumer);
+    expect(scan()).toEqual(expected);
+    git('commit', '-m', 'consumer');
+    expect(scan()).toEqual(expected);
   });
 
   it('every INTENTIONALLY_UNWIRED entry still names a real export', () => {
