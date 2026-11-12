@@ -80,12 +80,16 @@ const SCREENSHOT = { format: 'png', optimizeForSpeed: true, fromSurface: true, c
 
 // Compare a short sequence, not just its keyframe: quantization and inter-frame
 // prediction can lose grain even when a single encoded frame looks identical.
-export async function admitFilmLookWeb(page, contract, directory, { signal, offsetSec = 0 } = {}) {
+// `checkTimes` are song seconds whose frames the page encodes another way (a
+// title card flattened onto the picture): they take the place of evenly spread
+// samples that are compared, so that path is admitted on evidence too.
+export async function admitFilmLookWeb(page, contract, directory, { signal, offsetSec = 0, checkTimes = [] } = {}) {
   const { BT709_CONTAINER_ARGS, findFfmpeg, H264_ENCODE_ARGS, runFfmpegProcess } = await import('../../lib/ffmpeg.js');
   const totalFrames = Math.round(contract.durationSec * contract.fps);
   // A short render cannot amortize the check's screenshots and reference encode.
   if (totalFrames < 240) return false;
   const frames = 24;
+  const compared = Array.from({ length: 10 }, (_, i) => Math.round(i * (frames - 1) / 9));
   const dir = join(directory, 'web-check');
   const sample = { ...contract, durationSec: frames / contract.fps };
   const candidate = join(dir, 'candidate.mp4');
@@ -95,6 +99,11 @@ export async function admitFilmLookWeb(page, contract, directory, { signal, offs
   try {
     await mkdir(dir, { recursive: true });
     const frameTimes = Array.from({ length: frames }, (_, i) => offsetSec + Math.round(i * (totalFrames - 1) / (frames - 1)) / contract.fps);
+    // The first and last compared samples stay on the render's ends.
+    checkTimes.slice(0, compared.length - 2).forEach((time, index) => {
+      const frame = Math.min(totalFrames - 1, Math.max(0, Math.round((time - offsetSec) * contract.fps)));
+      frameTimes[compared[index + 1]] = offsetSec + frame / contract.fps;
+    });
     await encodeFilmLookWeb(page, sample, candidate, { signal, offsetSec, frameTimes, captureReference: async (target, n) => {
       const { data } = await target.send('Page.captureScreenshot', SCREENSHOT);
       await writeFile(join(dir, `frame-${String(n).padStart(3, '0')}.png`), Buffer.from(data, 'base64'));
@@ -114,7 +123,7 @@ export async function admitFilmLookWeb(page, contract, directory, { signal, offs
       stats.push(lines.map(line => { const value = /psnr_avg:([\d.]+|inf)/.exec(line)?.[1]; return value === 'inf' ? Infinity : Number(value); }));
     }
     return stats.every(values => values.length === frames && values.every(value => !Number.isNaN(value)))
-      && Array.from({ length: 10 }, (_, i) => Math.round(i * (frames - 1) / 9)).every(i => stats[0][i] >= stats[1][i] - 0.5);
+      && compared.every(i => stats[0][i] >= stats[1][i] - 0.5);
   } finally {
     await rm(dir, { recursive: true, force: true }).catch(() => {});
   }

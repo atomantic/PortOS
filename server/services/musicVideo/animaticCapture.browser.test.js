@@ -615,6 +615,35 @@ function App(){const[state,setState]=useState(null);window.show=(project,t)=>{wi
     expect(Buffer.compare(withWords, withoutWords)).not.toBe(0);
   });
 
+  // Uniquely catches a steady title card lost from a saved frame (its layer sits outside the tree the
+  // capture freezes), or saved under the film look the preview shows it over.
+  it('saves a steady title card over the film look, and a card that is not steady through it', async () => {
+    const card = { enabled: true, title: 'Example title', artist: 'Example artist', style: 'mtv', accentColor: '#00ff00', startSec: 0, endSec: 5 };
+    // Pixels of the lower third's bar that kept its exact colour: none does once the look has filtered it.
+    const barPixels = async (png) => {
+      const { data } = await sharp(png).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+      let count = 0;
+      for (let i = 0; i < data.length; i += 4) if (data[i] === 0 && data[i + 1] === 255 && data[i + 2] === 0) count += 1;
+      return count;
+    };
+    const shown = async (titleCard) => {
+      // Any render style but a composed cut can hold its card steady.
+      const extra = { composition: { mode: 'concat' }, audioAnalysis: { durationSec: 8 }, filmLook: filmLookPreset('vhs'), titleCard };
+      lyricProject = project([{ ...still, referenceImageId: null }], extra);
+      await show(project([still], extra), 2);
+      await enableFilmLook();
+      await page.frameLocator('iframe').locator('canvas[data-portos-title-card]').waitFor();
+    };
+    await shown(card);
+    expect(await page.locator('figure [data-film-look] iframe').count()).toBe(0);
+    const steady = await barPixels(await capture('steady title card'));
+    expect(steady).toBeGreaterThan(20);
+    await shown({ ...card, steady: false });
+    expect(await page.locator('figure [data-film-look] iframe').count()).toBe(1);
+    expect(await barPixels(await capture())).toBeLessThan(steady / 10);
+    await page.getByRole('button', { name: 'Film look', exact: true }).click();
+  });
+
   it('rejects a loading video-only shot without uploading a blank or a preloaded frame', async () => {
     await page.route('**/data/videos/clip.webm', (route) => route.abort());
     await show(project([{ ...still, referenceImageId: null, visualLayer: 'footage', videoHistoryId: 'loading' }]), 1);

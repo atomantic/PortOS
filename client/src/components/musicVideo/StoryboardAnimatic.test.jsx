@@ -269,6 +269,66 @@ describe('StoryboardAnimatic lyrics', () => {
     await waitFor(() => expect(post).toHaveBeenCalledWith({ type: 'portos-mv:title-card', card: expect.objectContaining({ position: 'upper-right' }) }, '*'));
   });
 
+  // Uniquely catches a steady card left on the lyric layer inside the film look (the look would weave
+  // and grain it), the words lifted out of the film with it, the card's own layer running the lyric
+  // page through the whole song, a card left showing after its window, and a page that loads again
+  // while its layer rests keeping the card it drew for second 0.
+  it('draws a steady title card on its own layer outside the film look, which rests outside the card\'s windows', async () => {
+    globalThis.localStorage.setItem(PREVIEW_FILM_LOOK_KEY, 'on');
+    try {
+      const card = { enabled: true, title: 'Example Song', style: 'mtv', startSec: 2, endSec: 8 };
+      const project = { ...lyricProject, filmLook: { preset: 'super8', grain: 0.5 }, titleCard: card };
+      const { container, rerender } = render(<StoryboardAnimatic project={project} audioUrl="/song.mp3" />);
+      await act(async () => {});
+      const words = screen.getByTestId('animatic-lyrics');
+      const titles = screen.getByTestId('animatic-title-card');
+      const look = container.querySelector('figure [data-film-look]');
+      expect(look.contains(words)).toBe(true);
+      expect(look.contains(titles)).toBe(false);
+      expect(titles.parentElement).toBe(look.parentElement);
+      expect(titles.getAttribute('title')).toBe('Title card over the storyboard animatic');
+      const posted = { words: vi.spyOn(words.contentWindow, 'postMessage'), titles: vi.spyOn(titles.contentWindow, 'postMessage') };
+      const reply = (frame, data) => act(async () => { window.dispatchEvent(new MessageEvent('message', { source: frame.contentWindow, data })); });
+      const seeks = (post) => post.mock.calls.map(([message]) => message).filter((message) => message.type === 'portos-mv:seek').map((message) => message.t);
+      await reply(words, { type: 'portos-mv:loaded' });
+      await reply(titles, { type: 'portos-mv:loaded' });
+      // The words' layer draws no card, and the card's layer no words.
+      expect(posted.words).toHaveBeenCalledWith({ type: 'portos-mv:title-card', card: null }, '*');
+      expect(posted.words).toHaveBeenCalledWith({ type: 'portos-mv:lyrics-visible', visible: true }, '*');
+      expect(posted.titles).toHaveBeenCalledWith({ type: 'portos-mv:title-card', card: expect.objectContaining({ title: 'Example Song', steady: true }) }, '*');
+      expect(posted.titles).toHaveBeenCalledWith({ type: 'portos-mv:lyrics-visible', visible: false }, '*');
+
+      const audio = screen.getByLabelText('Song for the storyboard animatic');
+      const at = async (t) => {
+        Object.defineProperty(audio, 'currentTime', { value: t, configurable: true, writable: true });
+        fireEvent.timeUpdate(audio);
+        for (const frame of [words, titles]) await reply(frame, { type: 'portos-mv:seeked', t });
+      };
+      for (const frame of [words, titles]) await reply(frame, { type: 'portos-mv:seeked', t: 0 });
+      for (const t of [1, 3, 5, 9, 10]) await at(t);
+      expect(seeks(posted.words)).toEqual([0, 1, 3, 5, 9, 10]);
+      // One seek at the start, the seeks inside the window, and the one after it that hides the card.
+      expect(seeks(posted.titles)).toEqual([0, 3, 5, 9]);
+
+      // An edit that keeps the windows reaches the resting layer without waking it.
+      rerender(<StoryboardAnimatic project={{ ...project, titleCard: { ...card, size: 150 } }} audioUrl="/song.mp3" />);
+      await waitFor(() => expect(posted.titles).toHaveBeenCalledWith({ type: 'portos-mv:title-card', card: expect.objectContaining({ size: 150 }) }, '*'));
+      expect(screen.getByTestId('animatic-title-card')).toBe(titles);
+      expect(seeks(posted.titles)).toEqual([0, 3, 5, 9]);
+      // Its page loading again (the layer was taken down for the cold open or the ending) is seeked afresh.
+      await reply(titles, { type: 'portos-mv:loaded' });
+      expect(seeks(posted.titles)).toEqual([0, 3, 5, 9, 10]);
+
+      // With the words switched off the one layer carries the card alone, and moves out of the look itself.
+      fireEvent.click(screen.getByRole('button', { name: 'Lyrics' }));
+      await waitFor(() => expect(screen.queryByTestId('animatic-title-card')).toBeNull());
+      const alone = await screen.findByTestId('animatic-lyrics');
+      expect(container.querySelector('figure [data-film-look]').contains(alone)).toBe(false);
+    } finally {
+      globalThis.localStorage.removeItem(PREVIEW_FILM_LOOK_KEY);
+    }
+  });
+
   it('offers no lyrics until the words are timed', () => {
     render(<StoryboardAnimatic project={{ ...lyricProject, lyricCues: [{ id: 'c1', text: 'hello', startSec: null }] }} audioUrl="/song.mp3" />);
     expect(screen.queryByRole('button', { name: 'Lyrics' })).toBeNull();

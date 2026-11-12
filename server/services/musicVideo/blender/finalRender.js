@@ -5,13 +5,16 @@
  * are the `prepare` / `encode` steps they call for `composition.mode === 'blender'`.
  * Nothing renders here: the shot videos already exist and are joined with the song,
  * with the project's grade, timed shot effects and title card painted over the join.
+ * `lookPass` tells an encode that the film look pass follows it: a steady title
+ * card is then left out of the join and returned as `lookPassInputs` for that pass
+ * to draw over the look (blenderTitleCardPlan).
  */
 import { normalizeBlenderRecord } from '../../../lib/musicVideoBlender.js';
 import { blenderScratchDir } from './workspace.js';
 import { blenderNotSynced, planBlenderFinal, planBlenderWindow, readBlenderFilm } from './film.js';
 import { blenderFinishFilter } from './finishFilter.js';
 import { assembleBlenderVideo } from './assemble.js';
-import { withBlenderTitleCard } from './titleCard.js';
+import { blenderTitleCardPlan, withBlenderTitleCard } from './titleCard.js';
 import { announceBlenderState } from './record.js';
 
 /** The final render's plan; refuses (409) until every shot has a complete, current final render. */
@@ -20,14 +23,15 @@ export async function prepareBlenderFinal(project) {
 }
 
 /** Join the final shot videos with the master song into `outputPath`. */
-export async function encodeBlenderFinal({ plan, project, projectId, jobId, audioPath, outputPath, signal, onProgress }) {
+export async function encodeBlenderFinal({ plan, project, projectId, jobId, audioPath, outputPath, signal, onProgress, lookPass = false }) {
   const { width, height, fps, segments, durationSec, boundaryTimes, signature } = plan;
-  await withBlenderTitleCard({ project, jobId, width, height, fps, startSec: 0, endSec: durationSec, signal }, (overlays) => assembleBlenderVideo({
+  const card = blenderTitleCardPlan(project, { lookPass, filmEndSec: durationSec });
+  await withBlenderTitleCard({ project, jobId, width, height, fps, startSec: 0, endSec: durationSec, bake: card.bake, signal }, (overlays) => assembleBlenderVideo({
     segments, width, height, fps, quality: 'final', overlays,
     filter: blenderFinishFilter(project, { width, height, fps, startSec: 0, endSec: durationSec }),
     audio: { path: audioPath, startSec: 0 }, output: outputPath, scratch: blenderScratchDir(projectId, jobId), signal, onProgress,
   }));
-  return { width, height, fps, durationSec, boundaryTimes, signature };
+  return { width, height, fps, durationSec, boundaryTimes, signature, lookPassInputs: card.pass };
 }
 
 /**
@@ -63,15 +67,16 @@ export async function prepareBlenderExcerpt(project) {
 export const assertBlenderExcerptWindow = ({ prepared, startSec, endSec }) => { planBlenderWindow(prepared.film, { startSec, endSec }); };
 
 /** Cut `[startSec, endSec)` out of the best available shot videos, with the song for that window. */
-export async function encodeBlenderExcerpt({ prepared, project, projectId, jobId, audioPath, outputPath, signal, startSec, endSec, onProgress }) {
+export async function encodeBlenderExcerpt({ prepared, project, projectId, jobId, audioPath, outputPath, signal, startSec, endSec, onProgress, lookPass = false }) {
   const window = planBlenderWindow(prepared.film, { startSec, endSec });
   const { width, height, fps } = window;
   const span = { startSec: window.startSec, endSec: window.startSec + window.durationSec };
-  await withBlenderTitleCard({ project, jobId, width, height, fps, ...span, filmEndSec: prepared.totalSec, signal }, (overlays) => assembleBlenderVideo({
+  const card = blenderTitleCardPlan(project, { lookPass, filmEndSec: prepared.totalSec });
+  await withBlenderTitleCard({ project, jobId, width, height, fps, ...span, filmEndSec: prepared.totalSec, bake: card.bake, signal }, (overlays) => assembleBlenderVideo({
     segments: window.segments, width, height, fps, quality: 'final', overlays,
     filter: blenderFinishFilter(project, { width, height, fps, ...span }),
     audio: { path: audioPath, startSec: window.startSec }, output: outputPath, scratch: blenderScratchDir(projectId, jobId), signal, onProgress,
   }));
   const boundaryTimes = prepared.film.shots.map((shot) => shot.start - window.startSec).filter((time) => time > 0 && time < window.durationSec);
-  return { width, height, fps, boundaryTimes: [0, ...boundaryTimes] };
+  return { width, height, fps, boundaryTimes: [0, ...boundaryTimes], lookPassInputs: card.pass };
 }

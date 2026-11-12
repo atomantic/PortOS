@@ -310,6 +310,34 @@ describe('StoryboardAnimatic Blender film effects', () => {
     expect(container.querySelector('figure [data-film-look="exact"] svg').outerHTML).not.toBe(before);
   });
 
+  // Uniquely catches a steady card drawn inside the film look's frame (the look would weave, flicker
+  // and grain it with the film), a card that is not steady lifted out of the film, and Keep steady
+  // changed in the panel leaving the card's layer where it was.
+  it('draws a steady title card outside the film look, and any other card inside it', async () => {
+    globalThis.localStorage.setItem(PREVIEW_FILM_LOOK_KEY, 'on');
+    const filmLook = { preset: 'super8', grain: 0.5, vignette: 0.3 };
+    const card = { enabled: true, title: 'Example Song', style: 'mtv', startSec: 2, endSec: 8 };
+    const { container, rerender } = render(player(film({ filmLook, titleCard: card }), blenderFilmState()));
+    const look = () => container.querySelector('figure [data-film-look]');
+    const layer = () => screen.findByTestId('animatic-lyrics');
+    // The lower third is steady unless the director says otherwise: over the look, still in the picture's frame.
+    const steady = await layer();
+    expect(look()).toBeTruthy();
+    expect(look().contains(steady)).toBe(false);
+    expect(steady.parentElement).toBe(screen.getByLabelText('Film preview'));
+    expect(look().contains(screen.getByLabelText('Clip for Cold open'))).toBe(true);
+    expect(screen.queryByTestId('animatic-title-card')).toBeNull();
+
+    rerender(player(film({ filmLook, titleCard: { ...card, steady: false } }), blenderFilmState()));
+    await waitFor(async () => expect(look().contains(await layer())).toBe(true));
+    // Outlined type reads like the lyrics and stays in the film, until Keep steady is ticked.
+    rerender(player(film({ filmLook, titleCard: { ...card, style: 'outline' } }), blenderFilmState()));
+    await waitFor(async () => expect(look().contains(await layer())).toBe(true));
+    rerender(player(film({ filmLook, titleCard: { ...card, style: 'outline', steady: true } }), blenderFilmState()));
+    await waitFor(async () => expect(look().contains(await layer())).toBe(false));
+    await act(async () => {});
+  });
+
   // Uniquely catches a shot's clip being remounted when the look changes rendering (play, pause, the
   // look switched off): the clip loads again, and a film has no still under it to cover the gap.
   it('keeps the shot\'s clip mounted through play, pause and the Film look toggle', async () => {

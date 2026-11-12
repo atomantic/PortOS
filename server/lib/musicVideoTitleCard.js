@@ -1,8 +1,9 @@
 /**
  * Music Video — the opening title card: the small credit block an MTV video
- * opens with (song title, artist, year), fading in over the opener and out
- * again. One record on the project (`project.titleCard`, null = none) drives
- * the composition live preview and the final render alike.
+ * opens with (song title, artist, year), fading in over the opener (optionally
+ * sliding in from one side as it does) and out again in place. One record on
+ * the project (`project.titleCard`, null = none) drives the composition live
+ * preview and the final render alike.
  *
  * The card is not part of the composition document (documents are immutable
  * versions the director may have authored); `titleCardRuntimeSource()` is a
@@ -18,6 +19,12 @@
  * Optionally (`outro`) the same card shows again at the end of the video, in
  * its own window (`outroStartSec`–`outroEndSec`, absolute song time).
  * Text is drawn exactly as typed (no forced case).
+ *
+ * A `steady` card is a broadcast graphic: it is drawn over the film look and
+ * the shots' timed effects, so gate weave, flicker and grain never move or
+ * modulate it. A card that is not steady sits in the film, under the look,
+ * like the lyrics. Each surface that draws the card decides how (the runtime
+ * below for pages; services/musicVideo/blender/titleCard.js for a Blender film).
  *
  * Fonts: four system/lyric stacks plus bundled OFL faces (TITLE_CARD_FONT_FACES,
  * files in services/musicVideo/titleCardFonts/). The runtime registers the
@@ -43,16 +50,20 @@ export const TITLE_CARD_FONT_FACES = Object.freeze({
 });
 export const TITLE_CARD_FONTS = Object.freeze(['display', 'sans', 'serif', 'mono', ...Object.keys(TITLE_CARD_FONT_FACES)]);
 export const TITLE_CARD_STYLES = Object.freeze(['outline', 'mtv']);
+/** The side the card slides in FROM as it fades in (`none` = it fades in where it rests). */
+export const TITLE_CARD_SLIDES = Object.freeze(['none', 'left', 'right']);
 /** The `mtv` look's title and bar colours when the card names none. */
 export const TITLE_CARD_MTV_COLORS = Object.freeze({ title: '#f5d33a', accent: '#1fc2e5' });
 export const TITLE_CARD_LIMITS = Object.freeze({
   textMax: 120, yearMax: 20, startMax: 600, windowMin: 0.5, fadeMax: 3, sizeMin: 50, sizeMax: 200, outroMax: 3600,
+  slideSecMin: 0.1, slideSecMax: 3, slidePctMin: 1, slidePctMax: 100,
 });
 export const TITLE_CARD_DEFAULTS = Object.freeze({
   enabled: true, title: '', artist: '', year: '', extra: '', quoteTitle: true,
-  startSec: 2, endSec: 8, fadeSec: 0.8, position: 'lower-left', font: 'display', size: 100, color: '#f3ead7',
+  startSec: 2, endSec: 8, fadeSec: 0.8, fadeOutSec: 0.8, position: 'lower-left', font: 'display', size: 100, color: '#f3ead7',
   style: 'outline', titleColor: '', accentColor: '',
   outro: false, outroStartSec: null, outroEndSec: null,
+  slideIn: 'none', slideSec: 0.8, slidePct: 12, steady: false,
 });
 
 const clampNum = (value, min, max, fallback) => {
@@ -66,6 +77,10 @@ const hexOr = (value, fallback) => (typeof value === 'string' && /^#[0-9a-f]{6}$
 /**
  * A stored title card from any input (null for none). Missing fields take
  * TITLE_CARD_DEFAULTS; the window keeps at least TITLE_CARD_LIMITS.windowMin.
+ * Two defaults follow another field, so a card stored before they existed
+ * draws as it did: `fadeOutSec` takes `fadeSec` (which was both fades), and
+ * `steady` follows the look (the `mtv` lower third is a broadcast graphic,
+ * the `outline` look reads like the lyrics and stays in the film).
  */
 export function normalizeTitleCard(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
@@ -79,6 +94,8 @@ export function normalizeTitleCard(input) {
   const outroEndSec = timedOutro
     ? round3(Math.max(outroStartSec + L.windowMin, clampNum(input.outroEndSec, 0, L.outroMax + 60, outroStartSec + (endSec - startSec))))
     : null;
+  const fadeSec = round3(clampNum(input.fadeSec, 0, L.fadeMax, D.fadeSec));
+  const style = TITLE_CARD_STYLES.includes(input.style) ? input.style : D.style;
   return {
     enabled: typeof input.enabled === 'boolean' ? input.enabled : D.enabled,
     title: cleanText(input.title, L.textMax),
@@ -88,18 +105,23 @@ export function normalizeTitleCard(input) {
     quoteTitle: typeof input.quoteTitle === 'boolean' ? input.quoteTitle : D.quoteTitle,
     startSec,
     endSec,
-    fadeSec: round3(clampNum(input.fadeSec, 0, L.fadeMax, D.fadeSec)),
+    fadeSec,
+    fadeOutSec: round3(clampNum(input.fadeOutSec, 0, L.fadeMax, fadeSec)),
     position: TITLE_CARD_POSITIONS.includes(input.position) ? input.position : D.position,
     font: TITLE_CARD_FONTS.includes(input.font) ? input.font : D.font,
     size: Math.round(clampNum(input.size, L.sizeMin, L.sizeMax, D.size)),
     color: hexOr(input.color, D.color),
-    style: TITLE_CARD_STYLES.includes(input.style) ? input.style : D.style,
+    style,
     // '' = the look's own colour (the text colour, or the mtv yellow title / cyan bar).
     titleColor: hexOr(input.titleColor, ''),
     accentColor: hexOr(input.accentColor, ''),
     outro: typeof input.outro === 'boolean' ? input.outro : D.outro,
     outroStartSec,
     outroEndSec,
+    slideIn: TITLE_CARD_SLIDES.includes(input.slideIn) ? input.slideIn : D.slideIn,
+    slideSec: round3(clampNum(input.slideSec, L.slideSecMin, L.slideSecMax, D.slideSec)),
+    slidePct: round3(clampNum(input.slidePct, L.slidePctMin, L.slidePctMax, D.slidePct)),
+    steady: typeof input.steady === 'boolean' ? input.steady : style === 'mtv',
   };
 }
 
@@ -131,6 +153,18 @@ export function titleCardVisible(card) {
   return !!(card && card.enabled && [card.title, card.artist, card.year, card.extra].some((line) => String(line || '').trim()));
 }
 
+/** True when the card draws something and is drawn over the film look rather than under it. */
+export function titleCardSteady(card) {
+  return titleCardVisible(card) && (typeof card.steady === 'boolean' ? card.steady : card.style === 'mtv');
+}
+
+/**
+ * Whether `project`'s render style can draw its card over the film look. A
+ * composed cut cannot: its card is baked into the encode on a timebase the
+ * cold open and frame holds shift, and its film look pass runs over the result.
+ */
+export const titleCardSteadySupported = (project) => project?.composition?.mode !== 'composed';
+
 /**
  * The default window for a new card: in a couple of seconds after the song
  * starts, out half a second before the first sung line (so it never shares the
@@ -150,22 +184,53 @@ export function titleCardPrefill(project, { artist = '', year = new Date().getFu
   return normalizeTitleCard({ ...defaultTitleCardTiming(firstLyricSec), title: name, artist, year: year ? String(year) : '' });
 }
 
-/* The three functions below are inlined into sandboxed pages by toString()
+/* The four functions below are inlined into sandboxed pages by toString()
  * (titleCardRuntimeSource), so each must stay self-contained: no references
  * to module scope, only to each other by name. */
 
-/** The card's opacity at song time t: a linear fade in and out inside its window, or its end window (0 outside). */
+/**
+ * The card's opacity at song time t: a linear fade in over `fadeSec` and out
+ * over `fadeOutSec` (`fadeSec` when the card has none), each at most half the
+ * window, inside its window or its end window (0 outside).
+ */
 function titleCardAlpha(card, t) {
   if (!card || !card.enabled) return 0;
+  const fadeOutSec = typeof card.fadeOutSec === 'number' ? card.fadeOutSec : card.fadeSec;
   const inWindow = (startSec, endSec) => {
     if (!(t >= startSec) || !(t < endSec)) return 0;
-    const fade = Math.min(Math.max(0, card.fadeSec || 0), (endSec - startSec) / 2);
-    if (fade <= 0) return 1;
-    return Math.max(0, Math.min(1, (t - startSec) / fade, (endSec - t) / fade));
+    const half = (endSec - startSec) / 2;
+    const fadeIn = Math.min(Math.max(0, card.fadeSec || 0), half);
+    const fadeOut = Math.min(Math.max(0, fadeOutSec || 0), half);
+    return Math.max(0, Math.min(1, fadeIn > 0 ? (t - startSec) / fadeIn : 1, fadeOut > 0 ? (endSec - t) / fadeOut : 1));
   };
   const outro = card.outro && typeof card.outroStartSec === 'number' && typeof card.outroEndSec === 'number'
     ? inWindow(card.outroStartSec, card.outroEndSec) : 0;
   return Math.max(inWindow(card.startSec, card.endSec), outro);
+}
+
+/**
+ * The card's sideways offset at song time t, as a signed fraction of the frame
+ * width: it starts `slidePct` percent to the side it comes from (negative for
+ * `left`) and eases out (cubic) to its resting place over `slideSec`, at most
+ * half the window. Both windows slide in; nothing slides out. 0 for a card that
+ * does not slide, outside its windows, and once the slide is done.
+ */
+function titleCardSlide(card, t) {
+  if (!card || !card.enabled || (card.slideIn !== 'left' && card.slideIn !== 'right')) return 0;
+  const distance = Math.min(100, Math.max(0, Number(card.slidePct) || 0)) / 100;
+  const inWindow = (startSec, endSec) => {
+    if (!(t >= startSec) || !(t < endSec)) return null;
+    const slide = Math.min(Math.max(0, Number(card.slideSec) || 0), (endSec - startSec) / 2);
+    const remaining = slide > 0 ? 1 - Math.min(1, (t - startSec) / slide) : 0;
+    return remaining * remaining * remaining * distance;
+  };
+  const opening = inWindow(card.startSec, card.endSec);
+  const end = card.outro && typeof card.outroStartSec === 'number' && typeof card.outroEndSec === 'number'
+    ? inWindow(card.outroStartSec, card.outroEndSec) : null;
+  // Windows that overlap show the card where the more settled one has it.
+  const offset = opening == null ? end : end == null ? opening : Math.min(opening, end);
+  if (!offset) return 0;
+  return card.slideIn === 'left' ? -offset : offset;
 }
 
 /**
@@ -175,7 +240,8 @@ function titleCardAlpha(card, t) {
  * follow; in the `mtv` look the artist leads, then the title, the extra
  * line and the year, and the block is inset by its plate's padding. A block
  * wider than its zone shrinks as a whole, so the card never runs off frame.
- * `measure(text, font)` returns a width in pixels. Pure.
+ * These are resting positions: the slide (titleCardSlide) moves the drawn block
+ * and is not in them. `measure(text, font)` returns a width in pixels. Pure.
  */
 function titleCardLayout(card, { width, height, measure }) {
   const stacks = {
@@ -248,6 +314,9 @@ function drawTitleCard(ctx, card, t, { width, height }) {
   const lines = titleCardLayout(card, { width, height, measure });
   if (!lines.length) return false;
   ctx.save();
+  // The whole block (plate, bar and text) slides as one. A card at rest makes the calls it always made.
+  const slide = titleCardSlide(card, t);
+  if (slide) ctx.translate(slide * width, 0);
   ctx.globalAlpha = alpha;
   ctx.textBaseline = 'alphabetic';
   ctx.lineJoin = 'round';
@@ -289,6 +358,9 @@ function drawTitleCard(ctx, card, t, { width, height }) {
   return true;
 }
 
+// The unit suite checks the motion the pages inline, without a browser.
+export const _titleCardTestHooks = Object.freeze({ titleCardAlpha, titleCardSlide, drawTitleCard });
+
 /**
  * A browser script that draws a card over the page it runs in: installed in
  * the composition live preview and in the final render's browsers before the
@@ -296,27 +368,38 @@ function drawTitleCard(ctx, card, t, { width, height }) {
  *
  *   apply(card)   put a (normalized) card on the page, or null to clear it
  *   draw(t)       redraw for song time t
- *   layout()      the lines as placed on the render frame (for checks)
+ *   layout()      the lines at their resting places on the render frame (for checks)
  *   card          the card currently applied
+ *   layer         the canvas while it shows the card, else null
  *
  * It wraps `globalThis.portosComposition.seek(t)` (chaining any accessor an
  * earlier init script installed, such as the film look's) so the card is drawn
  * for the frame before the document paints, after its faces have loaded. The
- * canvas is fixed over the viewport, fitted to the render's aspect, and sits
- * under the film look's root filter like the lyrics do.
+ * canvas is fixed over the viewport, fitted to the render's aspect.
+ *
+ * The film look is a filter (and, while a preview plays, a transform and
+ * overlay layers) on the page's ROOT element, so no ordinary descendant can
+ * escape it: a card that is not steady sits under it like the lyrics do. A
+ * `steady` card's canvas joins the top layer instead (`popover="manual"`),
+ * which the root's filter and transform do not reach, and a page screenshot or
+ * screencast still captures. A frame read from another canvas does not include
+ * it: such a producer composites `layer` itself (filmLookFinish.js).
  *
  * `fonts` maps a bundled family (TITLE_CARD_FONT_FACES) to its data URL; each is
  * registered with `document.fonts` up front and loads only when the card uses it.
+ * `untilSec` (song seconds) stops the card being drawn from that time on, for a
+ * page that plays past the end of the song.
  */
 // A background page can defer document.fonts.load until Chrome's resource
 // timeout (minutes). After this, the frame draws with the fallback and later
 // frames do not wait again. A timed-out face stays on the fallback for this page.
 const TITLE_CARD_FONT_WAIT_MS = 2000;
 
-export function titleCardRuntimeSource(card = null, { fonts = {} } = {}) {
+export function titleCardRuntimeSource(card = null, { fonts = {}, untilSec = null } = {}) {
   const faces = Object.entries(fonts).filter(([family, src]) => typeof family === 'string' && /^data:font\/woff2;base64,[a-z0-9+/=]+$/i.test(src));
   return `(() => {
   ${titleCardAlpha.toString()}
+  ${titleCardSlide.toString()}
   ${titleCardLayout.toString()}
   ${drawTitleCard.toString()}
   if (typeof FontFace === 'function' && document.fonts && document.fonts.add) {
@@ -327,6 +410,25 @@ export function titleCardRuntimeSource(card = null, { fonts = {} } = {}) {
   let card = ${JSON.stringify(normalizeTitleCard(card)).replace(/</g, '\\u003c')};
   let t = 0;
   let canvas = null;
+  const UNTIL = ${typeof untilSec === 'number' && Number.isFinite(untilSec) ? untilSec : 'Infinity'};
+  const showing = () => !!card && t < UNTIL && titleCardAlpha(card, t) > 0;
+  const steady = () => !!card && (typeof card.steady === 'boolean' ? card.steady : card.style === 'mtv');
+  // Move the canvas into the top layer or back out of it. A browser without popovers keeps it an ordinary layer.
+  const topLayer = (on) => {
+    if (typeof canvas.showPopover !== 'function') return;
+    try {
+      if (on) {
+        if (canvas.getAttribute('popover') !== 'manual') canvas.setAttribute('popover', 'manual');
+        if (!canvas.matches(':popover-open')) canvas.showPopover();
+      } else if (canvas.hasAttribute('popover')) {
+        if (canvas.matches(':popover-open')) canvas.hidePopover();
+        canvas.removeAttribute('popover');
+      }
+    } catch {
+      // A closed popover is display:none; without the attribute the card still draws, under the look.
+      canvas.removeAttribute('popover');
+    }
+  };
   const fonts = new Map();
   const fallbackFonts = new Set();
   const frame = () => {
@@ -365,8 +467,8 @@ export function titleCardRuntimeSource(card = null, { fonts = {} } = {}) {
   };
   const draw = () => {
     if (!document.body) return;
-    const on = card && titleCardAlpha(card, t) > 0;
-    if (!on) { if (canvas) canvas.style.display = 'none'; return; }
+    // A hidden card leaves the top layer too: an open popover with nothing on it is still a layer.
+    if (!showing()) { if (canvas) { topLayer(false); canvas.style.display = 'none'; } return; }
     const { width, height } = frame();
     if (!canvas) {
       canvas = document.createElement('canvas');
@@ -379,8 +481,12 @@ export function titleCardRuntimeSource(card = null, { fonts = {} } = {}) {
     const vw = innerWidth || width;
     const vh = innerHeight || height;
     const s = Math.min(vw / width, vh / height);
+    const over = steady();
+    // The second line undoes the browser's own [popover] box (inset, auto margin, a border, padding, a Canvas ground, scrolling).
     canvas.style.cssText = 'position:fixed;pointer-events:none;z-index:2147483647;margin:0;padding:0;border:0;'
-      + 'left:' + (vw - width * s) / 2 + 'px;top:' + (vh - height * s) / 2 + 'px;width:' + width * s + 'px;height:' + height * s + 'px';
+      + 'left:' + (vw - width * s) / 2 + 'px;top:' + (vh - height * s) / 2 + 'px;width:' + width * s + 'px;height:' + height * s + 'px'
+      + (over ? ';right:auto;bottom:auto;background:transparent;overflow:visible' : '');
+    topLayer(over);
     const ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, width, height);
     drawTitleCard(ctx, card, t, { width, height });
@@ -402,6 +508,7 @@ export function titleCardRuntimeSource(card = null, { fonts = {} } = {}) {
       return titleCardLayout(card, { width, height, measure: (text, font) => { ctx.font = font; return ctx.measureText(text).width; } });
     },
     get card() { return card; },
+    get layer() { return canvas && canvas.isConnected && canvas.style.display !== 'none' ? canvas : null; },
   };
   Object.defineProperty(window, '__portosTitleCard', { value: api, configurable: false, writable: false });
   const wrap = (c) => {

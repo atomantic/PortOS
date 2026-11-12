@@ -13,7 +13,7 @@ import useMusicVideoStatsOutro from '../../hooks/useMusicVideoStatsOutro.js';
 import { playthroughVersion } from './CompositionPreviewPlayer.jsx';
 import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
 import { selectedPerformanceInstruction } from '../../lib/musicVideoShotTiming.js';
-import { normalizeTitleCard, titleCardVisible } from '../../../../server/lib/musicVideoTitleCard.js';
+import { normalizeTitleCard, titleCardSteady, titleCardSteadySupported, titleCardVisible, titleCardWindows } from '../../../../server/lib/musicVideoTitleCard.js';
 import { endingParts } from '../../../../server/lib/musicVideoEnding.js';
 import EndingCanvas from './EndingCanvas.jsx';
 import ShotStepper from './ShotStepper.jsx';
@@ -63,19 +63,26 @@ const hasTimedLyrics = (project) => Number(project.audioAnalysis?.durationSec) >
  * drives it with seek messages, one in flight at a time, every animation frame
  * while the song plays. Returns the overlay element, or null while there is
  * nothing to draw.
+ *
+ * The page also draws the title card. `withCard: false` keeps it off this
+ * layer (a steady card is drawn by a second, card-only layer outside the film
+ * look). `cardOnly` marks that second layer: outside the card's windows it has
+ * nothing to draw, so after the seek that hides the card it rests instead of
+ * running the lyric page on every animation frame of the song.
  */
-function useLyricOverlay({ project, enabled, lyricsVisible, audioRef, time, title = 'Lyrics over the storyboard animatic' }) {
+function useLyricOverlay({ project, enabled, lyricsVisible, withCard = true, cardOnly = false, audioRef, time, title = 'Lyrics over the storyboard animatic', testId = 'animatic-lyrics' }) {
   const [preview, setPreview] = useState(null);
   const [failed, setFailed] = useState(false);
   const iframeRef = useRef(null);
   const captureRef = useRef(null);
-  const seekState = useRef({ inFlight: false, pending: null, ready: false, sentAt: 0 });
+  const seekState = useRef({ inFlight: false, pending: null, ready: false, sentAt: 0, resting: false });
   const version = enabled ? playthroughVersion(project) : null;
   const documentClock = project.composition?.mode === 'document';
   const frameTime = (t) => documentClock ? Math.floor(t * 24 + 1e-6) / 24 : t;
   // The opening title card rides on the lyric layer, posted live so its panel's edits show at once.
-  const titleCard = useMemo(() => normalizeTitleCard(project.titleCard), [project.titleCard]);
+  const titleCard = useMemo(() => (withCard ? normalizeTitleCard(project.titleCard) : null), [withCard, project.titleCard]);
   const titleCardRef = useRef(titleCard);
+  const restOutside = useMemo(() => (cardOnly ? titleCardWindows(titleCard) : null), [cardOnly, titleCard]);
   const lyricsVisibleRef = useRef(lyricsVisible);
   lyricsVisibleRef.current = lyricsVisible;
   useEffect(() => {
@@ -91,7 +98,7 @@ function useLyricOverlay({ project, enabled, lyricsVisible, audioRef, time, titl
     captureRef.current?.reject(new Error('Lyric preview changed'));
     setPreview(null);
     setFailed(false);
-    seekState.current = { inFlight: false, pending: null, ready: false, sentAt: 0 };
+    seekState.current = { inFlight: false, pending: null, ready: false, sentAt: 0, resting: false };
     if (!version) return () => { active = false; };
     getMusicVideoLyricOverlayPreview(project.id, { silent: true })
       .then((next) => { if (active) setPreview(next); })
@@ -106,10 +113,15 @@ function useLyricOverlay({ project, enabled, lyricsVisible, audioRef, time, titl
     if (!frame || !state.ready) return;
     // A seek the page never answered stops holding the queue after a second.
     if (state.inFlight && performance.now() - state.sentAt < SEEK_REPLY_MS) { state.pending = t; return; }
+    // `resting` is the last seek SENT, so the one that hides the card always goes, and a card edited while
+    // the layer rests is redrawn hidden (a moved window rebuilds the page). A frame capture is never skipped.
+    const resting = !!restOutside && !restOutside.some((window) => t >= window.startSec && t < window.endSec);
+    if (resting && state.resting && !captureRef.current) return;
+    state.resting = resting;
     state.inFlight = true;
     state.sentAt = performance.now();
     frame.postMessage({ type: 'portos-mv:seek', t }, '*');
-  }, [documentClock]);
+  }, [documentClock, restOutside]);
 
   useEffect(() => {
     if (!preview) return undefined;
@@ -122,6 +134,10 @@ function useLyricOverlay({ project, enabled, lyricsVisible, audioRef, time, titl
         event.source.postMessage({ type: 'portos-mv:title-card', card: titleCardRef.current }, '*');
         event.source.postMessage({ type: 'portos-mv:lyrics-visible', visible: lyricsVisibleRef.current }, '*');
         state.ready = true;
+        // A page that just loaded has drawn its card for second 0, whatever this layer last sent,
+        // and never saw a seek posted before it was listening (a layer moved in or out of the film look).
+        state.resting = false;
+        state.inFlight = false;
         postSeek(audioRef.current?.currentTime || 0);
       } else if (message.type === 'portos-mv:request') {
         event.source.postMessage({ type: 'portos-mv:asset', key: String(message.key), blob: null }, '*');
@@ -182,10 +198,11 @@ function useLyricOverlay({ project, enabled, lyricsVisible, audioRef, time, titl
     seekState.current.pending = null;
     postSeek(t);
   });
-  if (!preview?.html || failed) return { overlay: null, failed, capture };
+  if (!preview?.html || failed) return { overlay: null, failed, capture, frameRef: iframeRef };
   return {
     failed,
     capture,
+    frameRef: iframeRef,
     overlay: (
       <iframe
         ref={iframeRef}
@@ -195,7 +212,7 @@ function useLyricOverlay({ project, enabled, lyricsVisible, audioRef, time, titl
         // `color-scheme: normal` keeps the frame transparent under a dark parent page.
         style={{ colorScheme: 'normal' }}
         className="pointer-events-none absolute inset-0 h-full w-full border-0 bg-transparent"
-        data-testid="animatic-lyrics"
+        data-testid={testId}
       />
     ),
   };
@@ -705,14 +722,27 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
   const stillFps = project.composition?.mode === 'document' ? ANIMATIC_FPS : leadFile.fps || ANIMATIC_FPS;
   // A Blender film letters its own lyrics, so its lyric layer carries the title card alone.
   const lyricsAvailable = !film && project.lyricOverlayEnabled !== false && hasTimedLyrics(project);
+  const card = useMemo(() => normalizeTitleCard(project.titleCard), [project.titleCard]);
   // The opening title card rides on the lyric layer, so a video with its words switched off still
   // needs that layer for the card; the page itself keeps the words hidden.
-  const cardOnly = (!lyricsAvailable || !lyricsOn) && titleCardVisible(normalizeTitleCard(project.titleCard));
+  const cardOnly = (!lyricsAvailable || !lyricsOn) && titleCardVisible(card);
   const templateCues = documentVariant && (project.composition?.textCues || []).some(cue => cue.text && Number.isFinite(cue.startSec) && cue.endSec > cue.startSec);
-  const { overlay, failed, capture: captureLyrics } = useLyricOverlay({
-    project, enabled: ((lyricsAvailable || templateCues) && lyricsOn) || cardOnly, lyricsVisible: lyricsOn && !film, audioRef, time,
+  const wordsLayer = (lyricsAvailable || templateCues) && lyricsOn;
+  // A steady card is drawn over the film look, which covers everything inside its frame, so its
+  // layer sits outside that frame: the lyric layer itself when it carries nothing else, otherwise a
+  // second, card-only layer while the words stay in the film.
+  const steadyCard = titleCardSteady(card) && titleCardSteadySupported(project);
+  const cardOverWords = steadyCard && wordsLayer;
+  const lyricLayer = useLyricOverlay({
+    project, enabled: wordsLayer || cardOnly, lyricsVisible: lyricsOn && !film, withCard: !cardOverWords, audioRef, time,
     ...(film ? { title: 'Title card over the film preview' } : {}),
   });
+  const cardLayer = useLyricOverlay({
+    project, enabled: cardOverWords, lyricsVisible: false, cardOnly: true, audioRef, time,
+    title: 'Title card over the storyboard animatic', testId: 'animatic-title-card',
+  });
+  const { overlay, failed } = lyricLayer;
+  const lyricLayerSteady = steadyCard && !wordsLayer;
   // The ending (cutting room floor, then credits): it plays when the song ends, and Ending plays it straight away; playing or seeking the song leaves it.
   const { statsOutro, creditsOutro } = project;
   const endingPlan = useMemo(() => endingParts({ statsOutro, creditsOutro }), [statsOutro, creditsOutro]);
@@ -818,11 +848,20 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
       if (!clip && !fallback) throw new Error('Video frame is still loading');
     }
     if (((lyricsAvailable && lyricsOn) || cardOnly) && !overlay) throw new Error('Lyric frame unavailable');
+    if (cardOverWords && !cardLayer.overlay) throw new Error('Title card frame unavailable');
+    // A layer inside the film look is frozen with the picture and takes the look; a steady card's
+    // layer sits outside it and is laid over the finished picture, as the preview shows it.
     const iframeImages = new Map();
-    const iframe = figureRef.current?.querySelector('iframe');
-    if (iframe) iframeImages.set(iframe, await captureLyrics(at));
+    const over = [];
+    for (const [layer, inLook] of [[lyricLayer, !lyricLayerSteady], [cardLayer, false]]) {
+      const iframe = layer.frameRef.current;
+      if (!iframe) continue;
+      const png = await layer.capture(at);
+      if (inLook) iframeImages.set(iframe, png);
+      else over.push(png);
+    }
     if (!unchanged()) throw new Error('Preview changed during capture');
-    const blob = await capturePreviewFrame(figureRef.current?.firstElementChild, { iframeImages });
+    const blob = await capturePreviewFrame(figureRef.current?.firstElementChild, { iframeImages, over });
     if (!unchanged()) throw new Error('Preview changed during capture');
     const selectedIndex = selected ? timedShots(scenes).indexOf(selected) : -1;
     const shotLabel = basis.outro ? 'Ending' : selected ? sceneShotName(selected, selectedIndex >= 0 ? { number: selectedIndex + 1 } : {}) : null;
@@ -980,9 +1019,11 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
         {/* The shots' wipes on their cuts, on the frames the final render paints them. A film's cut draws none. */}
         {!film && (!nativeDrawing || cold.active) && <WipeOverlay scenes={clock.scenes} figureRef={figureRef} audioRef={clock.ref} time={clock.time} planned={planned}
           endSec={cold.active ? cold.seconds : Number(project.audioAnalysis?.durationSec) || null} fps={ANIMATIC_FPS} />}
-        {!cold.active && overlay}
+        {!cold.active && !lyricLayerSteady && overlay}
         {outro.active && <EndingCanvas parts={endingPlan} stats={outro.stats} t={outro.t} />}
         </FilmLookFrame>
+        {/* A steady title card: over the film look and the shots' effects, not through them. The ending covers the frame, card included. */}
+        {!cold.active && !outro.active && (lyricLayerSteady ? overlay : cardLayer.overlay)}
         {documentVariant && <ExactDocumentFrame ref={exactRef} project={project} time={time} active={exactActive} lookOn={lookOn} />}
       </figure>
       <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -1005,6 +1046,7 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
             </p>
           )}
           {(cardOnly || lyricsOn) && failed && <p className="text-port-error">{cardOnly ? 'The title card' : 'The lyrics'} could not be drawn over the animatic.</p>}
+          {cardOverWords && cardLayer.failed && !failed && <p className="text-port-error">The title card could not be drawn over the animatic.</p>}
         </div>
         {cold.seconds > 0 && (
           <button

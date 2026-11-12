@@ -15,7 +15,7 @@ import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../li
 vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await importOriginal(), {
   dataRoot: () => lazyTempDataRoot('portos-mv-film-look-finish-'),
 }));
-const { seen } = vi.hoisted(() => ({ seen: { webAdmitted: false, webFail: null, webAbort: null, geometryFrames: 48, opened: [], contract: null, options: null, progress: [], ffmpeg: [], encodeFail: null, labelFail: false, signature: null, page: null } }));
+const { seen } = vi.hoisted(() => ({ seen: { webAdmitted: false, webFail: null, webAbort: null, webCheck: null, geometryFrames: 48, opened: [], contract: null, options: null, progress: [], ffmpeg: [], encodeFail: null, labelFail: false, signature: null, page: null } }));
 vi.mock('../../lib/ffmpeg.js', () => ({
   findFfmpeg: async () => 'ffmpeg',
   // 48 frames at 24 fps: the container reports a hair more than the frames hold.
@@ -48,7 +48,7 @@ vi.mock('../htmlComposition/browser.js', () => ({
   },
 }));
 vi.mock('./filmLookWebEncoder.js', () => ({
-  admitFilmLookWeb: async () => seen.webAdmitted,
+  admitFilmLookWeb: async (_page, _contract, _directory, options) => { seen.webCheck = options; return seen.webAdmitted; },
   encodeFilmLookWeb: async () => {},
 }));
 vi.mock('../htmlComposition/encode.js', () => ({
@@ -79,7 +79,7 @@ beforeEach(async () => {
   seen.contract = null;
   seen.options = null;
   seen.encodeFail = null;
-  seen.webAdmitted = false; seen.webFail = null; seen.webAbort = null; seen.geometryFrames = 48;
+  seen.webAdmitted = false; seen.webFail = null; seen.webAbort = null; seen.webCheck = null; seen.geometryFrames = 48;
   seen.labelFail = false;
   // What every PortOS encoder writes.
   seen.signature = 'codec_name=h264|color_primaries=bt709|color_range=tv|color_space=bt709|color_transfer=bt709|pix_fmt=yuv420p';
@@ -222,6 +222,74 @@ describe('film look finishing pass', () => {
     expect(await readFile(path, 'utf8')).toBe('composed-render');
     expect(seen.options.encode.name).toBe('encodeFilmLookWeb');
     expect(seen.ffmpeg).toHaveLength(1);
+  });
+
+  // Uniquely catches a steady card left out of the picture and then never drawn (no runtime in one of
+  // the pass's browsers), drawn under the look, running on over an ending joined after the song, or
+  // admitted to WebCodecs without one of the frames it shows in being compared.
+  it('draws a title card it is handed over the look in every browser of the pass, and has its frames checked for WebCodecs', async () => {
+    const png = await solidPng(120);
+    seen.page = drawingPage({ svgPng: png, gpuPng: png, svgMs: 100, gpuMs: 10, switches: [] });
+    seen.geometryFrames = 240;
+    seen.webAdmitted = true;
+    const titleCard = { title: 'Example Song', artist: 'Example Artist', style: 'outline', startSec: 4, endSec: 8, outro: true, outroStartSec: 11, outroEndSec: 30 };
+    expect(await applyFilmLookFinish({ project: { filmLook: look }, path, jobId: 'job-card', offsetSec: 3, titleCard, titleCardUntilSec: 12 })).toBe(true);
+    // The check page, the page reopened after the WebCodecs check and a worker browser.
+    expect(seen.opened).toHaveLength(3);
+    for (const opened of seen.opened) {
+      expect(opened.options.initScripts).toHaveLength(2);
+      expect(opened.options.initScripts[0]).toContain('__portosFilmLook');
+      const runtime = opened.options.initScripts[1];
+      expect(runtime).toContain('__portosTitleCard');
+      // Over the look whatever the card says of itself, and gone where the song ends.
+      expect(runtime).toContain('"title":"Example Song"');
+      expect(runtime).toContain('"steady":true');
+      expect(runtime).toContain('const UNTIL = 12;');
+    }
+    // Ten seconds from song second 3: the middle of the opening window, and of what is left of the end window before second 12.
+    expect(seen.webCheck).toMatchObject({ offsetSec: 3, checkTimes: [6, 11.5] });
+
+    // A card that draws nothing costs the pass nothing.
+    seen.opened.length = 0;
+    await writeFile(path, 'composed-render');
+    expect(await applyFilmLookFinish({ project: { filmLook: look }, path, jobId: 'job-no-card', titleCard: { ...titleCard, enabled: false } })).toBe(true);
+    expect(seen.opened.map((opened) => opened.options.initScripts.length)).toEqual([1, 1, 1]);
+    expect(seen.webCheck.checkTimes).toEqual([]);
+  });
+
+  // Uniquely catches a WebCodecs frame that misses the card (read from the GPU canvas alone while the
+  // card shows over it), and a frame without the card no longer read straight from that canvas.
+  it('flattens the title card onto a WebCodecs frame only while the card shows', async () => {
+    await applyFilmLookFinish({ project: { filmLook: look }, path, jobId: 'web-card', useGpu: false });
+    const sources = [];
+    const drawn = [];
+    class Encoder {
+      static async isConfigSupported(config) { return { supported: true, config }; }
+      constructor(callbacks) { this.callbacks = callbacks; this.encodeQueueSize = 0; }
+      configure() {}
+      encode(frame) { this.callbacks.output({ timestamp: frame.timestamp, type: 'key', byteLength: 1, copyTo(bytes) { bytes[0] = 1; } }); }
+    }
+    class Frame { constructor(source, options) { sources.push(source.name); this.timestamp = options.timestamp; } close() {} }
+    class Reader { readAsDataURL(blob) { void blob.arrayBuffer().then(bytes => { this.result = `data:;base64,${Buffer.from(bytes).toString('base64')}`; this.onload(); }); } }
+    const film = { name: 'film', style: {} };
+    const flat = { name: 'flat', getContext: (_kind, options) => ({ drawImage: (source, ...box) => drawn.push([source.name, options.alpha, ...box]) }) };
+    const card = { layer: null };
+    const context = { document: { getElementById: id => id === 'source' ? { readyState: 2 } : film, createElement: () => flat },
+      __portosFilmLookGpu: { create: () => ({ renderer: 'test', dispose() {} }) }, __portosTitleCard: card,
+      VideoEncoder: Encoder, VideoFrame: Frame, FileReader: Reader, Blob, performance, setTimeout, clearTimeout };
+    runInNewContext(seen.opened[0].app, context);
+    context.__portosFilmLookFinish.useGpu(true);
+    await context.__portosFilmLookFinish.startEncoder();
+    const { frameEncoder } = context.__portosFilmLookFinish;
+    await frameEncoder.frame();
+    card.layer = { name: 'card' };
+    await frameEncoder.frame();
+    card.layer = null;
+    await frameEncoder.frame();
+    expect(sources).toEqual(['film', 'flat', 'film']);
+    // The film's picture first, on an opaque canvas, then the card over it, both at the render's frame.
+    expect(drawn).toEqual([['film', false, 0, 0, 1280, 720], ['card', false, 0, 0, 1280, 720]]);
+    expect(flat).toMatchObject({ width: 1280, height: 720 });
   });
 
   it('rejects reordered or missing WebCodecs chunks before muxing', async () => {

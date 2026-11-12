@@ -656,6 +656,37 @@ describe('Blender film cuts, notes and media', () => {
     expect(painted[painted.indexOf('-filter_complex') + 1]).toContain('[0:v][c0]overlay=eof_action=pass:format=yuv420[v]');
   });
 
+  // Uniquely catches a cut baking a steady card under the film look it was asked for, or leaving the
+  // card out of a cut that has no film look pass to draw it.
+  it('leaves a steady title card for the film look pass of a cut that has one, and bakes it into a cut that has none', async () => {
+    await scaffold();
+    await syncFilm();
+    await renderAll('preview');
+    await projects.updateProject(project.id, {
+      filmLook: { version: 2, preset: 'custom', grain: 0.4 },
+      titleCard: { title: 'Example Song', artist: 'Example Artist', style: 'mtv', startSec: 1, endSec: 3 },
+    });
+    const cut = async (body) => {
+      renderTypographyOverlays.mockClear();
+      applyFilmLookFinish.mockClear();
+      blender.ffmpeg.length = 0;
+      events.length = 0;
+      await request(app).post(api('/cut')).send({ quality: 'preview', ...body });
+      const [ended] = await settled(1);
+      expect(ended.job.status, ended.job.error).toBe('done');
+    };
+    await cut({ filmLook: true });
+    expect(renderTypographyOverlays).not.toHaveBeenCalled();
+    expect(blender.ffmpeg.some((args) => args.includes('-itsoffset'))).toBe(false);
+    expect(applyFilmLookFinish).toHaveBeenCalledTimes(1);
+    expect(applyFilmLookFinish.mock.calls[0][0]).toMatchObject({ titleCard: { title: 'Example Song', style: 'mtv', steady: true }, titleCardUntilSec: 6 });
+    // The same project, cut without the look: nothing follows the join, so the join draws the card.
+    await cut({});
+    expect(renderTypographyOverlays).toHaveBeenCalledTimes(1);
+    expect(blender.ffmpeg.some((args) => args.includes('-itsoffset'))).toBe(true);
+    expect(applyFilmLookFinish).not.toHaveBeenCalled();
+  });
+
   it('publishes a cut as a new version of one review-draft animatic', async () => {
     await scaffold();
     await syncFilm();
