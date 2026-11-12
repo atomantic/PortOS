@@ -178,7 +178,7 @@ export default function YoutubeThumbnailPanel({ project, publishKit }) {
               {busy ? 'Making the thumbnail…' : thumb.filename ? 'Apply to the thumbnail' : 'Make the thumbnail'}
             </button>
           )}
-          {lettering && !art.design && <p className="text-port-text-muted">Set in the plain look until the cover has a design (Cover art › Lettering).</p>}
+          {lettering && !art.design && <p className="text-port-text-muted">Set in your saved artist style, or the plain look when there is none, until the song has its own design (Cover art › Lettering).</p>}
         </div>
       </div>
 

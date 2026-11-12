@@ -22,6 +22,7 @@ const projects = await import('./projects.js');
 const thumbs = await import('./youtubeThumbnail.js');
 const cover = await import('./coverArt.js');
 const { buildPublishPayload } = await import('./publish/payloads.js');
+const { normalizeCoverDesign } = await import('../../lib/musicVideoCoverOverlay.js');
 const sharp = (await import('sharp')).default;
 
 afterAll(() => cleanupTempDataRoots());
@@ -63,6 +64,22 @@ describe('YouTube thumbnail', () => {
     await thumbs.clearProjectYoutubeThumbnail(id);
     expect((await kitOf(id)).youtubeThumbnail).toBeUndefined();
     expect(existsSync(join(PATHS.videoThumbnails, made.filename))).toBe(false);
+  });
+
+  it("sets a first thumbnail in the artist's saved style when the song has no design of its own", async () => {
+    const { id, frame } = await projectWithFrame();
+    const design = normalizeCoverDesign({ typeface: 'condensed', titleColor: '#aabbcc' });
+    cover.__setCoverArtDepsForTests({ artistStyle: async () => ({ key: 'example artist', name: 'Example Artist', design }), getPlatforms: async () => ({}) });
+    try {
+      const { project } = await thumbs.composeProjectYoutubeThumbnail(id, { source: { kind: 'thumbnail', filename: frame } });
+      expect(project.publishKit.coverArt.design).toEqual(design);
+      // A bare thumbnail on another song leaves that song without a design.
+      const other = await projectWithFrame();
+      const bare = await thumbs.composeProjectYoutubeThumbnail(other.id, { source: { kind: 'thumbnail', filename: other.frame }, lettering: false });
+      expect(bare.project.publishKit.coverArt).toBeUndefined();
+    } finally {
+      cover.__setCoverArtDepsForTests({});
+    }
   });
 
   it('re-sets a lettered thumbnail when the cover lettering changes', async () => {
