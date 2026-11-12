@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
 import { formatCount, formatPercent, formatUsd } from '../../utils/formatters';
 import { triggerCosOnDemandTask } from '../../services/apiAgents';
+import MetricEvidence from './ComparisonMetricEvidence';
 
 const number = value => formatCount(value, { maximumFractionDigits: 2 });
 const cost = value => formatUsd(value, { maximumFractionDigits: 4 });
@@ -22,7 +23,13 @@ export default function ComparisonValueGuide({ rows, onConfigureResearch }) {
     const points = byCost.filter(row => row.model === model);
     const best = points.reduce((result, row) => !result || row.quality.value > result.quality.value ? row : result, null);
     const pick = best && points.find(row => row.quality.value >= best.quality.value - tolerance);
-    return { model, points, best, pick, peer: pick && alternative(pick) };
+    const pricing = [...rows.filter(row => row.model === model && (row.inputPerMillion || row.outputPerMillion)).reduce((groups, row) => {
+      const key = JSON.stringify([row.inputPerMillion, row.outputPerMillion]);
+      if (!groups.has(key)) groups.set(key, { ...row, configurations: [] });
+      groups.get(key).configurations.push(`${row.provider} (${row.effort})`);
+      return groups;
+    }, new Map()).values()];
+    return { model, points, best, pick, pricing, peer: pick && alternative(pick) };
   });
   const researchModel = async model => {
     if (pendingResearch.current.has(model)) return;
@@ -41,10 +48,20 @@ export default function ComparisonValueGuide({ rows, onConfigureResearch }) {
       <div><label className="block text-xs mb-1" htmlFor="comparison-tolerance">Acceptable intelligence difference</label><select id="comparison-tolerance" className="max-w-full rounded-lg border border-port-border bg-port-bg p-2 text-sm" value={tolerance} onChange={event => setTolerance(Number(event.target.value))}>{[0, 0.5, 1, 2, 3, 5].map(value => <option key={value} value={value}>{number(value)} index points</option>)}</select></div></div>
     <p className="text-xs text-port-text-muted">Uses sourced Intelligence Index task costs across the selected models and efforts, regardless of the chart’s token-price axis. Estimates are excluded. A near match is a score tradeoff, not proof of equal ability; latency, coding, tools, context and reliability can still favor another choice. These API reference costs may differ from your endpoint or subscription.</p>
     {guide.some(item => !item.pick) && <p className="text-xs text-port-text-muted">Research uses the saved research provider or the CoS default and may use its quota. The agent investigates all efforts, updates this instance, and proposes public evidence as shipped data in a PortOS PR. <button type="button" className="rounded border border-port-border px-2 py-1" onClick={onConfigureResearch}>Research settings</button></p>}
-    <div className="grid grid-cols-1 gap-3 @3xl:grid-cols-2">{guide.slice(0, limit).map(({ model, points, best, pick, peer }) => <article key={model} className="min-w-0 rounded-lg border border-port-border p-3">
+    <div className="grid grid-cols-1 gap-3 @3xl:grid-cols-2">{guide.slice(0, limit).map(({ model, points, best, pick, pricing, peer }) => <article key={model} className="min-w-0 rounded-lg border border-port-border p-3">
       <h3 className="font-medium break-all">{model}</h3>
       {!pick ? <>
-        <p className="mt-2 text-sm text-port-text-muted">Research needed: no selected effort has both a sourced score and task cost.</p>
+        <p className="mt-2 text-sm text-port-text-muted">{pricing.length ? 'Partial comparison data: token pricing is available, but no selected effort has both a sourced intelligence score and benchmark task cost. Reloading preserves these gaps until supporting evidence is added.' : 'Research needed: no selected effort has both a sourced score and task cost.'}</p>
+        {pricing.length > 0 && <div className="mt-2 space-y-3 text-sm" aria-label={`${model} token pricing`}>
+          <p>API token prices · USD per 1M tokens. These rates do not establish benchmark task cost or subscription usage.</p>
+          {pricing.map(row => <div key={row.id} className="space-y-1">
+            {pricing.length > 1 && <p className="text-xs break-words">{row.configurations.join(', ')}</p>}
+            {['inputPerMillion', 'outputPerMillion'].map(field => row[field] && <div key={field}>
+              <p>{field === 'inputPerMillion' ? 'Input' : 'Output'}: {row[field].estimated ? '≈ ' : ''}{cost(row[field].value)} / 1M</p>
+              <MetricEvidence metric={row[field]} />
+            </div>)}
+          </div>)}
+        </div>}
         <button type="button" className="mt-2 rounded-lg border border-port-border px-3 py-2 text-sm hover:bg-port-bg disabled:opacity-50" aria-label={`Research ${model}`} disabled={['queuing', 'queued'].includes(research[model]?.status)} onClick={() => researchModel(model)}>{research[model]?.status === 'queuing' ? 'Queuing…' : research[model]?.status === 'queued' ? 'Research requested' : 'Research this model'}</button>
         {research[model]?.status === 'queued' && <p role="status" className="mt-2 text-xs text-port-text-muted">Research request queued in CoS. Follow its progress in CoS Schedule, then reload this page.</p>}
         {research[model]?.status === 'error' && <p role="alert" className="mt-2 text-sm text-port-error">{research[model].error}</p>}

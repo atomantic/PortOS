@@ -1,5 +1,5 @@
 import { beforeEach, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import ModelComparison from './ModelComparison';
 import * as api from '../../services/apiModelComparison';
 import { triggerCosOnDemandTask } from '../../services/apiAgents';
@@ -186,4 +186,23 @@ it('plots local zero API costs with configured evidence and explains their exclu
   fireEvent.click(screen.getByLabelText('Log cost scale'));
   expect(screen.queryByTestId('scatter-example:ornith-1.0-35b')).toBeNull();
   expect(screen.getByText(/No points match/)).toBeTruthy();
+});
+
+it('keeps researched Hydrogen token prices and sources visible after reload without inventing chart points', async () => {
+  const hydrogen = { ...row('gemini-4-hydrogen-high', 'high', null, 3), comparisonModel: 'gemini-4-hydrogen', costPerTask: null, inputPerMillion: metric(1.5), outputPerMillion: metric(7.5) };
+  api.getModelComparison.mockResolvedValue({ composite: { rows: [hydrogen, { ...hydrogen, id: 'duplicate-provider', provider: 'Another provider' }] } });
+  render(<ModelComparison />);
+  const pricing = await screen.findByLabelText('gemini-4-hydrogen token pricing');
+  expect(pricing).toHaveTextContent('Input: $1.50 / 1M');
+  expect(pricing).toHaveTextContent('Output: $7.50 / 1M');
+  expect(within(pricing).getAllByRole('link', { name: 'example.com' })).toHaveLength(2);
+  expect(screen.getByText(/Partial comparison data:/)).toBeTruthy();
+  expect(screen.getByText(/Plotting requires both an intelligence score/)).toBeTruthy();
+  expect(screen.queryByTestId('scatter-example:gemini-4-hydrogen-high')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Reload data' }));
+  await waitFor(() => expect(api.getModelComparison).toHaveBeenCalledTimes(2));
+  expect(screen.getByLabelText('gemini-4-hydrogen token pricing')).toHaveTextContent('Output: $7.50 / 1M');
+  fireEvent.change(screen.getByLabelText('Cost axis'), { target: { value: 'inputPerMillion' } });
+  expect(screen.queryByTestId('scatter-example:gemini-4-hydrogen-high')).toBeNull();
+  expect(screen.getByRole('button', { name: 'Research gemini-4-hydrogen' })).toBeEnabled();
 });
