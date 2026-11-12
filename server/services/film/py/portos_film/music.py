@@ -80,7 +80,7 @@ def bar_at(song, t):
 def phrases(song, bars=4):
     """Consecutive ``bars``-bar time ranges from the first downbeat to song end."""
     grid = downbeats(song)
-    if not grid or bars <= 0:
+    if not grid or type(bars) is not int or bars <= 0:
         return []
     duration = (song or {}).get("durationSec")
     if duration is None:

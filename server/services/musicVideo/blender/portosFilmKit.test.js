@@ -57,7 +57,7 @@ print(json.dumps({
     "instrumental": {
         "bar_time": [music.bar_time(instrumental, 1), music.bar_time(instrumental, 2, 2), music.bar_time(instrumental, 0), music.bar_time(instrumental, 3), music.bar_time(empty, 1)],
         "bar_at": [list(map(r, music.bar_at(instrumental, 1))), list(map(r, music.bar_at(instrumental, 0))), list(map(r, music.bar_at(instrumental, 9.2))), list(map(r, music.bar_at(instrumental, 17))), list(music.bar_at(empty, 9))],
-        "phrases": music.phrases(instrumental, 2), "no_phrases": music.phrases(empty),
+        "phrases": music.phrases(instrumental, 2), "invalid_phrases": [music.phrases(instrumental, 0), music.phrases(instrumental, 0.5), music.phrases(instrumental, "2")], "no_phrases": music.phrases(empty),
         "onsets": list(map(r, music.onsets(instrumental, min_gap=0.12))),
         "edge_onsets": list(map(r, music.onsets(edge_song))),
         "flat_onsets": music.onsets(flat_song), "no_onsets": music.onsets(empty),
@@ -87,7 +87,7 @@ describe.skipIf(!python)('portos_film kit', () => {
       instrumental: {
         bar_time: [1, 7.1, -3, 9.2, 0],
         bar_at: [[1, 0], [0, 3], [3, 0], [5, 0], [1, 0]],
-        phrases: [[1, 9.2], [9.2, 17], [17, 18]], no_phrases: [],
+        phrases: [[1, 9.2], [9.2, 17], [17, 18]], invalid_phrases: [[], [], []], no_phrases: [],
         onsets: [0.2, 0.4, 1], edge_onsets: [0.1, 0.5], flat_onsets: [], no_onsets: [], swell: [0.8333, 0],
       },
       clamp: [1, 0, 5],
