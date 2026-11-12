@@ -1071,3 +1071,67 @@ renderer setup, Metal builds, full Install/Repair and GLB generation were not
 rerun for this network-only slice. The known Pixal Gradio/Pillow metadata
 mismatch remains intentional; network-subclosure dependency checks do not
 claim that the full Pixal environment has no such mismatch.
+
+## Nineteenth-slice Music3 MLX Hub/Transformers migration (2026-11-12)
+
+Music3's Apple Silicon profile moves **Hugging Face Hub 1.28.0 → 2.4.0**
+together with **Transformers 5.15.0 → 5.22.1** and its required
+**Tokenizers 0.22.2 → 0.23.3**. The transport changes from HTTPX 0.28.1 /
+HTTPCore 1.0.9 / Certifi to **HTTPX2 2.16.0**, **HTTPCore2 2.16.0** and
+**Truststore 0.10.5**. No remaining dependency consumes the old transport.
+All **32** other versions, markers and hash sets are unchanged, including
+mlx-audio **0.6.4**, MLX/Metal **0.32.4** and the Python **3.12+** floor.
+
+The coordinated change is required: the old Transformers pin caps Hub below
+2, while 5.22.1 permits Hub 2 and requires Tokenizers `>=0.23.1,<0.24`.
+Source review found no PortOS or Music3 adapter change necessary. The shared
+mlx-audio loader still calls `snapshot_download` with supported arguments.
+Transformers now imports HTTP types through Hub's compatibility alias, which
+resolves to HTTPX2 in this closure rather than catching old HTTPX exceptions.
+Music3's official text path still loads `AutoTokenizer` locally and requests
+NumPy token IDs.
+
+The complete **38-package / 846-hash** lock was regenerated using verified
+**uv 0.13.7**, wheels only and cutoff `2026-11-05T00:00:00Z`, retaining the
+existing output to preserve unrelated versions. Every hash matches an
+unyanked pre-cutoff PyPI artifact. Complete OSV/MAL responses returned zero
+findings with count/error/pagination checks. Install/Repair still enforces
+hashes, wheels only and `--no-deps`; bundled native libraries are not separately
+audited.
+
+Fresh native Apple Silicon Python **3.12.11** and **3.13.18** environments
+installed the complete lock and passed dependency checks. An old-lock Python
+3.12 environment created a synthetic tiny checkpoint **with a saved local
+BPE tokenizer** configured for the `Qwen2Tokenizer` class declared by both
+revision-pinned production tokenizer configs. Its vocabulary remains synthetic;
+all three environments passed:
+
+- The actual official-tokenizer path, not Music3's tokenizer-less tiny fallback:
+  Unicode round trips, exact conditional IDs, unconditional middle-token masking,
+  preserved boundary tokens and oversized-prompt refusal through generation.
+- Strict checkpoint loading, tiny Metal generation and the unchanged PortOS
+  WAV sidecar, including finite stereo output and matching `STAGE`/`RESULT`
+  metadata. Tiny dimensions produce abbreviated waveforms; these are loading,
+  tokenization and tensor/sidecar checks, not production duration or quality
+  validation.
+- The actual shared Music3 loader against a synthetic loopback Hub snapshot,
+  including revision and file-pattern selection, downloaded synthetic tokenizer
+  through the official-text path, and generation. Offline cached snapshots were reused without requests and
+  missing snapshots/revisions/files were refused with the correct error types.
+- Deliberately interrupted downloads resumed from the exact saved byte offset.
+  The new Hub/Transformers path used actual HTTPX2 response/error objects.
+
+Both candidate interpreters additionally exercised the new TLS path. The real
+default HTTPX2 factory creates a Truststore SSL context with certificate and
+hostname verification enabled. Default-untrusted and wrong-CA loopback TLS
+connections were rejected before any HTTP request; loading an ephemeral fixture
+CA into the context permitted direct HTTPS and actual Hub HEAD/GET downloads.
+No OS trust store was changed and temporary private keys were removed. This
+validates synthetic local trust behavior, not live public Hub chains or proxies.
+
+All Hub tests isolated caches, disabled telemetry/implicit tokens and verified
+that no Authorization header was sent. **172** focused installer/profile/sidecar
+tests passed with the supported NumPy-capable interpreter. No production weights,
+provider calls or full-song quality evaluation ran. This completes Music3 MLX's
+original dependency candidates; H3's separate coordinated migration and the
+other profile-specific work remain under #15769.
