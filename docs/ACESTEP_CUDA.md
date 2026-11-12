@@ -79,6 +79,7 @@ for target in windows linux; do
   out="scripts/requirements-acestep-cuda-${target}.lock.txt"
   cp "$out" "$TMP/$target.lock" # retain unrelated pins during resolution
   "$UV" --no-config pip compile "$TMP/pyproject.toml" \
+    --upgrade-package filelock==4.2.9 --upgrade-package typing-inspection==0.4.5 \
     --python-version 3.11 --python-platform "$platform" \
     --generate-hashes --only-binary :all: --no-binary docopt --no-binary unidic-lite \
     --preview-features build-dependency-hashes --require-build-hashes \

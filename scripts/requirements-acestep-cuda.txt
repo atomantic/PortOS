@@ -36,7 +36,7 @@ fugashi[unidic-lite]
 click
 tensorboard
 tensorboardX
-filelock==4.2.7
+filelock==4.2.9
 pillow==13.0.0
 wheel
 setuptools
