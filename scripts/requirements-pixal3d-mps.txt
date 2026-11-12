@@ -12,7 +12,7 @@ audioop-lts==0.2.2
 brotli==1.2.1
 certifi==2026.10.23
 charset-normalizer==3.5.2
-click==8.4.1
+click==8.5.0
 contourpy==1.3.2
 cycler==0.12.1
 diffusers==0.38.0
@@ -43,7 +43,7 @@ kiwisolver==1.5.0
 kornia==0.8.2
 kornia-rs==0.1.14
 markdown-it-py==4.2.0
-markupsafe==3.0.3
+markupsafe==3.0.4
 matplotlib==3.10.9
 mdurl==0.1.2
 moderngl==5.12.0
@@ -63,14 +63,14 @@ psutil==7.2.2
 pydantic==2.13.4
 pydantic-core==2.46.4
 pydub==0.25.1
-pygments==2.20.0
+pygments==2.21.0
 pymeshlab==2025.7.post1
 pyparsing==3.3.2
 python-dateutil==2.9.0.post0
 python-multipart==0.0.31
 pytz==2026.2
 pyyaml==6.0.3
-regex==2026.5.9
+regex==2026.9.29
 requests==2.34.2
 rich==15.0.0
 safehttpx==0.1.7
