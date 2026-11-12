@@ -22,7 +22,7 @@ export default function CombineMoodBoards({ boards, onClose, onCreated }) {
   };
 
   return (
-    <Modal open onClose={onClose} closeOnEsc={!busy} closeOnBackdrop={!busy} ariaLabelledBy="combine-boards-title">
+    <Modal open onClose={onClose} closeOnEsc={!busy} closeOnBackdrop={!busy} ariaLabelledBy="combine-boards-title" panelClassName="bg-port-card border border-port-border rounded-xl shadow-xl">
       <form onSubmit={submit} className="p-4 space-y-4">
         <h2 id="combine-boards-title" className="text-lg font-semibold text-white">Combine mood boards</h2>
         <p className="text-sm text-gray-400">Create an independent board with both sets of pins and saved style prompts. Originals stay unchanged. No AI calls are made. Edit or render the combined style on the new board, or analyze its pins to compose a fresh style.</p>
