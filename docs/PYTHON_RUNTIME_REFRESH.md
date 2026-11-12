@@ -1826,3 +1826,48 @@ and the shipped lock.
 All 182 focused PortOS installer/profile/runner tests passed without skips.
 Independent review, final committed-tree pregate and exact-head hosted CI
 remain required before merge.
+
+## Thirty-second-slice Wan and ACE MLX helper maintenance (2026-11-12)
+
+This slice changes only Wan MLX `charset-normalizer` 3.4.4 → 3.5.2 and
+`fonttools` 4.61.1 → 4.68.0, plus ACE-Step 1.5 MLX `anyio` 4.15.1 → 4.16.0.
+Requests permits Charset-Normalizer below 4; immutable MLX-Gen requires
+FontTools >=4.60.2. ACE already has AnyIO's required Typing-Extensions 4.16.
+All Hub, model-library, MLX/Metal, Torch, build and source pins remain unchanged.
+Existing Python-marker branches are preserved. Dateutil's major-version change
+is deliberately separate.
+
+Regeneration uses verified uv 0.13.7 and cutoff `2026-11-05T00:00:00Z`.
+For Wan, use the bounded recipe in [MLX video locks](MLX_VIDEO_LOCKS.md#wan-decoding-and-font-helpers-2026-11-12).
+For ACE, copy its direct input and the arm64 macOS `pyproject.toml` environment
+configuration from the lock header to a scratch directory. Extract every
+existing `name==version` requirement with its marker into a constraints file,
+changing only AnyIO to 4.16.0. Run the header's universal Python 3.11 compile
+with `-c <constraints>`, the fixed cutoff and a scratch output. Verify the
+complete resolved package/version/marker set, then replace only AnyIO's block
+in the original lock, retaining its existing `# via httpx2` provenance. This
+avoids unrelated constraint annotations and artifact-allowlist churn.
+
+The final Wan lock has 51 package/version entries and 1,021 hashes; 49 companion
+blocks are byte-identical. ACE has 112 entries and 2,854 hashes; all 111 other
+blocks are byte-identical. Every final artifact matches official PyPI metadata,
+is unyanked and predates the cutoff. OSV, including malicious-package records,
+is clean for all 130 unique package/version identities. Full dependency-aware,
+hash-required wheel install plans pass for Wan Python 3.11 and ACE Python
+3.11/3.12/3.13, preserving the supported marker branches.
+
+Four native Python 3.11 baseline/candidate environments install exact hashed
+subclosures and pass dependency checks: six packages for Wan and seven for ACE.
+Actual Requests responses exercise automatic UTF-8/UTF-16 decoding. FontTools
+builds a synthetic font, saves/reloads it and subsets glyphs. Frozen Wan has no
+direct FontTools imports, so these are retained-library checks, not a claimed
+Wan rendering path. Real HTTPX2/HTTPCore2 transports exercise AnyIO streaming,
+cancellation with peer/response closure, reuse after cancellation, truncated
+stream `RemoteProtocolError` and cleanup. Frozen ACE source has no direct
+HTTPX/AnyIO imports and its model download uses synchronous Hub snapshots;
+these are transitive transport checks, not ACE generation validation.
+
+All 170 focused installer, lock-profile and Wan sidecar tests pass. Full heavy
+Torch/native environments, production model weights, audio/video generation and
+quality were not exercised in this bounded helper update. No provider calls,
+ambient credentials or live instance data were used.

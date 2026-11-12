@@ -17,6 +17,9 @@
 #     --generate-hashes --no-header --annotation-style line \
 #     --exclude-newer <UTC date at least 7 days ago> -o "$LOCK")
 # then check the result against OSV (including MAL- malicious-package records).
+# The bounded AnyIO refresh uses uv 0.13.7 and cutoff 2026-11-05T00:00:00Z;
+# preserve all other versions, markers and hash blocks. See the bounded Wan/ACE
+# helper section in docs/PYTHON_RUNTIME_REFRESH.md for the selective recipe.
 absl-py==2.5.1 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:286e71c82c1a38e75bbcf185f9b37d0305ad7786535107cb49bf4df9ff2e1f95 \
     --hash=sha256:721200f2f0e9960f2ca9dc3a2a706b201f5f75d812c158f059cbbe29eeafbdb8
@@ -200,9 +203,9 @@ annotated-doc==0.0.5 ; platform_machine == 'arm64' and sys_platform == 'darwin' 
     --hash=sha256:117bac03a25ede5df5440e855b32d556049ca169ead221505badf432fed4b101 \
     --hash=sha256:c7e58ce09192557605d8bbd92836d7e1d520ac9580096042c0bfd197efacf1bb
     # via typer
-anyio==4.15.1 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
-    --hash=sha256:6152fdbbf9a77fdec97731721bebf7c4c44f7c29b424b0065826173efc7ed101 \
-    --hash=sha256:9f28306018cbd6d329e64a36d58256edff76dd996fe423bc957326e578b82a94
+anyio==4.16.0 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
+    --hash=sha256:59bb03251907983d1603d27c3087ddb1e93299ea2163adcdba37899a4fb12ffb \
+    --hash=sha256:c66ae634e0b8228396b801741beb3294326d4b6102f7bba4041c0dfb58c29026
     # via httpx2
 attrs==26.1.0 ; platform_machine == 'arm64' and sys_platform == 'darwin' \
     --hash=sha256:c647aa4a12dfbad9333ca4e71fe62ddc36f4e63b2d260a37a8b83d2f043ac309 \
