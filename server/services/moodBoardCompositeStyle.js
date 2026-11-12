@@ -72,8 +72,11 @@ Rules:
 - Output ONLY valid JSON.
 - prompt is the COMPLETE render text, paragraph-style. Start with the visual treatment, not a subject or scene. Never prefix it with Create, Generate, Make, or Render an image of.
 - No motion language. This prompt is for a still poster.
-- Preserve observed optical qualities such as softness, defocus, bloom, grain and color misregistration. Do not normalize them into a sharper or cleaner look.
-- Negative prompts must not contradict those observed qualities; an avoid such as excessive blur does not mean all softness should be removed.
+- Prioritize the diagnostic shared traits, not a generic genre label or a balanced inventory of every detail. Lead with what makes these references look different from other images in that genre.
+- Preserve observed optical qualities such as softness, defocus, bloom, grain and color misregistration, including their stated strength and distribution. Do not downgrade conspicuous whole-frame effects to subtle, gentle, restrained or selective effects, or add a requirement to preserve crisp detail unless the analyses support it. Do not normalize the board into a sharper or cleaner look.
+- Distinguish depicted materials from reproduction texture. Paper tooth, aged print, film grain, optical diffusion and analog-video color bleed are different looks; do not substitute one for another or invent a medium from an era or genre label. Preserve dark-area coverage, palette relationships and contrast behavior, not just color names. Optical diffusion is not faded color, desaturation or a textured substrate; do not infer one from another.
+- Preserve the dominant surface and color-field treatment. Keep local or minority details subordinate: fine hatching, mottling or ornate edges in a few regions must not become an all-over finish. State relative coverage where it matters, so a subject-free poster retains the observed balance of simple areas, negative space and detail, including their lightness and coverage, rather than filling every region with decorative texture.
+- Resolve conflicting per-item negatives against the positive visual evidence. Never carry a negative that erases a diagnostic shared trait, even when phrased as excessive blur or excessive grain. Drop subject-specific exclusions and generic quality negatives that would constrain unrelated subjects. Avoid only incompatible visual treatments.
 - An empty negativePrompt is valid when the analyses share no consistent avoid.`;
 }
 
