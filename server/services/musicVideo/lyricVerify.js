@@ -1,7 +1,7 @@
 /** User-requested, transient comparison of a lyric sheet with its vocal stem. */
 import { ServerError } from '../../lib/errorHandler.js';
 import { decodeSourceToWav } from './lyricAlign.js';
-import { detectVocalPhrases, findSilentWords, mergeTranscripts, vocalPcm, wavDurationSec } from './lyricAlignCore.js';
+import { compareLyricPlacement, detectVocalPhrases, extendVoicedWordEnds, findSilentWords, mergeTranscripts, vocalPcm, wavDurationSec } from './lyricAlignCore.js';
 import { resolveVocalStemPath, vocalStemMasterChanged } from './vocalStem.js';
 import { resolveMasterAudioPath } from './render.js';
 
@@ -23,11 +23,11 @@ export async function verifyPrerequisites(project, { resolveStem = resolveVocalS
   return stem;
 }
 
-/** Compare only voiced regions outside the union of timed line spans. */
+/** Independently check placement inside timed spans, plus uncovered vocals. */
 export async function verifyLyricSheet(project, stemPath, { onProgress = () => {}, isCancelled = () => false, signal, deps = {} } = {}) {
   const checkCancel = () => { if (isCancelled()) throw Object.assign(new Error('cancelled'), { canceled: true }); };
   const decode = deps.decode || decodeSourceToWav;
-  const resolveTranscriber = deps.resolveTranscriber || (async onDownloadProgress => (await import('./lyricTranscriber.js')).resolveAlignmentTranscriber({ onDownloadProgress }));
+  const resolveTranscriber = deps.resolveTranscriber || (async onDownloadProgress => (await import('./lyricTranscriber.js')).resolveAlignmentTranscriber({ onDownloadProgress, requireDtw: true }));
   onProgress({ stage: 'decoding' });
   const wav = await decode(stemPath);
   checkCancel();
@@ -54,22 +54,47 @@ export async function verifyLyricSheet(project, stemPath, { onProgress = () => {
   }), [phrase])).filter(phrase => phrase.endSec - phrase.startSec >= 0.6);
   const silent = findSilentWords(cues, pcm);
   const unsungCues = cues.filter(cue => validWords(cue).length === (cue.words || []).length && cue.words.every((_, index) => silent.some(word => word.cueId === cue.id && word.wordIndex === index))).map(cue => ({ cueId: cue.id, text: cue.text }));
-  const extraPhrases = [];
-  if (regions.length) {
-    onProgress({ stage: 'loading-model' });
-    const transcriber = await resolveTranscriber(download => onProgress({ stage: 'downloading-model', percent: download.percent }));
-    try {
-      for (const [index, region] of regions.entries()) {
-        checkCancel();
-        onProgress({ stage: 'transcribing', current: index + 1, total: regions.length });
-        const words = await transcriber.transcribe(wav, { startSec: Math.max(0, region.startSec - 0.2), endSec: Math.min(wavDurationSec(wav), region.endSec + 0.2), prompt: '', isCancelled, signal });
-        checkCancel();
-        extraPhrases.push({ ...region, text: mergeTranscripts(words, [], '').map(word => word.text.trim()).join(' ') });
-      }
-    } finally {
-      await transcriber.release?.();
+  const extraPhrases = [], misplacedCues = [];
+  const uncheckedCues = (project.lyricCues || []).filter(cue => !validWords(cue).length).map(cue => ({ cueId: cue.id, text: cue.text }));
+  // A few neighbouring lines supply context without letting a repeated chorus
+  // elsewhere in the song steal this occurrence. Padding allows a shifted beat.
+  const windows = [];
+  for (const cue of cues) {
+    const words = validWords(cue);
+    const start = words[0].startSec, end = words.at(-1).endSec;
+    const last = windows.at(-1);
+    if (last && last.cues.length < 3 && end - last.startSec < 20 && start - last.endSec < 3) {
+      last.cues.push(cue);
+      last.endSec = Math.max(last.endSec, end);
+    } else windows.push({ cues: [cue], startSec: start, endSec: end });
+  }
+  onProgress({ stage: 'loading-model' });
+  const transcriber = await resolveTranscriber(download => onProgress({ stage: 'downloading-model', percent: download.percent }));
+  try {
+    for (const [index, window] of windows.entries()) {
+      checkCancel();
+      onProgress({ stage: 'checking-placement', current: index + 1, total: windows.length });
+      const heard = await transcriber.transcribe(wav, {
+        startSec: Math.max(0, window.startSec - 1.5), endSec: Math.min(wavDurationSec(wav), window.endSec + 1.5),
+        prompt: window.cues.map(cue => cue.text).join('\n'), isCancelled, signal,
+      });
+      checkCancel();
+      const placement = compareLyricPlacement(window.cues, heard);
+      misplacedCues.push(...placement.misplacedCues.map(cue => ({ ...cue, words: extendVoicedWordEnds([cue], pcm)[0].words })));
+      uncheckedCues.push(...placement.uncheckedCues);
     }
+    for (const [index, region] of regions.entries()) {
+      checkCancel();
+      onProgress({ stage: 'transcribing', current: index + 1, total: regions.length });
+      const words = await transcriber.transcribe(wav, { startSec: Math.max(0, region.startSec - 0.2), endSec: Math.min(wavDurationSec(wav), region.endSec + 0.2), prompt: '', isCancelled, signal });
+      checkCancel();
+      extraPhrases.push({ ...region, text: mergeTranscripts(words, [], '').map(word => word.text.trim()).join(' ') });
+    }
+  } finally {
+    await transcriber.release?.();
   }
   checkCancel();
-  return { extraPhrases, unsungCues, stemMasterFilename: project.vocalStemMasterFilename };
+  return { extraPhrases, unsungCues, misplacedCues, uncheckedCues,
+    passed: !extraPhrases.length && !unsungCues.length && !misplacedCues.length && !uncheckedCues.length,
+    stemMasterFilename: project.vocalStemMasterFilename };
 }

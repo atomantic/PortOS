@@ -480,16 +480,33 @@ describe('alignProjectLyrics', () => {
     expect(h.updateProject).not.toHaveBeenCalled();
   });
 
+  it('extends continuously sung word tails, preserves silence and flags weak acoustic matches', async () => {
+    const word = (w, startSec, conf = 'matched') => ({ w, startSec, endSec: startSec + 0.2, conf });
+    const words = [[word('bright', 1), word('morning', 2)], [word('quiet', 3), word('river', 4)], [word('bright', 5, 'interpolated'), word('morning', 6, 'interpolated')]];
+    const record = { ...project, vocalStemFilename: 'stem.wav', lyricCues: words.map((line, id) => ({ id: String(id), text: line.map(w => w.w).join(' ') })) };
+    const h = harness(vi.fn(), record, { resolveAudio: async () => ({ path: 'stem.wav', source: 'vocal-stem' }) });
+    const stem = encodePcm16Wav(16000 * 7);
+    for (const [start, end] of [[1, 2.2], [3, 3.2], [4, 4.2], [5, 6.2]]) {
+      for (let i = start * 16000; i < end * 16000; i++) stem.writeInt16LE(5000, 44 + i * 2);
+    }
+    h.decodeAudio.mockResolvedValue(stem);
+    const saved = await h.run({ deps: { forceAlign: async () => words } });
+    expect(saved.lyricCues[0].words[0].endSec).toBe(2);
+    expect(saved.lyricCues[1].words[0].endSec).toBe(3.2);
+    expect(saved.lyricCues[2]).toMatchObject({ suspect: true, matched: 0 });
+    expect(saved.lyricCues[2].words[0].endSec).toBe(6);
+  });
+
   it('re-aligns one stem line preserving current director edits and the other occurrence', async () => {
     const record = { ...project, vocalStemFilename: 'stem.wav', lyricCues: [
       { id: 'a', text: 'walking home', startSec: 1, endSec: 2, suspect: true },
-      { id: 'b', text: 'walking home', startSec: 4, endSec: 5, suspect: true },
+      { id: 'b', text: 'walking home', startSec: 4, endSec: 5, suspect: true, words: [{ w: 'walking', startSec: 4, endSec: 4.2, conf: 'matched' }, { w: 'home', startSec: 4.5, endSec: 5, conf: 'matched' }] },
     ] };
     const h = harness(vi.fn(), record, {
       resolveAudio: async () => ({ path: 'stem.wav', source: 'vocal-stem' }),
     });
     const stem = encodePcm16Wav(16000 * 6);
-    for (let i = 16000; i < 32000; i++) stem.writeInt16LE(5000, 44 + i * 2);
+    for (let i = 16000; i < 80000; i++) stem.writeInt16LE(5000, 44 + i * 2);
     h.decodeAudio.mockResolvedValue(stem);
     const forceAlign = vi.fn(async () => {
       record.lyricCues = [{ ...record.lyricCues[0], startSec: 1.2, endSec: 2.5 }, record.lyricCues[1]];

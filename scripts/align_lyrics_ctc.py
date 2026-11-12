@@ -115,7 +115,7 @@ def targets_for_lines(lines, dictionary):
     return tokens, slots
 
 
-def word_times(lines, slots, spans, frame_sec):
+def word_times(lines, slots, spans, frame_sec, emissions=None):
     words = []
     for start, end, original in slots:
         words.append({'w': original, 'startSec': round(spans[start].start * frame_sec, 3),
@@ -124,7 +124,19 @@ def word_times(lines, slots, spans, frame_sec):
     for line in lines:
         result.append(words[cursor:cursor + len(line)])
         cursor += len(line)
-    return result
+    if emissions is None:
+        return result
+    # Average each letter's lit frames first, then letters within the line.
+    # Blanks and free stars must not make a weakly heard line look confident.
+    scores, cursor = [], 0
+    for line in lines:
+        letters = []
+        for start, end, _ in slots[cursor:cursor + len(line)]:
+            for span in spans[start:end]:
+                letters.append(float(emissions[span.start:span.end, span.token].mean()))
+        scores.append(sum(letters) / len(letters) if letters else None)
+        cursor += len(line)
+    return {'lines': result, 'lineScores': scores}
 
 
 def forced_align(log_probs, targets, blank=BLANK):
@@ -317,7 +329,7 @@ def align(audio, lines, model_dir):
     spans = merge_tokens(forced_align(emission[0].numpy(), tokens))
     if [span.token for span in spans] != tokens:
         raise ValueError('CTC alignment did not preserve the transcript.')
-    return word_times(lines, slots, spans, HOP / SAMPLE_RATE)
+    return word_times(lines, slots, spans, HOP / SAMPLE_RATE, emission[0].numpy())
 
 
 class AudioTooShort(ValueError):

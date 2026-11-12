@@ -19,6 +19,7 @@ import {
   wavDurationSec,
   pickAlignmentPath,
   findSilentWords,
+  extendVoicedWordEnds,
 } from './lyricAlignCore.js';
 import { spreadVocableCues } from './lyricVocables.js';
 import { relabelAnalysisSections } from '../../lib/lyricMarkers.js';
@@ -236,7 +237,7 @@ export async function alignProjectLyrics(projectId, options = {}) {
     if (!forcedWords) return alignDirectorWords(entries, recognized).map((entry) => ({ ...entry, suspect: false }));
     return entries.map((entry, index) => {
       const words = forcedWords[index];
-      return { ...entry, words, matched: words.length ? 1 : 0, suspect: compressedWords(words),
+      return { ...entry, words, matched: words.length ? words.filter(word => word.conf === 'matched').length / words.length : 0, suspect: compressedWords(words) || words.some(word => word.conf !== 'matched'),
         startSec: entry.startSec ?? words[0]?.startSec ?? null,
         endSec: entry.endSec ?? words.at(-1)?.endSec ?? null };
     });
@@ -251,6 +252,10 @@ export async function alignProjectLyrics(projectId, options = {}) {
   }
   // CTC cannot anchor held oohs/ahs; re-time those runs from the stem energy.
   if (stemPcm && !cueId) nextCues = spreadVocableCues(nextCues, stemPcm, wavDurationSec(wav));
+  if (stemPcm) {
+    const extended = extendVoicedWordEnds(nextCues, stemPcm);
+    nextCues = nextCues.map((entry, index) => !cueId || entry.id === cueId ? extended[index] : entry);
+  }
   // Words placed where the vocal stem is silent are flagged on their line, not
   // refused: the director needs the timings saved to hear and fix them.
   const silentWords = stemPcm ? findSilentWords(nextCues, stemPcm) : [];

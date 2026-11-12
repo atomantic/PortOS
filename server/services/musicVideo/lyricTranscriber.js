@@ -40,6 +40,7 @@ import {
   lyricAlignChunkSec,
   mergeChunkWords,
   parseWhisperCliWords,
+  parseWhisperDtwWords,
   planAudioChunks,
   sliceWav,
   wavDurationSec,
@@ -108,8 +109,9 @@ async function ensureAlignmentModel({ configuredModelPath = null, download, onDo
 }
 
 /** whisper-cli argv for one WAV file; JSON lands at `${outBase}.json`. */
-function whisperCliArgs({ modelPath, wavPath, outBase, language = 'en', prompt = '' }) {
+function whisperCliArgs({ modelPath, wavPath, outBase, language = 'en', prompt = '', dtw = false }) {
   const args = ['-m', modelPath, '-f', wavPath, '-l', language, '-ml', '1', '-sow', '-ojf', '-of', outBase, '-np'];
+  if (dtw) args.push('-dtw', 'large.v3.turbo', '-nfa');
   if (prompt) args.push('--prompt', prompt);
   return args;
 }
@@ -128,7 +130,7 @@ function regionOf(wav, { startSec, endSec } = {}) {
 }
 
 /** One-shot whisper-cli transcriber. */
-function createCliTranscriber({ bin, modelPath, language = 'en', run = runStreamingCommand }) {
+function createCliTranscriber({ bin, modelPath, language = 'en', dtw = false, run = runStreamingCommand }) {
   return {
     kind: 'whisper-cli',
     async transcribe(wav, { startSec, endSec, prompt = '', isCancelled, signal } = {}) {
@@ -138,7 +140,7 @@ function createCliTranscriber({ bin, modelPath, language = 'en', run = runStream
         const wavPath = join(dir, 'audio.wav');
         const outBase = join(dir, 'words');
         await writeFile(wavPath, region.whole ? wav : sliceWav(wav, region.startSec, region.endSec));
-        const result = await run(bin, whisperCliArgs({ modelPath, wavPath, outBase, language, prompt }), null, { timeoutMs: CLI_TIMEOUT_MS, isCancelled: isCancelled || signal ? () => Boolean(isCancelled?.() || signal?.aborted) : undefined });
+        const result = await run(bin, whisperCliArgs({ modelPath, wavPath, outBase, language, prompt, dtw }), null, { timeoutMs: CLI_TIMEOUT_MS, isCancelled: isCancelled || signal ? () => Boolean(isCancelled?.() || signal?.aborted) : undefined });
         if (!result?.success) {
           console.error(`❌ whisper-cli failed: ${result?.error || 'unknown error'}`);
           throw new ServerError(`whisper-cli could not transcribe the song: ${result?.error || 'unknown error'}`, { status: 502, code: 'LYRIC_ALIGN_WHISPER_FAILED' });
@@ -148,7 +150,7 @@ function createCliTranscriber({ bin, modelPath, language = 'en', run = runStream
         if (!parsed) {
           throw new ServerError('whisper-cli wrote no readable word timings.', { status: 502, code: 'LYRIC_ALIGN_WHISPER_FAILED' });
         }
-        return parseWhisperCliWords(parsed).map((word) => ({
+        return (dtw ? parseWhisperDtwWords(parsed) : parseWhisperCliWords(parsed)).map((word) => ({
           ...word,
           startSec: word.startSec + region.startSec,
           endSec: word.endSec + region.startSec,
@@ -273,6 +275,7 @@ export async function resolveAlignmentTranscriber(deps = {}) {
     startServer = startTemporaryWhisperServer,
     transcribe = sttTranscribe,
     onDownloadProgress = null,
+    requireDtw = false,
   } = deps;
   const cfg = await voiceConfig().catch(() => null);
   const language = cfg?.stt?.language || 'en';
@@ -280,9 +283,10 @@ export async function resolveAlignmentTranscriber(deps = {}) {
 
   const cli = await firstOnPath(WHISPER_CLI_NAMES, which);
   if (cli) {
-    const modelPath = await ensureModel({ configuredModelPath, onDownloadProgress });
-    return createCliTranscriber({ bin: cli, modelPath, language, run: runCommand });
+    const modelPath = await ensureModel({ configuredModelPath: requireDtw ? null : configuredModelPath, onDownloadProgress });
+    return createCliTranscriber({ bin: cli, modelPath, language, dtw: requireDtw, run: runCommand });
   }
+  if (requireDtw) throw new ServerError('Checking word placement needs whisper-cli with DTW support. Install whisper.cpp (macOS: brew install whisper-cpp), then run the check again.', { status: 503, code: 'LYRIC_VERIFY_DTW_UNAVAILABLE' });
   const endpoint = cfg?.stt?.endpoint || null;
   if (endpoint && await probeEndpoint(endpoint)) {
     return createEndpointTranscriber({ endpoint, kind: 'stt-endpoint', transcribe });
