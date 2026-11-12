@@ -1353,3 +1353,59 @@ tokens/telemetry. No production weights, model inference, live providers or
 camera/audio streams were used. This establishes helper/API compatibility, not
 video/audio quality or a fresh source-build smoke test. Remaining model-library,
 Hub and native compatibility constraints stay separate under #15769.
+
+## Twenty-fourth-slice 3D Metal CLI and text helpers (2026-11-12)
+
+Both Metal profiles advance **Click 8.4.1 → 8.5.0**, **MarkupSafe 3.0.3 →
+3.0.4**, **Pygments 2.20.0 → 2.21.0** and **Regex 2026.5.9 → 2026.9.29**.
+**Typer stays at 0.25.1**: the frozen Hub 1.16.4 requires
+`typer>=0.20.0,<0.26.0`, and full resolution rejects Typer 0.27.3. Advancing
+Typer requires a separately tested Hub migration, not a metadata override.
+No native source revision, renderer pin or Pixal CLI-only Pillow override
+changes here. The generator commands use argparse, not Click or Typer; the
+latter are exercised through their actual retained Hub CLI consumer.
+
+Both complete locks were regenerated with hash-verified uv 0.13.7, CPython
+3.13/macOS 26+ ARM64, binary-only artifacts and seven-day cutoff
+**2026-11-05T00:00:00Z**. All 92 Pixal and 52 TRELLIS companion versions,
+markers and hash sets remain unchanged. New versions have complete generated
+artifact hash sets, including other platforms: Pixal has 96 entries/572
+hashes; TRELLIS has 56 entries/361 hashes. The union contains 97 registry
+identities/575 hashes. Every hash matches an official unyanked artifact
+uploaded before the cutoff. Fresh OSV/MAL queries covered all registry
+identities, 10 source-package identities and 13 immutable commits (120
+queries), with no matches.
+
+Baseline and candidate native CPython 3.13.18 tests use exact-hash
+**35-package subclosures**, not complete runtime installs. Unmodified pinned
+Pixal/TRELLIS generator scripts handle help and invalid arguments without
+entering inference; Pixal's real parser also accepts synthetic configuration
+and a Unicode output name. Frozen Hub CLI help, subcommand help and invalid
+option handling exercise Typer/Click. Transformers 5.10.1's actual chat
+renderer exercises escaped Unicode, JSON, assistant spans and sandbox
+rejection; its Blenderbot tokenizer and Whisper text normalizer exercise
+Regex with synthetic Unicode text. Rich syntax, Markdown and traceback
+renderers exercise Pygments. These retained-library seams do not imply a
+Blenderbot, Whisper or chat-template path in 3D inference. No pretrained
+weights, external requests, model inference or devices were used; caches
+were temporary, implicit tokens/telemetry/update checks disabled, and network
+connections rejected.
+
+Both profile artifact variants were tested separately while reusing two
+environments: the baseline differs in NumPy and Regex wheel hashes, and the
+candidate differs only in its preserved NumPy hash. Full profile resolution
+and wheel installation dry plans passed, as did the five focused
+installer/profile/runner test files (171 tests). Full renderer installation,
+Metal inference, model-backed background removal and GLB quality remain
+outside this bounded helper refresh.
+
+The combined state with the preceding timm/PLY/Ninja maintenance slice was
+resolved again: complete regenerated locks were byte-identical, and only
+these four helper identities differ from that merged base. A bounded
+39-package candidate subclosure includes all three maintenance packages;
+both profiles' exact NumPy artifact variants passed the actual helper
+probes again, plus real timm CPU model/preprocessing, pinned upstream PLY
+roundtrips and Torch/Ninja compile/incremental/failure probes. Candidate
+metadata checks passed. Original immutable baseline evidence remains
+applicable; the combined candidate's tokenizer, normalization and template
+outputs match it exactly. This is still not a complete renderer install.
