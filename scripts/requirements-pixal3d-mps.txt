@@ -37,7 +37,7 @@ huggingface-hub==1.16.4
 idna==3.20
 imageio==2.37.3
 imageio-ffmpeg==0.8.1
-importlib-metadata==9.0.0
+importlib-metadata==10.1.0
 jinja2==3.1.6
 kiwisolver==1.5.1
 kornia==0.8.2
@@ -57,7 +57,7 @@ orjson==3.11.9
 packaging==26.2
 pandas==2.3.3
 pillow==13.0.0
-pip==26.2.2
+pip==26.3
 plyfile==1.1.5
 psutil==7.2.2
 pydantic==2.13.4
@@ -96,7 +96,7 @@ typing-extensions==4.16.0
 tzdata==2026.2
 urllib3==2.8.0
 uvicorn==0.48.0
-wheel==0.46.2
+wheel==0.48.0
 xatlas==0.0.11
-zipp==4.1.0
+zipp==4.1.2
 zstandard==0.25.0

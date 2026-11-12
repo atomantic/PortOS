@@ -141,3 +141,9 @@ The CLI/text helper refresh retains Hub 1.16.4 and its Typer <0.26 constraint.
 See [3D Metal CLI/text helpers](PYTHON_RUNTIME_REFRESH.md#twenty-fourth-slice-3d-metal-cli-and-text-helpers-2026-11-12)
 for the four compatible upgrades, complete-lock audits and synthetic caller
 validation, which does not certify model inference or rendering.
+
+The packaging-tool refresh preserves native source revisions and other build
+pins, validating real isolated/offline hash installs and synthetic native
+source/editable builds.
+See [3D Metal packaging and installer tooling](PYTHON_RUNTIME_REFRESH.md#3d-metal-packaging-and-installer-tooling)
+for exact scope, full-lock audits and the limits of installer-only coverage.
