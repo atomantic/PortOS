@@ -1,9 +1,11 @@
 /**
  * DistroKid's store genres, and a first guess at a song's from its own style
- * words (the Suno style prompt and the musical description the autonomous run
- * wrote). Pure: project in, `{ primary, secondary }` out. The director can
+ * words (the song's Suno style, and the style and musical description an
+ * autonomous run wrote). Pure: project in, `{ primary, secondary }` out. The director can
  * always pick another; the adapter matches DistroKid's option by its text.
  */
+
+import { parseSongStyle } from './musicVideoCreativeContext.js';
 
 /**
  * The DistroKid answers that stay the same from release to release (the
@@ -50,9 +52,12 @@ const STYLE_WORDS = [
   [/\b(pop|synth[\s-]?pop|hyperpop)\b/gi, 'Pop'],
 ];
 
+// `concept.songStyle` is the Suno style of a song picked from the library (no autonomous run wrote
+// one); only what it sounds like counts, since its minus-prefixed terms name genres it is not.
 const styleText = (project) => {
   const out = project?.autonomousRun?.output || {};
-  return [out.sunoStyle, out.musicalDescription, project?.concept?.genre].filter((s) => typeof s === 'string' && s.trim()).join(' \n ');
+  return [out.sunoStyle, out.musicalDescription, project?.concept?.genre, parseSongStyle(project?.concept?.songStyle).sound]
+    .filter((s) => typeof s === 'string' && s.trim()).join(' \n ');
 };
 
 /** `{ primary, secondary }` store genres for the song, either null when its style names none. */

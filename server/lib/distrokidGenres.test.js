@@ -11,6 +11,11 @@ describe('suggestDistrokidGenres', () => {
     expect([primary, secondary].every((g) => DISTROKID_GENRES.includes(g))).toBe(true);
   });
 
+  it('reads the style of a song picked from the library, but not the genres that style excludes', () => {
+    expect(suggestDistrokidGenres({ concept: { songStyle: 'electro-punk, crunchy synth bass' } })).toEqual({ primary: 'Electronic', secondary: 'Punk' });
+    expect(suggestDistrokidGenres({ concept: { songStyle: 'dreamy folk, -country, -pop' } })).toEqual({ primary: 'Folk', secondary: null });
+  });
+
   it('does not read k-pop as pop, and suggests nothing for a song with no style words', () => {
     expect(suggestDistrokidGenres(song('k-pop anthem'))).toEqual({ primary: 'K-Pop', secondary: null });
     // ...but a word that merely ends in k still says pop.
