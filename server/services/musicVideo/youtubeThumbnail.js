@@ -7,7 +7,8 @@
  * over it by code in the song's cover lettering, laid out for a feed (large,
  * to one side, clear of the duration badge; lib/musicVideoCoverOverlay.js).
  * The YouTube post uploads it in place of a bare frame. No AI call: the
- * lettering is the cover's design, and a new design re-sets this too.
+ * lettering is the cover's design (the artist's saved style for a song with
+ * none of its own), and a new design re-sets this too.
  *
  *   youtubeThumbnail: { filename, source: { kind, filename }, title,
  *                       focusX, focusY, lettering, composedAt }
@@ -37,7 +38,7 @@ import { ensureDir, PATHS } from '../../lib/fileUtils.js';
 import { safeUnder } from '../../lib/ffmpeg.js';
 import { composeYoutubeThumbnail } from './coverArtCompose.js';
 import { listCoverFonts, registerCoverFonts } from './coverFonts.js';
-import { defaultImageRoute, projectCoverArt, sourcePath } from './coverArt.js';
+import { defaultImageRoute, projectCoverArt, songCoverDesign, sourcePath } from './coverArt.js';
 import { promptAddition } from '../../lib/modelInput.js';
 import { trimTo } from '../../lib/textUtils.js';
 import { musicVideoEvents } from './events.js';
@@ -108,7 +109,8 @@ export async function composeProjectYoutubeThumbnail(projectId, { source = null,
   const fonts = await listCoverFonts();
   await registerCoverFonts(fonts);
   const filename = `youtube-thumb-${String(projectId).slice(3, 11)}-${randomUUID().slice(0, 8)}.jpg`;
-  await composeYoutubeThumbnail({ ...next, design: art.design || null, fonts, source: path, out: safeUnder(PATHS.videoThumbnails, filename) });
+  const design = next.lettering ? await songCoverDesign(projectId, art) : art.design || null;
+  await composeYoutubeThumbnail({ ...next, design, fonts, source: path, out: safeUnder(PATHS.videoThumbnails, filename) });
   // The JPEG is written in place; the row that first names it commits under a backup lease (#9982).
   const out = await withBackupAssetPublication(() => mutateProjectRecord(projectId, (current) => {
     const kit = projectPublishKit(current);

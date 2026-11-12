@@ -110,6 +110,22 @@ async function defaultTag() {
 }
 
 /**
+ * The design a song's lettering is set in, or null for the plain look. A song
+ * with no design of its own takes the artist's saved style and keeps it as its
+ * design, so the Lettering preview and every later re-set show what was
+ * rendered. `tag` is the artist on the cover (default: the last cover's, else
+ * the DistroKid account).
+ */
+export async function songCoverDesign(projectId, art, { tag } = {}) {
+  if (art.design) return art.design;
+  const style = await deps.artistStyle(tag ?? art.tag ?? await defaultTag()).catch(() => null);
+  if (!style?.design) return null;
+  await writeCoverArt(projectId, (current) => (current.design ? {} : { design: style.design }));
+  console.log(`🖼️ Music Video cover art ${String(projectId).slice(3, 11)}: lettering starts from the artist style (${style.name})`);
+  return style.design;
+}
+
+/**
  * Compose the cover from `source` with the title and tag, and make it the
  * release's cover. Unset fields keep the last cover's (title defaults to the
  * project name, tag to the DistroKid artist). `lettering: false` uses the
@@ -133,7 +149,8 @@ export async function composeProjectCoverArt(projectId, { source = null, title, 
   const fonts = await deps.fonts();
   await deps.registerFonts(fonts);
   const filename = `cover-${String(projectId).slice(3, 11)}-${randomUUID().slice(0, 8)}.jpg`;
-  await deps.compose({ ...next, design: art.design || null, fonts, source: path, out: safeUnder(PATHS.videoThumbnails, filename) });
+  const design = next.lettering ? await songCoverDesign(projectId, art, { tag: next.tag }) : art.design || null;
+  await deps.compose({ ...next, design, fonts, source: path, out: safeUnder(PATHS.videoThumbnails, filename) });
   // The JPEG is written in place; the row that first names it commits under a backup lease (#9982).
   const out = await withBackupAssetPublication(() => writeCoverArt(projectId, () => ({
     ...next, filename, composedAt: new Date().toISOString(), lastError: null,

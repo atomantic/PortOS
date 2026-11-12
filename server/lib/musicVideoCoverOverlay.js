@@ -37,8 +37,10 @@ export const COVER_DESIGN_OPTIONS = Object.freeze({
   tagLayout: ['opposite-corner', 'with-title'],
 });
 
+// The plain look a song is set in until it has a design. Small: a thumbnail sets its title 1.7x
+// larger, where medium ran three lines across the picture's faces.
 export const DEFAULT_COVER_DESIGN = Object.freeze({
-  layout: 'bottom-left', typeface: 'sans', weight: 'bold', letterCase: 'upper', scale: 'medium',
+  layout: 'bottom-left', typeface: 'sans', weight: 'bold', letterCase: 'upper', scale: 'small',
   tracking: 0.02, titleColor: '#ffffff', accentColor: '#ffffff', backdrop: 'fade', tagStyle: 'plain', rule: false,
   titleStyle: 'fill', tagLayout: 'opposite-corner',
 });
