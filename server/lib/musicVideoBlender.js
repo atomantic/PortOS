@@ -27,8 +27,9 @@ export const MUSIC_VIDEO_BLENDER_OPTION_TYPES = Object.freeze(['choice', 'boolea
 export const MUSIC_VIDEO_BLENDER_MAX_OPTIONS = 24;
 export const MUSIC_VIDEO_BLENDER_MAX_CHOICES = 32;
 export const MUSIC_VIDEO_BLENDER_OPTION_TEXT_MAX = 2000;
+export const MUSIC_VIDEO_BLENDER_MAX_HANDLE_SEC = 4;
 // Why a render is out of date, in the order the UI names them.
-export const MUSIC_VIDEO_BLENDER_STALE_REASONS = Object.freeze(['source', 'timing', 'settings', 'options', 'song']);
+export const MUSIC_VIDEO_BLENDER_STALE_REASONS = Object.freeze(['source', 'timing', 'handles', 'settings', 'options', 'song']);
 
 export const MUSIC_VIDEO_BLENDER_SETTING_LIMITS = Object.freeze({
   width: { min: 320, max: 7680 },
@@ -174,6 +175,30 @@ export function blenderShotFrameRange(shot, fps) {
   const startFrame = Math.round(shot.start * fps);
   const endFrame = Math.round(shot.end * fps);
   return { startFrame, endFrame, frameCount: Math.max(0, endFrame - startFrame) };
+}
+
+/** Normalized `{ in, out }` handle seconds declared on a shot (defaulting missing sides to 0). */
+export function normalizeBlenderHandles(handles) {
+  return {
+    in: Math.max(0, Number(handles?.in) || 0),
+    out: Math.max(0, Number(handles?.out) || 0),
+  };
+}
+
+/**
+ * A shot's handle frame ranges on `fps`:
+ * - `in`: `[startFrame - inFrames, startFrame)` before the shot starts
+ * - `out`: `[endFrame, endFrame + outFrames)` after the shot ends
+ */
+export function blenderShotHandleRanges(shot, fps) {
+  const { startFrame, endFrame } = blenderShotFrameRange(shot, fps);
+  const handles = normalizeBlenderHandles(shot?.handles);
+  const inFrames = Math.round(handles.in * fps);
+  const outFrames = Math.round(handles.out * fps);
+  return {
+    in: { startFrame: startFrame - inFrames, endFrame: startFrame, frameCount: inFrames },
+    out: { startFrame: endFrame, endFrame: endFrame + outFrames, frameCount: outFrames },
+  };
 }
 
 /** `'text'` (editable through the API), `'binary'` (listed only), or null for a path src/ may not hold. */

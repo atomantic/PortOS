@@ -13,7 +13,7 @@
  * Clearing preserves videos, stills and posters for shots still in the film,
  * plus every cut and log. Removed shots lose their whole render folder.
  */
-import { lstat, readdir, rm } from 'node:fs/promises';
+import { lstat, readdir, rm, rmdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { MUSIC_VIDEO_BLENDER_SHOT_ID } from '../../lib/musicVideoBlender.js';
 import { assertInsideWithoutSymlinks, blenderRefusal, blenderRendersDir, blenderSrcDir, blenderWorkspaceDir, readBlenderJson } from './workspace.js';
@@ -24,6 +24,7 @@ import { announceBlenderState } from './record.js';
 import { withBlenderRenderAdmission } from './queue.js';
 
 const isFile = async (path) => (await lstat(path).catch(() => null))?.isFile() === true;
+const SHOT_FRAME_FILE = /^frame_\d{6,}\.(?:jpg|png)$/;
 
 /** `{ bytes, files }` of every regular file under `directory` (links are neither followed nor counted). */
 async function measure(directory) {
@@ -71,6 +72,14 @@ async function clearableFolders(owner) {
   return { frames, removedShots };
 }
 
+async function clearableShotFrames(folder) {
+  const entries = await readdir(folder, { withFileTypes: true }).catch(() => []);
+  const files = entries.filter((entry) => entry.isFile() && SHOT_FRAME_FILE.test(entry.name)).map((entry) => join(folder, entry.name));
+  let bytes = 0;
+  for (const file of files) bytes += (await lstat(file).catch(() => null))?.size ?? 0;
+  return { files, bytes };
+}
+
 /**
  * `{ sourceBytes, rendersBytes, frameBytes, frameFiles, clearableBytes, removedShots }`
  * for a project's Blender workspace. Walks the workspace: asked for on demand,
@@ -88,9 +97,8 @@ export async function getBlenderDiskUsage(owner) {
     }
   }
   let clearableBytes = 0;
-  for (const folder of [...clearable.frames, ...clearable.removedShots.map((shotId) => join(blenderRendersDir(owner), shotId))]) {
-    clearableBytes += (await measure(folder)).bytes;
-  }
+  for (const folder of clearable.frames) clearableBytes += (await clearableShotFrames(folder)).bytes;
+  for (const shotId of clearable.removedShots) clearableBytes += (await measure(join(blenderRendersDir(owner), shotId))).bytes;
   return {
     sourceBytes: source.bytes, rendersBytes: renders.bytes, frameBytes: frames.bytes, frameFiles: frames.files,
     clearableBytes, removedShots: clearable.removedShots,
@@ -110,7 +118,15 @@ async function clearFrames(owner) {
   }
   const before = await getBlenderDiskUsage(owner);
   const { frames, removedShots } = await clearableFolders(owner);
-  for (const folder of [...frames, ...removedShots.map((shotId) => join(blenderRendersDir(owner), shotId))]) {
+  for (const folder of frames) {
+    await assertInsideWithoutSymlinks(blenderWorkspaceDir(owner), folder);
+    const { files } = await clearableShotFrames(folder);
+    for (const file of files) await rm(file, { force: true });
+    // Remove the now-empty frames folder; handle frames stay for cuts and the final render.
+    await rmdir(folder).catch(() => {});
+  }
+  for (const shotId of removedShots) {
+    const folder = join(blenderRendersDir(owner), shotId);
     await assertInsideWithoutSymlinks(blenderWorkspaceDir(owner), folder);
     await rm(folder, { recursive: true, force: true });
   }

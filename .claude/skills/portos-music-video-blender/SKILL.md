@@ -36,8 +36,16 @@ def frame(ctx, shot, t, frame):       # optional: pose everything for song time 
 ```
 
 Each shot: `id` (letters, digits, `_`, `-`; unique), `label`, `start`, `end` (seconds on the song, on the frame
-grid, in order, no overlap), and for the storyboard `summary`, `action`, `staging`, `camera`, `transition`.
+grid, in order, no overlap), optional `handles: {"in": sec, "out": sec}` (each 0–4 s on the frame grid, with
+`handles.in <= start`), and for the storyboard `summary`, `action`, `staging`, `camera`, `transition`.
 Imported source files are tracked automatically; use `deps` (files and folders under `src/`) to add data and assets.
+
+**Handles & cut effects.** Assembled cuts, excerpts and the final draw `fade-black` inside each shot's own frames,
+`beat-toggle` using the incoming shot's `in` handle, and `dissolve` centred on the cut by blending the outgoing `out`
+handle with the incoming `in` handle (wipes stay undrawn). A shot declaring `handles` gets extra frames rendered for
+`[start - in, start)` and `[end, end + out)` by calling `frame()` for those times (so the scene must be valid slightly
+outside `[start, end)`); changing only handles marks the shot stale (`handles`) and resumes existing frames. Missing
+handles for a dissolve or beat toggle block the final render (`409`).
 
 `ctx`: `song`, `options`, `fps`, `width`, `height`, `scale`, `samples`, `quality`, `engine`, `workspace`, `src`,
 `out_dir`, `shot`, `log()`, `seconds_to_frame()`, `frame_to_seconds()`.

@@ -212,4 +212,71 @@ print("ok")
 `;
     expect(execFileSync(python, ['-c', script, PY_DIR], { encoding: 'utf8', timeout: PY_SUBPROCESS_TIMEOUT_MS }).trim()).toBe('ok');
   }, PY_TEST_TIMEOUT_MS);
+
+  it('renders handle frames outside [start, end) via frame() and skips existing frames on resume', () => {
+    const script = `
+import contextlib, io, json, os, runpy, sys, tempfile
+from types import SimpleNamespace
+sys.dont_write_bytecode = True
+sys.path.insert(0, sys.argv[1])
+driver_path = os.path.join(sys.argv[1], "portos_blender_driver.py")
+scene = SimpleNamespace(
+    render=SimpleNamespace(image_settings=SimpleNamespace()),
+    eevee=SimpleNamespace(), frame_set=lambda frame: None,
+)
+def render(**kwargs):
+    with open(scene.render.filepath, "wb") as handle:
+        handle.write(b"frame")
+sys.modules["bpy"] = SimpleNamespace(
+    app=SimpleNamespace(version=(5, 0, 0)), context=SimpleNamespace(scene=scene),
+    ops=SimpleNamespace(wm=SimpleNamespace(read_factory_settings=lambda **kwargs: None),
+                        render=SimpleNamespace(render=render)),
+)
+film_source = """
+posed = []
+def describe(ctx):
+    return {"shots": [{"id": "s020", "start": 1.0, "end": 1.25, "handles": {"in": 0.125, "out": 0.125}}]}
+def build_shot(ctx, shot):
+    pass
+def frame(ctx, shot, t, frame):
+    posed.append((round(t, 6), frame))
+"""
+with tempfile.TemporaryDirectory() as root:
+    with open(os.path.join(root, "film.py"), "w", encoding="utf-8") as handle:
+        handle.write(film_source)
+    with open(os.path.join(root, "song.json"), "w", encoding="utf-8") as handle:
+        json.dump({}, handle)
+    job = {"mode": "describe", "fps": 24, "width": 320, "height": 180,
+           "src": root, "workspace": root, "out": os.path.join(root, "renders")}
+    job_path = os.path.join(root, "job.json")
+    with open(job_path, "w", encoding="utf-8") as handle:
+        json.dump(job, handle)
+    sys.argv = [driver_path, "--", job_path]
+    with contextlib.redirect_stdout(io.StringIO()):
+        driver = runpy.run_path(driver_path)
+    film = sys.modules["film"]
+    shot = {"id": "s020", "start": 1.0, "end": 1.25, "handles": {"in": 0.125, "out": 0.125}}
+    job["quality"] = "final"
+    with contextlib.redirect_stdout(io.StringIO()):
+        driver["render_shot"](job, film, {}, shot)
+    frames_dir = os.path.join(root, "renders", "s020", "final", "frames")
+    assert sorted(os.listdir(frames_dir)) == [
+        "frame_000024.png", "frame_000025.png", "frame_000026.png",
+        "frame_000027.png", "frame_000028.png", "frame_000029.png",
+        "handle_in_000021.png", "handle_in_000022.png", "handle_in_000023.png",
+        "handle_out_000030.png", "handle_out_000031.png", "handle_out_000032.png",
+    ]
+    assert film.posed == [
+        (round(f / 24, 6), f) for f in range(21, 33)
+    ]
+    film.posed.clear()
+    shot_grown = {"id": "s020", "start": 1.0, "end": 1.25, "handles": {"in": 0.125, "out": 0.25}}
+    job["resume"] = True
+    with contextlib.redirect_stdout(io.StringIO()):
+        driver["render_shot"](job, film, {}, shot_grown)
+    assert film.posed == [(round(f / 24, 6), f) for f in (33, 34, 35)]
+print("ok")
+`;
+    expect(execFileSync(python, ['-c', script, PY_DIR], { encoding: 'utf8', timeout: PY_SUBPROCESS_TIMEOUT_MS }).trim()).toBe('ok');
+  }, PY_TEST_TIMEOUT_MS);
 });

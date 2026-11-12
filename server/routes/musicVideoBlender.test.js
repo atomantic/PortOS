@@ -7,7 +7,7 @@
  */
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { execFile } from '../lib/childProcess.js';
@@ -1151,5 +1151,59 @@ describe('Blender film fork', () => {
     expect(footage.body.composition.mode).toBe('composed');
     expect((await projects.getProject(footage.body.id)).blender).not.toHaveProperty('sceneMap');
     expect(existsSync(join(ROOT(), 'music-video', footage.body.id, 'blender'))).toBe(false);
+  });
+});
+
+describe('Blender film handles and dissolves', () => {
+  it('flags missing dissolve handles in problems, blocks final with 409, and resumes existing frames when only handles change', async () => {
+    await scaffold();
+    await syncFilm();
+    await renderAll('final');
+    const current = await projects.getProject(project.id);
+    const s010SceneId = current.blender.sceneMap.s010;
+    await projects.updateProject(project.id, {
+      scenes: current.scenes.map((scene) => (scene.sceneId === s010SceneId ? { ...scene, cutEffect: { style: 'dissolve', enabled: true, overlapSec: 0.5 } } : scene)),
+    });
+
+    const missing = await state();
+    expect(missing.manifest.problems).toEqual([
+      'Shot s010 needs 0.25 s of out handle for its dissolve',
+      'Shot s020 needs 0.25 s of in handle for its dissolve',
+    ]);
+    await expect(prepareBlenderFinal(await projects.getProject(project.id))).rejects.toMatchObject({
+      status: 409,
+      code: 'MUSIC_VIDEO_BLENDER_SHOTS_NOT_READY',
+      context: { problems: missing.manifest.problems },
+    });
+
+    // Adding handles marks only s010 and s020 stale with `handles`, never touching unrelated s030.
+    const withHandles = exampleManifest();
+    withHandles.shots[0].handles = { out: 0.25 };
+    withHandles.shots[1].handles = { in: 0.25 };
+    await syncFilm(withHandles);
+    const staleState = await state();
+    expect(staleState.manifest.problems).toEqual([]);
+    expect(staleState.renders.s010.final).toMatchObject({ stale: true, staleReasons: ['handles'] });
+    expect(staleState.renders.s020.final).toMatchObject({ stale: true, staleReasons: ['handles'] });
+    expect(staleState.renders.s030.final).toMatchObject({ stale: false, staleReasons: [] });
+
+    // Re-rendering resumes existing shot frames and writes only the 6 missing handle frames per shot.
+    const untouchedBefore = statSync(join(workspace(), 'renders', 's010', 'final', 'frames', 'frame_000000.png')).mtimeMs;
+    blender.fake.control.jobs.length = 0;
+    events.length = 0;
+    await request(app).post(api('/render')).send({ quality: 'final' });
+    await settled(2);
+    expect(blender.fake.control.jobs.map((job) => [job.shots[0].id, job.resume]).sort()).toEqual([['s010', true], ['s020', true]]);
+    expect(statSync(join(workspace(), 'renders', 's010', 'final', 'frames', 'frame_000000.png')).mtimeMs).toBe(untouchedBefore);
+    const s010Frames = readdirSync(join(workspace(), 'renders', 's010', 'final', 'frames'));
+    expect(s010Frames.filter((name) => name.startsWith('handle_out_'))).toHaveLength(6);
+
+    // Clearing finished frames removes shot frame PNGs while retaining handles so final assembly still sees them.
+    const cleared = await request(app).post(api('/frames/clear')).send({});
+    expect(cleared.status, JSON.stringify(cleared.body)).toBe(200);
+    expect(readdirSync(join(workspace(), 'renders', 's010', 'final', 'frames')).every((name) => name.startsWith('handle_out_'))).toBe(true);
+
+    const ready = await prepareBlenderFinal(await projects.getProject(project.id));
+    expect(ready.segments.some((segment) => segment.transition?.style === 'dissolve')).toBe(true);
   });
 });

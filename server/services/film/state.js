@@ -45,12 +45,16 @@ function manifestState(manifest, { settings, sceneMap }, timeline, sources) {
     options: manifest.options,
     shots: manifest.shots.map((shot) => ({
       id: shot.id, label: shot.label, start: shot.start, end: shot.end,
+      ...(shot.handles ? { handles: shot.handles } : {}),
       set: shot.set || '', summary: shot.summary || '', action: shot.action || '', staging: shot.staging || '',
       camera: shot.camera || '', transition: shot.transition || '',
       frames: blenderShotFrameRange(shot, settings.fps).frameCount,
       sceneId: sceneMap[shot.id] || null,
     })),
-    problems: blenderFilmProblems(manifest, { fps: settings.fps, durationSec: timeline.durationSec }),
+    problems: blenderFilmProblems(manifest, {
+      fps: settings.fps, durationSec: timeline.durationSec,
+      cutEffects: timeline.cutEffects?.(manifest) || [],
+    }),
     srcChanged: manifest.srcHash !== sources.tree,
   };
 }

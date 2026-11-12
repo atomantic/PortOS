@@ -166,6 +166,11 @@ def describe(job, film, song):
         if isinstance(shot, dict):
             for key in ("start", "end"):
                 shot[key] = snap_to_grid(shot.get(key), job["fps"])
+            handles = shot.get("handles")
+            if isinstance(handles, dict):
+                for side in ("in", "out"):
+                    if handles.get(side) is not None:
+                        handles[side] = snap_to_grid(handles.get(side), job["fps"])
     target = job.get("manifestOut") or os.path.join(os.environ.get("PORTOS_WORKER_OUTPUT", job["workspace"]), "manifest.json")
     with open(target, "w", encoding="utf-8") as handle:
         json.dump(manifest, handle)
@@ -221,6 +226,12 @@ def frame_file(job, shot, frame, quality):
     return os.path.join(shot_dir, quality, "frames", "frame_%06d.%s" % (frame, extension))
 
 
+def handle_frame_file(job, shot, side, frame, quality):
+    shot_dir = os.path.join(job["out"], shot["id"])
+    extension = "jpg" if quality == "preview" else "png"
+    return os.path.join(shot_dir, quality, "frames", "handle_%s_%06d.%s" % (side, frame, extension))
+
+
 def render_frame(scene, path):
     # Written beside the target and renamed, so a killed render never leaves a
     # truncated frame that a resumed job would take for finished.
@@ -253,13 +264,23 @@ def render_shot(job, film, song, shot):
         scene.eevee.taa_render_samples = ctx.samples
     apply_frame_settings(scene, ctx)
     last = end - 1
-    scene.frame_start = first
-    scene.frame_end = max(first, last)
-    frames = job.get("frames") if quality == "still" else list(range(first, last + 1))
-    if not frames:
+    handles = shot.get("handles") if isinstance(shot.get("handles"), dict) else {}
+    in_frames = 0 if quality == "still" else max(0, half_up(float(handles.get("in") or 0) * fps))
+    out_frames = 0 if quality == "still" else max(0, half_up(float(handles.get("out") or 0) * fps))
+    scene.frame_start = first - in_frames
+    scene.frame_end = max(scene.frame_start, last + out_frames)
+    if quality == "still":
+        targets = [(frame, frame_file(job, shot, frame, quality)) for frame in (job.get("frames") or [])]
+    else:
+        targets = (
+            [(frame, handle_frame_file(job, shot, "in", frame, quality)) for frame in range(first - in_frames, first)]
+            + [(frame, frame_file(job, shot, frame, quality)) for frame in range(first, last + 1)]
+            + [(frame, handle_frame_file(job, shot, "out", frame, quality)) for frame in range(end, end + out_frames)]
+        )
+    if not targets:
         raise RuntimeError("Shot %s has no frames to render" % shot["id"])
 
-    emit("start", shot=shot["id"], frames=len(frames), blender=blender_version(), engine=ctx.engine, device=device)
+    emit("start", shot=shot["id"], frames=len(targets), blender=blender_version(), engine=ctx.engine, device=device)
     started = time.time()
     film.build_shot(ctx, shot)
     emit("built", shot=shot["id"], sec=round(time.time() - started, 3))
@@ -270,12 +291,11 @@ def render_shot(job, film, song, shot):
     apply_output_format(scene, quality)
     pose = getattr(film, "frame", None)
     resume = bool(job.get("resume")) and quality != "still"
-    for index, frame in enumerate(frames, start=1):
+    for index, (frame, path) in enumerate(targets, start=1):
         if os.getppid() == 1:
             raise RuntimeError("PortOS stopped while this shot was rendering")
-        path = frame_file(job, shot, frame, quality)
         if resume and os.path.isfile(path) and os.path.getsize(path) > 0:
-            emit("frame", shot=shot["id"], frame=frame, index=index, total=len(frames), sec=0, skipped=True)
+            emit("frame", shot=shot["id"], frame=frame, index=index, total=len(targets), sec=0, skipped=True)
             continue
         os.makedirs(os.path.dirname(path), exist_ok=True)
         frame_started = time.time()
@@ -283,7 +303,7 @@ def render_shot(job, film, song, shot):
         if callable(pose):
             pose(ctx, shot, frame / fps, frame)
         render_frame(scene, path)
-        emit("frame", shot=shot["id"], frame=frame, index=index, total=len(frames),
+        emit("frame", shot=shot["id"], frame=frame, index=index, total=len(targets),
              sec=round(time.time() - frame_started, 3), skipped=False)
 
     if job.get("saveBlend"):

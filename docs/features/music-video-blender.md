@@ -88,6 +88,7 @@ def describe(ctx) -> dict:
         "title": "Example Film",
         "shots": [
             {"id": "s010", "label": "Cold open", "start": 0.0, "end": 4.5,   # seconds on the song
+             "handles": {"in": 0.0, "out": 0.5},                              # optional 0..4 s handles
              "set": "stage", "summary": "one line", "action": "...", "staging": "...",
              "camera": "...", "transition": "Cut", "deps": ["film.py", "shots/s010.py", "kit"]},
         ],
@@ -116,6 +117,12 @@ Shot rules:
   `stepped(t - shot["start"], ctx.fps)` start on the first pose. `manifest.json` still stores six-decimal times
   for display and comparison; restoring exact times for the film does not mark existing renders stale.
 - `summary`, `action`, `staging`, `camera` and `transition` are optional text, up to 4,000 characters each.
+- `handles` (optional): `{"in": seconds, "out": seconds}` — each 0 to 4 s on the frame grid (`in <= start`). PortOS
+  renders `[start - in, start)` into `handle_in_<frame>.<ext>` and `[end, end + out)` into `handle_out_<frame>.<ext>`
+  under `frames/` by calling `frame()` for those song times. A shot with handles must build a scene valid slightly
+  outside its own `[start, end)` range. Handle frames are NOT part of `shot.mp4`, resume with the shot, mark only
+  that shot stale (`handles`) when changed, and stay on disk when shot frames are cleared (`Clear rendered frames`)
+  until the shot re-renders or leaves the film.
 - `deps` lists the files and folders under `src/` the shot is built from. Without it, the shot depends on all of `src/`.
 
 `ctx` carries: `song` (the contents of `song.json`), `options` (the film's options, below), `fps`, `width` and `height` (already scaled), `scale`, `samples`,
@@ -287,9 +294,15 @@ window from the best video each shot has: a current final, else its preview fitt
 - **Film look.** The project's film look (grain, gate weave, halation, VHS looks) is applied to the final render
   and to excerpts as a finishing pass, as it is for footage. For a cut, tick **Film look** (off by default: the
   pass is slow).
-- **Grade and shot effects.** The project's color grade, and the timed effects set on each mirrored Board scene
-  (glitches, gate jumps, shutter blinks, light leaks, on a cut or at a moment), are painted when shots are joined.
-  Wipes between shots are not drawn.
+- **Grade and shot effects.** The project's color grade, `fade-black` cut effects, and the timed effects set on each
+  mirrored Board scene (glitches, gate jumps, shutter blinks, light leaks, on a cut or at a moment), are painted when
+  shots are joined. `fade-black` fades inside each shot's own frames (no handles required). A `dissolve` of length `D`
+  is drawn in cuts, excerpts and the final centred on the cut by blending the outgoing shot's `out` handle with the
+  incoming shot's `in` handle across `D` (preserving film length and sync); `beat-toggle` uses the incoming shot's `in`
+  handle on beat flips before the cut. When a scene requests a dissolve or beat toggle whose shot lacks the needed
+  handle, the film's `problems` list names it (`Shot s020 needs 0.25 s of out handle for its dissolve`) and the final
+  render refuses with `409 MUSIC_VIDEO_BLENDER_SHOTS_NOT_READY` rather than hard-cutting silently. Live preview keeps
+  drawing a hard cut and labels it (`Dissolve (drawn in cuts)`). Wipes between shots stay undrawn.
 - **Title card.** The project's opening title card (the MTV-style credit block set on the Look step: artist, title,
   year, and optionally again at the end, with its fades and its slide in) is drawn over the film in every cut,
   excerpt and final render. Leave room for it in the corner it sits in, and keep the film's own type out of its

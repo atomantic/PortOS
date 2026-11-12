@@ -7,8 +7,9 @@
  */
 import { atomicWrite } from '../../lib/fileCore.js';
 import {
-  MUSIC_VIDEO_BLENDER_MAX_CHOICES, MUSIC_VIDEO_BLENDER_MAX_OPTIONS, MUSIC_VIDEO_BLENDER_MAX_SHOTS, MUSIC_VIDEO_BLENDER_OPTION_KEY,
-  MUSIC_VIDEO_BLENDER_OPTION_TYPES, MUSIC_VIDEO_BLENDER_SHOT_ID, MUSIC_VIDEO_BLENDER_SOURCE_PATH, blenderOptionValueProblem,
+  MUSIC_VIDEO_BLENDER_MAX_CHOICES, MUSIC_VIDEO_BLENDER_MAX_HANDLE_SEC, MUSIC_VIDEO_BLENDER_MAX_OPTIONS,
+  MUSIC_VIDEO_BLENDER_MAX_SHOTS, MUSIC_VIDEO_BLENDER_OPTION_KEY, MUSIC_VIDEO_BLENDER_OPTION_TYPES,
+  MUSIC_VIDEO_BLENDER_SHOT_ID, MUSIC_VIDEO_BLENDER_SOURCE_PATH, blenderOptionValueProblem, blenderShotHandleRanges,
 } from '../../lib/musicVideoBlender.js';
 import { blenderManifestFile, readBlenderJson } from './workspace.js';
 
@@ -145,6 +146,34 @@ export function validateBlenderManifest(raw, { durationSec, fps }) {
       if (!valid) fail(`${name}: "deps" must list at most ${MAX_DEPS} files or folders relative to src/`);
       else if (entry.deps.length) shot.deps = [...new Set(entry.deps)];
     }
+    if (entry.handles != null) {
+      if (!isDict(entry.handles)) { fail(`${name}: "handles" must be a dict with optional "in" and "out" seconds`); continue; }
+      const extra = Object.keys(entry.handles).filter((key) => key !== 'in' && key !== 'out');
+      if (extra.length) { fail(`${name}: "handles" may only declare "in" and "out"`); continue; }
+      const handles = { in: 0, out: 0 };
+      let invalidHandle = false;
+      for (const side of ['in', 'out']) {
+        if (entry.handles[side] == null) continue;
+        const rawSec = entry.handles[side];
+        if (!isNumber(rawSec) || rawSec < 0 || rawSec > MUSIC_VIDEO_BLENDER_MAX_HANDLE_SEC) {
+          fail(`${name}: "handles.${side}" must be between 0 and ${MUSIC_VIDEO_BLENDER_MAX_HANDLE_SEC} s`);
+          invalidHandle = true;
+          break;
+        }
+        if (Math.abs(snap(rawSec) - rawSec) > GRID_TOLERANCE_SEC) {
+          fail(`${name}: handles.${side} must fall on a frame boundary (a multiple of 1/${fps} s)`);
+          invalidHandle = true;
+          break;
+        }
+        handles[side] = Number(snap(rawSec).toFixed(6));
+      }
+      if (invalidHandle) continue;
+      if (handles.in > start + 1e-9) {
+        fail(`${name}: handles.in (${seconds(handles.in)}) starts before 0 s`);
+        continue;
+      }
+      if (handles.in > 0 || handles.out > 0) shot.handles = handles;
+    }
     shots.push(shot);
     previous = shot;
   }
@@ -168,15 +197,42 @@ function coverageProblems(shots, { durationSec, fps }) {
   return problems;
 }
 
+function handleProblems(shots, cutEffects, fps) {
+  if (!Array.isArray(cutEffects) || !cutEffects.length) return [];
+  const problems = [];
+  for (const effect of cutEffects) {
+    if (effect.style !== 'dissolve' && effect.style !== 'beat-toggle') continue;
+    const label = effect.style === 'dissolve' ? 'dissolve' : 'beat toggle';
+    const from = shots[effect.index];
+    const to = shots[effect.index + 1];
+    if (from && effect.needOutFrames > 0) {
+      const outFrames = blenderShotHandleRanges(from, fps).out.frameCount;
+      if (outFrames < effect.needOutFrames) {
+        problems.push(`Shot ${from.id} needs ${seconds(effect.needOutFrames / fps)} of out handle for its ${label}`);
+      }
+    }
+    if (to && effect.needInFrames > 0) {
+      const inFrames = blenderShotHandleRanges(to, fps).in.frameCount;
+      if (inFrames < effect.needInFrames) {
+        problems.push(`Shot ${to.id} needs ${seconds(effect.needInFrames / fps)} of in handle for its ${label}`);
+      }
+    }
+  }
+  return problems;
+}
+
 /**
  * What keeps a synced film from being final, as director-facing sentences: a
- * frame rate changed since the sync, a song that is not analyzed, and every
- * stretch of the song no shot covers. Empty means the film tiles the song.
+ * frame rate changed since the sync, a song that is not analyzed, every
+ * stretch of the song no shot covers, and any cut effect whose shot lacks the
+ * handles it needs. Empty means the film is ready to join.
  */
-export function blenderFilmProblems(manifest, { fps, durationSec }) {
+export function blenderFilmProblems(manifest, { fps, durationSec, cutEffects = [] }) {
   const stale = manifest.fps === fps ? [] : [`The frame rate changed from ${manifest.fps} to ${fps} since the last sync. Sync shots from scripts again.`];
   if (!(durationSec > 0)) return [...stale, 'Analyze the song: the film cannot be checked against it yet.'];
-  return [...stale, ...coverageProblems(manifest.shots, { durationSec, fps })];
+  const coverage = coverageProblems(manifest.shots, { durationSec, fps });
+  const handles = manifest.fps === fps ? handleProblems(manifest.shots, cutEffects, fps) : [];
+  return [...stale, ...coverage, ...handles];
 }
 
 /** The last synced manifest, or null before the first sync. */

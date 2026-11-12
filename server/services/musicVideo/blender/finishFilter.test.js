@@ -40,4 +40,13 @@ describe('blenderFinishFilter', () => {
     expect(film({ scenes, composition: { grade: { preset: 'neutral', grain: 0, sections: [{ sceneId: 'mvs-b', preset: 'monochrome' }] } } }, { startSec: 3, endSec: 5 }))
       .toContain("enable='gte(t,0)*lt(t,1)'");
   });
+
+  it('paints fade-black across joins and on the last shot without handles, adjusted to excerpt windows', () => {
+    const faded = film({ scenes: [{ ...scenes[0], cutEffect: { style: 'fade-black', enabled: true, overlapSec: 0.5 } }, scenes[1], scenes[2]] });
+    expect(faded).toBe("fade=t=out:s=42:n=6:enable='between(n,42,47)',fade=t=in:s=48:n=6:enable='between(n,48,53)'");
+    expect(film({ scenes: [{ ...scenes[0], cutEffect: { style: 'fade-black', enabled: true, overlapSec: 0.5 } }, scenes[1], scenes[2]] }, { startSec: 1, endSec: 3 }))
+      .toBe("fade=t=out:s=18:n=6:enable='between(n,18,23)',fade=t=in:s=24:n=6:enable='between(n,24,29)'");
+    expect(film({ scenes: [scenes[0], scenes[1], { ...scenes[2], cutEffect: { style: 'fade-black', enabled: true, overlapSec: 0.5 } }] }))
+      .toBe("fade=t=out:s=132:n=12:enable='between(n,132,143)'");
+  });
 });

@@ -32,7 +32,7 @@ import ImageEffectStill from './ImageEffectStill.jsx';
 import { clipOffsetSec, clipReversed, clipSpeedRate, isLayeredComposition, isSelfDrawnLayer, sceneVisualLayer, stillFrameTransform } from '../../lib/musicVideoLayers.js';
 import { resolveSourceTake, scenePlayableClipId } from '../../../../server/lib/musicVideoSourceTake.js';
 import { sceneImageEffect, scenePhotoSequence } from '../../lib/musicVideoImageEffects.js';
-import { plannedTransitions, sceneCutEffects } from '../../lib/musicVideoCutEffects.js';
+import { MUSIC_VIDEO_CUT_EFFECT_LABELS, plannedTransitions, sceneCutEffect, sceneCutEffects } from '../../lib/musicVideoCutEffects.js';
 import { blenderSceneClips } from '../../lib/musicVideoBlender.js';
 
 const timedShots = (scenes) => scenes.filter((scene) => Number.isFinite(scene?.startSec)).sort((a, b) => a.startSec - b.startSec);
@@ -897,6 +897,15 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
   // Past its shot's end a film shows black until the next shot starts.
   const filmGap = film && !!shot && Number.isFinite(shot.endSec) && clock.time >= shot.endSec;
   const filmClip = film && shot && !filmGap ? filmClips.get(shot.sceneId) || null : null;
+  const filmCutEffect = useMemo(() => {
+    if (!film || !picture || filmGap) return null;
+    const effect = sceneCutEffect(picture, planned.get(picture.sceneId));
+    if (!effect?.enabled) return null;
+    if (effect.style === 'fade-black') return effect;
+    const nextShot = index >= 0 ? timed[index + 1] : null;
+    const hasNext = Boolean(nextShot && Number.isFinite(shot?.endSec) && Math.round(shot.endSec * stillFps) === Math.round(nextShot.startSec * stillFps));
+    return hasNext ? effect : null;
+  }, [film, picture, filmGap, planned, index, timed, shot, stillFps]);
   const filmEndSec = film ? timed.reduce((end, scene) => (Number.isFinite(scene.endSec) ? Math.max(end, scene.endSec) : end), 0) || null : null;
   const label = shot ? shot.label || `Shot ${index + 1}` : 'No shots yet';
   // With the lyrics drawn over the picture, a shot without a frame keeps its label and
@@ -1037,6 +1046,9 @@ export default function StoryboardAnimatic({ project, audioUrl, seekRequest, col
               <span className="tabular-nums">{formatDurationSec(shot.startSec)}</span>
               {film && (filmGap || filmClip) && (
                 <span>{filmGap ? 'No shot here' : `${filmClip.quality === 'final' ? 'Final' : 'Preview'} render${filmClip.stale ? ', out of date' : ''}`}</span>
+              )}
+              {filmCutEffect && (
+                <span>{`${MUSIC_VIDEO_CUT_EFFECT_LABELS[filmCutEffect.style]} (drawn in cuts)`}</span>
               )}
             </div>
           )}
