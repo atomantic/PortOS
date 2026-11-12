@@ -1611,3 +1611,46 @@ credentials, external uploads, production weights, live providers or device
 inputs were used. Full video/audio quality and source-build validation remain
 outside this transport slice. The exact regeneration recipe and retained Wan
 constraint are recorded in [MLX_VIDEO_LOCKS.md](MLX_VIDEO_LOCKS.md).
+
+## Twenty-eighth-slice Pixal Metal plotting maintenance (2026-11-12)
+
+Pixal alone advances **Matplotlib 3.10.9 → 3.11.2**, **FontTools 4.63.0 →
+4.68.0**, **Kiwisolver 1.5.0 → 1.5.1**, **PyParsing 3.3.2 → 3.3.3**, and
+**ContourPy 1.3.2 → 1.4.0**. Their published Python/NumPy requirements and
+native ARM64 wheels support the existing CPython 3.13/NumPy 2.2.6 profile;
+no companion expansion is needed. TRELLIS's source and lock files are
+unchanged: these plotting packages are not introduced there. Pandas,
+Dateutil, OpenCV, Trimesh, native renderer/source pins and the intentional
+Pixal CLI-only Pillow override remain unchanged.
+
+The complete Pixal lock was regenerated with hash-verified uv 0.13.7,
+CPython 3.13/macOS 26+ ARM64, binary-only artifacts and the seven-day cutoff
+**2026-11-05T00:00:00Z**. All 91 unrelated Pixal identities, markers and
+hash sets are preserved. The five new versions carry complete generated
+artifact sets, including other platforms: Pixal has 96 entries/898 hashes.
+The union with unchanged TRELLIS has 97 registry identities/901 hashes;
+every hash matches an official unyanked artifact uploaded before the cutoff.
+Fresh OSV/MAL queries include that union, 10 source-package identities and
+13 immutable source commits (120 queries): no matches.
+
+Baseline and candidate native CPython 3.13.18 tests use **21-package
+exact-hash CPU subclosures**, not full renderer installations. Real Agg
+rendering covers Unicode font text, math expressions, legends, constrained
+layout, contour labels, PNG and PDF output. Assertions check image size,
+nonblank content and text/layout bounds, not version-specific raster
+goldens. Analytic circular contours must be closed and stay within 0.002
+of the unit radius. FontTools subsets and round-trips Matplotlib's bundled
+DejaVu font, preserving the requested Unicode characters.
+
+The immutable Pixal `LinearMemoryController._visualize` helper is executed
+with synthetic CPU sample arrays and explicit CPU/memory configuration;
+its fitted line and generated plot are checked without entering GPU memory
+recording. This is a retained training-debug helper whose automatic call is
+commented out upstream, not a claimed live GLB-generation plotting path.
+Additional Agg/font/contour tests establish retained-library compatibility.
+No GUI, user images/fonts, model weights, live requests, inference, GPU work
+or production GLB quality checks run. Test caches and output files are
+isolated and temporary; network connections are rejected. Both subclosure
+metadata checks, complete profile resolution and native wheel installation
+dry plan passed, together with the five focused installer/profile/runner
+files (171 tests). Full native rendering requirements remain unchanged.
