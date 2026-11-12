@@ -30,14 +30,14 @@ httpx==0.28.1
 huggingface-hub==1.27.0
 idna==3.20
 jinja2==3.1.6
-llguidance==1.7.6
+llguidance==1.9.1
 markdown-it-py==4.2.0
 markupsafe==3.0.3
 mdurl==0.1.2
 miniaudio==1.71
 mlx==0.32.4
-mlx-audio==0.4.7
-mlx-lm==0.31.3
+mlx-audio==0.6.4
+mlx-lm==0.32.2
 mlx-metal==0.32.4
 mlx-vlm==0.6.10
 numpy==2.4.6
