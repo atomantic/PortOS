@@ -56,8 +56,8 @@ function staleReasons(meta, range, { fps, shotHash, settingsHash, optionsHash, s
   if (blenderImportsChanged(meta.imports, files) && !reasons.includes('source')) reasons.push('source');
   if (meta.settingsHash !== settingsHash) reasons.push('settings');
   if ((meta.optionsHash ?? BLENDER_NO_OPTIONS_HASH) !== optionsHash) reasons.push('options');
-  // Older metadata cannot establish which song inputs its frames used.
-  if (meta.songHash !== songHash) reasons.push('song');
+  // Older renders have no song hash and retain their declared contract.
+  if (meta.songHash != null && meta.songHash !== songHash) reasons.push('song');
   return reasons;
 }
 
@@ -108,7 +108,7 @@ async function readStills(projectId, shot, { shotHash, optionsHash, songHash, fi
     stills.push({
       ...(await isFile(thumbnail) ? { thumbnail: blenderMediaPath(projectId, thumbnail) } : {}),
       file: blenderMediaPath(projectId, absolute), timeSec: still.timeSec, createdAt: still.createdAt || null,
-      stale: still.songHash !== songHash || still.srcHash !== shotHash || blenderImportsChanged(still.imports, files) || (still.optionsHash ?? BLENDER_NO_OPTIONS_HASH) !== optionsHash,
+      stale: (still.songHash != null && still.songHash !== songHash) || still.srcHash !== shotHash || blenderImportsChanged(still.imports, files) || (still.optionsHash ?? BLENDER_NO_OPTIONS_HASH) !== optionsHash,
     });
   }
   // Newest first: the first still is the shot's freshest picture.

@@ -609,13 +609,17 @@ describe('Blender film shot renders', () => {
     const recorded = JSON.parse(readFileSync(metadata, 'utf8'));
     const index = JSON.parse(readFileSync(join(workspace(), 'renders/s010/stills/stills.json'), 'utf8'));
     expect(index[0].songHash).toBe(recorded.songHash);
-    // Old output stays playable, but missing evidence cannot establish currency.
+    // A legacy render (without songHash) keeps its pre-update contract and is not stale for song.
     delete recorded.songHash;
     writeFileSync(metadata, JSON.stringify(recorded));
     const legacy = readFileSync(metadata, 'utf8');
-    expect((await state()).renders.s010.preview).toMatchObject({ complete: true, stale: true, staleReasons: ['song'] });
+    expect((await state()).renders.s010.preview).toMatchObject({ complete: true, stale: false, staleReasons: [] });
     expect(readFileSync(metadata, 'utf8')).toBe(legacy);
-    await renderAll('preview', { shotIds: ['s010'] });
+    delete index[0].songHash;
+    writeFileSync(join(workspace(), 'renders/s010/stills/stills.json'), JSON.stringify(index));
+    expect((await state()).renders.s010.stills[0].stale).toBe(false);
+    await renderAll('preview', { shotIds: ['s010'], force: true });
+    await renderAll('still', { shotIds: ['s010'] });
     const original = await projects.getProject(project.id);
     for (const change of [
       { name: 'A new title' },
