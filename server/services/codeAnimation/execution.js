@@ -138,13 +138,14 @@ async function readExecution() {
  */
 export async function rearmCodeAnimationExecution() {
   if (lastProbe !== null) return undefined;
+  const generation = configurationGeneration;
   const armed = await armedConfiguration();
   if (!armed || !sameCheckedConfiguration(armed, await inspectConfiguredBlender())) return undefined;
   // Read again after the awaits: an explicit check may have landed meanwhile.
-  if (lastProbe !== null) return undefined;
+  if (lastProbe !== null || generation !== configurationGeneration) return undefined;
   if (!recheck) {
     console.log(`🛡️ Blender configuration unchanged since its last passing check: running the ${armed.executionMode} execution check for this server process`);
-    recheck = sharedProbe().then(() => undefined, (error) => {
+    recheck = sharedProbe({ generation, configuration: armed }).then(() => undefined, (error) => {
       console.error(`❌ Automatic Code Animation execution check failed: ${error.message}`);
     });
   }
@@ -270,15 +271,17 @@ async function probeLimit(workspaceRoot, kind, limits, expected, worker = runCon
   } finally { clearTimeout(timer); }
 }
 
-async function runProbe() {
+async function runProbe(generation, expectedConfiguration) {
   const started = Date.now();
-  const generation = configurationGeneration;
   const configuration = (await configuredTools()).blender;
+  const inspected = { ...await inspectExecutable(configuration.executable), executionMode: configuration.executionMode, engine: configuration.engine };
+  if (generation !== configurationGeneration || (expectedConfiguration && !sameCheckedConfiguration(expectedConfiguration, inspected))) return null;
   const trustedLocal = configuration.executionMode === 'trusted-local';
   const worker = trustedLocal ? runTrustedLocalWorker : runContainedWorker;
   // Fail closed while checking, and if the check itself errors.
   lastProbe = null;
   const mechanism = await currentContainmentMechanism();
+  if (generation !== configurationGeneration) return null;
   if (!trustedLocal && !mechanism.supported) {
     lastProbe = { probedAt: new Date().toISOString(), mechanism: null, passed: false, refused: mechanism.reason, checks: [], tools: {}, browser: null, durationMs: 0 };
     return lastProbe;
@@ -291,13 +294,14 @@ async function runProbe() {
     await probeLimit(workspaceRoot, 'memory', { memoryBytes: 128 * 1024 * 1024 }, 'memory', worker),
     await probeLimit(workspaceRoot, 'cancel', {}, 'canceled', worker),
   ];
-  const blender = await probeBlenderRender(await inspectExecutable(configuration.executable), workspaceRoot, {
+  const blender = await probeBlenderRender(inspected, workspaceRoot, {
     worker, engine: configuration.engine, executionMode: configuration.executionMode,
   });
   const browser = await cdpRequest('/json/version', { timeout: 2000 }).then((response) => response.ok, () => false);
   // A save during a probe revokes its authority, even if the operator later
   // switches back to the same path. Only the next explicit check can arm it.
-  if (generation !== configurationGeneration) return null;
+  const current = await inspectConfiguredBlender();
+  if (generation !== configurationGeneration || !sameCheckedConfiguration(inspected, current)) return null;
   lastProbe = {
     probedAt: new Date().toISOString(), executionMode: configuration.executionMode, contained: !trustedLocal,
     mechanism: trustedLocal ? 'trusted-local' : mechanism.id, passed: checks.every((check) => check.passed),
@@ -317,19 +321,23 @@ export function lastCheckedBlenderVersion() {
 // A passing explicit check is what lets a later process re-run it unasked.
 async function armCheckedConfiguration(probe) {
   const evidence = probe?.tools?.blender;
-  if (!probe?.passed || !evidence?.passed) return;
+  if (!probe?.passed || !evidence?.passed || probe !== lastProbe) return;
+  const generation = configurationGeneration;
   const armed = Object.fromEntries(CHECKED_FIELDS.map((field) => [field, evidence[field]]));
-  if (!sameCheckedConfiguration(await armedConfiguration(), armed)) await updateSettings({ [ARMED_KEY]: armed });
+  const previous = await armedConfiguration();
+  if (generation !== configurationGeneration || probe !== lastProbe) return;
+  if (!sameCheckedConfiguration(previous, armed)) await updateSettings({ [ARMED_KEY]: armed });
 }
 
 /**
  * The run for the current configuration. A run that began before a save answers
  * only for what that save replaced (it ends revoked), so a later caller gets its own.
  */
-function sharedProbe() {
+function sharedProbe(expected = null) {
+  if (expected && expected.generation !== configurationGeneration) return Promise.resolve(null);
   if (probing?.generation === configurationGeneration) return probing.run;
   const entry = { generation: configurationGeneration };
-  entry.run = runProbe().finally(() => { if (probing === entry) probing = null; });
+  entry.run = runProbe(entry.generation, expected?.configuration).finally(() => { if (probing === entry) probing = null; });
   probing = entry;
   return entry.run;
 }

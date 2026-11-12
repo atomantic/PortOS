@@ -3,8 +3,12 @@ import { mkdtemp, mkdir, realpath, writeFile, chmod, rm } from 'node:fs/promises
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import express from 'express';
-const state = vi.hoisted(() => ({ settings: {}, workers: [], blenderProbe: 'passes', hold: null }));
-vi.mock('../settings.js', () => ({ getSettings: async () => state.settings, updateSettings: async patch => { state.settings = { ...state.settings, ...patch }; } }));
+const state = vi.hoisted(() => ({ settings: {}, workers: [], blenderProbe: 'passes', hold: null, onReadSettings: null }));
+vi.mock('../settings.js', () => ({ getSettings: async () => {
+  const settings = state.settings;
+  await state.onReadSettings?.();
+  return settings;
+}, updateSettings: async patch => { state.settings = { ...state.settings, ...patch }; } }));
 vi.mock('../browserService.js', () => ({ cdpRequest: async () => ({ ok: false }) }));
 vi.mock('./containedWorker.js', () => ({
   currentContainmentMechanism: async () => ({ supported: false, reason: 'Synthetic unavailable sandbox' }),
@@ -63,6 +67,7 @@ beforeEach(async () => {
   state.settings = {};
   state.blenderProbe = 'passes';
   state.hold = null;
+  state.onReadSettings = null;
   await writeExecutable();
 });
 
@@ -168,6 +173,28 @@ describe.skipIf(!['darwin', 'linux'].includes(process.platform))('machine-owned 
     expect((await reading).status).toBe(200);
     expect((await restarted.read()).body.lanes.blender.ready).toBe(true);
     expect(state.settings.codeAnimationExecutionArmed).toMatchObject({ executionMode: 'trusted-local' });
+  });
+
+  it('does not automatically check a configuration saved while inspecting the previously armed one', async () => {
+    await checkedProcess();
+    const restarted = await startProcess();
+    let releaseInspection;
+    const holdInspection = new Promise(resolve => { releaseInspection = resolve; });
+    let reads = 0;
+    let inspecting;
+    const inspected = new Promise(resolve => { inspecting = resolve; });
+    state.onReadSettings = async () => {
+      if (++reads === 2) { inspecting(); await holdInspection; }
+    };
+    const rearming = restarted.execution.rearmCodeAnimationExecution();
+    await inspected;
+    expect((await restarted.save({ ...trustedLocal, engine: 'BLENDER_EEVEE_NEXT' })).body.lanes.blender).toEqual(UNCHECKED);
+    releaseInspection();
+    await rearming;
+    expect(state.workers).toHaveLength(0);
+    expect((await restarted.read()).body.lanes.blender).toEqual(UNCHECKED);
+    expect(state.settings.codeAnimationExecutionArmed).toBeNull();
+    expect((await restarted.check()).body.lanes.blender.ready).toBe(true);
   });
 
   // Regression: a check that cannot complete must not be started again by every readiness read.
