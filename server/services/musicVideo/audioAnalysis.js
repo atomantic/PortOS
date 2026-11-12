@@ -16,8 +16,8 @@
  *   2. A spectral-flux onset envelope captures percussion and harmonic attacks.
  *   3. Tempo is estimated by tempo-weighted autocorrelation of the envelope.
  *   4. The beat phase is fit by sliding a pulse train against the envelope.
- *   5. Downbeats are picked as the strongest of the four 4/4 beat phases.
- *   6. Coarse sections come from energy-novelty segmentation.
+ *   5. Coarse sections come from energy-novelty segmentation.
+ *   6. Downbeat phase combines onset strength with confident section/entry evidence.
  *
  * The DSP core (`analyzePcm`) is pure and deterministic — it takes a
  * Float32Array and returns the analysis, so it is unit-tested directly against
@@ -196,6 +196,7 @@ function deriveSections(samples, sampleRate, hop) {
 // predates the feature track (implicitly 1) and reads as "features not analyzed".
 // 3 adds the beat-grid trust fields (beatContrast, beatSpread, phaseCancellation, gridDecision, gridReason).
 // 4 tracks onsets through tempo drift and centres emitted beat timestamps.
+// downbeatSource is additive; existing analyses change only on explicit reanalysis.
 export const ANALYSIS_VERSION = 4;
 
 export const FEATURE_ENVELOPE_FPS = 30;
@@ -401,7 +402,11 @@ export function analyzePcm(samples, sampleRate, { hop = ONSET_HOP, truncatedAtSe
   const roundedBpm = bpm == null ? null : Number(bpm.toFixed(2));
   const emit = (t) => Number(Math.min(durationSec, t + FFT_SIZE / 2 / sampleRate).toFixed(3));
   const beats = frameBeats.map(emit);
-  const downbeats = pickDownbeats(frameBeats, onset, fps).map(emit);
+  const features = computeSongFeatures(samples, sampleRate, { truncatedAtSec });
+  const selected = pickDownbeats(frameBeats, onset, fps, {
+    sections, features, timeOffsetSec: FFT_SIZE / 2 / sampleRate,
+  });
+  const downbeats = selected.downbeats.map(emit);
   const tempoConfidence = confidence == null ? null : Number(Math.max(0, Math.min(1, confidence)).toFixed(3));
   const trust = {
     ...quality,
@@ -410,10 +415,11 @@ export function analyzePcm(samples, sampleRate, { hop = ONSET_HOP, truncatedAtSe
   };
   return {
     version: ANALYSIS_VERSION,
-    features: computeSongFeatures(samples, sampleRate, { truncatedAtSec }),
+    features,
     bpm: roundedBpm,
     beats,
     downbeats,
+    downbeatSource: selected.source,
     waveform,
     sections,
     durationSec: roundedDuration,

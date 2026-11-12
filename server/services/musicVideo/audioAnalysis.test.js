@@ -11,6 +11,7 @@ import {
   buildManualAnalysisFromCached,
   snapSectionsToGrid,
   ANALYSIS_SAMPLE_RATE,
+  ONSET_HOP,
 } from './audioAnalysis.js';
 import { findFfmpeg } from '../../lib/ffmpeg.js';
 import { stereoPhaseCancellation } from '../../lib/audioBeatDsp.js';
@@ -126,9 +127,32 @@ describe('song-length beat tracking', () => {
 });
 
 describe('analyzePcm', () => {
+  it('emits structure-derived beat-1 downbeats despite louder beat-3 hits', () => {
+    const rate = ANALYSIS_SAMPLE_RATE;
+    const period = Math.round(0.5 * rate / ONSET_HOP) * ONSET_HOP / rate;
+    const samples = new Float32Array(Math.ceil(128 * period * rate));
+    for (let i = 0; i < samples.length; i++) {
+      const t = i / rate;
+      const section = Math.floor(t / (32 * period));
+      samples[i] = (section % 2 ? 0.7 : 0.1) * Math.sin(2 * Math.PI * 300 * t);
+    }
+    for (let beat = 0; beat < 128; beat++) {
+      const start = Math.round(beat * period * rate);
+      for (let k = 0; k < 0.04 * rate && start + k < samples.length; k++) {
+        samples[start + k] += (beat % 4 === 2 ? 1.8 : 1) * Math.exp(-k / (0.01 * rate)) * Math.sin(2 * Math.PI * 1000 * k / rate);
+      }
+    }
+    const result = analyzePcm(samples, rate);
+    expect(result.downbeatSource).toBe('structure');
+    expect(result.sections.length).toBeGreaterThanOrEqual(3);
+    // Energy changes every eight bars must agree with the emitted downbeats.
+    expect(result.downbeats.every((time) => Math.abs(time / (4 * period) - Math.round(time / (4 * period))) < 0.04)).toBe(true);
+  });
+
   it('recovers a 120 BPM click track within tolerance', () => {
     const samples = clickTrack({ bpm: 120, durationSec: 16 });
     const result = analyzePcm(samples, ANALYSIS_SAMPLE_RATE);
+    expect(result.downbeatSource).toBe('onsets');
     expect(result.bpm).toBeGreaterThan(118);
     expect(result.bpm).toBeLessThan(122);
     // 16s at 120 BPM (0.5s/beat) → ~32 beats; allow ±2 for edge framing.
