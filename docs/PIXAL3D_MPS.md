@@ -136,3 +136,7 @@ for synthetic CPU coverage and its application/runtime limits.
 The mesh-library refresh keeps native source/model pins fixed while updating
 Fast-Simplification, Trimesh and NetworkX. See [mesh/export compatibility evidence](PYTHON_RUNTIME_REFRESH.md#fortieth-slice-3d-metal-mesh-simplification-and-export-migration-2026-11-12)
 for actual synthetic caller tests and the excluded native baking/inference scope.
+
+The OpenCV 5 refresh preserves native source/model and NumPy/Torch pins.
+See [OpenCV image-operation evidence](PYTHON_RUNTIME_REFRESH.md#forty-first-slice-3d-metal-opencv-image-operation-migration-2026-11-12)
+for actual wheel ownership, synthetic caller tests and observed resize behavior.

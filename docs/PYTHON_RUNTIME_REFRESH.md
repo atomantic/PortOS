@@ -2323,3 +2323,68 @@ only the three mesh-library identities differ. Both exact six-package native
 artifact variants reran the immutable mesh/material and PortOS wrapper probes
 successfully. The original baseline remains applicable; this is not a full
 model/runtime installation or a rerun of model inference.
+
+## Forty-first-slice 3D Metal OpenCV image-operation migration (2026-11-12)
+
+Both profiles advance **opencv-python-headless 4.13.0.92 → 5.0.0.93**;
+Pixal's existing **opencv-python** distribution advances to the same version.
+No other dependency, native/model source, NumPy/Torch pin or Pillow override
+changes. The official macOS 13 ARM64 abi3 wheels support the CPython 3.13/
+macOS 26 target and retained NumPy 2.2.6. The official 4-to-5 migration guide
+was checked against actual immutable image consumers before testing.
+
+Pixal retains its pre-existing pair of distributions sharing the `cv2`
+namespace; this is not a recommendation to mix arbitrary OpenCV wheels.
+Using the actual pinned pip 26.3 and installer hash/no-dependency/binary-only
+flags, fresh baseline/candidate pair installs and a real 4-to-5 in-place
+upgrade install headless first, then opencv-python. In all three cases the
+loaded native binary hash matches the verified non-headless wheel. Separate
+TRELLIS baseline/candidate installs use its isolated/force-reinstall flags,
+exact NumPy artifact and headless-only OpenCV distribution; the loaded binary
+matches the verified headless wheel. Both official ARM headless binaries also
+report `GUI: COCOA`, so that build-info label is not used to infer which wheel
+loaded. No GUI is invoked. These observations establish this pinned install
+path, not a general guarantee for arbitrary overwrite/uninstall ordering.
+
+Native CPython 3.13.18 probes use bounded hashed NumPy/Pillow/pip/OpenCV
+subclosures and real libraries. They execute the exact immutable Pixal EXR
+read/BGR-to-RGB expression, text helpers, Pixal and TRELLIS pre-material
+inpainting statements, and MoGe's dense-input perspective-warp helper.
+Synthetic float EXR data includes negative and HDR values; EXR is enabled
+before import as in the upstream app. PNG file/memory round-trips preserve
+pixels. Inpainting checks shape/range and constant-color behavior; text
+rasterization is nonblank. Identity/pixel-translation warps, color conversion,
+invalid image/channel/mask/size and corrupt decode paths are exercised.
+All probes pass for fresh paired, upgraded paired and isolated headless
+baseline/candidate states. No weights, live data, renderer inference,
+rasterizer/texture baking or production output quality is claimed.
+
+One migration-note discrepancy is retained explicitly: the guide says
+`INTER_NEAREST` becomes equivalent to Pillow/`INTER_NEAREST_EXACT`, but both
+verified 4.13 and 5.0 ARM variants still produce the legacy floor-grid
+sampling on a 3×5-to-7×8 label fixture. The probe checks that analytical grid;
+`INTER_NEAREST_EXACT` separately agrees with Pillow. No golden output or
+pinned source interpolation flag is changed to hide this observation. Warp
+checks use semantic invariants/tolerance rather than promising pixel-exact
+parity for every fractional transform.
+
+Both complete locks were regenerated with verified uv 0.13.7 and cutoff
+**2026-11-05T00:00:00Z** for CPython 3.13/macOS 26+ ARM64. All 97 unrelated
+Pixal and 55 unrelated TRELLIS identities, markers and hash sets are preserved.
+Pixal has 99 entries/1317 hashes and TRELLIS 56/493; their union has 100 registry
+identities/1321 hashes. Every hash matches an official unyanked artifact older
+than the cutoff. Fresh OSV/MAL queries cover the union, 10 source-package
+identities and 13 source commits (123 queries), with no matches; this is not
+a separate security certification of every bundled native codec. Both full
+profile installation dry plans and 171 focused installer/profile/adapter
+tests pass. No application API adaptation or companion expansion was needed
+for the exercised boundaries.
+
+The serial combined candidate preserves preceding web/date/Pandas/model and
+geometry changes. Complete locks were regenerated with only the intended
+OpenCV identities differing from that base. Fresh actual pip paired and
+isolated headless installs reran the native binary-ownership and immutable
+caller probes from the combined locks, using each profile's exact NumPy
+artifact. Historical baseline/upgrade evidence remains applicable because
+the installer, pip version and OpenCV inputs are unchanged. This does not
+claim a full model or renderer installation.
