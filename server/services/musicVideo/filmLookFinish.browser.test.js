@@ -6,7 +6,7 @@
  */
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 import { browserSuiteCanRun, resolveTestChrome } from '../../lib/browserSuiteGate.js';
@@ -22,8 +22,11 @@ vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await imp
 }));
 
 const { PATHS } = await import('../../lib/paths.js');
-const { findFfmpeg } = await import('../../lib/ffmpeg.js');
-const { applyFilmLookFinish } = await import('./filmLookFinish.js');
+const { findFfmpeg, probeVideoGeometry } = await import('../../lib/ffmpeg.js');
+const { applyFilmLookFinish, _filmLookFinishTestHooks } = await import('./filmLookFinish.js');
+const { encodeFilmLookWeb } = await import('./filmLookWebEncoder.js');
+const { openComposition } = await import('../htmlComposition/browser.js');
+const { filmLookRuntimeSource, normalizeFilmLook } = await import('../../lib/filmLook.js');
 const ffmpeg = await findFfmpeg();
 const canRun = browserSuiteCanRun('film look finishing pass', { Chrome: chrome, ffmpeg }, { onUnavailable: cleanupTempDataRoots });
 
@@ -57,4 +60,50 @@ describe.skipIf(!canRun)('film look finishing pass with real Chrome and ffmpeg',
     for (const [x, y] of [[3, 3], [W - 4, 3], [3, H - 4], [W - 4, H - 4]]) expect(at(frame, x, y), `corner ${x},${y}`).toBeLessThan(middle - 25);
     expect(at(frame, 3, H / 2), 'left edge').toBeLessThan(middle - 10);
   }, 90000);
+  it('keeps frame cadence, copied audio and final progress through an automatically selected finish', async () => {
+    await mkdir(PATHS.data, { recursive: true });
+    const path = join(PATHS.data, 'motion-audio.mp4');
+    execFileSync(ffmpeg, ['-v', 'error', '-f', 'lavfi', '-i', `testsrc2=s=${W}x${H}:r=24:d=10`, '-f', 'lavfi', '-i', 'sine=frequency=440:duration=10',
+      '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-color_primaries', 'bt709', '-color_trc', 'bt709', '-colorspace', 'bt709', '-y', path]);
+    const audioHash = () => execFileSync(ffmpeg, ['-v', 'error', '-i', path, '-map', '0:a:0', '-c', 'copy', '-f', 'hash', '-hash', 'sha256', '-']).toString();
+    const before = audioHash();
+    let progress = 0;
+    const finished = await applyFilmLookFinish({ look: { grain: 0.4 }, path, jobId: 'job-auto-web', workers: 1, onProgress: value => { progress = value; } })
+      .catch((error) => (error?.code === 'COMPOSITION_BROWSER_CODEC' && !process.env.PORTOS_REQUIRE_BROWSER_SUITES ? error.code : Promise.reject(error)));
+    if (finished === 'COMPOSITION_BROWSER_CODEC') return;
+    expect(finished).toBe(true);
+    expect(progress).toBe(1);
+    expect(audioHash()).toBe(before);
+    const geometry = await probeVideoGeometry(path);
+    expect(geometry).toMatchObject({ width: W, height: H, fps: 24, numFrames: 240 });
+    expect(geometry.durationSec).toBeCloseTo(10, 2);
+  }, 180000);
+
+  it('encodes the admitted GPU canvas with WebCodecs when the browser supports it', async ({ skip }) => {
+    const directory = 'web-encoder-browser';
+    const dir = join(PATHS.data, directory);
+    await mkdir(join(dir, 'media'), { recursive: true });
+    execFileSync(ffmpeg, ['-v', 'error', '-f', 'lavfi', '-i', `testsrc2=s=${W}x${H}:r=24:d=1`, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-y', join(dir, 'media', 'source.mp4')]);
+    const look = normalizeFilmLook({ grain: 0.4 });
+    const files = _filmLookFinishTestHooks.filmLookFinishPage({ width: W, height: H, fps: 24, durationSec: 1, look });
+    await Promise.all(Object.entries(files).map(([name, body]) => writeFile(join(dir, name), body)));
+    const page = await openComposition(directory, { streamMedia: true, ownedBrowser: true, initScripts: [filmLookRuntimeSource(look)] });
+    try {
+      const capabilities = await page.evaluate(`(async () => {
+        const gpu = globalThis.__portosFilmLookFinish.gpuInfo().available;
+        if (!gpu || typeof VideoEncoder !== 'function' || !document.createElement('video').canPlayType('video/mp4; codecs=\"avc1.640028\"')) return false;
+        const result = await VideoEncoder.isConfigSupported({ codec: 'avc1.640028', width: ${W}, height: ${H}, framerate: 24,
+          bitrateMode: 'quantizer', hardwareAcceleration: 'prefer-hardware', avc: { format: 'annexb' }, latencyMode: 'realtime' });
+        return result.supported && result.config.bitrateMode === 'quantizer';
+      })()`);
+      if (!capabilities) { console.log('⏭️ WebCodecs adapter: browser lacks GPU, H.264 or quantizer support'); skip(); }
+      const switched = await page.evaluate('globalThis.__portosFilmLookFinish.useGpu(true)');
+      expect(switched.on).toBe(true);
+      const output = join(dir, 'encoded.mp4');
+      const result = await encodeFilmLookWeb(page, { width: W, height: H, fps: 24, durationSec: 1 }, output);
+      expect(result.timing).toMatchObject({ frames: 24, gpuFrames: 24, svgFrames: 0 });
+      expect(await probeVideoGeometry(output)).toMatchObject({ width: W, height: H, fps: 24, numFrames: 24 });
+    } finally { await page.close(); }
+  }, 120000);
+
 });

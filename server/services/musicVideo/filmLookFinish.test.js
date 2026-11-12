@@ -9,16 +9,17 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { runInNewContext } from 'node:vm';
 import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
 vi.mock('../../lib/paths.js', async (importOriginal) => makePathsProxy(await importOriginal(), {
   dataRoot: () => lazyTempDataRoot('portos-mv-film-look-finish-'),
 }));
-const { seen } = vi.hoisted(() => ({ seen: { opened: [], contract: null, options: null, progress: [], ffmpeg: [], encodeFail: null, labelFail: false, signature: null, page: null } }));
+const { seen } = vi.hoisted(() => ({ seen: { webAdmitted: false, webFail: null, webAbort: null, geometryFrames: 48, opened: [], contract: null, options: null, progress: [], ffmpeg: [], encodeFail: null, labelFail: false, signature: null, page: null } }));
 vi.mock('../../lib/ffmpeg.js', () => ({
   findFfmpeg: async () => 'ffmpeg',
   // 48 frames at 24 fps: the container reports a hair more than the frames hold.
-  probeVideoGeometry: async () => ({ width: 1280, height: 720, fps: 24, numFrames: 48, durationSec: 2.04 }),
+  probeVideoGeometry: async () => ({ width: 1280, height: 720, fps: 24, numFrames: seen.geometryFrames, durationSec: seen.geometryFrames / 24 + 0.04 }),
   probeVideoCodecSignature: async () => seen.signature,
   runFfmpegProcess: async ({ args }) => {
     const { writeFile: write } = await import('node:fs/promises');
@@ -46,12 +47,17 @@ vi.mock('../htmlComposition/browser.js', () => ({
     return seen.page?.() || { evaluate: async () => 'probably', check() {}, async close() {}, async send() { return {}; } };
   },
 }));
+vi.mock('./filmLookWebEncoder.js', () => ({
+  admitFilmLookWeb: async () => seen.webAdmitted,
+  encodeFilmLookWeb: async () => {},
+}));
 vi.mock('../htmlComposition/encode.js', () => ({
   encodeComposition: vi.fn(),
   encodeCompositionSegments: async (_page, contract, outputPath, options) => {
     const { writeFile: write } = await import('node:fs/promises');
     seen.contract = contract;
     seen.options = options;
+    if (seen.webFail && options.encode.name === 'encodeFilmLookWeb') { seen.webAbort?.abort(); throw seen.webFail; }
     if (seen.encodeFail) throw seen.encodeFail;
     // A worker browser, opened while the page is staged.
     if (seen.page) await options.openPage();
@@ -73,6 +79,7 @@ beforeEach(async () => {
   seen.contract = null;
   seen.options = null;
   seen.encodeFail = null;
+  seen.webAdmitted = false; seen.webFail = null; seen.webAbort = null; seen.geometryFrames = 48;
   seen.labelFail = false;
   // What every PortOS encoder writes.
   seen.signature = 'codec_name=h264|color_primaries=bt709|color_range=tv|color_space=bt709|color_transfer=bt709|pix_fmt=yuv420p';
@@ -177,6 +184,85 @@ describe('film look finishing pass', () => {
     expect(seen.opened[1].source).toBe('composed-render');
     expect(warned).toHaveBeenCalledWith(expect.stringContaining('could not be labelled sRGB'));
     expect(await readFile(path, 'utf8')).toBe('finished-video');
+  });
+
+  it('uses WebCodecs only after GPU and encoded quality admission', async () => {
+    const png = await solidPng(120);
+    seen.page = drawingPage({ svgPng: png, gpuPng: png, svgMs: 100, gpuMs: 10, switches: [] });
+    seen.geometryFrames = 240;
+    seen.webAdmitted = true;
+    await expect(applyFilmLookFinish({ project: { filmLook: look }, path, jobId: 'web-admitted', onProgress: f => seen.progress.push(f) })).resolves.toBe(true);
+    expect(seen.options.encode).toBe((await import('./filmLookWebEncoder.js')).encodeFilmLookWeb);
+    expect(seen.progress).toEqual([0.475, 1]);
+    expect(await readFile(path, 'utf8')).toBe('finished-video');
+  });
+
+  it('restarts the entire pass with PNG when an admitted WebCodecs worker fails', async () => {
+    const png = await solidPng(120);
+    const switches = [];
+    seen.page = drawingPage({ svgPng: png, gpuPng: png, svgMs: 100, gpuMs: 10, switches });
+    seen.geometryFrames = 240;
+    seen.webAdmitted = true;
+    seen.webFail = new Error('reordered frames');
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await expect(applyFilmLookFinish({ project: { filmLook: look }, path, jobId: 'web-fallback' })).resolves.toBe(true);
+    expect(seen.options.encode).toBe((await import('../htmlComposition/encode.js')).encodeComposition);
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining('restarting with PNG'));
+    expect(await readFile(path, 'utf8')).toBe('finished-video');
+  });
+
+  it('keeps the source and does not restart after cancellation during WebCodecs', async () => {
+    const png = await solidPng(120);
+    seen.page = drawingPage({ svgPng: png, gpuPng: png, svgMs: 100, gpuMs: 10, switches: [] });
+    seen.geometryFrames = 240;
+    seen.webAdmitted = true;
+    seen.webAbort = new AbortController();
+    seen.webFail = new Error('aborted');
+    await expect(applyFilmLookFinish({ project: { filmLook: look }, path, jobId: 'web-cancel', signal: seen.webAbort.signal })).rejects.toThrow();
+    expect(await readFile(path, 'utf8')).toBe('composed-render');
+    expect(seen.options.encode.name).toBe('encodeFilmLookWeb');
+    expect(seen.ffmpeg).toHaveLength(1);
+  });
+
+  it('rejects reordered or missing WebCodecs chunks before muxing', async () => {
+    await applyFilmLookFinish({ project: { filmLook: look }, path, jobId: 'web-order', useGpu: false });
+    const script = seen.opened[0].app;
+    const setup = (mode) => {
+      let index = 0;
+      class Encoder {
+        static async isConfigSupported(config) { return { supported: true, config }; }
+        constructor(callbacks) { this.callbacks = callbacks; this.encodeQueueSize = 0; }
+        configure() {}
+        encode(frame) {
+          if (mode === 'drop' && index++ === 1) return;
+          const timestamp = mode === 'reorder' ? frame.timestamp + 1 : frame.timestamp;
+          this.callbacks.output({ timestamp, type: 'key', byteLength: mode === 'oversize' ? 20_000_000 : 1, copyTo(bytes) { bytes[0] = 1; } });
+        }
+        async flush() {}
+        close() {}
+      }
+      class Frame { constructor(_canvas, options) { this.timestamp = options.timestamp; } close() {} }
+      class Reader { readAsDataURL(blob) { void blob.arrayBuffer().then(bytes => { this.result = `data:;base64,${Buffer.from(bytes).toString('base64')}`; this.onload(); }); } }
+      const video = { readyState: 2 };
+      const canvas = { style: {} };
+      const context = { document: { getElementById: id => id === 'source' ? video : canvas },
+        __portosFilmLookGpu: { create: () => ({ renderer: 'test', dispose() {} }) },
+        VideoEncoder: Encoder, VideoFrame: Frame, FileReader: Reader, Blob, performance, setTimeout, clearTimeout };
+      runInNewContext(script, context);
+      context.__portosFilmLookFinish.useGpu(true);
+      return context.__portosFilmLookFinish;
+    };
+    const reordered = setup('reorder');
+    await reordered.startEncoder();
+    await expect(reordered.frameEncoder.frame()).rejects.toThrow('reordered frames');
+    const oversized = setup('oversize');
+    await oversized.startEncoder();
+    await expect(oversized.frameEncoder.frame()).rejects.toThrow('exceeded frame budget');
+    const missing = setup('drop');
+    await missing.startEncoder();
+    await missing.frameEncoder.frame();
+    await missing.frameEncoder.frame();
+    await expect(missing.frameEncoder.finish()).rejects.toThrow('lost frames');
   });
 
   it('draws the look on the GPU only when its check frame matches the SVG filter and is faster', async () => {
