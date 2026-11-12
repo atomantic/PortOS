@@ -24,7 +24,7 @@ import { safeUnder, edgeFadeFilter } from '../../lib/ffmpeg.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { listProjects, mutateProjectRecord } from './projects.js';
 import { requireProject } from './requireProject.js';
-import { suggestSocialCuts } from './socialCuts.js';
+import { kitCutWindows } from './socialCuts.js';
 import { musicVideoAspect } from '../../lib/musicVideoAspect.js';
 import { musicVideoDependencyChanges } from '../../lib/musicVideoDependencies.js';
 import { buildChapters, buildSrt, buildPublishCopyPrompt, parsePublishCopy, normalizeCopyOptions, PUBLISH_PLATFORMS } from './publishKitText.js';
@@ -125,7 +125,9 @@ async function beginPublishKitBuild(projectId, jobId) {
     await ensureDir(PATHS.videoThumbnails);
     const durationSec = Number(entry.durationSec) > 0 ? Number(entry.durationSec) : await probeVideoDuration(masterPath);
     const stem = `music-video-${projectId.slice(3, 11)}-${Date.now()}`;
-    const [teaser] = suggestSocialCuts(project, { count: 1, minSec: 25, maxSec: 45 });
+    // The vertical cut follows the teaser's hook unless the director posts Suno Hooks and that hook opens too late for one.
+    const platforms = await (await import('./publish/platforms.js')).getPublishPlatforms().catch(() => null);
+    const { teaser, vertical } = kitCutWindows(project, { sunoHook: platforms?.sunoHook?.enabled === true });
     const encodes = [
       { kind: 'x-1080p', label: 'X / social up to 1080p (12 Mbps)', filename: `${stem}-x-1080p.mp4`,
         args: ['-i', masterPath, '-vf', "scale=w='min(1920,iw)':h='min(1080,ih)':force_original_aspect_ratio=decrease", ...X_VIDEO_ARGS, ...AUDIO_ARGS] },
@@ -137,14 +139,14 @@ async function beginPublishKitBuild(projectId, jobId) {
       // #10150: Shorts/TikTok/Reels need 9:16. A composition that lays itself out at 9:16
       // (portosComposition.formats) renders the window natively; otherwise the 16:9 master's whole
       // frame is fitted over a blurred fill of itself (#10377) — a center-crop dropped off-center text.
-      ...(teaser && musicVideoAspect(project) === '16:9' ? [{ kind: 'vertical-9x16', label: `Vertical 9:16 ${Math.round(teaser.endSec - teaser.startSec)}s`, filename: `${stem}-vertical.mp4`, window: teaser,
+      ...(vertical && musicVideoAspect(project) === '16:9' ? [{ kind: 'vertical-9x16', label: `Vertical 9:16 ${Math.round(vertical.endSec - vertical.startSec)}s`, filename: `${stem}-vertical.mp4`, window: vertical,
         layout: 'fit',
         native: async (outputPath, onProgress) => (await import('./excerptRender.js')).renderSeekedWindow(project, {
-          startSec: teaser.startSec, endSec: teaser.endSec, aspect: '9:16', fade: true, outputPath, jobId: `${jobId}-vertical`, signal: job.abort.signal, onProgress,
+          startSec: vertical.startSec, endSec: vertical.endSec, aspect: '9:16', fade: true, outputPath, jobId: `${jobId}-vertical`, signal: job.abort.signal, onProgress,
         }),
-        args: ['-ss', String(teaser.startSec), '-t', String(teaser.endSec - teaser.startSec), '-i', masterPath,
+        args: ['-ss', String(vertical.startSec), '-t', String(vertical.endSec - vertical.startSec), '-i', masterPath,
           '-vf', VERTICAL_FIT_FILTER, ...X_VIDEO_ARGS,
-          '-af', `asetpts=PTS-STARTPTS${edgeFadeFilter(teaser.endSec - teaser.startSec)}`, ...AUDIO_ARGS] }] : []),
+          '-af', `asetpts=PTS-STARTPTS${edgeFadeFilter(vertical.endSec - vertical.startSec)}`, ...AUDIO_ARGS] }] : []),
     ];
     const candidates = thumbnailCandidates(project, durationSec);
     const total = encodes.length + candidates.length;
