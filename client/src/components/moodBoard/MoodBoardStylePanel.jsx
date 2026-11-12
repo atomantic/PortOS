@@ -57,12 +57,14 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
   // Stays shown while a saved negative prompt is being cleared.
   const negativeShown = negativeOpen || Boolean(negative) || Boolean(savedNegative);
   const [composing, setComposing] = useState(false);
-  const [starting, setStarting] = useState(false);
-  const startingRef = useRef(false);
-  const [job, setJob] = useState(null);
+  const boardId = board?.id;
+  const [startRequest, setStartRequest] = useState(null);
+  const startingRef = useRef(null);
+  const starting = Boolean(boardId && startRequest?.boardId === boardId);
+  const [jobSnapshot, setJob] = useState(null);
+  const job = jobSnapshot?.boardId === boardId ? jobSnapshot : null;
   const jobRunning = job?.status === 'running';
   const busy = composing || jobRunning || starting;
-  const boardId = board?.id;
   const boardIdRef = useRef(boardId);
   boardIdRef.current = boardId;
   const refreshRef = useRef(0);
@@ -217,27 +219,29 @@ export default function MoodBoardStylePanel({ board, onBoardChange }) {
     : '';
 
   const analyzeBoard = async (makeComplete = false) => {
-    if (!board?.id || busy || startingRef.current) return;
-    startingRef.current = true;
+    if (!boardId || busy || startingRef.current?.boardId === boardId) return;
     if (!selectedProviderId) {
       toast.error('Select a vision-capable provider to analyze the board');
-      startingRef.current = false;
       return;
     }
-    setStarting(true);
-    const started = await startMoodBoardAnalyze(board.id, {
+    const request = { boardId };
+    const refresh = refreshRef.current;
+    startingRef.current = request;
+    setStartRequest(request);
+    const started = await startMoodBoardAnalyze(boardId, {
       ...(makeComplete ? { render: { mode: resolvedMode, ...(resolvedMode === IMAGE_GEN_MODE.LOCAL && imageCfg?.modelId ? { model: imageCfg.modelId } : {}) } } : {}),
       providerId: selectedProviderId,
       model: selectedModel || undefined,
       effort: effort || undefined,
     }, { silent: true }).catch((err) => {
-      toast.error(err?.message || 'Could not start the board analysis');
+      if (mountedRef.current && boardIdRef.current === boardId) toast.error(err?.message || 'Could not start the board analysis');
       return null;
     });
-    startingRef.current = false;
+    if (startingRef.current === request) startingRef.current = null;
     if (mountedRef.current) {
-      setStarting(false);
-      if (started) setJob(started);
+      setStartRequest((current) => current === request ? null : current);
+      // Push events and restored state received since kickoff are newer than this response.
+      if (started && boardIdRef.current === boardId && refresh === refreshRef.current) setJob(started);
     }
   };
 
