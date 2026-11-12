@@ -179,6 +179,8 @@ it('starts Make complete with the selected renderer and restores server-side ima
   render(<MoodBoardStylePanel board={analyzedBoard} onBoardChange={vi.fn()} />);
   expect(await screen.findByRole('button', { name: 'Creating main board image…' })).toBeDisabled();
   expect(screen.getByRole('button', { name: 'Compose style prompt' })).toBeDisabled();
+  expect(screen.getByLabelText('Style prompt')).toBeDisabled();
+  expect(screen.getByLabelText('Negative prompt (optional)')).toBeDisabled();
 });
 
 it('retains a failed completion reason on return and protects unsaved style edits', async () => {
