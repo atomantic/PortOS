@@ -1,11 +1,10 @@
 import {
   CLAUDE_EFFORT_LEVELS,
   CODEX_EFFORT_LEVELS,
-  ANTIGRAVITY_EFFORT_LEVELS,
   CURSOR_EFFORT_LEVELS,
   GROK_EFFORT_LEVELS
 } from '../utils/providers';
-import { codexEffortLevelsForModel } from '../../../server/lib/providerModels.js';
+import { codexEffortLevelsForModel, effortLevelsForProvider } from '../../../server/lib/providerModels.js';
 
 /**
  * Client mirrors of the reviewer vocabulary in `server/lib/reviewerConfig.js` —
@@ -77,7 +76,7 @@ export const DEFAULT_GOAL_FIDELITY_FOLLOW_UP_TRIGGER = 'rethink';
 export const REVIEWER_EFFORT_LEVELS = Object.freeze({
   claude: CLAUDE_EFFORT_LEVELS,
   codex: CODEX_EFFORT_LEVELS,
-  antigravity: ANTIGRAVITY_EFFORT_LEVELS,
+  antigravity: effortLevelsForProvider({ harnessId: 'antigravity' }),
   cursor: CURSOR_EFFORT_LEVELS,
   pi: ['low', 'medium', 'high', 'xhigh', 'max'],
   grok: GROK_EFFORT_LEVELS,
