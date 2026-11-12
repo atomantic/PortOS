@@ -684,7 +684,7 @@ describe('telegram service', () => {
       expect(vi.getTimerCount()).toBe(0);
     });
 
-    it('keeps retrying with a growing delay after a failed reconnect, stops at 10, and resets on success', async () => {
+    it('keeps retrying with a growing delay capped at 5 minutes, still pending after 20 attempts, and resets on success', async () => {
       const telegram = await connectThenDropNetwork();
       await telegram.sendMessage('first'); // attempt 1 armed: 5s
 
@@ -699,12 +699,16 @@ describe('telegram service', () => {
       await vi.advanceTimersByTimeAsync(1);
       expect(h.getMe).toHaveBeenCalledTimes(2);
 
-      // attempts 3..10 keep failing until the cap leaves nothing armed
-      await vi.advanceTimersByTimeAsync(5_000 * (3 + 4 + 5 + 6 + 7 + 8 + 9 + 10));
-      expect(h.getMe).toHaveBeenCalledTimes(10);
-      expect(vi.getTimerCount()).toBe(0);
-      await vi.advanceTimersByTimeAsync(600_000);
-      expect(h.getMe).toHaveBeenCalledTimes(10);
+      // Advance through attempts 3..20. Each attempt delay is min(5000 * attempt, 300_000)
+      for (let attempt = 3; attempt <= 20; attempt++) {
+        const delay = Math.min(5000 * attempt, 5 * 60 * 1000);
+        expect(delay).toBeLessThanOrEqual(5 * 60 * 1000);
+        await vi.advanceTimersByTimeAsync(delay);
+        expect(h.getMe).toHaveBeenCalledTimes(attempt);
+      }
+
+      // After 20 consecutive transient failures, a reconnect is still pending
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
 
       // A later successful connection resets the counter: the next outage starts at 5s again.
       h.getMe.mockResolvedValue({ username: 'example_bot' });
@@ -716,6 +720,52 @@ describe('telegram service', () => {
       await telegram.sendMessage('again');
       await vi.advanceTimersByTimeAsync(5_000);
       expect(h.getMe).toHaveBeenCalledTimes(1);
+    });
+
+    it('schedules a reconnect when boot init() fails with a network error, and starts polling on later success', async () => {
+      vi.useFakeTimers();
+      const telegram = await loadTelegramActive();
+      h.getMe.mockRejectedValue(new Error('network down'));
+
+      await telegram.init(false);
+      expect(telegram.getStatus().connected).toBe(false);
+      expect(vi.getTimerCount()).toBe(1);
+
+      // When network recovers and timer fires at 5s, reconnects and polls
+      let secondGetMeCalled;
+      const secondGetMePromise = new Promise((resolve) => { secondGetMeCalled = resolve; });
+      h.getMe.mockImplementation(async () => {
+        secondGetMeCalled?.();
+        return { username: 'boot_bot' };
+      });
+      await vi.advanceTimersByTimeAsync(5_000);
+      await secondGetMePromise;
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(telegram.getStatus().connected).toBe(true);
+      expect(telegram.getStatus().botUsername).toBe('boot_bot');
+    });
+
+    it('does not schedule a reconnect when getMe() is rejected as Unauthorized or Not Found', async () => {
+      vi.useFakeTimers();
+      const telegram = await loadTelegramActive();
+      const err = Object.assign(new Error('Unauthorized'), { error_code: 401 });
+      h.getMe.mockRejectedValueOnce(err);
+
+      await telegram.init(false);
+      expect(telegram.getStatus().connected).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
+
+      await vi.advanceTimersByTimeAsync(600_000);
+      expect(h.getMe).toHaveBeenCalledTimes(1);
+
+      // Not Found (404) also does not schedule reconnect
+      const err404 = Object.assign(new Error('Not Found'), { error_code: 404 });
+      h.getMe.mockRejectedValueOnce(err404);
+
+      await telegram.init(false);
+      expect(telegram.getStatus().connected).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
     });
 
     it('does not restart the manual bot after switching to the MCP bridge', async () => {

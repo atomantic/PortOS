@@ -32,7 +32,13 @@ async function apiCall(token, method, body = {}) {
     signal: AbortSignal.timeout(API_TIMEOUT_MS)
   });
   const json = await readResponseJson(res);
-  if (!json.ok) throw new Error(json.description || `Telegram API error: ${method}`);
+  if (!json.ok) {
+    const err = new Error(json.description || `Telegram API error: ${method}`);
+    if (json.error_code !== undefined) {
+      err.error_code = json.error_code;
+    }
+    throw err;
+  }
   return json.result;
 }
 
