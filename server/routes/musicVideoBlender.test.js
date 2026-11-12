@@ -15,7 +15,7 @@ import { cleanupTempDataRoots, lazyTempDataRoot, makePathsProxy } from '../lib/m
 import { createFakeBlender, exampleManifest } from '../services/musicVideo/blender/__blenderFixture.js';
 
 const ROOT = () => lazyTempDataRoot('mv-blender-route-test-');
-const blender = vi.hoisted(() => ({ fake: null, ffmpeg: [] }));
+const blender = vi.hoisted(() => ({ fake: null, ffmpeg: [], posterHold: null }));
 
 vi.mock('../lib/paths.js', async (importOriginal) => makePathsProxy(await importOriginal(), { dataRoot: ROOT }));
 vi.mock('../services/settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));
@@ -27,9 +27,12 @@ vi.mock('../lib/ffmpeg.js', async (importOriginal) => ({
   ...await importOriginal(),
   findFfmpeg: vi.fn(async () => '/opt/example/ffmpeg'),
   bt709TagFilter: vi.fn(async () => null),
-  runFfmpegProcess: vi.fn(async ({ args }) => {
+  runFfmpegProcess: vi.fn(async ({ args, signal }) => {
     const { writeFileSync: write } = await import('node:fs');
     blender.ffmpeg.push(args);
+    if (args.at(-1).endsWith('poster.jpg.part.jpg') && blender.posterHold && !signal?.aborted) {
+      await Promise.race([blender.posterHold, new Promise((resolve) => signal?.addEventListener('abort', resolve, { once: true }))]);
+    }
     write(args.at(-1), 'video');
     return { ok: true };
   }),
@@ -48,6 +51,8 @@ const { default: musicVideoRoutes } = await import('./musicVideo.js');
 const projects = await import('../services/musicVideo/projects.js');
 const { musicVideoEvents } = await import('../services/musicVideo/events.js');
 const { __resetBlenderJobsForTests } = await import('../services/musicVideo/blender/jobs.js');
+const { resolveBlenderMedia } = await import('../services/musicVideo/blender/workspace.js');
+const { prepareBlenderFinal } = await import('../services/musicVideo/blender/finalRender.js');
 const { launchDetached } = await import('../lib/launchDetached.js');
 const { applyFilmLookFinish } = await import('../services/musicVideo/filmLookFinish.js');
 const { renderTypographyOverlays } = await import('../services/musicVideo/compositionRender.js');
@@ -106,6 +111,7 @@ beforeEach(async () => {
   __resetBlenderJobsForTests();
   blender.fake = createFakeBlender();
   blender.ffmpeg.length = 0;
+  blender.posterHold = null;
   events = [];
   musicVideoEvents.off('blender', onEvent);
   musicVideoEvents.on('blender', onEvent);
@@ -199,6 +205,10 @@ describe('Blender film workspace and source files', () => {
     writeFileSync(join(workspace(), 'src', 'plate.png'), Buffer.alloc(8));
     expect((await request(app).get(api('/files'))).body.files).toEqual([expect.objectContaining({ path: 'plate.png', text: false })]);
     expect((await request(app).get(api('/file?path=plate.png'))).body.code).toBe('MUSIC_VIDEO_BLENDER_NOT_TEXT');
+    // The route rejects traversal; the media service enforces its own renders-only contract too.
+    expect((await request(app).get(api('/media?path=../src/plate.png'))).status).toBe(400);
+    await expect(resolveBlenderMedia(project.id, '../src/plate.png')).rejects.toMatchObject({ status: 404 });
+    await expect(resolveBlenderMedia(project.id, 's010/../../src/plate.png')).rejects.toMatchObject({ status: 404 });
   });
 
   // Creating a symlink needs a privilege Windows CI does not grant.
@@ -274,6 +284,75 @@ describe('Blender film sync', () => {
     release();
     blender.fake.control.describeHold = null;
     expect((await syncFilm()).job.status).toBe('done');
+  });
+
+  it('reserves sync before asynchronous preparation and releases the reservation after refusal', async () => {
+    // No film: both requests must be independently eligible for the same refusal.
+    expect((await request(app).post(api('/sync')).send({})).body.code).toBe('MUSIC_VIDEO_BLENDER_NO_FILM');
+    expect((await request(app).post(api('/sync')).send({})).body.code).toBe('MUSIC_VIDEO_BLENDER_NO_FILM');
+    await scaffold();
+    blender.fake.control.manifest = exampleManifest();
+    let release;
+    const hold = new Promise((resolve) => { release = resolve; });
+    const original = blender.fake.getCodeAnimationExecution;
+    let entered;
+    const preparing = new Promise((resolve) => { entered = resolve; });
+    blender.fake.getCodeAnimationExecution = async () => { entered(); await hold; return original(); };
+    const first = Promise.resolve(request(app).post(api('/sync')).send({}));
+    await preparing;
+    try {
+      const second = await request(app).post(api('/sync')).send({});
+      expect([second.status, second.body.code]).toEqual([409, 'MUSIC_VIDEO_BLENDER_SYNC_IN_PROGRESS']);
+      expect(events.some((event) => event.job?.kind === 'sync')).toBe(false);
+    } finally { release(); }
+    expect((await first).status).toBe(202);
+    await settled();
+    expect((await state()).jobs.filter((job) => job.kind === 'sync')).toHaveLength(1);
+  });
+
+  it('keeps sync cleanup and shot rendering from overlapping in either direction', async () => {
+    await scaffold();
+    await syncFilm();
+    let release;
+    blender.fake.control.hold = new Promise((resolve) => { release = resolve; });
+    events.length = 0;
+    await request(app).post(api('/render')).send({ quality: 'final', shotIds: ['s030'] });
+    await vi.waitFor(() => expect(events.some((event) => event.job?.index === 1)).toBe(true), WAIT);
+    const blocked = await request(app).post(api('/sync')).send({});
+    expect([blocked.status, blocked.body.code]).toEqual([409, 'MUSIC_VIDEO_BLENDER_RENDERS_ACTIVE']);
+    expect(readdirSync(join(workspace(), 'renders/s030/final/frames'))).toHaveLength(1);
+    blender.fake.control.hold = null;
+    release();
+    await settled();
+    let releaseDescribe;
+    blender.fake.control.describeHold = new Promise((resolve) => { releaseDescribe = resolve; });
+    events.length = 0;
+    const sync = await request(app).post(api('/sync')).send({});
+    expect(sync.status).toBe(202);
+    const render = await request(app).post(api('/render')).send({ quality: 'still', shotIds: ['s030'] });
+    expect([render.status, render.body.code]).toEqual([409, 'MUSIC_VIDEO_BLENDER_SYNC_IN_PROGRESS']);
+    blender.fake.control.describeHold = null;
+    releaseDescribe();
+    await settled();
+    expect((await state()).renders.s030.final.complete).toBe(true);
+  });
+
+  it('refuses a final with either uncovered edge frame or shots past a shortened song', async () => {
+    await scaffold();
+    await request(app).put(api('/settings')).send({ fps: 25 });
+    const full = { title: 'Coverage', shots: [{ id: 's010', start: 0, end: 6 }] };
+    const early = { ...full, shots: [{ id: 's010', start: 0, end: 5.96 }] };
+    await syncFilm(early);
+    await renderAll('final');
+    await expect(prepareBlenderFinal(await projects.getProject(project.id))).rejects.toMatchObject({ code: 'MUSIC_VIDEO_BLENDER_SHOTS_NOT_READY', context: { missing: [], stale: [], problems: [expect.stringContaining('after 5.96 s')] } });
+    await syncFilm({ ...full, shots: [{ id: 's010', start: 0.04, end: 6 }] });
+    await renderAll('final');
+    await expect(prepareBlenderFinal(await projects.getProject(project.id))).rejects.toMatchObject({ context: { problems: [expect.stringContaining('first 0.04 s')] } });
+    await syncFilm(full);
+    await renderAll('final');
+    expect((await prepareBlenderFinal(await projects.getProject(project.id))).durationSec).toBe(6);
+    await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current, audioAnalysis: { ...current.audioAnalysis, durationSec: 5 } } }));
+    await expect(prepareBlenderFinal(await projects.getProject(project.id))).rejects.toMatchObject({ context: { problems: [expect.stringContaining('after the current song ends (5 s)')] } });
   });
 
   it('saves the manifest and mirrors each shot onto one Board scene, in song order', async () => {
@@ -514,6 +593,97 @@ describe('Blender film shot renders', () => {
     blender.fake.control.jobs.length = 0;
     await renderAll('final', { shotIds: ['s010'] });
     expect(blender.fake.control.jobs[0].resume).toBe(false);
+  });
+
+  it('marks song-dependent pictures stale, preserves legacy metadata, and restarts partial frames after a song edit', async () => {
+    await scaffold();
+    await syncFilm();
+    await renderAll('preview', { shotIds: ['s010'] });
+    await renderAll('still', { shotIds: ['s010'] });
+    const metadata = join(workspace(), 'renders/s010/preview/render.json');
+    const recorded = JSON.parse(readFileSync(metadata, 'utf8'));
+    const index = JSON.parse(readFileSync(join(workspace(), 'renders/s010/stills/stills.json'), 'utf8'));
+    expect(index[0].songHash).toBe(recorded.songHash);
+    // Old output stays playable, but missing evidence cannot establish currency.
+    delete recorded.songHash;
+    writeFileSync(metadata, JSON.stringify(recorded));
+    const legacy = readFileSync(metadata, 'utf8');
+    expect((await state()).renders.s010.preview).toMatchObject({ complete: true, stale: true, staleReasons: ['song'] });
+    expect(readFileSync(metadata, 'utf8')).toBe(legacy);
+    await renderAll('preview', { shotIds: ['s010'] });
+    const original = await projects.getProject(project.id);
+    for (const change of [
+      { name: 'A new title' },
+      { audioAnalysis: { ...original.audioAnalysis, beats: [0.25], bpm: 110 } },
+      { lyricCues: [{ id: 'line-1', text: 'New words', startSec: 0, endSec: 1, words: [{ w: 'New', startSec: 0, endSec: 0.5 }] }] },
+      { lyricMarkers: [{ type: 'section', label: 'New marker', kind: 'verse', line: 0 }] },
+    ]) {
+      await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current, ...change } }));
+      expect((await state()).renders.s010.preview.staleReasons, Object.keys(change).join(', ')).toEqual(['song']);
+      await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current, ...Object.fromEntries(Object.keys(change).map((key) => [key, original[key]])) } }));
+      expect((await state()).renders.s010.preview.stale).toBe(false);
+    }
+
+    let release;
+    blender.fake.control.hold = new Promise((resolve) => { release = resolve; });
+    events.length = 0;
+    const started = await request(app).post(api('/render')).send({ quality: 'final', shotIds: ['s010'] });
+    await vi.waitFor(() => expect(events.some((event) => event.job?.index === 1)).toBe(true), WAIT);
+    await request(app).post(api(`/jobs/${started.body.jobs[0].id}/cancel`)).send({});
+    await settled();
+    await projects.mutateProjectRecord(project.id, (current) => ({ project: { ...current, name: 'Changed title',
+      audioAnalysis: { ...current.audioAnalysis, beats: [0.25, 0.75], bpm: 110 },
+      lyricCues: [{ id: 'line-1', text: 'New lyrics', startSec: 0, endSec: 2, words: [{ w: 'New', startSec: 0, endSec: 1 }] }],
+    } }));
+    const changed = (await state()).renders.s010;
+    expect(changed.preview.staleReasons).toEqual(['song']);
+    expect(changed.final).toMatchObject({ complete: false, stale: true, staleReasons: ['song'], partialFrames: 1 });
+    expect(changed.stills[0].stale).toBe(true);
+    blender.fake.control.hold = null;
+    release();
+    blender.fake.control.jobs.length = 0;
+    await renderAll('final', { shotIds: ['s010'] });
+    expect(blender.fake.control.jobs[0].resume).toBe(false);
+    expect((await state()).renders.s010.final.stale).toBe(false);
+  });
+
+  it('serializes concurrent still requests for a shot through their image and index writes', async () => {
+    await scaffold();
+    await syncFilm();
+    await request(app).put(api('/settings')).send({ concurrency: 4 });
+    let release;
+    blender.fake.control.hold = new Promise((resolve) => { release = resolve; });
+    events.length = 0;
+    const requests = await Promise.all([
+      request(app).post(api('/render')).send({ quality: 'still', shotIds: ['s010'], times: [0, 0.5] }),
+      request(app).post(api('/render')).send({ quality: 'still', shotIds: ['s010'], times: [0.5, 1] }),
+    ]);
+    expect(requests.map((response) => response.status)).toEqual([202, 202]);
+    await vi.waitFor(() => expect(events.some((event) => event.job?.index === 1)).toBe(true), WAIT);
+    expect((await state()).jobs.filter((job) => job.kind === 'render').map((job) => job.status).sort()).toEqual(['queued', 'running']);
+    blender.fake.control.hold = null;
+    release();
+    await settled(2);
+    expect(blender.fake.control.peak).toBe(1);
+    expect((await state()).renders.s010.stills.map((still) => still.timeSec).sort()).toEqual([0, 0.5, 1]);
+  });
+
+  it('settles cancellation during poster encoding as canceled and leaves resumable metadata', async () => {
+    await scaffold();
+    await syncFilm();
+    let release;
+    blender.posterHold = new Promise((resolve) => { release = resolve; });
+    events.length = 0;
+    const started = await request(app).post(api('/render')).send({ quality: 'preview', shotIds: ['s010'] });
+    await vi.waitFor(() => expect(blender.ffmpeg.some((args) => args.at(-1).endsWith('poster.jpg.part.jpg'))).toBe(true), WAIT);
+    await request(app).post(api(`/jobs/${started.body.jobs[0].id}/cancel`)).send({});
+    const [ended] = await settled();
+    expect(ended.job.status).toBe('canceled');
+    expect(JSON.parse(readFileSync(join(workspace(), 'renders/s010/preview/render.json'), 'utf8')).complete).toBe(false);
+    release();
+    blender.posterHold = null;
+    await renderAll('preview', { shotIds: ['s010'] });
+    expect((await state()).renders.s010.preview).toMatchObject({ complete: true, stale: false });
   });
 
   it('reports the Shots step on project reads from the final renders on disk, without storing it', async () => {
