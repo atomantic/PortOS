@@ -59,6 +59,7 @@ vi.mock('./settings.js', () => ({
 const notifEmitter = vi.hoisted(() => {
   const listeners = {};
   return {
+    listeners,
     on(event, fn) { (listeners[event] ||= []).push(fn); },
     removeListener(event, fn) {
       listeners[event] = (listeners[event] || []).filter((f) => f !== fn);
@@ -352,6 +353,31 @@ describe('telegram service', () => {
         { text: '✅ Approve', callback_data: 'mem_approve:mem-1' },
         { text: '❌ Reject', callback_data: 'mem_reject:mem-1' },
       ]);
+    });
+
+    it('does not produce an unhandled rejection when getDomainAutonomyMode rejects', async () => {
+      const telegram = await loadTelegramActive();
+      await telegram.init(false);
+      const { getDomainAutonomyMode } = await import('./cosState.js');
+      getDomainAutonomyMode.mockRejectedValueOnce(new Error('cos state store down'));
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      // Direct bot listens via notificationEvents.on('added', forwardNotification)
+      // Since EventEmitter ignores returned promises, forwardNotification returning or resolving
+      // without rejection is verified by the promise not leaking to process unhandledRejection.
+      const listeners = notifEmitter.listeners?.added || [];
+      // or directly invoke the listener:
+      await expect(
+        Promise.all(listeners.map((fn) => fn({
+          type: 'health_issue',
+          title: 'Store down',
+          priority: 'high',
+        })))
+      ).resolves.toBeDefined();
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('📱 Telegram forward failed for health_issue: cos state store down')
+      );
     });
 
     it('truncates a body past the raw cap before escaping it', async () => {
