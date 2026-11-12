@@ -47,31 +47,32 @@ describe.skipIf(!canRun)('opaque document film-look canvas with Chrome and ffmpe
     const build = look => execFileSync(process.execPath, ['--input-type=module', '-e', `import { buildDocumentPreview } from ${JSON.stringify(new URL('./documentPreview.js', import.meta.url).href)}; const result=await buildDocumentPreview({id:'standalone',scenes:[],audioAnalysis:{durationSec:1},filmLook:JSON.parse(process.argv[2])},{files:new Map([['index.html',{abs:process.argv[1]}]])});process.stdout.write(result.html);`, path, JSON.stringify(look)], { encoding: 'utf8', env: { ...process.env, NODE_ENV: 'test' } });
     const browser = await chromium.launch({ executablePath: chrome, headless: true });
     const page = await browser.newPage({ viewport: { width: W, height: H } });
+    const load = async html => { await page.goto('about:blank'); await page.setContent(html); };
     const colors = () => page.evaluate(() => ['button', '#system'].map(selector => {
       const style = getComputedStyle(document.querySelector(selector));
       return [style.color, style.backgroundColor, style.colorScheme];
     }));
     const screenshot = async () => sharp(await page.screenshot()).removeAlpha().raw().toBuffer();
     try {
-      await page.setContent(authored);
+      await load(authored);
       const originalColors = await colors();
       const html = build({ version: 2, vignette: 0.6 });
-      await page.setContent(html);
+      await load(html);
       await page.evaluate(() => portosComposition.seek(0));
       const raw = await screenshot();
       for (const [x, y] of corners) expect(raw[(y * W + x) * 3]).toBeLessThan(raw[(H / 2 * W + W / 2) * 3] - 25);
       expect(await colors()).toEqual(originalColors);
       // The same document with the opt-in disabled is the pre-fix baseline.
       const neutral = build({ version: 2, contrast: 0.2 });
-      await page.setContent(neutral);
+      await load(neutral);
       const opaque = await screenshot();
       const legacy = neutral.replace('if (true) {\n      const filter = host.querySelector', 'if (false) {\n      const filter = host.querySelector');
       expect(legacy).not.toBe(neutral);
-      await page.setContent(legacy);
+      await load(legacy);
       expect(await screenshot()).toEqual(opaque);
       // No-look overlays remain transparent and retain the direct globals used by capture scripts.
       await writeFile(path, authored.replace('background:#808080', 'background:transparent'));
-      await page.setContent(build(null));
+      await load(build(null));
       expect(await page.evaluate(() => ({ filter: document.documentElement.style.filter, background: getComputedStyle(document.body).backgroundColor, seek: typeof portosComposition.seek })))
         .toEqual({ filter: '', background: 'rgba(0, 0, 0, 0)', seek: 'function' });
       const transparent = await sharp(await page.screenshot({ omitBackground: true })).ensureAlpha().raw().toBuffer();
