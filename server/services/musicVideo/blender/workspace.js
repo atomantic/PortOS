@@ -99,8 +99,12 @@ export async function resolveBlenderMedia(projectId, path) {
   const missing = () => blenderRefusal('That render file is not on this machine', 'NOT_FOUND', 404);
   const type = MEDIA_TYPES[String(path).slice(String(path).lastIndexOf('.') + 1).toLowerCase()];
   if (!type || !String(path).includes('.')) throw missing();
-  const absolute = join(blenderRendersDir(projectId), ...String(path).split('/'));
-  await assertInsideWithoutSymlinks(blenderWorkspaceDir(projectId), absolute);
+  const parts = String(path).split('/');
+  if (parts.some((part) => !part || part === '.' || part === '..' || part.includes('\\') || part.includes('\0'))) throw missing();
+  const renders = blenderRendersDir(projectId);
+  const absolute = join(renders, ...parts);
+  await assertInsideWithoutSymlinks(blenderWorkspaceDir(projectId), renders);
+  await assertInsideWithoutSymlinks(renders, absolute);
   const info = await lstat(absolute).catch(() => null);
   if (!info?.isFile()) throw missing();
   return { absolute, type };

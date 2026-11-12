@@ -11,7 +11,7 @@ vi.mock('../../services/socket', () => ({
 }));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 // The shared Blender setup reads its own API; here it only needs to be present.
-vi.mock('../codeAnimation/ProductionContainment', () => ({ default: () => <div data-testid="blender-setup">Blender setup</div> }));
+vi.mock('../codeAnimation/ProductionContainment', () => ({ default: ({ onExecutionChange }) => <div data-testid="blender-setup">Blender setup<button type="button" onClick={() => onExecutionChange({ executionMode: 'trusted-local', lanes: { blender: { ready: true } } })}>Report ready Blender</button></div> }));
 vi.mock('../../services/apiMusicVideo.js', () => ({
   getMusicVideoBlender: vi.fn(),
   saveMusicVideoBlenderSettings: vi.fn(),
@@ -199,6 +199,35 @@ describe('BlenderFilmPanel: shots', () => {
     await act(async () => {});
   });
 
+  it('holds a bulk confirmation when a film refresh makes rendering unavailable', async () => {
+    const shots = Array.from({ length: 12 }, (_, index) => blenderShot(`s${String((index + 1) * 10).padStart(3, '0')}`, index, index + 1));
+    const state = blenderFilmState({ manifest: { title: 'Example Film', syncedAt: null, fps: 24, srcChanged: false, problems: [], shots }, renders: {}, notes: {} });
+    getMusicVideoBlender.mockResolvedValue(state);
+    await renderPanel();
+    fireEvent.click(screen.getByRole('button', { name: 'Render previews (12)' }));
+    expect(screen.getByRole('button', { name: 'Render' })).toBeEnabled();
+    getMusicVideoBlender.mockResolvedValue({ ...state, tool: { ...state.tool, ready: false } });
+    await push('music-video:blender', { projectId: 'mv-test', kind: 'state' });
+    expect(screen.queryByRole('button', { name: 'Render' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Render previews (12)' })).toBeDisabled();
+    expect(renderMusicVideoBlender).not.toHaveBeenCalled();
+  });
+
+  it('renders the paused first frame and clamps a near-end position to the shot last frame', async () => {
+    renderMusicVideoBlender.mockResolvedValue({ jobs: [] });
+    await renderPanel();
+    const video = detail('s010').querySelector('video');
+    Object.defineProperty(video, 'paused', { configurable: true, value: true });
+    video.currentTime = 0;
+    fireEvent.click(within(detail('s010')).getByRole('button', { name: 'Render still' }));
+    await waitFor(() => expect(renderMusicVideoBlender).toHaveBeenCalledWith('mv-test', { shotIds: ['s010'], quality: 'still', times: [0] }, { silent: true }));
+    await waitFor(() => expect(within(detail('s010')).getByRole('button', { name: 'Render still' })).toBeEnabled());
+    video.currentTime = 4.499;
+    fireEvent.click(within(detail('s010')).getByRole('button', { name: 'Render still' }));
+    expect(renderMusicVideoBlender).toHaveBeenLastCalledWith('mv-test', { shotIds: ['s010'], quality: 'still', times: [107 / 24] }, { silent: true });
+    await act(async () => {});
+  });
+
   it('saves a director note only on Save, sending only what changed', async () => {
     saveMusicVideoBlenderShotNote.mockResolvedValue({ ok: true });
     await renderPanel();
@@ -258,6 +287,18 @@ describe('BlenderFilmPanel: settings', () => {
     const readiness = screen.getByRole('region', { name: 'Blender readiness' });
     expect(readiness).toHaveTextContent('Blender 5.2.3 is ready in Trusted local mode.');
     expect(readiness).not.toHaveTextContent(/acknowledge|you trust|host access/i);
+  });
+
+  it('refreshes when setup restores readiness after the film state changed independently', async () => {
+    await renderPanel('?btab=settings');
+    const blocked = blenderFilmState({ tool: { ready: false, executionMode: 'trusted-local', reason: 'Recheck required' } });
+    getMusicVideoBlender.mockResolvedValueOnce(blocked);
+    await push('music-video:blender', { projectId: 'mv-test', kind: 'state' });
+    expect(screen.getByText('Blender not ready')).toBeInTheDocument();
+    const before = getMusicVideoBlender.mock.calls.length;
+    fireEvent.click(screen.getByRole('button', { name: 'Report ready Blender' }));
+    await waitFor(() => expect(getMusicVideoBlender).toHaveBeenCalledTimes(before + 1));
+    expect(screen.getByText('Blender 5.2.3 ready')).toBeInTheDocument();
   });
 
   it('saves only the changed settings and holds renders until the save lands', async () => {
@@ -513,6 +554,29 @@ describe('BlenderFilmPanel: files', () => {
     fireEvent.change(name, { target: { value: 'kit/rig.blend' } });
     expect(screen.getByRole('alert')).toHaveTextContent('must end in');
     expect(saveMusicVideoBlenderFile).not.toHaveBeenCalled();
+  });
+
+  it('keeps an open file and its draft usable after a failed refresh and retries the read in place', async () => {
+    listMusicVideoBlenderFiles.mockResolvedValue({ files });
+    getMusicVideoBlenderFile.mockResolvedValue({ path: 'film.py', content: source });
+    await renderPanel('?btab=files&bfile=film.py');
+    const editor = await screen.findByLabelText('src/film.py');
+    await waitFor(() => expect(editor).toHaveValue(source));
+    fireEvent.change(editor, { target: { value: `${source}# my draft\n` } });
+    listMusicVideoBlenderFiles.mockResolvedValue({ files: files.map(file => ({ ...file, mtime: '2026-10-01T10:00:00.000Z' })) });
+    getMusicVideoBlenderFile.mockRejectedValueOnce(new Error('disk unavailable'));
+    await push('music-video:blender', { projectId: 'mv-test', kind: 'state' });
+    expect(await screen.findByRole('alert')).toHaveTextContent('disk unavailable');
+    expect(screen.getByLabelText('src/film.py')).toHaveValue(`${source}# my draft\n`);
+    expect(screen.getByLabelText('src/film.py')).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
+    getMusicVideoBlenderFile.mockResolvedValueOnce({ path: 'film.py', content: `${source}# disk changed\n` });
+    fireEvent.click(screen.getByRole('button', { name: /Retry/ }));
+    await waitFor(() => expect(getMusicVideoBlenderFile).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+    expect(screen.getByLabelText('src/film.py')).toHaveValue(`${source}# my draft\n`);
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }));
+    expect(screen.getByLabelText('src/film.py')).toHaveValue(`${source}# disk changed\n`);
   });
 
   it('says a failed list read failed instead of showing an empty workspace', async () => {

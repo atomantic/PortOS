@@ -108,6 +108,16 @@ function helperNames(ast) {
 const importedModule = (module, specifier) => posix.normalize(posix.join(posix.dirname(module), specifier));
 const unawait = node => node?.type === 'AwaitExpression' ? unawait(node.argument) : node;
 
+function returnedExpressions(node, expressions = []) {
+  if (!node || typeof node !== 'object' || FUNCTION_NODES.has(node.type)) return expressions;
+  if (Array.isArray(node)) node.forEach(child => returnedExpressions(child, expressions));
+  else if (node.type === 'ReturnStatement') expressions.push(node.argument);
+  else for (const key of Object.keys(node)) {
+    if (!AST_METADATA.has(key)) returnedExpressions(node[key], expressions);
+  }
+  return expressions;
+}
+
 /** Derive direct returned reads, never follow another wrapper. */
 export function buildJsonReadWrapperRegistry(modules) {
   const registry = new Map();
@@ -147,7 +157,7 @@ export function buildJsonReadWrapperRegistry(modules) {
       // Nested callback returns do not return the containing wrapper's value.
       const bindings = new Map();
       const returns = fn.body.type === 'BlockStatement'
-        ? fn.body.body.filter(node => node.type === 'ReturnStatement').map(node => node.argument) : [fn.body];
+        ? returnedExpressions(fn.body) : [fn.body];
       if (fn.body.type === 'BlockStatement') {
         for (const statement of fn.body.body) {
           if (statement.type !== 'VariableDeclaration') continue;
@@ -165,7 +175,7 @@ export function buildJsonReadWrapperRegistry(modules) {
         const name = names.get(node.callee.name);
         if (name === 'safeJSONParse') return readPaths(node.arguments[0], seen, true);
         if (name === 'readJSONFile' && !isStrict(node.arguments[2])
-          || name === 'tryReadFile' || raw && name === 'readFile') return [node.arguments[0]];
+          || raw && (name === 'tryReadFile' || name === 'readFile')) return [node.arguments[0]];
         return [];
       };
       const descriptors = returns.flatMap(expression => readPaths(expression)).flatMap(path => {

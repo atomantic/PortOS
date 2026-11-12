@@ -81,7 +81,7 @@ async function buildBlenderState(project) {
   const [sources, tool, manifest] = await Promise.all([hashBlenderSources(project.id), blenderToolState(), readBlenderManifest(project.id)]);
   const exists = (await lstat(blenderWorkspaceDir(project.id)).catch(() => null))?.isDirectory() === true;
   // The stored shots (with their `deps`) decide staleness, not the presented ones.
-  const renders = manifest ? await readBlenderRenders(project.id, manifest, { settings: record.settings, sources }) : {};
+  const renders = manifest ? await readBlenderRenders(project.id, manifest, { project, settings: record.settings, sources }) : {};
   return {
     settings: record.settings,
     tool,

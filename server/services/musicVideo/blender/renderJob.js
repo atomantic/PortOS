@@ -6,7 +6,7 @@
  * named by their absolute song frame, so a job that is cancelled or dies keeps
  * every finished frame. render.json beside them records what the frames were
  * made from; the next job resumes them only when the shot's source and the
- * render settings are unchanged, and starts clean otherwise.
+ * render settings and song context are unchanged, and starts clean otherwise.
  */
 import { mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -15,7 +15,7 @@ import { blenderRenderFrame, blenderShotFrameRange, normalizeBlenderRecord } fro
 import { requireProject } from '../requireProject.js';
 import { blenderShotDir, readBlenderJson } from './workspace.js';
 import { readBlenderManifest } from './manifest.js';
-import { BLENDER_NO_OPTIONS_HASH, blenderImportHashes, blenderImportsChanged, blenderOptionsHash, blenderSettingsHash, blenderShotHash, hashBlenderSources } from './hashing.js';
+import { BLENDER_NO_OPTIONS_HASH, blenderImportHashes, blenderImportsChanged, blenderOptionsHash, blenderSettingsHash, blenderShotHash, blenderSongHash, hashBlenderSources } from './hashing.js';
 import { writeBlenderSong } from './song.js';
 import { blenderJobBase, requireBlenderFilmTool, runBlenderDriver } from './driver.js';
 import { encodeBlenderPoster, encodeBlenderShot } from './encode.js';
@@ -42,12 +42,12 @@ export function blenderStillFrames(shot, fps, times = null) {
   return [...new Set(frames)].sort((a, b) => a - b);
 }
 
-async function recordStills(projectId, shot, frames, { fps, srcHash, optionsHash, imports }) {
+async function recordStills(projectId, shot, frames, { fps, srcHash, optionsHash, songHash, imports }) {
   const directory = blenderShotDir(projectId, shot.id, 'stills');
   const file = blenderStillsFile(projectId, shot.id);
   const listed = await readBlenderJson(file, []);
   const createdAt = new Date().toISOString();
-  const fresh = frames.map((frame) => ({ file: blenderStillName(frame, fps), timeSec: Number((frame / fps).toFixed(6)), frame, srcHash, optionsHash, imports, createdAt }));
+  const fresh = frames.map((frame) => ({ file: blenderStillName(frame, fps), timeSec: Number((frame / fps).toFixed(6)), frame, srcHash, optionsHash, songHash, imports, createdAt }));
   const { default: sharp } = await import('sharp');
   for (const still of fresh) {
     const source = join(directory, still.file);
@@ -86,6 +86,7 @@ export async function runBlenderShotRender(entry, { projectId, shotId, quality, 
     const options = blenderFilmOptions(manifest, settings);
     const optionsHash = blenderOptionsHash(options);
     const song = await writeBlenderSong(project, settings);
+    const songHash = blenderSongHash(song);
     const still = quality === 'still';
     const frame = blenderRenderFrame(settings, quality);
     const range = blenderShotFrameRange(shot, settings.fps);
@@ -97,10 +98,10 @@ export async function runBlenderShotRender(entry, { projectId, shotId, quality, 
     let resumedImports = null;
     if (!still) {
       const previous = await readBlenderJson(blenderRenderFile(projectId, shotId, quality));
-      // Frames built from other source, settings or options are another picture: start clean.
+      // Frames built from other source, settings, options or song context are another picture: start clean.
       resume = !force && previous?.complete !== true && previous?.srcHash === srcHash && previous?.settingsHash === settingsHash
         && !blenderImportsChanged(previous?.imports, files)
-        && (previous?.optionsHash ?? BLENDER_NO_OPTIONS_HASH) === optionsHash;
+        && (previous?.optionsHash ?? BLENDER_NO_OPTIONS_HASH) === optionsHash && previous?.songHash === songHash;
       resumedImports = resume ? previous.imports : null;
       const framesDir = blenderFramesDir(projectId, shotId, quality);
       if (!resume) await rm(framesDir, { recursive: true, force: true });
@@ -108,7 +109,7 @@ export async function runBlenderShotRender(entry, { projectId, shotId, quality, 
       meta = {
         // Until done reports actual imports, partial frames conservatively depend on the snapshot.
         imports: Object.fromEntries(files),
-        shotId, quality, srcHash, settingsHash, optionsHash, options, ...range, width: frame.width, height: frame.height, fps: settings.fps,
+        shotId, quality, srcHash, settingsHash, optionsHash, songHash, options, ...range, width: frame.width, height: frame.height, fps: settings.fps,
         samples: frame.samples, engine: settings.engine, blenderVersion: tool.version, device: null,
         startedAt: new Date(started).toISOString(), finishedAt: null, durationMs: null, complete: false,
       };
@@ -146,7 +147,7 @@ export async function runBlenderShotRender(entry, { projectId, shotId, quality, 
       throw jobFailure(result.error);
     }
     if (still) {
-      await recordStills(projectId, shot, stillFrames, { fps: settings.fps, srcHash, optionsHash, ...(imports ? { imports } : {}) });
+      await recordStills(projectId, shot, stillFrames, { fps: settings.fps, srcHash, optionsHash, songHash, ...(imports ? { imports } : {}) });
       return;
     }
     const present = await countBlenderFrames(projectId, shotId, quality, range);
@@ -161,7 +162,11 @@ export async function runBlenderShotRender(entry, { projectId, shotId, quality, 
     await encodeBlenderPoster({
       frame: join(blenderFramesDir(projectId, shotId, quality), blenderFrameName(range.startFrame + Math.floor(range.frameCount / 2), quality)),
       output: blenderShotPoster(projectId, shotId, quality), signal,
-    }).catch((error) => log.write(`PortOS: no poster for this render (${error.message})`));
+    }).catch((error) => {
+      if (signal.aborted) throw jobFailure('Canceled', { canceled: true });
+      log.write(`PortOS: no poster for this render (${error.message})`);
+    });
+    if (signal.aborted) throw jobFailure('Canceled', { canceled: true });
     await atomicWrite(blenderRenderFile(projectId, shotId, quality), {
       ...meta, blenderVersion: result.events.start?.blender || tool.version, device: result.events.start?.device || null,
       finishedAt: new Date().toISOString(), durationMs: Date.now() - started, complete: true,

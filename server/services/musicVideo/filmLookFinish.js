@@ -231,7 +231,7 @@ const BLACK_BASE = Object.freeze({ color: Object.freeze({ r: 0, g: 0, b: 0, a: 1
 const SRGB_LABEL = 'h264_metadata=colour_primaries=1:transfer_characteristics=13:matrix_coefficients=1';
 // The label names BT.709 primaries and matrix, so it goes only on a stream that already carries them:
 // the H.264 every PortOS encoder writes. An untagged clip keeps the matrix its decoder picks for it.
-const BT709_H264 = Object.freeze(['codec_name=h264', 'color_space=bt709', 'color_transfer=bt709']);
+const BT709_H264 = Object.freeze(['codec_name=h264', 'color_primaries=bt709', 'color_space=bt709', 'color_transfer=bt709']);
 
 /**
  * Stage the finished render at `source` for the page to play: a BT.709 H.264

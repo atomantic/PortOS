@@ -13,6 +13,7 @@
  */
 
 import { isNonBlankStr as hasText } from '../../lib/textUtils.js';
+import { ServerError } from '../../lib/errorHandler.js';
 import { promptFromMedia } from '../mediaPromptFromMedia.js';
 import { composeBoardPrompt } from '../moodBoardCompositeStyle.js';
 import { boardItemLocalImage } from './logic.js';
@@ -133,7 +134,12 @@ export function getAnalyzeJob(boardId) {
 /** Start (or join, when one is already running) the analyze job for a board. */
 export function startAnalyzeJob(boardId, { providerId, model, effort, render } = {}) {
   const existing = jobs.get(boardId);
-  if (existing?.status === 'running') return { ...existing };
+  if (existing?.status === 'running') {
+    if (render && !existing.makeComplete) {
+      throw new ServerError('A board analysis is already running. Retry Make complete when it finishes.', { status: 409, code: 'MOOD_BOARD_ANALYSIS_RUNNING' });
+    }
+    return { ...existing };
+  }
   const job = {
     boardId,
     status: 'running',

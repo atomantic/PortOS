@@ -29,8 +29,8 @@ export default function CompositionPanel({ board }) {
   const failure = <RenderFailure project={project} renderJob={board.renderJob} onPatchShots={board.onPatchShots} onRenderClips={board.onRenderClips} />;
   return (
     <>
+      {blender && <fieldset disabled={locked} className="min-w-0">{failure}</fieldset>}
       {/* Outside the save lock: nothing in the film panel writes through the project record. */}
-      {blender && failure}
       {blender && <BlenderFilmPanel board={board} />}
       <fieldset disabled={locked} className="min-w-0">
         {!blender && failure}

@@ -154,6 +154,23 @@ describe('lyric placement matching tolerances', () => {
     { w: 'tree', startSec: 2.0, endSec: 2.4 },
   ] };
 
+  it('flags a misplaced word even when the median line offset is zero', () => {
+    const heard = line.words.map((word, index) => ({ text: word.w, startSec: word.startSec + (index === 2 ? 2 : 0), endSec: word.endSec + (index === 2 ? 2 : 0) }));
+    const result = compareLyricPlacement([line], heard);
+    expect(result.uncheckedCues).toEqual([]);
+    expect(result.checkedCues[0].isMisplaced).toBe(true);
+    expect(result.misplacedCues[0]).toMatchObject({ cueId: line.id, offsetSec: 2, words: [{ startSec: 1 }, { startSec: 1.5 }, { startSec: 4 }] });
+  });
+
+  it.each([{ startSec: undefined }, { startSec: NaN }, { endSec: Infinity }, { endSec: 1 }])('leaves a partially timed cue unchecked (%j)', invalidTiming => {
+    const partial = { ...line, words: line.words.map((word, index) => index === 0 ? { ...word, ...invalidTiming } : word) };
+    const heard = line.words.map(word => ({ ...word, text: word.w }));
+    const result = compareLyricPlacement([partial], heard);
+    expect(result.uncheckedCues).toEqual([{ cueId: line.id, text: line.text }]);
+    expect(result.checkedCues).toEqual([]);
+    expect(result.misplacedCues).toEqual([]);
+  });
+
   it('checks a line with one dropped word when matched word offsets agree within 0.15s', () => {
     // 'apple' is dropped; 'red' offset is 0.05, 'tree' offset is 0.08 (spread = 0.03 <= 0.15)
     const heard = [

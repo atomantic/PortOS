@@ -5,6 +5,7 @@
  *
  *   shot hash     = the shot's dependency files (path + content) plus its start and end
  *   settings hash = engine, pixel size, frame rate, scale and samples of one quality
+ *   song hash     = the song context staged into the job
  *   options hash  = the film options the render was built with (`ctx.options`)
  */
 import { createHash } from 'node:crypto';
@@ -77,3 +78,6 @@ export function blenderImportsChanged(imports, files) {
 
 /** Missing-at-start imports stay stale even if created while Blender is running. */
 export const blenderImportHashes = (paths, files) => Object.fromEntries(paths.map((path) => [path, files.get(path) ?? null]));
+
+/** The canonical song projection built by song.js, exactly as staged for the driver. */
+export const blenderSongHash = (song) => sha(JSON.stringify(song));

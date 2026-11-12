@@ -47,6 +47,7 @@ export default function BlenderFilesTab({ blender }) {
   const [loaded, setLoaded] = useState(IDLE);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [newPath, setNewPath] = useState('');
+  const [readRetry, setReadRetry] = useState(0);
 
   // The tree changed elsewhere (an agent's write, a sync, a reconnect): re-list without blanking the list.
   const seenRevision = useRef(filesRevision);
@@ -72,13 +73,19 @@ export default function BlenderFilesTab({ blender }) {
     let active = true;
     // A re-read of the file already open keeps its text on screen while the fresh copy loads.
     setLoaded((current) => (current.path === path && current.status !== 'loading' && current.status !== 'error'
-      ? { ...current, status: 'refreshing' }
+      ? { ...current, status: 'refreshing', error: null }
       : { path, content: '', status: 'loading', error: null }));
     getMusicVideoBlenderFile(projectId, path, { silent: true })
       .then((answer) => { if (active) setLoaded({ path, content: answer?.content ?? '', status: 'ready', error: null }); })
-      .catch((err) => { if (active) setLoaded({ path, content: '', status: 'error', error: err?.message || 'Could not read the file' }); });
+      .catch((err) => {
+        if (active) setLoaded((current) => ({
+          ...(current.path === path ? current : { path, content: '' }),
+          status: current.path === path && (current.status === 'ready' || current.status === 'refreshing') ? 'ready' : 'error',
+          error: err?.message || 'Could not read the file',
+        }));
+      });
     return () => { active = false; };
-  }, [projectId, path, editable, mtime]);
+  }, [projectId, path, editable, mtime, readRetry]);
 
   const select = (next) => setSearchParams((previous) => {
     const params = new URLSearchParams(previous);
@@ -213,9 +220,8 @@ export default function BlenderFilesTab({ blender }) {
                 onCancel={() => setConfirmingDelete(false)}
               />
             )}
-            {loaded.status === 'error' && loaded.path === path ? (
-              <p role="alert" className="text-xs text-port-error">Could not read src/{path}: {loaded.error}</p>
-            ) : (
+            {loaded.error && loaded.path === path && <ListLoadError what={`src/${path}`} error={{ message: loaded.error }} onRetry={() => setReadRetry((count) => count + 1)} />}
+            {loaded.status !== 'error' && (
               <textarea id="mv-blender-file-editor" value={value} disabled={!ready || saving} spellCheck={false} autoCapitalize="off" autoCorrect="off" wrap="off"
                 onChange={(event) => edit(event.target.value)}
                 className="h-[55dvh] min-h-[16rem] w-full min-w-0 resize-y rounded border border-port-border bg-port-bg p-2 font-mono text-xs leading-5 focus:outline-none focus:ring-2 focus:ring-port-accent disabled:opacity-60" />

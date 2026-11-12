@@ -186,6 +186,13 @@ describe('film look finishing pass', () => {
     expect(await readFile(path, 'utf8')).toBe('finished-video');
   });
 
+  it('preserves non-BT.709 primaries even with BT.709 matrix and transfer tags', async () => {
+    seen.signature = 'codec_name=h264|color_primaries=bt2020|color_space=bt709|color_transfer=bt709';
+    await expect(applyFilmLookFinish({ project: { filmLook: look }, path, jobId: 'job-other-primaries' })).resolves.toBe(true);
+    expect(seen.opened[0].source).toBe('composed-render');
+    expect(seen.ffmpeg.some(args => args.includes('-bsf:v'))).toBe(false);
+  });
+
   it('uses WebCodecs only after GPU and encoded quality admission', async () => {
     const png = await solidPng(120);
     seen.page = drawingPage({ svgPng: png, gpuPng: png, svgMs: 100, gpuMs: 10, switches: [] });

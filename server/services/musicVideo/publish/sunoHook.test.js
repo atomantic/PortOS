@@ -76,7 +76,7 @@ describe('pickSongRow', () => {
 // window pill, a window that opens at Suno's own suggestion, and a waveform where 22.2 px of drag
 // moves the window one second (dragging right moves it earlier). `stuckAt` stops the window there.
 const fmt = (sec) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
-function hookPage({ windowAt = 158, pxPerSec = 22.2, stuckAt = null, restored = false, delayedSongResults = false, ambiguousReadout = false, noWindowReadout = false, waveformKind = 'identified', ambiguousWaveform = false } = {}) {
+function hookPage({ windowAt = 158, pxPerSec = 22.2, stuckAt = null, restored = false, delayedSongResults = false, failedSearch = false, searchStatus = 200, appliedAfterPoll = 1, ambiguousReadout = false, noWindowReadout = false, waveformKind = 'identified', ambiguousWaveform = false } = {}) {
   const state = { windowAt, clicked: [], drags: 0, lyrics: true, songRows: [{ text: 'Night Drive 3:42', html: '' }], songPolls: 0 };
   const rect = (bottom) => ({ left: 100, right: 200, bottom });
   const leaf = (text, bottom, parentText = text) => ({ children: [], textContent: text,
@@ -136,14 +136,22 @@ function hookPage({ windowAt = 158, pxPerSec = 22.2, stuckAt = null, restored = 
           state.songRows = [{ text: 'Other Song 3:07', html: '' }];
         }
         if (state.songPolls === 2) {
+          emitPageEvent('response', { request: () => state.songRowsRequest, ok: () => true, status: () => 200, json: async () => ({ clips: [{ id: ID }] }) });
           emitPageEvent('requestfinished', state.songRowsRequest);
           state.songRows = [{ text: 'Night Drive 3:42', html: '' }, { text: 'Night Drive 3:07', html: '' }];
         }
-      } else if (!delayedSongResults && ms === 250 && state.songPolls === 0) {
+      } else if (!delayedSongResults && ms === 250) {
         state.songPolls += 1;
-        const request = { resourceType: () => 'fetch', url: () => '/api/search?q=Night%20Drive', postData: () => null };
-        emitPageEvent('request', request);
-        emitPageEvent('requestfinished', request);
+        if (state.songPolls === 1) {
+          const request = { resourceType: () => 'fetch', url: () => '/api/search?q=Night%20Drive', postData: () => null };
+          emitPageEvent('request', request);
+          if (failedSearch) emitPageEvent('requestfailed', request);
+          else {
+            emitPageEvent('response', { request: () => request, ok: () => searchStatus === 200, status: () => searchStatus, json: async () => ({ clips: [{ id: ID }] }) });
+            emitPageEvent('requestfinished', request);
+          }
+        }
+        if (!failedSearch && searchStatus === 200 && state.songPolls === appliedAfterPoll) state.songRows = [{ text: 'Night Drive 3:42', html: '<span>Search result</span>' }];
       }
     },
     locator: (sel) => locator(sel),
@@ -241,5 +249,19 @@ describe('Suno Hook fill (#10860)', () => {
     await sunoHookAdapter.prepare(page, hookPayload({ songId: ID, durationSec: 187 }));
     expect(page.state.clicked).toContain('[role=dialog] button[1]');
     expect(page.state.clicked).not.toContain('[role=dialog] button[0]');
+  });
+
+  it.each([{ failedSearch: true }, { searchStatus: 503 }])('refuses stale matching rows after an unsuccessful search (%j)', async options => {
+    const page = hookPage(options);
+    await expect(sunoHookAdapter.prepare(page, hookPayload())).rejects.toThrow(/Suno search.*fail/i);
+    expect(page.state.clicked).not.toContain('[role=dialog] button[0]');
+    expect(page.state.clicked).not.toContain('Next');
+  });
+
+  it('waits for successful search results to be applied before selecting a matching old row', async () => {
+    const page = hookPage({ appliedAfterPoll: 6 });
+    await sunoHookAdapter.prepare(page, hookPayload());
+    expect(page.state.songPolls).toBeGreaterThanOrEqual(6);
+    expect(page.state.clicked).toContain('[role=dialog] button[0]');
   });
 });

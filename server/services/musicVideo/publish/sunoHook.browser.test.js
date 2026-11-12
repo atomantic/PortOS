@@ -58,6 +58,7 @@ function fixtureHtml(kind, initiallyOn) {
       document.querySelector('#songs textarea').oninput = async event => {
         const response = await fetch('/api/search?query=' + encodeURIComponent(event.target.value));
         await response.json();
+        if ('${kind}' !== 'unchanged-results') document.querySelector('#songs a').innerHTML = '<span>Synthetic song</span>';
         window.searchSettled = true;
       };
       document.getElementById('use').onclick = () => {
@@ -89,6 +90,7 @@ describe.skipIf(!canRun)('Suno Hook synthetic draft UI in Chrome', () => {
   afterAll(() => fixture?.close());
 
   it.each([
+    { kind: 'unchanged-results', initial: true, wanted: false },
     { kind: 'checkbox', initial: true, wanted: false },
     { kind: 'shadow', initial: false, wanted: true },
     { kind: 'fallback', initial: true, wanted: false },
@@ -106,7 +108,7 @@ describe.skipIf(!canRun)('Suno Hook synthetic draft UI in Chrome', () => {
         return route.fulfill({ contentType: 'text/html', body: fixtureHtml(kind, initial) });
       }
       if (route.request().url() === 'https://suno.com/api/search?query=Synthetic%20song' && route.request().resourceType() === 'fetch') {
-        return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ songId: ID }) });
+        return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ clips: [{ id: ID, title: 'Synthetic song', metadata: { duration: 258 } }] }) });
       }
       unexpected.push(route.request().resourceType());
       return route.abort();

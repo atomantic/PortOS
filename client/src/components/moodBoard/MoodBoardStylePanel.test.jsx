@@ -126,6 +126,32 @@ describe('MoodBoardStylePanel', () => {
     expect(mockStart).not.toHaveBeenCalled();
   });
 
+  it('keeps a completion pushed before the start response instead of restoring running state', async () => {
+    let finish;
+    mockStart.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+    const board = { id: 'mb-1', items: [{ id: 'b', type: 'image', mediaKey: 'image:b.png' }] };
+    render(<MoodBoardStylePanel board={board} onBoardChange={vi.fn()} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Analyze 1 new' }));
+    await act(async () => socketHandlers.get('mood-board:analyze')({ boardId: 'mb-1', status: 'done' }));
+    await act(async () => finish({ boardId: 'mb-1', status: 'running', phase: 'preparing', total: 0, done: 0 }));
+    expect(screen.getByRole('button', { name: 'Analyze 1 new' })).toBeEnabled();
+  });
+
+  it('keeps a previous board start response out of the newly selected board', async () => {
+    let finish;
+    mockStart.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+    const board = { id: 'mb-1', items: [{ id: 'b', type: 'image', mediaKey: 'image:b.png' }] };
+    const onBoardChange = vi.fn();
+    const { rerender } = render(<MoodBoardStylePanel board={board} onBoardChange={onBoardChange} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Analyze 1 new' }));
+    rerender(<MoodBoardStylePanel board={{ ...board, id: 'mb-2' }} onBoardChange={onBoardChange} />);
+    expect(screen.getByRole('button', { name: 'Analyze 1 new' })).toBeEnabled();
+    await act(async () => finish({ boardId: 'mb-1', status: 'running', phase: 'preparing', total: 0, done: 0 }));
+    expect(screen.getByRole('button', { name: 'Analyze 1 new' })).toBeEnabled();
+    rerender(<MoodBoardStylePanel board={board} onBoardChange={onBoardChange} />);
+    expect(screen.getByRole('button', { name: 'Analyze 1 new' })).toBeEnabled();
+  });
+
   it('renders the poster on the selected image service and pins the filename', async () => {
     const onBoardChange = vi.fn();
     render(<MoodBoardStylePanel board={analyzedBoard} onBoardChange={onBoardChange} />);

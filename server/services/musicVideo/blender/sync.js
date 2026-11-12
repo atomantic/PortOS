@@ -21,7 +21,7 @@ import { blenderManifestHash, hashBlenderSources } from './hashing.js';
 import { readBlenderManifest, validateBlenderManifest, writeBlenderManifest } from './manifest.js';
 import { writeBlenderSong } from './song.js';
 import { blenderJobBase, requireBlenderFilmTool, runBlenderDriver } from './driver.js';
-import { activeBlenderJobs, createBlenderJob, updateBlenderJob } from './jobs.js';
+import { activeBlenderJobs, createBlenderJob, reserveBlenderSync, updateBlenderJob } from './jobs.js';
 import { openBlenderJobLog } from './logs.js';
 import { announceBlenderState } from './record.js';
 import { mirrorBlenderScenes, scenesConflict, unmirroredScenes } from './sceneMirror.js';
@@ -58,7 +58,16 @@ async function describeFilm(entry, { project, settings, options, tool }) {
  * is saved and the Board mirrors it, or `error` with `error`, `code` and, for a
  * refused shot list, every problem in `problems`.
  */
-export async function startBlenderSync(projectId, { replaceScenes = false } = {}) {
+export async function startBlenderSync(projectId, options = {}) {
+  const release = reserveBlenderSync(projectId);
+  if (!release) throw blenderRefusal('A sync is already running for this project', 'MUSIC_VIDEO_BLENDER_SYNC_IN_PROGRESS', 409);
+  return prepareBlenderSync(projectId, options).finally(release);
+}
+
+async function prepareBlenderSync(projectId, { replaceScenes = false }) {
+  if (activeBlenderJobs(projectId).some(({ job }) => job.kind === 'render')) {
+    throw blenderRefusal('Renders are running for this film. Wait for them to finish, or cancel them, before syncing shots.', 'MUSIC_VIDEO_BLENDER_RENDERS_ACTIVE', 409);
+  }
   const project = await requireProject(projectId);
   if (!(project.audioAnalysis?.durationSec > 0)) {
     throw blenderRefusal('Analyze the song first: shots are checked against its length', 'NOT_ANALYZED', 409);
@@ -66,9 +75,6 @@ export async function startBlenderSync(projectId, { replaceScenes = false } = {}
   const tool = await requireBlenderFilmTool();
   if (!(await lstat(join(blenderSrcDir(projectId), 'film.py')).catch(() => null))?.isFile()) {
     throw blenderRefusal('The workspace has no film yet (src/film.py). Create the starter workspace or add your own film.', 'MUSIC_VIDEO_BLENDER_NO_FILM', 409);
-  }
-  if (activeBlenderJobs(projectId).some(({ job }) => job.kind === 'sync')) {
-    throw blenderRefusal('A sync is already running for this project', 'MUSIC_VIDEO_BLENDER_SYNC_IN_PROGRESS', 409);
   }
   // Known before Blender starts: fail fast rather than after the describe run.
   const strangers = unmirroredScenes(project);
